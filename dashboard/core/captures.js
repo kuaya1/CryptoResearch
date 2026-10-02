@@ -206,7 +206,7 @@ function readCapture(ws, attemptId) {
     buf = fs.readFileSync(p);
   } catch (err) {
     if (err.code === 'ENOENT') return { missing: true };
-    return { ok: false, rel: captureRel(attemptId), reason: `cannot be read (${err.code || err.message})` };
+    return { ok: false, rel: captureRel(attemptId), reason: `cannot be read (${err.code || err.message})`, code: err.code || null };
   }
   const d = decode(buf);
   if (!d.ok) return { ok: false, rel: captureRel(attemptId), reason: d.reason };

@@ -370,3 +370,33 @@ test('F1 Windows: a capture held open without read sharing when it is read back 
   await runner(d.root, d.stub);
   assertSavedOnce(d);
 });
+
+test('F1 Windows: a pending capture that another program still holds during recovery is tried again on the next run, not held as uncertain', async (t) => {
+  const c = await paidRun(t, 'f1busy3');
+  await runner(c.root, c.stub, { capture: { crash: 'after' } });
+  assert.equal(c.job().attempts[0].phase, 'dispatched');
+  assert.ok(fs.existsSync(c.captureFile()));
+  const busy = busyFlag(t);
+  const r2 = (await runner(c.root, c.stub, { fs: { capture_read_busy_while: busy } })).out.results[0];
+  assert.equal(r2.status, 'captured', JSON.stringify(r2));
+  assert.equal(c.job().attempts[0].phase, 'dispatched', 'still waiting for its captured answer, not uncertain');
+  // Doctor, while the file cannot be read: it is in use, not unmatched.
+  const readFileSync = fs.readFileSync;
+  fs.readFileSync = function busyRead(p, ...rest) {
+    if (typeof p === 'string' && /[\\/]\.cr[\\/]captures[\\/][^\\/.][^\\/]*$/.test(p)) throw Object.assign(new Error(`EBUSY: resource busy or locked, open '${p}'`), { code: 'EBUSY' });
+    return readFileSync.call(fs, p, ...rest);
+  };
+  let doc;
+  try {
+    doc = await require('../core/doctor').doctor(c.ws);
+  } finally {
+    fs.readFileSync = readFileSync;
+  }
+  const checks = doc.checks.filter((x) => x.name === 'Research captures');
+  assert.equal(checks.length, 1, JSON.stringify(checks));
+  assert.match(checks[0].detail, /open in another program/);
+  assert.doesNotMatch(checks[0].detail, /never imported/);
+  fs.unlinkSync(busy);
+  await runner(c.root, c.stub);
+  assertSavedOnce(c);
+});

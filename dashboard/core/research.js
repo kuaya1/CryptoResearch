@@ -891,6 +891,9 @@ async function commitCaptured(ws, projectId, run, provider, attempt) {
   if (!attempt || !attempt.attempt_id) return null;
   const cap = captures.readCapture(ws, attempt.attempt_id);
   if (cap.missing) return null;
+  // Another program has the file open without sharing reads (Windows): the
+  // capture is not unusable, so the next run tries again.
+  if (!cap.ok && cap.code === 'EBUSY') return { ok: false, busy: true, reason: `${cap.rel} ${cap.reason}`, rel: cap.rel };
   const bound = cap.ok ? captures.bindCapture(cap, run, provider, attempt) : { ok: false, reason: `${cap.rel} ${cap.reason}` };
   if (!bound.ok) return { ok: false, reason: bound.reason, rel: cap.rel };
   const capture = { id: attempt.attempt_id, sha256: cap.sha256, rel: cap.rel };
@@ -905,9 +908,13 @@ async function commitCaptured(ws, projectId, run, provider, attempt) {
 // Removes captures whose answer is already committed (a runner stopped after
 // the commit and before removing its capture). Leaves everything else.
 function sweepCaptures(ws, { remove = true } = {}) {
-  const out = { removed: 0, committed: 0, pending: [], unmatched: [] };
+  const out = { removed: 0, committed: 0, pending: [], unmatched: [], busy: [] };
   if (remove) captures.removeStaleTemps(ws);
   for (const c of captures.listCaptures(ws)) {
+    if (!c.ok && c.code === 'EBUSY') {
+      out.busy.push({ rel: c.rel });
+      continue;
+    }
     if (!c.ok || !c.body) {
       out.unmatched.push({ rel: c.rel, reason: c.reason });
       continue;
@@ -1008,6 +1015,7 @@ async function recoverJob(ws, projectId, run, provider) {
   // Dispatched: an answer captured but never committed comes first (audit F1).
   const cap = job.mode === 'api' ? await commitCaptured(ws, projectId, run, provider, last) : null;
   if (cap && cap.ok) return cap.out;
+  if (cap && cap.busy) return { provider, status: 'captured', error: `The provider's answer was captured (${cap.rel}), but another program has that file open, so it could not be saved into the records yet. It will be saved by the next research run, without asking the provider again.` };
   // Dispatched, or an older attempt still marked in progress: look for its answer.
   const rel = last.response_path || responseRel(run, provider, last.n);
   const found = exists(ws.abs(rel)) ? validateSaved(ws, run, provider, last, rel) : { ok: false, missing: true };
