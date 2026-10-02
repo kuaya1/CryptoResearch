@@ -116,7 +116,7 @@ function readBody(req) {
   });
 }
 
-function validateSettingsPatch(patch) {
+function validateSettingsPatch(patch, ws = null) {
   const out = {};
   const num = (v, lo, hi, label) => {
     const n = Number(v);
@@ -170,8 +170,12 @@ function validateSettingsPatch(patch) {
       }
     }
     if (r.default_horizon !== undefined) {
-      const h = require('./core/reports').parseHorizon(String(r.default_horizon));
-      if (!h || h.kind === 'unknown') throw new OpError('INVALID', 'Default horizon must read like "24 months" or "12-24 months".');
+      // The default is a position horizon; longer ones are per-run exceptions with a reason.
+      const pos = require('./core/position');
+      const m = pos.monthsFrom(String(r.default_horizon));
+      if (m.error) throw new OpError('INVALID', m.error);
+      const ceiling = pos.policy(ws).planning_ceiling_months;
+      if (m.months > ceiling) throw new OpError('INVALID', `The default horizon must be within your ${ceiling}-month planning ceiling. A longer horizon is a long-term exception, chosen per run with a reason.`);
       out.research.default_horizon = String(r.default_horizon);
     }
     if (r.providers) {
@@ -595,7 +599,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick }) {
     const r = projects.addProject(ws, { ...body, utterance: body.utterance || null });
     let run = null;
     if (body.research && Array.isArray(body.research_providers) && body.research_providers.length && ['created', 'exists'].includes(r.status)) {
-      run = research.createRun(ws, { project_id: r.project_id, providers: body.research_providers, horizon: body.horizon || null, channel: 'dashboard', utterance: body.utterance || null });
+      run = research.createRun(ws, { project_id: r.project_id, providers: body.research_providers, horizon: body.horizon || null, long_term_reason: body.long_term_reason || null, channel: 'dashboard', utterance: body.utterance || null });
       setTimeout(() => researchTick(), 500);
     }
     return after({ ...r, research: run ? { status: run.status, run_id: run.run_id, message: run.message } : null });
@@ -608,7 +612,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick }) {
   route('POST', '/api/projects/([^/]+)/reviewed', (m, req, res, body) => after(projects.markReviewed(ws, pid(m[1]), { note: body.note || null })));
   route('POST', '/api/projects/([^/]+)/prompts', (m, req, res, body) => after(projects.generatePrompts(ws, pid(m[1]), body.providers || PROVIDERS)));
   route('POST', '/api/projects/([^/]+)/research', (m, req, res, body) => once(body, () => {
-    const out = research.createRun(ws, { project_id: pid(m[1]), providers: body.providers, horizon: body.horizon || null, same_as_last: Boolean(body.same_as_last), channel: 'dashboard', utterance: body.utterance || null });
+    const out = research.createRun(ws, { project_id: pid(m[1]), providers: body.providers, horizon: body.horizon || null, long_term_reason: body.long_term_reason || null, same_as_last: Boolean(body.same_as_last), channel: 'dashboard', utterance: body.utterance || null });
     setTimeout(() => researchTick(), 500);
     return after({ status: out.status, run_id: out.run_id, message: out.message, run: out.run });
   }));
@@ -668,7 +672,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick }) {
     return { status: 'saved' };
   });
   route('POST', '/api/settings', (m, req, res, body) => {
-    const patch = validateSettingsPatch(body || {});
+    const patch = validateSettingsPatch(body || {}, ws);
     const out = runOp(ws, { type: 'update_settings', summary: 'Update dashboard settings' }, (op) => {
       const cur = op.readJson('config/settings.json', { schema_version: 1 });
       op.writeJson('config/settings.json', mergeDeep(cur, patch));

@@ -530,6 +530,9 @@ function citationIntegrity(a) {
       if (!claimIds.has(cid)) issues.push({ kind: 'dangling_claim_ref', path: `economics.${k}.claim_ids[${j}]`, id: cid });
     });
   }
+  for (const ref of require('./position').contextRefs(a.position_context)) {
+    if (!claimIds.has(ref.id) && !sourceIds.has(ref.id)) issues.push({ kind: 'dangling_evidence_ref', path: ref.path, id: ref.id });
+  }
   const uncited = claims.filter((c) => ['V', 'C'].includes(c.evidence_tag) && !(c.source_ids || []).length).length;
   const dangling = issues.filter((x) => x.kind !== 'duplicate_id').length;
   const duplicates = issues.filter((x) => x.kind === 'duplicate_id').length;
@@ -814,7 +817,13 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider }) {
       : null;
   const finalTake = typeof r.final_take === 'string' && r.final_take.trim() ? r.final_take.trim() : prose && prose.final_take ? prose.final_take.text : null;
 
-  const integrity = citationIntegrity({ sources, claims, diagnostic_scores: diagnostic, investment_components: components, risk_scores: risk, economics, ...lists, catalysts: r.catalysts, unlocks: r.unlocks, tokenomics_changes: r.tokenomics_changes });
+  // Position-cycle recipe (cr-research-prompt@3): the model's market and timing
+  // views, catalyst windows and suggested review date. Scores are untouched.
+  const pos = require('./position');
+  const position = pos.normalizePositionContext(r.position_context, { catalysts: r.catalysts, promptVersion: typeof r.prompt_version === 'string' ? r.prompt_version.trim() : null, analysisAt, ceiling: pos.policy(ws).planning_ceiling_months });
+  for (const i of position.issues) issues.push(i);
+
+  const integrity = citationIntegrity({ sources, claims, diagnostic_scores: diagnostic, investment_components: components, risk_scores: risk, economics, ...lists, catalysts: r.catalysts, unlocks: r.unlocks, tokenomics_changes: r.tokenomics_changes, position_context: position.context });
   for (const i of integrity.issues.slice(0, 60)) {
     issues.push({ severity: 'warning', field: i.path, message: i.kind === 'duplicate_id' ? `Duplicate ID "${i.id}" (first used at ${i.first}).` : `Reference "${i.id}" does not match any listed ${i.kind === 'dangling_source_ref' ? 'source' : 'claim or source'}.` });
   }
@@ -857,6 +866,7 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider }) {
       final_take: finalTake,
       unresolved_questions: unresolved,
       sections: r.sections && typeof r.sections === 'object' ? r.sections : null,
+      position_context: position.context,
     },
     issues,
     provenance,
@@ -957,6 +967,7 @@ function completeShape(a) {
   if (out.model_reported_overall_score === undefined) out.model_reported_overall_score = null;
   if (out.scenarios === undefined) out.scenarios = null;
   if (out.verdict === undefined) out.verdict = null;
+  if (out.position_context === undefined) out.position_context = null;
   return out;
 }
 

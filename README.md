@@ -1,6 +1,6 @@
 # CryptoResearch
 
-Your private crypto watchlist, research record and portfolio log. It lives in this folder on your PC, and a local dashboard displays it.
+Your private crypto watchlist, research record and portfolio log. It lives in this folder on your PC, and a local dashboard displays it. Why it exists and what it will not do: [CryptoResearch-Mission-and-Architecture-v1.md](CryptoResearch-Mission-and-Architecture-v1.md).
 
 - **The files are the record.** Reports, scores, notes and transactions are plain Markdown and JSON in this folder. The dashboard reads and writes them through one validated, journaled path; it keeps no hidden database.
 - **One way in for every change.** Dashboard forms, the command line Cowork runs, the request queue and the inbox folders all use the same code.
@@ -23,6 +23,8 @@ Double-click **`Open Dashboard.cmd`**. It starts the dashboard at <http://127.0.
   - When the window is narrower, less essential columns step aside so the three grades always stay in view; every hidden value is in the summary panel. Below about 760 px each project becomes a card with its name, price movement and all three grades.
   - Live updates never jump the list under you: values refresh in place, and if they would change the order, a "Re-sort" button lets you apply it. Your selection, open panel, scroll position and anything you are typing are kept.
   - **Review queue:** one line at the top; open it for the few items that need you.
+  - **Market line:** Bitcoin's price and its 7D and 30D change, BTC dominance, and how many of the largest coins beat Bitcoin over 30 days, with the time it was captured. "What is this?" shows the universe, what was left out (stablecoins, gold tokens, tokenized funds, wrapped or staked coins) and the definitions. It describes the market; it is not a forecast or an "altcoin season" call.
+  - **Each model's timing view** (in the summary panel and on the hover scorecard, for reports written with the position recipe): timing (early, developing, extended, thesis impaired, or unknown), the model's market reading, the next catalyst with its date window, and a suggested review date. **Add to my reviews** puts that date on your review calendar; until then it stays the model's suggestion. The panel's market section also shows the project's 7D and 30D change against Bitcoin.
 - **Project page** (`#/project/<id>/<tab>`): Overview (one card per model), Scorecards (one model at a time, all three scoring panels with their directions stated), Reports (a list of every report by model and date beside a reader for the complete original; download the original or show its exact text; corrections, claims, normalized data, extraction notes and provenance open on request), Comparison, Evidence, Market, Notes & history, Research runs (including token identity).
 - **Portfolio:** only what you record, kept separate from the watchlist. Grades are not shown next to holdings; select an asset to see its research.
 - **Research:** research routes per model (API, Cowork, manual import), jobs per project, cross-project model comparison, evidence, review calendar.
@@ -70,7 +72,9 @@ The project appears in the dashboard once, after its record is saved and verifie
 ## The research loop
 
 1. **Add a project** (Cowork, `+ Add project` on the watchlist, or the CLI). Its identity is resolved from evidence: a CoinGecko listing is only a candidate until an official source confirms the token. Unsure means **pending identity**: no prices, no holdings, never another token's prices.
-2. **Research it.** A research run saves one canonical prompt (`cr-research-prompt@2`, identical for every model), the rubric and scoring-profile versions, the full horizon, the prompt's SHA-256 and a dated, neutral evidence packet (public facts only: no holdings, notes or other models' conclusions). Each model gets its own job:
+2. **Research it.** A research run saves one canonical prompt (`cr-research-prompt@3`, the position-cycle recipe, identical for every model), the rubric and scoring-profile versions, the exact horizon, the prompt's SHA-256 and a dated, neutral evidence packet (public facts plus the latest market-cycle snapshot; no holdings, notes or other models' conclusions). Each model gets its own job:
+   - **Horizon:** your position horizon by default, **4 calendar months from the research date** (for example 2026-10-02 to 2027-02-02; a typical hold is about 2 months). Choose fewer months when you want. A longer horizon is a long-term exception and needs your reason, which is saved with the run and shown to the models.
+   - **What the models are asked for**, besides the usual ten sections and three scoring panels: the market cycle and sector participation, timing and catalysts inside the horizon, and a review plan, plus a `position_context` block (market view, timing view, catalyst windows, suggested review date). These views never change a score or a grade; "timing and executable liquidity" stays the only timing score. Reports from before this recipe stay as they were and show "not in this report".
    - **Claude via Cowork:** the Cowork session that asked does the Claude research with its own tools and imports it with the run ID.
    - **API (optional):** with a key, model ID, token prices and a budget you set (Settings → Research models & budget), the PC runs the job, saves the raw response before anything else, validates it and commits an immutable report.
    - **Manual (default for GPT and Gemini):** paste the run's prompt into ChatGPT or Gemini yourself and import the answer (Updates → Import report, or the **Import report** button next to that model's job). A consumer subscription is not API access.
@@ -118,6 +122,7 @@ date,type,account,asset,quantity,price_usd,fee_amount,fee_asset,transfer_id,btc_
 | What | When | Needs |
 |---|---|---|
 | Prices, rank, changes, volume (CoinGecko) | Every 5 min while the dashboard is open; hourly otherwise | PC on and online; for hourly, logged in with the task installed |
+| Market context: BTC trend, dominance, breadth (CoinGecko) | About once an hour, with prices | Same; 2 calls each time, from the same monthly call budget |
 | Reports dropped in the inbox, queued Cowork requests | Within seconds while open; hourly otherwise | Same |
 | Research API jobs you started | Within minutes while open; hourly otherwise | Keys, prices and budget set |
 | Scheduled research | **Off** unless you configure a schedule and allow unattended runs within a budget | Same |
@@ -129,7 +134,7 @@ A price refresh never starts research. The hourly job is one Windows scheduled t
 
 ## Costs
 
-- CoinGecko public API: free, keyless; a monthly call budget (default 7,500) pauses refreshes before any limit.
+- CoinGecko public API: free, keyless; a monthly call budget (default 7,500) pauses refreshes before any limit. Market context adds about 2 calls an hour.
 - Everything else runs locally: no hosting, no paid services.
 - Model API research is optional and costs per run; it only runs inside the limits you set. Manual research with your own subscriptions costs nothing extra.
 
@@ -137,7 +142,7 @@ A price refresh never starts research. The hourly job is one Windows scheduled t
 
 - The dashboard listens on 127.0.0.1 only. It is not reachable from your phone or other devices, and it should not be exposed to make it so.
 - Other websites cannot read or change your data: the dashboard checks the Host header, the page's origin and a per-launch token.
-- Outbound traffic: tracked coin IDs to CoinGecko; identity lookups you trigger; and, only if you configure APIs, the research prompt of the project being researched. No holdings, notes or keys leave the PC.
+- Outbound traffic: tracked coin IDs to CoinGecko; two market-wide CoinGecko requests about hourly (global figures and the top 100 by market cap, which name none of your projects); identity lookups you trigger; and, only if you configure APIs, the research prompt of the project being researched. No holdings, notes or keys leave the PC.
 - This folder is in Documents, which is not synced to OneDrive on this PC. Copying it to the cloud is your separate decision.
 
 ## Backups, recovery, exports

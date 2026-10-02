@@ -86,15 +86,17 @@ test('adding a project with a research horizon saves a valid record from every e
   t.after(cleanup);
   const projects = require('../core/projects');
   // Core / CLI path (project add --horizon).
-  const a = projects.addProject(ws, { name: 'Horizon Test One (FICTIONAL)', horizon: '24 months', research_providers: ['gpt', 'Claude', 'gpt'] });
+  const a = projects.addProject(ws, { name: 'Horizon Test One (FICTIONAL)', horizon: '3 months', research_providers: ['gpt', 'Claude', 'gpt'] });
   assert.equal(a.status, 'created');
   const pa = projects.getProject(ws, a.project_id);
-  assert.deepEqual(pa.research_defaults, { horizon: '24 months', providers: ['chatgpt', 'claude'] });
-  const b = projects.addProject(ws, { name: 'Horizon Test Two (FICTIONAL)', horizon: '12-24 months' });
-  assert.deepEqual(projects.getProject(ws, b.project_id).research_defaults.providers, []);
+  assert.deepEqual(pa.research_defaults, { horizon: '3 months', providers: ['chatgpt', 'claude'] });
+  // Above the 4-month planning ceiling a horizon is a long-term exception: it needs a reason.
+  assert.throws(() => projects.addProject(ws, { name: 'Horizon Test Two (FICTIONAL)', horizon: '12-24 months' }), /long-term exception and needs your reason/);
+  const b = projects.addProject(ws, { name: 'Horizon Test Two (FICTIONAL)', horizon: '12-24 months', long_term_reason: 'FICTIONAL structural thesis' });
+  assert.deepEqual(projects.getProject(ws, b.project_id).research_defaults, { horizon: '12-24 months', providers: [], long_term_reason: 'FICTIONAL structural thesis' });
   // Cowork request queue path.
   const requests = require('../core/requests');
-  fs.writeFileSync(path.join(root, 'inbox', 'requests', 'req_horizon_0001.json'), JSON.stringify({ schema_version: 'cr.request.v1', request_id: 'req_horizon_0001', action: 'add_project', args: { name: 'Horizon Test Three (FICTIONAL)', horizon: '24 months', research_providers: ['gemini'] } }));
+  fs.writeFileSync(path.join(root, 'inbox', 'requests', 'req_horizon_0001.json'), JSON.stringify({ schema_version: 'cr.request.v1', request_id: 'req_horizon_0001', action: 'add_project', args: { name: 'Horizon Test Three (FICTIONAL)', horizon: '24 months', long_term_reason: 'FICTIONAL exception for the queue path', research_providers: ['gemini'] } }));
   requests.processRequests(ws);
   const receipt = JSON.parse(fs.readFileSync(path.join(root, 'logs', 'requests', 'req_horizon_0001.result.json'), 'utf8'));
   assert.equal(receipt.status, 'done', JSON.stringify(receipt));
@@ -107,7 +109,7 @@ test('adding a project with a research horizon saves a valid record from every e
     method: 'POST',
     path: '/api/projects',
     headers: { 'x-cr-token': session.token, origin: `http://127.0.0.1:${srv.port}`, 'content-type': 'application/json' },
-    body: { name: 'Horizon Test Four (FICTIONAL)', horizon: '24 months', research: true, research_providers: ['claude', 'chatgpt'], submission_id: 'uitest00horizon01' },
+    body: { name: 'Horizon Test Four (FICTIONAL)', horizon: '4 months', research: true, research_providers: ['claude', 'chatgpt'], submission_id: 'uitest00horizon01' },
   });
   const out = JSON.parse(res.body.toString('utf8'));
   assert.equal(res.status, 200, JSON.stringify(out));
@@ -118,7 +120,7 @@ test('adding a project with a research horizon saves a valid record from every e
     method: 'POST',
     path: '/api/projects',
     headers: { 'x-cr-token': session.token, origin: `http://127.0.0.1:${srv.port}`, 'content-type': 'application/json' },
-    body: { name: 'Horizon Test Four (FICTIONAL)', horizon: '24 months', research: true, research_providers: ['claude', 'chatgpt'], submission_id: 'uitest00horizon01' },
+    body: { name: 'Horizon Test Four (FICTIONAL)', horizon: '4 months', research: true, research_providers: ['claude', 'chatgpt'], submission_id: 'uitest00horizon01' },
   });
   assert.equal(again.status, 200);
   assert.equal(projects.listProjects(ws).filter((p) => p.name === 'Horizon Test Four (FICTIONAL)').length, 1);

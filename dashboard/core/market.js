@@ -456,4 +456,4 @@ function volumeChange24h(ws, id, current) {
   return { pct: (current.volume_24h_usd / best.vol - 1) * 100, compared_with: best.at, hours: Math.round(best.age * 10) / 10 };
 }
 
-module.exports = { refresh, searchCoins, readLatest, readStatus, trackedIds, freshness, fetchMarkets, validateRow, nextAllowed, volumeChange24h, logoFile, LATEST_REL, STATUS_REL, SOURCE_LABEL };
+module.exports = { refresh, searchCoins, readLatest, readStatus, trackedIds, freshness, fetchMarkets, validateRow, nextAllowed, volumeChange24h, logoFile, apiKey, callBudget, LATEST_REL, STATUS_REL, SOURCE_LABEL };

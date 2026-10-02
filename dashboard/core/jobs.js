@@ -111,7 +111,16 @@ async function runJobBody(ws, name, trigger) {
     }
     case 'market': {
       const r = await require('./market').refresh(ws, { trigger });
-      return { status: r.status, summary: r.message, error: r.status === 'failed' ? r.message : null };
+      // Market-cycle context rides along at its own, slower interval (cycle.js).
+      // Its failure never changes the price result.
+      let ctx = null;
+      try {
+        ctx = await require('./cycle').refreshContext(ws, { trigger, foreground: trigger === 'dashboard' });
+      } catch (err) {
+        ctx = { status: 'failed', message: `Market context: ${err.message}` };
+      }
+      const extra = ctx && !['not_due', 'skipped'].includes(ctx.status) ? ` ${ctx.message}` : '';
+      return { status: r.status, summary: `${r.message}${extra}`, error: r.status === 'failed' ? r.message : null };
     }
     case 'research': {
       const r = await require('./research').runDueJobs(ws, { trigger });

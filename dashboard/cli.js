@@ -22,7 +22,8 @@ Setup and health
 Projects
   project add --name "Allora Network" [--website URL] [--symbol ALLO] [--coingecko-id ID]
               [--asset chain:contract[:standard]]... [--evidence URL]... [--evidence-note TEXT]...
-              [--sector "AI/Data"] [--profile network-infrastructure@1] [--horizon "24 months"]
+              [--sector "AI/Data"] [--profile network-infrastructure@1] [--horizon "3 months"]
+              [--long-term-reason TEXT]   (a horizon above the 4-month planning ceiling needs a reason)
               [--research claude,chatgpt,gemini] [--pending-identity] [--no-watchlist] [--no-prompts]
               [--utterance "spoken text"] [--allow-same-symbol] [--input file.json]
   project list | show <id> | archive <id> --reason TEXT
@@ -35,8 +36,9 @@ Projects
   query disagreements [--category token_value_capture] [--threshold 20]
 
 Research
-  research add <id> [--providers claude,chatgpt,gemini] [--horizon "24 months"] [--same-as-last]
-               [--channel cowork] [--utterance "spoken text"]
+  research add <id> [--providers claude,chatgpt,gemini] [--horizon "3 months"] [--same-as-last]
+               [--long-term-reason TEXT] [--channel cowork] [--utterance "spoken text"]
+                                         default horizon: 4 calendar months from today (position-cycle@1)
   research status <id> [<run_id>]       job states per provider
   research prompt <id> <run_id>          print the run's canonical prompt (identical for every provider)
   research cancel|retry <id> <run_id> --provider chatgpt
@@ -78,6 +80,7 @@ Portfolio (manual or CSV; never connects to exchanges)
 
 Data, jobs and maintenance
   market refresh | market status
+  market context [--refresh]             market-cycle snapshot: BTC trend, dominance, breadth (descriptive)
   market lookup "<name or ticker>"       CoinGecko listing candidates (never binds anything)
   job run [requests|inbox|market|research|snapshot|reviews|backup]... [--all-due] [--trigger scheduler]
   schedule install|status|run|remove
@@ -264,6 +267,7 @@ async function run(argv) {
           sector_profile: one(flags.profile) || f.sector_profile,
           sector_note: one(flags.sector_note) || f.sector_note,
           horizon: one(flags.horizon) || f.horizon,
+          long_term_reason: one(flags.long_term_reason) || f.long_term_reason,
           identity_status: flags.pending_identity ? 'pending' : one(flags.identity_status) || f.identity_status,
           watchlist: flags.no_watchlist ? false : f.watchlist !== false,
           generate_prompts: !flags.no_prompts && f.generate_prompts !== false,
@@ -276,7 +280,7 @@ async function run(argv) {
         let researchOut = null;
         const researchProviders = one(flags.research) || f.research;
         if (researchProviders && ['created', 'exists'].includes(r.status)) {
-          researchOut = require('./core/research').createRun(ws, { project_id: r.project_id, providers: researchProviders === true ? undefined : researchProviders, horizon: input.horizon, channel: one(flags.channel) || actor, utterance: input.utterance });
+          researchOut = require('./core/research').createRun(ws, { project_id: r.project_id, providers: researchProviders === true ? undefined : researchProviders, horizon: input.horizon, long_term_reason: input.long_term_reason, channel: one(flags.channel) || actor, utterance: input.utterance });
         }
         return { ...r, research: researchOut ? { status: researchOut.status, run_id: researchOut.run_id, message: researchOut.message, jobs: researchOut.run && Object.fromEntries(Object.entries(researchOut.run.jobs).map(([p, j]) => [p, { state: j.state, mode: j.mode, note: j.note || null }])), prompt_path: researchOut.run && researchOut.run.prompt.path } : null, ...(await afterWrite(ws, r.project_id)) };
       }
@@ -339,8 +343,8 @@ async function run(argv) {
       const research = require('./core/research');
       if (sub === 'add') {
         const id = need(rest[0], 'research add <project>');
-        const r = research.createRun(ws, { project_id: id, providers: one(flags.providers), horizon: one(flags.horizon), same_as_last: Boolean(flags.same_as_last), channel: one(flags.channel) || actor, utterance: one(flags.utterance) || null, force_new: Boolean(flags.force_new) });
-        return { status: r.status, run_id: r.run_id, message: r.message, jobs: Object.fromEntries(Object.entries(r.run.jobs).map(([p, j]) => [p, { state: j.state, mode: j.mode, note: j.note || null }])), prompt_path: r.run.prompt.path, prompt_sha256: r.run.prompt.sha256, files: r.files, verified: r.verified !== false, ...(await afterWrite(ws, id)) };
+        const r = research.createRun(ws, { project_id: id, providers: one(flags.providers), horizon: one(flags.horizon), long_term_reason: one(flags.long_term_reason), same_as_last: Boolean(flags.same_as_last), channel: one(flags.channel) || actor, utterance: one(flags.utterance) || null, force_new: Boolean(flags.force_new) });
+        return { status: r.status, run_id: r.run_id, message: r.message, horizon: r.run.horizon, market_snapshot_id: r.run.evidence_packet.market_snapshot_id || null, jobs: Object.fromEntries(Object.entries(r.run.jobs).map(([p, j]) => [p, { state: j.state, mode: j.mode, note: j.note || null }])), prompt_path: r.run.prompt.path, prompt_sha256: r.run.prompt.sha256, files: r.files, verified: r.verified !== false, ...(await afterWrite(ws, id)) };
       }
       if (sub === 'status') {
         const id = need(rest[0], 'research status <project> [<run_id>]');
@@ -563,7 +567,14 @@ async function run(argv) {
         const q = [...rest, one(flags.query)].filter(Boolean).join(' ');
         return market.searchCoins(ws, q);
       }
-      return { status: market.freshness(ws), tracked: market.trackedIds(ws), latest: market.readLatest(ws) };
+      if (sub === 'context') {
+        // Market-cycle snapshot: BTC trend, dominance and breadth (descriptive only).
+        const cycle = require('./core/cycle');
+        const refreshed = flags.refresh ? await cycle.refreshContext(ws, { trigger: one(flags.trigger) || 'cli', force: true }) : null;
+        const s = cycle.summary(ws);
+        return { ...(refreshed ? { refresh: refreshed } : {}), status: s.status, freshness: s.freshness, line: cycle.describe(cycle.readContext(ws)), snapshot: cycle.readContext(ws), ...(refreshed && refreshed.status === 'ok' ? await afterWrite(ws) : {}) };
+      }
+      return { status: market.freshness(ws), tracked: market.trackedIds(ws), latest: market.readLatest(ws), context: require('./core/cycle').summary(ws) };
     }
     case 'job': {
       const jobs = require('./core/jobs');

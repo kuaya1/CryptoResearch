@@ -8,6 +8,7 @@ import {
 } from '../ui.js';
 import { renderMarkdown } from '../md.js';
 import { openResearchDialog, openSectorDialog } from './dialogs.js';
+import { positionCard, previewTiming } from '../position-ui.js';
 
 const TABS = [
   ['overview', 'Overview'],
@@ -139,7 +140,8 @@ function modelCard(ctx, d, row, prov, latest) {
       h('dl', { class: 'facts' },
         h('div', { class: 'wide' }, h('dt', null, 'Verdict'), h('dd', null, verdictChip(r.assessment.verdict))),
         h('div', null, h('dt', null, 'Analysis'), h('dd', null, fmtDate(r.assessment.analysis_at), info.age ? h('span', { class: 'faint' }, ` · ${info.age}`) : null, info.stale ? h('span', { class: 'freshness stale' }, ' · stale') : null)),
-        h('div', null, h('dt', null, 'Horizon'), h('dd', null, r.assessment.horizon || 'not stated'))),
+        h('div', null, h('dt', null, 'Horizon'), h('dd', null, r.assessment.horizon || 'not stated')),
+        previewTiming(sum) ? h('div', { class: 'wide' }, h('dt', null, 'Timing (the model\'s view)'), h('dd', null, previewTiming(sum))) : null),
       r.assessment.summary ? h('p', { class: 'small', style: { margin: '10px 0 0' } }, r.assessment.summary) : null,
       h('p', { class: 'small faint', style: { margin: '8px 0 0' } }, routeText(r)),
       h('div', { class: 'btn-row', style: { marginTop: '10px' } },
@@ -286,7 +288,8 @@ function scorecardsTab(ctx, d, latest, route) {
         { label: 'Rationale', wrap: true, render: (x) => { const s = a.risk_scores[x.id]; return s ? h('span', { class: 'small' }, s.rationale || s.missing_data || '') : null; } },
       ], grading.risk_scores)),
       h('div', { class: 'btn-row', style: { marginTop: '16px' } }, h('a', { class: 'btn', href: `#/project/${pid}/reports?report=${encodeURIComponent(r.report_id)}` }, 'Open the full report')),
-    ]));
+    ]),
+    positionCard(a, prov));
 }
 
 // ---------------------------------------------------------------------------

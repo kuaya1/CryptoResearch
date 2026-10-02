@@ -11,6 +11,7 @@ import {
   PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, RESEARCH_STATE,
 } from '../ui.js';
 import { openAddProjectDialog, openResearchDialog, openSectorDialog } from './dialogs.js';
+import { marketStrip, positionFacts, previewTiming, vsBtcFacts } from '../position-ui.js';
 
 // Column catalogue. `hide` names the width below which a column steps aside
 // (its value stays in the summary panel).
@@ -417,6 +418,7 @@ function previewContent(ctx, p, prov) {
     else gradeEl = h('div', { class: 'pv-grade' }, h('span', { class: 'state-text' }, info.kind === 'pdf' ? 'PDF: needs a text copy' : 'Grade withheld'), g.coverage_pct !== null && g.coverage_pct !== undefined ? h('span', { class: 'what' }, `${g.coverage_pct}% of the weight scored`) : null);
     add('Verdict', verdictChip(rep.verdict));
     add('Horizon', rep.horizon || 'not stated');
+    add('Timing', previewTiming(rep));
     if (info.kind === 'grade' || info.kind === 'range') add('Coverage', `${g.coverage_pct ?? 100}% of the weight scored`);
     const risks = (rep.top_risks || []).filter((r) => r.status === 'scored' || r.status === 'range');
     if (risks.length) add('Top risks', h('span', null, risks.map((r) => `${riskLabels[r.id] || r.id} ${r.status === 'range' ? `${r.low}–${r.high}` : r.value}`).join(' · '), h('span', { class: 'faint' }, ' (higher is worse)')));
@@ -611,6 +613,7 @@ function providerSection(ctx, p, prov) {
     facts.push(['Verdict', verdictChip(rep.verdict)]);
     facts.push(['Analysis date', h('span', null, fmtDate(rep.analysis_at), info.age ? h('span', { class: 'faint' }, ` · ${info.age} ago`.replace('today ago', 'today')) : null, info.stale ? h('span', { class: 'freshness stale' }, ' · stale') : null)]);
     facts.push(['Horizon', rep.horizon || 'not stated']);
+    facts.push(...positionFacts(ctx, p, prov, rep));
     const risks = (rep.top_risks || []).filter((r) => r.status === 'scored' || r.status === 'range');
     if (risks.length) facts.push(['Top risks (higher is worse)', risks.map((r) => `${riskLabels[r.id] || r.id}: ${r.status === 'range' ? `${r.low}–${r.high}` : r.value}`).join(' · ')]);
     if (rep.grade && rep.grade.status === 'withheld' && rep.grade.reason) facts.push(['Why withheld', rep.grade.reason]);
@@ -718,6 +721,7 @@ function renderPanel(ctx, pid) {
             h('div', null, h('dt', null, 'Market cap'), h('dd', null, fmtCompactUsd(m.market_cap_usd))),
             h('div', null, h('dt', null, 'Volume, 24h'), h('dd', null, fmtCompactUsd(m.volume_24h_usd))),
             h('div', null, h('dt', null, 'FDV'), h('dd', null, fmtCompactUsd(m.fdv_usd))),
+            ...vsBtcFacts(m),
             h('div', { class: 'wide' }, h('dt', null, 'Source'), h('dd', { class: 'small' }, `${m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Fictional demo data' : 'CoinGecko'} · as of ${fmtDateTime(m.as_of)}`))))
           : h('p', { class: 'small muted' }, `No market data: ${(noPriceReason(p) || 'unknown').toLowerCase()}.`, p.identity_status !== 'verified' ? ' Prices appear once the token\'s identity is confirmed.' : '')),
       h('section', { 'aria-labelledby': 'panel-models' }, h('h3', { id: 'panel-models' }, 'Model scorecards'),
@@ -1012,6 +1016,7 @@ export function renderWatchlist(ctx, route) {
             `Prices: ${view.priceSource} · ${m.last_success_at ? `updated ${fmtAgo(m.last_success_at)}` : 'never fetched'}${m.freshness !== 'fresh' && m.freshness !== 'never_run' ? ` · ${fr.text}` : ''}`),
           refreshBtn)),
       h('div', { class: 'actions' }, addBtn)),
+    marketStrip(idx),
     attentionBlock(ctx),
     toolbar,
     tokens,

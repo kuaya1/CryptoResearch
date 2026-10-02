@@ -1,0 +1,33 @@
+/* Position-cycle views (position-ui.js): market-context strip, timing views,
+   suggested reviews. Same neutral palette; meaning is always in the text. */
+
+.mc-strip {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
+  margin: 0 0 var(--s4); padding: 8px 12px;
+  background: var(--surface); border: 1px solid var(--separator); border-radius: var(--r-md);
+  font-size: var(--fs-small); color: var(--text-2);
+}
+.mc-strip .mc-label { font-weight: 600; color: var(--text); }
+.mc-strip .mc-item strong { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.mc-strip.stale { border-color: var(--warn); }
+.mc-explain { flex-basis: 100%; }
+.mc-strip .mc-explain { flex-basis: auto; }
+.mc-explain > summary { cursor: pointer; color: var(--text-2); text-decoration: underline; text-decoration-color: var(--control-border); text-underline-offset: 3px; }
+.mc-explain[open] { flex-basis: 100%; }
+.mc-explain-body { margin-top: var(--s2); padding-top: var(--s2); border-top: 1px solid var(--separator); max-width: 72ch; }
+.mc-explain-body p { margin: 0 0 6px; }
+
+.tl-chip {
+  display: inline-block; padding: 0 8px; border: 1px solid var(--border); border-radius: 999px;
+  font-size: var(--fs-caption); font-weight: 600; line-height: 20px; color: var(--text);
+}
+.sr-wrap { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.sr-wrap .sr-trigger { flex-basis: 100%; }
+
+.pos-card { margin-top: var(--s4); }
+.pos-card .block { display: block; margin-top: 2px; }
+.pos-card h4 { margin: var(--s3) 0 var(--s1); font-size: var(--fs-body); }
+.pos-catalysts ul { margin: 0; padding-left: 18px; }
+.pos-catalysts li { margin: 2px 0; }
+
+.horizon-reason[hidden] { display: none; }

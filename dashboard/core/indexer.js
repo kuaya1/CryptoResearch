@@ -65,6 +65,7 @@ function reportSummary(ws, r) {
     claims: (a.claims || []).length,
     sources: (a.sources || []).length,
     top_risks: topRisks(a),
+    position: require('./position').compactContext(a),
   };
 }
 
@@ -116,6 +117,7 @@ function marketFor(ws, project, latest) {
     rank_source_label: obs.rank_source === 'coingecko' ? 'CoinGecko market-cap rank' : obs.rank_source === 'fictional-demo' ? 'FICTIONAL demo rank' : obs.rank_source || null,
     volume_change_24h_pct: volChange ? volChange.pct : null,
     volume_change_basis: volChange ? `vs. stored observation ${volChange.hours} h earlier (${volChange.compared_with})` : 'needs a stored observation from about 24 hours earlier',
+    vs_btc: valid ? require('./cycle').assetVsBtc(latest, obs) : null,
     as_of: asOf,
     age_minutes: age,
     status: !valid ? 'invalid' : age !== null && age > ws.settings.freshness.price_stale_minutes ? 'stale' : 'fresh',
@@ -180,8 +182,14 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
       const r = latest[prov];
       if (!r) continue;
       for (const c of r.assessment.catalysts || []) {
-        const d = eventDate(c.date);
-        calendar.push({ source: 'report', provider: prov, report_id: r.report_id, project_id: p.project_id, project_name: p.name, type: c.kind === 'unlock' ? 'unlock' : 'catalyst', title: c.title, date: d.date, precision: c.date_precision || d.precision, status: c.status || null, note: c.kind === 'unlock' ? 'Potential liquid supply, not demonstrated selling.' : null });
+        // A position-cycle report gives a window instead of a single date.
+        const d = eventDate(c.date || c.window_start);
+        const windowed = !c.date && Boolean(c.window_start);
+        calendar.push({ source: 'report', provider: prov, report_id: r.report_id, project_id: p.project_id, project_name: p.name, type: c.kind === 'unlock' ? 'unlock' : 'catalyst', title: c.title, date: d.date, precision: windowed ? 'window' : c.date_precision || d.precision, window_end: windowed ? c.window_end || null : null, certainty: c.certainty || null, status: c.status || null, note: c.kind === 'unlock' ? 'Potential liquid supply, not demonstrated selling.' : null });
+      }
+      const pc = r.assessment.position_context;
+      if (pc && pc.timing && pc.timing.next_review_date) {
+        calendar.push({ source: 'report', provider: prov, report_id: r.report_id, project_id: p.project_id, project_name: p.name, type: 'suggested_review', title: `${PROVIDER_LABELS[prov]} suggests a review`, date: pc.timing.next_review_date, precision: 'day', status: null, note: pc.timing.review_trigger || 'A model\'s suggestion, not your review calendar.' });
       }
       for (const u of r.assessment.unlocks || []) {
         const d = eventDate(u.date);
@@ -247,6 +255,21 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
         if (days < 0) attention.push({ kind: 'review_overdue', severity: 'high', project_id: p.project_id, title: `${p.name}: review overdue since ${e.due_date}`, detail: e.title });
         else if (days === 0) attention.push({ kind: 'review_due', severity: 'medium', project_id: p.project_id, title: `${p.name}: review due today`, detail: e.title });
         else if (days <= 7) attention.push({ kind: 'review_upcoming', severity: 'low', project_id: p.project_id, title: `${p.name}: review in ${days} day${days === 1 ? '' : 's'} (${e.due_date})`, detail: e.title });
+      }
+      // A model's suggested review date that is close and not yet on your calendar.
+      const suggested = PROVIDERS
+        .map((prov) => {
+          const pc = latest[prov] && latest[prov].assessment.position_context;
+          return pc && pc.timing && pc.timing.next_review_date ? { prov, date: pc.timing.next_review_date } : null;
+        })
+        .filter(Boolean)
+        .sort((x, y) => x.date.localeCompare(y.date))[0];
+      if (suggested) {
+        const days = daysBetween(today, suggested.date);
+        const covered = openEvents.some((e) => e.type === 'review' && e.due_date && e.due_date <= suggested.date);
+        if (!covered && days <= 7) {
+          attention.push({ kind: 'review_suggested', severity: 'low', project_id: p.project_id, title: `${p.name}: ${PROVIDER_LABELS[suggested.prov]} suggested a review ${days < 0 ? `on ${suggested.date}, which has passed` : days === 0 ? 'for today' : `in ${days} day${days === 1 ? '' : 's'} (${suggested.date})`}`, detail: 'A model\'s suggestion, not your review calendar. Add it as a review if you agree.' });
+        }
       }
       if (comp.flagged.length) {
         attention.push({ kind: 'disagreement', severity: 'medium', project_id: p.project_id, title: `${p.name}: models disagree on ${comp.flagged.length} item${comp.flagged.length === 1 ? '' : 's'}`, detail: comp.flagged.map((f) => `${f.label} (${f.spread})`).join(', ') });
@@ -382,6 +405,8 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
       verdicts: VERDICTS,
     },
     projects: projectsOut,
+    market_context: require('./cycle').summary(ws, now),
+    horizon_policy: require('./position').policy(ws),
     portfolio: pf,
     calendar,
     evidence,
@@ -481,6 +506,8 @@ function projectDetailRaw(ws, id) {
     conviction: notes.readConvictionNote(ws, id),
     prompts,
     market: marketFor(ws, project, latestMarket),
+    market_context: require('./cycle').summary(ws),
+    horizon_policy: require('./position').policy(ws),
     position: pf.positions.find((p) => p.project_id === id) || null,
     portfolio_method: pf.method,
   };

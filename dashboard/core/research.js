@@ -200,7 +200,9 @@ function evidencePacket(ws, project) {
       circulating_supply: obs.circulating_supply,
       total_supply: obs.total_supply,
       max_supply: obs.max_supply,
+      vs_btc: require('./cycle').assetVsBtc(latest, obs),
     } : { note: id ? 'No market observation stored yet.' : 'No verified token binding, so no market data.' },
+    market_context: require('./cycle').packetContext(ws),
     excluded: ['your holdings and transactions', 'your notes and journal', 'other models\' reports and scores'],
   };
 }
@@ -222,9 +224,10 @@ function createRun(ws, args = {}) {
   const list = normalizeProviders(args.providers && (Array.isArray(args.providers) ? args.providers.length : String(args.providers).trim()) ? args.providers : ws.settings.research.default_providers);
   if (!list.length) throw new OpError('INVALID', 'Choose at least one provider: claude, chatgpt or gemini.');
   const previous = listRuns(ws, projectId);
-  const horizonText = String(args.horizon || (args.same_as_last && previous[0] ? previous[0].horizon.text : null) || (project.research_defaults && project.research_defaults.horizon) || ws.settings.research.default_horizon || '24 months');
-  const horizon = parseHorizon(horizonText);
-  if (!horizon || horizon.kind === 'unknown') throw new OpError('INVALID', `Horizon "${horizonText}" is not readable. Use for example "24 months" or "12-24 months".`);
+  // The position-cycle recipe: an exact calendar interval inside the planning
+  // ceiling, or a long-term exception with the owner's reason (position.js).
+  const horizon = require('./position').resolveRunHorizon(ws, { args, previous, project });
+  const horizonText = horizon.text;
   const rubricRef = (args.same_as_last && previous[0] && previous[0].rubric_version) || ws.rubrics.activeRef;
   if (!ws.rubrics.gradingVersions[rubricRef]) throw new OpError('INVALID', `Rubric ${rubricRef} is not available.`);
   // Repeating the same request within a few minutes does not start a second run.
@@ -235,7 +238,7 @@ function createRun(ws, args = {}) {
   const runId = `run_${compactTs()}_${randomId(5)}`;
   const packet = evidencePacket(ws, project);
   const packetText = `${JSON.stringify(packet, null, 2)}\n`;
-  const prompt = buildRunPrompt(ws, project, { runId, horizon: horizonText, rubricRef, packet });
+  const prompt = buildRunPrompt(ws, project, { runId, horizon, rubricRef, packet });
   const status = providerStatus(ws);
   const channel = args.channel || ws.actor || 'cli';
   const fromCowork = /cowork/i.test(channel) || /cowork/i.test(ws.actor || '');
@@ -264,9 +267,9 @@ function createRun(ws, args = {}) {
     providers: list,
     rubric_version: rubricRef,
     sector_profile: project.sector_profile,
-    horizon: { text: horizonText, low_months: horizon.low_months, high_months: horizon.high_months },
-    prompt: { version: PROMPT_VERSION, path: `${dir}/prompt.md`, sha256: sha256(prompt), identical_for_all_providers: true },
-    evidence_packet: { path: `${dir}/evidence-packet.json`, sha256: sha256(packetText), captured_at: packet.captured_at },
+    horizon,
+    prompt: { version: require('./prompts').promptVersionFor(horizon), path: `${dir}/prompt.md`, sha256: sha256(prompt), identical_for_all_providers: true },
+    evidence_packet: { path: `${dir}/evidence-packet.json`, sha256: sha256(packetText), captured_at: packet.captured_at, market_snapshot_id: packet.market_context.snapshot_id || null },
     independence: 'Each provider gets the same prompt and dated context and never sees another model\'s conclusions.',
     jobs,
   };

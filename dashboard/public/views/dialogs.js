@@ -6,6 +6,7 @@ import {
   h, field, fieldError, input, select, button, callout, openDialog, submissionId, toast, copyText, busy, stateText, details,
   PROVIDERS, PROVIDER_LABELS, RESEARCH_STATE, fmtDateTime,
 } from '../ui.js';
+import { horizonHint, needsReason } from '../position-ui.js';
 
 function money(v) {
   return typeof v === 'number' ? `$${v}` : 'not set';
@@ -83,7 +84,16 @@ export function openResearchDialog(ctx, project, { providers = null } = {}) {
   const sameRadio = h('input', { type: 'radio', name: 'horizon-mode', value: 'same', checked: Boolean(last) });
   const customRadio = h('input', { type: 'radio', name: 'horizon-mode', value: 'custom', checked: !last });
   sameRadio.disabled = !last;
-  const horizon = input({ name: 'horizon', value: (last && last.horizon && last.horizon.text) || ctx.state.index.settings.research.default_horizon || '24 months' });
+  const idx = ctx.state.index;
+  const pol = idx.horizon_policy || { default_months: 4, planning_ceiling_months: 4 };
+  // A position run's horizon is whole calendar months from today; the last
+  // run's dates are re-anchored, never reused.
+  const lastText = !last || !last.horizon ? '?' : last.horizon.recipe
+    ? `${last.horizon.months} months from today${last.horizon.mode === 'long_term' ? ', long-term exception with the same reason' : ''}`
+    : `${last.horizon.text} (from before the position recipe)`;
+  const horizon = input({ name: 'horizon', value: `${pol.default_months} months` });
+  const reason = input({ name: 'long_term_reason', placeholder: 'Why this project gets a longer horizon' });
+  const reasonField = h('div', { class: 'horizon-reason', hidden: true }, field('Long-term reason', reason, `Required above ${pol.planning_ceiling_months} months. It is saved with the run and shown in the prompt.`));
   const btn = button('Run research', null, { kind: 'primary', type: 'submit' });
   const errorBox = h('div', { role: 'alert' });
   const out = h('div');
@@ -91,15 +101,20 @@ export function openResearchDialog(ctx, project, { providers = null } = {}) {
   const form = h('form', { class: 'form-stack' },
     choices.group,
     h('fieldset', { class: 'choices', style: { border: 0, padding: 0, margin: 0 } }, h('legend', { class: 'field-label', style: { marginBottom: '6px' } }, 'Horizon and rubric'),
-      h('label', { class: 'choice' }, sameRadio, h('span', { class: 'title' }, 'Same as the last run'), h('span', { class: 'desc' }, last ? `${last.horizon ? last.horizon.text : '?'}, with the same rubric version` : 'No earlier run for this project')),
+      h('label', { class: 'choice' }, sameRadio, h('span', { class: 'title' }, 'Same as the last run'), h('span', { class: 'desc' }, last ? `${lastText}, with the same rubric version` : 'No earlier run for this project')),
       h('label', { class: 'choice' }, customRadio, h('span', { class: 'title' }, 'Choose a horizon'), h('span', { class: 'desc' }, 'Uses the current rubric version'))),
-    field('Horizon', horizon, 'For example "24 months" or "12-24 months".'),
+    field('Horizon', horizon, horizonHint(idx)),
+    reasonField,
     callout(costNote(ctx), 'info'),
     errorBox,
     h('div', { class: 'dlg-foot' }, btn));
-  const syncHorizon = () => { horizon.disabled = sameRadio.checked; };
+  const syncHorizon = () => {
+    horizon.disabled = sameRadio.checked;
+    reasonField.hidden = sameRadio.checked || !needsReason(idx, horizon.value);
+  };
   sameRadio.onchange = syncHorizon;
   customRadio.onchange = syncHorizon;
+  horizon.addEventListener('input', syncHorizon);
   syncHorizon();
   form.onsubmit = async (e) => {
     e.preventDefault();
@@ -109,10 +124,12 @@ export function openResearchDialog(ctx, project, { providers = null } = {}) {
       errorBox.replaceChildren(callout('Choose at least one model.', 'bad'));
       return;
     }
-    if (!sameRadio.checked && !horizon.value.trim()) return fieldError(horizon, 'Type a horizon, for example "24 months".');
+    if (!sameRadio.checked && !horizon.value.trim()) return fieldError(horizon, `Type a horizon, for example "${pol.default_months} months".`);
+    const longTerm = !sameRadio.checked && needsReason(idx, horizon.value);
+    if (longTerm && !reason.value.trim()) return fieldError(reason, `A horizon above ${pol.planning_ceiling_months} months is a long-term exception: say why.`);
     busy(btn, true, 'Requesting…');
     try {
-      const r = await ctx.api.post(`/api/projects/${encodeURIComponent(pid)}/research`, { providers: chosen, horizon: sameRadio.checked ? null : horizon.value.trim(), same_as_last: sameRadio.checked, submission_id: sid });
+      const r = await ctx.api.post(`/api/projects/${encodeURIComponent(pid)}/research`, { providers: chosen, horizon: sameRadio.checked ? null : horizon.value.trim(), long_term_reason: longTerm ? reason.value.trim() : null, same_as_last: sameRadio.checked, submission_id: sid });
       form.classList.add('hidden');
       out.replaceChildren(researchReceipt(ctx, pid, r), h('div', { class: 'dlg-foot' }, button('Done', () => dlgApi.close(), { kind: 'primary' })));
       await ctx.refresh();
@@ -289,7 +306,7 @@ export function openAddProjectDialog(ctx) {
         sector: sector.value || null,
         research: research.checked,
         research_providers: research.checked ? choices.chosen() : [],
-        horizon: research.checked ? (ctx.state.index.settings.research.default_horizon || '24 months') : null,
+        horizon: research.checked ? `${(ctx.state.index.horizon_policy || {}).default_months || 4} months` : null,
         submission_id: st.sid,
       };
       busy(add, true, 'Saving…');

@@ -3,10 +3,13 @@
 // so every provider receives identical instructions and the same JSON contract.
 //
 // Versions: cr-research-prompt@1 (original) stays readable for older reports;
-// new prompts use cr-research-prompt@2, which adds the research run ID, the
-// dated evidence packet and the independence instruction. A research run's
-// prompt is byte-identical for Claude, ChatGPT and Gemini (the provider is set
-// by the channel the answer comes back through), and its SHA-256 is recorded.
+// cr-research-prompt@2 added the research run ID, the dated evidence packet and
+// the independence instruction. New prompts use cr-research-prompt@3, the
+// position-cycle@1 recipe (position.js): an exact calendar horizon inside the
+// planning ceiling, market-cycle, timing and review-plan sections, and a
+// position_context block in the JSON contract. Scoring is unchanged. A research
+// run's prompt is byte-identical for Claude, ChatGPT and Gemini (the provider is
+// set by the channel the answer comes back through), and its SHA-256 is recorded.
 
 const path = require('path');
 const { readText, sha256, listDir, fileInfo } = require('./fsx');
@@ -16,6 +19,7 @@ const { ymdInTz } = require('./dates');
 
 const PROMPT_VERSION_V1 = 'cr-research-prompt@1';
 const PROMPT_VERSION = 'cr-research-prompt@2';
+const PROMPT_VERSION_V3 = 'cr-research-prompt@3';
 const DEFAULT_HORIZON = '24 months';
 
 function unknownScore() {
@@ -38,7 +42,7 @@ function gradingFor(ws, rubricRef) {
   return (rubricRef && ws.rubrics.gradingVersions[rubricRef]) || ws.rubrics.grading;
 }
 
-function buildSkeleton(ws, profile, { provider = null, projectId = null, project = null, horizon = DEFAULT_HORIZON, rubricRef = null, runId = null, promptVersion = PROMPT_VERSION } = {}) {
+function buildSkeleton(ws, profile, { provider = null, projectId = null, project = null, horizon = DEFAULT_HORIZON, rubricRef = null, runId = null, promptVersion = PROMPT_VERSION, positionHorizon = null } = {}) {
   const grading = gradingFor(ws, rubricRef);
   const diagnostic = {};
   for (const c of profile.diagnostic_categories) {
@@ -106,10 +110,36 @@ function buildSkeleton(ws, profile, { provider = null, projectId = null, project
     unresolved_questions: [],
     original_report_reference: { note: 'The written report above this JSON block is the original.' },
   };
+  if (promptVersion === PROMPT_VERSION_V3) return positionSkeleton(skeleton, { runId, horizon: positionHorizon });
   if (promptVersion !== PROMPT_VERSION_V1) {
     return { schema_version: skeleton.schema_version, report_id: null, research_run_id: runId, ...skeleton };
   }
   return skeleton;
+}
+
+// cr-research-prompt@3: the same contract plus catalyst windows and the
+// position_context block, placed before the closing fields.
+function positionSkeleton(skeleton, { runId, horizon }) {
+  const h = horizon || {};
+  const out = { schema_version: skeleton.schema_version, report_id: null, research_run_id: runId };
+  for (const [k, v] of Object.entries(skeleton)) {
+    if (k === 'schema_version' || k === 'report_id') continue;
+    if (k === 'catalysts') {
+      out.catalysts = [{ title: '', date: null, date_precision: null, window_start: null, window_end: null, kind: null, status: null, certainty: 'unknown', in_horizon: null, claim_ids: [] }];
+      continue;
+    }
+    if (k === 'final_take') {
+      out.position_context = {
+        recipe: require('./position').RECIPE_ID,
+        horizon: { mode: h.mode || null, start_date: h.start_date || null, end_date: h.end_date || null },
+        market: { state: 'unknown', rationale: '', evidence_refs: [] },
+        timing: { state: 'unknown', rationale: '', evidence_refs: [], next_review_date: null, review_trigger: null },
+        long_term_note: null,
+      };
+    }
+    out[k] = v;
+  }
+  return out;
 }
 
 // Pretty-prints JSON but keeps small objects (each score object, each fact) on one
@@ -203,19 +233,88 @@ function promptValues(ws, project, profile, { horizon, rubricRef, runId, packet,
   };
 }
 
-// General per-provider prompt (projects/<id>/prompts/<provider>.md).
+function buildAppendixV3(ws, profile, { provider = null, projectId = null, project = null, horizon, rubricRef = null, runId = null } = {}) {
+  const grading = gradingFor(ws, rubricRef);
+  const { RECIPE_ID } = require('./position');
+  const template = readText(path.join(ws.root, 'templates', 'grading-appendix.v3.md'));
+  const skeleton = buildSkeleton(ws, profile, { provider, projectId, project, horizon: horizon.text, rubricRef: grading.rubric_ref, runId, promptVersion: PROMPT_VERSION_V3, positionHorizon: horizon });
+  return fill(template, {
+    PROVIDER_VALUE: provider ? `"${provider}"` : '`null` (set by the channel your answer comes back through; do not guess)',
+    PROJECT_ID_VALUE: projectId ? `"${projectId}"` : '`null` unless you were given one',
+    RUN_ID_VALUE: runId ? `"${runId}"` : '`null`',
+    SECTOR_PROFILE: profile.profile_ref,
+    RUBRIC_VERSION: grading.rubric_ref,
+    PROMPT_VERSION: PROMPT_VERSION_V3,
+    RECIPE_ID,
+    HORIZON: `"${horizon.text}"`,
+    HORIZON_MODE: horizon.mode,
+    HORIZON_START: horizon.start_date,
+    HORIZON_END: horizon.end_date,
+    DIAGNOSTIC_LIST: diagnosticList(profile),
+    COMPONENT_LIST: componentList(grading),
+    JSON_SKELETON: compactJson(skeleton),
+  });
+}
+
+function marketSnapshotLine(packet) {
+  const mc = packet && packet.market_context;
+  if (!packet) return 'none comes with this general prompt; retrieve current market conditions yourself and date them.';
+  if (!mc || mc.status !== 'captured') return 'none was available when this run was created, so treat Bitcoin\'s trend, dominance and altcoin breadth as unknown unless you retrieve them yourself.';
+  return `${require('./cycle').describe(mc)} (snapshot ${mc.snapshot_id}).`;
+}
+
+function promptValuesV3(ws, project, profile, { horizon, rubricRef, runId, packet, provider }) {
+  const { RECIPE_ID } = require('./position');
+  const base = promptValues(ws, project, profile, { horizon: horizon.text, rubricRef, runId, packet, provider });
+  const longTerm = horizon.mode === 'long_term';
+  return {
+    ...base,
+    RECIPE_ID,
+    TYPICAL_HOLD: String(horizon.typical_hold_months),
+    CEILING: String(horizon.planning_ceiling_months),
+    HORIZON_START: horizon.start_date,
+    HORIZON_END: horizon.end_date,
+    HORIZON_MONTHS: String(horizon.months),
+    HORIZON_MODE_TEXT: longTerm ? `a long-term exception beyond the ${horizon.planning_ceiling_months}-month planning ceiling` : `a position horizon inside the ${horizon.planning_ceiling_months}-month planning ceiling`,
+    EXCEPTION_LINE: longTerm
+      ? `This run is a long-term exception the owner chose, for this reason: "${String(horizon.exception_reason).replace(/[\r\n]+/g, ' ').slice(0, 600)}". Assess the full interval above, and still give the market-cycle and timing views.`
+      : 'Longer-term structural merit may be noted in `position_context.long_term_note`. Keep it out of this position assessment.',
+    MARKET_SNAPSHOT_LINE: marketSnapshotLine(packet),
+    GRADING_APPENDIX: buildAppendixV3(ws, profile, { provider, projectId: project.project_id, project, horizon, rubricRef: base.RUBRIC_VERSION, runId }),
+  };
+}
+
+// Which prompt a horizon calls for: the position recipe's object, or older text.
+function promptVersionFor(horizon) {
+  return horizon && typeof horizon === 'object' && horizon.recipe ? PROMPT_VERSION_V3 : PROMPT_VERSION;
+}
+
+// General per-provider prompt (projects/<id>/prompts/<provider>.md), dated the
+// day it is written. A research run's own prompt is the one to use.
 function buildProjectPrompt(ws, project, provider, { horizon = null } = {}) {
   const profile = ws.rubrics.profiles[project.sector_profile];
   if (!profile) throw new Error(`Unknown sector profile ${project.sector_profile}`);
-  const h = horizon || (project.research_defaults && project.research_defaults.horizon) || ws.settings.research.default_horizon || DEFAULT_HORIZON;
-  const template = readText(path.join(ws.root, 'templates', 'research-prompt.v2.md'));
-  return fill(template, promptValues(ws, project, profile, { horizon: h, rubricRef: ws.rubrics.activeRef, runId: null, packet: null, provider }));
+  const pos = require('./position');
+  let h;
+  try {
+    h = pos.resolveRunHorizon(ws, { args: { horizon }, project });
+  } catch (_) {
+    // A project default that needs a long-term reason never blocks its prompts.
+    h = pos.resolveRunHorizon(ws, {});
+  }
+  const template = readText(path.join(ws.root, 'templates', 'research-prompt.v3.md'));
+  return fill(template, promptValuesV3(ws, project, profile, { horizon: h, rubricRef: ws.rubrics.activeRef, runId: null, packet: null, provider }));
 }
 
 // The canonical prompt of a research run: identical bytes for every provider.
+// A horizon object from position.js gets cr-research-prompt@3; older text gets @2.
 function buildRunPrompt(ws, project, { runId, horizon, rubricRef, packet }) {
   const profile = ws.rubrics.profiles[project.sector_profile];
   if (!profile) throw new Error(`Unknown sector profile ${project.sector_profile}`);
+  if (promptVersionFor(horizon) === PROMPT_VERSION_V3) {
+    const template = readText(path.join(ws.root, 'templates', 'research-prompt.v3.md'));
+    return fill(template, promptValuesV3(ws, project, profile, { horizon, rubricRef, runId, packet, provider: null }));
+  }
   const template = readText(path.join(ws.root, 'templates', 'research-prompt.v2.md'));
   return fill(template, promptValues(ws, project, profile, { horizon, rubricRef, runId, packet, provider: null }));
 }
@@ -251,4 +350,4 @@ function listPromptFiles(ws, projectId) {
   return out;
 }
 
-module.exports = { PROMPT_VERSION, PROMPT_VERSION_V1, DEFAULT_HORIZON, buildSkeleton, buildAppendix, buildAppendixV2, buildProjectPrompt, buildRunPrompt, stageProjectPrompts, listPromptFiles };
+module.exports = { PROMPT_VERSION, PROMPT_VERSION_V1, PROMPT_VERSION_V3, DEFAULT_HORIZON, buildSkeleton, buildAppendix, buildAppendixV2, buildAppendixV3, buildProjectPrompt, buildRunPrompt, promptVersionFor, stageProjectPrompts, listPromptFiles };

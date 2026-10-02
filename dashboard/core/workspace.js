@@ -49,7 +49,7 @@ const DEFAULT_SETTINGS = {
   },
   research: {
     default_providers: ['claude', 'chatgpt', 'gemini'],
-    default_horizon: '24 months',
+    default_horizon: '4 months',
     max_attempts: 2,
     timeout_seconds: 600,
     max_concurrent: 1,

@@ -47,6 +47,23 @@ function mockReport(ws, provider, run) {
   const today = new Date().toISOString().slice(0, 10);
   const verdicts = ['CONDITIONAL OPPORTUNITY', 'REAL PRODUCT, WEAK TOKEN', 'INSUFFICIENT EVIDENCE'];
   const verdict = verdicts[Math.floor(rnd() * verdicts.length)];
+  // A run under the position-cycle recipe gets a FICTIONAL position_context
+  // and a catalyst with a window inside the run's horizon.
+  const h = run.horizon || {};
+  const positional = Boolean(h.recipe && h.start_date && h.end_date);
+  const { addDays } = require('./dates');
+  const pick = (list) => list[Math.floor(rnd() * list.length)];
+  const reviewDay = positional ? addDays(h.start_date, 35 + Math.floor(rnd() * 20)) : null;
+  const positionContext = positional ? {
+    recipe: h.recipe,
+    horizon: { mode: h.mode, start_date: h.start_date, end_date: h.end_date },
+    market: { state: pick(['bitcoin_led', 'mixed', 'broad_altcoin_participation']), rationale: 'FICTIONAL reading of the demo market snapshot. Not research.', evidence_refs: ['C1'] },
+    timing: { state: pick(['early', 'developing', 'extended']), rationale: 'FICTIONAL timing view for the demo. Not research.', evidence_refs: ['C1'], next_review_date: reviewDay < h.end_date ? reviewDay : h.end_date, review_trigger: 'FICTIONAL: re-check sooner if the demo upgrade slips.' },
+    long_term_note: null,
+  } : undefined;
+  const catalysts = positional
+    ? [{ title: 'FICTIONAL mainnet upgrade', date: null, date_precision: 'window', window_start: addDays(h.start_date, 20), window_end: addDays(h.start_date, 50), kind: 'product', status: 'announced', certainty: 'project_claimed', in_horizon: true, claim_ids: ['C1'] }]
+    : [];
   const json = {
     schema_version: 'cr.report.v1',
     report_id: null,
@@ -75,12 +92,13 @@ function mockReport(ws, provider, run) {
     bearish_facts: [{ text: 'FICTIONAL bearish fact.', claim_ids: ['C1'] }],
     conviction_increases: [{ text: 'FICTIONAL development that would raise conviction.', claim_ids: [] }],
     invalidators: [{ text: 'FICTIONAL thesis invalidator.', claim_ids: [] }],
-    catalysts: [],
+    catalysts,
     unlocks: [],
     tokenomics_changes: [],
     economics: {},
     scenarios: { btc_relative_definition: '(1 + token return) / (1 + BTC return) - 1 over the horizon', items: [{ case: 'bull', probability_pct: 25, price_range_usd: { low: null, high: null }, relative_return_vs_btc_pct: { low: null, high: null } }, { case: 'base', probability_pct: 45, price_range_usd: { low: null, high: null }, relative_return_vs_btc_pct: { low: null, high: null } }, { case: 'bear', probability_pct: 30, price_range_usd: { low: null, high: null }, relative_return_vs_btc_pct: { low: null, high: null } }] },
     next_metric_to_monitor: { metric: 'FICTIONAL metric', why: 'Demo', threshold: null },
+    position_context: positionContext,
     final_take: 'FICTIONAL demo take. Nothing here is real research.',
     unresolved_questions: ['FICTIONAL open question?'],
     original_report_reference: { note: 'The written report above this JSON block is the original.' },
@@ -103,6 +121,26 @@ function mockReport(ws, provider, run) {
     '',
   ].join('\n');
   return prose;
+}
+
+// A labeled FICTIONAL snapshot in the shape of a real one (cycle.js).
+function demoMarketContext(ws) {
+  const cycle = require('./cycle');
+  const now = new Date().toISOString();
+  const r = (id, symbol, price, ch7, ch30) => ({ id, symbol, name: `${id} (FICTIONAL)`, current_price: price, market_cap: 1e9, price_change_percentage_7d_in_currency: ch7, price_change_percentage_30d_in_currency: ch30, last_updated: now });
+  const rows = [
+    { ...r('bitcoin', 'btc', 61000, 2.2, 5.1), name: 'Bitcoin' },
+    { ...r('ethereum', 'eth', 2600, 1.4, 3.2), name: 'Ethereum' },
+    { ...r('tether', 'usdt', 1, 0, 0.01), name: 'Tether' },
+    r('example-infra-fictional', 'xinf', 1.84, -4.6, 18.9),
+    r('example-payfi-fictional', 'xmpl', 0.27, 11.8, -6.2),
+    r('example-ai-fictional', 'xaid', 0.061, 31.2, 54),
+    r('example-game-fictional', 'xgme', 0.0042, -12.5, -28.1),
+    r('example-alt-one-fictional', 'xa1', 2, 1, 2),
+    r('example-alt-two-fictional', 'xa2', 3, -2, 4),
+  ];
+  const global = { data: { total_market_cap: { usd: 2.1e12 }, total_volume: { usd: 7e10 }, market_cap_percentage: { btc: 56.4, eth: 11.8 }, market_cap_change_percentage_24h_usd: 0.6, updated_at: Math.floor(Date.now() / 1000) } };
+  return cycle.saveSnapshot(ws, cycle.buildSnapshot({ global, rows, capturedAt: now, fictional: true }));
 }
 
 function sparkline(seed, start, drift) {
@@ -169,13 +207,17 @@ async function buildDemo({ root = DEMO_ROOT } = {}) {
   const scan = inbox.scanInbox(ws, { force: true });
   inbox.importContent(ws, 'claude', { content: minimalPdf(), filename: 'example-game-fictional.pdf', projectId: game.project_id });
 
-  // Research runs in different states (mock adapters, fictional output).
-  research.createRun(ws, { project_id: infra.project_id, providers: ['claude', 'chatgpt', 'gemini'], horizon: '24 months', channel: 'dashboard', utterance: 'DEMO: research Example Infra with Claude, GPT and Gemini' });
+  // A FICTIONAL market-cycle snapshot, so new runs carry one (market data is off here).
+  demoMarketContext(ws);
+
+  // Research runs in different states (mock adapters, fictional output): a
+  // 4-month position run, and a long-term exception with its stated reason.
+  research.createRun(ws, { project_id: infra.project_id, providers: ['claude', 'chatgpt', 'gemini'], channel: 'dashboard', utterance: 'DEMO: research Example Infra with Claude, GPT and Gemini' });
   await research.runDueJobs(ws, { trigger: 'demo' });
   await research.runDueJobs(ws, { trigger: 'demo' });
   atomicWrite(settingsFile, jsonText(settings({ claude: { mock: 'ok' } })));
   ws = openWorkspace({ root, actor: 'demo-builder' });
-  research.createRun(ws, { project_id: ai.project_id, providers: ['claude', 'chatgpt', 'gemini'], horizon: '12-24 months', channel: 'dashboard', utterance: 'DEMO: research Example AI Data' });
+  research.createRun(ws, { project_id: ai.project_id, providers: ['claude', 'chatgpt', 'gemini'], horizon: '12 months', long_term_reason: 'FICTIONAL demo: a structural thesis on data demand, recorded as a long-term exception.', channel: 'dashboard', utterance: 'DEMO: research Example AI Data over 12 months' });
   await research.runDueJobs(ws, { trigger: 'demo' });
   atomicWrite(settingsFile, jsonText(settings({ claude: { mock: 'ok' }, chatgpt: { mock: 'ok' }, gemini: { mock: 'timeout' } })));
   ws = openWorkspace({ root, actor: 'demo-builder' });

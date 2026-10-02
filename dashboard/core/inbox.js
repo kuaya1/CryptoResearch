@@ -237,6 +237,12 @@ function ingestLocked(ws, provider, filename, opts = {}) {
   const now = new Date().toISOString();
   const originalName = `original${isPdf ? '.pdf' : ext === '.json' ? '.json' : ext === '.txt' ? '.txt' : '.md'}`;
   const linkedRun = runId || (assessment.research_run_id && /^run_[A-Za-z0-9_-]{4,80}$/.test(assessment.research_run_id) ? assessment.research_run_id : null);
+  if (built && linkedRun) {
+    // A position-cycle report is checked against the run it answers (horizon, recipe).
+    const bound = require('./position').bindToRun(ws, target.project_id, linkedRun, assessment);
+    if (assessment.position_context) assessment.position_context.run_binding = bound.binding;
+    built.extraction.issues.push(...bound.issues);
+  }
   const meta = {
     schema_version: 'cr.report-meta.v1',
     report_id: reportId,

@@ -12,13 +12,14 @@ CryptoResearch/
 ├── WORKSPACE-MAP.md            This file
 ├── Open Dashboard.cmd          One-click launcher (127.0.0.1:4729)
 ├── Open Demo Dashboard.cmd     Fictional demo workspace (127.0.0.1:4739)
+├── archive/                    Unique files kept from retired copies (2026-10-02-consolidation: zip, manifest, README)
 ├── audits/                     Audit reports and their status (findings, migration, validation, screenshots)
 ├── config/
 │   ├── settings.json           Only your overrides (thresholds, refresh, labels, research models and budget)
 │   └── ui-state.json           Dashboard view preferences (columns, sort, filters); not a record
 ├── templates/                  Versioned. Never edit a published version in place; publish a new @N
-│   ├── research-prompt.v2.md       Canonical research prompt (cr-research-prompt@2); v1 kept for old reports
-│   ├── grading-appendix.v2.md      Appendix with the JSON contract (v1 kept)
+│   ├── research-prompt.v3.md       Canonical research prompt (cr-research-prompt@3, position-cycle@1 recipe); v1, v2 kept for old reports
+│   ├── grading-appendix.v3.md      Appendix with the JSON contract, including position_context (v1, v2 kept)
 │   ├── appendix/                   Standalone appendix per scoring profile, for your own prompts
 │   ├── rubrics/                    cr-grading@1 (weights, labels, risk panel) + scoring profiles
 │   │   └── RUBRIC-LOCK.json        SHA-256 pin per rubric/profile version; unpinned or altered = no app grade
@@ -40,9 +41,10 @@ CryptoResearch/
 │       ├── journal/<entry>.json    Immutable: decisions, note history, thesis updates, completed reviews
 │       ├── prompts/<provider>.md   Standing research prompts (rebuilt when the profile changes)
 │       ├── research/<run_id>/      One research run (immutable inputs)
-│       │   ├── run.json                Models, rubric + profile versions, horizon, prompt hash, job states and attempts
+│       │   ├── run.json                Models, rubric + profile versions, horizon (exact dates; long-term reason if any),
+│       │   │                           prompt hash, market snapshot ID, job states and attempts
 │       │   ├── prompt.md               The canonical prompt, identical for every model
-│       │   ├── evidence-packet.json    Dated public context (no holdings, notes or other models' conclusions)
+│       │   ├── evidence-packet.json    Dated public context incl. the market snapshot (no holdings, notes or other models' conclusions)
 │       │   └── responses/<provider>-attempt<N>.json   Raw API response, saved before normalization
 │       └── reports/<YYYY-MM-DD>_<provider>_<hash>/
 │           ├── original.md|txt|json|pdf   The report exactly as received (never changed)
@@ -61,7 +63,10 @@ CryptoResearch/
 │   ├── latest.json             Last VALID observation per asset (invalid or older data never overwrites)
 │   ├── status.json             Last attempt / success / error, backoff, monthly call count
 │   ├── logos/                  Small logo images cached from CoinGecko's image CDN
-│   └── observations/YYYY-MM.jsonl   Append-only market history (about hourly)
+│   ├── observations/YYYY-MM.jsonl   Append-only market history (about hourly)
+│   └── context/                Market-cycle snapshots: BTC trend, dominance, breadth (about hourly)
+│       ├── latest.json             The last valid snapshot (kept when a fetch fails)
+│       └── YYYY-MM.jsonl           Every snapshot, append-only; research runs cite them by snapshot ID
 ├── logs/
 │   ├── operations.jsonl        Every write: begin / commit / recovery, with files touched
 │   ├── applied/<key>.json      Idempotency records: one per applied request or form submission

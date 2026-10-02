@@ -4,6 +4,8 @@ This folder is Eric's CryptoResearch workspace: a private crypto watchlist, rese
 
 Eric dictates most requests. Read for intent, ignore filler, and when he restarts a sentence, the last version is the real one. A spoken project name or ticker is a lead, not an identity. For example, "Huma" usually means Huma Finance, but Humanity (H) also matches. Resolve the identity as described in section 3.
 
+Why this desk exists, and its limits, are in [CryptoResearch-Mission-and-Architecture-v1.md](CryptoResearch-Mission-and-Architecture-v1.md). In short: Eric picks the projects; Claude, GPT and Gemini assess them independently; his own judgment stays separate; research, watchlist and holdings never mix; nothing trades. His style is **position trading**: usually a couple of months, with a **4-month planning ceiling**, read against Bitcoin's trend and whether altcoins participate.
+
 All commands below run from this folder: `node dashboard/cli.js <command> … --json`. On Windows PowerShell, continue long lines with a backtick instead of `\`.
 
 ---
@@ -66,9 +68,10 @@ This is the everyday request. CLI route:
      --website "https://www.allora.network/" --coingecko-id allora `
      --asset "ethereum:0x...:ERC-20" `
      --evidence "https://..." --evidence-note "Official page lists the token contract" `
-     --sector "AI/Data" --research claude,chatgpt,gemini --horizon "24 months" `
+     --sector "AI/Data" --research claude,chatgpt,gemini `
      --channel cowork --utterance "<Eric's words exactly>" --json
    ```
+   **Horizon.** Leave `--horizon` out: the run then uses Eric's position horizon, **4 calendar months from today** (for example 2026-10-02 to 2027-02-02). Use `--horizon "3 months"` when he asks for a shorter one. Anything longer than 4 months is a long-term exception: only when Eric asks for it, and only with his reason in his words, `--long-term-reason "<his words>"`. Never write a reason for him; without one the CLI refuses the run.
    Read `status`:
 
    | `status` | Meaning | Do |
@@ -77,12 +80,12 @@ This is the everyday request. CLI route:
    | `exists` | Already there; nothing duplicated (`matched_on` says why). | Tell Eric; research still starts if asked. |
    | `possible_duplicate` | Same ticker as another project. | Confirm identity; retry with `--allow-same-symbol` only if it really is different. |
 
-   The output's `research` block lists one job per model. The run saves one canonical prompt (identical for every model), the rubric and profile versions, the full horizon, the prompt hash and a neutral dated evidence packet.
+   The output's `research` block lists one job per model. The run saves one canonical prompt (`cr-research-prompt@3`, recipe `position-cycle@1`, identical for every model), the rubric and profile versions, the exact horizon interval, the prompt hash and a neutral dated evidence packet. The packet includes the latest **market-cycle snapshot** (Bitcoin's 7D/30D trend, BTC dominance, and how many of the largest coins beat BTC over 30 days) with its ID, or says it is unknown.
 5. **Your own job (Claude).** With `--channel cowork`, the Claude job is assigned to you (`running`, mode `cowork`). Do it now:
    ```
    node dashboard/cli.js research prompt <project_id> <run_id>
    ```
-   Research with your own tools (web search, the official sources) and the evidence packet. Do not read other models' reports for this project first; each model works independently. Write the complete answer (report plus the JSON block the prompt asks for, including `"research_run_id"`) to a file, then:
+   Research with your own tools (web search, the official sources) and the evidence packet. Do not read other models' reports for this project first; each model works independently. Write all thirteen sections the prompt asks for, including market cycle, timing and catalysts inside the horizon, and a review plan. The market snapshot is data the dashboard captured, not something you checked: tag claims that rely on it accordingly. Write the complete answer (report plus the JSON block the prompt asks for, including `"research_run_id"` and the `position_context` block: your market view, your timing view, catalyst windows and a suggested review date inside the horizon) to a file, then:
    ```
    node dashboard/cli.js import-text --provider claude --project <project_id> --run <run_id> --text-file <file> --json
    ```
@@ -94,7 +97,7 @@ This is the everyday request. CLI route:
    - `queued` / `running`: an API key, model, prices and budget are configured; the PC runs the job (dashboard or hourly task) within the budget. Pending is not saved.
    - `unconfigured` (manual): no API access. The prompt is ready for Eric to paste into ChatGPT and Gemini himself. Tell him where: on the project's Research runs tab, "Copy prompt" gives the prompt and "Import report" next to that model takes the answer; or `research prompt <id> <run_id>` prints it.
    - `failed`: show the error. Other models' results are unaffected. `research retry <id> <run_id> --provider chatgpt` retries (bounded).
-7. **Report back in a few lines:** the project ID, identity status and evidence; `projects/<id>/`; the dashboard link `http://127.0.0.1:4729/#/watchlist?p=<id>`; each model's job state in plain words; remaining unknowns.
+7. **Report back in a few lines:** the project ID, identity status and evidence; `projects/<id>/`; the dashboard link `http://127.0.0.1:4729/#/watchlist?p=<id>`; the horizon interval; each model's job state in plain words; remaining unknowns. Once a report is saved, its timing view and suggested review date show in the dashboard; a suggested review date is the model's suggestion, and it goes on Eric's calendar only if he adds it (`review add`).
 
 ## 4. The other everyday requests
 
@@ -102,7 +105,8 @@ This is the everyday request. CLI route:
 |---|---|
 | "Add [project + official URL] to my watchlist and research it with Claude, GPT, and Gemini." | Section 3. |
 | "Add this project only; research it later." | Section 3 steps 1 to 4 without `--research`/`--horizon`. Prompts are prepared; no run is started. |
-| "Refresh research for [project] using the same rubric and horizon." | `research add <id> --same-as-last --providers claude,chatgpt,gemini --channel cowork --utterance "<words>" --json`, then section 3 steps 5 to 7. A repeat within 10 minutes returns `exists` instead of a second run. |
+| "Refresh research for [project] using the same rubric and horizon." | `research add <id> --same-as-last --providers claude,chatgpt,gemini --channel cowork --utterance "<words>" --json`, then section 3 steps 5 to 7. The same length (and long-term reason, if any) is re-anchored to today. A repeat within 10 minutes returns `exists` instead of a second run. |
+| "What's the market doing?" / "Is it an altcoin season?" | `market context --json` (add `--refresh` for a new snapshot). Report the figures with their as-of time and definitions. They describe conditions; never present them as a forecast or an "altcoin season" verdict. |
 | "Import this GPT report for [project]." | Save Eric's pasted text unchanged to a file, then `import-text --provider chatgpt --project <id> --text-file <file> [--run <run_id>] --json`. Use the provider that actually wrote it; if unclear, ask. If the report says a different model wrote it, the import is held as `provider_mismatch`: ask Eric, never force it. |
 | "Show the latest scorecards and changes since my last review." | `scorecards --json` (each model's latest grade or why it has none) and `changes --json` (or `changes <id>`). Eric marks a project reviewed with `project reviewed <id>`; do that only when he says he reviewed it. |
 | "Compare the models on [project]." | `compare <id> --json`. Report comparability, each model's grade next to its own total, spreads of 20+, contradictions versus different bases, shared sources, resolving questions. Never present a median or model agreement as a verdict or as corroboration. |
@@ -139,6 +143,7 @@ Grades: each model's grade is shown separately. Missing, unknown or N/A inputs w
 | Command | What it does |
 |---|---|
 | `market refresh` | Fetches prices now from CoinGecko (only tracked coin IDs are sent). |
+| `market context [--refresh]` | The market-cycle snapshot (BTC trend, dominance, breadth). Refreshed about hourly with prices; `--refresh` makes a new one (2 CoinGecko calls). |
 | `market lookup "<name>"` | Listing candidates for identity work. |
 | `research run` | Runs queued API jobs now, within the budget. |
 | `research providers` | Which models can run by API and what is missing. |
@@ -175,7 +180,7 @@ Use this when you can write files into the folder but cannot execute commands ag
        "assets": [{ "chain": "ethereum", "contract_address": "0x..." }],
        "evidence": [{ "url": "https://...", "note": "what it confirms" }],
        "sector": "ai_data",
-       "horizon": "24 months",
+       "horizon": "4 months",
        "research_providers": ["claude", "chatgpt", "gemini"]
      }
    }
@@ -186,7 +191,7 @@ Use this when you can write files into the folder but cannot execute commands ag
      "request_id": "req_20261001_allora_research",
      "created_by": "cowork",
      "action": "research_project",
-     "args": { "project_id": "allora-network", "providers": ["claude", "chatgpt", "gemini"], "horizon": "24 months", "channel": "cowork" }
+     "args": { "project_id": "allora-network", "providers": ["claude", "chatgpt", "gemini"], "channel": "cowork" }
    }
    ```
    ```json
@@ -198,7 +203,7 @@ Use this when you can write files into the folder but cannot execute commands ag
      "args": { "provider": "claude", "project_id": "allora-network", "run_id": "run_...", "text": "<your complete report with its JSON block>" }
    }
    ```
-   `add_project` with `research_providers` records the defaults; a run starts with a separate `research_project` request (or from the dashboard). With `"channel": "cowork"` the Claude job is yours: once the receipt shows `result.run_id`, read `projects/<id>/research/<run_id>/prompt.md`, write your report, and import it with `import_report_text` and that `run_id`. Never send `import_report_text` with `"provider": "chatgpt"` or `"gemini"` for text you wrote.
+   `add_project` with `research_providers` records the defaults; a run starts with a separate `research_project` request (or from the dashboard). Without `horizon` a run uses the 4-month position horizon; a `horizon` above 4 months needs `"long_term_reason": "<Eric's words>"`, or the request is rejected. With `"channel": "cowork"` the Claude job is yours: once the receipt shows `result.run_id`, read `projects/<id>/research/<run_id>/prompt.md`, write your report, and import it with `import_report_text` and that `run_id`. Never send `import_report_text` with `"provider": "chatgpt"` or `"gemini"` for text you wrote.
 3. **Applied by** the dashboard within seconds while it is open, or by the hourly Windows task while the PC is on and Eric is logged in.
 4. **Read the receipt** `logs/requests/<request_id>.result.json`:
 

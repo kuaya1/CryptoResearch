@@ -176,6 +176,13 @@ function addProject(ws, input) {
   if (!ws.rubrics.profiles[profileRef]) {
     throw new OpError('INVALID', `Unknown sector profile "${profileRef}". Available: ${Object.keys(ws.rubrics.profiles).join(', ')}`);
   }
+  // A research horizon must be readable now, and above the planning ceiling it
+  // needs the owner's long-term reason (position.js), not at the first run.
+  let horizonCheck = null;
+  if (input.horizon) {
+    horizonCheck = require('./position').checkHorizon(ws, String(input.horizon), input.long_term_reason);
+    if (!horizonCheck.ok) throw new OpError('INVALID', horizonCheck.message);
+  }
   const dup = findDuplicates(ws, input);
   if (dup.strong.length) {
     const existing = dup.strong[0];
@@ -225,7 +232,9 @@ function addProject(ws, input) {
     tags: (input.tags || []).map(String),
     sector: sectorIn || normalizeSector(null, { fallbackProfile: profileRef }),
     review: null,
-    research_defaults: input.horizon ? { horizon: String(input.horizon), providers: providerList(input.providers || input.research_providers) } : null,
+    research_defaults: input.horizon
+      ? { horizon: String(input.horizon), providers: providerList(input.providers || input.research_providers), ...(horizonCheck.horizon.mode === 'long_term' ? { long_term_reason: horizonCheck.horizon.exception_reason } : {}) }
+      : null,
     created_at: now,
     updated_at: now,
     created_via: ws.actor,

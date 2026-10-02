@@ -29,7 +29,7 @@ test('three providers with mock adapters: each job gets its own state, one failu
   let ws = openWorkspace({ root, actor: 'test' });
   const pid = addFixtureProject(ws).project_id;
   ws = settings(root, { providers: { claude: { mock: 'ok' }, chatgpt: { mock: 'invalid' }, gemini: { mock: 'timeout' } }, max_attempts: 2 });
-  const run = research.createRun(ws, { project_id: pid, providers: 'claude,gpt,gemini', horizon: '24 months', channel: 'dashboard' });
+  const run = research.createRun(ws, { project_id: pid, providers: 'claude,gpt,gemini', horizon: '4 months', channel: 'dashboard' });
   assert.equal(run.status, 'created');
   assert.deepEqual(run.run.providers, ['claude', 'chatgpt', 'gemini']);
   assert.ok(Object.values(run.run.jobs).every((j) => j.state === 'queued'));
@@ -69,8 +69,8 @@ test('repeating the same research request within minutes does not start a second
   let ws = openWorkspace({ root, actor: 'test' });
   const pid = addFixtureProject(ws).project_id;
   ws = settings(root, { providers: {} });
-  const a = research.createRun(ws, { project_id: pid, providers: ['claude', 'chatgpt'], horizon: '24 months' });
-  const b = research.createRun(ws, { project_id: pid, providers: ['claude', 'chatgpt'], horizon: '24 months' });
+  const a = research.createRun(ws, { project_id: pid, providers: ['claude', 'chatgpt'], horizon: '4 months' });
+  const b = research.createRun(ws, { project_id: pid, providers: ['claude', 'chatgpt'], horizon: '4 months' });
   assert.equal(b.status, 'exists');
   assert.equal(b.run_id, a.run_id);
   assert.equal(research.listRuns(ws, pid).length, 1);
@@ -82,7 +82,7 @@ test('without API configuration each job is unconfigured with a ready prompt, an
   let ws = openWorkspace({ root, actor: 'test' });
   const pid = addFixtureProject(ws).project_id;
   ws = settings(root, { providers: {} });
-  const run = research.createRun(ws, { project_id: pid, providers: ['chatgpt', 'gemini'], horizon: '24 months' });
+  const run = research.createRun(ws, { project_id: pid, providers: ['chatgpt', 'gemini'], horizon: '4 months' });
   for (const j of Object.values(run.run.jobs)) {
     assert.equal(j.state, 'unconfigured');
     assert.equal(j.fallback, 'manual');
@@ -211,7 +211,7 @@ test('queued research requests are idempotent and canceling a job is explicit', 
   let ws = openWorkspace({ root, actor: 'test' });
   const pid = addFixtureProject(ws).project_id;
   ws = settings(root, { providers: {} });
-  const req = { schema_version: 'cr.request.v1', request_id: 'req_research_01', action: 'research_project', utterance: 'Research it with Claude, GPT and Gemini', args: { project_id: pid, providers: ['claude', 'chatgpt', 'gemini'], horizon: '24 months' } };
+  const req = { schema_version: 'cr.request.v1', request_id: 'req_research_01', action: 'research_project', utterance: 'Research it with Claude, GPT and Gemini', args: { project_id: pid, providers: ['claude', 'chatgpt', 'gemini'], horizon: '4 months' } };
   fs.writeFileSync(path.join(root, 'inbox', 'requests', 'req_research_01.json'), JSON.stringify(req));
   requests.processRequests(ws);
   fs.writeFileSync(path.join(root, 'inbox', 'requests', 'req_research_01.json'), JSON.stringify(req));
