@@ -400,3 +400,61 @@ test('F1 Windows: a pending capture that another program still holds during reco
   await runner(c.root, c.stub);
   assertSavedOnce(c);
 });
+
+// --- Spend log under a save that fails after its build step (review R8) ---
+
+test('F1 spend log: an outcome whose save fails after the cost line is written, then saved from the capture and recovered again, leaves exactly one actual-cost line', async (t) => {
+  const c = await paidRun(t, 'f1ledger');
+  const first = await runner(c.root, c.stub, { crash: { op: 'research_response', when: 'fail_after_build' } });
+  const r1 = first.out.results[0];
+  assert.equal(r1.status, 'captured', JSON.stringify(r1));
+  assert.equal(c.job().attempts[0].phase, 'dispatched', 'nothing was committed');
+  assert.equal(c.ledger('actual').length, 1, 'the failed save had already appended its actual-cost line');
+  // Retry, then restart recovery twice more.
+  await runner(c.root, c.stub);
+  await runner(c.root, c.stub);
+  await runner(c.root, c.stub);
+  assertSavedOnce(c); // one request, one report, one actual line, spend = actual
+  const lines = c.ledger();
+  assert.equal(lines.filter((l) => l.kind === 'reservation').length, 1, 'one reservation line');
+  assert.equal(lines.filter((l) => l.kind === 'adjustment').length, 0, 'no adjustment for the same amount');
+  assert.equal(lines.length, 2, JSON.stringify(lines.map((l) => l.kind)));
+});
+
+test('F1 spend log: a later save of the same outcome keeps the cost frozen at reservation; where it does differ (an older record priced at current settings) it is an explicit adjustment and counts once', async (t) => {
+  const research2 = { providers: { claude: { ...CLAUDE, output_usd_per_mtok: 30 } }, budget: { per_run_usd: 5, daily_usd: 20, monthly_usd: 100 }, max_output_tokens: 8000, max_attempts: 2, timeout_seconds: 60 };
+  // Prices frozen on the attempt: a price change before the retry changes nothing.
+  const f = await paidRun(t, 'f1frozen');
+  await runner(f.root, f.stub, { crash: { op: 'research_response', when: 'fail_after_build' } });
+  configure(f.root, research2);
+  await runner(f.root, f.stub);
+  await runner(f.root, f.stub);
+  assertSavedOnce(f);
+  assert.equal(f.ledger('adjustment').length, 0);
+  // An attempt without frozen prices (written by older code) is priced at the
+  // current settings, so the retried save computes a different cost.
+  const c = await paidRun(t, 'f1adjust');
+  await runner(c.root, c.stub, { crash: { op: 'research_response', when: 'fail_after_build' } });
+  assert.equal(c.ledger('actual').length, 1);
+  assert.equal(c.ledger('actual')[0].actual_usd, ACTUAL);
+  const runFile = c.ws.abs(`projects/${c.pid}/research/${c.run.run_id}/run.json`);
+  const doc = readJson(runFile);
+  delete doc.jobs.claude.attempts[0].prices;
+  atomicWrite(runFile, jsonText(doc));
+  configure(c.root, research2);
+  await runner(c.root, c.stub);
+  await runner(c.root, c.stub);
+  // 12000 x $3/M + 3000 x $30/M + 2 x $0.01
+  const corrected = 0.146;
+  const j = c.job();
+  assert.equal(c.stub.calls.length, 1, 'exactly one request reached the provider');
+  assert.equal(j.state, 'completed', j.error || '');
+  assert.equal(j.attempts[0].cost_actual_usd, corrected);
+  assert.equal(c.reports().length, 1);
+  assert.equal(c.ledger('actual').length, 1, 'the first actual line is kept as written');
+  const adj = c.ledger('adjustment');
+  assert.equal(adj.length, 1, 'the correction is one explicit adjustment line');
+  assert.equal(adj[0].actual_usd, corrected);
+  assert.equal(adj[0].replaces_actual_usd, ACTUAL);
+  assert.equal(c.spent(), corrected, 'the attempt counts once, at the corrected cost');
+});

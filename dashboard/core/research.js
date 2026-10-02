@@ -531,9 +531,28 @@ function updateJob(ws, projectId, runId, provider, mutate, summary, type = 'rese
 }
 
 // One line in logs/research-spend.jsonl. Written inside the operation that
-// changes the attempt, so a failed commit can only overcount.
+// changes the attempt, outside its atomic save. A save that fails after this
+// line was written and is then retried (from a capture, say) would write it
+// again, so the reservation, release and actual lines are recorded once per
+// attempt. An actual cost that differs from the one already recorded for the
+// same attempt is kept as an explicit adjustment that replaces it.
+const ONCE_PER_ATTEMPT = new Set(['reservation', 'release', 'actual']);
+
 function ledger(ws, run, job, a, entry) {
   if (job.mode !== 'api') return;
+  if (ONCE_PER_ATTEMPT.has(entry.kind)) {
+    const prior = readJsonLines(ws.abs(SPEND_REL)).filter((l) => l.run_id === run.run_id && l.provider === job.provider && l.attempt === a.n && (l.attempt_id || null) === (a.attempt_id || null));
+    if (entry.kind === 'actual') {
+      const costs = prior.filter((l) => l.kind === 'actual' || l.kind === 'adjustment');
+      if (costs.length) {
+        const recorded = costs[costs.length - 1].actual_usd;
+        if (recorded === entry.actual_usd) return;
+        entry = { ...entry, kind: 'adjustment', replaces_actual_usd: recorded, note: 'the same outcome was saved again with a different cost; this replaces the earlier figure' };
+      }
+    } else if (prior.some((l) => l.kind === entry.kind)) {
+      return;
+    }
+  }
   appendLine(ws.abs(SPEND_REL), {
     at: new Date().toISOString(),
     run_id: run.run_id,

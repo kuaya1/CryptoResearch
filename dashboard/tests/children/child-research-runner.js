@@ -4,7 +4,7 @@
 // stub server; any other URL is refused, so nothing leaves this PC. The keys in
 // the environment are fake test values.
 // Usage: node child-research-runner.js <root> <config.json>
-// config: { stub_port, crash: { op, when: 'before'|'after' } | null,
+// config: { stub_port, crash: { op, when: 'before'|'after'|'fail_after_build' } | null,
 //           barrier: <file to wait for> | null, calls_dir: <dir> | null,
 //           capture: { crash: 'before'|'after', fail: '<error code>' } | null,
 //           fs: { link_error: '<error code>', capture_read_busy_while: <file> } | null }
@@ -21,6 +21,15 @@ const ops = require(path.join(base, 'core', 'ops'));
 const runOp = ops.runOp;
 ops.runOp = function crashableRunOp(ws, meta, build) {
   if (cfg.crash && cfg.crash.op === meta.type && cfg.crash.when === 'before') die();
+  // 'fail_after_build': the operation stages everything (and appends whatever
+  // its build step writes directly, such as spend-log lines), then the atomic
+  // save fails before anything is committed.
+  if (cfg.crash && cfg.crash.op === meta.type && cfg.crash.when === 'fail_after_build') {
+    return runOp.call(this, ws, meta, (op) => {
+      build(op);
+      throw Object.assign(new Error('test: the save failed after its build step'), { code: 'TEST_SAVE_FAILED' });
+    });
+  }
   const out = runOp.call(this, ws, meta, build);
   if (cfg.crash && cfg.crash.op === meta.type && cfg.crash.when === 'after') die();
   return out;
