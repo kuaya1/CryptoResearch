@@ -267,3 +267,40 @@ cd "$REVIEW" && node dashboard/cli.js test        # 160/160, evidence/suite-revi
 git -C "$REVIEW" -c credential.helper= -c "credential.helper=!gh auth git-credential" push origin rc/integrity-r2
 gh pr create --repo kuaya1/CryptoResearch --draft --base main --head rc/integrity-r2 --title "..." --body-file <body>
 ```
+
+## Spend-log fix (R8) and tracked round-2 reports
+
+**Failure injection.** The runner child now accepts `crash: { op: 'research_response', when: 'fail_after_build' }`: it runs that operation's build step, which appends the spend-log line, then fails the save. Two regressions in `research-capture.test.js` use it.
+
+```
+cd "$REVIEW/dashboard" && node --test --test-name-pattern="spend log" tests/research-capture.test.js
+#   before the fix (working tree): evidence/fix-D-red-before-fix.txt, 2 actual lines for one attempt
+git -C "$LIVE" worktree add --detach <scratch> 33e72304fbc2256af944dcd0cb97792655d1a606
+#   + the final research-capture.test.js and child-research-runner.js copied in
+cd <scratch>/dashboard && node --test --test-name-pattern="spend log" tests/research-capture.test.js
+#   evidence/fix-D-red-final-tests-on-33e7230.txt: 2 fail ("2 !== 1"); the scratch worktree was removed afterwards
+```
+
+**After the fix:**
+
+```
+cd "$REVIEW/dashboard" && node --test tests/research-capture.test.js tests/research-spend.test.js tests/research-attempts.test.js tests/research.test.js
+#   41/41, evidence/fix-D-green-after-fix.txt
+cd "$REVIEW" && node dashboard/cli.js test        # 162/162 twice: evidence/suite-ledger-fix-windows-run{1,2}.txt
+git -C "$REVIEW" commit ...                        # 10143c8a200257008adc06832119a38a76579524
+node tools/git-fingerprint.cjs "$REVIEW" HEAD      # 6db60f39..., 81 files
+node tools/capture-adverse.cjs "$REVIEW" evidence/capture-adverse-ledger-fix-windows.json
+node tools/f1-repro.cjs "$REVIEW"                  # evidence/f1-repro-ledger-fix-windows.json
+git -C "$LIVE" -c core.autocrlf=false diff --binary a840ba7 10143c8a200257008adc06832119a38a76579524 -- dashboard package.json > rc-10143c8-code.patch
+DRILL_EXPECT_FP=6db60f39... node tools/rollback-drill.cjs <drill dir> "$LIVE" "$REC" rc-10143c8-code.patch evidence/rollback-drill-ledger-fix-windows.json
+```
+
+**Local drafts preserved before tracking.** The five RC report drafts and round 2's six reports were copied from the live folder, as they were, to `evidence/preserved-local-drafts-2026-10-02/`, with `MANIFEST.sha256`. That folder is ignored by Git, so no merge or checkout replaces it.
+
+**Round 2's reports.** `README.md`, `RESULTS.md`, `LIMITS.md`, `DEPLOY-CHECKLIST.md`, `DOC-CHANGES-PROPOSED.md` and `RUNTIME-AND-COMMANDS.md` were copied into the review worktree and changed in three ways:
+
+- The PC's name is replaced by "Eric's PC" (it was in three files).
+- `DEPLOY-CHECKLIST.md` gets a **SUPERSEDED** note at its top, linking to the current deployment and rollback instructions.
+- `README.md` gets a historical-status note.
+
+Those six paths are allowlisted. Round 2's patches, evidence and tools stay ignored.

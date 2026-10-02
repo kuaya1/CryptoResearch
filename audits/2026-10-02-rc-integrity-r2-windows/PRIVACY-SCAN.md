@@ -37,6 +37,8 @@ Known fictional values are allowed: `test-key-not-real…`, `example.com` and no
 | The five reports as produced by the validation (committed in `63b60f1`): `README.md`, `REVIEW.md`, `LIMITS.md`, `COMMANDS.md`, `PRIVACY-SCAN.md` | about 470 | **0**: no record identifiers, keys, addresses, user or PC names, profile paths or emails | `evidence/privacy-scan-proposed-files.json` |
 | The five reports after review preparation (this version), and `git diff a840ba7..63b60f1` | 691 and 4,721 | **0** | rescanned before the commit that adds this text |
 
+| After the R8 fix: these five reports, round 2's six tracked reports (PC name replaced), and `git diff a840ba7..10143c8` | 1,104 and 5,029 | **0** | `evidence/privacy-scan-r8-branch.json` |
+
 **Complete branch diff.** It is scanned again after the last commit (`a840ba7` to the branch head), together with a reading of the diff and the commit metadata. The result is in the pull request description.
 
 **Positive control.** The scan was run with a scratch file containing one real project ID, a fake key of the Anthropic shape and an EVM-style address. It reported all of them (5 hits across 5 checks), so a clean result means something. The scratch file was deleted afterwards.
