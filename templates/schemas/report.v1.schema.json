@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cr.report.v1",
+  "title": "CryptoResearch canonical report contract, version 1",
+  "description": "Structured output that Claude, ChatGPT and Gemini append after a written report. Unknown values are null with an explanation; never invent URLs, model versions, observations or scores to satisfy this schema. The dashboard, not the model, applies weights and calculates the investment grade. Score-object rules that depend on status are enforced by dashboard/core/scoring.js.",
+  "type": "object",
+  "required": ["schema_version", "verdict", "diagnostic_scores", "investment_components", "model_reported_overall_score", "risk_scores"],
+  "properties": {
+    "schema_version": { "const": "cr.report.v1" },
+    "report_id": { "type": ["string", "null"], "description": "Leave null. The dashboard assigns report IDs." },
+    "project_id": { "type": ["string", "null"], "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "project_name": { "type": ["string", "null"] },
+    "project_symbol": { "type": ["string", "null"] },
+    "provider": { "enum": ["claude", "chatgpt", "gemini", null], "description": "Which assistant produced the report. The inbox folder it arrives in is authoritative; a mismatch blocks the import." },
+    "model_self_identification": { "type": ["string", "null"], "description": "The model's own statement of which assistant it is, e.g. 'Claude (Anthropic)'. Used to catch mislabelled imports." },
+    "model_version": { "type": ["string", "null"], "description": "Exact model name/version only if known; otherwise null." },
+    "model_version_note": { "type": ["string", "null"] },
+    "analysis_at": { "type": ["string", "null"], "description": "Date (YYYY-MM-DD) or ISO date-time the analysis was performed." },
+    "horizon": { "type": ["string", "null"], "description": "Assessment horizon, e.g. '24 months'." },
+    "prompt_version": { "type": ["string", "null"] },
+    "rubric_version": { "type": ["string", "null"], "description": "Grading system version, e.g. 'cr-grading@1'. Reports are only comparable when this matches." },
+    "sector_profile": { "type": ["string", "null"], "description": "Sector profile, e.g. 'payfi-credit@1'." },
+    "verdict": {
+      "enum": ["ATTRACTIVE ASYMMETRY", "CONDITIONAL OPPORTUNITY", "REAL PRODUCT, WEAK TOKEN", "INCENTIVE-DEPENDENT", "UNFAVORABLE VALUATION", "INSUFFICIENT EVIDENCE", null]
+    },
+    "summary": { "type": ["string", "null"] },
+    "diagnostic_scores": {
+      "type": "object",
+      "description": "One score object per diagnostic category of the sector profile. Higher is better.",
+      "additionalProperties": { "$ref": "#/$defs/score" }
+    },
+    "investment_components": {
+      "type": "object",
+      "description": "All six components. Higher is better. The app applies the weights.",
+      "properties": {
+        "sustainable_business_demand": { "$ref": "#/$defs/score" },
+        "token_value_capture": { "$ref": "#/$defs/score" },
+        "valuation_supply": { "$ref": "#/$defs/score" },
+        "risk_resilience": { "$ref": "#/$defs/score" },
+        "btc_relative_asymmetry": { "$ref": "#/$defs/score" },
+        "timing_executable_liquidity": { "$ref": "#/$defs/score" }
+      },
+      "additionalProperties": { "$ref": "#/$defs/score" }
+    },
+    "model_reported_overall_score": { "$ref": "#/$defs/score" },
+    "risk_scores": {
+      "type": "object",
+      "description": "Higher means MORE risk.",
+      "properties": {
+        "credit": { "$ref": "#/$defs/score" },
+        "dilution": { "$ref": "#/$defs/score" },
+        "liquidity": { "$ref": "#/$defs/score" },
+        "overall_downside": { "$ref": "#/$defs/score" }
+      },
+      "additionalProperties": { "$ref": "#/$defs/score" }
+    },
+    "sources": { "type": "array", "items": { "$ref": "#/$defs/source" } },
+    "claims": { "type": "array", "items": { "$ref": "#/$defs/claim" } },
+    "bullish_facts": { "type": "array", "items": { "$ref": "#/$defs/fact" } },
+    "bearish_facts": { "type": "array", "items": { "$ref": "#/$defs/fact" } },
+    "conviction_increases": { "type": "array", "items": { "$ref": "#/$defs/fact" } },
+    "invalidators": { "type": "array", "items": { "$ref": "#/$defs/fact" } },
+    "catalysts": { "type": "array", "items": { "$ref": "#/$defs/catalyst" } },
+    "unlocks": { "type": "array", "items": { "$ref": "#/$defs/unlock" } },
+    "tokenomics_changes": { "type": "array", "items": { "$ref": "#/$defs/tokenomics_change" } },
+    "economics": { "type": "object", "additionalProperties": { "$ref": "#/$defs/metric" } },
+    "scenarios": {
+      "type": ["object", "null"],
+      "properties": {
+        "btc_relative_definition": { "type": ["string", "null"] },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/scenario" } }
+      }
+    },
+    "next_metric_to_monitor": {
+      "type": ["object", "null"],
+      "properties": {
+        "metric": { "type": ["string", "null"] },
+        "why": { "type": ["string", "null"] },
+        "threshold": { "type": ["string", "null"] }
+      }
+    },
+    "final_take": { "type": ["string", "null"] },
+    "unresolved_questions": { "type": "array", "items": { "type": "string" } },
+    "sections": { "type": ["object", "null"] },
+    "original_report_reference": { "type": ["object", "string", "null"] }
+  },
+  "$defs": {
+    "score": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["scored", "range", "unknown", "not_applicable"] },
+        "value": { "type": ["number", "null"], "minimum": 1, "maximum": 100 },
+        "low": { "type": ["number", "null"], "minimum": 1, "maximum": 100 },
+        "high": { "type": ["number", "null"], "minimum": 1, "maximum": 100 },
+        "rationale": { "type": ["string", "null"] },
+        "evidence_refs": { "type": ["array", "null"], "items": { "type": "string" } },
+        "missing_data": { "type": ["string", "null"] }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": ["source_id"],
+      "properties": {
+        "source_id": { "type": "string" },
+        "url": { "type": ["string", "null"] },
+        "title": { "type": ["string", "null"] },
+        "publisher": { "type": ["string", "null"] },
+        "source_type": { "enum": ["official", "onchain_data", "data_aggregator", "exchange", "audit", "news", "research", "social", "other", null] },
+        "accessed_at": { "type": ["string", "null"] }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "required": ["claim_id", "text", "evidence_tag"],
+      "properties": {
+        "claim_id": { "type": "string" },
+        "text": { "type": "string" },
+        "evidence_tag": { "enum": ["V", "C", "I", "S", "[V]", "[C]", "[I]", "[S]"] },
+        "source_ids": { "type": ["array", "null"], "items": { "type": "string" } },
+        "metric_id": { "type": ["string", "null"], "description": "Stable snake_case metric name, e.g. tvl_usd, revenue_usd, payment_volume_usd." },
+        "value": { "type": ["number", "null"] },
+        "unit": { "type": ["string", "null"] },
+        "definition": { "type": ["string", "null"] },
+        "period": { "type": ["string", "null"] },
+        "as_of": { "type": ["string", "null"] },
+        "limitation": { "type": ["string", "null"] },
+        "section": { "type": ["string", "null"] }
+      }
+    },
+    "fact": {
+      "type": "object",
+      "required": ["text"],
+      "properties": {
+        "text": { "type": "string" },
+        "claim_ids": { "type": ["array", "null"], "items": { "type": "string" } }
+      }
+    },
+    "catalyst": {
+      "type": "object",
+      "required": ["title"],
+      "properties": {
+        "title": { "type": "string" },
+        "date": { "type": ["string", "null"] },
+        "date_precision": { "enum": ["day", "month", "quarter", "year", "unknown", null] },
+        "kind": { "enum": ["unlock", "launch", "listing", "governance", "regulatory", "partnership", "earnings", "other", null] },
+        "status": { "enum": ["announced", "implemented", "speculative", null] },
+        "claim_ids": { "type": ["array", "null"], "items": { "type": "string" } }
+      }
+    },
+    "unlock": {
+      "type": "object",
+      "properties": {
+        "date": { "type": ["string", "null"] },
+        "amount_tokens": { "type": ["number", "null"] },
+        "pct_of_supply": { "type": ["number", "null"] },
+        "recipient_class": { "type": ["string", "null"] },
+        "note": { "type": ["string", "null"] },
+        "claim_ids": { "type": ["array", "null"], "items": { "type": "string" } }
+      }
+    },
+    "tokenomics_change": {
+      "type": "object",
+      "required": ["description"],
+      "properties": {
+        "description": { "type": "string" },
+        "status": { "enum": ["announced", "implemented", "proposed", "cancelled", null] },
+        "announced_at": { "type": ["string", "null"] },
+        "effective_at": { "type": ["string", "null"] },
+        "claim_ids": { "type": ["array", "null"], "items": { "type": "string" } }
+      }
+    },
+    "metric": {
+      "type": "object",
+      "properties": {
+        "status": { "enum": ["reported", "unknown", "not_applicable", null] },
+        "value": { "type": ["number", "null"] },
+        "unit": { "type": ["string", "null"] },
+        "period": { "type": ["string", "null"] },
+        "definition": { "type": ["string", "null"] },
+        "as_of": { "type": ["string", "null"] },
+        "evidence_tag": { "enum": ["V", "C", "I", "S", "[V]", "[C]", "[I]", "[S]", null] },
+        "claim_ids": { "type": ["array", "null"], "items": { "type": "string" } },
+        "note": { "type": ["string", "null"] }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "required": ["case"],
+      "properties": {
+        "case": { "enum": ["bull", "base", "bear"] },
+        "probability_pct": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+        "business_outcome": { "type": ["string", "null"] },
+        "token_capture_assumption": { "type": ["string", "null"] },
+        "supply_assumption": { "type": ["string", "null"] },
+        "price_range_usd": {
+          "type": ["object", "null"],
+          "properties": { "low": { "type": ["number", "null"] }, "high": { "type": ["number", "null"] } }
+        },
+        "btc_assumption": { "type": ["string", "null"] },
+        "relative_return_vs_btc_pct": {
+          "type": ["object", "null"],
+          "properties": { "low": { "type": ["number", "null"] }, "high": { "type": ["number", "null"] } }
+        },
+        "invalidation": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+ "method": "SHA-256 of sorted (path + NUL + per-file SHA-256), joined by LF; scope dashboard/** except demo-workspace, index, node_modules; plus package.json",
+ "node": "v24.21.0",
+ "audited_target": "9ff79de7f31aaf92c92822c1e092782c7a49493b84292ad38840516a86087fd0",
+ "real": {
+  "root": "C:/Users/Kuaya/Documents/CryptoResearch",
+  "at": "2026-10-02T16:51:23.992Z",
+  "aggregate_sha256": "9ff79de7f31aaf92c92822c1e092782c7a49493b84292ad38840516a86087fd0",
+  "files": 70
+ },
+ "original": {
+  "root": "C:/Users/Kuaya/AppData/Local/Temp/crfix/baseline",
+  "at": "2026-10-02T16:51:24.095Z",
+  "aggregate_sha256": "9ff79de7f31aaf92c92822c1e092782c7a49493b84292ad38840516a86087fd0",
+  "files": 70
+ },
+ "repaired": {
+  "root": "C:/Users/Kuaya/AppData/Local/Temp/crfix/dev",
+  "at": "2026-10-02T16:51:24.206Z",
+  "aggregate_sha256": "4ce11b80469b2414c2c3182ab2e6439e905ede48c54bbe38a454d014c7892f8b",
+  "files": 77
+ },
+ "real_vs_audit_list": {
+  "matches_target": true,
+  "changed": [],
+  "missing": []
+ },
+ "start_of_work": "9ff79de7f31aaf92c92822c1e092782c7a49493b84292ad38840516a86087fd0"
+}

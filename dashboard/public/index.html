@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CryptoResearch</title>
+  <meta name="description" content="Private, local crypto watchlist, research and portfolio dashboard.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div id="demo-banner" class="demo-banner hidden">Fictional demo data: not real research, prices or holdings</div>
+  <header class="topbar" id="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#/watchlist">CryptoResearch <span class="tag hidden" id="ws-kind"></span></a>
+      <button type="button" class="menu-btn quiet" id="menu-btn" aria-expanded="false" aria-controls="nav">Menu</button>
+      <nav class="mainnav" id="nav" aria-label="Main"></nav>
+      <span class="spacer"></span>
+      <span class="status-dot" id="live" title="Connection to the local dashboard server"><span class="dot" aria-hidden="true"></span><span class="status-text" id="live-text">Connecting</span></span>
+    </div>
+  </header>
+  <div class="layout" id="layout">
+    <main id="main" tabindex="-1"><p class="muted">Loading your workspace…</p></main>
+    <div id="panel-root"></div>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="sr-only" id="sr-live" aria-live="polite"></div>
+</body>
+</html>

@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cr.project.v1",
+  "title": "Project record (projects/<project_id>/project.json)",
+  "type": "object",
+  "required": ["schema_version", "project_id", "name", "status", "sector_profile", "identity", "watchlist", "created_at"],
+  "properties": {
+    "schema_version": { "const": "cr.project.v1" },
+    "project_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$", "description": "Stable ID. Never renamed; it is also the folder name." },
+    "name": { "type": "string", "minLength": 1 },
+    "symbol": { "type": ["string", "null"] },
+    "aliases": { "type": "array", "items": { "type": "string" } },
+    "status": { "enum": ["active", "pending_identity", "archived"] },
+    "sector_profile": { "type": "string", "pattern": "^[a-z0-9-]+@[0-9]+$" },
+    "sector_note": { "type": ["string", "null"] },
+    "identity": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["verified", "pending", "ambiguous"] },
+        "official_website": { "type": ["string", "null"] },
+        "coingecko_id": { "type": ["string", "null"], "description": "Bound only when status is verified." },
+        "coinmarketcap_id": { "type": ["integer", "null"], "description": "Optional, for the CoinMarketCap rank adapter only." },
+        "assets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["chain"],
+            "properties": {
+              "chain": { "type": "string" },
+              "contract_address": { "type": ["string", "null"] },
+              "standard": { "type": ["string", "null"] },
+              "note": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "candidates": { "type": "array", "description": "Unconfirmed identity candidates for a pending project. Never used for prices or holdings." },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["url"],
+            "properties": {
+              "kind": { "type": ["string", "null"] },
+              "url": { "type": "string" },
+              "checked_at": { "type": ["string", "null"] },
+              "note": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "unknowns": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "watchlist": {
+      "type": "object",
+      "properties": {
+        "on_watchlist": { "type": "boolean" },
+        "added_at": { "type": ["string", "null"] },
+        "removed_at": { "type": ["string", "null"] }
+      }
+    },
+    "headline": {
+      "type": ["object", "null"],
+      "description": "The assessment the dashboard headlines: a chosen report, or your own recorded decision. Never a cross-model median.",
+      "properties": {
+        "type": { "enum": ["report", "decision"] },
+        "report_id": { "type": ["string", "null"] },
+        "entry_id": { "type": ["string", "null"] },
+        "selected_at": { "type": "string" },
+        "note": { "type": ["string", "null"] }
+      }
+    },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "sector": {
+      "type": ["object", "null"],
+      "description": "Your primary category for the watchlist (editable), plus free tags. Distinct from sector_profile, which decides the scoring rubric categories.",
+      "properties": {
+        "primary": { "enum": ["defi", "payments", "infrastructure", "ai_data", "gaming", "other"] },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "source": { "enum": ["owner", "suggested", "migration", "research"] },
+        "updated_at": { "type": ["string", "null"] }
+      }
+    },
+    "review": {
+      "type": ["object", "null"],
+      "description": "Your review cursor: changes since this time are shown as new.",
+      "properties": {
+        "last_reviewed_at": { "type": ["string", "null"] },
+        "note": { "type": ["string", "null"] }
+      }
+    },
+    "research_defaults": {
+      "type": ["object", "null"],
+      "description": "Rubric, profile and horizon used for this project's research runs, so a refresh can reuse them.",
+      "properties": {
+        "horizon": { "type": ["string", "null"] },
+        "providers": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "created_at": { "type": "string" },
+    "updated_at": { "type": ["string", "null"] },
+    "created_via": { "type": ["string", "null"] },
+    "origin_request": { "type": ["string", "null"], "description": "The transcribed spoken or typed request that created the project, kept for audit." }
+  }
+}

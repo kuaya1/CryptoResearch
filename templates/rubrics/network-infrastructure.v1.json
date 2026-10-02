@@ -1,0 +1,116 @@
+{
+  "profile_ref": "network-infrastructure@1",
+  "profile_id": "network-infrastructure",
+  "version": 1,
+  "title": "Network infrastructure (AI, DePIN, L1/L2, oracle and compute networks)",
+  "status": "active",
+  "applies_to": "Networks whose token secures, pays for or rewards participation in shared infrastructure: decentralized AI and inference networks, DePIN, compute and storage, oracles, L1 and L2 chains.",
+  "origin": "Derived from the PayFi category list. Credit-risk transparency does not apply here and is N/A; it is replaced by technical_risk_transparency, a separately defined dimension that is NOT comparable with credit-risk scores.",
+  "diagnostic_categories": [
+    {
+      "id": "legitimacy",
+      "label": "Legitimacy",
+      "applicable": true,
+      "definition": "Is this a real, accountable organization operating the network it claims: identifiable team or foundation, audits, security history, regulatory posture, and no misrepresentation.",
+      "resolving_question": "Which independently checkable facts (audits, verified contracts, named partners, public infrastructure) confirm or contradict the project's claims?"
+    },
+    {
+      "id": "builder_operations",
+      "label": "Builder and operational quality",
+      "applicable": true,
+      "definition": "Shipping record, network uptime and incident handling, governance and treasury management.",
+      "resolving_question": "What did the team ship and operate over the last 12 months, and how were outages or incidents handled?"
+    },
+    {
+      "id": "product_usefulness",
+      "label": "Product usefulness",
+      "applicable": true,
+      "definition": "Does the network deliver a service (inference, compute, data, settlement) that real users choose over centralized alternatives, independent of token incentives?",
+      "resolving_question": "Who pays to use the network without incentives, and what centralized alternative would they use instead?"
+    },
+    {
+      "id": "organic_demand",
+      "label": "Organic demand",
+      "applicable": true,
+      "definition": "Paid usage and fees that persist net of token incentives, grants and self-dealing between related participants.",
+      "resolving_question": "What paid usage or fee revenue remains over the last 90 days after excluding incentive-funded and related-party activity?"
+    },
+    {
+      "id": "credit_risk_transparency",
+      "label": "Credit-risk transparency",
+      "applicable": false,
+      "na_reason": "Not applicable under network-infrastructure@1: the network does not underwrite credit. See technical_risk_transparency, which is a different dimension.",
+      "definition": "Not used in this profile.",
+      "resolving_question": ""
+    },
+    {
+      "id": "technical_risk_transparency",
+      "label": "Technical-risk transparency",
+      "applicable": true,
+      "definition": "Quality of disclosure on technical and network risks: audits and their scope, incident history, admin keys and upgradeability, validator or operator concentration, reliance on centralized components, and security budget.",
+      "resolving_question": "Who can upgrade or pause the contracts, how concentrated are operators or validators, and are audits current for the deployed code?"
+    },
+    {
+      "id": "differentiation",
+      "label": "Competitive differentiation",
+      "applicable": true,
+      "definition": "Durable advantages over competing networks and centralized providers (cost, quality, latency, openness, network effects).",
+      "resolving_question": "What does this network do measurably better than its two closest competitors and the centralized default?"
+    },
+    {
+      "id": "category_potential",
+      "label": "Category potential",
+      "applicable": true,
+      "definition": "Size and growth of the addressable market for the network's service and how much of it can plausibly use decentralized infrastructure within the horizon.",
+      "resolving_question": "What evidence shows paid demand for decentralized provision of this service is growing, measured over a stated period?"
+    },
+    {
+      "id": "token_value_capture",
+      "label": "Token value capture",
+      "applicable": true,
+      "definition": "Diagnostic view of how network usage reaches token holders as implemented today (fees paid in or burned in the token, staking yield funded by fees, required collateral). Emissions-funded rewards are not value capture. Announced but unimplemented mechanisms are conditional.",
+      "resolving_question": "What share of participant rewards is funded by fees rather than emissions, measured over a stated period?"
+    },
+    {
+      "id": "valuation_supply_attractiveness",
+      "label": "Valuation and supply attractiveness",
+      "applicable": true,
+      "definition": "Current market cap and FDV relative to fees, usage and peers, adjusted for circulating supply, unlocks (potential liquid supply) and emissions.",
+      "resolving_question": "What are circulating supply, FDV, annual emissions and the next 12 months of unlocks relative to fee revenue?"
+    },
+    {
+      "id": "chart_quality",
+      "label": "Chart quality",
+      "applicable": true,
+      "definition": "Quality of market structure: trend, support and resistance, volume confirmation, drawdown from highs, and relative strength versus BTC.",
+      "resolving_question": "Is the token holding higher lows against both USD and BTC on rising volume, measured on a stated timeframe?"
+    },
+    {
+      "id": "evidence_confidence",
+      "label": "Evidence confidence",
+      "applicable": true,
+      "definition": "Quality, recency and independence of the evidence behind this report. It is not a probability of profit and not a multiplier on any grade.",
+      "resolving_question": "Which material claims rest only on project statements, and what independent source would check them?"
+    }
+  ],
+  "research_sections": [
+    { "id": "legitimacy_security", "title": "Legitimacy and security", "guidance": "Team or foundation, audits and their scope, security incidents, regulatory posture, and any sign of misrepresentation." },
+    { "id": "product_mechanics", "title": "Product mechanics", "guidance": "How the network works: who requests work, who performs it, how results are verified, how fees and rewards flow, and who can change the rules." },
+    { "id": "security_economic_forensics", "title": "Security and network-economics forensics", "guidance": "Keep three things separate: (a) network activity and fees paid by users, (b) participant rewards (staking, worker or validator rewards) and whether they are funded by fees or emissions, (c) token-holder economics. Cover upgradeability, admin keys, operator concentration and incident history. Label every figure with period and definition." },
+    { "id": "adoption_unit_economics", "title": "Adoption and unit economics", "guidance": "Paid usage, fees and growth net of incentives; whether operators earn enough from fees alone to keep serving." },
+    { "id": "differentiation_category", "title": "Differentiation and category", "guidance": "Competing networks and centralized providers, defensibility, and the size and trajectory of paid demand." },
+    { "id": "current_tokenomics", "title": "Current tokenomics", "guidance": "Circulating and total supply, allocation, vesting and unlock schedule, emissions. Mark each change as announced or implemented, with announcement and effective dates. Unlocks are potential liquid supply, not demonstrated sales." },
+    { "id": "token_capture_valuation", "title": "Token value capture and valuation", "guidance": "Implemented mechanisms that route value to the token, value actually distributed or burned over a stated period, and valuation versus fees and peers." },
+    { "id": "chart_market_structure", "title": "Chart and market structure", "guidance": "Trend versus USD and BTC, key levels, volume, venue and liquidity concentration, executable depth for a spot position." },
+    { "id": "btc_relative_scenarios", "title": "BTC-relative scenarios", "guidance": "Bull, base and bear cases with probabilities totaling 100%, business outcome, token-capture assumption, supply assumption, price range, BTC assumption, relative return versus BTC and invalidation. State the BTC-relative return definition. If credible valuation evidence is missing, say asymmetry is unproven." },
+    { "id": "final_grading_verdict", "title": "Final grading and verdict", "guidance": "One verdict label, three strongest bullish facts, three strongest bearish facts, three developments that would increase conviction, three thesis invalidators, the single next metric to monitor, and an independent final take." }
+  ],
+  "economics_fields": [
+    { "id": "protocol_revenue", "label": "Protocol fee revenue", "definition": "Fees paid by users of the network's service over a stated period. Not emissions." },
+    { "id": "network_usage", "label": "Network usage", "definition": "Requests, jobs or transactions served, with definition and period." },
+    { "id": "participant_rewards", "label": "Participant rewards", "definition": "Rewards paid to operators, workers or validators, split into fee-funded and emissions-funded." },
+    { "id": "token_holder_distributions", "label": "Token-holder distributions", "definition": "Value actually distributed to or burned for token holders over a stated period. Emissions are not distributions." },
+    { "id": "staking_yield", "label": "Staking yield", "definition": "Nominal staking yield and its source (fees versus emissions), and the real yield after dilution." }
+  ],
+  "risk_applicability": { "credit": false, "credit_na_reason": "No credit underwriting in network-infrastructure@1." }
+}

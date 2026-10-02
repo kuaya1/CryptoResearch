@@ -1,0 +1,9 @@
+date,type,account,asset,quantity,price_usd,fee_amount,fee_asset,transfer_id,btc_price_usd,settle_cash,external_id,note
+2026-06-01,deposit_cash,demo-exchange,usd,5000,,,,,,,,FICTIONAL demo deposit
+2026-06-02,buy,demo-exchange,example-payfi-fictional,10000,0.20,4,usd,,60000,yes,demo-1,FICTIONAL purchase paid from cash
+2026-06-03,buy,demo-exchange,bitcoin,0.02,60000,3,usd,,60000,yes,demo-2,FICTIONAL purchase paid from cash
+2026-06-10,transfer_out,demo-exchange,example-payfi-fictional,6000,,,,move-1,,,,FICTIONAL move to own wallet
+2026-06-10,transfer_in,demo-wallet,example-payfi-fictional,5990,,,,move-1,,,,FICTIONAL arrived net of 10 token network fee
+2026-08-15,sell,demo-exchange,example-payfi-fictional,2000,0.30,2,usd,,58000,yes,demo-3,FICTIONAL partial sale into cash
+2026-08-20,buy,demo-exchange,usd-coin,500,1.00,,,,59000,yes,demo-4,FICTIONAL stablecoin paid from cash
+2026-09-01,transfer_in,demo-wallet,example-payfi-fictional,1500,,,,,,,,FICTIONAL airdrop-style deposit with unknown cost

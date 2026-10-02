@@ -1,0 +1,380 @@
+'use strict';
+// Project records: creation with duplicate detection, identity, watchlist,
+// headline selection, archiving and prompt generation.
+
+const { runOp, OpError } = require('./ops');
+const { readJson, listDir, exists } = require('./fsx');
+const { slugify, isProjectId, isRecordId } = require('./ids');
+const { stageProjectPrompts } = require('./prompts');
+const { safeUrl } = require('./reports');
+const { validate, loadSchema } = require('./schema');
+const { PROVIDERS } = require('./workspace');
+const { SECTORS, normalizeSector } = require('./sectors');
+
+const GENERIC_WORDS = new Set(['network', 'protocol', 'finance', 'financial', 'labs', 'foundation', 'token', 'coin', 'dao', 'chain', 'the', 'project', 'official']);
+
+function coreName(name) {
+  const words = String(name || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean);
+  const kept = words.filter((w) => !GENERIC_WORDS.has(w));
+  return (kept.length ? kept : words).join(' ');
+}
+
+function domainOf(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return host.split('.').slice(-2).join('.');
+  } catch (_) {
+    return null;
+  }
+}
+
+// EVM addresses are case-insensitive; others (e.g. Solana) are compared exactly.
+function normAddress(addr) {
+  if (!addr) return null;
+  const a = String(addr).trim();
+  return /^0x[0-9a-fA-F]{40}$/.test(a) ? a.toLowerCase() : a;
+}
+
+function requireProjectId(id) {
+  if (!isProjectId(id)) throw new OpError('BAD_ID', `Not a valid project ID: ${JSON.stringify(id)}`);
+  return id;
+}
+
+function loadProject(ws, id) {
+  requireProjectId(id);
+  return readJson(ws.abs(`projects/${id}/project.json`), null);
+}
+
+function getProject(ws, id) {
+  const p = loadProject(ws, id);
+  if (!p) throw new OpError('NOT_FOUND', `No project "${id}". Use: node dashboard/cli.js project list`);
+  return p;
+}
+
+function listProjects(ws) {
+  const out = [];
+  for (const id of listDir(ws.abs('projects'), { dirs: true })) {
+    if (!isProjectId(id)) continue;
+    try {
+      const p = readJson(ws.abs(`projects/${id}/project.json`), null);
+      if (p) out.push(p);
+    } catch (err) {
+      out.push({ project_id: id, name: id, broken: true, error: err.message, identity: {}, watchlist: {} });
+    }
+  }
+  return out;
+}
+
+function findDuplicates(ws, input, { excludeId = null } = {}) {
+  const strong = [];
+  const possible = [];
+  const inId = slugify(input.name || '');
+  const inCore = coreName(input.name);
+  const inAliases = (input.aliases || []).map(coreName);
+  const inDomain = input.official_website ? domainOf(input.official_website) : null;
+  const inCg = input.coingecko_id ? String(input.coingecko_id).toLowerCase() : null;
+  const inAddrs = (input.assets || []).map((a) => normAddress(a && a.contract_address)).filter(Boolean);
+  const inSym = input.symbol ? String(input.symbol).toUpperCase() : null;
+  for (const p of listProjects(ws)) {
+    if (p.broken || p.project_id === excludeId) continue;
+    const reasons = [];
+    if (inId && p.project_id === inId) reasons.push('same project ID');
+    const names = [p.name, ...(p.aliases || [])].map(coreName);
+    if (input.name && (names.includes(inCore) || inAliases.some((a) => names.includes(a)))) reasons.push('same name');
+    const id = p.identity || {};
+    const cgs = [id.coingecko_id, ...(id.candidates || []).map((c) => c.coingecko_id)].filter(Boolean).map((s) => s.toLowerCase());
+    if (inCg && cgs.includes(inCg)) reasons.push('same CoinGecko ID');
+    const addrs = [...(id.assets || []), ...(id.candidates || []).flatMap((c) => c.assets || [])].map((a) => normAddress(a.contract_address)).filter(Boolean);
+    if (inAddrs.some((a) => addrs.includes(a))) reasons.push('same contract address');
+    const domain = id.official_website ? domainOf(id.official_website) : null;
+    if (inDomain && domain && inDomain === domain) reasons.push('same official website');
+    if (reasons.length) {
+      strong.push({ project_id: p.project_id, name: p.name, status: p.status, reasons });
+    } else if (inSym && p.symbol && p.symbol.toUpperCase() === inSym) {
+      possible.push({ project_id: p.project_id, name: p.name, reasons: ['same ticker symbol only (tickers are not unique)'] });
+    }
+  }
+  return { strong, possible };
+}
+
+function cleanEvidence(list) {
+  const now = new Date().toISOString();
+  return (list || [])
+    .filter((e) => e && safeUrl(e.url))
+    .map((e) => ({ kind: e.kind || null, url: safeUrl(e.url), checked_at: e.checked_at || now, note: e.note || null }));
+}
+
+function cleanAssets(list) {
+  return (list || [])
+    .filter((a) => a && a.chain)
+    .map((a) => ({
+      chain: String(a.chain).trim().toLowerCase(),
+      contract_address: a.contract_address ? String(a.contract_address).trim() : null,
+      standard: a.standard || null,
+      note: a.note || null,
+    }));
+}
+
+// Decides whether the supplied identity is bound (verified) or stays pending.
+// Verified needs an official website, a token binding (CoinGecko ID or contract)
+// and at least one evidence URL. Otherwise the binding is kept only as an
+// unconfirmed candidate that is never used for prices or holdings.
+// Research defaults keep a plain provider list (never null), in canonical names.
+function providerList(list) {
+  const map = { gpt: 'chatgpt', openai: 'chatgpt', chatgpt: 'chatgpt', claude: 'claude', anthropic: 'claude', gemini: 'gemini', google: 'gemini' };
+  const raw = Array.isArray(list) ? list : typeof list === 'string' ? list.split(',') : [];
+  return [...new Set(raw.map((s) => map[String(s).trim().toLowerCase()]).filter(Boolean))];
+}
+
+function buildIdentity(input) {
+  const website = input.official_website ? safeUrl(input.official_website) : null;
+  const assets = cleanAssets(input.assets);
+  const evidence = cleanEvidence(input.evidence);
+  const cg = input.coingecko_id ? String(input.coingecko_id).trim().toLowerCase() : null;
+  const hasBinding = Boolean(cg) || assets.some((a) => a.contract_address);
+  const unknowns = [...(input.unknowns || [])];
+  let status = 'pending';
+  if (input.identity_status === 'ambiguous') status = 'ambiguous';
+  else if (input.identity_status !== 'pending' && website && hasBinding && evidence.length) status = 'verified';
+  if (status !== 'verified') {
+    if (!website) unknowns.push('Official website not confirmed.');
+    if (!hasBinding) unknowns.push('Token not bound to a CoinGecko ID or contract.');
+    if (!evidence.length) unknowns.push('No identity evidence URL recorded.');
+  }
+  if (status === 'verified') {
+    return { status, official_website: website, coingecko_id: cg, assets, candidates: [], evidence, unknowns };
+  }
+  return {
+    status,
+    official_website: website,
+    coingecko_id: null,
+    assets: [],
+    candidates: hasBinding ? [{ coingecko_id: cg, assets, note: 'Unconfirmed candidate. Not used for prices or holdings until confirmed.' }] : [],
+    evidence,
+    unknowns: [...new Set(unknowns)],
+  };
+}
+
+function validateProject(ws, project) {
+  const res = validate(loadSchema(ws, 'project.v1'), project);
+  if (!res.valid) throw new OpError('INVALID', `Project record failed validation: ${res.errors.slice(0, 5).join('; ')}`);
+}
+
+function addProject(ws, input) {
+  const name = String(input.name || '').trim();
+  if (!name) throw new OpError('INVALID', 'A project name is required.');
+  const sectorIn = input.sector ? normalizeSector(input.sector, { source: 'owner' }) : null;
+  if (input.sector && !sectorIn) throw new OpError('INVALID', `Unknown sector "${typeof input.sector === 'object' ? input.sector.primary : input.sector}". Use one of: ${SECTORS.map((s) => s.label).join(', ')}.`);
+  const profileRef = input.sector_profile || (sectorIn ? SECTORS.find((s) => s.id === sectorIn.primary).suggests_profile : 'general-token@1');
+  if (!ws.rubrics.profiles[profileRef]) {
+    throw new OpError('INVALID', `Unknown sector profile "${profileRef}". Available: ${Object.keys(ws.rubrics.profiles).join(', ')}`);
+  }
+  const dup = findDuplicates(ws, input);
+  if (dup.strong.length) {
+    const existing = dup.strong[0];
+    let watchlist = null;
+    if (input.watchlist !== false) watchlist = setWatchlist(ws, existing.project_id, true);
+    return {
+      status: 'exists',
+      project_id: existing.project_id,
+      matched_on: existing.reasons,
+      other_matches: dup.strong.slice(1),
+      watchlist_changed: Boolean(watchlist && !watchlist.noop),
+      message: `Already in the workspace as "${existing.project_id}" (${existing.reasons.join(', ')}). No duplicate was created.`,
+      files: watchlist ? watchlist.files : [],
+      verified: true,
+    };
+  }
+  if (dup.possible.length && !input.allow_same_symbol) {
+    return {
+      status: 'possible_duplicate',
+      candidates: dup.possible,
+      message: 'A project with the same ticker already exists. Tickers are not unique: confirm the identity, then repeat with --allow-same-symbol if this really is a different project.',
+      files: [],
+      verified: true,
+    };
+  }
+  let id = slugify(name) || 'project';
+  if (exists(ws.abs(`projects/${id}`))) {
+    let i = 2;
+    while (exists(ws.abs(`projects/${id}-${i}`))) i++;
+    id = `${id}-${i}`;
+  }
+  const now = new Date().toISOString();
+  const identity = buildIdentity(input);
+  const onWatchlist = input.watchlist !== false;
+  const project = {
+    schema_version: 'cr.project.v1',
+    project_id: id,
+    name,
+    symbol: input.symbol ? String(input.symbol).trim().toUpperCase() : null,
+    aliases: (input.aliases || []).map(String),
+    status: identity.status === 'verified' ? 'active' : 'pending_identity',
+    sector_profile: profileRef,
+    sector_note: input.sector_note || null,
+    identity,
+    watchlist: { on_watchlist: onWatchlist, added_at: onWatchlist ? now : null, removed_at: null },
+    headline: null,
+    tags: (input.tags || []).map(String),
+    sector: sectorIn || normalizeSector(null, { fallbackProfile: profileRef }),
+    review: null,
+    research_defaults: input.horizon ? { horizon: String(input.horizon), providers: providerList(input.providers || input.research_providers) } : null,
+    created_at: now,
+    updated_at: now,
+    created_via: ws.actor,
+    origin_request: input.utterance || null,
+  };
+  validateProject(ws, project);
+  const out = runOp(ws, { type: 'add_project', summary: `Add project ${id}` }, (op) => {
+    op.writeJson(`projects/${id}/project.json`, project, { mode: 'create' });
+    op.writeJson(`projects/${id}/events.json`, { schema_version: 'cr.events.v1', events: [] }, { mode: 'create' });
+    if (input.generate_prompts !== false) stageProjectPrompts(ws, op, project);
+  });
+  return {
+    status: 'created',
+    project_id: id,
+    identity_status: identity.status,
+    unknowns: identity.unknowns,
+    message: identity.status === 'verified'
+      ? `Created "${id}" with a verified identity and added it to the watchlist.`
+      : `Created "${id}" as a PENDING draft: the token is not bound until its identity is confirmed.`,
+    files: out.files,
+    verified: out.verified,
+    op_id: out.op_id,
+  };
+}
+
+// Read-modify-write of project.json inside one locked operation.
+function mutateProject(ws, id, type, summary, mutate) {
+  requireProjectId(id);
+  return runOp(ws, { type, summary }, (op) => {
+    const rel = `projects/${id}/project.json`;
+    const project = op.readJson(rel, null);
+    if (!project) throw new OpError('NOT_FOUND', `No project "${id}".`);
+    const before = JSON.stringify(project);
+    const extra = mutate(project, op);
+    if (JSON.stringify(project) === before) return extra;
+    project.updated_at = new Date().toISOString();
+    validateProject(ws, project);
+    op.writeJson(rel, project);
+    return extra;
+  });
+}
+
+function setWatchlist(ws, id, on) {
+  return mutateProject(ws, id, 'set_watchlist', `${on ? 'Add' : 'Remove'} ${id} ${on ? 'to' : 'from'} watchlist`, (p) => {
+    const wl = p.watchlist || {};
+    if (Boolean(wl.on_watchlist) === Boolean(on)) return;
+    const now = new Date().toISOString();
+    p.watchlist = on ? { on_watchlist: true, added_at: now, removed_at: null } : { on_watchlist: false, added_at: wl.added_at || null, removed_at: now };
+  });
+}
+
+function updateIdentity(ws, id, input) {
+  const current = getProject(ws, id);
+  const merged = {
+    official_website: input.official_website !== undefined ? input.official_website : current.identity.official_website,
+    coingecko_id: input.coingecko_id !== undefined ? input.coingecko_id : current.identity.coingecko_id || (current.identity.candidates[0] || {}).coingecko_id,
+    assets: input.assets !== undefined ? input.assets : current.identity.assets.length ? current.identity.assets : (current.identity.candidates[0] || {}).assets,
+    evidence: [...(current.identity.evidence || []), ...(input.evidence || [])],
+    identity_status: input.identity_status,
+    unknowns: input.unknowns || [],
+  };
+  const clash = findDuplicates(ws, { coingecko_id: merged.coingecko_id, assets: merged.assets, official_website: merged.official_website }, { excludeId: id });
+  if (clash.strong.length) {
+    throw new OpError('CONFLICT', `That identity already belongs to "${clash.strong[0].project_id}" (${clash.strong[0].reasons.join(', ')}). Not bound.`);
+  }
+  const identity = buildIdentity(merged);
+  const out = mutateProject(ws, id, 'update_identity', `Update identity of ${id}`, (p, op) => {
+    p.identity = identity;
+    if (p.status !== 'archived') p.status = identity.status === 'verified' ? 'active' : 'pending_identity';
+    if (input.regenerate_prompts !== false) stageProjectPrompts(ws, op, p);
+  });
+  return { status: 'updated', project_id: id, identity_status: identity.status, unknowns: identity.unknowns, files: out.files, verified: out.verified };
+}
+
+function setHeadline(ws, id, { report_id = null, entry_id = null, note = null, clear = false }) {
+  if (!clear) {
+    if (report_id && !isRecordId(report_id)) throw new OpError('BAD_ID', 'Invalid report ID');
+    if (entry_id && !isRecordId(entry_id)) throw new OpError('BAD_ID', 'Invalid journal entry ID');
+    if (report_id && !exists(ws.abs(`projects/${id}/reports/${report_id}/report.json`))) throw new OpError('NOT_FOUND', `No report ${report_id} in ${id}.`);
+    if (entry_id && !exists(ws.abs(`projects/${id}/journal/${entry_id}.json`))) throw new OpError('NOT_FOUND', `No journal entry ${entry_id} in ${id}.`);
+    if (!report_id && !entry_id) throw new OpError('INVALID', 'Choose a report or one of your decision entries as the headline, or clear it.');
+  }
+  return mutateProject(ws, id, 'set_headline', `Set headline of ${id}`, (p) => {
+    p.headline = clear ? null : report_id
+      ? { type: 'report', report_id, entry_id: null, selected_at: new Date().toISOString(), note }
+      : { type: 'decision', report_id: null, entry_id, selected_at: new Date().toISOString(), note };
+  });
+}
+
+function archiveProject(ws, id, reason) {
+  return mutateProject(ws, id, 'archive_project', `Archive ${id}`, (p) => {
+    p.status = 'archived';
+    p.archived_reason = reason || null;
+    p.watchlist = { ...(p.watchlist || {}), on_watchlist: false, removed_at: new Date().toISOString() };
+  });
+}
+
+function updateProjectFields(ws, id, fields) {
+  const allowed = ['symbol', 'aliases', 'tags', 'sector_profile', 'sector_note', 'name', 'sector', 'research_defaults'];
+  for (const k of Object.keys(fields)) if (!allowed.includes(k)) throw new OpError('INVALID', `Field ${k} cannot be changed here.`);
+  if (fields.sector_profile && !ws.rubrics.profiles[fields.sector_profile]) throw new OpError('INVALID', `Unknown sector profile ${fields.sector_profile}`);
+  let sector;
+  if (fields.sector !== undefined) {
+    sector = fields.sector === null ? null : normalizeSector(fields.sector, { source: 'owner' });
+    if (fields.sector !== null && !sector) throw new OpError('INVALID', `Unknown sector. Use one of: ${SECTORS.map((s) => s.label).join(', ')}.`);
+    if (sector) sector.source = 'owner';
+  }
+  return mutateProject(ws, id, 'update_project', `Update ${id}`, (p, op) => {
+    const { sector: _s, ...rest } = fields;
+    Object.assign(p, rest);
+    if (fields.sector !== undefined) {
+      const same = p.sector && sector && p.sector.primary === sector.primary && JSON.stringify(p.sector.tags || []) === JSON.stringify(sector.tags || []) && p.sector.source === 'owner';
+      if (!same) p.sector = sector;
+    }
+    if (fields.symbol) p.symbol = String(fields.symbol).toUpperCase();
+    if (fields.sector_profile) stageProjectPrompts(ws, op, p);
+  });
+}
+
+// Your review cursor: "changes since my last review" are measured from here.
+function markReviewed(ws, id, { note = null } = {}) {
+  return mutateProject(ws, id, 'mark_reviewed', `Reviewed ${id}`, (p) => {
+    p.review = { last_reviewed_at: new Date().toISOString(), note: note || null };
+  });
+}
+
+function generatePrompts(ws, id, providers = PROVIDERS) {
+  const project = getProject(ws, id);
+  const bad = providers.filter((p) => !PROVIDERS.includes(p));
+  if (bad.length) throw new OpError('INVALID', `Unknown provider(s): ${bad.join(', ')}`);
+  const out = runOp(ws, { type: 'generate_prompts', summary: `Generate prompts for ${id}` }, (op) => stageProjectPrompts(ws, op, project, providers));
+  return { status: out.noop ? 'unchanged' : 'generated', project_id: id, files: out.files, verified: out.verified };
+}
+
+module.exports = {
+  coreName,
+  domainOf,
+  loadProject,
+  getProject,
+  listProjects,
+  findDuplicates,
+  addProject,
+  setWatchlist,
+  updateIdentity,
+  setHeadline,
+  archiveProject,
+  updateProjectFields,
+  markReviewed,
+  generatePrompts,
+  mutateProject,
+  requireProjectId,
+};

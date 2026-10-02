@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cr.journal.v1",
+  "title": "Journal entry (projects/<project_id>/journal/<entry_id>.json)",
+  "description": "Your own decisions, conviction notes and thesis updates. Entries are immutable; a change of mind is a new entry. Kept separate from model reports.",
+  "type": "object",
+  "required": ["schema_version", "entry_id", "project_id", "type", "created_at"],
+  "properties": {
+    "schema_version": { "const": "cr.journal.v1" },
+    "entry_id": { "type": "string" },
+    "project_id": { "type": "string" },
+    "type": { "enum": ["decision", "conviction_note", "thesis", "review_completed", "note"] },
+    "created_at": { "type": "string" },
+    "via": { "type": ["string", "null"] },
+    "decision": { "enum": ["watch", "research_more", "accumulate", "hold", "trim", "exit", "avoid", null] },
+    "conviction": { "enum": ["low", "medium", "high", null] },
+    "text": { "type": ["string", "null"] },
+    "reasons": { "type": "array", "items": { "type": "string" } },
+    "linked_report_ids": { "type": "array", "items": { "type": "string" } },
+    "source_request_text": { "type": ["string", "null"] }
+  }
+}

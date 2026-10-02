@@ -1,0 +1,452 @@
+{
+  "at": "2026-10-02T00:28:45.458Z",
+  "root": "C:\\Users\\Kuaya\\Documents\\CryptoResearch",
+  "aggregate_sha256": "9ff79de7f31aaf92c92822c1e092782c7a49493b84292ad38840516a86087fd0",
+  "method": "SHA-256 of sorted path + NUL + per-file SHA-256, joined by LF; includes app/tests/fixtures/scripts/package",
+  "runtime": {
+    "node": "v24.21.0",
+    "execPath": "C:\\Users\\Kuaya\\AppData\\Local\\Volta\\tools\\image\\node\\24.21.0\\node.exe"
+  },
+  "workspace": {
+    "workspace_format": "cryptoresearch.workspace.v1",
+    "workspace_id": "ws_rzn5w5pudi",
+    "name": "CryptoResearch",
+    "kind": "real",
+    "created_at": "2026-10-01T14:20:13.535Z",
+    "timezone": "America/New_York",
+    "note": "Marks this folder as a CryptoResearch workspace. The dashboard refuses to write to a folder without this file.",
+    "home_host": "DESKTOP-IILMFLP"
+  },
+  "saved_server_marker": {
+    "pid": 13960,
+    "port": 4729,
+    "url": "http://127.0.0.1:4729/",
+    "started_at": "2026-10-01T23:35:58.896Z",
+    "workspace_id": "ws_rzn5w5pudi",
+    "host": "127.0.0.1",
+    "host_name": "DESKTOP-IILMFLP",
+    "node": "v24.21.0"
+  },
+  "files": [
+    {
+      "path": "dashboard/cli.js",
+      "bytes": 38624,
+      "sha256": "53df3c756a8679c451c8eee3debe1a1481d867efd1526f3ece0b8875db8fefd3",
+      "mtime": "2026-10-01T19:29:36.842Z"
+    },
+    {
+      "path": "dashboard/core/compare.js",
+      "bytes": 19738,
+      "sha256": "0eccea7de84ef2921d1df64141477e1614474a82452616ede5ddfc066688931c",
+      "mtime": "2026-10-01T18:18:42.711Z"
+    },
+    {
+      "path": "dashboard/core/dates.js",
+      "bytes": 4087,
+      "sha256": "97b9d47d3c64d0b3b01fb9b281167b8d700bfed7f1ac49f2a30f3a8de4c7c753",
+      "mtime": "2026-10-01T13:36:59.617Z"
+    },
+    {
+      "path": "dashboard/core/decimal.js",
+      "bytes": 4398,
+      "sha256": "2978aa9026c5b5ff871f9f0df70d3da7862257c872d44a29ffd8e13a0d5c5c53",
+      "mtime": "2026-10-01T18:25:27.298Z"
+    },
+    {
+      "path": "dashboard/core/demo.js",
+      "bytes": 17126,
+      "sha256": "1839ec82bba9f6c5afab0cf719a7b8ac77b2983055551ae726374cc425688cd6",
+      "mtime": "2026-10-01T18:43:05.750Z"
+    },
+    {
+      "path": "dashboard/core/digest.js",
+      "bytes": 4727,
+      "sha256": "ed9fc4f77c141139bb15e1a560f5aacd21f929ba33160393bb59936bb14eaef3",
+      "mtime": "2026-10-01T18:43:29.958Z"
+    },
+    {
+      "path": "dashboard/core/doctor.js",
+      "bytes": 11656,
+      "sha256": "ea835f9c3801465692f23916e13b8554bb15683ec3369b892abd9544ee8fd81c",
+      "mtime": "2026-10-01T18:35:57.654Z"
+    },
+    {
+      "path": "dashboard/core/exporter.js",
+      "bytes": 33245,
+      "sha256": "38e3b24229145645f55509741bd4e983a563564ef0128c9b60e5a33ff52942c3",
+      "mtime": "2026-10-01T18:24:31.401Z"
+    },
+    {
+      "path": "dashboard/core/fsx.js",
+      "bytes": 3886,
+      "sha256": "573d15cf534d6d44b67b5417b33b201b2332b2e1c72cd9ec00208608d9a9e986",
+      "mtime": "2026-10-01T13:36:40.080Z"
+    },
+    {
+      "path": "dashboard/core/ids.js",
+      "bytes": 1345,
+      "sha256": "aaa99494ecc317d98fd06dc73b4f40f6f42b48661c454172d17cd53a1fb3fbb4",
+      "mtime": "2026-10-01T13:36:45.480Z"
+    },
+    {
+      "path": "dashboard/core/inbox.js",
+      "bytes": 23484,
+      "sha256": "3008e65b22b0af42f675d1884b9ea753dd461bb831c9e79bf7bc585aaca52613",
+      "mtime": "2026-10-01T18:17:15.973Z"
+    },
+    {
+      "path": "dashboard/core/indexer.js",
+      "bytes": 28426,
+      "sha256": "7c2c173e7fe19c7ee26fbeeb0ee11099ace0c5e6d445a7c13c22cf4a498b3997",
+      "mtime": "2026-10-01T19:17:24.507Z"
+    },
+    {
+      "path": "dashboard/core/jobs.js",
+      "bytes": 8610,
+      "sha256": "77ac930fae54475931417143f413c7f4e42142b9837d5565dd990b6e9a4c2ea0",
+      "mtime": "2026-10-01T18:21:57.949Z"
+    },
+    {
+      "path": "dashboard/core/leases.js",
+      "bytes": 3760,
+      "sha256": "0f35cbd0e352e700cf6eb2fe928969f20509ed5629dbf97922b97f7d7d5bc4ad",
+      "mtime": "2026-10-01T18:45:39.940Z"
+    },
+    {
+      "path": "dashboard/core/market.js",
+      "bytes": 23044,
+      "sha256": "7185f0b2064b908948479631f136dff027cf94b0007cec4260e7525e95c39123",
+      "mtime": "2026-10-01T18:59:27.207Z"
+    },
+    {
+      "path": "dashboard/core/notes.js",
+      "bytes": 13956,
+      "sha256": "57a3ae6c432443a9d29268c9c313fa9ef7017459cf7a2934ed94a1bfb0dd141e",
+      "mtime": "2026-10-01T18:17:38.659Z"
+    },
+    {
+      "path": "dashboard/core/ops.js",
+      "bytes": 30366,
+      "sha256": "97b9374e30619ddcd1e88cd7264240cc86e1e946243d769aacb23e6b3deaee4a",
+      "mtime": "2026-10-01T18:12:28.450Z"
+    },
+    {
+      "path": "dashboard/core/portfolio.js",
+      "bytes": 49663,
+      "sha256": "16da70d0cc1c56c3184f034cc2862e290a9639cd67b368fbf3d48aa8e2971f5f",
+      "mtime": "2026-10-01T18:50:06.927Z"
+    },
+    {
+      "path": "dashboard/core/projects.js",
+      "bytes": 17627,
+      "sha256": "6247e6e44531e1cbaf3b1fa45fd441449f891117a50cd0b5b22bf0bc5f6a9155",
+      "mtime": "2026-10-01T19:34:34.197Z"
+    },
+    {
+      "path": "dashboard/core/prompts.js",
+      "bytes": 12714,
+      "sha256": "c80a798e4003a0a3614cda623147255ad9ded41e4541d59d008d3189b369a392",
+      "mtime": "2026-10-01T18:39:26.992Z"
+    },
+    {
+      "path": "dashboard/core/providers.js",
+      "bytes": 8180,
+      "sha256": "27309585e8036b355c62f9065254961db9d5d58fd81dc79651c51e58b4754c65",
+      "mtime": "2026-10-01T18:38:08.325Z"
+    },
+    {
+      "path": "dashboard/core/reports.js",
+      "bytes": 49516,
+      "sha256": "b1e8599c3a1e7dbd0c8d4b40a5b40e424a5f24b240c44d66efbd35da9cf7b9aa",
+      "mtime": "2026-10-01T18:19:19.312Z"
+    },
+    {
+      "path": "dashboard/core/requests.js",
+      "bytes": 17345,
+      "sha256": "901a03ad500d70c83324b5e29f8dc508ada27bc79a61541279124f837467ea9b",
+      "mtime": "2026-10-01T18:35:02.442Z"
+    },
+    {
+      "path": "dashboard/core/research.js",
+      "bytes": 36172,
+      "sha256": "605dbe2eefa153de3596fd3d689cd50ea68679aed501ae08cdc7590a7842caba",
+      "mtime": "2026-10-01T18:41:31.889Z"
+    },
+    {
+      "path": "dashboard/core/rubrics.js",
+      "bytes": 6840,
+      "sha256": "a595b2bf072f098a19736cee47952b6e0c6fbced12f5adbeee675e7eae853674",
+      "mtime": "2026-10-01T18:13:20.295Z"
+    },
+    {
+      "path": "dashboard/core/schedule.js",
+      "bytes": 7468,
+      "sha256": "a1a12421c31881153b8e1e4600458eb2e91e1f6bd580d7d2a8714ebb05c1d284",
+      "mtime": "2026-10-01T18:22:18.083Z"
+    },
+    {
+      "path": "dashboard/core/schema.js",
+      "bytes": 4443,
+      "sha256": "f745afe8f9d3e42b309213485f5793f8d3e7d99fe8041ec7594dee8295c024ec",
+      "mtime": "2026-10-01T13:38:25.936Z"
+    },
+    {
+      "path": "dashboard/core/scoring.js",
+      "bytes": 10421,
+      "sha256": "76bf5cbb824fc37c764ea50505b6291a1b76915cfb8865461d87ebab8d407e22",
+      "mtime": "2026-10-01T13:39:22.449Z"
+    },
+    {
+      "path": "dashboard/core/sectors.js",
+      "bytes": 2916,
+      "sha256": "0c580d1a3628e3b6602b79763f4f177cd616944bdcd9ec4d96d9014d89b53efc",
+      "mtime": "2026-10-01T18:36:20.293Z"
+    },
+    {
+      "path": "dashboard/core/workspace.js",
+      "bytes": 9745,
+      "sha256": "3f563b026d7329eb38778ab47ce14056c64f0e2c88640948ce3145aec14b2de4",
+      "mtime": "2026-10-01T18:13:54.853Z"
+    },
+    {
+      "path": "dashboard/fixtures/portfolio/fictional-transactions.csv",
+      "bytes": 1001,
+      "sha256": "bc608af1a5be3bab9cab1fbe405934bf6d76cd48524970af0c88a581aec06e12",
+      "mtime": "2026-10-01T14:15:06.982Z"
+    },
+    {
+      "path": "dashboard/fixtures/reports/example-payfi-fictional__chatgpt.md",
+      "bytes": 10010,
+      "sha256": "b3a6d3a7708a832d7e55d1328f2ad6f9c056e63294908d70c4c8347b2c201d5f",
+      "mtime": "2026-10-01T14:01:31.895Z"
+    },
+    {
+      "path": "dashboard/fixtures/reports/example-payfi-fictional__claude.md",
+      "bytes": 11785,
+      "sha256": "9b45ef5df89fc97fe18029357b8b7e3afafa8da6a0be9d3862140aeedc023820",
+      "mtime": "2026-10-01T14:01:01.395Z"
+    },
+    {
+      "path": "dashboard/fixtures/reports/example-payfi-fictional__gemini.md",
+      "bytes": 10612,
+      "sha256": "6e9265db587dfc898127f937563374f99bbe3847f862e3bf2828e4a61ce44c7a",
+      "mtime": "2026-10-01T14:02:03.145Z"
+    },
+    {
+      "path": "dashboard/fixtures/reports/example-payfi-fictional__prose-claude.md",
+      "bytes": 1508,
+      "sha256": "38ddc3421c3ace38f2bed5b5925c1b713b7058c5ddd2672b0d7cff38fe08a536",
+      "mtime": "2026-10-01T14:02:11.515Z"
+    },
+    {
+      "path": "dashboard/public/app.js",
+      "bytes": 19554,
+      "sha256": "cbbdddaf4ac7e8f3051e96938e849cab13c405f41fbad113cd21ae46867e70a5",
+      "mtime": "2026-10-01T23:17:39.120Z"
+    },
+    {
+      "path": "dashboard/public/favicon.svg",
+      "bytes": 185,
+      "sha256": "f7eb6bb8a56ddb363ea2235eb7bc3f63f7c3c4c989f656b367cbac3ffe25a7e6",
+      "mtime": "2026-10-01T14:04:47.240Z"
+    },
+    {
+      "path": "dashboard/public/index.html",
+      "bytes": 1544,
+      "sha256": "db55e1a027b60712ed3aaa64ad42e0036860e57bf798bf78eeaa961b0487f95c",
+      "mtime": "2026-10-01T23:17:39.120Z"
+    },
+    {
+      "path": "dashboard/public/md.js",
+      "bytes": 3842,
+      "sha256": "0af30647d4268cc3756dfae1dd61759b45db049155082fd703d0e4146a995e36",
+      "mtime": "2026-10-01T14:05:49.179Z"
+    },
+    {
+      "path": "dashboard/public/styles.css",
+      "bytes": 47644,
+      "sha256": "fad6fae87e68ccff31419b2fb185bd29cfb4138daf720849ac6d15f39e2a9dc1",
+      "mtime": "2026-10-01T23:39:44.509Z"
+    },
+    {
+      "path": "dashboard/public/ui.js",
+      "bytes": 29270,
+      "sha256": "709e58aa648e7f7e92ad054bcb6b6f0fd5ec49d50fee649832e44e4dda8f6273",
+      "mtime": "2026-10-01T23:17:39.118Z"
+    },
+    {
+      "path": "dashboard/public/views/dialogs.js",
+      "bytes": 22395,
+      "sha256": "51840de42a6a59990ac27e8822b385187c62e0fdaf2bcfad9bc22102fa5dc746",
+      "mtime": "2026-10-01T23:21:55.790Z"
+    },
+    {
+      "path": "dashboard/public/views/portfolio.js",
+      "bytes": 22118,
+      "sha256": "90b29ad21fd8db472d711486bc41fe35649e2dabb30e54f0b77a98989c7408e1",
+      "mtime": "2026-10-01T23:19:31.910Z"
+    },
+    {
+      "path": "dashboard/public/views/project.js",
+      "bytes": 69780,
+      "sha256": "2038ae17fea555b07a2a66d68db6c30d32b2b546c3760afe86a4abcf2f497411",
+      "mtime": "2026-10-01T23:47:11.467Z"
+    },
+    {
+      "path": "dashboard/public/views/research.js",
+      "bytes": 20883,
+      "sha256": "fa8bc9b3280c2f2624d95f811ba5b36543e33b4d966fff0d84ad85c4a8bcd90c",
+      "mtime": "2026-10-01T22:27:10.549Z"
+    },
+    {
+      "path": "dashboard/public/views/settings.js",
+      "bytes": 26436,
+      "sha256": "a58f3c994bb8e683b841bf16254d69ce208ca74cab21e623b1484afe43ab119d",
+      "mtime": "2026-10-01T22:27:10.549Z"
+    },
+    {
+      "path": "dashboard/public/views/updates.js",
+      "bytes": 24104,
+      "sha256": "62a67024fe549c1662565c025ac9044c748cd70b3124af682a47c86fe39cc25f",
+      "mtime": "2026-10-01T23:44:53.523Z"
+    },
+    {
+      "path": "dashboard/public/views/watchlist.js",
+      "bytes": 63471,
+      "sha256": "c725955d337d6fb6ace367464fad40b54983047de8971580a1ea078f1236e060",
+      "mtime": "2026-10-01T23:47:11.468Z"
+    },
+    {
+      "path": "dashboard/scripts/launch.sh",
+      "bytes": 170,
+      "sha256": "47c94a62f1214752d4d75c237c3317b48987f43e12495e0d287f930888be5d0c",
+      "mtime": "2026-10-01T14:20:08.585Z"
+    },
+    {
+      "path": "dashboard/scripts/migrate-2026-10-01.js",
+      "bytes": 2881,
+      "sha256": "04538def49683dd8a08de9f1ab10b51619cae1b68c85506d141bf51a0fc2c454",
+      "mtime": "2026-10-01T19:47:05.677Z"
+    },
+    {
+      "path": "dashboard/scripts/scheduled-run.cmd",
+      "bytes": 848,
+      "sha256": "b6cdd1af530620f5a068713950d085c5b488cc1cc8b933d6fc7a5664c8dafced",
+      "mtime": "2026-10-01T19:32:37.966Z"
+    },
+    {
+      "path": "dashboard/server.js",
+      "bytes": 38335,
+      "sha256": "ecfeb05fa346229472a9220b3c2ba009474b1c064612c8fc583dc3cfc7590bb7",
+      "mtime": "2026-10-01T22:25:20.882Z"
+    },
+    {
+      "path": "dashboard/tests/audit-regressions.test.js",
+      "bytes": 45681,
+      "sha256": "4742ec250236573d5dbe84b5931326f3ac8cbd8040c1db5ed297606bddc7c760",
+      "mtime": "2026-10-01T18:34:38.012Z"
+    },
+    {
+      "path": "dashboard/tests/children/child-generation.js",
+      "bytes": 1909,
+      "sha256": "65d3b40e7e5a99feb53ebf97252a384f94bd8c6deb26cdaafb272942b8ca885d",
+      "mtime": "2026-10-01T18:31:04.287Z"
+    },
+    {
+      "path": "dashboard/tests/children/child-queue-crash.js",
+      "bytes": 1625,
+      "sha256": "a71a7700b9b69c84dd369a94a836cd63183abb6e47aa10e46dc731f518d27c0e",
+      "mtime": "2026-10-01T18:30:54.808Z"
+    },
+    {
+      "path": "dashboard/tests/children/child-run-queue.js",
+      "bytes": 571,
+      "sha256": "83ebe6924bbca86310cade10f58513240f995efaf26db0396d08ec203bbe4068",
+      "mtime": "2026-10-01T18:30:57.197Z"
+    },
+    {
+      "path": "dashboard/tests/compare.test.js",
+      "bytes": 4587,
+      "sha256": "a1d7e27984a8c33041c940c462f2c35bc8852405eff4384fe5273998b2c39351",
+      "mtime": "2026-10-01T14:17:42.222Z"
+    },
+    {
+      "path": "dashboard/tests/dates.test.js",
+      "bytes": 1301,
+      "sha256": "7e1aa19827dd12d4cd4c5912e68eb4e55f5484f87d096adc3276ebde6cfd351e",
+      "mtime": "2026-10-01T14:16:55.252Z"
+    },
+    {
+      "path": "dashboard/tests/helpers.js",
+      "bytes": 2770,
+      "sha256": "3fa9708f09d35f05d1b9ccb6b548099e28167d74e83695db5ba383d456a028d1",
+      "mtime": "2026-10-01T18:19:33.887Z"
+    },
+    {
+      "path": "dashboard/tests/ingest.test.js",
+      "bytes": 8864,
+      "sha256": "7d2e1cc7a770ea2e0d0552ec43dda4a6dfd990d4f35b8f09e16e126793912649",
+      "mtime": "2026-10-01T14:17:23.080Z"
+    },
+    {
+      "path": "dashboard/tests/market.test.js",
+      "bytes": 3977,
+      "sha256": "b88c757df0b8d037c2ff68682a38c5275f79359445cdb0fbeb77702a1a67ec05",
+      "mtime": "2026-10-01T18:29:44.704Z"
+    },
+    {
+      "path": "dashboard/tests/ops.test.js",
+      "bytes": 3814,
+      "sha256": "d6a2cbb06cbe001ea2bf4015110740c7cca962ffb6b3d935881751a0ea086159",
+      "mtime": "2026-10-01T14:19:06.277Z"
+    },
+    {
+      "path": "dashboard/tests/portfolio.test.js",
+      "bytes": 8509,
+      "sha256": "e7c0a316455adeda0d3a89bf18ba5e500c202c85474c5311b003172ce94a65b8",
+      "mtime": "2026-10-01T18:29:38.261Z"
+    },
+    {
+      "path": "dashboard/tests/projects.test.js",
+      "bytes": 7082,
+      "sha256": "14278bcac199089039eff5bcc5a5f38ec9bbc70e706fbc158a3a9852650a173e",
+      "mtime": "2026-10-01T18:19:36.951Z"
+    },
+    {
+      "path": "dashboard/tests/research.test.js",
+      "bytes": 14739,
+      "sha256": "5b9205d1a2744845317ecf128107289fcda6e313175d6afe0b3cfd698a24e3a2",
+      "mtime": "2026-10-01T18:45:26.387Z"
+    },
+    {
+      "path": "dashboard/tests/scoring.test.js",
+      "bytes": 5732,
+      "sha256": "0a843cca1c199db8cd5c95ea5d889a6bf5ddac517cb247ab5c6cb2b404d66bad",
+      "mtime": "2026-10-01T14:16:50.253Z"
+    },
+    {
+      "path": "dashboard/tests/server.test.js",
+      "bytes": 6798,
+      "sha256": "84a4c79db7f800b1a43c67a1467f0e5f9eb522421353545de6527245e5a4a724",
+      "mtime": "2026-10-01T14:19:28.572Z"
+    },
+    {
+      "path": "dashboard/tests/ui-backend.test.js",
+      "bytes": 12531,
+      "sha256": "aeb818cf8868208d467e29636ab1e3aadec9fbb734e08a57860f825870b3445d",
+      "mtime": "2026-10-01T23:23:07.794Z"
+    },
+    {
+      "path": "dashboard/tests/ui-logic.test.js",
+      "bytes": 6529,
+      "sha256": "c24675da8e00479dd538fdf8aa81e1192fd0130a5a9dd599de4c1f6e5ed4ee91",
+      "mtime": "2026-10-01T22:40:43.198Z"
+    },
+    {
+      "path": "package.json",
+      "bytes": 408,
+      "sha256": "02574594fec2cfc11757cd1e5acd488521618a7da1bf16a7f7b0c5f971e30e60",
+      "mtime": "2026-10-01T19:40:33.788Z"
+    }
+  ]
+}

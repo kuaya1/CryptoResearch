@@ -1,0 +1,316 @@
+// Settings: general preferences, research providers and budgets (keys never
+// appear in the page), rubrics, data (exports, backups) and system status.
+import {
+  h, card, table, stateText, fmtDateTime, fmtNum, fmtAgo, field, input, button, action, callout, kv, details, tabStrip, safeSection,
+  PROVIDERS, PROVIDER_LABELS,
+} from '../ui.js';
+
+const TABS = [
+  ['general', 'General'],
+  ['research', 'Research models & budget'],
+  ['rubrics', 'Rubrics'],
+  ['data', 'Backups & exports'],
+  ['system', 'System & privacy'],
+  ['activity', 'Activity'],
+];
+
+export async function renderSettings(ctx, route) {
+  const tab = TABS.some(([t]) => t === route.query.get('tab')) ? route.query.get('tab') : 'general';
+  const strip = tabStrip(TABS.map(([t, label]) => ({ id: t, label, href: `#/settings?tab=${t}` })), tab, { label: 'Settings sections' });
+  const body = await safeSection(TABS.find(([t]) => t === tab)[1], () => ({ general: generalTab, research: researchTab, rubrics: rubricsTab, data: dataTab, system: systemTab, activity: activityTab })[tab](ctx));
+  return h('div', null,
+    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Settings'), h('div', { class: 'sub' }, 'Stored in config/settings.json inside your workspace.'))),
+    strip,
+    h('div', { id: 'tabpanel', role: 'tabpanel', 'aria-labelledby': `tab-${tab}` }, body));
+}
+
+function generalTab(ctx) {
+  const s = ctx.state.index.settings;
+  const r = ctx.state.index.rubrics;
+  const spread = input({ type: 'number', min: '1', max: '99', value: s.comparison.spread_threshold });
+  const windowDays = input({ type: 'number', min: '0', max: '365', value: s.comparison.date_window_days });
+  const median = h('input', { type: 'checkbox', checked: Boolean(s.comparison.show_median) });
+  const tol = input({ type: 'number', step: 'any', min: '0', max: '20', value: s.grading.discrepancy_tolerance });
+  const stale = input({ type: 'number', min: '5', value: s.freshness.price_stale_minutes });
+  const claimStale = input({ type: 'number', min: '1', value: s.freshness.claim_stale_days });
+  const researchStale = input({ type: 'number', min: '1', value: s.freshness.research_stale_days || 90 });
+  const md = h('input', { type: 'checkbox', checked: Boolean(s.market_data.enabled) });
+  const fg = input({ type: 'number', min: '2', max: '240', value: s.market_data.foreground_interval_minutes });
+  const budget = input({ type: 'number', min: '100', value: s.market_data.monthly_call_budget || 7500 });
+  const labels = input({ value: (r.labels || []).map((l) => `${l.label}:${l.min}`).join(', ') });
+  const btn = button('Save settings', null, { kind: 'primary small', type: 'submit' });
+  const form = h('form', { class: 'form-grid' },
+    field('Highlight spreads of at least', spread, 'points'),
+    field('Comparison date window', windowDays, 'days; applies across the whole span of compared analyses'),
+    field('Model-total tolerance', tol, 'points before a mismatch is flagged'),
+    field('Price is stale after', stale, 'minutes'),
+    field('Claim is stale after', claimStale, 'days'),
+    field('Research is stale after', researchStale, 'days; stale grades are marked, never hidden'),
+    field('Refresh prices while open every', fg, 'minutes'),
+    field('CoinGecko monthly call budget', budget, 'calls; refreshes pause at the budget and keep last values'),
+    field('Grade labels', labels, 'label:minimum, e.g. A:90, B:80, C:70, D:60, F:0'),
+    h('label', { class: 'check' }, median, 'Show descriptive median in comparisons'),
+    h('label', { class: 'check' }, md, 'Fetch market data (CoinGecko)'),
+    h('div', { class: 'field' }, btn));
+  form.onsubmit = action(btn, async () => {
+    const parsed = labels.value.split(',').map((x) => x.trim()).filter(Boolean).map((x) => { const [label, min] = x.split(':'); return { label: (label || '').trim(), min: Number(min) }; });
+    const out = await ctx.api.post('/api/settings', {
+      comparison: { spread_threshold: spread.value, date_window_days: windowDays.value, show_median: median.checked },
+      grading: { discrepancy_tolerance: tol.value, labels: parsed },
+      freshness: { price_stale_minutes: stale.value, claim_stale_days: claimStale.value, research_stale_days: researchStale.value },
+      market_data: { enabled: md.checked, foreground_interval_minutes: fg.value, monthly_call_budget: budget.value },
+    });
+    await ctx.refresh();
+    return out;
+  }, 'Settings saved to config/settings.json');
+  const sources = s.rank_sources || {};
+  return h('div', null,
+    card('Dashboard settings', form, { note: 'Rubric weights are not editable here: they belong to the versioned rubric files.' }),
+    card('Market data sources', table([
+      { label: 'Source', render: (x) => x.label },
+      { label: 'Status', render: (x) => (x.enabled ? stateText('In use', 'ok') : stateText('Not configured')) },
+      { label: 'Used for', wrap: true, render: (x) => h('span', { class: 'small' }, x.note) },
+    ], [
+      { label: 'CoinGecko /coins/markets', enabled: s.market_data.enabled !== false, note: 'Price, market cap, rank (labeled "CoinGecko"), rolling 24H/7D/30D change, 24h volume, supply, 7-day series, logos. Free, keyless, within the monthly call budget.' },
+      { label: 'CoinMarketCap', enabled: Boolean(sources.coinmarketcap && sources.coinmarketcap.enabled), note: 'Not used. A literal CoinMarketCap rank would need a CoinMarketCap API key and adapter; CoinGecko rank is never relabeled as CoinMarketCap.' },
+      { label: 'Liquidity (DEX/CEX depth)', enabled: false, note: 'No source configured, so no liquidity column is offered.' },
+    ]), { note: 'Each value shows the source it came from.' }));
+}
+
+async function researchTab(ctx) {
+  let info;
+  try {
+    info = await ctx.api.get('/api/research/providers');
+  } catch (err) {
+    return callout(err.message, 'bad');
+  }
+  const s = ctx.state.index.settings.research;
+  const cfg = s.providers || {};
+  const inputs = {};
+  const rows = PROVIDERS.map((p) => {
+    const c = cfg[p] || {};
+    inputs[p] = {
+      model: input({ value: c.model || '', placeholder: 'model ID', 'aria-label': `${PROVIDER_LABELS[p]} model ID` }),
+      inp: input({ inputmode: 'decimal', value: c.input_usd_per_mtok ?? '', placeholder: 'USD / 1M input tokens', 'aria-label': `${PROVIDER_LABELS[p]} input price` }),
+      outp: input({ inputmode: 'decimal', value: c.output_usd_per_mtok ?? '', placeholder: 'USD / 1M output tokens', 'aria-label': `${PROVIDER_LABELS[p]} output price` }),
+      search: input({ inputmode: 'decimal', value: c.search_usd_per_call ?? '', placeholder: 'USD per web search', 'aria-label': `${PROVIDER_LABELS[p]} search price` }),
+      maxs: input({ inputmode: 'numeric', value: c.max_searches ?? '', placeholder: 'max searches', 'aria-label': `${PROVIDER_LABELS[p]} max searches` }),
+    };
+    return p;
+  });
+  const b = s.budget || {};
+  const perRun = input({ inputmode: 'decimal', value: b.per_run_usd ?? '', placeholder: 'not set' });
+  const daily = input({ inputmode: 'decimal', value: b.daily_usd ?? '', placeholder: 'not set' });
+  const monthly = input({ inputmode: 'decimal', value: b.monthly_usd ?? '', placeholder: 'not set' });
+  const horizon = input({ value: s.default_horizon || '24 months' });
+  const unattended = h('input', { type: 'checkbox', checked: Boolean(s.unattended_enabled) });
+  const btn = button('Save research settings', null, { kind: 'primary small', type: 'submit' });
+  const form = h('form', null,
+    table([
+      { label: 'Model', render: (p) => h('strong', null, PROVIDER_LABELS[p]) },
+      { label: 'Route', render: (p) => { const st = info.providers[p] || {}; return st.mode === 'api' ? stateText('API, ready', 'ok') : st.mode === 'mock' ? stateText('Fictional demo adapter') : h('span', { title: st.reason || '' }, stateText('Manual import', 'warn')); } },
+      { label: 'API key', render: (p) => { const st = info.providers[p] || {}; return st.key && st.key.present ? `Present (${st.key.source || st.key.how || 'configured'})` : h('span', { class: 'faint' }, 'Not set'); } },
+      { label: 'Model ID', render: (p) => inputs[p].model },
+      { label: 'Input $/1M tok', render: (p) => inputs[p].inp },
+      { label: 'Output $/1M tok', render: (p) => inputs[p].outp },
+      { label: '$ per search', render: (p) => inputs[p].search },
+      { label: 'Max searches', render: (p) => inputs[p].maxs },
+    ], rows),
+    h('div', { class: 'form-grid', style: { marginTop: '12px' } },
+      field('Per-run limit (USD)', perRun, 'Each model call is estimated first; a call above this is not made'),
+      field('Daily limit (USD)', daily),
+      field('Monthly limit (USD)', monthly),
+      field('Default horizon', horizon),
+      h('label', { class: 'check field wide' }, unattended, 'Allow scheduled (unattended) research runs within these limits'),
+      h('div', { class: 'field' }, btn)));
+  form.onsubmit = action(btn, async () => {
+    const providers = {};
+    for (const p of PROVIDERS) {
+      const v = inputs[p];
+      providers[p] = { model: v.model.value.trim() || null, input_usd_per_mtok: v.inp.value.trim() || null, output_usd_per_mtok: v.outp.value.trim() || null, search_usd_per_call: v.search.value.trim() || null };
+      if (v.maxs.value.trim()) providers[p].max_searches = v.maxs.value.trim();
+    }
+    const out = await ctx.api.post('/api/settings', { research: { providers, budget: { per_run_usd: perRun.value.trim() || null, daily_usd: daily.value.trim() || null, monthly_usd: monthly.value.trim() || null }, default_horizon: horizon.value.trim(), unattended_enabled: unattended.checked } });
+    await ctx.refresh();
+    return out;
+  }, 'Research settings saved. No key was sent or stored by this page.');
+  return h('div', null,
+    callout(h('span', null, 'API access is separate from consumer subscriptions (Claude Pro/Max, ChatGPT Plus, Gemini Advanced are not API keys). Keys are read only by the local server from environment variables or ', h('code', null, info.keys_file), '; they are never shown here, sent to the browser, written to settings, exported or logged. Without a key, a model\'s job waits for you to paste its answer.'), 'info'),
+    card('Models, prices and limits', form, { note: `Spend so far: $${info.spend.daily} today, $${info.spend.monthly} this month (${info.spend.calls} call(s)). No budget is implied: until you set all three limits, no paid call is made.` }),
+    card('How to add a key (on this PC only)', h('ol', { class: 'list small' },
+      h('li', null, 'Create the file ', h('code', null, info.keys_file), ' (outside your workspace, so it is never backed up or exported).'),
+      h('li', null, 'Put in only the keys you want to use, for example ', h('code', null, '{ "anthropic_api_key": "…", "openai_api_key": "…", "gemini_api_key": "…" }'), '. Environment variables ANTHROPIC_API_KEY, OPENAI_API_KEY and GEMINI_API_KEY also work.'),
+      h('li', null, 'Set the model ID and token prices above (from each provider\'s pricing page), then the three limits.'),
+      h('li', null, 'Restart the dashboard. The status column shows "ready (API)" when everything needed is present.'))));
+}
+
+function rubricsTab(ctx) {
+  const r = ctx.state.index.rubrics;
+  const comps = r.grading.investment_components;
+  return h('div', null,
+    card(`Investment grade: ${r.grading.rubric_ref}`, [
+      table([
+        { label: 'Component', key: 'label' },
+        { label: 'Weight', num: true, render: (c) => `${c.weight_bp / 100}%` },
+        { label: 'Definition', wrap: true, key: 'definition' },
+      ], comps),
+      h('p', { class: 'small muted', style: { marginTop: '8px' } }, `Weights total ${comps.reduce((a, c) => a + c.weight_bp, 0) / 100}%. ${r.grading.grade_display_rule || ''} ${r.grading.grade_label_note || ''}`),
+      h('ul', { class: 'list small' }, (r.grading.rules || []).map((x) => h('li', null, x))),
+    ], { note: 'Each report is graded with the rubric version it declares. Unknown, unpinned or altered versions get no authoritative grade (templates/rubrics/RUBRIC-LOCK.json).' }),
+    card('Downside-risk panel (higher = more risk)', table([
+      { label: 'Risk', key: 'label' },
+      { label: 'Definition', wrap: true, key: 'definition' },
+    ], r.grading.risk_scores)),
+    card('Scoring profiles (diagnostic scorecards)', r.profiles.map((p) => details(`${p.profile_ref} — ${p.title}`, h('div', null,
+      h('p', { class: 'small muted' }, p.applies_to),
+      table([
+        { label: 'Category', render: (c) => h('span', null, c.label, ' ', h('code', { class: 'small faint' }, c.id)) },
+        { label: 'Applies', render: (c) => (c.applicable === false ? h('span', { class: 'faint', title: c.na_reason || '' }, 'Not applicable') : 'Yes') },
+        { label: 'Definition', wrap: true, key: 'definition' },
+      ], p.diagnostic_categories),
+      h('h3', { style: { marginTop: '10px' } }, 'Research sections'),
+      h('ol', { class: 'list small' }, p.research_sections.map((sct) => h('li', null, h('strong', null, sct.title), ` — ${sct.guidance}`)))))), { note: 'Scores are comparable only within the same profile and rubric version. Inapplicable categories are N/A, never zero. A project\'s sector is your label and is separate from its scoring profile.' }),
+    card('Evidence tags', kv(Object.entries(r.evidence_tags).map(([k, v]) => [`[${k}]`, v]))));
+}
+
+async function dataTab(ctx) {
+  let inventory = null;
+  try {
+    inventory = (await ctx.api.get('/api/export/inventory')).portable;
+  } catch (_) { /* optional */ }
+  const portable = button('Portable export (JSON)', null, { kind: 'small' });
+  portable.onclick = action(portable, async () => { await ctx.api.download('/api/export.json', 'cryptoresearch-portable-export.json'); return undefined; });
+  const pkg = button('Complete package (restorable)', null, { kind: 'primary small' });
+  pkg.onclick = action(pkg, async () => { await ctx.api.download('/api/export/package', 'cryptoresearch-complete-package.json'); return undefined; });
+  const csvButtons = ['reports', 'scores', 'claims', 'transactions', 'positions', 'events'].map((t) => {
+    const b = button(`${t}.csv`, null, { kind: 'small' });
+    b.onclick = action(b, async () => { await ctx.api.download(`/api/export/${t}.csv`, `${t}.csv`); return undefined; });
+    return b;
+  });
+  const backupList = h('div', null, h('p', { class: 'small muted' }, 'Loading backups…'));
+  const loadBackups = async () => {
+    try {
+      const list = await ctx.api.get('/api/backups');
+      backupList.replaceChildren(table([
+        { label: 'Backup', render: (b) => h('code', { class: 'small' }, b.name) },
+        { label: 'Created', render: (b) => fmtDateTime(b.created_at) },
+        { label: 'Kind', render: (b) => h('span', { title: b.sealed ? 'Has a manifest with SHA-256 for every file' : 'Older backup without a manifest; cannot be verified' }, stateText(b.sealed ? 'Sealed' : 'Legacy, unverifiable', b.sealed ? 'ok' : 'warn')) },
+        { label: 'Reason', key: 'reason' },
+        { label: 'Files', num: true, render: (b) => (b.files ? fmtNum(b.files) : '—') },
+        { label: '', render: (b) => {
+          if (!b.sealed) return null;
+          const v = button('Verify', null, { kind: 'small' });
+          v.onclick = action(v, async () => ctx.api.get(`/api/backups/${encodeURIComponent(b.name)}/verify`), (r) => (r.ok ? `Verified: all ${r.files} files match their SHA-256 hashes${r.extra && r.extra.length ? ` (${r.extra.length} unlisted extra file(s))` : ''}` : `Did not verify: ${r.reason || `${(r.missing || []).length} missing, ${(r.mismatched || []).length} changed`}`));
+          return v;
+        } },
+      ], list, { empty: 'No backups yet. One is made daily while the dashboard or the hourly task runs.' }));
+    } catch (err) {
+      backupList.replaceChildren(callout(err.message, 'bad'));
+    }
+  };
+  loadBackups();
+  const mk = button('Create backup now', null, { kind: 'small' });
+  mk.onclick = action(mk, async () => { const r = await ctx.api.post('/api/backups', {}); await loadBackups(); return r; }, (r) => `Backup ${r.name} created (${r.files} files)`);
+  return h('div', null,
+    card('Exports', [
+      h('p', null, 'The complete package contains every record and every original file (binary originals included) and can be restored into a new folder. The portable export is a readable JSON of your records. CSVs flatten the same data for spreadsheets; cells that look like formulas are neutralized. No secrets are stored in the workspace, so none are exported.'),
+      h('div', { class: 'actions' }, pkg, portable, ...csvButtons),
+      inventory ? details('What the portable export contains and leaves out', h('div', null,
+        h('h3', null, 'Included'), h('ul', { class: 'list small' }, (inventory.included || []).map((x) => h('li', null, x))),
+        (inventory.excluded || []).length ? h('div', null, h('h3', null, 'Not included'), h('ul', { class: 'list small' }, inventory.excluded.map((x) => h('li', null, x)))) : null)) : null,
+      h('p', { class: 'small muted', style: { marginTop: '8px' } }, 'Command line: node dashboard/cli.js package --out <file> · restore: node dashboard/cli.js restore-package <file> --to <new folder>'),
+    ]),
+    card('Local backups', [
+      h('p', null, 'Sealed backups live in backups/snapshots/ with a manifest of SHA-256 hashes. They protect against mistakes, not disk failure: copy the folder to an external drive for that. Nothing is uploaded.'),
+      h('div', { class: 'actions', style: { marginBottom: '10px' } }, mk),
+      backupList,
+      h('h3', { style: { marginTop: '12px' } }, 'Restoring'),
+      h('ul', { class: 'list small' },
+        h('li', null, h('strong', null, 'Clean restore (recommended): '), h('code', null, 'node dashboard/cli.js backup restore <name> --to <empty folder>'), ' — rebuilds the backup in a separate folder and reconciles hashes and record counts. Your live folder is untouched.'),
+        h('li', null, h('strong', null, 'Point-in-time: '), h('code', null, 'backup restore <name> --point-in-time'), ' previews; add ', h('code', null, '--confirm'), ' to apply. Files created after the backup are moved to backups/quarantine/, not deleted.'),
+        h('li', null, h('strong', null, 'Overlay: '), h('code', null, 'backup restore <name> --overlay --confirm'), ' copies backup files over the live folder and leaves newer files in place. It is not a point-in-time recovery.')),
+    ]));
+}
+
+async function systemTab(ctx) {
+  const idx = ctx.state.index;
+  const sched = h('div', null, h('p', { class: 'small muted' }, 'Checking the Windows scheduled task…'));
+  ctx.api.get('/api/schedule').then((s) => {
+    const own = { this_workspace: ['runs this workspace', 'ok'], other_workspace: ['points at a DIFFERENT workspace', 'bad'], this_folder_other_workspace_id: ['points at this folder but another workspace ID', 'warn'], none: ['not installed', 'warn'], unknown: ['ownership unknown', 'warn'] }[s.ownership] || [s.ownership || 'unknown', ''];
+    sched.replaceChildren(s.installed
+      ? kv([
+        ['Task', '\\CryptoResearch\\Hourly'],
+        ['Ownership', stateText(own[0], own[1])],
+        ['State', s.state],
+        ['Last run', s.last_run_time ? `${fmtDateTime(s.last_run_time)} (${s.last_task_result_meaning || s.last_task_result})` : 'not yet'],
+        ['Next run', s.next_run_time ? fmtDateTime(s.next_run_time) : '—'],
+        ['Runs', s.execute ? h('code', { class: 'small wrap-anywhere' }, `${s.execute} ${s.arguments || ''}`) : '—'],
+        ['In folder', s.working_directory ? h('code', { class: 'small wrap-anywhere' }, s.working_directory) : '—'],
+      ])
+      : s.installed === false
+        ? callout('The hourly task is not installed. Background updates only happen while the dashboard is open. Install it with: node dashboard/cli.js schedule install', 'warn')
+        : callout(`Scheduler status unavailable: ${s.error || s.status}`, 'warn'));
+  }).catch((err) => sched.replaceChildren(callout(err.message, 'bad')));
+  const doc = h('div', null, h('p', { class: 'small muted' }, 'Running checks…'));
+  ctx.api.get('/api/doctor').then((d) => {
+    doc.replaceChildren(
+      kv([
+        ['Node', d.runtime ? `v${d.runtime.version}${d.runtime.support ? ` · ${d.runtime.support}` : ''}${d.runtime.project_pin ? ` · project pin ${d.runtime.project_pin}` : ''}` : '—'],
+        ['This session', d.session ? `${d.session.host || '?'}${d.session.home_host ? ` (workspace home: ${d.session.home_host})` : ''} · write ${d.session.can_write ? 'yes' : 'no'}, rename ${d.session.can_rename ? 'yes' : 'no'}, delete ${d.session.can_delete ? 'yes' : 'no'}` : '—'],
+      ]),
+      table([
+        { label: 'Check', key: 'name' },
+        { label: 'Result', render: (c) => stateText(c.status === 'ok' ? 'OK' : c.status === 'warn' ? 'Warning' : 'Problem', c.status === 'ok' ? 'ok' : c.status === 'warn' ? 'warn' : 'bad') },
+        { label: 'Detail', wrap: true, render: (c) => h('span', { class: 'small' }, c.detail || c.message || '') },
+      ], d.checks || []));
+  }).catch((err) => doc.replaceChildren(callout(err.message, 'bad')));
+  const jobs = idx.settings.jobs || {};
+  return h('div', null,
+    card('Where things run', h('ul', { class: 'list' },
+      h('li', null, h('strong', null, 'This dashboard: '), 'runs on this PC at 127.0.0.1 only. It is not reachable from your phone or the internet, and it should not be exposed to reach it from elsewhere.'),
+      h('li', null, h('strong', null, 'Prices: '), `every ${idx.settings.market_data.foreground_interval_minutes} minutes while the dashboard is open, and hourly through the Windows scheduled task while the PC is on and you are logged in.`),
+      h('li', null, h('strong', null, 'Research: '), 'only when you ask (dashboard, CLI or Cowork) or on a schedule you configure with a budget. A price refresh never starts research.'),
+      h('li', null, h('strong', null, 'Cowork: '), 'a Cowork task may run in Anthropic\'s cloud. It can reach this folder only while the Claude desktop app is open and the folder is connected. Being able to write files there does not mean it can run programs on this PC: when it cannot, it drops a request in inbox/requests/ and this PC applies it. Scheduled Cowork tasks also run in the cloud.'),
+      h('li', null, h('strong', null, 'Holdings: '), 'change only when you record transactions.'),
+      jobs.evidence_watch ? h('li', null, h('strong', null, 'Evidence watch: '), jobs.evidence_watch.note || 'optional; produces a dated digest and never overwrites grades.') : null)),
+    card('Scheduled task (Windows)', sched),
+    card('Health checks', doc, { note: 'Same as: node dashboard/cli.js doctor' }),
+    card('Privacy', h('ul', { class: 'list' },
+      h('li', null, 'Listens on 127.0.0.1 only, accepts only expected Host headers, and writes need a per-launch token from this page.'),
+      h('li', null, 'Market data requests send only the tracked coin IDs to CoinGecko. No holdings, quantities, accounts or notes leave the PC.'),
+      h('li', null, 'Research prompts contain only the project context needed: name, links, identity, sector and a dated public market packet. Holdings and private notes are never model inputs by default.'),
+      h('li', null, 'No wallet connection, exchange keys, seed phrases or trading access are ever requested or stored.'),
+      h('li', null, 'API keys stay in environment variables or ~/.cryptoresearch/secrets.json, outside the workspace, so they are never in browser code, prompts, exports or logs.'),
+      h('li', null, `Your records live in ${idx.workspace.root}. Nothing is uploaded or synced by this app.`))));
+}
+
+// Activity: freshness, jobs and the write log (moved here from Updates).
+function activityTab(ctx) {
+  const idx = ctx.state.index;
+  const mf = idx.freshness.market;
+  const jobs = idx.freshness.jobs.jobs || {};
+  const jobRows = ['requests', 'inbox', 'market', 'research', 'snapshot', 'reviews', 'backup'].map((name) => ({ name, ...(jobs[name] || {}) }));
+  const runner = idx.freshness.jobs.runner || {};
+  const JOB_STATE = { ok: ['OK', 'ok'], done: ['OK', 'ok'], failed: ['Failed', 'bad'], attention: ['Needs attention', 'warn'] };
+  return h('div', null,
+    card('Data freshness', kv([
+      ['Market data', h('span', null, stateText(mf.freshness === 'fresh' ? 'Fresh' : String(mf.freshness || 'unknown').replace(/_/g, ' '), mf.freshness === 'fresh' ? 'ok' : 'warn'), ' ', h('span', { class: 'muted' }, mf.last_success_at ? `· last success ${fmtDateTime(mf.last_success_at)}` : '· never fetched'), mf.last_error ? h('div', { class: 'small muted' }, `Last problem: ${mf.last_error}`) : null)],
+      ['CoinGecko calls', mf.calls ? `${mf.calls.month_count} this month of a ${mf.calls.budget_monthly || 'unlimited'} budget · ${mf.calls.day_count} today` : '—'],
+      ['Hourly scheduled task', runner.last_scheduler_run_at ? `last ran ${fmtAgo(runner.last_scheduler_run_at)}${runner.node ? ` on Node ${runner.node}` : ''}` : h('span', { class: 'muted' }, 'no scheduled run recorded yet')],
+      ['Index', `built ${fmtDateTime(idx.generated_at)} in ${idx.build_ms} ms`],
+    ])),
+    card('Jobs', table([
+      { label: 'Job', key: 'name' },
+      { label: 'Last run', render: (j) => (j.last_run_at ? fmtAgo(j.last_run_at) : 'never') },
+      { label: 'Trigger', render: (j) => j.last_trigger || '—' },
+      { label: 'Status', render: (j) => { if (!j.last_status) return h('span', { class: 'faint' }, 'Never run'); const [t, tone] = JOB_STATE[j.last_status] || [j.last_status, '']; return stateText(t, tone); } },
+      { label: 'Summary', wrap: true, render: (j) => j.last_summary || '' },
+    ], jobRows), { note: 'Each job keeps its own timestamp. A failed refresh keeps the last valid data and marks it stale. Research never runs on a price refresh.' }),
+    card('Operation log', table([
+      { label: 'When', render: (o) => fmtDateTime(o.at) },
+      { label: 'Phase', render: (o) => (o.phase === 'commit' ? 'Committed' : /fail|interrupt|quarant/.test(o.phase || '') ? stateText(o.phase.replace(/_/g, ' '), 'bad') : (o.phase || '').replace(/_/g, ' ')) },
+      { label: 'Type', render: (o) => h('code', { class: 'small' }, o.type || '') },
+      { label: 'By', key: 'actor' },
+      { label: 'Summary', wrap: true, render: (o) => o.summary || o.error || o.note || '' },
+    ], idx.imports.recent_operations || [], { empty: 'No writes yet.' }), { note: 'The latest 25 writes from logs/operations.jsonl.' }));
+}

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cr.transaction.v1",
+  "title": "Portfolio transaction (one entry of portfolio/transactions.json)",
+  "description": "Transactions are never edited or deleted. A mistake is corrected by voiding the entry (voided=true with a reason) and adding a new one.",
+  "type": "object",
+  "required": ["tx_id", "type", "date", "account_id", "asset_id", "quantity"],
+  "properties": {
+    "tx_id": { "type": "string" },
+    "type": { "enum": ["buy", "sell", "transfer_out", "transfer_in", "income", "fee", "deposit_cash", "withdraw_cash"] },
+    "date": { "type": "string", "description": "ISO date or date-time (UTC when a time is given)." },
+    "account_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "asset_id": { "type": "string", "description": "Economic asset ID (CoinGecko ID for tokens, 'usd' for cash). One asset on several chains keeps one ID." },
+    "chain": { "type": ["string", "null"] },
+    "quantity": { "type": "number", "exclusiveMinimum": 0 },
+    "price_usd": { "type": ["number", "null"], "minimum": 0, "description": "Per-unit price. Null means unknown; cost basis stays unknown." },
+    "fee": {
+      "type": ["object", "null"],
+      "properties": {
+        "amount": { "type": "number", "minimum": 0 },
+        "asset_id": { "type": "string" }
+      }
+    },
+    "transfer_id": { "type": ["string", "null"], "description": "Links a transfer_out with its transfer_in between your own accounts (including bridges)." },
+    "btc_price_usd": { "type": ["number", "null"], "minimum": 0, "description": "BTC/USD at the time, used for BTC-relative performance." },
+    "btc_price_source": { "type": ["string", "null"] },
+    "external_id": { "type": ["string", "null"] },
+    "note": { "type": ["string", "null"] },
+    "source": { "type": ["string", "null"] },
+    "created_at": { "type": "string" },
+    "voided": { "type": "boolean" },
+    "void_reason": { "type": ["string", "null"] },
+    "voided_at": { "type": ["string", "null"] }
+  }
+}

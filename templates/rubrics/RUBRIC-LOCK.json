@@ -1,0 +1,26 @@
+{
+  "schema_version": "cr.rubric-lock.v1",
+  "note": "Published rubric and profile versions, pinned by SHA-256. A pinned file must never change; publish a new version instead.",
+  "pinned": {
+    "cr-grading@1": {
+      "file": "templates/rubrics/cr-grading.v1.json",
+      "sha256": "7972df13a045b8babd139d519d67887b96949974c85b594f53d2f89d6c20ea93",
+      "pinned_at": "2026-10-01T00:00:00.000Z"
+    },
+    "general-token@1": {
+      "file": "templates/rubrics/general-token.v1.json",
+      "sha256": "ed767f63640d627d7b1cdd9e47206365a34cbed79e64e55a1232beccf7ec3b93",
+      "pinned_at": "2026-10-01T00:00:00.000Z"
+    },
+    "network-infrastructure@1": {
+      "file": "templates/rubrics/network-infrastructure.v1.json",
+      "sha256": "d8dd322f83995f29a1e6020e99364d1bc3f6e255a983ba1fc258134a7777d2fc",
+      "pinned_at": "2026-10-01T00:00:00.000Z"
+    },
+    "payfi-credit@1": {
+      "file": "templates/rubrics/payfi-credit.v1.json",
+      "sha256": "1e8c9e5c9eebdba825d64a2af11c824714d1f377d446e293964c724dd8b04a49",
+      "pinned_at": "2026-10-01T00:00:00.000Z"
+    }
+  }
+}

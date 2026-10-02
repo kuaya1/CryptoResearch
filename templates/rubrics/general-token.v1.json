@@ -1,0 +1,116 @@
+{
+  "profile_ref": "general-token@1",
+  "profile_id": "general-token",
+  "version": 1,
+  "title": "General token (fallback profile)",
+  "status": "active",
+  "applies_to": "Any project that does not fit a more specific profile: DeFi applications, consumer apps, exchanges and other tokens. Use a specific profile when one fits; scores are only comparable within the same profile.",
+  "origin": "Derived from the PayFi category list. Credit-risk transparency is N/A and replaced by protocol_risk_transparency, a separately defined dimension that is NOT comparable with credit-risk scores.",
+  "diagnostic_categories": [
+    {
+      "id": "legitimacy",
+      "label": "Legitimacy",
+      "applicable": true,
+      "definition": "Is this a real, accountable organization operating the product it claims: identifiable team or entity, audits, security history, regulatory posture, and no misrepresentation.",
+      "resolving_question": "Which independently checkable facts confirm or contradict the project's claims?"
+    },
+    {
+      "id": "builder_operations",
+      "label": "Builder and operational quality",
+      "applicable": true,
+      "definition": "Shipping record, operational discipline, incident handling, governance and treasury management.",
+      "resolving_question": "What did the team ship and operate over the last 12 months, and how were incidents handled?"
+    },
+    {
+      "id": "product_usefulness",
+      "label": "Product usefulness",
+      "applicable": true,
+      "definition": "Does the product solve a real problem for identifiable users better than their alternatives, independent of token incentives?",
+      "resolving_question": "Who uses the product without incentives, and what would they use instead?"
+    },
+    {
+      "id": "organic_demand",
+      "label": "Organic demand",
+      "applicable": true,
+      "definition": "Usage, volume or revenue that persists net of token incentives, points programs and wash activity.",
+      "resolving_question": "What share of usage over the last 90 days remains after excluding incentive-driven and wash activity?"
+    },
+    {
+      "id": "credit_risk_transparency",
+      "label": "Credit-risk transparency",
+      "applicable": false,
+      "na_reason": "Not applicable under general-token@1. See protocol_risk_transparency, which is a different dimension.",
+      "definition": "Not used in this profile.",
+      "resolving_question": ""
+    },
+    {
+      "id": "protocol_risk_transparency",
+      "label": "Protocol-risk transparency",
+      "applicable": true,
+      "definition": "Quality of disclosure on smart-contract, oracle, custody, admin-key, upgradeability and counterparty risks, including audit scope and incident history.",
+      "resolving_question": "Who controls upgrades, treasuries and oracles, and are audits current for the deployed code?"
+    },
+    {
+      "id": "differentiation",
+      "label": "Competitive differentiation",
+      "applicable": true,
+      "definition": "Durable advantages over direct competitors and off-chain alternatives.",
+      "resolving_question": "What can this project do that its two closest competitors cannot, and is it defensible for the horizon?"
+    },
+    {
+      "id": "category_potential",
+      "label": "Category potential",
+      "applicable": true,
+      "definition": "Size and growth of the addressable category within the horizon.",
+      "resolving_question": "What evidence shows the category is growing, measured over a stated period?"
+    },
+    {
+      "id": "token_value_capture",
+      "label": "Token value capture",
+      "applicable": true,
+      "definition": "Diagnostic view of how business success reaches token holders as implemented today. Announced but unimplemented mechanisms are conditional; emissions are not value capture.",
+      "resolving_question": "Which implemented mechanism routes revenue to token holders, and how much has it distributed over a stated period?"
+    },
+    {
+      "id": "valuation_supply_attractiveness",
+      "label": "Valuation and supply attractiveness",
+      "applicable": true,
+      "definition": "Current market cap and FDV relative to revenue, usage and peers, adjusted for circulating supply, unlocks (potential liquid supply) and emissions.",
+      "resolving_question": "What are circulating supply, FDV and the next 12 months of unlocks relative to revenue over a stated period?"
+    },
+    {
+      "id": "chart_quality",
+      "label": "Chart quality",
+      "applicable": true,
+      "definition": "Quality of market structure: trend, support and resistance, volume confirmation, drawdown from highs, and relative strength versus BTC.",
+      "resolving_question": "Is the token holding higher lows against both USD and BTC on rising volume, measured on a stated timeframe?"
+    },
+    {
+      "id": "evidence_confidence",
+      "label": "Evidence confidence",
+      "applicable": true,
+      "definition": "Quality, recency and independence of the evidence behind this report. It is not a probability of profit and not a multiplier on any grade.",
+      "resolving_question": "Which material claims rest only on project statements, and what independent source would check them?"
+    }
+  ],
+  "research_sections": [
+    { "id": "legitimacy_security", "title": "Legitimacy and security", "guidance": "Team or entity, audits and their scope, security incidents, regulatory posture, and any sign of misrepresentation." },
+    { "id": "product_mechanics", "title": "Product mechanics", "guidance": "How the product works, where funds sit, which parts are on-chain, and who can change the rules." },
+    { "id": "revenue_risk_forensics", "title": "Revenue quality and risk forensics", "guidance": "Keep three things separate: (a) business activity and the fees it earns, (b) income paid to users or liquidity providers and its source, (c) token-holder economics. Cover contract, oracle, custody and counterparty risks. Label every figure with period and definition." },
+    { "id": "adoption_unit_economics", "title": "Adoption and unit economics", "guidance": "Organic usage, revenue and growth net of incentives; whether unit economics work without emissions." },
+    { "id": "differentiation_category", "title": "Differentiation and category", "guidance": "Competitors, defensibility, and the size and trajectory of the category." },
+    { "id": "current_tokenomics", "title": "Current tokenomics", "guidance": "Circulating and total supply, allocation, vesting and unlock schedule, emissions. Mark each change as announced or implemented, with announcement and effective dates. Unlocks are potential liquid supply, not demonstrated sales." },
+    { "id": "token_capture_valuation", "title": "Token value capture and valuation", "guidance": "Implemented mechanisms that route value to the token, distributions actually paid over a stated period, and valuation versus revenue and peers." },
+    { "id": "chart_market_structure", "title": "Chart and market structure", "guidance": "Trend versus USD and BTC, key levels, volume, venue and liquidity concentration, executable depth for a spot position." },
+    { "id": "btc_relative_scenarios", "title": "BTC-relative scenarios", "guidance": "Bull, base and bear cases with probabilities totaling 100%, business outcome, token-capture assumption, supply assumption, price range, BTC assumption, relative return versus BTC and invalidation. State the BTC-relative return definition. If credible valuation evidence is missing, say asymmetry is unproven." },
+    { "id": "final_grading_verdict", "title": "Final grading and verdict", "guidance": "One verdict label, three strongest bullish facts, three strongest bearish facts, three developments that would increase conviction, three thesis invalidators, the single next metric to monitor, and an independent final take." }
+  ],
+  "economics_fields": [
+    { "id": "business_revenue", "label": "Business revenue", "definition": "Fees earned by the protocol or company from its business activity. Not emissions." },
+    { "id": "usage_volume", "label": "Usage / volume", "definition": "Gross activity processed, with definition and period. Volume is not revenue." },
+    { "id": "user_yield", "label": "User or LP yield", "definition": "Return paid to users or liquidity providers and its source (fees versus incentives)." },
+    { "id": "token_holder_distributions", "label": "Token-holder distributions", "definition": "Value actually distributed to or burned for token holders over a stated period. Emissions are not distributions." },
+    { "id": "incentive_spend", "label": "Incentive spend", "definition": "Token emissions or grants spent to attract usage over a stated period." }
+  ],
+  "risk_applicability": { "credit": false, "credit_na_reason": "No credit underwriting in general-token@1." }
+}

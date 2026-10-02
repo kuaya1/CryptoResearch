@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cr.request.v1",
+  "title": "Queued request (inbox/requests/<request_id>.json)",
+  "description": "For a session that can write files into the folder but cannot run node against it. Publish by writing <request_id>.json.tmp and renaming it to <request_id>.json. The dashboard (while open) or the hourly scheduled task (while the PC is on and you are logged in) applies it through the same code as the CLI and writes logs/requests/<request_id>.result.json. Until that receipt exists the request is PENDING, not saved. Receipt statuses: done, unchanged, rejected, conflict, failed. Reusing a request_id for different content is a conflict and applies nothing.",
+  "type": "object",
+  "required": ["schema_version", "request_id", "action", "args"],
+  "properties": {
+    "schema_version": { "const": "cr.request.v1" },
+    "request_id": { "type": "string", "pattern": "^req_[A-Za-z0-9_-]{4,80}$" },
+    "created_at": { "type": ["string", "null"] },
+    "created_by": { "type": ["string", "null"] },
+    "utterance": { "type": ["string", "null"], "description": "The user's transcribed request, kept for audit." },
+    "action": {
+      "enum": [
+        "add_project",
+        "update_identity",
+        "set_watchlist",
+        "set_project_fields",
+        "generate_prompts",
+        "import_report_text",
+        "scan_inbox",
+        "set_conviction_note",
+        "add_journal",
+        "add_event",
+        "add_transaction",
+        "archive_project",
+        "research_project",
+        "cancel_research_job",
+        "retry_research_job"
+      ]
+    },
+    "args": { "type": "object" }
+  }
+}

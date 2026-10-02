@@ -1,0 +1,21 @@
+ dashboard/cli.js                              |  24 +-
+ dashboard/core/doctor.js                      |   3 +-
+ dashboard/core/exporter.js                    | 331 +++++++++++---
+ dashboard/core/indexer.js                     |  18 +-
+ dashboard/core/ops.js                         | 146 +++++-
+ dashboard/core/providers.js                   |  74 ++-
+ dashboard/core/research.js                    | 634 +++++++++++++++++++++-----
+ dashboard/core/workspace.js                   |  44 ++
+ dashboard/public/app.js                       | 314 ++++++++++---
+ dashboard/public/styles.css                   |   2 +
+ dashboard/public/ui.js                        |   4 +-
+ dashboard/public/views/project.js             |  25 +-
+ dashboard/public/views/settings.js            |   4 +-
+ dashboard/server.js                           | 142 +++++-
+ dashboard/tests/children/child-v2-research.js |  31 ++
+ dashboard/tests/children/child-v2-writer.js   |  27 ++
+ dashboard/tests/children/v2-stub.js           |  54 +++
+ dashboard/tests/v2-reads.test.js              | 228 +++++++++
+ dashboard/tests/v2-research.test.js           | 359 +++++++++++++++
+ dashboard/tests/v2-restore.test.js            | 165 +++++++
+ 20 files changed, 2329 insertions(+), 300 deletions(-)

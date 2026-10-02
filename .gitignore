@@ -1,0 +1,112 @@
+# CryptoResearch: track the application source, tests, templates and project
+# documentation only. This folder is also the live workspace, so it holds
+# private research records, holdings, provider responses, logs and backups:
+# those never go into Git.
+#
+# Allowlist: everything at the top level is ignored unless re-included below,
+# so a new private file or folder is never picked up by accident.
+
+/*
+
+# Git configuration
+!/.gitignore
+!/.gitattributes
+
+# Application source, tests and test fixtures (fictional data only)
+!/dashboard/
+!/package.json
+!/Open Dashboard.cmd
+!/Open Demo Dashboard.cmd
+
+# Prompt templates, rubrics and JSON schemas the application reads
+!/templates/
+
+# Project documentation
+!/README.md
+!/WORKSPACE-MAP.md
+!/COWORK-INSTRUCTIONS.md
+!/CLAUDE.md
+
+# Audit reports (inspected); their evidence, screenshots, workspace copies,
+# record mirrors, probe outputs and code copies stay local
+!/audits/
+
+# ---------------------------------------------------------------------------
+# Generated or fictional data inside the application folder
+
+/dashboard/index/
+/dashboard/demo-workspace/
+node_modules/
+
+# Owner's own research prompts (project-specific, personal context)
+/templates/source-prompts/*
+!/templates/source-prompts/README.md
+
+# ---------------------------------------------------------------------------
+# Audits: only the reviewed reports below are tracked
+
+/audits/*/*
+!/audits/2026-10-01-claude-design-pass/README.md
+!/audits/2026-10-01-claude-implementation/README.md
+!/audits/2026-10-01-claude-implementation/FINDINGS-STATUS.md
+!/audits/2026-10-01-claude-v2-repairs/README.md
+!/audits/2026-10-01-claude-v2-repairs/ROLLBACK.md
+!/audits/2026-10-01-claude-v2-repairs/RUNTIME-AND-COMMANDS.md
+!/audits/2026-10-01-claude-v2-repairs/COMMITS.txt
+!/audits/2026-10-01-claude-v2-repairs/PATCH-STAT.txt
+!/audits/2026-10-01-claude-v2-repairs/PATCH.diff
+!/audits/2026-10-01-claude-v2-repairs/REPAIRED-MANIFEST.json
+!/audits/2026-10-01-claude-v2-repairs/SOURCE-FINGERPRINT.json
+!/audits/2026-10-01-codex-system-review/README.md
+!/audits/2026-10-01-codex-system-review/DESIGN.md
+!/audits/2026-10-01-codex-system-review/FINDINGS.md
+!/audits/2026-10-01-codex-system-review/FOLLOW-UP-IMPLEMENTATION-PROMPT.md
+!/audits/2026-10-01-codex-system-review/INTEGRATIONS.md
+!/audits/2026-10-01-codex-system-review/VALIDATION.md
+!/audits/2026-10-01-codex-system-review/proposed-desk.svg
+!/audits/2026-10-01-codex-system-review-v2/REVIEW.md
+!/audits/2026-10-01-codex-system-review-v2/FINDINGS.md
+!/audits/2026-10-01-codex-system-review-v2/CLAIM-VERIFICATION.md
+!/audits/2026-10-01-codex-system-review-v2/VALIDATION.md
+!/audits/2026-10-01-codex-system-review-v2/NEXT-IMPLEMENTATION-PROMPT.md
+!/audits/2026-10-01-codex-system-review-v2/source-target.json
+!/audits/2026-10-02-claude-integrity-repair/README.md
+!/audits/2026-10-02-claude-integrity-repair/RESULTS.md
+!/audits/2026-10-02-claude-integrity-repair/LIMITS.md
+!/audits/2026-10-02-claude-integrity-repair/ROLLBACK.md
+!/audits/2026-10-02-claude-integrity-repair/RUNTIME-AND-COMMANDS.md
+!/audits/2026-10-02-claude-integrity-repair/DOC-CHANGES-PROPOSED.md
+!/audits/2026-10-02-claude-integrity-repair/PLAN.md
+!/audits/2026-10-02-claude-integrity-repair/fingerprints.json
+!/audits/2026-10-02-claude-integrity-repair/integrity-repair.patch
+
+# ---------------------------------------------------------------------------
+# Never track, wherever they appear
+
+# Credentials and keys (API keys live outside this folder, in
+# %USERPROFILE%\.cryptoresearch\secrets.json or environment variables)
+secrets.json
+*.secrets.json
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+.npmrc
+.netrc
+
+# Workspace runtime state, locks, staging and temporary files
+.cr/
+*.tmp-*
+*.stale-*
+*.probe
+
+# OS and editor files
+Thumbs.db
+desktop.ini
+.DS_Store
+*.swp
+*~

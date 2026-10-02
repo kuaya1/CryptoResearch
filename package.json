@@ -1,0 +1,16 @@
+{
+  "name": "cryptoresearch-workspace",
+  "private": true,
+  "description": "Private local crypto watchlist, research and portfolio dashboard. No npm dependencies.",
+  "scripts": {
+    "test": "node dashboard/cli.js test",
+    "dashboard": "node dashboard/cli.js serve --open",
+    "doctor": "node dashboard/cli.js doctor"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "volta": {
+    "node": "24.21.0"
+  }
+}

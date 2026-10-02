@@ -1,0 +1,13 @@
+# Store and check out every file byte for byte. The application pins SHA-256
+# hashes of its rubric files (templates/rubrics/RUBRIC-LOCK.json) and its code
+# is verified by fingerprint, so Git must never rewrite line endings, even
+# where core.autocrlf is on (it is, at system level, on this PC).
+* -text
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary

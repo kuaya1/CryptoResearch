@@ -1,0 +1,10 @@
+4acf835 comments: state idempotency and bound assumptions precisely
+71e9a11 aria label for Retry anyway
+a81ec93 network outcome test
+a27b55b release reservation when no connection was made; untrack demo workspace
+b98fb93 research recover command for rollback
+256ffb4 V2-006: bounded polling live updates, bounded/cancelable requests, READ_BUSY retry, status line
+cd14a61 V2-003/004/005: durable paid-attempt lifecycle, uncertain hold + reconcile, aggregate atomic reservations, native search caps, enforced-vs-estimate bounds
+8186ff8 V2-002: restore preflight for packages and sealed backups (portableRel, containedPath, source containment)
+7ce27d8 V2-001 tests; server lock-wait cap
+bf8826b V2-001: coherent reads fail closed (READ_BUSY), marker repair, server snapshot status, locked exports

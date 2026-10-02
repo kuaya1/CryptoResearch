@@ -1,0 +1,119 @@
+{
+  "rubric_ref": "cr-grading@1",
+  "rubric_id": "cr-grading",
+  "version": 1,
+  "title": "CryptoResearch shared grading system",
+  "status": "active",
+  "versioning_rule": "Never edit a published version in place. Changes go into cr-grading@2 so older reports keep their original meaning.",
+  "scale": { "min": 1, "max": 100 },
+  "score_statuses": ["scored", "range", "unknown", "not_applicable"],
+  "favorable_anchors": [
+    { "band": "90-100", "meaning": "Exceptional. Strong, recent, independently checkable evidence; no material weakness found." },
+    { "band": "75-89", "meaning": "Strong. Evidence mostly supports it; weaknesses are identified and bounded." },
+    { "band": "60-74", "meaning": "Adequate or mixed. Real positives with material open questions." },
+    { "band": "40-59", "meaning": "Weak. Positives rest on claims, incentives or assumptions not yet demonstrated." },
+    { "band": "20-39", "meaning": "Poor. Evidence points against it, or key facts are contradicted." },
+    { "band": "1-19", "meaning": "Severe. Disqualifying problems or signs of misrepresentation." }
+  ],
+  "risk_anchors": [
+    { "band": "90-100", "meaning": "Extreme risk. Loss is likely or already occurring." },
+    { "band": "75-89", "meaning": "High risk. A plausible single event causes large permanent loss." },
+    { "band": "60-74", "meaning": "Elevated risk. Material exposures with partial mitigation." },
+    { "band": "40-59", "meaning": "Moderate risk. Exposures exist and are reasonably disclosed and mitigated." },
+    { "band": "20-39", "meaning": "Low risk. Exposures are small, disclosed and mitigated." },
+    { "band": "1-19", "meaning": "Minimal risk on this dimension." }
+  ],
+  "investment_components": [
+    {
+      "id": "sustainable_business_demand",
+      "label": "Sustainable business demand",
+      "weight_bp": 2000,
+      "definition": "Durable, organic demand for the product or service that would persist without token incentives, measured by revenue, volume or usage net of incentives and wash activity.",
+      "resolving_question": "What revenue or usage remains over the last 90 days after excluding incentive-driven and wash activity?"
+    },
+    {
+      "id": "token_value_capture",
+      "label": "Token value capture",
+      "weight_bp": 2500,
+      "definition": "How directly and enforceably business success accrues to token holders as implemented today (fee share, buyback/burn, required usage, staking funded by real revenue). Announced but unimplemented mechanisms count only as conditional.",
+      "resolving_question": "Which implemented, on-chain mechanism routes revenue to token holders, and how much has it distributed over a stated period?"
+    },
+    {
+      "id": "valuation_supply",
+      "label": "Valuation and supply",
+      "weight_bp": 2000,
+      "definition": "Attractiveness of the current valuation (market cap and FDV versus revenue, usage and peers) after accounting for circulating supply, unlocks (potential liquid supply), emissions and dilution.",
+      "resolving_question": "What are market cap, FDV and the 12-month unlock schedule, and how do they compare with revenue measured over a stated period?"
+    },
+    {
+      "id": "risk_resilience",
+      "label": "Risk resilience",
+      "weight_bp": 1500,
+      "definition": "Ability of the project and of a spot position to withstand adverse events (credit losses, exploits, regulatory action, liquidity shocks, key-person risk). A separate judgement: it is NOT 100 minus overall downside risk.",
+      "resolving_question": "What happened, or would happen, to the project and the token in its worst plausible single event?"
+    },
+    {
+      "id": "btc_relative_asymmetry",
+      "label": "BTC-relative asymmetry",
+      "weight_bp": 1000,
+      "definition": "Probability-weighted upside versus downside relative to simply holding BTC over the horizon, from the scenarios. Unproven when credible valuation evidence is missing.",
+      "resolving_question": "Under the stated scenario probabilities and BTC assumptions, is the expected return versus BTC positive, and what valuation evidence supports it?"
+    },
+    {
+      "id": "timing_executable_liquidity",
+      "label": "Timing and executable liquidity",
+      "weight_bp": 1000,
+      "definition": "Whether a spot position of the intended size can be entered and exited now at reasonable cost (depth, venues, spreads) and whether near-term timing (unlocks, catalysts, trend) is favorable.",
+      "resolving_question": "What is the 2% order-book depth on the main spot venues, and which unlocks or catalysts fall in the next 90 days?"
+    }
+  ],
+  "grade_labels": [
+    { "label": "A", "min": 90 },
+    { "label": "B", "min": 80 },
+    { "label": "C", "min": 70 },
+    { "label": "D", "min": 60 },
+    { "label": "F", "min": 0 }
+  ],
+  "grade_label_note": "Descriptive labels only. They are not trade recommendations and never trigger a purchase.",
+  "grade_display_rule": "Full precision is stored. The display shows one decimal, truncated (not rounded), so a displayed number never sits in a higher band than its label.",
+  "risk_scores": [
+    {
+      "id": "credit",
+      "label": "Credit risk",
+      "direction": "higher_is_more_risk",
+      "definition": "Risk of loss from borrower or receivable default, collateral shortfall or credit-process failure. Not applicable outside credit and PayFi profiles.",
+      "resolving_question": "What are realized default and loss rates per pool over a stated period, who bears first loss, and how concentrated are the borrowers?"
+    },
+    {
+      "id": "dilution",
+      "label": "Dilution risk",
+      "direction": "higher_is_more_risk",
+      "definition": "Risk that new supply (unlocks, emissions, treasury sales, inflation) reduces holder value over the horizon. Unlocks are potential liquid supply, not demonstrated sales.",
+      "resolving_question": "How much supply unlocks or is emitted over the horizon, as a share of current circulating supply, and what has happened at past unlocks?"
+    },
+    {
+      "id": "liquidity",
+      "label": "Liquidity risk",
+      "direction": "higher_is_more_risk",
+      "definition": "Risk of being unable to exit a spot position of the intended size at a reasonable price (thin books, venue concentration, delisting).",
+      "resolving_question": "What is the 2% order-book depth across the main spot venues, and how concentrated is volume on one venue?"
+    },
+    {
+      "id": "overall_downside",
+      "label": "Overall downside risk",
+      "direction": "higher_is_more_risk",
+      "definition": "Probability-weighted severity of permanent capital loss over the horizon.",
+      "resolving_question": "What is the bear-case price and its probability, and which single event would cause it?"
+    }
+  ],
+  "rules": [
+    "Three independent panels: diagnostic categories (higher is better), investment components (higher is better) and downside risk (higher is more risk).",
+    "Diagnostic categories are never averaged into the investment grade.",
+    "The app, not the model, owns the weights and calculates the grade as the sum of component score times weight.",
+    "If any component is unknown or not applicable, no firm grade is shown; weighted coverage is shown instead. Weights are never renormalized and no midpoint is inserted.",
+    "A complete set of justified component ranges produces a labeled grade range.",
+    "The model-reported overall score is stored separately and never overwritten; differences are flagged.",
+    "Risk scores are not averaged into investment quality, and risk resilience is not derived from overall downside risk.",
+    "Evidence confidence measures evidence quality. It is not a probability of profit and not a multiplier on the grade."
+  ]
+}
