@@ -186,8 +186,8 @@ function validateSettingsPatch(patch, ws = null) {
       const pos = require('./core/position');
       const m = pos.monthsFrom(String(r.default_horizon));
       if (m.error) throw new OpError('INVALID', m.error);
-      const ceiling = pos.policy(ws).planning_ceiling_months;
-      if (m.months > ceiling) throw new OpError('INVALID', `The default horizon must be within your ${ceiling}-month planning ceiling. A longer horizon is a long-term exception, chosen per run with a reason.`);
+      const pol = pos.policy(ws);
+      if (m.months > pol.planning_ceiling_months && pol.require_long_term_reason) throw new OpError('INVALID', `The default horizon must be within your ${pol.planning_ceiling_months}-month planning ceiling. A longer horizon is a long-term exception, chosen per run with a reason.`);
       out.research.default_horizon = String(r.default_horizon);
     }
     if (r.providers) {

@@ -277,7 +277,9 @@ function promptValuesV3(ws, project, profile, { horizon, rubricRef, runId, packe
     HORIZON_MONTHS: String(horizon.months),
     HORIZON_MODE_TEXT: longTerm ? `a long-term exception beyond the ${horizon.planning_ceiling_months}-month planning ceiling` : `a position horizon inside the ${horizon.planning_ceiling_months}-month planning ceiling`,
     EXCEPTION_LINE: longTerm
-      ? `This run is a long-term exception the owner chose, for this reason: "${String(horizon.exception_reason).replace(/[\r\n]+/g, ' ').slice(0, 600)}". Assess the full interval above, and still give the market-cycle and timing views.`
+      ? horizon.exception_reason
+        ? `This run is a long-term exception the owner chose, for this reason: "${String(horizon.exception_reason).replace(/[\r\n]+/g, ' ').slice(0, 600)}". Assess the full interval above, and still give the market-cycle and timing views.`
+        : 'This run uses a long-term horizon beyond the planning ceiling; no reason was recorded. Assess the full interval above, and still give the market-cycle and timing views.'
       : 'Longer-term structural merit may be noted in `position_context.long_term_note`. Keep it out of this position assessment.',
     MARKET_SNAPSHOT_LINE: marketSnapshotLine(packet),
     GRADING_APPENDIX: buildAppendixV3(ws, profile, { provider, projectId: project.project_id, project, horizon, rubricRef: base.RUBRIC_VERSION, runId }),

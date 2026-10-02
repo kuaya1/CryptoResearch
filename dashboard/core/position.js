@@ -20,7 +20,11 @@ const { OpError } = require('./ops');
 const { ymdInTz, isYmd, daysBetween } = require('./dates');
 
 const RECIPE_ID = 'position-cycle@1';
-const DEFAULT_POLICY = Object.freeze({ planning_ceiling_months: 4, typical_hold_months: 2, default_months: 4 });
+// The 4-month ceiling and the long-term reason come from Eric's Foundation brief
+// and Implementation Architecture (2026-10-02), not from the agreed mission
+// document, so requiring a reason is OFF until he decides
+// (settings: research.horizon_policy.require_long_term_reason).
+const DEFAULT_POLICY = Object.freeze({ planning_ceiling_months: 4, typical_hold_months: 2, default_months: 4, require_long_term_reason: false });
 const MARKET_STATES = ['unknown', 'bitcoin_led', 'broad_altcoin_participation', 'mixed', 'contracting'];
 const TIMING_STATES = ['unknown', 'early', 'developing', 'extended', 'thesis_impaired'];
 const CERTAINTY = ['unknown', 'project_claimed', 'source_documented', 'analyst_inferred'];
@@ -37,6 +41,7 @@ function policy(ws) {
     planning_ceiling_months: ceiling,
     typical_hold_months: int(p.typical_hold_months, 1, ceiling, Math.min(DEFAULT_POLICY.typical_hold_months, ceiling)),
     default_months: int(p.default_months, 1, ceiling, Math.min(DEFAULT_POLICY.default_months, ceiling)),
+    require_long_term_reason: p.require_long_term_reason === true,
   };
 }
 
@@ -77,7 +82,7 @@ function cleanReason(r) {
 function build(ws, { months, startDate, reason, source, typed = null }) {
   const pol = policy(ws);
   const longTerm = months > pol.planning_ceiling_months;
-  if (longTerm && !reason) {
+  if (longTerm && !reason && pol.require_long_term_reason) {
     throw new OpError('INVALID', `A ${months}-month horizon is longer than your ${pol.planning_ceiling_months}-month planning ceiling, so it is a long-term exception and needs your reason (CLI: --long-term-reason "..."; dashboard: the reason field in Run research). Leave the horizon out for the usual ${pol.default_months}-month position horizon.`);
   }
   const h = {
@@ -86,7 +91,7 @@ function build(ws, { months, startDate, reason, source, typed = null }) {
     months,
     start_date: startDate,
     end_date: addCalendarMonths(startDate, months),
-    exception_reason: longTerm ? reason : null,
+    exception_reason: longTerm ? reason || null : null,
     typical_hold_months: pol.typical_hold_months,
     planning_ceiling_months: pol.planning_ceiling_months,
     source,

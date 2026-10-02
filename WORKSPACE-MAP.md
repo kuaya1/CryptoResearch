@@ -72,7 +72,8 @@ CryptoResearch/
 │   ├── applied/<key>.json      Idempotency records: one per applied request or form submission
 │   ├── jobs.jsonl              Job runs (scheduler, dashboard, CLI)
 │   ├── jobs-state.json         Last run / last success per job
-│   ├── research-spend.jsonl    Estimated and actual cost of every paid model call
+│   ├── research-spend.jsonl    Reservation, actual, release and reconciliation lines for every paid model call
+│   │                           (kept for history and for older code; the run files are authoritative)
 │   ├── ingestion-state.json    Inbox file status (ingested, duplicate, failed + reason)
 │   ├── review-findings.json    Daily review findings
 │   ├── requests/<id>.result.json   Receipts for queued requests (done/unchanged/rejected/conflict/failed)
@@ -87,7 +88,8 @@ CryptoResearch/
 │   ├── index/index.json        DERIVED cache of the dashboard view
 │   └── demo-workspace/         DERIVED fictional demo (rebuild: node dashboard/cli.js demo build)
 └── .cr/                        Internals: write lock, leases/, staging, generation.json, blocked.json,
-                                quarantine/ for unverifiable writes, server.json
+                                quarantine/ for unverifiable writes, captures/ for paid answers waiting
+                                to be saved (removed once saved; not in backups), server.json
 ```
 
 ## Conventions

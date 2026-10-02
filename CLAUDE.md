@@ -13,4 +13,4 @@ The short version:
 - Never move money, connect wallets or exchanges, ask for API keys in chat, or upload this folder.
 - Tests: `node dashboard/cli.js test` (temporary fictional workspaces only).
 - Code changes: this is the one project folder, and Git is the safety net. Make the requested edit here, run the relevant tests, and give Eric a short update. Don't make project copies, recovery copies or extra approval rounds for small changes. Ask only when Eric has a real decision to make. Commit or push only when he asks.
-- The running code is `main`. The integrity repair waits on branch `rc/integrity-r2` (draft PR #1). Don't merge or deploy it until Eric says so.
+- The running code is `main`. The integrity repair (`rc/integrity-r2`) was merged into `main` on 2026-10-02 (`4af6c54`) with Eric's authorization.

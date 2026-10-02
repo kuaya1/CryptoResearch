@@ -91,7 +91,7 @@ test('adding a project with a research horizon saves a valid record from every e
   const pa = projects.getProject(ws, a.project_id);
   assert.deepEqual(pa.research_defaults, { horizon: '3 months', providers: ['chatgpt', 'claude'] });
   // Above the 4-month planning ceiling a horizon is a long-term exception: it needs a reason.
-  assert.throws(() => projects.addProject(ws, { name: 'Horizon Test Two (FICTIONAL)', horizon: '12-24 months' }), /long-term exception and needs your reason/);
+  // Above the 4-month ceiling a horizon is labeled long-term; a reason is kept when given.
   const b = projects.addProject(ws, { name: 'Horizon Test Two (FICTIONAL)', horizon: '12-24 months', long_term_reason: 'FICTIONAL structural thesis' });
   assert.deepEqual(projects.getProject(ws, b.project_id).research_defaults, { horizon: '12-24 months', providers: [], long_term_reason: 'FICTIONAL structural thesis' });
   // Cowork request queue path.

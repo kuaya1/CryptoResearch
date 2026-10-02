@@ -80,6 +80,12 @@ test('a run horizon is an exact interval inside the planning ceiling; longer nee
   assert.equal(position.resolveRunHorizon(ws, { args: { horizon: '2-4 months' }, today }).months, 4, 'a range uses its end');
   assert.throws(() => position.resolveRunHorizon(ws, { args: { horizon: '6 weeks' }, today }), /whole number of calendar months/);
   assert.throws(() => position.resolveRunHorizon(ws, { args: { horizon: 'soon' }, today }), /not readable/);
+  // Not in the agreed mission, so by default a longer horizon is allowed and labeled long-term.
+  const open = position.resolveRunHorizon(ws, { args: { horizon: '24 months' }, today });
+  assert.deepEqual([open.mode, open.exception_reason, open.end_date], ['long_term', null, '2028-10-02']);
+  assert.equal(position.policy(ws).require_long_term_reason, false);
+  // When Eric turns the rule on, a long horizon needs his reason.
+  ws.settings.research.horizon_policy = { require_long_term_reason: true };
   assert.throws(() => position.resolveRunHorizon(ws, { args: { horizon: '24 months' }, today }), /long-term exception and needs your reason/);
   const lt = position.resolveRunHorizon(ws, { args: { horizon: '24 months', long_term_reason: 'FICTIONAL structural thesis' }, today });
   assert.deepEqual([lt.mode, lt.end_date, lt.exception_reason], ['long_term', '2028-10-02', 'FICTIONAL structural thesis']);
@@ -94,6 +100,7 @@ test('a run horizon is an exact interval inside the planning ceiling; longer nee
   const pd = position.resolveRunHorizon(ws, { project: { research_defaults: { horizon: '12 months', long_term_reason: 'FICTIONAL project reason' } }, today });
   assert.deepEqual([pd.mode, pd.exception_reason, pd.source], ['long_term', 'FICTIONAL project reason', 'project_default']);
   // A settings default above the ceiling is not used silently: the policy default applies.
+  delete ws.settings.research.horizon_policy;
   ws.settings.research.default_horizon = '24 months';
   assert.equal(position.resolveRunHorizon(ws, { today }).source, 'policy_default');
   ws.settings.research.default_horizon = '2 months';
@@ -257,7 +264,7 @@ function request(port, { method = 'GET', path: p = '/', headers = {}, body = nul
 }
 
 test('dashboard route: a long horizon needs its reason; the timing view survives a restart', async (t) => {
-  const { ws, root, cleanup } = tempWorkspace('pcserver');
+  const { ws, root, cleanup } = tempWorkspace('pcserver', { research: { horizon_policy: { require_long_term_reason: true } } });
   t.after(cleanup);
   addFixtureProject(ws);
   const { start } = require('../server');
@@ -291,7 +298,7 @@ test('dashboard route: a long horizon needs its reason; the timing view survives
 });
 
 test('Cowork request queue: a long-term research request needs its reason; with it, it is saved once', (t) => {
-  const { ws, root, cleanup } = tempWorkspace('pcqueue');
+  const { ws, root, cleanup } = tempWorkspace('pcqueue', { research: { horizon_policy: { require_long_term_reason: true } } });
   t.after(cleanup);
   addFixtureProject(ws);
   const requests = require('../core/requests');

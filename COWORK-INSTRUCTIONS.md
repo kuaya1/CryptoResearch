@@ -19,7 +19,7 @@ Where you run decides how you save. Per Anthropic's Cowork help article (checked
    ```
    node dashboard/cli.js doctor --json
    ```
-   - If it runs, read `session` in the output: `host`, `home_host` (the PC that owns the workspace), `can_write`, `can_rename`, `can_delete`. The `Write test` check must be `ok`. This is the **CLI route** (sections 2 to 7).
+   - If it runs, read `session` in the output: `host`, `home_host` (the PC that owns the workspace), `can_write`, `can_rename`, `can_delete`. The `Write test` check must be `ok`. This is the **CLI route** (sections 2 to 7). If doctor shows **Research captures**, a paid answer arrived but is not saved into the records yet. Say so; it is saved by the next research run. If it says a capture does not match an attempt, tell Eric and do not touch the file.
    - `can_delete: false` is fine. Saves still work; temporary files are cleaned up later by the PC.
    - If `host` differs from `home_host`, you are not on Eric's PC. Saves to the folder still work, but the PC's dashboard and scheduled task only pick them up when they next run; say so.
 3. If `node` cannot run but you can write files into the folder, use the **request queue** (section 8). Everything you do is **pending** until the PC applies it.
@@ -71,7 +71,7 @@ This is the everyday request. CLI route:
      --sector "AI/Data" --research claude,chatgpt,gemini `
      --channel cowork --utterance "<Eric's words exactly>" --json
    ```
-   **Horizon.** Leave `--horizon` out: the run then uses Eric's position horizon, **4 calendar months from today** (for example 2026-10-02 to 2027-02-02). Use `--horizon "3 months"` when he asks for a shorter one. Anything longer than 4 months is a long-term exception: only when Eric asks for it, and only with his reason in his words, `--long-term-reason "<his words>"`. Never write a reason for him; without one the CLI refuses the run.
+   **Horizon.** Leave `--horizon` out: the run then uses Eric's position horizon, **4 calendar months from today** (for example 2026-10-02 to 2027-02-02). Use `--horizon "3 months"` when he asks for a shorter one. Anything longer than 4 months is labeled a long-term exception: use it only when Eric asks for it, and pass his reason in his words if he gave one, `--long-term-reason "<his words>"`. Never write a reason for him. (Whether a reason should be required is Eric's open decision; until he decides, it is not required.)
    Read `status`:
 
    | `status` | Meaning | Do |
@@ -94,7 +94,8 @@ This is the everyday request. CLI route:
    ```
    node dashboard/cli.js research status <project_id> <run_id> --json
    ```
-   - `queued` / `running`: an API key, model, prices and budget are configured; the PC runs the job (dashboard or hourly task) within the budget. Pending is not saved.
+   - `queued` / `dispatching`: an API key, model, bounded prices and budget are configured; the app runs the job within the limits. `dispatching` means a paid call is reserved, in flight, or answered and waiting to be saved. Pending is not saved.
+   - `uncertain`: a paid request may have been sent and billed, and no answer was captured or saved. It is never resent automatically. Tell Eric; only he reconciles it (`research reconcile <id> <run_id> --provider P --not-charged | --charged-usd X --reason "..."`) or retries it, after checking the provider's usage page. Never reconcile on your own judgment.
    - `unconfigured` (manual): no API access. The prompt is ready for Eric to paste into ChatGPT and Gemini himself. Tell him where: on the project's Research runs tab, "Copy prompt" gives the prompt and "Import report" next to that model takes the answer; or `research prompt <id> <run_id>` prints it.
    - `failed`: show the error. Other models' results are unaffected. `research retry <id> <run_id> --provider chatgpt` retries (bounded).
 7. **Report back in a few lines:** the project ID, identity status and evidence; `projects/<id>/`; the dashboard link `http://127.0.0.1:4729/#/watchlist?p=<id>`; the horizon interval; each model's job state in plain words; remaining unknowns. Once a report is saved, its timing view and suggested review date show in the dashboard; a suggested review date is the model's suggestion, and it goes on Eric's calendar only if he adds it (`review add`).
@@ -124,7 +125,9 @@ Prose reports without the JSON block import with only clearly labeled scores; ev
 | `queued` | Waiting for the PC's runner. | "Queued, not saved yet." |
 | `running` | In progress (an API call, or your own Cowork job). | "Running, not saved yet." |
 | `completed` | The model's answer was saved before normalization, validated, and committed as an immutable report. | Its grade or why it has none. |
-| `failed` | Bounded retries used up; the raw response (if any) is kept. | The error; others are unaffected. |
+| `dispatching` | A paid call is reserved, in flight, or answered and waiting to be saved. | "Sending to the provider (or saving its answer), not saved yet." |
+| `uncertain` | The request may have reached the provider and been billed; no answer was captured. Held, never resent automatically. | "Outcome uncertain: check the provider's usage page, then reconcile or retry." |
+| `failed` | Bounded retries used up, or a provider error; the raw response (if any) is kept. A provider error without usage keeps counting at its reservation until reconciled. | The error; others are unaffected. |
 | `partially_completed` | Some models finished, others failed or wait. | Which is which. |
 | `canceled` | Stopped. A request already sent may still be billed by the provider. | Say that. |
 | `unconfigured` | No API access for that model; manual paste fallback. | Where the prompt is. |
@@ -150,6 +153,7 @@ Grades: each model's grade is shown separately. Missing, unknown or N/A inputs w
 | `index rebuild` | Rebuilds the dashboard cache from the files. |
 | `recover --status` | Shows interrupted or blocked writes. `recover` finishes or rolls them back (also automatic). |
 | `job run --all-due` | Runs whatever is due, like the hourly task. |
+| `research reconcile <id> <run_id> --provider P (--charged-usd X \| --not-charged) --reason "..."` | Records what the provider charged for an uncertain attempt (Eric's decision only). |
 | `backup create` / `backup list` / `backup verify <name>` | Sealed local backups with SHA-256 manifests. |
 | `backup restore <name> --to <empty folder>` | Clean, verified restore into a separate folder (recommended). |
 | `package --out <file>` / `restore-package <file> --to <empty folder>` | Complete restorable package. |
@@ -203,7 +207,7 @@ Use this when you can write files into the folder but cannot execute commands ag
      "args": { "provider": "claude", "project_id": "allora-network", "run_id": "run_...", "text": "<your complete report with its JSON block>" }
    }
    ```
-   `add_project` with `research_providers` records the defaults; a run starts with a separate `research_project` request (or from the dashboard). Without `horizon` a run uses the 4-month position horizon; a `horizon` above 4 months needs `"long_term_reason": "<Eric's words>"`, or the request is rejected. With `"channel": "cowork"` the Claude job is yours: once the receipt shows `result.run_id`, read `projects/<id>/research/<run_id>/prompt.md`, write your report, and import it with `import_report_text` and that `run_id`. Never send `import_report_text` with `"provider": "chatgpt"` or `"gemini"` for text you wrote.
+   `add_project` with `research_providers` records the defaults; a run starts with a separate `research_project` request (or from the dashboard). Without `horizon` a run uses the 4-month position horizon; a `horizon` above 4 months is labeled long-term, with `"long_term_reason": "<Eric's words>"` when he gave one. With `"channel": "cowork"` the Claude job is yours: once the receipt shows `result.run_id`, read `projects/<id>/research/<run_id>/prompt.md`, write your report, and import it with `import_report_text` and that `run_id`. Never send `import_report_text` with `"provider": "chatgpt"` or `"gemini"` for text you wrote.
 3. **Applied by** the dashboard within seconds while it is open, or by the hourly Windows task while the PC is on and Eric is logged in.
 4. **Read the receipt** `logs/requests/<request_id>.result.json`:
 

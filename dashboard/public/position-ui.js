@@ -191,7 +191,7 @@ function refsLine(refs) {
 
 export function horizonHint(idx) {
   const pol = (idx && idx.horizon_policy) || { planning_ceiling_months: 4, default_months: 4, typical_hold_months: 2 };
-  return `Whole calendar months from today. Leave it at ${pol.default_months} months for your usual position horizon (typical hold about ${pol.typical_hold_months} months, planning ceiling ${pol.planning_ceiling_months}). Longer is a long-term exception and needs your reason.`;
+  return `Whole calendar months from today. Leave it at ${pol.default_months} months for your usual position horizon (typical hold about ${pol.typical_hold_months} months, planning ceiling ${pol.planning_ceiling_months}). Longer is labeled a long-term exception${pol.require_long_term_reason ? ' and needs your reason' : ''}.`;
 }
 
 export function needsReason(idx, text) {

@@ -93,7 +93,7 @@ export function openResearchDialog(ctx, project, { providers = null } = {}) {
     : `${last.horizon.text} (from before the position recipe)`;
   const horizon = input({ name: 'horizon', value: `${pol.default_months} months` });
   const reason = input({ name: 'long_term_reason', placeholder: 'Why this project gets a longer horizon' });
-  const reasonField = h('div', { class: 'horizon-reason', hidden: true }, field('Long-term reason', reason, `Required above ${pol.planning_ceiling_months} months. It is saved with the run and shown in the prompt.`));
+  const reasonField = h('div', { class: 'horizon-reason', hidden: true }, field(pol.require_long_term_reason ? 'Long-term reason' : 'Long-term reason (optional)', reason, `${pol.require_long_term_reason ? 'Required' : 'Asked for'} above ${pol.planning_ceiling_months} months. It is saved with the run and shown in the prompt.`));
   const btn = button('Run research', null, { kind: 'primary', type: 'submit' });
   const errorBox = h('div', { role: 'alert' });
   const out = h('div');
@@ -126,7 +126,7 @@ export function openResearchDialog(ctx, project, { providers = null } = {}) {
     }
     if (!sameRadio.checked && !horizon.value.trim()) return fieldError(horizon, `Type a horizon, for example "${pol.default_months} months".`);
     const longTerm = !sameRadio.checked && needsReason(idx, horizon.value);
-    if (longTerm && !reason.value.trim()) return fieldError(reason, `A horizon above ${pol.planning_ceiling_months} months is a long-term exception: say why.`);
+    if (longTerm && pol.require_long_term_reason && !reason.value.trim()) return fieldError(reason, `A horizon above ${pol.planning_ceiling_months} months is a long-term exception: say why.`);
     busy(btn, true, 'Requesting…');
     try {
       const r = await ctx.api.post(`/api/projects/${encodeURIComponent(pid)}/research`, { providers: chosen, horizon: sameRadio.checked ? null : horizon.value.trim(), long_term_reason: longTerm ? reason.value.trim() : null, same_as_last: sameRadio.checked, submission_id: sid });

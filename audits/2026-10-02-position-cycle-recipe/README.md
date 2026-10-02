@@ -49,6 +49,10 @@ Older reports are untouched and show "Not in this report (written before the pos
 
 The code is plain Git: `git diff` shows every change. `git checkout -- dashboard templates` plus deleting the new files listed above returns to `a840ba7`. The data stays readable by the older code: runs still carry `horizon.text`, the older code ignores `market-data/context/` and `position_context`, and no existing record was rewritten.
 
+## Update, 2026-10-02 evening
+
+Checked against the agreed mission (`CryptoResearch-Mission-and-Architecture-v1.md`): it names a horizon as part of each research recipe but sets no 4-month ceiling. The ceiling and the long-term reason come from the Foundation brief ("usually a couple of months, with a 3–4 month planning ceiling. Longer-term holdings are explicit exceptions") and the Implementation Architecture ("A long-term exception requires a separate reason and horizon"). The foundation kit marks that policy "proposed, not active". So requiring a reason is now **off** until Eric decides (`research.horizon_policy.require_long_term_reason`). The 4-month default stays; a longer horizon is allowed and labeled long-term.
+
 ## Next step
 
 **Owner thesis journal.** A dated thesis per project: your intuition and reasons, the signal you expect, what would invalidate it, the planned horizon and review date. Then, at review time, the outcome: what happened, did the thesis hold, what you learned. It links to the model reports it relied on and stays separate from model grades. This is the mission's "owner judgment and learning" record, and the timing views from this milestone feed straight into it.
