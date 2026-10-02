@@ -332,3 +332,41 @@ test('F1 Windows: a volume without hard links that refuses the link with EISDIR 
   await runner(c.root, c.stub);
   assertSavedOnce(c);
 });
+
+// A flag file: while it exists, the runner child cannot read finished captures (EBUSY).
+function busyFlag(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-busy-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'capture-busy');
+  fs.writeFileSync(file, '1');
+  return file;
+}
+
+test('F1 Windows: a capture held open without read sharing when it is read back (an exclusive scan) still counts: the commit records it, and no stale capture or warning is left', async (t) => {
+  // The commit works.
+  const c = await paidRun(t, 'f1busy1');
+  const busy = busyFlag(t);
+  const first = await runner(c.root, c.stub, { fs: { capture_read_busy_while: busy } });
+  assert.equal(first.out.results[0].status, 'completed', JSON.stringify(first.out));
+  const a = c.job().attempts[0];
+  assert.equal(a.capture_sha256 && a.capture_sha256.length, 64, `the commit recorded the capture (capture_error: ${a.capture_error || 'none'})`);
+  fs.unlinkSync(busy);
+  await runner(c.root, c.stub);
+  assertSavedOnce(c);
+  const doc = await require('../core/doctor').doctor(c.ws);
+  assert.deepEqual(doc.checks.filter((x) => x.name === 'Research captures'), [], 'doctor has nothing to report');
+  // The commit cannot run either: reported as captured, saved by the next run.
+  const d = await paidRun(t, 'f1busy2');
+  const block = d.ws.abs('.cr/blocked.json');
+  d.stub.set(async () => {
+    fs.writeFileSync(block, JSON.stringify({ op_id: 'op_test_block', reason: 'test block' }));
+    return { status: 200, json: claudeAnswer(d.text) };
+  });
+  const busy2 = busyFlag(t);
+  const r1 = (await runner(d.root, d.stub, { fs: { capture_read_busy_while: busy2 } })).out.results[0];
+  assert.equal(r1.status, 'captured', JSON.stringify(r1));
+  fs.unlinkSync(busy2);
+  fs.unlinkSync(block);
+  await runner(d.root, d.stub);
+  assertSavedOnce(d);
+});

@@ -119,7 +119,8 @@ function fsyncDir(dir) {
 // error commonly reported for hard links on FAT32 and exFAT volumes.
 const NO_LINK = new Set(['EPERM', 'EACCES', 'EBUSY', 'EISDIR', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV', 'EINVAL', 'EMLINK']);
 
-// Writes the capture for one attempt. Returns { id, rel, sha256, bytes, already }.
+// Writes the capture for one attempt. Returns { id, rel, sha256, bytes, already },
+// plus unverified: true when another program kept it from being read back.
 // Throws CaptureError (CAPTURE_CONFLICT, CAPTURE_UNVERIFIED) or the filesystem
 // error; the caller treats any throw as "not captured".
 function writeCapture(ws, args) {
@@ -177,7 +178,17 @@ function writeCapture(ws, args) {
     try { fs.unlinkSync(tmp); } catch (_) { /* gone, renamed, or cannot delete here: names starting with "." are never read */ }
   }
   fsyncDir(dir);
-  const back = fs.readFileSync(final);
+  let back;
+  try {
+    back = fs.readFileSync(final);
+  } catch (err) {
+    // Windows: another program (an exclusive scan or backup) has the file
+    // open without sharing reads. This process wrote and fsynced these bytes
+    // before placing them, so the capture counts; everything that later uses
+    // or removes it reads it again and checks its hash.
+    if (placed && err.code === 'EBUSY') return { id, rel: captureRel(id), sha256: want, bytes: Buffer.byteLength(text), already: false, unverified: true };
+    throw err;
+  }
   if (sha256(back) !== want) throw new CaptureError('CAPTURE_UNVERIFIED', `The capture for attempt ${id} did not read back with the bytes written.`);
   return { id, rel: captureRel(id), sha256: want, bytes: back.length, already: false };
 }
