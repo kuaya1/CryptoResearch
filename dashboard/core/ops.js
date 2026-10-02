@@ -7,6 +7,15 @@
 // If a process dies after the manifest is sealed, recover() finishes the move on
 // the next start (roll forward). If it dies before, the staging folder is discarded.
 //
+// Readers (audit V2-001): readConsistent runs a read against one generation.
+// The marker says "applying" from before the first file moves until the
+// commit is verified. A reader waits a bounded time (READ_WAIT_MS) and then
+// gets READ_BUSY; it gets READ_INTERRUPTED when the writer died mid-commit
+// (recovery rolls it forward first) and READ_UNSAFE when a commit is
+// quarantined or unverified. A read during which the marker changed runs
+// again. No reader returns a value read across a commit, and none turns a
+// failure into an empty result.
+//
 // Safety rules (audit F01/F04):
 // - A lock records a random owner token. A lock held by a live process on this
 //   PC is never broken, however old. A lock from another host (for example a
@@ -277,38 +286,128 @@ function withLock(ws, label, fn, { timeoutMs = 20000 } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Generation pointer: readers retry until they see one stable generation.
+// Generation pointer: readers see one stable generation or an explicit error
+// (audit V2-001). A reader never runs over files that are being applied.
+
+// Default bound on how long a reader waits for a commit in progress.
+const READ_WAIT_MS = 1500;
 
 function readGen(ws) {
   const g = parseSafe(readRaw(ws.abs(GEN_REL)));
   return g && typeof g.generation === 'number' ? g : { generation: 0, state: 'stable' };
 }
 
+// Returns true when the marker was durably written. The "applying" marker is
+// mandatory: a commit that cannot announce itself does not apply anything.
 function writeGen(ws, doc) {
   try {
     mkdirp(path.dirname(ws.abs(GEN_REL)));
     replaceFile(ws, ws.abs(GEN_REL), JSON.stringify(doc));
-  } catch (_) { /* readers fall back to a best-effort read */ }
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
-// Runs fn against a coherent generation of the records: if a commit was in
-// progress or completed while fn was reading, fn runs again.
-function readConsistent(ws, fn, { attempts = 8 } = {}) {
-  let last;
-  for (let i = 0; i < attempts; i++) {
-    const a = readGen(ws);
-    if (a.state === 'applying') {
-      const age = Date.now() - Date.parse(a.at || 0);
-      if (age < 30000) {
-        sleepSync(30 * (i + 1));
-        continue;
-      }
-    }
-    last = fn();
-    const b = readGen(ws);
-    if (b.generation === a.generation && b.state === a.state && (a.state !== 'applying')) return last;
+// What the generation marker says about the files right now:
+//   stable       no commit is being applied (or one finished but its final
+//                marker was never written: its staging folder is gone or
+//                marked committed and nothing was quarantined)
+//   applying     a sealed commit is being applied by a writer that still
+//                holds the workspace lock
+//   interrupted  a sealed commit was being applied and its writer is gone;
+//                recovery must roll it forward before files are read
+//   blocked      a commit could not be verified or recovered; its files may
+//                be mixed until the owner resolves it (recover --status)
+// An unreadable marker cannot say whether a save is being applied, so the
+// staging folders decide: a sealed, uncommitted one means applying (live
+// lock) or interrupted (no live lock).
+function generationStatus(ws) {
+  const raw = readRaw(ws.abs(GEN_REL));
+  const g = parseSafe(raw);
+  const valid = Boolean(g && typeof g.generation === 'number' && typeof g.state === 'string');
+  const gen = valid ? g : { generation: 0, state: 'stable' };
+  const base = { raw, generation: gen.generation, op_id: gen.op_id || null, marker: gen.state };
+  const blocked = blockedState(ws);
+  if (blocked && blocked.op_id) {
+    return { ...base, state: 'blocked', blocked_op_id: blocked.op_id, reason: `A save (op ${blocked.op_id}) could not be verified: ${blocked.reason || 'unknown reason'}. Records may be inconsistent until it is resolved (node dashboard/cli.js recover --status).` };
   }
-  return last === undefined ? fn() : last;
+  if (!valid && raw !== null) {
+    const sealed = pendingRecovery(ws).filter((x) => x.state === 'sealed').map((x) => x.op_id);
+    if (!sealed.length) return { ...base, state: 'stable', invalid_marker: true };
+    const lock = lockState(ws);
+    if (lock.present && !lock.stale) return { ...base, op_id: sealed[0], state: 'applying', invalid_marker: true, reason: `A save (op ${sealed[0]}) is being applied.` };
+    return { ...base, op_id: sealed[0], state: 'interrupted', invalid_marker: true, reason: `The save marker is unreadable and a save (op ${sealed[0]}) was left unfinished. It is completed automatically on the next start or by: node dashboard/cli.js recover` };
+  }
+  if (gen.state !== 'applying') return { ...base, state: 'stable' };
+  const stagingDir = gen.op_id ? path.join(crDir(ws), 'staging', gen.op_id) : null;
+  if (gen.op_id && exists(path.join(crDir(ws), 'quarantine', gen.op_id))) {
+    return { ...base, state: 'blocked', reason: `An interrupted save (op ${gen.op_id}) was quarantined. Records may be inconsistent until it is resolved (node dashboard/cli.js recover --status).` };
+  }
+  if (!stagingDir || !exists(stagingDir)) return { ...base, state: 'stable', stale_marker: true };
+  const manifest = parseSafe(readRaw(path.join(stagingDir, 'manifest.json')));
+  if (manifest && manifest.committed) return { ...base, state: 'stable', stale_marker: true };
+  const lock = lockState(ws);
+  if (lock.present && !lock.stale) return { ...base, state: 'applying', reason: `A save (op ${gen.op_id}) is being applied.` };
+  return { ...base, state: 'interrupted', reason: `A save (op ${gen.op_id}) was interrupted while it was being applied. It is completed automatically on the next start or by: node dashboard/cli.js recover` };
+}
+
+function readError(status, waitedMs) {
+  if (status.state === 'applying') {
+    return new OpError('READ_BUSY', `The workspace is saving a change (op ${status.op_id}). Nothing was read; try again in a moment.`, { state: status.state, op_id: status.op_id, generation: status.generation, waited_ms: waitedMs, retry_after_ms: 1000 });
+  }
+  if (status.state === 'interrupted') {
+    return new OpError('READ_INTERRUPTED', status.reason, { state: status.state, op_id: status.op_id, generation: status.generation, retry_after_ms: 2000 });
+  }
+  return new OpError('READ_UNSAFE', status.reason, { state: status.state, op_id: status.op_id || status.blocked_op_id || null, generation: status.generation });
+}
+
+// Runs fn against one coherent generation of the records and returns its
+// result. If a commit is being applied it waits (at most waitMs) and then
+// throws READ_BUSY; if a commit happened while fn was reading, fn runs again.
+// It never returns a result read over files that are being applied, and it
+// throws READ_INTERRUPTED / READ_UNSAFE instead of reading an interrupted or
+// unverified commit. Use readConsistentDetailed to also get the generation.
+function readConsistentDetailed(ws, fn, { waitMs = READ_WAIT_MS } = {}) {
+  const started = Date.now();
+  const deadline = started + waitMs;
+  let delay = 25;
+  for (;;) {
+    const before = generationStatus(ws);
+    if (before.state === 'interrupted' || before.state === 'blocked') throw readError(before, Date.now() - started);
+    if (before.state === 'applying') {
+      const left = deadline - Date.now();
+      if (left <= 0) throw readError(before, Date.now() - started);
+      sleepSync(Math.min(delay, left));
+      delay = Math.min(delay * 2, 200);
+      continue;
+    }
+    let value;
+    let failure = null;
+    try {
+      value = fn();
+    } catch (err) {
+      failure = err;
+    }
+    const afterRaw = readRaw(ws.abs(GEN_REL));
+    if (afterRaw === before.raw) {
+      // No commit started or finished while fn read: the result is coherent.
+      if (failure) throw failure;
+      return { value, generation: before.generation, op_id: before.op_id, stale_marker: Boolean(before.stale_marker) };
+    }
+    // The generation moved while reading (a failure may come from a file a
+    // commit was moving): read again, within the same bound.
+    if (Date.now() >= deadline) {
+      const now = generationStatus(ws);
+      throw readError(now.state === 'stable' ? { ...now, state: 'applying', op_id: now.op_id } : now, Date.now() - started);
+    }
+    sleepSync(Math.min(delay, Math.max(1, deadline - Date.now())));
+    delay = Math.min(delay * 2, 200);
+  }
+}
+
+function readConsistent(ws, fn, opts = {}) {
+  return readConsistentDetailed(ws, fn, opts).value;
 }
 
 // ---------------------------------------------------------------------------
@@ -612,7 +711,12 @@ function runOp(ws, { type, summary, idempotencyKey = null, payloadHash = null },
     renewLock(ws);
     op.seal();
     const gen = readGen(ws);
-    writeGen(ws, { generation: gen.generation, state: 'applying', op_id: op.id, at: new Date().toISOString() });
+    // Readers must be able to see that files are moving (audit V2-001): no
+    // marker, no commit. Nothing has been applied yet, so aborting is clean.
+    if (!writeGen(ws, { generation: gen.generation, state: 'applying', op_id: op.id, at: new Date().toISOString() })) {
+      op.abort();
+      throw new OpError('GENERATION_UNWRITABLE', 'Could not mark the save as in progress (.cr/generation.json is not writable). Nothing was saved; try again.');
+    }
     logOp(ws, { op_id: op.id, phase: 'begin', type, actor: ws.actor, summary: op.summary, entries: op.entries.length });
     try {
       applyManifest(ws, op.manifest(), op.dir);
@@ -677,9 +781,14 @@ function recoverLocked(ws) {
       continue;
     }
     if (manifest && manifest.ready && !manifest.abandoned) {
+      const genBefore = readGen(ws);
+      if (!writeGen(ws, { generation: genBefore.generation, state: 'applying', op_id: name, at: new Date().toISOString(), recovering: true })) {
+        // Nothing applied; the sealed operation stays pending and no later
+        // write may run ahead of it.
+        throw new OpError('GENERATION_UNWRITABLE', `Could not mark recovery of ${name} as in progress (.cr/generation.json is not writable). Nothing was changed; try again.`);
+      }
       try {
-        const gen = readGen(ws);
-        writeGen(ws, { generation: gen.generation, state: 'applying', op_id: name, at: new Date().toISOString(), recovering: true });
+        const gen = genBefore;
         applyManifest(ws, manifest, dir);
         const files = verifyEntries(ws, manifest.entries);
         const ok = files.every((f) => f.ok);
@@ -766,6 +875,9 @@ module.exports = {
   blockedState,
   assertNotBlocked,
   readConsistent,
+  readConsistentDetailed,
+  generationStatus,
+  READ_WAIT_MS,
   readGen,
   lockState,
   capabilities,

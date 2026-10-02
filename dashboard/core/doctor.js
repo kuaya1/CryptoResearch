@@ -170,6 +170,15 @@ async function doctor(ws) {
     const rs = require('./research').providerStatus(ws);
     add('Research providers', true, Object.entries(rs).map(([p, s]) => `${p}: ${s.mode}${s.reason ? ` (${s.reason})` : ''}`).join('; '), 'info');
   } catch (_) { /* research module optional */ }
+  try {
+    // Paid attempts that may have been billed without a saved answer (V2-003).
+    const sp = require('./research').spendSoFar(ws);
+    // Paid answers captured but not yet saved into the records (audit F1).
+    const cs = require('./research').sweepCaptures(ws, { remove: false });
+    if (cs.pending.length) add('Research captures', false, `${cs.pending.length} paid answer(s) arrived and were captured in .cr/captures but are not saved into the records yet. They are saved by the next research run (dashboard, hourly task, or node dashboard/cli.js research run) without asking the provider again.`, 'warn');
+    if (cs.unmatched.length) add('Research captures', false, `${cs.unmatched.length} capture file(s) in .cr/captures do not match an attempt that is waiting for its answer (${cs.unmatched.map((u) => `${u.rel}: ${u.reason}`).join('; ')}). They are kept for inspection and never imported automatically.`, 'warn');
+    if (sp.uncertain_attempts) add('Research spend', false, `${sp.uncertain_attempts} paid attempt(s) have an uncertain outcome: they may have been billed, are never resent automatically, and count at their reservation until you reconcile them (project, Research tab; or node dashboard/cli.js research reconcile).`, 'warn');
+  } catch (_) { /* research module optional */ }
 
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   add('Time zone', true, `System ${tz}; review dates use America/New_York`, 'ok');

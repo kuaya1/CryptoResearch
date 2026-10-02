@@ -9,7 +9,7 @@ const { loadReports, isEligible, reportSortKey, EVIDENCE_TAGS, VERDICTS } = requ
 const { compareProject, diffReports, latestByProvider } = require('./compare');
 const { checkModelTotal } = require('./scoring');
 const { gradeAssessment } = require('./rubrics');
-const { readConsistent, replaceFile } = require('./ops');
+const { readConsistent, readConsistentDetailed, replaceFile } = require('./ops');
 const notes = require('./notes');
 const portfolio = require('./portfolio');
 const market = require('./market');
@@ -412,13 +412,16 @@ function rebuildIndex(ws) {
   return index;
 }
 
-// Readers see one coherent generation of the records (audit F04).
+// Readers see one coherent generation of the records (audit F04/V2-001), or
+// get READ_BUSY / READ_INTERRUPTED / READ_UNSAFE: never a mixed result.
 function buildIndex(ws, opts = {}) {
-  return readConsistent(ws, () => buildIndexRaw(ws, opts));
+  const r = readConsistentDetailed(ws, () => buildIndexRaw(ws, opts), opts.waitMs === undefined ? {} : { waitMs: opts.waitMs });
+  r.value.read_generation = { generation: r.generation, op_id: r.op_id };
+  return r.value;
 }
 
-function projectDetail(ws, id) {
-  return readConsistent(ws, () => projectDetailRaw(ws, id));
+function projectDetail(ws, id, opts = {}) {
+  return readConsistent(ws, () => projectDetailRaw(ws, id), opts.waitMs === undefined ? {} : { waitMs: opts.waitMs });
 }
 
 function projectDetailRaw(ws, id) {

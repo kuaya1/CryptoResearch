@@ -8,7 +8,14 @@
 // - strict Content-Security-Policy; static files come only from dashboard/public
 // - the API takes record IDs, never file paths; API keys never reach the page
 // Live refresh: the workspace folder is watched (plus a 5-second poll fallback);
-// on change the index is rebuilt and open pages are told to refresh.
+// on change the index is rebuilt. Open pages ask GET /api/version every few
+// seconds while visible (a short request; no connection is held open, so any
+// number of windows fit the browser's per-server limit) and refetch what
+// changed. /api/events (server-sent events) is kept for older pages.
+// Reads (audit V2-001): the server keeps the last verified index and serves it
+// with read_status (current / stale / unverified). A read that meets a save in
+// progress waits briefly, then answers 503 with Retry-After; an interrupted
+// save is recovered first. Nothing is ever served from a half-applied save.
 // Background work while open: prices every few minutes (shared lease, backoff
 // and call budget with the scheduled task), queued requests and inbox files,
 // queued research jobs (only ones you started), and the daily jobs.
@@ -22,7 +29,7 @@ const { spawn } = require('child_process');
 const { readJson, jsonText, fileInfo, listDir, toPosix, sha256 } = require('./core/fsx');
 const { isProjectId, isRecordId } = require('./core/ids');
 const { PROVIDERS } = require('./core/workspace');
-const { runOp, OpError, replaceFile } = require('./core/ops');
+const { runOp, OpError, replaceFile, readConsistent, recover } = require('./core/ops');
 const { buildIndex, writeIndex, projectDetail } = require('./core/indexer');
 const projects = require('./core/projects');
 const notes = require('./core/notes');
@@ -47,6 +54,11 @@ const WATCH_TOP = new Set(['projects', 'portfolio', 'market-data', 'inbox', 'con
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 const MAX_BODY = 30 * 1024 * 1024;
 const UI_STATE_REL = 'config/ui-state.json';
+// How long a server read waits for a save in progress before answering 503
+// (the page retries); the CLI's own reads wait READ_WAIT_MS.
+const SERVER_READ_WAIT_MS = 250;
+const CHANGE_LOG_MAX = 200;
+const READ_CODES = new Set(['READ_BUSY', 'READ_INTERRUPTED', 'READ_UNSAFE']);
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -186,7 +198,23 @@ function validateSettingsPatch(patch) {
           o.model = c.model || null;
         }
         for (const k of ['input_usd_per_mtok', 'output_usd_per_mtok', 'search_usd_per_call']) if (c[k] !== undefined) o[k] = c[k] === null || c[k] === '' ? null : num(c[k], 0, 10000, k);
-        if (c.max_searches !== undefined) o.max_searches = num(c.max_searches, 0, 200, 'max_searches');
+        if (c.max_searches !== undefined) {
+          // 0 is kept as 0 and turns web search off; empty means not set
+          // (audit V2-005).
+          if (c.max_searches === null || c.max_searches === '') o.max_searches = null;
+          else {
+            const n = num(c.max_searches, 0, 200, 'max_searches');
+            if (!Number.isInteger(n)) throw new OpError('INVALID', 'Max searches must be a whole number from 0 to 200 (0 turns web search off).');
+            o.max_searches = n;
+          }
+        }
+        if (c.search_billing !== undefined) {
+          // Gemini only: the API cannot cap searches, so search is used only
+          // when the owner declares that the model bills grounding per request.
+          if (p !== 'gemini') throw new OpError('INVALID', 'Search billing is only declared for Gemini.');
+          if (![null, '', 'per_request', 'per_query'].includes(c.search_billing)) throw new OpError('INVALID', 'Gemini search billing must be per_request or per_query.');
+          o.search_billing = c.search_billing || null;
+        }
         out.research.providers[p] = o;
       }
     }
@@ -232,7 +260,26 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   const allowedHosts = new Set([`127.0.0.1:${boundPort}`, `localhost:${boundPort}`]);
   const allowedOrigins = new Set([`http://127.0.0.1:${boundPort}`, `http://localhost:${boundPort}`]);
   const clients = new Set();
-  const state = { index: null, lastError: null, rebuilds: 0 };
+  const sockets = new Set();
+  const state = {
+    index: null,
+    lastError: null,
+    rebuilds: 0,
+    // What the served index is: current (the latest verified generation),
+    // stale (an older verified one, with the reason), unverified (none yet).
+    read: { status: 'unverified', reason: 'Not read yet.', code: null, since: null, generation: null, checked_at: null, retry_after_ms: null },
+    // Change log for polling pages: seq grows when the served index changes.
+    seq: 0,
+    changes: [],
+    indexSig: null,
+    instance: crypto.randomBytes(6).toString('hex'),
+    stats: { started_at: new Date().toISOString(), sockets_total: 0, requests: {} },
+  };
+  server.on('connection', (sock) => {
+    state.stats.sockets_total++;
+    sockets.add(sock);
+    sock.on('close', () => sockets.delete(sock));
+  });
 
   function broadcast(event) {
     const data = `event: changed\ndata: ${JSON.stringify(event)}\n\n`;
@@ -245,14 +292,38 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     return m;
   }
 
+  function noteChange(areas, projects) {
+    state.seq++;
+    state.changes.push({ seq: state.seq, at: new Date().toISOString(), areas, projects });
+    if (state.changes.length > CHANGE_LOG_MAX) state.changes.splice(0, state.changes.length - CHANGE_LOG_MAX);
+  }
+
+  // One verified generation of the index; an interrupted save is recovered
+  // (rolled forward) first, a save in progress is waited for briefly.
+  function readIndex() {
+    try {
+      return buildIndex(ws, { waitMs: SERVER_READ_WAIT_MS });
+    } catch (err) {
+      if (err.code !== 'READ_INTERRUPTED') throw err;
+      recover(ws);
+      return buildIndex(ws, { waitMs: SERVER_READ_WAIT_MS });
+    }
+  }
+
+  let rebuildRetry = null;
+  let retryDelay = 250;
   function rebuild(areas = []) {
+    clearTimeout(rebuildRetry);
+    rebuildRetry = null;
     try {
       if (areas.includes('config') || areas.includes('templates')) ws.reloadSettings();
       const prev = state.index;
-      const next = buildIndex(ws);
+      const next = readIndex();
       state.index = next;
       state.lastError = null;
       state.rebuilds++;
+      state.read = { status: 'current', reason: null, code: null, since: next.generated_at, generation: next.read_generation ? next.read_generation.generation : null, checked_at: new Date().toISOString(), retry_after_ms: null };
+      retryDelay = 250;
       writeIndex(ws, next);
       const changedProjects = [];
       if (prev) {
@@ -261,11 +332,33 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
         for (const [id, sig] of b) if (a.get(id) !== sig) changedProjects.push(id);
         for (const id of a.keys()) if (!b.has(id)) changedProjects.push(id);
       }
+      const sig = crypto.createHash('sha1').update(JSON.stringify({ ...next, generated_at: null, read_generation: null })).digest('hex');
+      if (sig !== state.indexSig) {
+        state.indexSig = sig;
+        noteChange(areas, prev ? changedProjects : null);
+      }
       broadcast({ areas, projects: changedProjects, index_built_at: next.generated_at });
     } catch (err) {
+      // Keep serving the last verified index, saying why it may be behind.
+      const transient = err.code === 'READ_BUSY' || err.code === 'READ_INTERRUPTED';
       state.lastError = err.message;
-      broadcast({ areas, error: err.message });
-      console.error('Index rebuild failed:', err.message);
+      state.read = {
+        status: state.index ? 'stale' : 'unverified',
+        reason: transient ? 'A save is in progress.' : err.message,
+        code: err.code || 'REBUILD_FAILED',
+        since: state.index ? state.index.generated_at : null,
+        generation: state.index && state.index.read_generation ? state.index.read_generation.generation : null,
+        checked_at: new Date().toISOString(),
+        retry_after_ms: transient ? retryDelay : null,
+      };
+      broadcast({ areas, error: err.message, code: err.code || null, read_status: state.read });
+      if (transient) {
+        rebuildRetry = setTimeout(() => rebuild(areas), retryDelay);
+        retryDelay = Math.min(retryDelay * 2, 5000);
+      } else {
+        if (err.code === 'READ_UNSAFE') rebuildRetry = setTimeout(() => rebuild(areas), 30000);
+        console.error('Index rebuild failed:', err.message);
+      }
     }
   }
 
@@ -386,7 +479,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   const researchTimer = setInterval(() => researchTick(), 2 * 60000);
   const dailyTimer = setInterval(() => jobs.runJobs(ws, ['snapshot', 'reviews', 'backup'], { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 30 * 60000);
 
-  const api = makeApi({ ws, state, token, rebuild, marketTick, researchTick });
+  const api = makeApi({ ws, state, token, rebuild, marketTick, researchTick, clients, sockets });
 
   server.on('request', async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -399,6 +492,8 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
       const hostHeader = String(req.headers.host || '').toLowerCase();
       if (!allowedHosts.has(hostHeader)) throw new HttpError(403, 'Host not allowed');
       const url = new URL(req.url, origin);
+      const bucket = url.pathname.startsWith('/api/') ? (['/api/version', '/api/index', '/api/events', '/api/session', '/api/health'].includes(url.pathname) ? url.pathname : '/api/(other)') : '(static)';
+      state.stats.requests[bucket] = (state.stats.requests[bucket] || 0) + 1;
       if (url.pathname.startsWith('/api/')) {
         const site = req.headers['sec-fetch-site'];
         if (site && !['same-origin', 'none'].includes(site)) throw new HttpError(403, 'Cross-site request refused');
@@ -407,12 +502,16 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
       }
       return serveStatic(req, res, url);
     } catch (err) {
-      const status = err.status || (err.code === 'NOT_FOUND' ? 404 : ['INVALID', 'BAD_ID', 'BAD_PATH', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT'].includes(err.code) ? 400 : ['WORKSPACE_BUSY', 'WRITES_BLOCKED'].includes(err.code) ? 409 : 500);
-      if (status >= 500) console.error(err);
+      // A read that met a save in progress, an interrupted save or an
+      // unverified commit is 503: nothing mixed is ever returned (V2-001).
+      const readErr = READ_CODES.has(err.code);
+      const status = err.status || (err.code === 'NOT_FOUND' ? 404 : ['INVALID', 'BAD_ID', 'BAD_PATH', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT', 'UNSAFE_PATH'].includes(err.code) ? 400 : ['WORKSPACE_BUSY', 'WRITES_BLOCKED'].includes(err.code) ? 409 : readErr ? 503 : 500);
+      if (status >= 500 && !readErr) console.error(err);
+      const retryMs = readErr && err.code !== 'READ_UNSAFE' ? (err.details && err.details.retry_after_ms) || 1000 : null;
       if (!res.headersSent) {
-        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...(retryMs ? { 'Retry-After': String(Math.max(1, Math.ceil(retryMs / 1000))) } : {}) });
       }
-      res.end(JSON.stringify({ error: status >= 500 ? `Server error: ${err.message}` : err.message, code: err.code || null, saved: ['INVALID', 'BAD_ID', 'BAD_PATH', 'NOT_FOUND', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'WORKSPACE_BUSY', 'WRITES_BLOCKED', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT'].includes(err.code) || err.status ? false : 'unknown' }));
+      res.end(JSON.stringify({ error: status >= 500 && !readErr ? `Server error: ${err.message}` : err.message, code: err.code || null, retry_after_ms: retryMs, saved: readErr && req.method === 'GET' ? false : ['INVALID', 'BAD_ID', 'BAD_PATH', 'NOT_FOUND', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'WORKSPACE_BUSY', 'WRITES_BLOCKED', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT', 'UNSAFE_PATH', 'GENERATION_UNWRITABLE'].includes(err.code) || err.status ? false : 'unknown' }));
     }
   });
 
@@ -462,6 +561,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     startupTimers.forEach(clearTimeout);
     clearTimeout(inboxTimer);
     clearTimeout(rebuildTimer);
+    clearTimeout(rebuildRetry);
     clearInterval(pollTimer);
     clearInterval(marketTimer);
     clearInterval(researchTimer);
@@ -491,7 +591,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   return { url: `${origin}/`, port: boundPort, token, server, shutdown, state };
 }
 
-function makeApi({ ws, state, token, rebuild, marketTick, researchTick }) {
+function makeApi({ ws, state, token, rebuild, marketTick, researchTick, clients, sockets }) {
   const send = (res, status, body, type = 'application/json; charset=utf-8', extra = {}) => {
     res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', ...extra });
     res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
@@ -530,11 +630,55 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick }) {
     }
   };
 
+  // A read against one verified generation of the records (audit V2-001). An
+  // interrupted save is recovered first; a save in progress is a bounded wait,
+  // then READ_BUSY (503 with Retry-After).
+  const coherent = (fn) => {
+    try {
+      return readConsistent(ws, fn, { waitMs: SERVER_READ_WAIT_MS });
+    } catch (err) {
+      if (err.code !== 'READ_INTERRUPTED') throw err;
+      recover(ws);
+      return readConsistent(ws, fn, { waitMs: SERVER_READ_WAIT_MS });
+    }
+  };
+
   const routes = [];
   const route = (method, pattern, handler) => routes.push({ method, re: new RegExp(`^${pattern}$`), handler });
 
-  route('GET', '/api/index', () => state.index || buildIndex(ws));
-  route('GET', '/api/projects/([^/]+)', (m) => projectDetail(ws, pid(m[1])));
+  // The last verified index, with what it is (current or stale, and why).
+  // With nothing verified yet, 503 and Retry-After instead of a guess.
+  route('GET', '/api/index', () => {
+    if (!state.index) rebuild(['request']);
+    if (!state.index) {
+      throw new OpError(state.read.code && READ_CODES.has(state.read.code) ? state.read.code : 'READ_BUSY', `Nothing verified to show yet: ${state.read.reason || 'the records could not be read'}`, { retry_after_ms: state.read.retry_after_ms || 1000 });
+    }
+    return { ...state.index, read_status: state.read, live: { seq: state.seq, instance: state.instance } };
+  });
+  // What changed since a page's last look: polled by visible pages (V2-006).
+  route('GET', '/api/version', (m, req, res, body, url) => {
+    const since = Number(url.searchParams.get('since'));
+    const known = Number.isInteger(since) && since >= 0 && since <= state.seq && (since === state.seq || (state.changes.length && since >= state.changes[0].seq - 1));
+    return {
+      instance: state.instance,
+      seq: state.seq,
+      index_built_at: state.index ? state.index.generated_at : null,
+      read_status: state.read,
+      changes: known ? state.changes.filter((c) => c.seq > since) : null,
+    };
+  });
+  // Counts for checking that open pages stay within bounds (no records).
+  route('GET', '/api/server-stats', () => ({ instance: state.instance, started_at: state.stats.started_at, sockets_open: sockets.size, sockets_total: state.stats.sockets_total, event_streams_open: clients.size, requests: state.stats.requests, seq: state.seq, rebuilds: state.rebuilds, read_status: state.read }));
+  route('GET', '/api/projects/([^/]+)', (m) => {
+    const id = pid(m[1]);
+    try {
+      return projectDetail(ws, id, { waitMs: SERVER_READ_WAIT_MS });
+    } catch (err) {
+      if (err.code !== 'READ_INTERRUPTED') throw err;
+      recover(ws);
+      return projectDetail(ws, id, { waitMs: SERVER_READ_WAIT_MS });
+    }
+  });
   route('GET', '/api/projects/([^/]+)/reports/([^/]+)/original', (m) => {
     const id = pid(m[1]);
     const r = rid(m[2]);
@@ -573,11 +717,14 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick }) {
     if (!run) throw new HttpError(404, 'No such research run');
     return { _raw: fs.readFileSync(ws.abs(run.prompt.path), 'utf8'), _type: 'text/plain; charset=utf-8' };
   });
-  route('GET', '/api/projects/([^/]+)/changes', (m, req, res, body, url) => require('./core/digest').changesSince(ws, pid(m[1]), { since: url.searchParams.get('since') || null, latestMarket: market.readLatest(ws) }));
-  route('GET', '/api/portfolio/ledger', () => {
+  route('GET', '/api/projects/([^/]+)/changes', (m, req, res, body, url) => {
+    const id = pid(m[1]);
+    return coherent(() => require('./core/digest').changesSince(ws, id, { since: url.searchParams.get('since') || null, latestMarket: market.readLatest(ws) }));
+  });
+  route('GET', '/api/portfolio/ledger', () => coherent(() => {
     const reg = portfolio.assetRegistry(ws);
     return { transactions: portfolio.loadTransactions(ws), accounts: portfolio.loadAccounts(ws), assets: Array.from(reg instanceof Map ? reg.values() : Object.values(reg || {})).map((a) => ({ asset_id: a.asset_id, symbol: a.symbol || null, name: a.name || null, kind: a.kind || null, decimals: a.decimals, project_id: a.project_id || null })) };
-  });
+  }));
   route('GET', '/api/market/lookup', (m, req, res, body, url) => market.searchCoins(ws, String(url.searchParams.get('q') || '')));
   route('GET', '/api/inbox/text', (m, req, res, body, url) => inbox.readInboxText(ws, String(url.searchParams.get('key') || '')));
   route('GET', '/api/ui-state', () => readJson(ws.abs(UI_STATE_REL), {}));
@@ -589,7 +736,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick }) {
   route('GET', '/api/backups', () => exporter.listBackups(ws));
   route('GET', '/api/backups/([A-Za-z0-9_-]+)/verify', (m) => exporter.verifyBackup(ws, m[1]));
   route('GET', '/api/doctor', async () => require('./core/doctor').doctor(ws));
-  route('GET', '/api/research/providers', () => ({ providers: research.providerStatus(ws), budget: ws.settings.research.budget, spend: research.spendSoFar(ws), unattended_enabled: Boolean(ws.settings.research.unattended_enabled), keys_file: require('./core/providers').secretsFile() }));
+  route('GET', '/api/research/providers', () => coherent(() => ({ providers: research.providerStatus(ws), budget: ws.settings.research.budget, spend: research.spendSoFar(ws), unattended_enabled: Boolean(ws.settings.research.unattended_enabled), keys_file: require('./core/providers').secretsFile() })));
 
   route('POST', '/api/projects', (m, req, res, body) => once(body, () => {
     const r = projects.addProject(ws, { ...body, utterance: body.utterance || null });
@@ -618,6 +765,14 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick }) {
     if (m[4] === 'retry') setTimeout(() => researchTick(), 500);
     return after(out);
   });
+  // The owner records what the provider charged for an attempt whose outcome
+  // is uncertain (or an error without usage): an amount, or not charged.
+  route('POST', '/api/projects/([^/]+)/research/([^/]+)/jobs/([a-z]+)/reconcile', (m, req, res, body) => after(research.reconcileAttempt(ws, pid(m[1]), runId(m[2]), provider(m[3]), {
+    attempt: body.attempt === undefined ? null : body.attempt,
+    charged_usd: body.charged_usd,
+    not_charged: body.not_charged === true,
+    reason: body.reason,
+  })));
   route('POST', '/api/projects/([^/]+)/note', (m, req, res, body) => after(notes.setConvictionNote(ws, pid(m[1]), body.text, { conviction: body.conviction || null })));
   route('POST', '/api/projects/([^/]+)/journal', (m, req, res, body) => once(body, () => after(notes.addJournal(ws, pid(m[1]), body))));
   route('POST', '/api/scopes/([^/]+)/events', (m, req, res, body) => once(body, () => after(notes.addEvent(ws, m[1] === 'portfolio' ? 'portfolio' : pid(m[1]), body))));

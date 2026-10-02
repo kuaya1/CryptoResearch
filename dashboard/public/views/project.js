@@ -722,6 +722,54 @@ function historyTab(ctx, d) {
 // ---------------------------------------------------------------------------
 // Research runs, prompts and identity
 
+// Mirrors the server: an uncertain paid attempt, or a provider error without
+// usage, can be reconciled by the owner.
+function reconcilable(j, a) {
+  if (j.mode !== 'api' || !a) return false;
+  if (a.phase === 'uncertain') return true;
+  if (a.phase === 'errored') return typeof a.cost_actual_usd !== 'number';
+  return !a.phase && Boolean(a.finished_at) && a.outcome !== 'response_saved' && typeof a.cost_actual_usd !== 'number' && typeof a.cost_estimate_usd === 'number';
+}
+
+function money(n) {
+  return `$${n > 0 && n < 0.1 ? n.toFixed(4) : n.toFixed(2)}`;
+}
+
+// What an attempt counts against the limits, in words: never "up to", because
+// a reservation is an estimate, not a maximum.
+function attemptCost(a) {
+  if (a.phase === 'not_sent') return 'not sent, $0';
+  if (a.phase === 'reconciled' && typeof a.reconciled_usd === 'number') return `reconciled ${money(a.reconciled_usd)}`;
+  if (typeof a.cost_actual_usd === 'number') return `${money(a.cost_actual_usd)} actual${typeof a.overrun_usd === 'number' && a.overrun_usd > 0 ? ` (${money(a.overrun_usd)} above its reservation)` : ''}`;
+  const r = typeof a.reserved_usd === 'number' ? a.reserved_usd : a.cost_estimate_usd;
+  if (typeof r !== 'number') return null;
+  return a.phase === 'uncertain' ? `${money(r)} reserved, counted until reconciled` : `${money(r)} reserved (estimate)`;
+}
+
+function reconcileForm(ctx, pid, run, prov, a) {
+  const key = `rec-${run.run_id}-${prov}-${a.n}`;
+  const amount = input({ inputmode: 'decimal', name: `${key}-amount`, placeholder: 'USD charged, e.g. 0.42', 'aria-label': `Amount charged for attempt ${a.n}` });
+  const none = h('input', { type: 'checkbox', name: `${key}-none` });
+  const reason = input({ name: `${key}-reason`, placeholder: 'How you know (e.g. provider usage page)', 'aria-label': `How you know what attempt ${a.n} cost` });
+  const save = button('Record', null, { kind: 'small primary', type: 'submit' });
+  const form = h('form', { class: 'reconcile', dataset: { key: `${key}-form` } },
+    amount,
+    h('label', { class: 'check small' }, none, 'Not charged'),
+    reason,
+    h('div', null, save));
+  form.onsubmit = action(save, async () => {
+    const body = { attempt: a.attempt_id || a.n, reason: reason.value.trim() };
+    if (none.checked) body.not_charged = true;
+    else body.charged_usd = amount.value.trim();
+    const r = await ctx.api.post(`/api/projects/${pid}/research/${run.run_id}/jobs/${prov}/reconcile`, body);
+    await ctx.refresh();
+    return r;
+  }, (r) => r.message || 'Recorded');
+  return details(`Reconcile attempt #${a.n}`, h('div', null,
+    h('p', { class: 'small muted', style: { margin: '0 0 6px' } }, 'Check the provider\'s usage page, then record what this attempt was charged. It counts against your limits at its reservation until you do.'),
+    form), { id: key });
+}
+
 function jobRow(ctx, pid, run, prov) {
   const j = run.jobs[prov];
   const key = j.state === 'unconfigured' ? 'manual' : j.state === 'running' && j.mode === 'cowork' ? 'cowork' : j.state;
@@ -732,7 +780,18 @@ function jobRow(ctx, pid, run, prov) {
     b.onclick = action(b, async () => { const r = await ctx.api.post(`/api/projects/${pid}/research/${run.run_id}/jobs/${prov}/retry`, {}); await ctx.refresh(); return r; }, (r) => r.message || 'Retry queued');
     actions.push(b);
   }
-  if (['queued', 'running', 'unconfigured'].includes(j.state) && j.mode !== 'cowork') {
+  if (j.state === 'uncertain') {
+    const b = button('Retry anyway', null, { kind: 'small', title: 'Sends a new request. The uncertain attempt may already have been billed and keeps counting until you reconcile it.' });
+    b.setAttribute('aria-label', `Send a new ${PROVIDER_LABELS[prov]} request despite the uncertain attempt`);
+    b.onclick = action(b, async () => {
+      if (!window.confirm(`Send a new ${PROVIDER_LABELS[prov]} request? The earlier attempt may already have been billed; it keeps counting against your limits until you reconcile it, and the new attempt is reserved separately.`)) return undefined;
+      const r = await ctx.api.post(`/api/projects/${pid}/research/${run.run_id}/jobs/${prov}/retry`, {});
+      await ctx.refresh();
+      return r;
+    }, (r) => r.message || 'Retry queued');
+    actions.push(b);
+  }
+  if (['queued', 'running', 'dispatching', 'uncertain', 'unconfigured'].includes(j.state) && j.mode !== 'cowork') {
     const b = button('Cancel', null, { kind: 'small quiet', title: 'Stops this job and its retries. A request already sent may still be billed.' });
     b.setAttribute('aria-label', `Cancel the ${PROVIDER_LABELS[prov]} job`);
     b.onclick = action(b, async () => {
@@ -751,11 +810,15 @@ function jobRow(ctx, pid, run, prov) {
   }
   if (j.report_id) actions.push(h('a', { class: 'btn small', href: `#/project/${pid}/reports?report=${encodeURIComponent(j.report_id)}` }, 'Open report'));
   const attempts = j.attempts || [];
+  for (const a of attempts) if (reconcilable(j, a)) actions.push(reconcileForm(ctx, pid, run, prov, a));
   return {
     prov,
     state: stateText(st.long, st.tone),
     mode: h('span', { class: 'small' }, j.mode === 'manual' ? 'Manual import' : j.mode === 'cowork' ? 'Claude Cowork session' : j.mode === 'mock' ? 'Fictional demo adapter' : `API${j.model ? ` · ${j.model}` : ''}`),
-    attempts: attempts.length ? h('div', { class: 'small' }, attempts.map((a) => h('div', null, `#${a.n} ${String(a.outcome || 'in progress').replace(/_/g, ' ')}`, a.usage ? h('span', { class: 'faint' }, ` · ${a.usage.input_tokens ?? '?'} in / ${a.usage.output_tokens ?? '?'} out tokens`) : null, typeof a.cost_actual_usd === 'number' ? h('span', { class: 'faint' }, ` · $${a.cost_actual_usd}`) : typeof a.cost_estimate_usd === 'number' ? h('span', { class: 'faint' }, ` · up to $${a.cost_estimate_usd}`) : null, a.response_sha256 ? h('span', { class: 'faint', title: `Raw response saved before normalization: ${a.response_path}` }, ` · response saved`) : null))) : h('span', { class: 'faint small' }, 'None'),
+    attempts: attempts.length ? h('div', { class: 'small' }, attempts.map((a) => {
+      const cost = attemptCost(a);
+      return h('div', null, `#${a.n} ${String(a.phase || a.outcome || 'in progress').replace(/_/g, ' ')}`, a.usage ? h('span', { class: 'faint' }, ` · ${a.usage.input_tokens ?? '?'} in / ${a.usage.output_tokens ?? '?'} out tokens`) : null, cost ? h('span', { class: a.phase === 'uncertain' ? null : 'faint' }, ` · ${cost}`) : null, a.response_sha256 ? h('span', { class: 'faint', title: `Raw response saved before normalization: ${a.response_path}` }, ` · response saved`) : null);
+    })) : h('span', { class: 'faint small' }, 'None'),
     error: j.error ? h('span', { class: 'small', style: { color: 'var(--neg)' } }, j.error) : j.note ? h('span', { class: 'small muted' }, j.note) : null,
     actions: actions.length ? h('div', { class: 'btn-row' }, actions) : null,
   };

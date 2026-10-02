@@ -15,6 +15,8 @@ export const RESEARCH_STATE = {
   none: { short: 'None', long: 'No research yet', tone: '' },
   queued: { short: 'Queued', long: 'Queued: not saved yet', tone: 'wait' },
   running: { short: 'Running', long: 'Running: not saved yet', tone: 'wait' },
+  dispatching: { short: 'Running', long: 'Sending to the provider: not saved yet', tone: 'wait' },
+  uncertain: { short: 'Check', long: 'Outcome uncertain: the request may have been sent and billed, and no answer was saved. Reconcile it or retry', tone: 'warn' },
   cowork: { short: 'Cowork', long: 'Assigned to the Claude Cowork session that asked for it: not saved yet', tone: 'wait' },
   manual: { short: 'Manual', long: 'Waiting for you to import this model\'s answer (no API set up)', tone: 'warn' },
   waiting: { short: 'Manual', long: 'Waiting for you to import this model\'s answer', tone: 'warn' },
@@ -329,7 +331,7 @@ function jobKey(job) {
 
 export function badgeInfo(provider, report, job, { staleDays = 90 } = {}) {
   const who = PROVIDER_LABELS[provider];
-  const jobOpen = job && ['queued', 'running', 'waiting', 'unconfigured'].includes(job.state) && (!report || (job.run_created_at && report.imported_at && job.run_created_at > report.imported_at));
+  const jobOpen = job && ['queued', 'running', 'dispatching', 'uncertain', 'waiting', 'unconfigured'].includes(job.state) && (!report || (job.run_created_at && report.imported_at && job.run_created_at > report.imported_at));
   if (report) {
     const g = report.grade || {};
     const age = daysSince(report.analysis_at);

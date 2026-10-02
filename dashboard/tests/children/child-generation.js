@@ -37,13 +37,22 @@ if (role === 'writer') {
   };
   let rawMixed = 0;
   let consistentMixed = 0;
+  // A read that cannot find one whole generation within its bound is refused
+  // with READ_BUSY (audit V2-001): counted, never treated as a value.
+  let busy = 0;
   const started = Date.now();
   for (let i = 0; i < n * 6 && Date.now() - started < 20000; i++) {
     const r1 = read();
     if (r1.a !== null && r1.b !== null && r1.a !== r1.b) rawMixed++;
-    const r2 = ops.readConsistent(ws, read, { attempts: 40 });
-    if (r2.a !== null && r2.b !== null && r2.a !== r2.b) consistentMixed++;
+    let r2 = null;
+    try {
+      r2 = ops.readConsistent(ws, read, { attempts: 40 });
+    } catch (err) {
+      if (err.code !== 'READ_BUSY') throw err;
+      busy++;
+    }
+    if (r2 && r2.a !== null && r2.b !== null && r2.a !== r2.b) consistentMixed++;
     sleepSync(3);
   }
-  process.stdout.write(JSON.stringify({ rawMixed, consistentMixed }));
+  process.stdout.write(JSON.stringify({ rawMixed, consistentMixed, busy }));
 }

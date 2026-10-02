@@ -20,7 +20,8 @@ const fs = require('fs');
 const path = require('path');
 const { readJson, readText, listDir, mkdirp, jsonText, exists, rmrf, sha256, writeDurable } = require('./fsx');
 const { fileTs } = require('./ids');
-const { withLock, renewLock, recoverLocked, logOp, OpError } = require('./ops');
+const { withLock, renewLock, recoverLocked, logOp, OpError, generationStatus } = require('./ops');
+const { checkRestoreInventory, within } = require('./workspace');
 const { listProjects } = require('./projects');
 const { loadReports } = require('./reports');
 const { gradeAssessment } = require('./rubrics');
@@ -175,10 +176,34 @@ const EXPORT_INVENTORY = {
   note: 'A portable data export for reading. To rebuild a workspace use the complete package or a sealed backup.',
 };
 
+// Exports read under the workspace lock (every writer applies under the same
+// lock), after finishing any interrupted save. If a save could not be
+// verified, records may be mixed (audit V2-001): derived exports refuse, and
+// byte-level copies (package, backup) say so in their own metadata.
+function consistencyNow(ws) {
+  const st = generationStatus(ws);
+  return st.state === 'stable'
+    ? { verified: true, generation: st.generation }
+    : { verified: false, state: st.state, op_id: st.op_id || st.blocked_op_id || null, reason: st.reason };
+}
+
+function requireVerified(ws, what) {
+  const c = consistencyNow(ws);
+  if (!c.verified) throw new OpError('READ_UNSAFE', `${what} was not made: ${c.reason}`, c);
+  return c;
+}
+
 function exportJson(ws) {
-  return withLock(ws, 'export', () => {
-    const data = collect(ws);
-    return {
+  return withLock(ws, 'export', () => portableLocked(ws).doc, { timeoutMs: 60000 });
+}
+
+function portableLocked(ws) {
+  recoverLocked(ws);
+  const consistency = requireVerified(ws, 'The export');
+  const data = collect(ws);
+  return {
+    data,
+    doc: {
       schema_version: 'cr.export.v2',
       kind: 'portable_data_export',
       exported_at: new Date().toISOString(),
@@ -197,8 +222,9 @@ function exportJson(ws) {
         computed: data.pf,
       },
       market_data: { latest: data.latest, status: market.readStatus(ws) },
-    };
-  }, { timeoutMs: 60000 });
+      consistency,
+    },
+  };
 }
 
 function tables(ws, data) {
@@ -217,13 +243,16 @@ function tables(ws, data) {
 function exportAll(ws, outDir = null) {
   const stamp = fileTs();
   const dir = outDir ? path.resolve(outDir) : path.join(ws.root, 'backups', 'exports', `export-${stamp}`);
+  // One locked read feeds export.json and every CSV, so they describe the
+  // same generation of the records.
+  const { doc, csv } = withLock(ws, 'export', () => {
+    const p = portableLocked(ws);
+    const t = tables(ws, p.data);
+    return { doc: p.doc, csv: Object.entries(t).map(([name, [rows, cols]]) => [name, toCsv(rows, cols)]) };
+  }, { timeoutMs: 60000 });
   mkdirp(dir);
-  const doc = exportJson(ws);
   fs.writeFileSync(path.join(dir, 'export.json'), jsonText(doc));
-  const data = { projects: doc.projects, reportRows: [], scoreRows: [], claimRows: [], eventRows: [], pf: doc.portfolio.computed };
-  const c = collect(ws);
-  Object.assign(data, { reportRows: c.reportRows, scoreRows: c.scoreRows, claimRows: c.claimRows, eventRows: c.eventRows });
-  for (const [name, [rows, cols]] of Object.entries(tables(ws, data))) fs.writeFileSync(path.join(dir, name), toCsv(rows, cols));
+  for (const [name, text] of csv) fs.writeFileSync(path.join(dir, name), text);
   for (const p of doc.projects) {
     for (const r of p.reports) {
       if (r.original_base64) {
@@ -251,11 +280,14 @@ function exportAll(ws, outDir = null) {
 }
 
 function csvTable(ws, name) {
-  const data = collect(ws);
-  const t = tables(ws, data);
   const key = `${name}.csv`;
-  if (!t[key]) throw new OpError('INVALID', `Unknown table ${name}`);
-  return toCsv(...t[key]);
+  return withLock(ws, 'export', () => {
+    recoverLocked(ws);
+    requireVerified(ws, `${key}`);
+    const t = tables(ws, collect(ws));
+    if (!t[key]) throw new OpError('INVALID', `Unknown table ${name}`);
+    return toCsv(...t[key]);
+  }, { timeoutMs: 20000 });
 }
 
 // ---------------------------------------------------------------------------
@@ -264,12 +296,18 @@ function csvTable(ws, name) {
 const PACKAGE_INCLUDE = ['workspace.json', 'config', 'templates', 'projects', 'portfolio', 'market-data', 'inbox', 'logs'];
 const BACKUP_INCLUDE = [...PACKAGE_INCLUDE, 'README.md', 'COWORK-INSTRUCTIONS.md', 'WORKSPACE-MAP.md', 'CLAUDE.md', 'package.json', 'Open Dashboard.cmd', 'Open Demo Dashboard.cmd', 'dashboard'];
 
-function walkFiles(root, rel, out, skip) {
+// Links and junctions are never followed: they could point outside the folder
+// being copied or checked. They are listed in `links` when one is given.
+function walkFiles(root, rel, out, skip, links = null) {
   const abs = path.join(root, ...rel.split('/'));
   let st;
   try {
-    st = fs.statSync(abs);
+    st = fs.lstatSync(abs);
   } catch (_) {
+    return;
+  }
+  if (st.isSymbolicLink()) {
+    if (links) links.push(rel);
     return;
   }
   if (st.isFile()) {
@@ -280,7 +318,7 @@ function walkFiles(root, rel, out, skip) {
   for (const name of fs.readdirSync(abs).sort()) {
     const r = `${rel}/${name}`;
     if (skip(r)) continue;
-    walkFiles(root, r, out, skip);
+    walkFiles(root, r, out, skip, links);
   }
 }
 
@@ -343,6 +381,9 @@ function compareSummaries(a, b) {
 function exportPackage(ws) {
   return withLock(ws, 'package', () => {
     recoverLocked(ws);
+    // A package copies bytes, so it is still made when a save could not be
+    // verified, but it says so: its records may be mixed.
+    const consistency = consistencyNow(ws);
     const files = inventoryOf(ws.root, PACKAGE_INCLUDE).map((rel) => {
       const buf = fs.readFileSync(path.join(ws.root, ...rel.split('/')));
       const text = isProbablyText(rel, buf);
@@ -359,6 +400,7 @@ function exportPackage(ws) {
         files: files.length,
         bytes: files.reduce((s, f) => s + f.bytes, 0),
       },
+      consistency,
       summary: semanticSummary(ws),
       files,
     };
@@ -372,32 +414,77 @@ function isProbablyText(rel, buf) {
   return false;
 }
 
+// Restores write into an empty folder, all or nothing (audit V2-002): every
+// path and hash is checked before the destination is created, each file is
+// read once and checked again as it is written, and any failure removes what
+// this restore wrote, so no partially restored folder is left behind.
+function emptyOrMissing(dest) {
+  if (!exists(dest)) return true;
+  let st;
+  try {
+    st = fs.lstatSync(dest);
+  } catch (_) {
+    return false;
+  }
+  return st.isDirectory() && !st.isSymbolicLink() && listDir(dest).length === 0;
+}
+
+function writeAllOrNothing(dest, items) {
+  if (!emptyOrMissing(dest)) throw new OpError('INVALID', `${dest} is not an empty folder. Restore into a new, empty folder.`);
+  const createdDest = !exists(dest);
+  try {
+    mkdirp(dest);
+    for (const it of items) {
+      const abs = path.join(dest, ...it.rel.split('/'));
+      if (!within(dest, abs)) throw new OpError('UNSAFE_PATH', `${it.rel} resolves outside ${dest}; nothing was kept.`);
+      const buf = it.read();
+      if (sha256(buf) !== it.sha256) throw new OpError('INVALID', `${it.rel} does not match its recorded hash (it changed while restoring); nothing was kept.`);
+      writeDurable(abs, buf);
+    }
+  } catch (err) {
+    try {
+      if (createdDest) rmrf(dest);
+      else for (const name of listDir(dest)) rmrf(path.join(dest, name));
+    } catch (_) { /* reported below */ }
+    if (exists(dest) && (createdDest || listDir(dest).length)) err.message += ` Cleaning up ${dest} did not complete; delete that folder before trying again.`;
+    throw err;
+  }
+}
+
+function unsafeInventoryError(what, rejected) {
+  const first = rejected[0];
+  return new OpError('UNSAFE_PATH', `${what} lists ${rejected.length} unsafe or conflicting path(s), so nothing was restored. First: "${first.path}": ${first.error}. A matching SHA-256 only ties bytes to the manifest; it does not make a path safe.`, { rejected });
+}
+
 // Rebuilds a workspace from a complete package into an empty folder.
 function restorePackage(pkg, destDir) {
   if (!pkg || pkg.schema_version !== 'cr.package.v1' || !Array.isArray(pkg.files)) throw new OpError('INVALID', 'Not a CryptoResearch complete package (cr.package.v1).');
   const dest = path.resolve(destDir);
-  if (exists(dest) && listDir(dest).length) throw new OpError('INVALID', `${dest} is not empty. Restore into a new, empty folder.`);
-  mkdirp(dest);
+  const inv = checkRestoreInventory(pkg.files, [dest]);
+  if (!inv.ok) throw unsafeInventoryError('The package', inv.rejected);
+  const items = [];
   const bad = [];
-  for (const f of pkg.files) {
-    if (typeof f.path !== 'string' || f.path.split('/').some((s) => !s || s === '.' || s === '..') || /^[a-zA-Z]:|^\//.test(f.path)) {
-      bad.push({ path: f.path, error: 'unsafe path' });
-      continue;
+  pkg.files.forEach((f, i) => {
+    if (!['utf8', 'base64'].includes(f.encoding) || typeof f.content !== 'string' || typeof f.sha256 !== 'string') {
+      bad.push({ path: f.path, error: 'malformed entry (encoding, content or hash missing)' });
+      return;
     }
     const buf = f.encoding === 'base64' ? Buffer.from(f.content, 'base64') : Buffer.from(f.content, 'utf8');
     if (sha256(buf) !== f.sha256) {
-      bad.push({ path: f.path, error: 'hash mismatch in package' });
-      continue;
+      bad.push({ path: f.path, error: 'content does not match its hash in the package' });
+      return;
     }
-    writeDurable(path.join(dest, ...f.path.split('/')), buf);
-  }
-  const verify = pkg.files.filter((f) => !bad.some((b) => b.path === f.path)).filter((f) => {
+    items.push({ rel: inv.paths[i], sha256: f.sha256, read: () => buf });
+  });
+  if (bad.length) throw new OpError('INVALID', `The package has ${bad.length} damaged entr${bad.length === 1 ? 'y' : 'ies'}, so nothing was restored. First: "${bad[0].path}": ${bad[0].error}.`, { rejected: bad });
+  writeAllOrNothing(dest, items);
+  const verify = items.filter((it) => {
     try {
-      return sha256(fs.readFileSync(path.join(dest, ...f.path.split('/')))) !== f.sha256;
+      return sha256(fs.readFileSync(path.join(dest, ...it.rel.split('/')))) !== it.sha256;
     } catch (_) {
       return true;
     }
-  }).map((f) => f.path);
+  }).map((it) => it.rel);
   let reconcile = null;
   try {
     const ws2 = require('./workspace').openWorkspace({ root: dest, actor: 'restore', recover: false });
@@ -405,7 +492,15 @@ function restorePackage(pkg, destDir) {
   } catch (err) {
     reconcile = [`could not open restored folder: ${err.message}`];
   }
-  return { status: !bad.length && !verify.length && reconcile && !reconcile.length ? 'restored_and_verified' : 'restored_with_problems', dest, files: pkg.files.length, rejected: bad, mismatched_after_write: verify, reconciliation: reconcile && reconcile.length ? reconcile : 'record totals match the package' };
+  return {
+    status: !verify.length && reconcile && !reconcile.length ? 'restored_and_verified' : 'restored_with_problems',
+    dest,
+    files: pkg.files.length,
+    rejected: [],
+    mismatched_after_write: verify,
+    reconciliation: reconcile && reconcile.length ? reconcile : 'record totals match the package',
+    consistency_when_packaged: pkg.consistency || null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +520,9 @@ function createBackup(ws, { reason = 'manual' } = {}) {
   const dest = backupDir(ws, name);
   const result = withLock(ws, 'backup', () => {
     recoverLocked(ws);
+    // A backup copies bytes, so it is still made when a save could not be
+    // verified (it may be needed to investigate), and its manifest says so.
+    const consistency = consistencyNow(ws);
     const files = inventoryOf(ws.root, BACKUP_INCLUDE);
     const items = [];
     let n = 0;
@@ -442,7 +540,10 @@ function createBackup(ws, { reason = 'manual' } = {}) {
       source_root: ws.root,
       workspace: ws.meta,
       node: process.version,
-      consistent: 'Captured while holding the workspace write lock: no record write could run during the copy.',
+      consistent: consistency.verified
+        ? 'Captured while holding the workspace write lock: no record write could run during the copy.'
+        : `Captured while holding the workspace write lock, but an earlier save was not verified: ${consistency.reason}`,
+      consistency,
       include: BACKUP_INCLUDE,
       excluded: ['.cr (temporary lock, staging and status files)', 'dashboard/index (derived)', 'dashboard/demo-workspace (fictional, rebuilt on demand)', 'backups/', 'audits/'],
       files: items.length,
@@ -453,9 +554,9 @@ function createBackup(ws, { reason = 'manual' } = {}) {
       complete: true,
     };
     writeDurable(path.join(dest, 'MANIFEST.json'), jsonText(manifest));
-    writeDurable(path.join(dest, 'BACKUP-INFO.json'), jsonText({ created_at: manifest.created_at, reason, source: ws.root, files: items.length, sealed: true, restore: `node dashboard/cli.js backup restore ${name} --to <empty folder>` }));
-    logOp(ws, { phase: 'backup', name, files: items.length, reason, seal: manifest.seal });
-    return { name, path: dest, files: items.length, bytes: manifest.bytes, seal: manifest.seal };
+    writeDurable(path.join(dest, 'BACKUP-INFO.json'), jsonText({ created_at: manifest.created_at, reason, source: ws.root, files: items.length, sealed: true, records_verified: consistency.verified, restore: `node dashboard/cli.js backup restore ${name} --to <empty folder>` }));
+    logOp(ws, { phase: 'backup', name, files: items.length, reason, seal: manifest.seal, records_verified: consistency.verified });
+    return { name, path: dest, files: items.length, bytes: manifest.bytes, seal: manifest.seal, consistency };
   }, { timeoutMs: 60000 });
   pruneBackups(ws, { protect: [name] });
   return result;
@@ -474,19 +575,51 @@ function verifyBackup(ws, name) {
   if (!m) return { name, ok: false, legacy: true, reason: 'No MANIFEST.json: an older unsealed backup. It cannot be verified file by file.' };
   if (!m.complete) return { name, ok: false, reason: 'Backup is incomplete (interrupted while copying).' };
   if (sealOf(m.items || []) !== m.seal) return { name, ok: false, reason: 'Manifest seal does not match its item list.' };
+  // The seal only proves the item list was not changed after sealing; anyone
+  // can recompute it. Paths are checked as untrusted input (audit V2-002).
+  const filesRoot = path.join(dir, 'files');
+  const inv = checkRestoreInventory(m.items, [filesRoot]);
+  if (!inv.ok) {
+    return { name, ok: false, reason: `The manifest lists ${inv.rejected.length} unsafe or conflicting path(s); this backup cannot be verified or restored.`, unsafe_paths: inv.rejected, files: m.items.length, missing: [], mismatched: [], extra: [], created_at: m.created_at, seal: m.seal };
+  }
+  const realRoot = exists(filesRoot) ? fs.realpathSync(filesRoot) : null;
   const missing = [];
   const mismatched = [];
-  for (const it of m.items) {
-    const abs = path.join(dir, 'files', ...it.path.split('/'));
-    if (!exists(abs)) missing.push(it.path);
-    else if (sha256(fs.readFileSync(abs)) !== it.sha256) mismatched.push(it.path);
-  }
-  const listed = new Set(m.items.map((i) => i.path));
+  const escaped = [];
+  m.items.forEach((it, i) => {
+    const abs = path.join(filesRoot, ...inv.paths[i].split('/'));
+    if (!exists(abs)) {
+      missing.push(it.path);
+      return;
+    }
+    // A link or junction inside the backup must not lead the read elsewhere.
+    if (!realRoot || !within(realRoot, fs.realpathSync(abs))) {
+      escaped.push(it.path);
+      return;
+    }
+    if (sha256(fs.readFileSync(abs)) !== it.sha256) mismatched.push(it.path);
+  });
+  const listed = new Set(inv.paths);
   const extra = [];
   const actual = [];
-  for (const item of fs.existsSync(path.join(dir, 'files')) ? fs.readdirSync(path.join(dir, 'files')) : []) walkFiles(path.join(dir, 'files'), item, actual, () => false);
+  const links = [];
+  for (const item of exists(filesRoot) ? fs.readdirSync(filesRoot) : []) walkFiles(filesRoot, item, actual, () => false, links);
   for (const a of actual) if (!listed.has(a)) extra.push(a);
-  return { name, ok: !missing.length && !mismatched.length, files: m.items.length, missing, mismatched, extra, created_at: m.created_at, seal: m.seal };
+  const ok = !missing.length && !mismatched.length && !escaped.length && !links.length;
+  return {
+    name,
+    ok,
+    reason: ok ? undefined : escaped.length || links.length ? `The backup contains links or junctions that lead outside its files folder (${[...escaped, ...links].slice(0, 3).join(', ')}).` : undefined,
+    files: m.items.length,
+    missing,
+    mismatched,
+    escaped,
+    links,
+    extra,
+    created_at: m.created_at,
+    seal: m.seal,
+    records_verified_when_taken: m.consistency ? m.consistency.verified : null,
+  };
 }
 
 // Keeps the newest N backups plus the newest backup of each of the last M
@@ -527,24 +660,27 @@ function listBackups(ws) {
 // Default restore: into an empty folder, then verify files and reconcile totals.
 function restoreBackupTo(ws, name, destDir) {
   const v = verifyBackup(ws, name);
+  if (v.unsafe_paths) throw unsafeInventoryError(`Backup ${name}`, v.unsafe_paths);
   if (!v.ok) throw new OpError('INVALID', `Backup ${name} did not verify: ${v.reason || `${v.missing.length} missing, ${v.mismatched.length} changed file(s)`}. Choose another backup.`);
   const { dir, manifest: m } = readManifest(ws, name);
   const dest = path.resolve(destDir);
   if (dest.toLowerCase().startsWith(path.resolve(ws.root).toLowerCase() + path.sep) || dest.toLowerCase() === path.resolve(ws.root).toLowerCase()) {
     throw new OpError('INVALID', 'Restore into a separate folder outside this workspace.');
   }
-  if (exists(dest) && listDir(dest).length) throw new OpError('INVALID', `${dest} is not empty. Restore into a new, empty folder.`);
-  for (const it of m.items) {
-    const buf = fs.readFileSync(path.join(dir, 'files', ...it.path.split('/')));
-    writeDurable(path.join(dest, ...it.path.split('/')), buf);
-  }
-  const mismatched = m.items.filter((it) => {
+  // Every path was checked against the backup's files folder by verifyBackup;
+  // check them against the destination too before anything is created.
+  const filesRoot = path.join(dir, 'files');
+  const inv = checkRestoreInventory(m.items, [filesRoot, dest]);
+  if (!inv.ok) throw unsafeInventoryError(`Backup ${name}`, inv.rejected);
+  const items = m.items.map((it, i) => ({ rel: inv.paths[i], sha256: it.sha256, read: () => fs.readFileSync(path.join(filesRoot, ...inv.paths[i].split('/'))) }));
+  writeAllOrNothing(dest, items);
+  const mismatched = items.filter((it) => {
     try {
-      return sha256(fs.readFileSync(path.join(dest, ...it.path.split('/')))) !== it.sha256;
+      return sha256(fs.readFileSync(path.join(dest, ...it.rel.split('/')))) !== it.sha256;
     } catch (_) {
       return true;
     }
-  }).map((it) => it.path);
+  }).map((it) => it.rel);
   let reconcile;
   try {
     const ws2 = require('./workspace').openWorkspace({ root: dest, actor: 'restore', recover: false });
@@ -552,7 +688,7 @@ function restoreBackupTo(ws, name, destDir) {
   } catch (err) {
     reconcile = [`could not open restored folder: ${err.message}`];
   }
-  const report = { mode: 'clean', restored_from: name, created_at: m.created_at, dest, files: m.items.length, mismatched_after_copy: mismatched, reconciliation: reconcile.length ? reconcile : 'record totals match the backup', status: !mismatched.length && !reconcile.length ? 'restored_and_verified' : 'restored_with_problems' };
+  const report = { mode: 'clean', restored_from: name, created_at: m.created_at, dest, files: m.items.length, mismatched_after_copy: mismatched, reconciliation: reconcile.length ? reconcile : 'record totals match the backup', status: !mismatched.length && !reconcile.length ? 'restored_and_verified' : 'restored_with_problems', records_verified_when_taken: m.consistency ? m.consistency.verified : null };
   writeDurable(path.join(dest, 'RESTORE-REPORT.json'), jsonText(report));
   logOp(ws, { phase: 'restore_clean', from: name, dest, status: report.status });
   return report;
@@ -562,23 +698,31 @@ function restoreBackupTo(ws, name, destDir) {
 // PLACE, so this is not point-in-time recovery. A pre-restore backup is made first.
 function restoreBackupOverlay(ws, name, { confirm = false } = {}) {
   const v = verifyBackup(ws, name);
+  if (v.unsafe_paths) throw unsafeInventoryError(`Backup ${name}`, v.unsafe_paths);
   if (!v.ok && !v.legacy) throw new OpError('INVALID', `Backup ${name} did not verify: ${v.reason || 'files missing or changed'}.`);
   if (!confirm) throw new OpError('CONFIRM', `Overlay restore copies ${name} over the current files and leaves files created later in place (not point-in-time). Re-run with --overlay --confirm. A pre-restore backup is made first. The safer default is: backup restore ${name} --to <empty folder>`);
-  const pre = createBackup(ws, { reason: 'pre-restore' });
   const { dir, manifest: m } = readManifest(ws, name);
+  const filesRoot = path.join(dir, 'files');
+  const inv = m ? checkRestoreInventory(m.items, [filesRoot, ws.root]) : null;
+  if (inv && !inv.ok) throw unsafeInventoryError(`Backup ${name}`, inv.rejected);
+  const pre = createBackup(ws, { reason: 'pre-restore' });
   return withLock(ws, 'restore', () => {
     let restored = 0;
     if (m) {
-      for (const it of m.items) {
-        if (/^dashboard\//.test(it.path) || /\.cmd$/.test(it.path)) continue; // records only; code is not overlaid
-        writeDurable(ws.abs(it.path), fs.readFileSync(path.join(dir, 'files', ...it.path.split('/'))));
+      m.items.forEach((it, i) => {
+        const rel = inv.paths[i];
+        if (/^dashboard\//.test(rel) || /\.cmd$/.test(rel)) return; // records only; code is not overlaid
+        const buf = fs.readFileSync(path.join(filesRoot, ...rel.split('/')));
+        if (sha256(buf) !== it.sha256) throw new OpError('INVALID', `${rel} in backup ${name} changed after it was verified; stopped. The pre-restore backup ${pre.name} has the state before this restore.`);
+        writeDurable(ws.abs(rel), buf);
         restored++;
-      }
+      });
     } else {
+      // Older unsealed backup: whole folders, never through links or junctions.
       for (const item of PACKAGE_INCLUDE) {
         const from = path.join(dir, item);
         if (!exists(from)) continue;
-        fs.cpSync(from, path.join(ws.root, item), { recursive: true, force: true });
+        fs.cpSync(from, path.join(ws.root, item), { recursive: true, force: true, dereference: false, filter: (src) => !fs.lstatSync(src).isSymbolicLink() });
         restored++;
       }
     }
@@ -592,9 +736,13 @@ function restoreBackupOverlay(ws, name, { confirm = false } = {}) {
 // backup's records are copied over. Application code is not touched.
 function restoreBackupPointInTime(ws, name, { confirm = false } = {}) {
   const v = verifyBackup(ws, name);
+  if (v.unsafe_paths) throw unsafeInventoryError(`Backup ${name}`, v.unsafe_paths);
   if (!v.ok) throw new OpError('INVALID', `Backup ${name} did not verify: ${v.reason || 'files missing or changed'}.`);
   const { dir, manifest: m } = readManifest(ws, name);
-  const inBackup = new Map(m.items.filter((i) => PACKAGE_INCLUDE.some((p) => i.path === p || i.path.startsWith(`${p}/`))).map((i) => [i.path, i]));
+  const inv = checkRestoreInventory(m.items, [path.join(dir, 'files'), ws.root]);
+  if (!inv.ok) throw unsafeInventoryError(`Backup ${name}`, inv.rejected);
+  const normalized = m.items.map((it, i) => ({ ...it, path: inv.paths[i] }));
+  const inBackup = new Map(normalized.filter((i) => PACKAGE_INCLUDE.some((p) => i.path === p || i.path.startsWith(`${p}/`))).map((i) => [i.path, i]));
   const current = inventoryOf(ws.root, PACKAGE_INCLUDE);
   const later = current.filter((rel) => !inBackup.has(rel));
   const changed = current.filter((rel) => inBackup.has(rel) && sha256(fs.readFileSync(ws.abs(rel))) !== inBackup.get(rel).sha256);

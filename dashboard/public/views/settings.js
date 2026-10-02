@@ -1,7 +1,7 @@
 // Settings: general preferences, research providers and budgets (keys never
 // appear in the page), rubrics, data (exports, backups) and system status.
 import {
-  h, card, table, stateText, fmtDateTime, fmtNum, fmtAgo, field, input, button, action, callout, kv, details, tabStrip, safeSection,
+  h, card, table, stateText, fmtDateTime, fmtNum, fmtAgo, field, input, select, button, action, callout, kv, details, tabStrip, safeSection,
   PROVIDERS, PROVIDER_LABELS,
 } from '../ui.js';
 
@@ -94,7 +94,7 @@ async function researchTab(ctx) {
       inp: input({ inputmode: 'decimal', value: c.input_usd_per_mtok ?? '', placeholder: 'USD / 1M input tokens', 'aria-label': `${PROVIDER_LABELS[p]} input price` }),
       outp: input({ inputmode: 'decimal', value: c.output_usd_per_mtok ?? '', placeholder: 'USD / 1M output tokens', 'aria-label': `${PROVIDER_LABELS[p]} output price` }),
       search: input({ inputmode: 'decimal', value: c.search_usd_per_call ?? '', placeholder: 'USD per web search', 'aria-label': `${PROVIDER_LABELS[p]} search price` }),
-      maxs: input({ inputmode: 'numeric', value: c.max_searches ?? '', placeholder: 'max searches', 'aria-label': `${PROVIDER_LABELS[p]} max searches` }),
+      maxs: input({ inputmode: 'numeric', value: c.max_searches ?? '', placeholder: 'max searches (0 = off)', 'aria-label': `${PROVIDER_LABELS[p]} max searches (0 turns web search off)` }),
     };
     return p;
   });
@@ -103,6 +103,17 @@ async function researchTab(ctx) {
   const daily = input({ inputmode: 'decimal', value: b.daily_usd ?? '', placeholder: 'not set' });
   const monthly = input({ inputmode: 'decimal', value: b.monthly_usd ?? '', placeholder: 'not set' });
   const horizon = input({ value: s.default_horizon || '24 months' });
+  // The Gemini API cannot cap searches per request, so web search is only used
+  // when you declare that your model bills grounding per request (audit V2-005).
+  const geminiBilling = select([
+    { value: '', label: 'Not declared (Gemini search is not used)', selected: !(cfg.gemini && cfg.gemini.search_billing) },
+    { value: 'per_request', label: 'Per request (Gemini 2.5 and older)', selected: Boolean(cfg.gemini && cfg.gemini.search_billing === 'per_request') },
+    { value: 'per_query', label: 'Per search query (Gemini 3: no cap, so not used)', selected: Boolean(cfg.gemini && cfg.gemini.search_billing === 'per_query') },
+  ], { 'aria-label': 'Gemini search billing' });
+  const boundsList = PROVIDERS.filter((p) => info.providers[p] && info.providers[p].bounds).map((p) => {
+    const b = info.providers[p].bounds;
+    return h('li', null, h('strong', null, `${PROVIDER_LABELS[p]}: `), `enforced by the request: ${b.enforced.join('; ')}. Estimated only: ${b.estimated.join('; ')}.`);
+  });
   const unattended = h('input', { type: 'checkbox', checked: Boolean(s.unattended_enabled) });
   const btn = button('Save research settings', null, { kind: 'primary small', type: 'submit' });
   const form = h('form', null,
@@ -117,10 +128,11 @@ async function researchTab(ctx) {
       { label: 'Max searches', render: (p) => inputs[p].maxs },
     ], rows),
     h('div', { class: 'form-grid', style: { marginTop: '12px' } },
-      field('Per-run limit (USD)', perRun, 'Each model call is estimated first; a call above this is not made'),
+      field('Per-run limit (USD)', perRun, 'The total for one run: every model and every attempt, counting each call\'s reservation until its actual cost is known'),
       field('Daily limit (USD)', daily),
       field('Monthly limit (USD)', monthly),
       field('Default horizon', horizon),
+      field('Gemini search billing', geminiBilling, 'The Gemini API has no per-request search limit. Gemini 3 bills each search query, so its search stays off (set Max searches to 0). Choose per request only if your model bills grounding per prompt.'),
       h('label', { class: 'check field wide' }, unattended, 'Allow scheduled (unattended) research runs within these limits'),
       h('div', { class: 'field' }, btn)));
   form.onsubmit = action(btn, async () => {
@@ -130,13 +142,18 @@ async function researchTab(ctx) {
       providers[p] = { model: v.model.value.trim() || null, input_usd_per_mtok: v.inp.value.trim() || null, output_usd_per_mtok: v.outp.value.trim() || null, search_usd_per_call: v.search.value.trim() || null };
       if (v.maxs.value.trim()) providers[p].max_searches = v.maxs.value.trim();
     }
+    providers.gemini.search_billing = geminiBilling.value || null;
     const out = await ctx.api.post('/api/settings', { research: { providers, budget: { per_run_usd: perRun.value.trim() || null, daily_usd: daily.value.trim() || null, monthly_usd: monthly.value.trim() || null }, default_horizon: horizon.value.trim(), unattended_enabled: unattended.checked } });
     await ctx.refresh();
     return out;
   }, 'Research settings saved. No key was sent or stored by this page.');
   return h('div', null,
     callout(h('span', null, 'API access is separate from consumer subscriptions (Claude Pro/Max, ChatGPT Plus, Gemini Advanced are not API keys). Keys are read only by the local server from environment variables or ', h('code', null, info.keys_file), '; they are never shown here, sent to the browser, written to settings, exported or logged. Without a key, a model\'s job waits for you to paste its answer.'), 'info'),
-    card('Models, prices and limits', form, { note: `Spend so far: $${info.spend.daily} today, $${info.spend.monthly} this month (${info.spend.calls} call(s)). No budget is implied: until you set all three limits, no paid call is made.` }),
+    card('Models, prices and limits', [
+      form,
+      boundsList.length ? h('div', { style: { marginTop: '12px' } }, h('h3', null, 'What each limit enforces'), h('ul', { class: 'list small' }, boundsList),
+        h('p', { class: 'small muted' }, 'Each call reserves the enforced parts plus the estimates before it is sent. Actual usage can be higher; it is recorded when the provider reports it.')) : null,
+    ], { note: `Counted so far: $${info.spend.daily} today, $${info.spend.monthly} this month (${info.spend.calls} call(s)${info.spend.open_reservations_usd ? `; $${info.spend.open_reservations_usd} of it is reservations for calls whose cost is not known yet` : ''}${info.spend.uncertain_attempts ? `; ${info.spend.uncertain_attempts} attempt(s) uncertain: reconcile them in the project's Research tab` : ''}). No budget is implied: until you set all three limits, no paid call is made.` }),
     card('How to add a key (on this PC only)', h('ol', { class: 'list small' },
       h('li', null, 'Create the file ', h('code', null, info.keys_file), ' (outside your workspace, so it is never backed up or exported).'),
       h('li', null, 'Put in only the keys you want to use, for example ', h('code', null, '{ "anthropic_api_key": "…", "openai_api_key": "…", "gemini_api_key": "…" }'), '. Environment variables ANTHROPIC_API_KEY, OPENAI_API_KEY and GEMINI_API_KEY also work.'),
