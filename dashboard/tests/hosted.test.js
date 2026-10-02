@@ -71,6 +71,22 @@ test('hosted: refuses to start without a passphrase, a data folder outside the c
   assert.match(unmounted.problems.join(' '), /persistent disk is not mounted/);
 });
 
+test('hosted: records start only on a mounted persistent disk, never on a folder that merely exists (Render free instances have /var/data too)', () => {
+  const free = 'overlay / overlay rw,relatime 0 0\nproc /proc proc rw 0 0\ntmpfs /dev tmpfs rw 0 0\n/dev/nvme0n1p1 /opt/render/project ext4 rw 0 0\n';
+  const withDisk = `${free}/dev/nvme1n1 /var/data ext4 rw,relatime 0 0\n`;
+  const ramDisk = `${free}tmpfs /var/data tmpfs rw 0 0\n`;
+  const code = '/opt/render/project/src';
+  const opts = (mountsText) => ({ platform: 'linux', mountsText, codeDir: code });
+  assert.deepEqual(hosted.containingMount('/var/data/cryptoresearch', withDisk), { point: '/var/data', type: 'ext4', source: '/dev/nvme1n1' });
+  assert.equal(hosted.containingMount('/var/data/cryptoresearch', free).point, '/');
+  assert.match(hosted.persistentDiskProblem('/var/data/cryptoresearch', opts(free)), /not on a persistent disk \(it is on \/, overlay\)/);
+  assert.match(hosted.persistentDiskProblem('/var/data/cryptoresearch', opts(ramDisk)), /not on a persistent disk/);
+  assert.match(hosted.persistentDiskProblem('/opt/render/project/data', opts(withDisk)), /not on a persistent disk/, 'the code\'s own disk is replaced on deploy');
+  assert.equal(hosted.persistentDiskProblem('/var/data/cryptoresearch', opts(withDisk)), null);
+  assert.match(hosted.persistentDiskProblem('/var/data/cryptoresearch', { platform: 'linux', mountsText: '', codeDir: code }), /not on a persistent disk|could not be read/);
+  assert.equal(hosted.persistentDiskProblem('C:\\data', { platform: 'win32' }), null, 'only checked where the desk runs (Linux)');
+});
+
 test('hosted: until configured, only a setup page is served; nothing else answers', async (t) => {
   const port = await freePort();
   const out = await hosted.main({ PORT: String(port) });

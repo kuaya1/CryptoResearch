@@ -50,9 +50,49 @@ const HOSTED_DEFAULTS = {
   },
 };
 
-function hostedConfig(env = process.env) {
+// The mount that holds a path, from the kernel's mount table (Linux): the
+// longest mount point that contains it. null when the table cannot be read.
+function containingMount(target, mountsText = null) {
+  let text = mountsText;
+  if (text === null) {
+    try {
+      text = fs.readFileSync('/proc/self/mounts', 'utf8');
+    } catch (_) {
+      return null;
+    }
+  }
+  const abs = path.posix.resolve(String(target).replace(/\\/g, '/'));
+  let best = null;
+  for (const line of text.split('\n')) {
+    const f = line.split(' ');
+    if (f.length < 3 || !f[1].startsWith('/')) continue;
+    const point = f[1].replace(/\\040/g, ' ').replace(/\\011/g, '\t').replace(/\\134/g, '\\');
+    const rel = path.posix.relative(point, abs);
+    const inside = rel === '' || (!rel.startsWith('..') && !path.posix.isAbsolute(rel));
+    if (inside && (!best || point.length > best.point.length)) best = { point, type: f[2], source: f[0] };
+  }
+  return best;
+}
+
+// Records need a disk that survives deploys: on Render, a persistent disk
+// mounted at its own mount point (for example /var/data). A folder that is
+// merely present (Render's free instances have /var/data too) is the
+// container's own filesystem, which every deploy and restart replaces.
+function persistentDiskProblem(dataDir, { platform = process.platform, mountsText = null, codeDir = CODE_DIR } = {}) {
+  if (platform !== 'linux') return null;
+  const m = containingMount(dataDir, mountsText);
+  if (!m) return 'The mount table (/proc/self/mounts) could not be read, so the persistent disk cannot be confirmed.';
+  const code = containingMount(codeDir, mountsText);
+  if (m.point === '/' || ['overlay', 'tmpfs', 'ramfs', 'devtmpfs', 'proc', 'sysfs'].includes(m.type) || (code && code.point === m.point)) {
+    return `${dataDir} is not on a persistent disk (it is on ${m.point}, ${m.type}). Add a disk in Render with mount path ${path.posix.dirname(dataDir)}; the desk does not start until records would survive a deploy.`;
+  }
+  return null;
+}
+
+function hostedConfig(env = process.env, { platform = process.platform, mountsText = null } = {}) {
   const problems = [];
   const dataDir = env.CR_DATA_DIR ? path.resolve(env.CR_DATA_DIR) : null;
+  let disk = null;
   if (!dataDir) problems.push('CR_DATA_DIR is not set. Add a persistent disk (for example mounted at /var/data) and set CR_DATA_DIR=/var/data/cryptoresearch.');
   else {
     if (!path.isAbsolute(env.CR_DATA_DIR)) problems.push('CR_DATA_DIR must be an absolute path on the persistent disk.');
@@ -60,14 +100,10 @@ function hostedConfig(env = process.env) {
     if (!rel || (!rel.startsWith('..') && !path.isAbsolute(rel))) problems.push('CR_DATA_DIR is inside the code folder, which is replaced on every deploy. Use the persistent disk instead.');
     const mount = path.dirname(dataDir);
     if (!fs.existsSync(mount)) problems.push(`The persistent disk is not mounted: ${mount} does not exist. Add a disk in Render (mount path ${mount}).`);
-    else if (process.platform === 'linux' && env.CR_ALLOW_SAME_DISK !== '1') {
-      // A folder on the same filesystem as the code is the container's own
-      // disk, which every deploy replaces: records would be lost.
-      try {
-        if (fs.statSync(mount).dev === fs.statSync(CODE_DIR).dev) problems.push(`${mount} is on the same disk as the code, not a persistent disk. Add a disk in Render with mount path ${mount}.`);
-      } catch (err) {
-        problems.push(`Could not check ${mount}: ${err.message}`);
-      }
+    else {
+      const p = persistentDiskProblem(dataDir, { platform, mountsText });
+      if (p) problems.push(p);
+      else if (platform === 'linux') disk = containingMount(dataDir, mountsText);
     }
   }
   const password = env.CR_ACCESS_PASSWORD || '';
@@ -76,7 +112,7 @@ function hostedConfig(env = process.env) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) problems.push('PORT is not set (Render sets it).');
   const hosts = [...new Set([env.RENDER_EXTERNAL_HOSTNAME, ...String(env.CR_ALLOWED_HOSTS || '').split(',')].map((h) => String(h || '').trim().toLowerCase()).filter((h) => /^[a-z0-9.-]{3,253}$/.test(h)))];
   if (!hosts.length) problems.push('No host name: RENDER_EXTERNAL_HOSTNAME (set by Render) or CR_ALLOWED_HOSTS is needed.');
-  return { dataDir, password, port, hosts, problems };
+  return { dataDir, password, port, hosts, problems, disk };
 }
 
 // Copies the code's templates into the data folder (prompts, rubrics, schemas),
@@ -281,6 +317,10 @@ function serveSetupPage(port, problems) {
 
 async function main(env = process.env) {
   const cfg = hostedConfig(env);
+  if (cfg.dataDir && process.platform === 'linux') {
+    const m = containingMount(cfg.dataDir);
+    console.log(`Data folder ${cfg.dataDir}: on mount ${m ? `${m.point} (${m.type})` : 'unknown (mount table unreadable)'}.`);
+  }
   if (cfg.problems.length) {
     console.error('CryptoResearch (hosted) did not start the desk, so no records are exposed:');
     for (const p of cfg.problems) console.error(`  - ${p}`);
@@ -293,4 +333,4 @@ async function main(env = process.env) {
   return start(ws, { hosted: { port: cfg.port, hosts: cfg.hosts, password: cfg.password } });
 }
 
-module.exports = { hostedConfig, prepareWorkspace, syncTemplates, makeAuth, main, HOSTED_DEFAULTS, loginPage, setupPage };
+module.exports = { hostedConfig, prepareWorkspace, syncTemplates, makeAuth, main, HOSTED_DEFAULTS, loginPage, setupPage, containingMount, persistentDiskProblem };
