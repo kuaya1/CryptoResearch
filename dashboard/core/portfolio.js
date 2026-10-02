@@ -896,20 +896,26 @@ function snapshotIfDue(ws, market) {
   const fs = require('fs');
   if (fs.existsSync(ws.abs(rel))) return { status: 'noop', message: `Snapshot for ${day} already exists.` };
   if (!loadTransactions(ws).length) return { status: 'noop', message: 'No transactions recorded; nothing to snapshot.' };
-  const pf = computePortfolio(ws, { market });
-  const snap = {
-    schema_version: 'cr.snapshot.v2',
-    date: day,
-    timezone: 'America/New_York',
-    created_at: new Date().toISOString(),
-    note: 'Historical record. Values use the prices listed here with their timestamps. Never rewritten.',
-    method: pf.method,
-    totals: pf.totals,
-    positions: pf.positions.filter((p) => !p.closed).map((p) => ({ asset_id: p.asset_id, symbol: p.symbol, quantity: p.quantity_exact, price_usd: p.price.usd, price_status: p.price.status, price_as_of: p.price.as_of || null, value_usd: p.value_usd, cost_basis_known_usd: p.cost_basis_known_exact, cost_basis_status: p.cost_basis_status })),
-  };
+  // A snapshot is permanent, so it is computed inside its own operation: under
+  // the workspace lock, after recovery, from one generation of the records
+  // (audit V2-001), never from files another save is moving.
   const out = runOp(ws, { type: 'portfolio_snapshot', summary: `Portfolio snapshot ${day}` }, (op) => {
+    if (fs.existsSync(ws.abs(rel))) return { noop: true };
+    const pf = computePortfolio(ws, { market });
+    const snap = {
+      schema_version: 'cr.snapshot.v2',
+      date: day,
+      timezone: 'America/New_York',
+      created_at: new Date().toISOString(),
+      note: 'Historical record. Values use the prices listed here with their timestamps. Never rewritten.',
+      method: pf.method,
+      totals: pf.totals,
+      positions: pf.positions.filter((p) => !p.closed).map((p) => ({ asset_id: p.asset_id, symbol: p.symbol, quantity: p.quantity_exact, price_usd: p.price.usd, price_status: p.price.status, price_as_of: p.price.as_of || null, value_usd: p.value_usd, cost_basis_known_usd: p.cost_basis_known_exact, cost_basis_status: p.cost_basis_status })),
+    };
     op.writeJson(rel, snap, { mode: 'create' });
+    return { noop: false };
   });
+  if (out.result && out.result.noop) return { status: 'noop', message: `Snapshot for ${day} already exists.` };
   return { status: 'ok', message: `Saved ${rel}`, files: out.files };
 }
 

@@ -6,6 +6,10 @@ import { h, clear, toast, store, announce } from './ui.js';
 
 const state = { token: null, session: null, index: null, projects: new Map(), dirty: false, live: false, route: null, ui: {}, renderSeq: 0, renderReason: 'nav' };
 
+const GET_TIMEOUT_MS = 20000;
+const WRITE_TIMEOUT_MS = 120000;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function parse(res) {
   const type = res.headers.get('content-type') || '';
   const body = type.includes('application/json') ? await res.json() : await res.text();
@@ -13,44 +17,103 @@ async function parse(res) {
     const err = new Error(body && body.error ? body.error : `Request failed (${res.status})`);
     err.code = body && body.code;
     err.saved = body && body.saved;
+    err.status = res.status;
+    err.retryAfterMs = body && typeof body.retry_after_ms === 'number' ? body.retry_after_ms : (Number(res.headers.get('retry-after')) * 1000 || null);
     throw err;
   }
   return body;
 }
 
-// The session token changes when the dashboard restarts. A 401 is refused
-// before anything runs, so renewing the token and retrying once is safe.
-async function call(path, init = {}) {
-  const go = () => fetch(path, { ...init, headers: { ...(init.headers || {}), 'x-cr-token': state.token } });
-  let res = await go();
-  if (res.status === 401) {
-    try {
-      const s = await (await fetch('/api/session')).json();
-      if (s && s.token && s.workspace && state.session && s.workspace.workspace_id === state.session.workspace.workspace_id) {
-        state.token = s.token;
-        res = await go();
-      }
-    } catch (_) { /* keep the 401 */ }
+// Every request is bounded (audit V2-006): a read gives up after 20 seconds,
+// a write after 120 seconds and then says its outcome is unknown. The session
+// token changes when the dashboard restarts; a 401 is refused before anything
+// runs, so renewing the token and retrying once is safe.
+async function call(path, init = {}, read = (res) => res, { timeoutMs = null, signal = null } = {}) {
+  const write = (init.method || 'GET') !== 'GET';
+  const ms = timeoutMs || (write ? WRITE_TIMEOUT_MS : GET_TIMEOUT_MS);
+  const ctrl = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ctrl.abort();
+  }, ms);
+  const relay = () => ctrl.abort();
+  if (signal) {
+    if (signal.aborted) ctrl.abort();
+    else signal.addEventListener('abort', relay, { once: true });
   }
-  return res;
+  const go = () => fetch(path, { ...init, signal: ctrl.signal, headers: { ...(init.headers || {}), 'x-cr-token': state.token } });
+  try {
+    let res = await go();
+    if (res.status === 401) {
+      try {
+        const s = await (await fetch('/api/session', { signal: ctrl.signal })).json();
+        if (s && s.token && s.workspace && state.session && s.workspace.workspace_id === state.session.workspace.workspace_id) {
+          state.token = s.token;
+          res = await go();
+        }
+      } catch (err) {
+        if (ctrl.signal.aborted) throw err;
+        /* keep the 401 */
+      }
+    }
+    return await read(res);
+  } catch (err) {
+    if (timedOut) {
+      const e = new Error(write
+        ? `No answer from the dashboard server within ${Math.round(ms / 1000)} seconds. The change may or may not have been saved: reload the page and check before trying again.`
+        : `The dashboard server did not answer within ${Math.round(ms / 1000)} seconds.`);
+      e.code = 'CLIENT_TIMEOUT';
+      e.saved = write ? 'unknown' : false;
+      throw e;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', relay);
+  }
 }
 
+// A read that meets a save in progress is answered 503 (READ_BUSY) instead of
+// with mixed records: wait as long as the server asks and try again, a few
+// times, while the status line says a save is in progress.
+async function getWithRetry(path, opts, read) {
+  for (let i = 0; ; i++) {
+    try {
+      const out = await call(path, {}, read, opts);
+      if (i) setSaving(false);
+      return out;
+    } catch (err) {
+      if (!['READ_BUSY', 'READ_INTERRUPTED'].includes(err.code) || i >= 4 || (opts.signal && opts.signal.aborted)) {
+        if (i) setSaving(false);
+        throw err;
+      }
+      setSaving(true);
+      await sleep(Math.min(Math.max(err.retryAfterMs || 1000, 250), 4000));
+    }
+  }
+}
+
+const readText = async (res) => {
+  if (!res.ok) await parse(res);
+  return res.text();
+};
+
 export const api = {
-  async get(path) {
-    return parse(await call(path));
+  get(path, opts = {}) {
+    return getWithRetry(path, opts, parse);
   },
-  async post(path, body) {
-    return parse(await call(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }));
+  post(path, body, opts = {}) {
+    return call(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }, parse, opts);
   },
-  async text(path) {
-    const res = await call(path);
-    if (!res.ok) throw new Error(`Request failed (${res.status})`);
-    return res.text();
+  text(path, opts = {}) {
+    return getWithRetry(path, opts, readText);
   },
   async download(path, filename) {
-    const res = await call(path);
-    if (!res.ok) throw new Error(`Download failed (${res.status})`);
-    const blob = await res.blob();
+    const blob = await getWithRetry(path, { timeoutMs: WRITE_TIMEOUT_MS }, async (res) => {
+      if (!res.ok) await parse(res);
+      return res.blob();
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -64,6 +127,15 @@ export const api = {
 
 async function loadIndex() {
   state.index = await api.get('/api/index');
+  // The index says which change it includes, so polling resumes after it.
+  if (state.index.live) {
+    live.seq = state.index.live.seq;
+    live.instance = state.index.live.instance;
+  }
+  if (state.index.read_status) {
+    live.read = state.index.read_status;
+    showStatus();
+  }
   return state.index;
 }
 
@@ -185,7 +257,7 @@ function counts(index) {
   const projects = (index.projects || []).filter((p) => !p.broken && p.status !== 'archived');
   const changed = projects.filter((p) => p.changes && p.changes.item_count > 0).length;
   const pending = (index.imports.requests_pending || []).length + ((index.imports.inbox || {}).in_inbox || []).length;
-  const running = projects.filter((p) => p.research && Object.values(p.research.providers || {}).some((j) => j && ['queued', 'running'].includes(j.state))).length;
+  const running = projects.filter((p) => p.research && Object.values(p.research.providers || {}).some((j) => j && ['queued', 'running', 'dispatching'].includes(j.state))).length;
   return {
     watchlist: projects.filter((p) => p.on_watchlist || p.held).length || '',
     research: running ? { n: running, title: `${running} project(s) with research in progress` } : '',
@@ -360,13 +432,6 @@ function closePanelChrome() {
   if (bd) bd.remove();
 }
 
-function setLive(on) {
-  state.live = on;
-  const el = document.getElementById('live');
-  el.className = `status-dot ${on ? 'on' : 'off'}`;
-  document.getElementById('live-text').textContent = on ? 'Live' : 'Reconnecting…';
-}
-
 function showUpdatedBar() {
   if (document.querySelector('.update-bar')) return;
   const apply = h('button', { type: 'button', onclick: () => { render({ reason: 'refresh' }); } }, 'Show updates');
@@ -374,66 +439,153 @@ function showUpdatedBar() {
   document.body.appendChild(bar);
 }
 
-// Browsers allow six connections per server and every open dashboard page holds
-// one for live updates, so a hidden or cached page gives its connection back
-// and catches up when it is shown again.
-let events = null;
-let hiddenTimer = null;
+// ---- live updates ----------------------------------------------------------
+//
+// A visible page asks the server what changed (GET /api/version) every few
+// seconds with one short, bounded request; a hidden or cached page asks
+// nothing and checks once when it is shown again. No connection is held open,
+// so any number of dashboard windows stay within the browser's per-server
+// connection limit (audit V2-006: one event stream per window starved the
+// seventh window). The status line says Live, Paused while hidden,
+// Reconnecting (with the next try), or Saving in progress.
+const POLL_MS = 2500;
+const POLL_TIMEOUT_MS = 8000;
+const BROAD_AREAS = ['portfolio', 'market-data', 'config', 'templates', 'all', 'poll', 'api', 'startup', 'logs', 'request'];
+const live = { seq: null, instance: null, timer: null, ctrl: null, failures: 0, retryIn: null, mode: null, saving: false, read: null, readCode: null, polls: 0 };
 
-function closeEvents() {
-  if (events) {
-    events.close();
-    events = null;
+function showStatus() {
+  const el = document.getElementById('live');
+  const text = document.getElementById('live-text');
+  if (!el || !text) return;
+  const read = live.read && live.read.status !== 'current' ? live.read : null;
+  let label = 'Connecting';
+  let tone = '';
+  if (live.mode === 'paused') {
+    label = 'Paused while hidden';
+    tone = 'paused';
+  } else if (live.mode === 'reconnecting') {
+    label = live.retryIn ? `Reconnecting… next try in ${Math.round(live.retryIn / 1000)} s` : 'Reconnecting…';
+    tone = 'off';
+  } else if (live.saving || (read && ['READ_BUSY', 'READ_INTERRUPTED'].includes(read.code))) {
+    label = 'Saving in progress';
+    tone = 'wait';
+  } else if (read) {
+    label = read.status === 'stale' ? 'Showing the last verified view' : 'Not verified yet';
+    tone = 'wait';
+  } else if (live.mode === 'live') {
+    label = 'Live';
+    tone = 'on';
   }
+  el.className = `status-dot ${tone}`.trim();
+  el.dataset.mode = live.mode || 'connecting';
+  el.dataset.polls = String(live.polls);
+  el.title = read && read.reason ? `${label}. ${read.reason}` : 'Connection to the local dashboard server';
+  if (text.textContent !== label) text.textContent = label;
+  state.live = live.mode === 'live';
 }
 
-async function catchUp() {
+function setSaving(on) {
+  live.saving = on;
+  showStatus();
+}
+
+function stopPolling() {
+  clearTimeout(live.timer);
+  live.timer = null;
+  const c = live.ctrl;
+  live.ctrl = null;
+  if (c) c.abort();
+}
+
+function schedulePoll(ms) {
+  clearTimeout(live.timer);
+  live.timer = null;
+  if (document.hidden) {
+    live.mode = 'paused';
+    showStatus();
+    return;
+  }
+  live.timer = setTimeout(pollVersion, ms);
+}
+
+function startPolling() {
+  stopPolling();
+  if (document.hidden) {
+    live.mode = 'paused';
+    showStatus();
+    return;
+  }
+  pollVersion();
+}
+
+// Applies what changed: refetch the index, drop only the project caches that
+// changed (everything after a broad or unknown change), then redraw in place
+// or offer the update when you are typing.
+async function applyChanges(changes) {
+  const before = state.index;
   try {
-    const next = await api.get('/api/index');
-    if (state.index && next.generated_at === state.index.generated_at) return;
-    state.index = next;
-    state.projects.clear();
-    if (state.dirty) showUpdatedBar();
-    else render({ reason: 'live' });
-  } catch (_) { /* the stream reports connection problems itself */ }
+    await loadIndex();
+  } catch (_) {
+    return false;
+  }
+  const broad = !changes || changes.some((c) => c.projects === null || (c.areas || []).some((a) => BROAD_AREAS.includes(a)));
+  if (broad) state.projects.clear();
+  else for (const c of changes) for (const id of c.projects || []) state.projects.delete(id);
+  // Announce only meaningful events, never price ticks.
+  const added = (state.index.projects || []).filter((p) => before && !before.projects.some((q) => q.project_id === p.project_id));
+  if (added.length) announce(`${added.map((p) => p.name).join(', ')} added.`);
+  if (state.dirty) showUpdatedBar();
+  else render({ reason: 'live' });
+  return true;
 }
 
-function connectEvents({ catchUpOnOpen = false } = {}) {
-  closeEvents();
-  const es = new EventSource('/api/events');
-  events = es;
-  let pendingCatchUp = catchUpOnOpen;
-  const opened = () => {
-    setLive(true);
-    if (pendingCatchUp) {
-      pendingCatchUp = false;
-      catchUp();
+async function pollVersion() {
+  live.timer = null;
+  if (document.hidden) {
+    live.mode = 'paused';
+    showStatus();
+    return;
+  }
+  if (live.ctrl) return;
+  const ctrl = new AbortController();
+  live.ctrl = ctrl;
+  live.polls++;
+  let v;
+  try {
+    v = await api.get(`/api/version${live.seq !== null ? `?since=${live.seq}` : ''}`, { signal: ctrl.signal, timeoutMs: POLL_TIMEOUT_MS });
+  } catch (_) {
+    if (live.ctrl !== ctrl) return; // stopped (hidden or leaving): no retry
+    live.ctrl = null;
+    live.failures++;
+    live.retryIn = Math.min(POLL_MS * 2 ** live.failures, 30000);
+    live.mode = 'reconnecting';
+    showStatus();
+    schedulePoll(live.retryIn);
+    return;
+  }
+  if (live.ctrl !== ctrl) return;
+  live.ctrl = null;
+  live.failures = 0;
+  live.retryIn = null;
+  live.mode = 'live';
+  live.read = v.read_status || null;
+  const code = live.read && live.read.status !== 'current' ? live.read.code : null;
+  if (code && code !== live.readCode && !['READ_BUSY', 'READ_INTERRUPTED'].includes(code)) toast(`The view may be out of date: ${live.read.reason}`, 'bad');
+  live.readCode = code;
+  showStatus();
+  const restarted = live.instance !== null && v.instance !== live.instance;
+  if (live.seq === null) {
+    live.seq = v.seq;
+    live.instance = v.instance;
+  } else if (restarted || v.seq !== live.seq) {
+    // live.seq moves on only when the change was applied (loadIndex sets it).
+    if (!(await applyChanges(restarted ? null : v.changes))) {
+      live.failures++;
+    } else if (restarted) {
+      live.instance = v.instance;
     }
-  };
-  es.addEventListener('hello', opened);
-  es.onopen = opened;
-  es.onerror = () => setLive(false);
-  es.addEventListener('changed', async (e) => {
-    let ev = {};
-    try {
-      ev = JSON.parse(e.data);
-    } catch (_) { /* ignore */ }
-    if (ev.error) toast(`Index rebuild problem: ${ev.error}`, 'bad');
-    const before = state.index;
-    try {
-      state.index = await api.get('/api/index');
-    } catch (_) {
-      return;
-    }
-    const broad = (ev.areas || []).some((a) => ['portfolio', 'market-data', 'config', 'templates', 'all', 'poll', 'api', 'startup', 'logs'].includes(a));
-    if (broad) state.projects.clear();
-    for (const id of ev.projects || []) state.projects.delete(id);
-    // Announce only meaningful events, never price ticks.
-    const added = (state.index.projects || []).filter((p) => before && !before.projects.some((q) => q.project_id === p.project_id));
-    if (added.length) announce(`${added.map((p) => p.name).join(', ')} added.`);
-    if (state.dirty) showUpdatedBar();
-    else render({ reason: 'live' });
-  });
+  }
+  schedulePoll(POLL_MS);
 }
 
 async function boot() {
@@ -495,15 +647,21 @@ async function boot() {
     state.dirty = true;
   });
   await render();
-  connectEvents();
+  // An initially hidden page (a background tab) does not poll until shown.
+  startPolling();
   document.addEventListener('visibilitychange', () => {
-    clearTimeout(hiddenTimer);
-    if (document.hidden) hiddenTimer = setTimeout(closeEvents, 15000);
-    else if (!events) connectEvents({ catchUpOnOpen: true });
+    if (document.hidden) {
+      stopPolling();
+      live.mode = 'paused';
+      showStatus();
+    } else startPolling();
   });
-  window.addEventListener('pagehide', closeEvents);
+  window.addEventListener('pagehide', stopPolling);
   window.addEventListener('pageshow', (e) => {
-    if (e.persisted && !events) connectEvents({ catchUpOnOpen: true });
+    if (e.persisted) startPolling();
+  });
+  window.addEventListener('online', () => {
+    if (live.mode === 'reconnecting') startPolling();
   });
 }
 

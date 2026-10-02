@@ -171,6 +171,8 @@ abbr[title] { text-decoration: underline dotted; text-decoration-color: var(--co
 .status-dot .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
 .status-dot.on .dot { background: var(--pos); }
 .status-dot.off .dot { background: var(--neg); }
+.status-dot.wait .dot { background: var(--warn); }
+.status-dot.paused .dot { background: var(--text-3); }
 .menu-btn { display: none; }
 @media (max-width: 860px) {
   .topbar-inner { padding: 0 var(--s4); gap: var(--s2); height: auto; min-height: var(--topbar-h); flex-wrap: wrap; }
@@ -552,6 +554,11 @@ button.gb:hover { border-color: var(--text-2); background: var(--surface-hover);
 .gb.is-none .v, .gb.is-withheld .v, .gb.is-pdf .v, .gb.is-manual .v, .gb.is-queued .v, .gb.is-running .v, .gb.is-canceled .v { font-weight: 500; color: var(--text-2); }
 .gb.is-withheld, .gb.is-pdf { border-style: dashed; }
 .gb.is-failed .v { color: var(--neg); font-weight: 600; }
+.gb.is-dispatching .v { font-weight: 500; color: var(--text-2); }
+.gb.is-uncertain .v { color: var(--warn); font-weight: 600; }
+.gb.is-uncertain .v::before { content: "? "; }
+form.reconcile { display: grid; gap: 6px; margin-top: 6px; max-width: 320px; }
+form.reconcile .check { display: flex; align-items: center; gap: 6px; }
 .gb.is-failed .v::before { content: "! "; }
 .gb.is-stale .a { color: var(--warn); font-weight: 600; }
 

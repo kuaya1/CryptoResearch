@@ -42,7 +42,9 @@ Research
   research status <id> [<run_id>]       job states per provider
   research prompt <id> <run_id>          print the run's canonical prompt (identical for every provider)
   research cancel|retry <id> <run_id> --provider chatgpt
-  research run                           run queued API jobs now (paid only when configured and budgeted)
+  research reconcile <id> <run_id> --provider P [--attempt N] (--charged-usd X | --not-charged) --reason "how you know"
+                                         record what the provider charged for an uncertain attempt
+  research run                           run queued API jobs now (paid only when configured, bounded and budgeted)
   research providers                     which providers can run by API, and what is missing
   scorecards [<id>]                      latest scorecard per provider
   changes [<id>] [--since 2026-09-01]    what changed since your last review
@@ -349,7 +351,7 @@ async function run(argv) {
       if (sub === 'status') {
         const id = need(rest[0], 'research status <project> [<run_id>]');
         if (rest[1]) return research.loadRun(ws, id, rest[1]) || { status: 'not_found' };
-        return { project_id: id, runs: research.listRuns(ws, id).map((r) => ({ run_id: r.run_id, status: r.status, created_at: r.created_at, horizon: r.horizon.text, jobs: Object.fromEntries(Object.entries(r.jobs).map(([p, j]) => [p, { state: j.state, mode: j.mode, report_id: j.report_id, error: j.error }])) })) };
+        return { project_id: id, runs: research.listRuns(ws, id).map((r) => ({ run_id: r.run_id, status: r.status, created_at: r.created_at, horizon: r.horizon.text, jobs: Object.fromEntries(Object.entries(r.jobs).map(([p, j]) => [p, { state: j.state, mode: j.mode, report_id: j.report_id, error: j.error, attempts: (j.attempts || []).map((a) => { const c = research.attemptCharge(a); return { n: a.n, phase: a.phase || a.outcome || null, counted_usd: c.usd, counted_as: c.basis }; }) }])) })) };
       }
       if (sub === 'prompt') {
         const id = need(rest[0], 'research prompt <project> <run_id>');
@@ -364,12 +366,19 @@ async function run(argv) {
         const r = sub === 'cancel' ? research.cancelJob(ws, id, runId, provider, one(flags.reason) || null) : research.retryJob(ws, id, runId, provider);
         return { ...r, ...(await afterWrite(ws, id)) };
       }
+      if (sub === 'reconcile') {
+        const id = need(rest[0], 'research reconcile <project> <run_id> --provider P (--charged-usd X | --not-charged) --reason "..."');
+        const runId = need(rest[1], 'run_id required');
+        const provider = need(one(flags.provider), '--provider required');
+        const r = research.reconcileAttempt(ws, id, runId, provider, { attempt: one(flags.attempt) || null, charged_usd: one(flags.charged_usd), not_charged: Boolean(flags.not_charged), reason: one(flags.reason) || '' });
+        return { ...r, ...(await afterWrite(ws, id)) };
+      }
       if (sub === 'run') {
         const r = await research.runDueJobs(ws, { trigger: one(flags.trigger) || 'cli' });
         return { ...r, ...(await afterWrite(ws)) };
       }
       if (sub === 'providers') return { providers: research.providerStatus(ws), budget: ws.settings.research.budget, spend: research.spendSoFar(ws), unattended_enabled: ws.settings.research.unattended_enabled };
-      throw Object.assign(new Error('research add|status|prompt|cancel|retry|run|providers'), { code: 'USAGE' });
+      throw Object.assign(new Error('research add|status|prompt|cancel|retry|reconcile|run|providers'), { code: 'USAGE' });
     }
     case 'scorecards': {
       const { buildIndex } = require('./core/indexer');
@@ -659,7 +668,7 @@ if (require.main === module) {
     })
     .catch((err) => {
       // These errors are raised before anything is committed.
-      const beforeCommit = ['USAGE', 'INVALID', 'BAD_ID', 'BAD_PATH', 'NOT_FOUND', 'REFUSED', 'CONFLICT', 'CONFIRM', 'WORKSPACE_UNREACHABLE', 'NOT_A_WORKSPACE', 'WORKSPACE_BUSY', 'ALREADY_EXISTS', 'WRITES_BLOCKED', 'IDEMPOTENCY_CONFLICT', 'AMBIGUOUS'].includes(err.code);
+      const beforeCommit = ['USAGE', 'INVALID', 'BAD_ID', 'BAD_PATH', 'NOT_FOUND', 'REFUSED', 'CONFLICT', 'CONFIRM', 'WORKSPACE_UNREACHABLE', 'NOT_A_WORKSPACE', 'WORKSPACE_BUSY', 'ALREADY_EXISTS', 'WRITES_BLOCKED', 'IDEMPOTENCY_CONFLICT', 'AMBIGUOUS', 'UNSAFE_PATH', 'GENERATION_UNWRITABLE'].includes(err.code);
       const payload = { status: 'error', code: err.code || 'ERROR', error: err.message, saved: beforeCommit ? false : 'unknown' };
       if (asJson) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
       else process.stderr.write(`Error (${payload.code}): ${err.message}\n${beforeCommit ? 'Nothing was saved by this command.' : 'The command did not finish. Run "node dashboard/cli.js status" to see what was saved.'}\n`);

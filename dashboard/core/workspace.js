@@ -114,6 +114,74 @@ function safeRel(rel) {
   return parts.join('/');
 }
 
+// Restore paths come from a package or backup manifest, which is untrusted
+// input: a valid SHA-256 seal only ties bytes to that manifest (audit V2-002).
+// On top of safeRel this rejects what Windows would silently rewrite (trailing
+// dots or spaces turn "..\x20" into ".."), characters Windows cannot store
+// (":" also selects alternate data streams), and reserved device names.
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i;
+
+function safeRestoreRel(rel) {
+  const s = safeRel(rel);
+  for (const seg of s.split('/')) {
+    if (/[. ]$/.test(seg)) throw new WorkspaceError('BAD_PATH', `Unsafe path (a name ends with a dot or space, which Windows rewrites): ${rel}`);
+    if (/[:*?"<>|\u0000-\u001f]/.test(seg)) throw new WorkspaceError('BAD_PATH', `Unsafe path (a character Windows cannot store in a file name): ${rel}`);
+    if (WINDOWS_RESERVED.test(seg)) throw new WorkspaceError('BAD_PATH', `Unsafe path (a reserved Windows device name): ${rel}`);
+  }
+  return s;
+}
+
+function within(root, abs) {
+  const r = path.resolve(root);
+  const a = path.resolve(abs);
+  const rel = path.relative(r, a);
+  return Boolean(rel) && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+// Checks a whole restore inventory before anything is written: every path is
+// safe, stays inside each root it will be resolved against, and no two
+// entries name the same target once case and Unicode form are ignored (as
+// Windows would), and no file sits where another entry needs a folder.
+// Returns { ok, paths (normalized, same order), rejected: [{ path, error }] }.
+function checkRestoreInventory(entries, roots = []) {
+  const rejected = [];
+  const paths = [];
+  const byKey = new Map();
+  for (const e of entries) {
+    const p = typeof e === 'string' ? e : e && e.path;
+    let s;
+    try {
+      s = safeRestoreRel(p);
+    } catch (err) {
+      rejected.push({ path: p, error: err.message });
+      paths.push(null);
+      continue;
+    }
+    const outside = roots.find((root) => !within(root, path.join(root, ...s.split('/'))));
+    if (outside) {
+      rejected.push({ path: p, error: `Resolves outside ${outside}` });
+      paths.push(null);
+      continue;
+    }
+    const key = s.normalize('NFC').toLowerCase();
+    if (byKey.has(key)) {
+      rejected.push({ path: p, error: `Same target as ${byKey.get(key)} (names differ only in case or Unicode form)` });
+      paths.push(null);
+      continue;
+    }
+    byKey.set(key, p);
+    paths.push(s);
+  }
+  for (const [key, original] of byKey) {
+    const parts = key.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      const prefix = parts.slice(0, i).join('/');
+      if (byKey.has(prefix)) rejected.push({ path: original, error: `Needs a folder where ${byKey.get(prefix)} is a file` });
+    }
+  }
+  return { ok: rejected.length === 0, paths, rejected };
+}
+
 function makeAbs(root) {
   return (rel) => {
     const s = safeRel(rel);
@@ -272,6 +340,9 @@ module.exports = {
   WorkspaceError,
   resolveRoot,
   safeRel,
+  safeRestoreRel,
+  checkRestoreInventory,
+  within,
   openWorkspace,
   initWorkspace,
   loadRubrics,
