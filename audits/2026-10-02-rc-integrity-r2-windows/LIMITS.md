@@ -4,7 +4,7 @@
    - Missing hard links were simulated by making `fs.linkSync` fail inside the runner process with `EPERM`, `ENOTSUP` or `EISDIR`.
    - The `EISDIR` mapping was verified indirectly: Win32 error 1 from a directory read surfaces as `EISDIR`. What `CreateHardLinkW` itself returns on FAT32 or exFAT was not observed here.
 2. **Locks were real but synthetic.** A PowerShell process held the capture file with `System.IO.File.Open(…, FileShare.None | Read | ReadWrite)`. Windows Defender, the only antivirus on this PC, was not provoked, and how it really scans was not measured.
-3. **The repository tests simulate Windows conditions; the harness shows the real ones.** The three new tests fake `EBUSY` and link errors inside the runner child, so they also run on Linux. The real NTFS behavior, including the temporary-file delete that fails under a lock, is shown only by `tools/capture-adverse.cjs` on this PC.
+3. **The repository tests simulate Windows conditions; the harness shows the real ones.** The three new tests fake `EBUSY` and link errors inside the runner child, so they also run on Linux. The real NTFS behavior, including the temporary-file delete that fails under a lock, is shown only by `tools/capture-adverse.cjs` on this PC. Which check is real and which is simulated: REVIEW, "Windows test basis".
 4. **The browser check used one embedded Chromium** (the Claude desktop pane, 152.0.7977.130).
    - Visibility was forced by overriding `document.hidden`, and the tabs were not separate OS windows.
    - Background-tab timer throttling may differ from real windows.
@@ -16,12 +16,17 @@
    - The hourly task itself was not triggered; its command (`job run --all-due --trigger scheduler`) was run directly.
    - Swapping code while a runner is active was not tested; the procedure says to stop everything first.
 8. **While rolled back, the original doctor reports `ok`.** It cannot see waiting captures or uncertain attempts. Check `research run` and doctor before rolling back.
-9. **The fixes change the expected fingerprint.** Round 2's documents name `59fef28a…`; this release candidate's head is `92af2c94fd8e424fb134084c9c31033541ceeba3ae359a8629b6d40c26af41c3` (81 files).
+9. **The fixes change the expected fingerprint.** Round 2's documents name `59fef28a…`, which describes `1cc9fee`. The candidate's code commit `665439b494a7486f6037688e7a727dcbb00fbaf0` gives `92af2c94fd8e424fb134084c9c31033541ceeba3ae359a8629b6d40c26af41c3` (81 files); the later documentation commits keep it.
 10. **Line endings.** On this PC any `git apply` outside a repository converts line endings unless `-c core.autocrlf=false` is given (REVIEW W3). Inside the live repository, `.gitattributes` prevents it.
-11. **Where the branch lives.** `rc/integrity-r2` exists only in the clone at `%TEMP%\cr-rc`, which Windows may clean. `evidence/rc-integrity-r2.bundle` holds the four RC commits and needs `a840ba7`. The patches are next to it.
+11. **Where the branch lives.** `rc/integrity-r2` is kept in the CryptoResearch repository (fetched without a checkout) and offered for review on the private GitHub repository. The working clone at `%TEMP%\cr-rc` is no longer needed. `evidence/rc-integrity-r2.bundle` and the patches remain as local copies of the four RC commits.
 12. **Limits of the privacy scan.**
     - It looked for 23 identifiers collected from the live records, plus generic patterns for keys, wallets, transaction hashes, provider IDs and personal data.
     - It cannot prove the absence of reworded private content.
     - The live records were read only to collect those identifiers, in memory.
 13. **Round 2's own limits still apply,** notably mixed versions (its item 3) and the research lease against lock waits (its item 13).
-14. **States.** Nothing here is independently reviewed, merged or deployed. The live folder still runs `a840ba7`. The live dashboard, the scheduled task, the Node pin, settings and records were not touched. The only change in the live folder is this audit folder.
+14. **States.** Nothing here is independently reviewed, merged or deployed. The live folder still runs `a840ba7`; its working tree was not checked out, and the dashboard, the scheduled task, the Node pin, settings and records were not touched. Outside its working tree, three things changed:
+    - Its Git repository holds the branch `rc/integrity-r2`.
+    - A separate review worktree is registered for it (`%USERPROFILE%\Documents\CryptoResearch-review\rc-integrity-r2`), where the documentation commits were made.
+    - The validation added this audit folder, as local untracked files.
+15. **Cost-line residual not tested.** A commit that fails after its build step could leave a second actual line in `logs/research-spend.jsonl` for one attempt. Totals still count the attempt once (REVIEW R8).
+16. **No power-loss test.** The capture's data is flushed before placement; the name's durability rests on NTFS metadata journaling, because `fsyncDir` is a no-op on Windows (REVIEW, item 1.6).

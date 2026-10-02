@@ -206,3 +206,64 @@ node tools/privacy-scan.cjs "$LIVE" "$RC" a840ba7 rc/integrity-r2 evidence/priva
 ```
 
 The positive control planted a project ID, a fake key pattern and an EVM-style address in a scratch file. All three were flagged; the file was then deleted.
+
+## Review preparation (after validation)
+
+One more shorthand: `REVIEW` = `%USERPROFILE%\Documents\CryptoResearch-review\rc-integrity-r2`.
+
+**Preserve the branch in the CryptoResearch repository, without a checkout.** The branch ref was already present when this preparation started. It came from the fetch below, recorded in the branch's reflog at 20:35 UTC:
+
+```
+git -C "$LIVE" fetch --no-tags "$RC" refs/heads/rc/integrity-r2:refs/heads/rc/integrity-r2
+```
+
+**Verify the commit.** All three must print `665439b494a7486f6037688e7a727dcbb00fbaf0`:
+
+```
+git -C "$RC" rev-parse rc/integrity-r2
+git -C "$RC" bundle list-heads evidence/rc-integrity-r2.bundle
+git -C "$LIVE" rev-parse rc/integrity-r2
+```
+
+**Create the separate worktree.** The live folder stays on `main` and is not checked out:
+
+```
+git -C "$LIVE" worktree add "$REVIEW" rc/integrity-r2
+```
+
+**Fingerprint, from the checkout and from the commit.** Both give `92af2c94…` (81 files), and every file is LF:
+
+```
+node tools/fingerprint.cjs "$REVIEW"
+node tools/git-fingerprint.cjs "$LIVE" 665439b494a7486f6037688e7a727dcbb00fbaf0
+git -C "$REVIEW" ls-files --eol dashboard package.json
+```
+
+**Allowlist.** Add the five `!/audits/2026-10-02-rc-integrity-r2-windows/<file>` lines to `.gitignore`, then check them. The five reports are re-included, while `evidence/` and `tools/` stay ignored by `/audits/*/*`:
+
+```
+git -C "$REVIEW" check-ignore -v --no-index <paths>
+```
+
+**Documentation commits:**
+
+- `63b60f17449db86a7a25aa994a263c4ca68f87b5` adds the five reports as produced by the validation, plus the allowlist lines.
+- The next commit adds the current deployment and rollback instructions, the design notes and test basis in REVIEW, and corrections W3 and W4. It also marks round 2's checklist as superseded.
+
+**Checks for those changes:**
+
+```
+git -C "$REVIEW" diff --stat 665439b494a7486f6037688e7a727dcbb00fbaf0 HEAD -- dashboard package.json    # empty
+node tools/git-fingerprint.cjs "$LIVE" HEAD                                                             # 92af2c94..., 81 files
+cd "$REVIEW" && node dashboard/cli.js test        # 160/160, evidence/suite-review-worktree-windows.txt (local)
+```
+
+- **Line endings and control characters:** a byte-level check of the five reports and `.gitignore` found no CR or other control characters.
+- **Privacy:** `node tools/privacy-scan.cjs "$LIVE" "$REVIEW" a840ba7 HEAD <out> <the five reports>`, plus reading the complete branch diff and the commit metadata.
+
+**Push and draft pull request.** The account is `kuaya1`; the repository is private. The push uses the existing GitHub CLI sign-in:
+
+```
+git -C "$REVIEW" -c credential.helper= -c "credential.helper=!gh auth git-credential" push origin rc/integrity-r2
+gh pr create --repo kuaya1/CryptoResearch --draft --base main --head rc/integrity-r2 --title "..." --body-file <body>
+```
