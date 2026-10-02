@@ -115,7 +115,9 @@ function fsyncDir(dir) {
   } catch (_) { /* not supported on every platform (Windows) */ }
 }
 
-const NO_LINK = new Set(['EPERM', 'EACCES', 'EBUSY', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV', 'EINVAL', 'EMLINK']);
+// EISDIR is how Node on Windows reports Win32 ERROR_INVALID_FUNCTION, the
+// error commonly reported for hard links on FAT32 and exFAT volumes.
+const NO_LINK = new Set(['EPERM', 'EACCES', 'EBUSY', 'EISDIR', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV', 'EINVAL', 'EMLINK']);
 
 // Writes the capture for one attempt. Returns { id, rel, sha256, bytes, already }.
 // Throws CaptureError (CAPTURE_CONFLICT, CAPTURE_UNVERIFIED) or the filesystem

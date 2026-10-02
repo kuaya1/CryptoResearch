@@ -68,7 +68,7 @@ async function stubProvider() {
 function runner(root, stub, cfg = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-runner-'));
   const cfgFile = path.join(dir, 'config.json');
-  fs.writeFileSync(cfgFile, JSON.stringify({ stub_port: stub.port, crash: cfg.crash || null, capture: cfg.capture || null }));
+  fs.writeFileSync(cfgFile, JSON.stringify({ stub_port: stub.port, crash: cfg.crash || null, capture: cfg.capture || null, fs: cfg.fs || null }));
   return new Promise((resolve) => {
     const child = cp.spawn(process.execPath, [CHILD, root, cfgFile], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ANTHROPIC_API_KEY: FAKE_KEY, OPENAI_API_KEY: '', GEMINI_API_KEY: '', GOOGLE_API_KEY: '' } });
     let out = '';
@@ -313,4 +313,22 @@ test('F1 capture files: whole or absent, concurrent writers of the same attempt 
   research.sweepCaptures(c.ws);
   assert.equal(fs.existsSync(old), false);
   assert.equal(fs.existsSync(fresh), true);
+});
+
+// --- Windows file-system conditions (RC validation on Windows, 2026-10-02) ---
+
+test('F1 Windows: a volume without hard links that refuses the link with EISDIR (how Node reports Win32 ERROR_INVALID_FUNCTION) still captures, and the answer is saved once', async (t) => {
+  const c = await paidRun(t, 'f1eisdir');
+  const block = c.ws.abs('.cr/blocked.json');
+  c.stub.set(async () => {
+    fs.writeFileSync(block, JSON.stringify({ op_id: 'op_test_block', reason: 'test block' }));
+    return { status: 200, json: claudeAnswer(c.text) };
+  });
+  const first = await runner(c.root, c.stub, { fs: { link_error: 'EISDIR' } });
+  const r1 = first.out.results[0];
+  assert.equal(r1.status, 'captured', `the exclusive-create fallback placed the capture (got ${JSON.stringify(r1)})`);
+  assert.ok(fs.existsSync(c.captureFile()));
+  fs.unlinkSync(block);
+  await runner(c.root, c.stub);
+  assertSavedOnce(c);
 });
