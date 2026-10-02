@@ -79,6 +79,12 @@ node_modules/
 !/audits/2026-10-02-claude-integrity-repair/PLAN.md
 !/audits/2026-10-02-claude-integrity-repair/fingerprints.json
 !/audits/2026-10-02-claude-integrity-repair/integrity-repair.patch
+!/audits/2026-10-02-claude-integrity-repair-r2/README.md
+!/audits/2026-10-02-claude-integrity-repair-r2/RESULTS.md
+!/audits/2026-10-02-claude-integrity-repair-r2/LIMITS.md
+!/audits/2026-10-02-claude-integrity-repair-r2/DEPLOY-CHECKLIST.md
+!/audits/2026-10-02-claude-integrity-repair-r2/DOC-CHANGES-PROPOSED.md
+!/audits/2026-10-02-claude-integrity-repair-r2/RUNTIME-AND-COMMANDS.md
 !/audits/2026-10-02-rc-integrity-r2-windows/README.md
 !/audits/2026-10-02-rc-integrity-r2-windows/REVIEW.md
 !/audits/2026-10-02-rc-integrity-r2-windows/LIMITS.md
