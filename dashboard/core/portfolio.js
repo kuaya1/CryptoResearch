@@ -303,6 +303,41 @@ function voidTransaction(ws, txId, reason) {
   return { status: out.noop ? 'unchanged' : 'voided', tx: out.result, files: out.files };
 }
 
+// A correction in one verified save: the old entry is voided (it stays, with
+// the reason and a pointer to its replacement) and the corrected entry is
+// added. Nothing is edited in place. Only Eric's own input reaches here.
+function correctTransaction(ws, txId, input, reason) {
+  const why = String(reason || '').trim();
+  if (!why) throw new OpError('INVALID', 'A correction needs a reason (kept with both records).');
+  const registry = assetRegistry(ws);
+  const accountIds = new Set(loadAccounts(ws).map((a) => a.account_id));
+  const out = runOp(ws, { type: 'correct_transaction', summary: `Correct ${txId}` }, (op) => {
+    const doc = op.readJson('portfolio/transactions.json', null);
+    const matches = doc ? doc.transactions.filter((t) => t.tx_id === txId) : [];
+    if (!matches.length) throw new OpError('NOT_FOUND', `No transaction ${txId}`);
+    if (matches.length > 1) throw new OpError('AMBIGUOUS', `${matches.length} older records share the ID ${txId}; fix the duplicate IDs first. Nothing was changed.`);
+    const old = matches[0];
+    if (old.voided) throw new OpError('CONFLICT', `${txId} is already voided${old.corrected_by ? ` (corrected by ${old.corrected_by})` : ''}. Correct the current entry instead.`);
+    const { tx_id: _ignored, external_id: _ext, ...fields } = input || {};
+    const { tx, errors } = normalizeTx({ ...fields }, { source: 'correction' });
+    if (!errors.length) errors.push(...validateTx(tx, registry, accountIds, doc.transactions.filter((t) => t !== old)));
+    if (!errors.length) errors.push(...transferIdErrors(tx, doc.transactions.filter((t) => t !== old)));
+    if (errors.length) throw new OpError('INVALID', `Correction not saved: ${errors.join('; ')}`);
+    if (payloadKey(tx) === payloadKey(old) && (tx.note || null) === (old.note || null)) throw new OpError('INVALID', 'The corrected entry is the same as the current one; nothing to change.');
+    delete tx.tx_id_supplied;
+    tx.corrects = txId;
+    old.voided = true;
+    old.void_reason = `Corrected: ${why}`;
+    old.voided_at = new Date().toISOString();
+    old.corrected_by = tx.tx_id;
+    doc.transactions.push(tx);
+    doc.schema_version = 'cr.transactions.v2';
+    op.writeJson('portfolio/transactions.json', doc);
+    return { voided: txId, added: tx.tx_id };
+  });
+  return { status: 'corrected', ...out.result, files: out.files, verified: out.verified, op_id: out.op_id };
+}
+
 function setLimits(ws, { speculative_capital_cap_usd, max_position_pct, max_sector_pct }) {
   const check = (v, label, max) => {
     if (v === undefined) return undefined;
@@ -931,6 +966,7 @@ module.exports = {
   addAsset,
   addTransactions,
   voidTransaction,
+  correctTransaction,
   setLimits,
   parseCsv,
   importCsv,

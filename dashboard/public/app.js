@@ -47,7 +47,13 @@ async function call(path, init = {}, read = (res) => res, { timeoutMs = null, si
     let res = await go();
     if (res.status === 401) {
       try {
-        const s = await (await fetch('/api/session', { signal: ctrl.signal })).json();
+        const sres = await fetch('/api/session', { signal: ctrl.signal });
+        // Online desk: signed out (the session cookie expired), so sign in again.
+        if (sres.status === 401 && state.session && state.session.hosted) {
+          location.assign('/login');
+          return await read(res);
+        }
+        const s = await sres.json();
         if (s && s.token && s.workspace && state.session && s.workspace.workspace_id === state.session.workspace.workspace_id) {
           state.token = s.token;
           res = await go();
@@ -214,6 +220,7 @@ const ctx = {
 };
 
 const SECTIONS = [
+  ['new', 'New research'],
   ['watchlist', 'Watchlist'],
   ['portfolio', 'Portfolio'],
   ['research', 'Research'],
@@ -222,6 +229,7 @@ const SECTIONS = [
 ];
 
 const LOADERS = {
+  new: () => import('./views/intake.js').then((m) => m.renderIntake),
   watchlist: () => import('./views/watchlist.js').then((m) => m.renderWatchlist),
   project: () => import('./views/project.js').then((m) => m.renderProject),
   portfolio: () => import('./views/portfolio.js').then((m) => m.renderPortfolio),
@@ -277,6 +285,10 @@ function renderNav() {
     const desc = n && typeof n === 'object' ? n.title : n ? `${n} projects` : '';
     nav.appendChild(h('a', { href: `#/${id}`, class: id === active ? 'active' : null, 'aria-current': id === active ? 'page' : null, 'aria-label': `${label}${desc ? `, ${desc}` : ''}`, onclick: () => closeMenu(), dataset: { key: `nav-${id}` } },
       h('span', null, label), num ? h('span', { class: 'count', 'aria-hidden': 'true' }, String(num)) : null));
+  }
+  // Online desk: signing out ends this browser's session on the server.
+  if (state.session && state.session.hosted) {
+    nav.appendChild(h('form', { method: 'post', action: '/logout', class: 'signout' }, h('button', { type: 'submit', class: 'quiet small', dataset: { key: 'nav-signout' } }, 'Sign out')));
   }
 }
 
@@ -590,10 +602,15 @@ async function pollVersion() {
 
 async function boot() {
   try {
-    state.session = await (await fetch('/api/session')).json();
+    const sres = await fetch('/api/session');
+    if (sres.status === 401) {
+      location.assign('/login');
+      return;
+    }
+    state.session = await sres.json();
     state.token = state.session.token;
   } catch (err) {
-    document.getElementById('main').textContent = 'Could not reach the local dashboard server. Start it with "Open Dashboard.cmd".';
+    document.getElementById('main').textContent = location.protocol === 'https:' ? 'Could not reach the research desk. Check your connection and reload.' : 'Could not reach the local dashboard server. Start it with "Open Dashboard.cmd".';
     return;
   }
   const ws = state.session.workspace;

@@ -2,8 +2,48 @@
 // subtotal shows its coverage, and every allocation names its denominator.
 import {
   h, card, table, stateText, fmtUsd, fmtNum, fmtPct, fmtDate, fmtDateTime, freshnessText, callout, empty, link, field, fieldError, input, select,
-  button, action, tabStrip, safeSection, submissionId,
+  button, action, tabStrip, safeSection, submissionId, openDialog,
 } from '../ui.js';
+
+const TX_TYPES = ['buy', 'sell', 'transfer_out', 'transfer_in', 'income', 'fee', 'deposit_cash', 'withdraw_cash'];
+
+// Correcting an entry: the form starts from the recorded values; saving voids
+// the old entry and records the corrected one together (one verified save).
+function openCorrectDialog(ctx, t, ledger) {
+  const assets = [{ value: 'usd', label: 'USD cash' }];
+  for (const a of ledger.assets || []) if (a.asset_id !== 'usd') assets.push({ value: a.asset_id, label: `${a.symbol || a.name || a.asset_id} (${a.asset_id})` });
+  const opts = (list, cur) => list.map((o) => (typeof o === 'string' ? { value: o, label: o.replace(/_/g, ' '), selected: o === cur } : { ...o, selected: o.value === cur }));
+  const type = select(opts(TX_TYPES, t.type), { name: 'fix-type' });
+  const date = h('input', { type: 'date', name: 'fix-date', value: String(t.date || '').slice(0, 10) });
+  const acct = select(opts((ledger.accounts || []).map((a) => ({ value: a.account_id, label: a.name || a.account_id })), t.account_id), { name: 'fix-account' });
+  const asset = select(opts(assets, t.asset_id), { name: 'fix-asset' });
+  const qty = input({ name: 'fix-qty', inputmode: 'decimal', value: String(t.quantity) });
+  const price = input({ name: 'fix-price', inputmode: 'decimal', placeholder: 'blank = unknown', value: t.price_usd === null || t.price_usd === undefined ? '' : String(t.price_usd) });
+  const fee = input({ name: 'fix-fee', inputmode: 'decimal', placeholder: '0', value: t.fee ? String(t.fee.amount) : '' });
+  const feeAsset = select(opts(assets, t.fee ? t.fee.asset_id : 'usd'), { name: 'fix-fee-asset' });
+  const note = input({ name: 'fix-note', value: t.note || '' });
+  const reason = input({ name: 'fix-reason', placeholder: 'e.g. wrong quantity' });
+  const save = button('Save correction', null, { kind: 'primary', type: 'submit' });
+  let dlg = null;
+  const form = h('form', { class: 'form-grid' },
+    field('Type', type), field('Date', date), field('Account', acct), field('Asset', asset), field('Quantity', qty, 'Exact decimal'), field('Price per unit (USD)', price, 'Blank means unknown'), field('Fee', fee), field('Fee asset', feeAsset), field('Note', note), field('Reason for the correction', reason, 'Kept with both entries'),
+    h('div', { class: 'field wide' }, h('p', { class: 'small muted' }, `The current entry (${t.tx_id}) is voided and stays visible; the corrected entry replaces it.`), save));
+  form.onsubmit = action(save, async () => {
+    if (!reason.value.trim()) {
+      fieldError(reason, 'Say why, so the history stays clear.');
+      return undefined;
+    }
+    const r = await ctx.api.post(`/api/portfolio/transactions/${encodeURIComponent(t.tx_id)}/correct`, {
+      reason: reason.value.trim(),
+      transaction: { type: type.value, date: date.value, account_id: acct.value, asset_id: asset.value, quantity: qty.value.trim(), price_usd: price.value.trim() === '' ? null : price.value.trim(), fee: fee.value.trim() ? { amount: fee.value.trim(), asset_id: feeAsset.value } : null, transfer_id: t.transfer_id || null, btc_price_usd: t.btc_price_usd ?? null, settle_cash: Boolean(t.settle_cash), note: note.value.trim() || null },
+    });
+    if (dlg) dlg.close();
+    await ctx.refresh();
+    return r;
+  }, () => 'Corrected. The old entry stays, marked voided.');
+  dlg = openDialog(`Correct ${t.type.replace(/_/g, ' ')} of ${t.asset_id}`, form);
+  return dlg;
+}
 
 const TABS = [
   ['positions', 'Positions'],
@@ -137,7 +177,7 @@ async function transactionsTab(ctx) {
   const idCounts = new Map();
   for (const t of txs) idCounts.set(t.tx_id, (idCounts.get(t.tx_id) || 0) + 1);
   return h('div', null,
-    callout('Mistakes are fixed by voiding and re-entering. Nothing is edited in place or deleted; voided records stay visible.', 'info'),
+    callout('Mistakes are fixed with Correct (or Void). Nothing is edited in place or deleted: the old entry stays visible, marked voided, next to the corrected one.', 'info'),
     card(`Transactions (${txs.length})`, table([
       { label: 'Date', nowrap: true, render: (t) => fmtDate(t.date || t.timestamp) },
       { label: 'Type', render: (t) => t.type.replace(/_/g, ' ') },
@@ -160,7 +200,9 @@ async function transactionsTab(ctx) {
           await ctx.refresh();
           return r;
         }, (r) => (r.status === 'voided' ? 'Voided. The record stays, marked voided.' : 'Already voided'));
-        return b;
+        const fix = button('Correct', () => openCorrectDialog(ctx, t, ledger), { kind: 'small' });
+        fix.setAttribute('aria-label', `Correct transaction ${t.tx_id}`);
+        return h('span', { class: 'btn-row' }, fix, b);
       } },
     ], txs, { empty: 'No transactions recorded.', rowClass: (t) => (t.voided ? 'faint' : null) }), { note: 'Also in portfolio/transactions.json and the transactions CSV export.' }));
 }

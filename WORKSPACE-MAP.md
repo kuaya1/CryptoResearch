@@ -28,8 +28,10 @@ CryptoResearch/
 ├── inbox/
 │   ├── claude/  chatgpt/  gemini/   Drop reports here; the folder = which assistant wrote it
 │   │   └── processed/               Originals moved here after import (date-prefixed)
-│   └── requests/                    Cowork request queue (COWORK-INSTRUCTIONS §8): <id>.json.tmp → <id>.json
-│       ├── processed/  failed/
+│   ├── requests/                    Cowork request queue (COWORK-INSTRUCTIONS §8): <id>.json.tmp → <id>.json
+│   │   ├── processed/  failed/
+│   └── intake/                      New research requests: in_<time>_<id>.json (link, screenshot, instructions,
+│                                    candidates, your confirmation, events) and the screenshot beside it
 ├── projects/
 │   └── <project-id>/               Stable ID, e.g. huma-finance, allora-network
 │       ├── project.json            Identity (website, CoinGecko ID, contracts, evidence), sector, scoring profile,
@@ -73,7 +75,8 @@ CryptoResearch/
 │   ├── jobs.jsonl              Job runs (scheduler, dashboard, CLI)
 │   ├── jobs-state.json         Last run / last success per job
 │   ├── research-spend.jsonl    Reservation, actual, release and reconciliation lines for every paid model call
-│   │                           (kept for history and for older code; the run files are authoritative)
+│   │                           (kept for history and for older code; the run files are authoritative).
+│   │                           Screenshot reads for New research are here too (run_id intake_<request>)
 │   ├── ingestion-state.json    Inbox file status (ingested, duplicate, failed + reason)
 │   ├── review-findings.json    Daily review findings
 │   ├── requests/<id>.result.json   Receipts for queued requests (done/unchanged/rejected/conflict/failed)
@@ -83,14 +86,18 @@ CryptoResearch/
 │   ├── versions/…@<time>           Previous version of every file that was replaced
 │   ├── quarantine/<time>/          Files set aside by a point-in-time restore (never deleted)
 │   └── exports/                    Exports written by `node dashboard/cli.js export`
+├── server.js                   Render's start command for the online desk (runs dashboard/hosted.js)
 ├── dashboard/                  App code (Node 24 LTS pinned; Node 20+ works; no dependencies, no build step)
-│   ├── cli.js  server.js  core/  public/  scripts/  tests/  fixtures/
+│   ├── cli.js  server.js  hosted.js  core/  public/  scripts/  tests/  fixtures/
 │   ├── index/index.json        DERIVED cache of the dashboard view
 │   └── demo-workspace/         DERIVED fictional demo (rebuild: node dashboard/cli.js demo build)
 └── .cr/                        Internals: write lock, leases/, staging, generation.json, blocked.json,
                                 quarantine/ for unverifiable writes, captures/ for paid answers waiting
-                                to be saved (removed once saved; not in backups), server.json
+                                to be saved (removed once saved; not in backups), server.json;
+                                on the online desk only, sessions.json (hashes of signed-in sessions)
 ```
+
+The online desk on Render uses the same layout in its own data folder (`CR_DATA_DIR`, on a Render disk). Its `templates/` are copied from the deployed code on every start; everything else there is its own record.
 
 ## Conventions
 

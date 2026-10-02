@@ -5,10 +5,11 @@
   "scripts": {
     "test": "node dashboard/cli.js test",
     "dashboard": "node dashboard/cli.js serve --open",
-    "doctor": "node dashboard/cli.js doctor"
+    "doctor": "node dashboard/cli.js doctor",
+    "start": "node server.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": "24.x"
   },
   "volta": {
     "node": "24.21.0"

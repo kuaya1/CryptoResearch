@@ -794,3 +794,39 @@ dialog .dlg-foot { display: flex; justify-content: flex-end; gap: var(--s2); pad
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }
+
+/* New research (views/intake.js) and the online desk's sign-in page. */
+.intake-page { max-width: 760px; }
+.intake-page h1 { margin-bottom: var(--s2); overflow-wrap: anywhere; }
+.intake-form { display: grid; gap: var(--s4); }
+.intake-form textarea { font-family: inherit; font-size: inherit; min-height: 96px; }
+.intake-preview { display: flex; align-items: flex-start; gap: var(--s3); flex-wrap: wrap; }
+.intake-preview img, img.intake-shot { max-width: min(260px, 100%); max-height: 360px; border: 1px solid var(--separator); border-radius: var(--r-md); object-fit: contain; background: var(--surface-sunken); }
+.intake-state { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 var(--s3); }
+.intake-sent { margin: calc(-1 * var(--s2)) 0 var(--s3); }
+.intake-list { list-style: none; margin: 0; padding: 0; }
+.intake-list li + li { border-top: 1px solid var(--separator); }
+.intake-list a { display: flex; justify-content: space-between; align-items: center; gap: var(--s3); padding: var(--s3) 0; min-height: var(--touch); color: var(--text); text-decoration: none; flex-wrap: wrap; }
+.intake-list a:hover .intake-name { text-decoration: underline; }
+.intake-name { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.intake-meta { display: inline-flex; gap: var(--s2); align-items: center; font-size: var(--fs-small); flex-wrap: wrap; }
+.intake-cand { border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--s3) var(--s4); margin-bottom: var(--s3); background: var(--surface); }
+.intake-cand-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s2); flex-wrap: wrap; margin-bottom: var(--s2); }
+.intake-cand-head h3 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }
+.intake-cand .kv { margin-bottom: var(--s3); }
+.intake-cand select { max-width: 260px; }
+.intake-cand .btn-row button, .intake-page .btn-row button { white-space: normal; max-width: 100%; height: auto; padding-top: 6px; padding-bottom: 6px; text-align: center; }
+.intake-nets { list-style: none; margin: 0; padding: 0; }
+.intake-nets li { margin: 2px 0; overflow-wrap: anywhere; }
+.intake-nets .net { font-weight: 600; }
+.intake-nets code { font-size: 12px; }
+.intake-events { margin: 0; padding-left: 18px; font-size: var(--fs-small); }
+.intake-events li { margin: 4px 0; }
+.warn-text { color: var(--warn); }
+.pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.mainnav .signout { display: flex; align-items: center; margin: 0 0 0 var(--s2); }
+@media (max-width: 860px) { .mainnav .signout { margin: var(--s2) var(--s3) 0; } }
+.login-wrap { min-height: 100dvh; display: flex; align-items: center; justify-content: center; padding: var(--s4); }
+.login-card { width: min(420px, 100%); display: grid; gap: var(--s3); }
+.login-card h1 { margin: 0; }
+.login-card input[type="password"] { width: 100%; border: 1px solid var(--control-border); border-radius: var(--r-md); background: var(--surface); padding: 6px 10px; min-height: var(--touch); font: inherit; color: inherit; }

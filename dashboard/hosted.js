@@ -1,0 +1,296 @@
+'use strict';
+// Hosted mode: the same dashboard as a private web app on Render, reachable
+// from Eric's phone.
+//
+// It refuses to start (fails closed) unless all of this is true:
+//   CR_DATA_DIR          an absolute folder on a persistent disk, outside the code
+//                        (Render: a disk mounted at /var/data, CR_DATA_DIR=/var/data/cryptoresearch)
+//   CR_ACCESS_PASSWORD   Eric's passphrase, at least 12 characters (set in Render's
+//                        Environment page; never in the code or the browser)
+//   PORT                 set by Render
+//   RENDER_EXTERNAL_HOSTNAME or CR_ALLOWED_HOSTS   the host names the app answers to
+// Research keys come from the environment too (ANTHROPIC_API_KEY); they are
+// never written to the disk, logs, exports or the page.
+//
+// Access: one passphrase, a signed-in session cookie (HttpOnly, Secure,
+// SameSite=Strict, 30 days, kept across restarts in .cr/sessions.json as
+// hashes only), failed sign-ins limited per address. Every API call still needs
+// the page's session token and a same-origin request, as on the PC.
+
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { readJson, jsonText, mkdirp, atomicWrite } = require('./core/fsx');
+
+const CODE_DIR = path.resolve(__dirname, '..');
+const SESSIONS_REL = '.cr/sessions.json';
+const SESSION_DAYS = 30;
+const FAIL_WINDOW_MS = 15 * 60000;
+const MAX_FAILS_PER_ADDRESS = 8;
+// Bounds guessing spread over many addresses (the forwarded address is only
+// what the client claims), at the cost of a short lockout for everyone.
+const MAX_FAILS_TOTAL = 100;
+
+// Proposed starting limits and model settings for the hosted desk, written once
+// on first boot; Eric changes them in Settings afterwards. Prices are Anthropic's
+// list prices for claude-opus-5-5 (Claude API documentation, October 2026):
+// $4 / $20 per million input / output tokens, $5 per million 5-minute cache
+// writes, $0.20 per million cache reads, and $10 per 1,000 web searches.
+const HOSTED_DEFAULTS = {
+  market_data: { enabled: true },
+  research: {
+    default_providers: ['claude'],
+    max_output_tokens: 16000,
+    max_continuations: 2,
+    effort: 'high',
+    providers: {
+      claude: { model: 'claude-opus-5-5', input_usd_per_mtok: 4, output_usd_per_mtok: 20, cache_write_usd_per_mtok: 5, cache_read_usd_per_mtok: 0.2, search_usd_per_call: 0.01, max_searches: 10 },
+    },
+    budget: { per_run_usd: 4, daily_usd: 8, monthly_usd: 30 },
+  },
+};
+
+function hostedConfig(env = process.env) {
+  const problems = [];
+  const dataDir = env.CR_DATA_DIR ? path.resolve(env.CR_DATA_DIR) : null;
+  if (!dataDir) problems.push('CR_DATA_DIR is not set. Add a persistent disk (for example mounted at /var/data) and set CR_DATA_DIR=/var/data/cryptoresearch.');
+  else {
+    if (!path.isAbsolute(env.CR_DATA_DIR)) problems.push('CR_DATA_DIR must be an absolute path on the persistent disk.');
+    const rel = path.relative(CODE_DIR, dataDir);
+    if (!rel || (!rel.startsWith('..') && !path.isAbsolute(rel))) problems.push('CR_DATA_DIR is inside the code folder, which is replaced on every deploy. Use the persistent disk instead.');
+    const mount = path.dirname(dataDir);
+    if (!fs.existsSync(mount)) problems.push(`The persistent disk is not mounted: ${mount} does not exist. Add a disk in Render (mount path ${mount}).`);
+    else if (process.platform === 'linux' && env.CR_ALLOW_SAME_DISK !== '1') {
+      // A folder on the same filesystem as the code is the container's own
+      // disk, which every deploy replaces: records would be lost.
+      try {
+        if (fs.statSync(mount).dev === fs.statSync(CODE_DIR).dev) problems.push(`${mount} is on the same disk as the code, not a persistent disk. Add a disk in Render with mount path ${mount}.`);
+      } catch (err) {
+        problems.push(`Could not check ${mount}: ${err.message}`);
+      }
+    }
+  }
+  const password = env.CR_ACCESS_PASSWORD || '';
+  if (password.length < 12) problems.push('CR_ACCESS_PASSWORD is missing or shorter than 12 characters. Set a passphrase in Render\'s Environment page.');
+  const port = Number(env.PORT);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) problems.push('PORT is not set (Render sets it).');
+  const hosts = [...new Set([env.RENDER_EXTERNAL_HOSTNAME, ...String(env.CR_ALLOWED_HOSTS || '').split(',')].map((h) => String(h || '').trim().toLowerCase()).filter((h) => /^[a-z0-9.-]{3,253}$/.test(h)))];
+  if (!hosts.length) problems.push('No host name: RENDER_EXTERNAL_HOSTNAME (set by Render) or CR_ALLOWED_HOSTS is needed.');
+  return { dataDir, password, port, hosts, problems };
+}
+
+// Copies the code's templates into the data folder (prompts, rubrics, schemas),
+// so a deploy updates them. Files that exist only on the disk are kept.
+function syncTemplates(dataDir) {
+  const from = path.join(CODE_DIR, 'templates');
+  const to = path.join(dataDir, 'templates');
+  const walk = (rel) => {
+    for (const e of fs.readdirSync(path.join(from, rel), { withFileTypes: true })) {
+      const r = path.join(rel, e.name);
+      if (e.isDirectory()) walk(r);
+      else if (e.isFile()) {
+        const src = fs.readFileSync(path.join(from, r));
+        const dest = path.join(to, r);
+        let same = false;
+        try { same = fs.readFileSync(dest).equals(src); } catch (_) { same = false; }
+        if (!same) {
+          mkdirp(path.dirname(dest));
+          atomicWrite(dest, src);
+        }
+      }
+    }
+  };
+  walk('');
+}
+
+function mergeMissing(target, defaults) {
+  const out = { ...target };
+  for (const [k, v] of Object.entries(defaults)) {
+    if (v && typeof v === 'object' && !Array.isArray(v)) out[k] = mergeMissing(target && typeof target[k] === 'object' ? target[k] : {}, v);
+    else if (out[k] === undefined || out[k] === null) out[k] = v;
+  }
+  return out;
+}
+
+function prepareWorkspace(cfg) {
+  const { initWorkspace, openWorkspace } = require('./core/workspace');
+  mkdirp(cfg.dataDir);
+  const fresh = !fs.existsSync(path.join(cfg.dataDir, 'workspace.json'));
+  if (fresh) initWorkspace(cfg.dataDir, { kind: 'real', name: 'CryptoResearch', templatesFrom: path.join(CODE_DIR, 'templates') });
+  syncTemplates(cfg.dataDir);
+  const settingsFile = path.join(cfg.dataDir, 'config', 'settings.json');
+  const cur = readJson(settingsFile, { schema_version: 1 });
+  if (!cur.hosted_defaults_applied_at) {
+    const next = { ...mergeMissing(cur, HOSTED_DEFAULTS), hosted_defaults_applied_at: new Date().toISOString(), hosted_defaults_note: 'Proposed starting limits and model for the online desk (claude-opus-5-5, per run $4, per day $8, per month $30). Change them in Settings > Research models & budget.' };
+    mkdirp(path.dirname(settingsFile));
+    atomicWrite(settingsFile, jsonText(next));
+  }
+  return openWorkspace({ root: cfg.dataDir, actor: 'hosted' });
+}
+
+// ---------------------------------------------------------------------------
+// Sign-in
+
+const hash = (s) => crypto.createHash('sha256').update(String(s)).digest();
+const hex = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
+
+function parseCookies(header) {
+  const out = {};
+  for (const part of String(header || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0) out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
+  }
+  return out;
+}
+
+function clientAddress(req) {
+  const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return fwd || (req.socket && req.socket.remoteAddress) || 'unknown';
+}
+
+function readForm(req, max = 4096) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > max) {
+        reject(Object.assign(new Error('Too large'), { status: 413 }));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(new URLSearchParams(Buffer.concat(chunks).toString('utf8'))));
+    req.on('error', reject);
+  });
+}
+
+function loginPage({ error = null, locked = false } = {}) {
+  const msg = locked
+    ? '<p class="callout bad" role="alert">Too many attempts. Wait a few minutes, then try again.</p>'
+    : error ? '<p class="callout bad" role="alert">That passphrase is not right.</p>' : '';
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · CryptoResearch</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/position.css"></head><body><main class="login-wrap"><form class="card login-card" method="post" action="/login"><h1>CryptoResearch</h1><p class="muted">Private research desk. Sign in with your passphrase.</p>${msg}<label class="field"><span class="field-label">Passphrase</span><input type="password" name="password" autocomplete="current-password" required autofocus></label><div class="btn-row"><button class="btn primary" type="submit">Sign in</button></div></form></main></body></html>`;
+}
+
+function makeAuth(ws, { password, hosts, failDelayMs = 600 }) {
+  const want = hash(password);
+  const origins = new Set(hosts.map((h) => `https://${h}`));
+  const fails = [];
+  let sessions = readJson(ws.abs(SESSIONS_REL), { schema_version: 'cr.sessions.v1', sessions: {} });
+  const save = () => {
+    const now = Date.now();
+    for (const [k, s] of Object.entries(sessions.sessions)) if (Date.parse(s.expires_at) < now) delete sessions.sessions[k];
+    mkdirp(path.dirname(ws.abs(SESSIONS_REL)));
+    atomicWrite(ws.abs(SESSIONS_REL), jsonText(sessions));
+  };
+  const recentFails = (addr) => {
+    const cut = Date.now() - FAIL_WINDOW_MS;
+    while (fails.length && fails[0].at < cut) fails.shift();
+    return { address: fails.filter((f) => f.addr === addr).length, total: fails.length };
+  };
+  const send = (res, status, body, headers = {}) => {
+    res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', ...headers });
+    res.end(body);
+  };
+  const cookie = (token, maxAge) => `cr_session=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`;
+
+  function sessionOf(req) {
+    const token = parseCookies(req.headers.cookie).cr_session;
+    if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
+    const s = sessions.sessions[hex(token)];
+    if (!s || Date.parse(s.expires_at) < Date.now()) return null;
+    return s;
+  }
+
+  return {
+    authorized(req) {
+      return Boolean(sessionOf(req));
+    },
+    redirectToLogin(res) {
+      send(res, 303, '', { Location: '/login' });
+    },
+    // Handles /login and /logout; returns true when it answered the request.
+    async handle(req, res, url) {
+      if (url.pathname === '/login' && req.method === 'GET') {
+        if (sessionOf(req)) { send(res, 303, '', { Location: '/' }); return true; }
+        send(res, 200, loginPage({ error: url.searchParams.get('e') === '1', locked: url.searchParams.get('e') === 'locked' }));
+        return true;
+      }
+      if (url.pathname === '/login' && req.method === 'POST') {
+        const o = req.headers.origin;
+        if (o && !origins.has(o)) { send(res, 403, 'Sign-in is only accepted from this site.'); return true; }
+        const addr = clientAddress(req);
+        const n = recentFails(addr);
+        if (n.address >= MAX_FAILS_PER_ADDRESS || n.total >= MAX_FAILS_TOTAL) { send(res, 303, '', { Location: '/login?e=locked' }); return true; }
+        const form = await readForm(req);
+        const ok = crypto.timingSafeEqual(hash(form.get('password') || ''), want);
+        if (!ok) {
+          fails.push({ at: Date.now(), addr });
+          await new Promise((r) => setTimeout(r, failDelayMs));
+          send(res, 303, '', { Location: '/login?e=1' });
+          return true;
+        }
+        const token = crypto.randomBytes(32).toString('hex');
+        const now = new Date();
+        sessions.sessions[hex(token)] = { created_at: now.toISOString(), expires_at: new Date(now.getTime() + SESSION_DAYS * 86400000).toISOString(), user_agent: String(req.headers['user-agent'] || '').slice(0, 160) };
+        save();
+        send(res, 303, '', { Location: '/', 'Set-Cookie': cookie(token, SESSION_DAYS * 86400) });
+        return true;
+      }
+      if (url.pathname === '/logout' && req.method === 'POST') {
+        const o = req.headers.origin;
+        if (o && !origins.has(o)) { send(res, 403, 'Refused.'); return true; }
+        const token = parseCookies(req.headers.cookie).cr_session;
+        if (token && /^[a-f0-9]{64}$/.test(token) && sessions.sessions[hex(token)]) {
+          delete sessions.sessions[hex(token)];
+          save();
+        }
+        send(res, 303, '', { Location: '/login', 'Set-Cookie': cookie('', 0) });
+        return true;
+      }
+      return false;
+    },
+  };
+}
+
+// While the desk is not configured, the service answers with a page that says
+// what is missing, and nothing else: no records exist, no input is accepted.
+// The app itself never starts without a passphrase and a persistent disk.
+function setupPage(problems) {
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const items = problems.map((p) => `<li>${esc(p)}</li>`).join('');
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Setup required · CryptoResearch</title><style>body{font:16px/1.5 system-ui,sans-serif;margin:0;padding:24px 16px;background:#f6f7f9;color:#1b1f24}main{max-width:560px;margin:0 auto;background:#fff;border:1px solid #dde1e6;border-radius:10px;padding:20px}h1{font-size:20px;margin:0 0 8px}li{margin:6px 0}@media (prefers-color-scheme:dark){body{background:#111418;color:#e6e9ee}main{background:#1a1f25;border-color:#2c333b}}</style></head><body><main><h1>CryptoResearch: setup required</h1><p>The private research desk is deployed but has not started, because it is not configured yet. Nothing is stored or exposed here.</p><ul>${items}</ul><p>After these are set in the Render dashboard, Render restarts the service and this page is replaced by the sign-in page.</p></main></body></html>`;
+}
+
+function serveSetupPage(port, problems) {
+  const http = require('http');
+  const body = setupPage(problems);
+  const server = http.createServer((req, res) => {
+    const headers = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'" };
+    if (req.url === '/healthz') {
+      res.writeHead(200, { ...headers, 'Content-Type': 'text/plain; charset=utf-8' });
+      return res.end('setup required');
+    }
+    res.writeHead(503, { ...headers, 'Content-Type': 'text/html; charset=utf-8', 'Retry-After': '300' });
+    res.end(req.method === 'HEAD' ? undefined : body);
+  });
+  server.listen(port, '0.0.0.0');
+  return server;
+}
+
+async function main(env = process.env) {
+  const cfg = hostedConfig(env);
+  if (cfg.problems.length) {
+    console.error('CryptoResearch (hosted) did not start the desk, so no records are exposed:');
+    for (const p of cfg.problems) console.error(`  - ${p}`);
+    if (!Number.isInteger(cfg.port)) process.exit(1);
+    console.error(`Serving a setup-required page on port ${cfg.port} until this is fixed.`);
+    return { setup: serveSetupPage(cfg.port, cfg.problems), problems: cfg.problems };
+  }
+  const ws = prepareWorkspace(cfg);
+  const { start } = require('./server');
+  return start(ws, { hosted: { port: cfg.port, hosts: cfg.hosts, password: cfg.password } });
+}
+
+module.exports = { hostedConfig, prepareWorkspace, syncTemplates, makeAuth, main, HOSTED_DEFAULTS, loginPage, setupPage };

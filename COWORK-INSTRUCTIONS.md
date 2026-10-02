@@ -115,6 +115,8 @@ This is the everyday request. CLI route:
 | "Update my conviction note on HUMA and set a review for next Friday." | `note conviction <id> --text-file <file>` (Eric's own words only) and `review add <id> --due <YYYY-MM-DD> --title "Review thesis"`. |
 | "I bought 2,000 HUMA on Coinbase at 3 cents." | Confirm the date and fee, then `tx add --type buy --account coinbase --asset <asset_id> --qty 2000 --price 0.03 --date <date> --json`. |
 | "What needs my attention?" | `status --json` (the `attention` list). |
+| A CoinMarketCap link or screenshot "to research" | Eric's own route is **New research** in the dashboard (PC or the online desk): the request is saved in `inbox/intake/`, identified from CoinGecko, and researched by Claude only after he confirms the candidate. Do not edit `inbox/intake/` files. From Cowork, resolve the identity yourself (section 3) and use `add` with `--research`. |
+| "I recorded the wrong quantity for that buy." | In the dashboard: Portfolio → Transactions → **Correct** (voids the old entry and records the corrected one in one save). Only with the numbers Eric gives. |
 
 Prose reports without the JSON block import with only clearly labeled scores; everything else stays unknown, and the rubric/profile stay unknown until Eric sets them with `report correct <id> <report_id> --field rubric_version --value <ref> --reason "..."`. PDFs are kept byte for byte and marked "needs text".
 
@@ -225,5 +227,5 @@ Use this when you can write files into the folder but cannot execute commands ag
 - Never write into `projects/*/reports/*`. Reports and corrections are immutable; corrections go through `report correct`.
 - Never delete files. To clear an inbox file without importing it, use `inbox set-aside` (it moves the file).
 - Never put demo or fixture data into this folder, and never record real research in a demo workspace.
-- Never upload this folder anywhere, and never expose the local dashboard to the network to reach it from a phone.
+- Never upload this folder anywhere, and never expose the local dashboard to the network to reach it from a phone. Phone access is the separate online desk (README, "The online desk"): it runs the code from GitHub with its own records on a Render disk and never receives this folder. Copying records to it is Eric's decision alone.
 - Never start paid research that Eric did not ask for, and never more than one research run per request without asking.

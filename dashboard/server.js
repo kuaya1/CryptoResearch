@@ -1,5 +1,9 @@
 'use strict';
-// Local dashboard server. Binds to 127.0.0.1 only.
+// Dashboard server. On the PC it binds to 127.0.0.1 only. Hosted mode
+// (dashboard/hosted.js, the private web app on Render) listens on Render's port
+// behind its HTTPS proxy and adds a passphrase sign-in in front of everything:
+// signed-out requests get the sign-in page (or 401 for the API); the host
+// names and https origins it answers to come from Render's environment.
 // Security:
 // - Host header must be 127.0.0.1:<port> or localhost:<port> (blocks DNS rebinding)
 // - every /api call except health/session needs the per-launch token header
@@ -40,8 +44,14 @@ const jobs = require('./core/jobs');
 const exporter = require('./core/exporter');
 const requests = require('./core/requests');
 const research = require('./core/research');
+const intake = require('./core/intake');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
+// What the sign-in page itself needs before anyone is signed in.
+const LOGIN_ASSETS = new Set(['/styles.css', '/position.css', '/favicon.svg']);
+// A page that asked for anything in this long counts as open (hosted mode
+// refreshes prices at the foreground interval only while a page is open).
+const PAGE_OPEN_MS = 10 * 60000;
 const STATIC_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -232,14 +242,19 @@ function mergeDeep(a, b) {
   return out;
 }
 
-async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false } = {}) {
-  if (!['127.0.0.1', 'localhost', '::1'].includes(host)) {
-    throw new Error('Refusing to listen on a non-loopback address. Remote access needs authentication and is out of scope.');
+async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false, hosted = null } = {}) {
+  if (hosted) {
+    // Only through hosted.js, which refuses to start without a passphrase,
+    // a persistent data folder and the host names to answer to.
+    if (!hosted.password || !Array.isArray(hosted.hosts) || !hosted.hosts.length || !Number.isInteger(hosted.port)) throw new Error('Hosted mode needs a passphrase, host names and a port (see dashboard/hosted.js).');
+    host = hosted.bind || '0.0.0.0';
+  } else if (!['127.0.0.1', 'localhost', '::1'].includes(host)) {
+    throw new Error('Refusing to listen on a non-loopback address. Remote access needs authentication: use hosted mode (dashboard/hosted.js).');
   }
   const log = (...a) => {
     if (!quiet) console.log(...a);
   };
-  const running = await existingInstance(ws);
+  const running = hosted ? null : await existingInstance(ws);
   if (running) {
     log(`Dashboard already running at ${running.url}`);
     if (open) openBrowser(running.url);
@@ -247,22 +262,23 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   }
 
   const token = crypto.randomBytes(24).toString('hex');
-  const startPort = port || ws.settings.server.port || 4729;
+  const startPort = hosted ? hosted.port : port || ws.settings.server.port || 4729;
   const server = http.createServer();
   let boundPort = null;
-  for (let p = startPort; p < startPort + 15; p++) {
+  for (let p = startPort; p < startPort + (hosted ? 1 : 15); p++) {
     try {
       await listen(server, p, host);
-      boundPort = p;
+      boundPort = server.address().port;
       break;
     } catch (err) {
-      if (err.code !== 'EADDRINUSE') throw err;
+      if (err.code !== 'EADDRINUSE' || hosted) throw err;
     }
   }
   if (!boundPort) throw new Error(`No free port between ${startPort} and ${startPort + 14}`);
-  const origin = `http://127.0.0.1:${boundPort}`;
-  const allowedHosts = new Set([`127.0.0.1:${boundPort}`, `localhost:${boundPort}`]);
-  const allowedOrigins = new Set([`http://127.0.0.1:${boundPort}`, `http://localhost:${boundPort}`]);
+  const origin = hosted ? `https://${hosted.hosts[0]}` : `http://127.0.0.1:${boundPort}`;
+  const allowedHosts = hosted ? new Set(hosted.hosts.flatMap((h) => [h, `${h}:443`])) : new Set([`127.0.0.1:${boundPort}`, `localhost:${boundPort}`]);
+  const allowedOrigins = hosted ? new Set(hosted.hosts.map((h) => `https://${h}`)) : new Set([`http://127.0.0.1:${boundPort}`, `http://localhost:${boundPort}`]);
+  const auth = hosted ? require('./hosted').makeAuth(ws, hosted) : null;
   const clients = new Set();
   const sockets = new Set();
   const state = {
@@ -278,6 +294,9 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     indexSig: null,
     instance: crypto.randomBytes(6).toString('hex'),
     stats: { started_at: new Date().toISOString(), sockets_total: 0, requests: {} },
+    // When a signed-in page last asked for anything (hosted mode).
+    lastPageSeen: 0,
+    hosted: Boolean(hosted),
   };
   server.on('connection', (sock) => {
     state.stats.sockets_total++;
@@ -407,6 +426,8 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
       if (!WATCH_TOP.has(top)) return;
       if (top === 'logs' && !/^logs\/(operations\.jsonl|jobs-state\.json|ingestion-state\.json|review-findings\.json|requests\/)/.test(rel)) return;
       if (top === 'market-data' && /^market-data\/(observations|logos)\//.test(rel)) return;
+      // Research requests (inbox/intake) are not report files to import.
+      if (rel.startsWith(`${intake.DIR}/`)) return;
       if (top === 'inbox' && !/\/processed\/|\/failed\//.test(rel)) scheduleInbox();
       scheduleRebuild(top);
     });
@@ -456,34 +477,88 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
 
   // Background work while the dashboard is open, under the same due rules,
   // leases and backoff as the scheduled task.
+  // On the PC the server runs only while Eric has it open. Hosted, it runs
+  // all day: prices refresh at the foreground interval only while a page is
+  // open, and hourly otherwise, so the CoinGecko call budget lasts the month.
+  const pageOpen = () => !hosted || Date.now() - state.lastPageSeen < PAGE_OPEN_MS;
   async function marketTick(force = false) {
     if (!ws.settings.market_data.enabled) return null;
     try {
       if (force) return await market.refresh(ws, { trigger: 'dashboard', force: true });
-      if (!jobs.marketDue(ws, Date.now(), { foreground: true })) return null;
-      return await jobs.runJob(ws, 'market', { trigger: 'dashboard' });
+      const foreground = pageOpen();
+      if (!jobs.marketDue(ws, Date.now(), { foreground })) return null;
+      return await jobs.runJob(ws, 'market', { trigger: foreground ? 'dashboard' : 'hosted' });
     } catch (err) {
       console.error('Market refresh failed:', err.message);
       return null;
     }
   }
   let researchRunning = false;
+  let researchAgain = false;
   async function researchTick() {
-    if (researchRunning) return;
+    if (researchRunning) {
+      researchAgain = true;
+      return;
+    }
     researchRunning = true;
     try {
-      await jobs.runJob(ws, 'research', { trigger: 'dashboard', onlyDue: true });
+      do {
+        researchAgain = false;
+        await jobs.runJob(ws, 'research', { trigger: 'dashboard', onlyDue: true });
+        // Research requests follow their run: done, failed, or queued again.
+        try {
+          if (intake.settle(ws).length) rebuild(['intake']);
+        } catch (err) {
+          console.error('Research request update failed:', err.message);
+        }
+      } while (researchAgain);
     } catch (err) {
       console.error('Research jobs failed:', err.message);
     } finally {
       researchRunning = false;
     }
   }
+  // Identifying research requests, one at a time, in the background. Requests
+  // still being identified when the server stopped are picked up again; an
+  // interrupted paid screenshot read is held, never repeated (intake.js).
+  const identifyQueue = new Set();
+  let identifying = null;
+  async function identifyTick() {
+    if (identifying) return;
+    try {
+      for (;;) {
+        const next = [...identifyQueue][0];
+        if (!next) break;
+        identifyQueue.delete(next);
+        identifying = next;
+        try {
+          await intake.identify(ws, next);
+        } catch (err) {
+          console.error(`Identifying ${next} failed:`, err.message);
+        }
+        identifying = null;
+      }
+    } finally {
+      identifying = null;
+    }
+  }
+  function queueIdentify(id) {
+    if (id !== identifying) identifyQueue.add(id);
+    setTimeout(() => identifyTick(), 20);
+  }
+  function sweepIntake() {
+    try {
+      for (const id of intake.pendingIdentify(ws)) queueIdentify(id);
+    } catch (err) {
+      console.error('Research request check failed:', err.message);
+    }
+  }
   const marketTimer = setInterval(() => marketTick(false), 60000);
   const researchTimer = setInterval(() => researchTick(), 2 * 60000);
+  const intakeTimer = setInterval(() => sweepIntake(), 60000);
   const dailyTimer = setInterval(() => jobs.runJobs(ws, ['snapshot', 'reviews', 'backup'], { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 30 * 60000);
 
-  const api = makeApi({ ws, state, token, rebuild, marketTick, researchTick, clients, sockets });
+  const api = makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIdentify, clients, sockets });
 
   server.on('request', async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -492,12 +567,28 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     res.setHeader('Content-Security-Policy', CSP);
+    if (hosted) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
     try {
+      // Render's health check: says only that the process answers.
+      if (hosted && req.url === '/healthz' && (req.method === 'GET' || req.method === 'HEAD')) {
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(req.method === 'HEAD' ? undefined : 'ok');
+      }
       const hostHeader = String(req.headers.host || '').toLowerCase();
       if (!allowedHosts.has(hostHeader)) throw new HttpError(403, 'Host not allowed');
       const url = new URL(req.url, origin);
       const bucket = url.pathname.startsWith('/api/') ? (['/api/version', '/api/index', '/api/events', '/api/session', '/api/health'].includes(url.pathname) ? url.pathname : '/api/(other)') : '(static)';
       state.stats.requests[bucket] = (state.stats.requests[bucket] || 0) + 1;
+      if (auth) {
+        // Sign-in comes before everything else in hosted mode.
+        if (await auth.handle(req, res, url)) return;
+        if (!auth.authorized(req)) {
+          if (LOGIN_ASSETS.has(url.pathname)) return serveStatic(req, res, url);
+          if (url.pathname.startsWith('/api/')) throw new HttpError(401, 'Signed out. Reload the page to sign in again.');
+          return auth.redirectToLogin(res);
+        }
+        state.lastPageSeen = Date.now();
+      }
       if (url.pathname.startsWith('/api/')) {
         const site = req.headers['sec-fetch-site'];
         if (site && !['same-origin', 'none'].includes(site)) throw new HttpError(403, 'Cross-site request refused');
@@ -552,11 +643,12 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   }
 
   rebuild(['startup']);
-  const serverInfo = { pid: process.pid, port: boundPort, url: `${origin}/`, started_at: new Date().toISOString(), workspace_id: ws.meta.workspace_id, host, host_name: os.hostname(), node: process.version };
+  const serverInfo = { pid: process.pid, port: boundPort, url: `${origin}/`, started_at: new Date().toISOString(), workspace_id: ws.meta.workspace_id, host, host_name: os.hostname(), node: process.version, hosted: Boolean(hosted) };
   replaceFile(ws, ws.abs('.cr/server.json'), jsonText(serverInfo));
   scheduleInbox(200);
   const startupTimers = [
     setTimeout(() => marketTick(false), 1500),
+    setTimeout(() => sweepIntake(), 2500),
     setTimeout(() => researchTick(), 5000),
     setTimeout(() => jobs.runJobs(ws, ['snapshot', 'reviews', 'backup'], { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 8000),
   ];
@@ -569,6 +661,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     clearInterval(pollTimer);
     clearInterval(marketTimer);
     clearInterval(researchTimer);
+    clearInterval(intakeTimer);
     clearInterval(dailyTimer);
     if (watcher) watcher.close();
     try {
@@ -578,24 +671,38 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     for (const c of clients) c.end();
     server.close();
   };
-  process.once('SIGINT', () => {
+  // A deploy or restart stops the process. Work in progress is given a short
+  // grace period: a research answer that arrives in time is captured and saved;
+  // one that does not is held as uncertain on the next start, never resent.
+  const stop = (code) => {
     shutdown();
-    process.exit(0);
-  });
-  process.once('SIGTERM', () => {
-    shutdown();
-    process.exit(0);
-  });
+    if (!hosted || (!researchRunning && !identifying)) process.exit(code);
+    const until = Date.now() + 25000;
+    const wait = setInterval(() => {
+      if ((!researchRunning && !identifying) || Date.now() > until) {
+        clearInterval(wait);
+        process.exit(code);
+      }
+    }, 250);
+  };
+  process.once('SIGINT', () => stop(0));
+  process.once('SIGTERM', () => stop(0));
 
   log('');
-  log(`CryptoResearch dashboard: ${origin}/`);
-  log(`Workspace: ${ws.root}${ws.kind !== 'real' ? `  [${ws.kind.toUpperCase()} WORKSPACE - FICTIONAL DATA]` : ''}`);
-  log(`Node ${process.version}. Listening on 127.0.0.1 only. Close this window (or press Ctrl+C) to stop the dashboard.`);
-  if (open) openBrowser(`${origin}/`);
-  return { url: `${origin}/`, port: boundPort, token, server, shutdown, state };
+  if (hosted) {
+    log(`CryptoResearch (hosted): ${origin}/`);
+    log(`Data folder: ${ws.root}${ws.kind !== 'real' ? `  [${ws.kind.toUpperCase()} WORKSPACE - FICTIONAL DATA]` : ''}`);
+    log(`Node ${process.version}. Listening on port ${boundPort} behind HTTPS; sign-in required for everything except /healthz.`);
+  } else {
+    log(`CryptoResearch dashboard: ${origin}/`);
+    log(`Workspace: ${ws.root}${ws.kind !== 'real' ? `  [${ws.kind.toUpperCase()} WORKSPACE - FICTIONAL DATA]` : ''}`);
+    log(`Node ${process.version}. Listening on 127.0.0.1 only. Close this window (or press Ctrl+C) to stop the dashboard.`);
+  }
+  if (open && !hosted) openBrowser(`${origin}/`);
+  return { url: `${origin}/`, port: boundPort, token, server, shutdown, state, queueIdentify, researchTick };
 }
 
-function makeApi({ ws, state, token, rebuild, marketTick, researchTick, clients, sockets }) {
+function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIdentify, clients, sockets }) {
   const send = (res, status, body, type = 'application/json; charset=utf-8', extra = {}) => {
     res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', ...extra });
     res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
@@ -742,6 +849,55 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, clients,
   route('GET', '/api/doctor', async () => require('./core/doctor').doctor(ws));
   route('GET', '/api/research/providers', () => coherent(() => ({ providers: research.providerStatus(ws), budget: ws.settings.research.budget, spend: research.spendSoFar(ws), unattended_enabled: Boolean(ws.settings.research.unattended_enabled), keys_file: require('./core/providers').secretsFile() })));
 
+  // Research requests: a link, name or screenshot plus optional instructions.
+  // Saved first, identified in the background, researched once Eric confirms
+  // the candidate. Progress comes from the request and its research run.
+  const inId = (id) => {
+    if (!intake.isIntakeId(id)) throw new HttpError(400, 'Invalid request ID');
+    return id;
+  };
+  const deskStatus = () => {
+    const st = research.providerStatus(ws).claude;
+    const plan = research.callBounds(ws, 'claude');
+    return {
+      claude: { mode: st.mode, reason: st.reason || null, model: st.model || (ws.settings.research.providers.claude || {}).model || null, missing: st.missing || [] },
+      budget: ws.settings.research.budget,
+      spend: research.spendSoFar(ws),
+      bounds: plan.ok ? { max_output_tokens: plan.max_output_tokens, max_searches: plan.search.limit, requests_max: plan.requests_max, effort: plan.effort } : null,
+      screenshot_reservation_usd: intake.readReservation(ws),
+      default_horizon: ws.settings.research.default_horizon,
+    };
+  };
+  route('GET', '/api/intake', () => coherent(() => ({ intakes: intake.listIntakes(ws, { limit: 30 }).map((d) => intake.progressOf(ws, d)), desk: deskStatus() })));
+  route('GET', '/api/intake/(in_[^/]+)', (m) => coherent(() => ({ intake: intake.progressOf(ws, intake.readIntake(ws, inId(m[1]))), desk: deskStatus() })));
+  route('GET', '/api/intake/(in_[^/]+)/screenshot', (m) => {
+    const doc = intake.readIntake(ws, inId(m[1]));
+    if (!doc.input.screenshot) throw new HttpError(404, 'No screenshot');
+    return { _raw: fs.readFileSync(ws.abs(doc.input.screenshot.file)), _type: doc.input.screenshot.media_type, _extra: { 'Cache-Control': 'private, max-age=3600' } };
+  });
+  route('POST', '/api/intake', (m, req, res, body) => {
+    const shot = body.screenshot && typeof body.screenshot === 'object' ? { media_type: String(body.screenshot.media_type || ''), data_base64: String(body.screenshot.data_base64 || '') } : null;
+    const out = once(body, () => intake.createIntake(ws, { link: typeof body.link === 'string' ? body.link : null, screenshot: shot, instructions: typeof body.instructions === 'string' ? body.instructions : null }));
+    if (out.intake && out.intake.status === 'identifying') queueIdentify(out.intake.intake_id);
+    return { status: out.status, message: out.message || null, intake: intake.progressOf(ws, out.intake) };
+  });
+  route('POST', '/api/intake/(in_[^/]+)/confirm', (m, req, res, body) => {
+    const out = intake.confirmIntake(ws, inId(m[1]), { coingecko_id: String(body.coingecko_id || ''), sector: typeof body.sector === 'string' && body.sector ? body.sector : null, different_project: body.different_project === true });
+    setTimeout(() => researchTick(), 300);
+    return after({ status: out.status, project_id: out.project_id, run_id: out.run_id, intake: intake.progressOf(ws, out.intake) });
+  });
+  route('POST', '/api/intake/(in_[^/]+)/retry-identity', (m) => {
+    const doc = intake.retryIdentify(ws, inId(m[1]));
+    queueIdentify(doc.intake_id);
+    return { status: 'saved', intake: intake.progressOf(ws, doc) };
+  });
+  route('POST', '/api/intake/(in_[^/]+)/retry-research', (m) => {
+    const out = intake.retryResearch(ws, inId(m[1]));
+    setTimeout(() => researchTick(), 300);
+    return after({ status: out.status, message: out.message, intake: intake.progressOf(ws, out.intake) });
+  });
+  route('POST', '/api/intake/(in_[^/]+)/dismiss', (m) => ({ status: 'saved', intake: intake.progressOf(ws, intake.dismissIntake(ws, inId(m[1]))) }));
+
   route('POST', '/api/projects', (m, req, res, body) => once(body, () => {
     const r = projects.addProject(ws, { ...body, utterance: body.utterance || null });
     let run = null;
@@ -806,6 +962,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, clients,
   route('POST', '/api/requests/process', () => after(requests.processRequests(ws)));
   route('POST', '/api/portfolio/transactions', (m, req, res, body) => once(body, () => after(portfolio.addTransactions(ws, Array.isArray(body.transactions) ? body.transactions : [body], { source: 'dashboard' }))));
   route('POST', '/api/portfolio/transactions/([^/]+)/void', (m, req, res, body) => after(portfolio.voidTransaction(ws, rid(m[1]), body.reason)));
+  route('POST', '/api/portfolio/transactions/([^/]+)/correct', (m, req, res, body) => after(portfolio.correctTransaction(ws, rid(m[1]), body.transaction && typeof body.transaction === 'object' ? body.transaction : {}, body.reason)));
   route('POST', '/api/portfolio/csv', (m, req, res, body) => after(portfolio.importCsv(ws, String(body.csv || ''), { filename: body.filename || 'dashboard.csv', defaultAccount: body.account_id || null, allowIdentical: Boolean(body.allow_identical) })));
   route('POST', '/api/portfolio/accounts', (m, req, res, body) => after(portfolio.addAccount(ws, body)));
   route('POST', '/api/portfolio/limits', (m, req, res, body) => after(portfolio.setLimits(ws, body)));
@@ -850,7 +1007,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, clients,
     }
     if (url.pathname === '/api/session') {
       if (req.method !== 'GET') throw new HttpError(405, 'Method not allowed');
-      return send(res, 200, { token, workspace: { name: ws.meta.name, kind: ws.kind, root: ws.root, workspace_id: ws.meta.workspace_id } });
+      return send(res, 200, { token, hosted: state.hosted, workspace: { name: ws.meta.name, kind: ws.kind, root: state.hosted ? null : ws.root, workspace_id: ws.meta.workspace_id } });
     }
     // Logos are public CoinGecko images. An <img> cannot send the session token;
     // Cross-Origin-Resource-Policy: same-origin keeps other sites from loading them.

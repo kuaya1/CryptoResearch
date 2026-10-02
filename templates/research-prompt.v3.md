@@ -17,7 +17,7 @@ This is an independent evaluation. Do not look for, use or mention other AI mode
 - {{EXCEPTION_LINE}}
 - What matters: legitimacy, a useful product, organic demand, token value capture, valuation, downside risk, timing inside the horizon, and asymmetric return versus simply holding BTC over the same interval.
 - Bitcoin's direction and whether altcoins participate are central context. Do not assume a Bitcoin advance, an altcoin season, a catalyst's success or appreciation. An interesting product need not create token-holder value, and a good project need not have favorable timing.
-
+{{OWNER_FOCUS}}
 ## Asset identity (do not substitute another token)
 
 - Project: {{PROJECT_NAME}}

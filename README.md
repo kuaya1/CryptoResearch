@@ -13,8 +13,41 @@ Double-click **`Open Dashboard.cmd`**. It starts the dashboard at <http://127.0.
 - **`Open Demo Dashboard.cmd`** opens a separate workspace of **fictional** data (a black "Fictional demo data" banner on every page, and a "Demo" tag next to the name) so you can see every screen populated. It never touches your real records.
 - **Node.js:** this folder pins **Node 24 LTS (24.21.0)** for itself through Volta (`package.json`). Other folders on the PC keep your default Node (20.20.2). Node 20 still works but no longer gets security fixes. Check with `node dashboard/cli.js doctor`.
 
+## New research (phone or PC)
+
+**New research** (first in the menu, and a button on the watchlist) is the one place to start research:
+
+1. Paste a CoinMarketCap link (`coinmarketcap.com/currencies/…`), a CoinGecko link, or type the name, and/or add a **screenshot** (CoinMarketCap, an exchange or a wallet). Add **instructions** if you want, for example "Who actually uses it? Is the March unlock a risk inside four months?"
+2. **Find this project** saves the request first, so leaving the page loses nothing. The project is identified in the background from CoinGecko's listing: only the name or contract in your link is used (the CoinMarketCap page itself is never opened). A screenshot is read by Claude for what is visible only: one small paid call, reserved at most $0.09 at the default prices.
+3. You see each candidate with its website, network and contract, rank, and why it matched. Lookalikes (same ticker, close names) are flagged. **Nothing is researched until you tap "Research <name>"**; a similarly named token is never picked for you. If your records already have a project with that ticker, or the same project bound to a different coin, it stops and says so.
+4. Confirming adds the project to your watchlist (or reuses it) and starts one Claude research run. Your instructions go to Claude as questions to investigate, never as conclusions. The page shows the state, attempts, model, horizon and cost (reserved before sending, then what Anthropic reported). You can leave or close the browser: the report is saved automatically and shown on the project page.
+5. A failure says what happened. **Retry research** sends one new attempt. An attempt that may have been billed without an answer ("Outcome uncertain") is never resent by itself.
+
+A screenshot never records a holding; holdings are only what you enter under Portfolio.
+
+## The online desk (phone access)
+
+The same dashboard runs as a private web app at <https://cryptoresearch.onrender.com>, deployed from this repository's `main` branch (GitHub to Render, automatic on every push). It keeps **its own records on a Render disk**. This folder on your PC is never uploaded, and your PC records stay here unless you decide to copy them.
+
+It starts only when all of this is set in the Render dashboard (service **CryptoResearch**):
+
+1. **Instance type Starter** and a **persistent disk** (1 GB is plenty) with mount path **`/var/data`**. The free type has no disk, so records would vanish on every deploy; the desk refuses to start without one. At Render's list prices (October 2026): $7 a month for Starter plus $0.25 per GB of disk a month.
+2. **Environment** variables:
+   - `CR_DATA_DIR` = `/var/data/cryptoresearch`
+   - `CR_ACCESS_PASSWORD` = a passphrase you choose, at least 12 characters. Never share it in chat.
+   - `ANTHROPIC_API_KEY` = your Claude API key (console.anthropic.com, with billing set up). Also set a monthly spend limit in the Anthropic Console as a second guard.
+   - Optional: `COINGECKO_API_KEY` (a free CoinGecko demo key) for fewer rate-limit pauses.
+3. Save; Render restarts the service. Until everything is set, the address shows only a "setup required" page listing what is missing.
+
+**Sign-in:** one passphrase; a browser stays signed in for 30 days (**Sign out** in the menu ends it). Eight wrong passphrases from one address lock sign-in for 15 minutes. Everything, the API included, needs sign-in, and keys stay in Render's environment: they never reach the page, the records or the logs.
+
+**Limits on first start:** Claude `claude-opus-5-5` with web search (at most 10 searches per request, and up to 3 requests for one answer when Claude pauses mid-research), output capped at 16,000 tokens per request, **$4.00 per run (room for one retry), $8 per day, $30 per month**. Each attempt reserves its maximum before it is sent (about $1.85 at these limits); a typical run costs less, and the recorded cost replaces the reservation as soon as Anthropic reports it. Change them in Settings → Research models & budget.
+
+**Records online:** a sealed backup every day on the same disk; download a complete package any time (Settings → Backups & exports). A deploy keeps the disk, but a deploy during a running research call ends that call (it is held as uncertain, never resent), so avoid deploying while research runs.
+
 ## What you see
 
+- **New research:** the one place to start research from a link, a name or a screenshot, with your instructions (above).
 - **Watchlist (home).** One table of the projects you chose: name and ticker; rank (with its source); price; rolling 7D and 30D change; market cap; 24h volume; sector; and one grade badge per model (Claude, GPT, Gemini). Each badge names its model and shows the 0–100 grade, a grade range, or a plain state (None, Queued, Running, Cowork, Manual, Failed, Withheld, PDF). A missing grade is never shown as a number. A month count on a badge (like "4mo") means that analysis is stale. "—" means unknown; unknown values sort last in either direction.
   - **Hover or keyboard-focus a grade** for a scorecard: grade, verdict, date and age, horizon, coverage, top risks and where the report came from. You can move the pointer onto it; Esc closes it.
   - **Select a project** (click its row or name, or press Enter) for the summary panel: market first, then each model's scorecard, how the models compare, and what changed since your last review. Selecting a grade badge opens the same panel at that model. On wide windows the panel sits beside the list and the list stays usable; on narrower windows it opens over the list as a full-height sheet. Esc or × closes it and returns you to where you were.
@@ -103,7 +136,7 @@ Nothing is billed until you set all of this up yourself:
 
 ## Portfolio
 
-Holdings are entered by you (Portfolio → Record & import, or CSV). No wallet or exchange is ever connected.
+Holdings are entered by you (Portfolio → Record & import, or CSV). No wallet or exchange is ever connected. To fix an entry, use **Correct** under Portfolio → Transactions: the form starts from the recorded values, and saving voids the old entry (it stays visible, with your reason) and records the corrected one in one save.
 
 - FIFO lots per account, exact to 18 decimal places. Transfers between your own accounts (same transfer ID on both sides) create no gain or loss. Every fee stays in the fee totals.
 - Unknown stays unknown: a missing purchase price means unknown cost basis; a missing price means unknown value, never zero. The page states its valuation state (all priced, partly priced, stale, none priced), shows the priced subtotal with how many positions it covers, and names the denominator of every allocation.
@@ -135,13 +168,13 @@ A price refresh never starts research. The hourly job is one Windows scheduled t
 
 ## Costs
 
-- CoinGecko public API: free, keyless; a monthly call budget (default 7,500) pauses refreshes before any limit. Market context adds about 2 calls an hour.
-- Everything else runs locally: no hosting, no paid services.
+- CoinGecko public API: free, keyless; a monthly call budget (default 7,500) pauses refreshes before any limit. Market context adds about 2 calls an hour. New research lookups (about 1 to 7 calls each) count in the same budget. The online desk refreshes prices every 5 minutes only while a page is open, hourly otherwise.
+- On the PC everything runs locally: no hosting, no paid services. The online desk, if you set it up, is Render Starter plus a 1 GB disk (about $7.25 a month at Render's October 2026 list prices).
 - Model API research is optional and costs per run; it only runs inside the limits you set. Manual research with your own subscriptions costs nothing extra.
 
 ## Privacy
 
-- The dashboard listens on 127.0.0.1 only. It is not reachable from your phone or other devices, and it should not be exposed to make it so.
+- The dashboard on the PC listens on 127.0.0.1 only. It is not reachable from your phone or other devices, and it should not be exposed to make it so. Phone access is the separate online desk (above): reachable from anywhere, but only after sign-in with your passphrase, and holding only the records you create there.
 - Other websites cannot read or change your data: the dashboard checks the Host header, the page's origin and a per-launch token.
 - Outbound traffic: tracked coin IDs to CoinGecko; two market-wide CoinGecko requests about hourly (global figures and the top 100 by market cap, which name none of your projects); identity lookups you trigger; and, only if you configure APIs, the research prompt of the project being researched. No holdings, notes or keys leave the PC.
 - This folder is in Documents, which is not synced to OneDrive on this PC. Copying it to the cloud is your separate decision.
@@ -167,7 +200,8 @@ See [WORKSPACE-MAP.md](WORKSPACE-MAP.md) for every folder and file convention, a
 ## Limits
 
 - **PDF reports** are kept byte for byte and flagged "needs text"; scores cannot be read from a PDF offline. Paste the text, or ask Cowork to transcribe it.
-- **No exchange or wallet sync, no external notifications, no remote access.** Each would need explicit setup.
+- **No exchange or wallet sync, no external notifications.** Each would need explicit setup. Remote access is only the online desk, behind your passphrase.
+- **One automatic research route:** Claude through the Anthropic API. GPT and Gemini stay manual (paste the prompt, import the answer) until you configure their APIs. Anthropic's server-side model fallbacks are not used, so the model that was budgeted is the model that answers.
 - **Rank** is CoinGecko's market-cap rank and is labeled as such. A CoinMarketCap rank needs a CoinMarketCap API key and adapter; it is listed in settings as not configured and is never substituted.
 - **Liquidity** has no configured source, so there is no liquidity column.
 - Your Huma Finance Run 2 prompt is saved in `templates/source-prompts/` (see the README there); its structure is the `payfi-credit@1` profile, used only for PayFi projects.

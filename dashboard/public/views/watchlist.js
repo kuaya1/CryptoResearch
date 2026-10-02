@@ -1015,7 +1015,7 @@ export function renderWatchlist(ctx, route) {
           h('span', { class: `freshness ${['stale', 'stale_failed', 'failed'].includes(m.freshness) ? 'stale' : ''}`.trim() },
             `Prices: ${view.priceSource} · ${m.last_success_at ? `updated ${fmtAgo(m.last_success_at)}` : 'never fetched'}${m.freshness !== 'fresh' && m.freshness !== 'never_run' ? ` · ${fr.text}` : ''}`),
           refreshBtn)),
-      h('div', { class: 'actions' }, addBtn)),
+      h('div', { class: 'actions' }, h('a', { class: 'btn', href: '#/new', dataset: { key: 'new-research' } }, 'New research'), addBtn)),
     marketStrip(idx),
     attentionBlock(ctx),
     toolbar,

@@ -30,6 +30,8 @@
     "created_at": { "type": "string" },
     "voided": { "type": "boolean" },
     "void_reason": { "type": ["string", "null"] },
-    "voided_at": { "type": ["string", "null"] }
+    "voided_at": { "type": ["string", "null"] },
+    "corrects": { "type": ["string", "null"], "description": "On an entry made by a correction: the tx_id it replaces (that entry is voided)." },
+    "corrected_by": { "type": ["string", "null"], "description": "On a voided entry: the tx_id of the entry that corrected it." }
   }
 }

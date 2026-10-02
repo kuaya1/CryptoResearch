@@ -79,6 +79,8 @@ const DEDUPE_MINUTES = 10;
 const MAX_SEARCHES = 200;
 const DEFAULT_SEARCHES = 20;
 const DEFAULT_OUTPUT_TOKENS = 16000;
+// Resumed turns are off unless settings allow them (research.max_continuations).
+const DEFAULT_CONTINUATIONS = 0;
 const CHARS_PER_TOKEN = 3.5;
 const SEARCH_RESULT_TOKENS = 4000;
 // The request parameter that caps searches, per provider. Gemini has none.
@@ -162,19 +164,31 @@ function callBounds(ws, provider) {
   }
   const perSearch = cfg.search_result_tokens_estimate === undefined || cfg.search_result_tokens_estimate === null ? SEARCH_RESULT_TOKENS : cfg.search_result_tokens_estimate;
   if (!Number.isInteger(perSearch) || perSearch < 0) problems.push('a search result token estimate (a whole number)');
+  // Claude's search loop can pause mid-answer; the turn is resumed at most this
+  // many times, and every resumed request is part of the same reservation.
+  const cont = provider === 'claude' ? (r.max_continuations === undefined || r.max_continuations === null ? DEFAULT_CONTINUATIONS : r.max_continuations) : 0;
+  if (!Number.isInteger(cont) || cont < 0 || cont > 5) problems.push('a continuation limit (a whole number from 0 to 5)');
+  const effort = provider === 'claude' ? r.effort || 'high' : null;
+  if (effort && !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) problems.push('an effort level (low, medium, high, xhigh or max)');
+  for (const k of ['cache_write_usd_per_mtok', 'cache_read_usd_per_mtok']) if (cfg[k] !== undefined && cfg[k] !== null && !isMoney(cfg[k])) problems.push(`a valid ${k.replace(/_/g, ' ')}`);
   return {
     ok: !problems.length,
     problems,
     max_output_tokens: maxOut,
+    max_continuations: Number.isInteger(cont) ? cont : 0,
+    requests_max: 1 + (Number.isInteger(cont) ? cont : 0),
+    effort,
     search: { enabled, limit: enabled ? limit : 0, control: enabled ? SEARCH_CONTROL[provider] || null : null, billing },
     search_result_tokens: perSearch,
-    prices: { input_usd_per_mtok: cfg.input_usd_per_mtok ?? null, output_usd_per_mtok: cfg.output_usd_per_mtok ?? null, search_usd_per_call: cfg.search_usd_per_call ?? null },
+    prices: { input_usd_per_mtok: cfg.input_usd_per_mtok ?? null, output_usd_per_mtok: cfg.output_usd_per_mtok ?? null, search_usd_per_call: cfg.search_usd_per_call ?? null, cache_write_usd_per_mtok: cfg.cache_write_usd_per_mtok ?? null, cache_read_usd_per_mtok: cfg.cache_read_usd_per_mtok ?? null },
   };
 }
 
 // What the request itself enforces, and what is only estimated.
 function describeBounds(b) {
-  const enforced = [`at most ${b.max_output_tokens} output tokens (the output limit sent with the request)`];
+  const enforced = [b.requests_max > 1
+    ? `at most ${b.max_output_tokens} output tokens per request and at most ${b.requests_max} requests for one answer (the first and up to ${b.max_continuations} resumed turns)`
+    : `at most ${b.max_output_tokens} output tokens (the output limit sent with the request)`];
   if (!b.search.enabled) enforced.push('web search off');
   else if (b.search.billing === 'per_request') enforced.push('one search fee per request (declared per-request billing; the Gemini API cannot cap the number of searches)');
   else enforced.push(`at most ${b.search.limit} searches (${b.search.control} sent with the request)`);
@@ -225,21 +239,25 @@ function callPlan(ws, provider, promptText) {
   const p = b.prices;
   const tok = (n, perM) => round4((n / 1e6) * perM);
   const promptTokens = Math.ceil(String(promptText).length / CHARS_PER_TOKEN);
-  const parts = [{ part: 'output_tokens', basis: 'enforced', tokens: b.max_output_tokens, usd: tok(b.max_output_tokens, p.output_usd_per_mtok), detail: `${b.max_output_tokens} output tokens at most (the output limit sent with the request)` }];
+  // A resumed turn is another request: every bound counts once per request.
+  const n = b.requests_max;
+  const per = n > 1 ? ` across up to ${n} requests` : '';
+  const outTokens = b.max_output_tokens * n;
+  const parts = [{ part: 'output_tokens', basis: 'enforced', tokens: outTokens, usd: tok(outTokens, p.output_usd_per_mtok), detail: `${outTokens} output tokens at most (${b.max_output_tokens}, the output limit sent with each request${per})` }];
   if (b.search.enabled) {
     parts.push(b.search.billing === 'per_request'
-      ? { part: 'search_fee', basis: 'enforced', units: 1, usd: round4(p.search_usd_per_call), detail: 'one search fee for the request (declared per-request billing)' }
-      : { part: 'search_fee', basis: 'enforced', units: b.search.limit, usd: round4(p.search_usd_per_call * b.search.limit), detail: `${b.search.limit} searches at most (${b.search.control})` });
+      ? { part: 'search_fee', basis: 'enforced', units: n, usd: round4(p.search_usd_per_call * n), detail: `one search fee per request (declared per-request billing)${per}` }
+      : { part: 'search_fee', basis: 'enforced', units: b.search.limit * n, usd: round4(p.search_usd_per_call * b.search.limit * n), detail: `${b.search.limit} searches at most per request (${b.search.control})${per}` });
   }
-  parts.push({ part: 'prompt_tokens', basis: 'estimated', tokens: promptTokens, usd: tok(promptTokens, p.input_usd_per_mtok), detail: `about ${promptTokens} prompt tokens (${CHARS_PER_TOKEN} characters per token)` });
+  parts.push({ part: 'prompt_tokens', basis: 'estimated', tokens: promptTokens * n, usd: tok(promptTokens * n, p.input_usd_per_mtok), detail: `about ${promptTokens} prompt tokens per request (${CHARS_PER_TOKEN} characters per token)${per}; counted at the full input price` });
   if (b.search.enabled) {
-    const t = b.search.limit * b.search_result_tokens;
+    const t = b.search.limit * n * b.search_result_tokens;
     parts.push({ part: 'search_result_tokens', basis: 'estimated', tokens: t, usd: tok(t, p.input_usd_per_mtok), detail: `about ${b.search_result_tokens} tokens of search results per search, billed as input; nothing caps them` });
   }
   const sum = (basis) => round4(parts.filter((x) => x.basis === basis).reduce((a, x) => a + x.usd, 0));
   const enforced = sum('enforced');
   const estimated = sum('estimated');
-  return { ok: true, total_usd: round4(enforced + estimated), enforced_usd: enforced, estimated_usd: estimated, parts, bounds: { max_output_tokens: b.max_output_tokens, search: b.search }, prices: p };
+  return { ok: true, total_usd: round4(enforced + estimated), enforced_usd: enforced, estimated_usd: estimated, parts, bounds: { max_output_tokens: b.max_output_tokens, max_continuations: b.max_continuations, requests_max: n, effort: b.effort, search: b.search }, prices: p };
 }
 
 function estimateCostUsd(ws, provider, promptText) {
@@ -261,7 +279,13 @@ function actualCostUsd(ws, provider, usage, attempt = null) {
     else if (search && search.enabled) fee = prices.search_usd_per_call * (calls === null ? search.limit : calls);
     else if (calls !== null) fee = prices.search_usd_per_call * calls;
   }
-  return round4((usage.input_tokens / 1e6) * prices.input_usd_per_mtok + (usage.output_tokens / 1e6) * prices.output_usd_per_mtok + fee);
+  // Prompt-cache tokens (Claude): written at the cache-write price, read at the
+  // cache-read price; without a configured price, 1.25x and 0.1x the input price.
+  const cw = typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : 0;
+  const cr = typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : 0;
+  const pcw = isMoney(prices.cache_write_usd_per_mtok) ? prices.cache_write_usd_per_mtok : prices.input_usd_per_mtok * 1.25;
+  const pcr = isMoney(prices.cache_read_usd_per_mtok) ? prices.cache_read_usd_per_mtok : prices.input_usd_per_mtok * 0.1;
+  return round4((usage.input_tokens / 1e6) * prices.input_usd_per_mtok + (cw / 1e6) * pcw + (cr / 1e6) * pcr + (usage.output_tokens / 1e6) * prices.output_usd_per_mtok + fee);
 }
 
 // What one attempt counts against the limits: the reconciled amount, else the
@@ -445,17 +469,19 @@ function createRun(ws, args = {}) {
   // ceiling, or a long-term exception with the owner's reason (position.js).
   const horizon = require('./position').resolveRunHorizon(ws, { args, previous, project });
   const horizonText = horizon.text;
+  // Eric's own questions for this run (scope, not conclusions), in his words.
+  const ownerInstructions = typeof args.owner_instructions === 'string' && args.owner_instructions.trim() ? args.owner_instructions.replace(/\r\n/g, '\n').trim().slice(0, 2000) : null;
   const rubricRef = (args.same_as_last && previous[0] && previous[0].rubric_version) || ws.rubrics.activeRef;
   if (!ws.rubrics.gradingVersions[rubricRef]) throw new OpError('INVALID', `Rubric ${rubricRef} is not available.`);
   // Repeating the same request within a few minutes does not start a second run.
-  const recent = previous.find((r) => !r.broken && !TERMINAL.has(r.status) && Date.now() - Date.parse(r.created_at) < DEDUPE_MINUTES * 60000 && r.horizon.text === horizonText && JSON.stringify(r.providers) === JSON.stringify(list));
+  const recent = previous.find((r) => !r.broken && !TERMINAL.has(r.status) && Date.now() - Date.parse(r.created_at) < DEDUPE_MINUTES * 60000 && r.horizon.text === horizonText && JSON.stringify(r.providers) === JSON.stringify(list) && (r.owner_instructions || null) === ownerInstructions);
   if (recent && !args.force_new) {
     return { status: 'exists', project_id: projectId, run_id: recent.run_id, run: recent, message: `A research run for ${project.name} with the same providers and horizon started ${Math.round((Date.now() - Date.parse(recent.created_at)) / 60000)} min ago (${recent.run_id}). No second run was created.` };
   }
   const runId = `run_${compactTs()}_${randomId(5)}`;
   const packet = evidencePacket(ws, project);
   const packetText = `${JSON.stringify(packet, null, 2)}\n`;
-  const prompt = buildRunPrompt(ws, project, { runId, horizon, rubricRef, packet });
+  const prompt = buildRunPrompt(ws, project, { runId, horizon, rubricRef, packet, ownerInstructions });
   const status = providerStatus(ws);
   const channel = args.channel || ws.actor || 'cli';
   const fromCowork = /cowork/i.test(channel) || /cowork/i.test(ws.actor || '');
@@ -485,6 +511,7 @@ function createRun(ws, args = {}) {
     rubric_version: rubricRef,
     sector_profile: project.sector_profile,
     horizon,
+    owner_instructions: ownerInstructions,
     prompt: { version: require('./prompts').promptVersionFor(horizon), path: `${dir}/prompt.md`, sha256: sha256(prompt), identical_for_all_providers: true },
     evidence_packet: { path: `${dir}/evidence-packet.json`, sha256: sha256(packetText), captured_at: packet.captured_at, market_snapshot_id: packet.market_context.snapshot_id || null },
     independence: 'Each provider gets the same prompt and dated context and never sees another model\'s conclusions.',
@@ -812,7 +839,8 @@ function markDispatched(ws, projectId, runId, provider, attemptId) {
 function outcomePhase(job, result, error) {
   if (result) return 'responded';
   if (error.kind === 'config' || error.notSent) return 'not_sent';
-  if (['http', 'empty'].includes(error.kind)) return 'errored';
+  // An answer arrived, even if cut off or declined: a known, billed outcome.
+  if (['http', 'empty', 'incomplete', 'refused'].includes(error.kind)) return 'errored';
   return job.mode === 'api' ? 'uncertain' : 'errored';
 }
 
@@ -824,6 +852,7 @@ function applyOutcome(ws, run, job, a, { result, error, finishedAt, rel, fileSha
     Object.assign(a, { request_id: at.request_id || null, response_id: at.response_id || null, model_attested: at.model || null, usage: result.usage || null, cost_actual_usd: actual });
   } else {
     Object.assign(a, { error: error.message, http_status: error.httpStatus || null, request_id: error.requestId || null, usage: error.usage || null, cost_actual_usd: actual });
+    if (error.partial_usage) a.partial_usage = error.partial_usage;
   }
   if (actual !== null && isMoney(a.reserved_usd) && units(actual) > units(a.reserved_usd)) a.overrun_usd = round4(actual - a.reserved_usd);
   const left = job.attempts.length < job.max_attempts;
@@ -1135,6 +1164,8 @@ async function runOneJob(ws, { project_id: projectId, run, job }, { fetchImpl, t
           prompt,
           maxOutputTokens: plan.bounds.max_output_tokens,
           maxSearches: plan.bounds.search.limit,
+          maxContinuations: plan.bounds.max_continuations,
+          effort: plan.bounds.effort,
           key: providers.apiKeyFor(provider),
           signal: AbortSignal.timeout(timeoutMs),
           timeoutMs,
@@ -1307,9 +1338,16 @@ function researchStateFor(ws, projectId) {
   return { latest_run: latest ? { run_id: latest.run_id, status: latest.status, created_at: latest.created_at, providers: latest.providers, horizon: latest.horizon } : null, providers: byProvider, runs: runs.length };
 }
 
+// A spend-log line for a paid call outside a research run (reading a research
+// request's screenshot). The daily and monthly totals count it like any other.
+function spendLine(ws, entry) {
+  appendLine(ws.abs(SPEND_REL), { at: new Date().toISOString(), project_id: null, ...entry });
+}
+
 module.exports = {
   RUN_ID_RE,
   createRun,
+  spendLine,
   listRuns,
   loadRun,
   runStatus,
