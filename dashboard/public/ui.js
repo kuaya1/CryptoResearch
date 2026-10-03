@@ -301,13 +301,24 @@ export function scoreView(s, direction = 'fav', { corrected = null } = {}) {
   return h('span', { class: cls, title }, h('span', { class: 'v' }, String(s.value)), h('span', { class: 'track', 'aria-hidden': 'true' }, fill), s.extraction ? chip('read from prose', '', 'Read from the prose, not a JSON block. Check against the original.') : null, mark);
 }
 
+// The rubric's letter band of a grade (a to f), for its color. A range takes
+// the band of its low end. No band without a calculated grade: a withheld or
+// missing grade never takes a grade's color.
+export function gradeBand(g) {
+  if (!g || !['firm', 'range'].includes(g.status)) return null;
+  const letter = String(g.label || '').trim().charAt(0).toLowerCase();
+  return /^[a-f]$/.test(letter) && letter !== 'e' ? letter : null;
+}
+
+export const bandClass = (g) => (gradeBand(g) ? ` band-${gradeBand(g)}` : '');
+
 export function gradeView(g, { compact = false } = {}) {
   if (!g) return h('span', { class: 'faint' }, 'No grade');
   if (g.status === 'firm') {
-    return h('div', { class: 'grade', title: `Full precision: ${g.value}. Calculated by this app from the six weighted components.` }, h('span', { class: compact ? 'num' : 'big' }, g.display), g.label ? h('span', { class: 'lab', 'aria-label': `letter ${g.label}` }, g.label) : null);
+    return h('div', { class: `grade${bandClass(g)}`, title: `Full precision: ${g.value}. Calculated by this app from the six weighted components.` }, h('span', { class: compact ? 'num' : 'big' }, g.display), g.label ? h('span', { class: 'lab', 'aria-label': `letter ${g.label}` }, g.label) : null);
   }
   if (g.status === 'range') {
-    return h('div', { class: 'grade', title: `Range from justified component ranges: ${g.low} to ${g.high}` }, h('span', { class: compact ? 'num' : 'big' }, g.display), h('span', { class: 'lab' }, g.label), h('span', { class: 'faint small' }, 'range'));
+    return h('div', { class: `grade${bandClass(g)}`, title: `Range from justified component ranges: ${g.low} to ${g.high}` }, h('span', { class: compact ? 'num' : 'big' }, g.display), h('span', { class: 'lab' }, g.label), h('span', { class: 'faint small' }, 'range'));
   }
   if (g.status === 'withheld') {
     const pct = g.coverage_pct || 0;
@@ -377,18 +388,20 @@ export function badgeInfo(provider, report, job, { staleDays = 90 } = {}) {
 export function gradeBadge(provider, report, job, opts = {}) {
   const info = badgeInfo(provider, report, job, opts);
   const tag = opts.button ? 'button' : 'span';
+  const band = info.kind === 'grade' || info.kind === 'range' ? bandClass(report && report.grade) : '';
   const attrs = {
-    class: `gb is-${info.kind}${info.stale ? ' is-stale' : ''}`,
+    class: `gb is-${info.kind}${band}${info.stale ? ' is-stale' : ''}`,
     'aria-label': opts.button ? `${info.text}. Open details` : info.text,
     dataset: { provider, key: opts.key || null },
   };
   if (!opts.key) delete attrs.dataset.key;
   if (opts.button) attrs.type = 'button';
-  // Two short lines: the model, then its grade or a plain state. The analysis
-  // age shows here only when it is stale; the scorecard and panel give the date.
+  // The model's name (hidden where a column header already names it), then
+  // its grade in the band's color, or a plain state. The analysis age shows
+  // only when it is stale; the scorecard and panel give the date.
   return h(tag, attrs,
-    h('span', { class: 'top', 'aria-hidden': 'true' }, h('span', { class: 'p' }, PROVIDER_SHORT[provider]), info.stale && info.age ? h('span', { class: 'a' }, info.age) : null),
-    h('span', { class: 'main', 'aria-hidden': 'true' }, h('span', { class: 'v' }, info.value), info.label ? h('span', { class: 'l' }, info.label) : null, info.refreshing ? h('span', { class: 'r' }, '↻') : null));
+    h('span', { class: 'p', 'aria-hidden': 'true' }, PROVIDER_SHORT[provider]),
+    h('span', { class: 'main', 'aria-hidden': 'true' }, h('span', { class: 'v' }, info.value), info.label ? h('span', { class: 'l' }, info.label) : null, info.stale && info.age ? h('span', { class: 'a' }, info.age) : null, info.refreshing ? h('span', { class: 'r' }, '↻') : null));
 }
 
 export function freshnessText(status, ageMin) {

@@ -6,7 +6,7 @@
 // Wide screens show the panel as a side column (non-modal); narrower screens
 // show it as a modal sheet (focus stays inside until it is closed).
 import {
-  h, clear, button, select, input, callout, changeCell, sparkline, logo, gradeBadge, badgeInfo, gradeView, verdictChip,
+  h, clear, button, select, input, callout, changeCell, sparkline, logo, gradeBadge, badgeInfo, gradeView, verdictChip, bandClass,
   fmtPrice, fmtCompactUsd, fmtDate, fmtDateTime, fmtAgo, fmtSignedPct, freshnessText, stateText, toast, announce, copyText,
   PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, RESEARCH_STATE,
 } from '../ui.js';
@@ -172,14 +172,19 @@ function projectCell(ctx, p) {
   if (p.held) marks.push(h('span', { class: 'held-mark', title: 'You hold this (Portfolio)' }, 'Held'));
   if (p.identity_status !== 'verified') marks.push(h('span', { class: 'flag', title: (p.identity_unknowns || []).join(' ') || 'Identity not confirmed: no prices or holdings use it' }, 'Identity pending'));
   if (p.status === 'archived') marks.push(h('span', null, 'Archived'));
-  if (p.changes && p.changes.item_count > 0) marks.push(h('span', { title: `${p.changes.item_count} change(s) since ${p.changes.cursor_source === 'project created' ? 'the project was added' : 'your last review'}` }, `${p.changes.item_count} new`));
-  return h('div', { class: 'proj-cell' }, logo(p),
-    h('div', { class: 'names' }, nameBtn, h('span', { class: 'sub' }, sub.filter(Boolean).length ? h('span', null, sub[0]) : null, marks)));
+  // Changes since the last review: a small dot on the logo, the count in its label.
+  const changed = p.changes && p.changes.item_count > 0 ? `${p.changes.item_count} change${p.changes.item_count === 1 ? '' : 's'} since ${p.changes.cursor_source === 'project created' ? 'the project was added' : 'your last review'}` : null;
+  return h('div', { class: 'proj-cell' },
+    h('span', { class: 'logo-wrap' }, logo(p), changed ? h('span', { class: 'new-dot', role: 'img', 'aria-label': changed, title: changed }) : null),
+    h('div', { class: 'names' }, nameBtn,
+      sub.filter(Boolean).length || marks.length ? h('span', { class: 'sub' }, sub.filter(Boolean).length ? h('span', null, sub[0]) : null, marks) : null));
 }
 
 function priceCell(p) {
   const reason = noPriceReason(p);
-  if (reason) return h('span', { class: 'unknown' }, reason);
+  // Without a price the cell stays quiet; the reason is in its label (and an
+  // unconfirmed identity is already flagged under the name).
+  if (reason) return h('span', { class: 'unknown', title: reason }, h('span', { 'aria-hidden': 'true' }, '—'), h('span', { class: 'sr-only' }, reason));
   const m = p.market;
   const f = freshnessText(m.status, m.age_minutes);
   return h('div', { title: `Source: ${m.source || 'CoinGecko'}, as of ${fmtDateTime(m.as_of)}` },
@@ -262,7 +267,7 @@ function sortHeader(ctx, prefsObj, col, rerender) {
   if (col === 'research') {
     const active = prefsObj.sort.key.startsWith('grade:');
     return h('th', { class: cls, scope: 'col', 'aria-sort': active ? (prefsObj.sort.dir === 'asc' ? 'ascending' : 'descending') : null },
-      h('span', { class: 'th-title' }, h('span', { class: 'lbl' }, 'Research'), h('span', { class: 'src' }, 'grade 0–100')),
+      h('span', { class: 'sr-only' }, 'Research grades, 0 to 100'),
       h('div', { class: 'provider-sorts', role: 'group', 'aria-label': 'Sort by a model\'s grade' }, PROVIDERS.map((prov) => {
         const key = `grade:${prov}`;
         const on = prefsObj.sort.key === key;
@@ -376,11 +381,12 @@ function radioGroup(name, legend, options, value, onPick) {
 
 // ---- review queue -------------------------------------------------------------
 
+// Below the list, closed until opened (the choice is remembered).
 function attentionBlock(ctx) {
   const items = ctx.state.index.attention || [];
   if (!items.length) return null;
   const high = items.filter((a) => a.severity === 'high').length;
-  const open = Boolean(ctx.ui.get('queueOpen', false));
+  const open = Boolean(ctx.ui.get('reviewOpen', false));
   const first = items[0];
   const det = h('details', { class: 'attention', open: open || null, dataset: { key: 'attention' } },
     h('summary', null,
@@ -396,7 +402,7 @@ function attentionBlock(ctx) {
   det.addEventListener('toggle', () => {
     const t = det.querySelector('summary .toggle');
     if (t) t.textContent = det.open ? 'Hide' : 'Show';
-    if (det.open !== Boolean(ctx.ui.get('queueOpen', false))) ctx.ui.set('queueOpen', det.open);
+    if (det.open !== Boolean(ctx.ui.get('reviewOpen', false))) ctx.ui.set('reviewOpen', det.open);
   });
   return det;
 }
@@ -414,7 +420,7 @@ function previewContent(ctx, p, prov) {
   let gradeEl;
   if (rep) {
     const g = rep.grade || {};
-    if (info.kind === 'grade' || info.kind === 'range') gradeEl = h('div', { class: 'pv-grade' }, h('span', { class: 'big' }, g.display), g.label ? h('span', { class: 'lab' }, g.label) : null, h('span', { class: 'what' }, info.kind === 'range' ? 'grade range, 0–100' : 'grade, 0–100'));
+    if (info.kind === 'grade' || info.kind === 'range') gradeEl = h('div', { class: `pv-grade${bandClass(g)}` }, h('span', { class: 'big' }, g.display), g.label ? h('span', { class: 'lab' }, g.label) : null, h('span', { class: 'what' }, info.kind === 'range' ? 'grade range, 0–100' : 'grade, 0–100'));
     else gradeEl = h('div', { class: 'pv-grade' }, h('span', { class: 'state-text' }, info.kind === 'pdf' ? 'PDF: needs a text copy' : 'Grade withheld'), g.coverage_pct !== null && g.coverage_pct !== undefined ? h('span', { class: 'what' }, `${g.coverage_pct}% of the weight scored`) : null);
     add('Verdict', verdictChip(rep.verdict));
     add('Horizon', rep.horizon || 'not stated');
@@ -601,7 +607,7 @@ function providerSection(ctx, p, prov) {
   }
   let gradeLine;
   if (rep && (info.kind === 'grade' || info.kind === 'range')) {
-    gradeLine = h('div', { class: 'provider-grade' }, h('span', { class: 'big' }, rep.grade.display), rep.grade.label ? h('span', { class: 'lab', 'aria-label': `letter ${rep.grade.label}` }, rep.grade.label) : null, h('span', { class: 'small muted' }, info.kind === 'range' ? 'grade range, 0–100' : 'grade, 0–100'));
+    gradeLine = h('div', { class: `provider-grade${bandClass(rep.grade)}` }, h('span', { class: 'big' }, rep.grade.display), rep.grade.label ? h('span', { class: 'lab', 'aria-label': `letter ${rep.grade.label}` }, rep.grade.label) : null, h('span', { class: 'small muted' }, info.kind === 'range' ? 'grade range, 0–100' : 'grade, 0–100'));
   } else if (rep) {
     gradeLine = h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, info.kind === 'pdf' ? 'PDF saved: needs a text copy' : 'Grade withheld'), rep.grade && rep.grade.coverage_pct !== null && rep.grade.coverage_pct !== undefined ? h('span', { class: 'small muted' }, `${rep.grade.coverage_pct}% of the weight scored`) : null);
   } else {
@@ -621,8 +627,10 @@ function providerSection(ctx, p, prov) {
   } else if (job && job.error) {
     facts.push(['Last error', job.error]);
   }
+  // Where the report came from, briefly (the full provenance is on the report).
+  const channel = rep && rep.provenance && rep.provenance.channel ? rep.provenance.channel : null;
   const route = rep
-    ? `${rep.model_version || 'Model not stated'} · ${rep.provenance && rep.provenance.attested ? 'attested by the API' : 'imported, self-reported'}`
+    ? [rep.model_version || null, rep.provenance && rep.provenance.attested ? 'attested by the API' : /desk connector/i.test(channel || '') ? 'saved through its connection' : 'imported'].filter(Boolean).join(' · ')
     : job ? (job.mode === 'manual' ? 'Waiting: its assistant through the desk connection, or paste the prompt and import' : job.mode === 'cowork' ? 'Claude Cowork session' : job.mode === 'connector' ? `${PROVIDER_LABELS[prov]} through its desk connection` : job.mode === 'mock' ? 'Fictional demo adapter' : 'API') : 'Not requested';
   return h('div', { class: 'provider', id: `panel-prov-${prov}`, tabindex: '-1', 'aria-label': `${PROVIDER_LABELS[prov]} scorecard` },
     h('div', { class: 'provider-top' }, h('span', { class: 'name' }, PROVIDER_LABELS[prov]), h('span', { class: 'route' }, route)),
@@ -810,11 +818,12 @@ export function renderWatchlist(ctx, route) {
     view.orderKey = key;
     const total = all.filter((p) => (f.archived ? p.status === 'archived' : p.status !== 'archived')).length;
     const filtered = Boolean(view.q) || filterCount() > 0 || f.owned !== 'all';
+    // Only what the list itself does not show: a filtered count, or rows kept in place.
     resultsLine.replaceChildren(...[
-      h('span', null, filtered ? `${rows.length} of ${total} ${f.archived ? 'archived ' : ''}projects` : `${total} ${f.archived ? 'archived ' : ''}project${total === 1 ? '' : 's'}`),
-      h('span', null, sortDescription(prefsObj.sort)),
+      filtered ? h('span', null, `${rows.length} of ${total} ${f.archived ? 'archived ' : ''}projects`) : null,
       reordered ? h('span', { class: 'reorder' }, h('span', null, 'Values updated; order kept while you look.'), button('Re-sort', () => { view.order = null; rerender(); }, { kind: 'small', key: 'resort' })) : null,
     ].filter(Boolean));
+    resultsLine.classList.toggle('hidden', !filtered && !reordered);
     drawTokens();
     if (rows.length) {
       holder.replaceChildren(buildTable(ctx, prefsObj, rows, () => rerender()));
@@ -1017,18 +1026,14 @@ export function renderWatchlist(ctx, route) {
           refreshBtn)),
       h('div', { class: 'actions' }, h('a', { class: 'btn', href: '#/new', dataset: { key: 'new-research' } }, 'New research'), addBtn)),
     marketStrip(idx),
-    attentionBlock(ctx),
     toolbar,
     tokens,
     resultsLine,
     holder,
     h('p', { class: 'legend-line' },
-      h('span', null, view.rankSource === 'Demo data' ? 'Rank: fictional demo rank' : 'Rank: CoinGecko market-cap rank'),
-      h('span', null, '7D and 30D: rolling price change'),
-      h('span', null, 'Volume: last 24 hours, USD'),
-      h('span', null, 'Grades: 0–100, calculated by this app from each model\'s own report; hover or focus one for its date and details'),
-      h('span', null, `A month count on a grade (like 4mo) means the analysis is older than ${idx.settings.freshness.research_stale_days || 90} days`),
-      h('span', null, '— unknown or not available')));
+      h('span', { class: 'bands', 'aria-hidden': 'true' }, ['a', 'b', 'c', 'd', 'f'].map((b) => h('span', { class: `band-key band-${b}` }, b.toUpperCase()))),
+      h('span', null, `Grades 0–100, calculated by this app from each model's own report. Hover one for details; a month count (4mo) means older than ${idx.settings.freshness.research_stale_days || 90} days.`)),
+    attentionBlock(ctx));
   page.afterMount = afterMount;
   return page;
 }
