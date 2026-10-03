@@ -1162,3 +1162,37 @@ test('connector: a replaced refresh token still works for two minutes (a lost an
   assert.ok(replaced.rotated_at);
   assert.equal(replaced.successor, sha(next.json.refresh_token));
 });
+
+test('connector: a job that waited for ChatGPT goes to its API once the key is set and Eric asks again; nothing is sent twice', async (t) => {
+  const d = await desk(t, 'send-waiting');
+  withKeys(t, {});
+  const claude = await connect(d);
+  const pid = (await tool(d, claude.access, 'add_project', EXAMPLECOIN)).data.project.project_id;
+  const first = await tool(d, claude.access, 'start_research', { project_id: pid, owner_request: 'Research Examplecoin with all three models (FICTIONAL)', models: 'all' });
+  const runId = first.data.run.run_id;
+  assert.equal(first.data.run.jobs.chatgpt.state, 'unconfigured', 'no key yet: waits for ChatGPT');
+  // Eric adds the OpenAI key and limits; then asks again (withKeys above restores the keys after the test).
+  process.env.OPENAI_API_KEY = 'test-openai-key-fictional';
+  const file = path.join(d.ws.root, 'config', 'settings.json');
+  const s = readJson(file);
+  s.research.providers.chatgpt = { model: 'gpt-fictional-test', input_usd_per_mtok: 2, output_usd_per_mtok: 10, search_usd_per_call: 0.01, max_searches: 5 };
+  fs.writeFileSync(file, JSON.stringify(s));
+  d.ws.reloadSettings();
+  const realFetch = globalThis.fetch;
+  const posts = [];
+  globalThis.fetch = async (url, init) => {
+    if ((init && init.method) === 'POST' && String(url) === 'https://api.openai.com/v1/responses') posts.push(url);
+    return new Response(JSON.stringify({ id: 'resp_fictional_w', status: 'queued' }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  t.after(() => { globalThis.fetch = realFetch; });
+  const again = await tool(d, claude.access, 'start_research', { project_id: pid, owner_request: 'all three again (FICTIONAL)', models: 'all' });
+  assert.equal(again.data.run.run_id, runId, 'the same run');
+  assert.match(again.data.message, /ChatGPT was waiting and now runs on its API in the background/);
+  const job = research.loadRun(d.ws, pid, runId).jobs.chatgpt;
+  assert.equal(job.mode, 'api', 'the API route, so every paid-request rule applies');
+  assert.equal(research.loadRun(d.ws, pid, runId).jobs.gemini.state, 'unconfigured', 'Gemini still has no API: it keeps waiting');
+  await waitFor(() => posts.length >= 1);
+  await tool(d, claude.access, 'start_research', { project_id: pid, owner_request: 'all three once more (FICTIONAL)', models: 'all' });
+  await new Promise((r) => setTimeout(r, 800));
+  assert.equal(posts.length, 1, 'sent once');
+});

@@ -346,8 +346,11 @@ function jobView(job, run, me) {
   else if (job.state === 'uncertain') progress = 'held: a paid request may have been billed without an answer; Eric reconciles or retries it in the dashboard';
   else if (activity && activity.open) progress = activity.interrupted ? `interrupted (no activity for ${activity.idle_minutes} min)` : `${job.provider === me ? 'you are' : `${label} is`} researching it`;
   else if (job.state === 'unconfigured') progress = job.provider === me ? 'waiting for you' : `waiting for ${label}: Eric says "${WAITING_PHRASE}" ${ASK_HOW[job.provider]} (or pastes the prompt into ${label} and imports the answer)`;
-  else if (job.state === 'queued') progress = `queued for the ${label} API in the background`;
-  else if (job.state === 'dispatching') progress = `running on the ${label} API in the background`;
+  else if (job.state === 'queued') progress = job.not_before && Date.parse(job.not_before) > Date.now() ? `queued for the ${label} API, which asked to slow down; it is asked again after ${job.not_before} (not billed)` : `queued for the ${label} API in the background`;
+  else if (job.state === 'dispatching') {
+    const last = (job.attempts || [])[(job.attempts || []).length - 1];
+    progress = last && last.phase === 'submitted' ? `running on the ${label} API in the background (accepted at ${last.submitted_at}; collected automatically when it finishes, also after a restart)` : `running on the ${label} API in the background`;
+  }
   else progress = job.state;
   const out = { state: job.state, mode: job.mode, progress, report_id: job.report_id || null };
   if (job.mode === 'api' || job.mode === 'mock') Object.assign(out, { model_id: job.model || null, attempts: (job.attempts || []).length, cost_counted_usd: Math.round(cost * 10000) / 10000 });
@@ -576,6 +579,10 @@ const handlers = {
       const parts = PROVIDERS.filter((p) => p !== me && run.jobs[p]).map((p) => `${PROVIDER_LABELS[p]}: ${jobView(run.jobs[p], run, me).progress}`);
       return parts.length ? ` ${parts.join('. ')}.` : '';
     };
+    // Jobs of the models asked for that still wait for their assistant go to
+    // their paid API once it is set up: Eric's request is the go-ahead.
+    const sendWaiting = (runId) => (identityOk ? research.sendWaitingToApi(ws, id, runId, wanted.filter((p) => p !== me)) : []);
+    const sentLine = (sent) => (sent.length ? ` ${listLabels(sent)} ${sent.length === 1 ? 'was' : 'were'} waiting and now ${sent.length === 1 ? 'runs on its' : 'run on their'} API in the background.` : '');
 
     // Restart: cancel the open jobs of the models asked for, then start anew
     // (never canceled for nothing: a pending identity stops it first).
@@ -594,9 +601,10 @@ const handlers = {
       if (open.length) {
         const runId = open[0].run.run_id;
         const added = addable.length ? research.addProviders(ws, id, runId, addable, { channel: ctx.channel }).added : [];
+        const sent = sendWaiting(runId);
         const run = reload(runId);
         kickIfQueued(run);
-        return { status: 'resumed', message: `Resuming the open research run ${runId} for ${project.name} (started ${run.created_at}).${added.length ? ` Added ${listLabels(added)} to it, with the same prompt.` : ''} Continue from your draft below if there is one, then save_report.${othersLine(run)}${heldBack}`, project: { project_id: id, name: project.name }, run: view(run) };
+        return { status: 'resumed', message: `Resuming the open research run ${runId} for ${project.name} (started ${run.created_at}).${added.length ? ` Added ${listLabels(added)} to it, with the same prompt.` : ''}${sentLine(sent)} Continue from your draft below if there is one, then save_report.${othersLine(run)}${heldBack}`, project: { project_id: id, name: project.name }, run: view(run) };
       }
       // 2. A job waiting for your model (no API runs it): take it over, no second run.
       const waiting = research.waitingJobs(ws, id, me);
@@ -604,18 +612,20 @@ const handlers = {
         const runId = waiting[0].run.run_id;
         research.adoptJob(ws, id, runId, me, { client: ctx.client });
         const added = addable.length ? research.addProviders(ws, id, runId, addable, { channel: ctx.channel }).added : [];
+        const sent = sendWaiting(runId);
         const run = reload(runId);
         kickIfQueued(run);
-        return { status: 'resumed', message: `Research run ${runId} for ${project.name} was waiting for ${ctx.label} (started ${run.created_at}); you are now doing it.${added.length ? ` Added ${listLabels(added)} to it, with the same prompt.` : ''} Follow the prompt below exactly, then save_report.${othersLine(run)}${heldBack}`, project: { project_id: id, name: project.name }, run: view(run) };
+        return { status: 'resumed', message: `Research run ${runId} for ${project.name} was waiting for ${ctx.label} (started ${run.created_at}); you are now doing it.${added.length ? ` Added ${listLabels(added)} to it, with the same prompt.` : ''}${sentLine(sent)} Follow the prompt below exactly, then save_report.${othersLine(run)}${heldBack}`, project: { project_id: id, name: project.name }, run: view(run) };
       }
       // 3. Your model's job in the open run is in a paid API's hands.
       const mineElsewhere = research.openJobsFor(ws, id, me);
       if (mineElsewhere.length) {
         const runId = mineElsewhere[0].run.run_id;
         const added = addable.length ? research.addProviders(ws, id, runId, addable, { channel: ctx.channel }).added : [];
+        const sent = sendWaiting(runId);
         const run = reload(runId);
         kickIfQueued(run);
-        return { status: 'in_background', message: `${ctx.label}'s research for ${project.name} is already in run ${runId}: ${jobView(run.jobs[me], run, me).progress}. Nothing for you to research now; the report appears on the desk when it is saved.${added.length ? ` Added ${listLabels(added)} to the run, with the same prompt.` : ''}${othersLine(run)}${heldBack}`, project: { project_id: id, name: project.name }, run: view(run) };
+        return { status: 'in_background', message: `${ctx.label}'s research for ${project.name} is already in run ${runId}: ${jobView(run.jobs[me], run, me).progress}. Nothing for you to research now; the report appears on the desk when it is saved.${added.length ? ` Added ${listLabels(added)} to the run, with the same prompt.` : ''}${sentLine(sent)}${othersLine(run)}${heldBack}`, project: { project_id: id, name: project.name }, run: view(run) };
       }
     }
 
@@ -649,15 +659,16 @@ const handlers = {
       .map(([p, o]) => ` ${PROVIDER_LABELS[p]} is still open in ${o.run.run_id} (${jobView(o.job, o.run, me).progress}); not started again.`)
       .join('');
     if (!toStart.length) {
+      const sent = [...new Set(Object.values(stillOpen).map((o) => o.run.run_id))].flatMap((runId) => sendWaiting(runId));
       const host = reload(stillOpen[toRun[0]].run.run_id);
       kickIfQueued(host);
       const progress = toRun.map((p) => {
-        const r = stillOpen[p].run.run_id === host.run_id ? host : stillOpen[p].run;
+        const r = stillOpen[p].run.run_id === host.run_id ? host : reload(stillOpen[p].run.run_id);
         return `${PROVIDER_LABELS[p]}: ${jobView(r.jobs[p], r, me).progress}${r.run_id !== host.run_id ? ` (in ${r.run_id})` : ''}`;
       });
       return {
         status: 'in_progress',
-        message: `Nothing new was started: ${listLabels(toRun)} ${toRun.length === 1 ? 'is' : 'are'} already in research run ${host.run_id} for ${project.name} (started ${host.created_at}). ${progress.join('. ')}.${skipped.length ? ` ${skipped.map((s) => s.reason).join(' ')}` : ''} get_research shows their progress; if Eric wants it started over, call start_research again with restart: true.`,
+        message: `Nothing new was started: ${listLabels(toRun)} ${toRun.length === 1 ? 'is' : 'are'} already in research run ${host.run_id} for ${project.name} (started ${host.created_at}).${sentLine(sent)} ${progress.join('. ')}.${skipped.length ? ` ${skipped.map((s) => s.reason).join(' ')}` : ''} get_research shows their progress; if Eric wants it started over, call start_research again with restart: true.`,
         project: { project_id: id, name: project.name },
         run: view(host),
         skipped,
@@ -674,6 +685,7 @@ const handlers = {
         const missing = toStart.filter((p) => !openRun.jobs[p]);
         if (missing.length) {
           research.addProviders(ws, id, openRun.run_id, missing, { assistant: missing.includes(me) ? me : null, channel: ctx.channel });
+          sendWaiting(openRun.run_id);
           const run = reload(openRun.run_id);
           kickIfQueued(run);
           const mineNow = run.jobs[me];
