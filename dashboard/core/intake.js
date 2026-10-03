@@ -597,7 +597,10 @@ function confirmIntake(ws, id, { coingecko_id: chosen, sector = null, different_
       throw new OpError('CONFLICT', `${cand.name} matches ${p.name} (${projectId}) in your records (${(added.matched_on || []).join(', ') || 'same project'}), which is bound to the CoinGecko coin "${idn.coingecko_id}", not "${chosen}". Nothing was researched. Check which one you mean on the project page.`);
     }
     if (idn.status !== 'verified') {
-      projects.updateIdentity(ws, projectId, { coingecko_id: chosen, official_website: idn.official_website || cand.homepage, assets, evidence });
+      // A market listing stored as the website (an older record) is not the
+      // project's own site: CoinGecko's homepage for the chosen coin is.
+      const site = idn.official_website && !projects.isNonOfficialHost(idn.official_website) ? idn.official_website : cand.homepage;
+      projects.updateIdentity(ws, projectId, { coingecko_id: chosen, official_website: site, assets, evidence });
     }
   }
   const research = require('./research');
