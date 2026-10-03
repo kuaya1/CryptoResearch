@@ -318,8 +318,12 @@ test('connector: the Cowork workflow (find, add once, research, draft, resume, s
   // Research never recorded a holding.
   assert.equal(readJson(path.join(d.ws.root, 'portfolio', 'transactions.json')).transactions.length, 0);
 
+  // The start log's record count, which is how a restart on Render is checked.
+  const before = hosted.recordsSummary(d.ws);
+  assert.match(before, /^Records: 1 project \(1 on the watchlist\), 1 report, newest examplecoin-fictional\/\S+ \(saved [^)]+\), 0 transactions; 1 connected app\.$/);
   // The saved report is still there after a restart (a deploy).
   await d.restart();
+  assert.equal(hosted.recordsSummary(d.ws), before);
   const after = await tool(d, access, 'get_report', { project_id: pid, include_text: true });
   assert.equal(after.data.report.report_id, reportId);
   assert.equal(after.data.text, text);

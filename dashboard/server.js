@@ -281,7 +281,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   const auth = hosted ? require('./hosted').makeAuth(ws, hosted) : null;
   // The connector for Claude (Cowork, claude.ai, Desktop): OAuth sign-in that
   // Eric approves with his passphrase, then the MCP endpoint at /mcp.
-  const oauth = hosted ? require('./oauth').makeOAuth(ws, { origin, auth }) : null;
+  const oauth = hosted ? require('./oauth').makeOAuth(ws, { origin, auth, log: (...a) => { if (!quiet) console.log(...a); } }) : null;
   const mcp = hosted ? require('./mcp').makeMcp(ws, { rebuild: (areas) => rebuild(areas), log: (...a) => { if (!quiet) console.log(...a); } }) : null;
   const clients = new Set();
   const sockets = new Set();

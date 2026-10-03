@@ -404,8 +404,32 @@ async function main(env = process.env) {
   }
   const ws = prepareWorkspace(cfg);
   console.log(researchSummary(ws));
+  console.log(recordsSummary(ws));
   const { start } = require('./server');
   return start(ws, { hosted: { port: cfg.port, hosts: cfg.hosts, password: cfg.password } });
+}
+
+// One line for the start log: what the desk holds (counts and the newest
+// report, no content), so a restart or deploy can be checked against the
+// line before it.
+function recordsSummary(ws) {
+  const { listDir } = require('./core/fsx');
+  const list = require('./core/projects').listProjects(ws).filter((p) => !p.broken);
+  let reports = 0;
+  let newest = null;
+  for (const p of list) {
+    for (const rid of listDir(ws.abs(`projects/${p.project_id}/reports`), { dirs: true })) {
+      reports++;
+      const meta = readJson(ws.abs(`projects/${p.project_id}/reports/${rid}/meta.json`), null);
+      const at = meta && meta.imported_at ? meta.imported_at : '';
+      if (!newest || at > newest.at) newest = { at, ref: `${p.project_id}/${rid}` };
+    }
+  }
+  const txs = require('./core/portfolio').loadTransactions(ws).filter((t) => !t.voided).length;
+  const oauth = readJson(ws.abs('.cr/oauth.json'), null);
+  const apps = oauth && oauth.grants ? Object.values(oauth.grants).filter((g) => !g.revoked_at).length : 0;
+  const watched = list.filter((p) => p.watchlist && p.watchlist.on_watchlist).length;
+  return `Records: ${list.length} project${list.length === 1 ? '' : 's'} (${watched} on the watchlist), ${reports} report${reports === 1 ? '' : 's'}${newest ? `, newest ${newest.ref} (saved ${newest.at})` : ''}, ${txs} transaction${txs === 1 ? '' : 's'}; ${apps} connected app${apps === 1 ? '' : 's'}.`;
 }
 
 // One line for the start log: the bounds research would be sent with, and
@@ -422,4 +446,4 @@ function researchSummary(ws) {
   return `Research: ${(r.providers.claude || {}).model || 'no model'}; ${b.max_output_tokens} output tokens per request, up to ${b.requests_max} requests, ${b.search.limit} searches per request, ${r.timeout_seconds || 600} s per call; limits $${budget.per_run_usd} per run, $${budget.daily_usd} per day, $${budget.monthly_usd} per month; Claude key ${providers.keyStatus('claude').present ? 'present' : 'missing'}; route ${st.mode}${st.mode === 'api' ? '' : ` (${st.reason})`}.${last ? ` Defaults v${last.version} applied ${last.at}: ${last.changed.length ? last.changed.map((c) => `${c.setting} ${c.from === null ? 'unset' : c.from} -> ${c.to}`).join(', ') : 'nothing to change'}.` : ''}`;
 }
 
-module.exports = { hostedConfig, prepareWorkspace, syncTemplates, makeAuth, main, HOSTED_DEFAULTS, loginPage, setupPage, containingMount, persistentDiskProblem, researchSummary };
+module.exports = { hostedConfig, prepareWorkspace, syncTemplates, makeAuth, main, HOSTED_DEFAULTS, loginPage, setupPage, containingMount, persistentDiskProblem, researchSummary, recordsSummary };

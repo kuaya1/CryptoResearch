@@ -577,6 +577,8 @@ function makeMcp(ws, { rebuild = () => {}, version = '1.0.0', log = () => {} } =
     switch (msg.method) {
       case 'initialize': {
         const asked = msg.params && msg.params.protocolVersion;
+        const client = msg.params && msg.params.clientInfo ? `${msg.params.clientInfo.name || '?'} ${msg.params.clientInfo.version || ''}`.trim() : 'unknown client';
+        log(`MCP initialize (${client}; protocol ${asked || '?'})`);
         return reply({
           protocolVersion: PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0],
           capabilities: { tools: { listChanged: false } },
@@ -587,6 +589,7 @@ function makeMcp(ws, { rebuild = () => {}, version = '1.0.0', log = () => {} } =
       case 'ping':
         return reply({});
       case 'tools/list':
+        log(`MCP tools/list (${TOOLS.length} tools)`);
         return reply({ tools: TOOLS });
       case 'tools/call': {
         const p = msg.params || {};

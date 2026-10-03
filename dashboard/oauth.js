@@ -107,7 +107,7 @@ function shell(title, body) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · CryptoResearch</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/position.css"></head><body><main class="login-wrap">${body}</main></body></html>`;
 }
 
-function makeOAuth(ws, { origin, auth }) {
+function makeOAuth(ws, { origin, auth, log = () => {} }) {
   const resource = `${origin}/mcp`;
   const metadataUrl = `${origin}/.well-known/oauth-protected-resource`;
   const storeFile = ws.abs(STORE_REL);
@@ -236,6 +236,7 @@ ${msg}<input type="hidden" name="request" value="${esc(p.id)}">
     store.clients[clientId] = client;
     pruneClients();
     save();
+    log(`OAuth: client registered (${client.client_name}; return to ${uris.map((u) => new URL(u).host).join(', ')})`);
     return json(res, 201, { client_id: clientId, client_id_issued_at: Math.floor(Date.now() / 1000), ...client, created_at: undefined });
   }
 
@@ -268,11 +269,16 @@ ${msg}<input type="hidden" name="request" value="${esc(p.id)}">
     const formAction = "'self' https://claude.ai http://localhost:* http://127.0.0.1:*";
     if (form.get('decision') !== 'allow') {
       pending.delete(p.id);
+      log(`OAuth: connection denied (${p.client_name})`);
       return redirectTo(res, p.redirect_uri, { error: 'access_denied', state: p.state, iss: origin });
     }
     const check = await auth.verifyPassphrase(req, form.get('password') || '');
-    if (!check.ok) return page(res, 200, consentPage(p, { error: check.locked ? null : 'That passphrase is not right.', locked: check.locked }), { formAction });
+    if (!check.ok) {
+      log(`OAuth: approval refused (${check.locked ? 'locked after repeated attempts' : 'wrong passphrase'})`);
+      return page(res, 200, consentPage(p, { error: check.locked ? null : 'That passphrase is not right.', locked: check.locked }), { formAction });
+    }
     pending.delete(p.id);
+    log(`OAuth: connection approved (${p.client_name})`);
     const code = newToken();
     codes.set(hashOf(code), { client_id: p.client_id, redirect_uri: p.redirect_uri, code_challenge: p.code_challenge, scope: p.scope, expires: Date.now() + CODE_TTL_MS });
     return redirectTo(res, p.redirect_uri, { code, state: p.state, iss: origin });
@@ -304,15 +310,18 @@ ${msg}<input type="hidden" name="request" value="${esc(p.id)}">
       if (form.get('resource') && form.get('resource') !== resource) return json(res, 400, { error: 'invalid_target', error_description: `This server's resource is ${resource}.` });
       const grantId = `grant_${newToken(9)}`;
       store.grants[grantId] = { client_id: clientId, client_name: store.clients[clientId].client_name, created_at: new Date().toISOString(), last_used_at: null, revoked_at: null };
+      log(`OAuth: tokens issued for a new connection (${store.clients[clientId].client_name})`);
       return json(res, 200, issue(grantId, clientId, c.scope));
     }
     if (grant === 'refresh_token') {
       const key = hashOf(form.get('refresh_token') || '');
       const r = store.refresh[key];
       if (!r || r.client_id !== clientId || Date.parse(r.expires_at) < Date.now() || !store.grants[r.grant_id] || store.grants[r.grant_id].revoked_at) {
+        log('OAuth: refresh refused (invalid, expired or revoked)');
         return json(res, 400, { error: 'invalid_grant', error_description: 'The refresh token is invalid, expired or revoked. Reconnect from Claude.' });
       }
       delete store.refresh[key]; // rotated: the old refresh token stops working now
+      log('OAuth: tokens refreshed');
       return json(res, 200, issue(r.grant_id, clientId, r.scope));
     }
     return json(res, 400, { error: 'unsupported_grant_type' });
