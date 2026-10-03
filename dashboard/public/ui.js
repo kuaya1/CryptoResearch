@@ -358,18 +358,22 @@ export function sparkline(values, { width = 96, height = 28, label = '7-day pric
     svg('polyline', { points: pts, fill: 'none', stroke: 'var(--text-2)', 'stroke-width': '1.5', 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
 }
 
-const LOGO_GRAYS = ['#3a3a3c', '#48484a', '#5f5f64', '#6e6e73'];
-
+// A project's logo: CoinGecko's own image, fetched and cached by this desk
+// (the page never calls an outside image host). Without one, or while it
+// loads, a monogram on one of six soft tones, chosen from the project ID so
+// a project keeps its tone. One size, one fine ring.
 export function logo(p, { size = 28 } = {}) {
   const m = p.market || {};
   const label = (p.symbol || p.name || '?').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || '?';
   let hash = 0;
   for (const ch of String(p.project_id || p.name || '')) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
-  const box = h('span', { class: 'logo', 'aria-hidden': 'true', style: { background: LOGO_GRAYS[hash % LOGO_GRAYS.length], width: `${size}px`, height: `${size}px` } }, label);
+  const box = h('span', { class: `logo tone-${hash % 6}`, 'aria-hidden': 'true', style: { width: `${size}px`, height: `${size}px`, fontSize: `${Math.max(10, Math.round(size * 0.38))}px` } }, label);
   if (m.logo_url) {
-    const img = h('img', { src: m.logo_url, alt: '', loading: 'lazy', width: String(size), height: String(size) });
+    // Loaded before it is placed (so a missing logo never flashes a broken
+    // image); a detached image must not be lazy, or it never loads at all.
+    const img = h('img', { src: m.logo_url, alt: '', decoding: 'async', width: String(size), height: String(size) });
     img.addEventListener('error', () => img.remove());
-    img.addEventListener('load', () => { box.textContent = ''; box.appendChild(img); box.style.background = 'transparent'; });
+    img.addEventListener('load', () => { box.textContent = ''; box.appendChild(img); box.classList.add('has-img'); });
   }
   return box;
 }
@@ -487,7 +491,42 @@ const SVG_ICONS = {
   // A warning sign: filled for a serious flag, outlined for a material one.
   'warn-fill': [['path', { d: 'M8 1.6 15.3 14.4H.7Z', fill: 'currentColor' }], ['path', { d: 'M8 6v3.6', class: 'ink-line', 'stroke-width': '1.7', 'stroke-linecap': 'round' }], ['circle', { cx: '8', cy: '11.9', r: '0.95', class: 'ink-dot' }]],
   'warn-line': [['path', { d: 'M8 2.2 14.6 13.9H1.4Z', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.4', 'stroke-linejoin': 'round' }], ['path', { d: 'M8 6.2v3.3', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round' }], ['circle', { cx: '8', cy: '11.7', r: '0.85', fill: 'currentColor' }]],
+  // Research states, one sign each (the word is always beside it).
+  clock: [['circle', { cx: '8', cy: '8', r: '6.2', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5' }], ['path', { d: 'M8 4.8V8l2.1 1.3', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round' }]],
+  key: [['circle', { cx: '5.6', cy: '10.4', r: '2.7', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5' }], ['path', { d: 'm7.6 8.4 5.6-5.6m-1.9 1.9 1.5 1.5m-3.1.1 1.3 1.3', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round' }]],
+  pause: [['path', { d: 'M5.8 4.2v7.6M10.2 4.2v7.6', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round' }]],
+  question: [['circle', { cx: '8', cy: '8', r: '6.2', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5' }], ['path', { d: 'M6.3 6.3a1.8 1.8 0 1 1 2.5 1.7c-.5.2-.8.6-.8 1.1v.3', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round' }], ['circle', { cx: '8', cy: '11.4', r: '0.8', fill: 'currentColor' }]],
+  alert: [['circle', { cx: '8', cy: '8', r: '6.2', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5' }], ['path', { d: 'M8 4.9v3.6', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.6', 'stroke-linecap': 'round' }], ['circle', { cx: '8', cy: '11', r: '0.85', fill: 'currentColor' }]],
+  file: [['path', { d: 'M4.2 1.9h5L12 4.7v9.4H4.2Z M9 1.9v3h3', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.4', 'stroke-linejoin': 'round' }]],
+  none: [['circle', { cx: '8', cy: '8', r: '5.8', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.4', 'stroke-dasharray': '2.1 2.1' }]],
+  slash: [['circle', { cx: '8', cy: '8', r: '6.2', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5' }], ['path', { d: 'm3.8 12.2 8.4-8.4', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5' }]],
+  hatch: [['rect', { x: '2', y: '2', width: '12', height: '12', rx: '2.5', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.4', 'stroke-dasharray': '2 1.6' }], ['path', { d: 'M5 11 11 5M2.8 8.2 8.2 2.8M7.8 13.2l5.4-5.4', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.1' }]],
 };
+
+// The sign for each research state on a badge.
+const STATE_ICON = { none: 'none', withheld: 'hatch', pdf: 'file', queued: 'clock', waiting: 'key', interrupted: 'pause', uncertain: 'question', failed: 'alert', canceled: 'slash' };
+const WORKING_KINDS = new Set(['running', 'dispatching', 'cowork', 'connector']);
+
+// The grade ruler: 0 to 100 with the rubric's letter bands (F below 60, then
+// D, C, B and A by tens), a marker at the grade or a span for a range. The
+// number and letter are always written next to it.
+export function gradeMeter(g, { serious = false } = {}) {
+  if (!g || !['firm', 'range'].includes(g.status)) return null;
+  const clamp = (v) => Math.max(0, Math.min(100, Number(v)));
+  const wrap = h('div', { class: 'wrap' }, h('div', { class: 'track' }, ['f', 'd', 'c', 'b', 'a'].map((z) => h('span', { class: `zone z-${z}` }))));
+  if (g.status === 'firm') wrap.appendChild(h('span', { class: 'mark', style: { left: `${clamp(g.value)}%` } }));
+  else wrap.appendChild(h('span', { class: 'span', style: { left: `${clamp(g.low)}%`, width: `${Math.max(2, clamp(g.high) - clamp(g.low))}%` } }));
+  return h('div', { class: `gmeter${serious ? ' ev-serious' : ''}`, 'aria-hidden': 'true' }, wrap,
+    h('div', { class: 'scale' }, h('span', null, '0'), h('span', null, '60'), h('span', null, '100')));
+}
+
+// A withheld grade's share of the weight that was scored; the rest is hatched.
+export function coverageMeter(pct) {
+  if (typeof pct !== 'number') return null;
+  return h('div', { class: 'coverage-meter' },
+    h('div', { class: 'track', 'aria-hidden': 'true' }, h('div', { class: 'fill', style: { width: `${Math.max(0, Math.min(100, pct))}%` } })),
+    h('div', { class: 'lbl' }, `${pct}% of the weight scored · no grade from part of it`));
+}
 
 // A small decorative icon; the meaning is always in the surrounding text.
 export function icon(name) {
@@ -543,9 +582,11 @@ export function gradeBadge(provider, report, job, opts = {}) {
   // only when it is stale; the scorecard and panel give the date. A withheld
   // grade shows the share of the weight that was scored, never a number in
   // the grade's place. Evidence flags sit right beside the grade.
+  const sign = WORKING_KINDS.has(info.kind) ? h('span', { class: 'pulse' }) : STATE_ICON[info.kind] ? h('span', { class: 'si' }, icon(STATE_ICON[info.kind])) : null;
   return h(tag, attrs,
     h('span', { class: 'p', 'aria-hidden': 'true' }, PROVIDER_SHORT[provider]),
     h('span', { class: 'main', 'aria-hidden': 'true' },
+      sign,
       h('span', { class: 'v' }, info.value),
       info.sub ? h('span', { class: 's' }, info.sub) : null,
       info.label ? h('span', { class: 'l' }, info.label) : null,

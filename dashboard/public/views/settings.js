@@ -6,11 +6,11 @@ import {
 } from '../ui.js';
 
 // The color theme is this browser's choice (theme.js applies it before the
-// first paint), so the phone and the PC can differ.
-const THEMES = [['dark', 'Dark'], ['light', 'Light'], ['system', 'Match this device']];
+// first paint), so the phone and the PC can differ. Light is the default.
+const THEMES = [['light', 'Light'], ['dark', 'Dark'], ['system', 'Match this device']];
 
 function appearanceCard() {
-  const current = THEMES.some(([v]) => v === store.get('theme')) ? store.get('theme') : 'dark';
+  const current = THEMES.some(([v]) => v === store.get('theme')) ? store.get('theme') : 'light';
   const pick = h('fieldset', { class: 'seg', dataset: { nodirty: '1' } },
     h('legend', { class: 'sr-only' }, 'Color theme'),
     THEMES.map(([v, label]) => h('button', {
@@ -18,14 +18,14 @@ function appearanceCard() {
       'aria-pressed': String(v === current),
       dataset: { key: `theme-${v}` },
       onclick: (e) => {
-        store.set('theme', v === 'dark' ? null : v);
-        if (v === 'dark') document.documentElement.removeAttribute('data-theme');
+        store.set('theme', v === 'light' ? null : v);
+        if (v === 'light') document.documentElement.removeAttribute('data-theme');
         else document.documentElement.setAttribute('data-theme', v);
         for (const b of pick.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b === e.currentTarget));
         toast(`Theme: ${label}. Saved in this browser only.`);
       },
     }, label)));
-  return card('Appearance', pick, { note: 'Saved in this browser only. Dark is the default.' });
+  return card('Appearance', pick, { note: 'Saved in this browser only. Light is the default.' });
 }
 
 const TABS = [

@@ -254,6 +254,56 @@ test('watchlist: opens on what you follow, one count for the nav and the header,
   assert.equal(wl.prefs(ctxWith({})).filters.owned, 'watching');
 });
 
+test('theme: light is the default, also for a browser that used the dark default; dark and "match this device" are choices', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'theme.js'), 'utf8');
+  const run = (stored) => {
+    const attrs = {};
+    const window = { localStorage: { getItem: () => (stored === undefined ? null : JSON.stringify(stored)) } };
+    const document = { documentElement: { setAttribute: (k, v) => { attrs[k] = v; } } };
+    new Function('window', 'document', src)(window, document);
+    return attrs['data-theme'] || 'light';
+  };
+  assert.equal(run(undefined), 'light', 'nothing stored: light');
+  assert.equal(run(null), 'light');
+  assert.equal(run('light'), 'light');
+  assert.equal(run('dark'), 'dark');
+  assert.equal(run('system'), 'system');
+  assert.equal(run('<script>'), 'light', 'anything else is ignored');
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  const root = css.slice(css.indexOf(':root {'), css.indexOf('}', css.indexOf(':root {')));
+  assert.match(root, /color-scheme: light/, 'the default palette is the light one');
+  assert.match(css, /:root\[data-theme="dark"\] \{[^}]*color-scheme: dark/, 'dark stays available');
+});
+
+test('research progress: each model\'s way from prompt to grade, without inventing a step', async () => {
+  const { wl } = await mods;
+  const firm = { grade: { status: 'firm', value: 72 } };
+  assert.deepEqual(wl.progressSteps(null, null), ['todo', 'todo', 'todo', 'todo'], 'nothing asked yet');
+  assert.deepEqual(wl.progressSteps(null, 'queued'), ['done', 'now', 'todo', 'todo']);
+  assert.deepEqual(wl.progressSteps(null, 'waiting'), ['done', 'warn', 'todo', 'todo'], 'waiting needs you');
+  assert.deepEqual(wl.progressSteps(null, 'uncertain'), ['done', 'warn', 'todo', 'todo']);
+  assert.deepEqual(wl.progressSteps(null, 'failed'), ['done', 'bad', 'todo', 'todo']);
+  assert.deepEqual(wl.progressSteps(firm, 'completed'), ['done', 'done', 'done', 'done']);
+  assert.deepEqual(wl.progressSteps(firm, null), ['done', 'done', 'done', 'done'], 'a report saved outside a run');
+  assert.deepEqual(wl.progressSteps({ grade: { status: 'withheld', coverage_pct: 55 } }, 'completed'), ['done', 'done', 'done', 'warn'], 'a withheld grade is not a grade');
+  assert.deepEqual(wl.progressSteps({ ...firm, needs_text: true }, null)[3], 'warn', 'a PDF is not graded yet');
+});
+
+test('logos: the crisp cached image is preferred, the earlier small one serves until it arrives', () => {
+  const market = require('../core/market');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-logo-'));
+  const ws = { abs: (rel) => path.join(dir, rel) };
+  const logos = path.join(dir, 'market-data', 'logos');
+  fs.mkdirSync(logos, { recursive: true });
+  fs.writeFileSync(path.join(logos, 'example-fictional.png'), 'small');
+  assert.match(market.logoFile(ws, 'example-fictional').abs, /example-fictional\.png$/);
+  fs.writeFileSync(path.join(logos, 'example-fictional.lg.png'), 'large');
+  assert.match(market.logoFile(ws, 'example-fictional').abs, /example-fictional\.lg\.png$/);
+  assert.equal(market.logoFile(ws, 'example-fictional.lg'), null, 'an id never names a file variant');
+  assert.equal(market.logoFile(ws, 'nothing-here'), null);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('attention: a possibly billed call, blocked research and recovery problems stay in view; the rest is counted', async () => {
   const { wl } = await mods;
   const items = [

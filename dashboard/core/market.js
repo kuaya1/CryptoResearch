@@ -519,31 +519,35 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
 }
 
 // Logos are fetched once per asset from CoinGecko's image CDN (raster images
-// only, size-limited) and served by the local dashboard.
+// only, size-limited) and served by the local dashboard. The large image
+// (about 250 px) is kept as <id>.lg.<ext> so a logo stays crisp at 40 px on a
+// phone's screen; an earlier small <id>.<ext> is served until it arrives.
 async function cacheLogos(ws, observations, fetchImpl = fetch) {
   if (process.env.CR_MARKET_API_BASE) return; // tests and mocks never fetch images
   let fetched = 0;
   mkdirp(ws.abs(LOGO_DIR));
   const have = new Set(listDir(ws.abs(LOGO_DIR), { dirs: false }).map((f) => f.replace(/\.[a-z]+$/, '')));
   for (const o of observations) {
-    if (!o.image_url || have.has(o.id) || fetched >= 10) continue;
+    if (!o.image_url || have.has(`${o.id}.lg`) || fetched >= 10) continue;
     fetched++;
     try {
-      const res = await fetchImpl(o.image_url.replace('/large/', '/small/'), { signal: AbortSignal.timeout(10000) });
+      const res = await fetchImpl(o.image_url.replace(/\/(small|thumb)\//, '/large/'), { signal: AbortSignal.timeout(10000) });
       if (!res.ok) continue;
       const type = String(res.headers.get('content-type') || '').split(';')[0].trim();
       const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }[type];
       if (!ext) continue;
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.length > 200 * 1024 || buf.length < 32) continue;
-      replaceFile(ws, ws.abs(`${LOGO_DIR}/${o.id}.${ext}`), buf);
+      replaceFile(ws, ws.abs(`${LOGO_DIR}/${o.id}.lg.${ext}`), buf);
     } catch (_) { /* skip this logo */ }
   }
 }
 
 function logoFile(ws, id) {
   if (!/^[a-z0-9][a-z0-9-]{0,100}$/.test(id)) return null;
-  const f = listDir(ws.abs(LOGO_DIR), { dirs: false }).find((x) => x.replace(/\.[a-z]+$/, '') === id);
+  const files = listDir(ws.abs(LOGO_DIR), { dirs: false });
+  const base = (x) => x.replace(/\.[a-z]+$/, '');
+  const f = files.find((x) => base(x) === `${id}.lg`) || files.find((x) => base(x) === id);
   return f ? { abs: ws.abs(`${LOGO_DIR}/${f}`), type: { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }[f.split('.').pop()] } : null;
 }
 

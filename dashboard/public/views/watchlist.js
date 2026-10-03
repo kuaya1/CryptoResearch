@@ -11,7 +11,7 @@
 import {
   h, clear, button, select, input, changeCell, sparkline, logo, gradeBadge, badgeInfo, verdictChip, bandClass,
   fmtPrice, fmtCompactUsd, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, fmtSignedPct, freshnessText, priceStatus, stateText, toast, announce,
-  followedCount, researchState, withheldReason, unscoredList, jobKey, icon, evidenceLevel, evidenceText,
+  followedCount, researchState, withheldReason, unscoredList, jobKey, icon, evidenceLevel, evidenceText, gradeMeter, coverageMeter,
   PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT,
 } from '../ui.js';
 import { openAddProjectDialog, openResearchDialog, openSectorDialog, waitingActions } from './dialogs.js';
@@ -192,7 +192,7 @@ function projectCell(ctx, p) {
   // Changes since the last review: a small dot on the logo, the count in its label.
   const changed = p.changes && p.changes.item_count > 0 ? `${p.changes.item_count} change${p.changes.item_count === 1 ? '' : 's'} since ${p.changes.cursor_source === 'project created' ? 'the project was added' : 'your last review'}` : null;
   return h('div', { class: 'proj-cell' },
-    h('span', { class: 'logo-wrap' }, logo(p, { size: 20 }), changed ? h('span', { class: 'new-dot', role: 'img', 'aria-label': changed, title: changed }) : null),
+    h('span', { class: 'logo-wrap' }, logo(p, { size: 26 }), changed ? h('span', { class: 'new-dot', role: 'img', 'aria-label': changed, title: changed }) : null),
     h('div', { class: 'names' }, nameBtn,
       p.symbol ? h('span', { class: 'tick' }, p.symbol) : null,
       marks.length ? h('span', { class: 'marks' }, marks) : null));
@@ -501,9 +501,9 @@ export function readinessSummary(providers) {
   return { list, text: parts.join(' · ') || 'unknown', setup: n('manual') };
 }
 
-function stripItem(key, parts, { warn = false, extra = null } = {}) {
+function stripItem(key, parts, { warn = false, extra = null, ico = null } = {}) {
   const open = view.strip === key;
-  return h('button', { type: 'button', class: `ss-item${warn ? ' warn' : ''}`, 'aria-expanded': String(open), 'aria-controls': 'ss-panel', dataset: { key: `ss-${key}` }, onclick: () => toggleStrip(key) }, parts, extra ? h('span', { class: 'sr-only' }, `. ${extra}`) : null);
+  return h('button', { type: 'button', class: `ss-item${warn ? ' warn' : ''}`, 'aria-expanded': String(open), 'aria-controls': 'ss-panel', dataset: { key: `ss-${key}` }, onclick: () => toggleStrip(key) }, ico ? h('span', { class: `ico i-${ico}`, 'aria-hidden': 'true' }) : null, parts, extra ? h('span', { class: 'sr-only' }, `. ${extra}`) : null);
 }
 
 let toggleStrip = () => {};
@@ -720,9 +720,11 @@ function providerSection(ctx, p, prov) {
   }
   let gradeLine;
   if (rep && (info.kind === 'grade' || info.kind === 'range')) {
-    gradeLine = h('div', { class: `provider-grade${bandClass(rep.grade)}${info.ev === 'serious' ? ' ev-serious' : ''}` }, h('span', { class: 'big' }, rep.grade.display), rep.grade.label ? h('span', { class: 'lab', 'aria-label': `letter ${rep.grade.label}` }, rep.grade.label) : null, h('span', { class: 'small muted' }, info.kind === 'range' ? 'grade range, 0–100' : 'grade, 0–100'));
+    gradeLine = h('div', null, h('div', { class: `provider-grade${bandClass(rep.grade)}${info.ev === 'serious' ? ' ev-serious' : ''}` }, h('span', { class: 'big' }, rep.grade.display), rep.grade.label ? h('span', { class: 'lab', 'aria-label': `letter ${rep.grade.label}` }, rep.grade.label) : null, h('span', { class: 'small muted' }, info.kind === 'range' ? 'grade range, 0–100' : 'grade, 0–100')),
+      gradeMeter(rep.grade, { serious: info.ev === 'serious' }));
   } else if (rep) {
-    gradeLine = h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, info.kind === 'pdf' ? 'PDF saved: needs a text copy' : 'Grade withheld'), rep.grade && rep.grade.coverage_pct !== null && rep.grade.coverage_pct !== undefined ? h('span', { class: 'small muted' }, `${rep.grade.coverage_pct}% of the weight scored`) : null);
+    gradeLine = h('div', null, h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, info.kind === 'pdf' ? 'PDF saved: needs a text copy' : 'Grade withheld')),
+      info.kind === 'pdf' ? null : coverageMeter(rep.grade ? rep.grade.coverage_pct : null));
   } else {
     const st = researchState(info.kind, { provider: prov, hosted });
     // On the online desk the sentence for the assistant follows below.
@@ -778,6 +780,36 @@ function comparisonNote(ctx, p) {
     h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/comparison`, dataset: { key: `compare-${p.project_id}` } }, 'Compare in detail'));
 }
 
+// A few quiet lines where content will be; the words are for screen readers.
+function skeleton(label) {
+  return h('div', { class: 'insp-loading', role: 'status' }, h('span', { class: 'sr-only' }, `${label}…`), h('span', { class: 'skel w80' }), h('span', { class: 'skel w60' }), h('span', { class: 'skel w40' }));
+}
+
+// One model's way from prompt to grade, as four marks: done (filled), now
+// (ringed), needs you or a check (amber), failed (red). The words beside it
+// say the same; the marks are a glance.
+const STEP_NAMES = ['Prompt', 'Research', 'Report', 'Grade'];
+export function progressSteps(rep, key) {
+  const graded = rep && rep.grade && ['firm', 'range'].includes(rep.grade.status) && !rep.needs_text;
+  const research = !key ? (rep ? 'done' : 'todo')
+    : key === 'completed' ? 'done'
+      : ['queued', 'running', 'dispatching', 'cowork', 'connector'].includes(key) ? 'now'
+        : key === 'failed' ? 'bad'
+          : ['waiting', 'interrupted', 'uncertain'].includes(key) ? 'warn' : 'todo';
+  return [
+    key || rep ? 'done' : 'todo',
+    research,
+    rep ? 'done' : 'todo',
+    graded ? 'done' : rep ? 'warn' : 'todo',
+  ];
+}
+
+function stepsTrack(states) {
+  const words = { done: 'done', now: 'in progress', warn: 'needs attention', bad: 'failed', todo: 'not yet' };
+  return h('ol', { class: 'steps', 'aria-label': STEP_NAMES.map((n, i) => `${n} ${words[states[i]]}`).join(', ') },
+    states.map((st, i) => h('li', { class: st === 'todo' ? null : st, title: `${STEP_NAMES[i]}: ${words[st]}`, 'aria-hidden': 'true' }, i ? h('span', { class: 'bar' }) : null, h('span', { class: 'dot' }))));
+}
+
 // Research progress for this project, from the index: the latest run and
 // each model's job in words, with what is missing where a model needs setup.
 function researchProgress(ctx, p) {
@@ -799,13 +831,14 @@ function researchProgress(ctx, p) {
     return h('li', null, h('span', { class: 'who' }, PROVIDER_LABELS[prov]),
       h('span', null, st ? stateText(st.short === 'Saved' ? 'Saved as a report' : st.long, st.tone) : idle,
         job && job.error && key !== 'completed' ? h('span', { class: 'how' }, job.error) : null,
-        how));
+        how,
+        stepsTrack(progressSteps(rep, key))));
   });
   return h('div', null,
     run ? h('p', { class: 'run-line' }, h('span', null, `Run of ${fmtDateTime(run.created_at)}`), h('span', null, String(run.status || '').replace(/_/g, ' ')), run.horizon && run.horizon.text ? h('span', null, `Horizon ${run.horizon.text}`) : null)
       : h('p', { class: 'run-line' }, 'No research run yet.'),
     h('ul', { class: 'job-list' }, items),
-    h('div', { dataset: { slot: 'run' } }, h('p', { class: 'insp-loading' }, 'Loading the saved prompt…')));
+    h('div', { dataset: { slot: 'run' } }, skeleton('Loading the saved prompt')));
 }
 
 function projectAlerts(ctx, p) {
@@ -913,7 +946,7 @@ function renderPanel(ctx, pid) {
   const panel = h('aside', split
     ? { class: `panel${reopened ? ' entering' : ''}`, role: 'dialog', 'aria-modal': 'false', 'aria-labelledby': 'panel-title' }
     : { class: `panel${reopened ? ' entering' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'panel-title' },
-    h('div', { class: 'panel-head' }, logo(p, { size: 28 }),
+    h('div', { class: 'panel-head' }, logo(p, { size: 40 }),
       h('div', { class: 'names' }, heading,
         h('div', { class: 'meta-chips' },
           h('span', { class: `idn ${p.identity_status === 'verified' ? 'ok' : 'pending'}`, title: (p.identity_unknowns || []).join(' ') || null }, p.identity_status === 'verified' ? 'Identity verified' : 'Identity pending'),
@@ -931,8 +964,8 @@ function renderPanel(ctx, pid) {
         h('details', { class: 'explain', dataset: { key: 'panel-explain' } }, h('summary', null, 'How to read these grades'),
           h('p', { style: { marginTop: '6px' } }, 'Each model writes its own report. This app calculates a 0–100 grade from that report\'s six weighted component scores (20/25/20/15/10/10) under the rubric the report declares. Letters: A 90+, B 80+, C 70+, D 60+, F below 60.'),
           h('p', null, 'A range means the model gave score ranges. "Withheld" means a component was missing; the share of the weight that was scored is shown instead of a guess. Downside-risk scores are separate: higher means more risk. A warning sign beside a grade means the desk\'s evidence checks flagged claims in that report: filled for a serious flag, outlined for a material one. Flags never change a score.'))),
-      h('section', { 'aria-labelledby': 'panel-breakdown' }, h('h3', { id: 'panel-breakdown' }, 'Category breakdown'), h('div', { dataset: { slot: 'breakdown' } }, h('p', { class: 'insp-loading' }, 'Loading each model\'s scores…'))),
-      h('section', { 'aria-labelledby': 'panel-evidence' }, h('h3', { id: 'panel-evidence' }, 'Evidence and sources'), h('div', { dataset: { slot: 'evidence' } }, h('p', { class: 'insp-loading' }, 'Loading the evidence checks…'))),
+      h('section', { 'aria-labelledby': 'panel-breakdown' }, h('h3', { id: 'panel-breakdown' }, 'Category breakdown'), h('div', { dataset: { slot: 'breakdown' } }, skeleton('Loading each model\'s scores'))),
+      h('section', { 'aria-labelledby': 'panel-evidence' }, h('h3', { id: 'panel-evidence' }, 'Evidence and sources'), h('div', { dataset: { slot: 'evidence' } }, skeleton('Loading the evidence checks'))),
       h('section', { 'aria-labelledby': 'panel-compare' }, h('h3', { id: 'panel-compare' }, 'How the models compare'), comparisonNote(ctx, p)),
       h('section', { 'aria-labelledby': 'panel-market' }, h('h3', { id: 'panel-market' }, 'Market'),
         m ? h('div', null,
@@ -1216,12 +1249,12 @@ export function renderWatchlist(ctx, route) {
       filters, sortSel, columns);
   }
 
-  const refreshBtn = button('Refresh', null, { kind: 'ss-icon', key: 'refresh-prices' });
+  const refreshBtn = h('button', { type: 'button', class: 'ss-icon', dataset: { key: 'refresh-prices' } }, h('span', { class: 'ico i-refresh', 'aria-hidden': 'true' }), h('span', { class: 'lbl' }, 'Refresh'));
   refreshBtn.setAttribute('aria-label', 'Refresh prices now');
   refreshBtn.onclick = async () => {
     const m = ctx.state.index.freshness.market;
     refreshBtn.disabled = true;
-    refreshBtn.textContent = 'Refreshing…';
+    refreshBtn.querySelector('.lbl').textContent = 'Refreshing…';
     try {
       const out = await ctx.api.post('/api/market/refresh', {});
       toast(...refreshToast(out));
@@ -1231,7 +1264,7 @@ export function renderWatchlist(ctx, route) {
     } finally {
       if (refreshBtn.isConnected) {
         refreshBtn.disabled = false;
-        refreshBtn.textContent = 'Refresh';
+        refreshBtn.querySelector('.lbl').textContent = 'Refresh';
       }
     }
   };
@@ -1241,7 +1274,8 @@ export function renderWatchlist(ctx, route) {
   function drawHead() {
     const followed = followedCount(all());
     head.replaceChildren(
-      h('div', { class: 'title' }, h('h1', null, 'Watchlist'), h('span', { class: 'count' }, `${followed} watching`)),
+      h('div', { class: 'title' }, h('h1', null, 'Watchlist'), h('span', { class: 'count' }, `${followed} watching`),
+        h('p', { class: 'lede' }, 'Claude, ChatGPT and Gemini research each project on their own; every grade is calculated here from its own report.')),
       h('div', { class: 'actions' }, h('a', { class: 'btn', href: '#/new', dataset: { key: 'new-research' } }, 'New research'), addBtn));
   }
 
@@ -1263,20 +1297,24 @@ export function renderWatchlist(ctx, route) {
     const items = [];
     const priceWord = ps.problem ? h('span', { class: 'warn-word' }, m.rate_limited ? 'Rate limited' : ps.text) : null;
     items.push(h('span', { class: 'ss-group' },
-      stripItem('prices', [h('span', { class: 'k' }, view.priceSource === 'CoinGecko' ? 'Prices' : 'Prices (demo)'), h('span', { class: 'v' }, m.last_success_at ? fmtAgo(m.last_success_at) : 'not fetched'), priceWord], { warn: ps.problem, extra: m.last_success_at ? ps.asOf : null }),
+      stripItem('prices', [h('span', { class: 'k' }, view.priceSource === 'CoinGecko' ? 'Prices' : 'Prices (demo)'), h('span', { class: 'v' }, m.last_success_at ? fmtAgo(m.last_success_at) : 'not fetched'), priceWord], { warn: ps.problem, extra: m.last_success_at ? ps.asOf : null, ico: 'clock' }),
       refreshBtn));
     const mc = idx.market_context;
     const snap = mc && mc.snapshot;
     if (snap && snap.bitcoin && typeof snap.bitcoin.price_usd === 'number') {
       const demo = snap.provider === 'fictional-demo';
-      items.push(stripItem('market', [h('span', { class: 'k' }, demo ? 'BTC (demo)' : 'BTC'), h('span', { class: 'v' }, `$${Math.round(snap.bitcoin.price_usd).toLocaleString('en-US')}`), changeCell(snap.bitcoin.change_7d_pct, { label: 'Bitcoin over 7 days' }), h('span', { class: 'k' }, '7D'), mc.status === 'stale' ? h('span', { class: 'warn-word' }, 'stale') : null], { warn: mc.status === 'stale' }));
+      const b30 = snap.breadth && snap.breadth.d30;
+      const breadth = b30 && typeof b30.share_pct === 'number'
+        ? h('span', { class: 'breadth', title: `${b30.beating_btc} of ${b30.counted} large coins rose more than Bitcoin over 30 days` }, h('span', { class: 'breadth-bar', 'aria-hidden': 'true' }, h('span', { style: { width: `${Math.max(0, Math.min(100, b30.share_pct))}%` } })), `${b30.beating_btc}/${b30.counted} beat BTC`)
+        : null;
+      items.push(stripItem('market', [h('span', { class: 'k' }, demo ? 'BTC (demo)' : 'BTC'), h('span', { class: 'v' }, `$${Math.round(snap.bitcoin.price_usd).toLocaleString('en-US')}`), changeCell(snap.bitcoin.change_7d_pct, { label: 'Bitcoin over 7 days' }), h('span', { class: 'k' }, '7D'), breadth, mc.status === 'stale' ? h('span', { class: 'warn-word' }, 'stale') : null], { warn: mc.status === 'stale', ico: 'coin' }));
     }
     if (idx.research && idx.research.providers) {
       const rs = readinessSummary(idx.research.providers);
-      items.push(stripItem('models', [h('span', { class: 'k' }, 'Models'), h('span', { class: 'v' }, rs.text)], {}));
+      items.push(stripItem('models', [h('span', { class: 'k' }, 'Models'), h('span', { class: 'v' }, rs.text)], { warn: rs.setup > 0, ico: 'models' }));
     }
     if (rest.length) {
-      items.push(stripItem('review', [h('span', { class: 'v' }, `${rest.length} to review`), high ? h('span', { class: 'bad-word' }, `${high} urgent`) : null], { warn: high > 0 }));
+      items.push(stripItem('review', [h('span', { class: 'v' }, `${rest.length} to review`), high ? h('span', { class: 'bad-word' }, `${high} urgent`) : null], { warn: high > 0, ico: 'tray' }));
     }
     strip.replaceChildren(...items);
     drawStripPanel(rest, ps, m);

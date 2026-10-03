@@ -71,6 +71,23 @@ function breakdownPart(ctx, d) {
       '? unknown · N/A not applicable · hover a score for its reason. Each model keeps its own grade.'));
 }
 
+// How the report's claims are supported, by its own tags: verified in the
+// model's session [V], project-claimed [C], inference [I], speculative [S].
+// Counts and words; the bar's textures only repeat them.
+const TAGS = [['V', 't-v', 'verified'], ['C', 't-c', 'claimed'], ['I', 't-i', 'inference'], ['S', 't-s', 'speculative']];
+export function evidenceQuality(claims) {
+  const list = Array.isArray(claims) ? claims : [];
+  if (!list.length) return h('p', { class: 'small faint', style: { margin: '0 0 6px' } }, 'No structured claims in this report.');
+  const n = Object.fromEntries(TAGS.map(([t]) => [t, list.filter((c) => c.evidence_tag === t).length]));
+  const other = list.length - TAGS.reduce((sum, [t]) => sum + n[t], 0);
+  return h('div', null,
+    h('div', { class: 'evbar', 'aria-hidden': 'true' }, TAGS.filter(([t]) => n[t]).map(([t, cls]) => h('span', { class: cls, style: { width: `${(n[t] / list.length) * 100}%` } }))),
+    h('p', { class: 'ev-legend' },
+      TAGS.map(([t, cls, word]) => h('span', null, h('i', { class: cls, 'aria-hidden': 'true' }), h('strong', null, String(n[t])), ` ${word} [${t}]`)),
+      other ? h('span', null, h('strong', null, String(other)), ' untagged') : null,
+      h('span', { class: 'faint' }, `of ${list.length} claims`)));
+}
+
 function evidencePart(ctx, d) {
   const pid = d.project.project_id;
   const latest = latestReports(d);
@@ -85,6 +102,7 @@ function evidencePart(ctx, d) {
       h('div', { class: 'head' },
         h('strong', null, PROVIDER_LABELS[p]),
         h('span', { class: 'faint' }, `${fmtDate(a.analysis_at)}${level === 'serious' ? ' · serious flag' : level === 'material' ? ' · material flag' : ''}`)),
+      evidenceQuality(a.claims),
       evidenceChecksBlock(r.evidence),
       sources.length
         ? details(`${sources.length} source${sources.length === 1 ? '' : 's'} cited`, h('ol', { class: 'src-list' }, sources.map(sourceItem)), { id: `insp-src-${pid}-${p}` })
