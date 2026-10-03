@@ -112,9 +112,15 @@ test('hosted: first boot creates the real workspace with the proposed limits; te
   assert.equal(ws.kind, 'real');
   assert.equal(ws.root, dataDir);
   assert.deepEqual(ws.settings.research.default_providers, ['claude']);
-  assert.deepEqual(ws.settings.research.budget, { per_run_usd: 4, daily_usd: 8, monthly_usd: 30 });
+  assert.deepEqual(ws.settings.research.budget, { per_run_usd: 5, daily_usd: 10, monthly_usd: 40 });
   assert.equal(ws.settings.research.providers.claude.model, 'claude-opus-5-5');
   assert.equal(ws.settings.research.max_continuations, 2);
+  assert.equal(ws.settings.research.max_output_tokens, 48000, 'room for a full report plus thinking');
+  assert.equal(ws.settings.research.timeout_seconds, 1500);
+  // One attempt at these bounds fits the per-run limit.
+  const research = require('../core/research');
+  const plan = research.callPlan(ws, 'claude', 'x'.repeat(30000));
+  assert.ok(plan.ok && plan.total_usd < ws.settings.research.budget.per_run_usd, `reservation ${plan.total_usd}`);
   const code = path.join(__dirname, '..', '..', 'templates', 'research-prompt.v3.md');
   assert.deepEqual(fs.readFileSync(path.join(dataDir, 'templates', 'research-prompt.v3.md')), fs.readFileSync(code));
   // Eric's own change survives the next boot (defaults are applied once).
@@ -131,6 +137,35 @@ test('hosted: first boot creates the real workspace with the proposed limits; te
   const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).forEach((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : all.push(path.join(d, e.name))));
   walk(dataDir);
   assert.ok(!all.some((f) => fs.readFileSync(f, 'utf8').includes(PASS)), 'the passphrase is never stored');
+});
+
+test('hosted: defaults written by the first version move to the current ones on start, unless Eric changed them', (t) => {
+  const { dataDir, cleanup } = tempDataDir('upgrade');
+  t.after(cleanup);
+  const cfg = hosted.hostedConfig({ CR_DATA_DIR: dataDir, CR_ACCESS_PASSWORD: PASS, PORT: '10000', RENDER_EXTERNAL_HOSTNAME: HOST });
+  hosted.prepareWorkspace(cfg);
+  // What the desk wrote on 2026-10-02 (version 1), with one limit Eric changed.
+  const file = path.join(dataDir, 'config', 'settings.json');
+  const s = readJson(file);
+  delete s.hosted_defaults_version;
+  delete s.research.timeout_seconds;
+  s.research.max_output_tokens = 16000;
+  s.research.providers.claude.max_searches = 10;
+  s.research.budget = { per_run_usd: 4, daily_usd: 12, monthly_usd: 30 };
+  fs.writeFileSync(file, JSON.stringify(s));
+  const ws = hosted.prepareWorkspace(cfg);
+  const r = ws.settings.research;
+  assert.equal(r.max_output_tokens, 48000);
+  assert.equal(r.timeout_seconds, 1500);
+  assert.equal(r.providers.claude.max_searches, 8);
+  assert.deepEqual(r.budget, { per_run_usd: 5, daily_usd: 12, monthly_usd: 40 }, 'the daily limit Eric set stays');
+  const after = readJson(file);
+  assert.equal(after.hosted_defaults_version, 2);
+  assert.deepEqual(after.hosted_defaults_upgrades[0].changed.map((c) => c.setting).sort(), ['research.budget.monthly_usd', 'research.budget.per_run_usd', 'research.max_output_tokens', 'research.providers.claude.max_searches', 'research.timeout_seconds']);
+  // Applied once: a later change of Eric's is never overwritten.
+  after.research.max_output_tokens = 20000;
+  fs.writeFileSync(file, JSON.stringify(after));
+  assert.equal(hosted.prepareWorkspace(cfg).settings.research.max_output_tokens, 20000);
 });
 
 test('hosted: everything needs sign-in; the session cookie is HttpOnly, Secure and SameSite=Strict; sessions survive a restart; sign-out ends one', async (t) => {

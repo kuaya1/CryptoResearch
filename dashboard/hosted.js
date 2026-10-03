@@ -36,19 +36,53 @@ const MAX_FAILS_TOTAL = 100;
 // list prices for claude-opus-5-5 (Claude API documentation, October 2026):
 // $4 / $20 per million input / output tokens, $5 per million 5-minute cache
 // writes, $0.20 per million cache reads, and $10 per 1,000 web searches.
+const HOSTED_DEFAULTS_VERSION = 2;
 const HOSTED_DEFAULTS = {
   market_data: { enabled: true },
   research: {
     default_providers: ['claude'],
-    max_output_tokens: 16000,
+    // A full report is about 16,000 tokens of text, plus Claude's thinking,
+    // which counts toward the same limit; each request is streamed.
+    max_output_tokens: 48000,
     max_continuations: 2,
     effort: 'high',
+    timeout_seconds: 1500,
     providers: {
-      claude: { model: 'claude-opus-5-5', input_usd_per_mtok: 4, output_usd_per_mtok: 20, cache_write_usd_per_mtok: 5, cache_read_usd_per_mtok: 0.2, search_usd_per_call: 0.01, max_searches: 10 },
+      claude: { model: 'claude-opus-5-5', input_usd_per_mtok: 4, output_usd_per_mtok: 20, cache_write_usd_per_mtok: 5, cache_read_usd_per_mtok: 0.2, search_usd_per_call: 0.01, max_searches: 8 },
     },
-    budget: { per_run_usd: 4, daily_usd: 8, monthly_usd: 30 },
+    // One attempt reserves about $3.80 at these bounds (most of it the output
+    // ceiling); a typical run costs far less, and its recorded cost replaces
+    // the reservation.
+    budget: { per_run_usd: 5, daily_usd: 10, monthly_usd: 40 },
   },
 };
+const DEFAULTS_NOTE = 'Proposed limits for the online desk: claude-opus-5-5 with web search, up to 48,000 output tokens per request, $5 per run, $10 per day, $40 per month. Change them in Settings > Research models & budget.';
+
+// Defaults that an earlier version wrote are moved to the current ones on
+// start, but only where the value is still exactly what that version wrote:
+// anything Eric changed stays as he set it.
+const DEFAULT_UPGRADES = {
+  // v1 (2026-10-02) capped output at 16,000 tokens, too little for a full report.
+  2: [
+    ['research.max_output_tokens', 16000, 48000],
+    ['research.timeout_seconds', undefined, 1500],
+    ['research.providers.claude.max_searches', 10, 8],
+    ['research.budget.per_run_usd', 4, 5],
+    ['research.budget.daily_usd', 8, 10],
+    ['research.budget.monthly_usd', 30, 40],
+  ],
+};
+
+const getPath = (o, p) => p.split('.').reduce((x, k) => (x && typeof x === 'object' ? x[k] : undefined), o);
+function setPath(o, p, v) {
+  const keys = p.split('.');
+  let x = o;
+  for (const k of keys.slice(0, -1)) {
+    if (!x[k] || typeof x[k] !== 'object') x[k] = {};
+    x = x[k];
+  }
+  x[keys[keys.length - 1]] = v;
+}
 
 // The mount that holds a path, from the kernel's mount table (Linux): the
 // longest mount point that contains it. null when the table cannot be read.
@@ -155,11 +189,30 @@ function prepareWorkspace(cfg) {
   if (fresh) initWorkspace(cfg.dataDir, { kind: 'real', name: 'CryptoResearch', templatesFrom: path.join(CODE_DIR, 'templates') });
   syncTemplates(cfg.dataDir);
   const settingsFile = path.join(cfg.dataDir, 'config', 'settings.json');
-  const cur = readJson(settingsFile, { schema_version: 1 });
-  if (!cur.hosted_defaults_applied_at) {
-    const next = { ...mergeMissing(cur, HOSTED_DEFAULTS), hosted_defaults_applied_at: new Date().toISOString(), hosted_defaults_note: 'Proposed starting limits and model for the online desk (claude-opus-5-5, per run $4, per day $8, per month $30). Change them in Settings > Research models & budget.' };
+  let doc = readJson(settingsFile, { schema_version: 1 });
+  const now = new Date().toISOString();
+  let changed = false;
+  if (!doc.hosted_defaults_applied_at) {
+    doc = { ...mergeMissing(doc, HOSTED_DEFAULTS), hosted_defaults_applied_at: now, hosted_defaults_version: HOSTED_DEFAULTS_VERSION, hosted_defaults_note: DEFAULTS_NOTE };
+    changed = true;
+  } else {
+    for (let v = (doc.hosted_defaults_version || 1) + 1; v <= HOSTED_DEFAULTS_VERSION; v++) {
+      const moved = [];
+      for (const [p, from, to] of DEFAULT_UPGRADES[v] || []) {
+        if (getPath(doc, p) === from) {
+          setPath(doc, p, to);
+          moved.push({ setting: p, from: from === undefined ? null : from, to });
+        }
+      }
+      doc.hosted_defaults_version = v;
+      doc.hosted_defaults_upgrades = [...(doc.hosted_defaults_upgrades || []), { version: v, at: now, changed: moved }];
+      doc.hosted_defaults_note = DEFAULTS_NOTE;
+      changed = true;
+    }
+  }
+  if (changed) {
     mkdirp(path.dirname(settingsFile));
-    atomicWrite(settingsFile, jsonText(next));
+    atomicWrite(settingsFile, jsonText(doc));
   }
   return openWorkspace({ root: cfg.dataDir, actor: 'hosted' });
 }

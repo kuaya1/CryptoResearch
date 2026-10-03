@@ -129,16 +129,119 @@ function transportInfo(timeoutMs) {
   return { node: process.version, undici: process.versions.undici || null, dispatcher: a ? 'bundled Undici Agent' : null, headers_timeout_ms: a ? Math.ceil(timeoutMs) + TRANSPORT_MARGIN_MS : null, body_timeout_ms: a ? Math.ceil(timeoutMs) + TRANSPORT_MARGIN_MS : null, research_timeout_ms: timeoutMs };
 }
 
+function transportError(err) {
+  if (err instanceof ProviderError) return err;
+  if (err.name === 'TimeoutError') return new ProviderError('timeout', 'The provider did not answer before the time limit. A request that was sent may still be billed.');
+  if (err.name === 'AbortError') return new ProviderError('canceled', 'Canceled. A request that was already sent may still be billed.');
+  const code = causeCode(err);
+  if (code && NOT_SENT_CODES.has(code)) return new ProviderError('network', `Could not connect (${code}); the request was not sent.`, { code, notSent: true });
+  return new ProviderError('network', `Network error${code ? ` (${code})` : ''}: ${err.message}`, { code });
+}
+
+// Reads a streamed Messages answer (server-sent events) into the same shape
+// as an answer sent in one piece: id, model, content blocks, stop_reason and
+// usage. Blocks are rebuilt exactly (text, thinking with its signature, tool
+// calls with their input, tool results), so a paused turn can be sent back
+// unchanged. A stream that ends before message_stop, or reports an error, is
+// an error with the usage seen so far.
+async function readMessageStream(res) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let msg = null;
+  let finished = false;
+  const fail = (kind, message, extra = {}) => Object.assign(new ProviderError(kind, message, extra), { partial_usage: msg ? { ...msg.usage } : null, raw: msg });
+  const apply = (data) => {
+    if (data.type === 'message_start') {
+      msg = { ...data.message, content: [], usage: { ...((data.message && data.message.usage) || {}) } };
+      return;
+    }
+    if (data.type === 'ping') return;
+    if (data.type === 'error') {
+      const e = data.error || {};
+      throw fail('http', `Anthropic reported an error during the answer (${e.type || 'error'}): ${String(e.message || '').slice(0, 300)}`, { retryable: ['overloaded_error', 'api_error'].includes(e.type) });
+    }
+    if (!msg) throw fail('stream', 'The answer stream did not start with message_start.');
+    if (data.type === 'content_block_start') {
+      msg.content[data.index] = JSON.parse(JSON.stringify(data.content_block));
+    } else if (data.type === 'content_block_delta') {
+      const b = msg.content[data.index];
+      const d = data.delta || {};
+      if (!b) throw fail('stream', `The answer stream sent a delta for a block it never started (${data.index}).`);
+      if (d.type === 'text_delta') b.text = (b.text || '') + d.text;
+      else if (d.type === 'thinking_delta') b.thinking = (b.thinking || '') + d.thinking;
+      else if (d.type === 'signature_delta') b.signature = (b.signature || '') + d.signature;
+      else if (d.type === 'input_json_delta') b._json = (b._json || '') + d.partial_json;
+      else if (d.type === 'citations_delta') (b.citations = b.citations || []).push(d.citation);
+      // A kind of delta this desk does not know: a finished answer is still
+      // usable, but a paused one cannot be sent back exactly (callClaude).
+      else msg._unknown_deltas = (msg._unknown_deltas || 0) + 1;
+    } else if (data.type === 'content_block_stop') {
+      const b = msg.content[data.index];
+      if (b && b._json !== undefined) {
+        try {
+          b.input = b._json ? JSON.parse(b._json) : {};
+        } catch (_) {
+          throw fail('stream', 'A tool call in the answer stream had unreadable input.');
+        }
+        delete b._json;
+      }
+    } else if (data.type === 'message_delta') {
+      const d = data.delta || {};
+      if (d.stop_reason !== undefined) msg.stop_reason = d.stop_reason;
+      if (d.stop_sequence !== undefined) msg.stop_sequence = d.stop_sequence;
+      if (d.stop_details !== undefined) msg.stop_details = d.stop_details;
+      if (data.usage) Object.assign(msg.usage, data.usage);
+    } else if (data.type === 'message_stop') {
+      finished = true;
+    }
+  };
+  const eventOf = (block) => {
+    const lines = block.split('\n');
+    const data = lines.filter((l) => l.startsWith('data:')).map((l) => l.slice(5).replace(/^ /, '')).join('\n');
+    if (!data) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(data);
+    } catch (_) {
+      throw fail('stream', 'The answer stream contained unreadable data.');
+    }
+    apply(parsed);
+  };
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (value) buf += decoder.decode(value, { stream: true }).replace(/\r\n?/g, '\n');
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const block = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        eventOf(block);
+      }
+      if (done) break;
+    }
+    buf += decoder.decode();
+    if (buf.trim()) eventOf(buf.trim());
+  } catch (err) {
+    if (err instanceof ProviderError) throw err;
+    throw Object.assign(transportError(err), { partial_usage: msg ? { ...msg.usage } : null, raw: msg });
+  }
+  if (!finished) throw fail('network', 'The connection to Anthropic ended before the answer was complete. A request that was sent may still be billed.');
+  return msg;
+}
+
 async function post(fetchImpl, url, headers, body, { signal, dispatcher }) {
   let res;
   try {
     res = await fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), signal, dispatcher });
   } catch (err) {
-    if (err.name === 'TimeoutError') throw new ProviderError('timeout', 'The provider did not answer before the time limit. A request that was sent may still be billed.');
-    if (err.name === 'AbortError') throw new ProviderError('canceled', 'Canceled. A request that was already sent may still be billed.');
-    const code = causeCode(err);
-    if (code && NOT_SENT_CODES.has(code)) throw new ProviderError('network', `Could not connect (${code}); the request was not sent.`, { code, notSent: true });
-    throw new ProviderError('network', `Network error${code ? ` (${code})` : ''}: ${err.message}`, { code });
+    throw transportError(err);
+  }
+  const type = res.headers && typeof res.headers.get === 'function' ? String(res.headers.get('content-type') || '') : '';
+  if (res.ok && /text\/event-stream/.test(type) && res.body && typeof res.body.getReader === 'function') {
+    const requestId = res.headers.get('request-id') || res.headers.get('x-request-id') || null;
+    const json = await readMessageStream(res);
+    return { json, raw: null, requestId };
   }
   const text = await res.text();
   let json = null;
@@ -167,6 +270,10 @@ async function post(fetchImpl, url, headers, body, { signal, dispatcher }) {
 // an error with its usage and raw responses, never as a finished report.
 // One top-level cache breakpoint makes the resumed requests read the prompt
 // from the prompt cache instead of paying for it again.
+// Every request is streamed: a full report runs to about 16,000 tokens of text
+// plus thinking, which takes minutes to write, and a connection that carries
+// nothing for that long can be dropped on the way. Streaming keeps it busy, and
+// the research timeout still ends the whole call.
 const CLAUDE_MODERN = /^claude-(opus|sonnet)-(5|4-6|4-7|4-8)(\b|-)|^claude-(opus|sonnet)-5$/;
 
 function claudeIsModern(model) {
@@ -186,7 +293,7 @@ function addClaudeUsage(sum, u) {
 
 async function callClaude({ model, prompt, maxOutputTokens, maxSearches, key, signal, fetchImpl, dispatcher, effort = 'high', maxContinuations = 2 }) {
   const modern = claudeIsModern(model);
-  const base = { model, max_tokens: maxOutputTokens, cache_control: { type: 'ephemeral' } };
+  const base = { model, max_tokens: maxOutputTokens, cache_control: { type: 'ephemeral' }, stream: true };
   if (modern && effort) base.output_config = { effort };
   if (maxSearches > 0) base.tools = [{ type: modern ? 'web_search_20260209' : 'web_search_20250305', name: 'web_search', max_uses: maxSearches }];
   const headers = { 'x-api-key': key, 'anthropic-version': '2023-06-01' };
@@ -203,12 +310,16 @@ async function callClaude({ model, prompt, maxOutputTokens, maxSearches, key, si
       r = await post(fetchImpl, 'https://api.anthropic.com/v1/messages', headers, { ...base, messages }, { signal, dispatcher });
     } catch (err) {
       // A later request failing after earlier ones answered: those were billed.
-      // An HTTP error is a known outcome, so its usage is the cost. A timeout or
-      // network error may itself have been billed: the usage so far is kept for
-      // the record, and the attempt keeps counting at its reservation.
-      if (requests > 0) {
-        if (err.kind === 'http') err.usage = { ...usage, requests };
-        else err.partial_usage = { ...usage, requests };
+      // An HTTP error before any answer is a known outcome, so its usage is the
+      // cost. A timeout, a network error or a stream cut off mid-answer may
+      // itself have been billed: the usage seen so far is kept for the record,
+      // and the attempt keeps counting at its reservation.
+      if (requests > 0 || err.partial_usage) {
+        const seen = { ...usage };
+        if (err.partial_usage) addClaudeUsage(seen, err.partial_usage);
+        const n = requests + (err.partial_usage ? 1 : 0);
+        if (err.kind === 'http' && !err.partial_usage) err.usage = { ...seen, requests: n };
+        else err.partial_usage = { ...seen, requests: n };
         err.raw = { responses: raws, failed_request: err.raw || null };
       }
       throw err;
@@ -221,6 +332,10 @@ async function callClaude({ model, prompt, maxOutputTokens, maxSearches, key, si
     const content = json && Array.isArray(json.content) ? json.content : [];
     for (const b of content) if (b.type === 'text' && b.text) texts.push(b.text);
     if (!json || json.stop_reason !== 'pause_turn' || requests > maxContinuations) break;
+    if (json._unknown_deltas) {
+      usage.requests = requests;
+      throw new ProviderError('incomplete', 'Claude paused mid-research, and its answer so far contained content this desk cannot send back exactly, so it was not resumed. The partial answer is kept, not saved as a report. Retry.', { usage, raw: JSON.stringify({ responses: raws }), retryable: false });
+    }
     // Resume the same turn: the paused answer goes back as the assistant turn.
     messages.push({ role: 'assistant', content });
   }
