@@ -6,7 +6,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
-const { tempWorkspace, addFixtureProject, importAllFixtures } = require('./helpers');
+const { tempWorkspace, addFixtureProject, importAllFixtures, dropText, FIXTURES } = require('./helpers');
+const { readJson, atomicWrite, jsonText } = require('../core/fsx');
 
 function request(port, { method = 'GET', path: p = '/', headers = {}, body = null } = {}) {
   return new Promise((resolve, reject) => {
@@ -216,4 +217,96 @@ test('server: a repeated paste is saved once; a fixed retry reuses the saved cop
   const retry = await post('/api/inbox/retry', { key: first.body.result.key, project_id: 'example-payfi-fictional', run_id: null });
   assert.equal(retry.status, 200);
   assert.equal(inboxCopies().length, 1);
+});
+
+test('a withheld grade carries its unscored parts and the model\'s own notes into the index, never a value', (t) => {
+  const { ws, cleanup } = tempWorkspace('unscored');
+  t.after(cleanup);
+  addFixtureProject(ws);
+  // The weighted component (not the diagnostic of the same name) is unknown.
+  const [head, tail] = fs.readFileSync(path.join(FIXTURES, 'reports', 'example-payfi-fictional__chatgpt.md'), 'utf8').split('"investment_components"');
+  const text = `${head}"investment_components"${tail.replace(/"token_value_capture": \{[^}]*\}/, '"token_value_capture": {"status": "unknown", "value": null, "low": null, "high": null, "rationale": null, "evidence_refs": [], "missing_data": "FICTIONAL: no fee data was found for this token."}')}`;
+  assert.match(text, /no fee data was found/);
+  dropText(ws, 'chatgpt', 'example-payfi-fictional__chatgpt.md', text);
+  require('../core/inbox').scanInbox(ws, { force: true });
+  const { buildIndex } = require('../core/indexer');
+  const p = buildIndex(ws).projects.find((x) => x.project_id === 'example-payfi-fictional');
+  const s = p.providers.chatgpt;
+  assert.equal(s.grade.status, 'withheld');
+  assert.equal(s.grade.display, null, 'no number stands in for the grade');
+  assert.ok(s.grade.coverage_pct > 0 && s.grade.coverage_pct < 100);
+  assert.equal(s.unscored.length, 1);
+  assert.equal(s.unscored[0].status, 'unknown');
+  assert.equal(s.unscored[0].note, 'FICTIONAL: no fee data was found for this token.');
+  assert.equal(typeof s.unscored[0].label, 'string');
+  assert.equal(Object.prototype.hasOwnProperty.call(s.unscored[0], 'value'), false);
+});
+
+test('review queue: research waiting, stalled, uncertain or failed opens the project\'s research runs', (t) => {
+  const { ws, root, cleanup } = tempWorkspace('attention-research', { research: { providers: {} } });
+  t.after(cleanup);
+  const pid = addFixtureProject(ws).project_id;
+  const research = require('../core/research');
+  const { buildIndex } = require('../core/indexer');
+  ws.actor = 'cowork';
+  const run = research.createRun(ws, { project_id: pid, providers: ['claude', 'chatgpt', 'gemini'], horizon: '4 months', channel: 'cowork' });
+  ws.actor = 'test';
+  assert.equal(run.run.jobs.claude.mode, 'cowork');
+  assert.equal(run.run.jobs.chatgpt.state, 'unconfigured');
+  const kinds = (idx) => idx.attention.filter((a) => a.project_id === pid && a.kind.startsWith('research_'));
+  // Just started: waiting and working are normal, nothing to review yet.
+  assert.deepEqual(kinds(buildIndex(ws)), []);
+  // Forty minutes later: two models waiting for their assistants, and Cowork has gone quiet.
+  const later = kinds(buildIndex(ws, { now: Date.now() + 40 * 60000 }));
+  const waiting = later.filter((a) => a.kind === 'research_waiting');
+  assert.deepEqual(waiting.map((a) => a.title).sort(), ['Example PayFi (FICTIONAL): ChatGPT research is waiting for you', 'Example PayFi (FICTIONAL): Gemini research is waiting for you']);
+  assert.ok(waiting.every((a) => a.severity === 'medium' && a.action === `#/project/${pid}/research`));
+  const stalled = later.find((a) => a.kind === 'research_interrupted');
+  assert.ok(stalled, JSON.stringify(later));
+  assert.match(stalled.title, /Cowork stopped working on its research/);
+  assert.equal(stalled.action, `#/project/${pid}/research`);
+  // An API call that may have been billed is urgent; a failure opens the runs, not the reports.
+  const file = path.join(root, 'projects', pid, 'research', run.run_id, 'run.json');
+  const doc = readJson(file);
+  doc.jobs.gemini.state = 'uncertain';
+  doc.jobs.chatgpt.state = 'failed';
+  doc.jobs.chatgpt.error = 'FICTIONAL provider error';
+  atomicWrite(file, jsonText(doc));
+  const now = kinds(buildIndex(ws));
+  const uncertain = now.find((a) => a.kind === 'research_uncertain');
+  assert.equal(uncertain.severity, 'high');
+  assert.equal(uncertain.action, `#/project/${pid}/research`);
+  const failed = now.find((a) => a.kind === 'research_failed');
+  assert.equal(failed.detail, 'FICTIONAL provider error');
+  assert.equal(failed.action, `#/project/${pid}/research`);
+});
+
+test('review queue: stale prices open the activity log and carry the market\'s own note', (t) => {
+  const { ws, root, cleanup } = tempWorkspace('attention-market');
+  t.after(cleanup);
+  fs.mkdirSync(path.join(root, 'market-data'), { recursive: true });
+  atomicWrite(path.join(root, 'market-data', 'status.json'), jsonText({ state: 'failed', last_attempt_at: new Date().toISOString(), last_success_at: new Date(Date.now() - 3 * 3600000).toISOString(), last_error: 'HTTP 429', note: 'FICTIONAL: the price source is limiting requests.', consecutive_failures: 2 }));
+  const { buildIndex } = require('../core/indexer');
+  const item = buildIndex(ws).attention.find((a) => a.kind === 'market_stale');
+  assert.ok(item);
+  assert.equal(item.action, '#/settings?tab=activity');
+  // The market code's own plain-English note (market.freshness), not the raw error.
+  assert.equal(item.detail, require('../core/market').freshness(ws).note);
+  assert.match(item.detail, /^The last price refresh failed; showing prices from /);
+});
+
+test('a closed position is not a holding: the project page and the list do not say Held', (t) => {
+  const { ws, cleanup } = tempWorkspace('closed');
+  t.after(cleanup);
+  const pid = addFixtureProject(ws).project_id;
+  const portfolio = require('../core/portfolio');
+  const indexer = require('../core/indexer');
+  portfolio.addAccount(ws, { name: 'Fictional wallet', kind: 'self_custody' });
+  const acct = portfolio.loadAccounts(ws)[0].account_id;
+  assert.equal(portfolio.addTransactions(ws, [{ type: 'buy', date: '2026-09-01', account_id: acct, asset_id: 'example-payfi-fictional', quantity: '10', price_usd: '0.1' }], { source: 'test' }).status, 'saved');
+  assert.ok(indexer.projectDetail(ws, pid).position, 'an open position is a holding');
+  assert.equal(indexer.buildIndex(ws).projects.find((p) => p.project_id === pid).held, true);
+  assert.equal(portfolio.addTransactions(ws, [{ type: 'sell', date: '2026-09-02', account_id: acct, asset_id: 'example-payfi-fictional', quantity: '10', price_usd: '0.2' }], { source: 'test' }).status, 'saved');
+  assert.equal(indexer.projectDetail(ws, pid).position, null, 'sold to zero: no position on the project page');
+  assert.equal(indexer.buildIndex(ws).projects.find((p) => p.project_id === pid).held, false);
 });

@@ -2,13 +2,13 @@
 // when opened and each in its own error boundary. Report text is cached so a
 // live refresh redraws instantly and keeps your reading position.
 import {
-  h, card, table, chip, gradeView, verdictChip, scoreView, tagChip, providerChip, gradeBadge, badgeInfo, logo, sparkline, changeCell,
-  fmtPrice, fmtCompactUsd, fmtNum, fmtDate, fmtDateTime, fmtAgo, fmtAge, fmtSignedPct, freshnessText, kv, details, field, input, select, button,
-  action, callout, empty, toast, copyText, tabStrip, safeSection, submissionId, stateText, fieldError, PROVIDERS, PROVIDER_LABELS, RESEARCH_STATE, link,
-  jobKey, coworkIdleMinutes, isAssistantJob,
+  h, card, table, gradeView, verdictChip, scoreView, tagChip, badgeInfo, bandClass, logo, sparkline, changeCell,
+  fmtPrice, fmtCompactUsd, fmtNum, fmtDate, fmtDateTime, fmtAgo, fmtSignedPct, freshnessText, kv, details, field, input, select, button,
+  action, callout, copyText, tabStrip, safeSection, submissionId, stateText, fieldError, PROVIDERS, PROVIDER_LABELS, link,
+  jobKey, coworkIdleMinutes, isAssistantJob, researchState, withheldReason, unscoredFrom, unscoredList,
 } from '../ui.js';
 import { renderMarkdown } from '../md.js';
-import { openResearchDialog, openSectorDialog } from './dialogs.js';
+import { openResearchDialog, openSectorDialog, waitingActions, waitingStep } from './dialogs.js';
 import { positionCard, previewTiming } from '../position-ui.js';
 
 const TABS = [
@@ -97,9 +97,9 @@ function header(ctx, d, row) {
       h('div', { class: 'pill-row', style: { gap: '12px' } }, logo({ ...row, project_id: p.project_id, name: p.name, symbol: p.symbol }, { size: 36 }), h('h1', null, p.name, p.symbol ? h('span', { class: 'faint', style: { fontWeight: 500 } }, ` ${p.symbol}`) : null)),
       h('div', { class: 'meta-line', style: { marginTop: '8px' } },
         sector ? h('button', { type: 'button', class: 'link', dataset: { key: 'project-sector' }, 'aria-label': `Sector: ${sector.label || sector.primary}. Change sector`, onclick: () => openSectorDialog(ctx, { ...row, ...p, sector }) }, sector.label || sector.primary) : null,
-        h('span', { title: d.profile ? d.profile.applies_to : '' }, `Scoring profile ${p.sector_profile}`),
         h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/research`, title: (id.unknowns || []).join(' ') || 'Token identity, contracts and evidence', dataset: { key: 'project-identity' } }, id.status === 'verified' ? 'Identity verified' : `Identity ${id.status}`),
-        d.position ? h('span', null, 'Held') : null,
+        // Watching or researching never suggests a holding; only an open position says Held.
+        d.position && !d.position.closed ? h('span', null, 'Held') : null,
         id.official_website ? h('a', { href: id.official_website, class: 'wrap-anywhere' }, id.official_website.replace(/^https?:\/\//, '').replace(/\/$/, '')) : null)),
     h('div', { class: 'actions' }, research, watch, archive));
 }
@@ -117,6 +117,14 @@ function originalOf(r, path) {
   return Object.prototype.hasOwnProperty.call(ov, path) ? fmtScore(ov[path]) : null;
 }
 
+// Why a grade is withheld, from the report itself: the parts not scored and
+// the model's own notes on them. The share of the weight that was scored is
+// shown; nothing is renormalized or filled in.
+function withheldBlock(prov, g, a) {
+  const why = withheldReason(prov, g, unscoredFrom(g, a.investment_components));
+  return h('div', { class: 'why-withheld' }, h('p', { style: { margin: '6px 0 0' } }, why.sentence), unscoredList(why, { max: 400 }));
+}
+
 function routeText(rep) {
   const pv = rep.provenance || {};
   return `${rep.assessment ? rep.assessment.model_version || 'model not stated' : rep.model_version || 'model not stated'} · ${pv.attested ? 'attested by the API' : 'self-reported'}${pv.channel ? ` · via ${pv.channel}` : ''}`;
@@ -128,16 +136,23 @@ function routeText(rep) {
 function modelCard(ctx, d, row, prov, latest) {
   const pid = d.project.project_id;
   const staleDays = ctx.state.index.settings.freshness.research_stale_days || 90;
+  const hosted = Boolean(ctx.state.session && ctx.state.session.hosted);
   const r = latest[prov];
   const sum = row.providers && row.providers[prov];
   const job = row.research && row.research.providers && row.research.providers[prov];
-  const info = badgeInfo(prov, sum, job, { staleDays });
+  const info = badgeInfo(prov, sum, job, { staleDays, hosted });
+  // A newer run's waiting job: the sentence for its assistant (online desk) or the pasted prompt.
+  const waiting = job && job.state === 'unconfigured' ? waitingActions(ctx, { pid, runId: job.run_id, provider: prov, key: `ov-${prov}` }) : null;
+  const newer = sum && info.newerText ? h('p', { class: `newer-line${info.problem ? ' problem' : ''}` }, info.newerText) : null;
   let main;
   if (r) {
     const g = sum ? sum.grade : r.grade;
+    const graded = g && (g.status === 'firm' || g.status === 'range');
+    const why = g && g.status === 'withheld' ? withheldReason(prov, g, sum && sum.unscored ? sum.unscored : unscoredFrom(r.grade, r.assessment.investment_components)) : null;
     main = h('div', null,
-      g && (g.status === 'firm' || g.status === 'range') ? h('div', { class: 'provider-grade' }, h('span', { class: 'big' }, g.display), g.label ? h('span', { class: 'lab' }, g.label) : null, h('span', { class: 'small muted' }, g.status === 'range' ? 'range, 0–100' : 'grade, 0–100'))
+      graded ? h('div', { class: `provider-grade${bandClass(g)}` }, h('span', { class: 'big' }, g.display), g.label ? h('span', { class: 'lab' }, g.label) : null, h('span', { class: 'small muted' }, g.status === 'range' ? 'range, 0–100' : 'grade, 0–100'))
         : h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, 'Grade withheld'), g && g.coverage_pct !== null && g.coverage_pct !== undefined ? h('span', { class: 'small muted' }, `${g.coverage_pct}% of the weight scored`) : null),
+      why ? h('p', { class: 'why-withheld' }, `${why.why.charAt(0).toUpperCase()}${why.why.slice(1)}.`) : null,
       h('dl', { class: 'facts' },
         h('div', { class: 'wide' }, h('dt', null, 'Verdict'), h('dd', null, verdictChip(r.assessment.verdict))),
         h('div', null, h('dt', null, 'Analysis'), h('dd', null, fmtDate(r.assessment.analysis_at), info.age ? h('span', { class: 'faint' }, ` · ${info.age}`) : null, info.stale ? h('span', { class: 'freshness stale' }, ' · stale') : null)),
@@ -145,19 +160,28 @@ function modelCard(ctx, d, row, prov, latest) {
         previewTiming(sum) ? h('div', { class: 'wide' }, h('dt', null, 'Timing (the model\'s view)'), h('dd', null, previewTiming(sum))) : null),
       r.assessment.summary ? h('p', { class: 'small', style: { margin: '10px 0 0' } }, r.assessment.summary) : null,
       h('p', { class: 'small faint', style: { margin: '8px 0 0' } }, routeText(r)),
+      newer,
       h('div', { class: 'btn-row', style: { marginTop: '10px' } },
         h('a', { class: 'btn small', href: `#/project/${pid}/reports?report=${encodeURIComponent(r.report_id)}`, dataset: { key: `ov-report-${prov}` } }, 'Open report'),
-        h('a', { class: 'btn small', href: `#/project/${pid}/scorecards?provider=${prov}`, dataset: { key: `ov-score-${prov}` } }, 'Scorecard')));
+        h('a', { class: 'btn small', href: `#/project/${pid}/scorecards?provider=${prov}`, dataset: { key: `ov-score-${prov}` } }, 'Scorecard'),
+        waiting));
+  } else if (sum && sum.needs_text) {
+    // A PDF-only report: saved, but no grade can be read from it offline.
+    main = h('div', null,
+      h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, 'PDF saved: needs a text copy')),
+      h('p', { class: 'small muted', style: { margin: '4px 0 0' } }, `The PDF from ${fmtDate(sum.analysis_at || sum.imported_at)} is kept byte for byte. Paste its text as a new import for ${PROVIDER_LABELS[prov]} to grade it; until then it is not compared.`),
+      newer,
+      h('div', { class: 'btn-row', style: { marginTop: '10px' } },
+        h('a', { class: 'btn small', href: `#/project/${pid}/reports?report=${encodeURIComponent(sum.report_id)}`, dataset: { key: `ov-report-${prov}` } }, 'Open the PDF report'),
+        h('a', { class: 'btn small', href: `#/updates?tab=import&project=${encodeURIComponent(pid)}&provider=${prov}`, dataset: { key: `ov-paste-${prov}` } }, 'Import the text'),
+        waiting));
   } else {
-    const k = info.kind;
-    const st = RESEARCH_STATE[k] || RESEARCH_STATE.none;
-    let next = null;
-    if (job && ['unconfigured', 'waiting'].includes(job.state)) {
-      const cp = button('Copy prompt', null, { kind: 'small', key: `ov-copy-${prov}` });
-      cp.onclick = action(cp, async () => { await copyText(await ctx.api.text(`/api/projects/${pid}/research/${job.run_id}/prompt`)); return undefined; });
-      next = [cp, h('a', { class: 'btn small', href: `#/updates?tab=import&project=${pid}&provider=${prov}&run=${encodeURIComponent(job.run_id)}`, dataset: { key: `ov-import-${prov}` } }, 'Import report')];
-    } else if (!job) next = button('Run research', () => openResearchDialog(ctx, { ...row, ...d.project, research: row.research }, { providers: [prov] }), { kind: 'small', key: `ov-run-${prov}` });
-    main = h('div', null, h('div', { class: 'provider-grade' }, stateText(st.long, st.tone)), job && job.error ? h('p', { class: 'small', style: { color: 'var(--neg)' } }, job.error) : null, next ? h('div', { class: 'btn-row', style: { marginTop: '8px' } }, next) : null);
+    const st = researchState(info.kind, { provider: prov, hosted });
+    const next = waiting || (!job ? button('Run research', () => openResearchDialog(ctx, { ...row, ...d.project, research: row.research }, { providers: [prov] }), { kind: 'small', key: `ov-run-${prov}` }) : null);
+    main = h('div', null,
+      h('div', { class: 'provider-grade' }, stateText(info.kind === 'waiting' && hosted ? 'Waiting for you' : st.long, st.tone)),
+      job && job.error ? h('p', { class: 'small', style: { color: 'var(--neg)' } }, job.error) : null,
+      next ? h('div', { class: 'btn-row', style: { marginTop: '8px' } }, next) : null);
   }
   return h('div', { class: 'card' }, h('h3', null, PROVIDER_LABELS[prov]), main);
 }
@@ -197,6 +221,10 @@ function overviewTab(ctx, d, row, latest) {
   return h('div', null,
     h('section', { class: 'section', 'aria-labelledby': 'ov-models' }, h('h2', { id: 'ov-models' }, 'Model scorecards'),
       h('div', { class: 'grid three' }, PROVIDERS.map((prov) => modelCard(ctx, d, row, prov, latest)))),
+    card('How the models compare', modelsCompared(ctx, d), {
+      note: 'Computed by this desk from the saved reports, not a model\'s opinion. Each model keeps its own grade; they are never merged into one.',
+      actions: [h('a', { class: 'small', href: `#/project/${encodeURIComponent(pid)}/comparison`, dataset: { key: 'ov-compare' } }, 'Open the full comparison')],
+    }),
     h('div', { class: 'grid two' },
       card('Since your last review', [
         ch.item_count ? h('ul', { class: 'list small' },
@@ -207,24 +235,63 @@ function overviewTab(ctx, d, row, latest) {
           : h('p', { class: 'small muted' }, 'Nothing new since your last review.'),
         h('div', { class: 'btn-row', style: { marginTop: '8px' } }, reviewedButton(ctx, pid), h('a', { class: 'small', href: `#/project/${pid}/history` }, 'All changes')),
       ], { note: ch.since ? `Since ${ch.cursor_source === 'project created' ? 'the project was added' : fmtDateTime(ch.since)}. A digest never changes grades, reports or your headline.` : null }),
-      card('How the models compare', comparisonSummary(ctx, d))),
+      card('Your headline', [h('p', { class: 'small', style: { margin: '0 0 8px' } }, headlineText), details('Change the headline', h('div', { class: 'actions' }, sel, save, clearBtn), { id: 'ov-headline' })], { note: 'The headline is your choice: one report, or one of your own decisions.' })),
     card('Material risks', [h('div', { class: 'legend' }, h('span', null, h('span', { class: 'swatch risk' }), 'Risk bars grow from the right: longer means more risk')), riskTable]),
-    unresolved.length ? card('Unresolved questions', h('ul', { class: 'list' }, unresolved.map((u) => h('li', null, h('span', { class: 'faint' }, `${u.provider === 'you' ? 'You' : PROVIDER_LABELS[u.provider]}: `), u.q)))) : null,
-    card('Your headline', [h('p', { class: 'small', style: { margin: '0 0 8px' } }, headlineText), details('Change the headline', h('div', { class: 'actions' }, sel, save, clearBtn), { id: 'ov-headline' })], { note: 'The headline is your choice: one report, or one of your own decisions.' }));
+    unresolved.length ? card('Unresolved questions', h('ul', { class: 'list' }, unresolved.map((u) => h('li', null, h('span', { class: 'faint' }, `${u.provider === 'you' ? 'You' : PROVIDER_LABELS[u.provider]}: `), u.q)))) : null);
 }
 
-function comparisonSummary(ctx, d) {
+const SECTION_NOTE = { component: ' (weighted into the grade)', risk: ' (downside risk: higher is worse)', diagnostic: '' };
+
+// How the models compare, from the comparison the desk computed over the
+// saved reports: each model's verdict and grade side by side (a withheld
+// grade stays withheld), differences at or above the highlight threshold,
+// figures that conflict, and the questions that would settle them. No
+// combined grade, and agreement is never presented as confirmation.
+function modelsCompared(ctx, d) {
   const c = d.comparison;
   const comp = c.comparability;
   const present = PROVIDERS.filter((p) => c.latest[p]);
-  if (present.length < 2) return h('p', { class: 'small muted' }, 'Differences appear once at least two models have a gradable report.');
-  if (!comp.comparable) return h('div', { class: 'small' }, h('p', { style: { margin: 0 } }, h('strong', null, 'Not directly comparable. '), comp.reasons.join('; ')), h('p', { class: 'muted', style: { margin: '6px 0 0' } }, 'Values can be read side by side, but no difference is calculated.'));
-  const ctxt = comp.context || {};
-  return h('div', { class: 'small' },
-    h('p', { style: { margin: 0 } }, `${comp.comparable_providers.map((p) => PROVIDER_LABELS[p]).join(', ')}: same rubric (${ctxt.rubric_version || '?'}), profile (${ctxt.sector_profile || '?'}) and horizon (${ctxt.horizon ? ctxt.horizon.raw : '?'}), analyses ${comp.date_span_days ?? '?'} day(s) apart.`),
-    c.flagged.length ? h('p', { style: { margin: '6px 0 0' } }, h('strong', null, `Differences of ${c.threshold}+ points: `), c.flagged.slice(0, 5).map((f) => `${f.label} (${f.spread})`).join(', '), c.flagged.length > 5 ? ', …' : '') : h('p', { style: { margin: '6px 0 0' } }, `No item differs by ${c.threshold} points or more.`),
-    h('p', { class: 'muted', style: { margin: '6px 0 0' } }, 'Agreement between models is not independent confirmation.'),
-    h('a', { href: `#/project/${encodeURIComponent(d.project.project_id)}/comparison` }, 'Open the comparison'));
+  if (!present.length) return h('p', { class: 'small muted', style: { margin: 0 } }, 'No gradable reports yet. Differences appear once at least two models have one.');
+  const side = table([
+    { label: 'Model', render: (p) => h('strong', null, PROVIDER_LABELS[p]) },
+    { label: 'Grade (this app)', render: (p) => gradeView(c.grades[p] && c.grades[p].grade, { compact: true }) },
+    { label: 'Verdict (the model\'s)', render: (p) => verdictChip(c.latest[p].verdict) },
+    { label: 'Analysis', nowrap: true, render: (p) => fmtDate(c.latest[p].analysis_at) },
+  ], present, { caption: 'Each model\'s grade and verdict, side by side' });
+  const out = [side];
+  const pairs = c.claim_conflicts.flatMap((m) => m.pairs.map((pair) => ({ metric: m.metric_id, ...pair })));
+  const contradictions = pairs.filter((x) => x.kind === 'contradiction');
+  const otherBasis = pairs.filter((x) => !['contradiction', 'agreement', 'agreement_shared_source'].includes(x.kind));
+  if (present.length < 2) {
+    out.push(h('p', { class: 'small muted', style: { margin: '10px 0 0' } }, 'Differences appear once a second model has a gradable report.'));
+    return out;
+  }
+  if (!comp.comparable) {
+    out.push(h('p', { class: 'small', style: { margin: '10px 0 0' } }, h('strong', null, 'Not directly comparable: '), `${comp.reasons.join('; ')}. The values can be read side by side, but no difference is calculated.`));
+  } else {
+    const rows = c.rows.filter((r) => r.spread_flag);
+    const cell = (s) => (!s ? '—' : s.status === 'scored' ? String(s.value) : s.status === 'range' ? `${s.low}–${s.high}` : s.status === 'not_applicable' ? 'N/A' : 'unknown');
+    out.push(h('p', { class: 'small', style: { margin: '10px 0 4px' } }, `${comp.comparable_providers.map((p) => PROVIDER_LABELS[p]).join(', ')} used the same rubric, scoring profile and horizon, analyzed ${comp.date_span_days ?? '?'} day(s) apart.`));
+    out.push(rows.length
+      ? h('div', null, h('h3', { class: 'compare-h' }, `Where they differ by ${c.threshold} points or more`),
+        h('ul', { class: 'list small' }, rows.slice(0, 6).map((r) => h('li', null, h('strong', null, r.label), SECTION_NOTE[r.section] || '', ': ',
+          comp.comparable_providers.map((p) => `${PROVIDER_LABELS[p]} ${cell(r.cells[p])}`).join(' · '), h('span', { class: 'faint' }, ` (${r.spread} points apart)`)))),
+        rows.length > 6 ? h('p', { class: 'small muted', style: { margin: 0 } }, `${rows.length - 6} more in the full comparison.`) : null)
+      : h('p', { class: 'small muted', style: { margin: 0 } }, `No score differs by ${c.threshold} points or more.`));
+  }
+  if (contradictions.length || otherBasis.length) {
+    out.push(h('div', null, h('h3', { class: 'compare-h' }, 'Figures that conflict'),
+      contradictions.length ? h('ul', { class: 'list small' }, contradictions.slice(0, 4).map((x) => h('li', null, h('code', null, x.metric), `: ${PROVIDER_LABELS[x.a.provider]} ${fmtNum(x.a.value)} ${x.a.unit || ''} vs ${PROVIDER_LABELS[x.b.provider]} ${fmtNum(x.b.value)} ${x.b.unit || ''}`, typeof x.diff_pct === 'number' ? h('span', { class: 'faint' }, ` (${x.diff_pct}% apart)`) : null))) : h('p', { class: 'small muted', style: { margin: 0 } }, 'No figure contradicts another on the same basis.'),
+      otherBasis.length ? h('p', { class: 'small muted', style: { margin: '4px 0 0' } }, `${otherBasis.length} more figure${otherBasis.length === 1 ? ' differs' : 's differ'} in unit, period, definition or date, so ${otherBasis.length === 1 ? 'it is' : 'they are'} not called a contradiction.`) : null));
+  }
+  const questions = c.resolving_questions || [];
+  if (questions.length) {
+    out.push(h('div', null, h('h3', { class: 'compare-h' }, 'Open questions that would settle it'),
+      h('ul', { class: 'list small' }, questions.slice(0, 4).map((q) => h('li', null, h('strong', null, q.label), `: ${q.question}`)))));
+  }
+  const shared = (c.shared_sources && c.shared_sources.shared) || [];
+  out.push(h('p', { class: 'small muted', style: { margin: '10px 0 0' } }, `Agreement between models is not independent confirmation: they may read the same sources (${shared.length} cited by more than one here), share training data, and get the same prompt.`));
+  return out;
 }
 
 function reviewedButton(ctx, pid) {
@@ -260,15 +327,20 @@ function scorecardsTab(ctx, d, latest, route) {
       h('div', { class: 'grid two' },
         h('div', null, h('div', { class: 'small muted' }, 'Grade calculated by this app'), gradeView(g),
           r.model_total ? h('p', { class: 'small', style: { marginTop: '8px' } }, r.model_total.status === 'mismatch' ? h('strong', null, 'Model total differs. ') : null, r.model_total.message) : null,
-          g && g.status === 'withheld' && g.reason ? h('p', { class: 'small muted', style: { marginTop: '6px' } }, g.reason) : null),
-        kv([
-          ['Model', `${a.model_version || 'not stated'} (${r.provenance && r.provenance.attested ? 'attested by the API' : 'self-reported'})`],
-          ['Rubric', h('span', null, a.rubric_version || 'not declared', g && g.rubric_status && g.rubric_status !== 'ok' ? h('span', { class: 'freshness stale' }, ` · ${g.rubric_status}: no authoritative grade`) : null)],
-          ['Profile · horizon', `${a.sector_profile || '?'} · ${a.horizon || '?'}${a.horizon_interval && a.horizon_interval.kind !== 'unknown' ? ` (${a.horizon_interval.low_months}–${a.horizon_interval.high_months} months)` : ''}`],
-          ['Prompt', a.prompt_version || 'not stated'],
-          ['Arrived via', `${(r.provenance && r.provenance.channel) || '?'}${r.provenance && r.provenance.research_run_id ? ` · run ${r.provenance.research_run_id}` : ''}`],
-          ['Citations', h('span', null, integ.status === 'valid' ? 'References resolve' : `Citation issues (${integ.status || 'unknown'})`, integ.counts ? h('span', { class: 'faint' }, ` · ${integ.counts.claims} claims, ${integ.counts.sources} sources`) : null)],
-        ])),
+          g && g.status === 'withheld' ? withheldBlock(prov, g, a) : null),
+        h('div', null,
+          kv([
+            ['Model', `${a.model_version || 'not stated'} (${r.provenance && r.provenance.attested ? 'attested by the API' : 'self-reported'})`],
+            ['Horizon', `${a.horizon || 'not stated'}${a.horizon_interval && a.horizon_interval.kind !== 'unknown' ? ` (${a.horizon_interval.low_months}–${a.horizon_interval.high_months} months)` : ''}`],
+            g && g.rubric_status && g.rubric_status !== 'ok' ? ['Rubric', h('span', { class: 'freshness stale' }, `${g.rubric_status}: no authoritative grade`)] : null,
+            ['Citations', h('span', null, integ.status === 'valid' ? 'References resolve' : `Citation issues (${integ.status || 'unknown'})`, integ.counts ? h('span', { class: 'faint' }, ` · ${integ.counts.claims} claims, ${integ.counts.sources} sources`) : null)],
+          ]),
+          details('Rubric and provenance', kv([
+            ['Rubric', a.rubric_version || 'not declared'],
+            ['Scoring profile', a.sector_profile || 'not declared'],
+            ['Prompt', a.prompt_version || 'not stated'],
+            ['Arrived via', `${(r.provenance && r.provenance.channel) || '?'}${r.provenance && r.provenance.research_run_id ? ` · run ${r.provenance.research_run_id}` : ''}`],
+          ]), { id: `sc-prov-${r.report_id}` }))),
       h('h3', { style: { marginTop: '20px' } }, 'Investment grade components (weighted)'),
       (table([
         { label: 'Component', render: (x) => x.label },
@@ -415,6 +487,54 @@ function normalizedView(ctx, d, r) {
   return det;
 }
 
+// At a glance, above the original: what the report concludes and what it
+// rests on. The grade is this app's calculation from the report's six
+// weighted scores (a withheld grade lists the unscored parts and the model's
+// own notes); verdict, horizon, risks, questions and sources are the model's.
+function atAGlance(ctx, d, r, withheld) {
+  const a = r.assessment;
+  const g = r.grade;
+  const isPdf = a.needs_text || String(r.meta.original_file || '').endsWith('.pdf');
+  const top = (s) => (s.status === 'range' ? s.high : s.value);
+  const risks = (ctx.state.index.rubrics.grading.risk_scores || [])
+    .map((def) => ({ def, s: (a.risk_scores || {})[def.id] }))
+    .filter((x) => x.s && (x.s.status === 'scored' || x.s.status === 'range'))
+    .sort((x, y) => top(y.s) - top(x.s))
+    .slice(0, 4);
+  const questions = a.unresolved_questions || [];
+  const sources = a.sources || [];
+  let gradeEl;
+  if (isPdf) gradeEl = h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, 'PDF: needs a text copy'));
+  else if (withheld) {
+    gradeEl = h('div', null,
+      h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, 'Withheld'), withheld.coverage !== null ? h('span', { class: 'small muted' }, `${withheld.coverage}% of the weight scored`) : null),
+      unscoredList(withheld, { max: 400 }));
+  } else if (g && (g.status === 'firm' || g.status === 'range')) gradeEl = gradeView(g);
+  else gradeEl = h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, 'No grade'), g && g.reason ? h('span', { class: 'small muted' }, g.reason) : null);
+  const sourceItem = (s) => {
+    const meta = [s.publisher, s.source_type ? s.source_type.replace(/_/g, ' ') : null, s.accessed_at ? `accessed ${fmtDate(s.accessed_at)}` : null].filter(Boolean);
+    return h('li', null, s.url ? h('a', { href: s.url }, s.title || s.url) : h('span', null, s.title || s.source_id, h('span', { class: 'faint' }, ' (no usable link)')), meta.length ? h('span', { class: 'faint' }, ` · ${meta.join(' · ')}`) : null);
+  };
+  return h('section', { class: 'card glance', 'aria-labelledby': 'glance-title' },
+    h('div', { class: 'card-head' }, h('div', null, h('h2', { id: 'glance-title' }, 'At a glance'),
+      h('div', { class: 'note' }, 'The grade is calculated by this app from the report\'s six weighted scores. The verdict, risks, questions and sources are the model\'s own; the report below tags each claim as checked, project-claimed, inference or speculation.'))),
+    h('div', { class: 'glance-grid' },
+      h('div', null,
+        h('div', { class: 'small muted' }, 'Grade'), gradeEl,
+        h('dl', { class: 'facts' },
+          h('div', null, h('dt', null, 'Verdict (the model\'s)'), h('dd', null, verdictChip(a.verdict))),
+          h('div', null, h('dt', null, 'Horizon'), h('dd', null, a.horizon || 'not stated')))),
+      h('div', null,
+        h('div', { class: 'small muted' }, 'Top downside risks (higher is worse)'),
+        risks.length
+          ? h('ul', { class: 'glance-risks' }, risks.map((x) => h('li', null, h('span', { title: x.def.definition || '' }, x.def.label), scoreView(x.s, 'risk'))))
+          : h('p', { class: 'small faint', style: { margin: '6px 0 0' } }, 'No downside risk was scored in this report.'))),
+    questions.length ? h('div', { class: 'glance-block' }, h('h3', null, `Unresolved questions (${questions.length})`), h('ul', { class: 'list small' }, questions.map((q) => h('li', null, q)))) : null,
+    h('div', { class: 'glance-block' }, sources.length
+      ? details(`${sources.length} source${sources.length === 1 ? '' : 's'} cited`, h('ol', { class: 'list small' }, sources.map(sourceItem)), { id: `src-${r.report_id}`, open: sources.length <= 5 })
+      : h('p', { class: 'small faint', style: { margin: 0 } }, 'This report lists no sources.')));
+}
+
 function reportsTab(ctx, d, route) {
   const pid = d.project.project_id;
   if (!d.reports.length) return callout('No reports imported yet. Older analyses stay here as dated records once they exist.', 'info');
@@ -429,7 +549,7 @@ function reportsTab(ctx, d, route) {
       good.filter((r) => r.meta.provider === p).sort((a, b) => String(b.assessment.analysis_at || '').localeCompare(String(a.assessment.analysis_at || ''))).map((r) => {
         const g = r.grade;
         return h('a', { href: `#/project/${pid}/reports?report=${encodeURIComponent(r.report_id)}`, 'aria-current': sel && r.report_id === sel.report_id ? 'true' : null, dataset: { key: `rl-${r.report_id}` } },
-          h('div', { class: 'line1' }, h('span', null, fmtDate(r.assessment.analysis_at) || 'Undated'), h('span', { class: 'num' }, g && g.display ? `${g.display} ${g.label || ''}`.trim() : g && g.status === 'withheld' ? 'Withheld' : r.meta.original_file.endsWith('.pdf') ? 'PDF' : 'No grade')),
+          h('div', { class: 'line1' }, h('span', null, fmtDate(r.assessment.analysis_at) || 'Undated'), h('span', { class: 'num' }, g && g.display ? `${g.display} ${g.label || ''}`.trim() : g && g.status === 'withheld' ? `Withheld${typeof g.coverage_pct === 'number' ? ` · ${g.coverage_pct}%` : ''}` : r.meta.original_file.endsWith('.pdf') ? 'PDF' : 'No grade')),
           h('div', { class: 'line2' }, [r.assessment.verdict ? r.assessment.verdict.charAt(0) + r.assessment.verdict.slice(1).toLowerCase() : 'No verdict', latestIds.has(r.report_id) ? 'latest' : 'earlier', r.corrections.length ? `${r.corrections.length} correction(s)` : null].filter(Boolean).join(' · ')));
       }),
     ]));
@@ -440,16 +560,19 @@ function reportsTab(ctx, d, route) {
     const errors = (ex.issues || []).filter((i) => i.severity === 'error').length;
     const amb = (ex.ambiguous || []).length;
     const pv = sel.provenance || {};
+    const withheld = sel.grade && sel.grade.status === 'withheld' ? withheldReason(sel.meta.provider, sel.grade, unscoredFrom(sel.grade, a.investment_components)) : null;
     main = h('article', { class: 'report-main', 'aria-labelledby': 'report-title' },
       h('div', { class: 'head' },
         h('h2', { id: 'report-title' }, `${PROVIDER_LABELS[sel.meta.provider]} report · ${fmtDate(a.analysis_at) || 'undated'}`),
         h('div', { class: 'meta-line', style: { marginTop: '6px' } },
-          h('span', null, sel.grade && sel.grade.display ? `Grade ${sel.grade.display} ${sel.grade.label || ''}`.trim() : sel.grade && sel.grade.status === 'withheld' ? 'Grade withheld' : 'No grade'),
+          h('span', null, sel.grade && sel.grade.display ? `Grade ${sel.grade.display} ${sel.grade.label || ''}`.trim() : withheld ? withheld.short : 'No grade'),
           verdictChip(a.verdict),
           h('span', null, `Horizon ${a.horizon || '?'}`),
           h('span', null, `${a.model_version || 'model not stated'}, ${pv.attested ? 'attested by the API' : 'self-reported'}`),
           h('span', null, latestIds.has(sel.report_id) ? 'Latest eligible report' : sel.eligible ? 'Earlier report' : 'Excluded from comparison')),
+        withheld ? h('p', { class: 'why-withheld' }, withheld.sentence) : null,
         errors || amb ? h('div', { style: { marginTop: '12px' } }, callout(`${errors ? `${errors} extraction error(s)` : ''}${errors && amb ? ' and ' : ''}${amb ? `${amb} ambiguous value(s)` : ''}: see Extraction notes below.`, 'warn')) : null),
+      atAGlance(ctx, d, sel, withheld),
       reportReader(ctx, d, sel),
       h('div', { style: { marginTop: '24px' } },
         details(`Corrections (${sel.corrections.length})`, h('div', null,
@@ -624,7 +747,7 @@ function marketTab(ctx, d) {
   }
   return h('div', null,
     card('Market data', body),
-    pos ? card('Your position', h('p', null, 'You hold ', h('strong', null, `${fmtNum(pos.quantity)} ${pos.symbol}`), pos.value_usd !== null ? ` worth ${fmtPrice(pos.value_usd)}` : ' (value unknown: no usable price)', '. ', link('Portfolio', '#/portfolio'))) : null);
+    pos && !pos.closed ? card('Your position', h('p', null, 'You hold ', h('strong', null, `${fmtNum(pos.quantity)} ${pos.symbol}`), pos.value_usd !== null ? ` worth ${fmtPrice(pos.value_usd)}` : ' (value unknown: no usable price)', '. ', link('Portfolio', '#/portfolio'))) : null);
 }
 
 // ---------------------------------------------------------------------------
@@ -774,11 +897,20 @@ function reconcileForm(ctx, pid, run, prov, a) {
     form), { id: key });
 }
 
+// An attempt's phase in words; "submitted" means the provider accepted the
+// request and the desk is checking on it in the background.
+const PHASE_TEXT = { reserved: 'reserved, about to be sent', submitted: 'accepted by the provider, running in the background', uncertain: 'uncertain: may have been billed', errored: 'error', not_sent: 'not sent' };
+
 function jobRow(ctx, pid, run, prov, projectName = pid) {
   const j = run.jobs[prov];
   const key = jobKey(j, run.created_at);
-  const st = RESEARCH_STATE[key] || { long: j.state, tone: '' };
+  const hosted = Boolean(ctx.state.session && ctx.state.session.hosted);
+  const st = researchState(key, { provider: prov, hosted });
   const actions = [];
+  // A waiting job leads with its next step: on the online desk the sentence
+  // for that model's assistant (in the state column, so it shows first even
+  // where the table scrolls), with pasting by hand tucked under it.
+  if (j.state === 'unconfigured') actions.push(...waitingActions(ctx, { pid, runId: run.run_id, provider: prov, key: `rt-${run.run_id}-${prov}`, instruction: false }));
   const say = (text) => {
     const b = button(`Copy: “${text}”`, null, { kind: 'small' });
     b.onclick = action(b, async () => { await copyText(text); return undefined; });
@@ -834,31 +966,16 @@ function jobRow(ctx, pid, run, prov, projectName = pid) {
     }, (r) => r.message || 'Canceled');
     actions.push(b);
   }
-  if (['unconfigured', 'waiting'].includes(j.state)) {
-    // On the online desk, the model's own assistant can take this job through
-    // its connection (Settings > Connected apps): one sentence to it.
-    if (ctx.state.session && ctx.state.session.hosted) {
-      // Gemini uses a custom app only when the message @-mentions it; ChatGPT,
-      // when the app is turned on in that chat.
-      const where = prov === 'gemini' ? 'In Gemini, type @ and pick CryptoResearch, then say' : prov === 'chatgpt' ? 'In a ChatGPT chat, turn on the CryptoResearch app (+ menu), then say' : 'In Cowork, say';
-      actions.push(h('div', { class: 'small', style: { flexBasis: '100%' } }, `${PROVIDER_LABELS[prov]} can do it through its desk connection. ${where} the sentence below. Or paste the prompt into ${PROVIDER_LABELS[prov]} and import the answer.`));
-      actions.push(say('Do my waiting CryptoResearch research'));
-    }
-    const cp = button('Copy prompt', null, { kind: 'small' });
-    cp.setAttribute('aria-label', `Copy the research prompt for ${PROVIDER_LABELS[prov]}`);
-    cp.onclick = action(cp, async () => { await copyText(await ctx.api.text(`/api/projects/${pid}/research/${run.run_id}/prompt`)); return undefined; });
-    actions.push(cp, h('a', { class: 'btn small', href: `#/updates?tab=import&project=${pid}&provider=${prov}&run=${encodeURIComponent(run.run_id)}` }, 'Import report'));
-  }
   if (j.report_id) actions.push(h('a', { class: 'btn small', href: `#/project/${pid}/reports?report=${encodeURIComponent(j.report_id)}` }, 'Open report'));
   const attempts = j.attempts || [];
   for (const a of attempts) if (reconcilable(j, a)) actions.push(reconcileForm(ctx, pid, run, prov, a));
   return {
     prov,
-    state: stateText(st.long, st.tone),
-    mode: h('span', { class: 'small' }, j.mode === 'manual' ? 'Waiting (connection or manual import)' : j.mode === 'cowork' ? 'Claude Cowork session' : j.mode === 'connector' ? `${PROVIDER_LABELS[prov]} through its desk connection` : j.mode === 'mock' ? 'Fictional demo adapter' : `API${j.model ? ` · ${j.model}` : ''}`),
+    state: key === 'waiting' && hosted ? h('div', { class: 'job-state' }, stateText('Waiting for you', st.tone), waitingStep(prov)) : stateText(st.long, st.tone),
+    mode: h('span', { class: 'small' }, j.mode === 'manual' ? (hosted ? 'Its assistant\'s connection, or by hand' : 'By hand: paste the prompt, import the answer') : j.mode === 'cowork' ? 'Claude in Cowork' : j.mode === 'connector' ? `${PROVIDER_LABELS[prov]} through its desk connection` : j.mode === 'mock' ? 'Fictional demo adapter' : `API, in the background${j.model ? ` · ${j.model}` : ''}`),
     attempts: attempts.length ? h('div', { class: 'small' }, attempts.map((a) => {
       const cost = attemptCost(a);
-      return h('div', null, `#${a.n} ${String(a.phase || a.outcome || 'in progress').replace(/_/g, ' ')}`, a.usage ? h('span', { class: 'faint' }, ` · ${a.usage.input_tokens ?? '?'} in / ${a.usage.output_tokens ?? '?'} out tokens`) : null, cost ? h('span', { class: a.phase === 'uncertain' ? null : 'faint' }, ` · ${cost}`) : null, a.response_sha256 ? h('span', { class: 'faint', title: `Raw response saved before normalization: ${a.response_path}` }, ` · response saved`) : null);
+      return h('div', null, `#${a.n} ${PHASE_TEXT[a.phase] || String(a.phase || a.outcome || 'in progress').replace(/_/g, ' ')}`, a.usage ? h('span', { class: 'faint' }, ` · ${a.usage.input_tokens ?? '?'} in / ${a.usage.output_tokens ?? '?'} out tokens`) : null, cost ? h('span', { class: a.phase === 'uncertain' ? null : 'faint' }, ` · ${cost}`) : null, a.response_sha256 ? h('span', { class: 'faint', title: `Raw response saved before normalization: ${a.response_path}` }, ` · response saved`) : null);
     })) : h('span', { class: 'faint small' }, 'None'),
     error: j.error ? h('span', { class: 'small', style: { color: 'var(--neg)' } }, j.error) : j.note ? h('span', { class: 'small muted' }, j.note) : null,
     actions: actions.length ? h('div', { class: 'btn-row' }, actions) : null,

@@ -10,22 +10,59 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const MINUS = '−';
 
 // One vocabulary for research states, used by badges, the panel, the
-// research pages and receipts.
+// research pages and receipts. Whoever does the work (the API in the
+// background, Claude in Cowork, ChatGPT or Gemini through its connection), it
+// reads "Working"; "Waiting" means the job needs you, because no API runs it.
+// researchState() fills in the model's name and, on the online desk, the
+// sentence to say to its assistant.
 export const RESEARCH_STATE = {
   none: { short: 'None', long: 'No research yet', tone: '' },
-  queued: { short: 'Queued', long: 'Queued: not saved yet', tone: 'wait' },
-  running: { short: 'Running', long: 'Running: not saved yet', tone: 'wait' },
-  dispatching: { short: 'Running', long: 'Sending to the provider: not saved yet', tone: 'wait' },
-  uncertain: { short: 'Check', long: 'Outcome uncertain: the request may have been sent and billed, and no answer was saved. Reconcile it or retry', tone: 'warn' },
-  cowork: { short: 'Cowork', long: 'Claude in Cowork is researching it: not saved yet', tone: 'wait' },
-  connector: { short: 'Working', long: 'Researching it itself through its desk connection: not saved yet', tone: 'wait' },
-  interrupted: { short: 'Paused', long: 'Interrupted: its assistant has not saved this report. Ask it to resume, or restart it', tone: 'warn' },
-  manual: { short: 'Waiting', long: 'Waiting for this model: ask its assistant to do its waiting research, or import its answer (no API set up)', tone: 'warn' },
-  waiting: { short: 'Manual', long: 'Waiting for you to import this model\'s answer', tone: 'warn' },
+  queued: { short: 'Queued', long: 'Queued: it starts shortly; not saved yet', tone: 'wait' },
+  dispatching: { short: 'Working', long: 'Running on the API in the background: not saved yet', tone: 'work' },
+  running: { short: 'Working', long: 'Working on it: not saved yet', tone: 'work' },
+  cowork: { short: 'Working', long: 'Claude in Cowork is researching it: not saved yet', tone: 'work' },
+  connector: { short: 'Working', long: 'Researching it itself through its desk connection: not saved yet', tone: 'work' },
+  waiting: { short: 'Waiting', long: 'Waiting for you: no API runs this model. Paste the prompt into it and import its answer', tone: 'warn' },
+  interrupted: { short: 'Paused', long: 'Paused: its assistant has shown no activity for 30 minutes and has not saved this report. Ask it to resume, or restart it', tone: 'warn' },
+  uncertain: { short: 'Check', long: 'Check: the request may have been sent and billed, and no answer was saved. Reconcile it or retry', tone: 'warn' },
   failed: { short: 'Failed', long: 'Failed: nothing was saved for this model', tone: 'bad' },
   canceled: { short: 'Canceled', long: 'Canceled: nothing was saved for this model', tone: '' },
   completed: { short: 'Saved', long: 'Saved as a report', tone: 'ok' },
 };
+
+// Work in progress (the ↻ "newer research" mark), and the states of a newer
+// run that the saved grade must not hide (the "!" mark).
+const WORKING = new Set(['queued', 'dispatching', 'running', 'cowork', 'connector']);
+const NEEDS_LOOK = new Set(['failed', 'uncertain', 'interrupted']);
+export const isWorking = (key) => WORKING.has(key);
+
+// The one sentence that gets a model's own assistant to do its waiting
+// research through the desk connection (the same words the connector uses),
+// and where to say it: Gemini uses a custom app only when the message
+// @-mentions it; ChatGPT, when the app is turned on in that chat.
+export const WAITING_SENTENCE = 'Do my waiting CryptoResearch research';
+export const ASK_WHERE = {
+  claude: 'In Cowork, say',
+  chatgpt: 'In a ChatGPT chat, turn on the CryptoResearch app (+ menu), then say',
+  gemini: 'In Gemini, type @ and pick CryptoResearch, then say',
+};
+
+export function waitingInstruction(provider, { full = false } = {}) {
+  if (full) return `${ASK_WHERE[provider] || 'Tell its assistant'}: "${WAITING_SENTENCE}"`;
+  return `Tell ${PROVIDER_LABELS[provider] || 'its assistant'}: "${WAITING_SENTENCE}"`;
+}
+
+// A state in words for one model. On the online desk a waiting job's next
+// step is the sentence for its assistant; on this PC it is the pasted prompt.
+export function researchState(key, { provider = null, hosted = false } = {}) {
+  const base = RESEARCH_STATE[key];
+  if (!base) return { short: key || 'Unknown', long: key || 'Unknown state', tone: '' };
+  const who = PROVIDER_LABELS[provider];
+  if (key === 'waiting') return { ...base, long: hosted ? `Waiting for you. ${waitingInstruction(provider)}` : `Waiting for you: paste the prompt into ${who || 'the model'} and import its answer` };
+  if (key === 'dispatching' && who) return { ...base, long: `Running on the ${who} API in the background: not saved yet` };
+  if (key === 'connector' && who) return { ...base, long: `${who} is researching it through its desk connection: not saved yet` };
+  return base;
+}
 
 export function safeUrl(u) {
   if (typeof u !== 'string') return null;
@@ -221,6 +258,63 @@ export function stateText(text, tone = '') {
   return h('span', { class: `state ${tone}`.trim() }, text);
 }
 
+// Projects on your watchlist or in your portfolio: the one count the
+// navigation and the watchlist header both show.
+export const isFollowed = (p) => Boolean(p && !p.broken && p.status !== 'archived' && (p.on_watchlist || p.held));
+export const followedCount = (projects) => (projects || []).filter(isFollowed).length;
+
+const lowerFirst = (s) => (/^[A-Z][a-z]/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s);
+
+function joinAnd(list) {
+  if (list.length <= 1) return list.join('');
+  return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;
+}
+
+// The weighted parts a withheld grade is missing, from a full report record
+// (the index carries the same list as `unscored`), with the model's own note.
+export function unscoredFrom(grade, components) {
+  if (!grade || grade.status !== 'withheld') return [];
+  return (grade.missing || []).map((m) => {
+    const s = components ? components[m.id] : null;
+    const note = s ? s.missing_data || s.rationale || null : null;
+    return { label: m.label, status: m.status, note: note ? String(note) : null };
+  });
+}
+
+const PART_STATUS = { unknown: 'marked unknown', not_applicable: 'marked not applicable', missing: 'not scored', range: 'a range without a reason' };
+
+// Why a grade is withheld, in plain words: which weighted parts were not
+// scored, what share of the weight was, and the model's own notes. It never
+// offers a number in the grade's place.
+export function withheldReason(provider, grade, unscored = []) {
+  const who = PROVIDER_LABELS[provider] || 'The model';
+  const pct = grade && typeof grade.coverage_pct === 'number' ? grade.coverage_pct : null;
+  const parts = Array.isArray(unscored) ? unscored : [];
+  const names = (status) => joinAnd(parts.filter((x) => x.status === status).map((x) => lowerFirst(String(x.label))));
+  const phrases = [];
+  if (names('unknown')) phrases.push(`${who} said evidence was missing for ${names('unknown')}`);
+  if (names('not_applicable')) phrases.push(`${who} marked ${names('not_applicable')} not applicable`);
+  if (names('missing')) phrases.push(`${who}'s report did not score ${names('missing')}`);
+  if (names('range')) phrases.push(`${names('range')}: a score range without a reason`);
+  const short = `Withheld${pct !== null ? ` · ${pct}% scored` : ''}`;
+  const why = phrases.length ? phrases.join('; ') : (grade && grade.reason) || 'a weighted part of the grade was not scored';
+  return {
+    short,
+    why,
+    sentence: `${short}: ${why.replace(/\.$/, '')}.`,
+    coverage: pct,
+    items: parts.map((x) => ({ label: x.label, status: PART_STATUS[x.status] || x.status, note: x.note || null })),
+  };
+}
+
+// The unscored parts as a short list, each with the model's own note.
+export function unscoredList(reason, { max = 200 } = {}) {
+  if (!reason.items.length) return null;
+  return h('ul', { class: 'list small unscored' }, reason.items.map((x) => h('li', null,
+    h('strong', null, x.label), ` · ${x.status}`,
+    x.note ? h('span', { class: 'muted' }, `: “${x.note.length > max ? `${x.note.slice(0, max - 1)}…` : x.note}”`) : null)));
+}
+
 export const TAG_TITLES = {
   V: "[V] Checked in that analyst's session. Not checked by this dashboard.",
   C: '[C] Project-claimed.',
@@ -355,34 +449,51 @@ export function jobKey(job, runCreatedAt = null) {
     const idle = coworkIdleMinutes(job, runCreatedAt);
     return idle !== null && idle >= COWORK_IDLE_MINUTES ? 'interrupted' : job.mode;
   }
-  if (job.state === 'unconfigured') return 'manual';
+  if (job.state === 'unconfigured') return 'waiting';
   return job.state;
 }
 
-export function badgeInfo(provider, report, job, { staleDays = 90 } = {}) {
+// A run started after the saved report, in one line: "Newer research
+// queued", "Newer run failed: <error>", "Newer run waiting for ChatGPT".
+function newerRunText(provider, key, job) {
   const who = PROVIDER_LABELS[provider];
-  const jobOpen = job && ['queued', 'running', 'dispatching', 'uncertain', 'waiting', 'unconfigured'].includes(job.state) && (!report || (job.run_created_at && report.imported_at && job.run_created_at > report.imported_at));
+  if (key === 'queued') return 'Newer research queued';
+  if (WORKING.has(key)) return key === 'dispatching' ? `Newer research running on the ${who} API` : 'Newer research in progress';
+  if (key === 'waiting') return `Newer run waiting for ${who}`;
+  if (key === 'failed') return `Newer run failed${job && job.error ? `: ${job.error}` : ''}`;
+  if (key === 'uncertain') return 'Newer run needs a check: it may have been billed, and no answer was saved';
+  if (key === 'interrupted') return `Newer run paused: ${provider === 'claude' && job && job.mode === 'cowork' ? 'Cowork' : who} stopped working on it`;
+  return `Newer run ${(RESEARCH_STATE[key] || { short: key }).short.toLowerCase()}`;
+}
+
+export function badgeInfo(provider, report, job, { staleDays = 90, hosted = false } = {}) {
+  const who = PROVIDER_LABELS[provider];
+  const key = jobKey(job);
   if (report) {
+    // A newer run (started after this report was saved) shows on the saved
+    // grade: ↻ while it works, ! when it failed, needs a check or stalled.
+    const newer = Boolean(key && !['completed', 'canceled'].includes(key) && job.run_created_at && report.imported_at && job.run_created_at > report.imported_at);
     const g = report.grade || {};
     const age = daysSince(report.analysis_at);
     const stale = age !== null && age > staleDays;
-    const base = { report: true, age: fmtAge(report.analysis_at), date: report.analysis_at, stale, refreshing: Boolean(jobOpen), job: jobOpen ? jobKey(job) : null };
+    const newerText = newer ? newerRunText(provider, key, job) : null;
+    const base = { report: true, age: fmtAge(report.analysis_at), date: report.analysis_at, stale, sub: null, refreshing: newer && WORKING.has(key), problem: newer && NEEDS_LOOK.has(key), newerText, job: newer ? key : null };
     let out;
     if (report.needs_text) out = { kind: 'pdf', value: 'PDF', label: null, text: `${who}: PDF report saved; a text copy is needed before it can be graded` };
     else if (g.status === 'firm') out = { kind: 'grade', value: g.display, label: g.label, text: `${who} grade ${g.display}${g.label ? `, ${g.label}` : ''}` };
     else if (g.status === 'range') out = { kind: 'range', value: g.display, label: g.label, text: `${who} grade range ${g.display}${g.label ? `, ${g.label}` : ''}` };
-    else if (g.status === 'withheld') out = { kind: 'withheld', value: 'Withheld', label: null, text: `${who}: grade withheld${g.coverage_pct !== null && g.coverage_pct !== undefined ? `, ${g.coverage_pct}% of the weight scored` : ''}` };
-    else out = { kind: 'withheld', value: 'No grade', label: null, text: `${who}: no authoritative grade${g.reason ? `. ${g.reason}` : ''}` };
+    else if (g.status === 'withheld') {
+      const pct = typeof g.coverage_pct === 'number' ? g.coverage_pct : null;
+      out = { kind: 'withheld', value: 'Withheld', sub: pct !== null ? `${pct}%` : null, label: null, text: `${who}: grade withheld${pct !== null ? `, ${pct}% of the weight scored` : ''}` };
+    } else out = { kind: 'withheld', value: 'No grade', label: null, text: `${who}: no authoritative grade${g.reason ? `. ${g.reason}` : ''}` };
     const when = report.analysis_at ? `analysis ${fmtDate(report.analysis_at)}${stale ? ', stale' : ''}` : 'analysis date unknown';
-    const extra = jobOpen ? `; newer research ${RESEARCH_STATE[jobKey(job)] ? RESEARCH_STATE[jobKey(job)].short.toLowerCase() : job.state}` : '';
-    return { ...base, ...out, text: `${out.text}, ${when}${extra}` };
+    return { ...base, ...out, text: `${out.text}, ${when}${newerText ? `; ${newerText.charAt(0).toLowerCase()}${newerText.slice(1)}` : ''}` };
   }
-  const k = jobKey(job);
-  if (k && RESEARCH_STATE[k]) {
-    const st = RESEARCH_STATE[k];
-    return { report: false, kind: k, value: st.short, label: null, age: null, stale: false, refreshing: false, job: k, text: `${who}: ${st.long}${job.error ? `. ${job.error}` : ''}` };
+  if (key && RESEARCH_STATE[key]) {
+    const st = researchState(key, { provider, hosted });
+    return { report: false, kind: key, value: st.short, sub: null, label: null, age: null, stale: false, refreshing: false, problem: false, newerText: null, job: key, text: `${who}: ${st.long}${job.error ? `. ${job.error}` : ''}` };
   }
-  return { report: false, kind: 'none', value: 'None', label: null, age: null, stale: false, refreshing: false, job: null, text: `${who}: no research yet` };
+  return { report: false, kind: 'none', value: 'None', sub: null, label: null, age: null, stale: false, refreshing: false, problem: false, newerText: null, job: null, text: `${who}: no research yet` };
 }
 
 export function gradeBadge(provider, report, job, opts = {}) {
@@ -390,7 +501,7 @@ export function gradeBadge(provider, report, job, opts = {}) {
   const tag = opts.button ? 'button' : 'span';
   const band = info.kind === 'grade' || info.kind === 'range' ? bandClass(report && report.grade) : '';
   const attrs = {
-    class: `gb is-${info.kind}${band}${info.stale ? ' is-stale' : ''}`,
+    class: `gb is-${info.kind}${band}${info.stale ? ' is-stale' : ''}${info.problem ? ' has-problem' : ''}`,
     'aria-label': opts.button ? `${info.text}. Open details` : info.text,
     dataset: { provider, key: opts.key || null },
   };
@@ -398,10 +509,18 @@ export function gradeBadge(provider, report, job, opts = {}) {
   if (opts.button) attrs.type = 'button';
   // The model's name (hidden where a column header already names it), then
   // its grade in the band's color, or a plain state. The analysis age shows
-  // only when it is stale; the scorecard and panel give the date.
+  // only when it is stale; the scorecard and panel give the date. A withheld
+  // grade shows the share of the weight that was scored, never a number in
+  // the grade's place.
   return h(tag, attrs,
     h('span', { class: 'p', 'aria-hidden': 'true' }, PROVIDER_SHORT[provider]),
-    h('span', { class: 'main', 'aria-hidden': 'true' }, h('span', { class: 'v' }, info.value), info.label ? h('span', { class: 'l' }, info.label) : null, info.stale && info.age ? h('span', { class: 'a' }, info.age) : null, info.refreshing ? h('span', { class: 'r' }, '↻') : null));
+    h('span', { class: 'main', 'aria-hidden': 'true' },
+      h('span', { class: 'v' }, info.value),
+      info.sub ? h('span', { class: 's' }, info.sub) : null,
+      info.label ? h('span', { class: 'l' }, info.label) : null,
+      info.stale && info.age ? h('span', { class: 'a' }, info.age) : null,
+      info.refreshing ? h('span', { class: 'r', title: info.newerText }, '↻') : null,
+      info.problem ? h('span', { class: 'x', title: info.newerText }, '!') : null));
 }
 
 export function freshnessText(status, ageMin) {
@@ -413,6 +532,34 @@ export function freshnessText(status, ageMin) {
   };
   const [text, tone] = map[status] || [status || 'Unknown', ''];
   return { text, tone, age };
+}
+
+// Today's times without the date; other days with it.
+export function fmtAsOf(s) {
+  const t = Date.parse(s || '');
+  if (Number.isNaN(t)) return '—';
+  const day = (x) => new Date(x).toLocaleDateString('en-US', { timeZone: TZ });
+  if (day(t) !== day(Date.now())) return fmtDateTime(s);
+  return `${new Date(t).toLocaleTimeString('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' })} ET`;
+}
+
+// The price status in plain words for the watchlist header and the activity
+// log: how old the prices are and, when the last refresh failed or was
+// rate-limited, the market source's own note (or its last error).
+export function priceStatus(mf) {
+  const m = mf || {};
+  const f = freshnessText(m.freshness, m.age_minutes);
+  const problem = ['stale', 'stale_failed', 'failed', 'fresh_last_failed'].includes(m.freshness) || Boolean(m.rate_limited);
+  const limited = m.rate_limited ? `The price source is limiting requests${m.retry_at ? `; the next try is after ${fmtAsOf(m.retry_at)}` : ''}` : null;
+  const note = m.note || limited || (problem ? m.last_error : null) || null;
+  return {
+    text: f.text,
+    tone: f.tone,
+    problem,
+    asOf: m.last_success_at ? `Prices as of ${fmtAsOf(m.last_success_at)} (${fmtAgo(m.last_success_at)})` : 'No prices fetched yet',
+    note: note ? String(note) : null,
+    retryAt: m.retry_at || null,
+  };
 }
 
 export function freshnessChip(status, ageMin) {

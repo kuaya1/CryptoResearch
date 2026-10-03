@@ -4,7 +4,7 @@
 // stay in place after an error so they can be corrected and retried.
 import {
   h, field, fieldError, input, select, button, callout, openDialog, submissionId, toast, copyText, busy, stateText, details,
-  PROVIDERS, PROVIDER_LABELS, RESEARCH_STATE, fmtDateTime,
+  PROVIDERS, PROVIDER_LABELS, WAITING_SENTENCE, fmtDateTime, jobKey, researchState, waitingInstruction,
 } from '../ui.js';
 import { horizonHint, needsReason } from '../position-ui.js';
 
@@ -12,16 +12,60 @@ function money(v) {
   return typeof v === 'number' ? `$${v}` : 'not set';
 }
 
-// How each model would run right now, in words, with the next step.
+const isHosted = (ctx) => Boolean(ctx.state.session && ctx.state.session.hosted);
+
+function names(list) {
+  const n = list.map((p) => PROVIDER_LABELS[p]);
+  return n.length <= 1 ? n.join('') : `${n.slice(0, -1).join(', ')} and ${n[n.length - 1]}`;
+}
+
+// The sentence for a waiting model's assistant, and where to say it.
+export function waitingStep(provider) {
+  return h('p', { class: 'small next-step' }, `${waitingInstruction(provider, { full: true })}. It researches under its own plan and saves the report here.`);
+}
+
+// The next step for a job waiting for its model. On the online desk that is
+// one sentence to the model's own assistant, which does the research through
+// its desk connection; pasting the prompt and importing the answer stays
+// under "Do it by hand". On this PC, pasting is the way.
+export function waitingActions(ctx, { pid, runId, provider, key, instruction = true }) {
+  const who = PROVIDER_LABELS[provider];
+  const cp = button('Copy prompt', null, { kind: 'small', key: `copy-${key}` });
+  cp.setAttribute('aria-label', `Copy the research prompt for ${who}`);
+  cp.onclick = async () => {
+    try {
+      await copyText(await ctx.api.text(`/api/projects/${encodeURIComponent(pid)}/research/${encodeURIComponent(runId)}/prompt`));
+    } catch (err) {
+      toast(err.message, 'bad');
+    }
+  };
+  const imp = h('a', { class: 'btn small', href: `#/updates?tab=import&project=${encodeURIComponent(pid)}&provider=${provider}&run=${encodeURIComponent(runId)}`, dataset: { key: `import-${key}` } }, 'Import report');
+  if (!isHosted(ctx)) return [cp, imp];
+  const say = button(`Copy: “${WAITING_SENTENCE}”`, () => copyText(WAITING_SENTENCE), { kind: 'small', key: `say-${key}` });
+  say.setAttribute('aria-label', `Copy the sentence for ${who}: ${WAITING_SENTENCE}`);
+  return [
+    instruction ? waitingStep(provider) : null,
+    say,
+    h('details', { class: 'by-hand', dataset: { key: `by-hand-${key}` } }, h('summary', null, 'Do it by hand'),
+      h('p', { class: 'small muted' }, `Paste the prompt into ${who} yourself, then import its answer for this run.`),
+      h('div', { class: 'btn-row' }, cp, imp)),
+  ];
+}
+
+// How each model would run right now, in words, with the next step: by
+// itself on the API, through its assistant's connection (online desk), or
+// by hand (paste the prompt, import the answer).
 function routeOf(ctx, prov) {
   const st = ((ctx.state.index.research || {}).providers || {})[prov] || { mode: 'manual' };
-  if (st.mode === 'api') return { mode: 'api', text: `API · ${st.model} · paid, within your budget`, next: null };
+  if (st.mode === 'api') return { mode: 'api', text: `API · ${st.model} · runs by itself in the background, within your limits`, next: null };
   if (st.mode === 'mock') return { mode: 'mock', text: 'Demo · fictional answers; nothing is sent or billed', next: null };
   const who = PROVIDER_LABELS[prov];
+  const setup = h('a', { href: '#/settings?tab=research', class: 'small' }, isHosted(ctx) ? 'Add an API key to run it by itself' : 'Set up API access');
+  if (isHosted(ctx)) return { mode: 'assistant', text: `Its assistant's connection · waits for you; then ${waitingInstruction(prov).replace(/^T/, 't')}`, next: setup };
   return {
     mode: 'manual',
-    text: prov === 'claude' ? 'Manual · paste the prompt into Claude yourself, or ask Cowork to run it' : `Manual · paste the prompt into ${who}, then import its answer`,
-    next: h('a', { href: '#/settings?tab=research', class: 'small' }, 'Set up API access'),
+    text: prov === 'claude' ? 'By hand · paste the prompt into Claude yourself, or ask Cowork to run it' : `By hand · paste the prompt into ${who}, then import its answer`,
+    next: setup,
   };
 }
 
@@ -40,10 +84,19 @@ function providerChoices(ctx, preselect) {
 
 function costNote(ctx) {
   const r = ctx.state.index.research || {};
-  const modes = Object.values(r.providers || {}).map((s) => s.mode);
+  const st = r.providers || {};
+  const modes = Object.values(st).map((s) => s.mode);
   if (modes.length && modes.every((m) => m === 'mock')) return 'Demo workspace: every model answers with a fictional fixture. Nothing is sent anywhere and nothing is billed.';
-  if (modes.includes('api')) return `API calls run only within your budget (per run ${money(r.budget.per_run_usd)}, day ${money(r.budget.daily_usd)}, month ${money(r.budget.monthly_usd)}). A request that has been sent cannot be un-sent; canceling stops retries, not charges already incurred.`;
-  return 'No model API is set up, so nothing is billed. Each model gets the same prompt for you to paste; its job completes when you import the answer.';
+  const api = PROVIDERS.filter((p) => st[p] && st[p].mode === 'api');
+  const rest = PROVIDERS.filter((p) => !api.includes(p) && !(st[p] && st[p].mode === 'mock'));
+  const parts = [];
+  if (api.length) parts.push(`${names(api)} ${api.length === 1 ? 'runs by itself' : 'run by themselves'} on the API in the background, within your limits (per run ${money(r.budget && r.budget.per_run_usd)}, day ${money(r.budget && r.budget.daily_usd)}, month ${money(r.budget && r.budget.monthly_usd)}). A request that has been sent cannot be un-sent; canceling stops retries, not charges already incurred.`);
+  if (rest.length) {
+    parts.push(isHosted(ctx)
+      ? `${names(rest)} ${rest.length === 1 ? 'waits' : 'wait'} for you: tell ${rest.length === 1 ? 'it' : 'each one'} "${WAITING_SENTENCE}" in its own app. It researches under its own plan, so nothing is billed here. Or paste the prompt and import the answer.`
+      : `${names(rest)} ${rest.length === 1 ? 'has' : 'have'} no API set up, so nothing is billed: each gets the same prompt for you to paste, and its job completes when you import the answer.`);
+  }
+  return parts.join(' ');
 }
 
 // One row per model: its state in words and the next step.
@@ -51,6 +104,7 @@ export function researchReceipt(ctx, projectId, out) {
   if (!out) return null;
   const run = out.run || null;
   const jobs = run ? Object.values(run.jobs || {}) : [];
+  const hosted = isHosted(ctx);
   const copyBtn = run ? button('Copy the research prompt', null, { kind: 'small' }) : null;
   if (copyBtn) {
     copyBtn.onclick = async () => {
@@ -61,19 +115,22 @@ export function researchReceipt(ctx, projectId, out) {
       }
     };
   }
-  const manual = jobs.some((j) => j.mode === 'manual');
+  const waiting = jobs.some((j) => j.state === 'unconfigured');
+  const byHand = run && waiting ? h('div', { class: 'btn-row' }, copyBtn,
+    h('a', { class: 'btn small', href: `#/updates?tab=import&project=${encodeURIComponent(projectId)}&run=${encodeURIComponent(run.run_id)}` }, 'Import report for this run')) : null;
   return h('div', { class: 'receipt', role: 'status' },
     h('h3', null, out.status === 'created' ? 'Research requested' : out.status === 'exists' ? 'Already requested' : 'Research'),
     h('p', { class: 'small muted', style: { margin: '0 0 8px' } }, out.status === 'exists' ? out.message : 'Each model works independently. Pending means not saved yet; a report appears when it is saved.'),
     jobs.length ? h('ul', { class: 'rows' }, jobs.map((j) => {
-      const key = j.state === 'unconfigured' ? 'manual' : j.state === 'running' && (j.mode === 'cowork' || j.mode === 'connector') ? j.mode : j.state;
-      const st = RESEARCH_STATE[key] || { long: j.state, tone: '' };
-      return h('li', null, h('span', { class: 'k' }, PROVIDER_LABELS[j.provider]),
-        h('span', null, stateText(j.mode === 'mock' && key === 'queued' ? 'Queued: fictional demo answer' : st.long, st.tone)));
+      const key = jobKey(j, run.created_at);
+      const st = researchState(key, { provider: j.provider, hosted });
+      // On the online desk a waiting row leads with the sentence for that assistant.
+      const text = j.mode === 'mock' && key === 'queued' ? 'Queued: fictional demo answer' : key === 'waiting' && hosted ? `Waiting for you. ${waitingInstruction(j.provider, { full: true })}` : st.long;
+      return h('li', null, h('span', { class: 'k' }, PROVIDER_LABELS[j.provider]), h('span', null, stateText(text, st.tone)));
     })) : out.message ? h('p', { class: 'small' }, out.message) : null,
-    run ? h('div', { class: 'btn-row' }, manual ? copyBtn : null,
-      manual ? h('a', { class: 'btn small', href: `#/updates?tab=import&project=${encodeURIComponent(projectId)}&run=${encodeURIComponent(run.run_id)}` }, 'Import report for this run') : null) : null,
-    run ? h('p', { class: 'small faint', style: { margin: '8px 0 0' } }, `Run ${run.run_id} · rubric ${run.rubric_version} · horizon ${run.horizon.text} · one prompt, identical for every model`) : null);
+    byHand && hosted ? h('details', { class: 'by-hand' }, h('summary', null, 'Do it by hand'), h('p', { class: 'small muted' }, 'Paste the prompt into the waiting model yourself, then import its answer for this run.'), byHand) : byHand,
+    run ? h('p', { class: 'small faint', style: { margin: '8px 0 0' } }, `Horizon ${run.horizon.text} · one prompt, identical for every model`) : null,
+    run ? details('Run details', h('p', { class: 'small faint', style: { margin: 0 } }, `Run ${run.run_id} · rubric ${run.rubric_version}`)) : null);
 }
 
 export function openResearchDialog(ctx, project, { providers = null } = {}) {
@@ -151,7 +208,7 @@ export function openSectorDialog(ctx, project) {
   const form = h('form', { class: 'form-stack' },
     field('Primary sector', sel, 'Used for filters and portfolio concentration.'),
     field('Tags', tags, 'Optional, comma-separated.'),
-    callout(`The sector is your label. It does not change how reports are graded: each report is scored with the profile and rubric it declares (this project's profile is ${project.sector_profile}).`, 'info'),
+    callout('The sector is your label. It does not change how reports are graded: each report is scored with the scoring profile and rubric it declares.', 'info'),
     errorBox,
     h('div', { class: 'dlg-foot' }, btn));
   const dlg = openDialog(`Sector: ${project.name}`, form);
@@ -172,20 +229,58 @@ export function openSectorDialog(ctx, project) {
 
 // ---- Add project: name or URL first, details only when needed -------------
 
-function parseQuery(text) {
-  const t = text.trim();
+// Pages that name a project without being its own website: block explorers,
+// DEX screeners, data aggregators, and social or code hosts. A pasted link to
+// one is never taken as the official website.
+const NOT_OFFICIAL_HOSTS = [
+  'etherscan.io', 'bscscan.com', 'polygonscan.com', 'arbiscan.io', 'basescan.org', 'snowtrace.io', 'ftmscan.com', 'lineascan.build', 'scrollscan.com', 'blastscan.io',
+  'solscan.io', 'solana.fm', 'explorer.solana.com', 'tronscan.org', 'blockchair.com', 'mintscan.io', 'suiscan.xyz', 'suivision.xyz', 'tonviewer.com', 'tonscan.org', 'blockscout.com',
+  'dexscreener.com', 'dextools.io', 'geckoterminal.com', 'birdeye.so', 'defillama.com', 'coinpaprika.com', 'cryptorank.io', 'messari.io', 'tokenterminal.com', 'rootdata.com',
+  'x.com', 'twitter.com', 't.me', 'telegram.me', 'discord.gg', 'discord.com', 'github.com', 'gitlab.com', 'medium.com', 'mirror.xyz', 'substack.com', 'youtube.com', 'youtu.be',
+  'reddit.com', 'linktr.ee', 'linkedin.com', 'facebook.com', 'instagram.com', 'tiktok.com', 'warpcast.com',
+];
+// On these, the first part of the path is the project's handle or account.
+const HANDLE_HOSTS = ['x.com', 'twitter.com', 't.me', 'telegram.me', 'github.com', 'gitlab.com', 'medium.com', 'warpcast.com', 'linktr.ee'];
+const onHost = (host, list) => list.some((d) => host === d || host.endsWith(`.${d}`));
+
+// What a typed name or pasted link means for the search: the words to search
+// listings for, and the official website only when the link is one. A
+// CoinMarketCap or CoinGecko page searches by its slug or listing ID (and
+// preselects that exact CoinGecko listing); it never becomes the website or
+// the name.
+export function parseQuery(text) {
+  const t = String(text || '').trim();
   const looksUrl = /^https?:\/\//i.test(t) || (/^[\w-]+(\.[\w-]+)+(\/.*)?$/.test(t) && !/\s/.test(t));
-  if (!looksUrl) return { name: t, website: null, search: t };
+  if (!looksUrl) return { name: t, website: null, search: t, listing: null, note: null };
   let url;
   try {
     url = new URL(/^https?:\/\//i.test(t) ? t : `https://${t}`);
   } catch (_) {
-    return { name: t, website: null, search: t };
+    return { name: t, website: null, search: t, listing: null, note: null };
   }
-  const host = url.hostname.replace(/^www\./, '');
+  const host = url.hostname.toLowerCase().replace(/^www\./, '');
+  const segs = url.pathname.split('/').filter(Boolean).map((s) => {
+    try { return decodeURIComponent(s); } catch (_) { return s; }
+  });
+  const after = (word) => {
+    const i = segs.indexOf(word);
+    return i >= 0 && segs[i + 1] ? segs[i + 1].toLowerCase() : null;
+  };
+  const words = (slug) => (slug && /^[a-z0-9][a-z0-9-]*$/.test(slug) ? slug.replace(/-/g, ' ') : null);
+  if (onHost(host, ['coinmarketcap.com'])) {
+    return { name: '', website: null, search: words(after('currencies')), listing: null, note: 'That is a CoinMarketCap page, a market listing rather than the project\'s own website, so it is used only to search. Add the official website below if you know it.' };
+  }
+  if (onHost(host, ['coingecko.com'])) {
+    const id = after('coins');
+    return { name: '', website: null, search: words(id), listing: words(id) ? id : null, note: 'That is a CoinGecko page, a market listing rather than the project\'s own website, so it is used only to search. Add the official website below if you know it.' };
+  }
+  if (onHost(host, NOT_OFFICIAL_HOSTS)) {
+    const handle = onHost(host, HANDLE_HOSTS) && segs[0] ? segs[0].replace(/^@/, '') : '';
+    return { name: '', website: null, search: handle.length >= 2 ? handle : null, listing: null, note: `${host} is not the project's own website (it is an explorer, a market or a social page), so it is not saved as the website.${handle.length >= 2 ? '' : ' Go back and type the project\'s name to search its listing.'}` };
+  }
   const stem = host.split('.')[0];
   const guess = stem.charAt(0).toUpperCase() + stem.slice(1);
-  return { name: guess, website: url.toString(), search: stem };
+  return { name: guess, website: url.toString(), search: stem, listing: null, note: null };
 }
 
 export function openAddProjectDialog(ctx) {
@@ -208,12 +303,18 @@ export function openAddProjectDialog(ctx) {
       st.query = text;
       st.parsed = parseQuery(text);
       busy(go, true, 'Searching…');
-      try {
-        st.lookup = await ctx.api.get(`/api/market/lookup?q=${encodeURIComponent(st.parsed.search)}`);
-      } catch (err) {
-        st.lookup = { status: 'failed', message: err.message, candidates: [] };
+      if (!st.parsed.search) st.lookup = { status: 'not_searched', candidates: [] };
+      else {
+        try {
+          st.lookup = await ctx.api.get(`/api/market/lookup?q=${encodeURIComponent(st.parsed.search)}`);
+        } catch (err) {
+          st.lookup = { status: 'failed', message: err.message, candidates: [] };
+        }
       }
-      st.picked = st.lookup.candidates && st.lookup.candidates.length === 1 && !st.lookup.ambiguous ? st.lookup.candidates[0].coingecko_id : null;
+      const cands = st.lookup.candidates || [];
+      // A pasted CoinGecko page names its listing exactly: preselect it.
+      const exact = st.parsed.listing ? cands.find((c) => c.coingecko_id === st.parsed.listing) : null;
+      st.picked = exact ? exact.coingecko_id : cands.length === 1 && !st.lookup.ambiguous ? cands[0].coingecko_id : null;
       renderDetails();
     };
     body.replaceChildren(form);
@@ -249,11 +350,13 @@ export function openAddProjectDialog(ctx) {
         : stateText(c ? 'Identity stays pending until you confirm the listing on the official website (no prices until then)' : 'Saved with a pending identity: no prices until a market listing is confirmed', 'warn'));
       if (c && !symbol.value) symbol.value = c.symbol || '';
     };
+    // Listing IDs are shown only where two listings would otherwise read alike.
+    const sameName = (c) => cands.filter((x) => (x.name || '').toLowerCase() === (c.name || '').toLowerCase() && (x.symbol || '').toLowerCase() === (c.symbol || '').toLowerCase()).length > 1;
     const radios = h('div', { class: 'choices', role: 'radiogroup', 'aria-label': 'Market listing' },
-      cands.map((c) => h('label', { class: 'choice' },
+      cands.map((c) => h('label', { class: 'choice', title: `CoinGecko listing ID: ${c.coingecko_id}` },
         h('input', { type: 'radio', name: 'listing', value: c.coingecko_id, checked: st.picked === c.coingecko_id, onchange: () => { st.picked = c.coingecko_id; if (!name.dataset.touched) name.value = c.name || name.value; updateOutcome(); } }),
         h('span', { class: 'title' }, `${c.name || c.coingecko_id}${c.symbol ? ` (${c.symbol})` : ''}`),
-        h('span', { class: 'desc' }, `${c.market_cap_rank ? `CoinGecko rank #${c.market_cap_rank}` : 'Unranked on CoinGecko'} · listing ID ${c.coingecko_id}`))),
+        h('span', { class: 'desc' }, `${c.market_cap_rank ? `CoinGecko rank #${c.market_cap_rank}` : 'Unranked on CoinGecko'}${sameName(c) ? ` · listing ID ${c.coingecko_id}` : ''}`))),
       h('label', { class: 'choice' },
         h('input', { type: 'radio', name: 'listing', value: '', checked: !st.picked, onchange: () => { st.picked = null; updateOutcome(); } }),
         h('span', { class: 'title' }, cands.length ? 'None of these, or not listed yet' : 'Not listed'),
@@ -263,13 +366,14 @@ export function openAddProjectDialog(ctx) {
     confirm.addEventListener('change', updateOutcome);
     const add = button('Add project', null, { kind: 'primary', type: 'submit' });
     const errorBox = h('div', { role: 'alert' });
-    const lookupNote = lk.status === 'failed' || lk.status === 'backoff' || lk.status === 'budget_paused'
-      ? callout(`Couldn't search the market listings: ${lk.message} You can still add the project; its identity stays pending until a listing is confirmed.`, 'warn')
-      : !cands.length ? callout(`No CoinGecko listing found for “${st.parsed.search}”. You can add it with a pending identity and confirm a listing later.`, 'info')
-        : lk.ambiguous ? callout('Several listings share this ticker. Pick the one the project\'s official website links to.', 'warn')
-          : cands.length > 1 ? callout(` possible listings. Pick the one the project's official website links to, or choose None of these.`, 'info') : null;
+    const lookupNote = lk.status === 'not_searched' ? null
+      : lk.status === 'failed' || lk.status === 'backoff' || lk.status === 'budget_paused'
+        ? callout(`Couldn't search the market listings: ${lk.message} You can still add the project; its identity stays pending until a listing is confirmed.`, 'warn')
+        : !cands.length ? callout(`No CoinGecko listing found for “${st.parsed.search}”. You can add it with a pending identity and confirm a listing later.`, 'info')
+          : lk.ambiguous ? callout('Several listings share this ticker. Pick the one the project\'s official website links to.', 'warn')
+            : cands.length > 1 ? callout(`${cands.length} possible listings. Pick the one the project's official website links to, or choose None of these.`, 'info') : null;
     const form = h('form', { class: 'form-stack' },
-      h('div', null, h('div', { class: 'field-label' }, `Market listing for “${st.query}”`), lookupNote, radios),
+      h('div', null, h('div', { class: 'field-label' }, `Market listing for “${st.query}”`), st.parsed.note ? callout(st.parsed.note, 'info') : null, lookupNote, radios),
       field('Name', name),
       field('Official website', website, 'Used to confirm the listing and shown on the project page.'),
       confirmRow,
@@ -354,7 +458,7 @@ export function openAddProjectDialog(ctx) {
     body.replaceChildren(h('div', { class: 'receipt', role: 'status' },
       h('h3', null, r.status === 'exists' ? 'Already saved' : 'Saved'),
       h('ul', { class: 'rows' }, rows.map(([k, v]) => h('li', null, h('span', { class: 'k' }, k), v))),
-      h('p', { class: 'small faint', style: { margin: '8px 0 0' } }, `Saved ${fmtDateTime(new Date().toISOString())} · projects/${pid}/`),
+      h('p', { class: 'small faint', style: { margin: '8px 0 0' } }, `Saved ${fmtDateTime(new Date().toISOString())}`),
       h('div', { class: 'btn-row' },
         h('a', { class: 'btn primary', href: `#/watchlist?p=${encodeURIComponent(pid)}`, onclick: close }, 'Show in watchlist'),
         h('a', { class: 'btn', href: `#/project/${encodeURIComponent(pid)}/overview`, onclick: close }, 'Open project'),

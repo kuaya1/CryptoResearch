@@ -2,7 +2,7 @@
 // review calendar.
 import {
   h, card, table, stateText, tagChip, gradeBadge, fmtNum, fmtDate, fmtAgo, select, field, fieldError, input, button, action, callout,
-  tabStrip, safeSection, submissionId, PROVIDERS, PROVIDER_LABELS,
+  tabStrip, safeSection, submissionId, waitingInstruction, PROVIDERS, PROVIDER_LABELS,
 } from '../ui.js';
 import { comparisonBlock } from './project.js';
 
@@ -30,19 +30,31 @@ function runsTab(ctx) {
   const runNow = button('Run queued jobs now', null, { kind: 'small' });
   runNow.onclick = action(runNow, async () => { await ctx.api.post('/api/research/run', {}); await ctx.refresh(); return true; }, 'Queued jobs processed (paid calls only within your budget)');
   const staleDays = idx.settings.freshness.research_stale_days || 90;
+  const hosted = Boolean(ctx.state.session && ctx.state.session.hosted);
+  // Three routes, in words: by itself on the API (in the background, within
+  // your limits), through the model's own assistant (online desk), or by hand.
+  const happens = (x) => {
+    const who = PROVIDER_LABELS[x.p];
+    if (x.s.mode === 'api') return `Runs by itself on the ${who} API in the background, within your limits. The report is saved when it finishes.`;
+    if (x.s.mode === 'mock') return 'Returns fictional fixture reports in this demo workspace. No network call.';
+    const missing = (x.s.missing || []).join(', ') || x.s.reason;
+    return hosted
+      ? `No API run (${missing}). Each run waits for you: ${waitingInstruction(x.p, { full: true })}. ${who} researches under its own plan and saves the report here. Or paste the prompt and import the answer.`
+      : `No API set up (${missing}). Each run saves the prompt for you to paste into ${who}; the job completes when you import the answer.`;
+  };
   return h('div', null,
     card('Research routes', table([
       { label: 'Model', render: (x) => h('strong', null, PROVIDER_LABELS[x.p]) },
-      { label: 'Route', render: (x) => (x.s.mode === 'api' ? stateText(`API · ${x.s.model}`, 'ok') : x.s.mode === 'mock' ? stateText('Fictional demo adapter') : stateText('Manual import', 'warn')) },
-      { label: 'What happens', wrap: true, render: (x) => h('span', { class: 'small' }, x.s.mode === 'manual' ? `No API set up (${(x.s.missing || []).join(', ') || x.s.reason}). Each run saves the prompt for you to run in ${PROVIDER_LABELS[x.p]}; the job completes when you import the answer.` : x.s.mode === 'mock' ? 'Returns fictional fixture reports in this demo workspace. No network call.' : x.s.reason || '') },
+      { label: 'Route', render: (x) => (x.s.mode === 'api' ? stateText(`API · ${x.s.model}`, 'ok') : x.s.mode === 'mock' ? stateText('Fictional demo adapter') : stateText(hosted ? 'Its assistant\'s connection' : 'By hand', 'warn')) },
+      { label: 'What happens', wrap: true, render: (x) => h('span', { class: 'small' }, happens(x)) },
     ], PROVIDERS.map((p) => ({ p, s: (r.providers || {})[p] || { mode: 'manual', reason: 'unknown' } }))), {
       note: `Spend this month: $${(r.spend && r.spend.monthly) || 0} · today: $${(r.spend && r.spend.daily) || 0} · budget per run ${money(r.budget && r.budget.per_run_usd)}, day ${money(r.budget && r.budget.daily_usd)}, month ${money(r.budget && r.budget.monthly_usd)} · unattended runs ${r.unattended_enabled ? 'on' : 'off'}`,
-      actions: [runNow, h('a', { class: 'btn small', href: '#/settings?tab=research' }, 'Set up API access')],
+      actions: [runNow, h('a', { class: 'btn small', href: '#/settings?tab=research' }, hosted ? 'API keys and limits' : 'Set up API access')],
     }),
     card('Latest research per project', table([
       { label: 'Project', render: (p) => h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/research` }, p.name) },
       { label: 'Latest run', render: (p) => (p.research && p.research.latest_run ? h('div', null, stateText(sentence(p.research.latest_run.status), p.research.latest_run.status === 'completed' ? 'ok' : p.research.latest_run.status === 'failed' ? 'bad' : 'wait'), h('div', { class: 'small muted' }, `${fmtAgo(p.research.latest_run.created_at)} · ${p.research.latest_run.horizon ? p.research.latest_run.horizon.text : ''}`)) : h('span', { class: 'faint small' }, 'None')) },
-      { label: 'Models', render: (p) => h('div', { class: 'grades' }, PROVIDERS.map((prov) => gradeBadge(prov, p.providers && p.providers[prov], p.research && p.research.providers && p.research.providers[prov], { staleDays }))) },
+      { label: 'Models', render: (p) => h('div', { class: 'grades' }, PROVIDERS.map((prov) => gradeBadge(prov, p.providers && p.providers[prov], p.research && p.research.providers && p.research.providers[prov], { staleDays, hosted }))) },
       { label: 'Reports', num: true, render: (p) => String(p.report_count || 0) },
     ], projects, { empty: 'No projects yet.' }), { note: 'Each model\'s job is independent: a failure in one never erases another\'s result. Price refreshes never start research.' }));
 }

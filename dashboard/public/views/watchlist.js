@@ -6,11 +6,12 @@
 // Wide screens show the panel as a side column (non-modal); narrower screens
 // show it as a modal sheet (focus stays inside until it is closed).
 import {
-  h, clear, button, select, input, callout, changeCell, sparkline, logo, gradeBadge, badgeInfo, gradeView, verdictChip, bandClass,
-  fmtPrice, fmtCompactUsd, fmtDate, fmtDateTime, fmtAgo, fmtSignedPct, freshnessText, stateText, toast, announce, copyText,
-  PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, RESEARCH_STATE,
+  h, clear, button, select, input, changeCell, sparkline, logo, gradeBadge, badgeInfo, verdictChip, bandClass,
+  fmtPrice, fmtCompactUsd, fmtDate, fmtDateTime, fmtAgo, fmtSignedPct, freshnessText, priceStatus, stateText, toast, announce,
+  followedCount, researchState, withheldReason, unscoredList,
+  PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT,
 } from '../ui.js';
-import { openAddProjectDialog, openResearchDialog, openSectorDialog } from './dialogs.js';
+import { openAddProjectDialog, openResearchDialog, openSectorDialog, waitingActions } from './dialogs.js';
 import { marketStrip, positionFacts, previewTiming, vsBtcFacts } from '../position-ui.js';
 
 // Column catalogue. `hide` names the width below which a column steps aside
@@ -42,26 +43,34 @@ const SORT_NAMES = {
   'grade:chatgpt': ['GPT grade', 'lowest first', 'highest first'], 'grade:gemini': ['Gemini grade', 'lowest first', 'highest first'],
 };
 
-const DEFAULT_FILTERS = { sector: '', owned: 'all', coverage: 'any', ret30: 'any', archived: false };
+// The list opens on what you follow: watched or held. Projects you stopped
+// watching stay one choice away ("Not watching"); "All" shows everything.
+const DEFAULT_FILTERS = { sector: '', owned: 'watching', coverage: 'any', ret30: 'any', archived: false };
 const DEFAULT_SORT = { key: 'rank', dir: 'asc' };
 const COVERAGE = [['any', 'Any coverage'], ['all3', 'Graded by all three models'], ['missing', 'Missing a model grade'], ['none', 'No research yet'], ['attention', 'Failed or withheld']];
 const RET30 = [['any', 'Any'], ['pos', 'Positive'], ['neg', 'Negative']];
-const OWNED = [['all', 'All'], ['held', 'Held'], ['watching', 'Watching']];
+const OWNED = [['watching', 'Watching'], ['held', 'Held'], ['off', 'Not watching'], ['all', 'All']];
+const PREFS_VERSION = 2;
 
 const view = {
   q: '', order: null, orderKey: '', preview: null, previewFor: null, previewKey: null, showTimer: null, hideTimer: null,
   dismissedKey: null, suppressFocus: false, returnFocus: null, focusProvider: null, focusOnRender: false, bound: false, menus: [],
 };
 
-function prefs(ctx) {
+export function prefs(ctx) {
   const saved = ctx.ui.get('watchlist', {}) || {};
   const cols = Array.isArray(saved.columns) ? saved.columns.filter((c) => COLUMNS.some((x) => x.id === c && !x.disabled)) : COLUMNS.filter((c) => c.def).map((c) => c.id);
   if (!cols.includes('research')) cols.push('research');
-  return { columns: cols, sort: saved.sort && SORT_NAMES[saved.sort.key] ? saved.sort : DEFAULT_SORT, filters: { ...DEFAULT_FILTERS, ...(saved.filters || {}) } };
+  const filters = { ...DEFAULT_FILTERS, ...(saved.filters || {}) };
+  // Saved before the list opened on what you follow, "all" was just the old
+  // default, not a choice: start from the new one.
+  if (saved.v !== PREFS_VERSION && filters.owned === 'all') filters.owned = DEFAULT_FILTERS.owned;
+  if (!OWNED.some(([v]) => v === filters.owned)) filters.owned = DEFAULT_FILTERS.owned;
+  return { columns: cols, sort: saved.sort && SORT_NAMES[saved.sort.key] ? saved.sort : DEFAULT_SORT, filters };
 }
 
 function savePrefs(ctx, p) {
-  ctx.ui.set('watchlist', { columns: p.columns, sort: p.sort, filters: p.filters });
+  ctx.ui.set('watchlist', { v: PREFS_VERSION, columns: p.columns, sort: p.sort, filters: p.filters });
 }
 
 // ---- values -----------------------------------------------------------------
@@ -127,13 +136,14 @@ function coverageOf(p) {
   };
 }
 
-function matches(p, f, q) {
+export function matches(p, f, q) {
   if (p.broken) return false;
   if (!f.archived && p.status === 'archived') return false;
   if (f.archived && p.status !== 'archived') return false;
   if (f.sector && (!p.sector || p.sector.primary !== f.sector)) return false;
   if (f.owned === 'held' && !p.held) return false;
-  if (f.owned === 'watching' && !(p.on_watchlist && !p.held)) return false;
+  if (f.owned === 'watching' && !(p.on_watchlist || p.held)) return false;
+  if (f.owned === 'off' && (p.on_watchlist || p.held)) return false;
   const cov = coverageOf(p);
   if (f.coverage === 'all3' && cov.gradedCount < 3) return false;
   if (f.coverage === 'missing' && cov.gradedCount >= 3) return false;
@@ -213,10 +223,12 @@ function cellFor(ctx, col, p) {
   }
 }
 
+const hostedDesk = (ctx) => Boolean(ctx.state.session && ctx.state.session.hosted);
+
 function researchCell(ctx, p) {
   const staleDays = ctx.state.index.settings.freshness.research_stale_days || 90;
   return h('div', { class: 'grades' }, PROVIDERS.map((prov) => {
-    const b = gradeBadge(prov, p.providers && p.providers[prov], p.research && p.research.providers && p.research.providers[prov], { staleDays, button: true, key: `gb-${p.project_id}-${prov}` });
+    const b = gradeBadge(prov, p.providers && p.providers[prov], p.research && p.research.providers && p.research.providers[prov], { staleDays, hosted: hostedDesk(ctx), button: true, key: `gb-${p.project_id}-${prov}` });
     b.addEventListener('mouseenter', () => schedulePreview(ctx, p.project_id, prov, b));
     b.addEventListener('mouseleave', () => scheduleHide());
     b.addEventListener('focus', () => {
@@ -381,28 +393,40 @@ function radioGroup(name, legend, options, value, onPick) {
 
 // ---- review queue -------------------------------------------------------------
 
-// Below the list, closed until opened (the choice is remembered).
+// The urgent items, as one string: closing the queue holds until it changes.
+export function urgentSignature(items) {
+  return (items || []).filter((a) => a.severity === 'high').map((a) => `${a.kind}|${a.project_id || ''}|${a.title}`).join('\n');
+}
+
+// One line right above the list. It opens by itself while anything is urgent
+// (until you close it, and again when a new urgent item arrives); otherwise
+// it remembers whether you left it open. Every item is listed.
 function attentionBlock(ctx) {
   const items = ctx.state.index.attention || [];
   if (!items.length) return null;
   const high = items.filter((a) => a.severity === 'high').length;
-  const open = Boolean(ctx.ui.get('reviewOpen', false));
+  const sig = urgentSignature(items);
+  const open = high ? ctx.ui.get('reviewClosedUrgent', null) !== sig : Boolean(ctx.ui.get('reviewOpen', false));
   const first = items[0];
-  const det = h('details', { class: 'attention', open: open || null, dataset: { key: 'attention' } },
-    h('summary', null,
+  // The open state is kept here, not by the page's redraw memory, so a new
+  // urgent item can open it during a live update.
+  const det = h('details', { class: 'attention', open: open || null },
+    h('summary', { dataset: { key: 'attention' } },
       h('span', { class: `sev ${high ? 'high' : 'medium'}`, 'aria-hidden': 'true' }),
       h('span', null, h('span', { class: 'count' }, String(items.length)), ` ${items.length === 1 ? 'item needs' : 'items need'} review`, high ? h('span', { class: 'sr-only' }, `, ${high} urgent`) : null),
       h('span', { class: 'peek' }, first.title),
       h('span', { class: 'toggle', 'aria-hidden': 'true' }, open ? 'Hide' : 'Show')),
-    h('ol', null, items.slice(0, 8).map((a, i) => h('li', null,
+    h('ol', null, items.map((a, i) => h('li', null,
       h('span', { class: `sev ${a.severity}`, role: 'img', 'aria-label': `${a.severity} priority` }),
       h('span', { class: 't' }, h('span', null, a.title), a.detail ? h('span', { class: 'd', title: a.detail }, a.detail) : null),
-      a.action ? h('a', { class: 'btn small', href: a.project_id && a.action === `#/project/${a.project_id}` ? `#/watchlist?p=${encodeURIComponent(a.project_id)}` : a.action, dataset: { key: `att-${i}` } }, 'Open') : null))),
-    items.length > 8 ? h('p', { class: 'small muted', style: { padding: '0 16px 12px', margin: 0 } }, `${items.length - 8} more in Updates.`) : null);
+      a.action ? h('a', { class: 'btn small', href: a.project_id && a.action === `#/project/${a.project_id}` ? `#/watchlist?p=${encodeURIComponent(a.project_id)}` : a.action, dataset: { key: `att-${i}` } }, 'Open') : null))));
   det.addEventListener('toggle', () => {
     const t = det.querySelector('summary .toggle');
     if (t) t.textContent = det.open ? 'Hide' : 'Show';
-    if (det.open !== Boolean(ctx.ui.get('reviewOpen', false))) ctx.ui.set('reviewOpen', det.open);
+    if (high) {
+      const closed = det.open ? null : sig;
+      if (ctx.ui.get('reviewClosedUrgent', null) !== closed) ctx.ui.set('reviewClosedUrgent', closed);
+    } else if (det.open !== Boolean(ctx.ui.get('reviewOpen', false))) ctx.ui.set('reviewOpen', det.open);
   });
   return det;
 }
@@ -413,7 +437,8 @@ function previewContent(ctx, p, prov) {
   const rep = p.providers && p.providers[prov];
   const job = p.research && p.research.providers && p.research.providers[prov];
   const staleDays = ctx.state.index.settings.freshness.research_stale_days || 90;
-  const info = badgeInfo(prov, rep, job, { staleDays });
+  const hosted = hostedDesk(ctx);
+  const info = badgeInfo(prov, rep, job, { staleDays, hosted });
   const riskLabels = Object.fromEntries((ctx.state.index.rubrics.grading.risk_scores || []).map((x) => [x.id, x.label.replace(/ risk$/i, '')]));
   const rows = [];
   const add = (k, v) => { if (v !== null && v !== undefined && v !== '') rows.push(h('dt', null, k), h('dd', null, v)); };
@@ -422,6 +447,10 @@ function previewContent(ctx, p, prov) {
     const g = rep.grade || {};
     if (info.kind === 'grade' || info.kind === 'range') gradeEl = h('div', { class: `pv-grade${bandClass(g)}` }, h('span', { class: 'big' }, g.display), g.label ? h('span', { class: 'lab' }, g.label) : null, h('span', { class: 'what' }, info.kind === 'range' ? 'grade range, 0–100' : 'grade, 0–100'));
     else gradeEl = h('div', { class: 'pv-grade' }, h('span', { class: 'state-text' }, info.kind === 'pdf' ? 'PDF: needs a text copy' : 'Grade withheld'), g.coverage_pct !== null && g.coverage_pct !== undefined ? h('span', { class: 'what' }, `${g.coverage_pct}% of the weight scored`) : null);
+    if (g.status === 'withheld' && info.kind !== 'pdf') {
+      const why = withheldReason(prov, g, rep.unscored);
+      add('Why', h('span', null, `${why.why.charAt(0).toUpperCase()}${why.why.slice(1)}.`, unscoredList(why, { max: 110 })));
+    }
     add('Verdict', verdictChip(rep.verdict));
     add('Horizon', rep.horizon || 'not stated');
     add('Timing', previewTiming(rep));
@@ -430,9 +459,9 @@ function previewContent(ctx, p, prov) {
     if (risks.length) add('Top risks', h('span', null, risks.map((r) => `${riskLabels[r.id] || r.id} ${r.status === 'range' ? `${r.low}–${r.high}` : r.value}`).join(' · '), h('span', { class: 'faint' }, ' (higher is worse)')));
     add('Source', `${rep.model_version || 'model not stated'} · ${rep.provenance && rep.provenance.attested ? 'attested by the API' : 'self-reported'}${rep.provenance && rep.provenance.channel ? ` · via ${rep.provenance.channel}` : ''}`);
     if (rep.model_total && rep.model_total.status === 'mismatch') add('Check', 'The model\'s own total differs from this grade');
-    if (info.refreshing) add('Newer', RESEARCH_STATE[info.job] ? RESEARCH_STATE[info.job].long : 'research in progress');
+    if (info.newerText) add('Newer', info.newerText);
   } else {
-    gradeEl = h('div', { class: 'pv-grade' }, h('span', { class: 'state-text' }, info.value === 'None' ? 'No research yet' : RESEARCH_STATE[info.kind] ? RESEARCH_STATE[info.kind].short : info.value));
+    gradeEl = h('div', { class: 'pv-grade' }, h('span', { class: 'state-text' }, info.value === 'None' ? 'No research yet' : researchState(info.kind).short));
     if (info.kind === 'none') add('Next', 'Select the project, then Run research');
     else add('Status', info.text.replace(`${PROVIDER_LABELS[prov]}: `, ''));
   }
@@ -565,7 +594,8 @@ function providerSection(ctx, p, prov) {
   const rep = p.providers && p.providers[prov];
   const job = p.research && p.research.providers && p.research.providers[prov];
   const staleDays = ctx.state.index.settings.freshness.research_stale_days || 90;
-  const info = badgeInfo(prov, rep, job, { staleDays });
+  const hosted = hostedDesk(ctx);
+  const info = badgeInfo(prov, rep, job, { staleDays, hosted });
   const pid = p.project_id;
   const riskLabels = Object.fromEntries((ctx.state.index.rubrics.grading.risk_scores || []).map((x) => [x.id, x.label]));
   const links = [];
@@ -573,6 +603,9 @@ function providerSection(ctx, p, prov) {
   if (rep) {
     links.push(h('a', { href: `#/project/${encodeURIComponent(pid)}/reports?report=${encodeURIComponent(rep.report_id)}`, dataset: { key: `report-${pid}-${prov}` } }, 'Open report'));
     links.push(h('a', { href: `#/project/${encodeURIComponent(pid)}/scorecards?provider=${prov}`, dataset: { key: `scorecard-${pid}-${prov}` } }, 'Scorecard'));
+  }
+  if (job && ['interrupted', 'uncertain'].includes(info.job || info.kind)) {
+    links.push(h('a', { href: `#/project/${encodeURIComponent(pid)}/research`, dataset: { key: `runs-${pid}-${prov}` } }, 'Research runs'));
   }
   if (job && job.state === 'failed') {
     const retry = button('Retry', null, { kind: 'small', key: `retry-${pid}-${prov}` });
@@ -589,18 +622,9 @@ function providerSection(ctx, p, prov) {
     };
     actions.push(retry);
   }
-  if (job && ['unconfigured', 'waiting'].includes(job.state)) {
-    const cp = button('Copy prompt', null, { kind: 'small', key: `copy-${pid}-${prov}` });
-    cp.setAttribute('aria-label', `Copy the research prompt for ${PROVIDER_LABELS[prov]}`);
-    cp.onclick = async () => {
-      try {
-        await copyText(await ctx.api.text(`/api/projects/${encodeURIComponent(pid)}/research/${encodeURIComponent(job.run_id)}/prompt`));
-      } catch (err) {
-        toast(err.message, 'bad');
-      }
-    };
-    actions.push(cp, h('a', { class: 'btn small', href: `#/updates?tab=import&project=${encodeURIComponent(pid)}&provider=${prov}&run=${encodeURIComponent(job.run_id)}`, dataset: { key: `import-${pid}-${prov}` } }, 'Import report'));
-  }
+  // A waiting job (no API runs it): on the online desk, the sentence for its
+  // assistant first; pasting by hand stays available.
+  if (job && job.state === 'unconfigured') actions.push(...waitingActions(ctx, { pid, runId: job.run_id, provider: prov, key: `${pid}-${prov}` }));
   if (!rep && !job) {
     const run = button('Run research', () => openResearchDialog(ctx, p, { providers: [prov] }), { kind: 'small', key: `run-${pid}-${prov}` });
     actions.push(run);
@@ -611,18 +635,22 @@ function providerSection(ctx, p, prov) {
   } else if (rep) {
     gradeLine = h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, info.kind === 'pdf' ? 'PDF saved: needs a text copy' : 'Grade withheld'), rep.grade && rep.grade.coverage_pct !== null && rep.grade.coverage_pct !== undefined ? h('span', { class: 'small muted' }, `${rep.grade.coverage_pct}% of the weight scored`) : null);
   } else {
-    const st = RESEARCH_STATE[info.kind] || RESEARCH_STATE.none;
-    gradeLine = h('div', { class: 'provider-grade' }, stateText(st.long, st.tone));
+    const st = researchState(info.kind, { provider: prov, hosted });
+    // On the online desk the sentence for the assistant follows below.
+    gradeLine = h('div', { class: 'provider-grade' }, stateText(info.kind === 'waiting' && hosted ? 'Waiting for you' : st.long, st.tone));
   }
   const facts = [];
   if (rep) {
+    if (rep.grade && rep.grade.status === 'withheld' && info.kind !== 'pdf') {
+      const why = withheldReason(prov, rep.grade, rep.unscored);
+      facts.push(['Why withheld', h('span', null, `${why.why.charAt(0).toUpperCase()}${why.why.slice(1)}. No grade is calculated from part of the weight.`, unscoredList(why))]);
+    }
     facts.push(['Verdict', verdictChip(rep.verdict)]);
     facts.push(['Analysis date', h('span', null, fmtDate(rep.analysis_at), info.age ? h('span', { class: 'faint' }, ` · ${info.age} ago`.replace('today ago', 'today')) : null, info.stale ? h('span', { class: 'freshness stale' }, ' · stale') : null)]);
     facts.push(['Horizon', rep.horizon || 'not stated']);
     facts.push(...positionFacts(ctx, p, prov, rep));
     const risks = (rep.top_risks || []).filter((r) => r.status === 'scored' || r.status === 'range');
     if (risks.length) facts.push(['Top risks (higher is worse)', risks.map((r) => `${riskLabels[r.id] || r.id}: ${r.status === 'range' ? `${r.low}–${r.high}` : r.value}`).join(' · ')]);
-    if (rep.grade && rep.grade.status === 'withheld' && rep.grade.reason) facts.push(['Why withheld', rep.grade.reason]);
     if (rep.model_total && rep.model_total.status === 'mismatch') facts.push(['Check', rep.model_total.message]);
   } else if (job && job.error) {
     facts.push(['Last error', job.error]);
@@ -631,12 +659,13 @@ function providerSection(ctx, p, prov) {
   const channel = rep && rep.provenance && rep.provenance.channel ? rep.provenance.channel : null;
   const route = rep
     ? [rep.model_version || null, rep.provenance && rep.provenance.attested ? 'attested by the API' : /desk connector/i.test(channel || '') ? 'saved through its connection' : 'imported'].filter(Boolean).join(' · ')
-    : job ? (job.mode === 'manual' ? 'Waiting: its assistant through the desk connection, or paste the prompt and import' : job.mode === 'cowork' ? 'Claude Cowork session' : job.mode === 'connector' ? `${PROVIDER_LABELS[prov]} through its desk connection` : job.mode === 'mock' ? 'Fictional demo adapter' : 'API') : 'Not requested';
+    : job ? (job.mode === 'manual' ? (hosted ? 'Waits for its assistant (no API key)' : 'By hand (no API set up)') : job.mode === 'cowork' ? 'Claude in Cowork' : job.mode === 'connector' ? `${PROVIDER_LABELS[prov]} through its desk connection` : job.mode === 'mock' ? 'Fictional demo adapter' : 'API, in the background') : 'Not requested';
   return h('div', { class: 'provider', id: `panel-prov-${prov}`, tabindex: '-1', 'aria-label': `${PROVIDER_LABELS[prov]} scorecard` },
     h('div', { class: 'provider-top' }, h('span', { class: 'name' }, PROVIDER_LABELS[prov]), h('span', { class: 'route' }, route)),
     gradeLine,
     facts.length ? h('dl', { class: 'facts' }, facts.map(([k, v]) => h('div', { class: 'wide' }, h('dt', null, k), h('dd', null, v)))) : null,
-    rep && info.refreshing ? h('p', { class: 'small muted', style: { margin: '6px 0 0' } }, `Newer research: ${(RESEARCH_STATE[info.job] || { long: 'in progress' }).long}`) : null,
+    // A newer run on a saved grade: in progress, waiting, failed, needs a check or paused.
+    rep && info.newerText ? h('p', { class: `newer-line${info.problem ? ' problem' : ''}` }, info.newerText) : null,
     links.length || actions.length ? h('div', { class: 'links' }, links, actions) : null);
 }
 
@@ -650,6 +679,7 @@ function comparisonNote(ctx, p) {
   }
   const flagged = c.flagged || [];
   return h('div', { class: 'small' },
+    h('p', { class: 'faint', style: { margin: '0 0 4px' } }, 'Computed by this desk from the saved reports; not a model\'s opinion.'),
     h('p', { style: { margin: 0 } }, `${comparable.map((x) => PROVIDER_LABELS[x]).join(', ')} used the same rubric, scoring profile and horizon, analyzed within the comparison window.`),
     flagged.length
       ? h('p', { style: { margin: '6px 0 0' } }, h('strong', null, `They differ by ${ctx.state.index.settings.comparison.spread_threshold}+ points on ${flagged.length} item(s): `), flagged.slice(0, 4).map((f) => `${f.label} (${f.spread})`).join(', '), flagged.length > 4 ? ', …' : '', '.')
@@ -781,6 +811,17 @@ function renderPanel(ctx, pid) {
 
 // ---- page ---------------------------------------------------------------------
 
+// What a manual price refresh did, for its toast: anything but a full or
+// partial update is a failure, said plainly, with the age of the prices still shown.
+export function refreshToast(out) {
+  const r = out && out.result;
+  const st = (out && out.status) || {};
+  if (r && ['ok', 'partial'].includes(r.status)) return [r.message || 'Prices refreshed', ''];
+  const why = String((r && r.message) || st.note || st.last_error || 'the price source did not answer').replace(/^not refreshed:\s*/i, '').replace(/[.\s]+$/, '');
+  const shown = st.last_success_at ? `Showing prices from ${fmtDateTime(st.last_success_at)}.` : 'There are no earlier prices to show.';
+  return [`Prices not refreshed: ${why}. ${shown}`, 'bad'];
+}
+
 export function renderWatchlist(ctx, route) {
   const idx = ctx.state.index;
   const rankLabels = [...new Set(idx.projects.map((p) => p.market && p.market.rank_source_label).filter(Boolean))];
@@ -817,7 +858,7 @@ export function renderWatchlist(ctx, route) {
     view.order = rows.map((r) => r.project_id);
     view.orderKey = key;
     const total = all.filter((p) => (f.archived ? p.status === 'archived' : p.status !== 'archived')).length;
-    const filtered = Boolean(view.q) || filterCount() > 0 || f.owned !== 'all';
+    const filtered = Boolean(view.q) || filterCount() > 0 || f.owned !== DEFAULT_FILTERS.owned;
     // Only what the list itself does not show: a filtered count, or rows kept in place.
     resultsLine.replaceChildren(...[
       filtered ? h('span', null, `${rows.length} of ${total} ${f.archived ? 'archived ' : ''}projects`) : null,
@@ -834,6 +875,11 @@ export function renderWatchlist(ctx, route) {
         h('p', null, 'Add a project by name or official website. Research and prices follow from there.'),
         h('div', { class: 'btn-row' }, button('Add project', () => openAddProjectDialog(ctx), { kind: 'primary', key: 'empty-add' })),
         h('p', { class: 'small muted', style: { marginTop: '12px' } }, 'Or ask Cowork: "Add [project name and official URL] to my crypto watchlist and research it with Claude, ChatGPT, and Gemini."')));
+    } else if (f.owned === 'watching' && !view.q && !filterCount()) {
+      // Projects exist, but none is watched or held.
+      holder.replaceChildren(h('div', { class: 'empty' }, h('h2', null, 'Nothing on your watchlist'),
+        h('p', null, `${total} project${total === 1 ? ' is' : 's are'} saved but not watched. Watching a project never records a holding.`),
+        h('div', { class: 'btn-row' }, button('Show not watching', () => setFilter('owned', 'off'), { key: 'empty-off' }))));
     } else {
       holder.replaceChildren(h('div', { class: 'empty' }, h('h2', null, 'No projects match'),
         h('p', null, `${total} project${total === 1 ? ' is' : 's are'} hidden by the current search or filters.`),
@@ -872,7 +918,7 @@ export function renderWatchlist(ctx, route) {
     const list = [];
     const tok = (label, onRemove, key) => h('span', { class: 'token' }, label, h('button', { type: 'button', 'aria-label': `Remove filter: ${label}`, dataset: { key }, onclick: onRemove }, '×'));
     if (view.q) list.push(tok(`Search: “${view.q}”`, () => { view.q = ''; search.value = ''; view.order = null; rerender(); search.focus(); }, 'tok-q'));
-    if (f.owned !== 'all') list.push(tok(OWNED.find(([v]) => v === f.owned)[1], () => setFilter('owned', 'all'), 'tok-owned'));
+    if (f.owned !== DEFAULT_FILTERS.owned) list.push(tok(f.owned === 'all' ? 'All projects, watched or not' : OWNED.find(([v]) => v === f.owned)[1], () => setFilter('owned', DEFAULT_FILTERS.owned), 'tok-owned'));
     if (f.sector) list.push(tok(`Sector: ${(idx.sectors.find((s) => s.id === f.sector) || { label: f.sector }).label}`, () => setFilter('sector', ''), 'tok-sector'));
     if (f.coverage !== 'any') list.push(tok(COVERAGE.find(([v]) => v === f.coverage)[1], () => setFilter('coverage', 'any'), 'tok-coverage'));
     if (f.ret30 !== 'any') list.push(tok(`30D ${f.ret30 === 'pos' ? 'positive' : 'negative'}`, () => setFilter('ret30', 'any'), 'tok-ret30'));
@@ -921,17 +967,17 @@ export function renderWatchlist(ctx, route) {
   }
 
   const m = idx.freshness.market;
-  const fr = freshnessText(m.freshness, m.age_minutes);
+  const ps = priceStatus(m);
   const refreshBtn = button('Refresh prices', null, { kind: 'small', key: 'refresh-prices' });
   refreshBtn.onclick = async () => {
     refreshBtn.disabled = true;
     refreshBtn.textContent = 'Refreshing…';
     try {
       const out = await ctx.api.post('/api/market/refresh', {});
-      toast(out.result && out.result.message ? out.result.message : 'Prices refreshed');
+      toast(...refreshToast(out));
       await ctx.refresh();
     } catch (err) {
-      toast(err.message, 'bad');
+      toast(...refreshToast({ result: { status: 'failed', message: err.message }, status: m }));
     } finally {
       if (refreshBtn.isConnected) {
         refreshBtn.disabled = false;
@@ -940,6 +986,7 @@ export function renderWatchlist(ctx, route) {
     }
   };
   const held = all.filter((p) => p.held && p.status !== 'archived').length;
+  const followed = followedCount(all);
   const addBtn = button('Add project', () => openAddProjectDialog(ctx), { kind: 'primary', key: 'add-project' });
   addBtn.id = 'add-project-btn';
   drawControls();
@@ -1020,20 +1067,22 @@ export function renderWatchlist(ctx, route) {
       h('div', null,
         h('h1', null, 'Watchlist'),
         h('div', { class: 'sub' },
-          h('span', null, ((n) => `${n} project${n === 1 ? '' : 's'}`)(all.filter((p) => p.status !== 'archived').length), held ? ` · ${held} held` : ''),
-          h('span', { class: `freshness ${['stale', 'stale_failed', 'failed'].includes(m.freshness) ? 'stale' : ''}`.trim() },
-            `Prices: ${view.priceSource} · ${m.last_success_at ? `updated ${fmtAgo(m.last_success_at)}` : 'never fetched'}${m.freshness !== 'fresh' && m.freshness !== 'never_run' ? ` · ${fr.text}` : ''}`),
-          refreshBtn)),
+          // The same count as the navigation: watched or held.
+          h('span', null, `${followed} watching`, held ? ` · ${held} held` : ''),
+          h('span', { class: `freshness${ps.problem ? ' stale' : ''}`, title: ps.note || null },
+            `Prices: ${view.priceSource} · ${m.last_success_at ? ps.asOf.replace(/^Prices /, '') : 'not fetched yet'}${m.freshness !== 'fresh' && m.freshness !== 'never_run' ? ` · ${ps.text}` : ''}`),
+          refreshBtn),
+        ps.note && ps.problem ? h('p', { class: 'price-problem' }, ps.note) : null),
       h('div', { class: 'actions' }, h('a', { class: 'btn', href: '#/new', dataset: { key: 'new-research' } }, 'New research'), addBtn)),
     marketStrip(idx),
+    attentionBlock(ctx),
     toolbar,
     tokens,
     resultsLine,
     holder,
     h('p', { class: 'legend-line' },
       h('span', { class: 'bands', 'aria-hidden': 'true' }, ['a', 'b', 'c', 'd', 'f'].map((b) => h('span', { class: `band-key band-${b}` }, b.toUpperCase()))),
-      h('span', null, `Grades 0–100, calculated by this app from each model's own report. Hover one for details; a month count (4mo) means older than ${idx.settings.freshness.research_stale_days || 90} days.`)),
-    attentionBlock(ctx));
+      h('span', null, `Grades 0–100, calculated by this app from each model's own report. Hover one for details; a month count (4mo) means older than ${idx.settings.freshness.research_stale_days || 90} days. Withheld means a weighted part was not scored: the share that was is shown instead of a grade.`)));
   page.afterMount = afterMount;
   return page;
 }

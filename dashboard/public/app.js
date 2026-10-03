@@ -2,7 +2,7 @@
 // live refresh. Views load on demand so one broken view never blanks the rest.
 // A live refresh keeps focus, open sections, scroll positions and drafts; Back
 // returns to the list position and the control that was used to leave it.
-import { h, clear, toast, store, announce } from './ui.js';
+import { h, clear, toast, store, announce, followedCount } from './ui.js';
 
 const state = { token: null, session: null, index: null, projects: new Map(), dirty: false, live: false, route: null, ui: {}, renderSeq: 0, renderReason: 'nav' };
 
@@ -267,7 +267,8 @@ function counts(index) {
   const pending = (index.imports.requests_pending || []).length + ((index.imports.inbox || {}).in_inbox || []).length;
   const running = projects.filter((p) => p.research && Object.values(p.research.providers || {}).some((j) => j && ['queued', 'running', 'dispatching'].includes(j.state))).length;
   return {
-    watchlist: projects.filter((p) => p.on_watchlist || p.held).length || '',
+    // The same count the watchlist header shows: watched or held.
+    watchlist: followedCount(projects) || '',
     research: running ? { n: running, title: `${running} project(s) with research in progress` } : '',
     updates: changed + pending ? { n: changed + pending, title: `${changed} project(s) changed since your last review${pending ? `; ${pending} item(s) waiting in the inbox or request queue` : ''}` } : '',
   };

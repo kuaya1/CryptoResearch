@@ -2,7 +2,7 @@
 // the Cowork request queue. (The activity log lives under Settings.)
 import {
   h, card, table, stateText, fmtDateTime, fmtAgo, fmtSignedPct, select, field, fieldError, button, action, busy, callout, details,
-  announce, tabStrip, safeSection, store, session, submissionId, PROVIDERS, PROVIDER_LABELS,
+  announce, tabStrip, safeSection, store, session, submissionId, jobKey, researchState, PROVIDERS, PROVIDER_LABELS,
 } from '../ui.js';
 
 const TABS = [
@@ -13,17 +13,21 @@ const TABS = [
 ];
 
 export async function renderUpdates(ctx, route) {
-  const tab = TABS.some(([t]) => t === route.query.get('tab')) ? route.query.get('tab') : 'changes';
+  // The Cowork request queue is how Cowork reaches this PC's folder; the
+  // online desk has no such folder (assistants use its connector instead).
+  const hosted = Boolean(ctx.state.session && ctx.state.session.hosted);
+  const tabs = hosted ? TABS.filter(([t]) => t !== 'requests') : TABS;
+  const tab = tabs.some(([t]) => t === route.query.get('tab')) ? route.query.get('tab') : 'changes';
   const idx = ctx.state.index;
   const counts = {
     changes: idx.projects.filter((p) => !p.broken && p.status !== 'archived' && p.changes && p.changes.item_count > 0).length,
     inbox: (idx.imports.inbox.in_inbox || []).length,
     requests: (idx.imports.requests_pending || []).length,
   };
-  const strip = tabStrip(TABS.map(([t, label]) => ({ id: t, label, href: `#/updates?tab=${t}`, count: counts[t] || null })), tab, { label: 'Update sections' });
-  const body = await safeSection(TABS.find(([t]) => t === tab)[1], () => ({ changes: changesTab, import: importTab, inbox: inboxTab, requests: requestsTab })[tab](ctx, route));
+  const strip = tabStrip(tabs.map(([t, label]) => ({ id: t, label, href: `#/updates?tab=${t}`, count: counts[t] || null })), tab, { label: 'Update sections' });
+  const body = await safeSection(tabs.find(([t]) => t === tab)[1], () => ({ changes: changesTab, import: importTab, inbox: inboxTab, requests: requestsTab })[tab](ctx, route));
   return h('div', null,
-    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Updates'), h('div', { class: 'sub' }, 'New research, report imports and Cowork requests. Every save goes through the same validated path.'))),
+    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Updates'), h('div', { class: 'sub' }, hosted ? 'New research and report imports. Every save goes through the same validated path.' : 'New research, report imports and Cowork requests. Every save goes through the same validated path.'))),
     strip,
     h('div', { id: 'tabpanel', role: 'tabpanel', 'aria-labelledby': `tab-${tab}` }, body));
 }
@@ -65,7 +69,7 @@ function runOptions(ctx, projectId, provider) {
   const p = ctx.state.index.projects.find((x) => x.project_id === projectId);
   const opts = [{ value: '', label: 'Not part of a research run' }];
   const job = p && p.research && p.research.providers && p.research.providers[provider];
-  if (job && job.run_id) opts.push({ value: job.run_id, label: `Run of ${fmtDateTime(job.run_created_at || '') || job.run_id} (${PROVIDER_LABELS[provider]}: ${job.state})` });
+  if (job && job.run_id) opts.push({ value: job.run_id, label: `Run of ${fmtDateTime(job.run_created_at || '') || job.run_id} (${PROVIDER_LABELS[provider]}: ${researchState(jobKey(job)).short.toLowerCase()})` });
   return opts;
 }
 

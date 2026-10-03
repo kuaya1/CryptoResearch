@@ -2,22 +2,26 @@
 // only: no HTML from the report is ever interpreted, and links are limited to
 // http(s). Report text is data; any instructions inside it are just text.
 
-import { h, safeUrl } from './ui.js';
+import { h, safeUrl, tagChip } from './ui.js';
 
+// Inline marks: code, bold, links (http(s) only), bare URLs, italics, and the
+// evidence tags [V] [C] [I] [S] as tag chips, so a checked fact, a project
+// claim, an inference and a speculation stand apart while reading.
 function inline(text) {
   const out = [];
-  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\[[^\]]+\]\((https?:\/\/[^\s)]+)\))|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])|(\*[^*\s][^*]*\*)/g;
+  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\[[^\]]+\]\((https?:\/\/[^\s)]+)\))|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])|(\*[^*\s][^*]*\*)|\[([VCIS])\]/g;
   let last = 0;
   let m;
   while ((m = re.exec(text))) {
     if (m.index > last) out.push(text.slice(last, m.index));
     if (m[1]) out.push(h('code', null, m[1].slice(1, -1)));
-    else if (m[2]) out.push(h('strong', null, m[2].slice(2, -2)));
+    else if (m[2]) out.push(h('strong', null, inline(m[2].slice(2, -2))));
     else if (m[3]) {
       const label = m[3].slice(1, m[3].indexOf(']('));
       out.push(safeUrl(m[4]) ? h('a', { href: m[4] }, label) : label);
     } else if (m[5]) out.push(safeUrl(m[5]) ? h('a', { href: m[5] }, m[5]) : m[5]);
-    else if (m[6]) out.push(h('em', null, m[6].slice(1, -1)));
+    else if (m[6]) out.push(h('em', null, inline(m[6].slice(1, -1))));
+    else if (m[7]) out.push(tagChip(m[7]));
     last = m.index + m[0].length;
   }
   if (last < text.length) out.push(text.slice(last));

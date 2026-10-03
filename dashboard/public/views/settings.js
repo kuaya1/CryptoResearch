@@ -2,7 +2,7 @@
 // appear in the page), rubrics, data (exports, backups) and system status.
 import {
   h, card, table, stateText, fmtDateTime, fmtNum, fmtAgo, field, input, select, button, action, callout, kv, details, tabStrip, safeSection,
-  PROVIDERS, PROVIDER_LABELS,
+  priceStatus, PROVIDERS, PROVIDER_LABELS,
 } from '../ui.js';
 
 const TABS = [
@@ -119,7 +119,7 @@ async function researchTab(ctx) {
   const form = h('form', null,
     table([
       { label: 'Model', render: (p) => h('strong', null, PROVIDER_LABELS[p]) },
-      { label: 'Route', render: (p) => { const st = info.providers[p] || {}; return st.mode === 'api' ? stateText('API, ready', 'ok') : st.mode === 'mock' ? stateText('Fictional demo adapter') : h('span', { title: st.reason || '' }, stateText('Manual import', 'warn')); } },
+      { label: 'Route', render: (p) => { const st = info.providers[p] || {}; return st.mode === 'api' ? stateText('API, ready', 'ok') : st.mode === 'mock' ? stateText('Fictional demo adapter') : h('span', { title: st.reason || '' }, stateText(ctx.state.session && ctx.state.session.hosted ? 'Its assistant\'s connection' : 'By hand', 'warn')); } },
       { label: 'API key', render: (p) => { const st = info.providers[p] || {}; return st.key && st.key.present ? `Present (${st.key.source || st.key.how || 'configured'})` : h('span', { class: 'faint' }, 'Not set'); } },
       { label: 'Model ID', render: (p) => inputs[p].model },
       { label: 'Input $/1M tok', render: (p) => inputs[p].inp },
@@ -147,18 +147,30 @@ async function researchTab(ctx) {
     await ctx.refresh();
     return out;
   }, 'Research settings saved. No key was sent or stored by this page.');
+  // The online desk reads its keys from Render's environment; this PC reads
+  // them from its environment or the secrets file outside the workspace.
+  const hosted = Boolean(ctx.state.session && ctx.state.session.hosted);
+  const keyHelp = hosted
+    ? card('How to add a key (online desk)', h('ol', { class: 'list small' },
+      h('li', null, 'In Render, open the CryptoResearch service, then Environment.'),
+      h('li', null, 'Add only the keys you want to use: ', h('code', null, 'ANTHROPIC_API_KEY'), ', ', h('code', null, 'OPENAI_API_KEY'), ', ', h('code', null, 'GEMINI_API_KEY'), '. Save; Render restarts the desk with them. Never paste a key into a chat or this page.'),
+      h('li', null, 'Set the model ID and token prices above (from each provider\'s pricing page), then the three limits.'),
+      h('li', null, 'The Route column shows "API, ready" when everything needed is present. That model then runs by itself in the background, within your limits.')))
+    : card('How to add a key (on this PC only)', h('ol', { class: 'list small' },
+      h('li', null, 'Create the file ', h('code', null, info.keys_file), ' (outside your workspace, so it is never backed up or exported).'),
+      h('li', null, 'Put in only the keys you want to use, for example ', h('code', null, '{ "anthropic_api_key": "…", "openai_api_key": "…", "gemini_api_key": "…" }'), '. Environment variables ANTHROPIC_API_KEY, OPENAI_API_KEY and GEMINI_API_KEY also work.'),
+      h('li', null, 'Set the model ID and token prices above (from each provider\'s pricing page), then the three limits.'),
+      h('li', null, 'Restart the dashboard. The status column shows "ready (API)" when everything needed is present.')));
   return h('div', null,
-    callout(h('span', null, 'API access is separate from consumer subscriptions (Claude Pro/Max, ChatGPT Plus, Gemini Advanced are not API keys). Keys are read only by the local server from environment variables or ', h('code', null, info.keys_file), '; they are never shown here, sent to the browser, written to settings, exported or logged. Without a key, a model\'s job waits for you to paste its answer.'), 'info'),
+    callout(hosted
+      ? h('span', null, 'API access is separate from consumer subscriptions (Claude Pro/Max, ChatGPT Plus, Gemini Advanced are not API keys). On this online desk, keys are set in Render > Environment and read only by the desk\'s server; they are never shown here, sent to the browser, written to settings, exported or logged. Without a key, a model\'s job waits for you: tell its assistant to do its waiting research, or paste the prompt and import the answer.')
+      : h('span', null, 'API access is separate from consumer subscriptions (Claude Pro/Max, ChatGPT Plus, Gemini Advanced are not API keys). Keys are read only by the local server from environment variables or ', h('code', null, info.keys_file), '; they are never shown here, sent to the browser, written to settings, exported or logged. Without a key, a model\'s job waits for you to paste its answer.'), 'info'),
     card('Models, prices and limits', [
       form,
       boundsList.length ? h('div', { style: { marginTop: '12px' } }, h('h3', null, 'What each limit enforces'), h('ul', { class: 'list small' }, boundsList),
         h('p', { class: 'small muted' }, 'Each call reserves the enforced parts plus the estimates before it is sent. Actual usage can be higher; it is recorded when the provider reports it.')) : null,
     ], { note: `Counted so far: $${info.spend.daily} today, $${info.spend.monthly} this month (${info.spend.calls} call(s)${info.spend.open_reservations_usd ? `; $${info.spend.open_reservations_usd} of it is reservations for calls whose cost is not known yet` : ''}${info.spend.uncertain_attempts ? `; ${info.spend.uncertain_attempts} attempt(s) uncertain: reconcile them in the project's Research tab` : ''}). No budget is implied: until you set all three limits, no paid call is made.` }),
-    card('How to add a key (on this PC only)', h('ol', { class: 'list small' },
-      h('li', null, 'Create the file ', h('code', null, info.keys_file), ' (outside your workspace, so it is never backed up or exported).'),
-      h('li', null, 'Put in only the keys you want to use, for example ', h('code', null, '{ "anthropic_api_key": "…", "openai_api_key": "…", "gemini_api_key": "…" }'), '. Environment variables ANTHROPIC_API_KEY, OPENAI_API_KEY and GEMINI_API_KEY also work.'),
-      h('li', null, 'Set the model ID and token prices above (from each provider\'s pricing page), then the three limits.'),
-      h('li', null, 'Restart the dashboard. The status column shows "ready (API)" when everything needed is present.'))));
+    keyHelp);
 }
 
 function rubricsTab(ctx) {
@@ -251,8 +263,10 @@ async function dataTab(ctx) {
 
 async function systemTab(ctx) {
   const idx = ctx.state.index;
+  const hostedDesk = Boolean(ctx.state.session && ctx.state.session.hosted);
   const sched = h('div', null, h('p', { class: 'small muted' }, 'Checking the Windows scheduled task…'));
-  ctx.api.get('/api/schedule').then((s) => {
+  // The online desk runs on Render: there is no Windows scheduled task to show.
+  if (!hostedDesk) ctx.api.get('/api/schedule').then((s) => {
     const own = { this_workspace: ['runs this workspace', 'ok'], other_workspace: ['points at a DIFFERENT workspace', 'bad'], this_folder_other_workspace_id: ['points at this folder but another workspace ID', 'warn'], none: ['not installed', 'warn'], unknown: ['ownership unknown', 'warn'] }[s.ownership] || [s.ownership || 'unknown', ''];
     sched.replaceChildren(s.installed
       ? kv([
@@ -282,7 +296,6 @@ async function systemTab(ctx) {
       ], d.checks || []));
   }).catch((err) => doc.replaceChildren(callout(err.message, 'bad')));
   const jobs = idx.settings.jobs || {};
-  const hostedDesk = Boolean(ctx.state.session && ctx.state.session.hosted);
   // Connected apps: assistant connections (Claude, ChatGPT, Gemini) Eric
   // approved for the online desk.
   const conn = h('div', null, h('p', { class: 'small muted' }, 'Loading…'));
@@ -326,21 +339,25 @@ async function systemTab(ctx) {
       hostedDesk
         ? h('li', null, h('strong', null, 'This desk: '), 'runs online (Render) with its own records on a persistent disk. Every page and API call needs your sign-in; Claude\'s connector needs a connection you approved. Your PC\'s dashboard and its records are separate.')
         : h('li', null, h('strong', null, 'This dashboard: '), 'runs on this PC at 127.0.0.1 only. It is not reachable from your phone or the internet, and it should not be exposed to reach it from elsewhere. Phone access is the separate online desk.'),
-      h('li', null, h('strong', null, 'Prices: '), `every ${idx.settings.market_data.foreground_interval_minutes} minutes while the dashboard is open, and hourly through the Windows scheduled task while the PC is on and you are logged in.`),
+      h('li', null, h('strong', null, 'Prices: '), hostedDesk
+        ? `refreshed by the desk itself: every ${idx.settings.market_data.foreground_interval_minutes} minutes while a page is open, and on a slower schedule otherwise.`
+        : `every ${idx.settings.market_data.foreground_interval_minutes} minutes while the dashboard is open, and hourly through the Windows scheduled task while the PC is on and you are logged in.`),
       h('li', null, h('strong', null, 'Research: '), 'only when you ask (dashboard, CLI or Cowork) or on a schedule you configure with a budget. A price refresh never starts research.'),
       hostedDesk
         ? h('li', null, h('strong', null, 'Assistants: '), 'Claude in Cowork, ChatGPT and Gemini work on this desk through the CryptoResearch connector (Connected apps, above): they find and add projects, do the research themselves under their own plans and save the full report here, each under its own name. No CoinGecko or paid model API is needed for that. Research by the paid APIs in the background happens only for models whose API key you added on Render, within your research spending limits.')
         : h('li', null, h('strong', null, 'Cowork: '), 'a Cowork task may run in Anthropic\'s cloud. It can reach this folder only while the Claude desktop app is open and the folder is connected. Being able to write files there does not mean it can run programs on this PC: when it cannot, it drops a request in inbox/requests/ and this PC applies it. Scheduled Cowork tasks also run in the cloud. Through the connector, Cowork works on the online desk instead.'),
       h('li', null, h('strong', null, 'Holdings: '), 'change only when you record transactions.'),
       jobs.evidence_watch ? h('li', null, h('strong', null, 'Evidence watch: '), jobs.evidence_watch.note || 'optional; produces a dated digest and never overwrites grades.') : null)),
-    card('Scheduled task (Windows)', sched),
+    hostedDesk ? null : card('Scheduled task (Windows)', sched),
     card('Health checks', doc, { note: 'Same as: node dashboard/cli.js doctor' }),
     card('Privacy', h('ul', { class: 'list' },
       h('li', null, hostedDesk ? 'Answers only its own address over HTTPS. Pages and the API need your sign-in, writes also need this page\'s token, and the connector needs a token from a connection you approved with your passphrase (stored only as hashes).' : 'Listens on 127.0.0.1 only, accepts only expected Host headers, and writes need a per-launch token from this page.'),
       h('li', null, 'Market data requests send only the tracked coin IDs to CoinGecko. No holdings, quantities, accounts or notes leave the PC.'),
       h('li', null, 'Research prompts contain only the project context needed: name, links, identity, sector and a dated public market packet. Holdings and private notes are never model inputs by default.'),
       h('li', null, 'No wallet connection, exchange keys, seed phrases or trading access are ever requested or stored.'),
-      h('li', null, 'API keys stay in environment variables or ~/.cryptoresearch/secrets.json, outside the workspace, so they are never in browser code, prompts, exports or logs.'),
+      h('li', null, hostedDesk
+        ? 'API keys live only in Render\'s environment settings for this desk, entered by you, so they are never in browser code, prompts, exports or logs.'
+        : 'API keys stay in environment variables or ~/.cryptoresearch/secrets.json, outside the workspace, so they are never in browser code, prompts, exports or logs.'),
       h('li', null, hostedDesk ? 'The records of this desk live on its own disk. Nothing from your PC is uploaded or synced.' : `Your records live in ${idx.workspace.root}. Nothing is uploaded or synced by this app.`))));
 }
 
@@ -352,11 +369,13 @@ function activityTab(ctx) {
   const jobRows = ['requests', 'inbox', 'market', 'research', 'snapshot', 'reviews', 'backup'].map((name) => ({ name, ...(jobs[name] || {}) }));
   const runner = idx.freshness.jobs.runner || {};
   const JOB_STATE = { ok: ['OK', 'ok'], done: ['OK', 'ok'], failed: ['Failed', 'bad'], attention: ['Needs attention', 'warn'] };
+  const ps = priceStatus(mf);
   return h('div', null,
     card('Data freshness', kv([
-      ['Market data', h('span', null, stateText(mf.freshness === 'fresh' ? 'Fresh' : String(mf.freshness || 'unknown').replace(/_/g, ' '), mf.freshness === 'fresh' ? 'ok' : 'warn'), ' ', h('span', { class: 'muted' }, mf.last_success_at ? `· last success ${fmtDateTime(mf.last_success_at)}` : '· never fetched'), mf.last_error ? h('div', { class: 'small muted' }, `Last problem: ${mf.last_error}`) : null)],
+      ['Market data', h('span', null, stateText(ps.text, ps.tone), ' ', h('span', { class: 'muted' }, `· ${ps.asOf}`),
+        ps.note ? h('div', { class: 'small muted' }, ps.problem ? `Last problem: ${ps.note}` : ps.note) : mf.last_error ? h('div', { class: 'small muted' }, `Last problem: ${mf.last_error}`) : null)],
       ['CoinGecko calls', mf.calls ? `${mf.calls.month_count} this month of a ${mf.calls.budget_monthly || 'unlimited'} budget · ${mf.calls.day_count} today` : '—'],
-      ['Hourly scheduled task', runner.last_scheduler_run_at ? `last ran ${fmtAgo(runner.last_scheduler_run_at)}${runner.node ? ` on Node ${runner.node}` : ''}` : h('span', { class: 'muted' }, 'no scheduled run recorded yet')],
+      ctx.state.session && ctx.state.session.hosted ? null : ['Hourly scheduled task', runner.last_scheduler_run_at ? `last ran ${fmtAgo(runner.last_scheduler_run_at)}${runner.node ? ` on Node ${runner.node}` : ''}` : h('span', { class: 'muted' }, 'no scheduled run recorded yet')],
       ['Index', `built ${fmtDateTime(idx.generated_at)} in ${idx.build_ms} ms`],
     ])),
     card('Jobs', table([

@@ -52,6 +52,7 @@ function reportSummary(ws, r) {
     eligible: isEligible(r),
     excluded_reason: a.eligibility && a.eligibility.excluded ? a.eligibility.reason : null,
     grade: compactGrade(grade),
+    unscored: unscoredParts(grade, a),
     model_total: model_total ? { status: model_total.status, message: model_total.message } : null,
     evidence_confidence: a.diagnostic_scores ? a.diagnostic_scores.evidence_confidence || null : null,
     errors: issues.filter((i) => i.severity === 'error').length,
@@ -69,6 +70,18 @@ function reportSummary(ws, r) {
   };
 }
 
+// The weighted parts a withheld grade is missing, each with the model's own
+// note on why (its missing_data), so a preview can say why in plain words.
+// Nothing is filled in: these parts have no value.
+function unscoredParts(grade, a) {
+  if (!grade || grade.status !== 'withheld') return null;
+  return (grade.missing || []).map((m) => {
+    const s = (a.investment_components || {})[m.id];
+    const note = s ? s.missing_data || s.rationale || null : null;
+    return { label: m.label, status: m.status, note: note ? String(note).slice(0, 280) : null };
+  });
+}
+
 // The two highest downside scores (higher = more risk), for compact previews.
 function topRisks(a) {
   return Object.entries(a.risk_scores || {})
@@ -76,6 +89,48 @@ function topRisks(a) {
     .filter((x) => x.value !== null && x.value !== undefined)
     .sort((x, y) => y.value - x.value)
     .slice(0, 2);
+}
+
+// A job waiting for its assistant is normal for a few minutes after a run
+// starts; after this long it is worth a line in the review queue.
+const WAITING_NOTICE_MINUTES = 15;
+
+function minutesText(min) {
+  if (min < 120) return `${min} minutes`;
+  if (min < 2880) return `${Math.round(min / 60)} hours`;
+  return `${Math.round(min / 1440)} days`;
+}
+
+// Research that needs Eric, per model: a failed job; an API call that may
+// have been billed with no answer saved (high: money may be counted); an
+// assistant that stopped working on its job; a job waiting for its assistant
+// for more than a few minutes. Each opens the project's research runs.
+function researchAttention(ws, p, researchState, now) {
+  const out = [];
+  if (!researchState) return out;
+  const research = require('./research');
+  const action = `#/project/${p.project_id}/research`;
+  for (const prov of PROVIDERS) {
+    const job = researchState.providers[prov];
+    if (!job) continue;
+    const who = PROVIDER_LABELS[prov];
+    const item = (kind, severity, title, detail) => out.push({ kind, severity, project_id: p.project_id, title: `${p.name}: ${title}`, detail, action });
+    if (job.state === 'failed') item('research_failed', 'medium', `${who} research job failed`, job.error || 'See the research run for details.');
+    else if (job.state === 'uncertain') item('research_uncertain', 'high', `${who} API call needs a check`, 'The request may have been sent and billed, and no answer was saved. Check the provider\'s usage page, then reconcile it or retry.');
+    else if (job.state === 'unconfigured') {
+      const since = Date.parse(job.updated_at || job.run_created_at || '');
+      const min = Number.isNaN(since) ? null : Math.round((now - since) / 60000);
+      if (min !== null && min > WAITING_NOTICE_MINUTES) {
+        item('research_waiting', 'medium', `${who} research is waiting for you`, ws.hosted
+          ? `Its prompt has been ready for ${minutesText(min)}. Ask ${who} to do its waiting research through its desk connection, or paste the prompt into ${who} and import the answer.`
+          : `Its prompt has been ready for ${minutesText(min)}. Paste it into ${who} and import the answer.`);
+      }
+    } else if (research.isAssistantJob(job)) {
+      const act = research.assistantActivity(job, { created_at: job.run_created_at }, now);
+      if (act && act.interrupted) item('research_interrupted', 'medium', `${job.mode === 'cowork' ? 'Cowork' : who} stopped working on its research`, `No activity for ${minutesText(act.idle_minutes)} and no report saved. Ask it to resume (its prompt and any draft are kept), or restart it.`);
+    }
+  }
+  return out;
 }
 
 function resolveHeadline(ws, project, reports, journal) {
@@ -299,10 +354,7 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
       } catch (_) { /* optional */ }
     }
     const sector = p.sector && p.sector.primary ? { ...p.sector, label: sectorLabel(p.sector.primary) } : { primary: null, label: 'Unclassified', tags: [], source: null };
-    for (const prov of PROVIDERS) {
-      const job = researchState && researchState.providers[prov];
-      if (job && job.state === 'failed') attention.push({ kind: 'research_failed', severity: 'medium', project_id: p.project_id, title: `${p.name}: ${PROVIDER_LABELS[prov]} research job failed`, detail: job.error || 'See the research run for details.', action: `#/project/${p.project_id}/reports` });
-    }
+    if (!archived) attention.push(...researchAttention(ws, p, researchState, now));
     projectsOut.push({
       project_id: p.project_id,
       name: p.name,
@@ -341,7 +393,7 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
   // Workspace-level attention.
   const mf = market.freshness(ws, now);
   if (['stale', 'stale_failed', 'failed'].includes(mf.freshness)) {
-    attention.push({ kind: 'market_stale', severity: 'medium', project_id: null, title: mf.last_success_at ? `Prices are stale (last update ${mf.age_minutes} min ago)` : 'Prices have never been fetched', detail: mf.last_error ? `Last error: ${mf.last_error}` : 'Values shown use the last valid observation.' });
+    attention.push({ kind: 'market_stale', severity: 'medium', project_id: null, title: mf.last_success_at ? `Prices are stale (last update ${mf.age_minutes} min ago)` : 'Prices have never been fetched', detail: mf.note || (mf.last_error ? `Last error: ${mf.last_error}` : 'Values shown use the last valid observation.'), action: '#/settings?tab=activity' });
   }
   const inboxSt = inbox.inboxStatus(ws);
   for (const f of inboxSt.in_inbox) {
@@ -511,7 +563,8 @@ function projectDetailRaw(ws, id) {
     market: marketFor(ws, project, latestMarket),
     market_context: require('./cycle').summary(ws),
     horizon_policy: require('./position').policy(ws),
-    position: pf.positions.find((p) => p.project_id === id) || null,
+    // A closed position (sold to zero) is history, not a holding.
+    position: pf.positions.find((p) => p.project_id === id && !p.closed) || null,
     portfolio_method: pf.method,
   };
 }
