@@ -397,6 +397,20 @@ function assetsOf(ws) {
   return [...portfolio.assetRegistry(ws).values()].map((a) => ({ asset_id: a.asset_id, symbol: a.symbol || null, name: a.name || null, kind: a.kind || null, project_id: a.project_id || null }));
 }
 
+// Eric's own words asking for all three models. An assistant whose tool list
+// predates the models option cannot pass models: "all", so his words in
+// owner_request count too ("with all three models", or naming Claude, ChatGPT
+// and Gemini), unless they ask for one model only or say not to.
+const ALL_MODELS_WORDS = /\b(all (three|3)|three|3)\s+(of the\s+)?(models|ais?|assistants|llms)\b|\bclaude\b.{0,40}\b(chat\s?gpt|gpt|openai)\b.{0,40}\bgemini\b|\b(chat\s?gpt|gpt|openai)\b.{0,40}\bclaude\b.{0,40}\bgemini\b|\bgemini\b.{0,40}\b(chat\s?gpt|gpt|openai)\b.{0,40}\bclaude\b|\bclaude\b.{0,40}\bgemini\b.{0,40}\b(chat\s?gpt|gpt|openai)\b/i;
+const ONE_MODEL_WORDS = /\b(only|just)\s+(with\s+)?(claude|you|chat\s?gpt|gpt|gemini)\b|\b(claude|chat\s?gpt|gpt|gemini)\s+only\b|\b(not|don'?t|do not|without|no)\b.{0,20}\b(all|three|3|chat\s?gpt|gpt|gemini)\b/i;
+
+function modelsAsked(args) {
+  if (args.models === 'all') return { all: true, from: 'models' };
+  if (args.models === 'self') return { all: false, from: 'models' };
+  const words = String(args.owner_request || '');
+  return ALL_MODELS_WORDS.test(words) && !ONE_MODEL_WORDS.test(words) ? { all: true, from: 'words' } : { all: false, from: null };
+}
+
 const cellText = (c) => (!c ? null : c.status === 'scored' ? c.value : c.status === 'range' ? `${c.low}-${c.high}` : c.status);
 const listLabels = (ps) => ps.map((p) => PROVIDER_LABELS[p]).join(', ').replace(/, ([^,]*)$/, ' and $1');
 
@@ -454,7 +468,8 @@ const handlers = {
     const project = projects.getProject(ws, id);
     if (project.status === 'archived') throw new OpError('INVALID', `${project.name} is archived; Eric has to unarchive it on the project page first.`);
     const { me } = ctx;
-    const all = args.models === 'all';
+    const asked = modelsAsked(args);
+    const all = asked.all;
     const wanted = all ? [...PROVIDERS] : [me];
     const others = wanted.filter((p) => p !== me);
     const view = (run) => runView(ws, id, run, ctx, { prompt: Boolean(run.jobs[me] && run.jobs[me].state === 'running' && research.isAssistantJob(run.jobs[me])) });
@@ -831,6 +846,24 @@ function readBody(req) {
   });
 }
 
+// What a call did, for the log: the models asked for, the run and each model's
+// job state, the report saved, the jobs waiting. IDs and states only.
+function logDetail(name, args, out) {
+  if (!out) return '';
+  const parts = [];
+  if (name === 'start_research') {
+    const m = modelsAsked(args);
+    parts.push(`models ${m.all ? 'all' : 'self'}${m.from === 'words' ? ' (from Eric\'s words)' : m.from ? '' : ' (default)'}`);
+  }
+  const r = out.run;
+  if (r && r.jobs) parts.push(`${r.run_id}: ${Object.entries(r.jobs).map(([p, j]) => `${PROVIDER_LABELS[p]} ${j.state}`).join(', ')}`);
+  else if (r && r.run_id) parts.push(`${r.run_id}: ${r.state || '?'}`);
+  if (name === 'save_report' && out.report && out.report.report_id) parts.push(`report ${out.report.report_id}`);
+  if (name === 'pending_research' && Array.isArray(out.pending)) parts.push(`${out.pending.length} waiting`);
+  if (!r && out.project && out.project.project_id) parts.push(out.project.project_id);
+  return parts.length ? ` [${parts.join('; ')}]` : '';
+}
+
 function makeMcp(ws, { rebuild = () => {}, version = '1.0.0', log = () => {}, kick = () => {} } = {}) {
   async function call(name, args, who) {
     const fn = handlers[name];
@@ -839,10 +872,11 @@ function makeMcp(ws, { rebuild = () => {}, version = '1.0.0', log = () => {}, ki
     // Records made through a connection are attributed to it.
     const cw = Object.create(ws, { actor: { value: ctx.actor, writable: true, enumerable: true }, _idem: { value: null, writable: true } });
     const by = `${ctx.label}${ctx.client && ctx.client !== ctx.label ? `: ${ctx.client}` : ''}`;
+    const a = args && typeof args === 'object' ? args : {};
     try {
-      const out = await fn(cw, args && typeof args === 'object' ? args : {}, ctx);
+      const out = await fn(cw, a, ctx);
       if (!handlers[name].readOnly) rebuild(['mcp']);
-      log(`MCP ${name}: ${out && out.status ? out.status : 'ok'} (${by})`);
+      log(`MCP ${name}: ${out && out.status ? out.status : 'ok'} (${by})${logDetail(name, a, out)}`);
       return toResult(name, out);
     } catch (err) {
       log(`MCP ${name}: ${err.code || 'error'} (${by}): ${String(err.message).slice(0, 160)}`);

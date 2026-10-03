@@ -624,6 +624,15 @@ test('connector: one Cowork request for all three models; ChatGPT and Gemini do 
   const solo = (await tool(d, claude.access, 'add_project', { ...EXAMPLECOIN, name: 'Solocoin (FICTIONAL)', symbol: 'SOLO', official_website: 'https://solocoin.example/', contracts: [{ chain: 'base', address: '0x3333333333333333333333333333333333333333' }], evidence: [{ url: 'https://solocoin.example/' }] })).data.project.project_id;
   const one = await tool(d, claude.access, 'start_research', { project_id: solo, owner_request: 'research Solocoin' });
   assert.deepEqual(one.data.run.models, ['claude']);
+  // An assistant whose tool list predates the models option passes only Eric's
+  // words: "with all three models" still means all three; "Claude only" does not.
+  const words = async (name, sym, addr, request) => {
+    const id = (await tool(d, claude.access, 'add_project', { ...EXAMPLECOIN, name, symbol: sym, official_website: `https://${sym.toLowerCase()}.example/`, contracts: [{ chain: 'base', address: addr }], evidence: [{ url: `https://${sym.toLowerCase()}.example/` }] })).data.project.project_id;
+    return (await tool(d, claude.access, 'start_research', { project_id: id, owner_request: request })).data.run.models;
+  };
+  assert.deepEqual(await words('Trio (FICTIONAL)', 'TRIO', '0x4444444444444444444444444444444444444444', 'Research this project with all three models: https://coinmarketcap.com/currencies/trio-fictional/'), ['claude', 'chatgpt', 'gemini']);
+  assert.deepEqual(await words('Quartet (FICTIONAL)', 'QRT', '0x5555555555555555555555555555555555555555', 'Have Claude, ChatGPT and Gemini each research Quartet'), ['claude', 'chatgpt', 'gemini']);
+  assert.deepEqual(await words('Uno (FICTIONAL)', 'UNO', '0x6666666666666666666666666666666666666666', 'Research Uno with Claude only, not all three models'), ['claude']);
 });
 
 test('connector: with paid APIs set up, "all three models" runs ChatGPT and Gemini in the background within the limits; one failing never touches the others, and a repeat sends nothing twice', async (t) => {
