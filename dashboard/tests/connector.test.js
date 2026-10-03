@@ -1107,7 +1107,7 @@ test('connector: save_report says "saved" only when the save is confirmed, and a
   assert.match(comps[1].given, /"value":"8\/10"/);
   assert.ok(comps.slice(2).every((c) => c.status === 'scored'));
   assert.deepEqual(first.data.extraction_errors.map((e) => e.field), [`investment_components.${comps[1].component}`]);
-  assert.match(first.data.extraction_errors[0].message, /a single score must be a number from 1 to 100 \(got "8\/10"\)/);
+  assert.match(first.data.extraction_errors[0].message, /"8\/10" is on a 10-point scale; this desk scores 1-100, so it was not converted/);
   // Saved again (as told): the same text is already there.
   const again = await tool(d, claude.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: text });
   assert.equal(again.data.status, 'unchanged');
