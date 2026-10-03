@@ -84,7 +84,7 @@ Data, jobs and maintenance
   market refresh | market status
   market context [--refresh]             market-cycle snapshot: BTC trend, dominance, breadth (descriptive)
   market lookup "<name or ticker>"       CoinGecko listing candidates (never binds anything)
-  job run [requests|inbox|market|research|snapshot|reviews|backup]... [--all-due] [--trigger scheduler]
+  job run [requests|inbox|market|research|snapshot|reviews|backup|offsite]... [--all-due] [--trigger scheduler]
   schedule install|status|run|remove
   requests process | requests status <request_id>
   index rebuild
@@ -97,6 +97,10 @@ Data, jobs and maintenance
   backup restore <name> --to <empty folder>          clean restore, verified (recommended)
   backup restore <name> --point-in-time [--confirm]  preview, then move later files to quarantine
   backup restore <name> --overlay --confirm          copy over current files; later files stay
+  offsite setup --desk https://<desk> [--to FOLDER]  pull verified copies of the online desk to this PC (daily)
+  offsite pull [--to FOLDER] | offsite status | offsite verify <FILE>
+                                         the backup key is CR_BACKUP_KEY on the desk and on this PC
+                                         (or "desk_backup_key" in ~/.cryptoresearch/secrets.json)
   demo build                             build the FICTIONAL demo workspace (dashboard/demo-workspace)
   test                                   run the automated tests
 
@@ -634,6 +638,32 @@ async function run(argv) {
       fs.mkdirSync(path.dirname(out), { recursive: true });
       fs.writeFileSync(out, JSON.stringify(pkg));
       return { kind: 'complete_package', file: out, files: pkg.inventory.files, bytes: pkg.inventory.bytes, omitted: pkg.inventory.omitted, restore: `node dashboard/cli.js restore-package "${out}" --to <empty folder>` };
+    }
+    case 'offsite': {
+      const off = require('./core/offsite');
+      if (sub === 'setup') {
+        const desk = one(flags.desk) ? String(one(flags.desk)).replace(/\/+$/, '') : null;
+        const to = one(flags.to) ? path.resolve(one(flags.to)) : null;
+        if (!desk && !to) throw Object.assign(new Error('offsite setup --desk https://<your desk> [--to <folder>]'), { code: 'USAGE' });
+        if (desk) {
+          let u;
+          try { u = new URL(desk); } catch (_) { throw Object.assign(new Error(`"${desk}" is not a URL.`), { code: 'INVALID' }); }
+          if (u.protocol !== 'https:' || u.pathname !== '/' || u.search) throw Object.assign(new Error('The desk address is its https origin only, for example https://your-desk.onrender.com'), { code: 'INVALID' });
+        }
+        const { runOp } = require('./core/ops');
+        const out = runOp(ws, { type: 'update_settings', summary: 'Set up offsite copies of the online desk' }, (op) => {
+          const cur = op.readJson('config/settings.json', { schema_version: 1 });
+          cur.offsite = { ...(cur.offsite || {}), ...(desk ? { desk_url: desk } : {}), ...(to ? { folder: to } : {}) };
+          op.writeJson('config/settings.json', cur);
+        });
+        ws.reloadSettings();
+        const r = off.readiness(ws);
+        return { status: 'saved', verified: out.verified, ...r, next: r.configured ? 'node dashboard/cli.js offsite pull' : `Still missing: ${r.missing.join('; ')}` };
+      }
+      if (sub === 'pull') return off.pull(ws, { to: one(flags.to) ? path.resolve(one(flags.to)) : null, deskUrl: one(flags.desk) || null });
+      if (sub === 'status') return off.status(ws);
+      if (sub === 'verify') return off.verifyFile(path.resolve(need(rest[0], 'offsite verify <file>')));
+      throw Object.assign(new Error('offsite setup|pull|status|verify'), { code: 'USAGE' });
     }
     case 'backup': {
       const ex = require('./core/exporter');

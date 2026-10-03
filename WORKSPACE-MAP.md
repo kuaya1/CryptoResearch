@@ -18,8 +18,9 @@ CryptoResearch/
 │   ├── settings.json           Only your overrides (thresholds, refresh, labels, research models and budget)
 │   └── ui-state.json           Dashboard view preferences (columns, sort, filters); not a record
 ├── templates/                  Versioned. Never edit a published version in place; publish a new @N
-│   ├── research-prompt.v3.md       Canonical research prompt (cr-research-prompt@3, position-cycle@1 recipe); v1, v2 kept for old reports
-│   ├── grading-appendix.v3.md      Appendix with the JSON contract, including position_context (v1, v2 kept)
+│   ├── research-prompt.v4.md       Canonical research prompt (cr-research-prompt@4: position-cycle@1 recipe plus evidence rules); v1-v3 kept for old reports
+│   ├── grading-appendix.v4.md      Appendix with the JSON contract: position_context, source types,
+│   │                               critical_kind / excerpt / query, optional probabilities (v1-v3 kept)
 │   ├── appendix/                   Standalone appendix per scoring profile, for your own prompts
 │   ├── rubrics/                    cr-grading@1 (weights, labels, risk panel) + scoring profiles
 │   │   └── RUBRIC-LOCK.json        SHA-256 pin per rubric/profile version; unpinned or altered = no app grade
@@ -87,15 +88,19 @@ CryptoResearch/
 │   ├── snapshots/<time>_<reason>/  Sealed copies of your records with MANIFEST.json (SHA-256 per file)
 │   ├── versions/…@<time>           Previous version of every file that was replaced
 │   ├── quarantine/<time>/          Files set aside by a point-in-time restore (never deleted)
-│   └── exports/                    Exports written by `node dashboard/cli.js export`
+│   ├── exports/                    Exports written by `node dashboard/cli.js export`
+│   └── offsite/                    Verified copies of the online desk pulled by this PC (offsite pull),
+│                                   with OFFSITE-INDEX.json; or the folder set with offsite setup --to
 ├── server.js                   Render's start command for the online desk (runs dashboard/hosted.js)
 ├── dashboard/                  App code (Node 24 LTS pinned; Node 20+ works; no dependencies, no build step)
 │   ├── cli.js  server.js  hosted.js  oauth.js  mcp.js  core/  public/  scripts/  tests/  fixtures/
 │   ├── index/index.json        DERIVED cache of the dashboard view
 │   └── demo-workspace/         DERIVED fictional demo (rebuild: node dashboard/cli.js demo build)
 └── .cr/                        Internals: write lock, leases/, staging, generation.json, blocked.json,
-                                quarantine/ for unverifiable writes, captures/ for paid answers waiting
-                                to be saved (removed once saved; not in backups), server.json;
+                                quarantine/ for unverifiable writes, captures/ for paid answers and
+                                background request IDs waiting to be saved (removed once saved; copied
+                                into backups and packages), repairs.json (one-time record repairs,
+                                also copied), server.json;
                                 on the online desk only, sessions.json (hashes of signed-in sessions) and
                                 oauth.json (the connector: registered clients, each connection's model
                                 (Claude, ChatGPT or Gemini) and hashes of its tokens)

@@ -317,6 +317,8 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   // A research request from an assistant can queue paid API jobs (other
   // models): the runner picks them up at once instead of at its next tick.
   const mcp = hosted ? require('./mcp').makeMcp(ws, { version: require('./core/revision').revision().short || '1.0.0', rebuild: (areas) => rebuild(areas), log: (...a) => { if (!quiet) console.log(...a); }, kick: () => setTimeout(() => researchTick(), 300) }) : null;
+  // The offsite package for this PC's daily pull (CR_BACKUP_KEY, read per request).
+  const offsite = hosted ? require('./core/offsite').makeOffsiteRoute(ws, { env: process.env, log: (...a) => { if (!quiet) console.log(...a); } }) : null;
   const clients = new Set();
   const sockets = new Set();
   const state = {
@@ -651,6 +653,9 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
           return await mcp(req, res, who);
         }
       }
+      // Offsite backup (core/offsite.js): the PC pulls a complete package with
+      // the desk's own backup key, never the sign-in, and can change nothing.
+      if (offsite && url.pathname === '/api/offsite/package') return offsite(req, res);
       if (auth) {
         // Sign-in comes before everything else in hosted mode.
         if (await auth.handle(req, res, url)) return;

@@ -283,7 +283,7 @@ function setupNeeds(ws, provider, st = providerStatus(ws)[provider]) {
   const missing = st.missing || [];
   const keyMissing = missing.includes('API key');
   const parts = missing.map((m) => (m === 'API key'
-    ? `no ${spec.vendor} API key on the desk (${spec.env[0]}${ws.hosted ? ', set in Render\'s environment' : `, or "${spec.secret}" in ${providers.secretsFile()}`})`
+    ? `no ${spec.vendor} API key ${ws.hosted ? 'on the desk' : 'on this PC'} (${spec.env[0]}${ws.hosted ? ', set in Render\'s environment' : `, or "${spec.secret}" in ${providers.secretsFile()}`})`
     : m === 'spending budget' ? 'no research spending limits (per run, per day and per month)'
       : m.startsWith('a bound on Gemini searches') ? 'a bound on Gemini searches (max searches 0, or declared per-request or per-query search billing)' : m));
   const rest = missing.length - (keyMissing ? 1 : 0);

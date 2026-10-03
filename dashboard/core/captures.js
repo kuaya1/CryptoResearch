@@ -22,8 +22,9 @@
 // - A capture is removed only after run.json records the same capture hash in
 //   a verified commit. Until then it stays, so a crash at any point after the
 //   capture loses nothing.
-// - .cr is not in backups or packages: a capture is a short-lived handoff, and
-//   doctor warns while one is waiting.
+// - Captures are copied into backups and packages (the rest of .cr is not), so
+//   a restore still collects a submitted request by its ID instead of sending
+//   it again; doctor warns while one is waiting.
 
 const fs = require('fs');
 const path = require('path');

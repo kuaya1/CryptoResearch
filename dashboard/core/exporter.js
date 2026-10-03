@@ -293,7 +293,13 @@ function csvTable(ws, name) {
 // ---------------------------------------------------------------------------
 // File inventories
 
-const PACKAGE_INCLUDE = ['workspace.json', 'config', 'templates', 'projects', 'portfolio', 'market-data', 'inbox', 'logs'];
+// .cr holds locks, staging, sign-in sessions and connection grants, which are
+// never copied. Two parts of it are records in waiting and are copied: paid
+// answers and background request IDs captured before their commit
+// (.cr/captures), so a restore collects a submitted request by its ID instead
+// of sending it again, and the ledger of one-time repairs.
+const CR_KEPT = ['.cr/captures', '.cr/repairs.json'];
+const PACKAGE_INCLUDE = ['workspace.json', 'config', 'templates', 'projects', 'portfolio', 'market-data', 'inbox', 'logs', ...CR_KEPT];
 const BACKUP_INCLUDE = [...PACKAGE_INCLUDE, 'README.md', 'COWORK-INSTRUCTIONS.md', 'WORKSPACE-MAP.md', 'CLAUDE.md', 'package.json', 'Open Dashboard.cmd', 'Open Demo Dashboard.cmd', 'dashboard'];
 
 // Links and junctions are never followed: they could point outside the folder
@@ -322,8 +328,19 @@ function walkFiles(root, rel, out, skip, links = null) {
   }
 }
 
+// The .cr files a backup or package carries: finished capture files (names
+// starting with "." are unfinished) and the repairs ledger.
+const CR_FILE_KEPT = /^\.cr\/(captures\/(?!\.)[A-Za-z0-9_.-]+\.json|repairs\.json)$/;
+
 function skipTransient(rel) {
+  if (/^\.cr(\/|$)/.test(rel)) return !(rel === '.cr/captures' || CR_FILE_KEPT.test(rel));
   return /(^|\/)\.cr(\/|$)|\.tmp-\d+-|\.json\.stale-|(^|\/)dashboard\/(index|demo-workspace)(\/|$)|(^|\/)node_modules(\/|$)/.test(rel);
+}
+
+// A restore writes no .cr file except those a backup carries: a package or
+// manifest is untrusted input and must not plant sign-in or connection files.
+function crRejected(paths) {
+  return paths.filter((p) => typeof p === 'string' && /^\.cr(\/|$)/.test(p.replace(/\\/g, '/')) && !CR_FILE_KEPT.test(p.replace(/\\/g, '/'))).map((p) => ({ path: p, error: 'not a .cr file a backup carries (only research captures and the repairs ledger are restored)' }));
 }
 
 function inventoryOf(root, include) {
@@ -396,7 +413,7 @@ function exportPackage(ws) {
       workspace: ws.meta,
       inventory: {
         included: PACKAGE_INCLUDE,
-        omitted: ['application code and launchers (in sealed backups)', 'dashboard/index (rebuilt automatically)', '.cr (temporary lock, staging and status files)', 'backups/ and audits/'],
+        omitted: ['application code and launchers (in sealed backups)', 'dashboard/index (rebuilt automatically)', '.cr except research captures and the repairs ledger (locks, staging, sign-in sessions and connection grants)', 'backups/ and audits/'],
         files: files.length,
         bytes: files.reduce((s, f) => s + f.bytes, 0),
       },
@@ -462,6 +479,8 @@ function restorePackage(pkg, destDir) {
   const dest = path.resolve(destDir);
   const inv = checkRestoreInventory(pkg.files, [dest]);
   if (!inv.ok) throw unsafeInventoryError('The package', inv.rejected);
+  const cr = crRejected(pkg.files.map((x) => x && x.path));
+  if (cr.length) throw unsafeInventoryError('The package', cr);
   const items = [];
   const bad = [];
   pkg.files.forEach((f, i) => {
@@ -545,7 +564,7 @@ function createBackup(ws, { reason = 'manual' } = {}) {
         : `Captured while holding the workspace write lock, but an earlier save was not verified: ${consistency.reason}`,
       consistency,
       include: BACKUP_INCLUDE,
-      excluded: ['.cr (temporary lock, staging and status files)', 'dashboard/index (derived)', 'dashboard/demo-workspace (fictional, rebuilt on demand)', 'backups/', 'audits/'],
+      excluded: ['.cr except research captures and the repairs ledger (locks, staging, sign-in sessions and connection grants)', 'dashboard/index (derived)', 'dashboard/demo-workspace (fictional, rebuilt on demand)', 'backups/', 'audits/'],
       files: items.length,
       bytes: items.reduce((s, i) => s + i.bytes, 0),
       summary: semanticSummary(ws),
@@ -672,6 +691,8 @@ function restoreBackupTo(ws, name, destDir) {
   const filesRoot = path.join(dir, 'files');
   const inv = checkRestoreInventory(m.items, [filesRoot, dest]);
   if (!inv.ok) throw unsafeInventoryError(`Backup ${name}`, inv.rejected);
+  const cr = crRejected(m.items.map((x) => x && x.path));
+  if (cr.length) throw unsafeInventoryError(`Backup ${name}`, cr);
   const items = m.items.map((it, i) => ({ rel: inv.paths[i], sha256: it.sha256, read: () => fs.readFileSync(path.join(filesRoot, ...inv.paths[i].split('/'))) }));
   writeAllOrNothing(dest, items);
   const mismatched = items.filter((it) => {
@@ -744,7 +765,10 @@ function restoreBackupPointInTime(ws, name, { confirm = false } = {}) {
   const normalized = m.items.map((it, i) => ({ ...it, path: inv.paths[i] }));
   const inBackup = new Map(normalized.filter((i) => PACKAGE_INCLUDE.some((p) => i.path === p || i.path.startsWith(`${p}/`))).map((i) => [i.path, i]));
   const current = inventoryOf(ws.root, PACKAGE_INCLUDE);
-  const later = current.filter((rel) => !inBackup.has(rel));
+  // Captures made after the backup stay where the runner looks for them: one
+  // whose attempt the restored records do not know is kept for inspection and
+  // never imported automatically (captures.js).
+  const later = current.filter((rel) => !inBackup.has(rel) && !rel.startsWith('.cr/'));
   const changed = current.filter((rel) => inBackup.has(rel) && sha256(fs.readFileSync(ws.abs(rel))) !== inBackup.get(rel).sha256);
   const missingNow = [...inBackup.keys()].filter((rel) => !current.includes(rel));
   const preview = { mode: 'point_in_time', backup: name, backup_created_at: m.created_at, files_to_quarantine: later, files_to_replace: changed, files_to_restore: missingNow };

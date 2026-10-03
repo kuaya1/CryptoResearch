@@ -75,6 +75,9 @@ const DEFAULT_SETTINGS = {
   inbox: { settle_seconds: 2 },
   requests: { settle_seconds: 2 },
   backups: { keep_recent: 14, keep_monthly: 12 },
+  // Offsite copies of the online desk, pulled by this PC (offsite.js). The
+  // backup key itself is never stored here.
+  offsite: { desk_url: null, folder: null, keep_recent: 30, keep_monthly: 12 },
 };
 
 class WorkspaceError extends Error {

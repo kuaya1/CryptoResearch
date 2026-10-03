@@ -764,8 +764,8 @@ const handlers = {
       revision: r,
       research: ready,
       prices,
-      backups: { latest: last ? { name: last.name, created_at: last.created_at, hours_ago: ageH, status: last.status } : null, count: backups.length },
-      message: `The desk runs ${rev.revisionLine(r)}. ${ready.summary} Prices: ${f.freshness}${f.note ? ` (${f.note})` : ''}. ${last ? `Latest backup ${last.name}, ${ageH} h ago.` : 'No backup on the desk yet.'}`,
+      backups: { latest: last ? { name: last.name, created_at: last.created_at, hours_ago: ageH, status: last.status } : null, count: backups.length, offsite_key: require('./core/offsite').deskKey() ? 'set' : 'not set' },
+      message: `The desk runs ${rev.revisionLine(r)}. ${ready.summary} Prices: ${f.freshness}${f.note ? ` (${f.note})` : ''}. ${last ? `Latest backup on the desk's own disk ${last.name}, ${ageH} h ago.` : 'No backup on the desk yet.'} Offsite copies: ${require('./core/offsite').deskKey() ? 'the backup key is set, so Eric\'s PC can pull them' : 'not set up (no CR_BACKUP_KEY on the desk)'}.`,
     };
   },
 

@@ -149,7 +149,10 @@ async function doctor(ws) {
   const srv = await serverStatus(ws);
   add('Dashboard server', true, srv.message, srv.running ? 'ok' : 'info');
 
-  if (process.platform === 'win32') {
+  if (ws.hosted) {
+    // The online desk does its own background work; there is no Windows task.
+    add('Background work', true, 'The online desk refreshes prices and runs queued research by itself while it runs; no scheduled task on a PC is involved.', 'ok');
+  } else if (process.platform === 'win32') {
     const s = require('./schedule').status(ws);
     if (s.installed && s.ownership === 'this_workspace') add('Scheduled task', true, `\\CryptoResearch\\Hourly is ${s.state} and runs this folder; last run ${s.last_run_time || 'never'} (${s.last_task_result_meaning || '?'}); next ${s.next_run_time || '?'}`);
     else if (s.installed) add('Scheduled task', false, `Installed, but it runs ${s.targets}, not this folder. It does not update this workspace.`, ws.kind === 'real' ? 'warn' : 'info');
@@ -166,6 +169,16 @@ async function doctor(ws) {
   const inboxSt = require('./inbox').inboxStatus(ws);
   const failed = inboxSt.in_inbox.filter((f) => !['new'].includes(f.status));
   add('Inbox', failed.length === 0, inboxSt.in_inbox.length ? `${inboxSt.in_inbox.length} file(s) waiting, ${failed.length} need attention` : 'Empty', failed.length ? 'warn' : 'ok');
+  try {
+    // Offsite copies of the online desk (offsite.js): the desk serves them,
+    // this PC pulls them once a day once set up.
+    if (ws.hosted) {
+      add('Offsite backup', true, require('./offsite').deskKey() ? 'Backup key set (CR_BACKUP_KEY): a PC can pull verified copies of this desk.' : 'Not set up: no CR_BACKUP_KEY in this desk\'s environment, so no copy of these records exists off this disk except Render\'s own disk snapshots.', require('./offsite').deskKey() ? 'ok' : 'warn');
+    } else {
+      const o = require('./offsite').status(ws);
+      if (o.configured || o.last) add('Offsite backup', Boolean(o.last && o.age_hours <= 36), o.last ? `Latest copy of the online desk ${o.last.file}, ${o.age_hours} h ago (${o.last.files} files, every one verified), in ${o.folder}.${o.configured ? '' : ` Not set up any more: ${o.missing.join('; ')}.`}` : `Set up, no copy yet: node dashboard/cli.js offsite pull (saves to ${o.folder}).`, o.last && o.age_hours <= 36 ? 'ok' : 'warn');
+    }
+  } catch (_) { /* offsite module optional */ }
   try {
     const rs = require('./research').providerStatus(ws);
     add('Research providers', true, Object.entries(rs).map(([p, s]) => `${p}: ${s.mode}${s.reason ? ` (${s.reason})` : ''}`).join('; '), 'info');

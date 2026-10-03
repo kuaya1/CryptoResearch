@@ -7,6 +7,7 @@
 //   snapshot  daily portfolio snapshot                   once per day (America/New_York)
 //   reviews   daily review findings                      once per day
 //   backup    sealed local backup                        once per day
+//   offsite   pull a verified copy of the online desk    once per day, on this PC, once set up (offsite.js)
 //
 // Every runner (dashboard, CLI, scheduled task) uses the same due rules, the
 // same backoff and a cross-process lease per job, so concurrent runners do one
@@ -20,8 +21,8 @@ const { ymdInTz } = require('./dates');
 const JOB_STATE_REL = 'logs/jobs-state.json';
 const JOB_LOG_REL = 'logs/jobs.jsonl';
 const FINDINGS_REL = 'logs/review-findings.json';
-const JOB_NAMES = ['requests', 'inbox', 'market', 'research', 'snapshot', 'reviews', 'backup'];
-const DAILY = new Set(['snapshot', 'reviews', 'backup']);
+const JOB_NAMES = ['requests', 'inbox', 'market', 'research', 'snapshot', 'reviews', 'backup', 'offsite'];
+const DAILY = new Set(['snapshot', 'reviews', 'backup', 'offsite']);
 const OK_STATUSES = new Set(['ok', 'noop', 'attention', 'skipped', 'partial', 'busy', 'backoff', 'budget_paused', 'not_due']);
 
 function readJobState(ws) {
@@ -60,6 +61,9 @@ function isDue(ws, name, state, now = Date.now(), opts = {}) {
     case 'reviews':
     case 'backup':
       return s.last_success_day !== today;
+    case 'offsite':
+      // Only on a PC that is set up to pull; the online desk serves, never pulls.
+      return !ws.hosted && s.last_success_day !== today && require('./offsite').readiness(ws).configured;
     default:
       return false;
   }
@@ -139,6 +143,11 @@ async function runJobBody(ws, name, trigger) {
     case 'backup': {
       const r = require('./exporter').createBackup(ws, { reason: 'daily' });
       return { status: 'ok', summary: `Backup ${r.name} (${r.files} files, sealed)` };
+    }
+    case 'offsite': {
+      if (ws.hosted) return { status: 'skipped', summary: 'The online desk serves offsite copies; it does not pull them.' };
+      const r = await require('./offsite').pull(ws);
+      return { status: r.status === 'ok' ? 'ok' : r.status === 'not_set_up' ? 'skipped' : 'failed', summary: r.message, error: r.status === 'failed' ? r.message : null };
     }
     default:
       throw new Error(`Unknown job ${name}`);

@@ -60,7 +60,7 @@ test('readiness: a missing key is "setup required" with its environment variable
   assert.equal(r.models.chatgpt.jobs.waiting, 1);
   assert.equal(r.models.gemini.jobs.waiting, 1);
   assert.equal(r.models.chatgpt.reservation_usd, null);
-  assert.match(r.models.chatgpt.sentence, /^ChatGPT: setup required \(no OpenAI API key on the desk \(OPENAI_API_KEY, or "openai_api_key" in .+\)\)\. Until then its research waits for a pasted answer; nothing is billed for it\. Open jobs: 1 waiting\.$/);
+  assert.match(r.models.chatgpt.sentence, /^ChatGPT: setup required \(no OpenAI API key on this PC \(OPENAI_API_KEY, or "openai_api_key" in .+\)\)\. Until then its research waits for a pasted answer; nothing is billed for it\. Open jobs: 1 waiting\.$/);
   assert.match(r.summary, /^No model runs automatically yet\. Setup required: Claude \(no Anthropic API key: ANTHROPIC_API_KEY, and \d+ more settings?\); ChatGPT \(no OpenAI API key: OPENAI_API_KEY\); Gemini \(no Google API key: GEMINI_API_KEY\); their jobs wait meanwhile\.$/);
   assert.deepEqual(r.reservations, { cowork_request_usd: null, cowork_request_fits: null, dashboard_run_usd: null, dashboard_run_fits: null });
   assert.equal(r.spend.today_usd, 0, 'a waiting job reserves nothing');
