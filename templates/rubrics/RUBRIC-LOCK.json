@@ -21,6 +21,21 @@
       "file": "templates/rubrics/payfi-credit.v1.json",
       "sha256": "1e8c9e5c9eebdba825d64a2af11c824714d1f377d446e293964c724dd8b04a49",
       "pinned_at": "2026-10-01T00:00:00.000Z"
+    },
+    "general-token@2": {
+      "file": "templates/rubrics/general-token.v2.json",
+      "sha256": "020748cb06997bf99c7961985a3c5e2267b4856a8a3f6fdabc9af8c025777433",
+      "pinned_at": "2026-10-03T13:12:02.832Z"
+    },
+    "network-infrastructure@2": {
+      "file": "templates/rubrics/network-infrastructure.v2.json",
+      "sha256": "c9b39a8cfdd9c6259deeef2f11670891ba6f32e7ecc86eb7d8ff9f06913a9d12",
+      "pinned_at": "2026-10-03T13:12:02.832Z"
+    },
+    "payfi-credit@2": {
+      "file": "templates/rubrics/payfi-credit.v2.json",
+      "sha256": "4a35f5be0a193231b0baa8ff95f195325eeaeff470aa75164bd113561073b863",
+      "pinned_at": "2026-10-03T13:12:02.832Z"
     }
   }
 }

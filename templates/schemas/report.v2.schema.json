@@ -1,0 +1,1502 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cr.report.v2",
+  "title": "CryptoResearch canonical report contract, version 2",
+  "description": "Structured output that Claude, ChatGPT and Gemini append after a written report, from cr-research-prompt@5 on. Version 1 (report.v1.schema.json) is unchanged and still validates the reports that declare it. Version 2 adds: category grades with a confidence, the strongest evidence, the main weakness and what would raise or lower them; the code_review, chart_cycle and independent_judgment blocks; scenario observations and a note for unknown price targets; and it declares the position_context block and catalyst windows that reports have carried since cr-research-prompt@3. Unknown values are null with an explanation; never invent URLs, model versions, observations, price levels or scores to satisfy this schema. The dashboard, not the model, applies weights and calculates the investment grade. Score-object rules that depend on status are enforced by dashboard/core/scoring.js.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "verdict",
+    "diagnostic_scores",
+    "investment_components",
+    "model_reported_overall_score",
+    "risk_scores"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "cr.report.v2"
+    },
+    "report_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Leave null. The dashboard assigns report IDs."
+    },
+    "research_run_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The research run this report answers, copied from the prompt."
+    },
+    "project_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+    },
+    "project_name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "project_symbol": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "provider": {
+      "enum": [
+        "claude",
+        "chatgpt",
+        "gemini",
+        null
+      ],
+      "description": "Which assistant produced the report. The inbox folder it arrives in is authoritative; a mismatch blocks the import."
+    },
+    "model_self_identification": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The model's own statement of which assistant it is, e.g. 'Claude (Anthropic)'. Used to catch mislabelled imports."
+    },
+    "model_version": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Exact model name/version only if known; otherwise null."
+    },
+    "model_version_note": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "analysis_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Date (YYYY-MM-DD) or ISO date-time the analysis was performed."
+    },
+    "horizon": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Assessment horizon, e.g. '24 months'."
+    },
+    "prompt_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "rubric_version": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Grading system version, e.g. 'cr-grading@1'. Reports are only comparable when this matches."
+    },
+    "sector_profile": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Sector profile, e.g. 'payfi-credit@1'."
+    },
+    "verdict": {
+      "enum": [
+        "ATTRACTIVE ASYMMETRY",
+        "CONDITIONAL OPPORTUNITY",
+        "REAL PRODUCT, WEAK TOKEN",
+        "INCENTIVE-DEPENDENT",
+        "UNFAVORABLE VALUATION",
+        "INSUFFICIENT EVIDENCE",
+        null
+      ]
+    },
+    "summary": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "diagnostic_scores": {
+      "type": "object",
+      "description": "One category grade per category of the sector profile. Higher means better quality or opportunity. Never averaged into the investment grade.",
+      "additionalProperties": {
+        "$ref": "#/$defs/category_grade"
+      }
+    },
+    "investment_components": {
+      "type": "object",
+      "description": "All six components. Higher is better. The app applies the weights.",
+      "properties": {
+        "sustainable_business_demand": {
+          "$ref": "#/$defs/score"
+        },
+        "token_value_capture": {
+          "$ref": "#/$defs/score"
+        },
+        "valuation_supply": {
+          "$ref": "#/$defs/score"
+        },
+        "risk_resilience": {
+          "$ref": "#/$defs/score"
+        },
+        "btc_relative_asymmetry": {
+          "$ref": "#/$defs/score"
+        },
+        "timing_executable_liquidity": {
+          "$ref": "#/$defs/score"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/score"
+      }
+    },
+    "model_reported_overall_score": {
+      "$ref": "#/$defs/score"
+    },
+    "risk_scores": {
+      "type": "object",
+      "description": "Higher means MORE risk.",
+      "properties": {
+        "credit": {
+          "$ref": "#/$defs/score"
+        },
+        "dilution": {
+          "$ref": "#/$defs/score"
+        },
+        "liquidity": {
+          "$ref": "#/$defs/score"
+        },
+        "overall_downside": {
+          "$ref": "#/$defs/score"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/score"
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/source"
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/claim"
+      }
+    },
+    "bullish_facts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/fact"
+      }
+    },
+    "bearish_facts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/fact"
+      }
+    },
+    "conviction_increases": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/fact"
+      }
+    },
+    "invalidators": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/fact"
+      }
+    },
+    "catalysts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/catalyst"
+      }
+    },
+    "unlocks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/unlock"
+      }
+    },
+    "tokenomics_changes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/tokenomics_change"
+      }
+    },
+    "economics": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/metric"
+      }
+    },
+    "code_review": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Which code was read, at which commit, and whether it can be connected to what is deployed. A research assessment, not a security audit.",
+      "properties": {
+        "source_access": {
+          "enum": [
+            "public",
+            "partial",
+            "none",
+            "unknown",
+            null
+          ]
+        },
+        "repositories": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "role": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "commit": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The commit or release tag that was read; null when no code was read there."
+              },
+              "files_inspected": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "observations": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "deployed_link": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "verified",
+                "partial",
+                "not_verified",
+                "not_applicable",
+                "unknown",
+                null
+              ]
+            },
+            "note": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "limitations": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "chart_cycle": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The token's chart, volume and cycle reading, with the data it rests on. Levels and patterns are never invented; unknown is allowed.",
+      "properties": {
+        "data": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "source": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "venue": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pair": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeframes": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "latest_observation_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "limitations": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "phase": {
+          "enum": [
+            "unknown",
+            "launch",
+            "decline",
+            "base_formation",
+            "possible_accumulation",
+            "breakout",
+            "expansion",
+            "distribution",
+            "renewed_decline",
+            null
+          ]
+        },
+        "phase_rationale": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "alternative_reading": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "trend_vs_usd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "trend_vs_btc": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "levels": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "support",
+                  "resistance",
+                  null
+                ]
+              },
+              "price_usd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "timeframe": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "basis": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "volume": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "baseline": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reading": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "confirms_price": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        },
+        "liquidity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "confirmation": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "invalidation": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidence_refs": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "scenarios": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "btc_relative_definition": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "probability_note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why probabilities are null, when the evidence does not support them."
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/scenario"
+          }
+        },
+        "target_note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why price ranges or relative returns are null, when the evidence does not support them."
+        }
+      }
+    },
+    "independent_judgment": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The model's own view. Judgment and speculation are labeled; neither is a verified fact.",
+      "properties": {
+        "market_misunderstanding": {
+          "$ref": "#/$defs/judgment"
+        },
+        "overlooked_bull_case": {
+          "$ref": "#/$defs/judgment"
+        },
+        "overlooked_bear_case": {
+          "$ref": "#/$defs/judgment"
+        },
+        "technology_without_token": {
+          "$ref": "#/$defs/judgment"
+        },
+        "within_holding_period": {
+          "$ref": "#/$defs/judgment"
+        },
+        "advantage_over_btc": {
+          "$ref": "#/$defs/judgment"
+        }
+      }
+    },
+    "next_metric_to_monitor": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "metric": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "why": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threshold": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "position_context": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The model's market and timing views for the position horizon (cr-research-prompt@3 and later). They change no score.",
+      "properties": {
+        "recipe": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "horizon": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "position",
+                "long_term",
+                null
+              ]
+            },
+            "start_date": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "end_date": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "market": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "state": {
+              "enum": [
+                "unknown",
+                "bitcoin_led",
+                "broad_altcoin_participation",
+                "mixed",
+                "contracting",
+                null
+              ]
+            },
+            "rationale": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "evidence_refs": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "timing": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "state": {
+              "enum": [
+                "unknown",
+                "early",
+                "developing",
+                "extended",
+                "thesis_impaired",
+                null
+              ]
+            },
+            "rationale": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "evidence_refs": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "next_review_date": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "review_trigger": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "long_term_note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Longer-term technology potential, kept apart from the position assessment."
+        }
+      }
+    },
+    "final_take": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "unresolved_questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "sections": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "original_report_reference": {
+      "type": [
+        "object",
+        "string",
+        "null"
+      ]
+    }
+  },
+  "$defs": {
+    "score": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "scored",
+            "range",
+            "unknown",
+            "not_applicable"
+          ]
+        },
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 100
+        },
+        "low": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 100
+        },
+        "high": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 100
+        },
+        "rationale": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence_refs": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "missing_data": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "category_grade": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "description": "A score object with the fields every category grade shows: confidence, strongest evidence, main weakness, and what would raise or lower it.",
+      "properties": {
+        "status": {
+          "enum": [
+            "scored",
+            "range",
+            "unknown",
+            "not_applicable"
+          ]
+        },
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 100
+        },
+        "low": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 100
+        },
+        "high": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 100
+        },
+        "rationale": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence_refs": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "missing_data": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "high",
+            "medium",
+            "low",
+            null
+          ],
+          "description": "How strong the evidence behind this grade is. null when the grade is unknown."
+        },
+        "strongest_evidence": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "main_weakness": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "would_raise": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "would_lower": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "source_id"
+      ],
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "publisher": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_type": {
+          "enum": [
+            "official",
+            "onchain_data",
+            "data_aggregator",
+            "exchange",
+            "audit",
+            "news",
+            "research",
+            "social",
+            "ai_summary",
+            "other",
+            null
+          ]
+        },
+        "accessed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "required": [
+        "claim_id",
+        "text",
+        "evidence_tag"
+      ],
+      "properties": {
+        "claim_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "evidence_tag": {
+          "enum": [
+            "V",
+            "C",
+            "I",
+            "S",
+            "[V]",
+            "[C]",
+            "[I]",
+            "[S]"
+          ]
+        },
+        "source_ids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "metric_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Stable snake_case metric name, e.g. tvl_usd, revenue_usd, payment_volume_usd."
+        },
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "unit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "definition": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "period": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "as_of": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limitation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "section": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "critical_kind": {
+          "enum": [
+            "audit",
+            "deployment",
+            "realized_fees",
+            "supply_change",
+            "liquidity",
+            "catalyst",
+            null
+          ],
+          "description": "The kind of critical claim, or null."
+        },
+        "excerpt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A short excerpt of the primary source that shows the claim."
+        },
+        "query": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The query, dashboard or explorer view (with its parameters) that reproduces a figure."
+        }
+      }
+    },
+    "fact": {
+      "type": "object",
+      "required": [
+        "text"
+      ],
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "claim_ids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "catalyst": {
+      "type": "object",
+      "required": [
+        "title"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "date": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "date_precision": {
+          "enum": [
+            "day",
+            "month",
+            "quarter",
+            "year",
+            "window",
+            "unknown",
+            null
+          ]
+        },
+        "kind": {
+          "enum": [
+            "unlock",
+            "launch",
+            "listing",
+            "governance",
+            "regulatory",
+            "partnership",
+            "earnings",
+            "other",
+            null
+          ]
+        },
+        "status": {
+          "enum": [
+            "announced",
+            "implemented",
+            "speculative",
+            null
+          ]
+        },
+        "claim_ids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "window_start": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "window_end": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "certainty": {
+          "enum": [
+            "unknown",
+            "project_claimed",
+            "source_documented",
+            "analyst_inferred",
+            null
+          ]
+        },
+        "in_horizon": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "unlock": {
+      "type": "object",
+      "properties": {
+        "date": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "amount_tokens": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "pct_of_supply": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "recipient_class": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "claim_ids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "tokenomics_change": {
+      "type": "object",
+      "required": [
+        "description"
+      ],
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "announced",
+            "implemented",
+            "proposed",
+            "cancelled",
+            null
+          ]
+        },
+        "announced_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effective_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "claim_ids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "metric": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "reported",
+            "unknown",
+            "not_applicable",
+            null
+          ]
+        },
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "unit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "period": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "definition": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "as_of": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence_tag": {
+          "enum": [
+            "V",
+            "C",
+            "I",
+            "S",
+            "[V]",
+            "[C]",
+            "[I]",
+            "[S]",
+            null
+          ]
+        },
+        "claim_ids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "required": [
+        "case"
+      ],
+      "properties": {
+        "case": {
+          "enum": [
+            "bull",
+            "base",
+            "bear"
+          ]
+        },
+        "probability_pct": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100,
+          "description": "A subjective estimate, never a verified fact. A number only where it can be defended; when all three cases have one they total 100; otherwise null."
+        },
+        "business_outcome": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "token_capture_assumption": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "supply_assumption": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "price_range_usd": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "low": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "high": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          }
+        },
+        "btc_assumption": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "relative_return_vs_btc_pct": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "low": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "high": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          }
+        },
+        "invalidation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observations": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "What is observed today that the case builds on. The assumption fields are assumptions; outcome, ranges and probability are forecasts."
+        },
+        "claim_ids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "judgment": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "view": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "enum": [
+            "judgment",
+            "speculation",
+            null
+          ]
+        },
+        "supporting_evidence": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "disconfirming_test": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

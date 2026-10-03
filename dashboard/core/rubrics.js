@@ -80,6 +80,25 @@ function resolveProfile(ws, ref) {
   return { profile: p, status: 'ok' };
 }
 
+// The published version of a scoring profile that NEW research uses: the
+// highest pinned version of the same profile (payfi-credit@1 ->
+// payfi-credit@2). Only a version pinned in RUBRIC-LOCK.json counts as
+// published, so a draft file, or one that changed after it was pinned, is
+// never moved to. A project record keeps the reference it was saved with, and
+// a stored report is always read under the version it declares; only new runs
+// and new prompts move forward.
+function currentProfileRef(ws, ref) {
+  const profiles = ws.rubrics.profiles;
+  const p = ref ? profiles[ref] : null;
+  if (!p || !p.profile_id) return ref;
+  let best = p;
+  for (const q of Object.values(profiles)) {
+    if (q.profile_id !== p.profile_id || q._status !== 'pinned' || q.status === 'retired') continue;
+    if (Number(q.version) > Number(best.version)) best = q;
+  }
+  return best.profile_ref;
+}
+
 // The app-calculated grade for one stored assessment, under its own rubric.
 function gradeAssessment(ws, a) {
   if (!a) return null;
@@ -112,4 +131,4 @@ function pinRubrics(ws, { runOp } = {}) {
   return { status: 'pinned', pinned: out.result, files: out.files };
 }
 
-module.exports = { LOCK_REL, loadRubrics, labelsFor, resolveGrading, resolveProfile, gradeAssessment, pinRubrics, RubricError };
+module.exports = { LOCK_REL, loadRubrics, labelsFor, resolveGrading, resolveProfile, currentProfileRef, gradeAssessment, pinRubrics, RubricError };

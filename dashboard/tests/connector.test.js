@@ -1377,3 +1377,57 @@ test('pilot rehearsal: when one provider fails, the other model\'s report is sav
   const cmp = await tool(d, claude.access, 'compare_reports', { project_id: pid });
   assert.deepEqual(Object.keys(cmp.data.reports).sort(), ['chatgpt', 'claude']);
 });
+
+test(`connector: a newly added project is researched with prompt @5 through the Cowork flow: one prompt for all three models, thirteen category grades saved, never a holding`, async (t) => {
+  const d = await desk(t, 'v5');
+  withKeys(t, {});
+  const claude = await connect(d);
+  const chatgpt = await connectChatgpt(d);
+  const gemini = await connectGemini(d);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => { throw new Error(`network call attempted: ${url}`); };
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const added = await tool(d, claude.access, 'add_project', { name: 'Example Network (FICTIONAL)', symbol: 'XNET', official_website: 'https://example.net/xnet', contracts: [{ chain: 'base', address: '0x3333333333333333333333333333333333333333' }], evidence: [{ url: 'https://example.net/xnet/docs', note: 'fictional official token page' }], sector: 'ai_data', owner_request: 'Research Example Network with all three models and add it to my watchlist (FICTIONAL)' });
+  assert.equal(added.data.status, 'created', added.text);
+  const pid = added.data.project.project_id;
+  assert.equal(projects.getProject(d.ws, pid).sector_profile, 'network-infrastructure@2', 'a new project gets the current profile version');
+
+  const all = await tool(d, claude.access, 'start_research', { project_id: pid, owner_request: 'Research Example Network with all three models (FICTIONAL)', models: 'all' });
+  assert.equal(all.data.status, 'created', all.text);
+  const runId = all.data.run.run_id;
+  assert.equal(all.data.run.prompt_version, 'cr-research-prompt@5');
+  assert.equal(all.data.run.sector_profile, 'network-infrastructure@2');
+  assert.equal(all.data.run.rubric_version, 'cr-grading@1');
+  const promptFile = fs.readFileSync(path.join(d.ws.root, 'projects', pid, 'research', runId, 'prompt.md'), 'utf8');
+  assert.match(promptFile, /^<!-- CR-PROMPT cr-research-prompt@5 /);
+  assert.ok(all.text.includes(promptFile), 'Claude gets the run prompt');
+  for (const id of ['legitimacy', 'development_credibility', 'build_operational_quality', 'code_quality', 'product_reality', 'technology_usefulness', 'organic_demand', 'token_value_capture', 'valuation_supply_attractiveness', 'chart_structure', 'cycle_timing', 'volume_liquidity', 'btc_relative_opportunity']) assert.ok(promptFile.includes(`- \`${id}\` (`), id);
+  // ChatGPT and Gemini take their own jobs and get exactly the same prompt.
+  for (const [who, conn] of [['ChatGPT', chatgpt], ['Gemini', gemini]]) {
+    const took = await tool(d, conn.access, 'start_research', { project_id: pid, owner_request: 'Do my waiting CryptoResearch research' });
+    assert.equal(took.data.status, 'resumed', took.text);
+    assert.equal(took.data.run.prompt_version, 'cr-research-prompt@5');
+    assert.ok(took.text.includes(promptFile), `${who} gets exactly the same prompt`);
+  }
+  // Each model saves its own report; the reply says how its category grades were read.
+  const run = research.loadRun(d.ws, pid, runId);
+  for (const [model, conn] of [['claude', claude], ['chatgpt', chatgpt], ['gemini', gemini]]) {
+    const saved = await tool(d, conn.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: mockReport(d.ws, model, run) });
+    assert.equal(saved.data.status, 'saved', saved.text);
+    assert.equal(saved.data.verified, true);
+    assert.equal(saved.data.report.sector_profile, 'network-infrastructure@2');
+    assert.equal(saved.data.report.category_grades.total, 13);
+    assert.equal(saved.data.report.category_grades.scored, 12);
+    assert.deepEqual(saved.data.report.category_grades.unknown, ['Code quality'], 'unknown stays unknown');
+    assert.match(saved.data.report.category_grades.note, /never averaged into it/);
+    assert.ok(saved.data.report.grade.display, 'the investment grade is calculated from the six components');
+  }
+  const mine = await tool(d, claude.access, 'get_report', { project_id: pid });
+  assert.equal(mine.data.report.category_grades.total, 13);
+  const cmp = await tool(d, claude.access, 'compare_reports', { project_id: pid });
+  assert.deepEqual(Object.keys(cmp.data.reports).sort(), ['chatgpt', 'claude', 'gemini']);
+  // Watching and researching a project never records a holding.
+  assert.equal(require('../core/portfolio').loadTransactions(d.ws).length, 0);
+  assert.equal((await tool(d, claude.access, 'portfolio_overview', {})).data.positions.length, 0);
+});

@@ -22,7 +22,7 @@ Setup and health
 Projects
   project add --name "Allora Network" [--website URL] [--symbol ALLO] [--coingecko-id ID]
               [--asset chain:contract[:standard]]... [--evidence URL]... [--evidence-note TEXT]...
-              [--sector "AI/Data"] [--profile network-infrastructure@1] [--horizon "3 months"]
+              [--sector "AI/Data"] [--profile network-infrastructure@2] [--horizon "3 months"]
               [--long-term-reason TEXT]   (a horizon above the 4-month planning ceiling needs a reason)
               [--research claude,chatgpt,gemini] [--pending-identity] [--no-watchlist] [--no-prompts]
               [--utterance "spoken text"] [--allow-same-symbol] [--input file.json]
@@ -616,15 +616,20 @@ async function run(argv) {
       return { status: 'rebuilt', path: ws.abs(INDEX_REL), projects: idx.projects.length, build_ms: idx.build_ms };
     }
     case 'templates': {
-      // Writes a ready-to-append grading appendix for every sector profile.
+      // Writes a ready-to-append grading appendix for every sector profile that
+      // can stand alone. A profile written for cr-research-prompt@5 has none:
+      // its appendix needs a run's exact horizon dates, so the project's own
+      // prompt (prompts <id>, or a research run's prompt) is the one to use.
       const { buildAppendixV2 } = require('./core/prompts');
       const { runOp } = require('./core/ops');
+      const standalone = Object.values(ws.rubrics.profiles).filter((profile) => !profile.written_for);
+      const skipped = Object.values(ws.rubrics.profiles).filter((profile) => profile.written_for).map((profile) => profile.profile_ref);
       const out = runOp(ws, { type: 'build_appendices', summary: 'Build standalone grading appendices' }, (op) => {
-        for (const profile of Object.values(ws.rubrics.profiles)) {
+        for (const profile of standalone) {
           op.write(`templates/appendix/grading-appendix.${profile.profile_id}.v${profile.version}.prompt-v2.md`, buildAppendixV2(ws, profile, {}));
         }
       });
-      return { status: out.noop ? 'unchanged' : 'built', files: out.files.map((f) => f.rel) };
+      return { status: out.noop ? 'unchanged' : 'built', files: out.files.map((f) => f.rel), ...(skipped.length ? { skipped, note: `No standalone appendix for ${skipped.join(', ')}: they are written for a run's prompt (research prompt <id> <run_id>, or prompts <id>).` } : {}) };
     }
     case 'rubrics': {
       if (sub !== 'pin') throw Object.assign(new Error('rubrics pin'), { code: 'USAGE' });

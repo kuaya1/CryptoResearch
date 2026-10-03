@@ -10,6 +10,10 @@ import {
 import { renderMarkdown } from '../md.js';
 import { openResearchDialog, openSectorDialog, waitingActions, waitingStep } from './dialogs.js';
 import { positionCard, previewTiming } from '../position-ui.js';
+import {
+  profileOf, categoryRows, scorecardCounts, confidenceLine, categoryTable, categoryGlance, positivesAndRisks, chartCycleBlock, catalystsBlock,
+  judgmentBlock, reviewBlock, scenariosBlock, codeReviewBlock,
+} from '../thesis-ui.js';
 
 const TABS = [
   ['overview', 'Overview'],
@@ -317,7 +321,11 @@ function scorecardsTab(ctx, d, latest, route) {
   const grading = ctx.state.index.rubrics.grading;
   const g = (d.comparison.grades[prov] && d.comparison.grades[prov].grade) || r.grade;
   const parts = (g && g.parts) || [];
-  const profileCats = new Map(((d.profile && d.profile.diagnostic_categories) || []).map((c) => [c.id, c]));
+  // The categories of the scoring profile this report declares, not of the
+  // project's current one: an older report keeps the categories it was graded
+  // under, a report written for cr-research-prompt@5 has the thirteen.
+  const rows = categoryRows(profileOf(ctx.state.index.rubrics.profiles, a, d.profile), a);
+  const counts = scorecardCounts(rows);
   const integ = r.integrity || {};
   const switcher = h('div', { class: 'seg-wrap' }, h('div', { class: 'seg', role: 'group', 'aria-label': 'Choose a model' },
     PROVIDERS.map((p) => (present.includes(p)
@@ -325,7 +333,7 @@ function scorecardsTab(ctx, d, latest, route) {
       : h('span', { class: 'seg-off', title: `No gradable ${PROVIDER_LABELS[p]} report yet` }, PROVIDER_LABELS[p], h('span', { class: 'sr-only' }, ', no gradable report'))))));
   return h('div', null,
     switcher,
-    callout('Three separate panels, never mixed: the 11 diagnostics (higher is better) are never averaged into the grade; the grade comes from six weighted components (20/25/20/15/10/10); the four downside-risk scores are higher-is-worse. A missing input withholds the grade and shows how much weight was scored.', 'info'),
+    callout(`Three separate panels, never mixed: the ${counts.total} category grades (higher is better) are diagnostics and are never averaged into the grade; the grade comes from six weighted components (20/25/20/15/10/10); the four downside-risk scores are higher-is-worse. A missing input withholds the grade and shows how much weight was scored.`, 'info'),
     card(h('span', { class: 'pill-row' }, h('span', null, `${PROVIDER_LABELS[prov]} · ${fmtDate(a.analysis_at)}`), verdictChip(a.verdict)), [
       h('div', { class: 'grid two' },
         h('div', null, h('div', { class: 'small muted' }, 'Grade calculated by this app'), gradeView(g),
@@ -351,12 +359,9 @@ function scorecardsTab(ctx, d, latest, route) {
         { label: 'Score (higher is better)', render: (x) => scoreView(a.investment_components[x.id], 'fav', { corrected: originalOf(r, `investment_components.${x.id}`) }) },
         { label: 'Contribution', num: true, render: (x) => (typeof x.contribution === 'number' ? x.contribution.toFixed(2) : h('span', { class: 'faint' }, '—')) },
       ], parts.length ? parts : grading.investment_components.map((c) => ({ id: c.id, label: c.label, weight_pct: c.weight_bp / 100 })))),
-      h('h3', { style: { marginTop: '20px' } }, 'Diagnostic scorecard (higher is better, never averaged)'),
-      (table([
-        { label: 'Category', render: (x) => h('span', { title: x.def ? x.def.definition : '' }, x.def ? x.def.label : x.id) },
-        { label: 'Score', render: (x) => (x.def && x.def.applicable === false ? h('span', { class: 'faint', title: x.def.na_reason || '' }, 'Not applicable to this profile') : scoreView(a.diagnostic_scores[x.id], 'fav', { corrected: originalOf(r, `diagnostic_scores.${x.id}`) })) },
-        { label: 'Rationale', wrap: true, render: (x) => { const s = a.diagnostic_scores[x.id]; return s ? h('span', { class: 'small' }, s.rationale || s.missing_data || '') : null; } },
-      ], [...new Set([...profileCats.keys(), ...Object.keys(a.diagnostic_scores || {})])].map((cid) => ({ id: cid, def: profileCats.get(cid) })))),
+      h('h3', { style: { marginTop: '20px' } }, 'Category grades (higher is better, never averaged into the grade)'),
+      h('p', { class: 'small muted', style: { margin: '0 0 8px' } }, `${counts.scored} of ${counts.total} scored${counts.unknown ? `; ${counts.unknown} unknown, with no number` : ''}. Scoring profile ${a.sector_profile || 'not declared'}.${confidenceLine(counts) ? ` ${confidenceLine(counts)}` : ''}`),
+      categoryTable(rows, { corrected: (cid) => originalOf(r, `diagnostic_scores.${cid}`) }),
       h('h3', { style: { marginTop: '20px' } }, 'Downside risk (higher means more risk)'),
       (table([
         { label: 'Risk', render: (x) => h('span', { title: x.definition }, x.label) },
@@ -365,7 +370,24 @@ function scorecardsTab(ctx, d, latest, route) {
       ], grading.risk_scores)),
       h('div', { class: 'btn-row', style: { marginTop: '16px' } }, h('a', { class: 'btn', href: `#/project/${pid}/reports?report=${encodeURIComponent(r.report_id)}` }, 'Open the full report')),
     ]),
-    positionCard(a, prov));
+    positionCard(a, prov),
+    thesisCards(a, prov));
+}
+
+// What a report written for cr-research-prompt@5 also says, each in its own
+// card: the chart and cycle reading, the scenarios, the model's own judgment
+// and the code it read. An older report shows the parts it has.
+function thesisCards(a, prov) {
+  const who = PROVIDER_LABELS[prov] || prov;
+  const one = (title, body) => (body ? h('div', { class: 'card thesis-card' }, h('h3', null, `${title} · ${who}`), body) : null);
+  const chart = chartCycleBlock(a, { full: true });
+  const judgment = judgmentBlock(a, { open: true, id: `sc-judgment-${prov}`, withLongTerm: false });
+  return [
+    chart ? h('div', { class: 'card thesis-card' }, chart) : null,
+    one('Scenarios over the horizon', scenariosBlock(a)),
+    judgment ? h('div', { class: 'card thesis-card' }, judgment) : null,
+    one('Code that was read', codeReviewBlock(a)),
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -514,10 +536,14 @@ export function sourceItem(s) {
   return h('li', null, s.url ? h('a', { href: s.url }, s.title || s.url) : h('span', null, s.title || s.source_id, h('span', { class: 'faint' }, ' (no usable link)')), meta.length ? h('span', { class: 'faint' }, ` · ${meta.join(' · ')}`) : null);
 }
 
-// At a glance, above the original: what the report concludes and what it
-// rests on. The grade is this app's calculation from the report's six
-// weighted scores (a withheld grade lists the unscored parts and the model's
-// own notes); verdict, horizon, risks, questions and sources are the model's.
+// The summary above the original, in reading order: the verdict for the
+// holding period; the investment grade, or why it is withheld; the category
+// grades with their confidence; the strongest positives and risks; the chart
+// and cycle reading; dated catalysts and what would confirm or invalidate the
+// opportunity; the model's final judgment; the next review. The grade is this
+// app's calculation from the report's six weighted scores (a withheld grade
+// lists the unscored parts and the model's own notes); everything else is the
+// model's. An older report shows the parts it has.
 function atAGlance(ctx, d, r, withheld) {
   const a = r.assessment;
   const g = r.grade;
@@ -538,20 +564,36 @@ function atAGlance(ctx, d, r, withheld) {
       unscoredList(withheld, { max: 400 }));
   } else if (g && (g.status === 'firm' || g.status === 'range')) gradeEl = gradeView(g);
   else gradeEl = h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, 'No grade'), g && g.reason ? h('span', { class: 'small muted' }, g.reason) : null);
+  // The category grades of the profile this report declares; none for a
+  // report that scored no category at all (a PDF, a short prose report).
+  const rows = Object.keys(a.diagnostic_scores || {}).length ? categoryRows(profileOf(ctx.state.index.rubrics.profiles, a, d.profile), a) : [];
+  const pid = d.project.project_id;
+  const scenarios = scenariosBlock(a);
+  const code = codeReviewBlock(a);
   return h('section', { class: 'card glance', 'aria-labelledby': 'glance-title' },
-    h('div', { class: 'card-head' }, h('div', null, h('h2', { id: 'glance-title' }, 'At a glance'),
-      h('div', { class: 'note' }, 'The grade is calculated by this app from the report\'s six weighted scores. The verdict, risks, questions and sources are the model\'s own; the report below tags each claim as checked, project-claimed, inference or speculation.'))),
+    h('div', { class: 'card-head' }, h('div', null, h('h2', { id: 'glance-title' }, 'Summary'),
+      h('div', { class: 'note' }, 'The investment grade is calculated by this app from the report\'s six weighted scores. Everything else here is the model\'s own: its verdict, category grades, chart reading, judgment, risks, questions and sources. The report below tags each claim as checked, project-claimed, inference or speculation.'))),
     h('div', { class: 'glance-grid' },
       h('div', null,
-        h('div', { class: 'small muted' }, 'Grade'), gradeEl,
-        h('dl', { class: 'facts' },
-          h('div', null, h('dt', null, 'Verdict (the model\'s)'), h('dd', null, verdictChip(a.verdict))),
-          h('div', null, h('dt', null, 'Horizon'), h('dd', null, a.horizon || 'not stated')))),
+        h('div', { class: 'small muted' }, 'Verdict for the holding period (the model\'s)'),
+        h('div', { style: { margin: '4px 0' } }, verdictChip(a.verdict)),
+        a.summary ? h('p', { class: 'small', style: { margin: '0 0 4px' } }, a.summary) : null,
+        h('dl', { class: 'facts' }, h('div', { class: 'wide' }, h('dt', null, 'Horizon'), h('dd', null, a.horizon || 'not stated')))),
       h('div', null,
-        h('div', { class: 'small muted' }, 'Top downside risks (higher is worse)'),
-        risks.length
-          ? h('ul', { class: 'glance-risks' }, risks.map((x) => h('li', null, h('span', { title: x.def.definition || '' }, x.def.label), scoreView(x.s, 'risk'))))
-          : h('p', { class: 'small faint', style: { margin: '6px 0 0' } }, 'No downside risk was scored in this report.'))),
+        h('div', { class: 'small muted' }, 'Investment grade (calculated by this app)'), gradeEl)),
+    categoryGlance(rows, `#/project/${pid}/scorecards?provider=${r.meta.provider}`),
+    positivesAndRisks(a),
+    chartCycleBlock(a),
+    catalystsBlock(a),
+    judgmentBlock(a, { id: `gl-judgment-${r.report_id}` }),
+    reviewBlock(a),
+    h('div', { class: 'glance-block' },
+      h('h3', null, 'Top downside risks (higher is worse)'),
+      risks.length
+        ? h('ul', { class: 'glance-risks' }, risks.map((x) => h('li', null, h('span', { title: x.def.definition || '' }, x.def.label), scoreView(x.s, 'risk'))))
+        : h('p', { class: 'small faint', style: { margin: '6px 0 0' } }, 'No downside risk was scored in this report.')),
+    scenarios ? h('div', { class: 'glance-block' }, details('Scenarios over the horizon: bear, base and bull', scenarios, { id: `gl-scenarios-${r.report_id}` })) : null,
+    code ? h('div', { class: 'glance-block' }, details('Code that was read', code, { id: `gl-code-${r.report_id}` })) : null,
     questions.length ? h('div', { class: 'glance-block' }, h('h3', null, `Unresolved questions (${questions.length})`), h('ul', { class: 'list small' }, questions.map((q) => h('li', null, q)))) : null,
     h('div', { class: 'glance-block' }, sources.length
       ? details(`${sources.length} source${sources.length === 1 ? '' : 's'} cited`, h('ol', { class: 'list small' }, sources.map(sourceItem)), { id: `src-${r.report_id}`, open: sources.length <= 5 })
@@ -1064,6 +1106,11 @@ function researchTab(ctx, d, row) {
     ]);
   });
   const legacy = d.prompt_files || [];
+  // What a new run would use, and the standing prompt files rebuilt to it.
+  const rc = d.research_contract || null;
+  const stale = rc ? legacy.filter((f) => /^(claude|chatgpt|gemini)\.md$/.test(f.name) && f.prompt_version && f.prompt_version !== rc.prompt_version) : [];
+  const rebuild = button('Rebuild with the current prompt', null, { kind: 'small', key: 'rt-rebuild-prompts' });
+  rebuild.onclick = action(rebuild, async () => { await ctx.api.post(`/api/projects/${pid}/prompts`, {}); await ctx.refresh(); return true; }, 'Prompt files rebuilt');
   const id = d.project.identity;
   const website = input({ type: 'url', value: id.official_website || '', placeholder: 'https://…' });
   const cg = input({ value: id.coingecko_id || ((id.candidates || [])[0] || {}).coingecko_id || '', placeholder: 'CoinGecko listing ID' });
@@ -1086,6 +1133,7 @@ function researchTab(ctx, d, row) {
   return h('div', null,
     card('Research runs', [
       h('p', { class: 'small muted', style: { margin: 0 } }, 'Each run sends every chosen model the same prompt, rubric, horizon and dated evidence packet. Jobs are independent: one failure never erases another model\'s result. Pending means not saved yet.'),
+      rc ? h('p', { class: 'small', style: { margin: '8px 0 0' } }, `A new run uses ${rc.prompt_version} with the scoring profile ${rc.sector_profile}${rc.category_grades ? ` (${rc.category_grades} category grades)` : ''} and ${rc.rubric_version}. Earlier runs and their reports keep the prompt, profile and rubric they were made with.`) : null,
     ], { actions: [button(runs.length ? 'Run research again' : 'Run research', () => openResearchDialog(ctx, { ...row, ...d.project, research: row.research, report_count: d.reports.length }), { kind: 'small primary', key: 'rt-run' })] }),
     runs.length ? runCards : callout('No research runs yet.', 'info'),
     h('div', { class: 'grid two' },
@@ -1095,7 +1143,9 @@ function researchTab(ctx, d, row) {
         idForm,
       ]),
       card('Standing prompt files', [
-        h('p', { class: 'small muted' }, 'Rebuilt when the scoring profile changes. Each research run also keeps its own exact prompt.'),
+        h('p', { class: 'small muted' }, 'The general prompt for this project, one file per model, without a run\'s dated context. Each research run keeps its own exact prompt.'),
+        stale.length ? h('p', { class: 'small' }, `These files were written with ${stale[0].prompt_version}; a new run uses ${rc.prompt_version}. Rebuild them to read the current prompt here.`) : null,
+        h('div', { class: 'btn-row', style: { marginBottom: '8px' } }, rebuild),
         (table([
           { label: 'File', render: (f) => h('code', { class: 'small' }, f.name) },
           { label: 'Version', render: (f) => h('span', { class: 'small' }, f.prompt_version || '?') },

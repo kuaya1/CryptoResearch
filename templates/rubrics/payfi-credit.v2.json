@@ -1,0 +1,172 @@
+{
+  "profile_ref": "payfi-credit@2",
+  "profile_id": "payfi-credit",
+  "version": 2,
+  "title": "PayFi / on-chain credit",
+  "status": "active",
+  "supersedes": "payfi-credit@1",
+  "written_for": "cr-research-prompt@5",
+  "applies_to": "Payment financing, receivables and invoice finance, on-chain private credit, and RWA lending protocols where liquidity providers fund real-world credit.",
+  "origin": "Second version, written for cr-research-prompt@5: the thirteen category grades replace the eleven diagnostics of payfi-credit@1. Credit-risk transparency is no longer a separate category; underwriting discipline and the disclosure of defaults, losses and concentration are read under build and operational quality, and credit risk itself stays in the downside-risk panel. payfi-credit@1 is unchanged and still grades the reports that declare it.",
+  "scorecard_note": "Thirteen category grades, each 1-100 with higher meaning better quality or opportunity, each with a confidence, the strongest evidence, the main weakness and what would raise or lower it. They are diagnostics: never averaged into the investment grade, which the dashboard calculates from the six weighted components of the grading rubric. Unknown means unknown and carries no number; missing evidence is not automatically evidence of failure.",
+  "diagnostic_categories": [
+    {
+      "id": "legitimacy",
+      "label": "Project legitimacy",
+      "applicable": true,
+      "definition": "Is this the real project, run by an identifiable and accountable organization: an official website, token, chain and contract, documentation, repository, explorer and official X account that link to each other; team and operating history; licenses and regulatory posture; named originators and counterparties; security incidents; audit scope; governance and administrative control; and no material misrepresentation. An identifiable organization, a functioning product and a trustworthy investment are three separate conclusions: this grade covers who runs the project and the honesty of its claims.",
+      "resolving_question": "Which independently checkable facts (registrations, licenses, verified contracts, named counterparties, audits) confirm or contradict who runs the project and what it claims?"
+    },
+    {
+      "id": "development_credibility",
+      "label": "Development credibility",
+      "applicable": true,
+      "definition": "Whether real, substantive development is happening in the repositories that actually power the product: recent releases, meaningful code changes, active contributors, reviewed pull requests, issue handling and maintenance, told apart from automated commits, cosmetic activity, promotional repositories and unrelated forks. Stars, followers and commit counts are not evidence.",
+      "resolving_question": "Which repositories power the live product, and what substantive changes shipped in them over the last 90 days, from how many distinct contributors?"
+    },
+    {
+      "id": "build_operational_quality",
+      "label": "Build and operational quality",
+      "applicable": true,
+      "definition": "How well the product is built and run: architecture, release discipline, documentation, tests, upgrade management, incident handling, and the credit operation itself: underwriting discipline and the quality of disclosure on borrowers or receivables, defaults, losses, concentration, collateral and who bears first loss.",
+      "resolving_question": "Are default, loss and concentration figures disclosed per pool with periods and definitions, do on-chain records match them, and how was the most recent incident or credit event handled?"
+    },
+    {
+      "id": "code_quality",
+      "label": "Code quality",
+      "applicable": true,
+      "definition": "Quality of representative implementation code inspected at an identified commit: maintainability, tests, dependencies, security-sensitive controls, whether documented features appear implemented, and whether the inspected code can be connected to what is deployed. A research assessment, not a security audit. Unknown when source access is insufficient; an audit badge is not a substitute.",
+      "resolving_question": "Which files were inspected at which commit, do they implement what the documentation describes, and can that code be tied to the deployed contracts or binaries?"
+    },
+    {
+      "id": "product_reality",
+      "label": "Live product reality",
+      "applicable": true,
+      "definition": "What is live and independently substantiated today (credit actually originated and repaid, payments actually financed, pools that hold funds), kept apart from project claims, announced or unfinished products, incentivized deposits and speculative future uses.",
+      "resolving_question": "Which pools or payment flows are live, and which on-chain or third-party evidence shows money actually lent, repaid or settled over a stated period?"
+    },
+    {
+      "id": "technology_usefulness",
+      "label": "Technology usefulness and defensibility",
+      "applicable": true,
+      "definition": "Whether the product solves a real problem for identifiable borrowers, payers or lenders better than credible alternatives, including banks and off-chain lenders, and whether that advantage is defensible: cost, speed, access, licensing, centralization dependencies, failure modes, and whether crypto and the token are necessary to the product.",
+      "resolving_question": "Who borrows or pays through this, what would they use instead, and what can this project do that its closest competitors and an off-chain lender cannot?"
+    },
+    {
+      "id": "organic_demand",
+      "label": "Organic demand and adoption",
+      "applicable": true,
+      "definition": "Payment or financing volume, borrowers and revenue that persist net of token incentives, points programs, subsidized yield, related-party activity and wash activity, and whether borrowers and lenders return.",
+      "resolving_question": "What share of volume or outstanding credit over the last 90 days remains after excluding incentive-driven, related-party and wash activity?"
+    },
+    {
+      "id": "token_value_capture",
+      "label": "Token value capture",
+      "applicable": true,
+      "definition": "How product success reaches token holders as implemented today (fee share, buyback or burn, required usage, staking funded by real revenue), and how it might not. Announced but unimplemented mechanisms are conditional; emissions are not value capture.",
+      "resolving_question": "Which implemented mechanism routes revenue or required demand to the token, and how much has it delivered over a stated period?"
+    },
+    {
+      "id": "valuation_supply_attractiveness",
+      "label": "Valuation and supply attractiveness",
+      "applicable": true,
+      "definition": "Current market cap and fully diluted valuation relative to revenue, usage and peers, after reconciling circulating supply, total supply, liquidity, emissions and the unlock schedule, with the focus on supply entering between the horizon's start and end dates. An unlock is potential liquid supply, not proof of selling.",
+      "resolving_question": "What supply enters between the horizon's start and end dates as a share of circulating supply, and how does valuation compare with revenue or usage over a stated period?"
+    },
+    {
+      "id": "chart_structure",
+      "label": "Chart structure",
+      "applicable": true,
+      "definition": "Quality of the price structure from a named data source, venue, trading pair and timeframe: trend and market structure against USD and BTC, support and resistance, bases, failed breakouts and drawdowns, weekly and daily first. Unknown when reliable chart data is unavailable; levels and patterns are never invented.",
+      "resolving_question": "On the weekly and daily charts, is the token holding higher lows against both USD and BTC, and which levels define the structure?"
+    },
+    {
+      "id": "cycle_timing",
+      "label": "Cycle position and catalyst timing",
+      "applicable": true,
+      "definition": "Where the token stands in its own cycle (launch, decline, base formation, possible accumulation, breakout, expansion, distribution or renewed decline), how sector strength, Bitcoin leadership and altcoin participation bear on it, and whether dated catalysts and supply events between the horizon's start and end dates favor a position now. Competing interpretations are explained; a cycle label is not forced.",
+      "resolving_question": "Which phase best fits the evidence, what is the competing reading, and which dated catalysts and supply events fall inside the horizon?"
+    },
+    {
+      "id": "volume_liquidity",
+      "label": "Volume confirmation and executable liquidity",
+      "applicable": true,
+      "definition": "Whether volume supports or contradicts the price move against an explicitly stated baseline, and whether a spot position can be entered and exited at reasonable cost: spot liquidity, spreads, depth and venue concentration. High reported volume does not prove durable demand; derivatives data is market context only.",
+      "resolving_question": "How does recent volume compare with a stated baseline on the main spot venues, and what are the spread and the 2% depth there?"
+    },
+    {
+      "id": "btc_relative_opportunity",
+      "label": "BTC-relative asymmetric opportunity",
+      "applicable": true,
+      "definition": "Whether the token offers a credible advantage over simply holding BTC between the horizon's start and end dates: the balance of upside and downside across the bear, base and bull cases, and how much of it rests on observation rather than assumption. Unknown when the asymmetry cannot be assessed; a number is never forced.",
+      "resolving_question": "What would have to be true for the token to outperform BTC over the horizon, and how much of that is observed today rather than assumed?"
+    }
+  ],
+  "research_sections": [
+    {
+      "id": "identity_legitimacy",
+      "title": "Identity and legitimacy",
+      "guidance": "The accountable entity, its licenses and regulatory posture, named originators and counterparties; who controls pools, upgrades and custody."
+    },
+    {
+      "id": "development_build_code",
+      "title": "Development credibility, build quality and code quality",
+      "guidance": "The contracts and services that hold and move funds, and the off-chain parts (underwriting, servicing) that cannot be inspected."
+    },
+    {
+      "id": "product_technology",
+      "title": "Product reality and technology usefulness",
+      "guidance": "End to end: who pays whom, where money sits, which parts are on-chain and which are off-chain, and who can change the rules; what borrowers and payers would use instead."
+    },
+    {
+      "id": "demand_token_valuation",
+      "title": "Demand, token economics and valuation",
+      "guidance": "Keep three things separate: (a) business activity (payment or financing volume, fees earned), (b) LP income (yield paid to liquidity providers, its source, and losses), (c) token-holder economics. Give default and loss history, concentration, collateral and who bears first loss, per pool and with periods."
+    },
+    {
+      "id": "chart_volume_cycle",
+      "title": "Chart, volume and market cycle",
+      "guidance": "The sector (payments, credit, RWA) this token trades with, and its strength against BTC."
+    },
+    {
+      "id": "judgment_asymmetry",
+      "title": "Independent judgment and asymmetry",
+      "guidance": "Whether the credit business can grow while the token captures little, and which credit event would end the thesis."
+    }
+  ],
+  "economics_fields": [
+    {
+      "id": "business_revenue",
+      "label": "Business revenue",
+      "definition": "Fees earned by the protocol or company from its business activity. Not LP yield and not token emissions."
+    },
+    {
+      "id": "payment_volume",
+      "label": "Payment / financing volume",
+      "definition": "Gross value of payments or financings processed. Volume is not revenue."
+    },
+    {
+      "id": "lp_yield",
+      "label": "LP yield",
+      "definition": "Return paid to liquidity providers, with its source (borrower interest versus incentives) and net of losses."
+    },
+    {
+      "id": "token_holder_distributions",
+      "label": "Token-holder distributions",
+      "definition": "Value actually distributed to token holders (buybacks, fee share, staking funded by revenue) over a stated period. Emissions are not distributions."
+    },
+    {
+      "id": "credit_losses",
+      "label": "Credit losses and defaults",
+      "definition": "Realized defaults and write-offs, with period and pool."
+    },
+    {
+      "id": "outstanding_credit",
+      "label": "Outstanding credit / TVL",
+      "definition": "Capital currently deployed or locked, with its definition."
+    }
+  ],
+  "risk_applicability": {
+    "credit": true
+  }
+}

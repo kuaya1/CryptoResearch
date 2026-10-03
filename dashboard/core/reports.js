@@ -1,10 +1,13 @@
 'use strict';
 // Report parsing and normalization.
-// A report arrives as Markdown/TXT (optionally ending with the cr.report.v1 JSON
-// block from the grading appendix), as a bare JSON file, or as a PDF (preserved,
-// flagged "needs text"). Nothing here invents content: anything not found is
-// recorded as unknown with an explanation, and ambiguous extractions are listed
-// for correction instead of guessed.
+// A report arrives as Markdown/TXT (optionally ending with the JSON block from
+// the grading appendix: cr.report.v1, or cr.report.v2 from cr-research-prompt@5
+// on), as a bare JSON file, or as a PDF (preserved, flagged "needs text").
+// Nothing here invents content: anything not found is recorded as unknown with
+// an explanation, and ambiguous extractions are listed for correction instead
+// of guessed. A report is read under the rubric, profile and prompt versions
+// it declares, so publishing a new version never changes how an older report
+// reads.
 
 const path = require('path');
 const { normalizeScore, emptyScore, formatScore } = require('./scoring');
@@ -49,8 +52,15 @@ function lineOf(text, index) {
 // ---------------------------------------------------------------------------
 // Finding the JSON block
 
+// The report formats this desk reads, and the schema file each is checked
+// against. cr.report.v2 (asked for from cr-research-prompt@5 on) adds fields to
+// v1 and removes none, so one reader handles both; a report is checked against
+// the schema of the format it declares.
+const REPORT_SCHEMAS = { 'cr.report.v1': 'report.v1', 'cr.report.v2': 'report.v2' };
+const REPORT_MARK = /cr\.report\.v[12]\b/;
+
 function isReportObj(o) {
-  return Boolean(o) && typeof o === 'object' && !Array.isArray(o) && o.schema_version === 'cr.report.v1';
+  return Boolean(o) && typeof o === 'object' && !Array.isArray(o) && typeof o.schema_version === 'string' && Object.prototype.hasOwnProperty.call(REPORT_SCHEMAS, o.schema_version);
 }
 
 function balancedFrom(text, start) {
@@ -156,7 +166,7 @@ function parseCandidate(src) {
   }
 }
 
-// The cr.report.v1 object in a parsed candidate: the object itself, or the
+// The report object in a parsed candidate: the object itself, or the
 // report a model nested one level under another key ({"report": {...}}), when
 // exactly one of its values is a report. An outer object that carries the
 // schema_version but no scores of its own is only an envelope.
@@ -169,7 +179,7 @@ function reportFrom(parsed, issues) {
   if (!outer && parsed.schema_version !== undefined) return null;
   const inner = Object.entries(parsed).filter(([, v]) => isReportObj(v));
   if (inner.length !== 1) return outer ? parsed : null;
-  issues.push({ severity: 'warning', field: 'json', message: `The cr.report.v1 object was nested under "${inner[0][0]}"; read from there.` });
+  issues.push({ severity: 'warning', field: 'json', message: `The ${inner[0][1].schema_version} object was nested under "${inner[0][0]}"; read from there.` });
   return inner[0][1];
 }
 
@@ -198,7 +208,7 @@ function findReportJson(text) {
   let found = null;
   let m;
   while ((m = fence.exec(text))) {
-    if (!/cr\.report\.v1/.test(m[2])) continue;
+    if (!REPORT_MARK.test(m[2])) continue;
     const line = lineOf(text, m.index);
     const hit = tryCandidate(m[2], { method: 'appendix_json', line, where: `JSON block at line ${line}` }, parseErrors);
     if (hit) found = hit;
@@ -207,7 +217,7 @@ function findReportJson(text) {
   // Unfenced JSON pasted at the end of a report. A candidate that fails (a
   // brace inside a string can start one mid-object) does not end the search:
   // earlier braces are tried too, within a bounded number of attempts.
-  const idx = text.lastIndexOf('"cr.report.v1"');
+  const idx = Math.max(...Object.keys(REPORT_SCHEMAS).map((v) => text.lastIndexOf(`"${v}"`)));
   if (idx !== -1) {
     let attempts = 0;
     let braces = 0;
@@ -278,10 +288,10 @@ function classify(text) {
 // Prose extraction (conservative)
 
 const LABELS = [
-  ['diagnostic', 'legitimacy', ['legitimacy']],
+  ['diagnostic', 'legitimacy', ['project legitimacy', 'legitimacy']],
   ['diagnostic', 'builder_operations', ['builder and operational quality', 'builder & operational quality', 'builder/operational quality', 'builder and operations', 'builder quality', 'operational quality']],
   ['diagnostic', 'product_usefulness', ['product usefulness', 'product utility']],
-  ['diagnostic', 'organic_demand', ['organic demand']],
+  ['diagnostic', 'organic_demand', ['organic demand and adoption', 'organic demand & adoption', 'organic demand']],
   ['diagnostic', 'credit_risk_transparency', ['credit-risk transparency', 'credit risk transparency']],
   ['diagnostic', 'technical_risk_transparency', ['technical-risk transparency', 'technical risk transparency']],
   ['diagnostic', 'protocol_risk_transparency', ['protocol-risk transparency', 'protocol risk transparency']],
@@ -291,6 +301,16 @@ const LABELS = [
   ['diagnostic', 'valuation_supply_attractiveness', ['valuation and supply attractiveness', 'valuation & supply attractiveness', 'valuation/supply attractiveness']],
   ['diagnostic', 'chart_quality', ['chart quality']],
   ['diagnostic', 'evidence_confidence', ['evidence confidence']],
+  // The category grades of the @2 profiles (cr-research-prompt@5).
+  ['diagnostic', 'development_credibility', ['development credibility']],
+  ['diagnostic', 'build_operational_quality', ['build and operational quality', 'build & operational quality', 'build/operational quality']],
+  ['diagnostic', 'code_quality', ['code quality']],
+  ['diagnostic', 'product_reality', ['live product reality', 'product reality']],
+  ['diagnostic', 'technology_usefulness', ['technology usefulness and defensibility', 'technology usefulness & defensibility', 'technology usefulness']],
+  ['diagnostic', 'chart_structure', ['chart structure']],
+  ['diagnostic', 'cycle_timing', ['cycle position and catalyst timing', 'cycle position & catalyst timing']],
+  ['diagnostic', 'volume_liquidity', ['volume confirmation and executable liquidity', 'volume confirmation & executable liquidity']],
+  ['diagnostic', 'btc_relative_opportunity', ['btc-relative asymmetric opportunity', 'btc relative asymmetric opportunity']],
   ['component', 'sustainable_business_demand', ['sustainable business demand']],
   ['component', 'valuation_supply', ['valuation and supply', 'valuation & supply', 'valuation/supply']],
   ['component', 'risk_resilience', ['risk resilience']],
@@ -377,9 +397,9 @@ function excerpt(line) {
 }
 
 const LIST_HEADINGS = [
-  ['bullish_facts', /(strongest bullish|bullish facts|top bullish|bullish points|bull points)/],
-  ['bearish_facts', /(strongest bearish|bearish facts|top bearish|bearish points|bear points)/],
-  ['conviction_increases', /(increase (my |your )?conviction|conviction increase|raise conviction|would increase conviction)/],
+  ['bullish_facts', /(strongest bullish|bullish facts|top bullish|bullish points|bull points|strongest positives)/],
+  ['bearish_facts', /(strongest bearish|bearish facts|top bearish|bearish points|bear points|strongest risks)/],
+  ['conviction_increases', /(increase (my |your )?conviction|conviction increase|raise conviction|would increase conviction|confirmation conditions)/],
   ['invalidators', /(invalidat)/],
   ['unresolved_questions', /(unresolved|open questions|key questions|unknowns)/],
 ];
@@ -412,7 +432,10 @@ function extractProse(text) {
         listField = null;
         paragraphTarget = null;
         for (const [field, re] of LIST_HEADINGS) if (re.test(lower)) listField = field;
-        if (/(final take|independent take|bottom line)/.test(lower)) paragraphTarget = 'final_take';
+        // One heading for both lists ("three strongest positives and three
+        // strongest risks"): the bullets under it cannot be told apart.
+        if (/strongest positives/.test(lower) && /strongest risks/.test(lower)) listField = null;
+        if (/(final take|final judgment|independent take|bottom line)/.test(lower)) paragraphTarget = 'final_take';
         if (/(next metric|single metric|metric to monitor)/.test(lower)) paragraphTarget = 'next_metric';
       } else if (ctx) {
         context = ctx;
@@ -638,9 +661,13 @@ function citationIntegrity(a) {
       if (!claimIds.has(cid)) issues.push({ kind: 'dangling_claim_ref', path: `economics.${k}.claim_ids[${j}]`, id: cid });
     });
   }
-  for (const ref of require('./position').contextRefs(a.position_context)) {
+  for (const ref of [...require('./position').contextRefs(a.position_context), ...require('./thesis').blockRefs(a)]) {
     if (!claimIds.has(ref.id) && !sourceIds.has(ref.id)) issues.push({ kind: 'dangling_evidence_ref', path: ref.path, id: ref.id });
   }
+  // Scenario cases cite the claims they build on (cr-research-prompt@5).
+  ((a.scenarios && Array.isArray(a.scenarios.items)) ? a.scenarios.items : []).forEach((s, i) => ((s && Array.isArray(s.claim_ids)) ? s.claim_ids : []).forEach((cid, j) => {
+    if (!claimIds.has(cid)) issues.push({ kind: 'dangling_claim_ref', path: `scenarios.items[${i}].claim_ids[${j}]`, id: cid });
+  }));
   const uncited = claims.filter((c) => ['V', 'C'].includes(c.evidence_tag) && !(c.source_ids || []).length).length;
   const dangling = issues.filter((x) => x.kind !== 'duplicate_id').length;
   const duplicates = issues.filter((x) => x.kind === 'duplicate_id').length;
@@ -997,30 +1024,48 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider, runDefau
     return out;
   });
 
-  // Scenarios. Probabilities are optional: all three, totaling 100, or none
-  // (null) with the reason; partial or other totals are shown as given.
+  // Scenarios. Probabilities and price targets are the model's subjective
+  // estimates, and both may be unknown. A total of 100 is asked only of a
+  // complete numerical distribution (a number for every case); a partial one,
+  // or none, is shown as given with its reason, and so are missing price
+  // ranges. Nothing is completed or corrected.
+  const thesis = require('./thesis');
+  const askedV5 = thesis.asksFor(promptVersion);
   let scenarios = null;
   if (r.scenarios && typeof r.scenarios === 'object') {
-    const items = (Array.isArray(r.scenarios.items) ? r.scenarios.items : []).filter((s) => s && typeof s === 'object');
+    const items = (Array.isArray(r.scenarios.items) ? r.scenarios.items : []).filter((s) => s && typeof s === 'object').map((s) => (s.observations === undefined
+      ? s
+      : { ...s, observations: (Array.isArray(s.observations) ? s.observations : [s.observations]).filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim().slice(0, 600)).slice(0, 12) }));
     const probs = items.map((s) => s.probability_pct);
     const isNum = (p) => typeof p === 'number' && Number.isFinite(p);
     const allProbs = items.length > 0 && probs.every(isNum);
     const noProbs = items.length > 0 && probs.every((p) => p === null || p === undefined);
-    const note = typeof r.scenarios.probability_note === 'string' && r.scenarios.probability_note.trim() ? r.scenarios.probability_note.trim().slice(0, 600) : null;
+    const noteOf = (v) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 600) : null);
+    const note = noteOf(r.scenarios.probability_note);
+    const targetNote = noteOf(r.scenarios.target_note);
     const total = allProbs ? Math.round(probs.reduce((a, b) => a + b, 0) * 100) / 100 : null;
     const check = !items.length
       ? { status: 'none', message: 'No scenarios given.' }
       : noProbs
         ? { status: 'not_given', message: note ? `No probabilities: ${note}` : 'No probabilities given, and no reason.' }
         : !allProbs
-          ? { status: 'incomplete', message: 'Only some scenarios have a probability. Shown as given; not completed.' }
+          ? { status: 'incomplete', message: note ? `Only some scenarios have a probability: ${note}` : 'Only some scenarios have a probability. Shown as given; not completed.' }
           : Math.abs(total - 100) <= 0.01
             ? { status: 'ok', total, message: 'Probabilities total 100%.' }
             : { status: 'invalid', total, message: `Probabilities total ${total}%, not 100%. Shown as given; not corrected.` };
-    if (check.status === 'invalid' || check.status === 'incomplete') issues.push({ severity: 'warning', field: 'scenarios', message: check.message });
+    if (check.status === 'invalid' || (check.status === 'incomplete' && !note)) issues.push({ severity: 'warning', field: 'scenarios', message: check.message });
     if (check.status === 'not_given' && !note) issues.push({ severity: 'warning', field: 'scenarios.probability_note', message: 'The scenarios give no probabilities and no reason why.' });
     if (items.length && !r.scenarios.btc_relative_definition) issues.push({ severity: 'warning', field: 'scenarios.btc_relative_definition', message: 'No definition of BTC-relative return; relative returns are not compared across reports.' });
-    scenarios = { btc_relative_definition: r.scenarios.btc_relative_definition || null, probability_note: note, items, probability_check: check, label: 'Speculative forecast' };
+    const hasRange = (x) => Boolean(x) && typeof x === 'object' && (isNum(x.low) || isNum(x.high));
+    const withTarget = items.filter((s) => hasRange(s.price_range_usd)).length;
+    const targetCheck = !items.length
+      ? { status: 'none', message: 'No scenarios given.' }
+      : withTarget === items.length
+        ? { status: 'given', message: 'Every scenario gives a price range.' }
+        : { status: withTarget ? 'partial' : 'not_given', message: `${withTarget ? 'Only some scenarios give a price range' : 'No price ranges'}${targetNote ? `: ${targetNote}` : withTarget ? '. Shown as given; not completed.' : ' given, and no reason.'}` };
+    // Reports written for cr-research-prompt@5 were asked for the reason.
+    if (askedV5 && items.length && withTarget < items.length && !targetNote) issues.push({ severity: 'warning', field: 'scenarios.target_note', message: `${withTarget ? 'Some scenarios give' : 'The scenarios give'} no price range and no reason why.` });
+    scenarios = { btc_relative_definition: r.scenarios.btc_relative_definition || null, probability_note: note, target_note: targetNote, items, probability_check: check, target_check: targetCheck, label: 'Speculative forecast' };
   }
 
   const lists = {};
@@ -1083,7 +1128,16 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider, runDefau
   const position = pos.normalizePositionContext(r.position_context, { catalysts: r.catalysts, promptVersion: typeof promptVersion === 'string' ? promptVersion.trim() : null, analysisAt, ceiling: pos.policy(ws).planning_ceiling_months });
   for (const i of position.issues) issues.push(i);
 
-  const integrity = citationIntegrity({ sources, claims, diagnostic_scores: diagnostic, investment_components: components, risk_scores: risk, economics, ...lists, catalysts: r.catalysts, unlocks: r.unlocks, tokenomics_changes: r.tokenomics_changes, position_context: position.context });
+  // cr-research-prompt@5: which code was read, the chart and cycle reading,
+  // and the model's own judgment (thesis.js). Read as written; no score moves.
+  // A report that was not asked for them, and gives none, has null here.
+  const codeReview = thesis.normalizeCodeReview(r.code_review, { asked: askedV5 });
+  const chartCycle = thesis.normalizeChartCycle(r.chart_cycle, { asked: askedV5 });
+  const judgment = thesis.normalizeJudgment(r.independent_judgment, { asked: askedV5 });
+  for (const i of [...codeReview.issues, ...chartCycle.issues, ...judgment.issues]) issues.push(i);
+  const blocks = { code_review: codeReview.block, chart_cycle: chartCycle.block, independent_judgment: judgment.block };
+
+  const integrity = citationIntegrity({ sources, claims, diagnostic_scores: diagnostic, investment_components: components, risk_scores: risk, economics, ...lists, catalysts: r.catalysts, unlocks: r.unlocks, tokenomics_changes: r.tokenomics_changes, scenarios, position_context: position.context, ...blocks });
   for (const i of integrity.issues.slice(0, 60)) {
     issues.push({ severity: 'warning', field: i.path, message: i.kind === 'duplicate_id' ? `Duplicate ID "${i.id}" (first used at ${i.first}).` : `Reference "${i.id}" does not match any listed ${i.kind === 'dangling_source_ref' ? 'source' : 'claim or source'}.` });
   }
@@ -1128,6 +1182,7 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider, runDefau
       unresolved_questions: unresolved,
       sections: r.sections && typeof r.sections === 'object' ? r.sections : null,
       position_context: position.context,
+      ...blocks,
     },
     issues,
     provenance,
@@ -1192,7 +1247,8 @@ function buildFromText(ws, { text, classification, provider, runDefaults = null 
     // not an error), and a problem repeated across a list is one line.
     const { forSchema, readAs } = schemaView(raw);
     if (readAs.length) issues.push({ severity: 'warning', field: 'sources[*].source_type', message: `${readAs.reduce((n, x) => n + x.count, 0)} source type(s) were written outside the accepted list and read as the nearest type: ${readAs.map((x) => `${x.given} as ${x.read_as}${x.count > 1 ? ` (${x.count})` : ''}`).join(', ')}.` });
-    const res = validate(loadSchema(ws, 'report.v1'), forSchema);
+    // Checked against the schema of the format the report declares.
+    const res = validate(loadSchema(ws, REPORT_SCHEMAS[raw.schema_version] || 'report.v1'), forSchema);
     schemaErrors = res.errors;
     for (const e of groupSchemaErrors(res.errors).slice(0, 40)) issues.push({ severity: 'warning', field: 'schema', message: e });
   } else if (classification.json && classification.json.parseErrors && classification.json.parseErrors.length) {
@@ -1210,7 +1266,7 @@ function buildFromText(ws, { text, classification, provider, runDefaults = null 
     provenance: norm.provenance,
     note: format === 'prose'
       ? `Prose report: only explicitly labeled scores directly followed by a number were extracted. Nothing was inferred.${unreadable ? ' Its JSON block could not be read, so the prose was read instead.' : ''} ${runRubric ? 'Rubric and sector profile were taken from the research run it was saved against.' : 'Rubric and sector profile are unknown until you set them.'}`
-      : 'Structured JSON block (cr.report.v1).',
+      : `Structured JSON block (${raw && REPORT_SCHEMAS[raw.schema_version] ? raw.schema_version : 'cr.report.v1'}).`,
   };
   return { raw, assessment: norm.assessment, extraction };
 }
@@ -1281,6 +1337,8 @@ function completeShape(a) {
   if (out.scenarios === undefined) out.scenarios = null;
   if (out.verdict === undefined) out.verdict = null;
   if (out.position_context === undefined) out.position_context = null;
+  // Blocks of cr-research-prompt@5; older reports have none.
+  for (const k of ['code_review', 'chart_cycle', 'independent_judgment']) if (out[k] === undefined) out[k] = null;
   return out;
 }
 

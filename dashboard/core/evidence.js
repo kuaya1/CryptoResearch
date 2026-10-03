@@ -4,7 +4,7 @@
 // score, a grade, a stored record or the original report.
 //
 // Source types: the accepted list (SOURCE_TYPES, also in the report schema
-// and the cr-research-prompt@4 appendix). Words models use instead are read
+// and the appendix of cr-research-prompt@4 and later). Words models use instead are read
 // as their nearest type (SYNONYMS), and the source's host settles what the
 // word leaves open: a block explorer is on-chain data, CoinGecko is a data
 // aggregator. An AI-generated summary (CoinMarketCap's AI pages and the like)
@@ -24,7 +24,7 @@
 //   fees_not_reproducible     a fee or revenue figure without its period, or
 //                             without a query, dashboard or explorer view that
 //                             reproduces it
-//   critical_without_excerpt  (cr-research-prompt@4 reports, which were asked
+//   critical_without_excerpt  (reports from cr-research-prompt@4 on, which were asked
 //                             for it) a critical [V] claim with neither an
 //                             excerpt of the artifact nor the query used
 
@@ -146,7 +146,12 @@ const shortUrl = (u) => {
   const p = hp.path.length > 32 ? `${hp.path.slice(0, 31)}…` : hp.path;
   return `${hp.host}${p === '/' ? '' : p}`;
 };
-const POSITION_V4 = 'cr-research-prompt@4';
+// Reports written for cr-research-prompt@4 and later were asked for an
+// excerpt of the source or the query used.
+const asksForExcerpt = (v) => {
+  const m = /^cr-research-prompt@(\d+)$/.exec(String(v || '').trim());
+  return Boolean(m) && Number(m[1]) >= 4;
+};
 
 // The checks for one assessment. officialWebsite: the project's verified site.
 function evidenceChecks(assessment, { officialWebsite = null } = {}) {
@@ -161,7 +166,7 @@ function evidenceChecks(assessment, { officialWebsite = null } = {}) {
     if (n.given && !SOURCE_TYPES.includes(key(n.given))) outside.set(n.given, new Set([...(outside.get(n.given) || []), n.type]));
   }
   const catalystClaims = new Set((Array.isArray(a.catalysts) ? a.catalysts : []).filter((c) => c && (c.date || c.window_start || c.window_end)).flatMap((c) => (Array.isArray(c.claim_ids) ? c.claim_ids.map(String) : [])));
-  const asked = a.prompt_version === POSITION_V4;
+  const asked = asksForExcerpt(a.prompt_version);
   const flags = [];
   let critical = 0;
   const claims = Array.isArray(a.claims) ? a.claims : [];

@@ -25,7 +25,7 @@ function seeded(seed) {
   };
 }
 
-// A complete fictional report (prose + cr.report.v1 JSON) for a mock research job.
+// A complete fictional report (prose + the report JSON) for a mock research job.
 function mockReport(ws, provider, run) {
   const project = require('./projects').getProject(ws, run.project_id);
   const profile = ws.rubrics.profiles[run.sector_profile];
@@ -33,9 +33,29 @@ function mockReport(ws, provider, run) {
   const rnd = seeded(`${run.project_id}|${provider}`);
   const score = (lo = 30, hi = 85) => Math.round(lo + rnd() * (hi - lo));
   const s = (v, why) => ({ status: 'scored', value: v, low: null, high: null, rationale: `FICTIONAL ${why}`, evidence_refs: ['C1'], missing_data: null });
+  // A run under cr-research-prompt@5 gets the cr.report.v2 shape: category
+  // grades with their detail fields (one left unknown, as a real report may),
+  // and FICTIONAL code, chart and judgment blocks.
+  const v5 = require('./thesis').asksFor(run.prompt && run.prompt.version);
   const diagnostic = {};
   for (const c of profile.diagnostic_categories) {
-    diagnostic[c.id] = c.applicable === false ? { status: 'not_applicable', value: null, low: null, high: null, rationale: c.na_reason || 'Not applicable', evidence_refs: [], missing_data: null } : s(score(), `${c.label} assessment`);
+    if (c.applicable === false) {
+      diagnostic[c.id] = { status: 'not_applicable', value: null, low: null, high: null, rationale: c.na_reason || 'Not applicable', evidence_refs: [], missing_data: null };
+    } else if (v5 && c.id === 'code_quality') {
+      diagnostic[c.id] = { status: 'unknown', value: null, low: null, high: null, confidence: null, rationale: '', strongest_evidence: null, main_weakness: null, would_raise: null, would_lower: null, evidence_refs: [], missing_data: 'FICTIONAL: the demo project publishes no source code, so none could be read.' };
+    } else if (v5) {
+      const label = c.label.toLowerCase();
+      diagnostic[c.id] = {
+        ...s(score(), `${c.label} assessment`),
+        confidence: ['high', 'medium', 'medium', 'low'][Math.floor(rnd() * 4)],
+        strongest_evidence: `FICTIONAL strongest evidence for ${label}.`,
+        main_weakness: `FICTIONAL main weakness of ${label}.`,
+        would_raise: `FICTIONAL development that would raise ${label}.`,
+        would_lower: `FICTIONAL development that would lower ${label}.`,
+      };
+    } else {
+      diagnostic[c.id] = s(score(), `${c.label} assessment`);
+    }
   }
   const components = {};
   for (const c of grading.investment_components) components[c.id] = s(score(25, 80), c.label);
@@ -64,8 +84,47 @@ function mockReport(ws, provider, run) {
   const catalysts = positional
     ? [{ title: 'FICTIONAL mainnet upgrade', date: null, date_precision: 'window', window_start: addDays(h.start_date, 20), window_end: addDays(h.start_date, 50), kind: 'product', status: 'announced', certainty: 'project_claimed', in_horizon: true, claim_ids: ['C1'] }]
     : [];
+  const three = (what) => [1, 2, 3].map((n) => ({ text: `FICTIONAL ${what} ${n}.`, claim_ids: ['C1'] }));
+  const view = (text, label) => ({ view: `FICTIONAL ${text}`, label, supporting_evidence: ['C1'], disconfirming_test: 'FICTIONAL observation that would prove this wrong.' });
+  const v5Blocks = v5 ? {
+    code_review: {
+      source_access: 'none',
+      repositories: [{ url: 'https://example.com/fictional-repository', role: 'FICTIONAL marketing site repository; not the product', commit: null, files_inspected: [], observations: 'FICTIONAL: no implementation code is published.' }],
+      deployed_link: { status: 'not_verified', note: 'FICTIONAL: with no source, nothing can be connected to what is deployed.' },
+      limitations: 'FICTIONAL demo. A research assessment, not a security audit.',
+    },
+    chart_cycle: {
+      data: { source: 'FICTIONAL demo chart', venue: 'Example Exchange (FICTIONAL)', pair: `${project.symbol || 'XMPL'}/USD`, timeframes: ['1W', '1D'], latest_observation_at: `${today}T00:00:00Z`, limitations: 'FICTIONAL data for the demo.' },
+      phase: pick(['base_formation', 'possible_accumulation', 'decline']),
+      phase_rationale: 'FICTIONAL reading of the demo chart. Not research.',
+      alternative_reading: 'FICTIONAL competing reading: a pause inside a longer decline.',
+      trend_vs_usd: 'FICTIONAL: sideways for eight weeks.',
+      trend_vs_btc: 'FICTIONAL: lower highs against BTC.',
+      levels: [{ kind: 'support', price_usd: 0.021, timeframe: '1W', basis: 'FICTIONAL: three weekly closes held it.' }, { kind: 'resistance', price_usd: 0.034, timeframe: '1D', basis: 'FICTIONAL: two failed breakouts.' }],
+      volume: { baseline: 'FICTIONAL 30-day average daily volume on the demo venue', reading: 'FICTIONAL: volume rose on up days.', confirms_price: pick([true, false, null]) },
+      liquidity: 'FICTIONAL: thin books on one venue.',
+      confirmation: ['FICTIONAL: a weekly close above resistance on rising volume.'],
+      invalidation: ['FICTIONAL: a weekly close below support.'],
+      evidence_refs: ['C1'],
+    },
+    independent_judgment: {
+      market_misunderstanding: view('view of what the market misunderstands.', 'judgment'),
+      overlooked_bull_case: view('overlooked bull case.', 'speculation'),
+      overlooked_bear_case: view('overlooked bear case.', 'judgment'),
+      technology_without_token: view('path in which the product works and the token does not benefit.', 'judgment'),
+      within_holding_period: view('view of what could happen inside the horizon.', 'speculation'),
+      advantage_over_btc: view('view on holding this rather than BTC.', 'judgment'),
+    },
+  } : {};
+  const scenarioItem = (c, p) => ({
+    case: c,
+    probability_pct: p,
+    ...(v5 ? { observations: [`FICTIONAL observation the ${c} case builds on.`], business_outcome: `FICTIONAL ${c} outcome.`, token_capture_assumption: 'FICTIONAL assumption.', supply_assumption: 'FICTIONAL assumption.', btc_assumption: 'FICTIONAL assumption.', invalidation: `FICTIONAL event that would end the ${c} case.`, claim_ids: ['C1'] } : {}),
+    price_range_usd: { low: null, high: null },
+    relative_return_vs_btc_pct: { low: null, high: null },
+  });
   const json = {
-    schema_version: 'cr.report.v1',
+    schema_version: v5 ? 'cr.report.v2' : 'cr.report.v1',
     report_id: null,
     research_run_id: run.run_id,
     project_id: run.project_id,
@@ -88,17 +147,23 @@ function mockReport(ws, provider, run) {
     risk_scores: risk,
     sources: [{ source_id: 'S1', url: 'https://example.com/fictional-source', title: 'FICTIONAL example source', publisher: 'example.com', source_type: 'other', accessed_at: today }],
     claims: [{ claim_id: 'C1', text: 'FICTIONAL claim used by every score in this demo report.', evidence_tag: 'I', source_ids: ['S1'], metric_id: 'tvl_usd', value: Math.round(1e6 + rnd() * 9e6), unit: 'USD', definition: 'FICTIONAL total value locked', period: 'spot', as_of: today, limitation: 'Fictional', section: null }],
-    bullish_facts: [{ text: 'FICTIONAL bullish fact.', claim_ids: ['C1'] }],
-    bearish_facts: [{ text: 'FICTIONAL bearish fact.', claim_ids: ['C1'] }],
-    conviction_increases: [{ text: 'FICTIONAL development that would raise conviction.', claim_ids: [] }],
-    invalidators: [{ text: 'FICTIONAL thesis invalidator.', claim_ids: [] }],
+    bullish_facts: v5 ? three('positive') : [{ text: 'FICTIONAL bullish fact.', claim_ids: ['C1'] }],
+    bearish_facts: v5 ? three('risk') : [{ text: 'FICTIONAL bearish fact.', claim_ids: ['C1'] }],
+    conviction_increases: v5 ? three('confirmation condition') : [{ text: 'FICTIONAL development that would raise conviction.', claim_ids: [] }],
+    invalidators: v5 ? three('invalidator') : [{ text: 'FICTIONAL thesis invalidator.', claim_ids: [] }],
     catalysts,
     unlocks: [],
     tokenomics_changes: [],
     economics: {},
-    scenarios: { btc_relative_definition: '(1 + token return) / (1 + BTC return) - 1 over the horizon', items: [{ case: 'bull', probability_pct: 25, price_range_usd: { low: null, high: null }, relative_return_vs_btc_pct: { low: null, high: null } }, { case: 'base', probability_pct: 45, price_range_usd: { low: null, high: null }, relative_return_vs_btc_pct: { low: null, high: null } }, { case: 'bear', probability_pct: 30, price_range_usd: { low: null, high: null }, relative_return_vs_btc_pct: { low: null, high: null } }] },
+    ...(v5 ? { code_review: v5Blocks.code_review, chart_cycle: v5Blocks.chart_cycle } : {}),
+    scenarios: {
+      btc_relative_definition: '(1 + token return) / (1 + BTC return) - 1 over the horizon',
+      ...(v5 ? { probability_note: null, target_note: 'FICTIONAL: the demo has no valuation evidence, so no price range is given.' } : {}),
+      items: [scenarioItem('bull', 25), scenarioItem('base', 45), scenarioItem('bear', 30)],
+    },
+    ...(v5 ? { independent_judgment: v5Blocks.independent_judgment } : {}),
     next_metric_to_monitor: { metric: 'FICTIONAL metric', why: 'Demo', threshold: null },
-    position_context: positionContext,
+    position_context: positionContext && v5 ? { ...positionContext, long_term_note: 'FICTIONAL longer-term view of the technology, kept apart from the position assessment.' } : positionContext,
     final_take: 'FICTIONAL demo take. Nothing here is real research.',
     unresolved_questions: ['FICTIONAL open question?'],
     original_report_reference: { note: 'The written report above this JSON block is the original.' },

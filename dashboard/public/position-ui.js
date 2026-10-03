@@ -154,7 +154,7 @@ export function vsBtcFacts(m) {
 export function positionCard(assessment, provider) {
   const pc = assessment && assessment.position_context;
   if (!pc) {
-    const note = assessment && /^cr-research-prompt@[34]$/.test(String(assessment.prompt_version || '').trim())
+    const note = assessment && /^cr-research-prompt@(?:[3-9]|[1-9][0-9]+)$/.test(String(assessment.prompt_version || '').trim())
       ? 'This report was asked for a position block (market view, timing view, review date) and did not give one, so those views are unknown.'
       : 'This report was written before the position recipe, so it has no market, timing or review view. Nothing is inferred for it.';
     return h('div', { class: 'card pos-card' }, h('h3', null, 'Position and timing'), h('p', { class: 'small muted', style: { margin: 0 } }, note));

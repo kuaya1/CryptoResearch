@@ -219,7 +219,7 @@ function addProject(ws, input) {
   refuseAggregatorName(name);
   const sectorIn = input.sector ? normalizeSector(input.sector, { source: 'owner' }) : null;
   if (input.sector && !sectorIn) throw new OpError('INVALID', `Unknown sector "${typeof input.sector === 'object' ? input.sector.primary : input.sector}". Use one of: ${SECTORS.map((s) => s.label).join(', ')}.`);
-  const profileRef = input.sector_profile || (sectorIn ? SECTORS.find((s) => s.id === sectorIn.primary).suggests_profile : 'general-token@1');
+  const profileRef = input.sector_profile || (sectorIn ? SECTORS.find((s) => s.id === sectorIn.primary).suggests_profile : 'general-token@2');
   if (!ws.rubrics.profiles[profileRef]) {
     throw new OpError('INVALID', `Unknown sector profile "${profileRef}". Available: ${Object.keys(ws.rubrics.profiles).join(', ')}`);
   }

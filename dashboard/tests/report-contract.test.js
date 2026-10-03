@@ -1,5 +1,6 @@
 'use strict';
 // The report contract (independent review, 2026-10-03): cr-research-prompt@4
+// (still the contract of @5, which prompt-v5.test.js covers)
 // lists the accepted source types, allows [V] only from a primary source with
 // its date and an excerpt or query, asks for primary sources and dates on
 // critical claims, and lets scenarios leave probabilities unknown with the
@@ -47,12 +48,18 @@ function importOne(ws, json) {
   return { rep, a: rep.assessment, issues, grade: gradeAssessment(ws, rep.assessment) };
 }
 
-test('prompt @4: new runs get the source types, the [V] rule, critical-claim evidence and optional probabilities; an older run\'s @3 prompt is still reproduced', (t) => {
+test('prompt @4 is still reproduced for an older run: the source types, the [V] rule, critical-claim evidence and optional probabilities; and so is @3', (t) => {
   const { ws, root } = workspace(t, 'contract-prompt');
   const r = research.createRun(ws, { project_id: PID, providers: ['claude', 'chatgpt', 'gemini'] });
-  assert.equal(r.run.prompt.version, 'cr-research-prompt@4');
-  const p = fs.readFileSync(path.join(root, r.run.prompt.path), 'utf8');
+  // New runs moved on to @5 (prompt-v5.test.js). An older run's @4 prompt is
+  // rebuilt from its own template and the profile version it was made under,
+  // which is the one the project record still names.
+  assert.equal(r.run.prompt.version, 'cr-research-prompt@5');
+  assert.equal(getProject(ws, PID).sector_profile, 'payfi-credit@1');
+  const older = { runId: r.run.run_id, horizon: r.run.horizon, rubricRef: r.run.rubric_version, packet: JSON.parse(fs.readFileSync(path.join(root, r.run.evidence_packet.path), 'utf8')) };
+  const p = prompts.buildRunPrompt(ws, getProject(ws, PID), { ...older, version: prompts.PROMPT_VERSION_V4 });
   assert.match(p, /CR-PROMPT cr-research-prompt@4/);
+  assert.match(p, /Sector profile: payfi-credit@1/);
   assert.match(p, /\*\*\[V\]\*\* Verified in your session from a primary source/);
   assert.match(p, /An AI-generated summary \(for example CoinMarketCap's AI pages, or any chatbot answer\) never supports \[V\]/);
   assert.match(p, /10\. Critical claims need a primary source and a date, or a lower tag:/);
@@ -70,7 +77,7 @@ test('prompt @4: new runs get the source types, the [V] rule, critical-claim evi
   assert.match(p, /9\. \*\*BTC-relative scenarios\.\*\* Bull, base and bear cases with probabilities only when the evidence supports them \(all three totaling 100%, or none, with the reason\)/);
   assert.ok(!/\{\{[A-Z_]+\}\}/.test(p), 'every placeholder filled');
   // Weights are unchanged: the same six components and appendix rules as @3.
-  const v3 = prompts.buildRunPrompt(ws, getProject(ws, PID), { runId: r.run.run_id, horizon: r.run.horizon, rubricRef: r.run.rubric_version, packet: JSON.parse(fs.readFileSync(path.join(root, r.run.evidence_packet.path), 'utf8')), version: prompts.PROMPT_VERSION_V3 });
+  const v3 = prompts.buildRunPrompt(ws, getProject(ws, PID), { ...older, version: prompts.PROMPT_VERSION_V3 });
   assert.match(v3, /CR-PROMPT cr-research-prompt@3/);
   assert.match(v3, /probabilities must total 100/);
   const comps = (text) => [...text.matchAll(/^- `([a-z_]+)` \(/gm)].map((m) => m[1]);

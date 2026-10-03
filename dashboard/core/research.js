@@ -708,7 +708,9 @@ function budgetCheck(ws, reservation, { runId = null, now = new Date() } = {}) {
 // ---------------------------------------------------------------------------
 // Evidence packet: dated, neutral, public context. Never holdings or notes.
 
-function evidencePacket(ws, project) {
+// profileRef: the run's scoring profile (the current version of the one the
+// project record names); without it, the record's.
+function evidencePacket(ws, project, { profileRef = null } = {}) {
   const latest = require('./market').readLatest(ws);
   const id = project.identity && project.identity.status === 'verified' ? project.identity.coingecko_id : null;
   const obs = id && latest.assets ? latest.assets[id] : null;
@@ -725,7 +727,7 @@ function evidencePacket(ws, project) {
       chains_and_contracts: project.identity && project.identity.status === 'verified' ? (project.identity.assets || []).map((a) => ({ chain: a.chain, contract_address: a.contract_address || null, standard: a.standard || null })) : [],
       identity_evidence_urls: ((project.identity && project.identity.evidence) || []).map((e) => e.url).slice(0, 10),
       sector: project.sector ? project.sector.primary : null,
-      scoring_profile: project.sector_profile,
+      scoring_profile: profileRef || project.sector_profile,
     },
     market: obs ? {
       source: obs.source || 'CoinGecko /coins/markets',
@@ -806,9 +808,15 @@ function createRun(ws, args = {}) {
     return { status: 'exists', project_id: projectId, run_id: recent.run_id, run: recent, message: `A research run for ${project.name} with the same providers and horizon started ${Math.round((Date.now() - Date.parse(recent.created_at)) / 60000)} min ago (${recent.run_id}). No second run was created.` };
   }
   const runId = `run_${compactTs()}_${randomId(5)}`;
-  const packet = evidencePacket(ws, project);
+  // The run's scoring profile: the current published version of the profile
+  // the project record names (payfi-credit@1 -> payfi-credit@2). The record is
+  // not rewritten; this run's prompt and its reports declare this version, and
+  // the profile decides the prompt (cr-research-prompt@5 for one written for
+  // it). Earlier runs and reports keep the versions they were made under.
+  const profileRef = require('./rubrics').currentProfileRef(ws, project.sector_profile);
+  const packet = evidencePacket(ws, project, { profileRef });
   const packetText = `${JSON.stringify(packet, null, 2)}\n`;
-  const prompt = buildRunPrompt(ws, project, { runId, horizon, rubricRef, packet, ownerInstructions });
+  const prompt = buildRunPrompt(ws, project, { runId, horizon, rubricRef, packet, ownerInstructions, profileRef });
   const status = providerStatus(ws);
   const channel = args.channel || ws.actor || 'cli';
   // The model doing this run itself through the desk connector, if any.
@@ -828,10 +836,10 @@ function createRun(ws, args = {}) {
     utterance: args.utterance || null,
     providers: list,
     rubric_version: rubricRef,
-    sector_profile: project.sector_profile,
+    sector_profile: profileRef,
     horizon,
     owner_instructions: ownerInstructions,
-    prompt: { version: require('./prompts').promptVersionFor(horizon), path: `${dir}/prompt.md`, sha256: sha256(prompt), identical_for_all_providers: true },
+    prompt: { version: require('./prompts').promptVersionFor(horizon, ws.rubrics.profiles[profileRef]), path: `${dir}/prompt.md`, sha256: sha256(prompt), identical_for_all_providers: true },
     evidence_packet: { path: `${dir}/evidence-packet.json`, sha256: sha256(packetText), captured_at: packet.captured_at, market_snapshot_id: packet.market_context.snapshot_id || null },
     independence: 'Each provider gets the same prompt and dated context and never sees another model\'s conclusions.',
     jobs,

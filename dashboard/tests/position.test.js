@@ -107,7 +107,7 @@ test('a run horizon is an exact interval inside the planning ceiling; longer nee
   assert.equal(position.resolveRunHorizon(ws, { today }).months, 2);
 });
 
-test('a run gets the position prompt (@4) with its dates and the market snapshot, identical for every model, without private notes', async (t) => {
+test('a run gets the position prompt (@5) with its dates and the market snapshot, identical for every model, without private notes', async (t) => {
   const { ws, root, cleanup } = tempWorkspace('runv3');
   t.after(cleanup);
   addFixtureProject(ws);
@@ -115,16 +115,17 @@ test('a run gets the position prompt (@4) with its dates and the market snapshot
   // Before any market snapshot: the prompt says the context is unknown.
   const r0 = research.createRun(ws, { project_id: PID, providers: ['claude', 'chatgpt', 'gemini'] });
   const run0 = r0.run;
-  assert.equal(run0.prompt.version, 'cr-research-prompt@4');
+  assert.equal(run0.prompt.version, 'cr-research-prompt@5');
   assert.equal(run0.horizon.recipe, 'position-cycle@1');
   assert.equal(run0.horizon.start_date, ymdInTz());
   assert.equal(run0.evidence_packet.market_snapshot_id, null);
   const prompt0 = fs.readFileSync(path.join(root, run0.prompt.path), 'utf8');
-  assert.match(prompt0, /CR-PROMPT cr-research-prompt@4/);
+  assert.match(prompt0, /CR-PROMPT cr-research-prompt@5/);
   assert.ok(prompt0.includes(`${run0.horizon.start_date} to ${run0.horizon.end_date}`));
   assert.match(prompt0, /none was available when this run was created/);
   assert.match(prompt0, /"position_context"/);
-  assert.match(prompt0, /Project timing and catalysts inside the horizon/);
+  assert.match(prompt0, /Dated catalysts, confirmation conditions and invalidators/);
+  assert.match(prompt0, /dated catalysts and supply events inside the holding period/);
   assert.ok(!prompt0.includes('FICTIONAL-PRIVATE-NOTE-7731'), 'private notes never reach the prompt');
   assert.ok(!/\{\{[A-Z_]+\}\}/.test(prompt0), 'every placeholder filled');
   const packet0 = readJson(path.join(root, run0.evidence_packet.path));
@@ -246,7 +247,8 @@ test('mock providers answer a position run end to end; grades come from the scor
     const pc = r.assessment.position_context;
     assert.ok(pc, `${r.meta.provider} has a position block`);
     assert.equal(pc.run_binding.horizon_matches, true);
-    assert.equal(r.assessment.prompt_version, 'cr-research-prompt@4');
+    assert.equal(r.assessment.prompt_version, 'cr-research-prompt@5');
+    assert.equal(r.assessment.sector_profile, 'payfi-credit@2', 'the run used the current version of the project\'s profile');
   }
 });
 

@@ -293,7 +293,16 @@ function reportsOf(ws, projectId, provider) {
 
 function compactReport(r) {
   if (!r) return null;
-  return { report_id: r.report_id, model: r.provider || null, analysis_at: r.analysis_at, imported_at: r.imported_at, verdict: r.verdict || null, grade: r.grade || null, horizon: r.horizon || null, rubric_version: r.rubric_version, warnings: r.warnings, errors: r.errors, sources: r.sources, top_risks: r.top_risks };
+  const out = { report_id: r.report_id, model: r.provider || null, analysis_at: r.analysis_at, imported_at: r.imported_at, verdict: r.verdict || null, grade: r.grade || null, horizon: r.horizon || null, rubric_version: r.rubric_version, warnings: r.warnings, errors: r.errors, sources: r.sources, top_risks: r.top_risks };
+  // How the category grades were read (counts only; they never enter the
+  // investment grade): how many are scored, which are unknown, and the
+  // confidence the report states.
+  const sc = r.scorecard;
+  if (sc && sc.total) {
+    out.sector_profile = r.sector_profile || null;
+    out.category_grades = { total: sc.total, scored: sc.scored, unknown: sc.unknown_labels, confidence: sc.confidence, note: 'Diagnostics, shown beside the investment grade and never averaged into it.' };
+  }
+  return out;
 }
 
 // Why a saved report's grade is withheld, part by part, as the desk read it:

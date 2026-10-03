@@ -38,8 +38,15 @@ test('spoken add-project request creates the folder, files and prompts, and the 
   assert.equal(idx.portfolio.positions.length, 0, 'researching a token never creates a position');
   const prompt = fs.readFileSync(path.join(root, 'projects', 'allora-network', 'prompts', 'chatgpt.md'), 'utf8');
   assert.match(prompt, /"provider": "chatgpt"/);
-  assert.match(prompt, /technical_risk_transparency/);
-  assert.match(prompt, /credit_risk_transparency/);
+  // The standing prompt is the current one for this kind of project: the
+  // record keeps the profile it was added with, and new research uses the
+  // current version of that profile (thirteen category grades, prompt @5).
+  assert.equal(p.sector_profile, 'network-infrastructure@1', 'the project record is not rewritten');
+  assert.match(prompt, /CR-PROMPT cr-research-prompt@5/);
+  assert.match(prompt, /Sector profile: network-infrastructure@2/);
+  assert.match(prompt, /`development_credibility` \(Development credibility\)/);
+  assert.match(prompt, /`btc_relative_opportunity` \(BTC-relative asymmetric opportunity\)/);
+  assert.doesNotMatch(prompt, /technical_risk_transparency|credit_risk_transparency/, 'the @1 categories are not asked for any more');
 });
 
 test('repeating the add-project request does not create a duplicate', (t) => {

@@ -31,3 +31,58 @@
 .pos-catalysts li { margin: 2px 0; }
 
 .horizon-reason[hidden] { display: none; }
+
+/* Thesis views (thesis-ui.js): category grades with their confidence, the
+   report summary, chart and cycle, scenarios, the model's own judgment. Same
+   neutral palette; the words carry the meaning, the marks only repeat it. */
+
+.conf { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-small); font-weight: 500; white-space: nowrap; }
+.conf-marks { display: inline-flex; gap: 2px; }
+.conf-marks span { width: 5px; height: 11px; border-radius: 1px; border: 1px solid var(--text-3); }
+.conf-marks span.on { background: var(--fav-bar); border-color: var(--fav-bar); }
+
+.cat-grid, .cat-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.cat-grid { gap: 4px; }
+.cat-grid li, .cat-head { display: grid; grid-template-columns: minmax(0, 1fr) auto 86px; align-items: center; gap: 2px var(--s3); }
+.cat-grid li { font-size: var(--fs-small); padding: 2px 0; border-bottom: 1px solid var(--separator); }
+.cat-grid li:last-child { border-bottom: 0; }
+.cat-name { min-width: 0; overflow-wrap: anywhere; }
+.cat-list li { padding: var(--s3) 0; border-bottom: 1px solid var(--separator); }
+.cat-list li:first-child { padding-top: var(--s1); }
+.cat-list li:last-child { border-bottom: 0; }
+.cat-list .cat-name { font-weight: 600; }
+.cat-why { margin-top: 4px; color: var(--text-2); overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .cat-grid li, .cat-head { grid-template-columns: minmax(0, 1fr) auto; }
+  .cat-grid .cat-conf, .cat-head .cat-conf { grid-column: 1 / -1; }
+  .cat-grid .score, .cat-head .score { min-width: 0; }
+  .cat-grid .score .track, .cat-head .score .track { width: 56px; }
+}
+
+.cat-more { margin-top: 4px; }
+.cat-more > summary { cursor: pointer; color: var(--text-2); text-decoration: underline; text-decoration-color: var(--control-border); text-underline-offset: 3px; }
+.cat-detail { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px var(--s3); margin: 6px 0 2px; }
+.cat-detail dt { color: var(--text-3); }
+.cat-detail dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 560px) { .cat-detail { grid-template-columns: minmax(0, 1fr); } .cat-detail dt { margin-top: 4px; } }
+
+.glance .block, .thesis-card .block { display: block; margin-top: 2px; }
+ul.plain { margin: 0; padding-left: 18px; }
+ul.plain li { margin: 2px 0; overflow-wrap: anywhere; }
+.kv.small { font-size: var(--fs-small); }
+
+dl.views { margin: 0; display: grid; gap: 4px; }
+dl.views dt { font-weight: 600; margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+dl.views dd { margin: 0; overflow-wrap: anywhere; }
+
+.thesis-card { margin-top: var(--s4); }
+.thesis-card > h3 { margin: 0 0 var(--s2); }
+.thesis-card > .glance-block { margin-top: 0; }
+.thesis-card > .glance-block > h3 { font-size: var(--fs-h3); margin-bottom: var(--s2); }
+
+.scn-list { display: grid; gap: var(--s3); }
+.scn { border: 1px solid var(--separator); border-radius: var(--r-md); padding: var(--s3); }
+.scn h4 { margin: 0 0 var(--s2); font-size: var(--fs-body); display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.scn .scn-prob { font-weight: 500; font-size: var(--fs-small); color: var(--text-2); }
+.scn .cat-detail { margin: 0; }
+.cat-grid.no-conf li, .cat-list.no-conf .cat-head { grid-template-columns: minmax(0, 1fr) auto; }

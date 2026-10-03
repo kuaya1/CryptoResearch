@@ -37,6 +37,32 @@ function given(v) {
   return v !== null && v !== undefined && v !== '';
 }
 
+// What a category grade also shows from cr-research-prompt@5 on: how strong
+// the evidence behind it is, the strongest evidence, the main weakness, and
+// what would raise or lower it. Kept as written (trimmed, bounded) and only
+// where given, so older score objects are read exactly as before. A
+// confidence word outside high / medium / low is noted and not used, and a
+// grade that is unknown or not applicable carries no confidence.
+const CONFIDENCE = ['high', 'medium', 'low'];
+const DETAIL_FIELDS = ['strongest_evidence', 'main_weakness', 'would_raise', 'would_lower'];
+const DETAIL_MAX = 1200;
+
+function withDetail(s, raw, label, warnings) {
+  if (given(raw.confidence)) {
+    const c = String(raw.confidence).trim().toLowerCase();
+    if (CONFIDENCE.includes(c)) {
+      if (s.status === 'scored' || s.status === 'range') s.confidence = c;
+    } else if (!['unknown', 'none', 'n/a', 'na'].includes(c)) {
+      warnings.push(`${label}: confidence ${JSON.stringify(raw.confidence)} is not high, medium or low; not used`);
+    }
+  }
+  for (const k of DETAIL_FIELDS) {
+    const v = str(raw[k]);
+    if (v) s[k] = v.slice(0, DETAIL_MAX);
+  }
+  return s;
+}
+
 // A number written as text: "72", "72.5" or "72/100". Anything else, including
 // "7/10" (another scale), is left as it was for the caller to reject.
 function numberText(v) {
@@ -189,7 +215,7 @@ function normalizeScore(raw, label = 'score') {
       warnings,
     };
   }
-  return { score: s, errors, warnings };
+  return { score: withDetail(s, raw, label, warnings), errors, warnings };
 }
 
 function sortedLabels(labels) {
@@ -345,6 +371,8 @@ function checkModelTotal(grade, reported, tolerance = 1.0) {
 
 module.exports = {
   STATUSES,
+  CONFIDENCE,
+  DETAIL_FIELDS,
   normalizeScore,
   emptyScore,
   computeInvestmentGrade,

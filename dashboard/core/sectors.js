@@ -3,14 +3,18 @@
 // (yours to edit) plus free tags. The sector is not the scoring profile: the
 // profile decides which rubric categories apply; the sector is how you group
 // and filter. A sector can suggest a profile, never the other way round silently.
+// New projects are suggested the current profile versions (@2, the thirteen
+// category grades of cr-research-prompt@5); a project saved with an @1 profile
+// keeps its record, and its new research uses the current version of that
+// profile (rubrics.currentProfileRef).
 
 const SECTORS = [
-  { id: 'defi', label: 'DeFi', suggests_profile: 'general-token@1' },
-  { id: 'payments', label: 'Payments / PayFi', suggests_profile: 'payfi-credit@1' },
-  { id: 'infrastructure', label: 'Infrastructure', suggests_profile: 'network-infrastructure@1' },
-  { id: 'ai_data', label: 'AI / Data', suggests_profile: 'network-infrastructure@1' },
-  { id: 'gaming', label: 'Gaming', suggests_profile: 'general-token@1' },
-  { id: 'other', label: 'Other', suggests_profile: 'general-token@1' },
+  { id: 'defi', label: 'DeFi', suggests_profile: 'general-token@2' },
+  { id: 'payments', label: 'Payments / PayFi', suggests_profile: 'payfi-credit@2' },
+  { id: 'infrastructure', label: 'Infrastructure', suggests_profile: 'network-infrastructure@2' },
+  { id: 'ai_data', label: 'AI / Data', suggests_profile: 'network-infrastructure@2' },
+  { id: 'gaming', label: 'Gaming', suggests_profile: 'general-token@2' },
+  { id: 'other', label: 'Other', suggests_profile: 'general-token@2' },
 ];
 
 const BY_ID = new Map(SECTORS.map((s) => [s.id, s]));
@@ -19,6 +23,9 @@ const PROFILE_DEFAULT_SECTOR = {
   'payfi-credit@1': 'payments',
   'network-infrastructure@1': 'infrastructure',
   'general-token@1': 'other',
+  'payfi-credit@2': 'payments',
+  'network-infrastructure@2': 'infrastructure',
+  'general-token@2': 'other',
 };
 
 function isSector(id) {

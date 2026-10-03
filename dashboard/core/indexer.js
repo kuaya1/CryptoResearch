@@ -78,6 +78,26 @@ function reportSummary(ws, r, project = null) {
     top_risks: topRisks(a),
     position: require('./position').compactContext(a),
     evidence: evidenceBrief(a, project),
+    // The category grades in brief (counts only, never a total), under the
+    // scoring profile the report declares.
+    scorecard: require('./thesis').scorecardBrief(a, ws.rubrics.profiles[a.sector_profile] || null),
+    chart_phase: a.chart_cycle ? a.chart_cycle.phase : null,
+  };
+}
+
+// What a new research run on this project would use: the current published
+// version of its scoring profile, the prompt that profile calls for and the
+// active grading rubric. A run freezes these when it is created; earlier runs
+// and reports keep their own.
+function researchContract(ws, project) {
+  const ref = require('./rubrics').currentProfileRef(ws, project.sector_profile);
+  const profile = ws.rubrics.profiles[ref] || null;
+  return {
+    sector_profile: ref || null,
+    project_profile: project.sector_profile || null,
+    prompt_version: require('./prompts').promptVersionFor({ recipe: require('./position').RECIPE_ID }, profile),
+    rubric_version: ws.rubrics.activeRef,
+    category_grades: profile ? profile.diagnostic_categories.filter((c) => c.applicable !== false).length : null,
   };
 }
 
@@ -566,6 +586,7 @@ function projectDetailRaw(ws, id) {
     sectors: SECTORS,
     project,
     profile: ws.rubrics.profiles[project.sector_profile] || null,
+    research_contract: researchContract(ws, project),
     headline: resolveHeadline(ws, project, reports, journal),
     reports: reportsOut,
     comparison: comp,

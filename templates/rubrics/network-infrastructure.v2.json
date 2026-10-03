@@ -1,0 +1,168 @@
+{
+  "profile_ref": "network-infrastructure@2",
+  "profile_id": "network-infrastructure",
+  "version": 2,
+  "title": "Network infrastructure (AI, DePIN, L1/L2, oracle and compute networks)",
+  "status": "active",
+  "supersedes": "network-infrastructure@1",
+  "written_for": "cr-research-prompt@5",
+  "applies_to": "Networks whose token secures, pays for or rewards participation in shared infrastructure: decentralized AI and inference networks, DePIN, compute and storage, oracles, L1 and L2 chains.",
+  "origin": "Second version, written for cr-research-prompt@5: the thirteen category grades replace the diagnostics of network-infrastructure@1. Technical-risk transparency is no longer a separate category; admin keys, upgradeability and audit scope are read under project legitimacy, and operator concentration, uptime and reliance on centralized components under build and operational quality. network-infrastructure@1 is unchanged and still grades the reports that declare it.",
+  "scorecard_note": "Thirteen category grades, each 1-100 with higher meaning better quality or opportunity, each with a confidence, the strongest evidence, the main weakness and what would raise or lower it. They are diagnostics: never averaged into the investment grade, which the dashboard calculates from the six weighted components of the grading rubric. Unknown means unknown and carries no number; missing evidence is not automatically evidence of failure.",
+  "diagnostic_categories": [
+    {
+      "id": "legitimacy",
+      "label": "Project legitimacy",
+      "applicable": true,
+      "definition": "Is this the real network, run by an identifiable and accountable foundation or company: an official website, token, chain and contract or native asset, documentation, repository, explorer and official X account that link to each other; team and operating history; security incidents; audit scope; governance, admin keys and upgradeability; and no material misrepresentation. An identifiable organization, a functioning network and a trustworthy investment are three separate conclusions: this grade covers who runs the network and the honesty of its claims.",
+      "resolving_question": "Which independently checkable facts (verified contracts, public infrastructure, named partners, audits of the deployed code) confirm or contradict who runs the network and what it claims?"
+    },
+    {
+      "id": "development_credibility",
+      "label": "Development credibility",
+      "applicable": true,
+      "definition": "Whether real, substantive development is happening in the repositories that actually power the product: recent releases, meaningful code changes, active contributors, reviewed pull requests, issue handling and maintenance, told apart from automated commits, cosmetic activity, promotional repositories and unrelated forks. Stars, followers and commit counts are not evidence.",
+      "resolving_question": "Which repositories power the live product, and what substantive changes shipped in them over the last 90 days, from how many distinct contributors?"
+    },
+    {
+      "id": "build_operational_quality",
+      "label": "Build and operational quality",
+      "applicable": true,
+      "definition": "How well the network is built and run: architecture, node and protocol release discipline, documentation, tests, upgrade management, uptime and outages, incident handling, validator or operator concentration, and reliance on centralized components.",
+      "resolving_question": "How were the most recent network upgrade and the most recent outage or incident handled, and how concentrated are the operators that keep the network running?"
+    },
+    {
+      "id": "code_quality",
+      "label": "Code quality",
+      "applicable": true,
+      "definition": "Quality of representative implementation code inspected at an identified commit: maintainability, tests, dependencies, security-sensitive controls, whether documented features appear implemented, and whether the inspected code can be connected to what is deployed. A research assessment, not a security audit. Unknown when source access is insufficient; an audit badge is not a substitute.",
+      "resolving_question": "Which files were inspected at which commit, do they implement what the documentation describes, and can that code be tied to the deployed contracts or binaries?"
+    },
+    {
+      "id": "product_reality",
+      "label": "Live product reality",
+      "applicable": true,
+      "definition": "What the network does on mainnet today and what independent evidence shows it, kept apart from project claims, testnet or announced features, incentivized campaigns and speculative future uses.",
+      "resolving_question": "Which services can an outside user request and pay for on mainnet today, and which on-chain or third-party evidence shows that they are served?"
+    },
+    {
+      "id": "technology_usefulness",
+      "label": "Technology usefulness and defensibility",
+      "applicable": true,
+      "definition": "Whether the network delivers a service (inference, compute, data, settlement) that real users would choose over centralized providers and competing networks, and whether that advantage is defensible: technical differentiation, cost, quality and latency, centralization dependencies, failure modes, and whether decentralization and the token are necessary to the service.",
+      "resolving_question": "What does this network do measurably better than its two closest competitors and the centralized default, and would the service still be needed if the token did not exist?"
+    },
+    {
+      "id": "organic_demand",
+      "label": "Organic demand and adoption",
+      "applicable": true,
+      "definition": "Paid usage and fees that persist net of token incentives, grants, emissions-funded activity and self-dealing between related participants, and whether paying users return.",
+      "resolving_question": "What paid usage or fee revenue remains over the last 90 days after excluding incentive-funded and related-party activity?"
+    },
+    {
+      "id": "token_value_capture",
+      "label": "Token value capture",
+      "applicable": true,
+      "definition": "How network usage reaches token holders as implemented today (fees paid in or burned in the token, staking yield funded by fees, required collateral), and how it might not. Emissions-funded rewards are not value capture; announced but unimplemented mechanisms are conditional.",
+      "resolving_question": "What share of participant rewards is funded by fees rather than emissions over a stated period, and which implemented mechanism ties usage to the token?"
+    },
+    {
+      "id": "valuation_supply_attractiveness",
+      "label": "Valuation and supply attractiveness",
+      "applicable": true,
+      "definition": "Current market cap and fully diluted valuation relative to fees, usage and peers, after reconciling circulating supply, total supply, staked supply, emissions and the unlock schedule, with the focus on supply entering between the horizon's start and end dates. An unlock is potential liquid supply, not proof of selling.",
+      "resolving_question": "What supply (unlocks and emissions) enters between the horizon's start and end dates as a share of circulating supply, and how does valuation compare with fee revenue over a stated period?"
+    },
+    {
+      "id": "chart_structure",
+      "label": "Chart structure",
+      "applicable": true,
+      "definition": "Quality of the price structure from a named data source, venue, trading pair and timeframe: trend and market structure against USD and BTC, support and resistance, bases, failed breakouts and drawdowns, weekly and daily first. Unknown when reliable chart data is unavailable; levels and patterns are never invented.",
+      "resolving_question": "On the weekly and daily charts, is the token holding higher lows against both USD and BTC, and which levels define the structure?"
+    },
+    {
+      "id": "cycle_timing",
+      "label": "Cycle position and catalyst timing",
+      "applicable": true,
+      "definition": "Where the token stands in its own cycle (launch, decline, base formation, possible accumulation, breakout, expansion, distribution or renewed decline), how sector strength, Bitcoin leadership and altcoin participation bear on it, and whether dated catalysts and supply events between the horizon's start and end dates favor a position now. Competing interpretations are explained; a cycle label is not forced.",
+      "resolving_question": "Which phase best fits the evidence, what is the competing reading, and which dated catalysts and supply events fall inside the horizon?"
+    },
+    {
+      "id": "volume_liquidity",
+      "label": "Volume confirmation and executable liquidity",
+      "applicable": true,
+      "definition": "Whether volume supports or contradicts the price move against an explicitly stated baseline, and whether a spot position can be entered and exited at reasonable cost: spot liquidity, spreads, depth and venue concentration. High reported volume does not prove durable demand; derivatives data is market context only.",
+      "resolving_question": "How does recent volume compare with a stated baseline on the main spot venues, and what are the spread and the 2% depth there?"
+    },
+    {
+      "id": "btc_relative_opportunity",
+      "label": "BTC-relative asymmetric opportunity",
+      "applicable": true,
+      "definition": "Whether the token offers a credible advantage over simply holding BTC between the horizon's start and end dates: the balance of upside and downside across the bear, base and bull cases, and how much of it rests on observation rather than assumption. Unknown when the asymmetry cannot be assessed; a number is never forced.",
+      "resolving_question": "What would have to be true for the token to outperform BTC over the horizon, and how much of that is observed today rather than assumed?"
+    }
+  ],
+  "research_sections": [
+    {
+      "id": "identity_legitimacy",
+      "title": "Identity and legitimacy",
+      "guidance": "The foundation or company and its control over the network; validator or operator concentration; admin keys and upgradeability; audits against the deployed code; reliance on centralized components."
+    },
+    {
+      "id": "development_build_code",
+      "title": "Development credibility, build quality and code quality",
+      "guidance": "The node, protocol and SDK repositories that run the network; the release cadence of the node software; whether mainnet runs the published code."
+    },
+    {
+      "id": "product_technology",
+      "title": "Product reality and technology usefulness",
+      "guidance": "Who requests work, who performs it, how results are verified, and cost and latency against centralized providers; what is live on mainnet as opposed to testnet or incentivized campaigns; whether decentralization is necessary to the service."
+    },
+    {
+      "id": "demand_token_valuation",
+      "title": "Demand, token economics and valuation",
+      "guidance": "Keep three things separate: (a) network activity and fees paid by users, (b) participant rewards (staking, worker or validator rewards) and whether fees or emissions fund them, (c) token-holder economics. Whether operators would keep serving on fees alone, and what share of usage is related-party or incentive-funded."
+    },
+    {
+      "id": "chart_volume_cycle",
+      "title": "Chart, volume and market cycle",
+      "guidance": "The sector (AI, DePIN, compute, oracle, L1 or L2) this token trades with, and its strength against BTC."
+    },
+    {
+      "id": "judgment_asymmetry",
+      "title": "Independent judgment and asymmetry",
+      "guidance": "Whether the network could succeed technically while applications or operators capture the value and the token does not."
+    }
+  ],
+  "economics_fields": [
+    {
+      "id": "protocol_revenue",
+      "label": "Protocol fee revenue",
+      "definition": "Fees paid by users of the network's service over a stated period. Not emissions."
+    },
+    {
+      "id": "network_usage",
+      "label": "Network usage",
+      "definition": "Requests, jobs or transactions served, with definition and period."
+    },
+    {
+      "id": "participant_rewards",
+      "label": "Participant rewards",
+      "definition": "Rewards paid to operators, workers or validators, split into fee-funded and emissions-funded."
+    },
+    {
+      "id": "token_holder_distributions",
+      "label": "Token-holder distributions",
+      "definition": "Value actually distributed to or burned for token holders over a stated period. Emissions are not distributions."
+    },
+    {
+      "id": "staking_yield",
+      "label": "Staking yield",
+      "definition": "Nominal staking yield and its source (fees versus emissions), and the real yield after dilution."
+    }
+  ],
+  "risk_applicability": {
+    "credit": false,
+    "credit_na_reason": "No credit underwriting in network-infrastructure@2."
+  }
+}

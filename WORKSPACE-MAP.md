@@ -18,13 +18,16 @@ CryptoResearch/
 │   ├── settings.json           Only your overrides (thresholds, refresh, labels, research models and budget)
 │   └── ui-state.json           Dashboard view preferences (columns, sort, filters); not a record
 ├── templates/                  Versioned. Never edit a published version in place; publish a new @N
-│   ├── research-prompt.v4.md       Canonical research prompt (cr-research-prompt@4: position-cycle@1 recipe plus evidence rules); v1-v3 kept for old reports
-│   ├── grading-appendix.v4.md      Appendix with the JSON contract: position_context, source types,
-│   │                               critical_kind / excerpt / query, optional probabilities (v1-v3 kept)
+│   ├── research-prompt.v5.md       Canonical research prompt (cr-research-prompt@5: one decision question, summary first,
+│   │                               six research sections, sector focus from the scoring profile); v1-v4 kept for old runs
+│   ├── grading-appendix.v5.md      Appendix with the JSON contract (cr.report.v2): thirteen category grades with confidence,
+│   │                               code_review, chart_cycle, independent_judgment, scenarios with unknowns allowed (v1-v4 kept)
 │   ├── appendix/                   Standalone appendix per scoring profile, for your own prompts
-│   ├── rubrics/                    cr-grading@1 (weights, labels, risk panel) + scoring profiles
+│   ├── rubrics/                    cr-grading@1 (weights, labels, risk panel) + scoring profiles: @2 (thirteen category
+│   │                               grades, used by new research) and @1 (kept for the reports that declare it)
 │   │   └── RUBRIC-LOCK.json        SHA-256 pin per rubric/profile version; unpinned or altered = no app grade
-│   ├── schemas/                    JSON Schemas: report, project, transaction, request, journal, events
+│   ├── schemas/                    JSON Schemas: report (v2 for cr-research-prompt@5, v1 for earlier reports), project,
+│   │                               transaction, request, journal, events
 │   └── source-prompts/             Your original prompts (Huma Finance Run 2 is saved here)
 ├── inbox/
 │   ├── claude/  chatgpt/  gemini/   Drop reports here; the folder = which assistant wrote it
