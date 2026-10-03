@@ -557,6 +557,9 @@ button.gb:hover { border-color: var(--text-2); background: var(--surface-hover);
 .gb.is-dispatching .v { font-weight: 500; color: var(--text-2); }
 .gb.is-uncertain .v { color: var(--warn); font-weight: 600; }
 .gb.is-uncertain .v::before { content: "? "; }
+.gb.is-cowork .v { font-weight: 500; color: var(--text-2); }
+.gb.is-interrupted .v { color: var(--warn); font-weight: 600; }
+.gb.is-interrupted .v::before { content: "|| "; letter-spacing: -1px; }
 form.reconcile { display: grid; gap: 6px; margin-top: 6px; max-width: 320px; }
 form.reconcile .check { display: flex; align-items: center; gap: 6px; }
 .gb.is-failed .v::before { content: "! "; }

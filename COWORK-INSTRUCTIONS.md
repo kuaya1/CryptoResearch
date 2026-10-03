@@ -10,6 +10,30 @@ All commands below run from this folder: `node dashboard/cli.js <command> … --
 
 ---
 
+## 0. Main route: the CryptoResearch connector (the online desk)
+
+Eric's desk is the online dashboard, <https://cryptoresearch.onrender.com>, which he reads on his phone. Claude in Cowork works on it through the **CryptoResearch** connector: a remote MCP server on that desk, added in claude.ai > Settings > Connectors and approved by Eric with his desk passphrase. First check that its tools are available to you (`find_projects`, `add_project`, `start_research`, `save_research_draft`, `save_report`, `record_transaction`, ...).
+
+- **If they are available, use this section for everything.** The CLI sections below are for the PC's own dashboard only; never put the same research in both places.
+- If they are not, say so plainly ("the CryptoResearch connector is not connected in this session") and point Eric to Settings > Connectors. Do not fall back to writing in the PC folder unless he asks for the PC dashboard.
+
+**Research a project** (a name, a link or a screenshot):
+
+1. `find_projects` with the name, ticker, contract or website. If the project is there, use it.
+2. Identify it from evidence: the official website, and the chain and contract address from the project's own docs or a block explorer. A screenshot or a CoinMarketCap/CoinGecko page is a lead, not proof. Never guess or complete a contract. If two tokens could match (same ticker, similar names), show Eric the candidates and ask once.
+3. `add_project` once, with the evidence URLs and his words. `exists` means nothing was added; `possible_duplicate` means only the ticker matches another project: ask Eric, then repeat with `allow_same_symbol: true` only if it really is different. A pending identity can be completed later with `update_project_identity`.
+4. `start_research` with his words in `owner_request` and his own questions, if any, in `instructions`. It returns the run's canonical prompt (`cr-research-prompt@3`, the 4-month horizon by default, the dated context and the grading appendix). Follow it exactly, with your own web research: all sections, sources with dates, facts, inferences and unknowns kept apart, risks, the verdict, and the JSON block it asks for. Do not read other models' reports for the project first.
+   - A run already open for the project is resumed (with your saved draft) instead of starting a second one.
+   - If a Claude report was saved in the last 24 hours, nothing starts; ask Eric, and only then call it again with `refresh: true`.
+5. For long research, `save_research_draft` every few sections, so an interruption loses nothing.
+6. `save_report` with the complete report text, not a summary. Confirm `status: saved`, then tell Eric the project, the verdict and grade if any, and the link `https://cryptoresearch.onrender.com/#/project/<project_id>`.
+
+**Interrupted research.** The dashboard shows research with no activity for 30 minutes as interrupted. "Resume the research on X": `start_research` (or `get_research`) returns the open run, its prompt and your draft; continue and `save_report`. "Restart the research on X": `start_research` with `restart: true` (the open run is canceled, its draft kept, a new run starts).
+
+**Transactions.** Only when Eric explicitly asks to record a purchase or sale: `list_accounts` (and `add_account` if he names an account the desk does not have), then `record_transaction` with his words in `owner_request` and a `request_id` that you reuse if you have to repeat the call. Ask only for what is missing: type, date, account, asset and quantity are required; price and fee only if he knows them (a missing price is recorded as unknown cost basis). Researching, adding or watching a project never records a holding.
+
+No CoinGecko call and no paid model API is involved in this route. Missing prices stay marked unavailable.
+
 ## 1. Start of every session: find out what this session can actually do
 
 Where you run decides how you save. Per Anthropic's Cowork help article (checked 2026-10-01): from October 6, 2026, new Cowork tasks on Pro and Max run in Anthropic's cloud; a cloud session reaches a connected local folder only while the Claude desktop app is open on the PC; and scheduled Cowork tasks run in the cloud. **Being able to read and write files in this folder does not prove you can run programs on Eric's PC.**
@@ -229,3 +253,4 @@ Use this when you can write files into the folder but cannot execute commands ag
 - Never put demo or fixture data into this folder, and never record real research in a demo workspace.
 - Never upload this folder anywhere, and never expose the local dashboard to the network to reach it from a phone. Phone access is the separate online desk (README, "The online desk"): it runs the code from GitHub with its own records on a Render disk and never receives this folder. Copying records to it is Eric's decision alone.
 - Never start paid research that Eric did not ask for, and never more than one research run per request without asking.
+- Never call the connector's `record_transaction` (or `tx add`) unless Eric explicitly asked to record that purchase or sale.

@@ -67,7 +67,17 @@ It starts only when all of this is set in the Render dashboard (service **Crypto
 
 ## Use it by voice through Cowork
 
-**One-time setup** in the Claude desktop app, Cowork tab:
+**Main route: Cowork works on the online desk through the CryptoResearch connector.** You give Cowork a project name, link or screenshot; it identifies the project, adds it to the watchlist once, researches it itself with the desk's prompt and grading rules, and saves the full report. The project and report appear on the online desk (your phone) right away. No CoinGecko or paid model API is needed; missing prices stay "unavailable".
+
+One-time connection:
+
+1. In Claude (claude.ai or the desktop app): **Settings > Connectors > Add custom connector**. Name: `CryptoResearch`. URL: `https://cryptoresearch.onrender.com/mcp`. Add.
+2. Click **Connect**. An approval page on your desk opens: enter your desk passphrase and approve. Claude never sees the passphrase; it gets a token you can revoke in the desk's Settings > System & privacy > Connected apps.
+3. In Cowork, make sure the CryptoResearch connector is enabled for the task (the connectors / tools menu in the message box).
+
+Then just ask, for example: "Research this project" with a CoinMarketCap link or a screenshot; "Resume the research on Examplecoin"; "Restart the research on Examplecoin"; "Record that I bought 2,000 HUMA on Coinbase today at 3 cents". Asking twice does not duplicate a project or start a second run; research that stops halfway shows as **Paused** on the project page with the exact words to resume or restart it. Holdings change only when you ask to record a purchase or sale.
+
+**PC folder route** (the dashboard on this PC, without the online desk), one-time setup in the Claude desktop app, Cowork tab:
 
 1. In the left sidebar, open **Projects** and click **+** (or **New project**).
 2. Choose **Use an existing folder** and select `Documents\CryptoResearch`.

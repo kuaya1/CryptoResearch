@@ -17,7 +17,8 @@ export const RESEARCH_STATE = {
   running: { short: 'Running', long: 'Running: not saved yet', tone: 'wait' },
   dispatching: { short: 'Running', long: 'Sending to the provider: not saved yet', tone: 'wait' },
   uncertain: { short: 'Check', long: 'Outcome uncertain: the request may have been sent and billed, and no answer was saved. Reconcile it or retry', tone: 'warn' },
-  cowork: { short: 'Cowork', long: 'Assigned to the Claude Cowork session that asked for it: not saved yet', tone: 'wait' },
+  cowork: { short: 'Cowork', long: 'Claude in Cowork is researching it: not saved yet', tone: 'wait' },
+  interrupted: { short: 'Paused', long: 'Interrupted: Cowork has not saved this report. Ask Cowork to resume it, or restart it', tone: 'warn' },
   manual: { short: 'Manual', long: 'Waiting for you to import this model\'s answer (no API set up)', tone: 'warn' },
   waiting: { short: 'Manual', long: 'Waiting for you to import this model\'s answer', tone: 'warn' },
   failed: { short: 'Failed', long: 'Failed: nothing was saved for this model', tone: 'bad' },
@@ -322,9 +323,23 @@ export function gradeView(g, { compact = false } = {}) {
 // One badge per model. A missing grade is never shown as zero: the badge
 // states why (queued, running, manual, failed, withheld, PDF, none).
 
-function jobKey(job) {
+// Research by Claude in Cowork with no sign of life for this long (no draft,
+// no report) is shown as interrupted; the same limit as the desk's
+// (core/research.js COWORK_IDLE_MINUTES).
+export const COWORK_IDLE_MINUTES = 30;
+
+export function coworkIdleMinutes(job, runCreatedAt = null) {
+  const last = job.progress_at || job.updated_at || runCreatedAt || job.run_created_at;
+  const t = last ? Date.parse(last) : NaN;
+  return Number.isNaN(t) ? null : Math.max(0, Math.round((Date.now() - t) / 60000));
+}
+
+export function jobKey(job, runCreatedAt = null) {
   if (!job) return null;
-  if (job.state === 'running' && job.mode === 'cowork') return 'cowork';
+  if (job.state === 'running' && job.mode === 'cowork') {
+    const idle = coworkIdleMinutes(job, runCreatedAt);
+    return idle !== null && idle >= COWORK_IDLE_MINUTES ? 'interrupted' : 'cowork';
+  }
   if (job.state === 'unconfigured') return 'manual';
   return job.state;
 }

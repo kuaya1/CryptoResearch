@@ -304,10 +304,24 @@ function makeAuth(ws, { password, hosts, failDelayMs = 600 }) {
     return s;
   }
 
+  // One passphrase check for every page that asks for it (sign-in, approving
+  // a Claude connection), with one shared limit on failed attempts.
+  async function verifyPassphrase(req, given) {
+    const addr = clientAddress(req);
+    const n = recentFails(addr);
+    if (n.address >= MAX_FAILS_PER_ADDRESS || n.total >= MAX_FAILS_TOTAL) return { ok: false, locked: true };
+    if (crypto.timingSafeEqual(hash(given || ''), want)) return { ok: true, locked: false };
+    fails.push({ at: Date.now(), addr });
+    await new Promise((r) => setTimeout(r, failDelayMs));
+    return { ok: false, locked: false };
+  }
+
   return {
     authorized(req) {
       return Boolean(sessionOf(req));
     },
+    fromThisSite,
+    verifyPassphrase,
     redirectToLogin(res) {
       send(res, 303, '', { Location: '/login' });
     },
@@ -320,15 +334,12 @@ function makeAuth(ws, { password, hosts, failDelayMs = 600 }) {
       }
       if (url.pathname === '/login' && req.method === 'POST') {
         if (!fromThisSite(req)) { send(res, 403, 'Sign-in is only accepted from this site\'s own sign-in page. Open /login on this site and try again.'); return true; }
-        const addr = clientAddress(req);
-        const n = recentFails(addr);
+        const n = recentFails(clientAddress(req));
         if (n.address >= MAX_FAILS_PER_ADDRESS || n.total >= MAX_FAILS_TOTAL) { send(res, 303, '', { Location: '/login?e=locked' }); return true; }
         const form = await readForm(req);
-        const ok = crypto.timingSafeEqual(hash(form.get('password') || ''), want);
-        if (!ok) {
-          fails.push({ at: Date.now(), addr });
-          await new Promise((r) => setTimeout(r, failDelayMs));
-          send(res, 303, '', { Location: '/login?e=1' });
+        const check = await verifyPassphrase(req, form.get('password') || '');
+        if (!check.ok) {
+          send(res, 303, '', { Location: check.locked ? '/login?e=locked' : '/login?e=1' });
           return true;
         }
         const token = crypto.randomBytes(32).toString('hex');

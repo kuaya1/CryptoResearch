@@ -279,6 +279,10 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   const allowedHosts = hosted ? new Set(hosted.hosts.flatMap((h) => [h, `${h}:443`])) : new Set([`127.0.0.1:${boundPort}`, `localhost:${boundPort}`]);
   const allowedOrigins = hosted ? new Set(hosted.hosts.map((h) => `https://${h}`)) : new Set([`http://127.0.0.1:${boundPort}`, `http://localhost:${boundPort}`]);
   const auth = hosted ? require('./hosted').makeAuth(ws, hosted) : null;
+  // The connector for Claude (Cowork, claude.ai, Desktop): OAuth sign-in that
+  // Eric approves with his passphrase, then the MCP endpoint at /mcp.
+  const oauth = hosted ? require('./oauth').makeOAuth(ws, { origin, auth }) : null;
+  const mcp = hosted ? require('./mcp').makeMcp(ws, { rebuild: (areas) => rebuild(areas), log: (...a) => { if (!quiet) console.log(...a); } }) : null;
   const clients = new Set();
   const sockets = new Set();
   const state = {
@@ -558,7 +562,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   const intakeTimer = setInterval(() => sweepIntake(), 60000);
   const dailyTimer = setInterval(() => jobs.runJobs(ws, ['snapshot', 'reviews', 'backup'], { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 30 * 60000);
 
-  const api = makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIdentify, clients, sockets });
+  const api = makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIdentify, clients, sockets, oauth });
 
   server.on('request', async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -582,6 +586,18 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
       const url = new URL(req.url, origin);
       const bucket = url.pathname.startsWith('/api/') ? (['/api/version', '/api/index', '/api/events', '/api/session', '/api/health'].includes(url.pathname) ? url.pathname : '/api/(other)') : '(static)';
       state.stats.requests[bucket] = (state.stats.requests[bucket] || 0) + 1;
+      if (oauth) {
+        // The connector has its own sign-in (OAuth) and never uses the
+        // dashboard's session cookie.
+        if (await oauth.handle(req, res, url)) return;
+        if (url.pathname === '/mcp') {
+          const o = req.headers.origin;
+          if (o && !allowedOrigins.has(o)) throw new HttpError(403, 'Origin not allowed');
+          const who = oauth.authenticate(req);
+          if (!who) return oauth.challenge(res, { invalid: Boolean(req.headers.authorization) });
+          return await mcp(req, res, who);
+        }
+      }
       if (auth) {
         // Sign-in comes before everything else in hosted mode.
         if (await auth.handle(req, res, url)) return;
@@ -705,7 +721,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   return { url: `${origin}/`, port: boundPort, token, server, shutdown, state, queueIdentify, researchTick };
 }
 
-function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIdentify, clients, sockets }) {
+function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIdentify, clients, sockets, oauth = null }) {
   const send = (res, status, body, type = 'application/json; charset=utf-8', extra = {}) => {
     res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', ...extra });
     res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
@@ -900,6 +916,13 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIde
     return after({ status: out.status, message: out.message, intake: intake.progressOf(ws, out.intake) });
   });
   route('POST', '/api/intake/(in_[^/]+)/dismiss', (m) => ({ status: 'saved', intake: intake.progressOf(ws, intake.dismissIntake(ws, inId(m[1]))) }));
+
+  // Settings > Connected apps: the Claude connections Eric approved.
+  route('GET', '/api/connections', () => ({ available: Boolean(oauth), mcp_url: oauth ? oauth.resource : null, connections: oauth ? oauth.connections() : [] }));
+  route('POST', '/api/connections/(grant_[A-Za-z0-9_-]{4,40})/revoke', (m) => {
+    if (!oauth || !oauth.revoke(m[1])) throw new HttpError(404, 'No such connection');
+    return { status: 'saved', message: 'Disconnected. Claude can no longer use the desk through that connection.' };
+  });
 
   route('POST', '/api/projects', (m, req, res, body) => once(body, () => {
     const r = projects.addProject(ws, { ...body, utterance: body.utterance || null });

@@ -47,6 +47,7 @@ CryptoResearch/
 │       │   │                           prompt hash, market snapshot ID, job states and attempts
 │       │   ├── prompt.md               The canonical prompt, identical for every model
 │       │   ├── evidence-packet.json    Dated public context incl. the market snapshot (no holdings, notes or other models' conclusions)
+│       │   ├── cowork-draft.md         Claude-in-Cowork's working draft while it researches (connector), kept if interrupted
 │       │   └── responses/<provider>-attempt<N>.json   Raw API response, saved before normalization
 │       └── reports/<YYYY-MM-DD>_<provider>_<hash>/
 │           ├── original.md|txt|json|pdf   The report exactly as received (never changed)
@@ -88,13 +89,14 @@ CryptoResearch/
 │   └── exports/                    Exports written by `node dashboard/cli.js export`
 ├── server.js                   Render's start command for the online desk (runs dashboard/hosted.js)
 ├── dashboard/                  App code (Node 24 LTS pinned; Node 20+ works; no dependencies, no build step)
-│   ├── cli.js  server.js  hosted.js  core/  public/  scripts/  tests/  fixtures/
+│   ├── cli.js  server.js  hosted.js  oauth.js  mcp.js  core/  public/  scripts/  tests/  fixtures/
 │   ├── index/index.json        DERIVED cache of the dashboard view
 │   └── demo-workspace/         DERIVED fictional demo (rebuild: node dashboard/cli.js demo build)
 └── .cr/                        Internals: write lock, leases/, staging, generation.json, blocked.json,
                                 quarantine/ for unverifiable writes, captures/ for paid answers waiting
                                 to be saved (removed once saved; not in backups), server.json;
-                                on the online desk only, sessions.json (hashes of signed-in sessions)
+                                on the online desk only, sessions.json (hashes of signed-in sessions) and
+                                oauth.json (the Claude connector: registered clients and hashes of its tokens)
 ```
 
 The online desk on Render uses the same layout in its own data folder (`CR_DATA_DIR`, on a Render disk). Its `templates/` are copied from the deployed code on every start; everything else there is its own record.

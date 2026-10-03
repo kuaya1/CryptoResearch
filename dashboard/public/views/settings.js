@@ -282,23 +282,60 @@ async function systemTab(ctx) {
       ], d.checks || []));
   }).catch((err) => doc.replaceChildren(callout(err.message, 'bad')));
   const jobs = idx.settings.jobs || {};
+  const hostedDesk = Boolean(ctx.state.session && ctx.state.session.hosted);
+  // Connected apps: Claude connections Eric approved for the online desk.
+  const conn = h('div', null, h('p', { class: 'small muted' }, 'Loading…'));
+  const drawConnections = () => ctx.api.get('/api/connections').then((c) => {
+    if (!c.available) {
+      conn.replaceChildren(callout('Claude (Cowork, claude.ai) connects to the online desk, not to this PC\'s dashboard. On the online desk this section shows the connector address and what is connected.', 'info'));
+      return;
+    }
+    const rows = c.connections.map((x) => {
+      const b = button('Disconnect', null, { kind: 'small quiet' });
+      b.setAttribute('aria-label', `Disconnect ${x.client_name}`);
+      b.onclick = action(b, async () => {
+        if (!window.confirm(`Disconnect ${x.client_name}? It loses access to the desk at once; reconnecting needs your passphrase again.`)) return undefined;
+        const r = await ctx.api.post(`/api/connections/${encodeURIComponent(x.grant_id)}/revoke`, {});
+        drawConnections();
+        return r;
+      }, (r) => r.message);
+      return { ...x, action: b };
+    });
+    conn.replaceChildren(
+      kv([['Connector address', h('code', { class: 'wrap-anywhere' }, c.mcp_url)]]),
+      h('p', { class: 'small muted' }, 'To connect Claude (and so Cowork): claude.ai > Settings > Connectors > Add custom connector, name it CryptoResearch and paste this address. Claude then opens an approval page here; approve it with your desk passphrase.'),
+      rows.length
+        ? table([
+          { label: 'App', key: 'client_name' },
+          { label: 'Connected', render: (x) => fmtDateTime(x.created_at) },
+          { label: 'Last used', render: (x) => (x.last_used_at ? fmtAgo(x.last_used_at) : 'not yet') },
+          { label: '', render: (x) => x.action },
+        ], rows)
+        : h('p', { class: 'small' }, 'Nothing is connected yet.'));
+  }).catch((err) => conn.replaceChildren(callout(err.message, 'bad')));
+  drawConnections();
   return h('div', null,
+    card('Connected apps', conn, { note: 'Apps you approved to use this desk. They act through the same validated records as this page; none of them can trade or move money.' }),
     card('Where things run', h('ul', { class: 'list' },
-      h('li', null, h('strong', null, 'This dashboard: '), 'runs on this PC at 127.0.0.1 only. It is not reachable from your phone or the internet, and it should not be exposed to reach it from elsewhere.'),
+      hostedDesk
+        ? h('li', null, h('strong', null, 'This desk: '), 'runs online (Render) with its own records on a persistent disk. Every page and API call needs your sign-in; Claude\'s connector needs a connection you approved. Your PC\'s dashboard and its records are separate.')
+        : h('li', null, h('strong', null, 'This dashboard: '), 'runs on this PC at 127.0.0.1 only. It is not reachable from your phone or the internet, and it should not be exposed to reach it from elsewhere. Phone access is the separate online desk.'),
       h('li', null, h('strong', null, 'Prices: '), `every ${idx.settings.market_data.foreground_interval_minutes} minutes while the dashboard is open, and hourly through the Windows scheduled task while the PC is on and you are logged in.`),
       h('li', null, h('strong', null, 'Research: '), 'only when you ask (dashboard, CLI or Cowork) or on a schedule you configure with a budget. A price refresh never starts research.'),
-      h('li', null, h('strong', null, 'Cowork: '), 'a Cowork task may run in Anthropic\'s cloud. It can reach this folder only while the Claude desktop app is open and the folder is connected. Being able to write files there does not mean it can run programs on this PC: when it cannot, it drops a request in inbox/requests/ and this PC applies it. Scheduled Cowork tasks also run in the cloud.'),
+      hostedDesk
+        ? h('li', null, h('strong', null, 'Cowork: '), 'Claude in Cowork works on this desk through the CryptoResearch connector (Connected apps, above): it finds and adds projects, does the research itself and saves the full report here. No CoinGecko or paid model API is needed for that.')
+        : h('li', null, h('strong', null, 'Cowork: '), 'a Cowork task may run in Anthropic\'s cloud. It can reach this folder only while the Claude desktop app is open and the folder is connected. Being able to write files there does not mean it can run programs on this PC: when it cannot, it drops a request in inbox/requests/ and this PC applies it. Scheduled Cowork tasks also run in the cloud. Through the connector, Cowork works on the online desk instead.'),
       h('li', null, h('strong', null, 'Holdings: '), 'change only when you record transactions.'),
       jobs.evidence_watch ? h('li', null, h('strong', null, 'Evidence watch: '), jobs.evidence_watch.note || 'optional; produces a dated digest and never overwrites grades.') : null)),
     card('Scheduled task (Windows)', sched),
     card('Health checks', doc, { note: 'Same as: node dashboard/cli.js doctor' }),
     card('Privacy', h('ul', { class: 'list' },
-      h('li', null, 'Listens on 127.0.0.1 only, accepts only expected Host headers, and writes need a per-launch token from this page.'),
+      h('li', null, hostedDesk ? 'Answers only its own address over HTTPS. Pages and the API need your sign-in, writes also need this page\'s token, and the connector needs a token from a connection you approved with your passphrase (stored only as hashes).' : 'Listens on 127.0.0.1 only, accepts only expected Host headers, and writes need a per-launch token from this page.'),
       h('li', null, 'Market data requests send only the tracked coin IDs to CoinGecko. No holdings, quantities, accounts or notes leave the PC.'),
       h('li', null, 'Research prompts contain only the project context needed: name, links, identity, sector and a dated public market packet. Holdings and private notes are never model inputs by default.'),
       h('li', null, 'No wallet connection, exchange keys, seed phrases or trading access are ever requested or stored.'),
       h('li', null, 'API keys stay in environment variables or ~/.cryptoresearch/secrets.json, outside the workspace, so they are never in browser code, prompts, exports or logs.'),
-      h('li', null, `Your records live in ${idx.workspace.root}. Nothing is uploaded or synced by this app.`))));
+      h('li', null, hostedDesk ? 'The records of this desk live on its own disk. Nothing from your PC is uploaded or synced.' : `Your records live in ${idx.workspace.root}. Nothing is uploaded or synced by this app.`))));
 }
 
 // Activity: freshness, jobs and the write log (moved here from Updates).

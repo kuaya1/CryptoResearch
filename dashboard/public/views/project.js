@@ -5,6 +5,7 @@ import {
   h, card, table, chip, gradeView, verdictChip, scoreView, tagChip, providerChip, gradeBadge, badgeInfo, logo, sparkline, changeCell,
   fmtPrice, fmtCompactUsd, fmtNum, fmtDate, fmtDateTime, fmtAgo, fmtAge, fmtSignedPct, freshnessText, kv, details, field, input, select, button,
   action, callout, empty, toast, copyText, tabStrip, safeSection, submissionId, stateText, fieldError, PROVIDERS, PROVIDER_LABELS, RESEARCH_STATE, link,
+  jobKey, coworkIdleMinutes,
 } from '../ui.js';
 import { renderMarkdown } from '../md.js';
 import { openResearchDialog, openSectorDialog } from './dialogs.js';
@@ -773,11 +774,37 @@ function reconcileForm(ctx, pid, run, prov, a) {
     form), { id: key });
 }
 
-function jobRow(ctx, pid, run, prov) {
+function jobRow(ctx, pid, run, prov, projectName = pid) {
   const j = run.jobs[prov];
-  const key = j.state === 'unconfigured' ? 'manual' : j.state === 'running' && j.mode === 'cowork' ? 'cowork' : j.state;
+  const key = jobKey(j, run.created_at);
   const st = RESEARCH_STATE[key] || { long: j.state, tone: '' };
   const actions = [];
+  if (j.mode === 'cowork' && j.state === 'running') {
+    // Claude in Cowork does this research; the desk cannot reach Cowork, so
+    // resuming or restarting is something to tell Cowork, in these words.
+    const idle = coworkIdleMinutes(j, run.created_at);
+    const say = (text) => {
+      const b = button(`Copy: “${text}”`, null, { kind: 'small' });
+      b.onclick = action(b, async () => { await copyText(text); return undefined; });
+      return b;
+    };
+    actions.push(h('div', { class: 'small', style: { flexBasis: '100%' } },
+      key === 'interrupted'
+        ? `No activity from Cowork for ${idle >= 120 ? `${Math.round(idle / 60)} hours` : `${idle} minutes`}${j.draft_saved_at ? `; its draft from ${fmtDateTime(j.draft_saved_at)} is kept` : ''}. Tell Cowork to resume it (it continues this run and its draft) or to restart it (this run is canceled and a new one starts).`
+        : `Cowork is working on it${idle !== null ? ` (last activity ${idle < 1 ? 'just now' : `${idle} min ago`})` : ''}${j.progress_note ? `: ${j.progress_note}` : ''}.`));
+    actions.push(say(`Resume the research on ${projectName}`), say(`Restart the research on ${projectName}`));
+    if (key === 'interrupted') {
+      const b = button('Cancel this run', null, { kind: 'small quiet' });
+      b.setAttribute('aria-label', `Cancel the interrupted Cowork research run for ${projectName}`);
+      b.onclick = action(b, async () => {
+        if (!window.confirm('Cancel this research run? Its draft is kept; nothing is deleted.')) return undefined;
+        const r = await ctx.api.post(`/api/projects/${pid}/research/${run.run_id}/jobs/${prov}/cancel`, {});
+        await ctx.refresh();
+        return r;
+      }, (r) => r.message || 'Canceled');
+      actions.push(b);
+    }
+  }
   if (j.state === 'failed' || j.state === 'canceled') {
     const b = button('Retry', null, { kind: 'small' });
     b.onclick = action(b, async () => { const r = await ctx.api.post(`/api/projects/${pid}/research/${run.run_id}/jobs/${prov}/retry`, {}); await ctx.refresh(); return r; }, (r) => r.message || 'Retry queued');
@@ -841,7 +868,7 @@ function researchTab(ctx, d, row) {
         { label: 'Attempts', render: (x) => x.attempts },
         { label: 'Note', wrap: true, render: (x) => x.error },
         { label: '', render: (x) => x.actions },
-      ], run.providers.filter((p) => run.jobs[p]).map((p) => jobRow(ctx, pid, run, p)))),
+      ], run.providers.filter((p) => run.jobs[p]).map((p) => jobRow(ctx, pid, run, p, d.project.name)))),
       details('Run details', kv([
         ['Run ID', h('code', null, run.run_id)],
         ['Started by', `${run.created_by || '?'} via ${run.channel || '?'}`],

@@ -490,7 +490,7 @@ function createRun(ws, args = {}) {
     const st = status[p];
     const base = { provider: p, attempts: [], max_attempts: ws.settings.research.max_attempts || 2, report_id: null, error: null, updated_at: new Date().toISOString(), cancel_requested: false };
     if (p === 'claude' && fromCowork) {
-      jobs[p] = { ...base, state: 'running', mode: 'cowork', note: 'Assigned to the Claude Cowork session that created this run. It completes when that session imports its report with --run.' };
+      jobs[p] = { ...base, state: 'running', mode: 'cowork', note: 'Assigned to Claude in Cowork, which researches it with this run\'s prompt. It completes when Cowork saves its report (the desk connector\'s save_report, or import with --run).' };
     } else if (st.mode === 'api' || st.mode === 'mock') {
       jobs[p] = { ...base, state: 'queued', mode: st.mode, model: st.model };
     } else {
@@ -1333,7 +1333,7 @@ function researchStateFor(ws, projectId) {
   const byProvider = {};
   for (const p of PROVIDERS) {
     const run = runs.find((r) => r.jobs[p]);
-    byProvider[p] = run ? { run_id: run.run_id, state: run.jobs[p].state, mode: run.jobs[p].mode, error: run.jobs[p].error || null, report_id: run.jobs[p].report_id || null, updated_at: run.jobs[p].updated_at, run_created_at: run.created_at } : null;
+    byProvider[p] = run ? { run_id: run.run_id, state: run.jobs[p].state, mode: run.jobs[p].mode, error: run.jobs[p].error || null, report_id: run.jobs[p].report_id || null, updated_at: run.jobs[p].updated_at, progress_at: run.jobs[p].progress_at || null, run_created_at: run.created_at } : null;
   }
   return { latest_run: latest ? { run_id: latest.run_id, status: latest.status, created_at: latest.created_at, providers: latest.providers, horizon: latest.horizon } : null, providers: byProvider, runs: runs.length };
 }
@@ -1344,10 +1344,76 @@ function spendLine(ws, entry) {
   appendLine(ws.abs(SPEND_REL), { at: new Date().toISOString(), project_id: null, ...entry });
 }
 
+// ---------------------------------------------------------------------------
+// Research done by Claude in Cowork (through the desk's connector)
+//
+// A Cowork job is open from start_research until Cowork saves the report.
+// Cowork can save a draft as it goes, which also says it is still working.
+// A job with no sign of life for COWORK_IDLE_MINUTES is shown as interrupted:
+// Eric can ask Cowork to resume it (the prompt and the draft are kept) or
+// restart it (this run is canceled and a new one starts).
+
+const COWORK_IDLE_MINUTES = 30;
+const DRAFT_NAME = 'cowork-draft.md';
+const MAX_DRAFT_BYTES = 400 * 1024;
+
+function coworkActivity(job, run, now = Date.now()) {
+  if (!job || job.mode !== 'cowork') return null;
+  const open = job.state === 'running';
+  const last = job.progress_at || job.updated_at || (run && run.created_at) || null;
+  const idle = last ? Math.max(0, Math.round((now - Date.parse(last)) / 60000)) : null;
+  return { open, last_activity_at: last, idle_minutes: idle, interrupted: open && idle !== null && idle >= COWORK_IDLE_MINUTES, progress_note: job.progress_note || null, draft_saved_at: job.draft_saved_at || null, draft_chars: job.draft_chars || null };
+}
+
+// Open Claude jobs assigned to Cowork for a project, newest run first.
+function openCoworkJobs(ws, projectId) {
+  return listRuns(ws, projectId)
+    .filter((r) => !r.broken && r.jobs && r.jobs.claude && r.jobs.claude.mode === 'cowork' && r.jobs.claude.state === 'running')
+    .map((r) => ({ run: r, job: r.jobs.claude }));
+}
+
+function draftRel(projectId, runId) {
+  return `${runDir(projectId, runId)}/${DRAFT_NAME}`;
+}
+
+function readCoworkDraft(ws, projectId, runId) {
+  try {
+    return fs.readFileSync(ws.abs(draftRel(projectId, runId)), 'utf8');
+  } catch (_) {
+    return null;
+  }
+}
+
+// Saves (replaces) Cowork's working draft for an open run, in the same
+// verified save as the job's "still working" marker.
+function saveCoworkDraft(ws, projectId, runId, { text, note = null }) {
+  const body = typeof text === 'string' ? text : '';
+  if (!body.trim()) throw new OpError('INVALID', 'The draft is empty.');
+  if (Buffer.byteLength(body) > MAX_DRAFT_BYTES) throw new OpError('INVALID', `The draft is larger than ${MAX_DRAFT_BYTES / 1024} KB.`);
+  const rel = `${runDir(projectId, runId)}/run.json`;
+  const out = runOp(ws, { type: 'research_cowork_draft', summary: `Cowork draft for ${runId}` }, (op) => {
+    const run = op.readJson(rel, null);
+    const job = run && run.jobs ? run.jobs.claude : null;
+    if (!job || job.mode !== 'cowork') throw new OpError('NOT_FOUND', `${runId} has no Claude job assigned to Cowork.`);
+    if (job.state !== 'running') throw new OpError('CONFLICT', `This run's Claude job is ${job.state}; start or resume research to get an open run.`);
+    const at = new Date().toISOString();
+    op.write(draftRel(projectId, runId), body);
+    Object.assign(job, { progress_at: at, progress_note: note ? String(note).slice(0, 300) : job.progress_note || null, draft_saved_at: at, draft_chars: body.length, updated_at: at });
+    op.writeJson(rel, run);
+    return { at, chars: body.length };
+  });
+  return { status: 'saved', ...out.result, files: out.files, verified: out.verified };
+}
+
 module.exports = {
   RUN_ID_RE,
   createRun,
   spendLine,
+  COWORK_IDLE_MINUTES,
+  coworkActivity,
+  openCoworkJobs,
+  readCoworkDraft,
+  saveCoworkDraft,
   listRuns,
   loadRun,
   runStatus,
