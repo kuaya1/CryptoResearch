@@ -66,7 +66,7 @@ export function researchReceipt(ctx, projectId, out) {
     h('h3', null, out.status === 'created' ? 'Research requested' : out.status === 'exists' ? 'Already requested' : 'Research'),
     h('p', { class: 'small muted', style: { margin: '0 0 8px' } }, out.status === 'exists' ? out.message : 'Each model works independently. Pending means not saved yet; a report appears when it is saved.'),
     jobs.length ? h('ul', { class: 'rows' }, jobs.map((j) => {
-      const key = j.state === 'unconfigured' ? 'manual' : j.state === 'running' && j.mode === 'cowork' ? 'cowork' : j.state;
+      const key = j.state === 'unconfigured' ? 'manual' : j.state === 'running' && (j.mode === 'cowork' || j.mode === 'connector') ? j.mode : j.state;
       const st = RESEARCH_STATE[key] || { long: j.state, tone: '' };
       return h('li', null, h('span', { class: 'k' }, PROVIDER_LABELS[j.provider]),
         h('span', null, stateText(j.mode === 'mock' && key === 'queued' ? 'Queued: fictional demo answer' : st.long, st.tone)));

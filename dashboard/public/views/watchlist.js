@@ -623,7 +623,7 @@ function providerSection(ctx, p, prov) {
   }
   const route = rep
     ? `${rep.model_version || 'Model not stated'} · ${rep.provenance && rep.provenance.attested ? 'attested by the API' : 'imported, self-reported'}`
-    : job ? (job.mode === 'manual' ? 'Manual: paste the prompt into this model, then import' : job.mode === 'cowork' ? 'Claude Cowork session' : job.mode === 'mock' ? 'Fictional demo adapter' : 'API') : 'Not requested';
+    : job ? (job.mode === 'manual' ? 'Waiting: its assistant through the desk connection, or paste the prompt and import' : job.mode === 'cowork' ? 'Claude Cowork session' : job.mode === 'connector' ? `${PROVIDER_LABELS[prov]} through its desk connection` : job.mode === 'mock' ? 'Fictional demo adapter' : 'API') : 'Not requested';
   return h('div', { class: 'provider', id: `panel-prov-${prov}`, tabindex: '-1', 'aria-label': `${PROVIDER_LABELS[prov]} scorecard` },
     h('div', { class: 'provider-top' }, h('span', { class: 'name' }, PROVIDER_LABELS[prov]), h('span', { class: 'route' }, route)),
     gradeLine,

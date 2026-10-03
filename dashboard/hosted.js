@@ -32,11 +32,24 @@ const MAX_FAILS_PER_ADDRESS = 8;
 const MAX_FAILS_TOTAL = 100;
 
 // Proposed starting limits and model settings for the hosted desk, written once
-// on first boot; Eric changes them in Settings afterwards. Prices are Anthropic's
-// list prices for claude-opus-5-5 (Claude API documentation, October 2026):
-// $4 / $20 per million input / output tokens, $5 per million 5-minute cache
-// writes, $0.20 per million cache reads, and $10 per 1,000 web searches.
-const HOSTED_DEFAULTS_VERSION = 2;
+// on first boot; Eric changes them in Settings afterwards. A model's paid API
+// is used only once its key is in Render's environment (entered by Eric);
+// without one its jobs wait for its assistant or a pasted answer. List prices
+// as published in October 2026:
+//   claude-opus-5-5 (Claude API documentation): $4 / $20 per million input /
+//     output tokens, $5 per million 5-minute cache writes, $0.20 per million
+//     cache reads, $10 per 1,000 web searches.
+//   gpt-6.1-sol (OpenAI API pricing): $2 / $10 per million input / output
+//     tokens; web search $10 per 1,000 calls, plus the search content it reads
+//     billed as input tokens. max_tool_calls caps the calls.
+//   gemini-2.5-pro (Gemini API pricing, prompts up to 200k tokens): $1.25 / $10
+//     per million input / output tokens; Google Search grounding is billed per
+//     grounded prompt ($35 per 1,000 after the free daily allowance), so one
+//     fee per request bounds it. Gemini 3 models bill every search query, with
+//     no request parameter that caps them, so they are not proposed here.
+const HOSTED_DEFAULTS_VERSION = 3;
+const CHATGPT_DEFAULTS = { model: 'gpt-6.1-sol', input_usd_per_mtok: 2, output_usd_per_mtok: 10, search_usd_per_call: 0.01, max_searches: 10, search_result_tokens_estimate: 8000 };
+const GEMINI_DEFAULTS = { model: 'gemini-2.5-pro', input_usd_per_mtok: 1.25, output_usd_per_mtok: 10, search_usd_per_call: 0.035, search_billing: 'per_request', max_searches: 1 };
 const HOSTED_DEFAULTS = {
   market_data: { enabled: true },
   research: {
@@ -47,16 +60,21 @@ const HOSTED_DEFAULTS = {
     max_continuations: 2,
     effort: 'high',
     timeout_seconds: 1500,
+    // ChatGPT and Gemini in the background run side by side.
+    max_concurrent: 2,
     providers: {
       claude: { model: 'claude-opus-5-5', input_usd_per_mtok: 4, output_usd_per_mtok: 20, cache_write_usd_per_mtok: 5, cache_read_usd_per_mtok: 0.2, search_usd_per_call: 0.01, max_searches: 8 },
+      chatgpt: CHATGPT_DEFAULTS,
+      gemini: GEMINI_DEFAULTS,
     },
-    // One attempt reserves about $3.80 at these bounds (most of it the output
-    // ceiling); a typical run costs far less, and its recorded cost replaces
-    // the reservation.
+    // A Claude API attempt reserves about $3.80 at these bounds (most of it
+    // the output ceiling), a ChatGPT one about $0.80 and a Gemini one about
+    // $0.55; a typical run costs far less, and its recorded cost replaces the
+    // reservation.
     budget: { per_run_usd: 5, daily_usd: 10, monthly_usd: 40 },
   },
 };
-const DEFAULTS_NOTE = 'Proposed limits for the online desk: claude-opus-5-5 with web search, up to 48,000 output tokens per request, $5 per run, $10 per day, $40 per month. Change them in Settings > Research models & budget.';
+const DEFAULTS_NOTE = 'Proposed limits for the online desk: claude-opus-5-5, gpt-6.1-sol and gemini-2.5-pro with web search, used only for a model whose API key is set; up to 48,000 output tokens per request, $5 per run, $10 per day, $40 per month. Change them in Settings > Research models & budget.';
 
 // Defaults that an earlier version wrote are moved to the current ones on
 // start, but only where the value is still exactly what that version wrote:
@@ -70,6 +88,12 @@ const DEFAULT_UPGRADES = {
     ['research.budget.per_run_usd', 4, 5],
     ['research.budget.daily_usd', 8, 10],
     ['research.budget.monthly_usd', 30, 40],
+  ],
+  // v3 (2026-10-03): proposed ChatGPT and Gemini API settings, inert until a key is set.
+  3: [
+    ['research.providers.chatgpt', undefined, CHATGPT_DEFAULTS],
+    ['research.providers.gemini', undefined, GEMINI_DEFAULTS],
+    ['research.max_concurrent', undefined, 2],
   ],
 };
 
@@ -214,7 +238,10 @@ function prepareWorkspace(cfg) {
     mkdirp(path.dirname(settingsFile));
     atomicWrite(settingsFile, jsonText(doc));
   }
-  return openWorkspace({ root: cfg.dataDir, actor: 'hosted' });
+  const ws = openWorkspace({ root: cfg.dataDir, actor: 'hosted' });
+  // The online desk: the models' own assistants can connect to it (mcp.js).
+  ws.hosted = true;
+  return ws;
 }
 
 // ---------------------------------------------------------------------------
@@ -434,17 +461,25 @@ function recordsSummary(ws) {
 }
 
 // One line for the start log: the bounds research would be sent with, and
-// whether a Claude key is present (never the key itself).
+// whether each model's key is present (never a key itself).
 function researchSummary(ws) {
   const research = require('./core/research');
   const providers = require('./core/providers');
+  const { PROVIDER_LABELS } = require('./core/workspace');
   const b = research.callBounds(ws, 'claude');
   const r = ws.settings.research;
   const budget = r.budget || {};
-  const st = research.providerStatus(ws).claude;
-  const upg = readJson(path.join(ws.root, 'config', 'settings.json'), {}).hosted_defaults_upgrades || [];
-  const last = upg[upg.length - 1];
-  return `Research: ${(r.providers.claude || {}).model || 'no model'}; ${b.max_output_tokens} output tokens per request, up to ${b.requests_max} requests, ${b.search.limit} searches per request, ${r.timeout_seconds || 600} s per call; limits $${budget.per_run_usd} per run, $${budget.daily_usd} per day, $${budget.monthly_usd} per month; Claude key ${providers.keyStatus('claude').present ? 'present' : 'missing'}; route ${st.mode}${st.mode === 'api' ? '' : ` (${st.reason})`}.${last ? ` Defaults v${last.version} applied ${last.at}: ${last.changed.length ? last.changed.map((c) => `${c.setting} ${c.from === null ? 'unset' : c.from} -> ${c.to}`).join(', ') : 'nothing to change'}.` : ''}`;
+  const status = research.providerStatus(ws);
+  const st = status.claude;
+  const doc = readJson(path.join(ws.root, 'config', 'settings.json'), {});
+  const upg = doc.hosted_defaults_upgrades || [];
+  // Every upgrade applied on the latest boot.
+  const at = upg.length ? upg[upg.length - 1].at : null;
+  const latest = upg.filter((u) => u.at === at);
+  const last = latest.length ? { version: latest.map((u) => u.version).join(', v'), at, changed: latest.flatMap((u) => u.changed) } : null;
+  const show = (v) => (v && typeof v === 'object' ? v.model || 'set' : v);
+  const others = ['chatgpt', 'gemini'].map((p) => `${PROVIDER_LABELS[p]} ${(r.providers[p] || {}).model || 'no model'} (key ${providers.keyStatus(p).present ? 'present' : 'missing'}; route ${status[p].mode})`).join(', ');
+  return `Research: ${(r.providers.claude || {}).model || 'no model'}; ${b.max_output_tokens} output tokens per request, up to ${b.requests_max} requests, ${b.search.limit} searches per request, ${r.timeout_seconds || 600} s per call; limits $${budget.per_run_usd} per run, $${budget.daily_usd} per day, $${budget.monthly_usd} per month; Claude key ${providers.keyStatus('claude').present ? 'present' : 'missing'}; route ${st.mode}${st.mode === 'api' ? '' : ` (${st.reason})`}; ${others}; ${r.max_concurrent || 1} at a time.${last ? ` Defaults v${last.version} applied ${last.at}: ${last.changed.length ? last.changed.map((c) => `${c.setting} ${c.from === null ? 'unset' : show(c.from)} -> ${show(c.to)}`).join(', ') : 'nothing to change'}.` : ''}`;
 }
 
 module.exports = { hostedConfig, prepareWorkspace, syncTemplates, makeAuth, main, HOSTED_DEFAULTS, loginPage, setupPage, containingMount, persistentDiskProblem, researchSummary, recordsSummary };

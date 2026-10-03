@@ -5,7 +5,7 @@ import {
   h, card, table, chip, gradeView, verdictChip, scoreView, tagChip, providerChip, gradeBadge, badgeInfo, logo, sparkline, changeCell,
   fmtPrice, fmtCompactUsd, fmtNum, fmtDate, fmtDateTime, fmtAgo, fmtAge, fmtSignedPct, freshnessText, kv, details, field, input, select, button,
   action, callout, empty, toast, copyText, tabStrip, safeSection, submissionId, stateText, fieldError, PROVIDERS, PROVIDER_LABELS, RESEARCH_STATE, link,
-  jobKey, coworkIdleMinutes,
+  jobKey, coworkIdleMinutes, isAssistantJob,
 } from '../ui.js';
 import { renderMarkdown } from '../md.js';
 import { openResearchDialog, openSectorDialog } from './dialogs.js';
@@ -779,23 +779,25 @@ function jobRow(ctx, pid, run, prov, projectName = pid) {
   const key = jobKey(j, run.created_at);
   const st = RESEARCH_STATE[key] || { long: j.state, tone: '' };
   const actions = [];
-  if (j.mode === 'cowork' && j.state === 'running') {
-    // Claude in Cowork does this research; the desk cannot reach Cowork, so
-    // resuming or restarting is something to tell Cowork, in these words.
+  const say = (text) => {
+    const b = button(`Copy: “${text}”`, null, { kind: 'small' });
+    b.onclick = action(b, async () => { await copyText(text); return undefined; });
+    return b;
+  };
+  if (isAssistantJob(j) && j.state === 'running') {
+    // The model's own assistant (Claude in Cowork, ChatGPT, Gemini) does this
+    // research; the desk cannot reach it, so resuming or restarting is
+    // something to tell that assistant, in these words.
+    const who = j.mode === 'cowork' ? 'Cowork' : PROVIDER_LABELS[prov];
     const idle = coworkIdleMinutes(j, run.created_at);
-    const say = (text) => {
-      const b = button(`Copy: “${text}”`, null, { kind: 'small' });
-      b.onclick = action(b, async () => { await copyText(text); return undefined; });
-      return b;
-    };
     actions.push(h('div', { class: 'small', style: { flexBasis: '100%' } },
       key === 'interrupted'
-        ? `No activity from Cowork for ${idle >= 120 ? `${Math.round(idle / 60)} hours` : `${idle} minutes`}${j.draft_saved_at ? `; its draft from ${fmtDateTime(j.draft_saved_at)} is kept` : ''}. Tell Cowork to resume it (it continues this run and its draft) or to restart it (this run is canceled and a new one starts).`
-        : `Cowork is working on it${idle !== null ? ` (last activity ${idle < 1 ? 'just now' : `${idle} min ago`})` : ''}${j.progress_note ? `: ${j.progress_note}` : ''}.`));
+        ? `No activity from ${who} for ${idle >= 120 ? `${Math.round(idle / 60)} hours` : `${idle} minutes`}${j.draft_saved_at ? `; its draft from ${fmtDateTime(j.draft_saved_at)} is kept` : ''}. Tell ${who} to resume it (it continues this run and its draft) or to restart it (this run is canceled and a new one starts).`
+        : `${who} is working on it${idle !== null ? ` (last activity ${idle < 1 ? 'just now' : `${idle} min ago`})` : ''}${j.progress_note ? `: ${j.progress_note}` : ''}.`));
     actions.push(say(`Resume the research on ${projectName}`), say(`Restart the research on ${projectName}`));
     if (key === 'interrupted') {
       const b = button('Cancel this run', null, { kind: 'small quiet' });
-      b.setAttribute('aria-label', `Cancel the interrupted Cowork research run for ${projectName}`);
+      b.setAttribute('aria-label', `Cancel the interrupted ${who} research for ${projectName}`);
       b.onclick = action(b, async () => {
         if (!window.confirm('Cancel this research run? Its draft is kept; nothing is deleted.')) return undefined;
         const r = await ctx.api.post(`/api/projects/${pid}/research/${run.run_id}/jobs/${prov}/cancel`, {});
@@ -821,7 +823,7 @@ function jobRow(ctx, pid, run, prov, projectName = pid) {
     }, (r) => r.message || 'Retry queued');
     actions.push(b);
   }
-  if (['queued', 'running', 'dispatching', 'uncertain', 'unconfigured'].includes(j.state) && j.mode !== 'cowork') {
+  if (['queued', 'running', 'dispatching', 'uncertain', 'unconfigured'].includes(j.state) && !isAssistantJob(j)) {
     const b = button('Cancel', null, { kind: 'small quiet', title: 'Stops this job and its retries. A request already sent may still be billed.' });
     b.setAttribute('aria-label', `Cancel the ${PROVIDER_LABELS[prov]} job`);
     b.onclick = action(b, async () => {
@@ -833,6 +835,12 @@ function jobRow(ctx, pid, run, prov, projectName = pid) {
     actions.push(b);
   }
   if (['unconfigured', 'waiting'].includes(j.state)) {
+    // On the online desk, the model's own assistant can take this job through
+    // its connection (Settings > Connected apps): one sentence to it.
+    if (ctx.state.session && ctx.state.session.hosted) {
+      actions.push(h('div', { class: 'small', style: { flexBasis: '100%' } }, `${PROVIDER_LABELS[prov]} can do it through its desk connection: tell ${PROVIDER_LABELS[prov]} the sentence below. Or paste the prompt into ${PROVIDER_LABELS[prov]} and import the answer.`));
+      actions.push(say('Do my waiting CryptoResearch research'));
+    }
     const cp = button('Copy prompt', null, { kind: 'small' });
     cp.setAttribute('aria-label', `Copy the research prompt for ${PROVIDER_LABELS[prov]}`);
     cp.onclick = action(cp, async () => { await copyText(await ctx.api.text(`/api/projects/${pid}/research/${run.run_id}/prompt`)); return undefined; });
@@ -844,7 +852,7 @@ function jobRow(ctx, pid, run, prov, projectName = pid) {
   return {
     prov,
     state: stateText(st.long, st.tone),
-    mode: h('span', { class: 'small' }, j.mode === 'manual' ? 'Manual import' : j.mode === 'cowork' ? 'Claude Cowork session' : j.mode === 'mock' ? 'Fictional demo adapter' : `API${j.model ? ` · ${j.model}` : ''}`),
+    mode: h('span', { class: 'small' }, j.mode === 'manual' ? 'Waiting (connection or manual import)' : j.mode === 'cowork' ? 'Claude Cowork session' : j.mode === 'connector' ? `${PROVIDER_LABELS[prov]} through its desk connection` : j.mode === 'mock' ? 'Fictional demo adapter' : `API${j.model ? ` · ${j.model}` : ''}`),
     attempts: attempts.length ? h('div', { class: 'small' }, attempts.map((a) => {
       const cost = attemptCost(a);
       return h('div', null, `#${a.n} ${String(a.phase || a.outcome || 'in progress').replace(/_/g, ' ')}`, a.usage ? h('span', { class: 'faint' }, ` · ${a.usage.input_tokens ?? '?'} in / ${a.usage.output_tokens ?? '?'} out tokens`) : null, cost ? h('span', { class: a.phase === 'uncertain' ? null : 'faint' }, ` · ${cost}`) : null, a.response_sha256 ? h('span', { class: 'faint', title: `Raw response saved before normalization: ${a.response_path}` }, ` · response saved`) : null);

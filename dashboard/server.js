@@ -279,10 +279,15 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   const allowedHosts = hosted ? new Set(hosted.hosts.flatMap((h) => [h, `${h}:443`])) : new Set([`127.0.0.1:${boundPort}`, `localhost:${boundPort}`]);
   const allowedOrigins = hosted ? new Set(hosted.hosts.map((h) => `https://${h}`)) : new Set([`http://127.0.0.1:${boundPort}`, `http://localhost:${boundPort}`]);
   const auth = hosted ? require('./hosted').makeAuth(ws, hosted) : null;
-  // The connector for Claude (Cowork, claude.ai, Desktop): OAuth sign-in that
-  // Eric approves with his passphrase, then the MCP endpoint at /mcp.
+  // The connector for the assistants (Claude in Cowork and claude.ai, ChatGPT,
+  // Gemini): OAuth sign-in that Eric approves with his passphrase, then the MCP
+  // endpoint at /mcp. Their servers call it without an Origin header; one that
+  // sends its own app's origin is accepted too (a bearer token is still needed).
   const oauth = hosted ? require('./oauth').makeOAuth(ws, { origin, auth, log: (...a) => { if (!quiet) console.log(...a); } }) : null;
-  const mcp = hosted ? require('./mcp').makeMcp(ws, { rebuild: (areas) => rebuild(areas), log: (...a) => { if (!quiet) console.log(...a); } }) : null;
+  const mcpOrigins = new Set([...allowedOrigins, 'https://claude.ai', 'https://chatgpt.com', 'https://gemini.google.com']);
+  // A research request from an assistant can queue paid API jobs (other
+  // models): the runner picks them up at once instead of at its next tick.
+  const mcp = hosted ? require('./mcp').makeMcp(ws, { rebuild: (areas) => rebuild(areas), log: (...a) => { if (!quiet) console.log(...a); }, kick: () => setTimeout(() => researchTick(), 300) }) : null;
   const clients = new Set();
   const sockets = new Set();
   const state = {
@@ -590,9 +595,12 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
         // The connector has its own sign-in (OAuth) and never uses the
         // dashboard's session cookie.
         if (await oauth.handle(req, res, url)) return;
-        if (url.pathname === '/mcp') {
+        if (url.pathname === '/mcp' || url.pathname === '/mcp/') {
           const o = req.headers.origin;
-          if (o && !allowedOrigins.has(o)) throw new HttpError(403, 'Origin not allowed');
+          if (o && !mcpOrigins.has(o)) {
+            if (!quiet) console.log(`MCP request refused: Origin ${String(o).slice(0, 80)} is not allowed`);
+            throw new HttpError(403, 'Origin not allowed');
+          }
           const who = oauth.authenticate(req);
           if (!who) return oauth.challenge(res, { invalid: Boolean(req.headers.authorization) });
           return await mcp(req, res, who);
@@ -672,7 +680,10 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     setTimeout(() => jobs.runJobs(ws, ['snapshot', 'reviews', 'backup'], { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 8000),
   ];
 
+  const onSignal = () => stop(0);
   const shutdown = () => {
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
     startupTimers.forEach(clearTimeout);
     clearTimeout(inboxTimer);
     clearTimeout(rebuildTimer);
@@ -704,8 +715,8 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
       }
     }, 250);
   };
-  process.once('SIGINT', () => stop(0));
-  process.once('SIGTERM', () => stop(0));
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
 
   log('');
   if (hosted) {

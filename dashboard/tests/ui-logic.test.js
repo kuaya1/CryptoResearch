@@ -88,9 +88,12 @@ test('grade badges: every missing grade states why and is never shown as a numbe
     [REPORT({ status: 'invalid_weights' }), null, 'withheld', 'No grade'],
     [REPORT({ status: 'firm', value: 81.2, display: '81.2', label: 'B' }, { needs_text: true }), null, 'pdf', 'PDF'],
     [null, { state: 'failed', error: 'timeout' }, 'failed', 'Failed'],
-    [null, { state: 'unconfigured' }, 'manual', 'Manual'],
+    // Waiting for the model: its assistant through the desk connection, or a pasted answer.
+    [null, { state: 'unconfigured' }, 'manual', 'Waiting'],
     [null, { state: 'queued' }, 'queued', 'Queued'],
     [null, { state: 'running', mode: 'cowork' }, 'cowork', 'Cowork'],
+    [null, { state: 'running', mode: 'connector', progress_at: new Date().toISOString() }, 'connector', 'Working'],
+    [null, { state: 'running', mode: 'connector', progress_at: new Date(Date.now() - 3 * 3600000).toISOString() }, 'interrupted', 'Paused'],
   ];
   for (const [report, job, kind, value] of cases) {
     const info = ui.badgeInfo('chatgpt', report, job);

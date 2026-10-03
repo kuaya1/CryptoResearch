@@ -48,6 +48,7 @@ CryptoResearch/
 │       │   ├── prompt.md               The canonical prompt, identical for every model
 │       │   ├── evidence-packet.json    Dated public context incl. the market snapshot (no holdings, notes or other models' conclusions)
 │       │   ├── cowork-draft.md         Claude-in-Cowork's working draft while it researches (connector), kept if interrupted
+│       │   ├── <provider>-draft.md     ChatGPT's or Gemini's working draft through its own connection (chatgpt-, gemini-)
 │       │   └── responses/<provider>-attempt<N>.json   Raw API response, saved before normalization
 │       └── reports/<YYYY-MM-DD>_<provider>_<hash>/
 │           ├── original.md|txt|json|pdf   The report exactly as received (never changed)
@@ -96,7 +97,8 @@ CryptoResearch/
                                 quarantine/ for unverifiable writes, captures/ for paid answers waiting
                                 to be saved (removed once saved; not in backups), server.json;
                                 on the online desk only, sessions.json (hashes of signed-in sessions) and
-                                oauth.json (the Claude connector: registered clients and hashes of its tokens)
+                                oauth.json (the connector: registered clients, each connection's model
+                                (Claude, ChatGPT or Gemini) and hashes of its tokens)
 ```
 
 The online desk on Render uses the same layout in its own data folder (`CR_DATA_DIR`, on a Render disk). Its `templates/` are copied from the deployed code on every start; everything else there is its own record.

@@ -283,11 +283,12 @@ async function systemTab(ctx) {
   }).catch((err) => doc.replaceChildren(callout(err.message, 'bad')));
   const jobs = idx.settings.jobs || {};
   const hostedDesk = Boolean(ctx.state.session && ctx.state.session.hosted);
-  // Connected apps: Claude connections Eric approved for the online desk.
+  // Connected apps: assistant connections (Claude, ChatGPT, Gemini) Eric
+  // approved for the online desk.
   const conn = h('div', null, h('p', { class: 'small muted' }, 'Loading…'));
   const drawConnections = () => ctx.api.get('/api/connections').then((c) => {
     if (!c.available) {
-      conn.replaceChildren(callout('Claude (Cowork, claude.ai) connects to the online desk, not to this PC\'s dashboard. On the online desk this section shows the connector address and what is connected.', 'info'));
+      conn.replaceChildren(callout('Claude (Cowork, claude.ai), ChatGPT and Gemini connect to the online desk, not to this PC\'s dashboard. On the online desk this section shows the connector address and what is connected.', 'info'));
       return;
     }
     const rows = c.connections.map((x) => {
@@ -303,9 +304,14 @@ async function systemTab(ctx) {
     });
     conn.replaceChildren(
       kv([['Connector address', h('code', { class: 'wrap-anywhere' }, c.mcp_url)]]),
-      h('p', { class: 'small muted' }, 'To connect Claude (and so Cowork): claude.ai > Settings > Connectors > Add custom connector, name it CryptoResearch and paste this address. Claude then opens an approval page here; approve it with your desk passphrase.'),
+      h('ul', { class: 'list small muted' },
+        h('li', null, h('strong', null, 'Claude (and so Cowork): '), 'claude.ai > Settings > Connectors > Add custom connector, name it CryptoResearch and paste this address.'),
+        h('li', null, h('strong', null, 'ChatGPT (Plus or Pro, on the web): '), 'Settings > Security and login > turn on Developer mode; then Plugins > + > create an app named CryptoResearch with this address and OAuth sign-in.'),
+        h('li', null, h('strong', null, 'Gemini (personal account, US, 18+): '), 'gemini.google.com > Settings > Connected Apps > Custom apps > Add a custom app, and paste this address.'),
+        h('li', null, 'Each then opens an approval page here; approve it with your desk passphrase. What a connection saves is filed under its own model.')),
       rows.length
         ? table([
+          { label: 'Model', key: 'assistant_label' },
           { label: 'App', key: 'client_name' },
           { label: 'Connected', render: (x) => fmtDateTime(x.created_at) },
           { label: 'Last used', render: (x) => (x.last_used_at ? fmtAgo(x.last_used_at) : 'not yet') },
@@ -323,7 +329,7 @@ async function systemTab(ctx) {
       h('li', null, h('strong', null, 'Prices: '), `every ${idx.settings.market_data.foreground_interval_minutes} minutes while the dashboard is open, and hourly through the Windows scheduled task while the PC is on and you are logged in.`),
       h('li', null, h('strong', null, 'Research: '), 'only when you ask (dashboard, CLI or Cowork) or on a schedule you configure with a budget. A price refresh never starts research.'),
       hostedDesk
-        ? h('li', null, h('strong', null, 'Cowork: '), 'Claude in Cowork works on this desk through the CryptoResearch connector (Connected apps, above): it finds and adds projects, does the research itself and saves the full report here. No CoinGecko or paid model API is needed for that.')
+        ? h('li', null, h('strong', null, 'Assistants: '), 'Claude in Cowork, ChatGPT and Gemini work on this desk through the CryptoResearch connector (Connected apps, above): they find and add projects, do the research themselves under their own plans and save the full report here, each under its own name. No CoinGecko or paid model API is needed for that. Research by the paid APIs in the background happens only for models whose API key you added on Render, within your research spending limits.')
         : h('li', null, h('strong', null, 'Cowork: '), 'a Cowork task may run in Anthropic\'s cloud. It can reach this folder only while the Claude desktop app is open and the folder is connected. Being able to write files there does not mean it can run programs on this PC: when it cannot, it drops a request in inbox/requests/ and this PC applies it. Scheduled Cowork tasks also run in the cloud. Through the connector, Cowork works on the online desk instead.'),
       h('li', null, h('strong', null, 'Holdings: '), 'change only when you record transactions.'),
       jobs.evidence_watch ? h('li', null, h('strong', null, 'Evidence watch: '), jobs.evidence_watch.note || 'optional; produces a dated digest and never overwrites grades.') : null)),

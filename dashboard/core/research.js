@@ -85,6 +85,12 @@ const CHARS_PER_TOKEN = 3.5;
 const SEARCH_RESULT_TOKENS = 4000;
 // The request parameter that caps searches, per provider. Gemini has none.
 const SEARCH_CONTROL = { claude: 'max_uses', chatgpt: 'max_tool_calls', gemini: null };
+// Jobs a model's own assistant does through the desk connector (mcp.js):
+// Claude in Cowork ("cowork"), ChatGPT or Gemini ("connector"). The runner
+// never sends anything for them.
+const ASSISTANT_MODES = new Set(['cowork', 'connector']);
+const isAssistantJob = (job) => Boolean(job && ASSISTANT_MODES.has(job.mode));
+const assistantMode = (provider) => (provider === 'claude' ? 'cowork' : 'connector');
 
 const round4 = (x) => Math.round(x * 10000) / 10000;
 const units = (x) => Math.round(x * 10000);
@@ -458,6 +464,33 @@ function normalizeProviders(list) {
   return out.filter((p) => PROVIDERS.includes(p));
 }
 
+// One provider's job in a run: done by the assistant that asked for it
+// (through the desk connector), run by the paid API when it is set up and
+// bounded, or waiting: the prompt is ready, and the model's own assistant takes
+// the job over when Eric asks it (or Eric pastes the prompt and imports the answer).
+function newJob(ws, p, st, { assistant = null } = {}) {
+  const at = new Date().toISOString();
+  const base = { provider: p, attempts: [], max_attempts: ws.settings.research.max_attempts || 2, report_id: null, error: null, updated_at: at, cancel_requested: false };
+  const label = PROVIDER_LABELS[p];
+  if (p === assistant) {
+    return {
+      ...base,
+      state: 'running',
+      mode: assistantMode(p),
+      progress_at: at,
+      note: p === 'claude'
+        ? 'Assigned to Claude in Cowork, which researches it with this run\'s prompt. It completes when Cowork saves its report (the desk connector\'s save_report, or import with --run).'
+        : `Assigned to ${label}, which researches it with this run's prompt through its desk connection. It completes when ${label} saves its report.`,
+    };
+  }
+  if (st.mode === 'api' || st.mode === 'mock') return { ...base, state: 'queued', mode: st.mode, model: st.model };
+  // Only the online desk has connections for the assistants to come through.
+  const note = ws.hosted
+    ? `${label} API ${st.reason}. Waiting for ${label}: ask ${label} through its desk connection to do its waiting research, or paste the prompt into ${label} yourself and import the answer for this run; it completes then.`
+    : `${label} API ${st.reason}. Paste the prompt into ${label} yourself and import the answer for this run; it completes then.`;
+  return { ...base, state: 'unconfigured', mode: 'manual', fallback: 'manual', note };
+}
+
 function createRun(ws, args = {}) {
   const projectId = args.project_id;
   const project = getProject(ws, projectId);
@@ -484,19 +517,11 @@ function createRun(ws, args = {}) {
   const prompt = buildRunPrompt(ws, project, { runId, horizon, rubricRef, packet, ownerInstructions });
   const status = providerStatus(ws);
   const channel = args.channel || ws.actor || 'cli';
+  // The model doing this run itself through the desk connector, if any.
   const fromCowork = /cowork/i.test(channel) || /cowork/i.test(ws.actor || '');
+  const assistant = args.assistant !== undefined ? (PROVIDERS.includes(args.assistant) ? args.assistant : null) : fromCowork ? 'claude' : null;
   const jobs = {};
-  for (const p of list) {
-    const st = status[p];
-    const base = { provider: p, attempts: [], max_attempts: ws.settings.research.max_attempts || 2, report_id: null, error: null, updated_at: new Date().toISOString(), cancel_requested: false };
-    if (p === 'claude' && fromCowork) {
-      jobs[p] = { ...base, state: 'running', mode: 'cowork', note: 'Assigned to Claude in Cowork, which researches it with this run\'s prompt. It completes when Cowork saves its report (the desk connector\'s save_report, or import with --run).' };
-    } else if (st.mode === 'api' || st.mode === 'mock') {
-      jobs[p] = { ...base, state: 'queued', mode: st.mode, model: st.model };
-    } else {
-      jobs[p] = { ...base, state: 'unconfigured', mode: 'manual', fallback: 'manual', note: `${PROVIDER_LABELS[p]} API ${st.reason}. Paste the prompt into ${PROVIDER_LABELS[p]} yourself and import the answer for this run; it completes then.` };
-    }
-  }
+  for (const p of list) jobs[p] = newJob(ws, p, status[p], { assistant });
   const dir = runDir(projectId, runId);
   const run = {
     schema_version: 'cr.research-run.v1',
@@ -537,7 +562,7 @@ function createRun(ws, args = {}) {
 }
 
 function summarizeRun(run, project) {
-  const parts = Object.values(run.jobs).map((j) => `${PROVIDER_LABELS[j.provider]}: ${j.state}${j.mode === 'manual' ? ' (prompt ready to paste)' : j.mode === 'cowork' ? ' (this Claude session)' : ''}`);
+  const parts = Object.values(run.jobs).map((j) => `${PROVIDER_LABELS[j.provider]}: ${j.state}${j.mode === 'manual' ? ' (prompt ready to paste)' : j.mode === 'cowork' ? ' (this Claude session)' : j.mode === 'connector' ? ` (${PROVIDER_LABELS[j.provider]} through its desk connection)` : ''}`);
   return `Research run ${run.run_id} for ${project ? project.name : run.project_id} — ${parts.join('; ')}.`;
 }
 
@@ -602,7 +627,7 @@ const uncertainOf = (job) => (job.attempts || []).filter((a) => a.phase === 'unc
 function cancelJob(ws, projectId, runId, provider, reason = null) {
   const out = updateJob(ws, projectId, runId, provider, (job) => {
     if (TERMINAL.has(job.state)) return { message: `${PROVIDER_LABELS[provider]} job is already ${job.state}.` };
-    if (IN_FLIGHT.has(job.state) && job.mode !== 'cowork') {
+    if (IN_FLIGHT.has(job.state) && !isAssistantJob(job)) {
       if (job.cancel_requested) return { message: 'Cancel already requested.' };
       job.cancel_requested = true;
       job.cancel_reason = reason;
@@ -732,8 +757,9 @@ function allOpenJobs(ws) {
 }
 
 // Queued jobs, and jobs a runner left in flight (their recovery never sends).
+// A job an assistant is doing through the connector is never the runner's.
 function isDueJob(job) {
-  return job.state === 'queued' || (IN_FLIGHT.has(job.state) && job.mode !== 'cowork');
+  return job.state === 'queued' || (IN_FLIGHT.has(job.state) && !isAssistantJob(job));
 }
 
 function hasDueWork(ws) {
@@ -1120,7 +1146,7 @@ async function runOneJob(ws, { project_id: projectId, run, job }, { fetchImpl, t
     let fresh = loadRun(ws, projectId, run.run_id);
     let j = fresh && fresh.jobs[provider];
     if (!j) return { provider, status: 'missing' };
-    if (IN_FLIGHT.has(j.state) && j.mode !== 'cowork') {
+    if (IN_FLIGHT.has(j.state) && !isAssistantJob(j)) {
       const rec = await recoverJob(ws, projectId, fresh, provider);
       if (rec.status !== 'requeued') return rec;
       fresh = loadRun(ws, projectId, run.run_id);
@@ -1345,77 +1371,145 @@ function spendLine(ws, entry) {
 }
 
 // ---------------------------------------------------------------------------
-// Research done by Claude in Cowork (through the desk's connector)
+// Research done by a model's own assistant through the desk connector:
+// Claude in Cowork, ChatGPT, Gemini (mcp.js)
 //
-// A Cowork job is open from start_research until Cowork saves the report.
-// Cowork can save a draft as it goes, which also says it is still working.
-// A job with no sign of life for COWORK_IDLE_MINUTES is shown as interrupted:
-// Eric can ask Cowork to resume it (the prompt and the draft are kept) or
-// restart it (this run is canceled and a new one starts).
+// The assistant researches with its own tools, under its own plan, and saves
+// the report itself; the desk calls no model for it. Its job is "running"
+// (mode cowork for Claude, connector for ChatGPT and Gemini) from the moment it
+// takes the job until it saves the report. A draft saved as it goes also says
+// it is still working. A job with no sign of life for ASSISTANT_IDLE_MINUTES
+// is shown as interrupted: Eric can ask that assistant to resume it (the
+// prompt and the draft are kept) or restart it (this run is canceled and a new
+// one starts). A job no API runs is "unconfigured": its prompt is ready, and
+// the model's assistant takes it over when Eric asks it to.
 
-const COWORK_IDLE_MINUTES = 30;
-const DRAFT_NAME = 'cowork-draft.md';
+const ASSISTANT_IDLE_MINUTES = 30;
+const COWORK_IDLE_MINUTES = ASSISTANT_IDLE_MINUTES;
 const MAX_DRAFT_BYTES = 400 * 1024;
+// Jobs still open: waiting for an assistant, queued, in flight, or held as uncertain.
+const OPEN_STATES = new Set(['unconfigured', 'queued', 'dispatching', 'running', 'uncertain']);
 
-function coworkActivity(job, run, now = Date.now()) {
-  if (!job || job.mode !== 'cowork') return null;
+function assistantActivity(job, run, now = Date.now()) {
+  if (!isAssistantJob(job)) return null;
   const open = job.state === 'running';
   const last = job.progress_at || job.updated_at || (run && run.created_at) || null;
   const idle = last ? Math.max(0, Math.round((now - Date.parse(last)) / 60000)) : null;
-  return { open, last_activity_at: last, idle_minutes: idle, interrupted: open && idle !== null && idle >= COWORK_IDLE_MINUTES, progress_note: job.progress_note || null, draft_saved_at: job.draft_saved_at || null, draft_chars: job.draft_chars || null };
+  return { open, last_activity_at: last, idle_minutes: idle, interrupted: open && idle !== null && idle >= ASSISTANT_IDLE_MINUTES, progress_note: job.progress_note || null, draft_saved_at: job.draft_saved_at || null, draft_chars: job.draft_chars || null };
 }
 
-// Open Claude jobs assigned to Cowork for a project, newest run first.
-function openCoworkJobs(ws, projectId) {
+// Open jobs a provider's assistant is doing for a project, newest run first.
+function openAssistantJobs(ws, projectId, provider = 'claude') {
   return listRuns(ws, projectId)
-    .filter((r) => !r.broken && r.jobs && r.jobs.claude && r.jobs.claude.mode === 'cowork' && r.jobs.claude.state === 'running')
-    .map((r) => ({ run: r, job: r.jobs.claude }));
+    .filter((r) => !r.broken && r.jobs && r.jobs[provider] && isAssistantJob(r.jobs[provider]) && r.jobs[provider].state === 'running')
+    .map((r) => ({ run: r, job: r.jobs[provider] }));
 }
 
-// Claude jobs waiting for a pasted answer (manual: no API key), newest first.
-// Cowork can do exactly that job, so it takes the job over instead of
-// starting a second run.
-function waitingClaudeJobs(ws, projectId) {
+// A provider's jobs waiting for an answer (no API runs them), newest first.
+// The provider's assistant can do exactly that job, so it takes the job over
+// instead of starting a second run.
+function waitingJobs(ws, projectId, provider = 'claude') {
   return listRuns(ws, projectId)
-    .filter((r) => !r.broken && r.jobs && r.jobs.claude && r.jobs.claude.state === 'unconfigured')
-    .map((r) => ({ run: r, job: r.jobs.claude }));
+    .filter((r) => !r.broken && r.jobs && r.jobs[provider] && r.jobs[provider].state === 'unconfigured')
+    .map((r) => ({ run: r, job: r.jobs[provider] }));
 }
 
-function adoptForCowork(ws, projectId, runId) {
-  const out = updateJob(ws, projectId, runId, 'claude', (job) => {
-    if (job.state !== 'unconfigured') throw new OpError('CONFLICT', `This run's Claude job is ${job.state}, not waiting for an answer.`);
+// Every job of a provider still open on a project, whoever runs it.
+function openJobsFor(ws, projectId, provider) {
+  return listRuns(ws, projectId)
+    .filter((r) => !r.broken && r.jobs && r.jobs[provider] && OPEN_STATES.has(r.jobs[provider].state))
+    .map((r) => ({ run: r, job: r.jobs[provider] }));
+}
+
+// The newest run of a project that still has an open job.
+function openRunOf(ws, projectId) {
+  return listRuns(ws, projectId).find((r) => !r.broken && r.jobs && Object.values(r.jobs).some((j) => OPEN_STATES.has(j.state))) || null;
+}
+
+function adoptJob(ws, projectId, runId, provider = 'claude', { client = null } = {}) {
+  const label = PROVIDER_LABELS[provider];
+  const out = updateJob(ws, projectId, runId, provider, (job) => {
+    if (job.state !== 'unconfigured') throw new OpError('CONFLICT', `This run's ${label} job is ${job.state}, not waiting for an answer.`);
     const at = new Date().toISOString();
-    Object.assign(job, { state: 'running', mode: 'cowork', fallback: null, progress_at: at, note: 'Taken over by Claude in Cowork (desk connector); it completes when Cowork saves its report.' });
-  }, `Cowork takes over the Claude job in ${runId}`);
+    Object.assign(job, {
+      state: 'running',
+      mode: assistantMode(provider),
+      fallback: null,
+      progress_at: at,
+      note: provider === 'claude' ? 'Taken over by Claude in Cowork (desk connector); it completes when Cowork saves its report.' : `Taken over by ${label} through its desk connection; it completes when ${label} saves its report.`,
+    });
+    if (client) job.connector_client = String(client).slice(0, 100);
+  }, provider === 'claude' ? `Cowork takes over the Claude job in ${runId}` : `${label} takes over its job in ${runId}`);
   return { status: 'saved', verified: out.verified };
 }
 
-function draftRel(projectId, runId) {
-  return `${runDir(projectId, runId)}/${DRAFT_NAME}`;
+// More models for a run that is still open (Eric asked for all three after one
+// had started): the run's own prompt and dated context, one new job each. A
+// provider the run already has keeps its job.
+function addProviders(ws, projectId, runId, providers, { assistant = null, channel = null } = {}) {
+  const list = normalizeProviders(providers);
+  const status = providerStatus(ws);
+  const rel = `${runDir(projectId, runId)}/run.json`;
+  const out = runOp(ws, { type: 'research_run_add_providers', summary: `Add ${list.join(', ')} to ${runId}` }, (op) => {
+    const run = op.readJson(rel, null);
+    if (!run) throw new OpError('NOT_FOUND', `No research run ${runId} in ${projectId}`);
+    const added = list.filter((p) => !run.jobs[p]);
+    if (!added.length) return { added: [] };
+    for (const p of added) run.jobs[p] = newJob(ws, p, status[p], { assistant });
+    run.providers = PROVIDERS.filter((p) => run.jobs[p]);
+    run.providers_added = [...(run.providers_added || []), { at: new Date().toISOString(), providers: added, by: ws.actor || null, channel }];
+    op.writeJson(rel, run);
+    return { added };
+  });
+  return { added: out.result.added, verified: out.verified };
 }
 
-function readCoworkDraft(ws, projectId, runId) {
+// Research waiting for one model across the desk: jobs no API runs (they wait
+// for that model's assistant) and jobs its assistant took and has not finished.
+function pendingFor(ws, provider) {
+  const out = [];
+  for (const p of listProjects(ws)) {
+    if (p.broken || p.status === 'archived') continue;
+    for (const r of listRuns(ws, p.project_id)) {
+      if (r.broken || !r.jobs || !r.jobs[provider]) continue;
+      const j = r.jobs[provider];
+      const open = isAssistantJob(j) && j.state === 'running';
+      if (j.state !== 'unconfigured' && !open) continue;
+      out.push({ project_id: p.project_id, name: p.name, run_id: r.run_id, created_at: r.created_at, state: open ? 'started' : 'waiting', activity: assistantActivity(j, r), requested_by: r.created_by || null, owner_request: r.utterance || null, owner_instructions: r.owner_instructions || null, models: r.providers });
+    }
+  }
+  return out.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+}
+
+const draftName = (provider) => (provider === 'claude' ? 'cowork-draft.md' : `${provider}-draft.md`);
+
+function draftRel(projectId, runId, provider = 'claude') {
+  return `${runDir(projectId, runId)}/${draftName(provider)}`;
+}
+
+function readAssistantDraft(ws, projectId, runId, provider = 'claude') {
   try {
-    return fs.readFileSync(ws.abs(draftRel(projectId, runId)), 'utf8');
+    return fs.readFileSync(ws.abs(draftRel(projectId, runId, provider)), 'utf8');
   } catch (_) {
     return null;
   }
 }
 
-// Saves (replaces) Cowork's working draft for an open run, in the same
+// Saves (replaces) an assistant's working draft for its open job, in the same
 // verified save as the job's "still working" marker.
-function saveCoworkDraft(ws, projectId, runId, { text, note = null }) {
+function saveAssistantDraft(ws, projectId, runId, { text, note = null, provider = 'claude' }) {
   const body = typeof text === 'string' ? text : '';
+  const label = PROVIDER_LABELS[provider];
   if (!body.trim()) throw new OpError('INVALID', 'The draft is empty.');
   if (Buffer.byteLength(body) > MAX_DRAFT_BYTES) throw new OpError('INVALID', `The draft is larger than ${MAX_DRAFT_BYTES / 1024} KB.`);
   const rel = `${runDir(projectId, runId)}/run.json`;
-  const out = runOp(ws, { type: 'research_cowork_draft', summary: `Cowork draft for ${runId}` }, (op) => {
+  const out = runOp(ws, { type: provider === 'claude' ? 'research_cowork_draft' : 'research_assistant_draft', summary: `${provider === 'claude' ? 'Cowork' : label} draft for ${runId}` }, (op) => {
     const run = op.readJson(rel, null);
-    const job = run && run.jobs ? run.jobs.claude : null;
-    if (!job || job.mode !== 'cowork') throw new OpError('NOT_FOUND', `${runId} has no Claude job assigned to Cowork.`);
-    if (job.state !== 'running') throw new OpError('CONFLICT', `This run's Claude job is ${job.state}; start or resume research to get an open run.`);
+    const job = run && run.jobs ? run.jobs[provider] : null;
+    if (!job || !isAssistantJob(job)) throw new OpError('NOT_FOUND', provider === 'claude' ? `${runId} has no Claude job assigned to Cowork.` : `${runId} has no ${label} job taken by ${label}.`);
+    if (job.state !== 'running') throw new OpError('CONFLICT', `This run's ${label} job is ${job.state}; start or resume research to get an open run.`);
     const at = new Date().toISOString();
-    op.write(draftRel(projectId, runId), body);
+    op.write(draftRel(projectId, runId, provider), body);
     Object.assign(job, { progress_at: at, progress_note: note ? String(note).slice(0, 300) : job.progress_note || null, draft_saved_at: at, draft_chars: body.length, updated_at: at });
     op.writeJson(rel, run);
     return { at, chars: body.length };
@@ -1423,11 +1517,32 @@ function saveCoworkDraft(ws, projectId, runId, { text, note = null }) {
   return { status: 'saved', ...out.result, files: out.files, verified: out.verified };
 }
 
+// The names Claude's connector has always used.
+const coworkActivity = assistantActivity;
+const openCoworkJobs = (ws, projectId) => openAssistantJobs(ws, projectId, 'claude');
+const waitingClaudeJobs = (ws, projectId) => waitingJobs(ws, projectId, 'claude');
+const adoptForCowork = (ws, projectId, runId) => adoptJob(ws, projectId, runId, 'claude');
+const readCoworkDraft = (ws, projectId, runId) => readAssistantDraft(ws, projectId, runId, 'claude');
+const saveCoworkDraft = (ws, projectId, runId, opts) => saveAssistantDraft(ws, projectId, runId, { ...opts, provider: 'claude' });
+
 module.exports = {
   RUN_ID_RE,
   createRun,
   spendLine,
   COWORK_IDLE_MINUTES,
+  ASSISTANT_IDLE_MINUTES,
+  OPEN_STATES,
+  isAssistantJob,
+  assistantActivity,
+  openAssistantJobs,
+  waitingJobs,
+  openJobsFor,
+  openRunOf,
+  adoptJob,
+  addProviders,
+  pendingFor,
+  readAssistantDraft,
+  saveAssistantDraft,
   coworkActivity,
   openCoworkJobs,
   waitingClaudeJobs,

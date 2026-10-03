@@ -77,6 +77,21 @@ One-time connection:
 
 Then just ask, for example: "Research this project" with a CoinMarketCap link or a screenshot; "Resume the research on Examplecoin"; "Restart the research on Examplecoin"; "Record that I bought 2,000 HUMA on Coinbase today at 3 cents". Asking twice does not duplicate a project or start a second run; research that stops halfway shows as **Paused** on the project page with the exact words to resume or restart it. Holdings change only when you ask to record a purchase or sale.
 
+### ChatGPT and Gemini on the same desk
+
+ChatGPT and Gemini connect to the same connector address, each with its own sign-in. A connection files what it saves under its own model: ChatGPT's connection can save only ChatGPT reports, and so on. Each model gets the same project brief and research prompt and never sees another model's conclusions while its own research is open. Its research runs in its own app, under your own plan.
+
+- **ChatGPT** (Plus or Pro, on chatgpt.com in a browser): Settings > Security and login > turn on **Developer mode**. Then Settings > Plugins > **+** > create an app: name `CryptoResearch`, URL `https://cryptoresearch.onrender.com/mcp`, authentication **OAuth**. Approve the desk's page with your passphrase. In a chat, choose the CryptoResearch app from the **+** menu (Developer mode). ChatGPT asks you to confirm each action that saves something.
+- **Gemini** (personal Google account, US, 18+, English): gemini.google.com > Settings > **Connected Apps** > Custom apps > **Add a custom app**, paste the same URL, and approve with your passphrase. Gemini asks you to confirm each action that saves something.
+
+**All three models in one request:** tell Cowork "Research this project with all three models". Claude researches in Cowork. ChatGPT and Gemini each get a job in the same run:
+- If that model's paid API key is set on the desk, the job runs in the background.
+- Otherwise it waits. Tell ChatGPT (or Gemini) **"Do my waiting CryptoResearch research"** and it does its part through its own connection.
+
+The project page shows each model's progress. When the reports are in, ask Cowork to compare them: it summarizes where the models agree and disagree.
+
+**Optional paid background route:** set `OPENAI_API_KEY` and/or `GEMINI_API_KEY` in Render's Environment page (never in chat or this folder). The desk then runs that model by itself with `gpt-6.1-sol` or `gemini-2.5-pro` and their own web search, within the limits in Settings > Research models & budget ($5 per run, $10 per day, $40 per month). It reserves about $0.80 per ChatGPT job and $0.55 per Gemini job before sending, and records the actual cost. Without a key, nothing is paid.
+
 **PC folder route** (the dashboard on this PC, without the online desk), one-time setup in the Claude desktop app, Cowork tab:
 
 1. In the left sidebar, open **Projects** and click **+** (or **New project**).

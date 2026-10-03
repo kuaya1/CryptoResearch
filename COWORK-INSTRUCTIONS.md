@@ -12,7 +12,7 @@ All commands below run from this folder: `node dashboard/cli.js <command> … --
 
 ## 0. Main route: the CryptoResearch connector (the online desk)
 
-Eric's desk is the online dashboard, <https://cryptoresearch.onrender.com>, which he reads on his phone. Claude in Cowork works on it through the **CryptoResearch** connector: a remote MCP server on that desk, added in claude.ai > Settings > Connectors and approved by Eric with his desk passphrase. First check that its tools are available to you (`find_projects`, `add_project`, `start_research`, `save_research_draft`, `save_report`, `record_transaction`, ...).
+Eric's desk is the online dashboard, <https://cryptoresearch.onrender.com>, which he reads on his phone. Claude in Cowork works on it through the **CryptoResearch** connector: a remote MCP server on that desk, added in claude.ai > Settings > Connectors and approved by Eric with his desk passphrase. First check that its tools are available to you (`find_projects`, `add_project`, `start_research`, `save_research_draft`, `save_report`, `compare_reports`, `record_transaction`, ...). ChatGPT and Gemini connect to the same desk through their own connections; each connection files what it saves under its own model, so yours can only save Claude's reports.
 
 - **If they are available, use this section for everything.** The CLI sections below are for the PC's own dashboard only; never put the same research in both places.
 - If they are not, say so plainly ("the CryptoResearch connector is not connected in this session") and point Eric to Settings > Connectors. Do not fall back to writing in the PC folder unless he asks for the PC dashboard.
@@ -28,11 +28,17 @@ Eric's desk is the online dashboard, <https://cryptoresearch.onrender.com>, whic
 5. For long research, `save_research_draft` every few sections, so an interruption loses nothing.
 6. `save_report` with the complete report text, not a summary. Confirm `status: saved`, then tell Eric the project, the verdict and grade if any, and the link `https://cryptoresearch.onrender.com/#/project/<project_id>`.
 
+**All three models** ("Research this project with all three models"; Claude alone stays the default). Do steps 1 to 3, then `start_research` with `models: "all"`. Claude, ChatGPT and Gemini join one run with the same prompt and dated context; none sees another's conclusions. You do Claude's part exactly as above. Tell Eric, from the message `start_research` returns, what happens to the other two:
+- a model whose paid API key is set on the desk runs in the background, within the desk's spending limits;
+- otherwise it waits for that model's assistant: Eric tells ChatGPT (or Gemini) "Do my waiting CryptoResearch research" and it does its part through its own connection.
+
+Repeating the request does not start a second run or a second paid request. `get_research` shows each model's progress. Other models' reports are withheld from you while your own job is open; once you have saved yours and the others are saved, `compare_reports` shows where they agree and disagree. Summarize that for Eric: verdicts, flagged score spreads, conflicting figures, and the open questions that would settle them, keeping each report's own uncertainty. Agreement between models is not independent confirmation. A model that fails does not touch the others' reports.
+
 **Interrupted research.** The dashboard shows research with no activity for 30 minutes as interrupted. "Resume the research on X": `start_research` (or `get_research`) returns the open run, its prompt and your draft; continue and `save_report`. "Restart the research on X": `start_research` with `restart: true` (the open run is canceled, its draft kept, a new run starts).
 
 **Transactions.** Only when Eric explicitly asks to record a purchase or sale: `list_accounts` (and `add_account` if he names an account the desk does not have), then `record_transaction` with his words in `owner_request` and a `request_id` that you reuse if you have to repeat the call. Ask only for what is missing: type, date, account, asset and quantity are required; price and fee only if he knows them (a missing price is recorded as unknown cost basis). Researching, adding or watching a project never records a holding.
 
-No CoinGecko call and no paid model API is involved in this route. Missing prices stay marked unavailable.
+No CoinGecko call and no paid model API is involved in this route, except a ChatGPT or Gemini API that Eric set up on the desk himself. Missing prices stay marked unavailable.
 
 ## 1. Start of every session: find out what this session can actually do
 
