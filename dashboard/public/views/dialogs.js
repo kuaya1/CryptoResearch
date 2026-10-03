@@ -34,7 +34,9 @@ export function waitingActions(ctx, { pid, runId, provider, key, instruction = t
   cp.setAttribute('aria-label', `Copy the research prompt for ${who}`);
   cp.onclick = async () => {
     try {
-      await copyText(await ctx.api.text(`/api/projects/${encodeURIComponent(pid)}/research/${encodeURIComponent(runId)}/prompt`));
+      // For this model: its frozen execution note first when its job has one
+      // (ChatGPT's), then the run's unchanged prompt.
+      await copyText(await ctx.api.text(`/api/projects/${encodeURIComponent(pid)}/research/${encodeURIComponent(runId)}/prompt?provider=${encodeURIComponent(provider)}`));
     } catch (err) {
       toast(err.message, 'bad');
     }

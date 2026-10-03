@@ -25,6 +25,9 @@ export const RESEARCH_STATE = {
   waiting: { short: 'Waiting', long: 'Waiting for you: no API runs this model. Paste the prompt into it and import its answer', tone: 'warn' },
   interrupted: { short: 'Paused', long: 'Paused: its assistant has shown no activity for 30 minutes and has not saved this report. Ask it to resume, or restart it', tone: 'warn' },
   uncertain: { short: 'Check', long: 'Check: the request may have been sent and billed, and no answer was saved. Reconcile it or retry', tone: 'warn' },
+  // An answer that arrived but stopped before it finished (for example at the
+  // output limit): not a report and never graded; its partial text is kept.
+  incomplete: { short: 'Incomplete', long: 'Incomplete answer: the model stopped before finishing (for example at its output limit). Nothing was saved as a report; the partial text is kept under its run', tone: 'bad' },
   failed: { short: 'Failed', long: 'Failed: nothing was saved for this model', tone: 'bad' },
   canceled: { short: 'Canceled', long: 'Canceled: nothing was saved for this model', tone: '' },
   completed: { short: 'Saved', long: 'Saved as a report', tone: 'ok' },
@@ -33,7 +36,7 @@ export const RESEARCH_STATE = {
 // Work in progress (the ↻ "newer research" mark), and the states of a newer
 // run that the saved grade must not hide (the "!" mark).
 const WORKING = new Set(['queued', 'dispatching', 'running', 'cowork', 'connector']);
-const NEEDS_LOOK = new Set(['failed', 'uncertain', 'interrupted']);
+const NEEDS_LOOK = new Set(['failed', 'incomplete', 'uncertain', 'interrupted']);
 export const isWorking = (key) => WORKING.has(key);
 
 // The one sentence that gets a model's own assistant to do its waiting
@@ -283,6 +286,15 @@ export function unscoredFrom(grade, components) {
 
 const PART_STATUS = { unknown: 'marked unknown', not_applicable: 'marked not applicable', missing: 'not scored', range: 'a range without a reason' };
 
+// What the coverage of a withheld grade is, said once and the same everywhere.
+export const COVERAGE_MEANS = 'Coverage is the share of the investment grade\'s weight that this report scored. It is not research progress and not the score.';
+
+// "Grade withheld — 80% coverage" (or just "Grade withheld" when the share is
+// not known): the saved report's state in one phrase.
+export function withheldLabel(pct) {
+  return typeof pct === 'number' ? `Grade withheld — ${pct}% coverage` : 'Grade withheld';
+}
+
 // Why a grade is withheld, in plain words: which weighted parts were not
 // scored, what share of the weight was, and the model's own notes. It never
 // offers a number in the grade's place.
@@ -296,7 +308,7 @@ export function withheldReason(provider, grade, unscored = []) {
   if (names('not_applicable')) phrases.push(`${who} marked ${names('not_applicable')} not applicable`);
   if (names('missing')) phrases.push(`${who}'s report did not score ${names('missing')}`);
   if (names('range')) phrases.push(`${names('range')}: a score range without a reason`);
-  const short = `Withheld${pct !== null ? ` · ${pct}% scored` : ''}`;
+  const short = withheldLabel(pct);
   const why = phrases.length ? phrases.join('; ') : (grade && grade.reason) || 'a weighted part of the grade was not scored';
   return {
     short,
@@ -305,6 +317,17 @@ export function withheldReason(provider, grade, unscored = []) {
     coverage: pct,
     items: parts.map((x) => ({ label: x.label, status: PART_STATUS[x.status] || x.status, note: x.note || null })),
   };
+}
+
+// A report's structure checks (core/consistency.js) as short notes: weighted
+// parts left unscored while the same report scores related ground. They
+// never change a score; they say where to look.
+export function structureNotes(st, { max = 3 } = {}) {
+  if (!st || !st.flagged || !Array.isArray(st.flags) || !st.flags.length) return null;
+  const items = st.flags.slice(0, max);
+  return h('ul', { class: 'list small structure-notes' },
+    items.map((f) => h('li', null, f.message)),
+    st.flags.length > max ? h('li', { class: 'muted' }, `${st.flags.length - max} more on the report's scorecard`) : null);
 }
 
 // The unscored parts as a short list, each with the model's own note.
@@ -420,10 +443,11 @@ export function gradeView(g, { compact = false } = {}) {
   }
   if (g.status === 'withheld') {
     const pct = g.coverage_pct || 0;
-    return h('div', { class: 'grade withheld', title: g.reason || '' },
-      h('span', { class: compact ? '' : 'big' }, 'Withheld'),
-      g.coverage_pct === null || g.coverage_pct === undefined ? null : h('span', { class: 'small muted' }, `${pct}% of the weight scored`),
-      compact || g.coverage_pct === null || g.coverage_pct === undefined ? null : h('div', { class: 'coverage', style: { width: '100%' }, 'aria-hidden': 'true' }, h('span', { style: { width: `${pct}%` } })));
+    const known = !(g.coverage_pct === null || g.coverage_pct === undefined);
+    return h('div', { class: 'grade withheld', title: [g.reason || '', known ? COVERAGE_MEANS : ''].filter(Boolean).join(' ') },
+      h('span', { class: compact ? '' : 'big' }, 'Grade withheld'),
+      known ? h('span', { class: 'small muted' }, `${pct}% coverage`) : null,
+      compact || !known ? null : h('div', { class: 'coverage', style: { width: '100%' }, 'aria-hidden': 'true' }, h('span', { style: { width: `${pct}%` } })));
   }
   return h('span', { class: 'faint', title: g.reason || '' }, g.status === 'invalid_weights' ? 'Weights invalid' : 'No grade');
 }
@@ -447,6 +471,11 @@ export function coworkIdleMinutes(job, runCreatedAt = null) {
   return Number.isNaN(t) ? null : Math.max(0, Math.round((Date.now() - t) / 60000));
 }
 
+// How a job's last attempt ended ('incomplete' for an answer that stopped
+// early): on the index's job summary as `outcome`, on a full job record from
+// its attempts.
+const lastOutcome = (job) => job.outcome || (Array.isArray(job.attempts) && job.attempts.length ? job.attempts[job.attempts.length - 1].outcome || null : null);
+
 export function jobKey(job, runCreatedAt = null) {
   if (!job) return null;
   if (job.state === 'running' && isAssistantJob(job)) {
@@ -454,6 +483,9 @@ export function jobKey(job, runCreatedAt = null) {
     return idle !== null && idle >= COWORK_IDLE_MINUTES ? 'interrupted' : job.mode;
   }
   if (job.state === 'unconfigured') return 'waiting';
+  // An answer that arrived but stopped before finishing is its own state,
+  // apart from a request that failed outright.
+  if (job.state === 'failed' && lastOutcome(job) === 'incomplete') return 'incomplete';
   return job.state;
 }
 
@@ -465,6 +497,7 @@ function newerRunText(provider, key, job) {
   if (WORKING.has(key)) return key === 'dispatching' ? `Newer research running on the ${who} API` : 'Newer research in progress';
   if (key === 'waiting') return `Newer run waiting for ${who}`;
   if (key === 'failed') return `Newer run failed${job && job.error ? `: ${job.error}` : ''}`;
+  if (key === 'incomplete') return 'Newer run incomplete: the answer stopped before finishing, and nothing was saved';
   if (key === 'uncertain') return 'Newer run needs a check: it may have been billed, and no answer was saved';
   if (key === 'interrupted') return `Newer run paused: ${provider === 'claude' && job && job.mode === 'cowork' ? 'Cowork' : who} stopped working on it`;
   return `Newer run ${(RESEARCH_STATE[key] || { short: key }).short.toLowerCase()}`;
@@ -505,10 +538,12 @@ const SVG_ICONS = {
   none: [['circle', { cx: '8', cy: '8', r: '5.8', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.4', 'stroke-dasharray': '2.1 2.1' }]],
   slash: [['circle', { cx: '8', cy: '8', r: '6.2', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5' }], ['path', { d: 'm3.8 12.2 8.4-8.4', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5' }]],
   hatch: [['rect', { x: '2', y: '2', width: '12', height: '12', rx: '2.5', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.4', 'stroke-dasharray': '2 1.6' }], ['path', { d: 'M5 11 11 5M2.8 8.2 8.2 2.8M7.8 13.2l5.4-5.4', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.1' }]],
+  // An answer that stopped part-way: a half-filled circle.
+  half: [['circle', { cx: '8', cy: '8', r: '6.2', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5' }], ['path', { d: 'M8 1.8a6.2 6.2 0 0 0 0 12.4Z', fill: 'currentColor' }]],
 };
 
 // The sign for each research state on a badge.
-const STATE_ICON = { none: 'none', withheld: 'hatch', pdf: 'file', queued: 'clock', waiting: 'key', interrupted: 'pause', uncertain: 'question', failed: 'alert', canceled: 'slash' };
+const STATE_ICON = { none: 'none', withheld: 'hatch', pdf: 'file', queued: 'clock', waiting: 'key', interrupted: 'pause', uncertain: 'question', incomplete: 'half', failed: 'alert', canceled: 'slash' };
 const WORKING_KINDS = new Set(['running', 'dispatching', 'cowork', 'connector']);
 
 // The grade ruler: 0 to 100 with the rubric's letter bands (F below 60, then
@@ -524,12 +559,14 @@ export function gradeMeter(g, { serious = false } = {}) {
     h('div', { class: 'scale' }, h('span', null, '0'), h('span', null, '60'), h('span', null, '100')));
 }
 
-// A withheld grade's share of the weight that was scored; the rest is hatched.
+// A withheld grade's coverage, the share of the investment weight the report
+// scored; the rest is hatched. The words say what it is and what it is not.
 export function coverageMeter(pct) {
   if (typeof pct !== 'number') return null;
   return h('div', { class: 'coverage-meter' },
     h('div', { class: 'track', 'aria-hidden': 'true' }, h('div', { class: 'fill', style: { width: `${Math.max(0, Math.min(100, pct))}%` } })),
-    h('div', { class: 'lbl' }, `${pct}% of the weight scored · no grade from part of it`));
+    h('div', { class: 'lbl' }, `${pct}% coverage · no grade is calculated from part of the weight`),
+    h('div', { class: 'lbl muted' }, COVERAGE_MEANS));
 }
 
 // A small decorative icon; the meaning is always in the surrounding text.
@@ -557,9 +594,11 @@ export function badgeInfo(provider, report, job, { staleDays = 90, hosted = fals
     else if (g.status === 'firm') out = { kind: 'grade', value: g.display, label: g.label, text: `${who} grade ${g.display}${g.label ? `, ${g.label}` : ''}` };
     else if (g.status === 'range') out = { kind: 'range', value: g.display, label: g.label, text: `${who} grade range ${g.display}${g.label ? `, ${g.label}` : ''}` };
     else if (g.status === 'withheld') {
+      // A saved report whose grade is withheld: the coverage is the share of
+      // the investment weight it scored, never progress and never a score.
       const pct = typeof g.coverage_pct === 'number' ? g.coverage_pct : null;
-      out = { kind: 'withheld', value: 'Withheld', sub: pct !== null ? `${pct}%` : null, label: null, text: `${who}: grade withheld${pct !== null ? `, ${pct}% of the weight scored` : ''}` };
-    } else out = { kind: 'withheld', value: 'No grade', label: null, text: `${who}: no authoritative grade${g.reason ? `. ${g.reason}` : ''}` };
+      out = { kind: 'withheld', value: 'Withheld', sub: pct !== null ? `${pct}% coverage` : null, label: null, text: `${who}: report saved, ${withheldLabel(pct).replace(/^G/, 'g')}${pct !== null ? ' (the share of the investment weight it scored, not research progress)' : ''}` };
+    } else out = { kind: 'withheld', value: 'No grade', label: null, text: `${who}: report saved, no authoritative grade${g.reason ? `. ${g.reason}` : ''}` };
     const when = report.analysis_at ? `analysis ${fmtDate(report.analysis_at)}${stale ? ', stale' : ''}` : 'analysis date unknown';
     return { ...base, ...out, text: `${out.text}, ${when}${evText ? `; ${evText}` : ''}${newerText ? `; ${newerText.charAt(0).toLowerCase()}${newerText.slice(1)}` : ''}` };
   }
@@ -592,12 +631,14 @@ export function gradeBadge(provider, report, job, opts = {}) {
     h('span', { class: 'main', 'aria-hidden': 'true' },
       sign,
       h('span', { class: 'v' }, info.value),
-      info.sub ? h('span', { class: 's' }, info.sub) : null,
       info.label ? h('span', { class: 'l' }, info.label) : null,
       info.ev ? h('span', { class: 'ev', title: `Evidence checks: ${info.evText}` }, icon(info.ev === 'serious' ? 'warn-fill' : 'warn-line')) : null,
       info.stale && info.age ? h('span', { class: 'a' }, info.age) : null,
       info.refreshing ? h('span', { class: 'r', title: info.newerText }, '↻') : null,
-      info.problem ? h('span', { class: 'x', title: info.newerText }, '!') : null));
+      info.problem ? h('span', { class: 'x', title: info.newerText }, '!') : null),
+    // A withheld grade's coverage on its own line ("80% coverage"), so the
+    // share never reads as progress or as a score next to the word.
+    info.sub ? h('span', { class: 'cov', 'aria-hidden': 'true' }, info.sub) : null);
 }
 
 export function freshnessText(status, ageMin) {

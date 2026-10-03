@@ -686,7 +686,14 @@ test('connector: one Cowork request for all three models; ChatGPT and Gemini do 
   const partial = await tool(d, gemini.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: unscored(mockReport(d.ws, 'gemini', run0)) });
   assert.equal(partial.data.status, 'saved', partial.text);
   assert.equal(partial.data.report.grade.status, 'withheld');
-  assert.match(partial.data.message, /Its grade is withheld: Grade withheld: .* is not scored\. \d+(\.\d+)?% of the weight is covered.*If your research supports a score .* If it does not, leave them unscored/);
+  assert.match(partial.data.message, /Its grade is withheld: Grade withheld: .* is not scored\. \d+(\.\d+)?% of the weight is covered.*Save again only to change the JSON block: .*your written report supports a judgment on a part .* Otherwise leave them unscored and do not save again: a withheld grade is then the honest result, and an unchanged report saved again is recognized and not stored twice\./);
+  // The part left unknown while the same report scores the category grade on
+  // the same ground (organic demand) is named; the grade is not changed.
+  assert.equal(partial.data.structure_checks.flagged, 1);
+  assert.match(partial.data.structure_checks.flags[0].message, /^Sustainable business demand is unknown, while the same report gives the category grade organic demand( and adoption)? \d+\. Check whether its written assessment supports a judgment on this part\. Nothing is changed\.$/);
+  assert.equal(partial.data.report.grade_withheld.coverage_pct, 80);
+  assert.match(partial.data.report.grade_withheld.coverage_means, /not research progress and not the score/);
+  assert.deepEqual(partial.data.report.grade_withheld.missing.map((x) => x.component), ['Sustainable business demand']);
   // The same request again today starts nothing; research never recorded a holding.
   assert.equal((await tool(d, claude.access, 'start_research', { project_id: pid, owner_request: 'all three once more', models: 'all' })).data.status, 'recent_report');
   assert.equal(readJson(path.join(d.ws.root, 'portfolio', 'transactions.json')).transactions.length, 0);
@@ -1129,7 +1136,7 @@ test('connector: save_report says "saved" only when the save is confirmed, and a
   assert.match(first.data.message, /could not confirm the save .*Call save_report again with the same text; if it did land, nothing changes\./);
   // The grade is withheld; each of the six parts says how it was read.
   assert.equal(first.data.report.grade.status, 'withheld');
-  assert.match(first.data.message, /If it does not, leave them unscored: a withheld grade is then the honest result\./);
+  assert.match(first.data.message, /Otherwise leave them unscored and do not save again: a withheld grade is then the honest result/);
   const comps = first.data.components;
   assert.equal(comps.length, 6);
   assert.deepEqual(comps[0], { component: comps[0].component, label: comps[0].label, status: 'unknown', missing_data: 'FICTIONAL: no audited revenue figures yet' });
@@ -1573,4 +1580,81 @@ test('connector: the frozen prompt arrives complete in the structured result and
   assert.ok(!bad.text.includes(prompt.slice(0, 2000)), 'nothing of a prompt is given out');
   fs.writeFileSync(promptPath, bytes);
   delivered(await tool(d, claude.access, 'get_research', { project_id: pid }), 'restored file');
+});
+
+// ChatGPT's flow after 2026-10-03, when every ChatGPT grade on the desk was
+// withheld and four reports were saved twice: its waiting job comes with its
+// frozen execution note (read-only, before the unchanged prompt); a withheld
+// save names what is missing and what the same report scores nearby, without
+// inviting an unchanged second save; a second save that changes only the
+// timestamps is not stored; a real change is a new report the run follows.
+test('connector: ChatGPT reads its waiting job with its execution note first (read-only); a withheld save names what is missing; a re-save that only changes timestamps is not stored twice', async (t) => {
+  const d = await desk(t, 'gpt-flow');
+  withKeys(t, {});
+  const claude = await connect(d);
+  const chatgpt = await connectChatgpt(d);
+  const pid = (await tool(d, claude.access, 'add_project', EXAMPLECOIN)).data.project.project_id;
+  const all = await tool(d, claude.access, 'start_research', { project_id: pid, owner_request: 'Research Examplecoin with all three models (FICTIONAL)', models: 'all' });
+  const runId = all.data.run.run_id;
+  const run = research.loadRun(d.ws, pid, runId);
+  const note = fs.readFileSync(path.join(d.ws.root, run.jobs.chatgpt.execution.path), 'utf8');
+  const prompt = fs.readFileSync(path.join(d.ws.root, run.prompt.path), 'utf8');
+  assert.equal(all.data.run.execution_notes, undefined, 'Claude gets the prompt alone');
+  assert.equal(all.data.run.prompt, prompt);
+  // ChatGPT: pending_research, then get_research, both read-only.
+  assert.equal((await tool(d, chatgpt.access, 'pending_research', {})).data.pending[0].run_id, runId);
+  const view = await tool(d, chatgpt.access, 'get_research', { project_id: pid, run_id: runId });
+  assert.equal(view.data.run.execution_notes, note, 'complete in the structured result, never a placeholder');
+  assert.deepEqual([view.data.run.execution_delivery.status, view.data.run.execution_delivery.ref], ['verified', 'cr-execution-chatgpt@1']);
+  assert.equal(view.data.run.prompt, prompt, 'the prompt is unchanged, the same as for Claude');
+  assert.equal(view.data.run.jobs.chatgpt.execution.sha256, run.jobs.chatgpt.execution.sha256, 'what ChatGPT was given is on record');
+  const notesAt = view.content.findIndex((c) => c.text.startsWith(`--- Execution notes for ${runId}`));
+  const promptAt = view.content.findIndex((c) => c.text.startsWith(`--- Research prompt for ${runId}`));
+  assert.ok(notesAt > 0 && notesAt < promptAt, 'its own text block, before the prompt');
+  assert.ok(view.content[notesAt].text.endsWith(note));
+  assert.equal(research.loadRun(d.ws, pid, runId).jobs.chatgpt.state, 'unconfigured', 'reading takes nothing over');
+  // ChatGPT's report, shaped like its 2026-10-03 reports: BTC-relative and
+  // timing unknown, no scenario probabilities, its own "as of" stamp.
+  const shaped = (stamp, edit = null) => {
+    const base = mockReport(d.ws, 'chatgpt', research.loadRun(d.ws, pid, runId));
+    const m = base.match(/```json\n([\s\S]*?)\n```/);
+    const obj = JSON.parse(m[1]);
+    obj.provider = null;
+    obj.investment_components.btc_relative_asymmetry = { status: 'unknown', value: null, low: null, high: null, rationale: 'FICTIONAL: no calibrated probabilities.', evidence_refs: [], missing_data: 'FICTIONAL: calibrated scenarios and fee-supported targets.' };
+    obj.investment_components.timing_executable_liquidity = { status: 'unknown', value: null, low: null, high: null, rationale: 'FICTIONAL: book not tested.', evidence_refs: [], missing_data: 'FICTIONAL: permitted live venue, intended size and net costs.' };
+    for (const s of obj.scenarios.items) s.probability_pct = null;
+    obj.scenarios.probability_note = 'FICTIONAL: no calibrated probabilities.';
+    if (edit) edit(obj);
+    return `As of ${stamp}. FICTIONAL sources accessed ${stamp}.\n\n${base.replace(m[1], JSON.stringify(obj, null, 2))}`;
+  };
+  const first = await tool(d, chatgpt.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: shaped('2026-10-03T14:30:48.260Z') });
+  assert.equal(first.data.status, 'saved', first.text);
+  const firstId = first.data.report.report_id;
+  assert.equal(first.data.report.model, 'chatgpt');
+  assert.deepEqual([first.data.report.grade.status, first.data.report.grade.coverage_pct], ['withheld', 80]);
+  assert.deepEqual(first.data.report.grade_withheld.missing.map((x) => [x.component, x.note]), [['BTC-relative asymmetry', 'FICTIONAL: calibrated scenarios and fee-supported targets.'], ['Timing and executable liquidity', 'FICTIONAL: permitted live venue, intended size and net costs.']]);
+  assert.match(first.data.report.grade_withheld.coverage_means, /not research progress and not the score/);
+  assert.deepEqual(first.data.structure_checks.flags.map((f) => f.component), ['btc_relative_asymmetry', 'timing_executable_liquidity']);
+  assert.match(first.data.message, /Save again only to change the JSON block: .* Otherwise leave them unscored and do not save again: a withheld grade is then the honest result, and an unchanged report saved again is recognized and not stored twice\./);
+  assert.doesNotMatch(first.data.message, /fix the JSON block and save the report again/);
+  // The same report written out again with new timestamps: nothing new is stored.
+  const again = await tool(d, chatgpt.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: shaped('2026-10-03T14:39:05.085Z') });
+  assert.equal(again.data.status, 'unchanged', again.text);
+  assert.match(again.data.message, new RegExp(`^This report is already saved as ${firstId}: the new text differs only in its date-time stamps, so nothing new was stored\\.`));
+  assert.equal(again.data.report.report_id, firstId);
+  assert.equal(require('../core/indexer').projectDetail(d.ws, pid).history.chatgpt.length, 1, 'one ChatGPT report, not two');
+  assert.equal(research.loadRun(d.ws, pid, runId).jobs.chatgpt.report_id, firstId);
+  // A real change (timing now judged) is a new report. The waiting job it
+  // answered keeps its first report, and the reply says so plainly; the
+  // newest report is the one the desk shows.
+  const changed = await tool(d, chatgpt.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: shaped('2026-10-03T14:52:00.000Z', (o) => { o.investment_components.timing_executable_liquidity = { status: 'scored', value: 35, low: null, high: null, rationale: 'FICTIONAL: thin books on a venue a US person can use; a small position only; supply enters in January.', evidence_refs: [], missing_data: null }; }) });
+  assert.equal(changed.data.status, 'saved', changed.text);
+  const changedId = changed.data.report.report_id;
+  assert.notEqual(changedId, firstId);
+  assert.equal(changed.data.validation.note, `The run keeps its report ${firstId}; this one was saved separately and is listed with it.`);
+  assert.equal(research.loadRun(d.ws, pid, runId).jobs.chatgpt.report_id, firstId);
+  const detail = require('../core/indexer').projectDetail(d.ws, pid);
+  assert.equal(detail.comparison.latest.chatgpt.report_id, changedId);
+  assert.equal(detail.history.chatgpt.length, 2, 'both stay saved and listed');
+  assert.equal(changed.data.report.grade.coverage_pct, 90);
 });

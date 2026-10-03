@@ -12,6 +12,7 @@ import {
   h, clear, button, select, input, changeCell, sparkline, logo, gradeBadge, badgeInfo, verdictChip, bandClass,
   fmtPrice, fmtCompactUsd, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, fmtSignedPct, freshnessText, priceStatus, stateText, toast, announce,
   followedCount, researchState, withheldReason, unscoredList, jobKey, icon, evidenceLevel, evidenceText, gradeMeter, coverageMeter,
+  withheldLabel, COVERAGE_MEANS, structureNotes,
   PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT,
 } from '../ui.js';
 import { openAddProjectDialog, openResearchDialog, openSectorDialog, waitingActions } from './dialogs.js';
@@ -430,6 +431,7 @@ function radioGroup(name, legend, options, value, onPick) {
 // recovery. Each states its kind in words.
 export const ALWAYS_VISIBLE = {
   research_uncertain: 'Check charge',
+  research_incomplete: 'Research incomplete',
   research_failed: 'Research failed',
   research_interrupted: 'Research paused',
   writes_blocked: 'Saving blocked',
@@ -523,11 +525,13 @@ function previewContent(ctx, p, prov) {
   if (rep) {
     const g = rep.grade || {};
     if (info.kind === 'grade' || info.kind === 'range') gradeEl = h('div', { class: `pv-grade${bandClass(g)}` }, h('span', { class: 'big' }, g.display), g.label ? h('span', { class: 'lab' }, g.label) : null, h('span', { class: 'what' }, info.kind === 'range' ? 'grade range, 0–100' : 'grade, 0–100'));
-    else gradeEl = h('div', { class: 'pv-grade' }, h('span', { class: 'state-text' }, info.kind === 'pdf' ? 'PDF: needs a text copy' : 'Grade withheld'), g.coverage_pct !== null && g.coverage_pct !== undefined ? h('span', { class: 'what' }, `${g.coverage_pct}% of the weight scored`) : null);
+    else gradeEl = h('div', { class: 'pv-grade' }, h('span', { class: 'state-text' }, info.kind === 'pdf' ? 'PDF: needs a text copy' : withheldLabel(g.coverage_pct)), info.kind !== 'pdf' && typeof g.coverage_pct === 'number' ? h('span', { class: 'what' }, 'report saved · coverage is the investment weight it scored, not progress') : null);
     if (info.evText) add('Evidence', h('span', { class: 'ev-word' }, `${info.evText.charAt(0).toUpperCase()}${info.evText.slice(1)}`));
     if (g.status === 'withheld' && info.kind !== 'pdf') {
       const why = withheldReason(prov, g, rep.unscored);
-      add('Why', h('span', null, `${why.why.charAt(0).toUpperCase()}${why.why.slice(1)}.`, unscoredList(why, { max: 110 })));
+      add('Missing', h('span', null, `${why.why.charAt(0).toUpperCase()}${why.why.slice(1)}.`, unscoredList(why, { max: 110 })));
+      // Parts left unscored while the same report scores related ground.
+      if (rep.structure && rep.structure.flagged) add('Check', structureNotes(rep.structure, { max: 1 }));
     }
     add('Verdict', verdictChip(rep.verdict));
     add('Horizon', rep.horizon || 'not stated');
@@ -690,7 +694,7 @@ function providerSection(ctx, p, prov) {
   const links = [];
   const actions = [];
   if (rep) {
-    links.push(h('a', { href: `#/project/${encodeURIComponent(pid)}/reports?report=${encodeURIComponent(rep.report_id)}`, dataset: { key: `report-${pid}-${prov}` } }, 'Original report'));
+    links.push(h('a', { href: `#/project/${encodeURIComponent(pid)}/reports?report=${encodeURIComponent(rep.report_id)}`, dataset: { key: `report-${pid}-${prov}` } }, 'Open report'));
     links.push(h('a', { href: `#/project/${encodeURIComponent(pid)}/scorecards?provider=${prov}`, dataset: { key: `scorecard-${pid}-${prov}` } }, 'Scorecard'));
   }
   if (job && ['interrupted', 'uncertain'].includes(info.job || info.kind)) {
@@ -723,8 +727,11 @@ function providerSection(ctx, p, prov) {
     gradeLine = h('div', null, h('div', { class: `provider-grade${bandClass(rep.grade)}${info.ev === 'serious' ? ' ev-serious' : ''}` }, h('span', { class: 'big' }, rep.grade.display), rep.grade.label ? h('span', { class: 'lab', 'aria-label': `letter ${rep.grade.label}` }, rep.grade.label) : null, h('span', { class: 'small muted' }, info.kind === 'range' ? 'grade range, 0–100' : 'grade, 0–100')),
       gradeMeter(rep.grade, { serious: info.ev === 'serious' }));
   } else if (rep) {
-    gradeLine = h('div', null, h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, info.kind === 'pdf' ? 'PDF saved: needs a text copy' : 'Grade withheld')),
-      info.kind === 'pdf' ? null : coverageMeter(rep.grade ? rep.grade.coverage_pct : null));
+    // A saved report whose grade is withheld stays one tap from its text: the
+    // state in words, its coverage, and the report right there.
+    gradeLine = h('div', null, h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, info.kind === 'pdf' ? 'PDF saved: needs a text copy' : withheldLabel(rep.grade ? rep.grade.coverage_pct : null))),
+      info.kind === 'pdf' ? null : coverageMeter(rep.grade ? rep.grade.coverage_pct : null),
+      info.kind === 'pdf' ? null : h('p', { class: 'small', style: { margin: '6px 0 0' } }, h('a', { class: 'btn small', href: `#/project/${encodeURIComponent(pid)}/reports?report=${encodeURIComponent(rep.report_id)}`, dataset: { key: `withheld-report-${pid}-${prov}` } }, `Open ${PROVIDER_LABELS[prov]}'s saved report`)));
   } else {
     const st = researchState(info.kind, { provider: prov, hosted });
     // On the online desk the sentence for the assistant follows below.
@@ -734,7 +741,9 @@ function providerSection(ctx, p, prov) {
   if (rep) {
     if (rep.grade && rep.grade.status === 'withheld' && info.kind !== 'pdf') {
       const why = withheldReason(prov, rep.grade, rep.unscored);
-      facts.push(['Why withheld', h('span', null, `${why.why.charAt(0).toUpperCase()}${why.why.slice(1)}. No grade is calculated from part of the weight.`, unscoredList(why))]);
+      facts.push(['Missing from the grade', h('span', null, `${why.why.charAt(0).toUpperCase()}${why.why.slice(1)}. No grade is calculated from part of the weight.`, unscoredList(why))]);
+      // Parts left unscored while the same report scores related ground.
+      if (rep.structure && rep.structure.flagged) facts.push(['Check', structureNotes(rep.structure)]);
     }
     facts.push(['Verdict', verdictChip(rep.verdict)]);
     facts.push(['Analysis date', h('span', null, fmtDate(rep.analysis_at), info.age ? h('span', { class: 'faint' }, ` · ${info.age} ago`.replace('today ago', 'today')) : null, info.stale ? h('span', { class: 'freshness stale' }, ' · stale') : null)]);
@@ -794,7 +803,7 @@ export function progressSteps(rep, key) {
   const research = !key ? (rep ? 'done' : 'todo')
     : key === 'completed' ? 'done'
       : ['queued', 'running', 'dispatching', 'cowork', 'connector'].includes(key) ? 'now'
-        : key === 'failed' ? 'bad'
+        : key === 'failed' || key === 'incomplete' ? 'bad'
           : ['waiting', 'interrupted', 'uncertain'].includes(key) ? 'warn' : 'todo';
   return [
     key || rep ? 'done' : 'todo',
@@ -963,7 +972,7 @@ function renderPanel(ctx, pid) {
         PROVIDERS.map((prov) => providerSection(ctx, p, prov)),
         h('details', { class: 'explain', dataset: { key: 'panel-explain' } }, h('summary', null, 'How to read these grades'),
           h('p', { style: { marginTop: '6px' } }, 'Each model writes its own report. This app calculates a 0–100 grade from that report\'s six weighted component scores (20/25/20/15/10/10) under the rubric the report declares. Letters: A 90+, B 80+, C 70+, D 60+, F below 60.'),
-          h('p', null, 'A range means the model gave score ranges. "Withheld" means a component was missing; the share of the weight that was scored is shown instead of a guess. Downside-risk scores are separate: higher means more risk. A warning sign beside a grade means the desk\'s evidence checks flagged claims in that report: filled for a serious flag, outlined for a material one. Flags never change a score.'))),
+          h('p', null, `A range means the model gave score ranges. "Withheld" means the report is saved but a weighted part was not scored, so no grade is calculated. ${COVERAGE_MEANS} Downside-risk scores are separate: higher means more risk. A warning sign beside a grade means the desk\'s evidence checks flagged claims in that report: filled for a serious flag, outlined for a material one. Flags never change a score.`))),
       h('section', { 'aria-labelledby': 'panel-breakdown' }, h('h3', { id: 'panel-breakdown' }, 'Category breakdown'), h('div', { dataset: { slot: 'breakdown' } }, skeleton('Loading each model\'s scores'))),
       h('section', { 'aria-labelledby': 'panel-evidence' }, h('h3', { id: 'panel-evidence' }, 'Evidence and sources'), h('div', { dataset: { slot: 'evidence' } }, skeleton('Loading the evidence checks'))),
       h('section', { 'aria-labelledby': 'panel-compare' }, h('h3', { id: 'panel-compare' }, 'How the models compare'), comparisonNote(ctx, p)),
@@ -1362,7 +1371,7 @@ export function renderWatchlist(ctx, route) {
   function drawLegend() {
     legend.replaceChildren(
       h('span', { class: 'bands', 'aria-hidden': 'true' }, ['a', 'b', 'c', 'd', 'f'].map((b) => h('span', { class: `band-key band-${b}` }, b.toUpperCase()))),
-      h('span', null, `Grades 0–100, calculated by this app from each model's own report. Withheld means a weighted part was not scored. A month count (4mo) means older than ${ctx.state.index.settings.freshness.research_stale_days || 90} days.`),
+      h('span', null, `Grades 0–100, calculated by this app from each model's own report. Withheld: the report is saved, but a weighted part was not scored; its coverage is the investment weight it did score, not research progress. A month count (4mo) means older than ${ctx.state.index.settings.freshness.research_stale_days || 90} days.`),
       h('span', { class: 'ev' }, h('span', { class: 'ev-ico' }, icon('warn-fill')), 'serious evidence flag'),
       h('span', { class: 'ev' }, h('span', { class: 'ev-ico' }, icon('warn-line')), 'material evidence flag'));
   }

@@ -97,6 +97,10 @@ test('grade badges: every missing grade states why and is never shown as a numbe
     [null, { state: 'dispatching', mode: 'api' }, 'dispatching', 'Working'],
     [null, { state: 'running', mode: 'connector', progress_at: new Date(Date.now() - 3 * 3600000).toISOString() }, 'interrupted', 'Paused'],
     [null, { state: 'uncertain', mode: 'api' }, 'uncertain', 'Check'],
+    // An answer that stopped before finishing: its own state, not "Failed".
+    [null, { state: 'failed', mode: 'api', outcome: 'incomplete', error: 'ChatGPT ran out of its output limit' }, 'incomplete', 'Incomplete'],
+    [null, { state: 'failed', mode: 'api', attempts: [{ outcome: 'incomplete' }] }, 'incomplete', 'Incomplete'],
+    [null, { state: 'failed', mode: 'api', attempts: [{ outcome: 'http' }] }, 'failed', 'Failed'],
     [null, { state: 'canceled' }, 'canceled', 'Canceled'],
   ];
   for (const [report, job, kind, value] of cases) {
@@ -188,15 +192,20 @@ const UNSCORED = [
   { label: 'Timing & executable liquidity', status: 'unknown', note: 'No order-book depth available.' },
 ];
 
-test('withheld grades: the badge says Withheld with the share scored, and the reason names the parts and the model\'s notes', async () => {
+test('withheld grades: a saved report reads "Grade withheld — 40% coverage", never a bare percentage, and the reason names the parts and the model\'s notes', async () => {
   const { ui } = await mods;
   const b = ui.badgeInfo('chatgpt', REPORT(WITHHELD), null);
+  assert.equal(b.report, true, 'a saved report, not a missing one');
+  assert.equal(b.kind, 'withheld');
   assert.equal(b.value, 'Withheld');
-  assert.equal(b.sub, '40%', 'the coverage is small secondary text');
-  assert.match(b.text, /grade withheld, 40% of the weight scored/);
+  assert.equal(b.sub, '40% coverage', 'the coverage is named as coverage, on its own line');
+  assert.match(b.text, /^ChatGPT: report saved, grade withheld — 40% coverage \(the share of the investment weight it scored, not research progress\)/);
   const r = ui.withheldReason('chatgpt', WITHHELD, UNSCORED);
-  assert.equal(r.short, 'Withheld · 40% scored');
-  assert.equal(r.sentence, 'Withheld · 40% scored: ChatGPT said evidence was missing for token value capture, valuation & supply, risk resilience and timing & executable liquidity.');
+  assert.equal(r.short, 'Grade withheld — 40% coverage');
+  assert.equal(r.sentence, 'Grade withheld — 40% coverage: ChatGPT said evidence was missing for token value capture, valuation & supply, risk resilience and timing & executable liquidity.');
+  assert.equal(ui.withheldLabel(80), 'Grade withheld — 80% coverage');
+  assert.equal(ui.withheldLabel(null), 'Grade withheld');
+  assert.match(ui.COVERAGE_MEANS, /share of the investment grade's weight that this report scored\. It is not research progress and not the score\./);
   assert.deepEqual(r.items.map((x) => x.note), ['No fee data found for this token.', 'Unlock schedule not published.', null, 'No order-book depth available.']);
   assert.doesNotMatch(r.sentence, /\b\d+(\.\d)?\b(?!%)/, 'no number stands in for the grade');
   const mixed = ui.withheldReason('gemini', { status: 'withheld', coverage_pct: 80 }, [{ label: 'Token value capture', status: 'missing', note: null }, { label: 'Risk resilience', status: 'not_applicable', note: 'No lending.' }]);
@@ -309,6 +318,7 @@ test('attention: a possibly billed call, blocked research and recovery problems 
   const items = [
     { kind: 'research_uncertain', severity: 'high', project_id: 'x', title: 'X: ChatGPT API call needs a check' },
     { kind: 'research_failed', severity: 'medium', project_id: 'x', title: 'X: Gemini research job failed' },
+    { kind: 'research_incomplete', severity: 'medium', project_id: 'x', title: 'X: ChatGPT answer incomplete' },
     { kind: 'research_interrupted', severity: 'medium', project_id: 'y', title: 'Y: Cowork stopped working on its research' },
     { kind: 'writes_blocked', severity: 'high', project_id: null, title: 'Saving is blocked' },
     { kind: 'broken_record', severity: 'high', project_id: 'z', title: 'Project record z could not be read' },
@@ -318,7 +328,8 @@ test('attention: a possibly billed call, blocked research and recovery problems 
     { kind: 'identity', severity: 'low', project_id: 'y', title: 'Y: token identity pending' },
   ];
   const { critical, rest } = wl.splitAttention(items);
-  assert.deepEqual(critical.map((a) => a.kind), ['research_uncertain', 'research_failed', 'research_interrupted', 'writes_blocked', 'broken_record', 'request_pending']);
+  assert.deepEqual(critical.map((a) => a.kind), ['research_uncertain', 'research_failed', 'research_incomplete', 'research_interrupted', 'writes_blocked', 'broken_record', 'request_pending']);
+  assert.equal(wl.kindWord(items[2]), 'Research incomplete', 'an answer that stopped early is said apart from a failure');
   assert.deepEqual(rest.map((a) => a.kind), ['request_pending', 'review_overdue', 'identity']);
   // Each kept item says what it is in words, never only a color or an icon.
   for (const a of items) assert.match(wl.kindWord(a), /^[A-Z][a-z]+( [a-z]+)?$/, a.kind);

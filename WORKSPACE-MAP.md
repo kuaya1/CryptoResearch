@@ -22,6 +22,8 @@ CryptoResearch/
 │   │                               six research sections, sector focus from the scoring profile); v1-v4 kept for old runs
 │   ├── grading-appendix.v5.md      Appendix with the JSON contract (cr.report.v2): thirteen category grades with confidence,
 │   │                               code_review, chart_cycle, independent_judgment, scenarios with unknowns allowed (v1-v4 kept)
+│   ├── execution/                  Execution notes for one model (chatgpt.v1.md = cr-execution-chatgpt@1): how it works
+│   │                               through the unchanged prompt; frozen per job next to prompt.md (execution.<model>.md)
 │   ├── appendix/                   Standalone appendix per scoring profile, for your own prompts
 │   ├── rubrics/                    cr-grading@1 (weights, labels, risk panel) + scoring profiles: @2 (thirteen category
 │   │                               grades, used by new research) and @1 (kept for the reports that declare it)

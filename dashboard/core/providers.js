@@ -511,8 +511,11 @@ function chatgptOutcome(r, json) {
   return { error: new ProviderError('failed', `OpenAI reported the request failed${e.code ? ` (${e.code})` : ''}: ${String(e.message || 'no reason given').slice(0, 300)}`, extra) };
 }
 
-async function callChatgpt({ model, prompt, maxOutputTokens, maxSearches, effort, key, signal, fetchImpl, dispatcher }) {
+// instructions: the job's execution note (core/execution.js), sent apart from
+// the input, which stays the run's prompt byte for byte.
+async function callChatgpt({ model, prompt, instructions = null, maxOutputTokens, maxSearches, effort, key, signal, fetchImpl, dispatcher }) {
   const body = { model, input: prompt, max_output_tokens: maxOutputTokens, store: false };
+  if (instructions) body.instructions = instructions;
   if (effort) body.reasoning = { effort };
   if (maxSearches > 0) {
     body.tools = [{ type: 'web_search' }];
@@ -585,8 +588,9 @@ function backgroundRoute(provider, cfg = {}) {
   return null;
 }
 
-async function submitChatgpt({ model, prompt, maxOutputTokens, maxSearches, effort, key, signal, fetchImpl, dispatcher, clientRequestId, metadata }) {
+async function submitChatgpt({ model, prompt, instructions = null, maxOutputTokens, maxSearches, effort, key, signal, fetchImpl, dispatcher, clientRequestId, metadata }) {
   const body = { model, input: prompt, max_output_tokens: maxOutputTokens, background: true, store: true };
+  if (instructions) body.instructions = instructions;
   if (effort) body.reasoning = { effort };
   if (maxSearches > 0) {
     body.tools = [{ type: 'web_search' }];

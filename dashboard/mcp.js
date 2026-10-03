@@ -73,7 +73,7 @@ To research a project Eric names, links or shows you:
 3. add_project once, with the evidence URLs. It refuses duplicates by itself; if the project is already there with a pending identity, what you supplied completes it.
 4. start_research. Research needs a verified identity (official website, token binding, evidence URL), so every model researches the same project: if it is pending, complete it with update_project_identity first, or, only when Eric confirmed the project has no token yet or cannot be identified further, pass allow_pending_identity: true. It returns the run's canonical prompt (horizon, rubric, grading appendix) in run.prompt, byte for byte as frozen when the run started; never rebuild it from templates or other files. Follow it exactly: research with your own web tools, cite sources with dates, keep facts, inferences and unknowns apart, cover risks, and end with the JSON block it asks for. If a research run for the project is already open, start_research resumes it (with any draft you saved) instead of starting another. When Eric asks for all three models (Claude, ChatGPT and Gemini), pass models: "all": each model gets the same prompt and never sees the others' conclusions. A model whose paid API is set up on the desk runs automatically in the background; a model without one waits for its assistant until Eric asks it ("${WAITING_PHRASE}": ${ASK_HOW.chatgpt}, or ${ASK_HOW.gemini}). The reply's readiness says which; tell Eric exactly that (desk_status has the detail: setup required, limits, spend). Never ask Eric for an API key in chat: he adds keys in Render's environment himself.
 ${step5}
-6. save_report with the complete report text (not a summary). If it answers "unverified", save the same text again.
+6. save_report with the complete report text (not a summary). If it answers "unverified", save the same text again. Otherwise save a report again only when you change it: an unchanged report saved again is recognized and not stored twice. If your job came with execution notes, read them before the prompt; the prompt itself is the same for every model and decides.
 ${step7}
 8. To show how the models compare, get_research shows each model's progress, and compare_reports, once their reports are saved, shows where they agree and disagree. Summarize that for Eric with each report's own uncertainty; agreement between models is not independent confirmation. Other models' reports on a project are withheld from you while your own research on it is open, so your report stays independent.
 
@@ -312,6 +312,18 @@ function compactReport(r) {
     out.sector_profile = r.sector_profile || null;
     out.category_grades = { total: sc.total, scored: sc.scored, unknown: sc.unknown_labels, confidence: sc.confidence, note: 'Diagnostics, shown beside the investment grade and never averaged into it.' };
   }
+  // A withheld grade in plain words: the share of the investment weight that
+  // was scored (not research progress, not a score) and the parts left out.
+  const g = r.grade;
+  if (g && g.status === 'withheld') {
+    out.grade_withheld = {
+      coverage_pct: typeof g.coverage_pct === 'number' ? g.coverage_pct : null,
+      coverage_means: 'The share of the investment grade\'s weight that this report scored. It is not research progress and not the score.',
+      missing: (r.unscored || []).map((x) => ({ component: x.label, status: x.status, note: x.note || null })),
+    };
+  }
+  // Weighted parts left unscored while the same report scores related ground.
+  if (r.structure && r.structure.flagged) out.structure_checks = r.structure;
   return out;
 }
 
@@ -389,6 +401,9 @@ function jobView(job, run, me, ws) {
   else progress = job.state;
   const out = { state: job.state, mode: job.mode, progress, report_id: job.report_id || null };
   if (job.mode === 'api' || job.mode === 'mock') Object.assign(out, { model_id: job.model || null, attempts: (job.attempts || []).length, cost_counted_usd: Math.round(cost * 10000) / 10000 });
+  // A model whose job carries an execution note (ChatGPT's): its version and
+  // hash, so what that model was given is on record beside the prompt's.
+  if (job.execution) out.execution = { ref: job.execution.ref, sha256: job.execution.sha256 };
   if (activity) out.activity = activity;
   return out;
 }
@@ -439,6 +454,14 @@ function runView(ws, projectId, run, ctx, { prompt = false } = {}) {
     out.cowork = research.assistantActivity(job, run);
   }
   if (prompt) {
+    // This model's execution note, when its job has one (ChatGPT's): frozen
+    // with the job, checked against its hash, given to that model only and
+    // before the prompt, which is unchanged and the same for every model.
+    const note = require('./core/execution').readNote(ws, run, ctx.me);
+    if (note) {
+      out.execution_notes = note.text;
+      out.execution_delivery = note.delivery;
+    }
     const p = frozenPrompt(ws, run);
     out.prompt = p.text;
     out.prompt_delivery = p.delivery;
@@ -859,8 +882,14 @@ const handlers = {
       throw new OpError('CONFLICT', `${label}'s job in ${runId} is with the ${label} API in the background (${job.state}); its answer is saved there. Nothing was saved here.`);
     }
     const inbox = require('./core/inbox');
-    const out = inbox.importContent(ws, me, { content: text, filename: `${id}__${runId}_${me}.md`, projectId: id, runId, channel: ctx.importChannel });
-    const r = out.result || {};
+    // The same report saved again for this run, differing only in its
+    // date-time stamps (an assistant that writes it out again stamps its "as
+    // of" and "accessed" times anew): nothing new is stored, and the run keeps
+    // the report it has.
+    const same = inbox.sameReportForRun(ws, { projectId: id, runId, provider: me, text });
+    const r = same
+      ? { status: 'duplicate', project_id: id, report_id: same.report_id, stamps_only: true }
+      : (inbox.importContent(ws, me, { content: text, filename: `${id}__${runId}_${me}.md`, projectId: id, runId, channel: ctx.importChannel }).result || {});
     if (r.status !== 'ingested' && r.status !== 'duplicate') {
       throw new OpError('INVALID', `The report was not saved: ${r.message || r.status}`);
     }
@@ -870,9 +899,14 @@ const handlers = {
       throw new OpError('REFUSED', `This exact text is already saved on the desk as report ${r.report_id}, which is not ${label}'s report for this project. Save the report you wrote yourself.`);
     }
     if (r.status === 'ingested' && job.state === 'completed' && job.report_id && job.report_id !== r.report_id) {
-      // A second, different report for a run that already had one: saved, but
-      // the run keeps its first report.
-      r.note = `The run already had report ${job.report_id}; this one was saved separately.`;
+      // A second, different report for a run that already had one. A job the
+      // model's assistant took follows its newer report; a waiting job it
+      // answered keeps its first (research.stageReportLink). Both stay saved
+      // and listed; the reply says which happened.
+      const linked = (research.loadRun(ws, id, runId) || { jobs: {} }).jobs[me];
+      r.note = linked && linked.report_id === r.report_id
+        ? `The run had report ${job.report_id}; it now follows this newer one, and ${job.report_id} stays saved and listed.`
+        : `The run keeps its report ${job.report_id}; this one was saved separately and is listed with it.`;
     }
     const { latest, all } = reportsOf(ws, id, me);
     const saved = all.find((x) => x.report_id === r.report_id) || latest;
@@ -892,17 +926,22 @@ const handlers = {
     // research is fresh, or left honestly unscored.
     const g = saved && saved.grade;
     const isWithheld = Boolean(g && g.status === 'withheld');
-    const withheld = isWithheld ? ` Its grade is withheld: ${g.reason || 'not every weighted component is scored.'} components shows each part as it was read, with any format errors. If your research supports a score (or a range with its reason) for those parts, or a part was misread because of a format slip, fix the JSON block and save the report again. If it does not, leave them unscored: a withheld grade is then the honest result.` : '';
+    // The model is not invited to save an unchanged report again (on
+    // 2026-10-03 that invitation made ChatGPT re-save four reports unchanged);
+    // a second save is for a real change only.
+    const checks = saved && saved.structure && saved.structure.flagged ? saved.structure : null;
+    const withheld = isWithheld ? ` Its grade is withheld: ${g.reason || 'not every weighted component is scored.'} components shows each part as it was read, with any format errors${checks ? '; structure_checks names parts left unscored while your report scores related ground' : ''}. Save again only to change the JSON block: a part was misread because of a format slip, or your written report supports a judgment on a part (a score, or a range with its reason) that the block leaves unknown. Otherwise leave them unscored and do not save again: a withheld grade is then the honest result, and an unchanged report saved again is recognized and not stored twice.` : '';
     const status = r.status === 'duplicate' ? 'unchanged' : verified ? 'saved' : 'unverified';
     const result = {
       status,
-      message: `${status === 'unchanged' ? `This exact report is already saved (${r.report_id}).` : status === 'saved' ? `Saved ${label} report ${r.report_id} for ${id}; it is on the project page now.` : `The desk wrote ${label} report ${r.report_id} for ${id} but could not confirm the save (it did not read back as written). Call save_report again with the same text; if it did land, nothing changes.`}${withheld}${othersOpen.length ? ` Still open in this run: ${listLabels(othersOpen)} (get_research shows their progress; compare_reports once they are saved).` : after && PROVIDERS.filter((p) => after.jobs[p]).length > 1 ? ' Every model in this run is done: compare_reports shows where they agree and disagree.' : ''}`,
+      message: `${status === 'unchanged' ? (r.stamps_only ? `This report is already saved as ${r.report_id}: the new text differs only in its date-time stamps, so nothing new was stored.` : `This exact report is already saved (${r.report_id}).`) : status === 'saved' ? `Saved ${label} report ${r.report_id} for ${id}; it is on the project page now.` : `The desk wrote ${label} report ${r.report_id} for ${id} but could not confirm the save (it did not read back as written). Call save_report again with the same text; if it did land, nothing changes.`}${withheld}${othersOpen.length ? ` Still open in this run: ${listLabels(othersOpen)} (get_research shows their progress; compare_reports once they are saved).` : after && PROVIDERS.filter((p) => after.jobs[p]).length > 1 ? ' Every model in this run is done: compare_reports shows where they agree and disagree.' : ''}`,
       report: compactReport(saved),
       run: runOut,
       validation: { errors: r.errors || 0, warnings: r.warnings || 0, ambiguous: r.ambiguous || 0, note: r.note || null },
       verified,
     };
     if (isWithheld) Object.assign(result, gradeGaps(ws, id, r.report_id));
+    if (checks) result.structure_checks = checks;
     return result;
   },
 
@@ -1067,17 +1106,20 @@ function toResult(name, out) {
   const { run, ...rest } = out || {};
   const prompt = run && typeof run.prompt === 'string' ? run.prompt : null;
   const draft = run && typeof run.draft === 'string' ? run.draft : null;
+  const notes = run && typeof run.execution_notes === 'string' ? run.execution_notes : null;
   const structured = run ? { ...rest, run } : rest;
   const forText = run ? {
     ...rest,
     run: {
       ...run,
+      ...(notes !== null ? { execution_notes: `(your execution notes are the text block just before the prompt: ${notes.length} characters, SHA-256 ${run.execution_delivery ? run.execution_delivery.sha256 : '?'})` } : {}),
       ...(prompt !== null ? { prompt: `(the run's frozen prompt is the last text block below: ${prompt.length} characters, SHA-256 ${run.prompt_delivery ? run.prompt_delivery.sha256 : run.prompt_sha256})` } : {}),
       ...(draft !== null ? { draft: `(your saved draft is the text block below: ${draft.length} characters)` } : {}),
     },
   } : rest;
   const blocks = [{ type: 'text', text: JSON.stringify(forText, null, 2) }];
   if (draft !== null) blocks.push({ type: 'text', text: `--- Your saved draft for ${run.run_id} ---\n${draft}` });
+  if (notes !== null) blocks.push({ type: 'text', text: `--- Execution notes for ${run.run_id} (for you only; read them first. The prompt below is unchanged and decides) ---\n${notes}` });
   if (prompt !== null) blocks.push({ type: 'text', text: `--- Research prompt for ${run.run_id} (follow it exactly) ---\n${prompt}` });
   return { content: blocks, structuredContent: structured, isError: false };
 }

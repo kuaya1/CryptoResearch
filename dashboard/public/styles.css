@@ -780,10 +780,10 @@ button.gb[class*="band-"]:hover { border-color: currentColor; }
 /* States: words, never numbers. */
 .gb.is-none, .gb.is-withheld, .gb.is-pdf, .gb.is-queued, .gb.is-canceled, .gb.is-completed,
 .gb.is-running, .gb.is-dispatching, .gb.is-cowork, .gb.is-connector, .gb.is-waiting,
-.gb.is-uncertain, .gb.is-failed, .gb.is-interrupted { font-size: var(--fs-caption); }
+.gb.is-uncertain, .gb.is-incomplete, .gb.is-failed, .gb.is-interrupted { font-size: var(--fs-caption); }
 .gb.is-none .v, .gb.is-withheld .v, .gb.is-pdf .v, .gb.is-queued .v, .gb.is-canceled .v, .gb.is-completed .v,
 .gb.is-running .v, .gb.is-dispatching .v, .gb.is-cowork .v, .gb.is-connector .v, .gb.is-waiting .v,
-.gb.is-uncertain .v, .gb.is-failed .v, .gb.is-interrupted .v { font-size: 12.5px; font-weight: 500; letter-spacing: 0; color: var(--text-2); }
+.gb.is-uncertain .v, .gb.is-incomplete .v, .gb.is-failed .v, .gb.is-interrupted .v { font-size: 12.5px; font-weight: 500; letter-spacing: 0; color: var(--text-2); }
 .gb.is-none { border-style: dashed; border-color: var(--border); background: transparent; }
 .gb.is-none .v { color: var(--text-3); }
 .gb.is-withheld { border-style: dashed; border-color: var(--control-border); background: repeating-linear-gradient(135deg, var(--surface-sunken) 0 4px, var(--surface) 4px 8px); }
@@ -802,6 +802,15 @@ button.gb[class*="band-"]:hover { border-color: currentColor; }
 .gb.is-failed .si, .gb.is-failed .v { color: var(--neg); font-weight: 600; }
 .gb.is-interrupted { border-color: color-mix(in srgb, var(--warn-strong) 55%, transparent); }
 .gb.is-interrupted .si, .gb.is-interrupted .v { color: var(--warn); font-weight: 600; }
+/* Incomplete: an answer that stopped part-way (not a report). A neutral solid
+   border and a half-filled sign, apart from withheld (hatched), failed (red),
+   check (amber fill), waiting (amber dashed) and paused (amber outline). */
+.gb.is-incomplete { border-color: var(--text-3); background: var(--surface); }
+.gb.is-incomplete .si, .gb.is-incomplete .v { color: var(--text); font-weight: 600; }
+/* A withheld grade's coverage, on its own line under the word, so the share
+   never reads as progress or as a score. */
+.gb .cov { font-size: 11px; font-weight: 600; color: var(--text-2); line-height: 13px; }
+table.wl .gb.is-withheld { flex-direction: column; align-items: flex-start; justify-content: center; gap: 0; }
 /* A newer run that failed, needs a check or stalled, on a saved grade. */
 .gb .x { font-size: 10px; font-weight: 700; line-height: 14px; min-width: 14px; text-align: center; border-radius: 50%; color: #fff; background: var(--warn-strong); }
 /* Evidence checks on the report behind a grade. Serious (a filled warning
@@ -877,7 +886,7 @@ table.wl .fit-hidden { display: none !important; }
   table.wl .gb .p { display: block; }
   table.wl .gb .main { flex-wrap: wrap; row-gap: 2px; max-width: 100%; }
   table.wl .gb .v { font-size: 15px; }
-  table.wl .gb.is-none .v, table.wl .gb.is-withheld .v, table.wl .gb.is-pdf .v, table.wl .gb.is-queued .v, table.wl .gb.is-waiting .v, table.wl .gb.is-uncertain .v, table.wl .gb.is-failed .v, table.wl .gb.is-interrupted .v, table.wl .gb.is-running .v, table.wl .gb.is-dispatching .v, table.wl .gb.is-connector .v, table.wl .gb.is-cowork .v { font-size: 13.5px; }
+  table.wl .gb.is-none .v, table.wl .gb.is-withheld .v, table.wl .gb.is-pdf .v, table.wl .gb.is-queued .v, table.wl .gb.is-waiting .v, table.wl .gb.is-uncertain .v, table.wl .gb.is-failed .v, table.wl .gb.is-incomplete .v, table.wl .gb.is-interrupted .v, table.wl .gb.is-running .v, table.wl .gb.is-dispatching .v, table.wl .gb.is-connector .v, table.wl .gb.is-cowork .v { font-size: 13.5px; }
   .proj-cell { max-width: none; align-items: flex-start; gap: 12px; }
   .proj-cell .logo { width: 36px !important; height: 36px !important; font-size: 13px !important; }
   .proj-cell .names { flex-direction: column; align-items: flex-start; gap: 3px; }

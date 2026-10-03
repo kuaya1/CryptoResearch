@@ -42,6 +42,19 @@ function evidenceBrief(a, project) {
   return { flagged: e.flagged_claims, flagged_categories: e.flagged_categories, high: e.high, medium: e.medium, low: e.low, critical: e.critical_claims, summary: e.summary };
 }
 
+// Structure checks of one report (core/consistency.js): weighted parts left
+// unscored while the same report scores related ground. Read-time only;
+// labels from the rubric and profile the report declares.
+function structureOf(ws, a) {
+  const grading = (ws.rubrics.gradingVersions && ws.rubrics.gradingVersions[a.rubric_version]) || ws.rubrics.grading || null;
+  return require('./consistency').structureChecks(a, { grading, profile: ws.rubrics.profiles[a.sector_profile] || null });
+}
+
+function structureBrief(ws, a) {
+  const s = structureOf(ws, a);
+  return s.flagged ? { flagged: s.flagged, summary: s.summary, flags: s.flags.map((f) => ({ component: f.component, label: f.label, message: f.message })) } : null;
+}
+
 function reportSummary(ws, r, project = null) {
   if (r.broken) return { report_id: r.report_id, broken: true, error: r.error };
   const a = r.assessment;
@@ -82,6 +95,9 @@ function reportSummary(ws, r, project = null) {
     // scoring profile the report declares.
     scorecard: require('./thesis').scorecardBrief(a, ws.rubrics.profiles[a.sector_profile] || null),
     chart_phase: a.chart_cycle ? a.chart_cycle.phase : null,
+    // Weighted parts left unscored while the report scores related ground
+    // (null when there are none). Never changes the grade.
+    structure: structureBrief(ws, a),
   };
 }
 
@@ -146,7 +162,10 @@ function researchAttention(ws, p, researchState, now) {
     if (!job) continue;
     const who = PROVIDER_LABELS[prov];
     const item = (kind, severity, title, detail) => out.push({ kind, severity, project_id: p.project_id, title: `${p.name}: ${title}`, detail, action });
-    if (job.state === 'failed') item('research_failed', 'medium', `${who} research job failed`, job.error || 'See the research run for details.');
+    // An answer that arrived but stopped before finishing is said apart from a
+    // request that failed outright.
+    if (job.state === 'failed' && job.outcome === 'incomplete') item('research_incomplete', 'medium', `${who} answer incomplete`, `${job.error || 'The answer stopped before it finished.'} Its partial text is kept under the run; it is not a report and is not graded.`);
+    else if (job.state === 'failed') item('research_failed', 'medium', `${who} research job failed`, job.error || 'See the research run for details.');
     else if (job.state === 'uncertain') item('research_uncertain', 'high', `${who} API call needs a check`, 'The request may have been sent and billed, and no answer was saved. Check the provider\'s usage page, then reconcile it or retry.');
     else if (job.state === 'unconfigured') {
       const since = Date.parse(job.updated_at || job.run_created_at || '');
@@ -560,6 +579,7 @@ function projectDetailRaw(ws, id) {
         model_total,
         eligible: isEligible(r),
         evidence: require('./evidence').evidenceChecks(r.assessment, { officialWebsite: siteOf(project) }),
+        structure: structureOf(ws, r.assessment),
       };
     })
     .sort((a, b) => String((b.assessment && b.assessment.analysis_at) || (b.meta && b.meta.imported_at) || '').localeCompare(String((a.assessment && a.assessment.analysis_at) || (a.meta && a.meta.imported_at) || '')));

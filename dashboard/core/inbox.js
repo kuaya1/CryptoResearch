@@ -44,6 +44,36 @@ function normalizedTextHash(text) {
   return sha256(text.replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').trim());
 }
 
+// A report text with its date-time stamps masked. An assistant that writes the
+// same report out again stamps its "as of" and "accessed" times anew (ChatGPT
+// re-saved four reports on 2026-10-03 that differed in nothing else). Dates
+// without a time stay as they are, so a report about another day is another
+// report.
+const DATE_TIME = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?/g;
+function stamplessText(text) {
+  return String(text).replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').trim().replace(DATE_TIME, '<date-time>');
+}
+
+// The report this model already saved for this research run whose text is the
+// same apart from its date-time stamps, or null. Read-only.
+function sameReportForRun(ws, { projectId, runId, provider, text }) {
+  if (!runId || !projectId) return null;
+  const want = stamplessText(text);
+  for (const r of loadReports(ws, projectId)) {
+    if (r.broken || r.meta.provider !== provider || !r.meta.original_file) continue;
+    const run = (r.meta.provenance && r.meta.provenance.research_run_id) || (r.assessment && r.assessment.research_run_id) || null;
+    if (run !== runId) continue;
+    let original;
+    try {
+      original = fs.readFileSync(ws.abs(`${r.dir}/${r.meta.original_file}`), 'utf8');
+    } catch (_) {
+      continue;
+    }
+    if (stamplessText(original) === want) return { report_id: r.report_id, imported_at: r.meta.imported_at || null };
+  }
+  return null;
+}
+
 // Index of every stored original by hash, for duplicate detection.
 function knownHashes(ws) {
   const map = new Map();
@@ -474,6 +504,8 @@ module.exports = {
   ingestFile,
   saveToInbox,
   importContent,
+  stamplessText,
+  sameReportForRun,
   assignAndRetry,
   setAside,
   inboxStatus,

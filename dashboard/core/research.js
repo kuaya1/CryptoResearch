@@ -435,7 +435,13 @@ function preflight(ws, projectId, runId = null) {
       jobs[p] = { state: job.state, route: 'setup_required', setup: need ? need.short : st[p].reason, note: 'nothing would be sent' };
       continue;
     }
-    const plan = prompt === null ? { ok: false, reason: 'the run\'s prompt file could not be read' } : callPlan(ws, p, prompt);
+    // A job with an execution note sends it too (as instructions): it counts.
+    const note = require('./execution').readNote(ws, run, p);
+    const plan = prompt === null
+      ? { ok: false, reason: 'the run\'s prompt file could not be read' }
+      : note && note.delivery.status !== 'verified'
+        ? { ok: false, reason: 'the job\'s execution notes no longer match their recorded hash' }
+        : callPlan(ws, p, note ? `${note.text}\n\n${prompt}` : prompt);
     if (!plan.ok) {
       jobs[p] = { state: job.state, route: 'automatic', error: plan.reason, note: 'nothing would be sent' };
       continue;
@@ -847,6 +853,12 @@ function createRun(ws, args = {}) {
   const out = runOp(ws, { type: 'research_run_create', summary: `Research ${projectId} with ${list.join(', ')}` }, (op) => {
     op.write(`${dir}/prompt.md`, prompt, { mode: 'create' });
     op.write(`${dir}/evidence-packet.json`, packetText, { mode: 'create' });
+    // A model's execution note (ChatGPT's, execution.js), frozen with its job
+    // next to the prompt; the prompt itself stays the same for every model.
+    for (const p of list) {
+      const note = require('./execution').freezeNote(op, ws, run, p, dir);
+      if (note) run.jobs[p].execution = note;
+    }
     op.writeJson(`${dir}/run.json`, run, { mode: 'create' });
     return { run_id: runId, project_id: projectId };
   });
@@ -1135,7 +1147,7 @@ const lastAttempt = (job) => (job && job.attempts && job.attempts.length ? job.a
 
 // Admission: under the workspace lock, count every attempt in the workspace
 // and reserve this one, or record why it was refused. Nothing is sent here.
-function admitAttempt(ws, projectId, runId, provider, { mode, model, plan }) {
+function admitAttempt(ws, projectId, runId, provider, { mode, model, plan, delivered = null }) {
   const rel = `${runDir(projectId, runId)}/run.json`;
   const out = runOp(ws, { type: 'research_admit', summary: `Reserve a ${provider} attempt in ${runId}` }, (op) => {
     const run = op.readJson(rel, null);
@@ -1173,6 +1185,7 @@ function admitAttempt(ws, projectId, runId, provider, { mode, model, plan }) {
       reserved_usd: mode === 'api' ? plan.total_usd : 0,
     };
     if (mode === 'api') Object.assign(attempt, { estimate: { enforced_usd: plan.enforced_usd, estimated_usd: plan.estimated_usd, parts: plan.parts }, bounds: plan.bounds, prices: plan.prices });
+    if (delivered) attempt.delivered = delivered;
     job.attempts.push(attempt);
     job.state = mode === 'api' ? 'dispatching' : 'running';
     job.error = null;
@@ -1638,21 +1651,33 @@ async function runOneJob(ws, { project_id: projectId, run, job }, { fetchImpl, t
       updateJob(ws, projectId, run.run_id, provider, (jj) => { jj.state = 'failed'; jj.error = 'The saved prompt no longer matches its recorded hash; not sent.'; });
       return { provider, status: 'failed' };
     }
+    // The job's execution note (ChatGPT's), checked against its frozen hash and
+    // sent apart from the prompt (the API's instructions), so the input stays
+    // the run's prompt byte for byte. A job made before notes existed has none.
+    const note = require('./execution').readNote(ws, fresh, provider);
+    if (note && note.delivery.status !== 'verified') {
+      updateJob(ws, projectId, run.run_id, provider, (jj) => { jj.state = 'failed'; jj.error = 'The saved execution notes no longer match their recorded hash; not sent.'; });
+      return { provider, status: 'failed' };
+    }
+    const instructions = note ? note.text : null;
     let plan = null;
     if (status.mode === 'api') {
-      plan = callPlan(ws, provider, prompt);
+      plan = callPlan(ws, provider, instructions ? `${instructions}\n\n${prompt}` : prompt);
       if (!plan.ok) {
         updateJob(ws, projectId, run.run_id, provider, (jj) => { jj.state = 'failed'; jj.error = `Not sent: ${plan.reason}`; });
         return { provider, status: 'refused', reason: plan.reason };
       }
     }
-    const adm = admitAttempt(ws, projectId, run.run_id, provider, { mode: status.mode, model: status.model || null, plan });
+    // What this attempt sends, recorded on it: the prompt's hash and, for a
+    // model with one, its execution note's version and hash.
+    const delivered = { prompt_sha256: fresh.prompt.sha256, execution: note ? { ref: note.delivery.ref, sha256: note.delivery.sha256 } : null };
+    const adm = admitAttempt(ws, projectId, run.run_id, provider, { mode: status.mode, model: status.model || null, plan, delivered });
     if (!adm.admitted) return { provider, status: adm.status, reason: adm.reason, state: adm.state };
     const attemptId = adm.attempt.attempt_id;
     if (!markDispatched(ws, projectId, run.run_id, provider, attemptId).send) return { provider, status: 'canceled' };
     // ChatGPT and Gemini: the provider runs it in the background; its ID is
     // saved and the answer is collected by later checks.
-    if (status.mode === 'api' && plan.bounds.route) return await submitAttempt(ws, projectId, fresh, provider, adm.attempt, { plan, status, prompt, fetchImpl });
+    if (status.mode === 'api' && plan.bounds.route) return await submitAttempt(ws, projectId, fresh, provider, adm.attempt, { plan, status, prompt, instructions, fetchImpl });
     let result = null;
     let error = null;
     try {
@@ -1662,6 +1687,7 @@ async function runOneJob(ws, { project_id: projectId, run, job }, { fetchImpl, t
         result = await providers.callProvider(provider, {
           model: status.model,
           prompt,
+          instructions,
           maxOutputTokens: plan.bounds.max_output_tokens,
           maxSearches: plan.bounds.search.limit,
           maxContinuations: plan.bounds.max_continuations,
@@ -1756,7 +1782,7 @@ function recordSubmitted(ws, run, provider, attemptId, sub) {
 // Sends one attempt to run in the provider's background and saves its ID:
 // first as a capture without the lock, then in run.json. A create that
 // fails is an outcome like any other (refused, uncertain, not sent).
-async function submitAttempt(ws, projectId, run, provider, attempt, { plan, status, prompt, fetchImpl }) {
+async function submitAttempt(ws, projectId, run, provider, attempt, { plan, status, prompt, instructions = null, fetchImpl }) {
   const label = PROVIDER_LABELS[provider];
   const submittedAt = new Date().toISOString();
   let sub = null;
@@ -1765,6 +1791,7 @@ async function submitAttempt(ws, projectId, run, provider, attempt, { plan, stat
     sub = await providers.submitBackground(provider, {
       model: status.model,
       prompt,
+      instructions,
       maxOutputTokens: plan.bounds.max_output_tokens,
       maxSearches: plan.bounds.search.limit,
       effort: plan.bounds.effort,
@@ -2003,7 +2030,7 @@ function researchStateFor(ws, projectId) {
   for (const p of PROVIDERS) {
     const run = runs.find((r) => r.jobs[p]);
     const last = run ? lastAttempt(run.jobs[p]) : null;
-    byProvider[p] = run ? { run_id: run.run_id, state: run.jobs[p].state, mode: run.jobs[p].mode, error: run.jobs[p].error || null, report_id: run.jobs[p].report_id || null, updated_at: run.jobs[p].updated_at, progress_at: run.jobs[p].progress_at || null, run_created_at: run.created_at, background: Boolean(last && last.phase === 'submitted'), provider_status: last && last.phase === 'submitted' ? last.provider_status || null : null, not_before: run.jobs[p].not_before || null } : null;
+    byProvider[p] = run ? { run_id: run.run_id, state: run.jobs[p].state, mode: run.jobs[p].mode, error: run.jobs[p].error || null, report_id: run.jobs[p].report_id || null, updated_at: run.jobs[p].updated_at, progress_at: run.jobs[p].progress_at || null, run_created_at: run.created_at, background: Boolean(last && last.phase === 'submitted'), provider_status: last && last.phase === 'submitted' ? last.provider_status || null : null, not_before: run.jobs[p].not_before || null, outcome: last && last.outcome ? last.outcome : null } : null;
   }
   return { latest_run: latest ? { run_id: latest.run_id, status: latest.status, created_at: latest.created_at, providers: latest.providers, horizon: latest.horizon } : null, providers: byProvider, runs: runs.length };
 }
@@ -2099,7 +2126,12 @@ function addProviders(ws, projectId, runId, providers, { assistant = null, chann
     if (!run) throw new OpError('NOT_FOUND', `No research run ${runId} in ${projectId}`);
     const added = list.filter((p) => !run.jobs[p]);
     if (!added.length) return { added: [] };
-    for (const p of added) run.jobs[p] = newJob(ws, p, status[p], { assistant });
+    for (const p of added) {
+      run.jobs[p] = newJob(ws, p, status[p], { assistant });
+      // A model added now gets its execution note now, frozen with its job.
+      const note = require('./execution').freezeNote(op, ws, run, p, runDir(projectId, runId));
+      if (note) run.jobs[p].execution = note;
+    }
     run.providers = PROVIDERS.filter((p) => run.jobs[p]);
     run.providers_added = [...(run.providers_added || []), { at: new Date().toISOString(), providers: added, by: ws.actor || null, channel }];
     op.writeJson(rel, run);

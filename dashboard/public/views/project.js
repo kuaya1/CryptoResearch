@@ -6,6 +6,7 @@ import {
   fmtPrice, fmtCompactUsd, fmtNum, fmtDate, fmtDateTime, fmtAgo, fmtSignedPct, freshnessText, kv, details, field, input, select, button,
   action, callout, copyText, tabStrip, safeSection, submissionId, stateText, fieldError, PROVIDERS, PROVIDER_LABELS, link,
   jobKey, coworkIdleMinutes, isAssistantJob, researchState, withheldReason, unscoredFrom, unscoredList,
+  withheldLabel, COVERAGE_MEANS, structureNotes,
 } from '../ui.js';
 import { renderMarkdown } from '../md.js';
 import { openResearchDialog, openSectorDialog, waitingActions, waitingStep } from './dialogs.js';
@@ -124,9 +125,13 @@ function originalOf(r, path) {
 // Why a grade is withheld, from the report itself: the parts not scored and
 // the model's own notes on them. The share of the weight that was scored is
 // shown; nothing is renormalized or filled in.
-function withheldBlock(prov, g, a) {
+function withheldBlock(prov, g, a, structure = null) {
   const why = withheldReason(prov, g, unscoredFrom(g, a.investment_components));
-  return h('div', { class: 'why-withheld' }, h('p', { style: { margin: '6px 0 0' } }, why.sentence), unscoredList(why, { max: 400 }));
+  return h('div', { class: 'why-withheld' },
+    h('p', { style: { margin: '6px 0 0' } }, why.sentence),
+    typeof why.coverage === 'number' ? h('p', { class: 'small muted', style: { margin: '2px 0 0' } }, COVERAGE_MEANS) : null,
+    unscoredList(why, { max: 400 }),
+    structureNotes(structure));
 }
 
 function routeText(rep) {
@@ -155,8 +160,10 @@ function modelCard(ctx, d, row, prov, latest) {
     const why = g && g.status === 'withheld' ? withheldReason(prov, g, sum && sum.unscored ? sum.unscored : unscoredFrom(r.grade, r.assessment.investment_components)) : null;
     main = h('div', null,
       graded ? h('div', { class: `provider-grade${bandClass(g)}` }, h('span', { class: 'big' }, g.display), g.label ? h('span', { class: 'lab' }, g.label) : null, h('span', { class: 'small muted' }, g.status === 'range' ? 'range, 0–100' : 'grade, 0–100'))
-        : h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, 'Grade withheld'), g && g.coverage_pct !== null && g.coverage_pct !== undefined ? h('span', { class: 'small muted' }, `${g.coverage_pct}% of the weight scored`) : null),
-      why ? h('p', { class: 'why-withheld' }, `${why.why.charAt(0).toUpperCase()}${why.why.slice(1)}.`) : null,
+        : h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, withheldLabel(g ? g.coverage_pct : null))),
+      why && typeof why.coverage === 'number' ? h('p', { class: 'small muted', style: { margin: '2px 0 0' } }, `The report is saved. ${COVERAGE_MEANS}`) : null,
+      why ? h('div', { class: 'why-withheld' }, h('p', { style: { margin: '6px 0 0' } }, `${why.why.charAt(0).toUpperCase()}${why.why.slice(1)}.`), unscoredList(why, { max: 240 })) : null,
+      why ? structureNotes((r.structure && r.structure.flagged) ? r.structure : sum && sum.structure) : null,
       h('dl', { class: 'facts' },
         h('div', { class: 'wide' }, h('dt', null, 'Verdict'), h('dd', null, verdictChip(r.assessment.verdict))),
         h('div', null, h('dt', null, 'Analysis'), h('dd', null, fmtDate(r.assessment.analysis_at), info.age ? h('span', { class: 'faint' }, ` · ${info.age}`) : null, info.stale ? h('span', { class: 'freshness stale' }, ' · stale') : null)),
@@ -338,7 +345,7 @@ function scorecardsTab(ctx, d, latest, route) {
       h('div', { class: 'grid two' },
         h('div', null, h('div', { class: 'small muted' }, 'Grade calculated by this app'), gradeView(g),
           r.model_total ? h('p', { class: 'small', style: { marginTop: '8px' } }, r.model_total.status === 'mismatch' ? h('strong', null, 'Model total differs. ') : null, r.model_total.message) : null,
-          g && g.status === 'withheld' ? withheldBlock(prov, g, a) : null),
+          g && g.status === 'withheld' ? withheldBlock(prov, g, a, r.structure) : null),
         h('div', null,
           kv([
             ['Model', `${a.model_version || 'not stated'} (${r.provenance && r.provenance.attested ? 'attested by the API' : 'self-reported'})`],
@@ -568,8 +575,10 @@ function atAGlance(ctx, d, r, withheld) {
   if (isPdf) gradeEl = h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, 'PDF: needs a text copy'));
   else if (withheld) {
     gradeEl = h('div', null,
-      h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, 'Withheld'), withheld.coverage !== null ? h('span', { class: 'small muted' }, `${withheld.coverage}% of the weight scored`) : null),
-      unscoredList(withheld, { max: 400 }));
+      h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, withheld.short)),
+      withheld.coverage !== null ? h('p', { class: 'small muted', style: { margin: '2px 0 0' } }, COVERAGE_MEANS) : null,
+      unscoredList(withheld, { max: 400 }),
+      structureNotes(r.structure));
   } else if (g && (g.status === 'firm' || g.status === 'range')) gradeEl = gradeView(g);
   else gradeEl = h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, 'No grade'), g && g.reason ? h('span', { class: 'small muted' }, g.reason) : null);
   // The category grades of the profile this report declares; none for a
@@ -622,7 +631,7 @@ function reportsTab(ctx, d, route) {
       good.filter((r) => r.meta.provider === p).sort((a, b) => String(b.assessment.analysis_at || '').localeCompare(String(a.assessment.analysis_at || ''))).map((r) => {
         const g = r.grade;
         return h('a', { href: `#/project/${pid}/reports?report=${encodeURIComponent(r.report_id)}`, 'aria-current': sel && r.report_id === sel.report_id ? 'true' : null, dataset: { key: `rl-${r.report_id}` } },
-          h('div', { class: 'line1' }, h('span', null, fmtDate(r.assessment.analysis_at) || 'Undated'), h('span', { class: 'num' }, g && g.display ? `${g.display} ${g.label || ''}`.trim() : g && g.status === 'withheld' ? `Withheld${typeof g.coverage_pct === 'number' ? ` · ${g.coverage_pct}%` : ''}` : r.meta.original_file.endsWith('.pdf') ? 'PDF' : 'No grade')),
+          h('div', { class: 'line1' }, h('span', null, fmtDate(r.assessment.analysis_at) || 'Undated'), h('span', { class: 'num' }, g && g.display ? `${g.display} ${g.label || ''}`.trim() : g && g.status === 'withheld' ? withheldLabel(g.coverage_pct) : r.meta.original_file.endsWith('.pdf') ? 'PDF' : 'No grade')),
           h('div', { class: 'line2' }, [r.assessment.verdict ? r.assessment.verdict.charAt(0) + r.assessment.verdict.slice(1).toLowerCase() : 'No verdict', latestIds.has(r.report_id) ? 'latest' : 'earlier', r.corrections.length ? `${r.corrections.length} correction(s)` : null].filter(Boolean).join(' · ')));
       }),
     ]));
@@ -1122,12 +1131,15 @@ function partialView(ctx, pid, run, prov, a) {
 
 // The exact prompt every model got, readable on the page (a phone has no
 // easy way to look at copied text), loaded only when opened.
-export function promptView(ctx, pid, run) {
-  const promptUrl = `/api/projects/${pid}/research/${run.run_id}/prompt`;
+// provider: what that model is given, its frozen execution note first (only
+// ChatGPT's jobs have one), then the same prompt.
+export function promptView(ctx, pid, run, { provider = null, label = 'Show the exact prompt' } = {}) {
+  const promptUrl = `/api/projects/${pid}/research/${run.run_id}/prompt${provider ? `?provider=${encodeURIComponent(provider)}` : ''}`;
+  const key = provider ? `prompt-${run.run_id}-${provider}` : `prompt-${run.run_id}`;
   // Already read once: shown at once, so a redraw keeps its scroll position.
   const cached = textCache.has(promptUrl);
-  const promptBox = h('pre', { class: 'prompt-text pre small', 'data-keep-scroll': `prompt-${run.run_id}`, dataset: cached ? { loaded: '1' } : null }, cached ? textCache.get(promptUrl) : 'Loading the prompt…');
-  const view = h('details', { class: 'prompt-view', dataset: { key: `prompt-${run.run_id}` } }, h('summary', null, 'Show the exact prompt'), promptBox);
+  const promptBox = h('pre', { class: 'prompt-text pre small', 'data-keep-scroll': key, dataset: cached ? { loaded: '1' } : null }, cached ? textCache.get(promptUrl) : 'Loading the prompt…');
+  const view = h('details', { class: 'prompt-view', dataset: { key } }, h('summary', null, label), promptBox);
   const load = () => {
     if (!view.open || promptBox.dataset.loaded) return;
     cachedText(ctx, promptUrl).then((t) => { promptBox.textContent = t; promptBox.dataset.loaded = '1'; }).catch((err) => { promptBox.textContent = `The prompt could not be loaded: ${err.message}`; });
@@ -1137,6 +1149,10 @@ export function promptView(ctx, pid, run) {
   queueMicrotask(load);
   return view;
 }
+
+// The models in a run whose jobs carry an execution note (ChatGPT's, from
+// 2026-10-03 on).
+const noted = (run) => (run.providers || []).filter((p) => run.jobs[p] && run.jobs[p].execution && run.jobs[p].execution.ref);
 
 function researchTab(ctx, d, row) {
   const pid = d.project.project_id;
@@ -1161,9 +1177,12 @@ function researchTab(ctx, d, row) {
         run.utterance ? ['Request', `“${run.utterance}”`] : null,
         ['Rubric · profile · horizon', `${run.rubric_version} · ${run.sector_profile} · ${run.horizon ? run.horizon.text : '?'}`],
         ['Prompt', h('span', null, `${run.prompt.version}, identical for every model · SHA-256 ${run.prompt.sha256.slice(0, 12)}… `, copy)],
+        // A model's own execution note (ChatGPT's), frozen with its job.
+        noted(run).length ? ['Execution notes', noted(run).map((p) => `${PROVIDER_LABELS[p]}: ${run.jobs[p].execution.ref} · SHA-256 ${String(run.jobs[p].execution.sha256).slice(0, 12)}…, given before the same prompt`).join(' · ')] : null,
         ['Evidence packet', `captured ${fmtDateTime(run.evidence_packet.captured_at)} · SHA-256 ${run.evidence_packet.sha256.slice(0, 12)}… · no holdings, notes or other models' conclusions`],
       ]), { id: `run-${run.run_id}` }),
       promptView(ctx, pid, run),
+      ...noted(run).map((p) => promptView(ctx, pid, run, { provider: p, label: `Show what ${PROVIDER_LABELS[p]} gets: its execution note, then the same prompt` })),
     ]);
   });
   const legacy = d.prompt_files || [];

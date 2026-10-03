@@ -903,11 +903,19 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIde
     if (!file) throw new HttpError(404, 'No such prompt file');
     return { _raw: fs.readFileSync(ws.abs(file.rel), 'utf8'), _type: 'text/plain; charset=utf-8' };
   });
-  route('GET', '/api/projects/([^/]+)/research/([^/]+)/prompt', (m) => {
+  route('GET', '/api/projects/([^/]+)/research/([^/]+)/prompt', (m, req, res, body, url) => {
     const id = pid(m[1]);
     const run = research.loadRun(ws, id, runId(m[2]));
     if (!run) throw new HttpError(404, 'No such research run');
-    return { _raw: fs.readFileSync(ws.abs(run.prompt.path), 'utf8'), _type: 'text/plain; charset=utf-8' };
+    const prompt = fs.readFileSync(ws.abs(run.prompt.path), 'utf8');
+    // ?provider=chatgpt: what that model is given to paste by hand, its frozen
+    // execution note first (core/execution.js), then the unchanged prompt.
+    // Without a provider, or for a model with no note: the prompt alone.
+    const who = url && url.searchParams ? url.searchParams.get('provider') : null;
+    const note = who && PROVIDERS.includes(who) ? require('./core/execution').readNote(ws, run, who) : null;
+    if (note && note.delivery.status !== 'verified') throw new HttpError(409, note.delivery.message);
+    const text = note ? `${note.text}\n\n---\n\n${prompt}` : prompt;
+    return { _raw: text, _type: 'text/plain; charset=utf-8' };
   });
   // The text an attempt's answer wrote before it stopped: read-only, checked
   // against the saved response, never a report.
