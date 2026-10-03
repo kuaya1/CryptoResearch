@@ -61,7 +61,7 @@ To research a project Eric names, links or shows you:
 1. find_projects first. If it is already there, use it; never add it twice.
 2. Identify it from evidence: the official website (the project's own site), and the chain and contract address from the project's own docs or a block explorer. CoinMarketCap, CoinGecko, DEX screener and explorer pages are leads, not the official website: the desk keeps one given as the website as evidence only. Never guess or complete a contract address. If two tokens could match (same ticker, similar names), show Eric the candidates and ask.
 3. add_project once, with the evidence URLs. It refuses duplicates by itself; if the project is already there with a pending identity, what you supplied completes it.
-4. start_research. Research needs a verified identity (official website, token binding, evidence URL), so every model researches the same project: if it is pending, complete it with update_project_identity first, or, only when Eric confirmed the project has no token yet or cannot be identified further, pass allow_pending_identity: true. It returns the run's canonical prompt (horizon, rubric, grading appendix). Follow it exactly: research with your own web tools, cite sources with dates, keep facts, inferences and unknowns apart, cover risks, and end with the JSON block it asks for. If a research run for the project is already open, start_research resumes it (with any draft you saved) instead of starting another. When Eric asks for all three models (Claude, ChatGPT and Gemini), pass models: "all": each model gets the same prompt and never sees the others' conclusions. A model whose paid API is set up on the desk runs automatically in the background; a model without one waits for its assistant until Eric asks it ("${WAITING_PHRASE}": ${ASK_HOW.chatgpt}, or ${ASK_HOW.gemini}). Tell Eric which.
+4. start_research. Research needs a verified identity (official website, token binding, evidence URL), so every model researches the same project: if it is pending, complete it with update_project_identity first, or, only when Eric confirmed the project has no token yet or cannot be identified further, pass allow_pending_identity: true. It returns the run's canonical prompt (horizon, rubric, grading appendix). Follow it exactly: research with your own web tools, cite sources with dates, keep facts, inferences and unknowns apart, cover risks, and end with the JSON block it asks for. If a research run for the project is already open, start_research resumes it (with any draft you saved) instead of starting another. When Eric asks for all three models (Claude, ChatGPT and Gemini), pass models: "all": each model gets the same prompt and never sees the others' conclusions. A model whose paid API is set up on the desk runs automatically in the background; a model without one waits for its assistant until Eric asks it ("${WAITING_PHRASE}": ${ASK_HOW.chatgpt}, or ${ASK_HOW.gemini}). The reply's readiness says which; tell Eric exactly that (desk_status has the detail: setup required, limits, spend). Never ask Eric for an API key in chat: he adds keys in Render's environment himself.
 5. For long research, save_research_draft as you go, so an interruption loses nothing.
 6. save_report with the complete report text (not a summary). If it answers "unverified", save the same text again.
 7. When Eric asks you to do your waiting research, call pending_research and do each item with start_research.
@@ -150,6 +150,13 @@ const TOOLS = [
     name: 'pending_research',
     title: 'Research waiting for you',
     description: 'Lists the research runs on the desk waiting for your model (for example after Eric asked Cowork for all three models), and the ones you started and have not finished. Do each with start_research.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'desk_status',
+    title: 'Desk status: which models run automatically, limits and spend',
+    description: 'Read-only. Says which models research automatically on their paid API (and about what one attempt reserves), which need setup and what is missing (for example the OpenAI or Gemini API key, which only Eric adds in Render\'s environment: never ask for a key in chat), what their open jobs are doing, the research limits and spend so far (reservations, estimates and uncertain attempts count until reconciled), price freshness, the latest backup and the code revision the desk runs. Use it when Eric asks whether everything is set up, before telling him which models will run by themselves.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
@@ -334,8 +341,10 @@ function guardIndependence(ws, projectId, ctx, what) {
   }
 }
 
-// One model's job, as progress (states, never conclusions).
-function jobView(job, run, me) {
+// One model's job, as progress (states, never conclusions). A job waiting for
+// its assistant says why: the model's API needs setup (and what), or its API
+// is set up now and Eric's next request for it sends the job there.
+function jobView(job, run, me, ws) {
   const label = PROVIDER_LABELS[job.provider];
   const activity = research.assistantActivity(job, run);
   const cost = (job.attempts || []).reduce((s, a) => s + research.attemptCharge(a).usd, 0);
@@ -343,9 +352,16 @@ function jobView(job, run, me) {
   if (job.state === 'completed') progress = `saved (${job.report_id})`;
   else if (job.state === 'canceled') progress = 'canceled';
   else if (job.state === 'failed') progress = `failed: ${job.error || 'see the dashboard'}`;
-  else if (job.state === 'uncertain') progress = 'held: a paid request may have been billed without an answer; Eric reconciles or retries it in the dashboard';
+  else if (job.state === 'uncertain') progress = 'held: a paid request may have been billed without an answer; it is never resent automatically, and Eric reconciles or retries it in the dashboard';
   else if (activity && activity.open) progress = activity.interrupted ? `interrupted (no activity for ${activity.idle_minutes} min)` : `${job.provider === me ? 'you are' : `${label} is`} researching it`;
-  else if (job.state === 'unconfigured') progress = job.provider === me ? 'waiting for you' : `waiting for ${label}: Eric says "${WAITING_PHRASE}" ${ASK_HOW[job.provider]} (or pastes the prompt into ${label} and imports the answer)`;
+  else if (job.state === 'unconfigured') {
+    const st = ws ? research.providerStatus(ws)[job.provider] : null;
+    const need = ws && st ? research.setupNeeds(ws, job.provider, st) : null;
+    const ask = `Eric says "${WAITING_PHRASE}" ${ASK_HOW[job.provider]} (or pastes the prompt into ${label} and imports the answer)`;
+    if (job.provider === me) progress = 'waiting for you';
+    else if (st && st.mode === 'api') progress = `waiting for ${label}; its API is set up now, so Eric's next request for ${label} on this project sends this job to the API (or ${ask})`;
+    else progress = `waiting for ${label}${need ? ` (setup required: ${need.short})` : ''}: ${ask}`;
+  }
   else if (job.state === 'queued') progress = job.not_before && Date.parse(job.not_before) > Date.now() ? `queued for the ${label} API, which asked to slow down; it is asked again after ${job.not_before} (not billed)` : `queued for the ${label} API in the background`;
   else if (job.state === 'dispatching') {
     const last = (job.attempts || [])[(job.attempts || []).length - 1];
@@ -360,7 +376,7 @@ function jobView(job, run, me) {
 
 function runView(ws, projectId, run, ctx, { prompt = false } = {}) {
   const jobs = {};
-  for (const p of PROVIDERS) if (run.jobs && run.jobs[p]) jobs[p] = jobView(run.jobs[p], run, ctx.me);
+  for (const p of PROVIDERS) if (run.jobs && run.jobs[p]) jobs[p] = jobView(run.jobs[p], run, ctx.me, ws);
   const mine = run.jobs ? run.jobs[ctx.me] : null;
   const out = {
     run_id: run.run_id,
@@ -576,7 +592,7 @@ const handlers = {
     };
     // What happens to the other models, in words Eric can act on.
     const othersLine = (run) => {
-      const parts = PROVIDERS.filter((p) => p !== me && run.jobs[p]).map((p) => `${PROVIDER_LABELS[p]}: ${jobView(run.jobs[p], run, me).progress}`);
+      const parts = PROVIDERS.filter((p) => p !== me && run.jobs[p]).map((p) => `${PROVIDER_LABELS[p]}: ${jobView(run.jobs[p], run, me, ws).progress}`);
       return parts.length ? ` ${parts.join('. ')}.` : '';
     };
     // Jobs of the models asked for that still wait for their assistant go to
@@ -625,7 +641,7 @@ const handlers = {
         const sent = sendWaiting(runId);
         const run = reload(runId);
         kickIfQueued(run);
-        return { status: 'in_background', message: `${ctx.label}'s research for ${project.name} is already in run ${runId}: ${jobView(run.jobs[me], run, me).progress}. Nothing for you to research now; the report appears on the desk when it is saved.${added.length ? ` Added ${listLabels(added)} to the run, with the same prompt.` : ''}${sentLine(sent)}${othersLine(run)}${heldBack}`, project: { project_id: id, name: project.name }, run: view(run) };
+        return { status: 'in_background', message: `${ctx.label}'s research for ${project.name} is already in run ${runId}: ${jobView(run.jobs[me], run, me, ws).progress}. Nothing for you to research now; the report appears on the desk when it is saved.${added.length ? ` Added ${listLabels(added)} to the run, with the same prompt.` : ''}${sentLine(sent)}${othersLine(run)}${heldBack}`, project: { project_id: id, name: project.name }, run: view(run) };
       }
     }
 
@@ -656,7 +672,7 @@ const handlers = {
     const toStart = toRun.filter((p) => !stillOpen[p]);
     const openElsewhere = (runId) => Object.entries(stillOpen)
       .filter(([, o]) => o.run.run_id !== runId)
-      .map(([p, o]) => ` ${PROVIDER_LABELS[p]} is still open in ${o.run.run_id} (${jobView(o.job, o.run, me).progress}); not started again.`)
+      .map(([p, o]) => ` ${PROVIDER_LABELS[p]} is still open in ${o.run.run_id} (${jobView(o.job, o.run, me, ws).progress}); not started again.`)
       .join('');
     if (!toStart.length) {
       const sent = [...new Set(Object.values(stillOpen).map((o) => o.run.run_id))].flatMap((runId) => sendWaiting(runId));
@@ -664,7 +680,7 @@ const handlers = {
       kickIfQueued(host);
       const progress = toRun.map((p) => {
         const r = stillOpen[p].run.run_id === host.run_id ? host : reload(stillOpen[p].run.run_id);
-        return `${PROVIDER_LABELS[p]}: ${jobView(r.jobs[p], r, me).progress}${r.run_id !== host.run_id ? ` (in ${r.run_id})` : ''}`;
+        return `${PROVIDER_LABELS[p]}: ${jobView(r.jobs[p], r, me, ws).progress}${r.run_id !== host.run_id ? ` (in ${r.run_id})` : ''}`;
       });
       return {
         status: 'in_progress',
@@ -729,6 +745,25 @@ const handlers = {
       message: items.length
         ? `${items.length} research ${items.length === 1 ? 'job is' : 'jobs are'} waiting for ${ctx.label}. Do each with start_research (project_id, and Eric's words as owner_request); it takes the waiting job over with the run's prompt.`
         : `Nothing is waiting for ${ctx.label}.`,
+    };
+  },
+
+  desk_status(ws) {
+    const rev = require('./core/revision');
+    const r = rev.revision();
+    const ready = research.readiness(ws);
+    const f = market.freshness(ws);
+    const backups = require('./core/exporter').listBackups(ws);
+    const last = backups[0] || null;
+    const ageH = last && last.created_at ? Math.round((Date.now() - Date.parse(last.created_at)) / 3600000) : null;
+    const prices = { freshness: f.freshness, note: f.note || null, last_success_at: f.last_success_at || null, rate_limited: Boolean(f.rate_limited), retry_at: f.retry_at || null, coingecko_key: market.apiKey() ? 'present' : 'none' };
+    return {
+      status: 'ok',
+      revision: r,
+      research: ready,
+      prices,
+      backups: { latest: last ? { name: last.name, created_at: last.created_at, hours_ago: ageH, status: last.status } : null, count: backups.length },
+      message: `The desk runs ${rev.revisionLine(r)}. ${ready.summary} Prices: ${f.freshness}${f.note ? ` (${f.note})` : ''}. ${last ? `Latest backup ${last.name}, ${ageH} h ago.` : 'No backup on the desk yet.'}`,
     };
   },
 
@@ -798,7 +833,7 @@ const handlers = {
     const after = research.loadRun(ws, id, runId);
     const myState = after && after.jobs[me] ? after.jobs[me].state : null;
     const othersOpen = after ? PROVIDERS.filter((p) => p !== me && after.jobs[p] && research.OPEN_STATES.has(after.jobs[p].state)) : [];
-    const runOut = { run_id: runId, state: myState, others: after ? Object.fromEntries(PROVIDERS.filter((p) => p !== me && after.jobs[p]).map((p) => [p, jobView(after.jobs[p], after, me).progress])) : {} };
+    const runOut = { run_id: runId, state: myState, others: after ? Object.fromEntries(PROVIDERS.filter((p) => p !== me && after.jobs[p]).map((p) => [p, jobView(after.jobs[p], after, me, ws).progress])) : {} };
     if (me === 'claude') runOut.claude_state = myState;
     // A grade is calculated only when every weighted component is scored (or a
     // range with its reason); say so at once, so a gap can be filled while the
@@ -867,7 +902,7 @@ const handlers = {
     const c = d.comparison;
     const have = PROVIDERS.filter((p) => c.latest[p]);
     const run = research.openRunOf(ws, id);
-    const stillOpen = run ? Object.fromEntries(PROVIDERS.filter((p) => run.jobs[p] && research.OPEN_STATES.has(run.jobs[p].state)).map((p) => [p, jobView(run.jobs[p], run, ctx.me).progress])) : {};
+    const stillOpen = run ? Object.fromEntries(PROVIDERS.filter((p) => run.jobs[p] && research.OPEN_STATES.has(run.jobs[p].state)).map((p) => [p, jobView(run.jobs[p], run, ctx.me, ws).progress])) : {};
     const reports = {};
     for (const p of PROVIDERS) {
       const l = c.latest[p];
@@ -1104,6 +1139,22 @@ function makeMcp(ws, { rebuild = () => {}, version = '1.0.0', log = () => {}, ki
     return res.end(JSON.stringify(Array.isArray(body) ? replies : replies[0]));
   };
 }
+
+// A request for all three models also says which of them run by themselves
+// and which wait (setup required, and what), so the assistant tells Eric that.
+const startResearchCore = handlers.start_research;
+handlers.start_research = function start_research(ws, args, ctx) {
+  const out = startResearchCore(ws, args, ctx);
+  if (out && typeof out === 'object' && modelsAsked(args).all) {
+    const r = research.readiness(ws);
+    out.readiness = {
+      summary: r.summary,
+      models: Object.fromEntries(PROVIDERS.map((p) => [p, { route: r.models[p].route, model: r.models[p].model, setup: r.models[p].setup_short }])),
+      limits: r.budget,
+    };
+  }
+  return out;
+};
 
 for (const t of TOOLS) if (handlers[t.name]) handlers[t.name].readOnly = Boolean(t.annotations && t.annotations.readOnlyHint);
 

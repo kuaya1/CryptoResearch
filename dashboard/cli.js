@@ -377,7 +377,7 @@ async function run(argv) {
         const r = await research.runDueJobs(ws, { trigger: one(flags.trigger) || 'cli' });
         return { ...r, ...(await afterWrite(ws)) };
       }
-      if (sub === 'providers') return { providers: research.providerStatus(ws), budget: ws.settings.research.budget, spend: research.spendSoFar(ws), unattended_enabled: ws.settings.research.unattended_enabled };
+      if (sub === 'providers') return { providers: research.providerStatus(ws), readiness: research.readiness(ws), budget: ws.settings.research.budget, spend: research.spendSoFar(ws), unattended_enabled: ws.settings.research.unattended_enabled };
       throw Object.assign(new Error('research add|status|prompt|cancel|retry|reconcile|run|providers'), { code: 'USAGE' });
     }
     case 'scorecards': {

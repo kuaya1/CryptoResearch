@@ -249,6 +249,13 @@ test('hosted: everything needs sign-in; the session cookie is HttpOnly, Secure a
   assert.match(login.headers['strict-transport-security'], /max-age=/);
   assert.equal((await req(port, { path: '/', headers: { host: 'evil.test' } })).status, 403, 'other host names are refused');
   assert.equal((await req(port, { path: '/healthz', headers: { host: 'internal' } })).status, 200);
+  // The health check names the running revision (a commit ID, nothing else).
+  const hz = await req(port, { path: '/healthz' });
+  const rev = require('../core/revision').revision();
+  assert.match(hz.text, /^ok\nrevision /);
+  assert.ok(hz.text.includes(`revision ${rev.commit || 'unknown'}`), hz.text);
+  assert.match(hz.text, /\nstarted \d{4}-\d\d-\d\dT/);
+  assert.doesNotMatch(hz.text, /CR_|passphrase|secret|key/i);
 
   const wrong = await req(port, form('not the passphrase'));
   assert.equal(wrong.status, 303);
@@ -271,6 +278,7 @@ test('hosted: everything needs sign-in; the session cookie is HttpOnly, Secure a
   const s = JSON.parse(sess.text);
   assert.equal(s.hosted, true);
   assert.equal(s.workspace.root, null, 'the server path is not shown');
+  assert.deepEqual(Object.keys(s.revision).sort(), ['branch', 'commit', 'short', 'source', 'started_at'], 'the session says which code runs');
   const idx = await req(port, { path: '/api/index', headers: { cookie, 'x-cr-token': s.token } });
   assert.equal(idx.status, 200);
   const intake = await req(port, { path: '/api/intake', headers: { cookie, 'x-cr-token': s.token } });

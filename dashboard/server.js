@@ -316,7 +316,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   const mcpOrigins = new Set([...allowedOrigins, 'https://claude.ai', 'https://chatgpt.com', 'https://gemini.google.com']);
   // A research request from an assistant can queue paid API jobs (other
   // models): the runner picks them up at once instead of at its next tick.
-  const mcp = hosted ? require('./mcp').makeMcp(ws, { rebuild: (areas) => rebuild(areas), log: (...a) => { if (!quiet) console.log(...a); }, kick: () => setTimeout(() => researchTick(), 300) }) : null;
+  const mcp = hosted ? require('./mcp').makeMcp(ws, { version: require('./core/revision').revision().short || '1.0.0', rebuild: (areas) => rebuild(areas), log: (...a) => { if (!quiet) console.log(...a); }, kick: () => setTimeout(() => researchTick(), 300) }) : null;
   const clients = new Set();
   const sockets = new Set();
   const state = {
@@ -623,10 +623,13 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     res.setHeader('Content-Security-Policy', CSP);
     if (hosted) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
     try {
-      // Render's health check: says only that the process answers.
+      // Render's health check: that the process answers, and which deployed
+      // revision it runs (a commit ID, nothing else), so a review can tell
+      // the running code from the repository without signing in.
       if (hosted && req.url === '/healthz' && (req.method === 'GET' || req.method === 'HEAD')) {
+        const rev = require('./core/revision').revision();
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
-        return res.end(req.method === 'HEAD' ? undefined : 'ok');
+        return res.end(req.method === 'HEAD' ? undefined : `ok\nrevision ${rev.commit || 'unknown'}${rev.branch ? ` (${rev.branch})` : ''}\nstarted ${rev.started_at}\n`);
       }
       const hostHeader = String(req.headers.host || '').toLowerCase();
       if (!allowedHosts.has(hostHeader)) throw new HttpError(403, 'Host not allowed');
@@ -920,7 +923,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIde
   route('GET', '/api/backups', () => exporter.listBackups(ws));
   route('GET', '/api/backups/([A-Za-z0-9_-]+)/verify', (m) => exporter.verifyBackup(ws, m[1]));
   route('GET', '/api/doctor', async () => require('./core/doctor').doctor(ws));
-  route('GET', '/api/research/providers', () => coherent(() => ({ providers: research.providerStatus(ws), budget: ws.settings.research.budget, spend: research.spendSoFar(ws), unattended_enabled: Boolean(ws.settings.research.unattended_enabled), keys_file: require('./core/providers').secretsFile() })));
+  route('GET', '/api/research/providers', () => coherent(() => ({ providers: research.providerStatus(ws), readiness: research.readiness(ws), budget: ws.settings.research.budget, spend: research.spendSoFar(ws), unattended_enabled: Boolean(ws.settings.research.unattended_enabled), keys_file: require('./core/providers').secretsFile() })));
 
   // Research requests: a link, name or screenshot plus optional instructions.
   // Saved first, identified in the background, researched once Eric confirms
@@ -1087,7 +1090,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIde
     }
     if (url.pathname === '/api/session') {
       if (req.method !== 'GET') throw new HttpError(405, 'Method not allowed');
-      return send(res, 200, { token, hosted: state.hosted, workspace: { name: ws.meta.name, kind: ws.kind, root: state.hosted ? null : ws.root, workspace_id: ws.meta.workspace_id } });
+      return send(res, 200, { token, hosted: state.hosted, revision: require('./core/revision').revision(), workspace: { name: ws.meta.name, kind: ws.kind, root: state.hosted ? null : ws.root, workspace_id: ws.meta.workspace_id } });
     }
     // Logos are public CoinGecko images. An <img> cannot send the session token;
     // Cross-Origin-Resource-Policy: same-origin keeps other sites from loading them.

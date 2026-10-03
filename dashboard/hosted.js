@@ -447,6 +447,7 @@ async function main(env = process.env) {
   if (cfg.dataDir && process.platform === 'linux') {
     const m = containingMount(cfg.dataDir);
     console.log(`Data folder ${cfg.dataDir}: on mount ${m ? `${m.point} (${m.type})` : 'unknown (mount table unreadable)'}.`);
+    console.log(`Revision: ${require('./core/revision').revisionLine()}.`);
   }
   if (cfg.problems.length) {
     console.error('CryptoResearch (hosted) did not start the desk, so no records are exposed:');
@@ -463,6 +464,7 @@ async function main(env = process.env) {
     console.log(`Record repairs could not run: ${err.message}`);
   }
   console.log(researchSummary(ws));
+  console.log(`Readiness: ${require('./core/research').readiness(ws).summary}`);
   console.log(recordsSummary(ws));
   try {
     for (const line of healthLines(ws)) console.log(line);

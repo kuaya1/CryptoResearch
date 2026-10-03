@@ -274,6 +274,136 @@ function providerStatus(ws) {
   return out;
 }
 
+// What a model's API route still needs, in words Eric can act on. A missing
+// key names its environment variable: on the online desk Eric sets it in
+// Render's environment himself (never through a chat or the connector).
+function setupNeeds(ws, provider, st = providerStatus(ws)[provider]) {
+  if (!st || st.mode === 'api' || st.mode === 'mock') return null;
+  const spec = providers.PROVIDER_API[provider];
+  const missing = st.missing || [];
+  const keyMissing = missing.includes('API key');
+  const parts = missing.map((m) => (m === 'API key'
+    ? `no ${spec.vendor} API key on the desk (${spec.env[0]}${ws.hosted ? ', set in Render\'s environment' : `, or "${spec.secret}" in ${providers.secretsFile()}`})`
+    : m === 'spending budget' ? 'no research spending limits (per run, per day and per month)'
+      : m.startsWith('a bound on Gemini searches') ? 'a bound on Gemini searches (max searches 0, or declared per-request or per-query search billing)' : m));
+  const rest = missing.length - (keyMissing ? 1 : 0);
+  const short = keyMissing
+    ? `no ${spec.vendor} API key: ${spec.env[0]}${rest ? `, and ${rest} more setting${rest === 1 ? '' : 's'}` : ''}`
+    : `${missing.length} setting${missing.length === 1 ? '' : 's'} missing`;
+  return { missing, text: parts.join('; ') || st.reason || 'not configured', short };
+}
+
+// A typical run prompt (template, grading appendix and the dated evidence
+// packet) is about 24,000 characters; readiness previews reservations for this.
+const TYPICAL_PROMPT_CHARS = 30000;
+
+// Readiness and execution, for Eric (Settings), Cowork (desk_status and
+// start_research) and the start log. Per model:
+//   automatic       its paid API runs research in the background, within the
+//                   desk's limits (key, model, bounds and budget all set)
+//   setup_required  no API route yet, and what is missing; its jobs wait for
+//                   the model's own assistant (or a pasted answer) meanwhile
+//   demo            fictional fixtures (test and demo workspaces only)
+// and what its open jobs are doing. Never a key, only whether one is present.
+function readiness(ws, now = new Date()) {
+  const status = providerStatus(ws);
+  const budget = (ws.settings.research || {}).budget || {};
+  const bs = budgetStatus(ws);
+  const spent = spendSoFar(ws, now);
+  const open = allOpenJobs(ws).filter(({ job }) => OPEN_STATES.has(job.state));
+  const names = (ps) => ps.map((p) => PROVIDER_LABELS[p]).join(', ').replace(/, ([^,]*)$/, ' and $1');
+  const models = {};
+  for (const p of PROVIDERS) {
+    const st = status[p];
+    const label = PROVIDER_LABELS[p];
+    const spec = providers.PROVIDER_API[p];
+    const mine = open.filter((o) => o.job.provider === p).map((o) => o.job);
+    const count = (pred) => mine.filter(pred).length;
+    const jobs = {
+      waiting: count((j) => j.state === 'unconfigured'),
+      queued: count((j) => j.state === 'queued'),
+      on_api: count((j) => IN_FLIGHT.has(j.state) && !isAssistantJob(j)),
+      with_assistant: count((j) => j.state === 'running' && isAssistantJob(j)),
+      uncertain: count((j) => j.state === 'uncertain'),
+    };
+    const route = st.mode === 'api' ? 'automatic' : st.mode === 'mock' ? 'demo' : 'setup_required';
+    const need = setupNeeds(ws, p, st);
+    const plan = route === 'automatic' ? callPlan(ws, p, 'x'.repeat(TYPICAL_PROMPT_CHARS)) : null;
+    const model = st.model && st.mode !== 'mock' ? st.model : providerConfig(ws, p).model || null;
+    const jobText = [
+      jobs.on_api && `${jobs.on_api} running on the API`,
+      jobs.queued && `${jobs.queued} queued`,
+      jobs.with_assistant && `${jobs.with_assistant} with ${label} itself`,
+      jobs.waiting && `${jobs.waiting} waiting`,
+      jobs.uncertain && `${jobs.uncertain} uncertain (may have been billed; never resent)`,
+    ].filter(Boolean).join(', ');
+    const sentence = route === 'automatic'
+      ? `${label}: automatic. Runs on the ${spec.vendor} API (${model}) in the background${plan && plan.ok ? `; about ${usd(plan.total_usd)} reserved per attempt for a typical prompt` : ''}.`
+      : route === 'demo'
+        ? `${label}: demo fixtures (fictional; nothing is sent or billed).`
+        : `${label}: setup required (${need.text}). Until then its research waits for ${ws.hosted ? `${label} itself (Eric asks it through its desk connection) or a pasted answer` : 'a pasted answer'}; nothing is billed for it.`;
+    models[p] = {
+      label,
+      route,
+      model,
+      key: { present: providers.keyStatus(p).present, env: spec.env[0] },
+      missing: need ? need.missing : [],
+      setup: need ? need.text : null,
+      setup_short: need ? need.short : null,
+      background: route === 'automatic' ? Boolean(st.background) : null,
+      reservation_usd: plan && plan.ok ? plan.total_usd : null,
+      jobs,
+      sentence: jobText ? `${sentence} Open jobs: ${jobText}.` : sentence,
+    };
+  }
+  const auto = PROVIDERS.filter((p) => models[p].route === 'automatic');
+  const setup = PROVIDERS.filter((p) => models[p].route === 'setup_required');
+  // Every model and attempt of one run counts against the per-run limit. A
+  // request from Cowork leaves Claude's part to Cowork itself (no API cost);
+  // a run started on the dashboard uses every automatic model's API.
+  const reserve = (list) => (list.length ? round4(list.reduce((s, p) => s + (models[p].reservation_usd || 0), 0)) : null);
+  const fitsRun = (x) => (x === null || !isMoney(budget.per_run_usd) ? null : units(x) <= units(budget.per_run_usd));
+  const coworkApis = auto.filter((p) => p !== 'claude');
+  const reservations = {
+    cowork_request_usd: reserve(coworkApis),
+    cowork_request_fits: fitsRun(reserve(coworkApis)),
+    dashboard_run_usd: reserve(auto),
+    dashboard_run_fits: fitsRun(reserve(auto)),
+  };
+  const against = (x, fits) => (fits === null ? '' : fits ? `, within the ${usd(budget.per_run_usd)} per-run limit` : `, more than the ${usd(budget.per_run_usd)} per-run limit, so the last model would be refused (not sent) until the limit is raised`);
+  const left = (limit, used) => (isMoney(limit) ? round4(Math.max(0, limit - used)) : null);
+  const summary = [
+    auto.length ? `Automatic: ${names(auto)}.` : 'No model runs automatically yet.',
+    setup.length ? `Setup required: ${setup.map((p) => `${PROVIDER_LABELS[p]} (${models[p].setup_short})`).join('; ')}; ${setup.length === 1 ? 'its' : 'their'} jobs wait meanwhile.` : '',
+    coworkApis.length ? `A three-model request from Cowork reserves about ${usd(reservations.cowork_request_usd)} on the ${names(coworkApis)} API${coworkApis.length === 1 ? '' : 's'} (Claude researches in Cowork itself)${against(reservations.cowork_request_usd, reservations.cowork_request_fits)}.` : '',
+    auto.includes('claude') ? `A run started on the dashboard with ${names(auto)} on the API${auto.length === 1 ? '' : 's'} reserves about ${usd(reservations.dashboard_run_usd)}${against(reservations.dashboard_run_usd, reservations.dashboard_run_fits)}.` : '',
+    bs.ok ? '' : `Research limits not set: ${bs.missing.join(', ')}.`,
+    spent.uncertain_attempts ? `${spent.uncertain_attempts} paid attempt(s) uncertain: never resent; Eric reconciles them on the dashboard.` : '',
+  ].filter(Boolean).join(' ');
+  return {
+    checked_at: now.toISOString(),
+    summary,
+    automatic: auto,
+    setup_required: setup,
+    models,
+    reservations,
+    retries_note: `A failed attempt is retried at most ${(ws.settings.research.max_attempts || 2) - 1} time(s) and only when nothing may have been billed; each retry is a new reservation inside the same per-run limit. An uncertain request is never resent.`,
+    budget: { per_run_usd: budget.per_run_usd ?? null, daily_usd: budget.daily_usd ?? null, monthly_usd: budget.monthly_usd ?? null, ok: bs.ok, missing: bs.missing },
+    spend: {
+      today_usd: spent.daily,
+      month_usd: spent.monthly,
+      left_today_usd: left(budget.daily_usd, spent.daily),
+      left_month_usd: left(budget.monthly_usd, spent.monthly),
+      reserved_open_usd: spent.open_reservations_usd,
+      estimated_usd: spent.estimated_usd,
+      estimated_attempts: spent.estimated_attempts,
+      known_month_usd: spent.known_month_usd,
+      uncertain_attempts: spent.uncertain_attempts,
+    },
+    limits_note: 'The desk counts reservations, estimates and uncertain attempts against its limits before it sends anything, and a request already sent cannot be un-sent. Provider spend caps are a second guard: they apply with billing delay and are not hard limits.',
+  };
+}
+
 // The reservation for one call: enforced parts (limits sent with the request)
 // plus estimated parts (what no request parameter caps). Not a maximum.
 function callPlan(ws, provider, promptText) {
@@ -1986,6 +2116,8 @@ module.exports = {
   loadRun,
   runStatus,
   providerStatus,
+  readiness,
+  setupNeeds,
   callBounds,
   callPlan,
   estimateCostUsd,

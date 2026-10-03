@@ -216,10 +216,10 @@ test('connector: Claude discovers the sign-in, registers, gets the passphrase co
   const note = await req(d.port, { method: 'POST', path: '/mcp', headers: { 'content-type': 'application/json', authorization: `Bearer ${c.access}` }, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) });
   assert.equal(note.status, 202);
   const list = await rpc(d, c.access, 'tools/list', {});
-  assert.deepEqual(list.json.result.tools.map((x) => x.name).sort(), ['add_account', 'add_project', 'cancel_research', 'compare_reports', 'find_projects', 'get_report', 'get_research', 'list_accounts', 'pending_research', 'portfolio_overview', 'record_transaction', 'save_report', 'save_research_draft', 'start_research', 'update_project_identity']);
+  assert.deepEqual(list.json.result.tools.map((x) => x.name).sort(), ['add_account', 'add_project', 'cancel_research', 'compare_reports', 'desk_status', 'find_projects', 'get_report', 'get_research', 'list_accounts', 'pending_research', 'portfolio_overview', 'record_transaction', 'save_report', 'save_research_draft', 'start_research', 'update_project_identity']);
   // ChatGPT asks to confirm every tool without readOnlyHint: reads are marked read-only.
   const readOnly = list.json.result.tools.filter((x) => x.annotations && x.annotations.readOnlyHint).map((x) => x.name).sort();
-  assert.deepEqual(readOnly, ['compare_reports', 'find_projects', 'get_report', 'get_research', 'list_accounts', 'pending_research', 'portfolio_overview']);
+  assert.deepEqual(readOnly, ['compare_reports', 'desk_status', 'find_projects', 'get_report', 'get_research', 'list_accounts', 'pending_research', 'portfolio_overview']);
   assert.equal((await req(d.port, { method: 'GET', path: '/mcp', headers: { authorization: `Bearer ${c.access}` } })).status, 405);
   // A forged or stale token is refused with invalid_token.
   const bad = await req(d.port, { method: 'POST', path: '/mcp', headers: { 'content-type': 'application/json', authorization: 'Bearer forged-token-forged-token-forged' }, body: '{}' });
@@ -565,8 +565,13 @@ test('connector: one Cowork request for all three models; ChatGPT and Gemini do 
   assert.equal(all.data.run.jobs.claude.state, 'running');
   assert.equal(all.data.run.jobs.chatgpt.state, 'unconfigured');
   assert.equal(all.data.run.jobs.gemini.state, 'unconfigured');
-  assert.match(all.data.message, /ChatGPT: waiting for ChatGPT: Eric says "Do my waiting CryptoResearch research" in a ChatGPT chat with the CryptoResearch app turned on/);
-  assert.match(all.data.message, /Gemini: waiting for Gemini: Eric says "Do my waiting CryptoResearch research" in Gemini after typing @ and picking CryptoResearch/, 'Gemini uses a custom app only when it is @-mentioned');
+  assert.match(all.data.message, /ChatGPT: waiting for ChatGPT \(setup required: no OpenAI API key: OPENAI_API_KEY\): Eric says "Do my waiting CryptoResearch research" in a ChatGPT chat with the CryptoResearch app turned on/);
+  assert.match(all.data.message, /Gemini: waiting for Gemini \(setup required: no Google API key: GEMINI_API_KEY\): Eric says "Do my waiting CryptoResearch research" in Gemini after typing @ and picking CryptoResearch/, 'Gemini uses a custom app only when it is @-mentioned');
+  // The reply says which models run by themselves and which wait, and why.
+  assert.equal(all.data.readiness.models.chatgpt.route, 'setup_required');
+  assert.equal(all.data.readiness.models.gemini.setup, 'no Google API key: GEMINI_API_KEY');
+  assert.match(all.data.readiness.summary, /^No model runs automatically yet\. Setup required: Claude \(no Anthropic API key: ANTHROPIC_API_KEY\); ChatGPT \(no OpenAI API key: OPENAI_API_KEY\); Gemini \(no Google API key: GEMINI_API_KEY\)/);
+  assert.doesNotMatch(all.text, /fictional-test|sk-|AIza/, 'never a key');
   const promptFile = fs.readFileSync(path.join(d.ws.root, 'projects', pid, 'research', runId, 'prompt.md'), 'utf8');
   assert.ok(all.text.includes(promptFile), 'Claude gets the run prompt');
   // Saying it again changes nothing: the same run, no second job for anyone.
@@ -752,6 +757,22 @@ test('connector: with paid APIs set up, "all three models" runs ChatGPT and Gemi
   assert.equal(all.data.run.jobs.claude.state, 'running', 'Claude stays in Cowork');
   assert.equal(all.data.run.jobs.chatgpt.mode, 'api');
   assert.match(all.data.message, /ChatGPT: queued for the ChatGPT API in the background/);
+  // Readiness: ChatGPT and Gemini run by themselves; Claude is done in Cowork.
+  assert.deepEqual(all.data.readiness.models.chatgpt, { route: 'automatic', model: 'gpt-fictional-test', setup: null });
+  assert.equal(all.data.readiness.models.gemini.route, 'automatic');
+  assert.equal(all.data.readiness.models.claude.route, 'setup_required');
+  assert.match(all.data.readiness.summary, /^Automatic: ChatGPT and Gemini\. Setup required: Claude \(no Anthropic API key: ANTHROPIC_API_KEY\); its jobs wait meanwhile\. A three-model request from Cowork reserves about \$\d+\.\d+ on the ChatGPT and Gemini APIs \(Claude researches in Cowork itself\), within the \$5\.00 per-run limit\./);
+  // desk_status: read-only, the same readiness with jobs, limits, spend and the revision.
+  const st = await tool(d, claude.access, 'desk_status', {});
+  assert.equal(st.data.status, 'ok', st.text);
+  assert.equal(st.data.revision.commit, require('../core/revision').revision().commit);
+  assert.equal(st.data.research.models.chatgpt.key.present, true);
+  assert.equal(st.data.research.models.chatgpt.key.env, 'OPENAI_API_KEY');
+  assert.ok(st.data.research.models.chatgpt.jobs.queued + st.data.research.models.chatgpt.jobs.on_api >= 1, 'its job is counted');
+  assert.equal(st.data.research.models.claude.jobs.with_assistant, 1, 'Claude researches in Cowork');
+  assert.match(st.data.research.limits_note, /not hard limits/);
+  assert.match(st.data.message, /^The desk runs /);
+  assert.doesNotMatch(st.text, /test-openai-key-fictional|test-gemini-key-fictional/, 'never a key');
   await waitFor(() => {
     const r = research.loadRun(d.ws, pid, runId);
     return ['completed', 'failed'].includes(r.jobs.chatgpt.state) && ['completed', 'failed'].includes(r.jobs.gemini.state);
@@ -858,7 +879,7 @@ test('connector: "all three models" again after Claude saved, while ChatGPT and 
   assert.equal(again.data.status, 'in_progress', again.text);
   assert.equal(again.data.run.run_id, runId);
   assert.match(again.data.message, /^Nothing new was started: ChatGPT and Gemini are already in research run run_\S+ for Examplecoin \(FICTIONAL\)/);
-  assert.match(again.data.message, /ChatGPT: waiting for ChatGPT: Eric says "Do my waiting CryptoResearch research"/);
+  assert.match(again.data.message, /ChatGPT: waiting for ChatGPT \(setup required: no OpenAI API key: OPENAI_API_KEY\): Eric says "Do my waiting CryptoResearch research"/);
   assert.match(again.data.message, /Gemini: waiting for Gemini/);
   assert.match(again.data.message, /Claude saved a report [\d.]+ h ago/);
   assert.equal(research.listRuns(d.ws, pid).length, 1, 'no second run');

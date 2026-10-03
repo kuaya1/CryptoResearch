@@ -77,6 +77,17 @@ function generalTab(ctx) {
     ]), { note: 'Each value shows the source it came from.' }));
 }
 
+// A model's research route, as readiness reports it: automatic on its API,
+// or setup required (what is missing in the tooltip and below the label) and
+// meanwhile waiting for its assistant (online desk) or a pasted answer (PC).
+function routeCell(m, hostedDesk) {
+  if (!m) return h('span', { class: 'faint' }, '—');
+  if (m.route === 'automatic') return h('span', null, stateText('Automatic (API)', 'ok'), m.reservation_usd !== null ? h('div', { class: 'small muted' }, `about ${fmtUsd(m.reservation_usd)} reserved per attempt`) : null);
+  if (m.route === 'demo') return stateText('Fictional demo adapter');
+  return h('span', { title: m.setup || '' }, stateText(`Setup required · ${hostedDesk ? 'waits for its assistant' : 'paste by hand'}`, 'warn'), h('div', { class: 'small muted' }, m.setup_short || ''));
+}
+const fmtUsd = (x) => `$${x > 0 && x < 0.1 ? x.toFixed(4) : x.toFixed(2)}`;
+
 async function researchTab(ctx) {
   let info;
   try {
@@ -86,6 +97,8 @@ async function researchTab(ctx) {
   }
   const s = ctx.state.index.settings.research;
   const cfg = s.providers || {};
+  const ready = info.readiness || null;
+  const hostedDesk = Boolean(ctx.state.session && ctx.state.session.hosted);
   const inputs = {};
   const rows = PROVIDERS.map((p) => {
     const c = cfg[p] || {};
@@ -103,12 +116,15 @@ async function researchTab(ctx) {
   const daily = input({ inputmode: 'decimal', value: b.daily_usd ?? '', placeholder: 'not set' });
   const monthly = input({ inputmode: 'decimal', value: b.monthly_usd ?? '', placeholder: 'not set' });
   const horizon = input({ value: s.default_horizon || '24 months' });
-  // The Gemini API cannot cap searches per request, so web search is only used
-  // when you declare that your model bills grounding per request (audit V2-005).
+  // The Gemini API cannot cap searches per request, so web search is used only
+  // when you declare how your model bills it (audit V2-005): one fee per
+  // grounded request (Gemini 2.5), or per search query (Gemini 3, where max
+  // searches is the number the reservation assumes and a count the answer does
+  // not report keeps the reservation counted until you reconcile it).
   const geminiBilling = select([
     { value: '', label: 'Not declared (Gemini search is not used)', selected: !(cfg.gemini && cfg.gemini.search_billing) },
     { value: 'per_request', label: 'Per request (Gemini 2.5 and older)', selected: Boolean(cfg.gemini && cfg.gemini.search_billing === 'per_request') },
-    { value: 'per_query', label: 'Per search query (Gemini 3: no cap, so not used)', selected: Boolean(cfg.gemini && cfg.gemini.search_billing === 'per_query') },
+    { value: 'per_query', label: 'Per search query (Gemini 3: reserved as an estimate; no cap exists)', selected: Boolean(cfg.gemini && cfg.gemini.search_billing === 'per_query') },
   ], { 'aria-label': 'Gemini search billing' });
   const boundsList = PROVIDERS.filter((p) => info.providers[p] && info.providers[p].bounds).map((p) => {
     const b = info.providers[p].bounds;
@@ -119,7 +135,7 @@ async function researchTab(ctx) {
   const form = h('form', null,
     table([
       { label: 'Model', render: (p) => h('strong', null, PROVIDER_LABELS[p]) },
-      { label: 'Route', render: (p) => { const st = info.providers[p] || {}; return st.mode === 'api' ? stateText('API, ready', 'ok') : st.mode === 'mock' ? stateText('Fictional demo adapter') : h('span', { title: st.reason || '' }, stateText(ctx.state.session && ctx.state.session.hosted ? 'Its assistant\'s connection' : 'By hand', 'warn')); } },
+      { label: 'Route', render: (p) => routeCell(ready && ready.models[p], hostedDesk) },
       { label: 'API key', render: (p) => { const st = info.providers[p] || {}; return st.key && st.key.present ? `Present (${st.key.source || st.key.how || 'configured'})` : h('span', { class: 'faint' }, 'Not set'); } },
       { label: 'Model ID', render: (p) => inputs[p].model },
       { label: 'Input $/1M tok', render: (p) => inputs[p].inp },
@@ -132,7 +148,7 @@ async function researchTab(ctx) {
       field('Daily limit (USD)', daily),
       field('Monthly limit (USD)', monthly),
       field('Default horizon', horizon),
-      field('Gemini search billing', geminiBilling, 'The Gemini API has no per-request search limit. Gemini 3 bills each search query, so its search stays off (set Max searches to 0). Choose per request only if your model bills grounding per prompt.'),
+      field('Gemini search billing', geminiBilling, 'The Gemini API has no per-request search limit. Gemini 3 bills each search query: choose per search query (Max searches is then the number the reservation assumes, an estimate; a count the answer does not report keeps the reservation counted until you reconcile it), or set Max searches to 0. Choose per request only if your model bills grounding per prompt (Gemini 2.5 and older).'),
       h('label', { class: 'check field wide' }, unattended, 'Allow scheduled (unattended) research runs within these limits'),
       h('div', { class: 'field' }, btn)));
   form.onsubmit = action(btn, async () => {
@@ -155,13 +171,18 @@ async function researchTab(ctx) {
       h('li', null, 'In Render, open the CryptoResearch service, then Environment.'),
       h('li', null, 'Add only the keys you want to use: ', h('code', null, 'ANTHROPIC_API_KEY'), ', ', h('code', null, 'OPENAI_API_KEY'), ', ', h('code', null, 'GEMINI_API_KEY'), '. Save; Render restarts the desk with them. Never paste a key into a chat or this page.'),
       h('li', null, 'Set the model ID and token prices above (from each provider\'s pricing page), then the three limits.'),
-      h('li', null, 'The Route column shows "API, ready" when everything needed is present. That model then runs by itself in the background, within your limits.')))
+      h('li', null, 'The Route column shows "Automatic (API)" when everything needed is present. That model then runs by itself in the background, within your limits. Until then it says "Setup required" and what is missing, and its jobs wait for its assistant.')))
     : card('How to add a key (on this PC only)', h('ol', { class: 'list small' },
       h('li', null, 'Create the file ', h('code', null, info.keys_file), ' (outside your workspace, so it is never backed up or exported).'),
       h('li', null, 'Put in only the keys you want to use, for example ', h('code', null, '{ "anthropic_api_key": "…", "openai_api_key": "…", "gemini_api_key": "…" }'), '. Environment variables ANTHROPIC_API_KEY, OPENAI_API_KEY and GEMINI_API_KEY also work.'),
       h('li', null, 'Set the model ID and token prices above (from each provider\'s pricing page), then the three limits.'),
-      h('li', null, 'Restart the dashboard. The status column shows "ready (API)" when everything needed is present.')));
+      h('li', null, 'Restart the dashboard. The Route column shows "Automatic (API)" when everything needed is present; until then it says "Setup required" and what is missing.')));
   return h('div', null,
+    ready ? card('Readiness', [
+      h('p', null, ready.summary),
+      h('ul', { class: 'list small' }, PROVIDERS.map((p) => h('li', null, ready.models[p].sentence))),
+      h('p', { class: 'small muted' }, `${ready.retries_note} ${ready.limits_note}`),
+    ]) : null,
     callout(hosted
       ? h('span', null, 'API access is separate from consumer subscriptions (Claude Pro/Max, ChatGPT Plus, Gemini Advanced are not API keys). On this online desk, keys are set in Render > Environment and read only by the desk\'s server; they are never shown here, sent to the browser, written to settings, exported or logged. Without a key, a model\'s job waits for you: tell its assistant to do its waiting research, or paste the prompt and import the answer.')
       : h('span', null, 'API access is separate from consumer subscriptions (Claude Pro/Max, ChatGPT Plus, Gemini Advanced are not API keys). Keys are read only by the local server from environment variables or ', h('code', null, info.keys_file), '; they are never shown here, sent to the browser, written to settings, exported or logged. Without a key, a model\'s job waits for you to paste its answer.'), 'info'),
@@ -169,7 +190,7 @@ async function researchTab(ctx) {
       form,
       boundsList.length ? h('div', { style: { marginTop: '12px' } }, h('h3', null, 'What each limit enforces'), h('ul', { class: 'list small' }, boundsList),
         h('p', { class: 'small muted' }, 'Each call reserves the enforced parts plus the estimates before it is sent. Actual usage can be higher; it is recorded when the provider reports it.')) : null,
-    ], { note: `Counted so far: $${info.spend.daily} today, $${info.spend.monthly} this month (${info.spend.calls} call(s)${info.spend.open_reservations_usd ? `; $${info.spend.open_reservations_usd} of it is reservations for calls whose cost is not known yet` : ''}${info.spend.uncertain_attempts ? `; ${info.spend.uncertain_attempts} attempt(s) uncertain: reconcile them in the project's Research tab` : ''}). No budget is implied: until you set all three limits, no paid call is made.` }),
+    ], { note: `Counted so far: $${info.spend.daily} today, $${info.spend.monthly} this month (${info.spend.calls} call(s)${info.spend.open_reservations_usd ? `; $${info.spend.open_reservations_usd} of it is reservations for calls whose cost is not known yet` : ''}${info.spend.estimated_usd ? `; $${info.spend.estimated_usd} is estimates for ${info.spend.estimated_attempts} answer(s) whose provider did not report every billable quantity, each counted at least at its reservation until you reconcile it` : ''}${info.spend.uncertain_attempts ? `; ${info.spend.uncertain_attempts} attempt(s) uncertain: never resent; reconcile them in the project's Research tab` : ''}). No budget is implied: until you set all three limits, no paid call is made. Provider spend caps are a second guard with billing delay, not hard limits.` }),
     keyHelp);
 }
 
@@ -261,6 +282,16 @@ async function dataTab(ctx) {
     ]));
 }
 
+// Which code this desk runs: the commit Render deployed (or this PC's Git
+// checkout), so a review can match the running code to the repository.
+function revisionItem(session) {
+  const r = session && session.revision;
+  if (!r) return null;
+  return h('li', null, h('strong', null, 'Running code: '), r.commit
+    ? [h('code', null, r.short), r.branch ? ` (${r.branch})` : '', r.source === 'render' ? ', deployed by Render from GitHub' : ', from this PC\'s Git checkout', r.started_at ? `; started ${fmtAgo(r.started_at)}.` : '.']
+    : 'unknown (no deploy or Git information).');
+}
+
 async function systemTab(ctx) {
   const idx = ctx.state.index;
   const hostedDesk = Boolean(ctx.state.session && ctx.state.session.hosted);
@@ -336,6 +367,7 @@ async function systemTab(ctx) {
   return h('div', null,
     card('Connected apps', conn, { note: 'Apps you approved to use this desk. They act through the same validated records as this page; none of them can trade or move money.' }),
     card('Where things run', h('ul', { class: 'list' },
+      revisionItem(ctx.state.session),
       hostedDesk
         ? h('li', null, h('strong', null, 'This desk: '), 'runs online (Render) with its own records on a persistent disk. Every page and API call needs your sign-in; Claude\'s connector needs a connection you approved. Your PC\'s dashboard and its records are separate.')
         : h('li', null, h('strong', null, 'This dashboard: '), 'runs on this PC at 127.0.0.1 only. It is not reachable from your phone or the internet, and it should not be exposed to reach it from elsewhere. Phone access is the separate online desk.'),

@@ -852,7 +852,9 @@ function historyTab(ctx, d) {
 // Mirrors the server: an uncertain paid attempt, or a provider error without
 // usage, can be reconciled by the owner.
 function reconcilable(j, a) {
-  if (j.mode !== 'api' || !a) return false;
+  if (j.mode !== 'api' || !a || a.reconciled_at) return false;
+  // An answer whose usage was incomplete: its cost is only an estimate.
+  if (a.cost_status === 'estimated' && ['responded', 'imported', 'errored'].includes(a.phase)) return true;
   if (a.phase === 'uncertain') return true;
   if (a.phase === 'errored') return typeof a.cost_actual_usd !== 'number';
   return !a.phase && Boolean(a.finished_at) && a.outcome !== 'response_saved' && typeof a.cost_actual_usd !== 'number' && typeof a.cost_estimate_usd === 'number';
@@ -864,13 +866,23 @@ function money(n) {
 
 // What an attempt counts against the limits, in words: never "up to", because
 // a reservation is an estimate, not a maximum.
-function attemptCost(a) {
+// What an attempt cost, and how sure that figure is: reconciled (you recorded
+// it from the provider's billing), actual (the provider reported all usage),
+// estimated (usage incomplete: counted at no less than the reservation until
+// reconciled) or reserved (no usage yet).
+export function attemptCost(a) {
   if (a.phase === 'not_sent') return 'not sent, $0';
-  if (a.phase === 'reconciled' && typeof a.reconciled_usd === 'number') return `reconciled ${money(a.reconciled_usd)}`;
-  if (typeof a.cost_actual_usd === 'number') return `${money(a.cost_actual_usd)} actual${typeof a.overrun_usd === 'number' && a.overrun_usd > 0 ? ` (${money(a.overrun_usd)} above its reservation)` : ''}`;
+  if (typeof a.reconciled_usd === 'number' && (a.phase === 'reconciled' || a.reconciled_at)) return `${money(a.reconciled_usd)} reconciled (you recorded it)`;
+  if (typeof a.cost_actual_usd === 'number') return `${money(a.cost_actual_usd)} actual${a.not_billed ? ' (refused before any work, not billed)' : ''}${typeof a.overrun_usd === 'number' && a.overrun_usd > 0 ? ` (${money(a.overrun_usd)} above its reservation)` : ''}`;
   const r = typeof a.reserved_usd === 'number' ? a.reserved_usd : a.cost_estimate_usd;
+  if (typeof a.cost_usage_estimate_usd === 'number') {
+    const counted = Math.max(a.cost_usage_estimate_usd, typeof r === 'number' ? r : 0);
+    return `${money(a.cost_usage_estimate_usd)} estimated (the provider did not report ${(a.cost_unknown || []).includes('search_calls') ? 'how many searches ran' : 'all usage'}); counted at ${money(counted)} until reconciled`;
+  }
   if (typeof r !== 'number') return null;
-  return a.phase === 'uncertain' ? `${money(r)} reserved, counted until reconciled` : `${money(r)} reserved (estimate)`;
+  if (a.phase === 'uncertain') return `${money(r)} reserved, counted until reconciled`;
+  if (a.phase === 'submitted' || a.phase === 'dispatched') return `${money(r)} reserved (an estimate made before sending)`;
+  return `${money(r)} reserved (estimate)`;
 }
 
 function reconcileForm(ctx, pid, run, prov, a) {
