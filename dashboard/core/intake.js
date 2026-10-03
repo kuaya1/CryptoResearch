@@ -205,14 +205,13 @@ function pendingIdentify(ws) {
 // CoinGecko lookups (free public API; every attempted call counts in the same
 // monthly budget as prices)
 
-function countCalls(ws, n) {
+// n requests sent (counted before each is sent), answered: those that came
+// back with a usable answer (counted after).
+function countCalls(ws, n, answered = 0) {
   const market = require('./market');
   withLock(ws, 'market_status', () => {
     const status = market.readStatus(ws);
-    const calls = market.callBudget(ws, status);
-    calls.month_count += n;
-    calls.day_count += n;
-    calls.remaining = calls.budget_monthly ? Math.max(0, calls.budget_monthly - calls.month_count) : null;
+    const calls = market.addCalls(market.callBudget(ws, status), n, answered);
     replaceFile(ws, ws.abs(market.STATUS_REL), jsonText({ ...status, schema_version: status.schema_version || 'cr.market-status.v2', calls }));
   });
 }
@@ -260,11 +259,14 @@ async function cgGet(ws, pathAndQuery, fetchImpl, { retries = 1, maxWaitMs = 200
       continue;
     }
     if (!res.ok) throw new OpError('LOOKUP_FAILED', `CoinGecko answered HTTP ${res.status}.`);
+    let body;
     try {
-      return await res.json();
+      body = await res.json();
     } catch (_) {
       throw new OpError('LOOKUP_FAILED', 'CoinGecko answered with unreadable data.');
     }
+    countCalls(ws, 0, 1);
+    return body;
   }
 }
 

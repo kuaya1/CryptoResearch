@@ -31,6 +31,10 @@ const FILE_RE = /^cryptoresearch-desk-(\d{4}-\d{2}-\d{2}T[\dZ-]+)\.json$/;
 const INDEX_NAME = 'OFFSITE-INDEX.json';
 const LOCK_FAILURES = 10;
 const LOCK_WINDOW_MS = 15 * 60000;
+// The desk's note of the last package it handed out (it cannot see the copy).
+const SERVED_REL = 'logs/offsite-served.json';
+// A verified copy older than this is reported as overdue.
+const COPY_FRESH_HOURS = 36;
 
 // ---------------------------------------------------------------------------
 // Desk side: GET /api/offsite/package with "Authorization: Bearer <key>".
@@ -64,6 +68,12 @@ function makeOffsiteRoute(ws, { env = process.env, log = () => {}, now = () => D
     const pkg = require('./exporter').exportPackage(ws);
     pkg.desk = { revision: require('./revision').revision(), served_at: new Date().toISOString() };
     log(`Offsite package served: ${pkg.inventory.files} files, ${pkg.inventory.bytes} bytes${pkg.consistency && pkg.consistency.verified === false ? ' (an earlier save was not verified)' : ''}.`);
+    // A note of what was handed out, for this desk's backup status. Whether
+    // the PC verified and kept it is known only on the PC.
+    try {
+      const { withLock, replaceFile } = require('./ops');
+      withLock(ws, 'offsite_served', () => replaceFile(ws, ws.abs(SERVED_REL), jsonText({ schema_version: 'cr.offsite-served.v1', served_at: pkg.desk.served_at, files: pkg.inventory.files, bytes: pkg.inventory.bytes, desk_revision: pkg.desk.revision ? pkg.desk.revision.short || null : null })));
+    } catch (_) { /* a status note only; the package was served */ }
     return send(res, 200, pkg);
   };
 }
@@ -160,7 +170,7 @@ function prune(folder, { keepRecent = 30, keepMonthly = 12 } = {}) {
   return removed;
 }
 
-async function pull(ws, { to = null, deskUrl = null, env = process.env, fetchImpl = fetch, timeoutMs = 120000 } = {}) {
+async function pull(ws, { to = null, deskUrl = null, env = process.env, fetchImpl = fetch, timeoutMs = 120000, trigger = 'manual' } = {}) {
   const s = settingsOf(ws);
   const base = (deskUrl || s.desk_url || '').replace(/\/+$/, '');
   const k = pcKey(env);
@@ -206,6 +216,8 @@ async function pull(ws, { to = null, deskUrl = null, env = process.env, fetchImp
   const entry = {
     file: name,
     pulled_at: new Date().toISOString(),
+    // Who pulled it: the scheduled task, the dashboard or a command.
+    trigger: String(trigger || 'manual').slice(0, 40),
     package_created_at: body.created_at || null,
     desk_revision: body.desk && body.desk.revision ? body.desk.revision.short || null : null,
     files: v.files,
@@ -239,6 +251,65 @@ function status(ws, env = process.env) {
   return { ...r, last, age_hours: ageHours, copies: (idx.copies || []).length };
 }
 
+// Backup status in three separate parts, never one "backed up":
+//   same_disk         sealed snapshots on this machine's own disk: they undo
+//                     mistakes, they do not survive losing this disk
+//   offsite           whether copies can leave this disk: on the desk, its
+//                     backup key; on the PC, the desk address and the key
+//   independent_copy  a copy on another machine whose every file was checked:
+//                     on the PC, the latest verified pull; the desk cannot see
+//                     it and says so (it notes only when it last served one)
+// level names the strongest protection that exists now.
+function backupStatus(ws, env = process.env, now = Date.now()) {
+  const hosted = Boolean(ws.hosted);
+  const snaps = require('./exporter').listBackups(ws);
+  const sealed = snaps.filter((b) => b.sealed);
+  const latest = sealed[0] || null;
+  const hoursAgo = (iso) => (iso && Number.isFinite(Date.parse(iso)) ? Math.max(0, Math.round((now - Date.parse(iso)) / 3600000)) : null);
+  const sameDisk = {
+    present: Boolean(latest),
+    latest: latest ? { name: latest.name, created_at: latest.created_at, hours_ago: hoursAgo(latest.created_at), files: latest.files } : null,
+    count: sealed.length,
+    where: hosted ? 'the desk\'s own disk' : 'this PC\'s disk',
+    note: 'Sealed snapshots on the same disk undo mistakes; they do not survive losing that disk.',
+  };
+  let offsiteSupport;
+  let copy;
+  if (hosted) {
+    const served = readJson(ws.abs(SERVED_REL), null);
+    offsiteSupport = {
+      configured: Boolean(deskKey(env)),
+      role: 'serves',
+      last_served: served && served.served_at ? { at: served.served_at, hours_ago: hoursAgo(served.served_at), files: served.files || null } : null,
+      missing: deskKey(env) ? [] : [`CR_BACKUP_KEY (at least ${MIN_KEY_CHARS} characters) in Render's environment, entered by Eric`],
+    };
+    copy = { verified: null, known_here: false, note: 'This desk cannot see copies kept elsewhere. Your PC checks every file of each copy it pulls; its Settings and "offsite status" show the latest verified copy.' };
+  } else {
+    const st = status(ws, env);
+    offsiteSupport = { configured: st.configured, role: 'pulls', desk_url: st.desk_url, folder: st.folder, missing: st.missing };
+    const last = st.last;
+    copy = {
+      verified: Boolean(last),
+      known_here: true,
+      latest: last ? { file: last.file, pulled_at: last.pulled_at, hours_ago: st.age_hours, files: last.files, captures: last.captures || 0, trigger: last.trigger || null, records: last.records || null } : null,
+      copies: st.copies,
+      overdue: Boolean(last) && st.age_hours > COPY_FRESH_HOURS,
+      folder: st.folder,
+    };
+  }
+  const level = copy.verified ? 'independent_copy' : offsiteSupport.configured ? 'offsite_set_up' : sameDisk.present ? 'same_disk_only' : 'none';
+  const parts = [
+    sameDisk.present ? `Same-disk snapshots: latest ${sameDisk.latest.name}, ${sameDisk.latest.hours_ago} h ago, on ${sameDisk.where} (undoes mistakes; does not survive losing that disk).` : `Same-disk snapshots: none yet on ${sameDisk.where}.`,
+    hosted
+      ? (offsiteSupport.configured ? `Offsite copies: set up (the backup key is set), so your PC can pull verified copies${offsiteSupport.last_served ? `; this desk last served one ${offsiteSupport.last_served.hours_ago} h ago` : '; none served yet'}.` : 'Offsite copies: not set up (no CR_BACKUP_KEY on the desk), so these records exist only on this disk and in Render\'s own disk snapshots.')
+      : (offsiteSupport.configured ? 'Offsite copies: set up on this PC (desk address and backup key present).' : `Offsite copies: not set up on this PC (missing ${offsiteSupport.missing.join('; ')}).`),
+    hosted
+      ? 'Verified independent copy: not visible from the desk; the PC that pulls copies shows it.'
+      : copy.verified ? `Verified independent copy: ${copy.latest.file}, pulled ${copy.latest.hours_ago} h ago${copy.latest.trigger ? ` (${copy.latest.trigger})` : ''}, every file checked against its hash${copy.overdue ? `; overdue (older than ${COPY_FRESH_HOURS} h)` : ''}.` : 'Verified independent copy: none yet.',
+  ];
+  return { hosted, level, same_disk: sameDisk, offsite: offsiteSupport, independent_copy: copy, summary: parts.join(' ') };
+}
+
 // Re-checks one saved copy file by file.
 function verifyFile(file) {
   let pkg;
@@ -250,4 +321,4 @@ function verifyFile(file) {
   return verifyPackage(pkg);
 }
 
-module.exports = { makeOffsiteRoute, verifyPackage, pull, status, readiness, verifyFile, prune, deskKey, CR_ALLOWED, MIN_KEY_CHARS };
+module.exports = { makeOffsiteRoute, verifyPackage, pull, status, backupStatus, readiness, verifyFile, prune, deskKey, CR_ALLOWED, MIN_KEY_CHARS, COPY_FRESH_HOURS };

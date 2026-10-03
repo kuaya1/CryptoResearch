@@ -149,14 +149,21 @@ function transportError(err) {
 // usage. Blocks are rebuilt exactly (text, thinking with its signature, tool
 // calls with their input, tool results), so a paused turn can be sent back
 // unchanged. A stream that ends before message_stop, or reports an error, is
-// an error with the usage seen so far.
+// an error with what it had delivered so far: the usage, the message ID, the
+// text written before it stopped (partial_text) and why it stopped
+// (termination). The caller adds the HTTP request ID.
 async function readMessageStream(res) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
   let msg = null;
   let finished = false;
-  const fail = (kind, message, extra = {}) => Object.assign(new ProviderError(kind, message, extra), { partial_usage: msg ? { ...msg.usage } : null, raw: msg });
+  const sofar = () => {
+    if (!msg) return { partial_usage: null, raw: msg };
+    const text = (msg.content || []).filter((b) => b && b.type === 'text' && b.text).map((b) => b.text).join('\n').trim();
+    return { partial_usage: { ...msg.usage }, partial_text: text || null, attested: { provider: 'anthropic', model: msg.model || null, response_id: msg.id || null, stop_reason: msg.stop_reason || null }, raw: msg };
+  };
+  const fail = (kind, message, extra = {}) => Object.assign(new ProviderError(kind, message, extra), sofar());
   const apply = (data) => {
     if (data.type === 'message_start') {
       msg = { ...data.message, content: [], usage: { ...((data.message && data.message.usage) || {}) } };
@@ -165,15 +172,15 @@ async function readMessageStream(res) {
     if (data.type === 'ping') return;
     if (data.type === 'error') {
       const e = data.error || {};
-      throw fail('http', `Anthropic reported an error during the answer (${e.type || 'error'}): ${String(e.message || '').slice(0, 300)}`, { retryable: ['overloaded_error', 'api_error'].includes(e.type) });
+      throw fail('http', `Anthropic reported an error during the answer (${e.type || 'error'}): ${String(e.message || '').slice(0, 300)}`, { retryable: ['overloaded_error', 'api_error'].includes(e.type), termination: `error_event${e.type ? `: ${e.type}` : ''}` });
     }
-    if (!msg) throw fail('stream', 'The answer stream did not start with message_start.');
+    if (!msg) throw fail('stream', 'The answer stream did not start with message_start.', { termination: 'stream_unreadable' });
     if (data.type === 'content_block_start') {
       msg.content[data.index] = JSON.parse(JSON.stringify(data.content_block));
     } else if (data.type === 'content_block_delta') {
       const b = msg.content[data.index];
       const d = data.delta || {};
-      if (!b) throw fail('stream', `The answer stream sent a delta for a block it never started (${data.index}).`);
+      if (!b) throw fail('stream', `The answer stream sent a delta for a block it never started (${data.index}).`, { termination: 'stream_unreadable' });
       if (d.type === 'text_delta') b.text = (b.text || '') + d.text;
       else if (d.type === 'thinking_delta') b.thinking = (b.thinking || '') + d.thinking;
       else if (d.type === 'signature_delta') b.signature = (b.signature || '') + d.signature;
@@ -188,7 +195,7 @@ async function readMessageStream(res) {
         try {
           b.input = b._json ? JSON.parse(b._json) : {};
         } catch (_) {
-          throw fail('stream', 'A tool call in the answer stream had unreadable input.');
+          throw fail('stream', 'A tool call in the answer stream had unreadable input.', { termination: 'stream_unreadable' });
         }
         delete b._json;
       }
@@ -210,7 +217,7 @@ async function readMessageStream(res) {
     try {
       parsed = JSON.parse(data);
     } catch (_) {
-      throw fail('stream', 'The answer stream contained unreadable data.');
+      throw fail('stream', 'The answer stream contained unreadable data.', { termination: 'stream_unreadable' });
     }
     apply(parsed);
   };
@@ -230,9 +237,10 @@ async function readMessageStream(res) {
     if (buf.trim()) eventOf(buf.trim());
   } catch (err) {
     if (err instanceof ProviderError) throw err;
-    throw Object.assign(transportError(err), { partial_usage: msg ? { ...msg.usage } : null, raw: msg });
+    const e = transportError(err);
+    throw Object.assign(e, sofar(), { termination: e.code ? `${e.kind}: ${e.code}` : e.kind });
   }
-  if (!finished) throw fail('network', 'The connection to Anthropic ended before the answer was complete. A request that was sent may still be billed.');
+  if (!finished) throw fail('network', 'The connection to Anthropic ended before the answer was complete. A request that was sent may still be billed.', { termination: 'ended_before_message_stop' });
   return msg;
 }
 
@@ -273,8 +281,15 @@ async function post(fetchImpl, url, headers, body, { signal, dispatcher, method 
   const type = res.headers && typeof res.headers.get === 'function' ? String(res.headers.get('content-type') || '') : '';
   if (res.ok && /text\/event-stream/.test(type) && res.body && typeof res.body.getReader === 'function') {
     const requestId = res.headers.get('request-id') || res.headers.get('x-request-id') || null;
-    const json = await readMessageStream(res);
-    return { json, raw: null, requestId };
+    try {
+      const json = await readMessageStream(res);
+      return { json, raw: null, requestId };
+    } catch (err) {
+      // An answer cut off or failed mid-stream keeps its request's ID.
+      if (!err.requestId) err.requestId = requestId;
+      if (err.attested && !err.attested.request_id) err.attested.request_id = requestId;
+      throw err;
+    }
   }
   const text = await res.text();
   let json = null;
@@ -355,6 +370,14 @@ async function callClaude({ model, prompt, maxOutputTokens, maxSearches, key, si
         else err.partial_usage = { ...seen, requests: n };
         err.raw = { responses: raws, failed_request: err.raw || null };
       }
+      // What a cut-off or failed answer leaves to recover from: the IDs of
+      // its requests, the failed message's ID and the text written before it
+      // stopped (kept with the attempt for reading, never saved as a report).
+      const ids = [...requestIds, err.requestId].filter(Boolean);
+      const failed = err.attested || null;
+      const before = [...texts, err.partial_text].filter(Boolean).join('\n').trim();
+      if (before) err.partial_text = before;
+      if (ids.length || failed) err.attested = { provider: 'anthropic', model: (failed && failed.model) || (json && json.model) || null, response_id: (failed && failed.response_id) || null, request_id: err.requestId || null, request_ids: ids, stop_reason: (failed && failed.stop_reason) || null, requests: requests + (failed ? 1 : 0) };
       throw err;
     }
     requests++;
@@ -367,7 +390,7 @@ async function callClaude({ model, prompt, maxOutputTokens, maxSearches, key, si
     if (!json || json.stop_reason !== 'pause_turn' || requests > maxContinuations) break;
     if (json._unknown_deltas) {
       usage.requests = requests;
-      throw new ProviderError('incomplete', 'Claude paused mid-research, and its answer so far contained content this desk cannot send back exactly, so it was not resumed. The partial answer is kept, not saved as a report. Retry.', { usage, raw: JSON.stringify({ responses: raws }), retryable: false });
+      throw new ProviderError('incomplete', 'Claude paused mid-research, and its answer so far contained content this desk cannot send back exactly, so it was not resumed. The partial answer is kept, not saved as a report. Retry.', { usage, raw: JSON.stringify({ responses: raws }), retryable: false, partial_text: texts.join('\n').trim() || null, termination: 'pause_turn_not_resumable', attested: { provider: 'anthropic', model: json.model || null, response_id: json.id || null, request_id: requestIds[requestIds.length - 1] || null, request_ids: requestIds, stop_reason: json.stop_reason, requests } });
     }
     // Resume the same turn: the paused answer goes back as the assistant turn.
     messages.push({ role: 'assistant', content });
@@ -376,14 +399,15 @@ async function callClaude({ model, prompt, maxOutputTokens, maxSearches, key, si
   const attested = { provider: 'anthropic', model: json && json.model, response_id: json && json.id, request_id: requestIds[requestIds.length - 1] || null, request_ids: requestIds, stop_reason: json && json.stop_reason, requests };
   const raw = JSON.stringify(raws.length === 1 ? raws[0] : { responses: raws });
   const stop = json && json.stop_reason;
+  const partialText = texts.join('\n').trim() || null;
   if (stop === 'refusal') {
     const d = json.stop_details || {};
-    throw new ProviderError('refused', `Claude declined to answer (refusal${d.category ? `: ${d.category}` : ''}). Nothing was saved as a report; the answer it returned is kept. You can retry.`, { usage, attested, raw, retryable: false });
+    throw new ProviderError('refused', `Claude declined to answer (refusal${d.category ? `: ${d.category}` : ''}). Nothing was saved as a report; the answer it returned is kept. You can retry.`, { usage, attested, raw, retryable: false, partial_text: partialText, termination: 'refusal' });
   }
   if (stop === 'pause_turn' || stop === 'max_tokens') {
     throw new ProviderError('incomplete', stop === 'max_tokens'
       ? `Claude ran out of its output limit (${maxOutputTokens} tokens) before finishing. The partial answer is kept, not saved as a report. Retry, or raise the output limit in Settings.`
-      : `Claude was still researching after ${requests} requests (the most this desk sends for one answer). The partial answer is kept, not saved as a report. Retry, or allow fewer searches.`, { usage, attested, raw, retryable: false });
+      : `Claude was still researching after ${requests} requests (the most this desk sends for one answer). The partial answer is kept, not saved as a report. Retry, or allow fewer searches.`, { usage, attested, raw, retryable: false, partial_text: partialText, termination: stop });
   }
   return { text: texts.join('\n').trim(), raw, attested, usage };
 }
@@ -473,10 +497,11 @@ function readChatgpt(json, raw, requestId) {
 // The outcome of a Responses answer whose status is final: a result, or the
 // provider's own failure with its usage.
 function chatgptOutcome(r, json) {
-  const extra = { usage: r.usage, attested: r.attested, raw: r.raw, retryable: false };
+  const why = r.status === 'incomplete' && json && json.incomplete_details ? json.incomplete_details.reason : null;
+  // A response that did not complete keeps any text it wrote and why it stopped.
+  const extra = { usage: r.usage, attested: r.attested, raw: r.raw, retryable: false, partial_text: r.text || null, termination: why ? `${r.status}: ${why}` : r.status || null };
   if (r.status === 'completed' || r.status === null || r.status === undefined) return { result: { text: r.text, raw: r.raw, attested: r.attested, usage: r.usage } };
   if (r.status === 'incomplete') {
-    const why = json && json.incomplete_details ? json.incomplete_details.reason : null;
     return { error: new ProviderError('incomplete', why === 'max_output_tokens'
       ? 'ChatGPT ran out of its output limit (reasoning counts toward it) before finishing. Its cost is recorded; nothing was saved as a report. Retry, or raise the output limit in Settings.'
       : `ChatGPT stopped before finishing (${why || 'incomplete'}). Its cost is recorded; nothing was saved as a report. You can retry.`, extra) };
@@ -642,7 +667,8 @@ function readGemini(json, raw, requestId) {
 }
 
 function geminiOutcome(r) {
-  const extra = { usage: r.usage, attested: r.attested, raw: r.raw, retryable: false };
+  // An interaction that did not complete keeps any text it wrote and why it stopped.
+  const extra = { usage: r.usage, attested: r.attested, raw: r.raw, retryable: false, partial_text: r.text || null, termination: r.status || null };
   if (r.status === 'completed') return { result: { text: r.text, raw: r.raw, attested: r.attested, usage: r.usage } };
   if (r.status === 'incomplete') return { error: new ProviderError('incomplete', 'Gemini stopped before finishing (output limit, thinking included). Its cost is recorded; nothing was saved as a report. Retry, or raise the output limit in Settings.', extra) };
   if (r.status === 'cancelled') return { error: new ProviderError('cancelled', 'The Gemini request was cancelled before it finished. Usage so far is recorded; nothing was saved as a report.', extra) };

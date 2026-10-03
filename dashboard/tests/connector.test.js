@@ -1278,14 +1278,33 @@ async function pilotSetup(t, label) {
   const cs = await tool(d, claude.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: mockReport(d.ws, 'claude', research.loadRun(d.ws, pid, runId)) });
   assert.equal(cs.data.status, 'saved', cs.text);
   const claudeDir = path.join(d.ws.root, 'projects', pid, 'reports', cs.data.report.report_id);
+  // Other work already waiting on the desk, as on the live desk: a project
+  // whose ChatGPT and Gemini jobs wait, and a Gemini job its own assistant
+  // took. Setting the keys must send none of it.
+  const addOther = async (name, symbol, n) => (await tool(d, claude.access, 'add_project', { ...EXAMPLECOIN, name, symbol, official_website: `https://${symbol.toLowerCase()}.example/`, contracts: [{ chain: 'base', address: `0x${String(n).repeat(40)}` }], evidence: [{ url: `https://${symbol.toLowerCase()}.example/token` }] })).data.project.project_id;
+  const waitingPid = await addOther('Otherchain (FICTIONAL)', 'OTH', 4);
+  const waitingRun = research.createRun(d.ws, { project_id: waitingPid, providers: ['chatgpt', 'gemini'], channel: 'dashboard' }).run_id;
+  const takenPid = await addOther('Thirdchain (FICTIONAL)', 'THR', 5);
+  const takenRun = research.createRun(d.ws, { project_id: takenPid, providers: ['gemini'], assistant: 'gemini', channel: 'gemini connector' }).run_id;
+  const others = { waiting: { pid: waitingPid, runId: waitingRun }, taken: { pid: takenPid, runId: takenRun } };
+  assert.deepEqual(['chatgpt', 'gemini'].map((p) => research.loadRun(d.ws, waitingPid, waitingRun).jobs[p].state), ['unconfigured', 'unconfigured']);
+  assert.deepEqual([research.loadRun(d.ws, takenPid, takenRun).jobs.gemini.state, research.loadRun(d.ws, takenPid, takenRun).jobs.gemini.mode], ['running', 'connector']);
   // The keys arrive on the desk (fictional values); its settings are the desk's defaults (v4).
   process.env.OPENAI_API_KEY = 'test-openai-key-fictional';
   process.env.GEMINI_API_KEY = 'test-gemini-key-fictional';
-  return { d, claude, pid, runId, claudeReportId: cs.data.report.report_id, claudeDir, claudeBytes: reportBytes(claudeDir) };
+  return { d, claude, pid, runId, claudeReportId: cs.data.report.report_id, claudeDir, claudeBytes: reportBytes(claudeDir), others };
 }
 
-test('pilot rehearsal: with Claude saved in Cowork, one request sends only the two waiting models to their background APIs with the frozen prompt; a repeat sends nothing; after a restart both are collected by ID, never resent; each report is saved and graded on its own; no transaction', async (t) => {
-  const { d, claude, pid, runId, claudeReportId, claudeDir, claudeBytes } = await pilotSetup(t, 'pilot');
+// Other projects' waiting work, untouched: nothing sent, nothing taken over.
+function assertOthersUntouched(d, others) {
+  const w = research.loadRun(d.ws, others.waiting.pid, others.waiting.runId);
+  assert.deepEqual(['chatgpt', 'gemini'].map((p) => [w.jobs[p].state, w.jobs[p].mode, w.jobs[p].attempts.length]), [['unconfigured', 'manual', 0], ['unconfigured', 'manual', 0]], 'another project\'s waiting jobs are not sent when the keys arrive');
+  const g = research.loadRun(d.ws, others.taken.pid, others.taken.runId).jobs.gemini;
+  assert.deepEqual([g.state, g.mode, g.attempts.length], ['running', 'connector', 0], 'a job its own assistant took stays with it');
+}
+
+test('pilot rehearsal: with Claude saved in Cowork, one request sends only the two waiting models to their background APIs with the frozen prompt; a repeat sends nothing; after a restart both are collected by ID, never resent; each report is saved and graded on its own; no transaction; other projects\' waiting work is never sent', async (t) => {
+  const { d, claude, pid, runId, claudeReportId, claudeDir, claudeBytes, others } = await pilotSetup(t, 'pilot');
   // Before anything is sent: the preflight (get_research) shows what would be sent and reserved.
   const before = await tool(d, claude.access, 'get_research', { project_id: pid, include_prompt: false });
   const pf = before.data.preflight;
@@ -1355,6 +1374,10 @@ test('pilot rehearsal: with Claude saved in Cowork, one request sends only the t
   // Claude's report is untouched; no holding was recorded.
   assert.equal(reportBytes(claudeDir), claudeBytes);
   assert.equal(require('../core/portfolio').loadTransactions(d.ws).length, 0, 'research never records a transaction');
+  // The keys, the request, its repeat and the restart sent nothing else.
+  assertOthersUntouched(d, others);
+  await new Promise((res) => setTimeout(res, 600));
+  assert.deepEqual([sp.calls.openaiPosts.length, sp.calls.geminiPosts.length], [1, 1], 'one paid request per model, for this project only');
 });
 
 test('pilot rehearsal: when one provider fails, the other model\'s report is saved and kept; the failure is recorded with its cost and never resent', async (t) => {
@@ -1469,4 +1492,85 @@ test('connector: Gemini does its waiting research with one call Eric approves: p
   assert.equal(r.jobs.gemini.report_id, saved.data.report.report_id);
   assert.equal(readJson(path.join(d.ws.root, 'projects', pid, 'reports', saved.data.report.report_id, 'meta.json')).provider, 'gemini');
   assert.equal((await tool(d, gemini.access, 'pending_research', {})).data.pending.length, 0, 'nothing left waiting for Gemini');
+});
+
+// Review v3, finding 3: a client that reads only the structured result (as
+// Claude's does) got "(below)" in place of the run's prompt and had to rebuild
+// it. Both forms of the result now carry the frozen prompt, byte for byte.
+test('connector: the frozen prompt arrives complete in the structured result and in the text, byte for byte against its frozen hash, long prompts and drafts included; a prompt file that no longer matches is not given out; reading changes nothing', async (t) => {
+  const { hashTree } = require('./helpers');
+  const { sha256 } = require('../core/fsx');
+  const d = await desk(t, 'prompt-delivery');
+  withKeys(t, {});
+  const claude = await connect(d);
+  const chatgpt = await connectChatgpt(d);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => { throw new Error(`network call attempted: ${url}`); };
+  t.after(() => { globalThis.fetch = realFetch; });
+  const pid = (await tool(d, claude.access, 'add_project', EXAMPLECOIN)).data.project.project_id;
+  // A long prompt: v5, with Eric's own questions at their 2,000-character limit.
+  const questions = 'Is the March unlock a risk inside four months, and does the fee switch reach holders? (FICTIONAL) '.repeat(30).slice(0, 2000);
+  const started = await tool(d, claude.access, 'start_research', { project_id: pid, owner_request: 'Research Examplecoin with all three models (FICTIONAL)', models: 'all', instructions: questions });
+  assert.equal(started.data.status, 'created', started.text);
+  const runId = started.data.run.run_id;
+  const run = research.loadRun(d.ws, pid, runId);
+  const bytes = fs.readFileSync(path.join(d.ws.root, run.prompt.path));
+  const prompt = bytes.toString('utf8');
+  assert.equal(sha256(bytes), run.prompt.sha256);
+  assert.ok(prompt.length > 50000 && prompt.includes(questions.slice(0, 200)), `a long prompt with the owner's questions (${prompt.length} characters)`);
+  const delivered = (res, who) => {
+    // Structured: the whole prompt, never a placeholder, with its hash.
+    assert.equal(res.data.run.prompt, prompt, `${who}: the structured result carries the complete prompt`);
+    assert.equal(sha256(Buffer.from(res.data.run.prompt, 'utf8')), run.prompt.sha256, `${who}: the delivered bytes match the frozen hash`);
+    assert.deepEqual([res.data.run.prompt_delivery.status, res.data.run.prompt_delivery.sha256, res.data.run.prompt_delivery.chars], ['verified', run.prompt.sha256, prompt.length]);
+    assert.equal(res.data.run.prompt_sha256, run.prompt.sha256);
+    // Text: the same prompt as a block of its own, exactly.
+    const block = res.content.find((c) => c.text.startsWith(`--- Research prompt for ${runId} (follow it exactly) ---\n`));
+    assert.ok(block, `${who}: a text block with the prompt`);
+    const fromText = block.text.slice(block.text.indexOf('\n') + 1);
+    assert.equal(fromText, prompt, `${who}: the text block carries the complete prompt`);
+    assert.equal(sha256(Buffer.from(fromText, 'utf8')), run.prompt.sha256);
+    // The record block points to it rather than repeating it.
+    assert.match(JSON.parse(res.content[0].text).run.prompt, /^\(the run's frozen prompt is the last text block below: \d+ characters, SHA-256 [0-9a-f]{64}\)$/);
+  };
+  delivered(started, 'start_research');
+  // The JSON-RPC answer as it travels: parsed from the raw HTTP body.
+  const raw = await rpc(d, claude.access, 'tools/call', { name: 'get_research', arguments: { project_id: pid } });
+  assert.equal(raw.status, 200);
+  assert.ok(raw.text.length > 2 * prompt.length, 'both forms are in the serialized answer');
+  delivered({ ...raw.json.result, data: raw.json.result.structuredContent }, 'get_research (raw)');
+  // A saved draft comes back in full in both forms too.
+  const draft = `## 1. Legitimacy\n${'FICTIONAL draft line with a dated source (2026-10-03).\n'.repeat(400)}`;
+  assert.equal((await tool(d, claude.access, 'save_research_draft', { project_id: pid, run_id: runId, draft_markdown: draft, note: 'section 1' })).data.status, 'saved');
+  const withDraft = await tool(d, claude.access, 'get_research', { project_id: pid });
+  assert.equal(withDraft.data.run.draft, draft, 'the structured result carries the complete draft');
+  assert.ok(withDraft.content.some((c) => c.text === `--- Your saved draft for ${runId} ---\n${draft}`), 'the text carries the complete draft');
+  delivered(withDraft, 'get_research with a draft');
+  // ChatGPT reads its waiting job's prompt, read-only: the same bytes.
+  const gv = await tool(d, chatgpt.access, 'get_research', { project_id: pid, run_id: runId });
+  delivered(gv, 'ChatGPT get_research');
+  assert.equal(research.loadRun(d.ws, pid, runId).jobs.chatgpt.state, 'unconfigured', 'reading takes nothing over');
+  // Without the prompt: no text, but the frozen hash it would match.
+  const brief = await tool(d, claude.access, 'get_research', { project_id: pid, include_prompt: false });
+  assert.equal(brief.data.run.prompt, undefined);
+  assert.equal(brief.data.run.prompt_sha256, run.prompt.sha256);
+  // Reading changes nothing on disk.
+  const before = hashTree(path.join(d.ws.root, 'projects'));
+  await tool(d, claude.access, 'get_research', { project_id: pid });
+  await tool(d, chatgpt.access, 'get_research', { project_id: pid, run_id: runId });
+  assert.deepEqual(hashTree(path.join(d.ws.root, 'projects')), before, 'get_research is read-only');
+  // A prompt file that no longer matches the hash recorded at the run's start
+  // is not given out, and nothing is rebuilt from the templates.
+  const promptPath = path.join(d.ws.root, run.prompt.path);
+  fs.writeFileSync(promptPath, `${prompt}\nFICTIONAL: changed after the run started`);
+  const bad = await tool(d, claude.access, 'get_research', { project_id: pid });
+  assert.equal(bad.isError, false);
+  assert.equal(bad.data.run.prompt, null);
+  assert.equal(bad.data.run.prompt_delivery.status, 'hash_mismatch');
+  assert.equal(bad.data.run.prompt_delivery.frozen_sha256, run.prompt.sha256);
+  assert.match(bad.data.run.prompt_delivery.message, /no longer matches the SHA-256 recorded when the run started, so it is not given out\. Tell Eric; never rebuild the prompt from the templates or other files\./);
+  assert.ok(!bad.content.some((c) => c.text.startsWith('--- Research prompt for')), 'no prompt block');
+  assert.ok(!bad.text.includes(prompt.slice(0, 2000)), 'nothing of a prompt is given out');
+  fs.writeFileSync(promptPath, bytes);
+  delivered(await tool(d, claude.access, 'get_research', { project_id: pid }), 'restored file');
 });

@@ -263,6 +263,60 @@ test('restore drill: a backup or package made while a background request was sub
   assert.equal(fs.existsSync(dest3), false, 'nothing written');
 });
 
+// Review v3, finding 2: backup status said "backup" for same-disk snapshots
+// and showed nothing on a PC with no offsite copy. It now reports three
+// separate things, and only a verified copy on another machine counts as one.
+test('backup status: same-disk snapshots, offsite set up and a verified independent copy are reported apart; a scheduled run that made no copy is not a copy; the desk notes what it served but cannot see the copy', async (t) => {
+  withEnv(t, { CR_BACKUP_KEY: undefined });
+  const jobs = require('../core/jobs');
+  const { doctor } = require('../core/doctor');
+  const { ws: pc, root, cleanup } = tempWorkspace('backup-status');
+  t.after(cleanup);
+  const folder = path.join(root, 'offsite-copies');
+  // Nothing yet.
+  let b = offsite.backupStatus(pc, {});
+  assert.deepEqual([b.level, b.same_disk.present, b.offsite.configured, b.independent_copy.verified], ['none', false, false, false]);
+  // A same-disk snapshot is not an independent copy.
+  exporter.createBackup(pc, { reason: 'test' });
+  b = offsite.backupStatus(pc, {});
+  assert.equal(b.level, 'same_disk_only');
+  assert.match(b.summary, /^Same-disk snapshots: latest \S+, 0 h ago, on this PC's disk \(undoes mistakes; does not survive losing that disk\)\. Offsite copies: not set up on this PC \(missing the desk address .*\)\. Verified independent copy: none yet\.$/);
+  // The scheduled task runs, but with offsite not set up it makes no copy: the job says so, and the status does not change.
+  const setUp = Object.create(pc, { settings: { value: { ...pc.settings, offsite: { desk_url: `https://${HOST}`, folder } } } });
+  const skipped = await jobs.runJob(pc, 'offsite', { trigger: 'scheduler' });
+  assert.equal(skipped.status, 'skipped');
+  assert.match(skipped.summary, /^No offsite copy was made: Offsite backup is not set up on this PC/);
+  assert.equal(offsite.backupStatus(pc, {}).independent_copy.verified, false);
+  const docLine = (await doctor(pc)).checks.find((c) => c.name === 'Offsite backup');
+  assert.equal(docLine.status, 'warn', 'doctor says it on a PC even before setup');
+  assert.match(docLine.detail, /Verified independent copy: none yet\./);
+  // Set up and pulled by the scheduled task: a verified independent copy.
+  process.env.CR_BACKUP_KEY = KEY;
+  const d = await desk(t, 'status');
+  assert.equal(offsite.backupStatus(setUp).level, 'offsite_set_up');
+  const pulled = await offsite.pull(setUp, { deskUrl: `https://${HOST}`, fetchImpl: deskFetch(d.port), trigger: 'scheduler' });
+  assert.equal(pulled.status, 'ok', pulled.message);
+  b = offsite.backupStatus(setUp);
+  assert.deepEqual([b.level, b.independent_copy.verified, b.independent_copy.overdue, b.independent_copy.latest.trigger, b.independent_copy.latest.file], ['independent_copy', true, false, 'scheduler', path.basename(pulled.file)]);
+  assert.match(b.summary, /Verified independent copy: cryptoresearch-desk-\S+\.json, pulled 0 h ago \(scheduler\), every file checked against its hash\.$/);
+  assert.equal(offsite.verifyFile(pulled.file).ok, true);
+  // A copy older than a day and a half is overdue.
+  const idxFile = path.join(folder, 'OFFSITE-INDEX.json');
+  const idx = readJson(idxFile);
+  idx.copies[0].pulled_at = new Date(Date.now() - 40 * 3600000).toISOString();
+  atomicWrite(idxFile, jsonText(idx));
+  assert.equal(offsite.backupStatus(setUp).independent_copy.overdue, true);
+  // The desk knows its key is set and when it last served a package, never whether a copy was kept.
+  const ds = offsite.backupStatus(d.ws);
+  assert.deepEqual([ds.hosted, ds.offsite.configured, ds.independent_copy.known_here, ds.independent_copy.verified], [true, true, false, null]);
+  assert.ok(ds.offsite.last_served && ds.offsite.last_served.files > 0, 'the package it served is noted');
+  assert.equal(ds.level, 'offsite_set_up', 'the desk never claims an independent copy');
+  assert.match(ds.summary, /Offsite copies: set up \(the backup key is set\), so your PC can pull verified copies; this desk last served one 0 h ago\. Verified independent copy: not visible from the desk; the PC that pulls copies shows it\.$/);
+  // Without the key the desk says the records exist only on its disk.
+  delete process.env.CR_BACKUP_KEY;
+  assert.match(offsite.backupStatus(d.ws).summary, /Offsite copies: not set up \(no CR_BACKUP_KEY on the desk\), so these records exist only on this disk and in Render's own disk snapshots\./);
+});
+
 test('offsite job: due once a day on a PC that is set up; never on the online desk', (t) => {
   const { ws, cleanup } = tempWorkspace('offsite-job');
   t.after(cleanup);

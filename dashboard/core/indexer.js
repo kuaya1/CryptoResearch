@@ -39,7 +39,7 @@ const siteOf = (project) => (project && project.identity && project.identity.sta
 // Evidence checks (evidence.js), in brief for lists: never a score change.
 function evidenceBrief(a, project) {
   const e = require('./evidence').evidenceChecks(a, { officialWebsite: siteOf(project) });
-  return { flagged: e.flagged_claims, high: e.high, medium: e.medium, low: e.low, critical: e.critical_claims, summary: e.summary };
+  return { flagged: e.flagged_claims, flagged_categories: e.flagged_categories, high: e.high, medium: e.medium, low: e.low, critical: e.critical_claims, summary: e.summary };
 }
 
 function reportSummary(ws, r, project = null) {

@@ -266,6 +266,7 @@ async function fetchContext(ws, fetchImpl = fetch) {
   if (key) headers['x-cg-demo-api-key'] = key;
   const timeout = (md.timeout_seconds || 20) * 1000;
   let calls = 0;
+  let answered = 0;
   const get = async (pathAndQuery) => {
     calls++; // counted before the request, so a failed request still counts
     let res;
@@ -273,37 +274,37 @@ async function fetchContext(ws, fetchImpl = fetch) {
       res = await fetchImpl(`${base}${pathAndQuery}`, { headers, signal: AbortSignal.timeout(timeout) });
     } catch (err) {
       const e = new Error(err.name === 'TimeoutError' || err.name === 'AbortError' ? 'CoinGecko timed out (offline or slow)' : `CoinGecko request failed: ${err.message}`);
-      e.calls = calls;
+      Object.assign(e, { calls, answered });
       throw e;
     }
     if (!res.ok) {
       const e = new Error(`CoinGecko responded HTTP ${res.status}${res.status === 429 ? ' (rate limited)' : ''}`);
-      e.calls = calls;
+      Object.assign(e, { calls, answered });
       e.httpStatus = res.status;
       e.retryAfterMs = market.retryAfterMs(res);
       throw e;
     }
+    let body;
     try {
-      return await res.json();
+      body = await res.json();
     } catch (err) {
       const e = new Error('CoinGecko answered with unreadable JSON');
-      e.calls = calls;
+      Object.assign(e, { calls, answered });
       throw e;
     }
+    answered++;
+    return body;
   };
   const global = await get('/global');
   const rows = await get(`/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=${TOP_N}&page=1&sparkline=false&price_change_percentage=7d,30d`);
-  return { global, rows, calls, base: base === md.api_base ? null : 'custom' };
+  return { global, rows, calls, answered, base: base === md.api_base ? null : 'custom' };
 }
 
-function recordAttempt(ws, { calls, outcome, error = null, snapshotId = null, at, rateLimit = null }) {
+function recordAttempt(ws, { calls, answered = 0, outcome, error = null, snapshotId = null, at, rateLimit = null }) {
   const market = require('./market');
   withLock(ws, 'market_write', () => {
     const status = market.readStatus(ws);
-    const c = market.callBudget(ws, status);
-    c.month_count += calls;
-    c.day_count += calls;
-    c.remaining = c.budget_monthly ? Math.max(0, c.budget_monthly - c.month_count) : null;
+    const c = market.addCalls(market.callBudget(ws, status), calls, answered);
     const prev = status.context || {};
     const context = {
       state: outcome,
@@ -343,21 +344,21 @@ async function refreshContext(ws, { trigger = 'manual', fetchImpl, force = false
       data = await fetchContext(ws, fetchImpl);
     } catch (err) {
       const limited = err.httpStatus === 429 || typeof err.retryAfterMs === 'number';
-      recordAttempt(ws, { calls: err.calls || 1, outcome: 'failed', error: err.message, at, rateLimit: limited ? { retryAfterMs: err.retryAfterMs, source: 'market context', httpStatus: err.httpStatus } : null });
+      recordAttempt(ws, { calls: Number.isInteger(err.calls) ? err.calls : 1, answered: Number.isInteger(err.answered) ? err.answered : 0, outcome: 'failed', error: err.message, at, rateLimit: limited ? { retryAfterMs: err.retryAfterMs, source: 'market context', httpStatus: err.httpStatus } : null });
       return { status: 'failed', message: `Market context not refreshed: ${err.message}. The last snapshot is kept.` };
     }
     let snap;
     try {
       snap = buildSnapshot({ global: data.global, rows: data.rows, capturedAt: at, base: data.base });
     } catch (err) {
-      recordAttempt(ws, { calls: data.calls, outcome: 'failed', error: err.message, at });
+      recordAttempt(ws, { calls: data.calls, answered: data.answered, outcome: 'failed', error: err.message, at });
       return { status: 'failed', message: `Market context not refreshed: ${err.message}. The last snapshot is kept.` };
     }
     withLock(ws, 'market_write', () => {
       appendLine(ws.abs(`${HISTORY_DIR}/${at.slice(0, 7)}.jsonl`), snap);
       replaceFile(ws, ws.abs(LATEST_REL), jsonText(snap));
     });
-    recordAttempt(ws, { calls: data.calls, outcome: 'ok', snapshotId: snap.snapshot_id, at });
+    recordAttempt(ws, { calls: data.calls, answered: data.answered, outcome: 'ok', snapshotId: snap.snapshot_id, at });
     return { status: 'ok', message: `Market context ${snap.snapshot_id}: ${describe(snap)}`, snapshot_id: snap.snapshot_id, calls: data.calls };
   } finally {
     releaseLease(ws, 'market', lease);

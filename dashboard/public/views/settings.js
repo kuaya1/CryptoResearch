@@ -247,6 +247,25 @@ function rubricsTab(ctx) {
     card('Evidence tags', kv(Object.entries(r.evidence_tags).map(([k, v]) => [`[${k}]`, v]))));
 }
 
+// The three kinds of protection, each said on its own, never one "backed
+// up": snapshots on the same disk, whether offsite copies are set up, and a
+// copy on another machine whose every file was checked (core/offsite.js).
+function backupStatusView(b) {
+  const sd = b.same_disk;
+  const off = b.offsite;
+  const cp = b.independent_copy;
+  const by = (t) => (t === 'scheduler' ? 'the hourly task' : t === 'dashboard' ? 'the dashboard' : t === 'manual' || t === 'cli' ? 'a command' : t);
+  return kv([
+    ['Same-disk snapshots', h('span', null, stateText(sd.present ? 'Present' : 'None yet', sd.present ? 'ok' : 'warn'), ' ', h('span', { class: 'muted' }, sd.present ? `latest ${fmtAgo(sd.latest.created_at)}, on ${sd.where}. They undo mistakes; they do not survive losing that disk.` : `none yet on ${sd.where}.`))],
+    ['Offsite copies', h('span', null, stateText(off.configured ? 'Set up' : 'Not set up', off.configured ? 'ok' : 'warn'), ' ', h('span', { class: 'muted' }, b.hosted
+      ? (off.configured ? `your PC can pull verified copies${off.last_served ? `; this desk last served one ${fmtAgo(off.last_served.at)}` : '; none served yet'}.` : 'needs CR_BACKUP_KEY in Render\'s environment (you enter it there). Until then these records exist only on this disk and in Render\'s own disk snapshots.')
+      : (off.configured ? `pulled from ${off.desk_url} into ${off.folder}.` : `missing ${off.missing.join('; ')}`)))],
+    ['Verified independent copy', b.hosted
+      ? h('span', { class: 'muted' }, 'Not visible from the desk: the PC that pulls copies checks every file and shows the latest in its own Settings.')
+      : h('span', null, stateText(cp.verified ? (cp.overdue ? 'Overdue' : 'Verified') : 'None yet', cp.verified ? (cp.overdue ? 'warn' : 'ok') : 'bad'), ' ', h('span', { class: 'muted' }, cp.verified ? `${cp.latest.file}, pulled ${fmtAgo(cp.latest.pulled_at)}${cp.latest.trigger ? ` by ${by(cp.latest.trigger)}` : ''}; all ${fmtNum(cp.latest.files)} files checked against their hashes.` : 'no copy of the online desk has been pulled and verified on this PC.'))],
+  ]);
+}
+
 async function dataTab(ctx) {
   let inventory = null;
   try {
@@ -285,7 +304,10 @@ async function dataTab(ctx) {
   loadBackups();
   const mk = button('Create backup now', null, { kind: 'small' });
   mk.onclick = action(mk, async () => { const r = await ctx.api.post('/api/backups', {}); await loadBackups(); return r; }, (r) => `Backup ${r.name} created (${r.files} files)`);
+  const backupState = h('div', null, h('p', { class: 'small muted' }, 'Checking backups…'));
+  ctx.api.get('/api/backup-status').then((b) => backupState.replaceChildren(backupStatusView(b))).catch((err) => backupState.replaceChildren(callout(err.message, 'bad')));
   return h('div', null,
+    card('Backup status', backupState, { note: 'Three separate protections. Only a verified copy on another machine survives losing this disk.' }),
     card('Exports', [
       h('p', null, 'The complete package contains every record and every original file (binary originals included) and can be restored into a new folder. The portable export is a readable JSON of your records. CSVs flatten the same data for spreadsheets; cells that look like formulas are neutralized. No secrets are stored in the workspace, so none are exported.'),
       h('div', { class: 'actions' }, pkg, portable, ...csvButtons),
@@ -417,6 +439,13 @@ async function systemTab(ctx) {
       h('li', null, hostedDesk ? 'The records of this desk live on its own disk. Nothing from your PC is uploaded or synced.' : `Your records live in ${idx.workspace.root}. Nothing is uploaded or synced by this app.`))));
 }
 
+// Requests sent count against the monthly budget whatever came back; the
+// answered count says how many came back with a usable answer.
+function callsText(c) {
+  const answered = typeof c.month_answered === 'number' ? ` (${fmtNum(c.month_answered)} answered${c.answered_counted_since ? ` since ${fmtDateTime(c.answered_counted_since)}` : ''})` : '';
+  return `${fmtNum(c.month_count)} requests this month${answered}, of a ${c.budget_monthly ? fmtNum(c.budget_monthly) : 'unlimited'} budget · ${fmtNum(c.day_count)} today`;
+}
+
 // Activity: freshness, jobs and the write log (moved here from Updates).
 function activityTab(ctx) {
   const idx = ctx.state.index;
@@ -430,7 +459,7 @@ function activityTab(ctx) {
     card('Data freshness', kv([
       ['Market data', h('span', null, stateText(ps.text, ps.tone), ' ', h('span', { class: 'muted' }, `· ${ps.asOf}`),
         ps.note ? h('div', { class: 'small muted' }, ps.problem ? `Last problem: ${ps.note}` : ps.note) : mf.last_error ? h('div', { class: 'small muted' }, `Last problem: ${mf.last_error}`) : null)],
-      ['CoinGecko calls', mf.calls ? `${mf.calls.month_count} this month of a ${mf.calls.budget_monthly || 'unlimited'} budget · ${mf.calls.day_count} today` : '—'],
+      ['CoinGecko calls', mf.calls ? callsText(mf.calls) : '—'],
       ctx.state.session && ctx.state.session.hosted ? null : ['Hourly scheduled task', runner.last_scheduler_run_at ? `last ran ${fmtAgo(runner.last_scheduler_run_at)}${runner.node ? ` on Node ${runner.node}` : ''}` : h('span', { class: 'muted' }, 'no scheduled run recorded yet')],
       ['Index', `built ${fmtDateTime(idx.generated_at)} in ${idx.build_ms} ms`],
     ])),

@@ -55,6 +55,9 @@ function capturePath(ws, attemptId) {
   return path.join(captureDir(ws), `${attemptId}.json`);
 }
 
+// An answer that stopped early keeps what it delivered: the usage seen before
+// it stopped (partial_usage, a lower bound), the text written so far and why
+// it stopped, besides the request and message IDs (attested).
 function plainError(error) {
   if (!error) return null;
   return {
@@ -66,6 +69,9 @@ function plainError(error) {
     not_sent: Boolean(error.notSent),
     retryable: Boolean(error.retryable),
     usage: error.usage || null,
+    partial_usage: error.partial_usage || null,
+    partial_text: typeof error.partial_text === 'string' && error.partial_text ? error.partial_text : null,
+    termination: error.termination || null,
     attested: error.attested || null,
     raw: error.raw === undefined ? null : error.raw,
   };
@@ -248,7 +254,7 @@ function bindCapture(cap, run, provider, attempt) {
   if (isSubmissionOnly(b)) return { ok: true, submission: b.submission };
   if (b.result) return { ok: true, finishedAt: b.finished_at, result: { text: b.result.text, attested: b.result.attested || {}, usage: b.result.usage || null, raw: b.result.raw } };
   const e = b.error;
-  const error = Object.assign(new Error(e.message), { kind: e.kind, httpStatus: e.http_status, requestId: e.request_id, code: e.code, notSent: e.not_sent, retryable: e.retryable, usage: e.usage, attested: e.attested, raw: e.raw });
+  const error = Object.assign(new Error(e.message), { kind: e.kind, httpStatus: e.http_status, requestId: e.request_id, code: e.code, notSent: e.not_sent, retryable: e.retryable, usage: e.usage, partial_usage: e.partial_usage || null, partial_text: e.partial_text || null, termination: e.termination || null, attested: e.attested, raw: e.raw });
   return { ok: true, finishedAt: b.finished_at, error };
 }
 

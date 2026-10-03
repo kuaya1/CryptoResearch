@@ -909,6 +909,12 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIde
     if (!run) throw new HttpError(404, 'No such research run');
     return { _raw: fs.readFileSync(ws.abs(run.prompt.path), 'utf8'), _type: 'text/plain; charset=utf-8' };
   });
+  // The text an attempt's answer wrote before it stopped: read-only, checked
+  // against the saved response, never a report.
+  route('GET', '/api/projects/([^/]+)/research/([^/]+)/jobs/([a-z]+)/attempts/(\\d{1,3})/partial', (m) => {
+    const out = research.partialOutput(ws, pid(m[1]), runId(m[2]), provider(m[3]), Number(m[4]));
+    return { _raw: out.text, _type: 'text/plain; charset=utf-8' };
+  });
   route('GET', '/api/projects/([^/]+)/changes', (m, req, res, body, url) => {
     const id = pid(m[1]);
     return coherent(() => require('./core/digest').changesSince(ws, id, { since: url.searchParams.get('since') || null, latestMarket: market.readLatest(ws) }));
@@ -926,6 +932,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIde
   route('GET', '/api/export/([a-z]+)\\.csv', (m) => ({ _raw: exporter.csvTable(ws, m[1]), _type: 'text/csv; charset=utf-8', _extra: { 'Content-Disposition': `attachment; filename="${m[1]}.csv"` } }));
   route('GET', '/api/schedule', () => require('./core/schedule').status(ws));
   route('GET', '/api/backups', () => exporter.listBackups(ws));
+  route('GET', '/api/backup-status', () => require('./core/offsite').backupStatus(ws));
   route('GET', '/api/backups/([A-Za-z0-9_-]+)/verify', (m) => exporter.verifyBackup(ws, m[1]));
   route('GET', '/api/doctor', async () => require('./core/doctor').doctor(ws));
   route('GET', '/api/research/providers', () => coherent(() => ({ providers: research.providerStatus(ws), readiness: research.readiness(ws), budget: ws.settings.research.budget, spend: research.spendSoFar(ws), unattended_enabled: Boolean(ws.settings.research.unattended_enabled), keys_file: require('./core/providers').secretsFile() })));

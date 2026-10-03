@@ -71,7 +71,7 @@ To research a project Eric names, links or shows you:
 1. find_projects first. If it is already there, use it; never add it twice.
 2. Identify it from evidence: the official website (the project's own site), and the chain and contract address from the project's own docs or a block explorer. CoinMarketCap, CoinGecko, DEX screener and explorer pages are leads, not the official website: the desk keeps one given as the website as evidence only. Never guess or complete a contract address. If two tokens could match (same ticker, similar names), show Eric the candidates and ask.
 3. add_project once, with the evidence URLs. It refuses duplicates by itself; if the project is already there with a pending identity, what you supplied completes it.
-4. start_research. Research needs a verified identity (official website, token binding, evidence URL), so every model researches the same project: if it is pending, complete it with update_project_identity first, or, only when Eric confirmed the project has no token yet or cannot be identified further, pass allow_pending_identity: true. It returns the run's canonical prompt (horizon, rubric, grading appendix). Follow it exactly: research with your own web tools, cite sources with dates, keep facts, inferences and unknowns apart, cover risks, and end with the JSON block it asks for. If a research run for the project is already open, start_research resumes it (with any draft you saved) instead of starting another. When Eric asks for all three models (Claude, ChatGPT and Gemini), pass models: "all": each model gets the same prompt and never sees the others' conclusions. A model whose paid API is set up on the desk runs automatically in the background; a model without one waits for its assistant until Eric asks it ("${WAITING_PHRASE}": ${ASK_HOW.chatgpt}, or ${ASK_HOW.gemini}). The reply's readiness says which; tell Eric exactly that (desk_status has the detail: setup required, limits, spend). Never ask Eric for an API key in chat: he adds keys in Render's environment himself.
+4. start_research. Research needs a verified identity (official website, token binding, evidence URL), so every model researches the same project: if it is pending, complete it with update_project_identity first, or, only when Eric confirmed the project has no token yet or cannot be identified further, pass allow_pending_identity: true. It returns the run's canonical prompt (horizon, rubric, grading appendix) in run.prompt, byte for byte as frozen when the run started; never rebuild it from templates or other files. Follow it exactly: research with your own web tools, cite sources with dates, keep facts, inferences and unknowns apart, cover risks, and end with the JSON block it asks for. If a research run for the project is already open, start_research resumes it (with any draft you saved) instead of starting another. When Eric asks for all three models (Claude, ChatGPT and Gemini), pass models: "all": each model gets the same prompt and never sees the others' conclusions. A model whose paid API is set up on the desk runs automatically in the background; a model without one waits for its assistant until Eric asks it ("${WAITING_PHRASE}": ${ASK_HOW.chatgpt}, or ${ASK_HOW.gemini}). The reply's readiness says which; tell Eric exactly that (desk_status has the detail: setup required, limits, spend). Never ask Eric for an API key in chat: he adds keys in Render's environment himself.
 ${step5}
 6. save_report with the complete report text (not a summary). If it answers "unverified", save the same text again.
 ${step7}
@@ -173,7 +173,7 @@ const TOOLS = [
   {
     name: 'get_research',
     title: 'Get a research run (progress, or to resume it)',
-    description: 'Returns a project\'s open research run (or the given run): each model\'s progress (working, waiting, running in the background, saved, failed, interrupted), your saved draft, and its canonical prompt. Use it to continue research that was interrupted, to follow the other models\' progress, or to read the prompt of a job waiting for your model without taking it (then save_report with its run_id completes it). Read-only.',
+    description: 'Returns a project\'s open research run (or the given run): each model\'s progress (working, waiting, running in the background, saved, failed, interrupted), your saved draft, and its canonical prompt in run.prompt, byte for byte as frozen when the run started (prompt_delivery gives its SHA-256 and length). Use it to continue research that was interrupted, to follow the other models\' progress, or to read the prompt of a job waiting for your model without taking it (then save_report with its run_id completes it). Read-only.',
     inputSchema: { type: 'object', required: ['project_id'], additionalProperties: false, properties: { project_id: projectRef, run_id: runRef, include_prompt: { type: 'boolean', description: 'Include the full prompt (default true).' } } },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
@@ -393,6 +393,27 @@ function jobView(job, run, me, ws) {
   return out;
 }
 
+// A run's frozen prompt, exactly as saved when the run started: read back and
+// checked against the hash recorded then. A file that cannot be read or no
+// longer matches is not given out, and nothing is rebuilt from the templates
+// (they may have changed since the run started). Read-only.
+function frozenPrompt(ws, run) {
+  const fs = require('fs');
+  const frozen = run.prompt ? run.prompt.sha256 : null;
+  let buf;
+  try {
+    buf = fs.readFileSync(ws.abs(run.prompt.path));
+  } catch (err) {
+    return { text: null, delivery: { status: 'unreadable', frozen_sha256: frozen, message: `This run's saved prompt could not be read (${err.code || err.message}), so it is not given out. Tell Eric; never rebuild the prompt from the templates or other files.` } };
+  }
+  const sha = sha256(buf);
+  if (!frozen || sha !== frozen) {
+    return { text: null, delivery: { status: 'hash_mismatch', frozen_sha256: frozen, file_sha256: sha, message: 'This run\'s saved prompt no longer matches the SHA-256 recorded when the run started, so it is not given out. Tell Eric; never rebuild the prompt from the templates or other files.' } };
+  }
+  const text = buf.toString('utf8');
+  return { text, delivery: { status: 'verified', sha256: sha, chars: text.length, note: 'run.prompt is this run\'s frozen prompt, byte for byte as saved when the run started (its SHA-256 matches the one recorded then). Follow it exactly; never rebuild it from the templates or other files.' } };
+}
+
 function runView(ws, projectId, run, ctx, { prompt = false } = {}) {
   const jobs = {};
   for (const p of PROVIDERS) if (run.jobs && run.jobs[p]) jobs[p] = jobView(run.jobs[p], run, ctx.me, ws);
@@ -408,6 +429,7 @@ function runView(ws, projectId, run, ctx, { prompt = false } = {}) {
     rubric_version: run.rubric_version,
     sector_profile: run.sector_profile,
     prompt_version: run.prompt ? run.prompt.version : null,
+    prompt_sha256: run.prompt ? run.prompt.sha256 : null,
     owner_instructions: run.owner_instructions || null,
   };
   if (ctx.me === 'claude') {
@@ -417,8 +439,9 @@ function runView(ws, projectId, run, ctx, { prompt = false } = {}) {
     out.cowork = research.assistantActivity(job, run);
   }
   if (prompt) {
-    const fs = require('fs');
-    out.prompt = fs.readFileSync(ws.abs(run.prompt.path), 'utf8');
+    const p = frozenPrompt(ws, run);
+    out.prompt = p.text;
+    out.prompt_delivery = p.delivery;
     out.draft = research.readAssistantDraft(ws, projectId, run.run_id, ctx.me);
   }
   return out;
@@ -780,14 +803,17 @@ const handlers = {
     const last = backups[0] || null;
     const ageH = last && last.created_at ? Math.round((Date.now() - Date.parse(last.created_at)) / 3600000) : null;
     const prices = { freshness: f.freshness, note: f.note || null, last_success_at: f.last_success_at || null, rate_limited: Boolean(f.rate_limited), retry_at: f.retry_at || null, coingecko_key: market.apiKey() ? 'present' : 'none' };
+    // Backups in three separate parts: same-disk snapshots, offsite copies set
+    // up or not, and a verified independent copy (which only the PC can see).
+    const b = require('./core/offsite').backupStatus(ws);
     return {
       status: 'ok',
       revision: r,
       research: ready,
       prices,
-      backups: { latest: last ? { name: last.name, created_at: last.created_at, hours_ago: ageH, status: last.status } : null, count: backups.length, offsite_key: require('./core/offsite').deskKey() ? 'set' : 'not set' },
+      backups: { latest: last ? { name: last.name, created_at: last.created_at, hours_ago: ageH, status: last.status } : null, count: backups.length, offsite_key: b.offsite.configured ? 'set' : 'not set', offsite_last_served: b.offsite.last_served || null, independent_copy: 'not visible from the desk: the PC that pulls copies verifies and lists them', level: b.level, summary: b.summary },
       ...(args && typeof args.project_id === 'string' && args.project_id ? { preflight: research.preflight(ws, pid(args)) || { note: 'No open research run for this project.' } } : {}),
-      message: `The desk runs ${rev.revisionLine(r)}. ${ready.summary} Prices: ${f.freshness}${f.note ? ` (${f.note})` : ''}. ${last ? `Latest backup on the desk's own disk ${last.name}, ${ageH} h ago.` : 'No backup on the desk yet.'} Offsite copies: ${require('./core/offsite').deskKey() ? 'the backup key is set, so Eric\'s PC can pull them' : 'not set up (no CR_BACKUP_KEY on the desk)'}.`,
+      message: `The desk runs ${rev.revisionLine(r)}. ${ready.summary} Prices: ${f.freshness}${f.note ? ` (${f.note})` : ''}. ${b.summary}`,
     };
   },
 
@@ -915,7 +941,7 @@ const handlers = {
     const out = { status: 'ok', project: { project_id: id, name: detail.project.name }, report: compactReport(r) };
     // The desk's evidence checks on its claims: flags only, never a score change.
     const ev = (detail.reports.find((x) => x.report_id === r.report_id) || {}).evidence;
-    if (ev) out.evidence_checks = { summary: ev.summary, critical_claims: ev.critical_claims, flags: ev.flags.map((x) => ({ claim_id: x.claim_id, severity: x.severity, rule: x.rule, message: x.message })), source_types_outside_list: ev.source_types.outside_list };
+    if (ev) out.evidence_checks = { summary: ev.summary, critical_claims: ev.critical_claims, flags: ev.flags.map((x) => ({ ...(x.claim_id ? { claim_id: x.claim_id } : { categories: x.categories }), severity: x.severity, rule: x.rule, message: x.message })), source_types_outside_list: ev.source_types.outside_list };
     if (args.include_text === true) {
       const fs = require('fs');
       const full = detail.reports.find((x) => x.report_id === r.report_id);
@@ -1030,18 +1056,30 @@ const handlers = {
   },
 };
 
-// Text the model reads: the message first, the record as JSON after, and a
-// research prompt (long) as its own block.
+// The result in both forms an assistant may read, each complete. The
+// structured result is the whole record, a run's frozen prompt and saved
+// draft in full: a client that reads only structured results (Claude's does)
+// gets everything, never a placeholder. The text blocks carry the same for a
+// client that reads text: the record first, with a pointer where the long
+// texts are, then the draft and the prompt as blocks of their own, so the
+// prompt reads exactly as written.
 function toResult(name, out) {
-  const blocks = [];
   const { run, ...rest } = out || {};
-  const prompt = run && run.prompt;
-  const draft = run && run.draft;
-  const runMeta = run ? { ...run, prompt: prompt ? '(below)' : undefined, draft: draft ? '(below)' : draft === null ? null : undefined } : undefined;
-  blocks.push({ type: 'text', text: JSON.stringify(runMeta ? { ...rest, run: runMeta } : rest, null, 2) });
-  if (draft) blocks.push({ type: 'text', text: `--- Your saved draft for ${run.run_id} ---\n${draft}` });
-  if (prompt) blocks.push({ type: 'text', text: `--- Research prompt for ${run.run_id} (follow it exactly) ---\n${prompt}` });
-  return { content: blocks, structuredContent: runMeta ? { ...rest, run: runMeta } : rest, isError: false };
+  const prompt = run && typeof run.prompt === 'string' ? run.prompt : null;
+  const draft = run && typeof run.draft === 'string' ? run.draft : null;
+  const structured = run ? { ...rest, run } : rest;
+  const forText = run ? {
+    ...rest,
+    run: {
+      ...run,
+      ...(prompt !== null ? { prompt: `(the run's frozen prompt is the last text block below: ${prompt.length} characters, SHA-256 ${run.prompt_delivery ? run.prompt_delivery.sha256 : run.prompt_sha256})` } : {}),
+      ...(draft !== null ? { draft: `(your saved draft is the text block below: ${draft.length} characters)` } : {}),
+    },
+  } : rest;
+  const blocks = [{ type: 'text', text: JSON.stringify(forText, null, 2) }];
+  if (draft !== null) blocks.push({ type: 'text', text: `--- Your saved draft for ${run.run_id} ---\n${draft}` });
+  if (prompt !== null) blocks.push({ type: 'text', text: `--- Research prompt for ${run.run_id} (follow it exactly) ---\n${prompt}` });
+  return { content: blocks, structuredContent: structured, isError: false };
 }
 
 function readBody(req) {

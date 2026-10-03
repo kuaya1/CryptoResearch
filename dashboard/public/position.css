@@ -86,3 +86,9 @@ dl.views dd { margin: 0; overflow-wrap: anywhere; }
 .scn .scn-prob { font-weight: 500; font-size: var(--fs-small); color: var(--text-2); }
 .scn .cat-detail { margin: 0; }
 .cat-grid.no-conf li, .cat-list.no-conf .cat-head { grid-template-columns: minmax(0, 1fr) auto; }
+
+/* An evidence flag on a category grade (core/evidence.js category checks):
+   the sign, the word and the reason; the grade stays as the model gave it. */
+.cat-list .ev-line { margin-top: 6px; }
+.cat-flag-mark { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; font-size: var(--fs-caption); font-weight: 600; color: var(--text-2); white-space: nowrap; vertical-align: 1px; }
+.cat-flag-mark svg { width: 12px; height: 12px; flex: none; color: var(--warn-strong); }

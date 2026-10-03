@@ -5,7 +5,7 @@
 // parts they have). Everything here is the report's own content, shown as
 // written: nothing is a verdict of this app, nothing is averaged, and a
 // missing value is said in words, never shown as zero.
-import { h, scoreView, details, fmtDate, fmtPrice, fmtSignedPct, safeUrl } from './ui.js';
+import { h, scoreView, details, fmtDate, fmtPrice, fmtSignedPct, safeUrl, icon } from './ui.js';
 import { CERTAINTY_LABELS } from './position-ui.js';
 
 export const CONFIDENCE_LABELS = { high: 'High', medium: 'Medium', low: 'Low' };
@@ -164,11 +164,35 @@ function windowText(w) {
 
 // ---- scorecard: the category grades of one report ---------------------------
 
+// The desk's evidence flags that concern one category grade (a scored code
+// quality with no code read, a chart grade on undated or stale data). They
+// flag; the grade is still shown as the model gave it.
+export function categoryFlags(flags, id) {
+  return (Array.isArray(flags) ? flags : []).filter((f) => Array.isArray(f.categories) && f.categories.includes(id));
+}
+
+const flagWord = (f) => (f.severity === 'high' ? 'Serious evidence flag' : 'Evidence flag');
+
+function categoryFlagLine(f) {
+  const serious = f.severity === 'high';
+  return h('p', { class: `ev-line ${serious ? 'serious' : 'material'}` }, icon(serious ? 'warn-fill' : 'warn-line'),
+    h('span', null, h('strong', null, `${flagWord(f)}. `), f.beside || f.message, ' ', h('span', { class: 'muted' }, 'The grade is shown as the model gave it.')));
+}
+
+// A compact mark for a list of grades: the sign and the word, the reason in
+// its label.
+function categoryFlagMark(list) {
+  if (!list.length) return null;
+  const serious = list.some((f) => f.severity === 'high');
+  const text = list.map((f) => f.beside || f.message).join(' ');
+  return h('span', { class: 'cat-flag-mark', role: 'img', title: text, 'aria-label': `${serious ? 'Serious evidence flag' : 'Evidence flag'}: ${text}` }, icon(serious ? 'warn-fill' : 'warn-line'), h('span', { 'aria-hidden': 'true' }, serious ? 'serious flag' : 'flag'));
+}
+
 // One entry per category: its name, score and confidence on one line, the
-// short explanation under it, and the strongest evidence, the main weakness
-// and what would raise or lower the grade one tap away. A list, not a table,
-// so it reads without sideways scrolling on a phone.
-export function categoryTable(rows, { corrected = () => null } = {}) {
+// short explanation under it, any evidence flag on it, and the strongest
+// evidence, the main weakness and what would raise or lower the grade one tap
+// away. A list, not a table, so it reads without sideways scrolling on a phone.
+export function categoryTable(rows, { corrected = () => null, flags = [] } = {}) {
   const more = (x) => {
     const s = x.score;
     if (!hasDetail(s) && !refsText(s && s.evidence_refs)) return null;
@@ -191,31 +215,36 @@ export function categoryTable(rows, { corrected = () => null } = {}) {
   const conf = statesConfidence(rows);
   return h('ul', { class: `cat-list${conf ? '' : ' no-conf'}`, 'aria-label': 'Category grades of this report' }, rows.map((x) => {
     const na = x.def && x.def.applicable === false;
+    const flagged = na ? [] : categoryFlags(flags, x.id);
     return h('li', null,
       h('div', { class: 'cat-head' },
         h('span', { class: 'cat-name', title: x.def ? x.def.definition : '' }, x.label),
         na ? h('span', { class: 'faint small', title: x.def.na_reason || '' }, 'Not applicable to this profile') : scoreView(x.score, 'fav', { corrected: corrected(x.id) }),
         conf ? h('span', { class: 'cat-conf' }, na ? null : confidenceChip(x.score)) : null),
       na ? null : h('div', { class: 'cat-why small' }, why(x.score)),
+      ...flagged.map(categoryFlagLine),
       na ? null : more(x));
   }));
 }
 
 // ---- report summary blocks, in reading order --------------------------------
 
-// The category grades at a glance: every grade with its confidence, and the
-// counts. Never a total.
-export function categoryGlance(rows, href) {
+// The category grades at a glance: every grade with its confidence and any
+// evidence flag on it, and the counts. Never a total.
+export function categoryGlance(rows, href, { flags = [] } = {}) {
   if (!rows.length) return null;
   const c = scorecardCounts(rows);
   const line = confidenceLine(c);
   const conf = statesConfidence(rows);
+  const shown = rows.filter((r) => !(r.def && r.def.applicable === false));
+  const flagged = shown.filter((r) => categoryFlags(flags, r.id).length);
   return block(`Category grades: ${c.scored} of ${c.total} scored`,
     h('p', { class: 'small muted', style: { margin: '0 0 8px' } }, 'The model\'s own diagnostic grades, 1 to 100, higher is better. They are never averaged into the investment grade.'),
-    h('ul', { class: `cat-grid${conf ? '' : ' no-conf'}` }, rows.filter((r) => !(r.def && r.def.applicable === false)).map((r) => h('li', null,
-      h('span', { class: 'cat-name', title: r.def ? r.def.definition : '' }, r.label),
+    h('ul', { class: `cat-grid${conf ? '' : ' no-conf'}` }, shown.map((r) => h('li', null,
+      h('span', { class: 'cat-name', title: r.def ? r.def.definition : '' }, r.label, categoryFlagMark(categoryFlags(flags, r.id))),
       scoreView(r.score, 'fav'),
       conf ? h('span', { class: 'cat-conf' }, confidenceChip(r.score)) : null))),
+    flagged.length ? h('p', { class: 'small', style: { margin: '8px 0 0' } }, `Evidence flags on ${flagged.map((r) => r.label).join(', ')}: the grade is shown as the model gave it; the scorecard says why it is flagged.`) : null,
     line ? h('p', { class: 'small muted', style: { margin: '8px 0 0' } }, line) : null,
     c.unknown ? h('p', { class: 'small muted', style: { margin: '4px 0 0' } }, `Unknown, with no number: ${c.unknownLabels.join(', ')}.`) : null,
     href ? h('p', { class: 'small', style: { margin: '6px 0 0' } }, h('a', { href, dataset: { key: 'glance-scorecard' } }, rows.some((r) => hasDetail(r.score)) ? 'Open the scorecard: the evidence, the main weakness and what would change each grade' : 'Open the scorecard: the reason behind each grade')) : null);

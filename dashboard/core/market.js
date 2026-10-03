@@ -151,6 +151,16 @@ function rateLimitGate(ws, now = Date.now()) {
   return gateOf(readStatus(ws), now);
 }
 
+// The counts a failed price refresh carries (audit V2-007): every request
+// sent so far, the one that failed included, and how many came back with a
+// usable answer. An error object that cannot take them is wrapped.
+function withCounts(err, calls, answered) {
+  const e = err && typeof err === 'object' && Object.isExtensible(err) ? err : Object.assign(new Error(String((err && err.message) || err)), { name: (err && err.name) || 'Error', cause: err });
+  e.calls = calls;
+  e.answered = answered;
+  return e;
+}
+
 async function fetchMarkets(ids, settings, fetchImpl = fetch) {
   const md = settings.market_data;
   const base = process.env.CR_MARKET_API_BASE || md.api_base;
@@ -159,26 +169,34 @@ async function fetchMarkets(ids, settings, fetchImpl = fetch) {
   if (key) headers['x-cg-demo-api-key'] = key;
   const rows = [];
   let calls = 0;
+  let answered = 0;
   for (const part of chunk(ids, Math.min(250, md.max_ids_per_call || 250))) {
     const url = `${base}/coins/markets?vs_currency=usd&ids=${encodeURIComponent(part.join(','))}&per_page=250&page=1&sparkline=true&price_change_percentage=24h,7d,30d`;
+    // Counted before it is sent: a request that then fails in any way (no
+    // connection, a timeout, an error status, an unreadable answer) counts.
     calls++;
-    const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout((md.timeout_seconds || 20) * 1000) });
-    if (!res.ok) {
-      const err = new Error(`CoinGecko responded HTTP ${res.status}${res.status === 429 ? ' (rate limited)' : ''}`);
-      err.httpStatus = res.status;
-      err.retryAfterMs = retryAfterMs(res);
-      err.calls = calls;
-      throw err;
+    try {
+      const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout((md.timeout_seconds || 20) * 1000) });
+      if (!res.ok) {
+        const err = new Error(`CoinGecko responded HTTP ${res.status}${res.status === 429 ? ' (rate limited)' : ''}`);
+        err.httpStatus = res.status;
+        err.retryAfterMs = retryAfterMs(res);
+        throw err;
+      }
+      let arr;
+      try {
+        arr = await res.json();
+      } catch (err) {
+        throw Object.assign(new Error('CoinGecko answered with unreadable JSON'), { cause: err });
+      }
+      if (!Array.isArray(arr)) throw new Error('Unexpected response from CoinGecko (not a list)');
+      answered++;
+      rows.push(...arr);
+    } catch (err) {
+      throw withCounts(err, calls, answered);
     }
-    const arr = await res.json();
-    if (!Array.isArray(arr)) {
-      const err = new Error('Unexpected response from CoinGecko (not a list)');
-      err.calls = calls;
-      throw err;
-    }
-    rows.push(...arr);
   }
-  return { rows, calls };
+  return { rows, calls, answered };
 }
 
 // Identity lookup: CoinGecko /search returns CANDIDATES only. Nothing is bound
@@ -211,9 +229,7 @@ async function searchCoins(ws, query, { fetchImpl = fetch } = {}) {
   }
   withLock(ws, 'market_status', () => {
     const status = readStatus(ws);
-    const calls = callBudget(ws, status);
-    calls.month_count += 1;
-    calls.day_count += 1;
+    const calls = addCalls(callBudget(ws, status), 1, body ? 1 : 0);
     // A 429 here closes the shared gate for prices and market context too.
     replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...status, schema_version: 'cr.market-status.v2', calls, ...(limited ? rateLimitFields(ws, status, limited) : {}) }));
   });
@@ -305,16 +321,41 @@ function monthKey(d = new Date()) {
   return ymdInTz(d).slice(0, 7);
 }
 
+// The CoinGecko call counts of this month and day. month_count and day_count
+// are requests sent (whatever came back): the monthly budget counts these.
+// month_answered and day_answered are the requests that came back with a
+// usable answer. A month that was already under way when answers started to
+// be counted says since when (answered_counted_since).
 function callBudget(ws, status) {
   const cap = ws.settings.market_data.monthly_call_budget || null;
   const month = monthKey();
-  const c = status.calls && status.calls.month === month ? status.calls : { month, month_count: 0, day: ymdInTz(), day_count: 0 };
   const day = ymdInTz();
+  const c = status.calls && status.calls.month === month ? { ...status.calls } : { month, month_count: 0, day, day_count: 0, month_answered: 0, day_answered: 0 };
   if (c.day !== day) {
     c.day = day;
     c.day_count = 0;
+    c.day_answered = 0;
   }
   return { ...c, budget_monthly: cap, remaining: cap ? Math.max(0, cap - c.month_count) : null };
+}
+
+// Adds requests to the counts above, once each, after they were made:
+// attempted is every request sent, answered those with a usable answer.
+function addCalls(calls, attempted, answered = 0) {
+  const c = { ...calls };
+  const sent = Number.isInteger(attempted) && attempted > 0 ? attempted : 0;
+  const ok = Number.isInteger(answered) && answered > 0 ? answered : 0;
+  c.month_count = (c.month_count || 0) + sent;
+  c.day_count = (c.day_count || 0) + sent;
+  if (typeof c.month_answered !== 'number') {
+    c.month_answered = 0;
+    if (c.month_count - sent > 0) c.answered_counted_since = new Date().toISOString();
+  }
+  if (typeof c.day_answered !== 'number') c.day_answered = 0;
+  c.month_answered += ok;
+  c.day_answered += ok;
+  c.remaining = c.budget_monthly ? Math.max(0, c.budget_monthly - c.month_count) : null;
+  return c;
 }
 
 function backoffMs(ws, failures) {
@@ -378,9 +419,8 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
       const status = readStatus(ws);
       const failures = (status.consecutive_failures || 0) + 1;
       const wait = backoffMs(ws, failures);
-      const calls = callBudget(ws, status);
-      calls.month_count += err.calls || 1;
-      calls.day_count += err.calls || 1;
+      // Every request this refresh sent, the failed one included (V2-007).
+      const calls = addCalls(callBudget(ws, status), Number.isInteger(err.calls) ? err.calls : 1, Number.isInteger(err.answered) ? err.answered : 0);
       const next = {
         ...status,
         schema_version: 'cr.market-status.v2',
@@ -451,9 +491,7 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
       appendLine(ws.abs(`market-data/observations/${fetchedAt.slice(0, 7)}.jsonl`), { fetched_at: fetchedAt, provider: 'coingecko', trigger, assets: valid.filter((o) => updated.includes(o.id)).map((o) => ({ ...o, sparkline_7d: undefined })) });
       observationWritten = true;
     }
-    const calls = callBudget(ws, status);
-    calls.month_count += data.calls;
-    calls.day_count += data.calls;
+    const calls = addCalls(callBudget(ws, status), data.calls, data.answered);
     const rows = { tracked_ids: ids, missing_ids: missing, invalid_rows: invalid.slice(0, 50), skipped_older: skippedOlder, coverage: { tracked: ids.length, updated: updated.length, kept_prior: ids.length - updated.length } };
     if (!updated.length) {
       // An answer that updates no price is a failed refresh, not a success:
@@ -598,4 +636,4 @@ function volumeChange24h(ws, id, current) {
   return { pct: (current.volume_24h_usd / best.vol - 1) * 100, compared_with: best.at, hours: Math.round(best.age * 10) / 10 };
 }
 
-module.exports = { refresh, searchCoins, readLatest, readStatus, trackedIds, freshness, fetchMarkets, validateRow, nextAllowed, noteRateLimit, rateLimitGate, retryAfterMs, clock, volumeChange24h, logoFile, apiKey, callBudget, LATEST_REL, STATUS_REL, SOURCE_LABEL, RATE_LIMIT_DEFAULT_MS };
+module.exports = { refresh, searchCoins, readLatest, readStatus, trackedIds, freshness, fetchMarkets, validateRow, nextAllowed, noteRateLimit, rateLimitGate, retryAfterMs, clock, volumeChange24h, logoFile, apiKey, callBudget, addCalls, LATEST_REL, STATUS_REL, SOURCE_LABEL, RATE_LIMIT_DEFAULT_MS };

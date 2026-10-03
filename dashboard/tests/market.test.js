@@ -304,3 +304,69 @@ test('a verified CoinGecko ID the refresh does not get back is flagged (attentio
   assert.match(lines.find((l) => l.startsWith('Prices:')), /; not returned wrong-id-fictional\.$/);
   assert.equal(projects.getProject(ws, 'wrong-id-coin-fictional').identity.coingecko_id, 'wrong-id-fictional', 'never rebound automatically');
 });
+
+// Audit V2-007, reproduced again in review v3 (finding 6): with several
+// chunks, a later request that failed before an answer (no connection, a
+// timeout, an unreadable body) was counted as one call in all.
+test('V2-007: every CoinGecko request a price refresh sends counts once, also when a later chunk fails on the network, times out or is unreadable; answered requests are counted apart', async (t) => {
+  const { ws, root, cleanup } = tempWorkspace('mkt-v2007');
+  t.after(cleanup);
+  addFixtureProject(ws);
+  const s = readJson(path.join(root, 'config', 'settings.json'));
+  s.market_data = { enabled: true, max_ids_per_call: 2 };
+  atomicWrite(path.join(root, 'config', 'settings.json'), jsonText(s));
+  ws.reloadSettings();
+  // bitcoin, tether, usd-coin and the fixture's token, two per request.
+  assert.equal(market.trackedIds(ws).length, 4);
+  const row = (id) => ({ id, symbol: id.slice(0, 4), name: id, current_price: 1.5, market_cap: 1e6, total_volume: 1e5, last_updated: new Date().toISOString() });
+  const ok = (url) => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => decodeURIComponent(new URL(url).searchParams.get('ids')).split(',').map(row) });
+  const twoChunks = (second) => {
+    const calls = [];
+    const f = async (url) => {
+      calls.push(url);
+      return calls.length === 2 && second ? second(url) : ok(url);
+    };
+    f.calls = calls;
+    return f;
+  };
+  const fresh = () => atomicWrite(ws.abs('market-data/status.json'), jsonText({ state: 'never_run' }));
+  const counts = () => { const c = market.readStatus(ws).calls; return [c.month_count, c.day_count, c.month_answered, c.day_answered, c.remaining]; };
+  const budget = market.callBudget(ws, market.readStatus(ws)).budget_monthly;
+  const failures = [
+    ['a network error', () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }); }, /fetch failed \(ECONNRESET\)/],
+    ['a timeout', () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); }, /^Request timed out/],
+    ['unreadable JSON', () => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => { throw new SyntaxError('Unexpected token < in JSON at position 0'); } }), /^CoinGecko answered with unreadable JSON \(Unexpected token </],
+    ['an answer that is not a list', () => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => ({ status: { error_code: 1 } }) }), /not a list/],
+    ['HTTP 500', () => ({ ok: false, status: 500, headers: { get: () => null }, json: async () => ({}) }), /HTTP 500/],
+  ];
+  for (const [what, second, message] of failures) {
+    fresh();
+    const f = twoChunks(second);
+    const r = await market.refresh(ws, { fetchImpl: f, force: true });
+    assert.equal(r.status, 'failed', what);
+    assert.match(r.message, message, what);
+    assert.equal(f.calls.length, 2, `${what}: two requests were sent`);
+    assert.deepEqual(counts(), [2, 2, 1, 1, budget - 2], `${what} on the second request: both requests count once, one was answered`);
+  }
+  // The first request failing: one sent, none answered, nothing more sent.
+  fresh();
+  const first = twoChunks(null);
+  await market.refresh(ws, { fetchImpl: async (url) => { first.calls.push(url); throw new TypeError('fetch failed'); }, force: true });
+  assert.equal(first.calls.length, 1);
+  assert.deepEqual(counts(), [1, 1, 0, 0, budget - 1]);
+  // Counts add up across refreshes, each request once.
+  fresh();
+  await market.refresh(ws, { fetchImpl: twoChunks(null), force: true });
+  assert.deepEqual(counts(), [2, 2, 2, 2, budget - 2]);
+  await market.refresh(ws, { fetchImpl: twoChunks(() => { throw new TypeError('fetch failed'); }), force: true });
+  assert.deepEqual(counts(), [4, 4, 3, 3, budget - 4]);
+  // A month already counted by older code (no answered count) keeps its
+  // count and says from when answers are counted.
+  const today = require('../core/dates').ymdInTz();
+  atomicWrite(ws.abs('market-data/status.json'), jsonText({ state: 'ok', calls: { month: today.slice(0, 7), month_count: 119, day: today, day_count: 3 } }));
+  assert.equal(market.readStatus(ws).calls.month_answered, undefined);
+  await market.refresh(ws, { fetchImpl: twoChunks(null), force: true });
+  const c = market.readStatus(ws).calls;
+  assert.deepEqual([c.month_count, c.day_count, c.month_answered, c.day_answered], [121, 5, 2, 2]);
+  assert.ok(Date.parse(c.answered_counted_since) <= Date.now(), 'answers are counted from this refresh on, and it says so');
+});

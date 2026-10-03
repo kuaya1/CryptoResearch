@@ -27,6 +27,24 @@
 //   critical_without_excerpt  (reports from cr-research-prompt@4 on, which were asked
 //                             for it) a critical [V] claim with neither an
 //                             excerpt of the artifact nor the query used
+//
+// Category grades checked against the evidence the prompt asks for beside
+// them (reports from cr-research-prompt@5 on, which were asked for the
+// code_review and chart_cycle blocks). Each flag names the category it
+// concerns, so it is shown beside that grade:
+//   code_score_without_source       code quality is scored although the report
+//                                   says the source could not be read
+//   code_score_without_inspection   code quality is scored with no repository
+//                                   recorded as read at a commit, files named
+//   chart_without_observation_date  a chart, cycle or volume grade is scored
+//                                   and the chart reading gives no day for the
+//                                   latest candle or quote it used
+//   chart_observation_stale         that latest observation is more than
+//                                   STALE_CHART_DAYS older than the report
+//   chart_observation_after_report  it is dated after the report itself
+// Older price history is context, never a flag: only the date of the latest
+// observation behind a current reading is checked. A report without these
+// flags is not thereby verified; the checks are structural.
 
 const SOURCE_TYPES = ['official', 'onchain_data', 'data_aggregator', 'exchange', 'audit', 'news', 'research', 'social', 'ai_summary', 'other'];
 const PRIMARY = new Set(['official', 'onchain_data', 'audit', 'exchange']);
@@ -147,11 +165,92 @@ const shortUrl = (u) => {
   return `${hp.host}${p === '/' ? '' : p}`;
 };
 // Reports written for cr-research-prompt@4 and later were asked for an
-// excerpt of the source or the query used.
-const asksForExcerpt = (v) => {
+// excerpt of the source or the query used; from @5 on, for the code that was
+// read and the dated data behind the chart reading.
+const promptAtLeast = (v, n) => {
   const m = /^cr-research-prompt@(\d+)$/.exec(String(v || '').trim());
-  return Boolean(m) && Number(m[1]) >= 4;
+  return Boolean(m) && Number(m[1]) >= n;
 };
+const asksForExcerpt = (v) => promptAtLeast(v, 4);
+
+const CHART_CATEGORIES = ['chart_structure', 'cycle_timing', 'volume_liquidity'];
+const CATEGORY_LABEL = { code_quality: 'Code quality', chart_structure: 'Chart structure', cycle_timing: 'Cycle position and catalyst timing', volume_liquidity: 'Volume confirmation and executable liquidity' };
+const STALE_CHART_DAYS = 7;
+const DAY_MS = 86400000;
+
+// A category grade given as a number (or a range), as text; null otherwise.
+function scoredText(s) {
+  if (!s || (s.status !== 'scored' && s.status !== 'range')) return null;
+  return s.status === 'range' ? `${s.low}-${s.high}` : String(s.value);
+}
+
+// The calendar day a date or date-time names, as written (YYYY-MM-DD is what
+// the prompt asks for), in ms at UTC midnight; null when it names no day.
+function dayOf(v) {
+  if (typeof v !== 'string' || !v.trim()) return null;
+  const m = /(\d{4})-(\d{2})-(\d{2})/.exec(v);
+  if (m) {
+    const t = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    return new Date(t).getUTCDate() === Number(m[3]) ? t : null;
+  }
+  const t = Date.parse(v);
+  if (!Number.isFinite(t)) return null;
+  const d = new Date(t);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+const ymd = (t) => new Date(t).toISOString().slice(0, 10);
+const names = (ids) => ids.map((id) => CATEGORY_LABEL[id] || id).join(', ').replace(/, ([^,]*)$/, ' and $1');
+
+// The category checks of one assessment (see the header). Returns the flags
+// and how many scored grades were checked.
+function categoryChecks(a) {
+  const flags = [];
+  if (!promptAtLeast(a.prompt_version, 5)) return { flags, checked: 0 };
+  const scores = a.diagnostic_scores || {};
+  let checked = 0;
+  const code = scoredText(scores.code_quality);
+  if (code !== null) {
+    checked += 1;
+    const cr = a.code_review || null;
+    const repos = cr && Array.isArray(cr.repositories) ? cr.repositories.filter(Boolean) : [];
+    const read = repos.filter((r) => r.commit && Array.isArray(r.files_inspected) && r.files_inspected.length);
+    const base = { claim_id: null, category: 'code_quality', categories: ['code_quality'], kind: null, source_ids: [] };
+    if (cr && cr.source_access === 'none') {
+      flags.push({ ...base, rule: 'code_score_without_source', severity: 'high', message: `Code quality is scored ${code}, but the report says the source could not be read (source access: none). The prompt asks for code quality to be unknown when the source cannot be read.` });
+    } else if (!read.length) {
+      const why = !cr ? 'the report has no account of the code it read'
+        : !repos.length ? 'no repository is recorded as read'
+          : repos.some((r) => Array.isArray(r.files_inspected) && r.files_inspected.length) ? 'files are listed without the commit they were read at'
+            : 'no inspected files are listed';
+      flags.push({ ...base, rule: 'code_score_without_inspection', severity: 'medium', message: `Code quality is scored ${code}, but ${why}. The prompt asks for the repository, the commit and the files read; without them code quality is unknown.` });
+    }
+  }
+  const chart = CHART_CATEGORIES.filter((id) => scoredText(scores[id]) !== null);
+  if (chart.length) {
+    checked += chart.length;
+    const cc = a.chart_cycle || null;
+    const raw = cc && cc.data ? cc.data.latest_observation_at : null;
+    const obs = dayOf(raw);
+    const report = dayOf(a.analysis_at);
+    const are = chart.length === 1 ? 'is' : 'are';
+    const base = { claim_id: null, category: chart[0], categories: chart, kind: null, source_ids: [] };
+    // message names every grade concerned (the evidence list shows it once);
+    // beside says it for the one grade it is shown next to.
+    if (obs === null) {
+      const what = !cc ? 'the report has no chart reading' : raw ? `its chart reading dates the latest observation "${String(raw).slice(0, 40)}", which names no day` : 'its chart reading gives no date for the latest observation';
+      const beside = !cc ? 'The report gives no chart reading behind this grade.' : raw ? `The chart reading behind this grade dates its latest observation "${String(raw).slice(0, 40)}", which names no day.` : 'The chart reading behind this grade gives no date for its latest observation.';
+      flags.push({ ...base, rule: 'chart_without_observation_date', severity: 'medium', message: `${names(chart)} ${are} scored, but ${what}. A current chart assessment needs the date of the latest candle or quote it used.`, beside: `${beside} A current assessment needs the date of the latest candle or quote it used.` });
+    } else if (report !== null) {
+      const days = Math.round((report - obs) / DAY_MS);
+      if (days > STALE_CHART_DAYS) {
+        flags.push({ ...base, rule: 'chart_observation_stale', severity: 'medium', message: `${names(chart)} ${are} scored on a chart whose latest observation (${ymd(obs)}) is ${days} days older than the report (${ymd(report)}). Older price history is context; a current assessment needs current data.`, beside: `The chart behind this grade was last observed on ${ymd(obs)}, ${days} days before the report (${ymd(report)}). Older price history is context; a current assessment needs current data.` });
+      } else if (days < -1) {
+        flags.push({ ...base, rule: 'chart_observation_after_report', severity: 'medium', message: `${names(chart)} ${are} scored on a chart whose latest observation is dated ${ymd(obs)}, ${-days} days after the report itself (${ymd(report)}); the dates are inconsistent.`, beside: `The chart behind this grade is dated ${ymd(obs)}, ${-days} days after the report itself (${ymd(report)}); the dates are inconsistent.` });
+      }
+    }
+  }
+  return { flags, checked };
+}
 
 // The checks for one assessment. officialWebsite: the project's verified site.
 function evidenceChecks(assessment, { officialWebsite = null } = {}) {
@@ -200,14 +299,24 @@ function evidenceChecks(assessment, { officialWebsite = null } = {}) {
       flags.push({ rule: 'critical_without_excerpt', severity: 'low', claim_id: id, kind, source_ids: [], message: `${id} (${KIND_LABEL[kind]}) is tagged verified with neither an excerpt of the source nor the query used, which the prompt asked for.` });
     }
   }
+  const cat = categoryChecks(a);
+  flags.push(...cat.flags);
   const rank = { high: 0, medium: 1, low: 2 };
   flags.sort((x, y) => rank[x.severity] - rank[y.severity]);
   const n = (sev) => flags.filter((f) => f.severity === sev).length;
-  const flagged = new Set(flags.map((f) => f.claim_id)).size;
+  const flagged = new Set(flags.filter((f) => f.claim_id).map((f) => f.claim_id)).size;
+  const flaggedCategories = new Set(flags.flatMap((f) => f.categories || [])).size;
+  const said = [
+    flagged ? `${flagged} of ${claims.length} claims need better evidence` : null,
+    flaggedCategories ? `${flaggedCategories} category grade${flaggedCategories === 1 ? ' lacks' : 's lack'} the evidence the prompt asks for beside ${flaggedCategories === 1 ? 'it' : 'them'}` : null,
+  ].filter(Boolean).join('; ');
+  const checkedGrades = cat.checked ? `, and ${cat.checked} category grade${cat.checked === 1 ? '' : 's'} against the code and chart evidence beside ${cat.checked === 1 ? 'it' : 'them'}` : '';
   return {
     checked_claims: claims.length,
     critical_claims: critical,
     flagged_claims: flagged,
+    checked_categories: cat.checked,
+    flagged_categories: flaggedCategories,
     high: n('high'),
     medium: n('medium'),
     low: n('low'),
@@ -216,12 +325,12 @@ function evidenceChecks(assessment, { officialWebsite = null } = {}) {
       ai_summaries: [...sources.values()].filter((s) => s.type === 'ai_summary').map((s) => s.id),
       outside_list: [...outside.entries()].map(([given, readAs]) => ({ given, read_as: [...readAs].join(', ') })),
     },
-    summary: !claims.length
-      ? 'No structured claims to check.'
-      : flags.length
-        ? `${flagged} of ${claims.length} claims need better evidence (${[n('high') && `${n('high')} high`, n('medium') && `${n('medium')} medium`, n('low') && `${n('low')} low`].filter(Boolean).join(', ')}). These checks change no score.`
-        : `${claims.length} claims checked${critical ? `, ${critical} of them critical` : ''}; none flagged. These checks change no score.`,
+    summary: flags.length
+      ? `${said} (${[n('high') && `${n('high')} high`, n('medium') && `${n('medium')} medium`, n('low') && `${n('low')} low`].filter(Boolean).join(', ')}). These checks change no score.`
+      : !claims.length && !cat.checked
+        ? 'No structured claims to check.'
+        : `${claims.length} claims checked${critical ? `, ${critical} of them critical` : ''}${checkedGrades}; none flagged. Nothing flagged is a structural result, not a verification of the facts. These checks change no score.`,
   };
 }
 
-module.exports = { SOURCE_TYPES, PRIMARY_SOURCE_TYPES: [...PRIMARY], CRITICAL_KINDS, normalizeSourceType, evidenceChecks, criticalKind };
+module.exports = { SOURCE_TYPES, PRIMARY_SOURCE_TYPES: [...PRIMARY], CRITICAL_KINDS, CHART_CATEGORIES, STALE_CHART_DAYS, normalizeSourceType, evidenceChecks, criticalKind, categoryChecks };

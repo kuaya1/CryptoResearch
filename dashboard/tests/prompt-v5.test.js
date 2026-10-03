@@ -589,3 +589,122 @@ test('dashboard: a report\'s categories come from the profile it declares; count
   assert.equal(m.rangeText({ low: null, high: 2 }, (n) => String(n)), 'up to 2');
   assert.equal(m.rangeText({ low: null, high: null }, (n) => String(n)), null);
 });
+
+// Review v3, finding 4: a numeric code-quality grade with no code read, and a
+// chart grade on an undated chart, passed every check. The category checks
+// flag them beside the grade they concern; nothing is rewritten or rescored.
+const withCode = (j, code) => { j.code_review = { ...j.code_review, ...code }; return j; };
+const scoredAt = (j, id, value, confidence = 'medium') => { j.diagnostic_scores[id] = { ...j.diagnostic_scores.chart_structure, status: 'scored', value, confidence, rationale: `FICTIONAL: ${id} scored ${value}.`, missing_data: null }; return j; };
+const flagsOf = (a) => evidenceChecks(a, { officialWebsite: 'https://example.net/xnet' }).flags.map((f) => [f.rule, f.severity, (f.categories || []).join('+')]);
+
+test('category checks: the review\'s contradictory report (no code access, no repository, code quality 99 high, undated chart) is flagged beside code quality and the chart grades; the original and every score are kept', (t) => {
+  const { ws } = workspace(t, 'v5-category-flags');
+  addNetworkProject(ws);
+  const good = importOne(ws, clone());
+  const j = withCode(scoredAt(clone(), 'code_quality', 99, 'high'), { source_access: 'none', repositories: [] });
+  delete j.chart_cycle.data.latest_observation_at;
+  j.summary = 'FICTIONAL: the contradictory case from the review.';
+  const bad = importOne(ws, j);
+  // The parser reads it as written: no error, the score kept as given.
+  assert.equal(bad.issues.filter((i) => i.severity === 'error').length, 0);
+  assert.equal(bad.a.diagnostic_scores.code_quality.value, 99);
+  assert.equal(bad.a.diagnostic_scores.code_quality.confidence, 'high');
+  // The checks flag both contradictions, each beside the grades it concerns.
+  const ev = evidenceChecks(bad.a, { officialWebsite: 'https://example.net/xnet' });
+  assert.deepEqual(ev.flags.map((f) => [f.rule, f.severity, f.categories.join('+'), f.claim_id]), [
+    ['code_score_without_source', 'high', 'code_quality', null],
+    ['chart_without_observation_date', 'medium', 'chart_structure+cycle_timing+volume_liquidity', null],
+  ]);
+  assert.match(ev.flags[0].message, /^Code quality is scored 99, but the report says the source could not be read \(source access: none\)\. The prompt asks for code quality to be unknown when the source cannot be read\.$/);
+  assert.match(ev.flags[1].message, /^Chart structure, Cycle position and catalyst timing and Volume confirmation and executable liquidity are scored, but its chart reading gives no date for the latest observation\. A current chart assessment needs the date of the latest candle or quote it used\.$/);
+  assert.deepEqual([ev.flagged_claims, ev.flagged_categories, ev.checked_categories, ev.high, ev.medium], [0, 4, 4, 1, 1]);
+  assert.match(ev.summary, /^4 category grades lack the evidence the prompt asks for beside them \(1 high, 1 medium\)\. These checks change no score\.$/);
+  // Flags only: the grade comes from the six components, exactly as before,
+  // and the stored report is the text as received.
+  assert.equal(bad.grade.value, BASE_GRADE);
+  assert.equal(bad.grade.value, good.grade.value);
+  assert.equal(fs.readFileSync(ws.abs(`projects/${NET}/reports/${bad.rep.report_id}/${bad.rep.meta.original_file}`), 'utf8'), report(j));
+  // The project page and the watchlist carry them.
+  const d = projectDetail(ws, NET);
+  assert.equal(d.reports.find((r) => r.report_id === bad.rep.report_id).evidence.flags.length, 2);
+  const brief = d.history.claude.find((r) => r.report_id === bad.rep.report_id).evidence;
+  assert.deepEqual([brief.flagged, brief.flagged_categories, brief.high, brief.medium], [0, 4, 1, 1]);
+  assert.equal(d.history.claude.find((r) => r.report_id === bad.rep.report_id).grade.value, BASE_GRADE);
+});
+
+test('category checks: reports that carry the evidence stay unflagged (code read at a commit, a dated chart, older price history), as do grades left unknown and reports not asked for the blocks', (t) => {
+  const { ws } = workspace(t, 'v5-category-clean');
+  addNetworkProject(ws);
+  let n = 0;
+  const imp = (j) => importOne(ws, { ...j, summary: `FICTIONAL variant ${n += 1}.` }).a;
+  // The fixture: code quality unknown (private node), chart dated the same day.
+  assert.deepEqual(flagsOf(imp(clone())), []);
+  // Code read at a commit with its files, as Linea's report records it.
+  assert.deepEqual(flagsOf(imp(withCode(scoredAt(clone(), 'code_quality', 70), { source_access: 'public', repositories: [{ url: 'https://code.example.net/xnet/node', role: 'FICTIONAL node', commit: 'c27732d199f8ad603d1983d8af72031c730b0382', files_inspected: ['src/vault.sol', 'src/burner.sol'], observations: 'FICTIONAL' }] }))), []);
+  // Partial access with one repository read is enough evidence for a grade.
+  assert.deepEqual(flagsOf(imp(scoredAt(clone(), 'code_quality', 55))), [], 'the fixture\'s SDK was read at a commit');
+  // Unknown code quality with no access is what the prompt asks for.
+  assert.deepEqual(flagsOf(imp(withCode(clone(), { source_access: 'none', repositories: [] }))), []);
+  // A chart whose latest candle is a few days old, built on months of history
+  // before the holding period: legitimate context, no flag.
+  const recent = clone();
+  recent.chart_cycle.data.latest_observation_at = '2026-09-28';
+  recent.chart_cycle.data.limitations = 'FICTIONAL: weekly candles from 2025-06 to 2026-09-28.';
+  assert.deepEqual(flagsOf(imp(recent)), []);
+  const sameDay = clone();
+  sameDay.chart_cycle.data.latest_observation_at = '2026-10-03 14:00 UTC';
+  assert.deepEqual(flagsOf(imp(sameDay)), [], 'a date-time written another way still names the day');
+  // Chart grades left unknown: nothing to date.
+  const unknownCharts = clone();
+  for (const id of ['chart_structure', 'cycle_timing', 'volume_liquidity']) unknownCharts.diagnostic_scores[id] = { ...unknownCharts.diagnostic_scores.code_quality };
+  delete unknownCharts.chart_cycle.data.latest_observation_at;
+  assert.deepEqual(flagsOf(imp(unknownCharts)), []);
+  // A report written for prompt @4 was not asked for these blocks.
+  const v4 = withCode(scoredAt(clone(), 'code_quality', 99, 'high'), { source_access: 'none', repositories: [] });
+  v4.prompt_version = 'cr-research-prompt@4';
+  delete v4.chart_cycle.data.latest_observation_at;
+  assert.deepEqual(flagsOf(imp(v4)), [], 'the checks apply only where the prompt asked for the evidence');
+});
+
+test('category checks: a code grade without a commit and files, and a chart dated weeks before the report, after it, or in words, are each flagged beside the grade', async (t) => {
+  const { ws } = workspace(t, 'v5-category-variants');
+  addNetworkProject(ws);
+  let n = 0;
+  const imp = (j) => importOne(ws, { ...j, summary: `FICTIONAL variant ${n += 1}.` }).a;
+  const noCommit = withCode(scoredAt(clone(), 'code_quality', 80), { source_access: 'public', repositories: [{ url: 'https://code.example.net/xnet/node', role: 'FICTIONAL', commit: null, files_inspected: ['src/a.ts'], observations: null }] });
+  const fl = evidenceChecks(imp(noCommit)).flags;
+  assert.deepEqual(fl.map((f) => [f.rule, f.severity, f.category]), [['code_score_without_inspection', 'medium', 'code_quality']]);
+  assert.match(fl[0].message, /^Code quality is scored 80, but files are listed without the commit they were read at\. The prompt asks for the repository, the commit and the files read; without them code quality is unknown\.$/);
+  const noBlock = scoredAt(clone(), 'code_quality', 80);
+  delete noBlock.code_review;
+  assert.match(evidenceChecks(imp(noBlock)).flags[0].message, /but the report has no account of the code it read\./);
+  const range = withCode(clone(), { source_access: 'none', repositories: [] });
+  range.diagnostic_scores.code_quality = { ...range.diagnostic_scores.chart_structure, status: 'range', value: null, low: 60, high: 80, rationale: 'FICTIONAL range.', missing_data: null };
+  assert.match(evidenceChecks(imp(range)).flags[0].message, /^Code quality is scored 60-80, but the report says the source could not be read/);
+  const stale = clone();
+  stale.chart_cycle.data.latest_observation_at = '2026-09-10T00:00:00Z';
+  const staleA = imp(stale);
+  assert.deepEqual(flagsOf(staleA), [['chart_observation_stale', 'medium', 'chart_structure+cycle_timing+volume_liquidity']]);
+  assert.match(evidenceChecks(staleA).flags[0].message, /latest observation \(2026-09-10\) is 23 days older than the report \(2026-10-03\)\. Older price history is context; a current assessment needs current data\.$/);
+  const after = clone();
+  after.chart_cycle.data.latest_observation_at = '2026-10-30';
+  assert.deepEqual(flagsOf(imp(after)), [['chart_observation_after_report', 'medium', 'chart_structure+cycle_timing+volume_liquidity']]);
+  const words = clone();
+  words.chart_cycle.data.latest_observation_at = 'last week';
+  assert.match(evidenceChecks(imp(words)).flags[0].message, /dates the latest observation "last week", which names no day/);
+  const oneScored = clone();
+  oneScored.chart_cycle.data.latest_observation_at = null;
+  for (const id of ['cycle_timing', 'volume_liquidity']) oneScored.diagnostic_scores[id] = { ...oneScored.diagnostic_scores.code_quality };
+  assert.deepEqual(flagsOf(imp(oneScored)), [['chart_without_observation_date', 'medium', 'chart_structure']], 'only the grades that are scored are named');
+  // Shown beside the category: the scorecard picks a category's own flags,
+  // and the watchlist's evidence words count category grades.
+  const m = await ui;
+  const both = evidenceChecks(imp(withCode(scoredAt(clone(), 'code_quality', 99, 'high'), { source_access: 'none', repositories: [] }))).flags;
+  assert.deepEqual(m.categoryFlags(both, 'code_quality').map((f) => f.rule), ['code_score_without_source']);
+  assert.deepEqual(m.categoryFlags(both, 'chart_structure'), []);
+  assert.deepEqual(m.categoryFlags(fl, 'code_quality').map((f) => f.rule), ['code_score_without_inspection']);
+  const uiMod = await import(pathToFileURL(path.join(tmp, 'ui.js')).href);
+  assert.equal(uiMod.evidenceLevel({ flagged: 0, flagged_categories: 1, high: 1, medium: 0 }), 'serious');
+  assert.equal(uiMod.evidenceText({ flagged: 0, flagged_categories: 1, high: 1, medium: 0 }), '1 category grade flagged by evidence checks (1 serious)');
+  assert.equal(uiMod.evidenceText({ flagged: 2, flagged_categories: 3, high: 0, medium: 2 }), '2 claims and 3 category grades flagged by evidence checks (2 material)');
+});

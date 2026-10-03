@@ -1219,6 +1219,25 @@ function outcomePhase(job, result, error) {
   return job.mode === 'api' ? 'uncertain' : 'errored';
 }
 
+// Usage seen before an answer stopped is a floor, never the bill.
+const PARTIAL_USAGE_NOTE = 'Counted before the answer stopped: a lower bound, not the billed total. The attempt counts at its reservation until you reconcile it from the provider\'s billing.';
+
+// What an answer that stopped early leaves to recover from, as kept in the
+// response file and on the attempt: the text written before it stopped (in
+// the file only; the attempt says how long it is), why it stopped and the
+// usage seen so far. Never a report, never graded.
+function partialOf(error) {
+  if (!error) return {};
+  const text = typeof error.partial_text === 'string' && error.partial_text ? error.partial_text : null;
+  return {
+    partial_usage: error.partial_usage || null,
+    usage_status: error.partial_usage && !error.usage ? 'incomplete' : null,
+    partial_text: text,
+    partial_text_sha256: text ? sha256(text) : null,
+    termination: error.termination || null,
+  };
+}
+
 // Records an outcome on the attempt and moves the job on (inside an operation).
 function applyOutcome(ws, run, job, a, { result, error, finishedAt, rel, fileSha, phase, actual, cost = null }) {
   Object.assign(a, { phase, finished_at: finishedAt, outcome: result ? 'response_saved' : phase === 'not_sent' ? 'not_sent' : error.kind || 'error', response_path: rel, response_sha256: fileSha });
@@ -1226,8 +1245,18 @@ function applyOutcome(ws, run, job, a, { result, error, finishedAt, rel, fileSha
     const at = result.attested || {};
     Object.assign(a, { request_id: at.request_id || null, response_id: at.response_id || null, model_attested: at.model || null, usage: result.usage || null, cost_actual_usd: actual });
   } else {
-    Object.assign(a, { error: error.message, http_status: error.httpStatus || null, request_id: error.requestId || null, usage: error.usage || null, cost_actual_usd: actual });
-    if (error.partial_usage) a.partial_usage = error.partial_usage;
+    const at = error.attested || {};
+    Object.assign(a, { error: error.message, http_status: error.httpStatus || null, request_id: error.requestId || at.request_id || null, usage: error.usage || null, cost_actual_usd: actual });
+    // The provider's IDs for an answer that stopped (a background request
+    // keeps the ID it is collected by).
+    if (at.response_id && !a.response_id) a.response_id = at.response_id;
+    if (at.model) a.model_attested = at.model;
+    if (Array.isArray(at.request_ids) && at.request_ids.length > 1) a.request_ids = at.request_ids;
+    const p = partialOf(error);
+    if (p.partial_usage) a.partial_usage = p.partial_usage;
+    if (p.usage_status) Object.assign(a, { usage_status: p.usage_status, usage_note: PARTIAL_USAGE_NOTE });
+    if (p.termination) a.termination = p.termination;
+    if (p.partial_text) a.partial_output = { chars: p.partial_text.length, sha256: p.partial_text_sha256, note: 'Text written before the answer stopped, kept in the response file for reading. Never saved as a report or graded.' };
   }
   // How certain the cost is: actual (complete usage), estimated (usage
   // reported but incomplete: never released below the reservation), or not
@@ -1318,7 +1347,10 @@ function recordOutcome(ws, run, provider, attemptId, { result = null, error = nu
       cost_actual_usd: actual,
       cost_status: actual !== null ? 'actual' : cost && cost.status === 'incomplete' ? 'estimated' : job.mode === 'api' ? 'unknown' : null,
       cost_usage_estimate_usd: cost && cost.status === 'incomplete' ? cost.usd : null,
-      error: error ? { kind: error.kind || 'error', message: error.message, http_status: error.httpStatus || null, request_id: error.requestId || null, code: error.code || null } : null,
+      error: error ? { kind: error.kind || 'error', message: error.message, http_status: error.httpStatus || null, request_id: error.requestId || (error.attested && error.attested.request_id) || null, code: error.code || null } : null,
+      // An answer that stopped early: usage seen so far (incomplete), the
+      // text written before it stopped and why. Not a report.
+      ...(error ? { ...partialOf(error), usage_note: error.partial_usage && !error.usage ? PARTIAL_USAGE_NOTE : null } : {}),
       text: result ? result.text : null,
       text_sha256: result ? sha256(result.text) : null,
       raw_response: result ? result.raw : error && error.raw ? error.raw : null,
@@ -1454,6 +1486,24 @@ function validateSaved(ws, run, provider, attempt, rel) {
   return { ok: true, payload: p, sha256: fileSha };
 }
 
+// The text an attempt's answer wrote before it stopped (cut off, out of its
+// output limit, cancelled), read from its saved response file after checking
+// that file against the attempt. Read-only: it is never imported, saved as a
+// report or graded.
+function partialOutput(ws, projectId, runId, provider, n) {
+  const run = loadRun(ws, projectId, runId);
+  const job = run && run.jobs ? run.jobs[provider] : null;
+  const a = job ? (job.attempts || []).find((x) => x.n === n) : null;
+  if (!a) throw new OpError('NOT_FOUND', `${runId} has no ${PROVIDER_LABELS[provider] || provider} attempt #${n}.`);
+  if (!a.response_path) throw new OpError('NOT_FOUND', `Attempt #${n} has no saved response.`);
+  const check = validateSaved(ws, run, provider, a, a.response_path);
+  if (!check.ok) throw new OpError('CONFLICT', `The saved response of attempt #${n} cannot be shown: ${check.reason}.`);
+  const text = check.payload.partial_text;
+  if (typeof text !== 'string' || !text) throw new OpError('NOT_FOUND', `Attempt #${n} kept no partial answer.`);
+  if (check.payload.partial_text_sha256 && sha256(text) !== check.payload.partial_text_sha256) throw new OpError('CONFLICT', `The partial answer of attempt #${n} does not match its recorded hash.`);
+  return { text, chars: text.length, attempt: n, termination: check.payload.termination || null, response_path: a.response_path };
+}
+
 // A job left in flight by a runner that stopped. Nothing is sent from here: a
 // provably unsent attempt is released and requeued, a saved answer is
 // validated and imported, and anything that may have been sent is held as
@@ -1507,7 +1557,7 @@ async function recoverJob(ws, projectId, run, provider, { fetchImpl } = {}) {
   if (found.ok) {
     const p = found.payload;
     const res = typeof p.text === 'string' && p.text ? { text: p.text, attested: p.attested || {}, usage: p.usage || null, raw: p.raw_response } : null;
-    const err = res ? null : Object.assign(new Error((p.error && p.error.message) || 'The saved response has no answer text.'), { kind: (p.error && p.error.kind) || 'empty', httpStatus: p.error ? p.error.http_status : null, requestId: p.error ? p.error.request_id : null, notSent: p.outcome === 'not_sent', usage: p.usage || null });
+    const err = res ? null : Object.assign(new Error((p.error && p.error.message) || 'The saved response has no answer text.'), { kind: (p.error && p.error.kind) || 'empty', httpStatus: p.error ? p.error.http_status : null, requestId: p.error ? p.error.request_id : null, notSent: p.outcome === 'not_sent', usage: p.usage || null, partial_usage: p.partial_usage || null, partial_text: p.partial_text || null, termination: p.termination || null, attested: p.attested || null });
     updateJob(ws, projectId, runId, provider, (jj, r) => {
       const a = lastAttempt(jj);
       const ph = outcomePhase(jj, res, err);
@@ -2216,6 +2266,7 @@ module.exports = {
   runDueJobs,
   sweepCaptures,
   commitCaptured,
+  partialOutput,
   researchStateFor,
   normalizeProviders,
 };

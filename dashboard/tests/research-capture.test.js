@@ -56,6 +56,13 @@ async function stubProvider() {
     req.on('end', async () => {
       calls.push({ path: req.url, at: Date.now() });
       const b = await behavior();
+      // A streamed answer (server-sent events), sent as given: one that stops
+      // before message_stop is an answer cut off on the way.
+      if (b.sse) {
+        res.writeHead(b.status, { 'content-type': 'text/event-stream; charset=utf-8', 'request-id': 'req_stub_1' });
+        res.end(b.sse);
+        return;
+      }
       res.writeHead(b.status, { 'content-type': 'application/json', 'request-id': 'req_stub_1' });
       res.end(JSON.stringify(b.json));
     });
@@ -457,4 +464,73 @@ test('F1 spend log: a later save of the same outcome keeps the cost frozen at re
   assert.equal(adj[0].actual_usd, corrected);
   assert.equal(adj[0].replaces_actual_usd, ACTUAL);
   assert.equal(c.spent(), corrected, 'the attempt counts once, at the corrected cost');
+});
+
+// Review v3, finding 5: a Claude stream that stopped before message_stop lost
+// its HTTP request ID, and the usage seen so far reached no normalized record.
+const PARTIAL = 'FICTIONAL partial report: section one, identity and legitimacy, is written.';
+function cutStream() {
+  const ev = (o) => `event: ${o.type}\ndata: ${JSON.stringify(o)}\n\n`;
+  return [
+    ev({ type: 'message_start', message: { id: 'msg_stub_cut', type: 'message', role: 'assistant', model: 'claude-test-model', content: [], stop_reason: null, usage: { input_tokens: 12000, output_tokens: 1 } } }),
+    ev({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+    ev({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: PARTIAL } }),
+    ev({ type: 'message_delta', delta: { stop_reason: null }, usage: { output_tokens: 900 } }),
+  ].join('');
+}
+
+test('a stream cut before the answer finished keeps its request ID, message ID, partial answer, why it stopped and the usage seen so far (labeled incomplete) through its capture and a restart; held as uncertain, never resent, never a report', async (t) => {
+  const c = await paidRun(t, 'cutstream');
+  c.stub.set(async () => ({ status: 200, sse: cutStream() }));
+  // The runner is killed right after the capture, before the commit.
+  const first = await runner(c.root, c.stub, { capture: { crash: 'after' } });
+  assert.ok(first.signal || first.code !== 0, 'the runner was killed');
+  assert.equal(c.stub.calls.length, 1);
+  assert.equal(c.job().attempts[0].phase, 'dispatched');
+  // The capture alone holds everything the cut stream delivered.
+  const cap = readJson(c.captureFile()).body.error;
+  assert.equal(cap.kind, 'network');
+  assert.equal(cap.request_id, 'req_stub_1', 'the HTTP request ID');
+  assert.equal(cap.attested.response_id, 'msg_stub_cut', 'the provider message ID');
+  assert.equal(cap.partial_text, PARTIAL);
+  assert.equal(cap.termination, 'ended_before_message_stop');
+  assert.deepEqual([cap.partial_usage.input_tokens, cap.partial_usage.output_tokens, cap.partial_usage.requests], [12000, 900, 1]);
+  // The restarted runner commits it from the capture; nothing is sent again.
+  const second = await runner(c.root, c.stub);
+  assert.equal(second.code, 0, second.err);
+  assert.equal(c.stub.calls.length, 1, 'never resent');
+  const j = c.job();
+  assert.equal(j.state, 'uncertain', 'it may have been billed: held for Eric');
+  const a = j.attempts[0];
+  assert.equal(a.phase, 'uncertain');
+  assert.match(a.recovered_from, /captured answer committed/);
+  assert.deepEqual([a.request_id, a.response_id, a.model_attested, a.termination], ['req_stub_1', 'msg_stub_cut', 'claude-test-model', 'ended_before_message_stop']);
+  // Incomplete usage stays incomplete: never an actual cost.
+  assert.equal(a.usage, null);
+  assert.deepEqual([a.partial_usage.input_tokens, a.partial_usage.output_tokens], [12000, 900]);
+  assert.equal(a.usage_status, 'incomplete');
+  assert.match(a.usage_note, /a lower bound, not the billed total/);
+  assert.equal(a.cost_actual_usd, null);
+  assert.ok(c.spent() >= a.reserved_usd, 'it counts at its reservation until reconciled');
+  assert.deepEqual(a.partial_output.chars, PARTIAL.length);
+  // The normalized response file carries the same, apart from any report.
+  const saved = readJson(c.ws.abs(a.response_path));
+  assert.deepEqual([saved.error.request_id, saved.attested.response_id, saved.attested.request_id, saved.termination, saved.usage_status], ['req_stub_1', 'msg_stub_cut', 'req_stub_1', 'ended_before_message_stop', 'incomplete']);
+  assert.equal(saved.usage, null);
+  assert.equal(saved.partial_usage.output_tokens, 900);
+  assert.equal(saved.partial_text, PARTIAL);
+  assert.equal(saved.text, null, 'the partial answer is not the answer');
+  assert.equal(c.reports().length, 0, 'no report was saved');
+  // The partial answer can be read on its own, checked against the saved file.
+  const p = research.partialOutput(c.ws, c.pid, c.run.run_id, 'claude', 1);
+  assert.deepEqual([p.text, p.termination], [PARTIAL, 'ended_before_message_stop']);
+  // Later runners change nothing and send nothing; the capture is cleared.
+  await runner(c.root, c.stub);
+  assert.equal(c.stub.calls.length, 1);
+  assert.equal(c.job().state, 'uncertain');
+  assert.deepEqual(c.captureFiles().filter((f) => !f.startsWith('.')), [], 'no capture is left behind');
+  // A response file that no longer matches its attempt is not shown.
+  const file = c.ws.abs(a.response_path);
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('section one', 'section 1'));
+  assert.throws(() => research.partialOutput(c.ws, c.pid, c.run.run_id, 'claude', 1), /cannot be shown: .*SHA-256 mismatch/);
 });

@@ -133,11 +133,12 @@ test('a failed fetch keeps the last snapshot, counts the attempted request and b
   assert.equal(cycle.readContext(ws).snapshot_id, kept, 'last valid snapshot kept');
   const st = market.readStatus(ws);
   assert.equal(st.calls.month_count, 4, '2 + 2: the failing second request still counts');
+  assert.equal(st.calls.month_answered, 3, 'three of the four came back with a usable answer');
   assert.equal(st.context.state, 'failed');
   assert.equal(cycle.due(ws, Date.now()), false, 'waits after a failure');
   const offline = await cycle.refreshContext(ws, { fetchImpl: async () => { throw new Error('getaddrinfo ENOTFOUND'); }, force: true });
   assert.equal(offline.status, 'failed');
-  assert.equal(market.readStatus(ws).calls.month_count, 5);
+  assert.deepEqual([market.readStatus(ws).calls.month_count, market.readStatus(ws).calls.month_answered], [5, 3]);
 });
 
 test('a price refresh keeps the market-context record, so context is not fetched again right after it', async (t) => {

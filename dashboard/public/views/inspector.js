@@ -97,7 +97,7 @@ function evidencePart(ctx, d) {
     const r = latest[p];
     const a = r.assessment || {};
     const sources = a.sources || [];
-    const level = evidenceLevel(r.evidence ? { flagged: r.evidence.flagged_claims, high: r.evidence.high, medium: r.evidence.medium } : null);
+    const level = evidenceLevel(r.evidence ? { flagged: r.evidence.flagged_claims, flagged_categories: r.evidence.flagged_categories, high: r.evidence.high, medium: r.evidence.medium } : null);
     return h('div', { class: 'ev-model', id: `insp-ev-${p}`, tabindex: '-1' },
       h('div', { class: 'head' },
         h('strong', null, PROVIDER_LABELS[p]),

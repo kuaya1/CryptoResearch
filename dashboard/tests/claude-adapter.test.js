@@ -197,12 +197,22 @@ test('claude: research calls are streamed; a paused streamed turn is rebuilt exa
 });
 
 test('claude: a streamed answer cut off, or an error mid-stream, keeps the usage seen so far and is never a report', async () => {
-  // The connection ends before message_stop: possibly billed (uncertain).
+  // The connection ends before message_stop: possibly billed (uncertain). It
+  // keeps the request's HTTP ID, the message ID, the text so far and why it
+  // stopped (review v3, finding 5).
   const cut = streamStub([sseFor(FINAL, { end: 'cut' })]);
-  await assert.rejects(call(cut), (err) => err.kind === 'network' && /ended before the answer was complete/.test(err.message) && err.usage === undefined && err.partial_usage.input_tokens === 300 && err.partial_usage.requests === 1);
+  await assert.rejects(call(cut), (err) => err.kind === 'network' && /ended before the answer was complete/.test(err.message) && err.usage === undefined && err.partial_usage.input_tokens === 300 && err.partial_usage.requests === 1
+    && err.requestId === 'req_s1' && err.attested.request_id === 'req_s1' && err.attested.response_id === 'msg_p2' && err.attested.model === 'claude-opus-5-5'
+    && err.partial_text === 'The full FICTIONAL report.' && err.termination === 'ended_before_message_stop');
+  // Cut on a resumed turn: both requests' IDs and all the text so far.
+  const late = streamStub([PAUSED, sseFor(FINAL, { end: 'cut' })]);
+  await assert.rejects(call(late), (err) => err.kind === 'network' && err.partial_usage.requests === 2 && err.partial_usage.input_tokens === 1200
+    && err.requestId === 'req_s2' && JSON.stringify(err.attested.request_ids) === JSON.stringify(['req_s1', 'req_s2']) && err.attested.response_id === 'msg_p2' && err.attested.requests === 2
+    && err.partial_text === 'Looking into Examplecoin (FICTIONAL).\nThe full FICTIONAL report.');
   // Anthropic reports an error mid-stream (overloaded): a known outcome.
   const failed = streamStub([sseFor(FINAL, { end: 'error' })]);
-  await assert.rejects(call(failed), (err) => err.kind === 'http' && err.retryable === true && /overloaded_error/.test(err.message) && err.partial_usage.input_tokens === 300);
+  await assert.rejects(call(failed), (err) => err.kind === 'http' && err.retryable === true && /overloaded_error/.test(err.message) && err.partial_usage.input_tokens === 300
+    && err.requestId === 'req_s1' && err.termination === 'error_event: overloaded_error');
   // A streamed refusal and a streamed max_tokens stop are errors with usage.
   const refusal = streamStub([{ ...FINAL, stop_reason: 'refusal' }]);
   await assert.rejects(call(refusal), (err) => err.kind === 'refused' && err.usage.output_tokens === 15000);

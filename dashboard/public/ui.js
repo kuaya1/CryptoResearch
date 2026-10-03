@@ -474,17 +474,21 @@ function newerRunText(provider, key, job) {
 // index): "serious" when any flag is high (for example a claim tagged verified
 // whose only support is an AI summary), "material" when any is medium, else
 // none. The checks never change a score; they say how far to trust it.
+// Evidence flags on a report: on its claims, and on category grades that lack
+// the evidence the prompt asks for beside them (core/evidence.js).
 export function evidenceLevel(ev) {
-  if (!ev || !ev.flagged) return null;
+  if (!ev || !(ev.flagged || ev.flagged_categories)) return null;
   if (ev.high > 0) return 'serious';
   if (ev.medium > 0) return 'material';
   return null;
 }
 
 export function evidenceText(ev) {
-  if (!ev || !ev.flagged) return null;
-  const n = ev.flagged;
-  return `${n} claim${n === 1 ? '' : 's'} flagged by evidence checks${ev.high ? ` (${ev.high} serious)` : ev.medium ? ` (${ev.medium} material)` : ''}`;
+  if (!ev || !(ev.flagged || ev.flagged_categories)) return null;
+  const n = ev.flagged || 0;
+  const c = ev.flagged_categories || 0;
+  const what = [n ? `${n} claim${n === 1 ? '' : 's'}` : null, c ? `${c} category grade${c === 1 ? '' : 's'}` : null].filter(Boolean).join(' and ');
+  return `${what} flagged by evidence checks${ev.high ? ` (${ev.high} serious)` : ev.medium ? ` (${ev.medium} material)` : ''}`;
 }
 
 const SVG_ICONS = {

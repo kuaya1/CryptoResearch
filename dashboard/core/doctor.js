@@ -162,7 +162,7 @@ async function doctor(ws) {
   }
 
   const m = require('./market').freshness(ws);
-  add('Market data', ['fresh', 'fresh_partial', 'fresh_last_failed'].includes(m.freshness), m.last_success_at ? `Last success ${m.last_success_at} (${m.age_minutes} min ago)${m.last_error ? `; last issue: ${m.last_error}` : ''}; calls this month ${m.calls.month_count}${m.calls.budget_monthly ? ` of ${m.calls.budget_monthly}` : ''}` : ws.settings.market_data.enabled ? 'Never fetched' : 'Turned off in settings', ['fresh'].includes(m.freshness) || !ws.settings.market_data.enabled ? 'ok' : 'warn');
+  add('Market data', ['fresh', 'fresh_partial', 'fresh_last_failed'].includes(m.freshness), m.last_success_at ? `Last success ${m.last_success_at} (${m.age_minutes} min ago)${m.last_error ? `; last issue: ${m.last_error}` : ''}; CoinGecko requests this month ${m.calls.month_count}${m.calls.budget_monthly ? ` of ${m.calls.budget_monthly}` : ''}${typeof m.calls.month_answered === 'number' ? ` (${m.calls.month_answered} answered${m.calls.answered_counted_since ? ` since ${m.calls.answered_counted_since}` : ''})` : ''}` : ws.settings.market_data.enabled ? 'Never fetched' : 'Turned off in settings', ['fresh'].includes(m.freshness) || !ws.settings.market_data.enabled ? 'ok' : 'warn');
 
   const pendingReq = require('./requests').pendingRequests(ws);
   add('Queued requests', pendingReq.length === 0, pendingReq.length ? `${pendingReq.length} pending (not saved yet)` : 'None pending', pendingReq.length ? 'warn' : 'ok');
@@ -170,14 +170,14 @@ async function doctor(ws) {
   const failed = inboxSt.in_inbox.filter((f) => !['new'].includes(f.status));
   add('Inbox', failed.length === 0, inboxSt.in_inbox.length ? `${inboxSt.in_inbox.length} file(s) waiting, ${failed.length} need attention` : 'Empty', failed.length ? 'warn' : 'ok');
   try {
-    // Offsite copies of the online desk (offsite.js): the desk serves them,
-    // this PC pulls them once a day once set up.
-    if (ws.hosted) {
-      add('Offsite backup', true, require('./offsite').deskKey() ? 'Backup key set (CR_BACKUP_KEY): a PC can pull verified copies of this desk.' : 'Not set up: no CR_BACKUP_KEY in this desk\'s environment, so no copy of these records exists off this disk except Render\'s own disk snapshots.', require('./offsite').deskKey() ? 'ok' : 'warn');
-    } else {
-      const o = require('./offsite').status(ws);
-      if (o.configured || o.last) add('Offsite backup', Boolean(o.last && o.age_hours <= 36), o.last ? `Latest copy of the online desk ${o.last.file}, ${o.age_hours} h ago (${o.last.files} files, every one verified), in ${o.folder}.${o.configured ? '' : ` Not set up any more: ${o.missing.join('; ')}.`}` : `Set up, no copy yet: node dashboard/cli.js offsite pull (saves to ${o.folder}).`, o.last && o.age_hours <= 36 ? 'ok' : 'warn');
-    }
+    // Backups in three separate parts (offsite.js backupStatus): same-disk
+    // snapshots, whether offsite copies are set up, and a verified copy on
+    // another machine. The desk serves copies; this PC pulls them once a day
+    // once set up. Only a verified copy that is not overdue is "ok" here; a
+    // scheduled task that ran without making one is not.
+    const b = require('./offsite').backupStatus(ws);
+    const ok = ws.hosted ? b.offsite.configured : b.independent_copy.verified && !b.independent_copy.overdue;
+    add('Offsite backup', ok, `${b.summary}${!ws.hosted && b.offsite.configured && !b.independent_copy.verified ? ` Pull one now: node dashboard/cli.js offsite pull (saves to ${b.offsite.folder}).` : ''}`, ok ? 'ok' : 'warn');
   } catch (_) { /* offsite module optional */ }
   try {
     const rs = require('./research').providerStatus(ws);

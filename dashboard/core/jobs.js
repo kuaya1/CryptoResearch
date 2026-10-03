@@ -146,8 +146,9 @@ async function runJobBody(ws, name, trigger) {
     }
     case 'offsite': {
       if (ws.hosted) return { status: 'skipped', summary: 'The online desk serves offsite copies; it does not pull them.' };
-      const r = await require('./offsite').pull(ws);
-      return { status: r.status === 'ok' ? 'ok' : r.status === 'not_set_up' ? 'skipped' : 'failed', summary: r.message, error: r.status === 'failed' ? r.message : null };
+      const r = await require('./offsite').pull(ws, { trigger });
+      // Only a verified copy counts as done; a run that saved none says so.
+      return { status: r.status === 'ok' ? 'ok' : r.status === 'not_set_up' ? 'skipped' : 'failed', summary: r.status === 'ok' ? r.message : `No offsite copy was made: ${r.message}`, error: r.status === 'failed' ? r.message : null };
     }
     default:
       throw new Error(`Unknown job ${name}`);

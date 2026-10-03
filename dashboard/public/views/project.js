@@ -164,7 +164,7 @@ function modelCard(ctx, d, row, prov, latest) {
         previewTiming(sum) ? h('div', { class: 'wide' }, h('dt', null, 'Timing (the model\'s view)'), h('dd', null, previewTiming(sum))) : null),
       r.assessment.summary ? h('p', { class: 'small', style: { margin: '10px 0 0' } }, r.assessment.summary) : null,
       r.evidence && r.evidence.flags.length
-        ? h('p', { class: 'small', style: { margin: '8px 0 0' } }, stateText(`Evidence checks: ${r.evidence.flagged_claims} claim${r.evidence.flagged_claims === 1 ? '' : 's'} flagged`, r.evidence.high ? 'bad' : 'warn'), ' ', h('a', { href: `#/project/${pid}/evidence`, dataset: { key: `ov-evidence-${prov}` } }, 'see why'), h('span', { class: 'muted' }, ' (no score changes)'))
+        ? h('p', { class: 'small', style: { margin: '8px 0 0' } }, stateText(`Evidence checks: ${flaggedText(r.evidence)} flagged`, r.evidence.high ? 'bad' : 'warn'), ' ', h('a', { href: `#/project/${pid}/evidence`, dataset: { key: `ov-evidence-${prov}` } }, 'see why'), h('span', { class: 'muted' }, ' (no score changes)'))
         : null,
       h('p', { class: 'small faint', style: { margin: '8px 0 0' } }, routeText(r)),
       newer,
@@ -361,7 +361,7 @@ function scorecardsTab(ctx, d, latest, route) {
       ], parts.length ? parts : grading.investment_components.map((c) => ({ id: c.id, label: c.label, weight_pct: c.weight_bp / 100 })))),
       h('h3', { style: { marginTop: '20px' } }, 'Category grades (higher is better, never averaged into the grade)'),
       h('p', { class: 'small muted', style: { margin: '0 0 8px' } }, `${counts.scored} of ${counts.total} scored${counts.unknown ? `; ${counts.unknown} unknown, with no number` : ''}. Scoring profile ${a.sector_profile || 'not declared'}.${confidenceLine(counts) ? ` ${confidenceLine(counts)}` : ''}`),
-      categoryTable(rows, { corrected: (cid) => originalOf(r, `diagnostic_scores.${cid}`) }),
+      categoryTable(rows, { corrected: (cid) => originalOf(r, `diagnostic_scores.${cid}`), flags: (r.evidence && r.evidence.flags) || [] }),
       h('h3', { style: { marginTop: '20px' } }, 'Downside risk (higher means more risk)'),
       (table([
         { label: 'Risk', render: (x) => h('span', { title: x.definition }, x.label) },
@@ -458,14 +458,22 @@ function claimReviewControls(ctx, d, r, c, rev) {
   return h('div', { style: { display: 'grid', gap: '6px', minWidth: '210px' } }, check, corr, btn);
 }
 
-// The desk's evidence checks on one report's claims (core/evidence.js):
-// flags with the reason and what would settle each; never a score change.
+// How many claims and category grades the evidence checks flagged, in words.
+export function flaggedText(ev) {
+  const claims = ev.flagged_claims || ev.flagged || 0;
+  const cats = ev.flagged_categories || 0;
+  return [claims ? `${claims} claim${claims === 1 ? '' : 's'}` : null, cats ? `${cats} category grade${cats === 1 ? '' : 's'}` : null].filter(Boolean).join(' and ') || 'nothing';
+}
+
+// The desk's evidence checks on one report's claims and category grades
+// (core/evidence.js): flags with the reason and what would settle each;
+// never a score change.
 const SEVERITY_TONE = { high: 'bad', medium: 'warn', low: '' };
 export function evidenceChecksBlock(ev) {
   if (!ev) return null;
   return h('div', { class: 'small', style: { margin: '0 0 10px' } },
     h('p', { style: { margin: '0 0 4px' } },
-      stateText(ev.flags.length ? `${ev.flagged_claims} claim${ev.flagged_claims === 1 ? '' : 's'} need better evidence` : 'Evidence checks: nothing flagged', ev.high ? 'bad' : ev.flags.length ? 'warn' : 'ok'),
+      stateText(ev.flags.length ? `${flaggedText(ev)} flagged` : 'Evidence checks: nothing flagged', ev.high ? 'bad' : ev.flags.length ? 'warn' : 'ok'),
       ' ', h('span', { class: 'muted' }, ev.summary)),
     ev.flags.length ? h('ul', { class: 'list small' }, ev.flags.map((x) => h('li', null, stateText(x.severity, SEVERITY_TONE[x.severity]), ' ', x.message))) : null,
     ev.source_types && ev.source_types.outside_list.length
@@ -478,7 +486,7 @@ function claimsTable(ctx, d, r) {
   const sources = new Map((r.assessment.sources || []).map((s) => [s.source_id, s]));
   // The worst desk flag on each claim, shown next to its text.
   const worst = new Map();
-  for (const x of (r.evidence && r.evidence.flags) || []) if (!worst.has(x.claim_id)) worst.set(x.claim_id, x);
+  for (const x of (r.evidence && r.evidence.flags) || []) if (x.claim_id && !worst.has(x.claim_id)) worst.set(x.claim_id, x);
   return (table([
     { label: 'Claim', wrap: true, render: (c) => h('div', null, h('span', { class: 'faint small' }, `${c.claim_id} `), c.text, c.limitation ? h('div', { class: 'small muted' }, `Limitation: ${c.limitation}`) : null, worst.has(c.claim_id) ? h('div', { class: 'small' }, stateText(`Desk check: ${worst.get(c.claim_id).severity}`, SEVERITY_TONE[worst.get(c.claim_id).severity]), ' ', h('span', { class: 'muted' }, worst.get(c.claim_id).message)) : null) },
     { label: 'Analyst tag', render: (c) => tagChip(c.evidence_tag, c.evidence_tag_raw) },
@@ -581,7 +589,7 @@ function atAGlance(ctx, d, r, withheld) {
         h('dl', { class: 'facts' }, h('div', { class: 'wide' }, h('dt', null, 'Horizon'), h('dd', null, a.horizon || 'not stated')))),
       h('div', null,
         h('div', { class: 'small muted' }, 'Investment grade (calculated by this app)'), gradeEl)),
-    categoryGlance(rows, `#/project/${pid}/scorecards?provider=${r.meta.provider}`),
+    categoryGlance(rows, `#/project/${pid}/scorecards?provider=${r.meta.provider}`, { flags: (r.evidence && r.evidence.flags) || [] }),
     positivesAndRisks(a),
     chartCycleBlock(a),
     catalystsBlock(a),
@@ -1051,13 +1059,65 @@ function jobRow(ctx, pid, run, prov, projectName = pid) {
     prov,
     state: key === 'waiting' && hosted ? h('div', { class: 'job-state' }, stateText('Waiting for you', st.tone), waitingStep(prov)) : stateText(st.long, st.tone),
     mode: h('span', { class: 'small' }, j.mode === 'manual' ? (hosted ? 'Its assistant\'s connection, or by hand' : 'By hand: paste the prompt, import the answer') : j.mode === 'cowork' ? 'Claude in Cowork' : j.mode === 'connector' ? `${PROVIDER_LABELS[prov]} through its desk connection` : j.mode === 'mock' ? 'Fictional demo adapter' : `API, in the background${j.model ? ` · ${j.model}` : ''}`),
-    attempts: attempts.length ? h('div', { class: 'small' }, attempts.map((a) => {
-      const cost = attemptCost(a);
-      return h('div', null, `#${a.n} ${PHASE_TEXT[a.phase] || String(a.phase || a.outcome || 'in progress').replace(/_/g, ' ')}`, a.usage ? h('span', { class: 'faint' }, ` · ${a.usage.input_tokens ?? '?'} in / ${a.usage.output_tokens ?? '?'} out tokens`) : null, cost ? h('span', { class: a.phase === 'uncertain' ? null : 'faint' }, ` · ${cost}`) : null, a.response_sha256 ? h('span', { class: 'faint', title: `Raw response saved before normalization: ${a.response_path}` }, ` · response saved`) : null);
-    })) : h('span', { class: 'faint small' }, 'None'),
+    attempts: attempts.length ? h('div', { class: 'small' }, attempts.map((a) => attemptLine(a))) : h('span', { class: 'faint small' }, 'None'),
     error: j.error ? h('span', { class: 'small', style: { color: 'var(--neg)' } }, j.error) : j.note ? h('span', { class: 'small muted' }, j.note) : null,
     actions: actions.length ? h('div', { class: 'btn-row' }, actions) : null,
   };
+}
+
+// Why an answer stopped early, in words (research.js termination codes).
+const TERMINATION_TEXT = {
+  ended_before_message_stop: 'the connection ended before the answer was complete',
+  stream_unreadable: 'the answer stream could not be read',
+  max_tokens: 'it ran out of its output limit',
+  pause_turn: 'it was still researching after the most requests allowed',
+  pause_turn_not_resumable: 'it paused and could not be resumed exactly',
+  refusal: 'the model declined',
+  timeout: 'the time limit ran out',
+  canceled: 'it was canceled',
+  cancelled: 'it was cancelled',
+  'incomplete: max_output_tokens': 'it ran out of its output limit',
+};
+const terminationText = (t) => TERMINATION_TEXT[t] || (/^error_event/.test(t) ? `the provider reported an error mid-answer${t.includes(':') ? ` (${t.split(': ')[1]})` : ''}` : String(t).replace(/_/g, ' '));
+
+// One attempt: what happened, the usage the provider reported (or, for an
+// answer that stopped early, what was seen before it stopped, labeled
+// incomplete: a lower bound, never the bill), its cost, and whether it kept a
+// partial answer (shown below the table, full width, by partialView).
+function attemptLine(a) {
+  const cost = attemptCost(a);
+  const usage = a.usage
+    ? h('span', { class: 'faint' }, ` · ${a.usage.input_tokens ?? '?'} in / ${a.usage.output_tokens ?? '?'} out tokens`)
+    : a.partial_usage
+      ? h('span', { class: 'faint', title: a.usage_note || '' }, ` · incomplete usage: at least ${a.partial_usage.input_tokens ?? '?'} in / ${a.partial_usage.output_tokens ?? '?'} out tokens before it stopped`)
+      : null;
+  return h('div', null,
+    `#${a.n} ${PHASE_TEXT[a.phase] || String(a.phase || a.outcome || 'in progress').replace(/_/g, ' ')}`,
+    usage,
+    cost ? h('span', { class: a.phase === 'uncertain' ? null : 'faint' }, ` · ${cost}`) : null,
+    a.response_sha256 ? h('span', { class: 'faint', title: `Raw response saved before normalization: ${a.response_path}${a.request_id ? ` · request ${a.request_id}` : ''}${a.response_id ? ` · response ${a.response_id}` : ''}` }, ` · response saved`) : null,
+    a.partial_output ? h('span', null, ' · partial answer kept (below the table)') : null);
+}
+
+// The text an answer wrote before it stopped, loaded only when opened. Kept
+// for reading only: it is never imported, graded or compared.
+function partialView(ctx, pid, run, prov, a) {
+  const url = `/api/projects/${pid}/research/${run.run_id}/jobs/${prov}/attempts/${a.n}/partial`;
+  const key = `partial-${run.run_id}-${prov}-${a.n}`;
+  const cached = textCache.has(url);
+  const box = h('pre', { class: 'prompt-text pre small', 'data-keep-scroll': key, dataset: cached ? { loaded: '1' } : null }, cached ? textCache.get(url) : 'Loading the partial answer…');
+  const view = h('details', { class: 'prompt-view', dataset: { key } },
+    h('summary', null, `Partial answer kept: ${PROVIDER_LABELS[prov]}, attempt #${a.n} (${fmtNum(a.partial_output.chars)} characters; not a report, not graded)`),
+    h('p', { class: 'small muted', style: { margin: '6px 0' } }, `What ${PROVIDER_LABELS[prov]} wrote before the answer stopped${a.termination ? ` (${terminationText(a.termination)})` : ''}. Kept for reading only: never saved as a report, graded or compared.`),
+    box);
+  const load = () => {
+    if (!view.open || box.dataset.loaded) return;
+    cachedText(ctx, url).then((t) => { box.textContent = t; box.dataset.loaded = '1'; }).catch((err) => { box.textContent = `The partial answer could not be loaded: ${err.message}`; });
+  };
+  view.addEventListener('toggle', load);
+  // Opened again after a redraw: load at once.
+  queueMicrotask(load);
+  return view;
 }
 
 // The exact prompt every model got, readable on the page (a phone has no
@@ -1094,6 +1154,7 @@ function researchTab(ctx, d, row) {
         { label: 'Note', wrap: true, render: (x) => x.error },
         { label: '', render: (x) => x.actions },
       ], run.providers.filter((p) => run.jobs[p]).map((p) => jobRow(ctx, pid, run, p, d.project.name)))),
+      ...run.providers.filter((p) => run.jobs[p]).flatMap((p) => (run.jobs[p].attempts || []).filter((a) => a.partial_output).map((a) => partialView(ctx, pid, run, p, a))),
       details('Run details', kv([
         ['Run ID', h('code', null, run.run_id)],
         ['Started by', `${run.created_by || '?'} via ${run.channel || '?'}`],
