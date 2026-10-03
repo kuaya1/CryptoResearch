@@ -13,6 +13,25 @@ const { SECTORS, normalizeSector } = require('./sectors');
 
 const GENERIC_WORDS = new Set(['network', 'protocol', 'finance', 'financial', 'labs', 'foundation', 'token', 'coin', 'dao', 'chain', 'the', 'project', 'official']);
 
+// Sites that list, chart or discuss a token but are not the project's own:
+// market data, DEX screeners, block explorers, social networks, link pages and
+// code hosts. A page on one of these hosts (or a subdomain of one) is a lead,
+// never the official website, and never makes two projects "the same".
+const NON_OFFICIAL_HOSTS = new Set([
+  'coinmarketcap.com', 'coingecko.com', 'geckoterminal.com', 'dexscreener.com', 'dextools.io', 'defillama.com',
+  'etherscan.io', 'bscscan.com', 'basescan.org', 'arbiscan.io', 'polygonscan.com', 'optimistic.etherscan.io', 'snowtrace.io',
+  'solscan.io', 'explorer.solana.com', 'solana.fm', 'tronscan.org', 'suiscan.xyz',
+  'x.com', 'twitter.com', 't.me', 'discord.gg', 'discord.com', 'medium.com', 'linktr.ee', 'github.com',
+]);
+// GitBook's own site is not a project's; a project's docs on its own
+// gitbook.io subdomain are.
+const NON_OFFICIAL_EXACT_HOSTS = new Set(['gitbook.io']);
+// Names that are a market-data site or explorer, not a project (the host of a
+// pasted link taken as the name).
+const AGGREGATOR_NAMES = new Set(['coinmarketcap', 'coingecko', 'geckoterminal', 'dexscreener', 'defillama', 'etherscan', 'bscscan', 'basescan', 'arbiscan', 'polygonscan', 'snowtrace', 'solscan', 'solanafm', 'tronscan', 'suiscan']);
+const LISTING_NOTE = 'Market listing or explorer page: a lead, not the official website';
+const LISTING_UNKNOWN = 'Official website not confirmed (a market listing page is not the project\'s own site).';
+
 function coreName(name) {
   const words = String(name || '')
     .toLowerCase()
@@ -26,13 +45,33 @@ function coreName(name) {
   return (kept.length ? kept : words).join(' ');
 }
 
+// The whole host name without "www.": projecta.gitbook.io and
+// projectb.gitbook.io, or foo.co.uk and bar.co.uk, are different sites.
 function domainOf(url) {
   try {
-    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
-    return host.split('.').slice(-2).join('.');
+    return new URL(url).hostname.toLowerCase().replace(/\.$/, '').replace(/^www\./, '') || null;
   } catch (_) {
     return null;
   }
+}
+
+function isNonOfficialHost(url) {
+  const s = String(url || '').trim();
+  if (!s) return false;
+  const host = domainOf(/^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `https://${s}`);
+  if (!host) return false;
+  if (NON_OFFICIAL_EXACT_HOSTS.has(host)) return true;
+  for (const h of NON_OFFICIAL_HOSTS) if (host === h || host.endsWith(`.${h}`)) return true;
+  return false;
+}
+
+function isAggregatorName(name) {
+  const s = String(name || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\.(com|io|org|xyz|fm)\/?$/, '').replace(/[^a-z0-9]+/g, '');
+  return AGGREGATOR_NAMES.has(s);
+}
+
+function refuseAggregatorName(name) {
+  if (isAggregatorName(name)) throw new OpError('INVALID', 'That is the name of a market-data site, not a project; use the project\'s own name.');
 }
 
 // EVM addresses are case-insensitive; others (e.g. Solana) are compared exactly.
@@ -78,7 +117,7 @@ function findDuplicates(ws, input, { excludeId = null } = {}) {
   const inId = slugify(input.name || '');
   const inCore = coreName(input.name);
   const inAliases = (input.aliases || []).map(coreName);
-  const inDomain = input.official_website ? domainOf(input.official_website) : null;
+  const inDomain = input.official_website && !isNonOfficialHost(input.official_website) ? domainOf(input.official_website) : null;
   const inCg = input.coingecko_id ? String(input.coingecko_id).toLowerCase() : null;
   const inAddrs = (input.assets || []).map((a) => normAddress(a && a.contract_address)).filter(Boolean);
   const inSym = input.symbol ? String(input.symbol).toUpperCase() : null;
@@ -93,7 +132,7 @@ function findDuplicates(ws, input, { excludeId = null } = {}) {
     if (inCg && cgs.includes(inCg)) reasons.push('same CoinGecko ID');
     const addrs = [...(id.assets || []), ...(id.candidates || []).flatMap((c) => c.assets || [])].map((a) => normAddress(a.contract_address)).filter(Boolean);
     if (inAddrs.some((a) => addrs.includes(a))) reasons.push('same contract address');
-    const domain = id.official_website ? domainOf(id.official_website) : null;
+    const domain = id.official_website && !isNonOfficialHost(id.official_website) ? domainOf(id.official_website) : null;
     if (inDomain && domain && inDomain === domain) reasons.push('same official website');
     if (reasons.length) {
       strong.push({ project_id: p.project_id, name: p.name, status: p.status, reasons });
@@ -134,9 +173,16 @@ function providerList(list) {
 }
 
 function buildIdentity(input) {
-  const website = input.official_website ? safeUrl(input.official_website) : null;
+  let website = input.official_website ? safeUrl(input.official_website) : null;
   const assets = cleanAssets(input.assets);
   const evidence = cleanEvidence(input.evidence);
+  // A CoinMarketCap, CoinGecko or explorer page given as the website is kept
+  // as a lead (evidence), never as the official website.
+  const listing = website && isNonOfficialHost(website);
+  if (listing) {
+    if (!evidence.some((e) => e.url === website)) evidence.push({ kind: 'listing', url: website, checked_at: new Date().toISOString(), note: LISTING_NOTE });
+    website = null;
+  }
   const cg = input.coingecko_id ? String(input.coingecko_id).trim().toLowerCase() : null;
   const hasBinding = Boolean(cg) || assets.some((a) => a.contract_address);
   const unknowns = [...(input.unknowns || [])];
@@ -144,7 +190,7 @@ function buildIdentity(input) {
   if (input.identity_status === 'ambiguous') status = 'ambiguous';
   else if (input.identity_status !== 'pending' && website && hasBinding && evidence.length) status = 'verified';
   if (status !== 'verified') {
-    if (!website) unknowns.push('Official website not confirmed.');
+    if (!website) unknowns.push(listing ? LISTING_UNKNOWN : 'Official website not confirmed.');
     if (!hasBinding) unknowns.push('Token not bound to a CoinGecko ID or contract.');
     if (!evidence.length) unknowns.push('No identity evidence URL recorded.');
   }
@@ -170,6 +216,7 @@ function validateProject(ws, project) {
 function addProject(ws, input) {
   const name = String(input.name || '').trim();
   if (!name) throw new OpError('INVALID', 'A project name is required.');
+  refuseAggregatorName(name);
   const sectorIn = input.sector ? normalizeSector(input.sector, { source: 'owner' }) : null;
   if (input.sector && !sectorIn) throw new OpError('INVALID', `Unknown sector "${typeof input.sector === 'object' ? input.sector.primary : input.sector}". Use one of: ${SECTORS.map((s) => s.label).join(', ')}.`);
   const profileRef = input.sector_profile || (sectorIn ? SECTORS.find((s) => s.id === sectorIn.primary).suggests_profile : 'general-token@1');
@@ -288,11 +335,17 @@ function setWatchlist(ws, id, on) {
 
 function updateIdentity(ws, id, input) {
   const current = getProject(ws, id);
+  // A market listing offered as the website never replaces the project's own
+  // site on file; it is kept as a lead.
+  const site = current.identity.official_website;
+  const keepSite = Boolean(input.official_website && isNonOfficialHost(input.official_website) && site && !isNonOfficialHost(site));
+  const evidence = [...(current.identity.evidence || []), ...(input.evidence || [])];
+  if (keepSite && !evidence.some((e) => e && safeUrl(e.url) === safeUrl(input.official_website))) evidence.push({ kind: 'listing', url: input.official_website, note: LISTING_NOTE });
   const merged = {
-    official_website: input.official_website !== undefined ? input.official_website : current.identity.official_website,
+    official_website: input.official_website !== undefined && !keepSite ? input.official_website : site,
     coingecko_id: input.coingecko_id !== undefined ? input.coingecko_id : current.identity.coingecko_id || (current.identity.candidates[0] || {}).coingecko_id,
     assets: input.assets !== undefined ? input.assets : current.identity.assets.length ? current.identity.assets : (current.identity.candidates[0] || {}).assets,
-    evidence: [...(current.identity.evidence || []), ...(input.evidence || [])],
+    evidence,
     identity_status: input.identity_status,
     unknowns: input.unknowns || [],
   };
@@ -335,6 +388,7 @@ function archiveProject(ws, id, reason) {
 function updateProjectFields(ws, id, fields) {
   const allowed = ['symbol', 'aliases', 'tags', 'sector_profile', 'sector_note', 'name', 'sector', 'research_defaults'];
   for (const k of Object.keys(fields)) if (!allowed.includes(k)) throw new OpError('INVALID', `Field ${k} cannot be changed here.`);
+  if (fields.name !== undefined) refuseAggregatorName(fields.name);
   if (fields.sector_profile && !ws.rubrics.profiles[fields.sector_profile]) throw new OpError('INVALID', `Unknown sector profile ${fields.sector_profile}`);
   let sector;
   if (fields.sector !== undefined) {
@@ -372,6 +426,9 @@ function generatePrompts(ws, id, providers = PROVIDERS) {
 module.exports = {
   coreName,
   domainOf,
+  isNonOfficialHost,
+  isAggregatorName,
+  NON_OFFICIAL_HOSTS,
   loadProject,
   getProject,
   listProjects,

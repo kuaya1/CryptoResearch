@@ -16,8 +16,11 @@ const http = require('http');
 const crypto = require('crypto');
 const hosted = require('../hosted');
 const { start } = require('../server');
-const { redirectAllowed, redirectKind, redirectMatches, guessLocal, CLAUDE_CALLBACK, CHATGPT_CALLBACK } = require('../oauth');
+const { makeOAuth, redirectAllowed, redirectKind, redirectMatches, guessLocal, CLAUDE_CALLBACK, CHATGPT_CALLBACK } = require('../oauth');
+const { modelsAsked } = require('../mcp');
 const research = require('../core/research');
+const projects = require('../core/projects');
+const { tempWorkspace } = require('./helpers');
 const { runOp } = require('../core/ops');
 const { mockReport } = require('../core/demo');
 const { readJson } = require('../core/fsx');
@@ -223,13 +226,17 @@ test('connector: Claude discovers the sign-in, registers, gets the passphrase co
   assert.equal(bad.status, 401);
   assert.match(bad.headers['www-authenticate'], /error="invalid_token"/);
 
-  // Refresh tokens rotate: the old one stops working.
+  // Refresh tokens rotate. The replaced one still works for a short grace (a
+  // lost answer), with a fresh pair; after it, it is refused (tested with a
+  // moved clock below).
   const r1 = await req(d.port, { method: 'POST', path: '/oauth/token', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form({ grant_type: 'refresh_token', refresh_token: c.refresh, client_id: c.clientId }) });
   assert.equal(r1.status, 200);
   assert.notEqual(r1.json.refresh_token, c.refresh);
   const again = await req(d.port, { method: 'POST', path: '/oauth/token', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form({ grant_type: 'refresh_token', refresh_token: c.refresh, client_id: c.clientId }) });
-  assert.equal(again.status, 400);
-  assert.equal(again.json.error, 'invalid_grant');
+  assert.equal(again.status, 200, 'within the grace');
+  assert.notEqual(again.json.refresh_token, r1.json.refresh_token);
+  const otherClient = await req(d.port, { method: 'POST', path: '/oauth/token', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form({ grant_type: 'refresh_token', refresh_token: c.refresh, client_id: 'crc_someone_else' }) });
+  assert.equal(otherClient.json.error, 'invalid_client');
 
   // Only hashes are stored; the connection survives a restart.
   const stored = fs.readFileSync(path.join(d.ws.root, '.cr', 'oauth.json'), 'utf8');
@@ -817,4 +824,341 @@ test('connector: a transaction is recorded only on an explicit request, asks for
   assert.equal(pf.data.positions.length, 1);
   assert.equal(pf.data.positions[0].quantity, '1500');
   assert.equal(pf.data.positions[0].price, 'unavailable', 'no price source: unavailable, not zero');
+});
+
+// The settings that put ChatGPT and Gemini on their paid APIs in a test desk
+// (FICTIONAL keys and models; every request goes to the test's stub).
+function apiRoute(t, d) {
+  withKeys(t, { OPENAI_API_KEY: 'test-openai-key-fictional', GEMINI_API_KEY: 'test-gemini-key-fictional' });
+  const file = path.join(d.ws.root, 'config', 'settings.json');
+  const s = readJson(file);
+  s.research.providers.chatgpt = { model: 'gpt-fictional-test', input_usd_per_mtok: 2, output_usd_per_mtok: 10, search_usd_per_call: 0.01, max_searches: 5 };
+  s.research.providers.gemini = { model: 'gemini-fictional-test', input_usd_per_mtok: 1.25, output_usd_per_mtok: 10, max_searches: 0 };
+  fs.writeFileSync(file, JSON.stringify(s));
+  d.ws.reloadSettings();
+}
+
+const jobCount = (ws, pid, provider) => research.listRuns(ws, pid).filter((r) => r.jobs && r.jobs[provider]).length;
+
+test('connector: "all three models" again after Claude saved, while ChatGPT and Gemini are still waiting, starts nothing new: the same run, no second job', async (t) => {
+  const d = await desk(t, 'no-dup');
+  withKeys(t, {});
+  const claude = await connect(d);
+  const pid = (await tool(d, claude.access, 'add_project', EXAMPLECOIN)).data.project.project_id;
+  const ask = { project_id: pid, owner_request: 'Research Examplecoin with all three models (FICTIONAL)', models: 'all' };
+  const first = await tool(d, claude.access, 'start_research', ask);
+  assert.equal(first.data.status, 'created', first.text);
+  const runId = first.data.run.run_id;
+  const cs = await tool(d, claude.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: mockReport(d.ws, 'claude', research.loadRun(d.ws, pid, runId)) });
+  assert.equal(cs.data.status, 'saved', cs.text);
+  const jobsBefore = research.loadRun(d.ws, pid, runId).jobs;
+
+  // Eric repeats the request: before, this made a second run with new ChatGPT and Gemini jobs.
+  const again = await tool(d, claude.access, 'start_research', ask);
+  assert.equal(again.data.status, 'in_progress', again.text);
+  assert.equal(again.data.run.run_id, runId);
+  assert.match(again.data.message, /^Nothing new was started: ChatGPT and Gemini are already in research run run_\S+ for Examplecoin \(FICTIONAL\)/);
+  assert.match(again.data.message, /ChatGPT: waiting for ChatGPT: Eric says "Do my waiting CryptoResearch research"/);
+  assert.match(again.data.message, /Gemini: waiting for Gemini/);
+  assert.match(again.data.message, /Claude saved a report [\d.]+ h ago/);
+  assert.equal(research.listRuns(d.ws, pid).length, 1, 'no second run');
+  assert.deepEqual(research.loadRun(d.ws, pid, runId).jobs, jobsBefore, 'no job changed');
+  // The same from Eric's words alone (an assistant whose tool list predates models).
+  const words = await tool(d, claude.access, 'start_research', { project_id: pid, owner_request: 'Research Examplecoin again with all three models, no rush on Gemini (FICTIONAL)' });
+  assert.equal(words.data.status, 'in_progress', words.text);
+  assert.equal(research.listRuns(d.ws, pid).length, 1);
+
+  // A model still open in an older run (too old to join) gets no second job
+  // either: the new run is for the others only.
+  const solo = (await tool(d, claude.access, 'add_project', { ...EXAMPLECOIN, name: 'Solocoin (FICTIONAL)', symbol: 'SOLO', official_website: 'https://solocoin.example/', contracts: [{ chain: 'base', address: '0x3333333333333333333333333333333333333333' }], evidence: [{ url: 'https://solocoin.example/' }] })).data.project.project_id;
+  const old = research.createRun(d.ws, { project_id: solo, providers: ['chatgpt'], channel: 'dashboard', utterance: 'ChatGPT research for Solocoin (FICTIONAL)' });
+  runOp(d.ws, { type: 'test_age', summary: 'make a run two days old' }, (op) => {
+    const rel = `projects/${solo}/research/${old.run_id}/run.json`;
+    const r = op.readJson(rel);
+    r.created_at = new Date(Date.now() - 48 * 3600000).toISOString();
+    op.writeJson(rel, r);
+  });
+  const fresh = await tool(d, claude.access, 'start_research', { project_id: solo, owner_request: 'Research Solocoin with all three models (FICTIONAL)', models: 'all' });
+  assert.equal(fresh.data.status, 'created', fresh.text);
+  assert.deepEqual(fresh.data.run.models, ['claude', 'gemini']);
+  assert.match(fresh.data.message, new RegExp(`ChatGPT is still open in ${old.run_id} \\(waiting for ChatGPT.*\\); not started again\\.$`));
+  assert.equal(jobCount(d.ws, solo, 'chatgpt'), 1);
+});
+
+test('connector: with paid APIs set up, "all three models" again while ChatGPT and Gemini are still running on their APIs sends nothing twice', async (t) => {
+  const d = await desk(t, 'no-dup-api');
+  apiRoute(t, d);
+  const claude = await connect(d);
+  // The answers are held until the test lets them go, so both jobs stay in flight.
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    calls.push(u);
+    await held;
+    const body = JSON.parse(init.body);
+    const runId = (String(body.input || (body.contents && body.contents[0].parts[0].text) || '').match(/run_[A-Za-z0-9_-]+/) || [])[0];
+    const run = research.loadRun(d.ws, 'examplecoin-fictional', runId);
+    if (u === 'https://api.openai.com/v1/responses') {
+      return new Response(JSON.stringify({ id: 'resp_fictional_held', model: 'gpt-fictional-test', status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: mockReport(d.ws, 'chatgpt', run) }] }], usage: { input_tokens: 1000, output_tokens: 1000 } }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({ error: { code: 400, message: 'FICTIONAL: API key not valid.' } }), { status: 400, headers: { 'content-type': 'application/json' } });
+  };
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const pid = (await tool(d, claude.access, 'add_project', EXAMPLECOIN)).data.project.project_id;
+  const ask = { project_id: pid, owner_request: 'Research Examplecoin with all three models (FICTIONAL)', models: 'all' };
+  const first = await tool(d, claude.access, 'start_research', ask);
+  assert.equal(first.data.status, 'created', first.text);
+  const runId = first.data.run.run_id;
+  await waitFor(() => calls.length === 2);
+  const cs = await tool(d, claude.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: mockReport(d.ws, 'claude', research.loadRun(d.ws, pid, runId)) });
+  assert.equal(cs.data.status, 'saved', cs.text);
+
+  const again = await tool(d, claude.access, 'start_research', ask);
+  assert.equal(again.data.status, 'in_progress', again.text);
+  assert.equal(again.data.run.run_id, runId);
+  assert.match(again.data.message, /ChatGPT: running on the ChatGPT API in the background\. Gemini: running on the Gemini API in the background/);
+  await new Promise((r) => setTimeout(r, 800));
+  assert.equal(calls.length, 2, 'no second paid request');
+  assert.equal(research.listRuns(d.ws, pid).length, 1, 'no second run');
+  const run = research.loadRun(d.ws, pid, runId);
+  assert.deepEqual(['chatgpt', 'gemini'].map((p) => run.jobs[p].attempts.length), [1, 1]);
+
+  // Let the answers in, and finish cleanly.
+  release();
+  await waitFor(() => {
+    const r = research.loadRun(d.ws, pid, runId);
+    return ['completed', 'failed'].includes(r.jobs.chatgpt.state) && ['completed', 'failed'].includes(r.jobs.gemini.state);
+  });
+  assert.equal(research.loadRun(d.ws, pid, runId).jobs.chatgpt.state, 'completed');
+});
+
+test('connector: adding a project already there with a pending identity completes that identity instead of dropping it', async (t) => {
+  const d = await desk(t, 'exists-identity');
+  const claude = await connect(d);
+  // Added from the dashboard with its website only (FICTIONAL).
+  projects.addProject(d.ws, { name: 'Sandcastle (FICTIONAL)', official_website: 'https://www.sandcastle.example/en/' });
+  // "The Sandcastle" is the same project by name ("the" does not count).
+  const add = await tool(d, claude.access, 'add_project', { name: 'The Sandcastle (FICTIONAL)', symbol: 'SCF', official_website: 'https://www.sandcastle.example/en/', coingecko_id: 'sandcastle-fictional', contracts: [{ chain: 'ethereum', address: '0x7777777777777777777777777777777777777777' }], evidence: [{ url: 'https://www.sandcastle.example/token', note: 'fictional official token page' }], owner_request: 'Add The Sandcastle (FICTIONAL)' });
+  assert.equal(add.isError, false, add.text);
+  assert.equal(add.data.status, 'exists');
+  assert.equal(add.data.identity_status, 'verified');
+  assert.match(add.data.message, /^Already on the desk as Sandcastle \(FICTIONAL\) \(sandcastle-fictional; same name, same official website\); nothing was added twice\. Its identity was pending; what you supplied completed it, and it is verified now\./);
+  const p = projects.getProject(d.ws, 'sandcastle-fictional');
+  assert.equal(p.status, 'active');
+  assert.equal(p.identity.coingecko_id, 'sandcastle-fictional');
+  assert.equal(p.identity.assets[0].contract_address, '0x7777777777777777777777777777777777777777');
+  assert.equal(projects.listProjects(d.ws).length, 1, 'still one project');
+
+  // Only a website and evidence: an earlier guess of the token stays a guess.
+  projects.addProject(d.ws, { name: 'Tidepool (FICTIONAL)', coingecko_id: 'tidepool-guess-fictional' });
+  const site = await tool(d, claude.access, 'add_project', { name: 'Tidepool (FICTIONAL)', official_website: 'https://tidepool.example/', evidence: [{ url: 'https://tidepool.example/' }], owner_request: 'add Tidepool (FICTIONAL)' });
+  assert.equal(site.data.status, 'exists');
+  assert.equal(site.data.identity_status, 'pending');
+  assert.match(site.data.message, /still pending: Token binding not confirmed: the CoinGecko ID or contract on file is an unconfirmed candidate\. Complete it with update_project_identity/);
+  const tp = projects.getProject(d.ws, 'tidepool-fictional').identity;
+  assert.equal(tp.official_website, 'https://tidepool.example/');
+  assert.equal(tp.coingecko_id, null);
+  assert.equal(tp.candidates[0].coingecko_id, 'tidepool-guess-fictional');
+
+  // An identity that belongs to another project is not added, and says so.
+  projects.addProject(d.ws, { name: 'Reef (FICTIONAL)', official_website: 'https://reef.example/', coingecko_id: 'reef-fictional', evidence: [{ url: 'https://reef.example/' }] });
+  projects.addProject(d.ws, { name: 'Atoll (FICTIONAL)', official_website: 'https://atoll.example/' });
+  const clash = await tool(d, claude.access, 'add_project', { name: 'Atoll (FICTIONAL)', coingecko_id: 'reef-fictional', evidence: [{ url: 'https://atoll.example/' }], owner_request: 'add Atoll (FICTIONAL)' });
+  assert.equal(clash.isError, false, clash.text);
+  assert.equal(clash.data.status, 'exists');
+  assert.equal(clash.data.identity_status, 'pending');
+  assert.match(clash.data.identity_conflict, /already belongs to "reef-fictional"/);
+  assert.match(clash.data.message, /The identity you supplied was not added: .*Show Eric both projects/);
+  assert.equal(projects.getProject(d.ws, 'atoll-fictional').identity.status, 'pending');
+});
+
+test('connector: a CoinMarketCap page is never taken as the official website or as the project name, and find_projects ignores such websites', async (t) => {
+  const d = await desk(t, 'listing');
+  const claude = await connect(d);
+  const listed = await tool(d, claude.access, 'add_project', { name: 'Lagoon (FICTIONAL)', official_website: 'https://coinmarketcap.com/currencies/lagoon-fictional/', coingecko_id: 'lagoon-fictional', evidence: [{ url: 'https://coinmarketcap.com/currencies/lagoon-fictional/' }], owner_request: 'add this https://coinmarketcap.com/currencies/lagoon-fictional/' });
+  assert.equal(listed.data.status, 'created', listed.text);
+  assert.equal(listed.data.project.identity.status, 'pending');
+  assert.equal(listed.data.project.identity.official_website, null);
+  assert.ok(listed.data.project.identity.unknowns.includes('Official website not confirmed (a market listing page is not the project\'s own site).'));
+  // Another project pasted as a CoinMarketCap link is a different project, not "the same website".
+  const other = await tool(d, claude.access, 'add_project', { name: 'Estuary (FICTIONAL)', official_website: 'https://coinmarketcap.com/currencies/estuary-fictional/', evidence: [{ url: 'https://coinmarketcap.com/currencies/estuary-fictional/' }], owner_request: 'add Estuary (FICTIONAL)' });
+  assert.equal(other.data.status, 'created', other.text);
+  // The market-data site's name is refused as a project name.
+  const named = await tool(d, claude.access, 'add_project', { name: 'Coinmarketcap', official_website: 'https://coinmarketcap.com/currencies/avantis/', evidence: [{ url: 'https://coinmarketcap.com/currencies/avantis/' }], owner_request: 'add https://coinmarketcap.com/currencies/avantis/' });
+  assert.equal(named.isError, true);
+  assert.match(named.text, /That is the name of a market-data site, not a project; use the project's own name\. \(INVALID\)/);
+  // An older record may still hold a listing page as its website: a search for
+  // the site's name does not match it.
+  runOp(d.ws, { type: 'test_legacy_record', summary: 'a record saved before listings were refused' }, (op) => {
+    const rel = 'projects/estuary-fictional/project.json';
+    const p = op.readJson(rel);
+    p.identity.official_website = 'https://coinmarketcap.com/currencies/estuary-fictional/';
+    op.writeJson(rel, p);
+  });
+  assert.deepEqual((await tool(d, claude.access, 'find_projects', { query: 'coinmarketcap.com' })).data.matches, []);
+  assert.deepEqual((await tool(d, claude.access, 'find_projects', { query: 'estuary' })).data.matches.map((m) => m.project_id), ['estuary-fictional']);
+});
+
+test('connector: research needs a verified identity, unless Eric confirmed it cannot be completed; resuming your own open job still works', async (t) => {
+  const d = await desk(t, 'identity-gate');
+  withKeys(t, {});
+  const claude = await connect(d);
+  const id = projects.addProject(d.ws, { name: 'Shoal (FICTIONAL)', official_website: 'https://shoal.example/' }).project_id;
+  const refused = await tool(d, claude.access, 'start_research', { project_id: id, owner_request: 'Research Shoal with all three models (FICTIONAL)', models: 'all' });
+  assert.equal(refused.isError, false, refused.text);
+  assert.equal(refused.data.status, 'needs_identity');
+  assert.deepEqual(refused.data.missing, ['Token not bound to a CoinGecko ID or contract.', 'No identity evidence URL recorded.']);
+  assert.match(refused.data.message, /^Nothing was started: Shoal \(FICTIONAL\)'s identity is pending, and every model has to research the same verified project\. Missing: Token not bound/);
+  assert.match(refused.data.message, /Complete it with update_project_identity first/);
+  assert.match(refused.data.message, /Only if Eric confirmed the project has no token yet or cannot be identified further, call start_research again with allow_pending_identity: true\./);
+  assert.equal((await tool(d, claude.access, 'start_research', { project_id: id, owner_request: 'start over', restart: true })).data.status, 'needs_identity', 'restart refuses before canceling anything');
+  assert.equal(research.listRuns(d.ws, id).length, 0);
+  // The tool says so to every assistant.
+  const list = await rpc(d, claude.access, 'tools/list', {});
+  assert.equal(list.json.result.tools.find((x) => x.name === 'start_research').inputSchema.properties.allow_pending_identity.type, 'boolean');
+
+  // Eric confirmed it has no token yet.
+  const allowed = await tool(d, claude.access, 'start_research', { project_id: id, owner_request: 'It has no token yet; research Shoal anyway (FICTIONAL)', allow_pending_identity: true });
+  assert.equal(allowed.data.status, 'created', allowed.text);
+  const runId = allowed.data.run.run_id;
+  // Resuming that job needs no flag; other models are not added while the identity is pending.
+  const resumed = await tool(d, claude.access, 'start_research', { project_id: id, owner_request: 'Continue Shoal with all three models (FICTIONAL)', models: 'all' });
+  assert.equal(resumed.data.status, 'resumed', resumed.text);
+  assert.equal(resumed.data.run.run_id, runId);
+  assert.deepEqual(resumed.data.run.models, ['claude']);
+  assert.match(resumed.data.message, /ChatGPT and Gemini were not added: Shoal \(FICTIONAL\)'s identity is pending; complete it with update_project_identity first\./);
+  // Verified: the others join the same run.
+  const upd = await tool(d, claude.access, 'update_project_identity', { project_id: id, coingecko_id: 'shoal-fictional', evidence: [{ url: 'https://shoal.example/token', note: 'fictional' }] });
+  assert.equal(upd.data.identity_status, 'verified', upd.text);
+  const joined = await tool(d, claude.access, 'start_research', { project_id: id, owner_request: 'Continue Shoal with all three models (FICTIONAL)', models: 'all' });
+  assert.equal(joined.data.run.run_id, runId);
+  assert.deepEqual(joined.data.run.models, ['claude', 'chatgpt', 'gemini']);
+});
+
+test('connector: only explicit one-model or exclusion phrasing keeps "all three models" from meaning all three', () => {
+  const all = (words) => modelsAsked({ owner_request: words }).all;
+  for (const words of [
+    'Research Huma with all three models, no rush on Gemini',
+    "Research Huma with all three models and don't skip Gemini",
+    'Research Huma with all three models, don’t skip Gemini',
+    'Research Huma with all three models, do not skip ChatGPT this time',
+    'Research it with all three models, not just Claude',
+    'Have Claude, ChatGPT and Gemini each research Quartet',
+  ]) assert.equal(all(words), true, words);
+  for (const words of [
+    'Research Uno with Claude only, not all three models',
+    'Research Huma with all three models except Gemini',
+    'all three models but skip Gemini',
+    'all three models without ChatGPT',
+    'all three models, no Gemini',
+    'just you, not the other models',
+    'all three models but not with Gemini',
+    'all three models but not Gemini',
+    'only with Claude please, all three models next time',
+  ]) assert.equal(all(words), false, words);
+  assert.deepEqual(modelsAsked({ models: 'all', owner_request: 'Claude only' }), { all: true, from: 'models' }, 'the explicit option wins');
+});
+
+test('connector: save_report says "saved" only when the save is confirmed, and a withheld grade comes with each part as it was read', async (t) => {
+  const d = await desk(t, 'save-feedback');
+  withKeys(t, {});
+  const claude = await connect(d);
+  const pid = (await tool(d, claude.access, 'add_project', EXAMPLECOIN)).data.project.project_id;
+  const runId = (await tool(d, claude.access, 'start_research', { project_id: pid, owner_request: 'Research Examplecoin (FICTIONAL)' })).data.run.run_id;
+  // One part honestly unscored, one written as "8/10" (a format slip).
+  const text = (() => {
+    const base = mockReport(d.ws, 'claude', research.loadRun(d.ws, pid, runId));
+    const m = base.match(/```json\n([\s\S]*?)\n```/);
+    const obj = JSON.parse(m[1]);
+    const [first, second] = Object.keys(obj.investment_components);
+    obj.investment_components[first] = { status: 'unknown', value: null, low: null, high: null, rationale: 'FICTIONAL: not supported by the evidence', evidence_refs: [], missing_data: 'FICTIONAL: no audited revenue figures yet' };
+    obj.investment_components[second] = { ...obj.investment_components[second], value: '8/10' };
+    return base.replace(m[1], JSON.stringify(obj, null, 2));
+  })();
+  // A save that does not read back as written is not reported as saved.
+  const inbox = require('../core/inbox');
+  const realImport = inbox.importContent;
+  inbox.importContent = (...a) => {
+    const out = realImport(...a);
+    if (out.result) out.result.verified = false;
+    return out;
+  };
+  let first;
+  try {
+    first = await tool(d, claude.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: text });
+  } finally {
+    inbox.importContent = realImport;
+  }
+  assert.equal(first.isError, false, first.text);
+  assert.equal(first.data.status, 'unverified');
+  assert.equal(first.data.verified, false);
+  assert.match(first.data.message, /could not confirm the save .*Call save_report again with the same text; if it did land, nothing changes\./);
+  // The grade is withheld; each of the six parts says how it was read.
+  assert.equal(first.data.report.grade.status, 'withheld');
+  assert.match(first.data.message, /If it does not, leave them unscored: a withheld grade is then the honest result\./);
+  const comps = first.data.components;
+  assert.equal(comps.length, 6);
+  assert.deepEqual(comps[0], { component: comps[0].component, label: comps[0].label, status: 'unknown', missing_data: 'FICTIONAL: no audited revenue figures yet' });
+  assert.equal(comps[1].status, 'unknown');
+  assert.match(comps[1].given, /"value":"8\/10"/);
+  assert.ok(comps.slice(2).every((c) => c.status === 'scored'));
+  assert.deepEqual(first.data.extraction_errors.map((e) => e.field), [`investment_components.${comps[1].component}`]);
+  assert.match(first.data.extraction_errors[0].message, /a single score must be a number from 1 to 100 \(got "8\/10"\)/);
+  // Saved again (as told): the same text is already there.
+  const again = await tool(d, claude.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: text });
+  assert.equal(again.data.status, 'unchanged');
+  assert.equal(again.data.verified, true);
+});
+
+test('connector: a replaced refresh token still works for two minutes (a lost answer, two refreshes at once), then is refused; the connection stays and only hashes are stored', async (t) => {
+  const { ws, cleanup } = tempWorkspace('oauth-grace');
+  t.after(cleanup);
+  let now = Date.now();
+  const oauth = makeOAuth(ws, { origin: ORIGIN, auth: { fromThisSite: () => true, verifyPassphrase: async (r, given) => ({ ok: given === PASS }) }, clock: () => now });
+  const srv = http.createServer(async (rq, rs) => {
+    if (!(await oauth.handle(rq, rs, new URL(rq.url, ORIGIN)))) {
+      rs.writeHead(404);
+      rs.end();
+    }
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  t.after(() => srv.close());
+  const d = { port: srv.address().port };
+  const c = await connect(d);
+  const refresh = (token) => req(d.port, { method: 'POST', path: '/oauth/token', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form({ grant_type: 'refresh_token', refresh_token: token, client_id: c.clientId }) });
+  const who = (access) => oauth.authenticate({ headers: { authorization: `Bearer ${access}` } });
+
+  // Two refreshes with the same token at once: both get a working pair.
+  const [a, b] = await Promise.all([refresh(c.refresh), refresh(c.refresh)]);
+  assert.equal(a.status, 200, a.text);
+  assert.equal(b.status, 200, b.text);
+  assert.notEqual(a.json.refresh_token, b.json.refresh_token);
+  assert.equal(who(a.json.access_token).grant_id, who(b.json.access_token).grant_id, 'the same connection');
+  // A minute later (the first answer was lost), it still works.
+  now += 60000;
+  const late1 = await refresh(c.refresh);
+  assert.equal(late1.status, 200, late1.text);
+  // Past two minutes from its first replacement, it is refused; the connection is not.
+  now += 61000;
+  const late2 = await refresh(c.refresh);
+  assert.equal(late2.status, 400);
+  assert.equal(late2.json.error, 'invalid_grant');
+  const next = await refresh(a.json.refresh_token);
+  assert.equal(next.status, 200, 'a token it was replaced with still works');
+  assert.ok(who(next.json.access_token));
+  assert.equal(oauth.connections().length, 1);
+
+  // Only hashes are stored; a replaced token keeps when it was replaced and its successor's hash.
+  const stored = fs.readFileSync(path.join(ws.root, '.cr', 'oauth.json'), 'utf8');
+  for (const tok of [c.refresh, a.json.refresh_token, b.json.refresh_token, late1.json.refresh_token, next.json.refresh_token, next.json.access_token]) assert.ok(!stored.includes(tok));
+  const recs = JSON.parse(stored).refresh;
+  const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
+  assert.equal(recs[sha(c.refresh)], undefined, 'the first token is gone after its grace');
+  const replaced = recs[sha(a.json.refresh_token)];
+  assert.ok(replaced.rotated_at);
+  assert.equal(replaced.successor, sha(next.json.refresh_token));
 });

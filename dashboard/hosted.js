@@ -455,6 +455,12 @@ async function main(env = process.env) {
     return { setup: serveSetupPage(cfg.port, cfg.problems), problems: cfg.problems };
   }
   const ws = prepareWorkspace(cfg);
+  // One-time fixes of known records (core/repairs.js); a failure never stops the desk.
+  try {
+    require('./core/repairs').runRepairs(ws, { log: (line) => console.log(line) });
+  } catch (err) {
+    console.log(`Record repairs could not run: ${err.message}`);
+  }
   console.log(researchSummary(ws));
   console.log(recordsSummary(ws));
   try {

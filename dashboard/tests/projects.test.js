@@ -78,6 +78,70 @@ test('the same token cannot be bound to two projects', (t) => {
   assert.throws(() => projects.updateIdentity(ws, other.project_id, { coingecko_id: 'allora-test-id', official_website: 'https://other.example', evidence: [{ url: 'https://other.example' }] }), /already belongs/);
 });
 
+test('market listings, explorers and social pages are leads, never the official website (subdomains too; project docs on gitbook.io are the project\'s)', () => {
+  for (const u of ['https://coinmarketcap.com/currencies/avantis/', 'https://www.coingecko.com/en/coins/x', 'https://www.geckoterminal.com/base/pools/0x1', 'https://dexscreener.com/base/0x1', 'https://www.dextools.io/app/en/base/pair-explorer/0x1', 'https://defillama.com/protocol/x', 'https://etherscan.io/token/0x1', 'https://bscscan.com/token/0x1', 'https://basescan.org/token/0x1', 'https://arbiscan.io/token/0x1', 'https://polygonscan.com/token/0x1', 'https://optimistic.etherscan.io/token/0x1', 'https://snowtrace.io/token/0x1', 'https://solscan.io/token/x', 'https://explorer.solana.com/address/x', 'https://solana.fm/address/x', 'https://tronscan.org/#/token20/x', 'https://suiscan.xyz/mainnet/coin/x', 'https://x.com/project', 'https://twitter.com/project', 'https://t.me/project', 'https://discord.gg/abc', 'https://discord.com/invite/abc', 'https://medium.com/@project', 'https://project.medium.com/', 'https://linktr.ee/project', 'https://github.com/project', 'https://gitbook.io/', 'coinmarketcap.com/currencies/x']) {
+    assert.equal(projects.isNonOfficialHost(u), true, u);
+  }
+  for (const u of ['https://www.sandbox.game/en/', 'https://projecta.gitbook.io/docs', 'https://solana.com/', 'https://docs.example.org/', 'https://xcom.example/', 'not a url', '']) {
+    assert.equal(projects.isNonOfficialHost(u), false, u);
+  }
+});
+
+test('a CoinMarketCap page given as the official website is kept as evidence only; the identity stays pending and says why', (t) => {
+  const { ws, cleanup } = tempWorkspace('listing');
+  t.after(cleanup);
+  // Everything a verified identity needs, except that the "website" is a market listing.
+  const r = projects.addProject(ws, { name: 'Listing Example (FICTIONAL)', official_website: 'https://coinmarketcap.com/currencies/listing-example-fictional/', coingecko_id: 'listing-example-fictional', evidence: [{ url: 'https://listing-example.example/docs', note: 'fictional' }] });
+  assert.equal(r.identity_status, 'pending');
+  const p = projects.getProject(ws, r.project_id);
+  assert.equal(p.identity.official_website, null);
+  assert.ok(p.identity.unknowns.includes('Official website not confirmed (a market listing page is not the project\'s own site).'));
+  assert.ok(!p.identity.unknowns.includes('Official website not confirmed.'), 'one reason, not two');
+  const lead = p.identity.evidence.find((e) => e.url === 'https://coinmarketcap.com/currencies/listing-example-fictional/');
+  assert.equal(lead.note, 'Market listing or explorer page: a lead, not the official website');
+  // updateIdentity refuses it the same way, without piling up copies of the lead.
+  const again = projects.updateIdentity(ws, r.project_id, { official_website: 'https://coinmarketcap.com/currencies/listing-example-fictional/', evidence: [] });
+  assert.equal(again.identity_status, 'pending');
+  assert.equal(projects.getProject(ws, r.project_id).identity.evidence.filter((e) => /coinmarketcap/.test(e.url)).length, 1);
+  // The project's own site completes it.
+  assert.equal(projects.updateIdentity(ws, r.project_id, { official_website: 'https://listing-example.example/', evidence: [] }).identity_status, 'verified');
+  // A listing offered later never replaces the site on file; it is kept as a lead.
+  const later = projects.updateIdentity(ws, r.project_id, { official_website: 'https://www.coingecko.com/en/coins/listing-example-fictional', evidence: [] });
+  assert.equal(later.identity_status, 'verified');
+  const idn = projects.getProject(ws, r.project_id).identity;
+  assert.equal(idn.official_website, 'https://listing-example.example/');
+  assert.equal(idn.evidence.find((e) => /coingecko\.com/.test(e.url)).note, 'Market listing or explorer page: a lead, not the official website');
+});
+
+test('a market-data site\'s name is not a project name', (t) => {
+  const { ws, cleanup } = tempWorkspace('aggregator-name');
+  t.after(cleanup);
+  for (const name of ['Coinmarketcap', 'CoinMarketCap', 'Coin Market Cap', 'coinmarketcap.com', 'CoinGecko', 'DexScreener', 'Etherscan']) {
+    assert.throws(() => projects.addProject(ws, { name, official_website: 'https://coinmarketcap.com/currencies/avantis/' }), /name of a market-data site, not a project/, name);
+  }
+  assert.equal(fs.readdirSync(path.join(ws.root, 'projects')).length, 0);
+  const ok = projects.addProject(ws, { name: 'The Sandbox' });
+  assert.equal(ok.status, 'created');
+  assert.throws(() => projects.updateProjectFields(ws, ok.project_id, { name: 'CoinGecko' }), /market-data site/);
+});
+
+test('duplicates by website compare the whole host name, and never a market listing or explorer host', (t) => {
+  const { ws, cleanup } = tempWorkspace('domains');
+  t.after(cleanup);
+  assert.equal(projects.domainOf('https://www.Foo.co.uk/x'), 'foo.co.uk');
+  projects.addProject(ws, { name: 'Project A (FICTIONAL)', official_website: 'https://projecta.gitbook.io/docs' });
+  assert.equal(projects.addProject(ws, { name: 'Project B (FICTIONAL)', official_website: 'https://projectb.gitbook.io/docs' }).status, 'created', 'two GitBook subdomains are two sites');
+  projects.addProject(ws, { name: 'Foo (FICTIONAL)', official_website: 'https://foo.co.uk/' });
+  assert.equal(projects.addProject(ws, { name: 'Bar (FICTIONAL)', official_website: 'https://bar.co.uk/' }).status, 'created', 'foo.co.uk and bar.co.uk are two sites');
+  const same = projects.addProject(ws, { name: 'Something Else (FICTIONAL)', official_website: 'https://www.foo.co.uk/token' });
+  assert.equal(same.status, 'exists', 'the same host with or without www is the same site');
+  assert.deepEqual(same.matched_on, ['same official website']);
+  // Two projects pasted as CoinMarketCap links are not "the same official website".
+  projects.addProject(ws, { name: 'Listed One (FICTIONAL)', official_website: 'https://coinmarketcap.com/currencies/listed-one-fictional/' });
+  assert.equal(projects.addProject(ws, { name: 'Listed Two (FICTIONAL)', official_website: 'https://coinmarketcap.com/currencies/listed-two-fictional/' }).status, 'created');
+  assert.equal(projects.findDuplicates(ws, { official_website: 'https://etherscan.io/token/0x1' }).strong.length, 0);
+});
+
 test('Cowork request queue: pending until a runner applies it, then a verified result', (t) => {
   const { ws, root, cleanup } = tempWorkspace('queue');
   t.after(cleanup);

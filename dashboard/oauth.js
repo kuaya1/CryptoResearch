@@ -15,9 +15,11 @@
 // Eric approves a connection once, on the consent page, with his desk
 // passphrase (the same rate-limited check as the sign-in page). The assistant
 // then holds an access token (1 hour) and a refresh token (90 days, replaced
-// on every use). Only SHA-256 hashes of tokens are stored, in .cr/oauth.json
-// on the desk's disk, so connections survive restarts and deploys. Settings >
-// Connected apps lists each connection and disconnects it.
+// on every use; the replaced one still works for two minutes, so a lost answer
+// or two refreshes at once do not force a reconnect). Only SHA-256 hashes of
+// tokens are stored, in .cr/oauth.json on the desk's disk, so connections
+// survive restarts and deploys. Settings > Connected apps lists each
+// connection and disconnects it.
 //
 // Each connection belongs to one assistant, and what it saves is filed under
 // that model. The assistant follows from the only return address the
@@ -34,6 +36,8 @@ const { PROVIDERS, PROVIDER_LABELS } = require('./core/workspace');
 const STORE_REL = '.cr/oauth.json';
 const ACCESS_TTL_S = 3600;
 const REFRESH_TTL_MS = 90 * 86400000;
+// How long a replaced refresh token still works (a lost answer, two refreshes at once).
+const REFRESH_GRACE_MS = 120000;
 const CODE_TTL_MS = 5 * 60000;
 const PENDING_TTL_MS = 10 * 60000;
 const MAX_CLIENTS = 50;
@@ -165,7 +169,8 @@ function shell(title, body) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · CryptoResearch</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/position.css"></head><body><main class="login-wrap">${body}</main></body></html>`;
 }
 
-function makeOAuth(ws, { origin, auth, log = () => {} }) {
+// clock: the time in milliseconds (tests move it forward).
+function makeOAuth(ws, { origin, auth, log = () => {}, clock = () => Date.now() }) {
   const resource = `${origin}/mcp`;
   // The names a client may use for this one resource (some send the origin).
   const resourceNames = new Set([resource, `${resource}/`, origin, `${origin}/`]);
@@ -180,15 +185,15 @@ function makeOAuth(ws, { origin, auth, log = () => {} }) {
   let lastUseSave = 0;
 
   function save() {
-    const now = Date.now();
+    const now = clock();
     for (const [k, v] of Object.entries(store.access)) if (Date.parse(v.expires_at) < now) delete store.access[k];
-    for (const [k, v] of Object.entries(store.refresh)) if (Date.parse(v.expires_at) < now) delete store.refresh[k];
+    for (const [k, v] of Object.entries(store.refresh)) if (Date.parse(v.expires_at) < now || (v.rotated_at && Date.parse(v.rotated_at) + REFRESH_GRACE_MS < now)) delete store.refresh[k];
     mkdirp(path.dirname(storeFile));
     atomicWrite(storeFile, jsonText(store));
   }
 
   function sweep() {
-    const now = Date.now();
+    const now = clock();
     for (const [k, v] of pending) if (v.expires < now) pending.delete(k);
     for (const [k, v] of used) if (v.expires < now) used.delete(k);
     for (const [k, v] of codes) if (v.expires < now) codes.delete(k);
@@ -202,12 +207,15 @@ function makeOAuth(ws, { origin, auth, log = () => {} }) {
     while (Object.keys(store.clients).length > MAX_CLIENTS && ids.length) delete store.clients[ids.shift()];
   }
 
-  function issue(grantId, clientId, scope) {
+  // A new token pair. replaces: the refresh token record it rotates, marked in
+  // the same save (when it was first replaced, and by which token's hash).
+  function issue(grantId, clientId, scope, replaces = null) {
     const access = newToken();
     const refresh = newToken();
-    const now = Date.now();
+    const now = clock();
     store.access[hashOf(access)] = { grant_id: grantId, client_id: clientId, scope, expires_at: new Date(now + ACCESS_TTL_S * 1000).toISOString() };
     store.refresh[hashOf(refresh)] = { grant_id: grantId, client_id: clientId, scope, expires_at: new Date(now + REFRESH_TTL_MS).toISOString() };
+    if (replaces) Object.assign(replaces, { rotated_at: replaces.rotated_at || new Date(now).toISOString(), successor: hashOf(refresh) });
     store.grants[grantId].last_used_at = new Date(now).toISOString();
     save();
     return { access_token: access, token_type: 'Bearer', expires_in: ACCESS_TTL_S, refresh_token: refresh, scope };
@@ -318,7 +326,7 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
 
   async function register(req, res) {
     const addr = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || (req.socket && req.socket.remoteAddress) || 'unknown';
-    const hourAgo = Date.now() - 3600000;
+    const hourAgo = clock() - 3600000;
     while (registrations.length && registrations[0].at < hourAgo) registrations.shift();
     if (registrations.filter((r) => r.addr === addr).length >= MAX_REGISTRATIONS_PER_HOUR) return json(res, 429, { error: 'too_many_requests', error_description: 'Too many client registrations; try again later.' });
     let body;
@@ -338,7 +346,7 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     }
     const grantTypes = Array.isArray(body.grant_types) && body.grant_types.length ? body.grant_types : ['authorization_code', 'refresh_token'];
     if (!grantTypes.every((g) => ['authorization_code', 'refresh_token'].includes(g))) return json(res, 400, { error: 'invalid_client_metadata', error_description: 'Only authorization_code and refresh_token grants are supported.' });
-    registrations.push({ at: Date.now(), addr });
+    registrations.push({ at: clock(), addr });
     const kind = kinds[0];
     const clientId = `crc_${newToken(16)}`;
     // Every client is public (PKCE, no secret). A client that asked for a
@@ -349,7 +357,7 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
       token_endpoint_auth_method: 'none',
-      created_at: new Date().toISOString(),
+      created_at: new Date(clock()).toISOString(),
       kind,
     };
     store.clients[clientId] = client;
@@ -357,7 +365,7 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     save();
     const dropped = asked.length - uris.length;
     log(`OAuth: client registered (${client.client_name}; ${labelOf(kind)}; return to ${where(uris)}; asked for ${typeof body.token_endpoint_auth_method === 'string' ? body.token_endpoint_auth_method.slice(0, 40) : 'no auth method'}, scope ${typeof body.scope === 'string' ? body.scope.slice(0, 80) : 'none'}${dropped ? `; ${dropped} other return address(es) dropped: ${where(asked.filter((u) => !uris.includes(u)).slice(0, 6))}` : ''})`);
-    return json(res, 201, { client_id: clientId, client_id_issued_at: Math.floor(Date.now() / 1000), ...client, created_at: undefined, kind: undefined });
+    return json(res, 201, { client_id: clientId, client_id_issued_at: Math.floor(clock() / 1000), ...client, created_at: undefined, kind: undefined });
   }
 
   function authorizeGet(req, res, url) {
@@ -376,7 +384,7 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     if (q.resource && !resourceNames.has(q.resource)) return redirectTo(res, redirect, { error: 'invalid_target', error_description: `This server's resource is ${resource}.`, state: q.state, iss: origin });
     const scope = SCOPES.filter((s) => String(q.scope || SCOPE).split(/\s+/).includes(s)).join(' ') || SCOPE;
     const id = newToken(18);
-    const p = { id, client_id: q.client_id, client_name: client.client_name, redirect_uri: redirect, kind, guess: kind === 'local' ? guessLocal(client.client_name) : null, code_challenge: q.code_challenge, state: q.state || null, scope, expires: Date.now() + PENDING_TTL_MS };
+    const p = { id, client_id: q.client_id, client_name: client.client_name, redirect_uri: redirect, kind, guess: kind === 'local' ? guessLocal(client.client_name) : null, code_challenge: q.code_challenge, state: q.state || null, scope, expires: clock() + PENDING_TTL_MS };
     pending.set(id, p);
     log(`OAuth: approval page shown (${client.client_name}; ${labelOf(kind)}; return to ${where([redirect])}; resource ${q.resource ? 'given' : 'not given'}; scope ${String(q.scope || 'not given').slice(0, 80)})`);
     return page(res, 200, consentPage(p), { formAction: formActionFor(redirect), script: true });
@@ -414,7 +422,7 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     const answered = (decision, { assistant = null, location, codeHash = null }) => {
       pending.delete(p.id);
       const label = p.kind !== 'local' ? PROVIDER_LABELS[p.kind] : assistant ? `the program on this computer (${PROVIDER_LABELS[assistant]})` : 'the program on this computer';
-      used.set(p.id, { decision, label, location, codeHash, exchanged: false, at: new Date().toISOString(), expires: Date.now() + PENDING_TTL_MS });
+      used.set(p.id, { decision, label, location, codeHash, exchanged: false, at: new Date(clock()).toISOString(), expires: clock() + PENDING_TTL_MS });
       return location;
     };
     if (form.get('decision') !== 'allow') {
@@ -432,7 +440,7 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     }
     const code = newToken();
     const codeHash = hashOf(code);
-    codes.set(codeHash, { client_id: p.client_id, redirect_uri: p.redirect_uri, code_challenge: p.code_challenge, scope: p.scope, assistant, request: p.id, expires: Date.now() + CODE_TTL_MS });
+    codes.set(codeHash, { client_id: p.client_id, redirect_uri: p.redirect_uri, code_challenge: p.code_challenge, scope: p.scope, assistant, request: p.id, expires: clock() + CODE_TTL_MS });
     log(`OAuth: connection approved (${p.client_name}; ${PROVIDER_LABELS[assistant]}); sent back to ${where([p.redirect_uri])}, waiting for its token request`);
     return sendTo(res, answered('approved', { assistant, codeHash, location: locationOf(p.redirect_uri, { code, state: p.state, iss: origin }) }));
   }
@@ -474,13 +482,13 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
       const key = hashOf(form.get('code') || '');
       const c = codes.get(key);
       codes.delete(key); // single use, even when the exchange fails
-      if (!c || c.expires < Date.now() || c.client_id !== clientId) return refuse(400, 'invalid_grant', 'The authorization code is invalid or expired.');
+      if (!c || c.expires < clock() || c.client_id !== clientId) return refuse(400, 'invalid_grant', 'The authorization code is invalid or expired.');
       if ((form.get('redirect_uri') || c.redirect_uri) !== c.redirect_uri) return refuse(400, 'invalid_grant', `redirect_uri does not match the authorization request (sent ${where([form.get('redirect_uri')])}).`);
       const verifier = form.get('code_verifier') || '';
       if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) || b64url(crypto.createHash('sha256').update(verifier).digest()) !== c.code_challenge) return refuse(400, 'invalid_grant', `PKCE verification failed (${verifier ? 'wrong verifier' : 'no code_verifier'}).`);
       if (form.get('resource') && !resourceNames.has(form.get('resource'))) return refuse(400, 'invalid_target', `This server's resource is ${resource} (sent ${String(form.get('resource')).slice(0, 100)}).`);
       const grantId = `grant_${newToken(9)}`;
-      store.grants[grantId] = { client_id: clientId, client_name: store.clients[clientId].client_name, assistant: c.assistant, created_at: new Date().toISOString(), last_used_at: null, revoked_at: null };
+      store.grants[grantId] = { client_id: clientId, client_name: store.clients[clientId].client_name, assistant: c.assistant, created_at: new Date(clock()).toISOString(), last_used_at: null, revoked_at: null };
       // The approval page, if submitted again, now says the connection is made.
       const done = c.request ? used.get(c.request) : null;
       if (done) Object.assign(done, { exchanged: true, location: null });
@@ -490,12 +498,20 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     if (grant === 'refresh_token') {
       const key = hashOf(form.get('refresh_token') || '');
       const r = store.refresh[key];
-      if (!r || r.client_id !== clientId || Date.parse(r.expires_at) < Date.now() || !store.grants[r.grant_id] || store.grants[r.grant_id].revoked_at) {
-        return refuse(400, 'invalid_grant', 'The refresh token is invalid, expired or revoked. Reconnect from the assistant.');
+      const now = clock();
+      const late = r && r.rotated_at && Date.parse(r.rotated_at) + REFRESH_GRACE_MS < now;
+      if (!r || late || r.client_id !== clientId || Date.parse(r.expires_at) < now || !store.grants[r.grant_id] || store.grants[r.grant_id].revoked_at) {
+        if (late) delete store.refresh[key];
+        return refuse(400, 'invalid_grant', late ? 'The refresh token was already used and replaced. Reconnect from the assistant.' : 'The refresh token is invalid, expired or revoked. Reconnect from the assistant.');
       }
-      delete store.refresh[key]; // rotated: the old refresh token stops working now
-      log(`OAuth: tokens refreshed (${store.clients[clientId].client_name})`);
-      return json(res, 200, issue(r.grant_id, clientId, r.scope));
+      // Rotated, not deleted: if the answer to this request is lost, or the
+      // assistant refreshes twice at once, the same token still works for a
+      // short grace (a fresh pair for the same connection) instead of forcing
+      // Eric to reconnect with his passphrase. After that it is refused.
+      const again = Boolean(r.rotated_at);
+      const pair = issue(r.grant_id, clientId, r.scope, r);
+      log(`OAuth: tokens refreshed (${store.clients[clientId].client_name})${again ? ' with a refresh token replaced moments ago (grace period)' : ''}`);
+      return json(res, 200, pair);
     }
     return refuse(400, 'unsupported_grant_type', 'Only authorization_code and refresh_token are supported.');
   }
@@ -512,7 +528,7 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
   function revokeGrant(grantId) {
     const g = store.grants[grantId];
     if (!g) return false;
-    g.revoked_at = g.revoked_at || new Date().toISOString();
+    g.revoked_at = g.revoked_at || new Date(clock()).toISOString();
     for (const t of ['access', 'refresh']) for (const [k, v] of Object.entries(store[t])) if (v.grant_id === grantId) delete store[t][k];
     save();
     return true;
@@ -523,10 +539,10 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     const m = String(req.headers.authorization || '').match(/^Bearer\s+([A-Za-z0-9._~+/=-]{20,200})$/);
     if (!m) return null;
     const rec = store.access[hashOf(m[1])];
-    if (!rec || Date.parse(rec.expires_at) < Date.now()) return null;
+    if (!rec || Date.parse(rec.expires_at) < clock()) return null;
     const g = store.grants[rec.grant_id];
     if (!g || g.revoked_at) return null;
-    const now = Date.now();
+    const now = clock();
     g.last_used_at = new Date(now).toISOString();
     if (now - lastUseSave > 10 * 60000) {
       lastUseSave = now;

@@ -20,9 +20,11 @@
 //
 // Rules the tools enforce: a project is added once (duplicates by name,
 // website, CoinGecko ID or contract are refused; a shared ticker needs an
-// explicit "different project"); a research request resumes the open run
-// instead of starting a second one, and a model's report saved in the last
-// day is not redone unless asked; while a model's own research on a project
+// explicit "different project"); research needs a verified identity, unless
+// Eric confirmed it cannot be completed; a research request resumes the open
+// run instead of starting a second one, a model whose job is still open is
+// never given a second, and a model's report saved in the last day is not
+// redone unless asked; while a model's own research on a project
 // is open, other models' conclusions on it are withheld from it; research
 // never records a holding; a transaction needs Eric's own words and a request
 // ID, and the same request ID applies once.
@@ -57,11 +59,11 @@ function instructionsFor(me) {
 
 To research a project Eric names, links or shows you:
 1. find_projects first. If it is already there, use it; never add it twice.
-2. Identify it from evidence: the official website, and the chain and contract address from the project's own docs or a block explorer. CoinMarketCap and CoinGecko pages are leads, not proof. Never guess or complete a contract address. If two tokens could match (same ticker, similar names), show Eric the candidates and ask.
-3. add_project once, with the evidence URLs. It refuses duplicates by itself.
-4. start_research. It returns the run's canonical prompt (horizon, rubric, grading appendix). Follow it exactly: research with your own web tools, cite sources with dates, keep facts, inferences and unknowns apart, cover risks, and end with the JSON block it asks for. If a research run for the project is already open, start_research resumes it (with any draft you saved) instead of starting another. When Eric asks for all three models (Claude, ChatGPT and Gemini), pass models: "all": each model gets the same prompt and never sees the others' conclusions. A model whose paid API is set up on the desk then runs in the background; the others wait until Eric asks that assistant ("${WAITING_PHRASE}": in ChatGPT with the CryptoResearch app turned on in that chat, in Gemini after typing @ and picking CryptoResearch). Tell Eric which.
+2. Identify it from evidence: the official website (the project's own site), and the chain and contract address from the project's own docs or a block explorer. CoinMarketCap, CoinGecko, DEX screener and explorer pages are leads, not the official website: the desk keeps one given as the website as evidence only. Never guess or complete a contract address. If two tokens could match (same ticker, similar names), show Eric the candidates and ask.
+3. add_project once, with the evidence URLs. It refuses duplicates by itself; if the project is already there with a pending identity, what you supplied completes it.
+4. start_research. Research needs a verified identity (official website, token binding, evidence URL), so every model researches the same project: if it is pending, complete it with update_project_identity first, or, only when Eric confirmed the project has no token yet or cannot be identified further, pass allow_pending_identity: true. It returns the run's canonical prompt (horizon, rubric, grading appendix). Follow it exactly: research with your own web tools, cite sources with dates, keep facts, inferences and unknowns apart, cover risks, and end with the JSON block it asks for. If a research run for the project is already open, start_research resumes it (with any draft you saved) instead of starting another. When Eric asks for all three models (Claude, ChatGPT and Gemini), pass models: "all": each model gets the same prompt and never sees the others' conclusions. A model whose paid API is set up on the desk runs automatically in the background; a model without one waits for its assistant until Eric asks it ("${WAITING_PHRASE}": ${ASK_HOW.chatgpt}, or ${ASK_HOW.gemini}). Tell Eric which.
 5. For long research, save_research_draft as you go, so an interruption loses nothing.
-6. save_report with the complete report text (not a summary).
+6. save_report with the complete report text (not a summary). If it answers "unverified", save the same text again.
 7. When Eric asks you to do your waiting research, call pending_research and do each item with start_research.
 8. To show how the models compare, get_research shows each model's progress, and compare_reports, once their reports are saved, shows where they agree and disagree. Summarize that for Eric with each report's own uncertainty; agreement between models is not independent confirmation. Other models' reports on a project are withheld from you while your own research on it is open, so your report stays independent.
 
@@ -85,7 +87,7 @@ const TOOLS = [
   {
     name: 'add_project',
     title: 'Add a project to the watchlist',
-    description: 'Adds a project to Eric\'s watchlist once. The identity is verified when it has the official website, a token binding (a contract on a named chain, or a CoinGecko ID) and at least one evidence URL; otherwise it is saved as pending and never gets prices or holdings. Returns "exists" (nothing added) when the name, website, contract or CoinGecko ID already belongs to a project, and "possible_duplicate" when only the ticker matches: then confirm with Eric and repeat with allow_same_symbol: true if it really is a different project. Never invent a contract address.',
+    description: 'Adds a project to Eric\'s watchlist once. The identity is verified when it has the official website, a token binding (a contract on a named chain, or a CoinGecko ID) and at least one evidence URL; otherwise it is saved as pending and never gets prices or holdings. A CoinMarketCap, CoinGecko, DEX screener or explorer page is not accepted as the official website (it is kept as evidence). Returns "exists" (nothing added) when the name, website, contract or CoinGecko ID already belongs to a project; if that project\'s identity is pending, the identity you supplied is added to it. Returns "possible_duplicate" when only the ticker matches: then confirm with Eric and repeat with allow_same_symbol: true if it really is a different project. Never invent a contract address.',
     inputSchema: {
       type: 'object',
       required: ['name', 'evidence', 'owner_request'],
@@ -93,7 +95,7 @@ const TOOLS = [
       properties: {
         name: { type: 'string', description: 'The project\'s own name, e.g. "Huma Finance".' },
         symbol: { type: 'string', description: 'Token ticker, e.g. "HUMA".' },
-        official_website: { type: 'string', description: 'The official website (https://...), as confirmed from the project itself.' },
+        official_website: { type: 'string', description: 'The project\'s own website (https://...), as confirmed from the project itself; never a CoinMarketCap, CoinGecko or explorer page.' },
         contracts: { type: 'array', description: 'Token deployments you confirmed (official docs or a block explorer).', items: { type: 'object', required: ['chain', 'address'], additionalProperties: false, properties: { chain: { type: 'string', description: 'Network, e.g. "solana", "ethereum", "base".' }, address: { type: 'string', description: 'The exact contract or mint address.' } } } },
         coingecko_id: { type: 'string', description: 'Optional: the coin\'s CoinGecko ID if you saw it on coingecko.com (e.g. "huma-finance"). Not required.' },
         evidence: { type: 'array', minItems: 1, description: 'URLs that establish the identity, each with what it shows.', items: { type: 'object', required: ['url'], additionalProperties: false, properties: { url: { type: 'string' }, note: { type: 'string' } } } },
@@ -125,7 +127,7 @@ const TOOLS = [
   {
     name: 'start_research',
     title: 'Start (or resume) research for a project',
-    description: 'Opens a research run for a project and returns its canonical prompt: the exact horizon (4 calendar months by default), the dated context, the report sections and the grading appendix with the JSON contract. Research it yourself following that prompt, then call save_report. If a run is already open for this project, it is resumed (same run, with your saved draft) or joined instead of starting another; a job waiting for your model is taken over. If your model saved a report in the last 24 hours, nothing is started unless refresh: true (ask Eric first). restart: true cancels the open run and starts a new one. models: "all" (only when Eric asks for all three models) adds Claude, ChatGPT and Gemini to the run with the same prompt: each model\'s paid API runs it in the background where it is set up, otherwise it waits for that model\'s assistant.',
+    description: 'Opens a research run for a project and returns its canonical prompt: the exact horizon (4 calendar months by default), the dated context, the report sections and the grading appendix with the JSON contract. Research it yourself following that prompt, then call save_report. The project\'s identity must be verified first, so every model researches the same project: a pending one returns "needs_identity" with what is missing (complete it with update_project_identity). If a run is already open for this project, it is resumed (same run, with your saved draft) or joined instead of starting another; a job waiting for your model is taken over; a model whose job is still open is never started twice ("in_progress"). If your model saved a report in the last 24 hours, nothing is started unless refresh: true (ask Eric first). restart: true cancels the open run and starts a new one. models: "all" (only when Eric asks for all three models) adds Claude, ChatGPT and Gemini to the run with the same prompt: a model whose paid API is set up on the desk runs automatically in the background, a model without one waits for its assistant.',
     inputSchema: {
       type: 'object',
       required: ['project_id', 'owner_request'],
@@ -139,6 +141,7 @@ const TOOLS = [
         long_term_reason: { type: 'string', description: 'Eric\'s reason for a long-term horizon, if he gave one.' },
         restart: { type: 'boolean', description: 'Eric asked to start over: cancel the open run and start a new one.' },
         refresh: { type: 'boolean', description: 'Eric confirmed he wants new research although a report was saved in the last 24 hours.' },
+        allow_pending_identity: { type: 'boolean', description: 'Only when Eric confirmed the project has no token yet or cannot be identified further: research it although its identity is not verified.' },
       },
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -167,7 +170,7 @@ const TOOLS = [
   {
     name: 'save_report',
     title: 'Save the finished research report',
-    description: 'Saves the complete report for your job in a research run, as your model\'s report: the full text with every section, sources, risks and uncertainties, and the JSON block from the prompt. It is validated and graded under the run\'s rubric, separately from the other models\' reports, linked to the run, and shown on the project page. Saving the same text again changes nothing. If it is refused (for example it is not a finished report), fix it and save again.',
+    description: 'Saves the complete report for your job in a research run, as your model\'s report: the full text with every section, sources, risks and uncertainties, and the JSON block from the prompt. It is validated and graded under the run\'s rubric, separately from the other models\' reports, linked to the run, and shown on the project page. Saving the same text again changes nothing. If it is refused (for example it is not a finished report), fix it and save again; "unverified" means the save could not be confirmed: save the same text again. When the grade is withheld, the answer lists each investment component as it was read and any format errors.',
     inputSchema: { type: 'object', required: ['project_id', 'run_id', 'report_markdown'], additionalProperties: false, properties: { project_id: projectRef, run_id: runRef, report_markdown: { type: 'string', description: 'The full report as you wrote it, unchanged and not summarized.' } } },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -286,6 +289,29 @@ function compactReport(r) {
   return { report_id: r.report_id, model: r.provider || null, analysis_at: r.analysis_at, imported_at: r.imported_at, verdict: r.verdict || null, grade: r.grade || null, horizon: r.horizon || null, rubric_version: r.rubric_version, warnings: r.warnings, errors: r.errors, sources: r.sources, top_risks: r.top_risks };
 }
 
+// Why a saved report's grade is withheld, part by part, as the desk read it:
+// each investment component of the report's rubric with its status (and, for
+// an unknown one, the model's own missing_data), plus the first format errors,
+// so the model can fix a slip while the research is fresh.
+function gradeGaps(ws, projectId, reportId) {
+  const rec = require('./core/reports').loadReports(ws, projectId).find((x) => x.report_id === reportId && !x.broken);
+  if (!rec) return { components: null, extraction_errors: null };
+  const a = rec.assessment || {};
+  const rubric = ws.rubrics.gradingVersions[a.rubric_version] || ws.rubrics.grading;
+  const comps = a.investment_components || {};
+  const components = rubric.investment_components.map((c) => {
+    const s = comps[c.id];
+    const out = { component: c.id, label: c.label, status: s ? s.status : 'missing' };
+    if (s && s.status === 'unknown') out.missing_data = s.missing_data ? String(s.missing_data).slice(0, 300) : null;
+    if (s && s.status === 'range' && !s.rationale) out.note = 'A range counts only with its rationale.';
+    if (s && s.invalid_source !== undefined) out.given = JSON.stringify(s.invalid_source).slice(0, 120);
+    return out;
+  });
+  const issues = ((rec.record && rec.record.extraction) || {}).issues || [];
+  const extraction_errors = issues.filter((i) => i.severity === 'error').slice(0, 5).map((i) => ({ field: i.field || null, message: i.message }));
+  return { components, extraction_errors };
+}
+
 const hoursSince = (iso) => {
   const t = Date.parse(iso || '');
   return Number.isFinite(t) ? (Date.now() - t) / 3600000 : Infinity;
@@ -391,11 +417,15 @@ function projectView(ws, p, ctx) {
   };
 }
 
+// A website on a market-data or explorer host (an old record may still hold
+// one) is not the project's: "coinmarketcap" must not match every project
+// added from a CoinMarketCap link.
 const matches = (p, q) => {
   if (!q) return true;
   const s = q.toLowerCase().trim();
   const id = p.identity || {};
-  const hay = [p.project_id, p.name, p.symbol, ...(p.aliases || []), id.official_website, id.coingecko_id, ...(id.assets || []).map((a) => a.contract_address), ...(id.candidates || []).map((c) => c.coingecko_id)]
+  const site = id.official_website && !projects.isNonOfficialHost(id.official_website) ? id.official_website : null;
+  const hay = [p.project_id, p.name, p.symbol, ...(p.aliases || []), site, id.coingecko_id, ...(id.assets || []).map((a) => a.contract_address), ...(id.candidates || []).map((c) => c.coingecko_id)]
     .filter(Boolean).map((x) => String(x).toLowerCase());
   return hay.some((h) => h === s || h.includes(s) || (s.length >= 3 && s.includes(h) && h.length >= 3));
 };
@@ -407,9 +437,13 @@ function assetsOf(ws) {
 // Eric's own words asking for all three models. An assistant whose tool list
 // predates the models option cannot pass models: "all", so his words in
 // owner_request count too ("with all three models", or naming Claude, ChatGPT
-// and Gemini), unless they ask for one model only or say not to.
+// and Gemini), unless they ask for one model only or leave one out. Only
+// explicit phrasing counts as that: "only/just (with) Claude", "Claude only",
+// "without/except Gemini", "not with Gemini", "but not Gemini", "skip Gemini"
+// (not "don't skip"), "no Gemini" and "not all three". "No rush on Gemini" or
+// "not just Claude" still mean all three.
 const ALL_MODELS_WORDS = /\b(all (three|3)|three|3)\s+(of the\s+)?(models|ais?|assistants|llms)\b|\bclaude\b.{0,40}\b(chat\s?gpt|gpt|openai)\b.{0,40}\bgemini\b|\b(chat\s?gpt|gpt|openai)\b.{0,40}\bclaude\b.{0,40}\bgemini\b|\bgemini\b.{0,40}\b(chat\s?gpt|gpt|openai)\b.{0,40}\bclaude\b|\bclaude\b.{0,40}\bgemini\b.{0,40}\b(chat\s?gpt|gpt|openai)\b/i;
-const ONE_MODEL_WORDS = /\b(only|just)\s+(with\s+)?(claude|you|chat\s?gpt|gpt|gemini)\b|\b(claude|chat\s?gpt|gpt|gemini)\s+only\b|\b(not|don'?t|do not|without|no)\b.{0,20}\b(all|three|3|chat\s?gpt|gpt|gemini)\b/i;
+const ONE_MODEL_WORDS = /(?<!\bnot\s+)\b(only|just)\s+((with|use|using|ask)\s+)?(claude|chat\s?gpt|gpt|openai|gemini|you|yourself)\b|\b(claude|chat\s?gpt|gpt|openai|gemini)\s+only\b|\b(without|except|excluding)\s+(claude|chat\s?gpt|gpt|openai|gemini)\b|\bnot\s+with\s+(claude|chat\s?gpt|gpt|openai|gemini)\b|\bbut\s+not\s+(claude|chat\s?gpt|gpt|openai|gemini)\b|(?<!\b(don['’]?t|do\s+not|never)\s+)\bskip(ping)?\s+(claude|chat\s?gpt|gpt|openai|gemini)\b|\bno\s+(claude|chat\s?gpt|gpt|openai|gemini)\b|\bnot\s+(with\s+)?all\s+(three|3)\b/i;
 
 function modelsAsked(args) {
   if (args.models === 'all') return { all: true, from: 'models' };
@@ -439,13 +473,20 @@ const handlers = {
     const name = need(args, 'name', 'The project name');
     const evidence = Array.isArray(args.evidence) ? args.evidence.filter((e) => e && typeof e.url === 'string') : [];
     if (!evidence.length) throw new OpError('INVALID', 'At least one evidence URL is required (the official site, docs or an explorer page you used).');
+    // The identity this call supplies, beyond the name.
+    const supplied = {};
+    if (args.official_website) supplied.official_website = args.official_website;
+    if (args.coingecko_id) supplied.coingecko_id = args.coingecko_id;
+    const contracts = (Array.isArray(args.contracts) ? args.contracts : []).filter((c) => c && c.chain && c.address);
+    if (contracts.length) supplied.assets = contracts.map((c) => ({ chain: c.chain, contract_address: c.address }));
+    const ev = evidence.map((e) => ({ url: e.url, note: e.note || null, kind: ctx.actor }));
     const out = projects.addProject(ws, {
       name,
       symbol: args.symbol || null,
-      official_website: args.official_website || null,
-      coingecko_id: args.coingecko_id || null,
-      assets: (Array.isArray(args.contracts) ? args.contracts : []).map((c) => ({ chain: c.chain, contract_address: c.address })),
-      evidence: evidence.map((e) => ({ url: e.url, note: e.note || null, kind: ctx.actor })),
+      official_website: supplied.official_website || null,
+      coingecko_id: supplied.coingecko_id || null,
+      assets: supplied.assets || [],
+      evidence: ev,
       sector: args.sector && SECTORS.includes(args.sector) ? { primary: args.sector, tags: [], source: 'research' } : null,
       utterance: args.owner_request || null,
       allow_same_symbol: args.allow_same_symbol === true,
@@ -454,7 +495,33 @@ const handlers = {
       return { status: 'possible_duplicate', message: `A project with the ticker ${args.symbol} is already on the desk: ${(out.candidates || []).map((c) => `${c.name} (${c.project_id})`).join(', ')}. Tickers are not unique. Ask Eric whether this is a different project; only then add it with allow_same_symbol: true.`, candidates: out.candidates || [] };
     }
     const p = projects.getProject(ws, out.project_id);
-    return { status: out.status, message: out.message, project: projectView(ws, p, ctx) };
+    const idn = p.identity || {};
+    if (out.status !== 'exists' || idn.status === 'verified' || !Object.keys(supplied).length) {
+      return { status: out.status, identity_status: idn.status || null, message: out.message, project: projectView(ws, p, ctx) };
+    }
+    // Already there (same name, website, contract or CoinGecko ID) with a
+    // pending identity: what this call supplies completes it, as a confirmed
+    // intake does, instead of being dropped. A binding the caller did not give
+    // stays an unconfirmed candidate: evidence for the website does not confirm
+    // an earlier guess of the token.
+    const where = `${p.name} (${p.project_id}; ${(out.matched_on || []).join(', ') || 'same project'})`;
+    const guess = (idn.candidates || []).some((c) => c.coingecko_id || (c.assets || []).some((a) => a.contract_address));
+    const keepGuess = !supplied.coingecko_id && !supplied.assets && guess;
+    try {
+      const upd = projects.updateIdentity(ws, p.project_id, { ...supplied, evidence: ev, ...(keepGuess ? { identity_status: 'pending', unknowns: ['Token binding not confirmed: the CoinGecko ID or contract on file is an unconfirmed candidate.'] } : {}) });
+      return {
+        status: 'exists',
+        identity_status: upd.identity_status,
+        unknowns: upd.unknowns,
+        message: upd.identity_status === 'verified'
+          ? `Already on the desk as ${where}; nothing was added twice. Its identity was ${idn.status}; what you supplied completed it, and it is verified now.`
+          : `Already on the desk as ${where}; nothing was added twice. What you supplied was added to its identity, which is still ${upd.identity_status}: ${upd.unknowns.join(' ')} Complete it with update_project_identity.`,
+        project: projectView(ws, projects.getProject(ws, p.project_id), ctx),
+      };
+    } catch (err) {
+      if (!(err instanceof OpError) || err.code !== 'CONFLICT') throw err;
+      return { status: 'exists', identity_status: idn.status || null, identity_conflict: err.message, message: `Already on the desk as ${where}, with a ${idn.status} identity. The identity you supplied was not added: ${err.message} Show Eric both projects before going further.`, project: projectView(ws, p, ctx) };
+    }
   },
 
   update_project_identity(ws, args, ctx) {
@@ -478,7 +545,24 @@ const handlers = {
     const asked = modelsAsked(args);
     const all = asked.all;
     const wanted = all ? [...PROVIDERS] : [me];
-    const others = wanted.filter((p) => p !== me);
+    // Every model researches the same verified project. A pending identity is
+    // researched only when Eric confirmed it cannot be completed (no token yet,
+    // or nothing more to identify it by). Resuming your own open job is always
+    // allowed; other models are not added to it until the identity is verified.
+    const idn = project.identity || {};
+    const identityOk = idn.status === 'verified' || args.allow_pending_identity === true;
+    // A model with an open job on this project (waiting, queued, running or
+    // held as uncertain, in any run) never gets a second one.
+    const hasOpenJob = (p) => research.openJobsFor(ws, id, p).length > 0;
+    const others = wanted.filter((p) => p !== me && !hasOpenJob(p));
+    const addable = identityOk ? others : [];
+    const heldBack = !identityOk && others.length ? ` ${listLabels(others)} ${others.length === 1 ? 'was' : 'were'} not added: ${project.name}'s identity is ${idn.status || 'not verified'}; complete it with update_project_identity first.` : '';
+    const needsIdentity = () => ({
+      status: 'needs_identity',
+      message: `Nothing was started: ${project.name}'s identity is ${idn.status || 'not verified'}, and every model has to research the same verified project. Missing: ${(idn.unknowns || []).join(' ') || 'a verified identity.'} Complete it with update_project_identity first: the official website from the project itself (not a CoinMarketCap or CoinGecko page), the token binding (coingecko_id, or chain and contract from the official docs or a block explorer) and an evidence URL; then call start_research again. Only if Eric confirmed the project has no token yet or cannot be identified further, call start_research again with allow_pending_identity: true.`,
+      project: { project_id: id, name: project.name, identity_status: idn.status || null },
+      missing: idn.unknowns || [],
+    });
     const view = (run) => runView(ws, id, run, ctx, { prompt: Boolean(run.jobs[me] && run.jobs[me].state === 'running' && research.isAssistantJob(run.jobs[me])) });
     const reload = (runId) => {
       const r = research.loadRun(ws, id, runId);
@@ -493,9 +577,11 @@ const handlers = {
       return parts.length ? ` ${parts.join('. ')}.` : '';
     };
 
-    // Restart: cancel the open jobs of the models asked for, then start anew.
+    // Restart: cancel the open jobs of the models asked for, then start anew
+    // (never canceled for nothing: a pending identity stops it first).
     const canceled = [];
     if (args.restart === true) {
+      if (!identityOk) return needsIdentity();
       for (const p of wanted) {
         for (const o of research.openJobsFor(ws, id, p)) {
           research.cancelJob(ws, id, o.run.run_id, p, `Restarted from ${ctx.label}: ${ownerRequest}`.slice(0, 300));
@@ -507,29 +593,29 @@ const handlers = {
       const open = research.openAssistantJobs(ws, id, me);
       if (open.length) {
         const runId = open[0].run.run_id;
-        const added = others.length ? research.addProviders(ws, id, runId, others, { channel: ctx.channel }).added : [];
+        const added = addable.length ? research.addProviders(ws, id, runId, addable, { channel: ctx.channel }).added : [];
         const run = reload(runId);
         kickIfQueued(run);
-        return { status: 'resumed', message: `Resuming the open research run ${runId} for ${project.name} (started ${run.created_at}).${added.length ? ` Added ${listLabels(added)} to it, with the same prompt.` : ''} Continue from your draft below if there is one, then save_report.${othersLine(run)}`, project: { project_id: id, name: project.name }, run: view(run) };
+        return { status: 'resumed', message: `Resuming the open research run ${runId} for ${project.name} (started ${run.created_at}).${added.length ? ` Added ${listLabels(added)} to it, with the same prompt.` : ''} Continue from your draft below if there is one, then save_report.${othersLine(run)}${heldBack}`, project: { project_id: id, name: project.name }, run: view(run) };
       }
       // 2. A job waiting for your model (no API runs it): take it over, no second run.
       const waiting = research.waitingJobs(ws, id, me);
       if (waiting.length) {
         const runId = waiting[0].run.run_id;
         research.adoptJob(ws, id, runId, me, { client: ctx.client });
-        const added = others.length ? research.addProviders(ws, id, runId, others, { channel: ctx.channel }).added : [];
+        const added = addable.length ? research.addProviders(ws, id, runId, addable, { channel: ctx.channel }).added : [];
         const run = reload(runId);
         kickIfQueued(run);
-        return { status: 'resumed', message: `Research run ${runId} for ${project.name} was waiting for ${ctx.label} (started ${run.created_at}); you are now doing it.${added.length ? ` Added ${listLabels(added)} to it, with the same prompt.` : ''} Follow the prompt below exactly, then save_report.${othersLine(run)}`, project: { project_id: id, name: project.name }, run: view(run) };
+        return { status: 'resumed', message: `Research run ${runId} for ${project.name} was waiting for ${ctx.label} (started ${run.created_at}); you are now doing it.${added.length ? ` Added ${listLabels(added)} to it, with the same prompt.` : ''} Follow the prompt below exactly, then save_report.${othersLine(run)}${heldBack}`, project: { project_id: id, name: project.name }, run: view(run) };
       }
       // 3. Your model's job in the open run is in a paid API's hands.
       const mineElsewhere = research.openJobsFor(ws, id, me);
       if (mineElsewhere.length) {
         const runId = mineElsewhere[0].run.run_id;
-        const added = others.length ? research.addProviders(ws, id, runId, others, { channel: ctx.channel }).added : [];
+        const added = addable.length ? research.addProviders(ws, id, runId, addable, { channel: ctx.channel }).added : [];
         const run = reload(runId);
         kickIfQueued(run);
-        return { status: 'in_background', message: `${ctx.label}'s research for ${project.name} is already in run ${runId}: ${jobView(run.jobs[me], run, me).progress}. Nothing for you to research now; the report appears on the desk when it is saved.${added.length ? ` Added ${listLabels(added)} to the run, with the same prompt.` : ''}${othersLine(run)}`, project: { project_id: id, name: project.name }, run: view(run) };
+        return { status: 'in_background', message: `${ctx.label}'s research for ${project.name} is already in run ${runId}: ${jobView(run.jobs[me], run, me).progress}. Nothing for you to research now; the report appears on the desk when it is saved.${added.length ? ` Added ${listLabels(added)} to the run, with the same prompt.` : ''}${othersLine(run)}${heldBack}`, project: { project_id: id, name: project.name }, run: view(run) };
       }
     }
 
@@ -549,27 +635,58 @@ const handlers = {
     }
     const skipped = wanted.filter((p) => recent[p]).map((p) => ({ model: p, reason: `${PROVIDER_LABELS[p]} saved a report ${recent[p].hours} h ago (${recent[p].report.report_id}); pass refresh: true to redo it.` }));
 
+    // Models still at work on this project (for example Claude saved its
+    // report while ChatGPT and Gemini are still open, and Eric asks for all
+    // three again) carry on in their run: nothing is started for them twice.
+    const stillOpen = {};
+    for (const p of toRun) {
+      const o = research.openJobsFor(ws, id, p);
+      if (o.length) stillOpen[p] = o[0];
+    }
+    const toStart = toRun.filter((p) => !stillOpen[p]);
+    const openElsewhere = (runId) => Object.entries(stillOpen)
+      .filter(([, o]) => o.run.run_id !== runId)
+      .map(([p, o]) => ` ${PROVIDER_LABELS[p]} is still open in ${o.run.run_id} (${jobView(o.job, o.run, me).progress}); not started again.`)
+      .join('');
+    if (!toStart.length) {
+      const host = reload(stillOpen[toRun[0]].run.run_id);
+      kickIfQueued(host);
+      const progress = toRun.map((p) => {
+        const r = stillOpen[p].run.run_id === host.run_id ? host : stillOpen[p].run;
+        return `${PROVIDER_LABELS[p]}: ${jobView(r.jobs[p], r, me).progress}${r.run_id !== host.run_id ? ` (in ${r.run_id})` : ''}`;
+      });
+      return {
+        status: 'in_progress',
+        message: `Nothing new was started: ${listLabels(toRun)} ${toRun.length === 1 ? 'is' : 'are'} already in research run ${host.run_id} for ${project.name} (started ${host.created_at}). ${progress.join('. ')}.${skipped.length ? ` ${skipped.map((s) => s.reason).join(' ')}` : ''} get_research shows their progress; if Eric wants it started over, call start_research again with restart: true.`,
+        project: { project_id: id, name: project.name },
+        run: view(host),
+        skipped,
+      };
+    }
+
+    if (!identityOk) return needsIdentity();
+
     // 4. Another model's run on this project is open and fresh: join it, so
     // every model answers the same prompt and dated context.
     if (!fresh) {
       const openRun = research.openRunOf(ws, id);
       if (openRun && hoursSince(openRun.created_at) < JOIN_OPEN_RUN_HOURS) {
-        const missing = toRun.filter((p) => !openRun.jobs[p]);
+        const missing = toStart.filter((p) => !openRun.jobs[p]);
         if (missing.length) {
-          research.addProviders(ws, id, openRun.run_id, missing, { assistant: toRun.includes(me) ? me : null, channel: ctx.channel });
+          research.addProviders(ws, id, openRun.run_id, missing, { assistant: missing.includes(me) ? me : null, channel: ctx.channel });
           const run = reload(openRun.run_id);
           kickIfQueued(run);
           const mineNow = run.jobs[me];
-          return { status: 'joined', message: `A research run for ${project.name} was already open (${openRun.run_id}, started ${run.created_at}); ${listLabels(missing)} ${missing.length === 1 ? 'was' : 'were'} added to it with the same prompt.${mineNow && mineNow.state === 'running' ? ' Follow the prompt below exactly, then save_report.' : ''}${othersLine(run)}`, project: { project_id: id, name: project.name }, run: view(run), skipped };
+          return { status: 'joined', message: `A research run for ${project.name} was already open (${openRun.run_id}, started ${run.created_at}); ${listLabels(missing)} ${missing.length === 1 ? 'was' : 'were'} added to it with the same prompt.${mineNow && mineNow.state === 'running' ? ' Follow the prompt below exactly, then save_report.' : ''}${othersLine(run)}${openElsewhere(openRun.run_id)}`, project: { project_id: id, name: project.name }, run: view(run), skipped };
         }
       }
     }
 
-    // 5. A new run.
+    // 5. A new run, for the models not already at work.
     const created = research.createRun(ws, {
       project_id: id,
-      providers: toRun,
-      assistant: toRun.includes(me) ? me : null,
+      providers: toStart,
+      assistant: toStart.includes(me) ? me : null,
       channel: ctx.channel,
       utterance: ownerRequest,
       owner_instructions: typeof args.instructions === 'string' ? args.instructions : null,
@@ -584,8 +701,8 @@ const handlers = {
     const doing = mineNow && mineNow.state === 'running' && research.isAssistantJob(mineNow);
     return {
       status,
-      message: `${status === 'restarted' ? `Canceled ${canceled.join(', ')} and started` : status === 'resumed' ? 'Resuming' : 'Started'} research run ${run.run_id} for ${project.name}${toRun.length > 1 ? ` with ${listLabels(toRun)}` : ''}.${doing ? ' Follow the prompt below exactly, then save_report with the full report.' : ''}${othersLine(run)}${skipped.length ? ` ${skipped.map((s) => s.reason).join(' ')}` : ''}`,
-      project: { project_id: id, name: project.name, identity_status: project.identity ? project.identity.status : null },
+      message: `${status === 'restarted' ? `Canceled ${canceled.join(', ')} and started` : status === 'resumed' ? 'Resuming' : 'Started'} research run ${run.run_id} for ${project.name}${toStart.length > 1 ? ` with ${listLabels(toStart)}` : ''}.${doing ? ' Follow the prompt below exactly, then save_report with the full report.' : ''}${othersLine(run)}${openElsewhere(run.run_id)}${skipped.length ? ` ${skipped.map((s) => s.reason).join(' ')}` : ''}`,
+      project: { project_id: id, name: project.name, identity_status: idn.status || null },
       run: view(run),
       skipped,
     };
@@ -660,8 +777,11 @@ const handlers = {
     }
     const { latest, all } = reportsOf(ws, id, me);
     const saved = all.find((x) => x.report_id === r.report_id) || latest;
+    // "Saved" only when the save read back as written; otherwise the model is
+    // told to save again (the same text changes nothing once it is in).
+    const verified = r.status === 'duplicate' ? true : Boolean(r.verified);
     // Other runs that waited for this model on the same request now have its answer.
-    const covered = r.status === 'ingested' ? research.coverWaitingJobs(ws, id, me, { runId, reportId: r.report_id }) : [];
+    const covered = r.status === 'ingested' && verified ? research.coverWaitingJobs(ws, id, me, { runId, reportId: r.report_id }) : [];
     if (covered.length) r.note = `${r.note ? `${r.note} ` : ''}The same request was also waiting in ${covered.join(', ')}; ${covered.length === 1 ? 'that job is' : 'those jobs are'} linked to this report, not researched twice.`;
     const after = research.loadRun(ws, id, runId);
     const myState = after && after.jobs[me] ? after.jobs[me].state : null;
@@ -672,15 +792,19 @@ const handlers = {
     // range with its reason); say so at once, so a gap can be filled while the
     // research is fresh, or left honestly unscored.
     const g = saved && saved.grade;
-    const withheld = g && g.status === 'withheld' ? ` Its grade is withheld: ${g.reason || 'not every weighted component is scored.'} If your research supports a score (or a range with its reason) for those parts, add them to the JSON block and save the report again. If it does not, leave them unscored: a withheld grade is then the honest result.` : '';
-    return {
-      status: r.status === 'duplicate' ? 'unchanged' : 'saved',
-      message: `${r.status === 'duplicate' ? `This exact report is already saved (${r.report_id}).` : `Saved ${label} report ${r.report_id} for ${id}; it is on the project page now.`}${withheld}${othersOpen.length ? ` Still open in this run: ${listLabels(othersOpen)} (get_research shows their progress; compare_reports once they are saved).` : after && PROVIDERS.filter((p) => after.jobs[p]).length > 1 ? ' Every model in this run is done: compare_reports shows where they agree and disagree.' : ''}`,
+    const isWithheld = Boolean(g && g.status === 'withheld');
+    const withheld = isWithheld ? ` Its grade is withheld: ${g.reason || 'not every weighted component is scored.'} components shows each part as it was read, with any format errors. If your research supports a score (or a range with its reason) for those parts, or a part was misread because of a format slip, fix the JSON block and save the report again. If it does not, leave them unscored: a withheld grade is then the honest result.` : '';
+    const status = r.status === 'duplicate' ? 'unchanged' : verified ? 'saved' : 'unverified';
+    const result = {
+      status,
+      message: `${status === 'unchanged' ? `This exact report is already saved (${r.report_id}).` : status === 'saved' ? `Saved ${label} report ${r.report_id} for ${id}; it is on the project page now.` : `The desk wrote ${label} report ${r.report_id} for ${id} but could not confirm the save (it did not read back as written). Call save_report again with the same text; if it did land, nothing changes.`}${withheld}${othersOpen.length ? ` Still open in this run: ${listLabels(othersOpen)} (get_research shows their progress; compare_reports once they are saved).` : after && PROVIDERS.filter((p) => after.jobs[p]).length > 1 ? ' Every model in this run is done: compare_reports shows where they agree and disagree.' : ''}`,
       report: compactReport(saved),
       run: runOut,
       validation: { errors: r.errors || 0, warnings: r.warnings || 0, ambiguous: r.ambiguous || 0, note: r.note || null },
-      verified: r.status === 'duplicate' ? true : Boolean(r.verified),
+      verified,
     };
+    if (isWithheld) Object.assign(result, gradeGaps(ws, id, r.report_id));
+    return result;
   },
 
   cancel_research(ws, args, ctx) {
@@ -971,4 +1095,4 @@ function makeMcp(ws, { rebuild = () => {}, version = '1.0.0', log = () => {}, ki
 
 for (const t of TOOLS) if (handlers[t.name]) handlers[t.name].readOnly = Boolean(t.annotations && t.annotations.readOnlyHint);
 
-module.exports = { makeMcp, TOOLS, INSTRUCTIONS, instructionsFor, PROTOCOL_VERSIONS, WAITING_PHRASE };
+module.exports = { makeMcp, TOOLS, INSTRUCTIONS, instructionsFor, modelsAsked, PROTOCOL_VERSIONS, WAITING_PHRASE };
