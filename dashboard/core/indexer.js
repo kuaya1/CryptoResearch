@@ -184,6 +184,8 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
   const today = ymdInTz(new Date(now));
   const settings = ws.settings;
   const latestMarket = market.readLatest(ws);
+  // CoinGecko IDs the last price refresh asked for and did not get back.
+  const notReturned = new Set(market.freshness(ws, now).missing_ids || []);
   const pf = portfolio.computePortfolio(ws, { market: latestMarket, now });
   const held = new Map(pf.positions.filter((p) => !p.closed && p.project_id).map((p) => [p.project_id, p]));
   const projectsOut = [];
@@ -337,6 +339,9 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
         if (s.needs_text) attention.push({ kind: 'needs_text', severity: 'medium', project_id: p.project_id, title: `${p.name}: ${PROVIDER_LABELS[prov]} PDF needs a text copy`, detail: 'The PDF is preserved; scores cannot be read from it offline.' });
       }
       if (p.identity.status !== 'verified') attention.push({ kind: 'identity', severity: 'low', project_id: p.project_id, title: `${p.name}: token identity pending`, detail: (p.identity.unknowns || []).join(' ') });
+      // A verified binding CoinGecko does not return is probably a wrong ID: the
+      // project never gets a price. Flagged, never changed automatically.
+      if (p.identity.status === 'verified' && p.identity.coingecko_id && notReturned.has(p.identity.coingecko_id)) attention.push({ kind: 'identity_price', severity: 'medium', project_id: p.project_id, title: `${p.name}: CoinGecko returned no price for "${p.identity.coingecko_id}"`, detail: 'The last price refresh asked CoinGecko for this ID and got nothing back, so the project has no price. The ID may be wrong: find the project on CoinGecko, check that the contract it lists is the one on file, and correct the binding.' });
       if (position && lastReport && lastReport.assessment.analysis_at && daysBetween(String(lastReport.assessment.analysis_at).slice(0, 10), today) > settings.freshness.report_stale_days) {
         attention.push({ kind: 'stale_research', severity: 'medium', project_id: p.project_id, title: `${p.name}: newest research is ${daysBetween(String(lastReport.assessment.analysis_at).slice(0, 10), today)} days old and you hold a position`, detail: 'Consider a new dated report. Prices never change stored grades.' });
       }

@@ -422,13 +422,15 @@ function projectView(ws, p, ctx) {
   } catch (_) {
     latest = null;
   }
+  // A bound CoinGecko ID the last price refresh did not get back: probably wrong.
+  const notReturned = id.coingecko_id && (market.freshness(ws).missing_ids || []).includes(id.coingecko_id);
   return {
     project_id: p.project_id,
     name: p.name,
     symbol: p.symbol || null,
     status: p.status,
     on_watchlist: Boolean(p.watchlist && p.watchlist.on_watchlist),
-    identity: { status: id.status, official_website: id.official_website || null, coingecko_id: id.coingecko_id || null, contracts: (id.assets || []).map((a) => ({ chain: a.chain, address: a.contract_address })), candidates: (id.candidates || []).length, unknowns: id.unknowns || [] },
+    identity: { status: id.status, official_website: id.official_website || null, coingecko_id: id.coingecko_id || null, contracts: (id.assets || []).map((a) => ({ chain: a.chain, address: a.contract_address })), candidates: (id.candidates || []).length, unknowns: id.unknowns || [], ...(notReturned ? { price_problem: `CoinGecko returned no price for "${id.coingecko_id}" in the last refresh; the ID may be wrong. Check the project's CoinGecko listing (its contract must match the one on file) and tell Eric before correcting it with update_project_identity.` } : {}) },
     sector: p.sector ? p.sector.primary : null,
     your_latest_report: latest,
     reports_by_model: byModel,

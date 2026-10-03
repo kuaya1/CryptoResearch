@@ -28,6 +28,35 @@ const SAND_CONTRACT = '0x3845badade8e6dff049820680d1f14bd3903a5d0';
 
 const relsOf = (out) => ((out && out.files) || []).map((f) => (typeof f === 'string' ? f : f.rel)).filter(Boolean);
 
+// A verified project bound to a CoinGecko ID CoinGecko does not have: its
+// price never arrives. Rebound to the listing's real ID only while the one
+// contract on file is exactly the contract that listing names; the website
+// and contract stay as they are.
+function rebindCoingecko({ id, target, from, to, chain, contract, sameAddress, evidence }) {
+  return {
+    id,
+    target,
+    check(ws, p) {
+      const idn = p.identity || {};
+      if (p.status === 'archived') return `${target} is archived`;
+      if (idn.status !== 'verified') return `${target}'s identity is ${idn.status || 'not set'}, not verified`;
+      if (idn.coingecko_id !== from) return `${target} is bound to CoinGecko "${idn.coingecko_id || 'none'}", not "${from}"`;
+      const assets = idn.assets || [];
+      if (assets.length !== 1 || String(assets[0].chain).toLowerCase() !== chain || !sameAddress(assets[0].contract_address || '')) return `${target}'s contract on file is not exactly ${chain} ${contract}`;
+      const clash = projects.findDuplicates(ws, { coingecko_id: to }, { excludeId: target }).strong;
+      if (clash.length) return `${clash[0].project_id} already has CoinGecko "${to}"`;
+      return null;
+    },
+    apply(ws) {
+      const upd = projects.updateIdentity(ws, target, { coingecko_id: to, evidence });
+      return { message: upd.identity_status === 'verified' ? `CoinGecko ID "${from}" -> "${to}"` : `identity now ${upd.identity_status}: ${upd.unknowns.join(' ')}`, files: relsOf(upd) };
+    },
+  };
+}
+
+const AVNT_BASE = '0x696f9436b67233384889472cd7cd58a6fb5df4f1';
+const IO_SOLANA = 'BZLbGTNCSFfoth2GYDtwr7e4imWzpR5jqcUuGEwr646K';
+
 // check(ws, project): why the target is not in the state the repair was
 // written for (it is then skipped), or null when it is. apply(ws, project):
 // the repair itself, returning what it did and the files it changed.
@@ -89,6 +118,31 @@ const REPAIRS = [
       return { message: upd.identity_status === 'verified' ? 'identity verified: the-sandbox' : `identity still ${upd.identity_status}: ${upd.unknowns.join(' ')}`, files: [...new Set(files)] };
     },
   },
+  // Both were bound to a guessed CoinGecko ID that CoinGecko does not have, so
+  // no price ever arrived (found 2026-10-03; the desk's refreshes listed them
+  // as not returned).
+  rebindCoingecko({
+    id: '2026-10-03-veranta-coingecko-id',
+    target: 'veranta-formerly-avantis',
+    from: 'veranta',
+    to: 'avantis',
+    chain: 'base',
+    contract: AVNT_BASE,
+    // EVM addresses are not case-sensitive.
+    sameAddress: (a) => a.toLowerCase() === AVNT_BASE,
+    evidence: [{ url: 'https://api.coingecko.com/api/v3/coins/avantis', note: `CoinGecko's ID for Veranta (AVNT) is "avantis": homepage veranta.xyz, Base contract ${AVNT_BASE} (the contract on file). The ID "veranta" does not exist on CoinGecko (the API answers "coin not found"). Checked 2026-10-03.`, kind: 'repair' }],
+  }),
+  rebindCoingecko({
+    id: '2026-10-03-io-net-coingecko-id',
+    target: 'io-net',
+    from: 'io-net',
+    to: 'io',
+    chain: 'solana',
+    contract: IO_SOLANA,
+    // Solana addresses are case-sensitive.
+    sameAddress: (a) => a === IO_SOLANA,
+    evidence: [{ url: 'https://api.coingecko.com/api/v3/coins/io', note: `CoinGecko's ID for io.net (IO) is "io": homepage io.net, Solana mint ${IO_SOLANA} (the mint on file). The ID "io-net" does not exist on CoinGecko (the API answers "coin not found"). Checked 2026-10-03.`, kind: 'repair' }],
+  }),
 ];
 
 function readLedger(ws) {

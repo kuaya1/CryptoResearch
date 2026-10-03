@@ -282,3 +282,25 @@ test('status notes use New York clock times, the date only for another day', (t)
   assert.equal(later.retry_at, null);
   assert.equal(later.note, 'The last price refresh failed; showing prices from 12:29 AM');
 });
+
+test('a verified CoinGecko ID the refresh does not get back is flagged (attention, start log, connector), never rebound automatically', async (t) => {
+  const { ws, root, cleanup } = tempWorkspace('mktnotreturned');
+  t.after(cleanup);
+  enableMarket(ws, root);
+  const projects = require('../core/projects');
+  projects.addProject(ws, { name: 'Wrong Id Coin (FICTIONAL)', symbol: 'WIC', official_website: 'https://wrong-id-fictional.example/', coingecko_id: 'wrong-id-fictional', assets: [{ chain: 'base', contract_address: '0x00000000000000000000000000000000000f1c71' }], evidence: [{ url: 'https://wrong-id-fictional.example/' }] });
+  addFixtureProject(ws);
+  // CoinGecko answers for the others and leaves the unknown ID out, as /coins/markets does.
+  const r = await market.refresh(ws, { fetchImpl: fakeFetch({ 'example-payfi-fictional': 0.5, bitcoin: 70000, tether: 1, 'usd-coin': 1 }) });
+  assert.equal(r.status, 'partial');
+  assert.deepEqual(r.missing, ['wrong-id-fictional']);
+  const idx = require('../core/indexer').buildIndex(ws);
+  const flag = idx.attention.find((a) => a.kind === 'identity_price');
+  assert.equal(flag.project_id, 'wrong-id-coin-fictional');
+  assert.equal(flag.title, 'Wrong Id Coin (FICTIONAL): CoinGecko returned no price for "wrong-id-fictional"');
+  assert.equal(idx.attention.filter((a) => a.kind === 'identity_price').length, 1, 'the priced projects are not flagged');
+  const lines = require('../hosted').healthLines(ws);
+  assert.ok(lines.includes('Identity: wrong-id-coin-fictional verified, but CoinGecko returned no price for its ID "wrong-id-fictional" in the last refresh (the ID may be wrong).'), lines.join('\n'));
+  assert.match(lines.find((l) => l.startsWith('Prices:')), /; not returned wrong-id-fictional\.$/);
+  assert.equal(projects.getProject(ws, 'wrong-id-coin-fictional').identity.coingecko_id, 'wrong-id-fictional', 'never rebound automatically');
+});

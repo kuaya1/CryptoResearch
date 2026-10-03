@@ -19,6 +19,10 @@ const { runRepairs } = require('../core/repairs');
 const CMC_ID = '2026-10-03-coinmarketcap-duplicate';
 const SANDBOX_ID = '2026-10-03-sandbox-identity';
 const SAND = '0x3845badade8e6dff049820680d1f14bd3903a5d0';
+const VERANTA_ID = '2026-10-03-veranta-coingecko-id';
+const IO_ID = '2026-10-03-io-net-coingecko-id';
+const AVNT = '0x696f9436b67233384889472cd7cd58a6fb5df4f1';
+const IO_MINT = 'BZLbGTNCSFfoth2GYDtwr7e4imWzpR5jqcUuGEwr646K';
 
 // "coinmarketcap" as the dashboard's Add project form saved it before market
 // listings were refused as websites: written as a record, since the desk no
@@ -65,6 +69,16 @@ function addVeranta(ws, { coingeckoId = 'avantis' } = {}) {
 
 const addSandbox = (ws, website = 'https://www.sandbox.game/en/') => projects.addProject(ws, { name: 'Sandbox', official_website: website });
 
+// io.net as the live desk had it: verified, but bound to the guessed ID "io-net".
+const addIoNet = (ws, { coingeckoId = 'io-net', contracts = [{ chain: 'solana', contract_address: IO_MINT }] } = {}) => projects.addProject(ws, {
+  name: 'io.net',
+  symbol: 'IO',
+  official_website: 'https://io.net/',
+  coingecko_id: coingeckoId,
+  assets: contracts,
+  evidence: [{ url: 'https://io.net/', note: 'test evidence' }],
+});
+
 function setup(label, { cmc = true, veranta = 'avantis', sandbox = 'https://www.sandbox.game/en/' } = {}) {
   const t = tempWorkspace(label);
   if (veranta) addVeranta(t.ws, { coingeckoId: veranta });
@@ -81,10 +95,11 @@ test('repairs: the two live records are fixed through the normal write paths, an
   const verantaBefore = fileHash(root, 'projects/veranta-formerly-avantis/project.json');
   const lines = [];
   const results = runRepairs(ws, { log: (l) => lines.push(l) });
-  assert.deepEqual(results.map((r) => [r.id, r.status]), [[CMC_ID, 'applied'], [SANDBOX_ID, 'applied']]);
+  assert.deepEqual(results.map((r) => [r.id, r.status]), [[CMC_ID, 'applied'], [SANDBOX_ID, 'applied'], [VERANTA_ID, 'skipped'], [IO_ID, 'not_here']]);
   assert.deepEqual(lines, [
     `Repair ${CMC_ID}: applied (archived coinmarketcap as a duplicate of veranta-formerly-avantis)`,
     `Repair ${SANDBOX_ID}: applied (identity verified: the-sandbox)`,
+    `Repair ${VERANTA_ID}: skipped: veranta-formerly-avantis is bound to CoinGecko "avantis", not "veranta"`,
   ]);
 
   // The duplicate is archived, with the reason; nothing is deleted.
@@ -120,7 +135,7 @@ test('repairs: the two live records are fixed through the normal write paths, an
   // A second start does nothing at all.
   const before = hashTree(root);
   const lines2 = [];
-  assert.deepEqual(runRepairs(ws, { log: (l) => lines2.push(l) }).map((r) => r.status), ['recorded_before', 'recorded_before']);
+  assert.deepEqual(runRepairs(ws, { log: (l) => lines2.push(l) }).map((r) => r.status), ['recorded_before', 'recorded_before', 'recorded_before', 'not_here']);
   assert.deepEqual(lines2, []);
   assert.deepEqual(hashTree(root), before);
 });
@@ -128,7 +143,7 @@ test('repairs: the two live records are fixed through the normal write paths, an
 test('repairs: the website variants the live record could have still match', (t) => {
   const { ws, cleanup } = setup('repairs-variants', { cmc: 'https://coinmarketcap.com/currencies/avantis', sandbox: 'https://sandbox.game/' });
   t.after(cleanup);
-  assert.deepEqual(runRepairs(ws).map((r) => r.status), ['applied', 'applied']);
+  assert.deepEqual(runRepairs(ws).map((r) => r.status), ['applied', 'applied', 'skipped', 'not_here']);
   assert.equal(projects.getProject(ws, 'coinmarketcap').status, 'archived');
   assert.equal(projects.getProject(ws, 'sandbox').identity.coingecko_id, 'the-sandbox');
 });
@@ -140,10 +155,11 @@ test('repairs: a record in any other state is left untouched, and the repair is 
   const before = hashTree(path.join(root, 'projects'));
   const lines = [];
   const results = runRepairs(ws, { log: (l) => lines.push(l) });
-  assert.deepEqual(results.map((r) => r.status), ['skipped', 'skipped']);
+  assert.deepEqual(results.map((r) => r.status), ['skipped', 'skipped', 'skipped', 'not_here']);
   assert.deepEqual(lines, [
     `Repair ${CMC_ID}: skipped: veranta-formerly-avantis is bound to CoinGecko "veranta-other-fictional", not "avantis"`,
     `Repair ${SANDBOX_ID}: skipped: sandbox's website is https://sandbox-fictional.example/, not sandbox.game`,
+    `Repair ${VERANTA_ID}: skipped: veranta-formerly-avantis is bound to CoinGecko "veranta-other-fictional", not "veranta"`,
   ]);
   assert.deepEqual(hashTree(path.join(root, 'projects')), before, 'no record changed');
   const ledger = readJson(path.join(root, '.cr', 'repairs.json'));
@@ -151,7 +167,7 @@ test('repairs: a record in any other state is left untouched, and the repair is 
   assert.deepEqual(ledger.repairs[SANDBOX_ID].files, []);
   // Skipped once means never tried again, even after the state changes.
   projects.updateIdentity(ws, 'veranta-formerly-avantis', { coingecko_id: 'avantis', evidence: [{ url: 'https://www.veranta.xyz', note: 'test' }] });
-  assert.deepEqual(runRepairs(ws).map((r) => r.status), ['recorded_before', 'recorded_before']);
+  assert.deepEqual(runRepairs(ws).map((r) => r.status), ['recorded_before', 'recorded_before', 'recorded_before', 'not_here']);
   assert.equal(projects.getProject(ws, 'coinmarketcap').status, 'pending_identity');
 });
 
@@ -181,10 +197,74 @@ test('repairs: each precondition guards its record (reports, open research, arch
 });
 
 test('repairs: on a workspace without those projects (the PC) nothing runs and nothing is recorded', (t) => {
-  const { ws, root, cleanup } = setup('repairs-absent', { cmc: false, veranta: 'avantis', sandbox: false });
+  const { ws, root, cleanup } = setup('repairs-absent', { cmc: false, veranta: false, sandbox: false });
   t.after(cleanup);
   const lines = [];
-  assert.deepEqual(runRepairs(ws, { log: (l) => lines.push(l) }).map((r) => r.status), ['not_here', 'not_here']);
+  assert.deepEqual(runRepairs(ws, { log: (l) => lines.push(l) }).map((r) => r.status), ['not_here', 'not_here', 'not_here', 'not_here']);
   assert.deepEqual(lines, []);
   assert.equal(fs.existsSync(path.join(root, '.cr', 'repairs.json')), false);
+});
+
+test('repairs: a verified project bound to a CoinGecko ID CoinGecko does not have is rebound to the listing\'s ID, only because the contract on file matches it exactly', (t) => {
+  // The live state: Veranta bound to "veranta" (with its contract in mixed case), io.net to "io-net".
+  const { ws, root, cleanup } = setup('repairs-rebind', { cmc: true, veranta: false, sandbox: false });
+  t.after(cleanup);
+  projects.addProject(ws, { name: 'Veranta (formerly Avantis)', symbol: 'AVNT', official_website: 'https://veranta.xyz/', coingecko_id: 'veranta', assets: [{ chain: 'base', contract_address: '0x696F9436B67233384889472Cd7cD58A6fB5DF4f1' }], evidence: [{ url: 'https://veranta.xyz/', note: 'test evidence' }] });
+  addIoNet(ws);
+  const lines = [];
+  const results = runRepairs(ws, { log: (l) => lines.push(l) });
+  assert.deepEqual(results.map((r) => [r.id, r.status]), [[CMC_ID, 'skipped'], [SANDBOX_ID, 'not_here'], [VERANTA_ID, 'applied'], [IO_ID, 'applied']]);
+  assert.deepEqual(lines, [
+    `Repair ${CMC_ID}: skipped: veranta-formerly-avantis is bound to CoinGecko "veranta", not "avantis"`,
+    `Repair ${VERANTA_ID}: applied (CoinGecko ID "veranta" -> "avantis")`,
+    `Repair ${IO_ID}: applied (CoinGecko ID "io-net" -> "io")`,
+  ]);
+  const v = projects.getProject(ws, 'veranta-formerly-avantis');
+  assert.equal(v.identity.status, 'verified');
+  assert.equal(v.identity.coingecko_id, 'avantis');
+  assert.equal(v.identity.official_website, 'https://veranta.xyz/', 'the website stays');
+  assert.deepEqual(v.identity.assets.map((a) => [a.chain, a.contract_address]), [['base', '0x696F9436B67233384889472Cd7cD58A6fB5DF4f1']], 'the contract stays as written');
+  const ev = v.identity.evidence[v.identity.evidence.length - 1];
+  assert.equal(ev.url, 'https://api.coingecko.com/api/v3/coins/avantis');
+  assert.match(ev.note, /The ID "veranta" does not exist on CoinGecko .* Checked 2026-10-03\.$/);
+  const io = projects.getProject(ws, 'io-net');
+  assert.equal(io.identity.coingecko_id, 'io');
+  assert.deepEqual(io.identity.assets.map((a) => a.contract_address), [IO_MINT]);
+  const tracked = require('../core/market').trackedIds(ws);
+  assert.ok(tracked.includes('avantis') && tracked.includes('io') && !tracked.includes('veranta') && !tracked.includes('io-net'), 'priced by the listing\'s ID now');
+  // The duplicate stays for Eric to decide: still pending, still there.
+  assert.equal(projects.getProject(ws, 'coinmarketcap').status, 'pending_identity');
+  const before = hashTree(path.join(root, 'projects'));
+  assert.deepEqual(runRepairs(ws).map((r) => r.status), ['recorded_before', 'not_here', 'recorded_before', 'recorded_before']);
+  assert.deepEqual(hashTree(path.join(root, 'projects')), before, 'once only');
+});
+
+test('repairs: the CoinGecko rebinds touch nothing unless the record is exactly as written for (contract, its case on Solana, one contract, verified, not archived, ID free)', (t) => {
+  const cases = [
+    ['other-contract', (ws) => addIoNet(ws, { contracts: [{ chain: 'solana', contract_address: 'FICTIONALmint1111111111111111111111111111111' }] }), /io-net's contract on file is not exactly solana BZLb/],
+    ['solana-case', (ws) => addIoNet(ws, { contracts: [{ chain: 'solana', contract_address: IO_MINT.toLowerCase() }] }), /io-net's contract on file is not exactly solana/],
+    ['two-contracts', (ws) => addIoNet(ws, { contracts: [{ chain: 'solana', contract_address: IO_MINT }, { chain: 'ethereum', contract_address: '0x000000000000000000000000000000000000f1c7' }] }), /io-net's contract on file is not exactly/],
+    ['other-chain', (ws) => addIoNet(ws, { contracts: [{ chain: 'ethereum', contract_address: IO_MINT }] }), /io-net's contract on file is not exactly solana/],
+    ['already-io', (ws) => addIoNet(ws, { coingeckoId: 'io' }), /io-net is bound to CoinGecko "io", not "io-net"/],
+    ['archived', (ws) => { addIoNet(ws); projects.archiveProject(ws, 'io-net', 'Eric archived it (FICTIONAL test)'); }, /io-net is archived/],
+    ['id-taken', (ws) => { addIoNet(ws); projects.addProject(ws, { name: 'Io Copy (FICTIONAL)', official_website: 'https://io-copy-fictional.example/', coingecko_id: 'io', evidence: [{ url: 'https://io-copy-fictional.example/' }] }); }, /io-copy-fictional already has CoinGecko "io"/],
+  ];
+  for (const [label, make, reason] of cases) {
+    const { ws, root, cleanup } = setup(`repairs-io-${label}`, { cmc: false, veranta: false, sandbox: false });
+    try {
+      make(ws);
+      const before = fileHash(root, 'projects/io-net/project.json');
+      const r = runRepairs(ws).find((x) => x.id === IO_ID);
+      assert.equal(r.status, 'skipped', label);
+      assert.match(r.reason, reason, label);
+      assert.equal(fileHash(root, 'projects/io-net/project.json'), before, `${label}: untouched`);
+    } finally {
+      cleanup();
+    }
+  }
+  // A pending identity is not rebound either.
+  const { ws, cleanup } = setup('repairs-io-pending', { cmc: false, veranta: false, sandbox: false });
+  t.after(cleanup);
+  projects.addProject(ws, { name: 'io.net', official_website: 'https://io.net/' });
+  assert.match(runRepairs(ws).find((x) => x.id === IO_ID).reason, /io-net's identity is pending, not verified/);
 });

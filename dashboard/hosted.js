@@ -447,8 +447,8 @@ async function main(env = process.env) {
   if (cfg.dataDir && process.platform === 'linux') {
     const m = containingMount(cfg.dataDir);
     console.log(`Data folder ${cfg.dataDir}: on mount ${m ? `${m.point} (${m.type})` : 'unknown (mount table unreadable)'}.`);
-    console.log(`Revision: ${require('./core/revision').revisionLine()}.`);
   }
+  console.log(`Revision: ${require('./core/revision').revisionLine()}.`);
   if (cfg.problems.length) {
     console.error('CryptoResearch (hosted) did not start the desk, so no records are exposed:');
     for (const p of cfg.problems) console.error(`  - ${p}`);
@@ -516,8 +516,11 @@ function healthLines(ws) {
   const host = (u) => {
     try { return new URL(u).hostname.replace(/^www\./, ''); } catch (_) { return null; }
   };
+  const f = market.freshness(ws);
+  const notReturned = new Set(f.missing_ids || []);
   for (const p of require('./core/projects').listProjects(ws).filter((x) => !x.broken && x.status !== 'archived')) {
     const id = p.identity || {};
+    if (id.status === 'verified' && id.coingecko_id && notReturned.has(id.coingecko_id)) out.push(`Identity: ${p.project_id} verified, but CoinGecko returned no price for its ID "${id.coingecko_id}" in the last refresh (the ID may be wrong).`);
     if (id.status !== 'verified') {
       const cands = (id.candidates || []).map((c) => c.coingecko_id).filter(Boolean);
       const ev = [...new Set((id.evidence || []).map((e) => host(e.url)).filter(Boolean))];
@@ -539,8 +542,7 @@ function healthLines(ws) {
       out.push(`Grade: ${p.project_id}/${r.report_id} (${r.meta.provider}, ${r.assessment.source_format || '?'}, rubric ${r.assessment.rubric_version || 'none'}) ${g.status}${g.coverage_pct !== null && g.coverage_pct !== undefined ? ` at ${g.coverage_pct}% of the weight` : ''}; ${comp.length ? comp.join('; ') : cut(g.reason || '', 120)}${ignored.length ? `; keys not in the rubric: ${ignored.join(', ')}` : ''}${errs.length ? `; errors: ${errs.join(' | ')}` : ''}.`);
     }
   }
-  const f = market.freshness(ws);
-  out.push(`Prices: ${f.freshness}${f.note ? ` (${cut(f.note, 160)})` : ''}; last success ${f.last_success_at || 'never'}; last attempt ${f.last_attempt_at || 'never'}${f.last_error ? `; last error "${cut(f.last_error, 120)}"` : ''}; failures in a row ${f.consecutive_failures || 0}${f.rate_limited ? `; rate-limited until ${f.retry_at}` : ''}; calls this month ${f.calls ? f.calls.month_count : '?'}; CoinGecko key ${market.apiKey() ? 'present' : 'none'}; tracked ${(f.tracked_ids || []).length}.`);
+  out.push(`Prices: ${f.freshness}${f.note ? ` (${cut(f.note, 160)})` : ''}; last success ${f.last_success_at || 'never'}; last attempt ${f.last_attempt_at || 'never'}${f.last_error ? `; last error "${cut(f.last_error, 120)}"` : ''}; failures in a row ${f.consecutive_failures || 0}${f.rate_limited ? `; rate-limited until ${f.retry_at}` : ''}; calls this month ${f.calls ? f.calls.month_count : '?'}; CoinGecko key ${market.apiKey() ? 'present' : 'none'}; tracked ${(f.tracked_ids || []).length}; not returned ${notReturned.size ? [...notReturned].join(', ') : 'none'}.`);
   return out;
 }
 
