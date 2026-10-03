@@ -160,10 +160,15 @@ async function refresh() {
   await render({ reason: 'refresh' });
 }
 
-function navigate(hash, { replace = false } = {}) {
+// `state` marks an entry a view added for itself (the project inspector), so
+// it can close by going back to the entry it came from.
+function navigate(hash, { replace = false, state = null } = {}) {
   if (location.hash === hash) render({ reason: 'refresh' });
   else if (replace) {
-    history.replaceState(null, '', hash);
+    history.replaceState(state, '', hash);
+    render({ reason: 'nav' });
+  } else if (state) {
+    history.pushState(state, '', hash);
     render({ reason: 'nav' });
   } else location.hash = hash;
 }
@@ -398,7 +403,9 @@ async function render({ reason = 'nav' } = {}) {
     const view = await LOADERS[route.name]();
     const node = await view(ctx, route);
     if (seq !== state.renderSeq) return; // a newer navigation won
-    clear(main).appendChild(node);
+    // A view that updated itself in place returns the page already shown:
+    // leave it in the document, so focus, a caret and composition stay.
+    if (main.firstChild !== node || main.childNodes.length !== 1) clear(main).appendChild(node);
     document.title = pageTitle(route);
     // Work that needs the page in the document (the summary panel, an open scorecard).
     if (typeof node.afterMount === 'function') {
@@ -663,6 +670,30 @@ async function boot() {
   main.addEventListener('input', (e) => {
     if (e.target && e.target.closest && e.target.closest('[data-nodirty]')) return;
     state.dirty = true;
+  });
+  // Ctrl+K (Cmd+K on a Mac): search the watchlist from anywhere. Never while
+  // typing or editing, and never with a dialog open.
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || '');
+  document.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() !== 'k' || e.altKey || e.shiftKey || (mac ? !e.metaKey || e.ctrlKey : !e.ctrlKey || e.metaKey)) return;
+    const t = e.target;
+    const editing = t && (t.isContentEditable || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || (t.tagName === 'INPUT' && t.dataset.key !== 'wl-search'));
+    if (editing || document.querySelector('dialog[open]')) return;
+    e.preventDefault();
+    const r = state.route;
+    const box = document.querySelector('[data-key="wl-search"]');
+    // On the list (also beside a docked project inspector): straight to the box.
+    if (r && r.name === 'watchlist' && box && !document.body.classList.contains('sheet-open')) {
+      box.focus();
+      box.select();
+      return;
+    }
+    // Elsewhere, or under a modal inspector: back to the list first.
+    state.focusSearch = true;
+    if (r && r.name === 'watchlist') {
+      if (history.state && history.state.crPanel) history.back();
+      else navigate(ctx.hrefWith({ p: null }), { replace: true });
+    } else navigate('#/watchlist');
   });
   await render();
   // An initially hidden page (a background tab) does not poll until shown.

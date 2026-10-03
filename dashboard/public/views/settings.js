@@ -2,8 +2,31 @@
 // appear in the page), rubrics, data (exports, backups) and system status.
 import {
   h, card, table, stateText, fmtDateTime, fmtNum, fmtAgo, field, input, select, button, action, callout, kv, details, tabStrip, safeSection,
-  priceStatus, PROVIDERS, PROVIDER_LABELS,
+  priceStatus, toast, store, PROVIDERS, PROVIDER_LABELS,
 } from '../ui.js';
+
+// The color theme is this browser's choice (theme.js applies it before the
+// first paint), so the phone and the PC can differ.
+const THEMES = [['dark', 'Dark'], ['light', 'Light'], ['system', 'Match this device']];
+
+function appearanceCard() {
+  const current = THEMES.some(([v]) => v === store.get('theme')) ? store.get('theme') : 'dark';
+  const pick = h('fieldset', { class: 'seg', dataset: { nodirty: '1' } },
+    h('legend', { class: 'sr-only' }, 'Color theme'),
+    THEMES.map(([v, label]) => h('button', {
+      type: 'button',
+      'aria-pressed': String(v === current),
+      dataset: { key: `theme-${v}` },
+      onclick: (e) => {
+        store.set('theme', v === 'dark' ? null : v);
+        if (v === 'dark') document.documentElement.removeAttribute('data-theme');
+        else document.documentElement.setAttribute('data-theme', v);
+        for (const b of pick.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b === e.currentTarget));
+        toast(`Theme: ${label}. Saved in this browser only.`);
+      },
+    }, label)));
+  return card('Appearance', pick, { note: 'Saved in this browser only. Dark is the default.' });
+}
 
 const TABS = [
   ['general', 'General'],
@@ -65,6 +88,7 @@ function generalTab(ctx) {
   }, 'Settings saved to config/settings.json');
   const sources = s.rank_sources || {};
   return h('div', null,
+    appearanceCard(),
     card('Dashboard settings', form, { note: 'Rubric weights are not editable here: they belong to the versioned rubric files.' }),
     card('Market data sources', table([
       { label: 'Source', render: (x) => x.label },

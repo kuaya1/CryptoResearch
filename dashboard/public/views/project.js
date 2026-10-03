@@ -64,7 +64,7 @@ export async function renderProject(ctx, route) {
     h('div', { id: 'tabpanel', role: 'tabpanel', 'aria-labelledby': `tab-${tab}` }, body));
 }
 
-function latestReports(d) {
+export function latestReports(d) {
   const out = {};
   for (const prov of PROVIDERS) {
     const meta = d.comparison.latest[prov];
@@ -439,7 +439,7 @@ function claimReviewControls(ctx, d, r, c, rev) {
 // The desk's evidence checks on one report's claims (core/evidence.js):
 // flags with the reason and what would settle each; never a score change.
 const SEVERITY_TONE = { high: 'bad', medium: 'warn', low: '' };
-function evidenceChecksBlock(ev) {
+export function evidenceChecksBlock(ev) {
   if (!ev) return null;
   return h('div', { class: 'small', style: { margin: '0 0 10px' } },
     h('p', { style: { margin: '0 0 4px' } },
@@ -508,6 +508,12 @@ function normalizedView(ctx, d, r) {
   return det;
 }
 
+// One cited source, with what is known about it (also used by the inspector).
+export function sourceItem(s) {
+  const meta = [s.publisher, s.source_type ? s.source_type.replace(/_/g, ' ') : null, s.accessed_at ? `accessed ${fmtDate(s.accessed_at)}` : null].filter(Boolean);
+  return h('li', null, s.url ? h('a', { href: s.url }, s.title || s.url) : h('span', null, s.title || s.source_id, h('span', { class: 'faint' }, ' (no usable link)')), meta.length ? h('span', { class: 'faint' }, ` · ${meta.join(' · ')}`) : null);
+}
+
 // At a glance, above the original: what the report concludes and what it
 // rests on. The grade is this app's calculation from the report's six
 // weighted scores (a withheld grade lists the unscored parts and the model's
@@ -532,10 +538,6 @@ function atAGlance(ctx, d, r, withheld) {
       unscoredList(withheld, { max: 400 }));
   } else if (g && (g.status === 'firm' || g.status === 'range')) gradeEl = gradeView(g);
   else gradeEl = h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, 'No grade'), g && g.reason ? h('span', { class: 'small muted' }, g.reason) : null);
-  const sourceItem = (s) => {
-    const meta = [s.publisher, s.source_type ? s.source_type.replace(/_/g, ' ') : null, s.accessed_at ? `accessed ${fmtDate(s.accessed_at)}` : null].filter(Boolean);
-    return h('li', null, s.url ? h('a', { href: s.url }, s.title || s.url) : h('span', null, s.title || s.source_id, h('span', { class: 'faint' }, ' (no usable link)')), meta.length ? h('span', { class: 'faint' }, ` · ${meta.join(' · ')}`) : null);
-  };
   return h('section', { class: 'card glance', 'aria-labelledby': 'glance-title' },
     h('div', { class: 'card-head' }, h('div', null, h('h2', { id: 'glance-title' }, 'At a glance'),
       h('div', { class: 'note' }, 'The grade is calculated by this app from the report\'s six weighted scores. The verdict, risks, questions and sources are the model\'s own; the report below tags each claim as checked, project-claimed, inference or speculation.'))),
@@ -1016,6 +1018,24 @@ function jobRow(ctx, pid, run, prov, projectName = pid) {
   };
 }
 
+// The exact prompt every model got, readable on the page (a phone has no
+// easy way to look at copied text), loaded only when opened.
+export function promptView(ctx, pid, run) {
+  const promptUrl = `/api/projects/${pid}/research/${run.run_id}/prompt`;
+  // Already read once: shown at once, so a redraw keeps its scroll position.
+  const cached = textCache.has(promptUrl);
+  const promptBox = h('pre', { class: 'prompt-text pre small', 'data-keep-scroll': `prompt-${run.run_id}`, dataset: cached ? { loaded: '1' } : null }, cached ? textCache.get(promptUrl) : 'Loading the prompt…');
+  const view = h('details', { class: 'prompt-view', dataset: { key: `prompt-${run.run_id}` } }, h('summary', null, 'Show the exact prompt'), promptBox);
+  const load = () => {
+    if (!view.open || promptBox.dataset.loaded) return;
+    cachedText(ctx, promptUrl).then((t) => { promptBox.textContent = t; promptBox.dataset.loaded = '1'; }).catch((err) => { promptBox.textContent = `The prompt could not be loaded: ${err.message}`; });
+  };
+  view.addEventListener('toggle', load);
+  // Opened again after a redraw: load at once.
+  queueMicrotask(load);
+  return view;
+}
+
 function researchTab(ctx, d, row) {
   const pid = d.project.project_id;
   const runs = d.research.runs || [];
@@ -1023,14 +1043,6 @@ function researchTab(ctx, d, row) {
     const promptUrl = `/api/projects/${pid}/research/${run.run_id}/prompt`;
     const copy = button('Copy prompt', null, { kind: 'small' });
     copy.onclick = action(copy, async () => { await copyText(await cachedText(ctx, promptUrl)); return undefined; });
-    // The exact prompt every model got, readable on the page (a phone has no
-    // easy way to look at copied text), loaded only when opened.
-    const promptBox = h('pre', { class: 'prompt-text pre small' }, 'Loading the prompt…');
-    const promptView = h('details', { class: 'prompt-view', dataset: { key: `prompt-${run.run_id}` } }, h('summary', null, 'Show the exact prompt'), promptBox);
-    promptView.addEventListener('toggle', () => {
-      if (!promptView.open || promptBox.dataset.loaded) return;
-      cachedText(ctx, promptUrl).then((t) => { promptBox.textContent = t; promptBox.dataset.loaded = '1'; }).catch((err) => { promptBox.textContent = `The prompt could not be loaded: ${err.message}`; });
-    });
     return card(h('span', { class: 'pill-row' }, h('span', null, `Run of ${fmtDateTime(run.created_at)}`), h('span', { class: 'small muted' }, (run.status || '').replace(/_/g, ' '))), [
       (table([
         { label: 'Model', render: (x) => PROVIDER_LABELS[x.prov] },
@@ -1048,7 +1060,7 @@ function researchTab(ctx, d, row) {
         ['Prompt', h('span', null, `${run.prompt.version}, identical for every model · SHA-256 ${run.prompt.sha256.slice(0, 12)}… `, copy)],
         ['Evidence packet', `captured ${fmtDateTime(run.evidence_packet.captured_at)} · SHA-256 ${run.evidence_packet.sha256.slice(0, 12)}… · no holdings, notes or other models' conclusions`],
       ]), { id: `run-${run.run_id}` }),
-      promptView,
+      promptView(ctx, pid, run),
     ]);
   });
   const legacy = d.prompt_files || [];

@@ -16,3 +16,15 @@ The short version:
 - The running code is `main`. The integrity repair (`rc/integrity-r2`) was merged into `main` on 2026-10-02 (`4af6c54`) with Eric's authorization.
 - The online desk (phone access) is the same code deployed from GitHub `main` to Render (`server.js` → `dashboard/hosted.js`). It keeps its own records on a Render disk and never receives this folder; copying records there is Eric's decision. Its keys and passphrase live only in Render's environment, entered by Eric.
 - Cowork's main route is the desk's **CryptoResearch connector** (remote MCP at `/mcp`, OAuth approved with Eric's passphrase; `dashboard/oauth.js`, `dashboard/mcp.js`). With its tools available, follow COWORK-INSTRUCTIONS §0 instead of the CLI. ChatGPT and Gemini connect to the same connector; each connection is bound to its model and files only that model's reports.
+
+## UI guidelines (dashboard/public)
+
+- Plain ES modules and CSS, no build step and no dependencies. Do not add a framework, component library or table engine for looks.
+- One token layer: the `:root` block at the top of `styles.css` (surfaces, text, lines, the one accent, status colors, type, spacing, row heights, motion). Dark is the default; the light palette is `data-theme="light"` or `"system"`, chosen per browser in Settings and applied before paint by `theme.js`. Components use tokens, never raw colors.
+- Meaning is never color alone: every state is a word (Queued, Working, Waiting, Paused, Check, Failed, Withheld), a sign or a shape, and the accessible label says it in full. Keep the vocabulary in `ui.js` (`RESEARCH_STATE`, `badgeInfo`).
+- The watchlist shows only values the desk supplies: unknown stays "—" with the reason in its label, stale prices show their age, unknown values sort last both ways. Each model keeps its own grade in its own column; never a combined score. Evidence flags sit beside the grade they concern (filled sign = serious, outlined = material).
+- Holdings live in Portfolio. No research view of positions.
+- The project inspector is `?p=<id>` on the watchlist: a dialog (docked beside the list from 1280px, a drawer below that, full screen at phone width). Back, Escape and its close button close it and return focus to the project. Its detail parts come from `views/inspector.js`, built from the project page's components.
+- Live updates redraw in place: a view returns its mounted page to update it, keeps focus, open details, scroll and drafts, and never reorders rows while you read (offer Re-sort). One bounded poll in `app.js`; no timer or connection per component.
+- Keyboard: Ctrl/Cmd+K search, Up/Down between rows in a column, Enter opens, Escape closes. Never while typing; no grid roles.
+- Sizes: desktop rows about 44px, 14px text, tabular numerals, monospace only for identifiers and compared numbers; touch targets 44px; transitions about 140ms and none with reduced motion. Check 1440px and 390px with fictional fixtures (no paid research).

@@ -254,13 +254,66 @@ test('watchlist: opens on what you follow, one count for the nav and the header,
   assert.equal(wl.prefs(ctxWith({})).filters.owned, 'watching');
 });
 
-test('review queue: closing it holds until a new urgent item arrives', async () => {
+test('attention: a possibly billed call, blocked research and recovery problems stay in view; the rest is counted', async () => {
   const { wl } = await mods;
-  const a = [{ kind: 'research_uncertain', severity: 'high', project_id: 'x', title: 'X: ChatGPT API call needs a check' }, { kind: 'identity', severity: 'low', project_id: 'y', title: 'Y: token identity pending' }];
-  const b = [...a, { kind: 'writes_blocked', severity: 'high', project_id: null, title: 'Saving is blocked' }];
-  assert.equal(wl.urgentSignature(a), 'research_uncertain|x|X: ChatGPT API call needs a check', 'only urgent items count');
-  assert.notEqual(wl.urgentSignature(b), wl.urgentSignature(a));
-  assert.equal(wl.urgentSignature([{ severity: 'medium', kind: 'k', title: 't' }]), '');
+  const items = [
+    { kind: 'research_uncertain', severity: 'high', project_id: 'x', title: 'X: ChatGPT API call needs a check' },
+    { kind: 'research_failed', severity: 'medium', project_id: 'x', title: 'X: Gemini research job failed' },
+    { kind: 'research_interrupted', severity: 'medium', project_id: 'y', title: 'Y: Cowork stopped working on its research' },
+    { kind: 'writes_blocked', severity: 'high', project_id: null, title: 'Saving is blocked' },
+    { kind: 'broken_record', severity: 'high', project_id: 'z', title: 'Project record z could not be read' },
+    { kind: 'request_pending', severity: 'high', project_id: null, title: 'Cowork request pending for 140 min' },
+    { kind: 'request_pending', severity: 'medium', project_id: null, title: 'Cowork request pending for 9 min' },
+    { kind: 'review_overdue', severity: 'high', project_id: 'y', title: 'Y: review overdue' },
+    { kind: 'identity', severity: 'low', project_id: 'y', title: 'Y: token identity pending' },
+  ];
+  const { critical, rest } = wl.splitAttention(items);
+  assert.deepEqual(critical.map((a) => a.kind), ['research_uncertain', 'research_failed', 'research_interrupted', 'writes_blocked', 'broken_record', 'request_pending']);
+  assert.deepEqual(rest.map((a) => a.kind), ['request_pending', 'review_overdue', 'identity']);
+  // Each kept item says what it is in words, never only a color or an icon.
+  for (const a of items) assert.match(wl.kindWord(a), /^[A-Z][a-z]+( [a-z]+)?$/, a.kind);
+  assert.equal(wl.kindWord(items[0]), 'Check charge');
+  assert.equal(wl.kindWord({ kind: 'portfolio_shortfall', severity: 'medium' }), 'Portfolio');
+});
+
+test('research models in brief: automatic, setup required (with the missing key named), demo', async () => {
+  const { wl } = await mods;
+  const manual = { mode: 'manual', reason: 'not configured: API key, model ID, token prices, a search price (or max searches 0 to turn web search off), spending budget' };
+  assert.equal(wl.readinessSummary({ claude: manual, chatgpt: manual, gemini: manual }).text, '3 need setup');
+  assert.equal(wl.readinessSummary({ claude: { mode: 'api' }, chatgpt: { mode: 'api' }, gemini: { mode: 'api' } }).text, 'all automatic');
+  assert.equal(wl.readinessSummary({ claude: { mode: 'api' }, chatgpt: manual, gemini: { mode: 'mock' } }).text, '1 automatic · 1 needs setup · 1 demo');
+  assert.equal(wl.readinessSummary(null).text, 'unknown');
+  assert.equal(wl.setupShort(manual.reason), 'Setup required: no API key');
+  assert.equal(wl.setupShort('not configured: model ID, spending budget'), 'Setup required: 2 settings missing');
+  assert.equal(wl.setupShort('not configured: a search price (or max searches 0 to turn web search off)'), 'Setup required: 1 setting missing', 'a comma inside parentheses is one setting');
+});
+
+test('evidence flags: a serious flag sits beside the grade and is said in words; the grade itself is unchanged', async () => {
+  const { ui } = await mods;
+  const graded = (evidence, extra = {}) => ui.badgeInfo('gemini', REPORT({ status: 'firm', value: 81.4, display: '81.4', label: 'B' }, { evidence, ...extra }), null);
+  const serious = graded({ flagged: 2, high: 1, medium: 1, low: 0 });
+  assert.equal(serious.kind, 'grade');
+  assert.equal(serious.value, '81.4', 'the number stays the calculated grade');
+  assert.equal(serious.ev, 'serious');
+  assert.match(serious.text, /^Gemini grade 81\.4, B, .*; 2 claims flagged by evidence checks \(1 serious\)/);
+  const material = graded({ flagged: 1, high: 0, medium: 1, low: 0 });
+  assert.equal(material.ev, 'material');
+  assert.match(material.text, /1 claim flagged by evidence checks \(1 material\)/);
+  assert.equal(graded({ flagged: 1, high: 0, medium: 0, low: 1 }).ev, null, 'a low flag (a missing date) is shown in the inspector only');
+  assert.equal(graded({ flagged: 0, high: 0, medium: 0, low: 0 }).ev, null);
+  assert.equal(graded(undefined).ev, null, 'an older index without evidence briefs');
+  assert.equal(graded({ flagged: 1, high: 1 }, { needs_text: true }).ev, null, 'a PDF has no checked claims yet');
+  const withheld = ui.badgeInfo('claude', REPORT({ status: 'withheld', coverage_pct: 55 }, { evidence: { flagged: 1, high: 1 } }), null);
+  assert.equal(withheld.value, 'Withheld');
+  assert.equal(withheld.ev, 'serious', 'a withheld report can be flagged too');
+  assert.equal(ui.evidenceText({ flagged: 3, high: 0, medium: 2 }), '3 claims flagged by evidence checks (2 material)');
+});
+
+test('watchlist: holdings stay in Portfolio, so a saved "held" view opens on what you follow', async () => {
+  const { wl } = await mods;
+  const ctxWith = (saved) => ({ ui: { get: () => saved } });
+  assert.equal(wl.prefs(ctxWith({ v: 2, filters: { owned: 'held' } })).filters.owned, 'watching');
+  assert.equal(wl.prefs(ctxWith({ v: 2, filters: { owned: 'off' } })).filters.owned, 'off');
 });
 
 test('Add project: a listing or explorer link is searched by its slug, never saved as the website or the name', async () => {

@@ -466,6 +466,35 @@ function newerRunText(provider, key, job) {
   return `Newer run ${(RESEARCH_STATE[key] || { short: key }).short.toLowerCase()}`;
 }
 
+// The desk's evidence checks on a report (core/evidence.js, in brief on the
+// index): "serious" when any flag is high (for example a claim tagged verified
+// whose only support is an AI summary), "material" when any is medium, else
+// none. The checks never change a score; they say how far to trust it.
+export function evidenceLevel(ev) {
+  if (!ev || !ev.flagged) return null;
+  if (ev.high > 0) return 'serious';
+  if (ev.medium > 0) return 'material';
+  return null;
+}
+
+export function evidenceText(ev) {
+  if (!ev || !ev.flagged) return null;
+  const n = ev.flagged;
+  return `${n} claim${n === 1 ? '' : 's'} flagged by evidence checks${ev.high ? ` (${ev.high} serious)` : ev.medium ? ` (${ev.medium} material)` : ''}`;
+}
+
+const SVG_ICONS = {
+  // A warning sign: filled for a serious flag, outlined for a material one.
+  'warn-fill': [['path', { d: 'M8 1.6 15.3 14.4H.7Z', fill: 'currentColor' }], ['path', { d: 'M8 6v3.6', class: 'ink-line', 'stroke-width': '1.7', 'stroke-linecap': 'round' }], ['circle', { cx: '8', cy: '11.9', r: '0.95', class: 'ink-dot' }]],
+  'warn-line': [['path', { d: 'M8 2.2 14.6 13.9H1.4Z', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.4', 'stroke-linejoin': 'round' }], ['path', { d: 'M8 6.2v3.3', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round' }], ['circle', { cx: '8', cy: '11.7', r: '0.85', fill: 'currentColor' }]],
+};
+
+// A small decorative icon; the meaning is always in the surrounding text.
+export function icon(name) {
+  const parts = SVG_ICONS[name] || [];
+  return svg('svg', { viewBox: '0 0 16 16', width: '16', height: '16', 'aria-hidden': 'true', focusable: 'false' }, ...parts.map(([tag, attrs]) => svg(tag, attrs)));
+}
+
 export function badgeInfo(provider, report, job, { staleDays = 90, hosted = false } = {}) {
   const who = PROVIDER_LABELS[provider];
   const key = jobKey(job);
@@ -477,7 +506,9 @@ export function badgeInfo(provider, report, job, { staleDays = 90, hosted = fals
     const age = daysSince(report.analysis_at);
     const stale = age !== null && age > staleDays;
     const newerText = newer ? newerRunText(provider, key, job) : null;
-    const base = { report: true, age: fmtAge(report.analysis_at), date: report.analysis_at, stale, sub: null, refreshing: newer && WORKING.has(key), problem: newer && NEEDS_LOOK.has(key), newerText, job: newer ? key : null };
+    const ev = report.needs_text ? null : evidenceLevel(report.evidence);
+    const evText = ev ? evidenceText(report.evidence) : null;
+    const base = { report: true, age: fmtAge(report.analysis_at), date: report.analysis_at, stale, sub: null, refreshing: newer && WORKING.has(key), problem: newer && NEEDS_LOOK.has(key), newerText, job: newer ? key : null, ev, evText };
     let out;
     if (report.needs_text) out = { kind: 'pdf', value: 'PDF', label: null, text: `${who}: PDF report saved; a text copy is needed before it can be graded` };
     else if (g.status === 'firm') out = { kind: 'grade', value: g.display, label: g.label, text: `${who} grade ${g.display}${g.label ? `, ${g.label}` : ''}` };
@@ -487,13 +518,13 @@ export function badgeInfo(provider, report, job, { staleDays = 90, hosted = fals
       out = { kind: 'withheld', value: 'Withheld', sub: pct !== null ? `${pct}%` : null, label: null, text: `${who}: grade withheld${pct !== null ? `, ${pct}% of the weight scored` : ''}` };
     } else out = { kind: 'withheld', value: 'No grade', label: null, text: `${who}: no authoritative grade${g.reason ? `. ${g.reason}` : ''}` };
     const when = report.analysis_at ? `analysis ${fmtDate(report.analysis_at)}${stale ? ', stale' : ''}` : 'analysis date unknown';
-    return { ...base, ...out, text: `${out.text}, ${when}${newerText ? `; ${newerText.charAt(0).toLowerCase()}${newerText.slice(1)}` : ''}` };
+    return { ...base, ...out, text: `${out.text}, ${when}${evText ? `; ${evText}` : ''}${newerText ? `; ${newerText.charAt(0).toLowerCase()}${newerText.slice(1)}` : ''}` };
   }
   if (key && RESEARCH_STATE[key]) {
     const st = researchState(key, { provider, hosted });
-    return { report: false, kind: key, value: st.short, sub: null, label: null, age: null, stale: false, refreshing: false, problem: false, newerText: null, job: key, text: `${who}: ${st.long}${job.error ? `. ${job.error}` : ''}` };
+    return { report: false, kind: key, value: st.short, sub: null, label: null, age: null, stale: false, refreshing: false, problem: false, newerText: null, job: key, ev: null, evText: null, text: `${who}: ${st.long}${job.error ? `. ${job.error}` : ''}` };
   }
-  return { report: false, kind: 'none', value: 'None', sub: null, label: null, age: null, stale: false, refreshing: false, problem: false, newerText: null, job: null, text: `${who}: no research yet` };
+  return { report: false, kind: 'none', value: 'None', sub: null, label: null, age: null, stale: false, refreshing: false, problem: false, newerText: null, job: null, ev: null, evText: null, text: `${who}: no research yet` };
 }
 
 export function gradeBadge(provider, report, job, opts = {}) {
@@ -501,8 +532,8 @@ export function gradeBadge(provider, report, job, opts = {}) {
   const tag = opts.button ? 'button' : 'span';
   const band = info.kind === 'grade' || info.kind === 'range' ? bandClass(report && report.grade) : '';
   const attrs = {
-    class: `gb is-${info.kind}${band}${info.stale ? ' is-stale' : ''}${info.problem ? ' has-problem' : ''}`,
-    'aria-label': opts.button ? `${info.text}. Open details` : info.text,
+    class: `gb is-${info.kind}${band}${info.stale ? ' is-stale' : ''}${info.problem ? ' has-problem' : ''}${info.ev ? ` ev-${info.ev}` : ''}`,
+    'aria-label': opts.button ? `${info.text.replace(/[.\s]+$/, '')}. Open details` : info.text,
     dataset: { provider, key: opts.key || null },
   };
   if (!opts.key) delete attrs.dataset.key;
@@ -511,13 +542,14 @@ export function gradeBadge(provider, report, job, opts = {}) {
   // its grade in the band's color, or a plain state. The analysis age shows
   // only when it is stale; the scorecard and panel give the date. A withheld
   // grade shows the share of the weight that was scored, never a number in
-  // the grade's place.
+  // the grade's place. Evidence flags sit right beside the grade.
   return h(tag, attrs,
     h('span', { class: 'p', 'aria-hidden': 'true' }, PROVIDER_SHORT[provider]),
     h('span', { class: 'main', 'aria-hidden': 'true' },
       h('span', { class: 'v' }, info.value),
       info.sub ? h('span', { class: 's' }, info.sub) : null,
       info.label ? h('span', { class: 'l' }, info.label) : null,
+      info.ev ? h('span', { class: 'ev', title: `Evidence checks: ${info.evText}` }, icon(info.ev === 'serious' ? 'warn-fill' : 'warn-line')) : null,
       info.stale && info.age ? h('span', { class: 'a' }, info.age) : null,
       info.refreshing ? h('span', { class: 'r', title: info.newerText }, '↻') : null,
       info.problem ? h('span', { class: 'x', title: info.newerText }, '!') : null));
