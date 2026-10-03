@@ -8,7 +8,7 @@
 // explicit long-term exception and needs the owner's reason; nothing here turns
 // a ceiling into a sale or a trade.
 //
-// Reports written for this recipe (cr-research-prompt@3) carry a
+// Reports written for this recipe (cr-research-prompt@3 and @4) carry a
 // `position_context` block: the model's reading of market conditions, its
 // qualitative timing view, catalyst windows and a suggested review date. It is
 // validated here and bound to the research run on import. It adds to the report
@@ -174,7 +174,7 @@ function dateOf(value, field, issues) {
 // malformed block is kept as far as it is readable, with warnings.
 function normalizePositionContext(raw, { catalysts = [], promptVersion = null, analysisAt = null, ceiling = DEFAULT_POLICY.planning_ceiling_months } = {}) {
   const issues = [];
-  const asked = promptVersion === 'cr-research-prompt@3';
+  const asked = require('./prompts').isPositionPrompt(promptVersion);
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     if (asked) issues.push({ severity: 'warning', field: 'position_context', message: 'The prompt asked for a position_context block (market view, timing view, review date) and the report has none. Its position and timing views are unknown.' });
     return { context: null, issues };
@@ -279,7 +279,7 @@ function bindToRun(ws, projectId, runId, assessment) {
 // Compact form for the index, the scorecard preview and the summary panel.
 function compactContext(assessment, { today = ymdInTz() } = {}) {
   const pc = assessment && assessment.position_context;
-  if (!pc) return { status: assessment && assessment.prompt_version === 'cr-research-prompt@3' ? 'missing' : 'not_in_recipe' };
+  if (!pc) return { status: assessment && require('./prompts').isPositionPrompt(assessment.prompt_version) ? 'missing' : 'not_in_recipe' };
   const windows = pc.catalyst_windows || [];
   const upcoming = windows
     .filter((w) => w.in_horizon !== false && (w.window_end || w.window_start || '') >= today)

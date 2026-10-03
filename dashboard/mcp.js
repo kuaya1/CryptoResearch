@@ -191,7 +191,7 @@ const TOOLS = [
   {
     name: 'get_report',
     title: 'Read a saved report',
-    description: 'Returns a project\'s latest report from your model (or another model, or the given report): verdict, grade, horizon, top risks and, if asked, the full text. Another model\'s report is withheld while your own research on that project is open.',
+    description: 'Returns a project\'s latest report from your model (or another model, or the given report): verdict, grade, horizon, top risks, the desk\'s evidence checks on its claims (for example a claim tagged verified whose only support is an AI summary; flags only, never a score change) and, if asked, the full text. Another model\'s report is withheld while your own research on that project is open.',
     inputSchema: { type: 'object', required: ['project_id'], additionalProperties: false, properties: { project_id: projectRef, model: modelRef, report_id: { type: 'string' }, include_text: { type: 'boolean', description: 'Include the full original text (default false).' } } },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
@@ -889,6 +889,9 @@ const handlers = {
     }
     if (!r) return { status: 'none', message: `No ${PROVIDER_LABELS[model]} report for ${detail.project.name} yet.` };
     const out = { status: 'ok', project: { project_id: id, name: detail.project.name }, report: compactReport(r) };
+    // The desk's evidence checks on its claims: flags only, never a score change.
+    const ev = (detail.reports.find((x) => x.report_id === r.report_id) || {}).evidence;
+    if (ev) out.evidence_checks = { summary: ev.summary, critical_claims: ev.critical_claims, flags: ev.flags.map((x) => ({ claim_id: x.claim_id, severity: x.severity, rule: x.rule, message: x.message })), source_types_outside_list: ev.source_types.outside_list };
     if (args.include_text === true) {
       const fs = require('fs');
       const full = detail.reports.find((x) => x.report_id === r.report_id);
@@ -910,7 +913,8 @@ const handlers = {
       const l = c.latest[p];
       if (!l) continue;
       const g = c.grades[p] && c.grades[p].grade;
-      reports[p] = { report_id: l.report_id, saved_at: l.imported_at, analysis_at: l.analysis_at, horizon: l.horizon, verdict: l.verdict || null, grade: g ? { display: g.display, label: g.label, status: g.status, coverage_pct: g.coverage_pct } : null, evidence_confidence: cellText(l.evidence_confidence), model_version: l.model_version || null, citation_integrity: l.citation_integrity ? l.citation_integrity.status : null };
+      const ev = (d.reports.find((x) => x.report_id === l.report_id) || {}).evidence;
+      reports[p] = { report_id: l.report_id, saved_at: l.imported_at, analysis_at: l.analysis_at, horizon: l.horizon, verdict: l.verdict || null, grade: g ? { display: g.display, label: g.label, status: g.status, coverage_pct: g.coverage_pct } : null, evidence_confidence: cellText(l.evidence_confidence), model_version: l.model_version || null, citation_integrity: l.citation_integrity ? l.citation_integrity.status : null, evidence_checks: ev ? { summary: ev.summary, high: ev.high, medium: ev.medium, low: ev.low, top: ev.flags.slice(0, 3).map((x) => x.message) } : null };
     }
     const comparable = new Set(c.comparability.comparable_providers);
     const scores = c.rows.filter((r) => r.applicable).map((r) => ({ section: r.section, label: r.label, direction: r.direction, values: Object.fromEntries(have.map((p) => [p, cellText(r.cells[p])])), spread: r.spread, disagreement: r.spread_flag }));
@@ -937,7 +941,7 @@ const handlers = {
       open_questions: c.resolving_questions.map((q) => ({ topic: q.label, why: q.reason, question: q.question })),
       shared_sources: { shared: c.shared_sources.shared.length, per_model: c.shared_sources.overlap },
       message: have.length >= 2
-        ? `${listLabels(have)} ${have.length === 2 ? 'both have' : 'have'} reports for ${d.project.name}${missing.length ? `; ${listLabels(missing)} not yet` : ''}. Summarize for Eric where they agree and where they disagree (verdicts, flagged score spreads, conflicting figures), keep each report's own uncertainty, and name the open questions that would settle the differences.`
+        ? `${listLabels(have)} ${have.length === 2 ? 'both have' : 'have'} reports for ${d.project.name}${missing.length ? `; ${listLabels(missing)} not yet` : ''}. Summarize for Eric where they agree and where they disagree (verdicts, flagged score spreads, conflicting figures), keep each report's own uncertainty, say where a report's evidence checks flag claims (for example tagged verified without a primary source), and name the open questions that would settle the differences.`
         : `Only ${have.length ? listLabels(have) : 'no model'} has a report for ${d.project.name} so far; nothing to compare yet.`,
       note: `${c.independence_note} ${c.shared_sources.note}`,
     };

@@ -32,7 +32,17 @@ function compactGrade(g) {
   return { status: g.status, display: g.display, label: g.label, value: g.value, low: g.low, high: g.high, coverage_pct: g.coverage_pct, reason: g.reason || null, rubric: g.rubric || null, rubric_status: g.rubric_status || null };
 }
 
-function reportSummary(ws, r) {
+// The project's verified website, which tells the evidence checks which
+// sources are its own.
+const siteOf = (project) => (project && project.identity && project.identity.status === 'verified' ? project.identity.official_website || null : null);
+
+// Evidence checks (evidence.js), in brief for lists: never a score change.
+function evidenceBrief(a, project) {
+  const e = require('./evidence').evidenceChecks(a, { officialWebsite: siteOf(project) });
+  return { flagged: e.flagged_claims, high: e.high, medium: e.medium, low: e.low, critical: e.critical_claims, summary: e.summary };
+}
+
+function reportSummary(ws, r, project = null) {
   if (r.broken) return { report_id: r.report_id, broken: true, error: r.error };
   const a = r.assessment;
   const { grade, model_total } = gradeOf(ws, r);
@@ -67,6 +77,7 @@ function reportSummary(ws, r) {
     sources: (a.sources || []).length,
     top_risks: topRisks(a),
     position: require('./position').compactContext(a),
+    evidence: evidenceBrief(a, project),
   };
 }
 
@@ -139,7 +150,7 @@ function resolveHeadline(ws, project, reports, journal) {
   if (h.type === 'report') {
     const r = reports.find((x) => x.report_id === h.report_id);
     if (!r || r.broken) return { type: 'missing', message: `The selected report ${h.report_id} was not found.` };
-    return { type: 'report', selected_at: h.selected_at, note: h.note || null, ...reportSummary(ws, r) };
+    return { type: 'report', selected_at: h.selected_at, note: h.note || null, ...reportSummary(ws, r, project) };
   }
   const e = journal.find((x) => x.entry_id === h.entry_id);
   if (!e) return { type: 'missing', message: `The selected decision ${h.entry_id} was not found.` };
@@ -209,7 +220,7 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
     const providers = {};
     for (const prov of PROVIDERS) {
       if (latest[prov]) {
-        providers[prov] = reportSummary(ws, latest[prov]);
+        providers[prov] = reportSummary(ws, latest[prov], p);
         continue;
       }
       // A PDF-only report is not comparable, but it exists: say "needs text",
@@ -217,7 +228,7 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
       const textless = reports
         .filter((r) => !r.broken && r.meta.provider === prov && (r.assessment.needs_text || r.assessment.source_format === 'pdf'))
         .sort((a, b) => reportSortKey(b).localeCompare(reportSortKey(a)))[0];
-      providers[prov] = textless ? { ...reportSummary(ws, textless), needs_text: true, latest_eligible: false } : null;
+      providers[prov] = textless ? { ...reportSummary(ws, textless, p), needs_text: true, latest_eligible: false } : null;
     }
     const good = reports.filter((r) => !r.broken);
     const lastReport = good.sort((a, b) => reportSortKey(b).localeCompare(reportSortKey(a)))[0] || null;
@@ -528,6 +539,7 @@ function projectDetailRaw(ws, id) {
         grade,
         model_total,
         eligible: isEligible(r),
+        evidence: require('./evidence').evidenceChecks(r.assessment, { officialWebsite: siteOf(project) }),
       };
     })
     .sort((a, b) => String((b.assessment && b.assessment.analysis_at) || (b.meta && b.meta.imported_at) || '').localeCompare(String((a.assessment && a.assessment.analysis_at) || (a.meta && a.meta.imported_at) || '')));
@@ -535,7 +547,7 @@ function projectDetailRaw(ws, id) {
   const diffs = {};
   for (const prov of PROVIDERS) {
     const list = reports.filter((r) => !r.broken && r.meta.provider === prov).sort((a, b) => reportSortKey(a).localeCompare(reportSortKey(b)));
-    history[prov] = list.map((r) => reportSummary(ws, r));
+    history[prov] = list.map((r) => reportSummary(ws, r, project));
     diffs[prov] = [];
     for (let i = 1; i < list.length; i++) diffs[prov].push(diffReports(list[i - 1], list[i]));
   }

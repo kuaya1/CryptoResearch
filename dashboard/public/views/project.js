@@ -159,6 +159,9 @@ function modelCard(ctx, d, row, prov, latest) {
         h('div', null, h('dt', null, 'Horizon'), h('dd', null, r.assessment.horizon || 'not stated')),
         previewTiming(sum) ? h('div', { class: 'wide' }, h('dt', null, 'Timing (the model\'s view)'), h('dd', null, previewTiming(sum))) : null),
       r.assessment.summary ? h('p', { class: 'small', style: { margin: '10px 0 0' } }, r.assessment.summary) : null,
+      r.evidence && r.evidence.flags.length
+        ? h('p', { class: 'small', style: { margin: '8px 0 0' } }, stateText(`Evidence checks: ${r.evidence.flagged_claims} claim${r.evidence.flagged_claims === 1 ? '' : 's'} flagged`, r.evidence.high ? 'bad' : 'warn'), ' ', h('a', { href: `#/project/${pid}/evidence`, dataset: { key: `ov-evidence-${prov}` } }, 'see why'), h('span', { class: 'muted' }, ' (no score changes)'))
+        : null,
       h('p', { class: 'small faint', style: { margin: '8px 0 0' } }, routeText(r)),
       newer,
       h('div', { class: 'btn-row', style: { marginTop: '10px' } },
@@ -433,11 +436,29 @@ function claimReviewControls(ctx, d, r, c, rev) {
   return h('div', { style: { display: 'grid', gap: '6px', minWidth: '210px' } }, check, corr, btn);
 }
 
+// The desk's evidence checks on one report's claims (core/evidence.js):
+// flags with the reason and what would settle each; never a score change.
+const SEVERITY_TONE = { high: 'bad', medium: 'warn', low: '' };
+function evidenceChecksBlock(ev) {
+  if (!ev) return null;
+  return h('div', { class: 'small', style: { margin: '0 0 10px' } },
+    h('p', { style: { margin: '0 0 4px' } },
+      stateText(ev.flags.length ? `${ev.flagged_claims} claim${ev.flagged_claims === 1 ? '' : 's'} need better evidence` : 'Evidence checks: nothing flagged', ev.high ? 'bad' : ev.flags.length ? 'warn' : 'ok'),
+      ' ', h('span', { class: 'muted' }, ev.summary)),
+    ev.flags.length ? h('ul', { class: 'list small' }, ev.flags.map((x) => h('li', null, stateText(x.severity, SEVERITY_TONE[x.severity]), ' ', x.message))) : null,
+    ev.source_types && ev.source_types.outside_list.length
+      ? h('p', { class: 'small muted', style: { margin: '4px 0 0' } }, `Source types written outside the accepted list, read as: ${ev.source_types.outside_list.map((x) => `${x.given} as ${x.read_as}`).join(', ')}.`)
+      : null);
+}
+
 function claimsTable(ctx, d, r) {
   const reviews = d.claim_reviews || {};
   const sources = new Map((r.assessment.sources || []).map((s) => [s.source_id, s]));
+  // The worst desk flag on each claim, shown next to its text.
+  const worst = new Map();
+  for (const x of (r.evidence && r.evidence.flags) || []) if (!worst.has(x.claim_id)) worst.set(x.claim_id, x);
   return (table([
-    { label: 'Claim', wrap: true, render: (c) => h('div', null, h('span', { class: 'faint small' }, `${c.claim_id} `), c.text, c.limitation ? h('div', { class: 'small muted' }, `Limitation: ${c.limitation}`) : null) },
+    { label: 'Claim', wrap: true, render: (c) => h('div', null, h('span', { class: 'faint small' }, `${c.claim_id} `), c.text, c.limitation ? h('div', { class: 'small muted' }, `Limitation: ${c.limitation}`) : null, worst.has(c.claim_id) ? h('div', { class: 'small' }, stateText(`Desk check: ${worst.get(c.claim_id).severity}`, SEVERITY_TONE[worst.get(c.claim_id).severity]), ' ', h('span', { class: 'muted' }, worst.get(c.claim_id).message)) : null) },
     { label: 'Analyst tag', render: (c) => tagChip(c.evidence_tag, c.evidence_tag_raw) },
     { label: 'Metric', render: (c) => (c.metric_id ? h('div', { class: 'small' }, h('code', null, c.metric_id), c.value !== null && c.value !== undefined ? ` ${fmtNum(c.value)} ${c.unit || ''}` : '', h('div', { class: 'muted' }, [c.period, c.as_of ? `as of ${c.as_of}` : null].filter(Boolean).join(' · '))) : null) },
     { label: 'Sources', render: (c) => h('div', { class: 'small' }, (c.source_ids || []).map((sid) => { const s = sources.get(sid); return h('div', null, s && s.url ? h('a', { href: s.url }, s.title || s.url) : `${sid} (not in the source list)`); })) },
@@ -692,13 +713,14 @@ function evidenceTab(ctx, d, latest) {
   const disputeForm = h('form', { class: 'form-grid', dataset: { key: 'dispute-form' } }, field('Topic', disputeTopic), field('Resolving question', disputeQ), h('div', { class: 'field', style: { justifyContent: 'flex-end' } }, disputeBtn));
   disputeForm.onsubmit = action(disputeBtn, async () => { await ctx.api.post(`/api/projects/${pid}/disputes`, { topic: disputeTopic.value || null, question: disputeQ.value }); await ctx.refresh(); return true; }, 'Question added');
   return h('div', null,
-    callout('Three separate things: the analyst tag ([V] means the analyst checked it in their own session), your check (what you confirmed by opening the source), and independent corroboration (a different, independent source agrees). Citation integrity only means the references resolve. Model agreement is not corroboration.', 'info'),
+    callout('Separate things: the analyst tag ([V] means the analyst says it checked a primary source in its own session), the desk\'s evidence checks (a [V] resting only on an AI summary or a secondary source, a critical claim without a primary source or date, a fee figure nobody could reproduce), your check (what you confirmed by opening the source), and independent corroboration (a different, independent source agrees). Citation integrity only means the references resolve. Model agreement is not corroboration. None of these changes a score.', 'info'),
     present.length ? present.map((p) => {
       const r = latest[p];
       const integ = r.integrity || {};
       return card(`${PROVIDER_LABELS[p]} · ${fmtDate(r.assessment.analysis_at)}`, [
         h('p', { class: 'small', style: { margin: '0 0 8px' } }, integ.status === 'valid' ? 'References resolve to listed sources (structural check only).' : `Citation issues: ${integ.status}.`),
         (integ.issues || []).length ? h('ul', { class: 'list small' }, integ.issues.map((i) => h('li', null, h('code', null, i.path || i.field || ''), ` ${i.message}`))) : null,
+        evidenceChecksBlock(r.evidence),
         claimsTable(ctx, d, r),
       ]);
     }) : callout('No reports yet.', 'info'),

@@ -488,6 +488,9 @@ test('connector: the Cowork workflow (find, add once, research, draft, resume, s
   const after = await tool(d, access, 'get_report', { project_id: pid, include_text: true });
   assert.equal(after.data.report.report_id, reportId);
   assert.equal(after.data.text, text);
+  // The desk's evidence checks come with the report (flags only).
+  assert.match(after.data.evidence_checks.summary, /These checks change no score\.|No structured claims to check\./);
+  assert.ok(Array.isArray(after.data.evidence_checks.flags));
 });
 
 test('connector: a run already waiting for a Claude answer (started from the dashboard) is taken over, not duplicated', async (t) => {
@@ -641,6 +644,8 @@ test('connector: one Cowork request for all three models; ChatGPT and Gemini do 
   assert.deepEqual(cmp2.data.missing_models.map((m) => m.model), ['gemini']);
   assert.match(cmp2.data.missing_models[0].progress, /waiting for Gemini/);
   assert.ok(cmp2.data.scores.length > 0);
+  for (const p of ['chatgpt', 'claude']) assert.match(cmp2.data.reports[p].evidence_checks.summary, /These checks change no score\.|No structured claims to check\./, p);
+  assert.match(cmp2.data.message, /say where a report's evidence checks flag claims/);
   assert.equal(research.runStatus(research.loadRun(d.ws, pid, runId)), 'partially_completed');
 
   // Gemini takes its job, is interrupted, resumes the same run and finishes.

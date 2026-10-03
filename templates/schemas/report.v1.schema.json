@@ -68,6 +68,7 @@
       "type": ["object", "null"],
       "properties": {
         "btc_relative_definition": { "type": ["string", "null"] },
+        "probability_note": { "type": ["string", "null"], "description": "cr-research-prompt@4: why probabilities are null, when the evidence does not support them." },
         "items": { "type": "array", "items": { "$ref": "#/$defs/scenario" } }
       }
     },
@@ -106,7 +107,7 @@
         "url": { "type": ["string", "null"] },
         "title": { "type": ["string", "null"] },
         "publisher": { "type": ["string", "null"] },
-        "source_type": { "enum": ["official", "onchain_data", "data_aggregator", "exchange", "audit", "news", "research", "social", "other", null] },
+        "source_type": { "enum": ["official", "onchain_data", "data_aggregator", "exchange", "audit", "news", "research", "social", "ai_summary", "other", null] },
         "accessed_at": { "type": ["string", "null"] }
       }
     },
@@ -125,7 +126,10 @@
         "period": { "type": ["string", "null"] },
         "as_of": { "type": ["string", "null"] },
         "limitation": { "type": ["string", "null"] },
-        "section": { "type": ["string", "null"] }
+        "section": { "type": ["string", "null"] },
+        "critical_kind": { "enum": ["audit", "deployment", "realized_fees", "supply_change", "liquidity", "catalyst", null], "description": "cr-research-prompt@4: the kind of critical claim, or null." },
+        "excerpt": { "type": ["string", "null"], "description": "cr-research-prompt@4: a short excerpt of the primary source that shows the claim." },
+        "query": { "type": ["string", "null"], "description": "cr-research-prompt@4: the query, dashboard or explorer view (with its parameters) that reproduces a figure." }
       }
     },
     "fact": {

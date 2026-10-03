@@ -953,24 +953,28 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider, runDefau
     verdictRaw = prose.verdict.verdict;
   }
 
-  // Sources and claims
+  // Sources and claims. A source type outside the accepted list is read as
+  // its nearest type (evidence.js) and the word the report used is kept.
+  const { normalizeSourceType, CRITICAL_KINDS } = require('./evidence');
   const sources = (Array.isArray(r.sources) ? r.sources : []).filter((s) => s && typeof s === 'object').map((s, i) => {
     const url = safeUrl(s.url);
     if (s.url && !url) issues.push({ severity: 'warning', field: `sources[${i}].url`, message: `Not a usable http(s) URL: ${String(s.url).slice(0, 80)}` });
+    const st = normalizeSourceType(s.source_type, url);
     return {
       source_id: String(s.source_id || `S${i + 1}`),
       url,
       url_raw: s.url && !url ? String(s.url) : undefined,
       title: s.title || null,
       publisher: s.publisher || null,
-      source_type: s.source_type || null,
+      source_type: st.how === 'missing' ? null : st.type,
+      source_type_raw: st.given !== null && st.given !== st.type ? st.given : undefined,
       accessed_at: s.accessed_at || null,
     };
   });
   const claims = (Array.isArray(r.claims) ? r.claims : []).filter((c) => c && typeof c === 'object' && c.text).map((c, i) => {
     const tag = normTag(c.evidence_tag);
     if (!tag) issues.push({ severity: 'warning', field: `claims[${i}].evidence_tag`, message: `Unknown evidence tag ${JSON.stringify(c.evidence_tag)}; kept as written.` });
-    return {
+    const out = {
       claim_id: String(c.claim_id || `C${i + 1}`),
       text: String(c.text),
       evidence_tag: tag,
@@ -985,25 +989,38 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider, runDefau
       limitation: c.limitation || null,
       section: c.section || null,
     };
+    // cr-research-prompt@4: what kind of critical claim it is, and the
+    // excerpt or query that shows it.
+    if (typeof c.critical_kind === 'string' && CRITICAL_KINDS.includes(c.critical_kind)) out.critical_kind = c.critical_kind;
+    if (typeof c.excerpt === 'string' && c.excerpt.trim()) out.excerpt = c.excerpt.trim().slice(0, 600);
+    if (typeof c.query === 'string' && c.query.trim()) out.query = c.query.trim().slice(0, 600);
+    return out;
   });
 
-  // Scenarios
+  // Scenarios. Probabilities are optional: all three, totaling 100, or none
+  // (null) with the reason; partial or other totals are shown as given.
   let scenarios = null;
   if (r.scenarios && typeof r.scenarios === 'object') {
     const items = (Array.isArray(r.scenarios.items) ? r.scenarios.items : []).filter((s) => s && typeof s === 'object');
     const probs = items.map((s) => s.probability_pct);
-    const allProbs = items.length > 0 && probs.every((p) => typeof p === 'number' && Number.isFinite(p));
+    const isNum = (p) => typeof p === 'number' && Number.isFinite(p);
+    const allProbs = items.length > 0 && probs.every(isNum);
+    const noProbs = items.length > 0 && probs.every((p) => p === null || p === undefined);
+    const note = typeof r.scenarios.probability_note === 'string' && r.scenarios.probability_note.trim() ? r.scenarios.probability_note.trim().slice(0, 600) : null;
     const total = allProbs ? Math.round(probs.reduce((a, b) => a + b, 0) * 100) / 100 : null;
     const check = !items.length
       ? { status: 'none', message: 'No scenarios given.' }
-      : !allProbs
-        ? { status: 'incomplete', message: 'Not every scenario has a probability.' }
-        : Math.abs(total - 100) <= 0.01
-          ? { status: 'ok', total, message: 'Probabilities total 100%.' }
-          : { status: 'invalid', total, message: `Probabilities total ${total}%, not 100%. Shown as given; not corrected.` };
-    if (check.status === 'invalid' || check.status === 'incomplete') issues.push({ severity: 'error', field: 'scenarios', message: check.message });
+      : noProbs
+        ? { status: 'not_given', message: note ? `No probabilities: ${note}` : 'No probabilities given, and no reason.' }
+        : !allProbs
+          ? { status: 'incomplete', message: 'Only some scenarios have a probability. Shown as given; not completed.' }
+          : Math.abs(total - 100) <= 0.01
+            ? { status: 'ok', total, message: 'Probabilities total 100%.' }
+            : { status: 'invalid', total, message: `Probabilities total ${total}%, not 100%. Shown as given; not corrected.` };
+    if (check.status === 'invalid' || check.status === 'incomplete') issues.push({ severity: 'warning', field: 'scenarios', message: check.message });
+    if (check.status === 'not_given' && !note) issues.push({ severity: 'warning', field: 'scenarios.probability_note', message: 'The scenarios give no probabilities and no reason why.' });
     if (items.length && !r.scenarios.btc_relative_definition) issues.push({ severity: 'warning', field: 'scenarios.btc_relative_definition', message: 'No definition of BTC-relative return; relative returns are not compared across reports.' });
-    scenarios = { btc_relative_definition: r.scenarios.btc_relative_definition || null, items, probability_check: check, label: 'Speculative forecast' };
+    scenarios = { btc_relative_definition: r.scenarios.btc_relative_definition || null, probability_note: note, items, probability_check: check, label: 'Speculative forecast' };
   }
 
   const lists = {};
@@ -1060,7 +1077,7 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider, runDefau
       : null;
   const finalTake = typeof r.final_take === 'string' && r.final_take.trim() ? r.final_take.trim() : prose && prose.final_take ? prose.final_take.text : null;
 
-  // Position-cycle recipe (cr-research-prompt@3): the model's market and timing
+  // Position-cycle recipe (cr-research-prompt@3 and @4): the model's market and timing
   // views, catalyst windows and suggested review date. Scores are untouched.
   const pos = require('./position');
   const position = pos.normalizePositionContext(r.position_context, { catalysts: r.catalysts, promptVersion: typeof promptVersion === 'string' ? promptVersion.trim() : null, analysisAt, ceiling: pos.policy(ws).planning_ceiling_months });
@@ -1117,6 +1134,38 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider, runDefau
   };
 }
 
+// The report's JSON as the schema check sees it: source types a known word
+// stands for are read as that type (the given words are listed once).
+function schemaView(raw) {
+  if (!raw || !Array.isArray(raw.sources)) return { forSchema: raw, readAs: [] };
+  const { normalizeSourceType, SOURCE_TYPES } = require('./evidence');
+  const counts = new Map();
+  const sources = raw.sources.map((s) => {
+    if (!s || typeof s !== 'object' || s.source_type === null || s.source_type === undefined || SOURCE_TYPES.includes(s.source_type)) return s;
+    const st = normalizeSourceType(s.source_type, s.url);
+    if (st.how !== 'synonym' && st.how !== 'host') return s;
+    const k = `${st.given}\u0000${st.type}`;
+    counts.set(k, (counts.get(k) || 0) + 1);
+    return { ...s, source_type: st.type };
+  });
+  const readAs = [...counts.entries()].map(([k, count]) => {
+    const [given, type] = k.split('\u0000');
+    return { given: JSON.stringify(given.slice(0, 40)), read_as: type, count };
+  });
+  return { forSchema: { ...raw, sources }, readAs };
+}
+
+// One line per distinct problem: "$.claims[3].x: ..." repeated for many items
+// becomes "$.claims[*].x: ... (5 items)".
+function groupSchemaErrors(errors) {
+  const groups = new Map();
+  for (const e of errors) {
+    const g = e.replace(/\[\d+\]/g, '[*]');
+    groups.set(g, (groups.get(g) || 0) + 1);
+  }
+  return [...groups.entries()].map(([g, n]) => (n > 1 ? `${g} (${n} items)` : errors.find((e) => e.replace(/\[\d+\]/g, '[*]') === g)));
+}
+
 // Builds the structured record for a classified report. `runDefaults` is what
 // the research run it was saved against fixed (rubric, profile, prompt version,
 // horizon); it only fills what the report itself leaves out.
@@ -1129,9 +1178,13 @@ function buildFromText(ws, { text, classification, provider, runDefaults = null 
   if (classification.json && classification.json.obj) {
     raw = classification.json.obj;
     for (const i of classification.json.issues || []) issues.push(i);
-    const res = validate(loadSchema(ws, 'report.v1'), raw);
+    // Source types are checked as read (a known word for an accepted type is
+    // not an error), and a problem repeated across a list is one line.
+    const { forSchema, readAs } = schemaView(raw);
+    if (readAs.length) issues.push({ severity: 'warning', field: 'sources[*].source_type', message: `${readAs.reduce((n, x) => n + x.count, 0)} source type(s) were written outside the accepted list and read as the nearest type: ${readAs.map((x) => `${x.given} as ${x.read_as}${x.count > 1 ? ` (${x.count})` : ''}`).join(', ')}.` });
+    const res = validate(loadSchema(ws, 'report.v1'), forSchema);
     schemaErrors = res.errors;
-    for (const e of res.errors.slice(0, 40)) issues.push({ severity: 'warning', field: 'schema', message: e });
+    for (const e of groupSchemaErrors(res.errors).slice(0, 40)) issues.push({ severity: 'warning', field: 'schema', message: e });
   } else if (classification.json && classification.json.parseErrors && classification.json.parseErrors.length) {
     unreadable = true;
     issues.push({ severity: 'error', field: 'json', message: `A JSON block was found but could not be read: ${classification.json.parseErrors[0]}` });
