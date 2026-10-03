@@ -7,7 +7,7 @@
 // for correction instead of guessed.
 
 const path = require('path');
-const { normalizeScore, emptyScore } = require('./scoring');
+const { normalizeScore, emptyScore, formatScore } = require('./scoring');
 const { validate, loadSchema } = require('./schema');
 const { readJson, listDir } = require('./fsx');
 const { isRecordId } = require('./ids');
@@ -75,46 +75,154 @@ function balancedFrom(text, start) {
   return null;
 }
 
+// Conservative repair of the JSON models actually write: trailing commas before
+// } or ], // and /* */ comments, and raw line breaks or tabs inside strings
+// (common in long rationales). A small scanner tracks whether it is inside a
+// string, so the text of a string is never changed except to escape the control
+// characters JSON forbids there. Nothing is evaluated. Returns null when a
+// comment never closes.
+const CONTROL_ESCAPES = { '\n': '\\n', '\r': '\\r', '\t': '\\t' };
+
+function repairJson(src) {
+  let out = '';
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      else if (ch.charCodeAt(0) < 0x20) {
+        out += CONTROL_ESCAPES[ch] || `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`;
+        continue;
+      }
+      out += ch;
+      continue;
+    }
+    if (ch === '/' && src[i + 1] === '/') {
+      const nl = src.indexOf('\n', i);
+      if (nl === -1) break;
+      i = nl - 1;
+      continue;
+    }
+    if (ch === '/' && src[i + 1] === '*') {
+      const end = src.indexOf('*/', i + 2);
+      if (end === -1) return null;
+      out += ' ';
+      i = end + 1;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    out += ch;
+  }
+  // Second pass, comments gone: drop a comma whose next non-space is } or ].
+  let fixed = '';
+  inStr = false;
+  esc = false;
+  for (let i = 0; i < out.length; i++) {
+    const ch = out[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+    } else if (ch === '"') {
+      inStr = true;
+    } else if (ch === ',') {
+      let j = i + 1;
+      while (j < out.length && /\s/.test(out[j])) j++;
+      if (out[j] === '}' || out[j] === ']') continue;
+    }
+    fixed += ch;
+  }
+  return fixed;
+}
+
+const REPAIRED = 'The JSON block needed repair (trailing commas / comments / raw line breaks in text) before it could be read.';
+
+// Parses one candidate block, repairing it if plain JSON.parse fails. The error
+// kept is the original one, which says what was actually wrong.
+function parseCandidate(src) {
+  try {
+    return { value: JSON.parse(src), repaired: false };
+  } catch (err) {
+    const fixed = repairJson(src);
+    if (fixed !== null && fixed !== src) {
+      try {
+        return { value: JSON.parse(fixed), repaired: true };
+      } catch (_) { /* the original error explains it better */ }
+    }
+    return { error: err.message };
+  }
+}
+
+// The cr.report.v1 object in a parsed candidate: the object itself, or the
+// report a model nested one level under another key ({"report": {...}}), when
+// exactly one of its values is a report. An outer object that carries the
+// schema_version but no scores of its own is only an envelope.
+const SCORE_GROUPS = ['diagnostic_scores', 'investment_components', 'risk_scores'];
+
+function reportFrom(parsed, issues) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const outer = isReportObj(parsed);
+  if (outer && SCORE_GROUPS.some((g) => parsed[g] !== undefined)) return parsed;
+  if (!outer && parsed.schema_version !== undefined) return null;
+  const inner = Object.entries(parsed).filter(([, v]) => isReportObj(v));
+  if (inner.length !== 1) return outer ? parsed : null;
+  issues.push({ severity: 'warning', field: 'json', message: `The cr.report.v1 object was nested under "${inner[0][0]}"; read from there.` });
+  return inner[0][1];
+}
+
+// Reads one candidate into a found result, or records why it could not be read.
+function tryCandidate(src, { method, line, where }, parseErrors) {
+  const parsed = parseCandidate(src);
+  if (parsed.error) {
+    parseErrors.push(where ? `${where}: ${parsed.error}` : parsed.error);
+    return null;
+  }
+  const issues = [];
+  const obj = reportFrom(parsed.value, issues);
+  if (!obj) return null;
+  if (parsed.repaired) issues.unshift({ severity: 'warning', field: 'json', message: REPAIRED });
+  return { obj, method, line, parseErrors, issues };
+}
+
 function findReportJson(text) {
   const parseErrors = [];
   const trimmed = text.trim();
   if (trimmed.startsWith('{')) {
-    try {
-      const obj = JSON.parse(trimmed);
-      if (isReportObj(obj)) return { obj, method: 'json_file', line: 1, parseErrors };
-    } catch (err) {
-      parseErrors.push(err.message);
-    }
+    const hit = tryCandidate(trimmed, { method: 'json_file', line: 1 }, parseErrors);
+    if (hit) return hit;
   }
   const fence = /```[ \t]*([A-Za-z0-9_-]*)[^\n]*\n([\s\S]*?)\n[ \t]*```/g;
   let found = null;
   let m;
   while ((m = fence.exec(text))) {
     if (!/cr\.report\.v1/.test(m[2])) continue;
-    try {
-      const obj = JSON.parse(m[2]);
-      if (isReportObj(obj)) found = { obj, method: 'appendix_json', line: lineOf(text, m.index), parseErrors };
-    } catch (err) {
-      parseErrors.push(`JSON block at line ${lineOf(text, m.index)}: ${err.message}`);
-    }
+    const line = lineOf(text, m.index);
+    const hit = tryCandidate(m[2], { method: 'appendix_json', line, where: `JSON block at line ${line}` }, parseErrors);
+    if (hit) found = hit;
   }
   if (found) return found;
-  // Unfenced JSON pasted at the end of a report.
+  // Unfenced JSON pasted at the end of a report. A candidate that fails (a
+  // brace inside a string can start one mid-object) does not end the search:
+  // earlier braces are tried too, within a bounded number of attempts.
   const idx = text.lastIndexOf('"cr.report.v1"');
   if (idx !== -1) {
-    for (let start = text.lastIndexOf('{', idx); start !== -1; start = text.lastIndexOf('{', start - 1)) {
-      const candidate = balancedFrom(text, start);
-      if (candidate && start + candidate.length > idx) {
-        try {
-          const obj = JSON.parse(candidate);
-          if (isReportObj(obj)) return { obj, method: 'appendix_json_unfenced', line: lineOf(text, start), parseErrors };
-        } catch (err) {
-          parseErrors.push(`Unfenced JSON at line ${lineOf(text, start)}: ${err.message}`);
-          break;
-        }
-      }
+    let attempts = 0;
+    let braces = 0;
+    let firstError = null;
+    for (let start = text.lastIndexOf('{', idx); start !== -1 && attempts < 40 && braces++ < 2000; start = text.lastIndexOf('{', start - 1)) {
       if (text.length - start > 400000) break;
+      const candidate = balancedFrom(text, start);
+      if (!candidate || start + candidate.length <= idx) continue;
+      attempts++;
+      const errors = [];
+      const hit = tryCandidate(candidate, { method: 'appendix_json_unfenced', line: lineOf(text, start), where: `Unfenced JSON at line ${lineOf(text, start)}` }, errors);
+      if (hit) return { ...hit, parseErrors };
+      if (!firstError && errors.length) firstError = errors[0];
     }
+    if (firstError) parseErrors.push(firstError);
   }
   return { obj: null, parseErrors };
 }
@@ -595,16 +703,128 @@ function safeUrl(u) {
   }
 }
 
-function normalizeAssessment(ws, raw, { prose = null, format, provider }) {
+// Score-group keys. Models write the rubric's keys in Title Case, with spaces
+// or hyphens, in camelCase, with the weight in brackets, or as the label text
+// ("Token value capture"); all of these collapse to one snake_case form.
+function snakeKey(k) {
+  return String(k)
+    .trim()
+    .replace(/\s*\([^)]*\)\s*$/, '')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+// snake_case form -> rubric id, from each id, its label and the label phrases
+// the prose reader already trusts for that panel. A form that would point at
+// two ids maps to null and is never guessed; an id's own form always wins.
+function keyAliases(defs, panels) {
+  const map = new Map();
+  for (const d of defs) map.set(snakeKey(d.id), d.id);
+  const ids = new Set(map.keys());
+  const put = (alias, id) => {
+    const k = snakeKey(alias);
+    if (!k || ids.has(k)) return;
+    map.set(k, map.has(k) && map.get(k) !== id ? null : id);
+  };
+  for (const d of defs) if (d.label) put(d.label, d.id);
+  for (const p of PHRASES) if (panels.includes(p.panel) && defs.some((d) => d.id === p.id)) put(p.phrase, p.id);
+  return map;
+}
+
+// Reads a score group (investment_components, risk_scores, diagnostic_scores)
+// into an object keyed by rubric id. A list of {id|key|name, ...score fields}
+// is read as the object form. A key that maps to an id is recorded as a
+// warning; a key that maps to nothing known is kept as written.
+function canonicalGroup(rawGroup, aliases, group, issues) {
+  if (!rawGroup || typeof rawGroup !== 'object') return Object.create(null);
+  let entries;
+  if (Array.isArray(rawGroup)) {
+    entries = [];
+    rawGroup.forEach((item, i) => {
+      const key = item && typeof item === 'object' && !Array.isArray(item) ? [item.id, item.key, item.name].find((x) => typeof x === 'string' && x.trim()) : null;
+      if (!key) {
+        issues.push({ severity: 'warning', field: `${group}[${i}]`, message: 'List item without an id, key or name; ignored.' });
+        return;
+      }
+      const { id: _id, key: _key, name: _name, ...score } = item;
+      entries.push([key.trim(), score]);
+    });
+    issues.push({ severity: 'warning', field: group, message: `${group}: given as a list of {id, ...}; read as the object form.` });
+  } else {
+    entries = Object.entries(rawGroup);
+  }
+  const byId = new Map();
+  for (const [k, v] of entries) {
+    const id = aliases.get(k) === k ? k : aliases.get(snakeKey(k)) || k;
+    if (!byId.has(id)) byId.set(id, []);
+    byId.get(id).push([k, v]);
+  }
+  // No prototype: a key such as "__proto__" stays an ordinary (unknown) key.
+  const out = Object.create(null);
+  for (const [id, list] of byId) {
+    let pick = list.find(([k]) => k === id);
+    if (pick && list.length > 1) {
+      issues.push({ severity: 'warning', field: `${group}.${id}`, message: `${group}: ${list.filter(([k]) => k !== id).map(([k]) => `'${k}'`).join(', ')} also read as ${id}; the exact key was used.` });
+    }
+    if (!pick) {
+      if (new Set(list.map(([, v]) => JSON.stringify(v))).size > 1) {
+        issues.push({ severity: 'error', field: `${group}.${id}`, message: `${group}: ${list.map(([k]) => `'${k}'`).join(', ')} all read as ${id} but give different scores; none was used.` });
+        out[id] = { status: 'unknown', value: null, missing_data: `Given under ${list.length} different keys with different scores; none was used.` };
+        continue;
+      }
+      pick = list[0];
+      if (pick[0] !== id) issues.push({ severity: 'warning', field: `${group}.${id}`, message: `${group}: key '${pick[0]}' read as ${id}` });
+    }
+    out[id] = pick[1];
+  }
+  return out;
+}
+
+// A model that scored on a 0-10 scale writes 7 where this desk means 70.
+// Reading that as 7 out of 100 would be a wrong grade, not a cautious one. So
+// when a group looks like a 10-point scale (all but one of its scores at 10 or
+// below, or any fractional score at 10 or below), those scores are set aside:
+// unknown, with the originals kept in invalid_source and an error that says why.
+const TEN_SCALE = 'Scores look like a 0-10 scale; this desk grades on 1-100, so they were not used';
+
+function guardTenScale(scores, defs, origins, group, issues) {
+  const small = (s) => Boolean(s) && ((s.status === 'scored' && s.value <= 10) || (s.status === 'range' && s.high <= 10));
+  const fractional = (s) => small(s) && [s.value, s.low, s.high].some((v) => typeof v === 'number' && !Number.isInteger(v));
+  const smallIds = defs.map((d) => d.id).filter((id) => small(scores[id]));
+  if (smallIds.length < Math.max(2, defs.length - 1) && !smallIds.some((id) => fractional(scores[id]))) return;
+  const shown = smallIds.map((id) => `${id} ${formatScore(scores[id])}`).join(', ');
+  for (const id of smallIds) {
+    const s = scores[id];
+    scores[id] = { ...emptyScore('unknown', TEN_SCALE), rationale: s.rationale, evidence_refs: s.evidence_refs, invalid_source: origins[id] !== undefined ? origins[id] : { status: s.status, value: s.value, low: s.low, high: s.high } };
+    if (s.extraction) scores[id].extraction = s.extraction;
+  }
+  issues.push({ severity: 'error', field: group, message: `${TEN_SCALE} (${shown}). Give them on the 1-100 scale to grade this report.` });
+}
+
+function normalizeAssessment(ws, raw, { prose = null, format, provider, runDefaults = null }) {
   const issues = [];
   const { profiles } = ws.rubrics;
   const r = raw || {};
-  const declaredProfile = typeof r.sector_profile === 'string' ? r.sector_profile.trim() : null;
+  // A report saved against a research run is read under the run's rubric,
+  // profile, prompt version and horizon when it does not state them itself
+  // (prose, or a JSON block that could not be read). What it states wins.
+  const fromRun = [];
+  const orRun = (field, own) => {
+    if (own || !runDefaults || !runDefaults[field]) return own;
+    fromRun.push(field);
+    return runDefaults[field];
+  };
+  const declaredProfile = orRun('sector_profile', typeof r.sector_profile === 'string' ? r.sector_profile.trim() : null);
   const profile = declaredProfile ? profiles[declaredProfile] || null : null;
   if (format !== 'prose' && !declaredProfile) issues.push({ severity: 'warning', field: 'sector_profile', message: 'No sector profile declared; this report cannot be compared until one is set.' });
   if (declaredProfile && !profile) issues.push({ severity: 'warning', field: 'sector_profile', message: `Unknown sector profile "${declaredProfile}"; kept as written, not comparable with known profiles.` });
-  const rubricVersion = typeof r.rubric_version === 'string' ? r.rubric_version.trim() : null;
+  const rubricVersion = orRun('rubric_version', typeof r.rubric_version === 'string' ? r.rubric_version.trim() : null);
   if (format !== 'prose' && !rubricVersion) issues.push({ severity: 'warning', field: 'rubric_version', message: 'No rubric version declared; not comparable and no app grade until set.' });
+  const promptVersion = orRun('prompt_version', r.prompt_version || null);
   // Components and risk scores are read against the rubric the report declares.
   // An unknown rubric keeps its raw scores but never gets an app grade (F05).
   const declaredGrading = rubricVersion ? ws.rubrics.gradingVersions[rubricVersion] || null : null;
@@ -623,7 +843,9 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider }) {
   // Diagnostic panel
   const diagnostic = {};
   const diagnosticExtra = {};
-  const rawDiag = r.diagnostic_scores && typeof r.diagnostic_scores === 'object' ? r.diagnostic_scores : {};
+  // Without a known profile, keys are matched against every profile's categories.
+  const diagDefs = profile ? profile.diagnostic_categories : Object.values(profiles).flatMap((p) => p.diagnostic_categories || []);
+  const rawDiag = canonicalGroup(r.diagnostic_scores, keyAliases(diagDefs, ['diagnostic', 'shared']), 'diagnostic_scores', issues);
   const proseDiag = prose ? prose.scores.diagnostic : {};
   const fromProse = (p) => ({
     status: p.status,
@@ -664,18 +886,24 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider }) {
 
   // Investment components (always the six from the grading rubric)
   const components = {};
-  const rawComp = r.investment_components && typeof r.investment_components === 'object' ? r.investment_components : {};
+  const rawComp = canonicalGroup(r.investment_components, keyAliases(grading.investment_components, ['component', 'shared']), 'investment_components', issues);
   const proseComp = prose ? prose.scores.component : {};
+  const compOrigins = {};
   for (const c of grading.investment_components) {
     const field = `investment_components.${c.id}`;
     let s = rawComp[c.id] !== undefined ? take(rawComp[c.id], field) : null;
-    if (!s && proseComp[c.id]) s = take(fromProse(proseComp[c.id]), field);
+    if (s) compOrigins[c.id] = rawComp[c.id];
+    if (!s && proseComp[c.id]) {
+      s = take(fromProse(proseComp[c.id]), field);
+      compOrigins[c.id] = fromProse(proseComp[c.id]);
+    }
     if (!s) {
       s = emptyScore('unknown', 'Not provided in the report; not inferred from prose or diagnostic scores.');
       issues.push({ severity: 'warning', field, message: 'not provided' });
     }
     components[c.id] = s;
   }
+  guardTenScale(components, grading.investment_components, compOrigins, 'investment_components', issues);
   for (const k of Object.keys(rawComp)) {
     if (grading.investment_components.some((c) => c.id === k)) continue;
     if (!declaredGrading && rubricVersion) {
@@ -688,12 +916,17 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider }) {
 
   // Risk panel (higher = more risk)
   const risk = {};
-  const rawRisk = r.risk_scores && typeof r.risk_scores === 'object' ? r.risk_scores : {};
+  const rawRisk = canonicalGroup(r.risk_scores, keyAliases(grading.risk_scores, ['risk']), 'risk_scores', issues);
   const proseRisk = prose ? prose.scores.risk : {};
+  const riskOrigins = {};
   for (const rd of grading.risk_scores) {
     const field = `risk_scores.${rd.id}`;
     let s = rawRisk[rd.id] !== undefined ? take(rawRisk[rd.id], field) : null;
-    if (!s && proseRisk[rd.id]) s = take(fromProse(proseRisk[rd.id]), field);
+    if (s) riskOrigins[rd.id] = rawRisk[rd.id];
+    if (!s && proseRisk[rd.id]) {
+      s = take(fromProse(proseRisk[rd.id]), field);
+      riskOrigins[rd.id] = fromProse(proseRisk[rd.id]);
+    }
     if (!s) {
       const creditNa = rd.id === 'credit' && profile && profile.risk_applicability && profile.risk_applicability.credit === false;
       s = creditNa ? emptyScore('not_applicable', profile.risk_applicability.credit_na_reason || `Not applicable under ${profile.profile_ref}`) : emptyScore('unknown', 'Not provided in the report.');
@@ -701,6 +934,9 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider }) {
     }
     risk[rd.id] = s;
   }
+  // Risk scores never feed the grade, but a 10-point risk score shown as 7/100
+  // would still misread the report, so it is set aside the same way.
+  guardTenScale(risk, grading.risk_scores, riskOrigins, 'risk_scores', issues);
 
   let overall = r.model_reported_overall_score !== undefined ? take(r.model_reported_overall_score, 'model_reported_overall_score') : null;
   if (!overall && prose && prose.scores.overall.overall) overall = take(fromProse(prose.scores.overall.overall), 'model_reported_overall_score');
@@ -805,6 +1041,13 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider }) {
     }
     if (prose.verdict && !r.verdict) provenance.verdict = { line: prose.verdict.line, excerpt: prose.verdict.excerpt };
   }
+  horizon = orRun('horizon', horizon);
+  if (fromRun.length) {
+    for (const f of fromRun) provenance[f] = { from: 'research_run', run_id: runDefaults.run_id || null };
+    const words = fromRun.map((f) => f.replace(/_/g, ' '));
+    const list = words.length > 1 ? `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}` : words[0];
+    issues.push({ severity: 'warning', field: 'research_run', message: `The report does not state its ${list}; taken from the research run it was saved against${runDefaults.run_id ? ` (${runDefaults.run_id})` : ''}.` });
+  }
   if (analysisAt && Number.isNaN(Date.parse(analysisAt))) {
     issues.push({ severity: 'warning', field: 'analysis_at', message: `"${analysisAt}" is not a readable date; kept as written.` });
   }
@@ -820,7 +1063,7 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider }) {
   // Position-cycle recipe (cr-research-prompt@3): the model's market and timing
   // views, catalyst windows and suggested review date. Scores are untouched.
   const pos = require('./position');
-  const position = pos.normalizePositionContext(r.position_context, { catalysts: r.catalysts, promptVersion: typeof r.prompt_version === 'string' ? r.prompt_version.trim() : null, analysisAt, ceiling: pos.policy(ws).planning_ceiling_months });
+  const position = pos.normalizePositionContext(r.position_context, { catalysts: r.catalysts, promptVersion: typeof promptVersion === 'string' ? promptVersion.trim() : null, analysisAt, ceiling: pos.policy(ws).planning_ceiling_months });
   for (const i of position.issues) issues.push(i);
 
   const integrity = citationIntegrity({ sources, claims, diagnostic_scores: diagnostic, investment_components: components, risk_scores: risk, economics, ...lists, catalysts: r.catalysts, unlocks: r.unlocks, tokenomics_changes: r.tokenomics_changes, position_context: position.context });
@@ -841,9 +1084,10 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider }) {
       horizon,
       horizon_normalized: normalizeHorizon(horizon),
       horizon_interval: parseHorizon(horizon),
-      prompt_version: r.prompt_version || null,
+      prompt_version: promptVersion,
       rubric_version: rubricVersion,
       sector_profile: declaredProfile,
+      ...(fromRun.length ? { fields_from_run: fromRun } : {}),
       verdict,
       verdict_raw: verdictRaw,
       summary: typeof r.summary === 'string' ? r.summary : null,
@@ -873,22 +1117,28 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider }) {
   };
 }
 
-// Builds the structured record for a classified report.
-function buildFromText(ws, { text, classification, provider }) {
+// Builds the structured record for a classified report. `runDefaults` is what
+// the research run it was saved against fixed (rubric, profile, prompt version,
+// horizon); it only fills what the report itself leaves out.
+function buildFromText(ws, { text, classification, provider, runDefaults = null }) {
   let raw = null;
   let format = classification.format;
   const issues = [];
   let schemaErrors = [];
+  let unreadable = false;
   if (classification.json && classification.json.obj) {
     raw = classification.json.obj;
+    for (const i of classification.json.issues || []) issues.push(i);
     const res = validate(loadSchema(ws, 'report.v1'), raw);
     schemaErrors = res.errors;
     for (const e of res.errors.slice(0, 40)) issues.push({ severity: 'warning', field: 'schema', message: e });
   } else if (classification.json && classification.json.parseErrors && classification.json.parseErrors.length) {
-    issues.push({ severity: 'error', field: 'json', message: `A JSON block was present but could not be read: ${classification.json.parseErrors[0]}. Fell back to reading the prose.` });
+    unreadable = true;
+    issues.push({ severity: 'error', field: 'json', message: `A JSON block was found but could not be read: ${classification.json.parseErrors[0]}` });
   }
   const prose = format === 'prose' ? extractProse(text) : null;
-  const norm = normalizeAssessment(ws, raw, { prose, format, provider });
+  const norm = normalizeAssessment(ws, raw, { prose, format, provider, runDefaults });
+  const runRubric = (norm.assessment.fields_from_run || []).includes('rubric_version');
   const extraction = {
     method: format,
     schema_valid: raw ? schemaErrors.length === 0 : null,
@@ -896,7 +1146,7 @@ function buildFromText(ws, { text, classification, provider }) {
     ambiguous: prose ? prose.ambiguous : [],
     provenance: norm.provenance,
     note: format === 'prose'
-      ? 'Prose report: only explicitly labeled scores directly followed by a number were extracted. Nothing was inferred. Rubric and sector profile are unknown until you set them.'
+      ? `Prose report: only explicitly labeled scores directly followed by a number were extracted. Nothing was inferred.${unreadable ? ' Its JSON block could not be read, so the prose was read instead.' : ''} ${runRubric ? 'Rubric and sector profile were taken from the research run it was saved against.' : 'Rubric and sector profile are unknown until you set them.'}`
       : 'Structured JSON block (cr.report.v1).',
   };
   return { raw, assessment: norm.assessment, extraction };

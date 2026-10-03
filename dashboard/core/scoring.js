@@ -33,12 +33,55 @@ function emptyScore(status, explanation) {
   };
 }
 
+function given(v) {
+  return v !== null && v !== undefined && v !== '';
+}
+
+// A number written as text: "72", "72.5" or "72/100". Anything else, including
+// "7/10" (another scale), is left as it was for the caller to reject.
+function numberText(v) {
+  if (typeof v !== 'string') return null;
+  const m = v.trim().match(/^(\d{1,3}(?:\.\d+)?)\s*(?:\/\s*100)?$/);
+  return m ? Number(m[1]) : null;
+}
+
+// A range written as one string: "60-70", "60–70", "60 to 70" (optionally /100).
+function rangeText(v) {
+  if (typeof v !== 'string') return null;
+  const m = v.trim().match(/^(\d{1,3}(?:\.\d+)?)\s*(?:-|–|—|to)\s*(\d{1,3}(?:\.\d+)?)\s*(?:\/\s*100)?$/i);
+  return m ? { low: Number(m[1]), high: Number(m[2]) } : null;
+}
+
+// "7/10", "7.5 / 10", "7 out of 10": a 10-point score. It is never converted,
+// because 7/10 could mean 70 or a different judgement altogether.
+function tenPointText(v) {
+  return typeof v === 'string' && /^\d{1,2}(?:\.\d+)?\s*(?:\/|out of)\s*10$/i.test(v.trim());
+}
+
 // Returns { score, errors, warnings }. Invalid input becomes status "unknown"
 // with the original kept in invalid_source, so nothing invalid is ever scored.
+// Leniency is limited to writings whose meaning is not in doubt: status in any
+// case, "score" for "value", numbers written as text ("72", "72/100"), a range
+// written as "60-70", and an object with no status whose fields say which kind
+// of score it is. Each of those, apart from letter case, is noted as a warning.
+// A 10-point score, a value outside 1-100, low above high, or an unknown status
+// word stays invalid.
 function normalizeScore(raw, label = 'score') {
   const errors = [];
   const warnings = [];
   if (raw === null || raw === undefined) return { score: null, errors, warnings };
+  if (typeof raw === 'string' && !tenPointText(raw)) {
+    // A bare score written as text is read the way a bare number is.
+    const n = numberText(raw);
+    const r = n === null ? rangeText(raw) : null;
+    if (n !== null) {
+      warnings.push(`${label}: ${JSON.stringify(raw)} given as text; read as ${n}`);
+      raw = n;
+    } else if (r) {
+      warnings.push(`${label}: ${JSON.stringify(raw)} given as text; read as a range`);
+      raw = { status: 'range', low: r.low, high: r.high };
+    }
+  }
   if (typeof raw === 'number') {
     if (!inScale(raw)) {
       errors.push(`${label}: ${raw} is outside 1-100`);
@@ -47,12 +90,57 @@ function normalizeScore(raw, label = 'score') {
     warnings.push(`${label}: given as a bare number; read as a single score with no rationale`);
     return { score: { status: 'scored', value: raw, low: null, high: null, rationale: null, evidence_refs: [], missing_data: null }, errors, warnings };
   }
+  if (tenPointText(raw)) {
+    errors.push(`${label}: ${JSON.stringify(raw)} is on a 10-point scale; this desk scores 1-100, so it was not converted`);
+    return { score: { ...emptyScore('unknown', `Invalid in source: ${raw} is on a 10-point scale; not converted`), invalid_source: raw }, errors, warnings };
+  }
   if (typeof raw !== 'object' || Array.isArray(raw)) {
     errors.push(`${label}: not a score object`);
     return { score: { ...emptyScore('unknown', 'Invalid in source: not a score object'), invalid_source: raw }, errors, warnings };
   }
+  const status = typeof raw.status === 'string' ? raw.status.trim().toLowerCase().replace(/[\s-]+/g, '_') : raw.status;
+  let value = raw.value;
+  if (!given(value) && given(raw.score)) {
+    value = raw.score;
+    warnings.push(`${label}: "score" read as the value`);
+  }
+  // Numbers written as text become numbers; anything unreadable stays as it
+  // was, so the checks below reject it with what was actually written.
+  const asNumber = (v, field) => {
+    const n = numberText(v);
+    if (n === null) return v;
+    warnings.push(`${label}: ${field} ${JSON.stringify(v)} given as text; read as ${n}`);
+    return n;
+  };
+  let low = asNumber(raw.low, 'low');
+  let high = asNumber(raw.high, 'high');
+  const tenPoint = [value, low, high].find(tenPointText);
+  if (tenPoint) {
+    errors.push(`${label}: ${JSON.stringify(tenPoint)} is on a 10-point scale; this desk scores 1-100, so it was not converted`);
+  }
+  value = asNumber(value, 'value');
+  const span = rangeText(value);
+  if (span && (status === 'range' || !given(status)) && !given(low) && !given(high)) {
+    warnings.push(`${label}: value ${JSON.stringify(value)} read as a range`);
+    low = span.low;
+    high = span.high;
+    value = null;
+  }
+  let kind = status;
+  if (!given(status) && !tenPoint) {
+    if (isNum(value)) {
+      kind = 'scored';
+      warnings.push(`${label}: status missing; read as a single score`);
+    } else if (!given(value) && isNum(low) && isNum(high)) {
+      kind = 'range';
+      warnings.push(`${label}: status missing; read as a range`);
+    } else if (!given(value) && !given(low) && !given(high) && str(raw.missing_data)) {
+      kind = 'unknown';
+      warnings.push(`${label}: status missing; read as unknown (no value, only what is missing)`);
+    }
+  }
   const s = {
-    status: raw.status,
+    status: kind,
     value: null,
     low: null,
     high: null,
@@ -61,31 +149,34 @@ function normalizeScore(raw, label = 'score') {
     missing_data: str(raw.missing_data),
   };
   if (raw.extraction) s.extraction = raw.extraction;
-  switch (raw.status) {
+  switch (tenPoint ? 'ten_point' : kind) {
+    case 'ten_point':
+      // Already rejected above; the status checks would only repeat it.
+      break;
     case 'scored':
-      if (!inScale(raw.value)) errors.push(`${label}: a single score must be a number from 1 to 100 (got ${JSON.stringify(raw.value)})`);
-      else s.value = raw.value;
-      if ((raw.low !== null && raw.low !== undefined) || (raw.high !== null && raw.high !== undefined)) {
+      if (!inScale(value)) errors.push(`${label}: a single score must be a number from 1 to 100 (got ${JSON.stringify(value)})`);
+      else s.value = value;
+      if (given(low) || given(high)) {
         warnings.push(`${label}: low/high ignored for a single score`);
       }
       if (!s.rationale && !s.extraction) warnings.push(`${label}: no rationale given`);
       break;
     case 'range':
-      if (!inScale(raw.low) || !inScale(raw.high)) errors.push(`${label}: a range needs low and high from 1 to 100`);
-      else if (raw.low > raw.high) errors.push(`${label}: range low ${raw.low} is above high ${raw.high}`);
+      if (!inScale(low) || !inScale(high)) errors.push(`${label}: a range needs low and high from 1 to 100`);
+      else if (low > high) errors.push(`${label}: range low ${low} is above high ${high}`);
       else {
-        s.low = raw.low;
-        s.high = raw.high;
+        s.low = low;
+        s.high = high;
       }
-      if (raw.value !== null && raw.value !== undefined) warnings.push(`${label}: value ignored for a range`);
+      if (given(value)) warnings.push(`${label}: value ignored for a range`);
       if (!s.rationale) warnings.push(`${label}: range has no rationale, so it is not justified and cannot form a grade range`);
       break;
     case 'unknown':
-      if (raw.value !== null && raw.value !== undefined) errors.push(`${label}: status unknown must have value null`);
+      if (given(value)) errors.push(`${label}: status unknown must have value null`);
       if (!s.missing_data && !s.rationale) warnings.push(`${label}: unknown without an explanation of what is missing`);
       break;
     case 'not_applicable':
-      if (raw.value !== null && raw.value !== undefined) errors.push(`${label}: status not_applicable must have value null`);
+      if (given(value)) errors.push(`${label}: status not_applicable must have value null`);
       if (!s.rationale && !s.missing_data) warnings.push(`${label}: not applicable without a reason`);
       break;
     default:

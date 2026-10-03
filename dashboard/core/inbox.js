@@ -98,6 +98,32 @@ function resolveProject(ws, { json, filename, text, hint }) {
   return { error: 'Could not tell which project this report is about. Assign it to a project (dashboard Imports page, or: node dashboard/cli.js inbox assign).' };
 }
 
+// What a research run fixed for every answer to it: rubric, sector profile,
+// prompt version and horizon. A report saved against the run (save_report and
+// the API path always name it) that leaves these out, as prose or a JSON block
+// that could not be read does, is read under the run's, with that recorded.
+// run.json is read directly at the path research.js uses, rather than through
+// research.js, which itself loads this module.
+function runDefaultsFor(ws, projectId, runId) {
+  if (!/^run_[A-Za-z0-9_-]{4,80}$/.test(String(runId))) return null;
+  let run = null;
+  try {
+    run = readJson(ws.abs(`projects/${projectId}/research/${runId}/run.json`), null);
+  } catch (_) {
+    return null;
+  }
+  if (!run || typeof run !== 'object' || (run.project_id && run.project_id !== projectId)) return null;
+  const text = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  const h = run.horizon;
+  return {
+    run_id: runId,
+    rubric_version: text(run.rubric_version),
+    sector_profile: text(run.sector_profile),
+    prompt_version: text(run.prompt && run.prompt.version),
+    horizon: text(typeof h === 'string' ? h : h && h.text),
+  };
+}
+
 function setState(op, key, patch) {
   const state = op.readJson(STATE_REL, emptyState());
   state.files[key] = { ...(state.files[key] || {}), ...patch, updated_at: new Date().toISOString() };
@@ -215,7 +241,7 @@ function ingestLocked(ws, provider, filename, opts = {}) {
     return fail('provider_mismatch', `The file came in as ${PROVIDER_LABELS[provider]} but ${where} identifies it as ${PROVIDER_LABELS[claimed]}. It was not imported, so nothing is mislabeled. If it really came from ${PROVIDER_LABELS[claimed]}, import it there; if the label inside is wrong, assign it with "allow provider mismatch" and the conflict stays recorded.`, { sha256: hash });
   }
 
-  if (!isPdf) built = buildFromText(ws, { text, classification, provider });
+  if (!isPdf) built = buildFromText(ws, { text, classification, provider, runDefaults: runId ? runDefaultsFor(ws, target.project_id, runId) : null });
 
   const assessment = completeShape(built
     ? built.assessment

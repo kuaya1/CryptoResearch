@@ -104,6 +104,65 @@ test('invalid scores never count as scores', () => {
   assert.equal(bare.warnings.length, 1);
 });
 
+test('score writings whose meaning is clear are read; anything beyond letter case is noted', () => {
+  const read = (raw) => normalizeScore(raw, 'x');
+  const scored = (raw, v) => {
+    const out = read(raw);
+    assert.deepEqual([out.score.status, out.score.value, out.errors], ['scored', v, []], JSON.stringify(raw));
+    return out.warnings;
+  };
+  assert.deepEqual(scored({ status: 'Scored', value: 72, rationale: 'r' }, 72), []);
+  assert.deepEqual(scored({ status: ' scored ', value: 72, rationale: 'r' }, 72), []);
+  assert.match(scored({ status: 'scored', value: '72', rationale: 'r' }, 72)[0], /"72" given as text; read as 72/);
+  scored({ status: 'scored', value: '72.5', rationale: 'r' }, 72.5);
+  scored({ status: 'scored', value: '72/100', rationale: 'r' }, 72);
+  assert.match(scored({ status: 'scored', score: 72, rationale: 'r' }, 72)[0], /"score" read as the value/);
+  assert.ok(scored({ value: 72, rationale: 'r' }, 72).some((w) => /status missing; read as a single score/.test(w)));
+  scored({ score: '72', rationale: 'r' }, 72);
+  assert.equal(scored('72', 72).length, 2, 'text, then the bare-number note');
+  const range = (raw, low, high) => {
+    const out = read(raw);
+    assert.deepEqual([out.score.status, out.score.low, out.score.high, out.errors], ['range', low, high, []], JSON.stringify(raw));
+  };
+  range({ low: 60, high: 70, rationale: 'r' }, 60, 70);
+  range({ status: 'range', value: '60-70', rationale: 'r' }, 60, 70);
+  range({ status: 'Range', value: '60–70', rationale: 'r' }, 60, 70);
+  range({ value: '60 to 70', rationale: 'r' }, 60, 70);
+  range({ status: 'range', low: '60', high: '70', rationale: 'r' }, 60, 70);
+  assert.equal(read({ status: 'Not Applicable', value: null, rationale: 'r' }).score.status, 'not_applicable');
+  assert.equal(read({ status: 'UNKNOWN', value: null, missing_data: 'm' }).score.status, 'unknown');
+  const unknown = read({ value: null, missing_data: 'no audit published' });
+  assert.deepEqual([unknown.score.status, unknown.score.missing_data, unknown.errors], ['unknown', 'no audit published', []]);
+});
+
+test('ambiguous or invalid score writings stay invalid, with the original kept', () => {
+  const invalid = (raw) => {
+    const out = normalizeScore(raw, 'x');
+    assert.equal(out.score.status, 'unknown', JSON.stringify(raw));
+    assert.ok(out.errors.length > 0, `an error for ${JSON.stringify(raw)}`);
+    assert.deepEqual(out.score.invalid_source, raw);
+    return out;
+  };
+  // A 10-point score is never converted, with or without a status.
+  assert.match(invalid({ status: 'scored', value: '7/10', rationale: 'r' }).errors[0], /10-point scale/);
+  invalid({ value: '7 / 10', rationale: 'r' });
+  invalid({ status: 'scored', value: '7 out of 10' });
+  invalid('7/10');
+  invalid({ status: 'range', low: '6/10', high: '8/10', rationale: 'r' });
+  // Out of scale, low above high, unknown words, and a status that contradicts the value.
+  invalid({ value: 150, rationale: 'r' });
+  invalid({ value: 0 });
+  invalid({ low: 70, high: 60, rationale: 'r' });
+  invalid({ status: 'range', value: '70-60', rationale: 'r' });
+  invalid({ status: 'probably', value: 50 });
+  invalid({ status: 'scored', value: '60-70', rationale: 'r' });
+  invalid({ status: 'scored', value: '72%' });
+  invalid({ status: 'unknown', value: '72', missing_data: 'm' });
+  invalid({ rationale: 'no numbers at all' });
+  invalid({ status: null, rationale: 'a null status says nothing' });
+  invalid('N/A');
+});
+
 test('labels use configurable bands', () => {
   assert.equal(labelFor(90, labels), 'A');
   assert.equal(labelFor(89.99, labels), 'B');
