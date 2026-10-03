@@ -298,6 +298,19 @@ test('research progress: each model\'s way from prompt to grade, without inventi
   assert.deepEqual(wl.progressSteps({ ...firm, needs_text: true }, null)[3], 'warn', 'a PDF is not graded yet');
 });
 
+test('inspector: opens on a calculated grade, then any saved report, then Claude; unknown bars stay empty', async () => {
+  const { wl } = await mods;
+  const firm = { grade: { status: 'firm', value: 61 } };
+  const withheld = { grade: { status: 'withheld', coverage_pct: 55 } };
+  assert.equal(wl.defaultModel({ claude: withheld, chatgpt: firm }), 'chatgpt', 'the first calculated grade, not the first report');
+  assert.equal(wl.defaultModel({ gemini: { grade: { status: 'range', low: 40, high: 55 } } }), 'gemini', 'a range is a grade');
+  assert.equal(wl.defaultModel({ chatgpt: { ...firm, needs_text: true }, gemini: withheld }), 'chatgpt', 'no grade anywhere: the first saved report');
+  assert.equal(wl.defaultModel({}), 'claude');
+  assert.equal(wl.defaultModel(null), 'claude');
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  assert.match(css, /\.cbar\.unknown \{[^}]*background: transparent;[^}]*dashed/, 'an unknown category is an empty dashed track, never a zero');
+});
+
 test('logos: the crisp cached image is preferred, the earlier small one serves until it arrives', () => {
   const market = require('../core/market');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-logo-'));
