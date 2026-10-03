@@ -149,6 +149,8 @@ test('connector: redirect URIs are the assistants\' own only (Claude, ChatGPT, G
   assert.equal(redirectKind(CHATGPT_CALLBACK), 'chatgpt');
   assert.equal(redirectKind(CHATGPT_APP_CALLBACK), 'chatgpt');
   assert.equal(redirectKind(GEMINI_CALLBACK), 'gemini');
+  assert.equal(redirectKind(GEMINI_CALLBACK.replace('/r/', '/a/')), 'gemini', 'Gemini registers the /a/ form too');
+  assert.equal(redirectKind(GEMINI_CALLBACK.replace('oauth-redirect.', 'oauth-redirect-sandbox.')), null, 'Google\'s sandbox relay is not accepted');
   assert.equal(redirectKind('http://127.0.0.1:7777/oauth/callback'), 'local', 'Gemini CLI');
   // Look-alikes are refused.
   for (const bad of [
@@ -292,6 +294,10 @@ test('connector: sign-in refuses a wrong passphrase, a denial, a missing PKCE ch
   assert.equal((await post({ request: rid3, password: PASS, decision: 'allow', assistant: 'grok' })).status, 200, 'only claude, chatgpt or gemini');
   const chosen = await post({ request: rid3, password: PASS, decision: 'allow', assistant: 'gemini' });
   assert.equal(chosen.status, 303);
+  // The same page submitted again (the back button) explains that the approval already went out.
+  const twice = await post({ request: rid3, password: PASS, decision: 'allow', assistant: 'gemini' });
+  assert.equal(twice.status, 400);
+  assert.match(twice.text, /already given \(\d\d:\d\d UTC\) and sent back to the program on this computer \(Gemini\)\. If Gemini did not finish connecting/);
   // A registration mixing two assistants' callbacks is refused; a stranger's
   // address among an assistant's is dropped.
   const mixed = await req(d.port, { method: 'POST', path: '/oauth/register', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: [CLAUDE_CALLBACK, CHATGPT_CALLBACK] }) });
@@ -313,10 +319,21 @@ test('connector: ChatGPT and Gemini connect with their own sign-in flows, and ea
   // The stable callback works too (the server sends iss).
   const g2 = await connect(d, { redirect: CHATGPT_CALLBACK, clientName: 'ChatGPT' });
   assert.ok(g2.access);
-  // Gemini: asks for client_secret_basic, gets a public client, and sends its client ID in a Basic header.
-  const gm = await connect(d, { redirect: GEMINI_CALLBACK, clientName: 'Gemini', authMethod: 'client_secret_basic', basicAuth: true, resource: null });
+  // Gemini, as it registered on the live desk: six return addresses (the relay's
+  // /r/ and /a/ forms on Google's production, sandbox and test relays) and
+  // client_secret_basic. It gets a public client with the two production
+  // addresses, and sends its client ID in a Basic header.
+  const relays = ['oauth-redirect', 'oauth-redirect-sandbox', 'oauth-redirect-test'].flatMap((h) => ['r', 'a'].map((p) => `https://${h}.googleusercontent.com/${p}/user_bound_custom-mcp-100000000000001-desk_test`));
+  const gm = await connect(d, { redirect: relays[0], redirects: relays, clientName: 'Google', authMethod: 'client_secret_basic', basicAuth: true, resource: null });
   assert.match(gm.consent.text, /Connect Gemini to your desk/);
   assert.match(gm.consent.headers['content-security-policy'], /form-action 'self' https:\/\/oauth-redirect\.googleusercontent\.com(;|$)/);
+  // The sign-in window stays linked to the Gemini page that opened it, so
+  // Google's relay can hand the code back (every other desk page keeps same-origin).
+  assert.equal(gm.consent.headers['cross-origin-opener-policy'], 'unsafe-none');
+  assert.equal(gm.approve.headers['cross-origin-opener-policy'], 'unsafe-none');
+  assert.equal((await req(d.port, { path: '/login' })).headers['cross-origin-opener-policy'], 'same-origin');
+  const reg = JSON.parse(fs.readFileSync(path.join(d.ws.root, '.cr', 'oauth.json'), 'utf8')).clients[gm.clientId];
+  assert.deepEqual(reg.redirect_uris, relays.slice(0, 2));
   // A Gemini refresh with the client ID in a Basic header.
   const ref = await req(d.port, { method: 'POST', path: '/oauth/token', headers: { 'content-type': 'application/x-www-form-urlencoded', authorization: `Basic ${Buffer.from(`${gm.clientId}:`).toString('base64')}` }, body: form({ grant_type: 'refresh_token', refresh_token: gm.refresh }) });
   assert.equal(ref.status, 200, ref.text);

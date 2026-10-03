@@ -49,10 +49,12 @@ const CLAUDE_CALLBACK = 'https://claude.ai/api/mcp/auth_callback';
 const CHATGPT_CALLBACK = 'https://chatgpt.com/connector_platform_oauth_redirect';
 const CHATGPT_APP_CALLBACK = /^\/connector\/oauth\/[A-Za-z0-9_-]{1,128}$/;
 // Gemini custom apps: Google's OAuth relay, in its per-user custom-app form
-// (user_bound_custom-mcp-<id>-<server host>). A Google Cloud project ID cannot
-// contain an underscore, so no other project's relay path matches.
+// (/r/ or /a/ then user_bound_custom-mcp-<id>-<server host>; Gemini registers
+// both, plus Google's sandbox and test relays, which are not accepted). A
+// Google Cloud project ID cannot contain an underscore, so no other project's
+// relay path matches.
 const GEMINI_RELAY = 'https://oauth-redirect.googleusercontent.com';
-const GEMINI_APP_CALLBACK = /^\/r\/user_bound_custom-mcp-[A-Za-z0-9._-]{1,200}$/;
+const GEMINI_APP_CALLBACK = /^\/[ra]\/user_bound_custom-mcp-[A-Za-z0-9._-]{1,200}$/;
 // Loopback callbacks of programs on this computer: Claude Code and Codex use
 // /callback, Gemini CLI /oauth/callback.
 const LOOPBACK_PATHS = new Set(['/callback', '/oauth/callback']);
@@ -133,12 +135,20 @@ function json(res, status, body, headers = {}) {
   res.end(JSON.stringify(body));
 }
 
+// The sign-in pages open in a window the assistant's app started (Gemini's
+// custom apps hand the result back through Google's relay to the Gemini page
+// that opened it). Cross-Origin-Opener-Policy: same-origin, which every other
+// page of the desk sends, would cut that link and the code would never reach
+// the app, so these pages send unsafe-none. Framing stays forbidden.
+const SIGN_IN_COOP = 'unsafe-none';
+
 function page(res, status, html, { formAction = "'self'" } = {}) {
   res.writeHead(status, {
     'Content-Type': 'text/html; charset=utf-8',
     'Cache-Control': 'no-store',
-    // The consent form posts to this site, which then redirects to Claude:
-    // browsers apply form-action to that redirect too.
+    'Cross-Origin-Opener-Policy': SIGN_IN_COOP,
+    // The consent form posts to this site, which then redirects to the
+    // assistant: browsers apply form-action to that redirect too.
     'Content-Security-Policy': `default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action ${formAction}`,
   });
   res.end(html);
@@ -157,6 +167,7 @@ function makeOAuth(ws, { origin, auth, log = () => {} }) {
   let store = readJson(storeFile, null) || { schema_version: 'cr.oauth.v1', clients: {}, grants: {}, access: {}, refresh: {} };
   for (const k of ['clients', 'grants', 'access', 'refresh']) store[k] = store[k] || {};
   const pending = new Map(); // consent requests in progress (minutes)
+  const used = new Map(); // consent requests already answered (minutes), to explain a second submit
   const codes = new Map(); // hash(code) -> authorization (minutes)
   const registrations = []; // { at, addr } for the hourly limit
   let lastUseSave = 0;
@@ -172,6 +183,7 @@ function makeOAuth(ws, { origin, auth, log = () => {} }) {
   function sweep() {
     const now = Date.now();
     for (const [k, v] of pending) if (v.expires < now) pending.delete(k);
+    for (const [k, v] of used) if (v.expires < now) used.delete(k);
     for (const [k, v] of codes) if (v.expires < now) codes.delete(k);
   }
 
@@ -264,9 +276,20 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
   function redirectTo(res, uri, params) {
     const u = new URL(uri);
     for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null) u.searchParams.set(k, v);
-    res.writeHead(303, { Location: u.toString(), 'Cache-Control': 'no-store' });
+    res.writeHead(303, { Location: u.toString(), 'Cache-Control': 'no-store', 'Cross-Origin-Opener-Policy': SIGN_IN_COOP });
     res.end();
   }
+
+  // Where a return address goes, for the log (host and path; never a query).
+  const where = (list) => list.map((x) => {
+    try {
+      const u = new URL(x);
+      return `${u.host}${u.pathname.slice(0, 90)}`;
+    } catch (_) {
+      return '(unreadable)';
+    }
+  }).join(', ');
+  const labelOf = (kind) => (kind === 'local' ? 'a program on this computer' : PROVIDER_LABELS[kind] || kind);
 
   async function register(req, res) {
     const addr = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || (req.socket && req.socket.remoteAddress) || 'unknown';
@@ -284,7 +307,6 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     // belongs to one assistant.
     const uris = asked.filter(redirectAllowed).slice(0, MAX_REDIRECTS);
     const kinds = [...new Set(uris.map(redirectKind))];
-    const where = (list) => list.map((u) => { try { const x = new URL(u); return `${x.host}${x.pathname.slice(0, 40)}`; } catch (_) { return '(unreadable)'; } }).join(', ');
     if (!uris.length || kinds.length !== 1) {
       log(`OAuth: registration refused (return to ${where(asked.slice(0, 5)) || 'nothing'})`);
       return json(res, 400, { error: 'invalid_redirect_uri', error_description: `Only the assistants' own callbacks are accepted, all from one assistant: Claude (${CLAUDE_CALLBACK}), ChatGPT (${CHATGPT_CALLBACK} or https://chatgpt.com/connector/oauth/<id>), Gemini custom apps (${GEMINI_RELAY}/r/user_bound_custom-mcp-...), or a program on this computer (http://localhost or http://127.0.0.1, any port, /callback or /oauth/callback).` });
@@ -309,7 +331,7 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     pruneClients();
     save();
     const dropped = asked.length - uris.length;
-    log(`OAuth: client registered (${client.client_name}; ${kind === 'local' ? 'a program on this computer' : PROVIDER_LABELS[kind]}; return to ${[...new Set(uris.map((u) => new URL(u).host))].join(', ')}${dropped ? `; ${dropped} other return address(es) dropped: ${where(asked.filter((u) => !uris.includes(u)).slice(0, 3))}` : ''})`);
+    log(`OAuth: client registered (${client.client_name}; ${labelOf(kind)}; return to ${where(uris)}; asked for ${typeof body.token_endpoint_auth_method === 'string' ? body.token_endpoint_auth_method.slice(0, 40) : 'no auth method'}, scope ${typeof body.scope === 'string' ? body.scope.slice(0, 80) : 'none'}${dropped ? `; ${dropped} other return address(es) dropped: ${where(asked.filter((u) => !uris.includes(u)).slice(0, 6))}` : ''})`);
     return json(res, 201, { client_id: clientId, client_id_issued_at: Math.floor(Date.now() / 1000), ...client, created_at: undefined, kind: undefined });
   }
 
@@ -331,6 +353,7 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     const id = newToken(18);
     const p = { id, client_id: q.client_id, client_name: client.client_name, redirect_uri: redirect, kind, guess: kind === 'local' ? guessLocal(client.client_name) : null, code_challenge: q.code_challenge, state: q.state || null, scope, expires: Date.now() + PENDING_TTL_MS };
     pending.set(id, p);
+    log(`OAuth: approval page shown (${client.client_name}; ${labelOf(kind)}; return to ${where([redirect])}; resource ${q.resource ? 'given' : 'not given'}; scope ${String(q.scope || 'not given').slice(0, 80)})`);
     return page(res, 200, consentPage(p), { formAction: formActionFor(redirect) });
   }
 
@@ -338,11 +361,27 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     sweep();
     if (!auth.fromThisSite(req)) return errorPage(res, 403, 'Approval is only accepted from this site\'s own page.');
     const form = new URLSearchParams(await readBody(req, 4096));
-    const p = pending.get(form.get('request') || '');
-    if (!p) return errorPage(res, 400, 'This approval page has expired. Start the connection again from the assistant.');
+    const rid = form.get('request') || '';
+    const p = pending.get(rid);
+    if (!p) {
+      // A page submitted a second time (the back button, or a double click)
+      // after its approval already went to the assistant.
+      const done = used.get(rid);
+      log(`OAuth: approval page submitted again (${done ? `already ${done.decision} at ${done.at}` : 'expired or unknown'})`);
+      if (done) {
+        const who = done.label;
+        return errorPage(res, 400, `This approval was already ${done.decision === 'approved' ? 'given' : 'answered'} (${done.at.slice(11, 16)} UTC) and sent back to ${who}. If ${who.replace(/^the program on this computer \((.*)\)$/, '$1')} did not finish connecting, the problem came after that step: start the connection again from there.`);
+      }
+      return errorPage(res, 400, 'This approval page has expired. Start the connection again from the assistant.');
+    }
     const formAction = formActionFor(p.redirect_uri);
-    if (form.get('decision') !== 'allow') {
+    const answered = (decision, assistant = null) => {
       pending.delete(p.id);
+      const label = p.kind !== 'local' ? PROVIDER_LABELS[p.kind] : assistant ? `the program on this computer (${PROVIDER_LABELS[assistant]})` : 'the program on this computer';
+      used.set(p.id, { decision, label, at: new Date().toISOString(), expires: Date.now() + PENDING_TTL_MS });
+    };
+    if (form.get('decision') !== 'allow') {
+      answered('denied');
       log(`OAuth: connection denied (${p.client_name})`);
       return redirectTo(res, p.redirect_uri, { error: 'access_denied', state: p.state, iss: origin });
     }
@@ -355,8 +394,8 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
       log(`OAuth: approval refused (${check.locked ? 'locked after repeated attempts' : 'wrong passphrase'})`);
       return page(res, 200, consentPage(p, { error: check.locked ? null : 'That passphrase is not right.', locked: check.locked }), { formAction });
     }
-    pending.delete(p.id);
-    log(`OAuth: connection approved (${p.client_name}; ${PROVIDER_LABELS[assistant]})`);
+    answered('approved', assistant);
+    log(`OAuth: connection approved (${p.client_name}; ${PROVIDER_LABELS[assistant]}); sent back to ${where([p.redirect_uri])}, waiting for its token request`);
     const code = newToken();
     codes.set(hashOf(code), { client_id: p.client_id, redirect_uri: p.redirect_uri, code_challenge: p.code_challenge, scope: p.scope, assistant, expires: Date.now() + CODE_TTL_MS });
     return redirectTo(res, p.redirect_uri, { code, state: p.state, iss: origin });
@@ -371,6 +410,7 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
       try {
         form = new URLSearchParams(Object.entries(JSON.parse(raw || '{}')).map(([k, v]) => [k, String(v)]));
       } catch (_) {
+        log('OAuth: token request refused (a JSON body that could not be read)');
         return json(res, 400, { error: 'invalid_request', error_description: 'Unreadable body.' });
       }
     } else form = new URLSearchParams(raw);
@@ -387,16 +427,22 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
         clientId = null;
       }
     }
-    if (!clientId || !store.clients[clientId]) return json(res, 401, { error: 'invalid_client', error_description: 'Unknown client.' });
+    // Every token request is logged with its outcome (never a code, token or secret).
+    const how = form.get('client_id') ? 'client_id in the body' : basic ? 'client_id in a Basic header' : 'no client_id';
+    const refuse = (status, error, description) => {
+      log(`OAuth: token request refused (${grant || 'no grant_type'}; ${store.clients[clientId] ? store.clients[clientId].client_name : 'unknown client'}; ${how}; ${type.split(';')[0] || 'no content type'}): ${error}: ${description}`);
+      return json(res, status, { error, error_description: description });
+    };
+    if (!clientId || !store.clients[clientId]) return refuse(401, 'invalid_client', 'Unknown client.');
     if (grant === 'authorization_code') {
       const key = hashOf(form.get('code') || '');
       const c = codes.get(key);
       codes.delete(key); // single use, even when the exchange fails
-      if (!c || c.expires < Date.now() || c.client_id !== clientId) return json(res, 400, { error: 'invalid_grant', error_description: 'The authorization code is invalid or expired.' });
-      if ((form.get('redirect_uri') || c.redirect_uri) !== c.redirect_uri) return json(res, 400, { error: 'invalid_grant', error_description: 'redirect_uri does not match the authorization request.' });
+      if (!c || c.expires < Date.now() || c.client_id !== clientId) return refuse(400, 'invalid_grant', 'The authorization code is invalid or expired.');
+      if ((form.get('redirect_uri') || c.redirect_uri) !== c.redirect_uri) return refuse(400, 'invalid_grant', `redirect_uri does not match the authorization request (sent ${where([form.get('redirect_uri')])}).`);
       const verifier = form.get('code_verifier') || '';
-      if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) || b64url(crypto.createHash('sha256').update(verifier).digest()) !== c.code_challenge) return json(res, 400, { error: 'invalid_grant', error_description: 'PKCE verification failed.' });
-      if (form.get('resource') && !resourceNames.has(form.get('resource'))) return json(res, 400, { error: 'invalid_target', error_description: `This server's resource is ${resource}.` });
+      if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) || b64url(crypto.createHash('sha256').update(verifier).digest()) !== c.code_challenge) return refuse(400, 'invalid_grant', `PKCE verification failed (${verifier ? 'wrong verifier' : 'no code_verifier'}).`);
+      if (form.get('resource') && !resourceNames.has(form.get('resource'))) return refuse(400, 'invalid_target', `This server's resource is ${resource} (sent ${String(form.get('resource')).slice(0, 100)}).`);
       const grantId = `grant_${newToken(9)}`;
       store.grants[grantId] = { client_id: clientId, client_name: store.clients[clientId].client_name, assistant: c.assistant, created_at: new Date().toISOString(), last_used_at: null, revoked_at: null };
       log(`OAuth: tokens issued for a new connection (${store.clients[clientId].client_name}; ${PROVIDER_LABELS[c.assistant]})`);
@@ -406,14 +452,13 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
       const key = hashOf(form.get('refresh_token') || '');
       const r = store.refresh[key];
       if (!r || r.client_id !== clientId || Date.parse(r.expires_at) < Date.now() || !store.grants[r.grant_id] || store.grants[r.grant_id].revoked_at) {
-        log('OAuth: refresh refused (invalid, expired or revoked)');
-        return json(res, 400, { error: 'invalid_grant', error_description: 'The refresh token is invalid, expired or revoked. Reconnect from the assistant.' });
+        return refuse(400, 'invalid_grant', 'The refresh token is invalid, expired or revoked. Reconnect from the assistant.');
       }
       delete store.refresh[key]; // rotated: the old refresh token stops working now
-      log('OAuth: tokens refreshed');
+      log(`OAuth: tokens refreshed (${store.clients[clientId].client_name})`);
       return json(res, 200, issue(r.grant_id, clientId, r.scope));
     }
-    return json(res, 400, { error: 'unsupported_grant_type' });
+    return refuse(400, 'unsupported_grant_type', 'Only authorization_code and refresh_token are supported.');
   }
 
   async function revokePost(req, res) {
