@@ -194,7 +194,9 @@ test('connector: Claude discovers the sign-in, registers, gets the passphrase co
   assert.equal(evil.json.error, 'invalid_redirect_uri');
 
   const c = await connect(d);
-  assert.match(c.consent.headers['content-security-policy'], /form-action 'self' https:\/\/claude\.ai/);
+  // The form may lead to any https address: a return address can redirect on,
+  // and browsers check form-action on every hop.
+  assert.match(c.consent.headers['content-security-policy'], /form-action 'self' https:(;|$)/);
   assert.match(c.consent.text, /Desk passphrase/);
   assert.match(c.consent.text, /claude\.ai/, 'the consent page names where it returns to');
   assert.equal(new URL(c.approve.headers.location).origin + new URL(c.approve.headers.location).pathname, CLAUDE_CALLBACK);
@@ -282,7 +284,7 @@ test('connector: sign-in refuses a wrong passphrase, a denial, a missing PKCE ch
   assert.ok(cc.access);
   assert.match(cc.consent.text, /a program on this computer/);
   assert.match(cc.consent.text, /<option value="claude" selected>/, 'guessed from its name');
-  assert.match(cc.consent.headers['content-security-policy'], /form-action 'self' http:\/\/localhost:54321(;|$)/, 'the form may return only to that program');
+  assert.match(cc.consent.headers['content-security-policy'], /form-action 'self' http:\/\/localhost:54321 https:(;|$)/, 'the only plain-http address the form may lead to is that program');
   // Without the model chosen, nothing is approved.
   const reg2 = await req(d.port, { method: 'POST', path: '/oauth/register', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'some tool', redirect_uris: ['http://127.0.0.1:7777/oauth/callback'] }) });
   const page2 = await req(d.port, { path: `/oauth/authorize?${form({ response_type: 'code', client_id: reg2.json.client_id, redirect_uri: 'http://127.0.0.1:7777/oauth/callback', code_challenge: challenge, code_challenge_method: 'S256', state: 's2' })}` });
@@ -331,7 +333,7 @@ test('connector: ChatGPT and Gemini connect with their own sign-in flows, and ea
   const g = await connect(d, { redirect: CHATGPT_APP_CALLBACK, clientName: 'ChatGPT', resource: ORIGIN });
   assert.match(g.consent.text, /Connect ChatGPT to your desk/);
   assert.match(g.consent.text, /as ChatGPT/);
-  assert.match(g.consent.headers['content-security-policy'], /form-action 'self' https:\/\/chatgpt\.com(;|$)/);
+  assert.match(g.consent.headers['content-security-policy'], /form-action 'self' https:(;|$)/);
   assert.equal(new URL(g.approve.headers.location).href.split('?')[0], CHATGPT_APP_CALLBACK);
   // The stable callback works too (the server sends iss).
   const g2 = await connect(d, { redirect: CHATGPT_CALLBACK, clientName: 'ChatGPT' });
@@ -343,7 +345,9 @@ test('connector: ChatGPT and Gemini connect with their own sign-in flows, and ea
   const relays = ['oauth-redirect', 'oauth-redirect-sandbox', 'oauth-redirect-test'].flatMap((h) => ['r', 'a'].map((p) => `https://${h}.googleusercontent.com/${p}/user_bound_custom-mcp-100000000000001-desk_test`));
   const gm = await connect(d, { redirect: relays[0], redirects: relays, clientName: 'Google', authMethod: 'client_secret_basic', basicAuth: true, resource: null });
   assert.match(gm.consent.text, /Connect Gemini to your desk/);
-  assert.match(gm.consent.headers['content-security-policy'], /form-action 'self' https:\/\/oauth-redirect\.googleusercontent\.com(;|$)/);
+  // Google's relay forwards Gemini's answer on to another Google address; a
+  // form-action naming only the relay stopped the browser there.
+  assert.match(gm.consent.headers['content-security-policy'], /form-action 'self' https:(;|$)/);
   // The sign-in window stays linked to the Gemini page that opened it, so
   // Google's relay can hand the code back (every other desk page keeps same-origin).
   assert.equal(gm.consent.headers['cross-origin-opener-policy'], 'unsafe-none');

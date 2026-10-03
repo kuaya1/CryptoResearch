@@ -271,11 +271,16 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     page(res, status, shell('Connection not possible', `<div class="card login-card"><h1>Connection not possible</h1><p class="callout bad">${esc(text)}</p><p class="small muted">Start the connection again from the assistant's connector or app settings.</p></div>`));
   }
 
-  // The consent form posts here, and the redirect that follows goes to the
-  // client's return address: browsers apply form-action to both.
+  // The consent form posts here, the redirect that follows goes to the
+  // client's return address, and that address may redirect on: Google's relay
+  // forwards Gemini's answer to another Google address. Browsers check
+  // form-action on every hop of that chain and silently stop at the first one
+  // not listed (the page then just sits there), so the form may lead to any
+  // https address, and to a program's own loopback address.
   const formActionFor = (redirect) => {
     try {
-      return `'self' ${new URL(redirect).origin}`;
+      const u = new URL(redirect);
+      return u.protocol === 'https:' ? "'self' https:" : `'self' ${u.origin} https:`;
     } catch (_) {
       return "'self'";
     }
