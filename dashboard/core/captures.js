@@ -70,7 +70,11 @@ function plainError(error) {
   };
 }
 
-function bodyFor({ run, provider, attempt, result, error, finishedAt, mode }) {
+// A background request (ChatGPT, Gemini) is captured twice: first its ID, the
+// moment the provider accepts it ("submission", no outcome yet), so a crash
+// before run.json records the ID still lets the next runner collect the
+// answer by that ID; then its outcome, which replaces the submission capture.
+function bodyFor({ run, provider, attempt, result, error, finishedAt, mode, submission = null }) {
   return {
     run_id: run.run_id,
     project_id: run.project_id,
@@ -86,8 +90,11 @@ function bodyFor({ run, provider, attempt, result, error, finishedAt, mode }) {
     pid: process.pid,
     result: result ? { text: result.text, text_sha256: sha256(String(result.text)), attested: result.attested || null, usage: result.usage || null, raw: result.raw === undefined ? null : result.raw } : null,
     error: result ? null : plainError(error),
+    ...(submission && !result && !error ? { submission: { response_id: String(submission.response_id), status: submission.status || null, request_id: submission.request_id || null, route: submission.route || null, submitted_at: submission.submitted_at || null } } : {}),
   };
 }
+
+const isSubmissionOnly = (b) => Boolean(b && !b.result && !b.error && b.submission && b.submission.response_id);
 
 function encode(body) {
   const bodyText = JSON.stringify(body);
@@ -135,34 +142,36 @@ function writeCapture(ws, args) {
   writeDurable(tmp, text);
   let placed = false;
   let existed = false;
-  try {
+  // Puts the temporary file in place: a hard link, or where links are not
+  // allowed, an exclusive create. Returns false when the file already exists.
+  const place = () => {
     try {
       fs.linkSync(tmp, final);
-      placed = true;
+      return true;
     } catch (err) {
-      if (err.code === 'EEXIST') existed = true;
-      else if (!NO_LINK.has(err.code)) throw err;
+      if (err.code === 'EEXIST') return false;
+      if (!NO_LINK.has(err.code)) throw err;
     }
-    if (!placed && !existed) {
-      // No hard links here: create the file exclusively. A crash part way
-      // leaves a damaged file that decode() refuses, never a wrong answer.
-      let fd;
-      try {
-        fd = fs.openSync(final, 'wx');
-      } catch (err) {
-        if (err.code !== 'EEXIST') throw err;
-        existed = true;
-      }
-      if (fd !== undefined) {
-        try {
-          fs.writeFileSync(fd, text);
-          fs.fsyncSync(fd);
-        } finally {
-          fs.closeSync(fd);
-        }
-        placed = true;
-      }
+    // No hard links here: create the file exclusively. A crash part way
+    // leaves a damaged file that decode() refuses, never a wrong answer.
+    let fd;
+    try {
+      fd = fs.openSync(final, 'wx');
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      return false;
     }
+    try {
+      fs.writeFileSync(fd, text);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    return true;
+  };
+  try {
+    placed = place();
+    existed = !placed;
     if (existed) {
       const cur = decode(fs.readFileSync(final));
       const same = (b) => JSON.stringify({ ...b, captured_at: null, pid: null });
@@ -170,6 +179,14 @@ function writeCapture(ws, args) {
         // Same answer captured before (only the capture time or process differs).
         return { id, rel: captureRel(id), sha256: sha256(fs.readFileSync(final)), bytes: fs.statSync(final).size, already: true };
       }
+      if (cur.ok && isSubmissionOnly(cur.body) && !isSubmissionOnly(body) && cur.body.attempt_id === body.attempt_id && cur.body.run_id === body.run_id) {
+        // The outcome of a background request replaces the capture of its ID.
+        fs.unlinkSync(final);
+        placed = place();
+        existed = !placed;
+      }
+    }
+    if (existed) {
       const keep = path.join(dir, `conflict-${id}-${crypto.randomBytes(4).toString('hex')}.json`);
       fs.renameSync(tmp, keep);
       throw new CaptureError('CAPTURE_CONFLICT', `A different capture already exists for attempt ${id}; both are kept (${path.basename(keep)}) and neither is imported automatically.`, { kept: path.basename(keep) });
@@ -225,8 +242,9 @@ function bindCapture(cap, run, provider, attempt) {
   if (!attempt.attempt_id || b.attempt_id !== attempt.attempt_id) bad.push('attempt ID');
   if (b.prompt_sha256 !== run.prompt.sha256) bad.push('prompt hash');
   if (b.evidence_packet_sha256 !== run.evidence_packet.sha256) bad.push('evidence packet hash');
-  if (!b.result && !b.error) bad.push('outcome');
+  if (!b.result && !b.error && !isSubmissionOnly(b)) bad.push('outcome');
   if (bad.length) return { ok: false, reason: `${cap.rel} does not match this attempt (${bad.join(', ')})` };
+  if (isSubmissionOnly(b)) return { ok: true, submission: b.submission };
   if (b.result) return { ok: true, finishedAt: b.finished_at, result: { text: b.result.text, attested: b.result.attested || {}, usage: b.result.usage || null, raw: b.result.raw } };
   const e = b.error;
   const error = Object.assign(new Error(e.message), { kind: e.kind, httpStatus: e.http_status, requestId: e.request_id, code: e.code, notSent: e.not_sent, retryable: e.retryable, usage: e.usage, attested: e.attested, raw: e.raw });
@@ -280,4 +298,4 @@ function removeStaleTemps(ws, maxAgeMs = 3600000) {
   return n;
 }
 
-module.exports = { SCHEMA, ATTEMPT_ID_RE, CaptureError, captureDir, captureRel, writeCapture, readCapture, bindCapture, removeCapture, listCaptures, removeStaleTemps, decode, encode, bodyFor };
+module.exports = { SCHEMA, ATTEMPT_ID_RE, CaptureError, captureDir, captureRel, writeCapture, readCapture, bindCapture, removeCapture, listCaptures, removeStaleTemps, decode, encode, bodyFor, isSubmissionOnly };

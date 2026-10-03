@@ -9,8 +9,9 @@
 //                        Environment page; never in the code or the browser)
 //   PORT                 set by Render
 //   RENDER_EXTERNAL_HOSTNAME or CR_ALLOWED_HOSTS   the host names the app answers to
-// Research keys come from the environment too (ANTHROPIC_API_KEY); they are
-// never written to the disk, logs, exports or the page.
+// Research keys come from the environment too (OPENAI_API_KEY, GEMINI_API_KEY,
+// ANTHROPIC_API_KEY, and COINGECKO_API_KEY for prices); they are never written
+// to the disk, logs, exports or the page.
 //
 // Access: one passphrase, a signed-in session cookie (HttpOnly, Secure,
 // SameSite=Strict, 30 days, kept across restarts in .cr/sessions.json as
@@ -42,14 +43,22 @@ const MAX_FAILS_TOTAL = 100;
 //   gpt-6.1-sol (OpenAI API pricing): $2 / $10 per million input / output
 //     tokens; web search $10 per 1,000 calls, plus the search content it reads
 //     billed as input tokens. max_tool_calls caps the calls.
-//   gemini-2.5-pro (Gemini API pricing, prompts up to 200k tokens): $1.25 / $10
-//     per million input / output tokens; Google Search grounding is billed per
-//     grounded prompt ($35 per 1,000 after the free daily allowance), so one
-//     fee per request bounds it. Gemini 3 models bill every search query, with
-//     no request parameter that caps them, so they are not proposed here.
-const HOSTED_DEFAULTS_VERSION = 3;
-const CHATGPT_DEFAULTS = { model: 'gpt-6.1-sol', input_usd_per_mtok: 2, output_usd_per_mtok: 10, search_usd_per_call: 0.01, max_searches: 10, search_result_tokens_estimate: 8000 };
-const GEMINI_DEFAULTS = { model: 'gemini-2.5-pro', input_usd_per_mtok: 1.25, output_usd_per_mtok: 10, search_usd_per_call: 0.035, search_billing: 'per_request', max_searches: 1 };
+//   gemini-3.1-pro-preview (Gemini API pricing checked 2026-10-03, prompts up
+//     to 200k tokens): $2 / $12 per million input / output tokens. Gemini 3
+//     bills every Google Search query the model runs (5,000 free a month
+//     across Gemini 3 models, then $14 per 1,000) and no request parameter
+//     caps them, so max searches is the number the reservation assumes (an
+//     estimate) and the Google project's spend cap is the hard limit.
+//     gemini-2.5-pro (the v3 proposal) is now limited to earlier users.
+// ChatGPT and Gemini run in the provider's background (Responses background
+// mode, Interactions background execution) and are collected by ID, so a
+// deploy or restart never strands a paid request.
+const HOSTED_DEFAULTS_VERSION = 4;
+const CHATGPT_DEFAULTS = { model: 'gpt-6.1-sol', input_usd_per_mtok: 2, output_usd_per_mtok: 10, search_usd_per_call: 0.01, max_searches: 10, search_result_tokens_estimate: 8000, effort: 'high' };
+const GEMINI_DEFAULTS = { model: 'gemini-3.1-pro-preview', input_usd_per_mtok: 2, output_usd_per_mtok: 12, search_usd_per_call: 0.014, search_billing: 'per_query', max_searches: 20, effort: 'high' };
+// What v3 proposed, to recognize settings nobody has changed since.
+const CHATGPT_DEFAULTS_V3 = { model: 'gpt-6.1-sol', input_usd_per_mtok: 2, output_usd_per_mtok: 10, search_usd_per_call: 0.01, max_searches: 10, search_result_tokens_estimate: 8000 };
+const GEMINI_DEFAULTS_V3 = { model: 'gemini-2.5-pro', input_usd_per_mtok: 1.25, output_usd_per_mtok: 10, search_usd_per_call: 0.035, search_billing: 'per_request', max_searches: 1 };
 const HOSTED_DEFAULTS = {
   market_data: { enabled: true },
   research: {
@@ -62,6 +71,8 @@ const HOSTED_DEFAULTS = {
     timeout_seconds: 1500,
     // ChatGPT and Gemini in the background run side by side.
     max_concurrent: 2,
+    // A background request still running after an hour is cancelled.
+    background_deadline_minutes: 60,
     providers: {
       claude: { model: 'claude-opus-5-5', input_usd_per_mtok: 4, output_usd_per_mtok: 20, cache_write_usd_per_mtok: 5, cache_read_usd_per_mtok: 0.2, search_usd_per_call: 0.01, max_searches: 8 },
       chatgpt: CHATGPT_DEFAULTS,
@@ -74,7 +85,7 @@ const HOSTED_DEFAULTS = {
     budget: { per_run_usd: 5, daily_usd: 10, monthly_usd: 40 },
   },
 };
-const DEFAULTS_NOTE = 'Proposed limits for the online desk: claude-opus-5-5, gpt-6.1-sol and gemini-2.5-pro with web search, used only for a model whose API key is set; up to 48,000 output tokens per request, $5 per run, $10 per day, $40 per month. Change them in Settings > Research models & budget.';
+const DEFAULTS_NOTE = 'Proposed limits for the online desk: claude-opus-5-5, gpt-6.1-sol and gemini-3.1-pro-preview with web search, used only for a model whose API key is set (ChatGPT and Gemini run in the provider\'s background and are collected by ID); up to 48,000 output tokens per request, $5 per run, $10 per day, $40 per month. Change them in Settings > Research models & budget.';
 
 // Defaults that an earlier version wrote are moved to the current ones on
 // start, but only where the value is still exactly what that version wrote:
@@ -91,11 +102,20 @@ const DEFAULT_UPGRADES = {
   ],
   // v3 (2026-10-03): proposed ChatGPT and Gemini API settings, inert until a key is set.
   3: [
-    ['research.providers.chatgpt', undefined, CHATGPT_DEFAULTS],
-    ['research.providers.gemini', undefined, GEMINI_DEFAULTS],
+    ['research.providers.chatgpt', undefined, CHATGPT_DEFAULTS_V3],
+    ['research.providers.gemini', undefined, GEMINI_DEFAULTS_V3],
     ['research.max_concurrent', undefined, 2],
   ],
+  // v4 (2026-10-03): background research for ChatGPT and Gemini; Gemini 3.1
+  // Pro on the Interactions API (2.5 Pro is limited to earlier users).
+  4: [
+    ['research.providers.chatgpt', CHATGPT_DEFAULTS_V3, CHATGPT_DEFAULTS],
+    ['research.providers.gemini', GEMINI_DEFAULTS_V3, GEMINI_DEFAULTS],
+    ['research.background_deadline_minutes', undefined, 60],
+  ],
 };
+// A setting still exactly as an earlier version wrote it (objects compared by value).
+const sameSetting = (a, b) => (a === undefined || b === undefined ? a === b : JSON.stringify(a) === JSON.stringify(b));
 
 const getPath = (o, p) => p.split('.').reduce((x, k) => (x && typeof x === 'object' ? x[k] : undefined), o);
 function setPath(o, p, v) {
@@ -223,7 +243,7 @@ function prepareWorkspace(cfg) {
     for (let v = (doc.hosted_defaults_version || 1) + 1; v <= HOSTED_DEFAULTS_VERSION; v++) {
       const moved = [];
       for (const [p, from, to] of DEFAULT_UPGRADES[v] || []) {
-        if (getPath(doc, p) === from) {
+        if (sameSetting(getPath(doc, p), from)) {
           setPath(doc, p, to);
           moved.push({ setting: p, from: from === undefined ? null : from, to });
         }

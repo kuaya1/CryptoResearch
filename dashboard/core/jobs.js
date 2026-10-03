@@ -149,7 +149,10 @@ async function runJob(ws, name, { trigger = 'cli', onlyDue = false, foreground =
   // Daily jobs and research take a cross-process lease; market has its own
   // lease inside refresh(). requests/inbox are serialized by the workspace lock.
   const leased = DAILY.has(name) || name === 'research';
-  const token = leased ? acquireLease(ws, `job-${name}`, 20 * 60000, { label: trigger }) : null;
+  // A research pass can wait on a blocking provider call for the whole
+  // research timeout, so its lease lasts at least that long.
+  const ttl = name === 'research' ? Math.max(20 * 60000, ((ws.settings.research && ws.settings.research.timeout_seconds) || 600) * 1000 + 5 * 60000) : 20 * 60000;
+  const token = leased ? acquireLease(ws, `job-${name}`, ttl, { label: trigger }) : null;
   if (leased && !token) {
     result = { status: 'busy', summary: 'Another runner is doing this job right now.' };
     record(ws, name, trigger, started, new Date().toISOString(), result);

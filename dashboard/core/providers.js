@@ -11,17 +11,22 @@
 // Search bounds (audit V2-005), as each provider documents them:
 //   Claude   web_search tool max_uses: a hard cap on searches in the request.
 //   ChatGPT  max_tool_calls: a cap on all built-in tool calls in the response.
-//   Gemini   google_search has no request parameter that caps searches; the
-//            runner refuses search for Gemini unless per-request billing is
-//            declared. Nothing here invents a cap.
+//   Gemini   google_search has no request parameter that caps searches. Gemini
+//            2.5 bills one fee per grounded request ("per_request" billing
+//            bounds it); Gemini 3 bills every query the model runs, so its
+//            search fee is an estimate ("per_query" billing, declared in
+//            Settings) and Google's project spend cap is the hard limit. The
+//            runner refuses Gemini search unless one of the two is declared.
+//            Nothing here invents a cap.
 // maxSearches 0 sends no search tool at all. No default replaces it here.
 //
 // Secrets: API keys come from environment variables or
 // ~/.cryptoresearch/secrets.json (outside the workspace). They are never written
 // to the workspace, logs, exports or the browser.
 //
-// These adapters follow each provider's documented HTTP API. They were tested
-// against recorded fixture responses, not live accounts.
+// These adapters follow each provider's documented HTTP API (OpenAI and Gemini
+// checked against their docs on 2026-10-03). They are tested against local
+// stand-ins for those APIs, not live accounts.
 //
 // Transport timeouts (audit F2, 2026-10-02 review). Node's built-in fetch is
 // Undici, whose connection pool waits at most 300 s for response headers and
@@ -230,10 +235,37 @@ async function readMessageStream(res) {
   return msg;
 }
 
-async function post(fetchImpl, url, headers, body, { signal, dispatcher }) {
+// How a provider's HTTP error answer reads for billing and retries:
+//   rejected   400-level refusals (bad request, key, model, rate limit) are
+//              answered before any work, and the providers used here do not
+//              bill them. 429 also says when to ask again (Retry-After).
+//   ambiguous  500-level answers, including a gateway that timed out while the
+//              provider may still have been working: whether the request ran
+//              and was billed is unknown, so it is never resent by itself.
+function httpErrorTraits(status) {
+  if (status >= 500) return { ambiguous: true, retryable: false };
+  if (status === 429) return { rejected: true, rateLimited: true, retryable: true };
+  if (status >= 400) return { rejected: true, retryable: false };
+  return {};
+}
+
+function retryAfterOf(res) {
+  const h = res && res.headers && typeof res.headers.get === 'function' ? res.headers.get('retry-after') || res.headers.get('retry-after-ms') : null;
+  if (!h) return null;
+  if (res.headers.get('retry-after-ms') && !res.headers.get('retry-after')) {
+    const ms = Number(h);
+    return Number.isFinite(ms) && ms >= 0 ? ms : null;
+  }
+  const secs = Number(h);
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
+  const t = Date.parse(h);
+  return Number.isNaN(t) ? null : Math.max(0, t - Date.now());
+}
+
+async function post(fetchImpl, url, headers, body, { signal, dispatcher, method = 'POST' }) {
   let res;
   try {
-    res = await fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), signal, dispatcher });
+    res = await fetchImpl(url, { method, headers: { 'content-type': 'application/json', ...headers }, body: body === undefined ? undefined : JSON.stringify(body), signal, dispatcher });
   } catch (err) {
     throw transportError(err);
   }
@@ -251,7 +283,7 @@ async function post(fetchImpl, url, headers, body, { signal, dispatcher }) {
   const requestId = res.headers && typeof res.headers.get === 'function' ? res.headers.get('request-id') || res.headers.get('x-request-id') || null : null;
   if (!res.ok) {
     const msg = json && json.error ? (json.error.message || JSON.stringify(json.error)).slice(0, 300) : text.slice(0, 300);
-    throw new ProviderError('http', `HTTP ${res.status}: ${msg}`, { httpStatus: res.status, requestId, raw: json || text, retryable: res.status === 429 || res.status >= 500 });
+    throw new ProviderError('http', `HTTP ${res.status}: ${msg}`, { httpStatus: res.status, requestId, raw: json || text, retryAfterMs: retryAfterOf(res), ...httpErrorTraits(res.status) });
   }
   return { json, raw: text, requestId };
 }
@@ -408,17 +440,19 @@ async function identifyImage({ model, imageBase64, mediaType, key, signal, fetch
 }
 
 // --- OpenAI Responses API with the web search tool -------------------------------
-async function callChatgpt({ model, prompt, maxOutputTokens, maxSearches, key, signal, fetchImpl, dispatcher }) {
-  const body = { model, input: prompt, max_output_tokens: maxOutputTokens, store: false };
-  if (maxSearches > 0) {
-    body.tools = [{ type: 'web_search' }];
-    body.max_tool_calls = maxSearches;
-  }
-  const { json, raw, requestId } = await post(fetchImpl, 'https://api.openai.com/v1/responses', { authorization: `Bearer ${key}` }, body, { signal, dispatcher });
+//
+// One reader for every shape a Responses answer comes back in: the blocking
+// call's body, a background response fetched by its ID, and a cancelled one.
+// A response that is not "completed" is never a finished report: "incomplete"
+// (the output limit ran out, reasoning included, possibly with no visible
+// text), "failed" and "cancelled" are answers with their own usage, so their
+// cost is known, but nothing is saved as a report.
+function readChatgpt(json, raw, requestId) {
   let text = '';
   if (json && typeof json.output_text === 'string') text = json.output_text;
   else if (json && Array.isArray(json.output)) {
-    text = json.output.filter((o) => o.type === 'message').flatMap((o) => o.content || []).filter((c) => c.type === 'output_text').map((c) => c.text).join('\n');
+    // Parts of one message continue each other; separate messages are separate blocks.
+    text = json.output.filter((o) => o.type === 'message').map((o) => (o.content || []).filter((c) => c.type === 'output_text').map((c) => c.text).join('')).filter(Boolean).join('\n\n');
   }
   const u = (json && json.usage) || {};
   // Every web_search_call counts toward max_tool_calls; the search fee is for
@@ -426,15 +460,52 @@ async function callChatgpt({ model, prompt, maxOutputTokens, maxSearches, key, s
   // without an action type is counted as a search.
   const calls = json && Array.isArray(json.output) ? json.output.filter((o) => o.type === 'web_search_call') : null;
   const searches = calls ? calls.filter((o) => !o.action || !o.action.type || o.action.type === 'search').length : null;
-  return {
-    text: String(text || '').trim(),
-    raw,
-    attested: { provider: 'openai', model: json && json.model, response_id: json && json.id, request_id: requestId, status: json && json.status },
-    usage: { input_tokens: u.input_tokens ?? null, output_tokens: u.output_tokens ?? null, search_calls: searches, tool_calls: calls ? calls.length : null },
-  };
+  const cached = u.input_tokens_details && typeof u.input_tokens_details.cached_tokens === 'number' ? u.input_tokens_details.cached_tokens : null;
+  const usage = { input_tokens: u.input_tokens ?? null, output_tokens: u.output_tokens ?? null, search_calls: searches, tool_calls: calls ? calls.length : null };
+  if (cached) usage.cached_input_tokens = cached;
+  if (u.output_tokens_details && typeof u.output_tokens_details.reasoning_tokens === 'number') usage.reasoning_tokens = u.output_tokens_details.reasoning_tokens;
+  const status = json && json.status ? json.status : null;
+  const attested = { provider: 'openai', model: json && json.model, response_id: json && json.id, request_id: requestId, status };
+  return { text: String(text || '').trim(), raw, attested, usage, status };
+}
+
+// The outcome of a Responses answer whose status is final: a result, or the
+// provider's own failure with its usage.
+function chatgptOutcome(r, json) {
+  const extra = { usage: r.usage, attested: r.attested, raw: r.raw, retryable: false };
+  if (r.status === 'completed' || r.status === null || r.status === undefined) return { result: { text: r.text, raw: r.raw, attested: r.attested, usage: r.usage } };
+  if (r.status === 'incomplete') {
+    const why = json && json.incomplete_details ? json.incomplete_details.reason : null;
+    return { error: new ProviderError('incomplete', why === 'max_output_tokens'
+      ? 'ChatGPT ran out of its output limit (reasoning counts toward it) before finishing. Its cost is recorded; nothing was saved as a report. Retry, or raise the output limit in Settings.'
+      : `ChatGPT stopped before finishing (${why || 'incomplete'}). Its cost is recorded; nothing was saved as a report. You can retry.`, extra) };
+  }
+  if (r.status === 'cancelled') return { error: new ProviderError('cancelled', 'The ChatGPT request was cancelled before it finished. Usage so far is recorded; nothing was saved as a report.', extra) };
+  const e = (json && json.error) || {};
+  return { error: new ProviderError('failed', `OpenAI reported the request failed${e.code ? ` (${e.code})` : ''}: ${String(e.message || 'no reason given').slice(0, 300)}`, extra) };
+}
+
+async function callChatgpt({ model, prompt, maxOutputTokens, maxSearches, effort, key, signal, fetchImpl, dispatcher }) {
+  const body = { model, input: prompt, max_output_tokens: maxOutputTokens, store: false };
+  if (effort) body.reasoning = { effort };
+  if (maxSearches > 0) {
+    body.tools = [{ type: 'web_search' }];
+    body.max_tool_calls = maxSearches;
+  }
+  const { json, raw, requestId } = await post(fetchImpl, 'https://api.openai.com/v1/responses', { authorization: `Bearer ${key}` }, body, { signal, dispatcher });
+  const r = readChatgpt(json, raw, requestId);
+  const out = chatgptOutcome(r, json);
+  if (out.error) throw out.error;
+  return out.result;
 }
 
 // --- Gemini generateContent with Google Search grounding ------------------------
+// Kept for research.providers.gemini.api "generate_content"; the default is
+// the Interactions API in the background (below). A candidate that did not
+// finish with STOP is not a finished report: MAX_TOKENS is incomplete, a
+// safety or recitation stop (or a blocked prompt) is a refusal.
+const GEMINI_REFUSED = new Set(['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII', 'IMAGE_SAFETY', 'LANGUAGE']);
+
 async function callGemini({ model, prompt, maxOutputTokens, maxSearches, key, signal, fetchImpl, dispatcher }) {
   const body = { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens } };
   // google_search has no parameter that limits searches (see the header).
@@ -442,18 +513,192 @@ async function callGemini({ model, prompt, maxOutputTokens, maxSearches, key, si
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const { json, raw, requestId } = await post(fetchImpl, url, { 'x-goog-api-key': key }, body, { signal, dispatcher });
   const cand = json && Array.isArray(json.candidates) ? json.candidates[0] : null;
-  const text = cand && cand.content && Array.isArray(cand.content.parts) ? cand.content.parts.map((p) => p.text || '').join('\n').trim() : '';
+  const text = cand && cand.content && Array.isArray(cand.content.parts) ? cand.content.parts.map((p) => p.text || '').join('').trim() : '';
   const u = (json && json.usageMetadata) || {};
   const grounding = cand && cand.groundingMetadata ? (cand.groundingMetadata.webSearchQueries || []).length : null;
-  return {
-    text,
-    raw,
-    attested: { provider: 'google', model: (json && json.modelVersion) || model, response_id: json && json.responseId, request_id: requestId, finish_reason: cand && cand.finishReason },
-    usage: { input_tokens: u.promptTokenCount ?? null, output_tokens: (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0) || null, search_calls: grounding },
-  };
+  const out = (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0);
+  const usage = { input_tokens: typeof u.promptTokenCount === 'number' ? u.promptTokenCount + (u.toolUsePromptTokenCount || 0) : null, output_tokens: out || (typeof u.candidatesTokenCount === 'number' ? 0 : null), search_calls: grounding };
+  const finish = cand ? cand.finishReason || null : null;
+  const attested = { provider: 'google', model: (json && json.modelVersion) || model, response_id: json && json.responseId, request_id: requestId, finish_reason: finish };
+  const blocked = json && json.promptFeedback && json.promptFeedback.blockReason;
+  if (blocked || GEMINI_REFUSED.has(finish)) throw new ProviderError('refused', `Gemini declined to answer (${blocked || finish}). Its cost is recorded; nothing was saved as a report.`, { usage, attested, raw, retryable: false });
+  if (finish === 'MAX_TOKENS') throw new ProviderError('incomplete', `Gemini ran out of its output limit (${maxOutputTokens} tokens, thinking included) before finishing. Its cost is recorded; nothing was saved as a report. Retry, or raise the output limit in Settings.`, { usage, attested, raw, retryable: false });
+  return { text, raw, attested, usage };
 }
 
 const CALLS = { claude: callClaude, chatgpt: callChatgpt, gemini: callGemini };
+
+// --- Research in the background, collected later by ID -----------------------
+//
+// A full research answer takes 5 to 25 minutes. Waiting for it on one open
+// connection ties the outcome to this process: a deploy or restart in the
+// middle leaves a request that was probably billed and an answer nobody can
+// collect ("uncertain"). OpenAI (Responses API, background mode) and Gemini
+// (Interactions API, background execution) can instead run the request on
+// their side: the create call answers at once with an ID, the answer is
+// fetched later by that ID (OpenAI keeps it 30 days, Gemini 55 days on the
+// paid tier), and a restart only means asking again. The create call is
+// short, so the window in which a request may have been sent without its ID
+// saved shrinks to seconds. Neither API documents an idempotency key for the
+// create call, so a create whose outcome is unknown is still never repeated
+// automatically. Both need store: true (the provider keeps the prompt and the
+// answer for that retention period).
+//
+//   submit  -> { response_id, status, request_id, raw, final }
+//              final is set when the create answer is already final.
+//   poll    -> { done: false, status } | { done: true, result } | { done: true, error }
+//   cancel  -> the same shape as poll, for the response after cancelling.
+// Fetching an answer by ID is safe to repeat: it creates nothing and costs nothing.
+const GEMINI_API_REVISION = '2026-05-20';
+const OPENAI_BASE = 'https://api.openai.com/v1/responses';
+const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/interactions';
+
+function backgroundRoute(provider, cfg = {}) {
+  if (provider === 'chatgpt') return cfg.api === 'blocking' ? null : 'openai_responses_background';
+  if (provider === 'gemini') return cfg.api === 'generate_content' ? null : 'gemini_interactions_background';
+  return null;
+}
+
+async function submitChatgpt({ model, prompt, maxOutputTokens, maxSearches, effort, key, signal, fetchImpl, dispatcher, clientRequestId, metadata }) {
+  const body = { model, input: prompt, max_output_tokens: maxOutputTokens, background: true, store: true };
+  if (effort) body.reasoning = { effort };
+  if (maxSearches > 0) {
+    body.tools = [{ type: 'web_search' }];
+    body.max_tool_calls = maxSearches;
+    body.include = ['web_search_call.action.sources'];
+  }
+  if (metadata) body.metadata = metadata;
+  const headers = { authorization: `Bearer ${key}` };
+  if (clientRequestId) headers['x-client-request-id'] = clientRequestId;
+  const { json, raw, requestId } = await post(fetchImpl, OPENAI_BASE, headers, body, { signal, dispatcher });
+  if (!json || typeof json.id !== 'string' || !json.id) throw new ProviderError('http', 'OpenAI answered the request without a response ID, so its answer cannot be collected.', { raw, requestId, ambiguous: true });
+  const finalNow = ['completed', 'incomplete', 'failed', 'cancelled'].includes(json.status);
+  return { response_id: json.id, status: json.status || null, request_id: requestId, raw, final: finalNow ? chatgptOutcome(readChatgpt(json, raw, requestId), json) : null };
+}
+
+async function pollChatgpt({ responseId, key, signal, fetchImpl, dispatcher, cancel = false }) {
+  const url = `${OPENAI_BASE}/${encodeURIComponent(responseId)}${cancel ? '/cancel' : ''}`;
+  const { json, raw, requestId } = await post(fetchImpl, url, { authorization: `Bearer ${key}` }, undefined, { signal, dispatcher, method: cancel ? 'POST' : 'GET' });
+  const r = readChatgpt(json, raw, requestId);
+  if (r.status === 'queued' || r.status === 'in_progress') return { done: false, status: r.status, request_id: requestId };
+  return { done: true, status: r.status, ...chatgptOutcome(r, json) };
+}
+
+// Gemini Interactions: the text is in the model_output steps (older answers
+// had a flat outputs list), each search the model ran is a google_search_call
+// step with its queries, and usage carries input, output, thinking and tool
+// (search result) tokens. Thinking is billed as output, search results as
+// input. Field names are read defensively: a count that cannot be found is
+// left unknown (the attempt then keeps counting at its reservation), never
+// taken as zero.
+function readGemini(json, raw, requestId) {
+  const obj = json && json.interaction && typeof json.interaction === 'object' ? json.interaction : json || {};
+  const steps = Array.isArray(obj.steps) ? obj.steps : [];
+  let text = typeof obj.output_text === 'string' ? obj.output_text : typeof obj.outputText === 'string' ? obj.outputText : '';
+  if (!text) {
+    // Parts of one step continue each other; separate steps are separate blocks.
+    const blocks = [];
+    for (const s of steps) {
+      if (!s || s.type !== 'model_output') continue;
+      const parts = (Array.isArray(s.content) ? s.content : []).filter((c) => c && c.type === 'text' && typeof c.text === 'string').map((c) => c.text);
+      if (typeof s.text === 'string') parts.push(s.text);
+      if (parts.length) blocks.push(parts.join(''));
+    }
+    if (!blocks.length && Array.isArray(obj.outputs)) {
+      const parts = obj.outputs.filter((o) => o && o.type === 'text' && typeof o.text === 'string').map((o) => o.text);
+      if (parts.length) blocks.push(parts.join(''));
+    }
+    text = blocks.join('\n\n');
+  }
+  let queries = 0;
+  let searchSteps = 0;
+  for (const s of steps) {
+    if (!s || s.type !== 'google_search_call') continue;
+    searchSteps += 1;
+    const q = Array.isArray(s.queries) ? s.queries : s.arguments && Array.isArray(s.arguments.queries) ? s.arguments.queries : null;
+    queries += q ? q.length : 1;
+  }
+  const u = obj.usage || {};
+  const num = (...keys) => {
+    for (const k of keys) if (typeof u[k] === 'number' && Number.isFinite(u[k])) return u[k];
+    return null;
+  };
+  const input = num('total_input_tokens', 'prompt_tokens', 'input_tokens');
+  const tool = num('total_tool_use_tokens', 'tool_use_prompt_tokens', 'tool_use_tokens') || 0;
+  const output = num('total_output_tokens', 'completion_tokens', 'output_tokens');
+  const thought = num('total_thought_tokens', 'thoughts_tokens', 'reasoning_tokens') || 0;
+  const usage = { input_tokens: input === null ? null : input + tool, output_tokens: output === null ? null : output + thought, search_calls: steps.length ? queries : null };
+  if (thought) usage.reasoning_tokens = thought;
+  if (searchSteps) usage.search_steps = searchSteps;
+  const status = obj.status || null;
+  const attested = { provider: 'google', model: (typeof obj.model === 'string' && obj.model) || null, response_id: obj.id || null, request_id: requestId, status };
+  return { text: String(text || '').trim(), raw, attested, usage, status, obj };
+}
+
+function geminiOutcome(r) {
+  const extra = { usage: r.usage, attested: r.attested, raw: r.raw, retryable: false };
+  if (r.status === 'completed') return { result: { text: r.text, raw: r.raw, attested: r.attested, usage: r.usage } };
+  if (r.status === 'incomplete') return { error: new ProviderError('incomplete', 'Gemini stopped before finishing (output limit, thinking included). Its cost is recorded; nothing was saved as a report. Retry, or raise the output limit in Settings.', extra) };
+  if (r.status === 'cancelled') return { error: new ProviderError('cancelled', 'The Gemini request was cancelled before it finished. Usage so far is recorded; nothing was saved as a report.', extra) };
+  if (r.status === 'requires_action') return { error: new ProviderError('failed', 'Gemini stopped to ask for an action this desk does not provide (requires_action). Nothing was saved as a report.', extra) };
+  const e = (r.obj && r.obj.error) || {};
+  return { error: new ProviderError('failed', `Gemini reported the request failed${e.code ? ` (${e.code})` : ''}: ${String(e.message || 'no reason given').slice(0, 300)}`, extra) };
+}
+
+async function submitGemini({ model, prompt, maxOutputTokens, maxSearches, effort, key, signal, fetchImpl, dispatcher }) {
+  const body = { model, input: prompt, background: true, store: true, generation_config: { max_output_tokens: maxOutputTokens } };
+  if (effort) body.generation_config.thinking_level = effort;
+  if (maxSearches > 0) body.tools = [{ type: 'google_search' }];
+  const { json, raw, requestId } = await post(fetchImpl, GEMINI_BASE, { 'x-goog-api-key': key, 'api-revision': GEMINI_API_REVISION }, body, { signal, dispatcher });
+  const r = readGemini(json, raw, requestId);
+  if (!r.attested.response_id) throw new ProviderError('http', 'Gemini answered the request without an interaction ID, so its answer cannot be collected.', { raw, requestId, ambiguous: true });
+  const finalNow = ['completed', 'incomplete', 'failed', 'cancelled', 'requires_action'].includes(r.status);
+  return { response_id: r.attested.response_id, status: r.status, request_id: requestId, raw, final: finalNow ? geminiOutcome(r) : null };
+}
+
+async function pollGemini({ responseId, key, signal, fetchImpl, dispatcher, cancel = false }) {
+  const url = `${GEMINI_BASE}/${encodeURIComponent(responseId)}${cancel ? '/cancel' : ''}`;
+  const { json, raw, requestId } = await post(fetchImpl, url, { 'x-goog-api-key': key, 'api-revision': GEMINI_API_REVISION }, undefined, { signal, dispatcher, method: cancel ? 'POST' : 'GET' });
+  const r = readGemini(json, raw, requestId);
+  if (r.status === 'queued' || r.status === 'in_progress' || !r.status) return { done: false, status: r.status || 'in_progress', request_id: requestId };
+  return { done: true, status: r.status, ...geminiOutcome(r) };
+}
+
+const BACKGROUND = {
+  chatgpt: { submit: submitChatgpt, poll: pollChatgpt },
+  gemini: { submit: submitGemini, poll: pollGemini },
+};
+
+// A short call: creating a background request, or asking for its answer.
+const SHORT_CALL_MS = 90000;
+
+function shortCallSetup(opts) {
+  const dispatcher = transportFor(SHORT_CALL_MS);
+  if (!dispatcher) throw new ProviderError('config', `This Node.js (${process.version}) does not expose the fetch dispatcher this desk needs; not sent.`);
+  return { dispatcher, fetchImpl: opts.fetchImpl || fetch, signal: opts.signal || AbortSignal.timeout(SHORT_CALL_MS) };
+}
+
+async function submitBackground(provider, opts) {
+  const b = BACKGROUND[provider];
+  if (!b) throw new ProviderError('config', `${provider} has no background research route.`);
+  if (!Number.isInteger(opts.maxOutputTokens) || opts.maxOutputTokens < 1) throw new ProviderError('config', 'No valid output token limit; not sent.');
+  if (!Number.isInteger(opts.maxSearches) || opts.maxSearches < 0) throw new ProviderError('config', 'No valid search limit (0 turns search off); not sent.');
+  return b.submit({ ...opts, ...shortCallSetup(opts) });
+}
+
+async function pollBackground(provider, opts) {
+  const b = BACKGROUND[provider];
+  if (!b) throw new ProviderError('config', `${provider} has no background research route.`);
+  const out = await b.poll({ ...opts, ...shortCallSetup(opts) });
+  if (out.done && out.result && !out.result.text) {
+    return { done: true, status: out.status, error: new ProviderError('empty', 'The provider finished without any report text. Its cost is recorded; nothing was saved as a report.', { usage: out.result.usage, attested: out.result.attested, raw: out.result.raw, retryable: false }) };
+  }
+  return out;
+}
+
+async function cancelBackground(provider, opts) {
+  return pollBackground(provider, { ...opts, cancel: true });
+}
 
 async function callProvider(provider, opts) {
   const fn = CALLS[provider];
@@ -469,4 +714,4 @@ async function callProvider(provider, opts) {
   return out;
 }
 
-module.exports = { PROVIDER_API, apiKeyFor, keyStatus, callProvider, identifyImage, claudeIsModern, ProviderError, secretsFile, transportFor, transportInfo, TRANSPORT_MARGIN_MS, IDENTIFY_SCHEMA };
+module.exports = { PROVIDER_API, apiKeyFor, keyStatus, callProvider, identifyImage, claudeIsModern, ProviderError, secretsFile, transportFor, transportInfo, TRANSPORT_MARGIN_MS, IDENTIFY_SCHEMA, backgroundRoute, submitBackground, pollBackground, cancelBackground, readGemini, readChatgpt, GEMINI_API_REVISION };

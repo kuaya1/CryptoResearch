@@ -699,24 +699,41 @@ test('connector: with paid APIs set up, "all three models" runs ChatGPT and Gemi
   fs.writeFileSync(file, JSON.stringify(s));
   d.ws.reloadSettings();
   const claude = await connect(d);
+  // Background requests are checked every 200 ms here (30 s on the desk).
+  const prevCheck = process.env.CR_BACKGROUND_CHECK_MS;
+  process.env.CR_BACKGROUND_CHECK_MS = '200';
+  t.after(() => { if (prevCheck === undefined) delete process.env.CR_BACKGROUND_CHECK_MS; else process.env.CR_BACKGROUND_CHECK_MS = prevCheck; });
   const calls = [];
+  let created = null;
+  let polls = 0;
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
     const u = String(url);
-    calls.push(u);
-    const body = JSON.parse(init.body);
-    const runId = (String(body.input || (body.contents && body.contents[0].parts[0].text) || '').match(/run_[A-Za-z0-9_-]+/) || [])[0];
-    const run = research.loadRun(d.ws, 'examplecoin-fictional', runId);
-    if (u === 'https://api.openai.com/v1/responses') {
-      assert.equal(body.store, false);
+    const method = (init && init.method) || 'GET';
+    calls.push(`${method} ${u}`);
+    if (u === 'https://api.openai.com/v1/responses' && method === 'POST') {
+      // ChatGPT runs in OpenAI's background: the create call answers with an ID at once.
+      const body = JSON.parse(init.body);
+      const runId = (String(body.input).match(/run_[A-Za-z0-9_-]+/) || [])[0];
+      assert.equal(body.background, true, 'sent to run in the background');
+      assert.equal(body.store, true, 'background mode keeps the answer for collection');
       assert.equal(body.max_tool_calls, 5, 'the search limit is sent');
+      assert.equal(body.metadata.run_id, runId);
       assert.equal(init.headers.authorization, 'Bearer test-openai-key-fictional');
-      return new Response(JSON.stringify({ id: 'resp_fictional_1', model: 'gpt-fictional-test', status: 'completed', output: [{ type: 'web_search_call', action: { type: 'search' } }, { type: 'message', content: [{ type: 'output_text', text: mockReport(d.ws, 'chatgpt', run) }] }], usage: { input_tokens: 12000, output_tokens: 9000 } }), { status: 200, headers: { 'content-type': 'application/json', 'x-request-id': 'req_fictional_1' } });
+      created = runId;
+      return new Response(JSON.stringify({ id: 'resp_fictional_1', model: 'gpt-fictional-test', status: 'queued' }), { status: 200, headers: { 'content-type': 'application/json', 'x-request-id': 'req_fictional_1' } });
+    }
+    if (u === 'https://api.openai.com/v1/responses/resp_fictional_1' && method === 'GET') {
+      // Collected by its ID: still running on the first check, done on the next.
+      polls += 1;
+      if (polls < 2) return new Response(JSON.stringify({ id: 'resp_fictional_1', status: 'in_progress' }), { status: 200, headers: { 'content-type': 'application/json' } });
+      const run = research.loadRun(d.ws, 'examplecoin-fictional', created);
+      return new Response(JSON.stringify({ id: 'resp_fictional_1', model: 'gpt-fictional-test', status: 'completed', output: [{ type: 'web_search_call', action: { type: 'search' } }, { type: 'message', content: [{ type: 'output_text', text: mockReport(d.ws, 'chatgpt', run) }] }], usage: { input_tokens: 12000, output_tokens: 9000 } }), { status: 200, headers: { 'content-type': 'application/json', 'x-request-id': 'req_fictional_2' } });
     }
     if (u.startsWith('https://generativelanguage.googleapis.com/')) {
       return new Response(JSON.stringify({ error: { code: 400, message: 'FICTIONAL: API key not valid.' } }), { status: 400, headers: { 'content-type': 'application/json' } });
     }
-    throw new Error(`unexpected network call: ${u}`);
+    throw new Error(`unexpected network call: ${method} ${u}`);
   };
   t.after(() => { globalThis.fetch = realFetch; });
 
@@ -736,7 +753,11 @@ test('connector: with paid APIs set up, "all three models" runs ChatGPT and Gemi
   assert.equal(run.jobs.chatgpt.state, 'completed', JSON.stringify(run.jobs.chatgpt));
   assert.equal(run.jobs.gemini.state, 'failed', 'a bad key fails Gemini only');
   assert.match(run.jobs.gemini.error, /HTTP 400/);
+  assert.equal(run.jobs.gemini.attempts[0].cost_actual_usd, 0, 'a refused request is not billed');
   const a = run.jobs.chatgpt.attempts[0];
+  assert.equal(a.response_id, 'resp_fictional_1', 'collected by its background ID');
+  assert.equal(a.phase, 'imported');
+  assert.ok(polls >= 2, 'checked until it finished');
   assert.equal(a.cost_actual_usd, 0.124, '12,000 in + 9,000 out tokens + 1 search at the configured prices');
   assert.ok(a.reserved_usd > 0 && a.reserved_usd <= 5, 'reserved within the per-run limit before it was sent');
   const meta = readJson(path.join(d.ws.root, 'projects', pid, 'reports', run.jobs.chatgpt.report_id, 'meta.json'));

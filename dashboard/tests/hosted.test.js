@@ -173,6 +173,7 @@ test('hosted: defaults written by the first version move to the current ones on 
   delete s.hosted_defaults_version;
   delete s.research.timeout_seconds;
   delete s.research.max_concurrent;
+  delete s.research.background_deadline_minutes;
   delete s.research.providers.chatgpt;
   delete s.research.providers.gemini;
   s.research.max_output_tokens = 16000;
@@ -186,12 +187,17 @@ test('hosted: defaults written by the first version move to the current ones on 
   assert.equal(r.providers.claude.max_searches, 8);
   assert.deepEqual(r.budget, { per_run_usd: 5, daily_usd: 12, monthly_usd: 40 }, 'the daily limit Eric set stays');
   const after = readJson(file);
-  assert.equal(after.hosted_defaults_version, 3);
+  assert.equal(after.hosted_defaults_version, 4);
   assert.deepEqual(after.hosted_defaults_upgrades[0].changed.map((c) => c.setting).sort(), ['research.budget.monthly_usd', 'research.budget.per_run_usd', 'research.max_output_tokens', 'research.providers.claude.max_searches', 'research.timeout_seconds']);
   // v3 proposes ChatGPT and Gemini API settings; they are used only with a key.
   assert.deepEqual(after.hosted_defaults_upgrades[1].changed.map((c) => c.setting).sort(), ['research.max_concurrent', 'research.providers.chatgpt', 'research.providers.gemini']);
+  // v4 moves them to background research, with Gemini 3.1 Pro on the Interactions API.
+  assert.deepEqual(after.hosted_defaults_upgrades[2].changed.map((c) => c.setting).sort(), ['research.background_deadline_minutes', 'research.providers.chatgpt', 'research.providers.gemini']);
   assert.equal(r.providers.chatgpt.model, 'gpt-6.1-sol');
-  assert.equal(r.providers.gemini.search_billing, 'per_request', 'Gemini search bounded by one fee per request');
+  assert.equal(r.providers.chatgpt.effort, 'high');
+  assert.equal(r.providers.gemini.model, 'gemini-3.1-pro-preview');
+  assert.equal(r.providers.gemini.search_billing, 'per_query', 'Gemini 3 bills every search query: the fee is reserved as an estimate');
+  assert.equal(r.background_deadline_minutes, 60);
   // The start log says what research would be sent with; never a key.
   const keys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY'];
   const prev = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
@@ -204,8 +210,8 @@ test('hosted: defaults written by the first version move to the current ones on 
   const withOpenai = research.providerStatus(ws);
   for (const k of keys) { if (prev[k] === undefined) delete process.env[k]; else process.env[k] = prev[k]; }
   assert.match(line, /48000 output tokens per request, up to 3 requests, 8 searches per request, 1500 s per call/);
-  assert.match(line, /limits \$5 per run, \$12 per day, \$40 per month; Claude key present; route api; ChatGPT gpt-6\.1-sol \(key missing; route manual\), Gemini gemini-2\.5-pro \(key missing; route manual\); 2 at a time\./);
-  assert.match(line, /Defaults v2, v3 applied .*research\.max_output_tokens 16000 -> 48000.*research\.providers\.chatgpt unset -> gpt-6\.1-sol/);
+  assert.match(line, /limits \$5 per run, \$12 per day, \$40 per month; Claude key present; route api; ChatGPT gpt-6\.1-sol \(key missing; route manual\), Gemini gemini-3\.1-pro-preview \(key missing; route manual\); 2 at a time\./);
+  assert.match(line, /Defaults v2, v3, v4 applied .*research\.max_output_tokens 16000 -> 48000.*research\.providers\.chatgpt unset -> gpt-6\.1-sol/);
   assert.doesNotMatch(line, /test-key-not-real/);
   assert.equal(noKeys.chatgpt.mode, 'manual', 'no key: nothing paid');
   assert.equal(withOpenai.chatgpt.mode, 'api', 'the key is the only missing piece');
@@ -213,7 +219,8 @@ test('hosted: defaults written by the first version move to the current ones on 
   const plan = research.callPlan(ws, 'chatgpt', 'x'.repeat(30000));
   assert.ok(plan.ok && plan.total_usd < 1, `reservation ${plan.total_usd}`);
   const gplan = research.callPlan(ws, 'gemini', 'x'.repeat(30000));
-  assert.ok(gplan.ok && gplan.total_usd < 1, `reservation ${gplan.total_usd}`);
+  assert.ok(gplan.ok && gplan.total_usd < 1.5, `reservation ${gplan.total_usd}`);
+  assert.ok(plan.total_usd + gplan.total_usd < r.budget.per_run_usd, 'ChatGPT and Gemini together fit the per-run limit');
   // Applied once: a later change of Eric's is never overwritten.
   after.research.max_output_tokens = 20000;
   fs.writeFileSync(file, JSON.stringify(after));

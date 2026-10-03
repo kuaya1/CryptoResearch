@@ -30,6 +30,10 @@
 //               comes second, so a busy lock, blocked writes or a crash after
 //               the capture never lose a paid answer: the next runner commits
 //               the capture without asking the provider again (audit F1).
+//   submitted   (ChatGPT, Gemini) the provider accepted the request to run in
+//               the background and its ID is saved: the answer is collected by
+//               that ID on later checks, also after a restart, never by
+//               sending the request again.
 //   responded   the answer and its usage were saved in the same write as the
 //               pointer to them (a provider error answer is "errored").
 //   imported    the answer became a report.
@@ -39,9 +43,12 @@
 //               you reconcile it or retry it.
 //   reconciled  you recorded what the provider charged (or that it did not).
 // The ambiguous window cannot be closed from this side: after the dispatch
-// marker and before an answer is captured, a crash cannot tell "never left
-// this PC" from "sent and billed". The provider APIs used here document no
-// idempotency for these calls, so none is assumed.
+// marker and before an answer (or, for a background request, its ID) is
+// captured, a crash cannot tell "never left this PC" from "sent and billed".
+// The provider APIs used here document no idempotency for these calls, so
+// none is assumed. A 400-level refusal (bad request, key or model, rate
+// limit) is an answer before any work and is not billed; a 500-level answer
+// may come from a request that ran, so it is held as uncertain, not resent.
 //
 // Spending (audit V2-004/005). The per-run limit covers the whole run: every
 // model and every attempt. Admission runs under the workspace lock and counts,
@@ -85,6 +92,18 @@ const CHARS_PER_TOKEN = 3.5;
 const SEARCH_RESULT_TOKENS = 4000;
 // The request parameter that caps searches, per provider. Gemini has none.
 const SEARCH_CONTROL = { claude: 'max_uses', chatgpt: 'max_tool_calls', gemini: null };
+const EFFORTS = { claude: ['low', 'medium', 'high', 'xhigh', 'max'], chatgpt: ['low', 'medium', 'high', 'xhigh', 'max'], gemini: ['minimal', 'low', 'medium', 'high'] };
+// A background request (ChatGPT, Gemini) still running after this long is
+// cancelled at the provider (research.background_deadline_minutes).
+const DEFAULT_BACKGROUND_MINUTES = 60;
+// One check of a background request holds its job only this long.
+const POLL_LEASE_MS = 3 * 60000;
+// How often a still-running background request's progress is written down.
+const POLL_NOTE_MS = 5 * 60000;
+// Rate limits: a request the provider refused with 429 is asked again after
+// its Retry-After (or this wait), at most this many times per job.
+const RATE_LIMIT_WAIT_MS = 2 * 60000;
+const MAX_RATE_LIMITED = 5;
 // Jobs a model's own assistant does through the desk connector (mcp.js):
 // Claude in Cowork ("cowork"), ChatGPT or Gemini ("connector"). The runner
 // never sends anything for them.
@@ -166,7 +185,11 @@ function callBounds(ws, provider) {
     if (!isMoney(cfg.search_usd_per_call)) problems.push('a search price (or max searches 0 to turn web search off)');
     if (provider !== 'gemini') billing = 'per_search';
     else if (cfg.search_billing === 'per_request') billing = 'per_request';
-    else problems.push('a bound on Gemini searches: the Gemini API has no per-request search limit and Gemini 3 bills every search query, so set max searches to 0, or declare per-request search billing if your model bills grounding per prompt (Gemini 2.5 and older)');
+    // Gemini 3 bills every query the model runs and no request parameter caps
+    // them: max searches is then the number the reservation assumes, an
+    // estimate, and Google's project spend cap is the hard limit.
+    else if (cfg.search_billing === 'per_query') billing = 'per_query';
+    else problems.push('a bound on Gemini searches: the Gemini API has no per-request search limit, so set max searches to 0, declare per-request search billing if your model bills grounding per prompt (Gemini 2.5 and older), or declare per-query billing (Gemini 3: every search query is billed; the desk then reserves max searches as an estimate and your Google project spend cap is the hard limit)');
   }
   const perSearch = cfg.search_result_tokens_estimate === undefined || cfg.search_result_tokens_estimate === null ? SEARCH_RESULT_TOKENS : cfg.search_result_tokens_estimate;
   if (!Number.isInteger(perSearch) || perSearch < 0) problems.push('a search result token estimate (a whole number)');
@@ -174,9 +197,18 @@ function callBounds(ws, provider) {
   // many times, and every resumed request is part of the same reservation.
   const cont = provider === 'claude' ? (r.max_continuations === undefined || r.max_continuations === null ? DEFAULT_CONTINUATIONS : r.max_continuations) : 0;
   if (!Number.isInteger(cont) || cont < 0 || cont > 5) problems.push('a continuation limit (a whole number from 0 to 5)');
-  const effort = provider === 'claude' ? r.effort || 'high' : null;
-  if (effort && !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) problems.push('an effort level (low, medium, high, xhigh or max)');
+  // How hard the model thinks: Claude's effort (research.effort), ChatGPT's
+  // reasoning effort and Gemini's thinking level (per provider, "off" sends
+  // none). Reasoning and thinking count toward the output limit.
+  const effort = provider === 'claude' ? r.effort || 'high' : cfg.effort === 'off' ? null : cfg.effort || (provider === 'chatgpt' || provider === 'gemini' ? 'high' : null);
+  if (effort && !EFFORTS[provider].includes(effort)) problems.push(`an effort level (${EFFORTS[provider].join(', ')}, or off)`);
   for (const k of ['cache_write_usd_per_mtok', 'cache_read_usd_per_mtok']) if (cfg[k] !== undefined && cfg[k] !== null && !isMoney(cfg[k])) problems.push(`a valid ${k.replace(/_/g, ' ')}`);
+  // ChatGPT and Gemini research runs on the provider's side and is collected
+  // by its ID (providers.backgroundRoute); it is cancelled if it has not
+  // finished within this many minutes.
+  const route = providers.backgroundRoute(provider, cfg);
+  const deadline = r.background_deadline_minutes === undefined || r.background_deadline_minutes === null ? DEFAULT_BACKGROUND_MINUTES : r.background_deadline_minutes;
+  if (route && (!Number.isInteger(deadline) || deadline < 5 || deadline > 24 * 60)) problems.push('a background time limit (research.background_deadline_minutes, 5 to 1440)');
   return {
     ok: !problems.length,
     problems,
@@ -184,6 +216,8 @@ function callBounds(ws, provider) {
     max_continuations: Number.isInteger(cont) ? cont : 0,
     requests_max: 1 + (Number.isInteger(cont) ? cont : 0),
     effort,
+    route,
+    deadline_minutes: route ? deadline : null,
     search: { enabled, limit: enabled ? limit : 0, control: enabled ? SEARCH_CONTROL[provider] || null : null, billing },
     search_result_tokens: perSearch,
     prices: { input_usd_per_mtok: cfg.input_usd_per_mtok ?? null, output_usd_per_mtok: cfg.output_usd_per_mtok ?? null, search_usd_per_call: cfg.search_usd_per_call ?? null, cache_write_usd_per_mtok: cfg.cache_write_usd_per_mtok ?? null, cache_read_usd_per_mtok: cfg.cache_read_usd_per_mtok ?? null },
@@ -197,8 +231,9 @@ function describeBounds(b) {
     : `at most ${b.max_output_tokens} output tokens (the output limit sent with the request)`];
   if (!b.search.enabled) enforced.push('web search off');
   else if (b.search.billing === 'per_request') enforced.push('one search fee per request (declared per-request billing; the Gemini API cannot cap the number of searches)');
-  else enforced.push(`at most ${b.search.limit} searches (${b.search.control} sent with the request)`);
+  else if (b.search.billing !== 'per_query') enforced.push(`at most ${b.search.limit} searches (${b.search.control} sent with the request)`);
   const estimated = ['prompt tokens'];
+  if (b.search.billing === 'per_query') estimated.push(`the search fee, reserved for about ${b.search.limit} searches (Gemini bills every query and cannot cap them; your Google project spend cap is the hard limit)`);
   if (b.search.enabled) estimated.push('search results billed as input tokens (no request parameter caps them)');
   return { enforced, estimated };
 }
@@ -232,7 +267,7 @@ function providerStatus(ws) {
     if (!providers.transportFor((ws.settings.research.timeout_seconds || 600) * 1000)) missing.push(`a fetch transport whose 300-second limits can be raised (not available in Node ${process.version})`);
     out[p] = missing.length
       ? { mode: 'manual', reason: `not configured: ${missing.join(', ')}`, missing, key: { present: key.present, how: key.how || null } }
-      : { mode: 'api', reason: null, model: cfg.model, key: { present: true, source: key.source }, bounds: describeBounds(bounds) };
+      : { mode: 'api', reason: null, model: cfg.model, key: { present: true, source: key.source }, bounds: describeBounds(bounds), background: Boolean(bounds.route) };
   }
   return out;
 }
@@ -253,7 +288,9 @@ function callPlan(ws, provider, promptText) {
   if (b.search.enabled) {
     parts.push(b.search.billing === 'per_request'
       ? { part: 'search_fee', basis: 'enforced', units: n, usd: round4(p.search_usd_per_call * n), detail: `one search fee per request (declared per-request billing)${per}` }
-      : { part: 'search_fee', basis: 'enforced', units: b.search.limit * n, usd: round4(p.search_usd_per_call * b.search.limit * n), detail: `${b.search.limit} searches at most per request (${b.search.control})${per}` });
+      : b.search.billing === 'per_query'
+        ? { part: 'search_fee', basis: 'estimated', units: b.search.limit * n, usd: round4(p.search_usd_per_call * b.search.limit * n), detail: `about ${b.search.limit} searches per request at the per-query price${per}: an estimate, because Gemini bills every query the model runs and no request parameter caps them (the actual count is recorded from the answer)` }
+        : { part: 'search_fee', basis: 'enforced', units: b.search.limit * n, usd: round4(p.search_usd_per_call * b.search.limit * n), detail: `${b.search.limit} searches at most per request (${b.search.control})${per}` });
   }
   parts.push({ part: 'prompt_tokens', basis: 'estimated', tokens: promptTokens * n, usd: tok(promptTokens * n, p.input_usd_per_mtok), detail: `about ${promptTokens} prompt tokens per request (${CHARS_PER_TOKEN} characters per token)${per}; counted at the full input price` });
   if (b.search.enabled) {
@@ -263,7 +300,7 @@ function callPlan(ws, provider, promptText) {
   const sum = (basis) => round4(parts.filter((x) => x.basis === basis).reduce((a, x) => a + x.usd, 0));
   const enforced = sum('enforced');
   const estimated = sum('estimated');
-  return { ok: true, total_usd: round4(enforced + estimated), enforced_usd: enforced, estimated_usd: estimated, parts, bounds: { max_output_tokens: b.max_output_tokens, max_continuations: b.max_continuations, requests_max: n, effort: b.effort, search: b.search }, prices: p };
+  return { ok: true, total_usd: round4(enforced + estimated), enforced_usd: enforced, estimated_usd: estimated, parts, bounds: { max_output_tokens: b.max_output_tokens, max_continuations: b.max_continuations, requests_max: n, effort: b.effort, route: b.route, deadline_minutes: b.deadline_minutes, search: b.search }, prices: p };
 }
 
 function estimateCostUsd(ws, provider, promptText) {
@@ -285,13 +322,17 @@ function actualCostUsd(ws, provider, usage, attempt = null) {
     else if (search && search.enabled) fee = prices.search_usd_per_call * (calls === null ? search.limit : calls);
     else if (calls !== null) fee = prices.search_usd_per_call * calls;
   }
+  // Cached input (OpenAI) is part of input_tokens and billed at the cache-read
+  // price where one is configured; otherwise at the full input price.
+  const cachedIn = typeof usage.cached_input_tokens === 'number' && isMoney(prices.cache_read_usd_per_mtok) ? Math.min(usage.cached_input_tokens, usage.input_tokens) : 0;
   // Prompt-cache tokens (Claude): written at the cache-write price, read at the
   // cache-read price; without a configured price, 1.25x and 0.1x the input price.
   const cw = typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : 0;
   const cr = typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : 0;
   const pcw = isMoney(prices.cache_write_usd_per_mtok) ? prices.cache_write_usd_per_mtok : prices.input_usd_per_mtok * 1.25;
   const pcr = isMoney(prices.cache_read_usd_per_mtok) ? prices.cache_read_usd_per_mtok : prices.input_usd_per_mtok * 0.1;
-  return round4((usage.input_tokens / 1e6) * prices.input_usd_per_mtok + (cw / 1e6) * pcw + (cr / 1e6) * pcr + (usage.output_tokens / 1e6) * prices.output_usd_per_mtok + fee);
+  const cachedCost = cachedIn ? (cachedIn / 1e6) * prices.cache_read_usd_per_mtok : 0;
+  return round4(((usage.input_tokens - cachedIn) / 1e6) * prices.input_usd_per_mtok + cachedCost + (cw / 1e6) * pcw + (cr / 1e6) * pcr + (usage.output_tokens / 1e6) * prices.output_usd_per_mtok + fee);
 }
 
 // What one attempt counts against the limits: the reconciled amount, else the
@@ -631,6 +672,8 @@ function cancelJob(ws, projectId, runId, provider, reason = null) {
       if (job.cancel_requested) return { message: 'Cancel already requested.' };
       job.cancel_requested = true;
       job.cancel_reason = reason;
+      const last = lastAttempt(job);
+      if (last && last.phase === 'submitted') return { message: `Cancel requested. The desk asks ${(providers.PROVIDER_API[provider] || {}).vendor || 'the provider'} to stop the request at its next check (within a few minutes); work done so far may still be billed and is recorded.` };
       return { message: 'Cancel requested. A request that was already sent to the provider may still be billed; its answer will be kept but not imported.' };
     }
     const open = uncertainOf(job);
@@ -639,6 +682,19 @@ function cancelJob(ws, projectId, runId, provider, reason = null) {
     return { message: `${PROVIDER_LABELS[provider]} job canceled.${open.length ? ` Attempt ${open.map((a) => `#${a.n}`).join(', ')} may still have been billed; it stays counted until you reconcile it.` : ''}` };
   }, `Cancel ${provider} in ${runId}`);
   return { status: out.result.noop ? 'unchanged' : 'saved', noop: Boolean(out.result.noop), message: out.result.message, files: out.files, verified: out.verified };
+}
+
+// A job about to be (re)queued for the paid API takes the route the API has
+// now: every integrity rule (spend log, actual cost, uncertain handling,
+// capture recovery) keys on job.mode, so a job created while the API was not
+// set up must not go to the API still marked manual or as an assistant's job.
+function switchToApiRoute(job, st) {
+  if (job.mode === st.mode && (job.model || null) === (st.model || null)) return;
+  job.route_changes = [...(job.route_changes || []), { at: new Date().toISOString(), from: job.mode || null, to: st.mode, model: st.model || null }];
+  job.mode = st.mode;
+  job.model = st.model || null;
+  job.fallback = null;
+  delete job.connector_client;
 }
 
 // An explicit retry by the owner. After an uncertain attempt this asks the
@@ -650,9 +706,13 @@ function retryJob(ws, projectId, runId, provider) {
     if (IN_FLIGHT.has(job.state)) return { message: 'Still running.' };
     if (st.mode === 'manual') {
       job.state = 'unconfigured';
+      job.mode = 'manual';
       return { message: `${PROVIDER_LABELS[provider]} API is ${st.reason}; the prompt is ready to paste.` };
     }
     const open = uncertainOf(job);
+    switchToApiRoute(job, st);
+    job.note = `Sent to the ${PROVIDER_LABELS[provider]} API (${st.model || st.mode}) by your retry.`;
+    delete job.not_before;
     job.state = 'queued';
     job.max_attempts = Math.max(job.max_attempts || 2, (job.attempts || []).length + 1);
     job.error = null;
@@ -666,7 +726,7 @@ function retryJob(ws, projectId, runId, provider) {
 }
 
 function reconcilable(a) {
-  if (!a || ['reconciled', 'not_sent', 'imported', 'responded', 'reserved', 'dispatched'].includes(a.phase)) return false;
+  if (!a || ['reconciled', 'not_sent', 'imported', 'responded', 'reserved', 'dispatched', 'submitted'].includes(a.phase)) return false;
   if (a.phase === 'uncertain') return true;
   if (a.phase === 'errored') return !isMoney(a.cost_actual_usd);
   // An older attempt that ended without a known cost.
@@ -716,7 +776,17 @@ function stageReportLink(ws, op, { projectId, runId, provider, reportId, method 
   const run = op.readJson(rel, null);
   if (!run || !run.jobs || !run.jobs[provider]) return;
   const job = run.jobs[provider];
-  if (job.state === 'completed' && job.report_id) return;
+  if (job.state === 'completed' && job.report_id) {
+    // The model's own assistant saved its report again for this run (after
+    // fixing a format slip, say): the run follows its newest report, and the
+    // earlier one stays saved and listed. A paid API answer keeps its link.
+    if (!isAssistantJob(job) || job.report_id === reportId) return;
+    const at = new Date().toISOString();
+    job.previous_report_ids = [...(job.previous_report_ids || []), job.report_id];
+    Object.assign(job, { report_id: reportId, linked_at: at, link_method: `${method}; replaces the earlier report from the same model`, updated_at: at });
+    op.writeJson(rel, run);
+    return;
+  }
   job.state = 'completed';
   job.report_id = reportId;
   job.linked_at = new Date().toISOString();
@@ -756,14 +826,22 @@ function allOpenJobs(ws) {
   return out;
 }
 
-// Queued jobs, and jobs a runner left in flight (their recovery never sends).
-// A job an assistant is doing through the connector is never the runner's.
-function isDueJob(job) {
-  return job.state === 'queued' || (IN_FLIGHT.has(job.state) && !isAssistantJob(job));
+// Queued jobs (once a rate limit's wait is over), background requests to
+// check, and jobs a runner left in flight (their recovery never sends). A job
+// an assistant is doing through the connector is never the runner's.
+function isDueJob(job, now = Date.now()) {
+  if (job.state === 'queued') return !job.not_before || !(Date.parse(job.not_before) > now);
+  return IN_FLIGHT.has(job.state) && !isAssistantJob(job);
 }
 
 function hasDueWork(ws) {
   return allOpenJobs(ws).some(({ job }) => isDueJob(job)) || dueSchedules(ws).length > 0;
+}
+
+// A ChatGPT or Gemini request is running on the provider's side: the runner
+// should check on it again soon.
+function hasBackgroundWork(ws) {
+  return allOpenJobs(ws).some(({ job }) => job.state === 'dispatching' && lastAttempt(job) && lastAttempt(job).phase === 'submitted');
 }
 
 function dueSchedules(ws, now = Date.now()) {
@@ -865,8 +943,11 @@ function markDispatched(ws, projectId, runId, provider, attemptId) {
 function outcomePhase(job, result, error) {
   if (result) return 'responded';
   if (error.kind === 'config' || error.notSent) return 'not_sent';
-  // An answer arrived, even if cut off or declined: a known, billed outcome.
-  if (['http', 'empty', 'incomplete', 'refused'].includes(error.kind)) return 'errored';
+  // A 500-level answer: the provider may have run (and billed) the request.
+  if (error.kind === 'http' && error.ambiguous && job.mode === 'api') return 'uncertain';
+  // An answer arrived, even if refused, cut off or declined: a known outcome
+  // (a 400-level refusal is known and not billed).
+  if (['http', 'empty', 'incomplete', 'refused', 'failed', 'cancelled'].includes(error.kind)) return 'errored';
   return job.mode === 'api' ? 'uncertain' : 'errored';
 }
 
@@ -881,8 +962,28 @@ function applyOutcome(ws, run, job, a, { result, error, finishedAt, rel, fileSha
     if (error.partial_usage) a.partial_usage = error.partial_usage;
   }
   if (actual !== null && isMoney(a.reserved_usd) && units(actual) > units(a.reserved_usd)) a.overrun_usd = round4(actual - a.reserved_usd);
+  if (error && error.rejected && actual === 0) a.not_billed = 'refused by the provider before any work (400-level answer), which is not billed';
   const left = job.attempts.length < job.max_attempts;
-  if (phase === 'uncertain') {
+  if (job.state === 'completed' && job.report_id) {
+    // A report reached this job another way (imported by hand) while this
+    // attempt was out: the job keeps its report; the outcome stays on the attempt.
+    a.note = `The job already had report ${job.report_id} when this outcome arrived; it is kept on the attempt only.`;
+  } else if (phase === 'errored' && error.rateLimited && !job.cancel_requested) {
+    // A rate limit is a refusal before any work: ask again after the
+    // provider's Retry-After, a few times, without using up the attempts.
+    job.rate_limited = (job.rate_limited || 0) + 1;
+    const label = PROVIDER_LABELS[job.provider];
+    if (job.rate_limited <= MAX_RATE_LIMITED) {
+      const wait = Number.isFinite(error.retryAfterMs) && error.retryAfterMs > 0 ? Math.min(error.retryAfterMs, 60 * 60000) : RATE_LIMIT_WAIT_MS * job.rate_limited;
+      job.not_before = new Date(Date.parse(finishedAt) + wait).toISOString();
+      job.max_attempts = Math.max(job.max_attempts || 2, job.attempts.length + 1);
+      job.state = 'queued';
+      job.error = `The ${label} API asked to slow down (rate limit); it was not billed. Asking again after ${job.not_before}.`;
+    } else {
+      job.state = 'failed';
+      job.error = `The ${label} API refused the request for its rate limit ${job.rate_limited} times; it was not billed. Retry later, or check the account's limits.`;
+    }
+  } else if (phase === 'uncertain') {
     a.uncertain_reason = `${error.message} The request may have reached ${(providers.PROVIDER_API[job.provider] || {}).vendor || 'the provider'} and been billed, and no answer was saved. It is not resent automatically: reconcile it or retry it yourself.`;
     job.state = job.cancel_requested ? 'canceled' : 'uncertain';
     job.error = a.uncertain_reason;
@@ -895,7 +996,7 @@ function applyOutcome(ws, run, job, a, { result, error, finishedAt, rel, fileSha
     job.error = error.message;
   }
   if (phase === 'not_sent') ledger(ws, run, job, a, { actual_usd: 0, kind: 'release', note: 'not sent; reservation released' });
-  else if (actual !== null) ledger(ws, run, job, a, { actual_usd: actual, replaces_estimate: true, kind: 'actual', usage: a.usage || null });
+  else if (actual !== null) ledger(ws, run, job, a, { actual_usd: actual, replaces_estimate: true, kind: 'actual', usage: a.usage || null, ...(a.not_billed ? { note: a.not_billed } : {}) });
 }
 
 // One verified write for the outcome: the response file (answer or error
@@ -903,7 +1004,7 @@ function applyOutcome(ws, run, job, a, { result, error, finishedAt, rel, fileSha
 // Applies once: an attempt that is no longer waiting for its outcome (another
 // runner, or a rolled-forward commit, already recorded it) is left unchanged,
 // so a capture recovered twice is committed and accounted once.
-const awaitingOutcome = (a) => a.phase === 'dispatched' || (!a.phase && !a.finished_at);
+const awaitingOutcome = (a) => a.phase === 'dispatched' || a.phase === 'submitted' || (!a.phase && !a.finished_at);
 
 function recordOutcome(ws, run, provider, attemptId, { result = null, error = null, finishedAt, capture = null, captureError = null, recoveredFrom = null }) {
   const runRel = `${runDir(run.project_id, run.run_id)}/run.json`;
@@ -915,7 +1016,8 @@ function recordOutcome(ws, run, provider, attemptId, { result = null, error = nu
     if (!awaitingOutcome(a)) return { phase: a.phase, state: job.state, error: job.error, n: a.n, already: true, capture_sha256: a.capture_sha256 || null };
     const phase = outcomePhase(job, result, error);
     const usage = result ? result.usage : error && error.usage ? error.usage : null;
-    const actual = job.mode === 'api' && usage ? actualCostUsd(ws, provider, usage, a) : null;
+    // A 400-level refusal without usage was answered before any work: not billed.
+    const actual = job.mode === 'api' && usage ? actualCostUsd(ws, provider, usage, a) : job.mode === 'api' && error && error.rejected && phase === 'errored' ? 0 : null;
     const payload = {
       schema_version: 'cr.research-response.v1',
       run_id: doc.run_id,
@@ -964,7 +1066,7 @@ function releaseCapture(ws, attemptId, capture, rec) {
 // Commits an answer that was captured but never committed (a busy lock,
 // blocked writes or a crash came between the two). Nothing is sent. Returns
 // null when there is no capture for the attempt.
-async function commitCaptured(ws, projectId, run, provider, attempt) {
+async function commitCaptured(ws, projectId, run, provider, attempt, { fetchImpl } = {}) {
   if (!attempt || !attempt.attempt_id) return null;
   const cap = captures.readCapture(ws, attempt.attempt_id);
   if (cap.missing) return null;
@@ -973,6 +1075,16 @@ async function commitCaptured(ws, projectId, run, provider, attempt) {
   if (!cap.ok && cap.code === 'EBUSY') return { ok: false, busy: true, reason: `${cap.rel} ${cap.reason}`, rel: cap.rel };
   const bound = cap.ok ? captures.bindCapture(cap, run, provider, attempt) : { ok: false, reason: `${cap.rel} ${cap.reason}` };
   if (!bound.ok) return { ok: false, reason: bound.reason, rel: cap.rel };
+  if (bound.submission) {
+    // The provider accepted it in the background and its ID was captured,
+    // but run.json never recorded the ID: record it now and collect the
+    // answer by it. Nothing is sent again.
+    const saved = recordSubmitted(ws, run, provider, attempt.attempt_id, { ...bound.submission, recoveredFrom: 'background request ID captured but not saved when the runner stopped; recorded afterwards, not sent again' });
+    if (saved.verified) captures.removeCapture(ws, attempt.attempt_id, cap.sha256);
+    const after = loadRun(ws, projectId, run.run_id);
+    const a = (after.jobs[provider].attempts || []).find((x) => x.attempt_id === attempt.attempt_id);
+    return { ok: true, out: await pollAttempt(ws, projectId, after, provider, a, { fetchImpl }) };
+  }
   const capture = { id: attempt.attempt_id, sha256: cap.sha256, rel: cap.rel };
   const rec = recordOutcome(ws, run, provider, attempt.attempt_id, { result: bound.result || null, error: bound.error || null, finishedAt: bound.finishedAt || new Date().toISOString(), capture, recoveredFrom: 'captured answer committed after the runner could not save it; not sent again' });
   releaseCapture(ws, attempt.attempt_id, capture, rec);
@@ -1002,6 +1114,16 @@ function sweepCaptures(ws, { remove = true } = {}) {
     const a = job ? (job.attempts || []).find((x) => x.attempt_id === c.attempt_id) : null;
     if (!a) {
       out.unmatched.push({ rel: c.rel, reason: 'no attempt with this ID' });
+      continue;
+    }
+    if (captures.isSubmissionOnly(b)) {
+      // A background request's ID: spent once run.json has it (or has the
+      // outcome); still needed while the attempt is only marked dispatched.
+      if (a.phase === 'dispatched') out.pending.push({ rel: c.rel, run_id: b.run_id, project_id: b.project_id, provider: b.provider, attempt: a.n, kind: 'background request ID' });
+      else if ((a.phase === 'submitted' && a.response_id === b.submission.response_id) || !awaitingOutcome(a)) {
+        if (remove && captures.removeCapture(ws, c.attempt_id, c.sha256)) out.removed += 1;
+        else out.committed += 1;
+      } else out.unmatched.push({ rel: c.rel, reason: `attempt #${a.n} has a different background request ID` });
       continue;
     }
     if (awaitingOutcome(a)) {
@@ -1053,7 +1175,7 @@ function validateSaved(ws, run, provider, attempt, rel) {
 // provably unsent attempt is released and requeued, a saved answer is
 // validated and imported, and anything that may have been sent is held as
 // uncertain. Older records (no phases) are read the same way.
-async function recoverJob(ws, projectId, run, provider) {
+async function recoverJob(ws, projectId, run, provider, { fetchImpl } = {}) {
   const job = run.jobs[provider];
   const last = lastAttempt(job);
   const phase = !last ? null : last.phase || (last.outcome === 'response_saved' && last.response_path ? 'responded' : !last.finished_at ? 'dispatched' : 'ended');
@@ -1089,8 +1211,11 @@ async function recoverJob(ws, projectId, run, provider) {
     return result(out.result);
   }
   if (phase === 'responded' && last.response_path) return importSaved(ws, run, provider, last);
-  // Dispatched: an answer captured but never committed comes first (audit F1).
-  const cap = job.mode === 'api' ? await commitCaptured(ws, projectId, run, provider, last) : null;
+  // Running on the provider's side: collect it by its ID; never send it again.
+  if (phase === 'submitted') return pollAttempt(ws, projectId, run, provider, last, { fetchImpl });
+  // Dispatched: an answer (or a background request ID) captured but never
+  // committed comes first (audit F1).
+  const cap = job.mode === 'api' ? await commitCaptured(ws, projectId, run, provider, last, { fetchImpl }) : null;
   if (cap && cap.ok) return cap.out;
   if (cap && cap.busy) return { provider, status: 'captured', error: `The provider's answer was captured (${cap.rel}), but another program has that file open, so it could not be saved into the records yet. It will be saved by the next research run, without asking the provider again.` };
   // Dispatched, or an older attempt still marked in progress: look for its answer.
@@ -1140,19 +1265,23 @@ async function runOneJob(ws, { project_id: projectId, run, job }, { fetchImpl, t
   const provider = job.provider;
   const timeoutMs = (ws.settings.research.timeout_seconds || 600) * 1000;
   const leaseName = `research-${run.run_id}-${provider}`;
-  const lease = acquireLease(ws, leaseName, timeoutMs + 60000, { label: trigger });
+  // Checking on a background request is short, so it holds the job briefly.
+  const last0 = lastAttempt(job);
+  const polling = job.state === 'dispatching' && last0 && last0.phase === 'submitted';
+  const lease = acquireLease(ws, leaseName, polling ? POLL_LEASE_MS : timeoutMs + 60000, { label: trigger });
   if (!lease) return { provider, status: 'busy' };
   try {
     let fresh = loadRun(ws, projectId, run.run_id);
     let j = fresh && fresh.jobs[provider];
     if (!j) return { provider, status: 'missing' };
     if (IN_FLIGHT.has(j.state) && !isAssistantJob(j)) {
-      const rec = await recoverJob(ws, projectId, fresh, provider);
+      const rec = await recoverJob(ws, projectId, fresh, provider, { fetchImpl });
       if (rec.status !== 'requeued') return rec;
       fresh = loadRun(ws, projectId, run.run_id);
       j = fresh.jobs[provider];
     }
     if (j.state !== 'queued') return { provider, status: 'skipped', state: j.state };
+    if (j.not_before && Date.parse(j.not_before) > Date.now()) return { provider, status: 'waiting', until: j.not_before };
     if (j.cancel_requested) {
       updateJob(ws, projectId, run.run_id, provider, (jj) => { jj.state = 'canceled'; });
       return { provider, status: 'canceled' };
@@ -1161,6 +1290,13 @@ async function runOneJob(ws, { project_id: projectId, run, job }, { fetchImpl, t
     if (status.mode === 'manual') {
       updateJob(ws, projectId, run.run_id, provider, (jj) => { jj.state = 'unconfigured'; jj.mode = 'manual'; jj.note = `${PROVIDER_LABELS[provider]} API ${status.reason}.`; });
       return { provider, status: 'unconfigured' };
+    }
+    if (status.mode === 'api' && j.mode !== 'api') {
+      // Queued without taking the API's route (a job made while the API was
+      // not set up): every integrity rule keys on the route, so set it first.
+      updateJob(ws, projectId, run.run_id, provider, (jj) => switchToApiRoute(jj, status), `Route ${provider} in ${run.run_id} to its API`);
+      fresh = loadRun(ws, projectId, run.run_id);
+      j = fresh.jobs[provider];
     }
     const prompt = fs.readFileSync(ws.abs(fresh.prompt.path), 'utf8');
     if (sha256(prompt) !== fresh.prompt.sha256) {
@@ -1179,6 +1315,9 @@ async function runOneJob(ws, { project_id: projectId, run, job }, { fetchImpl, t
     if (!adm.admitted) return { provider, status: adm.status, reason: adm.reason, state: adm.state };
     const attemptId = adm.attempt.attempt_id;
     if (!markDispatched(ws, projectId, run.run_id, provider, attemptId).send) return { provider, status: 'canceled' };
+    // ChatGPT and Gemini: the provider runs it in the background; its ID is
+    // saved and the answer is collected by later checks.
+    if (status.mode === 'api' && plan.bounds.route) return await submitAttempt(ws, projectId, fresh, provider, adm.attempt, { plan, status, prompt, fetchImpl });
     let result = null;
     let error = null;
     try {
@@ -1201,45 +1340,205 @@ async function runOneJob(ws, { project_id: projectId, run, job }, { fetchImpl, t
     } catch (err) {
       error = err;
     }
-    const finishedAt = new Date().toISOString();
-    // Capture first, without the workspace lock (audit F1). A paid answer is
-    // then never only in memory while this runner waits for the lock.
-    let capture = null;
-    let captureError = null;
-    if (status.mode === 'api') {
-      try {
-        capture = captures.writeCapture(ws, { run: fresh, provider, attempt: adm.attempt, result, error, finishedAt, mode: 'api' });
-      } catch (err) {
-        captureError = err;
-        try { logOp(ws, { phase: 'research_capture_failed', run_id: fresh.run_id, provider, attempt_id: attemptId, error: err.message }); } catch (_) { /* the commit below still tries */ }
-      }
-    }
-    let rec;
-    try {
-      rec = recordOutcome(ws, fresh, provider, attemptId, { result, error, finishedAt, capture, captureError });
-    } catch (err) {
-      // The commit could not run. With a capture, the answer is safe and the
-      // next runner commits it without a new request. Without one, the attempt
-      // stays "dispatched": recovery holds it as uncertain, never resends it.
-      const what = result ? 'answer' : 'outcome';
-      return capture
-        ? { provider, status: 'captured', error: `The provider's ${what} was captured (${capture.rel}) but could not be saved into the records yet (${err.message}). It will be saved by the next research run, without asking the provider again.` }
-        : { provider, status: 'unsaved', error: `The provider's ${what} could not be captured${captureError ? ` (${captureError.message})` : ''} or saved (${err.message}). It is not resent automatically: the attempt will be held as uncertain until you reconcile or retry it.` };
-    }
-    releaseCapture(ws, attemptId, capture, rec);
-    if (rec.already) {
-      const now = loadRun(ws, projectId, run.run_id);
-      return { provider, status: now.jobs[provider].state, already: true };
-    }
-    if (rec.phase !== 'responded') {
-      const status2 = rec.phase === 'uncertain' ? 'uncertain' : rec.phase === 'not_sent' ? 'not_sent' : 'failed';
-      return { provider, status: status2, error: rec.error, retry_queued: rec.state === 'queued' };
-    }
-    const after = loadRun(ws, projectId, run.run_id);
-    return await importSaved(ws, after, provider, lastAttempt(after.jobs[provider]));
+    return await finishAttempt(ws, projectId, fresh, provider, adm.attempt, { result, error, finishedAt: new Date().toISOString(), mode: status.mode });
   } finally {
     releaseLease(ws, leaseName, lease);
   }
+}
+
+// Saves a finished outcome (an answer or a provider error) and imports an
+// answer: capture first, without the workspace lock (audit F1), so a paid
+// answer is never only in memory while this runner waits for the lock; then
+// the one verified commit; then the import.
+async function finishAttempt(ws, projectId, run, provider, attempt, { result = null, error = null, finishedAt, mode }) {
+  const attemptId = attempt.attempt_id;
+  const background = attempt.phase === 'submitted';
+  let capture = null;
+  let captureError = null;
+  if (mode === 'api') {
+    try {
+      capture = captures.writeCapture(ws, { run, provider, attempt, result, error, finishedAt, mode: 'api' });
+    } catch (err) {
+      captureError = err;
+      try { logOp(ws, { phase: 'research_capture_failed', run_id: run.run_id, provider, attempt_id: attemptId, error: err.message }); } catch (_) { /* the commit below still tries */ }
+    }
+  }
+  let rec;
+  try {
+    rec = recordOutcome(ws, run, provider, attemptId, { result, error, finishedAt, capture, captureError });
+  } catch (err) {
+    // The commit could not run. With a capture, the answer is safe and the
+    // next runner commits it without a new request. A background request is
+    // still on the provider's side and is simply collected again. Otherwise
+    // the attempt stays "dispatched": recovery holds it as uncertain, never
+    // resends it.
+    const what = result ? 'answer' : 'outcome';
+    if (capture) return { provider, status: 'captured', error: `The provider's ${what} was captured (${capture.rel}) but could not be saved into the records yet (${err.message}). It will be saved by the next research run, without asking the provider again.` };
+    if (background) return { provider, status: 'running', error: `The provider's ${what} could not be saved yet (${err.message}); it is collected again by its ID at the next check.` };
+    return { provider, status: 'unsaved', error: `The provider's ${what} could not be captured${captureError ? ` (${captureError.message})` : ''} or saved (${err.message}). It is not resent automatically: the attempt will be held as uncertain until you reconcile or retry it.` };
+  }
+  releaseCapture(ws, attemptId, capture, rec);
+  if (rec.already) {
+    const now = loadRun(ws, projectId, run.run_id);
+    return { provider, status: now.jobs[provider].state, already: true };
+  }
+  if (rec.phase !== 'responded') {
+    const status2 = rec.phase === 'uncertain' ? 'uncertain' : rec.phase === 'not_sent' ? 'not_sent' : 'failed';
+    return { provider, status: status2, error: rec.error, retry_queued: rec.state === 'queued' };
+  }
+  const after = loadRun(ws, projectId, run.run_id);
+  return await importSaved(ws, after, provider, lastAttempt(after.jobs[provider]));
+}
+
+// The verified write that turns a dispatched attempt into a background
+// request with a saved ID (and the time it is cancelled if still running).
+function recordSubmitted(ws, run, provider, attemptId, sub) {
+  const out = updateJob(ws, run.project_id, run.run_id, provider, (job) => {
+    const a = (job.attempts || []).find((x) => x.attempt_id === attemptId);
+    if (!a) throw new OpError('NOT_FOUND', `Attempt ${attemptId} is missing from ${run.run_id}`);
+    if (a.phase === 'submitted' && a.response_id === sub.response_id) return { already: true };
+    if (a.phase !== 'dispatched') throw new OpError('CONFLICT', `Attempt ${attemptId} is ${a.phase || 'finished'}; its background request ID ${sub.response_id} was not recorded.`);
+    const at = sub.submitted_at || new Date().toISOString();
+    const minutes = sub.deadline_minutes || (a.bounds && a.bounds.deadline_minutes) || DEFAULT_BACKGROUND_MINUTES;
+    Object.assign(a, {
+      phase: 'submitted',
+      response_id: sub.response_id,
+      provider_route: sub.route || (a.bounds && a.bounds.route) || null,
+      submitted_at: at,
+      deadline_at: new Date(Date.parse(at) + minutes * 60000).toISOString(),
+      provider_status: sub.status || null,
+      request_id: sub.request_id || null,
+      polled_at: null,
+    });
+    if (sub.recoveredFrom) a.recovered_from = sub.recoveredFrom;
+    job.progress_at = at;
+    job.note = `Running on the ${PROVIDER_LABELS[provider]} API in the background; its answer is collected by its ID, also after a restart.`;
+    return null;
+  }, `${provider} accepted in the background in ${run.run_id}`, 'research_submitted');
+  return { verified: out.verified, already: Boolean(out.result && out.result.already) };
+}
+
+// Sends one attempt to run in the provider's background and saves its ID:
+// first as a capture without the lock, then in run.json. A create that
+// fails is an outcome like any other (refused, uncertain, not sent).
+async function submitAttempt(ws, projectId, run, provider, attempt, { plan, status, prompt, fetchImpl }) {
+  const label = PROVIDER_LABELS[provider];
+  const submittedAt = new Date().toISOString();
+  let sub = null;
+  let error = null;
+  try {
+    sub = await providers.submitBackground(provider, {
+      model: status.model,
+      prompt,
+      maxOutputTokens: plan.bounds.max_output_tokens,
+      maxSearches: plan.bounds.search.limit,
+      effort: plan.bounds.effort,
+      key: providers.apiKeyFor(provider),
+      fetchImpl,
+      clientRequestId: attempt.attempt_id,
+      metadata: { run_id: run.run_id, attempt_id: attempt.attempt_id, project_id: run.project_id },
+    });
+  } catch (err) {
+    error = err;
+  }
+  if (!sub) return finishAttempt(ws, projectId, run, provider, attempt, { result: null, error, finishedAt: new Date().toISOString(), mode: 'api' });
+  const info = { response_id: sub.response_id, status: sub.status, request_id: sub.request_id, route: plan.bounds.route, submitted_at: submittedAt, deadline_minutes: plan.bounds.deadline_minutes };
+  let capture = null;
+  try {
+    capture = captures.writeCapture(ws, { run, provider, attempt, result: null, error: null, finishedAt: null, mode: 'api', submission: info });
+  } catch (err) {
+    try { logOp(ws, { phase: 'research_capture_failed', run_id: run.run_id, provider, attempt_id: attempt.attempt_id, response_id: sub.response_id, error: err.message }); } catch (_) { /* the commit below still tries */ }
+  }
+  let saved;
+  try {
+    saved = recordSubmitted(ws, run, provider, attempt.attempt_id, info);
+  } catch (err) {
+    return capture
+      ? { provider, status: 'submitted', response_id: sub.response_id, note: `${label} accepted the request (${sub.response_id}); its ID was captured and the next research run records it and collects the answer (${err.message}).` }
+      : { provider, status: 'unsaved', error: `${label} accepted the request (${sub.response_id}), but its ID could not be captured or saved (${err.message}). It is not resent automatically: the attempt will be held as uncertain until you reconcile or retry it.` };
+  }
+  if (capture && saved.verified) captures.removeCapture(ws, attempt.attempt_id, capture.sha256);
+  if (sub.final) {
+    // Already finished when it was accepted (rare): collect it now.
+    const after = loadRun(ws, projectId, run.run_id);
+    const a = (after.jobs[provider].attempts || []).find((x) => x.attempt_id === attempt.attempt_id);
+    return finishAttempt(ws, projectId, after, provider, a, { result: sub.final.result || null, error: sub.final.error || null, finishedAt: new Date().toISOString(), mode: 'api' });
+  }
+  return { provider, status: 'submitted', response_id: sub.response_id };
+}
+
+// Holds a background request as uncertain when its answer can no longer be
+// collected: it may have run and been billed, and it is never resent.
+function holdUncollectable(ws, projectId, run, provider, attempt, reason) {
+  updateJob(ws, projectId, run.run_id, provider, (jj) => {
+    const a = (jj.attempts || []).find((x) => x.attempt_id === attempt.attempt_id);
+    if (!a || a.phase !== 'submitted') return;
+    Object.assign(a, { phase: 'uncertain', finished_at: new Date().toISOString(), outcome: 'uncollectable', uncertain_reason: reason });
+    jj.state = jj.cancel_requested ? 'canceled' : 'uncertain';
+    jj.error = reason;
+  }, `Hold uncollectable ${provider} attempt in ${run.run_id}`, 'research_recover');
+  return { provider, status: 'uncertain', recovered: true };
+}
+
+// One check on a background request: still running, finished (saved and
+// imported like any answer), or stopped. A request asked to cancel (by you,
+// or past its time limit) is cancelled at the provider and its outcome, with
+// the usage so far, is recorded. Asking for the answer creates nothing and
+// costs nothing, so a failed check only means asking again later.
+async function pollAttempt(ws, projectId, run, provider, attempt, { fetchImpl } = {}) {
+  const label = PROVIDER_LABELS[provider];
+  const vendor = (providers.PROVIDER_API[provider] || {}).vendor || label;
+  const job = run.jobs[provider];
+  const now = Date.now();
+  const deadline = attempt.deadline_at ? Date.parse(attempt.deadline_at) : Infinity;
+  const minutes = attempt.bounds && attempt.bounds.deadline_minutes ? attempt.bounds.deadline_minutes : DEFAULT_BACKGROUND_MINUTES;
+  const stopping = job.cancel_requested ? 'canceled' : now > deadline ? 'deadline' : null;
+  // Progress is written when the provider's status or the problem changes,
+  // or every few minutes: not on every check.
+  const note = (fields) => {
+    const last = attempt.polled_at ? Date.parse(attempt.polled_at) : 0;
+    const changed = (fields.provider_status !== undefined && fields.provider_status !== attempt.provider_status) || (fields.poll_error !== undefined && fields.poll_error !== (attempt.poll_error || null)) || Boolean(fields.cancel_sent_at && !attempt.cancel_sent_at);
+    if (!changed && now - last < POLL_NOTE_MS) return;
+    updateJob(ws, projectId, run.run_id, provider, (jj) => {
+      const a = (jj.attempts || []).find((x) => x.attempt_id === attempt.attempt_id);
+      if (!a || a.phase !== 'submitted') return;
+      a.polled_at = new Date(now).toISOString();
+      if (fields.provider_status) a.provider_status = fields.provider_status;
+      if (fields.poll_error !== undefined) a.poll_error = fields.poll_error;
+      if (fields.cancel_sent_at && !a.cancel_sent_at) a.cancel_sent_at = fields.cancel_sent_at;
+      jj.progress_at = a.polled_at;
+    }, `Check ${provider} in ${run.run_id}`, 'research_poll');
+  };
+  const key = providers.apiKeyFor(provider);
+  if (!key) {
+    if (now > deadline) return holdUncollectable(ws, projectId, run, provider, attempt, `The ${label} API key is no longer set, so request ${attempt.response_id} could neither be collected nor stopped before its time limit. It may have run and been billed. It is not resent automatically: reconcile it or retry it yourself.`);
+    note({ poll_error: `The ${label} API key is not set, so the answer cannot be collected yet.` });
+    return { provider, status: 'running', error: 'API key missing' };
+  }
+  let out;
+  try {
+    out = stopping
+      ? await providers.cancelBackground(provider, { responseId: attempt.response_id, key, fetchImpl })
+      : await providers.pollBackground(provider, { responseId: attempt.response_id, key, fetchImpl });
+  } catch (err) {
+    if (err.kind === 'http' && err.httpStatus === 404) {
+      return holdUncollectable(ws, projectId, run, provider, attempt, `${vendor} no longer has request ${attempt.response_id} (HTTP 404), so its answer cannot be collected. It may have run and been billed. It is not resent automatically: reconcile it or retry it yourself.`);
+    }
+    if (now > deadline + 30 * 60000) {
+      return holdUncollectable(ws, projectId, run, provider, attempt, `The desk could not reach ${vendor} to collect or stop request ${attempt.response_id} for half an hour past its time limit (${err.message}). It may have run and been billed. It is not resent automatically: reconcile it or retry it yourself.`);
+    }
+    note({ poll_error: String(err.message || err).slice(0, 300) });
+    return { provider, status: 'running', error: err.message };
+  }
+  if (!out.done) {
+    note({ provider_status: out.status, poll_error: null, ...(stopping ? { cancel_sent_at: new Date(now).toISOString() } : {}) });
+    return { provider, status: 'running', provider_status: out.status };
+  }
+  const error = out.error || null;
+  if (error && error.kind === 'cancelled' && stopping === 'deadline') {
+    error.message = `${label} had not finished after ${minutes} minutes, so the desk cancelled the request. The usage so far is recorded; nothing was saved as a report. You can retry.`;
+  }
+  return finishAttempt(ws, projectId, run, provider, attempt, { result: out.result || null, error, finishedAt: new Date().toISOString(), mode: 'api' });
 }
 
 // Imports a saved response through the normal import path, after checking it
@@ -1332,20 +1631,29 @@ async function runDueJobs(ws, { trigger = 'cli', fetchImpl = undefined, now = Da
       skippedSchedules.push({ project_id: due.project_id, reason: err.message });
     }
   }
+  // A small pool: each worker takes the next due job as soon as it is free,
+  // so one long call never holds up the others. Checks on background
+  // requests are short.
   const max = Math.max(1, ws.settings.research.max_concurrent || 1);
-  const todo = allOpenJobs(ws).filter(({ job }) => isDueJob(job));
+  const todo = allOpenJobs(ws).filter(({ job }) => isDueJob(job, now));
   const results = [];
-  for (let i = 0; i < todo.length; i += max) {
-    const batch = todo.slice(i, i + max);
-    results.push(...await Promise.all(batch.map((t) => runOneJob(ws, t, { fetchImpl, trigger }).catch((err) => ({ provider: t.job.provider, status: 'error', error: err.message })))));
-  }
+  let next = 0;
+  const worker = async () => {
+    while (next < todo.length) {
+      const t = todo[next++];
+      results.push(await runOneJob(ws, t, { fetchImpl, trigger }).catch((err) => ({ provider: t.job.provider, status: 'error', error: err.message })));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(max, todo.length) }, worker));
   const done = results.filter((r) => r.status === 'completed').length;
   const failed = results.filter((r) => ['failed', 'error', 'budget_refused', 'refused'].includes(r.status)).length;
   const uncertain = results.filter((r) => r.status === 'uncertain' || r.status === 'unsaved').length;
   const captured = results.filter((r) => r.status === 'captured').length;
+  const background = results.filter((r) => r.status === 'submitted' || r.status === 'running').length;
+  const quiet = !created.length && results.every((r) => ['running', 'waiting', 'busy', 'skipped'].includes(r.status));
   return {
-    status: !todo.length && !created.length ? 'noop' : failed || uncertain || captured ? 'attention' : 'ok',
-    summary: todo.length || created.length ? `${done} research job(s) completed, ${failed} failed or refused${uncertain ? `, ${uncertain} uncertain (may have been billed; reconcile or retry)` : ''}${captured ? `, ${captured} answer(s) captured and waiting to be saved by the next run` : ''}, ${created.length} scheduled run(s) created${skippedSchedules.length ? `, ${skippedSchedules.length} schedule(s) waiting (${skippedSchedules[0].reason})` : ''}` : skippedSchedules.length ? `Research refresh due for ${skippedSchedules.length} project(s), not started: ${skippedSchedules[0].reason}` : 'No research jobs waiting',
+    status: !todo.length && !created.length ? 'noop' : failed || uncertain || captured ? 'attention' : quiet ? 'noop' : 'ok',
+    summary: todo.length || created.length ? `${done} research job(s) completed, ${failed} failed or refused${background ? `, ${background} running in the background` : ''}${uncertain ? `, ${uncertain} uncertain (may have been billed; reconcile or retry)` : ''}${captured ? `, ${captured} answer(s) captured and waiting to be saved by the next run` : ''}, ${created.length} scheduled run(s) created${skippedSchedules.length ? `, ${skippedSchedules.length} schedule(s) waiting (${skippedSchedules[0].reason})` : ''}` : skippedSchedules.length ? `Research refresh due for ${skippedSchedules.length} project(s), not started: ${skippedSchedules[0].reason}` : 'No research jobs waiting',
     results,
     created,
     skipped_schedules: skippedSchedules,
@@ -1359,7 +1667,8 @@ function researchStateFor(ws, projectId) {
   const byProvider = {};
   for (const p of PROVIDERS) {
     const run = runs.find((r) => r.jobs[p]);
-    byProvider[p] = run ? { run_id: run.run_id, state: run.jobs[p].state, mode: run.jobs[p].mode, error: run.jobs[p].error || null, report_id: run.jobs[p].report_id || null, updated_at: run.jobs[p].updated_at, progress_at: run.jobs[p].progress_at || null, run_created_at: run.created_at } : null;
+    const last = run ? lastAttempt(run.jobs[p]) : null;
+    byProvider[p] = run ? { run_id: run.run_id, state: run.jobs[p].state, mode: run.jobs[p].mode, error: run.jobs[p].error || null, report_id: run.jobs[p].report_id || null, updated_at: run.jobs[p].updated_at, progress_at: run.jobs[p].progress_at || null, run_created_at: run.created_at, background: Boolean(last && last.phase === 'submitted'), provider_status: last && last.phase === 'submitted' ? last.provider_status || null : null, not_before: run.jobs[p].not_before || null } : null;
   }
   return { latest_run: latest ? { run_id: latest.run_id, status: latest.status, created_at: latest.created_at, providers: latest.providers, horizon: latest.horizon } : null, providers: byProvider, runs: runs.length };
 }
@@ -1464,6 +1773,29 @@ function addProviders(ws, projectId, runId, providers, { assistant = null, chann
   return { added: out.result.added, verified: out.verified };
 }
 
+// Jobs of a run still waiting for a model's assistant (made while that
+// model's API was not set up) go to the API once it is: Eric's new request
+// for the run is the go-ahead. A job an assistant has taken stays with it.
+// Returns the providers sent.
+function sendWaitingToApi(ws, projectId, runId, list = PROVIDERS) {
+  const st = providerStatus(ws);
+  const run = loadRun(ws, projectId, runId);
+  if (!run || !run.jobs) return [];
+  const sent = [];
+  for (const p of normalizeProviders(list)) {
+    const job = run.jobs[p];
+    if (!job || job.state !== 'unconfigured' || isAssistantJob(job) || !st[p] || (st[p].mode !== 'api' && st[p].mode !== 'mock')) continue;
+    const out = updateJob(ws, projectId, runId, p, (jj) => {
+      if (jj.state !== 'unconfigured' || isAssistantJob(jj)) return;
+      switchToApiRoute(jj, st[p]);
+      jj.state = 'queued';
+      jj.note = `Sent to the ${PROVIDER_LABELS[p]} API (${st[p].model || st[p].mode}): its key and limits are set now.`;
+    }, `Send waiting ${p} job in ${runId} to its API`);
+    if (!out.result || !out.result.noop) sent.push(p);
+  }
+  return sent;
+}
+
 // After a model saved its report for a project, its other jobs on that project
 // still waiting for an answer (another run asked for the same thing: same
 // horizon, same owner questions) are linked to that report instead of being
@@ -1561,6 +1893,8 @@ module.exports = {
   openRunOf,
   adoptJob,
   addProviders,
+  sendWaitingToApi,
+  hasBackgroundWork,
   coverWaitingJobs,
   pendingFor,
   readAssistantDraft,

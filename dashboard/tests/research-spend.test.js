@@ -96,7 +96,10 @@ function setup(t, label, researchSettings) {
   return { root, ws, pid };
 }
 
-const providersAll = (cfg) => Object.fromEntries(Object.keys(MODELS).map((p) => [p, { model: MODELS[p], ...cfg }]));
+// These tests cover the blocking calls; the background routes (the default for
+// ChatGPT and Gemini) are covered in research-background.test.js.
+const BLOCKING = { claude: {}, chatgpt: { api: 'blocking' }, gemini: { api: 'generate_content' } };
+const providersAll = (cfg) => Object.fromEntries(Object.keys(MODELS).map((p) => [p, { model: MODELS[p], ...BLOCKING[p], ...cfg }]));
 
 test('V2-004 a $1.10 per-run limit with three $1.00 calls: one is sent, the other two are refused before sending', async (t) => {
   const { ws, pid } = setup(t, 'v2004-run', { providers: providersAll(DOLLAR), budget: { per_run_usd: 1.1, daily_usd: 100, monthly_usd: 100 }, max_output_tokens: 10000 });
@@ -186,8 +189,10 @@ test('V2-004 retries, provider errors and uncertain attempts all count against t
   research.retryJob(ws, pid, run.run_id, 'claude');
   await research.runDueJobs(ws, { fetchImpl: f });
   assert.equal(f.calls.length, 2);
-  assert.equal(job().attempts[1].phase, 'errored');
-  assert.equal(job().state, 'failed', 'its attempts are used up');
+  assert.equal(job().attempts[1].phase, 'uncertain', 'a 500-level answer may come from a request that ran');
+  assert.equal(job().state, 'uncertain', 'held, never resent by itself');
+  await research.runDueJobs(ws, { fetchImpl: f });
+  assert.equal(f.calls.length, 2, 'the 500 is not resent automatically');
   assert.equal(spentRun(), 2, 'the HTTP error keeps its reservation: its cost is not known');
   research.retryJob(ws, pid, run.run_id, 'claude');
   const refused = await research.runDueJobs(ws, { fetchImpl: f });
@@ -247,7 +252,7 @@ test('V2-005 search limits are sent as documented: zero sends no search tool; Cl
 
 test('V2-005 Gemini: no search cap is invented; search is refused unless per-request billing is declared', async (t) => {
   // max_searches 5 with no declared billing: not dispatched, and the reason says why.
-  let c = setup(t, 'v2005-gem-refuse', { providers: { gemini: { model: MODELS.gemini, input_usd_per_mtok: 1, output_usd_per_mtok: 4, search_usd_per_call: 0.035, max_searches: 5 } }, budget: { per_run_usd: 50, daily_usd: 100, monthly_usd: 100 }, max_output_tokens: 4000 });
+  let c = setup(t, 'v2005-gem-refuse', { providers: { gemini: { model: MODELS.gemini, input_usd_per_mtok: 1, output_usd_per_mtok: 4, search_usd_per_call: 0.035, max_searches: 5, api: 'generate_content' } }, budget: { per_run_usd: 50, daily_usd: 100, monthly_usd: 100 }, max_output_tokens: 4000 });
   const st = research.providerStatus(c.ws).gemini;
   assert.equal(st.mode, 'manual');
   assert.match(st.reason, /no per-request search limit/);
@@ -257,7 +262,7 @@ test('V2-005 Gemini: no search cap is invented; search is refused unless per-req
   await research.runDueJobs(c.ws, { fetchImpl: f0 });
   assert.equal(f0.calls.length, 0);
   // Zero: no search tool, sent.
-  c = setup(t, 'v2005-gem-zero', { providers: { gemini: { model: MODELS.gemini, input_usd_per_mtok: 1, output_usd_per_mtok: 4, max_searches: 0 } }, budget: { per_run_usd: 50, daily_usd: 100, monthly_usd: 100 }, max_output_tokens: 4000 });
+  c = setup(t, 'v2005-gem-zero', { providers: { gemini: { model: MODELS.gemini, input_usd_per_mtok: 1, output_usd_per_mtok: 4, max_searches: 0, api: 'generate_content' } }, budget: { per_run_usd: 50, daily_usd: 100, monthly_usd: 100 }, max_output_tokens: 4000 });
   research.createRun(c.ws, { project_id: c.pid, providers: ['gemini'] });
   const f1 = stubFetch(texts(c.ws, c.pid), { usage: { input: 1000, output: 1000, searches: 0 } });
   await research.runDueJobs(c.ws, { fetchImpl: f1 });
@@ -266,7 +271,7 @@ test('V2-005 Gemini: no search cap is invented; search is refused unless per-req
   assert.equal(f1.calls[0].body.generationConfig.maxOutputTokens, 4000);
   // Declared per-request billing: the tool is sent without any invented cap and
   // the reservation holds one search fee.
-  c = setup(t, 'v2005-gem-req', { providers: { gemini: { model: MODELS.gemini, input_usd_per_mtok: 1, output_usd_per_mtok: 4, search_usd_per_call: 0.035, max_searches: 200, search_billing: 'per_request' } }, budget: { per_run_usd: 50, daily_usd: 100, monthly_usd: 100 }, max_output_tokens: 4000 });
+  c = setup(t, 'v2005-gem-req', { providers: { gemini: { model: MODELS.gemini, input_usd_per_mtok: 1, output_usd_per_mtok: 4, search_usd_per_call: 0.035, max_searches: 200, search_billing: 'per_request', api: 'generate_content' } }, budget: { per_run_usd: 50, daily_usd: 100, monthly_usd: 100 }, max_output_tokens: 4000 });
   assert.equal(research.providerStatus(c.ws).gemini.mode, 'api');
   const r2 = research.createRun(c.ws, { project_id: c.pid, providers: ['gemini'] });
   const f2 = stubFetch(texts(c.ws, c.pid), { usage: { input: 1000, output: 1000, searches: 7 } });

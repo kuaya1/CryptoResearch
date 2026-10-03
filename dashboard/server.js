@@ -52,6 +52,10 @@ const LOGIN_ASSETS = new Set(['/styles.css', '/position.css', '/favicon.svg']);
 // A page that asked for anything in this long counts as open (hosted mode
 // refreshes prices at the foreground interval only while a page is open).
 const PAGE_OPEN_MS = 10 * 60000;
+// How often a ChatGPT or Gemini request running in the background is checked
+// (CR_BACKGROUND_CHECK_MS shortens it in tests).
+const BACKGROUND_CHECK_MS = 30000;
+const backgroundCheckMs = () => Math.max(100, Number(process.env.CR_BACKGROUND_CHECK_MS) || BACKGROUND_CHECK_MS);
 const STATIC_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -185,6 +189,11 @@ function validateSettingsPatch(patch, ws = null) {
     out.research = {};
     const r = patch.research;
     if (r.unattended_enabled !== undefined) out.research.unattended_enabled = Boolean(r.unattended_enabled);
+    if (r.background_deadline_minutes !== undefined) {
+      const n = num(r.background_deadline_minutes, 5, 1440, 'Background time limit (minutes)');
+      if (!Number.isInteger(n)) throw new OpError('INVALID', 'The background time limit is a whole number of minutes from 5 to 1440.');
+      out.research.background_deadline_minutes = n;
+    }
     if (r.budget) {
       out.research.budget = {};
       for (const k of ['per_run_usd', 'daily_usd', 'monthly_usd']) {
@@ -205,7 +214,7 @@ function validateSettingsPatch(patch, ws = null) {
       for (const p of PROVIDERS) {
         const c = r.providers[p];
         if (!c) continue;
-        if (Object.keys(c).some((k) => /key|secret|token/i.test(k))) throw new OpError('REFUSED', 'API keys are never stored in settings. Put them in ~/.cryptoresearch/secrets.json.');
+        if (Object.keys(c).some((k) => /key|secret|token/i.test(k))) throw new OpError('REFUSED', 'API keys are never stored in settings. On the online desk they go in Render > Environment; on the PC in ~/.cryptoresearch/secrets.json.');
         const o = {};
         if (c.model !== undefined) {
           if (c.model !== null && !/^[A-Za-z0-9._:\-/]{1,100}$/.test(String(c.model))) throw new OpError('INVALID', 'Model ID looks wrong.');
@@ -228,6 +237,20 @@ function validateSettingsPatch(patch, ws = null) {
           if (p !== 'gemini') throw new OpError('INVALID', 'Search billing is only declared for Gemini.');
           if (![null, '', 'per_request', 'per_query'].includes(c.search_billing)) throw new OpError('INVALID', 'Gemini search billing must be per_request or per_query.');
           o.search_billing = c.search_billing || null;
+        }
+        if (c.effort !== undefined) {
+          // ChatGPT's reasoning effort and Gemini's thinking level ("off" sends none).
+          const allowed = { chatgpt: ['low', 'medium', 'high', 'xhigh', 'max'], gemini: ['minimal', 'low', 'medium', 'high'] }[p];
+          if (!allowed) throw new OpError('INVALID', 'Claude\'s effort is set once for research (research.effort).');
+          if (![null, '', 'off', ...allowed].includes(c.effort)) throw new OpError('INVALID', `Effort must be one of ${allowed.join(', ')} or off.`);
+          o.effort = c.effort || null;
+        }
+        if (c.api !== undefined) {
+          // ChatGPT and Gemini run in the provider's background by default.
+          const allowed = { chatgpt: ['background', 'blocking'], gemini: ['interactions', 'generate_content'] }[p];
+          if (!allowed) throw new OpError('INVALID', 'Only ChatGPT and Gemini have a choice of API.');
+          if (![null, '', ...allowed].includes(c.api)) throw new OpError('INVALID', `API must be one of ${allowed.join(', ')}.`);
+          o.api = c.api || null;
         }
         out.research.providers[p] = o;
       }
@@ -279,6 +302,12 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   const allowedHosts = hosted ? new Set(hosted.hosts.flatMap((h) => [h, `${h}:443`])) : new Set([`127.0.0.1:${boundPort}`, `localhost:${boundPort}`]);
   const allowedOrigins = hosted ? new Set(hosted.hosts.map((h) => `https://${h}`)) : new Set([`http://127.0.0.1:${boundPort}`, `http://localhost:${boundPort}`]);
   const auth = hosted ? require('./hosted').makeAuth(ws, hosted) : null;
+  if (hosted) {
+    // The only process on this disk (leases.js): what an earlier instance
+    // held is free now, so research and prices resume at once after a deploy.
+    const freed = require('./core/leases').releaseForeignLeases(ws);
+    if (freed.length && !quiet) console.log(`Leases left by an earlier instance released: ${freed.join(', ')}.`);
+  }
   // The connector for the assistants (Claude in Cowork and claude.ai, ChatGPT,
   // Gemini): OAuth sign-in that Eric approves with his passphrase, then the MCP
   // endpoint at /mcp. Their servers call it without an Origin header; one that
@@ -504,6 +533,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   }
   let researchRunning = false;
   let researchAgain = false;
+  let researchSoon = null;
   async function researchTick() {
     if (researchRunning) {
       researchAgain = true;
@@ -513,7 +543,8 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     try {
       do {
         researchAgain = false;
-        await jobs.runJob(ws, 'research', { trigger: 'dashboard', onlyDue: true });
+        const out = await jobs.runJob(ws, 'research', { trigger: 'dashboard', onlyDue: true });
+        if (out && !['noop', 'not_due', 'busy'].includes(out.status)) rebuild(['research']);
         // Research requests follow their run: done, failed, or queued again.
         try {
           if (intake.settle(ws).length) rebuild(['intake']);
@@ -526,6 +557,17 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     } finally {
       researchRunning = false;
     }
+    // A ChatGPT or Gemini request running on the provider's side is checked
+    // every 30 seconds, so its report appears soon after it is written.
+    try {
+      if (!researchSoon && research.hasBackgroundWork(ws)) {
+        researchSoon = setTimeout(() => {
+          researchSoon = null;
+          researchTick();
+        }, backgroundCheckMs());
+        if (researchSoon.unref) researchSoon.unref();
+      }
+    } catch (_) { /* the 2-minute timer still runs */ }
   }
   // Identifying research requests, one at a time, in the background. Requests
   // still being identified when the server stopped are picked up again; an
@@ -691,6 +733,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     clearInterval(pollTimer);
     clearInterval(marketTimer);
     clearInterval(researchTimer);
+    clearTimeout(researchSoon);
     clearInterval(intakeTimer);
     clearInterval(dailyTimer);
     if (watcher) watcher.close();
