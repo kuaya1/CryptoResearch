@@ -11,8 +11,10 @@
 //      its network, contract and homepage. Nothing is chosen silently: research
 //      starts only after Eric confirms one candidate.
 //   3. Confirming creates the watchlist project (or reuses the existing one) and
-//      one research run with Claude (the single automatic route), carrying the
-//      instructions. Progress, cost and the saved report come from that run.
+//      one research run, carrying the instructions: Claude, plus ChatGPT and
+//      Gemini where their API is set up on this desk (or when the instructions
+//      ask for all three models). Progress, cost and the saved reports come
+//      from that run.
 //
 // Screenshots, pages and links are evidence, never instructions. A project in a
 // screenshot is never treated as a holding, and nothing here touches the
@@ -543,6 +545,18 @@ async function identify(ws, id, { fetchImpl = fetch, identifyImpl = null, cg = c
 // ---------------------------------------------------------------------------
 // Confirmation: project + one Claude research run
 
+// The models a confirmed request is researched with: Claude always; ChatGPT
+// and Gemini as well when their paid API is set up on this desk (they then run
+// by themselves in the background), or when Eric's instructions ask for all
+// three models (a model without an API then waits for its assistant).
+const ALL_THREE_WORDS = /\b(all (three|3)|three|3)\s+(of the\s+)?(models|ais?|assistants|llms)\b|\bclaude\b.{0,40}\b(chat\s?gpt|gpt)\b.{0,40}\bgemini\b/i;
+
+function intakeModels(ws, doc) {
+  const st = require('./research').providerStatus(ws);
+  const askedAll = ALL_THREE_WORDS.test(String((doc.input && doc.input.instructions) || ''));
+  return ['claude', ...['chatgpt', 'gemini'].filter((p) => askedAll || (st[p] && (st[p].mode === 'api' || st[p].mode === 'mock')))];
+}
+
 function confirmIntake(ws, id, { coingecko_id: chosen, sector = null, different_project = false } = {}) {
   const doc = readIntake(ws, id);
   if (doc.status !== 'needs_confirmation') {
@@ -587,11 +601,14 @@ function confirmIntake(ws, id, { coingecko_id: chosen, sector = null, different_
     }
   }
   const research = require('./research');
-  const run = research.createRun(ws, { project_id: projectId, providers: ['claude'], channel: 'intake', utterance: doc.input.instructions || doc.input.link || null, owner_instructions: doc.input.instructions || null });
+  const models = intakeModels(ws, doc);
+  const run = research.createRun(ws, { project_id: projectId, providers: models, channel: 'intake', utterance: doc.input.instructions || doc.input.link || null, owner_instructions: doc.input.instructions || null });
+  const { PROVIDER_LABELS } = require('./workspace');
+  const named = models.map((p) => PROVIDER_LABELS[p]).join(', ').replace(/, ([^,]*)$/, ' and $1');
   const out = mutate(ws, id, `Confirm ${chosen} for ${id}`, (d) => {
     d.status = 'researching';
-    d.confirmed = { coingecko_id: chosen, name: cand.name, symbol: cand.symbol, at: nowIso(), project_id: projectId, project_status: added.status, run_id: run.run_id, run_status: run.status };
-    event(d, `${cand.name} confirmed. ${added.status === 'exists' ? 'It was already in your records.' : 'Added to your watchlist.'} ${run.status === 'exists' ? 'A research run for it had already started a few minutes ago.' : 'Research requested from Claude.'}`);
+    d.confirmed = { coingecko_id: chosen, name: cand.name, symbol: cand.symbol, at: nowIso(), project_id: projectId, project_status: added.status, run_id: run.run_id, run_status: run.status, models };
+    event(d, `${cand.name} confirmed. ${added.status === 'exists' ? 'It was already in your records.' : 'Added to your watchlist.'} ${run.status === 'exists' ? 'A research run for it had already started a few minutes ago.' : `Research requested from ${named}.`}`);
   });
   return { status: 'confirmed', intake: out, project_id: projectId, project_status: added.status, run_id: run.run_id, run: run.run };
 }
@@ -650,6 +667,8 @@ function progressOf(ws, doc) {
   view.research = {
     run_id: run.run_id,
     project_id: run.project_id,
+    // Every model in the run (Claude's job below is the request's own).
+    models: Object.fromEntries(Object.entries(run.jobs).map(([p, j]) => [p, { state: j.state, mode: j.mode || null, report_id: j.report_id || null, error: j.error || null }])),
     state: job.state,
     mode: job.mode,
     error: job.error || null,
@@ -701,4 +720,4 @@ function settle(ws, { only = null } = {}) {
   return changed;
 }
 
-module.exports = { DIR, isIntakeId, parseLink, createIntake, readIntake, listIntakes, pendingIdentify, identify, findCandidates, confirmIntake, dismissIntake, retryIdentify, retryResearch, progressOf, settle, sectorGuess, isAmbiguous, readReservation, cgGet, MEDIA, MAX_IMAGE_BYTES };
+module.exports = { DIR, intakeModels, isIntakeId, parseLink, createIntake, readIntake, listIntakes, pendingIdentify, identify, findCandidates, confirmIntake, dismissIntake, retryIdentify, retryResearch, progressOf, settle, sectorGuess, isAmbiguous, readReservation, cgGet, MEDIA, MAX_IMAGE_BYTES };

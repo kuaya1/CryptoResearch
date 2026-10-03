@@ -464,3 +464,12 @@ test('intake: dismissing works only before research starts', async (t) => {
   const { doc } = await confirmedRun(ws, f, { instructions: 'x' });
   assert.throws(() => intake.dismissIntake(ws, doc.intake_id), /already started/);
 });
+
+test('intake: a confirmed request is researched by Claude, plus ChatGPT and Gemini where their API is set up, or all three when asked', (t) => {
+  const { tempWorkspace } = require('./helpers');
+  const { ws, cleanup } = tempWorkspace('intake-models', { research: { providers: { chatgpt: { mock: 'ok' } } } });
+  t.after(cleanup);
+  const intakeMod = require('../core/intake');
+  assert.deepEqual(intakeMod.intakeModels(ws, { input: { instructions: null } }), ['claude', 'chatgpt'], 'ChatGPT runs by itself here; Gemini has no API');
+  assert.deepEqual(intakeMod.intakeModels(ws, { input: { instructions: 'Research it with all three models, focus on unlocks' } }), ['claude', 'chatgpt', 'gemini']);
+});
