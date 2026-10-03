@@ -162,6 +162,15 @@ test('hosted: defaults written by the first version move to the current ones on 
   const after = readJson(file);
   assert.equal(after.hosted_defaults_version, 2);
   assert.deepEqual(after.hosted_defaults_upgrades[0].changed.map((c) => c.setting).sort(), ['research.budget.monthly_usd', 'research.budget.per_run_usd', 'research.max_output_tokens', 'research.providers.claude.max_searches', 'research.timeout_seconds']);
+  // The start log says what research would be sent with; never a key.
+  const prevKey = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = 'test-key-not-real-a';
+  const line = hosted.researchSummary(ws);
+  if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = prevKey;
+  assert.match(line, /48000 output tokens per request, up to 3 requests, 8 searches per request, 1500 s per call/);
+  assert.match(line, /limits \$5 per run, \$12 per day, \$40 per month; Claude key present; route api/);
+  assert.match(line, /Defaults v2 applied .*research\.max_output_tokens 16000 -> 48000/);
+  assert.doesNotMatch(line, /test-key-not-real/);
   // Applied once: a later change of Eric's is never overwritten.
   after.research.max_output_tokens = 20000;
   fs.writeFileSync(file, JSON.stringify(after));

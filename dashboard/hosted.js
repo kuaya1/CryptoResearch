@@ -392,8 +392,23 @@ async function main(env = process.env) {
     return { setup: serveSetupPage(cfg.port, cfg.problems), problems: cfg.problems };
   }
   const ws = prepareWorkspace(cfg);
+  console.log(researchSummary(ws));
   const { start } = require('./server');
   return start(ws, { hosted: { port: cfg.port, hosts: cfg.hosts, password: cfg.password } });
 }
 
-module.exports = { hostedConfig, prepareWorkspace, syncTemplates, makeAuth, main, HOSTED_DEFAULTS, loginPage, setupPage, containingMount, persistentDiskProblem };
+// One line for the start log: the bounds research would be sent with, and
+// whether a Claude key is present (never the key itself).
+function researchSummary(ws) {
+  const research = require('./core/research');
+  const providers = require('./core/providers');
+  const b = research.callBounds(ws, 'claude');
+  const r = ws.settings.research;
+  const budget = r.budget || {};
+  const st = research.providerStatus(ws).claude;
+  const upg = readJson(path.join(ws.root, 'config', 'settings.json'), {}).hosted_defaults_upgrades || [];
+  const last = upg[upg.length - 1];
+  return `Research: ${(r.providers.claude || {}).model || 'no model'}; ${b.max_output_tokens} output tokens per request, up to ${b.requests_max} requests, ${b.search.limit} searches per request, ${r.timeout_seconds || 600} s per call; limits $${budget.per_run_usd} per run, $${budget.daily_usd} per day, $${budget.monthly_usd} per month; Claude key ${providers.keyStatus('claude').present ? 'present' : 'missing'}; route ${st.mode}${st.mode === 'api' ? '' : ` (${st.reason})`}.${last ? ` Defaults v${last.version} applied ${last.at}: ${last.changed.length ? last.changed.map((c) => `${c.setting} ${c.from === null ? 'unset' : c.from} -> ${c.to}`).join(', ') : 'nothing to change'}.` : ''}`;
+}
+
+module.exports = { hostedConfig, prepareWorkspace, syncTemplates, makeAuth, main, HOSTED_DEFAULTS, loginPage, setupPage, containingMount, persistentDiskProblem, researchSummary };
