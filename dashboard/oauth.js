@@ -142,14 +142,21 @@ function json(res, status, body, headers = {}) {
 // the app, so these pages send unsafe-none. Framing stays forbidden.
 const SIGN_IN_COOP = 'unsafe-none';
 
-function page(res, status, html, { formAction = "'self'" } = {}) {
+// One small script, allowed by its hash and nothing else: after the first
+// click the buttons are disabled and a note says the answer is on its way.
+// A second click would cancel the browser's way back to the assistant
+// (Google's relay page has to load and run to finish Gemini's handoff).
+const SUBMIT_ONCE_JS = "document.querySelector('form.login-card').addEventListener('submit',function(){var n=document.getElementById('sending');if(n)n.hidden=false;var b=document.querySelectorAll('button');setTimeout(function(){for(var i=0;i<b.length;i++)b[i].disabled=true;},0);});";
+const SUBMIT_ONCE_SRC = `'sha256-${crypto.createHash('sha256').update(SUBMIT_ONCE_JS).digest('base64')}'`;
+
+function page(res, status, html, { formAction = "'self'", script = false } = {}) {
   res.writeHead(status, {
     'Content-Type': 'text/html; charset=utf-8',
     'Cache-Control': 'no-store',
     'Cross-Origin-Opener-Policy': SIGN_IN_COOP,
     // The consent form posts to this site, which then redirects to the
     // assistant: browsers apply form-action to that redirect too.
-    'Content-Security-Policy': `default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action ${formAction}`,
+    'Content-Security-Policy': `default-src 'self'; script-src ${script ? SUBMIT_ONCE_SRC : "'none'"}; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action ${formAction}`,
   });
   res.end(html);
 }
@@ -256,7 +263,8 @@ function makeOAuth(ws, { origin, auth, log = () => {} }) {
 <p class="small">After you approve, you go back to <strong>${esc(host)}</strong>.${local ? ' That is a program on this computer (Claude Code, Codex or Gemini CLI); approve only if you just started the connection yourself.' : ' Approve only if you just started this connection yourself.'}</p>
 ${msg}<input type="hidden" name="request" value="${esc(p.id)}">
 ${pick}<label class="field"><span class="field-label">Desk passphrase</span><input type="password" name="password" autocomplete="current-password" required autofocus></label>
-<div class="btn-row"><button class="btn primary" type="submit" name="decision" value="allow">Approve</button><button class="btn" type="submit" name="decision" value="deny" formnovalidate>Deny</button></div></form>`);
+<div class="btn-row"><button class="btn primary" type="submit" name="decision" value="allow">Approve</button><button class="btn" type="submit" name="decision" value="deny" formnovalidate>Deny</button></div>
+<p id="sending" class="small" role="status" hidden>Sending your answer back to ${local ? 'the program' : esc(who)}. This can take a few seconds: click once and keep this window open.</p></form><script>${SUBMIT_ONCE_JS}</script>`);
   }
 
   function errorPage(res, status, text) {
@@ -273,11 +281,23 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     }
   };
 
-  function redirectTo(res, uri, params) {
+  function locationOf(uri, params) {
     const u = new URL(uri);
     for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null) u.searchParams.set(k, v);
-    res.writeHead(303, { Location: u.toString(), 'Cache-Control': 'no-store', 'Cross-Origin-Opener-Policy': SIGN_IN_COOP });
+    return u.toString();
+  }
+
+  function redirectTo(res, uri, params) {
+    sendTo(res, locationOf(uri, params));
+  }
+
+  function sendTo(res, location) {
+    res.writeHead(303, { Location: location, 'Cache-Control': 'no-store', 'Cross-Origin-Opener-Policy': SIGN_IN_COOP });
     res.end();
+  }
+
+  function infoPage(res, title, text) {
+    page(res, 200, shell(title, `<div class="card login-card"><h1>${esc(title)}</h1><p>${esc(text)}</p></div>`));
   }
 
   // Where a return address goes, for the log (host and path; never a query).
@@ -354,7 +374,7 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     const p = { id, client_id: q.client_id, client_name: client.client_name, redirect_uri: redirect, kind, guess: kind === 'local' ? guessLocal(client.client_name) : null, code_challenge: q.code_challenge, state: q.state || null, scope, expires: Date.now() + PENDING_TTL_MS };
     pending.set(id, p);
     log(`OAuth: approval page shown (${client.client_name}; ${labelOf(kind)}; return to ${where([redirect])}; resource ${q.resource ? 'given' : 'not given'}; scope ${String(q.scope || 'not given').slice(0, 80)})`);
-    return page(res, 200, consentPage(p), { formAction: formActionFor(redirect) });
+    return page(res, 200, consentPage(p), { formAction: formActionFor(redirect), script: true });
   }
 
   async function authorizePost(req, res) {
@@ -364,41 +384,52 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     const rid = form.get('request') || '';
     const p = pending.get(rid);
     if (!p) {
-      // A page submitted a second time (the back button, or a double click)
-      // after its approval already went to the assistant.
+      // The same page submitted again (a second click, Enter and a click, the
+      // back button). A second submit cancels the browser's way back to the
+      // assistant, so it is sent back again with the same answer, which still
+      // works once: the code is single use.
       const done = used.get(rid);
-      log(`OAuth: approval page submitted again (${done ? `already ${done.decision} at ${done.at}` : 'expired or unknown'})`);
+      if (done && done.exchanged) {
+        log('OAuth: approval page submitted again after the connection was made');
+        return infoPage(res, `${done.label.replace(/^the program on this computer \((.*)\)$/, '$1')} is connected`, 'The connection is made. You can close this window.');
+      }
+      if (done && done.location && (done.decision !== 'approved' || codes.has(done.codeHash))) {
+        log(`OAuth: approval page submitted again; sent back to ${done.label} again with the same answer (${done.decision} at ${done.at})`);
+        return sendTo(res, done.location);
+      }
+      log(`OAuth: approval page submitted again (${done ? `already ${done.decision} at ${done.at}; its code is no longer valid` : 'expired or unknown'})`);
       if (done) {
         const who = done.label;
-        return errorPage(res, 400, `This approval was already ${done.decision === 'approved' ? 'given' : 'answered'} (${done.at.slice(11, 16)} UTC) and sent back to ${who}. If ${who.replace(/^the program on this computer \((.*)\)$/, '$1')} did not finish connecting, the problem came after that step: start the connection again from there.`);
+        return errorPage(res, 400, `This approval was already ${done.decision === 'approved' ? 'given' : 'answered'} (${done.at.slice(11, 16)} UTC) and sent back to ${who}. If ${who.replace(/^the program on this computer \((.*)\)$/, '$1')} did not finish connecting, start the connection again from there.`);
       }
       return errorPage(res, 400, 'This approval page has expired. Start the connection again from the assistant.');
     }
     const formAction = formActionFor(p.redirect_uri);
-    const answered = (decision, assistant = null) => {
+    // Remembered for a few minutes, so a second submit can repeat the answer.
+    const answered = (decision, { assistant = null, location, codeHash = null }) => {
       pending.delete(p.id);
       const label = p.kind !== 'local' ? PROVIDER_LABELS[p.kind] : assistant ? `the program on this computer (${PROVIDER_LABELS[assistant]})` : 'the program on this computer';
-      used.set(p.id, { decision, label, at: new Date().toISOString(), expires: Date.now() + PENDING_TTL_MS });
+      used.set(p.id, { decision, label, location, codeHash, exchanged: false, at: new Date().toISOString(), expires: Date.now() + PENDING_TTL_MS });
+      return location;
     };
     if (form.get('decision') !== 'allow') {
-      answered('denied');
       log(`OAuth: connection denied (${p.client_name})`);
-      return redirectTo(res, p.redirect_uri, { error: 'access_denied', state: p.state, iss: origin });
+      return sendTo(res, answered('denied', { location: locationOf(p.redirect_uri, { error: 'access_denied', state: p.state, iss: origin }) }));
     }
     // The model this connection files its work under: fixed by the return
     // address, or chosen by Eric for a program on this computer.
     const assistant = p.kind === 'local' ? form.get('assistant') : p.kind;
-    if (!PROVIDERS.includes(assistant)) return page(res, 200, consentPage(p, { error: 'Choose which model this program is.' }), { formAction });
+    if (!PROVIDERS.includes(assistant)) return page(res, 200, consentPage(p, { error: 'Choose which model this program is.' }), { formAction, script: true });
     const check = await auth.verifyPassphrase(req, form.get('password') || '');
     if (!check.ok) {
       log(`OAuth: approval refused (${check.locked ? 'locked after repeated attempts' : 'wrong passphrase'})`);
-      return page(res, 200, consentPage(p, { error: check.locked ? null : 'That passphrase is not right.', locked: check.locked }), { formAction });
+      return page(res, 200, consentPage(p, { error: check.locked ? null : 'That passphrase is not right.', locked: check.locked }), { formAction, script: true });
     }
-    answered('approved', assistant);
-    log(`OAuth: connection approved (${p.client_name}; ${PROVIDER_LABELS[assistant]}); sent back to ${where([p.redirect_uri])}, waiting for its token request`);
     const code = newToken();
-    codes.set(hashOf(code), { client_id: p.client_id, redirect_uri: p.redirect_uri, code_challenge: p.code_challenge, scope: p.scope, assistant, expires: Date.now() + CODE_TTL_MS });
-    return redirectTo(res, p.redirect_uri, { code, state: p.state, iss: origin });
+    const codeHash = hashOf(code);
+    codes.set(codeHash, { client_id: p.client_id, redirect_uri: p.redirect_uri, code_challenge: p.code_challenge, scope: p.scope, assistant, request: p.id, expires: Date.now() + CODE_TTL_MS });
+    log(`OAuth: connection approved (${p.client_name}; ${PROVIDER_LABELS[assistant]}); sent back to ${where([p.redirect_uri])}, waiting for its token request`);
+    return sendTo(res, answered('approved', { assistant, codeHash, location: locationOf(p.redirect_uri, { code, state: p.state, iss: origin }) }));
   }
 
   async function tokenPost(req, res) {
@@ -445,6 +476,9 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
       if (form.get('resource') && !resourceNames.has(form.get('resource'))) return refuse(400, 'invalid_target', `This server's resource is ${resource} (sent ${String(form.get('resource')).slice(0, 100)}).`);
       const grantId = `grant_${newToken(9)}`;
       store.grants[grantId] = { client_id: clientId, client_name: store.clients[clientId].client_name, assistant: c.assistant, created_at: new Date().toISOString(), last_used_at: null, revoked_at: null };
+      // The approval page, if submitted again, now says the connection is made.
+      const done = c.request ? used.get(c.request) : null;
+      if (done) Object.assign(done, { exchanged: true, location: null });
       log(`OAuth: tokens issued for a new connection (${store.clients[clientId].client_name}; ${PROVIDER_LABELS[c.assistant]})`);
       return json(res, 200, issue(grantId, clientId, c.scope));
     }

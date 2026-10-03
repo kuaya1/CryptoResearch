@@ -294,10 +294,27 @@ test('connector: sign-in refuses a wrong passphrase, a denial, a missing PKCE ch
   assert.equal((await post({ request: rid3, password: PASS, decision: 'allow', assistant: 'grok' })).status, 200, 'only claude, chatgpt or gemini');
   const chosen = await post({ request: rid3, password: PASS, decision: 'allow', assistant: 'gemini' });
   assert.equal(chosen.status, 303);
-  // The same page submitted again (the back button) explains that the approval already went out.
+  // The same page submitted again (a second click cancels the browser's first
+  // trip back): it goes back again with the same answer, not a second code.
   const twice = await post({ request: rid3, password: PASS, decision: 'allow', assistant: 'gemini' });
-  assert.equal(twice.status, 400);
-  assert.match(twice.text, /already given \(\d\d:\d\d UTC\) and sent back to the program on this computer \(Gemini\)\. If Gemini did not finish connecting/);
+  assert.equal(twice.status, 303);
+  assert.equal(twice.headers.location, chosen.headers.location);
+  // Once the code is used, the page says the connection is made.
+  const code3 = new URL(chosen.headers.location).searchParams.get('code');
+  const tok3 = await req(d.port, { method: 'POST', path: '/oauth/token', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form({ grant_type: 'authorization_code', code: code3, redirect_uri: 'http://127.0.0.1:7777/oauth/callback', client_id: reg2.json.client_id, code_verifier: verifier }) });
+  assert.equal(tok3.status, 200, tok3.text);
+  const thrice = await post({ request: rid3, password: PASS, decision: 'allow', assistant: 'gemini' });
+  assert.equal(thrice.status, 200);
+  assert.match(thrice.text, /Gemini is connected/);
+  // A code that was spent on a failed exchange is not sent again.
+  const page4 = await req(d.port, { path: `/oauth/authorize?${form({ response_type: 'code', client_id: reg2.json.client_id, redirect_uri: 'http://127.0.0.1:7777/oauth/callback', code_challenge: challenge, code_challenge_method: 'S256', state: 's4' })}` });
+  const rid4 = page4.text.match(/name="request" value="([^"]+)"/)[1];
+  const first4 = await post({ request: rid4, password: PASS, decision: 'allow', assistant: 'gemini' });
+  const bad4 = await req(d.port, { method: 'POST', path: '/oauth/token', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form({ grant_type: 'authorization_code', code: new URL(first4.headers.location).searchParams.get('code'), redirect_uri: 'http://127.0.0.1:7777/oauth/callback', client_id: reg2.json.client_id, code_verifier: b64url(crypto.randomBytes(40)) }) });
+  assert.equal(bad4.json.error, 'invalid_grant');
+  const again4 = await post({ request: rid4, password: PASS, decision: 'allow', assistant: 'gemini' });
+  assert.equal(again4.status, 400);
+  assert.match(again4.text, /already given \(\d\d:\d\d UTC\) and sent back to the program on this computer \(Gemini\)\. If Gemini did not finish connecting, start the connection again from there/);
   // A registration mixing two assistants' callbacks is refused; a stranger's
   // address among an assistant's is dropped.
   const mixed = await req(d.port, { method: 'POST', path: '/oauth/register', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: [CLAUDE_CALLBACK, CHATGPT_CALLBACK] }) });
@@ -331,6 +348,13 @@ test('connector: ChatGPT and Gemini connect with their own sign-in flows, and ea
   // Google's relay can hand the code back (every other desk page keeps same-origin).
   assert.equal(gm.consent.headers['cross-origin-opener-policy'], 'unsafe-none');
   assert.equal(gm.approve.headers['cross-origin-opener-policy'], 'unsafe-none');
+  // The consent page runs one script, allowed by its hash only, that turns
+  // the buttons off after the first click.
+  const js = gm.consent.text.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const hash = crypto.createHash('sha256').update(js).digest('base64');
+  assert.match(gm.consent.headers['content-security-policy'], new RegExp(`script-src 'sha256-${hash.replace(/[+/]/g, (c) => `\\${c}`)}';`));
+  assert.match(gm.consent.text, /Sending your answer back to Gemini\. This can take a few seconds: click once/);
+  assert.match((await req(d.port, { path: '/oauth/authorize?client_id=crc_unknown' })).headers['content-security-policy'], /script-src 'none'/, 'other sign-in pages run no script');
   assert.equal((await req(d.port, { path: '/login' })).headers['cross-origin-opener-policy'], 'same-origin');
   const reg = JSON.parse(fs.readFileSync(path.join(d.ws.root, '.cr', 'oauth.json'), 'utf8')).clients[gm.clientId];
   assert.deepEqual(reg.redirect_uris, relays.slice(0, 2));
