@@ -158,7 +158,7 @@ test('hosted: the start log names pending identities, withheld grades (which par
   const text = lines.join('\n');
   assert.match(text, /Identity: pending-thing-fictional "Pending Thing \(FICTIONAL\)" pending; website https:\/\/pending\.example\.org\/; candidates none; evidence none/);
   assert.match(text, /Grade: example-payfi-fictional\/\S+ \(chatgpt, appendix_json, rubric cr-grading@1\) withheld at 75% of the weight; token_value_capture=unknown \(given \{"value":"7\/10"\}\)/);
-  assert.match(text, /Prices: never_run; last success never/);
+  assert.match(text, /Prices: never_run \(Market data is turned off in settings\); last success never/);
   assert.ok(!text.includes(fixture.slice(0, 200)), 'no report text in the log');
 });
 

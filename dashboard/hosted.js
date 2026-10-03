@@ -60,7 +60,10 @@ const GEMINI_DEFAULTS = { model: 'gemini-3.1-pro-preview', input_usd_per_mtok: 2
 const CHATGPT_DEFAULTS_V3 = { model: 'gpt-6.1-sol', input_usd_per_mtok: 2, output_usd_per_mtok: 10, search_usd_per_call: 0.01, max_searches: 10, search_result_tokens_estimate: 8000 };
 const GEMINI_DEFAULTS_V3 = { model: 'gemini-2.5-pro', input_usd_per_mtok: 1.25, output_usd_per_mtok: 10, search_usd_per_call: 0.035, search_billing: 'per_request', max_searches: 1 };
 const HOSTED_DEFAULTS = {
-  market_data: { enabled: true },
+  // Prices every 15 minutes while a page is open (hourly otherwise): a
+  // 4-month horizon gains nothing from 5-minute prices, and fewer calls from
+  // Render's shared addresses mean fewer CoinGecko rate limits.
+  market_data: { enabled: true, foreground_interval_minutes: 15 },
   research: {
     default_providers: ['claude'],
     // A full report is about 16,000 tokens of text, plus Claude's thinking,
@@ -112,6 +115,8 @@ const DEFAULT_UPGRADES = {
     ['research.providers.chatgpt', CHATGPT_DEFAULTS_V3, CHATGPT_DEFAULTS],
     ['research.providers.gemini', GEMINI_DEFAULTS_V3, GEMINI_DEFAULTS],
     ['research.background_deadline_minutes', undefined, 60],
+    ['market_data.foreground_interval_minutes', undefined, 15],
+    ['market_data.foreground_interval_minutes', 5, 15],
   ],
 };
 // A setting still exactly as an earlier version wrote it (objects compared by value).
@@ -526,7 +531,7 @@ function healthLines(ws) {
     }
   }
   const f = market.freshness(ws);
-  out.push(`Prices: ${f.freshness}; last success ${f.last_success_at || 'never'}; last attempt ${f.last_attempt_at || 'never'}${f.last_error ? `; last error "${cut(f.last_error, 120)}"` : ''}; failures in a row ${f.consecutive_failures || 0}${f.retry_after_until ? `; provider asked to wait until ${f.retry_after_until}` : ''}${f.next_allowed_at ? `; next try after ${f.next_allowed_at}` : ''}; calls this month ${f.calls ? f.calls.month_count : '?'}; CoinGecko key ${market.apiKey() ? 'present' : 'none'}; tracked ${(f.tracked_ids || []).length}.`);
+  out.push(`Prices: ${f.freshness}${f.note ? ` (${cut(f.note, 160)})` : ''}; last success ${f.last_success_at || 'never'}; last attempt ${f.last_attempt_at || 'never'}${f.last_error ? `; last error "${cut(f.last_error, 120)}"` : ''}; failures in a row ${f.consecutive_failures || 0}${f.rate_limited ? `; rate-limited until ${f.retry_at}` : ''}; calls this month ${f.calls ? f.calls.month_count : '?'}; CoinGecko key ${market.apiKey() ? 'present' : 'none'}; tracked ${(f.tracked_ids || []).length}.`);
   return out;
 }
 
