@@ -562,7 +562,10 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
 
   server.on('request', async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Referrer-Policy', 'no-referrer');
+    // Hosted: same-origin, because under no-referrer a browser sends
+    // "Origin: null" on a form post (sign-in, sign-out). No referrer ever
+    // goes to another site either way.
+    res.setHeader('Referrer-Policy', hosted ? 'same-origin' : 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');

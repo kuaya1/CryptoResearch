@@ -230,6 +230,18 @@ function makeAuth(ws, { password, hosts, failDelayMs = 600 }) {
     res.end(body);
   };
   const cookie = (token, maxAge) => `cr_session=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`;
+  // A form post from this site's own pages. Browsers send the page's origin,
+  // or "null" when that page had a no-referrer policy (sign-in pages served
+  // before 2026-10-03 did); then the browser's fetch metadata decides
+  // (Sec-Fetch-Site: same-origin). Anything that says it comes from another
+  // site is refused. The passphrase itself is the real protection.
+  const fromThisSite = (req) => {
+    const o = req.headers.origin;
+    const site = req.headers['sec-fetch-site'];
+    if (site && site !== 'same-origin') return false;
+    if (o && o !== 'null') return origins.has(o);
+    return true;
+  };
 
   function sessionOf(req) {
     const token = parseCookies(req.headers.cookie).cr_session;
@@ -254,8 +266,7 @@ function makeAuth(ws, { password, hosts, failDelayMs = 600 }) {
         return true;
       }
       if (url.pathname === '/login' && req.method === 'POST') {
-        const o = req.headers.origin;
-        if (o && !origins.has(o)) { send(res, 403, 'Sign-in is only accepted from this site.'); return true; }
+        if (!fromThisSite(req)) { send(res, 403, 'Sign-in is only accepted from this site\'s own sign-in page. Open /login on this site and try again.'); return true; }
         const addr = clientAddress(req);
         const n = recentFails(addr);
         if (n.address >= MAX_FAILS_PER_ADDRESS || n.total >= MAX_FAILS_TOTAL) { send(res, 303, '', { Location: '/login?e=locked' }); return true; }
@@ -275,8 +286,7 @@ function makeAuth(ws, { password, hosts, failDelayMs = 600 }) {
         return true;
       }
       if (url.pathname === '/logout' && req.method === 'POST') {
-        const o = req.headers.origin;
-        if (o && !origins.has(o)) { send(res, 403, 'Refused.'); return true; }
+        if (!fromThisSite(req)) { send(res, 403, 'Sign-out is only accepted from this site.'); return true; }
         const token = parseCookies(req.headers.cookie).cr_session;
         if (token && /^[a-f0-9]{64}$/.test(token) && sessions.sessions[hex(token)]) {
           delete sessions.sessions[hex(token)];

@@ -201,6 +201,35 @@ test('hosted: everything needs sign-in; the session cookie is HttpOnly, Secure a
   assert.equal((await req(port2, { path: '/api/session', headers: { cookie } })).status, 401, 'signed out');
 });
 
+test('hosted: a real browser\'s sign-in form is accepted (Origin "null" from a no-referrer page, or the real origin); other sites are refused', async (t) => {
+  const { dataDir, cleanup } = tempDataDir('browser');
+  t.after(cleanup);
+  const port = await freePort();
+  const cfg = hosted.hostedConfig({ CR_DATA_DIR: dataDir, CR_ACCESS_PASSWORD: PASS, PORT: String(port), RENDER_EXTERNAL_HOSTNAME: HOST });
+  const ws = offline(hosted.prepareWorkspace(cfg));
+  const srv = await start(ws, { quiet: true, hosted: { port, hosts: cfg.hosts, password: cfg.password, bind: '127.0.0.1', failDelayMs: 0 } });
+  t.after(() => srv.shutdown());
+  // The sign-in page now keeps the real origin on its form post.
+  assert.equal((await req(port, { path: '/login' })).headers['referrer-policy'], 'same-origin');
+  const post = (headers) => req(port, { method: 'POST', path: '/login', headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers }, body: `password=${encodeURIComponent(PASS)}` });
+  // What Chrome sent from the earlier no-referrer page (seen 2026-10-03).
+  const fromCached = await post({ origin: 'null', 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'navigate' });
+  assert.equal(fromCached.status, 303);
+  assert.equal(fromCached.headers.location, '/');
+  assert.match(fromCached.headers['set-cookie'][0], /^cr_session=/);
+  const fromPage = await post({ origin: `https://${HOST}`, 'sec-fetch-site': 'same-origin' });
+  assert.equal(fromPage.status, 303);
+  assert.equal((await post({ origin: 'null', 'sec-fetch-site': 'cross-site' })).status, 403, 'an opaque origin that says it is cross-site');
+  assert.equal((await post({ origin: `https://${HOST}`, 'sec-fetch-site': 'same-site' })).status, 403, 'a sibling site');
+  assert.equal((await post({ origin: 'https://evil.test' })).status, 403);
+  // Sign-out from the same kind of form.
+  const cookie = fromPage.headers['set-cookie'][0].split(';')[0];
+  const out = await req(port, { method: 'POST', path: '/logout', headers: { cookie, origin: 'null', 'sec-fetch-site': 'same-origin' } });
+  assert.equal(out.status, 303);
+  assert.equal((await req(port, { path: '/api/session', headers: { cookie } })).status, 401);
+  assert.equal((await req(port, { method: 'POST', path: '/logout', headers: { cookie, 'sec-fetch-site': 'cross-site' } })).status, 403);
+});
+
 test('hosted: repeated wrong passphrases lock sign-in for a while, even with the right one', async (t) => {
   const { dataDir, cleanup } = tempDataDir('limit');
   t.after(cleanup);
