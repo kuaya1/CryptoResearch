@@ -175,7 +175,10 @@ async function doctor(ws) {
     const sp = require('./research').spendSoFar(ws);
     // Paid answers captured but not yet saved into the records (audit F1).
     const cs = require('./research').sweepCaptures(ws, { remove: false });
-    if (cs.pending.length) add('Research captures', false, `${cs.pending.length} paid answer(s) arrived and were captured in .cr/captures but are not saved into the records yet. They are saved by the next research run (dashboard, hourly task, or node dashboard/cli.js research run) without asking the provider again.`, 'warn');
+    const ids = cs.pending.filter((p) => p.kind === 'background request ID');
+    const answers = cs.pending.length - ids.length;
+    if (answers) add('Research captures', false, `${answers} paid answer(s) arrived and were captured in .cr/captures but are not saved into the records yet. They are saved by the next research run (dashboard, hourly task, or node dashboard/cli.js research run) without asking the provider again.`, 'warn');
+    if (ids.length) add('Research captures', false, `${ids.length} background request(s) were accepted by the provider and their ID captured in .cr/captures, but the ID is not in the records yet. The next research run records it and collects the answer by that ID, without sending the request again.`, 'warn');
     if (cs.busy.length) add('Research captures', false, `${cs.busy.length} capture file(s) in .cr/captures are open in another program and cannot be read right now (${cs.busy.map((b) => b.rel).join('; ')}). Nothing is lost; the next research run tries again.`, 'warn');
     if (cs.unmatched.length) add('Research captures', false, `${cs.unmatched.length} capture file(s) in .cr/captures do not match an attempt that is waiting for its answer (${cs.unmatched.map((u) => `${u.rel}: ${u.reason}`).join('; ')}). They are kept for inspection and never imported automatically.`, 'warn');
     if (sp.uncertain_attempts) add('Research spend', false, `${sp.uncertain_attempts} paid attempt(s) have an uncertain outcome: they may have been billed, are never resent automatically, and count at their reservation until you reconcile them (project, Research tab; or node dashboard/cli.js research reconcile).`, 'warn');
