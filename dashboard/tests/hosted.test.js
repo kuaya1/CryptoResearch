@@ -139,6 +139,29 @@ test('hosted: first boot creates the real workspace with the proposed limits; te
   assert.ok(!all.some((f) => fs.readFileSync(f, 'utf8').includes(PASS)), 'the passphrase is never stored');
 });
 
+test('hosted: the start log names pending identities, withheld grades (which parts and why) and the last price refresh, never report text', (t) => {
+  const { dataDir, cleanup } = tempDataDir('health');
+  t.after(cleanup);
+  const cfg = hosted.hostedConfig({ CR_DATA_DIR: dataDir, CR_ACCESS_PASSWORD: PASS, PORT: '10000', RENDER_EXTERNAL_HOSTNAME: HOST });
+  const ws = offline(hosted.prepareWorkspace(cfg));
+  const projects = require('../core/projects');
+  const inbox = require('../core/inbox');
+  projects.addProject(ws, { name: 'Pending Thing (FICTIONAL)', official_website: 'https://pending.example.org/', evidence: [], utterance: 'add this one' });
+  const p = projects.addProject(ws, { name: 'Example PayFi (FICTIONAL)', symbol: 'XMPL', official_website: 'https://example.com/xmpl', coingecko_id: 'example-payfi-fictional', assets: [{ chain: 'example-chain', contract_address: 'FICTIONAL-CONTRACT-XMPL' }], evidence: [{ url: 'https://example.com/xmpl', note: 'fictional' }], sector_profile: 'payfi-credit@1' });
+  const fixture = fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'reports', 'example-payfi-fictional__chatgpt.md'), 'utf8');
+  // One weighted component given in a shape the parser does not read as a score.
+  const broken = fixture.replace(/("investment_components"\s*:\s*\{[^]*?)"token_value_capture"\s*:\s*\{[^}]*\}/, '$1"token_value_capture": { "value": "7/10" }');
+  assert.notEqual(broken, fixture, 'the fixture has a token_value_capture score to break');
+  const out = inbox.importContent(ws, 'chatgpt', { content: broken, filename: 'x.md', projectId: p.project_id, channel: 'test' });
+  assert.equal(out.result.status, 'ingested');
+  const lines = hosted.healthLines(ws);
+  const text = lines.join('\n');
+  assert.match(text, /Identity: pending-thing-fictional "Pending Thing \(FICTIONAL\)" pending; website https:\/\/pending\.example\.org\/; candidates none; evidence none/);
+  assert.match(text, /Grade: example-payfi-fictional\/\S+ \(chatgpt, appendix_json, rubric cr-grading@1\) withheld at 75% of the weight; token_value_capture=unknown \(given \{"value":"7\/10"\}\)/);
+  assert.match(text, /Prices: never_run; last success never/);
+  assert.ok(!text.includes(fixture.slice(0, 200)), 'no report text in the log');
+});
+
 test('hosted: defaults written by the first version move to the current ones on start, unless Eric changed them', (t) => {
   const { dataDir, cleanup } = tempDataDir('upgrade');
   t.after(cleanup);

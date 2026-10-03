@@ -432,6 +432,11 @@ async function main(env = process.env) {
   const ws = prepareWorkspace(cfg);
   console.log(researchSummary(ws));
   console.log(recordsSummary(ws));
+  try {
+    for (const line of healthLines(ws)) console.log(line);
+  } catch (err) {
+    console.log(`Records check could not run: ${err.message}`);
+  }
   const { start } = require('./server');
   return start(ws, { hosted: { port: cfg.port, hosts: cfg.hosts, password: cfg.password } });
 }
@@ -460,6 +465,51 @@ function recordsSummary(ws) {
   return `Records: ${list.length} project${list.length === 1 ? '' : 's'} (${watched} on the watchlist${ids ? `: ${ids}${list.length > 10 ? ', ...' : ''}` : ''}), ${reports} report${reports === 1 ? '' : 's'}${newest ? `, newest ${newest.ref} (saved ${newest.at})` : ''}, ${txs} transaction${txs === 1 ? '' : 's'}; ${apps} connected app${apps === 1 ? '' : 's'}.`;
 }
 
+// Start-log lines for what needs attention, so a problem seen on the phone can
+// be traced from Render's log without signing in: projects whose identity is
+// not verified, reports whose grade is withheld (which parts, and why), and the
+// last price refresh. IDs, statuses and validation messages only: no report
+// text, notes, holdings or keys.
+function healthLines(ws) {
+  const { loadReports } = require('./core/reports');
+  const { gradeAssessment } = require('./core/rubrics');
+  const market = require('./core/market');
+  const out = [];
+  const cut = (s, n = 100) => {
+    const t = String(s === undefined ? '' : s).replace(/\s+/g, ' ').trim();
+    return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+  };
+  const host = (u) => {
+    try { return new URL(u).hostname.replace(/^www\./, ''); } catch (_) { return null; }
+  };
+  for (const p of require('./core/projects').listProjects(ws).filter((x) => !x.broken && x.status !== 'archived')) {
+    const id = p.identity || {};
+    if (id.status !== 'verified') {
+      const cands = (id.candidates || []).map((c) => c.coingecko_id).filter(Boolean);
+      const ev = [...new Set((id.evidence || []).map((e) => host(e.url)).filter(Boolean))];
+      out.push(`Identity: ${p.project_id} "${cut(p.name, 40)}"${p.symbol ? ` (${p.symbol})` : ''} ${id.status || 'unknown'}; website ${id.official_website ? cut(id.official_website, 80) : 'none'}; candidates ${cands.length ? cands.join(', ') : 'none'}; evidence ${ev.length ? ev.join(', ') : 'none'}; via ${p.created_via || '?'}; asked "${cut(p.origin_request || '', 100)}".`);
+    }
+    for (const r of loadReports(ws, p.project_id)) {
+      if (r.broken) {
+        out.push(`Report: ${p.project_id}/${r.report_id} unreadable (${cut(r.error, 80)}).`);
+        continue;
+      }
+      const g = gradeAssessment(ws, r.assessment);
+      if (!g || g.status === 'firm' || g.status === 'range') continue;
+      const issues = ((r.record.extraction || {}).issues || []);
+      const comp = Object.entries(r.assessment.investment_components || {})
+        .filter(([, s]) => !s || !['scored', 'range'].includes(s.status) || (s.status === 'range' && !s.rationale))
+        .map(([k, s]) => `${k}=${s ? s.status : 'missing'}${s && s.invalid_source !== undefined ? ` (given ${cut(JSON.stringify(s.invalid_source), 90)})` : s && s.missing_data ? ` (${cut(s.missing_data, 70)})` : ''}`);
+      const ignored = issues.filter((i) => /ignored/.test(i.message || '') && /^investment_components\./.test(i.field || '')).map((i) => i.field.split('.')[1]);
+      const errs = issues.filter((i) => i.severity === 'error').slice(0, 3).map((i) => cut(i.message, 100));
+      out.push(`Grade: ${p.project_id}/${r.report_id} (${r.meta.provider}, ${r.assessment.source_format || '?'}, rubric ${r.assessment.rubric_version || 'none'}) ${g.status}${g.coverage_pct !== null && g.coverage_pct !== undefined ? ` at ${g.coverage_pct}% of the weight` : ''}; ${comp.length ? comp.join('; ') : cut(g.reason || '', 120)}${ignored.length ? `; keys not in the rubric: ${ignored.join(', ')}` : ''}${errs.length ? `; errors: ${errs.join(' | ')}` : ''}.`);
+    }
+  }
+  const f = market.freshness(ws);
+  out.push(`Prices: ${f.freshness}; last success ${f.last_success_at || 'never'}; last attempt ${f.last_attempt_at || 'never'}${f.last_error ? `; last error "${cut(f.last_error, 120)}"` : ''}; failures in a row ${f.consecutive_failures || 0}${f.retry_after_until ? `; provider asked to wait until ${f.retry_after_until}` : ''}${f.next_allowed_at ? `; next try after ${f.next_allowed_at}` : ''}; calls this month ${f.calls ? f.calls.month_count : '?'}; CoinGecko key ${market.apiKey() ? 'present' : 'none'}; tracked ${(f.tracked_ids || []).length}.`);
+  return out;
+}
+
 // One line for the start log: the bounds research would be sent with, and
 // whether each model's key is present (never a key itself).
 function researchSummary(ws) {
@@ -482,4 +532,4 @@ function researchSummary(ws) {
   return `Research: ${(r.providers.claude || {}).model || 'no model'}; ${b.max_output_tokens} output tokens per request, up to ${b.requests_max} requests, ${b.search.limit} searches per request, ${r.timeout_seconds || 600} s per call; limits $${budget.per_run_usd} per run, $${budget.daily_usd} per day, $${budget.monthly_usd} per month; Claude key ${providers.keyStatus('claude').present ? 'present' : 'missing'}; route ${st.mode}${st.mode === 'api' ? '' : ` (${st.reason})`}; ${others}; ${r.max_concurrent || 1} at a time.${last ? ` Defaults v${last.version} applied ${last.at}: ${last.changed.length ? last.changed.map((c) => `${c.setting} ${c.from === null ? 'unset' : show(c.from)} -> ${show(c.to)}`).join(', ') : 'nothing to change'}.` : ''}`;
 }
 
-module.exports = { hostedConfig, prepareWorkspace, syncTemplates, makeAuth, main, HOSTED_DEFAULTS, loginPage, setupPage, containingMount, persistentDiskProblem, researchSummary, recordsSummary };
+module.exports = { hostedConfig, prepareWorkspace, syncTemplates, makeAuth, main, HOSTED_DEFAULTS, loginPage, setupPage, containingMount, persistentDiskProblem, researchSummary, recordsSummary, healthLines };
