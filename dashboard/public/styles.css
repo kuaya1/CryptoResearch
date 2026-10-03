@@ -921,3 +921,8 @@ dialog .dlg-foot { display: flex; justify-content: flex-end; gap: var(--s2); pad
 .login-card { width: min(420px, 100%); display: grid; gap: var(--s3); }
 .login-card h1 { margin: 0; }
 .login-card input[type="password"] { width: 100%; border: 1px solid var(--control-border); border-radius: var(--r-md); background: var(--surface); padding: 6px 10px; min-height: var(--touch); font: inherit; color: inherit; }
+
+/* The exact prompt of a research run, readable on a phone. */
+.prompt-view { margin-top: var(--s3); }
+.prompt-view > summary { cursor: pointer; font-size: 14px; color: var(--link, inherit); }
+.prompt-text { background: var(--surface-sunken); border: 1px solid var(--separator); padding: var(--s3); border-radius: var(--r-md); max-height: 60vh; overflow: auto; margin: var(--s2) 0 0; }

@@ -1020,8 +1020,17 @@ function researchTab(ctx, d, row) {
   const pid = d.project.project_id;
   const runs = d.research.runs || [];
   const runCards = runs.map((run) => {
+    const promptUrl = `/api/projects/${pid}/research/${run.run_id}/prompt`;
     const copy = button('Copy prompt', null, { kind: 'small' });
-    copy.onclick = action(copy, async () => { await copyText(await ctx.api.text(`/api/projects/${pid}/research/${run.run_id}/prompt`)); return undefined; });
+    copy.onclick = action(copy, async () => { await copyText(await cachedText(ctx, promptUrl)); return undefined; });
+    // The exact prompt every model got, readable on the page (a phone has no
+    // easy way to look at copied text), loaded only when opened.
+    const promptBox = h('pre', { class: 'prompt-text pre small' }, 'Loading the prompt…');
+    const promptView = h('details', { class: 'prompt-view', dataset: { key: `prompt-${run.run_id}` } }, h('summary', null, 'Show the exact prompt'), promptBox);
+    promptView.addEventListener('toggle', () => {
+      if (!promptView.open || promptBox.dataset.loaded) return;
+      cachedText(ctx, promptUrl).then((t) => { promptBox.textContent = t; promptBox.dataset.loaded = '1'; }).catch((err) => { promptBox.textContent = `The prompt could not be loaded: ${err.message}`; });
+    });
     return card(h('span', { class: 'pill-row' }, h('span', null, `Run of ${fmtDateTime(run.created_at)}`), h('span', { class: 'small muted' }, (run.status || '').replace(/_/g, ' '))), [
       (table([
         { label: 'Model', render: (x) => PROVIDER_LABELS[x.prov] },
@@ -1039,6 +1048,7 @@ function researchTab(ctx, d, row) {
         ['Prompt', h('span', null, `${run.prompt.version}, identical for every model · SHA-256 ${run.prompt.sha256.slice(0, 12)}… `, copy)],
         ['Evidence packet', `captured ${fmtDateTime(run.evidence_packet.captured_at)} · SHA-256 ${run.evidence_packet.sha256.slice(0, 12)}… · no holdings, notes or other models' conclusions`],
       ]), { id: `run-${run.run_id}` }),
+      promptView,
     ]);
   });
   const legacy = d.prompt_files || [];
