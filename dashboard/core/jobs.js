@@ -31,6 +31,8 @@ function readJobState(ws) {
 function marketDue(ws, now, { foreground = false } = {}) {
   const market = require('./market');
   const status = market.readStatus(ws);
+  // Closed while any CoinGecko caller's rate limit (market.noteRateLimit) or a
+  // failure backoff is running, for every runner.
   if (!market.nextAllowed(ws, status).allowed) return false;
   const lastOk = status.last_success_at ? Date.parse(status.last_success_at) : 0;
   const md = ws.settings.market_data;

@@ -217,34 +217,52 @@ function countCalls(ws, n) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function cgGet(ws, pathAndQuery, fetchImpl, { retries = 1, waitMs = 20000 } = {}) {
+// One CoinGecko lookup through the shared rate-limit gate (market.js): a 429
+// here makes prices and market context wait too, and a 429 they saw makes this
+// wait. The keyless public API allows only a few calls a minute, so a short
+// wait (Retry-After up to maxWaitMs) is sat out once; a longer one fails at
+// once with the time to try again, instead of asking a busy provider again.
+async function cgGet(ws, pathAndQuery, fetchImpl, { retries = 1, maxWaitMs = 20000 } = {}) {
   const market = require('./market');
   const md = ws.settings.market_data;
-  const budget = market.callBudget(ws, market.readStatus(ws));
-  if (budget.budget_monthly && budget.month_count + 1 > budget.budget_monthly) throw new OpError('REFUSED', `The monthly CoinGecko call budget is used up (${budget.month_count} of ${budget.budget_monthly}).`);
   const base = process.env.CR_MARKET_API_BASE || md.api_base;
   const headers = { accept: 'application/json', 'user-agent': 'CryptoResearch-desk' };
   const key = market.apiKey();
   if (key) headers['x-cg-demo-api-key'] = key;
-  countCalls(ws, 1);
-  let res;
-  try {
-    res = await fetchImpl(`${base}${pathAndQuery}`, { headers, signal: AbortSignal.timeout((md.timeout_seconds || 20) * 1000) });
-  } catch (err) {
-    throw new OpError('LOOKUP_FAILED', err.name === 'TimeoutError' || err.name === 'AbortError' ? 'CoinGecko did not answer in time. Try again in a minute.' : `CoinGecko could not be reached (${err.message}).`);
-  }
-  if (res.status === 404) return null;
-  if (res.status === 429 && retries > 0) {
-    // The keyless public API allows only a few calls a minute: wait once.
-    const ra = Number(res.headers && typeof res.headers.get === 'function' ? res.headers.get('retry-after') : NaN);
-    await sleep(Number.isFinite(ra) && ra > 0 ? Math.min(ra * 1000, 60000) : waitMs);
-    return cgGet(ws, pathAndQuery, fetchImpl, { retries: retries - 1, waitMs });
-  }
-  if (!res.ok) throw new OpError('LOOKUP_FAILED', res.status === 429 ? 'CoinGecko is limiting requests right now. Try again in a minute.' : `CoinGecko answered HTTP ${res.status}.`);
-  try {
-    return await res.json();
-  } catch (_) {
-    throw new OpError('LOOKUP_FAILED', 'CoinGecko answered with unreadable data.');
+  const limited = (gate) => new OpError('LOOKUP_FAILED', `CoinGecko is rate-limiting this server. ${gate.until ? `Try again after ${market.clock(gate.until)}.` : 'Try again in a few minutes.'}`, { retry_at: gate.until || null });
+  let waits = retries;
+  let sent = 0;
+  for (;;) {
+    const gate = market.rateLimitGate(ws);
+    if (!gate.open) {
+      if (waits <= 0 || gate.wait_ms > maxWaitMs) throw limited(gate);
+      waits--;
+      await sleep(gate.wait_ms + 25);
+      continue; // checked again: another caller may have made the wait longer
+    }
+    const budget = market.callBudget(ws, market.readStatus(ws));
+    if (budget.budget_monthly && budget.month_count + 1 > budget.budget_monthly) throw new OpError('REFUSED', `The monthly CoinGecko call budget is used up (${budget.month_count} of ${budget.budget_monthly}).`);
+    countCalls(ws, 1);
+    sent++;
+    let res;
+    try {
+      res = await fetchImpl(`${base}${pathAndQuery}`, { headers, signal: AbortSignal.timeout((md.timeout_seconds || 20) * 1000) });
+    } catch (err) {
+      throw new OpError('LOOKUP_FAILED', err.name === 'TimeoutError' || err.name === 'AbortError' ? 'CoinGecko did not answer in time. Try again in a minute.' : `CoinGecko could not be reached (${err.message}).`);
+    }
+    if (res.status === 404) return null;
+    if (res.status === 429) {
+      const gateNow = market.noteRateLimit(ws, { retryAfterMs: market.retryAfterMs(res), source: 'research intake', httpStatus: 429 });
+      // Never more than retries + 1 requests, even when Retry-After is zero.
+      if (sent > retries) throw limited(gateNow.open ? { until: null } : gateNow);
+      continue;
+    }
+    if (!res.ok) throw new OpError('LOOKUP_FAILED', `CoinGecko answered HTTP ${res.status}.`);
+    try {
+      return await res.json();
+    } catch (_) {
+      throw new OpError('LOOKUP_FAILED', 'CoinGecko answered with unreadable data.');
+    }
   }
 }
 

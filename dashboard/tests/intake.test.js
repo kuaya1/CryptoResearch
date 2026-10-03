@@ -13,6 +13,7 @@ const intake = require('../core/intake');
 const research = require('../core/research');
 const projects = require('../core/projects');
 const providers = require('../core/providers');
+const market = require('../core/market');
 const { runOp } = require('../core/ops');
 const { mockReport } = require('../core/demo');
 const { readJson, atomicWrite, jsonText, readJsonLines } = require('../core/fsx');
@@ -217,6 +218,53 @@ test('intake: CoinGecko rate limits are waited out once; a lookup failure is sho
   intake.retryIdentify(ws, d2.intake_id);
   const o3 = await intake.identify(ws, d2.intake_id, { fetchImpl: cgStub({ search: SEARCH }) });
   assert.equal(o3.status, 'needs_confirmation');
+});
+
+test('intake: a 429 without Retry-After fails at once with the time to try again, and every CoinGecko caller then waits', async (t) => {
+  const { ws, cleanup } = tempWorkspace('intake-429-long', { market_data: { enabled: true } });
+  t.after(cleanup);
+  const busy = { ok: false, status: 429, headers: { get: () => null }, json: async () => ({}) };
+  const f = cgStub({ search: SEARCH, fail: (p) => (p === '/search' ? busy : null) });
+  const { intake: doc } = intake.createIntake(ws, { link: LINK });
+  const started = Date.now();
+  const out = await intake.identify(ws, doc.intake_id, { fetchImpl: f });
+  assert.ok(Date.now() - started < 5000, 'no long sleep inside the lookup');
+  assert.equal(f.calls.length, 1, 'asked once, not again');
+  assert.equal(out.status, 'identity_failed');
+  assert.match(out.identity.error, /^CoinGecko is rate-limiting this server\. Try again after (\w{3} \d{1,2}, )?\d{1,2}:\d{2} [AP]M\.$/);
+  const gate = market.rateLimitGate(ws);
+  assert.equal(gate.open, false);
+  assert.ok(gate.wait_ms > 110000 && gate.wait_ms <= 120000, `the default wait, got ${gate.wait_ms} ms`);
+  assert.equal(market.readStatus(ws).rate_limit.source, 'research intake');
+  assert.equal(market.readStatus(ws).calls.month_count, 1, 'the call is counted');
+
+  // Prices (even a manual refresh), market context and the next lookup wait without calling.
+  const never = async (url) => { throw new Error(`must not be called: ${url}`); };
+  const p = await market.refresh(ws, { fetchImpl: never, force: true });
+  assert.equal(p.status, 'backoff');
+  assert.equal(p.rate_limited, true);
+  assert.equal((await require('../core/cycle').refreshContext(ws, { fetchImpl: never, force: true })).status, 'backoff');
+  assert.equal(require('../core/jobs').marketDue(ws, Date.now(), { foreground: true }), false);
+  intake.retryIdentify(ws, doc.intake_id);
+  const again = await intake.identify(ws, doc.intake_id, { fetchImpl: f });
+  assert.equal(again.status, 'identity_failed');
+  assert.equal(f.calls.length, 1, 'the lookup waits for the shared gate too');
+});
+
+test('intake: a short shared wait is sat out once; a provider that keeps answering 429 is asked at most twice', async (t) => {
+  const { ws, cleanup } = tempWorkspace('intake-429-short');
+  t.after(cleanup);
+  // Prices saw a 429 with a short Retry-After a moment ago.
+  market.noteRateLimit(ws, { retryAfterMs: 50, source: 'prices' });
+  const f = cgStub({ search: SEARCH });
+  const { intake: doc } = intake.createIntake(ws, { link: LINK });
+  const out = await intake.identify(ws, doc.intake_id, { fetchImpl: f });
+  assert.equal(out.status, 'needs_confirmation', 'waited out, then looked up');
+
+  const zero = { ok: false, status: 429, headers: { get: (k) => (k === 'retry-after' ? '0' : null) }, json: async () => ({}) };
+  const g = cgStub({ fail: () => zero });
+  await assert.rejects(intake.cgGet(ws, '/search?query=x', g), /rate-limiting this server/);
+  assert.equal(g.calls.length, 2, 'never more than one retry, even with Retry-After: 0');
 });
 
 test('intake: a project with the same ticker is never merged silently; a different binding is never replaced', async (t) => {

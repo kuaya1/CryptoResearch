@@ -9,8 +9,10 @@
 //   market-data/status.json             `context` block: attempts, errors; calls count in the
 //                                       same monthly CoinGecko budget as prices
 //
-// Sources (CoinGecko public API, same optional key, base URL, backoff and call
-// budget as prices; at most one refresh per context_interval_minutes, default 60):
+// Sources (CoinGecko public API, same optional key, base URL, backoff, call
+// budget and rate-limit gate as prices: a 429 here makes prices wait too, and
+// nothing is fetched while the gate is closed; at most one refresh per
+// context_interval_minutes, default 60):
 //   /global                  total market cap and 24h volume, BTC and ETH dominance
 //   /coins/markets top 100   Bitcoin's own 7D/30D change, ETH/BTC, and breadth: how
 //                            many of the largest coins beat Bitcoin over 7 and 30 days
@@ -278,6 +280,7 @@ async function fetchContext(ws, fetchImpl = fetch) {
       const e = new Error(`CoinGecko responded HTTP ${res.status}${res.status === 429 ? ' (rate limited)' : ''}`);
       e.calls = calls;
       e.httpStatus = res.status;
+      e.retryAfterMs = market.retryAfterMs(res);
       throw e;
     }
     try {
@@ -293,7 +296,7 @@ async function fetchContext(ws, fetchImpl = fetch) {
   return { global, rows, calls, base: base === md.api_base ? null : 'custom' };
 }
 
-function recordAttempt(ws, { calls, outcome, error = null, snapshotId = null, at }) {
+function recordAttempt(ws, { calls, outcome, error = null, snapshotId = null, at, rateLimit = null }) {
   const market = require('./market');
   withLock(ws, 'market_write', () => {
     const status = market.readStatus(ws);
@@ -311,6 +314,8 @@ function recordAttempt(ws, { calls, outcome, error = null, snapshotId = null, at
       consecutive_failures: outcome === 'ok' ? 0 : (prev.consecutive_failures || 0) + 1,
     };
     replaceFile(ws, ws.abs(market.STATUS_REL), jsonText({ ...status, schema_version: status.schema_version || 'cr.market-status.v2', calls: c, context }));
+    // Under the same lock, so no runner sees the failure without the wait.
+    if (rateLimit) market.noteRateLimit(ws, rateLimit);
   });
 }
 
@@ -323,7 +328,7 @@ async function refreshContext(ws, { trigger = 'manual', fetchImpl, force = false
   if (!force && !due(ws, now, { foreground })) return { status: 'not_due', message: 'Market context is not due yet.' };
   const status0 = market.readStatus(ws);
   const gate = market.nextAllowed(ws, status0, { force });
-  if (!gate.allowed) return { status: 'backoff', message: `Market context not refreshed: ${gate.reason}.` };
+  if (!gate.allowed) return { status: 'backoff', message: `Market context not refreshed: ${gate.reason}; next try ${market.clock(gate.until)}.`, rate_limited: gate.rate_limited, retry_at: gate.until };
   const budget = market.callBudget(ws, status0);
   if (budget.budget_monthly && budget.month_count + 2 > budget.budget_monthly) {
     return { status: 'budget_paused', message: `Monthly CoinGecko call budget reached (${budget.month_count} of ${budget.budget_monthly}); market context stays at its last snapshot.` };
@@ -337,7 +342,8 @@ async function refreshContext(ws, { trigger = 'manual', fetchImpl, force = false
     try {
       data = await fetchContext(ws, fetchImpl);
     } catch (err) {
-      recordAttempt(ws, { calls: err.calls || 1, outcome: 'failed', error: err.message, at });
+      const limited = err.httpStatus === 429 || typeof err.retryAfterMs === 'number';
+      recordAttempt(ws, { calls: err.calls || 1, outcome: 'failed', error: err.message, at, rateLimit: limited ? { retryAfterMs: err.retryAfterMs, source: 'market context', httpStatus: err.httpStatus } : null });
       return { status: 'failed', message: `Market context not refreshed: ${err.message}. The last snapshot is kept.` };
     }
     let snap;

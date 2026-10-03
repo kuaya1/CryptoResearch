@@ -16,6 +16,12 @@
 //   is ignored, so timestamps never move backwards.
 // - One lease (single-flight) for every runner; one shared backoff with jitter,
 //   honoring Retry-After; one monthly call budget.
+// - One shared rate-limit gate for every CoinGecko caller (prices, market
+//   context, identity search, research intake): a 429 seen by any of them is
+//   recorded by noteRateLimit and closes rateLimitGate for all of them, manual
+//   refreshes included, until Retry-After (or a default wait) has passed.
+// - An answer that updates no price at all (an empty list, or only invalid or
+//   older rows) is not a success: last_success_at stays where it was.
 // - A price of exactly 0 from the provider is treated as invalid data, not as a
 //   real zero valuation (CoinGecko does not use 0 to mean "worthless").
 // Prices never change stored reports or grades.
@@ -28,12 +34,18 @@ const { readJson, jsonText, appendLine, readJsonLines, mkdirp, listDir } = requi
 const { withLock, replaceFile } = require('./ops');
 const { listProjects } = require('./projects');
 const { acquireLease, releaseLease } = require('./leases');
-const { ymdInTz } = require('./dates');
+const { ymdInTz, TZ } = require('./dates');
 
 const LATEST_REL = 'market-data/latest.json';
 const STATUS_REL = 'market-data/status.json';
 const LOGO_DIR = 'market-data/logos';
 const SOURCE_LABEL = 'CoinGecko /coins/markets';
+// A 429 without Retry-After closes the shared gate for two minutes, doubled for
+// each further 429 in the same episode (one that comes within 15 minutes of the
+// previous wait ending), so a rate limit is never answered by another call
+// seconds later. The keyless public API sends no Retry-After most of the time.
+const RATE_LIMIT_DEFAULT_MS = 120000;
+const RATE_LIMIT_EPISODE_MS = 15 * 60000;
 
 function readLatest(ws) {
   return readJson(ws.abs(LATEST_REL), { provider: 'coingecko', assets: {} });
@@ -79,6 +91,66 @@ function retryAfterMs(res) {
   return Number.isNaN(t) ? null : Math.max(0, t - Date.now());
 }
 
+// The later of an ISO time (when it is still ahead of `t`) and `t` itself.
+function laterIso(iso, t) {
+  return iso && Date.parse(iso) > t ? iso : new Date(t).toISOString();
+}
+
+// A time the person reads: "12:29 AM" today, "Oct 2, 9:15 PM" another day,
+// both in America/New_York. (Intl puts a narrow no-break space before AM/PM;
+// it becomes a plain space, so logs and searches read the same.)
+function clock(iso, now = Date.now()) {
+  const d = iso ? new Date(iso) : null;
+  if (!d || Number.isNaN(d.getTime())) return null;
+  const time = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' }).format(d).replace(/\s/g, ' ');
+  if (ymdInTz(d) === ymdInTz(new Date(now))) return time;
+  return `${new Intl.DateTimeFormat('en-US', { timeZone: TZ, month: 'short', day: 'numeric' }).format(d)}, ${time}`;
+}
+
+// The status fields one rate limit sets. The wait is Retry-After when CoinGecko
+// sends it, otherwise the default above; capped at backoff_max_minutes so a
+// bad header never parks the desk for days. A wait already running is never
+// shortened, and non-forced runners wait at least as long.
+function rateLimitFields(ws, status, { retryAfterMs: header = null, source = 'prices', httpStatus = 429 } = {}, now = Date.now()) {
+  const md = ws.settings.market_data || {};
+  const maxMs = (md.backoff_max_minutes || 60) * 60000;
+  const given = typeof header === 'number' && Number.isFinite(header) && header >= 0 ? header : null;
+  const prev = status.rate_limit || null;
+  const prevEnd = prev && prev.until ? Date.parse(prev.until) : NaN;
+  const strikes = !Number.isNaN(prevEnd) && now - prevEnd < RATE_LIMIT_EPISODE_MS ? (prev.strikes || 1) + 1 : 1;
+  const waitMs = Math.min(maxMs, given !== null ? given : RATE_LIMIT_DEFAULT_MS * 2 ** (strikes - 1));
+  const until = laterIso(status.retry_after_until, now + waitMs);
+  return {
+    retry_after_until: until,
+    next_allowed_at: laterIso(status.next_allowed_at, Date.parse(until)),
+    rate_limit: { at: new Date(now).toISOString(), source, http_status: httpStatus || null, retry_after_ms: given, wait_ms: waitMs, strikes, until },
+  };
+}
+
+// Records a rate limit seen by any CoinGecko caller in the shared gate, so
+// every other caller waits too. Returns the gate as it now stands.
+function noteRateLimit(ws, { retryAfterMs: header = null, source = 'prices', httpStatus = 429 } = {}) {
+  withLock(ws, 'market_status', () => {
+    const status = readStatus(ws);
+    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...status, schema_version: 'cr.market-status.v2', ...rateLimitFields(ws, status, { retryAfterMs: header, source, httpStatus }) }));
+  });
+  return rateLimitGate(ws);
+}
+
+function gateOf(status, now = Date.now()) {
+  const until = status.retry_after_until ? Date.parse(status.retry_after_until) : 0;
+  if (!(until > now)) return { open: true, until: null, wait_ms: 0, reason: null, note: null };
+  const rl = status.rate_limit;
+  const reason = !rl || rl.http_status === 429 ? 'CoinGecko is rate-limiting this server' : `CoinGecko asked this server to wait (HTTP ${rl.http_status} with Retry-After)`;
+  return { open: false, until: status.retry_after_until, wait_ms: until - now, reason, note: `${reason}; next try ${clock(status.retry_after_until, now)}`, source: rl ? rl.source : null };
+}
+
+// The shared gate every CoinGecko caller checks before it calls: closed while
+// a rate-limit wait runs. Forcing never opens it.
+function rateLimitGate(ws, now = Date.now()) {
+  return gateOf(readStatus(ws), now);
+}
+
 async function fetchMarkets(ids, settings, fetchImpl = fetch) {
   const md = settings.market_data;
   const base = process.env.CR_MARKET_API_BASE || md.api_base;
@@ -116,9 +188,8 @@ async function searchCoins(ws, query, { fetchImpl = fetch } = {}) {
   if (q.length < 2) return { status: 'invalid', message: 'Type at least two characters.', candidates: [] };
   const md = ws.settings.market_data;
   const status0 = readStatus(ws);
-  if (status0.retry_after_until && Date.parse(status0.retry_after_until) > Date.now()) {
-    return { status: 'backoff', message: `CoinGecko asked us to wait until ${status0.retry_after_until}.`, candidates: [] };
-  }
+  const gate = gateOf(status0);
+  if (!gate.open) return { status: 'backoff', message: `Not searched: ${gate.note}.`, rate_limited: true, retry_at: gate.until, candidates: [] };
   const budget = callBudget(ws, status0);
   if (budget.budget_monthly && budget.month_count + 1 > budget.budget_monthly) {
     return { status: 'budget_paused', message: `Monthly CoinGecko call budget reached (${budget.month_count} of ${budget.budget_monthly}).`, candidates: [] };
@@ -129,10 +200,12 @@ async function searchCoins(ws, query, { fetchImpl = fetch } = {}) {
   if (key) headers['x-cg-demo-api-key'] = key;
   let body = null;
   let failure = null;
+  let limited = null;
   try {
     const res = await fetchImpl(`${base}/search?query=${encodeURIComponent(q)}`, { headers, signal: AbortSignal.timeout((md.timeout_seconds || 20) * 1000) });
     if (!res.ok) failure = `CoinGecko search responded HTTP ${res.status}${res.status === 429 ? ' (rate limited)' : ''}`;
     else body = await res.json();
+    if (res.status === 429) limited = { retryAfterMs: retryAfterMs(res), source: 'identity search', httpStatus: 429 };
   } catch (err) {
     failure = err.name === 'TimeoutError' || err.name === 'AbortError' ? 'CoinGecko search timed out (offline or slow).' : `CoinGecko search failed: ${err.message}`;
   }
@@ -141,8 +214,13 @@ async function searchCoins(ws, query, { fetchImpl = fetch } = {}) {
     const calls = callBudget(ws, status);
     calls.month_count += 1;
     calls.day_count += 1;
-    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...status, schema_version: 'cr.market-status.v2', calls }));
+    // A 429 here closes the shared gate for prices and market context too.
+    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...status, schema_version: 'cr.market-status.v2', calls, ...(limited ? rateLimitFields(ws, status, limited) : {}) }));
   });
+  if (limited) {
+    const g = rateLimitGate(ws);
+    return { status: 'failed', message: g.open ? failure : `${g.note}.`, rate_limited: true, retry_at: g.until, candidates: [] };
+  }
   if (failure) return { status: 'failed', message: failure, candidates: [] };
   const lower = q.toLowerCase();
   const candidates = (Array.isArray(body && body.coins) ? body.coins : []).slice(0, 12).filter((c) => c && typeof c.id === 'string' && /^[a-z0-9][a-z0-9-]{0,100}$/.test(c.id)).map((c) => ({
@@ -248,14 +326,15 @@ function backoffMs(ws, failures) {
   return Math.max(base / 2, Math.round(raw + jitter));
 }
 
-// Shared due/backoff rule for every runner.
+// Shared due/backoff rule for every runner. Forcing (the manual "Refresh
+// prices") skips only the failure backoff, never the rate-limit gate.
 function nextAllowed(ws, status, { force = false } = {}) {
   const now = Date.now();
-  const retryAfter = status.retry_after_until ? Date.parse(status.retry_after_until) : 0;
-  if (retryAfter > now) return { allowed: false, until: status.retry_after_until, reason: 'the provider asked us to wait (Retry-After)' };
+  const gate = gateOf(status, now);
+  if (!gate.open) return { allowed: false, until: gate.until, reason: gate.reason, rate_limited: true };
   if (force) return { allowed: true };
   const next = status.next_allowed_at ? Date.parse(status.next_allowed_at) : 0;
-  if (next > now) return { allowed: false, until: status.next_allowed_at, reason: `backing off after ${status.consecutive_failures || 1} failure(s)` };
+  if (next > now) return { allowed: false, until: status.next_allowed_at, reason: `backing off after ${status.consecutive_failures || 1} failure(s)`, rate_limited: false };
   return { allowed: true };
 }
 
@@ -265,7 +344,9 @@ async function refresh(ws, { trigger = 'manual', fetchImpl, force = false } = {}
   const ids = trackedIds(ws);
   const status0 = readStatus(ws);
   const gate = nextAllowed(ws, status0, { force });
-  if (!gate.allowed) return { status: 'backoff', message: `Not refreshed: ${gate.reason}; next attempt after ${gate.until}.`, next_allowed_at: gate.until };
+  if (!gate.allowed) {
+    return { status: 'backoff', message: `Prices not refreshed: ${gate.reason}; next try ${clock(gate.until)}.`, rate_limited: gate.rate_limited, retry_at: gate.until, next_allowed_at: gate.until };
+  }
   const budget = callBudget(ws, status0);
   const needed = Math.ceil(ids.length / Math.min(250, md.max_ids_per_call || 250));
   if (budget.budget_monthly && budget.month_count + needed > budget.budget_monthly) {
@@ -292,6 +373,7 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
     const message = err.name === 'TimeoutError' || err.name === 'AbortError'
       ? 'Request timed out (offline or provider slow)'
       : `${err.message}${cause ? ` (${cause})` : ''}`;
+    let gate = null;
     withLock(ws, 'market_status', () => {
       const status = readStatus(ws);
       const failures = (status.consecutive_failures || 0) + 1;
@@ -299,7 +381,7 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
       const calls = callBudget(ws, status);
       calls.month_count += err.calls || 1;
       calls.day_count += err.calls || 1;
-      replaceFile(ws, ws.abs(STATUS_REL), jsonText({
+      const next = {
         ...status,
         schema_version: 'cr.market-status.v2',
         state: 'failed',
@@ -307,13 +389,19 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
         last_trigger: trigger,
         last_error: message,
         consecutive_failures: failures,
-        next_allowed_at: new Date(Date.now() + wait).toISOString(),
-        retry_after_until: err.retryAfterMs ? new Date(Date.now() + err.retryAfterMs).toISOString() : null,
+        next_allowed_at: laterIso(status.next_allowed_at, Date.now() + wait),
+        retry_after_until: gateOf(status).until,
         calls,
         tracked_ids: ids,
         note: 'Last valid prices in latest.json are kept and shown with their age.',
-      }));
+      };
+      // A 429 (or any answer that names a Retry-After) closes the shared gate
+      // for every caller, this refresh's next manual retry included.
+      const limited = err.httpStatus === 429 || typeof err.retryAfterMs === 'number';
+      replaceFile(ws, ws.abs(STATUS_REL), jsonText(limited ? { ...next, ...rateLimitFields(ws, next, { retryAfterMs: err.retryAfterMs, source: 'prices', httpStatus: err.httpStatus }) } : next));
+      gate = limited ? gateOf(readStatus(ws)) : null;
     });
+    if (gate && !gate.open) return { status: 'failed', message: `${message}; next try ${clock(gate.until)}.`, tracked: ids.length, rate_limited: true, retry_at: gate.until };
     return { status: 'failed', message, tracked: ids.length };
   }
   const now = Date.now();
@@ -329,6 +417,7 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
   const returned = new Set(data.rows.map((c) => c && c.id));
   const missing = ids.filter((id) => !returned.has(id));
   let observationWritten = false;
+  let nothingUsable = null;
   const skippedOlder = [];
   const updated = [];
   withLock(ws, 'market_write', () => {
@@ -343,15 +432,18 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
       assets[o.id] = { ...o, fetched_at: fetchedAt };
       updated.push(o.id);
     }
-    replaceFile(ws, ws.abs(LATEST_REL), jsonText({
-      schema_version: 'cr.market-latest.v2',
-      provider: 'coingecko',
-      endpoint: '/coins/markets',
-      fetched_at: fetchedAt,
-      rank_source: 'CoinGecko market-cap rank',
-      note: 'Last VALID observation per asset. An asset missing from, or invalid in, the latest fetch keeps its older observation and timestamp.',
-      assets,
-    }));
+    // With nothing updated, latest.json stays as it was, its fetch time included.
+    if (updated.length) {
+      replaceFile(ws, ws.abs(LATEST_REL), jsonText({
+        schema_version: 'cr.market-latest.v2',
+        provider: 'coingecko',
+        endpoint: '/coins/markets',
+        fetched_at: fetchedAt,
+        rank_source: 'CoinGecko market-cap rank',
+        note: 'Last VALID observation per asset. An asset missing from, or invalid in, the latest fetch keeps its older observation and timestamp.',
+        assets,
+      }));
+    }
     const status = readStatus(ws);
     const lastObs = status.last_observation_at ? Date.parse(status.last_observation_at) : 0;
     const interval = (md.observation_interval_minutes || 55) * 60000;
@@ -362,8 +454,38 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
     const calls = callBudget(ws, status);
     calls.month_count += data.calls;
     calls.day_count += data.calls;
+    const rows = { tracked_ids: ids, missing_ids: missing, invalid_rows: invalid.slice(0, 50), skipped_older: skippedOlder, coverage: { tracked: ids.length, updated: updated.length, kept_prior: ids.length - updated.length } };
+    if (!updated.length) {
+      // An answer that updates no price is a failed refresh, not a success:
+      // last_success_at stays put, so the page never says "updated just now"
+      // while every price is old, and the usual failure backoff applies.
+      const failures = (status.consecutive_failures || 0) + 1;
+      nothingUsable = `CoinGecko answered, but none of the ${ids.length} tracked prices could be used (${invalid.length} invalid row(s), ${missing.length} not returned${skippedOlder.length ? `, ${skippedOlder.length} older than the stored price` : ''}). Prices keep their previous values.`;
+      replaceFile(ws, ws.abs(STATUS_REL), jsonText({
+        ...status,
+        schema_version: 'cr.market-status.v2',
+        state: 'failed',
+        last_attempt_at: attemptAt,
+        last_trigger: trigger,
+        last_error: nothingUsable,
+        consecutive_failures: failures,
+        next_allowed_at: laterIso(status.next_allowed_at, Date.now() + backoffMs(ws, failures)),
+        retry_after_until: gateOf(status).until,
+        ...rows,
+        calls,
+        note: 'Last valid prices in latest.json are kept and shown with their age.',
+      }));
+      return;
+    }
     const partial = invalid.length > 0 || missing.length > 0;
+    // Everything else in status.json (the market-context block, the last rate
+    // limit) is kept: dropping `context` made market context look never
+    // captured and refetch right after every price refresh.
+    const { note: failureNote, ...kept } = status; // eslint-disable-line no-unused-vars
+    // A rate limit another caller noted while this request was out stays in force.
+    const limitedSince = Boolean(status.rate_limit && Date.parse(status.rate_limit.at) >= Date.parse(attemptAt));
     replaceFile(ws, ws.abs(STATUS_REL), jsonText({
+      ...kept,
       schema_version: 'cr.market-status.v2',
       state: partial ? 'partial' : 'ok',
       last_attempt_at: attemptAt,
@@ -371,17 +493,16 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
       last_trigger: trigger,
       last_error: partial ? `${invalid.length} invalid row(s), ${missing.length} not returned` : null,
       consecutive_failures: 0,
-      next_allowed_at: null,
-      retry_after_until: null,
-      tracked_ids: ids,
-      missing_ids: missing,
-      invalid_rows: invalid.slice(0, 50),
-      skipped_older: skippedOlder,
-      coverage: { tracked: ids.length, updated: updated.length, kept_prior: ids.length - updated.length },
+      next_allowed_at: limitedSince ? status.next_allowed_at : null,
+      retry_after_until: limitedSince ? status.retry_after_until : null,
+      ...rows,
       calls,
       last_observation_at: observationWritten ? fetchedAt : status.last_observation_at || null,
     }));
   });
+  if (nothingUsable) {
+    return { status: 'failed', message: nothingUsable, tracked: ids.length, updated: 0, missing, invalid, calls: data.calls, observation_written: false };
+  }
   if (!fetchImpl) {
     try { await cacheLogos(ws, valid); } catch (_) { /* logos are optional */ }
   }
@@ -426,6 +547,11 @@ function logoFile(ws, id) {
   return f ? { abs: ws.abs(`${LOGO_DIR}/${f}`), type: { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }[f.split('.').pop()] } : null;
 }
 
+// Price freshness for the page and the logs. Besides the stored status:
+//   rate_limited  the shared CoinGecko gate is closed right now
+//   retry_at      when the next automatic try may happen (ISO), or null
+//   note          one plain line the page can show as it is, or null when
+//                 prices are fresh and nothing is waiting
 function freshness(ws, now = Date.now()) {
   const status = readStatus(ws);
   const staleAfter = ws.settings.freshness.price_stale_minutes || 90;
@@ -434,7 +560,19 @@ function freshness(ws, now = Date.now()) {
   let state = 'never_run';
   if (last) state = ageMin > staleAfter ? 'stale' : status.state === 'partial' ? 'fresh_partial' : 'fresh';
   if (status.state === 'failed') state = last ? (ageMin > staleAfter ? 'stale_failed' : 'fresh_last_failed') : 'failed';
-  return { ...status, freshness: state, age_minutes: ageMin, stale_after_minutes: staleAfter, calls: callBudget(ws, status) };
+  const gate = gateOf(status, now);
+  const backoffUntil = status.next_allowed_at && Date.parse(status.next_allowed_at) > now ? status.next_allowed_at : null;
+  const retryAt = gate.open ? backoffUntil : backoffUntil ? laterIso(gate.until, Date.parse(backoffUntil)) : gate.until;
+  const shown = last ? `showing prices from ${clock(status.last_success_at, now)}` : 'no prices yet';
+  const next = retryAt ? `; next try ${clock(retryAt, now)}` : '';
+  const cov = status.coverage || {};
+  let note = null;
+  if (!gate.open) note = `${gate.reason}; ${shown}${next}`;
+  else if (status.state === 'failed') note = `The last price refresh failed; ${shown}${next}`;
+  else if (state === 'stale') note = `Prices are from ${clock(status.last_success_at, now)}, older than ${staleAfter} minutes`;
+  else if (state === 'fresh_partial' && cov.tracked) note = `Prices updated ${clock(status.last_success_at, now)} for ${cov.updated} of ${cov.tracked} tracked assets`;
+  else if (state === 'never_run') note = ws.settings.market_data && ws.settings.market_data.enabled === false ? 'Market data is turned off in settings' : 'No prices fetched yet';
+  return { ...status, freshness: state, age_minutes: ageMin, stale_after_minutes: staleAfter, calls: callBudget(ws, status), rate_limited: !gate.open, retry_at: retryAt, note };
 }
 
 // 24-hour volume change from our own stored observations, only when a
@@ -456,4 +594,4 @@ function volumeChange24h(ws, id, current) {
   return { pct: (current.volume_24h_usd / best.vol - 1) * 100, compared_with: best.at, hours: Math.round(best.age * 10) / 10 };
 }
 
-module.exports = { refresh, searchCoins, readLatest, readStatus, trackedIds, freshness, fetchMarkets, validateRow, nextAllowed, volumeChange24h, logoFile, apiKey, callBudget, LATEST_REL, STATUS_REL, SOURCE_LABEL };
+module.exports = { refresh, searchCoins, readLatest, readStatus, trackedIds, freshness, fetchMarkets, validateRow, nextAllowed, noteRateLimit, rateLimitGate, retryAfterMs, clock, volumeChange24h, logoFile, apiKey, callBudget, LATEST_REL, STATUS_REL, SOURCE_LABEL, RATE_LIMIT_DEFAULT_MS };

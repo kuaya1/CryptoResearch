@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { tempWorkspace, addFixtureProject, importAllFixtures, hashTree } = require('./helpers');
 const market = require('../core/market');
+const jobs = require('../core/jobs');
 const { loadReports } = require('../core/reports');
 const { compareProject } = require('../core/compare');
 const { readJson, atomicWrite, jsonText } = require('../core/fsx');
@@ -77,4 +78,207 @@ test('only verified identities are sent to the price provider', async (t) => {
   assert.ok(ids.includes('example-payfi-fictional'));
   assert.ok(ids.includes('bitcoin'));
   assert.ok(!ids.includes('guess-token'));
+});
+
+// --- the shared CoinGecko rate-limit gate (every provider answer below is a stub)
+
+// One canned answer for every request, with an optional Retry-After header.
+function answer(status, { retryAfter = null, rows = [] } = {}) {
+  const calls = [];
+  const f = async (url) => {
+    calls.push(url);
+    return { ok: status === 200, status, headers: { get: (k) => (k.toLowerCase() === 'retry-after' ? retryAfter : null) }, json: async () => rows };
+  };
+  f.calls = calls;
+  return f;
+}
+
+const TIME = '(\\w{3} \\d{1,2}, )?\\d{1,2}:\\d{2} [AP]M';
+const msFromNow = (iso) => Date.parse(iso) - Date.now();
+const writeStatus = (root, patch) => {
+  const file = path.join(root, 'market-data', 'status.json');
+  atomicWrite(file, jsonText({ ...readJson(file, {}), ...patch }));
+};
+
+test('a 429 without Retry-After closes the shared gate for two minutes; Refresh prices waits for it and says when it will try again', async (t) => {
+  const { ws, root, cleanup } = tempWorkspace('mkt429');
+  t.after(cleanup);
+  addFixtureProject(ws);
+  enableMarket(ws, root);
+  await market.refresh(ws, { fetchImpl: fakeFetch({ 'example-payfi-fictional': 0.5, bitcoin: 70000 }) });
+  const okAt = market.readStatus(ws).last_success_at;
+  const limited = answer(429);
+  const r = await market.refresh(ws, { fetchImpl: limited, force: true });
+  assert.equal(r.status, 'failed');
+  assert.equal(r.rate_limited, true);
+  const st = market.readStatus(ws);
+  const wait = msFromNow(st.retry_after_until);
+  assert.ok(wait > 110000 && wait <= 120000, `the default wait, got ${wait} ms`);
+  assert.ok(Date.parse(st.next_allowed_at) >= Date.parse(st.retry_after_until), 'scheduled runners wait at least as long');
+  assert.deepEqual([st.rate_limit.source, st.rate_limit.retry_after_ms, st.rate_limit.strikes], ['prices', null, 1]);
+
+  const again = await market.refresh(ws, { fetchImpl: limited, force: true });
+  assert.equal(again.status, 'backoff', 'a manual refresh never skips a rate-limit wait');
+  assert.equal(again.rate_limited, true);
+  assert.equal(again.retry_at, st.retry_after_until);
+  assert.match(again.message, new RegExp(`CoinGecko is rate-limiting this server; next try ${TIME}\\.$`));
+  assert.equal(limited.calls.length, 1, 'no second request');
+  assert.equal(jobs.marketDue(ws, Date.now(), { foreground: true }), false);
+  assert.equal(jobs.marketDue(ws, Date.now(), { foreground: false }), false);
+
+  const f = market.freshness(ws);
+  assert.equal(f.rate_limited, true);
+  assert.equal(f.retry_at, st.next_allowed_at);
+  assert.equal(f.last_success_at, okAt, 'the last success is not moved');
+  assert.match(f.note, new RegExp(`^CoinGecko is rate-limiting this server; showing prices from ${TIME}; next try ${TIME}$`));
+
+  // Once the wait has passed, a refresh goes out and its success opens the gate.
+  writeStatus(root, { retry_after_until: new Date(Date.now() - 1000).toISOString(), next_allowed_at: new Date(Date.now() - 1000).toISOString() });
+  const back = await market.refresh(ws, { fetchImpl: fakeFetch({ 'example-payfi-fictional': 0.6, bitcoin: 71000 }) });
+  assert.equal(back.status, 'partial');
+  const after = market.readStatus(ws);
+  assert.equal(after.retry_after_until, null);
+  assert.equal(after.next_allowed_at, null);
+  assert.equal(after.consecutive_failures, 0);
+  assert.equal(after.note, undefined, 'the failure note is gone');
+  assert.equal(market.freshness(ws).rate_limited, false);
+});
+
+test('Retry-After is honored as sent, capped at the longest backoff; a running wait is never shortened; repeated 429s without it double the wait', async (t) => {
+  const { ws, root, cleanup } = tempWorkspace('mktra');
+  t.after(cleanup);
+  enableMarket(ws, root);
+  const near = (iso, ms) => Math.abs(msFromNow(iso) - ms) < 5000;
+  let g = market.noteRateLimit(ws, { retryAfterMs: 30000, source: 'identity search' });
+  assert.equal(g.open, false);
+  assert.ok(near(g.until, 30000));
+  g = market.noteRateLimit(ws, { retryAfterMs: 5000, source: 'prices' });
+  assert.ok(near(g.until, 30000), 'a shorter Retry-After never shortens the running wait');
+  g = market.noteRateLimit(ws, { retryAfterMs: 10 * 3600000, source: 'prices' });
+  assert.ok(near(g.until, 60 * 60000), 'capped at backoff_max_minutes (60)');
+
+  const { ws: ws2, root: root2, cleanup: c2 } = tempWorkspace('mktra2');
+  t.after(c2);
+  enableMarket(ws2, root2);
+  const waits = [];
+  for (let i = 0; i < 3; i++) {
+    market.noteRateLimit(ws2, { source: 'prices' });
+    waits.push(market.readStatus(ws2).rate_limit.wait_ms);
+  }
+  assert.deepEqual(waits, [120000, 240000, 480000]);
+  assert.ok(near(market.readStatus(ws2).retry_after_until, 480000));
+  // A 429 long after the last wait ended starts a new episode at two minutes.
+  const old = new Date(Date.now() - 20 * 60000).toISOString();
+  writeStatus(root2, { retry_after_until: old, next_allowed_at: old, rate_limit: { ...market.readStatus(ws2).rate_limit, until: old } });
+  market.noteRateLimit(ws2, { source: 'prices' });
+  assert.deepEqual([market.readStatus(ws2).rate_limit.strikes, market.readStatus(ws2).rate_limit.wait_ms], [1, 120000]);
+});
+
+test('an answer that updates no price is not a success: the last success time and latest.json stay as they were', async (t) => {
+  const { ws, root, cleanup } = tempWorkspace('mktzero');
+  t.after(cleanup);
+  addFixtureProject(ws);
+  enableMarket(ws, root);
+  await market.refresh(ws, { fetchImpl: fakeFetch({ 'example-payfi-fictional': 0.5, bitcoin: 70000 }) });
+  const before = market.readStatus(ws);
+  const latestFile = path.join(root, 'market-data', 'latest.json');
+  const latestBefore = fs.readFileSync(latestFile, 'utf8');
+
+  const empty = await market.refresh(ws, { fetchImpl: answer(200, { rows: [] }) });
+  assert.equal(empty.status, 'failed');
+  assert.equal(empty.updated, 0);
+  assert.match(empty.message, /none of the 4 tracked prices could be used \(0 invalid row\(s\), 4 not returned\)/);
+  let st = market.readStatus(ws);
+  assert.equal(st.state, 'failed');
+  assert.equal(st.last_success_at, before.last_success_at, 'last success unchanged');
+  assert.equal(st.last_error, empty.message);
+  assert.equal(st.consecutive_failures, 1);
+  assert.ok(Date.parse(st.next_allowed_at) > Date.now(), 'the usual failure backoff applies');
+  assert.equal(fs.readFileSync(latestFile, 'utf8'), latestBefore, 'latest.json untouched, its fetch time included');
+  const f = market.freshness(ws);
+  assert.equal(f.freshness, 'fresh_last_failed');
+  assert.match(f.note, new RegExp(`^The last price refresh failed; showing prices from ${TIME}; next try ${TIME}$`));
+
+  // Only invalid rows: the same.
+  const bad = await market.refresh(ws, { fetchImpl: answer(200, { rows: [{ id: 'bitcoin', current_price: 0, last_updated: new Date().toISOString() }] }), force: true });
+  assert.equal(bad.status, 'failed');
+  st = market.readStatus(ws);
+  assert.equal(st.consecutive_failures, 2);
+  assert.equal(st.last_success_at, before.last_success_at);
+  assert.equal(st.invalid_rows[0].id, 'bitcoin');
+
+  // A usable answer is a success again.
+  const ok = await market.refresh(ws, { fetchImpl: fakeFetch({ 'example-payfi-fictional': 0.6, bitcoin: 71000 }), force: true });
+  assert.equal(ok.status, 'partial');
+  st = market.readStatus(ws);
+  assert.equal(st.consecutive_failures, 0);
+  assert.equal(st.state, 'partial');
+  assert.match(market.freshness(ws).note, new RegExp(`^Prices updated ${TIME} for 2 of 4 tracked assets$`));
+});
+
+test('forcing skips a failure backoff, never a rate limit; a rate limit noted while a refresh was out stays after its success', async (t) => {
+  const { ws, root, cleanup } = tempWorkspace('mktforce');
+  t.after(cleanup);
+  enableMarket(ws, root);
+  await market.refresh(ws, { fetchImpl: async () => { throw new Error('getaddrinfo ENOTFOUND api.coingecko.com'); } });
+  assert.equal(market.nextAllowed(ws, market.readStatus(ws)).allowed, false, 'scheduled runners back off');
+  assert.equal(market.rateLimitGate(ws).open, true, 'being offline is not a rate limit');
+  const manual = await market.refresh(ws, { fetchImpl: fakeFetch({ bitcoin: 70000 }), force: true });
+  assert.equal(manual.status, 'partial', 'a manual refresh may skip a failure backoff');
+
+  // Another caller's 429 lands while this request is out.
+  const overlapping = async (url) => {
+    market.noteRateLimit(ws, { source: 'identity search' });
+    return fakeFetch({ bitcoin: 70500 })(url);
+  };
+  const r = await market.refresh(ws, { fetchImpl: overlapping, force: true });
+  assert.equal(r.status, 'partial');
+  assert.equal(market.rateLimitGate(ws).open, false, 'the other caller\'s rate limit is kept');
+  const blocked = answer(200, { rows: [] });
+  assert.equal((await market.refresh(ws, { fetchImpl: blocked, force: true })).status, 'backoff');
+  assert.equal(blocked.calls.length, 0);
+});
+
+test('a 429 on identity search closes the shared gate; search, prices and market context then wait without calling', async (t) => {
+  const { ws, root, cleanup } = tempWorkspace('mktsearch429');
+  t.after(cleanup);
+  enableMarket(ws, root);
+  const limited = answer(429, { retryAfter: '45' });
+  const r = await market.searchCoins(ws, 'allo', { fetchImpl: limited });
+  assert.equal(r.status, 'failed');
+  assert.equal(r.rate_limited, true);
+  assert.match(r.message, new RegExp(`^CoinGecko is rate-limiting this server; next try ${TIME}\\.$`));
+  const st = market.readStatus(ws);
+  assert.equal(st.calls.month_count, 1, 'the call is counted');
+  assert.equal(st.rate_limit.source, 'identity search');
+  assert.equal(st.rate_limit.retry_after_ms, 45000);
+  assert.ok(Math.abs(msFromNow(st.retry_after_until) - 45000) < 5000);
+  const again = await market.searchCoins(ws, 'allo', { fetchImpl: limited });
+  assert.equal(again.status, 'backoff');
+  assert.equal((await market.refresh(ws, { fetchImpl: limited, force: true })).status, 'backoff');
+  assert.equal((await require('../core/cycle').refreshContext(ws, { fetchImpl: limited, force: true })).status, 'backoff');
+  assert.equal(limited.calls.length, 1, 'nothing else was sent');
+  assert.equal(market.readStatus(ws).calls.month_count, 1);
+});
+
+test('status notes use New York clock times, the date only for another day', (t) => {
+  const now = Date.parse('2026-10-03T04:35:00.000Z'); // 12:35 AM in New York (EDT)
+  assert.equal(market.clock('2026-10-03T04:29:58.000Z', now), '12:29 AM');
+  assert.equal(market.clock('2026-10-02T01:15:00.000Z', now), 'Oct 1, 9:15 PM');
+  assert.equal(market.clock(null, now), null);
+  const { ws, root, cleanup } = tempWorkspace('mktnote');
+  t.after(cleanup);
+  enableMarket(ws, root);
+  fs.mkdirSync(path.join(root, 'market-data'), { recursive: true });
+  // The state the Render log showed: last success 04:29:58Z, rate-limited until 04:37:18Z.
+  writeStatus(root, { state: 'failed', last_success_at: '2026-10-03T04:29:58.000Z', last_error: 'CoinGecko responded HTTP 429 (rate limited)', consecutive_failures: 1, retry_after_until: '2026-10-03T04:37:18.000Z', next_allowed_at: '2026-10-03T04:37:18.000Z', rate_limit: { at: '2026-10-03T04:34:58.000Z', source: 'prices', http_status: 429, retry_after_ms: null, wait_ms: 140000, strikes: 1, until: '2026-10-03T04:37:18.000Z' } });
+  const f = market.freshness(ws, now);
+  assert.equal(f.freshness, 'fresh_last_failed');
+  assert.equal(f.rate_limited, true);
+  assert.equal(f.retry_at, '2026-10-03T04:37:18.000Z');
+  assert.equal(f.note, 'CoinGecko is rate-limiting this server; showing prices from 12:29 AM; next try 12:37 AM');
+  const later = market.freshness(ws, Date.parse('2026-10-03T04:40:00.000Z'));
+  assert.equal(later.rate_limited, false);
+  assert.equal(later.retry_at, null);
+  assert.equal(later.note, 'The last price refresh failed; showing prices from 12:29 AM');
 });
