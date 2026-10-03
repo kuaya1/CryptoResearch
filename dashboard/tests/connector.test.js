@@ -778,6 +778,10 @@ test('connector: with paid APIs set up, "all three models" runs ChatGPT and Gemi
   assert.match(st.data.research.limits_note, /not hard limits/);
   assert.match(st.data.message, /^The desk runs /);
   assert.doesNotMatch(st.text, /test-openai-key-fictional|test-gemini-key-fictional/, 'never a key');
+  // With a project, desk_status also preflights its open run (read-only).
+  const st2 = await tool(d, claude.access, 'desk_status', { project_id: pid });
+  assert.equal(st2.data.preflight.run_id, runId);
+  assert.equal(st2.data.preflight.jobs.claude.note, 'with its assistant');
   await waitFor(() => {
     const r = research.loadRun(d.ws, pid, runId);
     return ['completed', 'failed'].includes(r.jobs.chatgpt.state) && ['completed', 'failed'].includes(r.jobs.gemini.state);
@@ -1221,4 +1225,155 @@ test('connector: a job that waited for ChatGPT goes to its API once the key is s
   await tool(d, claude.access, 'start_research', { project_id: pid, owner_request: 'all three once more (FICTIONAL)', models: 'all' });
   await new Promise((r) => setTimeout(r, 800));
   assert.equal(posts.length, 1, 'sent once');
+});
+
+// The Aleo acceptance pilot, rehearsed against stand-ins for both providers
+// (2026-10-03): the exact path the live pilot takes, with a restart while
+// both requests are out. Fictional keys and answers; nothing leaves this PC.
+function pilotProviders(d, pid, runId, { geminiOutcome = 'completed' } = {}) {
+  const calls = { openaiPosts: [], geminiPosts: [], polls: 0 };
+  let finish = false;
+  const run = () => research.loadRun(d.ws, pid, runId);
+  const json = (status, body, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
+  const f = async (url, init = {}) => {
+    const u = String(url);
+    const method = init.method || 'GET';
+    if (u === 'https://api.openai.com/v1/responses' && method === 'POST') {
+      calls.openaiPosts.push(JSON.parse(init.body));
+      return json(200, { id: 'resp_pilot_gpt', status: 'queued', model: 'gpt-6.1-sol' }, { 'x-request-id': 'req_pilot_gpt_create' });
+    }
+    if (u === 'https://api.openai.com/v1/responses/resp_pilot_gpt' && method === 'GET') {
+      calls.polls += 1;
+      if (!finish) return json(200, { id: 'resp_pilot_gpt', status: 'in_progress' });
+      return json(200, { id: 'resp_pilot_gpt', model: 'gpt-6.1-sol', status: 'completed', output: [{ type: 'web_search_call', action: { type: 'search', query: 'x' } }, { type: 'web_search_call', action: { type: 'search', query: 'y' } }, { type: 'message', content: [{ type: 'output_text', text: mockReport(d.ws, 'chatgpt', run()) }] }], usage: { input_tokens: 41000, output_tokens: 14000 } }, { 'x-request-id': 'req_pilot_gpt_done' });
+    }
+    if (u === 'https://generativelanguage.googleapis.com/v1beta/interactions' && method === 'POST') {
+      calls.geminiPosts.push(JSON.parse(init.body));
+      return json(200, { id: 'int_pilot_gem', status: 'in_progress', model: 'gemini-3.1-pro-preview' }, { 'x-goog-request-id': 'req_pilot_gem_create' });
+    }
+    if (u === 'https://generativelanguage.googleapis.com/v1beta/interactions/int_pilot_gem' && method === 'GET') {
+      calls.polls += 1;
+      if (!finish) return json(200, { id: 'int_pilot_gem', status: 'in_progress' });
+      if (geminiOutcome === 'refused') return json(200, { id: 'int_pilot_gem', model: 'gemini-3.1-pro-preview', status: 'failed', error: { code: 'FICTIONAL', message: 'FICTIONAL: the model could not finish' }, usage: { total_input_tokens: 9000, total_output_tokens: 300 } });
+      return json(200, { id: 'int_pilot_gem', model: 'gemini-3.1-pro-preview', status: 'completed', steps: [{ type: 'google_search_call', queries: ['a', 'b'] }, { type: 'google_search_call', queries: ['c'] }, { type: 'model_output', content: [{ type: 'text', text: mockReport(d.ws, 'gemini', run()) }] }], usage: { total_input_tokens: 20000, total_output_tokens: 10000 } });
+    }
+    throw new Error(`unexpected network call: ${method} ${u}`);
+  };
+  return { f, calls, done: () => { finish = true; } };
+}
+
+const reportBytes = (dir) => fs.readdirSync(dir).sort().map((n) => fs.readFileSync(path.join(dir, n)).toString('base64')).join('|');
+
+async function pilotSetup(t, label) {
+  const d = await desk(t, label);
+  withKeys(t, {});
+  const prevCheck = process.env.CR_BACKGROUND_CHECK_MS;
+  process.env.CR_BACKGROUND_CHECK_MS = '200';
+  t.after(() => { if (prevCheck === undefined) delete process.env.CR_BACKGROUND_CHECK_MS; else process.env.CR_BACKGROUND_CHECK_MS = prevCheck; });
+  const claude = await connect(d);
+  const pid = (await tool(d, claude.access, 'add_project', EXAMPLECOIN)).data.project.project_id;
+  // The morning: all three asked for before any key; Claude researched in Cowork and saved; ChatGPT and Gemini wait.
+  const first = await tool(d, claude.access, 'start_research', { project_id: pid, owner_request: 'Research Examplecoin with all three models (FICTIONAL)', models: 'all' });
+  const runId = first.data.run.run_id;
+  const cs = await tool(d, claude.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: mockReport(d.ws, 'claude', research.loadRun(d.ws, pid, runId)) });
+  assert.equal(cs.data.status, 'saved', cs.text);
+  const claudeDir = path.join(d.ws.root, 'projects', pid, 'reports', cs.data.report.report_id);
+  // The keys arrive on the desk (fictional values); its settings are the desk's defaults (v4).
+  process.env.OPENAI_API_KEY = 'test-openai-key-fictional';
+  process.env.GEMINI_API_KEY = 'test-gemini-key-fictional';
+  return { d, claude, pid, runId, claudeReportId: cs.data.report.report_id, claudeDir, claudeBytes: reportBytes(claudeDir) };
+}
+
+test('pilot rehearsal: with Claude saved in Cowork, one request sends only the two waiting models to their background APIs with the frozen prompt; a repeat sends nothing; after a restart both are collected by ID, never resent; each report is saved and graded on its own; no transaction', async (t) => {
+  const { d, claude, pid, runId, claudeReportId, claudeDir, claudeBytes } = await pilotSetup(t, 'pilot');
+  // Before anything is sent: the preflight (get_research) shows what would be sent and reserved.
+  const before = await tool(d, claude.access, 'get_research', { project_id: pid, include_prompt: false });
+  const pf = before.data.preflight;
+  assert.deepEqual(pf.would_send, ['chatgpt', 'gemini']);
+  assert.equal(pf.jobs.claude.note, `saved (${claudeReportId})`);
+  assert.equal(pf.jobs.chatgpt.model, 'gpt-6.1-sol');
+  assert.equal(pf.jobs.chatgpt.max_output_tokens, 48000);
+  assert.deepEqual(pf.jobs.chatgpt.search, { limit: 10, billing: 'per_search', capped_by_request: true });
+  assert.deepEqual(pf.jobs.gemini.search, { limit: 20, billing: 'per_query', capped_by_request: false });
+  assert.ok(pf.total_reservation_usd > 1.7 && pf.total_reservation_usd <= 3, `reservation ${pf.total_reservation_usd}`);
+  assert.equal(pf.admitted_now, true);
+  assert.equal(pf.prompt_sha256, research.loadRun(d.ws, pid, runId).prompt.sha256);
+  const sp = pilotProviders(d, pid, runId);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = sp.f;
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  // 1. The Cowork request: only the missing models start, in the same run.
+  const go = await tool(d, claude.access, 'start_research', { project_id: pid, owner_request: 'Research Examplecoin with all three models (FICTIONAL)', models: 'all' });
+  assert.equal(go.data.status, 'in_progress', go.text);
+  assert.equal(go.data.run.run_id, runId, 'the same run');
+  assert.match(go.data.message, /^ChatGPT and Gemini were waiting in research run run_\S+ for Examplecoin \(FICTIONAL\) \(started [^)]+\) and now run on their APIs in the background, with that run's saved prompt; no new run was started\./);
+  const submitted = () => { const r = research.loadRun(d.ws, pid, runId); return ['chatgpt', 'gemini'].every((p) => { const a = r.jobs[p].attempts[r.jobs[p].attempts.length - 1]; return a && a.phase === 'submitted'; }); };
+  await waitFor(submitted);
+  // The same saved prompt for both, with no other model's conclusions in it.
+  const prompt = fs.readFileSync(path.join(d.ws.root, research.loadRun(d.ws, pid, runId).prompt.path), 'utf8');
+  assert.equal(sp.calls.openaiPosts[0].input, prompt);
+  assert.equal(sp.calls.geminiPosts[0].input, prompt);
+  assert.ok(!prompt.includes(claudeReportId), 'Claude\'s report is not in the prompt');
+  assert.equal(sp.calls.openaiPosts[0].max_output_tokens, 48000);
+  assert.equal(sp.calls.openaiPosts[0].max_tool_calls, 10);
+
+  // 2. The same request again while both are running: same run, nothing sent twice.
+  const again = await tool(d, claude.access, 'start_research', { project_id: pid, owner_request: 'Research Examplecoin with all three models (FICTIONAL)', models: 'all' });
+  assert.equal(again.data.status, 'in_progress');
+  assert.equal(again.data.run.run_id, runId);
+  assert.match(again.data.message, /^Nothing new was started: ChatGPT and Gemini are already in research run/);
+  assert.match(again.data.message, /ChatGPT: running on the ChatGPT API in the background \(accepted at /);
+
+  // 3. An interruption (a deploy) while both are out; then the providers finish.
+  await d.restart();
+  sp.done();
+  await waitFor(() => { const r = research.loadRun(d.ws, pid, runId); return ['chatgpt', 'gemini'].every((p) => r.jobs[p].state === 'completed'); }, 30000);
+  assert.equal(sp.calls.openaiPosts.length, 1, 'ChatGPT sent once: collected by its ID after the restart');
+  assert.equal(sp.calls.geminiPosts.length, 1, 'Gemini sent once: collected by its ID after the restart');
+
+  // 4. Each original report saved and graded on its own; IDs, usage and costs recorded.
+  const r = research.loadRun(d.ws, pid, runId);
+  const a = (p) => r.jobs[p].attempts[r.jobs[p].attempts.length - 1];
+  assert.equal(a('chatgpt').response_id, 'resp_pilot_gpt');
+  assert.equal(a('gemini').response_id, 'int_pilot_gem');
+  assert.equal(a('chatgpt').cost_status, 'actual');
+  assert.equal(a('chatgpt').cost_actual_usd, 0.242, '41,000 in + 14,000 out + 2 searches at the desk\'s prices');
+  assert.equal(a('gemini').usage.search_calls, 3, 'every query counted from the answer');
+  assert.equal(a('gemini').cost_status, 'actual');
+  assert.equal(a('gemini').cost_actual_usd, 0.202, '20,000 in + 10,000 out + 3 queries');
+  assert.ok(a('chatgpt').reserved_usd + a('gemini').reserved_usd <= 3);
+  const cmp = await tool(d, claude.access, 'compare_reports', { project_id: pid });
+  assert.deepEqual(Object.keys(cmp.data.reports).sort(), ['chatgpt', 'claude', 'gemini']);
+  for (const p of ['chatgpt', 'claude', 'gemini']) {
+    assert.ok(cmp.data.reports[p].grade, `${p} graded`);
+    assert.match(cmp.data.reports[p].evidence_checks.summary, /These checks change no score\.|No structured claims to check\./);
+  }
+  assert.notEqual(cmp.data.reports.chatgpt.report_id, cmp.data.reports.gemini.report_id);
+  for (const p of ['chatgpt', 'gemini']) assert.equal(readJson(path.join(d.ws.root, 'projects', pid, 'reports', r.jobs[p].report_id, 'meta.json')).provider, p);
+  assert.equal(research.runStatus(r), 'completed');
+  // Claude's report is untouched; no holding was recorded.
+  assert.equal(reportBytes(claudeDir), claudeBytes);
+  assert.equal(require('../core/portfolio').loadTransactions(d.ws).length, 0, 'research never records a transaction');
+});
+
+test('pilot rehearsal: when one provider fails, the other model\'s report is saved and kept; the failure is recorded with its cost and never resent', async (t) => {
+  const { d, claude, pid, runId } = await pilotSetup(t, 'pilot-fail');
+  const sp = pilotProviders(d, pid, runId, { geminiOutcome: 'refused' });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = sp.f;
+  t.after(() => { globalThis.fetch = realFetch; });
+  await tool(d, claude.access, 'start_research', { project_id: pid, owner_request: 'Research Examplecoin with all three models (FICTIONAL)', models: 'all' });
+  sp.done();
+  await waitFor(() => { const r = research.loadRun(d.ws, pid, runId); return r.jobs.chatgpt.state === 'completed' && ['failed', 'uncertain'].includes(r.jobs.gemini.state); }, 30000);
+  const r = research.loadRun(d.ws, pid, runId);
+  assert.equal(r.jobs.gemini.state, 'failed');
+  assert.match(r.jobs.gemini.error, /Gemini reported the request failed \(FICTIONAL\)/);
+  assert.equal(r.jobs.gemini.attempts.length, 1, 'a billed failure is not retried');
+  assert.ok(r.jobs.chatgpt.report_id, 'ChatGPT\'s report is saved');
+  assert.equal(research.runStatus(r), 'partially_completed');
+  await new Promise((res) => setTimeout(res, 800));
+  assert.equal(sp.calls.geminiPosts.length, 1, 'never resent');
+  const cmp = await tool(d, claude.access, 'compare_reports', { project_id: pid });
+  assert.deepEqual(Object.keys(cmp.data.reports).sort(), ['chatgpt', 'claude']);
 });

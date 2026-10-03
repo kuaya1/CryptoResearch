@@ -156,8 +156,8 @@ const TOOLS = [
   {
     name: 'desk_status',
     title: 'Desk status: which models run automatically, limits and spend',
-    description: 'Read-only. Says which models research automatically on their paid API (and about what one attempt reserves), which need setup and what is missing (for example the OpenAI or Gemini API key, which only Eric adds in Render\'s environment: never ask for a key in chat), what their open jobs are doing, the research limits and spend so far (reservations, estimates and uncertain attempts count until reconciled), price freshness, the latest backup and the code revision the desk runs. Use it when Eric asks whether everything is set up, before telling him which models will run by themselves.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    description: 'Read-only. Says which models research automatically on their paid API (and about what one attempt reserves), which need setup and what is missing (for example the OpenAI or Gemini API key, which only Eric adds in Render\'s environment: never ask for a key in chat), what their open jobs are doing, the research limits and spend so far (reservations, estimates and uncertain attempts count until reconciled), price freshness, the latest backup and the code revision the desk runs. Use it when Eric asks whether everything is set up, before telling him which models will run by themselves. With project_id it also shows the preflight of that project\'s open run: for each job not yet sent, the model, token and search limits and the reservation for the run\'s saved prompt, and whether the limits admit them now (nothing is sent).',
+    inputSchema: { type: 'object', properties: { project_id: { type: 'string', description: 'Optional: a project whose open research run to preflight (lowercase ID, e.g. "aleo").' } }, additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
@@ -686,7 +686,7 @@ const handlers = {
       });
       return {
         status: 'in_progress',
-        message: `Nothing new was started: ${listLabels(toRun)} ${toRun.length === 1 ? 'is' : 'are'} already in research run ${host.run_id} for ${project.name} (started ${host.created_at}).${sentLine(sent)} ${progress.join('. ')}.${skipped.length ? ` ${skipped.map((s) => s.reason).join(' ')}` : ''} get_research shows their progress; if Eric wants it started over, call start_research again with restart: true.`,
+        message: `${sent.length ? `${listLabels(sent)} ${sent.length === 1 ? 'was' : 'were'} waiting in research run ${host.run_id} for ${project.name} (started ${host.created_at}) and now ${sent.length === 1 ? 'runs on its API' : 'run on their APIs'} in the background, with that run's saved prompt; no new run was started.` : `Nothing new was started: ${listLabels(toRun)} ${toRun.length === 1 ? 'is' : 'are'} already in research run ${host.run_id} for ${project.name} (started ${host.created_at}).`} ${progress.join('. ')}.${skipped.length ? ` ${skipped.map((s) => s.reason).join(' ')}` : ''} get_research shows their progress; if Eric wants it started over, call start_research again with restart: true.`,
         project: { project_id: id, name: project.name },
         run: view(host),
         skipped,
@@ -750,7 +750,7 @@ const handlers = {
     };
   },
 
-  desk_status(ws) {
+  desk_status(ws, args = {}) {
     const rev = require('./core/revision');
     const r = rev.revision();
     const ready = research.readiness(ws);
@@ -765,6 +765,7 @@ const handlers = {
       research: ready,
       prices,
       backups: { latest: last ? { name: last.name, created_at: last.created_at, hours_ago: ageH, status: last.status } : null, count: backups.length, offsite_key: require('./core/offsite').deskKey() ? 'set' : 'not set' },
+      ...(args && typeof args.project_id === 'string' && args.project_id ? { preflight: research.preflight(ws, pid(args)) || { note: 'No open research run for this project.' } } : {}),
       message: `The desk runs ${rev.revisionLine(r)}. ${ready.summary} Prices: ${f.freshness}${f.note ? ` (${f.note})` : ''}. ${last ? `Latest backup on the desk's own disk ${last.name}, ${ageH} h ago.` : 'No backup on the desk yet.'} Offsite copies: ${require('./core/offsite').deskKey() ? 'the backup key is set, so Eric\'s PC can pull them' : 'not set up (no CR_BACKUP_KEY on the desk)'}.`,
     };
   },
@@ -783,7 +784,9 @@ const handlers = {
       run = mine.length ? mine[0].run : research.openRunOf(ws, id) || research.listRuns(ws, id).find((r) => !r.broken) || null;
     }
     if (!run) return { status: 'none', message: `No research run for ${project.name} yet. Use start_research.` };
-    return { status: 'ok', project: { project_id: id, name: project.name }, run: runView(ws, id, run, ctx, { prompt: args.include_prompt !== false }) };
+    // Jobs not yet sent: what they would be sent with, and what they would reserve.
+    const pending = Object.values(run.jobs || {}).some((j) => (j.state === 'unconfigured' || j.state === 'queued') && !research.isAssistantJob(j));
+    return { status: 'ok', project: { project_id: id, name: project.name }, run: runView(ws, id, run, ctx, { prompt: args.include_prompt !== false }), ...(pending ? { preflight: research.preflight(ws, id, run.run_id) } : {}) };
   },
 
   save_research_draft(ws, args, ctx) {

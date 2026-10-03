@@ -404,6 +404,76 @@ function readiness(ws, now = new Date()) {
   };
 }
 
+// What a run's not-yet-sent paid jobs would be sent with, before anything is
+// sent: per model the route, model ID, bounds and the reservation for the
+// run's own frozen prompt, and whether the limits admit all of them now.
+// Read-only. A job already sent, done or with its assistant is listed with
+// its state only.
+function preflight(ws, projectId, runId = null) {
+  const run = runId ? loadRun(ws, projectId, runId) : openRunOf(ws, projectId);
+  if (!run || !run.jobs) return null;
+  let prompt = null;
+  try {
+    prompt = fs.readFileSync(ws.abs(run.prompt.path), 'utf8');
+  } catch (_) {
+    prompt = null;
+  }
+  const st = providerStatus(ws);
+  const jobs = {};
+  const wouldSend = [];
+  let total = 0;
+  for (const p of PROVIDERS) {
+    const job = run.jobs[p];
+    if (!job) continue;
+    const pending = (job.state === 'unconfigured' || job.state === 'queued') && !isAssistantJob(job);
+    if (!pending) {
+      jobs[p] = { state: job.state, mode: job.mode, attempts: (job.attempts || []).length, note: job.state === 'completed' ? `saved (${job.report_id})` : isAssistantJob(job) ? 'with its assistant' : 'already sent or finished: nothing new would be reserved' };
+      continue;
+    }
+    if (st[p].mode !== 'api' && st[p].mode !== 'mock') {
+      const need = setupNeeds(ws, p, st[p]);
+      jobs[p] = { state: job.state, route: 'setup_required', setup: need ? need.short : st[p].reason, note: 'nothing would be sent' };
+      continue;
+    }
+    const plan = prompt === null ? { ok: false, reason: 'the run\'s prompt file could not be read' } : callPlan(ws, p, prompt);
+    if (!plan.ok) {
+      jobs[p] = { state: job.state, route: 'automatic', error: plan.reason, note: 'nothing would be sent' };
+      continue;
+    }
+    const b = plan.bounds;
+    jobs[p] = {
+      state: job.state,
+      route: 'automatic',
+      model: providerConfig(ws, p).model || null,
+      api: b.route,
+      max_output_tokens: b.max_output_tokens,
+      requests_max: b.requests_max,
+      effort: b.effort,
+      search: b.search.enabled ? { limit: b.search.limit, billing: b.search.billing, capped_by_request: b.search.billing !== 'per_query' && b.search.billing !== null } : 'off',
+      deadline_minutes: b.deadline_minutes,
+      reservation_usd: plan.total_usd,
+      enforced_usd: plan.enforced_usd,
+      estimated_usd: plan.estimated_usd,
+      parts: plan.parts.map((x) => ({ part: x.part, basis: x.basis, usd: x.usd })),
+    };
+    wouldSend.push(p);
+    total = round4(total + plan.total_usd);
+  }
+  const check = wouldSend.length ? budgetCheck(ws, total, { runId: run.run_id }) : { ok: true };
+  return {
+    run_id: run.run_id,
+    prompt_version: run.prompt ? run.prompt.version : null,
+    prompt_sha256: run.prompt ? run.prompt.sha256 : null,
+    prompt_chars: prompt === null ? null : prompt.length,
+    jobs,
+    would_send: wouldSend,
+    total_reservation_usd: wouldSend.length ? total : 0,
+    admitted_now: Boolean(check.ok),
+    budget_note: check.ok ? (wouldSend.length ? `Within the limits: per run ${usd(ws.settings.research.budget.per_run_usd)}, per day ${usd(ws.settings.research.budget.daily_usd)}, per month ${usd(ws.settings.research.budget.monthly_usd)}.` : 'Nothing would be sent.') : check.reason,
+    note: 'A reservation is an estimate of the bounded cost, not a maximum bill; billed attempts are never retried automatically, and an uncertain one is never resent.',
+  };
+}
+
 // The reservation for one call: enforced parts (limits sent with the request)
 // plus estimated parts (what no request parameter caps). Not a maximum.
 function callPlan(ws, provider, promptText) {
@@ -2117,6 +2187,7 @@ module.exports = {
   runStatus,
   providerStatus,
   readiness,
+  preflight,
   setupNeeds,
   callBounds,
   callPlan,
