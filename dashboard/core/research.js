@@ -1464,6 +1464,27 @@ function addProviders(ws, projectId, runId, providers, { assistant = null, chann
   return { added: out.result.added, verified: out.verified };
 }
 
+// After a model saved its report for a project, its other jobs on that project
+// still waiting for an answer (another run asked for the same thing: same
+// horizon, same owner questions) are linked to that report instead of being
+// researched again. A job with different questions or horizon keeps waiting.
+function coverWaitingJobs(ws, projectId, provider, { runId, reportId }) {
+  const source = loadRun(ws, projectId, runId);
+  if (!source || !reportId) return [];
+  const same = (r) => r.horizon && source.horizon && r.horizon.text === source.horizon.text && (r.owner_instructions || null) === (source.owner_instructions || null);
+  const covered = [];
+  for (const { run } of waitingJobs(ws, projectId, provider)) {
+    if (run.run_id === runId || !same(run)) continue;
+    updateJob(ws, projectId, run.run_id, provider, (job) => {
+      if (job.state !== 'unconfigured') return;
+      const at = new Date().toISOString();
+      Object.assign(job, { state: 'completed', report_id: reportId, linked_at: at, link_method: `covered by the same model's report from ${runId}`, covered_by_run: runId, note: `Covered by ${PROVIDER_LABELS[provider]}'s report ${reportId} from run ${runId}, which answered the same request; not researched twice.` });
+    }, `Cover ${provider} in ${run.run_id} with ${reportId}`);
+    covered.push(run.run_id);
+  }
+  return covered;
+}
+
 // Research waiting for one model across the desk: jobs no API runs (they wait
 // for that model's assistant) and jobs its assistant took and has not finished.
 function pendingFor(ws, provider) {
@@ -1540,6 +1561,7 @@ module.exports = {
   openRunOf,
   adoptJob,
   addProviders,
+  coverWaitingJobs,
   pendingFor,
   readAssistantDraft,
   saveAssistantDraft,

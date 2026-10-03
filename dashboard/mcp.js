@@ -653,6 +653,9 @@ const handlers = {
     }
     const { latest, all } = reportsOf(ws, id, me);
     const saved = all.find((x) => x.report_id === r.report_id) || latest;
+    // Other runs that waited for this model on the same request now have its answer.
+    const covered = r.status === 'ingested' ? research.coverWaitingJobs(ws, id, me, { runId, reportId: r.report_id }) : [];
+    if (covered.length) r.note = `${r.note ? `${r.note} ` : ''}The same request was also waiting in ${covered.join(', ')}; ${covered.length === 1 ? 'that job is' : 'those jobs are'} linked to this report, not researched twice.`;
     const after = research.loadRun(ws, id, runId);
     const myState = after && after.jobs[me] ? after.jobs[me].state : null;
     const othersOpen = after ? PROVIDERS.filter((p) => p !== me && after.jobs[p] && research.OPEN_STATES.has(after.jobs[p].state)) : [];
