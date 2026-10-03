@@ -5,7 +5,7 @@
 
 const { readJson, jsonText, listDir, readJsonLines, fileInfo } = require('./fsx');
 const { listProjects, getProject } = require('./projects');
-const { loadReports, isEligible, reportSortKey, EVIDENCE_TAGS, VERDICTS } = require('./reports');
+const { loadReports, isEligible, reportSortKey, EVIDENCE_TAGS, VERDICTS, effectiveIssues } = require('./reports');
 const { compareProject, diffReports, latestByProvider } = require('./compare');
 const { checkModelTotal } = require('./scoring');
 const { gradeAssessment } = require('./rubrics');
@@ -47,7 +47,7 @@ function reportSummary(ws, r, project = null) {
   const a = r.assessment;
   const { grade, model_total } = gradeOf(ws, r);
   const ex = r.record.extraction || {};
-  const issues = ex.issues || [];
+  const issues = effectiveIssues(ex.issues);
   return {
     report_id: r.report_id,
     provider: r.meta.provider,
@@ -532,7 +532,7 @@ function projectDetailRaw(ws, id) {
         report_id: r.report_id,
         meta: r.meta,
         assessment: r.assessment,
-        extraction: r.record.extraction,
+        extraction: r.record.extraction ? { ...r.record.extraction, issues: effectiveIssues(r.record.extraction.issues) } : r.record.extraction,
         corrections: r.corrections,
         integrity: r.integrity,
         provenance: r.provenance,

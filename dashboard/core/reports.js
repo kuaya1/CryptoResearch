@@ -1134,6 +1134,16 @@ function normalizeAssessment(ws, raw, { prose = null, format, provider, runDefau
   };
 }
 
+// Stored extraction issues as the current report contract rates them. Reports
+// imported before cr-research-prompt@4 carry scenario-probability problems as
+// errors; probabilities are optional now and such problems are warnings. The
+// stored record is never changed: this applies when it is read.
+function effectiveIssues(issues) {
+  return (Array.isArray(issues) ? issues : []).map((i) => (i && i.severity === 'error' && /^scenarios(\.|$)/.test(i.field || '')
+    ? { ...i, severity: 'warning', severity_when_imported: 'error', message: `${i.message} (a warning under the current report contract: scenario probabilities are optional)` }
+    : i));
+}
+
 // The report's JSON as the schema check sees it: source types a known word
 // stands for are read as that type (the given words are listed once).
 function schemaView(raw) {
@@ -1364,6 +1374,7 @@ module.exports = {
   completeShape,
   provenanceOf,
   buildFromText,
+  effectiveIssues,
   validateCorrectionValue,
   applyCorrections,
   getPath,

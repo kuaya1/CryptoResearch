@@ -533,7 +533,7 @@ function healthLines(ws) {
       }
       const g = gradeAssessment(ws, r.assessment);
       if (!g || g.status === 'firm' || g.status === 'range') continue;
-      const issues = ((r.record.extraction || {}).issues || []);
+      const issues = require('./core/reports').effectiveIssues((r.record.extraction || {}).issues);
       const comp = Object.entries(r.assessment.investment_components || {})
         .filter(([, s]) => !s || !['scored', 'range'].includes(s.status) || (s.status === 'range' && !s.rationale))
         .map(([k, s]) => `${k}=${s ? s.status : 'missing'}${s && s.invalid_source !== undefined ? ` (given ${cut(JSON.stringify(s.invalid_source), 90)})` : s && s.missing_data ? ` (${cut(s.missing_data, 70)})` : ''}`);

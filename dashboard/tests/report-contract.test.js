@@ -206,3 +206,23 @@ test('evidence checks: an AI summary never verifies; critical claims need a prim
   const brief = detail.history.claude.find((x) => x.report_id === r.rep.report_id).evidence;
   assert.deepEqual(Object.keys(brief).sort(), ['critical', 'flagged', 'high', 'low', 'medium', 'summary']);
 });
+
+test('reports imported before @4 keep their stored scenario error, but every view rates it as the current contract does (a warning); the record is not changed', (t) => {
+  const { ws, root } = workspace(t, 'contract-old-scenario');
+  const r = importOne(ws, clone());
+  // What an import before @4 stored for a report without probabilities.
+  const file = path.join(root, r.rep.dir, 'report.json');
+  const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
+  rec.extraction.issues.push({ severity: 'error', field: 'scenarios', message: 'Not every scenario has a probability.' });
+  fs.writeFileSync(file, JSON.stringify(rec));
+  const before = fs.readFileSync(file);
+  const detail = require('../core/indexer').projectDetail(ws, PID);
+  const brief = detail.history.claude.find((x) => x.report_id === r.rep.report_id);
+  assert.equal(brief.errors, 0, 'not counted as an error');
+  const shown = detail.reports.find((x) => x.report_id === r.rep.report_id).extraction.issues.find((i) => i.field === 'scenarios');
+  assert.equal(shown.severity, 'warning');
+  assert.equal(shown.severity_when_imported, 'error');
+  assert.match(shown.message, /a warning under the current report contract: scenario probabilities are optional/);
+  assert.ok(fs.readFileSync(file).equals(before), 'the stored record is unchanged');
+  assert.equal(brief.grade.value, BASE_GRADE);
+});

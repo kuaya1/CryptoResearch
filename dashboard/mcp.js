@@ -314,7 +314,7 @@ function gradeGaps(ws, projectId, reportId) {
     if (s && s.invalid_source !== undefined) out.given = JSON.stringify(s.invalid_source).slice(0, 120);
     return out;
   });
-  const issues = ((rec.record && rec.record.extraction) || {}).issues || [];
+  const issues = require('./core/reports').effectiveIssues(((rec.record && rec.record.extraction) || {}).issues);
   const extraction_errors = issues.filter((i) => i.severity === 'error').slice(0, 5).map((i) => ({ field: i.field || null, message: i.message }));
   return { components, extraction_errors };
 }
