@@ -187,9 +187,11 @@ function callBounds(ws, provider) {
     else if (cfg.search_billing === 'per_request') billing = 'per_request';
     // Gemini 3 bills every query the model runs and no request parameter caps
     // them: max searches is then the number the reservation assumes, an
-    // estimate, and Google's project spend cap is the hard limit.
+    // estimate. Google's project spend cap is a second guard, not a hard
+    // limit: Google applies it with about ten minutes of billing delay and
+    // documents that long-running tasks can exceed it.
     else if (cfg.search_billing === 'per_query') billing = 'per_query';
-    else problems.push('a bound on Gemini searches: the Gemini API has no per-request search limit, so set max searches to 0, declare per-request search billing if your model bills grounding per prompt (Gemini 2.5 and older), or declare per-query billing (Gemini 3: every search query is billed; the desk then reserves max searches as an estimate and your Google project spend cap is the hard limit)');
+    else problems.push('a bound on Gemini searches: the Gemini API has no per-request search limit, so set max searches to 0, declare per-request search billing if your model bills grounding per prompt (Gemini 2.5 and older), or declare per-query billing (Gemini 3: every search query is billed; the desk then reserves max searches as an estimate, and a search count the answer does not report is never assumed: the attempt keeps counting at its reservation until you reconcile it. A Google project spend cap is a useful second guard, but Google applies it with about ten minutes of delay, so it is not a hard limit)');
   }
   const perSearch = cfg.search_result_tokens_estimate === undefined || cfg.search_result_tokens_estimate === null ? SEARCH_RESULT_TOKENS : cfg.search_result_tokens_estimate;
   if (!Number.isInteger(perSearch) || perSearch < 0) problems.push('a search result token estimate (a whole number)');
@@ -233,7 +235,7 @@ function describeBounds(b) {
   else if (b.search.billing === 'per_request') enforced.push('one search fee per request (declared per-request billing; the Gemini API cannot cap the number of searches)');
   else if (b.search.billing !== 'per_query') enforced.push(`at most ${b.search.limit} searches (${b.search.control} sent with the request)`);
   const estimated = ['prompt tokens'];
-  if (b.search.billing === 'per_query') estimated.push(`the search fee, reserved for about ${b.search.limit} searches (Gemini bills every query and cannot cap them; your Google project spend cap is the hard limit)`);
+  if (b.search.billing === 'per_query') estimated.push(`the search fee, reserved for about ${b.search.limit} searches (Gemini bills every query and cannot cap them; if the answer does not report the count, the attempt keeps counting at its reservation until reconciled)`);
   if (b.search.enabled) estimated.push('search results billed as input tokens (no request parameter caps them)');
   return { enforced, estimated };
 }
@@ -310,18 +312,52 @@ function estimateCostUsd(ws, provider, promptText) {
 
 // Cost from the usage the provider reported, at the prices the attempt was
 // admitted with. null when usage is incomplete (the reservation then counts).
-function actualCostUsd(ws, provider, usage, attempt = null) {
+// Cost from the usage the provider reported, at the prices the attempt was
+// admitted with:
+//   complete    every billable quantity was reported: usd is the actual cost.
+//   incomplete  tokens were reported but not everything billable (usually the
+//               number of searches): usd is an ESTIMATE, the known part plus
+//               the unknown part at what the attempt reserved for it (for
+//               Gemini, which cannot cap searches, the reserved search
+//               estimate; for a capped search, the cap). It is never presented
+//               as the actual cost, and the attempt keeps counting at no less
+//               than its reservation until the owner reconciles it.
+//   unknown     no usable token counts: usd is null (the reservation counts).
+function costFromUsage(ws, provider, usage, attempt = null) {
   const prices = (attempt && attempt.prices) || callBounds(ws, provider).prices;
-  if (!usage || typeof usage.input_tokens !== 'number' || typeof usage.output_tokens !== 'number') return null;
-  if (!isMoney(prices.input_usd_per_mtok) || !isMoney(prices.output_usd_per_mtok)) return null;
+  if (!usage || typeof usage.input_tokens !== 'number' || typeof usage.output_tokens !== 'number') return { status: 'unknown', usd: null, known_usd: null, unknown: ['tokens'], held_usd: null };
+  if (!isMoney(prices.input_usd_per_mtok) || !isMoney(prices.output_usd_per_mtok)) return { status: 'unknown', usd: null, known_usd: null, unknown: ['prices'], held_usd: null };
   const search = attempt && attempt.bounds ? attempt.bounds.search : null;
   const calls = typeof usage.search_calls === 'number' ? usage.search_calls : null;
   let fee = 0;
+  let held = 0;
+  const unknown = [];
   if (isMoney(prices.search_usd_per_call)) {
-    if (search && search.billing === 'per_request') fee = prices.search_usd_per_call * (calls === null ? 1 : Math.min(1, calls));
-    else if (search && search.enabled) fee = prices.search_usd_per_call * (calls === null ? search.limit : calls);
-    else if (calls !== null) fee = prices.search_usd_per_call * calls;
+    if (calls !== null) fee = prices.search_usd_per_call * (search && search.billing === 'per_request' ? Math.min(1, calls) : calls);
+    else if (search && search.enabled) {
+      // The provider did not say how many searches ran.
+      unknown.push('search_calls');
+      if (search.billing === 'per_request') held = prices.search_usd_per_call;
+      else if (search.billing === 'per_query') {
+        const part = attempt && attempt.estimate && Array.isArray(attempt.estimate.parts) ? attempt.estimate.parts.find((p) => p.part === 'search_fee') : null;
+        held = part && isMoney(part.usd) ? part.usd : prices.search_usd_per_call * search.limit;
+      } else held = prices.search_usd_per_call * search.limit;
+    }
   }
+  const known = tokenCost(usage, prices) + fee;
+  return unknown.length
+    ? { status: 'incomplete', usd: round4(known + held), known_usd: round4(known), unknown, held_usd: round4(held) }
+    : { status: 'complete', usd: round4(known), known_usd: round4(known), unknown, held_usd: 0 };
+}
+
+// The actual cost, only when every billable quantity was reported; otherwise
+// null (the attempt then counts at its reservation, or its estimate if higher).
+function actualCostUsd(ws, provider, usage, attempt = null) {
+  const c = costFromUsage(ws, provider, usage, attempt);
+  return c.status === 'complete' ? c.usd : null;
+}
+
+function tokenCost(usage, prices) {
   // Cached input (OpenAI) is part of input_tokens and billed at the cache-read
   // price where one is configured; otherwise at the full input price.
   const cachedIn = typeof usage.cached_input_tokens === 'number' && isMoney(prices.cache_read_usd_per_mtok) ? Math.min(usage.cached_input_tokens, usage.input_tokens) : 0;
@@ -332,18 +368,24 @@ function actualCostUsd(ws, provider, usage, attempt = null) {
   const pcw = isMoney(prices.cache_write_usd_per_mtok) ? prices.cache_write_usd_per_mtok : prices.input_usd_per_mtok * 1.25;
   const pcr = isMoney(prices.cache_read_usd_per_mtok) ? prices.cache_read_usd_per_mtok : prices.input_usd_per_mtok * 0.1;
   const cachedCost = cachedIn ? (cachedIn / 1e6) * prices.cache_read_usd_per_mtok : 0;
-  return round4(((usage.input_tokens - cachedIn) / 1e6) * prices.input_usd_per_mtok + cachedCost + (cw / 1e6) * pcw + (cr / 1e6) * pcr + (usage.output_tokens / 1e6) * prices.output_usd_per_mtok + fee);
+  return ((usage.input_tokens - cachedIn) / 1e6) * prices.input_usd_per_mtok + cachedCost + (cw / 1e6) * pcw + (cr / 1e6) * pcr + (usage.output_tokens / 1e6) * prices.output_usd_per_mtok;
 }
 
-// What one attempt counts against the limits: the reconciled amount, else the
-// actual cost, else its reservation. A provably unsent attempt counts nothing.
+// What one attempt counts against the limits:
+//   reconciled  what the owner recorded from the provider's billing
+//   actual      complete usage, priced at the attempt's prices
+//   estimated   usage reported but incomplete: the estimate, and never less
+//               than the reservation, until it is reconciled
+//   reserved    no usage yet (or none at all): the reservation
+// A provably unsent attempt counts nothing.
 function attemptCharge(a) {
   if (!a) return { usd: 0, basis: 'none' };
   if (a.phase === 'not_sent') return { usd: 0, basis: 'not_sent' };
-  if (a.phase === 'reconciled' && isMoney(a.reconciled_usd)) return { usd: a.reconciled_usd, basis: 'reconciled' };
+  if (isMoney(a.reconciled_usd) && (a.phase === 'reconciled' || a.reconciled_at)) return { usd: a.reconciled_usd, basis: 'reconciled' };
   if (isMoney(a.cost_actual_usd)) return { usd: a.cost_actual_usd, basis: 'actual' };
-  if (isMoney(a.reserved_usd)) return { usd: a.reserved_usd, basis: 'reserved' };
-  if (isMoney(a.cost_estimate_usd)) return { usd: a.cost_estimate_usd, basis: 'reserved' };
+  const reserved = isMoney(a.reserved_usd) ? a.reserved_usd : isMoney(a.cost_estimate_usd) ? a.cost_estimate_usd : null;
+  if (isMoney(a.cost_usage_estimate_usd)) return { usd: round4(Math.max(a.cost_usage_estimate_usd, reserved || 0)), basis: 'estimated' };
+  if (reserved !== null) return { usd: reserved, basis: 'reserved' };
   return { usd: 0, basis: 'none' };
 }
 
@@ -392,8 +434,8 @@ function allCharges(ws) {
           const cap = c.basis === 'reserved' && a.attempt_id ? captured.get(a.attempt_id) : null;
           if (cap && cap.run_id === runId) {
             const u = cap.result ? cap.result.usage : cap.error ? cap.error.usage : null;
-            const actual = u ? actualCostUsd(ws, job.provider, u, a) : null;
-            if (isMoney(actual) && actual > c.usd) c = { usd: actual, basis: 'captured_actual' };
+            const cost = u ? costFromUsage(ws, job.provider, u, a) : null;
+            if (cost && isMoney(cost.usd) && cost.usd > c.usd) c = { usd: cost.usd, basis: cost.status === 'complete' ? 'captured_actual' : 'captured_estimate' };
           }
           out.push({ key, run_id: runId, project_id: pid, provider: job.provider, n: a.n, attempt_id: a.attempt_id || null, at: a.started_at || null, phase: a.phase || null, usd: c.usd, basis: c.basis });
         }
@@ -415,6 +457,9 @@ function spendSoFar(ws, now = new Date(), { runId = null } = {}) {
   let monthly = 0;
   let run = 0;
   let open = 0;
+  let estimated = 0;
+  let estimatedN = 0;
+  let actual = 0;
   let uncertain = 0;
   for (const c of charges) {
     const t = c.at ? Date.parse(c.at) : NaN;
@@ -423,9 +468,17 @@ function spendSoFar(ws, now = new Date(), { runId = null } = {}) {
     if (d.slice(0, 7) === month) monthly += c.usd;
     if (runId && c.run_id === runId) run += c.usd;
     if (c.basis === 'reserved' || c.basis === 'ledger_estimate') open += c.usd;
+    if (c.basis === 'estimated' || c.basis === 'captured_estimate') {
+      estimated += c.usd;
+      estimatedN += 1;
+    }
+    if (['actual', 'ledger_actual', 'captured_actual', 'reconciled'].includes(c.basis) && d.slice(0, 7) === month) actual += c.usd;
     if (c.phase === 'uncertain') uncertain += 1;
   }
-  const out = { daily: round4(daily), monthly: round4(monthly), day, month, calls: charges.length, open_reservations_usd: round4(open), uncertain_attempts: uncertain };
+  // What the totals are made of: reservations (calls not answered yet, or
+  // uncertain), estimates (answers with incomplete usage, held at least at
+  // their reservation) and known costs (actual or reconciled).
+  const out = { daily: round4(daily), monthly: round4(monthly), day, month, calls: charges.length, open_reservations_usd: round4(open), estimated_usd: round4(estimated), estimated_attempts: estimatedN, known_month_usd: round4(actual), uncertain_attempts: uncertain };
   if (runId) out.run = round4(run);
   return out;
 }
@@ -632,7 +685,7 @@ function updateJob(ws, projectId, runId, provider, mutate, summary, type = 'rese
 // again, so the reservation, release and actual lines are recorded once per
 // attempt. An actual cost that differs from the one already recorded for the
 // same attempt is kept as an explicit adjustment that replaces it.
-const ONCE_PER_ATTEMPT = new Set(['reservation', 'release', 'actual']);
+const ONCE_PER_ATTEMPT = new Set(['reservation', 'release', 'actual', 'usage_incomplete']);
 
 function ledger(ws, run, job, a, entry) {
   if (job.mode !== 'api') return;
@@ -726,7 +779,10 @@ function retryJob(ws, projectId, runId, provider) {
 }
 
 function reconcilable(a) {
-  if (!a || ['reconciled', 'not_sent', 'imported', 'responded', 'reserved', 'dispatched', 'submitted'].includes(a.phase)) return false;
+  if (!a || a.reconciled_at) return false;
+  // An answer whose usage was incomplete: its cost is only an estimate.
+  if (a.cost_status === 'estimated' && ['responded', 'imported', 'errored'].includes(a.phase)) return true;
+  if (['reconciled', 'not_sent', 'imported', 'responded', 'reserved', 'dispatched', 'submitted'].includes(a.phase)) return false;
   if (a.phase === 'uncertain') return true;
   if (a.phase === 'errored') return !isMoney(a.cost_actual_usd);
   // An older attempt that ended without a known cost.
@@ -750,14 +806,18 @@ function reconcileAttempt(ws, projectId, runId, provider, { attempt = null, char
       ? [...list].reverse().find(reconcilable)
       : list.find((a) => a.attempt_id === attempt || String(a.n) === String(attempt));
     if (!target) throw new OpError('NOT_FOUND', attempt ? `${runId} has no ${provider} attempt ${attempt}.` : `No ${PROVIDER_LABELS[provider]} attempt in ${runId} needs reconciling.`);
-    if (target.phase === 'reconciled') {
+    if (target.phase === 'reconciled' || target.reconciled_at) {
       if (units(target.reconciled_usd) === units(amount)) return { message: `Attempt #${target.n} is already reconciled at ${usd(amount)}.`, attempt: target.n };
       throw new OpError('CONFLICT', `Attempt #${target.n} was already reconciled at ${usd(target.reconciled_usd)} on ${target.reconciled_at}.`);
     }
-    if (!reconcilable(target)) throw new OpError('CONFLICT', `Attempt #${target.n} is ${String(target.phase || target.outcome || 'in progress').replace(/_/g, ' ')}; only an uncertain attempt, or a provider error without usage, can be reconciled.`);
+    if (!reconcilable(target)) throw new OpError('CONFLICT', `Attempt #${target.n} is ${String(target.phase || target.outcome || 'in progress').replace(/_/g, ' ')}; only an uncertain attempt, a provider error without usage, or an answer whose usage was incomplete can be reconciled.`);
     const before = attemptCharge(target).usd;
     const at = new Date().toISOString();
-    Object.assign(target, { phase_before_reconcile: target.phase || null, phase: 'reconciled', reconciled_usd: amount, reconciled_at: at, reconciled_by: ws.actor || null, reconcile_reason: why });
+    // An answer that became a report keeps its phase (and its link to the
+    // report); only its cost becomes the reconciled amount.
+    const keepPhase = target.cost_status === 'estimated' && ['responded', 'imported'].includes(target.phase);
+    Object.assign(target, { ...(keepPhase ? {} : { phase_before_reconcile: target.phase || null, phase: 'reconciled' }), reconciled_usd: amount, reconciled_at: at, reconciled_by: ws.actor || null, reconcile_reason: why });
+    if (target.cost_status === 'estimated' || target.cost_status === 'unknown') target.cost_status = 'reconciled';
     if (job.state === 'uncertain' && !uncertainOf(job).length) {
       job.state = 'failed';
       job.error = `No answer was saved for attempt #${target.n}; you recorded ${amount ? `a charge of ${usd(amount)}` : 'no charge'}. Retry to ask again.`;
@@ -952,7 +1012,7 @@ function outcomePhase(job, result, error) {
 }
 
 // Records an outcome on the attempt and moves the job on (inside an operation).
-function applyOutcome(ws, run, job, a, { result, error, finishedAt, rel, fileSha, phase, actual }) {
+function applyOutcome(ws, run, job, a, { result, error, finishedAt, rel, fileSha, phase, actual, cost = null }) {
   Object.assign(a, { phase, finished_at: finishedAt, outcome: result ? 'response_saved' : phase === 'not_sent' ? 'not_sent' : error.kind || 'error', response_path: rel, response_sha256: fileSha });
   if (result) {
     const at = result.attested || {};
@@ -961,6 +1021,14 @@ function applyOutcome(ws, run, job, a, { result, error, finishedAt, rel, fileSha
     Object.assign(a, { error: error.message, http_status: error.httpStatus || null, request_id: error.requestId || null, usage: error.usage || null, cost_actual_usd: actual });
     if (error.partial_usage) a.partial_usage = error.partial_usage;
   }
+  // How certain the cost is: actual (complete usage), estimated (usage
+  // reported but incomplete: never released below the reservation), or not
+  // known (no usage: the reservation counts).
+  if (actual !== null) a.cost_status = 'actual';
+  else if (cost && cost.status === 'incomplete') {
+    Object.assign(a, { cost_status: 'estimated', cost_usage_estimate_usd: cost.usd, cost_known_part_usd: cost.known_usd, cost_unknown: cost.unknown, cost_held_for_unknown_usd: cost.held_usd });
+    a.cost_note = `The provider did not report ${cost.unknown.map((u) => (u === 'search_calls' ? 'how many searches ran' : u)).join(' or ')}: the cost is an estimate (${usd(cost.usd)}: ${usd(cost.known_usd)} from the reported usage plus ${usd(cost.held_usd)} kept for what was not reported), and it counts at no less than its reservation until you reconcile it from the provider's billing.`;
+  } else if (phase !== 'not_sent' && job.mode === 'api') a.cost_status = 'unknown';
   if (actual !== null && isMoney(a.reserved_usd) && units(actual) > units(a.reserved_usd)) a.overrun_usd = round4(actual - a.reserved_usd);
   if (error && error.rejected && actual === 0) a.not_billed = 'refused by the provider before any work (400-level answer), which is not billed';
   const left = job.attempts.length < job.max_attempts;
@@ -997,6 +1065,9 @@ function applyOutcome(ws, run, job, a, { result, error, finishedAt, rel, fileSha
   }
   if (phase === 'not_sent') ledger(ws, run, job, a, { actual_usd: 0, kind: 'release', note: 'not sent; reservation released' });
   else if (actual !== null) ledger(ws, run, job, a, { actual_usd: actual, replaces_estimate: true, kind: 'actual', usage: a.usage || null, ...(a.not_billed ? { note: a.not_billed } : {}) });
+  // Incomplete usage is not an actual cost: the log records the conservative
+  // figure the limits count (never below the reservation) as an estimate.
+  else if (a.cost_status === 'estimated') ledger(ws, run, job, a, { estimate_usd: attemptCharge(a).usd, kind: 'usage_incomplete', usage: a.usage || null, unknown: a.cost_unknown, note: 'usage reported but incomplete; counted as an estimate, not released below the reservation, until reconciled' });
 }
 
 // One verified write for the outcome: the response file (answer or error
@@ -1016,8 +1087,10 @@ function recordOutcome(ws, run, provider, attemptId, { result = null, error = nu
     if (!awaitingOutcome(a)) return { phase: a.phase, state: job.state, error: job.error, n: a.n, already: true, capture_sha256: a.capture_sha256 || null };
     const phase = outcomePhase(job, result, error);
     const usage = result ? result.usage : error && error.usage ? error.usage : null;
-    // A 400-level refusal without usage was answered before any work: not billed.
-    const actual = job.mode === 'api' && usage ? actualCostUsd(ws, provider, usage, a) : job.mode === 'api' && error && error.rejected && phase === 'errored' ? 0 : null;
+    // A 400-level refusal without usage was answered before any work: not
+    // billed. Otherwise the cost is actual only when the usage is complete.
+    const cost = job.mode === 'api' && usage ? costFromUsage(ws, provider, usage, a) : null;
+    const actual = cost ? (cost.status === 'complete' ? cost.usd : null) : job.mode === 'api' && error && error.rejected && phase === 'errored' ? 0 : null;
     const payload = {
       schema_version: 'cr.research-response.v1',
       run_id: doc.run_id,
@@ -1035,6 +1108,8 @@ function recordOutcome(ws, run, provider, attemptId, { result = null, error = nu
       usage: usage || null,
       cost_estimate_usd: a.cost_estimate_usd ?? null,
       cost_actual_usd: actual,
+      cost_status: actual !== null ? 'actual' : cost && cost.status === 'incomplete' ? 'estimated' : job.mode === 'api' ? 'unknown' : null,
+      cost_usage_estimate_usd: cost && cost.status === 'incomplete' ? cost.usd : null,
       error: error ? { kind: error.kind || 'error', message: error.message, http_status: error.httpStatus || null, request_id: error.requestId || null, code: error.code || null } : null,
       text: result ? result.text : null,
       text_sha256: result ? sha256(result.text) : null,
@@ -1045,7 +1120,7 @@ function recordOutcome(ws, run, provider, attemptId, { result = null, error = nu
     let rel = responseRel(doc, provider, a.n);
     if (exists(ws.abs(rel))) rel = rel.replace(/\.json$/, `.${a.attempt_id}.json`);
     op.write(rel, text, { mode: 'create' });
-    applyOutcome(ws, doc, job, a, { result, error, finishedAt, rel, fileSha: sha256(text), phase, actual });
+    applyOutcome(ws, doc, job, a, { result, error, finishedAt, rel, fileSha: sha256(text), phase, actual, cost });
     if (capture) Object.assign(a, { capture_id: capture.id, capture_sha256: capture.sha256 });
     if (captureError) a.capture_error = captureError.message || String(captureError);
     if (recoveredFrom) a.recovered_from = recoveredFrom;
@@ -1228,8 +1303,10 @@ async function recoverJob(ws, projectId, run, provider, { fetchImpl } = {}) {
     updateJob(ws, projectId, runId, provider, (jj, r) => {
       const a = lastAttempt(jj);
       const ph = outcomePhase(jj, res, err);
-      const actual = jj.mode === 'api' && (res ? res.usage : err.usage) ? actualCostUsd(ws, provider, res ? res.usage : err.usage, a) : null;
-      applyOutcome(ws, r, jj, a, { result: res, error: err, finishedAt: p.finished_at || at, rel, fileSha: found.sha256, phase: ph, actual });
+      const u = res ? res.usage : err.usage;
+      const cost = jj.mode === 'api' && u ? costFromUsage(ws, provider, u, a) : null;
+      const actual = cost && cost.status === 'complete' ? cost.usd : null;
+      applyOutcome(ws, r, jj, a, { result: res, error: err, finishedAt: p.finished_at || at, rel, fileSha: found.sha256, phase: ph, actual, cost });
       a.recovered_from = 'saved response found after the runner stopped; not sent again';
     }, `Recover saved ${provider} response in ${runId}`, 'research_recover');
     const after = loadRun(ws, projectId, runId);
@@ -1913,6 +1990,7 @@ module.exports = {
   callPlan,
   estimateCostUsd,
   actualCostUsd,
+  costFromUsage,
   attemptCharge,
   budgetCheck,
   spendSoFar,

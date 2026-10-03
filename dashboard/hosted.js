@@ -48,7 +48,8 @@ const MAX_FAILS_TOTAL = 100;
 //     bills every Google Search query the model runs (5,000 free a month
 //     across Gemini 3 models, then $14 per 1,000) and no request parameter
 //     caps them, so max searches is the number the reservation assumes (an
-//     estimate) and the Google project's spend cap is the hard limit.
+//     estimate). A Google project spend cap is a second guard, not a hard
+//     limit: Google applies it with about ten minutes of billing delay.
 //     gemini-2.5-pro (the v3 proposal) is now limited to earlier users.
 // ChatGPT and Gemini run in the provider's background (Responses background
 // mode, Interactions background execution) and are collected by ID, so a

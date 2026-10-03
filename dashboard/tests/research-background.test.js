@@ -201,9 +201,15 @@ test('background: still running at its time limit, it is cancelled at the provid
   assert.match(j.error, /had not finished after 5 minutes/);
   const a = lastA(j);
   assert.equal(a.phase, 'errored');
-  // 9,000 in + 1,000 out tokens; the cancelled response does not say how many
-  // searches ran, so they count at the limit (5 x $0.01), never as zero.
-  assert.equal(a.cost_actual_usd, 0.078);
+  // 9,000 in + 1,000 out tokens are known; the cancelled response does not say
+  // how many searches ran, so the cost is an estimate (the 5-search cap kept
+  // for them), never an actual cost, and it counts at least the reservation.
+  assert.equal(a.cost_actual_usd, null);
+  assert.equal(a.cost_status, 'estimated');
+  assert.equal(a.cost_usage_estimate_usd, 0.078);
+  assert.deepEqual(a.cost_unknown, ['search_calls']);
+  assert.equal(research.attemptCharge(a).basis, 'estimated');
+  assert.equal(research.attemptCharge(a).usd, Math.max(0.078, a.reserved_usd));
   assert.equal(j.report_id, null);
 });
 

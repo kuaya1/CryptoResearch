@@ -15,7 +15,8 @@
 //            2.5 bills one fee per grounded request ("per_request" billing
 //            bounds it); Gemini 3 bills every query the model runs, so its
 //            search fee is an estimate ("per_query" billing, declared in
-//            Settings) and Google's project spend cap is the hard limit. The
+//            Settings). A Google project spend cap is a second guard, applied
+//            with about ten minutes of billing delay, not a hard limit. The
 //            runner refuses Gemini search unless one of the two is declared.
 //            Nothing here invents a cap.
 // maxSearches 0 sends no search tool at all. No default replaces it here.
@@ -610,13 +611,18 @@ function readGemini(json, raw, requestId) {
     }
     text = blocks.join('\n\n');
   }
+  // Gemini 3 bills each query. The count is known only when every search step
+  // lists its queries; a step without its list leaves the count unknown (never
+  // assumed), so the cost stays an estimate.
   let queries = 0;
   let searchSteps = 0;
+  let countable = true;
   for (const s of steps) {
     if (!s || s.type !== 'google_search_call') continue;
     searchSteps += 1;
     const q = Array.isArray(s.queries) ? s.queries : s.arguments && Array.isArray(s.arguments.queries) ? s.arguments.queries : null;
-    queries += q ? q.length : 1;
+    if (q) queries += q.length;
+    else countable = false;
   }
   const u = obj.usage || {};
   const num = (...keys) => {
@@ -627,7 +633,7 @@ function readGemini(json, raw, requestId) {
   const tool = num('total_tool_use_tokens', 'tool_use_prompt_tokens', 'tool_use_tokens') || 0;
   const output = num('total_output_tokens', 'completion_tokens', 'output_tokens');
   const thought = num('total_thought_tokens', 'thoughts_tokens', 'reasoning_tokens') || 0;
-  const usage = { input_tokens: input === null ? null : input + tool, output_tokens: output === null ? null : output + thought, search_calls: steps.length ? queries : null };
+  const usage = { input_tokens: input === null ? null : input + tool, output_tokens: output === null ? null : output + thought, search_calls: steps.length && countable ? queries : null };
   if (thought) usage.reasoning_tokens = thought;
   if (searchSteps) usage.search_steps = searchSteps;
   const status = obj.status || null;
