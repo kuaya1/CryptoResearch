@@ -20,7 +20,7 @@ Double-click **`Open Dashboard.cmd`**. It starts the dashboard at <http://127.0.
 1. Paste a CoinMarketCap link (`coinmarketcap.com/currencies/…`), a CoinGecko link, or type the name, and/or add a **screenshot** (CoinMarketCap, an exchange or a wallet). Add **instructions** if you want, for example "Who actually uses it? Is the March unlock a risk inside four months?"
 2. **Find this project** saves the request first, so leaving the page loses nothing. The project is identified in the background from CoinGecko's listing: only the name or contract in your link is used (the CoinMarketCap page itself is never opened). A screenshot is read by Claude for what is visible only: one small paid call, reserved at most $0.09 at the default prices.
 3. You see each candidate with its website, network and contract, rank, and why it matched. Lookalikes (same ticker, close names) are flagged. **Nothing is researched until you tap "Research <name>"**; a similarly named token is never picked for you. If your records already have a project with that ticker, or the same project bound to a different coin, it stops and says so.
-4. Confirming adds the project to your watchlist (or reuses it) and starts one Claude research run. Your instructions go to Claude as questions to investigate, never as conclusions. The page shows the state, attempts, model, horizon and cost (reserved before sending, then what Anthropic reported). You can leave or close the browser: the report is saved automatically and shown on the project page.
+4. Confirming adds the project to your watchlist (or reuses it) and starts one research run: Claude, plus ChatGPT and Gemini where their API key is set on the desk (or when your instructions say "all three models"). Your instructions go to the models as questions to investigate, never as conclusions. The page shows the state, attempts, model, horizon and cost (reserved before sending, then what the provider reported). You can leave or close the browser: reports are saved automatically and shown on the project page.
 5. A failure says what happened. **Retry research** sends one new attempt. An attempt that may have been billed without an answer ("Outcome uncertain") is never resent by itself.
 
 A screenshot never records a holding; holdings are only what you enter under Portfolio.
@@ -35,15 +35,16 @@ It starts only when all of this is set in the Render dashboard (service **Crypto
 2. **Environment** variables:
    - `CR_DATA_DIR` = `/var/data/cryptoresearch`
    - `CR_ACCESS_PASSWORD` = a passphrase you choose, at least 12 characters. Never share it in chat.
-   - `ANTHROPIC_API_KEY` = your Claude API key (console.anthropic.com, with billing set up). Also set a monthly spend limit in the Anthropic Console as a second guard.
-   - Optional: `COINGECKO_API_KEY` (a free CoinGecko demo key) for fewer rate-limit pauses.
+   - For automatic ChatGPT and Gemini research (optional, paid): `OPENAI_API_KEY` (platform.openai.com: a project with prepaid credit and a monthly budget limit) and `GEMINI_API_KEY` (Google AI Studio: a project with billing linked and a spend cap). See "Automatic ChatGPT and Gemini" below.
+   - Optional: `ANTHROPIC_API_KEY` (console.anthropic.com, with billing and a monthly spend limit) lets the desk run Claude research by itself and read New research screenshots. Cowork does Claude's research without it.
+   - Recommended: `COINGECKO_API_KEY`, a free CoinGecko Demo key (coingecko.com > Developer Dashboard). Render's shared addresses are often rate-limited on the keyless API; with the key, prices refresh reliably.
 3. Save; Render restarts the service. Until everything is set, the address shows only a "setup required" page listing what is missing.
 
 **Sign-in:** one passphrase; a browser stays signed in for 30 days (**Sign out** in the menu ends it). Eight wrong passphrases from one address lock sign-in for 15 minutes. Everything, the API included, needs sign-in, and keys stay in Render's environment: they never reach the page, the records or the logs.
 
-**Limits on first start:** Claude `claude-opus-5-5` with web search (at most 8 searches per request, and up to 3 requests for one answer when Claude pauses mid-research), up to 48,000 output tokens per request (a full report is about 16,000 tokens of text, and Claude's thinking counts toward the same limit), answers streamed, 25 minutes at most per research call, **$5 per run, $10 per day, $40 per month**. Each attempt reserves its maximum before it is sent (about $3.80 at these limits, mostly the output ceiling); a typical run should cost around $1, and the recorded cost replaces the reservation as soon as Anthropic reports it. Change the limits in Settings → Research models & budget. (A desk started with the first version's defaults moves to these on its next start, except for anything you changed.)
+**Limits on first start:** **$5 per run, $10 per day, $40 per month** across all models, up to 48,000 output tokens per request (reasoning and thinking count toward it). ChatGPT `gpt-6.1-sol` (reasoning effort high, at most 10 web searches) and Gemini `gemini-3.1-pro-preview` (thinking high, Google Search) run in the provider's background for at most 60 minutes. Claude via the API, if you add its key: `claude-opus-5-5`, at most 8 searches per request, 25 minutes per call. Before sending, each attempt reserves an estimate (about $0.75 for ChatGPT, $1.05 for Gemini, $3.60 for Claude at these limits); the recorded cost replaces it as soon as the provider reports usage. A reservation is not a maximum. Change the limits in Settings → Research models & budget. (A desk started with earlier defaults moves to these on its next start, except for anything you changed.)
 
-**Records online:** a sealed backup every day on the same disk; download a complete package any time (Settings → Backups & exports). A deploy keeps the disk, but a deploy during a running research call ends that call (it is held as uncertain, never resent), so avoid deploying while research runs.
+**Records online:** a sealed backup every day on the same disk; download a complete package any time (Settings → Backups & exports). A deploy keeps the disk. ChatGPT and Gemini research keeps running on the provider's side during a deploy and is collected afterwards by its request ID. Only a Claude API call (if you set that key) is a single connection: a deploy during one ends it, and it is held as uncertain, never resent.
 
 ## What you see
 
@@ -67,7 +68,11 @@ It starts only when all of this is set in the Render dashboard (service **Crypto
 
 ## Use it by voice through Cowork
 
-**Main route: Cowork works on the online desk through the CryptoResearch connector.** You give Cowork a project name, link or screenshot; it identifies the project, adds it to the watchlist once, researches it itself with the desk's prompt and grading rules, and saves the full report. The project and report appear on the online desk (your phone) right away. No CoinGecko or paid model API is needed; missing prices stay "unavailable".
+**Main route: Cowork works on the online desk through the CryptoResearch connector.** Say, for example:
+
+> Research Huma Finance with all three models and add it to my watchlist.
+
+(or give a CoinMarketCap link or a screenshot instead of the name). Cowork identifies the project from evidence (a CoinMarketCap or CoinGecko page is a lead, never the official website), adds it to the watchlist once, starts one research run, researches Claude's part itself with the desk's prompt and grading rules, saves the full report, and answers in a few lines. ChatGPT and Gemini research the same project with the same prompt at the same time; their reports appear on the desk by themselves when their API keys are set (see below). Every report, its sources, grade, risks and each model's status show on the project page. Claude's part needs the Cowork session until it saves; if it stops halfway, the project page shows it as Paused with the words to resume it.
 
 One-time connection:
 
@@ -77,20 +82,23 @@ One-time connection:
 
 Then just ask, for example: "Research this project" with a CoinMarketCap link or a screenshot; "Resume the research on Examplecoin"; "Restart the research on Examplecoin"; "Record that I bought 2,000 HUMA on Coinbase today at 3 cents". Asking twice does not duplicate a project or start a second run; research that stops halfway shows as **Paused** on the project page with the exact words to resume or restart it. Holdings change only when you ask to record a purchase or sale.
 
-### ChatGPT and Gemini on the same desk
+### ChatGPT and Gemini through their own apps (without API keys)
 
-ChatGPT and Gemini connect to the same connector address, each with its own sign-in. A connection files what it saves under its own model: ChatGPT's connection can save only ChatGPT reports, and so on. Each model gets the same project brief and research prompt and never sees another model's conclusions while its own research is open. Its research runs in its own app, under your own plan.
+Without API keys, ChatGPT and Gemini can still do their part through their own apps under your own plans, but you have to ask each one. They connect to the same connector address, each with its own sign-in. A connection files what it saves under its own model: ChatGPT's connection can save only ChatGPT reports, and so on. Each model gets the same project brief and research prompt and never sees another model's conclusions while its own research is open. Its research runs in its own app, under your own plan.
 
 - **ChatGPT** (Plus or Pro, on chatgpt.com in a browser): Settings > Security and login > turn on **Developer mode**. Then Settings > Plugins > **+** > create an app: name `CryptoResearch`, URL `https://cryptoresearch.onrender.com/mcp`, authentication **OAuth**. Approve the desk's page with your passphrase. In a chat, choose the CryptoResearch app from the **+** menu (Developer mode). ChatGPT asks you to confirm each action that saves something.
 - **Gemini** (personal Google account, US, 18+, English): gemini.google.com > Settings > **Connected Apps** > Custom apps > **Add a custom app**, paste the same URL, and approve with your passphrase (click Approve once and wait). In a chat, type **@** and pick CryptoResearch before your request: Gemini uses a custom app only when you mention it. Gemini asks you to confirm each action that saves something.
 
-**All three models in one request:** tell Cowork "Research this project with all three models". Claude researches in Cowork. ChatGPT and Gemini each get a job in the same run:
-- If that model's paid API key is set on the desk, the job runs in the background.
-- Otherwise it waits. Tell ChatGPT (with the CryptoResearch app on in that chat) or Gemini (after typing @ and picking CryptoResearch) **"Do my waiting CryptoResearch research"**, and it does its part through its own connection.
+A ChatGPT or Gemini job without an API key waits: tell ChatGPT (with the CryptoResearch app on in that chat) or Gemini (after typing @ and picking CryptoResearch) **"Do my waiting CryptoResearch research"**, and it does its part through its own connection. Once you add that model's key, the next request sends any waiting job to the API instead.
 
-The project page shows each model's progress. When the reports are in, ask Cowork to compare them: it summarizes where the models agree and disagree.
+### Automatic ChatGPT and Gemini (API keys)
 
-**Optional paid background route:** set `OPENAI_API_KEY` and/or `GEMINI_API_KEY` in Render's Environment page (never in chat or this folder). The desk then runs that model by itself with `gpt-6.1-sol` or `gemini-2.5-pro` and their own web search, within the limits in Settings > Research models & budget ($5 per run, $10 per day, $40 per month). It reserves about $0.80 per ChatGPT job and $0.55 per Gemini job before sending, and records the actual cost. Without a key, nothing is paid.
+Neither OpenAI nor Google supports running research from a hosted server under a ChatGPT or Google AI subscription (checked against their documentation on 2026-10-03: Sign in with ChatGPT is a preview for apps that run locally and allows no background requests; Google AI plans cover only the AI Studio website). The supported automatic route is each provider's API, billed per use:
+
+1. **OpenAI:** at platform.openai.com create a project, add prepaid credit (at least $5) and a monthly budget limit, create a project API key, and enter it yourself in Render > CryptoResearch > Environment as `OPENAI_API_KEY`.
+2. **Gemini:** at aistudio.google.com open (or create) the project behind your key, set up billing (Cloud Billing, prepaid or postpaid) and a project spend cap, create an API key in that project, and enter it in Render as `GEMINI_API_KEY`.
+
+Never paste a key into chat, the dashboard or this folder. With a key set, "all three models" sends that model's job to its API at once: OpenAI's Responses API in background mode with web search, Gemini's Interactions API in the background with Google Search. The provider runs it; the desk saves the request ID and collects the answer when it is ready (it checks every 30 seconds), also after a restart or deploy, and never sends a request twice. A request still running after 60 minutes is cancelled at the provider; a rate limit waits for the provider's Retry-After; a request whose outcome is unknown is held for you, never resent. Rough cost per report at list prices: ChatGPT about $0.20-0.45, Gemini about $0.15-0.40 (Gemini 3 bills each search query after 5,000 free a month across Gemini 3 models; the desk can only estimate how many queries Gemini runs, so your Google spend cap is the hard limit). The project page shows each model's progress; when the reports are in, the project page and Cowork's `compare_reports` show where the models agree and disagree.
 
 **PC folder route** (the dashboard on this PC, without the online desk), one-time setup in the Claude desktop app, Cowork tab:
 
@@ -134,8 +142,8 @@ The project appears in the dashboard once, after its record is saved and verifie
    - **Horizon:** your position horizon by default, **4 calendar months from the research date** (for example 2026-10-02 to 2027-02-02; a typical hold is about 2 months). Choose fewer months when you want. A longer horizon is labeled a long-term exception; give your reason if you have one (it is saved with the run and shown to the models). Whether a reason should be required is still your decision; for now it is not.
    - **What the models are asked for**, besides the usual ten sections and three scoring panels: the market cycle and sector participation, timing and catalysts inside the horizon, and a review plan, plus a `position_context` block (market view, timing view, catalyst windows, suggested review date). These views never change a score or a grade; "timing and executable liquidity" stays the only timing score. Reports from before this recipe stay as they were and show "not in this report".
    - **Claude via Cowork:** the Cowork session that asked does the Claude research with its own tools and imports it with the run ID.
-   - **API (optional):** with a key, model ID, token prices and a budget you set (Settings → Research models & budget), the PC runs the job. The moment the answer arrives it is captured on disk (`.cr/captures`), then saved with the run, validated and committed as an immutable report. If saving has to wait (another save, a backup, or blocked writes), the captured answer is saved by the next research run without asking the provider again.
-   - **Manual (default for GPT and Gemini):** paste the run's prompt into ChatGPT or Gemini yourself and import the answer (Updates → Import report, or the **Import report** button next to that model's job). A consumer subscription is not API access.
+   - **API:** with a key, model ID, token prices and a budget (Settings → Research models & budget), the desk (or the PC) runs the job. ChatGPT and Gemini run in the provider's background: the request ID is captured on disk the moment the provider accepts it, then recorded with the run, and the answer is collected by that ID. The moment an answer arrives it is captured on disk (`.cr/captures`), then saved with the run, validated and committed as an immutable report. If saving has to wait (another save, a backup, or blocked writes), the captured answer is saved by the next research run without asking the provider again.
+   - **Without a key:** the job waits for that model's assistant on the online desk ("Do my waiting CryptoResearch research"), or you paste the run's prompt into ChatGPT or Gemini yourself and import the answer (Updates → Import report). A consumer subscription is not API access.
    - One model's failure never erases another's result. Retries are bounded. Canceling stops retries; a request already sent may still be billed.
    - If the PC stops after a paid request may have been sent and before its answer was captured, the job shows **Outcome uncertain** and is never resent by itself. Check the provider's usage page, then **Reconcile** it (charged amount, or not charged) or choose **Retry anyway**. Until you reconcile, it counts against your limits at its reservation.
 3. **Compare** on the project page: comparable reports only (same rubric, profile, complete horizon interval, analyzed within the date window across the whole span), N/A categories excluded, spreads of 20+ highlighted, contradictions kept apart from different units, periods, definitions and dates, shared sources flagged. Model agreement is not corroboration.
@@ -156,7 +164,7 @@ Honesty rules: a missing, unknown or N/A component withholds the grade and shows
 Nothing is billed until you set all of this up yourself:
 
 1. Create `%USERPROFILE%\.cryptoresearch\secrets.json` (outside this folder, so it is never backed up, exported or logged) with only the keys you want: `{ "anthropic_api_key": "…", "openai_api_key": "…", "gemini_api_key": "…" }`. Environment variables `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` also work. Never paste keys into chat, the dashboard, prompts or notes.
-2. In **Settings → Research models & budget**, set each model ID and its token prices (from the provider's pricing page), then a per-run, daily and monthly limit. The per-run limit is the total for one run: every model and every attempt. Before each call the PC reserves its cost: the parts the request itself caps (the output-token limit, and the search count sent as `max_uses` for Claude or `max_tool_calls` for ChatGPT) plus an estimate for prompt and search-result tokens, which no request parameter caps. A call whose reservation would pass any limit is not made. A reservation is not a maximum: actual usage is recorded when the provider reports it and counts from then on. A web search limit of 0 turns search off; with search on, set a price per search. Gemini's API cannot cap searches, so Gemini searches only if you choose "per request" search billing (Gemini 2.5 and older); for Gemini 3 set its searches to 0. A call may run up to the research timeout (10 minutes by default); a call still unanswered then is treated as possibly billed.
+2. In **Settings → Research models & budget**, set each model ID and its token prices (from the provider's pricing page), then a per-run, daily and monthly limit. The per-run limit is the total for one run: every model and every attempt. Before each call the PC reserves its cost: the parts the request itself caps (the output-token limit, and the search count sent as `max_uses` for Claude or `max_tool_calls` for ChatGPT) plus an estimate for prompt and search-result tokens, which no request parameter caps. A call whose reservation would pass any limit is not made. A reservation is not a maximum: actual usage is recorded when the provider reports it and counts from then on. A web search limit of 0 turns search off; with search on, set a price per search. Gemini's API cannot cap searches, so Gemini searches only if you declare how it bills them: "per request" (Gemini 2.5 and older bill one fee per grounded request) or "per query" (Gemini 3 bills every search query; the desk reserves your max searches as an estimate, labeled so, and Google's project spend cap is the hard limit). Otherwise set its searches to 0. A call may run up to the research timeout (10 minutes by default); a call still unanswered then is treated as possibly billed.
 3. Restart the dashboard. Settings → Research models & budget shows each model's route as "API, ready" once everything it needs is present. Scheduled (unattended) research stays off until you tick it.
 
 ## Portfolio
@@ -180,10 +188,10 @@ date,type,account,asset,quantity,price_usd,fee_amount,fee_asset,transfer_id,btc_
 
 | What | When | Needs |
 |---|---|---|
-| Prices, rank, changes, volume (CoinGecko) | Every 5 min while the dashboard is open; hourly otherwise | PC on and online; for hourly, logged in with the task installed |
+| Prices, rank, changes, volume (CoinGecko) | Every 5 min while the dashboard is open; hourly otherwise (the online desk: every 15 min while a page is open). A CoinGecko rate limit pauses every caller until it says to try again; the last good prices stay, with their time | PC on and online; for hourly, logged in with the task installed |
 | Market context: BTC trend, dominance, breadth (CoinGecko) | About once an hour, with prices | Same; 2 calls each time, from the same monthly call budget |
 | Reports dropped in the inbox, queued Cowork requests | Within seconds while open; hourly otherwise | Same |
-| Research API jobs you started | Within minutes while open; hourly otherwise | Keys, prices and budget set |
+| Research API jobs you started | At once on the online desk (ChatGPT and Gemini collected every 30 s while they run); within minutes while the PC dashboard is open, hourly otherwise | Keys, prices and budget set |
 | Scheduled research | **Off** unless you configure a schedule and allow unattended runs within a budget | Same |
 | Portfolio snapshot, review findings, local backup | Once a day | Same |
 | Your holdings | **Never** automatically; prices don't detect trades | You record transactions |
@@ -193,9 +201,9 @@ A price refresh never starts research. The hourly job is one Windows scheduled t
 
 ## Costs
 
-- CoinGecko public API: free, keyless; a monthly call budget (default 7,500) pauses refreshes before any limit. Market context adds about 2 calls an hour. New research lookups (about 1 to 7 calls each) count in the same budget. The online desk refreshes prices every 5 minutes only while a page is open, hourly otherwise.
+- CoinGecko public API: free, keyless (a free Demo key is recommended on the online desk); a monthly call budget (default 7,500) pauses refreshes before any limit. Market context adds about 2 calls an hour. New research lookups (about 1 to 7 calls each) count in the same budget. The online desk refreshes prices every 15 minutes only while a page is open, hourly otherwise.
 - On the PC everything runs locally: no hosting, no paid services. The online desk, if you set it up, is Render Starter plus a 1 GB disk (about $7.25 a month at Render's October 2026 list prices).
-- Model API research is optional and costs per run; it only runs inside the limits you set. Manual research with your own subscriptions costs nothing extra.
+- Model API research is optional and costs per report (roughly $0.20-0.45 for ChatGPT and $0.15-0.40 for Gemini at list prices); it only runs inside the limits you set, and each provider's own budget or spend cap is a second guard. Claude's research in Cowork, and ChatGPT or Gemini through their own apps, cost nothing extra.
 
 ## Privacy
 
@@ -226,7 +234,8 @@ See [WORKSPACE-MAP.md](WORKSPACE-MAP.md) for every folder and file convention, a
 
 - **PDF reports** are kept byte for byte and flagged "needs text"; scores cannot be read from a PDF offline. Paste the text, or ask Cowork to transcribe it.
 - **No exchange or wallet sync, no external notifications.** Each would need explicit setup. Remote access is only the online desk, behind your passphrase.
-- **One automatic research route:** Claude through the Anthropic API. GPT and Gemini stay manual (paste the prompt, import the answer) until you configure their APIs. Anthropic's server-side model fallbacks are not used, so the model that was budgeted is the model that answers.
+- **Automatic research needs API keys.** ChatGPT and Gemini run by themselves only through their APIs (keys in Render's environment, billed per use); without keys they wait for you to ask their own apps. Claude's research is done by Cowork (or, with its key, by the Claude API). Server-side model fallbacks are not used, so the model that was budgeted is the model that answers.
+- **Claude in Cowork needs its session** until it saves its report; ChatGPT and Gemini through their APIs do not need any session, browser tab or this PC.
 - **Rank** is CoinGecko's market-cap rank and is labeled as such. A CoinMarketCap rank needs a CoinMarketCap API key and adapter; it is listed in settings as not configured and is never substituted.
 - **Liquidity** has no configured source, so there is no liquidity column.
 - Your Huma Finance Run 2 prompt is saved in `templates/source-prompts/` (see the README there); its structure is the `payfi-credit@1` profile, used only for PayFi projects.

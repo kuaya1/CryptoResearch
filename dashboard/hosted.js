@@ -81,9 +81,9 @@ const HOSTED_DEFAULTS = {
       chatgpt: CHATGPT_DEFAULTS,
       gemini: GEMINI_DEFAULTS,
     },
-    // A Claude API attempt reserves about $3.80 at these bounds (most of it
-    // the output ceiling), a ChatGPT one about $0.80 and a Gemini one about
-    // $0.55; a typical run costs far less, and its recorded cost replaces the
+    // A Claude API attempt reserves about $3.60 at these bounds (most of it
+    // the output ceiling), a ChatGPT one about $0.75 and a Gemini one about
+    // $1.05; a typical run costs far less, and its recorded cost replaces the
     // reservation.
     budget: { per_run_usd: 5, daily_usd: 10, monthly_usd: 40 },
   },
