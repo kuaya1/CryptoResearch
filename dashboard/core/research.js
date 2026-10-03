@@ -1372,6 +1372,24 @@ function openCoworkJobs(ws, projectId) {
     .map((r) => ({ run: r, job: r.jobs.claude }));
 }
 
+// Claude jobs waiting for a pasted answer (manual: no API key), newest first.
+// Cowork can do exactly that job, so it takes the job over instead of
+// starting a second run.
+function waitingClaudeJobs(ws, projectId) {
+  return listRuns(ws, projectId)
+    .filter((r) => !r.broken && r.jobs && r.jobs.claude && r.jobs.claude.state === 'unconfigured')
+    .map((r) => ({ run: r, job: r.jobs.claude }));
+}
+
+function adoptForCowork(ws, projectId, runId) {
+  const out = updateJob(ws, projectId, runId, 'claude', (job) => {
+    if (job.state !== 'unconfigured') throw new OpError('CONFLICT', `This run's Claude job is ${job.state}, not waiting for an answer.`);
+    const at = new Date().toISOString();
+    Object.assign(job, { state: 'running', mode: 'cowork', fallback: null, progress_at: at, note: 'Taken over by Claude in Cowork (desk connector); it completes when Cowork saves its report.' });
+  }, `Cowork takes over the Claude job in ${runId}`);
+  return { status: 'saved', verified: out.verified };
+}
+
 function draftRel(projectId, runId) {
   return `${runDir(projectId, runId)}/${DRAFT_NAME}`;
 }
@@ -1412,6 +1430,8 @@ module.exports = {
   COWORK_IDLE_MINUTES,
   coworkActivity,
   openCoworkJobs,
+  waitingClaudeJobs,
+  adoptForCowork,
   readCoworkDraft,
   saveCoworkDraft,
   listRuns,

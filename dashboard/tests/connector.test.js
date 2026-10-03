@@ -320,13 +320,33 @@ test('connector: the Cowork workflow (find, add once, research, draft, resume, s
 
   // The start log's record count, which is how a restart on Render is checked.
   const before = hosted.recordsSummary(d.ws);
-  assert.match(before, /^Records: 1 project \(1 on the watchlist\), 1 report, newest examplecoin-fictional\/\S+ \(saved [^)]+\), 0 transactions; 1 connected app\.$/);
+  assert.match(before, /^Records: 1 project \(1 on the watchlist: examplecoin-fictional\), 1 report, newest examplecoin-fictional\/\S+ \(saved [^)]+\), 0 transactions; 1 connected app\.$/);
   // The saved report is still there after a restart (a deploy).
   await d.restart();
   assert.equal(hosted.recordsSummary(d.ws), before);
   const after = await tool(d, access, 'get_report', { project_id: pid, include_text: true });
   assert.equal(after.data.report.report_id, reportId);
   assert.equal(after.data.text, text);
+});
+
+test('connector: a run already waiting for a Claude answer (started from the dashboard) is taken over, not duplicated', async (t) => {
+  const d = await desk(t, 'mcp-adopt');
+  const { access } = await connect(d);
+  const pid = (await tool(d, access, 'add_project', { name: 'Examplecoin (FICTIONAL)', symbol: 'XMC', official_website: 'https://examplecoin.example/', contracts: [{ chain: 'base', address: '0x2222222222222222222222222222222222222222' }], evidence: [{ url: 'https://examplecoin.example/' }], owner_request: 'add it' })).data.project.project_id;
+  // New research on the phone without an API key: the Claude job waits for a pasted answer.
+  const prev = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  t.after(() => { if (prev !== undefined) process.env.ANTHROPIC_API_KEY = prev; });
+  const waiting = research.createRun(d.ws, { project_id: pid, providers: ['claude'], channel: 'intake' });
+  assert.equal(research.loadRun(d.ws, pid, waiting.run_id).jobs.claude.state, 'unconfigured');
+  const took = await tool(d, access, 'start_research', { project_id: pid, owner_request: 'Research Examplecoin (FICTIONAL)' });
+  assert.equal(took.data.status, 'resumed');
+  assert.equal(took.data.run.run_id, waiting.run_id, 'the waiting run, not a new one');
+  assert.match(took.text, /--- Research prompt for/);
+  const job = research.loadRun(d.ws, pid, waiting.run_id).jobs.claude;
+  assert.equal(job.mode, 'cowork');
+  assert.equal(job.state, 'running');
+  assert.equal(research.listRuns(d.ws, pid).length, 1);
 });
 
 test('connector: a transaction is recorded only on an explicit request, asks for what is missing, and applies once', async (t) => {

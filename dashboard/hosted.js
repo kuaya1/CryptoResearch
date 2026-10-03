@@ -429,7 +429,8 @@ function recordsSummary(ws) {
   const oauth = readJson(ws.abs('.cr/oauth.json'), null);
   const apps = oauth && oauth.grants ? Object.values(oauth.grants).filter((g) => !g.revoked_at).length : 0;
   const watched = list.filter((p) => p.watchlist && p.watchlist.on_watchlist).length;
-  return `Records: ${list.length} project${list.length === 1 ? '' : 's'} (${watched} on the watchlist), ${reports} report${reports === 1 ? '' : 's'}${newest ? `, newest ${newest.ref} (saved ${newest.at})` : ''}, ${txs} transaction${txs === 1 ? '' : 's'}; ${apps} connected app${apps === 1 ? '' : 's'}.`;
+  const ids = list.slice(0, 10).map((p) => p.project_id).join(', ');
+  return `Records: ${list.length} project${list.length === 1 ? '' : 's'} (${watched} on the watchlist${ids ? `: ${ids}${list.length > 10 ? ', ...' : ''}` : ''}), ${reports} report${reports === 1 ? '' : 's'}${newest ? `, newest ${newest.ref} (saved ${newest.at})` : ''}, ${txs} transaction${txs === 1 ? '' : 's'}; ${apps} connected app${apps === 1 ? '' : 's'}.`;
 }
 
 // One line for the start log: the bounds research would be sent with, and

@@ -345,9 +345,18 @@ const handlers = {
       const run = open[0].run;
       return { status: 'resumed', message: `Resuming the open research run ${run.run_id} for ${project.name} (started ${run.created_at}). Continue from the draft below if there is one, then save_report.`, project: { project_id: id, name: project.name }, run: runView(ws, id, run, { prompt: true }) };
     }
+    // A run already waiting for a Claude answer (started from the dashboard
+    // without an API key) is the same work: take it over, no second run.
+    const waiting = research.waitingClaudeJobs(ws, id);
+    if (waiting.length && args.restart !== true) {
+      const runId0 = waiting[0].run.run_id;
+      research.adoptForCowork(ws, id, runId0);
+      const run = research.loadRun(ws, id, runId0);
+      return { status: 'resumed', message: `Research run ${runId0} for ${project.name} was waiting for a Claude answer (started ${run.created_at}); you are now doing it. Follow the prompt below exactly, then save_report.`, project: { project_id: id, name: project.name }, run: runView(ws, id, { ...run, status: research.runStatus(run) }, { prompt: true }) };
+    }
     const canceled = [];
     if (args.restart === true) {
-      for (const o of open) {
+      for (const o of [...open, ...waiting]) {
         research.cancelJob(ws, id, o.run.run_id, 'claude', `Restarted from Cowork: ${ownerRequest}`.slice(0, 300));
         canceled.push(o.run.run_id);
       }
