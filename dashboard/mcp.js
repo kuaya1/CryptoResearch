@@ -668,9 +668,14 @@ const handlers = {
     const othersOpen = after ? PROVIDERS.filter((p) => p !== me && after.jobs[p] && research.OPEN_STATES.has(after.jobs[p].state)) : [];
     const runOut = { run_id: runId, state: myState, others: after ? Object.fromEntries(PROVIDERS.filter((p) => p !== me && after.jobs[p]).map((p) => [p, jobView(after.jobs[p], after, me).progress])) : {} };
     if (me === 'claude') runOut.claude_state = myState;
+    // A grade is calculated only when every weighted component is scored (or a
+    // range with its reason); say so at once, so a gap can be filled while the
+    // research is fresh, or left honestly unscored.
+    const g = saved && saved.grade;
+    const withheld = g && g.status === 'withheld' ? ` Its grade is withheld: ${g.reason || 'not every weighted component is scored.'} If your research supports a score (or a range with its reason) for those parts, add them to the JSON block and save the report again. If it does not, leave them unscored: a withheld grade is then the honest result.` : '';
     return {
       status: r.status === 'duplicate' ? 'unchanged' : 'saved',
-      message: `${r.status === 'duplicate' ? `This exact report is already saved (${r.report_id}).` : `Saved ${label} report ${r.report_id} for ${id}; it is on the project page now.`}${othersOpen.length ? ` Still open in this run: ${listLabels(othersOpen)} (get_research shows their progress; compare_reports once they are saved).` : after && PROVIDERS.filter((p) => after.jobs[p]).length > 1 ? ' Every model in this run is done: compare_reports shows where they agree and disagree.' : ''}`,
+      message: `${r.status === 'duplicate' ? `This exact report is already saved (${r.report_id}).` : `Saved ${label} report ${r.report_id} for ${id}; it is on the project page now.`}${withheld}${othersOpen.length ? ` Still open in this run: ${listLabels(othersOpen)} (get_research shows their progress; compare_reports once they are saved).` : after && PROVIDERS.filter((p) => after.jobs[p]).length > 1 ? ' Every model in this run is done: compare_reports shows where they agree and disagree.' : ''}`,
       report: compactReport(saved),
       run: runOut,
       validation: { errors: r.errors || 0, warnings: r.warnings || 0, ambiguous: r.ambiguous || 0, note: r.note || null },
@@ -868,7 +873,11 @@ function logDetail(name, args, out) {
   const r = out.run;
   if (r && r.jobs) parts.push(`${r.run_id}: ${Object.entries(r.jobs).map(([p, j]) => `${PROVIDER_LABELS[p]} ${j.state}`).join(', ')}`);
   else if (r && r.run_id) parts.push(`${r.run_id}: ${r.state || '?'}`);
-  if (name === 'save_report' && out.report && out.report.report_id) parts.push(`report ${out.report.report_id}`);
+  if (name === 'save_report' && out.report && out.report.report_id) {
+    const g = out.report.grade;
+    parts.push(`report ${out.report.report_id}`);
+    if (g) parts.push(`grade ${g.display ? `${g.display}${g.label ? ` ${g.label}` : ''}` : g.status}${g.status === 'withheld' && g.coverage_pct !== null && g.coverage_pct !== undefined ? ` (${g.coverage_pct}% of the weight scored)` : ''}`);
+  }
   if (name === 'pending_research' && Array.isArray(out.pending)) parts.push(`${out.pending.length} waiting`);
   if (!r && out.project && out.project.project_id) parts.push(out.project.project_id);
   return parts.length ? ` [${parts.join('; ')}]` : '';

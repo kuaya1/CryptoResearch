@@ -656,6 +656,20 @@ test('connector: one Cowork request for all three models; ChatGPT and Gemini do 
     assert.equal(detail.history[m].length, 1, m);
     assert.ok(detail.history[m][0].grade, `${m} graded`);
   }
+  // A report that leaves a weighted component unscored is saved, its grade is
+  // withheld, and the assistant is told at once which part, so it can add a
+  // score its research supports or leave it honestly unscored.
+  const unscored = (text) => {
+    const m = text.match(/```json\n([\s\S]*?)\n```/);
+    const obj = JSON.parse(m[1]);
+    const first = Object.keys(obj.investment_components)[0];
+    obj.investment_components[first] = { status: 'unknown', value: null, low: null, high: null, rationale: 'FICTIONAL: the evidence does not support a score', evidence_refs: [], missing_data: 'FICTIONAL' };
+    return text.replace(m[1], JSON.stringify(obj, null, 2));
+  };
+  const partial = await tool(d, gemini.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: unscored(mockReport(d.ws, 'gemini', run0)) });
+  assert.equal(partial.data.status, 'saved', partial.text);
+  assert.equal(partial.data.report.grade.status, 'withheld');
+  assert.match(partial.data.message, /Its grade is withheld: Grade withheld: .* is not scored\. \d+(\.\d+)?% of the weight is covered.*If your research supports a score .* If it does not, leave them unscored/);
   // The same request again today starts nothing; research never recorded a holding.
   assert.equal((await tool(d, claude.access, 'start_research', { project_id: pid, owner_request: 'all three once more', models: 'all' })).data.status, 'recent_report');
   assert.equal(readJson(path.join(d.ws.root, 'portfolio', 'transactions.json')).transactions.length, 0);
