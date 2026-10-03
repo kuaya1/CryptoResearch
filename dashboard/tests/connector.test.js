@@ -558,7 +558,8 @@ test('connector: one Cowork request for all three models; ChatGPT and Gemini do 
   assert.equal(all.data.run.jobs.claude.state, 'running');
   assert.equal(all.data.run.jobs.chatgpt.state, 'unconfigured');
   assert.equal(all.data.run.jobs.gemini.state, 'unconfigured');
-  assert.match(all.data.message, /ChatGPT: waiting for ChatGPT: Eric asks ChatGPT "Do my waiting CryptoResearch research"/);
+  assert.match(all.data.message, /ChatGPT: waiting for ChatGPT: Eric says "Do my waiting CryptoResearch research" in a ChatGPT chat with the CryptoResearch app turned on/);
+  assert.match(all.data.message, /Gemini: waiting for Gemini: Eric says "Do my waiting CryptoResearch research" in Gemini after typing @ and picking CryptoResearch/, 'Gemini uses a custom app only when it is @-mentioned');
   const promptFile = fs.readFileSync(path.join(d.ws.root, 'projects', pid, 'research', runId, 'prompt.md'), 'utf8');
   assert.ok(all.text.includes(promptFile), 'Claude gets the run prompt');
   // Saying it again changes nothing: the same run, no second job for anyone.

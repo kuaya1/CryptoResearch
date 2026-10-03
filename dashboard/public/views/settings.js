@@ -307,7 +307,7 @@ async function systemTab(ctx) {
       h('ul', { class: 'list small muted' },
         h('li', null, h('strong', null, 'Claude (and so Cowork): '), 'claude.ai > Settings > Connectors > Add custom connector, name it CryptoResearch and paste this address.'),
         h('li', null, h('strong', null, 'ChatGPT (Plus or Pro, on the web): '), 'Settings > Security and login > turn on Developer mode; then Plugins > + > create an app named CryptoResearch with this address and OAuth sign-in.'),
-        h('li', null, h('strong', null, 'Gemini (personal account, US, 18+): '), 'gemini.google.com > Settings > Connected Apps > Custom apps > Add a custom app, and paste this address.'),
+        h('li', null, h('strong', null, 'Gemini (personal account, US, 18+): '), 'gemini.google.com > Settings > Connected Apps > Custom apps > Add a custom app, and paste this address. In a chat, type @ and pick CryptoResearch: Gemini uses it only when mentioned.'),
         h('li', null, 'Each then opens an approval page here; approve it with your desk passphrase. What a connection saves is filed under its own model.')),
       rows.length
         ? table([

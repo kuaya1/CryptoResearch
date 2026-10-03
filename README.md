@@ -82,11 +82,11 @@ Then just ask, for example: "Research this project" with a CoinMarketCap link or
 ChatGPT and Gemini connect to the same connector address, each with its own sign-in. A connection files what it saves under its own model: ChatGPT's connection can save only ChatGPT reports, and so on. Each model gets the same project brief and research prompt and never sees another model's conclusions while its own research is open. Its research runs in its own app, under your own plan.
 
 - **ChatGPT** (Plus or Pro, on chatgpt.com in a browser): Settings > Security and login > turn on **Developer mode**. Then Settings > Plugins > **+** > create an app: name `CryptoResearch`, URL `https://cryptoresearch.onrender.com/mcp`, authentication **OAuth**. Approve the desk's page with your passphrase. In a chat, choose the CryptoResearch app from the **+** menu (Developer mode). ChatGPT asks you to confirm each action that saves something.
-- **Gemini** (personal Google account, US, 18+, English): gemini.google.com > Settings > **Connected Apps** > Custom apps > **Add a custom app**, paste the same URL, and approve with your passphrase. Gemini asks you to confirm each action that saves something.
+- **Gemini** (personal Google account, US, 18+, English): gemini.google.com > Settings > **Connected Apps** > Custom apps > **Add a custom app**, paste the same URL, and approve with your passphrase (click Approve once and wait). In a chat, type **@** and pick CryptoResearch before your request: Gemini uses a custom app only when you mention it. Gemini asks you to confirm each action that saves something.
 
 **All three models in one request:** tell Cowork "Research this project with all three models". Claude researches in Cowork. ChatGPT and Gemini each get a job in the same run:
 - If that model's paid API key is set on the desk, the job runs in the background.
-- Otherwise it waits. Tell ChatGPT (or Gemini) **"Do my waiting CryptoResearch research"** and it does its part through its own connection.
+- Otherwise it waits. Tell ChatGPT (with the CryptoResearch app on in that chat) or Gemini (after typing @ and picking CryptoResearch) **"Do my waiting CryptoResearch research"**, and it does its part through its own connection.
 
 The project page shows each model's progress. When the reports are in, ask Cowork to compare them: it summarizes where the models agree and disagree.
 

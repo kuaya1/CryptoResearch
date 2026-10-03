@@ -838,7 +838,10 @@ function jobRow(ctx, pid, run, prov, projectName = pid) {
     // On the online desk, the model's own assistant can take this job through
     // its connection (Settings > Connected apps): one sentence to it.
     if (ctx.state.session && ctx.state.session.hosted) {
-      actions.push(h('div', { class: 'small', style: { flexBasis: '100%' } }, `${PROVIDER_LABELS[prov]} can do it through its desk connection: tell ${PROVIDER_LABELS[prov]} the sentence below. Or paste the prompt into ${PROVIDER_LABELS[prov]} and import the answer.`));
+      // Gemini uses a custom app only when the message @-mentions it; ChatGPT,
+      // when the app is turned on in that chat.
+      const where = prov === 'gemini' ? 'In Gemini, type @ and pick CryptoResearch, then say' : prov === 'chatgpt' ? 'In a ChatGPT chat, turn on the CryptoResearch app (+ menu), then say' : 'In Cowork, say';
+      actions.push(h('div', { class: 'small', style: { flexBasis: '100%' } }, `${PROVIDER_LABELS[prov]} can do it through its desk connection. ${where} the sentence below. Or paste the prompt into ${PROVIDER_LABELS[prov]} and import the answer.`));
       actions.push(say('Do my waiting CryptoResearch research'));
     }
     const cp = button('Copy prompt', null, { kind: 'small' });

@@ -30,7 +30,7 @@ Eric's desk is the online dashboard, <https://cryptoresearch.onrender.com>, whic
 
 **All three models** ("Research this project with all three models"; Claude alone stays the default). Do steps 1 to 3, then `start_research` with `models: "all"`. Claude, ChatGPT and Gemini join one run with the same prompt and dated context; none sees another's conclusions. You do Claude's part exactly as above. Tell Eric, from the message `start_research` returns, what happens to the other two:
 - a model whose paid API key is set on the desk runs in the background, within the desk's spending limits;
-- otherwise it waits for that model's assistant: Eric tells ChatGPT (or Gemini) "Do my waiting CryptoResearch research" and it does its part through its own connection.
+- otherwise it waits for that model's assistant: Eric says "Do my waiting CryptoResearch research" to ChatGPT (with the CryptoResearch app turned on in that chat) or to Gemini (after typing @ and picking CryptoResearch; Gemini uses a custom app only when it is mentioned), and it does its part through its own connection.
 
 Repeating the request does not start a second run or a second paid request. `get_research` shows each model's progress. Other models' reports are withheld from you while your own job is open; once you have saved yours and the others are saved, `compare_reports` shows where they agree and disagree. Summarize that for Eric: verdicts, flagged score spreads, conflicting figures, and the open questions that would settle them, keeping each report's own uncertainty. Agreement between models is not independent confirmation. A model that fails does not touch the others' reports.
 

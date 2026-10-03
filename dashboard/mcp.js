@@ -43,6 +43,13 @@ const RECENT_REPORT_HOURS = 24;
 const JOIN_OPEN_RUN_HOURS = 24;
 const SECTORS = ['defi', 'payments', 'infrastructure', 'ai_data', 'gaming', 'other'];
 const WAITING_PHRASE = 'Do my waiting CryptoResearch research';
+// How Eric gets each assistant to use its connection: Gemini uses a custom app
+// only when the message @-mentions it; ChatGPT, when the app is on in that chat.
+const ASK_HOW = {
+  claude: 'in Cowork',
+  chatgpt: 'in a ChatGPT chat with the CryptoResearch app turned on (+ menu)',
+  gemini: 'in Gemini after typing @ and picking CryptoResearch',
+};
 
 function instructionsFor(me) {
   const label = PROVIDER_LABELS[me];
@@ -52,7 +59,7 @@ To research a project Eric names, links or shows you:
 1. find_projects first. If it is already there, use it; never add it twice.
 2. Identify it from evidence: the official website, and the chain and contract address from the project's own docs or a block explorer. CoinMarketCap and CoinGecko pages are leads, not proof. Never guess or complete a contract address. If two tokens could match (same ticker, similar names), show Eric the candidates and ask.
 3. add_project once, with the evidence URLs. It refuses duplicates by itself.
-4. start_research. It returns the run's canonical prompt (horizon, rubric, grading appendix). Follow it exactly: research with your own web tools, cite sources with dates, keep facts, inferences and unknowns apart, cover risks, and end with the JSON block it asks for. If a research run for the project is already open, start_research resumes it (with any draft you saved) instead of starting another. When Eric asks for all three models (Claude, ChatGPT and Gemini), pass models: "all": each model gets the same prompt and never sees the others' conclusions. A model whose paid API is set up on the desk then runs in the background; the others wait until Eric asks that assistant ("${WAITING_PHRASE}"). Tell Eric which.
+4. start_research. It returns the run's canonical prompt (horizon, rubric, grading appendix). Follow it exactly: research with your own web tools, cite sources with dates, keep facts, inferences and unknowns apart, cover risks, and end with the JSON block it asks for. If a research run for the project is already open, start_research resumes it (with any draft you saved) instead of starting another. When Eric asks for all three models (Claude, ChatGPT and Gemini), pass models: "all": each model gets the same prompt and never sees the others' conclusions. A model whose paid API is set up on the desk then runs in the background; the others wait until Eric asks that assistant ("${WAITING_PHRASE}": in ChatGPT with the CryptoResearch app turned on in that chat, in Gemini after typing @ and picking CryptoResearch). Tell Eric which.
 5. For long research, save_research_draft as you go, so an interruption loses nothing.
 6. save_report with the complete report text (not a summary).
 7. When Eric asks you to do your waiting research, call pending_research and do each item with start_research.
@@ -312,7 +319,7 @@ function jobView(job, run, me) {
   else if (job.state === 'failed') progress = `failed: ${job.error || 'see the dashboard'}`;
   else if (job.state === 'uncertain') progress = 'held: a paid request may have been billed without an answer; Eric reconciles or retries it in the dashboard';
   else if (activity && activity.open) progress = activity.interrupted ? `interrupted (no activity for ${activity.idle_minutes} min)` : `${job.provider === me ? 'you are' : `${label} is`} researching it`;
-  else if (job.state === 'unconfigured') progress = job.provider === me ? 'waiting for you' : `waiting for ${label}: Eric asks ${label} "${WAITING_PHRASE}" (or pastes the prompt into ${label} and imports the answer)`;
+  else if (job.state === 'unconfigured') progress = job.provider === me ? 'waiting for you' : `waiting for ${label}: Eric says "${WAITING_PHRASE}" ${ASK_HOW[job.provider]} (or pastes the prompt into ${label} and imports the answer)`;
   else if (job.state === 'queued') progress = `queued for the ${label} API in the background`;
   else if (job.state === 'dispatching') progress = `running on the ${label} API in the background`;
   else progress = job.state;
