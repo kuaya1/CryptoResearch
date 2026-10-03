@@ -1431,3 +1431,42 @@ test(`connector: a newly added project is researched with prompt @5 through the 
   assert.equal(require('../core/portfolio').loadTransactions(d.ws).length, 0);
   assert.equal((await tool(d, claude.access, 'portfolio_overview', {})).data.positions.length, 0);
 });
+
+// Gemini (and ChatGPT) confirm every call that saves something, and Gemini's
+// custom apps cannot allow a tool for good: their waiting research is read
+// with read-only tools and saved with one call (2026-10-03).
+test('connector: Gemini does its waiting research with one call Eric approves: pending_research and get_research (read-only) give the prompt, save_report completes the job; no start_research, no drafts', async (t) => {
+  const d = await desk(t, 'gemini-one-save');
+  withKeys(t, {});
+  const claude = await connect(d);
+  const gemini = await connectGemini(d);
+  const pid = (await tool(d, claude.access, 'add_project', EXAMPLECOIN)).data.project.project_id;
+  const all = await tool(d, claude.access, 'start_research', { project_id: pid, owner_request: 'Research Examplecoin with all three models (FICTIONAL)', models: 'all' });
+  const runId = all.data.run.run_id;
+  // What Gemini is told when it connects; Claude in Cowork keeps its drafts.
+  const init = await rpc(d, gemini.access, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'Gemini', version: 'test' } });
+  assert.match(init.json.result.instructions, /5\. In Gemini, every call that saves something \(add_project, start_research, save_research_draft, save_report and the like\) makes Eric approve it, so keep them to a minimum: do not save drafts unless he asks/);
+  assert.match(init.json.result.instructions, /get_research with its project_id and run_id gives you that run's prompt without taking the job \(nothing for Eric to approve\); research it, then save_report once with that run_id\. Do not call start_research for a waiting job\./);
+  const claudeInit = await rpc(d, claude.access, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'Claude', version: 'test' } });
+  assert.match(claudeInit.json.result.instructions, /5\. For long research, save_research_draft as you go/);
+  // The reads Gemini needs are marked read-only (Gemini asks nothing for them); a save never is.
+  const list = await rpc(d, gemini.access, 'tools/list', {});
+  const readOnly = new Set(list.json.result.tools.filter((x) => x.annotations && x.annotations.readOnlyHint).map((x) => x.name));
+  assert.ok(readOnly.has('pending_research') && readOnly.has('get_research'));
+  for (const w of ['save_report', 'save_research_draft', 'start_research']) assert.ok(!readOnly.has(w), `${w} is never marked read-only`);
+  const pend = await tool(d, gemini.access, 'pending_research', {});
+  assert.equal(pend.data.pending[0].run_id, runId);
+  assert.match(pend.data.message, /get_research with its project_id and run_id gives you the run's prompt \(read-only, nothing for Eric to approve\); research it and save_report once with that run_id\. That save is the only call Eric has to approve/);
+  const view = await tool(d, gemini.access, 'get_research', { project_id: pid, run_id: runId });
+  const promptFile = fs.readFileSync(path.join(d.ws.root, 'projects', pid, 'research', runId, 'prompt.md'), 'utf8');
+  assert.ok(view.text.includes(promptFile), 'the run\'s own prompt, without taking the job');
+  assert.equal(research.loadRun(d.ws, pid, runId).jobs.gemini.state, 'unconfigured', 'reading takes nothing over');
+  // The one call Eric approves.
+  const saved = await tool(d, gemini.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: mockReport(d.ws, 'gemini', research.loadRun(d.ws, pid, runId)) });
+  assert.equal(saved.data.status, 'saved', saved.text);
+  const r = research.loadRun(d.ws, pid, runId);
+  assert.equal(r.jobs.gemini.state, 'completed');
+  assert.equal(r.jobs.gemini.report_id, saved.data.report.report_id);
+  assert.equal(readJson(path.join(d.ws.root, 'projects', pid, 'reports', saved.data.report.report_id, 'meta.json')).provider, 'gemini');
+  assert.equal((await tool(d, gemini.access, 'pending_research', {})).data.pending.length, 0, 'nothing left waiting for Gemini');
+});
