@@ -10,18 +10,20 @@ const { diffReports } = require('./compare');
 const { gradeAssessment } = require('./rubrics');
 const notes = require('./notes');
 const { getProject } = require('./projects');
-const { readJsonLines } = require('./fsx');
 const { PROVIDERS } = require('./workspace');
 
-function priceAt(ws, coingeckoId, sinceMs) {
+// The stored price nearest the cursor. `history` is an index rebuild's shared
+// parse of the month files (market.historyMonth); without it, each month is
+// read for this call.
+function priceAt(ws, coingeckoId, sinceMs, history = null) {
   if (!coingeckoId) return null;
+  const { historyMonth } = require('./market');
   const months = [...new Set([new Date(sinceMs).toISOString().slice(0, 7), new Date(sinceMs + 86400000 * 3).toISOString().slice(0, 7)])];
   let best = null;
   for (const m of months) {
-    for (const line of readJsonLines(ws.abs(`market-data/observations/${m}.jsonl`))) {
-      const o = (line.assets || []).find((a) => a.id === coingeckoId);
-      if (!o || typeof o.price_usd !== 'number') continue;
-      const t = Date.parse(o.source_last_updated_at || line.fetched_at);
+    for (const o of historyMonth(ws, m, history).get(coingeckoId) || []) {
+      if (typeof o.price_usd !== 'number') continue;
+      const t = Date.parse(o.source_last_updated_at || o.fetched_at);
       if (Number.isNaN(t) || t < sinceMs - 6 * 3600000) continue;
       if (!best || Math.abs(t - sinceMs) < Math.abs(best.t - sinceMs)) best = { t, price: o.price_usd, at: new Date(t).toISOString() };
     }
@@ -29,7 +31,7 @@ function priceAt(ws, coingeckoId, sinceMs) {
   return best;
 }
 
-function changesSince(ws, projectId, { since = null, latestMarket = null } = {}) {
+function changesSince(ws, projectId, { since = null, latestMarket = null, history = null } = {}) {
   const project = getProject(ws, projectId);
   const cursor = since || (project.review && project.review.last_reviewed_at) || project.created_at;
   const sinceMs = Date.parse(cursor);
@@ -58,7 +60,7 @@ function changesSince(ws, projectId, { since = null, latestMarket = null } = {})
   const journal = notes.loadJournal(ws, projectId).filter((e) => Date.parse(e.created_at) > sinceMs);
   const events = notes.loadEvents(ws, projectId).filter((e) => Date.parse(e.created_at) > sinceMs);
   const id = project.identity && project.identity.status === 'verified' ? project.identity.coingecko_id : null;
-  const then = priceAt(ws, id, sinceMs);
+  const then = priceAt(ws, id, sinceMs, history);
   const nowObs = latestMarket && id && latestMarket.assets ? latestMarket.assets[id] : null;
   const price = then && nowObs && typeof nowObs.price_usd === 'number' ? { from: then.price, from_at: then.at, to: nowObs.price_usd, to_at: nowObs.source_last_updated_at, change_pct: (nowObs.price_usd / then.price - 1) * 100 } : null;
   const count = newReports.length + runs.length + journal.length + events.length;

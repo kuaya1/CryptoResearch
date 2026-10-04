@@ -1082,9 +1082,11 @@ const handlers = {
     // "Saved" only when the save read back as written; otherwise the model is
     // told to save again (the same text changes nothing once it is in).
     const verified = r.status === 'duplicate' ? true : Boolean(r.verified);
-    // Other runs that waited for this model on the same request now have its answer.
-    const covered = r.status === 'ingested' && verified ? research.coverWaitingJobs(ws, id, me, { runId, reportId: r.report_id }) : [];
-    if (covered.length) r.note = `${r.note ? `${r.note} ` : ''}The same request was also waiting in ${covered.join(', ')}; ${covered.length === 1 ? 'that job is' : 'those jobs are'} linked to this report, not researched twice.`;
+    // Other runs waiting for this model keep waiting: each froze its own
+    // prompt, profile, horizon and evidence, and this report answers only
+    // this run (research.otherWaitingRuns).
+    const waiting = r.status === 'ingested' && verified ? research.otherWaitingRuns(ws, id, me, { runId }) : [];
+    if (waiting.length) r.note = `${r.note ? `${r.note} ` : ''}${waiting.length === 1 ? 'Run' : 'Runs'} ${waiting.join(', ')} still ${waiting.length === 1 ? 'waits' : 'wait'} for ${label} on this project, each with its own frozen prompt: this report does not complete ${waiting.length === 1 ? 'it' : 'them'}. pending_research lists ${waiting.length === 1 ? 'it' : 'them'}.`;
     const after = research.loadRun(ws, id, runId);
     const myState = after && after.jobs[me] ? after.jobs[me].state : null;
     const othersOpen = after ? PROVIDERS.filter((p) => p !== me && after.jobs[p] && research.OPEN_STATES.has(after.jobs[p].state)) : [];

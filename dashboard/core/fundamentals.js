@@ -12,19 +12,23 @@
 //   source_url   where the relationship to this project was verified
 //   verified_at, verified_by
 // Nothing is matched by ticker or name, and a successful answer does not prove
-// the match: the entity type each answer reports is checked against the bound
-// scope, and a different one is refused (never a parent or a chain in place of
-// a product, never a parent summed with its children). A project without a
-// binding has no fundamentals ("unmapped").
+// the match: each answer must identify the bound entity (its slug, or a name
+// whose DefiLlama slug is the bound one) and state its kind, the same for all
+// three metrics, and that kind is checked against the bound scope. An answer
+// that does not identify itself is unusable, and a different entity or kind is
+// refused (never a parent or a chain in place of a product, never a parent
+// summed with its children). A project without a binding has no fundamentals
+// ("unmapped").
 //
 // Refresh: GET https://api.llama.fi/summary/fees/<slug>?dataType=<type> for
 // dailyFees, dailyRevenue and dailyHoldersRevenue, separately (fixed origin
 // and data types; the slug is validated, then encoded; the per-chain breakdown
 // is excluded, which only shrinks the answer). Every runner (dashboard, online
 // desk, scheduled task, CLI, connector) shares one lease, one rate-limit gate
-// that honors a valid Retry-After, the failure backoff and the request counts.
-// Requests time out, and one that may have failed transiently is tried once
-// more. Network waits never hold the workspace save lock: it is taken only to
+// that honors a valid Retry-After in full, the failure backoff and the request
+// counts. Every request, a retry included, is counted before it is sent, and
+// none is sent past the monthly budget. Requests time out, and one that may
+// have failed transiently is tried once more. Network waits never hold the workspace save lock: it is taken only to
 // replace a cache file. A failed refresh keeps the last good snapshot, with its
 // age and the failure.
 //
@@ -91,8 +95,12 @@ const DEFAULTS = {
   backoff_max_minutes: 360,
 };
 const NOTE = 'DefiLlama\'s own daily series for the bound entity, captured by the dashboard from a data aggregator (not checked in your session). Fees, revenue and holders revenue are three separate DefiLlama measurements, each as DefiLlama defines it (see each metric\'s definition and the methodology links): revenue is not net profit, holders revenue is reported by DefiLlama and never derived from the others, and protocol activity does not necessarily accrue to the token. A total is a 30-day total only when all 30 days were reported; otherwise the metric is partial (a subtotal of the reported days) or unknown. No valuation ratio is supplied.';
-const FAILURE_STATES = { failed: 'unavailable', rate_limited: 'unavailable', not_found: 'not_found', scope_mismatch: 'scope_mismatch', entity_mismatch: 'entity_mismatch' };
-const BINDING_PROBLEMS = new Set(['not_found', 'scope_mismatch', 'entity_mismatch']);
+const FAILURE_STATES = { failed: 'unavailable', rate_limited: 'unavailable', budget_paused: 'unavailable', not_found: 'not_found', scope_mismatch: 'scope_mismatch', entity_mismatch: 'entity_mismatch', unidentified: 'unidentified' };
+const BINDING_PROBLEMS = new Set(['not_found', 'scope_mismatch', 'entity_mismatch', 'unidentified']);
+// The longest server-dictated wait (Retry-After) the desk honors as sent: a
+// longer one is taken as this long. The local failure backoff has its own,
+// much lower ceiling (backoff_max_minutes).
+const SERVER_WAIT_MAX_MS = 7 * DAY_MS;
 
 const isoOf = (ms) => new Date(ms).toISOString();
 const dayOf = (ms) => isoOf(ms).slice(0, 10);
@@ -327,20 +335,35 @@ function unsupportedMetric(m, r) {
 // ---------------------------------------------------------------------------
 // The entity an answer describes
 
+// What kind of entity an answer says it describes, from what it states: a
+// chain (its protocol type or a chain# ID), a parent (a parent# ID or child
+// protocols), a product (protocol type "protocol" or a plain DefiLlama ID).
+// An answer that states none of these has no known scope: it is never taken
+// for a product (REVIEW F4, 2026-10-04).
+const idOf = (body) => {
+  const v = body.defillamaId !== undefined && body.defillamaId !== null ? body.defillamaId : body.id;
+  return v === undefined || v === null ? '' : String(v);
+};
 function reportedScope(body) {
-  const id = body.defillamaId === undefined || body.defillamaId === null ? '' : String(body.defillamaId);
+  const id = idOf(body);
   if (body.protocolType === 'chain' || id.startsWith('chain#')) return 'chain';
   if (id.startsWith('parent#') || (Array.isArray(body.childProtocols) && body.childProtocols.length)) return 'parent';
-  return 'product';
+  if (body.protocolType === 'protocol' || (id && !id.includes('#'))) return 'product';
+  return null;
 }
+
+// DefiLlama's slug for a name (its own rule: lowercase, spaces to hyphens,
+// apostrophes dropped), for an answer that names its entity but leaves out
+// the slug.
+const slugOfName = (name) => (typeof name === 'string' && name.trim() ? name.trim().toLowerCase().split(' ').join('-').split('\'').join('') : null);
 
 function entityOf(body) {
   const children = Array.isArray(body.childProtocols) ? body.childProtocols.filter((c) => c && typeof c === 'object') : [];
-  const idText = (v) => (v === undefined || v === null ? null : cleanText(String(v), 80));
+  const idText = (v) => (v === undefined || v === null || v === '' ? null : cleanText(String(v), 80));
   return {
     slug: cleanText(body.slug, 120),
     name: cleanText(body.displayName, 120) || cleanText(body.name, 120),
-    defillama_id: idText(body.defillamaId),
+    defillama_id: idText(idOf(body)),
     protocol_type: cleanText(body.protocolType, 40),
     category: cleanText(body.category, 60),
     parent_protocol: cleanText(body.parentProtocol, 80),
@@ -370,11 +393,27 @@ function buildSnapshot(binding, fetched, win, now, at) {
   }
   const entities = answered.map((m) => entityOf(fetched[m.key].body));
   const entity = entities[0];
-  if (entities.some((e) => e.defillama_id !== entity.defillama_id || e.slug !== entity.slug)) {
-    return { outcome: 'entity_mismatch', entity, message: `DefiLlama answered the series for "${binding.slug}" with different entities; nothing was used.` };
+  // Each answer must positively identify the bound entity: its own slug, or
+  // a name whose DefiLlama slug is the bound one. A readable series alone
+  // proves nothing (REVIEW F4, 2026-10-04: an answer with only 30 dated
+  // values was taken as the bound product's).
+  const named = (m) => {
+    const b = fetched[m.key].body;
+    const s = slugOfName(b.name) || slugOfName(b.displayName);
+    return s && checkSlug(s) ? s : null;
+  };
+  const identity = answered.map((m, i) => entities[i].slug || named(m));
+  if (identity.some((x) => !x)) {
+    return { outcome: 'unidentified', entity, message: `DefiLlama's answer for "${binding.slug}" does not identify its entity (no slug or name), so it cannot be checked against the binding. Nothing from it was used; the last good snapshot is kept.` };
   }
-  if (entity.slug && entity.slug !== binding.slug) {
-    return { outcome: 'entity_mismatch', entity, message: `Bound to "${binding.slug}", but DefiLlama answers for "${entity.slug}"${entity.name ? ` (${entity.name})` : ''}. It may have been renamed or merged: confirm the entity and bind its current slug. Nothing was used.` };
+  if (entities.some((e, i) => identity[i] !== identity[0] || e.defillama_id !== entity.defillama_id || e.reported_scope !== entity.reported_scope)) {
+    return { outcome: 'entity_mismatch', entity, message: `DefiLlama answered the series for "${binding.slug}" with different entities or scopes; nothing was used.` };
+  }
+  if (identity[0] !== binding.slug) {
+    return { outcome: 'entity_mismatch', entity, message: `Bound to "${binding.slug}", but DefiLlama answers for "${identity[0]}"${entity.name ? ` (${entity.name})` : ''}. It may have been renamed or merged: confirm the entity and bind its current slug. Nothing was used.` };
+  }
+  if (!entity.reported_scope) {
+    return { outcome: 'unidentified', entity, message: `DefiLlama's answer for "${binding.slug}" does not say what kind of entity it is (no protocol type, DefiLlama ID or child protocols), so it cannot be checked against the bound scope (${binding.scope}). Nothing from it was used; the last good snapshot is kept.` };
   }
   if (entity.reported_scope !== binding.scope) {
     return { outcome: 'scope_mismatch', entity, message: `Bound as ${binding.scope} (${SCOPES[binding.scope]}), but DefiLlama reports "${binding.slug}" as ${describeScope(entity)}. Nothing was used: bind the scope DefiLlama reports, or the slug of the entity you mean.` };
@@ -417,13 +456,15 @@ function retryAfterMs(res) {
 const HEADERS = { accept: 'application/json', 'user-agent': 'CryptoResearch-desk' };
 
 // One metric, with a bounded retry for a failure that may be transient (no
-// answer, a timeout, a 5xx, an unreadable answer). Every request sent counts;
-// a 400 or 404 is a definite answer (the metric is not published for the
-// entity); a 429 stops at once.
-async function getMetric(url, { fetchImpl, timeoutMs, maxAttempts, retryDelayMs, counts }) {
+// answer, a timeout, a 5xx, an unreadable answer). Every request, a retry
+// included, is reserved in the month's count before it is sent (reserve);
+// when the budget is used up nothing more is sent. A 400 or 404 is a definite
+// answer (the metric is not published for the entity); a 429 stops at once.
+async function getMetric(url, { fetchImpl, timeoutMs, maxAttempts, retryDelayMs, counts, reserve = () => true }) {
   let failure = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (attempt > 1 && retryDelayMs) await sleep(retryDelayMs);
+    if (!reserve()) return { kind: 'budget', attempts: attempt - 1, after: failure };
     counts.sent++;
     let res;
     let text;
@@ -492,13 +533,20 @@ function gateOf(status, now) {
   return until > now ? { open: false, until: status.retry_after_until } : { open: true, until: null };
 }
 
+// The wait a 429 sets. A valid Retry-After is DefiLlama's own deadline and is
+// honored in full (at least a minute, at most SERVER_WAIT_MAX_MS), even past
+// the local backoff ceiling; only the desk's own default wait is capped at
+// backoff_max_minutes (REVIEW F5, 2026-10-04: a 24-hour Retry-After reopened
+// after six hours). The deadline is saved in status.json, so a restart keeps it.
 function rateLimitFields(cfg, status, retryAfter, now) {
   const maxMs = cfg.backoff_max_minutes * 60000;
   const given = typeof retryAfter === 'number' && Number.isFinite(retryAfter) && retryAfter >= 0 ? retryAfter : null;
   const prev = status.rate_limit || null;
   const prevEnd = prev && prev.until ? Date.parse(prev.until) : NaN;
   const strikes = !Number.isNaN(prevEnd) && now - prevEnd < 3600000 ? (prev.strikes || 1) + 1 : 1;
-  const waitMs = Math.min(maxMs, Math.max(RATE_LIMIT_MIN_MS, given !== null ? given : RATE_LIMIT_DEFAULT_MS * 2 ** (strikes - 1)));
+  const waitMs = given !== null
+    ? Math.min(SERVER_WAIT_MAX_MS, Math.max(RATE_LIMIT_MIN_MS, given))
+    : Math.min(maxMs, Math.max(RATE_LIMIT_MIN_MS, RATE_LIMIT_DEFAULT_MS * 2 ** (strikes - 1)));
   const until = laterIso(status.retry_after_until, now + waitMs);
   return { retry_after_until: until, rate_limit: { at: isoOf(now), http_status: 429, retry_after_ms: given, wait_ms: waitMs, strikes, until } };
 }
@@ -534,6 +582,20 @@ function updateStatus(ws, fn) {
   withLock(ws, 'fundamentals_status', () => {
     const cur = readStatus(ws);
     replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...fn(cur), schema_version: 'cr.fundamentals-status.v1', provider: 'defillama' }));
+  });
+}
+
+// Reserves one request in this month's count before it is sent, under the
+// save lock, so the count is on disk even if the process stops mid-request
+// and no runner can send past the monthly budget. False when the budget is
+// used up (nothing is counted then).
+function reserveRequest(ws, cfg, now) {
+  return withLock(ws, 'fundamentals_status', () => {
+    const cur = readStatus(ws);
+    const c = callCounts(cur, now);
+    if (cfg.monthly_request_budget && (c.month_count || 0) >= cfg.monthly_request_budget) return false;
+    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...cur, calls: addCalls(c, 1, 0), schema_version: 'cr.fundamentals-status.v1', provider: 'defillama' }));
+    return true;
   });
 }
 
@@ -638,10 +700,12 @@ async function refreshLeased(ws, list, { trigger, fetchImpl, cfg, clock, retryDe
   const counts = { sent: 0, answered: 0 };
   const results = [];
   let limited = null;
+  let exhausted = false;
   let sentAny = false;
+  const reserve = () => reserveRequest(ws, cfg, clock());
   for (const p of list) {
-    if (limited) {
-      results.push({ project_id: p.project_id, slug: storedBinding(p.identity).slug, outcome: 'not_attempted', error: 'not attempted: DefiLlama rate-limited this refresh' });
+    if (limited || exhausted) {
+      results.push({ project_id: p.project_id, slug: storedBinding(p.identity).slug, outcome: 'not_attempted', error: limited ? 'not attempted: DefiLlama rate-limited this refresh' : 'not attempted: the monthly DefiLlama request budget is used up' });
       continue;
     }
     const binding = storedBinding(p.identity);
@@ -652,7 +716,15 @@ async function refreshLeased(ws, list, { trigger, fetchImpl, cfg, clock, retryDe
       if (sentAny && pauseMs) await sleep(pauseMs);
       sentAny = true;
       const url = metricUrl(binding.slug, m.type);
-      const r = await getMetric(url, { fetchImpl, timeoutMs, maxAttempts: Math.max(1, cfg.max_attempts), retryDelayMs, counts });
+      const r = await getMetric(url, { fetchImpl, timeoutMs, maxAttempts: Math.max(1, cfg.max_attempts), retryDelayMs, counts, reserve });
+      if (r.kind === 'budget') {
+        // A refresh that cannot finish publishes nothing: the last good
+        // snapshot (complete or partial as it was) stays, with this reason.
+        exhausted = true;
+        const before = r.after ? ` after ${r.after.error}` : '';
+        failure = { outcome: 'budget_paused', error: `${m.type}: the monthly DefiLlama request budget (${cfg.monthly_request_budget}) was used up during this refresh${before}; nothing from this refresh was used`, http_status: (r.after && r.after.http_status) || null };
+        break;
+      }
       if (r.kind === 'rate_limited') {
         limited = r;
         failure = { outcome: 'rate_limited', error: `${m.type}: DefiLlama answered HTTP 429 (rate limited)`, http_status: 429 };
@@ -672,7 +744,10 @@ async function refreshLeased(ws, list, { trigger, fetchImpl, cfg, clock, retryDe
     // A failure keeps the last good snapshot of this binding (never another's).
     const kept = { snapshot: same && same.snapshot ? same.snapshot : null, last_good_at: same ? same.last_good_at || null : null };
     let doc;
-    if (failure) {
+    if (failure && failure.outcome === 'budget_paused') {
+      // Not DefiLlama's failure: no backoff; the monthly admission check holds it.
+      doc = { ...base, ...kept, last_attempt: { at, trigger, outcome: failure.outcome, error: failure.error, http_status: failure.http_status }, consecutive_failures: (same && same.consecutive_failures) || 0, next_attempt_at: isoOf(now + cfg.refresh_hours * 3600000) };
+    } else if (failure) {
       const fails = ((same && same.consecutive_failures) || 0) + 1;
       doc = { ...base, ...kept, last_attempt: { at, trigger, outcome: failure.outcome, error: failure.error, http_status: failure.http_status }, consecutive_failures: fails, next_attempt_at: isoOf(now + Math.min(cfg.refresh_hours * 3600000, backoffMs(cfg, fails))) };
     } else {
@@ -696,8 +771,8 @@ async function refreshLeased(ws, list, { trigger, fetchImpl, cfg, clock, retryDe
   const now = clock();
   const ok = results.filter((r) => r.outcome === 'ok');
   const problems = results.filter((r) => BINDING_PROBLEMS.has(r.outcome));
-  const transient = results.filter((r) => ['failed', 'rate_limited', 'not_attempted'].includes(r.outcome));
-  const status = transient.length ? (ok.length ? 'partial' : 'failed') : problems.length ? 'attention' : 'ok';
+  const transient = results.filter((r) => ['failed', 'rate_limited', 'not_attempted', 'budget_paused'].includes(r.outcome));
+  const status = exhausted && !ok.length && !problems.length ? 'budget_paused' : transient.length ? (ok.length ? 'partial' : 'failed') : problems.length ? 'attention' : 'ok';
   // Every attempted project failed without an answer: back off before the
   // next scheduled try (a rate limit has its own gate).
   const offline = !ok.length && !problems.length && results.some((r) => r.outcome === 'failed');
@@ -706,6 +781,7 @@ async function refreshLeased(ws, list, { trigger, fetchImpl, cfg, clock, retryDe
     `DefiLlama fundamentals: ${ok.length} of ${results.length} bound project(s) refreshed${ok.length ? ` (window ${windowFor(now).start} to ${windowFor(now).end})` : ''}.`,
     problems.length ? `Binding needs checking: ${listOf(problems)}.` : '',
     transient.length ? `Not refreshed: ${listOf(transient)}.` : '',
+    exhausted ? `Monthly DefiLlama request budget reached (${cfg.monthly_request_budget}); saved fundamentals stay as they are.` : '',
   ].filter(Boolean).join(' ');
   updateStatus(ws, (cur) => {
     const failures = offline ? (cur.consecutive_failures || 0) + 1 : ok.length || problems.length ? 0 : cur.consecutive_failures || 0;
@@ -716,7 +792,9 @@ async function refreshLeased(ws, list, { trigger, fetchImpl, cfg, clock, retryDe
       ...(ok.length ? { last_success_at: isoOf(now) } : {}),
       consecutive_failures: failures,
       next_allowed_at: offline ? laterIso(cur.next_allowed_at, now + backoffMs(cfg, failures)) : ok.length || problems.length ? null : cur.next_allowed_at || null,
-      calls: addCalls(callCounts(cur, now), counts.sent, counts.answered),
+      // Each request was counted when it was reserved (reserveRequest); only
+      // the answers are added now.
+      calls: addCalls(callCounts(cur, now), 0, counts.answered),
     };
     return limited ? { ...next, ...rateLimitFields(cfg, cur, limited.retry_after_ms, now) } : next;
   });
@@ -745,6 +823,8 @@ async function refreshLeased(ws, list, { trigger, fetchImpl, cfg, clock, retryDe
 //   not_found          no snapshot; DefiLlama has no fee data for the slug
 //   scope_mismatch     no snapshot; DefiLlama reports another kind of entity
 //   entity_mismatch    no snapshot; DefiLlama answers for another slug
+//   unidentified       no snapshot; DefiLlama's answer does not say which
+//                      entity or what kind of entity it describes
 //   fresh              a snapshot of this binding, fetched within stale_hours
 //   fresh_last_failed  the same, but the latest refresh failed (shown)
 //   stale              a snapshot older than stale_hours (with any failure)

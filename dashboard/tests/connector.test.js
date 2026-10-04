@@ -622,20 +622,23 @@ test('connector: one Cowork request for all three models; ChatGPT and Gemini do 
   const copied = await tool(d, chatgpt.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: claudeText });
   assert.equal(copied.isError, true);
   assert.match(copied.text, /^Not saved: .*model: the report says "Claude", the run's is "ChatGPT"/);
-  // Meanwhile the same request for ChatGPT was also made on the dashboard (a
-  // second run). ChatGPT's report answers both: it is not researched twice.
+  // Meanwhile a second run for ChatGPT was made on the dashboard. It froze its
+  // own prompt (which names it), so ChatGPT's report for the first run does
+  // not complete it (REVIEW F1, 2026-10-04): it keeps waiting, and the reply
+  // says so.
   const extra = research.createRun(d.ws, { project_id: pid, providers: ['chatgpt'], channel: 'dashboard', utterance: 'ChatGPT research for Examplecoin (FICTIONAL)' });
   assert.equal(research.loadRun(d.ws, pid, extra.run_id).jobs.chatgpt.state, 'unconfigured');
   const gptText = mockReport(d.ws, 'chatgpt', run0);
   const gs = await tool(d, chatgpt.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: gptText });
   assert.equal(gs.data.status, 'saved', gs.text);
   assert.equal(gs.data.run.state, 'completed');
-  const coveredJob = research.loadRun(d.ws, pid, extra.run_id).jobs.chatgpt;
-  assert.equal(coveredJob.state, 'completed');
-  assert.equal(coveredJob.report_id, gs.data.report.report_id);
-  assert.equal(coveredJob.covered_by_run, runId);
-  assert.match(gs.data.validation.note, /also waiting in run_.*linked to this report, not researched twice/);
-  assert.equal((await tool(d, chatgpt.access, 'pending_research', {})).data.pending.length, 0, 'nothing left for ChatGPT');
+  const otherJob = research.loadRun(d.ws, pid, extra.run_id).jobs.chatgpt;
+  assert.equal(otherJob.state, 'unconfigured');
+  assert.equal(otherJob.report_id, null);
+  assert.equal(otherJob.covered_by_run, undefined);
+  assert.match(gs.data.validation.note, new RegExp(`Run ${extra.run_id} still waits for ChatGPT on this project, each with its own frozen prompt: this report does not complete it`));
+  assert.deepEqual((await tool(d, chatgpt.access, 'pending_research', {})).data.pending.map((x) => x.run_id), [extra.run_id], 'the other run is still ChatGPT\'s to do');
+  research.cancelJob(d.ws, pid, extra.run_id, 'chatgpt', 'FICTIONAL: not needed for the rest of this test');
   const gptMeta = readJson(path.join(d.ws.root, 'projects', pid, 'reports', gs.data.report.report_id, 'meta.json'));
   assert.equal(gptMeta.provider, 'chatgpt');
   assert.equal(gptMeta.provenance.channel, 'ChatGPT (desk connector)');

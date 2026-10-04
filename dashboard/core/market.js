@@ -151,10 +151,14 @@ function clock(iso, now = Date.now()) {
   return `${new Intl.DateTimeFormat('en-US', { timeZone: TZ, month: 'short', day: 'numeric' }).format(d)}, ${time}`;
 }
 
-// The status fields one rate limit sets. The wait is Retry-After when CoinGecko
-// sends it, otherwise the default above; capped at backoff_max_minutes so a
-// bad header never parks the desk for days. A wait already running is never
-// shortened, and non-forced runners wait at least as long.
+// The status fields one rate limit sets. A valid Retry-After is CoinGecko's
+// own deadline and is honored in full, up to SERVER_WAIT_MAX_MS, even past the
+// local backoff ceiling (REVIEW F5, 2026-10-04: a 24-hour wait reopened after
+// an hour). Without one, the default above doubles per strike, capped at
+// backoff_max_minutes. The deadline is saved in status.json, so a restart
+// keeps it. A wait already running is never shortened, and non-forced runners
+// wait at least as long.
+const SERVER_WAIT_MAX_MS = 7 * 86400000;
 function rateLimitFields(ws, status, { retryAfterMs: header = null, source = 'prices', httpStatus = 429 } = {}, now = Date.now()) {
   const md = ws.settings.market_data || {};
   const maxMs = (md.backoff_max_minutes || 60) * 60000;
@@ -162,7 +166,7 @@ function rateLimitFields(ws, status, { retryAfterMs: header = null, source = 'pr
   const prev = status.rate_limit || null;
   const prevEnd = prev && prev.until ? Date.parse(prev.until) : NaN;
   const strikes = !Number.isNaN(prevEnd) && now - prevEnd < RATE_LIMIT_EPISODE_MS ? (prev.strikes || 1) + 1 : 1;
-  const waitMs = Math.min(maxMs, given !== null ? given : RATE_LIMIT_DEFAULT_MS * 2 ** (strikes - 1));
+  const waitMs = given !== null ? Math.min(SERVER_WAIT_MAX_MS, given) : Math.min(maxMs, RATE_LIMIT_DEFAULT_MS * 2 ** (strikes - 1));
   const until = laterIso(status.retry_after_until, now + waitMs);
   return {
     retry_after_until: until,
@@ -205,7 +209,10 @@ function withCounts(err, calls, answered) {
   return e;
 }
 
-async function fetchMarkets(ids, settings, fetchImpl = fetch) {
+// Each request is reserved (reserve) before it is sent. When the monthly
+// budget runs out part way, the IDs not asked for are returned as unrequested,
+// never as "not returned".
+async function fetchMarkets(ids, settings, fetchImpl = fetch, reserve = () => true) {
   const md = settings.market_data;
   const base = process.env.CR_MARKET_API_BASE || md.api_base;
   const headers = { accept: 'application/json', 'user-agent': 'CryptoResearch-local-dashboard' };
@@ -214,7 +221,9 @@ async function fetchMarkets(ids, settings, fetchImpl = fetch) {
   const rows = [];
   let calls = 0;
   let answered = 0;
-  for (const part of chunk(ids, Math.min(250, md.max_ids_per_call || 250))) {
+  const parts = chunk(ids, Math.min(250, md.max_ids_per_call || 250));
+  for (const [i, part] of parts.entries()) {
+    if (!reserve()) return { rows, calls, answered, unrequested: parts.slice(i).flat(), budget_stopped: true };
     const url = `${base}/coins/markets?vs_currency=usd&ids=${encodeURIComponent(part.join(','))}&per_page=250&page=1&sparkline=true&price_change_percentage=24h,7d,30d`;
     // Counted before it is sent: a request that then fails in any way (no
     // connection, a timeout, an error status, an unreadable answer) counts.
@@ -240,7 +249,23 @@ async function fetchMarkets(ids, settings, fetchImpl = fetch) {
       throw withCounts(err, calls, answered);
     }
   }
-  return { rows, calls, answered };
+  return { rows, calls, answered, unrequested: [], budget_stopped: false };
+}
+
+// Reserves one CoinGecko request in the month's count before it is sent,
+// under the save lock, for every caller in this file and research intake: no
+// caller can send past the monthly budget while another's request is out,
+// and a request is counted even if the process stops while it is out. False
+// when the budget is used up (nothing is counted then). The answer is added
+// afterwards (addCalls with 0 sent).
+function reserveCall(ws) {
+  return withLock(ws, 'market_status', () => {
+    const status = readStatus(ws);
+    const c = callBudget(ws, status);
+    if (c.budget_monthly && c.month_count + 1 > c.budget_monthly) return false;
+    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...status, schema_version: 'cr.market-status.v2', credential: credential(), calls: addCalls(c, 1, 0) }));
+    return true;
+  });
 }
 
 // Identity lookup: CoinGecko /search returns CANDIDATES only. Nothing is bound
@@ -252,8 +277,8 @@ async function searchCoins(ws, query, { fetchImpl = fetch } = {}) {
   const status0 = readStatus(ws);
   const gate = gateOf(status0);
   if (!gate.open) return { status: 'backoff', message: `Not searched: ${gate.note}.`, rate_limited: true, retry_at: gate.until, candidates: [] };
-  const budget = callBudget(ws, status0);
-  if (budget.budget_monthly && budget.month_count + 1 > budget.budget_monthly) {
+  if (!reserveCall(ws)) {
+    const budget = callBudget(ws, readStatus(ws));
     return { status: 'budget_paused', message: `Monthly CoinGecko call budget reached (${budget.month_count} of ${budget.budget_monthly}).`, candidates: [] };
   }
   const base = process.env.CR_MARKET_API_BASE || md.api_base;
@@ -273,7 +298,7 @@ async function searchCoins(ws, query, { fetchImpl = fetch } = {}) {
   }
   withLock(ws, 'market_status', () => {
     const status = readStatus(ws);
-    const calls = addCalls(callBudget(ws, status), 1, body ? 1 : 0);
+    const calls = addCalls(callBudget(ws, status), 0, body ? 1 : 0); // sent: counted by reserveCall
     // A 429 here closes the shared gate for prices and market context too.
     replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...status, schema_version: 'cr.market-status.v2', credential: credential(), calls, ...(limited ? rateLimitFields(ws, status, limited) : {}) }));
   });
@@ -452,7 +477,7 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
   const attemptAt = new Date().toISOString();
   let data;
   try {
-    data = await fetchMarkets(ids, ws.settings, fetchImpl);
+    data = await fetchMarkets(ids, ws.settings, fetchImpl, () => reserveCall(ws));
   } catch (err) {
     const cause = err.cause && (err.cause.code || err.cause.message);
     const message = err.name === 'TimeoutError' || err.name === 'AbortError'
@@ -463,8 +488,9 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
       const status = readStatus(ws);
       const failures = (status.consecutive_failures || 0) + 1;
       const wait = backoffMs(ws, failures);
-      // Every request this refresh sent, the failed one included (V2-007).
-      const calls = addCalls(callBudget(ws, status), Number.isInteger(err.calls) ? err.calls : 1, Number.isInteger(err.answered) ? err.answered : 0);
+      // Every request this refresh sent, the failed one included (V2-007),
+      // was counted when it was reserved; the answers are added here.
+      const calls = addCalls(callBudget(ws, status), 0, Number.isInteger(err.answered) ? err.answered : 0);
       const next = {
         ...status,
         schema_version: 'cr.market-status.v2',
@@ -489,6 +515,11 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
     if (gate && !gate.open) return { status: 'failed', message: `${message}; next try ${clock(gate.until)}.`, tracked: ids.length, rate_limited: true, retry_at: gate.until };
     return { status: 'failed', message, tracked: ids.length };
   }
+  // Another caller used the last of the budget before this refresh sent anything.
+  if (data.budget_stopped && !data.calls) {
+    const b = callBudget(ws, readStatus(ws));
+    return { status: 'budget_paused', message: `Monthly call budget reached (${b.month_count} of ${b.budget_monthly}). Prices stay at their last valid values until next month or until you raise the budget in settings.` };
+  }
   const now = Date.now();
   const fetchedAt = new Date(now).toISOString();
   const tracked = new Set(ids);
@@ -500,7 +531,9 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
     else invalid.push({ id: c && c.id ? String(c.id).slice(0, 80) : null, errors: v.errors });
   }
   const returned = new Set(data.rows.map((c) => c && c.id));
-  const missing = ids.filter((id) => !returned.has(id));
+  // IDs never asked for (the budget ran out part way) are not "not returned".
+  const unrequested = new Set(data.unrequested || []);
+  const missing = ids.filter((id) => !returned.has(id) && !unrequested.has(id));
   let observationWritten = false;
   let nothingUsable = null;
   const skippedOlder = [];
@@ -536,8 +569,8 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
       appendLine(ws.abs(`market-data/observations/${fetchedAt.slice(0, 7)}.jsonl`), { fetched_at: fetchedAt, provider: 'coingecko', trigger, assets: valid.filter((o) => updated.includes(o.id)).map((o) => ({ ...o, sparkline_7d: undefined })) });
       observationWritten = true;
     }
-    const calls = addCalls(callBudget(ws, status), data.calls, data.answered);
-    const rows = { tracked_ids: ids, missing_ids: missing, invalid_rows: invalid.slice(0, 50), skipped_older: skippedOlder, coverage: { tracked: ids.length, updated: updated.length, kept_prior: ids.length - updated.length } };
+    const calls = addCalls(callBudget(ws, status), 0, data.answered); // sent: counted by reserveCall
+    const rows = { tracked_ids: ids, missing_ids: missing, not_requested_ids: [...unrequested], invalid_rows: invalid.slice(0, 50), skipped_older: skippedOlder, coverage: { tracked: ids.length, updated: updated.length, kept_prior: ids.length - updated.length } };
     if (!updated.length) {
       // An answer that updates no price is a failed refresh, not a success:
       // last_success_at stays put, so the page never says "updated just now"
@@ -561,7 +594,7 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
       }));
       return;
     }
-    const partial = invalid.length > 0 || missing.length > 0;
+    const partial = invalid.length > 0 || missing.length > 0 || unrequested.size > 0;
     // Everything else in status.json (the market-context block, the last rate
     // limit) is kept: dropping `context` made market context look never
     // captured and refetch right after every price refresh.
@@ -576,7 +609,7 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
       last_attempt_at: attemptAt,
       last_success_at: fetchedAt,
       last_trigger: trigger,
-      last_error: partial ? `${invalid.length} invalid row(s), ${missing.length} not returned` : null,
+      last_error: partial ? `${invalid.length} invalid row(s), ${missing.length} not returned${unrequested.size ? `, ${unrequested.size} not requested (monthly call budget reached)` : ''}` : null,
       consecutive_failures: 0,
       next_allowed_at: limitedSince ? status.next_allowed_at : null,
       retry_after_until: limitedSince ? status.retry_after_until : null,
@@ -592,8 +625,8 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
     try { await cacheLogos(ws, valid); } catch (_) { /* logos are optional */ }
   }
   return {
-    status: invalid.length || missing.length ? 'partial' : 'ok',
-    message: `Updated ${updated.length} of ${ids.length} tracked assets${missing.length ? `; not returned: ${missing.join(', ')}` : ''}${invalid.length ? `; invalid rows kept their previous values: ${invalid.map((x) => x.id || '?').join(', ')}` : ''}${skippedOlder.length ? `; older responses ignored: ${skippedOlder.join(', ')}` : ''}.`,
+    status: invalid.length || missing.length || unrequested.size ? 'partial' : 'ok',
+    message: `Updated ${updated.length} of ${ids.length} tracked assets${missing.length ? `; not returned: ${missing.join(', ')}` : ''}${invalid.length ? `; invalid rows kept their previous values: ${invalid.map((x) => x.id || '?').join(', ')}` : ''}${skippedOlder.length ? `; older responses ignored: ${skippedOlder.join(', ')}` : ''}${unrequested.size ? `; not requested, the monthly call budget ran out: ${[...unrequested].join(', ')}` : ''}.`,
     tracked: ids.length,
     updated: updated.length,
     missing,
@@ -664,17 +697,40 @@ function freshness(ws, now = Date.now()) {
   return { ...status, freshness: state, age_minutes: ageMin, stale_after_minutes: staleAfter, calls: callBudget(ws, status), rate_limited: !gate.open, retry_at: retryAt, note };
 }
 
+// One month of the price history (observations/YYYY-MM.jsonl), parsed and
+// grouped by asset: each asset's first entry of every line, in file order,
+// with only the fields readers use. Readers given a cache (a Map, one per
+// index rebuild) share one parse of each month; the rebuild clears it when
+// it is done. Without a cache the file is read for that call alone. The
+// history file itself is never changed (REVIEW F6, 2026-10-04: a rebuild
+// parsed the month once per project and reader).
+function historyMonth(ws, month, cache = null) {
+  if (cache && cache.has(month)) return cache.get(month);
+  const byId = new Map();
+  for (const line of readJsonLines(ws.abs(`market-data/observations/${month}.jsonl`))) {
+    const seen = new Set();
+    for (const a of Array.isArray(line.assets) ? line.assets : []) {
+      if (!a || typeof a.id !== 'string' || seen.has(a.id)) continue;
+      seen.add(a.id);
+      let list = byId.get(a.id);
+      if (!list) byId.set(a.id, (list = []));
+      list.push({ source_last_updated_at: a.source_last_updated_at || null, fetched_at: line.fetched_at || null, price_usd: a.price_usd, volume_24h_usd: a.volume_24h_usd });
+    }
+  }
+  if (cache) cache.set(month, byId);
+  return byId;
+}
+
 // 24-hour volume change from our own stored observations, only when a
 // measurement 20-28 hours old exists. Never derived from price changes.
-function volumeChange24h(ws, id, current) {
+function volumeChange24h(ws, id, current, { history = null } = {}) {
   if (!current || typeof current.volume_24h_usd !== 'number' || !current.source_last_updated_at) return null;
   const t = Date.parse(current.source_last_updated_at);
   const months = [...new Set([new Date(t).toISOString().slice(0, 7), new Date(t - 86400000 * 2).toISOString().slice(0, 7)])];
   let best = null;
   for (const m of months) {
-    for (const line of readJsonLines(ws.abs(`market-data/observations/${m}.jsonl`))) {
-      const o = (line.assets || []).find((a) => a.id === id);
-      if (!o || typeof o.volume_24h_usd !== 'number' || !o.source_last_updated_at) continue;
+    for (const o of historyMonth(ws, m, history).get(id) || []) {
+      if (typeof o.volume_24h_usd !== 'number' || !o.source_last_updated_at) continue;
       const age = (t - Date.parse(o.source_last_updated_at)) / 3600000;
       if (age >= 20 && age <= 28 && (!best || Math.abs(age - 24) < Math.abs(best.age - 24))) best = { age, vol: o.volume_24h_usd, at: o.source_last_updated_at };
     }
@@ -683,4 +739,4 @@ function volumeChange24h(ws, id, current) {
   return { pct: (current.volume_24h_usd / best.vol - 1) * 100, compared_with: best.at, hours: Math.round(best.age * 10) / 10 };
 }
 
-module.exports = { refresh, searchCoins, readLatest, readStatus, trackedIds, freshness, fetchMarkets, validateRow, nextAllowed, noteRateLimit, rateLimitGate, retryAfterMs, clock, volumeChange24h, logoFile, apiKey, credential, callBudget, addCalls, LATEST_REL, STATUS_REL, SOURCE_LABEL, RATE_LIMIT_DEFAULT_MS };
+module.exports = { refresh, searchCoins, readLatest, readStatus, trackedIds, freshness, fetchMarkets, validateRow, nextAllowed, noteRateLimit, rateLimitGate, retryAfterMs, clock, volumeChange24h, historyMonth, logoFile, apiKey, credential, callBudget, addCalls, reserveCall, LATEST_REL, STATUS_REL, SOURCE_LABEL, RATE_LIMIT_DEFAULT_MS };

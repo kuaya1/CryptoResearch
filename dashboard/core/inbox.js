@@ -74,6 +74,25 @@ function metadataStamps(obj) {
   return [...new Set(out)].sort((a, b) => b.length - a.length);
 }
 
+// The report's own stamps masked in its prose, but only where the prose
+// labels them as its analysis or access time: a line that opens "As of",
+// "Analysis date/time", "Analyzed at/on", "Report date/time" or "Generated",
+// or a stamp right after "accessed", "retrieved", "analysis_at" or
+// "accessed_at". The same characters anywhere else (an executed swap, a
+// candle close, a catalyst) are evidence and stay content, even when they
+// equal a metadata stamp (REVIEW F3, 2026-10-04: masking every occurrence
+// made a changed observation look like a restamp).
+const STAMP_SEP = '[ \\t*_:"\'`(|]*';
+function maskStamps(prose, stamps) {
+  let p = prose;
+  for (const s of stamps) {
+    const e = escapeRe(s);
+    p = p.replace(new RegExp(`(^[ \\t>*_#|-]*(?:as of|analy[sz](?:is|ed)(?: (?:date|time|at|on))?|report (?:date|time)|generated(?: at| on)?)${STAMP_SEP})${e}`, 'gim'), '$1<metadata-stamp>');
+    p = p.replace(new RegExp(`(\\b(?:accessed|retrieved|analysis_at|accessed_at)(?: (?:at|on))?${STAMP_SEP})${e}`, 'gi'), '$1<metadata-stamp>');
+  }
+  return p;
+}
+
 function withoutMetadata(obj) {
   const copy = JSON.parse(JSON.stringify(obj));
   delete copy.analysis_at;
@@ -96,12 +115,8 @@ function sameReportText(a, b) {
   for (let i = 0; i < sa.length; i++) if (day(sa[i] && sa[i].accessed_at) !== day(sb[i] && sb[i].accessed_at)) return { same: false, reason: 'a source accessed on another day' };
   if (JSON.stringify(withoutMetadata(oa)) !== JSON.stringify(withoutMetadata(ob))) return { same: false, reason: 'the JSON block differs beyond its analysis and access times' };
   // The prose, with the JSON block set aside and only the report's own
-  // metadata stamps masked.
-  const prose = (t, o) => {
-    let p = setAsideJson(norm(t));
-    for (const s of metadataStamps(o)) p = p.replace(new RegExp(escapeRe(s), 'g'), '<metadata-stamp>');
-    return p;
-  };
+  // metadata stamps masked where the prose labels them as such (maskStamps).
+  const prose = (t, o) => maskStamps(setAsideJson(norm(t)), metadataStamps(o));
   const once = (p) => (p.match(/<json-block>/g) || []).length === 1;
   if (!once(prose(a, oa)) || !once(prose(b, ob))) return { same: false, reason: 'not exactly one fenced JSON block; only identical text is the same report' };
   if (prose(a, oa) !== prose(b, ob)) return { same: false, reason: 'the written report differs beyond its own analysis and access times' };
@@ -327,18 +342,23 @@ function ingestLocked(ws, provider, filename, opts = {}) {
   }
 
   // A report completing a research run must answer that run's contract
-  // (binding.js): run, project, model, prompt, rubric, profile, horizon. A
-  // conflict is held here like a provider mismatch: nothing is linked, the
-  // job stays open, the file waits in the inbox with the reason. The desk's
-  // own paid API answer is checked and recorded, never refused.
+  // (binding.js): run, project, model, prompt, rubric, profile, horizon, and
+  // on the API path the prompt and evidence packet actually sent. A conflict
+  // is held here like a provider mismatch: nothing is linked, the job stays
+  // open, the file waits in the inbox with the reason. The desk's own paid
+  // API answer is never refused (it was paid for), but a conflicting one is
+  // quarantined: kept with its receipt, excluded from grades, and it does not
+  // complete the job or return it to the queue (REVIEW F1, 2026-10-04).
   const bind = require('./binding');
   const jsonInfo = classification.json || null;
   const bindArgs = { provider, json, hasBlock: Boolean(jsonInfo && (jsonInfo.obj || (jsonInfo.parseErrors || []).length)), parseError: jsonInfo && (jsonInfo.parseErrors || [])[0], allowModelMismatch: allowProviderMismatch };
   let binding = null;
+  let quarantine = null;
   if (!isPdf && runId) {
     const mode = runCheck || (attested ? 'record' : 'owner');
-    binding = bind.checkBinding(ws, { ...bindArgs, projectId: target.project_id, runId, mode });
+    binding = bind.checkBinding(ws, { ...bindArgs, projectId: target.project_id, runId, mode, promptSha256, evidenceSha256 });
     if (!binding.ok && mode !== 'record') return fail('run_mismatch', binding.message, { sha256: hash, binding: bind.bindingRecord(binding) });
+    if (!binding.ok) quarantine = { reason: binding.message, conflicts: binding.conflicts || [] };
   }
 
   if (!isPdf) built = buildFromText(ws, { text, classification, provider, runDefaults: runId ? runDefaultsFor(ws, target.project_id, runId) : null });
@@ -356,6 +376,9 @@ function ingestLocked(ws, provider, filename, opts = {}) {
       verdict: null,
       note: 'PDF preserved as the original. Text extraction is not available offline; add a text transcription to extract scores. No scores are inferred from the PDF.',
     });
+  // A quarantined answer is never an authoritative grade. Eric can still
+  // include it on purpose with an eligibility correction.
+  if (quarantine) assessment.eligibility = { excluded: true, quarantined: true, reason: quarantine.reason, conflicts: quarantine.conflicts };
   const datePart = (assessment.analysis_at && /^\d{4}-\d{2}-\d{2}/.test(assessment.analysis_at) ? assessment.analysis_at.slice(0, 10) : ymdInTz());
   const reportId = `${datePart}_${provider}_${hash.slice(0, 8)}`;
   const projectId = target.project_id;
@@ -408,6 +431,8 @@ function ingestLocked(ws, provider, filename, opts = {}) {
       binding: bind.bindingRecord(binding),
       // A second save for the same run says what changed and why (save_report).
       revision: revision || null,
+      // A paid answer that does not match the run it was sent for (above).
+      quarantined: Boolean(quarantine),
     },
     immutable: true,
     note: 'The original file and report.json never change. Corrections are separate files in corrections/.',
@@ -429,7 +454,8 @@ function ingestLocked(ws, provider, filename, opts = {}) {
     setState(op, key, { provider, filename, status: 'ingested', sha256: hash, project_id: projectId, report_id: reportId, error: null, last_attempt_at: now, run_id: linkedRun });
     if (linkedRun) {
       try {
-        require('./research').stageReportLink(ws, op, { projectId, runId: linkedRun, provider, reportId, method: runId ? 'run' : 'report json' });
+        if (quarantine) require('./research').stageQuarantine(ws, op, { projectId, runId: linkedRun, provider, reportId, reason: quarantine.reason });
+        else require('./research').stageReportLink(ws, op, { projectId, runId: linkedRun, provider, reportId, method: runId ? 'run' : 'report json' });
       } catch (_) { /* a missing or foreign run never blocks the import */ }
     }
     return { report_id: reportId, project_id: projectId };
@@ -447,7 +473,8 @@ function ingestLocked(ws, provider, filename, opts = {}) {
     errors: issues.filter((i) => i.severity === 'error').length,
     warnings: issues.filter((i) => i.severity === 'warning').length,
     ambiguous: (record.extraction.ambiguous || []).length,
-    message: `Imported ${PROVIDER_LABELS[provider]} report ${reportId} into ${projectId}.`,
+    ...(quarantine ? { quarantined: true } : {}),
+    message: quarantine ? `Saved ${PROVIDER_LABELS[provider]}'s answer as report ${reportId} in ${projectId}, quarantined. ${quarantine.reason}` : `Imported ${PROVIDER_LABELS[provider]} report ${reportId} into ${projectId}.`,
     files: out.files,
     verified: out.verified,
     op_id: out.op_id,

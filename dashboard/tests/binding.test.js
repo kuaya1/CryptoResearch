@@ -169,13 +169,18 @@ test('binding: a correctly bound report with unknown scores saves, its grade wit
   assert.equal(jobOf(ws, run, 'gemini').state, 'unconfigured', 'an old report never completes a job of another contract');
 });
 
-test('binding: the desk\'s own paid API answer is checked and recorded, never refused; a tampered run prompt binds nothing', async (t) => {
+test('binding: the desk\'s own paid API answer is never refused, but a conflicting one is quarantined and completes nothing; a tampered run prompt binds nothing', async (t) => {
   const { ws, run } = setup(t, 'bind-api', ['chatgpt', 'gemini']);
   const api = inbox.importContent(ws, 'chatgpt', { content: reportFor(ws, 'chatgpt', run, (o) => { o.sector_profile = 'payfi-credit@1'; }), projectId: PID, runId: run.run_id, attested: { provider: 'chatgpt', model: 'FICTIONAL' }, channel: 'api' });
   assert.equal(api.result.status, 'ingested', api.result.message);
+  assert.equal(api.result.quarantined, true);
   const rep = savedBy(ws, 'chatgpt')[0];
   assert.equal(rep.meta.provenance.binding.mode, 'record');
   assert.deepEqual(rep.meta.provenance.binding.conflicts, ['sector_profile']);
+  // Kept, never graded, and the job is not completed (REVIEW F1, 2026-10-04).
+  assert.equal(rep.assessment.eligibility.excluded, true);
+  assert.notEqual(jobOf(ws, run, 'chatgpt').state, 'completed');
+  assert.equal(jobOf(ws, run, 'chatgpt').report_id, null);
   // The run's frozen prompt no longer matches its hash: no report can complete it.
   fs.appendFileSync(ws.abs(run.prompt.path), '\nFICTIONAL tampering\n');
   const out = await call(ws, 'gemini', 'save_report', { project_id: PID, run_id: run.run_id, report_markdown: reportFor(ws, 'gemini', run) });

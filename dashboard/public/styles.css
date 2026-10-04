@@ -1387,7 +1387,9 @@ details.rev-line .rev-body p { margin: 0 0 6px; }
   #panel-root .panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(540px, 92vw); z-index: 60; box-shadow: var(--shadow-drawer); border-left: 1px solid var(--border); }
 }
 @media (max-width: 760px) {
-  #panel-root .panel { width: 100vw; height: 100dvh; border-left: 0; box-shadow: none; }
+  /* The containing width, not 100vw: a classic scrollbar is part of 100vw,
+     so a right-anchored 100vw panel slid under the left edge. */
+  #panel-root .panel { left: 0; right: 0; width: auto; height: 100dvh; border-left: 0; box-shadow: none; }
   .panel-head { padding: 12px 8px 12px 16px; }
   .panel-head h2 { font-size: 21px; }
   .panel-body { padding: 2px 16px 44px; font-size: 15px; }

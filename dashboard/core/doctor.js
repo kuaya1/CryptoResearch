@@ -168,7 +168,7 @@ async function doctor(ws) {
     // DefiLlama fundamentals: what is bound and saved, the last refresh, the gate.
     const fo = require('./fundamentals').overview(ws);
     const states = Object.entries(fo.states).filter(([s]) => s !== 'unmapped').map(([s, n]) => `${n} ${s.replace(/_/g, ' ')}`).join(', ');
-    const problems = ['unavailable', 'not_found', 'scope_mismatch', 'entity_mismatch'].reduce((a, s) => a + (fo.states[s] || 0), 0);
+    const problems = ['unavailable', 'not_found', 'scope_mismatch', 'entity_mismatch', 'unidentified'].reduce((a, s) => a + (fo.states[s] || 0), 0);
     const detail = !fo.enabled
       ? 'Turned off in settings.'
       : fo.bound

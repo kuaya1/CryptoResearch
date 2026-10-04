@@ -190,6 +190,8 @@ function researchAttention(ws, p, researchState, now) {
     // An answer that arrived but stopped before finishing is said apart from a
     // request that failed outright.
     if (job.state === 'failed' && job.outcome === 'incomplete') item('research_incomplete', 'medium', `${who} answer incomplete`, `${job.error || 'The answer stopped before it finished.'} Its partial text is kept under the run; it is not a report and is not graded.`);
+    // A paid answer that does not match its run: kept, quarantined, not graded.
+    else if (job.state === 'failed' && job.outcome === 'contract_conflict') item('research_conflict', 'high', `${who} answer does not match its research run`, job.error || 'The answer was saved but quarantined: it is excluded from grades and did not complete the job. Nothing was sent again.');
     else if (job.state === 'failed') item('research_failed', 'medium', `${who} research job failed`, job.error || 'See the research run for details.');
     else if (job.state === 'uncertain') item('research_uncertain', 'high', `${who} API call needs a check`, 'The request may have been sent and billed, and no answer was saved. Check the provider\'s usage page, then reconcile it or retry.');
     else if (job.state === 'unconfigured' && held[prov]) {
@@ -230,7 +232,7 @@ function eventDate(d) {
   return { date: null, precision: 'unknown', raw: d };
 }
 
-function marketFor(ws, project, latest) {
+function marketFor(ws, project, latest, history = null) {
   const id = project.identity && project.identity.status === 'verified' ? project.identity.coingecko_id : null;
   if (!id) return null;
   const obs = latest.assets ? latest.assets[id] : null;
@@ -240,7 +242,7 @@ function marketFor(ws, project, latest) {
   const valid = typeof obs.price_usd === 'number' && Number.isFinite(obs.price_usd) && obs.price_usd > 0 && !Number.isNaN(t);
   const age = Number.isNaN(t) ? null : Math.round((Date.now() - t) / 60000);
   const logo = market.logoFile(ws, id);
-  const volChange = valid ? market.volumeChange24h(ws, id, obs) : null;
+  const volChange = valid ? market.volumeChange24h(ws, id, obs, { history }) : null;
   return {
     coingecko_id: id,
     ...obs,
@@ -256,7 +258,19 @@ function marketFor(ws, project, latest) {
   };
 }
 
-function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
+// One rebuild parses each month of price history once (market.historyMonth),
+// shared by the volume change and the digest of every project, and lets go of
+// the parse when it is done, so memory stays bounded (REVIEW F6, 2026-10-04).
+function buildIndexRaw(ws, opts = {}) {
+  const history = new Map();
+  try {
+    return buildIndexOnce(ws, opts, history);
+  } finally {
+    history.clear();
+  }
+}
+
+function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = null) {
   const started = Date.now();
   const today = ymdInTz(new Date(now));
   const settings = ws.settings;
@@ -300,7 +314,7 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
     const lastReport = good.sort((a, b) => reportSortKey(b).localeCompare(reportSortKey(a)))[0] || null;
     const openEvents = events.filter((e) => e.status === 'open');
     const nextReview = openEvents.filter((e) => e.type === 'review' && e.due_date).sort((a, b) => a.due_date.localeCompare(b.due_date))[0] || null;
-    const mkt = marketFor(ws, p, latestMarket);
+    const mkt = marketFor(ws, p, latestMarket, history);
     // DefiLlama fundamentals as saved (fundamentals.js); a read never fetches.
     let fundamentals = null;
     try {
@@ -441,7 +455,7 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
     let changes = null;
     if (!light) {
       try {
-        const d = require('./digest').changesSince(ws, p.project_id, { latestMarket });
+        const d = require('./digest').changesSince(ws, p.project_id, { latestMarket, history });
         changes = { since: d.since, cursor_source: d.cursor_source, item_count: d.item_count, new_reports: d.new_reports.length, price_change_pct: d.price ? d.price.change_pct : null };
       } catch (_) { /* optional */ }
     }

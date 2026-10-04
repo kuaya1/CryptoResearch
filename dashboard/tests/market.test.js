@@ -144,7 +144,7 @@ test('a 429 without Retry-After closes the shared gate for two minutes; Refresh 
   assert.equal(market.freshness(ws).rate_limited, false);
 });
 
-test('Retry-After is honored as sent, capped at the longest backoff; a running wait is never shortened; repeated 429s without it double the wait', async (t) => {
+test('Retry-After is honored as sent, even past the longest local backoff; a running wait is never shortened; repeated 429s without it double the wait, capped', async (t) => {
   const { ws, root, cleanup } = tempWorkspace('mktra');
   t.after(cleanup);
   enableMarket(ws, root);
@@ -154,8 +154,10 @@ test('Retry-After is honored as sent, capped at the longest backoff; a running w
   assert.ok(near(g.until, 30000));
   g = market.noteRateLimit(ws, { retryAfterMs: 5000, source: 'prices' });
   assert.ok(near(g.until, 30000), 'a shorter Retry-After never shortens the running wait');
+  // CoinGecko's own deadline, not the local backoff ceiling (REVIEW F5, 2026-10-04).
   g = market.noteRateLimit(ws, { retryAfterMs: 10 * 3600000, source: 'prices' });
-  assert.ok(near(g.until, 60 * 60000), 'capped at backoff_max_minutes (60)');
+  assert.ok(near(g.until, 10 * 3600000), 'the ten hours CoinGecko asked for');
+  assert.equal(market.readStatus(ws).rate_limit.wait_ms, 10 * 3600000);
 
   const { ws: ws2, root: root2, cleanup: c2 } = tempWorkspace('mktra2');
   t.after(c2);

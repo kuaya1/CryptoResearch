@@ -29,6 +29,9 @@ export const RESEARCH_STATE = {
   // output limit): not a report and never graded; its partial text is kept.
   incomplete: { short: 'Incomplete', long: 'Incomplete answer: the model stopped before finishing (for example at its output limit). Nothing was saved as a report; the partial text is kept under its run', tone: 'bad' },
   failed: { short: 'Failed', long: 'Failed: nothing was saved for this model', tone: 'bad' },
+  // A paid answer that does not match the run it was sent for: kept with its
+  // receipt and cost, never graded, and not sent again.
+  conflict: { short: 'Check', long: 'Check: the answer does not match the research run it was sent for. It is kept with its receipt and cost, is not graded and did not complete the job. Retry only if you want the run asked again', tone: 'bad' },
   canceled: { short: 'Canceled', long: 'Canceled: nothing was saved for this model', tone: '' },
   completed: { short: 'Saved', long: 'Saved as a report', tone: 'ok' },
   // Eric paused the model: its waiting job is kept and nothing new is assigned.
@@ -46,7 +49,7 @@ export function onHoldOf(index, provider) {
 // Work in progress (the ↻ "newer research" mark), and the states of a newer
 // run that the saved grade must not hide (the "!" mark).
 const WORKING = new Set(['queued', 'dispatching', 'running', 'cowork', 'connector']);
-const NEEDS_LOOK = new Set(['failed', 'incomplete', 'uncertain', 'interrupted']);
+const NEEDS_LOOK = new Set(['failed', 'incomplete', 'conflict', 'uncertain', 'interrupted']);
 export const isWorking = (key) => WORKING.has(key);
 
 // The one sentence that gets a model's own assistant to do its waiting
@@ -578,6 +581,7 @@ export function jobKey(job, runCreatedAt = null, { onHold = false } = {}) {
   // An answer that arrived but stopped before finishing is its own state,
   // apart from a request that failed outright.
   if (job.state === 'failed' && lastOutcome(job) === 'incomplete') return 'incomplete';
+  if (job.state === 'failed' && lastOutcome(job) === 'contract_conflict') return 'conflict';
   return job.state;
 }
 
@@ -590,6 +594,7 @@ function newerRunText(provider, key, job) {
   if (key === 'waiting') return `Newer run waiting for ${who}`;
   if (key === 'failed') return `Newer run failed${job && job.error ? `: ${job.error}` : ''}`;
   if (key === 'incomplete') return 'Newer run incomplete: the answer stopped before finishing, and nothing was saved';
+  if (key === 'conflict') return 'Newer run needs a check: its answer does not match the run, so it was kept but not graded';
   if (key === 'uncertain') return 'Newer run needs a check: it may have been billed, and no answer was saved';
   if (key === 'interrupted') return `Newer run paused: ${provider === 'claude' && job && job.mode === 'cowork' ? 'Cowork' : who} stopped working on it`;
   return `Newer run ${(RESEARCH_STATE[key] || { short: key }).short.toLowerCase()}`;

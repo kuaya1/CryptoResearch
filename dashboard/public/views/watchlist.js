@@ -419,7 +419,7 @@ function buildTable(ctx, prefsObj, rows, rerender) {
     return tr;
   }));
   return h('div', { class: 'table-scroll', 'data-keep-scroll': 'watchlist' },
-    h('table', { class: 'wl' }, h('caption', { class: 'sr-only' }, `Watchlist. ${sortDescription(prefsObj.sort)}. Choose a project name for its details; J and K or the arrow keys move between rows, Space or Enter opens and closes a project. Grade badges show a scorecard on hover or keyboard focus.`), thead, tbody));
+    h('table', { class: 'wl' }, h('caption', { class: 'sr-only' }, `Watchlist. ${sortDescription(prefsObj.sort)}. Choose a project name for its details; J and K or the arrow keys move between rows, Space or Enter opens and closes a project.`), thead, tbody));
 }
 
 // ---- menus (filters, columns) ------------------------------------------------
@@ -835,7 +835,7 @@ function modelHead(ctx, p, prov) {
   // assistant first; pasting by hand stays available. A model on hold gets
   // no prompt to act: its job is kept, not handed out.
   if (job && job.state === 'unconfigured' && !opts.onHold && !resume) actions.push(...waitingActions(ctx, { pid, runId: job.run_id, provider: prov, key: `${pid}-${prov}` }));
-  if (job && ['interrupted', 'uncertain', 'incomplete', 'held'].includes(info.job || info.kind)) actions.push(h('a', { class: 'btn small', href: `#/project/${encodeURIComponent(pid)}/research`, dataset: { key: `runs-${pid}-${prov}` } }, 'Research runs'));
+  if (job && ['interrupted', 'uncertain', 'incomplete', 'conflict', 'held'].includes(info.job || info.kind)) actions.push(h('a', { class: 'btn small', href: `#/project/${encodeURIComponent(pid)}/research`, dataset: { key: `runs-${pid}-${prov}` } }, 'Research runs'));
   if (!rep && !job && p.status !== 'archived' && !opts.onHold) actions.push(button(`Run ${who} research`, () => openResearchDialog(ctx, p, { providers: [prov] }), { kind: 'small', key: `run-${pid}-${prov}` }));
   // The report's verdict, analysis date and horizon, in one quiet line. The
   // age is in calendar days in New York ("yesterday", not "today").
@@ -975,7 +975,7 @@ export function progressSteps(rep, key) {
   const research = !key ? (rep ? 'done' : 'todo')
     : key === 'completed' ? 'done'
       : ['queued', 'running', 'dispatching', 'cowork', 'connector'].includes(key) ? 'now'
-        : key === 'failed' || key === 'incomplete' ? 'bad'
+        : key === 'failed' || key === 'incomplete' || key === 'conflict' ? 'bad'
           : ['waiting', 'interrupted', 'uncertain'].includes(key) ? 'warn' : 'todo';
   return [
     key || rep ? 'done' : 'todo',
@@ -1031,8 +1031,8 @@ function researchProgress(ctx, p) {
 // other review items, and the identity when it is not confirmed.
 // One short line per model, each opening its tab: the model's own tab says the
 // rest (its badge and its card carry the same state in words).
-const PROBLEM_WORDS = { uncertain: 'Check charge', failed: 'Research failed', incomplete: 'Research incomplete', interrupted: 'Research paused', held: 'Held, not sent' };
-const JOB_KINDS = new Set(['research_uncertain', 'research_failed', 'research_incomplete', 'research_interrupted', 'identity']);
+const PROBLEM_WORDS = { uncertain: 'Check charge', failed: 'Research failed', incomplete: 'Research incomplete', conflict: 'Answer quarantined', interrupted: 'Research paused', held: 'Held, not sent' };
+const JOB_KINDS = new Set(['research_uncertain', 'research_failed', 'research_incomplete', 'research_conflict', 'research_interrupted', 'identity']);
 const projectItems = (ctx, p) => (ctx.state.index.attention || []).filter((a) => a.project_id === p.project_id && !JOB_KINDS.has(a.kind));
 function problemLines(ctx, p) {
   const items = [];
@@ -1041,7 +1041,7 @@ function problemLines(ctx, p) {
     const key = jobKey(job, null, { onHold: Boolean(onHoldOf(ctx.state.index, prov)) });
     if (!PROBLEM_WORDS[key]) continue;
     items.push(h('li', null, h('button', { type: 'button', class: `pline ${key === 'uncertain' ? 'high' : 'medium'}`, dataset: { key: `insp-show-${prov}` }, onclick: () => selectTab(ctx, p.project_id, prov) },
-      icon(key === 'uncertain' ? 'question' : key === 'failed' ? 'alert' : key === 'held' ? 'minus' : key === 'incomplete' ? 'half' : 'pause'),
+      icon(key === 'uncertain' ? 'question' : key === 'failed' || key === 'conflict' ? 'alert' : key === 'held' ? 'minus' : key === 'incomplete' ? 'half' : 'pause'),
       h('span', null, h('strong', null, PROBLEM_WORDS[key]), ` · ${PROVIDER_LABELS[prov]}`),
       h('span', { class: 'go', 'aria-hidden': 'true' }, 'Show'))));
   }

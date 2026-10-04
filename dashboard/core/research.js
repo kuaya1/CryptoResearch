@@ -1059,6 +1059,8 @@ function retryJob(ws, projectId, runId, provider) {
     if (IN_FLIGHT.has(job.state)) return { message: 'Still running.' };
     // Your retry is the go-ahead for a job held while its project was archived.
     if (job.hold) delete job.hold;
+    // A quarantined answer stays saved (quarantined_report_id); the job asks again.
+    if (job.outcome) delete job.outcome;
     if (st.mode === 'manual') {
       job.state = 'unconfigured';
       job.mode = 'manual';
@@ -1159,6 +1161,32 @@ function stageReportLink(ws, op, { projectId, runId, provider, reportId, method 
     last.phase = 'imported';
     last.report_id = reportId;
   }
+  op.writeJson(rel, run);
+}
+
+// A paid answer that does not match the run it was sent for (binding.js,
+// mode record): saved as its own report, excluded from grades (inbox.js), and
+// its job is not completed. The job fails with the reason, so it is in front
+// of Eric and never back in the queue: a retry is his call. Its attempt keeps
+// the answer, receipt and cost. A job that already has its report keeps it.
+// Called inside the import operation, like stageReportLink.
+function stageQuarantine(ws, op, { projectId, runId, provider, reportId, reason }) {
+  if (!RUN_ID_RE.test(runId)) return;
+  const rel = `${runDir(projectId, runId)}/run.json`;
+  const run = op.readJson(rel, null);
+  if (!run || !run.jobs || !run.jobs[provider]) return;
+  const job = run.jobs[provider];
+  if (job.state === 'completed' && job.report_id) return;
+  const at = new Date().toISOString();
+  Object.assign(job, {
+    state: 'failed',
+    outcome: 'contract_conflict',
+    quarantined_report_id: reportId,
+    error: `${PROVIDER_LABELS[provider]}'s answer was saved as report ${reportId} but quarantined: ${String(reason || 'it does not match this run').slice(0, 900)} Retry only if you want this run asked again.`,
+    updated_at: at,
+  });
+  const last = (job.attempts || [])[(job.attempts || []).length - 1];
+  if (last && last.phase === 'responded') Object.assign(last, { phase: 'imported', report_id: reportId, quarantined: true });
   op.writeJson(rel, run);
 }
 
@@ -1624,6 +1652,16 @@ async function recoverJob(ws, projectId, run, provider, { fetchImpl } = {}) {
     const j = out.job || ((loadRun(ws, projectId, runId) || {}).jobs || {})[provider] || {};
     return { provider, status: j.state === 'queued' ? 'requeued' : j.state || 'missing', recovered: true };
   };
+  // An answer kept but quarantined (it does not match this run): never
+  // completed, never requeued, so never sent again.
+  if (last && last.quarantined) {
+    updateJob(ws, projectId, runId, provider, (jj) => {
+      jj.state = 'failed';
+      jj.outcome = 'contract_conflict';
+      jj.quarantined_report_id = jj.quarantined_report_id || last.report_id || null;
+    }, `Recover ${provider} job in ${runId}`, 'research_recover');
+    return { provider, status: 'failed', recovered: true, quarantined: true };
+  }
   if (phase === 'imported' && last.report_id) {
     updateJob(ws, projectId, runId, provider, (jj) => { jj.state = 'completed'; jj.report_id = jj.report_id || last.report_id; }, `Recover ${provider} job in ${runId}`, 'research_recover');
     return { provider, status: 'completed', recovered: true };
@@ -2024,6 +2062,26 @@ async function importSaved(ws, run, provider, attempt) {
     evidenceSha256: saved.evidence_packet_sha256,
   });
   const st = out.result.status;
+  // Kept, but it does not answer this run (inbox.js quarantine): the job was
+  // failed with the reason inside the import; nothing is sent again.
+  if (st === 'ingested' && out.result.quarantined) return { provider, status: 'failed', quarantined: true, report_id: out.result.report_id, error: out.result.message };
+  if (st === 'duplicate') {
+    // The same text is already saved: it completes this job only when it
+    // answers this run's frozen contract, as a first import would.
+    const cls = require('./reports').classify(saved.text);
+    const json = cls.json && cls.json.obj ? cls.json.obj : null;
+    const b = require('./binding').checkBinding(ws, { projectId: run.project_id, runId: run.run_id, provider, json, mode: 'record', promptSha256: saved.prompt_sha256, evidenceSha256: saved.evidence_packet_sha256 });
+    if (!b.ok) {
+      const dupId = out.result.report_id || null;
+      updateJob(ws, run.project_id, run.run_id, provider, (jj) => {
+        if (jj.state === 'completed' && jj.report_id) return;
+        Object.assign(jj, { state: 'failed', outcome: 'contract_conflict', quarantined_report_id: dupId, error: `${PROVIDER_LABELS[provider]}'s answer is already saved as report ${dupId}, and it does not answer this run: ${b.message}` });
+        const a = lastAttempt(jj);
+        if (a && a.phase === 'responded') Object.assign(a, { phase: 'imported', report_id: dupId, quarantined: true });
+      }, `${provider} answer in ${run.run_id} quarantined`);
+      return { provider, status: 'failed', quarantined: true, report_id: dupId, error: b.message };
+    }
+  }
   if (st === 'ingested' || st === 'duplicate') {
     if (st === 'duplicate') {
       updateJob(ws, run.project_id, run.run_id, provider, (jj) => {
@@ -2126,7 +2184,7 @@ function researchStateFor(ws, projectId) {
   for (const p of PROVIDERS) {
     const run = runs.find((r) => r.jobs[p]);
     const last = run ? lastAttempt(run.jobs[p]) : null;
-    byProvider[p] = run ? { run_id: run.run_id, state: run.jobs[p].state, mode: run.jobs[p].mode, error: run.jobs[p].error || null, report_id: run.jobs[p].report_id || null, updated_at: run.jobs[p].updated_at, progress_at: run.jobs[p].progress_at || null, run_created_at: run.created_at, background: Boolean(last && last.phase === 'submitted'), provider_status: last && last.phase === 'submitted' ? last.provider_status || null : null, not_before: run.jobs[p].not_before || null, outcome: last && last.outcome ? last.outcome : null, hold: run.jobs[p].hold || null, draft_saved_at: run.jobs[p].draft_saved_at || null, released: run.jobs[p].released || null } : null;
+    byProvider[p] = run ? { run_id: run.run_id, state: run.jobs[p].state, mode: run.jobs[p].mode, error: run.jobs[p].error || null, report_id: run.jobs[p].report_id || null, updated_at: run.jobs[p].updated_at, progress_at: run.jobs[p].progress_at || null, run_created_at: run.created_at, background: Boolean(last && last.phase === 'submitted'), provider_status: last && last.phase === 'submitted' ? last.provider_status || null : null, not_before: run.jobs[p].not_before || null, outcome: run.jobs[p].outcome || (last && last.outcome ? last.outcome : null), quarantined_report_id: run.jobs[p].quarantined_report_id || null, hold: run.jobs[p].hold || null, draft_saved_at: run.jobs[p].draft_saved_at || null, released: run.jobs[p].released || null } : null;
   }
   return { latest_run: latest ? { run_id: latest.run_id, status: latest.status, created_at: latest.created_at, providers: latest.providers, horizon: latest.horizon } : null, providers: byProvider, runs: runs.length };
 }
@@ -2296,25 +2354,15 @@ function sendWaitingToApi(ws, projectId, runId, list = PROVIDERS) {
   return sent;
 }
 
-// After a model saved its report for a project, its other jobs on that project
-// still waiting for an answer (another run asked for the same thing: same
-// horizon, same owner questions) are linked to that report instead of being
-// researched again. A job with different questions or horizon keeps waiting.
-function coverWaitingJobs(ws, projectId, provider, { runId, reportId }) {
-  const source = loadRun(ws, projectId, runId);
-  if (!source || !reportId) return [];
-  const same = (r) => r.horizon && source.horizon && r.horizon.text === source.horizon.text && (r.owner_instructions || null) === (source.owner_instructions || null);
-  const covered = [];
-  for (const { run } of waitingJobs(ws, projectId, provider)) {
-    if (run.run_id === runId || !same(run)) continue;
-    updateJob(ws, projectId, run.run_id, provider, (job) => {
-      if (job.state !== 'unconfigured') return;
-      const at = new Date().toISOString();
-      Object.assign(job, { state: 'completed', report_id: reportId, linked_at: at, link_method: `covered by the same model's report from ${runId}`, covered_by_run: runId, note: `Covered by ${PROVIDER_LABELS[provider]}'s report ${reportId} from run ${runId}, which answered the same request; not researched twice.` });
-    }, `Cover ${provider} in ${run.run_id} with ${reportId}`);
-    covered.push(run.run_id);
-  }
-  return covered;
+// After a model saved its report for one run, its jobs in other runs on the
+// same project keep waiting. Each run froze its own contract (prompt and hash,
+// rubric, profile, horizon, evidence packet), and its prompt names the run, so
+// a report answers only the run it was written for: no report completes
+// another run (REVIEW F1, 2026-10-04; before, a matching horizon and owner
+// questions were enough). Read-only: the other runs still waiting for this
+// model, so the reply can say so.
+function otherWaitingRuns(ws, projectId, provider, { runId }) {
+  return waitingJobs(ws, projectId, provider).map(({ run }) => run.run_id).filter((id) => id !== runId);
 }
 
 // Research waiting for one model across the desk: jobs no API runs (they wait
@@ -2398,7 +2446,7 @@ module.exports = {
   addProviders,
   sendWaitingToApi,
   hasBackgroundWork,
-  coverWaitingJobs,
+  otherWaitingRuns,
   pendingFor,
   readAssistantDraft,
   saveAssistantDraft,
@@ -2431,6 +2479,7 @@ module.exports = {
   heldJobsOf,
   reconcileAttempt,
   stageReportLink,
+  stageQuarantine,
   autoLinkReport,
   hasDueWork,
   dueSchedules,

@@ -29,7 +29,12 @@
 //              inbox drop, an import without a run). On a conflict it is
 //              saved on its own and not linked to that run.
 //   record     the desk's own paid API answer to the frozen prompt it sent
-//              (attested): checked and recorded, never refused.
+//              (attested): never refused, since it was paid for. A conflict
+//              is kept with its receipt but quarantined (inbox.js): excluded
+//              from grades, its job not completed, never sent again.
+// Transport attribution proves who answered, not which contract the answer
+// satisfies. When the import knows the SHA-256 of the prompt and evidence
+// packet actually sent (the API path), each must be the run's own.
 // Read-only: it changes nothing.
 
 const fs = require('fs');
@@ -88,7 +93,7 @@ function quote(v) {
 
 // The check itself. `json` is the report's parsed JSON block (or null);
 // `hasBlock` says a JSON block was found at all (even an unreadable one).
-function checkBinding(ws, { projectId, runId, provider, json = null, hasBlock = false, parseError = null, mode = 'owner', now = new Date(), allowModelMismatch = false }) {
+function checkBinding(ws, { projectId, runId, provider, json = null, hasBlock = false, parseError = null, mode = 'owner', now = new Date(), allowModelMismatch = false, promptSha256 = null, evidenceSha256 = null }) {
   const run = loadRun(ws, projectId, runId);
   if (!run) return { ok: false, status: 'no_run', mode, run_id: runId, checks: {}, conflicts: [], missing: [], message: `There is no research run ${runId} for ${projectId}, so nothing can be completed by this report.` };
   const out = { ok: true, status: 'bound', mode, run_id: runId, checks: {}, conflicts: [], missing: [], prompt_sha256: run.prompt ? run.prompt.sha256 || null : null, execution_sha256: null };
@@ -106,6 +111,18 @@ function checkBinding(ws, { projectId, runId, provider, json = null, hasBlock = 
     }
     if (!ok) {
       return { ...out, ok: false, status: 'contract_unverifiable', message: `Research run ${runId}'s frozen prompt no longer matches the SHA-256 recorded when the run started, so no report can be bound to it. Nothing was saved. Tell Eric.` };
+    }
+  }
+  // The same for the run's frozen evidence packet (runs that have one).
+  if (mode !== 'record' && run.evidence_packet && run.evidence_packet.path && run.evidence_packet.sha256) {
+    let ok = false;
+    try {
+      ok = sha256(fs.readFileSync(ws.abs(run.evidence_packet.path))) === run.evidence_packet.sha256;
+    } catch (_) {
+      ok = false;
+    }
+    if (!ok) {
+      return { ...out, ok: false, status: 'contract_unverifiable', message: `Research run ${runId}'s frozen evidence packet no longer matches the SHA-256 recorded when the run started, so no report can be bound to it. Nothing was saved. Tell Eric.` };
     }
   }
 
@@ -142,6 +159,11 @@ function checkBinding(ws, { projectId, runId, provider, json = null, hasBlock = 
     }
   }
 
+  // The prompt and evidence packet the answer was given, when the import
+  // knows them (the hashes the API path recorded when it sent the request).
+  if (promptSha256) add('prompt_sha256', run.prompt && promptSha256 === run.prompt.sha256 ? 'match' : 'conflict', promptSha256, run.prompt ? run.prompt.sha256 || null : null);
+  if (evidenceSha256) add('evidence_packet_sha256', run.evidence_packet && evidenceSha256 === run.evidence_packet.sha256 ? 'match' : 'conflict', evidenceSha256, run.evidence_packet ? run.evidence_packet.sha256 || null : null);
+
   // An analysis time more than a day after the save cannot be right.
   if (mode === 'assistant' && j && text(j.analysis_at)) {
     const t = require('./reports').analysisTiming(text(j.analysis_at), now.toISOString());
@@ -171,8 +193,10 @@ function checkBinding(ws, { projectId, runId, provider, json = null, hasBlock = 
     ];
     const where = mode === 'declared'
       ? `It names research run ${runId} but does not match it, so it is saved on its own and not linked to that run`
-      : `Not saved: this report does not match research run ${runId}, the job it would complete. Nothing was saved or linked, and the job stays open`;
-    out.message = `${where}. ${lines.join('; ')}.${mode === 'declared' ? '' : ' Copy these from the run\'s prompt into the JSON block (never another run\'s) and save again. If the report really answers another run or prompt, save it against that run instead.'}`;
+      : mode === 'record'
+        ? `This answer does not match research run ${runId}, the request it was sent for. It is kept with its receipt and cost, excluded from grades, and does not complete the job; it is not sent again`
+        : `Not saved: this report does not match research run ${runId}, the job it would complete. Nothing was saved or linked, and the job stays open`;
+    out.message = `${where}. ${lines.join('; ')}.${mode === 'declared' || mode === 'record' ? '' : ' Copy these from the run\'s prompt into the JSON block (never another run\'s) and save again. If the report really answers another run or prompt, save it against that run instead.'}`;
   }
   return out;
 }

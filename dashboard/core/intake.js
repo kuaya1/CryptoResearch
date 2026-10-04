@@ -241,9 +241,11 @@ async function cgGet(ws, pathAndQuery, fetchImpl, { retries = 1, maxWaitMs = 200
       await sleep(gate.wait_ms + 25);
       continue; // checked again: another caller may have made the wait longer
     }
-    const budget = market.callBudget(ws, market.readStatus(ws));
-    if (budget.budget_monthly && budget.month_count + 1 > budget.budget_monthly) throw new OpError('REFUSED', `The monthly CoinGecko call budget is used up (${budget.month_count} of ${budget.budget_monthly}).`);
-    countCalls(ws, 1);
+    // Checked and counted in one step (market.reserveCall), before it is sent.
+    if (!market.reserveCall(ws)) {
+      const budget = market.callBudget(ws, market.readStatus(ws));
+      throw new OpError('REFUSED', `The monthly CoinGecko call budget is used up (${budget.month_count} of ${budget.budget_monthly}).`);
+    }
     sent++;
     let res;
     try {

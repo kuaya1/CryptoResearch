@@ -1418,41 +1418,74 @@ function isEligible(r) {
 // more than a day after the save is materially impossible (a connected model's
 // save of it is refused, binding.js). A date-time with a UTC offset is compared
 // as the instant it names; one without any zone is read in the most lenient
-// zone (UTC+14) and said to have none.
+// zone (UTC+14) and said to have none. A calendar date that does not exist
+// (2026-02-30, month 13) is unreadable. Any other readable form ("October 12,
+// 2026", an RFC 2822 date) gets the same checks: the instant it names when it
+// states a zone, else its wall clock in the most lenient zone (never this
+// machine's), and its zone is "nonstandard" (REVIEW F3, 2026-10-04: such a
+// date skipped the future check).
 const ANALYSIS_SKEW_MINUTES = 10;
 const ANALYSIS_IMPOSSIBLE_HOURS = 24;
+const LENIENT_ZONE_MS = 14 * 3600000;
+const realDate = (y, mo, d) => {
+  const x = new Date(Date.UTC(y, mo - 1, d));
+  return x.getUTCFullYear() === y && x.getUTCMonth() === mo - 1 && x.getUTCDate() === d;
+};
+const STATED_ZONE = /(?:^|[\s\d])(?:z|utc|ut|gmt)(?:$|[\s+-])|\d:\d{2}(?::\d{2}(?:\.\d+)?)?\s*[+-]\d{2}:?\d{2}\s*$/i;
 function analysisTiming(analysisAt, savedAt) {
   const s = typeof analysisAt === 'string' ? analysisAt.trim() : '';
   if (!s) return { status: 'unknown', zone: null, minutes_after_save: null, normalized: null };
   const saved = Date.parse(savedAt || '');
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+  const day = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (day) {
+    if (!realDate(+day[1], +day[2], +day[3])) return { status: 'unreadable', zone: 'date', minutes_after_save: null, normalized: null };
     if (!Number.isFinite(saved)) return { status: 'ok', zone: 'date', minutes_after_save: null, normalized: s };
     const latest = new Date(saved + 86400000).toISOString().slice(0, 10);
     return { status: s > latest ? 'future' : 'ok', zone: 'date', minutes_after_save: null, normalized: s };
   }
-  const m = s.match(/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?\s*(Z|[+-]\d{2}:?\d{2})?$/i);
-  if (!m) return { status: Number.isNaN(Date.parse(s)) ? 'unreadable' : 'ok', zone: null, minutes_after_save: null, normalized: null };
-  const zone = m[1] ? (/^z$/i.test(m[1]) ? 'utc' : 'offset') : 'none';
-  const iso = s.replace(' ', 'T');
-  const t = zone === 'none' ? Date.parse(`${iso}Z`) - 14 * 3600000 : Date.parse(iso);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?\s*(Z|[+-]\d{2}:?\d{2})?$/i);
+  let zone;
+  let t;
+  if (m) {
+    if (!realDate(+m[1], +m[2], +m[3]) || +m[4] > 23 || +m[5] > 59 || (m[6] && +m[6] > 59)) return { status: 'unreadable', zone: null, minutes_after_save: null, normalized: null };
+    zone = m[7] ? (/^z$/i.test(m[7]) ? 'utc' : 'offset') : 'none';
+    const iso = s.replace(' ', 'T');
+    t = zone === 'none' ? Date.parse(`${iso}Z`) - LENIENT_ZONE_MS : Date.parse(iso);
+  } else {
+    const parsed = Date.parse(s);
+    if (Number.isNaN(parsed)) return { status: 'unreadable', zone: null, minutes_after_save: null, normalized: null };
+    zone = 'nonstandard';
+    // Without a stated zone the parser read the wall clock in this machine's
+    // zone: take that wall clock as UTC, then the most lenient zone.
+    t = STATED_ZONE.test(s) ? parsed : parsed - new Date(parsed).getTimezoneOffset() * 60000 - LENIENT_ZONE_MS;
+  }
   if (!Number.isFinite(t)) return { status: 'unreadable', zone, minutes_after_save: null, normalized: null };
-  const normalized = zone === 'none' ? null : new Date(t).toISOString();
+  const normalized = zone === 'none' || (zone === 'nonstandard' && !STATED_ZONE.test(s)) ? null : new Date(t).toISOString();
   if (!Number.isFinite(saved)) return { status: 'ok', zone, minutes_after_save: null, normalized };
   const after = Math.round((t - saved) / 60000);
   const status = after > ANALYSIS_IMPOSSIBLE_HOURS * 60 ? 'future' : after > ANALYSIS_SKEW_MINUTES ? 'after_save' : 'ok';
   return { status, zone, minutes_after_save: after > 0 ? after : 0, normalized };
 }
 
-// Newest first by when the report was analyzed. A time with a UTC offset
-// sorts as the instant it names; a stated time after the save sorts at the
-// save time, so a mistyped or invented stamp cannot keep a report "latest".
+// Newest first by when the report was analyzed, compared as instants: a time
+// with a UTC offset as the instant it names, a date at its UTC midnight, a
+// time without a zone as UTC. A stated time that is suspect (after the save,
+// unreadable, or not in the ISO form the prompt asks for) sorts at the save
+// time instead, so a mistyped, invented or "October 12, 2026" stamp cannot
+// keep a report "latest" (its text is kept as written). A report that states
+// no time sorts before every dated one, as before.
 function reportSortKey(r) {
   const a = r.assessment.analysis_at || '';
-  const timing = a ? analysisTiming(a, r.meta.imported_at) : null;
-  const key = timing && (timing.status === 'after_save' || timing.status === 'future') && r.meta.imported_at
-    ? r.meta.imported_at
-    : timing && timing.zone === 'offset' && timing.normalized ? timing.normalized : a;
-  return `${key}|${r.meta.imported_at || ''}`;
+  const saved = r.meta.imported_at || '';
+  const timing = a ? analysisTiming(a, saved) : null;
+  let key = '';
+  if (timing) {
+    if (timing.status !== 'ok' || timing.zone === 'nonstandard') key = saved;
+    else if (timing.zone === 'date') key = `${a.trim()}T00:00:00.000Z`;
+    else if (timing.zone === 'none') key = new Date(Date.parse(`${a.trim().replace(' ', 'T')}Z`)).toISOString();
+    else key = timing.normalized || saved;
+  }
+  return `${key}|${saved}`;
 }
 
 module.exports = {

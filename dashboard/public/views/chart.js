@@ -197,10 +197,10 @@ export function technicalChart(ctx, project) {
   const guess = s.source === 'ticker';
   const box = h('div', { class: 'tv-box' });
   const el = h('details', { class: 'disclosure tvchart', dataset: { key: 'insp-chart' } },
-    h('summary', { title: 'TradingView · daily candles, UTC', 'aria-label': `Technical chart: ${s.symbol}${guess ? ', guessed from the ticker' : ''}. Opens a TradingView chart of daily candles, UTC.` },
+    h('summary', { title: 'TradingView · daily candles, UTC', 'aria-label': `Technical chart: ${s.symbol}${guess ? ', an unverified guess from the ticker' : ''}. Opens a TradingView chart of daily candles, UTC.` },
       h('span', null, 'Technical chart'),
       h('span', { class: 'tv-sym mono', 'aria-hidden': 'true' }, s.symbol),
-      guess ? h('span', { class: 'tv-guess', 'aria-hidden': 'true', title: 'Guessed from the ticker on Binance; the same ticker can be another token. Set the symbol to confirm it.' }, 'guess') : null),
+      guess ? h('span', { class: 'tv-guess', 'aria-hidden': 'true', title: 'Unverified: guessed from the ticker on Binance, and the same ticker can be another token. Not research evidence. Set the symbol to confirm it.' }, 'unverified guess') : null),
     h('div', { class: 'body' }, h('div', { class: 'tv-card' }, box), symbolForm(ctx, project, s)));
   const c = { key, el, box, symbol: s.symbol, theme, frame: null, timer: null };
   el.addEventListener('toggle', () => {
