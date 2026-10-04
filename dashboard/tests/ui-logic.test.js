@@ -536,10 +536,72 @@ test('inspector tiles: DefiLlama 30-day totals as saved, "—" with the reason o
   assert.equal(wl.fundamentalsTile(null, 'fees').text, null);
 });
 
-test('contract line: what the identity records, never a screening result the desk does not have', async () => {
+test('contract line: GoPlus answers as Yes / No / — across the contracts, never "safe"; states without a screen say which', async () => {
+  const { wl } = await mods;
+  const ok = (over = {}) => ({ chain: 'ethereum', label: 'Ethereum', family: 'evm', address: '0x8408d45b61f5823298f19a09b53b7339c0280489', status: 'ok', mint: 'absent', blacklist: 'absent', proxy: 'absent', sell_tax_pct: 0, severe: [], watch: [], unknown: 0, ...over });
+  const screen = (contracts, over = {}) => ({ state: 'fresh', reason: null, native_chain: false, fetched_at: '2026-10-04T22:25:49Z', age_hours: 3.2, contracts, alerts: [], last_error: null, ...over });
+  const clean = wl.contractStrip(screen([ok()]));
+  assert.deepEqual(clean.badges.map((b) => [b.key, b.label, b.value, b.tone]), [['mint', 'Mint', 'No', 'plain'], ['blacklist', 'Blacklist', 'No', 'plain'], ['proxy', 'Proxy', 'No', 'plain'], ['tax', 'Tax', '0%', 'plain']]);
+  assert.equal(clean.age, '3h');
+  assert.equal(clean.items[0].label, 'Ethereum');
+  // Worst across contracts: present beats unknown beats absent; the tooltip names each.
+  const mixed = wl.contractStrip(screen([ok({ proxy: 'present', mint: 'unknown' }), ok({ chain: 'base', label: 'Base', address: '0x032d86656db142138ac97d2c5c4e3766e8c0482d', mint: 'absent', proxy: 'absent', sell_tax_pct: null })]));
+  const by = Object.fromEntries(mixed.badges.map((b) => [b.key, b]));
+  assert.deepEqual([by.mint.value, by.mint.tone, by.proxy.value, by.proxy.tone], ['—', 'unknown', 'Yes', 'watch']);
+  assert.match(by.proxy.title, /Ethereum 0x8408…0489: yes\nBase 0x032d…482d: no/);
+  assert.match(by.mint.aria, /unknown \(GoPlus gave no answer\), across 2 contracts/);
+  // Solana: freeze stands where a blacklist would, no proxy badge.
+  const sol = wl.contractStrip(screen([ok({ chain: 'solana', label: 'Solana', family: 'solana', address: 'HUMA1821qVDKta3u2ovmfDQeW2fSQouSKE8fkF44wvGw', blacklist: 'present', proxy: null, sell_tax_pct: null })]));
+  assert.deepEqual(sol.badges.map((b) => [b.key, b.label, b.value]), [['mint', 'Mint', 'No'], ['blacklist', 'Freeze', 'Yes']]);
+  // Severe flags, a high sell tax and a recent change are rose.
+  const bad = wl.contractStrip(screen([ok({ severe: ['Honeypot', 'Hidden owner'], sell_tax_pct: 25, mint: 'present' })], { alerts: [{ at: '2026-10-04T12:00:00Z', chain: 'ethereum', address: '0x8408d45b61f5823298f19a09b53b7339c0280489', check: 'mint', words: 'now has a mint function' }] }));
+  const b2 = Object.fromEntries(bad.badges.map((b) => [b.key, b]));
+  assert.deepEqual([b2.severe.label, b2.severe.value, b2.severe.tone], ['Honeypot', '+1', 'severe'], 'worst first');
+  const evmOnly = wl.contractStrip(screen([ok()])).badges.find((b) => b.key === 'blacklist');
+  assert.match(evmOnly.aria, /^Blacklist: no, from GoPlus$/);
+  assert.deepEqual([b2.tax.value, b2.tax.tone], ['25%', 'severe']);
+  assert.deepEqual([b2.alert.label, b2.alert.tone], ['Changed', 'severe']);
+  assert.match(b2.alert.title, /now has a mint function/);
+  // Stale shows its age as stale; a failed latest run is in the tooltip.
+  const stale = wl.contractStrip(screen([ok()], { state: 'stale', age_hours: 400, last_error: 'GoPlus answered HTTP 503' }));
+  assert.equal(stale.stale, true);
+  assert.equal(stale.age, '17d');
+  assert.match(stale.ageTitle, /Latest run failed: GoPlus answered HTTP 503/);
+  // States without a screen.
+  assert.equal(wl.contractStrip(screen([], { state: 'native_chain' })).text, 'Native coin');
+  assert.equal(wl.contractStrip(screen([], { state: 'no_contract' })).text, 'None on record');
+  assert.equal(wl.contractStrip(screen([], { state: 'identity_pending' })).text, 'Identity pending');
+  const notYet = wl.contractStrip(screen([{ chain: 'base', label: 'Base', address: '0x032d86656db142138ac97d2c5c4e3766e8c0482d', status: 'not_screened' }], { state: 'pending', reason: 'Not screened yet.' }));
+  assert.deepEqual([notYet.status.word, notYet.badges.length, notYet.items.length], ['Not screened yet', 0, 1]);
+  assert.equal(wl.contractStrip(screen([{ chain: 'example-chain', label: 'example-chain', address: 'X', status: 'unsupported_chain' }], { state: 'unsupported' })).status.word, 'Not screenable');
+  assert.deepEqual(wl.contractStrip(screen([], { state: 'unavailable', last_error: 'no answer within 20 s' })).status, { word: 'Screen failed', tone: 'warn', title: 'no answer within 20 s' });
+  const nf = wl.contractStrip(screen([{ chain: 'ethereum', label: 'Ethereum', address: '0x1', status: 'not_found', reason: 'GoPlus has no record of this contract' }]));
+  assert.deepEqual([nf.status.word, nf.badges.length], ['Not in GoPlus', 0]);
+  assert.equal(wl.contractStrip(null).text, '—');
+  for (const m of [clean, mixed, sol, bad, stale]) assert.ok(!JSON.stringify(m).match(/\bsafe\b/i), 'never "safe"');
+});
+
+test('contract checks: every check in words, present first, then unknown, then absent; facts and GoPlus notes as data', async () => {
   const insp = await import(pathToFileURL(path.join(tmp, 'views', 'inspector.js')).href);
-  const c = insp.contractLine({ status: 'verified', assets: [{ chain: 'base', contract_address: ' 0xabcdef0123456789abcdef0123456789abcdef01 ' }, { chain: 'solana', contract_address: null }] });
-  assert.deepEqual(c, { kind: 'contracts', items: [{ chain: 'base', address: '0xabcdef0123456789abcdef0123456789abcdef01' }], verified: true, screened: false });
-  assert.deepEqual(insp.contractLine({ status: 'pending', assets: [] }), { kind: 'none', items: [], verified: false, screened: false });
-  assert.equal(insp.contractLine(null).kind, 'none');
+  assert.equal(insp.contractChecks(null), null);
+  assert.equal(insp.contractChecks({ state: 'pending', contracts: [] }), null, 'no screen, no list');
+  const m = insp.contractChecks({
+    state: 'fresh',
+    fetched_at: '2026-10-04T22:25:49Z',
+    alerts: [],
+    contracts: [
+      { chain: 'ethereum', label: 'Ethereum', family: 'evm', address: '0xabc', status: 'ok', checked_at: '2026-10-04T22:25:49Z', checks: { mint: 'absent', proxy: 'present', honeypot: 'unknown', hidden_owner: 'present', whitelist: 'absent' }, taxes: { buy_pct: 0, sell_pct: 5 }, owner: { state: 'renounced', address: null }, source: 'open', facts: { holder_count: 12345 }, notes: { other_potential_risks: 'FICTIONAL note', note: null } },
+      { chain: 'base', label: 'Base', family: 'evm', address: '0xdef', status: 'not_found', reason: 'GoPlus has no record of this contract' },
+    ],
+  });
+  const c = m.contracts[0];
+  assert.deepEqual(c.rows.map((r) => [r.label, r.value]), [['Hidden owner', 'Yes'], ['Upgradeable proxy', 'Yes'], ['Mint function', 'No'], ['Whitelist', 'No']]);
+  assert.deepEqual(c.unknown, ['Honeypot'], 'unanswered checks are named, never shown as No');
+  assert.deepEqual(c.facts, [['Buy / sell tax', '0% / 5%'], ['Owner', 'Renounced', null], ['Source code', 'Open'], ['Holders', '12,345']]);
+  assert.deepEqual(c.notes, ['FICTIONAL note']);
+  assert.deepEqual([m.contracts[1].status, m.contracts[1].reason], ['not_found', 'GoPlus has no record of this contract']);
+  const sol = insp.contractChecks({ state: 'fresh', fetched_at: '2026-10-04T22:25:49Z', contracts: [{ label: 'Solana', family: 'solana', address: 'HUMA', status: 'ok', checks: { mint: 'absent', freeze: 'absent', metadata_mutable: 'present' }, taxes: { transfer_fee_pct: null }, owner: { state: 'unknown' }, source: 'unknown', facts: {} }] });
+  assert.deepEqual(sol.contracts[0].rows.map((r) => r.label), ['Metadata can change', 'Mint authority', 'Freeze authority']);
+  assert.deepEqual(sol.contracts[0].facts, [['Transfer fee', '—']]);
+  assert.ok(!JSON.stringify(m).match(/\bsafe\b/i));
 });

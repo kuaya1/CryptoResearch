@@ -631,9 +631,9 @@ function stateFor(ws, project, now = Date.now()) {
 
 // One contract as the packet and the index carry it.
 function contractView(x) {
-  const base = { chain: x.chain, chain_id: x.chain_id, label: x.label, address: x.address, status: x.status };
+  const base = { chain: x.chain, chain_id: x.chain_id, label: x.label, family: x.family || null, address: x.address, status: x.status };
   if (x.status !== 'ok') return { ...base, reason: x.reason || null };
-  return { ...base, partial: Boolean(x.partial), checked_at: x.checked_at, checks: x.checks, taxes: x.taxes, owner: x.owner, source: x.source, severe: x.severe, watch: x.watch, unknown: x.unknown, notes: x.notes };
+  return { ...base, partial: Boolean(x.partial), checked_at: x.checked_at, checks: x.checks, taxes: x.taxes, owner: x.owner, source: x.source, facts: x.facts || null, severe: x.severe, watch: x.watch, unknown: x.unknown, notes: x.notes };
 }
 
 // The block a research run's evidence packet will carry (research.js, once

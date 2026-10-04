@@ -1886,8 +1886,46 @@ a.xlink:hover { background: var(--surface-hover); border-color: var(--control-bo
 .cstrip .cs-v { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
 .cstrip .cs-chain { font-family: var(--font); color: var(--text-3); text-transform: capitalize; }
 .cstrip .cs-badge { margin-left: auto; padding: 0 7px; line-height: 18px; border: 1px dashed var(--control-border); border-radius: 999px; font-family: var(--font); font-size: 10.5px; font-weight: 600; color: var(--text-3); white-space: nowrap; }
-.cstrip .cs-badge.warn { margin-left: 0; border-style: solid; border-color: var(--pill-warn-line); color: var(--pill-warn-ink); background: var(--pill-warn-bg); }
-.cstrip .cs-badge.warn + .cs-badge { margin-left: 0; }
+.cstrip .cs-badge.warn { border-style: solid; border-color: var(--pill-warn-line); color: var(--pill-warn-ink); background: var(--pill-warn-bg); }
+/* GoPlus answers: a key and its word (Yes, No, — for unknown); present is amber,
+   severe rose, unknown dashed, absent plain. */
+.cstrip .cs-flag { display: inline-flex; align-items: baseline; gap: 4px; padding: 0 7px; line-height: 18px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); font-family: var(--font); font-size: 10.5px; white-space: nowrap; }
+.cstrip .cs-fk { color: var(--text-3); font-weight: 500; }
+.cstrip .cs-fv { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums lining-nums; }
+.cstrip .cs-flag.unknown { border-style: dashed; border-color: var(--control-border); background: transparent; }
+.cstrip .cs-flag.unknown .cs-fv { color: var(--text-3); }
+.cstrip .cs-flag.watch { border-color: var(--pill-warn-line); background: var(--pill-warn-bg); }
+.cstrip .cs-flag.watch .cs-fk, .cstrip .cs-flag.watch .cs-fv { color: var(--pill-warn-ink); }
+.cstrip .cs-flag.severe { border-color: var(--pill-bad-line); background: var(--pill-bad-bg); }
+.cstrip .cs-flag.severe .cs-fk, .cstrip .cs-flag.severe .cs-fv { color: var(--pill-bad-ink); }
+.cstrip .cs-age { margin-left: auto; display: inline-flex; align-items: center; gap: 3px; font-family: var(--font); font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
+.cstrip .cs-badge + .cs-age { margin-left: 0; }
+.cstrip .cs-age svg { width: 11px; height: 11px; }
+.cstrip .cs-age.stale { color: var(--pill-warn-ink); }
+/* The folded list of every check, per contract. */
+.cchecks { display: grid; gap: 14px; }
+.cc-alerts { margin: 0; padding: 6px 10px; list-style: none; border: 1px solid var(--pill-bad-line); border-radius: var(--r-md); background: var(--pill-bad-bg); color: var(--pill-bad-ink); font-size: 12px; }
+.cc-alerts li + li { margin-top: 2px; }
+.cc-alerts .mono { font-size: 11px; overflow-wrap: anywhere; }
+.cc-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; margin-bottom: 4px; }
+.cc-chain { font-weight: 600; color: var(--text); }
+.cc-addr { min-width: 0; font-size: 11px; color: var(--text-2); overflow-wrap: anywhere; }
+.cc-when { font-size: 11px; color: var(--text-3); }
+.cc-head .cc-when { margin-left: auto; }
+.cc-rows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 20px; margin: 0; font-size: 12px; }
+.cc-row { display: flex; justify-content: space-between; gap: 8px; min-width: 0; padding: 4px 0; border-bottom: 1px solid var(--border); }
+.cc-row dt { min-width: 0; color: var(--text-2); }
+.cc-row dd { margin: 0; flex: none; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums lining-nums; }
+.cc-row.unknown dd { color: var(--text-3); font-weight: 500; }
+.cc-row.absent dd { color: var(--text-2); font-weight: 500; }
+.cc-row.present.watch dd { color: var(--pill-warn-ink); }
+.cc-row.present.severe dd { color: var(--pill-bad-ink); }
+.cc-row.fact dd { font-weight: 500; overflow-wrap: anywhere; text-align: right; flex: 0 1 auto; }
+.cc-none, .cc-notes, .cc-unknown { margin: 6px 0 0; }
+.cc-unknown { color: var(--text-3); }
+.cc-unknown .k { color: var(--text-2); font-weight: 600; }
+.cc-notes { color: var(--text-2); }
+@media (max-width: 640px) { .cc-rows { grid-template-columns: minmax(0, 1fr); } }
 .cstrip.loading .cs-v { color: var(--text-3); }
 /* Links out: small squared pills; one the desk does not hold is faded and inert. */
 .xlink { height: 24px; min-width: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-sunken); color: var(--text-2); font-size: 11px; font-weight: 600; }

@@ -1206,6 +1206,111 @@ function overviewStats(p) {
     fund('revenue', '30D Revenue'));
 }
 
+// GoPlus's answers as words: present Yes, absent No, unknown "—" (GoPlus gave
+// no answer). Nothing is ever called safe.
+export const FLAG_WORD = { present: 'Yes', absent: 'No', unknown: '—' };
+const FLAG_SPOKEN = { present: 'yes', absent: 'no', unknown: 'unknown (GoPlus gave no answer)' };
+const shortAddr = (a) => (a && a.length > 14 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a || '');
+
+// Several contracts' answers as one: present when any says present, then
+// unknown, and absent only when every one says absent.
+function worstFlag(values) {
+  const v = values.filter((x) => x === 'present' || x === 'absent' || x === 'unknown');
+  if (!v.length) return null;
+  return v.includes('present') ? 'present' : v.includes('unknown') ? 'unknown' : 'absent';
+}
+
+// Severe flags, worst first, as the screen names them.
+const SEVERE_ORDER = ['Honeypot', 'Cannot sell the whole balance', 'Cannot be bought', 'Owner can change balances', 'Balances can be changed', 'Hidden owner', 'Self-destruct', 'Can be closed', 'Not transferable'];
+const severeRank = (x) => (SEVERE_ORDER.indexOf(x) === -1 ? SEVERE_ORDER.length : SEVERE_ORDER.indexOf(x));
+
+const ageText = (hours) => (typeof hours !== 'number' ? null : hours < 1 ? '<1h' : hours < 48 ? `${Math.round(hours)}h` : `${Math.round(hours / 24)}d`);
+
+// The contract line under the tiles, from the index row's saved screen (never
+// fetched here): the contracts on record, GoPlus's mint, blacklist (freeze on
+// Solana) and proxy answers across them, the highest sell tax, a severe flag,
+// a recent change, and the screen's age. A state without a screen names it.
+// Pure, for the tests.
+export function contractStrip(s) {
+  const sc = s && typeof s === 'object' ? s : null;
+  const all = sc && Array.isArray(sc.contracts) ? sc.contracts : [];
+  const items = all.map((c) => ({ label: c.label || c.chain || null, address: c.address, status: c.status }));
+  const out = { state: sc ? sc.state : null, items, text: null, title: null, badges: [], status: null, age: null, stale: false, ageTitle: null };
+  if (!sc) return { ...out, text: '—', title: 'No contract screen in this index' };
+  const reason = sc.reason || null;
+  if (sc.state === 'native_chain') return { ...out, text: 'Native coin', title: reason };
+  if (sc.state === 'no_contract') return { ...out, text: 'None on record', title: reason };
+  if (sc.state === 'identity_pending') return { ...out, text: 'Identity pending', title: reason };
+  const STATUS = {
+    disabled: { word: 'Screening off', tone: 'none' },
+    unsupported: { word: 'Not screenable', tone: 'none' },
+    pending: { word: 'Not screened yet', tone: 'none' },
+    unavailable: { word: 'Screen failed', tone: 'warn' },
+  };
+  if (STATUS[sc.state]) return { ...out, text: items.length ? null : 'None on record', status: { ...STATUS[sc.state], title: (sc.state === 'unavailable' && sc.last_error) || reason } };
+  // A saved screen (fresh, fresh_last_failed, stale).
+  const ok = all.filter((c) => c.status === 'ok');
+  const when = sc.fetched_at ? `GoPlus Security, ${fmtDateTime(sc.fetched_at)}` : 'GoPlus Security';
+  const many = ok.length > 1;
+  const flag = (key, label, spoken, list, pick) => {
+    const v = worstFlag(list.map(pick));
+    if (!v) return null;
+    return {
+      key,
+      label,
+      value: FLAG_WORD[v],
+      state: v,
+      tone: v === 'present' ? 'watch' : v === 'unknown' ? 'unknown' : 'plain',
+      title: [...list.map((c) => `${c.label || c.chain} ${shortAddr(c.address)}: ${FLAG_SPOKEN[pick(c)] || 'not reported'}`), when].join('\n'),
+      aria: `${spoken}: ${FLAG_SPOKEN[v]}${many ? `, across ${list.length} contracts` : ''}, from GoPlus`,
+    };
+  };
+  if (ok.length) {
+    const sol = ok.every((c) => c.family === 'solana');
+    const evm = ok.filter((c) => c.family !== 'solana');
+    out.badges.push(
+      flag('mint', 'Mint', sol ? 'Mint authority' : 'Mint function', ok, (c) => c.mint),
+      flag('blacklist', sol ? 'Freeze' : 'Blacklist', sol ? 'Freeze authority' : evm.length < ok.length ? 'Blacklist (freeze authority on Solana)' : 'Blacklist', ok, (c) => c.blacklist),
+      evm.length ? flag('proxy', 'Proxy', 'Upgradeable proxy', evm, (c) => c.proxy) : null);
+    const taxes = ok.map((c) => c.sell_tax_pct).filter((x) => typeof x === 'number' && Number.isFinite(x));
+    if (taxes.length) {
+      const top = Math.max(...taxes);
+      const txt = `${Math.round(top * 100) / 100}%`;
+      out.badges.push({ key: 'tax', label: 'Tax', value: txt, state: null, tone: top > 10 ? 'severe' : top > 0 ? 'watch' : 'plain', title: [...ok.map((c) => `${c.label || c.chain} ${shortAddr(c.address)}: sell tax ${typeof c.sell_tax_pct === 'number' ? `${c.sell_tax_pct}%` : 'not reported'}`), when].join('\n'), aria: `Sell tax: ${txt}${many ? ', the highest across the contracts' : ''}, as GoPlus simulates it` });
+    }
+    const severe = [...new Set(ok.flatMap((c) => (Array.isArray(c.severe) ? c.severe : [])))].sort((a, b) => severeRank(a) - severeRank(b));
+    if (severe.length) out.badges.push({ key: 'severe', label: severe[0], value: severe.length > 1 ? `+${severe.length - 1}` : null, state: 'present', tone: 'severe', title: [...severe, when].join('\n'), aria: `Severe flags from GoPlus: ${severe.join(', ')}` });
+  } else if (all.length) {
+    const nf = all.every((c) => c.status === 'not_found');
+    out.status = { word: nf ? 'Not in GoPlus' : 'Not screened', tone: 'none', title: all.map((c) => `${c.label || c.chain} ${shortAddr(c.address)}: ${c.reason || c.status}`).join('\n') };
+  }
+  const alerts = Array.isArray(sc.alerts) ? sc.alerts : [];
+  if (alerts.length) {
+    const last = alerts.map((a) => a.at).filter(Boolean).sort().pop();
+    out.badges.push({ key: 'alert', label: 'Changed', value: last ? fmtDate(last).replace(/, \d{4}$/, '') : null, state: 'present', tone: 'severe', title: alerts.map((a) => `${fmtDate(a.at)}: ${a.chain} ${shortAddr(a.address)} ${a.words}`).join('\n'), aria: `Contract changed: ${alerts.map((a) => a.words).join('; ')}` });
+  }
+  out.badges = out.badges.filter(Boolean);
+  out.age = ageText(sc.age_hours);
+  out.stale = sc.state === 'stale';
+  out.ageTitle = `${when}${out.stale ? ' (stale)' : ''}${sc.last_error ? `\nLatest run failed: ${sc.last_error}` : ''}`;
+  return out;
+}
+
+function contractStripEl(p) {
+  const m = contractStrip(p.screening);
+  const first = m.items[0];
+  const value = first
+    ? h('span', { class: 'cs-v', title: m.items.map((x) => `${x.label || 'chain?'}: ${x.address}`).join('\n') },
+      first.label ? h('span', { class: 'cs-chain' }, first.label) : null,
+      h('span', { class: 'mono' }, shortAddr(first.address)),
+      m.items.length > 1 ? h('span', { class: 'faint' }, ` +${m.items.length - 1}`) : null)
+    : h('span', { class: 'cs-v', title: m.title }, m.text || '—');
+  return h('div', { class: 'cstrip' }, h('span', { class: 'cs-k' }, 'Contract'), value,
+    ...m.badges.map((b) => h('span', { class: `cs-flag ${b.tone}`, title: b.title, 'aria-label': b.aria }, h('span', { class: 'cs-fk', 'aria-hidden': 'true' }, b.label), b.value !== null ? h('span', { class: 'cs-fv', 'aria-hidden': 'true' }, b.value) : null)),
+    m.status ? h('span', { class: `cs-badge${m.status.tone === 'warn' ? ' warn' : ''}`, title: m.status.title }, m.status.word) : null,
+    m.age ? h('span', { class: `cs-age${m.stale ? ' stale' : ''}`, title: m.ageTitle, 'aria-label': `Screened by GoPlus ${m.age} ago${m.stale ? ', stale' : ''}` }, m.stale ? icon('clock') : null, h('span', { 'aria-hidden': 'true' }, `GoPlus ${m.age}`)) : null);
+}
+
 // Links out, beside close: the project's CoinMarketCap page, its CoinGecko
 // listing and its official website. A link the desk does not hold stays a
 // quiet disabled pill: no CoinMarketCap page is stored for any project yet,
@@ -1347,7 +1452,7 @@ function renderPanel(ctx, pid) {
         closeBtn),
       headMarket(p),
       overviewStats(p),
-      h('div', { class: 'cstrip-slot', dataset: { slot: 'contract' } }, h('div', { class: 'cstrip loading', 'aria-hidden': 'true' }, h('span', { class: 'cs-k' }, 'Contract'), h('span', { class: 'cs-v' }, '…')))),
+      h('div', { class: 'cstrip-slot' }, contractStripEl(p))),
     h('div', { class: 'panel-body', 'data-keep-scroll': 'panel' },
       archivedBanner(ctx, p),
       problemLines(ctx, p),
@@ -1360,6 +1465,7 @@ function renderPanel(ctx, pid) {
         h('div', { dataset: { slot: 'thesis' } }, skeleton('Loading the thesis notes'))),
       h('div', { class: 'insp-more' },
         onchainPart(p),
+        h('div', { dataset: { slot: 'checks' } }),
         reports >= 2 ? details('Compare the models', h('div', null, comparisonNote(ctx, p), h('div', { dataset: { slot: 'compare' } })), { id: `insp-compare-${pid}` }) : null,
         m ? details('Market details', h('div', null,
           m.sparkline_7d ? h('div', { style: { margin: '4px 0 8px' } }, sparkline(m.sparkline_7d, { width: 300, height: 48, label: `${p.symbol || p.name} 7-day price` })) : null,

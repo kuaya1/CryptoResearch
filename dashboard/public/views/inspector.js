@@ -8,7 +8,8 @@
 //                     never a combined score
 //   thesis            your own conviction note, then the selected model's
 //                     thesis in its report's words
-//   contract          the token's contract on record and its screening state
+//   checks            every GoPlus check of the contracts on record, in words
+//                     (the header's contract line comes from the index row)
 //   run               the latest run's exact saved prompt, version, rubric,
 //                     profile and holding horizon
 //   chart             the technical chart below the category bars, closed
@@ -297,41 +298,97 @@ function thesisPart(ctx, d, row, prov) {
   return h('div', { class: 'thesis' }, mine, model);
 }
 
-// ---- the contract on record ------------------------------------------------------
+// ---- the contract checks ---------------------------------------------------------
 
-// The token's contracts as the identity records them, and whether they have
-// been screened. No contract-security source (such as GoPlus) runs on this
-// desk, so nothing is ever called safe, flagged or verified here: the line
-// says what is on record and that it is not screened. Pure, for the tests.
-export function contractLine(identity) {
-  const id = identity || {};
-  const items = (Array.isArray(id.assets) ? id.assets : [])
-    .filter((a) => a && typeof a.contract_address === 'string' && a.contract_address.trim())
-    .map((a) => ({ chain: a.chain ? String(a.chain) : null, address: a.contract_address.trim() }));
-  return { kind: items.length ? 'contracts' : 'none', items, verified: id.status === 'verified', screened: false };
+// GoPlus's checks by key, as the screen saves them: label and weight (severe:
+// it can take holders' funds or trap them; watch: an owner power worth
+// knowing; info: context). The order is the order shown.
+export const CHECKS = [
+  ['honeypot', 'Honeypot', 'severe'],
+  ['cannot_sell_all', 'Cannot sell the whole balance', 'severe'],
+  ['cannot_buy', 'Cannot be bought', 'severe'],
+  ['owner_change_balance', 'Owner can change balances', 'severe'],
+  ['hidden_owner', 'Hidden owner', 'severe'],
+  ['selfdestruct', 'Self-destruct', 'severe'],
+  ['balance_mutable', 'Balances can be changed', 'severe'],
+  ['closable', 'Can be closed', 'severe'],
+  ['non_transferable', 'Not transferable', 'severe'],
+  ['mint', 'Mint', 'watch'],
+  ['proxy', 'Upgradeable proxy', 'watch'],
+  ['blacklist', 'Blacklist', 'watch'],
+  ['freeze', 'Freeze authority', 'watch'],
+  ['take_back_ownership', 'Ownership can be reclaimed', 'watch'],
+  ['transfer_pausable', 'Transfers can be paused', 'watch'],
+  ['tax_modifiable', 'Tax can be changed', 'watch'],
+  ['personal_tax', 'Tax can differ per address', 'watch'],
+  ['transfer_hook', 'Transfer hook', 'watch'],
+  ['transfer_hook_upgradable', 'Transfer hook can change', 'watch'],
+  ['transfer_fee_upgradable', 'Transfer fee can change', 'watch'],
+  ['whitelist', 'Whitelist', 'info'],
+  ['trading_cooldown', 'Trading cooldown', 'info'],
+  ['external_call', 'Calls external contracts', 'info'],
+  ['anti_whale', 'Anti-whale limit', 'info'],
+  ['metadata_mutable', 'Metadata can change', 'info'],
+];
+const WORD = { present: 'Yes', absent: 'No', unknown: '—' };
+const OWNER = { none: 'No owner', renounced: 'Renounced' };
+const pct = (v) => (typeof v === 'number' && Number.isFinite(v) ? `${v}%` : '—');
+const shortAddr = (a) => (a && a.length > 14 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a || '');
+
+// Every check of every screened contract, in words, from the saved screen in
+// the project record (never fetched here): present flags first, then absent
+// ones, severe before watch before info; the checks GoPlus did not answer are
+// named on one line. Pure, for the tests.
+export function contractChecks(s) {
+  if (!s || !Array.isArray(s.contracts) || !s.fetched_at) return null;
+  const contracts = s.contracts.map((c) => {
+    const base = { label: c.label || c.chain || 'chain?', address: c.address, status: c.status };
+    if (c.status !== 'ok') return { ...base, reason: c.reason || null };
+    const order = { present: 0, absent: 1 };
+    const weight = { severe: 0, watch: 1, info: 2 };
+    const all = CHECKS
+      .filter(([key]) => c.checks && typeof c.checks[key] === 'string')
+      .map(([key, label, level]) => ({ key, label: key === 'mint' ? (c.family === 'solana' ? 'Mint authority' : 'Mint function') : label, level, state: WORD[c.checks[key]] ? c.checks[key] : 'unknown', value: WORD[c.checks[key]] || '—' }));
+    const rows = all.filter((r) => r.state !== 'unknown').sort((a, b) => order[a.state] - order[b.state] || weight[a.level] - weight[b.level]);
+    const unknown = all.filter((r) => r.state === 'unknown').sort((a, b) => weight[a.level] - weight[b.level]).map((r) => r.label);
+    const t = c.taxes || {};
+    const facts = [];
+    if (c.family === 'solana') facts.push(['Transfer fee', pct(t.transfer_fee_pct)]);
+    else facts.push(['Buy / sell tax', `${pct(t.buy_pct)} / ${pct(t.sell_pct)}`]);
+    if (c.owner && c.owner.state !== 'unknown') facts.push(['Owner', OWNER[c.owner.state] || shortAddr(c.owner.address) || 'On record', c.owner.address || null]);
+    if (c.source && c.source !== 'unknown') facts.push(['Source code', c.source === 'open' ? 'Open' : 'Not open']);
+    if (c.facts && typeof c.facts.holder_count === 'number') facts.push(['Holders', c.facts.holder_count.toLocaleString('en-US')]);
+    const notes = [c.notes && c.notes.other_potential_risks, c.notes && c.notes.note].filter(Boolean);
+    return { ...base, partial: Boolean(c.partial), checked_at: c.checked_at || s.fetched_at, rows, unknown, facts, notes };
+  });
+  const labelOf = (a) => (s.contracts.find((c) => c.address === a.address && (!a.chain_id || c.chain_id === a.chain_id)) || {}).label || a.chain;
+  const alerts = (Array.isArray(s.alerts) ? s.alerts : []).map((a) => ({ at: a.at, label: labelOf(a), address: a.address, words: a.words }));
+  return { fetched_at: s.fetched_at, state: s.state, contracts, alerts };
 }
 
-const shortAddr = (a) => (a.length > 14 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a);
-
-function contractPart(d) {
-  const c = contractLine(d.project && d.project.identity);
-  const k = h('span', { class: 'cs-k' }, 'Contract');
-  if (c.kind === 'none') {
-    return h('div', { class: 'cstrip' }, k, h('span', { class: 'cs-v' }, c.verified ? 'None on record' : 'None on record · identity pending'));
-  }
-  const first = c.items[0];
-  return h('div', { class: 'cstrip' }, k,
-    h('span', { class: 'cs-v', title: c.items.map((x) => `${x.chain || 'chain?'}: ${x.address}`).join('\n') },
-      first.chain ? h('span', { class: 'cs-chain' }, first.chain) : null,
-      h('span', { class: 'mono' }, shortAddr(first.address)),
-      c.items.length > 1 ? h('span', { class: 'faint' }, ` +${c.items.length - 1}`) : null),
-    c.verified ? null : h('span', { class: 'cs-badge warn' }, 'Unconfirmed'),
-    h('span', { class: 'cs-badge', title: 'No contract-security source (such as GoPlus) runs on this desk; mint, blacklist and proxy checks are not run' }, 'Not screened'));
+function checksPart(d) {
+  const m = contractChecks(d.screening);
+  if (!m) return null;
+  const body = h('div', { class: 'cchecks' },
+    m.alerts.length ? h('ul', { class: 'cc-alerts' }, m.alerts.map((a) => h('li', null, h('span', { class: 'cc-when' }, fmtDateTime(a.at)), ` · ${a.label} `, h('span', { class: 'mono', title: a.address }, shortAddr(a.address)), `: ${a.words}`))) : null,
+    m.contracts.map((c) => h('div', { class: 'cc-contract' },
+      h('div', { class: 'cc-head' },
+        h('span', { class: 'cc-chain' }, c.label),
+        h('span', { class: 'mono cc-addr', title: c.address }, c.address),
+        c.status === 'ok' ? h('span', { class: 'cc-when', title: `GoPlus Security${c.partial ? ', partial answer' : ''}` }, fmtDateTime(c.checked_at)) : null),
+      c.status !== 'ok'
+        ? h('p', { class: 'small muted cc-none' }, c.reason || 'Not screened')
+        : h('dl', { class: 'cc-rows' },
+          c.rows.map((r) => h('div', { class: `cc-row ${r.state} ${r.level}` }, h('dt', null, r.label), h('dd', { 'aria-label': r.state === 'unknown' ? 'unknown, GoPlus gave no answer' : r.value }, r.value))),
+          c.facts.map(([k, v, full]) => h('div', { class: 'cc-row fact' }, h('dt', null, k), h('dd', { class: full ? 'mono' : null, title: full || null }, v)))),
+      c.status === 'ok' && c.unknown.length ? h('p', { class: 'small cc-unknown' }, h('span', { class: 'k' }, 'No answer: '), c.unknown.join(' · ')) : null,
+      c.notes && c.notes.length ? h('p', { class: 'small cc-notes' }, c.notes.join(' · ')) : null)));
+  return details('Contract checks', body, { id: `insp-checks-${d.project.project_id}` });
 }
 
 // The parts for the inspector of one project, for the selected model.
 export function inspectorParts(ctx, d, row, prov) {
-  const out = { run: runPart(ctx, d), compare: comparePart(ctx, d), thesis: thesisPart(ctx, d, row, prov), contract: contractPart(d), chart: technicalChart(ctx, d.project) };
+  const out = { run: runPart(ctx, d), compare: comparePart(ctx, d), thesis: thesisPart(ctx, d, row, prov), checks: checksPart(d), chart: technicalChart(ctx, d.project) };
   if (prov) {
     out[`cats-${prov}`] = categoriesPart(ctx, d, row, prov);
     out[`grade-${prov}`] = componentsPart(ctx, d, row, prov);
