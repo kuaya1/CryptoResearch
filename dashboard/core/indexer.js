@@ -322,6 +322,13 @@ function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = 
     } catch (err) {
       fundamentals = { state: 'unavailable', reason: `The saved fundamentals could not be read: ${err.message}` };
     }
+    // GoPlus contract screening as saved (screening.js); a read never fetches.
+    let screening = null;
+    try {
+      screening = require('./screening').summary(ws, p, now);
+    } catch (err) {
+      screening = { state: 'unavailable', reason: `The saved contract screen could not be read: ${err.message}` };
+    }
     const position = held.get(p.project_id) || null;
     const archived = p.status === 'archived';
 
@@ -443,6 +450,13 @@ function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = 
       // A DefiLlama binding DefiLlama does not confirm (unknown slug, another
       // kind of entity, another slug): flagged, never rebound automatically.
       if (fundamentals && fundamentals.binding_problem) attention.push({ kind: 'fundamentals_binding', severity: 'medium', project_id: p.project_id, title: `${p.name}: DefiLlama binding "${fundamentals.slug}" needs checking`, detail: fundamentals.last_error || fundamentals.reason });
+      // A severe change between two GoPlus screens of the same contract (mint,
+      // proxy, blacklist or freeze newly present, sell tax over the line),
+      // kept here for the settings' alert_days.
+      if (screening && Array.isArray(screening.alerts) && screening.alerts.length) {
+        const al = screening.alerts;
+        attention.push({ kind: 'contract_change', severity: 'high', project_id: p.project_id, title: `${p.name}: token contract ${al[0].words}${al.length > 1 ? ` (+${al.length - 1} more)` : ''}`, detail: al.map((a) => `${a.chain} ${a.address}: ${a.words} (GoPlus, ${String(a.at).slice(0, 10)})`).join('; ') });
+      }
       if (position && lastReport && lastReport.assessment.analysis_at && daysBetween(String(lastReport.assessment.analysis_at).slice(0, 10), today) > settings.freshness.report_stale_days) {
         attention.push({ kind: 'stale_research', severity: 'medium', project_id: p.project_id, title: `${p.name}: newest research is ${daysBetween(String(lastReport.assessment.analysis_at).slice(0, 10), today)} days old and you hold a position`, detail: 'Consider a new dated report. Prices never change stored grades.' });
       }
@@ -492,6 +506,7 @@ function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = 
       open_events: openEvents.length,
       market: mkt,
       fundamentals,
+      screening,
       created_at: p.created_at,
       updated_at: p.updated_at,
     });
@@ -685,6 +700,14 @@ function projectDetailRaw(ws, id) {
         return require('./fundamentals').view(ws, project);
       } catch (err) {
         return { state: 'unavailable', reason: `The saved fundamentals could not be read: ${err.message}` };
+      }
+    })(),
+    // The saved GoPlus contract screen and its recent alerts (never fetched here).
+    screening: (() => {
+      try {
+        return require('./screening').view(ws, project);
+      } catch (err) {
+        return { state: 'unavailable', reason: `The saved contract screen could not be read: ${err.message}` };
       }
     })(),
     market_context: require('./cycle').summary(ws),

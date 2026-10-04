@@ -109,6 +109,7 @@ const TOOLS = [
         official_website: { type: 'string', description: 'The project\'s own website (https://...), as confirmed from the project itself; never a CoinMarketCap, CoinGecko or explorer page.' },
         contracts: { type: 'array', description: 'Token deployments you confirmed (official docs or a block explorer).', items: { type: 'object', required: ['chain', 'address'], additionalProperties: false, properties: { chain: { type: 'string', description: 'Network, e.g. "solana", "ethereum", "base".' }, address: { type: 'string', description: 'The exact contract or mint address.' } } } },
         coingecko_id: { type: 'string', description: 'Optional: the coin\'s CoinGecko ID if you saw it on coingecko.com (e.g. "huma-finance"). Not required.' },
+        native_chain: { type: 'boolean', description: 'true only when the token is its own chain\'s native coin (BTC on Bitcoin, ETH on Ethereum, SOL on Solana), confirmed from the project; false when you confirmed it is not. Never inferred from a missing contract address; leave it out when unsure.' },
         evidence: { type: 'array', minItems: 1, description: 'URLs that establish the identity, each with what it shows.', items: { type: 'object', required: ['url'], additionalProperties: false, properties: { url: { type: 'string' }, note: { type: 'string' } } } },
         sector: { type: 'string', enum: SECTORS, description: 'Sector: defi, payments (PayFi / credit / RWA), infrastructure (L1/L2, oracles, DePIN), ai_data, gaming, other.' },
         owner_request: { type: 'string', description: 'Eric\'s request in his own words.' },
@@ -130,7 +131,8 @@ const TOOLS = [
         official_website: { type: 'string' },
         contracts: { type: 'array', items: { type: 'object', required: ['chain', 'address'], additionalProperties: false, properties: { chain: { type: 'string' }, address: { type: 'string' } } } },
         coingecko_id: { type: 'string' },
-        evidence: { type: 'array', minItems: 1, description: 'URLs that establish the identity; required with official_website, contracts or coingecko_id.', items: { type: 'object', required: ['url'], additionalProperties: false, properties: { url: { type: 'string' }, note: { type: 'string' } } } },
+        native_chain: { type: 'boolean', description: 'true only when the token is its own chain\'s native coin (BTC on Bitcoin, ETH on Ethereum, SOL on Solana), confirmed from the project; false when you confirmed it is not. Never inferred from a missing contract address; leave it out when unsure.' },
+        evidence: { type: 'array', minItems: 1, description: 'URLs that establish the identity; required with official_website, contracts, coingecko_id or native_chain.', items: { type: 'object', required: ['url'], additionalProperties: false, properties: { url: { type: 'string' }, note: { type: 'string' } } } },
         defillama_slug: { type: 'string', description: 'The exact DefiLlama slug, as in defillama.com/protocol/<slug> (lowercase).' },
         defillama_scope: { type: 'string', enum: ['product', 'parent', 'chain'], description: 'product: one protocol or version; parent: DefiLlama\'s parent entity including its child protocols; chain: a chain\'s own fees. It must be the kind of entity DefiLlama shows for that slug.' },
         defillama_source_url: { type: 'string', description: 'Where you verified that this DefiLlama entity is this project and its token (DefiLlama\'s page naming the token, or the project\'s own docs).' },
@@ -544,7 +546,7 @@ function projectView(ws, p, ctx) {
     symbol: p.symbol || null,
     status: p.status,
     on_watchlist: Boolean(p.watchlist && p.watchlist.on_watchlist),
-    identity: { status: id.status, official_website: id.official_website || null, coingecko_id: id.coingecko_id || null, contracts: (id.assets || []).map((a) => ({ chain: a.chain, address: a.contract_address })), candidates: (id.candidates || []).length, unknowns: id.unknowns || [], defillama, ...(notReturned ? { price_problem: `CoinGecko returned no price for "${id.coingecko_id}" in the last refresh; the ID may be wrong. Check the project's CoinGecko listing (its contract must match the one on file) and tell Eric before correcting it with update_project_identity.` } : {}) },
+    identity: { status: id.status, official_website: id.official_website || null, coingecko_id: id.coingecko_id || null, contracts: (id.assets || []).map((a) => ({ chain: a.chain, address: a.contract_address })), ...(typeof id.native_chain === 'boolean' ? { native_chain: id.native_chain } : {}), candidates: (id.candidates || []).length, unknowns: id.unknowns || [], defillama, ...(notReturned ? { price_problem: `CoinGecko returned no price for "${id.coingecko_id}" in the last refresh; the ID may be wrong. Check the project's CoinGecko listing (its contract must match the one on file) and tell Eric before correcting it with update_project_identity.` } : {}) },
     sector: p.sector ? p.sector.primary : null,
     your_latest_report: latest,
     reports_by_model: byModel,
@@ -649,6 +651,7 @@ const handlers = {
       sector: args.sector && SECTORS.includes(args.sector) ? { primary: args.sector, tags: [], source: 'research' } : null,
       utterance: args.owner_request || null,
       allow_same_symbol: args.allow_same_symbol === true,
+      ...(typeof args.native_chain === 'boolean' ? { native_chain: args.native_chain } : {}),
     });
     if (out.status === 'possible_duplicate') {
       return { status: 'possible_duplicate', message: `A project with the ticker ${args.symbol} is already on the desk: ${(out.candidates || []).map((c) => `${c.name} (${c.project_id})`).join(', ')}. Tickers are not unique. Ask Eric whether this is a different project; only then add it with allow_same_symbol: true.`, candidates: out.candidates || [] };
@@ -724,7 +727,7 @@ const handlers = {
   async update_project_identity(ws, args, ctx) {
     const id = pid(args);
     const evidence = Array.isArray(args.evidence) ? args.evidence.filter((e) => e && typeof e.url === 'string') : [];
-    const identityGiven = Boolean(args.official_website || args.coingecko_id || (Array.isArray(args.contracts) && args.contracts.length));
+    const identityGiven = Boolean(args.official_website || args.coingecko_id || (Array.isArray(args.contracts) && args.contracts.length) || typeof args.native_chain === 'boolean');
     const bindGiven = ['defillama_slug', 'defillama_scope', 'defillama_source_url'].some((k) => args[k] !== undefined);
     const unbind = args.remove_defillama === true;
     if ((identityGiven || !(bindGiven || unbind)) && !evidence.length) throw new OpError('INVALID', 'At least one evidence URL is required.');
@@ -738,6 +741,7 @@ const handlers = {
       if (args.official_website) input.official_website = args.official_website;
       if (args.coingecko_id) input.coingecko_id = args.coingecko_id;
       if (Array.isArray(args.contracts) && args.contracts.length) input.assets = args.contracts.map((c) => ({ chain: c.chain, contract_address: c.address }));
+      if (typeof args.native_chain === 'boolean') input.native_chain = args.native_chain;
       if (defillama !== undefined) input.defillama = defillama;
       out = projects.updateIdentity(ws, id, input);
     }

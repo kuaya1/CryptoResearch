@@ -29,6 +29,8 @@ Projects
               [--defillama-slug S --defillama-scope product|parent|chain --defillama-source URL]
   project list | show <id> | archive <id> --reason TEXT | restore <id>
   project identity <id> [--website URL] [--coingecko-id ID] [--asset ...] [--evidence URL]... [--pending]
+                    [--native-chain | --no-native-chain]   state that the token is (or is not) its chain's
+                                         own coin; never inferred from a missing contract
   project identity <id> --defillama-slug S --defillama-scope product|parent|chain --defillama-source URL [--no-refresh]
                                          bind the DefiLlama entity whose fees describe the project (verified
                                          from the source URL; never by name or ticker), then fetch it once
@@ -92,7 +94,10 @@ Data, jobs and maintenance
   market lookup "<name or ticker>"       CoinGecko listing candidates (never binds anything)
   fundamentals refresh [<id>...]         fetch DefiLlama fees, revenue and holders revenue now (bound projects)
   fundamentals status [<id>]             saved fundamentals: state, window, totals and coverage
-  job run [requests|inbox|market|fundamentals|research|snapshot|reviews|backup|offsite]... [--all-due] [--trigger scheduler]
+  screen refresh [<id>...]               GoPlus contract flags now (contracts of verified identities;
+                                         skips the failure backoff, never GoPlus's rate limit)
+  screen status [<id>]                   saved contract screens: flags, taxes, alerts, what is not screenable
+  job run [requests|inbox|market|fundamentals|screening|research|snapshot|reviews|backup|offsite]... [--all-due] [--trigger scheduler]
   schedule install|status|run|remove
   requests process | requests status <request_id>
   index rebuild
@@ -162,6 +167,17 @@ function parseEvidence(flags) {
   const urls = list(flags.evidence);
   const notes = list(flags.evidence_note);
   return urls.map((url, i) => ({ url, note: notes[i] || null, kind: null }));
+}
+
+// --native-chain / --no-native-chain: true, false, or undefined (not given,
+// so the identity keeps what it states). Never inferred.
+function nativeChainFlag(flags) {
+  if (flags.no_native_chain) return false;
+  if (flags.native_chain === undefined) return undefined;
+  const v = flags.native_chain === true ? true : String(one(flags.native_chain)).toLowerCase();
+  if (v === true || v === 'true' || v === 'yes') return true;
+  if (v === 'false' || v === 'no') return false;
+  throw Object.assign(new Error('--native-chain takes no value (or true / false)'), { code: 'USAGE' });
 }
 
 // The DefiLlama binding the flags ask for: undefined (none given), null
@@ -300,6 +316,7 @@ async function run(argv) {
           allow_same_symbol: Boolean(flags.allow_same_symbol || f.allow_same_symbol),
           tags: f.tags,
           defillama: defillamaFlags(flags) || f.defillama || undefined,
+          native_chain: nativeChainFlag(flags) !== undefined ? nativeChainFlag(flags) : f.native_chain,
         };
         need(input.name, 'project add needs --name');
         const r = projects.addProject(ws, input);
@@ -325,7 +342,8 @@ async function run(argv) {
       if (sub === 'identity') {
         const id = need(rest[0], 'project identity <id>');
         const defillama = defillamaFlags(flags);
-        const identityGiven = [flags.website, flags.coingecko_id, flags.asset, flags.evidence, flags.pending].some((v) => v !== undefined);
+        const native = nativeChainFlag(flags);
+        const identityGiven = [flags.website, flags.coingecko_id, flags.asset, flags.evidence, flags.pending, native].some((v) => v !== undefined);
         // Only the DefiLlama binding: the rest of the identity is left exactly
         // as it is.
         const r = defillama !== undefined && !identityGiven
@@ -336,6 +354,7 @@ async function run(argv) {
             assets: list(flags.asset).length ? parseAssets(flags.asset) : undefined,
             evidence: parseEvidence(flags),
             identity_status: flags.pending ? 'pending' : undefined,
+            ...(native !== undefined ? { native_chain: native } : {}),
             ...(defillama !== undefined ? { defillama } : {}),
           });
         // A new binding is fetched once right away (the same lease, gate and
@@ -644,6 +663,22 @@ async function run(argv) {
         return { overview: f.overview(ws), projects: list.map((p) => ({ project_id: p.project_id, ...f.summary(ws, p) })) };
       }
       throw Object.assign(new Error('fundamentals refresh [<id>...] | fundamentals status [<id>]'), { code: 'USAGE' });
+    }
+    case 'screen': {
+      const sc = require('./core/screening');
+      const ids = rest.filter(Boolean);
+      if (sub === 'refresh') {
+        // A manual run skips the failure backoff, never GoPlus's rate limit.
+        const r = await sc.refresh(ws, { trigger: one(flags.trigger) || 'cli', force: true, projectIds: ids.length ? ids : null });
+        const wrote = !['noop', 'busy', 'backoff', 'skipped', 'budget_paused'].includes(r.status);
+        return { ...r, ...(wrote ? await afterWrite(ws) : {}) };
+      }
+      if (sub === 'status' || !sub) {
+        if (ids.length) return sc.view(ws, projects.getProject(ws, ids[0]));
+        const list = projects.listProjects(ws).filter((p) => !p.broken && p.status !== 'archived');
+        return { overview: sc.overview(ws), projects: list.map((p) => ({ project_id: p.project_id, ...sc.summary(ws, p) })) };
+      }
+      throw Object.assign(new Error('screen refresh [<id>...] | screen status [<id>]'), { code: 'USAGE' });
     }
     case 'job': {
       const jobs = require('./core/jobs');

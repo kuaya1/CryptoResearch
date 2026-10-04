@@ -177,6 +177,27 @@ async function doctor(ws) {
     add('Fundamentals', !problems, detail, problems ? 'warn' : 'info');
   } catch (_) { /* fundamentals module optional */ }
 
+  try {
+    // Contract integrity: GoPlus screens of the contracts on record, recent
+    // alerts, and identity records whose contracts cannot be screened.
+    const so = require('./screening').overview(ws);
+    const st = so.states;
+    const alerts = so.alerts;
+    const bad = so.identity_issues;
+    const parts = [];
+    if (so.screened) parts.push(`${so.screened} project(s) screened`);
+    for (const k of ['pending', 'unavailable', 'stale', 'unsupported', 'native_chain', 'no_contract']) if (st[k]) parts.push(`${st[k]} ${k.replace(/_/g, ' ')}`);
+    const detail = !so.enabled
+      ? 'Turned off in settings.'
+      : [
+        `${parts.join(', ') || 'No verified contracts on record'}; last run ${so.last_run ? `${so.last_run.at} (${so.last_run.status})` : 'never'}; requests this month ${so.calls.month_count}${so.budget_monthly ? ` of ${so.budget_monthly}` : ''}${so.rate_limited ? `; rate-limited until ${so.retry_at}` : ''}; research packets: ${so.packet_mode}.`,
+        alerts ? `${alerts} contract change alert(s) in the review queue.` : '',
+        bad.length ? `Contracts that cannot be screened: ${bad.slice(0, 5).map((b) => `${b.project_id} (${b.reason})`).join('; ')}${bad.length > 5 ? ` and ${bad.length - 5} more` : ''}.` : '',
+      ].filter(Boolean).join(' ');
+    const warn = so.enabled && (alerts > 0 || (st.unavailable || 0) > 0 || bad.some((b) => b.kind === 'invalid_address'));
+    add('Contract screening', !warn, detail, warn ? 'warn' : 'info');
+  } catch (_) { /* screening module optional */ }
+
   const pendingReq = require('./requests').pendingRequests(ws);
   add('Queued requests', pendingReq.length === 0, pendingReq.length ? `${pendingReq.length} pending (not saved yet)` : 'None pending', pendingReq.length ? 'warn' : 'ok');
   const inboxSt = require('./inbox').inboxStatus(ws);

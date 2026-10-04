@@ -27,6 +27,8 @@ Eric's desk is the online dashboard, <https://cryptoresearch.onrender.com>, whic
    - **Never by name or ticker alone.** Ask Eric when the product, parent or chain choice is unclear.
    - **The reply says what DefiLlama answered.** A wrong slug or scope is refused and named there; fix it, or remove the binding with `remove_defillama: true`.
    - **Result:** every new research run's evidence packet then carries DefiLlama's fee, revenue and holders-revenue series over the previous 30 completed UTC days, dated, with definitions and coverage. Fees, revenue and holders revenue stay separate, and no valuation ratio is computed. An unbound project's packet says `unmapped`.
+
+   **Native coin** (BTC, ETH, SOL: the chain's own coin, with no token contract): pass `native_chain: true` with the evidence, only when the project's own docs confirm it. Never infer it from a missing contract; leave it out when unsure. The desk screens every recorded contract with GoPlus Security weekly and skips a project only when its identity says it is a native coin.
 4. `start_research` with his words in `owner_request`, `models: "all"` when he asked for all three, and his own questions, if any, in `instructions`. Read `status`:
 
    | `status` | Meaning | Do |
@@ -123,7 +125,7 @@ This is the everyday request. CLI route:
      --sector "AI/Data" --research claude,chatgpt,gemini `
      --channel cowork --utterance "<Eric's words exactly>" --json
    ```
-   **DefiLlama.** For a project with protocol or chain fees, bind its DefiLlama entity from evidence, never by name or ticker: `project identity <id> --defillama-slug <slug> --defillama-scope product|parent|chain --defillama-source <URL>`. It is fetched once right away; the output says whether DefiLlama confirms the slug and scope. `--no-defillama` removes it.
+   **DefiLlama.** For a project with protocol or chain fees, bind its DefiLlama entity from evidence, never by name or ticker: `project identity <id> --defillama-slug <slug> --defillama-scope product|parent|chain --defillama-source <URL>`. It is fetched once right away; the output says whether DefiLlama confirms the slug and scope. `--no-defillama` removes it. **Native coin:** `project identity <id> --native-chain` (or `--no-native-chain`) only when the project's docs confirm it, with `--evidence`.
    **Horizon.** Leave `--horizon` out: the run then uses Eric's position horizon, **4 calendar months from today** (for example 2026-10-02 to 2027-02-02). Use `--horizon "3 months"` when he asks for a shorter one. Anything longer than 4 months is labeled a long-term exception: use it only when Eric asks for it, and pass his reason in his words if he gave one, `--long-term-reason "<his words>"`. Never write a reason for him. (Whether a reason should be required is Eric's open decision; until he decides, it is not required.)
    Read `status`:
 
@@ -205,6 +207,8 @@ Grades: each model's grade is shown separately. Missing, unknown or N/A inputs w
 | `market lookup "<name>"` | Listing candidates for identity work. |
 | `fundamentals refresh [<id>]` | Fetches DefiLlama's fees, revenue and holders revenue now for bound projects. A rate limit is never skipped. Otherwise every 12 hours per project. |
 | `fundamentals status [<id>]` | Saved fundamentals: state (unmapped, pending, fresh, stale, unavailable, not found, scope mismatch), window, totals and coverage. |
+| `screen refresh [<id>]` | Fetches GoPlus Security's contract flags now for the contracts of verified identities. A rate limit is never skipped. Otherwise weekly per project. |
+| `screen status [<id>]` | Saved contract screens: state (pending, fresh, stale, unavailable, unsupported, no contract, native chain), each flag present / absent / unknown, taxes, recent alerts. |
 | `research run` | Runs queued API jobs now, within the budget. |
 | `research providers` | Which models can run by API and what is missing. |
 | `index rebuild` | Rebuilds the dashboard cache from the files. |

@@ -57,6 +57,26 @@ const DEFAULT_SETTINGS = {
     backoff_initial_minutes: 5,
     backoff_max_minutes: 360,
   },
+  // GoPlus token contract flags for the contracts of each verified identity
+  // (screening.js): keyless, refreshed per project every refresh_hours. Alerts
+  // only on severe changes (mint, proxy, blacklist or freeze newly present, the
+  // sell tax rising above sell_tax_alert_pct), kept in the review queue for
+  // alert_days. packet_mode "monitor" keeps the block out of research packets
+  // ("include" puts it in).
+  screening: {
+    enabled: true,
+    refresh_hours: 168,
+    stale_hours: 336,
+    timeout_seconds: 20,
+    max_attempts: 2,
+    monthly_request_budget: 1500,
+    max_contracts_per_run: 24,
+    backoff_initial_minutes: 10,
+    backoff_max_minutes: 720,
+    sell_tax_alert_pct: 10,
+    alert_days: 14,
+    packet_mode: 'monitor',
+  },
   rank_sources: {
     coingecko: { enabled: true, note: 'CoinGecko market-cap rank, from the same /coins/markets call as prices.' },
     coinmarketcap: { enabled: false, note: 'Optional. Needs a CoinMarketCap API key in ~/.cryptoresearch/secrets.json (coinmarketcap_api_key) and a CoinMarketCap ID on each project.' },

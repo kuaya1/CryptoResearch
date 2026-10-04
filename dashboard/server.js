@@ -499,7 +499,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
       const i = fileInfo(ws.abs(rel));
       parts.push(`${rel}:${i ? `${i.size}:${i.mtimeMs}` : '-'}`);
     };
-    ['logs/operations.jsonl', 'logs/jobs-state.json', 'logs/ingestion-state.json', 'market-data/status.json', 'market-data/latest.json', 'market-data/fundamentals/status.json', 'config/settings.json', 'portfolio/transactions.json', 'portfolio/accounts.json', 'portfolio/limits.json', 'portfolio/events.json'].forEach(add);
+    ['logs/operations.jsonl', 'logs/jobs-state.json', 'logs/ingestion-state.json', 'market-data/status.json', 'market-data/latest.json', 'market-data/fundamentals/status.json', 'market-data/screening/status.json', 'config/settings.json', 'portfolio/transactions.json', 'portfolio/accounts.json', 'portfolio/limits.json', 'portfolio/events.json'].forEach(add);
     for (const id of listDir(ws.abs('projects'), { dirs: true })) {
       for (const f of ['project.json', 'events.json', 'claim-reviews.json', 'disputes.json', 'notes/conviction.md']) add(`projects/${id}/${f}`);
       parts.push(`${id}/reports:${listDir(ws.abs(`projects/${id}/reports`), { dirs: true }).join('|')}`);
@@ -624,7 +624,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   const intakeTimer = setInterval(() => sweepIntake(), 60000);
   // DefiLlama fundamentals ride along: due per project every 12 hours, under
   // the lease, gate and backoff they share with the scheduled task and the CLI.
-  const dailyTimer = setInterval(() => jobs.runJobs(ws, ['snapshot', 'reviews', 'backup', 'fundamentals'], { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 30 * 60000);
+  const dailyTimer = setInterval(() => jobs.runJobs(ws, ['snapshot', 'reviews', 'backup', 'fundamentals', 'screening'], { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 30 * 60000);
 
   const api = makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIdentify, clients, sockets, oauth });
 
@@ -742,7 +742,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     setTimeout(() => marketTick(false), 1500),
     setTimeout(() => sweepIntake(), 2500),
     setTimeout(() => researchTick(), 5000),
-    setTimeout(() => jobs.runJobs(ws, ['snapshot', 'reviews', 'backup', 'fundamentals'], { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 8000),
+    setTimeout(() => jobs.runJobs(ws, ['snapshot', 'reviews', 'backup', 'fundamentals', 'screening'], { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 8000),
   ];
 
   const onSignal = () => stop(0);

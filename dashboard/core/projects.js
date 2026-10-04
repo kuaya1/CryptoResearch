@@ -10,6 +10,7 @@ const { safeUrl } = require('./reports');
 const { validate, loadSchema } = require('./schema');
 const { PROVIDERS } = require('./workspace');
 const { SECTORS, normalizeSector } = require('./sectors');
+const { chainInfo } = require('./chains');
 
 const GENERIC_WORDS = new Set(['network', 'protocol', 'finance', 'financial', 'labs', 'foundation', 'token', 'coin', 'dao', 'chain', 'the', 'project', 'official']);
 
@@ -150,15 +151,32 @@ function cleanEvidence(list) {
     .map((e) => ({ kind: e.kind || null, url: safeUrl(e.url), checked_at: e.checked_at || now, note: e.note || null }));
 }
 
+// Each asset keeps its chain as written (lowercased) and, when the chain is
+// one core/chains.js knows, its stable chain ID ("1", "8453", "solana"...);
+// an unknown chain gets null, never a guess.
 function cleanAssets(list) {
   return (list || [])
     .filter((a) => a && a.chain)
-    .map((a) => ({
-      chain: String(a.chain).trim().toLowerCase(),
-      contract_address: a.contract_address ? String(a.contract_address).trim() : null,
-      standard: a.standard || null,
-      note: a.note || null,
-    }));
+    .map((a) => {
+      const chain = String(a.chain).trim().toLowerCase();
+      const info = chainInfo(chain);
+      return {
+        chain,
+        chain_id: info ? info.chain_id : null,
+        contract_address: a.contract_address ? String(a.contract_address).trim() : null,
+        standard: a.standard || null,
+        note: a.note || null,
+      };
+    });
+}
+
+// Whether the token is its chain's own native coin (BTC, ETH, SOL...): only
+// ever what the identity states (true or false), never inferred from a
+// missing contract. null removes the statement.
+function nativeChainOf(v) {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'boolean') throw new OpError('INVALID', 'native_chain must be true or false.');
+  return v;
 }
 
 // Decides whether the supplied identity is bound (verified) or stays pending.
@@ -176,6 +194,8 @@ function buildIdentity(input) {
   // The DefiLlama binding (fundamentals.js), validated by the caller, is kept as
   // given. It never counts toward verifying the token identity.
   const defillama = input.defillama ? { defillama: input.defillama } : {};
+  const nativeChain = nativeChainOf(input.native_chain);
+  const native = nativeChain === null ? {} : { native_chain: nativeChain };
   let website = input.official_website ? safeUrl(input.official_website) : null;
   const assets = cleanAssets(input.assets);
   const evidence = cleanEvidence(input.evidence);
@@ -198,7 +218,7 @@ function buildIdentity(input) {
     if (!evidence.length) unknowns.push('No identity evidence URL recorded.');
   }
   if (status === 'verified') {
-    return { status, official_website: website, coingecko_id: cg, assets, candidates: [], evidence, unknowns, ...defillama };
+    return { status, official_website: website, coingecko_id: cg, assets, candidates: [], evidence, unknowns, ...native, ...defillama };
   }
   return {
     status,
@@ -208,6 +228,7 @@ function buildIdentity(input) {
     candidates: hasBinding ? [{ coingecko_id: cg, assets, note: 'Unconfirmed candidate. Not used for prices or holdings until confirmed.' }] : [],
     evidence,
     unknowns: [...new Set(unknowns)],
+    ...native,
     ...defillama,
   };
 }
@@ -402,6 +423,8 @@ function updateIdentity(ws, id, input) {
     evidence,
     identity_status: input.identity_status,
     unknowns: input.unknowns || [],
+    // Carried through every identity change; only an explicit value changes it.
+    native_chain: input.native_chain !== undefined ? nativeChainOf(input.native_chain) : current.identity.native_chain,
     defillama,
   };
   const clash = findDuplicates(ws, { coingecko_id: merged.coingecko_id, assets: merged.assets, official_website: merged.official_website }, { excludeId: id });

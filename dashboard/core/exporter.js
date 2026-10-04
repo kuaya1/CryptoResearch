@@ -170,6 +170,7 @@ const EXPORT_INVENTORY = {
   omitted: [
     'market observation history (market-data/observations): kept in the complete package and backups',
     'DefiLlama fundamentals cache (market-data/fundamentals): kept in the complete package and backups; each research run keeps its own frozen copy in its evidence packet',
+    'GoPlus contract screening cache (market-data/screening): kept in the complete package and backups',
     'operation log, request receipts and job history (logs/): kept in the complete package and backups',
     'files still waiting in the inbox and inbox history: kept in the complete package and backups',
     'application code and launchers: kept in backups only',
