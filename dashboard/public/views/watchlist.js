@@ -194,8 +194,7 @@ function projectCell(ctx, p) {
   if (p.held) marks.push(h('span', { class: 'mark', title: 'You hold this: see Portfolio' }, 'Held'));
   if (p.identity_status !== 'verified') marks.push(h('span', { class: 'mark flag', title: (p.identity_unknowns || []).join(' ') || 'Identity not confirmed: no prices or holdings use it' }, 'Identity pending'));
   if (p.status === 'archived') marks.push(h('span', { class: 'mark' }, 'Archived'));
-  // Changes since the last review: a small dot on the logo, the count in its label.
-  const changed = p.changes && p.changes.item_count > 0 ? `${p.changes.item_count} change${p.changes.item_count === 1 ? '' : 's'} since ${p.changes.cursor_source === 'project created' ? 'the project was added' : 'your last review'}` : null;
+  // Changes since your last review are counted in the inspector, not on the logo.
   // Under the Archived filter: Restore, right on the row.
   let restore = null;
   if (p.status === 'archived') {
@@ -204,7 +203,7 @@ function projectCell(ctx, p) {
     restore.onclick = (e) => { e.stopPropagation(); restoreProject(ctx, p, restore); };
   }
   return h('div', { class: 'proj-cell' },
-    h('span', { class: 'logo-wrap' }, logo(p, { size: 26 }), changed ? h('span', { class: 'new-dot', role: 'img', 'aria-label': changed, title: changed }) : null),
+    h('span', { class: 'logo-wrap' }, logo(p, { size: 24 })),
     h('div', { class: 'names' }, nameBtn,
       p.symbol ? h('span', { class: 'tick' }, p.symbol) : null,
       marks.length ? h('span', { class: 'marks' }, marks) : null,
@@ -1825,9 +1824,9 @@ export function renderWatchlist(ctx, route) {
   function drawLegend() {
     legend.replaceChildren(
       h('span', { class: 'bands', 'aria-hidden': 'true' }, ['a', 'b', 'c', 'd', 'f'].map((b) => h('span', { class: `band-key band-${b}` }, b.toUpperCase()))),
-      h('span', null, `Grades 0–100, calculated by this app from each model's own report. Withheld: the report is saved, but a weighted part was not scored; its coverage is the investment weight it did score, not research progress. A month count (4mo) means older than ${ctx.state.index.settings.freshness.research_stale_days || 90} days.`),
-      h('span', { class: 'ev' }, h('span', { class: 'ev-ico' }, icon('warn-fill')), 'serious evidence flag'),
-      h('span', { class: 'ev' }, h('span', { class: 'ev-ico' }, icon('warn-line')), 'material evidence flag'),
+      h('span', null, `Grades 0–100, calculated by this app from each model's own report. Withheld: the report is saved, but a weighted part was not scored; its coverage is the investment weight it did score, not research progress. A small clock in the list (a month count such as 4mo elsewhere) means the analysis is older than ${ctx.state.index.settings.freshness.research_stale_days || 90} days. A range shows its letters in its tooltip and the inspector.`),
+      h('span', { class: 'ev' }, h('span', { class: 'ev-dot serious', 'aria-hidden': 'true' }), 'serious evidence flag'),
+      h('span', { class: 'ev' }, h('span', { class: 'ev-dot material', 'aria-hidden': 'true' }), 'material evidence flag'),
       h('span', { class: 'keys' }, h('kbd', null, 'J'), h('kbd', null, 'K'), ' move', h('kbd', null, 'Space'), ' open', h('kbd', null, '/'), ' search', h('kbd', null, 'Esc'), ' close'));
   }
 

@@ -12,17 +12,17 @@
   --bg: #f6f4ef;                  /* the desk: warm paper */
   --surface: #ffffff;             /* cards, the list, the inspector */
   --surface-raised: #ffffff;      /* menus, dialogs, toasts */
-  --surface-hover: #fafafa;       /* a row under the pointer: barely there */
-  --surface-selected: #f1f1f3;
-  --surface-sunken: #f4f4f5;      /* wells: inputs, code, quiet chips */
-  /* Text: crisp zinc (each at least 4.5:1 on every surface above and the paper) */
-  --text: #18181b;
-  --text-2: #52525b;
-  --text-3: #6b6b74;
-  /* Lines: hairlines */
-  --separator: #ececee;
-  --border: #e2e2e6;
-  --control-border: #8a8a93;      /* at least 3:1 on every surface: field and checkbox edges */
+  --surface-hover: #fafaf9;       /* a row under the pointer: barely there */
+  --surface-selected: #f0efed;
+  --surface-sunken: #f5f5f4;      /* wells: inputs, code, quiet chips */
+  /* Text: warm stone (each at least 4.5:1 on every surface above and the paper) */
+  --text: #1c1917;
+  --text-2: #57534e;
+  --text-3: #716a64;
+  /* Lines: stone hairlines */
+  --separator: #ecebea;
+  --border: #e7e5e4;
+  --control-border: #8a847e;      /* at least 3:1 on every surface: field and checkbox edges */
   /* The one accent: ink blue for actions, selection and focus */
   --accent: #4b56cf;              /* fills; white text on it is 5.8:1 */
   --accent-hover: #3f49b8;
@@ -44,14 +44,17 @@
   --risk-bar: #c2413a;
   --fav-bar: #52525b;
   --track: #ececee;
-  /* Grade bands (the rubric's letters A to F): text color, pastel tint, letter
-     chip. Each text color is at least 4.5:1 on its tint and on white; white on
-     each chip at least 4.9:1. The letter and the number always say the band too. */
-  --band-a: #047857; --band-a-bg: #ecfdf5; --band-a-chip: #047857;
-  --band-b: #0f766e; --band-b-bg: #effcf9; --band-b-chip: #0f766e;
-  --band-c: #8a5a00; --band-c-bg: #fefbe8; --band-c-chip: #8a5a00;
-  --band-d: #c2410c; --band-d-bg: #fff7ed; --band-d-chip: #c2410c;
-  --band-f: #b91c1c; --band-f-bg: #fef2f2; --band-f-chip: #b91c1c;
+  /* Grade bands (the rubric's letters A to F): muted, low-saturation tints.
+     Higher grades lean sage and teal, the middle is plain stone, lower grades
+     soft amber and rust; red is kept for a charge that needs checking, never
+     for a grade. Each text color is at least 5.4:1 on its tint and on white;
+     white on each chip at least 5.9:1. The number and the letter always say
+     the band too. */
+  --band-a: #2f6a4f; --band-a-bg: #f0f6f2; --band-a-chip: #2f6a4f;
+  --band-b: #2e6662; --band-b-bg: #eff5f4; --band-b-chip: #2e6662;
+  --band-c: #57534e; --band-c-bg: #f5f5f4; --band-c-chip: #57534e;
+  --band-d: #855a10; --band-d-bg: #faf5ea; --band-d-chip: #855a10;
+  --band-f: #8c4318; --band-f-bg: #faf1e8; --band-f-chip: #8c4318;
   --on-chip: #ffffff;
   --new-dot: var(--accent-text);
   /* Type: the system sans for reading and numbers (tabular figures), a book
@@ -74,15 +77,17 @@
   --shadow-pop: 0 10px 28px rgba(24, 24, 27, 0.09), 0 0 0 1px rgba(24, 24, 27, 0.04);
   --shadow-drawer: -12px 0 32px rgba(24, 24, 27, 0.08);
   --scrim: rgba(24, 24, 27, 0.24);
-  /* Sizes: dense desktop rows (40px); touch rows and controls larger */
+  /* Sizes: desktop rows 48px (10px above and below a badge); touch rows and
+     controls larger */
   --topbar-h: 52px;
   --control-h: 32px;
   --touch: 44px;
-  --row-h: 40px;
+  --row-h: 48px;
   --row-h-touch: 56px;
-  --head-h: 32px;
-  /* Model badges: one fixed width in every column, so grades line up */
-  --badge-w: 96px;
+  --head-h: 34px;
+  /* Model badges: one fixed width in every column, ranges included, so
+     grades line up */
+  --badge-w: 90px;
   --badge-h: 28px;
   /* Motion: short, and none when reduced motion is asked for */
   --dur: 140ms;
@@ -658,7 +663,7 @@ button.ss-icon:hover { background: var(--surface-hover); color: var(--text); bor
 /* The list, Linear-dense: one quiet header line, 40px rows on hairlines,
    compared numbers right-aligned in monospace figures, the three models in
    aligned, equal columns of fixed-width badges. */
-table.wl { font-size: var(--fs-small); }
+table.wl { font-size: 13px; }
 table.wl thead th { padding: 0; height: var(--head-h); border-bottom: 1px solid var(--border); vertical-align: middle; background: var(--surface); }
 table.wl th .th { display: flex; align-items: center; gap: 4px; padding: 0 12px; min-height: var(--head-h); }
 table.wl th.num .th { justify-content: flex-end; text-align: right; }
@@ -687,10 +692,10 @@ table.wl th button.sort:focus-visible { outline: 2px solid var(--focus); outline
 table.wl th .lbl { display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; }
 table.wl th .arrow { font-size: 8px; color: var(--accent-text); }
 table.wl th[aria-sort] .lbl, table.wl th[aria-sort] button.sort { color: var(--text); }
-table.wl td { height: var(--row-h); padding: 0 12px; vertical-align: middle; white-space: nowrap; border-bottom: 1px solid var(--separator); }
+table.wl td { height: var(--row-h); padding: 10px 12px; vertical-align: middle; white-space: nowrap; border-bottom: 1px solid var(--separator); }
 table.wl tbody tr:last-child td { border-bottom: 0; }
 /* Every number in the list: monospace, tabular, right-aligned. */
-table.wl td.num, table.wl td .num, table.wl td .price, table.wl td .chg { font-family: var(--mono); font-size: 12.5px; letter-spacing: -0.01em; font-variant-numeric: tabular-nums lining-nums; }
+table.wl td.num, table.wl td .num, table.wl td .price, table.wl td .chg { font-family: var(--mono); font-size: 13px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums lining-nums; }
 table.wl td.num, table.wl td .num { color: var(--text-2); }
 table.wl td .price { color: var(--text); font-weight: 500; }
 table.wl td .chg { font-weight: 500; }
@@ -708,21 +713,25 @@ table.wl td.c-project, table.wl th.c-project { position: sticky; left: 0; z-inde
 table.wl th.c-project { z-index: 2; background: var(--surface); }
 table.wl tbody tr:hover td.c-project, table.wl tbody tr:focus-within td.c-project { background: var(--surface-hover); }
 table.wl tbody tr.selected td.c-project { background: var(--accent-weak); }
-table.wl td.c-prov, table.wl th.c-prov { padding-left: 4px; padding-right: 4px; width: calc(var(--badge-w) + 8px); }
-table.wl th.c-prov-claude, table.wl td.c-prov-claude { padding-left: 12px; border-left: 1px solid var(--separator); }
-table.wl th.c-prov-gemini, table.wl td.c-prov-gemini { padding-right: 12px; }
+/* The three model columns: equal, the badge centered in each. */
+table.wl td.c-prov, table.wl th.c-prov { padding-left: 6px; padding-right: 6px; width: calc(var(--badge-w) + 12px); text-align: center; }
+table.wl th.c-prov button.sort { justify-content: center; }
+table.wl th.c-prov-claude, table.wl td.c-prov-claude { padding-left: 14px; border-left: 1px solid var(--separator); }
+table.wl th.c-prov-gemini, table.wl td.c-prov-gemini { padding-right: 14px; }
 table.wl td.nodata { color: var(--text-2); font-size: var(--fs-small); white-space: normal; text-align: left; }
 @media (pointer: coarse) { table.wl td { height: 52px; } }
 .proj-cell { display: flex; align-items: center; gap: 10px; min-width: 0; max-width: 380px; }
 .proj-cell .names { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
-.proj-cell .logo { width: 22px !important; height: 22px !important; font-size: 9.5px !important; }
+/* Logos in the list: one 24px stone circle with a hairline, the image or a
+   plain monogram inside. */
+.proj-cell .logo { width: 24px !important; height: 24px !important; font-size: 10px !important; font-weight: 500; letter-spacing: 0; color: var(--text-2); background: var(--surface-sunken); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 60%, transparent); }
+.proj-cell .logo.has-img { background: var(--surface-sunken); }
 .logo-wrap { position: relative; display: inline-flex; flex: none; }
-.new-dot { position: absolute; top: -2px; right: -3px; width: 7px; height: 7px; border-radius: 50%; background: var(--new-dot); box-shadow: 0 0 0 2px var(--surface); }
 .pname {
   all: unset;
   cursor: pointer;
   font-weight: 500;
-  font-size: var(--fs-body);
+  font-size: 13px;
   letter-spacing: -0.006em;
   color: var(--text);
   overflow: hidden;
@@ -734,7 +743,7 @@ table.wl td.nodata { color: var(--text-2); font-size: var(--fs-small); white-spa
 .pname { display: inline-block; padding: 2px 0; vertical-align: middle; }
 .pname:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--control-border); }
 .pname:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.proj-cell .tick { font-family: var(--mono); font-size: 11.5px; color: var(--text-3); white-space: nowrap; letter-spacing: 0.02em; }
+.proj-cell .tick { font-family: var(--mono); font-size: 11px; color: var(--text-3); white-space: nowrap; letter-spacing: 0.01em; }
 .proj-cell .marks { display: inline-flex; gap: 4px; align-items: center; flex-wrap: nowrap; }
 .mark { font-size: 11px; font-weight: 600; line-height: 18px; padding: 0 7px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-2); white-space: nowrap; background: var(--surface); }
 .mark.flag { border-color: color-mix(in srgb, var(--warn-strong) 55%, transparent); color: var(--warn); background: var(--warn-weak); }
@@ -813,10 +822,28 @@ td .price-note { display: flex; justify-content: flex-end; }
 }
 /* In the list: one fixed width and height in every model column, so grades
    and states line up down the page. */
-table.wl .gb { flex-direction: row; align-items: center; justify-content: flex-start; width: var(--badge-w); min-width: 0; height: var(--badge-h); min-height: var(--badge-h); padding: 0 8px; border-radius: var(--r-md); }
-/* A range with its letters and marks grows instead of spilling out of its cell. */
-table.wl .gb.is-range { width: auto; min-width: var(--badge-w); max-width: 100%; }
-.gb.is-range .v { letter-spacing: -0.03em; }
+table.wl .gb { flex-direction: row; align-items: center; justify-content: center; width: var(--badge-w); min-width: 0; height: var(--badge-h); min-height: var(--badge-h); padding: 0 6px; border-radius: var(--r-md); vertical-align: middle; }
+table.wl .gb .main { justify-content: center; }
+/* Marks in a list badge: one at most, by priority (a newer run's problem,
+   an evidence flag, a newer run working, a stale analysis as a small clock),
+   and the letter steps aside when one shows, so every badge keeps one width.
+   All of them stay in the badge's label and tooltip and in the inspector;
+   phone cards have room and show them all. */
+@container wl (min-width: 761px) {
+  table.wl .gb { padding: 0 5px; }
+  table.wl .gb .main { gap: 4px; }
+  table.wl .gb:has(.ev, .a, .r, .x) .l { display: none; }
+  table.wl .gb:has(.x) :is(.ev, .r, .a) { display: none; }
+  table.wl .gb:has(.ev) :is(.r, .a) { display: none; }
+  table.wl .gb:has(.r) .a { display: none; }
+  table.wl .gb .a { font-size: 0; width: 11px; height: 11px; flex: none; color: var(--warn); background: currentColor; -webkit-mask: var(--i-clock) center / contain no-repeat; mask: var(--i-clock) center / contain no-repeat; }
+  table.wl .gb.is-range .v { font-size: 12px; }
+}
+/* A range keeps the same width: its letters stay in its label, its tooltip
+   and the inspector, so the cell holds only the two numbers. */
+table.wl .gb.is-range .l { display: none; }
+.gb.is-range .v { letter-spacing: -0.04em; }
+table.wl .gb.is-range .v { font-size: 12.5px; }
 .gb .main { overflow: hidden; }
 button.gb { cursor: pointer; }
 button.gb:hover { border-color: var(--control-border); }
@@ -846,10 +873,13 @@ button.gb[class*="band-"]:hover { border-color: color-mix(in srgb, currentColor 
 .gb.is-uncertain .v, .gb.is-incomplete .v, .gb.is-failed .v, .gb.is-interrupted .v, .gb.is-on_hold .v, .gb.is-held .v { font-size: 12px; font-weight: 500; letter-spacing: 0; color: var(--text-2); font-family: var(--font); }
 /* On hold (paused on purpose) and held (never sent): quiet, solid, a bar sign. */
 .gb.is-on_hold { border-color: var(--border); background: var(--surface-sunken); }
-.gb.is-held { border-color: color-mix(in srgb, var(--warn-strong) 45%, transparent); background: var(--surface); }
+.gb.is-held { border-color: color-mix(in srgb, var(--warn-strong) 35%, transparent); background: var(--surface); }
 .gb.is-held .si, .gb.is-held .v { color: var(--warn); }
 .gb.is-none { border-style: dashed; border-color: var(--border); background: transparent; }
 .gb.is-none .v { color: var(--text-3); }
+/* In the list, None and On hold are the quietest things in the row. */
+table.wl .gb.is-none .v, table.wl .gb.is-on_hold .v { font-family: var(--mono); font-size: 11.5px; font-weight: 400; color: var(--text-3); letter-spacing: -0.02em; }
+table.wl .gb.is-none .si, table.wl .gb.is-on_hold .si { color: color-mix(in srgb, var(--text-3) 70%, transparent); }
 .gb.is-withheld { border-style: dashed; border-color: var(--control-border); background: repeating-linear-gradient(135deg, var(--surface-sunken) 0 4px, var(--surface) 4px 8px); }
 .gb.is-withheld .v { color: var(--text); font-weight: 600; }
 .gb.is-withheld .main { gap: 5px; }
@@ -864,14 +894,18 @@ button.gb[class*="band-"]:hover { border-color: color-mix(in srgb, currentColor 
 @keyframes gb-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pulse-c) 40%, transparent); } 70% { box-shadow: 0 0 0 5px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 .gb.is-running, .gb.is-dispatching, .gb.is-cowork, .gb.is-connector { background: var(--accent-weak); border-color: color-mix(in srgb, var(--accent) 22%, transparent); }
 .gb.is-running .v, .gb.is-dispatching .v, .gb.is-cowork .v, .gb.is-connector .v { color: var(--accent-text); }
-.gb.is-waiting { border-style: dashed; border-color: color-mix(in srgb, var(--warn-strong) 60%, transparent); background: var(--warn-weak); }
+.gb.is-waiting { border-style: dashed; border-color: color-mix(in srgb, var(--warn-strong) 45%, transparent); background: var(--warn-weak); }
 .gb.is-waiting .si, .gb.is-waiting .v { color: var(--warn); }
-.gb.is-uncertain { border-color: var(--warn-strong); background: var(--warn-weak); }
-.gb.is-uncertain .si, .gb.is-uncertain .v { color: var(--warn); font-weight: 600; }
-.gb.is-failed { border-color: color-mix(in srgb, var(--neg) 55%, transparent); background: var(--neg-weak); }
-.gb.is-failed .si, .gb.is-failed .v { color: var(--neg); font-weight: 600; }
-.gb.is-interrupted { border-color: color-mix(in srgb, var(--warn-strong) 55%, transparent); }
-.gb.is-interrupted .si, .gb.is-interrupted .v { color: var(--warn); font-weight: 600; }
+/* Check (a paid call may have been billed, nothing saved): the one state in
+   a gentle rose, because it can cost money until it is reconciled. */
+.gb.is-uncertain { border-color: color-mix(in srgb, var(--neg) 30%, transparent); background: var(--neg-weak); }
+.gb.is-uncertain .si, .gb.is-uncertain .v { color: var(--neg); font-weight: 600; }
+/* Failed: a muted stone pill; the sign carries a soft rose, the word says it. */
+.gb.is-failed { border-color: var(--border); background: var(--surface-sunken); }
+.gb.is-failed .v { color: var(--text); font-weight: 500; }
+.gb.is-failed .si { color: color-mix(in srgb, var(--neg) 70%, var(--text-3)); }
+.gb.is-interrupted { border-color: color-mix(in srgb, var(--warn-strong) 40%, transparent); }
+.gb.is-interrupted .si, .gb.is-interrupted .v { color: var(--warn); font-weight: 500; }
 /* Incomplete: an answer that stopped part-way (not a report). A neutral solid
    border and a half-filled sign, apart from withheld (hatched), failed (red),
    check (amber fill), waiting (amber dashed) and paused (amber outline). */
@@ -880,19 +914,25 @@ button.gb[class*="band-"]:hover { border-color: color-mix(in srgb, currentColor 
 /* A withheld grade's coverage, on its own line under the word, so the share
    never reads as progress or as a score. */
 .gb .cov { font-size: 11px; font-weight: 600; color: var(--text-2); line-height: 13px; }
-table.wl .gb.is-withheld { flex-direction: column; align-items: flex-start; justify-content: center; gap: 0; }
+table.wl .gb.is-withheld { flex-direction: column; align-items: center; justify-content: center; gap: 0; }
 table.wl .gb.is-withheld .v { font-size: 11.5px; line-height: 13px; }
 table.wl .gb.is-withheld .cov { font-size: 10.5px; line-height: 12px; font-weight: 500; }
-/* A newer run that failed, needs a check or stalled, on a saved grade. */
-.gb .x { font-size: 10px; font-weight: 700; line-height: 14px; min-width: 14px; text-align: center; border-radius: 50%; color: #fff; background: var(--warn-strong); }
-/* Evidence checks on the report behind a grade. Serious (a filled warning
-   sign, dashed outline, no band color): the number must not look settled.
-   Material (an outlined sign). The words are in the label and the inspector. */
-.gb .ev { display: inline-flex; color: var(--warn-strong); flex: none; }
-.gb .ev svg { width: 13px; height: 13px; display: block; }
+/* A newer run that failed, needs a check or stalled, on a saved grade: a
+   small muted amber "!" (the words are in the label and the inspector). */
+.gb .x { font-size: 10px; font-weight: 700; line-height: 13px; min-width: 13px; text-align: center; border-radius: 50%; color: var(--warn); background: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn-strong) 55%, transparent); }
+/* Evidence checks on the report behind a grade: a small muted dot beside the
+   number, filled for a serious flag, a ring for a material one. A serious
+   flag also takes the band's tint away (plain stone), so the number never
+   looks settled. The words are in the label, the tooltip and the inspector. */
+.gb .ev { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; }
+.gb.ev-serious .ev { background: color-mix(in srgb, var(--warn-strong) 80%, var(--text-3)); }
+.gb.ev-material .ev { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--warn-strong) 80%, var(--text-3)); }
+.ev-dot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; }
+.ev-dot.serious { background: color-mix(in srgb, var(--warn-strong) 80%, var(--text-3)); }
+.ev-dot.material { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--warn-strong) 80%, var(--text-3)); }
 svg .ink-line { stroke: var(--surface); fill: none; }
 svg .ink-dot { fill: var(--surface); stroke: none; }
-.gb.ev-serious { background: var(--surface); border: 1px dashed var(--warn-strong); }
+.gb.ev-serious { background: var(--surface-sunken); border: 1px solid var(--border); }
 .gb.ev-serious .v { color: var(--text-2); font-weight: 600; }
 .gb.ev-serious .l { color: var(--text-2); background: var(--surface-sunken); }
 .ev-word { color: var(--warn); font-weight: 600; }
@@ -960,7 +1000,8 @@ table.wl .fit-hidden { display: none !important; }
   table.wl tbody tr.recent { box-shadow: 0 0 0 1px var(--border), var(--shadow-card); }
   table.wl .gb { width: 100%; height: auto; min-height: 52px; flex-direction: column; align-items: flex-start; justify-content: center; padding: 6px 10px; gap: 3px; }
   table.wl .gb .p { display: block; }
-  table.wl .gb .main { flex-wrap: wrap; row-gap: 2px; max-width: 100%; }
+  table.wl .gb .main { flex-wrap: wrap; row-gap: 2px; max-width: 100%; justify-content: flex-start; }
+  table.wl .gb.is-withheld { align-items: flex-start; }
   table.wl .gb .v { font-size: 15px; }
   table.wl .gb.is-none .v, table.wl .gb.is-withheld .v, table.wl .gb.is-pdf .v, table.wl .gb.is-queued .v, table.wl .gb.is-waiting .v, table.wl .gb.is-uncertain .v, table.wl .gb.is-failed .v, table.wl .gb.is-incomplete .v, table.wl .gb.is-interrupted .v, table.wl .gb.is-running .v, table.wl .gb.is-dispatching .v, table.wl .gb.is-connector .v, table.wl .gb.is-cowork .v { font-size: 13.5px; }
   .proj-cell { max-width: none; align-items: flex-start; gap: 12px; }

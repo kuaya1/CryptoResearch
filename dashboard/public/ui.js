@@ -699,7 +699,9 @@ export function gradeBadge(provider, report, job, opts = {}) {
       sign,
       h('span', { class: 'v' }, info.value),
       info.label ? h('span', { class: 'l' }, info.label) : null,
-      info.ev ? h('span', { class: 'ev', title: `Evidence checks: ${info.evText}` }, icon(info.ev === 'serious' ? 'warn-fill' : 'warn-line')) : null,
+      // A small muted dot (filled: serious, a ring: material); the words are
+      // in the badge's label, its tooltip and the inspector's evidence line.
+      info.ev ? h('span', { class: 'ev', title: `Evidence checks: ${info.evText}` }) : null,
       info.stale && info.age ? h('span', { class: 'a' }, info.age) : null,
       info.refreshing ? h('span', { class: 'r', title: info.newerText }, '↻') : null,
       info.problem ? h('span', { class: 'x', title: info.newerText }, '!') : null),
