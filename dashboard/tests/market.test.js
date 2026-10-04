@@ -261,6 +261,51 @@ test('a 429 on identity search closes the shared gate; search, prices and market
   assert.equal(market.readStatus(ws).calls.month_count, 1);
 });
 
+test('a rate limit and backoff met without a key never hold back the Demo key: the first keyed request goes out at once, on api.coingecko.com with x-cg-demo-api-key; a 429 met with the key holds the key', async (t) => {
+  const { ws, root, cleanup } = tempWorkspace('mktkey');
+  t.after(cleanup);
+  addFixtureProject(ws);
+  enableMarket(ws, root);
+  const saved = process.env.COINGECKO_API_KEY;
+  t.after(() => {
+    if (saved === undefined) delete process.env.COINGECKO_API_KEY;
+    else process.env.COINGECKO_API_KEY = saved;
+  });
+  // The desk as the keyless 429s left it: rate-limited and backing off for half an hour.
+  const later = new Date(Date.now() + 30 * 60000).toISOString();
+  fs.mkdirSync(path.join(root, 'market-data'), { recursive: true });
+  writeStatus(root, { state: 'failed', last_success_at: new Date(Date.now() - 2 * 3600000).toISOString(), last_error: 'CoinGecko responded HTTP 429 (rate limited)', consecutive_failures: 2, retry_after_until: later, next_allowed_at: later, rate_limit: { at: new Date().toISOString(), source: 'prices', http_status: 429, retry_after_ms: null, wait_ms: 1800000, strikes: 2, until: later } });
+  process.env.COINGECKO_API_KEY = 'CG-FICTIONAL-test-key';
+  assert.equal(market.credential(), 'demo_key');
+  assert.equal(market.rateLimitGate(ws).open, true, 'a limit met without the key does not hold back the key');
+  assert.equal(market.nextAllowed(ws, market.readStatus(ws)).allowed, true, 'nor does its failure backoff');
+  assert.equal(jobs.marketDue(ws, Date.now(), { foreground: false }), true, 'a start with the new key refreshes at once');
+  assert.equal(market.freshness(ws).rate_limited, false);
+  assert.equal(market.readStatus(ws).rate_limit_superseded.credential, 'keyless', 'the old limit is kept for the record');
+
+  const sent = [];
+  const keyed = async (url, init) => {
+    sent.push({ url, headers: init.headers });
+    return fakeFetch({ 'example-payfi-fictional': 0.5, bitcoin: 70000, tether: 1, 'usd-coin': 1 })(url);
+  };
+  const r = await market.refresh(ws, { fetchImpl: keyed });
+  assert.equal(r.status, 'ok', r.message);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].url, /^https:\/\/api\.coingecko\.com\/api\/v3\/coins\/markets\?/, 'the public root, never pro-api');
+  assert.equal(sent[0].headers['x-cg-demo-api-key'], 'CG-FICTIONAL-test-key');
+  assert.equal(sent[0].headers['x-cg-pro-api-key'], undefined);
+  const st = market.readStatus(ws);
+  assert.deepEqual([st.credential, st.retry_after_until, st.next_allowed_at, st.consecutive_failures, st.state], ['demo_key', null, null, 0, 'ok']);
+  assert.ok(!JSON.stringify(readJson(path.join(root, 'market-data', 'status.json'))).includes('CG-FICTIONAL'), 'the key itself is never written');
+
+  // A 429 met with the key holds the key, a manual refresh included.
+  const limited = answer(429, { retryAfter: '60' });
+  assert.equal((await market.refresh(ws, { fetchImpl: limited, force: true })).status, 'failed');
+  assert.equal(market.rateLimitGate(ws).open, false);
+  assert.equal((await market.refresh(ws, { fetchImpl: limited, force: true })).status, 'backoff');
+  assert.equal(limited.calls.length, 1);
+});
+
 test('status notes use New York clock times, the date only for another day', (t) => {
   const now = Date.parse('2026-10-03T04:35:00.000Z'); // 12:35 AM in New York (EDT)
   assert.equal(market.clock('2026-10-03T04:29:58.000Z', now), '12:29 AM');

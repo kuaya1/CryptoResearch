@@ -51,8 +51,37 @@ function readLatest(ws) {
   return readJson(ws.abs(LATEST_REL), { provider: 'coingecko', assets: {} });
 }
 
+// The status as it applies to the credential in use now (forCredential), so
+// every reader and writer sees the same gate and backoff.
 function readStatus(ws) {
-  return readJson(ws.abs(STATUS_REL), { state: 'never_run', last_attempt_at: null, last_success_at: null, last_error: null, consecutive_failures: 0 });
+  return forCredential(readJson(ws.abs(STATUS_REL), { state: 'never_run', last_attempt_at: null, last_success_at: null, last_error: null, consecutive_failures: 0 }));
+}
+
+// What CoinGecko sees this desk as: its Demo key, or no key. Only this word is
+// recorded, never the key or anything derived from it.
+function credential() {
+  return apiKey() ? 'demo_key' : 'keyless';
+}
+
+// A rate limit or failure backoff belongs to the credential it was met with.
+// CoinGecko counts a Demo key's calls on their own, apart from the shared
+// keyless allowance, so a wait met without the key never holds back the first
+// request with it (a manual refresh, or a start after the key was added), and
+// the other way round. The superseded limit is kept for the record. A status
+// written before this was recorded counts as keyless: no desk had a key then.
+function forCredential(status) {
+  const now = credential();
+  const was = status.credential || 'keyless';
+  if (was === now) return status;
+  return {
+    ...status,
+    credential: now,
+    retry_after_until: null,
+    next_allowed_at: null,
+    consecutive_failures: 0,
+    rate_limit: null,
+    ...(status.rate_limit ? { rate_limit_superseded: { ...status.rate_limit, credential: was } } : {}),
+  };
 }
 
 function trackedIds(ws) {
@@ -147,7 +176,7 @@ function rateLimitFields(ws, status, { retryAfterMs: header = null, source = 'pr
 function noteRateLimit(ws, { retryAfterMs: header = null, source = 'prices', httpStatus = 429 } = {}) {
   withLock(ws, 'market_status', () => {
     const status = readStatus(ws);
-    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...status, schema_version: 'cr.market-status.v2', ...rateLimitFields(ws, status, { retryAfterMs: header, source, httpStatus }) }));
+    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...status, schema_version: 'cr.market-status.v2', credential: credential(), ...rateLimitFields(ws, status, { retryAfterMs: header, source, httpStatus }) }));
   });
   return rateLimitGate(ws);
 }
@@ -246,7 +275,7 @@ async function searchCoins(ws, query, { fetchImpl = fetch } = {}) {
     const status = readStatus(ws);
     const calls = addCalls(callBudget(ws, status), 1, body ? 1 : 0);
     // A 429 here closes the shared gate for prices and market context too.
-    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...status, schema_version: 'cr.market-status.v2', calls, ...(limited ? rateLimitFields(ws, status, limited) : {}) }));
+    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...status, schema_version: 'cr.market-status.v2', credential: credential(), calls, ...(limited ? rateLimitFields(ws, status, limited) : {}) }));
   });
   if (limited) {
     const g = rateLimitGate(ws);
@@ -439,6 +468,7 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
       const next = {
         ...status,
         schema_version: 'cr.market-status.v2',
+        credential: credential(),
         state: 'failed',
         last_attempt_at: attemptAt,
         last_trigger: trigger,
@@ -517,6 +547,7 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
       replaceFile(ws, ws.abs(STATUS_REL), jsonText({
         ...status,
         schema_version: 'cr.market-status.v2',
+        credential: credential(),
         state: 'failed',
         last_attempt_at: attemptAt,
         last_trigger: trigger,
@@ -540,6 +571,7 @@ async function refreshLocked(ws, { ids, trigger, fetchImpl, force, budget }) {
     replaceFile(ws, ws.abs(STATUS_REL), jsonText({
       ...kept,
       schema_version: 'cr.market-status.v2',
+      credential: credential(),
       state: partial ? 'partial' : 'ok',
       last_attempt_at: attemptAt,
       last_success_at: fetchedAt,
@@ -651,4 +683,4 @@ function volumeChange24h(ws, id, current) {
   return { pct: (current.volume_24h_usd / best.vol - 1) * 100, compared_with: best.at, hours: Math.round(best.age * 10) / 10 };
 }
 
-module.exports = { refresh, searchCoins, readLatest, readStatus, trackedIds, freshness, fetchMarkets, validateRow, nextAllowed, noteRateLimit, rateLimitGate, retryAfterMs, clock, volumeChange24h, logoFile, apiKey, callBudget, addCalls, LATEST_REL, STATUS_REL, SOURCE_LABEL, RATE_LIMIT_DEFAULT_MS };
+module.exports = { refresh, searchCoins, readLatest, readStatus, trackedIds, freshness, fetchMarkets, validateRow, nextAllowed, noteRateLimit, rateLimitGate, retryAfterMs, clock, volumeChange24h, logoFile, apiKey, credential, callBudget, addCalls, LATEST_REL, STATUS_REL, SOURCE_LABEL, RATE_LIMIT_DEFAULT_MS };
