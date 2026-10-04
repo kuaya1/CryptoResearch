@@ -2,7 +2,7 @@
 // review calendar.
 import {
   h, card, table, stateText, tagChip, gradeBadge, fmtNum, fmtDate, fmtAgo, select, field, fieldError, input, button, action, callout,
-  tabStrip, safeSection, submissionId, waitingInstruction, PROVIDERS, PROVIDER_LABELS,
+  tabStrip, safeSection, submissionId, waitingInstruction, PROVIDERS, PROVIDER_LABELS, onHoldOf,
 } from '../ui.js';
 import { comparisonBlock } from './project.js';
 
@@ -54,7 +54,7 @@ function runsTab(ctx) {
     card('Latest research per project', table([
       { label: 'Project', render: (p) => h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/research` }, p.name) },
       { label: 'Latest run', render: (p) => (p.research && p.research.latest_run ? h('div', null, stateText(sentence(p.research.latest_run.status), p.research.latest_run.status === 'completed' ? 'ok' : p.research.latest_run.status === 'failed' ? 'bad' : 'wait'), h('div', { class: 'small muted' }, `${fmtAgo(p.research.latest_run.created_at)} · ${p.research.latest_run.horizon ? p.research.latest_run.horizon.text : ''}`)) : h('span', { class: 'faint small' }, 'None')) },
-      { label: 'Models', render: (p) => h('div', { class: 'grades' }, PROVIDERS.map((prov) => gradeBadge(prov, p.providers && p.providers[prov], p.research && p.research.providers && p.research.providers[prov], { staleDays, hosted }))) },
+      { label: 'Models', render: (p) => h('div', { class: 'grades' }, PROVIDERS.map((prov) => gradeBadge(prov, p.providers && p.providers[prov], p.research && p.research.providers && p.research.providers[prov], { staleDays, hosted, onHold: Boolean(onHoldOf(ctx.state.index, prov)) }))) },
       { label: 'Reports', num: true, render: (p) => String(p.report_count || 0) },
     ], projects, { empty: 'No projects yet.' }), { note: 'Each model\'s job is independent: a failure in one never erases another\'s result. Price refreshes never start research.' }));
 }

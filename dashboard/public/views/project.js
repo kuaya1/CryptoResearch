@@ -6,7 +6,7 @@ import {
   fmtPrice, fmtCompactUsd, fmtNum, fmtDate, fmtDateTime, fmtAgo, fmtSignedPct, freshnessText, kv, details, field, input, select, button,
   action, callout, copyText, tabStrip, safeSection, submissionId, stateText, fieldError, PROVIDERS, PROVIDER_LABELS, link,
   jobKey, coworkIdleMinutes, isAssistantJob, researchState, withheldReason, unscoredFrom, unscoredList,
-  withheldLabel, COVERAGE_MEANS, structureNotes,
+  withheldLabel, COVERAGE_MEANS, structureNotes, toast, onHoldOf,
 } from '../ui.js';
 import { renderMarkdown } from '../md.js';
 import { openResearchDialog, openSectorDialog, waitingActions, waitingStep } from './dialogs.js';
@@ -88,15 +88,31 @@ function header(ctx, d, row) {
   watch.setAttribute('aria-pressed', String(Boolean(p.watchlist.on_watchlist)));
   watch.title = p.watchlist.on_watchlist ? 'On your watchlist. Click to stop watching.' : 'Add to your watchlist';
   watch.onclick = action(watch, async () => { await ctx.api.post(`/api/projects/${p.project_id}/watchlist`, { on: !p.watchlist.on_watchlist }); await ctx.refresh(); return true; }, 'Watchlist updated');
-  const archive = button(p.status === 'archived' ? 'Archived' : 'Archive', null, { kind: 'quiet', key: 'project-archive' });
-  archive.disabled = p.status === 'archived';
-  if (archive.disabled) archive.title = 'Already archived';
-  archive.onclick = action(archive, async () => {
-    if (!window.confirm(`Archive ${p.name}? Its files stay in the folder; it is hidden from active lists.`)) return undefined;
-    await ctx.api.post(`/api/projects/${p.project_id}/archive`, { reason: 'Archived from the dashboard' });
+  // Archive needs no confirmation: nothing is deleted, the notice offers
+  // Undo, and an archived project shows Restore here and in the inspector.
+  const archived = p.status === 'archived';
+  const restore = async () => {
+    const r = await ctx.api.post(`/api/projects/${p.project_id}/restore`, {});
+    toast(`Restored ${p.name}${r.on_watchlist ? ', back on your watchlist' : ''}. Nothing was started or sent.`);
     await ctx.refresh();
-    return true;
-  }, 'Archived');
+  };
+  const archive = button(archived ? 'Restore' : 'Archive', null, { kind: 'quiet', key: archived ? 'project-restore' : 'project-archive' });
+  archive.title = archived ? 'Bring it back as it was, with its history' : 'Off your lists; nothing is deleted. Undo right after.';
+  archive.onclick = async () => {
+    archive.disabled = true;
+    try {
+      if (archived) await restore();
+      else {
+        const r = await ctx.api.post(`/api/projects/${p.project_id}/archive`, { reason: 'Archived from the dashboard' });
+        const sent = (r.sent_jobs || []).length;
+        toast(`Archived ${p.name}. It is off your watchlist; its reports, notes and any holding are kept.${sent ? ` ${sent} request${sent === 1 ? '' : 's'} already sent to a paid model may still finish and be billed.` : ''}`, '', { action: { label: 'Undo', key: `undo-archive-${p.project_id}`, onClick: restore } });
+        await ctx.refresh();
+      }
+    } catch (err) {
+      toast(err.message, 'bad');
+      archive.disabled = false;
+    }
+  };
   return h('div', { class: 'page-head' },
     h('div', null,
       h('div', { class: 'pill-row', style: { gap: '12px' } }, logo({ ...row, project_id: p.project_id, name: p.name, symbol: p.symbol }, { size: 36 }), h('h1', null, p.name, p.symbol ? h('span', { class: 'faint', style: { fontWeight: 500 } }, ` ${p.symbol}`) : null)),
@@ -106,7 +122,7 @@ function header(ctx, d, row) {
         // Watching or researching never suggests a holding; only an open position says Held.
         d.position && !d.position.closed ? h('span', null, 'Held') : null,
         id.official_website ? h('a', { href: id.official_website, class: 'wrap-anywhere' }, id.official_website.replace(/^https?:\/\//, '').replace(/\/$/, '')) : null)),
-    h('div', { class: 'actions' }, research, watch, archive));
+    h('div', { class: 'actions' }, archived ? null : research, archived ? null : watch, archive));
 }
 
 function fmtScore(s) {
@@ -149,9 +165,10 @@ function modelCard(ctx, d, row, prov, latest) {
   const r = latest[prov];
   const sum = row.providers && row.providers[prov];
   const job = row.research && row.research.providers && row.research.providers[prov];
-  const info = badgeInfo(prov, sum, job, { staleDays, hosted });
-  // A newer run's waiting job: the sentence for its assistant (online desk) or the pasted prompt.
-  const waiting = job && job.state === 'unconfigured' ? waitingActions(ctx, { pid, runId: job.run_id, provider: prov, key: `ov-${prov}` }) : null;
+  const onHold = Boolean(onHoldOf(ctx.state.index, prov));
+  const info = badgeInfo(prov, sum, job, { staleDays, hosted, onHold });
+  // A newer run's waiting job: the sentence for its assistant (online desk) or the pasted prompt; none for a model on hold.
+  const waiting = job && job.state === 'unconfigured' && !onHold ? waitingActions(ctx, { pid, runId: job.run_id, provider: prov, key: `ov-${prov}` }) : null;
   const newer = sum && info.newerText ? h('p', { class: `newer-line${info.problem ? ' problem' : ''}` }, info.newerText) : null;
   let main;
   if (r) {
@@ -503,12 +520,40 @@ function claimsTable(ctx, d, r) {
   ], r.assessment.claims || [], { empty: 'This report lists no structured claims.' }));
 }
 
+// The report's JSON block (the data the desk reads its grades from), set
+// apart from the written report. Only a fenced block holding the report's
+// schema_version, the last one; the text itself is never changed.
+export function splitDataBlock(text) {
+  const fence = /```[ \t]*[A-Za-z0-9_-]*[^\n]*\n([\s\S]*?)\n[ \t]*```/g;
+  let last = null;
+  let m;
+  while ((m = fence.exec(text))) if (/"schema_version"/.test(m[1])) last = { start: m.index, end: m.index + m[0].length, body: m[1] };
+  if (!last) return { prose: text, block: null };
+  return { prose: `${text.slice(0, last.start)}${text.slice(last.end)}`, block: last.body };
+}
+
+// The data block, one tap away and loaded only when opened.
+function dataBlockView(r, block) {
+  const pre = h('pre', { class: 'raw data-block' });
+  const det = h('details', { class: 'disclosure data-block-wrap', dataset: { key: `data-${r.report_id}` } },
+    h('summary', null, `Structured data block · ${block.length.toLocaleString('en-US')} characters`),
+    h('div', { class: 'body' }, h('p', { class: 'small muted', style: { margin: '0 0 8px' } }, 'The JSON the model wrote at the end of its report: the desk reads the scores from it. It is part of the original, which is unchanged ("Show exact text" and "Download original" include it).'), pre));
+  det.addEventListener('toggle', () => { if (det.open && !pre.textContent) pre.textContent = block; });
+  return det;
+}
+
 function reportReader(ctx, d, r) {
   const holder = h('div', { class: 'reader' }, h('p', { class: 'small muted' }, 'Loading the original…'));
   const pid = d.project.project_id;
   const isPdf = String(r.meta.original_file || '').endsWith('.pdf');
   const url = `/api/projects/${pid}/reports/${r.report_id}/original`;
-  const draw = (text) => holder.replaceChildren(viewState.raw[r.report_id] ? h('div', { class: 'raw' }, text) : renderMarkdown(text));
+  // Formatted: the written report, then its data block folded away. Exact
+  // text: the original as received, byte for byte.
+  const draw = (text) => {
+    if (viewState.raw[r.report_id]) return holder.replaceChildren(h('div', { class: 'raw' }, text));
+    const { prose, block } = splitDataBlock(text);
+    return holder.replaceChildren(renderMarkdown(prose), block ? dataBlockView(r, block) : null);
+  };
   if (isPdf) holder.replaceChildren(callout('The original is a PDF. It is kept byte for byte; download it below. Grading needs a text copy (paste it as a new import).', 'info'));
   else if (textCache.has(url)) draw(textCache.get(url));
   else cachedText(ctx, url).then(draw).catch((err) => holder.replaceChildren(callout(`Could not load the original: ${err.message}`, 'bad')));
@@ -617,6 +662,16 @@ function atAGlance(ctx, d, r, withheld) {
       : h('p', { class: 'small faint', style: { margin: 0 } }, 'This report lists no sources.')));
 }
 
+// A revision in one sentence: its basis, what changed, the model's reason.
+function revisionText(rv) {
+  const head = rv.basis === 'existing_evidence' ? 'Revision using existing evidence (no source added)'
+    : rv.basis === 'new_sources' ? `Revision with ${rv.sources.added} new source${rv.sources.added === 1 ? '' : 's'}`
+      : 'Re-saved with the same scores';
+  const parts = (rv.changed_components || []).map((c) => `${c.id.replace(/_/g, ' ')} ${c.from} → ${c.to}`);
+  const what = parts.length ? parts.join('; ') : rv.changed_categories ? `${rv.changed_categories} category grade(s) changed` : 'no weighted part changed';
+  return `${head}, ${rv.minutes_after} min after ${rv.of}: ${what}. ${rv.declared && rv.declared.note ? `The model's reason: ${rv.declared.note}` : 'No reason was recorded with this save.'}`;
+}
+
 function reportsTab(ctx, d, route) {
   const pid = d.project.project_id;
   if (!d.reports.length) return callout('No reports imported yet. Older analyses stay here as dated records once they exist.', 'info');
@@ -628,11 +683,11 @@ function reportsTab(ctx, d, route) {
   const list = h('nav', { class: 'report-list', 'aria-label': 'Reports' },
     PROVIDERS.filter((p) => good.some((r) => r.meta.provider === p)).map((p) => [
       h('div', { class: 'group-label' }, PROVIDER_LABELS[p]),
-      good.filter((r) => r.meta.provider === p).sort((a, b) => String(b.assessment.analysis_at || '').localeCompare(String(a.assessment.analysis_at || ''))).map((r) => {
+      good.filter((r) => r.meta.provider === p).map((r) => {
         const g = r.grade;
         return h('a', { href: `#/project/${pid}/reports?report=${encodeURIComponent(r.report_id)}`, 'aria-current': sel && r.report_id === sel.report_id ? 'true' : null, dataset: { key: `rl-${r.report_id}` } },
           h('div', { class: 'line1' }, h('span', null, fmtDate(r.assessment.analysis_at) || 'Undated'), h('span', { class: 'num' }, g && g.display ? `${g.display} ${g.label || ''}`.trim() : g && g.status === 'withheld' ? withheldLabel(g.coverage_pct) : r.meta.original_file.endsWith('.pdf') ? 'PDF' : 'No grade')),
-          h('div', { class: 'line2' }, [r.assessment.verdict ? r.assessment.verdict.charAt(0) + r.assessment.verdict.slice(1).toLowerCase() : 'No verdict', latestIds.has(r.report_id) ? 'latest' : 'earlier', r.corrections.length ? `${r.corrections.length} correction(s)` : null].filter(Boolean).join(' · ')));
+          h('div', { class: 'line2' }, [r.assessment.verdict ? r.assessment.verdict.charAt(0) + r.assessment.verdict.slice(1).toLowerCase() : 'No verdict', latestIds.has(r.report_id) ? 'latest' : 'earlier', r.revision && r.revision.kind === 'revision' ? (r.revision.basis === 'existing_evidence' ? 'revision, same evidence' : r.revision.basis === 'new_sources' ? 'revision, new sources' : 're-saved') : null, r.corrections.length ? `${r.corrections.length} correction(s)` : null].filter(Boolean).join(' · ')));
       }),
     ]));
   let main = h('div', null);
@@ -653,6 +708,10 @@ function reportsTab(ctx, d, route) {
           h('span', null, `${a.model_version || 'model not stated'}, ${pv.attested ? 'attested by the API' : 'self-reported'}`),
           h('span', null, latestIds.has(sel.report_id) ? 'Latest eligible report' : sel.eligible ? 'Earlier report' : 'Excluded from comparison')),
         withheld ? h('p', { class: 'why-withheld' }, withheld.sentence) : null,
+        // A revision of an earlier save for the same run: what changed, on
+        // what evidence and why, from the stored records (revisions.js).
+        sel.revision && sel.revision.kind === 'revision' ? h('p', { class: 'newer-line' }, revisionText(sel.revision), ' ', h('a', { href: `#/project/${encodeURIComponent(pid)}/reports?report=${encodeURIComponent(sel.revision.of)}`, dataset: { key: `rev-of-${sel.report_id}` } }, 'Open the earlier report')) : null,
+        sel.analysis_timing && ['after_save', 'future'].includes(sel.analysis_timing.status) ? h('p', { class: 'newer-line' }, `The report states an analysis time ${sel.analysis_timing.minutes_after_save !== null && sel.analysis_timing.minutes_after_save < 2880 ? `${sel.analysis_timing.minutes_after_save} min` : 'more than a day'} after it was saved (${fmtDateTime(sel.meta.imported_at)}); shown as written, ordered by its save time.`) : null,
         errors || amb ? h('div', { style: { marginTop: '12px' } }, callout(`${errors ? `${errors} extraction error(s)` : ''}${errors && amb ? ' and ' : ''}${amb ? `${amb} ambiguous value(s)` : ''}: see Extraction notes below.`, 'warn')) : null),
       atAGlance(ctx, d, sel, withheld),
       reportReader(ctx, d, sel),
@@ -998,14 +1057,15 @@ const PHASE_TEXT = { reserved: 'reserved, about to be sent', submitted: 'accepte
 
 function jobRow(ctx, pid, run, prov, projectName = pid) {
   const j = run.jobs[prov];
-  const key = jobKey(j, run.created_at);
+  const onHold = Boolean(onHoldOf(ctx.state.index, prov));
+  const key = jobKey(j, run.created_at, { onHold });
   const hosted = Boolean(ctx.state.session && ctx.state.session.hosted);
   const st = researchState(key, { provider: prov, hosted });
   const actions = [];
   // A waiting job leads with its next step: on the online desk the sentence
   // for that model's assistant (in the state column, so it shows first even
   // where the table scrolls), with pasting by hand tucked under it.
-  if (j.state === 'unconfigured') actions.push(...waitingActions(ctx, { pid, runId: run.run_id, provider: prov, key: `rt-${run.run_id}-${prov}`, instruction: false }));
+  if (j.state === 'unconfigured' && !onHold) actions.push(...waitingActions(ctx, { pid, runId: run.run_id, provider: prov, key: `rt-${run.run_id}-${prov}`, instruction: false }));
   const say = (text) => {
     const b = button(`Copy: “${text}”`, null, { kind: 'small' });
     b.onclick = action(b, async () => { await copyText(text); return undefined; });

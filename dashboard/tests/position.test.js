@@ -7,7 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { tempWorkspace, addFixtureProject, dropFixture } = require('./helpers');
+const { tempWorkspace, addFixtureProject, dropFixture, dropText } = require('./helpers');
 const position = require('../core/position');
 const research = require('../core/research');
 const prompts = require('../core/prompts');
@@ -26,7 +26,9 @@ const PID = 'example-payfi-fictional';
 // block from the run's own skeleton, every score filled.
 function v3Report(ws, run, provider, { pc = {}, catalysts = null, omitContext = false } = {}) {
   const profile = ws.rubrics.profiles[run.sector_profile];
-  const sk = prompts.buildSkeleton(ws, profile, { provider, projectId: run.project_id, horizon: run.horizon.text, rubricRef: run.rubric_version, runId: run.run_id, promptVersion: prompts.PROMPT_VERSION_V3, positionHorizon: run.horizon });
+  const sk = prompts.buildSkeleton(ws, profile, { provider, projectId: run.project_id, horizon: run.horizon.text, rubricRef: run.rubric_version, runId: run.run_id, promptVersion: run.prompt.version, positionHorizon: run.horizon });
+  // The report answers its own run: the prompt version that run was made with.
+  sk.prompt_version = run.prompt.version;
   const fill = (group) => {
     for (const [k, s] of Object.entries(sk[group])) {
       if (s.status === 'not_applicable') continue;
@@ -185,25 +187,37 @@ test('the position block is read and checked without touching any score', (t) =>
   assert.ok(normalizeAssessment(ws, late, { format: 'appendix_json', provider: 'claude' }).issues.some((i) => /after the horizon ends/.test(i.message)));
 });
 
-test('an imported answer is bound to its run; a different horizon is recorded, not hidden', (t) => {
+test('an imported answer is bound to its run; a different horizon is refused as that run\'s answer and never hidden or replaced', (t) => {
   const { ws, cleanup } = tempWorkspace('pcbind');
   t.after(cleanup);
   addFixtureProject(ws);
   const run = research.createRun(ws, { project_id: PID, providers: ['claude', 'chatgpt'] }).run;
   const ok = inbox.importContent(ws, 'claude', { content: v3Report(ws, run, 'claude'), projectId: PID, runId: run.run_id });
   assert.equal(ok.result.status, 'ingested', ok.result.message);
-  const wrong = inbox.importContent(ws, 'chatgpt', { content: v3Report(ws, run, 'chatgpt', { pc: { horizon: { mode: 'position', start_date: run.horizon.start_date, end_date: addDays(run.horizon.end_date, 30) } } }), projectId: PID, runId: run.run_id });
-  assert.equal(wrong.result.status, 'ingested', wrong.result.message);
-  const reps = loadReports(ws, PID);
-  const c = reps.find((r) => r.meta.provider === 'claude').assessment.position_context;
-  const g = reps.find((r) => r.meta.provider === 'chatgpt');
-  assert.equal(c.run_binding.horizon_matches, true);
-  assert.equal(g.assessment.position_context.run_binding.horizon_matches, false);
-  assert.ok(g.record.extraction.issues.some((i) => /is not the run's/.test(i.message)));
-  // Both jobs completed; the run keeps its own horizon.
+  const longer = addDays(run.horizon.end_date, 30);
+  const text = v3Report(ws, run, 'chatgpt', { pc: { horizon: { mode: 'position', start_date: run.horizon.start_date, end_date: longer } } });
+  // Imported for this run: refused, field by field; nothing linked, the job stays open.
+  const wrong = inbox.importContent(ws, 'chatgpt', { content: text, projectId: PID, runId: run.run_id });
+  assert.equal(wrong.result.status, 'run_mismatch');
+  assert.match(wrong.result.message, new RegExp(`position_context\\.horizon\\.end_date: the report says "${longer}", the run's is "${run.horizon.end_date}"`));
+  assert.equal(research.loadRun(ws, PID, run.run_id).jobs.chatgpt.state, 'unconfigured');
+  assert.equal(loadReports(ws, PID).filter((r) => r.meta.provider === 'chatgpt').length, 0, 'nothing saved under the run');
+  // The same text naming the run only inside itself (an inbox drop): saved on
+  // its own with its horizon as written, not linked, the reason recorded.
+  dropText(ws, 'chatgpt', 'example-payfi-fictional__declared.md', text);
+  inbox.scanInbox(ws, { force: true });
+  const g = loadReports(ws, PID).find((r) => r.meta.provider === 'chatgpt');
+  assert.ok(g, 'saved as its own report');
+  assert.equal(g.assessment.position_context.horizon.end_date, longer, 'what the report states is kept, never replaced by the run\'s');
+  assert.equal(g.meta.provenance.research_run_id, null);
+  assert.equal(g.meta.provenance.binding.status, 'conflict');
+  assert.ok(g.record.extraction.issues.some((i) => i.field === 'research_run_id' && /saved on its own and not linked/.test(i.message)));
+  const c = loadReports(ws, PID).find((r) => r.meta.provider === 'claude');
+  assert.equal(c.assessment.position_context.run_binding.horizon_matches, true);
+  assert.equal(c.meta.provenance.binding.status, 'bound');
   const after = research.loadRun(ws, PID, run.run_id);
   assert.equal(after.jobs.claude.state, 'completed');
-  assert.equal(after.jobs.chatgpt.state, 'completed');
+  assert.equal(after.jobs.chatgpt.state, 'unconfigured', 'the conflicting report completed nothing');
   assert.equal(after.horizon.end_date, run.horizon.end_date);
 });
 

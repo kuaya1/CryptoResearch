@@ -189,6 +189,16 @@ function validateSettingsPatch(patch, ws = null) {
     out.research = {};
     const r = patch.research;
     if (r.unattended_enabled !== undefined) out.research.unattended_enabled = Boolean(r.unattended_enabled);
+    // A model on hold gets nothing new (research.heldProviders): null lifts
+    // the hold; true puts it on hold from today, with a short reason.
+    if (r.on_hold && typeof r.on_hold === 'object') {
+      out.research.on_hold = {};
+      for (const p of PROVIDERS) {
+        if (r.on_hold[p] === undefined) continue;
+        if (r.on_hold[p] === null || r.on_hold[p] === false) out.research.on_hold[p] = null;
+        else out.research.on_hold[p] = { since: require('./core/dates').ymdInTz(), reason: typeof r.on_hold[p] === 'object' && typeof r.on_hold[p].reason === 'string' ? r.on_hold[p].reason.slice(0, 300) : 'Put on hold in Settings.' };
+      }
+    }
     if (r.background_deadline_minutes !== undefined) {
       const n = num(r.background_deadline_minutes, 5, 1440, 'Background time limit (minutes)');
       if (!Number.isInteger(n)) throw new OpError('INVALID', 'The background time limit is a whole number of minutes from 5 to 1440.');
@@ -1013,7 +1023,8 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIde
   route('POST', '/api/projects/([^/]+)/identity', (m, req, res, body) => after(projects.updateIdentity(ws, pid(m[1]), body)));
   route('POST', '/api/projects/([^/]+)/watchlist', (m, req, res, body) => after(projects.setWatchlist(ws, pid(m[1]), Boolean(body.on))));
   route('POST', '/api/projects/([^/]+)/headline', (m, req, res, body) => after(projects.setHeadline(ws, pid(m[1]), body)));
-  route('POST', '/api/projects/([^/]+)/archive', (m, req, res, body) => after(projects.archiveProject(ws, pid(m[1]), body.reason)));
+  route('POST', '/api/projects/([^/]+)/archive', (m, req, res, body) => after(projects.archiveProject(ws, pid(m[1]), typeof body.reason === 'string' ? body.reason.slice(0, 300) : null)));
+  route('POST', '/api/projects/([^/]+)/restore', (m) => after(projects.restoreProject(ws, pid(m[1]))));
   route('POST', '/api/projects/([^/]+)/fields', (m, req, res, body) => after(projects.updateProjectFields(ws, pid(m[1]), body)));
   route('POST', '/api/projects/([^/]+)/reviewed', (m, req, res, body) => after(projects.markReviewed(ws, pid(m[1]), { note: body.note || null })));
   route('POST', '/api/projects/([^/]+)/prompts', (m, req, res, body) => after(projects.generatePrompts(ws, pid(m[1]), body.providers || PROVIDERS)));

@@ -6,9 +6,14 @@
 // model only. It adds no research question, scope or grading rule: it says
 // how to work through the prompt (fetch it whole, research independently,
 // judge where the evidence supports it, check the JSON block against the
-// report before finishing). Only ChatGPT has one (cr-execution-chatgpt@1),
+// report before finishing). Only ChatGPT has one. cr-execution-chatgpt@1 was
 // written after its reports of 2026-10-03 left "timing and executable
 // liquidity" unknown for want of a position size no prompt states.
+// cr-execution-chatgpt@2 (2026-10-04, for jobs made from then on) replaced
+// "give a score or a range" with point-or-named-range-or-unknown, asks for
+// primary sources before grading, one bounded retry for a failed source,
+// evidence per component, a checked JSON block, one project per save, and
+// says a withheld grade is acceptable. Jobs keep the note they were frozen with.
 //
 // A note is frozen with its job, like the prompt: rendered when the job is
 // created (a new run, or a model added to a run), written next to prompt.md
@@ -21,8 +26,14 @@ const fs = require('fs');
 const path = require('path');
 const { sha256 } = require('./fsx');
 
+// The note a new job of each model is frozen with. Published notes never
+// change: a revision is a new file and version.
 const NOTES = {
-  chatgpt: { ref: 'cr-execution-chatgpt@1', file: 'execution/chatgpt.v1.md' },
+  chatgpt: { ref: 'cr-execution-chatgpt@2', file: 'execution/chatgpt.v2.md' },
+};
+const PUBLISHED = {
+  'cr-execution-chatgpt@1': 'execution/chatgpt.v1.md',
+  'cr-execution-chatgpt@2': 'execution/chatgpt.v2.md',
 };
 
 const notePath = (runDir, provider) => `${runDir}/execution.${provider}.md`;
@@ -77,4 +88,4 @@ function readNote(ws, run, provider) {
   return { text, delivery: { status: 'verified', ref: rec.ref, sha256: sha, chars: text.length, note: 'Execution notes for this model only, frozen with its job. The research prompt is unchanged and the same for every model; where the two seem to differ, the prompt decides.' } };
 }
 
-module.exports = { NOTES, notePath, renderNote, freezeNote, readNote };
+module.exports = { NOTES, PUBLISHED, notePath, renderNote, freezeNote, readNote };

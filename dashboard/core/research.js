@@ -166,6 +166,24 @@ function providerConfig(ws, provider) {
   return (ws.settings.research.providers || {})[provider] || {};
 }
 
+// Models Eric put on hold (settings research.on_hold.<model>: { since,
+// reason }; null lifts it). A model on hold gets nothing new: it is left out
+// of "all three" and of the default models, its waiting jobs are kept but not
+// handed out, and its jobs not yet sent to a paid API stay unsent. A request
+// already sent is still collected and recovered, and its saved reports stay.
+// Choosing it by name for one run (the dashboard's model boxes, the CLI) is
+// Eric's own decision and is not refused.
+function heldProviders(ws) {
+  const h = ((ws.settings || {}).research || {}).on_hold || {};
+  const out = {};
+  for (const p of PROVIDERS) if (h[p] && typeof h[p] === 'object') out[p] = { since: h[p].since || null, reason: h[p].reason || null };
+  return out;
+}
+
+// Jobs the runner never sends: queued for a model on hold, or held when their
+// project was archived (job.hold). Both wait, unsent, for Eric.
+const heldUnsent = (held, job) => job.state === 'queued' && Boolean(job.hold || held[job.provider]);
+
 // The bounds and prices a paid call would be sent with. A value that is set
 // but invalid is a configuration problem; it is never replaced by a default.
 // Zero searches stays zero and turns web search off (audit V2-005).
@@ -298,15 +316,20 @@ function setupNeeds(ws, provider, st = providerStatus(ws)[provider]) {
 const TYPICAL_PROMPT_CHARS = 30000;
 
 // Readiness and execution, for Eric (Settings), Cowork (desk_status and
-// start_research) and the start log. Per model:
-//   automatic       its paid API runs research in the background, within the
-//                   desk's limits (key, model, bounds and budget all set)
-//   setup_required  no API route yet, and what is missing; its jobs wait for
-//                   the model's own assistant (or a pasted answer) meanwhile
-//   demo            fictional fixtures (test and demo workspaces only)
-// and what its open jobs are doing. Never a key, only whether one is present.
+// start_research) and the start log. Three things are kept apart:
+//   manual research   the model's own assistant does it when Eric asks it
+//                     (Claude in Cowork, ChatGPT through its desk connection),
+//                     or he pastes the prompt; nothing to set up, nothing billed
+//   background API    optional: the model's paid API runs research by itself
+//                     within the desk's limits; it needs a key, a model,
+//                     bounds and a budget ("needs setup" until then)
+//   on hold           Eric paused the model: nothing new is assigned to it
+// Per model, `status` is automatic (its API is set up), manual, on_hold or
+// demo (fictional fixtures); `route` keeps its earlier values (automatic,
+// setup_required for the API, demo). Never a key, only whether one is present.
 function readiness(ws, now = new Date()) {
   const status = providerStatus(ws);
+  const held = heldProviders(ws);
   const budget = (ws.settings.research || {}).budget || {};
   const bs = budgetStatus(ws);
   const spent = spendSoFar(ws, now);
@@ -337,14 +360,22 @@ function readiness(ws, now = new Date()) {
       jobs.waiting && `${jobs.waiting} waiting`,
       jobs.uncertain && `${jobs.uncertain} uncertain (may have been billed; never resent)`,
     ].filter(Boolean).join(', ');
-    const sentence = route === 'automatic'
-      ? `${label}: automatic. Runs on the ${spec.vendor} API (${model}) in the background${plan && plan.ok ? `; about ${usd(plan.total_usd)} reserved per attempt for a typical prompt` : ''}.`
-      : route === 'demo'
-        ? `${label}: demo fixtures (fictional; nothing is sent or billed).`
-        : `${label}: setup required (${need.text}). Until then its research waits for ${ws.hosted ? `${label} itself (Eric asks it through its desk connection) or a pasted answer` : 'a pasted answer'}; nothing is billed for it.`;
+    const hold = held[p] || null;
+    const manualWho = p === 'claude' ? 'Claude in Cowork' : `${label} through its desk connection`;
+    const sentence = hold
+      ? `${label}: on hold${hold.since ? ` since ${hold.since}` : ''}${hold.reason ? ` (${hold.reason.replace(/\.$/, '')})` : ''}. Nothing new is assigned to it; its saved reports stay, and its ${jobs.waiting} waiting job${jobs.waiting === 1 ? ' is' : 's are'} kept but not handed out.${jobs.on_api ? ` ${jobs.on_api} request${jobs.on_api === 1 ? '' : 's'} already sent to its API ${jobs.on_api === 1 ? 'is' : 'are'} still collected.` : ''}`
+      : route === 'automatic'
+        ? `${label}: automatic. Runs on the ${spec.vendor} API (${model}) in the background${plan && plan.ok ? `; about ${usd(plan.total_usd)} reserved per attempt for a typical prompt` : ''}.`
+        : route === 'demo'
+          ? `${label}: demo fixtures (fictional; nothing is sent or billed).`
+          : ws.hosted
+            ? `${label}: manual. ${manualWho} researches when Eric asks it (or he pastes the prompt); nothing is billed here. Automatic background research is optional and not set up: ${need.text}.`
+            : `${label}: manual. Eric pastes the prompt into ${label} and imports the answer; nothing is billed. Automatic background research is optional and not set up: ${need.text}.`;
     models[p] = {
       label,
       route,
+      status: hold ? 'on_hold' : route === 'automatic' ? 'automatic' : route === 'demo' ? 'demo' : 'manual',
+      on_hold: hold,
       model,
       key: { present: providers.keyStatus(p).present, env: spec.env[0] },
       missing: need ? need.missing : [],
@@ -356,8 +387,10 @@ function readiness(ws, now = new Date()) {
       sentence: jobText ? `${sentence} Open jobs: ${jobText}.` : sentence,
     };
   }
-  const auto = PROVIDERS.filter((p) => models[p].route === 'automatic');
+  const auto = PROVIDERS.filter((p) => models[p].route === 'automatic' && !held[p]);
   const setup = PROVIDERS.filter((p) => models[p].route === 'setup_required');
+  const manual = PROVIDERS.filter((p) => models[p].status === 'manual');
+  const onHold = PROVIDERS.filter((p) => held[p]);
   // Every model and attempt of one run counts against the per-run limit. A
   // request from Cowork leaves Claude's part to Cowork itself (no API cost);
   // a run started on the dashboard uses every automatic model's API.
@@ -373,8 +406,10 @@ function readiness(ws, now = new Date()) {
   const against = (x, fits) => (fits === null ? '' : fits ? `, within the ${usd(budget.per_run_usd)} per-run limit` : `, more than the ${usd(budget.per_run_usd)} per-run limit, so the last model would be refused (not sent) until the limit is raised`);
   const left = (limit, used) => (isMoney(limit) ? round4(Math.max(0, limit - used)) : null);
   const summary = [
-    auto.length ? `Automatic: ${names(auto)}.` : 'No model runs automatically yet.',
-    setup.length ? `Setup required: ${setup.map((p) => `${PROVIDER_LABELS[p]} (${models[p].setup_short})`).join('; ')}; ${setup.length === 1 ? 'its' : 'their'} jobs wait meanwhile.` : '',
+    manual.length ? `Manual research: ${manual.map((p) => (p === 'claude' && ws.hosted ? 'Claude in Cowork' : ws.hosted ? `${PROVIDER_LABELS[p]} through its desk connection` : PROVIDER_LABELS[p])).join(', ').replace(/, ([^,]*)$/, ' and $1')}, when Eric asks${ws.hosted ? '' : ' (paste the prompt, import the answer)'}; nothing is billed.` : '',
+    auto.length ? `Automatic background research (paid API, within the limits): ${names(auto)}.` : `Automatic background research: not set up for any model (optional; each needs its API key${ws.hosted ? ' in Render\'s environment' : ''}).`,
+    setup.filter((p) => !held[p]).length && auto.length ? `Background API not set up: ${setup.filter((p) => !held[p]).map((p) => `${PROVIDER_LABELS[p]} (${models[p].setup_short})`).join('; ')}.` : '',
+    onHold.length ? `On hold: ${onHold.map((p) => `${PROVIDER_LABELS[p]}${held[p].since ? ` since ${held[p].since}` : ''} (${models[p].jobs.waiting} waiting job${models[p].jobs.waiting === 1 ? '' : 's'} kept, nothing new assigned)`).join('; ')}.` : '',
     coworkApis.length ? `A three-model request from Cowork reserves about ${usd(reservations.cowork_request_usd)} on the ${names(coworkApis)} API${coworkApis.length === 1 ? '' : 's'} (Claude researches in Cowork itself)${against(reservations.cowork_request_usd, reservations.cowork_request_fits)}.` : '',
     auto.includes('claude') ? `A run started on the dashboard with ${names(auto)} on the API${auto.length === 1 ? '' : 's'} reserves about ${usd(reservations.dashboard_run_usd)}${against(reservations.dashboard_run_usd, reservations.dashboard_run_fits)}.` : '',
     bs.ok ? '' : `Research limits not set: ${bs.missing.join(', ')}.`,
@@ -385,6 +420,8 @@ function readiness(ws, now = new Date()) {
     summary,
     automatic: auto,
     setup_required: setup,
+    manual,
+    on_hold: onHold,
     models,
     reservations,
     retries_note: `A failed attempt is retried at most ${(ws.settings.research.max_attempts || 2) - 1} time(s) and only when nothing may have been billed; each retry is a new reservation inside the same per-run limit. An uncertain request is never resent.`,
@@ -797,7 +834,10 @@ function createRun(ws, args = {}) {
   const projectId = args.project_id;
   const project = getProject(ws, projectId);
   if (project.status === 'archived') throw new OpError('INVALID', `${project.name} is archived. Unarchive it before researching it.`);
-  const list = normalizeProviders(args.providers && (Array.isArray(args.providers) ? args.providers.length : String(args.providers).trim()) ? args.providers : ws.settings.research.default_providers);
+  const explicit = Boolean(args.providers && (Array.isArray(args.providers) ? args.providers.length : String(args.providers).trim()));
+  // The default models leave out a model on hold; one named for this run is Eric's choice.
+  const held = heldProviders(ws);
+  const list = explicit ? normalizeProviders(args.providers) : normalizeProviders(ws.settings.research.default_providers).filter((p) => !held[p]);
   if (!list.length) throw new OpError('INVALID', 'Choose at least one provider: claude, chatgpt or gemini.');
   const previous = listRuns(ws, projectId);
   // The position-cycle recipe: an exact calendar interval inside the planning
@@ -970,13 +1010,40 @@ function switchToApiRoute(job, st) {
   delete job.connector_client;
 }
 
+// A project archived with research queued for a paid API that was never sent:
+// those jobs are held (job.hold) so the runner never sends them. A request
+// already sent is not touched: it can finish, be saved and be billed. A hold
+// is lifted only by Eric's explicit retry (retryJob), also after a restore.
+function holdUnsentJobs(ws, projectId, why = 'archived') {
+  const held = [];
+  for (const run of listRuns(ws, projectId)) {
+    if (run.broken) continue;
+    for (const [p, job] of Object.entries(run.jobs || {})) {
+      if (job.state !== 'queued' || job.hold) continue;
+      const out = updateJob(ws, projectId, run.run_id, p, (j) => {
+        if (j.state !== 'queued' || j.hold) return;
+        j.hold = { at: new Date().toISOString(), why };
+        j.note = `Held, not sent: the project was ${why} before this request was sent. It is sent only if you send it again (Retry).`;
+      }, `Hold unsent ${p} job in ${run.run_id}`);
+      if (!out.result || !out.result.noop) held.push({ run_id: run.run_id, provider: p });
+    }
+  }
+  return held;
+}
+
+const heldJobsOf = (ws, projectId) => listRuns(ws, projectId).flatMap((r) => (r.broken ? [] : Object.values(r.jobs || {}).filter((j) => j.state === 'queued' && j.hold).map((j) => ({ run_id: r.run_id, provider: j.provider, held_at: j.hold.at, why: j.hold.why }))));
+
 // An explicit retry by the owner. After an uncertain attempt this asks the
 // provider again; the uncertain attempt keeps counting until reconciled.
 function retryJob(ws, projectId, runId, provider) {
   const st = providerStatus(ws)[provider];
+  const project = getProject(ws, projectId);
+  if (project.status === 'archived') throw new OpError('INVALID', `${project.name} is archived. Restore it before sending its research.`);
   const out = updateJob(ws, projectId, runId, provider, (job) => {
     if (job.state === 'completed') return { message: 'Already completed; start a new run to research again.' };
     if (IN_FLIGHT.has(job.state)) return { message: 'Still running.' };
+    // Your retry is the go-ahead for a job held while its project was archived.
+    if (job.hold) delete job.hold;
     if (st.mode === 'manual') {
       job.state = 'unconfigured';
       job.mode = 'manual';
@@ -1082,10 +1149,13 @@ function stageReportLink(ws, op, { projectId, runId, provider, reportId, method 
 
 // A report imported without a run ID is linked to an open job for the same
 // project and provider, if exactly one such job exists.
-function autoLinkReport(ws, { projectId, provider, reportId, importedAt }) {
+function autoLinkReport(ws, { projectId, provider, reportId, importedAt, json = null }) {
   const open = listRuns(ws, projectId).filter((r) => !r.broken && r.jobs[provider] && ['unconfigured', 'running', 'queued', 'failed'].includes(r.jobs[provider].state) && Date.parse(r.created_at) <= Date.parse(importedAt));
   if (open.length !== 1) return null;
   const run = open[0];
+  // Never a report that states another prompt, profile or horizon than that
+  // run's (binding.js): it stays saved on its own.
+  if (json && !require('./binding').checkBinding(ws, { projectId, runId: run.run_id, provider, json, mode: 'declared' }).ok) return null;
   return runOp(ws, { type: 'research_job_link', summary: `Link ${reportId} to ${run.run_id}` }, (op) => {
     stageReportLink(ws, op, { projectId, runId: run.run_id, provider, reportId, method: 'same project and provider, imported after the run started' });
   });
@@ -1114,8 +1184,9 @@ function isDueJob(job, now = Date.now()) {
   return IN_FLIGHT.has(job.state) && !isAssistantJob(job);
 }
 
-function hasDueWork(ws) {
-  return allOpenJobs(ws).some(({ job }) => isDueJob(job)) || dueSchedules(ws).length > 0;
+function hasDueWork(ws, now = Date.now()) {
+  const held = heldProviders(ws);
+  return allOpenJobs(ws).some(({ job }) => isDueJob(job, now) && !heldUnsent(held, job)) || dueSchedules(ws, now).length > 0 || staleAssistantJobs(ws, now).length > 0;
 }
 
 // A ChatGPT or Gemini request is running on the provider's side: the runner
@@ -1156,6 +1227,9 @@ function admitAttempt(ws, projectId, runId, provider, { mode, model, plan, deliv
     const now = new Date();
     const at = now.toISOString();
     if (job.state !== 'queued') return { admitted: false, status: 'skipped', state: job.state };
+    // Held since the runner picked it (its project archived, its model put on
+    // hold): checked again here, under the lock, before anything is reserved.
+    if (job.hold || heldProviders(ws)[provider]) return { admitted: false, status: 'skipped', state: 'held' };
     if (job.cancel_requested) {
       job.state = 'canceled';
       job.updated_at = at;
@@ -1979,6 +2053,9 @@ async function runDueJobs(ws, { trigger = 'cli', fetchImpl = undefined, now = Da
   const created = [];
   const skippedSchedules = [];
   try { sweepCaptures(ws); } catch (_) { /* housekeeping only */ }
+  // Assistant claims idle for a day go back to waiting (drafts kept).
+  let released = [];
+  try { released = releaseStaleAssistantJobs(ws, now); } catch (_) { /* housekeeping only */ }
   for (const due of dueSchedules(ws, now)) {
     const st = providerStatus(ws);
     const usable = normalizeProviders(due.schedule.providers || ws.settings.research.default_providers).filter((p) => st[p].mode === 'api' || st[p].mode === 'mock');
@@ -1997,7 +2074,10 @@ async function runDueJobs(ws, { trigger = 'cli', fetchImpl = undefined, now = Da
   // so one long call never holds up the others. Checks on background
   // requests are short.
   const max = Math.max(1, ws.settings.research.max_concurrent || 1);
-  const todo = allOpenJobs(ws).filter(({ job }) => isDueJob(job, now));
+  // Never sent while held (a model on hold, an archived project); a request
+  // already sent is still collected and recovered.
+  const held = heldProviders(ws);
+  const todo = allOpenJobs(ws).filter(({ job }) => isDueJob(job, now) && !heldUnsent(held, job));
   const results = [];
   let next = 0;
   const worker = async () => {
@@ -2014,10 +2094,11 @@ async function runDueJobs(ws, { trigger = 'cli', fetchImpl = undefined, now = Da
   const background = results.filter((r) => r.status === 'submitted' || r.status === 'running').length;
   const quiet = !created.length && results.every((r) => ['running', 'waiting', 'busy', 'skipped'].includes(r.status));
   return {
-    status: !todo.length && !created.length ? 'noop' : failed || uncertain || captured ? 'attention' : quiet ? 'noop' : 'ok',
-    summary: todo.length || created.length ? `${done} research job(s) completed, ${failed} failed or refused${background ? `, ${background} running in the background` : ''}${uncertain ? `, ${uncertain} uncertain (may have been billed; reconcile or retry)` : ''}${captured ? `, ${captured} answer(s) captured and waiting to be saved by the next run` : ''}, ${created.length} scheduled run(s) created${skippedSchedules.length ? `, ${skippedSchedules.length} schedule(s) waiting (${skippedSchedules[0].reason})` : ''}` : skippedSchedules.length ? `Research refresh due for ${skippedSchedules.length} project(s), not started: ${skippedSchedules[0].reason}` : 'No research jobs waiting',
+    status: !todo.length && !created.length ? (released.length ? 'ok' : 'noop') : failed || uncertain || captured ? 'attention' : quiet && !released.length ? 'noop' : 'ok',
+    summary: `${todo.length || created.length ? `${done} research job(s) completed, ${failed} failed or refused${background ? `, ${background} running in the background` : ''}${uncertain ? `, ${uncertain} uncertain (may have been billed; reconcile or retry)` : ''}${captured ? `, ${captured} answer(s) captured and waiting to be saved by the next run` : ''}, ${created.length} scheduled run(s) created${skippedSchedules.length ? `, ${skippedSchedules.length} schedule(s) waiting (${skippedSchedules[0].reason})` : ''}` : skippedSchedules.length ? `Research refresh due for ${skippedSchedules.length} project(s), not started: ${skippedSchedules[0].reason}` : 'No research jobs waiting'}${released.length ? `; ${released.length} idle assistant claim(s) released back to waiting (drafts kept)` : ''}`,
     results,
     created,
+    released,
     skipped_schedules: skippedSchedules,
   };
 }
@@ -2030,7 +2111,7 @@ function researchStateFor(ws, projectId) {
   for (const p of PROVIDERS) {
     const run = runs.find((r) => r.jobs[p]);
     const last = run ? lastAttempt(run.jobs[p]) : null;
-    byProvider[p] = run ? { run_id: run.run_id, state: run.jobs[p].state, mode: run.jobs[p].mode, error: run.jobs[p].error || null, report_id: run.jobs[p].report_id || null, updated_at: run.jobs[p].updated_at, progress_at: run.jobs[p].progress_at || null, run_created_at: run.created_at, background: Boolean(last && last.phase === 'submitted'), provider_status: last && last.phase === 'submitted' ? last.provider_status || null : null, not_before: run.jobs[p].not_before || null, outcome: last && last.outcome ? last.outcome : null } : null;
+    byProvider[p] = run ? { run_id: run.run_id, state: run.jobs[p].state, mode: run.jobs[p].mode, error: run.jobs[p].error || null, report_id: run.jobs[p].report_id || null, updated_at: run.jobs[p].updated_at, progress_at: run.jobs[p].progress_at || null, run_created_at: run.created_at, background: Boolean(last && last.phase === 'submitted'), provider_status: last && last.phase === 'submitted' ? last.provider_status || null : null, not_before: run.jobs[p].not_before || null, outcome: last && last.outcome ? last.outcome : null, hold: run.jobs[p].hold || null, draft_saved_at: run.jobs[p].draft_saved_at || null, released: run.jobs[p].released || null } : null;
   }
   return { latest_run: latest ? { run_id: latest.run_id, status: latest.status, created_at: latest.created_at, providers: latest.providers, horizon: latest.horizon } : null, providers: byProvider, runs: runs.length };
 }
@@ -2097,6 +2178,41 @@ function openRunOf(ws, projectId) {
   return listRuns(ws, projectId).find((r) => !r.broken && r.jobs && Object.values(r.jobs).some((j) => OPEN_STATES.has(j.state))) || null;
 }
 
+// Stale sessions. A job an assistant took (Claude in Cowork, ChatGPT or Gemini
+// through its connection) and then left for a day with no sign of life is
+// released back to waiting: the claim ends, its draft and history stay, and
+// the same model (or Eric by hand) can take it again and continue from the
+// draft. Only assistant jobs: a request sent to a paid API is never touched,
+// resent or released by this.
+const ASSISTANT_RELEASE_HOURS = 24;
+
+function staleAssistantJobs(ws, now = Date.now()) {
+  return allOpenJobs(ws).filter(({ run, job }) => {
+    const act = assistantActivity(job, run, now);
+    return act && act.open && act.idle_minutes !== null && act.idle_minutes >= ASSISTANT_RELEASE_HOURS * 60;
+  });
+}
+
+function releaseStaleAssistantJobs(ws, now = Date.now()) {
+  const released = [];
+  for (const { project_id: projectId, run, job } of staleAssistantJobs(ws, now)) {
+    const label = PROVIDER_LABELS[job.provider];
+    const out = updateJob(ws, projectId, run.run_id, job.provider, (j, r) => {
+      const act = assistantActivity(j, r, now);
+      if (!act || !act.open || act.idle_minutes < ASSISTANT_RELEASE_HOURS * 60) return;
+      const at = new Date(now).toISOString();
+      j.released = [...(j.released || []), { at, from_mode: j.mode, idle_hours: Math.round(act.idle_minutes / 60), last_activity_at: act.last_activity_at, draft_saved_at: j.draft_saved_at || null, client: j.connector_client || null }];
+      j.state = 'unconfigured';
+      j.mode = 'manual';
+      j.fallback = 'manual';
+      delete j.connector_client;
+      j.note = `Released back to waiting at ${at}: ${label} showed no activity for ${Math.round(act.idle_minutes / 60)} hours and saved no report.${j.draft_saved_at ? ` Its draft from ${j.draft_saved_at} is kept and comes back when ${label} takes the job again.` : ''} Nothing was sent anywhere.`;
+    }, `Release stale ${job.provider} claim in ${run.run_id}`);
+    if (!out.result || !out.result.noop) released.push({ project_id: projectId, run_id: run.run_id, provider: job.provider });
+  }
+  return released;
+}
+
 function adoptJob(ws, projectId, runId, provider = 'claude', { client = null } = {}) {
   const label = PROVIDER_LABELS[provider];
   const out = updateJob(ws, projectId, runId, provider, (job) => {
@@ -2148,8 +2264,10 @@ function sendWaitingToApi(ws, projectId, runId, list = PROVIDERS) {
   const st = providerStatus(ws);
   const run = loadRun(ws, projectId, runId);
   if (!run || !run.jobs) return [];
+  const held = heldProviders(ws);
   const sent = [];
   for (const p of normalizeProviders(list)) {
+    if (held[p]) continue;
     const job = run.jobs[p];
     if (!job || job.state !== 'unconfigured' || isAssistantJob(job) || !st[p] || (st[p].mode !== 'api' && st[p].mode !== 'mock')) continue;
     const out = updateJob(ws, projectId, runId, p, (jj) => {
@@ -2251,6 +2369,9 @@ module.exports = {
   spendLine,
   COWORK_IDLE_MINUTES,
   ASSISTANT_IDLE_MINUTES,
+  ASSISTANT_RELEASE_HOURS,
+  staleAssistantJobs,
+  releaseStaleAssistantJobs,
   OPEN_STATES,
   isAssistantJob,
   assistantActivity,
@@ -2276,6 +2397,7 @@ module.exports = {
   loadRun,
   runStatus,
   providerStatus,
+  heldProviders,
   readiness,
   preflight,
   setupNeeds,
@@ -2290,6 +2412,8 @@ module.exports = {
   evidencePacket,
   cancelJob,
   retryJob,
+  holdUnsentJobs,
+  heldJobsOf,
   reconcileAttempt,
   stageReportLink,
   autoLinkReport,

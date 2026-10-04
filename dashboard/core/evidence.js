@@ -249,7 +249,34 @@ function categoryChecks(a) {
       }
     }
   }
+  // Liquidity is not a venue list: a volume and liquidity grade needs the
+  // volume baseline it compared against and a spread, depth or order-book
+  // reading (evidence rule 12: aggregate volume is not executable liquidity).
+  const liq = scoredText(scores.volume_liquidity);
+  if (liq !== null) {
+    const cc = a.chart_cycle || null;
+    const lacks = [cc && cc.volume && cc.volume.baseline ? null : 'a stated volume baseline', cc && cc.liquidity ? null : 'a spread, depth or order-book reading'].filter(Boolean);
+    if (lacks.length) {
+      flags.push({ claim_id: null, category: 'volume_liquidity', categories: ['volume_liquidity'], kind: null, source_ids: [], rule: 'liquidity_without_depth', severity: 'medium', message: `Volume confirmation and executable liquidity is scored ${liq}, but the chart reading gives no ${lacks.join(' and no ')}. Listing venues or aggregate volume is not executable liquidity.`, beside: `The reading behind this grade gives no ${lacks.join(' and no ')}. Listing venues or aggregate volume is not executable liquidity.` });
+    }
+  }
   return { flags, checked };
+}
+
+// Scenario probabilities are subjective estimates; one given for a case that
+// names no observation and cites no claim rests on nothing the report shows.
+function scenarioChecks(a) {
+  const flags = [];
+  if (!promptAtLeast(a.prompt_version, 5)) return flags;
+  const items = a.scenarios && Array.isArray(a.scenarios.items) ? a.scenarios.items : [];
+  const bare = items.filter((s) => s && typeof s.probability_pct === 'number' && Number.isFinite(s.probability_pct)
+    && !(Array.isArray(s.observations) && s.observations.some((o) => typeof o === 'string' && o.trim()))
+    && !(Array.isArray(s.claim_ids) && s.claim_ids.length));
+  if (bare.length) {
+    const cases = bare.map((s) => s.case || '?').join(', ');
+    flags.push({ claim_id: null, category: null, categories: [], kind: 'scenario', source_ids: [], rule: 'probability_without_support', severity: 'medium', message: `Scenario probabilities are given for the ${cases} case${bare.length === 1 ? '' : 's'} with no observation and no cited claim behind ${bare.length === 1 ? 'it' : 'them'}. A probability needs supporting evidence, or it stays null with the reason.` });
+  }
+  return flags;
 }
 
 // The checks for one assessment. officialWebsite: the project's verified site.
@@ -301,6 +328,8 @@ function evidenceChecks(assessment, { officialWebsite = null } = {}) {
   }
   const cat = categoryChecks(a);
   flags.push(...cat.flags);
+  const scen = scenarioChecks(a);
+  flags.push(...scen);
   const rank = { high: 0, medium: 1, low: 2 };
   flags.sort((x, y) => rank[x.severity] - rank[y.severity]);
   const n = (sev) => flags.filter((f) => f.severity === sev).length;
@@ -309,6 +338,7 @@ function evidenceChecks(assessment, { officialWebsite = null } = {}) {
   const said = [
     flagged ? `${flagged} of ${claims.length} claims need better evidence` : null,
     flaggedCategories ? `${flaggedCategories} category grade${flaggedCategories === 1 ? ' lacks' : 's lack'} the evidence the prompt asks for beside ${flaggedCategories === 1 ? 'it' : 'them'}` : null,
+    scen.length ? 'scenario probabilities are given without supporting evidence' : null,
   ].filter(Boolean).join('; ');
   const checkedGrades = cat.checked ? `, and ${cat.checked} category grade${cat.checked === 1 ? '' : 's'} against the code and chart evidence beside ${cat.checked === 1 ? 'it' : 'them'}` : '';
   return {
@@ -317,6 +347,8 @@ function evidenceChecks(assessment, { officialWebsite = null } = {}) {
     flagged_claims: flagged,
     checked_categories: cat.checked,
     flagged_categories: flaggedCategories,
+    // Flags on neither a claim nor a category grade (scenario probabilities).
+    flagged_other: scen.length,
     high: n('high'),
     medium: n('medium'),
     low: n('low'),

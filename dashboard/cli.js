@@ -26,7 +26,7 @@ Projects
               [--long-term-reason TEXT]   (a horizon above the 4-month planning ceiling needs a reason)
               [--research claude,chatgpt,gemini] [--pending-identity] [--no-watchlist] [--no-prompts]
               [--utterance "spoken text"] [--allow-same-symbol] [--input file.json]
-  project list | show <id> | archive <id> --reason TEXT
+  project list | show <id> | archive <id> --reason TEXT | restore <id>
   project identity <id> [--website URL] [--coingecko-id ID] [--asset ...] [--evidence URL]... [--pending]
   project watch <id> on|off
   project headline <id> --report <report_id> | --decision <entry_id> | --clear
@@ -296,7 +296,11 @@ async function run(argv) {
       if (sub === 'show') return require('./core/indexer').projectDetail(ws, need(rest[0], 'project show <id>'));
       if (sub === 'archive') {
         const r = projects.archiveProject(ws, need(rest[0], 'project archive <id>'), one(flags.reason));
-        return { status: 'archived', ...r, ...(await afterWrite(ws)) };
+        return { ...r, ...(await afterWrite(ws)) };
+      }
+      if (sub === 'restore') {
+        const r = projects.restoreProject(ws, need(rest[0], 'project restore <id>'));
+        return { ...r, ...(await afterWrite(ws)) };
       }
       if (sub === 'identity') {
         const id = need(rest[0], 'project identity <id>');
@@ -337,7 +341,7 @@ async function run(argv) {
         const r = projects.markReviewed(ws, id, { note: one(flags.note) || null });
         return { status: 'saved', files: r.files, ...(await afterWrite(ws, id)) };
       }
-      throw Object.assign(new Error('project add|list|show|archive|identity|watch|headline|set|reviewed'), { code: 'USAGE' });
+      throw Object.assign(new Error('project add|list|show|archive|restore|identity|watch|headline|set|reviewed'), { code: 'USAGE' });
     }
     case 'prompts': {
       const id = need(sub, 'prompts <project_id>');
@@ -699,7 +703,7 @@ if (require.main === module) {
     .then((out) => {
       if (out && out._silent) return;
       process.stdout.write(`${asJson && !(out && out._text) ? JSON.stringify(out, null, 2) : human(out)}\n`);
-      if (out && ['possible_duplicate', 'failed', 'needs_project', 'prompt', 'provider_mismatch', 'rejected', 'conflict'].includes(out.status)) process.exitCode = 2;
+      if (out && ['possible_duplicate', 'failed', 'needs_project', 'prompt', 'provider_mismatch', 'run_mismatch', 'rejected', 'conflict'].includes(out.status)) process.exitCode = 2;
     })
     .catch((err) => {
       // These errors are raised before anything is committed.

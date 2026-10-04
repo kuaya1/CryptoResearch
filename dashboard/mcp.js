@@ -63,17 +63,18 @@ function instructionsFor(me) {
     ? `5. In ${label}, every call that saves something (add_project, start_research, save_research_draft, save_report and the like) makes Eric approve it, so keep them to a minimum: do not save drafts unless he asks, and save each finished report once with save_report.`
     : '5. For long research, save_research_draft as you go, so an interruption loses nothing.';
   const step7 = confirms
-    ? `7. When Eric asks you to do your waiting research ("${WAITING_PHRASE}"), call pending_research. For each item, get_research with its project_id and run_id gives you that run's prompt without taking the job (nothing for Eric to approve); research it, then save_report once with that run_id. Do not call start_research for a waiting job.`
+    ? `7. When Eric asks you to do your waiting research ("${WAITING_PHRASE}"), call pending_research and do only its next item: get_research with that project_id and run_id gives you the run's prompt without taking the job (nothing for Eric to approve); research it, save_report once with that run_id, and tell Eric the receipt (status and report ID). One project per request: the next one is Eric's next request. When he asks you to resume research on a project, get_research gives you that run, its prompt and any draft you saved; continue from there. Do not call start_research for a waiting job.`
     : '7. When Eric asks you to do your waiting research, call pending_research and do each item with start_research.';
   return `This is Eric's private CryptoResearch desk (his watchlist, research reports and portfolio). It holds records; you do the research yourself. This connection belongs to ${label}: what you save here is filed as ${label}'s work, so save only research you did yourself.
 
 To research a project Eric names, links or shows you:
-1. find_projects first. If it is already there, use it; never add it twice.
+1. find_projects first. If it is already there, use it; never add it twice. If it is archived, ask Eric whether to restore it (restore_project); archive_project only when he asks.
 2. Identify it from evidence: the official website (the project's own site), and the chain and contract address from the project's own docs or a block explorer. CoinMarketCap, CoinGecko, DEX screener and explorer pages are leads, not the official website: the desk keeps one given as the website as evidence only. Never guess or complete a contract address. If two tokens could match (same ticker, similar names), show Eric the candidates and ask.
 3. add_project once, with the evidence URLs. It refuses duplicates by itself; if the project is already there with a pending identity, what you supplied completes it.
-4. start_research. Research needs a verified identity (official website, token binding, evidence URL), so every model researches the same project: if it is pending, complete it with update_project_identity first, or, only when Eric confirmed the project has no token yet or cannot be identified further, pass allow_pending_identity: true. It returns the run's canonical prompt (horizon, rubric, grading appendix) in run.prompt, byte for byte as frozen when the run started; never rebuild it from templates or other files. Follow it exactly: research with your own web tools, cite sources with dates, keep facts, inferences and unknowns apart, cover risks, and end with the JSON block it asks for. If a research run for the project is already open, start_research resumes it (with any draft you saved) instead of starting another. When Eric asks for all three models (Claude, ChatGPT and Gemini), pass models: "all": each model gets the same prompt and never sees the others' conclusions. A model whose paid API is set up on the desk runs automatically in the background; a model without one waits for its assistant until Eric asks it ("${WAITING_PHRASE}": ${ASK_HOW.chatgpt}, or ${ASK_HOW.gemini}). The reply's readiness says which; tell Eric exactly that (desk_status has the detail: setup required, limits, spend). Never ask Eric for an API key in chat: he adds keys in Render's environment himself.
+4. start_research. Research needs a verified identity (official website, token binding, evidence URL), so every model researches the same project: if it is pending, complete it with update_project_identity first, or, only when Eric confirmed the project has no token yet or cannot be identified further, pass allow_pending_identity: true. It returns the run's canonical prompt (horizon, rubric, grading appendix) in run.prompt, byte for byte as frozen when the run started; never rebuild it from templates or other files. Follow it exactly: research with your own web tools, cite sources with dates, keep facts, inferences and unknowns apart, cover risks, and end with the JSON block it asks for. If a research run for the project is already open, start_research resumes it (with any draft you saved) instead of starting another. When Eric asks for all three models (Claude, ChatGPT and Gemini), pass models: "all": each model gets the same prompt and never sees the others' conclusions. A model whose paid API is set up on the desk runs automatically in the background; a model without one is manual research: it waits for its own assistant until Eric asks it ("${WAITING_PHRASE}": ${ASK_HOW.chatgpt}, or ${ASK_HOW.gemini}), with nothing to set up. A model Eric put on hold gets nothing new and is not added. The reply's readiness says which; tell Eric exactly that, and never promise a model that is on hold (desk_status has the detail: routes, limits, spend). Never ask Eric for an API key in chat: he adds keys in Render's environment himself.
 ${step5}
-6. save_report with the complete report text (not a summary). If it answers "unverified", save the same text again. Otherwise save a report again only when you change it: an unchanged report saved again is recognized and not stored twice. If your job came with execution notes, read them before the prompt; the prompt itself is the same for every model and decides.
+   Evidence standards, the same for every model: code quality rests on implementation files read at a named commit (never commit counts, stars or an audit badge); liquidity rests on a stated volume baseline and a spread, depth or order-book reading (never a list of venues); a scenario probability rests on evidence or stays null with the reason. Give a point score where the evidence supports one, a range only between two named readings the evidence supports (and say what would tell them apart), otherwise unknown with what is missing. A range is a judgment, not a confidence interval. Set analysis_at to when you finish (or the date alone), never a time after you save.
+6. save_report with the complete report text (not a summary). Its JSON block must name this run's research_run_id and prompt_version, and the run's project, rubric, profile and horizon, copied from the prompt: a report that declares another contract is refused, field by field. If it answers "unverified", save the same text again. A withheld grade is an acceptable result; do not save again to complete it. Save a different report for the same run only to correct a documented issue or record a clearly explained revision, with revision (kind and note); an unchanged report saved again is recognized and not stored twice. If your job came with execution notes, read them before the prompt; the prompt itself is the same for every model and decides.
 ${step7}
 8. To show how the models compare, get_research shows each model's progress, and compare_reports, once their reports are saved, shows where they agree and disagree. Summarize that for Eric with each report's own uncertainty; agreement between models is not independent confirmation. Other models' reports on a project are withheld from you while your own research on it is open, so your report stays independent.
 
@@ -135,6 +136,20 @@ const TOOLS = [
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
+    name: 'archive_project',
+    title: 'Archive a project',
+    description: 'Archives a project when Eric asks: it leaves the watchlist, waiting queues and research reminders. Nothing is deleted: its reports, notes, research runs and transactions stay, a token he still holds stays in Portfolio with its price, and restore_project brings it back under the same ID. Research not yet sent is held and not sent; a request already sent to a paid model may still finish and be billed (the reply lists any). Only when Eric asked for it, in his words.',
+    inputSchema: { type: 'object', required: ['project_id', 'owner_request'], additionalProperties: false, properties: { project_id: projectRef, owner_request: { type: 'string', description: 'Eric\'s request in his own words.' }, reason: { type: 'string', description: 'Why, in Eric\'s words, if he gave one.' } } },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: 'restore_project',
+    title: 'Restore an archived project',
+    description: 'Restores an archived project when Eric asks: the same project, ID and history, back on the watchlist if he was watching it. It starts nothing: research held while it was archived stays held until Eric sends it, and nothing paid is sent again.',
+    inputSchema: { type: 'object', required: ['project_id', 'owner_request'], additionalProperties: false, properties: { project_id: projectRef, owner_request: { type: 'string', description: 'Eric\'s request in his own words.' } } },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
     name: 'start_research',
     title: 'Start (or resume) research for a project',
     description: 'Opens a research run for a project and returns its canonical prompt: the exact horizon (4 calendar months by default), the dated context, the report sections and the grading appendix with the JSON contract. Research it yourself following that prompt, then call save_report. The project\'s identity must be verified first, so every model researches the same project: a pending one returns "needs_identity" with what is missing (complete it with update_project_identity). If a run is already open for this project, it is resumed (same run, with your saved draft) or joined instead of starting another; a job waiting for your model is taken over; a model whose job is still open is never started twice ("in_progress"). If your model saved a report in the last 24 hours, nothing is started unless refresh: true (ask Eric first). restart: true cancels the open run and starts a new one. models: "all" (only when Eric asks for all three models) adds Claude, ChatGPT and Gemini to the run with the same prompt: a model whose paid API is set up on the desk runs automatically in the background, a model without one waits for its assistant.',
@@ -187,8 +202,27 @@ const TOOLS = [
   {
     name: 'save_report',
     title: 'Save the finished research report',
-    description: 'Saves the complete report for your job in a research run, as your model\'s report: the full text with every section, sources, risks and uncertainties, and the JSON block from the prompt. It is validated and graded under the run\'s rubric, separately from the other models\' reports, linked to the run, and shown on the project page. Saving the same text again changes nothing. If it is refused (for example it is not a finished report), fix it and save again; "unverified" means the save could not be confirmed: save the same text again. When the grade is withheld, the answer lists each investment component as it was read and any format errors.',
-    inputSchema: { type: 'object', required: ['project_id', 'run_id', 'report_markdown'], additionalProperties: false, properties: { project_id: projectRef, run_id: runRef, report_markdown: { type: 'string', description: 'The full report as you wrote it, unchanged and not summarized.' } } },
+    description: 'Saves the complete report for your job in a research run, as your model\'s report: the full text with every section, sources, risks and uncertainties, and the JSON block from the prompt. Its JSON block must answer this run: the research_run_id, project, prompt version, rubric, scoring profile and horizon copied from the prompt (a report that declares another run or contract is refused, each field named, and nothing is saved). It is validated and graded under the run\'s rubric, separately from the other models\' reports, linked to the run, and shown on the project page. Saving the same text again changes nothing. If it is refused, fix what the answer names and save again; "unverified" means the save could not be confirmed: save the same text again. When the grade is withheld, the answer lists each investment component as it was read and any format errors; a withheld grade is an acceptable result. A different report for a run you already answered is a revision and needs revision (kind and note).',
+    inputSchema: {
+      type: 'object',
+      required: ['project_id', 'run_id', 'report_markdown'],
+      additionalProperties: false,
+      properties: {
+        project_id: projectRef,
+        run_id: runRef,
+        report_markdown: { type: 'string', description: 'The full report as you wrote it, unchanged and not summarized.' },
+        revision: {
+          type: 'object',
+          description: 'Only when you already saved a report for this run and save a different one: why. The earlier report stays saved.',
+          additionalProperties: false,
+          required: ['kind', 'note'],
+          properties: {
+            kind: { type: 'string', enum: ['format_fix', 'reassessment', 'new_evidence', 'other'], description: 'format_fix: the JSON block misstated your written report. reassessment: a changed judgment from evidence already in the report. new_evidence: sources you retrieved since the earlier save (they must be cited). other.' },
+            note: { type: 'string', description: 'One or two sentences: what changed and why.' },
+          },
+        },
+      },
+    },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
@@ -386,13 +420,18 @@ function jobView(job, run, me, ws) {
   else if (job.state === 'uncertain') progress = 'held: a paid request may have been billed without an answer; it is never resent automatically, and Eric reconciles or retries it in the dashboard';
   else if (activity && activity.open) progress = activity.interrupted ? `interrupted (no activity for ${activity.idle_minutes} min)` : `${job.provider === me ? 'you are' : `${label} is`} researching it`;
   else if (job.state === 'unconfigured') {
+    // Three things kept apart: the model is on hold; its own assistant does
+    // it when Eric asks (manual, nothing to set up); its optional paid API is
+    // set up and his next request sends it there.
     const st = ws ? research.providerStatus(ws)[job.provider] : null;
-    const need = ws && st ? research.setupNeeds(ws, job.provider, st) : null;
+    const hold = ws ? research.heldProviders(ws)[job.provider] : null;
     const ask = `Eric says "${WAITING_PHRASE}" ${ASK_HOW[job.provider]} (or pastes the prompt into ${label} and imports the answer)`;
-    if (job.provider === me) progress = 'waiting for you';
+    if (hold) progress = `on hold: ${label} is paused on this desk${hold.since ? ` since ${hold.since}` : ''}; this waiting job is kept and is not handed out`;
+    else if (job.provider === me) progress = 'waiting for you';
     else if (st && st.mode === 'api') progress = `waiting for ${label}; its API is set up now, so Eric's next request for ${label} on this project sends this job to the API (or ${ask})`;
-    else progress = `waiting for ${label}${need ? ` (setup required: ${need.short})` : ''}: ${ask}`;
+    else progress = `waiting for ${label} to do it through its connection (manual research, nothing to set up): ${ask}`;
   }
+  else if (job.state === 'queued' && job.hold) progress = 'held, not sent: its project was archived before this request was sent; it is sent only if Eric sends it again from the dashboard';
   else if (job.state === 'queued') progress = job.not_before && Date.parse(job.not_before) > Date.now() ? `queued for the ${label} API, which asked to slow down; it is asked again after ${job.not_before} (not billed)` : `queued for the ${label} API in the background`;
   else if (job.state === 'dispatching') {
     const last = (job.attempts || [])[(job.attempts || []).length - 1];
@@ -580,6 +619,9 @@ const handlers = {
     if (out.status === 'possible_duplicate') {
       return { status: 'possible_duplicate', message: `A project with the ticker ${args.symbol} is already on the desk: ${(out.candidates || []).map((c) => `${c.name} (${c.project_id})`).join(', ')}. Tickers are not unique. Ask Eric whether this is a different project; only then add it with allow_same_symbol: true.`, candidates: out.candidates || [] };
     }
+    if (out.status === 'archived') {
+      return { status: 'archived', project_id: out.project_id, archived_reason: out.archived_reason, message: `${out.message} Ask Eric whether to restore it; if he says so, call restore_project.` };
+    }
     const p = projects.getProject(ws, out.project_id);
     const idn = p.identity || {};
     if (out.status !== 'exists' || idn.status === 'verified' || !Object.keys(supplied).length) {
@@ -610,6 +652,41 @@ const handlers = {
     }
   },
 
+  archive_project(ws, args) {
+    const id = pid(args);
+    need(args, 'owner_request', 'Eric\'s request (owner_request)');
+    const p = projects.getProject(ws, id);
+    const reason = typeof args.reason === 'string' && args.reason.trim() ? args.reason.trim().slice(0, 300) : `Archived at Eric's request: ${String(args.owner_request).trim().slice(0, 200)}`;
+    const out = projects.archiveProject(ws, id, reason);
+    if (out.status === 'unchanged') return { status: 'unchanged', message: `${p.name} is already archived. restore_project brings it back.`, project_id: id };
+    const sent = out.sent_jobs || [];
+    return {
+      status: 'archived',
+      project_id: id,
+      verified: out.verified !== false,
+      held_jobs: out.held_jobs || [],
+      sent_jobs: sent,
+      message: `Archived ${p.name}. It is off the watchlist and its waiting research is no longer handed out; its reports, notes, runs and any holding stay, and restore_project brings it back under the same ID.${(out.held_jobs || []).length ? ` ${(out.held_jobs || []).length} research request(s) not yet sent are held and will not be sent.` : ''}${sent.length ? ` ${sent.map((j) => `${PROVIDER_LABELS[j.provider]} (${j.state})`).join(', ')} ${sent.length === 1 ? 'was' : 'were'} already sent to a paid model: ${sent.length === 1 ? 'it' : 'they'} may still finish, be saved and be billed.` : ''}`,
+    };
+  },
+
+  restore_project(ws, args) {
+    const id = pid(args);
+    need(args, 'owner_request', 'Eric\'s request (owner_request)');
+    const p = projects.getProject(ws, id);
+    const out = projects.restoreProject(ws, id);
+    if (out.status === 'unchanged') return { status: 'unchanged', message: `${p.name} is not archived.`, project_id: id };
+    const held = out.held_jobs || [];
+    return {
+      status: 'restored',
+      project_id: id,
+      on_watchlist: out.on_watchlist,
+      verified: out.verified !== false,
+      held_jobs: held,
+      message: `Restored ${p.name} with its reports, notes and history${out.on_watchlist ? ', back on the watchlist' : ' (not on the watchlist, as before it was archived)'}. Nothing was started or sent.${held.length ? ` ${held.length} research request(s) held while it was archived stay unsent until Eric sends them from the dashboard.` : ''}`,
+    };
+  },
+
   update_project_identity(ws, args, ctx) {
     const id = pid(args);
     const evidence = Array.isArray(args.evidence) ? args.evidence.filter((e) => e && typeof e.url === 'string') : [];
@@ -626,11 +703,17 @@ const handlers = {
     const id = pid(args);
     const ownerRequest = need(args, 'owner_request', 'Eric\'s request (owner_request)');
     const project = projects.getProject(ws, id);
-    if (project.status === 'archived') throw new OpError('INVALID', `${project.name} is archived; Eric has to unarchive it on the project page first.`);
+    if (project.status === 'archived') throw new OpError('INVALID', `${project.name} is archived. Ask Eric whether to restore it (restore_project, or Restore under the Archived filter); nothing was started.`);
     const { me } = ctx;
     const asked = modelsAsked(args);
     const all = asked.all;
-    const wanted = all ? [...PROVIDERS] : [me];
+    // A model on hold gets nothing new: left out of "all three", and its own
+    // connection starts nothing new (resuming research it has open is fine).
+    const held = research.heldProviders(ws);
+    if (held[me] && !research.openAssistantJobs(ws, id, me).length) {
+      return { status: 'on_hold', message: `${ctx.label} is on hold on this desk${held[me].since ? ` since ${held[me].since}` : ''}: nothing new is started or handed out for it. Nothing was started. Tell Eric; he can lift the hold in Settings.`, project: { project_id: id, name: project.name } };
+    }
+    const wanted = all ? PROVIDERS.filter((p) => p === me || !held[p]) : [me];
     // Every model researches the same verified project. A pending identity is
     // researched only when Eric confirmed it cannot be completed (no token yet,
     // or nothing more to identify it by). Resuming your own open job is always
@@ -805,14 +888,22 @@ const handlers = {
 
   pending_research(ws, args, ctx) {
     const items = research.pendingFor(ws, ctx.me);
+    const hold = research.heldProviders(ws)[ctx.me];
+    if (hold) {
+      // Kept, not handed out (a job it had already taken can still be resumed with get_research).
+      return { status: 'on_hold', model: ctx.me, pending: [], held_jobs: items.length, message: `${ctx.label} is on hold on this desk${hold.since ? ` since ${hold.since}` : ''}: its ${items.length} waiting job${items.length === 1 ? ' is' : 's are'} kept but not handed out, and nothing new is assigned. Tell Eric; he can lift the hold in Settings.` };
+    }
+    // ChatGPT and Gemini do one project per request, then report its receipt.
+    const next = items[0] || null;
     return {
       status: 'ok',
       model: ctx.me,
       pending: items,
+      ...(ctx.me !== 'claude' ? { next } : {}),
       message: items.length
         ? ctx.me === 'claude'
           ? `${items.length} research ${items.length === 1 ? 'job is' : 'jobs are'} waiting for ${ctx.label}. Do each with start_research (project_id, and Eric's words as owner_request); it takes the waiting job over with the run's prompt.`
-          : `${items.length} research ${items.length === 1 ? 'job is' : 'jobs are'} waiting for ${ctx.label}. For each: get_research with its project_id and run_id gives you the run's prompt (read-only, nothing for Eric to approve); research it and save_report once with that run_id. That save is the only call Eric has to approve; do not save drafts unless he asks.`
+          : `${items.length} research ${items.length === 1 ? 'job is' : 'jobs are'} waiting for ${ctx.label}. Do only the next one now: ${next.name} (${next.project_id}, ${next.run_id}). get_research with that project_id and run_id gives you the run's prompt (read-only, nothing for Eric to approve); research it, save_report once with that run_id, and tell Eric the receipt (status and report ID). That save is the only call Eric has to approve; do not save drafts unless he asks. The others wait for his next request.`
         : `Nothing is waiting for ${ctx.label}.`,
     };
   },
@@ -882,14 +973,45 @@ const handlers = {
       throw new OpError('CONFLICT', `${label}'s job in ${runId} is with the ${label} API in the background (${job.state}); its answer is saved there. Nothing was saved here.`);
     }
     const inbox = require('./core/inbox');
+    const reports = require('./core/reports');
+    // The report must answer this run's frozen contract before it can complete
+    // the job (binding.js): the run, project, model, prompt version, rubric,
+    // profile and horizon it declares are this run's. A conflict is refused
+    // field by field; nothing is saved or linked, and the job stays open.
+    const cls = reports.classify(text);
+    const jsonInfo = cls.json || null;
+    const parsed = jsonInfo && jsonInfo.obj ? jsonInfo.obj : null;
+    if (cls.kind === 'report') {
+      const b = require('./core/binding').checkBinding(ws, { projectId: id, runId, provider: me, json: parsed, hasBlock: Boolean(jsonInfo && (jsonInfo.obj || (jsonInfo.parseErrors || []).length)), parseError: jsonInfo && (jsonInfo.parseErrors || [])[0], mode: 'assistant' });
+      if (!b.ok) throw new OpError('CONFLICT', b.message);
+    }
     // The same report saved again for this run, differing only in its
-    // date-time stamps (an assistant that writes it out again stamps its "as
-    // of" and "accessed" times anew): nothing new is stored, and the run keeps
-    // the report it has.
+    // restamped metadata (inbox.sameReportForRun): nothing new is stored, and
+    // the run keeps the report it has.
     const same = inbox.sameReportForRun(ws, { projectId: id, runId, provider: me, text });
+    // A second, different report for a run this model already answered is a
+    // revision: it says what changed and why. A withheld grade is an
+    // acceptable result, never a reason on its own to save again.
+    const prior = reports.loadReports(ws, id).filter((x) => !x.broken && x.meta.provider === me && ((x.meta.provenance && x.meta.provenance.research_run_id) || null) === runId)
+      .sort((x, y) => String(x.meta.imported_at || '').localeCompare(String(y.meta.imported_at || '')));
+    const exact = prior.some((x) => x.meta.text_sha256 && x.meta.text_sha256 === inbox.normalizedTextHash(text));
+    let revision = null;
+    if (prior.length && !same && !exact) {
+      const rv = args.revision && typeof args.revision === 'object' ? args.revision : null;
+      const last = prior[prior.length - 1];
+      const kinds = require('./core/revisions').REVISION_KINDS;
+      const note = rv && typeof rv.note === 'string' ? rv.note.trim() : '';
+      if (!rv || !kinds[rv.kind] || note.length < 15) {
+        throw new OpError('INVALID', `Not saved: you already saved report ${last.report_id} for ${runId}. A different report for the same run is a revision, so it needs revision: { kind, note }: kind is format_fix (the JSON block misstated your written report), reassessment (a changed judgment from evidence already in the report), new_evidence (sources you retrieved since) or other; note says in a sentence or two what changed and why. A withheld grade is an acceptable result: do not save again only to complete the grade. Nothing was saved.`);
+      }
+      if (rv.kind === 'new_evidence' && parsed && !require('./core/revisions').newSources(last, { assessment: { sources: (Array.isArray(parsed.sources) ? parsed.sources : []).map((s) => ({ url: s && reports.safeUrl(s.url), url_raw: s && s.url })) } }).length) {
+        throw new OpError('INVALID', `Not saved: revision kind new_evidence, but the report lists no source that ${last.report_id} did not already cite. Add the new sources (with dates) that the new claims rest on, or use reassessment if the judgment changed on the same evidence. Nothing was saved.`);
+      }
+      revision = { kind: rv.kind, note: note.slice(0, 600), of: last.report_id, by: label, at: new Date().toISOString() };
+    }
     const r = same
       ? { status: 'duplicate', project_id: id, report_id: same.report_id, stamps_only: true }
-      : (inbox.importContent(ws, me, { content: text, filename: `${id}__${runId}_${me}.md`, projectId: id, runId, channel: ctx.importChannel }).result || {});
+      : (inbox.importContent(ws, me, { content: text, filename: `${id}__${runId}_${me}.md`, projectId: id, runId, channel: ctx.importChannel, runCheck: 'assistant', revision }).result || {});
     if (r.status !== 'ingested' && r.status !== 'duplicate') {
       throw new OpError('INVALID', `The report was not saved: ${r.message || r.status}`);
     }
@@ -919,6 +1041,17 @@ const handlers = {
     const after = research.loadRun(ws, id, runId);
     const myState = after && after.jobs[me] ? after.jobs[me].state : null;
     const othersOpen = after ? PROVIDERS.filter((p) => p !== me && after.jobs[p] && research.OPEN_STATES.has(after.jobs[p].state)) : [];
+    // The others, as they are: still working or waiting, on hold, or done.
+    const heldNow = research.heldProviders(ws);
+    const othersLine = (open) => {
+      const active = open.filter((p) => !heldNow[p]);
+      const paused = open.filter((p) => heldNow[p]);
+      const parts = [];
+      if (active.length) parts.push(` Still open in this run: ${listLabels(active)} (get_research shows their progress; compare_reports once they are saved).`);
+      if (paused.length) parts.push(` ${listLabels(paused)}'s job in this run is on hold: kept, not handed out.`);
+      if (!active.length && after && PROVIDERS.filter((p) => after.jobs[p]).length > 1) parts.push(paused.length ? ' Every other model not on hold is done: compare_reports shows where the saved reports agree and disagree.' : ' Every model in this run is done: compare_reports shows where they agree and disagree.');
+      return parts.join('');
+    };
     const runOut = { run_id: runId, state: myState, others: after ? Object.fromEntries(PROVIDERS.filter((p) => p !== me && after.jobs[p]).map((p) => [p, jobView(after.jobs[p], after, me, ws).progress])) : {} };
     if (me === 'claude') runOut.claude_state = myState;
     // A grade is calculated only when every weighted component is scored (or a
@@ -926,15 +1059,17 @@ const handlers = {
     // research is fresh, or left honestly unscored.
     const g = saved && saved.grade;
     const isWithheld = Boolean(g && g.status === 'withheld');
-    // The model is not invited to save an unchanged report again (on
-    // 2026-10-03 that invitation made ChatGPT re-save four reports unchanged);
-    // a second save is for a real change only.
+    // A withheld grade is an acceptable result. On 2026-10-03 an invitation
+    // to save again where the report "supports a judgment on a part" was
+    // followed by 13 re-saves that turned unknown parts into ranges within a
+    // minute: the reply now asks for a second save only to correct a
+    // documented mismatch, and a revision must say why (revision).
     const checks = saved && saved.structure && saved.structure.flagged ? saved.structure : null;
-    const withheld = isWithheld ? ` Its grade is withheld: ${g.reason || 'not every weighted component is scored.'} components shows each part as it was read, with any format errors${checks ? '; structure_checks names parts left unscored while your report scores related ground' : ''}. Save again only to change the JSON block: a part was misread because of a format slip, or your written report supports a judgment on a part (a score, or a range with its reason) that the block leaves unknown. Otherwise leave them unscored and do not save again: a withheld grade is then the honest result, and an unchanged report saved again is recognized and not stored twice.` : '';
+    const withheld = isWithheld ? ` Its grade is withheld: ${g.reason || 'not every weighted component is scored.'} That is an acceptable result: an unknown part stays unknown when the evidence does not settle it. components shows each part as it was read, with any format errors${checks ? '; structure_checks names parts left unscored while your report scores related ground (a prompt to check, not an instruction to score them)' : ''}. Save again only if the JSON block misstates your written report (then pass revision with kind format_fix and say what was misstated). Do not save again to obtain a complete grade.` : '';
     const status = r.status === 'duplicate' ? 'unchanged' : verified ? 'saved' : 'unverified';
     const result = {
       status,
-      message: `${status === 'unchanged' ? (r.stamps_only ? `This report is already saved as ${r.report_id}: the new text differs only in its date-time stamps, so nothing new was stored.` : `This exact report is already saved (${r.report_id}).`) : status === 'saved' ? `Saved ${label} report ${r.report_id} for ${id}; it is on the project page now.` : `The desk wrote ${label} report ${r.report_id} for ${id} but could not confirm the save (it did not read back as written). Call save_report again with the same text; if it did land, nothing changes.`}${withheld}${othersOpen.length ? ` Still open in this run: ${listLabels(othersOpen)} (get_research shows their progress; compare_reports once they are saved).` : after && PROVIDERS.filter((p) => after.jobs[p]).length > 1 ? ' Every model in this run is done: compare_reports shows where they agree and disagree.' : ''}`,
+      message: `${status === 'unchanged' ? (r.stamps_only ? `This report is already saved as ${r.report_id}: the new text differs only in its restamped analysis and access times (the same day), so nothing new was stored.` : `This exact report is already saved (${r.report_id}).`) : status === 'saved' ? `Saved ${label} report ${r.report_id} for ${id}; it is on the project page now.` : `The desk wrote ${label} report ${r.report_id} for ${id} but could not confirm the save (it did not read back as written). Call save_report again with the same text; if it did land, nothing changes.`}${withheld}${othersLine(othersOpen)}`,
       report: compactReport(saved),
       run: runOut,
       validation: { errors: r.errors || 0, warnings: r.warnings || 0, ambiguous: r.ambiguous || 0, note: r.note || null },
@@ -942,6 +1077,12 @@ const handlers = {
     };
     if (isWithheld) Object.assign(result, gradeGaps(ws, id, r.report_id));
     if (checks) result.structure_checks = checks;
+    // A revision, as the desk read it against the earlier save: what changed
+    // and on what evidence (revisions.js). The earlier report stays saved.
+    if (saved && saved.revision && saved.revision.kind === 'revision') {
+      result.revision = { of: saved.revision.of, basis: saved.revision.basis, sources_added: saved.revision.sources.added, changed_components: saved.revision.changed_components, your_reason: saved.revision.declared, label: saved.revision_label };
+      result.message += ` This is a revision of ${saved.revision.of}, which stays saved and listed: ${saved.revision_label}`;
+    }
     return result;
   },
 
@@ -1259,9 +1400,15 @@ handlers.start_research = function start_research(ws, args, ctx) {
     const r = research.readiness(ws);
     out.readiness = {
       summary: r.summary,
-      models: Object.fromEntries(PROVIDERS.map((p) => [p, { route: r.models[p].route, model: r.models[p].model, setup: r.models[p].setup_short }])),
+      models: Object.fromEntries(PROVIDERS.map((p) => [p, { status: r.models[p].status, route: r.models[p].route, model: r.models[p].model, setup: r.models[p].setup_short, on_hold: r.models[p].on_hold }])),
       limits: r.budget,
     };
+    // "All three" while a model is on hold: say so, never promise it.
+    const heldOut = PROVIDERS.filter((p) => p !== ctx.me && r.models[p].on_hold);
+    if (heldOut.length && out.status !== 'on_hold') {
+      out.on_hold = heldOut;
+      out.message = `${out.message || ''} ${listLabels(heldOut)} ${heldOut.length === 1 ? 'is' : 'are'} on hold on this desk and ${heldOut.length === 1 ? 'was' : 'were'} not added; nothing new is assigned ${heldOut.length === 1 ? 'to it' : 'to them'}.`.trim();
+    }
   }
   return out;
 };

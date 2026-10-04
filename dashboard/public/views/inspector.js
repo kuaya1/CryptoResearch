@@ -10,7 +10,7 @@
 //                     profile and holding horizon
 // Every model keeps its own numbers. Unknown stays unknown and is never drawn
 // as zero; not applicable says so; nothing missing is filled in.
-import { h, details, fmtDateTime, PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, icon } from '../ui.js';
+import { h, details, fmtDateTime, PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, icon, anchorText } from '../ui.js';
 import { evidenceChecksBlock, latestReports, promptView, sourceItem } from './project.js';
 import { profileOf, categoryRows, scorecardCounts, statesConfidence, confidenceChip, categoryFlags, CONFIDENCE_LABELS } from '../thesis-ui.js';
 
@@ -45,26 +45,42 @@ function scoreBar(s) {
 
 const scoreWords = (s) => (s.status === 'range' ? `${s.low} to ${s.high} out of 100 (a range)` : `${s.value} out of 100`);
 
-// One category: its name, score and bar in the row; the report's reasons one
-// tap away. Older reports give only a reason, and that is all that is shown.
-function categoryRow(prov, x, flags, conf) {
+// Short names for a phone row; the full name is the row's title, its label
+// for screen readers, and the first line of its detail.
+const SHORT = {
+  legitimacy: 'Legitimacy', development_credibility: 'Development', build_operational_quality: 'Build quality', code_quality: 'Code quality',
+  product_reality: 'Live product', technology_usefulness: 'Technology', organic_demand: 'Organic demand', token_value_capture: 'Value capture',
+  valuation_supply_attractiveness: 'Valuation & supply', chart_structure: 'Chart', cycle_timing: 'Cycle & catalysts', volume_liquidity: 'Volume & liquidity',
+  btc_relative_opportunity: 'Against BTC', builder_operations: 'Builders & ops', product_usefulness: 'Product use', credit_risk_transparency: 'Credit-risk clarity',
+  protocol_risk_transparency: 'Protocol-risk clarity', technical_risk_transparency: 'Tech-risk clarity', differentiation: 'Differentiation',
+  category_potential: 'Category potential', chart_quality: 'Chart quality', evidence_confidence: 'Evidence confidence',
+};
+
+// One category: its name, score and bar in one row; an unknown says why right
+// there; the report's reasons, evidence and anchor are one tap away. Older
+// reports give only a reason, and that is all that is shown.
+function categoryRow(prov, x, flags, conf, anchors = []) {
   const s = x.score;
+  const name = SHORT[x.id] || x.label;
   const na = (x.def && x.def.applicable === false) || (s && s.status === 'not_applicable');
   if (na) {
     return h('li', { class: 'crow-na' },
-      h('span', { class: 'cr-name', title: x.def ? x.def.definition || '' : '' }, x.label),
+      h('span', { class: 'cr-name', title: x.label }, name),
       h('span', { class: 'cr-na', title: (x.def && x.def.na_reason) || (s && s.rationale) || '' }, 'Not applicable'));
   }
   const scored = isScored(s);
   const fl = categoryFlags(flags, x.id);
   const serious = fl.some((f) => f.severity === 'high');
   const value = !s ? 'Not in report' : scored ? (s.status === 'range' ? `${s.low}–${s.high}` : String(s.value)) : 'Unknown';
+  const word = scored ? anchorText(anchors, s) : null;
+  // Only an unknown (or a missing grade) carries a line in the row: why.
   const short = !s ? 'This report does not grade this category.'
-    : scored ? s.rationale || ''
+    : scored ? null
       : s.missing_data ? `Why unknown: ${s.missing_data}` : 'The report does not say what is missing.';
   const item = (k, v) => (v ? [h('dt', null, k), h('dd', null, v)] : []);
   const anyDetail = s && (s.strongest_evidence || s.main_weakness || s.would_raise || s.would_lower);
   const body = h('div', { class: 'cdetail' },
+    h('p', { class: 'cd-name' }, x.label, word ? h('span', { class: 'faint' }, ` · ${value} is “${word}” on the rubric's scale`) : null),
     fl.map((f) => h('p', { class: `ev-line ${f.severity === 'high' ? 'serious' : 'material'}` }, icon(f.severity === 'high' ? 'warn-fill' : 'warn-line'),
       h('span', null, h('strong', null, f.severity === 'high' ? 'Serious evidence flag. ' : 'Evidence flag. '), f.beside || f.message, ' ', h('span', { class: 'muted' }, 'The grade is shown as the model gave it.')))),
     h('dl', null,
@@ -77,15 +93,12 @@ function categoryRow(prov, x, flags, conf) {
       ...item('Cites', s && Array.isArray(s.evidence_refs) && s.evidence_refs.length ? s.evidence_refs.join(', ') : null)),
     !anyDetail && s ? h('p', { class: 'faint small', style: { margin: '6px 0 0' } }, 'This report gives the reason only; reports on the newer prompt add the evidence, the main weakness and what would change the grade.') : null);
   return h('li', null, h('details', { class: `crow${scored ? '' : ' is-unknown'}${fl.length ? (serious ? ' has-serious' : ' has-flag') : ''}`, dataset: { key: `cat-${prov}-${x.id}` } },
-    h('summary', null,
-      h('span', { class: 'cr-top' },
-        h('span', { class: 'cr-name', title: x.def ? x.def.definition || '' : '' }, x.label,
-          fl.length ? h('span', { class: 'cr-flag', title: fl.map((f) => f.beside || f.message).join(' ') }, icon(serious ? 'warn-fill' : 'warn-line'), h('span', null, serious ? 'serious flag' : 'flag')) : null),
-        h('span', { class: 'cr-score' }, h('span', { class: 'v' }, value), scored ? h('span', { class: 'of' }, '/100') : null)),
-      h('span', { class: 'cr-bar', role: 'img', 'aria-label': scored ? scoreWords(s) : 'Unknown, no score' }, scoreBar(s)),
-      h('span', { class: 'cr-sub' },
-        conf && scored ? confidenceChip(s) : null,
-        short ? h('span', { class: 'cr-why' }, short) : null)),
+    h('summary', { 'aria-label': `${x.label}: ${scored ? `${scoreWords(s)}${word ? `, ${word}` : ''}${conf && CONFIDENCE_LABELS[s.confidence] ? `, confidence ${CONFIDENCE_LABELS[s.confidence].toLowerCase()}` : ''}` : value}${fl.length ? `; ${serious ? 'serious evidence flag' : 'evidence flag'}` : ''}. Open for the reasons` },
+      h('span', { class: 'cr-name', title: x.label, 'aria-hidden': 'true' }, name,
+        fl.length ? h('span', { class: 'cr-flag', title: fl.map((f) => f.beside || f.message).join(' ') }, icon(serious ? 'warn-fill' : 'warn-line'), h('span', { class: 'sr-only' }, serious ? 'serious flag' : 'flag')) : null),
+      h('span', { class: 'cr-bar', 'aria-hidden': 'true' }, scoreBar(s)),
+      h('span', { class: 'cr-score', 'aria-hidden': 'true' }, h('span', { class: 'v' }, scored ? value : '?'), conf && scored ? h('span', { class: 'cr-conf' }, confidenceChip(s)) : null),
+      short ? h('span', { class: 'cr-why' }, short) : null),
     body));
 }
 
@@ -103,15 +116,71 @@ function categoriesPart(ctx, d, row, prov) {
   const counts = scorecardCounts(rows);
   const conf = statesConfidence(rows);
   const flags = (r.evidence && r.evidence.flags) || [];
+  const anchors = ctx.state.index.rubrics.grading.favorable_anchors || [];
   const confLine = conf ? [counts.high ? `${counts.high} high` : null, counts.medium ? `${counts.medium} medium` : null, counts.low ? `${counts.low} low` : null].filter(Boolean).join(' · ') : null;
   return h('div', { class: 'cats' },
     h('div', { class: 'cats-head' },
       h('h3', null, 'Category grades'),
       h('span', { class: 'cats-count' }, `${counts.scored} of ${counts.total} scored${counts.unknown ? ` · ${counts.unknown} unknown` : ''}`)),
-    confLine ? h('p', { class: 'cats-conf' }, `Confidence, as ${PROVIDER_LABELS[prov]} states it: ${confLine}`) : null,
-    h('div', { class: 'cats-scale', 'aria-hidden': 'true' }, ['0', '25', '50', '75', '100'].map((n) => h('span', null, n))),
-    h('ul', { class: 'cat-rows', 'aria-label': `${PROVIDER_LABELS[prov]}'s category grades, 0 to 100, higher is better` }, rows.map((x) => categoryRow(prov, x, flags, conf))),
-    h('p', { class: 'cats-note' }, `${PROVIDER_LABELS[prov]}'s own diagnostic grades, higher is better. They are never averaged into the investment grade or with another model's. Scoring profile ${a.sector_profile || 'not declared'}${profile ? '' : ' (not on this desk)'}.`));
+    h('p', { class: 'cats-conf' }, `Diagnostics, not part of the investment grade${confLine ? ` · ${PROVIDER_LABELS[prov]}'s confidence: ${confLine}` : ''}`),
+    h('div', { class: 'cats-scale', 'aria-hidden': 'true' }, h('span'), h('span', { class: 'sc' }, ['0', '50', '100'].map((n) => h('span', null, n))), h('span')),
+    h('ul', { class: 'cat-rows', 'aria-label': `${PROVIDER_LABELS[prov]}'s category grades, 0 to 100, higher is better` }, rows.map((x) => categoryRow(prov, x, flags, conf, anchors))),
+    h('p', { class: 'cats-note' }, `${PROVIDER_LABELS[prov]}'s own diagnostic grades, higher is better. They are never averaged into the investment grade or with another model's. Words such as “Weak” are the rubric's own anchors (${anchors.map((x) => `${x.band} ${String(x.meaning || '').split('.')[0].toLowerCase()}`).join(', ')}). Scoring profile ${a.sector_profile || 'not declared'}${profile ? '' : ' (not on this desk)'}.`));
+}
+
+// ---- the six weighted parts of the investment grade ----------------------------
+
+// What the investment grade is calculated from: the six weighted components
+// of the report's own rubric, each as given (a point, a range, or unknown with
+// the model's reason), its weight, and the rubric's word. Never a midpoint.
+function componentsPart(ctx, d, row, prov) {
+  const sum = row.providers && row.providers[prov];
+  if (!sum) return null;
+  const r = d.reports.find((x) => x.report_id === sum.report_id) || latestReports(d)[prov];
+  if (!r || r.broken) return h('p', { class: 'small muted' }, 'The report could not be read.');
+  const a = r.assessment || {};
+  const grading = ctx.state.index.rubrics.grading;
+  const anchors = grading.favorable_anchors || [];
+  const comps = grading.investment_components;
+  return h('div', { class: 'parts' },
+    h('ul', { class: 'part-rows', 'aria-label': 'The six weighted parts of the investment grade' }, comps.map((c) => {
+      const s = (a.investment_components || {})[c.id];
+      const scored = isScored(s);
+      const value = !s ? 'not given' : scored ? (s.status === 'range' ? `${s.low}–${s.high}` : String(s.value)) : s.status === 'not_applicable' ? 'N/A' : 'unknown';
+      const word = scored ? anchorText(anchors, s) : null;
+      const why = scored ? s.rationale : s ? s.missing_data || s.rationale : null;
+      return h('li', null,
+        h('div', { class: 'pr-top' },
+          h('span', { class: 'pr-name' }, c.label, h('span', { class: 'w' }, `${c.weight_bp / 100}%`)),
+          h('span', { class: 'pr-v' }, h('strong', null, value), word ? h('span', { class: 'faint' }, ` · ${word}`) : null)),
+        h('span', { class: 'cr-bar', role: 'img', 'aria-label': scored ? scoreWords(s) : 'Unknown, no score' }, scoreBar(s)),
+        why ? h('p', { class: 'pr-why' }, `${scored ? '' : 'Why unknown: '}${why}`) : null);
+    })),
+    h('p', { class: 'cats-note' }, r.grade && r.grade.status === 'range'
+      ? 'A range in any part makes the grade a range: each end is calculated from the parts\' own ends, never a midpoint. Ranges are the model\'s judgment, not statistical confidence intervals.'
+      : 'The grade is the sum of each part times its weight, calculated here under the rubric the report declares. An unknown part withholds the grade; nothing is filled in.'));
+}
+
+// ---- the model's strongest risks ---------------------------------------------
+
+// Right after the category bars: the model's own three strongest risks, then
+// its downside-risk scores (higher means more risk). Never folded away.
+function risksPart(ctx, d, row, prov) {
+  const sum = row.providers && row.providers[prov];
+  if (!sum) return null;
+  const r = d.reports.find((x) => x.report_id === sum.report_id) || latestReports(d)[prov];
+  if (!r || r.broken) return null;
+  const a = r.assessment || {};
+  const facts = (a.bearish_facts || []).slice(0, 3);
+  const defs = ctx.state.index.rubrics.grading.risk_scores || [];
+  const top = (s) => (s.status === 'range' ? s.high : s.value);
+  const scores = defs.map((def) => ({ def, s: (a.risk_scores || {})[def.id] })).filter((x) => isScored(x.s)).sort((x, y) => top(y.s) - top(x.s));
+  if (!facts.length && !scores.length) return h('div', { class: 'risks' }, h('h3', null, 'Strongest risks'), h('p', { class: 'small faint' }, 'This report names no risks in its data block; the full report may discuss them.'));
+  return h('section', { class: 'risks', 'aria-label': `${PROVIDER_LABELS[prov]}'s strongest risks` },
+    h('h3', null, 'Strongest risks', h('span', { class: 'faint' }, ` · as ${PROVIDER_LABELS[prov]} states them`)),
+    facts.length ? h('ol', { class: 'risk-list' }, facts.map((f) => h('li', null, f.text))) : null,
+    scores.length ? h('p', { class: 'risk-scores' }, h('span', { class: 'k' }, 'Downside, higher is worse'),
+      scores.map((x, i) => h('span', { class: 'rs' }, i ? ' · ' : '', `${x.def.label.replace(/ risk$/i, '')} `, h('strong', null, x.s.status === 'range' ? `${x.s.low}–${x.s.high}` : String(x.s.value))))) : null);
 }
 
 // ---- evidence and sources, per model ------------------------------------------
@@ -201,6 +270,8 @@ export function inspectorParts(ctx, d, row, prov) {
   const out = { run: runPart(ctx, d), compare: comparePart(ctx, d) };
   if (prov) {
     out[`cats-${prov}`] = categoriesPart(ctx, d, row, prov);
+    out[`grade-${prov}`] = componentsPart(ctx, d, row, prov);
+    out[`risks-${prov}`] = risksPart(ctx, d, row, prov);
     out[`evidence-${prov}`] = evidencePart(ctx, d, row, prov);
   }
   return out;

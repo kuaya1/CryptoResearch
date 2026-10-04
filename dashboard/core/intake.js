@@ -590,6 +590,9 @@ function confirmIntake(ws, id, { coingecko_id: chosen, sector = null, different_
     throw new OpError('AMBIGUOUS', `Your records already have a project with the ticker ${cand.symbol}: ${names}. Tickers are not unique. If ${cand.name} is a different project, confirm again with "This is a different project".`, { same_symbol: added.candidates || [] });
   }
   const projectId = added.project_id;
+  if (added.status === 'archived') {
+    throw new OpError('CONFLICT', `${cand.name} is already in your records as ${projectId}, archived. Nothing was researched or added twice. Restore it (Watchlist, Archived filter) to bring it back with its history, then research it.`, { archived: projectId });
+  }
   if (added.status === 'exists') {
     // The same project by name, website, contract or CoinGecko ID. A binding
     // to another coin is never replaced from here.

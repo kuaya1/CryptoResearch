@@ -187,7 +187,11 @@ test('hosted: defaults written by the first version move to the current ones on 
   assert.equal(r.providers.claude.max_searches, 8);
   assert.deepEqual(r.budget, { per_run_usd: 5, daily_usd: 12, monthly_usd: 40 }, 'the daily limit Eric set stays');
   const after = readJson(file);
-  assert.equal(after.hosted_defaults_version, 4);
+  assert.equal(after.hosted_defaults_version, 5);
+  // v5 puts Gemini on hold on a desk that ran an earlier version (2026-10-04).
+  assert.deepEqual(after.hosted_defaults_upgrades[3].changed.map((c) => c.setting), ['research.on_hold.gemini']);
+  assert.equal(r.on_hold.gemini.since, '2026-10-04');
+  assert.match(r.on_hold.gemini.reason, /On hold for this milestone/);
   assert.deepEqual(after.hosted_defaults_upgrades[0].changed.map((c) => c.setting).sort(), ['research.budget.monthly_usd', 'research.budget.per_run_usd', 'research.max_output_tokens', 'research.providers.claude.max_searches', 'research.timeout_seconds']);
   // v3 proposes ChatGPT and Gemini API settings; they are used only with a key.
   assert.deepEqual(after.hosted_defaults_upgrades[1].changed.map((c) => c.setting).sort(), ['research.max_concurrent', 'research.providers.chatgpt', 'research.providers.gemini']);
@@ -211,7 +215,7 @@ test('hosted: defaults written by the first version move to the current ones on 
   for (const k of keys) { if (prev[k] === undefined) delete process.env[k]; else process.env[k] = prev[k]; }
   assert.match(line, /48000 output tokens per request, up to 3 requests, 8 searches per request, 1500 s per call/);
   assert.match(line, /limits \$5 per run, \$12 per day, \$40 per month; Claude key present; route api; ChatGPT gpt-6\.1-sol \(key missing; route manual\), Gemini gemini-3\.1-pro-preview \(key missing; route manual\); 2 at a time\./);
-  assert.match(line, /Defaults v2, v3, v4 applied .*research\.max_output_tokens 16000 -> 48000.*research\.providers\.chatgpt unset -> gpt-6\.1-sol/);
+  assert.match(line, /Defaults v2, v3, v4, v5 applied .*research\.max_output_tokens 16000 -> 48000.*research\.providers\.chatgpt unset -> gpt-6\.1-sol.*research\.on_hold\.gemini unset -> set/);
   assert.doesNotMatch(line, /test-key-not-real/);
   assert.equal(noKeys.chatgpt.mode, 'manual', 'no key: nothing paid');
   assert.equal(withOpenai.chatgpt.mode, 'api', 'the key is the only missing piece');
@@ -223,8 +227,18 @@ test('hosted: defaults written by the first version move to the current ones on 
   assert.ok(plan.total_usd + gplan.total_usd < r.budget.per_run_usd, 'ChatGPT and Gemini together fit the per-run limit');
   // Applied once: a later change of Eric's is never overwritten.
   after.research.max_output_tokens = 20000;
+  // Eric lifts the hold in Settings: it is never put back.
+  after.research.on_hold.gemini = null;
   fs.writeFileSync(file, JSON.stringify(after));
-  assert.equal(hosted.prepareWorkspace(cfg).settings.research.max_output_tokens, 20000);
+  const again = hosted.prepareWorkspace(cfg);
+  assert.equal(again.settings.research.max_output_tokens, 20000);
+  assert.equal(again.settings.research.on_hold.gemini, null);
+  assert.deepEqual(require('../core/research').heldProviders(again), {});
+  // A desk set up from now on starts without a hold.
+  const fresh = tempDataDir('fresh-nohold');
+  t.after(fresh.cleanup);
+  const ws2 = hosted.prepareWorkspace(hosted.hostedConfig({ CR_DATA_DIR: fresh.dataDir, CR_ACCESS_PASSWORD: PASS, PORT: '10000', RENDER_EXTERNAL_HOSTNAME: HOST }));
+  assert.deepEqual(require('../core/research').heldProviders(ws2), {});
 });
 
 test('hosted: everything needs sign-in; the session cookie is HttpOnly, Secure and SameSite=Strict; sessions survive a restart; sign-out ends one', async (t) => {

@@ -31,6 +31,8 @@ const STATE_REL = 'logs/ingestion-state.json';
 const TEXT_EXT = new Set(['.md', '.markdown', '.txt', '.json']);
 const ACCEPTED_EXT = new Set([...TEXT_EXT, '.pdf']);
 const MAX_BYTES = 20 * 1024 * 1024;
+// Inbox files held back with a reason until someone acts on them.
+const HELD_STATUSES = ['failed', 'needs_project', 'prompt', 'provider_mismatch', 'run_mismatch'];
 
 function emptyState() {
   return { schema_version: 'cr.ingestion-state.v1', files: {} };
@@ -44,21 +46,72 @@ function normalizedTextHash(text) {
   return sha256(text.replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').trim());
 }
 
-// A report text with its date-time stamps masked. An assistant that writes the
-// same report out again stamps its "as of" and "accessed" times anew (ChatGPT
-// re-saved four reports on 2026-10-03 that differed in nothing else). Dates
-// without a time stay as they are, so a report about another day is another
-// report.
-const DATE_TIME = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?/g;
-function stamplessText(text) {
-  return String(text).replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').trim().replace(DATE_TIME, '<date-time>');
+// Is a new report text the same report as one already saved, apart from
+// restamped metadata? An assistant that writes a report out again stamps its
+// analysis time and source access times anew (ChatGPT re-saved four reports
+// on 2026-10-03 that differed in nothing else). Only these are restamping
+// metadata, and only on the same calendar day as written:
+//   - the JSON block's analysis_at;
+//   - each source's accessed_at in the JSON block;
+//   - those exact stamps where the prose repeats them ("As of <analysis_at>").
+// Everything else counts, every evidence date and time included: a source's
+// observation time, a chart candle, a catalyst date, the horizon, a claim, a
+// score. A text without a readable JSON block is the same only when it is the
+// same text. When in doubt it is another report, kept as its own original.
+// Pure; returns { same, reason }.
+// Each fenced block on its own; only a block holding the report's JSON is set aside.
+const FENCE = /```[ \t]*[A-Za-z0-9_-]*[^\n]*\n([\s\S]*?)\n[ \t]*```/g;
+const setAsideJson = (t) => t.replace(FENCE, (m, body) => (/"schema_version"/.test(body) ? '<json-block>' : m));
+const norm = (t) => String(t).replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').trim();
+const hasTime = (v) => typeof v === 'string' && /\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(v);
+const day = (v) => (typeof v === 'string' ? v.trim().slice(0, 10) : null);
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function metadataStamps(obj) {
+  const out = [];
+  if (hasTime(obj.analysis_at)) out.push(obj.analysis_at.trim());
+  for (const s of Array.isArray(obj.sources) ? obj.sources : []) if (s && hasTime(s.accessed_at)) out.push(String(s.accessed_at).trim());
+  return [...new Set(out)].sort((a, b) => b.length - a.length);
 }
 
-// The report this model already saved for this research run whose text is the
-// same apart from its date-time stamps, or null. Read-only.
+function withoutMetadata(obj) {
+  const copy = JSON.parse(JSON.stringify(obj));
+  delete copy.analysis_at;
+  if (Array.isArray(copy.sources)) for (const s of copy.sources) if (s && typeof s === 'object') delete s.accessed_at;
+  return copy;
+}
+
+function sameReportText(a, b) {
+  if (norm(a) === norm(b)) return { same: true, reason: 'identical text' };
+  const ja = classify(a).json;
+  const jb = classify(b).json;
+  const oa = ja && ja.obj;
+  const ob = jb && jb.obj;
+  if (!oa || !ob) return { same: false, reason: 'no readable JSON block to compare; only identical text is the same report' };
+  // The metadata stamps may differ only within the same calendar day.
+  if (day(oa.analysis_at) !== day(ob.analysis_at)) return { same: false, reason: 'another analysis date' };
+  const sa = Array.isArray(oa.sources) ? oa.sources : [];
+  const sb = Array.isArray(ob.sources) ? ob.sources : [];
+  if (sa.length !== sb.length) return { same: false, reason: 'other sources' };
+  for (let i = 0; i < sa.length; i++) if (day(sa[i] && sa[i].accessed_at) !== day(sb[i] && sb[i].accessed_at)) return { same: false, reason: 'a source accessed on another day' };
+  if (JSON.stringify(withoutMetadata(oa)) !== JSON.stringify(withoutMetadata(ob))) return { same: false, reason: 'the JSON block differs beyond its analysis and access times' };
+  // The prose, with the JSON block set aside and only the report's own
+  // metadata stamps masked.
+  const prose = (t, o) => {
+    let p = setAsideJson(norm(t));
+    for (const s of metadataStamps(o)) p = p.replace(new RegExp(escapeRe(s), 'g'), '<metadata-stamp>');
+    return p;
+  };
+  const once = (p) => (p.match(/<json-block>/g) || []).length === 1;
+  if (!once(prose(a, oa)) || !once(prose(b, ob))) return { same: false, reason: 'not exactly one fenced JSON block; only identical text is the same report' };
+  if (prose(a, oa) !== prose(b, ob)) return { same: false, reason: 'the written report differs beyond its own analysis and access times' };
+  return { same: true, reason: 'the same report restamped on the same day' };
+}
+
+// The report this model already saved for this research run that is the same
+// report (sameReportText), or null. Read-only.
 function sameReportForRun(ws, { projectId, runId, provider, text }) {
   if (!runId || !projectId) return null;
-  const want = stamplessText(text);
   for (const r of loadReports(ws, projectId)) {
     if (r.broken || r.meta.provider !== provider || !r.meta.original_file) continue;
     const run = (r.meta.provenance && r.meta.provenance.research_run_id) || (r.assessment && r.assessment.research_run_id) || null;
@@ -69,7 +122,8 @@ function sameReportForRun(ws, { projectId, runId, provider, text }) {
     } catch (_) {
       continue;
     }
-    if (stamplessText(original) === want) return { report_id: r.report_id, imported_at: r.meta.imported_at || null };
+    const cmp = sameReportText(original, text);
+    if (cmp.same) return { report_id: r.report_id, imported_at: r.meta.imported_at || null, reason: cmp.reason };
   }
   return null;
 }
@@ -191,6 +245,7 @@ function ingestLocked(ws, provider, filename, opts = {}) {
   const {
     projectHint = null, force = false, allowProviderMismatch = false,
     runId = null, channel = null, attested = null, promptSha256 = null, evidenceSha256 = null,
+    runCheck = null, revision = null,
   } = opts;
   const rel = `inbox/${provider}/${filename}`;
   const abs = ws.abs(rel);
@@ -222,7 +277,7 @@ function ingestLocked(ws, provider, filename, opts = {}) {
   const bytes = fs.readFileSync(abs);
   const hash = sha256(bytes);
   const prior = readJson(ws.abs(STATE_REL), emptyState()).files[key];
-  if (!force && prior && prior.sha256 === hash && ['failed', 'needs_project', 'prompt', 'provider_mismatch'].includes(prior.status) && !projectHint) {
+  if (!force && prior && prior.sha256 === hash && HELD_STATUSES.includes(prior.status) && !projectHint) {
     return { status: 'skipped', key, message: `Unchanged since the last failed attempt (${prior.error}). Fix the file or retry it explicitly.` };
   }
 
@@ -271,6 +326,21 @@ function ingestLocked(ws, provider, filename, opts = {}) {
     return fail('provider_mismatch', `The file came in as ${PROVIDER_LABELS[provider]} but ${where} identifies it as ${PROVIDER_LABELS[claimed]}. It was not imported, so nothing is mislabeled. If it really came from ${PROVIDER_LABELS[claimed]}, import it there; if the label inside is wrong, assign it with "allow provider mismatch" and the conflict stays recorded.`, { sha256: hash });
   }
 
+  // A report completing a research run must answer that run's contract
+  // (binding.js): run, project, model, prompt, rubric, profile, horizon. A
+  // conflict is held here like a provider mismatch: nothing is linked, the
+  // job stays open, the file waits in the inbox with the reason. The desk's
+  // own paid API answer is checked and recorded, never refused.
+  const bind = require('./binding');
+  const jsonInfo = classification.json || null;
+  const bindArgs = { provider, json, hasBlock: Boolean(jsonInfo && (jsonInfo.obj || (jsonInfo.parseErrors || []).length)), parseError: jsonInfo && (jsonInfo.parseErrors || [])[0], allowModelMismatch: allowProviderMismatch };
+  let binding = null;
+  if (!isPdf && runId) {
+    const mode = runCheck || (attested ? 'record' : 'owner');
+    binding = bind.checkBinding(ws, { ...bindArgs, projectId: target.project_id, runId, mode });
+    if (!binding.ok && mode !== 'record') return fail('run_mismatch', binding.message, { sha256: hash, binding: bind.bindingRecord(binding) });
+  }
+
   if (!isPdf) built = buildFromText(ws, { text, classification, provider, runDefaults: runId ? runDefaultsFor(ws, target.project_id, runId) : null });
 
   const assessment = completeShape(built
@@ -292,7 +362,14 @@ function ingestLocked(ws, provider, filename, opts = {}) {
   const dir = `projects/${projectId}/reports/${reportId}`;
   const now = new Date().toISOString();
   const originalName = `original${isPdf ? '.pdf' : ext === '.json' ? '.json' : ext === '.txt' ? '.txt' : '.md'}`;
-  const linkedRun = runId || (assessment.research_run_id && /^run_[A-Za-z0-9_-]{4,80}$/.test(assessment.research_run_id) ? assessment.research_run_id : null);
+  // A run named only inside the report is linked when the report matches it;
+  // otherwise it is saved on its own, with the reason.
+  const declaredRun = !runId && assessment.research_run_id && /^run_[A-Za-z0-9_-]{4,80}$/.test(assessment.research_run_id) ? assessment.research_run_id : null;
+  if (declaredRun && built) {
+    binding = bind.checkBinding(ws, { ...bindArgs, projectId: target.project_id, runId: declaredRun, mode: 'declared' });
+    if (!binding.ok) built.extraction.issues.push({ severity: 'warning', field: 'research_run_id', message: binding.message });
+  }
+  const linkedRun = runId || (declaredRun && binding && binding.ok ? declaredRun : null);
   if (built && linkedRun) {
     // A position-cycle report is checked against the run it answers (horizon, recipe).
     const bound = require('./position').bindToRun(ws, target.project_id, linkedRun, assessment);
@@ -327,6 +404,10 @@ function ingestLocked(ws, provider, filename, opts = {}) {
       research_run_id: linkedRun,
       prompt_sha256: promptSha256 || null,
       evidence_packet_sha256: evidenceSha256 || null,
+      // How the report was checked against the run's contract (binding.js).
+      binding: bind.bindingRecord(binding),
+      // A second save for the same run says what changed and why (save_report).
+      revision: revision || null,
     },
     immutable: true,
     note: 'The original file and report.json never change. Corrections are separate files in corrections/.',
@@ -354,8 +435,8 @@ function ingestLocked(ws, provider, filename, opts = {}) {
     return { report_id: reportId, project_id: projectId };
   });
   const issues = record.extraction.issues || [];
-  if (!linkedRun) {
-    try { require('./research').autoLinkReport(ws, { projectId, provider, reportId, importedAt: now }); } catch (_) { /* optional */ }
+  if (!linkedRun && !declaredRun) {
+    try { require('./research').autoLinkReport(ws, { projectId, provider, reportId, importedAt: now, json }); } catch (_) { /* optional */ }
   }
   return {
     status: 'ingested',
@@ -445,6 +526,8 @@ function importContent(ws, provider, opts) {
     attested: opts.attested || null,
     promptSha256: opts.promptSha256 || null,
     evidenceSha256: opts.evidenceSha256 || null,
+    runCheck: opts.runCheck || null,
+    revision: opts.revision || null,
   });
   return { saved, result };
 }
@@ -500,11 +583,12 @@ function readInboxText(ws, key) {
 
 module.exports = {
   STATE_REL,
+  HELD_STATUSES,
   scanInbox,
   ingestFile,
   saveToInbox,
   importContent,
-  stamplessText,
+  sameReportText,
   sameReportForRun,
   assignAndRetry,
   setAside,

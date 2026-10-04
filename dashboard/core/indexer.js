@@ -39,7 +39,7 @@ const siteOf = (project) => (project && project.identity && project.identity.sta
 // Evidence checks (evidence.js), in brief for lists: never a score change.
 function evidenceBrief(a, project) {
   const e = require('./evidence').evidenceChecks(a, { officialWebsite: siteOf(project) });
-  return { flagged: e.flagged_claims, flagged_categories: e.flagged_categories, high: e.high, medium: e.medium, low: e.low, critical: e.critical_claims, summary: e.summary };
+  return { flagged: e.flagged_claims, flagged_categories: e.flagged_categories, flagged_other: e.flagged_other || 0, high: e.high, medium: e.medium, low: e.low, critical: e.critical_claims, summary: e.summary };
 }
 
 // Structure checks of one report (core/consistency.js): weighted parts left
@@ -55,13 +55,37 @@ function structureBrief(ws, a) {
   return s.flagged ? { flagged: s.flagged, summary: s.summary, flags: s.flags.map((f) => ({ component: f.component, label: f.label, message: f.message })) } : null;
 }
 
-function reportSummary(ws, r, project = null) {
+// The report a research run links for this model, when it is not this one
+// (a run keeps the report that completed it; a later revision is listed
+// beside it).
+function runLinkOf(ws, r) {
+  const runId = r.provenance && r.provenance.research_run_id;
+  if (!runId || !r.meta) return null;
+  try {
+    const run = require('./research').loadRun(ws, r.meta.project_id || (r.assessment && r.assessment.project_id), runId);
+    const job = run && run.jobs ? run.jobs[r.meta.provider] : null;
+    return job ? { run_id: runId, report_id: job.report_id || null, state: job.state } : { run_id: runId, report_id: null, state: null };
+  } catch (_) {
+    return null;
+  }
+}
+
+function reportSummary(ws, r, project = null, all = null) {
   if (r.broken) return { report_id: r.report_id, broken: true, error: r.error };
   const a = r.assessment;
   const { grade, model_total } = gradeOf(ws, r);
   const ex = r.record.extraction || {};
   const issues = effectiveIssues(ex.issues);
+  const rev = all ? require('./revisions').revisionOf(all, r) : null;
+  const labels = Object.fromEntries((((ws.rubrics.gradingVersions || {})[a.rubric_version] || ws.rubrics.grading || {}).investment_components || []).map((c) => [c.id, c.label]));
   return {
+    // Where it sits among the same model's reports: first, new research, or
+    // a revision of an earlier save for the same run (revisions.js).
+    revision: rev,
+    revision_label: rev && rev.kind === 'revision' ? require('./revisions').revisionLabel(rev, { labels }) : null,
+    run_link: runLinkOf(ws, r),
+    // The stated analysis time against the save time (reports.js).
+    analysis_timing: require('./reports').analysisTiming(a.analysis_at, r.meta.imported_at),
     report_id: r.report_id,
     provider: r.meta.provider,
     analysis_at: a.analysis_at,
@@ -156,6 +180,7 @@ function researchAttention(ws, p, researchState, now) {
   const out = [];
   if (!researchState) return out;
   const research = require('./research');
+  const held = research.heldProviders(ws);
   const action = `#/project/${p.project_id}/research`;
   for (const prov of PROVIDERS) {
     const job = researchState.providers[prov];
@@ -167,7 +192,9 @@ function researchAttention(ws, p, researchState, now) {
     if (job.state === 'failed' && job.outcome === 'incomplete') item('research_incomplete', 'medium', `${who} answer incomplete`, `${job.error || 'The answer stopped before it finished.'} Its partial text is kept under the run; it is not a report and is not graded.`);
     else if (job.state === 'failed') item('research_failed', 'medium', `${who} research job failed`, job.error || 'See the research run for details.');
     else if (job.state === 'uncertain') item('research_uncertain', 'high', `${who} API call needs a check`, 'The request may have been sent and billed, and no answer was saved. Check the provider\'s usage page, then reconcile it or retry.');
-    else if (job.state === 'unconfigured') {
+    else if (job.state === 'unconfigured' && held[prov]) {
+      // A model on hold: its waiting job is kept and is not a reminder.
+    } else if (job.state === 'unconfigured') {
       const since = Date.parse(job.updated_at || job.run_created_at || '');
       const min = Number.isNaN(since) ? null : Math.round((now - since) / 60000);
       if (min !== null && min > WAITING_NOTICE_MINUTES) {
@@ -259,7 +286,7 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
     const providers = {};
     for (const prov of PROVIDERS) {
       if (latest[prov]) {
-        providers[prov] = reportSummary(ws, latest[prov], p);
+        providers[prov] = reportSummary(ws, latest[prov], p, reports);
         continue;
       }
       // A PDF-only report is not comparable, but it exists: say "needs text",
@@ -267,7 +294,7 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
       const textless = reports
         .filter((r) => !r.broken && r.meta.provider === prov && (r.assessment.needs_text || r.assessment.source_format === 'pdf'))
         .sort((a, b) => reportSortKey(b).localeCompare(reportSortKey(a)))[0];
-      providers[prov] = textless ? { ...reportSummary(ws, textless, p), needs_text: true, latest_eligible: false } : null;
+      providers[prov] = textless ? { ...reportSummary(ws, textless, p, reports), needs_text: true, latest_eligible: false } : null;
     }
     const good = reports.filter((r) => !r.broken);
     const lastReport = good.sort((a, b) => reportSortKey(b).localeCompare(reportSortKey(a)))[0] || null;
@@ -409,7 +436,10 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
       } catch (_) { /* optional */ }
     }
     const sector = p.sector && p.sector.primary ? { ...p.sector, label: sectorLabel(p.sector.primary) } : { primary: null, label: 'Unclassified', tags: [], source: null };
-    if (!archived) attention.push(...researchAttention(ws, p, researchState, now));
+    // An archived project's research reminders stop, but a paid request that
+    // may have been billed without an answer stays in view until reconciled.
+    const ra = researchAttention(ws, p, researchState, now);
+    attention.push(...(archived ? ra.filter((a) => a.kind === 'research_uncertain').map((a) => ({ ...a, title: `${a.title} (archived project)` })) : ra));
     projectsOut.push({
       project_id: p.project_id,
       name: p.name,
@@ -422,6 +452,8 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
       coingecko_id: p.identity.status === 'verified' ? p.identity.coingecko_id : null,
       official_website: p.identity.official_website,
       on_watchlist: Boolean(p.watchlist && p.watchlist.on_watchlist),
+      // When and why it was archived (Restore brings it back as it was).
+      archive: archived ? { archived_at: (p.archive && p.archive.archived_at) || (p.watchlist && p.watchlist.removed_at) || null, reason: (p.archive && p.archive.reason) || p.archived_reason || null } : null,
       held: Boolean(position),
       position: position ? { quantity: position.quantity, value_usd: position.value_usd, price_status: position.price.status } : null,
       headline,
@@ -452,7 +484,7 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
   }
   const inboxSt = inbox.inboxStatus(ws);
   for (const f of inboxSt.in_inbox) {
-    if (['failed', 'needs_project', 'prompt', 'provider_mismatch'].includes(f.status)) attention.push({ kind: 'import_failed', severity: 'high', project_id: null, title: `Import needs attention: ${f.key}`, detail: f.error });
+    if (inbox.HELD_STATUSES.includes(f.status)) attention.push({ kind: 'import_failed', severity: 'high', project_id: null, title: `Import needs attention: ${f.key}`, detail: f.error });
   }
   const pending = requests.pendingRequests(ws);
   for (const r of pending) {
@@ -580,14 +612,17 @@ function projectDetailRaw(ws, id) {
         eligible: isEligible(r),
         evidence: require('./evidence').evidenceChecks(r.assessment, { officialWebsite: siteOf(project) }),
         structure: structureOf(ws, r.assessment),
+        revision: require('./revisions').revisionOf(reports, r),
+        analysis_timing: require('./reports').analysisTiming(r.assessment.analysis_at, r.meta.imported_at),
       };
     })
-    .sort((a, b) => String((b.assessment && b.assessment.analysis_at) || (b.meta && b.meta.imported_at) || '').localeCompare(String((a.assessment && a.assessment.analysis_at) || (a.meta && a.meta.imported_at) || '')));
+    // Newest first, by the same key that picks each model's latest report.
+    .sort((a, b) => (a.broken || b.broken ? (a.broken ? 1 : 0) - (b.broken ? 1 : 0) : reportSortKey(b).localeCompare(reportSortKey(a))));
   const history = {};
   const diffs = {};
   for (const prov of PROVIDERS) {
     const list = reports.filter((r) => !r.broken && r.meta.provider === prov).sort((a, b) => reportSortKey(a).localeCompare(reportSortKey(b)));
-    history[prov] = list.map((r) => reportSummary(ws, r, project));
+    history[prov] = list.map((r) => reportSummary(ws, r, project, reports));
     diffs[prov] = [];
     for (let i = 1; i < list.length; i++) diffs[prov].push(diffReports(list[i - 1], list[i]));
   }

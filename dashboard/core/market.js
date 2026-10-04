@@ -58,8 +58,23 @@ function readStatus(ws) {
 function trackedIds(ws) {
   const ids = new Set(['bitcoin']);
   for (const a of readJson(ws.abs('portfolio/assets.json'), { assets: [] }).assets || []) if (a.coingecko_id) ids.add(a.coingecko_id);
+  const archived = new Map();
   for (const p of listProjects(ws)) {
-    if (!p.broken && p.status !== 'archived' && p.identity && p.identity.status === 'verified' && p.identity.coingecko_id) ids.add(p.identity.coingecko_id);
+    if (p.broken || !p.identity || p.identity.status !== 'verified' || !p.identity.coingecko_id) continue;
+    if (p.status !== 'archived') ids.add(p.identity.coingecko_id);
+    else archived.set(p.project_id, p.identity.coingecko_id);
+  }
+  // Archiving a project hides its research, never a holding: a token still
+  // held keeps getting prices for the portfolio.
+  if (archived.size) {
+    try {
+      const pf = require('./portfolio').computePortfolio(ws, { market: readLatest(ws) });
+      for (const pos of pf.positions || []) {
+        if (pos.closed) continue;
+        if (pos.project_id && archived.has(pos.project_id)) ids.add(archived.get(pos.project_id));
+        else if ([...archived.values()].includes(pos.asset_id)) ids.add(pos.asset_id);
+      }
+    } catch (_) { /* prices for active projects still refresh */ }
   }
   return [...ids].sort();
 }

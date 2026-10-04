@@ -12,7 +12,7 @@ import {
   h, clear, button, select, input, changeCell, sparkline, logo, gradeBadge, badgeInfo, verdictChip, bandClass,
   fmtPrice, fmtCompactUsd, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, fmtSignedPct, freshnessText, priceStatus, stateText, toast, announce,
   followedCount, researchState, withheldReason, unscoredList, jobKey, icon, evidenceLevel, evidenceText, gradeMeter, coverageMeter,
-  withheldLabel, COVERAGE_MEANS, structureNotes, details,
+  withheldLabel, COVERAGE_MEANS, structureNotes, details, onHoldOf, copyText, anchorText, fmtRelDay,
   PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT,
 } from '../ui.js';
 import { openAddProjectDialog, openResearchDialog, openSectorDialog, waitingActions } from './dialogs.js';
@@ -147,9 +147,13 @@ export function matches(p, f, q) {
   if (!f.archived && p.status === 'archived') return false;
   if (f.archived && p.status !== 'archived') return false;
   if (f.sector && (!p.sector || p.sector.primary !== f.sector)) return false;
-  if (f.owned === 'held' && !p.held) return false;
-  if (f.owned === 'watching' && !(p.on_watchlist || p.held)) return false;
-  if (f.owned === 'off' && (p.on_watchlist || p.held)) return false;
+  // An archived project is never on the watchlist, so the Archived filter
+  // lists every archived project whatever the watching filter says.
+  if (!f.archived) {
+    if (f.owned === 'held' && !p.held) return false;
+    if (f.owned === 'watching' && !(p.on_watchlist || p.held)) return false;
+    if (f.owned === 'off' && (p.on_watchlist || p.held)) return false;
+  }
   const cov = coverageOf(p);
   if (f.coverage === 'all3' && cov.gradedCount < 3) return false;
   if (f.coverage === 'missing' && cov.gradedCount >= 3) return false;
@@ -192,11 +196,19 @@ function projectCell(ctx, p) {
   if (p.status === 'archived') marks.push(h('span', { class: 'mark' }, 'Archived'));
   // Changes since the last review: a small dot on the logo, the count in its label.
   const changed = p.changes && p.changes.item_count > 0 ? `${p.changes.item_count} change${p.changes.item_count === 1 ? '' : 's'} since ${p.changes.cursor_source === 'project created' ? 'the project was added' : 'your last review'}` : null;
+  // Under the Archived filter: Restore, right on the row.
+  let restore = null;
+  if (p.status === 'archived') {
+    restore = button('Restore', null, { kind: 'small', key: `row-restore-${p.project_id}` });
+    restore.setAttribute('aria-label', `Restore ${p.name}`);
+    restore.onclick = (e) => { e.stopPropagation(); restoreProject(ctx, p, restore); };
+  }
   return h('div', { class: 'proj-cell' },
     h('span', { class: 'logo-wrap' }, logo(p, { size: 26 }), changed ? h('span', { class: 'new-dot', role: 'img', 'aria-label': changed, title: changed }) : null),
     h('div', { class: 'names' }, nameBtn,
       p.symbol ? h('span', { class: 'tick' }, p.symbol) : null,
-      marks.length ? h('span', { class: 'marks' }, marks) : null));
+      marks.length ? h('span', { class: 'marks' }, marks) : null,
+      restore));
 }
 
 function priceCell(p) {
@@ -235,8 +247,7 @@ const hostedDesk = (ctx) => Boolean(ctx.state.session && ctx.state.session.hoste
 
 // One model's state for one project: its grade, or why there is none.
 function providerCell(ctx, p, prov) {
-  const staleDays = ctx.state.index.settings.freshness.research_stale_days || 90;
-  const b = gradeBadge(prov, p.providers && p.providers[prov], p.research && p.research.providers && p.research.providers[prov], { staleDays, hosted: hostedDesk(ctx), button: true, key: `gb-${p.project_id}-${prov}` });
+  const b = gradeBadge(prov, p.providers && p.providers[prov], p.research && p.research.providers && p.research.providers[prov], { ...badgeOpts(ctx, prov), button: true, key: `gb-${p.project_id}-${prov}` });
   b.addEventListener('mouseenter', () => schedulePreview(ctx, p.project_id, prov, b));
   b.addEventListener('mouseleave', () => scheduleHide());
   b.addEventListener('focus', () => {
@@ -465,12 +476,13 @@ export function kindWord(a) {
   return ALWAYS_VISIBLE[a.kind] || KIND_WORDS[a.kind] || (String(a.kind || '').startsWith('portfolio_') ? 'Portfolio' : a.severity === 'high' ? 'Urgent' : 'Review');
 }
 
-// A model's missing setup, in brief (the full list is in its title and in Settings).
+// What the optional background API of a model still needs, in brief (the
+// full list is in its title and in Settings). Manual research needs none of it.
 export function setupShort(reason) {
   const r = String(reason || '');
-  if (/API key/.test(r)) return 'Setup required: no API key';
+  if (/API key/.test(r)) return 'Automatic: no API key (optional)';
   const n = r.replace(/^not configured:\s*/, '').split(/,\s*(?![^(]*\))/).filter(Boolean).length;
-  return n ? `Setup required: ${n} setting${n === 1 ? '' : 's'} missing` : 'Setup required';
+  return n ? `Automatic: ${n} setting${n === 1 ? '' : 's'} missing (optional)` : 'Automatic: not set up (optional)';
 }
 
 function alertList(items, keyPrefix) {
@@ -490,17 +502,18 @@ function reviewList(items) {
 
 // ---- status strip --------------------------------------------------------------
 
-// Each model's research route, counted: automatic (an API key and limits are
-// set), setup required (its research waits for its assistant or a pasted
-// answer) or demo fixtures.
-export function readinessSummary(providers) {
-  const list = PROVIDERS.map((p) => ({ provider: p, mode: providers && providers[p] ? providers[p].mode : null, reason: providers && providers[p] ? providers[p].reason || null : null }));
+// Each model's research route, counted: automatic (its paid API runs in the
+// background), manual (its own assistant when you ask, or a pasted answer:
+// nothing to set up), on hold (paused by you), or demo fixtures.
+export function readinessSummary(providers, held = {}) {
+  const list = PROVIDERS.map((p) => ({ provider: p, mode: held && held[p] ? 'hold' : providers && providers[p] ? providers[p].mode : null, reason: providers && providers[p] ? providers[p].reason || null : null, hold: (held && held[p]) || null }));
   const n = (mode) => list.filter((x) => x.mode === mode).length;
   const parts = [];
   if (n('api')) parts.push(n('api') === PROVIDERS.length ? 'all automatic' : `${n('api')} automatic`);
-  if (n('manual')) parts.push(`${n('manual')} need${n('manual') === 1 ? 's' : ''} setup`);
+  if (n('manual')) parts.push(n('manual') === PROVIDERS.length ? 'all manual' : `${n('manual')} manual`);
+  if (n('hold')) parts.push(`${list.filter((x) => x.mode === 'hold').map((x) => PROVIDER_LABELS[x.provider]).join(', ')} on hold`);
   if (n('mock')) parts.push(n('mock') === PROVIDERS.length ? 'demo adapters' : `${n('mock')} demo`);
-  return { list, text: parts.join(' · ') || 'unknown', setup: n('manual') };
+  return { list, text: parts.join(' · ') || 'unknown', setup: 0 };
 }
 
 function stripItem(key, parts, { warn = false, extra = null, ico = null } = {}) {
@@ -515,9 +528,7 @@ let toggleStrip = () => {};
 function previewContent(ctx, p, prov) {
   const rep = p.providers && p.providers[prov];
   const job = p.research && p.research.providers && p.research.providers[prov];
-  const staleDays = ctx.state.index.settings.freshness.research_stale_days || 90;
-  const hosted = hostedDesk(ctx);
-  const info = badgeInfo(prov, rep, job, { staleDays, hosted });
+  const info = badgeInfo(prov, rep, job, badgeOpts(ctx, prov));
   const riskLabels = Object.fromEntries((ctx.state.index.rubrics.grading.risk_scores || []).map((x) => [x.id, x.label.replace(/ risk$/i, '')]));
   const rows = [];
   const add = (k, v) => { if (v !== null && v !== undefined && v !== '') rows.push(h('dt', null, k), h('dd', null, v)); };
@@ -683,6 +694,73 @@ function evidenceLine(rep, prov) {
       h('button', { type: 'button', class: 'link', dataset: { key: `ev-jump-${prov}` }, onclick: () => { const d = document.querySelector(`[data-key="insp-evd-${prov}"]`); if (d) { d.open = true; d.scrollIntoView({ block: 'start' }); } } }, 'See the flags')));
 }
 
+// The badge options for one model: staleness, the online desk, and whether
+// Eric put the model on hold.
+function badgeOpts(ctx, prov) {
+  return { staleDays: ctx.state.index.settings.freshness.research_stale_days || 90, hosted: hostedDesk(ctx), onHold: Boolean(onHoldOf(ctx.state.index, prov)) };
+}
+
+// The latest report when it is a revision of an earlier save for the same
+// run: what kind, on what evidence, the model's own reason, and which report
+// the run itself links (revisions.js). Every original stays saved and listed.
+function revisionLine(rep, pid, prov) {
+  const rv = rep && rep.revision;
+  if (!rv || rv.kind !== 'revision') return null;
+  const who = PROVIDER_LABELS[prov];
+  const head = rv.basis === 'existing_evidence' ? 'Revision using existing evidence'
+    : rv.basis === 'new_sources' ? `Revision with ${rv.sources.added} new source${rv.sources.added === 1 ? '' : 's'}`
+      : 'Re-saved with the same scores';
+  const link = rep.run_link && rep.run_link.report_id && rep.run_link.report_id !== rep.report_id ? rep.run_link.report_id : null;
+  return h('details', { class: 'rev-line', dataset: { key: `rev-${pid}-${prov}` } },
+    h('summary', null, h('span', { class: 'rev-mark', 'aria-hidden': 'true' }, '↺'), h('span', null, h('strong', null, head), ` · ${who} saved this ${rv.minutes_after} min after its earlier report for the same run`)),
+    h('div', { class: 'rev-body' },
+      h('p', null, rep.revision_label),
+      rv.declared ? null : h('p', { class: 'muted' }, 'No reason was recorded with this save: it was saved before a reason was asked for. Nothing is guessed in its place.'),
+      link ? h('p', { class: 'muted' }, `The research run still links the first save (${link}); this view shows the latest. Both are kept.`) : null,
+      h('a', { class: 'small', href: `#/project/${encodeURIComponent(pid)}/reports?report=${encodeURIComponent(rv.of)}`, dataset: { key: `rev-of-${pid}-${prov}` } }, 'Open the earlier report')));
+}
+
+// A stated analysis time after the save (or more than a day ahead) is shown
+// as written, and the desk orders the report by its save time.
+function timingNote(rep) {
+  const t = rep && rep.analysis_timing;
+  if (!t || !['after_save', 'future'].includes(t.status)) return null;
+  const when = t.minutes_after_save !== null && t.minutes_after_save < 2880 ? `${t.minutes_after_save} min` : 'more than a day';
+  return h('p', { class: 'newer-line' }, `The report states an analysis time ${when} after it was saved. It is shown as written and ordered by its save time.`);
+}
+
+// Resume research that stopped: the sentence for the model's own assistant,
+// copied, and that assistant opened. Nothing changes here until the assistant
+// itself saves a draft or its report.
+const RESUME_WHERE = { claude: 'In Cowork (or a Claude chat with the CryptoResearch connector)', chatgpt: 'In a ChatGPT chat with the CryptoResearch app turned on' };
+const RESUME_OPEN = { claude: 'https://claude.ai/new', chatgpt: 'https://chatgpt.com/' };
+function resumeAction(ctx, p, prov, job, info) {
+  if (!job || !RESUME_WHERE[prov] || onHoldOf(ctx.state.index, prov)) return null;
+  const stalled = info.kind === 'interrupted' || info.job === 'interrupted';
+  const released = job.state === 'unconfigured' && (job.released || job.draft_saved_at);
+  if (!stalled && !released) return null;
+  const sentence = `Resume my CryptoResearch research on ${p.name}`;
+  const b = button('Resume', null, { kind: 'small', key: `resume-${p.project_id}-${prov}` });
+  b.setAttribute('aria-label', `Resume ${PROVIDER_LABELS[prov]}'s research: copy the sentence and open ${PROVIDER_LABELS[prov]}`);
+  b.onclick = async () => {
+    try { await copyText(sentence); } catch (_) { /* shown below */ }
+    if (hostedDesk(ctx)) window.open(RESUME_OPEN[prov], '_blank', 'noopener');
+    toast(`Copied: “${sentence}”. ${RESUME_WHERE[prov]}, paste it. This job shows Working again only when ${PROVIDER_LABELS[prov]} saves a draft or its report.`);
+  };
+  const since = job.progress_at || job.draft_saved_at || job.updated_at;
+  return h('div', { class: 'resume' }, b,
+    h('span', { class: 'small muted' }, `${released ? 'Released back to waiting' : 'Paused'}${since ? ` · last activity ${fmtDateTime(since)}` : ''}${job.draft_saved_at ? ` · draft saved ${fmtDateTime(job.draft_saved_at)}` : ' · no draft saved'}`));
+}
+
+// The report's highest downside scores, in one line beside the grade
+// (higher means more risk); the model's own strongest risks follow the bars.
+function riskTeaser(ctx, rep) {
+  const labels = Object.fromEntries((ctx.state.index.rubrics.grading.risk_scores || []).map((x) => [x.id, x.label.replace(/ risk$/i, '')]));
+  const risks = ((rep && rep.top_risks) || []).filter((r) => r.status === 'scored' || r.status === 'range');
+  if (!risks.length) return null;
+  return h('p', { class: 'ig-risk' }, h('span', { class: 'k' }, 'Downside'), risks.map((r) => `${labels[r.id] || r.id} ${r.status === 'range' ? `${r.low}–${r.high}` : r.value}`).join(' · '), h('span', { class: 'faint' }, ' (higher is worse)'));
+}
+
 // ---- project inspector: the scorecard first --------------------------------------
 
 // The model the inspector opens on: a calculated grade first, then any saved
@@ -709,18 +787,16 @@ function selectTab(ctx, pid, prov, { focus = true } = {}) {
 // One tab per model, each with that model's state as its badge shows it: the
 // grade, Withheld, No report, or what its research is doing.
 function modelTabs(ctx, p, sel) {
-  const staleDays = ctx.state.index.settings.freshness.research_stale_days || 90;
-  const hosted = hostedDesk(ctx);
   const list = h('div', { class: 'mtabs', role: 'tablist', 'aria-label': 'Model' }, PROVIDERS.map((prov) => {
     const rep = p.providers && p.providers[prov];
     const job = p.research && p.research.providers && p.research.providers[prov];
-    const info = badgeInfo(prov, rep, job, { staleDays, hosted });
+    const info = badgeInfo(prov, rep, job, badgeOpts(ctx, prov));
     const on = prov === sel;
     return h('button', {
       type: 'button', role: 'tab', id: `insp-tab-${prov}`, class: 'mtab', 'aria-selected': String(on), 'aria-controls': 'insp-model', tabindex: on ? '0' : '-1',
       'aria-label': info.text.replace(/[.\s]+$/, ''), dataset: { key: `insp-tab-${prov}` }, onclick: () => selectTab(ctx, p.project_id, prov),
     }, h('span', { class: 'mt-name', 'aria-hidden': 'true' }, PROVIDER_LABELS[prov]),
-    gradeBadge(prov, rep, job, { staleDays, hosted }));
+    gradeBadge(prov, rep, job, badgeOpts(ctx, prov)));
   }));
   list.addEventListener('keydown', (e) => {
     const i = PROVIDERS.indexOf(sel);
@@ -737,12 +813,14 @@ function modelTabs(ctx, p, sel) {
 function modelHead(ctx, p, prov) {
   const rep = p.providers && p.providers[prov];
   const job = p.research && p.research.providers && p.research.providers[prov];
-  const staleDays = ctx.state.index.settings.freshness.research_stale_days || 90;
   const hosted = hostedDesk(ctx);
-  const info = badgeInfo(prov, rep, job, { staleDays, hosted });
+  const opts = badgeOpts(ctx, prov);
+  const info = badgeInfo(prov, rep, job, opts);
   const pid = p.project_id;
   const who = PROVIDER_LABELS[prov];
+  const anchors = ctx.state.index.rubrics.grading.favorable_anchors || [];
   const actions = [];
+  const resume = resumeAction(ctx, p, prov, job, info);
   if (job && job.state === 'failed') {
     const retry = button('Retry', null, { kind: 'small', key: `retry-${pid}-${prov}` });
     retry.onclick = async () => {
@@ -759,24 +837,36 @@ function modelHead(ctx, p, prov) {
     actions.push(retry);
   }
   // A waiting job (no API runs it): on the online desk, the sentence for its
-  // assistant first; pasting by hand stays available.
-  if (job && job.state === 'unconfigured') actions.push(...waitingActions(ctx, { pid, runId: job.run_id, provider: prov, key: `${pid}-${prov}` }));
-  if (job && ['interrupted', 'uncertain', 'incomplete'].includes(info.job || info.kind)) actions.push(h('a', { class: 'btn small', href: `#/project/${encodeURIComponent(pid)}/research`, dataset: { key: `runs-${pid}-${prov}` } }, 'Research runs'));
-  if (!rep && !job) actions.push(button(`Run ${who} research`, () => openResearchDialog(ctx, p, { providers: [prov] }), { kind: 'small', key: `run-${pid}-${prov}` }));
-  // The report's verdict, analysis date and horizon, in one quiet line.
+  // assistant first; pasting by hand stays available. A model on hold gets
+  // no prompt to act: its job is kept, not handed out.
+  if (job && job.state === 'unconfigured' && !opts.onHold && !resume) actions.push(...waitingActions(ctx, { pid, runId: job.run_id, provider: prov, key: `${pid}-${prov}` }));
+  if (job && ['interrupted', 'uncertain', 'incomplete', 'held'].includes(info.job || info.kind)) actions.push(h('a', { class: 'btn small', href: `#/project/${encodeURIComponent(pid)}/research`, dataset: { key: `runs-${pid}-${prov}` } }, 'Research runs'));
+  if (!rep && !job && p.status !== 'archived' && !opts.onHold) actions.push(button(`Run ${who} research`, () => openResearchDialog(ctx, p, { providers: [prov] }), { kind: 'small', key: `run-${pid}-${prov}` }));
+  // The report's verdict, analysis date and horizon, in one quiet line. The
+  // age is in calendar days in New York ("yesterday", not "today").
+  const rel = rep ? fmtRelDay(rep.analysis_at) : null;
   const facts = rep ? h('p', { class: 'ig-facts' },
     h('span', null, verdictChip(rep.verdict)),
-    h('span', null, h('span', { class: 'k' }, 'Analysis'), fmtDate(rep.analysis_at), info.age ? h('span', { class: 'faint' }, ` · ${info.age} ago`.replace('today ago', 'today')) : null, info.stale ? h('span', { class: 'freshness stale' }, ' · stale') : null),
+    h('span', null, h('span', { class: 'k' }, 'Analysis'), fmtDate(rep.analysis_at), rel ? h('span', { class: 'faint' }, ` · ${rel}`) : null, info.stale ? h('span', { class: 'freshness stale' }, ' · stale') : null),
     h('span', null, h('span', { class: 'k' }, 'Horizon'), rep.horizon || 'not stated')) : null;
   const top = (extra = null) => h('div', { class: 'ig-top' }, h('span', { class: 'eyebrow' }, 'Investment grade'), extra);
+  // The six weighted parts the grade is calculated from, one tap away
+  // (filled from the full record); the category grades below are diagnostics.
+  const parts = rep && !rep.needs_text ? h('details', { class: 'ig-parts', dataset: { key: `ig-parts-${pid}-${prov}` } },
+    h('summary', null, h('span', null, 'Made from six weighted parts'), h('span', { class: 'faint' }, ' · 20/25/20/15/10/10')),
+    h('div', { dataset: { slot: `grade-${prov}` } }, skeleton('Loading the six weighted parts'))) : null;
   let body;
   if (rep && (info.kind === 'grade' || info.kind === 'range')) {
+    const word = anchorText(anchors, rep.grade.status === 'range' ? { status: 'range', low: rep.grade.low, high: rep.grade.high } : { status: 'scored', value: rep.grade.value });
     body = h('div', { class: 'ig' },
-      top(h('span', { class: 'ig-how' }, 'calculated here from six weighted components')),
+      top(h('span', { class: 'ig-how' }, 'calculated here, not by the model')),
       h('div', { class: 'ig-row' },
-        h('div', { class: `provider-grade${bandClass(rep.grade)}${info.ev === 'serious' ? ' ev-serious' : ''}` }, h('span', { class: 'big' }, rep.grade.display), rep.grade.label ? h('span', { class: 'lab', 'aria-label': `letter ${rep.grade.label}` }, rep.grade.label) : null, h('span', { class: 'small muted' }, info.kind === 'range' ? 'range, of 100' : 'of 100')),
+        h('div', { class: `provider-grade${bandClass(rep.grade)}${info.ev === 'serious' ? ' ev-serious' : ''}` }, h('span', { class: 'big' }, rep.grade.display), rep.grade.label ? h('span', { class: 'lab', 'aria-label': `letter ${rep.grade.label}` }, rep.grade.label) : null,
+          h('span', { class: 'aw' }, word ? `${word}${info.kind === 'range' ? ' · a range' : ''}` : info.kind === 'range' ? 'a range, of 100' : 'of 100')),
         gradeMeter(rep.grade, { serious: info.ev === 'serious' })),
-      facts);
+      facts,
+      riskTeaser(ctx, rep),
+      parts);
   } else if (rep && info.kind === 'pdf') {
     body = h('div', { class: 'ig' }, top(),
       h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, 'PDF saved: needs a text copy')),
@@ -791,25 +881,30 @@ function modelHead(ctx, p, prov) {
     const checks = rep.structure && rep.structure.flagged && Array.isArray(rep.structure.flags) ? rep.structure.flags.length : 0;
     body = h('div', { class: 'ig withheld' }, top(),
       h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, rep.grade && rep.grade.status === 'withheld' ? withheldLabel(pct) : 'No grade')),
-      coverageMeter(pct),
-      why ? h('div', { class: 'ig-missing' }, h('h4', null, 'Missing from the grade'), h('p', null, `${why.why.charAt(0).toUpperCase()}${why.why.slice(1)}. No grade is calculated from part of the weight.`), unscoredList(why)) : null,
+      coverageMeter(pct, { compact: true }),
+      why ? h('div', { class: 'ig-missing' }, h('h4', null, 'Not scored, in the model\'s words'), unscoredList(why)) : null,
       // Parts left unscored while the same report scores related ground.
       checks ? h('details', { class: 'ig-check', dataset: { key: `ig-check-${pid}-${prov}` } }, h('summary', null, icon('warn-line'), h('span', null, h('strong', null, 'Check'), ` · ${checks} note${checks === 1 ? '' : 's'} on how this report scored`)), structureNotes(rep.structure)) : null,
-      h('p', { class: 'ig-open' }, h('a', { class: 'btn small', href: `#/project/${encodeURIComponent(pid)}/reports?report=${encodeURIComponent(rep.report_id)}`, dataset: { key: `withheld-report-${pid}-${prov}` } }, `Open ${who}'s saved report`)),
-      facts);
+      facts,
+      riskTeaser(ctx, rep),
+      parts);
   } else {
-    const key = jobKey(job);
+    const key = jobKey(job, null, { onHold: opts.onHold });
     const st = researchState(info.kind, { provider: prov, hosted });
+    const hold = onHoldOf(ctx.state.index, prov);
     body = h('div', { class: 'ig none' }, top(),
       h('p', { class: 'ig-none-title' }, `No report from ${who}`),
-      key ? h('p', { class: 'small', style: { margin: '4px 0 0' } }, stateText(info.kind === 'waiting' && hosted ? 'Waiting for you' : st.long, st.tone)) : h('p', { class: 'small muted', style: { margin: '4px 0 0' } }, `${who} has not been asked to research this project.`),
+      key ? h('p', { class: 'small', style: { margin: '4px 0 0' } }, stateText(info.kind === 'waiting' && hosted ? 'Waiting for you' : st.long, st.tone)) : h('p', { class: 'small muted', style: { margin: '4px 0 0' } }, hold ? `${who} is on hold on this desk${hold.since ? ` since ${fmtDate(hold.since)}` : ''}: nothing new is assigned to it.` : `${who} has not been asked to research this project.`),
       job && job.error ? h('p', { class: 'small', style: { margin: '6px 0 0', color: 'var(--neg)' } }, job.error) : null);
   }
   return h('div', { class: 'mhead' },
     body,
     rep ? evidenceLine(rep, prov) : null,
+    rep ? revisionLine(rep, pid, prov) : null,
+    rep ? timingNote(rep) : null,
     rep && info.newerText ? h('p', { class: `newer-line${info.problem ? ' problem' : ''}` }, info.newerText) : null,
     rep && rep.model_total && rep.model_total.status === 'mismatch' ? h('p', { class: 'newer-line problem' }, rep.model_total.message) : null,
+    resume,
     actions.length ? h('div', { class: 'btn-row mhead-actions' }, actions) : null);
 }
 
@@ -838,6 +933,8 @@ function modelPanel(ctx, p, prov) {
   return h('div', { class: 'mpanel', id: 'insp-model', role: 'tabpanel', 'aria-labelledby': `insp-tab-${prov}` },
     modelHead(ctx, p, prov),
     rep && !rep.needs_text ? h('div', { dataset: { slot: `cats-${prov}` } }, catsSkeleton()) : null,
+    // The model's strongest risks, right after the bars (never behind them).
+    rep && !rep.needs_text ? h('div', { dataset: { slot: `risks-${prov}` } }) : null,
     rep ? h('div', { class: 'mfoot' },
       details('Evidence and sources', h('div', { dataset: { slot: `evidence-${prov}` } }, skeleton('Loading the evidence checks')), { id: `insp-evd-${prov}` }),
       details('Timing, risks and the report', timingFacts(ctx, p, prov), { id: `insp-timing-${prov}` }),
@@ -904,13 +1001,16 @@ function researchProgress(ctx, p) {
   const ready = (idx.research && idx.research.providers) || {};
   const items = PROVIDERS.map((prov) => {
     const job = p.research && p.research.providers && p.research.providers[prov];
-    const key = jobKey(job);
+    const hold = onHoldOf(idx, prov);
+    const key = jobKey(job, null, { onHold: Boolean(hold) });
     const st = key ? researchState(key, { provider: prov, hosted }) : null;
     const r = ready[prov];
     const rep = p.providers && p.providers[prov];
-    // What is missing matters only where research waits for it.
-    const how = r && r.mode === 'manual' && (key === 'waiting' || (!key && !rep)) ? h('span', { class: 'how', title: r.reason || null }, setupShort(r.reason), ' · ', h('a', { href: '#/settings?tab=research', dataset: { key: `setup-${prov}` } }, 'Settings'))
-      : r && r.mode === 'mock' && !key ? h('span', { class: 'how' }, 'Fictional demo adapter') : null;
+    // Manual research (its assistant, when you ask) is said apart from the
+    // optional background API and from a model on hold.
+    const how = hold && (key === 'on_hold' || !key) ? h('span', { class: 'how' }, `On hold on this desk${hold.since ? ` since ${fmtDate(hold.since)}` : ''}: nothing new is assigned to it`)
+      : r && r.mode === 'manual' && (key === 'waiting' || (!key && !rep)) ? h('span', { class: 'how', title: r.reason || null }, hosted ? 'Manual: its own assistant does it when you ask' : 'Manual: paste the prompt, import the answer', ' · ', h('a', { href: '#/settings?tab=research', dataset: { key: `setup-${prov}` } }, setupShort(r.reason)))
+        : r && r.mode === 'mock' && !key ? h('span', { class: 'how' }, 'Fictional demo adapter') : null;
     // A report saved outside a run (imported or pasted) still counts.
     const idle = rep ? stateText(`Report saved${rep.analysis_at ? ` (analysis ${fmtDate(rep.analysis_at)})` : ''}`, 'ok') : h('span', { class: 'faint' }, 'Not requested');
     return h('li', null, h('span', { class: 'who' }, PROVIDER_LABELS[prov]),
@@ -930,28 +1030,130 @@ function researchProgress(ctx, p) {
 // model, with the tab it concerns one tap away: a possibly billed call, a
 // failed or incomplete answer, an assistant that stopped. Then the project's
 // other review items, and the identity when it is not confirmed.
-const PROBLEM_WORDS = { uncertain: 'Check charge', failed: 'Research failed', incomplete: 'Research incomplete', interrupted: 'Research paused' };
+// One short line per model, each opening its tab: the model's own tab says the
+// rest (its badge and its card carry the same state in words).
+const PROBLEM_WORDS = { uncertain: 'Check charge', failed: 'Research failed', incomplete: 'Research incomplete', interrupted: 'Research paused', held: 'Held, not sent' };
 const JOB_KINDS = new Set(['research_uncertain', 'research_failed', 'research_incomplete', 'research_interrupted', 'identity']);
 const projectItems = (ctx, p) => (ctx.state.index.attention || []).filter((a) => a.project_id === p.project_id && !JOB_KINDS.has(a.kind));
 function problemLines(ctx, p) {
-  const hosted = hostedDesk(ctx);
   const items = [];
   for (const prov of PROVIDERS) {
     const job = p.research && p.research.providers && p.research.providers[prov];
-    const key = jobKey(job);
+    const key = jobKey(job, null, { onHold: Boolean(onHoldOf(ctx.state.index, prov)) });
     if (!PROBLEM_WORDS[key]) continue;
-    const st = researchState(key, { provider: prov, hosted });
-    items.push(h('li', { class: `alert ${key === 'uncertain' ? 'high' : 'medium'}` },
-      h('span', { class: 'kind' }, PROBLEM_WORDS[key]),
-      h('span', { class: 't' }, PROVIDER_LABELS[prov], h('span', { class: 'd' }, st.long)),
-      h('button', { type: 'button', class: 'small', dataset: { key: `insp-show-${prov}` }, onclick: () => selectTab(ctx, p.project_id, prov) }, `Show ${PROVIDER_LABELS[prov]}`)));
+    items.push(h('li', null, h('button', { type: 'button', class: `pline ${key === 'uncertain' ? 'high' : 'medium'}`, dataset: { key: `insp-show-${prov}` }, onclick: () => selectTab(ctx, p.project_id, prov) },
+      icon(key === 'uncertain' ? 'question' : key === 'failed' ? 'alert' : key === 'held' ? 'minus' : key === 'incomplete' ? 'half' : 'pause'),
+      h('span', null, h('strong', null, PROBLEM_WORDS[key]), ` · ${PROVIDER_LABELS[prov]}`),
+      h('span', { class: 'go', 'aria-hidden': 'true' }, 'Show'))));
   }
   const others = alertList(splitAttention(projectItems(ctx, p)).critical, `palert-${p.project_id}`);
   const idNote = p.identity_status !== 'verified'
     ? h('p', { class: 'small insp-idnote' }, h('strong', null, 'Identity pending: '), (p.identity_unknowns || []).join(' ') || 'The token is not confirmed, so no prices or holdings use it.', ' ', h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/research`, dataset: { key: `fix-identity-${p.project_id}` } }, 'Complete the identity'))
     : null;
   if (!items.length && !others && !idNote) return null;
-  return h('div', { class: 'insp-problems' }, items.length ? h('ul', { class: 'alerts', 'aria-label': 'Research that needs you' }, items) : null, others, idNote);
+  return h('div', { class: 'insp-problems' }, items.length ? h('ul', { class: 'plines', 'aria-label': 'Research that needs you' }, items) : null, others, idNote);
+}
+
+// Archived: said first, with Restore. Nothing was deleted.
+function archivedBanner(ctx, p) {
+  if (p.status !== 'archived') return null;
+  const a = p.archive || {};
+  const restore = button('Restore', null, { kind: 'small', key: `restore-${p.project_id}` });
+  restore.onclick = () => restoreProject(ctx, p, restore);
+  return h('div', { class: 'insp-archived', role: 'note' }, icon('minus'),
+    h('span', null, h('strong', null, 'Archived'), a.archived_at ? ` ${fmtDate(a.archived_at)}` : '', a.reason ? `: ${a.reason}` : '', '. Off your lists; its reports, notes, runs and any holding are kept.'),
+    restore);
+}
+
+async function restoreProject(ctx, p, btn = null) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await ctx.api.post(`/api/projects/${encodeURIComponent(p.project_id)}/restore`, {});
+    toast(`Restored ${p.name}${r.on_watchlist ? ', back on your watchlist' : ''}. Nothing was started or sent.${(r.held_jobs || []).length ? ' Research held while it was archived stays unsent until you send it.' : ''}`);
+    await ctx.refresh();
+  } catch (err) {
+    toast(err.message, 'bad');
+    if (btn) btn.disabled = false;
+  }
+}
+
+// Archive: no confirmation, an Undo in the notice, Restore under the Archived
+// filter. A request already sent to a paid model may still finish and be billed.
+async function archiveProject(ctx, p) {
+  try {
+    const r = await ctx.api.post(`/api/projects/${encodeURIComponent(p.project_id)}/archive`, { reason: 'Archived from the dashboard' });
+    const sent = (r.sent_jobs || []).length;
+    toast(`Archived ${p.name}. It is off your watchlist; its reports, notes and any holding are kept.${sent ? ` ${sent} request${sent === 1 ? '' : 's'} already sent to a paid model may still finish and be billed.` : ''}`, '', { action: { label: 'Undo', key: `undo-archive-${p.project_id}`, onClick: () => restoreProject(ctx, p) } });
+    await ctx.refresh();
+  } catch (err) {
+    toast(err.message, 'bad');
+  }
+}
+
+// The inspector's secondary actions in one menu (a button with a list of
+// menu items): Up/Down move, Escape closes and returns to the button.
+function inspectorMenu(ctx, p) {
+  const pid = p.project_id;
+  const archived = p.status === 'archived';
+  const btn = h('button', { type: 'button', class: 'more quiet', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-label': `More actions for ${p.name}`, title: 'More actions', dataset: { key: 'panel-more' } }, icon('more'));
+  const list = h('div', { class: 'insp-menu', role: 'menu', 'aria-label': `Actions for ${p.name}`, hidden: true });
+  const item = (label, fn, { key, desc = null, href = null } = {}) => {
+    const el = href
+      ? h('a', { role: 'menuitem', href, tabindex: '-1', dataset: { key } }, h('span', null, label), desc ? h('span', { class: 'desc' }, desc) : null)
+      : h('button', { type: 'button', role: 'menuitem', tabindex: '-1', dataset: { key } }, h('span', null, label), desc ? h('span', { class: 'desc' }, desc) : null);
+    el.addEventListener('click', () => { close(false); if (fn) fn(); });
+    return el;
+  };
+  const watch = async () => {
+    try {
+      await ctx.api.post(`/api/projects/${encodeURIComponent(pid)}/watchlist`, { on: !p.on_watchlist });
+      await ctx.refresh();
+    } catch (err) { toast(err.message, 'bad'); }
+  };
+  const reviewed = async () => {
+    try {
+      await ctx.api.post(`/api/projects/${encodeURIComponent(pid)}/reviewed`, {});
+      toast('Marked reviewed. New changes are counted from now.');
+      await ctx.refresh();
+    } catch (err) { toast(err.message, 'bad'); }
+  };
+  const items = [
+    item('Full research page', null, { key: `menu-full-${pid}`, href: `#/project/${encodeURIComponent(pid)}/overview` }),
+    archived ? null : item('Run research…', () => openResearchDialog(ctx, p), { key: 'menu-research' }),
+    archived ? null : item(p.on_watchlist ? 'Stop watching' : 'Watch', watch, { key: 'menu-watch', desc: p.on_watchlist ? 'On your watchlist now' : null }),
+    p.sector ? item('Change sector', () => openSectorDialog(ctx, p), { key: 'menu-sector', desc: p.sector.label }) : null,
+    item('Mark reviewed', reviewed, { key: 'menu-reviewed' }),
+    p.held ? item('Holding in Portfolio', null, { key: 'menu-held', href: '#/portfolio' }) : null,
+    archived
+      ? item('Restore', () => restoreProject(ctx, p), { key: 'menu-restore', desc: 'Back as it was, with its history' })
+      : item('Archive', () => archiveProject(ctx, p), { key: 'menu-archive', desc: 'Off your lists; nothing is deleted. Undo right after.' }),
+  ].filter(Boolean);
+  list.append(...items);
+  const onDoc = (e) => { if (!list.contains(e.target) && e.target !== btn && !btn.contains(e.target)) close(false); };
+  function open() {
+    list.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    items[0].focus();
+    setTimeout(() => document.addEventListener('click', onDoc), 0);
+  }
+  function close(focusBack = true) {
+    if (list.hidden) return;
+    list.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('click', onDoc);
+    if (focusBack) btn.focus();
+  }
+  btn.onclick = (e) => { e.stopPropagation(); if (list.hidden) open(); else close(); };
+  list.addEventListener('keydown', (e) => {
+    const i = items.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+    else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
+    else if (e.key === 'End') { e.preventDefault(); items[items.length - 1].focus(); }
+    else if (e.key === 'Tab') close(false);
+  });
+  return h('div', { class: 'insp-more-wrap' }, btn, list);
 }
 
 // Price, size and trading, with how fresh they are, in one line under the
@@ -961,12 +1163,13 @@ function headMarket(p) {
   if (!m) return h('p', { class: 'hmarket' }, h('span', { class: 'hm-none' }, `No price: ${(noPriceReason(p) || 'unknown').toLowerCase()}`));
   const f = freshnessText(m.status, m.age_minutes);
   const fresh = m.status === 'fresh';
+  // Short keys; their full names are each value's title and label.
   return h('p', { class: 'hmarket' },
     h('span', { class: 'hm-price' }, fmtPrice(m.price_usd)),
-    typeof m.change_24h_pct === 'number' ? h('span', { class: 'hm-chg' }, changeCell(m.change_24h_pct, { label: 'over 24 hours' }), h('span', { class: 'k' }, '24H')) : null,
-    typeof m.market_cap_usd === 'number' ? h('span', { class: 'hm-fact' }, h('span', { class: 'k' }, 'Mkt cap'), fmtCompactUsd(m.market_cap_usd)) : null,
-    typeof m.volume_24h_usd === 'number' ? h('span', { class: 'hm-fact' }, h('span', { class: 'k' }, 'Vol 24h'), fmtCompactUsd(m.volume_24h_usd)) : null,
-    h('span', { class: `hm-fresh ${fresh ? 'ok' : 'warn'}`, title: `${m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Fictional demo data' : `Source: ${m.source || 'CoinGecko'}`}, as of ${fmtDateTime(m.as_of)}` }, fresh ? `Updated ${fmtAgo(m.fetched_at || m.as_of)}` : f.text));
+    typeof m.change_24h_pct === 'number' ? h('span', { class: 'hm-chg', title: 'Price change over 24 hours' }, changeCell(m.change_24h_pct, { label: 'over 24 hours' }), h('span', { class: 'k' }, '24h')) : null,
+    typeof m.market_cap_usd === 'number' ? h('span', { class: 'hm-fact', title: 'Market cap (CoinGecko)' }, h('span', { class: 'k', 'aria-hidden': 'true' }, 'MC'), h('span', { class: 'sr-only' }, 'Market cap '), fmtCompactUsd(m.market_cap_usd)) : null,
+    typeof m.volume_24h_usd === 'number' ? h('span', { class: 'hm-fact', title: 'Trading volume over 24 hours (CoinGecko)' }, h('span', { class: 'k', 'aria-hidden': 'true' }, 'Vol'), h('span', { class: 'sr-only' }, '24-hour volume '), fmtCompactUsd(m.volume_24h_usd)) : null,
+    h('span', { class: `hm-fresh ${fresh ? 'ok' : 'warn'}`, title: `${m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Fictional demo data' : `Source: ${m.source || 'CoinGecko'}`}, as of ${fmtDateTime(m.as_of)}` }, fresh ? fmtAgo(m.fetched_at || m.as_of) : f.text));
 }
 
 // Detail state inside the inspector, kept across a redraw: scroll positions,
@@ -1039,20 +1242,6 @@ function renderPanel(ctx, pid) {
   const m = mkt(p);
   const closeBtn = h('button', { type: 'button', class: 'close quiet', 'aria-label': `Close ${p.name} details`, title: 'Close (Esc)', dataset: { key: 'panel-close' } }, '×');
   closeBtn.onclick = () => closePanel(ctx);
-  const watchBtn = button(p.on_watchlist ? 'Watching' : 'Watch', null, { kind: 'small', key: 'panel-watch' });
-  watchBtn.setAttribute('aria-pressed', String(Boolean(p.on_watchlist)));
-  watchBtn.title = p.on_watchlist ? 'On your watchlist. Click to stop watching.' : 'Add to your watchlist';
-  watchBtn.onclick = async () => {
-    watchBtn.disabled = true;
-    try {
-      await ctx.api.post(`/api/projects/${encodeURIComponent(pid)}/watchlist`, { on: !p.on_watchlist });
-      await ctx.refresh();
-    } catch (err) {
-      toast(err.message, 'bad');
-      watchBtn.disabled = false;
-    }
-  };
-  const researchBtn = button('Run research', () => openResearchDialog(ctx, p), { kind: 'small', key: 'panel-research' });
   const reviewedBtn = button('Mark reviewed', null, { kind: 'small', key: 'panel-reviewed' });
   reviewedBtn.onclick = async () => {
     reviewedBtn.disabled = true;
@@ -1072,15 +1261,12 @@ function renderPanel(ctx, pid) {
     ? { class: `panel${reopened ? ' entering' : ''}`, role: 'dialog', 'aria-modal': 'false', 'aria-labelledby': 'panel-title' }
     : { class: `panel${reopened ? ' entering' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'panel-title' },
     h('div', { class: 'panel-head' },
-      h('div', { class: 'ph-row' }, logo(p, { size: 40 }),
+      h('div', { class: 'ph-row' }, logo(p, { size: 36 }),
         h('div', { class: 'names' }, heading, headMarket(p)),
+        inspectorMenu(ctx, p),
         closeBtn)),
     h('div', { class: 'panel-body', 'data-keep-scroll': 'panel' },
-      h('div', { class: 'ph-meta' },
-        h('span', { class: `idn ${p.identity_status === 'verified' ? 'ok' : 'pending'}`, title: (p.identity_unknowns || []).join(' ') || null }, p.identity_status === 'verified' ? 'Identity verified' : 'Identity pending'),
-        p.sector ? h('button', { type: 'button', class: 'link', dataset: { key: 'panel-sector' }, 'aria-label': `Sector: ${p.sector.label}. Change sector`, onclick: () => openSectorDialog(ctx, p) }, p.sector.label) : null,
-        p.held ? h('a', { href: '#/portfolio', class: 'small', dataset: { key: 'panel-held' } }, 'Held: see Portfolio') : null,
-        h('span', { class: 'ph-actions' }, h('a', { class: 'btn small quiet-btn', href: `#/project/${encodeURIComponent(pid)}/overview`, dataset: { key: `open-research-${pid}` } }, 'Full research'), researchBtn, watchBtn)),
+      archivedBanner(ctx, p),
       problemLines(ctx, p),
       h('section', { class: 'scorecard', 'aria-label': 'Research scorecard' },
         modelTabs(ctx, p, sel),
@@ -1444,7 +1630,7 @@ export function renderWatchlist(ctx, route) {
       items.push(stripItem('market', [h('span', { class: 'k' }, demo ? 'BTC (demo)' : 'BTC'), h('span', { class: 'v' }, `$${Math.round(snap.bitcoin.price_usd).toLocaleString('en-US')}`), changeCell(snap.bitcoin.change_7d_pct, { label: 'Bitcoin over 7 days' }), h('span', { class: 'k' }, '7D'), breadth, mc.status === 'stale' ? h('span', { class: 'warn-word' }, 'stale') : null], { warn: mc.status === 'stale', ico: 'coin' }));
     }
     if (idx.research && idx.research.providers) {
-      const rs = readinessSummary(idx.research.providers);
+      const rs = readinessSummary(idx.research.providers, (idx.settings.research || {}).on_hold || {});
       items.push(stripItem('models', [h('span', { class: 'k' }, 'Models'), h('span', { class: 'v' }, rs.text)], { warn: rs.setup > 0, ico: 'models' }));
     }
     if (rest.length) {
@@ -1467,13 +1653,14 @@ export function renderWatchlist(ctx, route) {
     } else if (view.strip === 'market') {
       body = [marketStrip(idx)];
     } else if (view.strip === 'models') {
-      const rs = readinessSummary(idx.research && idx.research.providers);
+      const rs = readinessSummary(idx.research && idx.research.providers, (idx.settings.research || {}).on_hold || {});
       const hosted = hostedDesk(ctx);
       body = [h('h2', null, 'Research models'),
         h('ul', { class: 'ready-list' }, rs.list.map((x) => h('li', null, h('span', { class: 'who' }, PROVIDER_LABELS[x.provider]),
           h('span', null, x.mode === 'api' ? stateText('Automatic: runs on its API in the background, within your limits', 'ok')
             : x.mode === 'mock' ? stateText('Fictional demo adapter')
-              : h('span', { title: x.reason || null }, stateText(`${setupShort(x.reason)}. Its research ${hosted ? 'waits for its assistant or a pasted answer' : 'waits for a pasted answer'}`, 'warn')))))),
+              : x.mode === 'hold' ? stateText(`On hold${x.hold.since ? ` since ${fmtDate(x.hold.since)}` : ''}: nothing new is assigned; its waiting jobs are kept`)
+                : h('span', { title: x.reason || null }, stateText(hosted ? 'Manual: its own assistant researches when you ask it (nothing to set up)' : 'Manual: paste the prompt into it and import the answer'), h('span', { class: 'block faint small' }, setupShort(x.reason))))))),
         h('p', { style: { marginTop: '8px' } }, h('a', { href: '#/settings?tab=research', dataset: { key: 'ss-settings' } }, 'Models and budget settings'))];
     } else if (view.strip === 'review') {
       body = [h('h2', null, `To review (${rest.length})`), reviewList(rest)];

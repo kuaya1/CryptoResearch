@@ -71,7 +71,7 @@ const ACTIONS = {
   archive_project: {
     effect: 'archive_project',
     run: (ws, a) => projects.archiveProject(ws, a.project_id, a.reason),
-    outcome: (r) => ok(r.noop ? 'unchanged' : 'done'),
+    outcome: (r) => ok(r.noop || r.status === 'unchanged' ? 'unchanged' : 'done'),
   },
   import_report_text: {
     effect: 'ingest_report',
@@ -88,7 +88,7 @@ const ACTIONS = {
     run: (ws) => inbox.scanInbox(ws),
     outcome: (r) => {
       const c = r.counts || {};
-      const problems = (c.failed || 0) + (c.needs_project || 0) + (c.prompt || 0) + (c.provider_mismatch || 0) + (c.error || 0);
+      const problems = (c.failed || 0) + (c.needs_project || 0) + (c.prompt || 0) + (c.provider_mismatch || 0) + (c.run_mismatch || 0) + (c.error || 0);
       return ok((c.ingested || 0) > 0 ? 'done' : 'unchanged', `${c.ingested || 0} imported, ${c.duplicate || 0} duplicate, ${problems} need attention, ${c.waiting || 0} still being written.`);
     },
   },

@@ -54,7 +54,11 @@ const MAX_FAILS_TOTAL = 100;
 // ChatGPT and Gemini run in the provider's background (Responses background
 // mode, Interactions background execution) and are collected by ID, so a
 // deploy or restart never strands a paid request.
-const HOSTED_DEFAULTS_VERSION = 4;
+const HOSTED_DEFAULTS_VERSION = 5;
+// Gemini is on hold for the 2026-10-04 milestone (Eric's decision): nothing
+// new is assigned to it; its saved reports and waiting jobs stay. Lifted in
+// Settings (research.on_hold.gemini set to null), and never put back then.
+const GEMINI_HOLD = { since: '2026-10-04', reason: 'On hold for this milestone (Eric, 2026-10-04): Gemini\'s connector route has not completed a job since Oct 3, and it is not being troubleshot now.' };
 const CHATGPT_DEFAULTS = { model: 'gpt-6.1-sol', input_usd_per_mtok: 2, output_usd_per_mtok: 10, search_usd_per_call: 0.01, max_searches: 10, search_result_tokens_estimate: 8000, effort: 'high' };
 const GEMINI_DEFAULTS = { model: 'gemini-3.1-pro-preview', input_usd_per_mtok: 2, output_usd_per_mtok: 12, search_usd_per_call: 0.014, search_billing: 'per_query', max_searches: 20, effort: 'high' };
 // What v3 proposed, to recognize settings nobody has changed since.
@@ -118,6 +122,11 @@ const DEFAULT_UPGRADES = {
     ['research.background_deadline_minutes', undefined, 60],
     ['market_data.foreground_interval_minutes', undefined, 15],
     ['market_data.foreground_interval_minutes', 5, 15],
+  ],
+  // v5 (2026-10-04): Gemini on hold on the desk that has its backlog. A desk
+  // set up later starts without a hold.
+  5: [
+    ['research.on_hold.gemini', undefined, GEMINI_HOLD],
   ],
 };
 // A setting still exactly as an earlier version wrote it (objects compared by value).

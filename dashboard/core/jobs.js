@@ -108,7 +108,7 @@ async function runJobBody(ws, name, trigger) {
     case 'inbox': {
       const r = require('./inbox').scanInbox(ws);
       const c = r.counts;
-      const failed = (c.failed || 0) + (c.needs_project || 0) + (c.prompt || 0) + (c.provider_mismatch || 0) + (c.error || 0);
+      const failed = (c.failed || 0) + (c.needs_project || 0) + (c.prompt || 0) + (c.provider_mismatch || 0) + (c.run_mismatch || 0) + (c.error || 0);
       const imported = c.ingested || 0;
       return {
         status: failed ? 'attention' : imported || c.duplicate ? 'ok' : 'noop',

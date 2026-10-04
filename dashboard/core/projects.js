@@ -233,6 +233,22 @@ function addProject(ws, input) {
   const dup = findDuplicates(ws, input);
   if (dup.strong.length) {
     const existing = dup.strong[0];
+    // An archived project with this identity is offered back (Restore), never
+    // duplicated and never quietly put on the watchlist while still hidden.
+    if (existing.status === 'archived') {
+      const p = loadProject(ws, existing.project_id) || {};
+      const when = p.archive && p.archive.archived_at ? ` on ${String(p.archive.archived_at).slice(0, 10)}` : '';
+      return {
+        status: 'archived',
+        project_id: existing.project_id,
+        matched_on: existing.reasons,
+        other_matches: dup.strong.slice(1),
+        archived_reason: (p.archive && p.archive.reason) || p.archived_reason || null,
+        message: `Already in the workspace as "${existing.project_id}" (${existing.reasons.join(', ')}), archived${when}. Nothing was added or changed. Restore it to bring it back with its reports, notes and history.`,
+        files: [],
+        verified: true,
+      };
+    }
     let watchlist = null;
     if (input.watchlist !== false) watchlist = setWatchlist(ws, existing.project_id, true);
     return {
@@ -377,12 +393,51 @@ function setHeadline(ws, id, { report_id = null, entry_id = null, note = null, c
   });
 }
 
+// Archiving hides a project from the watchlist, the discovery and waiting
+// queues and its research reminders. Nothing is deleted: its reports, notes,
+// runs and transactions stay, a token still held stays in Portfolio with its
+// price, and Restore brings it back under the same ID. Research that was never
+// sent is held (research.holdUnsentJobs) and stays held after a restore until
+// Eric sends it; a request already sent to a paid model can still finish, be
+// saved and be billed. What it was before (status, watching) is kept on the
+// record, so Restore returns it as it was.
 function archiveProject(ws, id, reason) {
-  return mutateProject(ws, id, 'archive_project', `Archive ${id}`, (p) => {
+  const out = mutateProject(ws, id, 'archive_project', `Archive ${id}`, (p) => {
+    if (p.status === 'archived') return { already: true };
+    const now = new Date().toISOString();
+    p.archive = { archived_at: now, reason: reason || null, by: ws.actor || null, prior_status: p.status || null, prior_on_watchlist: Boolean(p.watchlist && p.watchlist.on_watchlist) };
     p.status = 'archived';
     p.archived_reason = reason || null;
-    p.watchlist = { ...(p.watchlist || {}), on_watchlist: false, removed_at: new Date().toISOString() };
+    p.watchlist = { ...(p.watchlist || {}), on_watchlist: false, removed_at: now };
+    return { already: false };
   });
+  if (out.result && out.result.already) return { status: 'unchanged', project_id: id, message: 'Already archived.', files: [], verified: true };
+  const research = require('./research');
+  const held = research.holdUnsentJobs(ws, id, 'archived');
+  const inFlight = research.listRuns(ws, id).flatMap((r) => (r.broken ? [] : Object.values(r.jobs || {}).filter((j) => ['dispatching', 'uncertain'].includes(j.state)).map((j) => ({ run_id: r.run_id, provider: j.provider, state: j.state }))));
+  return { ...out, status: 'archived', project_id: id, held_jobs: held, sent_jobs: inFlight };
+}
+
+// Restore: the same project, ID and history, back as it was before it was
+// archived (its identity decides active or pending; watching as you had it).
+// It starts nothing: research held while it was archived stays held until
+// you send it, and nothing paid is sent again.
+function restoreProject(ws, id) {
+  const out = mutateProject(ws, id, 'restore_project', `Restore ${id}`, (p) => {
+    if (p.status !== 'archived') return { already: true };
+    const now = new Date().toISOString();
+    const a = p.archive || { archived_at: (p.watchlist && p.watchlist.removed_at) || null, reason: p.archived_reason || null, prior_on_watchlist: true };
+    p.archive_history = [...(p.archive_history || []), { archived_at: a.archived_at || null, reason: a.reason || null, by: a.by || null, restored_at: now, restored_by: ws.actor || null }];
+    delete p.archive;
+    delete p.archived_reason;
+    p.status = p.identity && p.identity.status === 'verified' ? 'active' : 'pending_identity';
+    const watch = a.prior_on_watchlist !== false;
+    p.watchlist = watch ? { on_watchlist: true, added_at: (p.watchlist && p.watchlist.added_at) || now, removed_at: null } : { ...(p.watchlist || {}), on_watchlist: false };
+    return { already: false, watching: watch };
+  });
+  if (out.result && out.result.already) return { status: 'unchanged', project_id: id, message: 'Not archived.', files: [], verified: true };
+  const held = require('./research').heldJobsOf(ws, id);
+  return { ...out, status: 'restored', project_id: id, on_watchlist: out.result.watching, held_jobs: held };
 }
 
 function updateProjectFields(ws, id, fields) {
@@ -438,6 +493,7 @@ module.exports = {
   updateIdentity,
   setHeadline,
   archiveProject,
+  restoreProject,
   updateProjectFields,
   markReviewed,
   generatePrompts,

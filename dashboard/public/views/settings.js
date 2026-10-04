@@ -104,11 +104,20 @@ function generalTab(ctx) {
 // A model's research route, as readiness reports it: automatic on its API,
 // or setup required (what is missing in the tooltip and below the label) and
 // meanwhile waiting for its assistant (online desk) or a pasted answer (PC).
-function routeCell(m, hostedDesk) {
+// Three things kept apart: a model on hold (paused by you), automatic research
+// on its paid API, and manual research (its own assistant when you ask, or a
+// pasted answer: nothing to set up); the optional API's missing setup is a
+// note, not a warning.
+function routeCell(ctx, p, m, hostedDesk) {
   if (!m) return h('span', { class: 'faint' }, '—');
+  if (m.on_hold) {
+    const lift = button('Lift the hold', null, { kind: 'small', key: `lift-hold-${p}` });
+    lift.onclick = action(lift, async () => { await ctx.api.post('/api/settings', { research: { on_hold: { [p]: null } } }); await ctx.refresh(); return true; }, `${PROVIDER_LABELS[p]} is no longer on hold`);
+    return h('span', null, stateText(`On hold since ${m.on_hold.since || '?'}`), h('div', { class: 'small muted' }, m.on_hold.reason || 'Nothing new is assigned; waiting jobs are kept.'), h('div', { style: { marginTop: '6px' } }, lift));
+  }
   if (m.route === 'automatic') return h('span', null, stateText('Automatic (API)', 'ok'), m.reservation_usd !== null ? h('div', { class: 'small muted' }, `about ${fmtUsd(m.reservation_usd)} reserved per attempt`) : null);
   if (m.route === 'demo') return stateText('Fictional demo adapter');
-  return h('span', { title: m.setup || '' }, stateText(`Setup required · ${hostedDesk ? 'waits for its assistant' : 'paste by hand'}`, 'warn'), h('div', { class: 'small muted' }, m.setup_short || ''));
+  return h('span', { title: m.setup || '' }, stateText(hostedDesk ? 'Manual · its assistant, when you ask' : 'Manual · paste by hand'), h('div', { class: 'small muted' }, `Automatic route (optional): ${m.setup_short || 'not set up'}`));
 }
 const fmtUsd = (x) => `$${x > 0 && x < 0.1 ? x.toFixed(4) : x.toFixed(2)}`;
 
@@ -159,7 +168,7 @@ async function researchTab(ctx) {
   const form = h('form', null,
     table([
       { label: 'Model', render: (p) => h('strong', null, PROVIDER_LABELS[p]) },
-      { label: 'Route', render: (p) => routeCell(ready && ready.models[p], hostedDesk) },
+      { label: 'Route', render: (p) => routeCell(ctx, p, ready && ready.models[p], hostedDesk) },
       { label: 'API key', render: (p) => { const st = info.providers[p] || {}; return st.key && st.key.present ? `Present (${st.key.source || st.key.how || 'configured'})` : h('span', { class: 'faint' }, 'Not set'); } },
       { label: 'Model ID', render: (p) => inputs[p].model },
       { label: 'Input $/1M tok', render: (p) => inputs[p].inp },

@@ -92,6 +92,7 @@ function nextStep(ctx, res, model) {
   switch (res.status) {
     case 'needs_project': return 'The report did not say which project it is about. Choose the project above and select Import report again; the saved copy is reused.';
     case 'provider_mismatch': return `The report names a different model than ${PROVIDER_LABELS[model]}. If it really came from that model, choose it above and import again. Otherwise resolve it on the Inbox tab, where the conflict stays recorded.`;
+    case 'run_mismatch': return 'The report names another run, prompt, profile or horizon than the research run you chose (each is listed above). Nothing was linked and the job is still open. Import it against the run it answers, or fix the report\'s JSON block and import it again.';
     case 'prompt': return `This is the analysis prompt, not an answer. Run it in ${PROVIDER_LABELS[model]} and paste the answer here. The prompt copy can be set aside on the Inbox tab.`;
     case 'failed': return 'Fix the text (or the file) and import it again. The saved copy stays on the Inbox tab until it is imported or set aside.';
     case 'set_aside': return 'To import it anyway, choose its project above and select Import report again.';
@@ -284,7 +285,7 @@ function fixControls(ctx, f) {
   return h('div', null, h('div', { class: 'actions' }, f.status === 'needs_project' ? proj : null, retry, view, aside), h('div', { id: holderId }));
 }
 
-const INBOX_STATUS = { new: ['Waiting', ''], prompt: ['A prompt, not a report', 'warn'], needs_project: ['Needs a project', 'warn'], provider_mismatch: ['Model label conflict', 'warn'], failed: ['Not imported', 'bad'] };
+const INBOX_STATUS = { new: ['Waiting', ''], prompt: ['A prompt, not a report', 'warn'], needs_project: ['Needs a project', 'warn'], provider_mismatch: ['Model label conflict', 'warn'], run_mismatch: ['Does not match its run', 'warn'], failed: ['Not imported', 'bad'] };
 
 function inboxTab(ctx) {
   const idx = ctx.state.index;

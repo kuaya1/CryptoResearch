@@ -237,10 +237,16 @@ test('prose saved against a research run is graded under the run\'s rubric and p
   assert.match(loose.grade.reason, /does not declare a rubric version/);
 });
 
-test('what a report states itself is never replaced by its run\'s values', (t) => {
+test('what a report states itself is never replaced by its run\'s values: against that run it is refused field by field; on its own it is kept as written', (t) => {
   const ws = workspace(t, 'tol-own');
   const run = research.createRun(ws, { project_id: PID, providers: ['claude'] }).run;
-  const r = importOne(ws, report(clone()), { runId: run.run_id });
+  const text = report(clone());
+  const refused = inbox.importContent(ws, 'claude', { content: text, projectId: PID, runId: run.run_id });
+  assert.equal(refused.result.status, 'run_mismatch');
+  assert.match(refused.result.message, new RegExp(`prompt_version: the report says "cr-research-prompt@1", the run's is "${run.prompt.version}"`));
+  assert.match(refused.result.message, /horizon: the report says "24 months", the run's is "/);
+  assert.notEqual(research.loadRun(ws, PID, run.run_id).jobs.claude.state, 'completed', 'the job is not completed by it');
+  const r = importOne(ws, text);
   assert.equal(r.a.horizon, '24 months', 'the report\'s own horizon');
   assert.equal(r.a.prompt_version, 'cr-research-prompt@1');
   assert.equal(r.a.fields_from_run, undefined);

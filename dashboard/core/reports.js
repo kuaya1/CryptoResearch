@@ -1410,8 +1410,49 @@ function isEligible(r) {
   return !r.broken && !(r.assessment.eligibility && r.assessment.eligibility.excluded);
 }
 
+// When a report says it was analyzed, checked against when the desk saved it.
+// A report cannot be analyzed after it was saved; a clock a few minutes off
+// is allowed (skew), and so is a calendar date a day ahead (a model writing in
+// a time zone east of UTC). The stated time is never changed: a time after the
+// save is flagged and the desk orders the report by its save time instead; one
+// more than a day after the save is materially impossible (a connected model's
+// save of it is refused, binding.js). A date-time with a UTC offset is compared
+// as the instant it names; one without any zone is read in the most lenient
+// zone (UTC+14) and said to have none.
+const ANALYSIS_SKEW_MINUTES = 10;
+const ANALYSIS_IMPOSSIBLE_HOURS = 24;
+function analysisTiming(analysisAt, savedAt) {
+  const s = typeof analysisAt === 'string' ? analysisAt.trim() : '';
+  if (!s) return { status: 'unknown', zone: null, minutes_after_save: null, normalized: null };
+  const saved = Date.parse(savedAt || '');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    if (!Number.isFinite(saved)) return { status: 'ok', zone: 'date', minutes_after_save: null, normalized: s };
+    const latest = new Date(saved + 86400000).toISOString().slice(0, 10);
+    return { status: s > latest ? 'future' : 'ok', zone: 'date', minutes_after_save: null, normalized: s };
+  }
+  const m = s.match(/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?\s*(Z|[+-]\d{2}:?\d{2})?$/i);
+  if (!m) return { status: Number.isNaN(Date.parse(s)) ? 'unreadable' : 'ok', zone: null, minutes_after_save: null, normalized: null };
+  const zone = m[1] ? (/^z$/i.test(m[1]) ? 'utc' : 'offset') : 'none';
+  const iso = s.replace(' ', 'T');
+  const t = zone === 'none' ? Date.parse(`${iso}Z`) - 14 * 3600000 : Date.parse(iso);
+  if (!Number.isFinite(t)) return { status: 'unreadable', zone, minutes_after_save: null, normalized: null };
+  const normalized = zone === 'none' ? null : new Date(t).toISOString();
+  if (!Number.isFinite(saved)) return { status: 'ok', zone, minutes_after_save: null, normalized };
+  const after = Math.round((t - saved) / 60000);
+  const status = after > ANALYSIS_IMPOSSIBLE_HOURS * 60 ? 'future' : after > ANALYSIS_SKEW_MINUTES ? 'after_save' : 'ok';
+  return { status, zone, minutes_after_save: after > 0 ? after : 0, normalized };
+}
+
+// Newest first by when the report was analyzed. A time with a UTC offset
+// sorts as the instant it names; a stated time after the save sorts at the
+// save time, so a mistyped or invented stamp cannot keep a report "latest".
 function reportSortKey(r) {
-  return `${r.assessment.analysis_at || ''}|${r.meta.imported_at || ''}`;
+  const a = r.assessment.analysis_at || '';
+  const timing = a ? analysisTiming(a, r.meta.imported_at) : null;
+  const key = timing && (timing.status === 'after_save' || timing.status === 'future') && r.meta.imported_at
+    ? r.meta.imported_at
+    : timing && timing.zone === 'offset' && timing.normalized ? timing.normalized : a;
+  return `${key}|${r.meta.imported_at || ''}`;
 }
 
 module.exports = {
@@ -1439,6 +1480,7 @@ module.exports = {
   loadReports,
   isEligible,
   reportSortKey,
+  analysisTiming,
   promptSignals,
   safeUrl,
 };

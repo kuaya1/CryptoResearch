@@ -263,6 +263,49 @@ test('restore drill: a backup or package made while a background request was sub
   assert.equal(fs.existsSync(dest3), false, 'nothing written');
 });
 
+test('restore drill (2026-10-04): a copy holding an uncertain paid attempt and a job held unsent by an archived project restores with hashes and records reconciled, and the restored desk sends no request at all', async (t) => {
+  withEnv(t, { OPENAI_API_KEY: 'test-key-not-real-o', GEMINI_API_KEY: undefined, GOOGLE_API_KEY: undefined });
+  const { root, cleanup } = tempWorkspace('offsite-drill-uncertain');
+  t.after(cleanup);
+  let ws = openWorkspace({ root, actor: 'test' });
+  const pid = addFixtureProject(ws).project_id;
+  const file = path.join(root, 'config', 'settings.json');
+  const s = readJson(file);
+  s.research = { providers: { chatgpt: { model: 'gpt-test-model', input_usd_per_mtok: 2, output_usd_per_mtok: 10, search_usd_per_call: 0.01, max_searches: 5, effort: 'high' } }, budget: { per_run_usd: 20, daily_usd: 50, monthly_usd: 100 }, max_output_tokens: 20000 };
+  atomicWrite(file, jsonText(s));
+  ws = openWorkspace({ root, actor: 'test' });
+  // One request that may have been billed with no answer (uncertain), and a
+  // second project archived while its request was still queued (held, unsent).
+  const run = research.createRun(ws, { project_id: pid, providers: ['chatgpt'] }).run;
+  const runFile = path.join(root, 'projects', pid, 'research', run.run_id, 'run.json');
+  const doc = readJson(runFile);
+  doc.jobs.chatgpt.state = 'uncertain';
+  doc.jobs.chatgpt.attempts = [{ n: 1, attempt_id: 'att_drill_uncertain', phase: 'uncertain', reservation_usd: 0.5, dispatched_at: '2026-10-04T12:00:00Z' }];
+  atomicWrite(runFile, jsonText(doc));
+  const other = projects.addProject(ws, { name: 'Second Example (FICTIONAL)', official_website: 'https://second.example/', coingecko_id: 'second-example-fictional', evidence: [{ url: 'https://second.example/' }] }).project_id;
+  const run2 = research.createRun(ws, { project_id: other, providers: ['chatgpt'] }).run;
+  assert.equal(research.loadRun(ws, other, run2.run_id).jobs.chatgpt.state, 'queued');
+  projects.archiveProject(ws, other, 'FICTIONAL drill');
+  const pkg = exporter.exportPackage(ws);
+  const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-offsite-restored-u-'));
+  t.after(() => fs.rmSync(dest, { recursive: true, force: true, maxRetries: 5 }));
+  fs.rmdirSync(dest);
+  const restored = exporter.restorePackage(JSON.parse(JSON.stringify(pkg)), dest);
+  assert.equal(restored.status, 'restored_and_verified', JSON.stringify(restored));
+  // Every file of the package is in the copy, byte for byte.
+  for (const f of pkg.files) assert.equal(sha256(fs.readFileSync(path.join(dest, ...f.path.split('/')))), f.sha256, f.path);
+  const ws2 = openWorkspace({ root: dest, actor: 'test' });
+  assert.deepEqual(projects.listProjects(ws2).map((p) => [p.project_id, p.status]).sort(), [[other, 'archived'], [pid, 'active']].sort());
+  assert.equal(research.loadRun(ws2, pid, run.run_id).jobs.chatgpt.state, 'uncertain');
+  assert.equal(research.loadRun(ws2, other, run2.run_id).jobs.chatgpt.hold.why, 'archived');
+  const calls = [];
+  const out = await research.runDueJobs(ws2, { fetchImpl: async (url, opts = {}) => { calls.push(`${opts.method || 'GET'} ${url}`); throw new Error('FICTIONAL: no network in the drill'); } });
+  assert.deepEqual(calls, [], 'no request of any kind: the uncertain attempt is never resent and the held job is never sent');
+  assert.ok(!out.results.length, JSON.stringify(out.results));
+  assert.equal(research.loadRun(ws2, pid, run.run_id).jobs.chatgpt.state, 'uncertain', 'still waiting for Eric to reconcile it');
+  assert.equal(research.spendSoFar(ws2).uncertain_attempts, 1, 'and still counted against the limits');
+});
+
 // Review v3, finding 2: backup status said "backup" for same-disk snapshots
 // and showed nothing on a PC with no offsite copy. It now reports three
 // separate things, and only a verified copy on another machine counts as one.

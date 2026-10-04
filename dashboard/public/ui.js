@@ -31,7 +31,17 @@ export const RESEARCH_STATE = {
   failed: { short: 'Failed', long: 'Failed: nothing was saved for this model', tone: 'bad' },
   canceled: { short: 'Canceled', long: 'Canceled: nothing was saved for this model', tone: '' },
   completed: { short: 'Saved', long: 'Saved as a report', tone: 'ok' },
+  // Eric paused the model: its waiting job is kept and nothing new is assigned.
+  on_hold: { short: 'On hold', long: 'On hold: this model is paused on this desk. Its waiting job is kept and is not handed out; nothing new is assigned to it', tone: '' },
+  // Queued for a paid API, never sent, because its project was archived.
+  held: { short: 'Held', long: 'Held, not sent: the project was archived before this request was sent. It is sent only if you send it again', tone: 'warn' },
 };
+
+// A model Eric put on hold (settings research.on_hold), from the index.
+export function onHoldOf(index, provider) {
+  const h = index && index.settings && index.settings.research && index.settings.research.on_hold;
+  return h && h[provider] && typeof h[provider] === 'object' ? h[provider] : null;
+}
 
 // Work in progress (the ↻ "newer research" mark), and the states of a newer
 // run that the saved grade must not hide (the "!" mark).
@@ -234,21 +244,68 @@ export function fmtAgo(s) {
   return `${Math.round(hr / 24)} days ago`;
 }
 
-export function daysSince(s) {
+// The calendar day of an instant in New York (YYYY-MM-DD).
+const dayET = (t) => new Date(t).toLocaleDateString('en-CA', { timeZone: TZ });
+
+// Calendar days since a date or date-time, counted in New York: something
+// analyzed yesterday evening is "yesterday" this morning, not "today".
+export function daysSince(s, now = Date.now()) {
   if (!s) return null;
-  const t = Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T12:00:00Z` : s);
-  return Number.isNaN(t) ? null : Math.max(0, Math.floor((Date.now() - t) / 86400000));
+  let day = null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) day = s;
+  else {
+    const t = Date.parse(s);
+    if (Number.isNaN(t)) return null;
+    day = dayET(t);
+  }
+  const diff = Math.round((Date.parse(`${dayET(now)}T12:00:00Z`) - Date.parse(`${day}T12:00:00Z`)) / 86400000);
+  return Number.isNaN(diff) ? null : Math.max(0, diff);
 }
 
-// Compact analysis age for badges: today, 6d, 3w, 4mo, 1y.
-export function fmtAge(s) {
-  const d = daysSince(s);
+// Compact analysis age for badges: today, 1d, 6d, 3w, 4mo, 1y.
+export function fmtAge(s, now = Date.now()) {
+  const d = daysSince(s, now);
   if (d === null) return null;
   if (d < 1) return 'today';
   if (d < 14) return `${d}d`;
   if (d < 60) return `${Math.round(d / 7)}w`;
   if (d < 365) return `${Math.round(d / 30)}mo`;
   return `${Math.round(d / 365)}y`;
+}
+
+// The same in words, for a date line: today, yesterday, 5 days ago.
+export function fmtRelDay(s, now = Date.now()) {
+  const d = daysSince(s, now);
+  if (d === null) return null;
+  if (d === 0) return 'today';
+  if (d === 1) return 'yesterday';
+  if (d < 60) return `${d} days ago`;
+  return null;
+}
+
+// The rubric's own words for a score (cr-grading favorable anchors, for
+// example 40–59 "Weak"), never a word the rubric does not define.
+export function anchorWord(anchors, v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || !Array.isArray(anchors)) return null;
+  for (const a of anchors) {
+    const m = String((a && a.band) || '').match(/^(\d+)\s*-\s*(\d+)$/);
+    if (m && n >= Number(m[1]) && n < Number(m[2]) + 1) return String(a.meaning || '').split('.')[0].trim() || null;
+  }
+  return null;
+}
+
+// "Weak", or "Weak to adequate or mixed" for a range across two bands.
+export function anchorText(anchors, s) {
+  if (!s) return null;
+  if (s.status === 'scored' || typeof s.value === 'number') return anchorWord(anchors, s.value);
+  if (s.status === 'range' || (typeof s.low === 'number' && typeof s.high === 'number')) {
+    const lo = anchorWord(anchors, s.low);
+    const hi = anchorWord(anchors, s.high);
+    if (!lo || !hi) return lo || hi;
+    return lo === hi ? lo : `${lo} to ${hi.charAt(0).toLowerCase()}${hi.slice(1)}`;
+  }
+  return null;
 }
 
 // ---- small components ----------------------------------------------------
@@ -476,13 +533,15 @@ export function coworkIdleMinutes(job, runCreatedAt = null) {
 // its attempts.
 const lastOutcome = (job) => job.outcome || (Array.isArray(job.attempts) && job.attempts.length ? job.attempts[job.attempts.length - 1].outcome || null : null);
 
-export function jobKey(job, runCreatedAt = null) {
+export function jobKey(job, runCreatedAt = null, { onHold = false } = {}) {
   if (!job) return null;
   if (job.state === 'running' && isAssistantJob(job)) {
     const idle = coworkIdleMinutes(job, runCreatedAt);
     return idle !== null && idle >= COWORK_IDLE_MINUTES ? 'interrupted' : job.mode;
   }
-  if (job.state === 'unconfigured') return 'waiting';
+  if (job.state === 'unconfigured') return onHold ? 'on_hold' : 'waiting';
+  if (job.state === 'queued' && job.hold) return 'held';
+  if (job.state === 'queued' && onHold) return 'on_hold';
   // An answer that arrived but stopped before finishing is its own state,
   // apart from a request that failed outright.
   if (job.state === 'failed' && lastOutcome(job) === 'incomplete') return 'incomplete';
@@ -510,17 +569,17 @@ function newerRunText(provider, key, job) {
 // Evidence flags on a report: on its claims, and on category grades that lack
 // the evidence the prompt asks for beside them (core/evidence.js).
 export function evidenceLevel(ev) {
-  if (!ev || !(ev.flagged || ev.flagged_categories)) return null;
+  if (!ev || !(ev.flagged || ev.flagged_categories || ev.flagged_other)) return null;
   if (ev.high > 0) return 'serious';
   if (ev.medium > 0) return 'material';
   return null;
 }
 
 export function evidenceText(ev) {
-  if (!ev || !(ev.flagged || ev.flagged_categories)) return null;
+  if (!ev || !(ev.flagged || ev.flagged_categories || ev.flagged_other)) return null;
   const n = ev.flagged || 0;
   const c = ev.flagged_categories || 0;
-  const what = [n ? `${n} claim${n === 1 ? '' : 's'}` : null, c ? `${c} category grade${c === 1 ? '' : 's'}` : null].filter(Boolean).join(' and ');
+  const what = [n ? `${n} claim${n === 1 ? '' : 's'}` : null, c ? `${c} category grade${c === 1 ? '' : 's'}` : null, ev.flagged_other ? 'scenario probabilities' : null].filter(Boolean).join(' and ');
   return `${what} flagged by evidence checks${ev.high ? ` (${ev.high} serious)` : ev.medium ? ` (${ev.medium} material)` : ''}`;
 }
 
@@ -540,10 +599,14 @@ const SVG_ICONS = {
   hatch: [['rect', { x: '2', y: '2', width: '12', height: '12', rx: '2.5', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.4', 'stroke-dasharray': '2 1.6' }], ['path', { d: 'M5 11 11 5M2.8 8.2 8.2 2.8M7.8 13.2l5.4-5.4', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.1' }]],
   // An answer that stopped part-way: a half-filled circle.
   half: [['circle', { cx: '8', cy: '8', r: '6.2', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5' }], ['path', { d: 'M8 1.8a6.2 6.2 0 0 0 0 12.4Z', fill: 'currentColor' }]],
+  // Paused on purpose (a model on hold, work held unsent): a bar in a circle.
+  minus: [['circle', { cx: '8', cy: '8', r: '6.2', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5' }], ['path', { d: 'M5.2 8h5.6', stroke: 'currentColor', 'stroke-width': '1.6', 'stroke-linecap': 'round' }]],
+  // More actions.
+  more: [['circle', { cx: '3.5', cy: '8', r: '1.4', fill: 'currentColor' }], ['circle', { cx: '8', cy: '8', r: '1.4', fill: 'currentColor' }], ['circle', { cx: '12.5', cy: '8', r: '1.4', fill: 'currentColor' }]],
 };
 
 // The sign for each research state on a badge.
-const STATE_ICON = { none: 'none', withheld: 'hatch', pdf: 'file', queued: 'clock', waiting: 'key', interrupted: 'pause', uncertain: 'question', incomplete: 'half', failed: 'alert', canceled: 'slash' };
+const STATE_ICON = { none: 'none', withheld: 'hatch', pdf: 'file', queued: 'clock', waiting: 'key', interrupted: 'pause', uncertain: 'question', incomplete: 'half', failed: 'alert', canceled: 'slash', on_hold: 'minus', held: 'minus' };
 const WORKING_KINDS = new Set(['running', 'dispatching', 'cowork', 'connector']);
 
 // The grade ruler: 0 to 100 with the rubric's letter bands (F below 60, then
@@ -561,10 +624,13 @@ export function gradeMeter(g, { serious = false } = {}) {
 
 // A withheld grade's coverage, the share of the investment weight the report
 // scored; the rest is hatched. The words say what it is and what it is not.
-export function coverageMeter(pct) {
+export function coverageMeter(pct, { compact = false } = {}) {
   if (typeof pct !== 'number') return null;
-  return h('div', { class: 'coverage-meter' },
-    h('div', { class: 'track', 'aria-hidden': 'true' }, h('div', { class: 'fill', style: { width: `${Math.max(0, Math.min(100, pct))}%` } })),
+  const track = h('div', { class: 'track', 'aria-hidden': 'true' }, h('div', { class: 'fill', style: { width: `${Math.max(0, Math.min(100, pct))}%` } }));
+  // Compact (the inspector): the meaning in one line; the full sentence is
+  // in "How these grades work".
+  if (compact) return h('div', { class: 'coverage-meter' }, track, h('div', { class: 'lbl' }, `${pct}% of the investment weight scored: not research progress, not the score. No grade is calculated from part of the weight.`));
+  return h('div', { class: 'coverage-meter' }, track,
     h('div', { class: 'lbl' }, `${pct}% coverage · no grade is calculated from part of the weight`),
     h('div', { class: 'lbl muted' }, COVERAGE_MEANS));
 }
@@ -575,13 +641,13 @@ export function icon(name) {
   return svg('svg', { viewBox: '0 0 16 16', width: '16', height: '16', 'aria-hidden': 'true', focusable: 'false' }, ...parts.map(([tag, attrs]) => svg(tag, attrs)));
 }
 
-export function badgeInfo(provider, report, job, { staleDays = 90, hosted = false } = {}) {
+export function badgeInfo(provider, report, job, { staleDays = 90, hosted = false, onHold = false } = {}) {
   const who = PROVIDER_LABELS[provider];
-  const key = jobKey(job);
+  const key = jobKey(job, null, { onHold });
   if (report) {
     // A newer run (started after this report was saved) shows on the saved
     // grade: ↻ while it works, ! when it failed, needs a check or stalled.
-    const newer = Boolean(key && !['completed', 'canceled'].includes(key) && job.run_created_at && report.imported_at && job.run_created_at > report.imported_at);
+    const newer = Boolean(key && !['completed', 'canceled', 'on_hold'].includes(key) && job.run_created_at && report.imported_at && job.run_created_at > report.imported_at);
     const g = report.grade || {};
     const age = daysSince(report.analysis_at);
     const stale = age !== null && age > staleDays;
@@ -771,11 +837,27 @@ export function link(text, href, attrs = {}) {
   return h('a', { href, ...attrs }, text);
 }
 
-export function toast(message, kind = '') {
+// A short notice. With an action (Undo), it stays longer and carries the
+// button; the same action is always reachable elsewhere on the page too.
+export function toast(message, kind = '', { action = null, ms = null } = {}) {
   const box = document.getElementById('toast');
-  const el = h('div', { class: kind }, message);
+  const el = h('div', { class: `${kind}${action ? ' with-action' : ''}`.trim() }, h('span', null, message));
+  if (action) {
+    const b = h('button', { type: 'button', class: 'toast-action', dataset: { key: action.key || 'toast-action' } }, action.label);
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        await action.onClick();
+        el.remove();
+      } catch (err) {
+        b.disabled = false;
+        toast(err.message, 'bad');
+      }
+    };
+    el.appendChild(b);
+  }
   box.appendChild(el);
-  setTimeout(() => el.remove(), kind === 'bad' ? 9000 : 4500);
+  setTimeout(() => el.remove(), ms || (action ? 12000 : kind === 'bad' ? 9000 : 4500));
 }
 
 // Screen-reader announcement for changes that happen without a page change.

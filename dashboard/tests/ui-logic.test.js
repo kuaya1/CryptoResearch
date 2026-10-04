@@ -350,16 +350,62 @@ test('attention: a possibly billed call, blocked research and recovery problems 
   assert.equal(wl.kindWord({ kind: 'portfolio_shortfall', severity: 'medium' }), 'Portfolio');
 });
 
-test('research models in brief: automatic, setup required (with the missing key named), demo', async () => {
+test('research models in brief: automatic, manual (nothing to set up), on hold, demo; the optional API is said apart', async () => {
   const { wl } = await mods;
   const manual = { mode: 'manual', reason: 'not configured: API key, model ID, token prices, a search price (or max searches 0 to turn web search off), spending budget' };
-  assert.equal(wl.readinessSummary({ claude: manual, chatgpt: manual, gemini: manual }).text, '3 need setup');
+  assert.equal(wl.readinessSummary({ claude: manual, chatgpt: manual, gemini: manual }).text, 'all manual');
+  assert.equal(wl.readinessSummary({ claude: manual, chatgpt: manual, gemini: manual }, { gemini: { since: '2026-10-04' } }).text, '2 manual · Gemini on hold');
   assert.equal(wl.readinessSummary({ claude: { mode: 'api' }, chatgpt: { mode: 'api' }, gemini: { mode: 'api' } }).text, 'all automatic');
-  assert.equal(wl.readinessSummary({ claude: { mode: 'api' }, chatgpt: manual, gemini: { mode: 'mock' } }).text, '1 automatic · 1 needs setup · 1 demo');
+  assert.equal(wl.readinessSummary({ claude: { mode: 'api' }, chatgpt: manual, gemini: { mode: 'mock' } }).text, '1 automatic · 1 manual · 1 demo');
   assert.equal(wl.readinessSummary(null).text, 'unknown');
-  assert.equal(wl.setupShort(manual.reason), 'Setup required: no API key');
-  assert.equal(wl.setupShort('not configured: model ID, spending budget'), 'Setup required: 2 settings missing');
-  assert.equal(wl.setupShort('not configured: a search price (or max searches 0 to turn web search off)'), 'Setup required: 1 setting missing', 'a comma inside parentheses is one setting');
+  assert.equal(wl.readinessSummary({ claude: manual }).setup, 0, 'manual research is not a warning');
+  assert.equal(wl.setupShort(manual.reason), 'Automatic: no API key (optional)');
+  assert.equal(wl.setupShort('not configured: model ID, spending budget'), 'Automatic: 2 settings missing (optional)');
+  assert.equal(wl.setupShort('not configured: a search price (or max searches 0 to turn web search off)'), 'Automatic: 1 setting missing (optional)', 'a comma inside parentheses is one setting');
+});
+
+test('states: a model on hold and work held unsent are their own words; ages count calendar days in New York; anchors are the rubric\'s own words', async () => {
+  const { ui } = await mods;
+  assert.equal(ui.jobKey({ state: 'unconfigured', mode: 'manual' }, null, { onHold: true }), 'on_hold');
+  assert.equal(ui.jobKey({ state: 'queued', mode: 'api', hold: { why: 'archived' } }), 'held');
+  assert.equal(ui.RESEARCH_STATE.on_hold.short, 'On hold');
+  assert.equal(ui.RESEARCH_STATE.held.short, 'Held');
+  const b = ui.badgeInfo('gemini', null, { state: 'unconfigured', mode: 'manual' }, { hosted: true, onHold: true });
+  assert.equal(b.kind, 'on_hold');
+  assert.doesNotMatch(b.text, /Do my waiting/, 'no prompt to act for a model on hold');
+  assert.equal(ui.onHoldOf({ settings: { research: { on_hold: { gemini: { since: '2026-10-04' } } } } }, 'gemini').since, '2026-10-04');
+  assert.equal(ui.onHoldOf({ settings: { research: { on_hold: { gemini: null } } } }, 'gemini'), null);
+  // An analysis on Oct 3 at 11 PM New York time, seen on Oct 4 at 9 AM: yesterday, not today.
+  const now = Date.parse('2026-10-04T13:00:00Z');
+  assert.equal(ui.daysSince('2026-10-04T03:00:00Z', now), 1);
+  assert.equal(ui.fmtRelDay('2026-10-04T03:00:00Z', now), 'yesterday');
+  assert.equal(ui.fmtAge('2026-10-04T03:00:00Z', now), '1d');
+  assert.equal(ui.fmtRelDay('2026-10-04T12:00:00Z', now), 'today');
+  assert.equal(ui.fmtRelDay('2026-10-03', now), 'yesterday');
+  assert.equal(ui.daysSince('2026-09-27', now), 7);
+  const anchors = [{ band: '90-100', meaning: 'Exceptional. x' }, { band: '75-89', meaning: 'Strong. x' }, { band: '60-74', meaning: 'Adequate or mixed. x' }, { band: '40-59', meaning: 'Weak. x' }, { band: '20-39', meaning: 'Poor. x' }, { band: '1-19', meaning: 'Severe. x' }];
+  assert.equal(ui.anchorWord(anchors, 57.2), 'Weak');
+  assert.equal(ui.anchorWord(anchors, 59.9), 'Weak', 'a value between bands keeps its lower band');
+  assert.equal(ui.anchorWord(anchors, 60), 'Adequate or mixed');
+  assert.equal(ui.anchorWord(anchors, 0), null, 'no word the rubric does not define');
+  assert.equal(ui.anchorText(anchors, { status: 'range', low: 52.3, high: 64.7 }), 'Weak to adequate or mixed', 'a range keeps both ends, never a midpoint');
+  assert.equal(ui.anchorText(anchors, { status: 'unknown' }), null);
+});
+
+test('report page: the data block is set apart from the written report, the text itself unchanged; the Archived filter lists every archived project', async () => {
+  const { wl } = await mods;
+  const projectView = await import(pathToFileURL(path.join(tmp, 'views', 'project.js')).href);
+  const text = '# Report\n\nProse.\n\n```bash\necho not data\n```\n\nMore prose.\n\n```json\n{ "schema_version": "cr.report.v2", "verdict": "X" }\n```\n';
+  const { prose, block } = projectView.splitDataBlock(text);
+  assert.equal(block, '{ "schema_version": "cr.report.v2", "verdict": "X" }');
+  assert.ok(prose.includes('echo not data'), 'other code blocks stay in the report');
+  assert.ok(!prose.includes('schema_version'));
+  assert.deepEqual(projectView.splitDataBlock('# No data block'), { prose: '# No data block', block: null });
+  const base = { broken: false, name: 'X', project_id: 'x', providers: {}, research: {} };
+  const f = { sector: '', owned: 'watching', coverage: 'any', ret30: 'any', archived: true };
+  assert.equal(wl.matches({ ...base, status: 'archived', on_watchlist: false }, f, ''), true, 'archived and not watched: listed under Archived');
+  assert.equal(wl.matches({ ...base, status: 'active', on_watchlist: true }, f, ''), false);
+  assert.equal(wl.matches({ ...base, status: 'archived', on_watchlist: false }, { ...f, archived: false }, ''), false);
 });
 
 test('evidence flags: a serious flag sits beside the grade and is said in words; the grade itself is unchanged', async () => {

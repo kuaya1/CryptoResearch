@@ -156,26 +156,45 @@ test('structure checks: a part left unknown while the same report scores related
 
 test('execution note: a new run freezes ChatGPT\'s note with its job; the prompt stays one text for every model; a model added later gets its note then; a job without one gets none', (t) => {
   const { ws, root, pid } = workspace(t, 'gpt-note');
-  // The published template never changes: a new version gets a new file.
+  // The published templates never change: a new version gets a new file.
   assert.equal(sha256(fs.readFileSync(path.join(root, 'templates', 'execution', 'chatgpt.v1.md'))), 'a7ad4872d8db69af998d73ee928741f4d8c68b8169fee994b50e31cd92129106');
+  assert.equal(sha256(fs.readFileSync(path.join(root, 'templates', 'execution', 'chatgpt.v2.md'))), 'fddb85f49c79d6f119544828fe59efd939d9846af7cce640657e62e880482d8d');
   const run = research.createRun(ws, { project_id: pid, providers: ['claude', 'chatgpt', 'gemini'] }).run;
   assert.equal(run.prompt.version, 'cr-research-prompt@5');
   assert.equal(run.prompt.identical_for_all_providers, true);
   const rec = run.jobs.chatgpt.execution;
-  assert.equal(rec.ref, 'cr-execution-chatgpt@1');
+  assert.equal(rec.ref, 'cr-execution-chatgpt@2', 'a job made now gets note @2');
   assert.equal(rec.path, `projects/${pid}/research/${run.run_id}/execution.chatgpt.md`);
   const text = fs.readFileSync(path.join(root, rec.path), 'utf8');
   assert.equal(sha256(text), rec.sha256);
   assert.equal(run.jobs.claude.execution, undefined, 'Claude has no note');
   assert.equal(run.jobs.gemini.execution, undefined, 'Gemini has no note');
-  // Bound to this run; the prompt decides; the checks Eric asked for.
-  assert.ok(text.startsWith('<!-- CR-EXECUTION cr-execution-chatgpt@1 '));
+  // Bound to this run; the prompt decides; the discipline of 2026-10-04.
+  assert.ok(text.startsWith('<!-- CR-EXECUTION cr-execution-chatgpt@2 '));
   assert.ok(text.includes(`research run ${run.run_id} (ChatGPT)`));
   assert.ok(text.includes(`cr-research-prompt@5, SHA-256 ${run.prompt.sha256}, holding period ${run.horizon.start_date} to ${run.horizon.end_date}`));
   assert.ok(!/\{\{[A-Z_]+\}\}/.test(text), 'every placeholder filled');
-  for (const phrase of [/Where they seem to differ from the prompt, the prompt decides\./, /Do not look for, read or use Claude's or Gemini's reports, grades or conclusions/, /Agreeing with another model is not a goal and not a test of your work\./, /"Not proven" or "not verified" is not the same as "unknown"/, /Assess each of the six investment components explicitly/, /such as the owner's exact position size, state the assumption you used/, /Never fill in the form for its own sake\.\*\* Probabilities, price targets and scores you cannot defend stay unknown, with the reason\./, /Explain every unknown:\*\* what is missing, and which evidence would resolve it\./, /Check the JSON block against your written report before you finish\./]) {
+  for (const phrase of [
+    /Where they seem to differ from the prompt, the prompt decides\./,
+    /do not look for or use Claude's or Gemini's reports, grades or conclusions/,
+    /Finish with one save_report and report its receipt \(status and report ID\) to Eric before starting any other project\./,
+    /the implementation files that power the product, at a named commit/,
+    /Commit counts, stars or an audit badge are not code quality; a listing on a venue is not executable liquidity; intuition is not a probability\./,
+    /Make one bounded alternative attempt .* and state plainly what stayed unavailable/,
+    /a token launched last month has a month of data, and that is a disclosure, not a failure/,
+    /its own claim and source IDs, not one shared list/,
+    /Where a related category grade is unknown but you score a component, say which narrower evidence and assumptions support the component\./,
+    /Give a range only when its low and high ends are two named interpretations the evidence supports, and say what observable fact would tell them apart\./,
+    /A range is your judgment, not a statistical confidence interval/,
+    /Never turn an unknown into a band, and never fill in a number to complete the form\./,
+    /the volume baseline you compared against/,
+    /every categorical word is one the appendix allows/,
+    /A withheld grade is an acceptable result\.\*\*/,
+    /Save again only to correct a documented issue .* or to record a clearly explained revision, and then pass revision/,
+  ]) {
     assert.match(text, phrase);
   }
+  assert.doesNotMatch(text, /give a score or a range/, 'the @1 wording that invited bands is gone');
   // The prompt itself carries no note: the same bytes for every model.
   const prompt = fs.readFileSync(path.join(root, run.prompt.path), 'utf8');
   assert.equal(sha256(prompt), run.prompt.sha256);
@@ -194,8 +213,20 @@ test('execution note: a new run freezes ChatGPT\'s note with its job; the prompt
   assert.equal(solo.jobs.claude.execution, undefined);
   research.addProviders(ws, pid, solo.run_id, ['chatgpt']);
   const added = research.loadRun(ws, pid, solo.run_id).jobs.chatgpt.execution;
-  assert.equal(added.ref, 'cr-execution-chatgpt@1');
+  assert.equal(added.ref, 'cr-execution-chatgpt@2');
   assert.ok(fs.readFileSync(path.join(root, added.path), 'utf8').includes(`research run ${solo.run_id} (ChatGPT)`));
+  // A job frozen with note @1 (made before 2026-10-04) keeps exactly that
+  // note: delivered as frozen, never upgraded.
+  const v1 = fs.readFileSync(path.join(root, 'templates', 'execution', 'chatgpt.v1.md'), 'utf8').replace(/\{\{RUN_ID\}\}/g, solo.run_id);
+  runOp(ws, { type: 'test_v1_job', summary: 'FICTIONAL: a job frozen with note @1' }, (op) => {
+    const rel = `projects/${pid}/research/${solo.run_id}/run.json`;
+    const r = op.readJson(rel);
+    op.write(r.jobs.chatgpt.execution.path, v1);
+    r.jobs.chatgpt.execution = { ...r.jobs.chatgpt.execution, ref: 'cr-execution-chatgpt@1', sha256: sha256(v1), chars: v1.length };
+    op.writeJson(rel, r);
+  });
+  const kept = execution.readNote(ws, research.loadRun(ws, pid, solo.run_id), 'chatgpt');
+  assert.deepEqual([kept.delivery.status, kept.delivery.ref, kept.text], ['verified', 'cr-execution-chatgpt@1', v1]);
   // A job made before notes existed has none, and none is made up for it.
   asOlderJob(ws, pid, solo.run_id);
   assert.equal(execution.readNote(ws, research.loadRun(ws, pid, solo.run_id), 'chatgpt'), null);
@@ -247,7 +278,7 @@ test('API route: ChatGPT gets its note as instructions while the input stays the
   assert.equal(sp.posts[0].input, prompt, 'the input is the run\'s prompt, byte for byte');
   assert.equal(sp.posts[0].instructions, note, 'the note goes as the request\'s instructions');
   const a = research.loadRun(ws, pid, run.run_id).jobs.chatgpt.attempts[0];
-  assert.deepEqual(a.delivered, { prompt_sha256: run.prompt.sha256, execution: { ref: 'cr-execution-chatgpt@1', sha256: sha256(note) } });
+  assert.deepEqual(a.delivered, { prompt_sha256: run.prompt.sha256, execution: { ref: 'cr-execution-chatgpt@2', sha256: sha256(note) } });
 });
 
 test('API route: a ChatGPT job made before notes existed sends the prompt alone, as before', async (t) => {
@@ -274,26 +305,57 @@ test('API route: a ChatGPT note that no longer matches its hash is never sent, a
   assert.equal(j.attempts.length, 0, 'no attempt was reserved');
 });
 
-test('re-saves: a report that differs only in its date-time stamps is the same report for that run; a changed score, another day or another run is not', (t) => {
-  const { ws, pid } = workspace(t, 'gpt-resave');
-  const run = research.createRun(ws, { project_id: pid, providers: ['chatgpt'] }).run;
-  const unknown = ['btc_relative_asymmetry', 'timing_executable_liquidity'];
-  const first = chatgptReport({ unknown, runId: run.run_id, promptVersion: run.prompt.version, stamp: '2026-10-03T14:30:48.260Z' });
-  const out = inbox.importContent(ws, 'chatgpt', { content: first, filename: 'first.md', projectId: pid, runId: run.run_id });
-  assert.equal(out.result.status, 'ingested');
-  // The same report written out again 17 minutes later (as on 2026-10-03).
-  const again = chatgptReport({ unknown, runId: run.run_id, promptVersion: run.prompt.version, stamp: '2026-10-03T14:47:05.085Z' });
-  assert.notEqual(again, first);
-  assert.equal(inbox.stamplessText(again), inbox.stamplessText(first));
-  assert.deepEqual(inbox.sameReportForRun(ws, { projectId: pid, runId: run.run_id, provider: 'chatgpt', text: again }).report_id, out.result.report_id);
-  // A real change, another day, another model or another run is another report.
-  const changed = chatgptReport({ unknown: ['btc_relative_asymmetry'], runId: run.run_id, promptVersion: run.prompt.version, stamp: '2026-10-03T14:47:05.085Z' });
-  assert.equal(inbox.sameReportForRun(ws, { projectId: pid, runId: run.run_id, provider: 'chatgpt', text: changed }), null);
-  const nextDay = again.replace(/2026-10-03/g, '2026-10-04');
-  assert.equal(inbox.sameReportForRun(ws, { projectId: pid, runId: run.run_id, provider: 'chatgpt', text: nextDay }), null);
-  assert.equal(inbox.sameReportForRun(ws, { projectId: pid, runId: run.run_id, provider: 'gemini', text: again }), null);
-  assert.equal(inbox.sameReportForRun(ws, { projectId: pid, runId: 'run_2026-10-03T000000Z_other', provider: 'chatgpt', text: again }), null);
-});
+// The re-save checks run on a fixed clock, on three different days (the day
+// a run starts sets its horizon, and the stamps below are on that day), so
+// the result never depends on the day the tests run.
+const nextDayOf = (ymd) => new Date(Date.parse(`${ymd}T12:00:00Z`) + 86400000).toISOString().slice(0, 10);
+for (const day of ['2026-10-03', '2026-10-04', '2026-10-31']) {
+  test(`re-saves on ${day}: only restamped analysis and access times on the same day are the same report; every evidence date, a score, another day, model or run is another`, (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse(`${day}T18:00:00Z`) });
+    const { ws, pid } = workspace(t, `gpt-resave-${day}`);
+    const run = research.createRun(ws, { project_id: pid, providers: ['chatgpt'] }).run;
+    assert.equal(run.horizon.start_date, day, 'the run starts on the fixed day');
+    const unknown = ['btc_relative_asymmetry', 'timing_executable_liquidity'];
+    // A report for this run, with ChatGPT's own stamps: its analysis time and
+    // each source's access time, repeated in its prose ("As of ...").
+    const forRun = (stamp, edit = null, { obs = `${day}T08:00:00Z` } = {}) => chatgptReport({
+      unknown, runId: run.run_id, promptVersion: run.prompt.version, profile: run.sector_profile, stamp,
+      edit: (a) => {
+        a.horizon = run.horizon.text;
+        for (const s of a.sources) s.accessed_at = stamp;
+        if (edit) edit(a);
+      },
+    }).replace('FICTIONAL sources accessed', `FICTIONAL observation ${obs}. FICTIONAL sources accessed`);
+    const first = forRun(`${day}T14:30:48.260Z`);
+    const out = inbox.importContent(ws, 'chatgpt', { content: first, filename: 'first.md', projectId: pid, runId: run.run_id });
+    assert.equal(out.result.status, 'ingested', out.result.message);
+    const same = (text, provider = 'chatgpt', runId = run.run_id) => inbox.sameReportForRun(ws, { projectId: pid, runId, provider, text });
+    // Exact content: the same report (and the exact text is a duplicate on import).
+    assert.equal(same(first).report_id, out.result.report_id);
+    assert.equal(same(first.replace(/\n/g, '\r\n')).report_id, out.result.report_id, 'line endings are not content');
+    // Restamped 17 minutes later the same day, as on 2026-10-03: the same report.
+    const again = forRun(`${day}T14:47:05.085Z`);
+    assert.notEqual(again, first);
+    assert.equal(same(again).report_id, out.result.report_id);
+    assert.equal(inbox.sameReportText(first, again).reason, 'the same report restamped on the same day');
+    // Restamped on another day: another report, kept as its own original.
+    assert.equal(same(forRun(`${nextDayOf(day)}T09:00:00.000Z`)), null);
+    // Evidence times are content, whatever else is restamped.
+    assert.equal(same(forRun(`${day}T14:47:05.085Z`, null, { obs: `${nextDayOf(day)}T08:00:00Z` })), null, 'a source observation time');
+    assert.equal(same(forRun(`${day}T14:47:05.085Z`, null, { obs: `${day}T09:00:00Z` })), null, 'the same day, another observation time');
+    assert.equal(same(forRun(`${day}T14:47:05.085Z`, (a) => { a.claims[0].as_of = `${nextDayOf(day)}`; })), null, 'a claim\'s as-of date');
+    assert.equal(same(forRun(`${day}T14:47:05.085Z`, (a) => { a.catalysts = [{ title: 'FICTIONAL launch', date: nextDayOf(day), kind: 'product', status: 'announced' }]; })), null, 'a catalyst date');
+    assert.equal(same(forRun(`${day}T14:47:05.085Z`, (a) => { a.chart_cycle = { data: { latest_observation_at: `${day}T16:00:00Z` } }; })), null, 'a chart candle');
+    assert.equal(same(forRun(`${day}T14:47:05.085Z`, (a) => { a.sources[0].accessed_at = `${nextDayOf(day)}T01:00:00Z`; })), null, 'a source accessed on another day');
+    assert.equal(same(forRun(`${day}T14:47:05.085Z`, (a) => { a.horizon = '3 months'; })), null, 'the horizon');
+    assert.equal(same(forRun(`${day}T14:47:05.085Z`, (a) => { a.investment_components.valuation_supply.value += 1; })), null, 'a score');
+    assert.equal(same(again, 'gemini'), null, 'another model');
+    assert.equal(same(again, 'chatgpt', 'run_2026-10-03T000000Z_other'), null, 'another run');
+    // A text without a readable JSON block is the same only when it is identical.
+    assert.equal(inbox.sameReportText(`# Prose\n\nAs of ${day}T14:30:00Z.`, `# Prose\n\nAs of ${day}T14:47:00Z.`).same, false);
+    assert.equal(inbox.sameReportText(`# Prose\n\nAs of ${day}T14:30:00Z.`, `# Prose\n\nAs of ${day}T14:30:00Z.\n`).same, true);
+  });
+}
 
 function request(port, p, headers = {}) {
   return new Promise((resolve, reject) => {

@@ -216,7 +216,7 @@ test('connector: Claude discovers the sign-in, registers, gets the passphrase co
   const note = await req(d.port, { method: 'POST', path: '/mcp', headers: { 'content-type': 'application/json', authorization: `Bearer ${c.access}` }, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) });
   assert.equal(note.status, 202);
   const list = await rpc(d, c.access, 'tools/list', {});
-  assert.deepEqual(list.json.result.tools.map((x) => x.name).sort(), ['add_account', 'add_project', 'cancel_research', 'compare_reports', 'desk_status', 'find_projects', 'get_report', 'get_research', 'list_accounts', 'pending_research', 'portfolio_overview', 'record_transaction', 'save_report', 'save_research_draft', 'start_research', 'update_project_identity']);
+  assert.deepEqual(list.json.result.tools.map((x) => x.name).sort(), ['add_account', 'add_project', 'archive_project', 'cancel_research', 'compare_reports', 'desk_status', 'find_projects', 'get_report', 'get_research', 'list_accounts', 'pending_research', 'portfolio_overview', 'record_transaction', 'restore_project', 'save_report', 'save_research_draft', 'start_research', 'update_project_identity']);
   // ChatGPT asks to confirm every tool without readOnlyHint: reads are marked read-only.
   const readOnly = list.json.result.tools.filter((x) => x.annotations && x.annotations.readOnlyHint).map((x) => x.name).sort();
   assert.deepEqual(readOnly, ['compare_reports', 'desk_status', 'find_projects', 'get_report', 'get_research', 'list_accounts', 'pending_research', 'portfolio_overview']);
@@ -568,12 +568,16 @@ test('connector: one Cowork request for all three models; ChatGPT and Gemini do 
   assert.equal(all.data.run.jobs.claude.state, 'running');
   assert.equal(all.data.run.jobs.chatgpt.state, 'unconfigured');
   assert.equal(all.data.run.jobs.gemini.state, 'unconfigured');
-  assert.match(all.data.message, /ChatGPT: waiting for ChatGPT \(setup required: no OpenAI API key: OPENAI_API_KEY\): Eric says "Do my waiting CryptoResearch research" in a ChatGPT chat with the CryptoResearch app turned on/);
-  assert.match(all.data.message, /Gemini: waiting for Gemini \(setup required: no Google API key: GEMINI_API_KEY\): Eric says "Do my waiting CryptoResearch research" in Gemini after typing @ and picking CryptoResearch/, 'Gemini uses a custom app only when it is @-mentioned');
+  // Manual research waiting for its assistant is said apart from the optional
+  // background API (which needs setup) and from a model on hold.
+  assert.match(all.data.message, /ChatGPT: waiting for ChatGPT to do it through its connection \(manual research, nothing to set up\): Eric says "Do my waiting CryptoResearch research" in a ChatGPT chat with the CryptoResearch app turned on/);
+  assert.match(all.data.message, /Gemini: waiting for Gemini to do it through its connection \(manual research, nothing to set up\): Eric says "Do my waiting CryptoResearch research" in Gemini after typing @ and picking CryptoResearch/, 'Gemini uses a custom app only when it is @-mentioned');
+  assert.doesNotMatch(all.data.message, /setup required/);
   // The reply says which models run by themselves and which wait, and why.
   assert.equal(all.data.readiness.models.chatgpt.route, 'setup_required');
+  assert.equal(all.data.readiness.models.chatgpt.status, 'manual');
   assert.equal(all.data.readiness.models.gemini.setup, 'no Google API key: GEMINI_API_KEY');
-  assert.match(all.data.readiness.summary, /^No model runs automatically yet\. Setup required: Claude \(no Anthropic API key: ANTHROPIC_API_KEY\); ChatGPT \(no OpenAI API key: OPENAI_API_KEY\); Gemini \(no Google API key: GEMINI_API_KEY\)/);
+  assert.match(all.data.readiness.summary, /^Manual research: Claude in Cowork, ChatGPT through its desk connection and Gemini through its desk connection, when Eric asks; nothing is billed\. Automatic background research: not set up for any model \(optional; each needs its API key in Render's environment\)\./);
   assert.doesNotMatch(all.text, /fictional-test|sk-|AIza/, 'never a key');
   const promptFile = fs.readFileSync(path.join(d.ws.root, 'projects', pid, 'research', runId, 'prompt.md'), 'utf8');
   assert.ok(all.text.includes(promptFile), 'Claude gets the run prompt');
@@ -617,7 +621,7 @@ test('connector: one Cowork request for all three models; ChatGPT and Gemini do 
   // A ChatGPT connection cannot file Claude's text, or a report that names another model, as ChatGPT's.
   const copied = await tool(d, chatgpt.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: claudeText });
   assert.equal(copied.isError, true);
-  assert.match(copied.text, /not ChatGPT's report/);
+  assert.match(copied.text, /^Not saved: .*model: the report says "Claude", the run's is "ChatGPT"/);
   // Meanwhile the same request for ChatGPT was also made on the dashboard (a
   // second run). ChatGPT's report answers both: it is not researched twice.
   const extra = research.createRun(d.ws, { project_id: pid, providers: ['chatgpt'], channel: 'dashboard', utterance: 'ChatGPT research for Examplecoin (FICTIONAL)' });
@@ -653,7 +657,7 @@ test('connector: one Cowork request for all three models; ChatGPT and Gemini do 
   assert.equal(gm.data.status, 'resumed');
   const mislabeled = await tool(d, gemini.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: gptText.replace('FICTIONAL', 'FICTIONAL variant') });
   assert.equal(mislabeled.isError, true);
-  assert.match(mislabeled.text, /identifies it as ChatGPT/);
+  assert.match(mislabeled.text, /^Not saved: .*model: the report says "ChatGPT", the run's is "Gemini"/);
   assert.equal((await tool(d, gemini.access, 'save_research_draft', { project_id: pid, run_id: runId, draft_markdown: '## 1. Legitimacy\nFICTIONAL Gemini draft.\n', note: 'section 1' })).data.status, 'saved');
   idle(d.ws, pid, runId, 'gemini', 2);
   const gv = await tool(d, gemini.access, 'get_research', { project_id: pid });
@@ -683,10 +687,12 @@ test('connector: one Cowork request for all three models; ChatGPT and Gemini do 
     obj.investment_components[first] = { status: 'unknown', value: null, low: null, high: null, rationale: 'FICTIONAL: the evidence does not support a score', evidence_refs: [], missing_data: 'FICTIONAL' };
     return text.replace(m[1], JSON.stringify(obj, null, 2));
   };
-  const partial = await tool(d, gemini.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: unscored(mockReport(d.ws, 'gemini', run0)) });
+  // (A second Gemini report for the same run, so a revision with its reason.)
+  const partial = await tool(d, gemini.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: unscored(mockReport(d.ws, 'gemini', run0)), revision: { kind: 'reassessment', note: 'FICTIONAL: the demand evidence does not support a score after all.' } });
   assert.equal(partial.data.status, 'saved', partial.text);
   assert.equal(partial.data.report.grade.status, 'withheld');
-  assert.match(partial.data.message, /Its grade is withheld: Grade withheld: .* is not scored\. \d+(\.\d+)?% of the weight is covered.*Save again only to change the JSON block: .*your written report supports a judgment on a part .* Otherwise leave them unscored and do not save again: a withheld grade is then the honest result, and an unchanged report saved again is recognized and not stored twice\./);
+  assert.match(partial.data.message, /Its grade is withheld: Grade withheld: .* is not scored\. \d+(\.\d+)?% of the weight is covered.*That is an acceptable result.*Save again only if the JSON block misstates your written report .*Do not save again to obtain a complete grade\./);
+  assert.equal(partial.data.revision.basis, 'existing_evidence');
   // The part left unknown while the same report scores the category grade on
   // the same ground (organic demand) is named; the grade is not changed.
   assert.equal(partial.data.structure_checks.flagged, 1);
@@ -770,10 +776,10 @@ test('connector: with paid APIs set up, "all three models" runs ChatGPT and Gemi
   assert.equal(all.data.run.jobs.chatgpt.mode, 'api');
   assert.match(all.data.message, /ChatGPT: queued for the ChatGPT API in the background/);
   // Readiness: ChatGPT and Gemini run by themselves; Claude is done in Cowork.
-  assert.deepEqual(all.data.readiness.models.chatgpt, { route: 'automatic', model: 'gpt-fictional-test', setup: null });
+  assert.deepEqual(all.data.readiness.models.chatgpt, { status: 'automatic', route: 'automatic', model: 'gpt-fictional-test', setup: null, on_hold: null });
   assert.equal(all.data.readiness.models.gemini.route, 'automatic');
   assert.equal(all.data.readiness.models.claude.route, 'setup_required');
-  assert.match(all.data.readiness.summary, /^Automatic: ChatGPT and Gemini\. Setup required: Claude \(no Anthropic API key: ANTHROPIC_API_KEY\); its jobs wait meanwhile\. A three-model request from Cowork reserves about \$\d+\.\d+ on the ChatGPT and Gemini APIs \(Claude researches in Cowork itself\), within the \$5\.00 per-run limit\./);
+  assert.match(all.data.readiness.summary, /^Manual research: Claude in Cowork, when Eric asks; nothing is billed\. Automatic background research \(paid API, within the limits\): ChatGPT and Gemini\. Background API not set up: Claude \(no Anthropic API key: ANTHROPIC_API_KEY\)\. A three-model request from Cowork reserves about \$\d+\.\d+ on the ChatGPT and Gemini APIs \(Claude researches in Cowork itself\), within the \$5\.00 per-run limit\./);
   // desk_status: read-only, the same readiness with jobs, limits, spend and the revision.
   const st = await tool(d, claude.access, 'desk_status', {});
   assert.equal(st.data.status, 'ok', st.text);
@@ -895,7 +901,7 @@ test('connector: "all three models" again after Claude saved, while ChatGPT and 
   assert.equal(again.data.status, 'in_progress', again.text);
   assert.equal(again.data.run.run_id, runId);
   assert.match(again.data.message, /^Nothing new was started: ChatGPT and Gemini are already in research run run_\S+ for Examplecoin \(FICTIONAL\)/);
-  assert.match(again.data.message, /ChatGPT: waiting for ChatGPT \(setup required: no OpenAI API key: OPENAI_API_KEY\): Eric says "Do my waiting CryptoResearch research"/);
+  assert.match(again.data.message, /ChatGPT: waiting for ChatGPT to do it through its connection \(manual research, nothing to set up\): Eric says "Do my waiting CryptoResearch research"/);
   assert.match(again.data.message, /Gemini: waiting for Gemini/);
   assert.match(again.data.message, /Claude saved a report [\d.]+ h ago/);
   assert.equal(research.listRuns(d.ws, pid).length, 1, 'no second run');
@@ -1136,7 +1142,8 @@ test('connector: save_report says "saved" only when the save is confirmed, and a
   assert.match(first.data.message, /could not confirm the save .*Call save_report again with the same text; if it did land, nothing changes\./);
   // The grade is withheld; each of the six parts says how it was read.
   assert.equal(first.data.report.grade.status, 'withheld');
-  assert.match(first.data.message, /Otherwise leave them unscored and do not save again: a withheld grade is then the honest result/);
+  assert.match(first.data.message, /That is an acceptable result: an unknown part stays unknown when the evidence does not settle it\./);
+  assert.match(first.data.message, /Save again only if the JSON block misstates your written report \(then pass revision with kind format_fix and say what was misstated\)\. Do not save again to obtain a complete grade\./);
   const comps = first.data.components;
   assert.equal(comps.length, 6);
   assert.deepEqual(comps[0], { component: comps[0].component, label: comps[0].label, status: 'unknown', missing_data: 'FICTIONAL: no audited revenue figures yet' });
@@ -1476,7 +1483,7 @@ test('connector: Gemini does its waiting research with one call Eric approves: p
   // What Gemini is told when it connects; Claude in Cowork keeps its drafts.
   const init = await rpc(d, gemini.access, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'Gemini', version: 'test' } });
   assert.match(init.json.result.instructions, /5\. In Gemini, every call that saves something \(add_project, start_research, save_research_draft, save_report and the like\) makes Eric approve it, so keep them to a minimum: do not save drafts unless he asks/);
-  assert.match(init.json.result.instructions, /get_research with its project_id and run_id gives you that run's prompt without taking the job \(nothing for Eric to approve\); research it, then save_report once with that run_id\. Do not call start_research for a waiting job\./);
+  assert.match(init.json.result.instructions, /call pending_research and do only its next item: get_research with that project_id and run_id gives you the run's prompt without taking the job \(nothing for Eric to approve\); research it, save_report once with that run_id, and tell Eric the receipt \(status and report ID\)\. One project per request: the next one is Eric's next request\..* Do not call start_research for a waiting job\./);
   const claudeInit = await rpc(d, claude.access, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'Claude', version: 'test' } });
   assert.match(claudeInit.json.result.instructions, /5\. For long research, save_research_draft as you go/);
   // The reads Gemini needs are marked read-only (Gemini asks nothing for them); a save never is.
@@ -1486,7 +1493,8 @@ test('connector: Gemini does its waiting research with one call Eric approves: p
   for (const w of ['save_report', 'save_research_draft', 'start_research']) assert.ok(!readOnly.has(w), `${w} is never marked read-only`);
   const pend = await tool(d, gemini.access, 'pending_research', {});
   assert.equal(pend.data.pending[0].run_id, runId);
-  assert.match(pend.data.message, /get_research with its project_id and run_id gives you the run's prompt \(read-only, nothing for Eric to approve\); research it and save_report once with that run_id\. That save is the only call Eric has to approve/);
+  assert.equal(pend.data.next.run_id, runId, 'one project per request: the next one');
+  assert.match(pend.data.message, /Do only the next one now: .*get_research with that project_id and run_id gives you the run's prompt \(read-only, nothing for Eric to approve\); research it, save_report once with that run_id, and tell Eric the receipt \(status and report ID\)\. That save is the only call Eric has to approve/);
   const view = await tool(d, gemini.access, 'get_research', { project_id: pid, run_id: runId });
   const promptFile = fs.readFileSync(path.join(d.ws.root, 'projects', pid, 'research', runId, 'prompt.md'), 'utf8');
   assert.ok(view.text.includes(promptFile), 'the run\'s own prompt, without taking the job');
@@ -1605,7 +1613,7 @@ test('connector: ChatGPT reads its waiting job with its execution note first (re
   assert.equal((await tool(d, chatgpt.access, 'pending_research', {})).data.pending[0].run_id, runId);
   const view = await tool(d, chatgpt.access, 'get_research', { project_id: pid, run_id: runId });
   assert.equal(view.data.run.execution_notes, note, 'complete in the structured result, never a placeholder');
-  assert.deepEqual([view.data.run.execution_delivery.status, view.data.run.execution_delivery.ref], ['verified', 'cr-execution-chatgpt@1']);
+  assert.deepEqual([view.data.run.execution_delivery.status, view.data.run.execution_delivery.ref], ['verified', 'cr-execution-chatgpt@2']);
   assert.equal(view.data.run.prompt, prompt, 'the prompt is unchanged, the same as for Claude');
   assert.equal(view.data.run.jobs.chatgpt.execution.sha256, run.jobs.chatgpt.execution.sha256, 'what ChatGPT was given is on record');
   const notesAt = view.content.findIndex((c) => c.text.startsWith(`--- Execution notes for ${runId}`));
@@ -1624,6 +1632,10 @@ test('connector: ChatGPT reads its waiting job with its execution note first (re
     obj.investment_components.timing_executable_liquidity = { status: 'unknown', value: null, low: null, high: null, rationale: 'FICTIONAL: book not tested.', evidence_refs: [], missing_data: 'FICTIONAL: permitted live venue, intended size and net costs.' };
     for (const s of obj.scenarios.items) s.probability_pct = null;
     obj.scenarios.probability_note = 'FICTIONAL: no calibrated probabilities.';
+    // Its own stamps: the analysis time and every source's access time, as
+    // ChatGPT wrote them anew each time it wrote the report out.
+    obj.analysis_at = stamp;
+    for (const s of obj.sources || []) s.accessed_at = stamp;
     if (edit) edit(obj);
     return `As of ${stamp}. FICTIONAL sources accessed ${stamp}.\n\n${base.replace(m[1], JSON.stringify(obj, null, 2))}`;
   };
@@ -1635,26 +1647,42 @@ test('connector: ChatGPT reads its waiting job with its execution note first (re
   assert.deepEqual(first.data.report.grade_withheld.missing.map((x) => [x.component, x.note]), [['BTC-relative asymmetry', 'FICTIONAL: calibrated scenarios and fee-supported targets.'], ['Timing and executable liquidity', 'FICTIONAL: permitted live venue, intended size and net costs.']]);
   assert.match(first.data.report.grade_withheld.coverage_means, /not research progress and not the score/);
   assert.deepEqual(first.data.structure_checks.flags.map((f) => f.component), ['btc_relative_asymmetry', 'timing_executable_liquidity']);
-  assert.match(first.data.message, /Save again only to change the JSON block: .* Otherwise leave them unscored and do not save again: a withheld grade is then the honest result, and an unchanged report saved again is recognized and not stored twice\./);
-  assert.doesNotMatch(first.data.message, /fix the JSON block and save the report again/);
-  // The same report written out again with new timestamps: nothing new is stored.
+  assert.match(first.data.message, /That is an acceptable result: an unknown part stays unknown when the evidence does not settle it\. .*Save again only if the JSON block misstates your written report .*Do not save again to obtain a complete grade\./);
+  assert.doesNotMatch(first.data.message, /fix the JSON block and save the report again|supports a judgment on a part/);
+  // The same report written out again with new timestamps the same day: nothing new is stored.
   const again = await tool(d, chatgpt.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: shaped('2026-10-03T14:39:05.085Z') });
   assert.equal(again.data.status, 'unchanged', again.text);
-  assert.match(again.data.message, new RegExp(`^This report is already saved as ${firstId}: the new text differs only in its date-time stamps, so nothing new was stored\\.`));
+  assert.match(again.data.message, new RegExp(`^This report is already saved as ${firstId}: the new text differs only in its restamped analysis and access times \\(the same day\\), so nothing new was stored\\.`));
   assert.equal(again.data.report.report_id, firstId);
   assert.equal(require('../core/indexer').projectDetail(d.ws, pid).history.chatgpt.length, 1, 'one ChatGPT report, not two');
   assert.equal(research.loadRun(d.ws, pid, runId).jobs.chatgpt.report_id, firstId);
-  // A real change (timing now judged) is a new report. The waiting job it
-  // answered keeps its first report, and the reply says so plainly; the
-  // newest report is the one the desk shows.
-  const changed = await tool(d, chatgpt.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: shaped('2026-10-03T14:52:00.000Z', (o) => { o.investment_components.timing_executable_liquidity = { status: 'scored', value: 35, low: null, high: null, rationale: 'FICTIONAL: thin books on a venue a US person can use; a small position only; supply enters in January.', evidence_refs: [], missing_data: null }; }) });
+  // A real change (timing now judged) is a revision: without a stated reason
+  // it is refused; with one it is a new report beside the first.
+  const timingJudged = shaped('2026-10-03T14:52:00.000Z', (o) => { o.investment_components.timing_executable_liquidity = { status: 'scored', value: 35, low: null, high: null, rationale: 'FICTIONAL: thin books on a venue a US person can use; a small position only; supply enters in January.', evidence_refs: [], missing_data: null }; });
+  const unexplained = await tool(d, chatgpt.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: timingJudged });
+  assert.equal(unexplained.isError, true);
+  assert.match(unexplained.text, new RegExp(`^Not saved: you already saved report ${firstId} for ${runId}\\. A different report for the same run is a revision, so it needs revision: \\{ kind, note \\}.*do not save again only to complete the grade\\. Nothing was saved\\.`));
+  const noNewSource = await tool(d, chatgpt.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: timingJudged, revision: { kind: 'new_evidence', note: 'FICTIONAL: checked the venue book again.' } });
+  assert.equal(noNewSource.isError, true);
+  assert.match(noNewSource.text, /revision kind new_evidence, but the report lists no source that .* did not already cite/);
+  assert.equal(require('../core/indexer').projectDetail(d.ws, pid).history.chatgpt.length, 1, 'neither refused save stored anything');
+  const changed = await tool(d, chatgpt.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: timingJudged, revision: { kind: 'reassessment', note: 'FICTIONAL: judged timing for a small spot position from the venue evidence already in the report.' } });
   assert.equal(changed.data.status, 'saved', changed.text);
   const changedId = changed.data.report.report_id;
   assert.notEqual(changedId, firstId);
   assert.equal(changed.data.validation.note, `The run keeps its report ${firstId}; this one was saved separately and is listed with it.`);
   assert.equal(research.loadRun(d.ws, pid, runId).jobs.chatgpt.report_id, firstId);
+  // The reply and the records say what the revision is: existing evidence,
+  // which part changed, and the model's own reason.
+  assert.deepEqual([changed.data.revision.of, changed.data.revision.basis, changed.data.revision.sources_added], [firstId, 'existing_evidence', 0]);
+  assert.deepEqual(changed.data.revision.changed_components, [{ id: 'timing_executable_liquidity', from: 'unknown', to: '35' }]);
+  assert.equal(changed.data.revision.your_reason.kind, 'reassessment');
+  assert.match(changed.data.message, /This is a revision of .*: Revision using existing evidence \(no source added\), \d+ min after .*: Timing and executable liquidity unknown → 35\. The model's reason: FICTIONAL: judged timing/);
   const detail = require('../core/indexer').projectDetail(d.ws, pid);
   assert.equal(detail.comparison.latest.chatgpt.report_id, changedId);
   assert.equal(detail.history.chatgpt.length, 2, 'both stay saved and listed');
   assert.equal(changed.data.report.grade.coverage_pct, 90);
+  const idx = require('../core/indexer').buildIndex(d.ws).projects.find((p) => p.project_id === pid).providers.chatgpt;
+  assert.equal(idx.revision.basis, 'existing_evidence');
+  assert.deepEqual([idx.run_link.run_id, idx.run_link.report_id], [runId, firstId], 'the run still links its first report; the desk shows the revision and says so');
 });
