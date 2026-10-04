@@ -301,6 +301,13 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
     const openEvents = events.filter((e) => e.status === 'open');
     const nextReview = openEvents.filter((e) => e.type === 'review' && e.due_date).sort((a, b) => a.due_date.localeCompare(b.due_date))[0] || null;
     const mkt = marketFor(ws, p, latestMarket);
+    // DefiLlama fundamentals as saved (fundamentals.js); a read never fetches.
+    let fundamentals = null;
+    try {
+      fundamentals = require('./fundamentals').summary(ws, p, now);
+    } catch (err) {
+      fundamentals = { state: 'unavailable', reason: `The saved fundamentals could not be read: ${err.message}` };
+    }
     const position = held.get(p.project_id) || null;
     const archived = p.status === 'archived';
 
@@ -419,6 +426,9 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
       // A verified binding CoinGecko does not return is probably a wrong ID: the
       // project never gets a price. Flagged, never changed automatically.
       if (p.identity.status === 'verified' && p.identity.coingecko_id && notReturned.has(p.identity.coingecko_id)) attention.push({ kind: 'identity_price', severity: 'medium', project_id: p.project_id, title: `${p.name}: CoinGecko returned no price for "${p.identity.coingecko_id}"`, detail: 'The last price refresh asked CoinGecko for this ID and got nothing back, so the project has no price. The ID may be wrong: find the project on CoinGecko, check that the contract it lists is the one on file, and correct the binding.' });
+      // A DefiLlama binding DefiLlama does not confirm (unknown slug, another
+      // kind of entity, another slug): flagged, never rebound automatically.
+      if (fundamentals && fundamentals.binding_problem) attention.push({ kind: 'fundamentals_binding', severity: 'medium', project_id: p.project_id, title: `${p.name}: DefiLlama binding "${fundamentals.slug}" needs checking`, detail: fundamentals.last_error || fundamentals.reason });
       if (position && lastReport && lastReport.assessment.analysis_at && daysBetween(String(lastReport.assessment.analysis_at).slice(0, 10), today) > settings.freshness.report_stale_days) {
         attention.push({ kind: 'stale_research', severity: 'medium', project_id: p.project_id, title: `${p.name}: newest research is ${daysBetween(String(lastReport.assessment.analysis_at).slice(0, 10), today)} days old and you hold a position`, detail: 'Consider a new dated report. Prices never change stored grades.' });
       }
@@ -467,6 +477,7 @@ function buildIndexRaw(ws, { light = false, now = Date.now() } = {}) {
       next_review: nextReview ? { date: nextReview.due_date, title: nextReview.title, overdue: nextReview.due_date < today } : null,
       open_events: openEvents.length,
       market: mkt,
+      fundamentals,
       created_at: p.created_at,
       updated_at: p.updated_at,
     });
@@ -654,6 +665,14 @@ function projectDetailRaw(ws, id) {
     conviction: notes.readConvictionNote(ws, id),
     prompts,
     market: marketFor(ws, project, latestMarket),
+    // The saved DefiLlama fundamentals, every reported day (never fetched here).
+    fundamentals: (() => {
+      try {
+        return require('./fundamentals').view(ws, project);
+      } catch (err) {
+        return { state: 'unavailable', reason: `The saved fundamentals could not be read: ${err.message}` };
+      }
+    })(),
     market_context: require('./cycle').summary(ws),
     horizon_policy: require('./position').policy(ws),
     // A closed position (sold to zero) is history, not a holding.

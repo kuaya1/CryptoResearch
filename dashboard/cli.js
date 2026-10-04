@@ -26,8 +26,13 @@ Projects
               [--long-term-reason TEXT]   (a horizon above the 4-month planning ceiling needs a reason)
               [--research claude,chatgpt,gemini] [--pending-identity] [--no-watchlist] [--no-prompts]
               [--utterance "spoken text"] [--allow-same-symbol] [--input file.json]
+              [--defillama-slug S --defillama-scope product|parent|chain --defillama-source URL]
   project list | show <id> | archive <id> --reason TEXT | restore <id>
   project identity <id> [--website URL] [--coingecko-id ID] [--asset ...] [--evidence URL]... [--pending]
+  project identity <id> --defillama-slug S --defillama-scope product|parent|chain --defillama-source URL [--no-refresh]
+                                         bind the DefiLlama entity whose fees describe the project (verified
+                                         from the source URL; never by name or ticker), then fetch it once
+  project identity <id> --no-defillama   remove that binding
   project watch <id> on|off
   project headline <id> --report <report_id> | --decision <entry_id> | --clear
   project set <id> [--sector "PayFi"] [--tags a,b] [--symbol X] [--profile P] [--name N]
@@ -84,7 +89,9 @@ Data, jobs and maintenance
   market refresh | market status
   market context [--refresh]             market-cycle snapshot: BTC trend, dominance, breadth (descriptive)
   market lookup "<name or ticker>"       CoinGecko listing candidates (never binds anything)
-  job run [requests|inbox|market|research|snapshot|reviews|backup|offsite]... [--all-due] [--trigger scheduler]
+  fundamentals refresh [<id>...]         fetch DefiLlama fees, revenue and holders revenue now (bound projects)
+  fundamentals status [<id>]             saved fundamentals: state, window, totals and coverage
+  job run [requests|inbox|market|fundamentals|research|snapshot|reviews|backup|offsite]... [--all-due] [--trigger scheduler]
   schedule install|status|run|remove
   requests process | requests status <request_id>
   index rebuild
@@ -154,6 +161,17 @@ function parseEvidence(flags) {
   const urls = list(flags.evidence);
   const notes = list(flags.evidence_note);
   return urls.map((url, i) => ({ url, note: notes[i] || null, kind: null }));
+}
+
+// The DefiLlama binding the flags ask for: undefined (none given), null
+// (--no-defillama) or { slug, scope, source_url }, validated by the core.
+function defillamaFlags(flags) {
+  if (flags.no_defillama) return null;
+  const slug = one(flags.defillama_slug);
+  const scope = one(flags.defillama_scope);
+  const source = one(flags.defillama_source);
+  if (slug === undefined && scope === undefined && source === undefined) return undefined;
+  return { slug, scope, source_url: source };
 }
 
 function inputFile(flags) {
@@ -280,6 +298,7 @@ async function run(argv) {
           utterance: one(flags.utterance) || f.utterance,
           allow_same_symbol: Boolean(flags.allow_same_symbol || f.allow_same_symbol),
           tags: f.tags,
+          defillama: defillamaFlags(flags) || f.defillama || undefined,
         };
         need(input.name, 'project add needs --name');
         const r = projects.addProject(ws, input);
@@ -304,14 +323,29 @@ async function run(argv) {
       }
       if (sub === 'identity') {
         const id = need(rest[0], 'project identity <id>');
-        const r = projects.updateIdentity(ws, id, {
-          official_website: one(flags.website),
-          coingecko_id: one(flags.coingecko_id),
-          assets: list(flags.asset).length ? parseAssets(flags.asset) : undefined,
-          evidence: parseEvidence(flags),
-          identity_status: flags.pending ? 'pending' : undefined,
-        });
-        return { ...r, ...(await afterWrite(ws, id)) };
+        const defillama = defillamaFlags(flags);
+        const identityGiven = [flags.website, flags.coingecko_id, flags.asset, flags.evidence, flags.pending].some((v) => v !== undefined);
+        // Only the DefiLlama binding: the rest of the identity is left exactly
+        // as it is.
+        const r = defillama !== undefined && !identityGiven
+          ? projects.setDefillamaBinding(ws, id, { defillama })
+          : projects.updateIdentity(ws, id, {
+            official_website: one(flags.website),
+            coingecko_id: one(flags.coingecko_id),
+            assets: list(flags.asset).length ? parseAssets(flags.asset) : undefined,
+            evidence: parseEvidence(flags),
+            identity_status: flags.pending ? 'pending' : undefined,
+            ...(defillama !== undefined ? { defillama } : {}),
+          });
+        // A new binding is fetched once right away (the same lease, gate and
+        // backoff as the scheduled refresh), so a wrong slug or scope shows now.
+        let fundamentals = null;
+        if (defillama && !flags.no_refresh) {
+          const f = require('./core/fundamentals');
+          const refreshed = await f.refresh(ws, { trigger: 'binding', force: true, projectIds: [id] });
+          fundamentals = { refresh: { status: refreshed.status, message: refreshed.message }, ...f.summary(ws, projects.getProject(ws, id)) };
+        }
+        return { ...r, ...(fundamentals ? { fundamentals } : {}), ...(await afterWrite(ws, id)) };
       }
       if (sub === 'watch') {
         const id = need(rest[0], 'project watch <id> on|off');
@@ -592,6 +626,22 @@ async function run(argv) {
         return { ...(refreshed ? { refresh: refreshed } : {}), status: s.status, freshness: s.freshness, line: cycle.describe(cycle.readContext(ws)), snapshot: cycle.readContext(ws), ...(refreshed && refreshed.status === 'ok' ? await afterWrite(ws) : {}) };
       }
       return { status: market.freshness(ws), tracked: market.trackedIds(ws), latest: market.readLatest(ws), context: require('./core/cycle').summary(ws) };
+    }
+    case 'fundamentals': {
+      const f = require('./core/fundamentals');
+      const ids = rest.filter(Boolean);
+      if (sub === 'refresh') {
+        // A manual refresh skips the failure backoff, never DefiLlama's rate limit.
+        const r = await f.refresh(ws, { trigger: one(flags.trigger) || 'cli', force: true, projectIds: ids.length ? ids : null });
+        const wrote = !['noop', 'busy', 'backoff', 'skipped', 'budget_paused'].includes(r.status);
+        return { ...r, ...(wrote ? await afterWrite(ws) : {}) };
+      }
+      if (sub === 'status' || !sub) {
+        if (ids.length) return f.view(ws, projects.getProject(ws, ids[0]));
+        const list = projects.listProjects(ws).filter((p) => !p.broken && p.status !== 'archived');
+        return { overview: f.overview(ws), projects: list.map((p) => ({ project_id: p.project_id, ...f.summary(ws, p) })) };
+      }
+      throw Object.assign(new Error('fundamentals refresh [<id>...] | fundamentals status [<id>]'), { code: 'USAGE' });
     }
     case 'job': {
       const jobs = require('./core/jobs');

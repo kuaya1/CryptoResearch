@@ -552,6 +552,11 @@ function healthLines(ws) {
     }
   }
   out.push(`Prices: ${f.freshness}${f.note ? ` (${cut(f.note, 160)})` : ''}; last success ${f.last_success_at || 'never'}; last attempt ${f.last_attempt_at || 'never'}${f.last_error ? `; last error "${cut(f.last_error, 120)}"` : ''}; failures in a row ${f.consecutive_failures || 0}${f.rate_limited ? `; rate-limited until ${f.retry_at}` : ''}; requests this month ${f.calls ? `${f.calls.month_count}${typeof f.calls.month_answered === 'number' ? ` (${f.calls.month_answered} answered)` : ''}` : '?'}; CoinGecko key ${market.apiKey() ? 'present' : 'none'}; tracked ${(f.tracked_ids || []).length}; not returned ${notReturned.size ? [...notReturned].join(', ') : 'none'}.`);
+  try {
+    const fo = require('./core/fundamentals').overview(ws);
+    const states = Object.entries(fo.states).filter(([s]) => s !== 'unmapped').map(([s, n]) => `${s} ${n}`).join(', ');
+    out.push(`Fundamentals: ${fo.enabled ? `${fo.bound} bound to DefiLlama${states ? ` (${states})` : ''}; last refresh ${fo.last_run ? `${fo.last_run.at} ${fo.last_run.status}` : 'never'}; requests this month ${fo.calls.month_count} (${fo.calls.month_answered || 0} answered)${fo.rate_limited ? `; rate-limited until ${fo.retry_at}` : ''}` : 'turned off in settings'}.`);
+  } catch (_) { /* fundamentals module optional */ }
   out.push(`Offsite: ${require('./core/offsite').deskKey() ? 'backup key set (CR_BACKUP_KEY); a PC can pull verified copies' : 'not set up (no CR_BACKUP_KEY): the records exist only on this disk and in Render\'s disk snapshots'}.`);
   return out;
 }

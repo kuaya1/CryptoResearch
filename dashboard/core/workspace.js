@@ -43,6 +43,20 @@ const DEFAULT_SETTINGS = {
     backoff_max_minutes: 60,
     max_source_age_hours: 48,
   },
+  // DefiLlama fees, revenue and holders revenue of each project bound to a
+  // DefiLlama entity (fundamentals.js): keyless, refreshed per project every
+  // refresh_hours, a snapshot older than stale_hours shown as stale.
+  fundamentals: {
+    enabled: true,
+    refresh_hours: 12,
+    stale_hours: 36,
+    timeout_seconds: 20,
+    max_attempts: 2,
+    monthly_request_budget: 6000,
+    max_projects_per_run: 10,
+    backoff_initial_minutes: 5,
+    backoff_max_minutes: 360,
+  },
   rank_sources: {
     coingecko: { enabled: true, note: 'CoinGecko market-cap rank, from the same /coins/markets call as prices.' },
     coinmarketcap: { enabled: false, note: 'Optional. Needs a CoinMarketCap API key in ~/.cryptoresearch/secrets.json (coinmarketcap_api_key) and a CoinMarketCap ID on each project.' },

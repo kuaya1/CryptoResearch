@@ -70,7 +70,7 @@ function instructionsFor(me) {
 To research a project Eric names, links or shows you:
 1. find_projects first. If it is already there, use it; never add it twice. If it is archived, ask Eric whether to restore it (restore_project); archive_project only when he asks.
 2. Identify it from evidence: the official website (the project's own site), and the chain and contract address from the project's own docs or a block explorer. CoinMarketCap, CoinGecko, DEX screener and explorer pages are leads, not the official website: the desk keeps one given as the website as evidence only. Never guess or complete a contract address. If two tokens could match (same ticker, similar names), show Eric the candidates and ask.
-3. add_project once, with the evidence URLs. It refuses duplicates by itself; if the project is already there with a pending identity, what you supplied completes it.
+3. add_project once, with the evidence URLs. It refuses duplicates by itself; if the project is already there with a pending identity, what you supplied completes it. If the project earns protocol or chain fees, also bind its DefiLlama entity with update_project_identity (defillama_slug, defillama_scope, defillama_source_url) after checking on defillama.com that the entity is this project and which scope matches its token: never by name or ticker alone, and ask Eric when the product, parent or chain choice is unclear. Its dated fee, revenue and holders-revenue series then come with the research prompt.
 4. start_research. Research needs a verified identity (official website, token binding, evidence URL), so every model researches the same project: if it is pending, complete it with update_project_identity first, or, only when Eric confirmed the project has no token yet or cannot be identified further, pass allow_pending_identity: true. It returns the run's canonical prompt (horizon, rubric, grading appendix) in run.prompt, byte for byte as frozen when the run started; never rebuild it from templates or other files. Follow it exactly: research with your own web tools, cite sources with dates, keep facts, inferences and unknowns apart, cover risks, and end with the JSON block it asks for. If a research run for the project is already open, start_research resumes it (with any draft you saved) instead of starting another. When Eric asks for all three models (Claude, ChatGPT and Gemini), pass models: "all": each model gets the same prompt and never sees the others' conclusions. A model whose paid API is set up on the desk runs automatically in the background; a model without one is manual research: it waits for its own assistant until Eric asks it ("${WAITING_PHRASE}": ${ASK_HOW.chatgpt}, or ${ASK_HOW.gemini}), with nothing to set up. A model Eric put on hold gets nothing new and is not added. The reply's readiness says which; tell Eric exactly that, and never promise a model that is on hold (desk_status has the detail: routes, limits, spend). Never ask Eric for an API key in chat: he adds keys in Render's environment himself.
 ${step5}
    Evidence standards, the same for every model: code quality rests on implementation files read at a named commit (never commit counts, stars or an audit badge); liquidity rests on a stated volume baseline and a spread, depth or order-book reading (never a list of venues); a scenario probability rests on evidence or stays null with the reason. Give a point score where the evidence supports one, a range only between two named readings the evidence supports (and say what would tell them apart), otherwise unknown with what is missing. A range is a judgment, not a confidence interval. Set analysis_at to when you finish (or the date alone), never a time after you save.
@@ -120,17 +120,21 @@ const TOOLS = [
   {
     name: 'update_project_identity',
     title: 'Complete a project\'s identity',
-    description: 'Adds identity evidence to an existing project (official website, contracts, CoinGecko ID, evidence URLs), for example to verify a pending one. An identity that belongs to another project is refused.',
+    description: 'Adds identity evidence to an existing project (official website, contracts, CoinGecko ID, evidence URLs), for example to verify a pending one; an identity that belongs to another project is refused. It also binds the DefiLlama entity whose fees describe the project (defillama_slug, defillama_scope, defillama_source_url): check on defillama.com that the entity is this project and which scope matches its token, never by name or ticker alone, and ask Eric when the product, parent or chain choice is unclear. The desk then fetches DefiLlama\'s fee, revenue and holders-revenue series for it (the reply says what DefiLlama answered) and puts them, dated, in the research prompt. A binding changes nothing else in the identity.',
     inputSchema: {
       type: 'object',
-      required: ['project_id', 'evidence'],
+      required: ['project_id'],
       additionalProperties: false,
       properties: {
         project_id: projectRef,
         official_website: { type: 'string' },
         contracts: { type: 'array', items: { type: 'object', required: ['chain', 'address'], additionalProperties: false, properties: { chain: { type: 'string' }, address: { type: 'string' } } } },
         coingecko_id: { type: 'string' },
-        evidence: { type: 'array', minItems: 1, items: { type: 'object', required: ['url'], additionalProperties: false, properties: { url: { type: 'string' }, note: { type: 'string' } } } },
+        evidence: { type: 'array', minItems: 1, description: 'URLs that establish the identity; required with official_website, contracts or coingecko_id.', items: { type: 'object', required: ['url'], additionalProperties: false, properties: { url: { type: 'string' }, note: { type: 'string' } } } },
+        defillama_slug: { type: 'string', description: 'The exact DefiLlama slug, as in defillama.com/protocol/<slug> (lowercase).' },
+        defillama_scope: { type: 'string', enum: ['product', 'parent', 'chain'], description: 'product: one protocol or version; parent: DefiLlama\'s parent entity including its child protocols; chain: a chain\'s own fees. It must be the kind of entity DefiLlama shows for that slug.' },
+        defillama_source_url: { type: 'string', description: 'Where you verified that this DefiLlama entity is this project and its token (DefiLlama\'s page naming the token, or the project\'s own docs).' },
+        remove_defillama: { type: 'boolean', description: 'Remove the DefiLlama binding (for example when it was wrong).' },
       },
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -528,17 +532,47 @@ function projectView(ws, p, ctx) {
   }
   // A bound CoinGecko ID the last price refresh did not get back: probably wrong.
   const notReturned = id.coingecko_id && (market.freshness(ws).missing_ids || []).includes(id.coingecko_id);
+  // The DefiLlama binding and what was saved for it, briefly.
+  let defillama = null;
+  try {
+    const f = require('./core/fundamentals').summary(ws, p);
+    defillama = f.state === 'unmapped' ? null : { slug: f.slug, scope: f.scope, state: f.state, fetched_at: f.fetched_at, ...(f.reason ? { reason: f.reason } : {}) };
+  } catch (_) { /* optional */ }
   return {
     project_id: p.project_id,
     name: p.name,
     symbol: p.symbol || null,
     status: p.status,
     on_watchlist: Boolean(p.watchlist && p.watchlist.on_watchlist),
-    identity: { status: id.status, official_website: id.official_website || null, coingecko_id: id.coingecko_id || null, contracts: (id.assets || []).map((a) => ({ chain: a.chain, address: a.contract_address })), candidates: (id.candidates || []).length, unknowns: id.unknowns || [], ...(notReturned ? { price_problem: `CoinGecko returned no price for "${id.coingecko_id}" in the last refresh; the ID may be wrong. Check the project's CoinGecko listing (its contract must match the one on file) and tell Eric before correcting it with update_project_identity.` } : {}) },
+    identity: { status: id.status, official_website: id.official_website || null, coingecko_id: id.coingecko_id || null, contracts: (id.assets || []).map((a) => ({ chain: a.chain, address: a.contract_address })), candidates: (id.candidates || []).length, unknowns: id.unknowns || [], defillama, ...(notReturned ? { price_problem: `CoinGecko returned no price for "${id.coingecko_id}" in the last refresh; the ID may be wrong. Check the project's CoinGecko listing (its contract must match the one on file) and tell Eric before correcting it with update_project_identity.` } : {}) },
     sector: p.sector ? p.sector.primary : null,
     your_latest_report: latest,
     reports_by_model: byModel,
     open_research: run ? runView(ws, p.project_id, run, ctx) : null,
+  };
+}
+
+// How long update_project_identity waits for the first fetch of a new
+// DefiLlama binding before answering; the fetch itself continues.
+const BINDING_FETCH_WAIT_MS = 15000;
+
+// A new DefiLlama binding is fetched once right away (fundamentals.refresh:
+// the lease, gate and backoff every runner shares), so the reply can say
+// whether DefiLlama confirms the slug and scope. A slow answer never holds the
+// reply past BINDING_FETCH_WAIT_MS; the refresh then finishes by itself.
+async function fetchNewBinding(ws, id, ctx, { unchanged = false } = {}) {
+  const f = require('./core/fundamentals');
+  // The same binding again, already fetched: nothing is asked again.
+  const saved = f.summary(ws, projects.getProject(ws, id));
+  if (unchanged && saved.fetched_at) return { ...saved, refresh: { status: 'not_needed', message: 'This binding was already on file and fetched; nothing was asked again.' } };
+  const run = f.refresh(ws, { trigger: 'binding', force: true, projectIds: [id], ...(ctx.fundamentalsFetch ? { fetchImpl: ctx.fundamentalsFetch } : {}) }).catch((err) => ({ status: 'failed', message: err.message }));
+  let timer;
+  const waited = await Promise.race([run, new Promise((resolve) => { timer = setTimeout(() => resolve(null), BINDING_FETCH_WAIT_MS); })]);
+  clearTimeout(timer);
+  const now = f.summary(ws, projects.getProject(ws, id));
+  return {
+    ...now,
+    refresh: waited ? { status: waited.status, message: waited.message } : { status: 'running', message: 'DefiLlama has not answered yet; the fetch continues in the background and the next research prompt uses what it saves.' },
   };
 }
 
@@ -550,7 +584,7 @@ const matches = (p, q) => {
   const s = q.toLowerCase().trim();
   const id = p.identity || {};
   const site = id.official_website && !projects.isNonOfficialHost(id.official_website) ? id.official_website : null;
-  const hay = [p.project_id, p.name, p.symbol, ...(p.aliases || []), site, id.coingecko_id, ...(id.assets || []).map((a) => a.contract_address), ...(id.candidates || []).map((c) => c.coingecko_id)]
+  const hay = [p.project_id, p.name, p.symbol, ...(p.aliases || []), site, id.coingecko_id, id.defillama && id.defillama.slug, ...(id.assets || []).map((a) => a.contract_address), ...(id.candidates || []).map((c) => c.coingecko_id)]
     .filter(Boolean).map((x) => String(x).toLowerCase());
   return hay.some((h) => h === s || h.includes(s) || (s.length >= 3 && s.includes(h) && h.length >= 3));
 };
@@ -687,16 +721,29 @@ const handlers = {
     };
   },
 
-  update_project_identity(ws, args, ctx) {
+  async update_project_identity(ws, args, ctx) {
     const id = pid(args);
     const evidence = Array.isArray(args.evidence) ? args.evidence.filter((e) => e && typeof e.url === 'string') : [];
-    if (!evidence.length) throw new OpError('INVALID', 'At least one evidence URL is required.');
-    const input = { evidence: evidence.map((e) => ({ url: e.url, note: e.note || null, kind: ctx.actor })) };
-    if (args.official_website) input.official_website = args.official_website;
-    if (args.coingecko_id) input.coingecko_id = args.coingecko_id;
-    if (Array.isArray(args.contracts) && args.contracts.length) input.assets = args.contracts.map((c) => ({ chain: c.chain, contract_address: c.address }));
-    const out = projects.updateIdentity(ws, id, input);
-    return { status: out.status, identity_status: out.identity_status, unknowns: out.unknowns, project: projectView(ws, projects.getProject(ws, id), ctx) };
+    const identityGiven = Boolean(args.official_website || args.coingecko_id || (Array.isArray(args.contracts) && args.contracts.length));
+    const bindGiven = ['defillama_slug', 'defillama_scope', 'defillama_source_url'].some((k) => args[k] !== undefined);
+    const unbind = args.remove_defillama === true;
+    if ((identityGiven || !(bindGiven || unbind)) && !evidence.length) throw new OpError('INVALID', 'At least one evidence URL is required.');
+    const defillama = unbind ? null : bindGiven ? { slug: args.defillama_slug, scope: args.defillama_scope, source_url: args.defillama_source_url } : undefined;
+    let out;
+    if (!identityGiven && !evidence.length) {
+      // Only the DefiLlama binding: the rest of the identity stays as it is.
+      out = projects.setDefillamaBinding(ws, id, { defillama });
+    } else {
+      const input = { evidence: evidence.map((e) => ({ url: e.url, note: e.note || null, kind: ctx.actor })) };
+      if (args.official_website) input.official_website = args.official_website;
+      if (args.coingecko_id) input.coingecko_id = args.coingecko_id;
+      if (Array.isArray(args.contracts) && args.contracts.length) input.assets = args.contracts.map((c) => ({ chain: c.chain, contract_address: c.address }));
+      if (defillama !== undefined) input.defillama = defillama;
+      out = projects.updateIdentity(ws, id, input);
+    }
+    const reply = { status: out.status, identity_status: out.identity_status, unknowns: out.unknowns || [] };
+    if (bindGiven && !unbind) reply.fundamentals = await fetchNewBinding(ws, id, ctx, { unchanged: out.status === 'unchanged' });
+    return { ...reply, project: projectView(ws, projects.getProject(ws, id), ctx) };
   },
 
   start_research(ws, args, ctx) {
@@ -1305,11 +1352,12 @@ function logDetail(name, args, out) {
   return parts.length ? ` [${parts.join('; ')}]` : '';
 }
 
-function makeMcp(ws, { rebuild = () => {}, version = '1.0.0', log = () => {}, kick = () => {} } = {}) {
+// fundamentalsFetch: tests only (a stub for DefiLlama's API).
+function makeMcp(ws, { rebuild = () => {}, version = '1.0.0', log = () => {}, kick = () => {}, fundamentalsFetch = null } = {}) {
   async function call(name, args, who) {
     const fn = handlers[name];
     if (!fn) return { content: [{ type: 'text', text: `Unknown tool ${name}.` }], isError: true };
-    const ctx = { ...contextFor(who), kick };
+    const ctx = { ...contextFor(who), kick, fundamentalsFetch };
     // Records made through a connection are attributed to it.
     const cw = Object.create(ws, { actor: { value: ctx.actor, writable: true, enumerable: true }, _idem: { value: null, writable: true } });
     const by = `${ctx.label}${ctx.client && ctx.client !== ctx.label ? `: ${ctx.client}` : ''}`;

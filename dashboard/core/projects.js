@@ -173,6 +173,9 @@ function providerList(list) {
 }
 
 function buildIdentity(input) {
+  // The DefiLlama binding (fundamentals.js), validated by the caller, is kept as
+  // given. It never counts toward verifying the token identity.
+  const defillama = input.defillama ? { defillama: input.defillama } : {};
   let website = input.official_website ? safeUrl(input.official_website) : null;
   const assets = cleanAssets(input.assets);
   const evidence = cleanEvidence(input.evidence);
@@ -195,7 +198,7 @@ function buildIdentity(input) {
     if (!evidence.length) unknowns.push('No identity evidence URL recorded.');
   }
   if (status === 'verified') {
-    return { status, official_website: website, coingecko_id: cg, assets, candidates: [], evidence, unknowns };
+    return { status, official_website: website, coingecko_id: cg, assets, candidates: [], evidence, unknowns, ...defillama };
   }
   return {
     status,
@@ -205,7 +208,37 @@ function buildIdentity(input) {
     candidates: hasBinding ? [{ coingecko_id: cg, assets, note: 'Unconfirmed candidate. Not used for prices or holdings until confirmed.' }] : [],
     evidence,
     unknowns: [...new Set(unknowns)],
+    ...defillama,
   };
+}
+
+// The DefiLlama binding an identity change asks for, validated by
+// fundamentals.js: undefined keeps the one on file, null removes it, and a
+// binding object (`defillama`) or the flat defillama_* fields set it.
+function defillamaChange(ws, input) {
+  if (!input) return undefined;
+  if (input.defillama === null || input.remove_defillama === true) return null;
+  const flat = ['defillama_slug', 'defillama_scope', 'defillama_source_url', 'defillama_note'].some((k) => input[k] !== undefined && input[k] !== null);
+  const given = input.defillama && typeof input.defillama === 'object'
+    ? input.defillama
+    : flat ? { slug: input.defillama_slug, scope: input.defillama_scope, source_url: input.defillama_source_url, note: input.defillama_note } : undefined;
+  if (given === undefined) return undefined;
+  return require('./fundamentals').normalizeBinding(given, { actor: ws.actor || null });
+}
+
+// The binding a change leaves on file: the same entity, scope and source again
+// keeps the existing binding (and its cache) as it is.
+function nextDefillama(current, change) {
+  if (change === undefined) return current || null;
+  if (change && require('./fundamentals').sameBinding(current, change)) return current;
+  return change;
+}
+
+// One DefiLlama entity describes one project.
+function refuseSharedDefillama(ws, binding, excludeId) {
+  if (!binding) return;
+  const other = listProjects(ws).find((p) => !p.broken && p.project_id !== excludeId && p.identity && p.identity.defillama && p.identity.defillama.slug === binding.slug);
+  if (other) throw new OpError('CONFLICT', `The DefiLlama entity "${binding.slug}" is already bound to "${other.project_id}". One entity describes one project: if that binding is wrong, remove it there first. Not bound.`);
 }
 
 function validateProject(ws, project) {
@@ -278,7 +311,9 @@ function addProject(ws, input) {
     id = `${id}-${i}`;
   }
   const now = new Date().toISOString();
-  const identity = buildIdentity(input);
+  const defillama = nextDefillama(null, defillamaChange(ws, input));
+  refuseSharedDefillama(ws, defillama, null);
+  const identity = buildIdentity({ ...input, defillama });
   const onWatchlist = input.watchlist !== false;
   const project = {
     schema_version: 'cr.project.v1',
@@ -357,6 +392,9 @@ function updateIdentity(ws, id, input) {
   const keepSite = Boolean(input.official_website && isNonOfficialHost(input.official_website) && site && !isNonOfficialHost(site));
   const evidence = [...(current.identity.evidence || []), ...(input.evidence || [])];
   if (keepSite && !evidence.some((e) => e && safeUrl(e.url) === safeUrl(input.official_website))) evidence.push({ kind: 'listing', url: input.official_website, note: LISTING_NOTE });
+  // The DefiLlama binding on file is carried through every identity change;
+  // only an explicit binding or removal changes it.
+  const defillama = nextDefillama(current.identity.defillama, defillamaChange(ws, input));
   const merged = {
     official_website: input.official_website !== undefined && !keepSite ? input.official_website : site,
     coingecko_id: input.coingecko_id !== undefined ? input.coingecko_id : current.identity.coingecko_id || (current.identity.candidates[0] || {}).coingecko_id,
@@ -364,11 +402,13 @@ function updateIdentity(ws, id, input) {
     evidence,
     identity_status: input.identity_status,
     unknowns: input.unknowns || [],
+    defillama,
   };
   const clash = findDuplicates(ws, { coingecko_id: merged.coingecko_id, assets: merged.assets, official_website: merged.official_website }, { excludeId: id });
   if (clash.strong.length) {
     throw new OpError('CONFLICT', `That identity already belongs to "${clash.strong[0].project_id}" (${clash.strong[0].reasons.join(', ')}). Not bound.`);
   }
+  if (defillama !== (current.identity.defillama || null)) refuseSharedDefillama(ws, defillama, id);
   const identity = buildIdentity(merged);
   const out = mutateProject(ws, id, 'update_identity', `Update identity of ${id}`, (p, op) => {
     p.identity = identity;
@@ -376,6 +416,27 @@ function updateIdentity(ws, id, input) {
     if (input.regenerate_prompts !== false) stageProjectPrompts(ws, op, p);
   });
   return { status: 'updated', project_id: id, identity_status: identity.status, unknowns: identity.unknowns, files: out.files, verified: out.verified };
+}
+
+// Sets or removes only the DefiLlama binding (fundamentals.js); the rest of the
+// identity stays exactly as it is, and binding never verifies a token identity.
+// Repeating the same binding changes nothing.
+function setDefillamaBinding(ws, id, input) {
+  const current = getProject(ws, id);
+  const change = defillamaChange(ws, input);
+  if (change === undefined) throw new OpError('INVALID', 'Give the DefiLlama slug, scope and the URL where you verified the entity, or ask to remove the binding.');
+  const before = current.identity.defillama || null;
+  const next = nextDefillama(before, change);
+  if (next !== before) refuseSharedDefillama(ws, next, id);
+  const out = mutateProject(ws, id, 'update_identity', `${next ? 'Bind' : 'Unbind'} the DefiLlama entity of ${id}`, (p) => {
+    if (next) {
+      p.identity = { ...p.identity, defillama: next };
+    } else if (p.identity && p.identity.defillama) {
+      const { defillama: _removed, ...rest } = p.identity; // eslint-disable-line no-unused-vars
+      p.identity = rest;
+    }
+  });
+  return { status: out.noop ? 'unchanged' : next ? 'bound' : 'unbound', project_id: id, identity_status: current.identity.status, defillama: next, files: out.files, verified: out.verified };
 }
 
 function setHeadline(ws, id, { report_id = null, entry_id = null, note = null, clear = false }) {
@@ -491,6 +552,7 @@ module.exports = {
   addProject,
   setWatchlist,
   updateIdentity,
+  setDefillamaBinding,
   setHeadline,
   archiveProject,
   restoreProject,

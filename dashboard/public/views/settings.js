@@ -460,7 +460,7 @@ function activityTab(ctx) {
   const idx = ctx.state.index;
   const mf = idx.freshness.market;
   const jobs = idx.freshness.jobs.jobs || {};
-  const jobRows = ['requests', 'inbox', 'market', 'research', 'snapshot', 'reviews', 'backup', ...(ctx.state.session && ctx.state.session.hosted ? [] : ['offsite'])].map((name) => ({ name, ...(jobs[name] || {}) }));
+  const jobRows = ['requests', 'inbox', 'market', 'fundamentals', 'research', 'snapshot', 'reviews', 'backup', ...(ctx.state.session && ctx.state.session.hosted ? [] : ['offsite'])].map((name) => ({ name, ...(jobs[name] || {}) }));
   const runner = idx.freshness.jobs.runner || {};
   const JOB_STATE = { ok: ['OK', 'ok'], done: ['OK', 'ok'], failed: ['Failed', 'bad'], attention: ['Needs attention', 'warn'] };
   const ps = priceStatus(mf);

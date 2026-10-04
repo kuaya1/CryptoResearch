@@ -3,6 +3,7 @@
 //   requests  apply queued requests                     every run
 //   inbox     import new reports from inbox folders      every run
 //   market    prices and supply metrics                  every 5 min while the dashboard is open, about hourly otherwise
+//   fundamentals  DefiLlama fees/revenue of bound projects  every 12 h per project (fundamentals.js); a new binding at once
 //   research  run queued research jobs (explicit requests or configured schedules only)
 //   snapshot  daily portfolio snapshot                   once per day (America/New_York)
 //   reviews   daily review findings                      once per day
@@ -21,7 +22,7 @@ const { ymdInTz } = require('./dates');
 const JOB_STATE_REL = 'logs/jobs-state.json';
 const JOB_LOG_REL = 'logs/jobs.jsonl';
 const FINDINGS_REL = 'logs/review-findings.json';
-const JOB_NAMES = ['requests', 'inbox', 'market', 'research', 'snapshot', 'reviews', 'backup', 'offsite'];
+const JOB_NAMES = ['requests', 'inbox', 'market', 'fundamentals', 'research', 'snapshot', 'reviews', 'backup', 'offsite'];
 const DAILY = new Set(['snapshot', 'reviews', 'backup', 'offsite']);
 const OK_STATUSES = new Set(['ok', 'noop', 'attention', 'skipped', 'partial', 'busy', 'backoff', 'budget_paused', 'not_due']);
 
@@ -51,6 +52,13 @@ function isDue(ws, name, state, now = Date.now(), opts = {}) {
       return true;
     case 'market':
       return marketDue(ws, now, opts);
+    case 'fundamentals':
+      // Closed while DefiLlama's rate limit or a failure backoff runs.
+      try {
+        return require('./fundamentals').isDue(ws, now);
+      } catch (_) {
+        return false;
+      }
     case 'research':
       try {
         return require('./research').hasDueWork(ws, now);
@@ -127,6 +135,12 @@ async function runJobBody(ws, name, trigger) {
       }
       const extra = ctx && !['not_due', 'skipped'].includes(ctx.status) ? ` ${ctx.message}` : '';
       return { status: r.status, summary: `${r.message}${extra}`, error: r.status === 'failed' ? r.message : null };
+    }
+    case 'fundamentals': {
+      // Its own lease, gate and backoff are inside refresh(), shared with the
+      // CLI and the connector.
+      const r = await require('./fundamentals').refresh(ws, { trigger });
+      return { status: r.status, summary: r.message, error: r.status === 'failed' ? r.message : null };
     }
     case 'research': {
       const r = await require('./research').runDueJobs(ws, { trigger });

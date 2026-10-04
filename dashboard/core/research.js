@@ -750,6 +750,20 @@ function budgetCheck(ws, reservation, { runId = null, now = new Date() } = {}) {
 
 // ---------------------------------------------------------------------------
 // Evidence packet: dated, neutral, public context. Never holdings or notes.
+// v2 (2026-10-04) adds `fundamentals`: DefiLlama's fee, revenue and holders-
+// revenue series for the project's bound entity, read from the saved cache
+// (fundamentals.js; never fetched here), or why there is none. A run keeps the
+// packet it was created with: v1 packets and their prompts stay as they are.
+
+// What the saved fundamentals say for this project. Research never waits for
+// or depends on them: a cache that cannot be read is frozen as unavailable.
+function fundamentalsBlock(ws, project) {
+  try {
+    return require('./fundamentals').packetBlock(ws, project);
+  } catch (err) {
+    return { schema_version: 'cr.fundamentals.v1', provider: 'DefiLlama', state: 'unavailable', reason: `The saved fundamentals could not be read: ${String(err.message).slice(0, 200)}`, binding: null };
+  }
+}
 
 // profileRef: the run's scoring profile (the current version of the one the
 // project record names); without it, the record's.
@@ -758,7 +772,7 @@ function evidencePacket(ws, project, { profileRef = null } = {}) {
   const id = project.identity && project.identity.status === 'verified' ? project.identity.coingecko_id : null;
   const obs = id && latest.assets ? latest.assets[id] : null;
   return {
-    schema_version: 'cr.evidence-packet.v1',
+    schema_version: 'cr.evidence-packet.v2',
     captured_at: new Date().toISOString(),
     note: 'Dated public context captured by the dashboard. Starting point only: verify what you rely on. Contains no holdings, private notes, or other models\' conclusions.',
     project: {
@@ -789,6 +803,7 @@ function evidencePacket(ws, project, { profileRef = null } = {}) {
       vs_btc: require('./cycle').assetVsBtc(latest, obs),
     } : { note: id ? 'No market observation stored yet.' : 'No verified token binding, so no market data.' },
     market_context: require('./cycle').packetContext(ws),
+    fundamentals: fundamentalsBlock(ws, project),
     excluded: ['your holdings and transactions', 'your notes and journal', 'other models\' reports and scores'],
   };
 }
@@ -886,7 +901,7 @@ function createRun(ws, args = {}) {
     horizon,
     owner_instructions: ownerInstructions,
     prompt: { version: require('./prompts').promptVersionFor(horizon, ws.rubrics.profiles[profileRef]), path: `${dir}/prompt.md`, sha256: sha256(prompt), identical_for_all_providers: true },
-    evidence_packet: { path: `${dir}/evidence-packet.json`, sha256: sha256(packetText), captured_at: packet.captured_at, market_snapshot_id: packet.market_context.snapshot_id || null },
+    evidence_packet: { path: `${dir}/evidence-packet.json`, sha256: sha256(packetText), captured_at: packet.captured_at, market_snapshot_id: packet.market_context.snapshot_id || null, schema_version: packet.schema_version, fundamentals_state: packet.fundamentals.state },
     independence: 'Each provider gets the same prompt and dated context and never sees another model\'s conclusions.',
     jobs,
   };

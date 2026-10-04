@@ -22,6 +22,11 @@ Eric's desk is the online dashboard, <https://cryptoresearch.onrender.com>, whic
 1. `find_projects` with the name, ticker, contract or website. If the project is there, use it, even if its identity is still pending (then complete it in step 3). If it is **archived**, ask Eric whether to restore it (`restore_project`); `add_project` returns `archived` for it and adds nothing. Use `archive_project` only when Eric asks: nothing is deleted, and a request already sent to a paid model may still finish and be billed.
 2. **Identify it from evidence:** the official website from the project itself, and the token binding: the chain and contract from the project's own docs or a block explorer, or its CoinGecko ID. A screenshot, a CoinMarketCap or a CoinGecko page is a lead, never the official website: the desk refuses a listing page as a website (it keeps it as evidence) and refuses names such as "CoinMarketCap". Never guess or complete a contract. If two tokens could match (same ticker, similar names), show Eric the candidates and ask once.
 3. `add_project` once, with the evidence URLs and his words. `exists` means nothing was added; if that project's identity was still pending, the identity you supplied completes it (the reply gives `identity_status`). `possible_duplicate` means only the ticker matches another project: ask Eric, then repeat with `allow_same_symbol: true` only if it really is different. For a project already on the desk, `update_project_identity` completes a pending identity.
+   **DefiLlama binding** (when the project earns protocol or chain fees): `update_project_identity` with `defillama_slug` (the exact slug, as in defillama.com/protocol/<slug>), `defillama_scope` and `defillama_source_url` (where you verified the relationship: DefiLlama's page naming the token, or the project's docs).
+   - **Scope:** `product` is one protocol or version, `parent` is DefiLlama's parent entity including its child protocols, `chain` is a chain's own fees. It must be the kind of entity DefiLlama shows for that slug.
+   - **Never by name or ticker alone.** Ask Eric when the product, parent or chain choice is unclear.
+   - **The reply says what DefiLlama answered.** A wrong slug or scope is refused and named there; fix it, or remove the binding with `remove_defillama: true`.
+   - **Result:** every new research run's evidence packet then carries DefiLlama's fee, revenue and holders-revenue series over the previous 30 completed UTC days, dated, with definitions and coverage. Fees, revenue and holders revenue stay separate, and no valuation ratio is computed. An unbound project's packet says `unmapped`.
 4. `start_research` with his words in `owner_request`, `models: "all"` when he asked for all three, and his own questions, if any, in `instructions`. Read `status`:
 
    | `status` | Meaning | Do |
@@ -118,6 +123,7 @@ This is the everyday request. CLI route:
      --sector "AI/Data" --research claude,chatgpt,gemini `
      --channel cowork --utterance "<Eric's words exactly>" --json
    ```
+   **DefiLlama.** For a project with protocol or chain fees, bind its DefiLlama entity from evidence, never by name or ticker: `project identity <id> --defillama-slug <slug> --defillama-scope product|parent|chain --defillama-source <URL>`. It is fetched once right away; the output says whether DefiLlama confirms the slug and scope. `--no-defillama` removes it.
    **Horizon.** Leave `--horizon` out: the run then uses Eric's position horizon, **4 calendar months from today** (for example 2026-10-02 to 2027-02-02). Use `--horizon "3 months"` when he asks for a shorter one. Anything longer than 4 months is labeled a long-term exception: use it only when Eric asks for it, and pass his reason in his words if he gave one, `--long-term-reason "<his words>"`. Never write a reason for him. (Whether a reason should be required is Eric's open decision; until he decides, it is not required.)
    Read `status`:
 
@@ -197,6 +203,8 @@ Grades: each model's grade is shown separately. Missing, unknown or N/A inputs w
 | `market refresh` | Fetches prices now from CoinGecko (only tracked coin IDs are sent). |
 | `market context [--refresh]` | The market-cycle snapshot (BTC trend, dominance, breadth). Refreshed about hourly with prices; `--refresh` makes a new one (2 CoinGecko calls). |
 | `market lookup "<name>"` | Listing candidates for identity work. |
+| `fundamentals refresh [<id>]` | Fetches DefiLlama's fees, revenue and holders revenue now for bound projects. A rate limit is never skipped. Otherwise every 12 hours per project. |
+| `fundamentals status [<id>]` | Saved fundamentals: state (unmapped, pending, fresh, stale, unavailable, not found, scope mismatch), window, totals and coverage. |
 | `research run` | Runs queued API jobs now, within the budget. |
 | `research providers` | Which models can run by API and what is missing. |
 | `index rebuild` | Rebuilds the dashboard cache from the files. |

@@ -164,6 +164,19 @@ async function doctor(ws) {
   const m = require('./market').freshness(ws);
   add('Market data', ['fresh', 'fresh_partial', 'fresh_last_failed'].includes(m.freshness), m.last_success_at ? `Last success ${m.last_success_at} (${m.age_minutes} min ago)${m.last_error ? `; last issue: ${m.last_error}` : ''}; CoinGecko requests this month ${m.calls.month_count}${m.calls.budget_monthly ? ` of ${m.calls.budget_monthly}` : ''}${typeof m.calls.month_answered === 'number' ? ` (${m.calls.month_answered} answered${m.calls.answered_counted_since ? ` since ${m.calls.answered_counted_since}` : ''})` : ''}` : ws.settings.market_data.enabled ? 'Never fetched' : 'Turned off in settings', ['fresh'].includes(m.freshness) || !ws.settings.market_data.enabled ? 'ok' : 'warn');
 
+  try {
+    // DefiLlama fundamentals: what is bound and saved, the last refresh, the gate.
+    const fo = require('./fundamentals').overview(ws);
+    const states = Object.entries(fo.states).filter(([s]) => s !== 'unmapped').map(([s, n]) => `${n} ${s.replace(/_/g, ' ')}`).join(', ');
+    const problems = ['unavailable', 'not_found', 'scope_mismatch', 'entity_mismatch'].reduce((a, s) => a + (fo.states[s] || 0), 0);
+    const detail = !fo.enabled
+      ? 'Turned off in settings.'
+      : fo.bound
+        ? `${fo.bound} project(s) bound to DefiLlama (${states}); last refresh ${fo.last_run ? `${fo.last_run.at} (${fo.last_run.status})` : 'never'}; requests this month ${fo.calls.month_count}${fo.budget_monthly ? ` of ${fo.budget_monthly}` : ''}${fo.rate_limited ? `; rate-limited until ${fo.retry_at}` : ''}.`
+        : 'No project is bound to a DefiLlama entity, so no fees or revenue are supplied (node dashboard/cli.js project identity <id> --defillama-slug ...).';
+    add('Fundamentals', !problems, detail, problems ? 'warn' : 'info');
+  } catch (_) { /* fundamentals module optional */ }
+
   const pendingReq = require('./requests').pendingRequests(ws);
   add('Queued requests', pendingReq.length === 0, pendingReq.length ? `${pendingReq.length} pending (not saved yet)` : 'None pending', pendingReq.length ? 'warn' : 'ok');
   const inboxSt = require('./inbox').inboxStatus(ws);
