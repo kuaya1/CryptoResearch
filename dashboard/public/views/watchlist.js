@@ -1,22 +1,22 @@
 // Watchlist: the projects you follow, what moved, what each model thinks.
-//   Hover or keyboard-focus a grade badge  -> compact scorecard (hoverable, Esc dismisses)
-//   Select a project (click, tap, Enter)   -> the project inspector (?p=<id>)
-//   Select a provider badge                -> the inspector, focused on that provider
-//   Open full research                     -> #/project/<id>/<tab>
+//   Select a project (click, tap, Enter, Space) -> the project inspector (?p=<id>)
+//   Select a provider badge                      -> the inspector, on that provider
+//   Open full research                           -> #/project/<id>/<tab>
+// Nothing floats over the list: there is no hover card.
 // The inspector is a dialog: docked beside the list on wide screens
 // (non-modal), a drawer over it on medium ones and full screen on a phone
 // (modal). Back, Escape and its close button close it and return focus to the
 // project. Live updates redraw only what changed, in place: the search box,
 // open details, scroll positions and the row order you are reading stay put.
 import {
-  h, clear, button, select, input, changeCell, sparkline, logo, gradeBadge, badgeInfo, verdictChip, bandClass,
+  h, clear, button, select, input, changeCell, sparkline, logo, gradeBadge, badgeInfo, verdictChip,
   fmtPrice, fmtCompactUsd, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, fmtSignedPct, freshnessText, priceStatus, stateText, toast, announce,
   followedCount, researchState, withheldReason, unscoredList, jobKey, icon, evidenceLevel, evidenceText, gradeMeter, coverageMeter,
-  withheldLabel, COVERAGE_MEANS, structureNotes, details, onHoldOf, copyText, anchorText, fmtRelDay,
+  withheldLabel, structureNotes, details, onHoldOf, copyText, anchorText, fmtRelDay,
   PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT,
 } from '../ui.js';
 import { openAddProjectDialog, openResearchDialog, openSectorDialog, waitingActions } from './dialogs.js';
-import { marketStrip, positionFacts, previewTiming, vsBtcFacts } from '../position-ui.js';
+import { marketStrip, positionFacts, vsBtcFacts } from '../position-ui.js';
 
 // Column catalogue. `hide` names the width below which a column steps aside
 // (its value stays in the inspector). "research" is the three model columns.
@@ -58,8 +58,7 @@ const OWNED = [['watching', 'Watching'], ['off', 'Not watching'], ['all', 'All']
 const PREFS_VERSION = 2;
 
 const view = {
-  q: '', order: null, orderKey: '', preview: null, previewFor: null, previewKey: null, showTimer: null, hideTimer: null,
-  dismissedKey: null, suppressFocus: false, returnFocus: null, focusProvider: null, focusOnRender: false, bound: false, menus: [],
+  q: '', order: null, orderKey: '', suppressFocus: false, returnFocus: null, focusProvider: null, focusOnRender: false, bound: false, menus: [],
   mounted: null, strip: null, panelPid: null, recent: null, inspectorTab: {}, focusTab: null, keptOpen: {},
 };
 
@@ -246,17 +245,12 @@ const hostedDesk = (ctx) => Boolean(ctx.state.session && ctx.state.session.hoste
 
 // One model's state for one project: its grade, or why there is none.
 function providerCell(ctx, p, prov) {
-  const b = gradeBadge(prov, p.providers && p.providers[prov], p.research && p.research.providers && p.research.providers[prov], { ...badgeOpts(ctx, prov), button: true, key: `gb-${p.project_id}-${prov}` });
-  b.addEventListener('mouseenter', () => schedulePreview(ctx, p.project_id, prov, b));
-  b.addEventListener('mouseleave', () => scheduleHide());
-  b.addEventListener('focus', () => {
-    if (view.suppressFocus) return;
-    if (b.matches(':focus-visible')) showPreview(ctx, p.project_id, prov, b);
-  });
-  b.addEventListener('blur', () => scheduleHide(150));
+  const rep = p.providers && p.providers[prov];
+  const b = gradeBadge(prov, rep, p.research && p.research.providers && p.research.providers[prov], { ...badgeOpts(ctx, prov), button: true, key: `gb-${p.project_id}-${prov}` });
+  // A long range (such as 38.3–100.0) takes a smaller figure to keep the width.
+  if (rep && rep.grade && rep.grade.status === 'range' && String(rep.grade.display || '').length >= 10) b.classList.add('long');
   b.addEventListener('click', (e) => {
     e.stopPropagation();
-    hidePreview();
     openPanel(ctx, p.project_id, b, prov);
   });
   return b;
@@ -484,6 +478,15 @@ export function setupShort(reason) {
   return n ? `Automatic: ${n} setting${n === 1 ? '' : 's'} missing (optional)` : 'Automatic: not set up (optional)';
 }
 
+function alertStrips(items, keyPrefix) {
+  if (!items.length) return null;
+  return h('ul', { class: 'astrips', 'aria-label': 'Needs a look' }, items.map((a, i) => h('li', null,
+    h('details', { class: `astrip ${a.severity}`, dataset: { key: `${keyPrefix}-d-${i}` } },
+      h('summary', null, h('span', { class: 'kind' }, kindWord(a)), h('span', { class: 't' }, a.title)),
+      a.detail || a.action ? h('div', { class: 'astrip-body' }, a.detail ? h('p', null, a.detail) : null,
+        a.action ? h('a', { class: 'small', href: attentionHref(a), dataset: { key: `${keyPrefix}-${i}` } }, 'Open') : null) : null))));
+}
+
 function alertList(items, keyPrefix) {
   if (!items.length) return null;
   return h('ul', { class: 'alerts', 'aria-label': 'Needs action' }, items.map((a, i) => h('li', { class: `alert ${a.severity}` },
@@ -592,126 +595,6 @@ function marketFigures(snap, mc) {
   ];
 }
 
-// ---- hover / focus scorecard (WCAG 1.4.13: hoverable, dismissible, persistent) --
-
-function previewContent(ctx, p, prov) {
-  const rep = p.providers && p.providers[prov];
-  const job = p.research && p.research.providers && p.research.providers[prov];
-  const info = badgeInfo(prov, rep, job, badgeOpts(ctx, prov));
-  const riskLabels = Object.fromEntries((ctx.state.index.rubrics.grading.risk_scores || []).map((x) => [x.id, x.label.replace(/ risk$/i, '')]));
-  const rows = [];
-  const add = (k, v) => { if (v !== null && v !== undefined && v !== '') rows.push(h('dt', null, k), h('dd', null, v)); };
-  let gradeEl;
-  if (rep) {
-    const g = rep.grade || {};
-    if (info.kind === 'grade' || info.kind === 'range') gradeEl = h('div', { class: `pv-grade${bandClass(g)}` }, h('span', { class: 'big' }, g.display), g.label ? h('span', { class: 'lab' }, g.label) : null, h('span', { class: 'what' }, info.kind === 'range' ? 'grade range, 0–100' : 'grade, 0–100'));
-    else gradeEl = h('div', { class: 'pv-grade' }, h('span', { class: 'state-text' }, info.kind === 'pdf' ? 'PDF: needs a text copy' : withheldLabel(g.coverage_pct)), info.kind !== 'pdf' && typeof g.coverage_pct === 'number' ? h('span', { class: 'what' }, 'report saved · coverage is the investment weight it scored, not progress') : null);
-    if (info.evText) add('Evidence', h('span', { class: 'ev-word' }, `${info.evText.charAt(0).toUpperCase()}${info.evText.slice(1)}`));
-    if (g.status === 'withheld' && info.kind !== 'pdf') {
-      const why = withheldReason(prov, g, rep.unscored);
-      add('Missing', h('span', null, `${why.why.charAt(0).toUpperCase()}${why.why.slice(1)}.`, unscoredList(why, { max: 110 })));
-      // Parts left unscored while the same report scores related ground.
-      if (rep.structure && rep.structure.flagged) add('Check', structureNotes(rep.structure, { max: 1 }));
-    }
-    add('Verdict', verdictChip(rep.verdict));
-    add('Horizon', rep.horizon || 'not stated');
-    add('Timing', previewTiming(rep));
-    if (info.kind === 'grade' || info.kind === 'range') add('Coverage', `${g.coverage_pct ?? 100}% of the weight scored`);
-    const risks = (rep.top_risks || []).filter((r) => r.status === 'scored' || r.status === 'range');
-    if (risks.length) add('Top risks', h('span', null, risks.map((r) => `${riskLabels[r.id] || r.id} ${r.status === 'range' ? `${r.low}–${r.high}` : r.value}`).join(' · '), h('span', { class: 'faint' }, ' (higher is worse)')));
-    add('Source', `${rep.model_version || 'model not stated'} · ${rep.provenance && rep.provenance.attested ? 'attested by the API' : 'self-reported'}${rep.provenance && rep.provenance.channel ? ` · via ${rep.provenance.channel}` : ''}`);
-    if (rep.model_total && rep.model_total.status === 'mismatch') add('Check', 'The model\'s own total differs from this grade');
-    if (info.newerText) add('Newer', info.newerText);
-  } else {
-    gradeEl = h('div', { class: 'pv-grade' }, h('span', { class: 'state-text' }, info.value === 'None' ? 'No research yet' : researchState(info.kind).short));
-    if (info.kind === 'none') add('Next', 'Select the project, then Run research');
-    else add('Status', info.text.replace(`${PROVIDER_LABELS[prov]}: `, ''));
-  }
-  const comp = p.comparison || {};
-  if (rep && (comp.flagged || []).length && (comp.comparable_providers || []).includes(prov)) {
-    add('Models differ', `${comp.flagged.length} item(s) by ${ctx.state.index.settings.comparison.spread_threshold}+ points, e.g. ${comp.flagged.slice(0, 2).map((f) => f.label).join(', ')}`);
-  }
-  return h('div', null,
-    h('div', { class: 'pv-head' }, h('span', { class: 'who' }, `${PROVIDER_LABELS[prov]} · ${p.name}`), rep ? h('span', { class: 'when' }, `${fmtDate(rep.analysis_at)}${info.age ? ` · ${info.age}` : ''}${info.stale ? ' · stale' : ''}`) : null),
-    gradeEl,
-    rows.length ? h('dl', { class: 'pv-rows' }, rows) : null,
-    h('div', { class: 'pv-foot' }, 'Click or press Enter for details · Esc closes'));
-}
-
-function ensurePreview() {
-  if (view.preview && view.preview.isConnected) return view.preview;
-  view.preview = h('div', { class: 'preview', hidden: true, 'aria-hidden': 'true' });
-  view.preview.addEventListener('mouseenter', () => clearTimeout(view.hideTimer));
-  view.preview.addEventListener('mouseleave', () => scheduleHide());
-  document.body.appendChild(view.preview);
-  return view.preview;
-}
-
-function previewOpen() {
-  return Boolean(view.preview && !view.preview.hidden);
-}
-
-function schedulePreview(ctx, pid, prov, anchor) {
-  // Matched by key: a live redraw replaces the badge element, not the dismissal.
-  if (view.dismissedKey && anchor.dataset.key === view.dismissedKey) return;
-  clearTimeout(view.showTimer);
-  clearTimeout(view.hideTimer);
-  // While a scorecard is open, switching needs a longer pause, so moving
-  // diagonally across another badge does not flip it.
-  const wait = previewOpen() && view.previewFor !== anchor ? 380 : 220;
-  view.pendingFor = anchor;
-  view.showTimer = setTimeout(() => showPreview(ctx, pid, prov, anchor), wait);
-}
-
-function showPreview(ctx, pid, prov, anchor) {
-  clearTimeout(view.showTimer);
-  clearTimeout(view.hideTimer);
-  view.pendingFor = null;
-  if (!anchor.isConnected) return;
-  const p = ctx.state.index.projects.find((x) => x.project_id === pid);
-  if (!p) return;
-  const el = ensurePreview();
-  el.replaceChildren(previewContent(ctx, p, prov));
-  el.hidden = false;
-  view.previewFor = anchor;
-  view.previewKey = anchor.dataset.key;
-  view.previewArgs = { pid, prov };
-  placePreview(anchor);
-}
-
-function placePreview(anchor) {
-  const el = view.preview;
-  const r = anchor.getBoundingClientRect();
-  const w = el.offsetWidth;
-  const hgt = el.offsetHeight;
-  const left = Math.min(window.innerWidth - w - 12, Math.max(12, r.left + r.width / 2 - w / 2));
-  let top = r.bottom + 8;
-  if (top + hgt > window.innerHeight - 8 && r.top - hgt - 8 > 8) top = r.top - hgt - 8;
-  el.style.left = `${Math.round(left)}px`;
-  el.style.top = `${Math.round(Math.max(8, Math.min(top, window.innerHeight - hgt - 8)))}px`;
-}
-
-function scheduleHide(delay = 300) {
-  clearTimeout(view.showTimer);
-  clearTimeout(view.hideTimer);
-  view.pendingFor = null;
-  view.hideTimer = setTimeout(() => {
-    // Keep it while the pointer is over the scorecard or keyboard focus is on its badge.
-    if (view.preview && view.preview.matches(':hover')) return;
-    if (view.previewFor && document.activeElement === view.previewFor && view.previewFor.matches(':focus-visible')) return;
-    hidePreview();
-  }, delay);
-}
-
-function hidePreview() {
-  clearTimeout(view.showTimer);
-  clearTimeout(view.hideTimer);
-  view.pendingFor = null;
-  if (view.preview) view.preview.hidden = true;
-  view.previewFor = null;
-  view.previewKey = null;
-}
-
 // ---- project inspector ------------------------------------------------------------
 
 const wide = () => window.matchMedia('(min-width: 1280px)').matches;
@@ -723,7 +606,6 @@ function openPanel(ctx, pid, opener, provider = null, { peek = false } = {}) {
   view.returnFocus = opener && opener.dataset ? opener.dataset.key || null : null;
   view.focusProvider = provider;
   view.focusOnRender = !peek;
-  hidePreview();
   const open = ctx.state.route.query.get('p');
   if (open === pid) {
     renderPanel(ctx, pid);
@@ -758,9 +640,8 @@ function evidenceLine(rep, prov) {
   const level = evidenceLevel(rep && rep.evidence);
   if (!level) return null;
   const text = evidenceText(rep.evidence);
-  return h('p', { class: `ev-line ${level}` }, icon(level === 'serious' ? 'warn-fill' : 'warn-line'),
-    h('span', null, h('strong', null, level === 'serious' ? 'Serious evidence flag. ' : 'Evidence flag. '),
-      `${text.charAt(0).toUpperCase()}${text.slice(1)}. The grade stands as calculated; read the flags before relying on it. `,
+  return h('p', { class: `ev-line compact ${level}` }, h('span', { class: `ev-dot ${level}`, 'aria-hidden': 'true' }),
+    h('span', null, h('strong', null, level === 'serious' ? 'Serious flag' : 'Flag'), ` · ${text} · `,
       h('button', { type: 'button', class: 'link', dataset: { key: `ev-jump-${prov}` }, onclick: () => { const d = document.querySelector(`[data-key="insp-evd-${prov}"]`); if (d) { d.open = true; d.scrollIntoView({ block: 'start' }); } } }, 'See the flags')));
 }
 
@@ -782,11 +663,11 @@ function revisionLine(rep, pid, prov) {
       : 'Re-saved with the same scores';
   const link = rep.run_link && rep.run_link.report_id && rep.run_link.report_id !== rep.report_id ? rep.run_link.report_id : null;
   return h('details', { class: 'rev-line', dataset: { key: `rev-${pid}-${prov}` } },
-    h('summary', null, h('span', { class: 'rev-mark', 'aria-hidden': 'true' }, '↺'), h('span', null, h('strong', null, head), ` · ${who} saved this ${rv.minutes_after} min after its earlier report for the same run`)),
+    h('summary', null, h('span', { class: 'rev-mark', 'aria-hidden': 'true' }, '↺'), h('span', null, h('strong', null, head), ` · ${who}, ${rv.minutes_after} min after the first save`)),
     h('div', { class: 'rev-body' },
       h('p', null, rep.revision_label),
-      rv.declared ? null : h('p', { class: 'muted' }, 'No reason was recorded with this save: it was saved before a reason was asked for. Nothing is guessed in its place.'),
-      link ? h('p', { class: 'muted' }, `The research run still links the first save (${link}); this view shows the latest. Both are kept.`) : null,
+      rv.declared ? null : h('p', { class: 'muted' }, 'No reason recorded.'),
+      link ? h('p', { class: 'muted' }, `The run links the first save (${link}).`) : null,
       h('a', { class: 'small', href: `#/project/${encodeURIComponent(pid)}/reports?report=${encodeURIComponent(rv.of)}`, dataset: { key: `rev-of-${pid}-${prov}` } }, 'Open the earlier report')));
 }
 
@@ -796,7 +677,7 @@ function timingNote(rep) {
   const t = rep && rep.analysis_timing;
   if (!t || !['after_save', 'future'].includes(t.status)) return null;
   const when = t.minutes_after_save !== null && t.minutes_after_save < 2880 ? `${t.minutes_after_save} min` : 'more than a day';
-  return h('p', { class: 'newer-line' }, `The report states an analysis time ${when} after it was saved. It is shown as written and ordered by its save time.`);
+  return h('p', { class: 'newer-line' }, `Stated analysis time: ${when} after the save`);
 }
 
 // Resume research that stopped: the sentence for the model's own assistant,
@@ -828,7 +709,7 @@ function riskTeaser(ctx, rep) {
   const labels = Object.fromEntries((ctx.state.index.rubrics.grading.risk_scores || []).map((x) => [x.id, x.label.replace(/ risk$/i, '')]));
   const risks = ((rep && rep.top_risks) || []).filter((r) => r.status === 'scored' || r.status === 'range');
   if (!risks.length) return null;
-  return h('p', { class: 'ig-risk' }, h('span', { class: 'k' }, 'Downside'), risks.map((r) => `${labels[r.id] || r.id} ${r.status === 'range' ? `${r.low}–${r.high}` : r.value}`).join(' · '), h('span', { class: 'faint' }, ' (higher is worse)'));
+  return h('p', { class: 'ig-risk' }, h('span', { class: 'k' }, 'Downside'), risks.map((r) => `${labels[r.id] || r.id} ${r.status === 'range' ? `${r.low}–${r.high}` : r.value}`).join(' · '), h('span', { class: 'faint' }, ' · higher = worse'));
 }
 
 // ---- project inspector: the scorecard first --------------------------------------
@@ -923,16 +804,21 @@ function modelHead(ctx, p, prov) {
   // The six weighted parts the grade is calculated from, one tap away
   // (filled from the full record); the category grades below are diagnostics.
   const parts = rep && !rep.needs_text ? h('details', { class: 'ig-parts', dataset: { key: `ig-parts-${pid}-${prov}` } },
-    h('summary', null, h('span', null, 'Made from six weighted parts'), h('span', { class: 'faint' }, ' · 20/25/20/15/10/10')),
+    h('summary', null, h('span', null, 'Weighted parts')),
     h('div', { dataset: { slot: `grade-${prov}` } }, skeleton('Loading the six weighted parts'))) : null;
+  // The model's own total, when it differs from the calculated grade: one
+  // compact badge, the full sentence in its tooltip.
+  const mt = rep && rep.model_total && rep.model_total.status === 'mismatch' ? rep.model_total : null;
+  const delta = mt ? h('span', { class: 'delta-pill fig', title: mt.message, 'aria-label': mt.message }, `Δ ±${typeof mt.difference === 'number' ? mt.difference.toFixed(1) : '?'}`) : null;
   let body;
   if (rep && (info.kind === 'grade' || info.kind === 'range')) {
     const word = anchorText(anchors, rep.grade.status === 'range' ? { status: 'range', low: rep.grade.low, high: rep.grade.high } : { status: 'scored', value: rep.grade.value });
     body = h('div', { class: 'ig' },
-      top(h('span', { class: 'ig-how' }, 'calculated here, not by the model')),
+      top(),
       h('div', { class: 'ig-row' },
-        h('div', { class: `provider-grade${bandClass(rep.grade)}${info.ev === 'serious' ? ' ev-serious' : ''}` }, h('span', { class: 'big' }, rep.grade.display), rep.grade.label ? h('span', { class: 'lab', 'aria-label': `letter ${rep.grade.label}` }, rep.grade.label) : null,
-          h('span', { class: 'aw' }, word ? `${word}${info.kind === 'range' ? ' · a range' : ''}` : info.kind === 'range' ? 'a range, of 100' : 'of 100')),
+        h('div', { class: `provider-grade${info.ev === 'serious' ? ' ev-serious' : ''}` }, h('span', { class: 'big fig' }, rep.grade.display, h('span', { class: 'sr-only' }, rep.grade.label ? `, letter ${rep.grade.label}` : '')),
+          word ? h('span', { class: 'verdict-pill' }, word) : null,
+          delta),
         gradeMeter(rep.grade, { serious: info.ev === 'serious' })),
       facts,
       riskTeaser(ctx, rep),
@@ -952,9 +838,9 @@ function modelHead(ctx, p, prov) {
     body = h('div', { class: 'ig withheld' }, top(),
       h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, rep.grade && rep.grade.status === 'withheld' ? withheldLabel(pct) : 'No grade')),
       coverageMeter(pct, { compact: true }),
-      why ? h('div', { class: 'ig-missing' }, h('h4', null, 'Not scored, in the model\'s words'), unscoredList(why)) : null,
+      why ? h('div', { class: 'ig-missing' }, h('h4', null, 'Not scored'), unscoredList(why)) : null,
       // Parts left unscored while the same report scores related ground.
-      checks ? h('details', { class: 'ig-check', dataset: { key: `ig-check-${pid}-${prov}` } }, h('summary', null, icon('warn-line'), h('span', null, h('strong', null, 'Check'), ` · ${checks} note${checks === 1 ? '' : 's'} on how this report scored`)), structureNotes(rep.structure)) : null,
+      checks ? h('details', { class: 'ig-check', dataset: { key: `ig-check-${pid}-${prov}` } }, h('summary', null, h('span', null, h('strong', null, 'Check'), ` · ${checks} note${checks === 1 ? '' : 's'}`)), structureNotes(rep.structure)) : null,
       facts,
       riskTeaser(ctx, rep),
       parts);
@@ -964,7 +850,7 @@ function modelHead(ctx, p, prov) {
     const hold = onHoldOf(ctx.state.index, prov);
     body = h('div', { class: 'ig none' }, top(),
       h('p', { class: 'ig-none-title' }, `No report from ${who}`),
-      key ? h('p', { class: 'small', style: { margin: '4px 0 0' } }, stateText(info.kind === 'waiting' && hosted ? 'Waiting for you' : st.long, st.tone)) : h('p', { class: 'small muted', style: { margin: '4px 0 0' } }, hold ? `${who} is on hold on this desk${hold.since ? ` since ${fmtDate(hold.since)}` : ''}: nothing new is assigned to it.` : `${who} has not been asked to research this project.`),
+      key ? h('p', { class: 'small', style: { margin: '4px 0 0' } }, stateText(info.kind === 'waiting' && hosted ? 'Waiting for you' : st.long, st.tone)) : h('p', { class: 'small muted', style: { margin: '4px 0 0' } }, hold ? `On hold${hold.since ? ` since ${fmtDate(hold.since)}` : ''}` : 'Not researched yet'),
       job && job.error ? h('p', { class: 'small', style: { margin: '6px 0 0', color: 'var(--neg)' } }, job.error) : null);
   }
   return h('div', { class: 'mhead' },
@@ -973,7 +859,6 @@ function modelHead(ctx, p, prov) {
     rep ? revisionLine(rep, pid, prov) : null,
     rep ? timingNote(rep) : null,
     rep && info.newerText ? h('p', { class: `newer-line${info.problem ? ' problem' : ''}` }, info.newerText) : null,
-    rep && rep.model_total && rep.model_total.status === 'mismatch' ? h('p', { class: 'newer-line problem' }, rep.model_total.message) : null,
     resume,
     actions.length ? h('div', { class: 'btn-row mhead-actions' }, actions) : null);
 }
@@ -1116,7 +1001,7 @@ function problemLines(ctx, p) {
       h('span', null, h('strong', null, PROBLEM_WORDS[key]), ` · ${PROVIDER_LABELS[prov]}`),
       h('span', { class: 'go', 'aria-hidden': 'true' }, 'Show'))));
   }
-  const others = alertList(splitAttention(projectItems(ctx, p)).critical, `palert-${p.project_id}`);
+  const others = alertStrips(splitAttention(projectItems(ctx, p)).critical, `palert-${p.project_id}`);
   const idNote = p.identity_status !== 'verified'
     ? h('p', { class: 'small insp-idnote' }, h('strong', null, 'Identity pending: '), (p.identity_unknowns || []).join(' ') || 'The token is not confirmed, so no prices or holdings use it.', ' ', h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/research`, dataset: { key: `fix-identity-${p.project_id}` } }, 'Complete the identity'))
     : null;
@@ -1226,34 +1111,35 @@ function inspectorMenu(ctx, p) {
   return h('div', { class: 'insp-more-wrap' }, btn, list);
 }
 
-// Price, size and trading, with how fresh they are, in one line under the
-// name; missing data says why.
+// The price at the end of the header row: the price, its 24-hour change
+// and how fresh it is; missing data says why.
 function headMarket(p) {
   const m = mkt(p);
-  if (!m) return h('p', { class: 'hmarket' }, h('span', { class: 'hm-none' }, `No price: ${(noPriceReason(p) || 'unknown').toLowerCase()}`));
+  if (!m) return h('div', { class: 'hprice none' }, h('span', { class: 'hm-none' }, `No price: ${(noPriceReason(p) || 'unknown').toLowerCase()}`));
   const f = freshnessText(m.status, m.age_minutes);
   const fresh = m.status === 'fresh';
-  // Short keys; their full names are each value's title and label.
-  return h('p', { class: 'hmarket' },
-    h('span', { class: 'hm-price' }, fmtPrice(m.price_usd)),
-    typeof m.change_24h_pct === 'number' ? h('span', { class: 'hm-chg', title: 'Price change over 24 hours' }, changeCell(m.change_24h_pct, { label: 'over 24 hours' }), h('span', { class: 'k' }, '24h')) : null,
-    typeof m.market_cap_usd === 'number' ? h('span', { class: 'hm-fact', title: 'Market cap (CoinGecko)' }, h('span', { class: 'k', 'aria-hidden': 'true' }, 'MC'), h('span', { class: 'sr-only' }, 'Market cap '), fmtCompactUsd(m.market_cap_usd)) : null,
-    typeof m.volume_24h_usd === 'number' ? h('span', { class: 'hm-fact', title: 'Trading volume over 24 hours (CoinGecko)' }, h('span', { class: 'k', 'aria-hidden': 'true' }, 'Vol'), h('span', { class: 'sr-only' }, '24-hour volume '), fmtCompactUsd(m.volume_24h_usd)) : null,
-    h('span', { class: `hm-fresh ${fresh ? 'ok' : 'warn'}`, title: `${m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Fictional demo data' : `Source: ${m.source || 'CoinGecko'}`}, as of ${fmtDateTime(m.as_of)}` }, fresh ? fmtAgo(m.fetched_at || m.as_of) : f.text));
+  return h('div', { class: 'hprice' },
+    h('span', { class: 'hm-price fig' }, fmtPrice(m.price_usd)),
+    h('span', { class: 'hm-sub' },
+      typeof m.change_24h_pct === 'number' ? h('span', { class: 'hm-chg', title: 'Price change over 24 hours' }, changeCell(m.change_24h_pct, { label: 'over 24 hours' })) : null,
+      h('span', { class: `hm-fresh ${fresh ? 'ok' : 'warn'}`, title: `${m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Fictional demo data' : `Source: ${m.source || 'CoinGecko'}`}, as of ${fmtDateTime(m.as_of)}` }, fresh ? fmtAgo(m.fetched_at || m.as_of) : f.text)));
 }
 
-// The asset at a glance, under the name: rank, 7- and 30-day change and FDV
-// in compared figures. Unknown stays "—" with its reason in the label.
+// The asset at a glance under the header row: six tiles in compared figures.
+// Unknown stays "—" with its reason in the label.
 function overviewStats(p) {
   const m = mkt(p);
   if (!m) return null;
   const demo = m.rank_source_label && /fictional/i.test(m.rank_source_label);
+  const usd = (v, label) => (typeof v === 'number' ? fmtCompactUsd(v) : dash(label));
   const stat = (k, v, title = null) => h('div', { class: 'ov-stat', title }, h('dt', null, k), h('dd', { class: 'fig' }, v));
   return h('dl', { class: 'ov-stats', 'aria-label': 'Asset overview' },
-    stat('Rank', m.market_cap_rank ? `#${m.market_cap_rank}` : dash('Rank'), demo ? 'Market-cap rank from the fictional demo data' : 'Market-cap rank, as reported by CoinGecko'),
-    stat('7D', changeCell(m.change_7d_pct, { label: 'over 7 days' }), 'Price change over 7 days (rolling)'),
-    stat('30D', changeCell(m.change_30d_pct, { label: 'over 30 days' }), 'Price change over 30 days (rolling)'),
-    stat('FDV', typeof m.fdv_usd === 'number' ? fmtCompactUsd(m.fdv_usd) : dash('FDV'), 'Fully diluted valuation'));
+    stat('Rank', m.market_cap_rank ? `#${m.market_cap_rank}` : dash('Rank'), demo ? 'Market-cap rank from the fictional demo data' : 'Market-cap rank (CoinGecko)'),
+    stat('7D', changeCell(m.change_7d_pct, { label: 'over 7 days' }), 'Price change over 7 days'),
+    stat('30D', changeCell(m.change_30d_pct, { label: 'over 30 days' }), 'Price change over 30 days'),
+    stat('MC', usd(m.market_cap_usd, 'Market cap'), 'Market cap (CoinGecko)'),
+    stat('Vol', usd(m.volume_24h_usd, 'Volume'), 'Trading volume over 24 hours'),
+    stat('FDV', usd(m.fdv_usd, 'FDV'), 'Fully diluted valuation'));
 }
 
 // On-chain fundamentals (activity, fees, revenue, TVL) need an on-chain data
@@ -1262,7 +1148,7 @@ function overviewStats(p) {
 const ONCHAIN = ['Daily active addresses', 'Transactions', 'Fees', 'Revenue', 'TVL'];
 function onchainPart(p) {
   return details('On-chain fundamentals', h('div', { class: 'small' },
-    h('p', { class: 'onchain-note' }, h('span', { class: 'chip info' }, 'Not connected'), ' No on-chain data source (such as Artemis) is set up on this desk, so these stay unknown. Nothing here is estimated.'),
+    h('p', { class: 'onchain-note' }, h('span', { class: 'chip info', title: 'No on-chain data source (such as Artemis) is set up; nothing is estimated' }, 'Not connected')),
     h('dl', { class: 'facts onchain' }, ONCHAIN.map((k) => h('div', null, h('dt', null, k), h('dd', null, dash(k)))))), { id: `insp-onchain-${p.project_id}` });
 }
 
@@ -1336,7 +1222,7 @@ function renderPanel(ctx, pid) {
   const sel = selectedModel(p);
   const split = wide();
   const m = mkt(p);
-  const closeBtn = h('button', { type: 'button', class: 'close quiet', 'aria-label': `Close ${p.name} details`, title: 'Close (Esc)', dataset: { key: 'panel-close' } }, '×');
+  const closeBtn = h('button', { type: 'button', class: 'close quiet', 'aria-label': `Close ${p.name} details`, title: 'Close (Esc)', dataset: { key: 'panel-close' } }, '✕');
   closeBtn.onclick = () => closePanel(ctx);
   const reviewedBtn = button('Mark reviewed', null, { kind: 'small', key: 'panel-reviewed' });
   reviewedBtn.onclick = async () => {
@@ -1351,14 +1237,15 @@ function renderPanel(ctx, pid) {
     }
   };
   const ch = p.changes || {};
-  const heading = h('h2', { id: 'panel-title', tabindex: '-1' }, p.name, p.symbol ? h('span', { class: 'tick' }, p.symbol) : null);
+  const heading = h('h2', { id: 'panel-title', tabindex: '-1', title: p.name }, h('span', { class: 'pt-name' }, p.name), p.symbol ? h('span', { class: 'tick' }, p.symbol) : null);
   const reports = PROVIDERS.filter((x) => p.providers && p.providers[x] && !p.providers[x].needs_text).length;
   const panel = h('aside', split
     ? { class: `panel${reopened ? ' entering' : ''}`, role: 'dialog', 'aria-modal': 'false', 'aria-labelledby': 'panel-title' }
     : { class: `panel${reopened ? ' entering' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'panel-title' },
     h('div', { class: 'panel-head' },
-      h('div', { class: 'ph-row' }, logo(p, { size: 32 }),
-        h('div', { class: 'names' }, heading, headMarket(p)),
+      h('div', { class: 'ph-row' }, logo(p, { size: 28 }),
+        h('div', { class: 'names' }, heading),
+        headMarket(p),
         inspectorMenu(ctx, p),
         closeBtn),
       overviewStats(p)),
@@ -1366,7 +1253,7 @@ function renderPanel(ctx, pid) {
       archivedBanner(ctx, p),
       problemLines(ctx, p),
       h('section', { class: 'scorecard', 'aria-labelledby': 'insp-sec-scores' },
-        h('h3', { class: 'sec-title sec-scores', id: 'insp-sec-scores' }, 'Model scores', h('span', { class: 'faint' }, ' · each model on its own')),
+        h('h3', { class: 'sec-title sec-scores', id: 'insp-sec-scores' }, 'Model scores'),
         modelTabs(ctx, p, sel),
         modelPanel(ctx, p, sel)),
       h('section', { class: 'insp-thesis', 'aria-labelledby': 'insp-sec-thesis' },
@@ -1385,11 +1272,8 @@ function renderPanel(ctx, pid) {
             ...vsBtcFacts(m),
             h('div', { class: 'wide' }, h('dt', null, 'Source'), h('dd', { class: 'small' }, `${m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Fictional demo data' : 'CoinGecko'} · as of ${fmtDateTime(m.as_of)}`)))), { id: `insp-market-${pid}` }) : null,
         details('Research details', h('div', null, researchProgress(ctx, p)), { id: `insp-research-${pid}` }),
-        details('How these grades work', h('div', { class: 'small' },
-          h('p', { style: { margin: 0 } }, 'Each model writes its own report. Its category grades are its own 0–100 scores, shown on the same scale; Unknown means the report could not score that category, which is not zero. The investment grade is calculated here from the report\'s six weighted component scores (20/25/20/15/10/10) under the rubric it declares. Letters: A 90+, B 80+, C 70+, D 60+, F below 60.'),
-          h('p', null, `A range means the model gave score ranges. "Withheld" means the report is saved but a weighted part was not scored, so no grade is calculated. ${COVERAGE_MEANS} Downside-risk scores are separate: higher means more risk. A warning sign means the desk's evidence checks flagged claims in that report: filled for a serious flag, outlined for a material one. Flags never change a score. Models are never averaged: each grade stands on its own report.`)), { id: 'insp-explain' }),
         h('div', { class: 'insp-review' },
-          alertList(splitAttention(projectItems(ctx, p)).rest, `previews-${pid}`),
+          alertStrips(splitAttention(projectItems(ctx, p)).rest, `previews-${pid}`),
           h('p', { class: 'small' }, ch.item_count ? `${ch.item_count} change${ch.item_count === 1 ? '' : 's'} since ${ch.cursor_source === 'project created' ? 'the project was added' : `your last review (${fmtDateTime(ch.since)})`}${ch.new_reports ? `: ${ch.new_reports} new report(s)` : ''}${typeof ch.price_change_pct === 'number' ? `, price ${fmtSignedPct(ch.price_change_pct)}` : ''}.` : 'Nothing new since your last review.',
             p.next_review ? h('span', { class: 'block muted' }, `Next review: ${fmtDate(p.next_review.date)}${p.next_review.overdue ? ' (overdue)' : ''}`) : null),
           h('div', { class: 'btn-row' }, reviewedBtn, h('a', { class: 'small', href: `#/project/${encodeURIComponent(pid)}/history`, dataset: { key: `history-${pid}` } }, 'What changed'))))));
@@ -1547,7 +1431,6 @@ export function renderWatchlist(ctx, route) {
   const resultsLine = h('div', { class: 'results-line', role: 'status' });
   const tokens = h('div', { class: 'active-filters' });
   const toolbar = h('div', { class: 'toolbar', role: 'search', 'aria-label': 'Find and filter projects', dataset: { nodirty: '1' } });
-  const legend = h('p', { class: 'legend-line' });
   view.menus = [];
   view.mounted = null;
 
@@ -1586,13 +1469,11 @@ export function renderWatchlist(ctx, route) {
       if (holder.isConnected) fitColumns(holder);
     } else if (!list.filter((p) => p.status !== 'archived').length && !f.archived) {
       holder.replaceChildren(h('div', { class: 'empty' }, h('h2', null, 'Your watchlist is empty'),
-        h('p', null, 'Add a project by name or official website. Research and prices follow from there.'),
-        h('div', { class: 'btn-row' }, button('Add project', () => openAddProjectDialog(ctx), { kind: 'primary', key: 'empty-add' })),
-        h('p', { class: 'small muted', style: { marginTop: '12px' } }, 'Or ask Cowork: "Add [project name and official URL] to my crypto watchlist and research it with Claude, ChatGPT, and Gemini."')));
+        h('div', { class: 'btn-row' }, button('Add project', () => openAddProjectDialog(ctx), { kind: 'primary', key: 'empty-add' }))));
     } else if (f.owned === 'watching' && !view.q && !filterCount()) {
       // Projects exist, but none is watched or held.
       holder.replaceChildren(h('div', { class: 'empty' }, h('h2', null, 'Nothing on your watchlist'),
-        h('p', null, `${total} project${total === 1 ? ' is' : 's are'} saved but not watched. Watching a project never records a holding.`),
+        h('p', null, `${total} project${total === 1 ? ' is' : 's are'} saved but not watched.`),
         h('div', { class: 'btn-row' }, button('Show not watching', () => setFilter('owned', 'off'), { key: 'empty-off' }))));
     } else {
       holder.replaceChildren(h('div', { class: 'empty' }, h('h2', null, 'No projects match'),
@@ -1723,8 +1604,7 @@ export function renderWatchlist(ctx, route) {
   function drawHead() {
     const followed = followedCount(all());
     head.replaceChildren(
-      h('div', { class: 'title' }, h('h1', null, 'Watchlist'), h('span', { class: 'count' }, `${followed} watching`),
-        h('p', { class: 'lede' }, 'Claude, ChatGPT and Gemini research each project on their own; every grade is calculated here from its own report.')),
+      h('div', { class: 'title' }, h('h1', null, 'Watchlist'), h('span', { class: 'count' }, `${followed} watching`)),
       h('div', { class: 'actions' }, h('a', { class: 'btn', href: '#/new', dataset: { key: 'new-research' } }, 'New research'), addBtn));
   }
 
@@ -1789,8 +1669,7 @@ export function renderWatchlist(ctx, route) {
       body = [h('h2', null, 'Prices'),
         h('p', null, `${m.last_success_at ? ps.asOf : 'No prices fetched yet'} · source: ${view.priceSource}.`),
         ps.note ? h('p', null, h('span', { class: ps.problem ? 'warn-word' : null }, ps.problem ? 'Note: ' : ''), ps.note) : null,
-        ps.retryAt ? h('p', null, `The next automatic try is after ${fmtAsOf(ps.retryAt)}.`) : null,
-        h('p', { class: 'faint' }, 'Missing prices stay marked unavailable; a stale price shows its age. Prices never change stored grades.')];
+        ps.retryAt ? h('p', null, `Next try after ${fmtAsOf(ps.retryAt)}.`) : null];
     } else if (view.strip === 'market') {
       body = [marketStrip(idx)];
     } else if (view.strip === 'models') {
@@ -1798,10 +1677,10 @@ export function renderWatchlist(ctx, route) {
       const hosted = hostedDesk(ctx);
       body = [h('h2', null, 'Research models'),
         h('ul', { class: 'ready-list' }, rs.list.map((x) => h('li', null, h('span', { class: 'who' }, PROVIDER_LABELS[x.provider]),
-          h('span', null, x.mode === 'api' ? stateText('Automatic: runs on its API in the background, within your limits', 'ok')
+          h('span', null, x.mode === 'api' ? stateText('Automatic (API)', 'ok')
             : x.mode === 'mock' ? stateText('Fictional demo adapter')
-              : x.mode === 'hold' ? stateText(`On hold${x.hold.since ? ` since ${fmtDate(x.hold.since)}` : ''}: nothing new is assigned; its waiting jobs are kept`)
-                : h('span', { title: x.reason || null }, stateText(hosted ? 'Manual: its own assistant researches when you ask it (nothing to set up)' : 'Manual: paste the prompt into it and import the answer'), h('span', { class: 'block faint small' }, setupShort(x.reason))))))),
+              : x.mode === 'hold' ? stateText(`On hold${x.hold.since ? ` since ${fmtDate(x.hold.since)}` : ''}`)
+                : h('span', { title: x.reason || null }, stateText(hosted ? 'Manual (its assistant)' : 'Manual (paste and import)'), h('span', { class: 'block faint small' }, setupShort(x.reason))))))),
         h('p', { style: { marginTop: '8px' } }, h('a', { href: '#/settings?tab=research', dataset: { key: 'ss-settings' } }, 'Models and budget settings'))];
     } else if (view.strip === 'review') {
       body = [h('h2', null, `To review (${rest.length})`), reviewList(rest)];
@@ -1820,15 +1699,6 @@ export function renderWatchlist(ctx, route) {
     const again = strip.querySelector(`[data-key="ss-${key}"]`);
     if (again) again.focus();
   };
-
-  function drawLegend() {
-    legend.replaceChildren(
-      h('span', { class: 'bands', 'aria-hidden': 'true' }, ['a', 'b', 'c', 'd', 'f'].map((b) => h('span', { class: `band-key band-${b}` }, b.toUpperCase()))),
-      h('span', null, `Grades 0–100, calculated by this app from each model's own report. Withheld: the report is saved, but a weighted part was not scored; its coverage is the investment weight it did score, not research progress. A small clock in the list (a month count such as 4mo elsewhere) means the analysis is older than ${ctx.state.index.settings.freshness.research_stale_days || 90} days. A range shows its letters in its tooltip and the inspector.`),
-      h('span', { class: 'ev' }, h('span', { class: 'ev-dot serious', 'aria-hidden': 'true' }), 'serious evidence flag'),
-      h('span', { class: 'ev' }, h('span', { class: 'ev-dot material', 'aria-hidden': 'true' }), 'material evidence flag'),
-      h('span', { class: 'keys' }, h('kbd', null, 'J'), h('kbd', null, 'K'), ' move', h('kbd', null, 'Space'), ' open', h('kbd', null, '/'), ' search', h('kbd', null, 'Esc'), ' close'));
-  }
 
   function setSources() {
     const idx = ctx.state.index;
@@ -1865,15 +1735,6 @@ export function renderWatchlist(ctx, route) {
       search.focus();
       search.select();
       ctx.claimFocus();
-    }
-    // Keep an open scorecard attached to its redrawn badge.
-    if (previewOpen() && view.previewKey) {
-      const again = document.querySelector(`[data-key="${CSS.escape(view.previewKey)}"]`);
-      if (again && view.previewArgs) {
-        view.previewFor = again;
-        view.preview.replaceChildren(previewContent(ctx, ctx.state.index.projects.find((x) => x.project_id === view.previewArgs.pid) || {}, view.previewArgs.prov));
-        placePreview(again);
-      } else hidePreview();
     }
   };
 
@@ -1916,34 +1777,11 @@ export function renderWatchlist(ctx, route) {
         closeMenus();
         return;
       }
-      if (previewOpen() || view.pendingFor) {
-        // Dismiss without moving the pointer or focus (WCAG 1.4.13).
-        const target = view.previewFor || view.pendingFor;
-        view.dismissedKey = target && target.dataset ? target.dataset.key || null : null;
-        hidePreview();
-        e.preventDefault();
-        return;
-      }
       if (onList && r.query.get('p') && !typing(e.target)) closePanel(ctx);
     });
-    document.addEventListener('pointermove', (e) => {
-      if (view.dismissedKey) {
-        const el = document.querySelector(`[data-key="${CSS.escape(view.dismissedKey)}"]`);
-        if (!el || !el.matches(':hover')) view.dismissedKey = null;
-      }
-      if (!previewOpen()) return;
-      const inside = (el) => {
-        if (!el || !el.isConnected) return false;
-        const rc = el.getBoundingClientRect();
-        return e.clientX >= rc.left - 4 && e.clientX <= rc.right + 4 && e.clientY >= rc.top - 4 && e.clientY <= rc.bottom + 4;
-      };
-      if (e.target && e.target.closest && e.target.closest('button.gb')) return;
-      if (!inside(view.preview) && !inside(view.previewFor) && !(view.previewFor && document.activeElement === view.previewFor)) scheduleHide();
-    }, { passive: true });
     document.addEventListener('click', (e) => {
       if (!e.target.closest('.menu-wrap')) closeMenus();
     });
-    window.addEventListener('scroll', () => { if (previewOpen() && document.activeElement !== view.previewFor) hidePreview(); else if (previewOpen()) placePreview(view.previewFor); }, { passive: true });
     window.matchMedia('(min-width: 1280px)').addEventListener('change', () => {
       const r = ctx.state.route;
       if (r && r.name === 'watchlist' && r.query.get('p')) renderPanel(ctx, r.query.get('p'));
@@ -1954,11 +1792,10 @@ export function renderWatchlist(ctx, route) {
   drawHead();
   drawStatus();
   drawControls();
-  drawLegend();
   // Only a fresh visit re-sorts; live updates, Back and opening the inspector keep the order you saw.
   rerender(['live', 'same', 'refresh', 'pop'].includes(ctx.state.renderReason) ? 'live' : 'user');
 
-  const page = h('div', { class: 'wl-wrap' }, head, strip, stripPanel, toolbar, tokens, resultsLine, holder, legend);
+  const page = h('div', { class: 'wl-wrap' }, head, strip, stripPanel, toolbar, tokens, resultsLine, holder);
   page.afterMount = afterMount;
 
   // In-place redraw: the toolbar (and the search you may be typing in) stays;
@@ -1972,7 +1809,6 @@ export function renderWatchlist(ctx, route) {
     }
     drawHead();
     drawStatus();
-    drawLegend();
     rerender('live');
   };
   view.mounted = { page, update };

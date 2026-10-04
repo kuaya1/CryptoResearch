@@ -66,7 +66,7 @@ export async function renderPortfolio(ctx, route) {
   const strip = tabStrip(TABS.map(([t, label]) => ({ id: t, label, href: `#/portfolio${t === 'positions' ? '' : `?tab=${t}`}` })), tab, { label: 'Portfolio sections' });
   const body = await safeSection(TABS.find(([t]) => t === tab)[1], () => ({ positions: positionsTab, transactions: transactionsTab, record: recordTab })[tab](ctx));
   return h('div', null,
-    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Portfolio'), h('div', { class: 'sub' }, 'Holdings you record yourself, separate from the watchlist. No exchange or wallet is connected.'))),
+    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Portfolio'))),
     strip,
     h('div', { id: 'tabpanel', role: 'tabpanel', 'aria-labelledby': `tab-${tab}` }, body));
 }
@@ -132,7 +132,7 @@ function positionsTab(ctx) {
       { label: 'Record', render: (q) => h('code', { class: 'small' }, q.tx_id || q.id || '?') },
       { label: 'Why', wrap: true, render: (q) => q.reason || q.message || '' },
     ], pf.quarantine), { note: 'Held out of positions until you resolve them. Nothing was deleted.' }) : null,
-    card('Open positions', [positions, h('p', { class: 'small muted', style: { marginTop: '10px' } }, `Accounting: ${pf.method}`)], {
+    card('Open positions', positions, {
       note: open.length ? `Allocation denominator: ${denominator}. Unpriced positions are excluded from it and listed as unpriced. Research grades stay on the watchlist; select an asset to see them.` : null,
       actions: [link('Record transactions', '#/portfolio?tab=record')],
     }),
@@ -163,7 +163,7 @@ function positionsTab(ctx) {
       { label: 'Kind', key: 'kind' },
       { label: 'Chain', key: 'chain' },
       { label: 'Public address', render: (a) => (a.public_address ? h('code', { class: 'wrap-anywhere' }, a.public_address) : null) },
-    ], pf.accounts) : empty('No accounts yet. Accounts are labels for where assets sit; nothing is connected.'), { note: 'Labels only. Never store seed phrases, private keys or trading credentials here.' }));
+    ], pf.accounts) : empty('No accounts yet.')));
 }
 
 async function transactionsTab(ctx) {
@@ -222,10 +222,10 @@ async function recordTab(ctx) {
   const seen = new Set(['usd']);
   for (const a of ledger.assets || []) if (!seen.has(a.asset_id)) { seen.add(a.asset_id); assetOptions.push({ value: a.asset_id, label: `${a.symbol || a.name || a.asset_id} (${a.asset_id})` }); }
 
-  const accName = input({ placeholder: 'e.g. Coinbase' });
+  const accName = input({ placeholder: 'Label, e.g. Coinbase (no keys or seed phrases)' });
   const accKind = select(['exchange', 'self_custody', 'other']);
   const accChain = input({ placeholder: 'chain (optional)' });
-  const accAddr = input({ placeholder: 'public address (optional)' });
+  const accAddr = input({ placeholder: 'public address only (optional)' });
   const accBtn = button('Add account', null, { kind: 'small', type: 'submit' });
   const accForm = h('form', { class: 'form-grid' }, field('Name', accName), field('Kind', accKind), field('Chain', accChain), field('Public address', accAddr, 'Public only. Never a seed phrase or key.'), h('div', { class: 'field' }, accBtn));
   accForm.onsubmit = action(accBtn, async () => { const r = await ctx.api.post('/api/portfolio/accounts', { name: accName.value, kind: accKind.value, chain: accChain.value || null, public_address: accAddr.value || null }); await ctx.refresh(); return r; }, 'Account added');

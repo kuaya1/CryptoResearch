@@ -239,7 +239,6 @@ export function categoryGlance(rows, href, { flags = [] } = {}) {
   const shown = rows.filter((r) => !(r.def && r.def.applicable === false));
   const flagged = shown.filter((r) => categoryFlags(flags, r.id).length);
   return block(`Category grades: ${c.scored} of ${c.total} scored`,
-    h('p', { class: 'small muted', style: { margin: '0 0 8px' } }, 'The model\'s own diagnostic grades, 1 to 100, higher is better. They are never averaged into the investment grade.'),
     h('ul', { class: `cat-grid${conf ? '' : ' no-conf'}` }, shown.map((r) => h('li', null,
       h('span', { class: 'cat-name', title: r.def ? r.def.definition : '' }, r.label, categoryFlagMark(categoryFlags(flags, r.id))),
       scoreView(r.score, 'fav'),

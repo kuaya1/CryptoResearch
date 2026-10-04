@@ -628,9 +628,8 @@ export function gradeMeter(g, { serious = false } = {}) {
 export function coverageMeter(pct, { compact = false } = {}) {
   if (typeof pct !== 'number') return null;
   const track = h('div', { class: 'track', 'aria-hidden': 'true' }, h('div', { class: 'fill', style: { width: `${Math.max(0, Math.min(100, pct))}%` } }));
-  // Compact (the inspector): the meaning in one line; the full sentence is
-  // in "How these grades work".
-  if (compact) return h('div', { class: 'coverage-meter' }, track, h('div', { class: 'lbl' }, `${pct}% of the investment weight scored: not research progress, not the score. No grade is calculated from part of the weight.`));
+  // Compact (the inspector): the share in a few words.
+  if (compact) return h('div', { class: 'coverage-meter' }, track, h('div', { class: 'lbl' }, `${pct}% of the investment weight scored`));
   return h('div', { class: 'coverage-meter' }, track,
     h('div', { class: 'lbl' }, `${pct}% coverage · no grade is calculated from part of the weight`),
     h('div', { class: 'lbl muted' }, COVERAGE_MEANS));
@@ -767,9 +766,11 @@ export function table(columns, rows, { empty = 'Nothing here yet.', rowClass = n
   return h('div', { class: 'table-wrap' }, h('table', null, caption ? h('caption', { class: 'sr-only' }, caption) : null, thead, tbody));
 }
 
+// A card: its title and actions. An explanatory note is never shown as copy;
+// it stays as the title's tooltip.
 export function card(title, children, { note = null, actions = null, id = null } = {}) {
   return h('section', { class: 'card', id },
-    title || note || actions ? h('div', { class: 'card-head' }, h('div', null, typeof title === 'string' ? h('h2', null, title) : title, note ? h('div', { class: 'note' }, note) : null), actions ? h('div', { class: 'actions' }, actions) : null) : null,
+    title || actions ? h('div', { class: 'card-head' }, h('div', null, typeof title === 'string' ? h('h2', { title: note || null }, title) : title), actions ? h('div', { class: 'actions' }, actions) : null) : null,
     children);
 }
 
@@ -783,7 +784,10 @@ export function field(label, inputEl, hint = null, { wide = false, name = null }
   const id = inputEl.id || `f_${Math.random().toString(36).slice(2, 9)}`;
   inputEl.id = id;
   if (!inputEl.name && inputEl.tagName !== 'BUTTON') inputEl.name = name || slug(label);
-  const hintEl = hint ? h('div', { class: 'hint', id: `${id}-hint` }, hint) : null;
+  // A hint is not shown as copy: it describes the field to a screen reader
+  // and is the field's tooltip.
+  const hintEl = hint ? h('div', { class: 'hint sr-only', id: `${id}-hint` }, hint) : null;
+  if (hint && typeof hint === 'string' && !inputEl.title) inputEl.title = hint;
   const errEl = h('div', { class: 'field-error hidden', id: `${id}-err`, role: 'alert' });
   inputEl.setAttribute('aria-describedby', [hintEl ? hintEl.id : null, errEl.id].filter(Boolean).join(' '));
   return h('div', { class: `field${wide ? ' wide' : ''}` }, h('label', { for: id }, label), inputEl, hintEl, errEl);

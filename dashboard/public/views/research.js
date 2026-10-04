@@ -18,7 +18,7 @@ export async function renderResearch(ctx, route) {
   const strip = tabStrip(TABS.map(([t, label]) => ({ id: t, label, href: `#/research?tab=${t}` })), tab, { label: 'Research sections' });
   const body = await safeSection(TABS.find(([t]) => t === tab)[1], () => ({ runs: runsTab, compare: compareTab, evidence: evidenceTab, calendar: calendarTab })[tab](ctx, route));
   return h('div', null,
-    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Research'), h('div', { class: 'sub' }, 'Independent Claude, ChatGPT and Gemini research, compared only where it is comparable.'))),
+    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Research'))),
     strip,
     h('div', { id: 'tabpanel', role: 'tabpanel', 'aria-labelledby': `tab-${tab}` }, body));
 }

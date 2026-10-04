@@ -42,7 +42,7 @@ export async function renderSettings(ctx, route) {
   const strip = tabStrip(TABS.map(([t, label]) => ({ id: t, label, href: `#/settings?tab=${t}` })), tab, { label: 'Settings sections' });
   const body = await safeSection(TABS.find(([t]) => t === tab)[1], () => ({ general: generalTab, research: researchTab, rubrics: rubricsTab, data: dataTab, system: systemTab, activity: activityTab })[tab](ctx));
   return h('div', null,
-    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Settings'), h('div', { class: 'sub' }, 'Stored in config/settings.json inside your workspace.'))),
+    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Settings'))),
     strip,
     h('div', { id: 'tabpanel', role: 'tabpanel', 'aria-labelledby': `tab-${tab}` }, body));
 }
@@ -63,15 +63,15 @@ function generalTab(ctx) {
   const labels = input({ value: (r.labels || []).map((l) => `${l.label}:${l.min}`).join(', ') });
   const btn = button('Save settings', null, { kind: 'primary small', type: 'submit' });
   const form = h('form', { class: 'form-grid' },
-    field('Highlight spreads of at least', spread, 'points'),
-    field('Comparison date window', windowDays, 'days; applies across the whole span of compared analyses'),
-    field('Model-total tolerance', tol, 'points before a mismatch is flagged'),
-    field('Price is stale after', stale, 'minutes'),
-    field('Claim is stale after', claimStale, 'days'),
-    field('Research is stale after', researchStale, 'days; stale grades are marked, never hidden'),
-    field('Refresh prices while open every', fg, 'minutes'),
-    field('CoinGecko monthly call budget', budget, 'calls; refreshes pause at the budget and keep last values'),
-    field('Grade labels', labels, 'label:minimum, e.g. A:90, B:80, C:70, D:60, F:0'),
+    field('Highlight spreads of at least (points)', spread),
+    field('Comparison date window (days)', windowDays, 'days; applies across the whole span of compared analyses'),
+    field('Model-total tolerance (points)', tol, 'points before a mismatch is flagged'),
+    field('Price is stale after (minutes)', stale),
+    field('Claim is stale after (days)', claimStale),
+    field('Research is stale after (days)', researchStale, 'days; stale grades are marked, never hidden'),
+    field('Refresh prices while open every (minutes)', fg),
+    field('CoinGecko monthly call budget (calls)', budget, 'calls; refreshes pause at the budget and keep last values'),
+    field('Grade labels (label:minimum)', labels, 'label:minimum, e.g. A:90, B:80, C:70, D:60, F:0'),
     h('label', { class: 'check' }, median, 'Show descriptive median in comparisons'),
     h('label', { class: 'check' }, md, 'Fetch market data (CoinGecko)'),
     h('div', { class: 'field' }, btn));
@@ -95,9 +95,9 @@ function generalTab(ctx) {
       { label: 'Status', render: (x) => (x.enabled ? stateText('In use', 'ok') : stateText('Not configured')) },
       { label: 'Used for', wrap: true, render: (x) => h('span', { class: 'small' }, x.note) },
     ], [
-      { label: 'CoinGecko /coins/markets', enabled: s.market_data.enabled !== false, note: 'Price, market cap, rank (labeled "CoinGecko"), rolling 24H/7D/30D change, 24h volume, supply, 7-day series, logos. Free, keyless, within the monthly call budget.' },
-      { label: 'CoinMarketCap', enabled: Boolean(sources.coinmarketcap && sources.coinmarketcap.enabled), note: 'Not used. A literal CoinMarketCap rank would need a CoinMarketCap API key and adapter; CoinGecko rank is never relabeled as CoinMarketCap.' },
-      { label: 'Liquidity (DEX/CEX depth)', enabled: false, note: 'No source configured, so no liquidity column is offered.' },
+      { label: 'CoinGecko /coins/markets', enabled: s.market_data.enabled !== false, note: 'Price, market cap, rank, 24H/7D/30D, volume, supply, 7-day series, logos' },
+      { label: 'CoinMarketCap', enabled: Boolean(sources.coinmarketcap && sources.coinmarketcap.enabled), note: 'Not used' },
+      { label: 'Liquidity (DEX/CEX depth)', enabled: false, note: 'No source' },
     ]), { note: 'Each value shows the source it came from.' }));
 }
 

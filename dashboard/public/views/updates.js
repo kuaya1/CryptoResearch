@@ -27,7 +27,7 @@ export async function renderUpdates(ctx, route) {
   const strip = tabStrip(tabs.map(([t, label]) => ({ id: t, label, href: `#/updates?tab=${t}`, count: counts[t] || null })), tab, { label: 'Update sections' });
   const body = await safeSection(tabs.find(([t]) => t === tab)[1], () => ({ changes: changesTab, import: importTab, inbox: inboxTab, requests: requestsTab })[tab](ctx, route));
   return h('div', null,
-    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Updates'), h('div', { class: 'sub' }, hosted ? 'New research and report imports. Every save goes through the same validated path.' : 'New research, report imports and Cowork requests. Every save goes through the same validated path.'))),
+    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Updates'))),
     strip,
     h('div', { id: 'tabpanel', role: 'tabpanel', 'aria-labelledby': `tab-${tab}` }, body));
 }

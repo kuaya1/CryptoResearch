@@ -20,7 +20,7 @@ const fact = (k, v, wide = false) => h('div', { class: wide ? 'wide' : null }, h
 
 function runPart(ctx, d) {
   const run = (d.research.runs || []).find((r) => r.prompt) || null;
-  if (!run) return h('p', { class: 'small muted', style: { margin: '8px 0 0' } }, 'No research run yet. Each run saves the exact prompt, the same for every model.');
+  if (!run) return h('p', { class: 'small muted', style: { margin: '8px 0 0' } }, 'No research run yet.');
   return h('div', { style: { marginTop: '10px' } },
     h('dl', { class: 'facts' },
       fact('Prompt version', h('span', { class: 'mono' }, run.prompt.version || 'not stated')),
@@ -76,28 +76,27 @@ function categoryRow(prov, x, flags, conf, anchors = []) {
   const value = !s ? 'Not in report' : scored ? (s.status === 'range' ? `${s.low}–${s.high}` : String(s.value)) : 'Unknown';
   const word = scored ? anchorText(anchors, s) : null;
   // Only an unknown (or a missing grade) carries a line in the row: why.
-  const short = !s ? 'This report does not grade this category.'
+  const short = !s ? 'Not graded in this report'
     : scored ? null
-      : s.missing_data ? `Why unknown: ${s.missing_data}` : 'The report does not say what is missing.';
+      : s.missing_data || null;
   const item = (k, v) => (v ? [h('dt', null, k), h('dd', null, v)] : []);
-  const anyDetail = s && (s.strongest_evidence || s.main_weakness || s.would_raise || s.would_lower);
   const body = h('div', { class: 'cdetail' },
-    h('p', { class: 'cd-name' }, x.label, word ? h('span', { class: 'faint' }, ` · ${value} is “${word}” on the rubric's scale`) : null),
+    h('p', { class: 'cd-name' }, x.label, word ? h('span', { class: 'faint' }, ` · ${word}`) : null),
     fl.map((f) => h('p', { class: `ev-line ${f.severity === 'high' ? 'serious' : 'material'}` }, icon(f.severity === 'high' ? 'warn-fill' : 'warn-line'),
-      h('span', null, h('strong', null, f.severity === 'high' ? 'Serious evidence flag. ' : 'Evidence flag. '), f.beside || f.message, ' ', h('span', { class: 'muted' }, 'The grade is shown as the model gave it.')))),
+      h('span', null, h('strong', null, f.severity === 'high' ? 'Serious evidence flag. ' : 'Evidence flag. '), f.beside || f.message))),
     h('dl', null,
       ...item(scored ? 'Why this grade' : 'Why unknown', scored ? s.rationale || h('span', { class: 'faint' }, 'No reason given.') : (s && s.missing_data) || h('span', { class: 'faint' }, 'Not stated.')),
       ...item('Strongest evidence', s && s.strongest_evidence),
-      ...item('Confidence', scored && CONFIDENCE_LABELS[s.confidence] ? h('span', null, confidenceChip(s), h('span', { class: 'faint' }, ' as the model states it')) : null),
+      ...item('Confidence', scored && CONFIDENCE_LABELS[s.confidence] ? confidenceChip(s) : null),
       ...item('Main weakness', s && s.main_weakness),
       ...item('Would raise it', s && s.would_raise),
       ...item('Would lower it', s && s.would_lower),
       ...item('Cites', s && Array.isArray(s.evidence_refs) && s.evidence_refs.length ? s.evidence_refs.join(', ') : null)),
-    !anyDetail && s ? h('p', { class: 'faint small', style: { margin: '6px 0 0' } }, 'This report gives the reason only; reports on the newer prompt add the evidence, the main weakness and what would change the grade.') : null);
+  );
   return h('li', null, h('details', { class: `crow${scored ? '' : ' is-unknown'}${fl.length ? (serious ? ' has-serious' : ' has-flag') : ''}`, dataset: { key: `cat-${prov}-${x.id}` } },
     h('summary', { 'aria-label': `${x.label}: ${scored ? `${scoreWords(s)}${word ? `, ${word}` : ''}${conf && CONFIDENCE_LABELS[s.confidence] ? `, confidence ${CONFIDENCE_LABELS[s.confidence].toLowerCase()}` : ''}` : value}${fl.length ? `; ${serious ? 'serious evidence flag' : 'evidence flag'}` : ''}. Open for the reasons` },
       h('span', { class: 'cr-name', title: x.label, 'aria-hidden': 'true' }, name,
-        fl.length ? h('span', { class: 'cr-flag', title: fl.map((f) => f.beside || f.message).join(' ') }, icon(serious ? 'warn-fill' : 'warn-line'), h('span', { class: 'sr-only' }, serious ? 'serious flag' : 'flag')) : null),
+        fl.length ? h('span', { class: `cr-flag ev-dot ${serious ? 'serious' : 'material'}`, title: fl.map((f) => f.beside || f.message).join(' ') }, h('span', { class: 'sr-only' }, serious ? 'serious flag' : 'flag')) : null),
       h('span', { class: 'cr-bar', 'aria-hidden': 'true' }, scoreBar(s)),
       h('span', { class: 'cr-score', 'aria-hidden': 'true' }, h('span', { class: 'v' }, scored ? value : '?'), conf && scored ? h('span', { class: 'cr-conf' }, confidenceChip(s)) : null),
       short ? h('span', { class: 'cr-why' }, short) : null),
@@ -119,15 +118,12 @@ function categoriesPart(ctx, d, row, prov) {
   const conf = statesConfidence(rows);
   const flags = (r.evidence && r.evidence.flags) || [];
   const anchors = ctx.state.index.rubrics.grading.favorable_anchors || [];
-  const confLine = conf ? [counts.high ? `${counts.high} high` : null, counts.medium ? `${counts.medium} medium` : null, counts.low ? `${counts.low} low` : null].filter(Boolean).join(' · ') : null;
   return h('div', { class: 'cats' },
     h('div', { class: 'cats-head' },
       h('h3', null, 'Category grades'),
       h('span', { class: 'cats-count' }, `${counts.scored} of ${counts.total} scored${counts.unknown ? ` · ${counts.unknown} unknown` : ''}`)),
-    h('p', { class: 'cats-conf' }, `Diagnostics, not part of the investment grade${confLine ? ` · ${PROVIDER_LABELS[prov]}'s confidence: ${confLine}` : ''}`),
-    h('div', { class: 'cats-scale', 'aria-hidden': 'true' }, h('span'), h('span', { class: 'sc' }, ['0', '50', '100'].map((n) => h('span', null, n))), h('span')),
     h('ul', { class: 'cat-rows', 'aria-label': `${PROVIDER_LABELS[prov]}'s category grades, 0 to 100, higher is better` }, rows.map((x) => categoryRow(prov, x, flags, conf, anchors))),
-    h('p', { class: 'cats-note' }, `${PROVIDER_LABELS[prov]}'s own diagnostic grades, higher is better. They are never averaged into the investment grade or with another model's. Words such as “Weak” are the rubric's own anchors (${anchors.map((x) => `${x.band} ${String(x.meaning || '').split('.')[0].toLowerCase()}`).join(', ')}). Scoring profile ${a.sector_profile || 'not declared'}${profile ? '' : ' (not on this desk)'}.`));
+  );
 }
 
 // ---- the six weighted parts of the investment grade ----------------------------
@@ -156,11 +152,8 @@ function componentsPart(ctx, d, row, prov) {
           h('span', { class: 'pr-name' }, c.label, h('span', { class: 'w' }, `${c.weight_bp / 100}%`)),
           h('span', { class: 'pr-v' }, h('strong', null, value), word ? h('span', { class: 'faint' }, ` · ${word}`) : null)),
         h('span', { class: 'cr-bar', role: 'img', 'aria-label': scored ? scoreWords(s) : 'Unknown, no score' }, scoreBar(s)),
-        why ? h('p', { class: 'pr-why' }, `${scored ? '' : 'Why unknown: '}${why}`) : null);
-    })),
-    h('p', { class: 'cats-note' }, r.grade && r.grade.status === 'range'
-      ? 'A range in any part makes the grade a range: each end is calculated from the parts\' own ends, never a midpoint. Ranges are the model\'s judgment, not statistical confidence intervals.'
-      : 'The grade is the sum of each part times its weight, calculated here under the rubric the report declares. An unknown part withholds the grade; nothing is filled in.'));
+        why ? h('p', { class: 'pr-why' }, why) : null);
+    })));
 }
 
 // ---- the model's strongest risks ---------------------------------------------
@@ -177,9 +170,9 @@ function risksPart(ctx, d, row, prov) {
   const defs = ctx.state.index.rubrics.grading.risk_scores || [];
   const top = (s) => (s.status === 'range' ? s.high : s.value);
   const scores = defs.map((def) => ({ def, s: (a.risk_scores || {})[def.id] })).filter((x) => isScored(x.s)).sort((x, y) => top(y.s) - top(x.s));
-  if (!facts.length && !scores.length) return h('div', { class: 'risks' }, h('h3', null, 'Strongest risks'), h('p', { class: 'small faint' }, 'This report names no risks in its data block; the full report may discuss them.'));
+  if (!facts.length && !scores.length) return h('div', { class: 'risks' }, h('h3', null, 'Strongest risks'), h('p', { class: 'small faint' }, 'No risks listed.'));
   return h('section', { class: 'risks', 'aria-label': `${PROVIDER_LABELS[prov]}'s strongest risks` },
-    h('h3', null, 'Strongest risks', h('span', { class: 'faint' }, ` · as ${PROVIDER_LABELS[prov]} states them`)),
+    h('h3', null, 'Strongest risks'),
     facts.length ? h('ol', { class: 'risk-list' }, facts.map((f) => h('li', null, f.text))) : null,
     scores.length ? h('p', { class: 'risk-scores' }, h('span', { class: 'k' }, 'Downside, higher is worse'),
       scores.map((x, i) => h('span', { class: 'rs' }, i ? ' · ' : '', `${x.def.label.replace(/ risk$/i, '')} `, h('strong', null, x.s.status === 'range' ? `${x.s.low}–${x.s.high}` : String(x.s.value))))) : null);
@@ -255,16 +248,13 @@ function comparePart(ctx, d) {
   const of = (section) => c.rows.filter((r) => r.section === section);
   const diag = of('diagnostic');
   return h('div', { style: { marginTop: '10px' } },
-    h('h4', null, 'Weighted components (higher is better)'),
+    h('h4', null, 'Weighted components'),
     breakdownTable(of('component'), present, { weights, comparable }),
-    h('h4', null, 'Downside risk (higher means more risk)'),
+    h('h4', null, 'Downside risk', h('span', { class: 'faint' }, ' · higher = worse')),
     breakdownTable(of('risk'), present, { comparable }),
     diag.length ? details(`Category grades side by side (${diag.length})`, breakdownTable(diag, present, { comparable }), { id: `insp-diag-${d.project.project_id}` }) : null,
-    h('p', { class: 'breakdown-note' },
-      comparable.size >= 2
-        ? `Gap: points between comparable models; ${c.threshold}+ is marked. ${present.some((p) => !comparable.has(p)) ? '* not compared (different rubric, profile, horizon or date). ' : ''}`
-        : `Not directly comparable${(c.comparability.reasons || []).length ? `: ${c.comparability.reasons.join('; ')}` : ''}. Values side by side, no gap calculated. `,
-      '? unknown · N/A not applicable · hover a score for its reason. Each model keeps its own grade.'));
+    // Only a fact the table cannot show: these reports do not compare.
+    comparable.size < 2 ? h('p', { class: 'breakdown-note' }, `Not directly comparable${(c.comparability.reasons || []).length ? `: ${c.comparability.reasons.join('; ')}` : ''}.`) : null);
 }
 
 // ---- thesis notes ---------------------------------------------------------------
@@ -291,8 +281,8 @@ function thesisPart(ctx, d, row, prov) {
     const invalid = list(a.invalidators);
     const any = a.final_take || (metric && metric.metric) || confirm.length || invalid.length;
     model = h('div', { class: 'th-block' },
-      h('div', { class: 'th-head' }, h('span', { class: 'th-who' }, `${PROVIDER_LABELS[prov]}'s thesis`), h('span', { class: 'faint' }, 'as its report states it')),
-      !any ? h('p', { class: 'th-none' }, 'The report\'s data block states no thesis; the written report may.') : null,
+      h('div', { class: 'th-head' }, h('span', { class: 'th-who' }, `${PROVIDER_LABELS[prov]}'s thesis`)),
+      !any ? h('p', { class: 'th-none' }, 'No thesis in the data block.') : null,
       a.final_take ? h('p', { class: 'th-text' }, a.final_take) : null,
       metric && metric.metric ? h('p', { class: 'th-line' }, h('span', { class: 'k' }, 'Watch'), h('span', null, metric.metric, metric.threshold ? ` (${metric.threshold})` : '')) : null,
       confirm.length ? h('div', { class: 'th-line' }, h('span', { class: 'k' }, 'Confirms'), h('ul', null, confirm.map((f) => h('li', null, f.text)))) : null,

@@ -155,3 +155,20 @@ test('pasted text is saved to the inbox before import, so a failed import loses 
   assert.notEqual(out.result.status, 'ingested');
   assert.ok(fs.existsSync(path.join(root, 'inbox', 'claude', out.saved.filename)));
 });
+
+test('a model total that differs from the calculated grade reaches the index with its gap, for the inspector badge', (t) => {
+  const { ws, cleanup } = tempWorkspace('model-total');
+  t.after(cleanup);
+  addFixtureProject(ws);
+  const text = fs.readFileSync(path.join(FIXTURES, 'reports', 'example-payfi-fictional__claude.md'), 'utf8')
+    .replace('"model_reported_overall_score": {"status": "scored", "value": 61,', '"model_reported_overall_score": {"status": "scored", "value": 99,');
+  assert.ok(text.includes('"value": 99,'), 'fixture edited');
+  dropText(ws, 'claude', 'example-payfi-fictional__claude.md', text);
+  assert.equal(inbox.scanInbox(ws, { force: true }).results[0].status, 'ingested');
+  const row = require('../core/indexer').rebuildIndex(ws).projects.find((p) => p.project_id === 'example-payfi-fictional');
+  const mt = row.providers.claude.model_total;
+  assert.equal(mt.status, 'mismatch');
+  assert.equal(typeof mt.difference, 'number');
+  assert.ok(mt.difference > 1, `a gap above the tolerance: ${mt.difference}`);
+  assert.match(mt.message, new RegExp(`by ${mt.difference.toFixed(1)} points`), 'the badge and the sentence agree');
+});

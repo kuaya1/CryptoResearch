@@ -59,19 +59,17 @@ export async function renderIntake(ctx, route) {
 // Desk status: is automatic research ready, and what has been spent
 
 function deskLine(desk) {
+  // One compact status line: how research runs here, and the spending limits.
   const b = desk.budget || {};
   const s = desk.spend || {};
   const limits = typeof b.per_run_usd === 'number'
-    ? `Limits: ${fmtUsd(b.per_run_usd)} per run, ${fmtUsd(b.daily_usd)} per day (${fmtUsd(s.daily || 0)} used today), ${fmtUsd(b.monthly_usd)} per month (${fmtUsd(s.monthly || 0)} used this month).`
-    : 'No spending limits are set, so no paid call is made.';
-  if (desk.claude.mode === 'api') {
-    return callout(h('span', null, h('strong', null, 'Automatic research is on. '), `Claude (${desk.claude.model}) researches each confirmed project with web search and saves the report. ${limits}`), 'ok');
-  }
-  if (desk.claude.mode === 'mock') {
-    return callout(h('span', null, h('strong', null, 'Fictional research (test or demo workspace). '), 'Confirmed projects get a fictional fixture report, not Claude. Nothing is paid for.'), 'info');
-  }
+    ? [`${fmtUsd(b.per_run_usd)}/run`, `${fmtUsd(b.daily_usd)}/day (${fmtUsd(s.daily || 0)} used)`, `${fmtUsd(b.monthly_usd)}/month (${fmtUsd(s.monthly || 0)} used)`]
+    : ['No spending limits: no paid call'];
+  const line = (word, tone, parts) => h('p', { class: 'desk-line' }, stateText(word, tone), ...parts.map((x) => h('span', null, x)));
+  if (desk.claude.mode === 'api') return line('Automatic', 'ok', [`Claude ${desk.claude.model}`, ...limits]);
+  if (desk.claude.mode === 'mock') return line('Demo', 'info', ['Fixture reports, nothing paid']);
   const missing = (desk.claude.missing || []).join(', ') || desk.claude.reason || 'not configured';
-  return callout(h('span', null, h('strong', null, 'Automatic research is not set up yet '), `(missing: ${missing}). Requests are still saved and identified; research then waits with a ready-to-paste prompt. ${limits}`), 'warn');
+  return line('Manual', 'warn', [`no ${missing}`, ...limits]);
 }
 
 // ---------------------------------------------------------------------------
@@ -159,11 +157,12 @@ async function renderStart(ctx) {
       if (sendBtn.isConnected) busy(sendBtn, false);
     }
   } },
-  field('CoinMarketCap link or project name', linkIn, 'A coinmarketcap.com/currencies/… or coingecko.com/en/coins/… link works best. The page itself is never opened: only the name or contract in the link is used.', { wide: true }),
-  field('Screenshot (optional)', fileIn, `A CoinMarketCap, exchange or wallet screenshot. Claude reads only what is visible${typeof reservation === 'number' ? ` (one small paid call, at most ${fmtUsd(reservation)})` : ''}. A screenshot never records a holding.`, { wide: true }),
+  field('CoinMarketCap link or project name', linkIn, null, { wide: true }),
+  // What a screenshot costs stays in its label: it is the one paid step here.
+  field(`Screenshot (optional${typeof reservation === 'number' ? ` · one paid call, at most ${fmtUsd(reservation)}` : ''})`, fileIn, null, { wide: true }),
   preview,
-  field('Instructions (optional)', note, 'Your questions for this research. Claude treats them as questions to look into, never as conclusions.', { wide: true }),
-  h('div', { class: 'btn-row' }, sendBtn, h('span', { class: 'small muted' }, 'Nothing is researched or paid for until you confirm the project.')));
+  field('Questions (optional)', note, null, { wide: true }),
+  h('div', { class: 'btn-row' }, sendBtn));
   form.dataset.sid = submissionId();
 
   const list = data.intakes.filter((d) => !d.broken);
@@ -324,7 +323,7 @@ async function renderRequest(ctx, id, seq) {
           if (dismiss.isConnected) busy(dismiss, false);
         }
       });
-      body.append(card(cands.length === 1 ? 'Is this the project?' : 'Which project do you mean?', [head, cands.map((c) => candidateCard(ctx, d, c, load)), h('div', { class: 'btn-row' }, dismiss, h('span', { class: 'small muted' }, 'Not listed? Send a new request with its CoinMarketCap link or contract.'))], { note: 'From CoinGecko\'s listing. Confirming adds it to your watchlist and starts one Claude research run.' }));
+      body.append(card(cands.length === 1 ? 'Is this the project?' : 'Which project do you mean?', [head, cands.map((c) => candidateCard(ctx, d, c, load)), h('div', { class: 'btn-row' }, dismiss)], { note: 'From CoinGecko\'s listing. Confirming adds it to your watchlist and starts one Claude research run.' }));
     } else if (d.status === 'identity_failed') {
       const idn = d.identity || {};
       const retry = button('Try again', null, { kind: 'primary', key: 'intake-retry-identity' });

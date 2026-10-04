@@ -100,7 +100,7 @@ function reportSummary(ws, r, project = null, all = null) {
     excluded_reason: a.eligibility && a.eligibility.excluded ? a.eligibility.reason : null,
     grade: compactGrade(grade),
     unscored: unscoredParts(grade, a),
-    model_total: model_total ? { status: model_total.status, message: model_total.message } : null,
+    model_total: model_total ? { status: model_total.status, message: model_total.message, difference: typeof model_total.difference === 'number' ? model_total.difference : null } : null,
     evidence_confidence: a.diagnostic_scores ? a.diagnostic_scores.evidence_confidence || null : null,
     errors: issues.filter((i) => i.severity === 'error').length,
     warnings: issues.filter((i) => i.severity === 'warning').length,
