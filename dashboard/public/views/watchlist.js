@@ -1168,19 +1168,39 @@ function headMarket(p) {
     h('span', { class: `hm-fresh ${fresh ? 'ok' : 'warn'}`, title: `${m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Fictional demo data' : `Source: ${m.source || 'CoinGecko'}`}, as of ${fmtDateTime(m.as_of)}` }, fresh ? fmtAgo(m.fetched_at || m.as_of) : f.text));
 }
 
-// The asset at a glance: rank, market cap, 24-hour volume and FDV in one row
-// of tiles. Unknown stays "—" with its reason in the label.
+// One of DefiLlama's 30-day totals for a tile, as saved (never fetched here):
+// the total, or "—" with the reason. A partial month is not a total, so it
+// stays "—" with what was observed in the label. Pure, for the tests.
+const FUND_STATE = { unmapped: 'No DefiLlama entity is bound to this project', identity_pending: 'Identity pending: nothing is fetched until it is confirmed', never_run: 'Not fetched yet', pending: 'Not fetched yet', disabled: 'DefiLlama is turned off in settings', unavailable: 'The saved figures could not be read' };
+export function fundamentalsTile(f, key) {
+  const label = key === 'fees' ? 'fees' : 'revenue';
+  if (!f || !f.metrics) return { text: null, title: (f && (FUND_STATE[f.state] || f.reason)) || 'No DefiLlama figures' };
+  const x = f.metrics[key];
+  const src = `DefiLlama ${f.scope ? `${f.scope} ` : ''}${f.slug || ''}`.trim();
+  const when = f.window ? `, 30 days to ${f.window.end}` : '';
+  const stale = f.state === 'stale';
+  if (x && typeof x.total_30d_usd === 'number') return { text: x.total_30d_usd === 0 ? '$0' : fmtCompactUsd(x.total_30d_usd), title: `${src}${when}${stale ? ` (stale, ${Math.round(f.age_hours || 0)} h old)` : ''}`, stale };
+  if (x && x.status === 'unsupported') return { text: null, title: `${src} reports no ${label}` };
+  if (x && typeof x.observed_subtotal_usd === 'number') return { text: null, title: `Partial: ${x.observed_days ?? '?'} of 30 days reported (${fmtCompactUsd(x.observed_subtotal_usd)} observed); no 30-day total` };
+  return { text: null, title: `${src}: no 30-day ${label} total` };
+}
+
+// The asset at a glance: rank, market cap, 24-hour volume, FDV and
+// DefiLlama's 30-day fees and revenue in six tiles. Unknown stays "—" with
+// its reason in the label.
 function overviewStats(p) {
   const m = mkt(p);
-  if (!m) return null;
-  const demo = m.rank_source_label && /fictional/i.test(m.rank_source_label);
-  const usd = (v, label) => (typeof v === 'number' ? fmtCompactUsd(v) : dash(label));
-  const stat = (k, v, title = null) => h('div', { class: 'ov-stat', title }, h('dt', null, k), h('dd', { class: 'fig' }, v));
+  const demo = m && m.rank_source_label && /fictional/i.test(m.rank_source_label);
+  const usd = (v, label) => (m && typeof v === 'number' ? fmtCompactUsd(v) : dash(label));
+  const stat = (k, v, title = null, cls = '') => h('div', { class: `ov-stat${cls ? ` ${cls}` : ''}`, title }, h('dt', null, k), h('dd', { class: 'fig' }, v));
+  const fund = (key, k) => { const x = fundamentalsTile(p.fundamentals, key); return stat(k, x.text || dash(k), x.title, x.stale ? 'stale' : ''); };
   return h('dl', { class: 'ov-stats', 'aria-label': 'Asset overview' },
-    stat('Rank', m.market_cap_rank ? `#${m.market_cap_rank}` : dash('Rank'), demo ? 'Market-cap rank from the fictional demo data' : 'Market-cap rank (CoinGecko)'),
-    stat('MC', usd(m.market_cap_usd, 'Market cap'), 'Market cap (CoinGecko)'),
-    stat('Vol (24h)', usd(m.volume_24h_usd, 'Volume'), 'Trading volume over 24 hours'),
-    stat('FDV', usd(m.fdv_usd, 'FDV'), 'Fully diluted valuation'));
+    stat('Rank', m && m.market_cap_rank ? `#${m.market_cap_rank}` : dash('Rank'), demo ? 'Market-cap rank from the fictional demo data' : 'Market-cap rank (CoinGecko)'),
+    stat('MC', usd(m && m.market_cap_usd, 'Market cap'), 'Market cap (CoinGecko)'),
+    stat('Vol (24h)', usd(m && m.volume_24h_usd, 'Volume'), 'Trading volume over 24 hours'),
+    stat('FDV', usd(m && m.fdv_usd, 'FDV'), 'Fully diluted valuation'),
+    fund('fees', '30D Fees'),
+    fund('revenue', '30D Revenue'));
 }
 
 // Links out, beside close: the project's CoinMarketCap page, its CoinGecko
@@ -1202,7 +1222,8 @@ function headLinks(p) {
 // On-chain fundamentals (activity, fees, revenue, TVL) need an on-chain data
 // source such as Artemis. None is connected, so the section says so and shows
 // no figures: nothing is estimated or taken from a model's report.
-const ONCHAIN = ['Daily active addresses', 'Transactions', 'Fees', 'Revenue', 'TVL'];
+// Fees and revenue come from DefiLlama (the tiles above); these do not yet.
+const ONCHAIN = ['Daily active addresses', 'Transactions', 'TVL'];
 function onchainPart(p) {
   return details('On-chain fundamentals', h('div', { class: 'small' },
     h('p', { class: 'onchain-note' }, h('span', { class: 'chip info', title: 'No on-chain data source (such as Artemis) is set up; nothing is estimated' }, 'Not connected')),
@@ -1306,7 +1327,8 @@ function renderPanel(ctx, pid) {
         inspectorMenu(ctx, p),
         closeBtn),
       headMarket(p),
-      overviewStats(p)),
+      overviewStats(p),
+      h('div', { class: 'cstrip-slot', dataset: { slot: 'contract' } }, h('div', { class: 'cstrip loading', 'aria-hidden': 'true' }, h('span', { class: 'cs-k' }, 'Contract'), h('span', { class: 'cs-v' }, '…')))),
     h('div', { class: 'panel-body', 'data-keep-scroll': 'panel' },
       archivedBanner(ctx, p),
       problemLines(ctx, p),

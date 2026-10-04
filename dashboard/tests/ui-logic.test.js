@@ -519,3 +519,27 @@ test('one 0–100 spectrum on the rubric anchors, and the gauge geometry', async
   assert.deepEqual(ui.gaugePoint(140, geo), ui.gaugePoint(100, geo), 'clamped');
   assert.equal(ui.gaugeArc(0, 50, geo), 'M14.00 90.00A76 76 0 0 1 90.00 14.00', 'clockwise over the top');
 });
+
+test('inspector tiles: DefiLlama 30-day totals as saved, "—" with the reason otherwise; a partial month is not a total', async () => {
+  const { wl } = await mods;
+  const f = { state: 'fresh', slug: 'example-proto', scope: 'product', window: { start: '2026-09-04', end: '2026-10-03' }, metrics: { fees: { status: 'ok', total_30d_usd: 6.47e6, observed_subtotal_usd: 6.47e6, observed_days: 30 }, revenue: { status: 'ok', total_30d_usd: 0, observed_subtotal_usd: 0, observed_days: 30 } } };
+  assert.equal(wl.fundamentalsTile(f, 'fees').text, '$6.47M');
+  assert.match(wl.fundamentalsTile(f, 'fees').title, /DefiLlama product example-proto, 30 days to 2026-10-03/);
+  assert.equal(wl.fundamentalsTile(f, 'revenue').text, '$0', 'a reported zero is a value');
+  assert.equal(wl.fundamentalsTile({ state: 'unmapped', metrics: null }, 'fees').text, null);
+  assert.match(wl.fundamentalsTile({ state: 'unmapped', metrics: null }, 'fees').title, /No DefiLlama entity is bound/);
+  const partial = { ...f, metrics: { fees: { status: 'ok', total_30d_usd: null, observed_subtotal_usd: 1.2e6, observed_days: 22 } } };
+  assert.equal(wl.fundamentalsTile(partial, 'fees').text, null, 'never filled in');
+  assert.match(wl.fundamentalsTile(partial, 'fees').title, /22 of 30 days/);
+  assert.equal(wl.fundamentalsTile({ ...f, metrics: { revenue: { status: 'unsupported', total_30d_usd: null } } }, 'revenue').text, null);
+  assert.equal(wl.fundamentalsTile({ ...f, state: 'stale', age_hours: 50 }, 'fees').stale, true);
+  assert.equal(wl.fundamentalsTile(null, 'fees').text, null);
+});
+
+test('contract line: what the identity records, never a screening result the desk does not have', async () => {
+  const insp = await import(pathToFileURL(path.join(tmp, 'views', 'inspector.js')).href);
+  const c = insp.contractLine({ status: 'verified', assets: [{ chain: 'base', contract_address: ' 0xabcdef0123456789abcdef0123456789abcdef01 ' }, { chain: 'solana', contract_address: null }] });
+  assert.deepEqual(c, { kind: 'contracts', items: [{ chain: 'base', address: '0xabcdef0123456789abcdef0123456789abcdef01' }], verified: true, screened: false });
+  assert.deepEqual(insp.contractLine({ status: 'pending', assets: [] }), { kind: 'none', items: [], verified: false, screened: false });
+  assert.equal(insp.contractLine(null).kind, 'none');
+});

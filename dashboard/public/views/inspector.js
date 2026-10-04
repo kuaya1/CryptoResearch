@@ -8,6 +8,7 @@
 //                     never a combined score
 //   thesis            your own conviction note, then the selected model's
 //                     thesis in its report's words
+//   contract          the token's contract on record and its screening state
 //   run               the latest run's exact saved prompt, version, rubric,
 //                     profile and holding horizon
 // Every model keeps its own numbers. Unknown stays unknown and is never drawn
@@ -292,9 +293,41 @@ function thesisPart(ctx, d, row, prov) {
   return h('div', { class: 'thesis' }, mine, model);
 }
 
+// ---- the contract on record ------------------------------------------------------
+
+// The token's contracts as the identity records them, and whether they have
+// been screened. No contract-security source (such as GoPlus) runs on this
+// desk, so nothing is ever called safe, flagged or verified here: the line
+// says what is on record and that it is not screened. Pure, for the tests.
+export function contractLine(identity) {
+  const id = identity || {};
+  const items = (Array.isArray(id.assets) ? id.assets : [])
+    .filter((a) => a && typeof a.contract_address === 'string' && a.contract_address.trim())
+    .map((a) => ({ chain: a.chain ? String(a.chain) : null, address: a.contract_address.trim() }));
+  return { kind: items.length ? 'contracts' : 'none', items, verified: id.status === 'verified', screened: false };
+}
+
+const shortAddr = (a) => (a.length > 14 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a);
+
+function contractPart(d) {
+  const c = contractLine(d.project && d.project.identity);
+  const k = h('span', { class: 'cs-k' }, 'Contract');
+  if (c.kind === 'none') {
+    return h('div', { class: 'cstrip' }, k, h('span', { class: 'cs-v' }, c.verified ? 'None on record' : 'None on record · identity pending'));
+  }
+  const first = c.items[0];
+  return h('div', { class: 'cstrip' }, k,
+    h('span', { class: 'cs-v', title: c.items.map((x) => `${x.chain || 'chain?'}: ${x.address}`).join('\n') },
+      first.chain ? h('span', { class: 'cs-chain' }, first.chain) : null,
+      h('span', { class: 'mono' }, shortAddr(first.address)),
+      c.items.length > 1 ? h('span', { class: 'faint' }, ` +${c.items.length - 1}`) : null),
+    c.verified ? null : h('span', { class: 'cs-badge warn' }, 'Unconfirmed'),
+    h('span', { class: 'cs-badge', title: 'No contract-security source (such as GoPlus) runs on this desk; mint, blacklist and proxy checks are not run' }, 'Not screened'));
+}
+
 // The parts for the inspector of one project, for the selected model.
 export function inspectorParts(ctx, d, row, prov) {
-  const out = { run: runPart(ctx, d), compare: comparePart(ctx, d), thesis: thesisPart(ctx, d, row, prov) };
+  const out = { run: runPart(ctx, d), compare: comparePart(ctx, d), thesis: thesisPart(ctx, d, row, prov), contract: contractPart(d) };
   if (prov) {
     out[`cats-${prov}`] = categoriesPart(ctx, d, row, prov);
     out[`grade-${prov}`] = componentsPart(ctx, d, row, prov);

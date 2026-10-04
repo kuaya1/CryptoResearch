@@ -1871,3 +1871,25 @@ a.xlink:hover { background: var(--surface-hover); border-color: var(--control-bo
   .ph-row > .logo { order: 1; } .ph-row > .names { order: 2; } .ph-row > .insp-more-wrap { order: 3; } .ph-row > .close { order: 4; }
   .ph-links { order: 5; flex-basis: 100%; margin: 2px 0 0; padding-left: 42px; }
 }
+/* Six tiles in two rows of three; a stale DefiLlama figure is shown quieter. */
+.ov-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.ov-stat { padding: 6px 8px; background: var(--surface-hover); border: 1px solid var(--separator); border-radius: var(--r-sm); }
+.ov-stat dd { font-size: 12px; }
+.ov-stat.stale dd { color: var(--text-3); }
+@media (max-width: 760px) { .ov-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+/* The contract on record, one line under the tiles (its height is kept while it loads). */
+.cstrip-slot { margin-top: 8px; min-height: 30px; }
+.cstrip { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-height: 30px; padding: 4px 10px; background: var(--surface-hover); border: 1px solid var(--border); border-radius: var(--r-md); font-family: var(--mono); font-size: 11px; color: var(--text-2); }
+.cstrip .cs-k { font-family: var(--font); font-weight: 600; color: var(--text); }
+.cstrip .cs-v { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+.cstrip .cs-chain { font-family: var(--font); color: var(--text-3); text-transform: capitalize; }
+.cstrip .cs-badge { margin-left: auto; padding: 0 7px; line-height: 18px; border: 1px dashed var(--control-border); border-radius: 999px; font-family: var(--font); font-size: 10.5px; font-weight: 600; color: var(--text-3); white-space: nowrap; }
+.cstrip .cs-badge.warn { margin-left: 0; border-style: solid; border-color: var(--pill-warn-line); color: var(--pill-warn-ink); background: var(--pill-warn-bg); }
+.cstrip .cs-badge.warn + .cs-badge { margin-left: 0; }
+.cstrip.loading .cs-v { color: var(--text-3); }
+/* Links out: small squared pills; one the desk does not hold is faded and inert. */
+.xlink { height: 24px; min-width: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-sunken); color: var(--text-2); font-size: 11px; font-weight: 600; }
+a.xlink:hover { background: var(--border); border-color: var(--border); color: var(--text); }
+.xlink.web { width: 24px; padding: 0; }
+.xlink.off { opacity: 0.4; pointer-events: none; border-style: solid; background: var(--surface-sunken); cursor: default; }
+@media (pointer: coarse) { .xlink { height: var(--touch); min-width: var(--touch); } .xlink.web { width: var(--touch); } }
