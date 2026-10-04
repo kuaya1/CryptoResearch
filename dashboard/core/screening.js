@@ -748,7 +748,9 @@ function stateFor(ws, project, now = Date.now()) {
   const cfg = cfgOf(ws);
   const id = (project && project.identity) || {};
   const native = id.native_chain === true;
-  if (!cfg.enabled) return { state: 'disabled', native, reason: 'Contract screening is turned off in settings.' };
+  // Turned off: the contracts on record are still listed (not screened), so
+  // the inspector never reads "None on record" for a token that has one.
+  if (!cfg.enabled) return { state: 'disabled', native, contracts: id.status === 'verified' ? contractsOf(id) : [], reason: 'Contract screening is turned off in settings.' };
   if (id.status !== 'verified') return { state: 'identity_pending', native, reason: 'The project\'s identity is not verified, so its contracts are not screened.' };
   const contracts = contractsOf(id);
   if (!contracts.length) {

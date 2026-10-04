@@ -574,6 +574,8 @@ test('contract line: GoPlus answers as Yes / No / — across the contracts, neve
   const notYet = wl.contractStrip(screen([{ chain: 'base', label: 'Base', address: '0x032d86656db142138ac97d2c5c4e3766e8c0482d', status: 'not_screened' }], { state: 'pending', reason: 'Not screened yet.' }));
   assert.deepEqual([notYet.status.word, notYet.badges.length, notYet.items.length], ['Not screened yet', 0, 1]);
   assert.equal(wl.contractStrip(screen([{ chain: 'example-chain', label: 'example-chain', address: 'X', status: 'unsupported_chain' }], { state: 'unsupported' })).status.word, 'Not screenable');
+  const off = wl.contractStrip(screen([{ chain: 'ethereum', label: 'Ethereum', address: '0x8408d45b61f5823298f19a09b53b7339c0280489', status: 'not_screened' }], { state: 'disabled' }));
+  assert.deepEqual([off.text, off.items.length, off.status.word], [null, 1, 'Screening off'], 'turned off still shows the contract, never "None on record"');
   assert.deepEqual(wl.contractStrip(screen([], { state: 'unavailable', last_error: 'no answer within 20 s' })).status, { word: 'Screen failed', tone: 'warn', title: 'no answer within 20 s' });
   const nf = wl.contractStrip(screen([{ chain: 'ethereum', label: 'Ethereum', address: '0x1', status: 'not_found', reason: 'GoPlus has no record of this contract' }]));
   assert.deepEqual([nf.status.word, nf.badges.length], ['Not in GoPlus', 0]);

@@ -384,6 +384,9 @@ test('settings can turn screening off: no request, the state says so', async (t)
   assert.equal((await refresh(ws, f)).status, 'skipped');
   assert.equal(screening.isDue(ws, NOW), false);
   assert.equal(screening.stateFor(ws, project(ws, id), NOW).state, 'disabled');
+  // The contract on record is still listed, as not screened, never as none.
+  const sum = screening.summary(ws, project(ws, id), NOW);
+  assert.deepEqual(sum.contracts.map((c) => [c.label, c.address, c.status]), [['Ethereum', EVM_A, 'not_screened']]);
   assert.equal(f.calls.length, 0);
 });
 
