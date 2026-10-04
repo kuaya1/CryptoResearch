@@ -438,6 +438,39 @@ export function sparkline(values, { width = 96, height = 28, label = '7-day pric
     svg('polyline', { points: pts, fill: 'none', stroke: 'var(--text-2)', 'stroke-width': '1.5', 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
 }
 
+// The 7-day chart in the list: one SVG path, no library. The series is
+// thinned to at most `max` points (evenly, keeping the last), scaled to the
+// box with `pad` pixels top and bottom, and written as one "M … L …" string.
+// A flat series is drawn through the middle. Pure, for the tests.
+export function sparkPath(values, { width = 135, height = 36, pad = 3, max = 140 } = {}) {
+  const src = Array.isArray(values) ? values.filter((v) => typeof v === 'number' && Number.isFinite(v)) : [];
+  if (src.length < 2) return null;
+  const pts = src.length > max ? Array.from({ length: max }, (_, i) => src[Math.round((i * (src.length - 1)) / (max - 1))]) : src;
+  let min = Infinity;
+  let max2 = -Infinity;
+  for (const v of pts) { if (v < min) min = v; if (v > max2) max2 = v; }
+  const span = max2 - min;
+  const step = (width - 2) / (pts.length - 1);
+  const y = (v) => (span ? height - pad - ((v - min) / span) * (height - 2 * pad) : height / 2);
+  let d = '';
+  for (let i = 0; i < pts.length; i++) d += `${i ? 'L' : 'M'}${(1 + i * step).toFixed(1)} ${y(pts[i]).toFixed(1)}`;
+  return d;
+}
+
+// The list's 7-day chart: green when the 7-day change is up or flat, red when
+// down; a faint dashed line when there is no series. The label says the change.
+export function priceSpark(values, change, { width = 135, height = 36, label = '7-day price' } = {}) {
+  const d = sparkPath(values, { width, height });
+  const attrs = { class: 'pspark', width: String(width), height: String(height), viewBox: `0 0 ${width} ${height}`, fill: 'none' };
+  if (!d) {
+    return svg('svg', { ...attrs, class: 'pspark none', role: 'img', 'aria-label': `${label}: no series from the provider` },
+      svg('line', { x1: '1', y1: String(height / 2), x2: String(width - 1), y2: String(height / 2), 'stroke-width': '1.5', 'stroke-dasharray': '3 4', 'stroke-linecap': 'round' }));
+  }
+  const up = !(typeof change === 'number' && change < 0);
+  return svg('svg', { ...attrs, class: `pspark ${up ? 'up' : 'down'}`, role: 'img', 'aria-label': `${label}${typeof change === 'number' ? `, ${change >= 0 ? 'up' : 'down'} ${Math.abs(change).toFixed(2)} percent` : ''}` },
+    svg('path', { d, 'stroke-width': '1.75', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+}
+
 // A project's logo: CoinGecko's own image, fetched and cached by this desk
 // (the page never calls an outside image host). Without one, or while it
 // loads, a monogram on one of six soft tones, chosen from the project ID so

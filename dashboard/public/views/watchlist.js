@@ -9,7 +9,7 @@
 // project. Live updates redraw only what changed, in place: the search box,
 // open details, scroll positions and the row order you are reading stay put.
 import {
-  h, clear, button, select, input, changeCell, sparkline, logo, gradeBadge, badgeInfo, verdictChip,
+  h, clear, button, select, input, changeCell, sparkline, priceSpark, logo, gradeBadge, badgeInfo, verdictChip,
   fmtPrice, fmtCompactUsd, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, fmtSignedPct, freshnessText, priceStatus, stateText, toast, announce,
   followedCount, researchState, withheldReason, unscoredList, jobKey, icon, evidenceLevel, evidenceText, gradeMeter, coverageMeter,
   withheldLabel, structureNotes, details, onHoldOf, copyText, anchorText, fmtRelDay,
@@ -18,24 +18,27 @@ import {
 import { openAddProjectDialog, openResearchDialog, openSectorDialog, waitingActions } from './dialogs.js';
 import { marketStrip, positionFacts, vsBtcFacts } from '../position-ui.js';
 
-// Column catalogue. `hide` names the width below which a column steps aside
-// (its value stays in the inspector). "research" is the three model columns.
+// Column catalogue, in the CoinMarketCap order: # (rank, drawn before the
+// name), price, 24h, 7d and 30d change, market cap, volume, the 7-day chart,
+// then the three models. Optional columns (off at first) sit before the
+// models. When the list is narrower than its columns, the least essential
+// give way (FIT_ORDER); every value stays in the inspector.
 const COLUMNS = [
-  { id: 'rank', label: 'Rank', sub: 'CoinGecko', title: 'Market-cap rank, as reported by CoinGecko', def: true, sort: 'rank', num: true, market: true, hide: 'hide-md' },
-  { id: 'price', label: 'Price', sub: 'USD', def: true, sort: 'price', num: true, market: true },
-  { id: 'change24h', label: '24H', sub: 'rolling', title: 'Price change over the last 24 hours', sort: 'change24h', num: true, market: true, hide: 'hide-lg' },
-  { id: 'change7d', label: '7D', sub: 'rolling', title: 'Price change over the last 7 days (rolling)', def: true, sort: 'change7d', num: true, market: true },
-  { id: 'change30d', label: '30D', sub: 'rolling', title: 'Price change over the last 30 days (rolling)', def: true, sort: 'change30d', num: true, market: true, hide: 'hide-sm' },
-  { id: 'spark', label: '7D chart', sub: 'price', title: 'Price over the last 7 days (provider series)', market: true, hide: 'hide-lg' },
-  { id: 'mcap', label: 'Market cap', sub: 'USD', title: 'Price × circulating supply, as reported by CoinGecko', def: true, sort: 'mcap', num: true, market: true, hide: 'hide-md' },
-  { id: 'mcapChange', label: 'Mkt cap 24H', sub: 'change', title: 'Market-cap change over 24 hours, as reported by CoinGecko', sort: 'mcapChange', num: true, market: true, hide: 'hide-lg' },
-  { id: 'fdv', label: 'FDV', sub: 'USD', title: 'Fully diluted valuation: price × maximum (or total) supply', sort: 'fdv', num: true, market: true, hide: 'hide-lg' },
-  { id: 'volume', label: 'Volume', sub: '24h, USD', title: 'Trading volume over the last 24 hours, in USD', def: true, sort: 'volume', num: true, market: true, hide: 'hide-lg' },
-  { id: 'volChange', label: 'Volume change', sub: 'vs ~24h ago', title: 'Measured against our own stored observation from about 24 hours earlier', sort: 'volChange', num: true, market: true, hide: 'hide-lg' },
+  { id: 'rank', label: '#', title: 'Market-cap rank, as reported by CoinGecko', def: true, sort: 'rank', num: true, market: true },
+  { id: 'price', label: 'Price', def: true, sort: 'price', num: true, market: true },
+  { id: 'change24h', label: '24h %', title: 'Price change over the last 24 hours', def: true, sort: 'change24h', num: true, market: true },
+  { id: 'change7d', label: '7d %', title: 'Price change over the last 7 days (rolling)', def: true, sort: 'change7d', num: true, market: true },
+  { id: 'change30d', label: '30d %', title: 'Price change over the last 30 days (rolling)', def: true, sort: 'change30d', num: true, market: true },
+  { id: 'mcap', label: 'Market Cap', title: 'Price × circulating supply, as reported by CoinGecko', def: true, sort: 'mcap', num: true, market: true },
+  { id: 'mcapChange', label: 'Mkt cap 24h %', title: 'Market-cap change over 24 hours, as reported by CoinGecko', sort: 'mcapChange', num: true, market: true },
+  { id: 'fdv', label: 'FDV', title: 'Fully diluted valuation: price × maximum (or total) supply', sort: 'fdv', num: true, market: true },
+  { id: 'volume', label: 'Volume(24h)', title: 'Trading volume over the last 24 hours, in USD', def: true, sort: 'volume', num: true, market: true },
+  { id: 'volChange', label: 'Volume change', title: 'Measured against our own stored observation from about 24 hours earlier', sort: 'volChange', num: true, market: true },
+  { id: 'spark', label: '7D Chart', title: 'Price over the last 7 days (provider series)', def: true, market: true },
+  { id: 'sector', label: 'Sector', sort: 'sector' },
+  { id: 'lastResearch', label: 'Last research', title: 'Latest report analysis date', sort: 'lastResearch' },
   { id: 'liquidity', label: 'Liquidity', disabled: 'No liquidity source is configured (CoinGecko /coins/markets does not report liquidity).' },
-  { id: 'sector', label: 'Sector', sub: 'your label', def: true, sort: 'sector', hide: 'hide-lg' },
   { id: 'research', label: 'Research', def: true },
-  { id: 'lastResearch', label: 'Last research', sub: 'analysis date', sort: 'lastResearch', hide: 'hide-lg' },
 ];
 
 const SORT_NAMES = {
@@ -55,7 +58,7 @@ const DEFAULT_SORT = { key: 'rank', dir: 'asc' };
 const COVERAGE = [['any', 'Any coverage'], ['all3', 'Graded by all three models'], ['missing', 'Missing a model grade'], ['none', 'No research yet'], ['attention', 'Failed or withheld']];
 const RET30 = [['any', 'Any'], ['pos', 'Positive'], ['neg', 'Negative']];
 const OWNED = [['watching', 'Watching'], ['off', 'Not watching'], ['all', 'All']];
-const PREFS_VERSION = 2;
+const PREFS_VERSION = 3;
 
 const view = {
   q: '', order: null, orderKey: '', suppressFocus: false, returnFocus: null, focusProvider: null, focusOnRender: false, bound: false, menus: [],
@@ -64,12 +67,16 @@ const view = {
 
 export function prefs(ctx) {
   const saved = ctx.ui.get('watchlist', {}) || {};
-  const cols = Array.isArray(saved.columns) ? saved.columns.filter((c) => COLUMNS.some((x) => x.id === c && !x.disabled)) : COLUMNS.filter((c) => c.def).map((c) => c.id);
+  // Columns saved before the CoinMarketCap layout (v3) start from its defaults;
+  // sort and filters are kept.
+  const keepCols = Array.isArray(saved.columns) && saved.v >= 3;
+  const cols = keepCols ? COLUMNS.filter((x) => saved.columns.includes(x.id) && !x.disabled).map((x) => x.id) : COLUMNS.filter((c) => c.def).map((c) => c.id);
   if (!cols.includes('research')) cols.push('research');
   const filters = { ...DEFAULT_FILTERS, ...(saved.filters || {}) };
   // Saved before the list opened on what you follow, "all" was just the old
   // default, not a choice: start from the new one.
-  if (saved.v !== PREFS_VERSION && filters.owned === 'all') filters.owned = DEFAULT_FILTERS.owned;
+  // (Version 1 only: there, "all" was the old default, not a choice.)
+  if (!(saved.v >= 2) && filters.owned === 'all') filters.owned = DEFAULT_FILTERS.owned;
   if (!OWNED.some(([v]) => v === filters.owned)) filters.owned = DEFAULT_FILTERS.owned;
   return { columns: cols, sort: saved.sort && SORT_NAMES[saved.sort.key] ? saved.sort : DEFAULT_SORT, filters };
 }
@@ -180,6 +187,40 @@ function noPriceReason(p) {
   return null;
 }
 
+// A change in the CoinMarketCap way: a small caret and the size, two
+// decimals, no sign; the words for a screen reader.
+function deltaCell(n, label) {
+  if (n === null || n === undefined || Number.isNaN(n)) return dash(`${label} change`);
+  const dir = n > 0 ? 'up' : n < 0 ? 'down' : 'flat';
+  return h('span', { class: `dl ${dir}` },
+    h('span', { class: 'caret', 'aria-hidden': 'true' }, n < 0 ? '▼' : '▲'),
+    h('span', { 'aria-hidden': 'true' }, `${Math.abs(n).toFixed(2)}%`),
+    h('span', { class: 'sr-only' }, `${dir} ${Math.abs(n).toFixed(2)} percent, ${label}`));
+}
+
+// Market cap and volume as CoinMarketCap shows them: two decimals and a unit.
+export function cmcCompact(n) {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return null;
+  const abs = Math.abs(n);
+  const unit = [[1e12, 'T'], [1e9, 'B'], [1e6, 'M'], [1e3, 'K']].find(([v]) => abs >= v);
+  return `${n < 0 ? '−' : ''}$${unit ? (abs / unit[0]).toFixed(2) : abs.toFixed(2)}${unit ? unit[1] : ''}`;
+}
+
+// The 7-day chart, kept per project and price observation, so a live redraw
+// reuses it instead of building it again.
+const sparkCache = new Map();
+function sparkCell(p, m) {
+  const series = m && m.sparkline_7d;
+  const key = `${p.project_id}|${m ? m.as_of : ''}|${series ? series.length : 0}|${m ? m.change_7d_pct : ''}`;
+  let el = sparkCache.get(key);
+  if (!el) {
+    if (sparkCache.size > 400) sparkCache.clear();
+    el = priceSpark(series, m ? m.change_7d_pct : null, { label: `${p.symbol || p.name} 7-day price` });
+    sparkCache.set(key, el);
+  }
+  return el.cloneNode(true);
+}
+
 const dash = (label) => h('span', { class: 'unknown' }, h('span', { 'aria-hidden': 'true' }, '—'), h('span', { class: 'sr-only' }, `${label} unknown`));
 
 // ---- cells ------------------------------------------------------------------
@@ -224,17 +265,17 @@ function priceCell(p) {
 function cellFor(ctx, col, p) {
   const m = mkt(p);
   switch (col) {
-    case 'rank': return m && m.market_cap_rank ? h('span', { class: 'num', title: m.rank_source_label || 'CoinGecko market-cap rank' }, `#${m.market_cap_rank}`) : dash('Rank');
+    case 'rank': return m && m.market_cap_rank ? h('span', { class: 'num rk', title: m.rank_source_label || 'CoinGecko market-cap rank' }, String(m.market_cap_rank)) : dash('Rank');
     case 'price': return priceCell(p);
-    case 'change24h': return m ? changeCell(m.change_24h_pct, { label: 'over 24 hours' }) : dash('24-hour change');
-    case 'change7d': return m ? changeCell(m.change_7d_pct, { label: 'over 7 days' }) : dash('7-day change');
-    case 'change30d': return m ? changeCell(m.change_30d_pct, { label: 'over 30 days' }) : dash('30-day change');
-    case 'spark': return m && m.sparkline_7d ? sparkline(m.sparkline_7d, { width: 80, height: 22, label: `${p.symbol || p.name} 7-day price` }) : dash('7-day chart');
-    case 'mcap': return m && typeof m.market_cap_usd === 'number' ? h('span', { class: 'num', title: fmtPrice(m.market_cap_usd) }, fmtCompactUsd(m.market_cap_usd)) : dash('Market cap');
-    case 'mcapChange': return m ? changeCell(m.market_cap_change_24h_pct, { label: 'market cap over 24 hours' }) : dash('Market-cap change');
-    case 'fdv': return m && typeof m.fdv_usd === 'number' ? h('span', { class: 'num' }, fmtCompactUsd(m.fdv_usd)) : dash('FDV');
-    case 'volume': return m && typeof m.volume_24h_usd === 'number' ? h('span', { class: 'num' }, fmtCompactUsd(m.volume_24h_usd)) : dash('Volume');
-    case 'volChange': return m && typeof m.volume_change_24h_pct === 'number' ? changeCell(m.volume_change_24h_pct, { label: 'volume' }) : h('span', { class: 'unknown', title: m ? m.volume_change_basis || '' : 'No market data' }, h('span', { 'aria-hidden': 'true' }, '—'), h('span', { class: 'sr-only' }, 'Volume change unknown'));
+    case 'change24h': return m ? deltaCell(m.change_24h_pct, 'over 24 hours') : dash('24-hour change');
+    case 'change7d': return m ? deltaCell(m.change_7d_pct, 'over 7 days') : dash('7-day change');
+    case 'change30d': return m ? deltaCell(m.change_30d_pct, 'over 30 days') : dash('30-day change');
+    case 'spark': return sparkCell(p, m);
+    case 'mcap': return m && typeof m.market_cap_usd === 'number' ? h('span', { class: 'num', title: fmtPrice(m.market_cap_usd) }, cmcCompact(m.market_cap_usd)) : dash('Market cap');
+    case 'mcapChange': return m ? deltaCell(m.market_cap_change_24h_pct, 'market cap over 24 hours') : dash('Market-cap change');
+    case 'fdv': return m && typeof m.fdv_usd === 'number' ? h('span', { class: 'num' }, cmcCompact(m.fdv_usd)) : dash('FDV');
+    case 'volume': return m && typeof m.volume_24h_usd === 'number' ? h('span', { class: 'num' }, cmcCompact(m.volume_24h_usd)) : dash('Volume');
+    case 'volChange': return m && typeof m.volume_change_24h_pct === 'number' ? deltaCell(m.volume_change_24h_pct, 'volume') : h('span', { class: 'unknown', title: m ? m.volume_change_basis || '' : 'No market data' }, h('span', { 'aria-hidden': 'true' }, '—'), h('span', { class: 'sr-only' }, 'Volume change unknown'));
     case 'sector': return p.sector ? h('button', { type: 'button', class: 'chip', dataset: { key: `sector-${p.project_id}` }, 'aria-label': `Sector: ${p.sector.label}. Change sector`, title: 'Your label; change it here', onclick: (e) => { e.stopPropagation(); openSectorDialog(ctx, p); } }, p.sector.label) : dash('Sector');
     case 'lastResearch': return p.last_report_at ? h('span', { class: 'num', title: 'Latest report analysis date' }, fmtDate(p.last_report_at)) : dash('Last research');
     default: return null;
@@ -286,7 +327,7 @@ function secondaryFacts(ctx, p) {
 // Columns give way, least essential first, until the table fits the space it
 // has, so the three grades never scroll out of view. Every hidden value is
 // still in the inspector, and the Columns menu says so.
-const FIT_ORDER = ['lastResearch', 'volChange', 'mcapChange', 'fdv', 'spark', 'change24h', 'volume', 'sector', 'mcap', 'rank', 'change30d', 'change7d', 'price'];
+const FIT_ORDER = ['lastResearch', 'sector', 'volChange', 'mcapChange', 'fdv', 'spark', 'change30d', 'volume', 'change24h', 'mcap', 'rank', 'change7d', 'price'];
 
 function fitColumns(root) {
   const sc = root && root.querySelector('.table-scroll');
@@ -352,16 +393,19 @@ function rowClass(ctx, pid) {
 function buildTable(ctx, prefsObj, rows, rerender) {
   const cols = COLUMNS.filter((c) => prefsObj.columns.includes(c.id)).map((c) => c.id);
   const nameActive = prefsObj.sort.key === 'name';
+  const rankFirst = cols.includes('rank');
+  const rest = cols.filter((c) => c !== 'rank');
   const thead = h('thead', null, h('tr', null,
+    rankFirst ? sortHeader(ctx, prefsObj, 'rank', rerender) : null,
     h('th', { class: 'c-project', scope: 'col', 'aria-sort': nameActive ? (prefsObj.sort.dir === 'asc' ? 'ascending' : 'descending') : null },
       h('button', { type: 'button', class: 'sort', dataset: { key: 'sort-name' }, onclick: () => setSort(ctx, prefsObj, 'name', rerender) },
-        h('span', { class: 'lbl' }, 'Project', nameActive ? arrow(prefsObj.sort.dir) : null),
-        h('span', { class: 'src' }, 'name · ticker'))),
-    cols.map((c) => sortHeader(ctx, prefsObj, c, rerender))));
+        h('span', { class: 'lbl' }, 'Name', nameActive ? arrow(prefsObj.sort.dir) : null))),
+    rest.map((c) => sortHeader(ctx, prefsObj, c, rerender))));
   const tbody = h('tbody', null, rows.map((p) => {
     const tr = h('tr', { class: rowClass(ctx, p.project_id), dataset: { pid: p.project_id } },
+      rankFirst ? h('td', { class: 'num c-rank' }, cellFor(ctx, 'rank', p)) : null,
       h('td', { class: 'c-project' }, projectCell(ctx, p)),
-      cols.map((c) => {
+      rest.map((c) => {
         if (c === 'research') return PROVIDERS.map((prov) => h('td', { class: `c-prov c-prov-${prov} c-research` }, providerCell(ctx, p, prov)));
         const col = COLUMNS.find((x) => x.id === c);
         return h('td', { class: [col.num ? 'num' : '', col.hide || '', `c-${c}`].join(' ').trim() }, cellFor(ctx, c, p));

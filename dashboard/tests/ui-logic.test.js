@@ -472,3 +472,33 @@ test('Add project: a listing or explorer link is searched by its slug, never sav
   assert.equal(site.search, 'allora');
   assert.equal(dialogs.parseQuery('Allora Network').search, 'Allora Network');
 });
+
+test('7-day chart: one path scaled to its box, thinned to a cap, flat through the middle, nothing for no series', async () => {
+  const { ui } = await mods;
+  const d = ui.sparkPath([10, 20, 15], { width: 135, height: 36, pad: 3 });
+  assert.equal(d, 'M1.0 33.0L67.5 3.0L134.0 18.0', 'low at the bottom, high at the top, x across the width');
+  assert.equal(ui.sparkPath([5, 5, 5], { width: 135, height: 36 }), 'M1.0 18.0L67.5 18.0L134.0 18.0', 'a flat series runs through the middle');
+  assert.equal(ui.sparkPath([1]), null);
+  assert.equal(ui.sparkPath(null), null);
+  assert.equal(ui.sparkPath([1, 'x', 2, NaN, 3]).split('L').length, 3, 'only numbers are drawn');
+  const long = Array.from({ length: 168 }, (_, i) => Math.sin(i / 9) + i / 50);
+  const thin = ui.sparkPath(long, { max: 140 });
+  assert.equal(thin.split('L').length, 140, 'an hourly week is thinned to the cap');
+  assert.ok(thin.endsWith(`${(135 - 1).toFixed(1)} ${thin.split(' ').pop()}`), 'the last point is kept at the right edge');
+});
+
+test('the list in the CoinMarketCap style: compact USD with two decimals; saved columns from before start from the new layout', async () => {
+  const { wl } = await mods;
+  assert.equal(wl.cmcCompact(1.71e12), '$1.71T');
+  assert.equal(wl.cmcCompact(329.66e9), '$329.66B');
+  assert.equal(wl.cmcCompact(920e6), '$920.00M');
+  assert.equal(wl.cmcCompact(595620), '$595.62K');
+  assert.equal(wl.cmcCompact(12.5), '$12.50');
+  assert.equal(wl.cmcCompact(null), null);
+  const store = (saved) => ({ ui: { get: () => saved, set: () => {} } });
+  const old = wl.prefs(store({ v: 2, columns: ['rank', 'price', 'sector', 'research'], sort: { key: 'mcap', dir: 'desc' }, filters: { owned: 'all' } }));
+  assert.deepEqual(old.columns, ['rank', 'price', 'change24h', 'change7d', 'change30d', 'mcap', 'volume', 'spark', 'research'], 'the CMC order');
+  assert.deepEqual(old.sort, { key: 'mcap', dir: 'desc' }, 'the sort is kept');
+  const now = wl.prefs(store({ v: 3, columns: ['spark', 'price', 'sector'], sort: { key: 'rank', dir: 'asc' }, filters: {} }));
+  assert.deepEqual(now.columns, ['price', 'spark', 'sector', 'research'], 'choices made in this layout are kept, in its order');
+});
