@@ -364,6 +364,17 @@ test('research models in brief: automatic, manual (nothing to set up), on hold, 
   assert.equal(wl.setupShort('not configured: a search price (or max searches 0 to turn web search off)'), 'Automatic: 1 setting missing (optional)', 'a comma inside parentheses is one setting');
 });
 
+test('rate-limit countdown: m:ss to the next try, h:mm:ss past an hour, "due" once passed, nothing for no time', async () => {
+  const { wl } = await mods;
+  const now = Date.parse('2026-10-04T18:00:00.000Z');
+  assert.equal(wl.countdownText('2026-10-04T18:05:32.000Z', now), '5:32');
+  assert.equal(wl.countdownText('2026-10-04T18:00:00.400Z', now), '0:01', 'a part second still counts as waiting');
+  assert.equal(wl.countdownText('2026-10-04T19:02:05.000Z', now), '1:02:05');
+  assert.equal(wl.countdownText('2026-10-04T17:59:00.000Z', now), 'due');
+  assert.equal(wl.countdownText(null, now), null);
+  assert.equal(wl.countdownText('not a time', now), null);
+});
+
 test('states: a model on hold and work held unsent are their own words; ages count calendar days in New York; anchors are the rubric\'s own words', async () => {
   const { ui } = await mods;
   assert.equal(ui.jobKey({ state: 'unconfigured', mode: 'manual' }, null, { onHold: true }), 'on_hold');

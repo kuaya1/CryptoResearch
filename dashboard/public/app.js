@@ -671,13 +671,15 @@ async function boot() {
     if (e.target && e.target.closest && e.target.closest('[data-nodirty]')) return;
     state.dirty = true;
   });
-  // Ctrl+K (Cmd+K on a Mac): search the watchlist from anywhere. Never while
-  // typing or editing, and never with a dialog open.
+  // Ctrl+K (Cmd+K on a Mac), or / on its own: search the watchlist from
+  // anywhere. Never while typing or editing, and never with a dialog open.
   const mac = /Mac|iPhone|iPad/.test(navigator.platform || '');
   document.addEventListener('keydown', (e) => {
-    if (e.key.toLowerCase() !== 'k' || e.altKey || e.shiftKey || (mac ? !e.metaKey || e.ctrlKey : !e.ctrlKey || e.metaKey)) return;
+    const slash = e.key === '/' && !e.altKey && !e.ctrlKey && !e.metaKey && !e.isComposing;
+    if (!slash && (e.key.toLowerCase() !== 'k' || e.altKey || e.shiftKey || (mac ? !e.metaKey || e.ctrlKey : !e.ctrlKey || e.metaKey))) return;
     const t = e.target;
-    const editing = t && (t.isContentEditable || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || (t.tagName === 'INPUT' && t.dataset.key !== 'wl-search'));
+    // "/" is a character in every field, the search box included.
+    const editing = t && (t.isContentEditable || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || (t.tagName === 'INPUT' && (slash || t.dataset.key !== 'wl-search')));
     if (editing || document.querySelector('dialog[open]')) return;
     e.preventDefault();
     const r = state.route;

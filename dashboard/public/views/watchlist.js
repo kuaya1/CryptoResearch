@@ -382,7 +382,7 @@ function buildTable(ctx, prefsObj, rows, rerender) {
     return tr;
   }));
   return h('div', { class: 'table-scroll', 'data-keep-scroll': 'watchlist' },
-    h('table', { class: 'wl' }, h('caption', { class: 'sr-only' }, `Watchlist. ${sortDescription(prefsObj.sort)}. Choose a project name for its details; arrow keys move between rows. Grade badges show a scorecard on hover or keyboard focus.`), thead, tbody));
+    h('table', { class: 'wl' }, h('caption', { class: 'sr-only' }, `Watchlist. ${sortDescription(prefsObj.sort)}. Choose a project name for its details; J and K or the arrow keys move between rows, Space or Enter opens and closes a project. Grade badges show a scorecard on hover or keyboard focus.`), thead, tbody));
 }
 
 // ---- menus (filters, columns) ------------------------------------------------
@@ -516,12 +516,82 @@ export function readinessSummary(providers, held = {}) {
   return { list, text: parts.join(' · ') || 'unknown', setup: 0 };
 }
 
-function stripItem(key, parts, { warn = false, extra = null, ico = null } = {}) {
+function stripItem(key, parts, { warn = false, bad = false, extra = null, ico = null, cls = '' } = {}) {
   const open = view.strip === key;
-  return h('button', { type: 'button', class: `ss-item${warn ? ' warn' : ''}`, 'aria-expanded': String(open), 'aria-controls': 'ss-panel', dataset: { key: `ss-${key}` }, onclick: () => toggleStrip(key) }, ico ? h('span', { class: `ico i-${ico}`, 'aria-hidden': 'true' }) : null, parts, extra ? h('span', { class: 'sr-only' }, `. ${extra}`) : null);
+  return h('button', { type: 'button', class: `ss-item${warn ? ' warn' : ''}${bad ? ' bad' : ''}${cls ? ` ${cls}` : ''}`, 'aria-expanded': String(open), 'aria-controls': 'ss-panel', dataset: { key: `ss-${key}` }, onclick: () => toggleStrip(key) }, ico ? h('span', { class: `ico i-${ico}`, 'aria-hidden': 'true' }) : null, parts, extra ? h('span', { class: 'sr-only' }, `. ${extra}`) : null);
 }
 
 let toggleStrip = () => {};
+
+// Time left until the price source's next try, as m:ss (h:mm:ss past an
+// hour); "due" once it has passed. Pure, for the tests.
+export function countdownText(until, now = Date.now()) {
+  const t = Date.parse(until || '');
+  if (Number.isNaN(t)) return null;
+  const s = Math.ceil((t - now) / 1000);
+  if (s <= 0) return 'due';
+  const hh = Math.floor(s / 3600);
+  const mm = Math.floor((s % 3600) / 60);
+  const ss = String(s % 60).padStart(2, '0');
+  return hh ? `${hh}:${String(mm).padStart(2, '0')}:${ss}` : `${mm}:${ss}`;
+}
+
+// Rate limited by the price source: a quiet amber badge beside Refresh with
+// the time to the next try. The ticking figures are for the eye; the label
+// says the clock time once, so a screen reader is not read a running clock.
+function rateBadge(m) {
+  if (!m || !m.rate_limited) return null;
+  const left = countdownText(m.retry_at);
+  return h('span', { class: 'rl-badge', role: 'note', title: `The price source is limiting requests${m.retry_at ? `; the next automatic try is after ${fmtAsOf(m.retry_at)}` : ''}. Prices keep their age until then.` },
+    h('span', { class: 'rl-dot', 'aria-hidden': 'true' }),
+    h('span', null, 'Rate limited'),
+    left ? h('span', { class: 'rl-count fig', 'aria-hidden': 'true', dataset: { until: m.retry_at } }, left === 'due' ? 'retry due' : left) : null,
+    m.retry_at ? h('span', { class: 'sr-only' }, `, next try after ${fmtAsOf(m.retry_at)}`) : null);
+}
+
+// One timer for every countdown on the page, only while one is shown; it
+// stops itself when none is left.
+function startCountdown() {
+  if (view.countdown) return;
+  const tick = () => {
+    const els = [...document.querySelectorAll('.rl-count[data-until]')];
+    if (!els.length) {
+      clearInterval(view.countdown);
+      view.countdown = null;
+      return;
+    }
+    for (const el of els) {
+      const left = countdownText(el.dataset.until);
+      el.textContent = left === 'due' ? 'retry due' : left || '';
+    }
+  };
+  if (!document.querySelector('.rl-count[data-until]')) return;
+  view.countdown = setInterval(tick, 1000);
+}
+
+// Bitcoin and the market in one run of figures: price and 7-day change,
+// dominance, total market cap and its 24-hour change, and how many large
+// coins beat Bitcoin over 30 days. Only what the captured snapshot holds.
+function marketFigures(snap, mc) {
+  const demo = snap.provider === 'fictional-demo';
+  const sep = () => h('span', { class: 'ss-sep', 'aria-hidden': 'true' });
+  const dom = snap.dominance && typeof snap.dominance.btc_pct === 'number' ? snap.dominance.btc_pct : null;
+  const tm = snap.total_market || {};
+  const b30 = snap.breadth && snap.breadth.d30;
+  const breadth = b30 && typeof b30.share_pct === 'number'
+    ? h('span', { class: 'breadth', title:`${b30.beating_btc} of ${b30.counted} large coins rose more than Bitcoin over 30 days` }, h('span', { class: 'breadth-bar', 'aria-hidden': 'true' }, h('span', { style: { width: `${Math.max(0, Math.min(100, b30.share_pct))}%` } })), h('span', { class: 'fig' }, `${b30.beating_btc}/${b30.counted}`), h('span', { class: 'k' }, 'beat BTC'))
+    : null;
+  return [
+    h('span', { class: 'k' }, demo ? 'BTC (demo)' : 'BTC'),
+    h('span', { class: 'v fig' }, `$${Math.round(snap.bitcoin.price_usd).toLocaleString('en-US')}`),
+    h('span', { class: 'm-chg' }, changeCell(snap.bitcoin.change_7d_pct, { label: 'Bitcoin over 7 days' }), h('span', { class: 'k' }, '7D')),
+    dom !== null ? [sep(), h('span', { class: 'k', title: 'Bitcoin dominance: its share of the total crypto market cap (CoinGecko /global)' }, 'Dom'), h('span', { class: 'v fig' }, `${dom.toFixed(1)}%`)] : null,
+    typeof tm.market_cap_usd === 'number' ? h('span', { class: 'm-total' }, sep(), h('span', { class: 'k', title: 'Total crypto market cap (CoinGecko /global)' }, 'Total'), h('span', { class: 'v fig' }, fmtCompactUsd(tm.market_cap_usd)),
+      typeof tm.market_cap_change_24h_pct === 'number' ? h('span', { class: 'm-chg' }, changeCell(tm.market_cap_change_24h_pct, { label: 'total market cap over 24 hours' }), h('span', { class: 'k' }, '24h')) : null) : null,
+    breadth ? h('span', { class: 'm-breadth' }, sep(), breadth) : null,
+    mc.status === 'stale' ? h('span', { class: 'warn-word' }, 'stale') : null,
+  ];
+}
 
 // ---- hover / focus scorecard (WCAG 1.4.13: hoverable, dismissible, persistent) --
 
@@ -648,11 +718,12 @@ function hidePreview() {
 const wide = () => window.matchMedia('(min-width: 1280px)').matches;
 
 // Opening adds one history entry (so Back closes it); switching to another
-// project while it is open replaces that entry.
-function openPanel(ctx, pid, opener, provider = null) {
+// project while it is open replaces that entry. A peek (the keyboard, beside
+// the list) leaves focus on the list, so J/K and Space keep working there.
+function openPanel(ctx, pid, opener, provider = null, { peek = false } = {}) {
   view.returnFocus = opener && opener.dataset ? opener.dataset.key || null : null;
   view.focusProvider = provider;
-  view.focusOnRender = true;
+  view.focusOnRender = !peek;
   hidePreview();
   const open = ctx.state.route.query.get('p');
   if (open === pid) {
@@ -1172,6 +1243,30 @@ function headMarket(p) {
     h('span', { class: `hm-fresh ${fresh ? 'ok' : 'warn'}`, title: `${m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Fictional demo data' : `Source: ${m.source || 'CoinGecko'}`}, as of ${fmtDateTime(m.as_of)}` }, fresh ? fmtAgo(m.fetched_at || m.as_of) : f.text));
 }
 
+// The asset at a glance, under the name: rank, 7- and 30-day change and FDV
+// in compared figures. Unknown stays "—" with its reason in the label.
+function overviewStats(p) {
+  const m = mkt(p);
+  if (!m) return null;
+  const demo = m.rank_source_label && /fictional/i.test(m.rank_source_label);
+  const stat = (k, v, title = null) => h('div', { class: 'ov-stat', title }, h('dt', null, k), h('dd', { class: 'fig' }, v));
+  return h('dl', { class: 'ov-stats', 'aria-label': 'Asset overview' },
+    stat('Rank', m.market_cap_rank ? `#${m.market_cap_rank}` : dash('Rank'), demo ? 'Market-cap rank from the fictional demo data' : 'Market-cap rank, as reported by CoinGecko'),
+    stat('7D', changeCell(m.change_7d_pct, { label: 'over 7 days' }), 'Price change over 7 days (rolling)'),
+    stat('30D', changeCell(m.change_30d_pct, { label: 'over 30 days' }), 'Price change over 30 days (rolling)'),
+    stat('FDV', typeof m.fdv_usd === 'number' ? fmtCompactUsd(m.fdv_usd) : dash('FDV'), 'Fully diluted valuation'));
+}
+
+// On-chain fundamentals (activity, fees, revenue, TVL) need an on-chain data
+// source such as Artemis. None is connected, so the section says so and shows
+// no figures: nothing is estimated or taken from a model's report.
+const ONCHAIN = ['Daily active addresses', 'Transactions', 'Fees', 'Revenue', 'TVL'];
+function onchainPart(p) {
+  return details('On-chain fundamentals', h('div', { class: 'small' },
+    h('p', { class: 'onchain-note' }, h('span', { class: 'chip info' }, 'Not connected'), ' No on-chain data source (such as Artemis) is set up on this desk, so these stay unknown. Nothing here is estimated.'),
+    h('dl', { class: 'facts onchain' }, ONCHAIN.map((k) => h('div', null, h('dt', null, k), h('dd', null, dash(k)))))), { id: `insp-onchain-${p.project_id}` });
+}
+
 // Detail state inside the inspector, kept across a redraw: scroll positions,
 // open details and the focused control.
 function capturePanel(root) {
@@ -1222,6 +1317,8 @@ function renderPanel(ctx, pid) {
   const p = ctx.state.index.projects.find((x) => x.project_id === pid);
   const saved = capturePanel(root);
   const reopened = view.panelPid !== pid;
+  // Another project (J/K): it starts at its top, not where the last one was.
+  if (reopened) saved.scroll = {};
   // Rows and sections you opened stay open across a model switch and a refresh.
   view.keptOpen = reopened ? {} : { ...view.keptOpen, ...saved.open };
   saved.open = view.keptOpen;
@@ -1261,17 +1358,23 @@ function renderPanel(ctx, pid) {
     ? { class: `panel${reopened ? ' entering' : ''}`, role: 'dialog', 'aria-modal': 'false', 'aria-labelledby': 'panel-title' }
     : { class: `panel${reopened ? ' entering' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'panel-title' },
     h('div', { class: 'panel-head' },
-      h('div', { class: 'ph-row' }, logo(p, { size: 36 }),
+      h('div', { class: 'ph-row' }, logo(p, { size: 32 }),
         h('div', { class: 'names' }, heading, headMarket(p)),
         inspectorMenu(ctx, p),
-        closeBtn)),
+        closeBtn),
+      overviewStats(p)),
     h('div', { class: 'panel-body', 'data-keep-scroll': 'panel' },
       archivedBanner(ctx, p),
       problemLines(ctx, p),
-      h('section', { class: 'scorecard', 'aria-label': 'Research scorecard' },
+      h('section', { class: 'scorecard', 'aria-labelledby': 'insp-sec-scores' },
+        h('h3', { class: 'sec-title sec-scores', id: 'insp-sec-scores' }, 'Model scores', h('span', { class: 'faint' }, ' · each model on its own')),
         modelTabs(ctx, p, sel),
         modelPanel(ctx, p, sel)),
+      h('section', { class: 'insp-thesis', 'aria-labelledby': 'insp-sec-thesis' },
+        h('h3', { class: 'sec-title', id: 'insp-sec-thesis' }, 'Thesis notes'),
+        h('div', { dataset: { slot: 'thesis' } }, skeleton('Loading the thesis notes'))),
       h('div', { class: 'insp-more' },
+        onchainPart(p),
         reports >= 2 ? details('Compare the models', h('div', null, comparisonNote(ctx, p), h('div', { dataset: { slot: 'compare' } })), { id: `insp-compare-${pid}` }) : null,
         m ? details('Market details', h('div', null,
           m.sparkline_7d ? h('div', { style: { margin: '4px 0 8px' } }, sparkline(m.sparkline_7d, { width: 300, height: 48, label: `${p.symbol || p.name} 7-day price` })) : null,
@@ -1341,6 +1444,8 @@ function renderPanel(ctx, pid) {
     heading.focus({ preventScroll: true });
     ctx.claimFocus();
   } else if (panel.contains(document.activeElement)) ctx.claimFocus();
+  // A peek beside the list (J/K, Space): focus stays on the row; say what is shown.
+  else if (reopened && split) announce(`Showing ${p.name} beside the list. Escape closes it.`);
   view.focusOnRender = false;
   view.focusProvider = null;
   fillDetail(ctx, pid, panel, opening ? { scroll: {}, open: {}, focus: null } : saved, sel).then(() => { view.focusTab = null; });
@@ -1386,6 +1491,32 @@ export function refreshToast(out) {
 // Keys that never fire while typing or editing.
 const typing = (el) => Boolean(el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)));
 
+// J and K: the next or previous project in the order shown. With the
+// inspector open it follows, showing that project (from the list it is a
+// peek and focus stays on the row; from inside the inspector focus moves to
+// the new project's name there). With it closed, the row's name is focused.
+function stepProject(ctx, dir) {
+  const rows = [...document.querySelectorAll('table.wl tbody tr[data-pid]')];
+  if (!rows.length) return false;
+  const open = ctx.state.route.query.get('p');
+  const active = document.activeElement;
+  const fromRow = active && active.closest ? active.closest('table.wl tbody tr[data-pid]') : null;
+  const current = fromRow || (open ? rows.find((tr) => tr.dataset.pid === open) : null) || null;
+  const i = current ? rows.indexOf(current) + dir : dir > 0 ? 0 : rows.length - 1;
+  if (i < 0 || i >= rows.length) return true; // at the first or last project: stay
+  const next = rows[i];
+  const name = next.querySelector('.pname');
+  const inList = Boolean(fromRow) || !open;
+  if (inList && name) {
+    view.suppressFocus = true;
+    name.focus({ preventScroll: true });
+    view.suppressFocus = false;
+    next.scrollIntoView({ block: 'nearest' });
+  }
+  if (open && open !== next.dataset.pid) openPanel(ctx, next.dataset.pid, name, null, { peek: inList && wide() });
+  return true;
+}
+
 function moveRow(e) {
   const from = e.target.closest && e.target.closest('table.wl tbody td');
   if (!from) return false;
@@ -1413,7 +1544,6 @@ export function renderWatchlist(ctx, route) {
   const head = h('div', { class: 'wl-head' });
   const strip = h('div', { class: 'status-strip', role: 'group', 'aria-label': 'Status' });
   const stripPanel = h('div', { class: 'ss-panel', id: 'ss-panel', role: 'region', 'aria-label': 'Status details', hidden: true });
-  const alerts = h('div');
   const holder = h('div');
   const resultsLine = h('div', { class: 'results-line', role: 'status' });
   const tokens = h('div', { class: 'active-filters' });
@@ -1492,7 +1622,7 @@ export function renderWatchlist(ctx, route) {
     announce('Search and filters cleared.');
   };
 
-  const search = input({ type: 'search', placeholder: 'Search name, ticker or sector', 'aria-label': 'Search projects', 'aria-keyshortcuts': 'Control+K Meta+K', value: view.q, dataset: { key: 'wl-search' } });
+  const search = input({ type: 'search', placeholder: 'Search name, ticker or sector', 'aria-label': 'Search projects', 'aria-keyshortcuts': '/ Control+K Meta+K', value: view.q, dataset: { key: 'wl-search' } });
   search.addEventListener('input', () => {
     view.q = search.value;
     view.order = null;
@@ -1510,7 +1640,7 @@ export function renderWatchlist(ctx, route) {
       openPanel(ctx, first.closest('tr').dataset.pid, first);
     }
   });
-  const searchWrap = h('div', { class: 'search' }, search, h('kbd', { 'aria-hidden': 'true' }, /Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘K' : 'Ctrl K'));
+  const searchWrap = h('div', { class: 'search' }, search, h('kbd', { 'aria-hidden': 'true', title: `Also ${/Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘K' : 'Ctrl K'}` }, '/'));
 
   function drawTokens() {
     const f = prefsObj.filters;
@@ -1599,52 +1729,64 @@ export function renderWatchlist(ctx, route) {
       h('div', { class: 'actions' }, h('a', { class: 'btn', href: '#/new', dataset: { key: 'new-research' } }, 'New research'), addBtn));
   }
 
-  // The status strip: prices, Bitcoin context (only with a captured
-  // snapshot), each model's route, and the review queue; each opens its
-  // details below. Problems that need action are listed under it, always.
+  // The status strip: one compact line under the title. Prices, with a
+  // rate-limit badge and its countdown beside Refresh; Bitcoin and the market
+  // in one run of figures (only with a captured snapshot); each model's
+  // route; then what needs action and the review queue. Each part opens its
+  // details below. What needs action (a call that may have been billed,
+  // failed or stalled research, saving blocked) is always named in the strip
+  // in words, never folded into a count alone.
   function drawStatus() {
     const idx = ctx.state.index;
     const { critical, rest } = splitAttention(idx.attention || []);
     const high = rest.filter((a) => a.severity === 'high').length;
     // The review queue stays a count in the strip (urgent ones named in
     // words) and opens when you ask; it remembers that you left it open.
-    // What needs action now is listed below the strip, never folded away.
     if (!view.stripReady && ctx.ui.get('reviewOpen', false)) view.strip = view.strip || 'review';
     view.stripReady = true;
     if (view.strip === 'review' && !rest.length) view.strip = null;
+    if (view.strip === 'action' && !critical.length) view.strip = null;
     const m = idx.freshness.market;
     const ps = priceStatus(m);
     const items = [];
-    const priceWord = ps.problem ? h('span', { class: 'warn-word' }, m.rate_limited ? 'Rate limited' : ps.text) : null;
+    // Rate limited: said by the badge beside Refresh, not twice.
+    const priceWord = ps.problem && !m.rate_limited ? h('span', { class: 'warn-word' }, ps.text) : null;
     items.push(h('span', { class: 'ss-group' },
       stripItem('prices', [h('span', { class: 'k' }, view.priceSource === 'CoinGecko' ? 'Prices' : 'Prices (demo)'), h('span', { class: 'v' }, m.last_success_at ? fmtAgo(m.last_success_at) : 'not fetched'), priceWord], { warn: ps.problem, extra: m.last_success_at ? ps.asOf : null, ico: 'clock' }),
+      rateBadge(m),
       refreshBtn));
     const mc = idx.market_context;
     const snap = mc && mc.snapshot;
     if (snap && snap.bitcoin && typeof snap.bitcoin.price_usd === 'number') {
-      const demo = snap.provider === 'fictional-demo';
-      const b30 = snap.breadth && snap.breadth.d30;
-      const breadth = b30 && typeof b30.share_pct === 'number'
-        ? h('span', { class: 'breadth', title: `${b30.beating_btc} of ${b30.counted} large coins rose more than Bitcoin over 30 days` }, h('span', { class: 'breadth-bar', 'aria-hidden': 'true' }, h('span', { style: { width: `${Math.max(0, Math.min(100, b30.share_pct))}%` } })), `${b30.beating_btc}/${b30.counted} beat BTC`)
-        : null;
-      items.push(stripItem('market', [h('span', { class: 'k' }, demo ? 'BTC (demo)' : 'BTC'), h('span', { class: 'v' }, `$${Math.round(snap.bitcoin.price_usd).toLocaleString('en-US')}`), changeCell(snap.bitcoin.change_7d_pct, { label: 'Bitcoin over 7 days' }), h('span', { class: 'k' }, '7D'), breadth, mc.status === 'stale' ? h('span', { class: 'warn-word' }, 'stale') : null], { warn: mc.status === 'stale', ico: 'coin' }));
+      items.push(stripItem('market', marketFigures(snap, mc), { warn: mc.status === 'stale', ico: 'coin', cls: 'ss-market' }));
     }
     if (idx.research && idx.research.providers) {
       const rs = readinessSummary(idx.research.providers, (idx.settings.research || {}).on_hold || {});
-      items.push(stripItem('models', [h('span', { class: 'k' }, 'Models'), h('span', { class: 'v' }, rs.text)], { warn: rs.setup > 0, ico: 'models' }));
+      items.push(stripItem('models', [h('span', { class: 'k' }, 'Models'), h('span', { class: 'v' }, rs.text)], { warn: rs.setup > 0, ico: 'models', cls: 'ss-models' }));
+    }
+    if (critical.length || rest.length) items.push(h('span', { class: 'ss-spacer', 'aria-hidden': 'true' }));
+    if (critical.length) {
+      const kinds = [...new Set(critical.map(kindWord))];
+      const anyHigh = critical.some((a) => a.severity === 'high' || ['research_uncertain', 'research_failed', 'writes_blocked', 'broken_record'].includes(a.kind));
+      items.push(stripItem('action', [h('span', { class: anyHigh ? 'bad-word' : 'warn-word' }, kinds.length === 1 ? kinds[0] : `${critical.length} need action`),
+        critical.length > 1 && kinds.length === 1 ? h('span', { class: 'v fig' }, `×${critical.length}`) : null,
+        kinds.length > 1 ? h('span', { class: 'k ss-kinds' }, kinds.join(' · ')) : null],
+      { bad: anyHigh, warn: !anyHigh, ico: 'alert', extra: critical.map((a) => a.title).join('; ') }));
     }
     if (rest.length) {
       items.push(stripItem('review', [h('span', { class: 'v' }, `${rest.length} to review`), high ? h('span', { class: 'bad-word' }, `${high} urgent`) : null], { warn: high > 0, ico: 'tray' }));
     }
     strip.replaceChildren(...items);
-    drawStripPanel(rest, ps, m);
-    alerts.replaceChildren(...[alertList(critical, 'alert')].filter(Boolean));
+    drawStripPanel(rest, ps, m, critical);
+    startCountdown();
   }
 
-  function drawStripPanel(rest, ps, m) {
+  function drawStripPanel(rest, ps, m, critical = []) {
     const idx = ctx.state.index;
     let body = null;
-    if (view.strip === 'prices') {
+    if (view.strip === 'action') {
+      body = [h('h2', null, `Needs action (${critical.length})`), alertList(critical, 'alert')];
+    } else if (view.strip === 'prices') {
       body = [h('h2', null, 'Prices'),
         h('p', null, `${m.last_success_at ? ps.asOf : 'No prices fetched yet'} · source: ${view.priceSource}.`),
         ps.note ? h('p', null, h('span', { class: ps.problem ? 'warn-word' : null }, ps.problem ? 'Note: ' : ''), ps.note) : null,
@@ -1685,7 +1827,8 @@ export function renderWatchlist(ctx, route) {
       h('span', { class: 'bands', 'aria-hidden': 'true' }, ['a', 'b', 'c', 'd', 'f'].map((b) => h('span', { class: `band-key band-${b}` }, b.toUpperCase()))),
       h('span', null, `Grades 0–100, calculated by this app from each model's own report. Withheld: the report is saved, but a weighted part was not scored; its coverage is the investment weight it did score, not research progress. A month count (4mo) means older than ${ctx.state.index.settings.freshness.research_stale_days || 90} days.`),
       h('span', { class: 'ev' }, h('span', { class: 'ev-ico' }, icon('warn-fill')), 'serious evidence flag'),
-      h('span', { class: 'ev' }, h('span', { class: 'ev-ico' }, icon('warn-line')), 'material evidence flag'));
+      h('span', { class: 'ev' }, h('span', { class: 'ev-ico' }, icon('warn-line')), 'material evidence flag'),
+      h('span', { class: 'keys' }, h('kbd', null, 'J'), h('kbd', null, 'K'), ' move', h('kbd', null, 'Space'), ' open', h('kbd', null, '/'), ' search', h('kbd', null, 'Esc'), ' close'));
   }
 
   function setSources() {
@@ -1746,6 +1889,29 @@ export function renderWatchlist(ctx, route) {
         e.preventDefault();
         return;
       }
+      const plain = !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.isComposing;
+      const busy = typing(e.target) || document.querySelector('dialog[open]') || document.querySelector('.menu:not(.hidden), .insp-menu:not([hidden])');
+      // J / K: next and previous project (the inspector follows when open).
+      if (onList && plain && !busy && (e.key === 'j' || e.key === 'k' || e.key === 'J' || e.key === 'K')) {
+        if (stepProject(ctx, e.key.toLowerCase() === 'j' ? 1 : -1)) e.preventDefault();
+        return;
+      }
+      // Space or Enter on a project's name toggles its inspector. Beside the
+      // list (wide screens) it opens as a peek and focus stays on the row;
+      // narrower, it opens over the list and focus moves into it.
+      if (onList && plain && (e.key === ' ' || e.key === 'Enter') && e.target.classList && e.target.classList.contains('pname')) {
+        const tr = e.target.closest('tr[data-pid]');
+        if (tr && r.query.get('p') === tr.dataset.pid) {
+          e.preventDefault();
+          closePanel(ctx);
+          return;
+        }
+        if (tr && wide()) {
+          e.preventDefault();
+          openPanel(ctx, tr.dataset.pid, e.target, null, { peek: true });
+          return;
+        }
+      }
       if (e.key !== 'Escape' || document.querySelector('dialog[open]')) return;
       if (document.querySelector('.menu:not(.hidden)')) {
         closeMenus();
@@ -1793,7 +1959,7 @@ export function renderWatchlist(ctx, route) {
   // Only a fresh visit re-sorts; live updates, Back and opening the inspector keep the order you saw.
   rerender(['live', 'same', 'refresh', 'pop'].includes(ctx.state.renderReason) ? 'live' : 'user');
 
-  const page = h('div', { class: 'wl-wrap' }, head, strip, stripPanel, alerts, toolbar, tokens, resultsLine, holder, legend);
+  const page = h('div', { class: 'wl-wrap' }, head, strip, stripPanel, toolbar, tokens, resultsLine, holder, legend);
   page.afterMount = afterMount;
 
   // In-place redraw: the toolbar (and the search you may be typing in) stays;

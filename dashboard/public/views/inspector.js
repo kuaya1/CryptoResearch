@@ -6,6 +6,8 @@
 //   evidence-<model>  that model's evidence checks, claims by tag and sources
 //   compare           the models side by side where their reports compare;
 //                     never a combined score
+//   thesis            your own conviction note, then the selected model's
+//                     thesis in its report's words
 //   run               the latest run's exact saved prompt, version, rubric,
 //                     profile and holding horizon
 // Every model keeps its own numbers. Unknown stays unknown and is never drawn
@@ -265,9 +267,43 @@ function comparePart(ctx, d) {
       '? unknown · N/A not applicable · hover a score for its reason. Each model keeps its own grade.'));
 }
 
+// ---- thesis notes ---------------------------------------------------------------
+
+// Your own conviction note first, in your words (written on the project's
+// Notes page), then the selected model's thesis as its report states it: its
+// final take, the one development to watch, and what would confirm or
+// invalidate it. Each stays apart: nothing is summarized or merged.
+function thesisPart(ctx, d, row, prov) {
+  const pid = d.project.project_id;
+  const note = d.conviction ? String(d.conviction.text || '').trim() : '';
+  const mine = h('div', { class: 'th-block' },
+    h('div', { class: 'th-head' }, h('span', { class: 'th-who' }, 'Your note'), note && d.conviction.updated_at ? h('span', { class: 'faint' }, `saved ${fmtDateTime(d.conviction.updated_at)}`) : null),
+    note ? h('p', { class: 'th-text' }, note) : h('p', { class: 'th-none' }, 'No conviction note yet.'),
+    h('a', { class: 'small', href: `#/project/${encodeURIComponent(pid)}/history`, dataset: { key: `note-edit-${pid}` } }, note ? 'Edit your note' : 'Write your note'));
+  const sum = prov && row.providers && row.providers[prov];
+  const r = sum ? d.reports.find((x) => x.report_id === sum.report_id) || latestReports(d)[prov] : null;
+  const a = r && !r.broken ? r.assessment || {} : null;
+  let model = null;
+  if (a && !a.needs_text && !sum.needs_text) {
+    const metric = a.next_metric_to_monitor;
+    const list = (items) => (Array.isArray(items) ? items : []).filter((f) => f && f.text).slice(0, 2);
+    const confirm = list(a.conviction_increases);
+    const invalid = list(a.invalidators);
+    const any = a.final_take || (metric && metric.metric) || confirm.length || invalid.length;
+    model = h('div', { class: 'th-block' },
+      h('div', { class: 'th-head' }, h('span', { class: 'th-who' }, `${PROVIDER_LABELS[prov]}'s thesis`), h('span', { class: 'faint' }, 'as its report states it')),
+      !any ? h('p', { class: 'th-none' }, 'The report\'s data block states no thesis; the written report may.') : null,
+      a.final_take ? h('p', { class: 'th-text' }, a.final_take) : null,
+      metric && metric.metric ? h('p', { class: 'th-line' }, h('span', { class: 'k' }, 'Watch'), h('span', null, metric.metric, metric.threshold ? ` (${metric.threshold})` : '')) : null,
+      confirm.length ? h('div', { class: 'th-line' }, h('span', { class: 'k' }, 'Confirms'), h('ul', null, confirm.map((f) => h('li', null, f.text)))) : null,
+      invalid.length ? h('div', { class: 'th-line' }, h('span', { class: 'k' }, 'Breaks'), h('ul', null, invalid.map((f) => h('li', null, f.text)))) : null);
+  }
+  return h('div', { class: 'thesis' }, mine, model);
+}
+
 // The parts for the inspector of one project, for the selected model.
 export function inspectorParts(ctx, d, row, prov) {
-  const out = { run: runPart(ctx, d), compare: comparePart(ctx, d) };
+  const out = { run: runPart(ctx, d), compare: comparePart(ctx, d), thesis: thesisPart(ctx, d, row, prov) };
   if (prov) {
     out[`cats-${prov}`] = categoriesPart(ctx, d, row, prov);
     out[`grade-${prov}`] = componentsPart(ctx, d, row, prov);

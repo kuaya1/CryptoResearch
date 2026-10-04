@@ -605,8 +605,9 @@ const SVG_ICONS = {
   more: [['circle', { cx: '3.5', cy: '8', r: '1.4', fill: 'currentColor' }], ['circle', { cx: '8', cy: '8', r: '1.4', fill: 'currentColor' }], ['circle', { cx: '12.5', cy: '8', r: '1.4', fill: 'currentColor' }]],
 };
 
-// The sign for each research state on a badge.
-const STATE_ICON = { none: 'none', withheld: 'hatch', pdf: 'file', queued: 'clock', waiting: 'key', interrupted: 'pause', uncertain: 'question', incomplete: 'half', failed: 'alert', canceled: 'slash', on_hold: 'minus', held: 'minus' };
+// The sign for each research state on a badge. Working (blue) and Waiting
+// (amber, it needs you) wear a live dot instead.
+const STATE_ICON = { none: 'none', withheld: 'hatch', pdf: 'file', queued: 'clock', interrupted: 'pause', uncertain: 'question', incomplete: 'half', failed: 'alert', canceled: 'slash', on_hold: 'minus', held: 'minus' };
 const WORKING_KINDS = new Set(['running', 'dispatching', 'cowork', 'connector']);
 
 // The grade ruler: 0 to 100 with the rubric's letter bands (F below 60, then
@@ -691,7 +692,7 @@ export function gradeBadge(provider, report, job, opts = {}) {
   // only when it is stale; the scorecard and panel give the date. A withheld
   // grade shows the share of the weight that was scored, never a number in
   // the grade's place. Evidence flags sit right beside the grade.
-  const sign = WORKING_KINDS.has(info.kind) ? h('span', { class: 'pulse' }) : STATE_ICON[info.kind] ? h('span', { class: 'si' }, icon(STATE_ICON[info.kind])) : null;
+  const sign = WORKING_KINDS.has(info.kind) ? h('span', { class: 'pulse' }) : info.kind === 'waiting' ? h('span', { class: 'pulse wait' }) : STATE_ICON[info.kind] ? h('span', { class: 'si' }, icon(STATE_ICON[info.kind])) : null;
   return h(tag, attrs,
     h('span', { class: 'p', 'aria-hidden': 'true' }, PROVIDER_SHORT[provider]),
     h('span', { class: 'main', 'aria-hidden': 'true' },
