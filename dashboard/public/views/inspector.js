@@ -11,11 +11,15 @@
 //   contract          the token's contract on record and its screening state
 //   run               the latest run's exact saved prompt, version, rubric,
 //                     profile and holding horizon
+//   chart             the technical chart below the category bars, closed
+//                     until opened (views/chart.js); the same element on a
+//                     redraw, so its frame is kept
 // Every model keeps its own numbers. Unknown stays unknown and is never drawn
 // as zero; not applicable says so; nothing missing is filled in.
 import { h, details, fmtDateTime, PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, icon, anchorText, scoreTier } from '../ui.js';
 import { evidenceChecksBlock, latestReports, promptView, sourceItem } from './project.js';
 import { profileOf, categoryRows, scorecardCounts, statesConfidence, confidenceChip, categoryFlags, CONFIDENCE_LABELS } from '../thesis-ui.js';
+import { technicalChart } from './chart.js';
 
 const fact = (k, v, wide = false) => h('div', { class: wide ? 'wide' : null }, h('dt', null, k), h('dd', null, v));
 
@@ -327,7 +331,7 @@ function contractPart(d) {
 
 // The parts for the inspector of one project, for the selected model.
 export function inspectorParts(ctx, d, row, prov) {
-  const out = { run: runPart(ctx, d), compare: comparePart(ctx, d), thesis: thesisPart(ctx, d, row, prov), contract: contractPart(d) };
+  const out = { run: runPart(ctx, d), compare: comparePart(ctx, d), thesis: thesisPart(ctx, d, row, prov), contract: contractPart(d), chart: technicalChart(ctx, d.project) };
   if (prov) {
     out[`cats-${prov}`] = categoriesPart(ctx, d, row, prov);
     out[`grade-${prov}`] = componentsPart(ctx, d, row, prov);

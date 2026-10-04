@@ -1,0 +1,33 @@
+/* The technical chart in the project inspector (views/chart.js): a quiet
+   section below the category bars, closed until opened; the frame sits in a
+   white card with the desk's hairline. Tokens only (styles.css :root). */
+
+.chart-slot:empty { display: none; }
+.tvchart { margin-top: var(--s3, 12px); border-top: 1px solid var(--border); }
+.tvchart > summary { gap: var(--s2, 8px); }
+.tvchart > summary .tv-sym { color: var(--text-3); font-weight: 400; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tvchart > summary .tv-guess {
+  flex: none;
+  padding: 0 6px;
+  border: 1px dashed var(--pill-warn-dash);
+  border-radius: var(--r-sm);
+  background: var(--pill-warn-bg);
+  color: var(--pill-warn-ink);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+}
+.tv-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  padding: 4px;
+}
+.tv-box { height: 380px; }
+.tv-frame { display: block; width: 100%; height: 100%; border: 0; user-select: none; }
+.tv-foot { margin-top: 6px; }
+.tv-foot-row { display: flex; align-items: center; justify-content: flex-end; gap: var(--s2, 8px); }
+.tv-set { display: flex; gap: var(--s2, 8px); margin-top: 6px; }
+.tv-set[hidden] { display: none; }
+.tv-set input { flex: 1; min-width: 0; }

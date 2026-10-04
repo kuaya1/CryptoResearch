@@ -501,9 +501,21 @@ function restoreProject(ws, id) {
   return { ...out, status: 'restored', project_id: id, on_watchlist: out.result.watching, held_jobs: held };
 }
 
+// The chart symbol on a project record: EXCHANGE:PAIR as TradingView writes it
+// (for example BINANCE:ONDOUSDT). The same rule as the inspector's chart
+// (public/views/chart.js).
+const CHART_SYMBOL_RE = /^[A-Z0-9_]{1,20}:[A-Z0-9_.!-]{1,40}$/;
+
 function updateProjectFields(ws, id, fields) {
-  const allowed = ['symbol', 'aliases', 'tags', 'sector_profile', 'sector_note', 'name', 'sector', 'research_defaults'];
+  const allowed = ['symbol', 'aliases', 'tags', 'sector_profile', 'sector_note', 'name', 'sector', 'research_defaults', 'chart_symbol'];
   for (const k of Object.keys(fields)) if (!allowed.includes(k)) throw new OpError('INVALID', `Field ${k} cannot be changed here.`);
+  // A chart symbol is the one your chart shows instead of the ticker guess;
+  // null or empty clears it.
+  let chartSymbol;
+  if (fields.chart_symbol !== undefined) {
+    chartSymbol = fields.chart_symbol === null || String(fields.chart_symbol).trim() === '' ? null : String(fields.chart_symbol).trim().toUpperCase();
+    if (chartSymbol !== null && !CHART_SYMBOL_RE.test(chartSymbol)) throw new OpError('INVALID', 'A chart symbol is EXCHANGE:PAIR as TradingView writes it, for example BINANCE:ONDOUSDT.');
+  }
   if (fields.name !== undefined) refuseAggregatorName(fields.name);
   if (fields.sector_profile && !ws.rubrics.profiles[fields.sector_profile]) throw new OpError('INVALID', `Unknown sector profile ${fields.sector_profile}`);
   let sector;
@@ -513,8 +525,12 @@ function updateProjectFields(ws, id, fields) {
     if (sector) sector.source = 'owner';
   }
   return mutateProject(ws, id, 'update_project', `Update ${id}`, (p, op) => {
-    const { sector: _s, ...rest } = fields;
+    const { sector: _s, chart_symbol: _c, ...rest } = fields; // eslint-disable-line no-unused-vars
     Object.assign(p, rest);
+    if (chartSymbol !== undefined) {
+      if (chartSymbol) p.chart_symbol = chartSymbol;
+      else delete p.chart_symbol;
+    }
     if (fields.sector !== undefined) {
       const same = p.sector && sector && p.sector.primary === sector.primary && JSON.stringify(p.sector.tags || []) === JSON.stringify(sector.tags || []) && p.sector.source === 'owner';
       if (!same) p.sector = sector;

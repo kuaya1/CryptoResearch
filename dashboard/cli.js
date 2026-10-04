@@ -36,6 +36,7 @@ Projects
   project watch <id> on|off
   project headline <id> --report <report_id> | --decision <entry_id> | --clear
   project set <id> [--sector "PayFi"] [--tags a,b] [--symbol X] [--profile P] [--name N]
+              [--chart-symbol BINANCE:ONDOUSDT | --chart-symbol none]   the inspector's TradingView chart
   project reviewed <id> [--note TEXT]    move your review cursor ("changes since my last review")
   prompts <id> [--providers claude,chatgpt,gemini]
   query disagreements [--category token_value_capture] [--threshold 20]
@@ -363,6 +364,7 @@ async function run(argv) {
         if (one(flags.symbol)) fields.symbol = one(flags.symbol);
         if (one(flags.profile)) fields.sector_profile = one(flags.profile);
         if (one(flags.name)) fields.name = one(flags.name);
+        if (one(flags.chart_symbol)) fields.chart_symbol = /^none$/i.test(one(flags.chart_symbol)) ? null : one(flags.chart_symbol);
         if (one(flags.sector) || one(flags.tags)) {
           const current = projects.getProject(ws, id).sector || {};
           fields.sector = { primary: one(flags.sector) || current.primary || 'other', tags: one(flags.tags) ? String(one(flags.tags)).split(',').map((s) => s.trim()).filter(Boolean) : current.tags || [] };

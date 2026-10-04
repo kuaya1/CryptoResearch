@@ -929,6 +929,9 @@ function modelPanel(ctx, p, prov) {
   return h('div', { class: 'mpanel', id: 'insp-model', role: 'tabpanel', 'aria-labelledby': `insp-tab-${prov}` },
     modelHead(ctx, p, prov),
     rep && !rep.needs_text ? h('div', { dataset: { slot: `cats-${prov}` } }, catsSkeleton()) : null,
+    // The technical chart, right below the bars (views/chart.js): one slot for
+    // every model, so a model switch keeps the same chart.
+    h('div', { class: 'chart-slot', dataset: { slot: 'chart' } }),
     // The model's strongest risks, right after the bars (never behind them).
     rep && !rep.needs_text ? h('div', { dataset: { slot: `risks-${prov}` } }) : null,
     rep ? h('div', { class: 'mfoot' },
@@ -1253,6 +1256,20 @@ function restorePanel(root, s, { focus = true } = {}) {
   }
 }
 
+// Moves a filled-in part into its slot in the new panel. Node.moveBefore
+// (between two parents in the page) keeps live state such as a loaded frame;
+// without it the part is re-inserted, as before.
+function moveInto(slot, nodes) {
+  if (typeof slot.moveBefore === 'function' && slot.isConnected && nodes.every((n) => n.isConnected)) {
+    try {
+      slot.replaceChildren();
+      for (const n of nodes) slot.moveBefore(n, null);
+      return;
+    } catch (_) { /* re-inserted below */ }
+  }
+  slot.replaceChildren(...nodes);
+}
+
 // The parts that need the full project record, filled in when it arrives
 // (from the cache on a redraw, so nothing flickers).
 async function fillDetail(ctx, pid, panel, saved, prov) {
@@ -1270,6 +1287,8 @@ async function fillDetail(ctx, pid, panel, saved, prov) {
   for (const slot of panel.querySelectorAll('[data-slot]')) {
     if (!Object.prototype.hasOwnProperty.call(parts, slot.dataset.slot)) continue;
     const part = parts[slot.dataset.slot];
+    // A part already in its slot (the chart keeps its element) stays put.
+    if (part && slot.childNodes.length === 1 && slot.firstChild === part) continue;
     slot.replaceChildren(...(part ? [part] : []));
   }
   restorePanel(panel, saved, { focus: !view.focusTab });
@@ -1363,8 +1382,14 @@ function renderPanel(ctx, pid) {
       closePanel(ctx);
     }
   });
-  for (const slot of panel.querySelectorAll('[data-slot]')) if (oldSlots[slot.dataset.slot] && oldSlots[slot.dataset.slot].length) slot.replaceChildren(...oldSlots[slot.dataset.slot]);
-  clear(root).appendChild(panel);
+  // The parts already filled in move over to the new panel, so nothing
+  // flickers. Both panels are in the page for that moment: where the browser
+  // can (Node.moveBefore), a part keeps its live state as it moves, so the
+  // technical chart's frame does not reload on a redraw.
+  const previous = [...root.children];
+  root.appendChild(panel);
+  for (const slot of panel.querySelectorAll('[data-slot]')) if (oldSlots[slot.dataset.slot] && oldSlots[slot.dataset.slot].length) moveInto(slot, oldSlots[slot.dataset.slot]);
+  for (const el of previous) el.remove();
   view.panelPid = pid;
   document.body.classList.toggle('split', split);
   let bd = document.querySelector('.sheet-backdrop');
