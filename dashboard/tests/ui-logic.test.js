@@ -502,3 +502,20 @@ test('the list in the CoinMarketCap style: compact USD with two decimals; saved 
   const now = wl.prefs(store({ v: 3, columns: ['spark', 'price', 'sector'], sort: { key: 'rank', dir: 'asc' }, filters: {} }));
   assert.deepEqual(now.columns, ['price', 'spark', 'sector', 'research'], 'choices made in this layout are kept, in its order');
 });
+
+test('one 0–100 spectrum on the rubric anchors, and the gauge geometry', async () => {
+  const { ui } = await mods;
+  assert.deepEqual([0, 15.8, 39.9, 40, 59.9, 60, 74.9, 75, 89.9, 90, 100].map(ui.scoreTier), [1, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5]);
+  assert.equal(ui.scoreTier(null), null);
+  assert.equal(ui.scoreTier(NaN), null);
+  const geo = { cx: 90, cy: 90, r: 76 };
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  const [x0, y0] = ui.gaugePoint(0, geo);
+  const [x50, y50] = ui.gaugePoint(50, geo);
+  const [x100, y100] = ui.gaugePoint(100, geo);
+  assert.ok(near(x0, 14) && near(y0, 90), '0 at the left end');
+  assert.ok(near(x50, 90) && near(y50, 14), '50 at the top');
+  assert.ok(near(x100, 166) && near(y100, 90), '100 at the right end');
+  assert.deepEqual(ui.gaugePoint(140, geo), ui.gaugePoint(100, geo), 'clamped');
+  assert.equal(ui.gaugeArc(0, 50, geo), 'M14.00 90.00A76 76 0 0 1 90.00 14.00', 'clockwise over the top');
+});

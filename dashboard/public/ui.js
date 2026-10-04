@@ -130,7 +130,7 @@ export function clear(el) {
 function svg(tag, attrs = {}, ...children) {
   const el = document.createElementNS(SVG_NS, tag);
   for (const [k, v] of Object.entries(attrs)) if (v !== null && v !== undefined) el.setAttribute(k, String(v));
-  for (const c of children) if (c) el.appendChild(c);
+  for (const c of children) if (c !== null && c !== undefined && c !== false) el.appendChild(c instanceof Node ? c : document.createTextNode(String(c)));
   return el;
 }
 
@@ -634,8 +634,10 @@ const SVG_ICONS = {
   half: [['circle', { cx: '8', cy: '8', r: '6.2', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5' }], ['path', { d: 'M8 1.8a6.2 6.2 0 0 0 0 12.4Z', fill: 'currentColor' }]],
   // Paused on purpose (a model on hold, work held unsent): a bar in a circle.
   minus: [['circle', { cx: '8', cy: '8', r: '6.2', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5' }], ['path', { d: 'M5.2 8h5.6', stroke: 'currentColor', 'stroke-width': '1.6', 'stroke-linecap': 'round' }]],
+  // A link that opens elsewhere.
+  ext: [['path', { d: 'M9.5 2.5h4v4M13.3 2.7 7.5 8.5M12 9.5v3.2a.8.8 0 0 1-.8.8H3.3a.8.8 0 0 1-.8-.8V4.8c0-.4.4-.8.8-.8h3.2', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }]],
   // More actions.
-  more: [['circle', { cx: '3.5', cy: '8', r: '1.4', fill: 'currentColor' }], ['circle', { cx: '8', cy: '8', r: '1.4', fill: 'currentColor' }], ['circle', { cx: '12.5', cy: '8', r: '1.4', fill: 'currentColor' }]],
+  more:[['circle', { cx: '3.5', cy: '8', r: '1.4', fill: 'currentColor' }], ['circle', { cx: '8', cy: '8', r: '1.4', fill: 'currentColor' }], ['circle', { cx: '12.5', cy: '8', r: '1.4', fill: 'currentColor' }]],
 };
 
 // The sign for each research state on a badge. Working (blue) and Waiting
@@ -666,6 +668,49 @@ export function coverageMeter(pct, { compact = false } = {}) {
   return h('div', { class: 'coverage-meter' }, track,
     h('div', { class: 'lbl' }, `${pct}% coverage · no grade is calculated from part of the weight`),
     h('div', { class: 'lbl muted' }, COVERAGE_MEANS));
+}
+
+// The one 0–100 spectrum for every score on the desk, on the rubric's own
+// anchors: 1 below 40 (poor or severe), 2 to 59 (weak), 3 to 74 (adequate or
+// mixed), 4 to 89 (strong), 5 from 90 (exceptional). A range takes the tier
+// of its low end, as it sorts. Pure, for the tests.
+export function scoreTier(v) {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+  return v < 40 ? 1 : v < 60 ? 2 : v < 75 ? 3 : v < 90 ? 4 : 5;
+}
+export const TIER_EDGES = [[0, 40], [40, 60], [60, 75], [75, 90], [90, 100]];
+
+// A point on the gauge's half circle for a score (0 at the left end, 100 at
+// the right), and the arc between two scores, clockwise over the top.
+export function gaugePoint(s, { cx = 90, cy = 90, r = 76 } = {}) {
+  const a = Math.PI * (1 - Math.max(0, Math.min(100, s)) / 100);
+  return [cx + r * Math.cos(a), cy - r * Math.sin(a)];
+}
+export function gaugeArc(s0, s1, geo = {}) {
+  const [x0, y0] = gaugePoint(s0, geo);
+  const [x1, y1] = gaugePoint(s1, geo);
+  const r = geo.r || 76;
+  return `M${x0.toFixed(2)} ${y0.toFixed(2)}A${r} ${r} 0 0 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+}
+
+// The investment grade as a half-circle gauge: five muted segments on the
+// spectrum (the grade's own segment a shade stronger), a marker at the grade
+// or a span for a range, the number and the rubric's word in the middle.
+export function gradeGauge(g, { word = null, serious = false } = {}) {
+  if (!g || !['firm', 'range'].includes(g.status)) return null;
+  const geo = { cx: 90, cy: 90, r: 76 };
+  const low = g.status === 'range' ? g.low : g.value;
+  const high = g.status === 'range' ? g.high : g.value;
+  const tier = scoreTier(low);
+  const gap = 3.2;
+  const segs = TIER_EDGES.map(([a, b], i) => svg('path', { class: `gseg t${i + 1}${i + 1 === tier ? ' on' : ''}`, d: gaugeArc(a === 0 ? 1.5 : a + gap / 2, b === 100 ? 98.5 : b - gap / 2, geo) }));
+  const mark = g.status === 'range'
+    ? svg('path', { class: 'gspan', d: gaugeArc(Math.max(1.5, low), Math.min(98.5, Math.max(high, low + 0.8)), geo) })
+    : (() => { const [x, y] = gaugePoint(Math.max(1.5, Math.min(98.5, low)), geo); return svg('circle', { class: 'gdot', cx: x.toFixed(2), cy: y.toFixed(2), r: '6.5' }); })();
+  return svg('svg', { class: `ggauge${serious ? ' ev-serious' : ''}`, width: '180', height: '100', viewBox: '0 0 180 100', role: 'img', 'aria-label': `Investment grade ${g.display} of 100${word ? `, ${word}` : ''}` },
+    ...segs, mark,
+    svg('text', { class: 'gnum', x: '90', y: '76', 'text-anchor': 'middle' }, g.display),
+    word ? svg('text', { class: 'gword', x: '90', y: '95', 'text-anchor': 'middle' }, word) : null);
 }
 
 // A small decorative icon; the meaning is always in the surrounding text.
@@ -712,8 +757,11 @@ export function gradeBadge(provider, report, job, opts = {}) {
   const info = badgeInfo(provider, report, job, opts);
   const tag = opts.button ? 'button' : 'span';
   const band = info.kind === 'grade' || info.kind === 'range' ? bandClass(report && report.grade) : '';
+  // The grade's place on the one 0–100 spectrum (a range by its low end).
+  const g = report && report.grade;
+  const tier = info.kind === 'grade' ? scoreTier(g.value) : info.kind === 'range' ? scoreTier(g.low) : null;
   const attrs = {
-    class: `gb is-${info.kind}${band}${info.stale ? ' is-stale' : ''}${info.problem ? ' has-problem' : ''}${info.ev ? ` ev-${info.ev}` : ''}`,
+    class: `gb is-${info.kind}${band}${tier ? ` tier-${tier}` : ''}${info.stale ? ' is-stale' : ''}${info.problem ? ' has-problem' : ''}${info.ev ? ` ev-${info.ev}` : ''}`,
     'aria-label': opts.button ? `${info.text.replace(/[.\s]+$/, '')}. Open details` : info.text,
     dataset: { provider, key: opts.key || null },
   };

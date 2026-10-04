@@ -12,7 +12,7 @@
 //                     profile and holding horizon
 // Every model keeps its own numbers. Unknown stays unknown and is never drawn
 // as zero; not applicable says so; nothing missing is filled in.
-import { h, details, fmtDateTime, PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, icon, anchorText } from '../ui.js';
+import { h, details, fmtDateTime, PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, icon, anchorText, scoreTier } from '../ui.js';
 import { evidenceChecksBlock, latestReports, promptView, sourceItem } from './project.js';
 import { profileOf, categoryRows, scorecardCounts, statesConfidence, confidenceChip, categoryFlags, CONFIDENCE_LABELS } from '../thesis-ui.js';
 
@@ -40,8 +40,9 @@ const clamp = (v) => Math.max(0, Math.min(100, Number(v)));
 // The bar on the one 0–100 scale: a fill for a score, a span for a range, an
 // empty dashed track for unknown (it must never read as zero).
 function scoreBar(s) {
-  if (isScored(s) && s.status === 'range') return h('span', { class: 'cbar' }, h('span', { class: 'range', style: { left: `${clamp(s.low)}%`, width: `${Math.max(2, clamp(s.high) - clamp(s.low))}%` } }));
-  if (isScored(s)) return h('span', { class: 'cbar' }, h('span', { class: 'fill', style: { width: `${clamp(s.value)}%` } }));
+  // Each fill on the one 0–100 spectrum (a range by its low end).
+  if (isScored(s) && s.status === 'range') return h('span', { class: 'cbar' }, h('span', { class: `range tier-${scoreTier(s.low)}`, style: { left: `${clamp(s.low)}%`, width: `${Math.max(2, clamp(s.high) - clamp(s.low))}%` } }));
+  if (isScored(s)) return h('span', { class: 'cbar' }, h('span', { class: `fill tier-${scoreTier(s.value)}`, style: { width: `${clamp(s.value)}%` } }));
   return h('span', { class: 'cbar unknown' });
 }
 

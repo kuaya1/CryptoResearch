@@ -11,7 +11,7 @@
 import {
   h, clear, button, select, input, changeCell, sparkline, priceSpark, logo, gradeBadge, badgeInfo, verdictChip,
   fmtPrice, fmtCompactUsd, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, fmtSignedPct, freshnessText, priceStatus, stateText, toast, announce,
-  followedCount, researchState, withheldReason, unscoredList, jobKey, icon, evidenceLevel, evidenceText, gradeMeter, coverageMeter,
+  followedCount, researchState, withheldReason, unscoredList, jobKey, icon, evidenceLevel, evidenceText, gradeGauge, coverageMeter,
   withheldLabel, structureNotes, details, onHoldOf, copyText, anchorText, fmtRelDay,
   PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT,
 } from '../ui.js';
@@ -860,11 +860,8 @@ function modelHead(ctx, p, prov) {
     body = h('div', { class: 'ig' },
       top(),
       h('div', { class: 'ig-row' },
-        h('div', { class: `provider-grade${info.ev === 'serious' ? ' ev-serious' : ''}` }, h('span', { class: 'big fig' }, rep.grade.display, h('span', { class: 'sr-only' }, rep.grade.label ? `, letter ${rep.grade.label}` : '')),
-          word ? h('span', { class: 'verdict-pill' }, word) : null,
-          delta),
-        gradeMeter(rep.grade, { serious: info.ev === 'serious' })),
-      facts,
+        gradeGauge(rep.grade, { word, serious: info.ev === 'serious' }),
+        h('div', { class: 'ig-side' }, facts, delta)),
       riskTeaser(ctx, rep),
       parts);
   } else if (rep && info.kind === 'pdf') {
@@ -1155,22 +1152,24 @@ function inspectorMenu(ctx, p) {
   return h('div', { class: 'insp-more-wrap' }, btn, list);
 }
 
-// The price at the end of the header row: the price, its 24-hour change
-// and how fresh it is; missing data says why.
+// The price row under the name: the price, its 24-hour change as a pill and
+// how fresh it is; missing data says why.
 function headMarket(p) {
   const m = mkt(p);
-  if (!m) return h('div', { class: 'hprice none' }, h('span', { class: 'hm-none' }, `No price: ${(noPriceReason(p) || 'unknown').toLowerCase()}`));
+  if (!m) return h('div', { class: 'ph-price none' }, h('span', { class: 'hm-none' }, `No price: ${(noPriceReason(p) || 'unknown').toLowerCase()}`));
   const f = freshnessText(m.status, m.age_minutes);
   const fresh = m.status === 'fresh';
-  return h('div', { class: 'hprice' },
+  const c = m.change_24h_pct;
+  return h('div', { class: 'ph-price' },
     h('span', { class: 'hm-price fig' }, fmtPrice(m.price_usd)),
-    h('span', { class: 'hm-sub' },
-      typeof m.change_24h_pct === 'number' ? h('span', { class: 'hm-chg', title: 'Price change over 24 hours' }, changeCell(m.change_24h_pct, { label: 'over 24 hours' })) : null,
-      h('span', { class: `hm-fresh ${fresh ? 'ok' : 'warn'}`, title: `${m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Fictional demo data' : `Source: ${m.source || 'CoinGecko'}`}, as of ${fmtDateTime(m.as_of)}` }, fresh ? fmtAgo(m.fetched_at || m.as_of) : f.text)));
+    typeof c === 'number' ? h('span', { class: `hm-delta fig ${c < 0 ? 'down' : 'up'}`, title: 'Price change over 24 hours' },
+      h('span', { 'aria-hidden': 'true' }, `${c < 0 ? '▼' : '▲'} ${fmtSignedPct(c, 1)}`),
+      h('span', { class: 'sr-only' }, `${c < 0 ? 'down' : 'up'} ${Math.abs(c).toFixed(1)} percent over 24 hours`)) : null,
+    h('span', { class: `hm-fresh ${fresh ? 'ok' : 'warn'}`, title: `${m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Fictional demo data' : `Source: ${m.source || 'CoinGecko'}`}, as of ${fmtDateTime(m.as_of)}` }, fresh ? fmtAgo(m.fetched_at || m.as_of) : f.text));
 }
 
-// The asset at a glance under the header row: six tiles in compared figures.
-// Unknown stays "—" with its reason in the label.
+// The asset at a glance: rank, market cap, 24-hour volume and FDV in one row
+// of tiles. Unknown stays "—" with its reason in the label.
 function overviewStats(p) {
   const m = mkt(p);
   if (!m) return null;
@@ -1179,11 +1178,25 @@ function overviewStats(p) {
   const stat = (k, v, title = null) => h('div', { class: 'ov-stat', title }, h('dt', null, k), h('dd', { class: 'fig' }, v));
   return h('dl', { class: 'ov-stats', 'aria-label': 'Asset overview' },
     stat('Rank', m.market_cap_rank ? `#${m.market_cap_rank}` : dash('Rank'), demo ? 'Market-cap rank from the fictional demo data' : 'Market-cap rank (CoinGecko)'),
-    stat('7D', changeCell(m.change_7d_pct, { label: 'over 7 days' }), 'Price change over 7 days'),
-    stat('30D', changeCell(m.change_30d_pct, { label: 'over 30 days' }), 'Price change over 30 days'),
     stat('MC', usd(m.market_cap_usd, 'Market cap'), 'Market cap (CoinGecko)'),
-    stat('Vol', usd(m.volume_24h_usd, 'Volume'), 'Trading volume over 24 hours'),
+    stat('Vol (24h)', usd(m.volume_24h_usd, 'Volume'), 'Trading volume over 24 hours'),
     stat('FDV', usd(m.fdv_usd, 'FDV'), 'Fully diluted valuation'));
+}
+
+// Links out, beside close: the project's CoinMarketCap page, its CoinGecko
+// listing and its official website. A link the desk does not hold stays a
+// quiet disabled pill: no CoinMarketCap page is stored for any project yet,
+// and none is guessed from another listing's ID.
+function headLinks(p) {
+  const web = /^https?:\/\//i.test(String(p.official_website || '')) ? p.official_website : null;
+  const host = web ? (() => { try { return new URL(web).hostname.replace(/^www\./, ''); } catch (_) { return null; } })() : null;
+  const link = (cls, label, href, title, aria) => (href
+    ? h('a', { class: `xlink ${cls}`, href, target: '_blank', rel: 'noopener noreferrer', title, 'aria-label': aria, dataset: { key: `x-${cls}-${p.project_id}` } }, label)
+    : h('span', { class: `xlink ${cls} off`, role: 'link', 'aria-disabled': 'true', title, 'aria-label': `${aria} (not linked)` }, label));
+  return h('div', { class: 'ph-links' },
+    link('cmc', 'CMC', null, 'No CoinMarketCap page is linked to this project', 'CoinMarketCap page'),
+    link('cg', 'CG', p.coingecko_id ? `https://www.coingecko.com/en/coins/${encodeURIComponent(p.coingecko_id)}` : null, p.coingecko_id ? `CoinGecko: ${p.coingecko_id}` : 'No verified CoinGecko listing', 'CoinGecko listing'),
+    link('web', icon('ext'), web && host ? web : null, host ? `Official website: ${host}` : 'No official website on record', host ? `Official website, ${host}` : 'Official website'));
 }
 
 // On-chain fundamentals (activity, fees, revenue, TVL) need an on-chain data
@@ -1281,17 +1294,18 @@ function renderPanel(ctx, pid) {
     }
   };
   const ch = p.changes || {};
-  const heading = h('h2', { id: 'panel-title', tabindex: '-1', title: p.name }, h('span', { class: 'pt-name' }, p.name), p.symbol ? h('span', { class: 'tick' }, p.symbol) : null);
+  const heading = h('h2', { id: 'panel-title', tabindex: '-1', title: p.name }, h('span', { class: 'pt-name' }, p.name), p.symbol ? h('span', { class: 'pt-sym' }, p.symbol) : null);
   const reports = PROVIDERS.filter((x) => p.providers && p.providers[x] && !p.providers[x].needs_text).length;
   const panel = h('aside', split
     ? { class: `panel${reopened ? ' entering' : ''}`, role: 'dialog', 'aria-modal': 'false', 'aria-labelledby': 'panel-title' }
     : { class: `panel${reopened ? ' entering' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'panel-title' },
     h('div', { class: 'panel-head' },
-      h('div', { class: 'ph-row' }, logo(p, { size: 28 }),
+      h('div', { class: 'ph-row' }, logo(p, { size: 32 }),
         h('div', { class: 'names' }, heading),
-        headMarket(p),
+        headLinks(p),
         inspectorMenu(ctx, p),
         closeBtn),
+      headMarket(p),
       overviewStats(p)),
     h('div', { class: 'panel-body', 'data-keep-scroll': 'panel' },
       archivedBanner(ctx, p),
