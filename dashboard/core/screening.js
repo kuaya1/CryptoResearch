@@ -18,14 +18,28 @@
 // Requests: GET https://api.gopluslabs.io/api/v1/token_security/<chain_id>
 // ?contract_addresses=<address> (EVM chains and Tron) or
 // /api/v1/solana/token_security?contract_addresses=<address> (Solana). The
-// origin and paths are fixed and the address is validated, then encoded. No
-// key is needed for the free tier. Every runner (dashboard, online desk,
-// scheduled task, CLI) shares one lease, one rate-limit gate (a 429 or GoPlus
-// code 4029; a valid Retry-After is honored), the failure backoff and the
-// request counts. A request that may have failed transiently (no answer, a
-// timeout, a 5xx, an unreadable answer) is tried once more. Network waits
-// never hold the workspace save lock. A failed refresh keeps the last good
-// screen, with its age and the failure.
+// origin and paths are fixed and the address is validated, then encoded. One
+// address per request: a keyless call answers for the first address only.
+// Every runner (dashboard, online desk, scheduled task, CLI) shares one lease,
+// one rate-limit gate (a 429 or GoPlus code 4029; a valid Retry-After is
+// honored), the failure backoff and the request counts. Every request, a retry
+// or a token request included, is counted on disk before it is sent, and none
+// is sent past the monthly budget. A request that may have failed transiently
+// (no answer, a timeout, a 5xx, an unreadable answer) is tried once more.
+// Network waits never hold the workspace save lock. A failed refresh keeps
+// the last good screen, with its age and the failure.
+//
+// Credentials (optional): GoPlus serves token security without a key (its
+// free tier). With GOPLUS_APP_KEY and GOPLUS_APP_SECRET both in the
+// environment (Render's Environment page), a run first asks GoPlus for an
+// access token (POST /api/v1/token with app_key, time and sign = SHA-1 of
+// app_key + time + app_secret) and sends it as "Authorization: Bearer
+// <token>". The token stays in this process's memory, never in a file, a log
+// line or a reply. A key without its secret, a token request that fails, or a
+// token GoPlus refuses (401 or 403): the run goes on keyless and says why;
+// nothing throws for a missing key. A rate limit or backoff belongs to the
+// credential it was met with (status.json records "app_key" or "keyless",
+// never the key), as for CoinGecko (market.js).
 //
 // Alerts: only severe structural changes between two good screens of the same
 // contract (a mint function or mint authority newly present, an upgradeable
@@ -55,6 +69,7 @@ const { OpError } = require('./ops');
 const { chainInfo, addressFits, addressKey } = require('./chains');
 
 const ORIGIN = 'https://api.gopluslabs.io';
+const TOKEN_PATH = '/api/v1/token';
 const DIR = 'market-data/screening';
 const STATUS_REL = `${DIR}/status.json`;
 const LEASE = 'screening';
@@ -238,21 +253,93 @@ function screenUrl(c) {
 }
 
 // ---------------------------------------------------------------------------
+// Credentials (optional; see the top of this file)
+
+// The app key and secret, from the environment only. Never logged or saved.
+function credentials() {
+  const read = (k) => (typeof process.env[k] === 'string' ? process.env[k].trim() : '');
+  const key = read('GOPLUS_APP_KEY');
+  const secret = read('GOPLUS_APP_SECRET');
+  if (key && secret) return { mode: 'app_key', key, secret, note: null };
+  const note = key ? 'GOPLUS_APP_KEY is set without GOPLUS_APP_SECRET, which GoPlus needs to sign its token request, so screening runs keyless.'
+    : secret ? 'GOPLUS_APP_SECRET is set without GOPLUS_APP_KEY, so screening runs keyless.' : null;
+  return { mode: 'keyless', key: null, secret: null, note };
+}
+
+// The word status.json and the logs carry: "app_key" or "keyless".
+function credential() {
+  return credentials().mode;
+}
+
+// The access token, in this process's memory only, for the key it was issued
+// to (a hash of key and secret, never the key itself).
+let tokenCache = null;
+const credsId = (creds) => sha256(`${creds.key}\n${creds.secret}`);
+
+// A token for this run: the cached one while it has more than two minutes
+// left, else a new one from GoPlus (one request, reserved like any other).
+// Returns { token } or { token: null, why }; never throws.
+async function accessToken(creds, { fetchImpl, timeoutMs, now, reserve, counts }) {
+  if (creds.mode !== 'app_key') return { token: null, why: creds.note };
+  const id = credsId(creds);
+  if (tokenCache && tokenCache.id === id && tokenCache.expires_at - 120000 > now) return { token: tokenCache.token };
+  tokenCache = null;
+  if (!reserve()) return { token: null, why: 'the monthly GoPlus request budget left no room for a token request', budget: true };
+  counts.sent++;
+  const time = Math.floor(now / 1000);
+  const sign = crypto.createHash('sha1').update(`${creds.key}${time}${creds.secret}`).digest('hex');
+  const url = new URL(`${ORIGIN}${TOKEN_PATH}`);
+  if (url.origin !== ORIGIN) return { token: null, why: 'unexpected token origin' };
+  try {
+    const res = await fetchImpl(url.toString(), { method: 'POST', headers: { ...HEADERS, 'content-type': 'application/json' }, body: JSON.stringify({ app_key: creds.key, sign, time }), signal: AbortSignal.timeout(timeoutMs) });
+    const text = await res.text();
+    let body = null;
+    try { body = typeof text === 'string' && text.length <= MAX_BODY_CHARS ? JSON.parse(text) : null; } catch (_) { body = null; }
+    const r = body && body.result && typeof body.result === 'object' ? body.result : body;
+    const token = r && typeof r.access_token === 'string' && r.access_token.trim() ? r.access_token.trim() : null;
+    if (!res.ok || !body || Number(body.code) !== 1 || !token) {
+      const code = body && body.code !== undefined ? `, code ${cleanText(String(body.code), 12)}` : '';
+      return { token: null, why: `GoPlus issued no access token (HTTP ${res.status}${code})` };
+    }
+    counts.answered++;
+    const ttl = Number(r.expires_in);
+    tokenCache = { id, token, expires_at: now + (Number.isFinite(ttl) && ttl > 0 ? Math.min(ttl, 86400) * 1000 : 1800000) };
+    return { token };
+  } catch (err) {
+    const timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError');
+    return { token: null, why: timedOut ? `the token request had no answer within ${Math.round(timeoutMs / 1000)} s` : 'the token request failed' };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Requests
 
 const HEADERS = { accept: 'application/json', 'user-agent': 'CryptoResearch-desk' };
 
 // One contract, with a bounded retry for a failure that may be transient.
-// Every request sent counts. A 429 (or GoPlus code 4029) stops at once.
-async function getScreen(url, c, { fetchImpl, timeoutMs, maxAttempts, retryDelayMs, counts }) {
+// Each attempt is reserved in the month's count before it is sent (reserve);
+// when the budget is used up nothing more is sent. A 429 (or GoPlus code
+// 4029) stops at once. With an access token (auth.token), a 401 or 403 drops
+// it: the retry, and the rest of the run, go keyless.
+async function getScreen(url, c, { fetchImpl, timeoutMs, maxAttempts, retryDelayMs, counts, reserve = () => true, auth = { token: null } }) {
   let failure = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (attempt > 1 && retryDelayMs) await sleep(retryDelayMs);
+    if (!reserve()) return { kind: 'budget', attempts: attempt - 1, after: failure };
     counts.sent++;
+    const headers = auth.token ? { ...HEADERS, authorization: `Bearer ${auth.token}` } : HEADERS;
     let res;
     let text;
     try {
-      res = await fetchImpl(url, { headers: HEADERS, signal: AbortSignal.timeout(timeoutMs) });
+      res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+      if (auth.token && (res.status === 401 || res.status === 403)) {
+        try { if (res.body && typeof res.body.cancel === 'function') await res.body.cancel(); } catch (_) { /* nothing to release */ }
+        auth.token = null;
+        auth.dropped = `GoPlus refused the access token (HTTP ${res.status}); the rest of the run went keyless`;
+        tokenCache = null;
+        failure = { kind: 'failed', http_status: res.status, error: `GoPlus refused the access token (HTTP ${res.status})`, attempts: attempt };
+        continue;
+      }
       if (res.status === 429) {
         try { if (res.body && typeof res.body.cancel === 'function') await res.body.cancel(); } catch (_) { /* nothing to release */ }
         return { kind: 'rate_limited', http_status: 429, retry_after_ms: require('./market').retryAfterMs(res), attempts: attempt };
@@ -294,12 +381,33 @@ async function getScreen(url, c, { fetchImpl, timeoutMs, maxAttempts, retryDelay
 // ---------------------------------------------------------------------------
 // Status, gate, backoff, request counts
 
+// The status as it applies to the credential in use now: a rate limit or
+// failure backoff met with the key never holds back a keyless run, and the
+// other way round (the superseded limit is kept for the record). A status
+// written before this was recorded counts as keyless: no key was used then.
+function forCredential(status) {
+  const now = credential();
+  const was = status.credential || 'keyless';
+  if (was === now) return status;
+  return {
+    ...status,
+    credential: now,
+    retry_after_until: null,
+    next_allowed_at: null,
+    consecutive_failures: 0,
+    rate_limit: null,
+    ...(status.rate_limit ? { rate_limit_superseded: { ...status.rate_limit, credential: was } } : {}),
+  };
+}
+
 function readStatus(ws) {
+  let st;
   try {
-    return readJson(ws.abs(STATUS_REL), { state: 'never_run' });
+    st = readJson(ws.abs(STATUS_REL), { state: 'never_run' });
   } catch (_) {
-    return { state: 'never_run', unreadable: true };
+    st = { state: 'never_run', unreadable: true };
   }
+  return forCredential(st);
 }
 
 function laterIso(iso, t) {
@@ -354,7 +462,21 @@ function addCalls(c, sent, answered) {
 function updateStatus(ws, fn) {
   withLock(ws, 'screening_status', () => {
     const cur = readStatus(ws);
-    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...fn(cur), schema_version: 'cr.screening-status.v1', provider: 'goplus' }));
+    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...fn(cur), schema_version: 'cr.screening-status.v1', provider: 'goplus', credential: credential() }));
+  });
+}
+
+// Reserves one request in this month's count before it is sent, under the
+// save lock, so the count is on disk even if the process stops mid-request
+// and no runner sends past the monthly budget. False when the budget is used
+// up (nothing is counted then).
+function reserveRequest(ws, cfg, now) {
+  return withLock(ws, 'screening_status', () => {
+    const cur = readStatus(ws);
+    const c = callCounts(cur, now);
+    if (cfg.monthly_request_budget && (c.month_count || 0) >= cfg.monthly_request_budget) return false;
+    replaceFile(ws, ws.abs(STATUS_REL), jsonText({ ...cur, calls: addCalls(c, 1, 0), schema_version: 'cr.screening-status.v1', provider: 'goplus', credential: credential() }));
+    return true;
   });
 }
 
@@ -478,12 +600,21 @@ async function refreshLeased(ws, list, { trigger, fetchImpl, cfg, clock, retryDe
   const counts = { sent: 0, answered: 0 };
   const results = [];
   let limited = null;
+  let exhausted = false;
   let sentAny = false;
+  const reserve = () => reserveRequest(ws, cfg, clock());
+  // An access token when a key and secret are set; keyless otherwise, or when
+  // GoPlus issues none (never a screening failure: the run goes on keyless).
+  const creds = credentials();
+  const tok = await accessToken(creds, { fetchImpl, timeoutMs, now: clock(), reserve, counts });
+  sentAny = counts.sent > 0; // a token request also spaces the next one
+  const auth = { token: tok.token || null, dropped: null };
+  const authNote = creds.mode !== 'app_key' ? creds.note : tok.token ? null : `key set, but ${tok.why}; this run went keyless`;
   for (const p of list) {
     const contracts = contractsOf(p.identity);
     const key = contractsKey(contracts);
-    if (limited) {
-      results.push({ project_id: p.project_id, outcome: 'not_attempted', error: 'not attempted: GoPlus rate-limited this run' });
+    if (limited || exhausted) {
+      results.push({ project_id: p.project_id, outcome: 'not_attempted', error: limited ? 'not attempted: GoPlus rate-limited this run' : 'not attempted: the monthly GoPlus request budget is used up' });
       continue;
     }
     const screened = [];
@@ -496,7 +627,14 @@ async function refreshLeased(ws, list, { trigger, fetchImpl, cfg, clock, retryDe
       if (sentAny && pauseMs) await sleep(pauseMs);
       sentAny = true;
       const url = screenUrl(c);
-      const r = await getScreen(url, c, { fetchImpl, timeoutMs, maxAttempts: Math.max(1, cfg.max_attempts), retryDelayMs, counts });
+      const r = await getScreen(url, c, { fetchImpl, timeoutMs, maxAttempts: Math.max(1, cfg.max_attempts), retryDelayMs, counts, reserve, auth });
+      if (r.kind === 'budget') {
+        // A project that cannot be finished publishes nothing: its last good
+        // screen stays, with this reason.
+        exhausted = true;
+        failure = { outcome: 'budget_paused', error: `${c.label} ${c.address}: the monthly GoPlus request budget (${cfg.monthly_request_budget}) was used up during this run${r.after ? ` after ${r.after.error}` : ''}; nothing from this project's run was used`, http_status: (r.after && r.after.http_status) || null };
+        break;
+      }
       if (r.kind === 'rate_limited') {
         limited = r;
         failure = { outcome: 'rate_limited', error: `${c.label} ${c.address}: GoPlus rate-limited the request` };
@@ -524,7 +662,10 @@ async function refreshLeased(ws, list, { trigger, fetchImpl, cfg, clock, retryDe
     // Alerts are kept across contract changes for the contracts still on record.
     const keepTransitions = (prev && Array.isArray(prev.transitions) ? prev.transitions : []).filter((t) => contracts.some((c) => c.chain_id === t.chain_id && c.address === t.address));
     let doc;
-    if (failure) {
+    if (failure && failure.outcome === 'budget_paused') {
+      // Not GoPlus's failure: no backoff; the monthly admission check holds it.
+      doc = { ...docBase, ...kept, transitions: keepTransitions, last_attempt: { at, trigger, outcome: failure.outcome, error: failure.error, http_status: failure.http_status || null }, consecutive_failures: (same && same.consecutive_failures) || 0, next_attempt_at: isoOf(now + cfg.refresh_hours * 3600000) };
+    } else if (failure) {
       const fails = ((same && same.consecutive_failures) || 0) + 1;
       doc = { ...docBase, ...kept, transitions: keepTransitions, last_attempt: { at, trigger, outcome: failure.outcome, error: failure.error, http_status: failure.http_status || null }, consecutive_failures: fails, next_attempt_at: isoOf(now + Math.min(cfg.refresh_hours * 3600000, backoffMs(cfg, fails))) };
     } else {
@@ -546,25 +687,32 @@ async function refreshLeased(ws, list, { trigger, fetchImpl, cfg, clock, retryDe
 
   const now = clock();
   const ok = results.filter((r) => r.outcome === 'ok');
-  const transient = results.filter((r) => ['failed', 'rate_limited', 'not_attempted'].includes(r.outcome));
-  const status = transient.length ? (ok.length ? 'partial' : 'failed') : 'ok';
+  const transient = results.filter((r) => ['failed', 'rate_limited', 'not_attempted', 'budget_paused'].includes(r.outcome));
+  const status = exhausted && !ok.length ? 'budget_paused' : transient.length ? (ok.length ? 'partial' : 'failed') : 'ok';
   const offline = !ok.length && results.some((r) => r.outcome === 'failed');
   const alerts = ok.reduce((a, r) => a + (r.alerts || 0), 0);
+  // Which credential the run used, in words that never carry the key.
+  const authUsed = creds.mode === 'app_key' && tok.token ? (auth.dropped ? 'access token, then keyless' : 'access token') : 'keyless';
+  const authWhy = auth.dropped || authNote || null;
   const message = [
     `Contract screening: ${ok.length} of ${results.length} project(s) screened.`,
     alerts ? `${alerts} new alert(s).` : '',
     transient.length ? `Not screened: ${transient.map((r) => `${r.project_id} (${r.error})`).join('; ')}.` : '',
+    exhausted ? `Monthly GoPlus request budget reached (${cfg.monthly_request_budget}); saved screens stay as they are.` : '',
+    authWhy ? `GoPlus credential: ${authWhy}.` : '',
   ].filter(Boolean).join(' ');
   updateStatus(ws, (cur) => {
     const failures = offline ? (cur.consecutive_failures || 0) + 1 : ok.length ? 0 : cur.consecutive_failures || 0;
     const next = {
       ...cur,
       state: status,
-      last_run: { at: isoOf(now), trigger, status, screened: ok.length, not_screened: transient.length, alerts, requests: counts.sent, summary: message.slice(0, 600) },
+      last_run: { at: isoOf(now), trigger, status, screened: ok.length, not_screened: transient.length, alerts, requests: counts.sent, auth: authUsed, auth_note: authWhy, summary: message.slice(0, 600) },
       ...(ok.length ? { last_success_at: isoOf(now) } : {}),
       consecutive_failures: failures,
       next_allowed_at: offline ? laterIso(cur.next_allowed_at, now + backoffMs(cfg, failures)) : ok.length ? null : cur.next_allowed_at || null,
-      calls: addCalls(callCounts(cur, now), counts.sent, counts.answered),
+      // Each request was counted when it was reserved (reserveRequest); only
+      // the answers are added now.
+      calls: addCalls(callCounts(cur, now), 0, counts.answered),
     };
     return limited ? { ...next, ...rateLimitFields(cfg, cur, limited.retry_after_ms, now) } : next;
   });
@@ -707,8 +855,13 @@ function overview(ws, now = Date.now()) {
     }
   }
   const gate = gateOf(st, now);
+  const creds = credentials();
   return {
     enabled: cfg.enabled,
+    // "app_key" (GOPLUS_APP_KEY and GOPLUS_APP_SECRET set) or "keyless"; the
+    // note says why a key that is set is not used. Never the key itself.
+    credential: creds.mode,
+    credential_note: creds.note,
     screened: ['fresh', 'fresh_last_failed', 'stale'].reduce((a, k) => a + (states[k] || 0), 0),
     states,
     alerts,
@@ -746,6 +899,7 @@ module.exports = {
   transitionsBetween,
   readStatus,
   readProjectDoc,
+  credential,
   isDue,
   refresh,
   stateFor,

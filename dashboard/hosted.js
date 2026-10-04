@@ -560,9 +560,9 @@ function healthLines(ws) {
   try {
     const so = require('./core/screening').overview(ws);
     const states = Object.entries(so.states).map(([s, n]) => `${s} ${n}`).join(', ');
-    out.push(`Contract screening: ${so.enabled ? `${so.screened} screened${states ? ` (${states})` : ''}; alerts ${so.alerts}; last run ${so.last_run ? `${so.last_run.at} ${so.last_run.status}` : 'never'}; requests this month ${so.calls.month_count}${so.rate_limited ? `; rate-limited until ${so.retry_at}` : ''}; packets ${so.packet_mode}` : 'turned off in settings'}.`);
+    out.push(`Contract screening: ${so.enabled ? `${so.screened} screened${states ? ` (${states})` : ''}; alerts ${so.alerts}; last run ${so.last_run ? `${so.last_run.at} ${so.last_run.status}` : 'never'}; requests this month ${so.calls.month_count}${so.rate_limited ? `; rate-limited until ${so.retry_at}` : ''}; packets ${so.packet_mode}; ${so.credential === 'app_key' ? 'GoPlus key present' : `GoPlus keyless${so.credential_note ? ` (${so.credential_note})` : ''}`}` : 'turned off in settings'}.`);
   } catch (_) { /* screening module optional */ }
-  out.push(`Offsite: ${require('./core/offsite').deskKey() ? 'backup key set (CR_BACKUP_KEY); a PC can pull verified copies' : 'not set up (no CR_BACKUP_KEY): the records exist only on this disk and in Render\'s disk snapshots'}.`);
+  out.push(`Offsite: ${require('./core/offsite').deskKey() ? 'backup key set (CR_BACKUP_KEY); a PC can pull verified copies' : `not set up (${require('./core/offsite').deskKeyProblem()}): the records exist only on this disk and in Render's disk snapshots`}.`);
   return out;
 }
 

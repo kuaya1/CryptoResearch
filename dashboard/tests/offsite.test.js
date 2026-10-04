@@ -358,6 +358,11 @@ test('backup status: same-disk snapshots, offsite set up and a verified independ
   // Without the key the desk says the records exist only on its disk.
   delete process.env.CR_BACKUP_KEY;
   assert.match(offsite.backupStatus(d.ws).summary, /Offsite copies: not set up \(no CR_BACKUP_KEY on the desk\), so these records exist only on this disk and in Render's own disk snapshots\./);
+  // A key that is set but too short says so (its length, never its value).
+  const short = offsite.backupStatus(d.ws, { CR_BACKUP_KEY: 'FICTIONAL-short-key' });
+  assert.equal(short.offsite.configured, false);
+  assert.match(short.summary, /Offsite copies: not set up \(CR_BACKUP_KEY on the desk is 19 characters; it needs at least 32\)/);
+  assert.ok(!JSON.stringify(short).includes('FICTIONAL-short-key'), 'the key itself is never in the status');
 });
 
 test('offsite job: due once a day on a PC that is set up; never on the online desk', (t) => {

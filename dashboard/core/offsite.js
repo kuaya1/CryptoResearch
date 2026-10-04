@@ -46,6 +46,14 @@ function deskKey(env = process.env) {
   return typeof k === 'string' && k.length >= MIN_KEY_CHARS ? k : null;
 }
 
+// Why the desk's key is not usable, in words that never carry it: absent, or
+// set but too short (its length only).
+function deskKeyProblem(env = process.env) {
+  const k = env.CR_BACKUP_KEY;
+  if (deskKey(env)) return null;
+  return typeof k === 'string' && k.length ? `CR_BACKUP_KEY on the desk is ${k.length} characters; it needs at least ${MIN_KEY_CHARS}` : 'no CR_BACKUP_KEY on the desk';
+}
+
 function makeOffsiteRoute(ws, { env = process.env, log = () => {}, now = () => Date.now() } = {}) {
   const failures = [];
   const send = (res, status, body) => {
@@ -281,7 +289,7 @@ function backupStatus(ws, env = process.env, now = Date.now()) {
       configured: Boolean(deskKey(env)),
       role: 'serves',
       last_served: served && served.served_at ? { at: served.served_at, hours_ago: hoursAgo(served.served_at), files: served.files || null } : null,
-      missing: deskKey(env) ? [] : [`CR_BACKUP_KEY (at least ${MIN_KEY_CHARS} characters) in Render's environment, entered by Eric`],
+      missing: deskKey(env) ? [] : [deskKeyProblem(env) === 'no CR_BACKUP_KEY on the desk' ? `CR_BACKUP_KEY (at least ${MIN_KEY_CHARS} characters) in Render's environment, entered by Eric` : `a longer CR_BACKUP_KEY in Render's environment (${deskKeyProblem(env)})`],
     };
     copy = { verified: null, known_here: false, note: 'This desk cannot see copies kept elsewhere. Your PC checks every file of each copy it pulls; its Settings and "offsite status" show the latest verified copy.' };
   } else {
@@ -301,7 +309,7 @@ function backupStatus(ws, env = process.env, now = Date.now()) {
   const parts = [
     sameDisk.present ? `Same-disk snapshots: latest ${sameDisk.latest.name}, ${sameDisk.latest.hours_ago} h ago, on ${sameDisk.where} (undoes mistakes; does not survive losing that disk).` : `Same-disk snapshots: none yet on ${sameDisk.where}.`,
     hosted
-      ? (offsiteSupport.configured ? `Offsite copies: set up (the backup key is set), so your PC can pull verified copies${offsiteSupport.last_served ? `; this desk last served one ${offsiteSupport.last_served.hours_ago} h ago` : '; none served yet'}.` : 'Offsite copies: not set up (no CR_BACKUP_KEY on the desk), so these records exist only on this disk and in Render\'s own disk snapshots.')
+      ? (offsiteSupport.configured ? `Offsite copies: set up (the backup key is set), so your PC can pull verified copies${offsiteSupport.last_served ? `; this desk last served one ${offsiteSupport.last_served.hours_ago} h ago` : '; none served yet'}.` : `Offsite copies: not set up (${deskKeyProblem(env)}), so these records exist only on this disk and in Render's own disk snapshots.`)
       : (offsiteSupport.configured ? 'Offsite copies: set up on this PC (desk address and backup key present).' : `Offsite copies: not set up on this PC (missing ${offsiteSupport.missing.join('; ')}).`),
     hosted
       ? 'Verified independent copy: not visible from the desk; the PC that pulls copies shows it.'
@@ -321,4 +329,4 @@ function verifyFile(file) {
   return verifyPackage(pkg);
 }
 
-module.exports = { makeOffsiteRoute, verifyPackage, pull, status, backupStatus, readiness, verifyFile, prune, deskKey, CR_ALLOWED, MIN_KEY_CHARS, COPY_FRESH_HOURS };
+module.exports = { makeOffsiteRoute, verifyPackage, pull, status, backupStatus, readiness, verifyFile, prune, deskKey, deskKeyProblem, CR_ALLOWED, MIN_KEY_CHARS, COPY_FRESH_HOURS };

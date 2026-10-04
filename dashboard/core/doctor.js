@@ -190,7 +190,8 @@ async function doctor(ws) {
     const detail = !so.enabled
       ? 'Turned off in settings.'
       : [
-        `${parts.join(', ') || 'No verified contracts on record'}; last run ${so.last_run ? `${so.last_run.at} (${so.last_run.status})` : 'never'}; requests this month ${so.calls.month_count}${so.budget_monthly ? ` of ${so.budget_monthly}` : ''}${so.rate_limited ? `; rate-limited until ${so.retry_at}` : ''}; research packets: ${so.packet_mode}.`,
+        `${parts.join(', ') || 'No verified contracts on record'}; last run ${so.last_run ? `${so.last_run.at} (${so.last_run.status})` : 'never'}; requests this month ${so.calls.month_count}${so.budget_monthly ? ` of ${so.budget_monthly}` : ''}${so.rate_limited ? `; rate-limited until ${so.retry_at}` : ''}; research packets: ${so.packet_mode}; ${so.credential === 'app_key' ? 'GoPlus key present' : 'GoPlus keyless'}.`,
+        so.credential_note || '',
         alerts ? `${alerts} contract change alert(s) in the review queue.` : '',
         bad.length ? `Contracts that cannot be screened: ${bad.slice(0, 5).map((b) => `${b.project_id} (${b.reason})`).join('; ')}${bad.length > 5 ? ` and ${bad.length - 5} more` : ''}.` : '',
       ].filter(Boolean).join(' ');
