@@ -278,7 +278,11 @@ function symbolForm(ctx, project, s) {
     form.hidden = !form.hidden;
     if (!form.hidden) input.focus();
   }, { kind: 'link small', key: `tv-set-${pid}` });
-  return { toggle, form };
+  const reveal = () => {
+    form.hidden = false;
+    input.focus();
+  };
+  return { toggle, form, reveal };
 }
 
 // The summary and the source switch, for the source the chart now has.
@@ -286,7 +290,14 @@ const GUESS_TITLE = 'Unverified: guessed from the ticker on Binance, and the sam
 function paint(c) {
   const dex = c.source === 'dexscreener';
   const guess = !dex && c.tv.source === 'ticker';
-  c.sym.textContent = dex ? `${c.pool.pair} · ${c.pool.dex}` : c.tv.symbol || '…';
+  // The source beside the title; the pool as a label, or the TradingView
+  // symbol as a badge that opens the symbol field.
+  c.src.textContent = dex ? 'DexScreener' : c.source === 'pending' ? '' : 'TradingView';
+  c.sym.textContent = dex ? `${c.pool.pair} · ${c.pool.dex}` : '';
+  c.sym.hidden = !dex;
+  c.symBtn.textContent = dex ? '' : c.tv.symbol || '…';
+  c.symBtn.hidden = dex || !c.tv.symbol;
+  c.symBtn.setAttribute('aria-label', `Chart symbol ${c.tv.symbol || ''}${guess ? ', an unverified guess from the ticker' : ''}. Change it`);
   c.guess.hidden = !guess;
   c.sum.title = dex ? 'DexScreener · the deepest pool of the recorded contract' : 'TradingView · daily candles, UTC';
   c.sum.setAttribute('aria-label', dex
@@ -321,18 +332,29 @@ export function technicalChart(ctx, project) {
   releaseChart();
   watchClose();
   const box = h('div', { class: 'tv-box' });
-  const sym = h('span', { class: 'tv-sym mono', 'aria-hidden': 'true' });
-  const guess = h('span', { class: 'tv-guess', 'aria-hidden': 'true', title: GUESS_TITLE }, 'unverified guess');
-  const sum = h('summary', null, h('span', null, 'Technical chart'), sym, guess);
+  const src = h('span', { class: 'tv-src', 'aria-hidden': 'true' });
+  const sym = h('span', { class: 'tv-sym', 'aria-hidden': 'true' });
+  const symBtn = h('button', { type: 'button', class: 'tv-symbtn', title: 'Set the TradingView symbol (EXCHANGE:PAIR)', dataset: { key: `tv-symbtn-${pid}` } });
+  // A ticker guess says so: "Auto-pair · unverified" (the full words in its tooltip).
+  const guess = h('span', { class: 'tv-guess', 'aria-hidden': 'true', title: GUESS_TITLE }, 'Auto-pair · unverified');
+  const sum = h('summary', null, h('span', { class: 'tv-title' }, 'Technical chart'), src, h('span', { class: 'tv-right' }, sym, symBtn, guess));
   const swap = button('', null, { kind: 'link small', key: `tv-src-${pid}` });
-  const { toggle, form } = symbolForm(ctx, project, s);
+  const { toggle, form, reveal } = symbolForm(ctx, project, s);
   // No data-key: the inspector's redraw does not save and restore this
   // section's open state (a restore from before a click would close it, and
   // its frame with it); the element itself is kept, open or closed.
   const el = h('details', { class: 'disclosure tvchart' }, sum,
     h('div', { class: 'body' }, h('div', { class: 'tv-card' }, box),
       h('div', { class: 'tv-foot' }, h('div', { class: 'tv-foot-row' }, swap, toggle), form)));
-  const c = { key, pid, el, box, sum, sym, guess, switch: swap, tv: s, dex, theme, cgVolume, refPrice: deskPrice(ctx, pid), frame: null, timer: null, source: null, pool: null, share: null, asking: false };
+  const c = { key, pid, el, box, sum, src, sym, symBtn, guess, switch: swap, tv: s, dex, theme, cgVolume, refPrice: deskPrice(ctx, pid), frame: null, timer: null, source: null, pool: null, share: null, asking: false };
+  // The symbol badge opens the section and its symbol field, without the
+  // summary's own toggle closing it again.
+  symBtn.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    el.open = true;
+    reveal();
+  };
   swap.onclick = () => {
     const next = c.source === 'dexscreener' ? 'tradingview' : 'dexscreener';
     choices.set(pid, next);

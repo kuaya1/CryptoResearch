@@ -354,6 +354,23 @@ function fitColumns(root) {
   }
 }
 
+// The status strip keeps one line: when its parts do not fit the space it
+// has (the inspector open, a narrower window), the least needed figures step
+// aside in this order, and their values stay in each part's details. Market
+// breadth goes last; only after it does the strip wrap. A phone wraps by design.
+export const STRIP_FIT = ['ss-fit-kinds', 'ss-fit-models', 'ss-fit-total', 'ss-fit-refresh', 'ss-fit-tight', 'ss-fit-bar', 'ss-fit-chg', 'ss-fit-breadth'];
+
+function fitStrip(strip) {
+  if (!strip || !strip.isConnected) return;
+  strip.classList.remove(...STRIP_FIT, 'ss-wrap');
+  if (getComputedStyle(strip).flexWrap !== 'nowrap') return;
+  for (const step of STRIP_FIT) {
+    if (strip.scrollWidth <= strip.clientWidth + 1) return;
+    strip.classList.add(step);
+  }
+  strip.classList.toggle('ss-wrap', strip.scrollWidth > strip.clientWidth + 1);
+}
+
 const arrow = (dir) => h('span', { class: 'arrow', 'aria-hidden': 'true' }, dir === 'asc' ? '▲' : '▼');
 
 function providerHeaders(ctx, prefsObj, rerender) {
@@ -1209,7 +1226,7 @@ function overviewStats(p) {
   const stat = (k, v, title = null, cls = '') => h('div', { class: `ov-stat${cls ? ` ${cls}` : ''}`, title }, h('dt', null, k), h('dd', { class: 'fig' }, v));
   const fund = (key, k) => { const x = fundamentalsTile(p.fundamentals, key); return stat(k, x.text || dash(k), x.title, x.stale ? 'stale' : ''); };
   // DefiLlama's 30-day fees and revenue only for a project bound to a
-  // DefiLlama entity; otherwise four tiles, in two rows like six.
+  // DefiLlama entity (six tiles, three by two); otherwise four in one row.
   const bound = defillamaBound(p.fundamentals);
   return h('dl', { class: `ov-stats${bound ? '' : ' four'}`, 'aria-label': 'Asset overview' },
     stat('Rank', m && m.market_cap_rank ? `#${m.market_cap_rank}` : dash('Rank'), demo ? 'Market-cap rank from the fictional demo data' : 'Market-cap rank (CoinGecko)'),
@@ -1357,8 +1374,8 @@ function contractStripEl(p) {
     m.age ? h('span', { class: `cs-age${m.stale ? ' stale' : ''}`, title: m.ageTitle, 'aria-label': `Screened by GoPlus ${m.age} ago${m.stale ? ', stale' : ''}` }, m.stale ? icon('clock') : null, h('span', { 'aria-hidden': 'true' }, `GoPlus ${m.age}`)) : null);
 }
 
-// Links out, beside close: the project's CoinGecko listing, DexScreener and
-// its official website, as small labeled pills. A link the desk does not hold
+// Links out, on the price line: the project's CoinGecko listing, DexScreener
+// and its official website, as small labeled pills. A link the desk does not hold
 // is left out, never guessed. DexScreener is the verified contract's page
 // (from the index row's screen summary), else a search for the ticker.
 function headLinks(p) {
@@ -1491,12 +1508,12 @@ function renderPanel(ctx, pid) {
     ? { class: `panel${reopened ? ' entering' : ''}`, role: 'dialog', 'aria-modal': 'false', 'aria-labelledby': 'panel-title' }
     : { class: `panel${reopened ? ' entering' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'panel-title' },
     h('div', { class: 'panel-head' },
+      // The name has the whole top row (it wraps, never cut short); the links
+      // out sit on the price line under it.
       h('div', { class: 'ph-row' }, logo(p, { size: 32 }),
         h('div', { class: 'names' }, heading),
-        headLinks(p),
-        inspectorMenu(ctx, p),
-        closeBtn),
-      headMarket(p),
+        h('div', { class: 'ph-win' }, inspectorMenu(ctx, p), closeBtn)),
+      h('div', { class: 'ph-sub' }, headMarket(p), headLinks(p)),
       overviewStats(p),
       h('div', { class: 'cstrip-slot' }, contractStripEl(p))),
     h('div', { class: 'panel-body', 'data-keep-scroll': 'panel' },
@@ -1917,6 +1934,7 @@ export function renderWatchlist(ctx, route) {
       items.push(stripItem('review', [h('span', { class: 'v' }, `${rest.length} to review`), high ? h('span', { class: 'bad-word' }, `${high} urgent`) : null], { warn: high > 0, ico: 'tray' }));
     }
     strip.replaceChildren(...items);
+    fitStrip(strip);
     drawStripPanel(rest, ps, m, critical);
     startCountdown();
   }
@@ -1975,9 +1993,13 @@ export function renderWatchlist(ctx, route) {
   // it. It is drawn once the page is in the document, so it finds the rows.
   const afterMount = () => {
     fitColumns(page);
+    fitStrip(strip);
     if (!view.resizeObserver || view.resizeFor !== page) {
       if (view.resizeObserver) view.resizeObserver.disconnect();
-      view.resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => fitColumns(page)));
+      view.resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => {
+        fitColumns(page);
+        fitStrip(strip);
+      }));
       view.resizeObserver.observe(page);
       view.resizeFor = page;
     }

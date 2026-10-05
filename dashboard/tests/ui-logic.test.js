@@ -311,6 +311,17 @@ test('inspector: opens on a calculated grade, then any saved report, then Claude
   assert.match(css, /\.cbar\.unknown \{[^}]*background: transparent;[^}]*dashed/, 'an unknown category is an empty dashed track, never a zero');
 });
 
+test('status strip and header: figures step aside in order (breadth last), every step has a rule; four tiles sit in one row', async () => {
+  const { wl } = await mods;
+  assert.equal(wl.STRIP_FIT[wl.STRIP_FIT.length - 1], 'ss-fit-breadth', 'market breadth is the last figure to go');
+  assert.ok(wl.STRIP_FIT.indexOf('ss-fit-kinds') < wl.STRIP_FIT.indexOf('ss-fit-total'), 'the kinds of action go before any market figure');
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  for (const step of wl.STRIP_FIT) assert.ok(css.includes(`.status-strip.${step} `), `${step} has a rule`);
+  const four = [...css.matchAll(/^\.ov-stats\.four \{ grid-template-columns: repeat\((\d), /gm)].map((m) => m[1]);
+  assert.equal(four[four.length - 1], '4', 'the last word on four tiles (outside the narrowest phones): one row of four');
+  assert.doesNotMatch(css.slice(css.lastIndexOf('Inspector header, tiles')), /\.pt-name \{[^}]*text-overflow: ellipsis/, 'the name is never cut short');
+});
+
 test('logos: the crisp cached image is preferred, the earlier small one serves until it arrives', () => {
   const market = require('../core/market');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-logo-'));

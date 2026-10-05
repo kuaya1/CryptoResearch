@@ -602,17 +602,27 @@ button.ss-icon:hover { background: var(--surface-hover); color: var(--text); bor
 .ss-panel .ready-list li { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: var(--s3); align-items: baseline; }
 .ss-panel .ready-list .who { color: var(--text); font-weight: 600; }
 @media (pointer: coarse) { button.ss-item, button.ss-icon { min-height: var(--touch); } }
-@container wl (max-width: 1500px) { .ss-item .m-breadth, .ss-item.ss-models .k { display: none; } }
-@container wl (max-width: 1280px) { .ss-item .m-total, .ss-item .ss-kinds { display: none; } }
-/* A wide list keeps the strip on one line: only the models' summary gives
-   way, ending in an ellipsis (its full text is in its details). */
-@container wl (min-width: 1200px) {
+/* Above phone width the strip keeps one line. watchlist.js fitStrip measures
+   it: when the parts do not fit, the least needed figures step aside in turn
+   (ss-fit-*; their values stay in each part's details), market breadth last;
+   only then does it wrap (ss-wrap). Nothing is cut off mid-word. */
+@media (min-width: 641px) {
   .status-strip { flex-wrap: nowrap; }
   .status-strip > * { flex: none; }
-  .status-strip .ss-models { flex: 0 1 auto; min-width: 96px; }
-  .status-strip .ss-models .v { display: block; }
   .status-strip .ss-spacer { flex: 1 1 0; min-width: 0; }
+  .status-strip.ss-wrap { flex-wrap: wrap; }
+  .status-strip.ss-wrap > * { flex: 0 1 auto; }
 }
+.status-strip.ss-fit-kinds .ss-kinds,
+.status-strip.ss-fit-models .ss-models,
+.status-strip.ss-fit-total .m-total,
+.status-strip.ss-fit-refresh button.ss-icon .lbl,
+.status-strip.ss-fit-bar .breadth-bar,
+.status-strip.ss-fit-chg .ss-market > .m-chg,
+.status-strip.ss-fit-breadth .m-breadth { display: none; }
+/* Figures keep their own width and spacing: a label, a gap, the value. */
+.ss-item .k + .v, .ss-item .k + .fig { margin-left: 1px; }
+.ss-item .v, .ss-item .fig, .ss-item .breadth .fig { font-variant-numeric: tabular-nums lining-nums; }
 @media (max-width: 640px) {
   /* A phone: prices and Refresh on one row, the market on the next, then
      what needs action and the review queue side by side. The models' routes
@@ -621,6 +631,9 @@ button.ss-icon:hover { background: var(--surface-hover); color: var(--text); bor
   .status-strip .ss-group, .status-strip .ss-market { flex: 1 1 100%; }
   .status-strip .ss-group .ss-item { flex: 1; }
   .status-strip .ss-spacer, .status-strip .ss-models { display: none; }
+  /* The market row keeps BTC and dominance; total, breadth and the kinds of
+     action are in each part's details. */
+  .ss-item .m-total, .ss-item .m-breadth, .ss-item .ss-kinds { display: none; }
   button.ss-item { padding: 0 12px; }
   button.ss-icon .lbl { display: none; }
   .rl-badge { margin-left: 4px; }
@@ -1956,3 +1969,42 @@ table.wl .gb.is-incomplete:not(.is-range):not(.x-) .v { font-size: 10px; letter-
 /* Header links: small labeled pills. */
 .ph-links .xlink.web { display: inline-flex; align-items: center; gap: 4px; }
 .ph-links .xlink.web svg { width: 12px; height: 12px; }
+
+/* ---- Inspector header, tiles (2026-10-05) -------------------------------- */
+/* The name has the top row to itself: it wraps (up to three lines) rather than
+   being cut short, with its ticker as a small pill after it. Menu and close
+   keep their width; the links out sit on the price line below. */
+.ph-row { flex-wrap: nowrap; align-items: center; gap: 10px; }
+.ph-row > .logo { flex: none; }
+.panel-head .names { flex: 1 1 auto; min-width: 0; padding-top: 0; }
+.panel-head h2 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; white-space: normal; font-size: 16px; line-height: 1.3; overflow-wrap: anywhere; }
+.panel-head h2 .pt-name { overflow: visible; text-overflow: clip; white-space: normal; }
+.panel-head h2 .pt-sym { display: inline-block; margin-left: 7px; padding: 0 6px; border-radius: 4px; background: var(--surface-sunken); font-family: var(--mono); font-size: 11px; font-weight: 500; line-height: 18px; letter-spacing: 0.02em; text-transform: uppercase; color: var(--text-3); vertical-align: 1px; white-space: nowrap; }
+.ph-win { flex: none; display: inline-flex; align-items: center; gap: 2px; margin-left: auto; }
+.ph-sub { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-top: 8px; }
+.ph-sub .ph-price { margin: 0; flex: 0 1 auto; min-width: 0; }
+.ph-sub .ph-price .hm-fresh { margin-left: 0; }
+.ph-sub .ph-links { order: 0; flex: none; flex-basis: auto; gap: 4px; margin: 0 0 0 auto; padding: 0; }
+.ph-sub .xlink { height: 22px; min-width: 22px; padding: 0 7px; font-size: 10.5px; }
+@media (pointer: coarse) {
+  /* A 44px target without a 44px pill. */
+  .ph-sub .xlink { position: relative; height: 30px; min-width: 30px; }
+  .ph-sub .xlink::after { content: ""; position: absolute; inset: -7px -2px; }
+}
+/* Tiles: six (DefiLlama bound) as three by two, four in one row; centred figures. */
+.ov-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 10px; border: 0; border-radius: 0; overflow: visible; }
+.ov-stats.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.ov-stat { padding: 6px 6px 7px; text-align: center; background: var(--surface-hover); border: 1px solid var(--separator); border-radius: var(--r-sm); }
+.ov-stat + .ov-stat { border-left: 1px solid var(--separator); }
+.ov-stat dt { font-size: 10.5px; }
+.ov-stat dd { font-size: 12px; }
+@media (max-width: 340px) { .ov-stats.four { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* A phone keeps the same order: logo, name, then menu and close (the older
+   phone rule ordered the parts one by one). The links sit after the price,
+   left-aligned when they take their own line. */
+.ph-row > .logo, .ph-row > .names, .ph-row > .ph-win { order: 0; }
+@media (max-width: 760px) { .ph-sub .ph-links { margin-left: 0; } }
+/* The strip's tighter step: less padding before any figure steps aside. */
+.status-strip.ss-fit-tight button.ss-item { padding: 0 9px; gap: 5px; }
+.status-strip.ss-fit-tight button.ss-icon { padding: 0 9px; min-width: 34px; }
+.status-strip.ss-fit-tight .ss-item .ss-sep { margin: 0 1px; }

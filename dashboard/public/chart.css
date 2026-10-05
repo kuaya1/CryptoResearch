@@ -4,18 +4,50 @@
 
 .chart-slot:empty { display: none; }
 .tvchart { margin-top: var(--s3, 12px); border-top: 1px solid var(--border); }
-.tvchart > summary { gap: var(--s2, 8px); }
-.tvchart > summary .tv-sym { color: var(--text-3); font-weight: 400; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tvchart > summary .tv-guess {
+/* The header: "Technical chart · TradingView" on the left; on the right the
+   symbol as a badge (it opens the symbol field) or the DEX pool, and a ticker
+   guess's amber tag. It wraps onto two lines where it has to. */
+.tvchart > summary { gap: 4px var(--s2, 8px); flex-wrap: wrap; }
+.tvchart > summary .tv-title { color: var(--text); }
+.tvchart > summary .tv-src { color: var(--text-3); font-weight: 400; }
+.tvchart > summary .tv-src:not(:empty)::before { content: "· "; }
+.tvchart > summary .tv-right { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; margin-left: auto; }
+.tv-sym { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--text-3); }
+.tv-symbtn {
+  min-height: 0;
+  height: 22px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  box-shadow: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tv-symbtn:hover { border-color: var(--control-border); background: var(--surface); color: var(--text); }
+.tv-guess {
   flex: none;
   padding: 0 6px;
-  border: 1px dashed var(--pill-warn-dash);
+  border: 1px solid var(--pill-warn-line);
   border-radius: var(--r-sm);
   background: var(--pill-warn-bg);
   color: var(--pill-warn-ink);
-  font-size: 11px;
+  font-family: var(--mono);
+  font-size: 10px;
   font-weight: 500;
   line-height: 18px;
+  white-space: nowrap;
+}
+@media (pointer: coarse) {
+  .tv-symbtn { position: relative; height: 30px; }
+  .tv-symbtn::after { content: ""; position: absolute; inset: -7px 0; }
 }
 .tv-card {
   background: var(--surface);
@@ -33,3 +65,10 @@
 .tv-set { display: flex; gap: var(--s2, 8px); margin-top: 6px; }
 .tv-set[hidden] { display: none; }
 .tv-set input { flex: 1; min-width: 0; }
+
+/* Too narrow for one line (the docked drawer, a phone): the symbol and its
+   tag take a second line under the title rather than floating right. */
+.tvchart { container-type: inline-size; }
+@container (max-width: 479px) {
+  .tvchart > summary .tv-right { flex-basis: 100%; margin-left: 22px; }
+}
