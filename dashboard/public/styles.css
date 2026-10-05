@@ -2054,3 +2054,87 @@ table.wl .gb-none:hover { background: var(--row-hover); }
 .topbar-end .signout { margin: 0; }
 .topbar-end .signout button { color: var(--text-2); font-weight: 500; }
 .topbar-end .signout button:hover { color: var(--text); }
+
+
+/* ---- Presentation phase 3: the inspector (2026-10-05) --------------------- */
+/* A column: the head and the foot keep their place; only the body scrolls.
+   No sticky parts. */
+.panel { display: flex; flex-direction: column; min-width: 0; }
+.panel-head { flex: none; }
+.panel-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--scrollbar) transparent; scrollbar-gutter: stable; }
+.panel-foot { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--separator); background: var(--surface); }
+.panel-foot .pf-sum { margin: 0; min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 6px; font-size: 12px; color: var(--text-2); }
+.panel-foot .pf-ok { color: var(--text-2); }
+.panel-foot .pf-dot { color: var(--text-3); }
+.panel-foot .pf-act { flex: none; display: flex; align-items: center; gap: 8px; }
+@media (max-width: 760px) { .panel-foot { padding-bottom: max(10px, env(safe-area-inset-bottom)); } }
+/* Links out: one size, the same sign on each. */
+.ph-sub .xlink { height: auto; min-height: 24px; padding: 0 7px; gap: 4px; }
+.ph-sub .xlink svg { width: 12px; height: 12px; flex: none; }
+/* One row of four figures: no boxes, hairline dividers, label over value. */
+.ov-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 10px 0 0; padding: 0; }
+.ov-strip .ov-stat { min-width: 0; padding: 1px 10px; text-align: left; background: none; border: 0; border-radius: 0; }
+.ov-strip .ov-stat:first-child { padding-left: 0; }
+.ov-strip .ov-stat + .ov-stat { border-left: 1px solid var(--separator); }
+.ov-strip dt { font-size: 11px; font-weight: 400; color: var(--text-2); }
+.ov-strip dd { margin: 2px 0 0; font: 500 13px/1.3 var(--sans); font-variant-numeric: tabular-nums lining-nums; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The body's sections, in reading order. */
+.panel section.insp-sec { margin-top: 14px; padding: 12px 0 2px; border-top: 1px solid var(--separator); border-bottom: 0; }
+.panel .insp-alerts { margin-top: 10px; }
+.panel .insp-alerts .alerts { margin: 0; }
+/* Thesis: the model's take in three lines (Show more), then your note in one. */
+.thesis .th-text.clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.thesis .th-more { margin: 2px 0 6px; font-size: 12px; }
+.thesis .th-more[hidden] { display: none; }
+.thesis .th-note { display: flex; align-items: baseline; gap: 6px; margin: 10px 0 0; min-width: 0; font-size: 12px; color: var(--text-2); white-space: nowrap; }
+.thesis .th-note .k { flex: none; font-weight: 600; color: var(--text); }
+.thesis .th-note-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.thesis .th-note .th-none { color: var(--text-2); }
+.thesis .th-dot { color: var(--text-3); }
+.thesis .th-note a { flex: none; }
+/* Category tracks: 6px on the stone track; the fill is the shared tier band. */
+.cbar { height: 6px; border-radius: 3px; background-color: var(--track); }
+.cbar .fill, .cbar .range { border-radius: 3px; }
+.cr-conf { margin-left: 4px; font-size: 11px; font-weight: 500; color: var(--text-2); }
+.cats-ver { color: var(--text-3); }
+/* Market structure: DEX liquidity as name and figure, then the contract chips. */
+.insp-market .dexc { margin: 0 0 4px; padding: 0; background: none; border: 0; border-radius: 0; font-size: 13px; }
+.insp-market .dexc-head { margin: 0 0 6px; }
+.insp-market .dexc-head h4 { margin: 0; font-size: 12px; font-weight: 600; color: var(--text); }
+.cchips { margin-top: 12px; }
+.cc-line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; color: var(--text-2); }
+.cc-line .cc-k { font-weight: 600; color: var(--text); }
+.cc-line .cc-v { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+.cc-line .cc-chain { color: var(--text-3); text-transform: capitalize; }
+.cc-line .cc-v .mono { font-size: 11.5px; color: var(--text); }
+button.cc-copy { min-height: 24px; height: 24px; min-width: 24px; padding: 0 4px; border: 0; background: transparent; box-shadow: none; color: var(--text-3); }
+button.cc-copy:hover { background: var(--row-hover); color: var(--text); }
+button.cc-copy svg { width: 13px; height: 13px; }
+button.cc-copy.done { color: var(--pos-text); font-size: 11px; font-weight: 500; }
+.cc-line .cs-badge { margin-left: auto; padding: 0 7px; line-height: 18px; border: 1px dashed var(--control-border); border-radius: 999px; font-size: 10.5px; font-weight: 600; color: var(--text-3); white-space: nowrap; }
+.cc-line .cs-badge.warn { border-style: solid; border-color: var(--pill-warn-line); color: var(--pill-warn-ink); background: var(--pill-warn-bg); }
+.cc-line .cs-age { margin-left: auto; display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.cc-line .cs-badge + .cs-age { margin-left: 0; }
+.cc-line .cs-age svg { width: 11px; height: 11px; }
+.cc-line .cs-age.stale { color: var(--pill-warn-ink); }
+.cc-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+.cchip { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); font-size: 11px; font-weight: 500; line-height: 1; color: var(--text-2); white-space: nowrap; }
+.cchip .cc-val { color: var(--text); font-variant-numeric: tabular-nums lining-nums; }
+.cc-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; }
+.cchip.clean .cc-dot { background: var(--pos); }
+.cchip.risky .cc-dot { background: var(--warn-strong); }
+.cchip.unknown .cc-dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-3); }
+.cchip.none .cc-dot { display: none; }
+.cchip.severe { border-color: var(--pill-bad-line); background: var(--pill-bad-bg); color: var(--pill-bad-ink); }
+.cchip.severe .cc-dot { background: var(--pill-bad-dot); }
+/* The folded rows. */
+.insp-more .tvchart { margin-top: 0; border-top: 1px solid var(--separator); }
+.insp-more .insp-links { margin-top: 10px; }
+
+/* The docked pane fits the window: the top bar is --topbar-h plus its 1px
+   rule, and on the demo desk the banner above it (28px) is in the way at
+   the top of the page. */
+@media (min-width: 1280px) {
+  body.split #panel-root { height: calc(100vh - var(--topbar-h) - 1px); }
+  body:has(#demo-banner:not(.hidden)).split #panel-root { height: calc(100vh - var(--topbar-h) - 1px - 28px); }
+}

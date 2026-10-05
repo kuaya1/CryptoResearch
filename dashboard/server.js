@@ -1037,6 +1037,8 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIde
   route('POST', '/api/projects/([^/]+)/restore', (m) => after(projects.restoreProject(ws, pid(m[1]))));
   route('POST', '/api/projects/([^/]+)/fields', (m, req, res, body) => after(projects.updateProjectFields(ws, pid(m[1]), body)));
   route('POST', '/api/projects/([^/]+)/reviewed', (m, req, res, body) => after(projects.markReviewed(ws, pid(m[1]), { note: body.note || null })));
+  // Undo of one mark-reviewed (the cursor it replaced, while it is still the latest).
+  route('POST', '/api/projects/([^/]+)/reviewed/undo', (m, req, res, body) => after(projects.restoreReview(ws, pid(m[1]), { previous: body.previous === undefined ? null : body.previous, expect: body.expect || null })));
   route('POST', '/api/projects/([^/]+)/prompts', (m, req, res, body) => after(projects.generatePrompts(ws, pid(m[1]), body.providers || PROVIDERS)));
   route('POST', '/api/projects/([^/]+)/research', (m, req, res, body) => once(body, () => {
     const out = research.createRun(ws, { project_id: pid(m[1]), providers: body.providers, horizon: body.horizon || null, long_term_reason: body.long_term_reason || null, same_as_last: Boolean(body.same_as_last), channel: 'dashboard', utterance: body.utterance || null });

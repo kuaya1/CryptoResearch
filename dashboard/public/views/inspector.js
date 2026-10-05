@@ -28,6 +28,11 @@ import { dexCard } from './dex.js';
 
 const fact = (k, v, wide = false) => h('div', { class: wide ? 'wide' : null }, h('dt', null, k), h('dd', null, v));
 
+// A stated confidence as one letter beside the score (H, M, L); the word is
+// in its title and in the row's label. None where the report states none.
+const CONF_LETTER = { high: 'H', medium: 'M', low: 'L' };
+const confLetter = (s) => (s && CONF_LETTER[s.confidence] ? h('span', { class: 'cr-conf', title: `${CONFIDENCE_LABELS[s.confidence]} confidence, as the model states it` }, CONF_LETTER[s.confidence]) : null);
+
 function runPart(ctx, d) {
   const run = (d.research.runs || []).find((r) => r.prompt) || null;
   if (!run) return h('p', { class: 'small muted', style: { margin: '8px 0 0' } }, 'No research run yet.');
@@ -109,7 +114,7 @@ function categoryRow(prov, x, flags, conf, anchors = []) {
       h('span', { class: 'cr-name', title: x.label, 'aria-hidden': 'true' }, name,
         fl.length ? h('span', { class: `cr-flag ev-dot ${serious ? 'serious' : 'material'}`, title: fl.map((f) => f.beside || f.message).join(' ') }, h('span', { class: 'sr-only' }, serious ? 'serious flag' : 'flag')) : null),
       h('span', { class: 'cr-bar', 'aria-hidden': 'true' }, scoreBar(s)),
-      h('span', { class: 'cr-score', 'aria-hidden': 'true' }, h('span', { class: 'v' }, scored ? value : '?'), conf && scored ? h('span', { class: 'cr-conf' }, confidenceChip(s)) : null),
+      h('span', { class: 'cr-score', 'aria-hidden': 'true' }, h('span', { class: 'v' }, scored ? value : '?'), conf && scored ? confLetter(s) : null),
       short ? h('span', { class: 'cr-why' }, short) : null),
     body));
 }
@@ -129,10 +134,14 @@ function categoriesPart(ctx, d, row, prov) {
   const conf = statesConfidence(rows);
   const flags = (r.evidence && r.evidence.flags) || [];
   const anchors = ctx.state.index.rubrics.grading.favorable_anchors || [];
+  const current = d.research_contract && d.research_contract.sector_profile;
+  const older = Boolean(current && a.sector_profile && a.sector_profile !== current);
   return h('div', { class: 'cats' },
     h('div', { class: 'cats-head' },
       h('h3', null, 'Category grades'),
-      h('span', { class: 'cats-count' }, `${counts.scored} of ${counts.total} scored${counts.unknown ? ` · ${counts.unknown} unknown` : ''}`)),
+      h('span', { class: 'cats-count' }, `${counts.scored} of ${counts.total} scored${counts.unknown ? ` · ${counts.unknown} unknown` : ''}`,
+        // A report made under an earlier scoring profile keeps its own categories.
+        older ? h('span', { class: 'cats-ver', title: `This report used ${a.sector_profile}; new research uses ${current}` }, ` · ${a.sector_profile}`) : null)),
     h('ul', { class: 'cat-rows', 'aria-label': `${PROVIDER_LABELS[prov]}'s category grades, 0 to 100, higher is better` }, rows.map((x) => categoryRow(prov, x, flags, conf, anchors))),
   );
 }
@@ -268,19 +277,20 @@ function comparePart(ctx, d) {
     comparable.size < 2 ? h('p', { class: 'breakdown-note' }, `Not directly comparable${(c.comparability.reasons || []).length ? `: ${c.comparability.reasons.join('; ')}` : ''}.`) : null);
 }
 
-// ---- thesis notes ---------------------------------------------------------------
+// ---- the thesis -------------------------------------------------------------------
 
-// Your own conviction note first, in your words (written on the project's
-// Notes page), then the selected model's thesis as its report states it: its
-// final take, the one development to watch, and what would confirm or
-// invalidate it. Each stays apart: nothing is summarized or merged.
+// The selected model's thesis as its report states it: its final take (three
+// lines, then Show more), the one development to watch, what would confirm or
+// break it; then your own conviction note in one line (written on the
+// project's Notes page). Each stays apart: nothing is summarized or merged.
 function thesisPart(ctx, d, row, prov) {
   const pid = d.project.project_id;
   const note = d.conviction ? String(d.conviction.text || '').trim() : '';
-  const mine = h('div', { class: 'th-block' },
-    h('div', { class: 'th-head' }, h('span', { class: 'th-who' }, 'Your note'), note && d.conviction.updated_at ? h('span', { class: 'faint' }, `saved ${fmtDateTime(d.conviction.updated_at)}`) : null),
-    note ? h('p', { class: 'th-text' }, note) : h('p', { class: 'th-none' }, 'No conviction note yet.'),
-    h('a', { class: 'small', href: `#/project/${encodeURIComponent(pid)}/history`, dataset: { key: `note-edit-${pid}` } }, note ? 'Edit your note' : 'Write your note'));
+  const edit = h('a', { href: `#/project/${encodeURIComponent(pid)}/history`, dataset: { key: `note-edit-${pid}` } }, note ? 'Edit' : 'Write your note');
+  const mine = h('p', { class: 'th-note', title: note && d.conviction.updated_at ? `Your note, saved ${fmtDateTime(d.conviction.updated_at)}` : null },
+    h('span', { class: 'k' }, 'Your note'),
+    note ? h('span', { class: 'th-note-text' }, note) : h('span', { class: 'th-none' }, 'No conviction note yet'),
+    h('span', { class: 'th-dot', 'aria-hidden': 'true' }, '·'), edit);
   const sum = prov && row.providers && row.providers[prov];
   const r = sum ? d.reports.find((x) => x.report_id === sum.report_id) || latestReports(d)[prov] : null;
   const a = r && !r.broken ? r.assessment || {} : null;
@@ -291,15 +301,29 @@ function thesisPart(ctx, d, row, prov) {
     const confirm = list(a.conviction_increases);
     const invalid = list(a.invalidators);
     const any = a.final_take || (metric && metric.metric) || confirm.length || invalid.length;
+    let take = null;
+    if (a.final_take) {
+      const text = h('p', { class: 'th-text clamp', id: `th-take-${pid}-${prov}` }, a.final_take);
+      const more = h('button', { type: 'button', class: 'link th-more', 'aria-expanded': 'false', 'aria-controls': `th-take-${pid}-${prov}`, dataset: { key: `th-more-${pid}-${prov}` } }, 'Show more');
+      more.onclick = () => {
+        const open = more.getAttribute('aria-expanded') !== 'true';
+        more.setAttribute('aria-expanded', String(open));
+        more.textContent = open ? 'Show less' : 'Show more';
+        text.classList.toggle('clamp', !open);
+      };
+      // Shown only when the take is longer than three lines.
+      more.hidden = true;
+      requestAnimationFrame(() => { if (text.isConnected && text.scrollHeight > text.clientHeight + 1) more.hidden = false; });
+      take = [text, more];
+    }
     model = h('div', { class: 'th-block' },
-      h('div', { class: 'th-head' }, h('span', { class: 'th-who' }, `${PROVIDER_LABELS[prov]}'s thesis`)),
-      !any ? h('p', { class: 'th-none' }, 'No thesis in the data block.') : null,
-      a.final_take ? h('p', { class: 'th-text' }, a.final_take) : null,
+      !any ? h('p', { class: 'th-none' }, `No thesis in ${PROVIDER_LABELS[prov]}'s data block.`) : null,
+      take,
       metric && metric.metric ? h('p', { class: 'th-line' }, h('span', { class: 'k' }, 'Watch'), h('span', null, metric.metric, metric.threshold ? ` (${metric.threshold})` : '')) : null,
       confirm.length ? h('div', { class: 'th-line' }, h('span', { class: 'k' }, 'Confirms'), h('ul', null, confirm.map((f) => h('li', null, f.text)))) : null,
       invalid.length ? h('div', { class: 'th-line' }, h('span', { class: 'k' }, 'Breaks'), h('ul', null, invalid.map((f) => h('li', null, f.text)))) : null);
   }
-  return h('div', { class: 'thesis' }, mine, model);
+  return h('div', { class: 'thesis' }, model, mine);
 }
 
 // ---- the contract checks ---------------------------------------------------------

@@ -372,6 +372,44 @@ test('a model on hold: its header and its dashes follow the model status, for an
   assert.doesNotMatch(src, /'gemini'[^\n]*on hold|on hold[^\n]*'gemini'/i, 'no model is named in the on-hold code');
 });
 
+test('R: only a plain R outside fields, with nothing open, on a project with something to review; it goes to the next one to review in the list\'s order', async () => {
+  const { wl } = await mods;
+  const todo = { project_id: 'a', changes: { item_count: 3 } };
+  const done = { project_id: 'b', changes: { item_count: 0 } };
+  const key = (k, mods = {}) => ({ key: k, ctrlKey: false, metaKey: false, altKey: false, isComposing: false, ...mods });
+  assert.equal(wl.reviewKeyAllowed(key('r'), { project: todo }), true);
+  assert.equal(wl.reviewKeyAllowed(key('R'), { project: todo }), true);
+  assert.equal(wl.reviewKeyAllowed(key('r', { ctrlKey: true }), { project: todo }), false, 'Ctrl+R is the browser\'s');
+  assert.equal(wl.reviewKeyAllowed(key('r', { metaKey: true }), { project: todo }), false, 'Cmd+R is the browser\'s');
+  assert.equal(wl.reviewKeyAllowed(key('r', { altKey: true }), { project: todo }), false);
+  assert.equal(wl.reviewKeyAllowed(key('r'), { project: todo, busy: true }), false, 'typing, a dialog or a menu');
+  assert.equal(wl.reviewKeyAllowed(key('r'), { project: done }), false, 'nothing to review');
+  assert.equal(wl.reviewKeyAllowed(key('r'), { project: null }), false, 'no project chosen');
+  assert.equal(wl.reviewKeyAllowed(key('j'), { project: todo }), false);
+  assert.equal(wl.needsReview({ changes: { item_count: 2 }, status: 'archived' }), false, 'archived: nothing to review');
+  const projects = [{ project_id: 'a', changes: { item_count: 1 } }, { project_id: 'b', changes: { item_count: 0 } }, { project_id: 'c', changes: { item_count: 4 } }, { project_id: 'd', changes: { item_count: 2 } }];
+  assert.equal(wl.nextToReview(['a', 'b', 'c', 'd'], projects, 'a'), 'c', 'skips projects with nothing to review');
+  assert.equal(wl.nextToReview(['a', 'b', 'c', 'd'], projects, 'd'), 'a', 'wraps to the top of the list');
+  assert.equal(wl.nextToReview(['d', 'c', 'b', 'a'], projects, 'c'), 'a', 'in the order shown');
+  assert.equal(wl.nextToReview(['a', 'b'], projects, 'a'), null, 'none left: All caught up');
+  // The browser's own keys stay the browser's: the handler checks before acting.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'watchlist.js'), 'utf8');
+  assert.match(src, /reviewKeyAllowed\(e, \{ busy: Boolean\(busy\), project \}\)/);
+});
+
+test('contract chips: always Mint, Blacklist (Freeze on Solana), Proxy and Tax, with a clean, risky or unknown dot; n/a for a native coin', async () => {
+  const { wl } = await mods;
+  const keys = (m) => m.chips.map((c) => `${c.label}:${c.value}:${c.dot}`);
+  const unscreened = wl.contractChipModel({ state: 'pending', contracts: [{ chain: 'ethereum', label: 'Ethereum', address: '0x1111111111111111111111111111111111111111', status: 'pending' }] });
+  assert.deepEqual(keys(unscreened), ['Mint:—:unknown', 'Blacklist:—:unknown', 'Proxy:—:unknown', 'Tax:—:unknown'], 'no screen yet: all four, unknown');
+  const native = wl.contractChipModel({ state: 'native_chain', contracts: [] });
+  assert.deepEqual(keys(native), ['Mint:n/a:none', 'Blacklist:n/a:none', 'Proxy:n/a:none', 'Tax:n/a:none']);
+  const evm = wl.contractChipModel({ state: 'fresh', fetched_at: '2026-10-04T12:00:00Z', age_hours: 2, contracts: [{ chain: 'ethereum', label: 'Ethereum', family: 'evm', address: '0x2222222222222222222222222222222222222222', status: 'ok', mint: 'absent', blacklist: 'unknown', proxy: 'present', sell_tax_pct: 0, severe: [] }] });
+  assert.deepEqual(keys(evm), ['Mint:No:clean', 'Blacklist:—:unknown', 'Proxy:Yes:risky', 'Tax:0%:clean']);
+  const sol = wl.contractChipModel({ state: 'fresh', fetched_at: '2026-10-04T12:00:00Z', age_hours: 2, contracts: [{ chain: 'solana', label: 'Solana', family: 'solana', address: 'So11111111111111111111111111111111111111112', status: 'ok', mint: 'present', blacklist: 'absent', severe: [] }] });
+  assert.deepEqual(keys(sol), ['Mint:Yes:risky', 'Freeze:No:clean', 'Proxy:n/a:none', 'Tax:—:unknown']);
+});
+
 test('static: no CoinMarketCap tokens or colors, no "Inter", the serif only on the wordmark', () => {
   const dir = path.join(__dirname, '..', 'public');
   const files = [];

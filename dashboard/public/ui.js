@@ -657,6 +657,8 @@ const SVG_ICONS = {
   half: [['circle', { cx: '8', cy: '8', r: '6.2', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5' }], ['path', { d: 'M8 1.8a6.2 6.2 0 0 0 0 12.4Z', fill: 'currentColor' }]],
   // Paused on purpose (a model on hold, work held unsent): a bar in a circle.
   minus: [['circle', { cx: '8', cy: '8', r: '6.2', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5' }], ['path', { d: 'M5.2 8h5.6', stroke: 'currentColor', 'stroke-width': '1.6', 'stroke-linecap': 'round' }]],
+  // Copy to the clipboard.
+  copy: [['rect', { x: '5.5', y: '5.5', width: '8', height: '8', rx: '1.6', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5' }], ['path', { d: 'M10.5 3.2V3a1.5 1.5 0 0 0-1.5-1.5H3A1.5 1.5 0 0 0 1.5 3v6A1.5 1.5 0 0 0 3 10.5h.2', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round' }]],
   // A link that opens elsewhere.
   ext: [['path', { d: 'M9.5 2.5h4v4M13.3 2.7 7.5 8.5M12 9.5v3.2a.8.8 0 0 1-.8.8H3.3a.8.8 0 0 1-.8-.8V4.8c0-.4.4-.8.8-.8h3.2', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }]],
   // More actions.

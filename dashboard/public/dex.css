@@ -26,3 +26,12 @@
 .dexc-skel .wide .dexc-bar { width: 140px; }
 @media (prefers-reduced-motion: no-preference) { .dexc-bar { animation: dexc-pulse 1.2s ease-in-out infinite; } }
 @keyframes dexc-pulse { 50% { opacity: 0.45; } }
+
+/* The card as a list: the name, then the figure (dl > dt + dd). */
+.dexc-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; margin: 0; }
+.dexc-grid > dt { font-family: var(--sans); font-size: 12px; color: var(--text-2); }
+.dexc-grid > dd { margin: 0; min-width: 0; font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums lining-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dexc-grid > dd .buys { color: var(--pos-text); }
+.dexc-grid > dd .sells { color: var(--neg); }
+.dexc-cap { margin-left: 6px; font-size: 11px; color: var(--text-3); }
+@container (max-width: 300px) { .dexc-grid { grid-template-columns: minmax(0, 1fr); gap: 0 0; } .dexc-grid > dd { margin-bottom: 4px; } }

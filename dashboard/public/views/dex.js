@@ -317,31 +317,32 @@ function noteLine(text, extra = null) {
 // While DexScreener is asked: the card's own rows with placeholder bars, the
 // same height as the answer, so nothing below it moves when it arrives.
 function skeleton() {
-  const row = (k, wide = false) => h('div', { class: wide ? 'wide' : null }, h('dt', null, k), h('dd', null, h('span', { class: 'dexc-bar' }), ' '));
+  const row = (k) => [h('dt', null, k), h('dd', null, h('span', { class: 'dexc-bar' }), ' ')];
   return h('dl', { class: 'dexc-grid dexc-skel', 'aria-hidden': 'true' },
-    row('Top pool', true), row('Pool liquidity'), row('24h volume'), row('Trades 24h', true), row('FDV / liquidity', true));
+    ...row('Top pool'), ...row('Pool liquidity'), ...row('24h volume'), ...row('Trades 24h'), ...row('FDV / on-chain liquidity'));
 }
 
 function draw(c, answer) {
   const pool = topPool(answer, c.targets, { refPrice: c.refPrice });
   c.el.removeAttribute('aria-busy');
-  c.source.href = pool && pool.url ? pool.url : dexLink(c.project).href;
-  c.source.title = `DexScreener, asked by this browser ${fmtDateTime(answer.fetched_at)}`;
+  c.el.title = `DexScreener, asked by this browser ${fmtDateTime(answer.fetched_at)}`;
   if (!pool) {
     c.state = 'drawn';
     c.body.replaceChildren(noteLine('No decentralized liquidity pool indexed'));
     return;
   }
-  const item = (k, v, { wide = false, cls = null, title = null, label = null } = {}) => h('div', { class: wide ? 'wide' : null },
-    h('dt', null, k), h('dd', { class: cls, title, 'aria-label': label }, v));
+  // Two columns: the name, the figure. Buys and sells in the rise and fall
+  // colors; the ratio says what it counts (a token listed on exchanges can
+  // show a large one, so it is never an alarm color).
+  const item = (k, v, { cls = null, title = null, label = null } = {}) => [h('dt', null, k), h('dd', { class: cls, title, 'aria-label': label }, v)];
   const liq = pool.liquidity === null ? '—' : fmtCompactUsd(pool.liquidity);
   c.state = 'drawn';
   c.body.replaceChildren(h('dl', { class: 'dexc-grid' },
-    item(`Top pool${pool.count > 1 ? ` (of ${pool.count})` : ''}`, `${pool.dex} · ${pool.pair}${pool.multiChain ? ` · ${pool.chain}` : ''}`, { wide: true, title: `${pool.chain}${pool.pairAddress ? ` · ${pool.pairAddress}` : ''}${pool.leftOut ? `\n${pool.leftOut} more pool${pool.leftOut === 1 ? '' : 's'} left out: priced over ${PRICE_BAND}× away from the token's price (${fmtPrice(pool.refPrice)})` : ''}` }),
-    item('Pool liquidity', pool.thin ? [liq, h('span', { class: 'dexc-thin' }, ' · thin')] : liq, { cls: pool.thin ? 'thin' : null, title: pool.thin ? `Below ${fmtCompactUsd(THIN_USD)}: a trade of any size moves the price` : null, label: pool.thin ? `${liq}, thin: below ${fmtCompactUsd(THIN_USD)}` : null }),
-    item('24h volume', pool.volume24h === null ? '—' : fmtCompactUsd(pool.volume24h)),
-    item('Trades 24h', pool.buys === null && pool.sells === null ? '—' : `▲ ${n(pool.buys)} buys / ▼ ${n(pool.sells)} sells`, { wide: true, label: `${n(pool.buys)} buys and ${n(pool.sells)} sells in 24 hours` }),
-    item('FDV / liquidity', ratioText(pool.ratio), { wide: true, title: pool.fdv === null ? 'DexScreener gives no FDV for this pool' : `DexScreener's FDV ${fmtCompactUsd(pool.fdv)} over this pool's liquidity` })));
+    ...item(`Top pool${pool.count > 1 ? ` (of ${pool.count})` : ''}`, `${pool.dex} · ${pool.pair}${pool.multiChain ? ` · ${pool.chain}` : ''}`, { title: `${pool.chain}${pool.pairAddress ? ` · ${pool.pairAddress}` : ''}${pool.leftOut ? `\n${pool.leftOut} more pool${pool.leftOut === 1 ? '' : 's'} left out: priced over ${PRICE_BAND}× away from the token's price (${fmtPrice(pool.refPrice)})` : ''}` }),
+    ...item('Pool liquidity', pool.thin ? [liq, h('span', { class: 'dexc-thin' }, ' · thin')] : liq, { cls: pool.thin ? 'thin' : null, title: pool.thin ? `Below ${fmtCompactUsd(THIN_USD)}: a trade of any size moves the price` : null, label: pool.thin ? `${liq}, thin: below ${fmtCompactUsd(THIN_USD)}` : null }),
+    ...item('24h volume', pool.volume24h === null ? '—' : fmtCompactUsd(pool.volume24h)),
+    ...item('Trades 24h', pool.buys === null && pool.sells === null ? '—' : [h('span', { class: 'buys' }, `${n(pool.buys)} buys`), ' / ', h('span', { class: 'sells' }, `${n(pool.sells)} sells`)], { label: `${n(pool.buys)} buys and ${n(pool.sells)} sells in 24 hours` }),
+    ...item('FDV / on-chain liquidity', [ratioText(pool.ratio), h('span', { class: 'dexc-cap' }, 'DEX pools only')], { title: pool.fdv === null ? 'DexScreener gives no FDV for this pool' : `DexScreener's FDV ${fmtCompactUsd(pool.fdv)} over this pool's liquidity (DEX pools only; exchange order books are not counted)` })));
 }
 
 function fail(c, err) {
@@ -399,12 +400,12 @@ export function dexCard(ctx, project) {
     return currentCard.el;
   }
   if (currentCard) clearTimeout(currentCard.timer);
-  const source = h('a', { class: 'dexc-src', href: dexLink(project).href, target: '_blank', rel: 'noopener noreferrer', dataset: { key: `dex-src-${project.project_id}` } }, 'DexScreener');
+  // The header's DEX pill links DexScreener; the card has no link of its own.
   const body = h('div', { class: 'dexc-body' }, skeleton());
-  const el = h('section', { class: 'dexc', 'aria-label': 'DEX liquidity, from DexScreener', 'aria-busy': 'true' },
-    h('div', { class: 'dexc-head' }, h('h3', null, 'DEX liquidity'), source),
+  const el = h('div', { class: 'dexc', role: 'group', 'aria-label': 'DEX liquidity, from DexScreener', 'aria-busy': 'true' },
+    h('div', { class: 'dexc-head' }, h('h4', null, 'DEX liquidity')),
     body);
-  const c = { key, el, body, source, targets: t.targets, project, refPrice: deskPrice(ctx, project.project_id), timer: null, state: 'waiting' };
+  const c = { key, el, body, targets: t.targets, project, refPrice: deskPrice(ctx, project.project_id), timer: null, state: 'waiting' };
   currentCard = c;
   const cached = peekLookup(t.targets);
   if (cached) draw(c, cached);

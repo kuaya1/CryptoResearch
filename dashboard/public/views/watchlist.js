@@ -476,7 +476,7 @@ function buildTable(ctx, prefsObj, rows, rerender) {
     return tr;
   }));
   return h('div', { class: 'table-scroll', 'data-keep-scroll': 'watchlist' },
-    h('table', { class: 'wl' }, h('caption', { class: 'sr-only' }, `Watchlist. ${sortDescription(prefsObj.sort)}. Choose a project name for its details; J and K or the arrow keys move between rows, Space or Enter opens and closes a project.`), thead, tbody));
+    h('table', { class: 'wl' }, h('caption', { class: 'sr-only' }, `Watchlist. ${sortDescription(prefsObj.sort)}. Choose a project name for its details; J and K or the arrow keys move between rows, Space or Enter opens and closes a project, R marks the open project reviewed and moves to the next one with changes to review.`), thead, tbody));
 }
 
 // ---- menus (filters, columns) ------------------------------------------------
@@ -816,15 +816,6 @@ function resumeAction(ctx, p, prov, job, info) {
     h('span', { class: 'small muted' }, `${released ? 'Released back to waiting' : 'Paused'}${since ? ` · last activity ${fmtDateTime(since)}` : ''}${job.draft_saved_at ? ` · draft saved ${fmtDateTime(job.draft_saved_at)}` : ' · no draft saved'}`));
 }
 
-// The report's highest downside scores, in one line beside the grade
-// (higher means more risk); the model's own strongest risks follow the bars.
-function riskTeaser(ctx, rep) {
-  const labels = Object.fromEntries((ctx.state.index.rubrics.grading.risk_scores || []).map((x) => [x.id, x.label.replace(/ risk$/i, '')]));
-  const risks = ((rep && rep.top_risks) || []).filter((r) => r.status === 'scored' || r.status === 'range');
-  if (!risks.length) return null;
-  return h('p', { class: 'ig-risk' }, h('span', { class: 'k' }, 'Downside'), risks.map((r) => `${labels[r.id] || r.id} ${r.status === 'range' ? `${r.low}–${r.high}` : r.value}`).join(' · '), h('span', { class: 'faint' }, ' · higher = worse'));
-}
-
 // ---- project inspector: the scorecard first --------------------------------------
 
 // The model the inspector opens on: a calculated grade first, then any saved
@@ -919,10 +910,11 @@ function modelHead(ctx, p, prov) {
   const parts = rep && !rep.needs_text ? h('details', { class: 'ig-parts', dataset: { key: `ig-parts-${pid}-${prov}` } },
     h('summary', null, h('span', null, 'Weighted parts')),
     h('div', { dataset: { slot: `grade-${prov}` } }, skeleton('Loading the six weighted parts'))) : null;
-  // The model's own total, when it differs from the calculated grade: one
-  // compact badge, the full sentence in its tooltip.
+  // The model's own total, when it differs from the grade calculated here from
+  // the same report: by how much, the full sentence in its tooltip. It is not
+  // a spread between models.
   const mt = rep && rep.model_total && rep.model_total.status === 'mismatch' ? rep.model_total : null;
-  const delta = mt ? h('span', { class: 'delta-pill fig', title: mt.message, 'aria-label': mt.message }, `Δ ±${typeof mt.difference === 'number' ? mt.difference.toFixed(1) : '?'}`) : null;
+  const delta = mt ? h('span', { class: 'delta-pill fig', title: mt.message, 'aria-label': mt.message }, `Own total differs by ${typeof mt.difference === 'number' ? mt.difference.toFixed(1) : '?'}`) : null;
   let body;
   if (rep && (info.kind === 'grade' || info.kind === 'range')) {
     const word = anchorText(anchors, rep.grade.status === 'range' ? { status: 'range', low: rep.grade.low, high: rep.grade.high } : { status: 'scored', value: rep.grade.value });
@@ -931,7 +923,6 @@ function modelHead(ctx, p, prov) {
       h('div', { class: 'ig-row' },
         gradeGauge(rep.grade, { word, serious: info.ev === 'serious' }),
         h('div', { class: 'ig-side' }, facts, delta)),
-      riskTeaser(ctx, rep),
       parts);
   } else if (rep && info.kind === 'pdf') {
     body = h('div', { class: 'ig' }, top(),
@@ -952,7 +943,6 @@ function modelHead(ctx, p, prov) {
       // Parts left unscored while the same report scores related ground.
       checks ? h('details', { class: 'ig-check', dataset: { key: `ig-check-${pid}-${prov}` } }, h('summary', null, h('span', null, h('strong', null, 'Check'), ` · ${checks} note${checks === 1 ? '' : 's'}`)), structureNotes(rep.structure)) : null,
       facts,
-      riskTeaser(ctx, rep),
       parts);
   } else {
     const key = jobKey(job, null, { onHold: opts.onHold });
@@ -990,25 +980,28 @@ function catsSkeleton() {
     [80, 60, 72, 45, 66].map((w) => h('div', { class: 'skel-row' }, h('span', { class: 'skel', style: { width: `${w * 0.6}%` } }), h('span', { class: 'skel bar', style: { width: '100%' } }))));
 }
 
-// The selected model's panel: its investment grade, then its category grades
-// as bars, then the evidence, timing and the report one tap away.
+// The selected model's panel, in reading order: the verdict (its investment
+// grade and facts, its evidence flag), the project's review items right under
+// it (models differ, total differs, …), the model's thesis, its category
+// grades, then its strongest risks with one Downside line.
 function modelPanel(ctx, p, prov) {
   const rep = p.providers && p.providers[prov];
-  const pid = p.project_id;
+  const graded = rep && !rep.needs_text;
   return h('div', { class: 'mpanel', id: 'insp-model', role: 'tabpanel', 'aria-labelledby': `insp-tab-${prov}` },
     modelHead(ctx, p, prov),
-    rep && !rep.needs_text ? h('div', { dataset: { slot: `cats-${prov}` } }, catsSkeleton()) : null,
-    // The technical chart, right below the bars (views/chart.js): one slot for
-    // every model, so a model switch keeps the same chart.
-    h('div', { class: 'chart-slot', dataset: { slot: 'chart' } }),
-    // The model's strongest risks, right after the bars (never behind them).
-    rep && !rep.needs_text ? h('div', { dataset: { slot: `risks-${prov}` } }) : null,
-    rep ? h('div', { class: 'mfoot' },
-      details('Evidence and sources', h('div', { dataset: { slot: `evidence-${prov}` } }, skeleton('Loading the evidence checks')), { id: `insp-evd-${prov}` }),
-      details('Timing, risks and the report', timingFacts(ctx, p, prov), { id: `insp-timing-${prov}` }),
-      h('div', { class: 'btn-row mfoot-links' },
-        h('a', { class: 'btn small', href: `#/project/${encodeURIComponent(pid)}/reports?report=${encodeURIComponent(rep.report_id)}`, dataset: { key: `report-${pid}-${prov}` } }, 'Open report'),
-        h('a', { class: 'small', href: `#/project/${encodeURIComponent(pid)}/scorecards?provider=${prov}`, dataset: { key: `scorecard-${pid}-${prov}` } }, 'Full scorecard'))) : null);
+    projectAlerts(ctx, p),
+    h('section', { class: 'insp-sec insp-thesis', 'aria-labelledby': 'insp-sec-thesis' },
+      h('h3', { class: 'sec-title', id: 'insp-sec-thesis' }, 'Thesis'),
+      h('div', { dataset: { slot: 'thesis' } }, skeleton('Loading the thesis'))),
+    graded ? h('div', { class: 'insp-sec', dataset: { slot: `cats-${prov}` } }, catsSkeleton()) : null,
+    graded ? h('div', { class: 'insp-sec', dataset: { slot: `risks-${prov}` } }) : null);
+}
+
+// The project's own review items (models differ, total differs, review due…),
+// right under the verdict rather than at the foot of the drawer.
+function projectAlerts(ctx, p) {
+  const list = alertStrips(splitAttention(projectItems(ctx, p)).rest, `previews-${p.project_id}`);
+  return list ? h('div', { class: 'insp-alerts' }, list) : null;
 }
 
 function comparisonNote(ctx, p) {
@@ -1273,25 +1266,18 @@ export function fundamentalsTile(f, key) {
   return { text: null, title: `${src}: no 30-day ${label} total` };
 }
 
-// The asset at a glance: rank, market cap, 24-hour volume, FDV and
-// DefiLlama's 30-day fees and revenue in six tiles. Unknown stays "—" with
-// its reason in the label.
+// The asset at a glance, one row of four: market cap, 24-hour volume, FDV, and
+// FDV over market cap (the one derived figure, from the two values shown).
+// Rank is in the table; DefiLlama's 30-day fees and revenue are under
+// On-chain fundamentals. Unknown stays "—" with its reason in the label.
 function overviewStats(p) {
-  const m = mkt(p);
-  const demo = m && m.rank_source_label && /fictional/i.test(m.rank_source_label);
-  const usd = (v, label) => (m && typeof v === 'number' ? fmtMarketUsd(v) : dash(label));
-  const stat = (k, v, title = null, cls = '') => h('div', { class: `ov-stat${cls ? ` ${cls}` : ''}`, title }, h('dt', null, k), h('dd', { class: 'fig' }, v));
-  const fund = (key, k) => { const x = fundamentalsTile(p.fundamentals, key); return stat(k, x.text || dash(k), x.title, x.stale ? 'stale' : ''); };
-  // DefiLlama's 30-day fees and revenue only for a project bound to a
-  // DefiLlama entity (six tiles, three by two); otherwise four in one row.
-  const bound = defillamaBound(p.fundamentals);
-  return h('dl', { class: `ov-stats${bound ? '' : ' four'}`, 'aria-label': 'Asset overview' },
-    stat('Rank', m && m.market_cap_rank ? `#${m.market_cap_rank}` : dash('Rank'), demo ? 'Market-cap rank from the fictional demo data' : 'Market-cap rank (CoinGecko)'),
-    stat('MC', usd(m && m.market_cap_usd, 'Market cap'), 'Market cap (CoinGecko)'),
-    stat('Vol (24h)', usd(m && m.volume_24h_usd, 'Volume'), 'Trading volume over 24 hours'),
-    stat('FDV', usd(m && m.fdv_usd, 'FDV'), 'Fully diluted valuation'),
-    bound ? fund('fees', '30D Fees') : null,
-    bound ? fund('revenue', '30D Revenue') : null);
+  const s = marketStrings(mkt(p)) || {};
+  const stat = (k, v, title) => h('div', { class: 'ov-stat', title }, h('dt', null, k), h('dd', { class: 'fig' }, v));
+  return h('dl', { class: 'ov-strip', 'aria-label': 'Asset overview' },
+    stat('MC', s.mcap || dash('Market cap'), 'Market cap (CoinGecko)'),
+    stat('Vol 24h', s.volume || dash('Volume'), 'Trading volume over 24 hours'),
+    stat('FDV', s.fdv || dash('FDV'), 'Fully diluted valuation'),
+    stat('FDV/MC', s.fdvMc || dash('FDV over market cap'), 'Fully diluted valuation over market cap, from the two figures shown'));
 }
 
 // Whether a project is bound to a DefiLlama entity (fundamentals.js summary):
@@ -1412,24 +1398,62 @@ export function contractStrip(s) {
 const BADGE_RANK = { alert: 0, severe: 1 };
 const badgeRank = (b) => (BADGE_RANK[b.key] !== undefined ? BADGE_RANK[b.key] : b.key === 'tax' && b.tone === 'severe' ? 2 : b.key === 'tax' ? 6 : { mint: 3, blacklist: 4, proxy: 5 }[b.key] ?? 7);
 
-function contractStripEl(p) {
-  const m = contractStrip(p.screening);
-  m.badges = [...m.badges].sort((a, b) => badgeRank(a) - badgeRank(b));
-  const first = m.items[0];
-  const value = first
-    ? h('span', { class: 'cs-v', title: m.items.map((x) => `${x.label || 'chain?'}: ${x.address}`).join('\n') },
-      first.label ? h('span', { class: 'cs-chain' }, first.label) : null,
-      h('span', { class: 'mono' }, shortAddr(first.address)),
-      m.items.length > 1 ? h('span', { class: 'faint' }, ` +${m.items.length - 1}`) : null)
-    : h('span', { class: 'cs-v', title: m.title }, m.text || '—');
-  // One line on wider screens (J/K never moves the drawer); what does not fit
-  // is in this tooltip and under Contract checks.
-  const all = [m.items.length ? m.items.map((x) => `${x.label || 'chain?'} ${x.address}`).join(', ') : m.text, ...m.badges.map((b) => `${b.label}${b.value !== null ? ` ${b.value}` : ''}`), m.status ? m.status.word : null, m.age ? `GoPlus ${m.age}` : null].filter(Boolean).join(' · ');
-  return h('div', { class: 'cstrip', title: all }, h('span', { class: 'cs-k' }, 'Contract'), value,
-    ...m.badges.map((b) => h('span', { class: `cs-flag ${b.tone}`, title: b.title, 'aria-label': b.aria }, h('span', { class: 'cs-fk', 'aria-hidden': 'true' }, b.label), b.value !== null ? h('span', { class: 'cs-fv', 'aria-hidden': 'true' }, b.value) : null)),
-    m.status ? h('span', { class: `cs-badge${m.status.tone === 'warn' ? ' warn' : ''}`, title: m.status.title }, m.status.word) : null,
-    m.age ? h('span', { class: `cs-age${m.stale ? ' stale' : ''}`, title: m.ageTitle, 'aria-label': `Screened by GoPlus ${m.age} ago${m.stale ? ', stale' : ''}` }, m.stale ? icon('clock') : null, h('span', { 'aria-hidden': 'true' }, `GoPlus ${m.age}`)) : null);
+// The contract chips under Market structure, from contractStrip: always Mint,
+// Blacklist (Freeze on Solana), Proxy and Tax, each with a status dot (clean,
+// risky, unknown), "n/a" for a native coin; then a severe flag or a change.
+// Pure, for the tests.
+const CHIP_KEYS = ['mint', 'blacklist', 'proxy', 'tax'];
+export function contractChipModel(s) {
+  const m = contractStrip(s);
+  const native = m.state === 'native_chain';
+  const byKey = Object.fromEntries(m.badges.map((b) => [b.key, b]));
+  const solana = Boolean(byKey.blacklist && byKey.blacklist.label === 'Freeze');
+  const label = { mint: 'Mint', blacklist: solana ? 'Freeze' : 'Blacklist', proxy: 'Proxy', tax: 'Tax' };
+  const chips = CHIP_KEYS.map((key) => {
+    if (native) return { key, label: label[key], value: 'n/a', dot: 'none', aria: `${label[key]}: not applicable to a native coin` };
+    if (key === 'proxy' && solana && !byKey.proxy) return { key, label: 'Proxy', value: 'n/a', dot: 'none', aria: 'Proxy: not applicable on Solana' };
+    const b = byKey[key];
+    if (!b) return { key, label: label[key], value: '—', dot: 'unknown', aria: `${label[key]}: unknown, no screen answer`, title: m.status ? m.status.title || m.status.word : null };
+    const dot = key === 'tax' ? (b.tone === 'plain' ? 'clean' : 'risky') : b.state === 'present' ? 'risky' : b.state === 'absent' ? 'clean' : 'unknown';
+    return { key, label: b.label, value: b.value, dot, title: b.title, aria: b.aria };
+  });
+  return { ...m, chips, extra: m.badges.filter((b) => !CHIP_KEYS.includes(b.key)) };
 }
+
+function contractChipsEl(p) {
+  const m = contractChipModel(p.screening);
+  const first = m.items[0];
+  const pid = p.project_id;
+  let copy = null;
+  if (first && first.address) {
+    copy = h('button', { type: 'button', class: 'cc-copy quiet', 'aria-label': 'Copy contract address', title: first.address, dataset: { key: `copy-addr-${pid}` } }, icon('copy'));
+    copy.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(first.address);
+        copy.classList.add('done');
+        copy.setAttribute('aria-label', 'Copied');
+        copy.replaceChildren(h('span', null, 'Copied'));
+        setTimeout(() => { copy.classList.remove('done'); copy.setAttribute('aria-label', 'Copy contract address'); copy.replaceChildren(icon('copy')); }, 1500);
+      } catch (_) {
+        toast('Could not copy: the browser refused the clipboard.', 'bad');
+      }
+    };
+  }
+  return h('div', { class: 'cchips' },
+    h('div', { class: 'cc-line' },
+      h('span', { class: 'cc-k' }, 'Contract'),
+      first ? h('span', { class: 'cc-v', title: m.items.map((x) => `${x.label || 'chain?'}: ${x.address}`).join('\n') },
+        first.label ? h('span', { class: 'cc-chain' }, first.label) : null,
+        h('span', { class: 'mono' }, shortAddr(first.address)),
+        m.items.length > 1 ? h('span', { class: 'faint' }, ` +${m.items.length - 1}`) : null) : h('span', { class: 'cc-v', title: m.title }, m.text || '—'),
+      copy,
+      m.status ? h('span', { class: `cs-badge${m.status.tone === 'warn' ? ' warn' : ''}`, title: m.status.title }, m.status.word) : null,
+      m.age ? h('span', { class: `cs-age${m.stale ? ' stale' : ''}`, title: m.ageTitle, 'aria-label': `Screened by GoPlus ${m.age} ago${m.stale ? ', stale' : ''}` }, m.stale ? icon('clock') : null, h('span', { 'aria-hidden': 'true' }, `GoPlus ${m.age}`)) : null),
+    h('ul', { class: 'cc-chips', 'aria-label': 'Contract checks from GoPlus' },
+      m.chips.map((c) => h('li', { class: `cchip ${c.dot}`, title: c.title || null, 'aria-label': c.aria }, h('span', { class: 'cc-dot', 'aria-hidden': 'true' }), h('span', { class: 'cc-l', 'aria-hidden': 'true' }, c.label), h('span', { class: 'cc-val', 'aria-hidden': 'true' }, c.value))),
+      [...m.extra].sort((a, b) => badgeRank(a) - badgeRank(b)).map((b) => h('li', { class: 'cchip risky severe', title: b.title, 'aria-label': b.aria }, h('span', { class: 'cc-dot', 'aria-hidden': 'true' }), h('span', { class: 'cc-l', 'aria-hidden': 'true' }, b.label), b.value !== null ? h('span', { class: 'cc-val', 'aria-hidden': 'true' }, b.value) : null))));
+}
+
 
 // Links out, on the price line: the project's CoinGecko listing, DexScreener
 // and its official website, as small labeled pills. A link the desk does not hold
@@ -1441,18 +1465,20 @@ function headLinks(p) {
   const dex = dexLink(rowProject(p));
   const link = (cls, label, href, title, aria) => h('a', { class: `xlink ${cls}`, href, target: '_blank', rel: 'noopener noreferrer', title, 'aria-label': aria, dataset: { key: `x-${cls}-${p.project_id}` } }, label);
   return h('div', { class: 'ph-links' },
-    p.coingecko_id ? link('cg', 'CG', `https://www.coingecko.com/en/coins/${encodeURIComponent(p.coingecko_id)}`, `CoinGecko: ${p.coingecko_id}`, 'CoinGecko listing') : null,
-    dex ? link('dex', 'DexScreener', dex.href, dex.title, dex.aria) : null,
+    p.coingecko_id ? link('cg', [icon('ext'), h('span', null, 'CG')], `https://www.coingecko.com/en/coins/${encodeURIComponent(p.coingecko_id)}`, `CoinGecko: ${p.coingecko_id}`, 'CoinGecko listing') : null,
+    dex ? link('dex', [icon('ext'), h('span', null, 'DexScreener')], dex.href, dex.title, dex.aria) : null,
     web && host ? link('web', [icon('ext'), h('span', null, 'Web')], web, `Official website: ${host}`, `Official website, ${host}`) : null);
 }
 
-// On-chain fundamentals (activity, fees, revenue, TVL) need an on-chain data
-// source such as Artemis. None is connected, so the section says so and shows
-// no figures: nothing is estimated or taken from a model's report.
-// Fees and revenue come from DefiLlama (the tiles above); these do not yet.
+// On-chain fundamentals: DefiLlama's 30-day fees and revenue as saved, for a
+// project bound to a DefiLlama entity (a partial month is not a total), then
+// activity and TVL, which need an on-chain source such as Artemis: none is
+// connected, so they say so and show no figures. Nothing is estimated.
 const ONCHAIN = ['Daily active addresses', 'Transactions', 'TVL'];
 function onchainPart(p) {
+  const fund = (key, k) => { const x = fundamentalsTile(p.fundamentals, key); return h('div', { title: x.title }, h('dt', null, k), h('dd', { class: `fig${x.stale ? ' stale' : ''}` }, x.text || dash(k))); };
   return details('On-chain fundamentals', h('div', { class: 'small' },
+    defillamaBound(p.fundamentals) ? h('dl', { class: 'facts onchain' }, fund('fees', '30D fees (DefiLlama)'), fund('revenue', '30D revenue (DefiLlama)')) : null,
     h('p', { class: 'onchain-note' }, h('span', { class: 'chip info', title: 'No on-chain data source (such as Artemis) is set up; nothing is estimated' }, 'Not connected')),
     h('dl', { class: 'facts onchain' }, ONCHAIN.map((k) => h('div', null, h('dt', null, k), h('dd', null, dash(k)))))), { id: `insp-onchain-${p.project_id}` });
 }
@@ -1546,48 +1572,48 @@ function renderPanel(ctx, pid) {
   const m = mkt(p);
   const closeBtn = h('button', { type: 'button', class: 'close quiet', 'aria-label': `Close ${p.name} details`, title: 'Close (Esc)', dataset: { key: 'panel-close' } }, '✕');
   closeBtn.onclick = () => closePanel(ctx);
-  const reviewedBtn = button('Mark reviewed', null, { kind: 'small', key: 'panel-reviewed' });
-  reviewedBtn.onclick = async () => {
-    reviewedBtn.disabled = true;
-    try {
-      await ctx.api.post(`/api/projects/${encodeURIComponent(pid)}/reviewed`, {});
-      toast('Marked reviewed. New changes are counted from now.');
-      await ctx.refresh();
-    } catch (err) {
-      toast(err.message, 'bad');
-      reviewedBtn.disabled = false;
-    }
-  };
+  const reviewedBtn = button('Mark reviewed', null, { kind: 'small primary', key: 'panel-reviewed' });
+  reviewedBtn.setAttribute('aria-keyshortcuts', 'R');
+  reviewedBtn.title = 'Mark reviewed (R marks it and moves to the next project to review)';
+  reviewedBtn.onclick = () => markReviewed(ctx, p, { advance: false, button: reviewedBtn });
   const ch = p.changes || {};
   const heading = h('h2', { id: 'panel-title', tabindex: '-1', title: p.name }, h('span', { class: 'pt-name' }, p.name), p.symbol ? h('span', { class: 'pt-sym' }, p.symbol) : null);
   const reports = PROVIDERS.filter((x) => p.providers && p.providers[x] && !p.providers[x].needs_text).length;
+  const selRep = p.providers && p.providers[sel];
   const panel = h('aside', split
     ? { class: `panel${reopened ? ' entering' : ''}`, role: 'dialog', 'aria-modal': 'false', 'aria-labelledby': 'panel-title' }
     : { class: `panel${reopened ? ' entering' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'panel-title' },
     h('div', { class: 'panel-head' },
       // The name has the whole top row (it wraps, never cut short); the links
-      // out sit on the price line under it.
+      // out sit on the price line under it; then one row of four figures.
       h('div', { class: 'ph-row' }, logo(p, { size: 32 }),
         h('div', { class: 'names' }, heading),
         h('div', { class: 'ph-win' }, inspectorMenu(ctx, p), closeBtn)),
       h('div', { class: 'ph-sub' }, headMarket(p, ctx.state.index.freshness && ctx.state.index.freshness.market), headLinks(p)),
-      overviewStats(p),
-      h('div', { class: 'cstrip-slot' }, contractStripEl(p))),
-    h('div', { class: 'panel-body', 'data-keep-scroll': 'panel' },
-      // DEX liquidity, right under the contract line (views/dex.js).
-      h('div', { class: 'dex-slot', dataset: { slot: 'dex' } }, dexCard(ctx, rowProject(p))),
+      overviewStats(p)),
+    // Its scroll key names the project: the page's state restore (app.js)
+    // then puts a redraw of the same project back where it was, and never
+    // carries one project's place over to another.
+    h('div', { class: 'panel-body', 'data-keep-scroll': `panel:${pid}` },
       archivedBanner(ctx, p),
       problemLines(ctx, p),
+      // a–d: the verdict, its review items, the thesis, the category grades
+      // and the strongest risks, all for the selected model.
       h('section', { class: 'scorecard', 'aria-labelledby': 'insp-sec-scores' },
-        h('h3', { class: 'sec-title sec-scores', id: 'insp-sec-scores' }, 'Model scores'),
+        h('h3', { class: 'sec-title sec-scores', id: 'insp-sec-scores' }, 'Verdict'),
         modelTabs(ctx, p, sel),
         modelPanel(ctx, p, sel)),
-      h('section', { class: 'insp-thesis', 'aria-labelledby': 'insp-sec-thesis' },
-        h('h3', { class: 'sec-title', id: 'insp-sec-thesis' }, 'Thesis notes'),
-        h('div', { dataset: { slot: 'thesis' } }, skeleton('Loading the thesis notes'))),
+      // e: market structure: DEX liquidity, then the contract chips.
+      h('section', { class: 'insp-sec insp-market', 'aria-labelledby': 'insp-sec-market' },
+        h('h3', { class: 'sec-title', id: 'insp-sec-market' }, 'Market structure'),
+        h('div', { class: 'dex-slot', dataset: { slot: 'dex' } }, dexCard(ctx, rowProject(p))),
+        contractChipsEl(p)),
+      // f: everything else, folded.
       h('div', { class: 'insp-more' },
+        h('div', { class: 'chart-slot', dataset: { slot: 'chart' } }),
+        selRep ? details('Evidence and sources', h('div', { dataset: { slot: `evidence-${sel}` } }, skeleton('Loading the evidence checks')), { id: `insp-evd-${sel}` }) : null,
+        selRep ? details('Timing, risks and the report', timingFacts(ctx, p, sel), { id: `insp-timing-${sel}` }) : null,
         onchainPart(p),
-        h('div', { dataset: { slot: 'checks' } }),
         reports >= 2 ? details('Compare the models', h('div', null, comparisonNote(ctx, p), h('div', { dataset: { slot: 'compare' } })), { id: `insp-compare-${pid}` }) : null,
         m ? details('Market details', h('div', null,
           m.sparkline_7d ? h('div', { style: { margin: '4px 0 8px' } }, sparkline(m.sparkline_7d, { width: 300, height: 48, label: `${p.symbol || p.name} 7-day price` })) : null,
@@ -1599,11 +1625,19 @@ function renderPanel(ctx, pid) {
             ...vsBtcFacts(m),
             h('div', { class: 'wide' }, h('dt', null, 'Source'), h('dd', { class: 'small' }, `${m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Fictional demo data' : 'CoinGecko'} · as of ${fmtDateTime(m.as_of)}`)))), { id: `insp-market-${pid}` }) : null,
         details('Research details', h('div', null, researchProgress(ctx, p)), { id: `insp-research-${pid}` }),
-        h('div', { class: 'insp-review' },
-          alertStrips(splitAttention(projectItems(ctx, p)).rest, `previews-${pid}`),
-          h('p', { class: 'small' }, ch.item_count ? `${ch.item_count} change${ch.item_count === 1 ? '' : 's'} since ${ch.cursor_source === 'project created' ? 'the project was added' : `your last review (${fmtDateTime(ch.since)})`}${ch.new_reports ? `: ${ch.new_reports} new report(s)` : ''}${typeof ch.price_change_pct === 'number' ? `, price ${fmtSignedPct(ch.price_change_pct)}` : ''}.` : 'Nothing new since your last review.',
-            p.next_review ? h('span', { class: 'block muted' }, `Next review: ${fmtDate(p.next_review.date)}${p.next_review.overdue ? ' (overdue)' : ''}`) : null),
-          h('div', { class: 'btn-row' }, reviewedBtn, h('a', { class: 'small', href: `#/project/${encodeURIComponent(pid)}/history`, dataset: { key: `history-${pid}` } }, 'What changed'))))));
+        // The contract checks in full (the chips above are the summary).
+        h('div', { dataset: { slot: 'checks' } }),
+        selRep ? h('div', { class: 'btn-row insp-links' },
+          h('a', { class: 'btn small', href: `#/project/${encodeURIComponent(pid)}/scorecards?provider=${sel}`, dataset: { key: `scorecard-${pid}-${sel}` } }, 'Full scorecard')) : null)),
+    // The foot: what changed since your review, the report, Mark reviewed.
+    h('div', { class: 'panel-foot' },
+      h('p', { class: 'pf-sum', title: p.next_review ? `Next review: ${fmtDate(p.next_review.date)}${p.next_review.overdue ? ' (overdue)' : ''}` : null },
+        ch.item_count
+          ? [`${ch.item_count} change${ch.item_count === 1 ? '' : 's'} since ${ch.cursor_source === 'project created' ? 'added' : 'your last review'}`, h('span', { class: 'pf-dot', 'aria-hidden': 'true' }, '·'), h('a', { href: `#/project/${encodeURIComponent(pid)}/history`, dataset: { key: `history-${pid}` } }, 'What changed')]
+          : h('span', { class: 'pf-ok' }, 'Reviewed')),
+      h('div', { class: 'pf-act' },
+        selRep ? h('a', { class: 'btn small', href: `#/project/${encodeURIComponent(pid)}/reports?report=${encodeURIComponent(selRep.report_id)}`, dataset: { key: `report-${pid}-${sel}` } }, 'Open report') : null,
+        ch.item_count ? reviewedBtn : null)));
   // The slide-in runs once; the class goes when it ends.
   if (reopened) panel.addEventListener('animationend', () => panel.classList.remove('entering'), { once: true });
   panel.addEventListener('keydown', (e) => {
@@ -1635,6 +1669,12 @@ function renderPanel(ctx, pid) {
   }
   const opening = view.focusOnRender;
   if (!opening) restorePanel(panel, saved, { focus: true });
+  // Another project (a click, J/K, R, a link): its top. The same project
+  // redrawn (a price refresh, a new report): where you were.
+  if (reopened) {
+    const body = panel.querySelector('.panel-body');
+    if (body) body.scrollTop = 0;
+  }
   // Focus moves into the inspector only when you open it, never on a live refresh.
   if (view.focusTab) {
     const t = panel.querySelector(`#insp-tab-${view.focusTab}`);
@@ -1648,7 +1688,7 @@ function renderPanel(ctx, pid) {
     if (body && list) {
       const above = body.getBoundingClientRect().top - list.getBoundingClientRect().top;
       if (above > 0) body.scrollTop -= above + 8;
-      saved.scroll.panel = body.scrollTop;
+      saved.scroll[`panel:${pid}`] = body.scrollTop;
     }
   } else if (opening) {
     const target = view.focusProvider ? panel.querySelector(`#insp-tab-${view.focusProvider}`) : heading;
@@ -1686,6 +1726,64 @@ function showEmptyPane() {
   if (root.children.length === 1 && root.firstElementChild.classList.contains('panel-empty')) return;
   clear(root).appendChild(h('aside', { class: 'panel panel-empty', 'aria-label': 'Project inspector' },
     h('p', { class: 'pe-text' }, 'Select a project', h('span', { class: 'pe-sep', 'aria-hidden': 'true' }, '·'), h('kbd', null, 'J'), h('span', { 'aria-hidden': 'true' }, ' / '), h('kbd', null, 'K'), ' to move')));
+}
+
+// What R does with the selected project: mark it reviewed (only with changes
+// to review), offer Undo for six seconds, and move to the next project in the
+// list's order that has changes to review ("All caught up" when none).
+// Pure parts, for the tests.
+export const needsReview = (p) => Boolean(p && p.changes && p.changes.item_count > 0 && p.status !== 'archived');
+export function nextToReview(order, projects, pid) {
+  const byId = new Map(projects.map((x) => [x.project_id, x]));
+  const i = order.indexOf(pid);
+  for (let k = 1; k <= order.length; k++) {
+    const id = order[(i + k) % order.length];
+    if (id !== pid && needsReview(byId.get(id))) return id;
+  }
+  return null;
+}
+// R counts only as a plain key, outside fields, with no dialog or menu open,
+// on a project with something to review.
+export function reviewKeyAllowed(e, { busy = false, project = null } = {}) {
+  if (!e || (e.key !== 'r' && e.key !== 'R') || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return false;
+  if (busy) return false;
+  return needsReview(project);
+}
+
+async function markReviewed(ctx, p, { advance = false, button: btn = null } = {}) {
+  if (!needsReview(p)) return;
+  const pid = p.project_id;
+  const order = [...document.querySelectorAll('table.wl tbody tr[data-pid]')].map((tr) => tr.dataset.pid);
+  const next = advance ? nextToReview(order, ctx.state.index.projects, pid) : null;
+  if (btn) btn.disabled = true;
+  let out;
+  try {
+    out = await ctx.api.post(`/api/projects/${encodeURIComponent(pid)}/reviewed`, {});
+  } catch (err) {
+    toast(err.message, 'bad');
+    if (btn) btn.disabled = false;
+    return;
+  }
+  const res = (out && out.result) || {};
+  toast(`Marked ${p.name} reviewed`, '', {
+    ms: 6000,
+    action: {
+      label: 'Undo',
+      key: 'undo-review',
+      onClick: async () => {
+        await ctx.api.post(`/api/projects/${encodeURIComponent(pid)}/reviewed/undo`, { previous: res.previous === undefined ? null : res.previous, expect: res.reviewed_at });
+        toast(`${p.name}: review undone`);
+        await ctx.refresh();
+      },
+    },
+  });
+  if (advance) {
+    if (next) {
+      const name = document.querySelector(`[data-key="pname-${CSS.escape(next)}"]`);
+      openPanel(ctx, next, name, null, { peek: wide() });
+    } else toast('All caught up');
+  }
+  await ctx.refresh();
 }
 
 // After the inspector closes (its button, Escape, Back): focus returns to the
@@ -2124,6 +2222,16 @@ export function renderWatchlist(ctx, route) {
       // J / K: next and previous project (the inspector follows when open).
       if (onList && plain && !busy && (e.key === 'j' || e.key === 'k' || e.key === 'J' || e.key === 'K')) {
         if (stepProject(ctx, e.key.toLowerCase() === 'j' ? 1 : -1)) e.preventDefault();
+        return;
+      }
+      // R: mark the selected project reviewed and go to the next one to review.
+      if (onList && !typing(e.target) && (e.key === 'r' || e.key === 'R')) {
+        const pid = r.query.get('p');
+        const project = pid ? ctx.state.index.projects.find((x) => x.project_id === pid) : null;
+        if (reviewKeyAllowed(e, { busy: Boolean(busy), project })) {
+          e.preventDefault();
+          markReviewed(ctx, project, { advance: true });
+        }
         return;
       }
       // Space or Enter on a project's name toggles its inspector. Beside the

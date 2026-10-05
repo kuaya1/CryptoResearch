@@ -564,9 +564,33 @@ function updateProjectFields(ws, id, fields) {
 }
 
 // Your review cursor: "changes since my last review" are measured from here.
+// The cursor it replaced comes back with the result, so the page can offer to
+// undo this one step.
 function markReviewed(ws, id, { note = null } = {}) {
   return mutateProject(ws, id, 'mark_reviewed', `Reviewed ${id}`, (p) => {
+    const previous = p.review && typeof p.review === 'object' ? { last_reviewed_at: p.review.last_reviewed_at || null, note: p.review.note || null } : null;
     p.review = { last_reviewed_at: new Date().toISOString(), note: note || null };
+    return { previous, reviewed_at: p.review.last_reviewed_at };
+  });
+}
+
+// Undo of one mark-reviewed: puts back the cursor it replaced (the same
+// field, the same shape; nothing else changes), and only while the cursor is
+// still the one that mark set, so a later review is never undone.
+function restoreReview(ws, id, { previous = null, expect = null } = {}) {
+  if (typeof expect !== 'string' || Number.isNaN(Date.parse(expect))) throw new OpError('INVALID', 'Undo needs the review time it undoes.');
+  let restore = null;
+  if (previous !== null) {
+    if (typeof previous !== 'object' || Array.isArray(previous)) throw new OpError('INVALID', 'The earlier review is an object or null.');
+    const at = previous.last_reviewed_at === undefined ? null : previous.last_reviewed_at;
+    if (at !== null && (typeof at !== 'string' || Number.isNaN(Date.parse(at)) || Date.parse(at) > Date.parse(expect))) throw new OpError('INVALID', 'The earlier review time must be a time before the review it undoes.');
+    restore = { last_reviewed_at: at, note: typeof previous.note === 'string' ? previous.note.slice(0, 2000) : null };
+  }
+  return mutateProject(ws, id, 'restore_review', `Undo review ${id}`, (p) => {
+    const current = p.review && p.review.last_reviewed_at;
+    if (current !== expect) throw new OpError('CONFLICT', 'The review mark changed since; nothing was undone.');
+    p.review = restore;
+    return { restored: restore };
   });
 }
 
@@ -597,6 +621,7 @@ module.exports = {
   restoreProject,
   updateProjectFields,
   markReviewed,
+  restoreReview,
   generatePrompts,
   mutateProject,
   requireProjectId,
