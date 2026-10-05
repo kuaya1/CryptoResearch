@@ -492,6 +492,39 @@ export function priceSpark(values, change, { width = 135, height = 36, label = '
     svg('path', { d, 'stroke-width': '1.75', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
 }
 
+// The list's 30-day chart: daily closes from this desk's own observations
+// (core/market.js priceHistory30d), placed on a true 30-day time axis, so a
+// short history sits at the right end and the days before it, not on record,
+// stay empty (never stretched, never filled in). Green when the line ends at
+// or above where it starts, red when below; a faint dashed line with fewer
+// than two days on record. The label and title say the change, the dates and
+// how many of the 30 days are on record.
+export function historySpark(series, { width = 112, height = 36, pad = 3, label = '30-day price' } = {}) {
+  const span = series && series.span_days > 0 ? series.span_days : 30;
+  const pts = series && Array.isArray(series.points) ? series.points.filter((p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]) && p[1] > 0) : [];
+  const attrs = { class: 'pspark', width: String(width), height: String(height), viewBox: `0 0 ${width} ${height}`, fill: 'none' };
+  const covered = series && Number.isInteger(series.covered_days) ? series.covered_days : pts.length;
+  const range = series && series.from ? (series.from === series.to ? ` (${series.from})` : ` (${series.from} to ${series.to})`) : '';
+  if (pts.length < 2) {
+    const why = covered ? `${covered} of ${span} days on record${range}; a chart needs two` : 'no stored price history yet';
+    return svg('svg', { ...attrs, class: 'pspark none', role: 'img', 'aria-label': `${label}: ${why}` }, svg('title', {}, `${label}: ${why}`),
+      svg('line', { x1: '1', y1: String(height / 2), x2: String(width - 1), y2: String(height / 2), 'stroke-width': '1.5', 'stroke-dasharray': '3 4', 'stroke-linecap': 'round' }));
+  }
+  let min = Infinity;
+  let max = -Infinity;
+  for (const [, v] of pts) { if (v < min) min = v; if (v > max) max = v; }
+  const rng = max - min;
+  const x = (t) => 1 + (Math.max(0, Math.min(span, t)) / span) * (width - 2);
+  const y = (v) => (rng ? height - pad - ((v - min) / rng) * (height - 2 * pad) : height / 2);
+  let d = '';
+  pts.forEach(([t, v], i) => { d += `${i ? 'L' : 'M'}${x(t).toFixed(1)} ${y(v).toFixed(1)}`; });
+  const change = (pts[pts.length - 1][1] / pts[0][1] - 1) * 100;
+  const up = change >= 0;
+  const words = `${label}, daily closes from this desk's own records: ${up ? 'up' : 'down'} ${Math.abs(change).toFixed(2)} percent over ${covered} of ${span} days on record${range}`;
+  return svg('svg', { ...attrs, class: `pspark ${up ? 'up' : 'down'}`, role: 'img', 'aria-label': words }, svg('title', {}, words),
+    svg('path', { d, 'stroke-width': '1.75', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+}
+
 // A project's logo: CoinGecko's own image, fetched and cached by this desk
 // (the page never calls an outside image host). Without one, or while it
 // loads, a monogram on one of six soft tones, chosen from the project ID so
