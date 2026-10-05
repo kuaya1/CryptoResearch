@@ -39,7 +39,7 @@
   border-radius: var(--r-sm);
   background: var(--pill-warn-bg);
   color: var(--pill-warn-ink);
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 10px;
   font-weight: 500;
   line-height: 18px;

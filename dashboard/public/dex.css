@@ -6,7 +6,7 @@
 .ph-dex { display: inline-flex; }
 .dex-slot:empty { display: none; }
 
-.dexc { container-type: inline-size; margin: 10px 0 6px; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-md); font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+.dexc { container-type: inline-size; margin: 10px 0 6px; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-md); font-family: var(--sans); font-variant-numeric: tabular-nums lining-nums; font-size: 12px; color: var(--text-2); }
 /* The drawer's section rule (padding 16px 0, a bottom rule) would win over
    .dexc: the card keeps its own box. */
 .panel section.dexc { padding: 10px; border-bottom: 1px solid var(--border); }

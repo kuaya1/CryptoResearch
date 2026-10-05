@@ -311,6 +311,66 @@ test('inspector: opens on a calculated grade, then any saved report, then Claude
   assert.match(css, /\.cbar\.unknown \{[^}]*background: transparent;[^}]*dashed/, 'an unknown category is an empty dashed track, never a zero');
 });
 
+test('one formatter for the list and the inspector: the same row reads the same in both; two decimals for every change', async () => {
+  const { wl, ui } = await mods;
+  const row = { price_usd: 0.41274, change_24h_pct: 0.857, change_7d_pct: -12.5, change_30d_pct: 0, market_cap_usd: 412.3e6, volume_24h_usd: 18.61e6, fdv_usd: 498e6 };
+  const s = wl.marketStrings(row);
+  assert.equal(s.change24h, '+0.86%', 'not "0.86%" in one place and "+0.9%" in the other');
+  assert.equal(s.change7d, '−12.50%');
+  assert.equal(s.change30d, '0.00%');
+  assert.equal(s.price, ui.fmtPrice(0.41274));
+  assert.equal(s.mcap, '$412.30M');
+  assert.equal(s.fdvMc, '1.21×', 'FDV / MC from the two values shown');
+  assert.equal(wl.marketStrings({ ...row, market_cap_usd: null }).fdvMc, null, 'no market cap, no ratio');
+  assert.equal(ui.fmtChangePct(null), null);
+  // Both views draw their figures from marketStrings and the shared formatters, never their own.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'watchlist.js'), 'utf8');
+  const body = (name) => src.slice(src.indexOf(`function ${name}(`), src.indexOf('\n}\n', src.indexOf(`function ${name}(`)));
+  assert.match(body('cellFor'), /marketStrings\(m\)\.mcap/);
+  assert.match(body('deltaCell'), /fmtChangePct\(n\)/);
+  assert.match(body('headMarket'), /marketStrings\(m\)/);
+  assert.doesNotMatch(body('headMarket'), /fmtSignedPct|toFixed\(1\)\}%/);
+  assert.doesNotMatch(src, /cmcCompact/);
+});
+
+test('price clock: the drawer reads the bar\'s refresh time when that refresh stored the price, and says so when it kept an older one', async () => {
+  const { wl } = await mods;
+  const now = Date.now();
+  const iso = (msAgo) => new Date(now - msAgo).toISOString();
+  const same = wl.priceClock(iso(10000), iso(10000));
+  assert.equal(same.kept, false);
+  assert.equal(same.text, 'just now');
+  const kept = wl.priceClock(iso(6 * 60000), iso(10000));
+  assert.equal(kept.kept, true);
+  assert.equal(kept.text, 'Not refreshed · 6 min ago', 'an older stored price is labeled, never shown as the bar\'s time');
+  assert.equal(wl.priceClock(null, iso(10000)).text, 'just now');
+});
+
+test('breadth is labeled with what it counts: n of N over 30 days', async () => {
+  const { wl } = await mods;
+  const b = wl.breadthWords({ beating_btc: 57, counted: 74, share_pct: 77 });
+  assert.equal(b.text, '57 of 74 beat BTC');
+  assert.equal(b.window, '30d');
+  assert.match(b.title, /100 largest by CoinGecko market cap/);
+  assert.equal(wl.breadthWords(null), null);
+});
+
+test('static: no CoinMarketCap tokens or colors, no "Inter", the serif only on the wordmark', () => {
+  const dir = path.join(__dirname, '..', 'public');
+  const files = [];
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (/\.(css|js|html)$/.test(e.name)) files.push(p); } };
+  walk(dir);
+  const all = files.map((f) => [path.relative(dir, f), fs.readFileSync(f, 'utf8')]);
+  for (const [f, s] of all) {
+    assert.doesNotMatch(s, /--cmc-/, `${f}: a --cmc- token`);
+    assert.doesNotMatch(s, /#16c784|#ea3943|#0d1421|#58667e|#eff2f5/i, `${f}: a CoinMarketCap color`);
+    assert.doesNotMatch(s, /font-family:[^;]*\bInter\b/, `${f}: Inter in a font stack`);
+  }
+  const css = all.filter(([f]) => f.endsWith('.css')).map(([, s]) => s).join('\n');
+  const serif = css.split('\n').filter((l) => l.includes('var(--font-serif)'));
+  assert.deepEqual(serif.map((l) => l.trim().split(' {')[0]), ['.brand'], 'the serif is the wordmark\'s alone');
+});
+
 test('status strip and header: figures step aside in order (breadth last), every step has a rule; four tiles sit in one row', async () => {
   const { wl } = await mods;
   assert.equal(wl.STRIP_FIT[wl.STRIP_FIT.length - 1], 'ss-fit-breadth', 'market breadth is the last figure to go');
@@ -498,14 +558,14 @@ test('7-day chart: one path scaled to its box, thinned to a cap, flat through th
   assert.ok(thin.endsWith(`${(135 - 1).toFixed(1)} ${thin.split(' ').pop()}`), 'the last point is kept at the right edge');
 });
 
-test('the list in the CoinMarketCap style: compact USD with two decimals; saved columns from before start from the new layout', async () => {
-  const { wl } = await mods;
-  assert.equal(wl.cmcCompact(1.71e12), '$1.71T');
-  assert.equal(wl.cmcCompact(329.66e9), '$329.66B');
-  assert.equal(wl.cmcCompact(920e6), '$920.00M');
-  assert.equal(wl.cmcCompact(595620), '$595.62K');
-  assert.equal(wl.cmcCompact(12.5), '$12.50');
-  assert.equal(wl.cmcCompact(null), null);
+test('the list\'s market figures: compact USD with two decimals (the shared formatter); saved columns from before start from the new layout', async () => {
+  const { wl, ui } = await mods;
+  assert.equal(ui.fmtMarketUsd(1.71e12), '$1.71T');
+  assert.equal(ui.fmtMarketUsd(329.66e9), '$329.66B');
+  assert.equal(ui.fmtMarketUsd(920e6), '$920.00M');
+  assert.equal(ui.fmtMarketUsd(595620), '$595.62K');
+  assert.equal(ui.fmtMarketUsd(12.5), '$12.50');
+  assert.equal(ui.fmtMarketUsd(null), null);
   const store = (saved) => ({ ui: { get: () => saved, set: () => {} } });
   const old = wl.prefs(store({ v: 2, columns: ['rank', 'price', 'sector', 'research'], sort: { key: 'mcap', dir: 'desc' }, filters: { owned: 'all' } }));
   assert.deepEqual(old.columns, ['rank', 'price', 'change24h', 'change7d', 'change30d', 'mcap', 'volume', 'spark', 'research'], 'the CMC order');

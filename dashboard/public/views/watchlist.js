@@ -12,7 +12,7 @@ import {
   h, clear, button, select, input, changeCell, sparkline, priceSpark, logo, gradeBadge, badgeInfo, verdictChip,
   fmtPrice, fmtCompactUsd, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, fmtSignedPct, freshnessText, priceStatus, stateText, toast, announce,
   followedCount, researchState, withheldReason, unscoredList, jobKey, icon, evidenceLevel, evidenceText, gradeGauge, coverageMeter,
-  withheldLabel, structureNotes, details, onHoldOf, copyText, anchorText, fmtRelDay,
+  withheldLabel, structureNotes, details, onHoldOf, copyText, anchorText, fmtRelDay, fmtChangePct, fmtMarketUsd,
   PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT,
 } from '../ui.js';
 import { openAddProjectDialog, openResearchDialog, openSectorDialog, waitingActions } from './dialogs.js';
@@ -188,23 +188,33 @@ function noPriceReason(p) {
   return null;
 }
 
-// A change in the CoinMarketCap way: a small caret and the size, two
-// decimals, no sign; the words for a screen reader.
+// A change: the shared signed percent with two decimals (fmtChangePct), the
+// same string the inspector shows; the words for a screen reader.
 function deltaCell(n, label) {
-  if (n === null || n === undefined || Number.isNaN(n)) return dash(`${label} change`);
+  const text = fmtChangePct(n);
+  if (text === null) return dash(`${label} change`);
   const dir = n > 0 ? 'up' : n < 0 ? 'down' : 'flat';
   return h('span', { class: `dl ${dir}` },
-    h('span', { class: 'caret', 'aria-hidden': 'true' }, n < 0 ? '▼' : '▲'),
-    h('span', { 'aria-hidden': 'true' }, `${Math.abs(n).toFixed(2)}%`),
-    h('span', { class: 'sr-only' }, `${dir} ${Math.abs(n).toFixed(2)} percent, ${label}`));
+    h('span', { 'aria-hidden': 'true' }, text),
+    h('span', { class: 'sr-only' }, `${dir === 'flat' ? 'unchanged' : dir} ${Math.abs(n).toFixed(2)} percent, ${label}`));
 }
 
-// Market cap and volume as CoinMarketCap shows them: two decimals and a unit.
-export function cmcCompact(n) {
-  if (typeof n !== 'number' || !Number.isFinite(n)) return null;
-  const abs = Math.abs(n);
-  const unit = [[1e12, 'T'], [1e9, 'B'], [1e6, 'M'], [1e3, 'K']].find(([v]) => abs >= v);
-  return `${n < 0 ? '−' : ''}$${unit ? (abs / unit[0]).toFixed(2) : abs.toFixed(2)}${unit ? unit[1] : ''}`;
+// The strings the list and the inspector show for one market row, from the
+// same formatters, so a value reads the same in both. Pure, for the tests.
+export function marketStrings(m) {
+  if (!m) return null;
+  const ratio = typeof m.fdv_usd === 'number' && typeof m.market_cap_usd === 'number' && m.market_cap_usd > 0 ? m.fdv_usd / m.market_cap_usd : null;
+  return {
+    price: fmtPrice(m.price_usd),
+    change24h: fmtChangePct(m.change_24h_pct),
+    change7d: fmtChangePct(m.change_7d_pct),
+    change30d: fmtChangePct(m.change_30d_pct),
+    mcap: fmtMarketUsd(m.market_cap_usd),
+    volume: fmtMarketUsd(m.volume_24h_usd),
+    fdv: fmtMarketUsd(m.fdv_usd),
+    // FDV over market cap: the only derived figure, from the two values shown.
+    fdvMc: ratio === null || !Number.isFinite(ratio) ? null : `${ratio.toFixed(2)}×`,
+  };
 }
 
 // The 7-day chart, kept per project and price observation, so a live redraw
@@ -272,10 +282,10 @@ function cellFor(ctx, col, p) {
     case 'change7d': return m ? deltaCell(m.change_7d_pct, 'over 7 days') : dash('7-day change');
     case 'change30d': return m ? deltaCell(m.change_30d_pct, 'over 30 days') : dash('30-day change');
     case 'spark': return sparkCell(p, m);
-    case 'mcap': return m && typeof m.market_cap_usd === 'number' ? h('span', { class: 'num', title: fmtPrice(m.market_cap_usd) }, cmcCompact(m.market_cap_usd)) : dash('Market cap');
+    case 'mcap': return m && typeof m.market_cap_usd === 'number' ? h('span', { class: 'num', title: fmtPrice(m.market_cap_usd) }, marketStrings(m).mcap) : dash('Market cap');
     case 'mcapChange': return m ? deltaCell(m.market_cap_change_24h_pct, 'market cap over 24 hours') : dash('Market-cap change');
-    case 'fdv': return m && typeof m.fdv_usd === 'number' ? h('span', { class: 'num' }, cmcCompact(m.fdv_usd)) : dash('FDV');
-    case 'volume': return m && typeof m.volume_24h_usd === 'number' ? h('span', { class: 'num' }, cmcCompact(m.volume_24h_usd)) : dash('Volume');
+    case 'fdv': return m && typeof m.fdv_usd === 'number' ? h('span', { class: 'num' }, marketStrings(m).fdv) : dash('FDV');
+    case 'volume': return m && typeof m.volume_24h_usd === 'number' ? h('span', { class: 'num' }, marketStrings(m).volume) : dash('Volume');
     case 'volChange': return m && typeof m.volume_change_24h_pct === 'number' ? deltaCell(m.volume_change_24h_pct, 'volume') : h('span', { class: 'unknown', title: m ? m.volume_change_basis || '' : 'No market data' }, h('span', { 'aria-hidden': 'true' }, '—'), h('span', { class: 'sr-only' }, 'Volume change unknown'));
     case 'sector': return p.sector ? h('button', { type: 'button', class: 'chip', dataset: { key: `sector-${p.project_id}` }, 'aria-label': `Sector: ${p.sector.label}. Change sector`, title: 'Your label; change it here', onclick: (e) => { e.stopPropagation(); openSectorDialog(ctx, p); } }, p.sector.label) : dash('Sector');
     case 'lastResearch': return p.last_report_at ? h('span', { class: 'num', title: 'Latest report analysis date' }, fmtDate(p.last_report_at)) : dash('Last research');
@@ -302,7 +312,7 @@ function mktSummaryCell(p) {
   const reason = noPriceReason(p);
   const m = mkt(p);
   if (reason || !m) return h('div', { class: 'mkt-summary' }, h('span', { class: 'none' }, reason || 'No price'));
-  return h('div', { class: 'mkt-summary' }, h('span', { class: 'price' }, fmtPrice(m.price_usd)), changeCell(m.change_7d_pct, { label: 'over 7 days' }), m.status !== 'fresh' ? h('span', { class: 'price-note' }, freshnessText(m.status, m.age_minutes).text) : null);
+  return h('div', { class: 'mkt-summary' }, h('span', { class: 'price' }, fmtPrice(m.price_usd)), deltaCell(m.change_7d_pct, 'over 7 days'), m.status !== 'fresh' ? h('span', { class: 'price-note' }, freshnessText(m.status, m.age_minutes).text) : null);
 }
 
 // A phone shows identity, price and the three models; the rest of the row is
@@ -314,8 +324,8 @@ function secondaryFacts(ctx, p) {
     h('summary', null, 'Market details'),
     h('dl', null,
       f('Rank', cellFor(ctx, 'rank', p)),
-      f('24H', m ? changeCell(m.change_24h_pct, { label: 'over 24 hours' }) : dash('24-hour change')),
-      f('30D', m ? changeCell(m.change_30d_pct, { label: 'over 30 days' }) : dash('30-day change')),
+      f('24H', m ? deltaCell(m.change_24h_pct, 'over 24 hours') : dash('24-hour change')),
+      f('30D', m ? deltaCell(m.change_30d_pct, 'over 30 days') : dash('30-day change')),
       f('Market cap', cellFor(ctx, 'mcap', p)),
       f('FDV', cellFor(ctx, 'fdv', p)),
       f('Volume, 24h', cellFor(ctx, 'volume', p)),
@@ -358,7 +368,7 @@ function fitColumns(root) {
 // has (the inspector open, a narrower window), the least needed figures step
 // aside in this order, and their values stay in each part's details. Market
 // breadth goes last; only after it does the strip wrap. A phone wraps by design.
-export const STRIP_FIT = ['ss-fit-kinds', 'ss-fit-models', 'ss-fit-total', 'ss-fit-refresh', 'ss-fit-tight', 'ss-fit-bar', 'ss-fit-chg', 'ss-fit-breadth'];
+export const STRIP_FIT = ['ss-fit-kinds', 'ss-fit-total', 'ss-fit-refresh', 'ss-fit-tight', 'ss-fit-bar', 'ss-fit-chg', 'ss-fit-breadth'];
 
 function fitStrip(strip) {
   if (!strip || !strip.isConnected) return;
@@ -643,28 +653,40 @@ function startCountdown() {
   view.countdown = setInterval(tick, 1000);
 }
 
-// Bitcoin and the market in one run of figures: price and 7-day change,
-// dominance, total market cap and its 24-hour change, and how many large
-// coins beat Bitcoin over 30 days. Only what the captured snapshot holds.
+// Bitcoin and the market in one run of figures: BTC's price and its 7-day
+// change, dominance, and the total market cap with its 24-hour change. The
+// snapshot holds no 24-hour change for BTC, so each change names its window.
+// Only what the captured snapshot holds.
 function marketFigures(snap, mc) {
   const demo = snap.provider === 'fictional-demo';
-  const sep = () => h('span', { class: 'ss-sep', 'aria-hidden': 'true' });
+  const dot = () => h('span', { class: 'ss-dot', 'aria-hidden': 'true' }, '·');
   const dom = snap.dominance && typeof snap.dominance.btc_pct === 'number' ? snap.dominance.btc_pct : null;
   const tm = snap.total_market || {};
-  const b30 = snap.breadth && snap.breadth.d30;
-  const breadth = b30 && typeof b30.share_pct === 'number'
-    ? h('span', { class: 'breadth', title:`${b30.beating_btc} of ${b30.counted} large coins rose more than Bitcoin over 30 days` }, h('span', { class: 'breadth-bar', 'aria-hidden': 'true' }, h('span', { style: { width: `${Math.max(0, Math.min(100, b30.share_pct))}%` } })), h('span', { class: 'fig' }, `${b30.beating_btc}/${b30.counted}`), h('span', { class: 'k' }, 'beat BTC'))
-    : null;
+  const chg = (n, win, label) => {
+    const s = fmtChangePct(n);
+    return s ? h('span', { class: `m-chg ${n < 0 ? 'down' : n > 0 ? 'up' : 'flat'}` }, h('span', { class: 'chg fig', 'aria-hidden': 'true' }, s), h('span', { class: 'k', 'aria-hidden': 'true' }, win), h('span', { class: 'sr-only' }, `${s.replace('−', 'minus ')} ${label}`)) : null;
+  };
   return [
     h('span', { class: 'k' }, demo ? 'BTC (demo)' : 'BTC'),
     h('span', { class: 'v fig' }, `$${Math.round(snap.bitcoin.price_usd).toLocaleString('en-US')}`),
-    h('span', { class: 'm-chg' }, changeCell(snap.bitcoin.change_7d_pct, { label: 'Bitcoin over 7 days' }), h('span', { class: 'k' }, '7D')),
-    dom !== null ? [sep(), h('span', { class: 'k', title: 'Bitcoin dominance: its share of the total crypto market cap (CoinGecko /global)' }, 'Dom'), h('span', { class: 'v fig' }, `${dom.toFixed(1)}%`)] : null,
-    typeof tm.market_cap_usd === 'number' ? h('span', { class: 'm-total' }, sep(), h('span', { class: 'k', title: 'Total crypto market cap (CoinGecko /global)' }, 'Total'), h('span', { class: 'v fig' }, fmtCompactUsd(tm.market_cap_usd)),
-      typeof tm.market_cap_change_24h_pct === 'number' ? h('span', { class: 'm-chg' }, changeCell(tm.market_cap_change_24h_pct, { label: 'total market cap over 24 hours' }), h('span', { class: 'k' }, '24h')) : null) : null,
-    breadth ? h('span', { class: 'm-breadth' }, sep(), breadth) : null,
+    chg(snap.bitcoin.change_7d_pct, '7d', 'over 7 days'),
+    dom !== null ? [dot(), h('span', { class: 'k', title: 'Bitcoin dominance: its share of the total crypto market cap (CoinGecko /global)' }, 'Dom'), h('span', { class: 'v fig' }, `${dom.toFixed(1)}%`)] : null,
+    typeof tm.market_cap_usd === 'number' ? h('span', { class: 'm-total' }, dot(), h('span', { class: 'k', title: 'Total crypto market cap (CoinGecko /global)' }, 'Total'), h('span', { class: 'v fig' }, fmtMarketUsd(tm.market_cap_usd)),
+      chg(tm.market_cap_change_24h_pct, '24h', 'total market cap over 24 hours')) : null,
     mc.status === 'stale' ? h('span', { class: 'warn-word' }, 'stale') : null,
   ];
+}
+
+// Breadth over 30 days, as the snapshot computes it: of the 100 largest coins
+// by CoinGecko market cap, less Bitcoin, stablecoins and other pegged, gold-
+// backed, tokenized-fund and wrapped tokens, how many rose more than BTC.
+export function breadthWords(b30) {
+  if (!b30 || typeof b30.beating_btc !== 'number' || typeof b30.counted !== 'number') return null;
+  return {
+    text: `${b30.beating_btc} of ${b30.counted} beat BTC`,
+    window: '30d',
+    title: `${b30.beating_btc} of the ${b30.counted} counted coins rose more than Bitcoin over 30 days. Counted: the 100 largest by CoinGecko market cap, less Bitcoin, stablecoins and other pegged, gold-backed, tokenized-fund and wrapped tokens.`,
+  };
 }
 
 // ---- project inspector ------------------------------------------------------------
@@ -1183,20 +1205,36 @@ function inspectorMenu(ctx, p) {
   return h('div', { class: 'insp-more-wrap' }, btn, list);
 }
 
+// The time a price line shows. The status bar shows when prices were last
+// refreshed; a project's price was stored by that refresh, or kept from an
+// earlier one when the refresh did not update it (not returned, invalid, or
+// older than the stored price). Same refresh: the bar's own time, so the two
+// never disagree. Kept: said so, with its own time. Pure, for the tests.
+export function priceClock(assetFetchedAt, lastRefreshAt) {
+  const a = Date.parse(assetFetchedAt || '');
+  const r = Date.parse(lastRefreshAt || '');
+  if (Number.isNaN(a)) return { text: Number.isNaN(r) ? null : fmtAgo(lastRefreshAt), kept: false };
+  if (Number.isNaN(r) || a >= r - 60000) return { text: fmtAgo(Number.isNaN(r) ? assetFetchedAt : lastRefreshAt), kept: false };
+  return { text: `Not refreshed · ${fmtAgo(assetFetchedAt)}`, kept: true };
+}
+
 // The price row under the name: the price, its 24-hour change as a pill and
 // how fresh it is; missing data says why.
-function headMarket(p) {
+function headMarket(p, freshness = null) {
   const m = mkt(p);
   if (!m) return h('div', { class: 'ph-price none' }, h('span', { class: 'hm-none' }, `No price: ${(noPriceReason(p) || 'unknown').toLowerCase()}`));
   const f = freshnessText(m.status, m.age_minutes);
   const fresh = m.status === 'fresh';
   const c = m.change_24h_pct;
+  const s = marketStrings(m);
+  const clock = priceClock(m.fetched_at, freshness && freshness.last_success_at);
+  const source = m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Fictional demo data' : `Source: ${m.source || 'CoinGecko'}`;
   return h('div', { class: 'ph-price' },
-    h('span', { class: 'hm-price fig' }, fmtPrice(m.price_usd)),
-    typeof c === 'number' ? h('span', { class: `hm-delta fig ${c < 0 ? 'down' : 'up'}`, title: 'Price change over 24 hours' },
-      h('span', { 'aria-hidden': 'true' }, `${c < 0 ? '▼' : '▲'} ${fmtSignedPct(c, 1)}`),
-      h('span', { class: 'sr-only' }, `${c < 0 ? 'down' : 'up'} ${Math.abs(c).toFixed(1)} percent over 24 hours`)) : null,
-    h('span', { class: `hm-fresh ${fresh ? 'ok' : 'warn'}`, title: `${m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Fictional demo data' : `Source: ${m.source || 'CoinGecko'}`}, as of ${fmtDateTime(m.as_of)}` }, fresh ? fmtAgo(m.fetched_at || m.as_of) : f.text));
+    h('span', { class: 'hm-price fig' }, s.price),
+    s.change24h ? h('span', { class: `hm-delta fig ${c < 0 ? 'down' : 'up'}`, title: 'Price change over 24 hours' },
+      h('span', { 'aria-hidden': 'true' }, s.change24h),
+      h('span', { class: 'sr-only' }, `${c < 0 ? 'down' : c > 0 ? 'up' : 'unchanged'} ${Math.abs(c).toFixed(2)} percent over 24 hours`)) : null,
+    h('span', { class: `hm-fresh ${fresh && !clock.kept ? 'ok' : 'warn'}`, title: `${source}, as of ${fmtDateTime(m.as_of)}${clock.kept ? `. The last price refresh (${fmtAgo(freshness.last_success_at)}) did not update this asset, so its last valid price is kept.` : ''}` }, fresh ? clock.text || fmtAgo(m.fetched_at || m.as_of) : f.text));
 }
 
 // One of DefiLlama's 30-day totals for a tile, as saved (never fetched here):
@@ -1222,7 +1260,7 @@ export function fundamentalsTile(f, key) {
 function overviewStats(p) {
   const m = mkt(p);
   const demo = m && m.rank_source_label && /fictional/i.test(m.rank_source_label);
-  const usd = (v, label) => (m && typeof v === 'number' ? fmtCompactUsd(v) : dash(label));
+  const usd = (v, label) => (m && typeof v === 'number' ? fmtMarketUsd(v) : dash(label));
   const stat = (k, v, title = null, cls = '') => h('div', { class: `ov-stat${cls ? ` ${cls}` : ''}`, title }, h('dt', null, k), h('dd', { class: 'fig' }, v));
   const fund = (key, k) => { const x = fundamentalsTile(p.fundamentals, key); return stat(k, x.text || dash(k), x.title, x.stale ? 'stale' : ''); };
   // DefiLlama's 30-day fees and revenue only for a project bound to a
@@ -1513,7 +1551,7 @@ function renderPanel(ctx, pid) {
       h('div', { class: 'ph-row' }, logo(p, { size: 32 }),
         h('div', { class: 'names' }, heading),
         h('div', { class: 'ph-win' }, inspectorMenu(ctx, p), closeBtn)),
-      h('div', { class: 'ph-sub' }, headMarket(p), headLinks(p)),
+      h('div', { class: 'ph-sub' }, headMarket(p, ctx.state.index.freshness && ctx.state.index.freshness.market), headLinks(p)),
       overviewStats(p),
       h('div', { class: 'cstrip-slot' }, contractStripEl(p))),
     h('div', { class: 'panel-body', 'data-keep-scroll': 'panel' },
@@ -1535,10 +1573,10 @@ function renderPanel(ctx, pid) {
         m ? details('Market details', h('div', null,
           m.sparkline_7d ? h('div', { style: { margin: '4px 0 8px' } }, sparkline(m.sparkline_7d, { width: 300, height: 48, label: `${p.symbol || p.name} 7-day price` })) : null,
           h('dl', { class: 'facts' },
-            h('div', null, h('dt', null, '7D, rolling'), h('dd', null, changeCell(m.change_7d_pct, { label: 'over 7 days' }))),
-            h('div', null, h('dt', null, '30D, rolling'), h('dd', null, changeCell(m.change_30d_pct, { label: 'over 30 days' }))),
+            h('div', null, h('dt', null, '7D, rolling'), h('dd', null, deltaCell(m.change_7d_pct, 'over 7 days'))),
+            h('div', null, h('dt', null, '30D, rolling'), h('dd', null, deltaCell(m.change_30d_pct, 'over 30 days'))),
             h('div', null, h('dt', null, m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Rank (demo data)' : 'Rank (CoinGecko)'), h('dd', null, m.market_cap_rank ? `#${m.market_cap_rank}` : 'Unranked')),
-            h('div', null, h('dt', null, 'FDV'), h('dd', null, fmtCompactUsd(m.fdv_usd))),
+            h('div', null, h('dt', null, 'FDV'), h('dd', null, fmtMarketUsd(m.fdv_usd) || dash('FDV'))),
             ...vsBtcFacts(m),
             h('div', { class: 'wide' }, h('dt', null, 'Source'), h('dd', { class: 'small' }, `${m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Fictional demo data' : 'CoinGecko'} · as of ${fmtDateTime(m.as_of)}`)))), { id: `insp-market-${pid}` }) : null,
         details('Research details', h('div', null, researchProgress(ctx, p)), { id: `insp-research-${pid}` }),
@@ -1886,10 +1924,11 @@ export function renderWatchlist(ctx, route) {
       h('div', { class: 'actions' }, h('a', { class: 'btn', href: '#/new', dataset: { key: 'new-research' } }, 'New research'), addBtn));
   }
 
-  // The status strip: one compact line under the title. Prices, with a
-  // rate-limit badge and its countdown beside Refresh; Bitcoin and the market
-  // in one run of figures (only with a captured snapshot); each model's
-  // route; then what needs action and the review queue. Each part opens its
+  // The status strip: one compact line under the title, in three groups with
+  // one kind of separator: [prices, with a rate-limit badge and its countdown
+  // beside Refresh] | [Bitcoin and the market, only with a captured snapshot]
+  // | [breadth over 30 days, what needs action, the review queue]. The
+  // models' routes are in Settings and each model's tab. Each part opens its
   // details below. What needs action (a call that may have been billed,
   // failed or stalled research, saving blocked) is always named in the strip
   // in words, never folded into a count alone.
@@ -1906,32 +1945,45 @@ export function renderWatchlist(ctx, route) {
     const m = idx.freshness.market;
     const ps = priceStatus(m);
     const items = [];
-    // Rate limited: said by the badge beside Refresh, not twice.
+    const divider = () => h('span', { class: 'ss-div', 'aria-hidden': 'true' });
+    const dot = () => h('span', { class: 'ss-dot', 'aria-hidden': 'true' }, '·');
+    // 1. Prices and Refresh. Rate limited: said by the badge beside Refresh, not twice.
     const priceWord = ps.problem && !m.rate_limited ? h('span', { class: 'warn-word' }, ps.text) : null;
-    items.push(h('span', { class: 'ss-group' },
+    items.push(h('span', { class: 'ss-group ss-g1' },
       stripItem('prices', [h('span', { class: 'k' }, view.priceSource === 'CoinGecko' ? 'Prices' : 'Prices (demo)'), h('span', { class: 'v' }, m.last_success_at ? fmtAgo(m.last_success_at) : 'not fetched'), priceWord], { warn: ps.problem, extra: m.last_success_at ? ps.asOf : null, ico: 'clock' }),
       rateBadge(m),
       refreshBtn));
+    // 2. Bitcoin and the market.
     const mc = idx.market_context;
     const snap = mc && mc.snapshot;
-    if (snap && snap.bitcoin && typeof snap.bitcoin.price_usd === 'number') {
+    const hasSnap = Boolean(snap && snap.bitcoin && typeof snap.bitcoin.price_usd === 'number');
+    if (hasSnap) {
+      items.push(divider());
       items.push(stripItem('market', marketFigures(snap, mc), { warn: mc.status === 'stale', ico: 'coin', cls: 'ss-market' }));
     }
-    if (idx.research && idx.research.providers) {
-      const rs = readinessSummary(idx.research.providers, (idx.settings.research || {}).on_hold || {});
-      items.push(stripItem('models', [h('span', { class: 'k' }, 'Models'), h('span', { class: 'v' }, rs.text)], { warn: rs.setup > 0, ico: 'models', cls: 'ss-models' }));
+    // 3. Breadth, what needs action, the review queue.
+    const third = [];
+    const bw = hasSnap ? breadthWords(snap.breadth && snap.breadth.d30) : null;
+    if (bw) {
+      const b30 = snap.breadth.d30;
+      third.push(stripItem('breadth', [h('span', { class: 'breadth' }, typeof b30.share_pct === 'number' ? h('span', { class: 'breadth-bar', 'aria-hidden': 'true' }, h('span', { style: { width: `${Math.max(0, Math.min(100, b30.share_pct))}%` } })) : null,
+        h('span', { class: 'v fig' }, bw.text), h('span', { class: 'k' }, bw.window))], { cls: 'ss-breadth', extra: bw.title }));
+      third[third.length - 1].title = bw.title;
     }
-    if (critical.length || rest.length) items.push(h('span', { class: 'ss-spacer', 'aria-hidden': 'true' }));
     if (critical.length) {
       const kinds = [...new Set(critical.map(kindWord))];
       const anyHigh = critical.some((a) => a.severity === 'high' || ['research_uncertain', 'research_failed', 'writes_blocked', 'broken_record'].includes(a.kind));
-      items.push(stripItem('action', [h('span', { class: anyHigh ? 'bad-word' : 'warn-word' }, kinds.length === 1 ? kinds[0] : `${critical.length} need action`),
+      third.push(stripItem('action', [h('span', { class: anyHigh ? 'bad-word' : 'warn-word' }, kinds.length === 1 ? kinds[0] : `${critical.length} need action`),
         critical.length > 1 && kinds.length === 1 ? h('span', { class: 'v fig' }, `×${critical.length}`) : null,
         kinds.length > 1 ? h('span', { class: 'k ss-kinds' }, kinds.join(' · ')) : null],
       { bad: anyHigh, warn: !anyHigh, ico: 'alert', extra: critical.map((a) => a.title).join('; ') }));
     }
     if (rest.length) {
-      items.push(stripItem('review', [h('span', { class: 'v' }, `${rest.length} to review`), high ? h('span', { class: 'bad-word' }, `${high} urgent`) : null], { warn: high > 0, ico: 'tray' }));
+      third.push(stripItem('review', [h('span', { class: 'v' }, `${rest.length} to review`), high ? h('span', { class: 'bad-word' }, `${high} urgent`) : null], { warn: high > 0, ico: 'tray' }));
+    }
+    if (third.length) {
+      items.push(divider());
+      items.push(h('span', { class: 'ss-group ss-g3' }, third.flatMap((el, i) => (i ? [dot(), el] : [el]))));
     }
     strip.replaceChildren(...items);
     fitStrip(strip);
@@ -1949,7 +2001,7 @@ export function renderWatchlist(ctx, route) {
         h('p', null, `${m.last_success_at ? ps.asOf : 'No prices fetched yet'} · source: ${view.priceSource}.`),
         ps.note ? h('p', null, h('span', { class: ps.problem ? 'warn-word' : null }, ps.problem ? 'Note: ' : ''), ps.note) : null,
         ps.retryAt ? h('p', null, `Next try after ${fmtAsOf(ps.retryAt)}.`) : null];
-    } else if (view.strip === 'market') {
+    } else if (view.strip === 'market' || view.strip === 'breadth') {
       body = [marketStrip(idx)];
     } else if (view.strip === 'models') {
       const rs = readinessSummary(idx.research && idx.research.providers, (idx.settings.research || {}).on_hold || {});

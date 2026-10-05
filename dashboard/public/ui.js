@@ -200,6 +200,24 @@ export function fmtCompactUsd(n) {
   return `${sign}$${v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)}${unit[1]}`;
 }
 
+// Market figures as the list and the inspector both show them, so the same
+// value always reads the same: a change as a signed percent with two
+// decimals, money in compact USD with two decimals and its unit. Unknown is
+// null (the caller shows "—" with its reason).
+export function fmtChangePct(n) {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return null;
+  const r = Number(n.toFixed(2));
+  if (r === 0) return '0.00%';
+  return `${r > 0 ? '+' : MINUS}${Math.abs(r).toFixed(2)}%`;
+}
+
+export function fmtMarketUsd(n) {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return null;
+  const abs = Math.abs(n);
+  const unit = [[1e12, 'T'], [1e9, 'B'], [1e6, 'M'], [1e3, 'K']].find(([v]) => abs >= v);
+  return `${n < 0 ? MINUS : ''}$${unit ? (abs / unit[0]).toFixed(2) : abs.toFixed(2)}${unit ? unit[1] : ''}`;
+}
+
 export function fmtNum(n, digits = 4) {
   if (n === null || n === undefined || Number.isNaN(n)) return '—';
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(n);

@@ -33,11 +33,11 @@ function runPart(ctx, d) {
   if (!run) return h('p', { class: 'small muted', style: { margin: '8px 0 0' } }, 'No research run yet.');
   return h('div', { style: { marginTop: '10px' } },
     h('dl', { class: 'facts' },
-      fact('Prompt version', h('span', { class: 'mono' }, run.prompt.version || 'not stated')),
+      fact('Prompt version', run.prompt.version || 'not stated'),
       fact('Prompt SHA-256', h('span', { class: 'mono', title: run.prompt.sha256 }, `${String(run.prompt.sha256 || '').slice(0, 12)}…`)),
       fact('Holding horizon', run.horizon && run.horizon.text ? run.horizon.text : 'not stated', true),
       run.horizon && run.horizon.exception_reason ? fact('Long-term reason (yours)', run.horizon.exception_reason, true) : null,
-      fact('Rubric · profile', h('span', { class: 'mono' }, `${run.rubric_version || '?'} · ${run.sector_profile || '?'}`), true),
+      fact('Rubric · profile', `${run.rubric_version || '?'} · ${run.sector_profile || '?'}`, true),
       fact('Started', `${fmtDateTime(run.created_at)} via ${run.channel || '?'}`, true)),
     promptView(ctx, d.project.project_id, run));
 }
