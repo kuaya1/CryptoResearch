@@ -49,6 +49,7 @@ node_modules/
 
 /audits/*/*
 !/audits/2026-10-05-evidence-recovery/README.md
+!/audits/2026-10-05-ui-cleanup-phase2/README.md
 !/audits/2026-10-03-core-workflow/README.md
 !/audits/2026-10-02-position-cycle-recipe/README.md
 !/audits/2026-10-01-claude-design-pass/README.md
