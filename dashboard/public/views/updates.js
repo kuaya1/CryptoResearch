@@ -24,7 +24,13 @@ export async function renderUpdates(ctx, route) {
     inbox: (idx.imports.inbox.in_inbox || []).length,
     requests: (idx.imports.requests_pending || []).length,
   };
-  const strip = tabStrip(tabs.map(([t, label]) => ({ id: t, label, href: `#/updates?tab=${t}`, count: counts[t] || null })), tab, { label: 'Update sections' });
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const countLabels = {
+    changes: plural(counts.changes, 'project changed since your last review', 'projects changed since your last review'),
+    inbox: plural(counts.inbox, 'file in the inbox', 'files in the inbox'),
+    requests: plural(counts.requests, 'request pending', 'requests pending'),
+  };
+  const strip = tabStrip(tabs.map(([t, label]) => ({ id: t, label, href: `#/updates?tab=${t}`, count: counts[t] || null, countLabel: countLabels[t] || null })), tab, { label: 'Update sections' });
   const body = await safeSection(tabs.find(([t]) => t === tab)[1], () => ({ changes: changesTab, import: importTab, inbox: inboxTab, requests: requestsTab })[tab](ctx, route));
   return h('div', null,
     h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Updates'))),

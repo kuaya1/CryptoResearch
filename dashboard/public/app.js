@@ -279,9 +279,10 @@ function counts(index) {
   const changed = projects.filter((p) => p.changes && p.changes.item_count > 0).length;
   const pending = (index.imports.requests_pending || []).length + ((index.imports.inbox || {}).in_inbox || []).length;
   const running = projects.filter((p) => p.research && Object.values(p.research.providers || {}).some((j) => j && ['queued', 'running', 'dispatching'].includes(j.state))).length;
+  const followed = followedCount(projects);
   return {
-    // The same count the watchlist header shows: watched or held.
-    watchlist: followedCount(projects) || '',
+    // Projects you watch or hold (not archived): the list's default view.
+    watchlist: followed ? { n: followed, title: `${followed} project${followed === 1 ? '' : 's'} you watch or hold` } : '',
     research: running ? { n: running, title: `${running} project(s) with research in progress` } : '',
     updates: changed + pending ? { n: changed + pending, title: `${changed} project(s) changed since your last review${pending ? `; ${pending} item(s) waiting in the inbox or request queue` : ''}` } : '',
   };
@@ -298,7 +299,7 @@ function renderNav() {
     const num = n && typeof n === 'object' ? n.n : n;
     const desc = n && typeof n === 'object' ? n.title : n ? `${n} projects` : '';
     nav.appendChild(h('a', { href: `#/${id}`, class: id === active ? 'active' : null, 'aria-current': id === active ? 'page' : null, 'aria-label': `${label}${desc ? `, ${desc}` : ''}`, onclick: () => closeMenu(), dataset: { key: `nav-${id}` } },
-      h('span', null, label), num ? h('span', { class: 'count', 'aria-hidden': 'true' }, String(num)) : null));
+      h('span', null, label), num ? h('span', { class: 'count', 'aria-hidden': 'true', title: desc || null }, String(num)) : null));
   }
   // Online desk: signing out ends this browser's session on the server. A
   // quiet text button at the right of the top bar, not a section of the nav.

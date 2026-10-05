@@ -13,7 +13,7 @@
 // filters and place). A phone gets the whole screen.
 import {
   h, details, logo, gradeGauge, coverageMeter, unscoredList, structureNotes, fmtDate, fmtDateTime, fmtAsOf, fmtRelDay,
-  icon, stateText, button, callout, scoreTier, PROVIDER_LABELS, COVERAGE_MEANS, TAG_TITLES,
+  icon, stateText, button, callout, scoreTier, PROVIDER_LABELS, COVERAGE_MEANS, TAG_TITLES, unknownFigure,
 } from '../ui.js';
 import { briefModel, TAG_WORDS, CERTAINTY_WORDS } from '../brief-model.js';
 import { evidenceChecksBlock, sourceItem, checksWord } from './project.js';
@@ -134,8 +134,8 @@ function marketLine(mk) {
     h('span', { class: 'k' }, 'Market now'),
     h('span', { class: 'fig' }, mk.price),
     mk.change24h ? h('span', { class: `fig bf-chg ${dir}` }, h('span', { 'aria-hidden': 'true' }, mk.change24h), h('span', { class: 'sr-only' }, `${dir === 'down' ? 'down' : dir === 'up' ? 'up' : 'unchanged'} ${Math.abs(mk.change).toFixed(2)} percent over 24 hours`)) : null,
-    mk.mcap ? h('span', null, h('span', { class: 'k2' }, 'MC '), h('span', { class: 'fig' }, mk.mcap)) : null,
-    mk.volume ? h('span', null, h('span', { class: 'k2' }, 'Vol 24h '), h('span', { class: 'fig' }, mk.volume)) : null,
+    h('span', null, h('span', { class: 'k2' }, 'MC '), mk.mcap ? h('span', { class: 'fig' }, mk.mcap) : unknownFigure('Market cap', mk.mcap_usd)),
+    h('span', null, h('span', { class: 'k2' }, 'Vol 24h '), mk.volume ? h('span', { class: 'fig' }, mk.volume) : unknownFigure('Volume', mk.volume_usd)),
     h('span', { class: `bf-when${mk.stale ? ' stale' : ''}` }, `${mk.source}${mk.as_of ? ` · ${fmtAsOf(mk.as_of)}` : ''}${mk.stale ? ' · stale' : ''}`));
 }
 

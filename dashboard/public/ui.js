@@ -218,6 +218,29 @@ export function fmtMarketUsd(n) {
   return `${n < 0 ? MINUS : ''}$${unit ? (abs / unit[0]).toFixed(2) : abs.toFixed(2)}${unit ? unit[1] : ''}`;
 }
 
+// The data source's market cap, FDV and 24-hour volume: a missing or zero
+// figure is unknown, never "$0" (Eric, 2026-10-05). One rule for the list,
+// the side panel, the project page and the Brief. A report's own USD metrics
+// keep fmtMarketUsd, where 0 can be a real value.
+export function marketFigure(n) {
+  return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export function fmtMarketFigure(n, fmt = fmtMarketUsd) {
+  const v = marketFigure(n);
+  return v === null ? null : fmt(v);
+}
+
+export function marketFigureReason(label, n) {
+  return `${label} unknown: ${n === 0 ? 'the data source reported 0' : 'not reported by the data source'}`;
+}
+
+// "—" with that reason as its accessible label and tooltip.
+export function unknownFigure(label, n) {
+  const why = marketFigureReason(label, n);
+  return h('span', { class: 'unknown', title: why }, h('span', { 'aria-hidden': 'true' }, '—'), h('span', { class: 'sr-only' }, why));
+}
+
 export function fmtNum(n, digits = 4) {
   if (n === null || n === undefined || Number.isNaN(n)) return '—';
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(n);
@@ -1048,10 +1071,11 @@ export function action(btn, fn, success = null, { busyLabel = 'Working…' } = {
 // Accessible tab strip with roving focus. Each tab is a link, so tabs are
 // addressable, survive reloads and work with Back.
 export function tabStrip(items, current, { label = 'Sections' } = {}) {
+  // A count names what it counts (countLabel) where the tab's own word does not.
   const list = h('div', { class: 'tabs', role: 'tablist', 'aria-label': label });
   for (const it of items) {
     const sel = it.id === current;
-    list.appendChild(h('a', { role: 'tab', href: it.href, id: `tab-${it.id}`, 'aria-selected': String(sel), tabindex: sel ? '0' : '-1', 'aria-controls': 'tabpanel', dataset: { key: `tab-${it.id}` } }, it.label, it.count ? h('span', { class: 'count', 'aria-label': `${it.count} items` }, String(it.count)) : null));
+    list.appendChild(h('a', { role: 'tab', href: it.href, id: `tab-${it.id}`, 'aria-selected': String(sel), tabindex: sel ? '0' : '-1', 'aria-controls': 'tabpanel', dataset: { key: `tab-${it.id}` } }, it.label, it.count ? h('span', { class: 'count', 'aria-label': it.countLabel || `${it.count} items`, title: it.countLabel || null }, String(it.count)) : null));
   }
   list.addEventListener('keydown', (e) => {
     const tabs = [...list.querySelectorAll('[role="tab"]')];

@@ -776,3 +776,53 @@ test('header links from the index row: the verified contract\'s DexScreener page
   assert.equal(wl.defillamaBound({ state: 'fresh' }), true);
   assert.equal(wl.defillamaBound({ state: 'pending' }), true);
 });
+
+test('market figures: a missing or zero market cap, FDV or volume is unknown ("—" with its reason), never $0, in every view', async () => {
+  const { ui, wl } = await mods;
+  const bm = await import(pathToFileURL(path.join(tmp, 'brief-model.js')).href);
+  for (const v of [0, null, undefined, Number.NaN, Infinity, -5]) assert.equal(ui.fmtMarketFigure(v), null, `${v} is unknown`);
+  assert.equal(ui.fmtMarketFigure(54e6), '$54.00M');
+  assert.equal(ui.fmtMarketFigure(54e6, ui.fmtCompactUsd), '$54.0M', 'the project page keeps its own format, under the same rule');
+  assert.equal(ui.marketFigureReason('Market cap', 0), 'Market cap unknown: the data source reported 0');
+  assert.equal(ui.marketFigureReason('FDV', null), 'FDV unknown: not reported by the data source');
+  assert.equal(ui.fmtMarketUsd(0), '$0.00', "a report's own USD metric of 0 stays a real $0");
+  // The list and the side panel (marketStrings), FDV/MC included.
+  const zero = { price_usd: 0.061, market_cap_usd: 0, fdv_usd: 0, volume_24h_usd: 0 };
+  const s = wl.marketStrings(zero);
+  assert.deepEqual([s.mcap, s.fdv, s.volume, s.fdvMc], [null, null, null, null]);
+  assert.equal(wl.marketStrings({ ...zero, fdv_usd: 61e6 }).fdvMc, null, 'no ratio over a zero market cap');
+  assert.equal(wl.marketStrings({ ...zero, market_cap_usd: 12.4e6 }).fdvMc, null, 'no ratio from a zero FDV');
+  // A zero sorts with the unknowns: last, both ways.
+  const rows = [ROW('Zero', MKT({ market_cap_usd: 0 })), ROW('Big', MKT({ market_cap_usd: 9e8 })), ROW('Small', MKT({ market_cap_usd: 3e6 }))];
+  assert.deepEqual(wl.sortRows(rows, { key: 'mcap', dir: 'asc' }).map((r) => r.name), ['Small', 'Big', 'Zero']);
+  assert.deepEqual(wl.sortRows(rows, { key: 'mcap', dir: 'desc' }).map((r) => r.name), ['Big', 'Small', 'Zero']);
+  // The Brief's market line.
+  const now = bm.marketNow({ market: { status: 'fresh', price_usd: 0.061, market_cap_usd: 0, volume_24h_usd: 4e5 } });
+  assert.equal(now.mcap, null);
+  assert.equal(now.mcap_usd, 0, 'the source value is kept for the reason');
+  assert.equal(now.volume, '$400.00K');
+  // Every view goes through the rule, never a bare typeof check.
+  const src = (f) => fs.readFileSync(path.join(__dirname, '..', 'public', f), 'utf8');
+  assert.doesNotMatch(src('views/watchlist.js'), /typeof m\.(market_cap_usd|fdv_usd|volume_24h_usd) === 'number'/);
+  assert.doesNotMatch(src('views/project.js'), /fmtCompactUsd\(m\.(fdv_usd|volume_24h_usd)\)\]/);
+  assert.match(src('views/brief.js'), /unknownFigure\('Market cap', mk\.mcap_usd\)/);
+});
+
+test('a model on hold: its card offers no run and reads On hold; the routes table says On hold; saved pills are untouched', async () => {
+  const { wl } = await mods;
+  const project = await import(pathToFileURL(path.join(tmp, 'views', 'project.js')).href);
+  const research = await import(pathToFileURL(path.join(tmp, 'views', 'research.js')).href);
+  assert.deepEqual(project.emptyCardOffer('none', { job: null, onHold: true }), { kind: 'on_hold', canRun: false });
+  assert.deepEqual(project.emptyCardOffer('none', { job: null, onHold: false }), { kind: 'none', canRun: true }, 'a model not on hold still offers its run');
+  assert.equal(project.emptyCardOffer('on_hold', { job: { state: 'queued' }, onHold: true }).canRun, false, 'a kept job: no new run');
+  assert.deepEqual(project.emptyCardOffer('withheld', { job: null, onHold: true, saved: true }), { kind: 'withheld', canRun: false }, 'a saved report keeps its own state; still no new run');
+  const hold = { since: '2026-10-04', reason: 'paused' };
+  const w = research.routeWords('gemini', { hold });
+  assert.equal(w.route, 'On hold');
+  assert.match(w.happens, /^On hold since 2026-10-04: nothing new is assigned to Gemini\./);
+  assert.doesNotMatch(w.happens, /paste|prompt|import the answer|API|assistant/i, 'no way to run it');
+  assert.equal(research.routeWords('claude', { hold: null }), null, 'other models keep their route');
+  // Saved reports keep their pills (unchanged rule).
+  const index = { settings: { research: { on_hold: { gemini: hold } } } };
+  assert.equal(wl.holdCell(index, 'gemini', { grade: { status: 'firm', value: 67, display: '67.0' } }).dash, false);
+});

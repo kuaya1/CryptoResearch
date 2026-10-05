@@ -33,8 +33,10 @@ function runsTab(ctx) {
   const hosted = Boolean(ctx.state.session && ctx.state.session.hosted);
   // Three routes, in words: by itself on the API (in the background, within
   // your limits), through the model's own assistant (online desk), or by hand.
+  // A model on hold has none: it reads On hold (routeWords).
   const happens = (x) => {
     const who = PROVIDER_LABELS[x.p];
+    if (x.hold) return routeWords(x.p, { hold: x.hold }).happens;
     if (x.s.mode === 'api') return `Runs by itself on the ${who} API in the background, within your limits. The report is saved when it finishes.`;
     if (x.s.mode === 'mock') return 'Returns fictional fixture reports in this demo workspace. No network call.';
     const missing = (x.s.missing || []).join(', ') || x.s.reason;
@@ -45,9 +47,9 @@ function runsTab(ctx) {
   return h('div', null,
     card('Research routes', table([
       { label: 'Model', render: (x) => h('strong', null, PROVIDER_LABELS[x.p]) },
-      { label: 'Route', render: (x) => (x.s.mode === 'api' ? stateText(`API · ${x.s.model}`, 'ok') : x.s.mode === 'mock' ? stateText('Fictional demo adapter') : stateText(hosted ? 'Its assistant\'s connection' : 'By hand', 'warn')) },
+      { label: 'Route', render: (x) => (x.hold ? stateText(routeWords(x.p, { hold: x.hold }).route) : x.s.mode === 'api' ? stateText(`API · ${x.s.model}`, 'ok') : x.s.mode === 'mock' ? stateText('Fictional demo adapter') : stateText(hosted ? 'Its assistant\'s connection' : 'By hand', 'warn')) },
       { label: 'What happens', wrap: true, render: (x) => h('span', { class: 'small' }, happens(x)) },
-    ], PROVIDERS.map((p) => ({ p, s: (r.providers || {})[p] || { mode: 'manual', reason: 'unknown' } }))), {
+    ], PROVIDERS.map((p) => ({ p, s: (r.providers || {})[p] || { mode: 'manual', reason: 'unknown' }, hold: onHoldOf(idx, p) }))), {
       note: `Spend this month: $${(r.spend && r.spend.monthly) || 0} · today: $${(r.spend && r.spend.daily) || 0} · budget per run ${money(r.budget && r.budget.per_run_usd)}, day ${money(r.budget && r.budget.daily_usd)}, month ${money(r.budget && r.budget.monthly_usd)} · unattended runs ${r.unattended_enabled ? 'on' : 'off'}`,
       actions: [runNow, h('a', { class: 'btn small', href: '#/settings?tab=research' }, hosted ? 'API keys and limits' : 'Set up API access')],
     }),
@@ -57,6 +59,14 @@ function runsTab(ctx) {
       { label: 'Models', render: (p) => h('div', { class: 'grades' }, PROVIDERS.map((prov) => gradeBadge(prov, p.providers && p.providers[prov], p.research && p.research.providers && p.research.providers[prov], { staleDays, hosted, onHold: Boolean(onHoldOf(ctx.state.index, prov)) }))) },
       { label: 'Reports', num: true, render: (p) => String(p.report_count || 0) },
     ], projects, { empty: 'No projects yet.' }), { note: 'Each model\'s job is independent: a failure in one never erases another\'s result. Price refreshes never start research.' }));
+}
+
+// A model on hold on this desk (settings research.on_hold): its route reads
+// On hold, and nothing says how to run it. Pure, for the tests.
+export function routeWords(provider, { hold = null } = {}) {
+  if (!hold) return null;
+  const who = PROVIDER_LABELS[provider];
+  return { route: 'On hold', happens: `On hold${hold.since ? ` since ${hold.since}` : ''}: nothing new is assigned to ${who}. Its saved reports and waiting jobs are kept.` };
 }
 
 function money(v) {

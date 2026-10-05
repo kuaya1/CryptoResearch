@@ -12,7 +12,7 @@ import {
   h, clear, button, select, input, changeCell, sparkline, priceSpark, logo, gradeBadge, badgeInfo, verdictChip,
   fmtPrice, fmtCompactUsd, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, fmtSignedPct, freshnessText, priceStatus, stateText, toast, announce,
   researchState, withheldReason, unscoredList, jobKey, icon, evidenceLevel, evidenceText, gradeGauge, coverageMeter,
-  withheldLabel, structureNotes, details, onHoldOf, copyText, anchorText, fmtRelDay, fmtChangePct, fmtMarketUsd, briefLink,
+  withheldLabel, structureNotes, details, onHoldOf, copyText, anchorText, fmtRelDay, fmtChangePct, fmtMarketUsd, briefLink, marketFigure, fmtMarketFigure, unknownFigure,
   PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT,
 } from '../ui.js';
 import { openAddProjectDialog, openResearchDialog, openSectorDialog, waitingActions } from './dialogs.js';
@@ -109,10 +109,10 @@ function sortValue(p, key) {
     case 'change24h': return m ? m.change_24h_pct ?? null : null;
     case 'change7d': return m ? m.change_7d_pct ?? null : null;
     case 'change30d': return m ? m.change_30d_pct ?? null : null;
-    case 'mcap': return m ? m.market_cap_usd ?? null : null;
+    case 'mcap': return m ? marketFigure(m.market_cap_usd) : null;
     case 'mcapChange': return m ? m.market_cap_change_24h_pct ?? null : null;
-    case 'fdv': return m ? m.fdv_usd ?? null : null;
-    case 'volume': return m ? m.volume_24h_usd ?? null : null;
+    case 'fdv': return m ? marketFigure(m.fdv_usd) : null;
+    case 'volume': return m ? marketFigure(m.volume_24h_usd) : null;
     case 'volChange': return m ? m.volume_change_24h_pct ?? null : null;
     case 'sector': return p.sector ? p.sector.label.toLowerCase() : null;
     case 'lastResearch': return p.last_report_at || null;
@@ -203,15 +203,17 @@ function deltaCell(n, label) {
 // same formatters, so a value reads the same in both. Pure, for the tests.
 export function marketStrings(m) {
   if (!m) return null;
-  const ratio = typeof m.fdv_usd === 'number' && typeof m.market_cap_usd === 'number' && m.market_cap_usd > 0 ? m.fdv_usd / m.market_cap_usd : null;
+  const mc = marketFigure(m.market_cap_usd);
+  const fdv = marketFigure(m.fdv_usd);
+  const ratio = mc !== null && fdv !== null ? fdv / mc : null;
   return {
     price: fmtPrice(m.price_usd),
     change24h: fmtChangePct(m.change_24h_pct),
     change7d: fmtChangePct(m.change_7d_pct),
     change30d: fmtChangePct(m.change_30d_pct),
-    mcap: fmtMarketUsd(m.market_cap_usd),
-    volume: fmtMarketUsd(m.volume_24h_usd),
-    fdv: fmtMarketUsd(m.fdv_usd),
+    mcap: fmtMarketFigure(m.market_cap_usd),
+    volume: fmtMarketFigure(m.volume_24h_usd),
+    fdv: fmtMarketFigure(m.fdv_usd),
     // FDV over market cap: the only derived figure, from the two values shown.
     fdvMc: ratio === null || !Number.isFinite(ratio) ? null : `${ratio.toFixed(2)}×`,
   };
@@ -282,10 +284,10 @@ function cellFor(ctx, col, p) {
     case 'change7d': return m ? deltaCell(m.change_7d_pct, 'over 7 days') : dash('7-day change');
     case 'change30d': return m ? deltaCell(m.change_30d_pct, 'over 30 days') : dash('30-day change');
     case 'spark': return sparkCell(p, m);
-    case 'mcap': return m && typeof m.market_cap_usd === 'number' ? h('span', { class: 'num', title: fmtPrice(m.market_cap_usd) }, marketStrings(m).mcap) : dash('Market cap');
+    case 'mcap': return m && marketStrings(m).mcap ? h('span', { class: 'num', title: fmtPrice(m.market_cap_usd) }, marketStrings(m).mcap) : m ? unknownFigure('Market cap', m.market_cap_usd) : dash('Market cap');
     case 'mcapChange': return m ? deltaCell(m.market_cap_change_24h_pct, 'market cap over 24 hours') : dash('Market-cap change');
-    case 'fdv': return m && typeof m.fdv_usd === 'number' ? h('span', { class: 'num' }, marketStrings(m).fdv) : dash('FDV');
-    case 'volume': return m && typeof m.volume_24h_usd === 'number' ? h('span', { class: 'num' }, marketStrings(m).volume) : dash('Volume');
+    case 'fdv': return m && marketStrings(m).fdv ? h('span', { class: 'num' }, marketStrings(m).fdv) : m ? unknownFigure('FDV', m.fdv_usd) : dash('FDV');
+    case 'volume': return m && marketStrings(m).volume ? h('span', { class: 'num' }, marketStrings(m).volume) : m ? unknownFigure('Volume', m.volume_24h_usd) : dash('Volume');
     case 'volChange': return m && typeof m.volume_change_24h_pct === 'number' ? deltaCell(m.volume_change_24h_pct, 'volume') : h('span', { class: 'unknown', title: m ? m.volume_change_basis || '' : 'No market data' }, h('span', { 'aria-hidden': 'true' }, '—'), h('span', { class: 'sr-only' }, 'Volume change unknown'));
     case 'sector': return p.sector ? h('button', { type: 'button', class: 'chip', dataset: { key: `sector-${p.project_id}` }, 'aria-label': `Sector: ${p.sector.label}. Change sector`, title: 'Your label; change it here', onclick: (e) => { e.stopPropagation(); openSectorDialog(ctx, p); } }, p.sector.label) : dash('Sector');
     case 'lastResearch': return p.last_report_at ? h('span', { class: 'num', title: 'Latest report analysis date' }, fmtDate(p.last_report_at)) : dash('Last research');
@@ -1272,12 +1274,14 @@ export function fundamentalsTile(f, key) {
 // Rank is in the table; DefiLlama's 30-day fees and revenue are under
 // On-chain fundamentals. Unknown stays "—" with its reason in the label.
 function overviewStats(p) {
-  const s = marketStrings(mkt(p)) || {};
+  const m = mkt(p);
+  const s = marketStrings(m) || {};
+  const none = (label, v) => (m ? unknownFigure(label, v) : dash(label));
   const stat = (k, v, title) => h('div', { class: 'ov-stat', title }, h('dt', null, k), h('dd', { class: 'fig' }, v));
   return h('dl', { class: 'ov-strip', 'aria-label': 'Asset overview' },
-    stat('MC', s.mcap || dash('Market cap'), 'Market cap (CoinGecko)'),
-    stat('Vol 24h', s.volume || dash('Volume'), 'Trading volume over 24 hours'),
-    stat('FDV', s.fdv || dash('FDV'), 'Fully diluted valuation'),
+    stat('MC', s.mcap || none('Market cap', m && m.market_cap_usd), 'Market cap (CoinGecko)'),
+    stat('Vol 24h', s.volume || none('Volume', m && m.volume_24h_usd), 'Trading volume over 24 hours'),
+    stat('FDV', s.fdv || none('FDV', m && m.fdv_usd), 'Fully diluted valuation'),
     stat('FDV/MC', s.fdvMc || dash('FDV over market cap'), 'Fully diluted valuation over market cap, from the two figures shown'));
 }
 
@@ -1625,7 +1629,7 @@ function renderPanel(ctx, pid) {
             h('div', null, h('dt', null, '7D, rolling'), h('dd', null, deltaCell(m.change_7d_pct, 'over 7 days'))),
             h('div', null, h('dt', null, '30D, rolling'), h('dd', null, deltaCell(m.change_30d_pct, 'over 30 days'))),
             h('div', null, h('dt', null, m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Rank (demo data)' : 'Rank (CoinGecko)'), h('dd', null, m.market_cap_rank ? `#${m.market_cap_rank}` : 'Unranked')),
-            h('div', null, h('dt', null, 'FDV'), h('dd', null, fmtMarketUsd(m.fdv_usd) || dash('FDV'))),
+            h('div', null, h('dt', null, 'FDV'), h('dd', null, fmtMarketFigure(m.fdv_usd) || unknownFigure('FDV', m.fdv_usd))),
             ...vsBtcFacts(m),
             h('div', { class: 'wide' }, h('dt', null, 'Source'), h('dd', { class: 'small' }, `${m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Fictional demo data' : 'CoinGecko'} · as of ${fmtDateTime(m.as_of)}`)))), { id: `insp-market-${pid}` }) : null,
         details('Research details', h('div', null, researchProgress(ctx, p)), { id: `insp-research-${pid}` }),
@@ -1910,7 +1914,7 @@ export function renderWatchlist(ctx, route) {
     const filtered = Boolean(view.q) || filterCount() > 0 || f.owned !== DEFAULT_FILTERS.owned;
     // Only what the list itself does not show: a filtered count, or rows kept in place.
     resultsLine.replaceChildren(...[
-      filtered ? h('span', null, `${rows.length} of ${total} ${f.archived ? 'archived ' : ''}projects`) : null,
+      filtered ? h('span', null, `${rows.length} of ${total} ${f.archived ? 'archived' : 'saved'} projects`) : null,
       reordered ? h('span', { class: 'reorder' }, h('span', null, 'Values updated; order kept while you read.'), button('Re-sort', () => { view.order = null; rerender(); announce('Re-sorted.'); }, { kind: 'small', key: 'resort' })) : null,
     ].filter(Boolean));
     resultsLine.classList.toggle('hidden', !filtered && !reordered);
@@ -2113,7 +2117,9 @@ export function renderWatchlist(ctx, route) {
       { bad: anyHigh, warn: !anyHigh, ico: 'alert', extra: critical.map((a) => a.title).join('; ') }));
     }
     if (rest.length) {
-      third.push(stripItem('review', [h('span', { class: 'v' }, `${rest.length} to review`), high ? h('span', { class: 'bad-word' }, `${high} urgent`) : null], { warn: high > 0, ico: 'tray' }));
+      // Items in the review queue, not projects: one project can have several.
+      third.push(stripItem('review', [h('span', { class: 'v' }, String(rest.length)), h('span', { class: 'k' }, rest.length === 1 ? 'item' : 'items'), high ? h('span', { class: 'bad-word' }, `${high} urgent`) : null], { warn: high > 0, ico: 'tray', extra: 'In the review queue; one project can have several' }));
+      third[third.length - 1].title = 'Items in the review queue; one project can have several';
     }
     if (third.length) {
       items.push(divider());

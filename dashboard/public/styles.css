@@ -335,7 +335,12 @@ main:focus { outline: none; }
 .crumbs a { color: var(--text-2); text-decoration: none; }
 .crumbs a:hover { color: var(--text); text-decoration: underline; }
 .crumbs a, .meta-line a, .meta-line button.link, a.small:not(.btn), td a:not(.btn), .btn-row > a:not(.btn), .panel section a:not(.btn), .panel .ev-model a:not(.btn), .card-head a:not(.btn) { display: inline-block; padding-block: 3px; }
-input[type="file"] { font: inherit; min-height: var(--control-h); padding: 6px 0; max-width: 100%; }
+/* A real file input: its button drawn as the desk's pill, the browser's own
+   file name (or "No file chosen") beside it. */
+input[type="file"] { font: inherit; color: var(--text-2); min-height: var(--control-h); padding: 0; max-width: 100%; }
+input[type="file"]::file-selector-button { font: inherit; font-size: var(--fs-small); font-weight: 500; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-pill); padding: 0 var(--s3); min-height: var(--control-h); margin-right: var(--s3); cursor: pointer; transition: background-color var(--dur) var(--ease); }
+input[type="file"]:hover::file-selector-button { background: var(--row-hover); }
+input[type="file"]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-pill); box-shadow: none; }
 
 /* ---------- Surfaces ---------- */
 .card {
@@ -1506,7 +1511,10 @@ details.disclosure[open] > summary::before { transform: none; }
 details.disclosure > summary:hover { color: var(--text); }
 details.disclosure > .body { padding: 0 0 var(--s4); min-width: 0; }
 
-.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--separator); margin-bottom: var(--s5); overflow-x: auto; max-width: 100%; scrollbar-width: thin; }
+/* overflow-x: auto alone makes overflow-y auto too, and the tabs' -1px
+   margin (the underline over the hairline) then scrolls 1px vertically: a
+   stray scrollbar where scrollbars are classic. Only the row scrolls. */
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--separator); margin-bottom: var(--s5); overflow-x: auto; overflow-y: hidden; max-width: 100%; scrollbar-width: thin; }
 .tabs [role="tab"] { display: inline-flex; align-items: center; gap: 6px; border-bottom: 2px solid transparent; margin-bottom: -1px; color: var(--text-2); padding: 0 var(--s3); min-height: var(--touch); white-space: nowrap; text-decoration: none; font-weight: 500; transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease); }
 .tabs [role="tab"]:hover { color: var(--text); border-bottom-color: var(--border); }
 .tabs [role="tab"][aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }

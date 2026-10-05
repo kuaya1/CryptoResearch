@@ -6,7 +6,7 @@ import {
   fmtPrice, fmtCompactUsd, fmtNum, fmtDate, fmtDateTime, fmtAgo, fmtSignedPct, freshnessText, kv, details, field, input, select, button,
   action, callout, copyText, tabStrip, safeSection, submissionId, stateText, fieldError, PROVIDERS, PROVIDER_LABELS, link,
   jobKey, coworkIdleMinutes, isAssistantJob, researchState, withheldReason, unscoredFrom, unscoredList,
-  withheldLabel, COVERAGE_MEANS, structureNotes, toast, onHoldOf, briefLink,
+  withheldLabel, COVERAGE_MEANS, structureNotes, toast, onHoldOf, briefLink, fmtMarketFigure, unknownFigure,
 } from '../ui.js';
 import { renderMarkdown } from '../md.js';
 import { openResearchDialog, openSectorDialog, waitingActions, waitingStep } from './dialogs.js';
@@ -171,6 +171,13 @@ function routeText(rep) {
 // ---------------------------------------------------------------------------
 // Overview
 
+// A model's card without a readable report: a model on hold offers no run
+// (nothing new is assigned to it), and reads On hold unless a job or a saved
+// report already says what it has. Pure, for the tests.
+export function emptyCardOffer(kind, { job = null, onHold = false, saved = false } = {}) {
+  return { kind: onHold && !job && !saved ? 'on_hold' : kind, canRun: !job && !onHold };
+}
+
 function modelCard(ctx, d, row, prov, latest) {
   const pid = d.project.project_id;
   const staleDays = ctx.state.index.settings.freshness.research_stale_days || 90;
@@ -221,10 +228,11 @@ function modelCard(ctx, d, row, prov, latest) {
         h('a', { class: 'btn small', href: `#/updates?tab=import&project=${encodeURIComponent(pid)}&provider=${prov}`, dataset: { key: `ov-paste-${prov}` } }, 'Import the text'),
         waiting));
   } else {
-    const st = researchState(info.kind, { provider: prov, hosted });
-    const next = waiting || (!job ? button('Run research', () => openResearchDialog(ctx, { ...row, ...d.project, research: row.research }, { providers: [prov] }), { kind: 'small', key: `ov-run-${prov}` }) : null);
+    const offer = emptyCardOffer(info.kind, { job, onHold, saved: Boolean(sum) });
+    const st = researchState(offer.kind, { provider: prov, hosted });
+    const next = waiting || (offer.canRun ? button('Run research', () => openResearchDialog(ctx, { ...row, ...d.project, research: row.research }, { providers: [prov] }), { kind: 'small', key: `ov-run-${prov}` }) : null);
     main = h('div', null,
-      h('div', { class: 'provider-grade' }, stateText(info.kind === 'waiting' && hosted ? 'Waiting for you' : st.long, st.tone)),
+      h('div', { class: 'provider-grade' }, stateText(offer.kind === 'waiting' && hosted ? 'Waiting for you' : st.long, st.tone)),
       job && job.error ? h('p', { class: 'small', style: { color: 'var(--neg)' } }, job.error) : null,
       next ? h('div', { class: 'btn-row', style: { marginTop: '8px' } }, next) : null);
   }
@@ -904,10 +912,10 @@ function marketTab(ctx, d) {
         ['7D change (rolling)', changeCell(m.change_7d_pct, { label: 'over 7 days' })],
         ['30D change (rolling)', changeCell(m.change_30d_pct, { label: 'over 30 days' })],
         ['Rank', m.market_cap_rank ? `#${m.market_cap_rank} · ${m.rank_source_label || 'CoinGecko market-cap rank'}` : 'Unranked'],
-        ['Market cap', h('span', { title: 'Price × circulating supply, as reported by the provider' }, `${fmtCompactUsd(m.market_cap_usd)} (${typeof m.market_cap_usd === 'number' ? `$${fmtNum(m.market_cap_usd, 0)}` : '—'})`)],
+        ['Market cap', fmtMarketFigure(m.market_cap_usd, fmtCompactUsd) ? h('span', { title: 'Price × circulating supply, as reported by the provider' }, `${fmtCompactUsd(m.market_cap_usd)} ($${fmtNum(m.market_cap_usd, 0)})`) : unknownFigure('Market cap', m.market_cap_usd)],
         ['Market cap, 24H change', changeCell(m.market_cap_change_24h_pct, { label: 'market cap over 24 hours' })],
-        ['Fully diluted valuation', fmtCompactUsd(m.fdv_usd)],
-        ['Volume, last 24h', fmtCompactUsd(m.volume_24h_usd)],
+        ['Fully diluted valuation', fmtMarketFigure(m.fdv_usd, fmtCompactUsd) || unknownFigure('Fully diluted valuation', m.fdv_usd)],
+        ['Volume, last 24h', fmtMarketFigure(m.volume_24h_usd, fmtCompactUsd) || unknownFigure('Volume', m.volume_24h_usd)],
         ['Volume vs ~24h ago', typeof m.volume_change_24h_pct === 'number' ? changeCell(m.volume_change_24h_pct, { label: 'volume' }) : h('span', { class: 'unknown' }, `Unknown: ${m.volume_change_basis || 'no earlier observation'}`)],
         ['Circulating / total / max supply', `${fmtNum(m.circulating_supply, 0)} / ${fmtNum(m.total_supply, 0)} / ${fmtNum(m.max_supply, 0)}`],
         ['Source timestamp', `${fmtDateTime(m.as_of)} (${m.source || 'CoinGecko'})`],

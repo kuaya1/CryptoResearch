@@ -6,7 +6,7 @@
 // saves or starts anything. No DOM: pure, for the tests.
 import {
   PROVIDER_LABELS, anchorText, scoreTier, withheldReason, unscoredFrom, jobKey, onHoldOf, researchState, badgeInfo,
-  fmtPrice, fmtChangePct, fmtMarketUsd, fmtNum,
+  fmtPrice, fmtChangePct, fmtMarketUsd, fmtMarketFigure, fmtNum,
 } from './ui.js';
 import { profileOf, categoryRows, scorecardCounts, categoryFlags, scenarioRows, CONFIDENCE_LABELS } from './thesis-ui.js';
 
@@ -107,8 +107,11 @@ export function marketNow(row) {
     price: fmtPrice(m.price_usd),
     change24h: fmtChangePct(m.change_24h_pct),
     change: num(m.change_24h_pct) ? m.change_24h_pct : null,
-    mcap: fmtMarketUsd(m.market_cap_usd),
-    volume: fmtMarketUsd(m.volume_24h_usd),
+    mcap: fmtMarketFigure(m.market_cap_usd),
+    volume: fmtMarketFigure(m.volume_24h_usd),
+    // The source's own values, for the reason an unknown figure gives.
+    mcap_usd: m.market_cap_usd ?? null,
+    volume_usd: m.volume_24h_usd ?? null,
     as_of: m.as_of || m.fetched_at || null,
     stale: m.status === 'stale',
     source: demo ? 'Fictional demo data' : m.source || 'CoinGecko',
