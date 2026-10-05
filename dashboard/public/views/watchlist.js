@@ -254,7 +254,7 @@ function projectCell(ctx, p) {
     restore.onclick = (e) => { e.stopPropagation(); restoreProject(ctx, p, restore); };
   }
   return h('div', { class: 'proj-cell' },
-    h('span', { class: 'logo-wrap' }, logo(p, { size: 20 })),
+    h('span', { class: 'logo-wrap' }, logo(p, { size: 24 })),
     h('div', { class: 'names' }, nameBtn,
       p.symbol ? h('span', { class: 'tick' }, p.symbol) : null,
       marks.length ? h('span', { class: 'marks' }, marks) : null,
@@ -310,7 +310,8 @@ function providerCell(ctx, p, prov) {
   // On hold with no report: a quiet dash, still a way into that model's tab.
   if (holdCell(ctx.state.index, prov, rep).dash) {
     return h('button', { type: 'button', class: 'gb-none', 'aria-label': `No ${PROVIDER_LABELS[prov]} score`, title: `No ${PROVIDER_LABELS[prov]} report yet: ${PROVIDER_LABELS[prov]} is on hold on this desk`, dataset: { key: `gb-${p.project_id}-${prov}`, provider: prov },
-      onclick: (e) => { e.stopPropagation(); openPanel(ctx, p.project_id, e.currentTarget, prov); } }, '—');
+      onclick: (e) => { e.stopPropagation(); openPanel(ctx, p.project_id, e.currentTarget, prov); } },
+    h('span', { class: 'p' }, PROVIDER_LABELS[prov]), h('span', { class: 'v' }, '—'));
   }
   const b = gradeBadge(prov, rep, p.research && p.research.providers && p.research.providers[prov], { ...badgeOpts(ctx, prov), button: true, key: `gb-${p.project_id}-${prov}` });
   // A long range (such as 38.3–100.0) takes a smaller figure to keep the width.
