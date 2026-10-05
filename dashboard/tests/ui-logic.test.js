@@ -355,15 +355,15 @@ test('breadth is labeled with what it counts: n of N over 30 days', async () => 
   assert.equal(wl.breadthWords(null), null);
 });
 
-test('a model on hold: its header and its dashes follow the model status, for any model; a score it gave keeps its pill', async () => {
+test('a model on hold: its header and its dashes follow the model status, for any model; a dash only where it has no report at all', async () => {
   const { wl } = await mods;
   const index = { settings: { research: { on_hold: { gemini: { since: '2026-10-04T12:00:00Z', reason: 'x' } } } } };
   const firm = { grade: { status: 'firm', value: 61 } };
   const withheld = { grade: { status: 'withheld', coverage_pct: 55 } };
-  assert.deepEqual(wl.holdCell(index, 'gemini', null), { hold: true, dash: true, label: 'No Gemini score' });
-  assert.equal(wl.holdCell(index, 'gemini', withheld).dash, true, 'no score: a dash');
+  assert.deepEqual(wl.holdCell(index, 'gemini', null), { hold: true, dash: true, label: 'No Gemini score' }, 'no report: a dash');
+  assert.equal(wl.holdCell(index, 'gemini', withheld).dash, false, 'a saved report whose grade was withheld keeps its Withheld pill');
   assert.equal(wl.holdCell(index, 'gemini', firm).dash, false, 'a score it gave keeps its pill');
-  assert.equal(wl.holdCell(index, 'gemini', { ...firm, needs_text: true }).dash, true, 'a PDF is not a score');
+  assert.equal(wl.holdCell(index, 'gemini', { ...firm, needs_text: true }).dash, false, 'a saved PDF keeps its pill');
   assert.deepEqual(wl.holdCell(index, 'chatgpt', null), { hold: false, dash: false, label: 'No ChatGPT score' }, 'only the model on hold');
   const chatgptHeld = { settings: { research: { on_hold: { chatgpt: { since: null } } } } };
   assert.equal(wl.holdCell(chatgptHeld, 'chatgpt', null).hold, true, 'not hardcoded to Gemini');
@@ -419,6 +419,15 @@ test('inspector scroll: the body\'s keep-scroll key names the project, so the pa
   assert.doesNotMatch(wl, /'data-keep-scroll': 'panel'/, 'no shared key left');
   // And the panel itself resets to the top when the project changes.
   assert.match(wl, /if \(reopened\) \{\n\s+const body = panel\.querySelector\('\.panel-body'\);\n\s+if \(body\) body\.scrollTop = 0;/);
+});
+
+test('evidence marks in the pills: a solid dot for a serious flag, a ring for a material one (the last rule for each wins)', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  const last = (sel) => { const re = new RegExp(`${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^{]*\\{([^}]*)\\}`, 'g'); let m; let out = null; while ((m = re.exec(css))) out = m[1]; return out || ''; };
+  const material = last(':is(table.wl, .mtabs) .gb.ev-material .ev');
+  assert.match(material, /background: transparent/, 'material: hollow');
+  assert.match(material, /box-shadow: inset 0 0 0 1\.5px var\(--warn-strong\)/, 'material: a ring');
+  assert.match(css, /:is\(table\.wl, \.mtabs\) \.gb\.ev-serious \.ev,[^}]*background: var\(--warn-strong\)/, 'serious: solid');
 });
 
 test('static: no CoinMarketCap tokens or colors, no "Inter", the serif only on the wordmark', () => {

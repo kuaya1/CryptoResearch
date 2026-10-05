@@ -296,20 +296,20 @@ function cellFor(ctx, col, p) {
 const hostedDesk = (ctx) => Boolean(ctx.state.session && ctx.state.session.hosted);
 
 // A model on hold on this desk (settings research.on_hold, any model): its
-// header says so, and a cell without a score is a quiet dash; a score it
-// already gave keeps its pill. Pure, for the tests.
+// header says so, and a cell where it has no report at all is a quiet dash.
+// A saved report keeps its pill: its grade, Withheld (a grade deliberately
+// not calculated) or PDF. Pure, for the tests.
 export function holdCell(index, prov, rep) {
   const hold = Boolean(onHoldOf(index, prov));
-  const scored = Boolean(rep && !rep.needs_text && rep.grade && ['firm', 'range'].includes(rep.grade.status));
-  return { hold, dash: hold && !scored, label: `No ${PROVIDER_LABELS[prov] || prov} score` };
+  return { hold, dash: hold && !rep, label: `No ${PROVIDER_LABELS[prov] || prov} score` };
 }
 
 // One model's state for one project: its grade, or why there is none.
 function providerCell(ctx, p, prov) {
   const rep = p.providers && p.providers[prov];
-  // On hold without a score: a quiet dash, still a way into that model's tab.
+  // On hold with no report: a quiet dash, still a way into that model's tab.
   if (holdCell(ctx.state.index, prov, rep).dash) {
-    return h('button', { type: 'button', class: 'gb-none', 'aria-label': `No ${PROVIDER_LABELS[prov]} score`, title: `No ${PROVIDER_LABELS[prov]} score: ${PROVIDER_LABELS[prov]} is on hold on this desk`, dataset: { key: `gb-${p.project_id}-${prov}`, provider: prov },
+    return h('button', { type: 'button', class: 'gb-none', 'aria-label': `No ${PROVIDER_LABELS[prov]} score`, title: `No ${PROVIDER_LABELS[prov]} report yet: ${PROVIDER_LABELS[prov]} is on hold on this desk`, dataset: { key: `gb-${p.project_id}-${prov}`, provider: prov },
       onclick: (e) => { e.stopPropagation(); openPanel(ctx, p.project_id, e.currentTarget, prov); } }, '—');
   }
   const b = gradeBadge(prov, rep, p.research && p.research.providers && p.research.providers[prov], { ...badgeOpts(ctx, prov), button: true, key: `gb-${p.project_id}-${prov}` });

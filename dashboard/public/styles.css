@@ -2014,13 +2014,15 @@ table.wl .gb.is-incomplete:not(.is-range):not(.x-) .v { font-size: 10px; letter-
 
 /* ---- Presentation phase 2: the list (2026-10-05) -------------------------- */
 /* Score pills: one weight and size, tabular, one fixed width (--badge-w). An
-   evidence flag is a 5px dot inside the pill before the figure (the words are
-   in its label and tooltip); the corner keeps one other mark at most. */
+   evidence flag is a mark inside the pill before the figure: a solid dot for
+   a serious flag, a ring for a material one (the words are in its label and
+   tooltip); the corner keeps one other mark at most. */
 :is(table.wl, .mtabs) .gb .v { font: 500 12px/1 var(--sans); font-variant-numeric: tabular-nums lining-nums; letter-spacing: 0; }
 table.wl .gb:not(.is-range):not(.x-) .v { font-size: 12px; letter-spacing: 0; }
 :is(table.wl, .mtabs) .gb .ev,
 :is(table.wl, .mtabs) .gb.ev-serious .ev,
 :is(table.wl, .mtabs) .gb.ev-material .ev { position: static; flex: none; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--warn-strong); box-shadow: none; }
+:is(table.wl, .mtabs) .gb.ev-material .ev { width: 6px; height: 6px; background: transparent; box-shadow: inset 0 0 0 1.5px var(--warn-strong); }
 :is(table.wl, .mtabs) .gb:has(.x) .ev { display: inline-block; }
 :is(table.wl, .mtabs) .gb:has(.ev):not(:has(.x)) .r { display: block; }
 :is(table.wl, .mtabs) .gb:has(.ev):not(:has(.x)):not(:has(.r)) .a { display: block; }
