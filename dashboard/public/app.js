@@ -408,7 +408,13 @@ async function render({ reason = 'nav' } = {}) {
   state.renderReason = reason === 'live' ? 'live' : samePage ? 'same' : reason;
   state.focusClaimed = false;
   renderNav();
-  if (route.name !== 'watchlist') closePanelChrome();
+  if (route.name !== 'watchlist') {
+    closePanelChrome();
+    // The status strip band belongs to the watchlist.
+    const band = document.getElementById('strip-root');
+    if (band) clear(band);
+    document.documentElement.style.removeProperty('--band-h');
+  }
   const main = document.getElementById('main');
   try {
     const view = await LOADERS[route.name]();

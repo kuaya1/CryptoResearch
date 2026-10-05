@@ -226,7 +226,7 @@ function sparkCell(p, m) {
   let el = sparkCache.get(key);
   if (!el) {
     if (sparkCache.size > 400) sparkCache.clear();
-    el = priceSpark(series, m ? m.change_7d_pct : null, { label: `${p.symbol || p.name} 7-day price` });
+    el = priceSpark(series, m ? m.change_7d_pct : null, { width: 150, height: 42, label: `${p.symbol || p.name} 7-day price` });
     sparkCache.set(key, el);
   }
   return el.cloneNode(true);
@@ -2178,15 +2178,29 @@ export function renderWatchlist(ctx, route) {
   // The inspector follows the address (?p=<id>), so Back and bookmarks restore
   // it. It is drawn once the page is in the document, so it finds the rows.
   const afterMount = () => {
+    // The status strip is a full-width band under the bar, outside the
+    // centered content (index.html #strip-root); without the band it stays
+    // under the title.
+    const band = document.getElementById('strip-root');
+    if (band && strip.parentNode !== band) band.replaceChildren(strip, stripPanel);
+    // The docked inspector fits the window under the strip's row (--band-h);
+    // an open status panel pushes it down and the page scrolls.
+    const fitBand = () => {
+      const h = band && strip.parentNode === band ? Math.ceil(strip.getBoundingClientRect().bottom - band.getBoundingClientRect().top) : 0;
+      document.documentElement.style.setProperty('--band-h', `${Math.max(0, h)}px`);
+    };
     fitColumns(page);
     fitStrip(strip);
+    fitBand();
     if (!view.resizeObserver || view.resizeFor !== page) {
       if (view.resizeObserver) view.resizeObserver.disconnect();
       view.resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => {
         fitColumns(page);
         fitStrip(strip);
+        fitBand();
       }));
       view.resizeObserver.observe(page);
+      if (band) view.resizeObserver.observe(band);
       view.resizeFor = page;
     }
     const pid = ctx.state.route.query.get('p');

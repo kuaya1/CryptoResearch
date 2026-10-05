@@ -2240,34 +2240,52 @@ button.mtab { border-radius: 10px; }
 .price-big, .provider-grade .big, .grade .big { font-family: var(--font-display); letter-spacing: -0.025em; }
 .ggauge .gnum { font-family: var(--font-display); }
 
-/* ---- The watchlist page (Eric, 2026-10-05, later) ---------------------------
-   Centered: the page (title, status strip, toolbar and table together) is at
-   most 1440px wide, 32px inside its edges, in the middle of the space it has
-   (beside the inspector when one is open); a phone keeps its 16px gutter.
-   In the table (never on a phone card): rows 52px; names 14px/600; tickers
-   12px/500 in --text-3; every figure (price, changes, market cap, volume)
-   14px with tabular digits; header labels 13px in a 48px header row; the
-   name 24px in from the table's edge with its header label over the logos;
-   the Name column as wide as its content, so the figures share the rest. */
+/* ---- The desk's frame and the watchlist table (Eric, 2026-10-05, evening) ----
+   The top bar and the status strip span the window with the bar's own 24px
+   margins (16px on a phone); only the work is centered: .layout (the title,
+   toolbar and table, and the inspector docked beside them) is 94% of the
+   window, at most 1560px. In the table (never on a phone card), about a
+   quarter larger: rows 60px; names 15px/600; tickers 13px/500 in --text-3;
+   every figure (price, changes, market cap, volume) 15px with tabular
+   digits; the 7D chart 150 x 42; header labels 13px in a 48px row; the name
+   24px in from the table's edge with its header label over the logos; the
+   Name column as wide as its content, so the figures share the rest. */
+.strip-band { padding: var(--s3) var(--s6) 0; min-width: 0; }
+.strip-band:empty { display: none; }
+.strip-band .status-strip { margin: 0; }
+.strip-band .ss-panel { margin: var(--s2) 0 0; }
+@media (max-width: 860px) { .strip-band { padding: var(--s3) var(--s4) 0; } }
 @media (min-width: 861px) {
-  main:has(> .wl-wrap) { padding-inline: 0; }
-  .wl-wrap { box-sizing: border-box; max-width: 1440px; margin-inline: auto; padding-inline: 32px; }
-  /* Beside a docked inspector the list keeps the page's usual 24px, so its figures keep their place. */
-  body.split .wl-wrap { padding-inline: 24px; }
+  .layout { box-sizing: border-box; width: 94%; max-width: 1560px; margin-inline: auto; }
+  /* The box's own edges are the content's edges. */
+  main { padding-inline: 0; }
+}
+/* Docked, the inspector card ends at the box's right edge with 16px between
+   it and the list; at 1280-1333px its column gives a little (36vw) so the
+   list keeps its table. */
+@media (min-width: 1280px) {
+  body.split .layout { grid-template-columns: minmax(0, 1fr) min(480px, 36vw); }
+  body.split #panel-root { padding: 12px 0 16px 16px; }
+  /* Its foot stays in the window under the strip's row (--band-h, measured by
+     views/watchlist.js); scrolled past the strip it leaves that much canvas below. */
+  body.split #panel-root { height: calc(100vh - var(--topbar-h) - 1px - var(--band-h, 0px)); }
+  body:has(#demo-banner:not(.hidden)).split #panel-root { height: calc(100vh - var(--topbar-h) - 1px - 28px - var(--band-h, 0px)); }
 }
 @container wl (min-width: 720px) {
   table.wl thead th { height: 48px; }
   table.wl th .th, table.wl th button.sort { min-height: 48px; }
   table.wl th button.sort, table.wl th .th, table.wl th .th .lbl, table.wl th .lbl { font-size: 13px; }
   table.wl th.c-prov .hold { font-size: 11.5px; }
-  table.wl td, table.wl tbody td { height: 52px; }
+  table.wl td, table.wl tbody td { height: 60px; }
   table.wl td.c-project, table.wl th.c-project { padding-left: 24px; }
   table.wl th.c-project button.sort, table.wl th.c-project .th { padding-left: 0; }
   table.wl th.c-project { width: 1%; }
-  table.wl .pname { font-size: 14px; font-weight: 600; }
-  table.wl .proj-cell .tick { font-size: 12px; font-weight: 500; color: var(--text-3); }
-  table.wl td.num, table.wl td .num, table.wl td .price, table.wl td .chg { font-size: 14px; font-variant-numeric: tabular-nums lining-nums; }
+  table.wl .pname { font-size: 15px; font-weight: 600; }
+  table.wl .proj-cell .tick { font-size: 13px; font-weight: 500; color: var(--text-3); }
+  table.wl td.num, table.wl td .num, table.wl td .price, table.wl td .chg { font-size: 15px; font-variant-numeric: tabular-nums lining-nums; }
+  table.wl td.c-spark, table.wl th.c-spark { width: 164px; }
 }
-/* In a list narrower than 1100px (beside the inspector, a laptop) a long name
-   cuts at 180px; its full text is its title and in the inspector. */
-@container wl (min-width: 720px) and (max-width: 1099px) { table.wl .pname { max-width: 180px; } }
+/* A long name cuts at 230px, 180px in a list narrower than 1100px (beside
+   the inspector, a laptop) and 170px under 880px; its full text is its title
+   and in the inspector. */
+@container wl (min-width: 881px) and (max-width: 1099px) { table.wl .pname { max-width: 180px; } }
