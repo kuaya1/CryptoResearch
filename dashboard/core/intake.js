@@ -72,7 +72,7 @@ function parseLink(input) {
     url = null;
   }
   if (!url) {
-    if (raw.length > 80 || /[<>{}]/.test(raw)) return { source: 'invalid', raw, error: 'Type the project name or ticker, or paste a CoinGecko link.' };
+    if (raw.length > 80 || /[<>{}]/.test(raw)) return { source: 'invalid', raw, error: 'Type the project name, ticker or contract, or paste a CoinGecko or CoinMarketCap link.' };
     return { source: 'text', raw, query: raw };
   }
   const host = url.hostname.toLowerCase().replace(/^www\./, '');
@@ -98,7 +98,7 @@ function parseLink(input) {
     if (ci >= 0 && parts[ci + 1] && /^[a-z0-9][a-z0-9-]{0,100}$/.test(parts[ci + 1])) return { source: 'coingecko', raw, coingecko_id: parts[ci + 1], query: parts[ci + 1].replace(/-/g, ' ') };
     return { source: 'invalid', raw, error: 'That CoinGecko link does not point to a coin page (coingecko.com/en/coins/<id>).' };
   }
-  return { source: 'invalid', raw, error: `Links from ${host} are not used to identify projects. Type the project name, or paste a CoinGecko link.` };
+  return { source: 'invalid', raw, error: `Links from ${host} are not used to identify projects. Type the project name, ticker or contract, or paste a CoinGecko or CoinMarketCap link.` };
 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +162,7 @@ function createIntake(ws, { link = null, screenshot = null, instructions = null 
     if (buf.length > MAX_IMAGE_BYTES) throw new OpError('INVALID', `The screenshot is larger than ${MAX_IMAGE_BYTES / 1048576} MB. Crop it or send a smaller one.`);
     image = { buf, type, sha256: sha256(buf) };
   }
-  if (!parsed && !image) throw new OpError('INVALID', 'Type a project name, paste a CoinGecko link, or add a screenshot.');
+  if (!parsed && !image) throw new OpError('INVALID', 'Type a project name, ticker or contract, paste a CoinGecko or CoinMarketCap link, or add a screenshot.');
   const note = cleanInstructions(instructions);
   const fingerprint = sha256(JSON.stringify({ link: parsed ? parsed.raw.toLowerCase() : null, image: image ? image.sha256 : null, note }));
   const recent = listIntakes(ws, { limit: 20 }).find((d) => !d.broken && d.fingerprint === fingerprint && d.status !== 'canceled' && Date.now() - Date.parse(d.created_at) < DEDUPE_MINUTES * 60000);
@@ -559,7 +559,9 @@ const ALL_THREE_WORDS = /\b(all (three|3)|three|3)\s+(of the\s+)?(models|ais?|as
 function intakeModels(ws, doc) {
   const st = require('./research').providerStatus(ws);
   const askedAll = ALL_THREE_WORDS.test(String((doc.input && doc.input.instructions) || ''));
-  return ['claude', ...['chatgpt', 'gemini'].filter((p) => askedAll || (st[p] && (st[p].mode === 'api' || st[p].mode === 'mock')))];
+  // A model on hold gets nothing new, even when the request asks for all three.
+  const held = require('./research').heldProviders(ws);
+  return ['claude', ...['chatgpt', 'gemini'].filter((p) => !held[p] && (askedAll || (st[p] && (st[p].mode === 'api' || st[p].mode === 'mock'))))];
 }
 
 function confirmIntake(ws, id, { coingecko_id: chosen, sector = null, different_project = false } = {}) {

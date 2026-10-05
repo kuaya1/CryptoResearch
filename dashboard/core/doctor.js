@@ -90,7 +90,10 @@ function sessionCapabilities(ws) {
   };
 }
 
-async function doctor(ws) {
+// The diagnostics. The write test (a durable write of a probe file, read back
+// and compared) runs only when asked for: the CLI's doctor command and the
+// dashboard's "Run write test" (POST). An ordinary status read writes nothing.
+async function doctor(ws, { writeProbe = false } = {}) {
   const checks = [];
   const add = (name, ok, detail, level = ok ? 'ok' : 'fail') => checks.push({ name, status: level, detail });
   const rt = runtimeInfo(ws);
@@ -102,15 +105,19 @@ async function doctor(ws) {
 
   // Write verification: overwrite a fixed probe file, read it back, compare.
   // Uses one fixed name, so it never needs to delete anything.
-  const probeRel = '.cr/doctor.probe';
-  const payload = `doctor ${new Date().toISOString()} ${crypto.randomBytes(8).toString('hex')}`;
-  try {
-    writeDurable(ws.abs(probeRel), payload);
-    const back = fs.readFileSync(ws.abs(probeRel), 'utf8');
-    const ok = sha256(back) === sha256(payload);
-    add('Write test', ok, ok ? 'Wrote, read back and matched a test file in the workspace.' : 'Read-back did not match. Do not report saves as successful.');
-  } catch (err) {
-    add('Write test', false, `Could not write to the workspace: ${err.message}. Nothing can be saved here.`);
+  if (writeProbe) {
+    const probeRel = '.cr/doctor.probe';
+    const payload = `doctor ${new Date().toISOString()} ${crypto.randomBytes(8).toString('hex')}`;
+    try {
+      writeDurable(ws.abs(probeRel), payload);
+      const back = fs.readFileSync(ws.abs(probeRel), 'utf8');
+      const ok = sha256(back) === sha256(payload);
+      add('Write test', ok, ok ? 'Wrote, read back and matched a test file in the workspace.' : 'Read-back did not match. Do not report saves as successful.');
+    } catch (err) {
+      add('Write test', false, `Could not write to the workspace: ${err.message}. Nothing can be saved here.`);
+    }
+  } else {
+    add('Write test', true, 'Not run: a status read writes nothing. Run the write test (Settings, or node dashboard/cli.js doctor) to write, read back and compare a test file.', 'info');
   }
   const caps = sessionCapabilities(ws);
   add('This session', caps.can_write, `${caps.route}. Rename ${caps.can_rename ? 'allowed' : 'not allowed'}, delete ${caps.can_delete ? 'allowed' : 'not allowed'}.${caps.notes.length ? ` ${caps.notes.join(' ')}` : ''}`, caps.can_write ? 'ok' : 'fail');
@@ -123,6 +130,8 @@ async function doctor(ws) {
     const sealed = pending.filter((p) => p.state === 'sealed').length;
     add('Interrupted writes', !sealed, `${pending.length} staging folder(s): ${pending.map((p) => `${p.op_id} (${p.state})`).join(', ')}.${sealed ? ' Run: node dashboard/cli.js recover' : ' Only cleanup is pending.'}`, sealed ? 'warn' : 'info');
   }
+  const restored = require('./research').restoredHold(ws);
+  if (restored) add('Restored copy', true, `Restored ${restored.restored_at || ''} from a ${(restored.from && restored.from.kind) || 'copy'}: research is held, so no model provider is asked for anything here. Release it with node dashboard/cli.js restored-copy release --confirm.`, 'info');
   const lock = ops.lockState(ws);
   if (lock.present && !lock.stale && !lock.mine) add('Workspace lock', true, `Held right now: ${lock.reason}.`, 'info');
 
@@ -235,7 +244,9 @@ async function doctor(ws) {
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   add('Time zone', true, `System ${tz}; review dates use America/New_York`, 'ok');
   const worst = checks.some((c) => c.status === 'fail') ? 'fail' : checks.some((c) => c.status === 'warn') ? 'warn' : 'ok';
-  return { status: worst, verified_write: checks.find((c) => c.name === 'Write test').status === 'ok', checked_at: new Date().toISOString(), runtime: rt, session: caps, checks };
+  // verified_write: true or false when the write test ran; null when it did not.
+  const wt = checks.find((c) => c.name === 'Write test');
+  return { status: worst, write_test: writeProbe ? 'run' : 'not_run', verified_write: writeProbe ? wt.status === 'ok' : null, checked_at: new Date().toISOString(), runtime: rt, session: caps, checks };
 }
 
 module.exports = { doctor, serverStatus, sessionCapabilities, runtimeInfo };

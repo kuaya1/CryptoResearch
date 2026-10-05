@@ -909,7 +909,7 @@ function modelHead(ctx, p, prov) {
   // The six weighted parts the grade is calculated from, one tap away
   // (filled from the full record); the category grades below are diagnostics.
   const parts = rep && !rep.needs_text ? h('details', { class: 'ig-parts', dataset: { key: `ig-parts-${pid}-${prov}` } },
-    h('summary', null, h('span', null, 'Weighted parts')),
+    h('summary', { title: 'What the investment grade is calculated from: each component score times its weight. The diagnostic categories never enter it.' }, h('span', null, 'Six weighted components')),
     h('div', { dataset: { slot: `grade-${prov}` } }, skeleton('Loading the six weighted parts'))) : null;
   // The model's own total, when it differs from the grade calculated here from
   // the same report: by how much, the full sentence in its tooltip. It is not

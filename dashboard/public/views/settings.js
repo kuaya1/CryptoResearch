@@ -99,10 +99,7 @@ function generalTab(ctx) {
     ]), { note: 'Each value shows the source it came from.' }));
 }
 
-// A model's research route, as readiness reports it: automatic on its API,
-// or setup required (what is missing in the tooltip and below the label) and
-// meanwhile waiting for its assistant (online desk) or a pasted answer (PC).
-// Three things kept apart: a model on hold (paused by you), automatic research
+// A model's research route, as readiness reports it. Three things kept apart: a model on hold (paused by you), automatic research
 // on its paid API, and manual research (its own assistant when you ask, or a
 // pasted answer: nothing to set up); the optional API's missing setup is a
 // note, not a warning.
@@ -115,7 +112,7 @@ function routeCell(ctx, p, m, hostedDesk) {
   }
   if (m.route === 'automatic') return h('span', null, stateText('Automatic (API)', 'ok'), m.reservation_usd !== null ? h('div', { class: 'small muted' }, `about ${fmtUsd(m.reservation_usd)} reserved per attempt`) : null);
   if (m.route === 'demo') return stateText('Fictional demo adapter');
-  return h('span', { title: m.setup || '' }, stateText(hostedDesk ? 'Manual · its assistant, when you ask' : 'Manual · paste by hand'), h('div', { class: 'small muted' }, `Automatic route (optional): ${m.setup_short || 'not set up'}`));
+  return h('span', { title: m.setup || '' }, stateText(hostedDesk ? 'Manual · ready through its assistant' : 'Manual · ready by paste and import'), h('div', { class: 'small muted' }, `Automatic route (optional): ${m.setup_short || 'not set up'}`));
 }
 const fmtUsd = (x) => `$${x > 0 && x < 0.1 ? x.toFixed(4) : x.toFixed(2)}`;
 
@@ -202,12 +199,12 @@ async function researchTab(ctx) {
       h('li', null, 'In Render, open the CryptoResearch service, then Environment.'),
       h('li', null, 'Add only the keys you want to use: ', h('code', null, 'ANTHROPIC_API_KEY'), ', ', h('code', null, 'OPENAI_API_KEY'), ', ', h('code', null, 'GEMINI_API_KEY'), '. Save; Render restarts the desk with them. Never paste a key into a chat or this page.'),
       h('li', null, 'Set the model ID and token prices above (from each provider\'s pricing page), then the three limits.'),
-      h('li', null, 'The Route column shows "Automatic (API)" when everything needed is present. That model then runs by itself in the background, within your limits. Until then it says "Setup required" and what is missing, and its jobs wait for its assistant.')))
+      h('li', null, 'The Route column shows "Automatic (API)" when everything needed is present. That model then runs by itself in the background, within your limits. Until then it shows "Manual · ready through its assistant": its research works when you ask its assistant, and the optional automatic route\'s missing setting is named below it.')))
     : card('How to add a key (on this PC only)', h('ol', { class: 'list small' },
       h('li', null, 'Create the file ', h('code', null, info.keys_file), ' (outside your workspace, so it is never backed up or exported).'),
       h('li', null, 'Put in only the keys you want to use, for example ', h('code', null, '{ "anthropic_api_key": "…", "openai_api_key": "…", "gemini_api_key": "…" }'), '. Environment variables ANTHROPIC_API_KEY, OPENAI_API_KEY and GEMINI_API_KEY also work.'),
       h('li', null, 'Set the model ID and token prices above (from each provider\'s pricing page), then the three limits.'),
-      h('li', null, 'Restart the dashboard. The Route column shows "Automatic (API)" when everything needed is present; until then it says "Setup required" and what is missing.')));
+      h('li', null, 'Restart the dashboard. The Route column shows "Automatic (API)" when everything needed is present; until then it shows "Manual · ready by paste and import", with the optional automatic route\'s missing setting below it.')));
   return h('div', null,
     ready ? card('Readiness', [
       h('p', null, ready.summary),
@@ -345,6 +342,10 @@ function revisionItem(session) {
     : 'unknown (no deploy or Git information).');
 }
 
+// The last write test run from this page: a write redraws the page (live
+// updates), and the redraw's read does not run the test again.
+let lastWriteTest = null;
+
 async function systemTab(ctx) {
   const idx = ctx.state.index;
   const hostedDesk = Boolean(ctx.state.session && ctx.state.session.hosted);
@@ -366,19 +367,30 @@ async function systemTab(ctx) {
         ? callout('The hourly task is not installed. Background updates only happen while the dashboard is open. Install it with: node dashboard/cli.js schedule install', 'warn')
         : callout(`Scheduler status unavailable: ${s.error || s.status}`, 'warn'));
   }).catch((err) => sched.replaceChildren(callout(err.message, 'bad')));
-  const doc = h('div', null, h('p', { class: 'small muted' }, 'Running checks…'));
-  ctx.api.get('/api/doctor').then((d) => {
-    doc.replaceChildren(
-      kv([
-        ['Node', d.runtime ? `v${d.runtime.version}${d.runtime.support ? ` · ${d.runtime.support}` : ''}${d.runtime.project_pin ? ` · project pin ${d.runtime.project_pin}` : ''}` : '—'],
-        ['This session', d.session ? `${d.session.host || '?'}${d.session.home_host ? ` (workspace home: ${d.session.home_host})` : ''} · write ${d.session.can_write ? 'yes' : 'no'}, rename ${d.session.can_rename ? 'yes' : 'no'}, delete ${d.session.can_delete ? 'yes' : 'no'}` : '—'],
-      ]),
-      table([
-        { label: 'Check', key: 'name' },
-        { label: 'Result', render: (c) => stateText(c.status === 'ok' ? 'OK' : c.status === 'warn' ? 'Warning' : 'Problem', c.status === 'ok' ? 'ok' : c.status === 'warn' ? 'warn' : 'bad') },
-        { label: 'Detail', wrap: true, render: (c) => h('span', { class: 'small' }, c.detail || c.message || '') },
-      ], d.checks || []));
-  }).catch((err) => doc.replaceChildren(callout(err.message, 'bad')));
+  // Opening Settings reads the checks and writes nothing; the write test is
+  // its own action (POST), like node dashboard/cli.js doctor.
+  const doc = h('div', null, h('p', { class: 'small muted' }, 'Reading checks…'));
+  const RESULT = { ok: ['OK', 'ok'], warn: ['Warning', 'warn'], info: ['Note', ''], fail: ['Problem', 'bad'] };
+  const writeBtn = button('Run write test', null, { kind: 'small', key: 'doctor-write-test' });
+  writeBtn.title = 'Writes a test file in the workspace, reads it back and compares';
+  const drawDoctor = (read) => {
+    const wt = read.write_test === 'run' ? read : lastWriteTest;
+    const wtCheck = wt ? wt.checks.find((c) => c.name === 'Write test') : null;
+    const d = wt && read.write_test !== 'run' ? { ...read, write_test: 'run', verified_write: wt.verified_write, checked_at: wt.checked_at, checks: read.checks.map((c) => (c.name === 'Write test' && wtCheck ? wtCheck : c)) } : read;
+    return doc.replaceChildren(
+    kv([
+      ['Node', d.runtime ? `v${d.runtime.version}${d.runtime.support ? ` · ${d.runtime.support}` : ''}${d.runtime.project_pin ? ` · project pin ${d.runtime.project_pin}` : ''}` : '—'],
+      ['This session', d.session ? `${d.session.host || '?'}${d.session.home_host ? ` (workspace home: ${d.session.home_host})` : ''} · write ${d.session.can_write ? 'yes' : 'no'}, rename ${d.session.can_rename ? 'yes' : 'no'}, delete ${d.session.can_delete ? 'yes' : 'no'}` : '—'],
+      ['Write test', h('span', null, d.write_test === 'run' ? stateText(d.verified_write ? `Verified ${fmtDateTime(d.checked_at)}` : 'Failed', d.verified_write ? 'ok' : 'bad') : h('span', { class: 'muted' }, 'Not run on this read'), ' ', writeBtn)],
+    ]),
+    table([
+      { label: 'Check', key: 'name' },
+      { label: 'Result', render: (c) => (c.name === 'Write test' && d.write_test !== 'run' ? stateText('Not run', '') : stateText(...(RESULT[c.status] || RESULT.fail))) },
+      { label: 'Detail', wrap: true, render: (c) => h('span', { class: 'small' }, c.detail || c.message || '') },
+    ], d.checks || []));
+  };
+  writeBtn.onclick = action(writeBtn, async () => { lastWriteTest = await ctx.api.post('/api/doctor/write-test', {}); drawDoctor(lastWriteTest); return true; }, 'Write test run');
+  ctx.api.get('/api/doctor').then(drawDoctor).catch((err) => doc.replaceChildren(callout(err.message, 'bad')));
   const jobs = idx.settings.jobs || {};
   // Connected apps: assistant connections (Claude, ChatGPT, Gemini) Eric
   // approved for the online desk.

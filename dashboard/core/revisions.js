@@ -8,6 +8,10 @@
 //                    existing_evidence  scores changed and no source was added
 //                    new_sources        scores changed with new sources cited
 //                    scores_unchanged   the same scores, rewritten text
+// A range the earlier save gave that the revision turns into a point inside
+// it, with no new source, is a narrowing of the same judgment (often the
+// midpoint), never new research: the label says so, and the earlier save,
+// with its range, stays saved.
 // A model that saves a revision through its connection says why (kind and
 // note, kept on its meta as provenance.revision); reports saved before that
 // was asked for have no stated reason, and that is said, never guessed.
@@ -34,6 +38,25 @@ function changed(a, b, group) {
   return [...new Set([...Object.keys(x), ...Object.keys(y)])]
     .filter((k) => scoreKey(x[k]) !== scoreKey(y[k]))
     .map((k) => ({ id: k, from: scoreText(x[k]), to: scoreText(y[k]) }));
+}
+
+// Scores that were a range in the earlier save and are a point inside that
+// range now: which, in which group, and whether the point is the midpoint.
+function narrowed(a, b) {
+  const out = [];
+  for (const group of ['investment_components', 'diagnostic_scores', 'risk_scores']) {
+    const x = (a && a[group]) || {};
+    const y = (b && b[group]) || {};
+    for (const k of Object.keys(y)) {
+      const s0 = x[k];
+      const s1 = y[k];
+      if (!s0 || !s1 || s0.status !== 'range' || s1.status !== 'scored') continue;
+      if (![s0.low, s0.high, s1.value].every((v) => typeof v === 'number' && Number.isFinite(v))) continue;
+      if (s1.value < s0.low || s1.value > s0.high) continue;
+      out.push({ id: k, group, from: scoreText(s0), to: scoreText(s1), midpoint: Math.abs(s1.value - (s0.low + s0.high) / 2) <= 0.5 });
+    }
+  }
+  return out;
 }
 
 // The new source URLs of `r` against `prev` (for the reply and the label).
@@ -75,6 +98,8 @@ function revisionOf(reports, r) {
     changed_components: components,
     changed_categories: categories.length,
     changed_risks: risks.length,
+    // Ranges turned into a point inside them; with no new source, not new research.
+    narrowed: narrowed(prev.assessment, r.assessment),
     declared: declared ? { kind: declared.kind || null, label: REVISION_KINDS[declared.kind] || null, note: declared.note || null } : null,
     minutes_after: Math.round((Date.parse(at) - Date.parse(prev.meta.imported_at || '')) / 60000) || 0,
   };
@@ -89,7 +114,21 @@ function revisionLabel(rev, { labels = {} } = {}) {
     : rev.basis === 'new_sources' ? `Revision with ${rev.sources.added} new source${rev.sources.added === 1 ? '' : 's'}`
       : 'Re-saved: the same scores';
   const why = rev.declared && rev.declared.note ? ` The model's reason: ${rev.declared.note}` : ' No reason was recorded with this save.';
-  return `${head}, ${rev.minutes_after} min after ${rev.of}: ${what}.${why}`;
+  const nar = narrowedText(rev);
+  return `${head}, ${rev.minutes_after} min after ${rev.of}: ${what}.${nar ? ` ${nar}` : ''}${why}`;
 }
 
-module.exports = { REVISION_KINDS, revisionOf, revisionLabel, newSources, runOf };
+// "2 ranges became a point inside the same range (1 at its midpoint) with no
+// new source: a narrowing of the earlier judgment, not new research."
+function narrowedText(rev) {
+  const n = rev && Array.isArray(rev.narrowed) ? rev.narrowed : [];
+  if (!n.length) return null;
+  const mid = n.filter((x) => x.midpoint).length;
+  const many = n.length !== 1;
+  const midText = mid ? ` (${mid === n.length ? (many ? 'each at its midpoint' : 'at its midpoint') : `${mid} at the midpoint`})` : '';
+  return rev.basis === 'new_sources'
+    ? `${n.length} range${many ? 's' : ''} became a point inside the same range${midText}.`
+    : `${n.length} range${many ? 's' : ''} became a point inside the same range${midText} with no new source: a narrowing of the earlier judgment, not new research.`;
+}
+
+module.exports = { REVISION_KINDS, revisionOf, revisionLabel, narrowedText, newSources, runOf };

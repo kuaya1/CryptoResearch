@@ -4,7 +4,7 @@
 // stay in place after an error so they can be corrected and retried.
 import {
   h, field, fieldError, input, select, button, callout, openDialog, submissionId, toast, copyText, busy, stateText, details,
-  PROVIDERS, PROVIDER_LABELS, WAITING_SENTENCE, fmtDateTime, jobKey, researchState, waitingInstruction,
+  PROVIDERS, PROVIDER_LABELS, WAITING_SENTENCE, fmtDateTime, jobKey, researchState, waitingInstruction, onHoldOf, fmtDate,
 } from '../ui.js';
 import { horizonHint, needsReason } from '../position-ui.js';
 
@@ -62,8 +62,10 @@ function routeOf(ctx, prov) {
   if (st.mode === 'api') return { mode: 'api', text: `API · ${st.model} · runs by itself in the background, within your limits`, next: null };
   if (st.mode === 'mock') return { mode: 'mock', text: 'Demo · fictional answers; nothing is sent or billed', next: null };
   const who = PROVIDER_LABELS[prov];
-  const setup = h('a', { href: '#/settings?tab=research', class: 'small' }, isHosted(ctx) ? 'Add an API key to run it by itself' : 'Set up API access');
-  if (isHosted(ctx)) return { mode: 'assistant', text: `Its assistant's connection · waits for you; then ${waitingInstruction(prov).replace(/^T/, 't')}`, next: setup };
+  const hold = onHoldOf(ctx.state.index, prov);
+  if (hold) return { mode: 'hold', text: `On hold on this desk${hold.since ? ` since ${fmtDate(hold.since)}` : ''} · nothing new is assigned to it; lift the hold in Settings`, next: null };
+  const setup = h('a', { href: '#/settings?tab=research', class: 'small' }, isHosted(ctx) ? 'Optional: add an API key to run it by itself' : 'Optional: set up API access');
+  if (isHosted(ctx)) return { mode: 'assistant', text: `Manual, ready · through its assistant's connection: ${waitingInstruction(prov).replace(/^T/, 't')}`, next: setup };
   return {
     mode: 'manual',
     text: prov === 'claude' ? 'By hand · paste the prompt into Claude yourself, or ask Cowork to run it' : `By hand · paste the prompt into ${who}, then import its answer`,
@@ -77,11 +79,12 @@ function providerChoices(ctx, preselect) {
     h('legend', { class: 'field-label', style: { marginBottom: '6px' } }, 'Models'),
     PROVIDERS.map((p) => {
       const r = routeOf(ctx, p);
-      const cb = h('input', { type: 'checkbox', name: `provider-${p}`, checked: preselect.includes(p) });
+      // A model on hold is shown as held, never offered: it cannot be chosen.
+      const cb = h('input', { type: 'checkbox', name: `provider-${p}`, checked: r.mode !== 'hold' && preselect.includes(p), disabled: r.mode === 'hold' });
       boxes[p] = cb;
       return h('label', { class: 'choice' }, cb, h('span', { class: 'title' }, PROVIDER_LABELS[p]), h('span', { class: 'desc' }, r.text, r.next ? h('span', null, ' · ', r.next) : null));
     }));
-  return { group, chosen: () => PROVIDERS.filter((p) => boxes[p].checked) };
+  return { group, chosen: () => PROVIDERS.filter((p) => boxes[p].checked && !boxes[p].disabled) };
 }
 
 function costNote(ctx) {
@@ -89,15 +92,17 @@ function costNote(ctx) {
   const st = r.providers || {};
   const modes = Object.values(st).map((s) => s.mode);
   if (modes.length && modes.every((m) => m === 'mock')) return 'Demo workspace: every model answers with a fictional fixture. Nothing is sent anywhere and nothing is billed.';
-  const api = PROVIDERS.filter((p) => st[p] && st[p].mode === 'api');
-  const rest = PROVIDERS.filter((p) => !api.includes(p) && !(st[p] && st[p].mode === 'mock'));
+  const held = PROVIDERS.filter((p) => onHoldOf(ctx.state.index, p));
+  const api = PROVIDERS.filter((p) => st[p] && st[p].mode === 'api' && !held.includes(p));
+  const rest = PROVIDERS.filter((p) => !api.includes(p) && !held.includes(p) && !(st[p] && st[p].mode === 'mock'));
   const parts = [];
   if (api.length) parts.push(`${names(api)} ${api.length === 1 ? 'runs by itself' : 'run by themselves'} on the API in the background, within your limits (per run ${money(r.budget && r.budget.per_run_usd)}, day ${money(r.budget && r.budget.daily_usd)}, month ${money(r.budget && r.budget.monthly_usd)}). A request that has been sent cannot be un-sent; canceling stops retries, not charges already incurred.`);
   if (rest.length) {
     parts.push(isHosted(ctx)
-      ? `${names(rest)} ${rest.length === 1 ? 'waits' : 'wait'} for you: tell ${rest.length === 1 ? 'it' : 'each one'} "${WAITING_SENTENCE}" in its own app. It researches under its own plan, so nothing is billed here. Or paste the prompt and import the answer.`
-      : `${names(rest)} ${rest.length === 1 ? 'has' : 'have'} no API set up, so nothing is billed: each gets the same prompt for you to paste, and its job completes when you import the answer.`);
+      ? `${names(rest)}: manual research, ready. Tell ${rest.length === 1 ? 'it' : 'each one'} "${WAITING_SENTENCE}" in its own app; it researches under its own plan, so nothing is billed here. Or paste the prompt and import the answer. Automatic API research is optional.`
+      : `${names(rest)}: manual research, ready. Each gets the same prompt for you to paste, and its job completes when you import the answer; nothing is billed. Automatic API research is optional.`);
   }
+  if (held.length) parts.push(`${names(held)} ${held.length === 1 ? 'is' : 'are'} on hold: nothing new is assigned.`);
   return parts.join(' ');
 }
 

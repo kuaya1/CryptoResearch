@@ -102,7 +102,7 @@ function mockReport(ws, provider, run) {
       trend_vs_btc: 'FICTIONAL: lower highs against BTC.',
       levels: [{ kind: 'support', price_usd: 0.021, timeframe: '1W', basis: 'FICTIONAL: three weekly closes held it.' }, { kind: 'resistance', price_usd: 0.034, timeframe: '1D', basis: 'FICTIONAL: two failed breakouts.' }],
       volume: { baseline: 'FICTIONAL 30-day average daily volume on the demo venue', reading: 'FICTIONAL: volume rose on up days.', confirms_price: pick([true, false, null]) },
-      liquidity: 'FICTIONAL: thin books on one venue.',
+      liquidity: `FICTIONAL: about $18K within 2% of the price on each side on one venue, ${today}.`,
       confirmation: ['FICTIONAL: a weekly close above resistance on rising volume.'],
       invalidation: ['FICTIONAL: a weekly close below support.'],
       evidence_refs: ['C1'],

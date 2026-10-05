@@ -654,11 +654,18 @@ test('category checks: reports that carry the evidence stay unflagged (code read
   const sameDay = clone();
   sameDay.chart_cycle.data.latest_observation_at = '2026-10-03 14:00 UTC';
   assert.deepEqual(flagsOf(imp(sameDay)), [], 'a date-time written another way still names the day');
-  // Chart grades left unknown: nothing to date.
+  // Chart grades left unknown: nothing to date. The weighted timing and
+  // liquidity component is still scored, and its depth figure is now undated:
+  // only that component's liquidity part is noted (low), never the timing.
   const unknownCharts = clone();
   for (const id of ['chart_structure', 'cycle_timing', 'volume_liquidity']) unknownCharts.diagnostic_scores[id] = { ...unknownCharts.diagnostic_scores.code_quality };
   delete unknownCharts.chart_cycle.data.latest_observation_at;
-  assert.deepEqual(flagsOf(imp(unknownCharts)), []);
+  assert.deepEqual(flagsOf(imp(unknownCharts)), [['executable_liquidity_unsupported', 'low', '']]);
+  const unknownDated = clone();
+  for (const id of ['chart_structure', 'cycle_timing', 'volume_liquidity']) unknownDated.diagnostic_scores[id] = { ...unknownDated.diagnostic_scores.code_quality };
+  unknownDated.chart_cycle.liquidity = 'FICTIONAL: about $40k within 2% on each side on one venue on 2026-10-03.';
+  delete unknownDated.chart_cycle.data.latest_observation_at;
+  assert.deepEqual(flagsOf(imp(unknownDated)), [], 'a depth figure dated in its own words needs no chart date');
   // A report written for prompt @4 was not asked for these blocks.
   const v4 = withCode(scoredAt(clone(), 'code_quality', 99, 'high'), { source_access: 'none', repositories: [] });
   v4.prompt_version = 'cr-research-prompt@4';
@@ -674,7 +681,7 @@ test('category checks: a code grade without a commit and files, and a chart date
   const noCommit = withCode(scoredAt(clone(), 'code_quality', 80), { source_access: 'public', repositories: [{ url: 'https://code.example.net/xnet/node', role: 'FICTIONAL', commit: null, files_inspected: ['src/a.ts'], observations: null }] });
   const fl = evidenceChecks(imp(noCommit)).flags;
   assert.deepEqual(fl.map((f) => [f.rule, f.severity, f.category]), [['code_score_without_inspection', 'medium', 'code_quality']]);
-  assert.match(fl[0].message, /^Code quality is scored 80, but files are listed without the commit they were read at\. The prompt asks for the repository, the commit and the files read; without them code quality is unknown\.$/);
+  assert.match(fl[0].message, /^Code quality is scored 80, but files are listed without the commit they were read at\. The prompt asks for the repository, the commit and the implementation files read; commit history, releases and test counts are activity, not inspection\. Without them code quality is unknown\.$/);
   const noBlock = scoredAt(clone(), 'code_quality', 80);
   delete noBlock.code_review;
   assert.match(evidenceChecks(imp(noBlock)).flags[0].message, /but the report has no account of the code it read\./);

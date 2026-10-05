@@ -507,13 +507,26 @@ export function flaggedText(ev) {
 // (core/evidence.js): flags with the reason and what would settle each;
 // never a score change.
 const SEVERITY_TONE = { high: 'bad', medium: 'warn', low: '' };
+// A clean result in words that claim no more than the checks do: they found
+// no inconsistency, they did not verify the facts, and with too little to
+// check they say so.
+export function checksWord(ev) {
+  if (!ev) return 'not run';
+  const cov = ev.coverage && typeof ev.coverage === 'object' ? ev.coverage.status : ev.coverage;
+  if (cov === 'none') return 'coverage insufficient';
+  return cov === 'partial' ? 'no inconsistencies detected · partial coverage' : 'no inconsistencies detected';
+}
 export function evidenceChecksBlock(ev) {
   if (!ev) return null;
+  const cov = ev.coverage && typeof ev.coverage === 'object' ? ev.coverage.status : ev.coverage;
+  const head = ev.flags.length ? `${flaggedText(ev)} flagged`
+    : cov === 'none' ? 'Evidence checks: coverage insufficient' : 'No inconsistencies detected by these checks';
   return h('div', { class: 'small', style: { margin: '0 0 10px' } },
     h('p', { style: { margin: '0 0 4px' } },
-      stateText(ev.flags.length ? `${flaggedText(ev)} flagged` : 'Evidence checks: nothing flagged', ev.high ? 'bad' : ev.flags.length ? 'warn' : 'ok'),
+      stateText(head, ev.high ? 'bad' : ev.flags.length || cov === 'none' ? 'warn' : ''),
       ' ', h('span', { class: 'muted' }, ev.summary)),
     ev.flags.length ? h('ul', { class: 'list small' }, ev.flags.map((x) => h('li', null, stateText(x.severity, SEVERITY_TONE[x.severity]), ' ', x.message))) : null,
+    h('p', { class: 'small faint', style: { margin: '4px 0 0' } }, ev.tag_note || 'A claim tagged [V] is the researcher\'s own classification of its source; the desk does not verify it independently.'),
     ev.source_types && ev.source_types.outside_list.length
       ? h('p', { class: 'small muted', style: { margin: '4px 0 0' } }, `Source types written outside the accepted list, read as: ${ev.source_types.outside_list.map((x) => `${x.given} as ${x.read_as}`).join(', ')}.`)
       : null);

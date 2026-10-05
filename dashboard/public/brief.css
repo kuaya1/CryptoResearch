@@ -106,6 +106,16 @@
 .bf-nmore[open] > summary { color: var(--text); }
 .bf-nbody { margin-top: 6px; color: var(--text-2); }
 .bf-nbody p { margin: 0 0 4px; }
+/* Key points: the strongest sourced risk, what would confirm, what would
+   break, in one gray well before the thesis and the scorecard. */
+.bf-keys { margin: var(--s5) 0 0; padding: 12px 16px; display: grid; gap: 10px; background: var(--surface-sunken); border-radius: var(--r-well, var(--r-md)); }
+.bf-key { display: grid; grid-template-columns: 176px minmax(0, 1fr); gap: 2px 16px; align-items: baseline; }
+.bf-key + .bf-key { padding-top: 10px; border-top: 1px solid var(--separator); }
+.bf-key dt { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.bf-key dd { margin: 0; min-width: 0; }
+.bf-key-t { margin: 0; font-size: 14px; line-height: 1.5; color: var(--text); overflow-wrap: anywhere; }
+.bf-key .bf-cite { margin-top: 4px; }
+.bf-key-more { display: block; margin-top: 2px; font-size: var(--fs-small); color: var(--text-3); }
 
 /* ---- the thesis ----------------------------------------------------------------- */
 .bf-qs { display: grid; gap: var(--s5); }
@@ -327,6 +337,8 @@
   .bf-comp > details > summary, .bf-cat > details > summary, .bf-risk { min-height: var(--touch); }
   /* Small controls inside a line keep the line as it is but take a finger. */
   .bf-nmore > summary, .bf-notice button.link { display: inline-block; padding-block: 12px; margin-block: -12px; }
+  /* Source links inside a citation line, here and in the inspector's thesis. */
+  .bf-cite a, .thesis .th-cite a { display: inline-block; padding-block: 13px; margin-block: -13px; }
 }
 @media (max-width: 860px) {
   /* A phone: the brief takes the whole screen with its own bar. */
@@ -337,6 +349,7 @@
 }
 @media (max-width: 760px) {
   .bf-vgrid { grid-template-columns: minmax(0, 1fr); justify-items: stretch; }
+  .bf-key { grid-template-columns: minmax(0, 1fr); }
   .bf-grade { justify-self: center; }
   .bf-grade.withheld { justify-self: stretch; }
   .bf-vlabel { font-size: 18px; }

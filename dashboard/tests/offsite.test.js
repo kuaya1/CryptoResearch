@@ -237,8 +237,15 @@ test('restore drill: a backup or package made while a background request was sub
   const restored = exporter.restorePackage(JSON.parse(JSON.stringify(pkg)), dest);
   assert.equal(restored.status, 'restored_and_verified', JSON.stringify(restored));
   assert.ok(fs.existsSync(path.join(dest, ...capRel.split('/'))));
-  // The restored desk collects by the captured ID: nothing is sent again.
+  // A restored copy holds research: nothing is asked of the provider, not
+  // even the answer, until Eric releases it.
   const ws2 = openWorkspace({ root: dest, actor: 'test' });
+  assert.equal(restored.restored_copy.research_held, true);
+  const heldRun = await research.runDueJobs(ws2, { fetchImpl: async () => { throw new Error('no call may be made while held'); } });
+  assert.equal(heldRun.status, 'held');
+  assert.equal(posts, 1);
+  // Released, it collects by the captured ID: nothing is sent again.
+  assert.equal(research.releaseRestoredCopy(ws2).status, 'saved');
   const out = await research.runDueJobs(ws2, { fetchImpl: f });
   assert.equal(out.results[0].status, 'completed', JSON.stringify(out.results));
   assert.equal(posts, 1, 'collected by its ID, never sent again');
@@ -295,6 +302,9 @@ test('restore drill (2026-10-04): a copy holding an uncertain paid attempt and a
   // Every file of the package is in the copy, byte for byte.
   for (const f of pkg.files) assert.equal(sha256(fs.readFileSync(path.join(dest, ...f.path.split('/')))), f.sha256, f.path);
   const ws2 = openWorkspace({ root: dest, actor: 'test' });
+  // Released (a held copy would ask nothing anyway): the runner itself still
+  // never resends the uncertain attempt or sends the held job.
+  research.releaseRestoredCopy(ws2);
   assert.deepEqual(projects.listProjects(ws2).map((p) => [p.project_id, p.status]).sort(), [[other, 'archived'], [pid, 'active']].sort());
   assert.equal(research.loadRun(ws2, pid, run.run_id).jobs.chatgpt.state, 'uncertain');
   assert.equal(research.loadRun(ws2, other, run2.run_id).jobs.chatgpt.hold.why, 'archived');
@@ -377,4 +387,69 @@ test('offsite job: due once a day on a PC that is set up; never on the online de
   assert.equal(jobs.isDue(setUp, 'offsite', { jobs: { offsite: { last_success_day: require('../core/dates').ymdInTz() } } }, Date.now(), {}), false, 'once a day');
   const deskWs = Object.create(setUp, { hosted: { value: true } });
   assert.equal(jobs.isDue(deskWs, 'offsite', state, Date.now(), {}), false, 'the desk serves, it does not pull');
+});
+
+// Review of fa05f99 (2026-10-05): the recovery drill as one command. A copy
+// pulled from the desk is verified, restored into a new folder of its own,
+// its records, originals and research state checked, and the restored copy's
+// runner asked once with a network stand-in that refuses and counts: unsent,
+// sent, uncertain and quarantined jobs are restored as they were and nothing
+// is asked of any provider.
+test('offsite drill: pulled copy verified, restored in isolation, originals and research states intact, zero provider calls; a tampered copy is not restored', async (t) => {
+  withEnv(t, { CR_BACKUP_KEY: KEY, OPENAI_API_KEY: 'test-key-not-real-o' });
+  const d = await desk(t, 'drill');
+  const pid = 'example-payfi-fictional';
+  const inbox = require('../core/inbox');
+  const { FIXTURES } = require('./helpers');
+  const saved = inbox.importContent(d.ws, 'claude', { content: fs.readFileSync(path.join(FIXTURES, 'reports', `${pid}__claude.md`), 'utf8'), projectId: pid });
+  assert.equal(saved.result.status, 'ingested', saved.result.message);
+  // Four ChatGPT jobs, one in each state the review names.
+  const states = [];
+  for (const kind of ['unsent', 'sent', 'uncertain', 'quarantined']) {
+    const run = research.createRun(d.ws, { project_id: pid, providers: ['chatgpt'], force_new: true }).run;
+    const file = d.ws.abs(`projects/${pid}/research/${run.run_id}/run.json`);
+    const doc = readJson(file);
+    const j = doc.jobs.chatgpt;
+    if (kind === 'unsent') Object.assign(j, { state: 'queued', attempts: [] });
+    if (kind === 'sent') Object.assign(j, { state: 'dispatching', attempts: [{ n: 1, attempt_id: 'att_drill_sent', phase: 'submitted', response_id: 'resp_drill_sent', submitted_at: '2026-10-05T10:00:00Z', reservation_usd: 0.5 }] });
+    if (kind === 'uncertain') Object.assign(j, { state: 'uncertain', attempts: [{ n: 1, attempt_id: 'att_drill_unc', phase: 'uncertain', reservation_usd: 0.5, dispatched_at: '2026-10-05T10:00:00Z' }] });
+    if (kind === 'quarantined') Object.assign(j, { state: 'failed', outcome: 'contract_conflict', quarantined_report_id: 'FICTIONAL-quarantined', attempts: [] });
+    atomicWrite(file, jsonText(doc));
+    states.push(kind);
+  }
+  const { ws: pc, root, cleanup } = tempWorkspace('offsite-drill-pc');
+  t.after(cleanup);
+  const folder = path.join(root, 'offsite-copies');
+  const pulled = await offsite.pull(pc, { to: folder, deskUrl: `https://${HOST}`, fetchImpl: deskFetch(d.port) });
+  assert.equal(pulled.status, 'ok', pulled.message);
+  const liveBefore = fs.readdirSync(path.join(root, 'projects')).join(',');
+  const dest = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cr-drill-')), 'restored');
+  t.after(() => fs.rmSync(path.dirname(dest), { recursive: true, force: true, maxRetries: 5 }));
+  // Never into the live workspace.
+  await assert.rejects(() => offsite.drill(pc, { folder, to: path.join(root, 'drill') }), /outside the live workspace/);
+  const out = await offsite.drill(pc, { folder, to: dest });
+  assert.equal(out.status, 'passed', out.message);
+  assert.equal(out.copy.file, path.basename(pulled.file));
+  assert.equal(out.copy.sha256, sha256(fs.readFileSync(pulled.file)));
+  assert.equal(out.copy.matches_index, true);
+  assert.equal(out.restore.status, 'restored_and_verified');
+  assert.equal(out.restore.research_held, true);
+  assert.equal(out.records.reports_checked, 1);
+  assert.deepEqual(out.records.originals_changed, []);
+  assert.deepEqual([out.research.unsent, out.research.sent_collect_by_id, out.research.uncertain, out.research.quarantined], [1, 1, 1, 1]);
+  assert.equal(out.provider_calls, 0);
+  assert.equal(out.runner, 'held');
+  assert.match(out.message, /^Drill passed: .* no provider asked for anything \(1 unsent, 1 sent, 1 uncertain and 1 quarantined job\(s\) restored as they were\)\.$/);
+  // The restored copy says what it is; the live workspace is untouched.
+  const ws2 = openWorkspace({ root: dest, actor: 'test' });
+  assert.equal(research.restoredHold(ws2).from.kind, 'package');
+  assert.equal(fs.readdirSync(path.join(root, 'projects')).join(','), liveBefore);
+  assert.equal(readJson(path.join(folder, 'OFFSITE-DRILLS.json')).drills[0].passed, true);
+  // A copy changed on disk after it was pulled: not restored, recorded as failed.
+  const tampered = path.join(folder, 'cryptoresearch-desk-2026-01-01T00-00-00Z.json');
+  fs.writeFileSync(tampered, fs.readFileSync(pulled.file, 'utf8').replace('Example PayFi (FICTIONAL)', 'Example PayFi (TAMPERED)'));
+  const bad = await offsite.drill(pc, { folder, file: tampered, to: path.join(path.dirname(dest), 'second') });
+  assert.equal(bad.status, 'failed');
+  assert.match(bad.message, /did not verify, so it was not restored/);
+  assert.equal(fs.existsSync(path.join(path.dirname(dest), 'second')), false);
 });

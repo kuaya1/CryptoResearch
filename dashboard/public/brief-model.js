@@ -308,7 +308,9 @@ export function valueLayers(a, profile) {
 
 // ---- what supports it, what threatens it -------------------------------------------
 
-export const TAG_WORDS = { V: 'Verified', C: 'Project claim', I: 'Inference', S: 'Speculation' };
+// [V] is the researcher's own classification of its source, never the
+// desk's verification: the word says whose it is.
+export const TAG_WORDS = { V: 'Researcher-verified', C: 'Project claim', I: 'Inference', S: 'Speculation' };
 const TAG_ORDER = ['V', 'C', 'I', 'S'];
 
 // Up to three of the report's strongest positives or risks, each with the
@@ -331,6 +333,28 @@ export function factItems(facts, a, max = 3) {
       from_prose: Boolean(f.extraction),
     };
   });
+}
+
+// The first view's three lines, before any category detail: the strongest
+// risk the report backs with a cited source (the model lists its risks
+// strongest first; when none cites a source, its first risk, said to be
+// unsourced), and the first thing it says would confirm the thesis and the
+// first that would break it. The report's own words; the full lists stay
+// where they are.
+export function keyPoints(a) {
+  const risks = factItems(a && a.bearish_facts, a, 50);
+  const sourced = risks.find((f) => f.sources.length) || null;
+  const risk = sourced || risks[0] || null;
+  const first = (v) => list(v).map((f) => (f && str(f.text)) || str(f)).filter(Boolean);
+  const confirms = first(a && a.conviction_increases);
+  const breaks = first(a && a.invalidators);
+  return {
+    risk: risk ? { ...risk, sourced: Boolean(sourced), rank: risks.indexOf(risk) + 1, of: risks.length } : null,
+    confirm: confirms[0] || null,
+    confirm_more: Math.max(0, confirms.length - 1),
+    break: breaks[0] || null,
+    break_more: Math.max(0, breaks.length - 1),
+  };
 }
 
 // The downside-risk panel, higher meaning more risk: kept apart from the
@@ -578,6 +602,8 @@ export function noticesOf({ r, sel, provider, row, index, history, ev, hz }) {
       of: rv.of || null,
       minutes: num(rv.minutes_after) ? rv.minutes_after : null,
       declared: rv.declared ? { label: str(rv.declared.label), note: str(rv.declared.note) } : null,
+      narrowed: list(rv.narrowed).length,
+      narrowed_mid: list(rv.narrowed).filter((x) => x && x.midpoint).length,
     });
   }
   const mt = r.model_total;
@@ -674,6 +700,7 @@ export function briefModel({ detail, row = null, index, provider = 'claude', rep
     value: valueLayers(a, profile),
     supports: factItems(a.bullish_facts, a),
     threatens: factItems(a.bearish_facts, a),
+    key: keyPoints(a),
     risks: riskRows(a, grading),
     watch,
     scenarios: scenariosOf(a),

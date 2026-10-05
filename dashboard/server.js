@@ -962,7 +962,9 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIde
   route('GET', '/api/backups', () => exporter.listBackups(ws));
   route('GET', '/api/backup-status', () => require('./core/offsite').backupStatus(ws));
   route('GET', '/api/backups/([A-Za-z0-9_-]+)/verify', (m) => exporter.verifyBackup(ws, m[1]));
+  // A status read writes nothing; the write test is its own explicit action.
   route('GET', '/api/doctor', async () => require('./core/doctor').doctor(ws));
+  route('POST', '/api/doctor/write-test', async () => require('./core/doctor').doctor(ws, { writeProbe: true }));
   route('GET', '/api/research/providers', () => coherent(() => ({ providers: research.providerStatus(ws), readiness: research.readiness(ws), budget: ws.settings.research.budget, spend: research.spendSoFar(ws), unattended_enabled: Boolean(ws.settings.research.unattended_enabled), keys_file: require('./core/providers').secretsFile() })));
 
   // Research requests: a link, name or screenshot plus optional instructions.

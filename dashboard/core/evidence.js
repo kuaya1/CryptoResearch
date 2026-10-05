@@ -34,17 +34,39 @@
 // concerns, so it is shown beside that grade:
 //   code_score_without_source       code quality is scored although the report
 //                                   says the source could not be read
-//   code_score_without_inspection   code quality is scored with no repository
-//                                   recorded as read at a commit, files named
+//   code_score_without_inspection   code quality is scored with no named
+//                                   implementation file read at a stated
+//                                   revision (a commit hash or release tag):
+//                                   a branch name is not a revision, and
+//                                   commit history, releases, test-file counts
+//                                   or tests alone are repository activity,
+//                                   not implementation read
 //   chart_without_observation_date  a chart, cycle or volume grade is scored
 //                                   and the chart reading gives no day for the
 //                                   latest candle or quote it used
 //   chart_observation_stale         that latest observation is more than
 //                                   STALE_CHART_DAYS older than the report
 //   chart_observation_after_report  it is dated after the report itself
+//   liquidity_without_depth         volume and executable liquidity is scored
+//                                   without a stated volume baseline and a
+//                                   dated spread, depth or order-book figure:
+//                                   a venue list, aggregate volume or a
+//                                   statement that depth was not retrieved is
+//                                   not one
+//   executable_liquidity_unsupported  (low) the timing and executable
+//                                   liquidity component is scored with no such
+//                                   figure: its executable-liquidity part rests
+//                                   on no measurement, while its timing
+//                                   judgment can stand on the chart
 // Older price history is context, never a flag: only the date of the latest
-// observation behind a current reading is checked. A report without these
-// flags is not thereby verified; the checks are structural.
+// observation behind a current reading is checked. A claim a dated catalyst
+// cites is checked as catalyst evidence only when it is not a market
+// observation (a past price, volume or chart reading). A report without these
+// flags is not thereby verified; the checks are structural, and a claim tagged
+// [V] is the researcher's own classification of its source, not the desk's.
+
+// What [V] means on this desk, said wherever the tags are shown.
+const TAG_NOTE = 'A claim tagged [V] is the researcher\'s own classification of its source; the desk does not verify it independently.';
 
 const SOURCE_TYPES = ['official', 'onchain_data', 'data_aggregator', 'exchange', 'audit', 'news', 'research', 'social', 'ai_summary', 'other'];
 const PRIMARY = new Set(['official', 'onchain_data', 'audit', 'exchange']);
@@ -138,6 +160,57 @@ const FEE_TEXT_RE = /\b(fees?|revenue|earnings)\b/i;
 const FEE_METRIC_RE = /(fee|revenue|earning|income)/i;
 const NUMBER_RE = /(\$\s?\d|\d[\d,.]*\s?(k|m|b|million|billion|usd|%))/i;
 
+// ---- what the evidence says, not only whether a field holds text ----------
+
+// Clauses of a free-text reading: split at semicolons, line breaks and full
+// stops that end a sentence (never the point inside "0.3%").
+const clauses = (t) => String(t || '').split(/[;\n]+|\.(?=\s|$)/).map((x) => x.trim()).filter(Boolean);
+
+// A spread, depth, order-book or slippage term, or a band around the price.
+const DEPTH_TERM_RE = /\b(depth|order ?books?|spreads?|slippage|bid[- ]ask|price impact)\b|±\s?\d|\bwithin\s+[±+]?\s?\d+(\.\d+)?\s?%|\bpool (liquidity|reserves?|tvl)\b/i;
+// A measured figure: money, a percentage or basis points.
+const MEASURE_RE = /(\$\s?\d|\d[\d,.]*\s?(k|m|bn?|million|billion|thousand|usd[ct]?|%|bps|bp|basis points)(?![a-z]))/i;
+// A statement that the data is missing, aimed at the depth term it names.
+const MISSING_DEPTH_RE = /\b(no|not|n\/a|without|unavailable|unknown|missing|lack\w*|could\s?n[o']t|cannot|can'?t|unable to|failed to|did\s?n[o']t|never)\b[^.;]{0,48}\b(depth|order ?books?|spreads?|slippage|bid[- ]ask|price impact|liquidity data)\b|\b(depth|order ?books?|spreads?|slippage|bid[- ]ask)\b[^.;]{0,40}\b((not|un)\s?(available|retrieved|known|accessible|measured|captured|obtained|found|read)|n\/a|unknown|missing)\b/i;
+const MISSING_WORDS_RE = /^\s*(unknown|none|n\/a|null|not\b|no\b|unavailable|missing|could\s?n[o']t|cannot|unable|not available)/i;
+const ISO_DAY_RE = /\b\d{4}-\d{2}-\d{2}\b/;
+
+// What a liquidity reading holds: a spread, depth or order-book figure (not
+// a venue list, aggregate volume or a statement that depth is missing), and
+// whether that figure is dated (in the reading, or by the chart snapshot it
+// belongs to).
+function depthReading(cc) {
+  const text = cc && typeof cc.liquidity === 'string' ? cc.liquidity.trim() : '';
+  const parts = clauses(text);
+  const measured = parts.filter((p) => DEPTH_TERM_RE.test(p) && MEASURE_RE.test(p) && !MISSING_DEPTH_RE.test(p));
+  const says = !text ? 'none' : measured.length ? 'figure' : parts.some((p) => MISSING_DEPTH_RE.test(p)) || MISSING_WORDS_RE.test(text) ? 'missing' : 'no_figure';
+  const dated = Boolean(measured.some((p) => ISO_DAY_RE.test(p) && dayOf(p.match(ISO_DAY_RE)[0]) !== null) || dayOf(cc && cc.data ? cc.data.latest_observation_at : null) !== null);
+  return { text, says, dated };
+}
+
+// A volume baseline the reading states (not "unknown" or "not available").
+const statedText = (v) => typeof v === 'string' && v.trim() !== '' && !MISSING_WORDS_RE.test(v);
+
+// A stated revision: a commit hash or a release tag, never a branch name
+// ("main", "HEAD", "latest") or a date alone.
+const BRANCH_ONLY_RE = /^(the\s+)?(main|master|head|develop|dev|trunk|latest|default|default branch|current|tip|n\/a|unknown|none)(\s+branch)?$/i;
+function statedRevision(v) {
+  const t = typeof v === 'string' ? v.trim() : '';
+  if (!t || BRANCH_ONLY_RE.test(t)) return false;
+  const hashes = t.match(/\b[0-9a-f]{7,40}\b/gi) || [];
+  if (hashes.some((x) => /[a-f]/i.test(x) && (x.length >= 12 || /\d/.test(x)))) return true;
+  return /(^|[\s@:/(])v?\d+\.\d+(\.\d+)?([-+][0-9a-z.]+)?(?=$|[\s),;])/i.test(t);
+}
+
+// Implementation source files named in files_inspected. A test file, a
+// document, or an entry that describes repository activity (commit history,
+// releases, "38 test files") is not one.
+const SOURCE_FILE_RE = /[\w@.\/-]*[\w-]\.(sol|vy|rs|go|ts|tsx|js|jsx|mjs|cjs|py|move|cairo|c|cc|cpp|h|hpp|java|kt|scala|swift|rb|ex|exs|erl|zig|hs|ml|fc|func|tact|circom|nr|huff|yul|cs|fs|dart|clar|aleo|leo|sw|sway)\b/i;
+const TEST_FILE_RE = /(^|[\/])(tests?|__tests__|specs?|testing|fuzz|invariants?|mocks?)[\/]|\.t\.sol$|[._-](test|spec)\.[a-z]+$|_test\.[a-z]+$|(^|[\/])test_[\w-]+\.[a-z]+$|(^|[\/])\w*Tests?\.(java|kt|swift|cs)$/i;
+function implementationFiles(files) {
+  return (Array.isArray(files) ? files : []).map((x) => (typeof x === 'string' ? x.match(SOURCE_FILE_RE) : null)).filter(Boolean).map((m) => m[0]).filter((p) => !TEST_FILE_RE.test(p));
+}
+
 // Which critical kind a claim is, if any: the model's own label (asked for
 // from cr-research-prompt@4 on) or, for older reports, what the claim says.
 function criticalKind(claim, catalystClaims) {
@@ -148,10 +221,22 @@ function criticalKind(claim, catalystClaims) {
   if (AUDIT_RE.test(text)) return 'audit';
   if (SUPPLY_RE.test(text) || /unlock|emission|burn|buyback|vesting/i.test(metric)) return 'supply_change';
   // Live liquidity is a measurement: a figure, or a liquidity metric.
-  if ((LIQ_RE.test(text) && NUMBER_RE.test(text)) || /liquidity|depth|spread|slippage/i.test(metric)) return 'liquidity';
+  if (((LIQ_RE.test(text) && NUMBER_RE.test(text)) || /liquidity|depth|spread|slippage/i.test(metric)) && !MISSING_DEPTH_RE.test(text)) return 'liquidity';
   if (DEPLOY_RE.test(text)) return 'deployment';
-  if (catalystClaims.has(claim.claim_id)) return 'catalyst';
+  if (catalystClaims.has(claim.claim_id) && !marketObservation(claim)) return 'catalyst';
   return null;
+}
+
+// A past market reading (a price, volume, market cap or chart observation)
+// with no forward event in it. A dated catalyst may cite one as context; it
+// is not evidence of the catalyst, so it is not checked as one.
+const MARKET_TEXT_RE = /\b(price[sd]?|traded|trading (at|between|range)|closed?|candles?|chart|all[- ]time (high|low)|ath|atl|drawdown|fell|dropped|declined|rallied|rose|gained|down \d|up \d|market cap|fdv|volume|support|resistance|range[- ]bound|consolidat\w*|breakout|breakdown)\b/i;
+const MARKET_METRIC_RE = /price|market_?cap|mcap|fdv|volume|return|change_|drawdown|\bath\b|\batl\b|ohlc|candle/i;
+const FORWARD_RE = /\b(launch(es|ing)?|release[sd]?|upgrade|vote|proposal|listing|unlock(s|ing)?|mainnet|testnet|integration|partnership|announce[sd]?|scheduled|planned|roadmap|will|expected|deadline|hard ?fork|airdrop|tge|halving|burn|vesting|cliff|deploy\w*|go(es)? live)\b/i;
+function marketObservation(claim) {
+  const text = String(claim.text || '');
+  const market = MARKET_METRIC_RE.test(String(claim.metric_id || '')) || MARKET_TEXT_RE.test(text);
+  return market && !FORWARD_RE.test(text);
 }
 
 const tagOf = (t) => {
@@ -213,16 +298,24 @@ function categoryChecks(a) {
     checked += 1;
     const cr = a.code_review || null;
     const repos = cr && Array.isArray(cr.repositories) ? cr.repositories.filter(Boolean) : [];
-    const read = repos.filter((r) => r.commit && Array.isArray(r.files_inspected) && r.files_inspected.length);
+    // Read means named implementation files at a stated revision; repository
+    // activity (commit history, releases, test-file counts) is not reading.
+    const withImpl = repos.filter((r) => implementationFiles(r.files_inspected).length);
+    const read = withImpl.filter((r) => statedRevision(r.commit));
+    const listed = repos.flatMap((r) => (Array.isArray(r.files_inspected) ? r.files_inspected.filter((x) => typeof x === 'string' && x.trim()) : []));
     const base = { claim_id: null, category: 'code_quality', categories: ['code_quality'], kind: null, source_ids: [] };
     if (cr && cr.source_access === 'none') {
       flags.push({ ...base, rule: 'code_score_without_source', severity: 'high', message: `Code quality is scored ${code}, but the report says the source could not be read (source access: none). The prompt asks for code quality to be unknown when the source cannot be read.` });
     } else if (!read.length) {
+      const quote = (xs) => xs.slice(0, 3).map((x) => `"${String(x).trim().slice(0, 48)}"`).join(', ') + (xs.length > 3 ? ` and ${xs.length - 3} more` : '');
+      const vague = withImpl.map((r) => r.commit).filter((c) => typeof c === 'string' && c.trim());
       const why = !cr ? 'the report has no account of the code it read'
         : !repos.length ? 'no repository is recorded as read'
-          : repos.some((r) => Array.isArray(r.files_inspected) && r.files_inspected.length) ? 'files are listed without the commit they were read at'
-            : 'no inspected files are listed';
-      flags.push({ ...base, rule: 'code_score_without_inspection', severity: 'medium', message: `Code quality is scored ${code}, but ${why}. The prompt asks for the repository, the commit and the files read; without them code quality is unknown.` });
+          : withImpl.length && vague.length ? `its implementation files are recorded at ${quote(vague)}, a branch or description rather than a commit hash or release tag, so the code read cannot be pinned`
+            : withImpl.length ? 'files are listed without the commit they were read at'
+              : listed.length ? `what it lists as inspected (${quote(listed)}) is repository activity, tests or documents, not a named implementation file`
+                : 'no inspected files are listed';
+      flags.push({ ...base, rule: 'code_score_without_inspection', severity: 'medium', message: `Code quality is scored ${code}, but ${why}. The prompt asks for the repository, the commit and the implementation files read; commit history, releases and test counts are activity, not inspection. Without them code quality is unknown.` });
     }
   }
   const chart = CHART_CATEGORIES.filter((id) => scoredText(scores[id]) !== null);
@@ -252,13 +345,34 @@ function categoryChecks(a) {
   // Liquidity is not a venue list: a volume and liquidity grade needs the
   // volume baseline it compared against and a spread, depth or order-book
   // reading (evidence rule 12: aggregate volume is not executable liquidity).
+  // A depth reading must say something: a dated spread, depth or order-book
+  // figure. "No depth retrieved" is an honest limitation, not a reading.
+  const cc = a.chart_cycle || null;
+  const depth = depthReading(cc);
+  const undatedChart = flags.some((f) => f.rule === 'chart_without_observation_date');
+  const depthGap = () => {
+    const q = depth.text ? `"${depth.text.slice(0, 60)}${depth.text.length > 60 ? '…' : ''}"` : '';
+    if (depth.says === 'none') return 'no spread, depth or order-book reading';
+    if (depth.says === 'missing') return `only a statement that the depth data is missing (${q})`;
+    if (depth.says === 'no_figure') return `a liquidity reading with no spread, depth or order-book figure (${q}; a venue list, aggregate volume or a description is not one)`;
+    if (!depth.dated && !undatedChart) return 'a depth figure with no date';
+    return null;
+  };
   const liq = scoredText(scores.volume_liquidity);
   if (liq !== null) {
-    const cc = a.chart_cycle || null;
-    const lacks = [cc && cc.volume && cc.volume.baseline ? null : 'a stated volume baseline', cc && cc.liquidity ? null : 'a spread, depth or order-book reading'].filter(Boolean);
+    const lacks = [statedText(cc && cc.volume ? cc.volume.baseline : null) ? null : 'no stated volume baseline', depthGap()].filter(Boolean);
     if (lacks.length) {
-      flags.push({ claim_id: null, category: 'volume_liquidity', categories: ['volume_liquidity'], kind: null, source_ids: [], rule: 'liquidity_without_depth', severity: 'medium', message: `Volume confirmation and executable liquidity is scored ${liq}, but the chart reading gives no ${lacks.join(' and no ')}. Listing venues or aggregate volume is not executable liquidity.`, beside: `The reading behind this grade gives no ${lacks.join(' and no ')}. Listing venues or aggregate volume is not executable liquidity.` });
+      const said = lacks.join(' and ');
+      flags.push({ claim_id: null, category: 'volume_liquidity', categories: ['volume_liquidity'], kind: null, source_ids: [], rule: 'liquidity_without_depth', severity: 'medium', message: `Volume confirmation and executable liquidity is scored ${liq}, but the report has ${said}. Listing venues or aggregate volume is not executable liquidity. This concerns the liquidity grade; the chart and timing grades stand on their own evidence.`, beside: `The report has ${said}. Listing venues or aggregate volume is not executable liquidity.` });
     }
+  }
+  // The weighted timing and liquidity component: the timing judgment can
+  // stand on the chart, but its executable-liquidity part needs a figure.
+  const comp = (a.investment_components || {}).timing_executable_liquidity;
+  const compText = scoredText(comp);
+  // An undated figure is said once: by the chart date flag when there is one.
+  if (compText !== null && (depth.says !== 'figure' || (!depth.dated && !undatedChart))) {
+    flags.push({ claim_id: null, category: null, categories: [], component: 'timing_executable_liquidity', kind: null, source_ids: [], rule: 'executable_liquidity_unsupported', severity: 'low', message: `Timing and executable liquidity is scored ${compText}, and the report has ${depthGap() || 'a depth figure with no date'}: its executable-liquidity part rests on no measurement. Its timing judgment can still stand on the chart; this flag does not question it, and changes no score.` });
   }
   return { flags, checked };
 }
@@ -340,15 +454,31 @@ function evidenceChecks(assessment, { officialWebsite = null } = {}) {
     flaggedCategories ? `${flaggedCategories} category grade${flaggedCategories === 1 ? ' lacks' : 's lack'} the evidence the prompt asks for beside ${flaggedCategories === 1 ? 'it' : 'them'}` : null,
     scen.length ? 'scenario probabilities are given without supporting evidence' : null,
   ].filter(Boolean).join('; ');
+  const comps = flags.filter((f) => f.component);
   const checkedGrades = cat.checked ? `, and ${cat.checked} category grade${cat.checked === 1 ? '' : 's'} against the code and chart evidence beside ${cat.checked === 1 ? 'it' : 'them'}` : '';
+  // What these checks could not look at, said plainly: a report with nothing
+  // to check is not a clean result.
+  const gaps = [
+    !claims.length ? 'the report lists no structured claims, so no claim was checked' : null,
+    promptAtLeast(a.prompt_version, 5) ? null
+      : a.prompt_version ? `its prompt (${String(a.prompt_version).slice(0, 40)}) did not ask for the code and chart evidence beside the category grades, so those grades were not checked`
+        : 'its prompt version is not stated, so the category grades were not checked against code and chart evidence',
+  ].filter(Boolean);
+  const coverage = !claims.length && !cat.checked ? 'none' : gaps.length ? 'partial' : 'full';
+  const gapText = gaps.length ? ` Coverage is partial: ${gaps.join('; ')}.` : '';
+  const counts = [n('high') && `${n('high')} high`, n('medium') && `${n('medium')} medium`, n('low') && `${n('low')} low`].filter(Boolean).join(', ');
+  const saidAll = [said, comps.length ? 'the timing and liquidity component has no depth figure behind its liquidity part' : null].filter(Boolean).join('; ');
   return {
     checked_claims: claims.length,
     critical_claims: critical,
     flagged_claims: flagged,
     checked_categories: cat.checked,
     flagged_categories: flaggedCategories,
-    // Flags on neither a claim nor a category grade (scenario probabilities).
+    // Flags on neither a claim nor a category grade: scenario probabilities,
+    // and weighted components (the timing and liquidity component).
     flagged_other: scen.length,
+    flagged_components: new Set(comps.map((f) => f.component)).size,
+    coverage: { status: coverage, gaps },
     high: n('high'),
     medium: n('medium'),
     low: n('low'),
@@ -358,11 +488,12 @@ function evidenceChecks(assessment, { officialWebsite = null } = {}) {
       outside_list: [...outside.entries()].map(([given, readAs]) => ({ given, read_as: [...readAs].join(', ') })),
     },
     summary: flags.length
-      ? `${said} (${[n('high') && `${n('high')} high`, n('medium') && `${n('medium')} medium`, n('low') && `${n('low')} low`].filter(Boolean).join(', ')}). These checks change no score.`
-      : !claims.length && !cat.checked
-        ? 'No structured claims to check.'
-        : `${claims.length} claims checked${critical ? `, ${critical} of them critical` : ''}${checkedGrades}; none flagged. Nothing flagged is a structural result, not a verification of the facts. These checks change no score.`,
+      ? `${saidAll.charAt(0).toUpperCase()}${saidAll.slice(1)} (${counts}).${gapText} These checks change no score.`
+      : coverage === 'none'
+        ? 'Coverage insufficient: the report has no structured claims and no category grade these checks apply to, so nothing was checked. No flag here is not a clean result. These checks change no score.'
+        : `No inconsistencies detected by these checks: ${claims.length} claim${claims.length === 1 ? '' : 's'} checked${critical ? `, ${critical} of them critical` : ''}${checkedGrades}.${gapText} They test structure and consistency, not whether the facts are true. These checks change no score.`,
+    tag_note: TAG_NOTE,
   };
 }
 
-module.exports = { SOURCE_TYPES, PRIMARY_SOURCE_TYPES: [...PRIMARY], CRITICAL_KINDS, CHART_CATEGORIES, STALE_CHART_DAYS, normalizeSourceType, evidenceChecks, criticalKind, categoryChecks };
+module.exports = { TAG_NOTE, SOURCE_TYPES, PRIMARY_SOURCE_TYPES: [...PRIMARY], CRITICAL_KINDS, CHART_CATEGORIES, STALE_CHART_DAYS, normalizeSourceType, evidenceChecks, criticalKind, categoryChecks };

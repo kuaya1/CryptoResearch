@@ -230,6 +230,29 @@ test('what supports and threatens it: three each at most, with the evidence tags
   assert.equal(m.risks.find((x) => x.id === 'dilution').value, 58);
 });
 
+test('key points before the scorecard: the strongest risk that cites a source, else the first said unsourced; the first confirm and break with how many more; the report\'s words only', async () => {
+  const { model } = await mods;
+  const { m } = await brief('complete');
+  assert.equal(m.key.risk.text, m.threatens[0].text, 'the model\'s first risk cites a source here');
+  assert.equal(m.key.risk.sourced, true);
+  assert.ok(m.key.risk.sources.length >= 1);
+  assert.equal(m.key.confirm, m.watch.confirms[0]);
+  assert.equal(m.key.break, m.watch.breaks[0]);
+  assert.equal(m.key.confirm_more, m.watch.confirms.length - 1);
+  const a = {
+    claims: [{ claim_id: 'C1', evidence_tag: 'I', source_ids: [] }, { claim_id: 'C2', evidence_tag: 'V', source_ids: ['S1'] }],
+    sources: [{ source_id: 'S1', url: 'https://docs.example/fees', title: 'FICTIONAL docs' }],
+    bearish_facts: [{ text: 'FICTIONAL: first risk, cites nothing with a source.', claim_ids: ['C1'] }, { text: 'FICTIONAL: second risk, sourced.', claim_ids: ['C2'] }],
+  };
+  const k = model.keyPoints(a);
+  assert.deepEqual([k.risk.text, k.risk.sourced, k.risk.rank, k.risk.of], ['FICTIONAL: second risk, sourced.', true, 2, 2]);
+  const bare = model.keyPoints({ bearish_facts: [{ text: 'FICTIONAL: unsourced.', claim_ids: [] }] });
+  assert.deepEqual([bare.risk.text, bare.risk.sourced], ['FICTIONAL: unsourced.', false]);
+  assert.deepEqual(model.keyPoints({}), { risk: null, confirm: null, confirm_more: 0, break: null, break_more: 0 });
+  // [V] is named as the researcher's classification wherever the tag is a word.
+  assert.equal(model.TAG_WORDS.V, 'Researcher-verified');
+});
+
 test('what to watch: dated catalysts and the suggested review, numbered in date order on the horizon; undated and outside apart; no date made up', async () => {
   const { model } = await mods;
   const base = await brief('complete');

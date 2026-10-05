@@ -1,0 +1,22 @@
+# Evidence meaning, first view, workflow wording, recovery drill (2026-10-05)
+
+A bounded correction after the review of `fa05f99` plus the Claude Brief (`73888fe`, live on Render when this started). No framework, database or provider change. Fictional workspaces only; no paid call, no Gemini activity, no record on the online desk changed.
+
+## What changed
+
+| Item | Change | Evidence |
+|---|---|---|
+| 1. Evidence checks | Code quality needs named implementation files at a stated commit or release tag; commit history, releases, test counts, tests and documents are activity, and a branch name is not a revision. Volume and liquidity needs a dated spread, depth or order-book figure; a venue list, aggregate volume or "no depth retrieved" is not one. Missing depth flags only the liquidity grade, plus a low, scoped note on the timing and liquidity component's liquidity part (timing judgments stand). A past price, volume or chart observation a catalyst cites is no longer checked as catalyst evidence. A clean result reads "No inconsistencies detected by these checks" with coverage stated (partial or insufficient said plainly); [V] is labeled the researcher's classification. Read-time only: no score, record or original changes. | `evidence-meaning.test.js` (the review's two gaps reproduced through the import path first, then fixed; valid evidence; legacy reports; originals byte for byte) |
+| 2. First view | Inspector: the strongest sourced risk (with its tags and source) joins the thesis before the category bars, after the take and before Watch, Confirms and Breaks; the rest of the risks follow the categories; "Six weighted components" (what the grade is calculated from) and "Diagnostic categories" name their purposes. Brief: key points (strongest sourced risk, would confirm, would break) in the verdict, before the thesis and scorecard. Inline source links get a 44px hit area on touch screens. | `brief.test.js` (`keyPoints`); Playwright on the fictional Brief workspace at 390 px and 1440 px (order, overflow, Escape and focus return, hostile and long text, withheld, range) |
+| 3. Wording | Manual research reads as ready, the paid API as optional, a held model as on hold: the research dialog shows a held model disabled and never pre-checked; New research's waiting state is "Waiting for manual research" (information, not a warning); Settings' route column and help text; the connector's readiness gives each model's sentence (`says`). Intake names CoinMarketCap links among its inputs. An intake asking for "all three" no longer adds a held Gemini. A revision that turns a range into a point inside it on the same evidence is labeled a narrowing, not new research. `GET /api/doctor` and Settings no longer run the write probe; `POST /api/doctor/write-test` and the CLI's `doctor` do. | `workflow-wording.test.js`, `intake.test.js`, `connector.test.js`; browser check of the dialog, Settings and New research |
+| 4. Recovery | A clean restore into a new folder is a restored copy (`config/restored-copy.json`): research asks no provider for anything there until `restored-copy release --confirm`. `offsite drill` verifies the latest pulled copy, restores it in isolation, checks records, originals and research states (unsent, sent, uncertain, quarantined, held) and runs the restored runner against a refusing network stand-in. | `offsite.test.js` (end-to-end drill from a pulled copy, zero provider calls; tampered copy not restored); CLI drill on a fictional package |
+
+## Tests
+
+`node dashboard/cli.js test` on Node 24.21.0: 479 of 481 pass. The two failures are environmental and fail identically on the untouched `73888fe` in the same container: the hosted first-boot test refuses a temporary folder on the root mount (the persistent-disk guard working as designed), and one inbox test depends on file-settle timing.
+
+## Needs Eric
+
+- **Offsite key:** `CR_BACKUP_KEY` is not set on the desk (its start log says so). Create one (at least 32 characters), add it in Render > Environment, put the same value in `%USERPROFILE%\.cryptoresearch\secrets.json` as `"desk_backup_key"`, then on the PC: `offsite setup --desk <desk address>`, `offsite pull`, `offsite drill`. Item 4 is complete only when that drill passes on a real copy.
+- **Pilot:** one fresh Claude + ChatGPT run after the drill passes, on a project Eric chooses (the session report has a nomination and the launch steps).
+- **Deploy:** this work is on the session branch; Render deploys `main`.

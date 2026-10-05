@@ -110,10 +110,10 @@ test('intake: links are read from their own text only; other sites are refused',
 test('intake: a request is saved first; a repeat within minutes is the same request; nothing touches the portfolio', (t) => {
   const { ws, cleanup } = tempWorkspace('intake-save');
   t.after(cleanup);
-  // The forms ask for a name or a CoinGecko link; a pasted CoinMarketCap link
-  // still works (above), but no message asks for one.
-  assert.throws(() => intake.createIntake(ws, {}), /Type a project name, paste a CoinGecko link, or add a screenshot\./);
-  for (const bad of ['https://scam.example/x', 'x'.repeat(81)]) assert.doesNotMatch(intake.parseLink(bad).error, /CoinMarketCap/);
+  // The forms name every accepted input, CoinMarketCap links among them
+  // (Eric, 2026-10-05); a CoinMarketCap page is read as a lead, never fetched.
+  assert.throws(() => intake.createIntake(ws, {}), /Type a project name, ticker or contract, paste a CoinGecko or CoinMarketCap link, or add a screenshot\./);
+  for (const bad of ['https://scam.example/x', 'x'.repeat(81)]) assert.match(intake.parseLink(bad).error, /CoinGecko or CoinMarketCap link/);
   assert.throws(() => intake.createIntake(ws, { link: 'https://scam.example/x' }), /not used to identify/);
   assert.throws(() => intake.createIntake(ws, { screenshot: { media_type: 'image/svg+xml', data_base64: 'PHN2Zz4=' } }), /PNG, JPEG/);
   assert.throws(() => intake.createIntake(ws, { screenshot: { media_type: 'image/png', data_base64: Buffer.alloc(intake.MAX_IMAGE_BYTES + 1).toString('base64') } }), /larger than/);
@@ -475,4 +475,9 @@ test('intake: a confirmed request is researched by Claude, plus ChatGPT and Gemi
   const intakeMod = require('../core/intake');
   assert.deepEqual(intakeMod.intakeModels(ws, { input: { instructions: null } }), ['claude', 'chatgpt'], 'ChatGPT runs by itself here; Gemini has no API');
   assert.deepEqual(intakeMod.intakeModels(ws, { input: { instructions: 'Research it with all three models, focus on unlocks' } }), ['claude', 'chatgpt', 'gemini']);
+  // Gemini on hold (Eric, 2026-10-04): "all three" adds Claude and ChatGPT only.
+  const held = tempWorkspace('intake-models-held', { research: { providers: { chatgpt: { mock: 'ok' } }, on_hold: { gemini: { since: '2026-10-04', reason: 'FICTIONAL hold' } } } });
+  t.after(held.cleanup);
+  assert.deepEqual(intakeMod.intakeModels(held.ws, { input: { instructions: 'Research it with all three models, focus on unlocks' } }), ['claude', 'chatgpt']);
+  assert.deepEqual(intakeMod.intakeModels(held.ws, { input: { instructions: null } }), ['claude', 'chatgpt']);
 });

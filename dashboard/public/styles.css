@@ -2100,6 +2100,11 @@ table.wl .gb-none .p { display: none; }
 .panel .insp-alerts .alerts { margin: 0; }
 /* Thesis: the model's take in three lines (Show more), then your note in one. */
 .thesis .th-text.clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+/* The strongest sourced risk: its words, then its tags and source on one line. */
+.thesis .th-risk-t { margin: 0; overflow-wrap: anywhere; }
+.thesis .th-cite { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 3px 0 0; font-size: 11.5px; color: var(--text-2); min-width: 0; }
+.thesis .th-cite a { color: var(--text-2); overflow-wrap: anywhere; }
+.thesis .th-cite .bf-tag { height: 18px; font-size: 11px; }
 .thesis .th-more { margin: 2px 0 6px; font-size: 12px; }
 .thesis .th-more[hidden] { display: none; }
 .thesis .th-note { display: flex; align-items: baseline; gap: 6px; margin: 10px 0 0; min-width: 0; font-size: 12px; color: var(--text-2); white-space: nowrap; }

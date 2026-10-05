@@ -39,7 +39,7 @@ const siteOf = (project) => (project && project.identity && project.identity.sta
 // Evidence checks (evidence.js), in brief for lists: never a score change.
 function evidenceBrief(a, project) {
   const e = require('./evidence').evidenceChecks(a, { officialWebsite: siteOf(project) });
-  return { flagged: e.flagged_claims, flagged_categories: e.flagged_categories, flagged_other: e.flagged_other || 0, high: e.high, medium: e.medium, low: e.low, critical: e.critical_claims, summary: e.summary };
+  return { flagged: e.flagged_claims, flagged_categories: e.flagged_categories, flagged_other: e.flagged_other || 0, flagged_components: e.flagged_components || 0, coverage: e.coverage ? e.coverage.status : null, high: e.high, medium: e.medium, low: e.low, critical: e.critical_claims, summary: e.summary };
 }
 
 // Structure checks of one report (core/consistency.js): weighted parts left

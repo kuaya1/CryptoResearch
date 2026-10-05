@@ -476,6 +476,26 @@ function unsafeInventoryError(what, rejected) {
 }
 
 // Rebuilds a workspace from a complete package into an empty folder.
+// A clean restore into a new folder is a restored copy: config/restored-copy.json
+// says where it came from, and while it holds research (the default) no model
+// provider is asked for anything there, neither a new request nor the answer
+// to one already sent, until Eric releases it (node dashboard/cli.js
+// restored-copy release --confirm). A drill or an inspection of a backup
+// never sends or collects a paid request. Written after the files are
+// verified, so it is never part of what was compared.
+const RESTORED_REL = 'config/restored-copy.json';
+function markRestoredCopy(dest, from) {
+  const doc = {
+    schema_version: 'cr.restored-copy.v1',
+    restored_at: new Date().toISOString(),
+    from,
+    research_held: true,
+    note: 'A restored copy: research holds every provider request (new or collected) until released with node dashboard/cli.js restored-copy release --confirm. Nothing here was sent anywhere by the restore.',
+  };
+  writeDurable(path.join(dest, ...RESTORED_REL.split('/')), jsonText(doc));
+  return doc;
+}
+
 function restorePackage(pkg, destDir) {
   if (!pkg || pkg.schema_version !== 'cr.package.v1' || !Array.isArray(pkg.files)) throw new OpError('INVALID', 'Not a CryptoResearch complete package (cr.package.v1).');
   const dest = path.resolve(destDir);
@@ -513,7 +533,9 @@ function restorePackage(pkg, destDir) {
   } catch (err) {
     reconcile = [`could not open restored folder: ${err.message}`];
   }
+  const marker = markRestoredCopy(dest, { kind: 'package', created_at: pkg.created_at || null, served_at: pkg.desk ? pkg.desk.served_at || null : null, desk_revision: pkg.desk && pkg.desk.revision ? pkg.desk.revision.short || pkg.desk.revision.commit || null : null, files: pkg.files.length });
   return {
+    restored_copy: { file: RESTORED_REL, research_held: marker.research_held },
     status: !verify.length && reconcile && !reconcile.length ? 'restored_and_verified' : 'restored_with_problems',
     dest,
     files: pkg.files.length,
@@ -711,7 +733,8 @@ function restoreBackupTo(ws, name, destDir) {
   } catch (err) {
     reconcile = [`could not open restored folder: ${err.message}`];
   }
-  const report = { mode: 'clean', restored_from: name, created_at: m.created_at, dest, files: m.items.length, mismatched_after_copy: mismatched, reconciliation: reconcile.length ? reconcile : 'record totals match the backup', status: !mismatched.length && !reconcile.length ? 'restored_and_verified' : 'restored_with_problems', records_verified_when_taken: m.consistency ? m.consistency.verified : null };
+  const marker = markRestoredCopy(dest, { kind: 'backup', name, created_at: m.created_at, files: m.items.length });
+  const report = { mode: 'clean', restored_from: name, created_at: m.created_at, dest, files: m.items.length, mismatched_after_copy: mismatched, reconciliation: reconcile.length ? reconcile : 'record totals match the backup', status: !mismatched.length && !reconcile.length ? 'restored_and_verified' : 'restored_with_problems', records_verified_when_taken: m.consistency ? m.consistency.verified : null, restored_copy: { file: RESTORED_REL, research_held: marker.research_held } };
   writeDurable(path.join(dest, 'RESTORE-REPORT.json'), jsonText(report));
   logOp(ws, { phase: 'restore_clean', from: name, dest, status: report.status });
   return report;

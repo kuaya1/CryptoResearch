@@ -1,6 +1,7 @@
 // New research: the one place to start research, made for the phone.
 //
-// Type a name (or paste a CoinGecko link) and/or add a screenshot, add
+// Type a name, ticker or contract (or paste a CoinGecko or CoinMarketCap
+// link) and/or add a screenshot, add
 // optional instructions, and send. The request is saved first, then the
 // project is identified in the background. Research starts only after you
 // confirm one candidate, with its network, contract and website in view.
@@ -23,7 +24,7 @@ const JOB = {
   dispatching: ['Claude is researching', 'wait'],
   running: ['Claude is researching', 'wait'],
   uncertain: ['Outcome uncertain: check before retrying', 'warn'],
-  unconfigured: ['Waiting: automatic research is not set up', 'warn'],
+  unconfigured: ['Waiting for manual research', 'wait'],
   completed: ['Report saved', 'ok'],
   failed: ['Failed: no report was saved', 'bad'],
   canceled: ['Canceled', ''],
@@ -111,7 +112,7 @@ async function renderStart(ctx) {
   } catch (err) {
     return h('div', null, h('h1', null, 'New research'), callout(`Could not load research requests: ${err.message}`, 'bad'));
   }
-  const linkIn = input({ name: 'intake-link', placeholder: 'A project name or ticker, or coingecko.com/en/coins/…', autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'next' });
+  const linkIn = input({ name: 'intake-link', placeholder: 'Huma Finance, HUMA, 0x…, coingecko.com/en/coins/… or coinmarketcap.com/currencies/…', autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'next' });
   const fileIn = h('input', { type: 'file', name: 'intake-shot', accept: 'image/png,image/jpeg,image/webp,image/gif,image/*' });
   const preview = h('div', { class: 'intake-preview hidden' });
   const note = h('textarea', { name: 'intake-instructions', rows: 4, maxlength: 2000, placeholder: 'Optional: what you want looked into, e.g. "Who actually uses it? Is the March unlock a risk inside four months?"' });
@@ -137,7 +138,7 @@ async function renderStart(ctx) {
     if (sendBtn.getAttribute('aria-busy') === 'true') return;
     const link = linkIn.value.trim();
     if (!link && !image) {
-      toast('Type a project name, paste a CoinGecko link, or add a screenshot.', 'bad');
+      toast('Type a project name, ticker or contract, paste a CoinGecko or CoinMarketCap link, or add a screenshot.', 'bad');
       linkIn.focus();
       return;
     }
@@ -157,7 +158,7 @@ async function renderStart(ctx) {
       if (sendBtn.isConnected) busy(sendBtn, false);
     }
   } },
-  field('Project name or CoinGecko link', linkIn, null, { wide: true }),
+  field('Name, ticker, contract, or CoinGecko or CoinMarketCap link', linkIn, 'A CoinMarketCap or CoinGecko link is read as a lead and matched to CoinGecko\'s listing; you confirm the project before any research.', { wide: true }),
   // What a screenshot costs stays in its label: it is the one paid step here.
   field(`Screenshot (optional${typeof reservation === 'number' ? ` · one paid call, at most ${fmtUsd(reservation)}` : ''})`, fileIn, null, { wide: true }),
   preview,
@@ -242,7 +243,9 @@ function progressBlock(ctx, d, rerun) {
   if (['queued', 'dispatching', 'running'].includes(r.state)) {
     parts.push(h('p', { class: 'muted' }, 'Claude researches with web search and writes the full report; this usually takes 3 to 10 minutes. You can leave this page or close the browser: the report is saved and shown on the project page automatically.'));
   } else if (r.state === 'unconfigured') {
-    parts.push(callout(`${r.note || 'The Claude API is not set up.'} The research prompt is ready: open the project page to copy it into Claude yourself and import the answer there.`, 'warn'));
+    // Manual research is a working route, not a fault: the prompt is frozen
+    // and ready. The Claude API would only run it in the background.
+    parts.push(callout(h('span', null, h('strong', null, 'Ready for manual research. '), 'The research prompt is frozen and ready: ask Claude in Cowork to "Do my waiting CryptoResearch research", or copy the prompt from the project page and import the answer there. Automatic research by the Claude API is optional and not set up, so nothing runs or is billed in the background.'), 'info'));
   } else if (r.state === 'uncertain') {
     parts.push(callout(`${r.error || 'The request may have reached Anthropic and been billed, and no answer was saved.'} It is never resent by itself. Check the Anthropic Console usage page, then record the charge on the project page, or retry (a retry is a new paid attempt).`, 'warn'));
   } else if (r.state === 'failed') {

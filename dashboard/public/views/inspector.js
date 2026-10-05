@@ -20,10 +20,11 @@
 //                     rests on a verified contract (views/dex.js)
 // Every model keeps its own numbers. Unknown stays unknown and is never drawn
 // as zero; not applicable says so; nothing missing is filled in.
-import { h, details, fmtDateTime, PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, icon, anchorText, scoreTier } from '../ui.js';
+import { h, details, fmtDateTime, PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, icon, anchorText, scoreTier, TAG_TITLES } from '../ui.js';
 import { evidenceChecksBlock, latestReports, promptView, sourceItem } from './project.js';
 import { profileOf, categoryRows, scorecardCounts, statesConfidence, confidenceChip, categoryFlags, CONFIDENCE_LABELS } from '../thesis-ui.js';
 import { technicalChart } from './chart.js';
+import { keyPoints, TAG_WORDS } from '../brief-model.js';
 import { dexCard } from './dex.js';
 
 const fact = (k, v, wide = false) => h('div', { class: wide ? 'wide' : null }, h('dt', null, k), h('dd', null, v));
@@ -138,7 +139,7 @@ function categoriesPart(ctx, d, row, prov) {
   const older = Boolean(current && a.sector_profile && a.sector_profile !== current);
   return h('div', { class: 'cats' },
     h('div', { class: 'cats-head' },
-      h('h3', null, 'Category grades'),
+      h('h3', { title: 'The report\'s category grades: diagnostics shown beside the investment grade, never averaged into it' }, 'Diagnostic categories'),
       h('span', { class: 'cats-count' }, `${counts.scored} of ${counts.total} scored${counts.unknown ? ` · ${counts.unknown} unknown` : ''}`,
         // A report made under an earlier scoring profile keeps its own categories.
         older ? h('span', { class: 'cats-ver', title: `This report used ${a.sector_profile}; new research uses ${current}` }, ` · ${a.sector_profile}`) : null)),
@@ -186,13 +187,16 @@ function risksPart(ctx, d, row, prov) {
   const r = d.reports.find((x) => x.report_id === sum.report_id) || latestReports(d)[prov];
   if (!r || r.broken) return null;
   const a = r.assessment || {};
-  const facts = (a.bearish_facts || []).slice(0, 3);
+  // The strongest sourced risk is in the thesis above; the rest are here.
+  const shown = keyPoints(a).risk;
+  const facts = (a.bearish_facts || []).filter((f) => f && f.text && !(shown && f.text.trim() === shown.text)).slice(0, 3);
   const defs = ctx.state.index.rubrics.grading.risk_scores || [];
   const top = (s) => (s.status === 'range' ? s.high : s.value);
   const scores = defs.map((def) => ({ def, s: (a.risk_scores || {})[def.id] })).filter((x) => isScored(x.s)).sort((x, y) => top(y.s) - top(x.s));
-  if (!facts.length && !scores.length) return h('div', { class: 'risks' }, h('h3', null, 'Strongest risks'), h('p', { class: 'small faint' }, 'No risks listed.'));
-  return h('section', { class: 'risks', 'aria-label': `${PROVIDER_LABELS[prov]}'s strongest risks` },
-    h('h3', null, 'Strongest risks'),
+  const title = shown ? 'More risks' : 'Strongest risks';
+  if (!facts.length && !scores.length) return shown ? null : h('div', { class: 'risks' }, h('h3', null, title), h('p', { class: 'small faint' }, 'No risks listed.'));
+  return h('section', { class: 'risks', 'aria-label': `${PROVIDER_LABELS[prov]}'s ${title.toLowerCase()}` },
+    h('h3', null, title),
     facts.length ? h('ol', { class: 'risk-list' }, facts.map((f) => h('li', null, f.text))) : null,
     scores.length ? h('p', { class: 'risk-scores' }, h('span', { class: 'k' }, 'Downside, higher is worse'),
       scores.map((x, i) => h('span', { class: 'rs' }, i ? ' · ' : '', `${x.def.label.replace(/ risk$/i, '')} `, h('strong', null, x.s.status === 'range' ? `${x.s.low}–${x.s.high}` : String(x.s.value))))) : null);
@@ -203,7 +207,7 @@ function risksPart(ctx, d, row, prov) {
 // How the report's claims are supported, by its own tags: verified in the
 // model's session [V], project-claimed [C], inference [I], speculative [S].
 // Counts and words; the bar's textures only repeat them.
-const TAGS = [['V', 't-v', 'verified'], ['C', 't-c', 'claimed'], ['I', 't-i', 'inference'], ['S', 't-s', 'speculative']];
+const TAGS = [['V', 't-v', 'researcher-verified'], ['C', 't-c', 'claimed'], ['I', 't-i', 'inference'], ['S', 't-s', 'speculative']];
 export function evidenceQuality(claims) {
   const list = Array.isArray(claims) ? claims : [];
   if (!list.length) return h('p', { class: 'small faint', style: { margin: '0 0 6px' } }, 'No structured claims in this report.');
@@ -283,6 +287,20 @@ function comparePart(ctx, d) {
 // lines, then Show more), the one development to watch, what would confirm or
 // break it; then your own conviction note in one line (written on the
 // project's Notes page). Each stays apart: nothing is summarized or merged.
+// The strongest risk the report backs with a source, in its words, with the
+// claims' evidence tags and the source; a risk with no source says so.
+function riskLine(risk, pid, prov) {
+  const src = risk.sources[0] || null;
+  const name = src ? src.title || src.publisher || src.url || src.source_id : null;
+  return h('div', { class: 'th-line th-risk' }, h('span', { class: 'k', title: risk.sourced ? 'The strongest risk the report backs with a cited source' : 'No listed risk cites a source' }, 'Risk'),
+    h('div', null,
+      h('p', { class: 'th-risk-t' }, risk.text),
+      h('p', { class: 'th-cite' },
+        risk.tags.map((t) => h('span', { class: `bf-tag t-${t.toLowerCase()}`, title: TAG_TITLES[t] }, TAG_WORDS[t])),
+        src && src.url ? h('a', { href: src.url, dataset: { key: `th-risk-src-${pid}-${prov}` } }, name) : src ? h('span', null, name) : h('span', { class: 'faint' }, 'No source cited'),
+        risk.sources.length > 1 ? h('span', { class: 'faint' }, ` +${risk.sources.length - 1}`) : null)));
+}
+
 function thesisPart(ctx, d, row, prov) {
   const pid = d.project.project_id;
   const note = d.conviction ? String(d.conviction.text || '').trim() : '';
@@ -316,9 +334,11 @@ function thesisPart(ctx, d, row, prov) {
       requestAnimationFrame(() => { if (text.isConnected && text.scrollHeight > text.clientHeight + 1) more.hidden = false; });
       take = [text, more];
     }
+    const risk = keyPoints(a).risk;
     model = h('div', { class: 'th-block' },
-      !any ? h('p', { class: 'th-none' }, `No thesis in ${PROVIDER_LABELS[prov]}'s data block.`) : null,
+      !any && !risk ? h('p', { class: 'th-none' }, `No thesis in ${PROVIDER_LABELS[prov]}'s data block.`) : null,
       take,
+      risk ? riskLine(risk, pid, prov) : null,
       metric && metric.metric ? h('p', { class: 'th-line' }, h('span', { class: 'k' }, 'Watch'), h('span', null, metric.metric, metric.threshold ? ` (${metric.threshold})` : '')) : null,
       confirm.length ? h('div', { class: 'th-line' }, h('span', { class: 'k' }, 'Confirms'), h('ul', null, confirm.map((f) => h('li', null, f.text)))) : null,
       invalid.length ? h('div', { class: 'th-line' }, h('span', { class: 'k' }, 'Breaks'), h('ul', null, invalid.map((f) => h('li', null, f.text)))) : null);

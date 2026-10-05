@@ -180,6 +180,28 @@ function heldProviders(ws) {
   return out;
 }
 
+// A restored copy (exporter.js writes config/restored-copy.json on a clean
+// restore into a new folder): while it holds research, the runner asks no
+// provider for anything, new or collected, and creates no scheduled run.
+const RESTORED_REL = 'config/restored-copy.json';
+function restoredHold(ws) {
+  const m = readJson(ws.abs(RESTORED_REL), null);
+  return m && typeof m === 'object' && m.research_held !== false ? m : null;
+}
+
+// Eric's release of a restored copy: queued jobs may then be sent and
+// accepted requests collected by their ID, within the limits; an uncertain
+// attempt is still never resent.
+function releaseRestoredCopy(ws) {
+  const cur = readJson(ws.abs(RESTORED_REL), null);
+  if (!cur) return { status: 'unchanged', message: 'This workspace is not a restored copy; nothing is held.' };
+  if (cur.research_held === false) return { status: 'unchanged', message: `Research was already released on ${cur.released_at || 'an earlier date'}.` };
+  const out = require('./ops').runOp(ws, { type: 'update_settings', summary: 'Release research in a restored copy' }, (op) => {
+    op.writeJson(RESTORED_REL, { ...cur, research_held: false, released_at: new Date().toISOString() });
+  });
+  return { status: 'saved', verified: out.verified, research_held: false, message: 'Research released in this restored copy. Uncertain attempts are still never resent.' };
+}
+
 // Jobs the runner never sends: queued for a model on hold, or held when their
 // project was archived (job.hold). Both wait, unsent, for Eric.
 const heldUnsent = (held, job) => job.state === 'queued' && Boolean(job.hold || held[job.provider]);
@@ -2121,6 +2143,11 @@ async function mockCall(ws, provider, run) {
 }
 
 async function runDueJobs(ws, { trigger = 'cli', fetchImpl = undefined, now = Date.now() } = {}) {
+  // A restored copy sends and collects nothing until Eric releases it.
+  const restored = restoredHold(ws);
+  if (restored) {
+    return { status: 'held', restored_copy: true, summary: `Restored copy (${restored.restored_at || 'date unknown'}): research is held, so no provider was asked for anything. Release it with node dashboard/cli.js restored-copy release --confirm.`, results: [], created: [], released: [], skipped_schedules: [] };
+  }
   // Scheduled refreshes: only when unattended paid research is enabled and
   // every bound and price it needs is set (providerStatus api).
   const created = [];
@@ -2427,6 +2454,9 @@ const readCoworkDraft = (ws, projectId, runId) => readAssistantDraft(ws, project
 const saveCoworkDraft = (ws, projectId, runId, opts) => saveAssistantDraft(ws, projectId, runId, { ...opts, provider: 'claude' });
 
 module.exports = {
+  RESTORED_REL,
+  restoredHold,
+  releaseRestoredCopy,
   RUN_ID_RE,
   createRun,
   spendLine,

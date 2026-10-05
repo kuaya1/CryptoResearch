@@ -1133,7 +1133,7 @@ const handlers = {
     // A revision, as the desk read it against the earlier save: what changed
     // and on what evidence (revisions.js). The earlier report stays saved.
     if (saved && saved.revision && saved.revision.kind === 'revision') {
-      result.revision = { of: saved.revision.of, basis: saved.revision.basis, sources_added: saved.revision.sources.added, changed_components: saved.revision.changed_components, your_reason: saved.revision.declared, label: saved.revision_label };
+      result.revision = { of: saved.revision.of, basis: saved.revision.basis, sources_added: saved.revision.sources.added, changed_components: saved.revision.changed_components, narrowed: saved.revision.narrowed || [], your_reason: saved.revision.declared, label: saved.revision_label };
       result.message += ` This is a revision of ${saved.revision.of}, which stays saved and listed: ${saved.revision_label}`;
     }
     return result;
@@ -1174,7 +1174,7 @@ const handlers = {
     const out = { status: 'ok', project: { project_id: id, name: detail.project.name }, report: compactReport(r) };
     // The desk's evidence checks on its claims: flags only, never a score change.
     const ev = (detail.reports.find((x) => x.report_id === r.report_id) || {}).evidence;
-    if (ev) out.evidence_checks = { summary: ev.summary, critical_claims: ev.critical_claims, flags: ev.flags.map((x) => ({ ...(x.claim_id ? { claim_id: x.claim_id } : { categories: x.categories }), severity: x.severity, rule: x.rule, message: x.message })), source_types_outside_list: ev.source_types.outside_list };
+    if (ev) out.evidence_checks = { summary: ev.summary, coverage: ev.coverage, critical_claims: ev.critical_claims, flags: ev.flags.map((x) => ({ ...(x.claim_id ? { claim_id: x.claim_id } : x.component ? { component: x.component } : { categories: x.categories }), severity: x.severity, rule: x.rule, message: x.message })), source_types_outside_list: ev.source_types.outside_list, tag_note: ev.tag_note };
     if (args.include_text === true) {
       const fs = require('fs');
       const full = detail.reports.find((x) => x.report_id === r.report_id);
@@ -1445,8 +1445,11 @@ function makeMcp(ws, { rebuild = () => {}, version = '1.0.0', log = () => {}, ki
   };
 }
 
-// A request for all three models also says which of them run by themselves
-// and which wait (setup required, and what), so the assistant tells Eric that.
+// A request for all three models also says, per model, which runs by itself
+// on its paid API, which is manual research ready through its assistant (the
+// optional API not set up: route setup_required names the API route only, and
+// setup what it would need) and which is on hold, so the assistant tells Eric
+// that in those words (says).
 const startResearchCore = handlers.start_research;
 handlers.start_research = function start_research(ws, args, ctx) {
   const out = startResearchCore(ws, args, ctx);
@@ -1454,7 +1457,7 @@ handlers.start_research = function start_research(ws, args, ctx) {
     const r = research.readiness(ws);
     out.readiness = {
       summary: r.summary,
-      models: Object.fromEntries(PROVIDERS.map((p) => [p, { status: r.models[p].status, route: r.models[p].route, model: r.models[p].model, setup: r.models[p].setup_short, on_hold: r.models[p].on_hold }])),
+      models: Object.fromEntries(PROVIDERS.map((p) => [p, { status: r.models[p].status, route: r.models[p].route, model: r.models[p].model, setup: r.models[p].setup_short, on_hold: r.models[p].on_hold, says: r.models[p].sentence }])),
       limits: r.budget,
     };
     // "All three" while a model is on hold: say so, never promise it.

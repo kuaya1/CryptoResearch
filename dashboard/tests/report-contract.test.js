@@ -192,7 +192,10 @@ test('evidence checks: an AI summary never verifies; critical claims need a prim
   assert.equal(e.flagged_claims, 4);
   assert.equal(e.high, 1);
   assert.deepEqual(e.source_types.ai_summaries, ['S3']);
-  assert.match(e.summary, /^4 of 6 claims need better evidence \(1 high, 2 medium, 1 low\)\. These checks change no score\.$/);
+  // A @3 report was not asked for the code and chart blocks: the summary says
+  // which part it could not check.
+  assert.match(e.summary, /^4 of 6 claims need better evidence \(1 high, 2 medium, 1 low\)\. Coverage is partial: its prompt \(cr-research-prompt@3\) did not ask for the code and chart evidence beside the category grades, so those grades were not checked\. These checks change no score\.$/);
+  assert.equal(e.coverage.status, 'partial');
 
   // From @4 on, a critical [V] claim shows its excerpt or query; the model's own critical_kind is used.
   const v4 = { ...assessment, prompt_version: 'cr-research-prompt@4', claims: [
@@ -211,7 +214,7 @@ test('evidence checks: an AI summary never verifies; critical claims need a prim
   assert.equal(full.evidence.flags.length, 0, JSON.stringify(full.evidence.flags));
   assert.equal(full.grade.value, BASE_GRADE);
   const brief = detail.history.claude.find((x) => x.report_id === r.rep.report_id).evidence;
-  assert.deepEqual(Object.keys(brief).sort(), ['critical', 'flagged', 'flagged_categories', 'flagged_other', 'high', 'low', 'medium', 'summary']);
+  assert.deepEqual(Object.keys(brief).sort(), ['coverage', 'critical', 'flagged', 'flagged_categories', 'flagged_components', 'flagged_other', 'high', 'low', 'medium', 'summary']);
   assert.equal(brief.flagged_categories, 0);
 });
 

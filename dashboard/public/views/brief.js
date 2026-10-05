@@ -13,10 +13,10 @@
 // filters and place). A phone gets the whole screen.
 import {
   h, details, logo, gradeGauge, coverageMeter, unscoredList, structureNotes, fmtDate, fmtDateTime, fmtAsOf, fmtRelDay,
-  icon, stateText, button, callout, scoreTier, PROVIDER_LABELS, COVERAGE_MEANS,
+  icon, stateText, button, callout, scoreTier, PROVIDER_LABELS, COVERAGE_MEANS, TAG_TITLES,
 } from '../ui.js';
 import { briefModel, TAG_WORDS, CERTAINTY_WORDS } from '../brief-model.js';
-import { evidenceChecksBlock, sourceItem } from './project.js';
+import { evidenceChecksBlock, sourceItem, checksWord } from './project.js';
 import { evidenceQuality } from './inspector.js';
 import { chartCycleBlock, CONFIDENCE_LABELS } from '../thesis-ui.js';
 import { openResearchDialog } from './dialogs.js';
@@ -75,7 +75,7 @@ const confMark = (c) => (c && CONF_LETTER[c] ? h('span', { class: 'bf-conf', tit
 
 function tagChips(tags) {
   if (!tags.length) return [h('span', { class: 'bf-tag none' }, 'No claim cited')];
-  return tags.map((t) => h('span', { class: `bf-tag t-${t.toLowerCase()}`, title: `[${t}] ${TAG_WORDS[t]}` }, TAG_WORDS[t]));
+  return tags.map((t) => h('span', { class: `bf-tag t-${t.toLowerCase()}`, title: TAG_TITLES[t] }, TAG_WORDS[t]));
 }
 
 // "Oct 20 – 27, 2026", "Oct 20 – Nov 19, 2026", "Oct 20, 2026", or the year
@@ -191,9 +191,11 @@ function noticeItem(ctx, n, m, pid) {
   } else if (n.kind === 'revision') {
     const what = n.changed.length ? n.changed.join('; ') : n.categories ? `${n.categories} category grade${n.categories === 1 ? '' : 's'} changed` : 'no score changed';
     const basis = n.basis === 'existing_evidence' ? 'using existing evidence' : `with ${n.added} new source${n.added === 1 ? '' : 's'}`;
+    // A range narrowed to a point on the same evidence is not new research.
+    const nar = n.narrowed ? ` ${n.narrowed} range${n.narrowed === 1 ? '' : 's'} became a point inside it${n.narrowed_mid ? (n.narrowed_mid === n.narrowed ? ' (the midpoint)' : ` (${n.narrowed_mid} at the midpoint)`) : ''}${n.basis === 'new_sources' ? '' : ': a narrowing, not new research'}.` : '';
     main = n.basis === 'scores_unchanged'
       ? [h('strong', null, 'A re-save'), ' of an earlier save for the same run, with the same scores.']
-      : [h('strong', null, 'A revision'), ` of an earlier save for the same run, ${basis}: ${what}.`];
+      : [h('strong', null, 'A revision'), ` of an earlier save for the same run, ${basis}: ${what}.${nar}`];
     more = h('div', null,
       h('p', null, n.declared && n.declared.note ? `${WHO}'s reason${n.declared.label ? ` (${n.declared.label.split(':')[0].toLowerCase()})` : ''}: ${n.declared.note}` : 'No reason was recorded with this save.'),
       n.minutes !== null ? h('p', null, `Saved ${n.minutes} min after the first save; both are kept.`) : null,
@@ -239,6 +241,23 @@ function noticeItem(ctx, n, m, pid) {
   return li;
 }
 
+// The first view's key points, before the thesis and the scorecard: the
+// strongest risk the report backs with a source, and what would confirm or
+// break the thesis, in the report's words. The full lists stay under What
+// threatens it and What to watch.
+function keyPoints(m) {
+  const k = m.key;
+  if (!k || (!k.risk && !k.confirm && !k.break)) return null;
+  const more = (n, what) => (n ? h('span', { class: 'bf-key-more' }, `+${n} more ${what}`) : null);
+  const row = (cls, label, ...body) => h('div', { class: `bf-key ${cls}` }, h('dt', null, label), h('dd', null, ...body));
+  return h('dl', { class: 'bf-keys', 'aria-label': 'Key points from the report' },
+    k.risk ? row('risk', k.risk.sourced ? 'Strongest sourced risk' : 'Strongest risk',
+      h('p', { class: 'bf-key-t' }, k.risk.text),
+      k.risk.sourced ? citeLine(k.risk) : h('p', { class: 'bf-cite' }, h('span', { class: 'bf-tag none' }, 'No source cited for any listed risk'))) : null,
+    k.confirm ? row('confirm', 'Would confirm', h('p', { class: 'bf-key-t' }, k.confirm), more(k.confirm_more, 'under What to watch')) : null,
+    k.break ? row('break', 'Would break it', h('p', { class: 'bf-key-t' }, k.break), more(k.break_more, 'under What to watch')) : null);
+}
+
 function verdictSection(ctx, m, pid) {
   const v = m.verdict;
   // The next dated event still ahead and the suggested review, from What to
@@ -265,7 +284,8 @@ function verdictSection(ctx, m, pid) {
         views.length ? h('p', { class: 'bf-views', title: `${WHO}'s own views for this horizon; they change no score` }, views) : null)),
     m.grade.status === 'withheld' && m.grade.why.items.length ? h('div', { class: 'bf-missing' }, h('h3', null, 'Not scored'), unscoredList(m.grade.why, { max: 320 }),
       m.structure ? details(`Check · ${m.structure.flags.length} note${m.structure.flags.length === 1 ? '' : 's'}`, structureNotes(m.structure, { max: 6 }), { id: 'brief-structure' }) : null) : null,
-    notices.length ? h('ul', { class: 'bf-notices', 'aria-label': 'Before you rely on this brief' }, notices) : null);
+    notices.length ? h('ul', { class: 'bf-notices', 'aria-label': 'Before you rely on this brief' }, notices) : null,
+    keyPoints(m));
 }
 
 // ---- the thesis -------------------------------------------------------------------------------
@@ -289,7 +309,7 @@ function valueFlow(v) {
         h('p', { class: 'bf-layer-t' }, l.title),
         l.items.length ? h('dl', null, l.items.map((x) => h('div', { title: x.definition || null },
           h('dt', null, x.label),
-          h('dd', null, x.reported ? [h('span', { class: 'fig' }, x.text), x.tag ? h('span', { class: `bf-tag t-${x.tag.toLowerCase()}`, title: `[${x.tag}] ${TAG_WORDS[x.tag]}` }, TAG_WORDS[x.tag]) : null,
+          h('dd', null, x.reported ? [h('span', { class: 'fig' }, x.text), x.tag ? h('span', { class: `bf-tag t-${x.tag.toLowerCase()}`, title: TAG_TITLES[x.tag] }, TAG_WORDS[x.tag]) : null,
             [x.period, x.as_of ? `as of ${x.as_of}` : null].filter(Boolean).length ? h('span', { class: 'bf-when' }, [x.period, x.as_of ? `as of ${x.as_of}` : null].filter(Boolean).join(' · ')) : null]
             : h('span', { class: 'faint' }, 'Not reported'))))) : h('p', { class: 'bf-none' }, 'Not part of this profile')),
     ]));
@@ -335,7 +355,7 @@ function componentsBlock(m) {
     h('p', null, `A range stays a range: the grade then runs from the low ends to the high ends. If any component is unknown, no grade is calculated and the scored share of the weight is shown instead.`),
     h('p', null, `The category grades and the downside-risk scores are shown apart and never averaged in; ${WHO}'s own total, if it wrote one, is kept beside the grade, never in its place.`)), { id: 'brief-how' });
   return h('div', { class: 'bf-block' },
-    h('h3', { class: 'bf-h3' }, 'What the grade is calculated from', h('span', { class: 'bf-h3-sub' }, 'six weighted components')),
+    h('h3', { class: 'bf-h3' }, 'What the grade is calculated from', h('span', { class: 'bf-h3-sub' }, 'six weighted components · the only inputs to the grade')),
     h('ul', { class: 'bf-comps', 'aria-label': 'The six weighted components of the investment grade, 0 to 100, higher is better' }, rows),
     how);
 }
@@ -386,15 +406,21 @@ function scorecardSection(m) {
 
 // ---- what supports it, what threatens it ------------------------------------------------------------
 
+// A fact's support in one line: its claims' evidence tags, its first source
+// (the rest counted), the claim IDs; references the report does not list.
+function citeLine(f) {
+  return h('p', { class: 'bf-cite' },
+    tagChips(f.tags),
+    f.sources.length ? [h('span', { class: 'bf-dot', 'aria-hidden': 'true' }, '·'), f.sources[0].url ? h('a', { href: f.sources[0].url, title: [f.sources[0].publisher, f.sources[0].accessed_at ? `accessed ${f.sources[0].accessed_at}` : null].filter(Boolean).join(' · ') || null }, f.sources[0].title || f.sources[0].publisher || f.sources[0].url) : h('span', null, f.sources[0].title || f.sources[0].source_id), f.sources.length > 1 ? h('span', { class: 'faint', title: f.sources.slice(1).map((s) => s.title || s.url || s.source_id).join('\n') }, `+${f.sources.length - 1} more`) : null] : null,
+    f.claims.length ? h('span', { class: 'bf-ids', title: f.claims.map((c) => `${c.id}${c.as_of ? ` (as of ${c.as_of})` : ''}`).join(', ') }, f.claims.map((c) => c.id).join(' ')) : null,
+    f.dangling.length ? h('span', { class: 'bf-dangling', title: 'These references are not in the report\'s claim or source list' }, `${f.dangling.join(', ')} not listed`) : null);
+}
+
 function factList(items, label) {
   if (!items.length) return none('None given in the report.');
   return h('ol', { class: 'bf-facts', 'aria-label': label }, items.map((f) => h('li', null,
     h('p', { class: 'bf-fact' }, f.text),
-    h('p', { class: 'bf-cite' },
-      tagChips(f.tags),
-      f.sources.length ? [h('span', { class: 'bf-dot', 'aria-hidden': 'true' }, '·'), f.sources[0].url ? h('a', { href: f.sources[0].url, title: [f.sources[0].publisher, f.sources[0].accessed_at ? `accessed ${f.sources[0].accessed_at}` : null].filter(Boolean).join(' · ') || null }, f.sources[0].title || f.sources[0].publisher || f.sources[0].url) : h('span', null, f.sources[0].title || f.sources[0].source_id), f.sources.length > 1 ? h('span', { class: 'faint', title: f.sources.slice(1).map((s) => s.title || s.url || s.source_id).join('\n') }, `+${f.sources.length - 1} more`) : null] : null,
-      f.claims.length ? h('span', { class: 'bf-ids', title: f.claims.map((c) => `${c.id}${c.as_of ? ` (as of ${c.as_of})` : ''}`).join(', ') }, f.claims.map((c) => c.id).join(' ')) : null,
-      f.dangling.length ? h('span', { class: 'bf-dangling', title: 'These references are not in the report\'s claim or source list' }, `${f.dangling.join(', ')} not listed`) : null))));
+    citeLine(f))));
 }
 
 function risksBlock(m) {
@@ -538,7 +564,7 @@ function evidenceSection(ctx, m, pid) {
   const e = m.evidence;
   const pv = m.provenance;
   const r = m.report;
-  const flagsWord = e.flags.length ? `${e.flags.length} flag${e.flags.length === 1 ? '' : 's'}${e.checks && e.checks.high ? ` · ${e.checks.high} serious` : ''}` : 'nothing flagged';
+  const flagsWord = e.flags.length ? `${e.flags.length} flag${e.flags.length === 1 ? '' : 's'}${e.checks && e.checks.high ? ` · ${e.checks.high} serious` : ''}` : checksWord(e.checks);
   const checks = e.checks ? details(`Desk evidence checks · ${flagsWord}`, evidenceChecksBlock(e.checks), { id: 'brief-checks', open: e.level === 'serious' }) : null;
   const shownSources = e.sources.slice(0, 5);
   const restSources = e.sources.slice(5);

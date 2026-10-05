@@ -250,6 +250,122 @@ async function pull(ws, { to = null, deskUrl = null, env = process.env, fetchImp
   };
 }
 
+// ---------------------------------------------------------------------------
+// The recovery drill (review of fa05f99, 2026-10-05). From an offsite copy
+// this PC pulled (the latest in the index, or the file named): verify it,
+// restore it into a new folder of its own (never over live records), check
+// the restored records, originals and research state, and show that nothing
+// can be sent from it: the restored copy holds research, and its runner is
+// asked once with a stand-in for the network that refuses and counts every
+// call. Nothing here contacts the desk or a model provider. The result is
+// kept in the offsite folder's DRILLS file.
+const DRILLS_NAME = 'OFFSITE-DRILLS.json';
+
+// Research jobs in a restored copy, by what the runner would do with them
+// once released (never before): an unsent job would be sent; a request the
+// provider accepted is collected by its ID, never sent again; an uncertain
+// attempt waits for Eric; a job held by an archived project or a model on
+// hold stays unsent; an answer quarantined against its run stays kept and
+// ungraded.
+function researchStates(ws2) {
+  const research = require('./research');
+  const { listProjects } = require('./projects');
+  const held = research.heldProviders(ws2);
+  const out = { unsent: 0, held_unsent: 0, sent_collect_by_id: 0, uncertain: 0, with_assistant: 0, waiting_manual: 0, completed: 0, failed: 0, quarantined: 0, other: 0 };
+  for (const p of listProjects(ws2).filter((x) => !x.broken)) {
+    for (const run of research.listRuns(ws2, p.project_id).filter((r) => !r.broken)) {
+      for (const job of Object.values(run.jobs || {})) {
+        const last = (job.attempts || [])[(job.attempts || []).length - 1] || null;
+        if (job.state === 'queued') out[job.hold || held[job.provider] ? 'held_unsent' : 'unsent'] += 1;
+        else if (job.state === 'dispatching') out.sent_collect_by_id += 1;
+        else if (job.state === 'uncertain') out.uncertain += 1;
+        else if (job.state === 'running') out.with_assistant += 1;
+        else if (job.state === 'unconfigured') out.waiting_manual += 1;
+        else if (job.state === 'completed') out.completed += 1;
+        else if (job.state === 'failed' && (job.outcome === 'contract_conflict' || (last && last.outcome === 'contract_conflict'))) out.quarantined += 1;
+        else if (job.state === 'failed') out.failed += 1;
+        else out.other += 1;
+      }
+    }
+  }
+  return out;
+}
+
+async function drill(ws, { file = null, to = null, folder = null } = {}) {
+  const { OpError } = require('./ops');
+  const dir = folderOf(ws, folder);
+  const idx = readIndex(dir);
+  const name = file ? path.resolve(file) : (idx.copies || [])[0] ? path.join(dir, idx.copies[0].file) : null;
+  if (!name || !fs.existsSync(name)) {
+    throw new OpError('NOT_FOUND', file ? `${file} does not exist.` : `No offsite copy on this PC yet in ${dir}. Pull one first (node dashboard/cli.js offsite pull); it needs the desk address and the backup key (offsite status says which is missing).`);
+  }
+  const buf = fs.readFileSync(name);
+  const fileSha = sha256(buf);
+  const listed = (idx.copies || []).find((c) => c.file === path.basename(name)) || null;
+  let pkg;
+  try {
+    pkg = JSON.parse(buf.toString('utf8'));
+  } catch (err) {
+    throw new OpError('INVALID', `${path.basename(name)} is not JSON: ${err.message}`);
+  }
+  const v = verifyPackage(pkg);
+  const record = {
+    schema_version: 'cr.offsite-drill.v1',
+    at: new Date().toISOString(),
+    copy: { file: path.basename(name), sha256: fileSha, matches_index: listed ? listed.sha256 === fileSha : null, pulled_at: listed ? listed.pulled_at : null, package_created_at: pkg.created_at || null, served_at: pkg.desk ? pkg.desk.served_at || null : null, desk_revision: pkg.desk && pkg.desk.revision ? pkg.desk.revision.short || null : null, files: v.files || 0, captures: v.captures || 0 },
+    verify: { ok: v.ok, problems: v.problems || [] },
+  };
+  if (!v.ok) return finishDrill(dir, { ...record, passed: false, message: `The copy did not verify, so it was not restored: ${v.problems.join('; ')}.` });
+  // A new folder of its own: never the live workspace or anything inside it.
+  const dest = path.resolve(to || path.join(require('os').tmpdir(), `cryptoresearch-drill-${fileTs()}`));
+  const live = path.resolve(ws.root);
+  if (dest === live || dest.toLowerCase().startsWith(`${live.toLowerCase()}${path.sep}`)) throw new OpError('INVALID', 'Restore the drill into a folder outside the live workspace.');
+  if (fs.existsSync(dest) && listDir(dest).length) throw new OpError('INVALID', `${dest} is not empty; the drill restores only into a new or empty folder.`);
+  const restored = require('./exporter').restorePackage(pkg, dest);
+  const ws2 = require('./workspace').openWorkspace({ root: dest, actor: 'drill', recover: false });
+  // Every original as it was saved: its bytes against the hash on its record.
+  const { listProjects } = require('./projects');
+  const { loadReports } = require('./reports');
+  let originals = 0;
+  const changed = [];
+  for (const p of listProjects(ws2).filter((x) => !x.broken)) {
+    for (const r of loadReports(ws2, p.project_id)) {
+      if (r.broken || !r.meta || !r.meta.original_sha256) continue;
+      originals += 1;
+      let sha = null;
+      try { sha = sha256(fs.readFileSync(ws2.abs(`${r.dir}/${r.meta.original_file}`))); } catch (_) { /* missing */ }
+      if (sha !== r.meta.original_sha256) changed.push(r.report_id);
+    }
+  }
+  const states = researchStates(ws2);
+  // The runner, once, with a stand-in for the network that refuses and
+  // counts: the restored copy holds research, so it asks for nothing.
+  const calls = [];
+  const run = await require('./research').runDueJobs(ws2, { trigger: 'drill', fetchImpl: async (url, opts = {}) => { calls.push(`${opts.method || 'GET'} ${String(url).replace(/\?.*$/, '')}`); throw new Error('drill: no network'); } });
+  const passed = restored.status === 'restored_and_verified' && !changed.length && !calls.length && run.status === 'held';
+  return finishDrill(dir, {
+    ...record,
+    restore: { dest, status: restored.status, reconciliation: restored.reconciliation, research_held: Boolean(restored.restored_copy && restored.restored_copy.research_held) },
+    records: { projects: listProjects(ws2).filter((x) => !x.broken).length, reports_checked: originals, originals_changed: changed },
+    research: states,
+    provider_calls: calls.length,
+    runner: run.status,
+    passed,
+    message: passed
+      ? `Drill passed: ${path.basename(name)} verified (${v.files} files), restored into ${dest} with every file and record total matching, ${originals} original report(s) byte for byte, and no provider asked for anything (${states.unsent} unsent, ${states.sent_collect_by_id} sent, ${states.uncertain} uncertain and ${states.quarantined} quarantined job(s) restored as they were).`
+      : `Drill did not pass: ${[restored.status !== 'restored_and_verified' ? `restore ${restored.status}` : null, changed.length ? `${changed.length} original(s) changed` : null, calls.length ? `${calls.length} provider call(s)` : null, run.status !== 'held' ? 'research was not held' : null].filter(Boolean).join('; ')}.`,
+  });
+}
+
+function finishDrill(dir, rec) {
+  mkdirp(dir);
+  const file = path.join(dir, DRILLS_NAME);
+  const doc = readJson(file, null) || { schema_version: 'cr.offsite-drills.v1', drills: [] };
+  doc.drills = [rec, ...(doc.drills || [])].slice(0, 100);
+  writeDurable(file, jsonText(doc));
+  return { status: rec.passed ? 'passed' : 'failed', ...rec, drills_file: file };
+}
+
 // The latest copy and its age, for doctor, Settings and desk checks.
 function status(ws, env = process.env) {
   const r = readiness(ws, env);
@@ -329,4 +445,4 @@ function verifyFile(file) {
   return verifyPackage(pkg);
 }
 
-module.exports = { makeOffsiteRoute, verifyPackage, pull, status, backupStatus, readiness, verifyFile, prune, deskKey, deskKeyProblem, CR_ALLOWED, MIN_KEY_CHARS, COPY_FRESH_HOURS };
+module.exports = { makeOffsiteRoute, verifyPackage, pull, drill, researchStates, status, backupStatus, readiness, verifyFile, prune, deskKey, deskKeyProblem, CR_ALLOWED, MIN_KEY_CHARS, COPY_FRESH_HOURS };

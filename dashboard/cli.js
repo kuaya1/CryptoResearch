@@ -112,6 +112,12 @@ Data, jobs and maintenance
   backup restore <name> --overlay --confirm          copy over current files; later files stay
   offsite setup --desk https://<desk> [--to FOLDER]  pull verified copies of the online desk to this PC (daily)
   offsite pull [--to FOLDER] | offsite status | offsite verify <FILE>
+  offsite drill [<FILE>] [--to <empty folder>]
+                                         verify the latest pulled copy (or FILE), restore it into a new
+                                         folder, check records, originals and research state; no provider
+                                         is asked for anything (the restored copy holds research)
+  restored-copy status | restored-copy release --confirm
+                                         a restored copy holds research until released here
                                          the backup key is CR_BACKUP_KEY on the desk and on this PC
                                          (or "desk_backup_key" in ~/.cryptoresearch/secrets.json)
   demo build                             build the FICTIONAL demo workspace (dashboard/demo-workspace)
@@ -265,7 +271,8 @@ async function run(argv) {
 
   switch (cmd) {
     case 'doctor':
-      return require('./core/doctor').doctor(ws);
+      // The explicit diagnostic: it includes the write test.
+      return require('./core/doctor').doctor(ws, { writeProbe: true });
     case 'capabilities':
       return { ...require('./core/doctor').sessionCapabilities(ws), runtime: require('./core/doctor').runtimeInfo(ws) };
     case 'recover': {
@@ -759,7 +766,22 @@ async function run(argv) {
       if (sub === 'pull') return off.pull(ws, { to: one(flags.to) ? path.resolve(one(flags.to)) : null, deskUrl: one(flags.desk) || null });
       if (sub === 'status') return off.status(ws);
       if (sub === 'verify') return off.verifyFile(path.resolve(need(rest[0], 'offsite verify <file>')));
-      throw Object.assign(new Error('offsite setup|pull|status|verify'), { code: 'USAGE' });
+      if (sub === 'drill') return off.drill(ws, { file: rest[0] ? path.resolve(rest[0]) : null, to: one(flags.to) ? path.resolve(one(flags.to)) : null });
+      throw Object.assign(new Error('offsite setup|pull|status|verify|drill'), { code: 'USAGE' });
+    }
+    case 'restored-copy': {
+      // A restored copy holds research (no provider asked for anything) until
+      // Eric releases it; releasing lets queued jobs be sent and accepted
+      // requests be collected by their ID, within the limits.
+      const research = require('./core/research');
+      const rel = research.RESTORED_REL;
+      const cur = research.restoredHold(ws) || require('./core/fsx').readJson(ws.abs(rel), null);
+      if (sub === 'status') return cur ? { restored_copy: true, research_held: cur.research_held !== false, ...cur } : { restored_copy: false, message: 'This workspace is not a restored copy.' };
+      if (sub === 'release') {
+        if (cur && cur.research_held !== false && !flags.confirm) throw Object.assign(new Error('Releasing lets this copy send its queued research jobs and collect accepted requests by their ID, within the limits. Re-run with --confirm.'), { code: 'CONFIRM' });
+        return research.releaseRestoredCopy(ws);
+      }
+      throw Object.assign(new Error('restored-copy status|release --confirm'), { code: 'USAGE' });
     }
     case 'backup': {
       const ex = require('./core/exporter');

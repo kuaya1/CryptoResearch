@@ -577,6 +577,8 @@ test('connector: one Cowork request for all three models; ChatGPT and Gemini do 
   assert.equal(all.data.readiness.models.chatgpt.route, 'setup_required');
   assert.equal(all.data.readiness.models.chatgpt.status, 'manual');
   assert.equal(all.data.readiness.models.gemini.setup, 'no Google API key: GEMINI_API_KEY');
+  // Manual research is a working route: said as ready, the API as optional.
+  assert.match(all.data.readiness.models.chatgpt.says, /^ChatGPT: manual\. ChatGPT through its desk connection researches when Eric asks it .*Automatic background research is optional and not set up/);
   assert.match(all.data.readiness.summary, /^Manual research: Claude in Cowork, ChatGPT through its desk connection and Gemini through its desk connection, when Eric asks; nothing is billed\. Automatic background research: not set up for any model \(optional; each needs its API key in Render's environment\)\./);
   assert.doesNotMatch(all.text, /fictional-test|sk-|AIza/, 'never a key');
   const promptFile = fs.readFileSync(path.join(d.ws.root, 'projects', pid, 'research', runId, 'prompt.md'), 'utf8');
@@ -779,7 +781,10 @@ test('connector: with paid APIs set up, "all three models" runs ChatGPT and Gemi
   assert.equal(all.data.run.jobs.chatgpt.mode, 'api');
   assert.match(all.data.message, /ChatGPT: queued for the ChatGPT API in the background/);
   // Readiness: ChatGPT and Gemini run by themselves; Claude is done in Cowork.
-  assert.deepEqual(all.data.readiness.models.chatgpt, { status: 'automatic', route: 'automatic', model: 'gpt-fictional-test', setup: null, on_hold: null });
+  const { says, ...chatgptReady } = all.data.readiness.models.chatgpt;
+  assert.deepEqual(chatgptReady, { status: 'automatic', route: 'automatic', model: 'gpt-fictional-test', setup: null, on_hold: null });
+  assert.match(says, /^ChatGPT: automatic\. Runs on the OpenAI API \(gpt-fictional-test\) in the background/);
+  assert.match(all.data.readiness.models.claude.says, /^Claude: manual\. Claude in Cowork researches when Eric asks it/);
   assert.equal(all.data.readiness.models.gemini.route, 'automatic');
   assert.equal(all.data.readiness.models.claude.route, 'setup_required');
   assert.match(all.data.readiness.summary, /^Manual research: Claude in Cowork, when Eric asks; nothing is billed\. Automatic background research \(paid API, within the limits\): ChatGPT and Gemini\. Background API not set up: Claude \(no Anthropic API key: ANTHROPIC_API_KEY\)\. A three-model request from Cowork reserves about \$\d+\.\d+ on the ChatGPT and Gemini APIs \(Claude researches in Cowork itself\), within the \$5\.00 per-run limit\./);

@@ -417,7 +417,7 @@ export function unscoredList(reason, { max = 200 } = {}) {
 }
 
 export const TAG_TITLES = {
-  V: "[V] Checked in that analyst's session. Not checked by this dashboard.",
+  V: "[V] The researcher's own classification: it says it opened a primary source. The desk does not verify it independently.",
   C: '[C] Project-claimed.',
   I: '[I] Analyst inference.',
   S: '[S] Speculative forecast.',
@@ -625,17 +625,17 @@ function newerRunText(provider, key, job) {
 // Evidence flags on a report: on its claims, and on category grades that lack
 // the evidence the prompt asks for beside them (core/evidence.js).
 export function evidenceLevel(ev) {
-  if (!ev || !(ev.flagged || ev.flagged_categories || ev.flagged_other)) return null;
+  if (!ev || !(ev.flagged || ev.flagged_categories || ev.flagged_other || ev.flagged_components)) return null;
   if (ev.high > 0) return 'serious';
   if (ev.medium > 0) return 'material';
   return null;
 }
 
 export function evidenceText(ev) {
-  if (!ev || !(ev.flagged || ev.flagged_categories || ev.flagged_other)) return null;
+  if (!ev || !(ev.flagged || ev.flagged_categories || ev.flagged_other || ev.flagged_components)) return null;
   const n = ev.flagged || 0;
   const c = ev.flagged_categories || 0;
-  const what = [n ? `${n} claim${n === 1 ? '' : 's'}` : null, c ? `${c} category grade${c === 1 ? '' : 's'}` : null, ev.flagged_other ? 'scenario probabilities' : null].filter(Boolean).join(' and ');
+  const what = [n ? `${n} claim${n === 1 ? '' : 's'}` : null, c ? `${c} category grade${c === 1 ? '' : 's'}` : null, ev.flagged_other ? 'scenario probabilities' : null, ev.flagged_components ? 'the timing and liquidity component' : null].filter(Boolean).join(' and ').replace(/ and (?=[^,]* and )/g, ', ');
   return `${what} flagged by evidence checks${ev.high ? ` (${ev.high} serious)` : ev.medium ? ` (${ev.medium} material)` : ''}`;
 }
 
