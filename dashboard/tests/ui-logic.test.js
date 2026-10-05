@@ -643,12 +643,10 @@ test('the list\'s market figures: compact USD with two decimals (the shared form
   assert.equal(ui.fmtMarketUsd(null), null);
   const store = (saved) => ({ ui: { get: () => saved, set: () => {} } });
   const old = wl.prefs(store({ v: 2, columns: ['rank', 'price', 'sector', 'research'], sort: { key: 'mcap', dir: 'desc' }, filters: { owned: 'all' } }));
-  assert.deepEqual(old.columns, ['rank', 'price', 'change24h', 'change7d', 'change30d', 'mcap', 'volume', 'spark', 'spark30', 'research'], 'the CMC order, then the 30D chart');
+  assert.deepEqual(old.columns, ['rank', 'price', 'change24h', 'change7d', 'change30d', 'mcap', 'volume', 'spark', 'research'], 'the CMC order');
   assert.deepEqual(old.sort, { key: 'mcap', dir: 'desc' }, 'the sort is kept');
   const now = wl.prefs(store({ v: 3, columns: ['spark', 'price', 'sector'], sort: { key: 'rank', dir: 'asc' }, filters: {} }));
-  assert.deepEqual(now.columns, ['price', 'spark', 'spark30', 'sector', 'research'], 'choices made in this layout are kept, in its order; the 30D chart joins them once (v3 to v4)');
-  const since = wl.prefs(store({ v: 4, columns: ['spark', 'price', 'sector'], sort: { key: 'rank', dir: 'asc' }, filters: {} }));
-  assert.deepEqual(since.columns, ['price', 'spark', 'sector', 'research'], 'a choice made since is kept');
+  assert.deepEqual(now.columns, ['price', 'spark', 'sector', 'research'], 'choices made in this layout are kept, in its order');
 });
 
 test('one 0–100 spectrum on the rubric anchors, and the gauge geometry', async () => {

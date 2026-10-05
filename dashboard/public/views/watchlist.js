@@ -9,7 +9,7 @@
 // project. Live updates redraw only what changed, in place: the search box,
 // open details, scroll positions and the row order you are reading stay put.
 import {
-  h, clear, button, select, input, changeCell, sparkline, priceSpark, historySpark, logo, gradeBadge, badgeInfo, verdictChip,
+  h, clear, button, select, input, changeCell, sparkline, priceSpark, logo, gradeBadge, badgeInfo, verdictChip,
   fmtPrice, fmtCompactUsd, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, fmtSignedPct, freshnessText, priceStatus, stateText, toast, announce,
   researchState, withheldReason, unscoredList, jobKey, icon, evidenceLevel, evidenceText, gradeGauge, coverageMeter,
   withheldLabel, structureNotes, details, onHoldOf, copyText, anchorText, fmtRelDay, fmtChangePct, fmtMarketUsd, briefLink,
@@ -20,8 +20,8 @@ import { marketStrip, positionFacts, vsBtcFacts } from '../position-ui.js';
 import { dexLink, dexCard } from './dex.js';
 
 // Column catalogue, in the CoinMarketCap order: # (rank, drawn before the
-// name), price, 24h, 7d and 30d change, market cap, volume, the 7-day chart
-// and the 30-day chart (the desk's own daily closes), then the three models. Optional columns (off at first) sit before the
+// name), price, 24h, 7d and 30d change, market cap, volume, the 7-day chart,
+// then the three models. Optional columns (off at first) sit before the
 // models. When the list is narrower than its columns, the least essential
 // give way (FIT_ORDER); every value stays in the inspector.
 const COLUMNS = [
@@ -36,7 +36,6 @@ const COLUMNS = [
   { id: 'volume', label: 'Volume(24h)', title: 'Trading volume over the last 24 hours, in USD', def: true, sort: 'volume', num: true, market: true },
   { id: 'volChange', label: 'Volume change', title: 'Measured against our own stored observation from about 24 hours earlier', sort: 'volChange', num: true, market: true },
   { id: 'spark', label: '7D Chart', title: 'Price over the last 7 days (provider series)', def: true, market: true },
-  { id: 'spark30', label: '30D Chart', title: 'Daily closing price over the last 30 days, from this desk\'s own stored observations (a new desk shows a shorter history)', def: true, market: true },
   { id: 'sector', label: 'Sector', sort: 'sector' },
   { id: 'lastResearch', label: 'Last research', title: 'Latest report analysis date', sort: 'lastResearch' },
   { id: 'liquidity', label: 'Liquidity', disabled: 'No liquidity source is configured (CoinGecko /coins/markets does not report liquidity).' },
@@ -60,7 +59,7 @@ const DEFAULT_SORT = { key: 'rank', dir: 'asc' };
 const COVERAGE = [['any', 'Any coverage'], ['all3', 'Graded by all three models'], ['missing', 'Missing a model grade'], ['none', 'No research yet'], ['attention', 'Failed or withheld']];
 const RET30 = [['any', 'Any'], ['pos', 'Positive'], ['neg', 'Negative']];
 const OWNED = [['watching', 'Watching'], ['off', 'Not watching'], ['all', 'All']];
-const PREFS_VERSION = 4;
+const PREFS_VERSION = 3;
 
 const view = {
   q: '', order: null, orderKey: '', suppressFocus: false, returnFocus: null, focusProvider: null, focusOnRender: false, bound: false, menus: [],
@@ -72,10 +71,7 @@ export function prefs(ctx) {
   // Columns saved before the CoinMarketCap layout (v3) start from its defaults;
   // sort and filters are kept.
   const keepCols = Array.isArray(saved.columns) && saved.v >= 3;
-  // Columns saved before the 30-day chart (v3) get it once, as a new default.
-  const keep = new Set(keepCols ? saved.columns : []);
-  if (keepCols && !(saved.v >= 4)) keep.add('spark30');
-  const cols = keepCols ? COLUMNS.filter((x) => keep.has(x.id) && !x.disabled).map((x) => x.id) : COLUMNS.filter((c) => c.def).map((c) => c.id);
+  const cols = keepCols ? COLUMNS.filter((x) => saved.columns.includes(x.id) && !x.disabled).map((x) => x.id) : COLUMNS.filter((c) => c.def).map((c) => c.id);
   if (!cols.includes('research')) cols.push('research');
   const filters = { ...DEFAULT_FILTERS, ...(saved.filters || {}) };
   // Saved before the list opened on what you follow, "all" was just the old
@@ -230,22 +226,7 @@ function sparkCell(p, m) {
   let el = sparkCache.get(key);
   if (!el) {
     if (sparkCache.size > 400) sparkCache.clear();
-    el = priceSpark(series, m ? m.change_7d_pct : null, { width: 108, label: `${p.symbol || p.name} 7-day price` });
-    sparkCache.set(key, el);
-  }
-  return el.cloneNode(true);
-}
-
-// The 30-day chart, kept the same way.
-function spark30Cell(p, m) {
-  const s = m && m.sparkline_30d;
-  const pts = s && Array.isArray(s.points) ? s.points : [];
-  const last = pts.length ? pts[pts.length - 1] : null;
-  const key = `30|${p.project_id}|${pts.length}|${last ? last.join(',') : ''}|${pts.length ? pts[0].join(',') : ''}`;
-  let el = sparkCache.get(key);
-  if (!el) {
-    if (sparkCache.size > 400) sparkCache.clear();
-    el = historySpark(s, { width: 108, label: `${p.symbol || p.name} 30-day price` });
+    el = priceSpark(series, m ? m.change_7d_pct : null, { label: `${p.symbol || p.name} 7-day price` });
     sparkCache.set(key, el);
   }
   return el.cloneNode(true);
@@ -301,7 +282,6 @@ function cellFor(ctx, col, p) {
     case 'change7d': return m ? deltaCell(m.change_7d_pct, 'over 7 days') : dash('7-day change');
     case 'change30d': return m ? deltaCell(m.change_30d_pct, 'over 30 days') : dash('30-day change');
     case 'spark': return sparkCell(p, m);
-    case 'spark30': return spark30Cell(p, m);
     case 'mcap': return m && typeof m.market_cap_usd === 'number' ? h('span', { class: 'num', title: fmtPrice(m.market_cap_usd) }, marketStrings(m).mcap) : dash('Market cap');
     case 'mcapChange': return m ? deltaCell(m.market_cap_change_24h_pct, 'market cap over 24 hours') : dash('Market-cap change');
     case 'fdv': return m && typeof m.fdv_usd === 'number' ? h('span', { class: 'num' }, marketStrings(m).fdv) : dash('FDV');
@@ -374,9 +354,8 @@ function secondaryFacts(ctx, p) {
 // has, so the three grades never scroll out of view. Every hidden value is
 // still in the inspector, and the Columns menu says so.
 // Optional columns first, then the defaults in the same order as the
-// container-width rules in styles.css: the 30-day chart, 30d %, volume, the
-// 7-day chart, market cap.
-const FIT_ORDER = ['lastResearch', 'sector', 'volChange', 'mcapChange', 'fdv', 'spark30', 'change30d', 'volume', 'spark', 'mcap', 'change24h', 'rank', 'change7d', 'price'];
+// container-width rules in styles.css: 30d %, volume, the 7-day chart, market cap.
+const FIT_ORDER = ['lastResearch', 'sector', 'volChange', 'mcapChange', 'fdv', 'change30d', 'volume', 'spark', 'mcap', 'change24h', 'rank', 'change7d', 'price'];
 
 function fitColumns(root) {
   const sc = root && root.querySelector('.table-scroll');

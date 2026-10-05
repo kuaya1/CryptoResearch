@@ -247,8 +247,6 @@ function marketFor(ws, project, latest, history = null) {
     coingecko_id: id,
     ...obs,
     sparkline_7d: Array.isArray(obs.sparkline_7d) ? obs.sparkline_7d : null,
-    // Daily closes over 30 days from the desk's own observations (never fetched).
-    sparkline_30d: valid ? market.priceHistory30d(ws, id, { history, current: obs }) : null,
     logo_url: logo ? `/api/logos/${id}` : null,
     rank_source_label: obs.rank_source === 'coingecko' ? 'CoinGecko market-cap rank' : obs.rank_source === 'fictional-demo' ? 'FICTIONAL demo rank' : obs.rank_source || null,
     volume_change_24h_pct: volChange ? volChange.pct : null,

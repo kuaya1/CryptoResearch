@@ -739,40 +739,4 @@ function volumeChange24h(ws, id, current, { history = null } = {}) {
   return { pct: (current.volume_24h_usd / best.vol - 1) * 100, compared_with: best.at, hours: Math.round(best.age * 10) / 10 };
 }
 
-// The last 30 days of an asset's price from this desk's own stored
-// observations (about hourly), as daily closes: the last observation of each
-// UTC day, today's latest price closing today. Each point is [days since the
-// window opened, price], so a chart can place it on a true 30-day axis. A day
-// with no observation is left out, never filled in; covered_days says how
-// many of the 30 are on record. Nothing is fetched: a new desk shows a short
-// history until it has kept 30 days.
-const HISTORY_DAYS = 30;
-const DAY_MS = 86400000;
-function priceHistory30d(ws, id, { now = Date.now(), history = null, current = null } = {}) {
-  // The last 30 UTC calendar days, today included.
-  const today = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
-  const start = today - (HISTORY_DAYS - 1) * DAY_MS;
-  const months = [...new Set([new Date(start).toISOString().slice(0, 7), new Date(start + 15 * DAY_MS).toISOString().slice(0, 7), new Date(now).toISOString().slice(0, 7)])];
-  const close = new Map();
-  const take = (at, price) => {
-    const t = Date.parse(at || '');
-    if (!Number.isFinite(t) || t < start || t > now + 10 * 60000) return;
-    if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) return;
-    const day = new Date(t).toISOString().slice(0, 10);
-    const prev = close.get(day);
-    if (!prev || t >= prev.t) close.set(day, { t, price });
-  };
-  for (const m of months) for (const o of historyMonth(ws, m, history).get(id) || []) take(o.source_last_updated_at || o.fetched_at, o.price_usd);
-  if (current) take(current.source_last_updated_at || current.fetched_at, current.price_usd);
-  const days = [...close.keys()].sort();
-  if (!days.length) return { span_days: HISTORY_DAYS, covered_days: 0, from: null, to: null, points: [] };
-  return {
-    span_days: HISTORY_DAYS,
-    covered_days: days.length,
-    from: days[0],
-    to: days[days.length - 1],
-    points: days.map((d) => { const c = close.get(d); return [Math.round(((c.t - start) / DAY_MS) * 100) / 100, c.price]; }),
-  };
-}
-
-module.exports = { refresh, searchCoins, readLatest, readStatus, trackedIds, freshness, fetchMarkets, validateRow, nextAllowed, noteRateLimit, rateLimitGate, retryAfterMs, clock, volumeChange24h, historyMonth, priceHistory30d, logoFile, apiKey, credential, callBudget, addCalls, reserveCall, LATEST_REL, STATUS_REL, SOURCE_LABEL, RATE_LIMIT_DEFAULT_MS };
+module.exports = { refresh, searchCoins, readLatest, readStatus, trackedIds, freshness, fetchMarkets, validateRow, nextAllowed, noteRateLimit, rateLimitGate, retryAfterMs, clock, volumeChange24h, historyMonth, logoFile, apiKey, credential, callBudget, addCalls, reserveCall, LATEST_REL, STATUS_REL, SOURCE_LABEL, RATE_LIMIT_DEFAULT_MS };

@@ -2240,27 +2240,34 @@ button.mtab { border-radius: 10px; }
 .price-big, .provider-grade .big, .grade .big { font-family: var(--font-display); letter-spacing: -0.025em; }
 .ggauge .gnum { font-family: var(--font-display); }
 
-/* ---- The watchlist grid (2026-10-05, the 30D chart) -------------------------
-   Rows stay 56px (Eric's sizes of 2026-10-05). The header reads larger (13px
-   in a 48px row); the name is set 24px in from the edge with its header;
-   tickers sit at normal weight in the quieter gray; the name column takes
-   about a fifth of the width instead of all the slack, so a wide screen
-   spreads the figures; both charts are one width. */
-table.wl thead th { height: 48px; }
-table.wl th .th, table.wl th button.sort { min-height: 48px; }
-table.wl th button.sort, table.wl th .th, table.wl th .th .lbl, table.wl th .lbl { font-size: 13px; }
-table.wl th.c-prov .hold { font-size: 11.5px; }
-@container wl (min-width: 720px) {
-  table.wl td.c-project, table.wl th.c-project { padding-left: 24px; }
-  /* The header's label starts where the logos do. */
-  table.wl th.c-project button.sort, table.wl th.c-project .th { padding-left: 0; }
+/* ---- The watchlist page (Eric, 2026-10-05, later) ---------------------------
+   Centered: the page (title, status strip, toolbar and table together) is at
+   most 1440px wide, 32px inside its edges, in the middle of the space it has
+   (beside the inspector when one is open); a phone keeps its 16px gutter.
+   In the table (never on a phone card): rows 52px; names 14px/600; tickers
+   12px/500 in --text-3; every figure (price, changes, market cap, volume)
+   14px with tabular digits; header labels 13px in a 48px header row; the
+   name 24px in from the table's edge with its header label over the logos;
+   the Name column as wide as its content, so the figures share the rest. */
+@media (min-width: 861px) {
+  main:has(> .wl-wrap) { padding-inline: 0; }
+  .wl-wrap { box-sizing: border-box; max-width: 1440px; margin-inline: auto; padding-inline: 32px; }
+  /* Beside a docked inspector the list keeps the page's usual 24px, so its figures keep their place. */
+  body.split .wl-wrap { padding-inline: 24px; }
 }
-/* Below 1500px the name cuts at 160px (its full text is the button's title and in the inspector), so the 30D chart keeps its place. */
-@container wl (min-width: 720px) and (max-width: 1499px) { table.wl .pname { max-width: 160px; } }
-table.wl th.c-project { width: 1%; }
-table.wl .proj-cell .tick { font-weight: 400; color: var(--text-3); }
-table.wl td.c-spark, table.wl th.c-spark, table.wl td.c-spark30, table.wl th.c-spark30 { width: 108px; padding-left: 8px; padding-right: 12px; }
-table.wl th.c-spark30 .th { justify-content: flex-end; padding: 0; }
-/* The 30D chart gives way first, before 30d % (the rules above), so a
-   narrower list keeps its figures; its values stay in the Columns menu. */
-@container wl (max-width: 1379px) { table.wl .c-spark30 { display: none; } }
+@container wl (min-width: 720px) {
+  table.wl thead th { height: 48px; }
+  table.wl th .th, table.wl th button.sort { min-height: 48px; }
+  table.wl th button.sort, table.wl th .th, table.wl th .th .lbl, table.wl th .lbl { font-size: 13px; }
+  table.wl th.c-prov .hold { font-size: 11.5px; }
+  table.wl td, table.wl tbody td { height: 52px; }
+  table.wl td.c-project, table.wl th.c-project { padding-left: 24px; }
+  table.wl th.c-project button.sort, table.wl th.c-project .th { padding-left: 0; }
+  table.wl th.c-project { width: 1%; }
+  table.wl .pname { font-size: 14px; font-weight: 600; }
+  table.wl .proj-cell .tick { font-size: 12px; font-weight: 500; color: var(--text-3); }
+  table.wl td.num, table.wl td .num, table.wl td .price, table.wl td .chg { font-size: 14px; font-variant-numeric: tabular-nums lining-nums; }
+}
+/* In a list narrower than 1100px (beside the inspector, a laptop) a long name
+   cuts at 180px; its full text is its title and in the inspector. */
+@container wl (min-width: 720px) and (max-width: 1099px) { table.wl .pname { max-width: 180px; } }
