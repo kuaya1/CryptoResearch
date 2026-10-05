@@ -1002,7 +1002,7 @@ td.c-mkt-summary { display: none; }
 .panel-head { padding: 12px 8px 12px 20px; border-bottom: 1px solid var(--border); background: var(--surface); }
 .ph-row { display: flex; align-items: flex-start; gap: 12px; }
 /* The asset at a glance: four compared figures in one hairline-divided row. */
-.ov-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 10px 12px 0 0; border: 1px solid var(--separator); border-radius: var(--r-md); overflow: hidden; }
+.ov-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 10px 0 0; border: 1px solid var(--separator); border-radius: var(--r-md); overflow: hidden; }
 .ov-stat { min-width: 0; padding: 5px 10px 6px; }
 .ov-stat + .ov-stat { border-left: 1px solid var(--separator); }
 .ov-stat dt { font-size: 11px; font-weight: 500; color: var(--text-3); }
@@ -1029,7 +1029,6 @@ td.c-mkt-summary { display: none; }
 @media (max-width: 760px) {
   /* The model tabs say it on a phone; the heading stays for screen readers. */
   .panel h3.sec-scores { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  .ov-stats { margin-right: 4px; }
   .ov-stat { padding: 4px 8px 5px; }
   .facts.onchain { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -1082,7 +1081,7 @@ button.pline .go { font-size: var(--fs-caption); color: var(--accent-text); font
 .idn.ok { color: var(--pos); border-color: color-mix(in srgb, var(--pos) 30%, transparent); background: var(--pos-weak); }
 .idn.pending { border-color: color-mix(in srgb, var(--warn-strong) 55%, transparent); color: var(--warn); background: var(--warn-weak); }
 .idn.pending::before { -webkit-mask-image: var(--i-warn); mask-image: var(--i-warn); }
-.panel-body { overflow-y: auto; overscroll-behavior: contain; padding: 4px 20px 36px; min-width: 0; flex: 1; }
+.panel-body { overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 4px 20px 36px; min-width: 0; flex: 1; }
 .panel section { padding: 16px 0; border-bottom: 1px solid var(--separator); min-width: 0; }
 .panel section:last-child { border-bottom: 0; }
 .panel h3 { font-size: 12px; font-weight: 600; letter-spacing: 0; color: var(--text-3); margin-bottom: 12px; }
@@ -1698,7 +1697,7 @@ button.gb:is(.is-none, .is-on_hold):hover { border-color: var(--border); }
 .hprice .hm-sub .chg { font-family: var(--mono); font-size: 11px; }
 .hprice.none { font-size: var(--fs-caption); color: var(--text-3); }
 .panel-head .close { font-size: 14px; color: var(--text-3); }
-.ov-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 10px 8px 0 0; border: 0; border-radius: 0; overflow: visible; }
+.ov-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 10px 0 0; border: 0; border-radius: 0; overflow: visible; }
 .ov-stat { padding: 6px 8px; background: var(--surface-hover); border: 1px solid var(--separator); border-radius: var(--r-md); }
 .ov-stat + .ov-stat { border-left: 1px solid var(--separator); }
 .ov-stat dt { font-size: 10.5px; }
@@ -1750,7 +1749,6 @@ button.gb:is(.is-none, .is-on_hold):hover { border-color: var(--border); }
   body { font-size: 14px; }
   input[type="text"], input[type="number"], input[type="date"], input[type="url"], input[type="search"], input[type="password"], select, textarea { font-size: 16px; }
   .panel-head h2 { font-size: 16px; }
-  .ov-stats { margin-right: 4px; }
 }
 
 /* New research: how research runs here and the limits, one line. */
@@ -1793,7 +1791,7 @@ button.gb:is(.is-none, .is-on_hold):hover { border-color: var(--border); }
   table.wl tbody tr.selected td { background: var(--accent-weak); }
   /* # and the name. */
   table.wl th.c-rank, table.wl td.c-rank { width: 44px; padding-left: 16px; padding-right: 4px; text-align: left; }
-  table.wl th.c-rank button.sort { justify-content: flex-start; padding-left: 16px; }
+  table.wl th.c-rank button.sort { justify-content: flex-start; padding-left: 0; padding-right: 4px; }
   table.wl td.c-rank .rk { font-family: inherit; font-size: 12px; font-weight: 500; color: var(--cmc-muted); letter-spacing: 0; }
   table.wl td.c-project, table.wl th.c-project { padding-left: 6px; }
   .proj-cell { gap: 10px; }
@@ -1853,9 +1851,7 @@ button.gb:is(.is-none, .is-on_hold):hover { border-color: var(--border); }
 .ph-links { flex: none; display: inline-flex; align-items: center; gap: 4px; }
 .xlink { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 26px; min-width: 26px; padding: 0 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text-2); font-size: 11px; font-weight: 600; text-decoration: none; white-space: nowrap; transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease), color var(--dur) var(--ease); }
 a.xlink:hover { background: var(--surface-hover); border-color: var(--control-border); color: var(--text); text-decoration: none; }
-.xlink.web { padding: 0; width: 26px; }
 .xlink svg { width: 13px; height: 13px; }
-.xlink.off { color: var(--text-3); background: transparent; border-style: dashed; cursor: not-allowed; opacity: 0.7; }
 .ph-price { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin: 10px 0 0; }
 .ph-price .hm-price { font-size: 20px; font-weight: 700; letter-spacing: -0.03em; color: var(--text); }
 .hm-delta { display: inline-flex; align-items: center; height: 22px; padding: 0 7px; border-radius: var(--r-md); font-size: 11.5px; font-weight: 600; }
@@ -1865,7 +1861,7 @@ a.xlink:hover { background: var(--surface-hover); border-color: var(--control-bo
 .ph-price.none { font-size: var(--fs-caption); color: var(--text-3); }
 .ov-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 10px; }
 .ov-stat { padding: 6px 10px; }
-@media (pointer: coarse) { .xlink { height: var(--touch); min-width: var(--touch); } .xlink.web { width: var(--touch); } }
+@media (pointer: coarse) { .xlink { height: var(--touch); min-width: var(--touch); } }
 @media (max-width: 760px) { .ov-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) {
   /* A phone: the links take their own line under the name; menu and close stay on top. */
@@ -1930,6 +1926,33 @@ a.xlink:hover { background: var(--surface-hover); border-color: var(--control-bo
 /* Links out: small squared pills; one the desk does not hold is faded and inert. */
 .xlink { height: 24px; min-width: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-sunken); color: var(--text-2); font-size: 11px; font-weight: 600; }
 a.xlink:hover { background: var(--border); border-color: var(--border); color: var(--text); }
-.xlink.web { width: 24px; padding: 0; }
-.xlink.off { opacity: 0.4; pointer-events: none; border-style: solid; background: var(--surface-sunken); cursor: default; }
-@media (pointer: coarse) { .xlink { height: var(--touch); min-width: var(--touch); } .xlink.web { width: var(--touch); } }
+@media (pointer: coarse) { .xlink { height: var(--touch); min-width: var(--touch); } }
+
+/* ---- Audit fixes (2026-10-05) ------------------------------------------- */
+/* Every pill in the list in one type: 12px monospace, figure or word (a range
+   keeps its own fit to the pill's width). */
+table.wl .gb:not(.is-range):not(.x-) .v { font-family: var(--mono); font-size: 12px; letter-spacing: -0.02em; }
+table.wl .gb.is-none .v { color: var(--text-3); }
+/* State words fit the 56px pill in the same type: a little tighter, and the
+   longest (Incomplete) a step smaller. */
+table.wl .gb:not(.is-grade):not(.is-range):not(.x-) .v { letter-spacing: -0.05em; }
+table.wl .gb.is-incomplete:not(.is-range):not(.x-) .v { font-size: 10px; letter-spacing: -0.08em; }
+/* Marks: one corner dot, inside the pill. */
+:is(table.wl, .mtabs) .gb :is(.ev, .a, .r, .x) { top: 3px; right: 3px; width: 6px; height: 6px; box-shadow: none; }
+:is(table.wl, .mtabs) .gb.ev-material .ev { background: transparent; box-shadow: inset 0 0 0 1.5px var(--warn-strong); }
+/* The drawer title takes focus for screen readers, without a box. */
+#panel-title:focus, #panel-title:focus-visible { outline: none; box-shadow: none; }
+/* Four tiles (no DefiLlama entity bound) sit in two rows, like six. */
+.ov-stats.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* The contract line holds one line on wider screens, so J/K never moves the
+   drawer: what does not fit wraps out of view (its tooltip lists it all). */
+@media (min-width: 641px) {
+  .cstrip { height: 30px; overflow: hidden; align-content: flex-start; row-gap: 14px; }
+}
+/* A table that still does not fit after columns gave way scrolls sideways;
+   its header then scrolls with it. */
+.wl-wrap .table-scroll.xscroll { overflow-x: auto; }
+.wl-wrap .table-scroll.xscroll table.wl thead th { top: 0; }
+/* Header links: small labeled pills. */
+.ph-links .xlink.web { display: inline-flex; align-items: center; gap: 4px; }
+.ph-links .xlink.web svg { width: 12px; height: 12px; }

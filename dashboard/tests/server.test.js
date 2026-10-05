@@ -141,3 +141,28 @@ test('local server: loopback only, host and origin checks, token, traversal, liv
     }
   });
 });
+
+test('the Refresh button never calls CoinGecko within a minute of the last successful refresh', async (t) => {
+  const { ws, cleanup } = tempWorkspace('srv-refresh', { market_data: { enabled: true } });
+  // A refresh 10 seconds ago, as the price job saves it.
+  const { atomicWrite, jsonText } = require('../core/fsx');
+  atomicWrite(ws.abs('market-data/status.json'), jsonText({ state: 'ok', last_success_at: new Date(Date.now() - 10000).toISOString(), last_attempt_at: new Date(Date.now() - 10000).toISOString(), consecutive_failures: 0 }));
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    throw new Error('network access is not allowed in tests');
+  });
+  const srv = await start(ws, { port: PORT + 700, quiet: true });
+  t.after(() => {
+    try { srv.shutdown(); } catch (_) { /* already stopped */ }
+    cleanup();
+  });
+  const port = srv.port;
+  const { token } = JSON.parse((await request(port, { path: '/api/session' })).body);
+  const r = await request(port, { method: 'POST', path: '/api/market/refresh', headers: { 'x-cr-token': token, 'content-type': 'application/json', origin: `http://127.0.0.1:${port}` }, body: {} });
+  assert.equal(r.status, 200);
+  const out = JSON.parse(r.body);
+  assert.equal(out.result.status, 'noop');
+  assert.match(out.result.message, /not asked again within a minute/);
+  assert.equal(calls, 0, 'no request to CoinGecko');
+});

@@ -18,15 +18,13 @@
 //   dex               the DEX liquidity card at the top of the inspector,
 //                     asked of DexScreener by this browser once the inspector
 //                     rests on a verified contract (views/dex.js)
-//   dexlink           the header's DEX pill: the recorded contract's
-//                     DexScreener page, else a search (views/dex.js)
 // Every model keeps its own numbers. Unknown stays unknown and is never drawn
 // as zero; not applicable says so; nothing missing is filled in.
 import { h, details, fmtDateTime, PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, icon, anchorText, scoreTier } from '../ui.js';
 import { evidenceChecksBlock, latestReports, promptView, sourceItem } from './project.js';
 import { profileOf, categoryRows, scorecardCounts, statesConfidence, confidenceChip, categoryFlags, CONFIDENCE_LABELS } from '../thesis-ui.js';
 import { technicalChart } from './chart.js';
-import { dexCard, dexPill } from './dex.js';
+import { dexCard } from './dex.js';
 
 const fact = (k, v, wide = false) => h('div', { class: wide ? 'wide' : null }, h('dt', null, k), h('dd', null, v));
 
@@ -394,7 +392,7 @@ function checksPart(d) {
 
 // The parts for the inspector of one project, for the selected model.
 export function inspectorParts(ctx, d, row, prov) {
-  const out = { run: runPart(ctx, d), compare: comparePart(ctx, d), thesis: thesisPart(ctx, d, row, prov), checks: checksPart(d), dex: dexCard(ctx, d.project), dexlink: dexPill(d.project), chart: technicalChart(ctx, d.project) };
+  const out = { run: runPart(ctx, d), compare: comparePart(ctx, d), thesis: thesisPart(ctx, d, row, prov), checks: checksPart(d), dex: dexCard(ctx, d.project), chart: technicalChart(ctx, d.project) };
   if (prov) {
     out[`cats-${prov}`] = categoriesPart(ctx, d, row, prov);
     out[`grade-${prov}`] = componentsPart(ctx, d, row, prov);

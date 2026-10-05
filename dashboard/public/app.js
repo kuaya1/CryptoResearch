@@ -58,6 +58,11 @@ async function call(path, init = {}, read = (res) => res, { timeoutMs = null, si
           state.token = s.token;
           res = await go();
         }
+        // Still refused: the online desk signs in again now; never a retry loop.
+        if (res.status === 401 && state.session && state.session.hosted) {
+          location.assign('/login');
+          return await read(res);
+        }
       } catch (err) {
         if (ctrl.signal.aborted) throw err;
         /* keep the 401 */
@@ -483,6 +488,9 @@ function showStatus() {
   if (live.mode === 'paused') {
     label = 'Paused while hidden';
     tone = 'paused';
+  } else if (live.mode === 'signed_out') {
+    label = 'Signed out: reload';
+    tone = 'off';
   } else if (live.mode === 'reconnecting') {
     label = live.retryIn ? `Reconnecting… next try in ${Math.round(live.retryIn / 1000)} s` : 'Reconnecting…';
     tone = 'off';
@@ -573,9 +581,17 @@ async function pollVersion() {
   let v;
   try {
     v = await api.get(`/api/version${live.seq !== null ? `?since=${live.seq}` : ''}`, { signal: ctrl.signal, timeoutMs: POLL_TIMEOUT_MS });
-  } catch (_) {
+  } catch (err) {
     if (live.ctrl !== ctrl) return; // stopped (hidden or leaving): no retry
     live.ctrl = null;
+    // Signed out (a 401 the session could not renew): no retries. The online
+    // desk has already gone to sign-in; this PC's dashboard says to reload.
+    if (err && err.status === 401) {
+      live.mode = 'signed_out';
+      showStatus();
+      if (!state.session || !state.session.hosted) toast('This dashboard was restarted with another session. Reload the page to continue.', 'bad');
+      return;
+    }
     live.failures++;
     live.retryIn = Math.min(POLL_MS * 2 ** live.failures, 30000);
     live.mode = 'reconnecting';

@@ -84,7 +84,7 @@ test('sorting: unknown values stay last in both directions; ranges sort by their
 test('grade badges: every missing grade states why and is never shown as a number', async () => {
   const { ui } = await mods;
   const cases = [
-    [null, null, 'none', 'None'],
+    [null, null, 'none', '—'],
     [REPORT({ status: 'withheld', coverage_pct: 0 }), null, 'withheld', 'Withheld'],
     [REPORT({ status: 'invalid_weights' }), null, 'withheld', 'No grade'],
     [REPORT({ status: 'firm', value: 81.2, display: '81.2', label: 'B' }, { needs_text: true }), null, 'pdf', 'PDF'],
@@ -606,4 +606,27 @@ test('contract checks: every check in words, present first, then unknown, then a
   assert.deepEqual(sol.contracts[0].rows.map((r) => r.label), ['Metadata can change', 'Mint authority', 'Freeze authority']);
   assert.deepEqual(sol.contracts[0].facts, [['Transfer fee', '—']]);
   assert.ok(!JSON.stringify(m).match(/\bsafe\b/i));
+});
+
+test('header links from the index row: the verified contract\'s DexScreener page, else a ticker search; DefiLlama tiles only when bound', async () => {
+  const { wl } = await mods;
+  const dex = await import(pathToFileURL(path.join(tmp, 'views', 'dex.js')).href);
+  const row = (screening, identity_status = 'verified', symbol = 'XFCT') => ({ project_id: 'example-fictional', name: 'Example (FICTIONAL)', symbol, identity_status, screening });
+  const base = dex.dexLink(wl.rowProject(row({ state: 'fresh', contracts: [{ chain: 'base', label: 'Base', address: '0xba12bc7b210e61e5d3110b997a63ea216e0e18f7', status: 'ok' }] })));
+  assert.equal(base.href, 'https://dexscreener.com/base/0xba12bc7b210e61e5d3110b997a63ea216e0e18f7');
+  assert.equal(base.exact, true);
+  const native = dex.dexLink(wl.rowProject(row({ state: 'native_chain', native_chain: true, contracts: [] }, 'verified', 'ALEO')));
+  assert.equal(native.href, 'https://dexscreener.com/search?q=ALEO');
+  const pending = dex.dexLink(wl.rowProject(row({ state: 'identity_pending', contracts: [] }, 'pending')));
+  assert.equal(pending.href, 'https://dexscreener.com/search?q=XFCT');
+  assert.equal(dex.dexLink(wl.rowProject(row(null, 'pending', null))), null, 'nothing to look up: no link at all');
+  // The same contracts from the row and from the full record make the same card key.
+  const fromRow = dex.dexTargets(wl.rowProject(row({ state: 'fresh', contracts: [{ chain: 'ethereum', address: '0x0000000000000000000000000000000000000ab1', status: 'ok' }, { chain: 'bsc', address: '0x0000000000000000000000000000000000000ab2', status: 'ok' }] })));
+  const fromRecord = dex.dexTargets({ project_id: 'example-fictional', symbol: 'XFCT', identity: { status: 'verified', assets: [{ chain: 'ethereum', chain_id: '1', contract_address: '0x0000000000000000000000000000000000000ab1' }, { chain: 'bsc', chain_id: '56', contract_address: '0x0000000000000000000000000000000000000ab2' }] } });
+  assert.deepEqual(fromRow.targets.map((x) => x.key), fromRecord.targets.map((x) => x.key));
+  assert.equal(wl.defillamaBound({ state: 'unmapped' }), false);
+  assert.equal(wl.defillamaBound({ state: 'disabled' }), false);
+  assert.equal(wl.defillamaBound(null), false);
+  assert.equal(wl.defillamaBound({ state: 'fresh' }), true);
+  assert.equal(wl.defillamaBound({ state: 'pending' }), true);
 });

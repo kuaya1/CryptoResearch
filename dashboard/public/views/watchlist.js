@@ -17,6 +17,7 @@ import {
 } from '../ui.js';
 import { openAddProjectDialog, openResearchDialog, openSectorDialog, waitingActions } from './dialogs.js';
 import { marketStrip, positionFacts, vsBtcFacts } from '../position-ui.js';
+import { dexLink, dexCard } from './dex.js';
 
 // Column catalogue, in the CoinMarketCap order: # (rank, drawn before the
 // name), price, 24h, 7d and 30d change, market cap, volume, the 7-day chart,
@@ -340,6 +341,16 @@ function fitColumns(root) {
     const cells = table.querySelectorAll(`.c-${id}`);
     if (!cells.length || getComputedStyle(cells[0]).display === 'none') continue;
     for (const el of cells) el.classList.add('fit-hidden');
+  }
+  // Still wider than its space (very long values, a narrow window): the table
+  // scrolls sideways rather than being cut off. The header then scrolls with
+  // it instead of sticking under the bar.
+  sc.classList.toggle('xscroll', sc.scrollWidth > sc.clientWidth + 1);
+  // A table that grows without the page resizing (a live update with longer
+  // values) is fitted again.
+  if (view.resizeObserver && view.fitTable !== table) {
+    view.resizeObserver.observe(table);
+    view.fitTable = table;
   }
 }
 
@@ -1197,13 +1208,39 @@ function overviewStats(p) {
   const usd = (v, label) => (m && typeof v === 'number' ? fmtCompactUsd(v) : dash(label));
   const stat = (k, v, title = null, cls = '') => h('div', { class: `ov-stat${cls ? ` ${cls}` : ''}`, title }, h('dt', null, k), h('dd', { class: 'fig' }, v));
   const fund = (key, k) => { const x = fundamentalsTile(p.fundamentals, key); return stat(k, x.text || dash(k), x.title, x.stale ? 'stale' : ''); };
-  return h('dl', { class: 'ov-stats', 'aria-label': 'Asset overview' },
+  // DefiLlama's 30-day fees and revenue only for a project bound to a
+  // DefiLlama entity; otherwise four tiles, in two rows like six.
+  const bound = defillamaBound(p.fundamentals);
+  return h('dl', { class: `ov-stats${bound ? '' : ' four'}`, 'aria-label': 'Asset overview' },
     stat('Rank', m && m.market_cap_rank ? `#${m.market_cap_rank}` : dash('Rank'), demo ? 'Market-cap rank from the fictional demo data' : 'Market-cap rank (CoinGecko)'),
     stat('MC', usd(m && m.market_cap_usd, 'Market cap'), 'Market cap (CoinGecko)'),
     stat('Vol (24h)', usd(m && m.volume_24h_usd, 'Volume'), 'Trading volume over 24 hours'),
     stat('FDV', usd(m && m.fdv_usd, 'FDV'), 'Fully diluted valuation'),
-    fund('fees', '30D Fees'),
-    fund('revenue', '30D Revenue'));
+    bound ? fund('fees', '30D Fees') : null,
+    bound ? fund('revenue', '30D Revenue') : null);
+}
+
+// Whether a project is bound to a DefiLlama entity (fundamentals.js summary):
+// not when nothing is bound or DefiLlama is turned off. Pure, for the tests.
+export function defillamaBound(f) {
+  return Boolean(f && f.state && !['unmapped', 'disabled'].includes(f.state));
+}
+
+// The index row as dex.js reads a project: the verified identity's contracts
+// from the saved screen summary, so the DEX link and card are drawn with the
+// header instead of waiting for the full record. Pure, for the tests.
+export function rowProject(p) {
+  const contracts = p && p.screening && Array.isArray(p.screening.contracts) ? p.screening.contracts : [];
+  return {
+    project_id: p.project_id,
+    name: p.name,
+    symbol: p.symbol,
+    identity: {
+      status: p.identity_status,
+      native_chain: Boolean(p.screening && p.screening.native_chain),
+      assets: contracts.filter((c) => c && c.address).map((c) => ({ chain: c.chain, contract_address: c.address })),
+    },
+  };
 }
 
 // GoPlus's answers as words: present Yes, absent No, unknown "—" (GoPlus gave
@@ -1296,8 +1333,14 @@ export function contractStrip(s) {
   return out;
 }
 
+// Badges in the order that matters when the line is full: changes and severe
+// flags, a high sell tax, then mint, blacklist and proxy, then the rest.
+const BADGE_RANK = { alert: 0, severe: 1 };
+const badgeRank = (b) => (BADGE_RANK[b.key] !== undefined ? BADGE_RANK[b.key] : b.key === 'tax' && b.tone === 'severe' ? 2 : b.key === 'tax' ? 6 : { mint: 3, blacklist: 4, proxy: 5 }[b.key] ?? 7);
+
 function contractStripEl(p) {
   const m = contractStrip(p.screening);
+  m.badges = [...m.badges].sort((a, b) => badgeRank(a) - badgeRank(b));
   const first = m.items[0];
   const value = first
     ? h('span', { class: 'cs-v', title: m.items.map((x) => `${x.label || 'chain?'}: ${x.address}`).join('\n') },
@@ -1305,29 +1348,28 @@ function contractStripEl(p) {
       h('span', { class: 'mono' }, shortAddr(first.address)),
       m.items.length > 1 ? h('span', { class: 'faint' }, ` +${m.items.length - 1}`) : null)
     : h('span', { class: 'cs-v', title: m.title }, m.text || '—');
-  return h('div', { class: 'cstrip' }, h('span', { class: 'cs-k' }, 'Contract'), value,
+  // One line on wider screens (J/K never moves the drawer); what does not fit
+  // is in this tooltip and under Contract checks.
+  const all = [m.items.length ? m.items.map((x) => `${x.label || 'chain?'} ${x.address}`).join(', ') : m.text, ...m.badges.map((b) => `${b.label}${b.value !== null ? ` ${b.value}` : ''}`), m.status ? m.status.word : null, m.age ? `GoPlus ${m.age}` : null].filter(Boolean).join(' · ');
+  return h('div', { class: 'cstrip', title: all }, h('span', { class: 'cs-k' }, 'Contract'), value,
     ...m.badges.map((b) => h('span', { class: `cs-flag ${b.tone}`, title: b.title, 'aria-label': b.aria }, h('span', { class: 'cs-fk', 'aria-hidden': 'true' }, b.label), b.value !== null ? h('span', { class: 'cs-fv', 'aria-hidden': 'true' }, b.value) : null)),
     m.status ? h('span', { class: `cs-badge${m.status.tone === 'warn' ? ' warn' : ''}`, title: m.status.title }, m.status.word) : null,
     m.age ? h('span', { class: `cs-age${m.stale ? ' stale' : ''}`, title: m.ageTitle, 'aria-label': `Screened by GoPlus ${m.age} ago${m.stale ? ', stale' : ''}` }, m.stale ? icon('clock') : null, h('span', { 'aria-hidden': 'true' }, `GoPlus ${m.age}`)) : null);
 }
 
 // Links out, beside close: the project's CoinGecko listing, DexScreener and
-// its official website. A link the desk does not hold stays a quiet disabled
-// pill, never a guessed URL. The DEX pill searches DexScreener for the ticker
-// until the project record arrives; then it is the recorded contract's page
-// when the identity is verified (views/dex.js, the "dexlink" part).
+// its official website, as small labeled pills. A link the desk does not hold
+// is left out, never guessed. DexScreener is the verified contract's page
+// (from the index row's screen summary), else a search for the ticker.
 function headLinks(p) {
   const web = /^https?:\/\//i.test(String(p.official_website || '')) ? p.official_website : null;
   const host = web ? (() => { try { return new URL(web).hostname.replace(/^www\./, ''); } catch (_) { return null; } })() : null;
-  const ticker = String(p.symbol || '').trim();
-  const link = (cls, label, href, title, aria) => (href
-    ? h('a', { class: `xlink ${cls}`, href, target: '_blank', rel: 'noopener noreferrer', title, 'aria-label': aria, dataset: { key: `x-${cls}-${p.project_id}` } }, label)
-    : h('span', { class: `xlink ${cls} off`, role: 'link', 'aria-disabled': 'true', title, 'aria-label': `${aria} (not linked)` }, label));
+  const dex = dexLink(rowProject(p));
+  const link = (cls, label, href, title, aria) => h('a', { class: `xlink ${cls}`, href, target: '_blank', rel: 'noopener noreferrer', title, 'aria-label': aria, dataset: { key: `x-${cls}-${p.project_id}` } }, label);
   return h('div', { class: 'ph-links' },
-    link('cg', 'CG', p.coingecko_id ? `https://www.coingecko.com/en/coins/${encodeURIComponent(p.coingecko_id)}` : null, p.coingecko_id ? `CoinGecko: ${p.coingecko_id}` : 'No verified CoinGecko listing', 'CoinGecko listing'),
-    h('span', { class: 'ph-dex', dataset: { slot: 'dexlink' } },
-      link('dex', 'DEX', ticker ? `https://dexscreener.com/search?q=${encodeURIComponent(ticker)}` : null, ticker ? `Search DexScreener for ${ticker}` : 'No contract or ticker to look up on DexScreener', ticker ? `Search DexScreener for ${ticker}` : 'DexScreener')),
-    link('web', icon('ext'), web && host ? web : null, host ? `Official website: ${host}` : 'No official website on record', host ? `Official website, ${host}` : 'Official website'));
+    p.coingecko_id ? link('cg', 'CG', `https://www.coingecko.com/en/coins/${encodeURIComponent(p.coingecko_id)}`, `CoinGecko: ${p.coingecko_id}`, 'CoinGecko listing') : null,
+    dex ? link('dex', 'DexScreener', dex.href, dex.title, dex.aria) : null,
+    web && host ? link('web', [icon('ext'), h('span', null, 'Web')], web, `Official website: ${host}`, `Official website, ${host}`) : null);
 }
 
 // On-chain fundamentals (activity, fees, revenue, TVL) need an on-chain data
@@ -1387,7 +1429,7 @@ async function fillDetail(ctx, pid, panel, saved, prov) {
     [d, mod] = await Promise.all([ctx.projectDetail(pid), import('./inspector.js')]);
   } catch (err) {
     // The header's DEX pill keeps its ticker search, and no DEX card is shown.
-    for (const slot of panel.querySelectorAll('[data-slot]')) if (slot.dataset.slot !== 'dexlink' && slot.dataset.slot !== 'dex') slot.replaceChildren(h('p', { class: 'small muted' }, `Could not load the full record: ${err.message}. The summary above is current.`));
+    for (const slot of panel.querySelectorAll('[data-slot]')) if (slot.dataset.slot !== 'dex') slot.replaceChildren(h('p', { class: 'small muted' }, `Could not load the full record: ${err.message}. The summary above is current.`));
     return;
   }
   if (!panel.isConnected || ctx.state.route.query.get('p') !== pid) return;
@@ -1459,7 +1501,7 @@ function renderPanel(ctx, pid) {
       h('div', { class: 'cstrip-slot' }, contractStripEl(p))),
     h('div', { class: 'panel-body', 'data-keep-scroll': 'panel' },
       // DEX liquidity, right under the contract line (views/dex.js).
-      h('div', { class: 'dex-slot', dataset: { slot: 'dex' } }),
+      h('div', { class: 'dex-slot', dataset: { slot: 'dex' } }, dexCard(ctx, rowProject(p))),
       archivedBanner(ctx, p),
       problemLines(ctx, p),
       h('section', { class: 'scorecard', 'aria-labelledby': 'insp-sec-scores' },
@@ -1488,6 +1530,8 @@ function renderPanel(ctx, pid) {
           h('p', { class: 'small' }, ch.item_count ? `${ch.item_count} change${ch.item_count === 1 ? '' : 's'} since ${ch.cursor_source === 'project created' ? 'the project was added' : `your last review (${fmtDateTime(ch.since)})`}${ch.new_reports ? `: ${ch.new_reports} new report(s)` : ''}${typeof ch.price_change_pct === 'number' ? `, price ${fmtSignedPct(ch.price_change_pct)}` : ''}.` : 'Nothing new since your last review.',
             p.next_review ? h('span', { class: 'block muted' }, `Next review: ${fmtDate(p.next_review.date)}${p.next_review.overdue ? ' (overdue)' : ''}`) : null),
           h('div', { class: 'btn-row' }, reviewedBtn, h('a', { class: 'small', href: `#/project/${encodeURIComponent(pid)}/history`, dataset: { key: `history-${pid}` } }, 'What changed'))))));
+  // The slide-in runs once; the class goes when it ends.
+  if (reopened) panel.addEventListener('animationend', () => panel.classList.remove('entering'), { once: true });
   panel.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !document.querySelector('dialog[open]')) {
       e.stopPropagation();

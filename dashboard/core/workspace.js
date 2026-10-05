@@ -70,7 +70,7 @@ const DEFAULT_SETTINGS = {
     timeout_seconds: 20,
     max_attempts: 2,
     monthly_request_budget: 1500,
-    max_contracts_per_run: 24,
+    max_contracts_per_run: 60,
     backoff_initial_minutes: 10,
     backoff_max_minutes: 720,
     sell_tax_alert_pct: 10,

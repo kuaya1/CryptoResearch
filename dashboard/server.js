@@ -73,6 +73,8 @@ const WATCH_TOP = new Set(['projects', 'portfolio', 'market-data', 'inbox', 'con
 // sandbox.
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.dexscreener.com; font-src 'self'; frame-src https://www.tradingview-widget.com https://dexscreener.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 const MAX_BODY = 30 * 1024 * 1024;
+// The Refresh button calls CoinGecko at most once a minute (POST /api/market/refresh).
+const MANUAL_REFRESH_MIN_MS = 60000;
 const UI_STATE_REL = 'config/ui-state.json';
 // How long a server read waits for a save in progress before answering 503
 // (the page retries); the CLI's own reads wait READ_WAIT_MS.
@@ -1088,7 +1090,15 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIde
   route('POST', '/api/portfolio/csv', (m, req, res, body) => after(portfolio.importCsv(ws, String(body.csv || ''), { filename: body.filename || 'dashboard.csv', defaultAccount: body.account_id || null, allowIdentical: Boolean(body.allow_identical) })));
   route('POST', '/api/portfolio/accounts', (m, req, res, body) => after(portfolio.addAccount(ws, body)));
   route('POST', '/api/portfolio/limits', (m, req, res, body) => after(portfolio.setLimits(ws, body)));
+  // A refresh within a minute of the last successful one returns the saved
+  // status without calling CoinGecko, so repeated presses or reloads never
+  // spend the call budget.
   route('POST', '/api/market/refresh', async () => {
+    const st = market.freshness(ws);
+    const last = st.last_success_at ? Date.parse(st.last_success_at) : NaN;
+    if (Number.isFinite(last) && Date.now() - last < MANUAL_REFRESH_MIN_MS) {
+      return { result: { status: 'noop', message: `Prices were refreshed ${Math.max(1, Math.round((Date.now() - last) / 1000))} s ago; not asked again within a minute.` }, status: st };
+    }
     const r = await marketTick(true);
     return after({ result: r, status: market.freshness(ws) });
   });

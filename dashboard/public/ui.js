@@ -755,7 +755,7 @@ export function badgeInfo(provider, report, job, { staleDays = 90, hosted = fals
     const st = researchState(key, { provider, hosted });
     return { report: false, kind: key, value: st.short, sub: null, label: null, age: null, stale: false, refreshing: false, problem: false, newerText: null, job: key, ev: null, evText: null, text: `${who}: ${st.long}${job.error ? `. ${job.error}` : ''}` };
   }
-  return { report: false, kind: 'none', value: 'None', sub: null, label: null, age: null, stale: false, refreshing: false, problem: false, newerText: null, job: null, ev: null, evText: null, text: `${who}: no research yet` };
+  return { report: false, kind: 'none', value: '—', sub: null, label: null, age: null, stale: false, refreshing: false, problem: false, newerText: null, job: null, ev: null, evText: null, text: `${who}: no report yet` };
 }
 
 export function gradeBadge(provider, report, job, opts = {}) {

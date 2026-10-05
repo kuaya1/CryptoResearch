@@ -1,6 +1,7 @@
-// DexScreener in the project inspector: the header's DEX link, the DEX
-// liquidity card at the top of the inspector, and the pool the technical
-// chart shows for a token that trades mainly on DEXs (views/chart.js).
+// DexScreener in the project inspector: the header's DexScreener link (drawn
+// by views/watchlist.js headLinks from dexLink), the DEX liquidity card at the
+// top of the inspector, and the pool the technical chart shows for a token
+// that trades mainly on DEXs (views/chart.js).
 //
 // Asked by this browser, on demand only: when an inspector rests on a project
 // whose verified identity records a contract on a chain DexScreener lists.
@@ -134,15 +135,6 @@ export function dexLink(project) {
   const q = t.state === 'unmatched' ? t.address : tickerOf(project);
   if (!q) return null;
   return { href: `${SITE}search?q=${encodeURIComponent(q)}`, title: t.state === 'unmatched' ? `Search DexScreener for the contract ${shortAddr(q)}` : `Search DexScreener for ${q}`, aria: `Search DexScreener for ${t.state === 'unmatched' ? 'the contract' : q}`, exact: false };
-}
-
-// The header pill (views/watchlist.js headLinks draws the same pill from the
-// ticker until the project record arrives).
-export function dexPill(project) {
-  const l = dexLink(project);
-  const pid = project && project.project_id;
-  if (!l) return h('span', { class: 'xlink dex off', role: 'link', 'aria-disabled': 'true', title: 'No contract or ticker to look up on DexScreener', 'aria-label': 'DexScreener (not linked)' }, 'DEX');
-  return h('a', { class: 'xlink dex', href: l.href, target: '_blank', rel: 'noopener noreferrer', title: l.title, 'aria-label': l.aria, dataset: { key: `x-dex-${pid}` } }, 'DEX');
 }
 
 // ---- the lookup -------------------------------------------------------------
@@ -322,6 +314,14 @@ function noteLine(text, extra = null) {
   return h('p', { class: 'dexc-note' }, h('span', null, text), extra);
 }
 
+// While DexScreener is asked: the card's own rows with placeholder bars, the
+// same height as the answer, so nothing below it moves when it arrives.
+function skeleton() {
+  const row = (k, wide = false) => h('div', { class: wide ? 'wide' : null }, h('dt', null, k), h('dd', null, h('span', { class: 'dexc-bar' }), ' '));
+  return h('dl', { class: 'dexc-grid dexc-skel', 'aria-hidden': 'true' },
+    row('Top pool', true), row('Pool liquidity'), row('24h volume'), row('Trades 24h', true), row('FDV / liquidity', true));
+}
+
 function draw(c, answer) {
   const pool = topPool(answer, c.targets, { refPrice: c.refPrice });
   c.el.removeAttribute('aria-busy');
@@ -349,7 +349,7 @@ function fail(c, err) {
   c.el.removeAttribute('aria-busy');
   const retry = button('Retry', () => {
     c.el.setAttribute('aria-busy', 'true');
-    c.body.replaceChildren(noteLine('Looking up DEX pools…'));
+    c.body.replaceChildren(skeleton());
     run(c, true);
   }, { kind: 'small quiet', key: `dex-retry-${c.project.project_id}` });
   c.body.replaceChildren(noteLine(err && err.message ? err.message : 'DexScreener could not be reached.', retry));
@@ -400,7 +400,7 @@ export function dexCard(ctx, project) {
   }
   if (currentCard) clearTimeout(currentCard.timer);
   const source = h('a', { class: 'dexc-src', href: dexLink(project).href, target: '_blank', rel: 'noopener noreferrer', dataset: { key: `dex-src-${project.project_id}` } }, 'DexScreener');
-  const body = h('div', { class: 'dexc-body' }, noteLine('Looking up DEX pools…'));
+  const body = h('div', { class: 'dexc-body' }, skeleton());
   const el = h('section', { class: 'dexc', 'aria-label': 'DEX liquidity, from DexScreener', 'aria-busy': 'true' },
     h('div', { class: 'dexc-head' }, h('h3', null, 'DEX liquidity'), source),
     body);
