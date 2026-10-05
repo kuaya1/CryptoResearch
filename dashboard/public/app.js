@@ -297,9 +297,12 @@ function renderNav() {
     nav.appendChild(h('a', { href: `#/${id}`, class: id === active ? 'active' : null, 'aria-current': id === active ? 'page' : null, 'aria-label': `${label}${desc ? `, ${desc}` : ''}`, onclick: () => closeMenu(), dataset: { key: `nav-${id}` } },
       h('span', null, label), num ? h('span', { class: 'count', 'aria-hidden': 'true' }, String(num)) : null));
   }
-  // Online desk: signing out ends this browser's session on the server.
-  if (state.session && state.session.hosted) {
-    nav.appendChild(h('form', { method: 'post', action: '/logout', class: 'signout' }, h('button', { type: 'submit', class: 'quiet small', dataset: { key: 'nav-signout' } }, 'Sign out')));
+  // Online desk: signing out ends this browser's session on the server. A
+  // quiet text button at the right of the top bar, not a section of the nav.
+  const end = document.getElementById('topbar-end');
+  if (end) clear(end);
+  if (end && state.session && state.session.hosted) {
+    end.appendChild(h('form', { method: 'post', action: '/logout', class: 'signout' }, h('button', { type: 'submit', class: 'quiet small', dataset: { key: 'nav-signout' } }, 'Sign out')));
   }
 }
 

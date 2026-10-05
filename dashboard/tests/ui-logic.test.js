@@ -355,6 +355,23 @@ test('breadth is labeled with what it counts: n of N over 30 days', async () => 
   assert.equal(wl.breadthWords(null), null);
 });
 
+test('a model on hold: its header and its dashes follow the model status, for any model; a score it gave keeps its pill', async () => {
+  const { wl } = await mods;
+  const index = { settings: { research: { on_hold: { gemini: { since: '2026-10-04T12:00:00Z', reason: 'x' } } } } };
+  const firm = { grade: { status: 'firm', value: 61 } };
+  const withheld = { grade: { status: 'withheld', coverage_pct: 55 } };
+  assert.deepEqual(wl.holdCell(index, 'gemini', null), { hold: true, dash: true, label: 'No Gemini score' });
+  assert.equal(wl.holdCell(index, 'gemini', withheld).dash, true, 'no score: a dash');
+  assert.equal(wl.holdCell(index, 'gemini', firm).dash, false, 'a score it gave keeps its pill');
+  assert.equal(wl.holdCell(index, 'gemini', { ...firm, needs_text: true }).dash, true, 'a PDF is not a score');
+  assert.deepEqual(wl.holdCell(index, 'chatgpt', null), { hold: false, dash: false, label: 'No ChatGPT score' }, 'only the model on hold');
+  const chatgptHeld = { settings: { research: { on_hold: { chatgpt: { since: null } } } } };
+  assert.equal(wl.holdCell(chatgptHeld, 'chatgpt', null).hold, true, 'not hardcoded to Gemini');
+  assert.equal(wl.holdCell({ settings: {} }, 'gemini', null).hold, false);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'watchlist.js'), 'utf8');
+  assert.doesNotMatch(src, /'gemini'[^\n]*on hold|on hold[^\n]*'gemini'/i, 'no model is named in the on-hold code');
+});
+
 test('static: no CoinMarketCap tokens or colors, no "Inter", the serif only on the wordmark', () => {
   const dir = path.join(__dirname, '..', 'public');
   const files = [];

@@ -3,15 +3,15 @@
 //   Select a provider badge                      -> the inspector, on that provider
 //   Open full research                           -> #/project/<id>/<tab>
 // Nothing floats over the list: there is no hover card.
-// The inspector is a dialog: docked beside the list on wide screens
-// (non-modal), a drawer over it on medium ones and full screen on a phone
-// (modal). Back, Escape and its close button close it and return focus to the
+// The inspector is a pane that stays beside the list from 1280px (empty
+// until a project is chosen, so the list never reflows), a drawer over the
+// list on medium screens and full screen on a phone (modal). Back, Escape and its close button close it and return focus to the
 // project. Live updates redraw only what changed, in place: the search box,
 // open details, scroll positions and the row order you are reading stay put.
 import {
   h, clear, button, select, input, changeCell, sparkline, priceSpark, logo, gradeBadge, badgeInfo, verdictChip,
   fmtPrice, fmtCompactUsd, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, fmtSignedPct, freshnessText, priceStatus, stateText, toast, announce,
-  followedCount, researchState, withheldReason, unscoredList, jobKey, icon, evidenceLevel, evidenceText, gradeGauge, coverageMeter,
+  researchState, withheldReason, unscoredList, jobKey, icon, evidenceLevel, evidenceText, gradeGauge, coverageMeter,
   withheldLabel, structureNotes, details, onHoldOf, copyText, anchorText, fmtRelDay, fmtChangePct, fmtMarketUsd,
   PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT,
 } from '../ui.js';
@@ -254,7 +254,7 @@ function projectCell(ctx, p) {
     restore.onclick = (e) => { e.stopPropagation(); restoreProject(ctx, p, restore); };
   }
   return h('div', { class: 'proj-cell' },
-    h('span', { class: 'logo-wrap' }, logo(p, { size: 24 })),
+    h('span', { class: 'logo-wrap' }, logo(p, { size: 20 })),
     h('div', { class: 'names' }, nameBtn,
       p.symbol ? h('span', { class: 'tick' }, p.symbol) : null,
       marks.length ? h('span', { class: 'marks' }, marks) : null,
@@ -295,9 +295,23 @@ function cellFor(ctx, col, p) {
 
 const hostedDesk = (ctx) => Boolean(ctx.state.session && ctx.state.session.hosted);
 
+// A model on hold on this desk (settings research.on_hold, any model): its
+// header says so, and a cell without a score is a quiet dash; a score it
+// already gave keeps its pill. Pure, for the tests.
+export function holdCell(index, prov, rep) {
+  const hold = Boolean(onHoldOf(index, prov));
+  const scored = Boolean(rep && !rep.needs_text && rep.grade && ['firm', 'range'].includes(rep.grade.status));
+  return { hold, dash: hold && !scored, label: `No ${PROVIDER_LABELS[prov] || prov} score` };
+}
+
 // One model's state for one project: its grade, or why there is none.
 function providerCell(ctx, p, prov) {
   const rep = p.providers && p.providers[prov];
+  // On hold without a score: a quiet dash, still a way into that model's tab.
+  if (holdCell(ctx.state.index, prov, rep).dash) {
+    return h('button', { type: 'button', class: 'gb-none', 'aria-label': `No ${PROVIDER_LABELS[prov]} score`, title: `No ${PROVIDER_LABELS[prov]} score: ${PROVIDER_LABELS[prov]} is on hold on this desk`, dataset: { key: `gb-${p.project_id}-${prov}`, provider: prov },
+      onclick: (e) => { e.stopPropagation(); openPanel(ctx, p.project_id, e.currentTarget, prov); } }, '—');
+  }
   const b = gradeBadge(prov, rep, p.research && p.research.providers && p.research.providers[prov], { ...badgeOpts(ctx, prov), button: true, key: `gb-${p.project_id}-${prov}` });
   // A long range (such as 38.3–100.0) takes a smaller figure to keep the width.
   if (rep && rep.grade && rep.grade.status === 'range' && String(rep.grade.display || '').length >= 10) b.classList.add('long');
@@ -338,7 +352,9 @@ function secondaryFacts(ctx, p) {
 // Columns give way, least essential first, until the table fits the space it
 // has, so the three grades never scroll out of view. Every hidden value is
 // still in the inspector, and the Columns menu says so.
-const FIT_ORDER = ['lastResearch', 'sector', 'volChange', 'mcapChange', 'fdv', 'spark', 'change30d', 'volume', 'change24h', 'mcap', 'rank', 'change7d', 'price'];
+// Optional columns first, then the defaults in the same order as the
+// container-width rules in styles.css: 30d %, volume, the 7-day chart, market cap.
+const FIT_ORDER = ['lastResearch', 'sector', 'volChange', 'mcapChange', 'fdv', 'change30d', 'volume', 'spark', 'mcap', 'change24h', 'rank', 'change7d', 'price'];
 
 function fitColumns(root) {
   const sc = root && root.querySelector('.table-scroll');
@@ -387,9 +403,12 @@ function providerHeaders(ctx, prefsObj, rerender) {
   return PROVIDERS.map((prov) => {
     const key = `grade:${prov}`;
     const on = prefsObj.sort.key === key;
-    return h('th', { class: `c-prov c-prov-${prov} c-research`, scope: 'col', 'aria-sort': on ? (prefsObj.sort.dir === 'asc' ? 'ascending' : 'descending') : null },
-      h('button', { type: 'button', class: 'sort', dataset: { key: `sort-${key}` }, 'aria-label': `${PROVIDER_LABELS[prov]} grade, 0 to 100. Sort${on ? `ed ${SORT_NAMES[key][prefsObj.sort.dir === 'asc' ? 1 : 2]}` : ''}`, onclick: () => setSort(ctx, prefsObj, key, rerender) },
-        h('span', { class: 'lbl' }, PROVIDER_SHORT[prov], on ? arrow(prefsObj.sort.dir) : null)));
+    // On hold on this desk (settings research.on_hold, any model): said under its name.
+    const hold = holdCell(ctx.state.index, prov, null).hold;
+    return h('th', { class: `c-prov c-prov-${prov} c-research${hold ? ' is-hold' : ''}`, scope: 'col', 'aria-sort': on ? (prefsObj.sort.dir === 'asc' ? 'ascending' : 'descending') : null },
+      h('button', { type: 'button', class: 'sort', dataset: { key: `sort-${key}` }, 'aria-label': `${PROVIDER_LABELS[prov]} grade, 0 to 100${hold ? ', on hold on this desk' : ''}. Sort${on ? `ed ${SORT_NAMES[key][prefsObj.sort.dir === 'asc' ? 1 : 2]}` : ''}`, onclick: () => setSort(ctx, prefsObj, key, rerender) },
+        h('span', { class: 'lbl' }, PROVIDER_SHORT[prov], on ? arrow(prefsObj.sort.dir) : null),
+        hold ? h('span', { class: 'hold', 'aria-hidden': 'true' }, 'on hold') : null));
   });
 }
 
@@ -446,7 +465,7 @@ function buildTable(ctx, prefsObj, rows, rerender) {
       rest.map((c) => {
         if (c === 'research') return PROVIDERS.map((prov) => h('td', { class: `c-prov c-prov-${prov} c-research` }, providerCell(ctx, p, prov)));
         const col = COLUMNS.find((x) => x.id === c);
-        return h('td', { class: [col.num ? 'num' : '', col.hide || '', `c-${c}`].join(' ').trim() }, cellFor(ctx, c, p));
+        return h('td', { class: [col.num ? 'num' : '', c === 'price' ? 'price' : '', col.hide || '', `c-${c}`].join(' ').trim() }, cellFor(ctx, c, p));
       }),
       h('td', { class: 'c-mkt-summary' }, mktSummaryCell(p)),
       h('td', { class: 'c-more' }, secondaryFacts(ctx, p)));
@@ -1650,16 +1669,32 @@ function renderPanel(ctx, pid) {
   fillDetail(ctx, pid, panel, opening ? { scroll: {}, open: {}, focus: null } : saved, sel).then(() => { view.focusTab = null; });
 }
 
-// After the inspector closes (its button, Escape, Back): focus returns to the
-// project it was opened from, and the list stays where it was.
-function afterPanelClosed(ctx) {
-  const pid = view.panelPid;
-  view.panelPid = null;
-  clear(document.getElementById('panel-root'));
-  document.body.classList.remove('split');
+// From 1280px the inspector is a pane that stays: with nothing chosen it
+// says how to choose, so the list never reflows when a project opens or
+// closes. Narrower, nothing is shown until a project opens over the list.
+function showEmptyPane() {
+  const root = document.getElementById('panel-root');
   setSheetMode(false);
   const bd = document.querySelector('.sheet-backdrop');
   if (bd) bd.remove();
+  if (!wide()) {
+    clear(root);
+    document.body.classList.remove('split');
+    return;
+  }
+  document.body.classList.add('split');
+  if (root.children.length === 1 && root.firstElementChild.classList.contains('panel-empty')) return;
+  clear(root).appendChild(h('aside', { class: 'panel panel-empty', 'aria-label': 'Project inspector' },
+    h('p', { class: 'pe-text' }, 'Select a project', h('span', { class: 'pe-sep', 'aria-hidden': 'true' }, '·'), h('kbd', null, 'J'), h('span', { 'aria-hidden': 'true' }, ' / '), h('kbd', null, 'K'), ' to move')));
+}
+
+// After the inspector closes (its button, Escape, Back): focus returns to the
+// project it was opened from, the list stays where it was, and from 1280px
+// the pane stays, empty.
+function afterPanelClosed(ctx) {
+  const pid = view.panelPid;
+  view.panelPid = null;
+  showEmptyPane();
   if (!pid) return;
   view.recent = pid;
   for (const tr of document.querySelectorAll('table.wl tbody tr')) tr.className = rowClass(ctx, tr.dataset.pid) || '';
@@ -1712,7 +1747,7 @@ function stepProject(ctx, dir) {
     view.suppressFocus = false;
     next.scrollIntoView({ block: 'nearest' });
   }
-  if (open && open !== next.dataset.pid) openPanel(ctx, next.dataset.pid, name, null, { peek: inList && wide() });
+  if ((open || wide()) && open !== next.dataset.pid) openPanel(ctx, next.dataset.pid, name, null, { peek: inList && wide() });
   return true;
 }
 
@@ -1843,7 +1878,6 @@ export function renderWatchlist(ctx, route) {
     const list = [];
     const tok = (label, onRemove, key) => h('span', { class: 'token' }, label, h('button', { type: 'button', 'aria-label': `Remove filter: ${label}`, dataset: { key }, onclick: onRemove }, '×'));
     if (view.q) list.push(tok(`Search: “${view.q}”`, () => { view.q = ''; search.value = ''; view.order = null; rerender(); search.focus(); }, 'tok-q'));
-    if (f.owned !== DEFAULT_FILTERS.owned) list.push(tok(f.owned === 'all' ? 'All projects, watched or not' : OWNED.find(([v]) => v === f.owned)[1], () => setFilter('owned', DEFAULT_FILTERS.owned), 'tok-owned'));
     if (f.sector) list.push(tok(`Sector: ${((ctx.state.index.sectors || []).find((s) => s.id === f.sector) || { label: f.sector }).label}`, () => setFilter('sector', ''), 'tok-sector'));
     if (f.coverage !== 'any') list.push(tok(COVERAGE.find(([v]) => v === f.coverage)[1], () => setFilter('coverage', 'any'), 'tok-coverage'));
     if (f.ret30 !== 'any') list.push(tok(`30D ${f.ret30 === 'pos' ? 'positive' : 'negative'}`, () => setFilter('ret30', 'any'), 'tok-ret30'));
@@ -1918,10 +1952,10 @@ export function renderWatchlist(ctx, route) {
   addBtn.id = 'add-project-btn';
 
   function drawHead() {
-    const followed = followedCount(all());
+    // The nav's count and the results line say how many; New research is in the nav.
     head.replaceChildren(
-      h('div', { class: 'title' }, h('h1', null, 'Watchlist'), h('span', { class: 'count' }, `${followed} watching`)),
-      h('div', { class: 'actions' }, h('a', { class: 'btn', href: '#/new', dataset: { key: 'new-research' } }, 'New research'), addBtn));
+      h('div', { class: 'title' }, h('h1', null, 'Watchlist')),
+      h('div', { class: 'actions' }, addBtn));
   }
 
   // The status strip: one compact line under the title, in three groups with
@@ -2058,13 +2092,7 @@ export function renderWatchlist(ctx, route) {
     const pid = ctx.state.route.query.get('p');
     if (pid) renderPanel(ctx, pid);
     else if (view.panelPid) afterPanelClosed(ctx);
-    else {
-      clear(document.getElementById('panel-root'));
-      document.body.classList.remove('split');
-      setSheetMode(false);
-      const bd = document.querySelector('.sheet-backdrop');
-      if (bd) bd.remove();
-    }
+    else showEmptyPane();
     if (ctx.state.focusSearch) {
       ctx.state.focusSearch = false;
       search.focus();
@@ -2075,6 +2103,13 @@ export function renderWatchlist(ctx, route) {
 
   if (!view.bound) {
     view.bound = true;
+    window.matchMedia('(min-width: 1280px)').addEventListener('change', () => {
+      const r = ctx.state.route;
+      if (!r || r.name !== 'watchlist') return;
+      const p = r.query.get('p');
+      if (p) renderPanel(ctx, p);
+      else showEmptyPane();
+    });
     document.addEventListener('keydown', (e) => {
       const r = ctx.state.route;
       const onList = r && r.name === 'watchlist';
@@ -2116,10 +2151,6 @@ export function renderWatchlist(ctx, route) {
     });
     document.addEventListener('click', (e) => {
       if (!e.target.closest('.menu-wrap')) closeMenus();
-    });
-    window.matchMedia('(min-width: 1280px)').addEventListener('change', () => {
-      const r = ctx.state.route;
-      if (r && r.name === 'watchlist' && r.query.get('p')) renderPanel(ctx, r.query.get('p'));
     });
   }
 

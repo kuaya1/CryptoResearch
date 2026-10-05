@@ -253,7 +253,6 @@ kbd { font-family: var(--sans); font-size: 11px; line-height: 16px; padding: 0 5
   border-bottom: 1px solid var(--separator);
 }
 .topbar-inner {
-  max-width: 1600px;
   margin: 0 auto;
   height: var(--topbar-h);
   display: flex;
@@ -309,7 +308,7 @@ kbd { font-family: var(--sans); font-size: 11px; line-height: 16px; padding: 0 5
 }
 
 /* ---------- Page layout (list + optional detail column) ---------- */
-.layout { display: flex; align-items: flex-start; max-width: 1600px; margin: 0 auto; min-width: 0; }
+.layout { display: flex; align-items: flex-start; margin: 0 auto; min-width: 0; }
 main { flex: 1 1 auto; min-width: 0; padding: var(--s6) var(--s6) 80px; }
 main:focus { outline: none; }
 #panel-root:empty { display: none; }
@@ -762,7 +761,7 @@ table.wl th.c-prov button.sort { justify-content: center; }
 table.wl th.c-prov-claude, table.wl td.c-prov-claude { padding-left: 14px; border-left: 1px solid var(--separator); }
 table.wl th.c-prov-gemini, table.wl td.c-prov-gemini { padding-right: 14px; }
 table.wl td.nodata { color: var(--text-2); font-size: var(--fs-small); white-space: normal; text-align: left; }
-@media (pointer: coarse) { table.wl td { height: 52px; } }
+@media (pointer: coarse) { table.wl tbody td { height: var(--touch); } }
 .proj-cell { display: flex; align-items: center; gap: 10px; min-width: 0; max-width: 380px; }
 .proj-cell .names { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
 /* Logos in the list: one 24px stone circle with a hairline, the image or a
@@ -966,7 +965,7 @@ table.wl .fit-hidden { display: none !important; }
   .pname { max-width: 170px; }
 }
 .sort-compact { display: none; }
-@container wl (max-width: 760px) {
+@container wl (max-width: 719px) {
   .sort-compact { display: block; flex: 1 1 100%; }
   .columns-wide { display: none; }
 }
@@ -982,7 +981,7 @@ table.wl .fit-hidden { display: none !important; }
   .wl-head .lede { display: none; }
   .alerts .alert .t .d { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 }
-@container wl (max-width: 760px) {
+@container wl (max-width: 719px) {
   /* A phone: each project is its own card: identity and price, then all
      three model states side by side, then the rest one tap away. Never tiny
      text, never a sideways scroll. */
@@ -1695,7 +1694,7 @@ button.gb:is(.is-none, .is-on_hold):hover { border-color: var(--border); }
 :is(table.wl, .mtabs) .gb .si { display: none; }
 :is(table.wl, .mtabs) .gb .pulse { width: 5px; height: 5px; }
 /* The list: one width (phone cards give each model its own wide tile). */
-@container wl (min-width: 761px) {
+@container wl (min-width: 720px) {
   table.wl .gb { flex-direction: row; align-items: center; justify-content: center; width: var(--badge-w); min-width: 0; height: var(--badge-h); min-height: var(--badge-h); padding: 0 2px; vertical-align: middle; }
   table.wl .gb .main { justify-content: center; gap: 3px; overflow: visible; }
   table.wl .gb.is-range .v { font-size: 10.5px; letter-spacing: -0.07em; }
@@ -1782,7 +1781,7 @@ button.gb:is(.is-none, .is-on_hold):hover { border-color: var(--border); }
 /* ---------- The list ----------
    Changes and the 7-day chart in the desk's own rise and fall colors; ink,
    stone and hairlines from the token layer (dark mode follows them). */
-.dl { display: inline-flex; align-items: baseline; gap: 2px; white-space: nowrap; font-weight: 600; font-variant-numeric: tabular-nums lining-nums; }
+.dl { display: inline-flex; align-items: baseline; gap: 2px; white-space: nowrap; font-weight: 400; font-variant-numeric: tabular-nums lining-nums; }
 .dl .caret { font-size: 9px; position: relative; top: -1px; }
 .dl.up { color: var(--pos-text); }
 .dl.down { color: var(--neg); }
@@ -1791,7 +1790,7 @@ button.gb:is(.is-none, .is-on_hold):hover { border-color: var(--border); }
 .pspark.up path { stroke: var(--pos-text); }
 .pspark.down path { stroke: var(--neg); }
 .pspark.none line { stroke: var(--border); }
-@container wl (min-width: 761px) {
+@container wl (min-width: 720px) {
   /* The frame: white, pale rules, a header that stays in view under the bar. */
   .wl-wrap .table-scroll { overflow: visible; background: var(--surface); border: 1px solid var(--separator); border-radius: 12px; }
   table.wl { font-family: var(--sans); font-size: 14px; }
@@ -1801,21 +1800,24 @@ button.gb:is(.is-none, .is-on_hold):hover { border-color: var(--border); }
   table.wl th.c-project { z-index: 4; }
   table.wl th button.sort, table.wl th .th, table.wl th .th .lbl, table.wl th .lbl { font-size: 12px; font-weight: 700; color: var(--text); letter-spacing: 0; text-transform: none; }
   table.wl th .arrow { color: var(--text-2); }
-  /* Rows: 56px on pale rules, a faint blue-gray hover. */
-  table.wl td { height: 56px; padding: 0 10px; border-bottom: 1px solid var(--separator); }
+  /* Rows: 40px on hairlines (the cells' own side padding keeps headers over their figures). */
+  table.wl td { height: 40px; padding: 0 10px; border-bottom: 1px solid var(--separator); }
+  table.wl tbody td { height: 40px; padding-block: 0; }
   /* # and the name. */
-  table.wl th.c-rank, table.wl td.c-rank { width: 44px; padding-left: 16px; padding-right: 4px; text-align: left; }
-  table.wl th.c-rank button.sort { justify-content: flex-start; padding-left: 0; padding-right: 4px; }
-  table.wl td.c-rank .rk { font-family: inherit; font-size: 12px; font-weight: 500; color: var(--text-2); letter-spacing: 0; }
+  table.wl th.c-rank, table.wl td.c-rank { width: 44px; padding-left: 16px; padding-right: 4px; text-align: right; }
+  table.wl th.c-rank button.sort { justify-content: flex-end; padding-left: 0; padding-right: 0; }
+  table.wl td.c-rank .rk { font-family: inherit; font-size: 12px; font-weight: 400; color: var(--text-2); letter-spacing: 0; font-variant-numeric: tabular-nums lining-nums; }
   table.wl td.c-project, table.wl th.c-project { padding-left: 6px; }
   .proj-cell { gap: 10px; }
-  .proj-cell .logo { width: 24px !important; height: 24px !important; min-width: 24px; font-size: 10px !important; font-weight: 600; color: var(--text-2); background: var(--bg); box-shadow: inset 0 0 0 1px var(--border); }
+  .proj-cell .logo { width: 20px !important; height: 20px !important; min-width: 20px; font-size: 9px !important; font-weight: 600; color: var(--text-2); background: var(--bg); box-shadow: inset 0 0 0 1px var(--border); }
   .proj-cell .logo.has-img { background: var(--bg); }
-  table.wl .pname { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; color: var(--text); }
+  table.wl .pname { font-size: 13px; font-weight: 500; letter-spacing: 0; color: var(--text); }
   table.wl .proj-cell .names { gap: 6px; }
-  table.wl .proj-cell .tick { font-family: inherit; font-size: 12px; font-weight: 600; letter-spacing: 0; text-transform: uppercase; color: var(--text-2); }
+  table.wl .proj-cell .tick { font-family: inherit; font-size: 11px; font-weight: 500; letter-spacing: 0; text-transform: uppercase; color: var(--text-2); }
   /* Figures: CMC's sans with even-width digits, right-aligned. */
-  table.wl td.num, table.wl td .num, table.wl td .price { font-family: inherit; font-size: 14px; font-weight: 600; letter-spacing: 0; color: var(--text); }
+  table.wl td.num, table.wl td .num, table.wl td .price { font-family: inherit; font-size: 13px; font-weight: 400; letter-spacing: 0; color: var(--text); }
+  /* The price is the row's one emphasised figure. */
+  table.wl td.price .price { font-weight: 500; }
   table.wl td .dl { font-size: 13px; }
   table.wl td.c-spark, table.wl th.c-spark { width: 150px; padding-right: 14px; }
   table.wl th.c-spark .th { justify-content: flex-end; padding: 0; }
@@ -2008,3 +2010,47 @@ table.wl .gb.is-incomplete:not(.is-range):not(.x-) .v { font-size: 10px; letter-
 .status-strip.ss-fit-tight button.ss-item { padding: 0 4px; gap: 5px; }
 .status-strip.ss-fit-tight button.ss-icon { padding: 0 4px; min-width: 30px; }
 .status-strip.ss-fit-tight .ss-div { margin: 0 8px; }
+
+/* ---- Presentation phase 2: the list (2026-10-05) -------------------------- */
+/* Score pills: one weight and size, tabular, one fixed width (--badge-w). An
+   evidence flag is a 5px dot inside the pill before the figure (the words are
+   in its label and tooltip); the corner keeps one other mark at most. */
+:is(table.wl, .mtabs) .gb .v { font: 500 12px/1 var(--sans); font-variant-numeric: tabular-nums lining-nums; letter-spacing: 0; }
+table.wl .gb:not(.is-range):not(.x-) .v { font-size: 12px; letter-spacing: 0; }
+:is(table.wl, .mtabs) .gb .ev,
+:is(table.wl, .mtabs) .gb.ev-serious .ev,
+:is(table.wl, .mtabs) .gb.ev-material .ev { position: static; flex: none; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--warn-strong); box-shadow: none; }
+:is(table.wl, .mtabs) .gb:has(.x) .ev { display: inline-block; }
+:is(table.wl, .mtabs) .gb:has(.ev):not(:has(.x)) .r { display: block; }
+:is(table.wl, .mtabs) .gb:has(.ev):not(:has(.x)):not(:has(.r)) .a { display: block; }
+/* A model on hold (any model, from its status): "on hold" under its name; a
+   cell without a score is a quiet dash that still opens that model's tab. */
+table.wl th.c-prov.is-hold button.sort { flex-direction: column; justify-content: center; gap: 1px; line-height: 1.1; }
+table.wl th.c-prov .hold { display: block; font-size: 11px; font-weight: 400; color: var(--text-2); }
+table.wl .gb-none { display: inline-flex; align-items: center; justify-content: center; width: var(--badge-w); min-width: 0; height: var(--badge-h); min-height: 0; padding: 0; border: 0; border-radius: var(--r-md); background: transparent; box-shadow: none; font-size: 13px; color: var(--text-3); }
+table.wl .gb-none:hover { background: var(--row-hover); }
+/* The default columns give way by the list's own width, never by whether a
+   project is open (from 1280px the pane stays, so opening one never changes
+   the width). The order is fixed: 30d %, then Volume (24h), then the 7-day
+   chart, then Market Cap. Every value stays in the inspector. watchlist.js
+   fitColumns is the backstop for optional columns and long values. */
+@container wl (max-width: 1289px) { table.wl .c-change30d { display: none; } }
+@container wl (max-width: 1209px) { table.wl .c-volume { display: none; } }
+@container wl (max-width: 1099px) { table.wl .c-spark { display: none; } }
+@container wl (max-width: 944px) { table.wl .c-mcap { display: none; } }
+/* From 1280px the inspector is a pane that stays (480px): empty until a
+   project is chosen, so the list keeps its width. */
+@media (min-width: 1280px) {
+  body.split .layout { display: grid; grid-template-columns: minmax(0, 1fr) 480px; align-items: start; }
+  body.split #panel-root { flex: none; width: auto; }
+}
+.panel-empty { display: flex; align-items: center; justify-content: center; height: 100%; padding: 24px; color: var(--text-2); font-size: var(--fs-small); }
+.panel-empty .pe-text { margin: 0; display: inline-flex; align-items: center; gap: 4px; }
+.panel-empty .pe-sep { margin: 0 6px; color: var(--text-3); }
+.panel-empty kbd { color: var(--text-2); }
+/* Sign out: a quiet text button at the right of the top bar. */
+.topbar-end { display: flex; align-items: center; flex: none; margin-left: var(--s2); }
+.topbar-end:empty { display: none; }
+.topbar-end .signout { margin: 0; }
+.topbar-end .signout button { color: var(--text-2); font-weight: 500; }
+.topbar-end .signout button:hover { color: var(--text); }

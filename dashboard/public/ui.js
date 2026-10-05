@@ -800,11 +800,12 @@ export function gradeBadge(provider, report, job, opts = {}) {
     h('span', { class: 'p', 'aria-hidden': 'true' }, PROVIDER_SHORT[provider]),
     h('span', { class: 'main', 'aria-hidden': 'true' },
       sign,
+      // An evidence flag: a small solid dot inside the pill, before the
+      // figure; the words (serious or material) are in the badge's label, its
+      // tooltip and the inspector's evidence line.
+      info.ev ? h('span', { class: 'ev', title: `Evidence checks: ${info.evText}` }) : null,
       h('span', { class: 'v' }, info.value),
       info.label ? h('span', { class: 'l' }, info.label) : null,
-      // A small muted dot (filled: serious, a ring: material); the words are
-      // in the badge's label, its tooltip and the inspector's evidence line.
-      info.ev ? h('span', { class: 'ev', title: `Evidence checks: ${info.evText}` }) : null,
       info.stale && info.age ? h('span', { class: 'a' }, info.age) : null,
       info.refreshing ? h('span', { class: 'r', title: info.newerText }, '↻') : null,
       info.problem ? h('span', { class: 'x', title: info.newerText }, '!') : null),
