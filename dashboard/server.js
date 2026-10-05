@@ -65,10 +65,13 @@ const STATIC_TYPES = {
   '.png': 'image/png',
 };
 const WATCH_TOP = new Set(['projects', 'portfolio', 'market-data', 'inbox', 'config', 'templates', 'logs']);
-// One frame origin beyond the desk's own: TradingView's widget frame for the
-// inspector's technical chart (public/views/chart.js). No TradingView script
-// runs in the page; the frame is isolated by its own origin and a sandbox.
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-src https://www.tradingview-widget.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+// Beyond the desk's own origin, only the inspector's market views: the frames
+// of its technical chart (TradingView's widget, DexScreener's pool chart;
+// public/views/chart.js) and DexScreener's public API, which the browser asks
+// on demand for the DEX liquidity card (public/views/dex.js). No third-party
+// script runs in the page; each frame is isolated by its own origin and a
+// sandbox.
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.dexscreener.com; font-src 'self'; frame-src https://www.tradingview-widget.com https://dexscreener.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 const MAX_BODY = 30 * 1024 * 1024;
 const UI_STATE_REL = 'config/ui-state.json';
 // How long a server read waits for a save in progress before answering 503

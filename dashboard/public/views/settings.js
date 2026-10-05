@@ -86,7 +86,6 @@ function generalTab(ctx) {
     await ctx.refresh();
     return out;
   }, 'Settings saved to config/settings.json');
-  const sources = s.rank_sources || {};
   return h('div', null,
     appearanceCard(),
     card('Dashboard settings', form, { note: 'Rubric weights are not editable here: they belong to the versioned rubric files.' }),
@@ -96,8 +95,7 @@ function generalTab(ctx) {
       { label: 'Used for', wrap: true, render: (x) => h('span', { class: 'small' }, x.note) },
     ], [
       { label: 'CoinGecko /coins/markets', enabled: s.market_data.enabled !== false, note: 'Price, market cap, rank, 24H/7D/30D, volume, supply, 7-day series, logos' },
-      { label: 'CoinMarketCap', enabled: Boolean(sources.coinmarketcap && sources.coinmarketcap.enabled), note: 'Not used' },
-      { label: 'Liquidity (DEX/CEX depth)', enabled: false, note: 'No source' },
+      { label: 'DexScreener', enabled: true, note: 'Top DEX pool, liquidity, 24h volume and trades in the inspector, asked by your browser when you open a verified contract; never stored' },
     ]), { note: 'Each value shows the source it came from.' }));
 }
 

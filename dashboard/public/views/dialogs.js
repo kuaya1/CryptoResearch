@@ -270,7 +270,7 @@ export function parseQuery(text) {
   };
   const words = (slug) => (slug && /^[a-z0-9][a-z0-9-]*$/.test(slug) ? slug.replace(/-/g, ' ') : null);
   if (onHost(host, ['coinmarketcap.com'])) {
-    return { name: '', website: null, search: words(after('currencies')), listing: null, note: 'That is a CoinMarketCap page, a market listing rather than the project\'s own website, so it is used only to search. Add the official website below if you know it.' };
+    return { name: '', website: null, search: words(after('currencies')), listing: null, note: 'That is a market listing page, not the project\'s own website, so it is used only to search. Add the official website below if you know it.' };
   }
   if (onHost(host, ['coingecko.com'])) {
     const id = after('coins');

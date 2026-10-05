@@ -110,7 +110,10 @@ test('intake: links are read from their own text only; other sites are refused',
 test('intake: a request is saved first; a repeat within minutes is the same request; nothing touches the portfolio', (t) => {
   const { ws, cleanup } = tempWorkspace('intake-save');
   t.after(cleanup);
-  assert.throws(() => intake.createIntake(ws, {}), /Paste a CoinMarketCap link/);
+  // The forms ask for a name or a CoinGecko link; a pasted CoinMarketCap link
+  // still works (above), but no message asks for one.
+  assert.throws(() => intake.createIntake(ws, {}), /Type a project name, paste a CoinGecko link, or add a screenshot\./);
+  for (const bad of ['https://scam.example/x', 'x'.repeat(81)]) assert.doesNotMatch(intake.parseLink(bad).error, /CoinMarketCap/);
   assert.throws(() => intake.createIntake(ws, { link: 'https://scam.example/x' }), /not used to identify/);
   assert.throws(() => intake.createIntake(ws, { screenshot: { media_type: 'image/svg+xml', data_base64: 'PHN2Zz4=' } }), /PNG, JPEG/);
   assert.throws(() => intake.createIntake(ws, { screenshot: { media_type: 'image/png', data_base64: Buffer.alloc(intake.MAX_IMAGE_BYTES + 1).toString('base64') } }), /larger than/);

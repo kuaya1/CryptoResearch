@@ -1,6 +1,6 @@
 // New research: the one place to start research, made for the phone.
 //
-// Paste a CoinMarketCap link (or type a name) and/or add a screenshot, add
+// Type a name (or paste a CoinGecko link) and/or add a screenshot, add
 // optional instructions, and send. The request is saved first, then the
 // project is identified in the background. Research starts only after you
 // confirm one candidate, with its network, contract and website in view.
@@ -111,7 +111,7 @@ async function renderStart(ctx) {
   } catch (err) {
     return h('div', null, h('h1', null, 'New research'), callout(`Could not load research requests: ${err.message}`, 'bad'));
   }
-  const linkIn = input({ name: 'intake-link', placeholder: 'coinmarketcap.com/currencies/…  or a project name', autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', inputmode: 'url', enterkeyhint: 'next' });
+  const linkIn = input({ name: 'intake-link', placeholder: 'A project name or ticker, or coingecko.com/en/coins/…', autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'next' });
   const fileIn = h('input', { type: 'file', name: 'intake-shot', accept: 'image/png,image/jpeg,image/webp,image/gif,image/*' });
   const preview = h('div', { class: 'intake-preview hidden' });
   const note = h('textarea', { name: 'intake-instructions', rows: 4, maxlength: 2000, placeholder: 'Optional: what you want looked into, e.g. "Who actually uses it? Is the March unlock a risk inside four months?"' });
@@ -137,7 +137,7 @@ async function renderStart(ctx) {
     if (sendBtn.getAttribute('aria-busy') === 'true') return;
     const link = linkIn.value.trim();
     if (!link && !image) {
-      toast('Paste a CoinMarketCap link, type a project name, or add a screenshot.', 'bad');
+      toast('Type a project name, paste a CoinGecko link, or add a screenshot.', 'bad');
       linkIn.focus();
       return;
     }
@@ -157,7 +157,7 @@ async function renderStart(ctx) {
       if (sendBtn.isConnected) busy(sendBtn, false);
     }
   } },
-  field('CoinMarketCap link or project name', linkIn, null, { wide: true }),
+  field('Project name or CoinGecko link', linkIn, null, { wide: true }),
   // What a screenshot costs stays in its label: it is the one paid step here.
   field(`Screenshot (optional${typeof reservation === 'number' ? ` · one paid call, at most ${fmtUsd(reservation)}` : ''})`, fileIn, null, { wide: true }),
   preview,

@@ -1311,19 +1311,22 @@ function contractStripEl(p) {
     m.age ? h('span', { class: `cs-age${m.stale ? ' stale' : ''}`, title: m.ageTitle, 'aria-label': `Screened by GoPlus ${m.age} ago${m.stale ? ', stale' : ''}` }, m.stale ? icon('clock') : null, h('span', { 'aria-hidden': 'true' }, `GoPlus ${m.age}`)) : null);
 }
 
-// Links out, beside close: the project's CoinMarketCap page, its CoinGecko
-// listing and its official website. A link the desk does not hold stays a
-// quiet disabled pill: no CoinMarketCap page is stored for any project yet,
-// and none is guessed from another listing's ID.
+// Links out, beside close: the project's CoinGecko listing, DexScreener and
+// its official website. A link the desk does not hold stays a quiet disabled
+// pill, never a guessed URL. The DEX pill searches DexScreener for the ticker
+// until the project record arrives; then it is the recorded contract's page
+// when the identity is verified (views/dex.js, the "dexlink" part).
 function headLinks(p) {
   const web = /^https?:\/\//i.test(String(p.official_website || '')) ? p.official_website : null;
   const host = web ? (() => { try { return new URL(web).hostname.replace(/^www\./, ''); } catch (_) { return null; } })() : null;
+  const ticker = String(p.symbol || '').trim();
   const link = (cls, label, href, title, aria) => (href
     ? h('a', { class: `xlink ${cls}`, href, target: '_blank', rel: 'noopener noreferrer', title, 'aria-label': aria, dataset: { key: `x-${cls}-${p.project_id}` } }, label)
     : h('span', { class: `xlink ${cls} off`, role: 'link', 'aria-disabled': 'true', title, 'aria-label': `${aria} (not linked)` }, label));
   return h('div', { class: 'ph-links' },
-    link('cmc', 'CMC', null, 'No CoinMarketCap page is linked to this project', 'CoinMarketCap page'),
     link('cg', 'CG', p.coingecko_id ? `https://www.coingecko.com/en/coins/${encodeURIComponent(p.coingecko_id)}` : null, p.coingecko_id ? `CoinGecko: ${p.coingecko_id}` : 'No verified CoinGecko listing', 'CoinGecko listing'),
+    h('span', { class: 'ph-dex', dataset: { slot: 'dexlink' } },
+      link('dex', 'DEX', ticker ? `https://dexscreener.com/search?q=${encodeURIComponent(ticker)}` : null, ticker ? `Search DexScreener for ${ticker}` : 'No contract or ticker to look up on DexScreener', ticker ? `Search DexScreener for ${ticker}` : 'DexScreener')),
     link('web', icon('ext'), web && host ? web : null, host ? `Official website: ${host}` : 'No official website on record', host ? `Official website, ${host}` : 'Official website'));
 }
 
@@ -1383,7 +1386,8 @@ async function fillDetail(ctx, pid, panel, saved, prov) {
   try {
     [d, mod] = await Promise.all([ctx.projectDetail(pid), import('./inspector.js')]);
   } catch (err) {
-    for (const slot of panel.querySelectorAll('[data-slot]')) slot.replaceChildren(h('p', { class: 'small muted' }, `Could not load the full record: ${err.message}. The summary above is current.`));
+    // The header's DEX pill keeps its ticker search, and no DEX card is shown.
+    for (const slot of panel.querySelectorAll('[data-slot]')) if (slot.dataset.slot !== 'dexlink' && slot.dataset.slot !== 'dex') slot.replaceChildren(h('p', { class: 'small muted' }, `Could not load the full record: ${err.message}. The summary above is current.`));
     return;
   }
   if (!panel.isConnected || ctx.state.route.query.get('p') !== pid) return;
@@ -1454,6 +1458,8 @@ function renderPanel(ctx, pid) {
       overviewStats(p),
       h('div', { class: 'cstrip-slot' }, contractStripEl(p))),
     h('div', { class: 'panel-body', 'data-keep-scroll': 'panel' },
+      // DEX liquidity, right under the contract line (views/dex.js).
+      h('div', { class: 'dex-slot', dataset: { slot: 'dex' } }),
       archivedBanner(ctx, p),
       problemLines(ctx, p),
       h('section', { class: 'scorecard', 'aria-labelledby': 'insp-sec-scores' },

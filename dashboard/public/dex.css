@@ -1,0 +1,20 @@
+/* DexScreener in the project inspector (views/dex.js): the DEX pill beside
+   CoinGecko in the header, and the DEX liquidity card at the top of the
+   inspector body, under the contract line: one line per figure, two figures a
+   line where they fit. Tokens only (styles.css :root). */
+
+.ph-dex { display: inline-flex; }
+.dex-slot:empty { display: none; }
+
+.dexc { container-type: inline-size; margin: 10px 0 6px; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-md); font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+.dexc-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s2, 8px); margin-bottom: 6px; }
+.dexc-head h3 { margin: 0; font-family: var(--font); font-size: 12px; font-weight: 600; letter-spacing: 0; color: var(--text); }
+.dexc-src { font-family: var(--font); font-size: 11px; color: var(--text-3); }
+.dexc-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; margin: 0; }
+.dexc-grid > div { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.dexc-grid > .wide { grid-column: 1 / -1; }
+.dexc-grid dt { flex: none; font-family: var(--font); font-size: 11px; color: var(--text-3); }
+.dexc-grid dd { min-width: 0; margin: 0; color: var(--text); font-variant-numeric: tabular-nums lining-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dexc-grid dd.thin { color: var(--pill-warn-ink); }
+@container (max-width: 340px) { .dexc-grid { grid-template-columns: minmax(0, 1fr); } }
+.dexc-note { display: flex; align-items: center; justify-content: space-between; gap: var(--s2, 8px); margin: 0; min-height: 24px; font-family: var(--font); font-size: 12px; color: var(--text-3); }

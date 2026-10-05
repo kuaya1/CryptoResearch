@@ -1,7 +1,7 @@
 'use strict';
 // The inspector's technical chart (public/views/chart.js): which symbol it
 // shows, the exact TradingView widget frame it embeds, the chart symbol on the
-// project record, and the one frame origin the page's security policy allows.
+// project record, and the outside origins the page's security policy allows.
 // FICTIONAL projects only; nothing here contacts TradingView.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -87,7 +87,7 @@ test('record: chart_symbol is EXCHANGE:PAIR, stored upper case, refused otherwis
   assert.equal('chart_symbol' in projects.getProject(ws, id), false, 'an empty value clears it too');
 });
 
-test('page policy: one frame origin beyond the desk\'s own, TradingView\'s widget; scripts still only from the desk', async (t) => {
+test('page policy: beyond the desk\'s own origin only the chart frames (TradingView\'s widget, DexScreener) and DexScreener\'s API; scripts still only from the desk', async (t) => {
   const { ws, cleanup } = tempWorkspace('chart-csp');
   const srv = await require('../server').start(ws, { port: 47600 + Math.floor(Math.random() * 300), quiet: true });
   t.after(() => {
@@ -103,9 +103,9 @@ test('page policy: one frame origin beyond the desk\'s own, TradingView\'s widge
     req.end();
   });
   const csp = Object.fromEntries(headers['content-security-policy'].split(';').map((d) => d.trim().split(/\s+/)).map(([k, ...v]) => [k, v.join(' ')]));
-  assert.equal(csp['frame-src'], 'https://www.tradingview-widget.com');
+  assert.equal(csp['frame-src'], 'https://www.tradingview-widget.com https://dexscreener.com');
   assert.equal(csp['script-src'], "'self'");
-  assert.equal(csp['connect-src'], "'self'");
+  assert.equal(csp['connect-src'], "'self' https://api.dexscreener.com");
   assert.equal(csp['default-src'], "'self'");
   assert.equal(csp['frame-ancestors'], "'none'");
 });
