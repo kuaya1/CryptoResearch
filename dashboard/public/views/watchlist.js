@@ -1710,23 +1710,15 @@ function renderPanel(ctx, pid) {
   fillDetail(ctx, pid, panel, opening ? { scroll: {}, open: {}, focus: null } : saved, sel).then(() => { view.focusTab = null; });
 }
 
-// From 1280px the inspector is a pane that stays: with nothing chosen it
-// says how to choose, so the list never reflows when a project opens or
-// closes. Narrower, nothing is shown until a project opens over the list.
+// With nothing chosen the list has the whole width (Eric, 2026-10-05): the
+// inspector appears only when a project is clicked or opened.
 function showEmptyPane() {
   const root = document.getElementById('panel-root');
   setSheetMode(false);
   const bd = document.querySelector('.sheet-backdrop');
   if (bd) bd.remove();
-  if (!wide()) {
-    clear(root);
-    document.body.classList.remove('split');
-    return;
-  }
-  document.body.classList.add('split');
-  if (root.children.length === 1 && root.firstElementChild.classList.contains('panel-empty')) return;
-  clear(root).appendChild(h('aside', { class: 'panel panel-empty', 'aria-label': 'Project inspector' },
-    h('p', { class: 'pe-text' }, 'Select a project', h('span', { class: 'pe-sep', 'aria-hidden': 'true' }, '·'), h('kbd', null, 'J'), h('span', { 'aria-hidden': 'true' }, ' / '), h('kbd', null, 'K'), ' to move')));
+  clear(root);
+  document.body.classList.remove('split');
 }
 
 // What R does with the selected project: mark it reviewed (only with changes

@@ -2052,10 +2052,6 @@ table.wl .gb-none .p { display: none; }
   body.split .layout { display: grid; grid-template-columns: minmax(0, 1fr) 480px; align-items: start; }
   body.split #panel-root { flex: none; width: auto; }
 }
-.panel-empty { display: flex; align-items: center; justify-content: center; height: 100%; padding: 24px; color: var(--text-2); font-size: var(--fs-small); }
-.panel-empty .pe-text { margin: 0; display: inline-flex; align-items: center; gap: 4px; }
-.panel-empty .pe-sep { margin: 0 6px; color: var(--text-3); }
-.panel-empty kbd { color: var(--text-2); }
 /* Sign out: a quiet text button at the right of the top bar. */
 .topbar-end { display: flex; align-items: center; flex: none; margin-left: var(--s2); }
 .topbar-end:empty { display: none; }
