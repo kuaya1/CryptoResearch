@@ -242,6 +242,9 @@ const LOADERS = {
   new: () => import('./views/intake.js').then((m) => m.renderIntake),
   watchlist: () => import('./views/watchlist.js').then((m) => m.renderWatchlist),
   project: () => import('./views/project.js').then((m) => m.renderProject),
+  // The Claude Brief of one project (#/brief/<id>[?report=<id>]): a page of
+  // its own, so it opens in a new tab and Back returns to where it was opened.
+  brief: () => import('./views/brief.js').then((m) => m.renderBrief),
   portfolio: () => import('./views/portfolio.js').then((m) => m.renderPortfolio),
   research: () => import('./views/research.js').then((m) => m.renderResearch),
   updates: () => import('./views/updates.js').then((m) => m.renderUpdates),
@@ -287,7 +290,7 @@ function counts(index) {
 function renderNav() {
   const nav = document.getElementById('nav');
   const r = state.route;
-  const active = r ? (r.name === 'project' ? 'watchlist' : r.name) : 'watchlist';
+  const active = r ? (r.name === 'project' || r.name === 'brief' ? 'watchlist' : r.name) : 'watchlist';
   const c = state.index ? counts(state.index) : {};
   clear(nav);
   for (const [id, label] of SECTIONS) {
@@ -313,9 +316,9 @@ function closeMenu() {
 }
 
 function pageTitle(route) {
-  if (route.name === 'project') {
+  if (route.name === 'project' || route.name === 'brief') {
     const p = state.index && state.index.projects.find((x) => x.project_id === route.args[0]);
-    return `${p ? p.name : 'Project'} · CryptoResearch`;
+    return `${route.name === 'brief' ? 'Claude Brief · ' : ''}${p ? p.name : 'Project'} · CryptoResearch`;
   }
   const s = SECTIONS.find((x) => x[0] === route.name);
   return `${s ? s[1] : 'Watchlist'} · CryptoResearch`;

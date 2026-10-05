@@ -6,7 +6,7 @@ import {
   fmtPrice, fmtCompactUsd, fmtNum, fmtDate, fmtDateTime, fmtAgo, fmtSignedPct, freshnessText, kv, details, field, input, select, button,
   action, callout, copyText, tabStrip, safeSection, submissionId, stateText, fieldError, PROVIDERS, PROVIDER_LABELS, link,
   jobKey, coworkIdleMinutes, isAssistantJob, researchState, withheldReason, unscoredFrom, unscoredList,
-  withheldLabel, COVERAGE_MEANS, structureNotes, toast, onHoldOf,
+  withheldLabel, COVERAGE_MEANS, structureNotes, toast, onHoldOf, briefLink,
 } from '../ui.js';
 import { renderMarkdown } from '../md.js';
 import { openResearchDialog, openSectorDialog, waitingActions, waitingStep } from './dialogs.js';
@@ -60,13 +60,26 @@ export async function renderProject(ctx, route) {
     evidence: () => evidenceTab(ctx, d, latest),
     market: () => marketTab(ctx, d),
     history: () => historyTab(ctx, d),
-    research: () => researchTab(ctx, d, row),
+    research: () => researchTab(ctx, d, row, route),
   })[tab]());
-  return h('div', null,
+  const page = h('div', null,
     h('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' }, h('a', { href: `#/watchlist?p=${encodeURIComponent(id)}`, dataset: { key: 'crumb-watchlist' } }, 'Watchlist'), h('span', { 'aria-hidden': 'true' }, '/'), h('span', { 'aria-current': 'page' }, d.project.name)),
     header(ctx, d, row),
     strip,
     h('div', { id: 'tabpanel', role: 'tabpanel', 'aria-labelledby': `tab-${tab}` }, body));
+  // A link to one research run (#/project/<id>/research?run=<run>, from the
+  // Claude Brief): that run comes into view once, when the page opens.
+  const run = tab === 'research' ? route.query.get('run') : null;
+  if (run) {
+    page.afterMount = () => {
+      if (ctx.state.renderReason !== 'nav') return;
+      requestAnimationFrame(() => {
+        const el = document.getElementById(`run-card-${run}`);
+        if (el) el.scrollIntoView({ block: 'start' });
+      });
+    };
+  }
+  return page;
 }
 
 export function latestReports(d) {
@@ -193,6 +206,7 @@ function modelCard(ctx, d, row, prov, latest) {
       h('p', { class: 'small faint', style: { margin: '8px 0 0' } }, routeText(r)),
       newer,
       h('div', { class: 'btn-row', style: { marginTop: '10px' } },
+        prov === 'claude' ? briefLink(ctx, d.project, { from: 'project', cls: 'btn small brief-link' }) : null,
         h('a', { class: 'btn small', href: `#/project/${pid}/reports?report=${encodeURIComponent(r.report_id)}`, dataset: { key: `ov-report-${prov}` } }, 'Open report'),
         h('a', { class: 'btn small', href: `#/project/${pid}/scorecards?provider=${prov}`, dataset: { key: `ov-score-${prov}` } }, 'Scorecard'),
         waiting));
@@ -1214,9 +1228,10 @@ export function promptView(ctx, pid, run, { provider = null, label = 'Show the e
 // 2026-10-03 on).
 const noted = (run) => (run.providers || []).filter((p) => run.jobs[p] && run.jobs[p].execution && run.jobs[p].execution.ref);
 
-function researchTab(ctx, d, row) {
+function researchTab(ctx, d, row, route = null) {
   const pid = d.project.project_id;
   const runs = d.research.runs || [];
+  const wantRun = route ? route.query.get('run') : null;
   const runCards = runs.map((run) => {
     const promptUrl = `/api/projects/${pid}/research/${run.run_id}/prompt`;
     const copy = button('Copy prompt', null, { kind: 'small' });
@@ -1240,10 +1255,10 @@ function researchTab(ctx, d, row) {
         // A model's own execution note (ChatGPT's), frozen with its job.
         noted(run).length ? ['Execution notes', noted(run).map((p) => `${PROVIDER_LABELS[p]}: ${run.jobs[p].execution.ref} · SHA-256 ${String(run.jobs[p].execution.sha256).slice(0, 12)}…, given before the same prompt`).join(' · ')] : null,
         ['Evidence packet', `captured ${fmtDateTime(run.evidence_packet.captured_at)} · SHA-256 ${run.evidence_packet.sha256.slice(0, 12)}… · no holdings, notes or other models' conclusions`],
-      ]), { id: `run-${run.run_id}` }),
+      ]), { id: `run-${run.run_id}`, open: run.run_id === wantRun }),
       promptView(ctx, pid, run),
       ...noted(run).map((p) => promptView(ctx, pid, run, { provider: p, label: `Show what ${PROVIDER_LABELS[p]} gets: its execution note, then the same prompt` })),
-    ]);
+    ], { id: `run-card-${run.run_id}` });
   });
   const legacy = d.prompt_files || [];
   // What a new run would use, and the standing prompt files rebuilt to it.

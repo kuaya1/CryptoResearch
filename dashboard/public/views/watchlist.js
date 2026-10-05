@@ -12,7 +12,7 @@ import {
   h, clear, button, select, input, changeCell, sparkline, priceSpark, logo, gradeBadge, badgeInfo, verdictChip,
   fmtPrice, fmtCompactUsd, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, fmtSignedPct, freshnessText, priceStatus, stateText, toast, announce,
   researchState, withheldReason, unscoredList, jobKey, icon, evidenceLevel, evidenceText, gradeGauge, coverageMeter,
-  withheldLabel, structureNotes, details, onHoldOf, copyText, anchorText, fmtRelDay, fmtChangePct, fmtMarketUsd,
+  withheldLabel, structureNotes, details, onHoldOf, copyText, anchorText, fmtRelDay, fmtChangePct, fmtMarketUsd, briefLink,
   PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT,
 } from '../ui.js';
 import { openAddProjectDialog, openResearchDialog, openSectorDialog, waitingActions } from './dialogs.js';
@@ -63,7 +63,7 @@ const PREFS_VERSION = 3;
 
 const view = {
   q: '', order: null, orderKey: '', suppressFocus: false, returnFocus: null, focusProvider: null, focusOnRender: false, bound: false, menus: [],
-  mounted: null, strip: null, panelPid: null, recent: null, inspectorTab: {}, focusTab: null, keptOpen: {},
+  mounted: null, strip: null, panelPid: null, recent: null, inspectorTab: {}, focusTab: null, keptOpen: {}, briefReturn: null,
 };
 
 export function prefs(ctx) {
@@ -1601,7 +1601,10 @@ function renderPanel(ctx, pid) {
       // a–d: the verdict, its review items, the thesis, the category grades
       // and the strongest risks, all for the selected model.
       h('section', { class: 'scorecard', 'aria-labelledby': 'insp-sec-scores' },
-        h('h3', { class: 'sec-title sec-scores', id: 'insp-sec-scores' }, 'Verdict'),
+        // The Claude Brief: Claude's latest report as one decision page.
+        h('div', { class: 'sec-head' },
+          h('h3', { class: 'sec-title sec-scores', id: 'insp-sec-scores' }, 'Verdict'),
+          briefLink(ctx, p, { from: 'watchlist', cls: 'btn small brief-link', onOpen: () => { view.briefReturn = pid; } })),
         modelTabs(ctx, p, sel),
         modelPanel(ctx, p, sel)),
       // e: market structure: DEX liquidity, then the contract chips.
@@ -1669,6 +1672,9 @@ function renderPanel(ctx, pid) {
     setSheetMode(false);
   }
   const opening = view.focusOnRender;
+  // Back from the Claude Brief opened here: focus returns to its link.
+  const fromBrief = view.briefReturn === pid ? panel.querySelector(`[data-key="brief-${CSS.escape(pid)}"]`) : null;
+  view.briefReturn = null;
   if (!opening) restorePanel(panel, saved, { focus: true });
   // Another project (a click, J/K, R, a link): its top. The same project
   // redrawn (a price refresh, a new report): where you were.
@@ -1699,6 +1705,9 @@ function renderPanel(ctx, pid) {
     }
     const row = document.querySelector(`tr[data-pid="${CSS.escape(pid)}"]`);
     if (row && split) row.scrollIntoView({ block: 'nearest' });
+  } else if (fromBrief) {
+    fromBrief.focus({ preventScroll: true });
+    ctx.claimFocus();
   } else if (!split && !panel.contains(document.activeElement)) {
     heading.focus({ preventScroll: true });
     ctx.claimFocus();

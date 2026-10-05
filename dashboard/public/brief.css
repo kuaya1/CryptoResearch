@@ -1,0 +1,365 @@
+/* The Claude Brief (views/brief.js): one saved Claude report read as a
+   decision page. A sheet of paper on the desk: white, hairlines, generous
+   space, the desk's tokens only (styles.css :root). Quality bars fill in their
+   tier from the left; downside-risk bars grow from the right in the risk
+   colour; forecasts are labeled as such. On a phone the brief takes the whole
+   screen with its own Back bar. Every graphic only repeats words on the page. */
+
+.brief-page { max-width: 920px; margin: 0 auto; min-width: 0; }
+
+/* ---- the bar: Back, the title on a phone, the full report ---------------- */
+/* The bar stays under the top bar while the page scrolls; its band of desk
+   colour runs the full width (a spread shadow, clipped to the sides), so the
+   sheet never shows through at its edges. */
+.bf-bar {
+  position: sticky; top: var(--topbar-h); z-index: 30;
+  display: flex; align-items: center; gap: var(--s3);
+  min-height: 48px; margin: calc(-1 * var(--s3)) 0 var(--s3); padding: 6px 0;
+  background: var(--bg);
+  box-shadow: 0 0 0 100vmax var(--bg);
+  clip-path: inset(0 -100vmax);
+}
+.bf-back {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 10px 0 6px;
+  border-radius: var(--r-pill, var(--r-md)); color: var(--text-2); font-weight: 500; font-size: var(--fs-small); text-decoration: none;
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.bf-back:hover { background: var(--row-hover); color: var(--text); }
+.bf-chev { width: 16px; height: 16px; background: currentColor; -webkit-mask: var(--i-chevron) center / contain no-repeat; mask: var(--i-chevron) center / contain no-repeat; transform: rotate(90deg); }
+.bf-bar-title { margin: 0; min-width: 0; flex: 1; line-height: 1.2; opacity: 0; visibility: hidden; transition: opacity var(--dur) var(--ease), visibility var(--dur); }
+.bf-bar.scrolled .bf-bar-title { opacity: 1; visibility: visible; }
+.bf-bar-k { display: block; font-size: 11px; font-weight: 600; color: var(--text-3); }
+.bf-bar-name { display: block; font-size: 14px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bf-bar-act { margin-left: auto; display: flex; gap: var(--s2); flex: none; }
+
+/* ---- the sheet: the desk's card (.card), with a reading page's margins;
+   panels inside it are the desk's gray wells -------------------------------- */
+.brief.card { padding: var(--s8) 44px var(--s6); margin-bottom: var(--s6); min-width: 0; overflow-wrap: anywhere; }
+.bf-sec { padding: var(--s6) 0; border-top: 1px solid var(--separator); min-width: 0; }
+.bf-h { margin: 0 0 var(--s4); font-family: var(--sans); font-size: 15px; font-weight: 600; letter-spacing: -0.005em; color: var(--text); display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.bf-h-sub, .bf-h3-sub { font-size: var(--fs-small); font-weight: 400; color: var(--text-3); letter-spacing: 0; }
+.bf-h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--text); display: flex; align-items: baseline; gap: 4px 8px; flex-wrap: wrap; }
+.bf-none { margin: 0; font-size: var(--fs-small); color: var(--text-3); }
+.bf-block + .bf-block { margin-top: var(--s6); }
+.bf-dot { color: var(--text-3); margin: 0 2px; }
+.brief .k { font-size: 12px; font-weight: 600; color: var(--text-3); margin-right: 6px; }
+
+/* ---- the header: who, when, the market now ---------------------------------- */
+.bf-head { padding-bottom: var(--s5); }
+.bf-id { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
+.bf-id .logo { margin-top: 4px; box-shadow: inset 0 0 0 1px var(--border); }
+.bf-id-text { min-width: 0; flex: 1; }
+.bf-eyebrow { margin: 0 0 2px; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text-3); }
+.bf-head h1 { margin: 0; font-size: 24px; font-weight: 600; line-height: 1.15; letter-spacing: -0.005em; display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+/* The title takes focus when the brief opens (for a screen reader), as the
+   inspector's does; it is not a control, so it draws no ring. */
+.bf-head h1:focus, .bf-head h1:focus-visible { outline: none; box-shadow: none; }
+.bf-sym { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--text-2); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 1px 6px; letter-spacing: 0; }
+.bf-chain { margin: 8px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: var(--fs-small); color: var(--text-2); }
+.bf-chip { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r-pill, 999px); background: var(--surface); font-weight: 500; color: var(--text-2); }
+.bf-idstate { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
+.bf-idstate::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
+.bf-idstate.ok::before { background: var(--pos); }
+.bf-idstate.warn::before { background: var(--warn-strong); }
+.bf-web { color: var(--text-2); }
+.bf-meta { display: flex; flex-wrap: wrap; gap: 10px 28px; margin: var(--s5) 0 0; padding-top: var(--s4); border-top: 1px solid var(--separator); }
+.bf-meta div { min-width: 0; }
+.bf-meta dt { font-size: 12px; font-weight: 600; color: var(--text-3); }
+.bf-meta dd { margin: 2px 0 0; font-size: 13px; font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums lining-nums; }
+.bf-market { margin: var(--s3) 0 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 9px 14px; border-radius: var(--r-well, var(--r-md)); background: var(--surface-sunken); font-size: var(--fs-small); color: var(--text); }
+.bf-market .k { margin-right: 0; }
+.bf-market .k2 { color: var(--text-3); font-weight: 500; }
+.bf-chg.up { color: var(--pos-text); }
+.bf-chg.down { color: var(--neg); }
+.bf-when { color: var(--text-3); font-size: var(--fs-small); }
+.bf-when.stale { color: var(--warn); }
+.bf-market .bf-when { margin-left: auto; }
+
+/* ---- the verdict ---------------------------------------------------------------- */
+.bf-vgrid { display: grid; grid-template-columns: 196px minmax(0, 1fr); gap: var(--s4) 32px; align-items: center; }
+.bf-grade { display: flex; flex-direction: column; align-items: center; min-width: 0; }
+.bf-grade .ggauge { width: 196px; height: auto; }
+.bf-gcap { margin: 4px 0 0; font-size: 12px; font-weight: 600; color: var(--text-3); text-align: center; cursor: help; }
+.bf-grade.withheld { align-items: stretch; padding: 14px 16px; border: 1px dashed var(--control-border); border-radius: var(--r-well, var(--r-lg)); background: repeating-linear-gradient(135deg, var(--surface) 0 6px, color-mix(in srgb, var(--surface-sunken) 70%, var(--surface)) 6px 12px); }
+.bf-grade.withheld .bf-gcap { text-align: left; }
+.bf-wh { margin: 0; font-size: 17px; font-weight: 600; color: var(--text); }
+.bf-grade .coverage-meter { max-width: none; margin: 8px 0 0; }
+.bf-vlabel { margin: 0 0 6px; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.25; color: var(--text); }
+.bf-lead { margin: 0; font-size: var(--fs-read); line-height: 1.6; color: var(--text); max-width: 64ch; }
+.bf-views { margin: 12px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.bf-view { display: inline-flex; align-items: baseline; min-height: 26px; max-width: 100%; padding: 4px 10px; border-radius: var(--r-pill, 999px); background: var(--surface-sunken); border: 1px solid var(--border); font-size: var(--fs-small); font-weight: 500; line-height: 1.3; color: var(--text); cursor: help; }
+.bf-view .k { font-size: 11.5px; margin-right: 6px; flex: none; }
+.bf-view-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 24ch; }
+.bf-view .fig { flex: none; white-space: nowrap; }
+.bf-missing { margin-top: var(--s4); padding-top: var(--s3); border-top: 1px solid var(--separator); font-size: var(--fs-small); }
+.bf-missing h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.bf-notices { list-style: none; margin: var(--s5) 0 0; padding: 0; display: grid; gap: 6px; }
+.bf-notice { display: flex; align-items: flex-start; gap: 9px; padding: 9px 14px; border-radius: var(--r-well, var(--r-md)); font-size: var(--fs-small); line-height: 1.5; color: var(--text); background: var(--surface-sunken); border: 1px solid transparent; }
+.bf-notice > svg { width: 15px; height: 15px; flex: none; margin-top: 2px; color: var(--text-3); }
+.bf-notice.tone-warn { background: var(--pill-warn-bg); border-color: var(--pill-warn-line); }
+.bf-notice.tone-warn > svg { color: var(--warn-strong); }
+.bf-notice.ev-serious { border-color: var(--warn-strong); border-style: dashed; }
+.bf-ntext { min-width: 0; }
+.bf-nmore { display: inline; }
+.bf-nmore > summary { display: inline; cursor: pointer; color: var(--text-2); text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 3px; }
+.bf-nmore > summary::-webkit-details-marker { display: none; }
+.bf-nmore[open] > summary { color: var(--text); }
+.bf-nbody { margin-top: 6px; color: var(--text-2); }
+.bf-nbody p { margin: 0 0 4px; }
+
+/* ---- the thesis ----------------------------------------------------------------- */
+.bf-qs { display: grid; gap: var(--s5); }
+.bf-q h3, .bf-final h3 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text); }
+.bf-qtext { margin: 0; font-size: 14px; line-height: 1.65; color: var(--text); max-width: 72ch; white-space: pre-line; }
+.bf-qtest { margin: 6px 0 0; font-size: var(--fs-small); color: var(--text-2); max-width: 72ch; }
+.bf-qsrc { margin: 6px 0 0; font-size: var(--fs-small); color: var(--text-3); }
+.bf-final { margin-top: var(--s5); padding: var(--s4) var(--s5); background: var(--surface-sunken); border-radius: var(--r-well, var(--r-md)); }
+/* Where the value goes: three layers side by side, as the report quantifies them. */
+.bf-flow { margin-top: var(--s3); display: grid; grid-template-columns: minmax(0, 1fr) 18px minmax(0, 1fr) 18px minmax(0, 1fr); align-items: stretch; }
+.bf-flow-sep { align-self: center; justify-self: center; width: 12px; height: 12px; background: var(--text-3); -webkit-mask: var(--i-chevron) center / contain no-repeat; mask: var(--i-chevron) center / contain no-repeat; transform: rotate(-90deg); }
+.bf-layer { padding: 12px 14px; border: 1px solid transparent; border-radius: var(--r-well, var(--r-md)); background: var(--surface-sunken); min-width: 0; }
+.bf-layer.none { border-color: var(--border); border-style: dashed; background: transparent; }
+.bf-layer-t { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.bf-layer dl { margin: 0; display: grid; gap: 6px; }
+.bf-layer dt { font-size: 11.5px; color: var(--text-3); }
+.bf-layer dd { margin: 1px 0 0; font-size: 13px; font-weight: 500; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; }
+.bf-layer .bf-when { flex-basis: 100%; font-weight: 400; font-size: 11.5px; }
+
+/* ---- the scorecard ---------------------------------------------------------------- */
+.bf-comps, .bf-cats, .bf-risks ul { list-style: none; margin: 0; padding: 0; }
+.bf-comp, .bf-cat { border-top: 1px solid var(--separator); }
+.bf-comps .bf-comp:last-child, .bf-cats .bf-cat:last-child { border-bottom: 1px solid var(--separator); }
+.bf-comp > details > summary, .bf-cat > details > summary, .bf-catrow, .bf-risk {
+  display: grid; align-items: center; gap: 12px; min-height: 36px; padding: 6px 0; list-style: none; cursor: pointer;
+}
+.bf-comp > details > summary { grid-template-columns: minmax(0, 1fr) minmax(96px, 300px) 52px 48px 14px; }
+.bf-cat > details > summary, .bf-catrow { grid-template-columns: minmax(0, 1fr) minmax(64px, 104px) 54px 14px; }
+.bf-catrow { cursor: default; }
+.bf-comp > details > summary::-webkit-details-marker, .bf-cat > details > summary::-webkit-details-marker { display: none; }
+.bf-comp > details > summary::after, .bf-cat > details > summary::after {
+  content: ""; width: 14px; height: 14px; background: var(--text-3); -webkit-mask: var(--i-chevron) center / contain no-repeat; mask: var(--i-chevron) center / contain no-repeat; transition: transform var(--dur) var(--ease);
+}
+.bf-comp > details[open] > summary::after, .bf-cat > details[open] > summary::after { transform: rotate(180deg); }
+.bf-comp > details > summary:hover, .bf-cat > details > summary:hover { background: var(--surface-hover); }
+.bf-cname { min-width: 0; font-size: 13px; font-weight: 500; color: var(--text); display: flex; align-items: center; gap: 6px; }
+.bf-w { flex: none; white-space: nowrap; font-size: 11.5px; font-weight: 600; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.bf-cbar { display: block; min-width: 0; }
+.bf-cbar .cbar { height: 6px; }
+.bf-cv { text-align: right; font-size: 13px; font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums lining-nums; white-space: nowrap; display: inline-flex; justify-content: flex-end; align-items: center; gap: 6px; }
+.is-unknown .bf-cv, .bf-cat.na .bf-cv { color: var(--text-3); font-weight: 400; }
+.bf-pts { text-align: right; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums lining-nums; }
+.bf-conf { font-size: 10.5px; font-weight: 600; color: var(--text-3); width: 10px; text-align: center; cursor: help; }
+.bf-flag { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.bf-flag.serious { background: color-mix(in srgb, var(--warn-strong) 80%, var(--text-3)); }
+.bf-flag.material { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--warn-strong) 80%, var(--text-3)); }
+.bf-cbody { padding: 2px 0 12px; font-size: var(--fs-small); color: var(--text); max-width: 72ch; }
+.bf-cbody p { margin: 0 0 6px; }
+.bf-cbody dl { margin: 0; display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); gap: 4px 12px; }
+.bf-cbody dt { color: var(--text-3); font-weight: 600; font-size: 11.5px; padding-top: 1px; }
+.bf-cbody dd { margin: 0; }
+.bf-word { color: var(--text-2); font-weight: 500; }
+.bf-flagline { padding: 6px 10px; border-radius: var(--r-well, var(--r-md)); background: var(--pill-warn-bg); border: 1px solid var(--pill-warn-line); }
+.bf-flagline.serious { border-style: dashed; border-color: var(--warn-strong); }
+.bf-how { font-size: var(--fs-small); color: var(--text-2); max-width: 72ch; }
+.bf-how p { margin: 0 0 6px; }
+.bf-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s5) 36px; }
+.bf-group h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--text-2); display: flex; justify-content: space-between; gap: 8px; }
+.bf-gn { font-weight: 400; color: var(--text-3); }
+
+/* ---- what supports it, what threatens it ----------------------------------------------- */
+.bf-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 40px; border-top: 1px solid var(--separator); }
+.bf-two > .bf-sec { border-top: 0; }
+.bf-two.tight { border-top: 0; gap: var(--s5) 40px; margin-top: var(--s5); }
+.bf-facts { margin: 0; padding: 0; list-style: none; counter-reset: bf; display: grid; gap: var(--s4); }
+.bf-facts > li { counter-increment: bf; position: relative; padding-left: 26px; }
+.bf-facts > li::before { content: counter(bf); position: absolute; left: 0; top: 2px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 600; color: var(--text-2); background: var(--surface-sunken); border: 1px solid var(--border); }
+.bf-fact { margin: 0; font-size: 14px; line-height: 1.55; color: var(--text); }
+.bf-cite { margin: 6px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: var(--fs-small); color: var(--text-2); }
+.bf-cite a { color: var(--text-2); }
+.bf-ids { font-family: var(--mono); font-size: 11px; color: var(--text-3); cursor: help; }
+.bf-dangling { color: var(--warn); font-size: 11.5px; }
+/* Evidence tags as words, each with the swatch the evidence bar uses. */
+.bf-tag { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px; border-radius: var(--r-pill, 999px); border: 1px solid var(--border); background: var(--surface); font-size: 11.5px; font-weight: 500; color: var(--text-2); white-space: nowrap; }
+.bf-tag::before { content: ""; width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.bf-tag.t-v::before { background: var(--fav-bar); }
+.bf-tag.t-c::before { background: color-mix(in srgb, var(--fav-bar) 55%, var(--surface)); }
+.bf-tag.t-i::before { background: repeating-linear-gradient(90deg, color-mix(in srgb, var(--fav-bar) 50%, var(--surface)) 0 2px, var(--surface) 2px 3px); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fav-bar) 40%, transparent); }
+.bf-tag.t-s::before { background: repeating-linear-gradient(135deg, var(--warn-strong) 0 2px, var(--surface) 2px 4px); }
+.bf-tag.none { border-style: dashed; color: var(--text-3); }
+.bf-tag.none::before { display: none; }
+.bf-risks { margin-top: var(--s6); }
+.bf-risk { grid-template-columns: minmax(0, 1fr) minmax(64px, 104px) 54px; cursor: help; border-top: 1px solid var(--separator); }
+.bf-risks li:last-child { border-bottom: 1px solid var(--separator); }
+.bf-rbar { position: relative; display: block; height: 6px; border-radius: 999px; overflow: hidden; background: var(--surface-sunken); }
+.bf-rbar .fill { position: absolute; top: 0; bottom: 0; right: 0; border-radius: 999px; background: color-mix(in srgb, var(--risk-bar) 62%, var(--surface)); }
+.bf-rbar .fill.range { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--risk-bar) 62%, var(--surface)) 0 3px, color-mix(in srgb, var(--risk-bar) 22%, var(--surface)) 3px 6px); }
+.bf-rbar.unknown { background: transparent; border: 1px dashed var(--control-border); }
+
+/* ---- what to watch -------------------------------------------------------------------- */
+.bf-timing { margin: 0 0 var(--s4); font-size: 14px; line-height: 1.6; color: var(--text); max-width: 72ch; }
+.bf-timing .k { display: block; margin: 0 0 2px; }
+.bf-track { --top: 30px; margin: 0 0 var(--s4); }
+.bf-track.l1 { --top: 52px; }
+.bf-track.l2 { --top: 74px; }
+.bf-lanes { position: relative; height: calc(var(--top) + 8px); margin: 0 9px; }
+.bf-rail { position: absolute; left: 0; right: 0; top: var(--top); height: 8px; border-radius: 999px; background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--border); overflow: hidden; }
+.bf-elapsed { position: absolute; left: 0; top: 0; bottom: 0; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--text-3) 30%, var(--surface-sunken)) 0 2px, var(--surface-sunken) 2px 5px); }
+.bf-track.ended .bf-elapsed { background: color-mix(in srgb, var(--text-3) 25%, var(--surface-sunken)); }
+.bf-win, .bf-pin { --lift: 12px; position: absolute; top: var(--top); height: 8px; }
+.bf-win.lane-1, .bf-pin.lane-1 { --lift: 34px; }
+.bf-win.lane-2, .bf-pin.lane-2 { --lift: 56px; }
+.bf-win { min-width: 8px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 55%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+.bf-pin { width: 0; }
+.bf-pin::before { content: ""; position: absolute; left: -6px; top: -2px; width: 12px; height: 12px; background: var(--text); transform: rotate(45deg); border-radius: 2px; box-shadow: 0 0 0 2px var(--surface); }
+.bf-num { position: absolute; bottom: calc(100% + var(--lift) - 8px); left: 0; transform: translateX(-50%); display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--accent-text); background: var(--surface); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+.bf-num::after { content: ""; position: absolute; left: 50%; top: 100%; width: 1px; height: calc(var(--lift) - 8px); background: color-mix(in srgb, var(--accent) 35%, transparent); }
+.bf-pin .bf-num { color: var(--text); border-color: var(--control-border); }
+.bf-pin .bf-num::after { background: var(--control-border); height: calc(var(--lift) - 10px); }
+.bf-today { position: absolute; top: calc(var(--top) - 6px); width: 0; height: 20px; }
+.bf-today::before { content: ""; position: absolute; left: -1px; top: 0; width: 2px; height: 20px; border-radius: 1px; background: var(--text); }
+.bf-ends { display: flex; justify-content: space-between; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; margin-top: 8px; font-size: var(--fs-small); color: var(--text-2); }
+.bf-days { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+.bf-events { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.bf-events li { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 4px 8px; padding: 8px 0; border-top: 1px solid var(--separator); }
+.bf-events li:last-child { border-bottom: 1px solid var(--separator); }
+.bf-events .bf-num { position: static; transform: none; margin-top: 1px; }
+.bf-events .bf-num::after { display: none; }
+.bf-events li.review .bf-num { color: var(--text); border-color: var(--control-border); }
+.bf-ev-t { margin: 0; font-size: 13px; font-weight: 500; color: var(--text); }
+.bf-ev-m { margin: 2px 0 0; display: flex; flex-wrap: wrap; gap: 2px 6px; font-size: var(--fs-small); color: var(--text-2); }
+.bf-ev-x { margin: 4px 0 0; font-size: var(--fs-small); color: var(--text-2); }
+.bf-aside { margin-top: var(--s4); font-size: var(--fs-small); }
+.bf-aside ul { margin: 0; padding-left: 18px; color: var(--text); }
+.bf-aside li { margin: 3px 0; }
+.bf-cond ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.bf-cond li { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; font-size: 13.5px; line-height: 1.5; color: var(--text); }
+.bf-cmark { width: 14px; height: 14px; margin-top: 3px; background: var(--text-3); }
+.bf-cmark.confirm { background: var(--pos); -webkit-mask: var(--i-check) center / contain no-repeat; mask: var(--i-check) center / contain no-repeat; }
+.bf-cmark.break { background: var(--neg); -webkit-mask: var(--i-alert) center / contain no-repeat; mask: var(--i-alert) center / contain no-repeat; }
+.bf-metric { margin-top: var(--s5); padding: var(--s3) var(--s4); background: var(--surface-sunken); border-radius: var(--r-well, var(--r-md)); }
+.bf-metric p { margin: 0; font-size: 14px; }
+.bf-metric .bf-qsrc { font-size: var(--fs-small); margin-top: 4px; }
+.bf-watch .disclosure { margin-top: var(--s5); }
+.bf-watch .disclosure .glance-block > h3 { display: none; }
+
+/* ---- the scenarios: forecasts, labeled as such -------------------------------------------- */
+.bf-label { margin: -6px 0 var(--s4); font-size: var(--fs-small); color: var(--text-3); }
+.bf-pbar { display: flex; height: 28px; margin: 0 0 var(--s4); border-radius: var(--r-pill, var(--r-md)); overflow: hidden; }
+.bf-pbar .seg { display: grid; place-items: center; min-width: 0; font-size: 11.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; }
+.bf-pbar .seg + .seg { box-shadow: inset 1px 0 0 var(--surface); }
+.bf-pbar .seg.bear, .bf-prange.bear { background: var(--t1-arc); }
+.bf-pbar .seg.base, .bf-prange.base { background: var(--t3-arc); }
+.bf-pbar .seg.bull, .bf-prange.bull { background: var(--t4-arc); }
+.bf-plot { display: grid; gap: 6px; margin: 0 0 var(--s4); }
+.bf-prow { display: grid; grid-template-columns: 44px minmax(0, 1fr) minmax(120px, auto); gap: 10px; align-items: center; font-size: var(--fs-small); }
+.bf-plab { color: var(--text-2); font-weight: 600; }
+.bf-ptrack { position: relative; height: 10px; border-radius: 999px; background: var(--surface-sunken); }
+.bf-prange { position: absolute; top: 0; bottom: 0; border-radius: 999px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-3) 35%, transparent); }
+.bf-pval { color: var(--text); text-align: right; }
+.bf-scns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.bf-scn { padding: 14px 16px; border-radius: var(--r-well, var(--r-lg)); background: var(--surface-sunken); min-width: 0; }
+.bf-scn-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.bf-scn-head h3 { margin: 0; font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 7px; }
+/* Each case keeps the colour of its share in the probability bar. */
+.bf-scn-head h3::before { content: ""; width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.bf-scn.bear h3::before { background: var(--t1-fill); }
+.bf-scn.base h3::before { background: var(--t3-fill); }
+.bf-scn.bull h3::before { background: var(--t4-fill); }
+.bf-prob { font-size: 18px; font-weight: 600; letter-spacing: -0.02em; color: var(--text); cursor: help; }
+.bf-prob.none { font-size: 11.5px; font-weight: 500; color: var(--text-3); letter-spacing: 0; cursor: default; }
+.bf-scn dl { margin: 0; display: grid; gap: 2px; font-size: var(--fs-small); }
+.bf-scn dt { margin-top: 6px; font-size: 11px; font-weight: 600; color: var(--text-3); }
+.bf-scn dd { margin: 0; color: var(--text); line-height: 1.45; }
+.bf-scn dd ul { margin: 0; padding-left: 14px; }
+.bf-ak { color: var(--text-2); font-weight: 600; }
+.bf-notes { margin: var(--s3) 0 0; padding-left: 18px; font-size: var(--fs-small); color: var(--text-2); }
+.bf-notes li { margin: 2px 0; }
+
+/* ---- evidence and records ------------------------------------------------------------ */
+.bf-evidence .disclosure { margin-top: 10px; }
+.bf-limits { margin: 0; padding-left: 18px; font-size: var(--fs-small); color: var(--text); }
+.bf-limits li { margin: 4px 0; line-height: 1.5; }
+.bf-src { font-size: var(--fs-small); }
+.bf-records { padding: var(--s4) var(--s5); border-radius: var(--r-well, var(--r-lg)); background: var(--surface-sunken); }
+.bf-prov { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 24px; }
+.bf-prov div { min-width: 0; }
+.bf-prov dt { font-size: 11.5px; font-weight: 600; color: var(--text-3); }
+.bf-prov dd { margin: 2px 0 0; font-size: var(--fs-small); color: var(--text); overflow-wrap: anywhere; }
+.bf-prov .mono { font-size: 11.5px; }
+.bf-links { margin: var(--s4) 0 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.bf-hist { list-style: none; margin: 0; padding: 0; font-size: var(--fs-small); }
+.bf-hist li { display: grid; grid-template-columns: 7.5rem 4.5rem minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--separator); }
+.bf-hist-g { font-weight: 600; }
+.bf-hist-v { color: var(--text-2); }
+
+/* ---- your note: yours, apart from Claude's ------------------------------------------------ */
+.bf-yours { margin-top: var(--s2); padding: var(--s5); border: 1px dashed var(--control-border); border-radius: var(--r-well, var(--r-lg)); background: var(--surface); }
+.bf-yours .bf-h { margin-bottom: 8px; }
+.bf-yours-text { margin: 0; font-size: 14px; line-height: 1.6; color: var(--text); white-space: pre-line; max-width: 72ch; }
+.bf-yours-m { margin: 10px 0 0; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: var(--fs-small); color: var(--text-3); }
+
+/* ---- no brief to show ------------------------------------------------------------------ */
+.bf-empty { text-align: center; padding: var(--s10) var(--s4); }
+.bf-empty-mark { width: 44px; height: 44px; margin: 0 auto var(--s3); display: grid; place-items: center; border-radius: 50%; color: var(--text-3); background: var(--surface-sunken); border: 1px dashed var(--border); }
+.bf-empty-mark svg { width: 20px; height: 20px; }
+.bf-empty-t { margin: 0 0 8px; font-size: 17px; font-weight: 600; }
+.bf-empty p { margin: 0 auto 6px; max-width: 56ch; font-size: 13px; color: var(--text-2); }
+.bf-empty .bf-links { justify-content: center; }
+.bf-empty .disclosure { max-width: 60ch; margin: 4px auto 8px; text-align: left; }
+.bf-why { margin: 0; font-size: var(--fs-small); color: var(--text-2); }
+.bf-err { color: var(--neg); }
+
+/* ---- the link that opens the brief (the inspector, Claude's card) ----------------------- */
+.panel .sec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px; }
+.panel .sec-head h3.sec-title { margin: 0; }
+.brief-link {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  font-size: var(--fs-small); font-weight: 500; text-decoration: none;
+}
+.brief-link svg { width: 15px; height: 15px; flex: none; }
+/* In the inspector it is the desk's own small button (.btn.small), beside
+   "Verdict"; on Claude's card on the project page, the same. */
+.panel .sec-head .brief-link { margin-left: auto; padding-left: 9px; }
+
+/* ---- touch and narrow screens ------------------------------------------------------------ */
+@media (pointer: coarse) {
+  .bf-back { min-height: 40px; }
+  .bf-comp > details > summary, .bf-cat > details > summary, .bf-risk { min-height: var(--touch); }
+  /* Small controls inside a line keep the line as it is but take a finger. */
+  .bf-nmore > summary, .bf-notice button.link { display: inline-block; padding-block: 12px; margin-block: -12px; }
+}
+@media (max-width: 860px) {
+  /* A phone: the brief takes the whole screen with its own bar. */
+  body:has(.brief-page) .topbar { display: none; }
+  .bf-bar { top: 0; margin: calc(-1 * var(--s4)) calc(-1 * var(--s4)) 0; padding: 6px var(--s4) 6px var(--s2); border-bottom: 1px solid var(--separator); background: var(--surface); box-shadow: none; clip-path: none; }
+  .brief.card { margin: 0 calc(-1 * var(--s4)) var(--s6); border: 0; border-radius: 0; padding: var(--s5) var(--s4) var(--s6); }
+  .bf-head h1 { font-size: 22px; }
+}
+@media (max-width: 760px) {
+  .bf-vgrid { grid-template-columns: minmax(0, 1fr); justify-items: stretch; }
+  .bf-grade { justify-self: center; }
+  .bf-grade.withheld { justify-self: stretch; }
+  .bf-vlabel { font-size: 18px; }
+  .bf-groups, .bf-two, .bf-two.tight, .bf-scns, .bf-prov { grid-template-columns: minmax(0, 1fr); }
+  .bf-two > .bf-sec + .bf-sec { border-top: 1px solid var(--separator); }
+  .bf-flow { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .bf-flow-sep { transform: none; margin: 4px 0; }
+  .bf-comp > details > summary { grid-template-columns: minmax(0, 1fr) 64px 46px 38px 14px; gap: 8px; }
+  .bf-cat > details > summary, .bf-catrow, .bf-risk { grid-template-columns: minmax(0, 1fr) 64px 50px 14px; gap: 8px; }
+  .bf-risk { grid-template-columns: minmax(0, 1fr) 64px 50px; }
+  .bf-cbody dl { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .bf-cbody dd { margin-bottom: 6px; }
+  .bf-hist li { grid-template-columns: minmax(0, 1fr) auto; }
+  .bf-hist-v { grid-column: 1 / -1; }
+  .bf-market .bf-when { margin-left: 0; flex-basis: 100%; }
+  .bf-days { order: 3; flex-basis: 100%; }
+  .bf-prow { grid-template-columns: 40px minmax(0, 1fr); }
+  .bf-pval { grid-column: 2; text-align: left; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bf-comp > details > summary::after, .bf-cat > details > summary::after { transition: none; }
+}
+@media print {
+  .bf-bar, .topbar, .bf-links { display: none !important; }
+  .brief { border: 0; padding: 0; }
+}

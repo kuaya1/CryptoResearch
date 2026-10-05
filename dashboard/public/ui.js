@@ -663,6 +663,10 @@ const SVG_ICONS = {
   ext: [['path', { d: 'M9.5 2.5h4v4M13.3 2.7 7.5 8.5M12 9.5v3.2a.8.8 0 0 1-.8.8H3.3a.8.8 0 0 1-.8-.8V4.8c0-.4.4-.8.8-.8h3.2', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }]],
   // More actions.
   more:[['circle', { cx: '3.5', cy: '8', r: '1.4', fill: 'currentColor' }], ['circle', { cx: '8', cy: '8', r: '1.4', fill: 'currentColor' }], ['circle', { cx: '12.5', cy: '8', r: '1.4', fill: 'currentColor' }]],
+  // The Claude Brief: a page with lines of text.
+  brief: [['path', { d: 'M4 1.9h5.2L12 4.7v9.4H4Z M9.2 1.9v2.8H12', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.4', 'stroke-linejoin': 'round' }], ['path', { d: 'M6 8h4M6 10.6h3', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.3', 'stroke-linecap': 'round' }]],
+  // Re-saved or newer: a turning arrow.
+  refresh: [['path', { d: 'M13.1 8.4A5.2 5.2 0 1 1 11.6 4.3', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round' }], ['path', { d: 'M13.3 2.5v3.1h-3.1', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }]],
 };
 
 // The sign for each research state on a badge. Working (blue) and Waiting
@@ -736,6 +740,22 @@ export function gradeGauge(g, { word = null, serious = false } = {}) {
     ...segs, mark,
     svg('text', { class: 'gnum', x: '90', y: '76', 'text-anchor': 'middle' }, g.display),
     word ? svg('text', { class: 'gword', x: '90', y: '95', 'text-anchor': 'middle' }, word) : null);
+}
+
+// The Claude Brief of a project (views/brief.js) as a link, so it also opens
+// in a new tab. A plain click adds one history entry, so Back and the brief's
+// own Back control return to the page it was opened from (`from`).
+export function briefLink(ctx, p, { from = 'watchlist', label = 'Claude Brief', cls = 'brief-link', onOpen = null } = {}) {
+  const pid = p.project_id;
+  const href = `#/brief/${encodeURIComponent(pid)}`;
+  const a = h('a', { class: cls, href, dataset: { key: `brief-${pid}` }, 'aria-label': `${label}: ${p.name || pid}` }, icon('brief'), h('span', null, label));
+  a.addEventListener('click', (e) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    if (onOpen) onOpen();
+    ctx.navigate(href, { state: { crBrief: pid, from } });
+  });
+  return a;
 }
 
 // A small decorative icon; the meaning is always in the surrounding text.
