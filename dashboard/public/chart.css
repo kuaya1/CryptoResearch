@@ -20,7 +20,7 @@
   max-width: 100%;
   padding: 0 7px;
   border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-pill);
   background: var(--surface);
   box-shadow: none;
   font-family: var(--mono);
@@ -36,7 +36,7 @@
   flex: none;
   padding: 0 6px;
   border: 1px solid var(--pill-warn-line);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-pill);
   background: var(--pill-warn-bg);
   color: var(--pill-warn-ink);
   font-family: var(--sans);
@@ -52,7 +52,7 @@
 .tv-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  border-radius: var(--r-well);
   overflow: hidden;
   padding: 4px;
 }

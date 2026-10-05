@@ -1,38 +1,47 @@
 /* CryptoResearch design tokens: the one layer every page and component uses.
-   A warm, light research desk is the default, with Linear-style ergonomics:
-   the warm paper desk, white cards and rows, crisp zinc text, hairline rules,
-   pastel status tints and one ink-blue accent for actions, selection and
-   focus. Depth comes from spacing and hairlines, not from shadows. Dark stays
-   available in Settings (per browser), and "Match this device" follows the
-   system. Status colors are small signals only: every meaning is also carried
-   by a word, a sign or a shape. Change colors here, never in a component rule. */
+   A monochrome fintech desk: a pale gray canvas, white cards on it without
+   borders, near-black for the active choice and primary actions, one lime
+   highlight used only as a fill, pastel status tints and pills for controls.
+   Depth comes from the canvas and spacing, not from shadows (menus and dialogs
+   only). Dark stays available in Settings (per browser), and "Match this
+   device" follows the system. Status colors are small signals only: every
+   meaning is also carried by a word, a sign or a shape. Change colors here,
+   never in a component rule. */
 
 :root {
-  /* Surfaces */
-  --bg: #fafaf9;                  /* the desk: warm stone-50 */
+  /* Surfaces: a pale gray canvas, white cards on it, gray wells inside them */
+  --bg: #f6f6f6;                  /* the canvas */
   --surface: #ffffff;             /* cards, the list, the inspector */
   --surface-raised: #ffffff;      /* menus, dialogs, toasts */
-  --surface-hover: #fafaf9;       /* a row under the pointer: barely there */
-  --surface-selected: #f0efed;
-  --surface-sunken: #f5f5f4;      /* wells: inputs, code, quiet chips */
-  /* Text: warm stone (each at least 4.5:1 on every surface above and the paper) */
-  --text: #1c1917;
-  --text-2: #57534e;
-  --text-3: #716a64;
-  /* Lines: stone hairlines */
-  --separator: #ecebea;
-  --border: #e7e5e4;
-  --control-border: #8a847e;      /* at least 3:1 on every surface: field and checkbox edges */
-  /* The one accent: ink blue for actions, selection and focus */
-  --accent: #4b56cf;              /* fills; white text on it is 5.8:1 */
-  --accent-hover: #3f49b8;
-  --accent-text: #4450c8;         /* accent as text or a ring */
-  --accent-weak: #f0f1fd;
+  --surface-hover: #f6f6f6;       /* a row or control under the pointer */
+  --surface-selected: #efefef;    /* pressed */
+  --surface-sunken: #f6f6f6;      /* wells inside a card: inputs, code, chips, sub-cards */
+  /* Text: neutral, near-black (each at least 4.5:1 on white, the canvas and the pressed fill) */
+  --text: #111110;
+  --text-2: #5f5f5c;
+  --text-3: #6b6b67;
+  /* Lines: neutral hairlines */
+  --separator: #eeeeee;
+  --border: #e6e6e4;
+  --control-border: #8a8a86;      /* at least 3:1 on white and the canvas: field and checkbox edges */
+  /* The accent: near-black for the active choice, primary actions, selection and focus */
+  --accent: #111110;              /* fills; white text on it is 18.8:1 */
+  --accent-hover: #2b2b29;
+  --accent-text: #111110;         /* accent as text or a ring */
+  --accent-weak: #efefef;
   --on-accent: #ffffff;
   --primary: var(--accent);
   --primary-hover: var(--accent-hover);
   --on-primary: var(--on-accent);
   --focus: var(--accent-text);
+  /* The one highlight: lime, as a fill only (black text on it), never as text */
+  --highlight: #78fc90;
+  --highlight-weak: #e8fdeb;
+  --on-highlight: #111110;        /* text on the lime fill, in either theme */
+  /* Working: blue, a state like amber Waiting, never the accent */
+  --work: #4b56cf;
+  --work-text: #4450c8;
+  --work-weak: #f0f1fd;
   /* Status: pastel tints, darker words (the text always states the meaning too) */
   --pos: #15803d;
   --neg: #b91c1c;
@@ -40,35 +49,35 @@
   --warn-strong: #d97706;         /* signs and rules, not text */
   --warn-weak: #fffbeb;
   --neg-weak: #fef2f2;
-  --pos-weak: #f0fdf4;
+  --pos-weak: #e8fdeb;            /* a rise chip: the pale lime */
   --risk-bar: #c2413a;
-  --fav-bar: #52525b;
-  --track: #f5f5f4;
-  --row-hover: #f5f5f4;            /* a row or control under the pointer */
-  --scrollbar: #d6d3d1;
+  --fav-bar: #52524f;
+  --track: #f1f1f0;
+  --row-hover: #f6f6f6;            /* a row or control under the pointer */
+  --scrollbar: #d4d4d2;
   --pos-text: #166534;             /* a rise as text: 6.35:1 on the selected-row tint */
   /* Grade bands (the rubric's letters A to F): muted, low-saturation tints.
-     Higher grades lean sage and teal, the middle is plain stone, lower grades
+     Higher grades lean sage and teal, the middle is plain gray, lower grades
      soft amber and rust; red is kept for a charge that needs checking, never
      for a grade. Each text color is at least 5.4:1 on its tint and on white;
      white on each chip at least 5.9:1. The number and the letter always say
      the band too. */
   --band-a: #2f6a4f; --band-a-bg: #f0f6f2; --band-a-chip: #2f6a4f;
   --band-b: #2e6662; --band-b-bg: #eff5f4; --band-b-chip: #2e6662;
-  --band-c: #57534e; --band-c-bg: #f5f5f4; --band-c-chip: #57534e;
+  --band-c: #5f5f5c; --band-c-bg: #f3f3f2; --band-c-chip: #5f5f5c;
   --band-d: #855a10; --band-d-bg: #faf5ea; --band-d-chip: #855a10;
   --band-f: #8c4318; --band-f-bg: #faf1e8; --band-f-chip: #8c4318;
   /* The 0–100 spectrum (rubric anchors): 1 poor or severe, 2 weak, 3 adequate
      or mixed, 4 strong, 5 exceptional. Ink on tint at least 5.5:1. */
   --t1-ink: #be123c; --t1-bg: #fff1f2; --t1-line: rgba(254, 205, 211, 0.6); --t1-fill: #d9576b; --t1-arc: #f6c9cf;
   --t2-ink: #92400e; --t2-bg: #fffbf0; --t2-line: rgba(253, 230, 138, 0.6); --t2-fill: #c98a1e; --t2-arc: #f2dca5;
-  --t3-ink: #44403c; --t3-bg: #f5f5f4; --t3-line: rgba(231, 229, 228, 0.8); --t3-fill: #78716c; --t3-arc: #e2e0dd;
+  --t3-ink: #3f3f3c; --t3-bg: #f3f3f2; --t3-line: rgba(228, 228, 226, 0.8); --t3-fill: #74746f; --t3-arc: #e1e1df;
   --t4-ink: #065f46; --t4-bg: #f1fbf6; --t4-line: rgba(167, 243, 208, 0.6); --t4-fill: #4f9a78; --t4-arc: #c3e6d3;
   --t5-ink: #134e4a; --t5-bg: #f0fdfa; --t5-line: rgba(153, 246, 228, 0.8); --t5-fill: #2a8a82; --t5-arc: #a9dfd8;
   /* Model pills, inspector badges, bars and fields */
-  --pill-ink: #44403c; --pill-warn-bg: #fffbeb; --pill-warn-ink: #b45309; --pill-warn-line: rgba(253, 230, 138, 0.6); --pill-warn-dash: rgba(217, 119, 6, 0.45);
+  --pill-ink: #3f3f3c; --pill-warn-bg: #fffbeb; --pill-warn-ink: #b45309; --pill-warn-line: rgba(253, 230, 138, 0.6); --pill-warn-dash: rgba(217, 119, 6, 0.45);
   --pill-bad-bg: #fff1f2; --pill-bad-ink: #be123c; --pill-bad-line: rgba(254, 205, 211, 0.6); --pill-bad-dot: #e11d48;
-  --field-hover: #d6d3d1; --field-focus: #a8a29e; --field-ring: rgba(168, 162, 158, 0.22);
+  --field-hover: #d4d4d2; --field-focus: #a3a3a0; --field-ring: rgba(163, 163, 160, 0.22);
   --on-chip: #ffffff;
   --new-dot: var(--accent-text);
   /* Type: the system sans for reading and for every number (tabular, lining
@@ -88,7 +97,8 @@
   --fs-h1: 24px;
   /* Space, shape, depth */
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px; --s10: 40px;
-  --r-sm: 4px; --r-md: 6px; --r-lg: 10px; --r-xl: 12px;
+  --r-sm: 4px; --r-md: 6px; --r-lg: 14px; --r-xl: 20px;
+  --r-card: var(--r-xl); --r-well: var(--r-lg); --r-pill: 999px; --r-field: 10px;   /* cards, wells inside a card, controls, text fields */
   --shadow-card: none;
   --shadow-pop: 0 10px 28px rgba(24, 24, 27, 0.09), 0 0 0 1px rgba(24, 24, 27, 0.04);
   --shadow-drawer: -12px 0 32px rgba(24, 24, 27, 0.08);
@@ -114,20 +124,21 @@
 /* The dark palette: chosen in Settings, or followed from the device with
    "Match this device". Text colors are at least 4.5:1 on its surfaces. */
 :root[data-theme="dark"] {
-  --bg: #0f1012; --surface: #151619; --surface-raised: #1b1c20; --surface-hover: #1c1d21; --surface-selected: #23252b; --surface-sunken: #0c0d0f;
-  --text: #ececef; --text-2: #b6b8bf; --text-3: #8e919a;
-  --separator: #222328; --border: #2c2e34; --control-border: #6b6e77;
-  --accent: #5e6ad2; --accent-hover: #6b77e0; --accent-text: #8b93f5; --accent-weak: rgba(94, 106, 210, 0.16); --on-accent: #ffffff;
+  --bg: #0c0c0b; --surface: #171716; --surface-raised: #1e1e1c; --surface-hover: #1f1f1d; --surface-selected: #262624; --surface-sunken: #111110;
+  --text: #f4f4f2; --text-2: #b8b8b3; --text-3: #9a9a95;
+  --separator: #242422; --border: #2e2e2b; --control-border: #6e6e69;
+  --accent: #f4f4f2; --accent-hover: #ffffff; --accent-text: #f4f4f2; --accent-weak: #262624; --on-accent: #111110;
+  --highlight: #78fc90; --highlight-weak: rgba(120, 252, 144, 0.12); --work: #7d87f0; --work-text: #9aa2f7; --work-weak: rgba(94, 106, 210, 0.18);
   --pos: #4cc27a; --neg: #ff6a5f; --warn: #f0b04a; --warn-strong: #f0b04a; --warn-weak: rgba(240, 176, 74, 0.12); --neg-weak: rgba(255, 106, 95, 0.12); --pos-weak: rgba(76, 194, 122, 0.12);
-  --risk-bar: #ff7b6e; --fav-bar: #b6b8bf; --track: #26282e; --row-hover: #1c1d21; --scrollbar: #3a3d44; --pos-text: #4cc27a;
+  --risk-bar: #ff7b6e; --fav-bar: #b8b8b3; --track: #262624; --row-hover: #1f1f1d; --scrollbar: #3a3a37; --pos-text: #4cc27a;
   --band-a: #5ad292; --band-a-bg: rgba(90, 210, 146, 0.11); --band-a-chip: #5ad292;
   --band-b: #5fc8b5; --band-b-bg: rgba(95, 200, 181, 0.11); --band-b-chip: #5fc8b5;
   --band-c: #e9c45c; --band-c-bg: rgba(233, 196, 92, 0.11); --band-c-chip: #e9c45c;
   --band-d: #f59d55; --band-d-bg: rgba(245, 157, 85, 0.12); --band-d-chip: #f59d55;
   --band-f: #ff8278; --band-f-bg: rgba(255, 130, 120, 0.12); --band-f-chip: #ff8278;
   --on-chip: #111113;
-  --t1-ink: #ff8a8a; --t1-bg: rgba(255, 106, 95, 0.12); --t1-line: rgba(255, 106, 95, 0.3); --t1-fill: #e26d7c; --t1-arc: rgba(255, 106, 95, 0.32); --t2-ink: #f0b04a; --t2-bg: rgba(240, 176, 74, 0.12); --t2-line: rgba(240, 176, 74, 0.3); --t2-fill: #d49a3c; --t2-arc: rgba(240, 176, 74, 0.32); --t3-ink: #c9cbd1; --t3-bg: rgba(255, 255, 255, 0.06); --t3-line: rgba(255, 255, 255, 0.12); --t3-fill: #8e919a; --t3-arc: rgba(255, 255, 255, 0.16); --t4-ink: #6fd3a0; --t4-bg: rgba(76, 194, 122, 0.12); --t4-line: rgba(76, 194, 122, 0.3); --t4-fill: #4cc27a; --t4-arc: rgba(76, 194, 122, 0.32); --t5-ink: #6fd6c8; --t5-bg: rgba(95, 200, 181, 0.12); --t5-line: rgba(95, 200, 181, 0.3); --t5-fill: #5fc8b5; --t5-arc: rgba(95, 200, 181, 0.32);
-  --pill-ink: #c9cbd1; --pill-warn-bg: rgba(240, 176, 74, 0.12); --pill-warn-ink: #f0b04a; --pill-warn-line: rgba(240, 176, 74, 0.3); --pill-warn-dash: rgba(240, 176, 74, 0.5); --pill-bad-bg: rgba(255, 106, 95, 0.12); --pill-bad-ink: #ff8278; --pill-bad-line: rgba(255, 106, 95, 0.3); --pill-bad-dot: #ff6a5f; --field-hover: #6b6e77; --field-focus: #8e919a; --field-ring: rgba(255, 255, 255, 0.08);
+  --t1-ink: #ff8a8a; --t1-bg: rgba(255, 106, 95, 0.12); --t1-line: rgba(255, 106, 95, 0.3); --t1-fill: #e26d7c; --t1-arc: rgba(255, 106, 95, 0.32); --t2-ink: #f0b04a; --t2-bg: rgba(240, 176, 74, 0.12); --t2-line: rgba(240, 176, 74, 0.3); --t2-fill: #d49a3c; --t2-arc: rgba(240, 176, 74, 0.32); --t3-ink: #cfcfca; --t3-bg: rgba(255, 255, 255, 0.06); --t3-line: rgba(255, 255, 255, 0.12); --t3-fill: #91918c; --t3-arc: rgba(255, 255, 255, 0.16); --t4-ink: #6fd3a0; --t4-bg: rgba(76, 194, 122, 0.12); --t4-line: rgba(76, 194, 122, 0.3); --t4-fill: #4cc27a; --t4-arc: rgba(76, 194, 122, 0.32); --t5-ink: #6fd6c8; --t5-bg: rgba(95, 200, 181, 0.12); --t5-line: rgba(95, 200, 181, 0.3); --t5-fill: #5fc8b5; --t5-arc: rgba(95, 200, 181, 0.32);
+  --pill-ink: #cfcfca; --pill-warn-bg: rgba(240, 176, 74, 0.12); --pill-warn-ink: #f0b04a; --pill-warn-line: rgba(240, 176, 74, 0.3); --pill-warn-dash: rgba(240, 176, 74, 0.5); --pill-bad-bg: rgba(255, 106, 95, 0.12); --pill-bad-ink: #ff8278; --pill-bad-line: rgba(255, 106, 95, 0.3); --pill-bad-dot: #ff6a5f; --field-hover: #6e6e69; --field-focus: #91918c; --field-ring: rgba(255, 255, 255, 0.08);
   --shadow-card: none;
   --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.03);
   --shadow-drawer: -16px 0 40px rgba(0, 0, 0, 0.45);
@@ -136,20 +147,21 @@
 }
 @media (prefers-color-scheme: dark) {
   :root[data-theme="system"] {
-    --bg: #0f1012; --surface: #151619; --surface-raised: #1b1c20; --surface-hover: #1c1d21; --surface-selected: #23252b; --surface-sunken: #0c0d0f;
-    --text: #ececef; --text-2: #b6b8bf; --text-3: #8e919a;
-    --separator: #222328; --border: #2c2e34; --control-border: #6b6e77;
-    --accent: #5e6ad2; --accent-hover: #6b77e0; --accent-text: #8b93f5; --accent-weak: rgba(94, 106, 210, 0.16); --on-accent: #ffffff;
+    --bg: #0c0c0b; --surface: #171716; --surface-raised: #1e1e1c; --surface-hover: #1f1f1d; --surface-selected: #262624; --surface-sunken: #111110;
+    --text: #f4f4f2; --text-2: #b8b8b3; --text-3: #9a9a95;
+    --separator: #242422; --border: #2e2e2b; --control-border: #6e6e69;
+    --accent: #f4f4f2; --accent-hover: #ffffff; --accent-text: #f4f4f2; --accent-weak: #262624; --on-accent: #111110;
+    --highlight: #78fc90; --highlight-weak: rgba(120, 252, 144, 0.12); --work: #7d87f0; --work-text: #9aa2f7; --work-weak: rgba(94, 106, 210, 0.18);
     --pos: #4cc27a; --neg: #ff6a5f; --warn: #f0b04a; --warn-strong: #f0b04a; --warn-weak: rgba(240, 176, 74, 0.12); --neg-weak: rgba(255, 106, 95, 0.12); --pos-weak: rgba(76, 194, 122, 0.12);
-    --risk-bar: #ff7b6e; --fav-bar: #b6b8bf; --track: #26282e; --row-hover: #1c1d21; --scrollbar: #3a3d44; --pos-text: #4cc27a;
+    --risk-bar: #ff7b6e; --fav-bar: #b8b8b3; --track: #262624; --row-hover: #1f1f1d; --scrollbar: #3a3a37; --pos-text: #4cc27a;
     --band-a: #5ad292; --band-a-bg: rgba(90, 210, 146, 0.11); --band-a-chip: #5ad292;
     --band-b: #5fc8b5; --band-b-bg: rgba(95, 200, 181, 0.11); --band-b-chip: #5fc8b5;
     --band-c: #e9c45c; --band-c-bg: rgba(233, 196, 92, 0.11); --band-c-chip: #e9c45c;
     --band-d: #f59d55; --band-d-bg: rgba(245, 157, 85, 0.12); --band-d-chip: #f59d55;
     --band-f: #ff8278; --band-f-bg: rgba(255, 130, 120, 0.12); --band-f-chip: #ff8278;
     --on-chip: #111113;
-    --t1-ink: #ff8a8a; --t1-bg: rgba(255, 106, 95, 0.12); --t1-line: rgba(255, 106, 95, 0.3); --t1-fill: #e26d7c; --t1-arc: rgba(255, 106, 95, 0.32); --t2-ink: #f0b04a; --t2-bg: rgba(240, 176, 74, 0.12); --t2-line: rgba(240, 176, 74, 0.3); --t2-fill: #d49a3c; --t2-arc: rgba(240, 176, 74, 0.32); --t3-ink: #c9cbd1; --t3-bg: rgba(255, 255, 255, 0.06); --t3-line: rgba(255, 255, 255, 0.12); --t3-fill: #8e919a; --t3-arc: rgba(255, 255, 255, 0.16); --t4-ink: #6fd3a0; --t4-bg: rgba(76, 194, 122, 0.12); --t4-line: rgba(76, 194, 122, 0.3); --t4-fill: #4cc27a; --t4-arc: rgba(76, 194, 122, 0.32); --t5-ink: #6fd6c8; --t5-bg: rgba(95, 200, 181, 0.12); --t5-line: rgba(95, 200, 181, 0.3); --t5-fill: #5fc8b5; --t5-arc: rgba(95, 200, 181, 0.32);
-    --pill-ink: #c9cbd1; --pill-warn-bg: rgba(240, 176, 74, 0.12); --pill-warn-ink: #f0b04a; --pill-warn-line: rgba(240, 176, 74, 0.3); --pill-warn-dash: rgba(240, 176, 74, 0.5); --pill-bad-bg: rgba(255, 106, 95, 0.12); --pill-bad-ink: #ff8278; --pill-bad-line: rgba(255, 106, 95, 0.3); --pill-bad-dot: #ff6a5f; --field-hover: #6b6e77; --field-focus: #8e919a; --field-ring: rgba(255, 255, 255, 0.08);
+    --t1-ink: #ff8a8a; --t1-bg: rgba(255, 106, 95, 0.12); --t1-line: rgba(255, 106, 95, 0.3); --t1-fill: #e26d7c; --t1-arc: rgba(255, 106, 95, 0.32); --t2-ink: #f0b04a; --t2-bg: rgba(240, 176, 74, 0.12); --t2-line: rgba(240, 176, 74, 0.3); --t2-fill: #d49a3c; --t2-arc: rgba(240, 176, 74, 0.32); --t3-ink: #cfcfca; --t3-bg: rgba(255, 255, 255, 0.06); --t3-line: rgba(255, 255, 255, 0.12); --t3-fill: #91918c; --t3-arc: rgba(255, 255, 255, 0.16); --t4-ink: #6fd3a0; --t4-bg: rgba(76, 194, 122, 0.12); --t4-line: rgba(76, 194, 122, 0.3); --t4-fill: #4cc27a; --t4-arc: rgba(76, 194, 122, 0.32); --t5-ink: #6fd6c8; --t5-bg: rgba(95, 200, 181, 0.12); --t5-line: rgba(95, 200, 181, 0.3); --t5-fill: #5fc8b5; --t5-arc: rgba(95, 200, 181, 0.32);
+    --pill-ink: #cfcfca; --pill-warn-bg: rgba(240, 176, 74, 0.12); --pill-warn-ink: #f0b04a; --pill-warn-line: rgba(240, 176, 74, 0.3); --pill-warn-dash: rgba(240, 176, 74, 0.5); --pill-bad-bg: rgba(255, 106, 95, 0.12); --pill-bad-ink: #ff8278; --pill-bad-line: rgba(255, 106, 95, 0.3); --pill-bad-dot: #ff6a5f; --field-hover: #6e6e69; --field-focus: #91918c; --field-ring: rgba(255, 255, 255, 0.08);
     --shadow-card: none;
     --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.03);
     --shadow-drawer: -16px 0 40px rgba(0, 0, 0, 0.45);
@@ -512,7 +524,7 @@ button.chip:hover { border-color: var(--border); background: var(--row-hover); }
 .state.warn::before { background: var(--warn-strong); }
 .state.bad::before { background: var(--neg); }
 .state.wait::before { background: transparent; border: 1.5px solid var(--text-3); width: 8px; height: 8px; }
-.state.work::before { background: var(--new-dot); box-shadow: 0 0 0 3px var(--accent-weak); }
+.state.work::before { background: var(--work); box-shadow: 0 0 0 3px var(--work-weak); }
 
 /* ---------- Tables ---------- */
 .table-wrap, .table-scroll { overflow-x: auto; max-width: 100%; min-width: 0; -webkit-overflow-scrolling: touch; position: relative; }
@@ -885,15 +897,15 @@ button.gb[class*="band-"]:hover { border-color: color-mix(in srgb, currentColor 
 .gb.is-withheld .main { gap: 5px; }
 .gb .s { font-size: 11px; font-weight: 600; color: var(--text-2); }
 .gb.is-pdf { background: var(--surface-sunken); }
-.gb.is-running .si, .gb.is-dispatching .si, .gb.is-cowork .si, .gb.is-connector .si { color: var(--accent-text); }
+.gb.is-running .si, .gb.is-dispatching .si, .gb.is-cowork .si, .gb.is-connector .si { color: var(--work-text); }
 /* A live dot: blue while a model works (streaming), amber while a job waits
    for you. A slow, small pulse; still with reduced motion. The word beside it
    always says which. */
-.gb .pulse { width: 6px; height: 6px; margin: 0 1px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 0 var(--accent-weak); animation: gb-pulse 2s var(--ease) infinite; flex: none; --pulse-c: var(--accent); }
+.gb .pulse { width: 6px; height: 6px; margin: 0 1px; border-radius: 50%; background: var(--work); box-shadow: 0 0 0 0 var(--work-weak); animation: gb-pulse 2s var(--ease) infinite; flex: none; --pulse-c: var(--work); }
 .gb .pulse.wait { background: var(--warn-strong); --pulse-c: var(--warn-strong); animation-duration: 2.6s; }
 @keyframes gb-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pulse-c) 40%, transparent); } 70% { box-shadow: 0 0 0 5px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
-.gb.is-running, .gb.is-dispatching, .gb.is-cowork, .gb.is-connector { background: var(--accent-weak); border-color: color-mix(in srgb, var(--accent) 22%, transparent); }
-.gb.is-running .v, .gb.is-dispatching .v, .gb.is-cowork .v, .gb.is-connector .v { color: var(--accent-text); }
+.gb.is-running, .gb.is-dispatching, .gb.is-cowork, .gb.is-connector { background: var(--work-weak); border-color: color-mix(in srgb, var(--work) 22%, transparent); }
+.gb.is-running .v, .gb.is-dispatching .v, .gb.is-cowork .v, .gb.is-connector .v { color: var(--work-text); }
 .gb.is-waiting { border-style: dashed; border-color: color-mix(in srgb, var(--warn-strong) 45%, transparent); background: var(--warn-weak); }
 .gb.is-waiting .si, .gb.is-waiting .v { color: var(--warn); }
 /* Check (a paid call may have been billed, nothing saved): the one state in
@@ -1186,7 +1198,7 @@ ul.unscored { margin-top: 4px; }
 .steps .done .dot { background: var(--pos); border-color: var(--pos); }
 .steps li.done .bar { background: var(--pos); }
 .steps li.now .bar, .steps li.warn .bar, .steps li.bad .bar { background: var(--control-border); }
-.steps .now .dot { border-color: var(--accent); background: var(--accent-weak); box-shadow: 0 0 0 3px var(--accent-weak); }
+.steps .now .dot { border-color: var(--work); background: var(--work-weak); box-shadow: 0 0 0 3px var(--work-weak); }
 .steps .warn .dot { border-color: var(--warn-strong); background: var(--warn-weak); }
 .steps .bad .dot { border-color: var(--neg); background: var(--neg-weak); }
 
@@ -1685,7 +1697,7 @@ button.gb:is(.is-none, .is-on_hold):hover { border-color: var(--border); }
 :is(table.wl, .mtabs) .gb :is(.ev, .a, .r, .x) { position: absolute; top: -3px; right: -3px; width: 7px; height: 7px; min-width: 0; padding: 0; border-radius: 50%; font-size: 0; line-height: 0; background: var(--text-3); box-shadow: 0 0 0 2px var(--surface); -webkit-mask: none; mask: none; }
 :is(table.wl, .mtabs) .gb .x { background: var(--pill-bad-dot); }
 :is(table.wl, .mtabs) .gb.ev-serious .ev { background: var(--warn-strong); }
-:is(table.wl, .mtabs) .gb .r { background: var(--accent); }
+:is(table.wl, .mtabs) .gb .r { background: var(--work); }
 :is(table.wl, .mtabs) .gb .a { background: var(--text-3); }
 :is(table.wl, .mtabs) .gb.ev-material .ev { background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--warn-strong), 0 0 0 2px var(--surface); }
 /* By priority: x, an evidence flag, r, a. */
@@ -2142,3 +2154,83 @@ button.cc-copy.done { color: var(--pos-text); font-size: 11px; font-weight: 500;
   body.split #panel-root { height: calc(100vh - var(--topbar-h) - 1px); }
   body:has(#demo-banner:not(.hidden)).split #panel-root { height: calc(100vh - var(--topbar-h) - 1px - 28px); }
 }
+
+/* ---- Monochrome (2026-10-05) ------------------------------------------------
+   The desk in the monochrome fintech style: white cards without borders on
+   the pale canvas, near-black pills for the active choice and the primary
+   action, white pills for the rest, gray wells inside a card, the lime
+   highlight on the selected row. Sizes are unchanged (905d162). */
+
+/* The bar sits on the canvas: no white strip, no rule. */
+.topbar { background: color-mix(in srgb, var(--bg) 88%, transparent); border-bottom: 0; }
+.brand .tag { background: var(--surface); border-color: transparent; }
+.status-dot { background: var(--surface); border-color: transparent; }
+/* Navigation: white pills, the current page a black one. */
+.mainnav { gap: 6px; }
+.mainnav a { padding: 0 14px; border-radius: var(--r-pill); background: var(--surface); color: var(--text); }
+.mainnav a:hover { background: var(--surface); color: var(--text); box-shadow: inset 0 0 0 1px var(--border); }
+.mainnav a.active { background: var(--accent); color: var(--on-accent); }
+.mainnav a.active:hover { background: var(--accent-hover); box-shadow: none; }
+.mainnav .count { background: var(--surface-sunken); border-color: transparent; color: var(--text-2); }
+.mainnav a.active .count { background: color-mix(in srgb, var(--on-accent) 18%, transparent); color: var(--on-accent); }
+
+/* Cards: white, no border, round corners. */
+.card { padding: var(--s5); border-color: transparent; border-radius: var(--r-card); }
+.summary-row, .status-strip, .ss-panel, .reader, .report-list, .empty { border-color: transparent; border-radius: var(--r-card); }
+.summary-row .value { font-family: var(--font-display); }
+dialog { border-color: transparent; border-radius: var(--r-card); }
+.menu, .insp-menu { border-color: transparent; }
+.alert { border-top-color: transparent; border-right-color: transparent; border-bottom-color: transparent; border-radius: var(--r-well); }
+.callout { border-color: transparent; border-radius: var(--r-well); }
+
+/* Controls: pills. The primary action is the black one (--primary). */
+button, .btn { border-radius: var(--r-pill); }
+button.icon { border-radius: 50%; }
+input[type="text"], input[type="number"], input[type="date"], input[type="url"], input[type="search"], input[type="password"], select, textarea { border-radius: var(--r-field); }
+.search input { border-radius: var(--r-pill); }
+/* A segmented choice: a white track, the chosen segment a black pill (a
+   gray track inside a card, where white would not show). */
+.seg { padding: 3px; border-color: transparent; border-radius: var(--r-pill); background: var(--surface); }
+.card .seg, .panel .seg, dialog .seg { background: var(--surface-sunken); }
+.seg button, .seg a, .seg .seg-off { border-radius: var(--r-pill); }
+.seg button[aria-pressed="true"], .seg a[aria-current="true"] { background: var(--accent); color: var(--on-accent); box-shadow: none; }
+.seg button[aria-pressed="true"]:hover, .seg a[aria-current="true"]:hover { background: var(--accent-hover); color: var(--on-accent); }
+
+/* The list: one white card. Gray labels over black figures; the sorted
+   column's label black. */
+@container wl (min-width: 720px) {
+  .wl-wrap .table-scroll { border-color: transparent; border-radius: var(--r-card); }
+  table.wl thead th:first-child { border-top-left-radius: var(--r-card); }
+  table.wl thead th:last-child { border-top-right-radius: var(--r-card); }
+  table.wl tbody tr:last-child td:first-child { border-bottom-left-radius: var(--r-card); }
+  table.wl tbody tr:last-child td:last-child { border-bottom-right-radius: var(--r-card); }
+  table.wl th button.sort, table.wl th .th, table.wl th .th .lbl, table.wl th .lbl { font-weight: 500; color: var(--text-2); }
+  table.wl th[aria-sort] button.sort, table.wl th[aria-sort] .lbl, table.wl th[aria-sort] .th .lbl { color: var(--text); }
+}
+/* The open project: the lime highlight and a black edge (not colour alone). */
+table.wl tbody tr.selected td, table.wl tbody tr.selected:hover td, table.wl tbody tr.selected:focus-within td, table.wl tbody tr.selected td.c-project { background: var(--highlight-weak); }
+/* A phone: each project a white card. */
+@container wl (max-width: 719px) {
+  table.wl tbody tr { border-color: transparent; border-radius: var(--r-card); }
+}
+
+/* The inspector: a white card on the canvas. */
+@media (min-width: 1280px) {
+  body.split #panel-root { padding: 12px 16px 16px 0; border-left: 0; background: transparent; }
+  body.split #panel-root .panel { border-radius: var(--r-card); overflow: hidden; }
+}
+@media (min-width: 761px) and (max-width: 1279.98px) {
+  #panel-root .panel { top: 12px; right: 12px; bottom: 12px; border-left: 0; border-radius: var(--r-card); overflow: hidden; box-shadow: var(--shadow-pop); }
+}
+.panel-head { border-bottom-color: var(--separator); }
+/* Boxes inside it: gray wells without a border. A withheld grade keeps its
+   dashed edge (.ig.withheld). */
+.ig { border-color: transparent; border-radius: var(--r-well); background: var(--surface-sunken); }
+.th-block, .cstrip { border-color: transparent; border-radius: var(--r-well); background: var(--surface-sunken); }
+.mtabs { border-color: transparent; border-radius: var(--r-well); }
+button.mtab { border-radius: 10px; }
+.xlink { border-color: transparent; border-radius: var(--r-pill); }
+.cchip { border-radius: var(--r-pill); }
+/* Big figures: the display cut of the system sans, tight. */
+.price-big, .provider-grade .big, .grade .big { font-family: var(--font-display); letter-spacing: -0.025em; }
+.ggauge .gnum { font-family: var(--font-display); }
