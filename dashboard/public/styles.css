@@ -1636,7 +1636,8 @@ dialog .dlg-foot { display: flex; justify-content: flex-end; gap: var(--s2); pad
 .prompt-view > summary::-webkit-details-marker { display: none; }
 .prompt-view > summary::before { content: ""; width: 14px; height: 14px; background: var(--text-3); -webkit-mask: var(--i-chevron) center / contain no-repeat; mask: var(--i-chevron) center / contain no-repeat; transform: rotate(-90deg); transition: transform var(--dur) var(--ease); }
 .prompt-view[open] > summary::before { transform: none; }
-.prompt-text { background: var(--surface-sunken); border: 1px solid var(--separator); padding: var(--s4); border-radius: var(--r-md); max-height: 60vh; overflow: auto; margin: var(--s2) 0 0; line-height: 1.6; }
+/* The exact prompt is prose: the sans, its line breaks kept (monospace is for addresses, hashes and symbols). */
+.prompt-text { font-family: var(--sans); font-size: 12.5px; line-height: 1.55; background: var(--surface-sunken); border: 1px solid var(--separator); padding: var(--s4); border-radius: var(--r-md); max-height: 60vh; overflow: auto; margin: var(--s2) 0 0; line-height: 1.6; }
 
 /* Initial load: a few quiet lines where the page will be. */
 .boot { display: grid; gap: 12px; max-width: 760px; padding-top: 8px; }

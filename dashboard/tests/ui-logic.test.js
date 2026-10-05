@@ -410,6 +410,17 @@ test('contract chips: always Mint, Blacklist (Freeze on Solana), Proxy and Tax, 
   assert.deepEqual(keys(sol), ['Mint:Yes:risky', 'Freeze:No:clean', 'Proxy:n/a:none', 'Tax:—:unknown']);
 });
 
+test('inspector scroll: the body\'s keep-scroll key names the project, so the page\'s restore keeps a redraw in place and never carries a place to another project', () => {
+  const wl = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'watchlist.js'), 'utf8');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  // app.js restores every [data-keep-scroll] element by its key after a render.
+  assert.match(app, /querySelector\(`\[data-keep-scroll="\$\{CSS\.escape\(key\)\}"\]`\)/);
+  assert.match(wl, /class: 'panel-body', 'data-keep-scroll': `panel:\$\{pid\}`/, 'one key per project');
+  assert.doesNotMatch(wl, /'data-keep-scroll': 'panel'/, 'no shared key left');
+  // And the panel itself resets to the top when the project changes.
+  assert.match(wl, /if \(reopened\) \{\n\s+const body = panel\.querySelector\('\.panel-body'\);\n\s+if \(body\) body\.scrollTop = 0;/);
+});
+
 test('static: no CoinMarketCap tokens or colors, no "Inter", the serif only on the wordmark', () => {
   const dir = path.join(__dirname, '..', 'public');
   const files = [];
