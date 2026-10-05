@@ -378,8 +378,10 @@ test('the brief only reads: no write, refresh, screen, provider or research call
       assert.ok(!re.test(src), `${name} must not match ${re}`);
     }
   }
-  // Its one read is the project record the inspector already loaded.
-  assert.match(view, /ctx\.projectDetail\(pid\)/);
+  // Its one read is the project record the inspector already loaded, which
+  // the project page passes in.
+  assert.match(view, /export function briefPanel\(ctx, \{ d, row, pid, provider = 'claude', reportId = null \}\)/);
+  assert.match(read('views/project.js'), /d = await ctx\.projectDetail\(id\)/);
   assert.ok(!/ctx\.api\./.test(view), 'no other API call');
   // The model never imports the views or the network-facing modules.
   assert.ok(!/from '\.\/views\//.test(model));
@@ -393,12 +395,14 @@ test('the brief\'s styles use the desk\'s tokens only; the page is wired into th
   assert.ok(!/font-family:(?!\s*var\()/.test(noComments), 'type from the tokens');
   assert.ok(!/text-transform:\s*uppercase/.test(noComments), 'sentence case');
   assert.match(read('index.html'), /<link rel="stylesheet" href="\/brief\.css">/);
-  assert.match(read('app.js'), /brief: \(\) => import\('\.\/views\/brief\.js'\)/);
+  // The Brief is the project page's default tab (D1); its old address redirects.
+  assert.match(read('app.js'), /if \(route\.name === 'brief' \|\| route\.name === 'project'\)/);
+  assert.match(read('views/project.js'), /if \(name === 'brief'\) return to\('brief', \{ model: 'claude'/);
+  assert.match(read('views/project.js'), /briefPanel\(ctx, \{ d, row, pid, provider: prov/);
   assert.match(read('views/watchlist.js'), /briefLink\(ctx, p, \{ from: 'watchlist'/);
-  assert.match(read('views/project.js'), /briefLink\(ctx, d\.project, \{ from: 'project'/);
-  // The link opens the brief's own address with one history entry to return through.
+  // The link opens the brief's address with one history entry to return through.
   const ui = read('ui.js');
-  assert.match(ui, /const href = `#\/brief\/\$\{encodeURIComponent\(pid\)\}`;/);
+  assert.match(ui, /const href = `#\/project\/\$\{encodeURIComponent\(pid\)\}\/brief\?model=claude`;/);
   assert.match(ui, /ctx\.navigate\(href, \{ state: \{ crBrief: pid, from \} \}\)/);
   // Back leaves through that entry, else to the project in the watchlist.
   assert.match(read('views/brief.js'), /st\.crBrief === pid\) history\.back\(\);\s*else ctx\.navigate\(`#\/watchlist\?p=\$\{enc\(pid\)\}`, \{ replace: true \}\)/);

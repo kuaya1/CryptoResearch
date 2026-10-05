@@ -1,33 +1,66 @@
-// Project page: addressable tabs (#/project/<id>/<tab>), each rendered only
-// when opened and each in its own error boundary. Report text is cached so a
-// live refresh redraws instantly and keeps your reading position.
+// Project page: one page per project (Eric, 2026-10-05, D1) with addressable
+// tabs (#/project/<id>/<tab>): the Brief (the default: one model's brief under
+// model tabs, then the review digest and the folded sections that keep the
+// former Overview, Scorecards, Comparison, Evidence and Research runs tabs),
+// Full report, Market and Notes. Each is rendered only when opened and in its
+// own error boundary. Report text is cached so a live refresh redraws
+// instantly and keeps your reading position. Old tab addresses redirect
+// (projectRedirect).
 import {
-  h, card, table, gradeView, verdictChip, scoreView, tagChip, badgeInfo, bandClass, logo, sparkline, changeCell,
+  h, card, table, gradeView, verdictChip, scoreView, tagChip, badgeInfo, gradeBadge, logo, sparkline, changeCell,
   fmtPrice, fmtCompactUsd, fmtNum, fmtDate, fmtDateTime, fmtAgo, fmtSignedPct, freshnessText, kv, details, field, input, select, button,
   action, callout, copyText, tabStrip, safeSection, submissionId, stateText, fieldError, PROVIDERS, PROVIDER_LABELS, link,
   jobKey, coworkIdleMinutes, isAssistantJob, researchState, withheldReason, unscoredFrom, unscoredList,
-  withheldLabel, COVERAGE_MEANS, structureNotes, toast, onHoldOf, briefLink, fmtMarketFigure, unknownFigure,
+  withheldLabel, COVERAGE_MEANS, structureNotes, toast, onHoldOf, fmtMarketFigure, unknownFigure,
 } from '../ui.js';
 import { renderMarkdown } from '../md.js';
 import { openResearchDialog, openSectorDialog, waitingActions, waitingStep } from './dialogs.js';
-import { positionCard, previewTiming } from '../position-ui.js';
+import { briefPanel, bindBriefKeys, topBar } from './brief.js';
+import { positionCard } from '../position-ui.js';
 import {
   profileOf, categoryRows, scorecardCounts, confidenceLine, categoryTable, categoryGlance, positivesAndRisks, chartCycleBlock, catalystsBlock,
   judgmentBlock, reviewBlock, scenariosBlock, codeReviewBlock,
 } from '../thesis-ui.js';
 
 const TABS = [
-  ['overview', 'Overview'],
-  ['scorecards', 'Scorecards'],
-  ['reports', 'Reports'],
-  ['comparison', 'Comparison'],
-  ['evidence', 'Evidence'],
+  ['brief', 'Brief'],
+  ['report', 'Full report'],
   ['market', 'Market'],
-  ['history', 'Notes & history'],
-  ['research', 'Research runs'],
+  ['notes', 'Notes'],
 ];
 
-const viewState = { median: null, raw: {} };
+// The Brief's folded sections, by the name an address opens them with
+// (?open=<name>).
+const FOLDS = { scorecard: 'pb-scorecard', compare: 'pb-compare', evidence: 'pb-evidence', headline: 'pb-headline', runs: 'pb-runs', identity: 'pb-identity' };
+
+// The project page's former tabs and the Claude Brief's own page, mapped to
+// their new home (Eric, 2026-10-05, D1). Pure: the hash to go to, or null.
+export function projectRedirect(name, args, query) {
+  const q = new URLSearchParams(query);
+  const enc = encodeURIComponent;
+  const pid = args[0];
+  if (!pid) return null;
+  const to = (tab, params) => {
+    const qs = new URLSearchParams(params).toString();
+    return `#/project/${enc(pid)}/${tab}${qs ? `?${qs}` : ''}`;
+  };
+  if (name === 'brief') return to('brief', { model: 'claude', ...(q.get('report') ? { report: q.get('report') } : {}) });
+  if (name !== 'project') return null;
+  const tab = args[1];
+  const model = q.get('provider') || q.get('model');
+  switch (tab) {
+    case undefined: case 'overview': return to('brief', {});
+    case 'scorecards': return to('brief', { ...(model ? { model } : {}), open: 'scorecard' });
+    case 'reports': return to('report', q.get('report') ? { report: q.get('report') } : {});
+    case 'comparison': return to('brief', { open: 'compare' });
+    case 'evidence': return to('brief', { open: 'evidence' });
+    case 'research': return to('brief', { open: 'runs', ...(q.get('run') ? { run: q.get('run') } : {}) });
+    case 'history': return to('notes', {});
+    default: return TABS.some(([t]) => t === tab) ? null : to('brief', {});
+  }
+}
+
+const viewState = { median: null, raw: {}, focusTab: null };
 const textCache = new Map();
 
 async function cachedText(ctx, url) {
@@ -40,45 +73,74 @@ async function cachedText(ctx, url) {
 export async function renderProject(ctx, route) {
   const id = route.args[0];
   if (!id) return callout('No project selected.', 'warn');
-  const tab = TABS.some(([t]) => t === route.args[1]) ? route.args[1] : 'overview';
+  const tab = TABS.some(([t]) => t === route.args[1]) ? route.args[1] : 'brief';
   let d;
   try {
     d = await ctx.projectDetail(id);
   } catch (err) {
     return h('div', null, h('div', { class: 'crumbs' }, h('a', { href: '#/watchlist' }, 'Watchlist')), callout(`Could not load project "${id}": ${err.message}`, 'bad'));
   }
+  bindBriefKeys(ctx);
   if (viewState.median === null) viewState.median = Boolean(ctx.state.index.settings.comparison.show_median);
   const row = ctx.state.index.projects.find((p) => p.project_id === id) || {};
   const latest = latestReports(d);
-  const counts = { reports: d.reports.length, research: (d.research.runs || []).length };
-  const strip = tabStrip(TABS.map(([t, label]) => ({ id: t, label, href: `#/project/${encodeURIComponent(id)}/${t}`, count: counts[t] || null })), tab, { label: 'Project sections' });
+  const counts = { report: d.reports.length };
+  const strip = tabStrip(TABS.map(([t, label]) => ({ id: t, label, href: `#/project/${encodeURIComponent(id)}/${t}`, count: counts[t] || null, countLabel: t === 'report' && counts[t] ? `${counts[t]} report${counts[t] === 1 ? '' : 's'}` : null })), tab, { label: 'Project sections' });
+  let sheet = null;
   const body = await safeSection(TABS.find(([t]) => t === tab)[1], () => ({
-    overview: () => overviewTab(ctx, d, row, latest),
-    scorecards: () => scorecardsTab(ctx, d, latest, route),
-    reports: () => reportsTab(ctx, d, route),
-    comparison: () => comparisonTab(ctx, d),
-    evidence: () => evidenceTab(ctx, d, latest),
+    brief: () => {
+      const out = briefTab(ctx, d, row, latest, route);
+      sheet = out.m;
+      return out.node;
+    },
+    report: () => reportsTab(ctx, d, route),
     market: () => marketTab(ctx, d),
-    history: () => historyTab(ctx, d),
-    research: () => researchTab(ctx, d, row, route),
+    notes: () => historyTab(ctx, d),
   })[tab]());
-  const page = h('div', null,
+  // Opened from the inspector (ui.js briefLink): the brief's own bar, whose
+  // Back (and Escape) returns there.
+  const fromInspector = tab === 'brief' && history.state && history.state.crBrief === id;
+  const page = h('div', { class: 'project-page' },
+    fromInspector ? topBar(ctx, sheet || { identity: { name: d.project.name }, report_id: null }, id) : null,
     h('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' }, h('a', { href: `#/watchlist?p=${encodeURIComponent(id)}`, dataset: { key: 'crumb-watchlist' } }, 'Watchlist'), h('span', { 'aria-hidden': 'true' }, '/'), h('span', { 'aria-current': 'page' }, d.project.name)),
     header(ctx, d, row),
     strip,
     h('div', { id: 'tabpanel', role: 'tabpanel', 'aria-labelledby': `tab-${tab}` }, body));
-  // A link to one research run (#/project/<id>/research?run=<run>, from the
-  // Claude Brief): that run comes into view once, when the page opens.
-  const run = tab === 'research' ? route.query.get('run') : null;
-  if (run) {
-    page.afterMount = () => {
-      if (ctx.state.renderReason !== 'nav') return;
+  // An address that names a folded section (?open=, ?run=) brings it into
+  // view once, when the page opens; a brief opened from the inspector puts
+  // focus on its title, so a screen reader starts there.
+  const open = tab === 'brief' ? FOLDS[route.query.get('open') || (route.query.get('run') ? 'runs' : '')] : null;
+  const run = tab === 'brief' ? route.query.get('run') : null;
+  page.afterMount = () => {
+    const t = page.querySelector('#bf-title');
+    const b = page.querySelector('.bf-bar');
+    if (t && b && typeof IntersectionObserver === 'function') {
+      const io = new IntersectionObserver(([en]) => {
+        if (!t.isConnected) { io.disconnect(); return; }
+        b.classList.toggle('scrolled', !en.isIntersecting && en.boundingClientRect.top < 0);
+      }, { rootMargin: '-96px 0px 0px 0px' });
+      io.observe(t);
+    }
+    // A model tab chosen with a key or a click keeps focus on the new tab.
+    if (viewState.focusTab) {
+      const el = page.querySelector(`#pb-tab-${viewState.focusTab}`);
+      viewState.focusTab = null;
+      if (el) {
+        el.focus({ preventScroll: true });
+        ctx.claimFocus();
+      }
+    }
+    if (ctx.state.renderReason !== 'nav') return;
+    if (open || run) {
       requestAnimationFrame(() => {
-        const el = document.getElementById(`run-card-${run}`);
+        const el = (run && document.getElementById(`run-card-${run}`)) || page.querySelector(`[data-key="${open}"]`);
         if (el) el.scrollIntoView({ block: 'start' });
       });
-    };
-  }
+    } else if (fromInspector && t) {
+      t.focus({ preventScroll: true });
+      ctx.claimFocus();
+    }
+  };
   return page;
 }
 
@@ -131,7 +193,7 @@ function header(ctx, d, row) {
       h('div', { class: 'pill-row', style: { gap: '12px' } }, logo({ ...row, project_id: p.project_id, name: p.name, symbol: p.symbol }, { size: 36 }), h('h1', null, p.name, p.symbol ? h('span', { class: 'faint', style: { fontWeight: 500 } }, ` ${p.symbol}`) : null)),
       h('div', { class: 'meta-line', style: { marginTop: '8px' } },
         sector ? h('button', { type: 'button', class: 'link', dataset: { key: 'project-sector' }, 'aria-label': `Sector: ${sector.label || sector.primary}. Change sector`, onclick: () => openSectorDialog(ctx, { ...row, ...p, sector }) }, sector.label || sector.primary) : null,
-        h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/research`, title: (id.unknowns || []).join(' ') || 'Token identity, contracts and evidence', dataset: { key: 'project-identity' } }, id.status === 'verified' ? 'Identity verified' : `Identity ${id.status}`),
+        h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/brief?open=identity`, title: (id.unknowns || []).join(' ') || 'Token identity, contracts and evidence', dataset: { key: 'project-identity' } }, id.status === 'verified' ? 'Identity verified' : `Identity ${id.status}`),
         // Watching or researching never suggests a holding; only an open position says Held.
         d.position && !d.position.closed ? h('span', null, 'Held') : null,
         id.official_website ? h('a', { href: id.official_website, class: 'wrap-anywhere' }, id.official_website.replace(/^https?:\/\//, '').replace(/\/$/, '')) : null)),
@@ -169,16 +231,75 @@ function routeText(rep) {
 }
 
 // ---------------------------------------------------------------------------
-// Overview
+// Brief: model tabs, the review digest, one model's brief, then the folded
+// sections that hold what the Overview, Scorecards, Comparison, Evidence and
+// Research runs tabs held (Eric, 2026-10-05, D1).
 
-// A model's card without a readable report: a model on hold offers no run
-// (nothing new is assigned to it), and reads On hold unless a job or a saved
-// report already says what it has. Pure, for the tests.
-export function emptyCardOffer(kind, { job = null, onHold = false, saved = false } = {}) {
-  return { kind: onHold && !job && !saved ? 'on_hold' : kind, canRun: !job && !onHold };
+function briefTab(ctx, d, row, latest, route) {
+  const pid = d.project.project_id;
+  const want = route.query.get('model');
+  const prov = PROVIDERS.includes(want) ? want : 'claude';
+  const { m, sheet } = briefPanel(ctx, { d, row, pid, provider: prov, reportId: route.query.get('report') || null });
+  const open = route.query.get('open') || (route.query.get('run') ? 'runs' : null);
+  const fold = (key, title, body, note = null) => {
+    const el = details(title, body, { id: FOLDS[key], open: open === key });
+    el.classList.add('page-fold');
+    if (note) el.querySelector('summary').title = note;
+    return el;
+  };
+  const runs = researchParts(ctx, d, row, route);
+  return { m, node: h('div', null,
+    reviewDigest(ctx, d),
+    briefModelTabs(ctx, row, prov),
+    h('div', { id: 'pb-model', role: 'tabpanel', 'aria-labelledby': `pb-tab-${prov}` },
+      modelStatus(ctx, d, row, prov, latest),
+      sheet),
+    fold('scorecard', `Full scorecard · ${PROVIDER_LABELS[prov]}`, latest[prov] ? scorecardBody(ctx, d, latest, prov) : h('p', { class: 'small muted' }, `No gradable ${PROVIDER_LABELS[prov]} report yet.`), SCORECARD_NOTE),
+    fold('compare', 'Compare the models', compareBody(ctx, d, latest), 'Computed by this desk from the saved reports, not a model\'s opinion. Each model keeps its own grade; they are never merged into one.'),
+    fold('evidence', 'Claims, checks and your questions', evidenceBody(ctx, d, latest), EVIDENCE_NOTE),
+    fold('headline', 'Your headline', headlineBody(ctx, d), 'The headline is your choice: one report, or one of your own decisions.'),
+    fold('runs', `Research runs${(d.research.runs || []).length ? ` (${d.research.runs.length})` : ''}`, runs.runs),
+    fold('identity', `Token identity · ${d.project.identity.status === 'verified' ? 'verified' : d.project.identity.status}`, runs.identity)) };
 }
 
-function modelCard(ctx, d, row, prov, latest) {
+// Claude, ChatGPT and Gemini, Claude first: each tab names the model, its
+// grade or state (the desk's own pill) and its verdict; each brief is drawn
+// from that model's own report. Choosing one keeps the entry (and its way
+// back to the inspector).
+function briefModelTabs(ctx, row, sel) {
+  const staleDays = ctx.state.index.settings.freshness.research_stale_days || 90;
+  const hosted = Boolean(ctx.state.session && ctx.state.session.hosted);
+  const go = (prov) => {
+    viewState.focusTab = prov;
+    ctx.navigate(ctx.hrefWith({ model: prov, report: null, open: null, run: null }), { replace: true, state: history.state });
+  };
+  const list = h('div', { class: 'mtabs pb-mtabs', role: 'tablist', 'aria-label': 'Model' }, PROVIDERS.map((prov) => {
+    const rep = row.providers && row.providers[prov];
+    const job = row.research && row.research.providers && row.research.providers[prov];
+    const opts = { staleDays, hosted, onHold: Boolean(onHoldOf(ctx.state.index, prov)) };
+    const info = badgeInfo(prov, rep, job, opts);
+    const on = prov === sel;
+    const verdict = rep && rep.verdict ? `${rep.verdict.charAt(0)}${rep.verdict.slice(1).toLowerCase().replace(/_/g, ' ')}` : null;
+    return h('button', {
+      type: 'button', role: 'tab', id: `pb-tab-${prov}`, class: 'mtab', 'aria-selected': String(on), 'aria-controls': 'pb-model', tabindex: on ? '0' : '-1',
+      'aria-label': `${info.text.replace(/[.\s]+$/, '')}${verdict ? `. Verdict: ${verdict}` : ''}`, dataset: { key: `pb-tab-${prov}` }, onclick: () => { if (!on) go(prov); },
+    }, h('span', { class: 'mt-name', 'aria-hidden': 'true' }, PROVIDER_LABELS[prov]),
+    gradeBadge(prov, rep, job, opts),
+    verdict ? h('span', { class: 'mt-verdict', 'aria-hidden': 'true' }, verdict) : null);
+  }));
+  list.addEventListener('keydown', (e) => {
+    const i = PROVIDERS.indexOf(sel);
+    const to = e.key === 'ArrowRight' ? PROVIDERS[(i + 1) % 3] : e.key === 'ArrowLeft' ? PROVIDERS[(i + 2) % 3] : e.key === 'Home' ? PROVIDERS[0] : e.key === 'End' ? PROVIDERS[2] : null;
+    if (!to) return;
+    e.preventDefault();
+    if (to !== sel) go(to);
+  });
+  return list;
+}
+
+// The chosen model's report age, staleness and route, and the waiting job's
+// actions (copy the prompt, import the answer) when a run waits for it.
+function modelStatus(ctx, d, row, prov, latest) {
   const pid = d.project.project_id;
   const staleDays = ctx.state.index.settings.freshness.research_stale_days || 90;
   const hosted = Boolean(ctx.state.session && ctx.state.session.hosted);
@@ -187,72 +308,33 @@ function modelCard(ctx, d, row, prov, latest) {
   const job = row.research && row.research.providers && row.research.providers[prov];
   const onHold = Boolean(onHoldOf(ctx.state.index, prov));
   const info = badgeInfo(prov, sum, job, { staleDays, hosted, onHold });
-  // A newer run's waiting job: the sentence for its assistant (online desk) or the pasted prompt; none for a model on hold.
-  const waiting = job && job.state === 'unconfigured' && !onHold ? waitingActions(ctx, { pid, runId: job.run_id, provider: prov, key: `ov-${prov}` }) : null;
-  const newer = sum && info.newerText ? h('p', { class: `newer-line${info.problem ? ' problem' : ''}` }, info.newerText) : null;
-  let main;
-  if (r) {
-    const g = sum ? sum.grade : r.grade;
-    const graded = g && (g.status === 'firm' || g.status === 'range');
-    const why = g && g.status === 'withheld' ? withheldReason(prov, g, sum && sum.unscored ? sum.unscored : unscoredFrom(r.grade, r.assessment.investment_components)) : null;
-    main = h('div', null,
-      graded ? h('div', { class: `provider-grade${bandClass(g)}` }, h('span', { class: 'big' }, g.display), g.label ? h('span', { class: 'lab' }, g.label) : null, h('span', { class: 'small muted' }, g.status === 'range' ? 'range, 0–100' : 'grade, 0–100'))
-        : h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, withheldLabel(g ? g.coverage_pct : null))),
-      why && typeof why.coverage === 'number' ? h('p', { class: 'small muted', style: { margin: '2px 0 0' } }, `The report is saved. ${COVERAGE_MEANS}`) : null,
-      why ? h('div', { class: 'why-withheld' }, h('p', { style: { margin: '6px 0 0' } }, `${why.why.charAt(0).toUpperCase()}${why.why.slice(1)}.`), unscoredList(why, { max: 240 })) : null,
-      why ? structureNotes((r.structure && r.structure.flagged) ? r.structure : sum && sum.structure) : null,
-      h('dl', { class: 'facts' },
-        h('div', { class: 'wide' }, h('dt', null, 'Verdict'), h('dd', null, verdictChip(r.assessment.verdict))),
-        h('div', null, h('dt', null, 'Analysis'), h('dd', null, fmtDate(r.assessment.analysis_at), info.age ? h('span', { class: 'faint' }, ` · ${info.age}`) : null, info.stale ? h('span', { class: 'freshness stale' }, ' · stale') : null)),
-        h('div', null, h('dt', null, 'Horizon'), h('dd', null, r.assessment.horizon || 'not stated')),
-        previewTiming(sum) ? h('div', { class: 'wide' }, h('dt', null, 'Timing (the model\'s view)'), h('dd', null, previewTiming(sum))) : null),
-      r.assessment.summary ? h('p', { class: 'small', style: { margin: '10px 0 0' } }, r.assessment.summary) : null,
-      r.evidence && r.evidence.flags.length
-        ? h('p', { class: 'small', style: { margin: '8px 0 0' } }, stateText(`Evidence checks: ${flaggedText(r.evidence)} flagged`, r.evidence.high ? 'bad' : 'warn'), ' ', h('a', { href: `#/project/${pid}/evidence`, dataset: { key: `ov-evidence-${prov}` } }, 'see why'), h('span', { class: 'muted' }, ' (no score changes)'))
-        : null,
-      h('p', { class: 'small faint', style: { margin: '8px 0 0' } }, routeText(r)),
-      newer,
-      h('div', { class: 'btn-row', style: { marginTop: '10px' } },
-        prov === 'claude' ? briefLink(ctx, d.project, { from: 'project', cls: 'btn small brief-link' }) : null,
-        h('a', { class: 'btn small', href: `#/project/${pid}/reports?report=${encodeURIComponent(r.report_id)}`, dataset: { key: `ov-report-${prov}` } }, 'Open report'),
-        h('a', { class: 'btn small', href: `#/project/${pid}/scorecards?provider=${prov}`, dataset: { key: `ov-score-${prov}` } }, 'Scorecard'),
-        waiting));
-  } else if (sum && sum.needs_text) {
-    // A PDF-only report: saved, but no grade can be read from it offline.
-    main = h('div', null,
-      h('div', { class: 'provider-grade' }, h('span', { class: 'state-text' }, 'PDF saved: needs a text copy')),
-      h('p', { class: 'small muted', style: { margin: '4px 0 0' } }, `The PDF from ${fmtDate(sum.analysis_at || sum.imported_at)} is kept byte for byte. Paste its text as a new import for ${PROVIDER_LABELS[prov]} to grade it; until then it is not compared.`),
-      newer,
-      h('div', { class: 'btn-row', style: { marginTop: '10px' } },
-        h('a', { class: 'btn small', href: `#/project/${pid}/reports?report=${encodeURIComponent(sum.report_id)}`, dataset: { key: `ov-report-${prov}` } }, 'Open the PDF report'),
-        h('a', { class: 'btn small', href: `#/updates?tab=import&project=${encodeURIComponent(pid)}&provider=${prov}`, dataset: { key: `ov-paste-${prov}` } }, 'Import the text'),
-        waiting));
-  } else {
-    const offer = emptyCardOffer(info.kind, { job, onHold, saved: Boolean(sum) });
-    const st = researchState(offer.kind, { provider: prov, hosted });
-    const next = waiting || (offer.canRun ? button('Run research', () => openResearchDialog(ctx, { ...row, ...d.project, research: row.research }, { providers: [prov] }), { kind: 'small', key: `ov-run-${prov}` }) : null);
-    main = h('div', null,
-      h('div', { class: 'provider-grade' }, stateText(offer.kind === 'waiting' && hosted ? 'Waiting for you' : st.long, st.tone)),
-      job && job.error ? h('p', { class: 'small', style: { color: 'var(--neg)' } }, job.error) : null,
-      next ? h('div', { class: 'btn-row', style: { marginTop: '8px' } }, next) : null);
-  }
-  return h('div', { class: 'card' }, h('h3', null, PROVIDER_LABELS[prov]), main);
+  const waiting = job && job.state === 'unconfigured' && !onHold ? waitingActions(ctx, { pid, runId: job.run_id, provider: prov, key: `pb-${prov}` }) : null;
+  if (!r && !waiting) return null;
+  return h('div', { class: 'pb-status' },
+    r ? h('p', { class: 'small faint' }, info.age ? `Analysis ${info.age} · ` : '', info.stale ? h('span', { class: 'freshness stale' }, 'stale · ') : null, routeText(r)) : null,
+    waiting ? h('div', { class: 'btn-row' }, waiting) : null);
 }
 
-function overviewTab(ctx, d, row, latest) {
+// What changed since your last review, with Mark reviewed; the full list is
+// on the Notes tab.
+function reviewDigest(ctx, d) {
+  const pid = d.project.project_id;
+  const ch = d.changes || {};
+  return h('section', { class: 'card pb-digest', 'aria-labelledby': 'pb-digest-h' },
+    h('div', { class: 'card-head' }, h('div', null, h('h2', { id: 'pb-digest-h', title: ch.since ? `Since ${ch.cursor_source === 'project created' ? 'the project was added' : fmtDateTime(ch.since)}. A digest never changes grades, reports or your headline.` : null }, 'Since your last review')),
+      h('div', { class: 'actions' }, reviewedButton(ctx, pid), h('a', { class: 'small', href: `#/project/${encodeURIComponent(pid)}/notes`, dataset: { key: 'pb-all-changes' } }, 'All changes'))),
+    ch.item_count ? h('ul', { class: 'list small' },
+      (ch.new_reports || []).map((r) => h('li', null, `New ${PROVIDER_LABELS[r.provider]} report (${fmtDate(r.analysis_at)}): ${r.verdict || 'no verdict'}`)),
+      (ch.provider_changes || []).filter((c) => c.from_report).map((c) => h('li', null, `${PROVIDER_LABELS[c.provider]} grade ${c.grade_from || 'none'} → ${c.grade_to || 'none'}${c.verdict_from !== c.verdict_to ? `; verdict ${c.verdict_from || 'none'} → ${c.verdict_to || 'none'}` : ''}`)),
+      (ch.research_runs || []).map((r) => h('li', null, `Research run ${r.status.replace(/_/g, ' ')} (${r.providers.map((p) => PROVIDER_LABELS[p]).join(', ')})`)),
+      ch.price && typeof ch.price.change_pct === 'number' ? h('li', null, `Price ${fmtSignedPct(ch.price.change_pct)} since then`) : null)
+      : h('p', { class: 'small muted', style: { margin: 0 } }, 'Nothing new since your last review.'));
+}
+
+// Your headline: one report, or one of your own decisions.
+function headlineBody(ctx, d) {
   const pid = d.project.project_id;
   const hl = d.headline;
-  const ch = d.changes || {};
-  const riskSources = PROVIDERS.map((p) => latest[p]).filter(Boolean);
-  const grading = ctx.state.index.rubrics.grading;
-  const riskTable = riskSources.length ? table([
-    { label: 'Downside risk (higher means more risk)', render: (r) => h('span', { title: r.def.definition }, r.def.label) },
-    ...riskSources.map((rep) => ({ label: `${PROVIDER_LABELS[rep.meta.provider]} · ${fmtDate(rep.assessment.analysis_at)}`, render: (r) => scoreView(rep.assessment.risk_scores[r.def.id], 'risk', { corrected: originalOf(rep, `risk_scores.${r.def.id}`) }) })),
-  ], grading.risk_scores.map((def) => ({ def }))) : h('p', { class: 'small muted' }, 'No reports yet.');
-  const unresolved = [
-    ...PROVIDERS.flatMap((p) => (latest[p] ? (latest[p].assessment.unresolved_questions || []).map((q) => ({ provider: p, q })) : [])),
-    ...d.disputes.filter((x) => x.status === 'open').map((x) => ({ provider: 'you', q: x.question })),
-  ];
   const options = [{ value: '', label: 'Choose a report or decision…' }];
   for (const r of d.reports) if (!r.broken) options.push({ value: `report:${r.report_id}`, label: `${PROVIDER_LABELS[r.meta.provider]} · ${r.assessment.analysis_at || 'undated'} · ${r.grade ? r.grade.display || r.grade.status : 'no grade'}` });
   for (const j of d.journal) if (j.type === 'decision') options.push({ value: `decision:${j.entry_id}`, label: `Your decision · ${fmtDate(j.created_at)} · ${j.decision || ''}` });
@@ -271,26 +353,17 @@ function overviewTab(ctx, d, row, latest) {
     : hl.type === 'missing' ? hl.message
       : hl.type === 'decision' ? `Your decision: ${hl.decision || 'no label'}${hl.conviction ? `, conviction ${hl.conviction}` : ''} (${fmtDate(hl.created_at)})`
         : `${PROVIDER_LABELS[hl.provider]} report of ${fmtDate(hl.analysis_at)}: ${hl.grade && hl.grade.display ? `${hl.grade.display} ${hl.grade.label || ''}` : 'no grade'} · ${hl.verdict || 'no verdict'}`;
-  return h('div', null,
-    h('section', { class: 'section', 'aria-labelledby': 'ov-models' }, h('h2', { id: 'ov-models' }, 'Model scorecards'),
-      h('div', { class: 'grid three' }, PROVIDERS.map((prov) => modelCard(ctx, d, row, prov, latest)))),
-    card('How the models compare', modelsCompared(ctx, d), {
-      note: 'Computed by this desk from the saved reports, not a model\'s opinion. Each model keeps its own grade; they are never merged into one.',
-      actions: [h('a', { class: 'small', href: `#/project/${encodeURIComponent(pid)}/comparison`, dataset: { key: 'ov-compare' } }, 'Open the full comparison')],
-    }),
-    h('div', { class: 'grid two' },
-      card('Since your last review', [
-        ch.item_count ? h('ul', { class: 'list small' },
-          (ch.new_reports || []).map((r) => h('li', null, `New ${PROVIDER_LABELS[r.provider]} report (${fmtDate(r.analysis_at)}): ${r.verdict || 'no verdict'}`)),
-          (ch.provider_changes || []).filter((c) => c.from_report).map((c) => h('li', null, `${PROVIDER_LABELS[c.provider]} grade ${c.grade_from || 'none'} → ${c.grade_to || 'none'}${c.verdict_from !== c.verdict_to ? `; verdict ${c.verdict_from || 'none'} → ${c.verdict_to || 'none'}` : ''}`)),
-          (ch.research_runs || []).map((r) => h('li', null, `Research run ${r.status.replace(/_/g, ' ')} (${r.providers.map((p) => PROVIDER_LABELS[p]).join(', ')})`)),
-          ch.price && typeof ch.price.change_pct === 'number' ? h('li', null, `Price ${fmtSignedPct(ch.price.change_pct)} since then`) : null)
-          : h('p', { class: 'small muted' }, 'Nothing new since your last review.'),
-        h('div', { class: 'btn-row', style: { marginTop: '8px' } }, reviewedButton(ctx, pid), h('a', { class: 'small', href: `#/project/${pid}/history` }, 'All changes')),
-      ], { note: ch.since ? `Since ${ch.cursor_source === 'project created' ? 'the project was added' : fmtDateTime(ch.since)}. A digest never changes grades, reports or your headline.` : null }),
-      card('Your headline', [h('p', { class: 'small', style: { margin: '0 0 8px' } }, headlineText), details('Change the headline', h('div', { class: 'actions' }, sel, save, clearBtn), { id: 'ov-headline' })], { note: 'The headline is your choice: one report, or one of your own decisions.' })),
-    card('Material risks', [h('div', { class: 'legend' }, h('span', null, h('span', { class: 'swatch risk' }), 'Risk bars grow from the right: longer means more risk')), riskTable]),
-    unresolved.length ? card('Unresolved questions', h('ul', { class: 'list' }, unresolved.map((u) => h('li', null, h('span', { class: 'faint' }, `${u.provider === 'you' ? 'You' : PROVIDER_LABELS[u.provider]}: `), u.q)))) : null);
+  return h('div', null, h('p', { class: 'small', style: { margin: '0 0 8px' } }, headlineText), details('Change the headline', h('div', { class: 'actions' }, sel, save, clearBtn), { id: 'ov-headline' }));
+}
+
+// Each model's four downside-risk scores side by side, corrections marked.
+function materialRisks(ctx, latest) {
+  const riskSources = PROVIDERS.map((p) => latest[p]).filter(Boolean);
+  const grading = ctx.state.index.rubrics.grading;
+  return riskSources.length ? table([
+    { label: 'Downside risk (higher means more risk)', render: (r) => h('span', { title: r.def.definition }, r.def.label) },
+    ...riskSources.map((rep) => ({ label: `${PROVIDER_LABELS[rep.meta.provider]} · ${fmtDate(rep.assessment.analysis_at)}`, render: (r) => scoreView(rep.assessment.risk_scores[r.def.id], 'risk', { corrected: originalOf(rep, `risk_scores.${r.def.id}`) }) })),
+  ], grading.risk_scores.map((def) => ({ def }))) : h('p', { class: 'small muted' }, 'No reports yet.');
 }
 
 const SECTION_NOTE = { component: ' (weighted into the grade)', risk: ' (downside risk: higher is worse)', diagnostic: '' };
@@ -354,14 +427,12 @@ function reviewedButton(ctx, pid) {
 }
 
 // ---------------------------------------------------------------------------
-// Scorecards: one model at a time, under the rubric its report declares.
+// The full scorecard: one model at a time, under the rubric its report declares.
 
-function scorecardsTab(ctx, d, latest, route) {
-  const present = PROVIDERS.filter((p) => latest[p]);
+const SCORECARD_NOTE = 'Three separate panels, never mixed: the category grades (higher is better) are diagnostics and are never averaged into the grade; the grade comes from six weighted components (20/25/20/15/10/10); the four downside-risk scores are higher-is-worse. A missing input withholds the grade and shows how much weight was scored.';
+
+function scorecardBody(ctx, d, latest, prov) {
   const pid = d.project.project_id;
-  if (!present.length) return callout('No gradable reports yet. Use Run research above, or import a report from the Updates page.', 'info');
-  const want = route.query.get('provider');
-  const prov = present.includes(want) ? want : present[0];
   const r = latest[prov];
   const a = r.assessment;
   const grading = ctx.state.index.rubrics.grading;
@@ -373,13 +444,7 @@ function scorecardsTab(ctx, d, latest, route) {
   const rows = categoryRows(profileOf(ctx.state.index.rubrics.profiles, a, d.profile), a);
   const counts = scorecardCounts(rows);
   const integ = r.integrity || {};
-  const switcher = h('div', { class: 'seg-wrap' }, h('div', { class: 'seg', role: 'group', 'aria-label': 'Choose a model' },
-    PROVIDERS.map((p) => (present.includes(p)
-      ? h('a', { href: `#/project/${pid}/scorecards?provider=${p}`, 'aria-current': p === prov ? 'true' : null, dataset: { key: `sc-${p}` } }, PROVIDER_LABELS[p])
-      : h('span', { class: 'seg-off', title: `No gradable ${PROVIDER_LABELS[p]} report yet` }, PROVIDER_LABELS[p], h('span', { class: 'sr-only' }, ', no gradable report'))))));
   return h('div', null,
-    switcher,
-    callout(`Three separate panels, never mixed: the ${counts.total} category grades (higher is better) are diagnostics and are never averaged into the grade; the grade comes from six weighted components (20/25/20/15/10/10); the four downside-risk scores are higher-is-worse. A missing input withholds the grade and shows how much weight was scored.`, 'info'),
     card(h('span', { class: 'pill-row' }, h('span', null, `${PROVIDER_LABELS[prov]} · ${fmtDate(a.analysis_at)}`), verdictChip(a.verdict)), [
       h('div', { class: 'grid two' },
         h('div', null, h('div', { class: 'small muted' }, 'Grade calculated by this app'), gradeView(g),
@@ -414,7 +479,7 @@ function scorecardsTab(ctx, d, latest, route) {
         { label: 'Score', render: (x) => scoreView(a.risk_scores[x.id], 'risk', { corrected: originalOf(r, `risk_scores.${x.id}`) }) },
         { label: 'Rationale', wrap: true, render: (x) => { const s = a.risk_scores[x.id]; return s ? h('span', { class: 'small' }, s.rationale || s.missing_data || '') : null; } },
       ], grading.risk_scores)),
-      h('div', { class: 'btn-row', style: { marginTop: '16px' } }, h('a', { class: 'btn', href: `#/project/${pid}/reports?report=${encodeURIComponent(r.report_id)}` }, 'Open the full report')),
+      h('div', { class: 'btn-row', style: { marginTop: '16px' } }, h('a', { class: 'btn', href: `#/project/${encodeURIComponent(pid)}/report?report=${encodeURIComponent(r.report_id)}`, dataset: { key: `sc-report-${prov}` } }, 'Open the full report')),
     ]),
     positionCard(a, prov),
     thesisCards(a, prov));
@@ -720,7 +785,7 @@ function reportsTab(ctx, d, route) {
       h('div', { class: 'group-label' }, PROVIDER_LABELS[p]),
       good.filter((r) => r.meta.provider === p).map((r) => {
         const g = r.grade;
-        return h('a', { href: `#/project/${pid}/reports?report=${encodeURIComponent(r.report_id)}`, 'aria-current': sel && r.report_id === sel.report_id ? 'true' : null, dataset: { key: `rl-${r.report_id}` } },
+        return h('a', { href: `#/project/${encodeURIComponent(pid)}/report?report=${encodeURIComponent(r.report_id)}`, 'aria-current': sel && r.report_id === sel.report_id ? 'true' : null, dataset: { key: `rl-${r.report_id}` } },
           h('div', { class: 'line1' }, h('span', null, fmtDate(r.assessment.analysis_at) || 'Undated'), h('span', { class: 'num' }, g && g.display ? `${g.display} ${g.label || ''}`.trim() : g && g.status === 'withheld' ? withheldLabel(g.coverage_pct) : r.meta.original_file.endsWith('.pdf') ? 'PDF' : 'No grade')),
           h('div', { class: 'line2' }, [r.assessment.verdict ? r.assessment.verdict.charAt(0) + r.assessment.verdict.slice(1).toLowerCase() : 'No verdict', latestIds.has(r.report_id) ? 'latest' : 'earlier', r.revision && r.revision.kind === 'revision' ? (r.revision.basis === 'existing_evidence' ? 'revision, same evidence' : r.revision.basis === 'new_sources' ? 'revision, new sources' : 're-saved') : null, r.corrections.length ? `${r.corrections.length} correction(s)` : null].filter(Boolean).join(' · ')));
       }),
@@ -745,7 +810,7 @@ function reportsTab(ctx, d, route) {
         withheld ? h('p', { class: 'why-withheld' }, withheld.sentence) : null,
         // A revision of an earlier save for the same run: what changed, on
         // what evidence and why, from the stored records (revisions.js).
-        sel.revision && sel.revision.kind === 'revision' ? h('p', { class: 'newer-line' }, revisionText(sel.revision), ' ', h('a', { href: `#/project/${encodeURIComponent(pid)}/reports?report=${encodeURIComponent(sel.revision.of)}`, dataset: { key: `rev-of-${sel.report_id}` } }, 'Open the earlier report')) : null,
+        sel.revision && sel.revision.kind === 'revision' ? h('p', { class: 'newer-line' }, revisionText(sel.revision), ' ', h('a', { href: `#/project/${encodeURIComponent(pid)}/report?report=${encodeURIComponent(sel.revision.of)}`, dataset: { key: `rev-of-${sel.report_id}` } }, 'Open the earlier report')) : null,
         sel.analysis_timing && ['after_save', 'future'].includes(sel.analysis_timing.status) ? h('p', { class: 'newer-line' }, `The report states an analysis time ${sel.analysis_timing.minutes_after_save !== null && sel.analysis_timing.minutes_after_save < 2880 ? `${sel.analysis_timing.minutes_after_save} min` : 'more than a day'} after it was saved (${fmtDateTime(sel.meta.imported_at)}); shown as written, ordered by its save time.`) : null,
         errors || amb ? h('div', { style: { marginTop: '12px' } }, callout(`${errors ? `${errors} extraction error(s)` : ''}${errors && amb ? ' and ' : ''}${amb ? `${amb} ambiguous value(s)` : ''}: see Extraction notes below.`, 'warn')) : null),
       atAGlance(ctx, d, sel, withheld),
@@ -842,7 +907,10 @@ export function comparisonBlock(ctx, d, { showMedian }) {
     ], conflicts))) : null);
 }
 
-function comparisonTab(ctx, d) {
+// Compare the models: the summary (grades and verdicts side by side, the
+// differences, conflicting figures, the settling questions), the full
+// comparison, how each model changed, and the material risks.
+function compareBody(ctx, d, latest) {
   const holder = h('div');
   const draw = () => holder.replaceChildren(comparisonBlock(ctx, d, { showMedian: viewState.median }));
   const toggle = h('input', { type: 'checkbox', checked: viewState.median });
@@ -850,16 +918,22 @@ function comparisonTab(ctx, d) {
   draw();
   const diffs = PROVIDERS.flatMap((p) => (d.diffs[p] || []).map((x) => ({ p, ...x })));
   return h('div', null,
-    card('Model comparison', holder, { note: 'Latest eligible report from each model. Earlier reports are under Reports.', actions: [h('label', { class: 'check small', dataset: { nodirty: '1' } }, toggle, 'Show descriptive median')] }),
+    h('div', { class: 'card' }, modelsCompared(ctx, d)),
+    card('Model comparison', holder, { note: 'Latest eligible report from each model. Earlier reports are under Full report.', actions: [h('label', { class: 'check small', dataset: { nodirty: '1' } }, toggle, 'Show descriptive median')] }),
     card('How each model changed over time', diffs.length ? diffs.map((x) => h('div', { style: { marginBottom: '12px' } },
       h('div', { class: 'pill-row' }, h('strong', null, PROVIDER_LABELS[x.p]), h('span', { class: 'small' }, `${x.from} → ${x.to}`), x.comparable ? null : h('span', { class: 'small muted', title: x.note }, 'different rubric, profile or horizon')),
-      x.changes.length ? h('ul', { class: 'list small' }, x.changes.map((chg) => h('li', null, `${chg.section} · ${chg.id}: ${fmtScore(chg.from)} → ${fmtScore(chg.to)}${chg.delta !== null && chg.delta !== undefined ? ` (${chg.delta > 0 ? '+' : ''}${chg.delta})` : ''}`))) : h('div', { class: 'small muted' }, 'No score changes.'))) : h('p', { class: 'small muted' }, 'Only one report per model so far.')));
+      x.changes.length ? h('ul', { class: 'list small' }, x.changes.map((chg) => h('li', null, `${chg.section} · ${chg.id}: ${fmtScore(chg.from)} → ${fmtScore(chg.to)}${chg.delta !== null && chg.delta !== undefined ? ` (${chg.delta > 0 ? '+' : ''}${chg.delta})` : ''}`))) : h('div', { class: 'small muted' }, 'No score changes.'))) : h('p', { class: 'small muted' }, 'Only one report per model so far.')),
+    card('Material risks', [h('div', { class: 'legend' }, h('span', null, h('span', { class: 'swatch risk' }), 'Risk bars grow from the right: longer means more risk')), materialRisks(ctx, latest)]));
 }
 
 // ---------------------------------------------------------------------------
 // Evidence
 
-function evidenceTab(ctx, d, latest) {
+const EVIDENCE_NOTE = 'Separate things: the analyst tag ([V] means the analyst says it checked a primary source in its own session), the desk\'s evidence checks (a [V] resting only on an AI summary or a secondary source, a critical claim without a primary source or date, a fee figure nobody could reproduce), your check (what you confirmed by opening the source), and independent corroboration (a different, independent source agrees). Citation integrity only means the references resolve. Model agreement is not corroboration. None of these changes a score.';
+
+// Each model's claims and evidence checks, the unresolved questions, and your
+// dispute questions.
+function evidenceBody(ctx, d, latest) {
   const pid = d.project.project_id;
   const present = PROVIDERS.filter((p) => latest[p]);
   const disputeTopic = input({ placeholder: 'e.g. category:token_value_capture or metric:revenue_usd' });
@@ -867,8 +941,11 @@ function evidenceTab(ctx, d, latest) {
   const disputeBtn = button('Add question', null, { kind: 'small', type: 'submit' });
   const disputeForm = h('form', { class: 'form-grid', dataset: { key: 'dispute-form' } }, field('Topic', disputeTopic), field('Resolving question', disputeQ), h('div', { class: 'field', style: { justifyContent: 'flex-end' } }, disputeBtn));
   disputeForm.onsubmit = action(disputeBtn, async () => { await ctx.api.post(`/api/projects/${pid}/disputes`, { topic: disputeTopic.value || null, question: disputeQ.value }); await ctx.refresh(); return true; }, 'Question added');
+  const unresolved = [
+    ...PROVIDERS.flatMap((p) => (latest[p] ? (latest[p].assessment.unresolved_questions || []).map((q) => ({ provider: p, q })) : [])),
+    ...d.disputes.filter((x) => x.status === 'open').map((x) => ({ provider: 'you', q: x.question })),
+  ];
   return h('div', null,
-    callout('Separate things: the analyst tag ([V] means the analyst says it checked a primary source in its own session), the desk\'s evidence checks (a [V] resting only on an AI summary or a secondary source, a critical claim without a primary source or date, a fee figure nobody could reproduce), your check (what you confirmed by opening the source), and independent corroboration (a different, independent source agrees). Citation integrity only means the references resolve. Model agreement is not corroboration. None of these changes a score.', 'info'),
     present.length ? present.map((p) => {
       const r = latest[p];
       const integ = r.integrity || {};
@@ -886,7 +963,8 @@ function evidenceTab(ctx, d, latest) {
         { label: 'Status', render: (x) => x.status },
       ], d.disputes)) : h('p', { class: 'small muted' }, 'None yet.'),
       h('div', { style: { marginTop: '12px' } }, disputeForm),
-    ]));
+    ]),
+    unresolved.length ? card('Unresolved questions', h('ul', { class: 'list' }, unresolved.map((u) => h('li', null, h('span', { class: 'faint' }, `${u.provider === 'you' ? 'You' : PROVIDER_LABELS[u.provider]}: `), u.q)))) : null);
 }
 
 // ---------------------------------------------------------------------------
@@ -1249,7 +1327,9 @@ export function promptView(ctx, pid, run, { provider = null, label = 'Show the e
 // 2026-10-03 on).
 const noted = (run) => (run.providers || []).filter((p) => run.jobs[p] && run.jobs[p].execution && run.jobs[p].execution.ref);
 
-function researchTab(ctx, d, row, route = null) {
+// The research runs (with the standing prompt files) and the token identity,
+// two folded sections of the Brief.
+function researchParts(ctx, d, row, route = null) {
   const pid = d.project.project_id;
   const runs = d.research.runs || [];
   const wantRun = route ? route.query.get('run') : null;
@@ -1306,18 +1386,13 @@ function researchTab(ctx, d, row, route = null) {
     await ctx.refresh();
     return r;
   }, (r) => (r && r.identity_status === 'verified' ? 'Identity verified and bound' : 'Saved; identity still pending (needs website, token binding and evidence)'), { busyLabel: 'Saving…' });
-  return h('div', null,
+  return {
+    runs: h('div', null,
     card('Research runs', [
       h('p', { class: 'small muted', style: { margin: 0 } }, 'Each run sends every chosen model the same prompt, rubric, horizon and dated evidence packet. Jobs are independent: one failure never erases another model\'s result. Pending means not saved yet.'),
       rc ? h('p', { class: 'small', style: { margin: '8px 0 0' } }, `A new run uses ${rc.prompt_version} with the scoring profile ${rc.sector_profile}${rc.category_grades ? ` (${rc.category_grades} category grades)` : ''} and ${rc.rubric_version}. Earlier runs and their reports keep the prompt, profile and rubric they were made with.`) : null,
     ], { actions: [button(runs.length ? 'Run research again' : 'Run research', () => openResearchDialog(ctx, { ...row, ...d.project, research: row.research, report_count: d.reports.length }), { kind: 'small primary', key: 'rt-run' })] }),
     runs.length ? runCards : callout('No research runs yet.', 'info'),
-    h('div', { class: 'grid two' },
-      card('Token identity', [
-        id.status === 'verified' ? callout('Verified: bound to the token below. Prices and holdings use this identity.', 'ok') : callout(`Pending: ${(id.unknowns || []).join(' ')} No prices or holdings use a pending identity.`, 'warn'),
-        (id.evidence || []).length ? h('ul', { class: 'list small' }, id.evidence.map((e) => h('li', null, h('a', { href: e.url }, e.url), e.note ? ` — ${e.note}` : '', h('span', { class: 'faint' }, ` (checked ${fmtDate(e.checked_at)})`)))) : null,
-        idForm,
-      ]),
       card('Standing prompt files', [
         h('p', { class: 'small muted' }, 'The general prompt for this project, one file per model, without a run\'s dated context. Each research run keeps its own exact prompt.'),
         stale.length ? h('p', { class: 'small' }, `These files were written with ${stale[0].prompt_version}; a new run uses ${rc.prompt_version}. Rebuild them to read the current prompt here.`) : null,
@@ -1328,5 +1403,11 @@ function researchTab(ctx, d, row, route = null) {
           { label: 'Updated', render: (f) => fmtAgo(f.updated_at) },
           { label: '', render: (f) => { const b = button('Copy', null, { kind: 'small' }); b.setAttribute('aria-label', `Copy ${f.name}`); b.onclick = action(b, async () => { await copyText(await ctx.api.text(`/api/projects/${pid}/prompt-file?name=${encodeURIComponent(f.name)}`)); return undefined; }); return b; } },
         ], legacy, { empty: 'No prompt files.' })),
-      ])));
+      ])),
+    identity: card(null, [
+      id.status === 'verified' ? callout('Verified: bound to the token below. Prices and holdings use this identity.', 'ok') : callout(`Pending: ${(id.unknowns || []).join(' ')} No prices or holdings use a pending identity.`, 'warn'),
+      (id.evidence || []).length ? h('ul', { class: 'list small' }, id.evidence.map((e) => h('li', null, h('a', { href: e.url }, e.url), e.note ? ` — ${e.note}` : '', h('span', { class: 'faint' }, ` (checked ${fmtDate(e.checked_at)})`)))) : null,
+      idForm,
+    ]),
+  };
 }

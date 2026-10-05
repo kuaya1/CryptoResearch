@@ -132,13 +132,6 @@ function suggestedReview(ctx, p, prov, pos) {
   return wrap;
 }
 
-// One short line for the hover scorecard.
-export function previewTiming(rep) {
-  const pos = rep && rep.position;
-  if (!pos || pos.status !== 'provided') return null;
-  return `${pos.timing_label}${pos.next_review_date ? ` · review ${fmtDate(pos.next_review_date)}` : ''}`;
-}
-
 // The project's own price against Bitcoin's, for the summary panel.
 export function vsBtcFacts(m) {
   const v = m && m.vs_btc;

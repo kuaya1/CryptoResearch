@@ -1510,6 +1510,10 @@ details.disclosure > summary::before { content: ""; width: 14px; height: 14px; f
 details.disclosure[open] > summary::before { transform: none; }
 details.disclosure > summary:hover { color: var(--text); }
 details.disclosure > .body { padding: 0 0 var(--s4); min-width: 0; }
+/* A page's own folded section (Settings' Advanced, the Brief's folds). */
+details.page-fold { margin-top: var(--s5); }
+details.page-fold > summary { font-size: 15px; min-height: 44px; }
+details.page-fold, #settings-research { scroll-margin-top: calc(var(--topbar-h) + var(--s3)); }
 
 /* overflow-x: auto alone makes overflow-y auto too, and the tabs' -1px
    margin (the underline over the hairline) then scrolls 1px vertically: a

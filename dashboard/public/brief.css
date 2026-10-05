@@ -1,11 +1,20 @@
-/* The Claude Brief (views/brief.js): one saved Claude report read as a
-   decision page. A sheet of paper on the desk: white, hairlines, generous
+/* The Brief (views/brief.js), the project page's default tab: one saved
+   report of the chosen model read as a decision page. A sheet of paper on the desk: white, hairlines, generous
    space, the desk's tokens only (styles.css :root). Quality bars fill in their
    tier from the left; downside-risk bars grow from the right in the risk
-   colour; forecasts are labeled as such. On a phone the brief takes the whole
-   screen with its own Back bar. Every graphic only repeats words on the page. */
+   colour; forecasts are labeled as such. Opened from the inspector, its Back
+   bar leads the page (on a phone in place of the top bar). Every graphic only
+   repeats words on the page. */
 
-.brief-page { max-width: 920px; margin: 0 auto; min-width: 0; }
+/* The project page around it: model tabs (the inspector's), the review
+   digest, the model's status line. */
+.pb-mtabs { margin-bottom: var(--s3); }
+.mtab .mt-verdict { font-size: 12px; color: var(--text-3); padding-left: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pb-digest { margin-bottom: var(--s4); }
+.pb-digest .card-head { margin-bottom: 0; }
+.pb-digest .list { margin: var(--s2) 0 0; }
+.pb-status { margin: 0 0 var(--s3); }
+.pb-status p { margin: 0 0 var(--s2); }
 
 /* ---- the bar: Back, the title on a phone, the full report ---------------- */
 /* The bar stays under the top bar while the page scrolls; its band of desk
@@ -47,14 +56,12 @@
 /* ---- the header: who, when, the market now ---------------------------------- */
 .bf-head { padding-bottom: var(--s5); }
 .bf-id { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
-.bf-id .logo { margin-top: 4px; box-shadow: inset 0 0 0 1px var(--border); }
 .bf-id-text { min-width: 0; flex: 1; }
-.bf-eyebrow { margin: 0 0 2px; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text-3); }
-.bf-head h1 { margin: 0; font-size: 24px; font-weight: 600; line-height: 1.15; letter-spacing: -0.005em; display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
-/* The title takes focus when the brief opens (for a screen reader), as the
-   inspector's does; it is not a control, so it draws no ring. */
-.bf-head h1:focus, .bf-head h1:focus-visible { outline: none; box-shadow: none; }
-.bf-sym { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--text-2); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 1px 6px; letter-spacing: 0; }
+/* The model's name heads the sheet (the project page's header names the
+   project). It takes focus when a brief opens from the inspector, for a
+   screen reader; it is not a control, so it draws no ring. */
+.bf-head h2.bf-eyebrow { margin: 0; display: block; font-size: 15px; font-weight: 600; color: var(--text); }
+.bf-head h2.bf-eyebrow:focus, .bf-head h2.bf-eyebrow:focus-visible { outline: none; box-shadow: none; }
 .bf-chain { margin: 8px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: var(--fs-small); color: var(--text-2); }
 .bf-chip { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r-pill, 999px); background: var(--surface); font-weight: 500; color: var(--text-2); }
 .bf-idstate { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
@@ -341,11 +348,10 @@
   .bf-cite a, .thesis .th-cite a { display: inline-block; padding-block: 13px; margin-block: -13px; }
 }
 @media (max-width: 860px) {
-  /* A phone: the brief takes the whole screen with its own bar. */
-  body:has(.brief-page) .topbar { display: none; }
+  /* A phone: a brief opened from the inspector has its own bar in place of the top bar. */
+  body:has(.bf-bar) .topbar { display: none; }
   .bf-bar { top: 0; margin: calc(-1 * var(--s4)) calc(-1 * var(--s4)) 0; padding: 6px var(--s4) 6px var(--s2); border-bottom: 1px solid var(--separator); background: var(--surface); box-shadow: none; clip-path: none; }
   .brief.card { margin: 0 calc(-1 * var(--s4)) var(--s6); border: 0; border-radius: 0; padding: var(--s5) var(--s4) var(--s6); }
-  .bf-head h1 { font-size: 22px; }
 }
 @media (max-width: 760px) {
   .bf-vgrid { grid-template-columns: minmax(0, 1fr); justify-items: stretch; }

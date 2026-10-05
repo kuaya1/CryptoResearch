@@ -808,15 +808,21 @@ test('market figures: a missing or zero market cap, FDV or volume is unknown ("â
   assert.match(src('views/brief.js'), /unknownFigure\('Market cap', mk\.mcap_usd\)/);
 });
 
-test('a model on hold: its card offers no run and reads On hold; the routes table says On hold; saved pills are untouched', async () => {
+test('a model on hold: its brief offers no run and reads On hold; the routes table says On hold; saved pills are untouched', async () => {
   const { wl } = await mods;
-  const project = await import(pathToFileURL(path.join(tmp, 'views', 'project.js')).href);
   const research = await import(pathToFileURL(path.join(tmp, 'views', 'research.js')).href);
-  assert.deepEqual(project.emptyCardOffer('none', { job: null, onHold: true }), { kind: 'on_hold', canRun: false });
-  assert.deepEqual(project.emptyCardOffer('none', { job: null, onHold: false }), { kind: 'none', canRun: true }, 'a model not on hold still offers its run');
-  assert.equal(project.emptyCardOffer('on_hold', { job: { state: 'queued' }, onHold: true }).canRun, false, 'a kept job: no new run');
-  assert.deepEqual(project.emptyCardOffer('withheld', { job: null, onHold: true, saved: true }), { kind: 'withheld', canRun: false }, 'a saved report keeps its own state; still no new run');
+  const bm = await import(pathToFileURL(path.join(tmp, 'brief-model.js')).href);
   const hold = { since: '2026-10-04', reason: 'paused' };
+  // The project page's Brief tab, for a model with no report (D1 replaced the Overview's cards).
+  const d = { project: { status: 'active' }, reports: [] };
+  const none = { status: 'none', own: [] };
+  const held = { settings: { research: { on_hold: { gemini: hold } } } };
+  const e = bm.emptyOf(none, { d, row: null, index: held, provider: 'gemini' });
+  assert.equal(e.can_run, false, 'a model on hold offers no run');
+  assert.ok(e.hold, 'and says it is on hold');
+  assert.equal(bm.emptyOf(none, { d, row: null, index: held, provider: 'claude' }).can_run, true, 'a model not on hold still offers its run');
+  const queued = { research: { providers: { gemini: { state: 'queued', run_id: 'r1' } } } };
+  assert.equal(bm.emptyOf(none, { d, row: queued, index: held, provider: 'gemini' }).can_run, false, 'a kept job: no new run');
   const w = research.routeWords('gemini', { hold });
   assert.equal(w.route, 'On hold');
   assert.match(w.happens, /^On hold since 2026-10-04: nothing new is assigned to Gemini\./);
@@ -825,4 +831,23 @@ test('a model on hold: its card offers no run and reads On hold; the routes tabl
   // Saved reports keep their pills (unchanged rule).
   const index = { settings: { research: { on_hold: { gemini: hold } } } };
   assert.equal(wl.holdCell(index, 'gemini', { grade: { status: 'firm', value: 67, display: '67.0' } }).dash, false);
+});
+
+test('one page per project (D1): every former project tab and the Brief page redirect to the new home', async () => {
+  const project = await import(pathToFileURL(path.join(tmp, 'views', 'project.js')).href);
+  const go = (name, args, qs = '') => project.projectRedirect(name, args, new URLSearchParams(qs));
+  const P = 'p1';
+  assert.equal(go('project', [P]), '#/project/p1/brief');
+  assert.equal(go('project', [P, 'overview']), '#/project/p1/brief');
+  assert.equal(go('project', [P, 'scorecards'], 'provider=chatgpt'), '#/project/p1/brief?model=chatgpt&open=scorecard');
+  assert.equal(go('project', [P, 'reports'], 'report=r1'), '#/project/p1/report?report=r1');
+  assert.equal(go('project', [P, 'comparison']), '#/project/p1/brief?open=compare');
+  assert.equal(go('project', [P, 'evidence']), '#/project/p1/brief?open=evidence');
+  assert.equal(go('project', [P, 'research'], 'run=run1'), '#/project/p1/brief?open=runs&run=run1');
+  assert.equal(go('project', [P, 'history']), '#/project/p1/notes');
+  assert.equal(go('brief', [P]), '#/project/p1/brief?model=claude');
+  assert.equal(go('brief', [P], 'report=r2'), '#/project/p1/brief?model=claude&report=r2');
+  // The new tabs stay where they are.
+  for (const t of ['brief', 'report', 'market', 'notes']) assert.equal(go('project', [P, t]), null);
+  assert.equal(go('project', [P, 'nonsense']), '#/project/p1/brief');
 });

@@ -54,7 +54,7 @@ function runsTab(ctx) {
       actions: [runNow, h('a', { class: 'btn small', href: '#/settings?tab=research' }, hosted ? 'API keys and limits' : 'Set up API access')],
     }),
     card('Latest research per project', table([
-      { label: 'Project', render: (p) => h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/research` }, p.name) },
+      { label: 'Project', render: (p) => h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/brief?open=runs` }, p.name) },
       { label: 'Latest run', render: (p) => (p.research && p.research.latest_run ? h('div', null, stateText(sentence(p.research.latest_run.status), p.research.latest_run.status === 'completed' ? 'ok' : p.research.latest_run.status === 'failed' ? 'bad' : 'wait'), h('div', { class: 'small muted' }, `${fmtAgo(p.research.latest_run.created_at)} · ${p.research.latest_run.horizon ? p.research.latest_run.horizon.text : ''}`)) : h('span', { class: 'faint small' }, 'None')) },
       { label: 'Models', render: (p) => h('div', { class: 'grades' }, PROVIDERS.map((prov) => gradeBadge(prov, p.providers && p.providers[prov], p.research && p.research.providers && p.research.providers[prov], { staleDays, hosted, onHold: Boolean(onHoldOf(ctx.state.index, prov)) }))) },
       { label: 'Reports', num: true, render: (p) => String(p.report_count || 0) },
@@ -101,7 +101,7 @@ async function compareTab(ctx, route) {
   if (projectId) {
     try {
       const d = await ctx.projectDetail(projectId);
-      detail = card(`${d.project.name}: side by side`, comparisonBlock(ctx, d, { showMedian: Boolean(idx.settings.comparison.show_median) }), { actions: [h('a', { href: `#/project/${encodeURIComponent(projectId)}/comparison` }, 'Open project')] });
+      detail = card(`${d.project.name}: side by side`, comparisonBlock(ctx, d, { showMedian: Boolean(idx.settings.comparison.show_median) }), { actions: [h('a', { href: `#/project/${encodeURIComponent(projectId)}/brief?open=compare` }, 'Open project')] });
     } catch (err) {
       detail = callout(err.message, 'bad');
     }
@@ -136,7 +136,7 @@ function evidenceTab(ctx) {
   const draw = () => {
     const rows = ev.claims.filter((c) => (!evFilters.project || c.project_id === evFilters.project) && (!evFilters.tag || c.evidence_tag === evFilters.tag) && (!evFilters.check || c.dashboard_check.status === evFilters.check) && (!evFilters.staleOnly || c.stale));
     claimsHolder.replaceChildren(table([
-      { label: 'Project', render: (c) => h('a', { href: `#/project/${encodeURIComponent(c.project_id)}/evidence` }, c.project_name) },
+      { label: 'Project', render: (c) => h('a', { href: `#/project/${encodeURIComponent(c.project_id)}/brief?open=evidence` }, c.project_name) },
       { label: 'From', render: (c) => PROVIDER_LABELS[c.provider] || c.provider },
       { label: 'Claim', wrap: true, render: (c) => h('div', null, c.text, c.limitation ? h('div', { class: 'small muted' }, `Limitation: ${c.limitation}`) : null) },
       { label: 'Analyst tag', render: (c) => tagChip(c.evidence_tag, c.evidence_tag_raw) },
@@ -157,7 +157,7 @@ function evidenceTab(ctx) {
   return h('div', null,
     callout('Three separate things: the analyst tag ([V] means the analyst checked it in their own session), your dashboard check (what you confirmed by opening the source), and independent corroboration (a different, independent source agrees). Opening an official statement is not verification of its substance.', 'info'),
     card('Contradictions and different measurement bases', table([
-      { label: 'Project', render: (c) => h('a', { href: `#/project/${encodeURIComponent(c.project_id)}/comparison` }, c.project_name) },
+      { label: 'Project', render: (c) => h('a', { href: `#/project/${encodeURIComponent(c.project_id)}/brief?open=compare` }, c.project_name) },
       { label: 'Metric', render: (c) => h('code', null, c.metric_id) },
       { label: 'Finding', render: (c) => (c.kind === 'contradiction' ? stateText('Contradiction', 'bad') : sentence(c.kind)) },
       { label: 'A', wrap: true, render: (c) => h('div', null, `${PROVIDER_LABELS[c.a.provider]}: ${fmtNum(c.a.value)} ${c.a.unit || ''}`, h('div', { class: 'small muted' }, c.a.period || 'period unstated')) },
@@ -165,7 +165,7 @@ function evidenceTab(ctx) {
     ], ev.contradictions, { empty: 'No conflicting numbers between models.' }), { note: 'A contradiction is the same metric, unit, period, definition and date with different values. Anything else is listed by its difference, not called a contradiction.' }),
     h('div', { class: 'grid two' },
       card('Sources cited by more than one model', table([
-        { label: 'Project', render: (s) => h('a', { href: `#/project/${encodeURIComponent(s.project_id)}/evidence` }, s.project_name) },
+        { label: 'Project', render: (s) => h('a', { href: `#/project/${encodeURIComponent(s.project_id)}/brief?open=evidence` }, s.project_name) },
         { label: 'Source', wrap: true, render: (s) => h('a', { href: s.url }, s.title || s.url) },
         { label: 'Cited by', render: (s) => s.providers.map((p) => PROVIDER_LABELS[p]).join(', ') },
       ], ev.shared_sources, { empty: 'No shared sources.' }), { note: 'Agreement built on the same source is not independent.' }),
@@ -177,7 +177,7 @@ function evidenceTab(ctx) {
     card('Claims', [h('div', { class: 'form-grid', style: { marginBottom: '12px' }, dataset: { nodirty: '1' } }, field('Project', projSel), field('Analyst tag', tagSel), field('Dashboard check', checkSel), h('label', { class: 'check' }, stale, `Only stale (older than ${idx.settings.freshness.claim_stale_days} days)`)), claimsHolder], { note: `${ev.claims.length} claims · ${ev.stale_claims} stale. Record checks on each project's Evidence tab.` }),
     card('Your dispute questions', [
       table([
-        { label: 'Project', render: (x) => h('a', { href: `#/project/${encodeURIComponent(x.project_id)}/evidence` }, x.project_name) },
+        { label: 'Project', render: (x) => h('a', { href: `#/project/${encodeURIComponent(x.project_id)}/brief?open=evidence` }, x.project_name) },
         { label: 'Topic', render: (x) => (x.topic ? h('code', null, x.topic) : null) },
         { label: 'Question', wrap: true, key: 'question' },
         { label: 'Status', render: (x) => sentence(x.status) },

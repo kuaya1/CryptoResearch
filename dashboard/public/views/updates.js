@@ -49,7 +49,7 @@ function changesTab(ctx) {
   const changed = rows.filter((p) => p.changes && p.changes.item_count > 0);
   return h('div', null,
     card(`Projects with changes (${changed.length})`, table([
-      { label: 'Project', render: (p) => h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/history` }, p.name) },
+      { label: 'Project', render: (p) => h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/notes` }, p.name) },
       { label: 'New items', num: true, render: (p) => (p.changes && p.changes.item_count ? h('strong', null, String(p.changes.item_count)) : h('span', { class: 'faint' }, '0')) },
       { label: 'New reports', num: true, render: (p) => String((p.changes && p.changes.new_reports) || 0) },
       { label: 'Price since', num: true, render: (p) => (p.changes && typeof p.changes.price_change_pct === 'number' ? fmtSignedPct(p.changes.price_change_pct) : h('span', { class: 'unknown' }, 'unknown')) },
@@ -115,7 +115,7 @@ function importReceipt(ctx, rec) {
   const dup = res.status === 'duplicate';
   const title = ok ? 'Report saved' : dup ? 'Already saved: nothing new was added' : 'Not imported yet';
   const tone = ok ? 'ok' : dup ? '' : res.status === 'failed' || res.status === 'error' ? 'bad' : 'warn';
-  const href = res.project_id && res.report_id ? `#/project/${encodeURIComponent(res.project_id)}/reports?report=${encodeURIComponent(res.report_id)}` : null;
+  const href = res.project_id && res.report_id ? `#/project/${encodeURIComponent(res.project_id)}/report?report=${encodeURIComponent(res.report_id)}` : null;
   const issues = ok ? [res.errors ? `${res.errors} extraction error(s)` : null, res.ambiguous ? `${res.ambiguous} ambiguous value(s)` : null, res.warnings ? `${res.warnings} warning(s)` : null].filter(Boolean) : [];
   const row = (k, v) => (v === null || v === undefined ? null : h('li', null, h('span', { class: 'k' }, k), h('span', null, v)));
   const another = button('Import another', null, { kind: 'small quiet', key: 'import-another' });
@@ -263,7 +263,7 @@ function importTab(ctx, route) {
       h('p', { class: 'small muted', style: { marginTop: '12px' } }, 'PDFs are kept as originals and marked as needing a text copy, since scores cannot be read from a PDF offline. Files dropped into inbox/claude, inbox/chatgpt or inbox/gemini are picked up within seconds while the dashboard is open, and hourly otherwise.')), { id: 'import-file' })),
     card('Recent imports', table([
       { label: 'Result', render: (f) => stateText(f.status === 'ingested' ? 'Saved' : f.status === 'duplicate' ? 'Already saved' : f.status === 'set_aside' ? 'Set aside' : f.status.replace(/_/g, ' '), f.status === 'ingested' ? 'ok' : f.status === 'duplicate' || f.status === 'set_aside' ? '' : 'warn') },
-      { label: 'Project · report', render: (f) => (f.project_id ? h('a', { href: `#/project/${encodeURIComponent(f.project_id)}/reports${f.report_id ? `?report=${encodeURIComponent(f.report_id)}` : ''}` }, `${projectName(ctx, f.project_id)}${f.report_id ? ` · ${f.report_id}` : ''}`) : f.duplicate_of ? `Same as ${f.duplicate_of.report_id}` : null) },
+      { label: 'Project · report', render: (f) => (f.project_id ? h('a', { href: `#/project/${encodeURIComponent(f.project_id)}/report${f.report_id ? `?report=${encodeURIComponent(f.report_id)}` : ''}` }, `${projectName(ctx, f.project_id)}${f.report_id ? ` · ${f.report_id}` : ''}`) : f.duplicate_of ? `Same as ${f.duplicate_of.report_id}` : null) },
       { label: 'Model', render: (f) => PROVIDER_LABELS[(f.key || '').split('/')[0]] || '—' },
       { label: 'When', render: (f) => fmtAgo(f.updated_at) },
     ], recent, { empty: 'Nothing imported yet.' }), { note: 'Saved on disk, so this list survives restarts. All files: Inbox tab.' }));
@@ -309,7 +309,7 @@ function inboxTab(ctx) {
     card('Recently processed', table([
       { label: 'File', render: (f) => h('code', { class: 'small wrap-anywhere' }, f.key) },
       { label: 'Result', render: (f) => stateText(f.status === 'ingested' ? 'Saved' : f.status === 'duplicate' ? 'Already saved' : f.status.replace(/_/g, ' '), f.status === 'ingested' ? 'ok' : '') },
-      { label: 'Project · report', render: (f) => (f.project_id ? h('a', { href: `#/project/${encodeURIComponent(f.project_id)}/reports${f.report_id ? `?report=${encodeURIComponent(f.report_id)}` : ''}` }, `${projectName(ctx, f.project_id)} · ${f.report_id || ''}`) : f.duplicate_of ? `Same as ${f.duplicate_of.report_id}` : null) },
+      { label: 'Project · report', render: (f) => (f.project_id ? h('a', { href: `#/project/${encodeURIComponent(f.project_id)}/report${f.report_id ? `?report=${encodeURIComponent(f.report_id)}` : ''}` }, `${projectName(ctx, f.project_id)} · ${f.report_id || ''}`) : f.duplicate_of ? `Same as ${f.duplicate_of.report_id}` : null) },
       { label: 'Run', render: (f) => (f.run_id ? h('code', { class: 'small' }, f.run_id) : null) },
       { label: 'When', render: (f) => fmtAgo(f.updated_at) },
     ], inbox.recent || [], { empty: 'Nothing processed yet.' }), { note: 'Each original is copied into its project folder before the inbox file moves to processed/.' }));

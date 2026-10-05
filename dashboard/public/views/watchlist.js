@@ -784,7 +784,7 @@ function revisionLine(rep, pid, prov) {
       h('p', null, rep.revision_label),
       rv.declared ? null : h('p', { class: 'muted' }, 'No reason recorded.'),
       link ? h('p', { class: 'muted' }, `The run links the first save (${link}).`) : null,
-      h('a', { class: 'small', href: `#/project/${encodeURIComponent(pid)}/reports?report=${encodeURIComponent(rv.of)}`, dataset: { key: `rev-of-${pid}-${prov}` } }, 'Open the earlier report')));
+      h('a', { class: 'small', href: `#/project/${encodeURIComponent(pid)}/report?report=${encodeURIComponent(rv.of)}`, dataset: { key: `rev-of-${pid}-${prov}` } }, 'Open the earlier report')));
 }
 
 // A stated analysis time after the save (or more than a day ahead) is shown
@@ -898,7 +898,7 @@ function modelHead(ctx, p, prov) {
   // assistant first; pasting by hand stays available. A model on hold gets
   // no prompt to act: its job is kept, not handed out.
   if (job && job.state === 'unconfigured' && !opts.onHold && !resume) actions.push(...waitingActions(ctx, { pid, runId: job.run_id, provider: prov, key: `${pid}-${prov}` }));
-  if (job && ['interrupted', 'uncertain', 'incomplete', 'conflict', 'held'].includes(info.job || info.kind)) actions.push(h('a', { class: 'btn small', href: `#/project/${encodeURIComponent(pid)}/research`, dataset: { key: `runs-${pid}-${prov}` } }, 'Research runs'));
+  if (job && ['interrupted', 'uncertain', 'incomplete', 'conflict', 'held'].includes(info.job || info.kind)) actions.push(h('a', { class: 'btn small', href: `#/project/${encodeURIComponent(pid)}/brief?open=runs`, dataset: { key: `runs-${pid}-${prov}` } }, 'Research runs'));
   if (!rep && !job && p.status !== 'archived' && !opts.onHold) actions.push(button(`Run ${who} research`, () => openResearchDialog(ctx, p, { providers: [prov] }), { kind: 'small', key: `run-${pid}-${prov}` }));
   // The report's verdict, analysis date and horizon, in one quiet line. The
   // age is in calendar days in New York ("yesterday", not "today").
@@ -1023,7 +1023,7 @@ function comparisonNote(ctx, p) {
       ? h('p', { style: { margin: '6px 0 0' } }, h('strong', null, `They differ by ${ctx.state.index.settings.comparison.spread_threshold}+ points on ${flagged.length} item(s): `), flagged.slice(0, 4).map((f) => `${f.label} (${f.spread})`).join(', '), flagged.length > 4 ? `, and ${flagged.length - 4} more.` : '.')
       : h('p', { style: { margin: '6px 0 0' } }, 'No item differs by the highlight threshold or more.'),
     h('p', { class: 'muted', style: { margin: '6px 0 0' } }, 'Agreement between models is not independent confirmation: they often read the same sources.'),
-    h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/comparison`, dataset: { key: `compare-${p.project_id}` } }, 'Compare in detail'));
+    h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/brief?open=compare`, dataset: { key: `compare-${p.project_id}` } }, 'Compare in detail'));
 }
 
 // A few quiet lines where content will be; the words are for screen readers.
@@ -1112,7 +1112,7 @@ function problemLines(ctx, p) {
   }
   const others = alertStrips(splitAttention(projectItems(ctx, p)).critical, `palert-${p.project_id}`);
   const idNote = p.identity_status !== 'verified'
-    ? h('p', { class: 'small insp-idnote' }, h('strong', null, 'Identity pending: '), (p.identity_unknowns || []).join(' ') || 'The token is not confirmed, so no prices or holdings use it.', ' ', h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/research`, dataset: { key: `fix-identity-${p.project_id}` } }, 'Complete the identity'))
+    ? h('p', { class: 'small insp-idnote' }, h('strong', null, 'Identity pending: '), (p.identity_unknowns || []).join(' ') || 'The token is not confirmed, so no prices or holdings use it.', ' ', h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/brief?open=identity`, dataset: { key: `fix-identity-${p.project_id}` } }, 'Complete the identity'))
     : null;
   if (!items.length && !others && !idNote) return null;
   return h('div', { class: 'insp-problems' }, items.length ? h('ul', { class: 'plines', 'aria-label': 'Research that needs you' }, items) : null, others, idNote);
@@ -1182,7 +1182,7 @@ function inspectorMenu(ctx, p) {
     } catch (err) { toast(err.message, 'bad'); }
   };
   const items = [
-    item('Full research page', null, { key: `menu-full-${pid}`, href: `#/project/${encodeURIComponent(pid)}/overview` }),
+    item('Full research page', null, { key: `menu-full-${pid}`, href: `#/project/${encodeURIComponent(pid)}/brief` }),
     archived ? null : item('Run research…', () => openResearchDialog(ctx, p), { key: 'menu-research' }),
     archived ? null : item(p.on_watchlist ? 'Stop watching' : 'Watch', watch, { key: 'menu-watch', desc: p.on_watchlist ? 'On your watchlist now' : null }),
     p.sector ? item('Change sector', () => openSectorDialog(ctx, p), { key: 'menu-sector', desc: p.sector.label }) : null,
@@ -1636,15 +1636,15 @@ function renderPanel(ctx, pid) {
         // The contract checks in full (the chips above are the summary).
         h('div', { dataset: { slot: 'checks' } }),
         selRep ? h('div', { class: 'btn-row insp-links' },
-          h('a', { class: 'btn small', href: `#/project/${encodeURIComponent(pid)}/scorecards?provider=${sel}`, dataset: { key: `scorecard-${pid}-${sel}` } }, 'Full scorecard')) : null)),
+          h('a', { class: 'btn small', href: `#/project/${encodeURIComponent(pid)}/brief?model=${sel}&open=scorecard`, dataset: { key: `scorecard-${pid}-${sel}` } }, 'Full scorecard')) : null)),
     // The foot: what changed since your review, the report, Mark reviewed.
     h('div', { class: 'panel-foot' },
       h('p', { class: 'pf-sum', title: p.next_review ? `Next review: ${fmtDate(p.next_review.date)}${p.next_review.overdue ? ' (overdue)' : ''}` : null },
         ch.item_count
-          ? [`${ch.item_count} change${ch.item_count === 1 ? '' : 's'} since ${ch.cursor_source === 'project created' ? 'added' : 'your last review'}`, h('span', { class: 'pf-dot', 'aria-hidden': 'true' }, '·'), h('a', { href: `#/project/${encodeURIComponent(pid)}/history`, dataset: { key: `history-${pid}` } }, 'What changed')]
+          ? [`${ch.item_count} change${ch.item_count === 1 ? '' : 's'} since ${ch.cursor_source === 'project created' ? 'added' : 'your last review'}`, h('span', { class: 'pf-dot', 'aria-hidden': 'true' }, '·'), h('a', { href: `#/project/${encodeURIComponent(pid)}/notes`, dataset: { key: `history-${pid}` } }, 'What changed')]
           : h('span', { class: 'pf-ok' }, 'Reviewed')),
       h('div', { class: 'pf-act' },
-        selRep ? h('a', { class: 'btn small', href: `#/project/${encodeURIComponent(pid)}/reports?report=${encodeURIComponent(selRep.report_id)}`, dataset: { key: `report-${pid}-${sel}` } }, 'Open report') : null,
+        selRep ? h('a', { class: 'btn small', href: `#/project/${encodeURIComponent(pid)}/report?report=${encodeURIComponent(selRep.report_id)}`, dataset: { key: `report-${pid}-${sel}` } }, 'Open report') : null,
         ch.item_count ? reviewedBtn : null)));
   // The slide-in runs once; the class goes when it ends.
   if (reopened) panel.addEventListener('animationend', () => panel.classList.remove('entering'), { once: true });

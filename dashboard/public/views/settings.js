@@ -1,5 +1,6 @@
-// Settings: general preferences, research providers and budgets (keys never
-// appear in the page), rubrics, data (exports, backups) and system status.
+// Settings: Appearance first, then research providers and budgets (keys never
+// appear in the page); dashboard preferences, rubrics, data (exports,
+// backups), system status and activity under Advanced.
 import {
   h, card, table, stateText, fmtDateTime, fmtNum, fmtAgo, field, input, select, button, action, callout, kv, details, tabStrip, safeSection,
   priceStatus, toast, store, PROVIDERS, PROVIDER_LABELS,
@@ -28,9 +29,12 @@ function appearanceCard() {
   return card('Appearance', pick, { note: 'Saved in this browser only. Light is the default.' });
 }
 
-const TABS = [
+// Settings opens on Appearance; Research models & budget follows, always
+// shown; the technical sections sit under a collapsed Advanced (Eric,
+// 2026-10-05, D6). A link to one of them (#/settings?tab=<id>) opens Advanced
+// on that section.
+const ADVANCED = [
   ['general', 'General'],
-  ['research', 'Research models & budget'],
   ['rubrics', 'Rubrics'],
   ['data', 'Backups & exports'],
   ['system', 'System & privacy'],
@@ -38,13 +42,31 @@ const TABS = [
 ];
 
 export async function renderSettings(ctx, route) {
-  const tab = TABS.some(([t]) => t === route.query.get('tab')) ? route.query.get('tab') : 'general';
-  const strip = tabStrip(TABS.map(([t, label]) => ({ id: t, label, href: `#/settings?tab=${t}` })), tab, { label: 'Settings sections' });
-  const body = await safeSection(TABS.find(([t]) => t === tab)[1], () => ({ general: generalTab, research: researchTab, rubrics: rubricsTab, data: dataTab, system: systemTab, activity: activityTab })[tab](ctx));
-  return h('div', null,
+  const want = route.query.get('tab');
+  const tab = ADVANCED.some(([t]) => t === want) ? want : null;
+  const research = await safeSection('Research models & budget', () => researchTab(ctx));
+  const strip = tabStrip(ADVANCED.map(([t, label]) => ({ id: t, label, href: `#/settings?tab=${t}` })), tab || 'general', { label: 'Advanced settings' });
+  const sel = tab || 'general';
+  const body = await safeSection(ADVANCED.find(([t]) => t === sel)[1], () => ({ general: generalTab, rubrics: rubricsTab, data: dataTab, system: systemTab, activity: activityTab })[sel](ctx));
+  const page = h('div', null,
     h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Settings'))),
-    strip,
-    h('div', { id: 'tabpanel', role: 'tabpanel', 'aria-labelledby': `tab-${tab}` }, body));
+    appearanceCard(),
+    h('section', { class: 'section', id: 'settings-research', 'aria-labelledby': 'settings-h-research', tabindex: '-1' },
+      h('h2', { id: 'settings-h-research' }, 'Research models & budget'), research),
+    details('Advanced', h('div', null, strip, h('div', { id: 'tabpanel', role: 'tabpanel', 'aria-labelledby': `tab-${sel}` }, body)), { id: 'settings-advanced', open: Boolean(tab) }));
+  page.lastChild.classList.add('page-fold');
+  // A link into one section brings it into view once, when the page opens.
+  const target = want === 'research' ? 'settings-research' : tab ? 'settings-advanced' : null;
+  if (target) {
+    page.afterMount = () => {
+      if (ctx.state.renderReason !== 'nav') return;
+      requestAnimationFrame(() => {
+        const el = page.querySelector(`#${target}, [data-key="${target}"]`);
+        if (el) el.scrollIntoView({ block: 'start' });
+      });
+    };
+  }
+  return page;
 }
 
 function generalTab(ctx) {
@@ -87,7 +109,6 @@ function generalTab(ctx) {
     return out;
   }, 'Settings saved to config/settings.json');
   return h('div', null,
-    appearanceCard(),
     card('Dashboard settings', form, { note: 'Rubric weights are not editable here: they belong to the versioned rubric files.' }),
     card('Market data sources', table([
       { label: 'Source', render: (x) => x.label },

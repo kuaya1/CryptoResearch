@@ -241,10 +241,8 @@ const SECTIONS = [
 const LOADERS = {
   new: () => import('./views/intake.js').then((m) => m.renderIntake),
   watchlist: () => import('./views/watchlist.js').then((m) => m.renderWatchlist),
+  // One page per project (#/project/<id>/<tab>); its Brief tab is the default.
   project: () => import('./views/project.js').then((m) => m.renderProject),
-  // The Claude Brief of one project (#/brief/<id>[?report=<id>]): a page of
-  // its own, so it opens in a new tab and Back returns to where it was opened.
-  brief: () => import('./views/brief.js').then((m) => m.renderBrief),
   portfolio: () => import('./views/portfolio.js').then((m) => m.renderPortfolio),
   research: () => import('./views/research.js').then((m) => m.renderResearch),
   updates: () => import('./views/updates.js').then((m) => m.renderUpdates),
@@ -291,7 +289,7 @@ function counts(index) {
 function renderNav() {
   const nav = document.getElementById('nav');
   const r = state.route;
-  const active = r ? (r.name === 'project' || r.name === 'brief' ? 'watchlist' : r.name) : 'watchlist';
+  const active = r ? (r.name === 'project' ? 'watchlist' : r.name) : 'watchlist';
   const c = state.index ? counts(state.index) : {};
   clear(nav);
   for (const [id, label] of SECTIONS) {
@@ -317,9 +315,9 @@ function closeMenu() {
 }
 
 function pageTitle(route) {
-  if (route.name === 'project' || route.name === 'brief') {
+  if (route.name === 'project') {
     const p = state.index && state.index.projects.find((x) => x.project_id === route.args[0]);
-    return `${route.name === 'brief' ? 'Claude Brief · ' : ''}${p ? p.name : 'Project'} · CryptoResearch`;
+    return `${p ? p.name : 'Project'} · CryptoResearch`;
   }
   const s = SECTIONS.find((x) => x[0] === route.name);
   return `${s ? s[1] : 'Watchlist'} · CryptoResearch`;
@@ -400,6 +398,17 @@ async function render({ reason = 'nav' } = {}) {
   }
   if (route.name === 'imports') return navigate(LEGACY_IMPORT_TABS[route.query.get('tab')] || '#/updates?tab=import', { replace: true });
   if (route.name === 'updates' && route.query.get('tab') === 'activity') return navigate('#/settings?tab=activity', { replace: true });
+  // The project page's former tabs and the Brief's own page (#/brief/<id>,
+  // also from links the server builds) land on their new home, keeping the
+  // entry's state (a brief opened from the inspector returns there).
+  if (route.name === 'brief' || route.name === 'project') {
+    const { projectRedirect } = await import('./views/project.js');
+    const to = projectRedirect(route.name, route.args, route.query);
+    if (to) {
+      history.replaceState(history.state, '', to);
+      route = parseHash();
+    }
+  }
   if (!LOADERS[route.name]) route = { name: 'watchlist', args: [], query: new URLSearchParams() };
   const prev = state.route;
   const samePage = prev && routeKey(prev) === routeKey(route);

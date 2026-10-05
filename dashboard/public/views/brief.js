@@ -1,19 +1,22 @@
-// The Claude Brief (#/brief/<project>[?report=<report>]): one page that reads
-// one saved Claude report as a decision brief for the position horizon. The
+// The Brief (#/project/<project>/brief?model=<model>[&report=<report>]): the
+// project page's default tab (Eric, 2026-10-05, D1). It reads one saved report
+// of the chosen model (Claude, ChatGPT or Gemini, each its own brief, never
+// mixed) as a decision brief for the position horizon. The
 // verdict and the desk's calculated grade first, then the thesis, the
 // scorecard, what supports and what threatens it, what to watch, the
 // scenarios, and the evidence and records it is drawn from; your own note
 // last, apart from Claude's.
 //
 // It reads the saved project record (cached from the inspector) and the index
-// the page already has: opening or closing it never refreshes prices, never
-// screens a contract, never asks DexScreener or TradingView, and never starts
-// research. Report text is data, shown as text. Back, Escape and its Back
-// control return to where it was opened (the watchlist keeps its inspector,
-// filters and place). A phone gets the whole screen.
+// the page already has: drawing it never refreshes prices, never screens a
+// contract, never asks DexScreener or TradingView, and never starts research.
+// Report text is data, shown as text. Opened from the inspector (ui.js
+// briefLink), Back, Escape and its Back control return there (the watchlist
+// keeps its inspector, filters and place); on a phone its bar replaces the
+// top bar. The project page (views/project.js) draws the tabs around it.
 import {
-  h, details, logo, gradeGauge, coverageMeter, unscoredList, structureNotes, fmtDate, fmtDateTime, fmtAsOf, fmtRelDay,
-  icon, stateText, button, callout, scoreTier, PROVIDER_LABELS, COVERAGE_MEANS, TAG_TITLES, unknownFigure,
+  h, details, gradeGauge, coverageMeter, unscoredList, structureNotes, fmtDate, fmtDateTime, fmtAsOf, fmtRelDay,
+  icon, stateText, button, scoreTier, PROVIDER_LABELS, COVERAGE_MEANS, TAG_TITLES, unknownFigure,
 } from '../ui.js';
 import { briefModel, TAG_WORDS, CERTAINTY_WORDS } from '../brief-model.js';
 import { evidenceChecksBlock, sourceItem, checksWord } from './project.js';
@@ -21,12 +24,15 @@ import { evidenceQuality } from './inspector.js';
 import { chartCycleBlock, CONFIDENCE_LABELS } from '../thesis-ui.js';
 import { openResearchDialog } from './dialogs.js';
 
-const PROVIDER = 'claude';
-const WHO = PROVIDER_LABELS[PROVIDER];
+// The model this brief reads; set once per draw by briefPanel (a draw is
+// synchronous, so one brief never sees another's model).
+let PROVIDER = 'claude';
+let WHO = PROVIDER_LABELS[PROVIDER];
 const enc = encodeURIComponent;
-const briefHref = (pid, rid = null) => `#/brief/${enc(pid)}${rid ? `?report=${enc(rid)}` : ''}`;
-const reportHref = (pid, rid) => `#/project/${enc(pid)}/reports?report=${enc(rid)}`;
-const runHref = (pid, runId) => `#/project/${enc(pid)}/research${runId ? `?run=${enc(runId)}` : ''}`;
+const briefHref = (pid, rid = null) => `#/project/${enc(pid)}/brief?model=${PROVIDER}${rid ? `&report=${enc(rid)}` : ''}`;
+const reportHref = (pid, rid) => `#/project/${enc(pid)}/report?report=${enc(rid)}`;
+// The project's research runs, folded under the brief, with one run in view.
+const runHref = (pid, runId) => `#/project/${enc(pid)}/brief?model=${PROVIDER}&open=runs${runId ? `&run=${enc(runId)}` : ''}`;
 const plainClick = (e) => e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
 
 // Leaving the brief: back to the entry it was opened from (the watchlist with
@@ -98,7 +104,7 @@ const none = (text) => h('p', { class: 'bf-none' }, text);
 
 // ---- the bar and the header ------------------------------------------------------------
 
-function topBar(ctx, m, pid) {
+export function topBar(ctx, m, pid) {
   const from = history.state && history.state.crBrief === pid ? history.state.from : null;
   const back = h('a', { class: 'bf-back', href: `#/watchlist?p=${enc(pid)}`, dataset: { key: 'brief-back' }, 'aria-label': `Close the brief and return to ${from === 'project' ? `the ${m.identity.name} page` : 'the watchlist'}`, title: 'Back (Esc)' },
     h('span', { class: 'bf-chev', 'aria-hidden': 'true' }), h('span', null, from === 'project' ? 'Project' : 'Watchlist'));
@@ -141,7 +147,6 @@ function marketLine(mk) {
 
 function header(ctx, m, row, pid) {
   const id = m.identity;
-  const lg = logo({ ...(row || {}), project_id: pid, name: id.name, symbol: id.symbol }, { size: 44 });
   const facts = [];
   if (m.report_id) {
     const a = m.report.assessment || {};
@@ -153,11 +158,11 @@ function header(ctx, m, row, pid) {
       hz.months ? h('span', { class: 'faint' }, ` · ${hz.months} month${hz.months === 1 ? '' : 's'}${hz.mode === 'long_term' ? ', long-term exception' : ''}`) : null)));
     facts.push(h('div', null, h('dt', null, 'Report'), h('dd', null, m.is_latest ? `${WHO}'s latest` : 'An earlier report', h('span', { class: 'faint' }, ` · saved ${fmtDate(m.provenance.saved_at)}`))));
   }
+  // The project page's header names the project; the brief names its model.
   return h('header', { class: 'bf-head' },
-    h('div', { class: 'bf-id' }, lg,
+    h('div', { class: 'bf-id' },
       h('div', { class: 'bf-id-text' },
-        h('p', { class: 'bf-eyebrow' }, `${WHO} Brief`),
-        h('h1', { id: 'bf-title', tabindex: '-1' }, h('span', { class: 'bf-name' }, id.name), id.symbol ? h('span', { class: 'bf-sym' }, id.symbol) : null),
+        h('h2', { id: 'bf-title', class: 'bf-eyebrow', tabindex: '-1' }, `${WHO} Brief`, h('span', { class: 'sr-only' }, `: ${id.name}`)),
         chainLine(id))),
     facts.length ? h('dl', { class: 'bf-meta' }, facts) : null,
     marketLine(m.market));
@@ -601,8 +606,7 @@ function evidenceSection(ctx, m, pid) {
         prov('Brief', `${pv.format}, drawn from this report when opened`)),
       h('p', { class: 'bf-links' },
         h('a', { class: 'btn small', href: reportHref(pid, pv.report_id), dataset: { key: 'brief-open-report' } }, 'Open the full report'),
-        pv.run_id ? h('a', { class: 'btn small', href: runHref(pid, pv.run_id), dataset: { key: 'brief-open-run' } }, 'Research run') : null,
-        h('a', { class: 'btn small', href: `#/project/${enc(pid)}/overview`, dataset: { key: 'brief-open-project' } }, 'Full research page'))),
+        pv.run_id ? h('a', { class: 'btn small', href: runHref(pid, pv.run_id), dataset: { key: 'brief-open-run' } }, 'Research run') : null)),
     others.length ? details(`${WHO}'s other reports (${others.length})`, h('ul', { class: 'bf-hist' }, others.map((x) => h('li', null,
       h('span', { class: 'bf-hist-d' }, x.analysis_at ? fmtDate(x.analysis_at) : 'Undated'),
       h('span', { class: 'bf-hist-g fig' }, x.grade && x.grade.display ? x.grade.display : x.needs_text ? 'PDF' : x.grade && x.grade.status === 'withheld' ? 'Withheld' : 'No grade'),
@@ -622,7 +626,7 @@ function noteSection(d, row, pid) {
     h('p', { class: 'bf-yours-m' },
       c && c.updated_at ? h('span', null, `Saved ${fmtDate(c.updated_at)}${c.conviction ? ` · conviction ${c.conviction}` : ''}`) : null,
       review ? h('span', null, `Your next review ${fmtDate(review.date)}${review.overdue ? ' (overdue)' : ''}`) : null,
-      h('a', { href: `#/project/${enc(pid)}/history`, dataset: { key: 'brief-note-edit' } }, text ? 'Edit your note' : 'Write your note')));
+      h('a', { href: `#/project/${enc(pid)}/notes`, dataset: { key: 'brief-note-edit' } }, text ? 'Edit your note' : 'Write your note')));
 }
 
 // ---- no brief to show -------------------------------------------------------------------------------
@@ -664,8 +668,8 @@ function emptySection(ctx, m, d, row, pid) {
   }
   if (e.latest_id && e.kind !== 'none') acts.push(inBrief(ctx, briefHref(pid), `${WHO}'s latest brief`, 'brief-latest-empty', 'btn small'));
   if (e.report_id && ['ineligible', 'other_provider'].includes(e.kind)) acts.push(h('a', { class: 'btn small', href: reportHref(pid, e.report_id), dataset: { key: 'brief-empty-report' } }, 'Open the report'));
+  else if (e.pdf) acts.push(h('a', { class: 'btn small', href: reportHref(pid, e.pdf.report_id), dataset: { key: 'brief-pdf-report' } }, 'Open the PDF report'));
   if (e.job || e.quarantined || (e.why && e.why.kind === 'quarantined')) acts.push(h('a', { class: 'btn small', href: runHref(pid, null), dataset: { key: 'brief-empty-runs' } }, 'Research runs'));
-  acts.push(h('a', { class: 'btn small', href: `#/project/${enc(pid)}/overview`, dataset: { key: 'brief-empty-project' } }, 'Full research page'));
   return h('section', { class: 'bf-sec bf-empty', 'aria-labelledby': 'bf-h-empty' },
     h('div', { class: 'bf-empty-mark', 'aria-hidden': 'true' }, icon('brief')),
     h('h2', { class: 'bf-empty-t', id: 'bf-h-empty' }, title),
@@ -673,16 +677,19 @@ function emptySection(ctx, m, d, row, pid) {
     h('p', { class: 'bf-links' }, acts));
 }
 
-// ---- the page --------------------------------------------------------------------------------------
+// ---- the panel ------------------------------------------------------------------------------------
 
 let keysBound = false;
-function bindKeys(ctx) {
+// Escape leaves a brief opened from the inspector (its entry carries
+// crBrief), never while typing or with a dialog open.
+export function bindBriefKeys(ctx) {
   if (keysBound) return;
   keysBound = true;
-  // Escape leaves the brief, never while typing or with a dialog open.
   document.addEventListener('keydown', (e) => {
     const r = ctx.state.route;
-    if (!r || r.name !== 'brief' || e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
+    if (!r || r.name !== 'project' || e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
+    const st = history.state;
+    if (!st || st.crBrief !== r.args[0]) return;
     const t = e.target;
     if (document.querySelector('dialog[open]') || (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)))) return;
     e.preventDefault();
@@ -690,51 +697,14 @@ function bindKeys(ctx) {
   });
 }
 
-export async function renderBrief(ctx, route) {
-  bindKeys(ctx);
-  const pid = route.args[0];
-  const wrap = (bar, ...body) => {
-    // The sheet is the desk's own card, so it follows the desk's card style.
-    const page = h('div', { class: 'brief-page' }, bar, h('article', { class: 'brief card', 'aria-labelledby': 'bf-title' }, ...body));
-    // Opened (not redrawn): the title takes focus, so a screen reader starts
-    // there; a live redraw keeps where you were. The bar names the project
-    // once the header has scrolled away.
-    page.afterMount = () => {
-      const t = page.querySelector('#bf-title');
-      const b = page.querySelector('.bf-bar');
-      if (t && b && typeof IntersectionObserver === 'function') {
-        const io = new IntersectionObserver(([en]) => {
-          if (!t.isConnected) { io.disconnect(); return; }
-          b.classList.toggle('scrolled', !en.isIntersecting && en.boundingClientRect.top < 0);
-        }, { rootMargin: '-96px 0px 0px 0px' });
-        io.observe(t);
-      }
-      if (ctx.state.renderReason !== 'nav' || !t) return;
-      t.focus({ preventScroll: true });
-      ctx.claimFocus();
-    };
-    return page;
-  };
-  if (!pid) return wrap(null, callout('No project chosen.', 'warn'));
-  let d;
-  try {
-    d = await ctx.projectDetail(pid);
-  } catch (err) {
-    const bar = topBar(ctx, { identity: { name: pid }, report_id: null }, pid);
-    return wrap(bar, h('h1', { id: 'bf-title', tabindex: '-1', class: 'sr-only' }, `${WHO} Brief`), callout(`Could not load the project "${pid}": ${err.message}. Nothing was changed.`, 'bad'));
-  }
-  const row = (ctx.state.index.projects || []).find((x) => x.project_id === pid) || null;
-  const m = briefModel({ detail: d, row, index: ctx.state.index, provider: PROVIDER, reportId: route.query.get('report') || null, hosted: Boolean(ctx.state.session && ctx.state.session.hosted) });
-  const bar = topBar(ctx, m, pid);
-  if (m.status !== 'ok') return wrap(bar, header(ctx, m, row, pid), emptySection(ctx, m, d, row, pid), noteSection(d, row, pid));
-  return wrap(bar,
-    header(ctx, m, row, pid),
-    verdictSection(ctx, m, pid),
-    thesisSection(m),
-    scorecardSection(m),
-    forAgainstSection(m),
-    watchSection(m),
-    scenariosSection(m),
-    evidenceSection(ctx, m, pid),
-    noteSection(d, row, pid));
+// One model's brief as a sheet: its model (provider), its report (reportId,
+// else the latest eligible), drawn from the project record already loaded.
+export function briefPanel(ctx, { d, row, pid, provider = 'claude', reportId = null }) {
+  PROVIDER = PROVIDER_LABELS[provider] ? provider : 'claude';
+  WHO = PROVIDER_LABELS[PROVIDER];
+  const m = briefModel({ detail: d, row, index: ctx.state.index, provider: PROVIDER, reportId, hosted: Boolean(ctx.state.session && ctx.state.session.hosted) });
+  const body = m.status !== 'ok'
+    ? [header(ctx, m, row, pid), emptySection(ctx, m, d, row, pid), noteSection(d, row, pid)]
+    : [header(ctx, m, row, pid), verdictSection(ctx, m, pid), thesisSection(m), scorecardSection(m), forAgainstSection(m), watchSection(m), scenariosSection(m), evidenceSection(ctx, m, pid), noteSection(d, row, pid)];
+  return { m, sheet: h('article', { class: 'brief card', id: 'brief-sheet', 'aria-labelledby': 'bf-title' }, ...body) };
 }

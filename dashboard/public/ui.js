@@ -770,7 +770,7 @@ export function gradeGauge(g, { word = null, serious = false } = {}) {
 // own Back control return to the page it was opened from (`from`).
 export function briefLink(ctx, p, { from = 'watchlist', label = 'Claude Brief', cls = 'brief-link', onOpen = null } = {}) {
   const pid = p.project_id;
-  const href = `#/brief/${encodeURIComponent(pid)}`;
+  const href = `#/project/${encodeURIComponent(pid)}/brief?model=claude`;
   const a = h('a', { class: cls, href, dataset: { key: `brief-${pid}` }, 'aria-label': `${label}: ${p.name || pid}` }, icon('brief'), h('span', null, label));
   a.addEventListener('click', (e) => {
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;

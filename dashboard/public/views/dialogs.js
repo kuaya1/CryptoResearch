@@ -468,7 +468,7 @@ export function openAddProjectDialog(ctx) {
       h('p', { class: 'small faint', style: { margin: '8px 0 0' } }, `Saved ${fmtDateTime(new Date().toISOString())}`),
       h('div', { class: 'btn-row' },
         h('a', { class: 'btn primary', href: `#/watchlist?p=${encodeURIComponent(pid)}`, onclick: close }, 'Show in watchlist'),
-        h('a', { class: 'btn', href: `#/project/${encodeURIComponent(pid)}/overview`, onclick: close }, 'Open project'),
+        h('a', { class: 'btn', href: `#/project/${encodeURIComponent(pid)}/brief`, onclick: close }, 'Open project'),
         button('Add another', () => { st.query = ''; st.parsed = null; st.lookup = null; st.picked = null; st.sid = submissionId(); renderFind(); }, { kind: 'quiet' }))));
     body.querySelector('.receipt a').focus();
   }
