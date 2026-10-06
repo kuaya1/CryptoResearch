@@ -1076,6 +1076,10 @@ function retryJob(ws, projectId, runId, provider) {
   const st = providerStatus(ws)[provider];
   const project = getProject(ws, projectId);
   if (project.status === 'archived') throw new OpError('INVALID', `${project.name} is archived. Restore it before sending its research.`);
+  // A retry assigns the model new work, which a model on hold never gets
+  // (Eric, 2026-10-06); its saved reports and the job's record stay.
+  const held = heldProviders(ws)[provider];
+  if (held) throw new OpError('INVALID', `${PROVIDER_LABELS[provider]} is on hold${held.since ? ` since ${held.since}` : ''}: nothing new is sent to it. Lift the hold in Settings to retry this job.`);
   const out = updateJob(ws, projectId, runId, provider, (job) => {
     if (job.state === 'completed') return { message: 'Already completed; start a new run to research again.' };
     if (IN_FLIGHT.has(job.state)) return { message: 'Still running.' };

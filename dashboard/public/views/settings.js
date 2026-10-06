@@ -59,11 +59,14 @@ export async function renderSettings(ctx, route) {
   const target = want === 'research' ? 'settings-research' : tab ? 'settings-advanced' : null;
   if (target) {
     page.afterMount = () => {
-      if (ctx.state.renderReason !== 'nav') return;
-      requestAnimationFrame(() => {
+      // Not on a redraw of the same page; any other arrival (a link inside
+      // the app arrives as 'pop') goes to the section, after the router's
+      // own scroll reset.
+      if (['live', 'same', 'refresh'].includes(ctx.state.renderReason)) return;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
         const el = page.querySelector(`#${target}, [data-key="${target}"]`);
-        if (el) el.scrollIntoView({ block: 'start' });
-      });
+        if (el && el.isConnected) el.scrollIntoView({ block: 'start' });
+      }));
     };
   }
   return page;

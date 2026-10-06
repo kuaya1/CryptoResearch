@@ -405,5 +405,7 @@ test('the brief\'s styles use the desk\'s tokens only; the page is wired into th
   assert.match(ui, /const href = `#\/project\/\$\{encodeURIComponent\(pid\)\}\/brief\?model=claude`;/);
   assert.match(ui, /ctx\.navigate\(href, \{ state: \{ crBrief: pid, from \} \}\)/);
   // Back leaves through that entry, else to the project in the watchlist.
-  assert.match(read('views/brief.js'), /st\.crBrief === pid\) history\.back\(\);\s*else ctx\.navigate\(`#\/watchlist\?p=\$\{enc\(pid\)\}`, \{ replace: true \}\)/);
+  // (through every project tab entry since it was opened: crDepth).
+  assert.match(read('views/brief.js'), /st\.crBrief === pid\) history\.go\(-\(Number\(st\.crDepth\) \|\| 1\)\);\s*else ctx\.navigate\(`#\/watchlist\?p=\$\{enc\(pid\)\}`, \{ replace: true \}\)/);
+  assert.match(read('views/project.js'), /crDepth: \(Number\(now\.crDepth\) \|\| 1\) \+ 1/);
 });

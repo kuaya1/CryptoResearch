@@ -242,3 +242,24 @@ test('price refreshes never start research; schedules need unattended mode and a
   assert.equal(out2.created.length, 1);
   assert.equal(research.dueSchedules(ws).length, 0, 'not due again until 30 days later');
 });
+
+test('a model on hold is never retried: the retry is refused, the job and its record stay as they were; lifting the hold allows it again', async (t) => {
+  const { root, cleanup } = tempWorkspace('r-hold-retry');
+  t.after(cleanup);
+  let ws = openWorkspace({ root, actor: 'test' });
+  const pid = addFixtureProject(ws).project_id;
+  const providers = { claude: { mock: 'ok' }, gemini: { mock: 'timeout' } };
+  ws = settings(root, { providers, max_attempts: 1 });
+  const run = research.createRun(ws, { project_id: pid, providers: 'gemini', horizon: '4 months', channel: 'dashboard' });
+  await research.runDueJobs(ws, { trigger: 'test' });
+  const jobOf = () => research.loadRun(ws, pid, run.run_id).jobs.gemini;
+  assert.equal(jobOf().state, 'failed');
+  const attempts = (jobOf().attempts || []).length;
+  ws = settings(root, { providers, max_attempts: 1, on_hold: { gemini: { since: '2026-10-04', reason: 'FICTIONAL hold' } } });
+  assert.throws(() => research.retryJob(ws, pid, run.run_id, 'gemini'), /Gemini is on hold since 2026-10-04: nothing new is sent to it/);
+  assert.equal(jobOf().state, 'failed', 'the job is untouched');
+  assert.equal((jobOf().attempts || []).length, attempts, 'no attempt was added');
+  ws = settings(root, { providers, max_attempts: 1, on_hold: { gemini: null } });
+  research.retryJob(ws, pid, run.run_id, 'gemini');
+  assert.equal(jobOf().state, 'queued', 'with the hold lifted, the retry queues the job again');
+});

@@ -987,7 +987,9 @@ export function kv(pairs) {
 }
 
 export function details(summary, body, { open = false, id = null } = {}) {
-  return h('details', { class: 'disclosure', open: open || null, id, dataset: id ? { key: id } : null }, h('summary', null, summary), h('div', { class: 'body' }, body));
+  // The summary has a key of its own, so focus on it survives a live redraw
+  // (the details element itself cannot take focus).
+  return h('details', { class: 'disclosure', open: open || null, id, dataset: id ? { key: id } : null }, h('summary', { dataset: id ? { key: `${id}-summary` } : null }, summary), h('div', { class: 'body' }, body));
 }
 
 export function link(text, href, attrs = {}) {

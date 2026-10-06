@@ -61,6 +61,12 @@ test('a report in the wrong provider folder is held back, never mislabeled', (t)
   assert.equal(loadReports(ws, 'example-payfi-fictional').length, 0);
   assert.ok(fs.existsSync(path.join(root, 'inbox', 'chatgpt', 'example-payfi-fictional__claude.md')), 'original stays in the inbox');
   // A failed file is not retried on every scan until it changes or is retried explicitly.
+  // Its modified time is set past the settle window (2 s by default), so the
+  // scan meets the no-retry rule rather than the settle wait; its content (what
+  // "changed" means here) is untouched.
+  const file = path.join(root, 'inbox', 'chatgpt', 'example-payfi-fictional__claude.md');
+  const past = new Date(Date.now() - 60 * 1000);
+  fs.utimesSync(file, past, past);
   assert.equal(inbox.scanInbox(ws, { force: false }).results[0].status, 'skipped');
 });
 

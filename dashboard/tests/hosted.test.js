@@ -104,9 +104,13 @@ test('hosted: until configured, only a setup page is served; nothing else answer
 });
 
 test('hosted: first boot creates the real workspace with the proposed limits; templates follow the code; settings are kept', (t) => {
-  const { dataDir, cleanup } = tempDataDir('boot');
+  const { base, dataDir, cleanup } = tempDataDir('boot');
   t.after(cleanup);
-  const cfg = hosted.hostedConfig({ CR_DATA_DIR: dataDir, CR_ACCESS_PASSWORD: PASS, PORT: '10000', RENDER_EXTERNAL_HOSTNAME: HOST });
+  // The temp folder stands for the persistent disk, as on Render: a mount of
+  // its own in the table this boot reads (the guard itself is tested above).
+  // Without it the result depends on the disk the test machine's temp folder is on.
+  const mountsText = `/dev/vda / ext4 rw 0 0\n/dev/vdb ${base} ext4 rw 0 0\n`;
+  const cfg = hosted.hostedConfig({ CR_DATA_DIR: dataDir, CR_ACCESS_PASSWORD: PASS, PORT: '10000', RENDER_EXTERNAL_HOSTNAME: HOST }, { platform: 'linux', mountsText });
   assert.deepEqual(cfg.problems, []);
   const ws = hosted.prepareWorkspace(cfg);
   assert.equal(ws.kind, 'real');

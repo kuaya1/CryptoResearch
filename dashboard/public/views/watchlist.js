@@ -272,8 +272,8 @@ function priceCell(p) {
   const f = freshnessText(m.status, m.age_minutes);
   return h('div', { title: `Source: ${m.source || 'CoinGecko'}, as of ${fmtDateTime(m.as_of)}` },
     h('span', { class: 'price' }, fmtPrice(m.price_usd)),
-    // The note's parts never break inside (a tight column puts the age on a
-    // second line rather than dropping a column).
+    // The note's parts never break inside; it keeps one line unless the list
+    // would otherwise drop an essential column (fitColumns, wrap-notes).
     m.status !== 'fresh' ? h('span', { class: 'price-note' }, String(f.text).split(' · ').flatMap((part, i) => (i ? [' · ', h('span', { class: 'pn' }, part)] : [h('span', { class: 'pn' }, part)]))) : null);
 }
 
@@ -366,9 +366,16 @@ function fitColumns(root) {
   const table = sc && sc.querySelector('table.wl');
   if (!table || !table.isConnected) return;
   for (const el of table.querySelectorAll('.fit-hidden')) el.classList.remove('fit-hidden');
+  table.classList.remove('wrap-notes');
   if (!table.tHead || getComputedStyle(table.tHead).display === 'none') return; // cards
   for (const id of FIT_ORDER) {
     if (sc.scrollWidth <= sc.clientWidth + 1) break;
+    // Before an essential column (24h % onward) gives way, a stale price's
+    // note may take two lines between its parts (12px type; Eric, 2026-10-06).
+    if (id === 'change24h' && !table.classList.contains('wrap-notes')) {
+      table.classList.add('wrap-notes');
+      if (sc.scrollWidth <= sc.clientWidth + 1) break;
+    }
     const cells = table.querySelectorAll(`.c-${id}`);
     if (!cells.length || getComputedStyle(cells[0]).display === 'none') continue;
     for (const el of cells) el.classList.add('fit-hidden');
@@ -887,7 +894,8 @@ function modelHead(ctx, p, prov) {
   const anchors = ctx.state.index.rubrics.grading.favorable_anchors || [];
   const actions = [];
   const resume = resumeAction(ctx, p, prov, job, info);
-  if (job && job.state === 'failed') {
+  // A model on hold gets nothing new: no retry (the server refuses one too).
+  if (job && job.state === 'failed' && !opts.onHold) {
     const retry = button('Retry', null, { kind: 'small', key: `retry-${pid}-${prov}` });
     retry.onclick = async () => {
       retry.disabled = true;

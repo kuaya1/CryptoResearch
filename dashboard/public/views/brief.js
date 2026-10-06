@@ -39,7 +39,9 @@ const plainClick = (e) => e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shift
 // its inspector, or the project page), else to the project in the watchlist.
 export function closeBrief(ctx, pid) {
   const st = history.state;
-  if (st && st.crBrief === pid) history.back();
+  // crDepth counts the project's own tab entries since it was opened from the
+  // inspector (views/project.js), so leaving goes all the way back there.
+  if (st && st.crBrief === pid) history.go(-(Number(st.crDepth) || 1));
   else ctx.navigate(`#/watchlist?p=${enc(pid)}`, { replace: true });
 }
 

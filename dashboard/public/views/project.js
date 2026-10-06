@@ -86,6 +86,21 @@ export async function renderProject(ctx, route) {
   const latest = latestReports(d);
   const counts = { report: d.reports.length };
   const strip = tabStrip(TABS.map(([t, label]) => ({ id: t, label, href: `#/project/${encodeURIComponent(id)}/${t}`, count: counts[t] || null, countLabel: t === 'report' && counts[t] ? `${counts[t]} report${counts[t] === 1 ? '' : 's'}` : null })), tab, { label: 'Project sections' });
+  // Opened from the inspector: the project's tabs keep that way back (its
+  // history state, one entry deeper each time), so Escape and the Back bar
+  // still return to the inspector after Full report and back (Eric, 2026-10-06).
+  const st = history.state;
+  if (st && st.crBrief === id) {
+    for (const a of strip.querySelectorAll('a[role="tab"]')) {
+      a.addEventListener('click', (e) => {
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        if (a.getAttribute('aria-selected') === 'true') return;
+        const now = history.state && history.state.crBrief === id ? history.state : st;
+        ctx.navigate(a.getAttribute('href'), { state: { ...now, crDepth: (Number(now.crDepth) || 1) + 1 } });
+      });
+    }
+  }
   let sheet = null;
   const body = await safeSection(TABS.find(([t]) => t === tab)[1], () => ({
     brief: () => {
@@ -132,13 +147,26 @@ export async function renderProject(ctx, route) {
         ctx.claimFocus();
       }
     }
-    if (ctx.state.renderReason !== 'nav') return;
-    if (open || run) {
-      requestAnimationFrame(() => {
-        const el = (run && document.getElementById(`run-card-${run}`)) || page.querySelector(`[data-key="${open}"]`);
-        if (el) el.scrollIntoView({ block: 'start' });
-      });
-    } else if (fromInspector && t) {
+    // A redraw of the same page (a live update, a refresh) keeps its place.
+    // Any other arrival goes to the section the address names: a link inside
+    // the app arrives as 'pop' too (the browser fires popstate for a hash
+    // link), so the reason alone cannot tell a link from Back.
+    if (['live', 'same', 'refresh'].includes(ctx.state.renderReason)) return;
+    const target = () => (run && page.querySelector(`#run-card-${CSS.escape(run)}`)) || (open && page.querySelector(`[data-key="${open}"]`)) || null;
+    if (target()) {
+      // Focus goes with the section, so the router leaves it alone.
+      ctx.claimFocus();
+      // After the router's own scroll reset (it runs once this returns) and
+      // once the section is laid out.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const el = target();
+        if (!el || !el.isConnected) return;
+        el.scrollIntoView({ block: 'start' });
+        const head = (run && el.querySelector(`[data-key="run-${CSS.escape(run)}"] > summary`)) || el.querySelector(':scope > summary') || el;
+        if (head === el && !el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+        head.focus({ preventScroll: true });
+      }));
+    } else if (ctx.state.renderReason === 'nav' && fromInspector && t) {
       t.focus({ preventScroll: true });
       ctx.claimFocus();
     }
@@ -644,21 +672,38 @@ function dataBlockView(r, block) {
   return det;
 }
 
+// Until the original's text arrives the reader holds its place with a
+// fixed-height placeholder, said to a screen reader; the tab itself is drawn
+// at once (Eric, 2026-10-06), so a click never waits on a slow link.
+function readerWaiting() {
+  return h('div', { class: 'reader-wait', role: 'status' },
+    h('span', { class: 'sr-only' }, 'Loading the report text'),
+    ...['w80', '', 'w60', '', 'w80', 'w40', '', 'w60'].map((w) => h('span', { class: `skel${w ? ` ${w}` : ''}`, 'aria-hidden': 'true' })));
+}
+
 function reportReader(ctx, d, r) {
-  const holder = h('div', { class: 'reader' }, h('p', { class: 'small muted' }, 'Loading the original…'));
+  const holder = h('div', { class: 'reader', 'aria-busy': 'true' }, readerWaiting());
   const pid = d.project.project_id;
   const isPdf = String(r.meta.original_file || '').endsWith('.pdf');
   const url = `/api/projects/${pid}/reports/${r.report_id}/original`;
   // Formatted: the written report, then its data block folded away. Exact
   // text: the original as received, byte for byte.
   const draw = (text) => {
+    holder.removeAttribute('aria-busy');
     if (viewState.raw[r.report_id]) return holder.replaceChildren(h('div', { class: 'raw' }, text));
     const { prose, block } = splitDataBlock(text);
     return holder.replaceChildren(renderMarkdown(prose), block ? dataBlockView(r, block) : null);
   };
-  if (isPdf) holder.replaceChildren(callout('The original is a PDF. It is kept byte for byte; download it below. Grading needs a text copy (paste it as a new import).', 'info'));
-  else if (textCache.has(url)) draw(textCache.get(url));
-  else cachedText(ctx, url).then(draw).catch((err) => holder.replaceChildren(callout(`Could not load the original: ${err.message}`, 'bad')));
+  if (isPdf) {
+    holder.removeAttribute('aria-busy');
+    holder.replaceChildren(callout('The original is a PDF. It is kept byte for byte; download it below. Grading needs a text copy (paste it as a new import).', 'info'));
+  } else if (textCache.has(url)) draw(textCache.get(url));
+  else {
+    cachedText(ctx, url).then(draw).catch((err) => {
+      holder.removeAttribute('aria-busy');
+      holder.replaceChildren(callout(`Could not load the original: ${err.message}`, 'bad'));
+    });
+  }
   const toggle = button(viewState.raw[r.report_id] ? 'Show formatted' : 'Show exact text', null, { kind: 'small', key: `raw-${r.report_id}` });
   toggle.onclick = () => {
     viewState.raw[r.report_id] = !viewState.raw[r.report_id];
@@ -776,11 +821,7 @@ function revisionText(rv) {
   return `${head}, ${rv.minutes_after} min after ${rv.of}: ${what}. ${rv.declared && rv.declared.note ? `The model's reason: ${rv.declared.note}` : 'No reason was recorded with this save.'}`;
 }
 
-// How long the tab waits for the report's text before drawing without it (a
-// slow link then shows the page and fills the text in when it arrives).
-const ORIGINAL_WAIT_MS = 2500;
-
-async function reportsTab(ctx, d, route) {
+function reportsTab(ctx, d, route) {
   const pid = d.project.project_id;
   if (!d.reports.length) return callout('No reports imported yet. Older analyses stay here as dated records once they exist.', 'info');
   const good = d.reports.filter((r) => !r.broken);
@@ -788,13 +829,6 @@ async function reportsTab(ctx, d, route) {
   const latestIds = new Set(Object.values(d.comparison.latest).filter(Boolean).map((x) => x.report_id));
   const want = route.query.get('report');
   const sel = good.find((r) => r.report_id === want) || good.find((r) => latestIds.has(r.report_id)) || good[0];
-  // The whole report in one paint (V4, Eric, 2026-10-05): the original's text
-  // is read before the tab is drawn, so the reader never stands empty while
-  // the rest of the page is already there.
-  if (sel && !String(sel.meta.original_file || '').endsWith('.pdf')) {
-    const url = `/api/projects/${pid}/reports/${sel.report_id}/original`;
-    if (!textCache.has(url)) await Promise.race([cachedText(ctx, url).catch(() => null), new Promise((res) => setTimeout(res, ORIGINAL_WAIT_MS))]);
-  }
   const list = h('nav', { class: 'report-list', 'aria-label': 'Reports' },
     PROVIDERS.filter((p) => good.some((r) => r.meta.provider === p)).map((p) => [
       h('div', { class: 'group-label' }, PROVIDER_LABELS[p]),
@@ -868,6 +902,14 @@ const CONTENTS = [['rsec-summary', 'Summary'], ['rsec-scores', 'Scores'], ['rsec
 function reportContents(main) {
   const items = CONTENTS.filter(([id]) => main.querySelector(`#${id}`));
   if (!items.length) return null;
+  // Each part's heading can take focus and has a stable key, set when the
+  // report is drawn, so focus put there survives a live redraw.
+  const headOf = (el) => el.querySelector('h2, h3, summary') || el;
+  for (const [id] of items) {
+    const head = headOf(main.querySelector(`#${id}`));
+    if (head.tagName !== 'SUMMARY' && !head.hasAttribute('tabindex')) head.setAttribute('tabindex', '-1');
+    if (!head.dataset.key) head.dataset.key = `${id}-head`;
+  }
   const buttons = items.map(([id, label]) => {
     const b = h('button', { type: 'button', class: 'toc-item', dataset: { key: `toc-${id}`, target: id } }, label);
     b.addEventListener('click', () => {
@@ -877,9 +919,7 @@ function reportContents(main) {
       const fold = el.querySelector('details');
       if (fold) fold.open = true;
       el.scrollIntoView({ block: 'start' });
-      const head = el.querySelector('h2, h3, summary') || el;
-      if (head.tagName !== 'SUMMARY' && !head.hasAttribute('tabindex')) head.setAttribute('tabindex', '-1');
-      head.focus({ preventScroll: true });
+      headOf(el).focus({ preventScroll: true });
     });
     return b;
   });
@@ -1273,12 +1313,14 @@ function jobRow(ctx, pid, run, prov, projectName = pid) {
       actions.push(b);
     }
   }
-  if (j.state === 'failed' || j.state === 'canceled') {
+  // A model on hold gets nothing new, so no retry is offered (the server
+  // refuses one too).
+  if (!onHold && (j.state === 'failed' || j.state === 'canceled')) {
     const b = button('Retry', null, { kind: 'small' });
     b.onclick = action(b, async () => { const r = await ctx.api.post(`/api/projects/${pid}/research/${run.run_id}/jobs/${prov}/retry`, {}); await ctx.refresh(); return r; }, (r) => r.message || 'Retry queued');
     actions.push(b);
   }
-  if (j.state === 'uncertain') {
+  if (!onHold && j.state === 'uncertain') {
     const b = button('Retry anyway', null, { kind: 'small', title: 'Sends a new request. The uncertain attempt may already have been billed and keeps counting until you reconcile it.' });
     b.setAttribute('aria-label', `Send a new ${PROVIDER_LABELS[prov]} request despite the uncertain attempt`);
     b.onclick = action(b, async () => {

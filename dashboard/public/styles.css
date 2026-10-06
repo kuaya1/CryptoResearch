@@ -657,10 +657,13 @@ button.ss-icon:hover { background: var(--row-hover); color: var(--text); border-
   .status-strip .ss-spacer, .status-strip .ss-g3 .ss-dot { display: none; }
   button.ss-item { padding: 0 10px; }
   .rl-badge { margin-left: 4px; }
+  /* Visually hidden only (the .sr-only pattern): each button's accessible
+     name still says the prices' name, dominance and "items". */
   .status-strip.ss-fit-plabel .ss-g1 > button.ss-item > .k,
   .status-strip.ss-fit-dom .ss-market > .ss-dot,
-  .status-strip.ss-fit-dom .ss-market > .ss-dot ~ *:not(.sr-only),
-  .status-strip.ss-fit-qlabel .ss-g3 > button.ss-item.warn > .k { display: none; }
+  .status-strip.ss-fit-dom .ss-market > .ss-dot ~ *:not(.sr-only):not(.m-total),
+  .status-strip.ss-fit-qlabel .ss-g3 > button.ss-item.warn > .k { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  .status-strip.ss-fit-dom .ss-market > .m-total { display: none; }
   /* Wrapped (still too wide): what needs action takes its own row. */
   .status-strip.ss-wrap > .ss-g3 { flex: 1 1 100%; border-top: 1px solid var(--separator); }
   .status-strip.ss-wrap > .ss-div:has(+ .ss-g3) { display: none; }
@@ -832,9 +835,11 @@ table.wl td.nodata { color: var(--text-2); font-size: var(--fs-small); white-spa
 .price-note { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-caption); line-height: 14px; color: var(--warn); font-weight: 600; }
 .price-note::before { content: ""; width: 11px; height: 11px; background: currentColor; -webkit-mask: var(--i-clock) center / contain no-repeat; mask: var(--i-clock) center / contain no-repeat; }
 td .price-note { display: flex; justify-content: flex-end; }
-/* In the list the note may take two lines, between its parts, when the
-   column is tight (12px type, V1): a column is never dropped for it. */
-table.wl td .price-note { display: block; text-align: right; white-space: normal; }
+/* In the list the note keeps one line; only right before an essential column
+   would give way (fitColumns adds wrap-notes) may it take two lines, between
+   its parts (Eric, 2026-10-06). */
+table.wl td .price-note { display: block; text-align: right; white-space: nowrap; }
+table.wl.wrap-notes td .price-note { white-space: normal; }
 table.wl td .price-note::before { display: inline-block; vertical-align: -1px; margin-right: 4px; }
 .price-note .pn { white-space: nowrap; }
 .row-go { color: var(--text-3); font-size: 18px; line-height: 1; padding-left: 4px; width: 20px; }
@@ -1518,7 +1523,6 @@ details.disclosure > .body { padding: 0 0 var(--s4); min-width: 0; }
 /* A page's own folded section (Settings' Advanced, the Brief's folds). */
 details.page-fold { margin-top: var(--s5); }
 details.page-fold > summary { font-size: 15px; min-height: 44px; }
-details.page-fold, #settings-research { scroll-margin-top: calc(var(--topbar-h) + var(--s3)); }
 
 /* overflow-x: auto alone makes overflow-y auto too, and the tabs' -1px
    margin (the underline over the hairline) then scrolls 1px vertically: a
@@ -1570,6 +1574,10 @@ details.page-fold, #settings-research { scroll-margin-top: calc(var(--topbar-h) 
 .raw.data-block { font-size: var(--fs-small); max-height: 480px; }
 /* The exact text in the reader is the whole report, in the page's own flow:
    no inner scroll box (V4). */
+/* The reader's place while the report's text is on its way: a fixed height,
+   so nothing below it jumps when the text arrives in a short report's place. */
+.reader-wait { min-height: 60vh; }
+.reader-wait .skel { height: 12px; margin: 14px 0; }
 .reader > .raw { max-height: none; overflow: visible; font-size: var(--fs-read); background: none; border: 0; border-radius: 0; padding: 0; }
 .report-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: var(--s6); align-items: start; }
 .report-list { margin: 0; padding: 0; border: 1px solid var(--separator); border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--shadow-card); overflow-y: auto; max-height: calc(100vh - var(--topbar-h) - 32px); position: sticky; top: calc(var(--topbar-h) + 16px); }
@@ -1803,6 +1811,7 @@ button.gb:is(.is-none, .is-on_hold):hover { border-color: var(--border); }
    its left rule is the sign, its kind the word. */
 .astrip { min-width: 0; overflow: hidden; border: 0; border-left: 2px solid var(--warn-strong); border-radius: 0; background: transparent; font-size: var(--fs-caption); }
 .astrip.high { border-left-color: var(--pill-bad-dot); }
+.astrip > summary:focus-visible { outline-offset: -2px; border-radius: var(--r-sm); }
 .astrip > summary { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 10px; cursor: pointer; list-style: none; }
 .astrip > summary::-webkit-details-marker { display: none; }
 .astrip > summary::after { content: ""; flex: none; width: 12px; height: 12px; margin-left: auto; background: var(--text-3); -webkit-mask: var(--i-chevron) center / contain no-repeat; mask: var(--i-chevron) center / contain no-repeat; transition: transform var(--dur) var(--ease); }
