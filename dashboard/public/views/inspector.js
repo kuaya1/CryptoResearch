@@ -335,13 +335,16 @@ function thesisPart(ctx, d, row, prov) {
       take = [text, more];
     }
     const risk = keyPoints(a).risk;
+    // The first-view points always have a line: a point the report does not
+    // give says so, and nothing is inferred or taken from another report.
+    const notReported = (k) => h('p', { class: 'th-line' }, h('span', { class: 'k' }, k), h('span', { class: 'th-nr' }, 'Not reported'));
     model = h('div', { class: 'th-block' },
       !any && !risk ? h('p', { class: 'th-none' }, `No thesis in ${PROVIDER_LABELS[prov]}'s data block.`) : null,
       take,
-      risk ? riskLine(risk, pid, prov) : null,
+      risk ? riskLine(risk, pid, prov) : notReported('Risk'),
       metric && metric.metric ? h('p', { class: 'th-line' }, h('span', { class: 'k' }, 'Watch'), h('span', null, metric.metric, metric.threshold ? ` (${metric.threshold})` : '')) : null,
-      confirm.length ? h('div', { class: 'th-line' }, h('span', { class: 'k' }, 'Confirms'), h('ul', null, confirm.map((f) => h('li', null, f.text)))) : null,
-      invalid.length ? h('div', { class: 'th-line' }, h('span', { class: 'k' }, 'Breaks'), h('ul', null, invalid.map((f) => h('li', null, f.text)))) : null);
+      confirm.length ? h('div', { class: 'th-line' }, h('span', { class: 'k' }, 'Confirms'), h('ul', null, confirm.map((f) => h('li', null, f.text)))) : notReported('Confirms'),
+      invalid.length ? h('div', { class: 'th-line' }, h('span', { class: 'k' }, 'Breaks'), h('ul', null, invalid.map((f) => h('li', null, f.text)))) : notReported('Breaks'));
   }
   return h('div', { class: 'thesis' }, model, mine);
 }
@@ -435,9 +438,26 @@ function checksPart(d) {
 }
 
 // The parts for the inspector of one project, for the selected model.
+// Under the verdict: the scores the written report states that differ from
+// its data block (core/textscores.js), in one line with the items one tap
+// away. The grade is the data block's; neither side is chosen or changed.
+function textCheckPart(ctx, d, row, prov) {
+  const sum = row.providers && row.providers[prov];
+  if (!sum) return null;
+  const r = d.reports.find((x) => x.report_id === sum.report_id) || latestReports(d)[prov];
+  const tx = r && !r.broken ? r.text_scores : null;
+  if (!tx || !Array.isArray(tx.mismatches) || !tx.mismatches.length) return null;
+  const n = tx.mismatches.length;
+  return h('details', { class: 'ig-check text-check', dataset: { key: `text-check-${d.project.project_id}-${prov}` } },
+    h('summary', null, icon('warn-line'), h('span', null, h('strong', null, 'Text and data block differ'), ` · ${n} score${n === 1 ? '' : 's'}`)),
+    h('ul', { class: 'small' }, tx.mismatches.map((m) => h('li', null, `${m.label}: ${m.text.join(' and ')} in the text, ${m.data} in the data block`))),
+    h('p', { class: 'small muted' }, 'The grade uses the data block as saved; the text is kept as written, and neither is changed.'));
+}
+
 export function inspectorParts(ctx, d, row, prov) {
   const out = { run: runPart(ctx, d), compare: comparePart(ctx, d), thesis: thesisPart(ctx, d, row, prov), checks: checksPart(d), dex: dexCard(ctx, d.project), chart: technicalChart(ctx, d.project) };
   if (prov) {
+    out[`textcheck-${prov}`] = textCheckPart(ctx, d, row, prov);
     out[`cats-${prov}`] = categoriesPart(ctx, d, row, prov);
     out[`grade-${prov}`] = componentsPart(ctx, d, row, prov);
     out[`risks-${prov}`] = risksPart(ctx, d, row, prov);

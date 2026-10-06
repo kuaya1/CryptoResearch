@@ -655,12 +655,20 @@ test('category checks: reports that carry the evidence stay unflagged (code read
   sameDay.chart_cycle.data.latest_observation_at = '2026-10-03 14:00 UTC';
   assert.deepEqual(flagsOf(imp(sameDay)), [], 'a date-time written another way still names the day');
   // Chart grades left unknown: nothing to date. The weighted timing and
-  // liquidity component is still scored, and its depth figure is now undated:
-  // only that component's liquidity part is noted (low), never the timing.
+  // liquidity component is still scored; its depth figure is dated by the
+  // claim it cites (C5, as of 2026-10-03), so nothing is noted.
   const unknownCharts = clone();
   for (const id of ['chart_structure', 'cycle_timing', 'volume_liquidity']) unknownCharts.diagnostic_scores[id] = { ...unknownCharts.diagnostic_scores.code_quality };
   delete unknownCharts.chart_cycle.data.latest_observation_at;
-  assert.deepEqual(flagsOf(imp(unknownCharts)), [['executable_liquidity_unsupported', 'low', '']]);
+  assert.deepEqual(flagsOf(imp(unknownCharts)), [], 'a depth figure dated by the claim it cites');
+  // Without that claim cited, the figure is undated: only that component's
+  // liquidity part is noted (low), never the timing.
+  const undatedFigure = clone();
+  for (const id of ['chart_structure', 'cycle_timing', 'volume_liquidity']) undatedFigure.diagnostic_scores[id] = { ...undatedFigure.diagnostic_scores.code_quality };
+  delete undatedFigure.chart_cycle.data.latest_observation_at;
+  undatedFigure.chart_cycle.evidence_refs = ['C4'];
+  undatedFigure.investment_components.timing_executable_liquidity.evidence_refs = [];
+  assert.deepEqual(flagsOf(imp(undatedFigure)), [['executable_liquidity_unsupported', 'low', '']]);
   const unknownDated = clone();
   for (const id of ['chart_structure', 'cycle_timing', 'volume_liquidity']) unknownDated.diagnostic_scores[id] = { ...unknownDated.diagnostic_scores.code_quality };
   unknownDated.chart_cycle.liquidity = 'FICTIONAL: about $40k within 2% on each side on one venue on 2026-10-03.';

@@ -1008,6 +1008,9 @@ function modelPanel(ctx, p, prov) {
   const graded = rep && !rep.needs_text;
   return h('div', { class: 'mpanel', id: 'insp-model', role: 'tabpanel', 'aria-labelledby': `insp-tab-${prov}` },
     modelHead(ctx, p, prov),
+    // Scores the report's text states that differ from its data block,
+    // filled from the full record (inspector.js textCheckPart).
+    graded ? h('div', { dataset: { slot: `textcheck-${prov}` } }) : null,
     projectAlerts(ctx, p),
     h('section', { class: 'insp-sec insp-thesis', 'aria-labelledby': 'insp-sec-thesis' },
       h('h3', { class: 'sec-title', id: 'insp-sec-thesis' }, 'Thesis'),
@@ -1112,7 +1115,7 @@ function researchProgress(ctx, p) {
 // other review items, and the identity when it is not confirmed.
 // One short line per model, each opening its tab: the model's own tab says the
 // rest (its badge and its card carry the same state in words).
-const PROBLEM_WORDS = { uncertain: 'Check charge', failed: 'Research failed', incomplete: 'Research incomplete', conflict: 'Answer quarantined', interrupted: 'Research paused', held: 'Held, not sent' };
+const PROBLEM_WORDS = { uncertain: 'Check charge', failed: 'Research failed', incomplete: 'Research incomplete', conflict: 'Answer quarantined', interrupted: 'Research paused', held: 'Held by archive' };
 const JOB_KINDS = new Set(['research_uncertain', 'research_failed', 'research_incomplete', 'research_conflict', 'research_interrupted', 'identity']);
 const projectItems = (ctx, p) => (ctx.state.index.attention || []).filter((a) => a.project_id === p.project_id && !JOB_KINDS.has(a.kind));
 function problemLines(ctx, p) {

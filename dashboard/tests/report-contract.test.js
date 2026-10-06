@@ -214,7 +214,7 @@ test('evidence checks: an AI summary never verifies; critical claims need a prim
   assert.equal(full.evidence.flags.length, 0, JSON.stringify(full.evidence.flags));
   assert.equal(full.grade.value, BASE_GRADE);
   const brief = detail.history.claude.find((x) => x.report_id === r.rep.report_id).evidence;
-  assert.deepEqual(Object.keys(brief).sort(), ['coverage', 'critical', 'flagged', 'flagged_categories', 'flagged_components', 'flagged_other', 'high', 'low', 'medium', 'summary']);
+  assert.deepEqual(Object.keys(brief).sort(), ['coverage', 'critical', 'flagged', 'flagged_catalysts', 'flagged_categories', 'flagged_components', 'flagged_other', 'high', 'low', 'medium', 'summary']);
   assert.equal(brief.flagged_categories, 0);
 });
 

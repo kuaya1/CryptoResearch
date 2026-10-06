@@ -571,7 +571,10 @@ export function historyOf(d, provider, currentId, latestId) {
     eligible: Boolean(s.eligible) && !s.needs_text,
     excluded: s.excluded_reason || null,
     needs_text: Boolean(s.needs_text),
-    revision: s.revision_label || null,
+    // Where it sits among the model's reports (revisions.js): a revision of an
+    // earlier save for the same run says on what evidence; new research for
+    // another run, and the first report, say so too.
+    revision: s.revision_label || (s.revision && s.revision.kind === 'new_run' ? 'New research (another run)' : s.revision && s.revision.kind === 'first' ? 'First report' : null),
     current: s.report_id === currentId,
     latest: s.report_id === latestId,
   }));
@@ -612,6 +615,10 @@ export function noticesOf({ r, sel, provider, row, index, history, ev, hz }) {
   const mt = r.model_total;
   if (mt && mt.status === 'mismatch') out.push({ kind: 'model_total', tone: 'warn', reported: mt.reported || null, calculated: mt.calculated || null, difference: num(mt.difference) ? mt.difference : null, message: str(mt.message) });
   else if (mt && mt.status === 'unverifiable') out.push({ kind: 'model_total_unchecked', tone: 'info', reported: mt.reported || null, message: str(mt.message) });
+  // Scores the written text states that differ from the data block the grade
+  // is calculated from (core/textscores.js): both shown, neither chosen.
+  const tx = r.text_scores;
+  if (tx && list(tx.mismatches).length) out.push({ kind: 'text_scores', tone: 'warn', items: list(tx.mismatches).map((m) => ({ label: str(m.label) || String(m.id || ''), text: list(m.text).map(String), data: str(m.data) || 'not given' })) });
   if (ev.level === 'serious' || ev.level === 'material') out.push({ kind: 'evidence', tone: 'warn', level: ev.level, claims: ev.flagged_claims, categories: ev.flagged_categories, high: ev.checks ? ev.checks.high || 0 : 0, medium: ev.checks ? ev.checks.medium || 0 : 0 });
   if (sel.isLatest && row) {
     const job = row.research && row.research.providers ? row.research.providers[provider] : null;

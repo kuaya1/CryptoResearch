@@ -828,11 +828,21 @@ test('a model on hold: its brief offers no run and reads On hold; the routes tab
   assert.equal(bm.emptyOf(none, { d, row: null, index: held, provider: 'claude' }).can_run, true, 'a model not on hold still offers its run');
   const queued = { research: { providers: { gemini: { state: 'queued', run_id: 'r1' } } } };
   assert.equal(bm.emptyOf(none, { d, row: queued, index: held, provider: 'gemini' }).can_run, false, 'a kept job: no new run');
-  const w = research.routeWords('gemini', { hold });
+  const manual = { mode: 'manual', missing: ['API key'] };
+  const w = research.routeWords(held, 'gemini', manual, { hosted: true });
   assert.equal(w.route, 'On hold');
-  assert.match(w.happens, /^On hold since 2026-10-04: nothing new is assigned to Gemini\./);
+  assert.match(w.happens, /^On hold on this desk since 2026-10-04: nothing new is assigned to Gemini\./);
   assert.doesNotMatch(w.happens, /paste|prompt|import the answer|API|assistant/i, 'no way to run it');
-  assert.equal(research.routeWords('claude', { hold: null }), null, 'other models keep their route');
+  assert.equal(w.setup, null, 'no setup is offered for a held model');
+  // Manual research is ready, never a warning; the optional API is a quiet second line.
+  const c = research.routeWords(held, 'claude', manual, { hosted: true });
+  assert.equal(c.route, 'Manual · ready through its assistant');
+  assert.equal(c.tone, '');
+  assert.equal(c.setup, 'Automatic route (optional): not set up (API key)');
+  assert.doesNotMatch(c.happens, /No API/);
+  assert.match(c.happens, /^Each run waits for you: In Cowork, say: "Do my waiting CryptoResearch research"\. Claude researches under its own plan .* Nothing is billed here\.$/);
+  assert.equal(research.routeWords(held, 'chatgpt', manual).route, 'Manual · ready by paste and import');
+  assert.deepEqual([research.routeWords(held, 'chatgpt', { mode: 'api', model: 'FICTIONAL-model' }).route, research.routeWords(held, 'chatgpt', { mode: 'api', model: 'FICTIONAL-model' }).tone], ['Automatic (API) · FICTIONAL-model', 'ok']);
   // Saved reports keep their pills (unchanged rule).
   const index = { settings: { research: { on_hold: { gemini: hold } } } };
   assert.equal(wl.holdCell(index, 'gemini', { grade: { status: 'firm', value: 67, display: '67.0' } }).dash, false);

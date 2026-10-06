@@ -73,7 +73,7 @@ To research a project Eric names, links or shows you:
 3. add_project once, with the evidence URLs. It refuses duplicates by itself; if the project is already there with a pending identity, what you supplied completes it. If the project earns protocol or chain fees, also bind its DefiLlama entity with update_project_identity (defillama_slug, defillama_scope, defillama_source_url) after checking on defillama.com that the entity is this project and which scope matches its token: never by name or ticker alone, and ask Eric when the product, parent or chain choice is unclear. Its dated fee, revenue and holders-revenue series then come with the research prompt.
 4. start_research. Research needs a verified identity (official website, token binding, evidence URL), so every model researches the same project: if it is pending, complete it with update_project_identity first, or, only when Eric confirmed the project has no token yet or cannot be identified further, pass allow_pending_identity: true. It returns the run's canonical prompt (horizon, rubric, grading appendix) in run.prompt, byte for byte as frozen when the run started; never rebuild it from templates or other files. Follow it exactly: research with your own web tools, cite sources with dates, keep facts, inferences and unknowns apart, cover risks, and end with the JSON block it asks for. If a research run for the project is already open, start_research resumes it (with any draft you saved) instead of starting another. When Eric asks for all three models (Claude, ChatGPT and Gemini), pass models: "all": each model gets the same prompt and never sees the others' conclusions. A model whose paid API is set up on the desk runs automatically in the background; a model without one is manual research: it waits for its own assistant until Eric asks it ("${WAITING_PHRASE}": ${ASK_HOW.chatgpt}, or ${ASK_HOW.gemini}), with nothing to set up. A model Eric put on hold gets nothing new and is not added. The reply's readiness says which; tell Eric exactly that, and never promise a model that is on hold (desk_status has the detail: routes, limits, spend). Never ask Eric for an API key in chat: he adds keys in Render's environment himself.
 ${step5}
-   Evidence standards, the same for every model: code quality rests on implementation files read at a named commit (never commit counts, stars or an audit badge); liquidity rests on a stated volume baseline and a spread, depth or order-book reading (never a list of venues); a scenario probability rests on evidence or stays null with the reason. Give a point score where the evidence supports one, a range only between two named readings the evidence supports (and say what would tell them apart), otherwise unknown with what is missing. A range is a judgment, not a confidence interval. Set analysis_at to when you finish (or the date alone), never a time after you save.
+   Evidence standards, the same for every model: code quality rests on implementation files read at a named commit (never commit counts, stars or an audit badge); liquidity rests on a stated volume baseline and a dated depth, order-book or slippage reading (a list of venues, aggregate volume or a spread alone does not measure how much can be traded); a scenario probability rests on evidence or stays null with the reason. Give a point score where the evidence supports one, a range only between two named readings the evidence supports (and say what would tell them apart), otherwise unknown with what is missing. A range is a judgment, not a confidence interval. Set analysis_at to when you finish (or the date alone), never a time after you save.
 6. save_report with the complete report text (not a summary). Its JSON block must name this run's research_run_id and prompt_version, and the run's project, rubric, profile and horizon, copied from the prompt: a report that declares another contract is refused, field by field. If it answers "unverified", save the same text again. A withheld grade is an acceptable result; do not save again to complete it. Save a different report for the same run only to correct a documented issue or record a clearly explained revision, with revision (kind and note); an unchanged report saved again is recognized and not stored twice. If your job came with execution notes, read them before the prompt; the prompt itself is the same for every model and decides.
 ${step7}
 8. To show how the models compare, get_research shows each model's progress, and compare_reports, once their reports are saved, shows where they agree and disagree. Summarize that for Eric with each report's own uncertainty; agreement between models is not independent confirmation. Other models' reports on a project are withheld from you while your own research on it is open, so your report stays independent.
@@ -420,8 +420,13 @@ function jobView(job, run, me, ws) {
   const activity = research.assistantActivity(job, run);
   const cost = (job.attempts || []).reduce((s, a) => s + research.attemptCharge(a).usd, 0);
   let progress;
-  if (job.state === 'completed') progress = `saved (${job.report_id})`;
+  const lastOutcome = ((job.attempts || [])[(job.attempts || []).length - 1] || {}).outcome || null;
+  const earlier = Array.isArray(job.previous_report_ids) ? job.previous_report_ids : [];
+  // A later save for the same run is a revision; the first save completed
+  // the job and stays saved (revisions.js labels what changed).
+  if (job.state === 'completed') progress = earlier.length ? `saved (${job.report_id}, a later save for this run; the first save, ${earlier[0]}, completed the job and stays saved)` : `saved (${job.report_id})`;
   else if (job.state === 'canceled') progress = 'canceled';
+  else if (job.state === 'failed' && lastOutcome === 'contract_conflict') progress = `answer quarantined${job.quarantined_report_id ? ` (${job.quarantined_report_id})` : ''}: it does not match this run, so it is kept but not graded and did not complete the job`;
   else if (job.state === 'failed') progress = `failed: ${job.error || 'see the dashboard'}`;
   else if (job.state === 'uncertain') progress = 'held: a paid request may have been billed without an answer; it is never resent automatically, and Eric reconciles or retries it in the dashboard';
   else if (activity && activity.open) progress = activity.interrupted ? `interrupted (no activity for ${activity.idle_minutes} min)` : `${job.provider === me ? 'you are' : `${label} is`} researching it`;
@@ -437,7 +442,7 @@ function jobView(job, run, me, ws) {
     else if (st && st.mode === 'api') progress = `waiting for ${label}; its API is set up now, so Eric's next request for ${label} on this project sends this job to the API (or ${ask})`;
     else progress = `waiting for ${label} to do it through its connection (manual research, nothing to set up): ${ask}`;
   }
-  else if (job.state === 'queued' && job.hold) progress = 'held, not sent: its project was archived before this request was sent; it is sent only if Eric sends it again from the dashboard';
+  else if (job.state === 'queued' && job.hold) progress = 'held by archive, not sent: its project was archived before this request was sent; restoring the project does not send it, and it is sent only if Eric sends it again from the dashboard';
   else if (job.state === 'queued') progress = job.not_before && Date.parse(job.not_before) > Date.now() ? `queued for the ${label} API, which asked to slow down; it is asked again after ${job.not_before} (not billed)` : `queued for the ${label} API in the background`;
   else if (job.state === 'dispatching') {
     const last = (job.attempts || [])[(job.attempts || []).length - 1];
@@ -1173,8 +1178,13 @@ const handlers = {
     if (!r) return { status: 'none', message: `No ${PROVIDER_LABELS[model]} report for ${detail.project.name} yet.` };
     const out = { status: 'ok', project: { project_id: id, name: detail.project.name }, report: compactReport(r) };
     // The desk's evidence checks on its claims: flags only, never a score change.
-    const ev = (detail.reports.find((x) => x.report_id === r.report_id) || {}).evidence;
-    if (ev) out.evidence_checks = { summary: ev.summary, coverage: ev.coverage, critical_claims: ev.critical_claims, flags: ev.flags.map((x) => ({ ...(x.claim_id ? { claim_id: x.claim_id } : x.component ? { component: x.component } : { categories: x.categories }), severity: x.severity, rule: x.rule, message: x.message })), source_types_outside_list: ev.source_types.outside_list, tag_note: ev.tag_note };
+    const shown = detail.reports.find((x) => x.report_id === r.report_id) || {};
+    const ev = shown.evidence;
+    // Scores the written text states that differ from the data block the
+    // grade is calculated from: said, never resolved (core/textscores.js).
+    const tx = shown.text_scores;
+    if (tx && tx.mismatches.length) out.text_vs_data = { summary: tx.summary, mismatches: tx.mismatches.map((m) => ({ item: m.label, kind: m.group === 'investment_components' ? 'weighted component' : 'category grade', text: m.text, data_block: m.data })) };
+    if (ev) out.evidence_checks = { summary: ev.summary, coverage: ev.coverage, critical_claims: ev.critical_claims, flags: ev.flags.map((x) => ({ ...(x.claim_id ? { claim_id: x.claim_id } : x.component ? { component: x.component } : x.catalyst ? { catalyst: x.catalyst } : { categories: x.categories }), severity: x.severity, rule: x.rule, message: x.message })), source_types_outside_list: ev.source_types.outside_list, tag_note: ev.tag_note };
     if (args.include_text === true) {
       const fs = require('fs');
       const full = detail.reports.find((x) => x.report_id === r.report_id);

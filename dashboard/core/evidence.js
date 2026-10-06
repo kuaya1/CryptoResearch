@@ -49,10 +49,17 @@
 //   chart_observation_after_report  it is dated after the report itself
 //   liquidity_without_depth         volume and executable liquidity is scored
 //                                   without a stated volume baseline and a
-//                                   dated spread, depth or order-book figure:
-//                                   a venue list, aggregate volume or a
-//                                   statement that depth was not retrieved is
-//                                   not one
+//                                   dated depth, order-book or slippage
+//                                   figure: a venue list, aggregate volume or
+//                                   a statement that depth was not retrieved
+//                                   is not one (medium), and a spread alone
+//                                   prices the top of the book, not how much
+//                                   can be traded (low). The figure may be in
+//                                   the chart reading or in a dated claim the
+//                                   grade or the chart reading cites
+//   liquidity_depth_conflict        the chart reading says the depth data is
+//                                   missing while a claim it cites gives a
+//                                   dated depth figure: said, never resolved
 //   executable_liquidity_unsupported  (low) the timing and executable
 //                                   liquidity component is scored with no such
 //                                   figure: its executable-liquidity part rests
@@ -61,9 +68,16 @@
 // Older price history is context, never a flag: only the date of the latest
 // observation behind a current reading is checked. A claim a dated catalyst
 // cites is checked as catalyst evidence only when it is not a market
-// observation (a past price, volume or chart reading). A report without these
-// flags is not thereby verified; the checks are structural, and a claim tagged
-// [V] is the researcher's own classification of its source, not the desk's.
+// observation (a past price, volume or chart reading), and such an
+// observation never counts as evidence of the event either:
+//   catalyst_market_context_only    (low) a dated catalyst the report gives as
+//                                   documented (source documented, project
+//                                   claimed, announced or implemented) cites
+//                                   only past market observations
+// A conditional or inferred catalyst may rest on market context; it is not
+// flagged. A report without these flags is not thereby verified; the checks
+// are structural, and a claim tagged [V] is the researcher's own
+// classification of its source, not the desk's.
 
 // What [V] means on this desk, said wherever the tags are shown.
 const TAG_NOTE = 'A claim tagged [V] is the researcher\'s own classification of its source; the desk does not verify it independently.';
@@ -166,8 +180,13 @@ const NUMBER_RE = /(\$\s?\d|\d[\d,.]*\s?(k|m|b|million|billion|usd|%))/i;
 // stops that end a sentence (never the point inside "0.3%").
 const clauses = (t) => String(t || '').split(/[;\n]+|\.(?=\s|$)/).map((x) => x.trim()).filter(Boolean);
 
-// A spread, depth, order-book or slippage term, or a band around the price.
-const DEPTH_TERM_RE = /\b(depth|order ?books?|spreads?|slippage|bid[- ]ask|price impact)\b|±\s?\d|\bwithin\s+[±+]?\s?\d+(\.\d+)?\s?%|\bpool (liquidity|reserves?|tvl)\b/i;
+// What measures how much can be traded: depth, an order book, slippage or
+// price impact, a band around the price, or a pool's size.
+const SIZE_TERM_RE = /\b(depth|order ?books?|slippage|price impact)\b|±\s?\d|\bwithin\s+[±+]?\s?\d+(\.\d+)?\s?%|\bpool (liquidity|reserves?|tvl)\b/i;
+// A spread: the price gap at the top of the book, not how much can be traded.
+const SPREAD_TERM_RE = /\b(spreads?|bid[- ]ask)\b/i;
+const DEPTH_METRIC_RE = /depth|slippage|order_?book|price_impact|pool_(liquidity|reserves?|tvl)|dex_liquidity/i;
+const SPREAD_METRIC_RE = /spread|bid_?ask/i;
 // A measured figure: money, a percentage or basis points.
 const MEASURE_RE = /(\$\s?\d|\d[\d,.]*\s?(k|m|bn?|million|billion|thousand|usd[ct]?|%|bps|bp|basis points)(?![a-z]))/i;
 // A statement that the data is missing, aimed at the depth term it names.
@@ -175,17 +194,51 @@ const MISSING_DEPTH_RE = /\b(no|not|n\/a|without|unavailable|unknown|missing|lac
 const MISSING_WORDS_RE = /^\s*(unknown|none|n\/a|null|not\b|no\b|unavailable|missing|could\s?n[o']t|cannot|unable|not available)/i;
 const ISO_DAY_RE = /\b\d{4}-\d{2}-\d{2}\b/;
 
-// What a liquidity reading holds: a spread, depth or order-book figure (not
-// a venue list, aggregate volume or a statement that depth is missing), and
-// whether that figure is dated (in the reading, or by the chart snapshot it
-// belongs to).
-function depthReading(cc) {
+// A dated claim that measures liquidity, as the report structures it: 'depth'
+// (depth, an order book, slippage, price impact or a pool's size, by its
+// metric or its words, with a figure), 'spread' (a spread alone), or null.
+// An undated reading and a statement that the data is missing are neither.
+function depthClaim(c) {
+  if (!c || dayOf(c.as_of) === null) return null;
+  const text = String(c.text || '');
+  if (MISSING_DEPTH_RE.test(text)) return null;
+  if (!((typeof c.value === 'number' && Number.isFinite(c.value)) || MEASURE_RE.test(text))) return null;
+  const metric = String(c.metric_id || '');
+  if (DEPTH_METRIC_RE.test(metric) || SIZE_TERM_RE.test(text)) return 'depth';
+  if (SPREAD_METRIC_RE.test(metric) || SPREAD_TERM_RE.test(text)) return 'spread';
+  return null;
+}
+
+// What the liquidity evidence holds: a depth, order-book or slippage figure,
+// in the chart reading's own words or in a dated claim the grade or the
+// reading cites ('figure'); a spread and nothing about size ('spread_only');
+// a statement that depth is missing ('missing'); a venue list, aggregate
+// volume or a description ('no_figure'); nothing ('none'); or a reading that
+// says the depth data is missing while a claim it cites gives a dated depth
+// figure ('conflict': the report contradicts itself, and neither side is
+// chosen). And whether the figure is dated: in the reading, by the chart
+// snapshot it belongs to, or by the claim's own as-of day.
+function depthReading(cc, cited = []) {
   const text = cc && typeof cc.liquidity === 'string' ? cc.liquidity.trim() : '';
   const parts = clauses(text);
-  const measured = parts.filter((p) => DEPTH_TERM_RE.test(p) && MEASURE_RE.test(p) && !MISSING_DEPTH_RE.test(p));
-  const says = !text ? 'none' : measured.length ? 'figure' : parts.some((p) => MISSING_DEPTH_RE.test(p)) || MISSING_WORDS_RE.test(text) ? 'missing' : 'no_figure';
-  const dated = Boolean(measured.some((p) => ISO_DAY_RE.test(p) && dayOf(p.match(ISO_DAY_RE)[0]) !== null) || dayOf(cc && cc.data ? cc.data.latest_observation_at : null) !== null);
-  return { text, says, dated };
+  const reads = (p) => MEASURE_RE.test(p) && !MISSING_DEPTH_RE.test(p);
+  const depth = parts.filter((p) => SIZE_TERM_RE.test(p) && reads(p));
+  const spread = parts.filter((p) => SPREAD_TERM_RE.test(p) && !SIZE_TERM_RE.test(p) && reads(p));
+  const kinds = cited.map((c) => [String(c.claim_id), depthClaim(c)]);
+  const claimDepth = kinds.filter(([, k]) => k === 'depth').map(([id]) => id);
+  const claimSpread = kinds.filter(([, k]) => k === 'spread').map(([id]) => id);
+  const textSays = depth.length ? 'figure'
+    : spread.length ? 'spread_only'
+      : !text ? 'none'
+        : parts.some((p) => MISSING_DEPTH_RE.test(p)) || MISSING_WORDS_RE.test(text) ? 'missing' : 'no_figure';
+  const says = textSays === 'figure' ? 'figure'
+    : claimDepth.length ? (textSays === 'missing' ? 'conflict' : 'figure')
+      : textSays === 'spread_only' || claimSpread.length ? 'spread_only' : textSays;
+  const datedIn = (xs) => xs.some((p) => ISO_DAY_RE.test(p) && dayOf(p.match(ISO_DAY_RE)[0]) !== null);
+  const snapshot = dayOf(cc && cc.data ? cc.data.latest_observation_at : null) !== null;
+  const dated = says === 'figure' ? Boolean(claimDepth.length || datedIn(depth) || snapshot)
+    : says === 'spread_only' ? Boolean(claimSpread.length || datedIn(spread) || snapshot) : false;
+  return { text, says, dated, claims: says === 'figure' || says === 'conflict' ? claimDepth : says === 'spread_only' ? claimSpread : [] };
 }
 
 // A volume baseline the reading states (not "unknown" or "not available").
@@ -343,36 +396,53 @@ function categoryChecks(a) {
     }
   }
   // Liquidity is not a venue list: a volume and liquidity grade needs the
-  // volume baseline it compared against and a spread, depth or order-book
+  // volume baseline it compared against and a depth, order-book or slippage
   // reading (evidence rule 12: aggregate volume is not executable liquidity).
-  // A depth reading must say something: a dated spread, depth or order-book
-  // figure. "No depth retrieved" is an honest limitation, not a reading.
+  // A depth reading must say something: a dated figure of how much can be
+  // traded, in the chart reading or in a dated claim the grade or the reading
+  // cites. "No depth retrieved" is an honest limitation, not a reading, and a
+  // spread alone prices the top of the book without measuring size.
   const cc = a.chart_cycle || null;
-  const depth = depthReading(cc);
+  const claimsById = new Map((Array.isArray(a.claims) ? a.claims : []).filter((c) => c && c.claim_id).map((c) => [String(c.claim_id), c]));
+  const refsOf = (s) => (s && Array.isArray(s.evidence_refs) ? s.evidence_refs.map(String) : []);
+  const cited = [...new Set([...refsOf(scores.volume_liquidity), ...refsOf(cc), ...refsOf((a.investment_components || {}).timing_executable_liquidity)])]
+    .map((id) => claimsById.get(id)).filter(Boolean);
+  const depth = depthReading(cc, cited);
   const undatedChart = flags.some((f) => f.rule === 'chart_without_observation_date');
   const depthGap = () => {
     const q = depth.text ? `"${depth.text.slice(0, 60)}${depth.text.length > 60 ? '…' : ''}"` : '';
-    if (depth.says === 'none') return 'no spread, depth or order-book reading';
+    if (depth.says === 'none') return 'no depth, order-book or slippage reading';
     if (depth.says === 'missing') return `only a statement that the depth data is missing (${q})`;
-    if (depth.says === 'no_figure') return `a liquidity reading with no spread, depth or order-book figure (${q}; a venue list, aggregate volume or a description is not one)`;
+    if (depth.says === 'no_figure') return `a liquidity reading with no depth, order-book or slippage figure (${q}; a venue list, aggregate volume or a description is not one)`;
+    if (depth.says === 'spread_only') return `a spread but no depth, order-book or slippage figure (${depth.claims.length ? depth.claims.join(', ') : q})`;
+    if (depth.says === 'conflict') return `a chart reading that says the depth data is missing (${q}), while ${depth.claims.join(', ')}, which ${depth.claims.length === 1 ? 'it cites, gives' : 'it cites, give'} a dated depth figure`;
     if (!depth.dated && !undatedChart) return 'a depth figure with no date';
     return null;
   };
+  const spreadOnly = depth.says === 'spread_only';
+  const conflict = depth.says === 'conflict';
+  const notLiquidity = spreadOnly ? 'A spread prices the top of the book; it does not measure how much can be traded.'
+    : conflict ? 'The report contradicts itself on depth; the order book or pool itself, on a dated snapshot, would settle it.'
+      : 'Listing venues or aggregate volume is not executable liquidity.';
   const liq = scoredText(scores.volume_liquidity);
   if (liq !== null) {
-    const lacks = [statedText(cc && cc.volume ? cc.volume.baseline : null) ? null : 'no stated volume baseline', depthGap()].filter(Boolean);
+    const noBaseline = !statedText(cc && cc.volume ? cc.volume.baseline : null);
+    const lacks = [noBaseline ? 'no stated volume baseline' : null, depthGap()].filter(Boolean);
     if (lacks.length) {
       const said = lacks.join(' and ');
-      flags.push({ claim_id: null, category: 'volume_liquidity', categories: ['volume_liquidity'], kind: null, source_ids: [], rule: 'liquidity_without_depth', severity: 'medium', message: `Volume confirmation and executable liquidity is scored ${liq}, but the report has ${said}. Listing venues or aggregate volume is not executable liquidity. This concerns the liquidity grade; the chart and timing grades stand on their own evidence.`, beside: `The report has ${said}. Listing venues or aggregate volume is not executable liquidity.` });
+      // A measured spread is partial evidence: a low note. Nothing measured,
+      // a contradiction or no baseline is a material gap.
+      flags.push({ claim_id: null, category: 'volume_liquidity', categories: ['volume_liquidity'], kind: null, source_ids: [], rule: conflict ? 'liquidity_depth_conflict' : 'liquidity_without_depth', severity: spreadOnly && !noBaseline ? 'low' : 'medium', message: `Volume confirmation and executable liquidity is scored ${liq}, but the report has ${said}. ${notLiquidity} This concerns the liquidity grade; the chart and timing grades stand on their own evidence.`, beside: `The report has ${said}. ${notLiquidity}` });
     }
   }
   // The weighted timing and liquidity component: the timing judgment can
-  // stand on the chart, but its executable-liquidity part needs a figure.
+  // stand on the chart, but its executable-liquidity part needs a figure. A
+  // contradiction about depth is said once, beside the liquidity grade.
   const comp = (a.investment_components || {}).timing_executable_liquidity;
   const compText = scoredText(comp);
   // An undated figure is said once: by the chart date flag when there is one.
-  if (compText !== null && (depth.says !== 'figure' || (!depth.dated && !undatedChart))) {
-    flags.push({ claim_id: null, category: null, categories: [], component: 'timing_executable_liquidity', kind: null, source_ids: [], rule: 'executable_liquidity_unsupported', severity: 'low', message: `Timing and executable liquidity is scored ${compText}, and the report has ${depthGap() || 'a depth figure with no date'}: its executable-liquidity part rests on no measurement. Its timing judgment can still stand on the chart; this flag does not question it, and changes no score.` });
+  if (compText !== null && !conflict && (depth.says !== 'figure' || (!depth.dated && !undatedChart))) {
+    flags.push({ claim_id: null, category: null, categories: [], component: 'timing_executable_liquidity', kind: null, source_ids: [], rule: 'executable_liquidity_unsupported', severity: 'low', message: `Timing and executable liquidity is scored ${compText}, and the report has ${depthGap() || 'a depth figure with no date'}: its executable-liquidity part rests on ${spreadOnly ? 'a spread alone, not on a measurement of size' : 'no measurement'}. Its timing judgment can still stand on the chart; this flag does not question it, and changes no score.` });
   }
   return { flags, checked };
 }
@@ -389,6 +459,30 @@ function scenarioChecks(a) {
   if (bare.length) {
     const cases = bare.map((s) => s.case || '?').join(', ');
     flags.push({ claim_id: null, category: null, categories: [], kind: 'scenario', source_ids: [], rule: 'probability_without_support', severity: 'medium', message: `Scenario probabilities are given for the ${cases} case${bare.length === 1 ? '' : 's'} with no observation and no cited claim behind ${bare.length === 1 ? 'it' : 'them'}. A probability needs supporting evidence, or it stays null with the reason.` });
+  }
+  return flags;
+}
+
+// A dated catalyst the report gives as documented (source documented, project
+// claimed, announced or implemented) whose cited claims are all past market
+// observations: a price, volume or chart reading is context, never evidence
+// that the event is scheduled. A conditional, inferred or speculative catalyst
+// may rest on market context and is not checked here.
+const DOCUMENTED_CERTAINTY = new Set(['source_documented', 'project_claimed']);
+const DOCUMENTED_STATUS = new Set(['announced', 'implemented']);
+function catalystChecks(a, claimsById) {
+  const flags = [];
+  for (const c of Array.isArray(a.catalysts) ? a.catalysts : []) {
+    if (!c || !(c.date || c.window_start || c.window_end)) continue;
+    if (!DOCUMENTED_CERTAINTY.has(c.certainty) && !DOCUMENTED_STATUS.has(c.status)) continue;
+    const cited = (Array.isArray(c.claim_ids) ? c.claim_ids : []).map((id) => claimsById.get(String(id))).filter(Boolean);
+    if (!cited.length || !cited.every(marketObservation)) continue;
+    const title = String(c.title || 'Untitled catalyst').trim().slice(0, 80);
+    const start = c.window_start || c.date || null;
+    const end = c.window_end && c.window_end !== start ? c.window_end : null;
+    const given = DOCUMENTED_CERTAINTY.has(c.certainty) ? String(c.certainty).replace(/_/g, ' ') : String(c.status);
+    const one = cited.length === 1;
+    flags.push({ claim_id: null, category: null, categories: [], kind: 'catalyst', catalyst: title, source_ids: [], rule: 'catalyst_market_context_only', severity: 'low', message: `The catalyst "${title}" (${[start, end].filter(Boolean).join(' to ')}) is given as ${given}, but the claim${one ? '' : 's'} it cites (${cited.map((x) => x.claim_id).join(', ')}) ${one ? 'is a past market observation' : 'are past market observations'}: context, not evidence of the event. A dated catalyst needs the official announcement with its date window.` });
   }
   return flags;
 }
@@ -444,6 +538,9 @@ function evidenceChecks(assessment, { officialWebsite = null } = {}) {
   flags.push(...cat.flags);
   const scen = scenarioChecks(a);
   flags.push(...scen);
+  const byId = new Map(claims.filter((c) => c && c.claim_id).map((c) => [String(c.claim_id), c]));
+  const catalysts = catalystChecks(a, byId);
+  flags.push(...catalysts);
   const rank = { high: 0, medium: 1, low: 2 };
   flags.sort((x, y) => rank[x.severity] - rank[y.severity]);
   const n = (sev) => flags.filter((f) => f.severity === sev).length;
@@ -453,6 +550,7 @@ function evidenceChecks(assessment, { officialWebsite = null } = {}) {
     flagged ? `${flagged} of ${claims.length} claims need better evidence` : null,
     flaggedCategories ? `${flaggedCategories} category grade${flaggedCategories === 1 ? ' lacks' : 's lack'} the evidence the prompt asks for beside ${flaggedCategories === 1 ? 'it' : 'them'}` : null,
     scen.length ? 'scenario probabilities are given without supporting evidence' : null,
+    catalysts.length ? `${catalysts.length} dated catalyst${catalysts.length === 1 ? ' cites' : 's cite'} only past market observations` : null,
   ].filter(Boolean).join('; ');
   const comps = flags.filter((f) => f.component);
   const checkedGrades = cat.checked ? `, and ${cat.checked} category grade${cat.checked === 1 ? '' : 's'} against the code and chart evidence beside ${cat.checked === 1 ? 'it' : 'them'}` : '';
@@ -478,6 +576,8 @@ function evidenceChecks(assessment, { officialWebsite = null } = {}) {
     // and weighted components (the timing and liquidity component).
     flagged_other: scen.length,
     flagged_components: new Set(comps.map((f) => f.component)).size,
+    // Dated catalysts that cite only past market observations.
+    flagged_catalysts: catalysts.length,
     coverage: { status: coverage, gaps },
     high: n('high'),
     medium: n('medium'),
@@ -496,4 +596,4 @@ function evidenceChecks(assessment, { officialWebsite = null } = {}) {
   };
 }
 
-module.exports = { TAG_NOTE, SOURCE_TYPES, PRIMARY_SOURCE_TYPES: [...PRIMARY], CRITICAL_KINDS, CHART_CATEGORIES, STALE_CHART_DAYS, normalizeSourceType, evidenceChecks, criticalKind, categoryChecks };
+module.exports = { TAG_NOTE, SOURCE_TYPES, PRIMARY_SOURCE_TYPES: [...PRIMARY], CRITICAL_KINDS, CHART_CATEGORIES, STALE_CHART_DAYS, normalizeSourceType, evidenceChecks, criticalKind, categoryChecks, depthClaim, marketObservation };

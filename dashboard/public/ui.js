@@ -22,7 +22,7 @@ export const RESEARCH_STATE = {
   running: { short: 'Working', long: 'Working on it: not saved yet', tone: 'work' },
   cowork: { short: 'Working', long: 'Claude in Cowork is researching it: not saved yet', tone: 'work' },
   connector: { short: 'Working', long: 'Researching it itself through its desk connection: not saved yet', tone: 'work' },
-  waiting: { short: 'Waiting', long: 'Waiting for you: no API runs this model. Paste the prompt into it and import its answer', tone: 'warn' },
+  waiting: { short: 'Waiting', long: 'Waiting for you: manual research, ready when you ask. Paste the prompt into it and import its answer', tone: 'warn' },
   interrupted: { short: 'Paused', long: 'Paused: its assistant has shown no activity for 30 minutes and has not saved this report. Ask it to resume, or restart it', tone: 'warn' },
   uncertain: { short: 'Check', long: 'Check: the request may have been sent and billed, and no answer was saved. Reconcile it or retry', tone: 'warn' },
   // An answer that arrived but stopped before it finished (for example at the
@@ -31,13 +31,13 @@ export const RESEARCH_STATE = {
   failed: { short: 'Failed', long: 'Failed: nothing was saved for this model', tone: 'bad' },
   // A paid answer that does not match the run it was sent for: kept with its
   // receipt and cost, never graded, and not sent again.
-  conflict: { short: 'Check', long: 'Check: the answer does not match the research run it was sent for. It is kept with its receipt and cost, is not graded and did not complete the job. Retry only if you want the run asked again', tone: 'bad' },
+  conflict: { short: 'Check', long: 'Check · answer quarantined: it does not match the research run it was sent for. It is kept with its receipt and cost, is not graded and did not complete the job. Retry only if you want the run asked again', tone: 'bad' },
   canceled: { short: 'Canceled', long: 'Canceled: nothing was saved for this model', tone: '' },
   completed: { short: 'Saved', long: 'Saved as a report', tone: 'ok' },
   // Eric paused the model: its waiting job is kept and nothing new is assigned.
   on_hold: { short: 'On hold', long: 'On hold: this model is paused on this desk. Its waiting job is kept and is not handed out; nothing new is assigned to it', tone: '' },
   // Queued for a paid API, never sent, because its project was archived.
-  held: { short: 'Held', long: 'Held, not sent: the project was archived before this request was sent. It is sent only if you send it again', tone: 'warn' },
+  held: { short: 'Held', long: 'Held by archive, not sent: the project was archived before this request was sent. Restoring the project does not send it; it is sent only if you send it again', tone: 'warn' },
 };
 
 // A model Eric put on hold (settings research.on_hold), from the index.
@@ -647,18 +647,21 @@ function newerRunText(provider, key, job) {
 // none. The checks never change a score; they say how far to trust it.
 // Evidence flags on a report: on its claims, and on category grades that lack
 // the evidence the prompt asks for beside them (core/evidence.js).
+const anyFlag = (ev) => Boolean(ev && (ev.flagged || ev.flagged_categories || ev.flagged_other || ev.flagged_components || ev.flagged_catalysts));
+
 export function evidenceLevel(ev) {
-  if (!ev || !(ev.flagged || ev.flagged_categories || ev.flagged_other || ev.flagged_components)) return null;
+  if (!anyFlag(ev)) return null;
   if (ev.high > 0) return 'serious';
   if (ev.medium > 0) return 'material';
   return null;
 }
 
 export function evidenceText(ev) {
-  if (!ev || !(ev.flagged || ev.flagged_categories || ev.flagged_other || ev.flagged_components)) return null;
+  if (!anyFlag(ev)) return null;
   const n = ev.flagged || 0;
   const c = ev.flagged_categories || 0;
-  const what = [n ? `${n} claim${n === 1 ? '' : 's'}` : null, c ? `${c} category grade${c === 1 ? '' : 's'}` : null, ev.flagged_other ? 'scenario probabilities' : null, ev.flagged_components ? 'the timing and liquidity component' : null].filter(Boolean).join(' and ').replace(/ and (?=[^,]* and )/g, ', ');
+  const k = ev.flagged_catalysts || 0;
+  const what = [n ? `${n} claim${n === 1 ? '' : 's'}` : null, c ? `${c} category grade${c === 1 ? '' : 's'}` : null, ev.flagged_other ? 'scenario probabilities' : null, ev.flagged_components ? 'the timing and liquidity component' : null, k ? `${k} dated catalyst${k === 1 ? '' : 's'}` : null].filter(Boolean).join(' and ').replace(/ and (?=[^,]* and )/g, ', ');
   return `${what} flagged by evidence checks${ev.high ? ` (${ev.high} serious)` : ev.medium ? ` (${ev.medium} material)` : ''}`;
 }
 

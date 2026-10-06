@@ -126,6 +126,7 @@
 .bf-key-t { margin: 0; font-size: 14px; line-height: 1.5; color: var(--text); overflow-wrap: anywhere; }
 .bf-key .bf-cite { margin-top: 4px; }
 .bf-key-more { display: block; margin-top: 2px; font-size: var(--fs-small); color: var(--text-3); }
+.bf-key-t.bf-key-none { font-size: var(--fs-small); color: var(--text-2); }
 
 /* ---- the thesis ----------------------------------------------------------------- */
 .bf-qs { display: grid; gap: var(--s5); }

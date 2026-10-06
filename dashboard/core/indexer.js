@@ -39,7 +39,7 @@ const siteOf = (project) => (project && project.identity && project.identity.sta
 // Evidence checks (evidence.js), in brief for lists: never a score change.
 function evidenceBrief(a, project) {
   const e = require('./evidence').evidenceChecks(a, { officialWebsite: siteOf(project) });
-  return { flagged: e.flagged_claims, flagged_categories: e.flagged_categories, flagged_other: e.flagged_other || 0, flagged_components: e.flagged_components || 0, coverage: e.coverage ? e.coverage.status : null, high: e.high, medium: e.medium, low: e.low, critical: e.critical_claims, summary: e.summary };
+  return { flagged: e.flagged_claims, flagged_categories: e.flagged_categories, flagged_other: e.flagged_other || 0, flagged_components: e.flagged_components || 0, flagged_catalysts: e.flagged_catalysts || 0, coverage: e.coverage ? e.coverage.status : null, high: e.high, medium: e.medium, low: e.low, critical: e.critical_claims, summary: e.summary };
 }
 
 // Structure checks of one report (core/consistency.js): weighted parts left
@@ -48,6 +48,24 @@ function evidenceBrief(a, project) {
 function structureOf(ws, a) {
   const grading = (ws.rubrics.gradingVersions && ws.rubrics.gradingVersions[a.rubric_version]) || ws.rubrics.grading || null;
   return require('./consistency').structureChecks(a, { grading, profile: ws.rubrics.profiles[a.sector_profile] || null });
+}
+
+// The written report against its own data block (core/textscores.js): scores
+// the text states that differ from the data block the grade is calculated
+// from. Read-time only, from the original as saved; a PDF or a report read
+// from prose (whose scores came from that text) has nothing to compare.
+function textScoresOf(ws, r) {
+  const a = r.assessment || {};
+  const file = r.meta && r.meta.original_file;
+  if (!file || /\.pdf$/i.test(file) || a.needs_text || a.source_format === 'prose' || a.source_format === 'pdf') return null;
+  let text;
+  try {
+    text = require('fs').readFileSync(ws.abs(`${r.dir}/${file}`), 'utf8');
+  } catch (_) {
+    return null;
+  }
+  const grading = (ws.rubrics.gradingVersions && ws.rubrics.gradingVersions[a.rubric_version]) || ws.rubrics.grading || null;
+  return require('./textscores').textScoreChecks(text, a, { grading, profile: ws.rubrics.profiles[a.sector_profile] || null });
 }
 
 function structureBrief(ws, a) {
@@ -652,6 +670,7 @@ function projectDetailRaw(ws, id) {
         eligible: isEligible(r),
         evidence: require('./evidence').evidenceChecks(r.assessment, { officialWebsite: siteOf(project) }),
         structure: structureOf(ws, r.assessment),
+        text_scores: textScoresOf(ws, r),
         revision: require('./revisions').revisionOf(reports, r),
         analysis_timing: require('./reports').analysisTiming(r.assessment.analysis_at, r.meta.imported_at),
       };

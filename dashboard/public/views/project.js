@@ -861,6 +861,8 @@ function reportsTab(ctx, d, route) {
         // what evidence and why, from the stored records (revisions.js).
         sel.revision && sel.revision.kind === 'revision' ? h('p', { class: 'newer-line' }, revisionText(sel.revision), ' ', h('a', { href: `#/project/${encodeURIComponent(pid)}/report?report=${encodeURIComponent(sel.revision.of)}`, dataset: { key: `rev-of-${sel.report_id}` } }, 'Open the earlier report')) : null,
         sel.analysis_timing && ['after_save', 'future'].includes(sel.analysis_timing.status) ? h('p', { class: 'newer-line' }, `The report states an analysis time ${sel.analysis_timing.minutes_after_save !== null && sel.analysis_timing.minutes_after_save < 2880 ? `${sel.analysis_timing.minutes_after_save} min` : 'more than a day'} after it was saved (${fmtDateTime(sel.meta.imported_at)}); shown as written, ordered by its save time.`) : null,
+        // Scores the text states that differ from the data block (core/textscores.js).
+        sel.text_scores && Array.isArray(sel.text_scores.mismatches) && sel.text_scores.mismatches.length ? h('p', { class: 'newer-line problem' }, sel.text_scores.summary) : null,
         errors || amb ? h('div', { style: { marginTop: '12px' } }, callout(`${errors ? `${errors} extraction error(s)` : ''}${errors && amb ? ' and ' : ''}${amb ? `${amb} ambiguous value(s)` : ''}: see Extraction notes below.`, 'warn')) : null),
       atAGlance(ctx, d, sel, withheld),
       reportReader(ctx, d, sel),
@@ -1274,7 +1276,7 @@ function reconcileForm(ctx, pid, run, prov, a) {
 // request and the desk is checking on it in the background.
 const PHASE_TEXT = { reserved: 'reserved, about to be sent', submitted: 'accepted by the provider, running in the background', uncertain: 'uncertain: may have been billed', errored: 'error', not_sent: 'not sent' };
 
-function jobRow(ctx, pid, run, prov, projectName = pid) {
+function jobRow(ctx, pid, run, prov, projectName = pid, d = null) {
   const j = run.jobs[prov];
   const onHold = Boolean(onHoldOf(ctx.state.index, prov));
   const key = jobKey(j, run.created_at, { onHold });
@@ -1342,7 +1344,12 @@ function jobRow(ctx, pid, run, prov, projectName = pid) {
     }, (r) => r.message || 'Canceled');
     actions.push(b);
   }
-  if (j.report_id) actions.push(h('a', { class: 'btn small', href: `#/project/${pid}/reports?report=${encodeURIComponent(j.report_id)}` }, 'Open report'));
+  // A completed job keeps its first save apart from a later save for the same
+  // run (the run follows the latest; both stay saved).
+  const saves = jobSaves(j, d ? d.reports : []);
+  const reportHref = (id) => `#/project/${encodeURIComponent(pid)}/report?report=${encodeURIComponent(id)}`;
+  if (saves) actions.push(h('a', { class: 'btn small', href: reportHref(saves.original), dataset: { key: `job-orig-${run.run_id}-${prov}` } }, 'Open the original'), h('a', { class: 'btn small', href: reportHref(saves.latest), dataset: { key: `job-latest-${run.run_id}-${prov}` } }, 'Open the latest revision'));
+  else if (j.report_id) actions.push(h('a', { class: 'btn small', href: reportHref(j.report_id) }, 'Open report'));
   const attempts = j.attempts || [];
   for (const a of attempts) if (reconcilable(j, a)) actions.push(reconcileForm(ctx, pid, run, prov, a));
   return {
@@ -1350,9 +1357,24 @@ function jobRow(ctx, pid, run, prov, projectName = pid) {
     state: key === 'waiting' && hosted ? h('div', { class: 'job-state' }, stateText('Waiting for you', st.tone), waitingStep(prov)) : stateText(st.long, st.tone),
     mode: h('span', { class: 'small' }, j.mode === 'manual' ? (hosted ? 'Its assistant\'s connection, or by hand' : 'By hand: paste the prompt, import the answer') : j.mode === 'cowork' ? 'Claude in Cowork' : j.mode === 'connector' ? `${PROVIDER_LABELS[prov]} through its desk connection` : j.mode === 'mock' ? 'Fictional demo adapter' : `API, in the background${j.model ? ` · ${j.model}` : ''}`),
     attempts: attempts.length ? h('div', { class: 'small' }, attempts.map((a) => attemptLine(a))) : h('span', { class: 'faint small' }, 'None'),
-    error: j.error ? h('span', { class: 'small', style: { color: 'var(--neg)' } }, j.error) : j.note ? h('span', { class: 'small muted' }, j.note) : null,
+    error: j.error ? h('span', { class: 'small', style: { color: 'var(--neg)' } }, j.error) : saves ? h('span', { class: 'small' }, saves.text) : j.note ? h('span', { class: 'small muted' }, j.note) : null,
     actions: actions.length ? h('div', { class: 'btn-row' }, actions) : null,
   };
+}
+
+// A completed job whose model saved again for the same run: the first save
+// completed the job (the original), the run now links the latest, and the
+// revision record says what kind of save that was (revisions.js). Null for a
+// job with one save. Pure, for the tests.
+const REVISION_BASIS = { existing_evidence: 'a revision using existing evidence (no source added)', new_sources: 'a revision with new sources', scores_unchanged: 'a re-save with the same scores' };
+export function jobSaves(j, reports = []) {
+  const earlier = j && j.state === 'completed' && j.report_id && Array.isArray(j.previous_report_ids) ? j.previous_report_ids.filter(Boolean) : [];
+  if (!earlier.length) return null;
+  const latest = (reports || []).find((r) => r && r.report_id === j.report_id);
+  const rv = latest && latest.revision && latest.revision.kind === 'revision' ? latest.revision : null;
+  const kind = rv ? REVISION_BASIS[rv.basis] || 'a revision' : 'a later save';
+  const between = earlier.length > 1 ? ` (${earlier.length - 1} more save${earlier.length === 2 ? '' : 's'} in between)` : '';
+  return { original: earlier[0], latest: j.report_id, basis: rv ? rv.basis : null, text: `Completed by its first save, ${earlier[0]}. The run now links ${j.report_id}, ${kind}${between}. Both are kept.` };
 }
 
 // Why an answer stopped early, in words (research.js termination codes).
@@ -1453,7 +1475,7 @@ function researchParts(ctx, d, row, route = null) {
         { label: 'Attempts', render: (x) => x.attempts },
         { label: 'Note', wrap: true, render: (x) => x.error },
         { label: '', render: (x) => x.actions },
-      ], run.providers.filter((p) => run.jobs[p]).map((p) => jobRow(ctx, pid, run, p, d.project.name)))),
+      ], run.providers.filter((p) => run.jobs[p]).map((p) => jobRow(ctx, pid, run, p, d.project.name, d)))),
       ...run.providers.filter((p) => run.jobs[p]).flatMap((p) => (run.jobs[p].attempts || []).filter((a) => a.partial_output).map((a) => partialView(ctx, pid, run, p, a))),
       details('Run details', kv([
         ['Run ID', h('code', null, run.run_id)],

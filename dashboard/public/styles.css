@@ -1072,6 +1072,7 @@ td.c-mkt-summary { display: none; }
 .th-line .k { font-size: var(--fs-caption); font-weight: 600; color: var(--text-3); padding-top: 2px; }
 .th-line ul { margin: 0; padding-left: 16px; }
 .th-line li + li { margin-top: 2px; }
+.th-line .th-nr { color: var(--text-2); }
 .onchain-note { margin: 0 0 8px; color: var(--text-2); }
 .onchain-note .chip { margin-right: 4px; }
 .facts.onchain { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; }
@@ -1302,6 +1303,8 @@ button.mtab:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px
 .ig-check > summary::-webkit-details-marker { display: none; }
 .ig-check > summary svg { width: 14px; height: 14px; flex: none; color: var(--warn-strong); }
 .ig-check .structure-notes { margin: 2px 0 4px; }
+.text-check ul { margin: 2px 0 4px; padding-left: 18px; }
+.text-check p { margin: 0 0 4px; }
 .ig-open { margin: 10px 0 0; }
 .ig.none { border-style: dashed; border-color: var(--border); background: transparent; }
 .ig-none-title { margin: 4px 0 0; font-size: 16px; font-weight: 600; color: var(--text); }

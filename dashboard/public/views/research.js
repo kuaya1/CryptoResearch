@@ -31,25 +31,12 @@ function runsTab(ctx) {
   runNow.onclick = action(runNow, async () => { await ctx.api.post('/api/research/run', {}); await ctx.refresh(); return true; }, 'Queued jobs processed (paid calls only within your budget)');
   const staleDays = idx.settings.freshness.research_stale_days || 90;
   const hosted = Boolean(ctx.state.session && ctx.state.session.hosted);
-  // Three routes, in words: by itself on the API (in the background, within
-  // your limits), through the model's own assistant (online desk), or by hand.
-  // A model on hold has none: it reads On hold (routeWords).
-  const happens = (x) => {
-    const who = PROVIDER_LABELS[x.p];
-    if (x.hold) return routeWords(x.p, { hold: x.hold }).happens;
-    if (x.s.mode === 'api') return `Runs by itself on the ${who} API in the background, within your limits. The report is saved when it finishes.`;
-    if (x.s.mode === 'mock') return 'Returns fictional fixture reports in this demo workspace. No network call.';
-    const missing = (x.s.missing || []).join(', ') || x.s.reason;
-    return hosted
-      ? `No API run (${missing}). Each run waits for you: ${waitingInstruction(x.p, { full: true })}. ${who} researches under its own plan and saves the report here. Or paste the prompt and import the answer.`
-      : `No API set up (${missing}). Each run saves the prompt for you to paste into ${who}; the job completes when you import the answer.`;
-  };
   return h('div', null,
     card('Research routes', table([
       { label: 'Model', render: (x) => h('strong', null, PROVIDER_LABELS[x.p]) },
-      { label: 'Route', render: (x) => (x.hold ? stateText(routeWords(x.p, { hold: x.hold }).route) : x.s.mode === 'api' ? stateText(`API · ${x.s.model}`, 'ok') : x.s.mode === 'mock' ? stateText('Fictional demo adapter') : stateText(hosted ? 'Its assistant\'s connection' : 'By hand', 'warn')) },
-      { label: 'What happens', wrap: true, render: (x) => h('span', { class: 'small' }, happens(x)) },
-    ], PROVIDERS.map((p) => ({ p, s: (r.providers || {})[p] || { mode: 'manual', reason: 'unknown' }, hold: onHoldOf(idx, p) }))), {
+      { label: 'Route', render: (x) => h('span', null, stateText(x.w.route, x.w.tone), x.w.setup ? h('div', { class: 'small muted' }, x.w.setup) : null) },
+      { label: 'What happens', wrap: true, render: (x) => h('span', { class: 'small' }, x.w.happens) },
+    ], PROVIDERS.map((p) => ({ p, w: routeWords(idx, p, (r.providers || {})[p] || { mode: 'manual', reason: 'unknown' }, { hosted }) }))), {
       note: `Spend this month: $${(r.spend && r.spend.monthly) || 0} · today: $${(r.spend && r.spend.daily) || 0} · budget per run ${money(r.budget && r.budget.per_run_usd)}, day ${money(r.budget && r.budget.daily_usd)}, month ${money(r.budget && r.budget.monthly_usd)} · unattended runs ${r.unattended_enabled ? 'on' : 'off'}`,
       actions: [runNow, h('a', { class: 'btn small', href: '#/settings?tab=research' }, hosted ? 'API keys and limits' : 'Set up API access')],
     }),
@@ -61,12 +48,28 @@ function runsTab(ctx) {
     ], projects, { empty: 'No projects yet.' }), { note: 'Each model\'s job is independent: a failure in one never erases another\'s result. Price refreshes never start research.' }));
 }
 
-// A model on hold on this desk (settings research.on_hold): its route reads
-// On hold, and nothing says how to run it. Pure, for the tests.
-export function routeWords(provider, { hold = null } = {}) {
-  if (!hold) return null;
-  const who = PROVIDER_LABELS[provider];
-  return { route: 'On hold', happens: `On hold${hold.since ? ` since ${hold.since}` : ''}: nothing new is assigned to ${who}. Its saved reports and waiting jobs are kept.` };
+// A model's effective route in words, the way Settings says it: on hold
+// (paused on this desk, so nothing says how to run it); automatic on its paid
+// API (in the background, within your limits); or manual and ready (its own
+// assistant when you ask on the online desk, or the pasted prompt on this
+// PC), with the optional automatic route's missing setup as a quiet second
+// line, never a warning. Pure, for the tests.
+export function routeWords(index, p, s, { hosted = false } = {}) {
+  const who = PROVIDER_LABELS[p];
+  const hold = onHoldOf(index, p);
+  if (hold) return { route: 'On hold', tone: '', setup: null, happens: `On hold on this desk${hold.since ? ` since ${hold.since}` : ''}: nothing new is assigned to ${who}. Its saved reports and waiting jobs are kept; lift the hold in Settings.` };
+  const st = s || { mode: 'manual' };
+  if (st.mode === 'api') return { route: `Automatic (API)${st.model ? ` · ${st.model}` : ''}`, tone: 'ok', setup: null, happens: `Runs by itself on the ${who} API in the background, within your limits. The report is saved when it finishes.` };
+  if (st.mode === 'mock') return { route: 'Fictional demo adapter', tone: '', setup: null, happens: 'Returns fictional fixture reports in this demo workspace. No network call.' };
+  const missing = (st.missing || []).join(', ') || st.reason || null;
+  return {
+    route: hosted ? 'Manual · ready through its assistant' : 'Manual · ready by paste and import',
+    tone: '',
+    setup: `Automatic route (optional): not set up${missing ? ` (${missing})` : ''}`,
+    happens: hosted
+      ? `Each run waits for you: ${waitingInstruction(p, { full: true })}. ${who} researches under its own plan and saves the report here, or paste the prompt and import the answer. Nothing is billed here.`
+      : `Each run saves the prompt for you to paste into ${who}; the job completes when you import the answer. Nothing is billed here.`,
+  };
 }
 
 function money(v) {

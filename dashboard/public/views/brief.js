@@ -188,7 +188,8 @@ function gradeBlock(m) {
   return h('div', { class: 'bf-grade withheld' }, h('p', { class: 'bf-wh' }, 'No grade'), h('p', { class: 'bf-none' }, g.reason || 'No grade was calculated.'), cap('Investment grade'));
 }
 
-const NOTICE_ICON = { older: 'clock', revision: 'refresh', model_total: 'warn-line', model_total_unchecked: 'question', evidence: 'warn-line', newer: 'refresh', horizon: 'warn-line', prose: 'file', corrections: 'file', extraction: 'warn-line', timing: 'clock' };
+const NOTICE_ICON = { older: 'clock', revision: 'refresh', model_total: 'warn-line', model_total_unchecked: 'question', text_scores: 'warn-line', evidence: 'warn-line', newer: 'refresh', horizon: 'warn-line', prose: 'file', corrections: 'file', extraction: 'warn-line', timing: 'clock' };
+const textScoreLine = (x) => `${x.label} ${x.text.join(' and ')} in the text, ${x.data} in the data block`;
 
 function noticeItem(ctx, n, m, pid) {
   let main;
@@ -212,6 +213,11 @@ function noticeItem(ctx, n, m, pid) {
     more = n.message ? h('p', null, n.message) : null;
   } else if (n.kind === 'model_total_unchecked') {
     main = [`${WHO} wrote its own total of ${n.reported || '?'}; with the grade withheld it cannot be checked.`];
+  } else if (n.kind === 'text_scores') {
+    // The written report states a score its data block does not: both kept,
+    // the grade from the data block as saved, nothing chosen.
+    main = [h('strong', null, 'The text and the data block differ'), `: ${n.items.slice(0, 2).map(textScoreLine).join('; ')}${n.items.length > 2 ? `; and ${n.items.length - 2} more` : ''}. The grade uses the data block as saved; neither is changed. `, h('a', { href: reportHref(pid, m.report_id), dataset: { key: 'brief-text-scores' } }, 'Open the report')];
+    more = n.items.length > 2 ? h('ul', null, n.items.map((x) => h('li', null, textScoreLine(x)))) : null;
   } else if (n.kind === 'evidence') {
     const what = [n.claims ? `${n.claims} claim${n.claims === 1 ? '' : 's'}` : null, n.categories ? `${n.categories} category grade${n.categories === 1 ? '' : 's'}` : null].filter(Boolean).join(' and ') || 'parts of the report';
     // A jump inside the page, so a button (a "#..." link would be read as a route).
@@ -251,18 +257,20 @@ function noticeItem(ctx, n, m, pid) {
 // The first view's key points, before the thesis and the scorecard: the
 // strongest risk the report backs with a source, and what would confirm or
 // break the thesis, in the report's words. The full lists stay under What
-// threatens it and What to watch.
+// threatens it and What to watch. A point the report does not give says
+// "Not reported": nothing is inferred or taken from another report.
 function keyPoints(m) {
   const k = m.key;
-  if (!k || (!k.risk && !k.confirm && !k.break)) return null;
+  if (!k) return null;
   const more = (n, what) => (n ? h('span', { class: 'bf-key-more' }, `+${n} more ${what}`) : null);
   const row = (cls, label, ...body) => h('div', { class: `bf-key ${cls}` }, h('dt', null, label), h('dd', null, ...body));
+  const missing = () => h('p', { class: 'bf-key-t bf-key-none' }, `Not reported in ${WHO}'s report`);
   return h('dl', { class: 'bf-keys', 'aria-label': 'Key points from the report' },
     k.risk ? row('risk', k.risk.sourced ? 'Strongest sourced risk' : 'Strongest risk',
       h('p', { class: 'bf-key-t' }, k.risk.text),
-      k.risk.sourced ? citeLine(k.risk) : h('p', { class: 'bf-cite' }, h('span', { class: 'bf-tag none' }, 'No source cited for any listed risk'))) : null,
-    k.confirm ? row('confirm', 'Would confirm', h('p', { class: 'bf-key-t' }, k.confirm), more(k.confirm_more, 'under What to watch')) : null,
-    k.break ? row('break', 'Would break it', h('p', { class: 'bf-key-t' }, k.break), more(k.break_more, 'under What to watch')) : null);
+      k.risk.sourced ? citeLine(k.risk) : h('p', { class: 'bf-cite' }, h('span', { class: 'bf-tag none' }, 'No source cited for any listed risk'))) : row('risk', 'Strongest risk', missing()),
+    row('confirm', 'Would confirm', k.confirm ? h('p', { class: 'bf-key-t' }, k.confirm) : missing(), more(k.confirm_more, 'under What to watch')),
+    row('break', 'Would break it', k.break ? h('p', { class: 'bf-key-t' }, k.break) : missing(), more(k.break_more, 'under What to watch')));
 }
 
 function verdictSection(ctx, m, pid) {
@@ -281,7 +289,14 @@ function verdictSection(ctx, m, pid) {
   // The summary is the verdict's reason in a few sentences; without one, the
   // final judgment takes its place (and is then not repeated below).
   const lead = v.summary || v.final_take;
-  const notices = m.notices.map((n) => noticeItem(ctx, n, m, pid)).filter(Boolean);
+  // The first read on a phone: the grade (or why it is withheld), then the
+  // strongest risk and what would confirm or break the thesis, then the other
+  // notices. A serious evidence flag stays above the key points.
+  const serious = (n) => n.kind === 'evidence' && n.level === 'serious';
+  const list = (ns, label) => {
+    const items = ns.map((n) => noticeItem(ctx, n, m, pid)).filter(Boolean);
+    return items.length ? h('ul', { class: 'bf-notices', 'aria-label': label }, items) : null;
+  };
   return sec('verdict', `${WHO}'s verdict`,
     h('div', { class: 'bf-vgrid' },
       gradeBlock(m),
@@ -291,8 +306,9 @@ function verdictSection(ctx, m, pid) {
         views.length ? h('p', { class: 'bf-views', title: `${WHO}'s own views for this horizon; they change no score` }, views) : null)),
     m.grade.status === 'withheld' && m.grade.why.items.length ? h('div', { class: 'bf-missing' }, h('h3', null, 'Not scored'), unscoredList(m.grade.why, { max: 320 }),
       m.structure ? details(`Check · ${m.structure.flags.length} note${m.structure.flags.length === 1 ? '' : 's'}`, structureNotes(m.structure, { max: 6 }), { id: 'brief-structure' }) : null) : null,
-    notices.length ? h('ul', { class: 'bf-notices', 'aria-label': 'Before you rely on this brief' }, notices) : null,
-    keyPoints(m));
+    list(m.notices.filter(serious), 'Serious evidence flag'),
+    keyPoints(m),
+    list(m.notices.filter((n) => !serious(n)), 'Before you rely on this brief'));
 }
 
 // ---- the thesis -------------------------------------------------------------------------------
@@ -584,7 +600,9 @@ function evidenceSection(ctx, m, pid) {
   return sec('evidence', 'Evidence and sources',
     h('div', { class: 'bf-two tight' },
       h('div', null,
-        h('h3', { class: 'bf-h3' }, 'Claims by evidence tag'),
+        // The tags are the researcher's own classification ([V]: it says it
+        // opened a primary source); the desk does not verify them.
+        h('h3', { class: 'bf-h3', title: TAG_TITLES.V }, `Claims by ${WHO}'s own evidence tags`),
         evidenceQuality(e.claims),
         checks),
       h('div', null,
