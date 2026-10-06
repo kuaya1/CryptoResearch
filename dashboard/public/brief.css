@@ -37,7 +37,7 @@
 .bf-chev { width: 16px; height: 16px; background: currentColor; -webkit-mask: var(--i-chevron) center / contain no-repeat; mask: var(--i-chevron) center / contain no-repeat; transform: rotate(90deg); }
 .bf-bar-title { margin: 0; min-width: 0; flex: 1; line-height: 1.2; opacity: 0; visibility: hidden; transition: opacity var(--dur) var(--ease), visibility var(--dur); }
 .bf-bar.scrolled .bf-bar-title { opacity: 1; visibility: visible; }
-.bf-bar-k { display: block; font-size: 11px; font-weight: 600; color: var(--text-3); }
+.bf-bar-k { display: block; font-size: var(--fs-caption); font-weight: 600; color: var(--text-3); }
 .bf-bar-name { display: block; font-size: 14px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bf-bar-act { margin-left: auto; display: flex; gap: var(--s2); flex: none; }
 
@@ -95,7 +95,7 @@
 .bf-lead { margin: 0; font-size: var(--fs-read); line-height: 1.6; color: var(--text); max-width: 64ch; }
 .bf-views { margin: 12px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .bf-view { display: inline-flex; align-items: baseline; min-height: 26px; max-width: 100%; padding: 4px 10px; border-radius: var(--r-pill, 999px); background: var(--surface-sunken); border: 1px solid var(--border); font-size: var(--fs-small); font-weight: 500; line-height: 1.3; color: var(--text); cursor: help; }
-.bf-view .k { font-size: 11.5px; margin-right: 6px; flex: none; }
+.bf-view .k { font-size: var(--fs-caption); margin-right: 6px; flex: none; }
 .bf-view-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 24ch; }
 .bf-view .fig { flex: none; white-space: nowrap; }
 .bf-missing { margin-top: var(--s4); padding-top: var(--s3); border-top: 1px solid var(--separator); font-size: var(--fs-small); }
@@ -138,9 +138,9 @@
 .bf-layer.none { border-color: var(--border); border-style: dashed; background: transparent; }
 .bf-layer-t { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--text-2); }
 .bf-layer dl { margin: 0; display: grid; gap: 6px; }
-.bf-layer dt { font-size: 11.5px; color: var(--text-3); }
+.bf-layer dt { font-size: var(--fs-caption); color: var(--text-3); }
 .bf-layer dd { margin: 1px 0 0; font-size: 13px; font-weight: 500; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; }
-.bf-layer .bf-when { flex-basis: 100%; font-weight: 400; font-size: 11.5px; }
+.bf-layer .bf-when { flex-basis: 100%; font-weight: 400; font-size: var(--fs-caption); }
 
 /* ---- the scorecard ---------------------------------------------------------------- */
 .bf-comps, .bf-cats, .bf-risks ul { list-style: none; margin: 0; padding: 0; }
@@ -159,20 +159,20 @@
 .bf-comp > details[open] > summary::after, .bf-cat > details[open] > summary::after { transform: rotate(180deg); }
 .bf-comp > details > summary:hover, .bf-cat > details > summary:hover { background: var(--surface-hover); }
 .bf-cname { min-width: 0; font-size: 13px; font-weight: 500; color: var(--text); display: flex; align-items: center; gap: 6px; }
-.bf-w { flex: none; white-space: nowrap; font-size: 11.5px; font-weight: 600; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.bf-w { flex: none; white-space: nowrap; font-size: var(--fs-caption); font-weight: 600; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .bf-cbar { display: block; min-width: 0; }
 .bf-cbar .cbar { height: 6px; }
 .bf-cv { text-align: right; font-size: 13px; font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums lining-nums; white-space: nowrap; display: inline-flex; justify-content: flex-end; align-items: center; gap: 6px; }
 .is-unknown .bf-cv, .bf-cat.na .bf-cv { color: var(--text-3); font-weight: 400; }
 .bf-pts { text-align: right; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums lining-nums; }
-.bf-conf { font-size: 10.5px; font-weight: 600; color: var(--text-3); width: 10px; text-align: center; cursor: help; }
+.bf-conf { font-size: var(--fs-caption); font-weight: 600; color: var(--text-3); width: 10px; text-align: center; cursor: help; }
 .bf-flag { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .bf-flag.serious { background: color-mix(in srgb, var(--warn-strong) 80%, var(--text-3)); }
 .bf-flag.material { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--warn-strong) 80%, var(--text-3)); }
 .bf-cbody { padding: 2px 0 12px; font-size: var(--fs-small); color: var(--text); max-width: 72ch; }
 .bf-cbody p { margin: 0 0 6px; }
 .bf-cbody dl { margin: 0; display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); gap: 4px 12px; }
-.bf-cbody dt { color: var(--text-3); font-weight: 600; font-size: 11.5px; padding-top: 1px; }
+.bf-cbody dt { color: var(--text-3); font-weight: 600; font-size: var(--fs-caption); padding-top: 1px; }
 .bf-cbody dd { margin: 0; }
 .bf-word { color: var(--text-2); font-weight: 500; }
 .bf-flagline { padding: 6px 10px; border-radius: var(--r-well, var(--r-md)); background: var(--pill-warn-bg); border: 1px solid var(--pill-warn-line); }
@@ -189,14 +189,14 @@
 .bf-two.tight { border-top: 0; gap: var(--s5) 40px; margin-top: var(--s5); }
 .bf-facts { margin: 0; padding: 0; list-style: none; counter-reset: bf; display: grid; gap: var(--s4); }
 .bf-facts > li { counter-increment: bf; position: relative; padding-left: 26px; }
-.bf-facts > li::before { content: counter(bf); position: absolute; left: 0; top: 2px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 600; color: var(--text-2); background: var(--surface-sunken); border: 1px solid var(--border); }
+.bf-facts > li::before { content: counter(bf); position: absolute; left: 0; top: 2px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: var(--fs-caption); font-weight: 600; color: var(--text-2); background: var(--surface-sunken); border: 1px solid var(--border); }
 .bf-fact { margin: 0; font-size: 14px; line-height: 1.55; color: var(--text); }
 .bf-cite { margin: 6px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: var(--fs-small); color: var(--text-2); }
 .bf-cite a { color: var(--text-2); }
-.bf-ids { font-family: var(--mono); font-size: 11px; color: var(--text-3); cursor: help; }
-.bf-dangling { color: var(--warn); font-size: 11.5px; }
+.bf-ids { font-family: var(--mono); font-size: var(--fs-caption); color: var(--text-3); cursor: help; }
+.bf-dangling { color: var(--warn); font-size: var(--fs-caption); }
 /* Evidence tags as words, each with the swatch the evidence bar uses. */
-.bf-tag { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px; border-radius: var(--r-pill, 999px); border: 1px solid var(--border); background: var(--surface); font-size: 11.5px; font-weight: 500; color: var(--text-2); white-space: nowrap; }
+.bf-tag { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px; border-radius: var(--r-pill, 999px); border: 1px solid var(--border); background: var(--surface); font-size: var(--fs-caption); font-weight: 500; color: var(--text-2); white-space: nowrap; }
 .bf-tag::before { content: ""; width: 8px; height: 8px; border-radius: 2px; flex: none; }
 .bf-tag.t-v::before { background: var(--fav-bar); }
 .bf-tag.t-c::before { background: color-mix(in srgb, var(--fav-bar) 55%, var(--surface)); }
@@ -228,7 +228,7 @@
 .bf-win { min-width: 8px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 55%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
 .bf-pin { width: 0; }
 .bf-pin::before { content: ""; position: absolute; left: -6px; top: -2px; width: 12px; height: 12px; background: var(--text); transform: rotate(45deg); border-radius: 2px; box-shadow: 0 0 0 2px var(--surface); }
-.bf-num { position: absolute; bottom: calc(100% + var(--lift) - 8px); left: 0; transform: translateX(-50%); display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--accent-text); background: var(--surface); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+.bf-num { position: absolute; bottom: calc(100% + var(--lift) - 8px); left: 0; transform: translateX(-50%); display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px; font-size: var(--fs-caption); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--accent-text); background: var(--surface); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
 .bf-num::after { content: ""; position: absolute; left: 50%; top: 100%; width: 1px; height: calc(var(--lift) - 8px); background: color-mix(in srgb, var(--accent) 35%, transparent); }
 .bf-pin .bf-num { color: var(--text); border-color: var(--control-border); }
 .bf-pin .bf-num::after { background: var(--control-border); height: calc(var(--lift) - 10px); }
@@ -262,7 +262,7 @@
 /* ---- the scenarios: forecasts, labeled as such -------------------------------------------- */
 .bf-label { margin: -6px 0 var(--s4); font-size: var(--fs-small); color: var(--text-3); }
 .bf-pbar { display: flex; height: 28px; margin: 0 0 var(--s4); border-radius: var(--r-pill, var(--r-md)); overflow: hidden; }
-.bf-pbar .seg { display: grid; place-items: center; min-width: 0; font-size: 11.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; }
+.bf-pbar .seg { display: grid; place-items: center; min-width: 0; font-size: var(--fs-caption); font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; }
 .bf-pbar .seg + .seg { box-shadow: inset 1px 0 0 var(--surface); }
 .bf-pbar .seg.bear, .bf-prange.bear { background: var(--t1-arc); }
 .bf-pbar .seg.base, .bf-prange.base { background: var(--t3-arc); }
@@ -283,9 +283,9 @@
 .bf-scn.base h3::before { background: var(--t3-fill); }
 .bf-scn.bull h3::before { background: var(--t4-fill); }
 .bf-prob { font-size: 18px; font-weight: 600; letter-spacing: -0.02em; color: var(--text); cursor: help; }
-.bf-prob.none { font-size: 11.5px; font-weight: 500; color: var(--text-3); letter-spacing: 0; cursor: default; }
+.bf-prob.none { font-size: var(--fs-caption); font-weight: 500; color: var(--text-3); letter-spacing: 0; cursor: default; }
 .bf-scn dl { margin: 0; display: grid; gap: 2px; font-size: var(--fs-small); }
-.bf-scn dt { margin-top: 6px; font-size: 11px; font-weight: 600; color: var(--text-3); }
+.bf-scn dt { margin-top: 6px; font-size: var(--fs-caption); font-weight: 600; color: var(--text-3); }
 .bf-scn dd { margin: 0; color: var(--text); line-height: 1.45; }
 .bf-scn dd ul { margin: 0; padding-left: 14px; }
 .bf-ak { color: var(--text-2); font-weight: 600; }
@@ -300,9 +300,9 @@
 .bf-records { padding: var(--s4) var(--s5); border-radius: var(--r-well, var(--r-lg)); background: var(--surface-sunken); }
 .bf-prov { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 24px; }
 .bf-prov div { min-width: 0; }
-.bf-prov dt { font-size: 11.5px; font-weight: 600; color: var(--text-3); }
+.bf-prov dt { font-size: var(--fs-caption); font-weight: 600; color: var(--text-3); }
 .bf-prov dd { margin: 2px 0 0; font-size: var(--fs-small); color: var(--text); overflow-wrap: anywhere; }
-.bf-prov .mono { font-size: 11.5px; }
+.bf-prov .mono { font-size: var(--fs-caption); }
 .bf-links { margin: var(--s4) 0 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .bf-hist { list-style: none; margin: 0; padding: 0; font-size: var(--fs-small); }
 .bf-hist li { display: grid; grid-template-columns: 7.5rem 4.5rem minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--separator); }
@@ -310,7 +310,8 @@
 .bf-hist-v { color: var(--text-2); }
 
 /* ---- your note: yours, apart from Claude's ------------------------------------------------ */
-.bf-yours { margin-top: var(--s2); padding: var(--s5); border: 1px dashed var(--control-border); border-radius: var(--r-well, var(--r-lg)); background: var(--surface); }
+/* Your note: apart from the model's as a gray well, not a box in the sheet (V3, Eric, 2026-10-05). */
+.bf-yours { margin-top: var(--s2); padding: var(--s5); border: 0; border-radius: var(--r-well, var(--r-lg)); background: var(--surface-sunken); }
 .bf-yours .bf-h { margin-bottom: 8px; }
 .bf-yours-text { margin: 0; font-size: 14px; line-height: 1.6; color: var(--text); white-space: pre-line; max-width: 72ch; }
 .bf-yours-m { margin: 10px 0 0; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: var(--fs-small); color: var(--text-3); }

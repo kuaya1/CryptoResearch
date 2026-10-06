@@ -300,11 +300,14 @@ function renderNav() {
       h('span', null, label), num ? h('span', { class: 'count', 'aria-hidden': 'true', title: desc || null }, String(num)) : null));
   }
   // Online desk: signing out ends this browser's session on the server. A
-  // quiet text button at the right of the top bar, not a section of the nav.
+  // quiet text button at the right of the top bar, not a section of the nav;
+  // where the nav folds into Menu (a phone), the menu's last item instead
+  // (V5, Eric, 2026-10-05). The stylesheet shows one of the two.
   const end = document.getElementById('topbar-end');
   if (end) clear(end);
   if (end && state.session && state.session.hosted) {
     end.appendChild(h('form', { method: 'post', action: '/logout', class: 'signout' }, h('button', { type: 'submit', class: 'quiet small', dataset: { key: 'nav-signout' } }, 'Sign out')));
+    nav.appendChild(h('form', { method: 'post', action: '/logout', class: 'signout menu-signout' }, h('button', { type: 'submit', class: 'quiet', dataset: { key: 'menu-signout' } }, 'Sign out')));
   }
 }
 

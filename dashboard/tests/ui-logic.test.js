@@ -452,6 +452,11 @@ test('status strip and header: figures step aside in order (breadth last), every
   assert.ok(wl.STRIP_FIT.indexOf('ss-fit-kinds') < wl.STRIP_FIT.indexOf('ss-fit-total'), 'the kinds of action go before any market figure');
   const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
   for (const step of wl.STRIP_FIT) assert.ok(css.includes(`.status-strip.${step} `), `${step} has a rule`);
+  // A phone (V5): three labels step aside after the shared order, each with a
+  // rule; none of them is a warning.
+  assert.deepEqual(wl.STRIP_FIT_PHONE, ['ss-fit-plabel', 'ss-fit-dom', 'ss-fit-qlabel']);
+  for (const step of wl.STRIP_FIT_PHONE) assert.ok(css.includes(`.status-strip.${step} `), `${step} has a rule`);
+  assert.doesNotMatch(css, /\.status-strip\.ss-fit-(plabel|dom|qlabel)[^{]*\.(bad|bad-word|i-alert)\b/, 'warnings keep their words on a phone');
   const four = [...css.matchAll(/^\.ov-stats\.four \{ grid-template-columns: repeat\((\d), /gm)].map((m) => m[1]);
   assert.equal(four[four.length - 1], '4', 'the last word on four tiles (outside the narrowest phones): one row of four');
   assert.doesNotMatch(css.slice(css.lastIndexOf('Inspector header, tiles')), /\.pt-name \{[^}]*text-overflow: ellipsis/, 'the name is never cut short');

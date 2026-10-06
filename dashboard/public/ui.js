@@ -524,7 +524,7 @@ export function logo(p, { size = 28 } = {}) {
   const label = (p.symbol || p.name || '?').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || '?';
   let hash = 0;
   for (const ch of String(p.project_id || p.name || '')) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
-  const box = h('span', { class: `logo tone-${hash % 6}`, 'aria-hidden': 'true', style: { width: `${size}px`, height: `${size}px`, fontSize: `${Math.max(10, Math.round(size * 0.38))}px` } }, label);
+  const box = h('span', { class: `logo tone-${hash % 6}`, 'aria-hidden': 'true', style: { width: `${size}px`, height: `${size}px`, fontSize: `${Math.max(12, Math.round(size * 0.38))}px` } }, label);
   if (m.logo_url) {
     // Loaded before it is placed (so a missing logo never flashes a broken
     // image); a detached image must not be lazy, or it never loads at all.

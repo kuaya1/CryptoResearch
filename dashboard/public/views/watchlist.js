@@ -272,7 +272,9 @@ function priceCell(p) {
   const f = freshnessText(m.status, m.age_minutes);
   return h('div', { title: `Source: ${m.source || 'CoinGecko'}, as of ${fmtDateTime(m.as_of)}` },
     h('span', { class: 'price' }, fmtPrice(m.price_usd)),
-    m.status !== 'fresh' ? h('span', { class: 'price-note' }, f.text) : null);
+    // The note's parts never break inside (a tight column puts the age on a
+    // second line rather than dropping a column).
+    m.status !== 'fresh' ? h('span', { class: 'price-note' }, String(f.text).split(' · ').flatMap((part, i) => (i ? [' · ', h('span', { class: 'pn' }, part)] : [h('span', { class: 'pn' }, part)]))) : null);
 }
 
 function cellFor(ctx, col, p) {
@@ -384,23 +386,29 @@ function fitColumns(root) {
 }
 
 // The status strip keeps one line: when its parts do not fit the space it
-// has (the inspector open, a narrower window), the least needed figures step
-// aside in this order, and their values stay in each part's details. Market
-// breadth goes last; only after it does the strip wrap. A phone wraps by design.
+// has (the inspector open, a narrower window, a phone), the least needed
+// figures step aside in this order, and their values stay in each part's
+// details. Market breadth goes last; only after it does the strip wrap.
 export const STRIP_FIT = ['ss-fit-kinds', 'ss-fit-total', 'ss-fit-refresh', 'ss-fit-tight', 'ss-fit-bar', 'ss-fit-chg', 'ss-fit-breadth'];
+// A phone (V5, Eric, 2026-10-05): after the shared order, three labels step
+// aside before the strip wraps: the prices' name, dominance, the word "items".
+// Each part's accessible name keeps them, and warnings keep their words.
+export const STRIP_FIT_PHONE = ['ss-fit-plabel', 'ss-fit-dom', 'ss-fit-qlabel'];
 
 function fitStrip(strip) {
   if (!strip || !strip.isConnected) return;
-  strip.classList.remove(...STRIP_FIT, 'ss-wrap');
+  strip.classList.remove(...STRIP_FIT, ...STRIP_FIT_PHONE, 'ss-wrap');
   if (getComputedStyle(strip).flexWrap !== 'nowrap') return;
-  for (const step of STRIP_FIT) {
+  const phone = window.matchMedia('(max-width: 640px)').matches;
+  for (const step of phone ? [...STRIP_FIT, ...STRIP_FIT_PHONE] : STRIP_FIT) {
     if (strip.scrollWidth <= strip.clientWidth + 1) return;
     strip.classList.add(step);
   }
   strip.classList.toggle('ss-wrap', strip.scrollWidth > strip.clientWidth + 1);
 }
 
-const arrow = (dir) => h('span', { class: 'arrow', 'aria-hidden': 'true' }, dir === 'asc' ? '▲' : '▼');
+// The sort direction as a drawn chevron (the header's aria-sort says it in words).
+const arrow = (dir) => h('span', { class: `arrow ${dir === 'asc' ? 'asc' : 'desc'}`, 'aria-hidden': 'true' });
 
 function providerHeaders(ctx, prefsObj, rerender) {
   return PROVIDERS.map((prov) => {

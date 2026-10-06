@@ -112,6 +112,8 @@ export async function renderProject(ctx, route) {
   const open = tab === 'brief' ? FOLDS[route.query.get('open') || (route.query.get('run') ? 'runs' : '')] : null;
   const run = tab === 'brief' ? route.query.get('run') : null;
   page.afterMount = () => {
+    const toc = page.querySelector('.report-toc');
+    if (toc && typeof toc.watch === 'function') toc.watch();
     const t = page.querySelector('#bf-title');
     const b = page.querySelector('.bf-bar');
     if (t && b && typeof IntersectionObserver === 'function') {
@@ -732,7 +734,9 @@ function atAGlance(ctx, d, r, withheld) {
   const pid = d.project.project_id;
   const scenarios = scenariosBlock(a);
   const code = codeReviewBlock(a);
-  return h('section', { class: 'card glance', 'aria-labelledby': 'glance-title' },
+  const scores = categoryGlance(rows, `#/project/${pid}/scorecards?provider=${r.meta.provider}`, { flags: (r.evidence && r.evidence.flags) || [] });
+  if (scores) scores.id = 'rsec-scores';
+  return h('section', { class: 'card glance', id: 'rsec-summary', 'aria-labelledby': 'glance-title' },
     h('div', { class: 'card-head' }, h('div', null, h('h2', { id: 'glance-title' }, 'Summary'),
       h('div', { class: 'note' }, 'The investment grade is calculated by this app from the report\'s six weighted scores. Everything else here is the model\'s own: its verdict, category grades, chart reading, judgment, risks, questions and sources. The report below tags each claim as checked, project-claimed, inference or speculation.'))),
     h('div', { class: 'glance-grid' },
@@ -743,21 +747,21 @@ function atAGlance(ctx, d, r, withheld) {
         h('dl', { class: 'facts' }, h('div', { class: 'wide' }, h('dt', null, 'Horizon'), h('dd', null, a.horizon || 'not stated')))),
       h('div', null,
         h('div', { class: 'small muted' }, 'Investment grade (calculated by this app)'), gradeEl)),
-    categoryGlance(rows, `#/project/${pid}/scorecards?provider=${r.meta.provider}`, { flags: (r.evidence && r.evidence.flags) || [] }),
+    scores,
     positivesAndRisks(a),
     chartCycleBlock(a),
     catalystsBlock(a),
     judgmentBlock(a, { id: `gl-judgment-${r.report_id}` }),
     reviewBlock(a),
-    h('div', { class: 'glance-block' },
+    h('div', { class: 'glance-block', id: 'rsec-risks' },
       h('h3', null, 'Top downside risks (higher is worse)'),
       risks.length
         ? h('ul', { class: 'glance-risks' }, risks.map((x) => h('li', null, h('span', { title: x.def.definition || '' }, x.def.label), scoreView(x.s, 'risk'))))
         : h('p', { class: 'small faint', style: { margin: '6px 0 0' } }, 'No downside risk was scored in this report.')),
-    scenarios ? h('div', { class: 'glance-block' }, details('Scenarios over the horizon: bear, base and bull', scenarios, { id: `gl-scenarios-${r.report_id}` })) : null,
+    scenarios ? h('div', { class: 'glance-block', id: 'rsec-scenarios' }, details('Scenarios over the horizon: bear, base and bull', scenarios, { id: `gl-scenarios-${r.report_id}` })) : null,
     code ? h('div', { class: 'glance-block' }, details('Code that was read', code, { id: `gl-code-${r.report_id}` })) : null,
     questions.length ? h('div', { class: 'glance-block' }, h('h3', null, `Unresolved questions (${questions.length})`), h('ul', { class: 'list small' }, questions.map((q) => h('li', null, q)))) : null,
-    h('div', { class: 'glance-block' }, sources.length
+    h('div', { class: 'glance-block', id: 'rsec-sources' }, sources.length
       ? details(`${sources.length} source${sources.length === 1 ? '' : 's'} cited`, h('ol', { class: 'list small' }, sources.map(sourceItem)), { id: `src-${r.report_id}`, open: sources.length <= 5 })
       : h('p', { class: 'small faint', style: { margin: 0 } }, 'This report lists no sources.')));
 }
@@ -772,7 +776,11 @@ function revisionText(rv) {
   return `${head}, ${rv.minutes_after} min after ${rv.of}: ${what}. ${rv.declared && rv.declared.note ? `The model's reason: ${rv.declared.note}` : 'No reason was recorded with this save.'}`;
 }
 
-function reportsTab(ctx, d, route) {
+// How long the tab waits for the report's text before drawing without it (a
+// slow link then shows the page and fills the text in when it arrives).
+const ORIGINAL_WAIT_MS = 2500;
+
+async function reportsTab(ctx, d, route) {
   const pid = d.project.project_id;
   if (!d.reports.length) return callout('No reports imported yet. Older analyses stay here as dated records once they exist.', 'info');
   const good = d.reports.filter((r) => !r.broken);
@@ -780,6 +788,13 @@ function reportsTab(ctx, d, route) {
   const latestIds = new Set(Object.values(d.comparison.latest).filter(Boolean).map((x) => x.report_id));
   const want = route.query.get('report');
   const sel = good.find((r) => r.report_id === want) || good.find((r) => latestIds.has(r.report_id)) || good[0];
+  // The whole report in one paint (V4, Eric, 2026-10-05): the original's text
+  // is read before the tab is drawn, so the reader never stands empty while
+  // the rest of the page is already there.
+  if (sel && !String(sel.meta.original_file || '').endsWith('.pdf')) {
+    const url = `/api/projects/${pid}/reports/${sel.report_id}/original`;
+    if (!textCache.has(url)) await Promise.race([cachedText(ctx, url).catch(() => null), new Promise((res) => setTimeout(res, ORIGINAL_WAIT_MS))]);
+  }
   const list = h('nav', { class: 'report-list', 'aria-label': 'Reports' },
     PROVIDERS.filter((p) => good.some((r) => r.meta.provider === p)).map((p) => [
       h('div', { class: 'group-label' }, PROVIDER_LABELS[p]),
@@ -842,7 +857,58 @@ function reportsTab(ctx, d, route) {
   }
   return h('div', null,
     broken.length ? broken.map((r) => callout(`${r.report_id}: ${r.error}`, 'bad')) : null,
-    h('div', { class: 'report-layout' }, list, main));
+    h('div', { class: 'report-layout' }, list, main, sel ? reportContents(main) : null));
+}
+
+// The report's contents, beside it from 1280px (V4, Eric, 2026-10-05): one
+// button per part the report has, in its order; the part in view is marked.
+// Buttons, not links: an address here would be read as a route.
+const CONTENTS = [['rsec-summary', 'Summary'], ['rsec-scores', 'Scores'], ['rsec-risks', 'Risks'], ['rsec-scenarios', 'Scenarios'], ['rsec-sources', 'Sources']];
+
+function reportContents(main) {
+  const items = CONTENTS.filter(([id]) => main.querySelector(`#${id}`));
+  if (!items.length) return null;
+  const buttons = items.map(([id, label]) => {
+    const b = h('button', { type: 'button', class: 'toc-item', dataset: { key: `toc-${id}`, target: id } }, label);
+    b.addEventListener('click', () => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      // A folded part (the scenarios, a long source list) opens first.
+      const fold = el.querySelector('details');
+      if (fold) fold.open = true;
+      el.scrollIntoView({ block: 'start' });
+      const head = el.querySelector('h2, h3, summary') || el;
+      if (head.tagName !== 'SUMMARY' && !head.hasAttribute('tabindex')) head.setAttribute('tabindex', '-1');
+      head.focus({ preventScroll: true });
+    });
+    return b;
+  });
+  const nav = h('nav', { class: 'report-toc', 'aria-label': 'Report contents' }, h('p', { class: 'toc-title', 'aria-hidden': 'true' }, 'Contents'), h('ul', null, buttons.map((b) => h('li', null, b))));
+  // The part in view, marked as you scroll (set up once the page is shown):
+  // the last part whose top has reached the line under the bar where a jump
+  // lands (the summary holds the others, so "intersecting" alone would always
+  // name it).
+  nav.watch = () => {
+    let frame = 0;
+    const mark = () => {
+      frame = 0;
+      if (!nav.isConnected) { window.removeEventListener('scroll', onScroll); return; }
+      // Where a jump lands (the page's scroll padding under the bar), and a little more.
+      const line = (parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) || 0) + 12;
+      let on = items[0][0];
+      for (const [id] of items) { const el = document.getElementById(id); if (el && el.getBoundingClientRect().top <= line) on = id; }
+      // At the end of the page the last parts cannot reach the line.
+      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) on = items[items.length - 1][0];
+      for (const b of buttons) {
+        if (b.dataset.target === on) b.setAttribute('aria-current', 'location');
+        else b.removeAttribute('aria-current');
+      }
+    };
+    const onScroll = () => { if (!frame) frame = requestAnimationFrame(mark); };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    mark();
+  };
+  return nav;
 }
 
 // ---------------------------------------------------------------------------

@@ -81,7 +81,8 @@ dl.views dd { margin: 0; overflow-wrap: anywhere; }
 .thesis-card > .glance-block > h3 { font-size: var(--fs-h3); margin-bottom: var(--s2); }
 
 .scn-list { display: grid; gap: var(--s3); }
-.scn { border: 1px solid var(--separator); border-radius: var(--r-well); padding: var(--s3); }
+/* A scenario is a gray well inside its card, not a card of its own (V3, Eric, 2026-10-05). */
+.scn { border: 0; background: var(--surface-sunken); border-radius: var(--r-well); padding: var(--s3); }
 .scn h4 { margin: 0 0 var(--s2); font-size: var(--fs-body); display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 .scn .scn-prob { font-weight: 500; font-size: var(--fs-small); color: var(--text-2); }
 .scn .cat-detail { margin: 0; }
