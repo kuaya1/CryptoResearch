@@ -1,37 +1,52 @@
 // Project page: one page per project (Eric, 2026-10-05, D1) with addressable
-// tabs (#/project/<id>/<tab>): the Brief (the default: one model's brief under
-// model tabs, then the review digest and the folded sections that keep the
-// former Overview, Scorecards, Comparison, Evidence and Research runs tabs),
-// Full report, Market and Notes. Each is rendered only when opened and in its
-// own error boundary. Report text is cached so a live refresh redraws
-// instantly and keeps your reading position. Old tab addresses redirect
-// (projectRedirect).
+// tabs (#/project/<id>/<tab>). The project brief's three views (Eric,
+// 2026-10-07): Overview (the default, at the address "brief": one model's
+// brief under model tabs, the review digest above, the full scorecard and
+// your headline folded under it), Compare (two saved reports side by side,
+// views/brief-compare.js) and Evidence (one model's flags, claims, sources and
+// provenance, with your checks, the research runs and the token identity
+// folded under it); then Full report, Market and Notes. The header names the
+// project and the market now, with its own time. Each tab is rendered only
+// when opened and in its own error boundary, all from one read of the project
+// record. Report text is cached so a live refresh redraws instantly and keeps
+// your reading position. Old tab addresses redirect (projectRedirect).
 import {
   h, card, table, gradeView, verdictChip, scoreView, tagChip, badgeInfo, gradeBadge, logo, sparkline, changeCell,
   fmtPrice, fmtCompactUsd, fmtNum, fmtDate, fmtDateTime, fmtAgo, fmtSignedPct, freshnessText, kv, details, field, input, select, button,
   action, callout, copyText, tabStrip, safeSection, submissionId, stateText, fieldError, PROVIDERS, PROVIDER_LABELS, link,
   jobKey, coworkIdleMinutes, isAssistantJob, researchState, withheldReason, unscoredFrom, unscoredList,
-  withheldLabel, COVERAGE_MEANS, structureNotes, toast, onHoldOf, fmtMarketFigure, unknownFigure,
+  withheldLabel, COVERAGE_MEANS, structureNotes, toast, onHoldOf, fmtMarketFigure, unknownFigure, fmtAsOf,
 } from '../ui.js';
 import { renderMarkdown } from '../md.js';
 import { openResearchDialog, openSectorDialog, waitingActions, waitingStep } from './dialogs.js';
-import { briefPanel, bindBriefKeys, topBar } from './brief.js';
+import { briefPanel, evidencePanel, bindBriefKeys, topBar } from './brief.js';
+import { comparePanel } from './brief-compare.js';
+import { marketNow } from '../brief-model.js';
 import { positionCard } from '../position-ui.js';
 import {
   profileOf, categoryRows, scorecardCounts, confidenceLine, categoryTable, categoryGlance, positivesAndRisks, chartCycleBlock, catalystsBlock,
   judgmentBlock, reviewBlock, scenariosBlock, codeReviewBlock,
 } from '../thesis-ui.js';
 
+// The brief's three views first (Overview keeps the address "brief", so every
+// link to the Brief lands on it), then the report, the market and your notes.
 const TABS = [
-  ['brief', 'Brief'],
+  ['brief', 'Overview'],
+  ['compare', 'Compare'],
+  ['evidence', 'Evidence'],
   ['report', 'Full report'],
   ['market', 'Market'],
   ['notes', 'Notes'],
 ];
+// The views drawn as a brief: opened from the inspector, they keep its Back bar.
+const BRIEF_VIEWS = ['brief', 'compare', 'evidence'];
 
-// The Brief's folded sections, by the name an address opens them with
-// (?open=<name>).
-const FOLDS = { scorecard: 'pb-scorecard', compare: 'pb-compare', evidence: 'pb-evidence', headline: 'pb-headline', runs: 'pb-runs', identity: 'pb-identity' };
+// Each view's folded sections, by the name an address opens them with
+// (?open=<name>), and the evidence checks the Overview's flags point to.
+const FOLDS = {
+  brief: { scorecard: 'pb-scorecard', headline: 'pb-headline' },
+  evidence: { checks: 'brief-ev-checks', claims: 'pb-claims', technical: 'pb-technical', runs: 'pb-runs', identity: 'pb-identity' },
+};
 
 // The project page's former tabs and the Claude Brief's own page, mapped to
 // their new home (Eric, 2026-10-05, D1). Pure: the hash to go to, or null.
@@ -48,19 +63,28 @@ export function projectRedirect(name, args, query) {
   if (name !== 'project') return null;
   const tab = args[1];
   const model = q.get('provider') || q.get('model');
+  const run = q.get('run') ? { run: q.get('run') } : {};
+  // The Brief's former folds now live on its other views (2026-10-07).
+  if (tab === 'brief') {
+    const open = q.get('open');
+    if (open === 'compare') return to('compare', {});
+    if (open === 'evidence') return to('evidence', { ...(model ? { model } : {}), open: 'claims' });
+    if (open === 'runs' || (!open && q.get('run'))) return to('evidence', { open: 'runs', ...run });
+    if (open === 'identity') return to('evidence', { open: 'identity' });
+    return null;
+  }
   switch (tab) {
     case undefined: case 'overview': return to('brief', {});
     case 'scorecards': return to('brief', { ...(model ? { model } : {}), open: 'scorecard' });
     case 'reports': return to('report', q.get('report') ? { report: q.get('report') } : {});
-    case 'comparison': return to('brief', { open: 'compare' });
-    case 'evidence': return to('brief', { open: 'evidence' });
-    case 'research': return to('brief', { open: 'runs', ...(q.get('run') ? { run: q.get('run') } : {}) });
+    case 'comparison': return to('compare', {});
+    case 'research': return to('evidence', { open: 'runs', ...run });
     case 'history': return to('notes', {});
     default: return TABS.some(([t]) => t === tab) ? null : to('brief', {});
   }
 }
 
-const viewState = { median: null, raw: {}, focusTab: null };
+const viewState = { raw: {}, focusTab: null };
 const textCache = new Map();
 
 async function cachedText(ctx, url) {
@@ -81,7 +105,6 @@ export async function renderProject(ctx, route) {
     return h('div', null, h('div', { class: 'crumbs' }, h('a', { href: '#/watchlist' }, 'Watchlist')), callout(`Could not load project "${id}": ${err.message}`, 'bad'));
   }
   bindBriefKeys(ctx);
-  if (viewState.median === null) viewState.median = Boolean(ctx.state.index.settings.comparison.show_median);
   const row = ctx.state.index.projects.find((p) => p.project_id === id) || {};
   const latest = latestReports(d);
   const counts = { report: d.reports.length };
@@ -108,15 +131,22 @@ export async function renderProject(ctx, route) {
       sheet = out.m;
       return out.node;
     },
+    compare: () => compareTab(ctx, d, row, route),
+    evidence: () => {
+      const out = evidenceTab(ctx, d, row, latest, route);
+      sheet = out.m;
+      return out.node;
+    },
     report: () => reportsTab(ctx, d, route),
     market: () => marketTab(ctx, d),
     notes: () => historyTab(ctx, d),
   })[tab]());
   // Opened from the inspector (ui.js briefLink): the brief's own bar, whose
-  // Back (and Escape) returns there.
-  const fromInspector = tab === 'brief' && history.state && history.state.crBrief === id;
-  const page = h('div', { class: 'project-page' },
-    fromInspector ? topBar(ctx, sheet || { identity: { name: d.project.name }, report_id: null }, id) : null,
+  // Back (and Escape) returns there, on each of the brief's three views.
+  const fromInspector = BRIEF_VIEWS.includes(tab) && history.state && history.state.crBrief === id;
+  const barLabel = tab === 'compare' ? 'Compare' : tab === 'evidence' ? `${PROVIDER_LABELS[sheet && sheet.provider] || 'Claude'}'s evidence` : undefined;
+  const page = h('div', { class: `project-page${BRIEF_VIEWS.includes(tab) ? ' pb-view' : ''}` },
+    fromInspector ? topBar(ctx, sheet || { identity: { name: d.project.name }, report_id: null }, id, barLabel ? { label: barLabel } : {}) : null,
     h('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' }, h('a', { href: `#/watchlist?p=${encodeURIComponent(id)}`, dataset: { key: 'crumb-watchlist' } }, 'Watchlist'), h('span', { 'aria-hidden': 'true' }, '/'), h('span', { 'aria-current': 'page' }, d.project.name)),
     header(ctx, d, row),
     strip,
@@ -124,8 +154,8 @@ export async function renderProject(ctx, route) {
   // An address that names a folded section (?open=, ?run=) brings it into
   // view once, when the page opens; a brief opened from the inspector puts
   // focus on its title, so a screen reader starts there.
-  const open = tab === 'brief' ? FOLDS[route.query.get('open') || (route.query.get('run') ? 'runs' : '')] : null;
-  const run = tab === 'brief' ? route.query.get('run') : null;
+  const open = FOLDS[tab] ? FOLDS[tab][route.query.get('open') || (tab === 'evidence' && route.query.get('run') ? 'runs' : '')] : null;
+  const run = tab === 'evidence' ? route.query.get('run') : null;
   page.afterMount = () => {
     const toc = page.querySelector('.report-toc');
     if (toc && typeof toc.watch === 'function') toc.watch();
@@ -138,13 +168,16 @@ export async function renderProject(ctx, route) {
       }, { rootMargin: '-96px 0px 0px 0px' });
       io.observe(t);
     }
-    // A model tab chosen with a key or a click keeps focus on the new tab.
+    // A model tab chosen with a key or a click keeps focus on the new tab
+    // (and the brief's title does not take it back below).
+    let onTab = false;
     if (viewState.focusTab) {
       const el = page.querySelector(`#pb-tab-${viewState.focusTab}`);
       viewState.focusTab = null;
       if (el) {
         el.focus({ preventScroll: true });
         ctx.claimFocus();
+        onTab = true;
       }
     }
     // A redraw of the same page (a live update, a refresh) keeps its place.
@@ -166,7 +199,7 @@ export async function renderProject(ctx, route) {
         if (head === el && !el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
         head.focus({ preventScroll: true });
       }));
-    } else if (ctx.state.renderReason === 'nav' && fromInspector && t) {
+    } else if (ctx.state.renderReason === 'nav' && fromInspector && t && !onTab) {
       t.focus({ preventScroll: true });
       ctx.claimFocus();
     }
@@ -218,16 +251,36 @@ function header(ctx, d, row) {
       archive.disabled = false;
     }
   };
-  return h('div', { class: 'page-head' },
-    h('div', null,
-      h('div', { class: 'pill-row', style: { gap: '12px' } }, logo({ ...row, project_id: p.project_id, name: p.name, symbol: p.symbol }, { size: 36 }), h('h1', null, p.name, p.symbol ? h('span', { class: 'faint', style: { fontWeight: 500 } }, ` ${p.symbol}`) : null)),
+  return h('div', { class: 'page-head pb-head' },
+    h('div', { class: 'pb-head-id' },
+      h('div', { class: 'pb-head-name' }, logo({ ...row, project_id: p.project_id, name: p.name, symbol: p.symbol }, { size: 36 }), h('h1', null, p.name, p.symbol ? h('span', { class: 'pb-ticker' }, ` ${p.symbol}`) : null)),
+      marketFacts(row),
       h('div', { class: 'meta-line', style: { marginTop: '8px' } },
         sector ? h('button', { type: 'button', class: 'link', dataset: { key: 'project-sector' }, 'aria-label': `Sector: ${sector.label || sector.primary}. Change sector`, onclick: () => openSectorDialog(ctx, { ...row, ...p, sector }) }, sector.label || sector.primary) : null,
-        h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/brief?open=identity`, title: (id.unknowns || []).join(' ') || 'Token identity, contracts and evidence', dataset: { key: 'project-identity' } }, id.status === 'verified' ? 'Identity verified' : `Identity ${id.status}`),
+        h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/evidence?open=identity`, title: (id.unknowns || []).join(' ') || 'Token identity, contracts and evidence', dataset: { key: 'project-identity' } }, id.status === 'verified' ? 'Identity verified' : `Identity ${id.status}`),
         // Watching or researching never suggests a holding; only an open position says Held.
         d.position && !d.position.closed ? h('span', null, 'Held') : null,
         id.official_website ? h('a', { href: id.official_website, class: 'wrap-anywhere' }, id.official_website.replace(/^https?:\/\//, '').replace(/\/$/, '')) : null)),
     h('div', { class: 'actions' }, archived ? null : research, archived ? null : watch, archive));
+}
+
+// The market now, under the project's name: price and its 24-hour change,
+// market cap and 24-hour volume, from the index row the watchlist already has
+// (never fetched here), with their own time and source, apart from any
+// research date. A stale price says so in words; an unknown figure stays
+// "—" with its reason.
+function marketFacts(row) {
+  const mk = marketNow(row);
+  if (!mk) return h('p', { class: 'pb-mk none' }, h('span', { class: 'pb-mk-when' }, 'No market data for this project'));
+  const dir = mk.change === null ? null : mk.change > 0 ? 'up' : mk.change < 0 ? 'down' : 'flat';
+  const fig = (label, v, unknown) => h('span', { class: 'pb-mk-f' }, h('span', { class: 'k' }, label), v ? h('span', { class: 'v' }, v) : unknown);
+  const when = mk.as_of ? fmtAgo(mk.as_of) : 'time not recorded';
+  return h('p', { class: 'pb-mk', title: `${mk.source}${mk.as_of ? `, as of ${fmtDateTime(mk.as_of)}` : ''}. A market observation, not part of the research.` },
+    h('span', { class: 'pb-mk-f' }, h('span', { class: 'v price' }, mk.price),
+      mk.change24h ? h('span', { class: `chg ${dir}` }, h('span', { 'aria-hidden': 'true' }, mk.change24h), h('span', { class: 'sr-only' }, ` ${dir === 'down' ? 'down' : dir === 'up' ? 'up' : 'unchanged'} ${Math.abs(mk.change).toFixed(2)} percent over 24 hours`)) : null),
+    fig('Market cap', mk.mcap, unknownFigure('Market cap', mk.mcap_usd)),
+    fig('Volume 24h', mk.volume, unknownFigure('Volume', mk.volume_usd)),
+    h('span', { class: `pb-mk-when${mk.stale ? ' stale' : ''}` }, mk.stale ? `Stale price · ${when}` : `${mk.source} · ${when}`, mk.as_of ? h('span', { class: 'sr-only' }, `, at ${fmtAsOf(mk.as_of)}`) : null));
 }
 
 function fmtScore(s) {
@@ -265,31 +318,112 @@ function routeText(rep) {
 // sections that hold what the Overview, Scorecards, Comparison, Evidence and
 // Research runs tabs held (Eric, 2026-10-05, D1).
 
-function briefTab(ctx, d, row, latest, route) {
-  const pid = d.project.project_id;
-  const want = route.query.get('model');
-  const prov = PROVIDERS.includes(want) ? want : 'claude';
-  const { m, sheet } = briefPanel(ctx, { d, row, pid, provider: prov, reportId: route.query.get('report') || null });
-  const open = route.query.get('open') || (route.query.get('run') ? 'runs' : null);
-  const fold = (key, title, body, note = null) => {
-    const el = details(title, body, { id: FOLDS[key], open: open === key });
+// A folded section of a view, opened by its address (?open=<name>).
+function foldFor(tab, route) {
+  const open = route.query.get('open') || (tab === 'evidence' && route.query.get('run') ? 'runs' : null);
+  return (key, title, body, note = null) => {
+    const el = details(title, body, { id: FOLDS[tab][key], open: open === key });
     el.classList.add('page-fold');
     if (note) el.querySelector('summary').title = note;
     return el;
   };
-  const runs = researchParts(ctx, d, row, route);
+}
+
+const modelOf = (route) => (PROVIDERS.includes(route.query.get('model')) ? route.query.get('model') : 'claude');
+
+// Overview: what changed since your review (one line until opened), the model
+// tabs, the chosen model's brief; its full scorecard and your headline folded.
+function briefTab(ctx, d, row, latest, route) {
+  const pid = d.project.project_id;
+  const prov = modelOf(route);
+  const { m, sheet } = briefPanel(ctx, { d, row, pid, provider: prov, reportId: route.query.get('report') || null });
+  const fold = foldFor('brief', route);
   return { m, node: h('div', null,
     reviewDigest(ctx, d),
     briefModelTabs(ctx, row, prov),
     h('div', { id: 'pb-model', role: 'tabpanel', 'aria-labelledby': `pb-tab-${prov}` },
-      modelStatus(ctx, d, row, prov, latest),
+      modelStatus(ctx, d, row, prov, latest, { route: false }),
       sheet),
     fold('scorecard', `Full scorecard · ${PROVIDER_LABELS[prov]}`, latest[prov] ? scorecardBody(ctx, d, latest, prov) : h('p', { class: 'small muted' }, `No gradable ${PROVIDER_LABELS[prov]} report yet.`), SCORECARD_NOTE),
-    fold('compare', 'Compare the models', compareBody(ctx, d, latest), 'Computed by this desk from the saved reports, not a model\'s opinion. Each model keeps its own grade; they are never merged into one.'),
-    fold('evidence', 'Claims, checks and your questions', evidenceBody(ctx, d, latest), EVIDENCE_NOTE),
-    fold('headline', 'Your headline', headlineBody(ctx, d), 'The headline is your choice: one report, or one of your own decisions.'),
+    fold('headline', 'Your headline', headlineBody(ctx, d), 'The headline is your choice: one report, or one of your own decisions.')) };
+}
+
+// Compare: two saved reports side by side (views/brief-compare.js).
+function compareTab(ctx, d, row, route) {
+  return h('div', null, comparePanel(ctx, { d, row, pid: d.project.project_id, query: route.query }));
+}
+
+// Evidence: the model tabs, the chosen model's evidence; then, folded, your
+// own checks of its claims and your questions, its technical records, the
+// research runs and the token identity.
+function evidenceTab(ctx, d, row, latest, route) {
+  const pid = d.project.project_id;
+  const prov = modelOf(route);
+  const { m, sheet } = evidencePanel(ctx, { d, row, pid, provider: prov, reportId: route.query.get('report') || null });
+  const fold = foldFor('evidence', route);
+  const runs = researchParts(ctx, d, row, route);
+  const r = m.status === 'ok' ? m.report : null;
+  return { m, node: h('div', null,
+    briefModelTabs(ctx, row, prov),
+    h('div', { id: 'pb-model', role: 'tabpanel', 'aria-labelledby': `pb-tab-${prov}` },
+      modelStatus(ctx, d, row, prov, latest),
+      sheet),
+    fold('claims', `Check the claims yourself${r ? ` · ${PROVIDER_LABELS[prov]}` : ''}`, claimsBody(ctx, d, r), EVIDENCE_NOTE),
+    r ? fold('technical', 'Technical records', technicalBody(ctx, d, r, prov), 'How the report was read and saved: citation structure, extraction notes, the binding to its run, corrections, and the normalized data as saved.') : null,
     fold('runs', `Research runs${(d.research.runs || []).length ? ` (${d.research.runs.length})` : ''}`, runs.runs),
     fold('identity', `Token identity · ${d.project.identity.status === 'verified' ? 'verified' : d.project.identity.status}`, runs.identity)) };
+}
+
+// Your own checks of one report's claims, your dispute questions, and every
+// open question on the project (each model's and yours).
+function claimsBody(ctx, d, r) {
+  const pid = d.project.project_id;
+  const latest = latestReports(d);
+  const disputeTopic = input({ placeholder: 'e.g. category:token_value_capture or metric:revenue_usd' });
+  const disputeQ = input({ placeholder: 'The question that would settle it' });
+  const disputeBtn = button('Add question', null, { kind: 'small', type: 'submit' });
+  const disputeForm = h('form', { class: 'form-grid', dataset: { key: 'dispute-form' } }, field('Topic', disputeTopic), field('Resolving question', disputeQ), h('div', { class: 'field', style: { justifyContent: 'flex-end' } }, disputeBtn));
+  disputeForm.onsubmit = action(disputeBtn, async () => { await ctx.api.post(`/api/projects/${pid}/disputes`, { topic: disputeTopic.value || null, question: disputeQ.value }); await ctx.refresh(); return true; }, 'Question added');
+  const unresolved = [
+    ...PROVIDERS.flatMap((p) => (latest[p] ? (latest[p].assessment.unresolved_questions || []).map((q) => ({ provider: p, q })) : [])),
+    ...d.disputes.filter((x) => x.status === 'open').map((x) => ({ provider: 'you', q: x.question })),
+  ];
+  return h('div', null,
+    r ? card(`${PROVIDER_LABELS[r.meta.provider]} · ${fmtDate(r.assessment.analysis_at)}`, claimsTable(ctx, d, r)) : callout('No report to check here yet.', 'info'),
+    card('Your dispute questions', [
+      d.disputes.length ? (table([
+        { label: 'Topic', render: (x) => (x.topic ? h('code', null, x.topic) : null) },
+        { label: 'Question', wrap: true, key: 'question' },
+        { label: 'Status', render: (x) => x.status },
+      ], d.disputes)) : h('p', { class: 'small muted' }, 'None yet.'),
+      h('div', { style: { marginTop: '12px' } }, disputeForm),
+    ]),
+    unresolved.length ? card('Unresolved questions', h('ul', { class: 'list' }, unresolved.map((u) => h('li', null, h('span', { class: 'faint' }, `${u.provider === 'you' ? 'You' : PROVIDER_LABELS[u.provider]}: `), u.q)))) : null);
+}
+
+// How the report was read and saved, for when something looks wrong: the
+// citation structure, extraction notes, the binding to its run, your
+// corrections, how this model's reports changed, and the normalized data as
+// saved (loaded only when opened).
+function technicalBody(ctx, d, r, prov) {
+  const integ = r.integrity || {};
+  const issues = (r.extraction && r.extraction.issues) || [];
+  const mp = (r.meta && r.meta.provenance) || {};
+  const binding = mp.binding || null;
+  const diffs = (d.diffs[prov] || []).filter((x) => x.to === r.report_id || x.from === r.report_id);
+  return h('div', null,
+    h('dl', { class: 'facts' },
+      h('div', null, h('dt', null, 'Citation structure'), h('dd', null, integ.status === 'valid' ? 'References resolve to listed sources (a structural check only)' : `Citation issues: ${integ.status || 'not checked'}`)),
+      h('div', null, h('dt', null, 'Read from'), h('dd', null, r.assessment.source_format === 'prose' ? 'The written report (no data block)' : r.assessment.source_format || 'Not recorded')),
+      h('div', null, h('dt', null, 'Binding to its run'), h('dd', null, binding ? `${binding.status === 'bound' ? 'Bound to its run' : String(binding.status || 'not bound').replace(/_/g, ' ')}${(binding.conflicts || []).length ? ` · ${binding.conflicts.length} conflict${binding.conflicts.length === 1 ? '' : 's'}` : ''}${binding.fields ? ` · ${Object.entries(binding.fields).map(([k, v]) => `${k.replace(/_/g, ' ')} ${v}`).join(', ')}` : ''}` : mp.research_run_id ? 'Saved for its run' : 'Not part of a run')),
+      h('div', null, h('dt', null, 'Your corrections'), h('dd', null, (r.corrections || []).length ? `${r.corrections.length}; the original is unchanged` : 'None')),
+      h('div', null, h('dt', null, 'Original file'), h('dd', null, r.meta.original_filename || r.meta.original_file || 'Not recorded'))),
+    (integ.issues || []).length ? h('ul', { class: 'list small' }, integ.issues.map((i) => h('li', null, h('code', null, i.path || i.field || ''), ` ${i.message}`))) : null,
+    issues.length ? h('div', null, h('h3', { class: 'compare-h' }, 'Extraction notes'), issuesList(r.extraction)) : null,
+    diffs.length ? h('div', null, h('h3', { class: 'compare-h' }, `How ${PROVIDER_LABELS[prov]}'s reports changed`), diffs.map((x) => h('div', { style: { marginBottom: '10px' } },
+      h('p', { class: 'small', style: { margin: '0 0 4px' } }, `${x.from} → ${x.to}`, x.comparable ? null : h('span', { class: 'muted', title: x.note }, ' · different rubric, profile or horizon')),
+      x.changes.length ? h('ul', { class: 'list small' }, x.changes.map((chg) => h('li', null, `${chg.section} · ${chg.id}: ${fmtScore(chg.from)} → ${fmtScore(chg.to)}${chg.delta !== null && chg.delta !== undefined ? ` (${chg.delta > 0 ? '+' : ''}${chg.delta})` : ''}`))) : h('p', { class: 'small muted', style: { margin: 0 } }, 'No score changes.')))) : null,
+    normalizedView(ctx, d, r));
 }
 
 // Claude, ChatGPT and Gemini, Claude first: each tab names the model, its
@@ -329,7 +463,7 @@ function briefModelTabs(ctx, row, sel) {
 
 // The chosen model's report age, staleness and route, and the waiting job's
 // actions (copy the prompt, import the answer) when a run waits for it.
-function modelStatus(ctx, d, row, prov, latest) {
+function modelStatus(ctx, d, row, prov, latest, { route = true } = {}) {
   const pid = d.project.project_id;
   const staleDays = ctx.state.index.settings.freshness.research_stale_days || 90;
   const hosted = Boolean(ctx.state.session && ctx.state.session.hosted);
@@ -339,26 +473,32 @@ function modelStatus(ctx, d, row, prov, latest) {
   const onHold = Boolean(onHoldOf(ctx.state.index, prov));
   const info = badgeInfo(prov, sum, job, { staleDays, hosted, onHold });
   const waiting = job && job.state === 'unconfigured' && !onHold ? waitingActions(ctx, { pid, runId: job.run_id, provider: prov, key: `pb-${prov}` }) : null;
-  if (!r && !waiting) return null;
+  if ((!r || !route) && !waiting) return null;
   return h('div', { class: 'pb-status' },
-    r ? h('p', { class: 'small faint' }, info.age ? `Analysis ${info.age} · ` : '', info.stale ? h('span', { class: 'freshness stale' }, 'stale · ') : null, routeText(r)) : null,
+    r && route ? h('p', { class: 'small faint' }, info.age ? `Analysis ${info.age} · ` : '', info.stale ? h('span', { class: 'freshness stale' }, 'stale · ') : null, routeText(r)) : null,
     waiting ? h('div', { class: 'btn-row' }, waiting) : null);
 }
 
-// What changed since your last review, with Mark reviewed; the full list is
-// on the Notes tab.
+// What changed since your last review, with Mark reviewed: one line that
+// names the changes in words, the list one tap away (the full history is on
+// the Notes tab), so the verdict and its risk stay in the first view.
 function reviewDigest(ctx, d) {
   const pid = d.project.project_id;
   const ch = d.changes || {};
-  return h('section', { class: 'card pb-digest', 'aria-labelledby': 'pb-digest-h' },
-    h('div', { class: 'card-head' }, h('div', null, h('h2', { id: 'pb-digest-h', title: ch.since ? `Since ${ch.cursor_source === 'project created' ? 'the project was added' : fmtDateTime(ch.since)}. A digest never changes grades, reports or your headline.` : null }, 'Since your last review')),
-      h('div', { class: 'actions' }, reviewedButton(ctx, pid), h('a', { class: 'small', href: `#/project/${encodeURIComponent(pid)}/notes`, dataset: { key: 'pb-all-changes' } }, 'All changes'))),
-    ch.item_count ? h('ul', { class: 'list small' },
-      (ch.new_reports || []).map((r) => h('li', null, `New ${PROVIDER_LABELS[r.provider]} report (${fmtDate(r.analysis_at)}): ${r.verdict || 'no verdict'}`)),
-      (ch.provider_changes || []).filter((c) => c.from_report).map((c) => h('li', null, `${PROVIDER_LABELS[c.provider]} grade ${c.grade_from || 'none'} → ${c.grade_to || 'none'}${c.verdict_from !== c.verdict_to ? `; verdict ${c.verdict_from || 'none'} → ${c.verdict_to || 'none'}` : ''}`)),
-      (ch.research_runs || []).map((r) => h('li', null, `Research run ${r.status.replace(/_/g, ' ')} (${r.providers.map((p) => PROVIDER_LABELS[p]).join(', ')})`)),
-      ch.price && typeof ch.price.change_pct === 'number' ? h('li', null, `Price ${fmtSignedPct(ch.price.change_pct)} since then`) : null)
-      : h('p', { class: 'small muted', style: { margin: 0 } }, 'Nothing new since your last review.'));
+  const n = (k, one, many = `${one}s`) => (k ? `${k} ${k === 1 ? one : many}` : null);
+  const grades = (ch.provider_changes || []).filter((c) => c.from_report);
+  const words = [n((ch.new_reports || []).length, 'new report'), n(grades.length, 'grade change'), n((ch.research_runs || []).length, 'research run'), ch.price && typeof ch.price.change_pct === 'number' ? `price ${fmtSignedPct(ch.price.change_pct)}` : null].filter(Boolean);
+  const since = ch.since ? `Since ${ch.cursor_source === 'project created' ? 'the project was added' : fmtDateTime(ch.since)}. A digest never changes grades, reports or your headline.` : null;
+  const list = ch.item_count ? h('ul', { class: 'list small' },
+    (ch.new_reports || []).map((r) => h('li', null, `New ${PROVIDER_LABELS[r.provider]} report (${fmtDate(r.analysis_at)}): ${r.verdict || 'no verdict'}`)),
+    grades.map((c) => h('li', null, `${PROVIDER_LABELS[c.provider]} grade ${c.grade_from || 'none'} → ${c.grade_to || 'none'}${c.verdict_from !== c.verdict_to ? `; verdict ${c.verdict_from || 'none'} → ${c.verdict_to || 'none'}` : ''}`)),
+    (ch.research_runs || []).map((r) => h('li', null, `Research run ${r.status.replace(/_/g, ' ')} (${r.providers.map((p) => PROVIDER_LABELS[p]).join(', ')})`)),
+    ch.price && typeof ch.price.change_pct === 'number' ? h('li', null, `Price ${fmtSignedPct(ch.price.change_pct)} since then`) : null,
+    h('li', { class: 'pb-digest-all' }, h('a', { href: `#/project/${encodeURIComponent(pid)}/notes`, dataset: { key: 'pb-all-changes' } }, 'All changes'), reviewedButton(ctx, pid, 'ov-reviewed-in'))) : null;
+  const head = h('span', { class: 'pb-digest-t' }, h('strong', { id: 'pb-digest-h' }, 'Since your last review'), h('span', { class: 'pb-digest-w' }, words.length ? ` · ${words.join(', ')}` : ' · nothing new'));
+  return h('section', { class: `pb-digest${ch.item_count ? ' has' : ''}`, 'aria-labelledby': 'pb-digest-h', title: since },
+    list ? h('details', { class: 'pb-digest-d', dataset: { key: 'pb-digest' } }, h('summary', null, head), list) : h('p', { class: 'pb-digest-d none' }, head),
+    ch.item_count ? reviewedButton(ctx, pid) : null);
 }
 
 // Your headline: one report, or one of your own decisions.
@@ -386,72 +526,8 @@ function headlineBody(ctx, d) {
   return h('div', null, h('p', { class: 'small', style: { margin: '0 0 8px' } }, headlineText), details('Change the headline', h('div', { class: 'actions' }, sel, save, clearBtn), { id: 'ov-headline' }));
 }
 
-// Each model's four downside-risk scores side by side, corrections marked.
-function materialRisks(ctx, latest) {
-  const riskSources = PROVIDERS.map((p) => latest[p]).filter(Boolean);
-  const grading = ctx.state.index.rubrics.grading;
-  return riskSources.length ? table([
-    { label: 'Downside risk (higher means more risk)', render: (r) => h('span', { title: r.def.definition }, r.def.label) },
-    ...riskSources.map((rep) => ({ label: `${PROVIDER_LABELS[rep.meta.provider]} · ${fmtDate(rep.assessment.analysis_at)}`, render: (r) => scoreView(rep.assessment.risk_scores[r.def.id], 'risk', { corrected: originalOf(rep, `risk_scores.${r.def.id}`) }) })),
-  ], grading.risk_scores.map((def) => ({ def }))) : h('p', { class: 'small muted' }, 'No reports yet.');
-}
-
-const SECTION_NOTE = { component: ' (weighted into the grade)', risk: ' (downside risk: higher is worse)', diagnostic: '' };
-
-// How the models compare, from the comparison the desk computed over the
-// saved reports: each model's verdict and grade side by side (a withheld
-// grade stays withheld), differences at or above the highlight threshold,
-// figures that conflict, and the questions that would settle them. No
-// combined grade, and agreement is never presented as confirmation.
-function modelsCompared(ctx, d) {
-  const c = d.comparison;
-  const comp = c.comparability;
-  const present = PROVIDERS.filter((p) => c.latest[p]);
-  if (!present.length) return h('p', { class: 'small muted', style: { margin: 0 } }, 'No gradable reports yet. Differences appear once at least two models have one.');
-  const side = table([
-    { label: 'Model', render: (p) => h('strong', null, PROVIDER_LABELS[p]) },
-    { label: 'Grade (this app)', render: (p) => gradeView(c.grades[p] && c.grades[p].grade, { compact: true }) },
-    { label: 'Verdict (the model\'s)', render: (p) => verdictChip(c.latest[p].verdict) },
-    { label: 'Analysis', nowrap: true, render: (p) => fmtDate(c.latest[p].analysis_at) },
-  ], present, { caption: 'Each model\'s grade and verdict, side by side' });
-  const out = [side];
-  const pairs = c.claim_conflicts.flatMap((m) => m.pairs.map((pair) => ({ metric: m.metric_id, ...pair })));
-  const contradictions = pairs.filter((x) => x.kind === 'contradiction');
-  const otherBasis = pairs.filter((x) => !['contradiction', 'agreement', 'agreement_shared_source'].includes(x.kind));
-  if (present.length < 2) {
-    out.push(h('p', { class: 'small muted', style: { margin: '10px 0 0' } }, 'Differences appear once a second model has a gradable report.'));
-    return out;
-  }
-  if (!comp.comparable) {
-    out.push(h('p', { class: 'small', style: { margin: '10px 0 0' } }, h('strong', null, 'Not directly comparable: '), `${comp.reasons.join('; ')}. The values can be read side by side, but no difference is calculated.`));
-  } else {
-    const rows = c.rows.filter((r) => r.spread_flag);
-    const cell = (s) => (!s ? '—' : s.status === 'scored' ? String(s.value) : s.status === 'range' ? `${s.low}–${s.high}` : s.status === 'not_applicable' ? 'N/A' : 'unknown');
-    out.push(h('p', { class: 'small', style: { margin: '10px 0 4px' } }, `${comp.comparable_providers.map((p) => PROVIDER_LABELS[p]).join(', ')} used the same rubric, scoring profile and horizon, analyzed ${comp.date_span_days ?? '?'} day(s) apart.`));
-    out.push(rows.length
-      ? h('div', null, h('h3', { class: 'compare-h' }, `Where they differ by ${c.threshold} points or more`),
-        h('ul', { class: 'list small' }, rows.slice(0, 6).map((r) => h('li', null, h('strong', null, r.label), SECTION_NOTE[r.section] || '', ': ',
-          comp.comparable_providers.map((p) => `${PROVIDER_LABELS[p]} ${cell(r.cells[p])}`).join(' · '), h('span', { class: 'faint' }, ` (${r.spread} points apart)`)))),
-        rows.length > 6 ? h('p', { class: 'small muted', style: { margin: 0 } }, `${rows.length - 6} more in the full comparison.`) : null)
-      : h('p', { class: 'small muted', style: { margin: 0 } }, `No score differs by ${c.threshold} points or more.`));
-  }
-  if (contradictions.length || otherBasis.length) {
-    out.push(h('div', null, h('h3', { class: 'compare-h' }, 'Figures that conflict'),
-      contradictions.length ? h('ul', { class: 'list small' }, contradictions.slice(0, 4).map((x) => h('li', null, h('code', null, x.metric), `: ${PROVIDER_LABELS[x.a.provider]} ${fmtNum(x.a.value)} ${x.a.unit || ''} vs ${PROVIDER_LABELS[x.b.provider]} ${fmtNum(x.b.value)} ${x.b.unit || ''}`, typeof x.diff_pct === 'number' ? h('span', { class: 'faint' }, ` (${x.diff_pct}% apart)`) : null))) : h('p', { class: 'small muted', style: { margin: 0 } }, 'No figure contradicts another on the same basis.'),
-      otherBasis.length ? h('p', { class: 'small muted', style: { margin: '4px 0 0' } }, `${otherBasis.length} more figure${otherBasis.length === 1 ? ' differs' : 's differ'} in unit, period, definition or date, so ${otherBasis.length === 1 ? 'it is' : 'they are'} not called a contradiction.`) : null));
-  }
-  const questions = c.resolving_questions || [];
-  if (questions.length) {
-    out.push(h('div', null, h('h3', { class: 'compare-h' }, 'Open questions that would settle it'),
-      h('ul', { class: 'list small' }, questions.slice(0, 4).map((q) => h('li', null, h('strong', null, q.label), `: ${q.question}`)))));
-  }
-  const shared = (c.shared_sources && c.shared_sources.shared) || [];
-  out.push(h('p', { class: 'small muted', style: { margin: '10px 0 0' } }, `Agreement between models is not independent confirmation: they may read the same sources (${shared.length} cited by more than one here), share training data, and get the same prompt.`));
-  return out;
-}
-
-function reviewedButton(ctx, pid) {
-  const b = button('Mark reviewed', null, { kind: 'small', key: 'ov-reviewed' });
+function reviewedButton(ctx, pid, key = 'ov-reviewed') {
+  const b = button('Mark reviewed', null, { kind: 'small', key });
   b.onclick = action(b, async () => { await ctx.api.post(`/api/projects/${pid}/reviewed`, {}); await ctx.refresh(); return true; }, 'Marked reviewed. New changes are counted from now.');
   return b;
 }
@@ -1015,65 +1091,10 @@ export function comparisonBlock(ctx, d, { showMedian }) {
     ], conflicts))) : null);
 }
 
-// Compare the models: the summary (grades and verdicts side by side, the
-// differences, conflicting figures, the settling questions), the full
-// comparison, how each model changed, and the material risks.
-function compareBody(ctx, d, latest) {
-  const holder = h('div');
-  const draw = () => holder.replaceChildren(comparisonBlock(ctx, d, { showMedian: viewState.median }));
-  const toggle = h('input', { type: 'checkbox', checked: viewState.median });
-  toggle.onchange = () => { viewState.median = toggle.checked; draw(); };
-  draw();
-  const diffs = PROVIDERS.flatMap((p) => (d.diffs[p] || []).map((x) => ({ p, ...x })));
-  return h('div', null,
-    h('div', { class: 'card' }, modelsCompared(ctx, d)),
-    card('Model comparison', holder, { note: 'Latest eligible report from each model. Earlier reports are under Full report.', actions: [h('label', { class: 'check small', dataset: { nodirty: '1' } }, toggle, 'Show descriptive median')] }),
-    card('How each model changed over time', diffs.length ? diffs.map((x) => h('div', { style: { marginBottom: '12px' } },
-      h('div', { class: 'pill-row' }, h('strong', null, PROVIDER_LABELS[x.p]), h('span', { class: 'small' }, `${x.from} → ${x.to}`), x.comparable ? null : h('span', { class: 'small muted', title: x.note }, 'different rubric, profile or horizon')),
-      x.changes.length ? h('ul', { class: 'list small' }, x.changes.map((chg) => h('li', null, `${chg.section} · ${chg.id}: ${fmtScore(chg.from)} → ${fmtScore(chg.to)}${chg.delta !== null && chg.delta !== undefined ? ` (${chg.delta > 0 ? '+' : ''}${chg.delta})` : ''}`))) : h('div', { class: 'small muted' }, 'No score changes.'))) : h('p', { class: 'small muted' }, 'Only one report per model so far.')),
-    card('Material risks', [h('div', { class: 'legend' }, h('span', null, h('span', { class: 'swatch risk' }), 'Risk bars grow from the right: longer means more risk')), materialRisks(ctx, latest)]));
-}
-
 // ---------------------------------------------------------------------------
 // Evidence
 
 const EVIDENCE_NOTE = 'Separate things: the analyst tag ([V] means the analyst says it checked a primary source in its own session), the desk\'s evidence checks (a [V] resting only on an AI summary or a secondary source, a critical claim without a primary source or date, a fee figure nobody could reproduce), your check (what you confirmed by opening the source), and independent corroboration (a different, independent source agrees). Citation integrity only means the references resolve. Model agreement is not corroboration. None of these changes a score.';
-
-// Each model's claims and evidence checks, the unresolved questions, and your
-// dispute questions.
-function evidenceBody(ctx, d, latest) {
-  const pid = d.project.project_id;
-  const present = PROVIDERS.filter((p) => latest[p]);
-  const disputeTopic = input({ placeholder: 'e.g. category:token_value_capture or metric:revenue_usd' });
-  const disputeQ = input({ placeholder: 'The question that would settle it' });
-  const disputeBtn = button('Add question', null, { kind: 'small', type: 'submit' });
-  const disputeForm = h('form', { class: 'form-grid', dataset: { key: 'dispute-form' } }, field('Topic', disputeTopic), field('Resolving question', disputeQ), h('div', { class: 'field', style: { justifyContent: 'flex-end' } }, disputeBtn));
-  disputeForm.onsubmit = action(disputeBtn, async () => { await ctx.api.post(`/api/projects/${pid}/disputes`, { topic: disputeTopic.value || null, question: disputeQ.value }); await ctx.refresh(); return true; }, 'Question added');
-  const unresolved = [
-    ...PROVIDERS.flatMap((p) => (latest[p] ? (latest[p].assessment.unresolved_questions || []).map((q) => ({ provider: p, q })) : [])),
-    ...d.disputes.filter((x) => x.status === 'open').map((x) => ({ provider: 'you', q: x.question })),
-  ];
-  return h('div', null,
-    present.length ? present.map((p) => {
-      const r = latest[p];
-      const integ = r.integrity || {};
-      return card(`${PROVIDER_LABELS[p]} · ${fmtDate(r.assessment.analysis_at)}`, [
-        h('p', { class: 'small', style: { margin: '0 0 8px' } }, integ.status === 'valid' ? 'References resolve to listed sources (structural check only).' : `Citation issues: ${integ.status}.`),
-        (integ.issues || []).length ? h('ul', { class: 'list small' }, integ.issues.map((i) => h('li', null, h('code', null, i.path || i.field || ''), ` ${i.message}`))) : null,
-        evidenceChecksBlock(r.evidence),
-        claimsTable(ctx, d, r),
-      ]);
-    }) : callout('No reports yet.', 'info'),
-    card('Your dispute questions', [
-      d.disputes.length ? (table([
-        { label: 'Topic', render: (x) => (x.topic ? h('code', null, x.topic) : null) },
-        { label: 'Question', wrap: true, key: 'question' },
-        { label: 'Status', render: (x) => x.status },
-      ], d.disputes)) : h('p', { class: 'small muted' }, 'None yet.'),
-      h('div', { style: { marginTop: '12px' } }, disputeForm),
-    ]),
-    unresolved.length ? card('Unresolved questions', h('ul', { class: 'list' }, unresolved.map((u) => h('li', null, h('span', { class: 'faint' }, `${u.provider === 'you' ? 'You' : PROVIDER_LABELS[u.provider]}: `), u.q)))) : null);
-}
 
 // ---------------------------------------------------------------------------
 // Market data

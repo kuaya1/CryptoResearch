@@ -157,7 +157,6 @@ export function versionsOf(a, b, names = namesFor(a, b)) {
 }
 
 const horizonOf = (r) => (r.horizon_start && r.horizon_end ? `${r.horizon_start} to ${r.horizon_end}` : null);
-const NOT_STORED = 'Not stored in the Explorer';
 
 // What makes two reports answers to the same frozen research request. The
 // required facts must be stated by both; the frozen prompt and evidence
@@ -180,8 +179,11 @@ const SCOPE = [
 // listed apart: models in one run may finish on different days. Scope says
 // nothing about accuracy, and nothing about who wrote the reports
 // (authorshipOf).
-export function scopeOf(a, b, names = namesFor(a, b)) {
+// `where`: where the hashes would be stored ("in the Explorer"; the project
+// page says "with these reports").
+export function scopeOf(a, b, names = namesFor(a, b), { where = 'in the Explorer' } = {}) {
   const [na, nb] = names;
+  const notStored = `Not stored ${where}`;
   const differs = [];
   const missing = [];
   const facts = SCOPE.map((f) => {
@@ -190,7 +192,7 @@ export function scopeOf(a, b, names = namesFor(a, b)) {
     if (x && y && x !== y) differs.push(`different ${f.many}`);
     else if (f.required && (!x || !y)) missing.push(!x && !y ? `neither states ${f.noun}` : `${!x ? na : nb} states no ${f.noun.replace(/^an? /, '')}`);
     else if (!f.required && Boolean(x) !== Boolean(y)) missing.push(`${f.noun} is stored for ${x ? na : nb} only`);
-    const none = f.required ? 'Not stated' : NOT_STORED;
+    const none = f.required ? 'Not stated' : notStored;
     return { what: f.what, a: x || none, b: y || none, differs: Boolean(x && y && x !== y), missing: f.required ? !x || !y : Boolean(x) !== Boolean(y) };
   });
   facts.push({ what: 'Research date', a: a.research_date || 'Not stated', b: b.research_date || 'Not stated', differs: Boolean(a.research_date && b.research_date && a.research_date !== b.research_date), missing: false, apart: true });
@@ -202,7 +204,7 @@ export function scopeOf(a, b, names = namesFor(a, b)) {
   let text;
   if (status === 'matches') {
     text = `Same research run, prompt, scoring profile, rubric and horizon${hashesCompared ? ', and the same frozen prompt and evidence packet' : ''}: both reports answered the same frozen request.`;
-    if (hashesAbsent) text += ' The frozen prompt and evidence packet hashes are not stored in the Explorer, so they are not compared.';
+    if (hashesAbsent) text += ` The frozen prompt and evidence packet hashes are not stored ${where}, so they are not compared.`;
   } else if (status === 'differs') {
     text = `${cap([...differs, ...missing].join('; '))}. Read side by side; this is not a controlled comparison.`;
   } else {
@@ -266,7 +268,7 @@ const GROUP_ORDER = { notable: 0, missing: 1, close: 2, other: 3 };
 // versions and when both reports define the category the same way (the same
 // stored ID and label). `all`: the project's reports, to follow a chain of
 // revisions.
-export function compareReports(a, b, all = []) {
+export function compareReports(a, b, all = [], { where } = {}) {
   const relation = relationOf(a, b, all);
   const [nameA, nameB] = relation.names;
   const versions = versionsOf(a, b, relation.names);
@@ -301,7 +303,7 @@ export function compareReports(a, b, all = []) {
     relation: relation.kind,
     authorship: authorshipOf(relation),
     versions,
-    scope: scopeOf(a, b, relation.names),
+    scope: scopeOf(a, b, relation.names, where ? { where } : {}),
     rows: { inspection, profile },
     counts: { categories: rows.length, notable: count('notable'), missing: count('missing'), close: count('close'), other: count('other') },
   };

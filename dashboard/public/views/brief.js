@@ -1,11 +1,16 @@
-// The Brief (#/project/<project>/brief?model=<model>[&report=<report>]): the
-// project page's default tab (Eric, 2026-10-05, D1). It reads one saved report
-// of the chosen model (Claude, ChatGPT or Gemini, each its own brief, never
-// mixed) as a decision brief for the position horizon. The
-// verdict and the desk's calculated grade first, then the thesis, the
-// scorecard, what supports and what threatens it, what to watch, the
-// scenarios, and the evidence and records it is drawn from; your own note
-// last, apart from Claude's.
+// The Brief: the project page's Overview (#/project/<project>/brief?model=
+// <model>[&report=<report>], the default tab, D1) and Evidence
+// (#/project/<project>/evidence?model=...) views of one saved report of the
+// chosen model (Claude, ChatGPT or Gemini, each its own, never mixed). The
+// Overview reads it as a decision brief for the position horizon: the verdict
+// and the desk's calculated grade with the research age and the warnings that
+// bear on it, the strongest sourced risk and what would confirm or break the
+// thesis, the category grades, then apart the six weighted components the
+// grade is calculated from, the thesis, what supports and what threatens it,
+// what to watch, the scenarios; your own note last, apart from the model's.
+// The Evidence view is the same report's flags, claims, sources with their
+// dates, the limits it states and the records it is drawn from. (Compare is
+// views/brief-compare.js; Eric, 2026-10-07.)
 //
 // It reads the saved project record (cached from the inspector) and the index
 // the page already has: drawing it never refreshes prices, never screens a
@@ -15,8 +20,8 @@
 // keeps its inspector, filters and place); on a phone its bar replaces the
 // top bar. The project page (views/project.js) draws the tabs around it.
 import {
-  h, details, gradeGauge, coverageMeter, unscoredList, structureNotes, fmtDate, fmtDateTime, fmtAsOf, fmtRelDay,
-  icon, stateText, button, scoreTier, PROVIDER_LABELS, COVERAGE_MEANS, TAG_TITLES, unknownFigure,
+  h, details, gradeGauge, coverageMeter, unscoredList, structureNotes, fmtDate, fmtDateTime, daysSince,
+  icon, stateText, button, scoreTier, PROVIDER_LABELS, COVERAGE_MEANS, TAG_TITLES,
 } from '../ui.js';
 import { briefModel, TAG_WORDS, CERTAINTY_WORDS } from '../brief-model.js';
 import { evidenceChecksBlock, sourceItem, checksWord } from './project.js';
@@ -24,16 +29,49 @@ import { evidenceQuality } from './inspector.js';
 import { chartCycleBlock, CONFIDENCE_LABELS } from '../thesis-ui.js';
 import { openResearchDialog } from './dialogs.js';
 
-// The model this brief reads; set once per draw by briefPanel (a draw is
-// synchronous, so one brief never sees another's model).
+// The model this brief reads and the view it is drawn for; set once per draw
+// by briefPanel or evidencePanel (a draw is synchronous, so one brief never
+// sees another's model).
 let PROVIDER = 'claude';
 let WHO = PROVIDER_LABELS[PROVIDER];
+let VIEW = 'overview';
 const enc = encodeURIComponent;
 const briefHref = (pid, rid = null) => `#/project/${enc(pid)}/brief?model=${PROVIDER}${rid ? `&report=${enc(rid)}` : ''}`;
 const reportHref = (pid, rid) => `#/project/${enc(pid)}/report?report=${enc(rid)}`;
-// The project's research runs, folded under the brief, with one run in view.
-const runHref = (pid, runId) => `#/project/${enc(pid)}/brief?model=${PROVIDER}&open=runs${runId ? `&run=${enc(runId)}` : ''}`;
+// The project's research runs, folded under the Evidence view, with one run in view.
+const runHref = (pid, runId) => `#/project/${enc(pid)}/evidence?model=${PROVIDER}&open=runs${runId ? `&run=${enc(runId)}` : ''}`;
+// The same report's Evidence view (an earlier report keeps its own).
+const evidenceHref = (pid, rid = null) => `#/project/${enc(pid)}/evidence?model=${PROVIDER}${rid ? `&report=${enc(rid)}` : ''}`;
 const plainClick = (e) => e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
+
+// A link to another view of the project page. Opened from the inspector, it
+// keeps that way back (one entry deeper, as the project's tabs do), so Back
+// and Escape still return to the inspector.
+function viewLink(ctx, pid, href, text, key, cls = null) {
+  const a = h('a', { href, class: cls, dataset: { key } }, text);
+  a.addEventListener('click', (e) => {
+    const st = history.state;
+    if (!plainClick(e) || !st || st.crBrief !== pid) return;
+    e.preventDefault();
+    ctx.navigate(href, { state: { ...st, crDepth: (Number(st.crDepth) || 1) + 1 } });
+  });
+  return a;
+}
+
+// A button that brings a part of this page into view and gives it focus (an
+// in-page "#…" link would be read as a route).
+function jumpButton(text, target, key, cls = 'bf-gflag') {
+  const b = h('button', { type: 'button', class: cls, dataset: { key } }, text);
+  b.addEventListener('click', () => {
+    const el = document.querySelector(`[data-key="${target}"]`);
+    if (!el) return;
+    if (el.tagName === 'DETAILS') el.open = true;
+    el.scrollIntoView({ block: 'center' });
+    const f = el.tagName === 'DETAILS' ? el.querySelector('summary') : el;
+    if (f) f.focus({ preventScroll: true });
+  });
+  return b;
+}
 
 // Leaving the brief: back to the entry it was opened from (the watchlist with
 // its inspector, or the project page), else to the project in the watchlist.
@@ -106,7 +144,7 @@ const none = (text) => h('p', { class: 'bf-none' }, text);
 
 // ---- the bar and the header ------------------------------------------------------------
 
-export function topBar(ctx, m, pid) {
+export function topBar(ctx, m, pid, { label = `${WHO} Brief` } = {}) {
   const from = history.state && history.state.crBrief === pid ? history.state.from : null;
   const back = h('a', { class: 'bf-back', href: `#/watchlist?p=${enc(pid)}`, dataset: { key: 'brief-back' }, 'aria-label': `Close the brief and return to ${from === 'project' ? `the ${m.identity.name} page` : 'the watchlist'}`, title: 'Back (Esc)' },
     h('span', { class: 'bf-chev', 'aria-hidden': 'true' }), h('span', null, from === 'project' ? 'Project' : 'Watchlist'));
@@ -117,57 +155,46 @@ export function topBar(ctx, m, pid) {
   });
   return h('div', { class: 'bf-bar' },
     back,
-    h('p', { class: 'bf-bar-title', 'aria-hidden': 'true' }, h('span', { class: 'bf-bar-k' }, `${WHO} Brief`), h('span', { class: 'bf-bar-name' }, m.identity.name)),
+    h('p', { class: 'bf-bar-title', 'aria-hidden': 'true' }, h('span', { class: 'bf-bar-k' }, label), h('span', { class: 'bf-bar-name' }, m.identity.name)),
     h('div', { class: 'bf-bar-act' },
       m.report_id ? h('a', { class: 'btn small', href: reportHref(pid, m.report_id), dataset: { key: 'brief-report' } }, 'Full report') : null));
 }
 
-function chainLine(id) {
-  const parts = [];
-  if (id.native) parts.push(h('span', { class: 'bf-chip' }, 'Native coin'));
-  for (const c of id.chains) parts.push(h('span', { class: 'bf-chip', title: c.addresses.join('\n') || null }, c.label));
-  parts.push(h('span', { class: `bf-idstate${id.verified ? ' ok' : ' warn'}`, title: id.verified ? 'The token identity is verified: these are the chains and contracts on record' : 'The token identity is not verified yet' }, id.verified ? 'Verified identity' : 'Identity pending'));
-  if (id.website) {
-    let host = id.website;
-    try { host = new URL(id.website).hostname.replace(/^www\./, ''); } catch (_) { /* as given */ }
-    parts.push(h('a', { class: 'bf-web', href: id.website, title: `Official website: ${host}` }, host));
-  }
-  return h('p', { class: 'bf-chain' }, parts);
-}
-
-function marketLine(mk) {
-  if (!mk) return null;
-  const dir = mk.change === null ? null : mk.change > 0 ? 'up' : mk.change < 0 ? 'down' : 'flat';
-  return h('p', { class: 'bf-market', title: `${mk.source}${mk.as_of ? `, as of ${fmtDateTime(mk.as_of)}` : ''}. A market observation, not part of the research.` },
-    h('span', { class: 'k' }, 'Market now'),
-    h('span', { class: 'fig' }, mk.price),
-    mk.change24h ? h('span', { class: `fig bf-chg ${dir}` }, h('span', { 'aria-hidden': 'true' }, mk.change24h), h('span', { class: 'sr-only' }, `${dir === 'down' ? 'down' : dir === 'up' ? 'up' : 'unchanged'} ${Math.abs(mk.change).toFixed(2)} percent over 24 hours`)) : null,
-    h('span', null, h('span', { class: 'k2' }, 'MC '), mk.mcap ? h('span', { class: 'fig' }, mk.mcap) : unknownFigure('Market cap', mk.mcap_usd)),
-    h('span', null, h('span', { class: 'k2' }, 'Vol 24h '), mk.volume ? h('span', { class: 'fig' }, mk.volume) : unknownFigure('Volume', mk.volume_usd)),
-    h('span', { class: `bf-when${mk.stale ? ' stale' : ''}` }, `${mk.source}${mk.as_of ? ` · ${fmtAsOf(mk.as_of)}` : ''}${mk.stale ? ' · stale' : ''}`));
-}
-
-function header(ctx, m, row, pid) {
-  const id = m.identity;
-  const facts = [];
-  if (m.report_id) {
-    const a = m.report.assessment || {};
-    const rel = fmtRelDay(a.analysis_at);
-    facts.push(h('div', null, h('dt', null, 'Analysis'), h('dd', null, a.analysis_at ? fmtDate(a.analysis_at) : 'Date not stated', rel ? h('span', { class: 'faint' }, ` · ${rel}`) : null)));
-    const hz = m.watch.horizon;
-    facts.push(h('div', null, h('dt', null, 'Horizon'), h('dd', null,
-      hz.start && hz.end ? windowWords(hz.start, hz.end) : hz.text || 'Not stated',
-      hz.months ? h('span', { class: 'faint' }, ` · ${hz.months} month${hz.months === 1 ? '' : 's'}${hz.mode === 'long_term' ? ', long-term exception' : ''}`) : null)));
-    facts.push(h('div', null, h('dt', null, 'Report'), h('dd', null, m.is_latest ? `${WHO}'s latest` : 'An earlier report', h('span', { class: 'faint' }, ` · saved ${fmtDate(m.provenance.saved_at)}`))));
-  }
-  // The project page's header names the project; the brief names its model.
+// The sheet's head band: whose view of the project this is, and which of the
+// model's reports it reads. (The project page's header names the project,
+// its identity and the market now.)
+function sheetHead(m, title) {
   return h('header', { class: 'bf-head' },
     h('div', { class: 'bf-id' },
-      h('div', { class: 'bf-id-text' },
-        h('h2', { id: 'bf-title', class: 'bf-eyebrow', tabindex: '-1' }, `${WHO} Brief`, h('span', { class: 'sr-only' }, `: ${id.name}`)),
-        chainLine(id))),
-    facts.length ? h('dl', { class: 'bf-meta' }, facts) : null,
-    marketLine(m.market));
+      h('h2', { id: 'bf-title', class: 'bf-eyebrow', tabindex: '-1' }, title, h('span', { class: 'sr-only' }, `: ${m.identity.name}`)),
+      m.report_id ? h('p', { class: 'bf-id-r' }, m.is_latest ? 'Latest report' : 'An earlier report', h('span', { class: 'bf-id-saved' }, ` · saved ${fmtDate(m.provenance.saved_at)}`)) : null));
+}
+
+// The research age in words, kept apart from the market's time: the day the
+// report says it was analyzed, how long ago, and "stale" past the desk's
+// research freshness limit (Settings).
+function ageWords(at, staleDays) {
+  const d = daysSince(at);
+  if (d === null) return { text: at ? at : 'Date not stated', rel: null, stale: false };
+  const rel = d === 0 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`;
+  return { text: fmtDate(at), rel, stale: Boolean(staleDays && d > staleDays) };
+}
+
+// The verdict's facts: the research age, the horizon, the report.
+function verdictFacts(m, staleDays) {
+  const a = m.report.assessment || {};
+  const age = ageWords(a.analysis_at, staleDays);
+  const hz = m.watch.horizon;
+  return h('dl', { class: 'bf-vfacts' },
+    h('div', null, h('dt', null, 'Analysis'), h('dd', null, age.text,
+      age.rel ? h('span', { class: 'faint' }, ` · ${age.rel}`) : null,
+      age.stale ? h('span', { class: 'bf-stale' }, ' · stale') : null)),
+    // The window in full; on a phone its length and end, so the verdict
+    // keeps its few lines (the full window is under What to watch).
+    h('div', null, h('dt', null, 'Horizon'), h('dd', null,
+      h('span', { class: 'bf-hz-full' }, hz.start && hz.end ? windowWords(hz.start, hz.end) : hz.text || 'Not stated',
+        hz.months ? h('span', { class: 'faint' }, ` · ${hz.months} month${hz.months === 1 ? '' : 's'}${hz.mode === 'long_term' ? ', long-term exception' : ''}`) : null),
+      hz.months && hz.end ? h('span', { class: 'bf-hz-short' }, `${hz.months} month${hz.months === 1 ? '' : 's'}`, h('span', { class: 'faint' }, ` · to ${fmtDate(hz.end)}`)) : null)));
 }
 
 // ---- the verdict ---------------------------------------------------------------------------
@@ -220,18 +247,11 @@ function noticeItem(ctx, n, m, pid) {
     more = n.items.length > 2 ? h('ul', null, n.items.map((x) => h('li', null, textScoreLine(x)))) : null;
   } else if (n.kind === 'evidence') {
     const what = [n.claims ? `${n.claims} claim${n.claims === 1 ? '' : 's'}` : null, n.categories ? `${n.categories} category grade${n.categories === 1 ? '' : 's'}` : null].filter(Boolean).join(' and ') || 'parts of the report';
-    // A jump inside the page, so a button (a "#..." link would be read as a route).
-    const jump = h('button', { type: 'button', class: 'link', dataset: { key: 'brief-ev-jump' } }, 'See the flags');
-    jump.addEventListener('click', () => {
-      const d = document.querySelector('[data-key="brief-checks"]');
-      if (d) {
-        d.open = true;
-        d.scrollIntoView({ block: 'start' });
-        const s = d.querySelector('summary');
-        if (s) s.focus({ preventScroll: true });
-      }
-    });
-    main = [h('strong', null, n.level === 'serious' ? 'Serious evidence flag' : 'Evidence flag'), ` · ${what} flagged by the desk's evidence checks. No score is changed. `, jump];
+    // The flags themselves are on the Evidence view (on it, a jump to them).
+    const see = VIEW === 'evidence'
+      ? jumpButton('See the flags', 'brief-ev-checks', 'brief-ev-jump', 'link')
+      : viewLink(ctx, pid, `${evidenceHref(pid, m.is_latest ? null : m.report_id)}&open=checks`, 'See the flags', 'brief-ev-jump');
+    main = [h('strong', null, n.level === 'serious' ? 'Serious evidence flag' : 'Evidence flag'), ` · ${what} flagged by the desk's evidence checks. No score is changed. `, see];
   } else if (n.kind === 'newer') {
     main = [h('strong', null, n.text), '. This brief stays on the saved report until a new one is saved.'];
   } else if (n.kind === 'horizon') {
@@ -246,7 +266,7 @@ function noticeItem(ctx, n, m, pid) {
     main = [`The report states an analysis time ${n.minutes !== null && n.minutes < 2880 ? `${n.minutes} min` : 'more than a day'} after it was saved; it is ordered by its save time.`];
   } else return null;
   const body = h('span', { class: 'bf-ntext' }, main);
-  const li = h('li', { class: `bf-notice tone-${n.tone}${n.kind === 'evidence' ? ` ev-${n.level}` : ''}` }, icon(NOTICE_ICON[n.kind] || 'alert'), body);
+  const li = h('li', { class: `bf-notice tone-${n.tone}${n.kind === 'evidence' ? ` ev-${n.level}` : ''}`, tabindex: '-1', dataset: { key: `brief-notice-${n.kind}` } }, icon(NOTICE_ICON[n.kind] || 'alert'), body);
   if (more) {
     const d = h('details', { class: 'bf-nmore', dataset: { key: `brief-n-${n.kind}` } }, h('summary', null, 'Why'), h('div', { class: 'bf-nbody' }, more));
     body.append(' ', d);
@@ -273,7 +293,27 @@ function keyPoints(m) {
     row('break', 'Would break it', k.break ? h('p', { class: 'bf-key-t' }, k.break) : missing(), more(k.break_more, 'under What to watch')));
 }
 
-function verdictSection(ctx, m, pid) {
+// The notices that bear on the grade itself: an evidence flag, the model's
+// own total differing, the text and the data block differing, extraction
+// errors. Each is named beside the grade in a few words, its sentence one
+// tap away in the notices.
+const GRADE_NOTICES = ['evidence', 'model_total', 'text_scores', 'extraction'];
+
+function gradeFlagWords(n) {
+  if (n.kind === 'evidence') return n.level === 'serious' ? 'Serious evidence flag' : 'Evidence flag';
+  if (n.kind === 'model_total') return `Own total differs${n.difference !== null ? ` by ${n.difference.toFixed(1)}` : ''}`;
+  if (n.kind === 'text_scores') return 'Text and data block differ';
+  return [n.errors ? `${n.errors} extraction error${n.errors === 1 ? '' : 's'}` : null, n.ambiguous ? `${n.ambiguous} ambiguous value${n.ambiguous === 1 ? '' : 's'}` : null].filter(Boolean).join(', ');
+}
+
+function gradeFlags(m) {
+  const ns = m.notices.filter((n) => GRADE_NOTICES.includes(n.kind));
+  if (!ns.length) return null;
+  return h('ul', { class: 'bf-gflags', 'aria-label': 'Warnings about this grade' }, ns.map((n) => h('li', { class: `tone-${n.tone}${n.kind === 'evidence' ? ` ev-${n.level}` : ''}` },
+    jumpButton([icon(n.kind === 'evidence' && n.level === 'serious' ? 'warn-fill' : 'warn-line'), h('span', null, gradeFlagWords(n))], `brief-notice-${n.kind}`, `brief-gflag-${n.kind}`))));
+}
+
+function verdictSection(ctx, m, pid, staleDays) {
   const v = m.verdict;
   // The next dated event still ahead and the suggested review, from What to
   // watch, so the dates that matter are in the first view.
@@ -289,26 +329,32 @@ function verdictSection(ctx, m, pid) {
   // The summary is the verdict's reason in a few sentences; without one, the
   // final judgment takes its place (and is then not repeated below).
   const lead = v.summary || v.final_take;
-  // The first read on a phone: the grade (or why it is withheld), then the
-  // strongest risk and what would confirm or break the thesis, then the other
-  // notices. A serious evidence flag stays above the key points.
-  const serious = (n) => n.kind === 'evidence' && n.level === 'serious';
+  // The first read on a phone: the grade (or why it is withheld) with its
+  // verdict, research age and the warnings that bear on it, then the
+  // strongest sourced risk and what would confirm or break the thesis, then
+  // the summary and the other notices.
   const list = (ns, label) => {
     const items = ns.map((n) => noticeItem(ctx, n, m, pid)).filter(Boolean);
     return items.length ? h('ul', { class: 'bf-notices', 'aria-label': label }, items) : null;
   };
-  return sec('verdict', `${WHO}'s verdict`,
+  const first = (n) => GRADE_NOTICES.includes(n.kind);
+  return h('section', { class: 'bf-sec bf-verdict', id: 'bf-verdict', 'aria-label': `${WHO}'s verdict` },
     h('div', { class: 'bf-vgrid' },
       gradeBlock(m),
       h('div', { class: 'bf-vtext' },
+        h('p', { class: 'bf-vwho' }, `${WHO}'s verdict`),
         h('p', { class: 'bf-vlabel', title: 'The verdict as the report writes it' }, v.label || h('span', { class: 'faint' }, 'No verdict given')),
-        lead ? h('p', { class: 'bf-lead' }, lead) : none(`No summary in ${WHO}'s data block.`),
-        views.length ? h('p', { class: 'bf-views', title: `${WHO}'s own views for this horizon; they change no score` }, views) : null)),
+        verdictFacts(m, staleDays))),
+    gradeFlags(m),
+    keyPoints(m),
+    // What a withheld grade is missing, right after the key points (the grade
+    // itself says withheld, with the share of the weight scored).
     m.grade.status === 'withheld' && m.grade.why.items.length ? h('div', { class: 'bf-missing' }, h('h3', null, 'Not scored'), unscoredList(m.grade.why, { max: 320 }),
       m.structure ? details(`Check · ${m.structure.flags.length} note${m.structure.flags.length === 1 ? '' : 's'}`, structureNotes(m.structure, { max: 6 }), { id: 'brief-structure' }) : null) : null,
-    list(m.notices.filter(serious), 'Serious evidence flag'),
-    keyPoints(m),
-    list(m.notices.filter((n) => !serious(n)), 'Before you rely on this brief'));
+    lead ? h('div', { class: 'bf-why' }, h('h3', { class: 'bf-h3' }, `${WHO}'s summary`), h('p', { class: 'bf-lead' }, lead)) : none(`No summary in ${WHO}'s data block.`),
+    views.length ? h('p', { class: 'bf-views', title: `${WHO}'s own views for this horizon; they change no score` }, views) : null,
+    list(m.notices.filter(first), 'Warnings about this grade'),
+    list(m.notices.filter((n) => !first(n)), 'Before you rely on this brief'));
 }
 
 // ---- the thesis -------------------------------------------------------------------------------
@@ -377,10 +423,10 @@ function componentsBlock(m) {
     h('p', null, `Each component's score is multiplied by its weight and the results are added${total ? `: together ${total}` : ''}. The weights come from ${g.rubric || 'the report\'s rubric'} and are never adjusted.`),
     h('p', null, `A range stays a range: the grade then runs from the low ends to the high ends. If any component is unknown, no grade is calculated and the scored share of the weight is shown instead.`),
     h('p', null, `The category grades and the downside-risk scores are shown apart and never averaged in; ${WHO}'s own total, if it wrote one, is kept beside the grade, never in its place.`)), { id: 'brief-how' });
-  return h('div', { class: 'bf-block' },
-    h('h3', { class: 'bf-h3' }, 'What the grade is calculated from', h('span', { class: 'bf-h3-sub' }, 'six weighted components · the only inputs to the grade')),
+  return [
     h('ul', { class: 'bf-comps', 'aria-label': 'The six weighted components of the investment grade, 0 to 100, higher is better' }, rows),
-    how);
+    how,
+  ];
 }
 
 function categoryItem(x) {
@@ -408,7 +454,11 @@ function categoryItem(x) {
           ...item('Would lower it', x.would_lower)))));
 }
 
-function scorecardSection(m) {
+// The category grades: the report's diagnostics as bars on the one 0–100
+// scale, grouped as the research is, each opening to the report's reasons.
+// Never averaged into the grade, and drawn apart from the six components it
+// is calculated from.
+function categoriesSection(m) {
   const c = m.categories;
   const counts = c.counts;
   const groups = c.groups.map((g) => {
@@ -418,13 +468,17 @@ function scorecardSection(m) {
       h('h4', null, g.title, h('span', { class: 'bf-gn' }, total ? `${graded} of ${total} graded` : 'not applicable')),
       h('ul', { class: 'bf-cats', 'aria-label': `${g.title}: category grades, 0 to 100, higher is better` }, g.items.map(categoryItem)));
   });
-  return sec('scorecard', 'Scorecard',
-    componentsBlock(m),
-    h('div', { class: 'bf-block' },
-      h('h3', { class: 'bf-h3' }, 'Category grades',
-        h('span', { class: 'bf-h3-sub' }, `${counts.scored} of ${counts.total} graded${counts.unknown ? ` · ${counts.unknown} unknown` : ''} · diagnostics, never averaged into the grade`),
-        m.older_profile ? h('span', { class: 'bf-h3-sub', title: `This report used ${m.older_profile.report}; new research uses ${m.older_profile.current}` }, ` · ${m.older_profile.report}`) : null),
-      groups.length ? h('div', { class: 'bf-groups' }, groups) : none('This report grades no categories.')));
+  return sec('categories', ['Category grades',
+    h('span', { class: 'bf-h-sub' }, `${c.items.length} diagnostics · ${counts.scored} of ${counts.total} graded${counts.unknown ? ` · ${counts.unknown} unknown` : ''} · never averaged into the grade`),
+    m.older_profile ? h('span', { class: 'bf-h-sub', title: `This report used ${m.older_profile.report}; new research uses ${m.older_profile.current}` }, ` · ${m.older_profile.report}`) : null],
+  groups.length ? h('div', { class: 'bf-groups' }, groups) : none('This report grades no categories.'));
+}
+
+// What the investment grade is calculated from: the six weighted components,
+// in a well of their own so they never read as more category grades.
+function inputsSection(m) {
+  return sec('inputs', ['What the grade is calculated from', h('span', { class: 'bf-h-sub' }, 'six weighted components · the only inputs to the grade')],
+    h('div', { class: 'bf-inputs-well' }, componentsBlock(m)));
 }
 
 // ---- what supports it, what threatens it ------------------------------------------------------------
@@ -583,55 +637,125 @@ function scenariosSection(m) {
 
 // ---- evidence and records ----------------------------------------------------------------------------
 
-function evidenceSection(ctx, m, pid) {
+// On the Overview, where the evidence is: one line in words and the way to
+// the Evidence view of the same report.
+function evidenceLinkSection(ctx, m, pid) {
   const e = m.evidence;
+  const n = (k, one, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
+  const flags = e.flags.length ? `${n(e.flags.length, 'evidence flag')}${e.checks && e.checks.high ? `, ${e.checks.high} serious` : ''}` : `evidence checks: ${checksWord(e.checks)}`;
+  return h('section', { class: 'bf-sec bf-evlink', 'aria-labelledby': 'bf-h-evlink' },
+    h('div', null,
+      h('h2', { class: 'bf-h', id: 'bf-h-evlink' }, 'Evidence and sources'),
+      h('p', { class: 'bf-evlink-t' }, [n(e.sources.length, 'source'), n(e.total, 'claim'), flags].join(' · '))),
+    viewLink(ctx, pid, evidenceHref(pid, m.is_latest ? null : m.report_id), 'Open the evidence', 'brief-open-evidence', 'btn small'));
+}
+
+// ---- the Evidence view ----------------------------------------------------------------
+
+const TAG_ORDER = ['V', 'C', 'I', 'S'];
+
+// Every claim the report makes: its ID, the researcher's own evidence tag,
+// its date, the desk's worst flag on it, and its sources with their dates.
+function claimList(m) {
+  const e = m.evidence;
+  const sources = new Map(e.sources.map((s) => [s.source_id, s]));
+  const worst = new Map();
+  for (const f of e.flags) if (f.claim_id && (!worst.has(f.claim_id) || f.severity === 'high')) worst.set(f.claim_id, f);
+  if (!e.claims.length) return none('This report lists no structured claims.');
+  return h('ol', { class: 'bf-claims', 'aria-label': `${WHO}'s claims, with their evidence tags, dates and sources` }, e.claims.map((c) => {
+    const tag = TAG_ORDER.includes(c.evidence_tag) ? c.evidence_tag : null;
+    const f = worst.get(c.claim_id);
+    const srcs = (Array.isArray(c.source_ids) ? c.source_ids : []).map((id) => [id, sources.get(id)]);
+    return h('li', { class: `bf-claim${f ? ` flag-${f.severity}` : ''}` },
+      h('p', { class: 'bf-claim-m' },
+        h('span', { class: 'bf-ids' }, c.claim_id),
+        tag ? h('span', { class: `bf-tag t-${tag.toLowerCase()}`, title: TAG_TITLES[tag] }, TAG_WORDS[tag]) : h('span', { class: 'bf-tag none' }, 'Untagged'),
+        h('span', { class: 'bf-when' }, c.as_of ? `as of ${fmtDate(c.as_of)}` : 'date not stated')),
+      h('p', { class: 'bf-claim-t' }, c.text || h('span', { class: 'faint' }, 'No text')),
+      f ? h('p', { class: `bf-flagline ${f.severity === 'high' ? 'serious' : 'material'}` }, h('strong', null, `Desk check (${f.severity === 'high' ? 'serious' : f.severity === 'medium' ? 'material' : 'note'}). `), f.message) : null,
+      h('p', { class: 'bf-cite' }, srcs.length ? srcs.map(([id, s], i) => [i ? h('span', { class: 'bf-dot', 'aria-hidden': 'true' }, '·') : null,
+        s ? (s.url ? h('a', { href: s.url, title: [s.publisher, s.accessed_at ? `accessed ${fmtDate(s.accessed_at)}` : null].filter(Boolean).join(' · ') || null }, s.title || s.url) : h('span', null, s.title || id))
+          : h('span', { class: 'bf-dangling' }, `${id} not in the source list`)]) : h('span', { class: 'bf-tag none' }, 'No source cited')));
+  }));
+}
+
+// Every source, with its publisher, type and the date it was read.
+function sourceList(e) {
+  if (!e.sources.length) return none('This report lists no sources.');
+  return h('ol', { class: 'src-list bf-src' }, e.sources.map(sourceItem));
+}
+
+// The exact records this view and the Overview are drawn from, and the way to
+// the original report.
+function provenanceBlock(ctx, m, pid) {
   const pv = m.provenance;
-  const r = m.report;
-  const flagsWord = e.flags.length ? `${e.flags.length} flag${e.flags.length === 1 ? '' : 's'}${e.checks && e.checks.high ? ` · ${e.checks.high} serious` : ''}` : checksWord(e.checks);
-  const checks = e.checks ? details(`Desk evidence checks · ${flagsWord}`, evidenceChecksBlock(e.checks), { id: 'brief-checks', open: e.level === 'serious' }) : null;
-  const shownSources = e.sources.slice(0, 5);
-  const restSources = e.sources.slice(5);
-  const limits = e.limits.slice(0, 4);
-  const moreLimits = e.limits.slice(4);
-  const limitItem = (x) => h('li', null, h('strong', null, `${x.label}: `), x.text);
   const prov = (k, val, title = null) => h('div', { title }, h('dt', null, k), h('dd', null, val));
   const short = (s, n = 12) => (s && s.length > n + 2 ? `${s.slice(0, n)}…` : s || '—');
-  const others = m.history.filter((x) => !x.current);
-  return sec('evidence', 'Evidence and sources',
-    h('div', { class: 'bf-two tight' },
-      h('div', null,
-        // The tags are the researcher's own classification ([V]: it says it
-        // opened a primary source); the desk does not verify them.
-        h('h3', { class: 'bf-h3', title: TAG_TITLES.V }, `Claims by ${WHO}'s own evidence tags`),
-        evidenceQuality(e.claims),
-        checks),
-      h('div', null,
-        h('h3', { class: 'bf-h3' }, 'Key limitations'),
-        limits.length ? h('ul', { class: 'bf-limits' }, limits.map(limitItem)) : none('The report states no limitation.'),
-        moreLimits.length ? details(`${moreLimits.length} more`, h('ul', { class: 'bf-limits' }, moreLimits.map(limitItem)), { id: 'brief-limits' }) : null,
-        e.questions.length ? details(`Open questions (${e.questions.length})`, h('ul', { class: 'bf-limits' }, e.questions.map((q) => h('li', null, q))), { id: 'brief-questions' }) : null)),
-    h('div', { class: 'bf-block' },
-      h('h3', { class: 'bf-h3' }, `Sources${e.sources.length ? ` (${e.sources.length})` : ''}`),
-      shownSources.length ? h('ol', { class: 'src-list bf-src' }, shownSources.map(sourceItem)) : none('This report lists no sources.'),
-      restSources.length ? details(`All ${e.sources.length} sources`, h('ol', { class: 'src-list bf-src', start: '6' }, restSources.map(sourceItem)), { id: 'brief-sources' }) : null),
-    h('div', { class: 'bf-block bf-records' },
-      h('h3', { class: 'bf-h3' }, 'Drawn from'),
-      h('dl', { class: 'bf-prov' },
-        prov('Report', h('a', { class: 'mono', href: reportHref(pid, pv.report_id), dataset: { key: 'brief-rec-report' } }, pv.report_id)),
-        prov('Research run', pv.run_id ? h('a', { class: 'mono', href: runHref(pid, pv.run_id), dataset: { key: 'brief-rec-run' } }, pv.run_id) : h('span', { class: 'faint' }, 'Not part of a run')),
-        prov('Analysis · saved', `${pv.analysis_at ? fmtDate(pv.analysis_at) : 'not stated'} · ${fmtDateTime(pv.saved_at)}`),
-        prov('Model', `${pv.model || 'not stated'} · ${pv.attested ? 'attested by the API' : /connector/i.test(pv.channel || '') ? 'saved through its connection' : 'self-reported'}`),
-        prov('Prompt · rubric · profile', `${pv.prompt_version || '?'} · ${pv.rubric_version || '?'} · ${pv.sector_profile || '?'}`),
-        prov('Original SHA-256', h('span', { class: 'mono' }, short(pv.sha256, 16)), pv.sha256),
-        prov('Brief', `${pv.format}, drawn from this report when opened`)),
-      h('p', { class: 'bf-links' },
-        h('a', { class: 'btn small', href: reportHref(pid, pv.report_id), dataset: { key: 'brief-open-report' } }, 'Open the full report'),
-        pv.run_id ? h('a', { class: 'btn small', href: runHref(pid, pv.run_id), dataset: { key: 'brief-open-run' } }, 'Research run') : null)),
-    others.length ? details(`${WHO}'s other reports (${others.length})`, h('ul', { class: 'bf-hist' }, others.map((x) => h('li', null,
-      h('span', { class: 'bf-hist-d' }, x.analysis_at ? fmtDate(x.analysis_at) : 'Undated'),
-      h('span', { class: 'bf-hist-g fig' }, x.grade && x.grade.display ? x.grade.display : x.needs_text ? 'PDF' : x.grade && x.grade.status === 'withheld' ? 'Withheld' : 'No grade'),
-      h('span', { class: 'bf-hist-v' }, [x.verdict, x.revision, x.latest ? 'latest' : null, x.excluded ? `excluded: ${x.excluded}` : null].filter(Boolean).join(' · ')),
-      x.eligible ? inBrief(ctx, briefHref(pid, x.report_id), 'Its brief', `brief-hist-${x.report_id}`) : h('a', { href: reportHref(pid, x.report_id), dataset: { key: `brief-hist-r-${x.report_id}` } }, 'The report')))), { id: 'brief-history' }) : null);
+  const cur = m.history.find((x) => x.current) || null;
+  return h('div', { class: 'bf-records' },
+    h('dl', { class: 'bf-prov' },
+      prov('Report', h('span', { class: 'mono' }, pv.report_id)),
+      prov('Research run', pv.run_id ? viewLink(ctx, pid, runHref(pid, pv.run_id), pv.run_id, 'brief-rec-run', 'mono') : h('span', { class: 'faint' }, 'Not part of a run')),
+      prov('Analysis', pv.analysis_at ? `${fmtDate(pv.analysis_at)}` : 'Not stated'),
+      prov('Saved', fmtDateTime(pv.saved_at)),
+      prov('Model', `${pv.model || 'not stated'} · ${pv.attested ? 'attested by the API' : /connector/i.test(pv.channel || '') ? 'saved through its connection' : 'self-reported'}`),
+      prov('Channel', pv.channel || 'Not recorded'),
+      prov('Prompt · rubric · profile', `${pv.prompt_version || '?'} · ${pv.rubric_version || '?'} · ${pv.sector_profile || '?'}`),
+      prov('Where it sits', [cur && cur.revision, m.is_latest ? `${WHO}'s latest` : 'An earlier report'].filter(Boolean).join(' · ')),
+      prov('Original SHA-256', h('span', { class: 'mono' }, short(pv.sha256, 16)), pv.sha256),
+      prov('Drawn', `${pv.format}, from this report each time it is opened`)),
+    h('p', { class: 'bf-links' },
+      viewLink(ctx, pid, reportHref(pid, pv.report_id), 'Open the original report', 'brief-open-report', 'btn small'),
+      pv.run_id ? viewLink(ctx, pid, runHref(pid, pv.run_id), 'Research run', 'brief-open-run', 'btn small') : null));
+}
+
+// The model's reports on this project, this one marked: each one's own view,
+// or the report itself when it carries none (excluded, quarantined, a PDF).
+function historyList(ctx, m, pid) {
+  if (m.history.length < 2) return null;
+  return h('ul', { class: 'bf-hist' }, m.history.map((x) => h('li', { class: x.current ? 'current' : null },
+    h('span', { class: 'bf-hist-d' }, x.analysis_at ? fmtDate(x.analysis_at) : 'Undated'),
+    h('span', { class: 'bf-hist-g fig' }, x.grade && x.grade.display ? x.grade.display : x.needs_text ? 'PDF' : x.grade && x.grade.status === 'withheld' ? 'Withheld' : 'No grade'),
+    h('span', { class: 'bf-hist-v' }, [x.current ? 'This report' : null, x.verdict, x.revision, x.latest ? 'latest' : null, x.excluded ? `excluded: ${x.excluded}` : null].filter(Boolean).join(' · ')),
+    x.current ? h('span', { class: 'faint' }, 'Shown') : x.eligible ? inBrief(ctx, evidenceHref(pid, x.report_id), 'Its evidence', `brief-hist-${x.report_id}`) : viewLink(ctx, pid, reportHref(pid, x.report_id), 'The report', `brief-hist-r-${x.report_id}`))));
+}
+
+// The conclusion the evidence bears on, with its warnings beside it.
+function conclusionLine(m) {
+  const g = m.grade;
+  const grade = g.status === 'firm' || g.status === 'range' ? `Grade ${g.display}${g.word ? ` · ${g.word}` : ''}`
+    : g.status === 'withheld' ? `Grade withheld${typeof g.coverage === 'number' ? ` · ${g.coverage}% of the weight scored` : ''}` : 'No grade';
+  return h('div', { class: 'bf-concl' },
+    h('p', { class: 'bf-concl-t' }, h('strong', null, grade), ' · ', m.verdict.label || 'No verdict given',
+      h('span', { class: 'faint' }, ` · analysis ${m.provenance.analysis_at ? fmtDate(m.provenance.analysis_at) : 'date not stated'}`)),
+    gradeFlags(m));
+}
+
+function evidenceView(ctx, m, pid) {
+  const e = m.evidence;
+  const hist = historyList(ctx, m, pid);
+  const limitItem = (x) => h('li', null, h('strong', null, `${x.label}: `), x.text);
+  const checksHead = e.flags.length ? `${e.flags.length} flag${e.flags.length === 1 ? '' : 's'}${e.checks && e.checks.high ? ` · ${e.checks.high} serious` : ''}` : checksWord(e.checks);
+  const list = (ns, label) => {
+    const items = ns.map((n) => noticeItem(ctx, n, m, pid)).filter(Boolean);
+    return items.length ? h('ul', { class: 'bf-notices', 'aria-label': label }, items) : null;
+  };
+  return [
+    h('section', { class: 'bf-sec bf-verdict', 'aria-label': 'The conclusion this evidence bears on' },
+      conclusionLine(m),
+      list(m.notices, 'Before you rely on this report')),
+    sec('ev-checks', ['Desk evidence checks', h('span', { class: 'bf-h-sub' }, checksHead)],
+      h('div', { dataset: { key: 'brief-ev-checks' }, tabindex: '-1' }, e.checks ? evidenceChecksBlock(e.checks) : none('The evidence checks have not run on this report.'))),
+    sec('ev-claims', [`Claims (${e.total})`, h('span', { class: 'bf-h-sub', title: TAG_TITLES.V }, `${WHO}'s own evidence tags; the desk does not verify them`)],
+      evidenceQuality(e.claims),
+      claimList(m)),
+    sec('ev-sources', `Sources (${e.sources.length})`, sourceList(e)),
+    sec('ev-limits', 'What the report says it could not establish',
+      e.limits.length ? h('ul', { class: 'bf-limits' }, e.limits.map(limitItem)) : none('The report states no limitation.'),
+      e.questions.length ? h('div', { class: 'bf-block' }, h('h3', { class: 'bf-h3' }, `Open questions (${e.questions.length})`), h('ul', { class: 'bf-limits' }, e.questions.map((q) => h('li', null, q)))) : null),
+    sec('ev-records', 'Report provenance', provenanceBlock(ctx, m, pid),
+      hist ? h('div', { class: 'bf-block' }, h('h3', { class: 'bf-h3' }, `${WHO}'s reports on this project`), hist) : null),
+  ];
 }
 
 // ---- your note --------------------------------------------------------------------------------------
@@ -717,14 +841,32 @@ export function bindBriefKeys(ctx) {
   });
 }
 
-// One model's brief as a sheet: its model (provider), its report (reportId,
-// else the latest eligible), drawn from the project record already loaded.
+// One model's brief as a sheet (the Overview): its model (provider), its
+// report (reportId, else the latest eligible), drawn from the project record
+// already loaded.
 export function briefPanel(ctx, { d, row, pid, provider = 'claude', reportId = null }) {
   PROVIDER = PROVIDER_LABELS[provider] ? provider : 'claude';
   WHO = PROVIDER_LABELS[PROVIDER];
+  VIEW = 'overview';
   const m = briefModel({ detail: d, row, index: ctx.state.index, provider: PROVIDER, reportId, hosted: Boolean(ctx.state.session && ctx.state.session.hosted) });
+  const staleDays = (ctx.state.index.settings && ctx.state.index.settings.freshness && ctx.state.index.settings.freshness.research_stale_days) || 90;
+  const title = `${WHO} Brief`;
   const body = m.status !== 'ok'
-    ? [header(ctx, m, row, pid), emptySection(ctx, m, d, row, pid), noteSection(d, row, pid)]
-    : [header(ctx, m, row, pid), verdictSection(ctx, m, pid), thesisSection(m), scorecardSection(m), forAgainstSection(m), watchSection(m), scenariosSection(m), evidenceSection(ctx, m, pid), noteSection(d, row, pid)];
+    ? [sheetHead(m, title), emptySection(ctx, m, d, row, pid), noteSection(d, row, pid)]
+    : [sheetHead(m, title), verdictSection(ctx, m, pid, staleDays), categoriesSection(m), inputsSection(m), thesisSection(m), forAgainstSection(m), watchSection(m), scenariosSection(m), evidenceLinkSection(ctx, m, pid), noteSection(d, row, pid)];
   return { m, sheet: h('article', { class: 'brief card', id: 'brief-sheet', 'aria-labelledby': 'bf-title' }, ...body) };
+}
+
+// The same report's evidence (the Evidence view): its flags, claims, sources
+// with their dates, the limits it states and the records it is drawn from.
+export function evidencePanel(ctx, { d, row, pid, provider = 'claude', reportId = null }) {
+  PROVIDER = PROVIDER_LABELS[provider] ? provider : 'claude';
+  WHO = PROVIDER_LABELS[PROVIDER];
+  VIEW = 'evidence';
+  const m = briefModel({ detail: d, row, index: ctx.state.index, provider: PROVIDER, reportId, hosted: Boolean(ctx.state.session && ctx.state.session.hosted) });
+  const title = `${WHO}'s evidence`;
+  const body = m.status !== 'ok'
+    ? [sheetHead(m, title), emptySection(ctx, m, d, row, pid)]
+    : [sheetHead(m, title), ...evidenceView(ctx, m, pid)];
+  return { m, sheet: h('article', { class: 'brief card bf-evview', id: 'brief-sheet', 'aria-labelledby': 'bf-title' }, ...body) };
 }

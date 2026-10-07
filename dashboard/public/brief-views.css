@@ -1,0 +1,279 @@
+/* The project brief's three views (Eric, 2026-10-07): Overview (views/brief.js
+   briefPanel), Compare (views/brief-compare.js) and Evidence (brief.js
+   evidencePanel), with the project page's compact header and review line
+   around them (views/project.js). The desk's tokens only (styles.css :root),
+   light and dark alike; brief.css keeps the sheet's own parts. On a phone the
+   first screen holds who the project is, the market with its own time, the
+   model's grade or why it is withheld, its verdict and research age, and the
+   strongest sourced risk. */
+
+/* ---- the project's header: name, ticker, the market now --------------------- */
+.pb-head { align-items: flex-start; margin-bottom: var(--s4); }
+.pb-head-id { min-width: 0; flex: 1 1 420px; }
+.pb-head-name { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.pb-head-name .logo { flex: none; }
+.pb-head h1 { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.pb-ticker { color: var(--text-3); font-weight: 500; }
+.pb-mk { margin: 10px 0 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 20px; font-size: var(--fs-body); color: var(--text); }
+.pb-mk-f { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.pb-mk .k { font-size: var(--fs-caption); font-weight: 500; color: var(--text-3); }
+.pb-mk .v { font-weight: 600; font-variant-numeric: tabular-nums lining-nums; }
+.pb-mk .v.price { font-size: 15px; }
+.pb-mk .chg { font-weight: 500; font-variant-numeric: tabular-nums lining-nums; }
+.pb-mk .chg.up { color: var(--pos-text); }
+.pb-mk .chg.down { color: var(--neg); }
+.pb-mk-when { font-size: var(--fs-caption); color: var(--text-3); white-space: nowrap; }
+.pb-mk-when.stale { color: var(--warn); font-weight: 600; }
+.pb-mk.none { margin-top: 6px; }
+.pb-head .meta-line { font-size: var(--fs-small); }
+
+/* ---- since your last review: one line until opened -------------------------------- */
+.pb-digest { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin: 0 0 var(--s3); padding: 4px 6px 4px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); }
+.pb-digest-d { flex: 1 1 260px; min-width: 0; margin: 0; font-size: var(--fs-body); }
+.pb-digest-d > summary { display: flex; align-items: center; gap: 8px; min-height: 36px; cursor: pointer; list-style: none; }
+.pb-digest-d > summary::-webkit-details-marker { display: none; }
+.pb-digest-d > summary::before { content: ""; flex: none; width: 12px; height: 12px; background: var(--text-3); -webkit-mask: var(--i-chevron) center / contain no-repeat; mask: var(--i-chevron) center / contain no-repeat; transform: rotate(-90deg); transition: transform var(--dur) var(--ease); }
+.pb-digest-d[open] > summary::before { transform: none; }
+.pb-digest-d.none { display: flex; align-items: center; min-height: 36px; color: var(--text-2); }
+.pb-digest-t { min-width: 0; }
+.pb-digest-w { color: var(--text-2); }
+.pb-digest-d .list { margin: 2px 0 8px 20px; }
+.pb-digest-all { list-style: none; margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.pb-digest > button { flex: none; }
+/* Mark reviewed sits in the line on a wide screen, under the list on a phone. */
+.pb-digest-all button { display: none; }
+/* A tab's verdict reads under its pill (brief.css); the tabs follow at once. */
+.pb-view .pb-mtabs { margin-bottom: var(--s3); }
+
+/* ---- the sheet's head band: whose view, which report ----------------------------- */
+.brief .bf-head { padding-bottom: var(--s4); }
+.brief .bf-head > .bf-id { align-items: center; flex-wrap: wrap; gap: 4px 16px; }
+.brief .bf-head h2.bf-eyebrow { flex: none; }
+.bf-id-r { margin: 0 0 0 auto; font-size: var(--fs-small); color: var(--text-3); text-align: right; }
+.brief .bf-head + .bf-sec { border-top: 0; padding-top: 0; }
+
+/* ---- the verdict: grade, verdict, research age, the warnings on the grade ------------- */
+.bf-vwho { margin: 0 0 2px; font-size: var(--fs-caption); font-weight: 600; color: var(--text-3); }
+.bf-vfacts { margin: 12px 0 0; display: flex; flex-wrap: wrap; gap: 8px 28px; }
+.bf-vfacts > div { min-width: 0; }
+.bf-vfacts dt { font-size: var(--fs-caption); font-weight: 600; color: var(--text-3); }
+.bf-vfacts dd { margin: 2px 0 0; font-size: var(--fs-body); font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums lining-nums; }
+.bf-stale { color: var(--warn); font-weight: 600; }
+.bf-hz-short { display: none; }
+.bf-gflags { list-style: none; margin: var(--s4) 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.bf-gflag { position: relative; display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 11px 3px 9px; border-radius: var(--r-pill); border: 1px solid var(--border); background: var(--surface-sunken); color: var(--text); font: inherit; font-size: var(--fs-small); font-weight: 600; line-height: 1.3; text-align: left; cursor: pointer; box-shadow: none; }
+.bf-gflag svg { width: 14px; height: 14px; flex: none; color: var(--text-3); }
+.bf-gflags .tone-warn .bf-gflag { border-color: var(--pill-warn-line); background: var(--pill-warn-bg); color: var(--pill-warn-ink); }
+.bf-gflags .tone-warn .bf-gflag svg { color: var(--warn-strong); }
+.bf-gflags .ev-serious .bf-gflag { border-style: dashed; border-color: var(--warn-strong); }
+.bf-gflag:hover { border-color: var(--control-border); }
+.bf-why { margin-top: var(--s5); }
+.bf-why .bf-h3 { margin-bottom: 4px; }
+.brief .bf-verdict .bf-views { margin-top: var(--s3); }
+/* A notice reached from its flag shows where focus landed. */
+.bf-notice:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- the category grades, then the grade's six inputs in a well of their own -------------- */
+.bf-categories .bf-h, .bf-inputs .bf-h { margin-bottom: var(--s3); }
+.bf-inputs-well { padding: 4px 16px 10px; border-radius: var(--r-well); background: var(--surface-sunken); }
+.bf-inputs-well .bf-comps .bf-comp:first-child { border-top: 0; }
+.bf-inputs-well .bf-comps .bf-comp:last-child { border-bottom: 0; }
+.bf-inputs-well .disclosure { margin-top: 6px; }
+.bf-inputs-well .bf-comp > details > summary:hover { background: color-mix(in srgb, var(--surface) 60%, transparent); }
+
+/* ---- the Overview's way to the evidence ----------------------------------------------------- */
+.bf-evlink { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; }
+.bf-evlink .bf-h { margin-bottom: 2px; }
+.bf-evlink-t { margin: 0; font-size: var(--fs-body); color: var(--text-2); }
+
+/* ---- the Evidence view ------------------------------------------------------------------------ */
+.bf-concl-t { margin: 0; font-size: 15px; line-height: 1.5; color: var(--text); }
+.bf-concl .bf-gflags { margin-top: var(--s3); }
+.bf-evview .bf-verdict .bf-notices { margin-top: var(--s4); }
+.bf-claims { list-style: none; margin: var(--s4) 0 0; padding: 0; }
+.bf-claim { padding: 10px 0; border-top: 1px solid var(--separator); min-width: 0; }
+.bf-claims .bf-claim:last-child { border-bottom: 1px solid var(--separator); }
+.bf-claim-m { margin: 0 0 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.bf-claim-t { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--text); max-width: 80ch; }
+.bf-claim .bf-flagline { margin: 6px 0 0; font-size: var(--fs-small); }
+.bf-evview .src-list li { margin: 4px 0; }
+.bf-evview [data-key="brief-ev-checks"]:focus { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: var(--r-sm); }
+.bf-hist li.current .bf-hist-v { color: var(--text); font-weight: 600; }
+.bf-evview .bf-records + .bf-block { margin-top: var(--s5); }
+/* Each report's own link at the row's end is a target of its own. */
+.bf-hist li > a { display: inline-block; padding-block: 4px; }
+
+/* ---- the Compare view --------------------------------------------------------------------------- */
+.cmp-pickers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin: 0 0 var(--s4); }
+.cmp-pick { display: grid; gap: 4px; min-width: 0; }
+.cmp-pick .lbl { font-size: var(--fs-caption); font-weight: 600; color: var(--text-3); }
+.cmp-pick select { width: 100%; min-width: 0; }
+.cmp-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
+.cmp-side { padding: 14px 16px; border-radius: var(--r-well); background: var(--surface-sunken); min-width: 0; }
+.cmp-side.is-empty { background: transparent; border: 1px dashed var(--control-border); }
+.cmp-who { margin: 0 0 4px; font-size: var(--fs-body); font-weight: 600; color: var(--text); }
+.cmp-grade-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+.cmp-grade { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.15; color: var(--text); font-variant-numeric: tabular-nums lining-nums; cursor: help; }
+.cmp-grade.tier-1 { color: var(--t1-ink); }
+.cmp-grade.tier-2 { color: var(--t2-ink); }
+.cmp-grade.tier-4 { color: var(--t4-ink); }
+.cmp-grade.tier-5 { color: var(--t5-ink); }
+.cmp-grade.g-withheld, .cmp-grade.g-none, .cmp-grade.g-invalid_weights { font-size: 18px; letter-spacing: 0; color: var(--text-2); }
+.cmp-grade-k { font-size: var(--fs-caption); color: var(--text-3); }
+.cmp-verdict { margin: 6px 0 0; font-size: var(--fs-body); font-weight: 500; }
+.cmp-meta { margin: 6px 0 0; font-size: var(--fs-small); color: var(--text-3); }
+.cmp-flag { margin: 8px 0 0; display: flex; align-items: center; gap: 6px; font-size: var(--fs-small); font-weight: 600; color: var(--pill-warn-ink); }
+.cmp-flag svg { width: 14px; height: 14px; flex: none; color: var(--warn-strong); }
+.cmp-none { margin: 0; font-size: var(--fs-body); line-height: 1.5; color: var(--text-2); }
+.cmp-none.pad { margin-top: var(--s5); }
+.bf-cmpview .cmp-sides + .bf-sec { margin-top: var(--s5); }
+.cmp-state { display: grid; gap: var(--s3); }
+.cmp-status { margin: 0; padding: 10px 14px; border-radius: var(--r-well); background: var(--surface-sunken); border: 1px solid transparent; font-size: var(--fs-body); }
+.cmp-status.warn { background: var(--pill-warn-bg); border-color: var(--pill-warn-line); }
+.cmp-status .head { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--text); }
+.cmp-status .head svg { width: 15px; height: 15px; flex: none; color: var(--warn-strong); }
+.cmp-status p:not(.head) { margin: 4px 0 0; color: var(--text-2); line-height: 1.5; }
+.cmp-facts { margin: 0; }
+.cmp-facts > div { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 2px 14px; padding: 5px 0; border-top: 1px solid var(--separator); font-size: var(--fs-body); }
+.cmp-facts > div:last-child { border-bottom: 1px solid var(--separator); }
+.cmp-facts dt { font-size: var(--fs-caption); font-weight: 600; color: var(--text-3); padding-top: 1px; }
+.cmp-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.cmp-facts .differs dd, .cmp-facts .missing dd { color: var(--pill-warn-ink); font-weight: 500; }
+.cmp-scope .disclosure { margin-top: 8px; }
+.cmp-ver { margin: 8px 0 0; font-size: var(--fs-small); color: var(--text-2); line-height: 1.5; }
+.cmp-listhead { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; margin-bottom: var(--s3); }
+.cmp-listhead .bf-h { margin: 0; }
+.cmp-group + .cmp-group { margin-top: var(--s5); }
+.cmp-group > .bf-h3 { margin-bottom: 4px; }
+.cmp-rows { list-style: none; margin: 0; padding: 0; }
+.cmp-row { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(0, 1.7fr); gap: 6px 24px; align-items: start; padding: 10px 0; border-top: 1px solid var(--separator); }
+.cmp-rows .cmp-row:last-child { border-bottom: 1px solid var(--separator); }
+.cmp-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: var(--fs-body); font-weight: 600; color: var(--text); }
+.cmp-name .alt { font-size: var(--fs-caption); font-weight: 400; color: var(--text-3); }
+.cmp-label { align-self: flex-start; font-size: var(--fs-small); font-weight: 500; color: var(--text-2); cursor: help; }
+.cmp-row.g-notable .cmp-label { color: var(--text); font-weight: 600; }
+.cmp-row.g-missing .cmp-label { color: var(--pill-warn-ink); }
+.cmp-pair { display: grid; gap: 5px; min-width: 0; }
+.cmp-line { display: grid; grid-template-columns: 84px minmax(48px, 1fr) minmax(56px, max-content) 12px; align-items: center; gap: 10px; font-size: var(--fs-body); min-width: 0; }
+.cmp-line .model { font-size: var(--fs-small); font-weight: 500; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cmp-bar .cbar { height: 6px; }
+.cbar.cmp-na { background: transparent; border: 1px solid var(--separator); }
+.cmp-val { text-align: right; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums lining-nums; color: var(--text); }
+.cmp-val.none { font-weight: 400; color: var(--text-3); }
+.cmp-conf { font-size: var(--fs-caption); font-weight: 600; color: var(--text-3); text-align: center; }
+.cmp-more { grid-column: 1 / -1; min-width: 0; }
+.cmp-more > summary { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; font-size: var(--fs-small); font-weight: 600; color: var(--text-2); cursor: pointer; list-style: none; }
+.cmp-more > summary::-webkit-details-marker { display: none; }
+.cmp-more > summary::before { content: ""; width: 12px; height: 12px; flex: none; background: currentColor; -webkit-mask: var(--i-chevron) center / contain no-repeat; mask: var(--i-chevron) center / contain no-repeat; transform: rotate(-90deg); transition: transform var(--dur) var(--ease); }
+.cmp-more[open] > summary::before { transform: none; }
+.cmp-more > summary:hover { color: var(--text); }
+.cmp-q { font-weight: 500; color: var(--pill-warn-ink); }
+.cmp-basis { margin: 6px 0 4px; padding: 12px 16px; border-radius: var(--r-well); background: var(--surface-sunken); }
+.cmp-unexplained { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 12px; font-size: var(--fs-body); font-weight: 500; line-height: 1.5; color: var(--text); }
+.cmp-unexplained svg { width: 15px; height: 15px; flex: none; margin-top: 2px; color: var(--warn-strong); }
+.cmp-words-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 28px; }
+.cmp-words-pair.one { grid-template-columns: minmax(0, 1fr); }
+.cmp-words { min-width: 0; }
+.cmp-words h4 { margin: 0 0 6px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: var(--fs-body); font-weight: 600; color: var(--text); }
+.cmp-wv { font-size: var(--fs-small); font-weight: 500; color: var(--text-2); }
+.cmp-words dl { margin: 0; display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); gap: 5px 10px; font-size: var(--fs-body); line-height: 1.5; }
+.cmp-words dt { font-size: var(--fs-caption); font-weight: 600; color: var(--text-3); padding-top: 2px; }
+.cmp-words dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+.cmp-cited { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.cmp-cited li { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 6px; min-width: 0; }
+.cmp-ctext { flex-basis: 100%; }
+.cmp-csrc { font-size: var(--fs-small); }
+.cmp-csrc a { color: var(--text-2); }
+.cmp-words .bf-flagline { margin: 8px 0 0; font-size: var(--fs-small); }
+.cmp-shared, .cmp-figs { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--separator); font-size: var(--fs-body); color: var(--text-2); line-height: 1.5; }
+.cmp-shared a { color: var(--text-2); }
+.cmp-figs-h { margin: 0; font-size: var(--fs-caption); font-weight: 600; color: var(--text-3); }
+.cmp-figs ul { margin: 4px 0 0; padding-left: 18px; }
+.cmp-fig-k { color: var(--text-3); }
+.cmp-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--fs-body); }
+.cmp-table th, .cmp-table td { padding: 7px 12px 7px 0; border-top: 1px solid var(--separator); text-align: left; vertical-align: top; font-weight: 400; overflow-wrap: anywhere; }
+.cmp-table thead th { border-top: 0; font-size: var(--fs-caption); font-weight: 600; color: var(--text-3); }
+.cmp-table tbody tr:last-child > * { border-bottom: 1px solid var(--separator); }
+.cmp-table th[scope="row"] { width: 38%; color: var(--text); font-weight: 500; }
+.cmp-table .n { width: 13%; text-align: right; font-variant-numeric: tabular-nums lining-nums; font-weight: 600; }
+.cmp-table thead .n { font-weight: 600; }
+.cmp-table td.cmp-res { padding-left: 16px; color: var(--text-2); cursor: help; }
+.cmp-table tr.notable .cmp-res { color: var(--text); font-weight: 600; }
+.cmp-note { margin: var(--s4) 0 0; font-size: var(--fs-small); color: var(--text-3); }
+
+/* ---- touch and narrow screens -------------------------------------------------------------- */
+@media (pointer: coarse) {
+  /* Small chips and summaries keep their look but take a finger. */
+  .bf-gflag::after, .cmp-more > summary::after { content: ""; position: absolute; inset: -8px -2px; }
+  .cmp-more > summary { position: relative; min-height: 36px; }
+  .bf-hist li > a { padding-block: 12px; margin-block: -8px; }
+  .pb-digest-d > summary { min-height: var(--touch); }
+}
+@media (max-width: 860px) {
+  /* Opened from the inspector, the brief's bar leads (brief.css): the trail repeats it. */
+  body:has(.bf-bar) .project-page > .crumbs { display: none; }
+}
+@media (max-width: 760px) {
+  .pb-head { gap: var(--s3); margin-bottom: var(--s3); }
+  .pb-head h1 { font-size: 20px; line-height: 1.2; }
+  .pb-mk { gap: 2px 14px; margin-top: 8px; }
+  .pb-mk-when { flex-basis: 100%; }
+  .pb-head .meta-line { margin-top: 6px !important; }
+  .pb-head .actions { width: 100%; }
+  /* The brief's views on a phone: the header names the project, so the
+     trail does not repeat it; the review line keeps one row. */
+  .project-page.pb-view > .crumbs { display: none; }
+  .project-page.pb-view > .tabs { margin-bottom: var(--s3); }
+  .pb-digest { padding-left: 12px; }
+  .pb-digest > button { display: none; }
+  .pb-digest-all button { display: inline-flex; }
+  .pb-digest-d > summary { line-height: 1.35; padding: 4px 0; }
+  .bf-id-saved { display: none; }
+  /* The grade and the verdict side by side, the gauge smaller; a withheld
+     grade keeps the width it needs for its words. */
+  .brief .bf-vgrid { grid-template-columns: 124px minmax(0, 1fr); gap: 4px 14px; align-items: center; justify-items: stretch; }
+  .brief .bf-vgrid:has(.bf-grade.withheld) { grid-template-columns: 136px minmax(0, 1fr); align-items: start; }
+  .brief .bf-grade.withheld { padding: 10px 11px; }
+  .brief .bf-grade.withheld .bf-wh { font-size: 15px; line-height: 1.25; }
+  .brief .bf-grade.withheld .bf-gcap { display: none; }
+  .brief .bf-grade { justify-self: stretch; }
+  .brief .bf-grade .ggauge { width: 124px; }
+  .brief .bf-grade .bf-gcap { margin-top: 0; }
+  .brief .bf-vlabel { font-size: 17px; margin-bottom: 0; }
+  .bf-vfacts { margin-top: 8px; gap: 4px 16px; flex-direction: column; }
+  .bf-vfacts > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; }
+  .bf-vfacts dd { margin: 0; }
+  .bf-vfacts dd:has(.bf-hz-short) .bf-hz-full { display: none; }
+  .bf-hz-short { display: inline; }
+  .bf-gflags { margin-top: var(--s3); }
+  .bf-keys { margin-top: var(--s4); }
+  .bf-inputs-well { padding: 2px 12px 8px; }
+  /* The two reports stay side by side, each in a narrow column. */
+  .cmp-pickers, .cmp-sides { gap: 8px; }
+  .cmp-pick select { padding-left: 8px; padding-right: 22px; text-overflow: ellipsis; }
+  .cmp-side { padding: 10px 12px; }
+  .cmp-grade { font-size: 24px; }
+  .cmp-grade.g-withheld, .cmp-grade.g-none, .cmp-grade.g-invalid_weights { font-size: 16px; }
+  .cmp-grade-k { flex-basis: 100%; }
+  .cmp-verdict { margin-top: 4px; line-height: 1.35; }
+  .cmp-meta { line-height: 1.4; }
+  .cmp-meta .bf-dot { display: block; height: 0; overflow: hidden; }
+  .cmp-words-pair { grid-template-columns: minmax(0, 1fr); }
+  .cmp-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .cmp-name { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+  .cmp-line { grid-template-columns: 64px minmax(40px, 1fr) minmax(54px, max-content) 12px; gap: 8px; }
+  .cmp-basis { padding: 10px 12px; }
+  .cmp-words dl { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .cmp-words dd { margin-bottom: 6px; }
+  .cmp-facts > div { grid-template-columns: minmax(0, 1fr); }
+  .cmp-table { font-size: var(--fs-small); }
+  .cmp-table th[scope="row"] { width: 36%; }
+  .cmp-table .n { width: 16%; }
+  .cmp-table td.cmp-res { padding-left: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pb-digest-d > summary::before, .cmp-more > summary::before { transition: none; }
+}
+@media print {
+  .pb-digest, .cmp-pickers { display: none !important; }
+}

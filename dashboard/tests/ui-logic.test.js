@@ -810,7 +810,8 @@ test('market figures: a missing or zero market cap, FDV or volume is unknown ("â
   const src = (f) => fs.readFileSync(path.join(__dirname, '..', 'public', f), 'utf8');
   assert.doesNotMatch(src('views/watchlist.js'), /typeof m\.(market_cap_usd|fdv_usd|volume_24h_usd) === 'number'/);
   assert.doesNotMatch(src('views/project.js'), /fmtCompactUsd\(m\.(fdv_usd|volume_24h_usd)\)\]/);
-  assert.match(src('views/brief.js'), /unknownFigure\('Market cap', mk\.mcap_usd\)/);
+  // The market now is the project page's header (2026-10-07), from the same rule.
+  assert.match(src('views/project.js'), /unknownFigure\('Market cap', mk\.mcap_usd\)/);
 });
 
 test('a model on hold: its brief offers no run and reads On hold; the routes table says On hold; saved pills are untouched', async () => {
@@ -848,7 +849,7 @@ test('a model on hold: its brief offers no run and reads On hold; the routes tab
   assert.equal(wl.holdCell(index, 'gemini', { grade: { status: 'firm', value: 67, display: '67.0' } }).dash, false);
 });
 
-test('one page per project (D1): every former project tab and the Brief page redirect to the new home', async () => {
+test('one page per project (D1): every former project tab and the Brief page redirect to the new home; the Brief\'s former folds land on Compare and Evidence (2026-10-07)', async () => {
   const project = await import(pathToFileURL(path.join(tmp, 'views', 'project.js')).href);
   const go = (name, args, qs = '') => project.projectRedirect(name, args, new URLSearchParams(qs));
   const P = 'p1';
@@ -856,13 +857,19 @@ test('one page per project (D1): every former project tab and the Brief page red
   assert.equal(go('project', [P, 'overview']), '#/project/p1/brief');
   assert.equal(go('project', [P, 'scorecards'], 'provider=chatgpt'), '#/project/p1/brief?model=chatgpt&open=scorecard');
   assert.equal(go('project', [P, 'reports'], 'report=r1'), '#/project/p1/report?report=r1');
-  assert.equal(go('project', [P, 'comparison']), '#/project/p1/brief?open=compare');
-  assert.equal(go('project', [P, 'evidence']), '#/project/p1/brief?open=evidence');
-  assert.equal(go('project', [P, 'research'], 'run=run1'), '#/project/p1/brief?open=runs&run=run1');
+  assert.equal(go('project', [P, 'comparison']), '#/project/p1/compare');
+  assert.equal(go('project', [P, 'research'], 'run=run1'), '#/project/p1/evidence?open=runs&run=run1');
+  // The Brief's former folds, by their old addresses.
+  assert.equal(go('project', [P, 'brief'], 'open=compare'), '#/project/p1/compare');
+  assert.equal(go('project', [P, 'brief'], 'model=chatgpt&open=evidence'), '#/project/p1/evidence?model=chatgpt&open=claims');
+  assert.equal(go('project', [P, 'brief'], 'open=runs&run=run1'), '#/project/p1/evidence?open=runs&run=run1');
+  assert.equal(go('project', [P, 'brief'], 'run=run1'), '#/project/p1/evidence?open=runs&run=run1');
+  assert.equal(go('project', [P, 'brief'], 'open=identity'), '#/project/p1/evidence?open=identity');
+  assert.equal(go('project', [P, 'brief'], 'model=chatgpt&open=scorecard'), null, 'the scorecard stays on the Overview');
   assert.equal(go('project', [P, 'history']), '#/project/p1/notes');
   assert.equal(go('brief', [P]), '#/project/p1/brief?model=claude');
   assert.equal(go('brief', [P], 'report=r2'), '#/project/p1/brief?model=claude&report=r2');
   // The new tabs stay where they are.
-  for (const t of ['brief', 'report', 'market', 'notes']) assert.equal(go('project', [P, t]), null);
+  for (const t of ['brief', 'compare', 'evidence', 'report', 'market', 'notes']) assert.equal(go('project', [P, t]), null);
   assert.equal(go('project', [P, 'nonsense']), '#/project/p1/brief');
 });

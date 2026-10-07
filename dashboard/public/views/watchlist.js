@@ -914,7 +914,7 @@ function modelHead(ctx, p, prov) {
   // assistant first; pasting by hand stays available. A model on hold gets
   // no prompt to act: its job is kept, not handed out.
   if (job && job.state === 'unconfigured' && !opts.onHold && !resume) actions.push(...waitingActions(ctx, { pid, runId: job.run_id, provider: prov, key: `${pid}-${prov}` }));
-  if (job && ['interrupted', 'uncertain', 'incomplete', 'conflict', 'held'].includes(info.job || info.kind)) actions.push(h('a', { class: 'btn small', href: `#/project/${encodeURIComponent(pid)}/brief?open=runs`, dataset: { key: `runs-${pid}-${prov}` } }, 'Research runs'));
+  if (job && ['interrupted', 'uncertain', 'incomplete', 'conflict', 'held'].includes(info.job || info.kind)) actions.push(h('a', { class: 'btn small', href: `#/project/${encodeURIComponent(pid)}/evidence?open=runs`, dataset: { key: `runs-${pid}-${prov}` } }, 'Research runs'));
   if (!rep && !job && p.status !== 'archived' && !opts.onHold) actions.push(button(`Run ${who} research`, () => openResearchDialog(ctx, p, { providers: [prov] }), { kind: 'small', key: `run-${pid}-${prov}` }));
   // The report's verdict, analysis date and horizon, in one quiet line. The
   // age is in calendar days in New York ("yesterday", not "today").
@@ -1042,7 +1042,7 @@ function comparisonNote(ctx, p) {
       ? h('p', { style: { margin: '6px 0 0' } }, h('strong', null, `They differ by ${ctx.state.index.settings.comparison.spread_threshold}+ points on ${flagged.length} item(s): `), flagged.slice(0, 4).map((f) => `${f.label} (${f.spread})`).join(', '), flagged.length > 4 ? `, and ${flagged.length - 4} more.` : '.')
       : h('p', { style: { margin: '6px 0 0' } }, 'No item differs by the highlight threshold or more.'),
     h('p', { class: 'muted', style: { margin: '6px 0 0' } }, 'Agreement between models is not independent confirmation: they often read the same sources.'),
-    h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/brief?open=compare`, dataset: { key: `compare-${p.project_id}` } }, 'Compare in detail'));
+    h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/compare`, dataset: { key: `compare-${p.project_id}` } }, 'Compare in detail'));
 }
 
 // A few quiet lines where content will be; the words are for screen readers.
@@ -1131,7 +1131,7 @@ function problemLines(ctx, p) {
   }
   const others = alertStrips(splitAttention(projectItems(ctx, p)).critical, `palert-${p.project_id}`);
   const idNote = p.identity_status !== 'verified'
-    ? h('p', { class: 'small insp-idnote' }, h('strong', null, 'Identity pending: '), (p.identity_unknowns || []).join(' ') || 'The token is not confirmed, so no prices or holdings use it.', ' ', h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/brief?open=identity`, dataset: { key: `fix-identity-${p.project_id}` } }, 'Complete the identity'))
+    ? h('p', { class: 'small insp-idnote' }, h('strong', null, 'Identity pending: '), (p.identity_unknowns || []).join(' ') || 'The token is not confirmed, so no prices or holdings use it.', ' ', h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/evidence?open=identity`, dataset: { key: `fix-identity-${p.project_id}` } }, 'Complete the identity'))
     : null;
   if (!items.length && !others && !idNote) return null;
   return h('div', { class: 'insp-problems' }, items.length ? h('ul', { class: 'plines', 'aria-label': 'Research that needs you' }, items) : null, others, idNote);

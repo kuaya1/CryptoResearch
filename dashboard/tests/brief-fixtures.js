@@ -211,6 +211,63 @@ function reportText({ project, symbol, profile, run = null, analysisAt, horizon,
   return body;
 }
 
+// ChatGPT's FICTIONAL report on the relay network, for the same run as
+// Claude's: its own verdict, sources and claims (two sources shared with
+// Claude's, one paid-jobs figure that differs), and category grades that
+// differ in ways the comparison must keep apart: a gap each side explains,
+// a range against a point, a grade with no reason and no evidence, a category
+// only one side could grade, and grades that match.
+function chatgptEdit(j) {
+  const at = j.analysis_at;
+  j.provider = 'chatgpt';
+  j.model_self_identification = 'FICTIONAL test fixture labeled as ChatGPT';
+  j.verdict = 'REAL PRODUCT, WEAK TOKEN';
+  j.summary = 'Fictional: the relay network works and is paid for, but the token is an option on a fee switch that operators openly resist; today it earns nothing and an unlock lands inside the horizon.';
+  j.sources = [
+    { source_id: 'S1', url: 'https://docs.relay.example/fees', title: 'Fees and settlement (FICTIONAL docs)', publisher: 'relay.example', source_type: 'official', accessed_at: at },
+    { source_id: 'S2', url: 'https://dashboard.relay.example/jobs', title: 'Relay jobs dashboard (FICTIONAL)', publisher: 'relay.example', source_type: 'official', accessed_at: at },
+    { source_id: 'S3', url: 'https://blog.relay.example/fee-switch', title: 'Fee switch proposal (FICTIONAL)', publisher: 'relay.example', source_type: 'official', accessed_at: at },
+    { source_id: 'S4', url: 'https://docs.relay.example/token', title: 'Token and unlocks (FICTIONAL)', publisher: 'relay.example', source_type: 'official', accessed_at: at },
+    { source_id: 'S5', url: 'https://forum.relay.example/t/operators-fee-share', title: 'Operators on the fee share (FICTIONAL forum thread)', publisher: 'forum.relay.example', source_type: 'community', accessed_at: at },
+  ];
+  j.claims = [
+    { claim_id: 'C1', text: 'Fictional: mainnet settles paid relay jobs and charges a fee per job.', evidence_tag: 'V', source_ids: ['S1'], as_of: at },
+    { claim_id: 'C2', text: 'Fictional: 1.2M paid jobs in the last 30 days on the project dashboard.', evidence_tag: 'C', source_ids: ['S2'], metric_id: 'paid_jobs', value: 1200000, unit: 'jobs', period: '30 days', as_of: at },
+    { claim_id: 'C3', text: 'Fictional: two enterprise integrators are in production.', evidence_tag: 'C', source_ids: ['S3'], as_of: at },
+    { claim_id: 'C4', text: 'Fictional: an investor unlock of 6% of supply falls inside the horizon.', evidence_tag: 'V', source_ids: ['S4'], as_of: at, critical_kind: 'supply_change', excerpt: 'Fictional unlock table.' },
+    { claim_id: 'C5', text: 'Fictional: the fee contract pays operators only; holders receive nothing.', evidence_tag: 'V', source_ids: ['S1'], as_of: at },
+    { claim_id: 'C8', text: 'Fictional: operators in the governance forum oppose a 20% fee share.', evidence_tag: 'C', source_ids: ['S5'], as_of: at },
+  ];
+  const d = j.diagnostic_scores;
+  d.token_value_capture = cat(30, 'medium', 'token value capture', { rationale: 'Fictional: operators keep every fee today and the forum shows them opposing the switch; a token with no cash flow and a contested path to one grades low.', evidence_refs: ['C5', 'C8'], strongest_evidence: 'Fictional: the fee contract pays operators only.', main_weakness: 'Fictional: one forum thread is a small sample of operators.' });
+  d.organic_demand = cat(66, 'medium', 'organic demand', { rationale: 'Fictional: 1.2M paid jobs in 30 days with no incentive campaign running.', evidence_refs: ['C2'], main_weakness: 'Fictional: the dashboard is the project\'s own.' });
+  d.valuation_supply_attractiveness = cat(38, 'medium', 'valuation and supply', { rationale: 'Fictional: on the token docs\' circulating supply the valuation is rich for a token with no cash flow, and the unlock adds 6%.', evidence_refs: ['C4'] });
+  d.volume_liquidity = cat(48, 'low', 'volume and liquidity', { rationale: 'Fictional: aggregate volume is steady across two venues.', evidence_refs: [], strongest_evidence: null });
+  d.cycle_timing = { status: 'scored', value: 50, low: null, high: null, confidence: 'low', rationale: '', evidence_refs: [], missing_data: null, strongest_evidence: null, main_weakness: null, would_raise: null, would_lower: null };
+  d.chart_structure = cat(60, 'medium', 'chart structure');
+  d.btc_relative_opportunity = range(40, 50, 'Fictional: depends on the vote; either way the token lags BTC until it passes.', { confidence: 'low', evidence_refs: ['C3'] });
+  d.code_quality = unknown('Fictional: no implementation file was read at a named commit.', { confidence: null });
+  const c = j.investment_components;
+  c.token_value_capture = score(40, 'Fictional: no fee reaches holders today; the switch is contested.', { evidence_refs: ['C5', 'C8'] });
+  c.valuation_supply = score(50, 'Fictional: rich on current fees, with an unlock inside the horizon.', { evidence_refs: ['C4'] });
+  c.btc_relative_asymmetry = score(52, 'Fictional: the upside needs a vote the operators resist.', { evidence_refs: ['C8'] });
+  j.model_reported_overall_score = unknown('Fictional: no total of its own.');
+  j.bullish_facts = [
+    { text: 'Fictional: paid demand is real and grows without incentives.', claim_ids: ['C1', 'C2'] },
+    { text: 'Fictional: two integrators route production traffic through the network.', claim_ids: ['C3'] },
+  ];
+  j.bearish_facts = [
+    { text: 'Fictional: operators oppose a 20% fee share, so the switch may not pass.', claim_ids: ['C8'] },
+    { text: 'Fictional: the token captures none of the fees today.', claim_ids: ['C5'] },
+    { text: 'Fictional: a 6% investor unlock lands inside the horizon.', claim_ids: ['C4'] },
+  ];
+  j.conviction_increases = [{ text: 'Fictional: a delegate count shows a majority for the fee switch before the vote.', claim_ids: ['C8'] }];
+  j.invalidators = [{ text: 'Fictional: operators fork the relay client to keep every fee.', claim_ids: ['C8'] }];
+  j.economics.network_usage = { status: 'reported', value: 1200000, unit: 'jobs', period: '30 days', definition: 'Paid relay jobs', as_of: at, evidence_tag: 'C', claim_ids: ['C2'], note: null };
+  j.final_take = 'Fictional: a good network with a token that earns nothing. The fee switch is the whole case, and the operators who would pay for it are against it. Wait for the vote.';
+  j.unresolved_questions = ['Fictional: how many operators would leave over a 20% fee share?'];
+}
+
 // Prices and market caps the index reads (market data is off in tests; these
 // are FICTIONAL observations, labeled as demo data).
 function writeMarket(ws, ids, now = Date.now()) {
@@ -242,7 +299,6 @@ function build(t) {
   const research = require('../core/research');
   const inbox = require('../core/inbox');
   const notes = require('../core/notes');
-  const { mockReport } = require('../core/demo');
   const pids = {};
   const add = (key, name, symbol, profile, extra = {}) => {
     const res = projects.addProject(ws, {
@@ -257,11 +313,12 @@ function build(t) {
     pids[key] = res.project_id;
     return { project_id: res.project_id, name };
   };
-  const importClaude = (pid, text, opts = {}) => {
-    const out = inbox.importContent(ws, 'claude', { content: text, projectId: pid, ...opts });
+  const importAs = (provider, pid, text, opts = {}) => {
+    const out = inbox.importContent(ws, provider, { content: text, projectId: pid, ...opts });
     if (out.result.status !== 'ingested') throw new Error(`fixture import failed: ${out.result.message}`);
     return out.result;
   };
+  const importClaude = (pid, text, opts = {}) => importAs('claude', pid, text, opts);
   const runFor = (pid, providers = ['claude']) => research.createRun(ws, { project_id: pid, providers, channel: 'dashboard', force_new: true }).run;
   const hz = (run) => ({ start: run.horizon.start_date, end: run.horizon.end_date, text: run.horizon.text, mode: run.horizon.mode });
   const out = { ids: IDS, pids, reports: {} };
@@ -278,7 +335,12 @@ function build(t) {
   const day = run1.horizon.start_date;
   out.reports.first = importClaude(p1.project_id, reportText({ project: p1, symbol: 'XRLY', profile: run1.sector_profile, run: run1, analysisAt: day, horizon: hz(run1), edit: (j) => { j.investment_components.token_value_capture.value = 54; } }), { runId: run1.run_id }).report_id;
   out.reports.latest = importClaude(p1.project_id, reportText({ project: p1, symbol: 'XRLY', profile: run1.sector_profile, run: run1, analysisAt: day, horizon: hz(run1) }), { runId: run1.run_id, revision: { kind: 'reassessment', note: 'FICTIONAL: re-read the fee switch proposal; token value capture raised from 54 to 58.' } }).report_id;
-  inbox.importContent(ws, 'chatgpt', { content: mockReport(ws, 'chatgpt', run1), projectId: p1.project_id, runId: run1.run_id });
+  // ChatGPT's own report for the same run, written apart: grades that differ
+  // with its own reasons and claims, a category Claude could not grade and
+  // one Claude graded that ChatGPT could not, a grade ChatGPT gives no reason
+  // or evidence for, and a paid-jobs figure that differs from Claude's.
+  const gpt = importAs('chatgpt', p1.project_id, reportText({ project: p1, symbol: 'XRLY', profile: run1.sector_profile, run: run1, analysisAt: day, horizon: hz(run1), edit: chatgptEdit }), { runId: run1.run_id });
+  out.reports.chatgpt = gpt.report_id;
   notes.setConvictionNote(ws, p1.project_id, 'FICTIONAL note: I like the network; I only want the token if the fee switch passes on-chain. Small size before the vote.', { conviction: 'medium' });
   out.runs = { complete: run1.run_id };
 
@@ -338,6 +400,12 @@ function build(t) {
       sources: [], claims: [], bullish_facts: [], bearish_facts: [], catalysts: [],
     }, null, 2),
     '```', ''].join('\n')).report_id;
+
+  // A ChatGPT report on it under a later prompt and scoring profile, outside
+  // any run: the two are not scored on the same scale.
+  const later = addDays(ymdInTz(), -6);
+  out.reports.sparseChatgpt = importAs('chatgpt', p4.project_id, reportText({ project: p4, symbol: 'XSPR', profile: 'general-token@2', analysisAt: later, horizon: { start: later, end: addDays(later, 120), text: `4 months (${later} to ${addDays(later, 120)})`, mode: 'position' },
+    edit: (j) => { j.provider = 'chatgpt'; j.model_self_identification = 'FICTIONAL test fixture labeled as ChatGPT'; j.verdict = 'INSUFFICIENT EVIDENCE'; } })).report_id;
 
   // 5. Only a quarantined answer.
   const p5 = add('quarantined', 'Example Quarantine Network (FICTIONAL)', 'XQRN', 'network-infrastructure@2');

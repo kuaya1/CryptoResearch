@@ -235,7 +235,7 @@ function evidencePart(ctx, d, row, prov) {
     sources.length
       ? details(`${sources.length} source${sources.length === 1 ? '' : 's'} cited`, h('ol', { class: 'src-list' }, sources.map(sourceItem)), { id: `insp-src-${pid}-${prov}` })
       : h('p', { class: 'small faint', style: { margin: '0 0 6px' } }, 'This report lists no sources.'),
-    h('p', { class: 'small', style: { margin: '6px 0 0' } }, h('a', { href: `#/project/${encodeURIComponent(pid)}/brief?open=evidence`, dataset: { key: `insp-claims-${prov}` } }, 'Claims and your checks')));
+    h('p', { class: 'small', style: { margin: '6px 0 0' } }, h('a', { href: `#/project/${encodeURIComponent(pid)}/evidence?model=${prov}&open=claims`, dataset: { key: `insp-claims-${prov}` } }, 'Claims and your checks')));
 }
 
 // ---- the models side by side ---------------------------------------------------
