@@ -14,6 +14,8 @@ CryptoResearch/
 ├── Open Demo Dashboard.cmd     Fictional demo workspace (127.0.0.1:4739)
 ├── archive/                    Unique files kept from retired copies (2026-10-02-consolidation: zip, manifest, README)
 ├── audits/                     Audit reports and their status (findings, migration, validation, screenshots)
+├── supabase/migrations/        SQL of the optional Research Explorer database (schema only: no data, no keys);
+│                               applied versions are named <timestamp>_<name>.sql; never edit an applied one
 ├── config/
 │   ├── settings.json           Only your overrides (thresholds, refresh, labels, research models and budget)
 │   └── ui-state.json           Dashboard view preferences (columns, sort, filters); not a record

@@ -24,6 +24,14 @@ const { readJson, atomicWrite, jsonText, sha256 } = require('../core/fsx');
 const { openWorkspace } = require('../core/workspace');
 const { mockReport } = require('../core/demo');
 
+// This PC's own secrets file is never read here: the offsite key lookup is
+// pointed at a file that does not exist, so a backup key kept on the machine
+// running the tests cannot change what "not set up" says.
+const providers = require('../core/providers');
+const realSecretsFile = providers.secretsFile;
+providers.secretsFile = () => path.join(os.tmpdir(), `cr-offsite-test-no-secrets-${process.pid}`, 'secrets.json');
+test.after(() => { providers.secretsFile = realSecretsFile; });
+
 const PASS = 'test-passphrase-not-real';
 const HOST = 'desk.test';
 const KEY = 'test-backup-key-not-real-0123456789abcdef';

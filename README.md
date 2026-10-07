@@ -202,6 +202,17 @@ date,type,account,asset,quantity,price_usd,fee_amount,fee_asset,transfer_id,btc_
 
 A price refresh never starts research. The hourly job is one Windows scheduled task, `\CryptoResearch\Hourly`, running as your user with no admin rights and no window. Its last run (including the Node version used) is in `logs/scheduler-last-run.log`. `node dashboard/cli.js schedule status | run | remove`.
 
+## Research Explorer (optional, Supabase)
+
+An optional page (**Explorer** in the nav) that compares one category grade across projects, model by model, from a small Supabase database. It is for learning and comparison only: the desk's own files stay the record, and nothing on the desk depends on it.
+
+- **What is in it:** FICTIONAL demo records only (`dashboard/fixtures/explorer/`), labeled "Demo data". Exporting real records is prepared in the code but not enabled.
+- **How it is read:** the page asks this desk's server (`GET /api/explorer`, behind the same sign-in and token as every page); the server asks Supabase with a secret key the page never sees. Opening it never writes, refreshes prices or starts research. If Supabase is down it says "unavailable" and the rest of the desk carries on.
+- **Set up:** the project URL is in settings (`node dashboard/cli.js explorer configure --url https://<ref>.supabase.co`). Create a secret key in Supabase (Project Settings > API Keys > Secret keys) and put it in `%USERPROFILE%\.cryptoresearch\secrets.json` as `"supabase_secret_key"` (or the environment variable `CR_SUPABASE_SECRET_KEY`; on the online desk, `CR_SUPABASE_URL` and `CR_SUPABASE_SECRET_KEY` in Render's Environment). Never paste it into a chat. `explorer status` checks it without showing it.
+- **Export the demo records:** `node dashboard/cli.js explorer export --fixtures`. Run it as often as you like: identical reports come back "unchanged", and a changed report under an ID already stored is refused. `--dry-run` shows what would be sent.
+- **Switch it off:** `node dashboard/cli.js explorer configure --off` (or `CR_EXPLORER=off`, or remove the key). `--on` brings it back.
+- **The database:** `supabase/migrations/` holds its SQL (tables, constraints, row level security, the one import function). Anonymous and signed-in Supabase users can read and write nothing; only the secret key can read, and only through the import function can it add rows.
+
 ## Costs
 
 - CoinGecko public API: free, keyless (a free Demo key is recommended on the online desk); a monthly call budget (default 7,500) pauses refreshes before any limit. Market context adds about 2 calls an hour. New research lookups (about 1 to 7 calls each) count in the same budget. The online desk refreshes prices every 15 minutes only while a page is open, hourly otherwise.

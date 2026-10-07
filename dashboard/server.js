@@ -963,6 +963,10 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIde
   route('GET', '/api/backup-status', () => require('./core/offsite').backupStatus(ws));
   route('GET', '/api/backups/([A-Za-z0-9_-]+)/verify', (m) => exporter.verifyBackup(ws, m[1]));
   // A status read writes nothing; the write test is its own explicit action.
+  // The Research Explorer (core/explorer.js): this server reads Supabase with
+  // a key the page never sees, behind the same sign-in and token as every
+  // other route. A read only: it never writes, screens or starts research.
+  route('GET', '/api/explorer', (m, req, res, body, url) => require('./core/explorer').read(ws, { refresh: url.searchParams.get('refresh') === '1' }));
   route('GET', '/api/doctor', async () => require('./core/doctor').doctor(ws));
   route('POST', '/api/doctor/write-test', async () => require('./core/doctor').doctor(ws, { writeProbe: true }));
   route('GET', '/api/research/providers', () => coherent(() => ({ providers: research.providerStatus(ws), readiness: research.readiness(ws), budget: ws.settings.research.budget, spend: research.spendSoFar(ws), unattended_enabled: Boolean(ws.settings.research.unattended_enabled), keys_file: require('./core/providers').secretsFile() })));
@@ -1143,7 +1147,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIde
     }
     if (url.pathname === '/api/session') {
       if (req.method !== 'GET') throw new HttpError(405, 'Method not allowed');
-      return send(res, 200, { token, hosted: state.hosted, revision: require('./core/revision').revision(), workspace: { name: ws.meta.name, kind: ws.kind, root: state.hosted ? null : ws.root, workspace_id: ws.meta.workspace_id } });
+      return send(res, 200, { token, hosted: state.hosted, revision: require('./core/revision').revision(), workspace: { name: ws.meta.name, kind: ws.kind, root: state.hosted ? null : ws.root, workspace_id: ws.meta.workspace_id }, explorer: require('./core/explorer').navInfo(ws, { hosted: Boolean(state.hosted) }) });
     }
     // Logos are public CoinGecko images. An <img> cannot send the session token;
     // Cross-Origin-Resource-Policy: same-origin keeps other sites from loading them.

@@ -112,6 +112,9 @@ const DEFAULT_SETTINGS = {
   // Offsite copies of the online desk, pulled by this PC (offsite.js). The
   // backup key itself is never stored here.
   offsite: { desk_url: null, folder: null, keep_recent: 30, keep_monthly: 12 },
+  // The optional Research Explorer (explorer.js): a Supabase mirror for
+  // learning and comparison. The secret key is never stored here.
+  explorer: { enabled: true, supabase_url: null },
 };
 
 class WorkspaceError extends Error {

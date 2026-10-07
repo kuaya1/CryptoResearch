@@ -235,6 +235,9 @@ const SECTIONS = [
   ['portfolio', 'Portfolio'],
   ['research', 'Research'],
   ['updates', 'Updates'],
+  // The optional Research Explorer (Supabase); in the nav only where the
+  // server says to show it (set up, or on the PC), see renderNav.
+  ['explorer', 'Explorer'],
   ['settings', 'Settings'],
 ];
 
@@ -247,6 +250,7 @@ const LOADERS = {
   research: () => import('./views/research.js').then((m) => m.renderResearch),
   updates: () => import('./views/updates.js').then((m) => m.renderUpdates),
   settings: () => import('./views/settings.js').then((m) => m.renderSettings),
+  explorer: () => import('./views/explorer.js').then((m) => m.renderExplorer),
 };
 
 // Old addresses keep working.
@@ -293,6 +297,7 @@ function renderNav() {
   const c = state.index ? counts(state.index) : {};
   clear(nav);
   for (const [id, label] of SECTIONS) {
+    if (id === 'explorer' && !(state.session && state.session.explorer && state.session.explorer.show) && active !== 'explorer') continue;
     const n = c[id];
     const num = n && typeof n === 'object' ? n.n : n;
     const desc = n && typeof n === 'object' ? n.title : n ? `${n} projects` : '';

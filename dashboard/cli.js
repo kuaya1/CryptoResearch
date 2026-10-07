@@ -120,6 +120,13 @@ Data, jobs and maintenance
                                          a restored copy holds research until released here
                                          the backup key is CR_BACKUP_KEY on the desk and on this PC
                                          (or "desk_backup_key" in ~/.cryptoresearch/secrets.json)
+  explorer status                        the optional Research Explorer (Supabase): set-up and a live read;
+                                         never shows the key
+  explorer configure --url https://<ref>.supabase.co | --off | --on
+                                         the project URL (the secret key goes in CR_SUPABASE_SECRET_KEY or
+                                         "supabase_secret_key" in ~/.cryptoresearch/secrets.json)
+  explorer export --fixtures [--dry-run] send the FICTIONAL demo records one way to Supabase; repeatable,
+                                         nothing duplicated, changed content refused (real records: not enabled)
   demo build                             build the FICTIONAL demo workspace (dashboard/demo-workspace)
   test                                   run the automated tests
 
@@ -768,6 +775,38 @@ async function run(argv) {
       if (sub === 'verify') return off.verifyFile(path.resolve(need(rest[0], 'offsite verify <file>')));
       if (sub === 'drill') return off.drill(ws, { file: rest[0] ? path.resolve(rest[0]) : null, to: one(flags.to) ? path.resolve(one(flags.to)) : null });
       throw Object.assign(new Error('offsite setup|pull|status|verify|drill'), { code: 'USAGE' });
+    }
+    case 'explorer': {
+      // The optional Research Explorer (core/explorer.js). Exports go one way,
+      // to Supabase only; nothing here changes the desk's records.
+      const xp = require('./core/explorer');
+      if (sub === 'status') {
+        const st = xp.status(ws);
+        if (st.state !== 'configured') return { ...st, next: st.state === 'off' ? 'node dashboard/cli.js explorer configure --on' : `Still missing: ${[...st.problems, ...st.missing].join('; ')}` };
+        const live = await xp.read(ws, { refresh: true });
+        const scores = (live.reports || []).reduce((n, r) => n + r.category_scores.length, 0);
+        return { ...st, live: { state: live.state, reason: live.reason || null, demo: live.demo || false, projects: (live.projects || []).length, reports: (live.reports || []).length, category_scores: scores, last_export: live.last_export || null } };
+      }
+      if (sub === 'configure') {
+        const url = one(flags.url) ? String(one(flags.url)).trim().replace(/\/+$/, '') : null;
+        if (!url && !flags.off && !flags.on) throw Object.assign(new Error('explorer configure --url https://<ref>.supabase.co | --off | --on'), { code: 'USAGE' });
+        if (url && !xp.URL_RE.test(url)) throw Object.assign(new Error('The Supabase URL is the project address only, https://<20-character ref>.supabase.co (Supabase > Project Settings > Data API).'), { code: 'INVALID' });
+        const { runOp } = require('./core/ops');
+        const out = runOp(ws, { type: 'update_settings', summary: 'Set up the Research Explorer' }, (op) => {
+          const cur = op.readJson('config/settings.json', { schema_version: 1 });
+          cur.explorer = { ...(cur.explorer || {}), ...(url ? { supabase_url: url } : {}), ...(flags.off ? { enabled: false } : flags.on ? { enabled: true } : {}) };
+          op.writeJson('config/settings.json', cur);
+        });
+        ws.reloadSettings();
+        const st = xp.status(ws);
+        return { status: 'saved', verified: out.verified, ...st, next: st.state === 'configured' ? 'node dashboard/cli.js explorer status' : st.state === 'off' ? 'Switched off.' : `Still missing: ${[...st.problems, ...st.missing].join('; ')}` };
+      }
+      if (sub === 'export') {
+        if (flags.desk) return xp.exportDesk();
+        if (!flags.fixtures) throw Object.assign(new Error('explorer export --fixtures [--dry-run] (only the FICTIONAL fixtures are exported in this version)'), { code: 'USAGE' });
+        return xp.exportFixtures(ws, { dryRun: Boolean(flags.dry_run) });
+      }
+      throw Object.assign(new Error('explorer status | configure --url <url> | --off | --on | export --fixtures [--dry-run]'), { code: 'USAGE' });
     }
     case 'restored-copy': {
       // A restored copy holds research (no provider asked for anything) until

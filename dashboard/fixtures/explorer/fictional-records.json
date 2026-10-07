@@ -1,0 +1,356 @@
+{
+  "schema_version": "cr.explorer-fixtures.v1",
+  "fictional": true,
+  "note": "FICTIONAL demo records for the Research Explorer (Supabase). Every project, contract, report and score here is invented; none is research. Shaped like the desk's stored records (project.json and a report's meta and normalized assessment), so the same adapter that would one day export real records reads them.",
+  "projects": [
+    {
+      "project": {
+        "project_id": "demo-lumen-pay",
+        "name": "Lumen Pay (FICTIONAL)",
+        "symbol": "LUMX",
+        "status": "active",
+        "sector_profile": "payfi-credit@2",
+        "identity": {
+          "status": "verified",
+          "official_website": "https://example.com/lumen-pay",
+          "assets": [{ "chain": "example-chain", "contract_address": "FICTIONAL-LUMX-0001", "standard": null }]
+        }
+      },
+      "reports": [
+        {
+          "report_id": "2026-10-02_claude_demo0001",
+          "format": "cr.report.v2",
+          "meta": { "provider": "claude", "imported_at": "2026-10-02T15:20:00.000Z", "provenance": { "research_run_id": "run_demo_lumen_01" } },
+          "assessment": {
+            "source_format": "json",
+            "model_version": null,
+            "analysis_at": "2026-10-02T14:05:00Z",
+            "horizon": "4 months",
+            "prompt_version": "cr-research-prompt@5",
+            "rubric_version": "cr-grading@1",
+            "sector_profile": "payfi-credit@2",
+            "verdict": "CONDITIONAL OPPORTUNITY",
+            "position_context": { "horizon": { "mode": "position", "start_date": "2026-10-02", "end_date": "2027-02-02" } },
+            "code_review": null,
+            "chart_cycle": {
+              "data": { "latest_observation_at": "2026-10-01" },
+              "volume": { "baseline": "FICTIONAL: 30-day median spot volume on the two main venues" },
+              "liquidity": "FICTIONAL: two centralized venues and one DEX pool list the pair"
+            },
+            "diagnostic_scores": {
+              "legitimacy": { "status": "scored", "value": 78, "confidence": "high", "rationale": "FICTIONAL: the operating company, its licence and the token contract link to each other.", "main_weakness": "FICTIONAL: the audit covers an earlier contract version.", "evidence_refs": [] },
+              "development_credibility": { "status": "scored", "value": 66, "confidence": "medium", "rationale": "FICTIONAL: steady releases in the settlement service.", "main_weakness": "FICTIONAL: two contributors account for most changes.", "evidence_refs": [] },
+              "build_operational_quality": { "status": "scored", "value": 70, "confidence": "medium", "rationale": "FICTIONAL: one documented outage, handled within a day.", "main_weakness": "FICTIONAL: the upgrade key is a 2-of-3 multisig.", "evidence_refs": [] },
+              "code_quality": { "status": "scored", "value": 62, "confidence": "low", "rationale": "FICTIONAL: the code looks maintained.", "main_weakness": "FICTIONAL: no implementation file is named.", "evidence_refs": [] },
+              "product_reality": { "status": "scored", "value": 72, "confidence": "medium", "rationale": "FICTIONAL: merchants settle invoices on mainnet today.", "main_weakness": "FICTIONAL: volume figures are the project's own.", "evidence_refs": [] },
+              "technology_usefulness": { "status": "scored", "value": 60, "confidence": "medium", "rationale": "FICTIONAL: faster settlement than card rails for cross-border invoices.", "main_weakness": "FICTIONAL: the token is not needed to settle.", "evidence_refs": [] },
+              "organic_demand": { "status": "scored", "value": 57, "confidence": "medium", "rationale": "FICTIONAL: repeat merchants are a minority.", "main_weakness": "FICTIONAL: incentives fund part of the volume.", "evidence_refs": [] },
+              "token_value_capture": { "status": "scored", "value": 54, "confidence": "low", "rationale": "FICTIONAL: a fee share is announced, not implemented.", "main_weakness": "FICTIONAL: conditional mechanism only.", "evidence_refs": [] },
+              "valuation_supply_attractiveness": { "status": "scored", "value": 59, "confidence": "medium", "rationale": "FICTIONAL: valuation in line with peers after unlocks.", "main_weakness": "FICTIONAL: a 9% unlock falls inside the horizon.", "evidence_refs": [] },
+              "chart_structure": { "status": "scored", "value": 48, "confidence": "medium", "rationale": "FICTIONAL: a base on the daily chart, no higher high yet.", "main_weakness": "FICTIONAL: weak against BTC.", "evidence_refs": [] },
+              "cycle_timing": { "status": "scored", "value": 50, "confidence": "low", "rationale": "FICTIONAL: possible accumulation phase.", "main_weakness": "FICTIONAL: the competing reading is a renewed decline.", "evidence_refs": [] },
+              "volume_liquidity": { "status": "range", "low": 45, "high": 60, "confidence": "low", "rationale": "FICTIONAL: between a thin-book reading and a two-venue reading.", "main_weakness": "FICTIONAL: no depth figure.", "evidence_refs": [] },
+              "btc_relative_opportunity": { "status": "scored", "value": 51, "confidence": "low", "rationale": "FICTIONAL: modest edge over BTC in the base case.", "main_weakness": "FICTIONAL: rests on the announced fee share.", "evidence_refs": [] }
+            },
+            "investment_components": {
+              "sustainable_business_demand": { "status": "scored", "value": 64, "rationale": "FICTIONAL demand assessment." },
+              "token_value_capture": { "status": "scored", "value": 58, "rationale": "FICTIONAL value-capture assessment." },
+              "valuation_supply": { "status": "scored", "value": 61, "rationale": "FICTIONAL valuation assessment." },
+              "risk_resilience": { "status": "scored", "value": 55, "rationale": "FICTIONAL resilience assessment." },
+              "btc_relative_asymmetry": { "status": "scored", "value": 52, "rationale": "FICTIONAL asymmetry assessment." },
+              "timing_executable_liquidity": { "status": "scored", "value": 47, "rationale": "FICTIONAL timing assessment." }
+            }
+          }
+        },
+        {
+          "report_id": "2026-10-03_chatgpt_demo0002",
+          "format": "cr.report.v2",
+          "meta": { "provider": "chatgpt", "imported_at": "2026-10-03T10:02:00.000Z", "provenance": { "research_run_id": "run_demo_lumen_01" } },
+          "assessment": {
+            "source_format": "json",
+            "model_version": null,
+            "analysis_at": "2026-10-03T09:40:00Z",
+            "horizon": "4 months",
+            "prompt_version": "cr-research-prompt@5",
+            "rubric_version": "cr-grading@1",
+            "sector_profile": "payfi-credit@2",
+            "verdict": "INSUFFICIENT EVIDENCE",
+            "position_context": { "horizon": { "mode": "position", "start_date": "2026-10-02", "end_date": "2027-02-02" } },
+            "code_review": { "source_access": "none", "repositories": [] },
+            "chart_cycle": {
+              "data": { "latest_observation_at": "2026-10-03" },
+              "volume": { "baseline": "FICTIONAL: 30-day median spot volume" },
+              "liquidity": "FICTIONAL: depth within 2% of the price was $95K on the main venue on 2026-10-03"
+            },
+            "diagnostic_scores": {
+              "legitimacy": { "status": "range", "low": 70, "high": 80, "confidence": "medium", "rationale": "FICTIONAL: between the licence reading and the unaudited upgrade path.", "main_weakness": "FICTIONAL: upgrade path not audited.", "evidence_refs": [] },
+              "development_credibility": { "status": "scored", "value": 63, "confidence": "medium", "rationale": "FICTIONAL: releases every few weeks.", "main_weakness": "FICTIONAL: small team.", "evidence_refs": [] },
+              "build_operational_quality": { "status": "range", "low": 58, "high": 70, "confidence": "low", "rationale": "FICTIONAL: between the outage report and the status page.", "main_weakness": "FICTIONAL: no incident post-mortem.", "evidence_refs": [] },
+              "code_quality": { "status": "unknown", "missing_data": "FICTIONAL: the lending contracts' repository is private; no implementation file could be read.", "evidence_refs": [] },
+              "product_reality": { "status": "scored", "value": 68, "confidence": "medium", "rationale": "FICTIONAL: invoices settle on mainnet.", "main_weakness": "FICTIONAL: few independent users found.", "evidence_refs": [] },
+              "technology_usefulness": { "status": "range", "low": 50, "high": 65, "confidence": "low", "rationale": "FICTIONAL: between a cost reading and a speed reading.", "main_weakness": "FICTIONAL: centralized rails are close on cost.", "evidence_refs": [] },
+              "organic_demand": { "status": "scored", "value": 52, "confidence": "medium", "rationale": "FICTIONAL: demand mostly incentive-funded.", "main_weakness": "FICTIONAL: incentive share unknown.", "evidence_refs": [] },
+              "token_value_capture": { "status": "scored", "value": 47, "confidence": "medium", "rationale": "FICTIONAL: no implemented fee route to holders.", "main_weakness": "FICTIONAL: announced mechanism only.", "evidence_refs": [] },
+              "valuation_supply_attractiveness": { "status": "range", "low": 50, "high": 62, "confidence": "low", "rationale": "FICTIONAL: between two readings of circulating supply.", "main_weakness": "FICTIONAL: supply figures disagree.", "evidence_refs": [] },
+              "chart_structure": { "status": "unknown", "missing_data": "FICTIONAL: no reliable daily candles for the token's main pair.", "evidence_refs": [] },
+              "cycle_timing": { "status": "unknown", "missing_data": "FICTIONAL: the cycle phase cannot be read without chart data.", "evidence_refs": [] },
+              "volume_liquidity": { "status": "scored", "value": 44, "confidence": "medium", "rationale": "FICTIONAL: thin depth against the stated baseline.", "main_weakness": "FICTIONAL: one venue carries most volume.", "evidence_refs": [] },
+              "btc_relative_opportunity": { "status": "unknown", "missing_data": "FICTIONAL: asymmetry cannot be assessed without scenario probabilities.", "evidence_refs": [] }
+            },
+            "investment_components": {
+              "sustainable_business_demand": { "status": "range", "low": 55, "high": 68, "rationale": "FICTIONAL: between the merchant count and the volume reading." },
+              "token_value_capture": { "status": "scored", "value": 50, "rationale": "FICTIONAL value-capture assessment." },
+              "valuation_supply": { "status": "range", "low": 52, "high": 63, "rationale": "FICTIONAL: between two circulating-supply readings." },
+              "risk_resilience": { "status": "scored", "value": 49, "rationale": "FICTIONAL resilience assessment." },
+              "btc_relative_asymmetry": { "status": "unknown", "missing_data": "FICTIONAL: no defensible BTC scenario probabilities." },
+              "timing_executable_liquidity": { "status": "unknown", "missing_data": "FICTIONAL: timing not assessed without a dated catalyst list." }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "project": {
+        "project_id": "demo-halcyon-mesh",
+        "name": "Halcyon Mesh (FICTIONAL)",
+        "symbol": "HMSH",
+        "status": "active",
+        "sector_profile": "network-infrastructure@2",
+        "identity": {
+          "status": "verified",
+          "official_website": "https://example.com/halcyon-mesh",
+          "native_chain": true,
+          "assets": [{ "chain": "example-l1", "contract_address": null, "standard": "native" }]
+        }
+      },
+      "reports": [
+        {
+          "report_id": "2026-09-20_gemini_demo0005",
+          "format": "cr.report.v1",
+          "meta": { "provider": "gemini", "imported_at": "2026-09-20T18:45:00.000Z", "provenance": { "research_run_id": "run_demo_halcyon_00" } },
+          "assessment": {
+            "source_format": "json",
+            "model_version": null,
+            "analysis_at": "2026-09-20",
+            "horizon": "4 months",
+            "prompt_version": "cr-research-prompt@4",
+            "rubric_version": "cr-grading@1",
+            "sector_profile": "network-infrastructure@1",
+            "verdict": "REAL PRODUCT, WEAK TOKEN",
+            "position_context": { "horizon": { "mode": "position", "start_date": "2026-09-20", "end_date": "2027-01-20" } },
+            "diagnostic_scores": {
+              "legitimacy": { "status": "scored", "value": 80, "rationale": "FICTIONAL: foundation and validators are identifiable.", "evidence_refs": [] },
+              "builder_operations": { "status": "scored", "value": 74, "rationale": "FICTIONAL: regular node releases.", "evidence_refs": [] },
+              "product_usefulness": { "status": "scored", "value": 76, "rationale": "FICTIONAL: paid relay traffic on mainnet.", "evidence_refs": [] },
+              "organic_demand": { "status": "scored", "value": 63, "rationale": "FICTIONAL: fee revenue grew without new incentives.", "evidence_refs": [] },
+              "credit_risk_transparency": { "status": "not_applicable", "rationale": "FICTIONAL: not applicable, this network extends no credit.", "evidence_refs": [] },
+              "technical_risk_transparency": { "status": "scored", "value": 67, "rationale": "FICTIONAL: upgrade keys disclosed.", "evidence_refs": [] },
+              "differentiation": { "status": "scored", "value": 70, "rationale": "FICTIONAL: lower latency than two rivals.", "evidence_refs": [] },
+              "category_potential": { "status": "scored", "value": 72, "rationale": "FICTIONAL: a growing relay market.", "evidence_refs": [] },
+              "token_value_capture": { "status": "scored", "value": 49, "rationale": "FICTIONAL: rewards are mostly emissions.", "evidence_refs": [] },
+              "valuation_supply_attractiveness": { "status": "scored", "value": 55, "rationale": "FICTIONAL: emissions dilute holders.", "evidence_refs": [] },
+              "chart_quality": { "status": "scored", "value": 58, "rationale": "FICTIONAL: a range on the weekly chart.", "evidence_refs": [] },
+              "evidence_confidence": { "status": "scored", "value": 60, "rationale": "FICTIONAL: mostly primary sources.", "evidence_refs": [] }
+            },
+            "investment_components": {
+              "sustainable_business_demand": { "status": "scored", "value": 70, "rationale": "FICTIONAL demand assessment." },
+              "token_value_capture": { "status": "scored", "value": 52, "rationale": "FICTIONAL value-capture assessment." },
+              "valuation_supply": { "status": "scored", "value": 58, "rationale": "FICTIONAL valuation assessment." },
+              "risk_resilience": { "status": "scored", "value": 64, "rationale": "FICTIONAL resilience assessment." },
+              "btc_relative_asymmetry": { "status": "scored", "value": 47, "rationale": "FICTIONAL asymmetry assessment." },
+              "timing_executable_liquidity": { "status": "scored", "value": 55, "rationale": "FICTIONAL timing assessment." }
+            }
+          }
+        },
+        {
+          "report_id": "2026-09-28_claude_demo0003",
+          "format": "cr.report.v2",
+          "meta": { "provider": "claude", "imported_at": "2026-09-28T14:00:00.000Z", "provenance": { "research_run_id": "run_demo_halcyon_01" } },
+          "assessment": {
+            "source_format": "json",
+            "model_version": null,
+            "analysis_at": "2026-09-28T13:10:00Z",
+            "horizon": "4 months",
+            "prompt_version": "cr-research-prompt@5",
+            "rubric_version": "cr-grading@1",
+            "sector_profile": "network-infrastructure@2",
+            "verdict": "ATTRACTIVE ASYMMETRY",
+            "position_context": { "horizon": { "mode": "position", "start_date": "2026-09-28", "end_date": "2027-01-28" } },
+            "code_review": { "source_access": "full", "repositories": [{ "name": "FICTIONAL halcyon-node", "commit": "4e1c9a7b2d3f", "files_inspected": ["src/consensus/engine.rs", "src/relay/fees.rs"] }] },
+            "chart_cycle": {
+              "data": { "latest_observation_at": "2026-09-27" },
+              "volume": { "baseline": "FICTIONAL: 90-day median spot volume" },
+              "liquidity": "FICTIONAL: depth within 2% of the price was $410K across the two main venues on 2026-09-27"
+            },
+            "diagnostic_scores": {
+              "legitimacy": { "status": "scored", "value": 84, "confidence": "high", "rationale": "FICTIONAL: foundation, validators and audits link to each other.", "main_weakness": "FICTIONAL: one audit predates the last upgrade.", "evidence_refs": [] },
+              "development_credibility": { "status": "scored", "value": 79, "confidence": "high", "rationale": "FICTIONAL: 14 contributors shipped node changes in 90 days.", "main_weakness": "FICTIONAL: the SDK lags the node.", "evidence_refs": [] },
+              "build_operational_quality": { "status": "scored", "value": 76, "confidence": "medium", "rationale": "FICTIONAL: the last upgrade was coordinated and documented.", "main_weakness": "FICTIONAL: five operators run most stake.", "evidence_refs": [] },
+              "code_quality": { "status": "scored", "value": 74, "confidence": "medium", "rationale": "FICTIONAL: consensus and fee code read at the stated commit; tested and documented.", "main_weakness": "FICTIONAL: fee code has few property tests.", "evidence_refs": [] },
+              "product_reality": { "status": "scored", "value": 81, "confidence": "high", "rationale": "FICTIONAL: outside users pay for relays on mainnet.", "main_weakness": "FICTIONAL: two customers are most of the fees.", "evidence_refs": [] },
+              "technology_usefulness": { "status": "scored", "value": 77, "confidence": "medium", "rationale": "FICTIONAL: lower latency than the centralized default.", "main_weakness": "FICTIONAL: the advantage narrows at scale.", "evidence_refs": [] },
+              "organic_demand": { "status": "scored", "value": 69, "confidence": "medium", "rationale": "FICTIONAL: fees grew after incentives ended.", "main_weakness": "FICTIONAL: customer concentration.", "evidence_refs": [] },
+              "token_value_capture": { "status": "scored", "value": 58, "confidence": "medium", "rationale": "FICTIONAL: a share of fees is burned.", "main_weakness": "FICTIONAL: emissions still exceed the burn.", "evidence_refs": [] },
+              "valuation_supply_attractiveness": { "status": "scored", "value": 61, "confidence": "medium", "rationale": "FICTIONAL: fair against fees once emissions are counted.", "main_weakness": "FICTIONAL: a validator unlock inside the horizon.", "evidence_refs": [] },
+              "chart_structure": { "status": "scored", "value": 66, "confidence": "medium", "rationale": "FICTIONAL: higher lows against USD and BTC on the weekly chart.", "main_weakness": "FICTIONAL: resistance overhead.", "evidence_refs": [] },
+              "cycle_timing": { "status": "range", "low": 55, "high": 68, "confidence": "low", "rationale": "FICTIONAL: between a base-formation reading and an early-breakout reading.", "main_weakness": "FICTIONAL: the breakout is unconfirmed.", "evidence_refs": [] },
+              "volume_liquidity": { "status": "scored", "value": 63, "confidence": "medium", "rationale": "FICTIONAL: volume above the stated baseline with measured depth.", "main_weakness": "FICTIONAL: one venue dominates.", "evidence_refs": [] },
+              "btc_relative_opportunity": { "status": "range", "low": 45, "high": 60, "confidence": "low", "rationale": "FICTIONAL: between the base and bull readings against BTC.", "main_weakness": "FICTIONAL: rests on the burn outpacing emissions.", "evidence_refs": [] }
+            },
+            "investment_components": {
+              "sustainable_business_demand": { "status": "scored", "value": 72, "rationale": "FICTIONAL demand assessment." },
+              "token_value_capture": { "status": "scored", "value": 66, "rationale": "FICTIONAL value-capture assessment." },
+              "valuation_supply": { "status": "scored", "value": 63, "rationale": "FICTIONAL valuation assessment." },
+              "risk_resilience": { "status": "scored", "value": 68, "rationale": "FICTIONAL resilience assessment." },
+              "btc_relative_asymmetry": { "status": "range", "low": 40, "high": 56, "rationale": "FICTIONAL: between the base and bull scenarios against BTC." },
+              "timing_executable_liquidity": { "status": "scored", "value": 61, "rationale": "FICTIONAL timing assessment." }
+            }
+          }
+        },
+        {
+          "report_id": "2026-09-28_claude_demo0004",
+          "format": "cr.report.v2",
+          "meta": { "provider": "claude", "imported_at": "2026-09-28T16:30:00.000Z", "provenance": { "research_run_id": "run_demo_halcyon_01", "revision": { "kind": "reassessment", "note": "FICTIONAL: re-read the unlock schedule already cited; the asymmetry range narrows to a point." } } },
+          "assessment": {
+            "source_format": "json",
+            "model_version": null,
+            "analysis_at": "2026-09-28T16:20:00Z",
+            "horizon": "4 months",
+            "prompt_version": "cr-research-prompt@5",
+            "rubric_version": "cr-grading@1",
+            "sector_profile": "network-infrastructure@2",
+            "verdict": "CONDITIONAL OPPORTUNITY",
+            "position_context": { "horizon": { "mode": "position", "start_date": "2026-09-28", "end_date": "2027-01-28" } },
+            "code_review": { "source_access": "full", "repositories": [{ "name": "FICTIONAL halcyon-node", "commit": "4e1c9a7b2d3f", "files_inspected": ["src/consensus/engine.rs", "src/relay/fees.rs"] }] },
+            "chart_cycle": {
+              "data": { "latest_observation_at": "2026-09-27" },
+              "volume": { "baseline": "FICTIONAL: 90-day median spot volume" },
+              "liquidity": "FICTIONAL: depth within 2% of the price was $410K across the two main venues on 2026-09-27"
+            },
+            "diagnostic_scores": {
+              "legitimacy": { "status": "scored", "value": 84, "confidence": "high", "rationale": "FICTIONAL: foundation, validators and audits link to each other.", "main_weakness": "FICTIONAL: one audit predates the last upgrade.", "evidence_refs": [] },
+              "development_credibility": { "status": "scored", "value": 79, "confidence": "high", "rationale": "FICTIONAL: 14 contributors shipped node changes in 90 days.", "main_weakness": "FICTIONAL: the SDK lags the node.", "evidence_refs": [] },
+              "build_operational_quality": { "status": "scored", "value": 76, "confidence": "medium", "rationale": "FICTIONAL: the last upgrade was coordinated and documented.", "main_weakness": "FICTIONAL: five operators run most stake.", "evidence_refs": [] },
+              "code_quality": { "status": "scored", "value": 74, "confidence": "medium", "rationale": "FICTIONAL: consensus and fee code read at the stated commit; tested and documented.", "main_weakness": "FICTIONAL: fee code has few property tests.", "evidence_refs": [] },
+              "product_reality": { "status": "scored", "value": 81, "confidence": "high", "rationale": "FICTIONAL: outside users pay for relays on mainnet.", "main_weakness": "FICTIONAL: two customers are most of the fees.", "evidence_refs": [] },
+              "technology_usefulness": { "status": "scored", "value": 77, "confidence": "medium", "rationale": "FICTIONAL: lower latency than the centralized default.", "main_weakness": "FICTIONAL: the advantage narrows at scale.", "evidence_refs": [] },
+              "organic_demand": { "status": "scored", "value": 69, "confidence": "medium", "rationale": "FICTIONAL: fees grew after incentives ended.", "main_weakness": "FICTIONAL: customer concentration.", "evidence_refs": [] },
+              "token_value_capture": { "status": "scored", "value": 52, "confidence": "medium", "rationale": "FICTIONAL: the burn covers less of emissions than first read.", "main_weakness": "FICTIONAL: emissions still exceed the burn.", "evidence_refs": [] },
+              "valuation_supply_attractiveness": { "status": "scored", "value": 61, "confidence": "medium", "rationale": "FICTIONAL: fair against fees once emissions are counted.", "main_weakness": "FICTIONAL: a validator unlock inside the horizon.", "evidence_refs": [] },
+              "chart_structure": { "status": "scored", "value": 66, "confidence": "medium", "rationale": "FICTIONAL: higher lows against USD and BTC on the weekly chart.", "main_weakness": "FICTIONAL: resistance overhead.", "evidence_refs": [] },
+              "cycle_timing": { "status": "range", "low": 55, "high": 68, "confidence": "low", "rationale": "FICTIONAL: between a base-formation reading and an early-breakout reading.", "main_weakness": "FICTIONAL: the breakout is unconfirmed.", "evidence_refs": [] },
+              "volume_liquidity": { "status": "scored", "value": 63, "confidence": "medium", "rationale": "FICTIONAL: volume above the stated baseline with measured depth.", "main_weakness": "FICTIONAL: one venue dominates.", "evidence_refs": [] },
+              "btc_relative_opportunity": { "status": "scored", "value": 52, "confidence": "low", "rationale": "FICTIONAL: the same unlock schedule, read again, puts the edge at the middle of the earlier range.", "main_weakness": "FICTIONAL: rests on the burn outpacing emissions.", "evidence_refs": [] }
+            },
+            "investment_components": {
+              "sustainable_business_demand": { "status": "scored", "value": 72, "rationale": "FICTIONAL demand assessment." },
+              "token_value_capture": { "status": "scored", "value": 62, "rationale": "FICTIONAL value-capture assessment, revised." },
+              "valuation_supply": { "status": "scored", "value": 63, "rationale": "FICTIONAL valuation assessment." },
+              "risk_resilience": { "status": "scored", "value": 68, "rationale": "FICTIONAL resilience assessment." },
+              "btc_relative_asymmetry": { "status": "scored", "value": 48, "rationale": "FICTIONAL: the earlier range read again on the same evidence." },
+              "timing_executable_liquidity": { "status": "scored", "value": 61, "rationale": "FICTIONAL timing assessment." }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "project": {
+        "project_id": "demo-quill-data",
+        "name": "Quill Data (FICTIONAL)",
+        "symbol": "QULD",
+        "status": "pending_identity",
+        "sector_profile": "general-token@2",
+        "identity": { "status": "pending", "official_website": null, "assets": [] }
+      },
+      "reports": [
+        {
+          "report_id": "2026-10-04_claude_demo0006",
+          "format": "cr.report.v2",
+          "meta": { "provider": "claude", "imported_at": "2026-10-04T11:30:00.000Z", "provenance": { "research_run_id": "run_demo_quill_01" } },
+          "assessment": {
+            "source_format": "json",
+            "model_version": null,
+            "analysis_at": "2026-10-04T11:00:00Z",
+            "horizon": "4 months",
+            "prompt_version": "cr-research-prompt@5",
+            "rubric_version": "cr-grading@1",
+            "sector_profile": "general-token@2",
+            "verdict": "INSUFFICIENT EVIDENCE",
+            "position_context": { "horizon": { "mode": "position", "start_date": "2026-10-04", "end_date": "2027-02-04" } },
+            "code_review": { "source_access": "none", "repositories": [] },
+            "chart_cycle": { "data": { "latest_observation_at": null }, "volume": { "baseline": null }, "liquidity": "FICTIONAL: depth data not retrieved" },
+            "diagnostic_scores": {
+              "legitimacy": { "status": "scored", "value": 35, "confidence": "low", "rationale": "FICTIONAL: no team or company could be identified.", "main_weakness": "FICTIONAL: the website and the token do not link to each other.", "evidence_refs": [] },
+              "development_credibility": { "status": "unknown", "missing_data": "FICTIONAL: no public repository was found.", "evidence_refs": [] },
+              "build_operational_quality": { "status": "unknown", "missing_data": "FICTIONAL: nothing documents how the service is run.", "evidence_refs": [] },
+              "code_quality": { "status": "unknown", "missing_data": "FICTIONAL: no source code is published, so none could be read.", "evidence_refs": [] },
+              "product_reality": { "status": "scored", "value": 38, "confidence": "low", "rationale": "FICTIONAL: a waitlist page, no live product.", "main_weakness": "FICTIONAL: only announced features.", "evidence_refs": [] },
+              "technology_usefulness": { "status": "range", "low": 30, "high": 45, "confidence": "low", "rationale": "FICTIONAL: between the whitepaper's claim and a centralized alternative.", "main_weakness": "FICTIONAL: nothing to test.", "evidence_refs": [] },
+              "organic_demand": { "status": "unknown", "missing_data": "FICTIONAL: no usage figures are published.", "evidence_refs": [] },
+              "token_value_capture": { "status": "scored", "value": 33, "confidence": "low", "rationale": "FICTIONAL: the token has no stated use.", "main_weakness": "FICTIONAL: utility undefined.", "evidence_refs": [] },
+              "valuation_supply_attractiveness": { "status": "unknown", "missing_data": "FICTIONAL: circulating supply could not be reconciled.", "evidence_refs": [] },
+              "chart_structure": { "status": "scored", "value": 41, "confidence": "low", "rationale": "FICTIONAL: a falling trend since listing.", "main_weakness": "FICTIONAL: short history.", "evidence_refs": [] },
+              "cycle_timing": { "status": "scored", "value": 39, "confidence": "low", "rationale": "FICTIONAL: post-launch decline.", "main_weakness": "FICTIONAL: no dated catalysts.", "evidence_refs": [] },
+              "volume_liquidity": { "status": "scored", "value": 28, "confidence": "low", "rationale": "FICTIONAL: thin trading.", "main_weakness": "FICTIONAL: no depth or baseline.", "evidence_refs": [] },
+              "btc_relative_opportunity": { "status": "unknown", "missing_data": "FICTIONAL: asymmetry cannot be assessed on this evidence.", "evidence_refs": [] }
+            },
+            "investment_components": {
+              "sustainable_business_demand": { "status": "unknown", "missing_data": "FICTIONAL: no usage data is published." },
+              "token_value_capture": { "status": "scored", "value": 35, "rationale": "FICTIONAL value-capture assessment." },
+              "valuation_supply": { "status": "unknown", "missing_data": "FICTIONAL: circulating supply not reconciled." },
+              "risk_resilience": { "status": "scored", "value": 40, "rationale": "FICTIONAL resilience assessment." },
+              "btc_relative_asymmetry": { "status": "unknown", "missing_data": "FICTIONAL: no scenario can be defended." },
+              "timing_executable_liquidity": { "status": "scored", "value": 30, "rationale": "FICTIONAL timing assessment." }
+            }
+          }
+        },
+        {
+          "report_id": "2026-10-05_chatgpt_demo0007",
+          "format": "cr.report.v2",
+          "meta": { "provider": "chatgpt", "imported_at": "2026-10-05T08:40:00.000Z", "provenance": { "research_run_id": "run_demo_quill_01" } },
+          "assessment": {
+            "source_format": "json",
+            "model_version": null,
+            "analysis_at": "2026-10-05T08:15:00Z",
+            "horizon": "4 months",
+            "prompt_version": "cr-research-prompt@5",
+            "rubric_version": "cr-grading@1",
+            "sector_profile": "general-token@2",
+            "verdict": "INSUFFICIENT EVIDENCE",
+            "position_context": { "horizon": { "mode": "position", "start_date": "2026-10-04", "end_date": "2027-02-04" } },
+            "code_review": { "source_access": "none", "repositories": [] },
+            "chart_cycle": {
+              "data": { "latest_observation_at": "2026-10-04" },
+              "volume": { "baseline": "FICTIONAL: 14-day median spot volume" },
+              "liquidity": "FICTIONAL: depth within 2% of the price was $12K on the only venue on 2026-10-04"
+            },
+            "diagnostic_scores": {
+              "legitimacy": { "status": "scored", "value": 44, "confidence": "medium", "rationale": "FICTIONAL: a registered company, anonymous developers.", "main_weakness": "FICTIONAL: no audit.", "evidence_refs": [] },
+              "development_credibility": { "status": "scored", "value": 37, "confidence": "low", "rationale": "FICTIONAL: little visible development.", "main_weakness": "FICTIONAL: no public repository.", "evidence_refs": [] },
+              "build_operational_quality": { "status": "scored", "value": 40, "confidence": "low", "rationale": "FICTIONAL: a status page with no history.", "main_weakness": "FICTIONAL: no incident record.", "evidence_refs": [] },
+              "code_quality": { "status": "scored", "value": 40, "confidence": "low", "rationale": "FICTIONAL: judged from the documentation.", "main_weakness": "FICTIONAL: the source could not be read.", "evidence_refs": [] },
+              "product_reality": { "status": "scored", "value": 42, "confidence": "low", "rationale": "FICTIONAL: a beta with a waitlist.", "main_weakness": "FICTIONAL: no outside users found.", "evidence_refs": [] },
+              "technology_usefulness": { "status": "scored", "value": 46, "confidence": "low", "rationale": "FICTIONAL: a plausible data-labelling market.", "main_weakness": "FICTIONAL: the token is not needed.", "evidence_refs": [] },
+              "organic_demand": { "status": "scored", "value": 31, "confidence": "low", "rationale": "FICTIONAL: no paying users found.", "main_weakness": "FICTIONAL: demand is airdrop-driven.", "evidence_refs": [] },
+              "token_value_capture": { "status": "scored", "value": 36, "confidence": "low", "rationale": "FICTIONAL: no route from usage to the token.", "main_weakness": "FICTIONAL: utility undefined.", "evidence_refs": [] },
+              "valuation_supply_attractiveness": { "status": "scored", "value": 43, "confidence": "low", "rationale": "FICTIONAL: a small float and a large unlock.", "main_weakness": "FICTIONAL: supply figures unverified.", "evidence_refs": [] },
+              "chart_structure": { "status": "scored", "value": 45, "confidence": "medium", "rationale": "FICTIONAL: a tight range after the listing drop.", "main_weakness": "FICTIONAL: weak against BTC.", "evidence_refs": [] },
+              "cycle_timing": { "status": "scored", "value": 41, "confidence": "low", "rationale": "FICTIONAL: early base formation at best.", "main_weakness": "FICTIONAL: an unlock inside the horizon.", "evidence_refs": [] },
+              "volume_liquidity": { "status": "scored", "value": 38, "confidence": "medium", "rationale": "FICTIONAL: measured depth is thin against the baseline.", "main_weakness": "FICTIONAL: one venue only.", "evidence_refs": [] },
+              "btc_relative_opportunity": { "status": "scored", "value": 35, "confidence": "low", "rationale": "FICTIONAL: the downside case dominates.", "main_weakness": "FICTIONAL: rests on assumptions.", "evidence_refs": [] }
+            },
+            "investment_components": {
+              "sustainable_business_demand": { "status": "scored", "value": 42, "rationale": "FICTIONAL demand assessment." },
+              "token_value_capture": { "status": "scored", "value": 38, "rationale": "FICTIONAL value-capture assessment." },
+              "valuation_supply": { "status": "scored", "value": 45, "rationale": "FICTIONAL valuation assessment." },
+              "risk_resilience": { "status": "scored", "value": 40, "rationale": "FICTIONAL resilience assessment." },
+              "btc_relative_asymmetry": { "status": "scored", "value": 36, "rationale": "FICTIONAL asymmetry assessment." },
+              "timing_executable_liquidity": { "status": "scored", "value": 33, "rationale": "FICTIONAL timing assessment." }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

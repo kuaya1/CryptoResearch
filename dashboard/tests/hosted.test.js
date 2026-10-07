@@ -109,7 +109,9 @@ test('hosted: first boot creates the real workspace with the proposed limits; te
   // The temp folder stands for the persistent disk, as on Render: a mount of
   // its own in the table this boot reads (the guard itself is tested above).
   // Without it the result depends on the disk the test machine's temp folder is on.
-  const mountsText = `/dev/vda / ext4 rw 0 0\n/dev/vdb ${base} ext4 rw 0 0\n`;
+  // The mount point is written the way the guard reads paths (POSIX), so the
+  // table also matches on a Windows test machine; on Linux it is `base` itself.
+  const mountsText = `/dev/vda / ext4 rw 0 0\n/dev/vdb ${path.posix.resolve(base.replace(/\\/g, '/'))} ext4 rw 0 0\n`;
   const cfg = hosted.hostedConfig({ CR_DATA_DIR: dataDir, CR_ACCESS_PASSWORD: PASS, PORT: '10000', RENDER_EXTERNAL_HOSTNAME: HOST }, { platform: 'linux', mountsText });
   assert.deepEqual(cfg.problems, []);
   const ws = hosted.prepareWorkspace(cfg);
