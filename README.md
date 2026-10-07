@@ -23,7 +23,7 @@ Double-click **`Open Dashboard.cmd`**. It starts the dashboard at <http://127.0.
 4. Confirming adds the project to your watchlist (or reuses it) and starts one research run: Claude, plus ChatGPT and Gemini where their API key is set on the desk (or when your instructions say "all three models"). Your instructions go to the models as questions to investigate, never as conclusions. The page shows the state, attempts, model, horizon and cost (reserved before sending, then what the provider reported). You can leave or close the browser: reports are saved automatically and shown on the project page.
 5. A failure says what happened. **Retry research** sends one new attempt. An attempt that may have been billed without an answer ("Outcome uncertain") is never resent by itself.
 
-A screenshot never records a holding; holdings are only what you enter under Portfolio.
+A screenshot never records a holding; holdings are only what you enter under Portfolio or what a wallet you track shows.
 
 ## The online desk (phone access)
 
@@ -60,7 +60,7 @@ It starts only when all of this is set in the Render dashboard (service **Crypto
   - **Market line:** Bitcoin's price and its 7D and 30D change, BTC dominance, and how many of the largest coins beat Bitcoin over 30 days, with the time it was captured. "What is this?" shows the universe, what was left out (stablecoins, gold tokens, tokenized funds, wrapped or staked coins) and the definitions. It describes the market; it is not a forecast or an "altcoin season" call.
   - **Each model's timing view** (in the summary panel and on the hover scorecard, for reports written with the position recipe): timing (early, developing, extended, thesis impaired, or unknown), the model's market reading, the next catalyst with its date window, and a suggested review date. **Add to my reviews** puts that date on your review calendar; until then it stays the model's suggestion. The panel's market section also shows the project's 7D and 30D change against Bitcoin.
 - **Project page** (`#/project/<id>/<tab>`): Overview (one card per model), Scorecards (one model at a time, all three scoring panels with their directions stated; each category grade with its confidence and, one tap away, the strongest evidence, the main weakness and what would change it; then the model's position and timing view, chart and cycle reading, scenarios, own judgment and the code it read), Reports (a list of every report by model and date; a summary in reading order, from the verdict and the grade to the next review, above a reader for the complete original; download the original or show its exact text; corrections, claims, normalized data, extraction notes and provenance open on request), Comparison, Evidence, Market, Notes & history, Research runs (including token identity).
-- **Portfolio:** only what you record, kept separate from the watchlist. Grades are not shown next to holdings; select an asset to see its research.
+- **Portfolio:** what you record and what the wallets you track show (read-only), kept separate from the watchlist. Grades are not shown next to holdings; select an asset to see its research.
 - **Research:** research routes per model (API, Cowork, manual import), jobs per project, cross-project model comparison, evidence, review calendar.
 - **Updates:** what changed since your last review, **Import report** (your pasted text is kept as a draft until it is saved; the result, with a link to the saved report, stays visible after the page refreshes; pasting the same text twice saves it once), the inbox, and the Cowork request queue.
 - **Settings:** preferences, research models and budget, rubrics, backups and exports, system and privacy, and Activity (data freshness, jobs and the write log).
@@ -170,7 +170,7 @@ Nothing is billed until you set all of this up yourself:
 
 ## Portfolio
 
-Holdings are entered by you (Portfolio → Record & import, or CSV). No wallet or exchange is ever connected. To fix an entry, use **Correct** under Portfolio → Transactions: the form starts from the recorded values, and saving voids the old entry (it stays visible, with your reason) and records the corrected one in one save.
+Holdings are entered by you (Portfolio → Record & import, or CSV), or come from public wallet addresses you track read-only (below). No exchange is ever connected and no wallet is ever asked to sign or approve anything. To fix an entry, use **Correct** under Portfolio → Transactions: the form starts from the recorded values, and saving voids the old entry (it stays visible, with your reason) and records the corrected one in one save.
 
 - FIFO lots per account, exact to 18 decimal places. Transfers between your own accounts (same transfer ID on both sides) create no gain or loss. Every fee stays in the fee totals.
 - Unknown stays unknown: a missing purchase price means unknown cost basis; a missing price means unknown value, never zero. The page states its valuation state (all priced, partly priced, stale, none priced), shows the priced subtotal with how many positions it covers, and names the denominator of every allocation.
@@ -185,6 +185,17 @@ date,type,account,asset,quantity,price_usd,fee_amount,fee_asset,transfer_id,btc_
 
 `type` is `buy`, `sell`, `transfer_out`, `transfer_in`, `income`, `fee`, `deposit_cash` or `withdraw_cash`. `asset` is the CoinGecko ID of a project with a verified identity (for example `huma-finance`, `allora`), a reference asset (`bitcoin`), or `usd`.
 
+### Tracked wallets (read-only)
+
+Portfolio → Wallets → **Add wallet**: a label, the public address (0x…) and the networks to follow (Ethereum, Base, Arbitrum One, Optimism, Linea, Polygon, BNB Smart Chain, Avalanche C-Chain; nothing is scanned that you did not choose). The desk then reads that address through Moralis on its own schedule, every 10 minutes per network by default, so the Portfolio stays current with your PC and browser closed. It never asks for a private key, a seed phrase, a signature or an approval, and it cannot move anything.
+
+- **Three things, kept apart.** *Wallet balances* (top of Positions) are what the chain shows at the last complete sync, with their age. *Recorded positions* are the ledger: your entries plus wallet activity recorded from the chain (Transactions → Source names the network and transaction). *Reconciliation* (Wallets) compares the two per account and asset: matches, ledger catching up (activity not recorded yet explains it), waiting for your decision, or differs (nothing explains it; it stays visible, with when it was first seen, and the ledger is never adjusted to match).
+- **What is recorded automatically:** only final, successful activity in a token with a verified identity (a project's chain and contract, or the network's native coin): incoming and outgoing transfers, transfers between two tracked wallets (one transfer with its lots), simple one-for-one swaps (a sell and a buy at unknown price) and network fees. The first balance read records nothing: tokens you already held show "Acquisition cost unknown" until history or your own entry explains them. Bridges, staking, liquidity, lending, mints, multi-token swaps and unknown activity stay unresolved and visible.
+- **Your own entries win.** If the wallet's ledger account already has transactions you recorded for the same asset, an import that could count them twice waits under "Waiting for your decision": Record in ledger, or Already recorded.
+- **Spam and dust** (flagged by the provider, advertising names, unsolicited unverified tokens, or worth under $1) stay out of the main list, under "Suspected spam and dust". Receiving a token never starts research and never creates a project.
+- **Pause syncing** keeps the last view; **Remove tracking** stops reading and keeps every event, snapshot and ledger entry. **Sync now** joins the same queue and limits.
+- **Set up on the online desk:** create a Moralis API key (moralis.com) and add it in Render > CryptoResearch > Environment as `MORALIS_API_KEY` (on the PC: `"moralis_api_key"` in `%USERPROFILE%\.cryptoresearch\secrets.json`). Never paste it into a chat. Then add the wallet in Portfolio → Wallets. Without the key nothing is read and the page says so.
+
 ## What updates automatically
 
 | What | When | Needs |
@@ -197,7 +208,8 @@ date,type,account,asset,quantity,price_usd,fee_amount,fee_asset,transfer_id,btc_
 | Research API jobs you started | At once on the online desk (ChatGPT and Gemini collected every 30 s while they run); within minutes while the PC dashboard is open, hourly otherwise | Keys, prices and budget set |
 | Scheduled research | **Off** unless you configure a schedule and allow unattended runs within a budget | Same |
 | Portfolio snapshot, review findings, local backup | Once a day | Same |
-| Your holdings | **Never** automatically; prices don't detect trades | You record transactions |
+| Tracked wallets (Moralis, read-only) | Every 10 minutes per network on the online desk (checked every minute; Sync now asks at once). Balances hourly or when new activity appears. A Moralis rate limit pauses every runner until it says to try again; a failure keeps the last complete view, with its age | A tracked wallet with its networks and `MORALIS_API_KEY`; about 150 compute units per network read, 100 per balance read |
+| Your holdings | From tracked wallets as above; otherwise **never** automatically (prices don't detect trades) | A tracked wallet, or you record transactions |
 | Evidence watch (news, announcements) | **Not configured** | A source you choose |
 
 A price refresh never starts research. The hourly job is one Windows scheduled task, `\CryptoResearch\Hourly`, running as your user with no admin rights and no window. Its last run (including the Node version used) is in `logs/scheduler-last-run.log`. `node dashboard/cli.js schedule status | run | remove`.
@@ -221,6 +233,7 @@ An optional page (**Explorer** in the nav) that compares one category grade acro
 - CoinGecko public API: free, keyless (a free Demo key is recommended on the online desk); a monthly call budget (default 7,500) pauses refreshes before any limit. Market context adds about 2 calls an hour. New research lookups (about 1 to 7 calls each) count in the same budget. The online desk refreshes prices every 15 minutes only while a page is open, hourly otherwise.
 - DefiLlama's public API: free and keyless. A monthly request budget (default 6,000) pauses refreshes before any limit; that is room for about 25 bound projects at 3 requests every 12 hours.
 - GoPlus Security's token security API: free and keyless. A monthly request budget (default 1,500) pauses screening before any limit; that is room for about 300 contracts screened weekly.
+- Moralis (tracked wallets): billed in compute units. At the defaults one network costs about 24,000 a day (a history read every 10 minutes, balances hourly). The desk stops at a daily budget (default 40,000, in Portfolio → Wallets → Sync settings), so two networks need a longer interval or a larger budget. Check your plan on moralis.com: on 2026-10-07 its pricing page listed Starter at $149 a month for 2,000,000 compute units; a free tier of 40,000 a day was still described elsewhere.
 - On the PC everything runs locally: no hosting, no paid services. The online desk, if you set it up, is Render Starter plus a 1 GB disk (about $7.25 a month at Render's October 2026 list prices).
 - Model API research is optional and costs per report (roughly $0.20-0.45 for ChatGPT and $0.15-0.40 for Gemini at list prices); it only runs inside the limits you set, and each provider's own budget or spend cap is a second guard. Claude's research in Cowork, and ChatGPT or Gemini through their own apps, cost nothing extra.
 
@@ -228,7 +241,7 @@ An optional page (**Explorer** in the nav) that compares one category grade acro
 
 - The dashboard on the PC listens on 127.0.0.1 only. It is not reachable from your phone or other devices, and it should not be exposed to make it so. Phone access is the separate online desk (above): reachable from anywhere, but only after sign-in with your passphrase, and holding only the records you create there.
 - Other websites cannot read or change your data: the dashboard checks the Host header, the page's origin and a per-launch token.
-- Outbound traffic: tracked coin IDs to CoinGecko; two market-wide CoinGecko requests about hourly (global figures and the top 100 by market cap, which name none of your projects); identity lookups you trigger; and, only if you configure APIs, the research prompt of the project being researched. No holdings, notes or keys leave the PC.
+- Outbound traffic: tracked coin IDs to CoinGecko; two market-wide CoinGecko requests about hourly (global figures and the top 100 by market cap, which name none of your projects); identity lookups you trigger; only if you track a wallet, its public address and the chosen networks to Moralis; and, only if you configure APIs, the research prompt of the project being researched. No holdings, notes or keys leave the PC. A tracked address stays in your records only: never in Git, logs, status files or public pages.
 - This folder is in Documents, which is not synced to OneDrive on this PC. Copying it to the cloud is your separate decision.
 
 ## Backups, recovery, exports
@@ -257,7 +270,7 @@ See [WORKSPACE-MAP.md](WORKSPACE-MAP.md) for every folder and file convention, a
 ## Limits
 
 - **PDF reports** are kept byte for byte and flagged "needs text"; scores cannot be read from a PDF offline. Paste the text, or ask Cowork to transcribe it.
-- **No exchange or wallet sync, no external notifications.** Each would need explicit setup. Remote access is only the online desk, behind your passphrase.
+- **No exchange sync, no external notifications.** Wallet tracking is read-only, EVM networks only (no Solana or Bitcoin addresses yet), one provider (Moralis); NFTs are not tracked, and bridges, staking and liquidity positions stay unresolved rather than being guessed. Remote access is only the online desk, behind your passphrase.
 - **Automatic research needs API keys.** ChatGPT and Gemini run by themselves only through their APIs (keys in Render's environment, billed per use); without keys they wait for you to ask their own apps. Claude's research is done by Cowork (or, with its key, by the Claude API). Server-side model fallbacks are not used, so the model that was budgeted is the model that answers.
 - **Claude in Cowork needs its session** until it saves its report; ChatGPT and Gemini through their APIs do not need any session, browser tab or this PC.
 - **Rank** is CoinGecko's market-cap rank and is labeled as such. A CoinMarketCap rank needs a CoinMarketCap API key and adapter; it is listed in settings as not configured and is never substituted.

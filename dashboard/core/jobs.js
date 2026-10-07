@@ -5,6 +5,8 @@
 //   market    prices and supply metrics                  every 5 min while the dashboard is open, about hourly otherwise
 //   fundamentals  DefiLlama fees/revenue of bound projects  every 12 h per project (fundamentals.js); a new binding at once
 //   screening  GoPlus contract flags of verified contracts  weekly per project (screening.js); a contract change at once
+//   wallets   read-only sync of tracked wallet addresses  every wallet_sync.interval_minutes per network, or when
+//             asked (walletsync.js); only with a tracked wallet and a Moralis key
 //   research  run queued research jobs (explicit requests or configured schedules only)
 //   snapshot  daily portfolio snapshot                   once per day (America/New_York)
 //   reviews   daily review findings                      once per day
@@ -23,7 +25,7 @@ const { ymdInTz } = require('./dates');
 const JOB_STATE_REL = 'logs/jobs-state.json';
 const JOB_LOG_REL = 'logs/jobs.jsonl';
 const FINDINGS_REL = 'logs/review-findings.json';
-const JOB_NAMES = ['requests', 'inbox', 'market', 'fundamentals', 'screening', 'research', 'snapshot', 'reviews', 'backup', 'offsite'];
+const JOB_NAMES = ['requests', 'inbox', 'market', 'fundamentals', 'screening', 'wallets', 'research', 'snapshot', 'reviews', 'backup', 'offsite'];
 const DAILY = new Set(['snapshot', 'reviews', 'backup', 'offsite']);
 const OK_STATUSES = new Set(['ok', 'noop', 'attention', 'skipped', 'partial', 'busy', 'backoff', 'budget_paused', 'not_due']);
 
@@ -64,6 +66,14 @@ function isDue(ws, name, state, now = Date.now(), opts = {}) {
       // Closed while GoPlus's rate limit or a failure backoff runs.
       try {
         return require('./screening').isDue(ws, now);
+      } catch (_) {
+        return false;
+      }
+    case 'wallets':
+      // Closed without a tracked wallet or a key, in a restored copy, and
+      // while Moralis's rate limit or a key refusal runs.
+      try {
+        return require('./walletsync').isDue(ws, now);
       } catch (_) {
         return false;
       }
@@ -154,6 +164,11 @@ async function runJobBody(ws, name, trigger) {
       // Same shape as fundamentals: lease, gate, backoff and budget inside refresh().
       const r = await require('./screening').refresh(ws, { trigger });
       return { status: r.status, summary: r.message, error: r.status === 'failed' ? r.message : null };
+    }
+    case 'wallets': {
+      // Its own lease, gate, backoff and compute-unit budget are inside refresh().
+      const r = await require('./walletsync').refresh(ws, { trigger });
+      return { status: r.status === 'not_configured' || r.status === 'held' ? 'skipped' : r.status, summary: r.message, error: r.status === 'failed' ? r.message : null };
     }
     case 'research': {
       const r = await require('./research').runDueJobs(ws, { trigger });

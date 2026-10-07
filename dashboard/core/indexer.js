@@ -560,6 +560,11 @@ function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = 
   for (const w of pf.warnings) {
     if (['shortfall', 'in_transit', 'transfer_mismatch', 'unmatched_transfer_in', 'ambiguous_transfer_id', 'transfer_quarantined', 'bridge_unmatched_asset'].includes(w.kind)) attention.push({ kind: `portfolio_${w.kind}`, severity: 'medium', project_id: null, title: 'Portfolio record needs attention', detail: w.message });
   }
+  // Tracked wallets: a decision waiting, a difference with the ledger, an
+  // entry reversed on chain, a network that stopped syncing.
+  try {
+    attention.push(...require('./wallets').attentionItems(ws, { pf, now }));
+  } catch (_) { /* wallet records are optional; their page says what is wrong */ }
   const blocked = require('./ops').blockedState(ws);
   if (blocked) attention.push({ kind: 'writes_blocked', severity: 'high', project_id: null, title: 'Saving is blocked until a failed check is resolved', detail: `${blocked.reason} (op ${blocked.op_id}). Run: node dashboard/cli.js recover --status` });
   let researchProviders = null;

@@ -208,6 +208,22 @@ async function doctor(ws, { writeProbe = false } = {}) {
     add('Contract screening', !warn, detail, warn ? 'warn' : 'info');
   } catch (_) { /* screening module optional */ }
 
+  try {
+    // Tracked wallets: counts, the key's presence and the last good sync;
+    // never an address.
+    const tracked = require('./wallets').listWallets(ws).filter((w) => w.status !== 'removed');
+    if (tracked.length) {
+      const st = require('./walletsync').statusOf(ws);
+      const s = st.summary;
+      const nets = Object.values(st.networks).filter((n) => n.state !== 'removed');
+      const behind = nets.filter((n) => ['failing', 'stale', 'unavailable'].includes(n.state)).length;
+      const detail = `${tracked.length} wallet(s), ${nets.length} network(s) followed read-only through Moralis; key ${s.key_present ? 'present' : 'missing (MORALIS_API_KEY)'}; last complete sync ${s.last_success_at || 'never'}; compute units today ${s.calls.day_cu || 0}${s.daily_cu_budget ? ` of ${s.daily_cu_budget}` : ''}${s.gate ? `; waiting: ${s.gate.why} until ${s.gate.until}` : ''}${s.held_restored_copy ? '; held in this restored copy' : ''}${behind ? `; ${behind} network(s) not current` : ''}.`;
+      add('Wallet sync', s.key_present && !behind, detail, s.key_present && !behind ? 'ok' : 'warn');
+    } else {
+      add('Wallet sync', true, 'No wallet is tracked, so nothing is read.', 'info');
+    }
+  } catch (_) { /* wallet module optional */ }
+
   const pendingReq = require('./requests').pendingRequests(ws);
   add('Queued requests', pendingReq.length === 0, pendingReq.length ? `${pendingReq.length} pending (not saved yet)` : 'None pending', pendingReq.length ? 'warn' : 'ok');
   const inboxSt = require('./inbox').inboxStatus(ws);

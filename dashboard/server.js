@@ -192,6 +192,22 @@ function validateSettingsPatch(patch, ws = null) {
     if (patch.market_data.foreground_interval_minutes !== undefined) out.market_data.foreground_interval_minutes = num(patch.market_data.foreground_interval_minutes, 2, 240, 'Refresh interval');
     if (patch.market_data.monthly_call_budget !== undefined) out.market_data.monthly_call_budget = num(patch.market_data.monthly_call_budget, 100, 1000000, 'Monthly call budget');
   }
+  if (patch.wallet_sync) {
+    // Schedule and limits only; the Moralis key is never accepted from the page.
+    const w = patch.wallet_sync;
+    if (Object.keys(w).some((k) => /key|secret|token|address/i.test(k))) throw new OpError('REFUSED', 'Keys and addresses are never stored in settings. The Moralis key goes in Render > Environment (MORALIS_API_KEY); addresses are added as tracked wallets.');
+    out.wallet_sync = {};
+    if (w.enabled !== undefined) out.wallet_sync.enabled = Boolean(w.enabled);
+    const whole = (v, lo, hi, label) => {
+      const n = num(v, lo, hi, label);
+      if (!Number.isInteger(n)) throw new OpError('INVALID', `${label} must be a whole number from ${lo} to ${hi}.`);
+      return n;
+    };
+    if (w.interval_minutes !== undefined) out.wallet_sync.interval_minutes = whole(w.interval_minutes, 5, 1440, 'Sync interval (minutes)');
+    if (w.balance_refresh_minutes !== undefined) out.wallet_sync.balance_refresh_minutes = whole(w.balance_refresh_minutes, 5, 1440, 'Balance refresh (minutes)');
+    if (w.daily_cu_budget !== undefined) out.wallet_sync.daily_cu_budget = w.daily_cu_budget === null || w.daily_cu_budget === '' ? null : whole(w.daily_cu_budget, 500, 100000000, 'Daily compute-unit budget');
+    if (w.dust_usd !== undefined) out.wallet_sync.dust_usd = num(w.dust_usd, 0, 1000, 'Dust threshold (USD)');
+  }
   if (patch.research) {
     // Only limits and model choices; API keys are never accepted from the page.
     out.research = {};
@@ -480,6 +496,9 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
       if (!filename) return scheduleRebuild('all');
       const rel = toPosix(String(filename));
       if (/\.tmp-\d+-|[\\/]?\.cr[\\/]|^\.cr/.test(rel) || rel === UI_STATE_REL) return;
+      // The wallet sync's progress counter changes with every request; the
+      // run itself redraws when it ends (walletTick).
+      if (rel === 'portfolio/wallets/sync-state.json') return;
       const top = rel.split('/')[0];
       if (!WATCH_TOP.has(top)) return;
       if (top === 'logs' && !/^logs\/(operations\.jsonl|jobs-state\.json|ingestion-state\.json|review-findings\.json|requests\/)/.test(rel)) return;
@@ -504,7 +523,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
       const i = fileInfo(ws.abs(rel));
       parts.push(`${rel}:${i ? `${i.size}:${i.mtimeMs}` : '-'}`);
     };
-    ['logs/operations.jsonl', 'logs/jobs-state.json', 'logs/ingestion-state.json', 'market-data/status.json', 'market-data/latest.json', 'market-data/fundamentals/status.json', 'market-data/screening/status.json', 'config/settings.json', 'portfolio/transactions.json', 'portfolio/accounts.json', 'portfolio/limits.json', 'portfolio/events.json'].forEach(add);
+    ['logs/operations.jsonl', 'logs/jobs-state.json', 'logs/ingestion-state.json', 'market-data/status.json', 'market-data/latest.json', 'market-data/fundamentals/status.json', 'market-data/screening/status.json', 'config/settings.json', 'portfolio/transactions.json', 'portfolio/accounts.json', 'portfolio/limits.json', 'portfolio/events.json', 'portfolio/wallets/registry.json'].forEach(add);
     for (const id of listDir(ws.abs('projects'), { dirs: true })) {
       for (const f of ['project.json', 'events.json', 'claim-reviews.json', 'disputes.json', 'notes/conviction.md']) add(`projects/${id}/${f}`);
       parts.push(`${id}/reports:${listDir(ws.abs(`projects/${id}/reports`), { dirs: true }).join('|')}`);
@@ -624,14 +643,41 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
       console.error('Research request check failed:', err.message);
     }
   }
+  // Tracked wallets (walletsync.js): checked every minute, read only when a
+  // network is due (its interval, or Sync now) and a Moralis key is set. One
+  // run at a time in this process, one lease across processes; a request that
+  // arrives while a run is going joins the next one. Viewing a page never
+  // starts a sync.
+  let walletRunning = false;
+  let walletAgain = false;
+  async function walletTick() {
+    if (walletRunning) {
+      walletAgain = true;
+      return;
+    }
+    walletRunning = true;
+    try {
+      do {
+        walletAgain = false;
+        if (!jobs.isDue(ws, 'wallets', jobs.readJobState(ws))) break;
+        const out = await jobs.runJob(ws, 'wallets', { trigger: hosted ? 'hosted' : 'dashboard', onlyDue: true });
+        if (out && !['noop', 'not_due', 'busy', 'skipped'].includes(out.status)) rebuild(['portfolio']);
+      } while (walletAgain);
+    } catch (err) {
+      console.error('Wallet sync failed:', err.message);
+    } finally {
+      walletRunning = false;
+    }
+  }
   const marketTimer = setInterval(() => marketTick(false), 60000);
+  const walletTimer = setInterval(() => walletTick(), 60000);
   const researchTimer = setInterval(() => researchTick(), 2 * 60000);
   const intakeTimer = setInterval(() => sweepIntake(), 60000);
   // DefiLlama fundamentals ride along: due per project every 12 hours, under
   // the lease, gate and backoff they share with the scheduled task and the CLI.
   const dailyTimer = setInterval(() => jobs.runJobs(ws, ['snapshot', 'reviews', 'backup', 'fundamentals', 'screening'], { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 30 * 60000);
 
-  const api = makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIdentify, clients, sockets, oauth });
+  const api = makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTick, queueIdentify, clients, sockets, oauth });
 
   server.on('request', async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -748,6 +794,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     setTimeout(() => sweepIntake(), 2500),
     setTimeout(() => researchTick(), 5000),
     setTimeout(() => jobs.runJobs(ws, ['snapshot', 'reviews', 'backup', 'fundamentals', 'screening'], { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 8000),
+    setTimeout(() => walletTick(), 12000),
   ];
 
   const onSignal = () => stop(0);
@@ -760,6 +807,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     clearTimeout(rebuildRetry);
     clearInterval(pollTimer);
     clearInterval(marketTimer);
+    clearInterval(walletTimer);
     clearInterval(researchTimer);
     clearTimeout(researchSoon);
     clearInterval(intakeTimer);
@@ -803,7 +851,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   return { url: `${origin}/`, port: boundPort, token, server, shutdown, state, queueIdentify, researchTick };
 }
 
-function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIdentify, clients, sockets, oauth = null }) {
+function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTick = () => {}, queueIdentify, clients, sockets, oauth = null }) {
   const send = (res, status, body, type = 'application/json; charset=utf-8', extra = {}) => {
     res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', ...extra });
     res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
@@ -1099,6 +1147,35 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIde
   route('POST', '/api/portfolio/transactions/([^/]+)/correct', (m, req, res, body) => after(portfolio.correctTransaction(ws, rid(m[1]), body.transaction && typeof body.transaction === 'object' ? body.transaction : {}, body.reason)));
   route('POST', '/api/portfolio/csv', (m, req, res, body) => after(portfolio.importCsv(ws, String(body.csv || ''), { filename: body.filename || 'dashboard.csv', defaultAccount: body.account_id || null, allowIdentical: Boolean(body.allow_identical) })));
   route('POST', '/api/portfolio/accounts', (m, req, res, body) => after(portfolio.addAccount(ws, body)));
+  // Tracked wallets (core/wallets.js, core/walletsync.js): public addresses,
+  // read-only. Reading never syncs; Sync now and a new wallet join the same
+  // queue the one-minute check runs, under the same limits.
+  const walletsCore = require('./core/wallets');
+  route('GET', '/api/wallets', () => coherent(() => walletsCore.overview(ws, { market: market.readLatest(ws) })));
+  route('POST', '/api/wallets', (m, req, res, body) => once(body, () => {
+    const out = walletsCore.addWallet(ws, { label: body.label, address: body.address, networks: body.networks, account_id: typeof body.account_id === 'string' && body.account_id ? body.account_id : null });
+    if (out.status === 'saved') setTimeout(() => walletTick(), 1000);
+    return after(out);
+  }));
+  route('POST', '/api/wallets/(w_[a-z2-9]{10})/(pause|resume|remove|sync|networks)', (m, req, res, body) => {
+    const id = m[1];
+    if (m[2] === 'sync') {
+      const out = require('./core/walletsync').requestSync(ws, id);
+      if (out.status === 'queued') setTimeout(() => walletTick(), 300);
+      return out;
+    }
+    if (m[2] === 'pause') return after(walletsCore.pauseWallet(ws, id));
+    if (m[2] === 'resume') return after(walletsCore.resumeWallet(ws, id));
+    if (m[2] === 'networks') return after(walletsCore.setWalletNetworks(ws, id, body.networks));
+    return after(walletsCore.removeWallet(ws, id, typeof body.reason === 'string' ? body.reason : null));
+  });
+  // Eric's decision on a held wallet event, applied to the ledger at once (no
+  // network involved).
+  route('POST', '/api/wallets/events/resolve', (m, req, res, body) => {
+    const out = walletsCore.resolveEvent(ws, { wallet_id: String(body.wallet_id || ''), network: String(body.network || ''), event_key: String(body.event_key || ''), decision: body.decision, note: typeof body.note === 'string' ? body.note : null });
+    const ledger = walletsCore.importReady(ws);
+    return after({ ...out, ledger: { status: ledger.status, recorded: ledger.recorded, held: ledger.held } });
+  });
   route('POST', '/api/portfolio/limits', (m, req, res, body) => after(portfolio.setLimits(ws, body)));
   // A refresh within a minute of the last successful one returns the saved
   // status without calling CoinGecko, so repeated presses or reloads never

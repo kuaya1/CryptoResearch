@@ -52,6 +52,7 @@ node_modules/
 # Audits: only the reviewed reports below are tracked
 
 /audits/*/*
+!/audits/2026-10-07-wallet-sync/README.md
 !/audits/2026-10-06-desk-clarity/README.md
 !/audits/2026-10-06-supabase-explorer/README.md
 !/audits/2026-10-07-seven-corrections/README.md

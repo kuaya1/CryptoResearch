@@ -707,6 +707,11 @@ function computePortfolio(ws, { market = null, now = Date.now() } = {}) {
     }
   }
 
+  // Where each warning's transaction came from (manual, csv, wallet_sync, ...),
+  // so the page can group the expected notes of imported wallet activity.
+  const sourceOf = new Map(active.map((t) => [t.tx_id, t.source || null]));
+  for (const w of warnings) if (w.tx_id && sourceOf.has(w.tx_id)) w.source = sourceOf.get(w.tx_id);
+
   const settings = ws.settings;
   const openLegs = [...transit.values()].flat().filter((l) => l.direction === 'out' && !l.matched);
   const assetIds = new Set([...[...lots.keys()].map((k) => k.split('|')[1]), ...openLegs.map((p) => p.asset_id), ...[...stats.keys()].filter((a) => {
@@ -725,7 +730,11 @@ function computePortfolio(ws, { market = null, now = Date.now() } = {}) {
       const [acct, a] = k.split('|');
       if (a !== assetId) continue;
       const qa = list.reduce((sum, l) => sum + l.qty, 0n);
-      if (qa > 0n) byAccount.push({ account_id: acct, quantity: n(qa), quantity_exact: D.toString(qa) });
+      // Per account, what is known of the cost (tracked wallets reconcile
+      // and show acquisition cost account by account).
+      const knownA = list.filter((l) => l.cost !== null).reduce((sum, l) => sum + l.cost, 0n);
+      const unknownA = list.filter((l) => l.cost === null).reduce((sum, l) => sum + l.qty, 0n);
+      if (qa > 0n) byAccount.push({ account_id: acct, quantity: n(qa), quantity_exact: D.toString(qa), cost_known_exact: unknownA === qa ? null : D.toString(knownA), unknown_quantity_exact: D.toString(unknownA) });
       for (const l of list) {
         qty += l.qty;
         if (l.cost === null) unknownQty += l.qty;
@@ -975,4 +984,8 @@ module.exports = {
   priceFor,
   looksLikeSecret,
   payloadKey,
+  // The same checks every entry passes, for the wallet import (wallets.js).
+  normalizeTx,
+  validateTx,
+  transferIdErrors,
 };

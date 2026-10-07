@@ -2348,3 +2348,34 @@ button.mtab { border-radius: 10px; }
    the inspector, a laptop) and 170px under 880px; its full text is its title
    and in the inspector. */
 @container wl (min-width: 881px) and (max-width: 1099px) { table.wl .pname { max-width: 180px; } }
+
+/* Tracked wallets (views/wallets.js): one row per token and network, the
+   figures on the right, cost and reconciliation on a second line. The same
+   row on a phone; holdings come first on the Portfolio page. */
+.wh-list { list-style: none; margin: 0; padding: 0; }
+.wh-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; grid-template-areas: "logo name fig" ". foot foot"; column-gap: var(--s3); row-gap: 2px; align-items: center; padding: var(--s3) 0; border-top: 1px solid var(--separator); min-width: 0; }
+.wh-row:first-child { border-top: 0; }
+.wh-row > .logo { grid-area: logo; }
+.wh-name { grid-area: name; min-width: 0; }
+.wh-title { display: flex; align-items: baseline; gap: var(--s2); min-width: 0; font-size: 15px; font-weight: 600; }
+.wh-title > :first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.wh-sym { font-size: var(--fs-body); font-weight: 500; color: var(--text-3); flex: none; }
+.wh-sub { font-size: var(--fs-small); color: var(--text-2); overflow-wrap: anywhere; }
+.wh-fig { grid-area: fig; text-align: right; font-variant-numeric: tabular-nums lining-nums; white-space: nowrap; }
+.wh-qty { font-size: 15px; }
+.wh-val { font-size: var(--fs-body); color: var(--text-2); }
+.wh-foot { grid-area: foot; display: flex; flex-wrap: wrap; gap: var(--s1) var(--s3); align-items: center; font-size: var(--fs-small); color: var(--text-2); min-width: 0; }
+.wh-status { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--s3); margin-bottom: var(--s2); font-size: var(--fs-body); }
+.wh-net { display: inline-flex; align-items: center; gap: var(--s1); min-width: 0; }
+.wh-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s2); margin-top: var(--s1); padding-top: var(--s3); border-top: 1px solid var(--separator); }
+.wh-total strong { font-size: 15px; font-variant-numeric: tabular-nums lining-nums; }
+.wl-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s1) var(--s3); min-width: 0; }
+.wl-nets { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s4); margin: 0; padding: 0; border: 0; min-width: 0; }
+.wl-nets legend { padding: 0; margin-bottom: 6px; font-size: var(--fs-small); font-weight: 600; color: var(--text); }
+@media (max-width: 480px) {
+  .wh-qty, .wh-title { font-size: 14px; }
+}
+.wl-net, .wl-decide { display: flex; flex-direction: column; gap: 4px; padding: var(--s3) 0; border-top: 1px solid var(--separator); min-width: 0; }
+.wl-net:first-child, .wl-decide:first-child { border-top: 0; }
+.wl-net-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--s1) var(--s3); min-width: 0; }
+.wl-decide .btn-row { margin-top: var(--s1); }

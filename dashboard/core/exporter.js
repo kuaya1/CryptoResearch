@@ -374,6 +374,12 @@ function semanticSummary(ws) {
   } catch (err) {
     positions = [{ error: err.message }];
   }
+  let wallets = null;
+  try {
+    wallets = require('./wallets').recordSummary(ws);
+  } catch (err) {
+    wallets = { error: err.message };
+  }
   return {
     projects: projects.length,
     reports: reports.sort((a, b) => a.report_id.localeCompare(b.report_id)),
@@ -381,11 +387,14 @@ function semanticSummary(ws) {
     transactions: txs.length,
     transactions_active: txs.filter((t) => !t.voided).length,
     positions: positions.sort((a, b) => String(a.asset_id).localeCompare(String(b.asset_id))),
+    wallets,
   };
 }
 
 function compareSummaries(a, b) {
   const diffs = [];
+  // Tracked-wallet records (counts only); a backup made before they existed has none to compare.
+  if (a.wallets && b.wallets && JSON.stringify(a.wallets) !== JSON.stringify(b.wallets)) diffs.push(`tracked-wallet records ${JSON.stringify(a.wallets)} vs ${JSON.stringify(b.wallets)}`);
   if (a.projects !== b.projects) diffs.push(`projects ${a.projects} vs ${b.projects}`);
   if (a.corrections !== b.corrections) diffs.push(`corrections ${a.corrections} vs ${b.corrections}`);
   if (a.transactions !== b.transactions) diffs.push(`transactions ${a.transactions} vs ${b.transactions}`);

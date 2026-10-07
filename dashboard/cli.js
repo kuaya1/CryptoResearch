@@ -88,6 +88,18 @@ Portfolio (manual or CSV; never connects to exchanges)
   limits set [--cap 5000] [--max-position-pct 25] [--max-sector-pct 50]
   portfolio show
 
+Tracked wallets (public addresses, read-only through Moralis; key in MORALIS_API_KEY, never here)
+  wallet add --label "MetaMask" --address 0x... --networks eth,base [--account ID]
+                                         never a private key or seed phrase; nothing is scanned
+                                         without networks; the first read is not a purchase
+  wallet list | wallet status            sync state per network | holdings, activity, reconciliation
+  wallet sync [<wallet_id>]              read now (same lease, rate limit and compute-unit budget)
+  wallet pause|resume <wallet_id>
+  wallet remove <wallet_id> [--reason TEXT]   stops following; events and ledger entries stay
+  wallet networks <wallet_id> --networks eth,base
+  wallet resolve <wallet_id> <network> <event_key> --record | --skip [--note TEXT]
+                                         your decision on a held import ("--skip" = already recorded)
+
 Data, jobs and maintenance
   market refresh | market status
   market context [--refresh]             market-cycle snapshot: BTC trend, dominance, breadth (descriptive)
@@ -97,7 +109,7 @@ Data, jobs and maintenance
   screen refresh [<id>...]               GoPlus contract flags now (contracts of verified identities;
                                          skips the failure backoff, never GoPlus's rate limit)
   screen status [<id>]                   saved contract screens: flags, taxes, alerts, what is not screenable
-  job run [requests|inbox|market|fundamentals|screening|research|snapshot|reviews|backup|offsite]... [--all-due] [--trigger scheduler]
+  job run [requests|inbox|market|fundamentals|screening|wallets|research|snapshot|reviews|backup|offsite]... [--all-due] [--trigger scheduler]
   schedule install|status|run|remove
   requests process | requests status <request_id>
   index rebuild
@@ -647,6 +659,41 @@ async function run(argv) {
     case 'portfolio': {
       const market = require('./core/market');
       return portfolio.computePortfolio(ws, { market: market.readLatest(ws) });
+    }
+    case 'wallet': {
+      // Tracked wallets: public addresses, read-only (core/wallets.js).
+      const wallets = require('./core/wallets');
+      const sync = require('./core/walletsync');
+      const id = rest[0];
+      if (sub === 'add') {
+        const r = wallets.addWallet(ws, { label: need(one(flags.label), '--label required'), address: need(one(flags.address), '--address 0x... required (public address only)'), networks: need(one(flags.networks), `--networks required (${Object.keys(wallets.NETWORKS).join(', ')})`), account_id: one(flags.account) || null });
+        return { ...r, ...(await afterWrite(ws)) };
+      }
+      if (['pause', 'resume', 'remove', 'networks'].includes(sub)) {
+        need(id, `wallet ${sub} <wallet_id>`);
+        const r = sub === 'pause' ? wallets.pauseWallet(ws, id) : sub === 'resume' ? wallets.resumeWallet(ws, id) : sub === 'remove' ? wallets.removeWallet(ws, id, one(flags.reason) || null) : wallets.setWalletNetworks(ws, id, need(one(flags.networks), '--networks required'));
+        return { ...r, ...(await afterWrite(ws)) };
+      }
+      if (sub === 'sync') {
+        // Asks for a read and runs it now, under the same lease, gate and budget.
+        const asked = id ? sync.requestSync(ws, id) : null;
+        if (asked && asked.status !== 'queued') return asked;
+        const r = await sync.refresh(ws, { trigger: one(flags.trigger) || 'cli', walletIds: id ? [id] : null, force: !id });
+        const wrote = !['noop', 'busy', 'backoff', 'skipped', 'not_configured', 'held'].includes(r.status);
+        return { ...r, ...(wrote ? await afterWrite(ws) : {}) };
+      }
+      if (sub === 'resolve') {
+        const choice = flags.record ? 'record' : flags.skip ? 'skip' : null;
+        const r = wallets.resolveEvent(ws, { wallet_id: need(id, 'wallet resolve <wallet_id> <network> <event_key> --record|--skip'), network: need(rest[1], 'network required'), event_key: need(rest[2], 'event key required'), decision: need(choice, '--record or --skip required'), note: one(flags.note) || null });
+        const ledger = wallets.importReady(ws);
+        return { ...r, ledger, ...(await afterWrite(ws)) };
+      }
+      if (sub === 'status') return wallets.overview(ws);
+      if (sub === 'list' || !sub) {
+        const st = sync.statusOf(ws);
+        return { sync: st.summary, estimate: sync.estimateDailyCu(ws), wallets: wallets.listWallets(ws).map((w) => ({ wallet_id: w.wallet_id, label: w.label, address: w.address, account_id: w.account_id, status: w.status, networks: w.networks.map((n) => ({ network: n, ...st.networks[`${w.wallet_id}:${n}`] })) })) };
+      }
+      throw Object.assign(new Error('wallet list|status|add|pause|resume|remove|networks|sync|resolve'), { code: 'USAGE' });
     }
     case 'market': {
       const market = require('./core/market');

@@ -70,7 +70,14 @@ CryptoResearch/
 │   ├── limits.json             Capital cap, max position %, max sector %
 │   ├── events.json             Portfolio-level reviews
 │   ├── imports/                CSV files exactly as imported
-│   └── snapshots/<date>.json   Daily valuation snapshot with the prices used
+│   ├── snapshots/<date>.json   Daily valuation snapshot with the prices used
+│   └── wallets/                Tracked wallets, read-only (core/wallets.js, core/walletsync.js)
+│       ├── registry.json           Label, public address, networks, status, linked ledger account
+│       ├── sync-state.json         Sync progress per network: cursors, last success, errors, compute units (no addresses)
+│       └── <wallet_id>/<network>/
+│           ├── events.json         One event per transfer leg or fee: chain references, classification, state, ledger link
+│           ├── balances.json       Last complete balance snapshot and the ten before it (exact raw amounts)
+│           └── raw/<YYYY-MM>.json  The provider's original items by transaction hash, every version kept
 ├── market-data/
 │   ├── latest.json             Last VALID observation per asset (invalid or older data never overwrites)
 │   ├── status.json             Last attempt / success / error, backoff, monthly call count

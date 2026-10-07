@@ -106,6 +106,31 @@ const DEFAULT_SETTINGS = {
     },
   },
   portfolio: { base_currency: 'USD', accounting_method: 'fifo_per_account' },
+  // Read-only tracking of public wallet addresses (wallets.js, walletsync.js):
+  // nothing is read until a wallet with its networks and a Moralis key
+  // (MORALIS_API_KEY, never stored here) are both present. Each network is
+  // read every interval_minutes; balances every balance_refresh_minutes or
+  // when new activity appears. daily_cu_budget caps Moralis compute units per
+  // day (America/New_York); null removes the cap. recheck_minutes is how far
+  // back each read overlaps the last one, to catch reorganizations and late
+  // confirmations.
+  wallet_sync: {
+    enabled: true,
+    provider: 'moralis',
+    interval_minutes: 10,
+    balance_refresh_minutes: 60,
+    daily_cu_budget: 40000,
+    timeout_seconds: 20,
+    max_attempts: 2,
+    max_pages_per_run: 40,
+    max_balance_pages: 20,
+    recheck_minutes: 120,
+    stale_after_minutes: 60,
+    backoff_initial_minutes: 5,
+    backoff_max_minutes: 240,
+    sync_now_min_seconds: 60,
+    dust_usd: 1,
+  },
   inbox: { settle_seconds: 2 },
   requests: { settle_seconds: 2 },
   backups: { keep_recent: 14, keep_monthly: 12 },

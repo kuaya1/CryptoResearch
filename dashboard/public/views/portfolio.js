@@ -4,6 +4,7 @@ import {
   h, card, table, stateText, fmtUsd, fmtNum, fmtPct, fmtDate, fmtDateTime, freshnessText, callout, empty, link, field, fieldError, input, select,
   button, action, tabStrip, safeSection, submissionId, openDialog,
 } from '../ui.js';
+import { walletHoldingsCard, walletsTab } from './wallets.js';
 
 const TX_TYPES = ['buy', 'sell', 'transfer_out', 'transfer_in', 'income', 'fee', 'deposit_cash', 'withdraw_cash'];
 
@@ -47,12 +48,30 @@ function openCorrectDialog(ctx, t, ledger) {
 
 const TABS = [
   ['positions', 'Positions'],
+  ['wallets', 'Wallets'],
   ['transactions', 'Transactions'],
   ['record', 'Record & import'],
 ];
 
+// Where a ledger entry came from, in words; a wallet import names its
+// network and transaction.
+const SOURCE_WORDS = { manual: 'Manual', csv: 'CSV import', dashboard: 'Dashboard', correction: 'Correction', connector: 'Assistant', request: 'Request' };
+const EXPLORERS = { eth: 'https://etherscan.io', base: 'https://basescan.org', arbitrum: 'https://arbiscan.io', optimism: 'https://optimistic.etherscan.io', linea: 'https://lineascan.build', polygon: 'https://polygonscan.com', bsc: 'https://bscscan.com', avalanche: 'https://snowtrace.io' };
+function sourceCell(t) {
+  const p = t.provenance;
+  if (t.source === 'wallet_sync' && p && p.tx_hash) {
+    const base = EXPLORERS[p.network];
+    return h('div', { class: 'small' }, `Wallet sync · ${p.network}`, h('div', null, base ? link(`${p.tx_hash.slice(0, 10)}…`, `${base}/tx/${p.tx_hash}`, { class: 'mono', title: p.tx_hash }) : h('code', { class: 'mono', title: p.tx_hash }, `${p.tx_hash.slice(0, 10)}…`)));
+  }
+  return h('span', { class: 'small' }, SOURCE_WORDS[t.source] || t.source || '—');
+}
+
+// Wallet imports carry no prices and leave to addresses outside your
+// accounts: expected notes, counted in one line instead of one per entry.
+const WALLET_NOTE_KINDS = new Set(['external_deposit', 'external_transfer_out', 'unknown_basis', 'unknown_proceeds']);
+
 const STATE_TEXT = {
-  no_records: ['No holdings recorded', 'info', 'Researching a token never creates a position. Record transactions under Record & import when you want portfolio tracking.'],
+  no_records: ['Nothing recorded in the ledger', 'info', 'Researching a token never creates a position. Record transactions under Record & import, or track a wallet under Wallets.'],
   empty: ['All positions closed', 'info', 'Every recorded position is closed. Realized results and fees stay below.'],
   all_unpriced: ['No position has a usable price', 'bad', 'Values are unknown, not zero. Prices return when market data refreshes.'],
   partially_priced: ['Partly priced', 'warn', 'Some positions have no usable price. Totals cover priced positions only and say so.'],
@@ -64,7 +83,7 @@ const STATE_TEXT = {
 export async function renderPortfolio(ctx, route) {
   const tab = TABS.some(([t]) => t === route.query.get('tab')) ? route.query.get('tab') : 'positions';
   const strip = tabStrip(TABS.map(([t, label]) => ({ id: t, label, href: `#/portfolio${t === 'positions' ? '' : `?tab=${t}`}` })), tab, { label: 'Portfolio sections' });
-  const body = await safeSection(TABS.find(([t]) => t === tab)[1], () => ({ positions: positionsTab, transactions: transactionsTab, record: recordTab })[tab](ctx));
+  const body = await safeSection(TABS.find(([t]) => t === tab)[1], () => ({ positions: positionsTab, wallets: walletsTab, transactions: transactionsTab, record: recordTab })[tab](ctx));
   return h('div', null,
     h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Portfolio'))),
     strip,
@@ -95,9 +114,19 @@ function summaryItem(label, value, hint) {
   return h('div', { class: 'item' }, h('div', { class: 'label' }, label), h('div', { class: 'value' }, value), hint ? h('div', { class: 'hint' }, hint) : null);
 }
 
-function positionsTab(ctx) {
+async function positionsTab(ctx) {
   const idx = ctx.state.index;
   const pf = idx.portfolio;
+  // Tracked wallets first (what the chain shows); the ledger follows. A
+  // failure to read them never hides the ledger.
+  let walletCard = null;
+  try {
+    walletCard = walletHoldingsCard(ctx, await ctx.api.get('/api/wallets'));
+  } catch (err) {
+    walletCard = callout(`Wallet balances could not be shown: ${err.message}. The ledger below is unaffected.`, 'warn');
+  }
+  const walletNotes = pf.warnings.filter((w) => w.source === 'wallet_sync' && WALLET_NOTE_KINDS.has(w.kind));
+  const otherNotes = pf.warnings.filter((w) => !walletNotes.includes(w));
   const t = pf.totals;
   const open = pf.positions.filter((p) => !p.closed);
   const closed = pf.positions.filter((p) => p.closed);
@@ -120,6 +149,7 @@ function positionsTab(ctx) {
 
   const limits = pf.limits || {};
   return h('div', null,
+    walletCard,
     callout(h('span', null, h('strong', null, `${stateLabel}. `), stateNote), stateKind === 'ok' ? 'ok' : stateKind === 'bad' ? 'bad' : stateKind === 'warn' ? 'warn' : 'info'),
     open.length ? h('div', { class: 'summary-row' },
       summaryItem('Priced value', fmtUsd(t.value_priced_usd), `${t.priced_count} of ${t.open_count} open position(s) priced${t.unpriced_count ? ` · unpriced: ${t.unpriced_assets.join(', ')}` : ''}`),
@@ -127,13 +157,15 @@ function positionsTab(ctx) {
       summaryItem('Realized (known)', fmtUsd(t.realized_known_usd), t.realized_unknown_positions ? `${t.realized_unknown_positions} position(s) with unknown basis` : 'all sales have known basis'),
       summaryItem('Fees paid', fmtUsd(t.fees_usd), t.fees_crypto_cost_usd ? `includes ${fmtUsd(t.fees_crypto_cost_usd)} paid in crypto (at cost)` : 'USD and in-kind, at cost'),
       summaryItem('Stale prices', String(t.stale_count || 0), t.stale_count ? t.stale_assets.join(', ') : 'none')) : null,
-    pf.warnings.length ? card('Records that need attention', h('ul', { class: 'list' }, pf.warnings.map((w) => h('li', null, w.message))), { note: 'Nothing is estimated to fill these gaps.' }) : null,
+    pf.warnings.length ? card('Records that need attention', h('ul', { class: 'list' },
+      otherNotes.map((w) => h('li', null, w.message)),
+      walletNotes.length ? h('li', null, `${walletNotes.length} wallet import${walletNotes.length === 1 ? '' : 's'} with no recorded price, or sent to an address outside your accounts. The chain gives quantities, not prices; Correct an entry to add one.`) : null), { note: 'Nothing is estimated to fill these gaps.' }) : null,
     (pf.quarantine || []).length ? card('Quarantined records', table([
       { label: 'Record', render: (q) => h('code', { class: 'small' }, q.tx_id || q.id || '?') },
       { label: 'Why', wrap: true, render: (q) => q.reason || q.message || '' },
     ], pf.quarantine), { note: 'Held out of positions until you resolve them. Nothing was deleted.' }) : null,
-    card('Open positions', positions, {
-      note: open.length ? `Allocation denominator: ${denominator}. Unpriced positions are excluded from it and listed as unpriced. Research grades stay on the watchlist; select an asset to see them.` : null,
+    card('Recorded positions', positions, {
+      note: open.length ? `From the ledger (your entries and recorded wallet activity). Allocation denominator: ${denominator}. Unpriced positions are excluded from it and listed as unpriced. Research grades stay on the watchlist; select an asset to see them.` : null,
       actions: [link('Record transactions', '#/portfolio?tab=record')],
     }),
     h('div', { class: 'grid two' },
@@ -187,6 +219,7 @@ async function transactionsTab(ctx) {
       { label: 'Price (USD)', num: true, render: (t) => (t.price_usd === null || t.price_usd === undefined ? h('span', { class: 'unknown' }, 'unknown') : fmtUsd(Number(t.price_usd))) },
       { label: 'Fee', render: (t) => (t.fee ? `${t.fee.amount} ${t.fee.asset_id}` : null) },
       { label: 'Transfer', render: (t) => (t.transfer_id ? h('code', { class: 'small' }, t.transfer_id) : null) },
+      { label: 'Source', render: sourceCell },
       { label: 'Note', wrap: true, render: (t) => h('span', { class: 'small' }, t.note || '', t.voided ? h('div', { class: 'faint' }, `Voided ${fmtDateTime(t.voided_at)}: ${t.void_reason || ''}`) : null) },
       { label: '', render: (t) => {
         if (t.voided) return h('span', { class: 'faint' }, 'Voided');
@@ -298,7 +331,7 @@ async function recordTab(ctx) {
   limForm.onsubmit = action(limBtn, async () => { const r = await ctx.api.post('/api/portfolio/limits', { speculative_capital_cap_usd: cap.value, max_position_pct: maxPos.value, max_sector_pct: maxSec.value }); await ctx.refresh(); return r; }, 'Limits saved. They only raise flags.');
 
   return h('div', null,
-    callout('Holdings are recorded by you, manually or by CSV. No exchange or wallet is connected and no trading access is ever requested. Quantities are kept exact (18 decimal places).', 'info'),
+    callout('Holdings are recorded by you, manually or by CSV, or from the public wallets you track (read-only, under Wallets). No exchange is connected, no wallet is asked to sign anything and no trading access is ever requested. Quantities are kept exact (18 decimal places).', 'info'),
     card('Record a transaction', txForm, { note: 'A repeated submission is applied once.' }),
     card('Import transactions from CSV', [csvForm, csvOut, h('p', { class: 'small muted', style: { marginTop: '8px' } }, 'The CSV is saved to portfolio/imports/ as received. Rows already recorded are skipped; rows that conflict with a recorded transaction are reported, not overwritten.')]),
     h('div', { class: 'grid two' }, card('Accounts', [accForm, accounts.length ? h('p', { class: 'small muted', style: { marginTop: '8px' } }, `Existing: ${accounts.map((a) => a.account_id).join(', ')}`) : null]), card('Capital limits', limForm)));

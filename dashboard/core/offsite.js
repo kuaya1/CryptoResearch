@@ -341,8 +341,11 @@ async function drill(ws, { file = null, to = null, folder = null } = {}) {
   // The runner, once, with a stand-in for the network that refuses and
   // counts: the restored copy holds research, so it asks for nothing.
   const calls = [];
-  const run = await require('./research').runDueJobs(ws2, { trigger: 'drill', fetchImpl: async (url, opts = {}) => { calls.push(`${opts.method || 'GET'} ${String(url).replace(/\?.*$/, '')}`); throw new Error('drill: no network'); } });
-  const passed = restored.status === 'restored_and_verified' && !changed.length && !calls.length && run.status === 'held';
+  const refuse = async (url, opts = {}) => { calls.push(`${opts.method || 'GET'} ${String(url).replace(/\?.*$/, '')}`); throw new Error('drill: no network'); };
+  const run = await require('./research').runDueJobs(ws2, { trigger: 'drill', fetchImpl: refuse });
+  // Tracked wallets are held too: the copy asks Moralis for nothing.
+  const walletRun = await require('./walletsync').refresh(ws2, { trigger: 'drill', force: true, fetchImpl: refuse });
+  const passed = restored.status === 'restored_and_verified' && !changed.length && !calls.length && run.status === 'held' && walletRun.status === 'held';
   return finishDrill(dir, {
     ...record,
     restore: { dest, status: restored.status, reconciliation: restored.reconciliation, research_held: Boolean(restored.restored_copy && restored.restored_copy.research_held) },
@@ -350,10 +353,11 @@ async function drill(ws, { file = null, to = null, folder = null } = {}) {
     research: states,
     provider_calls: calls.length,
     runner: run.status,
+    wallet_sync: walletRun.status,
     passed,
     message: passed
       ? `Drill passed: ${path.basename(name)} verified (${v.files} files), restored into ${dest} with every file and record total matching, ${originals} original report(s) byte for byte, and no provider asked for anything (${states.unsent} unsent, ${states.sent_collect_by_id} sent, ${states.uncertain} uncertain and ${states.quarantined} quarantined job(s) restored as they were).`
-      : `Drill did not pass: ${[restored.status !== 'restored_and_verified' ? `restore ${restored.status}` : null, changed.length ? `${changed.length} original(s) changed` : null, calls.length ? `${calls.length} provider call(s)` : null, run.status !== 'held' ? 'research was not held' : null].filter(Boolean).join('; ')}.`,
+      : `Drill did not pass: ${[restored.status !== 'restored_and_verified' ? `restore ${restored.status}` : null, changed.length ? `${changed.length} original(s) changed` : null, calls.length ? `${calls.length} provider call(s)` : null, run.status !== 'held' ? 'research was not held' : null, walletRun.status !== 'held' ? 'wallet sync was not held' : null].filter(Boolean).join('; ')}.`,
   });
 }
 
