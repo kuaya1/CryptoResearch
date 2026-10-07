@@ -54,6 +54,7 @@ node_modules/
 /audits/*/*
 !/audits/2026-10-06-desk-clarity/README.md
 !/audits/2026-10-06-supabase-explorer/README.md
+!/audits/2026-10-07-seven-corrections/README.md
 !/audits/2026-10-05-evidence-recovery/README.md
 !/audits/2026-10-05-ui-cleanup-phase2/README.md
 !/audits/2026-10-03-core-workflow/README.md

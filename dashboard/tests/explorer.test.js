@@ -49,8 +49,18 @@ function paged(st, req, list) {
   return { rows, contentRange: rows.length ? `${from}-${from + rows.length - 1}/${total}` : `*/${total}` };
 }
 
+// numeric(5,2), as PostgreSQL rounds it (half away from zero; all values here are >= 0).
+const round2 = (v) => {
+  if (typeof v !== 'number') return v;
+  const x = Number(`${Math.round(Number(`${v}e2`))}e-2`);
+  return Number.isFinite(x) ? x : Math.round(v * 100) / 100;
+};
+
+// The consistency marker (schema 2, public.explorer_state): generation rises
+// with every simulated write, as the database's statement triggers raise it;
+// st.noMarker answers it like a database without that migration.
 function standIn() {
-  const st = { requests: [], projects: new Map(), reports: new Map(), texts: new Map(), exports: [], fail: null, maxRows: Infinity, lie: 0, repeat: false, hook: null };
+  const st = { requests: [], projects: new Map(), reports: new Map(), texts: new Map(), exports: [], fail: null, maxRows: Infinity, lie: 0, repeat: false, hook: null, generation: 1, noMarker: false };
   const server = http.createServer((req, res) => {
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
@@ -73,7 +83,9 @@ function standIn() {
           const prev = st.texts.get(r.report_id);
           if (prev === undefined) {
             st.texts.set(r.report_id, text);
-            st.reports.set(r.report_id, { ...r, dataset: batch.dataset, exported_at: new Date().toISOString(), evidence_checked_at: new Date().toISOString() });
+            // As schema 2 stores them: the two-decimal columns and the exact value sent.
+            const scores = r.category_scores.map((s) => ({ ...s, score: round2(s.score), score_low: round2(s.score_low), score_high: round2(s.score_high), score_exact: s.status === 'scored' ? s.score : null, score_low_exact: s.status === 'range' ? s.score_low : null, score_high_exact: s.status === 'range' ? s.score_high : null }));
+            st.reports.set(r.report_id, { ...r, category_scores: scores, dataset: batch.dataset, exported_at: new Date().toISOString(), evidence_checked_at: new Date().toISOString() });
             return { report_id: r.report_id, status: 'inserted', scores: r.category_scores.length };
           }
           return prev === text ? { report_id: r.report_id, status: 'unchanged' } : { report_id: r.report_id, status: 'conflict', stored_sha256: 'a'.repeat(64), new_sha256: 'b'.repeat(64) };
@@ -81,6 +93,7 @@ function standIn() {
         const count = (s) => results.filter((x) => x.status === s).length;
         const run = { export_id: `exp-${st.exports.length + 1}`, dataset: batch.dataset, source: batch.source, adapter_version: batch.adapter_version, started_at: new Date().toISOString(), finished_at: new Date().toISOString(), reports_inserted: count('inserted'), reports_unchanged: count('unchanged'), reports_refused: count('conflict') };
         st.exports.push(run);
+        st.generation += 1;
         return send(200, { export_id: run.export_id, dataset: batch.dataset, finished_at: run.finished_at, projects: { inserted: batch.projects.length, updated: 0, unchanged: 0 }, reports: { inserted: count('inserted'), unchanged: count('unchanged'), evidence_updated: 0, refused: count('conflict') }, scores_inserted: results.reduce((n, x) => n + (x.scores || 0), 0), results });
       }
       // A paged read (Range header), filtered or whole, in the order the
@@ -108,6 +121,11 @@ function standIn() {
         const p = paged(st, req, list);
         res.writeHead(200, { 'content-type': 'application/json', 'content-range': p.contentRange });
         return res.end(JSON.stringify(p.rows));
+      }
+      if (req.method === 'GET' && st.hook) st.hook(u, st);
+      if (req.method === 'GET' && u.pathname === '/rest/v1/explorer_state') {
+        if (st.noMarker) return send(404, { code: 'PGRST205', message: 'Could not find the table \'public.explorer_state\' in the schema cache' });
+        return send(200, [{ generation: st.generation, changed_at: '2026-10-07T12:00:00+00:00' }]);
       }
       if (req.method === 'GET' && u.pathname === '/rest/v1/projects') return send(200, [...st.projects.values()]);
       if (req.method === 'GET' && u.pathname === '/rest/v1/reports') return send(200, [...st.reports.values()].sort((a, b) => b.saved_at.localeCompare(a.saved_at)));
@@ -422,7 +440,9 @@ test('export: one call per run; a repeat is all "unchanged"; changed content und
   assert.ok(unknown.length && unknown.every((s) => s.score === null && s.score_low === null), 'unknown is read back as null, never 0');
   assert.ok(!JSON.stringify(data).includes(KEY));
   const gets = si.st.requests.filter((r) => r.method === 'GET').map((r) => new URL(r.url, 'http://x').pathname).sort();
-  assert.deepEqual(gets, ['/rest/v1/category_scores', '/rest/v1/export_runs', '/rest/v1/projects', '/rest/v1/reports'], 'four queries, one page each here; never a request per report or category');
+  assert.deepEqual(gets, ['/rest/v1/category_scores', '/rest/v1/explorer_state', '/rest/v1/explorer_state', '/rest/v1/export_runs', '/rest/v1/projects', '/rest/v1/reports'], 'four queries, one page each here, between two readings of the consistency marker; never a request per report or category');
+  assert.equal(data.marker.generation, si.st.generation, 'the answer names the committed state it describes');
+  assert.equal(data.marker.attempts, 1);
   // Dry run: the batch, nothing sent.
   const before = si.st.requests.length;
   const dry = await explorer.exportFixtures(ws, { env, dryRun: true });
@@ -595,6 +615,7 @@ async function view() {
 }
 const viewMod = view();
 const cmpMod = viewMod.then(() => import(pathToFileURL(path.join(tmpUi, 'compare-model.js')).href));
+const cmpViewMod = viewMod.then(() => import(pathToFileURL(path.join(tmpUi, 'views', 'explorer-compare.js')).href));
 const S = (score) => ({ status: 'scored', score, score_low: null, score_high: null });
 const R = (lo, hi) => ({ status: 'range', score: null, score_low: lo, score_high: hi });
 const U = { status: 'unknown', score: null, score_low: null, score_high: null };
@@ -789,14 +810,17 @@ test('second opinion picks reports by the desk\'s own rules: latest by reports.j
     // Saved after it: latest by its save time, on the desk and here alike.
     const late = both(withClone('2026-10-07_chatgpt_demo0091', '2027-03-01', '2026-10-07T08:00:00.000Z'), 'demo-meridian-ledger', 'chatgpt');
     assert.deepEqual([late.desk, late.explorer], ['2026-10-07_chatgpt_demo0091', '2026-10-07_chatgpt_demo0091']);
-    // A stored row whose day is far after its save (written by hand, not by the
-    // adapter) is held to the same check: it sorts at its save time.
+    // A stored row from before schema 2 (no order_basis) whose day is far after
+    // its save (written by hand, not by the adapter) is held to the same
+    // check: it sorts at its save time.
     const current = early.rows.find((r) => r.report_id === '2026-10-06_chatgpt_demo0009');
-    const future = explorer.shapeReport({ ...current, report_id: '2026-10-05_chatgpt_demo0092', research_date: '2027-03-01', saved_at: '2026-10-05T12:00:00+00:00' });
+    const legacyRow = (over) => explorer.shapeReport({ ...current, order_basis: null, order_at: null, ...over });
+    const future = legacyRow({ report_id: '2026-10-05_chatgpt_demo0092', research_date: '2027-03-01', saved_at: '2026-10-05T12:00:00+00:00' });
     assert.ok(future.order_key.startsWith('2026-10-05T12:00:00.000Z|'), future.order_key);
+    assert.equal(future.order_exact, false);
     assert.equal(c.latestFor([current, future], 'chatgpt'), current, 'a future date never makes a report "latest"');
     // A day one day after the save is the desk's tolerance for time zones: used as stated.
-    assert.ok(explorer.shapeReport({ ...current, research_date: '2026-10-07', saved_at: '2026-10-06T09:20:00.000Z' }).order_key.startsWith('2026-10-07T00:00:00.000Z|'));
+    assert.ok(legacyRow({ research_date: '2026-10-07', saved_at: '2026-10-06T09:20:00.000Z' }).order_key.startsWith('2026-10-07T00:00:00.000Z|'));
     // An original followed by its revision (Halcyon, one research run): the
     // revision is the latest on both; the link is the desk's own.
     const hal = both(adapter.loadFixtures(), 'demo-halcyon-mesh', 'claude');
@@ -913,7 +937,7 @@ test('explorer list: every row across pages past Supabase\'s 1,000-row cap, in a
   let reqs = si.st.requests.slice(before);
   assert.ok(reqs.every((r) => r.method === 'GET'), 'reads only');
   assert.equal(reqs.filter((r) => r.url.startsWith('/rest/v1/category_scores')).length, 2, 'two pages of grades, not a request per report or category');
-  assert.ok(reqs.filter((r) => !r.url.startsWith('/rest/v1/export_runs')).every((r) => /^\d+-\d+$/.test(r.headers.range || '') && r.headers.prefer === 'count=exact' && !/limit=/.test(r.url)), 'paged with an exact count, never a row limit');
+  assert.ok(reqs.filter((r) => !r.url.startsWith('/rest/v1/export_runs') && !r.url.startsWith('/rest/v1/explorer_state')).every((r) => /^\d+-\d+$/.test(r.headers.range || '') && r.headers.prefer === 'count=exact' && !/limit=/.test(r.url)), 'paged with an exact count, never a row limit');
   // The view counts and filters over every row read, the last page included.
   const v = await viewMod;
   assert.equal(v.selectReports(d, { q: '', model: 'all', saves: 'latest' }).length, 102, '12 fixture reports in view and 90 more');
@@ -945,20 +969,20 @@ test('explorer list: every row across pages past Supabase\'s 1,000-row cap, in a
   assert.equal(twice.state, 'unavailable');
   assert.match(twice.reason, /came back twice|rows from 0 when rows from 7/);
   si.st.repeat = false;
-  // An export landing mid-read changes the count: refused, read again later.
+  // An export landing mid-read changes the count: that read is dropped and the
+  // whole answer read again (review of 2026-10-07, finding 4); it shows the
+  // state after the export, never a mix.
   let calls = 0;
   si.st.hook = (u, st) => {
     if (u.pathname === '/rest/v1/reports' && ++calls === 2) st.reports.set('2026-10-07_claude_bulk999', { ...template, report_id: '2026-10-07_claude_bulk999', project_id: 'demo-bulk-001', model: 'claude', saved_at: '2026-10-07T00:00:00.000Z' });
   };
   explorer.resetMemory();
   const moved = await explorer.read(ws, { env, refresh: true });
-  assert.equal(moved.state, 'unavailable');
-  assert.match(moved.reason, /changed while it was being read \(103 rows, then 104\)/);
+  assert.equal(moved.state, 'ok', moved.reason);
+  assert.equal(moved.marker.attempts, 2, 'read again after the count changed');
+  assert.equal(moved.totals.reports, 104);
+  assert.ok(moved.reports.find((r) => r.report_id === '2026-10-07_claude_bulk999').category_scores.length > 0, 'with its grades');
   si.st.hook = null;
-  explorer.resetMemory();
-  const again = await explorer.read(ws, { env, refresh: true });
-  assert.equal(again.state, 'ok', again.reason);
-  assert.equal(again.totals.reports, 104);
 });
 
 test('compare endpoint: one project only, every row across pages (never a request per category), an incomplete count refused, failures said, nothing written', async (t) => {
@@ -983,7 +1007,8 @@ test('compare endpoint: one project only, every row across pages (never a reques
   const reqs = si.st.requests.slice(before);
   assert.ok(reqs.every((r) => r.method === 'GET'), 'reads only');
   assert.equal(reqs.filter((r) => r.url.startsWith('/rest/v1/category_scores')).length, 9, 'one request per page, not per category');
-  assert.ok(reqs.every((r) => /project_id=eq\.demo-meridian-ledger|report_id=in\./.test(r.url)), 'only the selected project');
+  assert.ok(reqs.filter((r) => !r.url.startsWith('/rest/v1/explorer_state')).every((r) => /project_id=eq\.demo-meridian-ledger|report_id=in\./.test(r.url)), 'only the selected project');
+  assert.equal(reqs.filter((r) => r.url.startsWith('/rest/v1/explorer_state')).length, 2, 'the consistency marker before and after');
   const legit = d.reports[0].category_scores.find((s) => s.category_id === 'legitimacy');
   assert.deepEqual([legit.status, legit.score, legit.score_low, legit.score_high, legit.confidence], ['range', null, 70, 85, 'medium']);
   assert.match(legit.rationale, /registered and its filings/);
@@ -1011,4 +1036,205 @@ test('compare endpoint: one project only, every row across pages (never a reques
   const hal = await explorer.compareData(ws, 'demo-halcyon-mesh', { env });
   assert.deepEqual(hal.reports.map((r) => r.model).sort(), ['claude', 'claude', 'gemini']);
   assert.ok(si.st.requests.slice(before).every((r) => r.method === 'GET'), 'comparing never writes');
+});
+
+// ---- review of 2026-10-07: exact order, one consistent state, exact values ----
+
+// FICTIONAL desk records for one project and model: clones of a fixture report
+// with the analysis and save times given. Returns the desk's choice
+// (compare.latestByProvider) and the Explorer's (each row as PostgreSQL gives
+// it back: timestamps with +00:00 and no trailing zero milliseconds), with the
+// stored order fields kept or dropped (`legacy`: a row from before schema 2).
+function orderCase(ws, items, { legacy = false } = {}) {
+  const { latestByProvider } = require('../core/compare');
+  const sources = adapter.loadFixtures().filter((x) => x.project.project_id === 'demo-meridian-ledger');
+  const tpl = sources[0].reports.find((r) => r.report_id === '2026-10-06_chatgpt_demo0009');
+  sources[0].reports = items.map(([id, analysisAt, importedAt]) => {
+    const r = structuredClone(tpl);
+    r.report_id = id;
+    r.assessment.analysis_at = analysisAt;
+    r.meta.imported_at = importedAt;
+    r.meta.provenance = { research_run_id: `run_order_${id}` };
+    r.provenance = r.meta.provenance;
+    return r;
+  });
+  const desk = latestByProvider(sources[0].reports).chatgpt;
+  const pg = (iso) => (iso ? new Date(iso).toISOString().replace('.000Z', '+00:00').replace('Z', '+00:00') : iso);
+  const rows = adapter.buildBatch(ws, sources, { dataset: 'demo', source: 'test' }).batch.reports
+    .map((r) => ({ ...r, saved_at: pg(r.saved_at), order_at: pg(r.order_at), ...(legacy ? { order_basis: null, order_at: null } : {}) }))
+    .map((r) => explorer.shapeReport(r));
+  return { desk: desk && desk.report_id, rows };
+}
+
+test('finding 3: "latest" in the Explorer is the desk\'s latest: same-day instants, offsets, no zone, undated, a suspect future time, ties; a day-only row says so', async (t) => {
+  const c = await cmpMod;
+  const { ws, cleanup } = tempWorkspace('xp-order');
+  t.after(cleanup);
+  const check = (items, expected, label) => {
+    const { desk, rows } = orderCase(ws, items);
+    const xp = c.latestFor(rows, 'chatgpt');
+    assert.equal(desk, expected, `${label}: the desk`);
+    assert.equal(xp && xp.report_id, expected, `${label}: the Explorer`);
+    assert.ok(rows.every((r) => r.order_exact), `${label}: exact order stored`);
+    return rows;
+  };
+  // The reported case: A analyzed 18:00, saved 18:30; B analyzed 09:00, saved 19:00, the same day.
+  const ab = [['2026-10-07_chatgpt_demoA001', '2026-10-07T18:00:00Z', '2026-10-07T18:30:00.000Z'], ['2026-10-07_chatgpt_demoB001', '2026-10-07T09:00:00Z', '2026-10-07T19:00:00.000Z']];
+  const rows = check(ab, '2026-10-07_chatgpt_demoA001', 'same day');
+  assert.deepEqual(rows.map((r) => r.order_basis), ['analysis_time', 'analysis_time']);
+  // With only the day stored (before schema 2) the Explorer picked B, by save
+  // time: the defect, reproduced. Such a row now says it is not exact.
+  const old = orderCase(ws, ab, { legacy: true });
+  assert.equal(c.latestFor(old.rows, 'chatgpt').report_id, '2026-10-07_chatgpt_demoB001');
+  assert.ok(old.rows.every((r) => r.order_exact === false));
+  // Offsets: 23:30 at -05:00 is 04:30 UTC the next day, later than 03:00 at +02:00.
+  check([['2026-10-08_chatgpt_demoC001', '2026-10-07T23:30:00-05:00', '2026-10-08T05:00:00.000Z'], ['2026-10-08_chatgpt_demoC002', '2026-10-08T03:00:00+02:00', '2026-10-08T06:00:00.000Z']], '2026-10-08_chatgpt_demoC001', 'offsets');
+  // A stated time without a zone is read as UTC, as the desk does.
+  check([['2026-10-07_chatgpt_demoN001', '2026-10-07T20:00:00', '2026-10-07T21:00:00.000Z'], ['2026-10-07_chatgpt_demoN002', '2026-10-07T10:00:00Z', '2026-10-07T22:00:00.000Z']], '2026-10-07_chatgpt_demoN001', 'no zone');
+  // Undated sorts before every dated report, even when saved later.
+  check([['2026-10-07_chatgpt_demoU001', null, '2026-10-07T23:00:00.000Z'], ['2026-10-07_chatgpt_demoU002', '2026-10-07', '2026-10-07T08:00:00.000Z']], '2026-10-07_chatgpt_demoU002', 'undated');
+  // A stated time two days after its save sorts at the save time.
+  const sus = check([['2026-10-07_chatgpt_demoF001', '2026-10-09T12:00:00Z', '2026-10-07T10:00:00.000Z'], ['2026-10-07_chatgpt_demoF002', '2026-10-07T11:00:00Z', '2026-10-07T11:30:00.000Z']], '2026-10-07_chatgpt_demoF002', 'suspect future');
+  assert.equal(sus.find((r) => r.report_id === '2026-10-07_chatgpt_demoF001').order_basis, 'save_time');
+  // Ties: the same instant and the same save time: the larger report ID, in both.
+  check([['2026-10-07_chatgpt_demoT001', '2026-10-07T12:00:00Z', '2026-10-07T12:10:00.000Z'], ['2026-10-07_chatgpt_demoT002', '2026-10-07T12:00:00Z', '2026-10-07T12:10:00.000Z']], '2026-10-07_chatgpt_demoT002', 'tie');
+  // An original and its revision use the same rule (Halcyon, in the test above).
+});
+
+test('finding 7: category values keep their exact source precision (68.025 is not 68.03); 0, 100, unknown and N/A keep their meaning; display rounding is separate', async (t) => {
+  const c = await cmpMod;
+  const si = await standIn();
+  t.after(() => si.server.close());
+  const { ws, cleanup } = explorerWorkspace('xp-exact', si.url);
+  t.after(cleanup);
+  explorer.resetMemory();
+  const env = { CR_SUPABASE_SECRET_KEY: KEY };
+  const sources = adapter.loadFixtures();
+  const r = sources.find((x) => x.project.project_id === 'demo-meridian-ledger').reports.find((x) => x.report_id === '2026-10-06_chatgpt_demo0009');
+  const ds = r.assessment.diagnostic_scores;
+  const ids = Object.keys(ds);
+  const set = (k, v) => { ds[k] = { ...ds[k], ...v }; };
+  set(ids[0], { status: 'scored', value: 68.025, low: null, high: null });
+  set(ids[1], { status: 'range', value: null, low: 41.125, high: 57.875 });
+  set(ids[2], { status: 'scored', value: 0, low: null, high: null });
+  set(ids[3], { status: 'scored', value: 100, low: null, high: null });
+  const { batch } = adapter.buildBatch(ws, sources, { dataset: 'demo', source: 'test' });
+  const row = batch.reports.find((x) => x.report_id === '2026-10-06_chatgpt_demo0009');
+  const cat = (id) => row.category_scores.find((s) => s.category_id === id);
+  assert.equal(cat(ids[0]).score, 68.025, 'the adapter sends the desk\'s value as it is');
+  assert.deepEqual([cat(ids[1]).score_low, cat(ids[1]).score_high], [41.125, 57.875]);
+  // Sent the way explorer_import receives it; stored as schema 2 stores it.
+  const post = () => fetch(`${si.url}/rest/v1/rpc/explorer_import`, { method: 'POST', headers: { apikey: KEY, 'content-type': 'application/json' }, body: JSON.stringify({ batch }) }).then((x) => x.json());
+  const sent = await post();
+  assert.ok(sent.results.every((x) => x.status === 'inserted'));
+  const stored = si.st.reports.get('2026-10-06_chatgpt_demo0009').category_scores.find((s) => s.category_id === ids[0]);
+  assert.deepEqual([stored.score, stored.score_exact], [68.03, 68.025], 'the two-decimal column and the exact value, side by side');
+  const d = await explorer.compareData(ws, 'demo-meridian-ledger', { env });
+  assert.equal(d.state, 'ok', d.reason);
+  const got = d.reports.find((x) => x.report_id === '2026-10-06_chatgpt_demo0009').category_scores;
+  const g = (id) => got.find((s) => s.category_id === id);
+  assert.deepEqual([g(ids[0]).score, g(ids[0]).precision], [68.025, 'exact'], 'read back exactly');
+  assert.deepEqual([g(ids[1]).score_low, g(ids[1]).score_high, g(ids[1]).score], [41.125, 57.875, null]);
+  assert.deepEqual([g(ids[2]).score, g(ids[3]).score], [0, 100], 'zero and a hundred are numbers');
+  assert.ok(got.filter((s) => s.status === 'unknown' || s.status === 'not_applicable').every((s) => s.score === null && s.score_low === null && s.score_high === null && s.precision === null));
+  assert.deepEqual(d.legacy, { reports_without_exact_order: 0, reports_without_exact_values: 0 });
+  // Display rounds for display only (two decimals, half away from zero, as written).
+  assert.equal(c.valueText(g(ids[0])), '68.03');
+  assert.equal(c.valueText(g(ids[1])), '41.13–57.88');
+  // A difference is computed from the exact values.
+  assert.equal(c.compareScores(g(ids[0]), { status: 'scored', score: 70 }).gap, 70 - 68.025);
+  // A row stored before schema 2 (no exact value) is said to be two-decimal, never claimed exact.
+  const legacy = explorer.shapeReport({ report_id: 'x', saved_at: '2026-10-01T00:00:00Z', category_scores: [{ category_id: 'legitimacy', status: 'scored', score: 68.03, score_exact: null }, { category_id: 'code_quality', status: 'range', score_low: 41.13, score_high: 57.88 }] });
+  assert.deepEqual(legacy.category_scores.map((s) => [s.score ?? s.score_low, s.precision]), [[68.03, 'two_decimals'], [41.13, 'two_decimals']]);
+  // The same records sent again: unchanged, nothing duplicated.
+  const again = await post();
+  assert.ok(again.results.every((x) => x.status === 'unchanged'));
+});
+
+test('finding 6: an empty side names a missing model only in the opening pair; after any picker change it asks for a second report; reports without exact metadata are said', async () => {
+  const cv = await cmpViewMod;
+  const v = await viewMod;
+  assert.deepEqual(cv.emptySide({ picked: false, missingModel: 'chatgpt' }), { title: 'ChatGPT', text: 'No ChatGPT report for this project; nothing else is put in its place.' });
+  assert.deepEqual(cv.emptySide({ picked: false, missingModel: 'claude' }).title, 'Claude');
+  for (const m of ['chatgpt', 'claude', null]) assert.deepEqual(cv.emptySide({ picked: true, missingModel: m }), { title: 'Second report', text: 'Choose a second report.' });
+  assert.deepEqual(cv.emptySide({ picked: false, missingModel: null }), { title: 'Second report', text: 'Choose a second report.' });
+  assert.equal(v.legacyNotice({ legacy: { reports_without_exact_order: 0, reports_without_exact_values: 0 } }), null);
+  assert.match(v.legacyNotice({ legacy: { reports_without_exact_order: 7, reports_without_exact_values: 7 } }), /^7 reports were exported before exact order and values were stored/);
+});
+
+// One export landing in the stand-in, as explorer_import commits it: a new
+// FICTIONAL report with its grades, an export receipt and a higher marker.
+function landExport(st, n) {
+  const tpl = st.reports.get('2026-10-06_chatgpt_demo0009');
+  const id = `2026-10-07_claude_land${String(n).padStart(4, '0')}`;
+  const at = `2026-10-07T1${n % 10}:00:00.000Z`;
+  st.reports.set(id, { ...tpl, report_id: id, model: 'claude', saved_at: at, order_basis: 'save_time', order_at: at, research_date: null });
+  st.exports.push({ export_id: `exp-land-${n}`, dataset: 'demo', source: 'test', adapter_version: 'test', started_at: at, finished_at: at, reports_inserted: 1, reports_unchanged: 0, reports_refused: 0 });
+  st.generation += 1;
+}
+
+test('finding 4: an export committing between any two reads is never shown as synced with the other half: the answer is read again, or said to be updating', async (t) => {
+  const si = await standIn();
+  t.after(() => si.server.close());
+  const { ws, cleanup } = explorerWorkspace('xp-marker', si.url);
+  t.after(cleanup);
+  const env = { CR_SUPABASE_SECRET_KEY: KEY };
+  await explorer.exportFixtures(ws, { env });
+  let n = 0;
+  // Lands one export the first time a request for `path` arrives.
+  const once = (path) => {
+    let done = false;
+    return (u, st) => {
+      if (!done && u.pathname === path) {
+        done = true;
+        landExport(st, ++n);
+      }
+    };
+  };
+  const consistent = (d) => {
+    const newest = si.st.exports[si.st.exports.length - 1];
+    assert.equal(d.state, 'ok', d.reason);
+    assert.equal(d.last_export.export_id, newest.export_id, 'the receipt shown is the newest one');
+    assert.equal(d.reports.length, si.st.reports.size, 'with every report it committed');
+    assert.ok(d.reports.every((r) => r.category_scores.length === si.st.reports.get(r.report_id).category_scores.length), 'each with all its grades');
+    assert.equal(d.marker.generation, si.st.generation);
+    assert.equal(d.marker.attempts, 2, 'the mixed read was dropped and read again');
+  };
+  // Between the report and the category reads.
+  si.st.hook = once('/rest/v1/category_scores');
+  explorer.resetMemory();
+  consistent(await explorer.read(ws, { env, refresh: true }));
+  // Between the project and the report reads.
+  si.st.hook = once('/rest/v1/projects');
+  explorer.resetMemory();
+  consistent(await explorer.read(ws, { env, refresh: true }));
+  si.st.hook = once('/rest/v1/projects');
+  const cmp = await explorer.compareData(ws, 'demo-meridian-ledger', { env });
+  assert.equal(cmp.state, 'ok', cmp.reason);
+  assert.equal(cmp.marker.attempts, 2);
+  // Between the dataset reads and the export receipt.
+  si.st.hook = once('/rest/v1/export_runs');
+  explorer.resetMemory();
+  consistent(await explorer.read(ws, { env, refresh: true }));
+  // Exports that keep landing: after three tries the answer is "updating",
+  // never "ok"; the copy read earlier is shown as that copy, with its time.
+  si.st.hook = (u, st) => { if (u.pathname === '/rest/v1/export_runs') landExport(st, ++n); };
+  const busy = await explorer.read(ws, { env, refresh: true, now: () => Date.now() + 60000 });
+  assert.equal(busy.state, 'updating');
+  assert.match(busy.reason, /changed while it was being read, 3 times in a row/);
+  assert.equal(busy.served, 'memory');
+  assert.ok(busy.copy_fetched_at);
+  si.st.hook = (u, st) => { if (u.pathname === '/rest/v1/reports') landExport(st, ++n); };
+  const busyCmp = await explorer.compareData(ws, 'demo-meridian-ledger', { env });
+  assert.equal(busyCmp.state, 'updating');
+  assert.deepEqual(busyCmp.reports, []);
+  si.st.hook = null;
+  // A database without the marker (schema 2 not applied): never shown as synced.
+  si.st.noMarker = true;
+  explorer.resetMemory();
+  const old = await explorer.read(ws, { env, refresh: true });
+  assert.equal(old.state, 'unavailable');
+  assert.match(old.reason, /no consistency marker \(public\.explorer_state, migration explorer_exact_order_precision_marker\)/);
+  si.st.noMarker = false;
+  assert.ok(si.st.requests.filter((r) => !r.url.startsWith('/rest/v1/rpc/')).every((r) => r.method === 'GET'), 'reads only');
 });

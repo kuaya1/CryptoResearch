@@ -241,7 +241,7 @@ const TOOLS = [
   {
     name: 'get_report',
     title: 'Read a saved report',
-    description: 'Returns a project\'s latest report from your model (or another model, or the given report): verdict, grade, horizon, top risks, the desk\'s evidence checks on its claims (for example a claim tagged verified whose only support is an AI summary; flags only, never a score change) and, if asked, the full text. Another model\'s report is withheld while your own research on that project is open.',
+    description: 'Returns a project\'s current report from your model (or another model): the one the desk shows, chosen by the desk\'s own rule (never an excluded or quarantined answer, never a PDF without its text). With report_id, any saved report, an earlier or excluded one included, with its eligibility, exclusion reason and revision status; an excluded report\'s grade is never given as a current grade. Verdict, grade, horizon, top risks, the desk\'s evidence checks on its claims (for example a claim tagged verified whose only support is an AI summary; flags only, never a score change) and, if asked, the full text. Another model\'s report is withheld while your own research on that project is open.',
     inputSchema: { type: 'object', required: ['project_id'], additionalProperties: false, properties: { project_id: projectRef, model: modelRef, report_id: { type: 'string' }, include_text: { type: 'boolean', description: 'Include the full original text (default false).' } } },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
@@ -335,15 +335,49 @@ function runIdOf(args, required = true) {
   return id;
 }
 
+// A model's reports as the desk reads them: every saved one (oldest first,
+// for reading one by its ID) and its current one, chosen by the desk's own
+// rule, never a second selector: compare.latestByProvider, through the
+// project's comparison (eligible, not a PDF without its text, newest by
+// reports.reportSortKey). It is the report the watchlist and the Brief show;
+// a newer quarantined or excluded answer is never current (review of
+// 2026-10-07, finding 2).
 function reportsOf(ws, projectId, provider) {
   const d = require('./core/indexer').projectDetail(ws, projectId);
   const list = (d.history && d.history[provider]) || [];
-  return { detail: d, latest: list.length ? list[list.length - 1] : null, all: list };
+  return { detail: d, latest: currentOf(d, provider), all: list };
 }
 
-function compactReport(r) {
+function currentOf(detail, provider) {
+  const cur = detail.comparison && detail.comparison.latest ? detail.comparison.latest[provider] : null;
+  const list = (detail.history && detail.history[provider]) || [];
+  return cur ? list.find((x) => x.report_id === cur.report_id) || null : null;
+}
+
+// Whether a saved report counts on the desk, in words: eligible (and current
+// or not), excluded with the reason (a quarantined paid answer is one), or a
+// PDF without its text.
+function eligibilityOf(r) {
+  const eligible = r.eligible !== false;
+  return { eligible, excluded_reason: eligible ? null : r.excluded_reason || 'Excluded from the desk\'s grades.', quarantined: Boolean(r.quarantined), ...(r.needs_text ? { needs_text: true } : {}) };
+}
+
+// One report in brief. `all`: the same model's reports (for "revised later
+// by"); `currentId`: the model's current report on the desk. An excluded
+// report's calculation is kept apart as excluded_grade, never as its grade.
+function compactReport(r, { all = [], currentId = null } = {}) {
   if (!r) return null;
-  const out = { report_id: r.report_id, model: r.provider || null, analysis_at: r.analysis_at, imported_at: r.imported_at, verdict: r.verdict || null, grade: r.grade || null, horizon: r.horizon || null, rubric_version: r.rubric_version, warnings: r.warnings, errors: r.errors, sources: r.sources, top_risks: r.top_risks };
+  const eligibility = eligibilityOf(r);
+  const counts = eligibility.eligible && !eligibility.needs_text;
+  const out = { report_id: r.report_id, model: r.provider || null, analysis_at: r.analysis_at, imported_at: r.imported_at, verdict: r.verdict || null, grade: counts ? r.grade || null : null, horizon: r.horizon || null, rubric_version: r.rubric_version, warnings: r.warnings, errors: r.errors, sources: r.sources, top_risks: r.top_risks };
+  out.eligibility = eligibility;
+  out.current = Boolean(currentId && r.report_id === currentId);
+  if (!counts && r.grade) out.excluded_grade = { ...r.grade, note: eligibility.needs_text ? 'Not a current grade: the report is a PDF without its text.' : 'Calculated from this report as saved, but the report is excluded from the desk\'s grades: not a current grade.' };
+  // Where it sits among the model's saves (revisions.js), as the desk labels it.
+  const rev = r.revision || null;
+  if (rev) out.revision = rev.kind === 'revision' ? { kind: 'revision', of: rev.of, run_id: rev.run_id || null, basis: rev.basis || null, declared: rev.declared || null, label: r.revision_label || null } : { kind: rev.kind };
+  const later = all.filter((x) => x.revision && x.revision.kind === 'revision' && x.revision.of === r.report_id).map((x) => x.report_id);
+  if (later.length) out.revised_later_by = later;
   // How the category grades were read (counts only; they never enter the
   // investment grade): how many are scored, which are unknown, and the
   // confidence the report states.
@@ -355,7 +389,7 @@ function compactReport(r) {
   // A withheld grade in plain words: the share of the investment weight that
   // was scored (not research progress, not a score) and the parts left out.
   const g = r.grade;
-  if (g && g.status === 'withheld') {
+  if (counts && g && g.status === 'withheld') {
     out.grade_withheld = {
       coverage_pct: typeof g.coverage_pct === 'number' ? g.coverage_pct : null,
       coverage_means: 'The share of the investment grade\'s weight that this report scored. It is not research progress and not the score.',
@@ -395,12 +429,13 @@ const hoursSince = (iso) => {
   return Number.isFinite(t) ? (Date.now() - t) / 3600000 : Infinity;
 };
 
-// The latest report of a model saved in the last day, if any.
+// The model's current report (the desk's own choice), if it was saved in the
+// last day. An excluded or quarantined answer is not a usable recent report.
 function recentReport(ws, projectId, provider) {
-  const { latest } = reportsOf(ws, projectId, provider);
+  const { latest, all } = reportsOf(ws, projectId, provider);
   if (!latest) return null;
   const h = hoursSince(latest.imported_at || latest.analysis_at);
-  return h < RECENT_REPORT_HOURS ? { report: latest, hours: Math.round(h * 10) / 10 } : null;
+  return h < RECENT_REPORT_HOURS ? { report: latest, all, hours: Math.round(h * 10) / 10 } : null;
 }
 
 // Another model's conclusions on a project stay hidden from a model whose own
@@ -530,9 +565,10 @@ function projectView(ws, p, ctx) {
     for (const m of PROVIDERS) {
       const list = (d.history && d.history[m]) || [];
       if (!list.length) continue;
-      const last = list[list.length - 1];
-      byModel[m] = { reports: list.length, latest_report_id: last.report_id, latest_saved_at: last.imported_at || null };
-      if (m === ctx.me) latest = compactReport(last);
+      // The desk's current report for the model (reportsOf), never simply the newest save.
+      const cur = currentOf(d, m);
+      byModel[m] = { reports: list.length, latest_report_id: cur ? cur.report_id : null, latest_saved_at: cur ? cur.imported_at || null : null, not_eligible: list.filter((x) => x.eligible === false).length };
+      if (m === ctx.me) latest = cur ? compactReport(cur, { all: list, currentId: cur.report_id }) : null;
     }
   } catch (_) {
     latest = null;
@@ -861,7 +897,7 @@ const handlers = {
       return {
         status: 'recent_report',
         message: `${listLabels(wanted)} ${wanted.length === 1 ? 'has a report' : 'all have reports'} for ${project.name} from the last ${RECENT_REPORT_HOURS} hours (${wanted.map((p) => `${PROVIDER_LABELS[p]} ${recent[p].hours} h ago`).join(', ')}). Nothing was started. If Eric wants fresh research anyway, call start_research again with refresh: true.`,
-        report: compactReport(r.report),
+        report: compactReport(r.report, { all: r.all, currentId: r.report.report_id }),
         recent_reports: Object.fromEntries(Object.entries(recent).map(([p, x]) => [p, { report_id: x.report.report_id, hours_ago: x.hours }])),
       };
     }
@@ -1128,7 +1164,7 @@ const handlers = {
     const result = {
       status,
       message: `${status === 'unchanged' ? (r.stamps_only ? `This report is already saved as ${r.report_id}: the new text differs only in its restamped analysis and access times (the same day), so nothing new was stored.` : `This exact report is already saved (${r.report_id}).`) : status === 'saved' ? `Saved ${label} report ${r.report_id} for ${id}; it is on the project page now.` : `The desk wrote ${label} report ${r.report_id} for ${id} but could not confirm the save (it did not read back as written). Call save_report again with the same text; if it did land, nothing changes.`}${withheld}${othersLine(othersOpen)}`,
-      report: compactReport(saved),
+      report: compactReport(saved, { all, currentId: latest ? latest.report_id : null }),
       run: runOut,
       validation: { errors: r.errors || 0, warnings: r.warnings || 0, ambiguous: r.ambiguous || 0, note: r.note || null },
       verified,
@@ -1165,7 +1201,10 @@ const handlers = {
     const model = PROVIDERS.includes(args.model) ? args.model : ctx.me;
     if (model !== ctx.me) guardIndependence(ws, id, ctx, `read ${PROVIDER_LABELS[model]}'s report`);
     const { detail, latest, all } = reportsOf(ws, id, model);
+    // By default the model's current report, the one the desk shows; any
+    // saved report, excluded or earlier ones included, by its ID.
     let r = latest;
+    let owner = model;
     if (args.report_id) {
       r = all.find((x) => x.report_id === args.report_id) || null;
       if (!r) {
@@ -1173,10 +1212,29 @@ const handlers = {
         const other = PROVIDERS.find((p) => p !== model && ((detail.history && detail.history[p]) || []).some((x) => x.report_id === args.report_id));
         if (other && other !== ctx.me) guardIndependence(ws, id, ctx, `read ${PROVIDER_LABELS[other]}'s report`);
         r = other ? detail.history[other].find((x) => x.report_id === args.report_id) : null;
+        if (other) owner = other;
       }
     }
-    if (!r) return { status: 'none', message: `No ${PROVIDER_LABELS[model]} report for ${detail.project.name} yet.` };
-    const out = { status: 'ok', project: { project_id: id, name: detail.project.name }, report: compactReport(r) };
+    if (!r && args.report_id) return { status: 'none', message: `No report ${String(args.report_id).slice(0, 80)} for ${detail.project.name}.` };
+    if (!r) {
+      // Saved reports, none of which counts on the desk: named, never shown as current.
+      const notEligible = all.filter((x) => x.eligible === false || x.needs_text).map((x) => ({ report_id: x.report_id, imported_at: x.imported_at || null, ...eligibilityOf(x) }));
+      if (!notEligible.length) return { status: 'none', message: `No ${PROVIDER_LABELS[model]} report for ${detail.project.name} yet.` };
+      return {
+        status: 'none',
+        message: `No eligible ${PROVIDER_LABELS[model]} report for ${detail.project.name}: ${notEligible.length === 1 ? 'its one saved report is' : `its ${notEligible.length} saved reports are`} not counted on the desk (${notEligible.map((x) => `${x.report_id}: ${x.needs_text ? 'a PDF without its text' : x.excluded_reason}`).join('; ')}). Read one with report_id; its grade is not a current grade.`,
+        not_eligible: notEligible,
+      };
+    }
+    const ownList = (detail.history && detail.history[owner]) || [];
+    const current = currentOf(detail, owner);
+    const out = { status: 'ok', project: { project_id: id, name: detail.project.name }, report: compactReport(r, { all: ownList, currentId: current ? current.report_id : null }) };
+    if (!out.report.current) {
+      out.current_report_id = current ? current.report_id : null;
+      out.note = out.report.eligibility.eligible && !out.report.eligibility.needs_text
+        ? `Not ${PROVIDER_LABELS[owner]}'s current report on the desk${current ? ` (that is ${current.report_id})` : ''}; read as history.`
+        : `Excluded from the desk's grades: ${out.report.eligibility.needs_text ? 'a PDF without its text' : out.report.eligibility.excluded_reason} Its grade is not a current grade${current ? `; ${PROVIDER_LABELS[owner]}'s current report is ${current.report_id}` : ''}.`;
+    }
     // The desk's evidence checks on its claims: flags only, never a score change.
     const shown = detail.reports.find((x) => x.report_id === r.report_id) || {};
     const ev = shown.evidence;

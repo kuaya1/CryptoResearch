@@ -123,9 +123,10 @@ test('new runs get prompt @5 with the current version of the project\'s profile:
   assert.match(p, /Work at your highest reasoning capability\./);
   assert.match(p, /Be skeptical and curious, and be willing to reach an original conclusion\./);
   assert.match(p, /Missing evidence is not automatically evidence of failure/);
-  assert.match(p, /A typical hold is about 2 months, and 4 months is the planning ceiling\./);
+  // A typical hold is 3 to 4 months (Eric, 2026-10-07; it read "about 2 months" before).
+  assert.match(p, /A typical hold is about 3 to 4 months, and 4 months is the planning ceiling\./);
   assert.ok(p.includes(`**Assessment horizon for this report: ${r.run.horizon.start_date} to ${r.run.horizon.end_date}**`));
-  assert.ok(p.includes(`A typical hold would end around ${require('../core/position').addCalendarMonths(r.run.horizon.start_date, 2)}`));
+  assert.ok(p.includes(`A typical hold of 3 to 4 months would end between ${require('../core/position').addCalendarMonths(r.run.horizon.start_date, 3)} and the end of this horizon (${r.run.horizon.end_date})`));
   assert.match(p, /Longer-term technology potential is a separate question\./);
   assert.match(p, /Do not look for, use or mention other AI models' conclusions or scores about this project\./);
   // The six research sections, the summary first, and the scenarios.

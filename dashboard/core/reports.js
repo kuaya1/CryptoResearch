@@ -1473,19 +1473,32 @@ function analysisTiming(analysisAt, savedAt) {
 // unreadable, or not in the ISO form the prompt asks for) sorts at the save
 // time instead, so a mistyped, invented or "October 12, 2026" stamp cannot
 // keep a report "latest" (its text is kept as written). A report that states
-// no time sorts before every dated one, as before.
-function reportSortKey(r) {
+// no time sorts before every dated one, as before. Ties (the same instant and
+// the same save time) go to the larger report ID, so the order is total.
+//
+// reportOrder says what the key is built from, so the Research Explorer can
+// store it with each report and order exactly as the desk does (review of
+// 2026-10-07, finding 3):
+//   basis analysis_time          a stated time with its zone (Z or an offset)
+//   basis analysis_time_no_zone  a stated time without a zone, read as UTC
+//   basis analysis_date          a stated date, at its UTC midnight
+//   basis save_time              a stated time the desk does not use (after
+//                                the save, unreadable or not ISO): the save time
+//   basis undated                nothing stated: no instant (sorts first)
+// `at` is that instant as an ISO string (null when undated).
+function reportOrder(r) {
   const a = r.assessment.analysis_at || '';
   const saved = r.meta.imported_at || '';
   const timing = a ? analysisTiming(a, saved) : null;
-  let key = '';
-  if (timing) {
-    if (timing.status !== 'ok' || timing.zone === 'nonstandard') key = saved;
-    else if (timing.zone === 'date') key = `${a.trim()}T00:00:00.000Z`;
-    else if (timing.zone === 'none') key = new Date(Date.parse(`${a.trim().replace(' ', 'T')}Z`)).toISOString();
-    else key = timing.normalized || saved;
-  }
-  return `${key}|${saved}`;
+  if (!timing) return { basis: 'undated', at: null };
+  if (timing.status !== 'ok' || timing.zone === 'nonstandard') return { basis: 'save_time', at: saved || null };
+  if (timing.zone === 'date') return { basis: 'analysis_date', at: `${a.trim()}T00:00:00.000Z` };
+  if (timing.zone === 'none') return { basis: 'analysis_time_no_zone', at: new Date(Date.parse(`${a.trim().replace(' ', 'T')}Z`)).toISOString() };
+  return timing.normalized ? { basis: 'analysis_time', at: timing.normalized } : { basis: 'save_time', at: saved || null };
+}
+
+function reportSortKey(r) {
+  return `${reportOrder(r).at || ''}|${r.meta.imported_at || ''}|${r.report_id || ''}`;
 }
 
 module.exports = {
@@ -1513,6 +1526,7 @@ module.exports = {
   loadReports,
   isEligible,
   reportSortKey,
+  reportOrder,
   analysisTiming,
   promptSignals,
   safeUrl,

@@ -116,6 +116,8 @@ function reportSummary(ws, r, project = null, all = null) {
     verdict: a.verdict,
     eligible: isEligible(r),
     excluded_reason: a.eligibility && a.eligibility.excluded ? a.eligibility.reason : null,
+    // A paid answer that did not match its run (binding.js mode record).
+    quarantined: Boolean(a.eligibility && a.eligibility.excluded && a.eligibility.quarantined),
     grade: compactGrade(grade),
     unscored: unscoredParts(grade, a),
     model_total: model_total ? { status: model_total.status, message: model_total.message, difference: typeof model_total.difference === 'number' ? model_total.difference : null } : null,

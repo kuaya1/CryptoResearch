@@ -28,7 +28,7 @@
 
 const { secretsFile } = require('./providers');
 const adapter = require('./explorer-adapter');
-const { reportSortKey } = require('./reports');
+const { reportOrder } = require('./reports');
 
 const READ_TIMEOUT_MS = 8000;
 const EXPORT_TIMEOUT_MS = 30000;
@@ -192,7 +192,7 @@ async function restAll(cfg, pathQuery, key) {
     const m = /^(?:(\d+)-(\d+)|\*)\/(\d+|\*)$/.exec(String(headers.get('content-range') || '').trim());
     if (!m || m[3] === '*') throw new ExplorerError('INCOMPLETE', 'Supabase did not state how many rows there are, so a complete read cannot be confirmed.');
     if (got.length && Number(m[1]) !== from) throw new ExplorerError('INCOMPLETE', `Supabase answered rows from ${m[1]} when rows from ${from} were asked for; the read is incomplete.`);
-    if (total !== null && Number(m[3]) !== total) throw new ExplorerError('INCOMPLETE', `The Explorer changed while it was being read (${total} rows, then ${m[3]}); the read is incomplete. Refresh to read it again.`);
+    if (total !== null && Number(m[3]) !== total) throw new ExplorerError('INCOMPLETE', `The Explorer changed while it was being read (${total} rows, then ${m[3]}); the read is incomplete. Refresh to read it again.`, { changed: true });
     total = Number(m[3]);
     for (const row of got) {
       const k = key(row);
@@ -211,48 +211,118 @@ const byProject = (p) => p.project_id;
 const byReport = (r) => r.report_id;
 const byScore = (s) => `${s.report_id}/${s.category_id}`;
 
+// ---- one consistent state (review of 2026-10-07, finding 4) ------------------
+//
+// One answer is assembled from several requests (reports, projects, grades,
+// the last export receipt), each its own snapshot. The database keeps one
+// generation number (public.explorer_state, schema 2) that every write to the
+// Explorer tables raises in its own transaction, the export's inserts,
+// evidence refreshes and completions included. The marker is read before and
+// after the requests: the same number means no write committed in between,
+// so the reports, their grades and the receipt belong together. Otherwise the
+// whole answer is read again, up to MAX_READ_ATTEMPTS times, then said to be
+// "updating"; it is never labeled synced. A count that changes between pages
+// (restAll) is the same event seen mid-request and is read again too.
+const MIGRATION_2 = 'explorer_exact_order_precision_marker';
+const MAX_READ_ATTEMPTS = 3;
+
+async function markerOf(cfg) {
+  let rows;
+  try {
+    rows = await rest(cfg, 'GET', '/explorer_state?select=generation,changed_at&singleton=eq.true');
+  } catch (err) {
+    if (err instanceof ExplorerError && (err.http_status === 404 || /explorer_state/.test(err.message))) {
+      throw new ExplorerError('NOT_MIGRATED', `The Explorer database has no consistency marker (public.explorer_state, migration ${MIGRATION_2}), so whether one read saw one export cannot be confirmed. Apply the migration, then Refresh.`);
+    }
+    throw err;
+  }
+  const row = Array.isArray(rows) ? rows[0] : null;
+  const generation = row ? num(row.generation) : null;
+  if (generation === null) throw new ExplorerError('NOT_MIGRATED', `The Explorer database's consistency marker is missing or unreadable (public.explorer_state, migration ${MIGRATION_2}). Refresh after it is restored.`);
+  return { generation, changed_at: row.changed_at || null };
+}
+
+async function consistentRead(cfg, assemble) {
+  for (let attempt = 1; ; attempt += 1) {
+    const before = await markerOf(cfg);
+    let value = null;
+    let failure = null;
+    try {
+      value = await assemble();
+    } catch (err) {
+      if (!(err instanceof ExplorerError && err.code === 'INCOMPLETE')) throw err;
+      failure = err;
+    }
+    const after = await markerOf(cfg);
+    const moved = after.generation !== before.generation;
+    if (!failure && !moved) return { value, marker: { ...after, attempts: attempt } };
+    if (attempt >= MAX_READ_ATTEMPTS) {
+      // Writes kept landing: "updating". A read that stays incomplete with
+      // nothing written (rows repeated, a count never reached) is said as such.
+      if (moved || failure.changed) throw new ExplorerError('UPDATING', `The Explorer changed while it was being read, ${MAX_READ_ATTEMPTS} times in a row (an export is landing). What was read is not shown as synced; Refresh in a moment.`);
+      throw failure;
+    }
+  }
+}
+
 // ---- reading (GET /api/explorer) --------------------------------------------
 
 const REPORT_COLUMNS = [
-  'report_id', 'project_id', 'dataset', 'model', 'model_version', 'research_run_id', 'research_date', 'saved_at',
+  'report_id', 'project_id', 'dataset', 'model', 'model_version', 'research_run_id', 'research_date', 'saved_at', 'order_basis', 'order_at',
   'horizon_text', 'horizon_start', 'horizon_end', 'report_format', 'prompt_version', 'rubric_version', 'profile_version', 'verdict',
   'revision_of', 'revision_kind', 'revision_basis', 'revision_note',
   'grade_status', 'grade_value', 'grade_low', 'grade_high', 'grade_coverage_pct', 'grade_unscored', 'grade_reason',
   'evidence_summary', 'evidence_coverage', 'evidence_high', 'evidence_medium', 'evidence_low', 'evidence_checked_at', 'exported_at',
 ];
-const SCORE_COLUMNS = ['category_id', 'category_label', 'position', 'status', 'score', 'score_low', 'score_high', 'confidence', 'evidence_refs', 'rationale', 'main_weakness', 'unknown_reason', 'evidence_flags'];
+const SCORE_COLUMNS = ['category_id', 'category_label', 'position', 'status', 'score', 'score_low', 'score_high', 'score_exact', 'score_low_exact', 'score_high_exact', 'confidence', 'evidence_refs', 'rationale', 'main_weakness', 'unknown_reason', 'evidence_flags'];
 const PROJECT_COLUMNS = ['project_id', 'dataset', 'name', 'ticker', 'identity_status', 'chain', 'contract_address', 'native_chain', 'updated_at'];
-const EXPORT_COLUMNS = ['export_id', 'dataset', 'source', 'adapter_version', 'started_at', 'finished_at', 'projects_inserted', 'projects_updated', 'projects_unchanged', 'reports_inserted', 'reports_unchanged', 'reports_evidence_updated', 'reports_refused', 'scores_inserted'];
+const EXPORT_COLUMNS = ['export_id', 'dataset', 'source', 'adapter_version', 'started_at', 'finished_at', 'projects_inserted', 'projects_updated', 'projects_unchanged', 'reports_inserted', 'reports_unchanged', 'reports_evidence_updated', 'reports_refused', 'scores_inserted', 'reports_metadata_completed', 'reports_metadata_missing'];
 
 // Numbers come back as numbers; a numeric column may come back as text from
 // some proxies, so read it as a number only when it is one. Null stays null:
 // an unknown score is never 0.
 const num = (v) => (v === null || v === undefined || v === '' ? null : Number.isFinite(Number(v)) ? Number(v) : null);
+const given = (v) => v !== null && v !== undefined && v !== '';
 
+// A category grade with its exact value: the number the export sent
+// (score_exact and the range ends, schema 2), else the two-decimal column of a
+// row stored before 2026-10-07, said as such ("precision"), since its source
+// value may have been rounded (review of 2026-10-07, finding 7). Display
+// rounding is the page's business; nothing here rounds.
 function shapeScore(s) {
+  const { score_exact: px, score_low_exact: lx, score_high_exact: hx, ...rest } = s;
+  const precision = s.status === 'scored' ? (given(px) ? 'exact' : 'two_decimals') : s.status === 'range' ? (given(lx) && given(hx) ? 'exact' : 'two_decimals') : null;
   return {
-    ...s,
+    ...rest,
     position: num(s.position),
-    score: num(s.score),
-    score_low: num(s.score_low),
-    score_high: num(s.score_high),
+    score: num(given(px) ? px : s.score),
+    score_low: num(given(lx) ? lx : s.score_low),
+    score_high: num(given(hx) ? hx : s.score_high),
+    precision,
     evidence_refs: Array.isArray(s.evidence_refs) ? s.evidence_refs : [],
     evidence_flags: Array.isArray(s.evidence_flags) ? s.evidence_flags : [],
   };
 }
 
-// The desk's latest-report rule (reports.js reportSortKey, the same code),
-// applied to what the Explorer stores: the stated analysis day, checked
-// against the save time by the desk's own check, so a day more than a day
-// after the save sorts at the save time and can never keep a report
-// "latest". A report stored without a day (none stated, or a stated time the
-// desk would not use: export leaves those out) sorts at its save time. The
-// report ID last, so the order is total. Newest is the largest key.
+const isoOf = (s) => {
+  const t = Date.parse(s || '');
+  return Number.isFinite(t) ? new Date(t).toISOString() : '';
+};
+
+// The desk's latest-report rule (reports.js reportSortKey: the instant from
+// reportOrder, then the save time, then the report ID; newest is the largest
+// key). Since schema 2 the export stores the desk's own basis and instant
+// (order_basis, order_at), so the key is exactly the desk's. A report stored
+// before 2026-10-07 has only its analysis day: its key is that day through
+// the same rule (a day more than a day after the save sorts at the save
+// time), order_exact false, and the response says how many such reports
+// there are: two of one model's reports on the same day may then order
+// differently than on the desk (review of 2026-10-07, finding 3).
 function orderKey(r) {
-  const t = Date.parse(r.saved_at || '');
-  const saved = Number.isFinite(t) ? new Date(t).toISOString() : '';
-  const desk = r.research_date ? reportSortKey({ assessment: { analysis_at: String(r.research_date) }, meta: { imported_at: saved } }) : `${saved}|${saved}`;
-  return `${desk}|${r.report_id}`;
+  const saved = isoOf(r.saved_at);
+  if (r.order_basis) return `${r.order_basis === 'undated' ? '' : isoOf(r.order_at)}|${saved}|${r.report_id}`;
+  const day = r.research_date ? reportOrder({ report_id: r.report_id, assessment: { analysis_at: String(r.research_date).slice(0, 10) }, meta: { imported_at: saved } }).at : saved;
+  return `${day || ''}|${saved}|${r.report_id}`;
 }
 
 function shapeReport(r) {
@@ -260,6 +330,7 @@ function shapeReport(r) {
   return {
     ...r,
     order_key: orderKey(r),
+    order_exact: Boolean(r.order_basis),
     grade_value: num(r.grade_value),
     grade_low: num(r.grade_low),
     grade_high: num(r.grade_high),
@@ -280,17 +351,20 @@ async function read(ws, { refresh = false, env = process.env, now = Date.now } =
   const age = mine ? now() - mine.at : Infinity;
   if (mine && (age < (refresh ? MIN_REFRESH_MS : CACHE_MS))) return { ...mine.data, checked_at: base.checked_at, served: 'cache' };
   try {
-    // Every row, page by page (restAll), each query in a unique order. The
-    // reports first: an export stores a report, its project and its grades
-    // in one transaction, so projects and grades read after the reports
-    // cover every report listed. Grades of a report that landed after the
-    // reports were read are left for the next read.
-    const reports = await restAll(cfg, `/reports?select=${REPORT_COLUMNS.join(',')}&order=saved_at.desc,report_id.asc`, byReport);
-    const [projects, scores, exportsList] = await Promise.all([
-      restAll(cfg, `/projects?select=${PROJECT_COLUMNS.join(',')}&order=name.asc,project_id.asc`, byProject),
-      restAll(cfg, `/category_scores?select=report_id,${SCORE_COLUMNS.join(',')}&order=report_id.asc,category_id.asc`, byScore),
-      rest(cfg, 'GET', `/export_runs?select=${EXPORT_COLUMNS.join(',')}&order=finished_at.desc,export_id.asc&limit=1`),
-    ]);
+    // Every row, page by page (restAll), each query in a unique order, all of
+    // it between two readings of the consistency marker (consistentRead): the
+    // reports, their projects and grades and the export receipt shown are one
+    // committed state of the database.
+    const { value: got, marker } = await consistentRead(cfg, async () => {
+      const reports = await restAll(cfg, `/reports?select=${REPORT_COLUMNS.join(',')}&order=saved_at.desc,report_id.asc`, byReport);
+      const [projects, scores, exportsList] = await Promise.all([
+        restAll(cfg, `/projects?select=${PROJECT_COLUMNS.join(',')}&order=name.asc,project_id.asc`, byProject),
+        restAll(cfg, `/category_scores?select=report_id,${SCORE_COLUMNS.join(',')}&order=report_id.asc,category_id.asc`, byScore),
+        rest(cfg, 'GET', `/export_runs?select=${EXPORT_COLUMNS.join(',')}&order=finished_at.desc,export_id.asc&limit=1`),
+      ]);
+      return { reports, projects, scores, exportsList };
+    });
+    const { reports, projects, scores, exportsList } = got;
     const grades = new Map(reports.rows.map((r) => [r.report_id, []]));
     for (const s of scores.rows) if (grades.has(s.report_id)) grades.get(s.report_id).push(s);
     const last = Array.isArray(exportsList) && exportsList.length ? exportsList[0] : null;
@@ -310,6 +384,10 @@ async function read(ws, { refresh = false, env = process.env, now = Date.now } =
       last_export: last,
       totals: { projects: projects.total, reports: reports.total, category_scores: list.reduce((n, r) => n + r.category_scores.length, 0) },
       pages: { projects: projects.pages, reports: reports.pages, category_scores: scores.pages },
+      // The committed state this answer describes, and how many reads it took.
+      marker,
+      // Reports exported before exact order and exact values were stored.
+      legacy: legacyOf(list),
       projects: projects.rows,
       reports: list,
     };
@@ -317,9 +395,19 @@ async function read(ws, { refresh = false, env = process.env, now = Date.now } =
     return data;
   } catch (err) {
     const reason = err instanceof ExplorerError ? err.message : `The Explorer could not be read: ${scrub(err.message, cfg._key)}`;
-    if (mine) return { ...mine.data, state: 'unavailable', reason, checked_at: base.checked_at, served: 'memory', copy_fetched_at: mine.data.fetched_at };
-    return { ...base, state: 'unavailable', reason, projects: [], reports: [] };
+    const state = err instanceof ExplorerError && err.code === 'UPDATING' ? 'updating' : 'unavailable';
+    if (mine) return { ...mine.data, state, reason, checked_at: base.checked_at, served: 'memory', copy_fetched_at: mine.data.fetched_at };
+    return { ...base, state, reason, projects: [], reports: [] };
   }
+}
+
+// How many reports lack the schema-2 metadata (stored before 2026-10-07 and
+// not completed since): their order is known to the day and their values to
+// two decimals. Said, never filled in.
+function legacyOf(list) {
+  const order = list.filter((r) => !r.order_exact).length;
+  const values = list.filter((r) => r.category_scores.some((s) => s.precision === 'two_decimals')).length;
+  return { reports_without_exact_order: order, reports_without_exact_values: values };
 }
 
 // ---- one project, for Second opinion (GET /api/explorer/compare) -------------
@@ -341,25 +429,31 @@ async function compareData(ws, projectId, { env = process.env, now = Date.now } 
   if (cfg.state === 'not_configured') return { ...base, reason: cfg.problems[0] || `Missing ${cfg.missing.map((m) => m.replace(/ \(.*$/, '')).join(' and ')}.`, reports: [] };
   try {
     const id = encodeURIComponent(projectId);
-    // The reports first, then the project and the grades (see read()).
-    const reports = await restAll(cfg, `/reports?project_id=eq.${id}&select=${REPORT_COLUMNS.join(',')}&order=saved_at.desc,report_id.asc`, byReport);
-    const projects = await restAll(cfg, `/projects?project_id=eq.${id}&select=${PROJECT_COLUMNS.join(',')}&order=project_id.asc`, byProject);
+    // The reports, then the project and the grades, all between two readings
+    // of the consistency marker (consistentRead), as read() does.
+    const { value: got, marker } = await consistentRead(cfg, async () => {
+      const reports = await restAll(cfg, `/reports?project_id=eq.${id}&select=${REPORT_COLUMNS.join(',')}&order=saved_at.desc,report_id.asc`, byReport);
+      const projects = await restAll(cfg, `/projects?project_id=eq.${id}&select=${PROJECT_COLUMNS.join(',')}&order=project_id.asc`, byProject);
+      const scores = { rows: [], total: 0, pages: 0 };
+      const ids = reports.rows.map((r) => r.report_id);
+      for (let i = 0; i < ids.length; i += IDS_PER_QUERY) {
+        const list = ids.slice(i, i + IDS_PER_QUERY).map((x) => `"${x}"`).join(',');
+        const part = await restAll(cfg, `/category_scores?report_id=in.(${encodeURIComponent(list)})&select=report_id,${SCORE_COLUMNS.join(',')}&order=report_id.asc,category_id.asc`, byScore);
+        scores.rows.push(...part.rows);
+        scores.total += part.total;
+        scores.pages += part.pages;
+      }
+      return { reports, projects, scores };
+    });
+    const { reports, projects, scores } = got;
     const project = projects.rows[0] || null;
     if (!project) return { ...base, state: 'not_found', reason: `No project "${projectId}" in the Explorer.`, reports: [] };
-    const scores = { rows: [], total: 0, pages: 0 };
-    const ids = reports.rows.map((r) => r.report_id);
-    for (let i = 0; i < ids.length; i += IDS_PER_QUERY) {
-      const list = ids.slice(i, i + IDS_PER_QUERY).map((x) => `"${x}"`).join(',');
-      const part = await restAll(cfg, `/category_scores?report_id=in.(${encodeURIComponent(list)})&select=report_id,${SCORE_COLUMNS.join(',')}&order=report_id.asc,category_id.asc`, byScore);
-      scores.rows.push(...part.rows);
-      scores.total += part.total;
-      scores.pages += part.pages;
-    }
     const gradesOf = new Map();
     for (const s of scores.rows) {
       if (!gradesOf.has(s.report_id)) gradesOf.set(s.report_id, []);
       gradesOf.get(s.report_id).push(s);
     }
+    const list = reports.rows.map((r) => shapeReport({ ...r, category_scores: gradesOf.get(r.report_id) || [] }));
     return {
       ...base,
       state: 'ok',
@@ -367,13 +461,15 @@ async function compareData(ws, projectId, { env = process.env, now = Date.now } 
       fetched_at: new Date(now()).toISOString(),
       demo: project.dataset === 'demo',
       project,
-      reports: reports.rows.map((r) => shapeReport({ ...r, category_scores: gradesOf.get(r.report_id) || [] })),
+      reports: list,
       totals: { reports: reports.total, category_scores: scores.total },
       pages: { projects: projects.pages, reports: reports.pages, category_scores: scores.pages },
+      marker,
+      legacy: legacyOf(list),
     };
   } catch (err) {
     const reason = err instanceof ExplorerError ? err.message : `The comparison could not be read: ${scrub(err.message, cfg._key)}`;
-    return { ...base, state: 'unavailable', reason, reports: [] };
+    return { ...base, state: err instanceof ExplorerError && err.code === 'UPDATING' ? 'updating' : 'unavailable', reason, reports: [] };
   }
 }
 
@@ -386,8 +482,14 @@ function fixtureBatch(ws) {
 // Sends the FICTIONAL fixture records. Repeatable: identical reports come back
 // "unchanged", nothing is duplicated, and a timeout after Supabase committed
 // is settled by running it again.
-async function exportFixtures(ws, { dryRun = false, env = process.env } = {}) {
+// completeExisting: also fill, once, the schema-2 order and exact values of
+// fixture reports stored before 2026-10-07, from these same records; the
+// database does it only for a report whose content hash matches and whose
+// values agree with what it stores (explorer_import). An explicit step,
+// never a side effect of an ordinary export.
+async function exportFixtures(ws, { dryRun = false, completeExisting = false, env = process.env } = {}) {
   const { batch, skipped } = fixtureBatch(ws);
+  if (completeExisting) batch.complete_existing = true;
   const counts = { projects: batch.projects.length, reports: batch.reports.length, category_scores: batch.reports.reduce((n, r) => n + r.category_scores.length, 0) };
   if (dryRun) return { status: 'dry_run', dataset: 'demo', sent: false, ...counts, skipped, batch };
   const cfg = resolve(ws, env);
@@ -414,6 +516,10 @@ async function exportFixtures(ws, { dryRun = false, env = process.env } = {}) {
     finished_at: out.finished_at,
     projects: out.projects,
     reports: out.reports,
+    // Schema 2: reports whose order and exact values were filled now, or are
+    // still missing (stored before 2026-10-07; complete_existing fills them).
+    metadata: out.metadata || null,
+    complete_existing: Boolean(completeExisting),
     scores_inserted: out.scores_inserted,
     results: out.results,
     skipped,

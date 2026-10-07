@@ -14,7 +14,10 @@
 import { h, clear, logo, scoreTier, PROVIDERS, PROVIDER_LABELS, fmtDate, fmtDateTime, fmtAgo, icon, announce } from '../ui.js';
 import { sortKey } from '../compare-model.js';
 
-const STATE_WORDS = { ok: 'Synced', stale: 'Stale', unavailable: 'Supabase unavailable', not_configured: 'Not set up', off: 'Switched off', empty: 'Nothing exported yet' };
+// "Synced" only for a read the server confirmed was one committed state
+// (core/explorer.js consistentRead); an export landing during every try is
+// "Updating", never synced.
+const STATE_WORDS = { ok: 'Synced', stale: 'Stale', updating: 'Updating', unavailable: 'Supabase unavailable', not_configured: 'Not set up', off: 'Switched off', empty: 'Nothing exported yet' };
 const CONFIDENCE = { high: 'high confidence', medium: 'medium confidence', low: 'low confidence' };
 const SEVERITY = { high: 'serious', medium: 'material', low: 'note' };
 const REVISION_WORDS = { format_fix: 'format fix', reassessment: 'reassessment', new_evidence: 'new evidence', other: 'other reason', not_stated: 'reason not stated' };
@@ -280,7 +283,7 @@ function row(e, categoryId, label) {
 function syncLine(data, { onRefresh }) {
   const st = data.state;
   const word = STATE_WORDS[st] || st;
-  const tone = st === 'ok' ? 'ok' : st === 'stale' || st === 'empty' ? 'warn' : st === 'unavailable' ? 'bad' : 'muted';
+  const tone = st === 'ok' ? 'ok' : st === 'stale' || st === 'empty' || st === 'updating' ? 'warn' : st === 'unavailable' ? 'bad' : 'muted';
   const last = data.last_export;
   const parts = [];
   if (last && last.finished_at) parts.push(`last export ${fmtDateTime(last.finished_at)} (${fmtAgo(last.finished_at)})`);
@@ -298,9 +301,18 @@ function syncLine(data, { onRefresh }) {
 
 function stateCallout(data) {
   if (data.state === 'ok') return null;
-  const kind = data.state === 'unavailable' ? 'bad' : data.state === 'stale' || data.state === 'empty' ? 'warn' : 'info';
+  const kind = data.state === 'unavailable' ? 'bad' : data.state === 'stale' || data.state === 'empty' || data.state === 'updating' ? 'warn' : 'info';
   const text = data.reason || STATE_WORDS[data.state];
   return h('div', { class: `callout ${kind}` }, text);
+}
+
+// Reports exported before exact order and values were stored (schema 2):
+// said, never filled in (core/explorer.js legacyOf).
+export function legacyNotice(data) {
+  const l = data && data.legacy;
+  const n = l ? Math.max(l.reports_without_exact_order || 0, l.reports_without_exact_values || 0) : 0;
+  if (!n) return null;
+  return `${n} report${n === 1 ? ' was' : 's were'} exported before exact order and values were stored: one model's reports from the same day may be ordered by save time, and their grades are known to two decimals.`;
 }
 
 function seg(label, options, current, onPick, key) {
@@ -419,6 +431,8 @@ export async function renderExplorer(ctx, route) {
     clear(syncSlot).appendChild(syncLine(d, { onRefresh }));
     const c = stateCallout(d);
     if (c) syncSlot.appendChild(c);
+    const legacy = legacyNotice(d);
+    if (legacy) syncSlot.appendChild(h('div', { class: 'callout warn' }, legacy));
     clear(toolsSlot);
     clear(resultsSlot);
     if (Array.isArray(d.reports) && d.reports.length) {

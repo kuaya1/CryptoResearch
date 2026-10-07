@@ -4,12 +4,15 @@
 // compares them in the page (compare-model.js). Opening it, choosing
 // reports and expanding rows are reads: nothing is written, no research is
 // started and no model is asked anything.
-// Order on screen: who and what (models, dates, versions, grades), whether
-// the two answered the same request and, apart, who wrote them (two models,
-// or one model's original and revision), then the categories, then each
-// model's own words on demand. Gemini's saved reports can be chosen; it is
+// Order on screen (review of 2026-10-07, finding 6: on a phone the first
+// category bars began about 1,500 px down): the project, the two pickers,
+// each report's grade as stored in one line, one status line (whether the two
+// answered the same request and, apart, who wrote them, with every
+// consequential warning in words), then the categories; the dates, versions,
+// hashes, horizons and provenance in one expandable section; each model's own
+// words per category on demand. Gemini's saved reports can be chosen; it is
 // never the default.
-import { h, clear, logo, scoreTier, fmtDate, fmtDateTime, openDialog, announce, verdictChip } from '../ui.js';
+import { h, clear, logo, scoreTier, fmtDate, fmtDateTime, openDialog, announce, verdictChip, details } from '../ui.js';
 import { MODEL_LABELS, compareReports, defaultPair, namesFor, reportChoices, valueOf, valueText, NOTABLE_GAP } from '../compare-model.js';
 
 const NOT_STORED = 'Not stored in the Explorer';
@@ -69,7 +72,27 @@ function picker(label, key, choices, selected, onPick) {
   return h('label', { class: 'xp-cmp-pick' }, h('span', { class: 'lbl' }, label), sel);
 }
 
-// One report's identity card in the summary. `who` is its name on this
+// One report in one line at the top: its name on this screen, its grade as
+// stored (a figure, a range, or withheld with its coverage) and its verdict.
+// An empty side says why, in words (emptySide).
+function sideLine(r, who, empty) {
+  if (!r) return h('div', { class: 'xp-cmp-line1 empty' }, h('span', { class: 'model' }, empty.title), h('span', { class: 'none' }, empty.text));
+  return h('div', { class: 'xp-cmp-line1' },
+    h('span', { class: 'model' }, who),
+    h('span', { class: `xp-grade g-${r.grade_status}`, title: r.grade_reason || 'Calculated by the desk from the six weighted components; never the model\'s own total.' }, gradeText(r)),
+    verdictChip(r.verdict));
+}
+
+// What an empty side says. Only the opening pair names a missing model ("No
+// ChatGPT report for this project"); once a report is chosen or cleared, the
+// empty side asks for one, whatever model is missing (review of 2026-10-07,
+// finding 6: it used to name ChatGPT or Claude after any picker change).
+export function emptySide({ picked, missingModel }) {
+  if (!picked && missingModel) return { title: MODEL_LABELS[missingModel], text: `No ${MODEL_LABELS[missingModel]} report for this project; nothing else is put in its place.` };
+  return { title: 'Second report', text: 'Choose a second report.' };
+}
+
+// One report's identity card in the details. `who` is its name on this
 // screen: the model, or "Claude (first)" when both reports are Claude's.
 function side(r, choice, empty = null, who = name(r)) {
   if (!r) {
@@ -117,6 +140,37 @@ function scopeBlock(cmp) {
       s.confirmed ? h('p', { class: 'caveat' }, s.caveat) : null),
     h('div', { class: `xp-cmp-author ${a.independent ? 'ok' : 'warn'}` },
       h('p', null, h('strong', null, a.label), ' ', a.text)));
+}
+
+// The one visible status: the research scope and the authorship, each its
+// label, with every consequential warning in words: a scope that differs or is
+// not confirmed (what differs or is missing), authorship that is not
+// independent, scoring versions that do not allow numbers to be compared, and
+// reports stored without the desk's exact order or values. The facts behind it
+// are in the details.
+function statusBlock(cmp, legacy) {
+  const s = cmp.scope;
+  const a = cmp.authorship;
+  const v = cmp.versions;
+  const warn = !s.confirmed || !a.independent || !v.compatible;
+  const lines = [];
+  if (!s.confirmed) lines.push(s.text);
+  else lines.push(s.caveat);
+  if (!a.independent) lines.push(`${a.label}: not an independent second opinion.`);
+  if (!v.compatible) lines.push(`${v.label}: the numbers are shown side by side and not compared.`);
+  if (legacy) lines.push(legacy);
+  return h('div', { class: `xp-cmp-status ${warn ? 'warn' : 'ok'}`, role: 'note' },
+    h('p', { class: 'head' }, h('strong', null, s.label), h('span', { class: 'sep', 'aria-hidden': 'true' }, ' · '), h('span', { class: 'sr-only' }, '; '), h('strong', null, a.label)),
+    lines.map((t) => h('p', null, t)));
+}
+
+// Versions, hashes, horizons and provenance: a native disclosure (keyboard and
+// screen readers open it as a button), its state kept across redraws.
+function detailsBlock(st, parts) {
+  const d = details('Versions, horizons and provenance', parts, { open: st.details, id: 'xp-cmp-more' });
+  d.classList.add('xp-cmp-more');
+  d.addEventListener('toggle', () => { st.details = d.open; });
+  return d;
 }
 
 function countsLine(cmp) {
@@ -203,23 +257,29 @@ function drawBody(st, ui) {
   }
   const first = a || b;
   const second = a ? b : null;
-  // A missing side says why: the model has no report here, or none is chosen.
-  const wanted = a ? 'chatgpt' : 'claude';
-  const has = data.reports.some((r) => r.model === wanted && r !== first);
-  const empty = has
-    ? { title: 'Second report', text: 'No second report chosen. Choose one above to read it beside the first.' }
-    : { title: MODEL_LABELS[wanted], text: `No ${MODEL_LABELS[wanted]} report for this project. Nothing else is put in its place; choose another report above to read it beside this one.` };
+  // A missing side says why (emptySide): before any choice, the model with no
+  // report here; after one, a request to choose.
+  const empty = emptySide({ picked: st.picked, missingModel: st.missingModel });
   const cmp = second ? compareReports(first, second, data.reports) : null;
   const names = cmp ? cmp.names : [name(first), null];
-  out.push(h('div', { class: 'xp-cmp-sides' }, side(first, choiceOf(first), null, names[0]), side(second, choiceOf(second), empty, names[1])));
+  const legacy = [first, second].some((r) => r && (r.order_exact === false || (r.category_scores || []).some((x) => x.precision === 'two_decimals')))
+    ? 'Exported before exact order and values were stored: “latest” may differ from the desk for same-day reports, and grades are known to two decimals.'
+    : null;
+  // First what matters: who, their grades, whether they answered the same
+  // request and who wrote them, then the categories. Everything else (dates,
+  // versions, hashes, horizons, provenance, counts) is in the details.
+  out.push(h('div', { class: 'xp-cmp-summary' }, sideLine(first, names[0], null), sideLine(second, names[1], empty)));
   let rows;
+  const detail = [h('div', { class: 'xp-cmp-sides' }, side(first, choiceOf(first), null, names[0]), side(second, choiceOf(second), empty, names[1]))];
   if (cmp) {
-    out.push(scopeBlock(cmp));
-    out.push(countsLine(cmp));
+    out.push(statusBlock(cmp, legacy));
+    detail.push(scopeBlock(cmp), countsLine(cmp));
     rows = cmp.rows[st.order];
   } else {
+    if (legacy) out.push(h('div', { class: 'xp-cmp-status warn', role: 'note' }, h('p', null, legacy)));
     rows = oneSidedRows(first).sort((x, y) => x.position - y.position);
   }
+  out.push(detailsBlock(st, detail));
   const orderSeg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Order' },
     [['inspection', 'For inspection'], ['profile', 'Profile order']].map(([v, t]) => {
       const btn = h('button', { type: 'button', 'aria-pressed': String(st.order === v), disabled: !second || null, dataset: { key: `xp-cmp-order-${v}` } }, t);
@@ -256,7 +316,9 @@ export async function openCompare(ctx, project) {
     return;
   }
   const pair = defaultPair(data.reports);
-  const st = { data, a: pair.a, b: pair.b, order: 'inspection', open: new Set() };
+  // The opening pair names a model only when that model has no report here.
+  const missingModel = pair.a && !pair.b ? 'chatgpt' : !pair.a && pair.b ? 'claude' : null;
+  const st = { data, a: pair.a, b: pair.b, order: 'inspection', open: new Set(), picked: false, missingModel, details: false };
   const redraw = (focusKey = null) => {
     clear(body).append(...drawBody(st, ui).flat());
     if (focusKey) {
@@ -268,6 +330,7 @@ export async function openCompare(ctx, project) {
     setPair(a, b, key) {
       st.a = a;
       st.b = b;
+      st.picked = true;
       st.open.clear();
       redraw(key);
       announce(a && b && a !== b ? `Comparing ${namesFor(a, b, st.data.reports).join(' and ')}` : 'One report shown');

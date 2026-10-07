@@ -310,7 +310,17 @@ function ingestLocked(ws, provider, filename, opts = {}) {
     if (alreadyCopied && capabilities(ws).delete) {
       try { fs.unlinkSync(abs); } catch (_) { /* left for the next pass */ }
     }
-    return { status: 'duplicate', key, duplicate_of: dup, project_id: dup.project_id, report_id: dup.report_id, message: `Already imported as ${dup.project_id}/${dup.report_id}. Not imported again.`, files: out.files, verified: out.verified };
+    // Asked for a run, but the same text was saved earlier for another run or
+    // none: it is not bound afterwards, so it completes nothing here. (The
+    // desk's own paid answer is settled by research.importSaved, which checks
+    // its receipt against the run.)
+    let notBound = '';
+    if (runId && !attested) {
+      const prevMeta = readJson(ws.abs(`projects/${dup.project_id}/reports/${dup.report_id}/meta.json`), null);
+      const prevRun = prevMeta && prevMeta.provenance ? prevMeta.provenance.research_run_id || null : null;
+      if (prevRun !== runId) notBound = ` It was saved ${prevRun ? `for research run ${prevRun}` : 'without a research run'}, and a saved report is never bound to a run afterwards, so it completes nothing in ${runId}.`;
+    }
+    return { status: 'duplicate', key, duplicate_of: dup, project_id: dup.project_id, report_id: dup.report_id, message: `Already imported as ${dup.project_id}/${dup.report_id}. Not imported again.${notBound}`, files: out.files, verified: out.verified };
   }
 
   let classification;
@@ -461,8 +471,12 @@ function ingestLocked(ws, provider, filename, opts = {}) {
     return { report_id: reportId, project_id: projectId };
   });
   const issues = record.extraction.issues || [];
-  if (!linkedRun && !declaredRun) {
-    try { require('./research').autoLinkReport(ws, { projectId, provider, reportId, importedAt: now, json }); } catch (_) { /* optional */ }
+  // Without a validated run it is history: it completes no job, whatever is
+  // open for this project and model (research.unboundImportNote).
+  let unbound = null;
+  if (!linkedRun) {
+    unbound = declaredRun ? `It names research run ${declaredRun} but does not match it, so it is kept as history and completes no research job.` : null;
+    try { unbound = unbound || require('./research').unboundImportNote(ws, { projectId, provider }); } catch (_) { unbound = unbound || 'It names no research run, so it is kept as history and completes no research job.'; }
   }
   return {
     status: 'ingested',
@@ -474,7 +488,8 @@ function ingestLocked(ws, provider, filename, opts = {}) {
     warnings: issues.filter((i) => i.severity === 'warning').length,
     ambiguous: (record.extraction.ambiguous || []).length,
     ...(quarantine ? { quarantined: true } : {}),
-    message: quarantine ? `Saved ${PROVIDER_LABELS[provider]}'s answer as report ${reportId} in ${projectId}, quarantined. ${quarantine.reason}` : `Imported ${PROVIDER_LABELS[provider]} report ${reportId} into ${projectId}.`,
+    ...(unbound ? { completes_job: false } : {}),
+    message: quarantine ? `Saved ${PROVIDER_LABELS[provider]}'s answer as report ${reportId} in ${projectId}, quarantined. ${quarantine.reason}` : `Imported ${PROVIDER_LABELS[provider]} report ${reportId} into ${projectId}.${unbound ? ` ${unbound}` : ''}`,
     files: out.files,
     verified: out.verified,
     op_id: out.op_id,

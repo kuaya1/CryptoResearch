@@ -15,7 +15,11 @@
 //   (rubrics.gradeAssessment), never the model's own total and never a
 //   combination across models;
 // - the desk's evidence checks (evidence.js), which change no score;
-// - revision lineage from the stored records (revisions.js).
+// - revision lineage from the stored records (revisions.js);
+// - the desk's own ordering basis and instant (reports.js reportOrder), so
+//   "latest" means the same report in both places;
+// - category values exactly as the desk holds them (68.025 stays 68.025; the
+//   database keeps the exact value beside its two-decimal column).
 //
 // Two sources share the mapping: the FICTIONAL fixture file (the only one
 // any command exports in this version) and the desk's own records
@@ -26,7 +30,7 @@ const fs = require('fs');
 const path = require('path');
 const { normalizeScore } = require('./scoring');
 const { gradeAssessment } = require('./rubrics');
-const { applyCorrections, analysisTiming, isEligible } = require('./reports');
+const { applyCorrections, analysisTiming, isEligible, reportOrder } = require('./reports');
 const { revisionOf } = require('./revisions');
 const { evidenceChecks } = require('./evidence');
 const { CODE_ROOT } = require('./workspace');
@@ -146,6 +150,11 @@ function gradeFields(g) {
   return out;
 }
 
+function orderFields(r) {
+  const o = reportOrder(r);
+  return { order_basis: o.basis, order_at: o.at };
+}
+
 function revisionFields(rev) {
   if (!rev || rev.kind !== 'revision') return { revision_of: null, revision_kind: null, revision_basis: null, revision_note: null };
   const declared = rev.declared && REVISION_KINDS.has(rev.declared.kind) ? rev.declared.kind : 'not_stated';
@@ -175,6 +184,10 @@ function reportRow(ws, project, r, all) {
       research_run_id: text(r.provenance && r.provenance.research_run_id) || text(r.meta.provenance && r.meta.provenance.research_run_id) || text(a.research_run_id),
       research_date: researchDate(a.analysis_at, r.meta.imported_at),
       saved_at: r.meta.imported_at,
+      // What the desk orders this report by (reports.js reportOrder): the
+      // exact instant and what it is, so "latest" in the Explorer is the
+      // desk's latest (review of 2026-10-07, finding 3).
+      ...orderFields(r),
       horizon_text: text(a.horizon),
       horizon_start: ymd(horizon.start_date),
       horizon_end: ymd(horizon.end_date),

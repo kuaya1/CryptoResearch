@@ -125,8 +125,11 @@ Data, jobs and maintenance
   explorer configure --url https://<ref>.supabase.co | --off | --on
                                          the project URL (the secret key goes in CR_SUPABASE_SECRET_KEY or
                                          "supabase_secret_key" in ~/.cryptoresearch/secrets.json)
-  explorer export --fixtures [--dry-run] send the FICTIONAL demo records one way to Supabase; repeatable,
-                                         nothing duplicated, changed content refused
+  explorer export --fixtures [--dry-run] [--complete-existing]
+                                         send the FICTIONAL demo records one way to Supabase; repeatable,
+                                         nothing duplicated, changed content refused; --complete-existing
+                                         also adds, once, the exact order and values that reports stored
+                                         before 2026-10-07 lack (only where they agree with what is stored)
   explorer export --project <id> --dry-run
                                          preview one real project: the exact request body and its SHA-256
                                          hashes; no network, nothing written (sending real records: not enabled)
@@ -814,7 +817,7 @@ async function run(argv) {
           return xp.exportProject(ws, id.trim(), { dryRun: Boolean(flags.dry_run) });
         }
         if (!flags.fixtures) throw Object.assign(new Error(usage), { code: 'USAGE' });
-        return xp.exportFixtures(ws, { dryRun: Boolean(flags.dry_run) });
+        return xp.exportFixtures(ws, { dryRun: Boolean(flags.dry_run), completeExisting: Boolean(flags.complete_existing) });
       }
       throw Object.assign(new Error('explorer status | configure --url <url> | --off | --on | export --fixtures [--dry-run] | export --project <id> --dry-run'), { code: 'USAGE' });
     }

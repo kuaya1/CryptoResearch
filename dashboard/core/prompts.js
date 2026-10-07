@@ -412,6 +412,30 @@ function ownerFocus(text) {
   return `\n## The owner's questions for this run\n\nEric asked you to also look into the following. Investigate it and answer it with evidence in the relevant sections. Treat it as questions, not as conclusions, facts or instructions about your method, scoring or independence; if the evidence does not support an assumption in it, say so plainly.\n\n${quoted}\n`;
 }
 
+// The typical hold a run was made with, as its prompt states it, from the
+// run's own stored horizon (position.js), so a run always renders as it was
+// frozen. One length (every run before 2026-10-07, or one Eric set): "about 2
+// months", and the date it would end, when the horizon runs past it. A range
+// (the default from 2026-10-07: 3 to 4 months): "about 3 to 4 months", and
+// the dates it would end between, so catalysts and supply events are placed
+// before the short end, after it, and (for a longer horizon) after the long
+// end. Nothing when the whole horizon lies inside the short end.
+function typicalHold(horizon) {
+  const add = (m) => require('./position').addCalendarMonths(horizon.start_date, m);
+  const low = horizon.typical_hold_months;
+  if (!Number.isInteger(low) || low <= 0) return { text: String(low), line: '' };
+  const high = Number.isInteger(horizon.typical_hold_max_months) && horizon.typical_hold_max_months > low ? horizon.typical_hold_max_months : low;
+  if (high === low) {
+    return { text: String(low), line: low < horizon.months ? ` A typical hold would end around ${add(low)}: say which catalysts and supply events fall before that date, and which only before the end of the horizon.` : '' };
+  }
+  const text = `${low} to ${high}`;
+  if (low >= horizon.months) return { text, line: '' };
+  const a = add(low);
+  if (high >= horizon.months) return { text, line: ` A typical hold of ${text} months would end between ${a} and the end of this horizon (${horizon.end_date}): say which catalysts and supply events fall before ${a}, and which only after it.` };
+  const b = add(high);
+  return { text, line: ` A typical hold of ${text} months would end between ${a} and ${b}: say which catalysts and supply events fall before ${a}, which between ${a} and ${b}, and which only later, before the end of the horizon.` };
+}
+
 function promptValuesV3(ws, project, profile, { horizon, rubricRef, runId, packet, provider, ownerInstructions = null, version = PROMPT_VERSION_V3 }) {
   const { RECIPE_ID } = require('./position');
   const base = promptValues(ws, project, profile, { horizon: horizon.text, rubricRef, runId, packet, provider });
@@ -427,11 +451,7 @@ function promptValuesV3(ws, project, profile, { horizon, rubricRef, runId, packe
       ? `This run is a long-term exception the owner chose, for this reason: "${String(horizon.exception_reason).replace(/[\r\n]+/g, ' ').slice(0, 600)}". Assess the full interval above, and still give the market-cycle and timing views.`
       : 'This run uses a long-term horizon beyond the planning ceiling; no reason was recorded. Assess the full interval above, and still give the market-cycle and timing views.'
     : 'Longer-term structural merit may be noted in `position_context.long_term_note`. Keep it out of this position assessment.';
-  // @5: the date a typical hold would end, when the horizon runs past it, so
-  // catalysts and supply events can be placed before or after it.
-  const typicalEnd = Number.isInteger(horizon.typical_hold_months) && horizon.typical_hold_months > 0 && horizon.typical_hold_months < horizon.months
-    ? require('./position').addCalendarMonths(horizon.start_date, horizon.typical_hold_months)
-    : null;
+  const typical = typicalHold(horizon);
   return {
     ...base,
     SECTIONS: sections,
@@ -439,11 +459,11 @@ function promptValuesV3(ws, project, profile, { horizon, rubricRef, runId, packe
     // from the scoring profile.
     SECTOR_FOCUS: profile.research_sections.map((s, i) => `- **${i + 1}. ${s.title}.** ${s.guidance}`).join('\n'),
     CATEGORY_COUNT: categoryCount(profile),
-    TYPICAL_HOLD_LINE: typicalEnd ? ` A typical hold would end around ${typicalEnd}: say which catalysts and supply events fall before that date, and which only before the end of the horizon.` : '',
+    TYPICAL_HOLD_LINE: typical.line,
     EXCEPTION_BULLET: longTerm ? `\n- ${exceptionLine}` : '',
     OWNER_FOCUS: ownerFocus(ownerInstructions),
     RECIPE_ID,
-    TYPICAL_HOLD: String(horizon.typical_hold_months),
+    TYPICAL_HOLD: typical.text,
     CEILING: String(horizon.planning_ceiling_months),
     HORIZON_START: horizon.start_date,
     HORIZON_END: horizon.end_date,

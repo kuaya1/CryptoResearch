@@ -167,7 +167,7 @@ async function researchTab(ctx) {
   const perRun = input({ inputmode: 'decimal', value: b.per_run_usd ?? '', placeholder: 'not set' });
   const daily = input({ inputmode: 'decimal', value: b.daily_usd ?? '', placeholder: 'not set' });
   const monthly = input({ inputmode: 'decimal', value: b.monthly_usd ?? '', placeholder: 'not set' });
-  const horizon = input({ value: s.default_horizon || '24 months' });
+  const horizon = input({ value: s.default_horizon || '4 months' });
   // The Gemini API cannot cap searches per request, so web search is used only
   // when you declare how your model bills it (audit V2-005): one fee per
   // grounded request (Gemini 2.5), or per search query (Gemini 3, where max

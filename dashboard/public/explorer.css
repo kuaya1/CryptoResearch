@@ -98,9 +98,9 @@
   .xp-tools .seg { max-width: 100%; overflow-x: auto; }
 }
 
-/* Second opinion (views/explorer-compare.js): the comparison dialog. Who and
-   what first, then the scope, then paired bars per category, then each
-   model's own words on demand. */
+/* Second opinion (views/explorer-compare.js): the comparison dialog. Each
+   report's grade in a line, one status, then paired bars per category; the
+   dates, versions and provenance folded; each model's own words on demand. */
 dialog.xp-cmp-dlg { max-width: min(1000px, calc(100vw - 24px)); }
 @media (max-width: 600px) { dialog.xp-cmp-dlg { max-width: 100vw; } }
 .xp-cmp-loading { margin: 0; color: var(--text-2); }
@@ -114,6 +114,23 @@ dialog.xp-cmp-dlg { max-width: min(1000px, calc(100vw - 24px)); }
 .xp-cmp-pick { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .xp-cmp-pick .lbl { font-size: var(--fs-small); font-weight: 500; color: var(--text-2); }
 .xp-cmp-pick select { width: 100%; min-width: 0; }
+
+/* The top: one line per report (its name, grade as stored, verdict), one
+   status well (scope and authorship, with every warning in words), the
+   details folded under it. */
+.xp-cmp-summary { display: grid; gap: 6px; margin-bottom: var(--s3); }
+.xp-cmp-line1 { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; font-size: var(--fs-small); }
+.xp-cmp-line1 .model { font-size: 14px; font-weight: 600; color: var(--text); }
+.xp-cmp-line1 .xp-grade { background: var(--surface-sunken); }
+.xp-cmp-line1.empty .none { color: var(--text-2); }
+.xp-cmp-status { margin-bottom: var(--s2); padding: 10px 14px; border-radius: var(--r-well); font-size: var(--fs-small); color: var(--text); }
+.xp-cmp-status.ok { background: var(--t4-bg); }
+.xp-cmp-status.warn { background: var(--warn-weak); }
+.xp-cmp-status p { margin: 0; }
+.xp-cmp-status p + p { margin-top: 4px; }
+.xp-cmp-status.ok p + p { color: var(--text-2); }
+.xp-cmp-more { margin-bottom: var(--s2); }
+.xp-cmp-more > .body .xp-cmp-sides { margin-top: var(--s2); }
 
 .xp-cmp-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); margin-bottom: var(--s3); }
 .xp-cmp-side { min-width: 0; padding: var(--s3) 14px; border-radius: var(--r-well); background: var(--surface-sunken); font-size: var(--fs-small); }

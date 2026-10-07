@@ -1,8 +1,9 @@
 'use strict';
 // Position-cycle research recipe (position-cycle@1).
 //
-// Eric's style is position trading: usually a couple of months, with a planning
-// ceiling of four calendar months. So a research run's horizon is an exact
+// Eric's style is position trading: he usually holds 3 to 4 months, with a
+// planning ceiling of four calendar months (longer holds are explicit
+// exceptions; Eric, 2026-10-07). So a research run's horizon is an exact
 // calendar interval anchored to the research date (America/New_York), for
 // example "4 months (2026-10-02 to 2027-02-02)". A longer horizon is an
 // explicit long-term exception and needs the owner's reason; nothing here turns
@@ -24,7 +25,10 @@ const RECIPE_ID = 'position-cycle@1';
 // and Implementation Architecture (2026-10-02), not from the agreed mission
 // document, so requiring a reason is OFF until he decides
 // (settings: research.horizon_policy.require_long_term_reason).
-const DEFAULT_POLICY = Object.freeze({ planning_ceiling_months: 4, typical_hold_months: 2, default_months: 4, require_long_term_reason: false });
+// A typical hold is 3 to 4 months (it was "about 2" until 2026-10-07, review
+// finding 5). A run stores the typical hold it was made with, and its frozen
+// prompt never changes; runs made before keep their single 2-month value.
+const DEFAULT_POLICY = Object.freeze({ planning_ceiling_months: 4, typical_hold_months: 3, typical_hold_max_months: 4, default_months: 4, require_long_term_reason: false });
 const MARKET_STATES = ['unknown', 'bitcoin_led', 'broad_altcoin_participation', 'mixed', 'contracting'];
 const TIMING_STATES = ['unknown', 'early', 'developing', 'extended', 'thesis_impaired'];
 const CERTAINTY = ['unknown', 'project_claimed', 'source_documented', 'analyst_inferred'];
@@ -36,10 +40,15 @@ function policy(ws) {
   const p = (ws && ws.settings && ws.settings.research && ws.settings.research.horizon_policy) || {};
   const int = (v, lo, hi, d) => (Number.isInteger(v) && v >= lo && v <= hi ? v : d);
   const ceiling = int(p.planning_ceiling_months, 1, 24, DEFAULT_POLICY.planning_ceiling_months);
+  // A typical hold set in Settings without its own upper end is one length,
+  // as it always was; the default is the range 3 to 4 months.
+  const own = Number.isInteger(p.typical_hold_months) && p.typical_hold_months >= 1 && p.typical_hold_months <= ceiling;
+  const typical = own ? p.typical_hold_months : Math.min(DEFAULT_POLICY.typical_hold_months, ceiling);
   return {
     recipe: RECIPE_ID,
     planning_ceiling_months: ceiling,
-    typical_hold_months: int(p.typical_hold_months, 1, ceiling, Math.min(DEFAULT_POLICY.typical_hold_months, ceiling)),
+    typical_hold_months: typical,
+    typical_hold_max_months: int(p.typical_hold_max_months, typical, ceiling, own ? typical : Math.max(typical, Math.min(DEFAULT_POLICY.typical_hold_max_months, ceiling))),
     default_months: int(p.default_months, 1, ceiling, Math.min(DEFAULT_POLICY.default_months, ceiling)),
     require_long_term_reason: p.require_long_term_reason === true,
   };
@@ -93,6 +102,7 @@ function build(ws, { months, startDate, reason, source, typed = null }) {
     end_date: addCalendarMonths(startDate, months),
     exception_reason: longTerm ? reason || null : null,
     typical_hold_months: pol.typical_hold_months,
+    typical_hold_max_months: pol.typical_hold_max_months,
     planning_ceiling_months: pol.planning_ceiling_months,
     source,
     typed,

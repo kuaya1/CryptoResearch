@@ -1216,18 +1216,20 @@ function stageQuarantine(ws, op, { projectId, runId, provider, reportId, reason 
   op.writeJson(rel, run);
 }
 
-// A report imported without a run ID is linked to an open job for the same
-// project and provider, if exactly one such job exists.
-function autoLinkReport(ws, { projectId, provider, reportId, importedAt, json = null }) {
-  const open = listRuns(ws, projectId).filter((r) => !r.broken && r.jobs[provider] && ['unconfigured', 'running', 'queued', 'failed'].includes(r.jobs[provider].state) && Date.parse(r.created_at) <= Date.parse(importedAt));
-  if (open.length !== 1) return null;
-  const run = open[0];
-  // Never a report that states another prompt, profile or horizon than that
-  // run's (binding.js): it stays saved on its own.
-  if (json && !require('./binding').checkBinding(ws, { projectId, runId: run.run_id, provider, json, mode: 'declared' }).ok) return null;
-  return runOp(ws, { type: 'research_job_link', summary: `Link ${reportId} to ${run.run_id}` }, (op) => {
-    stageReportLink(ws, op, { projectId, runId: run.run_id, provider, reportId, method: 'same project and provider, imported after the run started' });
-  });
+// A report imported without a run (none chosen, none named in its JSON) is
+// history: it is saved on its own and completes no job, however many jobs of
+// its project and model are open (review of 2026-10-07, finding 1; it used to
+// complete the one open job, even a failed one whose paid answer was
+// quarantined). A job completes only by an assignment to its exact run that
+// binding.js validates. Read-only: says which open jobs stay open.
+function unboundImportNote(ws, { projectId, provider }) {
+  const open = openJobsFor(ws, projectId, provider);
+  const label = PROVIDER_LABELS[provider];
+  const runs = open.map((o) => o.run.run_id);
+  const stays = !runs.length ? ''
+    : runs.length === 1 ? ` ${label}'s open job in run ${runs[0]} stays open: a report answers it only when it is imported for that run (Research runs, Import report) or its JSON block names that run.`
+      : ` ${label}'s open jobs in runs ${runs.join(', ')} stay open.`;
+  return `It names no research run, so it is kept as history and completes no research job.${stays}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -2514,7 +2516,7 @@ module.exports = {
   reconcileAttempt,
   stageReportLink,
   stageQuarantine,
-  autoLinkReport,
+  unboundImportNote,
   hasDueWork,
   dueSchedules,
   runDueJobs,
