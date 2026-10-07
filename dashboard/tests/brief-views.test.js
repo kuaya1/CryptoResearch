@@ -222,6 +222,52 @@ test('the Overview reads in order: the verdict with its warnings and key points,
   assert.match(src, /const GRADE_NOTICES = \['evidence', 'model_total', 'text_scores', 'extraction'\];/);
 });
 
+test('phone layout (2026-10-07): the strongest risk is the report\'s own words, whole; a long one reads as its first lines on a phone with an explicit way to the rest', async () => {
+  // The risk is the report's own text, never shortened in the model.
+  const bm = await import(pathToFileURL(path.join(tmp, 'brief-model.js')).href);
+  await mod;
+  const w = fx().ws;
+  const id = fx().pids.ranges;
+  const index = indexer.buildIndex(w);
+  const d = indexer.projectDetail(w, id);
+  const m = bm.briefModel({ detail: d, row: index.projects.find((p) => p.project_id === id), index, provider: 'claude' });
+  const stored = d.reports.find((r) => r.report_id === m.report_id).assessment.bearish_facts[0].text;
+  assert.equal(m.key.risk.text, stored);
+  assert.ok(stored.length > 160, 'the fixture\'s risk is long');
+  // The view keeps the whole text in the page and names the way to it.
+  const src = read('views/brief.js');
+  assert.match(src, /const RISK_SHORT = 160;/);
+  assert.match(src, /h\('p', \{ class: 'bf-key-t bf-clamp', id: 'bf-risk-text' \}, text\)/);
+  assert.match(src, /'aria-expanded': 'false', 'aria-controls': 'bf-risk-text'/);
+  assert.match(src, /'Show the full risk'/);
+  // Only a phone clamps it, and only a phone shows the button.
+  const css = read('brief-views.css');
+  const phone = css.slice(css.indexOf('@media (max-width: 760px)'));
+  const wide = css.slice(0, css.indexOf('@media'));
+  assert.match(phone, /\.bf-key-t\.bf-clamp:not\(\.open\) \{[^}]*-webkit-line-clamp: 4/);
+  assert.match(wide, /\.bf-key-more-btn \{ display: none; \}/);
+  assert.ok(!/bf-clamp/.test(wide), 'a wide screen shows the risk whole');
+});
+
+test('phone layout: the project\'s actions are one menu beside the name with the same actions; the head that repeats the model tab steps aside only for the latest report; warnings stay', () => {
+  const project = read('views/project.js');
+  assert.match(project, /function actionsMenu\(name, items\)/);
+  assert.match(project, /role: 'menu'/);
+  // The menu and the row of buttons call the same handlers.
+  for (const fn of ['runResearch', 'setWatch', 'archiveOrRestore']) assert.ok((project.match(new RegExp(`\\b${fn}\\b`, 'g')) || []).length >= 3, `${fn} shared`);
+  const css = read('brief-views.css');
+  const phone = css.slice(css.indexOf('@media (max-width: 760px)'));
+  assert.match(css.slice(0, css.indexOf('@media')), /\.pb-more \{ display: none; \}/);
+  assert.match(phone, /\.pb-head \.actions \{ display: none; \}/);
+  assert.match(phone, /\.pb-more \{ display: block;/);
+  // Only the latest report's head is set aside; an earlier one keeps it.
+  assert.match(phone, /\.brief \.bf-head\.is-latest \{ position: absolute;/);
+  assert.match(read('views/brief.js'), /class: `bf-head\$\{m\.report_id && m\.is_latest \? ' is-latest' : ''\}`/);
+  // The grade's warnings are never hidden on a phone.
+  assert.ok(!/\.bf-gflags[^{]*\{[^}]*display: none/.test(phone));
+  assert.ok(!/\.bf-notices[^{]*\{[^}]*display: none/.test(phone));
+});
+
 test('the views\' styles use the desk\'s tokens only, in light and dark alike', () => {
   const css = read('brief-views.css');
   const noComments = css.replace(/\/\*[\s\S]*?\*\//g, '');

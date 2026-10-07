@@ -164,7 +164,10 @@ export function topBar(ctx, m, pid, { label = `${WHO} Brief` } = {}) {
 // model's reports it reads. (The project page's header names the project,
 // its identity and the market now.)
 function sheetHead(m, title) {
-  return h('header', { class: 'bf-head' },
+  // The latest report's head repeats the model tab above it; on a phone it is
+  // then read by screen readers only (brief-views.css). An earlier report
+  // always says so.
+  return h('header', { class: `bf-head${m.report_id && m.is_latest ? ' is-latest' : ''}` },
     h('div', { class: 'bf-id' },
       h('h2', { id: 'bf-title', class: 'bf-eyebrow', tabindex: '-1' }, title, h('span', { class: 'sr-only' }, `: ${m.identity.name}`)),
       m.report_id ? h('p', { class: 'bf-id-r' }, m.is_latest ? 'Latest report' : 'An earlier report', h('span', { class: 'bf-id-saved' }, ` · saved ${fmtDate(m.provenance.saved_at)}`)) : null));
@@ -274,6 +277,10 @@ function noticeItem(ctx, n, m, pid) {
   return li;
 }
 
+// A risk longer than this many characters reads as its first four lines on a
+// phone, with "Show the full risk" (about four lines at 360px).
+const RISK_SHORT = 160;
+
 // The first view's key points, before the thesis and the scorecard: the
 // strongest risk the report backs with a source, and what would confirm or
 // break the thesis, in the report's words. The full lists stay under What
@@ -285,9 +292,24 @@ function keyPoints(m) {
   const more = (n, what) => (n ? h('span', { class: 'bf-key-more' }, `+${n} more ${what}`) : null);
   const row = (cls, label, ...body) => h('div', { class: `bf-key ${cls}` }, h('dt', null, label), h('dd', null, ...body));
   const missing = () => h('p', { class: 'bf-key-t bf-key-none' }, `Not reported in ${WHO}'s report`);
+  // A long risk reads as its first lines on a phone, with an explicit way to
+  // the whole of it; the complete text is always in the page (and in full on
+  // a wide screen).
+  const riskText = (text) => {
+    if (text.length <= RISK_SHORT) return h('p', { class: 'bf-key-t' }, text);
+    const p = h('p', { class: 'bf-key-t bf-clamp', id: 'bf-risk-text' }, text);
+    const more = h('button', { type: 'button', class: 'link bf-key-more-btn', 'aria-expanded': 'false', 'aria-controls': 'bf-risk-text', dataset: { key: 'brief-risk-more' } }, 'Show the full risk');
+    more.addEventListener('click', () => {
+      const open = more.getAttribute('aria-expanded') !== 'true';
+      more.setAttribute('aria-expanded', String(open));
+      more.textContent = open ? 'Show less' : 'Show the full risk';
+      p.classList.toggle('open', open);
+    });
+    return [p, more];
+  };
   return h('dl', { class: 'bf-keys', 'aria-label': 'Key points from the report' },
     k.risk ? row('risk', k.risk.sourced ? 'Strongest sourced risk' : 'Strongest risk',
-      h('p', { class: 'bf-key-t' }, k.risk.text),
+      riskText(k.risk.text),
       k.risk.sourced ? citeLine(k.risk) : h('p', { class: 'bf-cite' }, h('span', { class: 'bf-tag none' }, 'No source cited for any listed risk'))) : row('risk', 'Strongest risk', missing()),
     row('confirm', 'Would confirm', k.confirm ? h('p', { class: 'bf-key-t' }, k.confirm) : missing(), more(k.confirm_more, 'under What to watch')),
     row('break', 'Would break it', k.break ? h('p', { class: 'bf-key-t' }, k.break) : missing(), more(k.break_more, 'under What to watch')));

@@ -26,6 +26,12 @@
 .pb-mk-when.stale { color: var(--warn); font-weight: 600; }
 .pb-mk.none { margin-top: 6px; }
 .pb-head .meta-line { font-size: var(--fs-small); }
+/* The actions' menu is the phone's; a wide screen keeps the row of buttons. */
+.pb-more { display: none; }
+.pb-more .more { min-width: var(--touch); min-height: var(--touch); padding: 0; display: inline-flex; align-items: center; justify-content: center; color: var(--text-2); }
+.pb-more .more svg { width: 18px; height: 18px; }
+/* "Show the full risk" is the phone's; a wide screen shows the risk whole. */
+.bf-key-more-btn { display: none; }
 
 /* ---- since your last review: one line until opened -------------------------------- */
 .pb-digest { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin: 0 0 var(--s3); padding: 4px 6px 4px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); }
@@ -206,6 +212,8 @@
   /* Small chips and summaries keep their look but take a finger. */
   .bf-gflag::after, .cmp-more > summary::after { content: ""; position: absolute; inset: -8px -2px; }
   .cmp-more > summary { position: relative; min-height: 36px; }
+  .bf-key-more-btn { position: relative; }
+  .bf-key-more-btn::after { content: ""; position: absolute; inset: -8px -4px; }
   .bf-hist li > a { padding-block: 12px; margin-block: -8px; }
   .pb-digest-d > summary { min-height: var(--touch); }
 }
@@ -214,17 +222,34 @@
   body:has(.bf-bar) .project-page > .crumbs { display: none; }
 }
 @media (max-width: 760px) {
-  .pb-head { gap: var(--s3); margin-bottom: var(--s3); }
-  .pb-head h1 { font-size: 20px; line-height: 1.2; }
-  .pb-mk { gap: 2px 14px; margin-top: 8px; }
-  .pb-mk-when { flex-basis: 100%; }
-  .pb-head .meta-line { margin-top: 6px !important; }
-  .pb-head .actions { width: 100%; }
+  /* The project's identity, compact: name and ticker beside the logo with
+     the actions' menu, the market in a line or two with its time, then
+     sector, identity and website (2026-10-07). */
+  .pb-head { gap: var(--s2); margin-bottom: var(--s2); }
+  .pb-head-name { align-items: flex-start; gap: 10px; }
+  .pb-head-name .logo { margin-top: 2px; }
+  .pb-head h1 { flex: 1; font-size: 18px; line-height: 1.25; padding-top: 6px; }
+  .pb-head .actions { display: none; }
+  .pb-more { display: block; flex: none; margin: -2px -10px 0 auto; }
+  .pb-mk { gap: 2px 14px; margin-top: 6px; }
+  .pb-head .meta-line { margin-top: 4px !important; }
   /* The brief's views on a phone: the header names the project, so the
      trail does not repeat it; the review line keeps one row. */
   .project-page.pb-view > .crumbs { display: none; }
-  .project-page.pb-view > .tabs { margin-bottom: var(--s3); }
-  .pb-digest { padding-left: 12px; }
+  .project-page.pb-view > .tabs { margin-bottom: var(--s2); }
+  .pb-digest { padding-left: 12px; margin-bottom: var(--s2); }
+  .pb-view .pb-mtabs { margin-bottom: var(--s2); }
+  /* The sheet starts at its verdict: the head that repeats the chosen model
+     tab is read by screen readers only (an earlier report keeps its head);
+     the verdict's own small label does the same. */
+  .brief.card { padding-top: var(--s3); --bf-pad-t: var(--s3); }
+  .brief .bf-head.is-latest { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  .brief .bf-head.is-latest + .bf-sec { padding-top: 0; }
+  .bf-vwho { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  /* The strongest risk follows the verdict at once: its first four lines,
+     and the whole of it one tap away. */
+  .bf-key-t.bf-clamp:not(.open) { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+  .bf-key-more-btn { display: inline-flex; align-items: center; min-height: 28px; margin-top: 2px; font-size: var(--fs-small); font-weight: 600; }
   .pb-digest > button { display: none; }
   .pb-digest-all button { display: inline-flex; }
   .pb-digest-d > summary { line-height: 1.35; padding: 4px 0; }
@@ -245,8 +270,14 @@
   .bf-vfacts dd { margin: 0; }
   .bf-vfacts dd:has(.bf-hz-short) .bf-hz-full { display: none; }
   .bf-hz-short { display: inline; }
-  .bf-gflags { margin-top: var(--s3); }
-  .bf-keys { margin-top: var(--s4); }
+  .bf-gflags { margin-top: 10px; gap: 6px; }
+  /* Two warnings fit one row at 360px; the words keep their size. */
+  .bf-gflag { gap: 5px; padding: 3px 9px 3px 7px; }
+  /* A citation wraps between its parts without a stray separator. */
+  .bf-key .bf-cite { gap: 4px 8px; }
+  .bf-key .bf-cite > .bf-dot { display: none; }
+  .bf-keys { margin-top: var(--s3); padding: 10px 14px; gap: 8px; }
+  .bf-key + .bf-key { padding-top: 8px; }
   .bf-inputs-well { padding: 2px 12px 8px; }
   /* The two reports stay side by side, each in a narrow column. */
   .cmp-pickers, .cmp-sides { gap: 8px; }

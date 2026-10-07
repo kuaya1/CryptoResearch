@@ -15,7 +15,7 @@ import {
   fmtPrice, fmtCompactUsd, fmtNum, fmtDate, fmtDateTime, fmtAgo, fmtSignedPct, freshnessText, kv, details, field, input, select, button,
   action, callout, copyText, tabStrip, safeSection, submissionId, stateText, fieldError, PROVIDERS, PROVIDER_LABELS, link,
   jobKey, coworkIdleMinutes, isAssistantJob, researchState, withheldReason, unscoredFrom, unscoredList,
-  withheldLabel, COVERAGE_MEANS, structureNotes, toast, onHoldOf, fmtMarketFigure, unknownFigure, fmtAsOf,
+  withheldLabel, COVERAGE_MEANS, structureNotes, toast, onHoldOf, fmtMarketFigure, unknownFigure, fmtAsOf, icon,
 } from '../ui.js';
 import { renderMarkdown } from '../md.js';
 import { openResearchDialog, openSectorDialog, waitingActions, waitingStep } from './dialogs.js';
@@ -220,12 +220,14 @@ function header(ctx, d, row) {
   const p = d.project;
   const id = p.identity;
   const sector = d.sector || p.sector;
-  const research = button('Run research', () => openResearchDialog(ctx, { ...row, ...p, research: row.research, report_count: d.reports.length }), { kind: 'primary', key: 'project-research' });
+  const runResearch = () => openResearchDialog(ctx, { ...row, ...p, research: row.research, report_count: d.reports.length });
+  const research = button('Run research', runResearch, { kind: 'primary', key: 'project-research' });
   research.id = 'project-research-btn';
+  const setWatch = async () => { await ctx.api.post(`/api/projects/${p.project_id}/watchlist`, { on: !p.watchlist.on_watchlist }); await ctx.refresh(); return true; };
   const watch = button(p.watchlist.on_watchlist ? 'Watching' : 'Watch', null, { key: 'project-watch' });
   watch.setAttribute('aria-pressed', String(Boolean(p.watchlist.on_watchlist)));
   watch.title = p.watchlist.on_watchlist ? 'On your watchlist. Click to stop watching.' : 'Add to your watchlist';
-  watch.onclick = action(watch, async () => { await ctx.api.post(`/api/projects/${p.project_id}/watchlist`, { on: !p.watchlist.on_watchlist }); await ctx.refresh(); return true; }, 'Watchlist updated');
+  watch.onclick = action(watch, setWatch, 'Watchlist updated');
   // Archive needs no confirmation: nothing is deleted, the notice offers
   // Undo, and an archived project shows Restore here and in the inspector.
   const archived = p.status === 'archived';
@@ -234,10 +236,8 @@ function header(ctx, d, row) {
     toast(`Restored ${p.name}${r.on_watchlist ? ', back on your watchlist' : ''}. Nothing was started or sent.`);
     await ctx.refresh();
   };
-  const archive = button(archived ? 'Restore' : 'Archive', null, { kind: 'quiet', key: archived ? 'project-restore' : 'project-archive' });
-  archive.title = archived ? 'Bring it back as it was, with its history' : 'Off your lists; nothing is deleted. Undo right after.';
-  archive.onclick = async () => {
-    archive.disabled = true;
+  const archiveOrRestore = async (el) => {
+    el.disabled = true;
     try {
       if (archived) await restore();
       else {
@@ -248,12 +248,22 @@ function header(ctx, d, row) {
       }
     } catch (err) {
       toast(err.message, 'bad');
-      archive.disabled = false;
+      el.disabled = false;
     }
   };
+  const archive = button(archived ? 'Restore' : 'Archive', null, { kind: 'quiet', key: archived ? 'project-restore' : 'project-archive' });
+  archive.title = archived ? 'Bring it back as it was, with its history' : 'Off your lists; nothing is deleted. Undo right after.';
+  archive.onclick = () => archiveOrRestore(archive);
+  // On a phone the same three actions sit in one menu beside the name, so
+  // the project's identity stays compact (2026-10-07).
+  const more = actionsMenu(p.name, [
+    archived ? null : { label: 'Run research…', key: 'project-menu-research', fn: runResearch },
+    archived ? null : { label: p.watchlist.on_watchlist ? 'Stop watching' : 'Watch', key: 'project-menu-watch', desc: p.watchlist.on_watchlist ? 'On your watchlist now' : null, fn: async () => { try { await setWatch(); toast('Watchlist updated'); } catch (err) { toast(err.message, 'bad'); } } },
+    { label: archived ? 'Restore' : 'Archive', key: archived ? 'project-menu-restore' : 'project-menu-archive', desc: archived ? 'Back as it was, with its history' : 'Off your lists; nothing is deleted. Undo right after.', fn: (el) => archiveOrRestore(el) },
+  ].filter(Boolean));
   return h('div', { class: 'page-head pb-head' },
     h('div', { class: 'pb-head-id' },
-      h('div', { class: 'pb-head-name' }, logo({ ...row, project_id: p.project_id, name: p.name, symbol: p.symbol }, { size: 36 }), h('h1', null, p.name, p.symbol ? h('span', { class: 'pb-ticker' }, ` ${p.symbol}`) : null)),
+      h('div', { class: 'pb-head-name' }, logo({ ...row, project_id: p.project_id, name: p.name, symbol: p.symbol }, { size: 36 }), h('h1', null, p.name, p.symbol ? h('span', { class: 'pb-ticker' }, ` ${p.symbol}`) : null), more),
       marketFacts(row),
       h('div', { class: 'meta-line', style: { marginTop: '8px' } },
         sector ? h('button', { type: 'button', class: 'link', dataset: { key: 'project-sector' }, 'aria-label': `Sector: ${sector.label || sector.primary}. Change sector`, onclick: () => openSectorDialog(ctx, { ...row, ...p, sector }) }, sector.label || sector.primary) : null,
@@ -262,6 +272,45 @@ function header(ctx, d, row) {
         d.position && !d.position.closed ? h('span', null, 'Held') : null,
         id.official_website ? h('a', { href: id.official_website, class: 'wrap-anywhere' }, id.official_website.replace(/^https?:\/\//, '').replace(/\/$/, '')) : null)),
     h('div', { class: 'actions' }, archived ? null : research, archived ? null : watch, archive));
+}
+
+// The project's actions as one menu (the inspector's menu, its styles and
+// keys: Up/Down move, Home/End, Escape closes and returns to the button, Tab
+// leaves). Shown on a phone in place of the row of buttons.
+function actionsMenu(name, items) {
+  const btn = h('button', { type: 'button', class: 'more quiet', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-label': `Actions for ${name}`, title: 'Actions', dataset: { key: 'project-more' } }, icon('more'));
+  const list = h('div', { class: 'insp-menu', role: 'menu', 'aria-label': `Actions for ${name}`, hidden: true });
+  const els = items.map((it) => {
+    const el = h('button', { type: 'button', role: 'menuitem', tabindex: '-1', dataset: { key: it.key } }, h('span', null, it.label), it.desc ? h('span', { class: 'desc' }, it.desc) : null);
+    el.addEventListener('click', () => { close(false); it.fn(el); });
+    return el;
+  });
+  list.append(...els);
+  const onDoc = (e) => { if (!list.contains(e.target) && !btn.contains(e.target)) close(false); };
+  function open() {
+    list.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    els[0].focus();
+    setTimeout(() => document.addEventListener('click', onDoc), 0);
+  }
+  function close(focusBack = true) {
+    if (list.hidden) return;
+    list.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('click', onDoc);
+    if (focusBack) btn.focus();
+  }
+  btn.onclick = (e) => { e.stopPropagation(); if (list.hidden) open(); else close(); };
+  list.addEventListener('keydown', (e) => {
+    const i = els.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); els[(i + 1) % els.length].focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); els[(i - 1 + els.length) % els.length].focus(); }
+    else if (e.key === 'Home') { e.preventDefault(); els[0].focus(); }
+    else if (e.key === 'End') { e.preventDefault(); els[els.length - 1].focus(); }
+    else if (e.key === 'Tab') close(false);
+  });
+  return h('div', { class: 'insp-more-wrap pb-more' }, btn, list);
 }
 
 // The market now, under the project's name: price and its 24-hour change,
@@ -273,13 +322,14 @@ function marketFacts(row) {
   const mk = marketNow(row);
   if (!mk) return h('p', { class: 'pb-mk none' }, h('span', { class: 'pb-mk-when' }, 'No market data for this project'));
   const dir = mk.change === null ? null : mk.change > 0 ? 'up' : mk.change < 0 ? 'down' : 'flat';
-  const fig = (label, v, unknown) => h('span', { class: 'pb-mk-f' }, h('span', { class: 'k' }, label), v ? h('span', { class: 'v' }, v) : unknown);
+  // The inspector's short labels (MC, Vol 24h); a screen reader hears the words.
+  const fig = (short, label, v, unknown) => h('span', { class: 'pb-mk-f', title: label }, h('span', { class: 'k', 'aria-hidden': 'true' }, short), h('span', { class: 'sr-only' }, `${label} `), v ? h('span', { class: 'v' }, v) : unknown);
   const when = mk.as_of ? fmtAgo(mk.as_of) : 'time not recorded';
   return h('p', { class: 'pb-mk', title: `${mk.source}${mk.as_of ? `, as of ${fmtDateTime(mk.as_of)}` : ''}. A market observation, not part of the research.` },
     h('span', { class: 'pb-mk-f' }, h('span', { class: 'v price' }, mk.price),
       mk.change24h ? h('span', { class: `chg ${dir}` }, h('span', { 'aria-hidden': 'true' }, mk.change24h), h('span', { class: 'sr-only' }, ` ${dir === 'down' ? 'down' : dir === 'up' ? 'up' : 'unchanged'} ${Math.abs(mk.change).toFixed(2)} percent over 24 hours`)) : null),
-    fig('Market cap', mk.mcap, unknownFigure('Market cap', mk.mcap_usd)),
-    fig('Volume 24h', mk.volume, unknownFigure('Volume', mk.volume_usd)),
+    fig('MC', 'Market cap', mk.mcap, unknownFigure('Market cap', mk.mcap_usd)),
+    fig('Vol 24h', 'Volume over 24 hours', mk.volume, unknownFigure('Volume', mk.volume_usd)),
     h('span', { class: `pb-mk-when${mk.stale ? ' stale' : ''}` }, mk.stale ? `Stale price · ${when}` : `${mk.source} · ${when}`, mk.as_of ? h('span', { class: 'sr-only' }, `, at ${fmtAsOf(mk.as_of)}`) : null));
 }
 

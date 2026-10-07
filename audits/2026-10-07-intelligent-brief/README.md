@@ -39,6 +39,26 @@ On a 390 × 844 phone the first screen now holds identity, market with its own t
 - The "!" corner mark on a model pill renders as a 7 px dot with no text by design (its words are in the label); the checker lists it as small text.
 - "Since your last review" is now one line above the model tabs (the list one tap away), a change to the 2026-10-05 layout made for the phone first screen.
 
+## Second pass: phone hierarchy (same evening, after c8f57ac)
+
+On a phone the Overview now reads: compact identity (name and ticker beside the logo; MC and Vol 24h with their source and age; Run research, Watch and Archive in one 44px "⋯" menu, the inspector's, instead of a row of buttons), the model tabs, the grade or withheld state with the verdict and research age, the grade's warning chips (never hidden), then at once the strongest sourced risk, what would confirm and break it, then the category bars. The sheet's head and its "Claude's verdict" label, which repeat the chosen model tab, are for screen readers only on a phone when the report is the latest (an earlier report keeps its head). A risk over 160 characters reads as its first four lines with an explicit "Show the full risk"; the whole text is always in the page and shows in full on a wide screen. No text was made smaller; desktop is unchanged.
+
+Strongest-risk block, top–bottom (document px), opened from the inspector; FICTIONAL fixture with its 28px "Test workspace" banner (the real desk has none). Before = the deployed c8f57ac exported; after = the staged candidate exported (neither has the Day Desk session's pending CSS).
+
+| Case | 390×844 before | 390×844 after | 360×780 before | 360×780 after |
+|---|---|---|---|---|
+| Complete | 736–844 | **607–715** | 809–917 | **610–718** |
+| Withheld grade | 759–867 | **635–743** | 781–889 | **635–743** |
+| Range grade | 722–830 | **600–771** (now a long risk, 4 lines) | 727–835 | **600–771** |
+| Sparse legacy | 669–707 | 544–582 | 687–725 | 547–585 |
+| Very long name (6 lines) | 829–979 | 674–824 | 905–1055 | 700–850 (grade, verdict, age on screen; risk starts on it) |
+
+Grade top: 578 → 460 px (390), 609 → 461 px (360). Desktop 1440×900: unchanged (risk 808–853).
+
+Checks on the staged candidate: full suite 582/582 (2 new tests); `measure.js` and `check.js` at 390×844 and 360×780 (touch) and 1440×900, light and dark: 0 writes, 0 research or Explorer requests, 0 console errors, no overflow; the "⋯" menu opens on its first item, Up/Down move, Escape closes it and returns focus (the page stays); "Show the full risk" toggles (aria-expanded) with all 211 characters always in the page; Escape and Back return to the inspector; Compare and Evidence unchanged in behavior. Comparison rules, scores, exclusions and reports untouched (no change to `compare-model.js`, `compare-desk.js`, `brief-model.js` or `core/`). Screenshots: `shots/before-p2/`, `shots/after-p2/`, `shots/after-p2-check/`.
+
+Not changed: the model tabs keep each model's verdict under its pill on a phone (Eric, 2026-10-06); with a very long project name the risk starts on the 360px first screen but ends below it. At 360px with the test banner the desk's own top bar wraps its status dot to a second row (pre-existing, top bar; the real desk has no "Test" tag).
+
 ## Files
 
 Changed: `dashboard/public/views/{brief,project,inspector,research,watchlist}.js`, `dashboard/public/{compare-model.js,index.html}`, `dashboard/tests/{brief-fixtures,ui-logic.test}.js`, `CLAUDE.md` (the project-page bullet only). New: `dashboard/public/{compare-desk.js,brief-views.css}`, `dashboard/public/views/brief-compare.js`, `dashboard/tests/brief-views.test.js`. Not mine, left untouched: `dashboard/public/{styles,brief}.css` and the Day Desk line in `CLAUDE.md` (another session's uncommitted work). Local only (ignored): `fixture.js`, `cdp.js`, `shoot-before.js`, `check.js`, `peek.js`, `summarize.js`, results JSON, `shots/`.

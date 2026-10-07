@@ -370,6 +370,8 @@ function build(t) {
   out.reports.range = importClaude(p3.project_id, reportText({ project: p3, symbol: 'XRNG', profile: run3.sector_profile, run: run3, analysisAt: run3.horizon.start_date, horizon: hz(run3),
     edit: (j) => {
       j.verdict = 'UNFAVORABLE VALUATION';
+      // A long strongest risk: on a phone its first lines, the rest one tap away.
+      j.bearish_facts[0].text = 'Fictional: the token captures none of the fees today; operators keep them, the buyback has no date, and two unlocks inside the horizon add supply that the thin order books cannot absorb without a large discount.';
       j.investment_components.valuation_supply = range(40, 55, 'Fictional: two supply readings, both defensible.');
       j.investment_components.btc_relative_asymmetry = range(35, 60, 'Fictional: depends on whether the buyback is implemented.');
       j.diagnostic_scores.organic_demand = range(30, 45, 'Fictional: incentive share unknown.', { confidence: 'low' });
