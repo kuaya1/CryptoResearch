@@ -166,6 +166,9 @@ test('hosted: the start log names pending identities, withheld grades (which par
   assert.match(text, /Grade: example-payfi-fictional\/\S+ \(chatgpt, appendix_json, rubric cr-grading@1\) withheld at 75% of the weight; token_value_capture=unknown \(given \{"value":"7\/10"\}\)/);
   assert.match(text, /Prices: never_run \(Market data is turned off in settings\); last success never/);
   assert.ok(!text.includes(fixture.slice(0, 200)), 'no report text in the log');
+  // The Explorer's state in words, never a key (no URL is set in this test).
+  assert.match(text, /Explorer: not set up \([^)]*missing the Supabase project URL[^)]*set CR_SUPABASE_URL and CR_SUPABASE_SECRET_KEY in Render's environment\); nothing else on the desk depends on it\./);
+  assert.ok(!/sb_secret_[A-Za-z0-9]/.test(text), 'no key in the log');
 });
 
 test('hosted: defaults written by the first version move to the current ones on start, unless Eric changed them', (t) => {

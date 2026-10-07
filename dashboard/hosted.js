@@ -563,6 +563,13 @@ function healthLines(ws) {
     out.push(`Contract screening: ${so.enabled ? `${so.screened} screened${states ? ` (${states})` : ''}; alerts ${so.alerts}; last run ${so.last_run ? `${so.last_run.at} ${so.last_run.status}` : 'never'}; requests this month ${so.calls.month_count}${so.rate_limited ? `; rate-limited until ${so.retry_at}` : ''}; packets ${so.packet_mode}; ${so.credential === 'app_key' ? 'GoPlus key present' : `GoPlus keyless${so.credential_note ? ` (${so.credential_note})` : ''}`}` : 'turned off in settings'}.`);
   } catch (_) { /* screening module optional */ }
   out.push(`Offsite: ${require('./core/offsite').deskKey() ? 'backup key set (CR_BACKUP_KEY); a PC can pull verified copies' : `not set up (${require('./core/offsite').deskKeyProblem()}): the records exist only on this disk and in Render's disk snapshots`}.`);
+  // The optional Research Explorer (core/explorer.js): its state and where
+  // its settings come from, never the key. Nothing is asked of Supabase here.
+  try {
+    const xs = require('./core/explorer').status(ws);
+    const why = [...xs.problems, ...xs.missing.map((m) => `missing ${m.replace(/ \(.*$/, '')}`)].join('; ');
+    out.push(`Explorer: ${xs.state === 'configured' ? `set up (URL from ${xs.url_source}; ${xs.key_kind} key from ${xs.key_source})` : xs.state === 'off' ? 'switched off' : `not set up (${why}; set CR_SUPABASE_URL and CR_SUPABASE_SECRET_KEY in Render's environment)`}; nothing else on the desk depends on it.`);
+  } catch (_) { /* explorer module optional */ }
   return out;
 }
 
