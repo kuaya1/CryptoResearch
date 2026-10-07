@@ -2,15 +2,15 @@
    the same 0–100 bars and tier colours as the Brief and the inspector. */
 
 .xp-title { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); }
-/* "Demo data": the desk's one highlight, as a fill with near-black text. */
+/* "Demo data": the caution fill (fictional records), its words in dark amber. */
 .xp-demo { display: inline-flex; align-items: center; height: 26px; padding: 0 12px; border-radius: var(--r-pill); background: var(--highlight); color: var(--on-highlight); font-size: var(--fs-body); font-weight: 600; white-space: nowrap; }
 
 /* The sync line: a word, then when and how much, then Refresh. */
 .xp-sync { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s2); margin: calc(-1 * var(--s2)) 0 var(--s4); font-size: var(--fs-small); color: var(--text-2); min-width: 0; }
 .xp-sync .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--text-3); }
-.xp-sync.tone-ok .dot { background: var(--pos); }
+.xp-sync.tone-ok .dot { background: var(--pos-strong); }
 .xp-sync.tone-warn .dot { background: var(--warn-strong); }
-.xp-sync.tone-bad .dot { background: var(--neg); }
+.xp-sync.tone-bad .dot { background: var(--neg-strong); }
 .xp-sync .word { font-weight: 600; color: var(--text); }
 .xp-sync .rest { min-width: 0; overflow-wrap: anywhere; }
 .xp-refresh { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
