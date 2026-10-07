@@ -29,15 +29,17 @@ function qty(s, symbol = null) {
   return h('span', { class: 'num', title: `Exact: ${exact}`, 'aria-label': exact }, fmtQty(s));
 }
 
-const NET_TONE = { ok: 'ok', resuming: 'work', first_read: 'work', stale: 'warn', failing: 'warn', unavailable: 'bad', never: 'wait', paused: '', held: '', off: '', removed: '' };
+const NET_TONE = { ok: 'ok', gap: 'warn', resuming: 'work', history_incomplete: 'work', stale: 'warn', failing: 'warn', unavailable: 'bad', never: 'wait', paused: '', held: '', off: '', removed: '', unsupported: '' };
 
 // One network's sync state in words, with the age of the last complete view.
 export function networkStatusText(n) {
   const age = n.last_success_at ? fmtAgo(n.last_success_at) : null;
   if (n.state === 'ok') return `Synced ${age}`;
+  if (n.state === 'gap') return `Synced ${age} · history incomplete`;
   if (n.state === 'stale') return `Stale · last complete sync ${age}`;
   if (n.state === 'failing') return `Last sync failed · showing the view from ${age}`;
   if (n.state === 'resuming') return `Reading new activity · last complete sync ${age}`;
+  if (n.state === 'history_incomplete') return `History still loading${n.pass ? ` (block ${n.pass.resume_block} of ${n.pass.to_block})` : ''}${n.balances_complete_at ? ` · balances read ${fmtAgo(n.balances_complete_at)}` : ''}`;
   return n.words || 'Unknown';
 }
 
@@ -50,14 +52,16 @@ const RECON = {
   explained: ['Ledger catching up', 'info', 'Activity the ledger does not have yet (waiting for confirmations, held or unresolved) accounts for the difference.'],
   awaiting_decision: ['Waiting for your decision', 'warn', 'A held transaction may duplicate one you recorded yourself; decide it under Wallets.'],
   mismatch: ['Differs from your ledger', 'bad', 'Nothing on record explains the difference. It stays visible until it is reconciled; nothing is adjusted for you.'],
-  incomplete: ['Not every network read yet', 'info', 'A tracked network has no complete view yet.'],
+  incomplete: ['Not complete yet', 'info', 'A tracked network has no complete balance read yet, or its history is still loading.'],
+  history_partial: ['History partial', 'info', 'Alchemy\'s history here does not have everything that changes this balance (see the note). It stays visible; nothing is adjusted.'],
   not_in_ledger: ['Not in your ledger', 'info', 'No verified identity names this token, so the ledger cannot hold it. It is shown as the chain reports it.'],
 };
 
 function reconChip(r) {
   const x = RECON[r && r.status];
   if (!x) return null;
-  return h('span', { class: `chip ${x[1]}`, title: x[2] }, x[0]);
+  const notes = r.notes && r.notes.length ? ` (${r.notes.join('; ')})` : '';
+  return h('span', { class: `chip ${x[1]}`, title: `${notes}` }, x[0]);
 }
 
 function acquisitionText(a) {
@@ -80,16 +84,18 @@ function holdingRow(r, { showWallet }) {
   return h('li', { class: 'wh-row', dataset: { key: `wh-${r.key}` } },
     lg,
     h('div', { class: 'wh-name' }, h('div', { class: 'wh-title' }, name, r.symbol && r.symbol !== title ? h('span', { class: 'wh-sym' }, r.symbol) : null), h('div', { class: 'wh-sub' }, sub)),
-    h('div', { class: 'wh-fig' }, h('div', { class: 'wh-qty' }, qty(r.quantity, r.symbol)), h('div', { class: 'wh-val' }, priceCell(r))),
+    h('div', { class: 'wh-fig' }, h('div', { class: 'wh-qty' }, r.quantity === null ? h('span', { class: 'unknown' }, r.quantity_note || 'Unknown') : qty(r.quantity, r.symbol)), h('div', { class: 'wh-val' }, priceCell(r))),
     h('div', { class: 'wh-foot' }, acquisitionText(r.acquisition), reconChip(r.reconciliation)));
 }
 
+const HIDDEN_WORDS = { suspicious: 'Suspected spam', unsolicited: 'Not acquired by you' };
+
 function hiddenList(rows) {
   if (!rows.length) return null;
-  return details(`Suspected spam and dust (${rows.length})`, h('ul', { class: 'wh-list wh-hidden' }, rows.map((r) => h('li', { class: 'wh-row', dataset: { key: `wh-${r.key}` } },
+  return details(`Unverified tokens set aside (${rows.length})`, h('ul', { class: 'wh-list wh-hidden' }, rows.map((r) => h('li', { class: 'wh-row', dataset: { key: `wh-${r.key}` } },
     logo({ symbol: r.reported.symbol || r.symbol || '?', project_id: r.contract || r.key, market: {} }, { size: 24 }),
-    h('div', { class: 'wh-name' }, h('div', { class: 'wh-title' }, h('span', { title: 'Name as the token contract reports it (unverified)' }, r.name || r.reported.name || r.reported.symbol || 'Unnamed token')), h('div', { class: 'wh-sub' }, [r.network_label, r.hidden === 'spam' ? 'Suspected spam' : 'Dust'].join(' · '))),
-    h('div', { class: 'wh-fig' }, h('div', { class: 'wh-qty' }, qty(r.quantity, r.reported.symbol)), h('div', { class: 'wh-val' }, priceCell(r))),
+    h('div', { class: 'wh-name' }, h('div', { class: 'wh-title' }, h('span', { title: 'Name as the token contract reports it (unverified)' }, r.name || r.reported.name || r.reported.symbol || 'Unnamed token')), h('div', { class: 'wh-sub' }, [r.network_label, HIDDEN_WORDS[r.hidden] || 'Set aside'].join(' · '))),
+    h('div', { class: 'wh-fig' }, h('div', { class: 'wh-qty' }, r.quantity === null ? h('span', { class: 'unknown' }, r.quantity_note || 'Unknown') : qty(r.quantity, r.reported.symbol)), h('div', { class: 'wh-val' }, priceCell(r))),
     h('div', { class: 'wh-foot' }, h('span', { class: 'small muted' }, r.hidden_reason), r.contract ? h('code', { class: 'mono small wrap-anywhere' }, r.contract) : null)))), { id: 'wallet-hidden' });
 }
 
@@ -99,14 +105,16 @@ export function walletHoldingsCard(ctx, o) {
   if (!tracked.length) return null;
   const showWallet = tracked.length > 1;
   const statusLines = tracked.map((w) => h('div', { class: 'wh-status' }, showWallet ? h('strong', null, `${w.label}:`) : null, w.networks.map((n) => h('span', { class: 'wh-net' }, `${n.label} `, networkStatus(n)))));
+  const cadence = h('div', { class: 'wh-status' }, h('span', { class: 'muted', title: 'Each tracked network is read on this schedule; Sync now asks for a read sooner. Change it under Wallets > Sync settings.' }, `Syncs ${o.settings.interval_words.toLowerCase()}`));
   const keyMissing = !o.provider.present;
   const s = o.summary;
   const actions = [];
   if (tracked.length === 1 && tracked[0].status === 'active' && !keyMissing) actions.push(syncButton(ctx, tracked[0]));
   actions.push(link('Wallets', '#/portfolio?tab=wallets', { class: 'btn small' }));
   return card('Wallet balances', [
+    cadence,
     statusLines,
-    keyMissing ? callout('Waiting for the Moralis key (MORALIS_API_KEY in Render > Environment). Nothing is read until it is set.', 'info') : null,
+    keyMissing ? callout('Waiting for the Alchemy key (ALCHEMY_API_KEY in Render > Environment). Nothing is read until it is set.', 'info') : null,
     o.holdings.length ? h('ul', { class: 'wh-list', 'aria-label': 'Wallet balances' }, o.holdings.map((r) => holdingRow(r, { showWallet }))) : empty(s.last_success_at ? 'No balance on the tracked networks.' : 'No complete balance read yet.'),
     o.holdings.length ? h('div', { class: 'wh-total' }, h('span', { class: 'muted' }, 'Observed value'), h('strong', { class: 'num' }, s.value_priced_usd === null ? '—' : fmtUsd(s.value_priced_usd)), h('span', { class: 'small muted' }, `${s.priced} priced${s.unpriced ? `, ${s.unpriced} without a price` : ''}`)) : null,
     hiddenList(o.hidden),
@@ -132,6 +140,8 @@ const KIND_WORDS = {
   outgoing_transfer: () => 'Sent',
   internal_transfer: (e, names) => (e.direction === 'in' ? `From your wallet ${names.get(e.counterparty_wallet_id) || ''}` : `To your wallet ${names.get(e.counterparty_wallet_id) || ''}`).trim(),
   swap: (e) => (e.direction === 'in' ? 'Swap · bought' : 'Swap · sold'),
+  possible_swap: (e) => (e.direction === 'in' ? 'Possible swap · in' : 'Possible swap · out'),
+  awaiting_receipt: (e) => (e.direction === 'in' ? 'Received' : 'Sent'),
   gas_fee: () => 'Network fee',
   failed_transfer: () => 'Failed transaction',
   self_transfer: () => 'Sent to itself',
@@ -143,7 +153,8 @@ export function eventStatus(e) {
   const l = e.ledger || {};
   if (e.state === 'reverted') return l.status === 'voided' ? ['Reversed on chain · ledger entry voided', 'bad'] : ['Reversed on chain', 'bad'];
   if (l.status === 'recorded') return ['Recorded', 'ok'];
-  if (l.status === 'skipped') return ['You said it is already recorded', ''];
+  if (l.status === 'skipped') return [l.decision && /swap/.test(e.classification) ? 'You left it unrecorded' : 'You said it is already recorded', ''];
+  if (e.classification === 'awaiting_receipt') return ['Waiting for its receipt', 'wait'];
   if (l.status === 'held') return l.hold && l.hold.needs_decision && !l.decision ? ['Needs your decision', 'warn'] : ['Held', 'warn'];
   if (l.status === 'not_recorded') return l.code === 'spam' ? ['Suspected spam · not recorded', ''] : l.code === 'failed' ? ['Not recorded: failed', ''] : l.code === 'self' ? ['No change', ''] : ['Not recorded', 'wait'];
   if (e.state === 'pending') return ['Waiting for confirmations', 'wait'];
@@ -163,12 +174,20 @@ function amountCell(e) {
   return h('span', { class: 'num nowrap', title: `Exact: ${e.amount} ${e.symbol || ''}`.trim() }, `${sign}${fmtQty(e.amount)} `, h('span', { class: e.verified ? null : 'faint' }, e.symbol || 'token'));
 }
 
+// The two choices, in the words of why the event is held.
+const DECISION_WORDS = {
+  possible_swap: ['Record as swap', 'Leave unrecorded', 'Recorded as a sale and a purchase at unknown price', 'Left out of the ledger. The balances still show it.'],
+  possible_own_transfer: ['Record as sent', 'Already recorded', 'Recorded in the ledger', 'Kept out of the ledger. Your own entry stays as it is.'],
+  manual_records: ['Record in ledger', 'Already recorded', 'Recorded in the ledger', 'Kept out of the ledger. Your own entry stays as it is.'],
+};
+
 function decisionButtons(ctx, e) {
   const post = (decision) => ctx.api.post('/api/wallets/events/resolve', { wallet_id: e.wallet_id, network: e.network, event_key: e.event_key, decision });
-  const rec = button('Record in ledger', null, { kind: 'small', key: `rec-${e.event_key}` });
-  rec.onclick = action(rec, async () => { const r = await post('record'); await ctx.refresh(); return r; }, (r) => (r.ledger && r.ledger.recorded ? 'Recorded in the ledger' : 'Saved; it is recorded once it is final and mapped'));
-  const skip = button('Already recorded', null, { kind: 'small', key: `skip-${e.event_key}` });
-  skip.onclick = action(skip, async () => { const r = await post('skip'); await ctx.refresh(); return r; }, 'Kept out of the ledger. Your own entry stays as it is.');
+  const [recWord, skipWord, recDone, skipDone] = DECISION_WORDS[e.ledger.hold && e.ledger.hold.code] || DECISION_WORDS.manual_records;
+  const rec = button(recWord, null, { kind: 'small', key: `rec-${e.event_key}` });
+  rec.onclick = action(rec, async () => { const r = await post('record'); await ctx.refresh(); return r; }, (r) => (r.ledger && r.ledger.recorded ? recDone : 'Saved; it is recorded once it is final and mapped'));
+  const skip = button(skipWord, null, { kind: 'small', key: `skip-${e.event_key}` });
+  skip.onclick = action(skip, async () => { const r = await post('skip'); await ctx.refresh(); return r; }, skipDone);
   return h('span', { class: 'btn-row' }, rec, skip);
 }
 
@@ -184,16 +203,22 @@ function walletCard(ctx, w, o) {
     acts.push(button('Remove tracking', () => openRemoveDialog(ctx, w), { kind: 'small', key: `remove-${w.wallet_id}` }));
   }
   // One row per network, stacked so it reads the same on a phone.
-  const rows = h('ul', { class: 'wh-list' }, w.networks.map((n) => h('li', { class: 'wl-net', dataset: { key: `wl-net-${w.wallet_id}-${n.network}` } },
-    h('div', { class: 'wl-net-head' }, h('strong', null, n.label), networkStatus(n)),
-    n.last_error && n.state !== 'ok' ? h('div', { class: 'small muted' }, n.last_error) : null,
-    h('div', { class: 'small muted' }, [
-      n.snapshot_at ? `Balances as of ${fmtAsOf(n.snapshot_at)}` : 'No complete balance read yet',
-      `${n.events} event(s)`,
-      n.counts.pending ? `${n.counts.pending} waiting for confirmations` : null,
-      n.counts.decisions ? `${n.counts.decisions} need your decision` : null,
-      n.counts.reversed ? `${n.counts.reversed} reversed` : null,
-    ].filter(Boolean).join(' · ')))));
+  const rows = h('ul', { class: 'wh-list' }, w.networks.map((n) => {
+    const missingSent = Number(n.history_gap || 0);
+    return h('li', { class: 'wl-net', dataset: { key: `wl-net-${w.wallet_id}-${n.network}` } },
+      h('div', { class: 'wl-net-head' }, h('strong', null, n.label), networkStatus(n)),
+      n.last_error && !['ok', 'unsupported'].includes(n.state) ? h('div', { class: 'small muted' }, n.last_error) : null,
+      n.supported === false ? h('div', { class: 'small muted' }, 'Its earlier records stay as they are. Choose a covered network under Networks to keep following this wallet.') : h('div', { class: 'small muted' }, [
+        n.snapshot_at ? `Balances as of ${fmtAsOf(n.snapshot_confirmed_at || n.snapshot_at)}` : 'No complete balance read yet',
+        `${n.events} event(s)`,
+        n.counts.pending ? `${n.counts.pending} not final yet` : null,
+        n.counts.decisions ? `${n.counts.decisions} need your decision` : null,
+        n.counts.reversed ? `${n.counts.reversed} reversed` : null,
+        n.unreadable ? `${n.unreadable} token balance(s) unreadable` : null,
+      ].filter(Boolean).join(' · ')),
+      n.coverage && !n.coverage.internal ? h('div', { class: 'small muted', title: 'Alchemy reports ETH that contracts send (internal transfers) only on Ethereum, Polygon and Base.' }, 'History here does not include ETH sent by contracts.') : null,
+      missingSent ? h('div', { class: 'small warn-text' }, `${missingSent} transaction(s) this wallet sent are not in Alchemy's history; their fees are not recorded.`) : null);
+  }));
   const title = h('div', { class: 'wl-title' }, h('h2', null, w.label), h('code', { class: 'mono small', title: w.address }, w.address_short), w.status === 'removed' ? chip('Not tracked', '') : w.status === 'paused' ? chip('Paused', 'warn') : null);
   return card(title, [
     rows,
@@ -259,6 +284,7 @@ function addWalletForm(ctx, o) {
     field('Public address', address, 'The 0x address only. Never a private key or a seed phrase; the desk never asks for one.'),
     field('Ledger account', account, 'Where recorded activity goes. An existing account with your own entries holds overlapping imports for your decision.'),
     networkChecks(o, [], 'wallet-nets'),
+    o.networks_unsupported && o.networks_unsupported.length ? h('p', { class: 'field wide small muted' }, `Not available: ${o.networks_unsupported.map((n) => n.label).join(', ')} (Alchemy's transfer history does not cover them).`) : null,
     h('div', { class: 'field' }, go));
   for (const el of [label, address]) el.addEventListener('input', () => fieldError(el, null));
   const submit = action(go, async () => {
@@ -266,7 +292,7 @@ function addWalletForm(ctx, o) {
     sid = submissionId();
     await ctx.refresh();
     return r;
-  }, (r) => (r.status === 'exists' ? 'That address is already tracked.' : 'Wallet added. The first read starts within a minute once the Moralis key is set.'));
+  }, (r) => (r.status === 'exists' ? 'That address is already tracked.' : 'Wallet added. The first read starts within a minute once the Alchemy key is set, then twice daily.'));
   form.onsubmit = (e) => {
     e.preventDefault();
     if (!label.value.trim()) return fieldError(label, 'Give it a label.');
@@ -277,19 +303,26 @@ function addWalletForm(ctx, o) {
   return form;
 }
 
+// The schedules offered; a value set another way still shows as its own words.
+const INTERVALS = [[720, 'Twice daily'], [1440, 'Once daily'], [360, 'Every 6 hours'], [180, 'Every 3 hours'], [60, 'Every hour']];
+
 function settingsForm(ctx, o) {
   const s = o.settings;
-  const interval = input({ name: 'ws-interval', inputmode: 'numeric', value: String(s.interval_minutes) });
-  const balances = input({ name: 'ws-balances', inputmode: 'numeric', value: String(s.balance_refresh_minutes) });
-  const budget = input({ name: 'ws-budget', inputmode: 'numeric', value: s.daily_cu_budget === null ? '' : String(s.daily_cu_budget), placeholder: 'no cap' });
+  const options = INTERVALS.some(([m]) => m === s.interval_minutes) ? INTERVALS : [[s.interval_minutes, s.interval_words], ...INTERVALS];
+  const interval = select(options.map(([m, words]) => ({ value: String(m), label: words, selected: m === s.interval_minutes })), { name: 'ws-interval' });
+  const daily = input({ name: 'ws-daily-cap', inputmode: 'numeric', value: s.daily_cu_cap === null ? '' : String(s.daily_cu_cap), placeholder: 'no cap' });
+  const monthly = input({ name: 'ws-monthly-cap', inputmode: 'numeric', value: s.monthly_cu_cap === null ? '' : String(s.monthly_cu_cap), placeholder: 'no cap' });
   const go = button('Save', null, { kind: 'small', type: 'submit' });
+  const e = o.estimate;
   const form = h('form', { class: 'form-grid' },
-    field('Sync every (minutes)', interval, 'Each tracked network is read this often (5 to 1440).'),
-    field('Balances every (minutes)', balances, 'Balances are also read whenever new activity appears.'),
-    field('Daily compute-unit budget', budget, 'Moralis compute units per day (New York time); the sync stops at it. Empty means no cap.'),
+    field('Sync', interval, 'How often each tracked network is read. Sync now asks for a read sooner, within the same caps.'),
+    field('Daily cap (compute units, estimated)', daily, 'The desk stops for the day (New York time) before passing it. Empty means no cap.'),
+    field('Monthly cap (compute units, estimated)', monthly, 'The desk stops for the month before passing it. Alchemy Free allows 30,000,000 a month. Empty means no cap.'),
+    h('p', { class: 'field wide small muted', title: e.basis }, `About ${e.per_sync.toLocaleString('en-US')} compute units per network each sync with no new activity, plus ${e.per_new_transaction} per new transaction and ${e.per_new_token} per new token. At this schedule: about ${e.per_network_month.toLocaleString('en-US')} a month per network${e.networks ? `; ${e.total_month.toLocaleString('en-US')} for the ${e.networks} network(s) tracked` : ''}.`),
     h('div', { class: 'field' }, go));
   form.onsubmit = action(go, async () => {
-    const r = await ctx.api.post('/api/settings', { wallet_sync: { interval_minutes: interval.value.trim(), balance_refresh_minutes: balances.value.trim(), daily_cu_budget: budget.value.trim() === '' ? null : budget.value.trim() } });
+    const minutes = Number(interval.value);
+    const r = await ctx.api.post('/api/settings', { wallet_sync: { interval_minutes: minutes, balance_refresh_minutes: minutes, daily_cu_cap: daily.value.trim() === '' ? null : daily.value.trim(), monthly_cu_cap: monthly.value.trim() === '' ? null : monthly.value.trim() } });
     await ctx.refresh();
     return r;
   }, 'Saved.');
@@ -298,10 +331,13 @@ function settingsForm(ctx, o) {
 
 function technicalDetails(o) {
   const s = o.sync;
+  const methods = Object.entries(s.calls.methods || {}).map(([m, n]) => `${m} ${n}`).join(', ');
   const lines = [
-    ['Provider', `Moralis · key ${o.provider.present ? `present (${o.provider.source})` : 'missing'}`],
-    ['Compute units today', `${s.calls.day_cu || 0}${s.daily_cu_budget ? ` of ${s.daily_cu_budget}` : ''} (${s.calls.day_count || 0} requests)`],
-    ['This month', `${s.calls.month_cu || 0} compute units (${s.calls.month_count || 0} requests)`],
+    ['Provider', `Alchemy · key ${o.provider.present ? `present (${o.provider.source})` : 'missing'}`],
+    ['Schedule', `${o.settings.interval_words} (every ${o.settings.interval_minutes} minutes)`],
+    ['Compute units today (estimated)', `${(s.calls.day_cu || 0).toLocaleString('en-US')}${s.daily_cu_cap ? ` of ${s.daily_cu_cap.toLocaleString('en-US')}` : ''} (${s.calls.day_count || 0} requests)`],
+    ['This month (estimated)', `${(s.calls.month_cu || 0).toLocaleString('en-US')}${s.monthly_cu_cap ? ` of ${s.monthly_cu_cap.toLocaleString('en-US')}` : ''} compute units (${s.calls.month_count || 0} requests)${methods ? `: ${methods}` : ''}`],
+    ['Usage record', 'Estimated here from Alchemy\'s published method costs; Alchemy\'s dashboard is the provider\'s record.'],
     ['Last run', s.last_run ? `${fmtDateTime(s.last_run.at)} · ${s.last_run.status} · ${s.last_run.summary}` : 'never'],
     s.gate ? ['Waiting', `${s.gate.why} until ${fmtDateTime(s.gate.until)}`] : null,
     s.held_restored_copy ? ['Restored copy', 'Held: no request is sent until the copy is released.'] : null,
@@ -312,9 +348,9 @@ function technicalDetails(o) {
     table([
       { label: 'Wallet', render: (n) => n.wallet },
       { label: 'Network', render: (n) => n.label },
-      { label: 'Last complete read', wrap: true, render: (n) => (n.last_pass ? `${n.last_pass.from ? fmtDateTime(n.last_pass.from) : 'whole history'} to ${fmtDateTime(n.last_pass.to)} · ${n.last_pass.pages} page(s), ${n.last_pass.items} item(s)${n.last_pass.malformed ? `, ${n.last_pass.malformed} unreadable` : ''}` : '—') },
-      { label: 'In progress', render: (n) => (n.pass ? `${n.pass.pages} page(s) read` : '—') },
-      { label: 'Block', render: (n) => n.block_number || '—' },
+      { label: 'History read', wrap: true, render: (n) => (n.supported === false ? 'Not covered by Alchemy' : n.history_complete_to ? `Blocks to ${n.history_complete_to}${n.backfill_complete_at ? ` · full history since ${fmtDate(n.backfill_complete_at)}` : ''}${n.last_pass ? ` · last read ${n.last_pass.from_block} to ${n.last_pass.to_block}, ${n.last_pass.pages} page(s), ${n.last_pass.items} item(s)${n.last_pass.malformed ? `, ${n.last_pass.malformed} unreadable` : ''}` : ''}` : n.pass ? `Loading: block ${n.pass.resume_block} of ${n.pass.to_block}` : 'Not read yet') },
+      { label: 'Final at', wrap: true, render: (n) => (n.finalized_block ? h('span', { title: n.finalized_basis || null }, `block ${n.finalized_block}`) : '—') },
+      { label: 'Sent transactions', render: (n) => (n.sent_count_chain ? `${n.sent_count_seen || 0} seen of ${n.sent_count_chain}` : '—') },
       { label: 'Stored', render: (n) => `${n.events} event(s), ${n.raw_months} raw file(s)` },
       { label: 'Next try', render: (n) => (n.next_attempt_at ? fmtDateTime(n.next_attempt_at) : '—') },
     ], nets, { empty: 'No network.' }),
@@ -342,10 +378,10 @@ export async function walletsTab(ctx) {
   ], o.activity, { empty: 'No activity read yet.', rowClass: (e) => (e.state === 'reverted' ? 'faint' : null) });
   return h('div', null,
     held.length ? card(`Waiting for your decision (${held.length})`, h('ul', { class: 'wh-list' }, held.map((e) => h('li', { class: 'wl-decide', dataset: { key: `wl-decide-${e.event_key}` } },
-      h('div', { class: 'wl-net-head' }, h('strong', null, (KIND_WORDS[e.classification] || (() => e.classification))(e, names)), amountCell(e)),
+      e.swap_legs ? h('div', { class: 'wl-net-head' }, h('strong', null, 'Possible swap'), h('span', { class: 'btn-row' }, e.swap_legs.map((x) => amountCell({ ...x })))) : h('div', { class: 'wl-net-head' }, h('strong', null, (KIND_WORDS[e.classification] || (() => e.classification))(e, names)), amountCell(e)),
       h('div', { class: 'small muted' }, `${e.wallet_label} · ${e.network_label} · ${fmtDate(e.at)}`),
       h('div', { class: 'small' }, e.ledger.hold.reason),
-      decisionButtons(ctx, e)))), { note: 'Record it, or say it is already in your own records. Nothing is recorded over your entries without you.' }) : null,
+      decisionButtons(ctx, e)))), { note: 'A possible swap, an overlap with your own entries, or a possible move between your accounts. Nothing is recorded over your entries, and no swap is assumed, without you.' }) : null,
     tracked.length || o.wallets.length ? o.wallets.map((w) => walletCard(ctx, w, o)) : empty('No wallet tracked yet. Add one below: a label, its public address and the networks to follow.'),
     recon.length ? card('Reconciliation', table([
       { label: 'Asset', render: (r) => h('div', null, r.asset_id, h('div', { class: 'small muted' }, `${r.wallet_label} · ${r.account_id}`)) },
@@ -354,8 +390,8 @@ export async function walletsTab(ctx) {
       { label: 'Difference', num: true, render: (r) => qty(r.difference) },
       { label: 'Status', wrap: true, render: (r) => h('div', null, reconChip(r), r.since ? h('div', { class: 'small muted' }, `since ${fmtDateTime(r.since)}`) : null, r.unrecorded_events ? h('div', { class: 'small muted' }, `${r.unrecorded_events} chain event(s) not in the ledger`) : null) },
     ], recon), { note: 'The chain\'s balance at the last complete sync against what the ledger derives for the wallet\'s account. A difference stays here until the records explain it; the ledger is never adjusted to match.' }) : null,
-    tracked.length ? card(`Recent activity${o.activity_total > o.activity.length ? ` (latest ${o.activity.length} of ${o.activity_total})` : ''}`, activity, { note: 'Each transfer, swap leg and network fee the provider reported, with what happened to it in the ledger.' }) : null,
+    tracked.length ? card(`Recent activity${o.activity_total > o.activity.length ? ` (latest ${o.activity.length} of ${o.activity_total})` : ''}`, activity, { note: 'Each transfer Alchemy reported and each network fee from a receipt, with what happened to it in the ledger.' }) : null,
     card('Add wallet', addWalletForm(ctx, o), { note: 'Read-only: the desk follows a public address. It never asks for a private key, a seed phrase, a signature or an approval.' }),
-    tracked.length ? details('Sync settings', settingsForm(ctx, o), { id: 'wallet-settings' }) : null,
+    tracked.length ? details(`Sync settings · ${o.settings.interval_words}`, settingsForm(ctx, o), { id: 'wallet-settings' }) : null,
     tracked.length ? details('Technical details', technicalDetails(o), { id: 'wallet-tech' }) : null);
 }

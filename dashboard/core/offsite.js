@@ -343,7 +343,7 @@ async function drill(ws, { file = null, to = null, folder = null } = {}) {
   const calls = [];
   const refuse = async (url, opts = {}) => { calls.push(`${opts.method || 'GET'} ${String(url).replace(/\?.*$/, '')}`); throw new Error('drill: no network'); };
   const run = await require('./research').runDueJobs(ws2, { trigger: 'drill', fetchImpl: refuse });
-  // Tracked wallets are held too: the copy asks Moralis for nothing.
+  // Tracked wallets are held too: the copy asks Alchemy for nothing.
   const walletRun = await require('./walletsync').refresh(ws2, { trigger: 'drill', force: true, fetchImpl: refuse });
   const passed = restored.status === 'restored_and_verified' && !changed.length && !calls.length && run.status === 'held' && walletRun.status === 'held';
   return finishDrill(dir, {

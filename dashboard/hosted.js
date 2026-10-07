@@ -568,7 +568,7 @@ function healthLines(ws) {
     const st = require('./core/walletsync').statusOf(ws);
     const states = {};
     for (const n of Object.values(st.networks)) if (n.state !== 'removed') states[n.state] = (states[n.state] || 0) + 1;
-    out.push(`Wallets: ${tracked.length ? `${tracked.length} tracked (${Object.entries(states).map(([k, v]) => `${k} ${v}`).join(', ')}); Moralis key ${st.summary.key_present ? 'present' : 'missing'}; last run ${st.summary.last_run ? `${st.summary.last_run.at} ${st.summary.last_run.status}` : 'never'}; compute units today ${st.summary.calls.day_cu || 0}${st.summary.daily_cu_budget ? ` of ${st.summary.daily_cu_budget}` : ''}` : 'none tracked; nothing is read'}.`);
+    out.push(`Wallets: ${tracked.length ? `${tracked.length} tracked (${Object.entries(states).map(([k, v]) => `${k} ${v}`).join(', ')}); Alchemy key ${st.summary.key_present ? 'present' : 'missing'}; ${st.summary.interval_words.toLowerCase()}; last run ${st.summary.last_run ? `${st.summary.last_run.at} ${st.summary.last_run.status}` : 'never'}; estimated compute units today ${st.summary.calls.day_cu || 0}${st.summary.daily_cu_cap ? ` of ${st.summary.daily_cu_cap}` : ''}, this month ${st.summary.calls.month_cu || 0}${st.summary.monthly_cu_cap ? ` of ${st.summary.monthly_cu_cap}` : ''}` : 'none tracked; nothing is read'}.`);
   } catch (_) { /* wallet module optional */ }
   out.push(`Offsite: ${require('./core/offsite').deskKey() ? 'backup key set (CR_BACKUP_KEY); a PC can pull verified copies' : `not set up (${require('./core/offsite').deskKeyProblem()}): the records exist only on this disk and in Render's disk snapshots`}.`);
   // The optional Research Explorer (core/explorer.js): its state and where

@@ -193,9 +193,11 @@ function validateSettingsPatch(patch, ws = null) {
     if (patch.market_data.monthly_call_budget !== undefined) out.market_data.monthly_call_budget = num(patch.market_data.monthly_call_budget, 100, 1000000, 'Monthly call budget');
   }
   if (patch.wallet_sync) {
-    // Schedule and limits only; the Moralis key is never accepted from the page.
+    // Schedule and caps only; the Alchemy key is never accepted from the page.
+    // No interval shorter than an hour: a personal free account needs no
+    // frequent polling.
     const w = patch.wallet_sync;
-    if (Object.keys(w).some((k) => /key|secret|token|address/i.test(k))) throw new OpError('REFUSED', 'Keys and addresses are never stored in settings. The Moralis key goes in Render > Environment (MORALIS_API_KEY); addresses are added as tracked wallets.');
+    if (Object.keys(w).some((k) => /key|secret|token|address|url/i.test(k))) throw new OpError('REFUSED', 'Keys, endpoints and addresses are never stored in settings. The Alchemy key goes in Render > Environment (ALCHEMY_API_KEY); addresses are added as tracked wallets.');
     out.wallet_sync = {};
     if (w.enabled !== undefined) out.wallet_sync.enabled = Boolean(w.enabled);
     const whole = (v, lo, hi, label) => {
@@ -203,10 +205,10 @@ function validateSettingsPatch(patch, ws = null) {
       if (!Number.isInteger(n)) throw new OpError('INVALID', `${label} must be a whole number from ${lo} to ${hi}.`);
       return n;
     };
-    if (w.interval_minutes !== undefined) out.wallet_sync.interval_minutes = whole(w.interval_minutes, 5, 1440, 'Sync interval (minutes)');
-    if (w.balance_refresh_minutes !== undefined) out.wallet_sync.balance_refresh_minutes = whole(w.balance_refresh_minutes, 5, 1440, 'Balance refresh (minutes)');
-    if (w.daily_cu_budget !== undefined) out.wallet_sync.daily_cu_budget = w.daily_cu_budget === null || w.daily_cu_budget === '' ? null : whole(w.daily_cu_budget, 500, 100000000, 'Daily compute-unit budget');
-    if (w.dust_usd !== undefined) out.wallet_sync.dust_usd = num(w.dust_usd, 0, 1000, 'Dust threshold (USD)');
+    if (w.interval_minutes !== undefined) out.wallet_sync.interval_minutes = whole(w.interval_minutes, 60, 1440, 'Sync interval (minutes)');
+    if (w.balance_refresh_minutes !== undefined) out.wallet_sync.balance_refresh_minutes = whole(w.balance_refresh_minutes, 60, 1440, 'Balance refresh (minutes)');
+    if (w.daily_cu_cap !== undefined) out.wallet_sync.daily_cu_cap = w.daily_cu_cap === null || w.daily_cu_cap === '' ? null : whole(w.daily_cu_cap, 1000, 30000000, 'Daily compute-unit cap');
+    if (w.monthly_cu_cap !== undefined) out.wallet_sync.monthly_cu_cap = w.monthly_cu_cap === null || w.monthly_cu_cap === '' ? null : whole(w.monthly_cu_cap, 10000, 300000000, 'Monthly compute-unit cap');
   }
   if (patch.research) {
     // Only limits and model choices; API keys are never accepted from the page.
@@ -644,7 +646,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     }
   }
   // Tracked wallets (walletsync.js): checked every minute, read only when a
-  // network is due (its interval, or Sync now) and a Moralis key is set. One
+  // network is due (its interval, or Sync now) and an Alchemy key is set. One
   // run at a time in this process, one lease across processes; a request that
   // arrives while a run is going joins the next one. Viewing a page never
   // starts a sync.

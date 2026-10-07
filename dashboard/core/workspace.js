@@ -106,30 +106,34 @@ const DEFAULT_SETTINGS = {
     },
   },
   portfolio: { base_currency: 'USD', accounting_method: 'fifo_per_account' },
-  // Read-only tracking of public wallet addresses (wallets.js, walletsync.js):
-  // nothing is read until a wallet with its networks and a Moralis key
-  // (MORALIS_API_KEY, never stored here) are both present. Each network is
-  // read every interval_minutes; balances every balance_refresh_minutes or
-  // when new activity appears. daily_cu_budget caps Moralis compute units per
-  // day (America/New_York); null removes the cap. recheck_minutes is how far
-  // back each read overlaps the last one, to catch reorganizations and late
-  // confirmations.
+  // Read-only tracking of public wallet addresses (wallets.js, walletsync.js),
+  // through Alchemy: nothing is read until a wallet with its networks and an
+  // Alchemy key (ALCHEMY_API_KEY, never stored here) are both present. Each
+  // network is read twice daily (interval_minutes 720); balances with it, or
+  // when new activity appears. The caps are the desk's estimate of Alchemy
+  // compute units (published method costs) per day (America/New_York) and per
+  // month; null removes one. At these defaults one wallet on one network uses
+  // about 900 a day (Alchemy Free: 30,000,000 a month); the caps leave room
+  // for a first history backfill. recheck_minutes of blocks are read again
+  // each time, for transfers indexed late.
   wallet_sync: {
     enabled: true,
-    provider: 'moralis',
-    interval_minutes: 10,
-    balance_refresh_minutes: 60,
-    daily_cu_budget: 40000,
+    provider: 'alchemy',
+    interval_minutes: 720,
+    balance_refresh_minutes: 720,
+    daily_cu_cap: 200000,
+    monthly_cu_cap: 2000000,
     timeout_seconds: 20,
     max_attempts: 2,
-    max_pages_per_run: 40,
+    max_pages_per_run: 60,
+    max_receipts_per_run: 2000,
+    max_metadata_per_run: 300,
     max_balance_pages: 20,
-    recheck_minutes: 120,
-    stale_after_minutes: 60,
-    backoff_initial_minutes: 5,
-    backoff_max_minutes: 240,
-    sync_now_min_seconds: 60,
-    dust_usd: 1,
+    recheck_minutes: 60,
+    stale_after_minutes: 1500,
+    backoff_initial_minutes: 30,
+    backoff_max_minutes: 720,
+    sync_now_min_seconds: 120,
   },
   inbox: { settle_seconds: 2 },
   requests: { settle_seconds: 2 },

@@ -217,7 +217,8 @@ async function doctor(ws, { writeProbe = false } = {}) {
       const s = st.summary;
       const nets = Object.values(st.networks).filter((n) => n.state !== 'removed');
       const behind = nets.filter((n) => ['failing', 'stale', 'unavailable'].includes(n.state)).length;
-      const detail = `${tracked.length} wallet(s), ${nets.length} network(s) followed read-only through Moralis; key ${s.key_present ? 'present' : 'missing (MORALIS_API_KEY)'}; last complete sync ${s.last_success_at || 'never'}; compute units today ${s.calls.day_cu || 0}${s.daily_cu_budget ? ` of ${s.daily_cu_budget}` : ''}${s.gate ? `; waiting: ${s.gate.why} until ${s.gate.until}` : ''}${s.held_restored_copy ? '; held in this restored copy' : ''}${behind ? `; ${behind} network(s) not current` : ''}.`;
+      const unsupported = nets.filter((n) => n.state === 'unsupported').length;
+      const detail = `${tracked.length} wallet(s), ${nets.length} network(s) followed read-only through Alchemy (${s.interval_words.toLowerCase()}); key ${s.key_present ? 'present' : 'missing (ALCHEMY_API_KEY)'}; last complete sync ${s.last_success_at || 'never'}; estimated compute units today ${s.calls.day_cu || 0}${s.daily_cu_cap ? ` of ${s.daily_cu_cap}` : ''}, this month ${s.calls.month_cu || 0}${s.monthly_cu_cap ? ` of ${s.monthly_cu_cap}` : ''}${s.gate ? `; waiting: ${s.gate.why} until ${s.gate.until}` : ''}${s.held_restored_copy ? '; held in this restored copy' : ''}${behind ? `; ${behind} network(s) not current` : ''}${unsupported ? `; ${unsupported} network(s) not covered by Alchemy (not read)` : ''}.`;
       add('Wallet sync', s.key_present && !behind, detail, s.key_present && !behind ? 'ok' : 'warn');
     } else {
       add('Wallet sync', true, 'No wallet is tracked, so nothing is read.', 'info');

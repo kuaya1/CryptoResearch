@@ -88,7 +88,7 @@ Portfolio (manual or CSV; never connects to exchanges)
   limits set [--cap 5000] [--max-position-pct 25] [--max-sector-pct 50]
   portfolio show
 
-Tracked wallets (public addresses, read-only through Moralis; key in MORALIS_API_KEY, never here)
+Tracked wallets (public addresses, read-only through Alchemy, twice daily; key in ALCHEMY_API_KEY, never here)
   wallet add --label "MetaMask" --address 0x... --networks eth,base [--account ID]
                                          never a private key or seed phrase; nothing is scanned
                                          without networks; the first read is not a purchase
@@ -691,7 +691,7 @@ async function run(argv) {
       if (sub === 'status') return wallets.overview(ws);
       if (sub === 'list' || !sub) {
         const st = sync.statusOf(ws);
-        return { sync: st.summary, estimate: sync.estimateDailyCu(ws), wallets: wallets.listWallets(ws).map((w) => ({ wallet_id: w.wallet_id, label: w.label, address: w.address, account_id: w.account_id, status: w.status, networks: w.networks.map((n) => ({ network: n, ...st.networks[`${w.wallet_id}:${n}`] })) })) };
+        return { sync: st.summary, estimate: sync.estimateUsage(ws), wallets: wallets.listWallets(ws).map((w) => ({ wallet_id: w.wallet_id, label: w.label, address: w.address, account_id: w.account_id, status: w.status, networks: w.networks.map((n) => ({ network: n, ...st.networks[`${w.wallet_id}:${n}`] })) })) };
       }
       throw Object.assign(new Error('wallet list|status|add|pause|resume|remove|networks|sync|resolve'), { code: 'USAGE' });
     }

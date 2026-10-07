@@ -6,7 +6,7 @@
 //   fundamentals  DefiLlama fees/revenue of bound projects  every 12 h per project (fundamentals.js); a new binding at once
 //   screening  GoPlus contract flags of verified contracts  weekly per project (screening.js); a contract change at once
 //   wallets   read-only sync of tracked wallet addresses  every wallet_sync.interval_minutes per network, or when
-//             asked (walletsync.js); only with a tracked wallet and a Moralis key
+//             asked (walletsync.js); only with a tracked wallet and an Alchemy key
 //   research  run queued research jobs (explicit requests or configured schedules only)
 //   snapshot  daily portfolio snapshot                   once per day (America/New_York)
 //   reviews   daily review findings                      once per day
@@ -71,7 +71,7 @@ function isDue(ws, name, state, now = Date.now(), opts = {}) {
       }
     case 'wallets':
       // Closed without a tracked wallet or a key, in a restored copy, and
-      // while Moralis's rate limit or a key refusal runs.
+      // while Alchemy's rate limit, a key refusal or a used-up plan runs.
       try {
         return require('./walletsync').isDue(ws, now);
       } catch (_) {

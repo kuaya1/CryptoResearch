@@ -73,11 +73,13 @@ CryptoResearch/
 │   ├── snapshots/<date>.json   Daily valuation snapshot with the prices used
 │   └── wallets/                Tracked wallets, read-only (core/wallets.js, core/walletsync.js)
 │       ├── registry.json           Label, public address, networks, status, linked ledger account
-│       ├── sync-state.json         Sync progress per network: cursors, last success, errors, compute units (no addresses)
+│       ├── token-metadata.json     Token names, symbols and decimals as Alchemy reported them, per network
+│       ├── sync-state.json         Sync progress per network: blocks reached, last success, errors, estimated compute units (no addresses, keys or URLs)
 │       └── <wallet_id>/<network>/
-│           ├── events.json         One event per transfer leg or fee: chain references, classification, state, ledger link
+│           ├── events.json         One event per transfer leg or fee, with each transaction's receipt facts (`txs`)
 │           ├── balances.json       Last complete balance snapshot and the ten before it (exact raw amounts)
-│           └── raw/<YYYY-MM>.json  The provider's original items by transaction hash, every version kept
+│           ├── raw/alchemy-<YYYY-MM>.json  Alchemy's original transfers, receipts and block checks, every version kept
+│           └── raw/<YYYY-MM>.json  An earlier provider's original items (kept as saved)
 ├── market-data/
 │   ├── latest.json             Last VALID observation per asset (invalid or older data never overwrites)
 │   ├── status.json             Last attempt / success / error, backoff, monthly call count
