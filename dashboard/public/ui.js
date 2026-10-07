@@ -246,6 +246,37 @@ export function fmtNum(n, digits = 4) {
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(n);
 }
 
+// A token amount for reading, from its exact decimal string: grouped, two
+// decimals from 1,000 up, four below that, four significant digits under 1;
+// trailing zeros dropped. Display only: the exact string stays with the
+// element (its tooltip and data-exact).
+export function fmtAmount(s) {
+  if (s === null || s === undefined || s === '') return '—';
+  const n = Number(s);
+  if (!Number.isFinite(n)) return String(s);
+  const a = Math.abs(n);
+  const opts = a === 0 ? { maximumFractionDigits: 0 } : a >= 1000 ? { maximumFractionDigits: 2 } : a >= 1 ? { maximumFractionDigits: 4 } : { maximumSignificantDigits: 4 };
+  return new Intl.NumberFormat('en-US', opts).format(n).replace(/^-/, '−');
+}
+
+// A long identifier for reading: its start and end around an ellipsis
+// (0x1234…abcd for a hash, …riztvc for a ledger ID). The full value is the
+// element's tooltip and what its copy button copies.
+export function shortId(s, { head = 6, tail = 4 } = {}) {
+  const v = String(s || '');
+  if (/^0x[0-9a-fA-F]+$/.test(v)) return v.length > head + tail + 1 ? `${v.slice(0, head)}…${v.slice(-tail)}` : v;
+  const m = v.match(/^tx_.*_([A-Za-z0-9]+)$/);
+  if (m) return `…${m[1]}`;
+  return v.length > 14 ? `${v.slice(0, 6)}…${v.slice(-6)}` : v;
+}
+
+// A small button that copies a value, labeled with what it copies.
+export function copyButton(value, label, { key = null } = {}) {
+  const b = h('button', { type: 'button', class: 'copy-btn', title: `Copy ${label}`, 'aria-label': `Copy ${label}`, dataset: key ? { key } : null }, icon('copy'));
+  b.onclick = (e) => { e.stopPropagation(); copyText(value); };
+  return b;
+}
+
 export function fmtPct(n, digits = 1) {
   if (n === null || n === undefined || Number.isNaN(n)) return '—';
   return `${n.toFixed(digits)}%`;

@@ -517,6 +517,7 @@ function computePortfolio(ws, { market = null, now = Date.now() } = {}) {
         tx_id: txId,
         asset_id: asset,
         account_id: acct,
+        quantity: D.toString(need),
         message: asset === 'usd'
           ? `${txId}: paid ${D.toString(need)} USD more than the recorded cash in ${acct}. Record the deposit, or leave "paid from cash" off.`
           : `${txId}: ${D.toString(need)} ${asset} more than recorded in ${acct}. Earlier purchases are probably missing; the missing units are treated as unknown cost.`,
@@ -654,7 +655,7 @@ function computePortfolio(ws, { market = null, now = Date.now() } = {}) {
             const sent = leg.qty;
             const arrived = qty;
             if (arrived > sent) {
-              warnings.push({ kind: 'transfer_over_arrival', tx_id: t.tx_id, asset_id: t.asset_id, message: `${t.tx_id}: more arrived (${D.toString(arrived)}) than was sent (${D.toString(sent)}). The extra is treated as unknown cost.` });
+              warnings.push({ kind: 'transfer_over_arrival', tx_id: t.tx_id, asset_id: t.asset_id, quantity: D.toString(arrived - sent), message: `${t.tx_id}: more arrived (${D.toString(arrived)}) than was sent (${D.toString(sent)}). The extra is treated as unknown cost.` });
               for (const l of leg.lots) put(t.account_id, t.asset_id, { ...l });
               put(t.account_id, t.asset_id, { qty: arrived - sent, cost: null, acquired_at: t.date, tx_id: t.tx_id, lot_id: `${t.tx_id}/extra`, seq: ++seq });
               flow(t.asset_id).in += arrived - sent;
@@ -703,14 +704,29 @@ function computePortfolio(ws, { market = null, now = Date.now() } = {}) {
   }
   for (const [tid, legs] of transit) {
     for (const p of legs.filter((l) => l.direction === 'out' && !l.matched)) {
-      warnings.push({ kind: 'in_transit', asset_id: p.asset_id, message: `Transfer ${tid} (${D.toString(p.qty)} ${p.asset_id} from ${p.from}, ${p.tx_id}) has not arrived in a recorded account. It is still counted as yours, shown as in transit.` });
+      warnings.push({ kind: 'in_transit', tx_id: p.tx_id, asset_id: p.asset_id, account_id: p.from, quantity: D.toString(p.qty), message: `Transfer ${tid} (${D.toString(p.qty)} ${p.asset_id} from ${p.from}, ${p.tx_id}) has not arrived in a recorded account. It is still counted as yours, shown as in transit.` });
     }
   }
 
   // Where each warning's transaction came from (manual, csv, wallet_sync, ...),
   // so the page can group the expected notes of imported wallet activity.
-  const sourceOf = new Map(active.map((t) => [t.tx_id, t.source || null]));
-  for (const w of warnings) if (w.tx_id && sourceOf.has(w.tx_id)) w.source = sourceOf.get(w.tx_id);
+  // Each warning also names its transaction's date, account, quantity and,
+  // for a wallet import, the on-chain hash, so the page can show it as a row
+  // (the message keeps the full wording).
+  const txOf = new Map(active.map((t) => [t.tx_id, t]));
+  for (const w of warnings) {
+    const t = w.tx_id ? txOf.get(w.tx_id) : null;
+    if (!t) continue;
+    w.source = t.source || null;
+    w.date = t.date || null;
+    w.tx_type = t.type;
+    w.tx_quantity = t.quantity === undefined || t.quantity === null ? null : String(t.quantity);
+    if (!w.account_id) w.account_id = t.account_id || null;
+    if (t.provenance && t.provenance.tx_hash) {
+      w.tx_hash = t.provenance.tx_hash;
+      w.network = t.provenance.network || null;
+    }
+  }
 
   const settings = ws.settings;
   const openLegs = [...transit.values()].flat().filter((l) => l.direction === 'out' && !l.matched);

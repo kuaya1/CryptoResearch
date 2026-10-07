@@ -4,29 +4,17 @@
 // anything. Drawing this page never syncs: Sync now asks the desk's own queue.
 import {
   h, card, table, stateText, fmtUsd, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, callout, empty, link, field, fieldError, input, select,
-  button, action, details, submissionId, openDialog, logo, kv, chip,
+  button, action, details, submissionId, openDialog, logo, kv, chip, fmtAmount, shortId, copyButton,
 } from '../ui.js';
 
 const MINUS = '−';
 
-// An exact decimal string for reading: grouped, four decimals (or four
-// significant ones below 1), "…" where more digits follow. The exact value is
-// the tooltip and the accessible name.
-export function fmtQty(s) {
-  if (s === null || s === undefined || s === '') return '—';
-  const str = String(s);
-  const neg = str.startsWith('-');
-  const [i, f = ''] = str.replace(/^-/, '').split('.');
-  const int = i.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  const keep = i !== '0' ? 4 : Math.min(f.length, (f.match(/^0*/)[0].length) + 4);
-  const shown = f.slice(0, keep).replace(/0+$/, '');
-  const more = /[1-9]/.test(f.slice(keep));
-  return `${neg ? MINUS : ''}${int}${shown ? `.${shown}` : ''}${more ? '…' : ''}`;
-}
-
+// An amount rounded for reading (ui.js fmtAmount); the exact decimal is the
+// tooltip, the accessible name and data-exact.
 function qty(s, symbol = null) {
+  if (s === null || s === undefined || s === '') return h('span', { class: 'unknown' }, '—');
   const exact = `${s}${symbol ? ` ${symbol}` : ''}`;
-  return h('span', { class: 'num', title: `Exact: ${exact}`, 'aria-label': exact }, fmtQty(s));
+  return h('span', { class: 'num', title: `Exact: ${exact}`, 'aria-label': exact, dataset: { exact: String(s) } }, fmtAmount(s));
 }
 
 const NET_TONE = { ok: 'ok', gap: 'warn', resuming: 'work', history_incomplete: 'work', stale: 'warn', failing: 'warn', unavailable: 'bad', never: 'wait', paused: '', held: '', off: '', removed: '', unsupported: '' };
@@ -48,7 +36,7 @@ function networkStatus(n) {
 }
 
 const RECON = {
-  matches: null,
+  matches: ['Matches ledger', 'ok', 'The chain balance equals what the ledger derives for this account.'],
   explained: ['Ledger catching up', 'info', 'Activity the ledger does not have yet (waiting for confirmations, held or unresolved) accounts for the difference.'],
   awaiting_decision: ['Waiting for your decision', 'warn', 'A held transaction may duplicate one you recorded yourself; decide it under Wallets.'],
   mismatch: ['Differs from your ledger', 'bad', 'Nothing on record explains the difference. It stays visible until it is reconciled; nothing is adjusted for you.'],
@@ -61,42 +49,78 @@ function reconChip(r) {
   const x = RECON[r && r.status];
   if (!x) return null;
   const notes = r.notes && r.notes.length ? ` (${r.notes.join('; ')})` : '';
-  return h('span', { class: `chip ${x[1]}`, title: `${notes}` }, x[0]);
+  return h('span', { class: `chip ${x[1]}`, title: `${x[2]}${notes}` }, x[0]);
 }
 
-function acquisitionText(a) {
-  if (a && a.status === 'known') return h('span', { title: a.all_networks ? 'Recorded cost of this asset in the wallet, all its networks together' : 'Recorded cost' }, `Cost ${fmtUsd(a.cost_usd)}${a.all_networks ? ' (all networks)' : ''}`);
-  if (a && a.status === 'partial') return h('span', { title: 'Some units have no recorded cost' }, `Cost ${fmtUsd(a.cost_usd)} + units of unknown cost`);
-  return h('span', { class: 'unknown', title: 'No purchase price is on record for these units. Nothing is estimated.' }, 'Acquisition cost unknown');
+// What the ledger knows of the cost, as a tag; the words say it in full.
+function acquisitionTag(a) {
+  if (a && a.status === 'known') return chip(`Cost ${fmtUsd(a.cost_usd)}${a.all_networks ? ' · all networks' : ''}`, '', a.all_networks ? 'Recorded cost of this asset in the wallet, all its networks together' : 'Recorded cost');
+  if (a && a.status === 'partial') return chip(`Cost ${fmtUsd(a.cost_usd)} + unknown`, '', 'Some units have no recorded cost. Nothing is estimated.');
+  return chip('Cost unknown', '', `No purchase price is on record for these units${a && a.note ? ` ${a.note}` : ''}. Nothing is estimated.`);
 }
 
 function priceCell(r) {
   if (r.value_usd !== null) return h('span', { class: 'num', title: r.price.as_of ? `Price ${fmtUsd(r.price.usd)} as of ${fmtAsOf(r.price.as_of)}${r.price.status === 'stale' ? ' (stale)' : ''}` : null }, fmtUsd(r.value_usd), r.price.status === 'stale' ? h('span', { class: 'note-line warn-text' }, 'Price stale') : null);
   const why = !r.verified ? 'No verified identity names this token, so the desk has no price for it.' : 'No usable price from the market data right now.';
-  return h('span', { class: 'unknown', title: why }, 'Price unavailable');
+  return h('span', { class: 'wh-noprice', title: why }, 'Price unavailable');
 }
 
-function holdingRow(r, { showWallet }) {
-  const lg = logo({ symbol: r.symbol || '?', name: r.name || '', project_id: r.asset_id || r.contract || r.key, market: { logo_url: r.logo_url } }, { size: 24 });
-  const title = r.name || r.symbol || 'Unnamed token';
-  const name = r.project_id ? link(title, `#/watchlist?p=${encodeURIComponent(r.project_id)}`, { title: 'Open its research summary' }) : h('span', { title: r.verified ? null : 'Name as the token contract reports it (unverified)' }, title);
-  const sub = [r.network_label, showWallet ? r.wallet_label : null, r.verified ? null : 'Unverified token', r.wallet_status === 'paused' ? 'Syncing paused' : null].filter(Boolean).join(' · ');
-  return h('li', { class: 'wh-row', dataset: { key: `wh-${r.key}` } },
-    lg,
-    h('div', { class: 'wh-name' }, h('div', { class: 'wh-title' }, name, r.symbol && r.symbol !== title ? h('span', { class: 'wh-sym' }, r.symbol) : null), h('div', { class: 'wh-sub' }, sub)),
-    h('div', { class: 'wh-fig' }, h('div', { class: 'wh-qty' }, r.quantity === null ? h('span', { class: 'unknown' }, r.quantity_note || 'Unknown') : qty(r.quantity, r.symbol)), h('div', { class: 'wh-val' }, priceCell(r))),
-    h('div', { class: 'wh-foot' }, acquisitionText(r.acquisition), reconChip(r.reconciliation)));
+// The balance as read: rounded for reading, the exact decimal kept as the
+// tooltip, the accessible name and data-exact.
+function balance(r, symbol) {
+  if (r.quantity === null || r.quantity === undefined) return h('span', { class: 'unknown' }, r.quantity_note || 'Unknown');
+  const exact = `${r.quantity}${symbol ? ` ${symbol}` : ''}`;
+  return h('span', { class: 'num', title: `Exact: ${exact}`, 'aria-label': exact, dataset: { exact: String(r.quantity) } }, fmtAmount(r.quantity));
 }
 
 const HIDDEN_WORDS = { suspicious: 'Suspected spam', unsolicited: 'Not acquired by you' };
 
+// One token on one network: the asset (logo, symbol, name, network), what
+// the ledger knows (tags), then the balance and its value on the right.
+function holdingRow(r, { showWallet, setAside = false }) {
+  const symbol = setAside ? (r.reported && r.reported.symbol) || r.symbol : r.symbol;
+  const name = setAside ? r.name || (r.reported && r.reported.name) : r.name;
+  const lg = logo({ symbol: symbol || '?', name: name || '', project_id: r.asset_id || r.contract || r.key, market: { logo_url: setAside ? null : r.logo_url } }, { size: 32 });
+  const asReported = r.verified ? null : 'As the token contract reports it (unverified)';
+  const sym = symbol || name || 'Unnamed token';
+  const symEl = r.project_id ? link(sym, `#/watchlist?p=${encodeURIComponent(r.project_id)}`, { class: 'wh-sym', title: 'Open its research summary' }) : h('span', { class: 'wh-sym', title: asReported }, sym);
+  const tags = setAside
+    ? [chip(HIDDEN_WORDS[r.hidden] || 'Set aside', '', r.hidden_reason || null)]
+    : [acquisitionTag(r.acquisition), reconChip(r.reconciliation), r.wallet_status === 'paused' ? chip('Syncing paused', '') : null];
+  return h('li', { class: 'wh-row', dataset: { key: `wh-${r.key}` } },
+    lg,
+    h('div', { class: 'wh-asset' },
+      h('div', { class: 'wh-line' }, symEl, h('span', { class: 'net-pill' }, r.network_label), showWallet ? h('span', { class: 'net-pill' }, r.wallet_label) : null),
+      name && name !== sym ? h('div', { class: 'wh-name', title: asReported }, name) : null,
+      setAside && r.contract ? h('div', { class: 'wh-name' }, h('code', { class: 'mono', title: r.contract }, shortId(r.contract)), copyButton(r.contract, 'token contract')) : null),
+    h('div', { class: 'wh-tags' }, tags),
+    h('div', { class: 'wh-fig' }, h('div', { class: 'wh-qty' }, balance(r, symbol)), h('div', { class: 'wh-val' }, priceCell(r))));
+}
+
+// The rows a balance sheet shows first (verified tokens and the network's
+// own coin) and the ones it folds away (unverified tokens).
+export function holdingGroups(holdings) {
+  return { main: holdings.filter((r) => r.verified), unverified: holdings.filter((r) => !r.verified) };
+}
+
+function holdingsTable(rows, opts, label) {
+  return h('div', { class: 'wh-table' },
+    h('div', { class: 'wh-cols', 'aria-hidden': 'true' }, h('span', null, 'Asset'), h('span', null, 'Ledger'), h('span', { class: 'r' }, 'Balance · value')),
+    h('ul', { class: 'wh-list', 'aria-label': label }, rows.map((r) => holdingRow(r, opts))));
+}
+
 function hiddenList(rows) {
   if (!rows.length) return null;
-  return details(`Unverified tokens set aside (${rows.length})`, h('ul', { class: 'wh-list wh-hidden' }, rows.map((r) => h('li', { class: 'wh-row', dataset: { key: `wh-${r.key}` } },
-    logo({ symbol: r.reported.symbol || r.symbol || '?', project_id: r.contract || r.key, market: {} }, { size: 24 }),
-    h('div', { class: 'wh-name' }, h('div', { class: 'wh-title' }, h('span', { title: 'Name as the token contract reports it (unverified)' }, r.name || r.reported.name || r.reported.symbol || 'Unnamed token')), h('div', { class: 'wh-sub' }, [r.network_label, HIDDEN_WORDS[r.hidden] || 'Set aside'].join(' · '))),
-    h('div', { class: 'wh-fig' }, h('div', { class: 'wh-qty' }, r.quantity === null ? h('span', { class: 'unknown' }, r.quantity_note || 'Unknown') : qty(r.quantity, r.reported.symbol)), h('div', { class: 'wh-val' }, priceCell(r))),
-    h('div', { class: 'wh-foot' }, h('span', { class: 'small muted' }, r.hidden_reason), r.contract ? h('code', { class: 'mono small wrap-anywhere' }, r.contract) : null)))), { id: 'wallet-hidden' });
+  return details(`Set aside as spam or unsolicited (${rows.length})`, holdingsTable(rows, { showWallet: false, setAside: true }, 'Tokens set aside'), { id: 'wallet-hidden' });
+}
+
+// A tracked wallet's bar: its label and address, each network's sync state
+// as a pill, and the schedule.
+function walletBar(w, o) {
+  return h('div', { class: 'wh-bar', dataset: { key: `wh-bar-${w.wallet_id}` } },
+    h('div', { class: 'wh-id' }, h('strong', null, w.label), h('code', { class: 'mono', title: w.address }, w.address_short), copyButton(w.address, `${w.label}'s address`), w.status === 'paused' ? chip('Paused', 'warn') : null),
+    h('div', { class: 'wh-nets' }, w.networks.map((n) => h('span', { class: 'sync-pill', title: n.last_error || null }, h('span', { class: 'k' }, n.label), networkStatus(n)))),
+    h('span', { class: 'wh-cad', title: 'Each tracked network is read on this schedule; Sync now asks for a read sooner. Change it under Wallets > Sync settings.' }, `Syncs ${o.settings.interval_words.toLowerCase()}`));
 }
 
 // The holdings view of every tracked wallet, for the top of Positions.
@@ -104,19 +128,18 @@ export function walletHoldingsCard(ctx, o) {
   const tracked = o.wallets.filter((w) => w.status !== 'removed');
   if (!tracked.length) return null;
   const showWallet = tracked.length > 1;
-  const statusLines = tracked.map((w) => h('div', { class: 'wh-status' }, showWallet ? h('strong', null, `${w.label}:`) : null, w.networks.map((n) => h('span', { class: 'wh-net' }, `${n.label} `, networkStatus(n)))));
-  const cadence = h('div', { class: 'wh-status' }, h('span', { class: 'muted', title: 'Each tracked network is read on this schedule; Sync now asks for a read sooner. Change it under Wallets > Sync settings.' }, `Syncs ${o.settings.interval_words.toLowerCase()}`));
   const keyMissing = !o.provider.present;
   const s = o.summary;
   const actions = [];
   if (tracked.length === 1 && tracked[0].status === 'active' && !keyMissing) actions.push(syncButton(ctx, tracked[0]));
-  actions.push(link('Wallets', '#/portfolio?tab=wallets', { class: 'btn small' }));
+  actions.push(link('Manage wallets', '#/portfolio?tab=wallets', { class: 'btn small' }));
+  const { main, unverified } = holdingGroups(o.holdings);
   return card('Wallet balances', [
-    cadence,
-    statusLines,
+    h('div', { class: 'wh-bars' }, tracked.map((w) => walletBar(w, o))),
     keyMissing ? callout('Waiting for the Alchemy key (ALCHEMY_API_KEY in Render > Environment). Nothing is read until it is set.', 'info') : null,
-    o.holdings.length ? h('ul', { class: 'wh-list', 'aria-label': 'Wallet balances' }, o.holdings.map((r) => holdingRow(r, { showWallet }))) : empty(s.last_success_at ? 'No balance on the tracked networks.' : 'No complete balance read yet.'),
-    o.holdings.length ? h('div', { class: 'wh-total' }, h('span', { class: 'muted' }, 'Observed value'), h('strong', { class: 'num' }, s.value_priced_usd === null ? '—' : fmtUsd(s.value_priced_usd)), h('span', { class: 'small muted' }, `${s.priced} priced${s.unpriced ? `, ${s.unpriced} without a price` : ''}`)) : null,
+    main.length ? holdingsTable(main, { showWallet }, 'Wallet balances') : empty(!o.holdings.length && !s.last_success_at ? 'No complete balance read yet.' : 'No verified token balance on the tracked networks.'),
+    o.holdings.length ? h('div', { class: 'wh-total' }, h('span', { class: 'wh-total-k' }, 'Observed value', h('span', { class: 'muted' }, ` · ${s.priced} priced${s.unpriced ? `, ${s.unpriced} without a price` : ''}`)), h('strong', { class: 'num' }, s.value_priced_usd === null ? '—' : fmtUsd(s.value_priced_usd))) : null,
+    unverified.length ? details(`Unverified tokens (${unverified.length})`, holdingsTable(unverified, { showWallet }, 'Unverified tokens'), { id: 'wallet-unverified' }) : null,
     hiddenList(o.hidden),
   ], { note: 'What the chain shows at the last complete sync of each network. The ledger below is what you and the sync recorded; differences are marked on each row.', actions });
 }
@@ -171,7 +194,7 @@ function eventReason(e) {
 function amountCell(e) {
   if (e.amount === null || e.amount === undefined) return h('span', { class: 'unknown' }, 'unknown');
   const sign = e.direction === 'out' ? MINUS : e.direction === 'in' ? '+' : '';
-  return h('span', { class: 'num nowrap', title: `Exact: ${e.amount} ${e.symbol || ''}`.trim() }, `${sign}${fmtQty(e.amount)} `, h('span', { class: e.verified ? null : 'faint' }, e.symbol || 'token'));
+  return h('span', { class: 'num nowrap', title: `Exact: ${e.amount} ${e.symbol || ''}`.trim() }, `${sign}${fmtAmount(e.amount)} `, h('span', { class: e.verified ? null : 'faint' }, e.symbol || 'token'));
 }
 
 // The two choices, in the words of why the event is held.
@@ -219,7 +242,7 @@ function walletCard(ctx, w, o) {
       n.coverage && !n.coverage.internal ? h('div', { class: 'small muted', title: 'Alchemy reports ETH that contracts send (internal transfers) only on Ethereum, Polygon and Base.' }, 'History here does not include ETH sent by contracts.') : null,
       missingSent ? h('div', { class: 'small warn-text' }, `${missingSent} transaction(s) this wallet sent are not in Alchemy's history; their fees are not recorded.`) : null);
   }));
-  const title = h('div', { class: 'wl-title' }, h('h2', null, w.label), h('code', { class: 'mono small', title: w.address }, w.address_short), w.status === 'removed' ? chip('Not tracked', '') : w.status === 'paused' ? chip('Paused', 'warn') : null);
+  const title = h('div', { class: 'wl-title' }, h('h2', null, w.label), h('code', { class: 'mono small', title: w.address }, w.address_short), copyButton(w.address, `${w.label}'s address`), w.status === 'removed' ? chip('Not tracked', '') : w.status === 'paused' ? chip('Paused', 'warn') : null);
   return card(title, [
     rows,
     details('Address and ledger account', kv([
@@ -368,13 +391,14 @@ export async function walletsTab(ctx) {
   const tracked = o.wallets.filter((w) => w.status !== 'removed');
   const held = o.held;
   const recon = o.reconciliation.filter((r) => r.status !== 'matches');
+  const assetOf = new Map(o.holdings.filter((r) => r.asset_id).map((r) => [r.asset_id, r]));
   const activity = table([
     { label: 'Date', nowrap: true, render: (e) => h('span', { title: fmtDateTime(e.at) }, fmtDate(e.at)) },
     { label: 'Network', render: (e) => e.network_label },
     { label: 'What', render: (e) => (KIND_WORDS[e.classification] || (() => e.classification))(e, names) },
     { label: 'Amount', num: true, render: amountCell },
     { label: 'Status', wrap: true, render: (e) => { const [t, tone] = eventStatus(e); const why = eventReason(e); return h('div', null, stateText(t, tone), why ? h('div', { class: 'small muted' }, why) : null); } },
-    { label: 'Transaction', render: (e) => link(`${e.tx_hash.slice(0, 10)}…`, e.explorer_url, { class: 'mono small', title: e.tx_hash }) },
+    { label: 'Transaction', render: (e) => h('span', { class: 'au-id' }, link(shortId(e.tx_hash), e.explorer_url, { class: 'mono small', title: e.tx_hash, rel: 'noopener noreferrer', target: '_blank' }), copyButton(e.tx_hash, 'transaction hash')) },
   ], o.activity, { empty: 'No activity read yet.', rowClass: (e) => (e.state === 'reverted' ? 'faint' : null) });
   return h('div', null,
     held.length ? card(`Waiting for your decision (${held.length})`, h('ul', { class: 'wh-list' }, held.map((e) => h('li', { class: 'wl-decide', dataset: { key: `wl-decide-${e.event_key}` } },
@@ -384,7 +408,7 @@ export async function walletsTab(ctx) {
       decisionButtons(ctx, e)))), { note: 'A possible swap, an overlap with your own entries, or a possible move between your accounts. Nothing is recorded over your entries, and no swap is assumed, without you.' }) : null,
     tracked.length || o.wallets.length ? o.wallets.map((w) => walletCard(ctx, w, o)) : empty('No wallet tracked yet. Add one below: a label, its public address and the networks to follow.'),
     recon.length ? card('Reconciliation', table([
-      { label: 'Asset', render: (r) => h('div', null, r.asset_id, h('div', { class: 'small muted' }, `${r.wallet_label} · ${r.account_id}`)) },
+      { label: 'Asset', render: (r) => { const a = assetOf.get(r.asset_id); return h('div', null, h('strong', { title: r.asset_id }, a && a.symbol ? a.symbol : r.asset_id), a && a.name ? h('span', { class: 'muted' }, ` ${a.name}`) : null, h('div', { class: 'small muted' }, `${r.wallet_label} · ${r.account_id}`)); } },
       { label: 'On chain', num: true, render: (r) => qty(r.observed) },
       { label: 'In your ledger', num: true, render: (r) => qty(r.recorded) },
       { label: 'Difference', num: true, render: (r) => qty(r.difference) },

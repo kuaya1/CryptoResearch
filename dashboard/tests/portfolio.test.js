@@ -152,3 +152,25 @@ test('duplicate CSV rows are skipped and secrets are refused', (t) => {
   assert.throws(() => pf.addAccount(ws, { name: 'bad', public_address: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' }), /seed phrase/);
   assert.throws(() => pf.addTransactions(ws, [{ type: 'buy', date: '2026-07-01', account_id: 'demo-exchange', asset_id: 'not-a-known-asset', quantity: 1, price_usd: 1 }]), /unknown asset/);
 });
+
+test('attention records carry their exact quantity, date and account beside the unchanged sentence', (t) => {
+  const { ws, cleanup } = setup('attention-fields');
+  t.after(cleanup);
+  pf.addTransactions(ws, [
+    { type: 'buy', date: '2026-07-01', account_id: 'ex', asset_id: 'example-payfi-fictional', quantity: '10', price_usd: 1 },
+    { type: 'sell', date: '2026-07-03', account_id: 'ex', asset_id: 'example-payfi-fictional', quantity: '3393.859022', price_usd: 1 },
+    { type: 'transfer_out', date: '2026-07-05', account_id: 'wallet', asset_id: 'example-payfi-fictional', quantity: '2', transfer_id: 'x9' },
+  ]);
+  const out = pf.computePortfolio(ws, { market: market({ 'example-payfi-fictional': 1 }), now: NOW });
+  const short = out.warnings.find((w) => w.kind === 'shortfall');
+  assert.equal(short.quantity, '3383.859022', 'the exact shortfall, as a decimal string');
+  assert.equal(short.account_id, 'ex');
+  assert.equal(short.date.slice(0, 10), '2026-07-03');
+  assert.equal(short.tx_type, 'sell');
+  assert.equal(short.tx_quantity, '3393.859022');
+  assert.match(short.message, /^tx_\S+: 3383\.859022 example-payfi-fictional more than recorded in ex\./, 'the sentence is unchanged');
+  const transit = out.warnings.find((w) => w.kind === 'in_transit');
+  assert.equal(transit.account_id, 'wallet');
+  assert.ok(transit.tx_id, 'an in-transit warning names its send');
+  assert.equal(transit.date.slice(0, 10), '2026-07-05');
+});

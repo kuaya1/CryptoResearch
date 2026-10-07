@@ -2,7 +2,7 @@
 // subtotal shows its coverage, and every allocation names its denominator.
 import {
   h, card, table, stateText, fmtUsd, fmtNum, fmtPct, fmtDate, fmtDateTime, freshnessText, callout, empty, link, field, fieldError, input, select,
-  button, action, tabStrip, safeSection, submissionId, openDialog,
+  button, action, tabStrip, safeSection, submissionId, openDialog, fmtAmount, shortId, copyButton, details,
 } from '../ui.js';
 import { walletHoldingsCard, walletsTab } from './wallets.js';
 
@@ -70,6 +70,96 @@ function sourceCell(t) {
 // accounts: expected notes, counted in one line instead of one per entry.
 const WALLET_NOTE_KINDS = new Set(['external_deposit', 'external_transfer_out', 'unknown_basis', 'unknown_proceeds']);
 
+// Records that need attention, as rows of an audit table: what differs in a
+// few words (the full sentence stays the row's tooltip), the amount rounded
+// for reading with its exact value kept, a tone that the words also carry
+// (bad: units held out of the count; warn: the ledger and the records
+// disagree; info: a value is unknown), and the one action that fixes it.
+const ATTENTION = {
+  shortfall: (w, amt) => (w.asset_id === 'usd'
+    ? [`${amt.usd} paid beyond the recorded cash`, 'Record the deposit, or leave “paid from cash” off', 'warn', 'record-deposit']
+    : [`${amt.text} more than recorded`, 'Missing purchases count at unknown cost', 'warn', 'record-purchase']),
+  in_transit: (w, amt) => [`${amt.text} still in transit`, 'Counted as yours until it arrives', 'warn', 'record-arrival'],
+  transfer_over_arrival: (w, amt) => [`${amt.text} more arrived than was sent`, 'The extra counts at unknown cost', 'warn', 'correct'],
+  unmatched_transfer_in: () => ['Arrival with no matching send', 'Counted as a deposit', 'warn', 'correct'],
+  cash_unsettled: () => ['Paid from cash at an unknown price', 'The cash balance was not reduced', 'warn', 'correct'],
+  ambiguous_transfer_id: () => ['Transfer ID used by two sends', 'Both stay in transit until each has its own ID', 'bad', 'correct'],
+  transfer_quarantined: () => ['Arrival cannot be matched to one send', 'Quarantined (not counted) until the IDs are fixed', 'bad', 'correct'],
+  bridge_unmatched_asset: () => ['Left as one asset, arrived as another', 'Arrival quarantined, so nothing counts twice', 'bad', 'correct'],
+  unknown_basis: () => ['Purchase price unknown', 'Cost basis unknown', 'info', 'correct'],
+  unknown_proceeds: () => ['Sale price unknown', 'Realized result unknown', 'info', 'correct'],
+  external_deposit: (w) => ['Deposit from outside your accounts', /cost basis unknown/.test(w.message || '') ? 'Cost basis unknown' : null, 'info', 'correct'],
+  external_transfer_out: () => ['Sent outside your accounts', 'Removed with no gain or loss', 'info', 'correct'],
+};
+const TONE_ORDER = { bad: 0, warn: 1, info: 2 };
+
+export function attentionRows(warnings, { symbols = new Map(), accounts = new Map() } = {}) {
+  const sym = (id) => symbols.get(id) || String(id || '').toUpperCase();
+  const acct = (id) => (id ? { id, name: accounts.get(id) || id } : null);
+  const wallet = warnings.filter((w) => w.source === 'wallet_sync' && WALLET_NOTE_KINDS.has(w.kind));
+  const rows = warnings.filter((w) => !wallet.includes(w)).map((w, i) => {
+    const exact = w.quantity ?? w.tx_quantity ?? null;
+    const amt = { exact, symbol: w.asset_id ? sym(w.asset_id) : null, text: exact === null ? null : `${fmtAmount(exact)} ${w.asset_id ? sym(w.asset_id) : ''}`.trim(), usd: exact === null ? null : fmtUsd(Number(exact)) };
+    const words = ATTENTION[w.kind];
+    const [what, detail, tone, act] = words ? words(w, amt) : [String(w.message || w.kind).replace(/^tx_\S+:\s*/, ''), null, 'info', w.tx_id ? 'correct' : null];
+    // The amount is already in the words for the kinds that name one.
+    const amount = w.quantity === undefined && amt.text && w.asset_id !== 'usd' ? amt : null;
+    return { key: `${w.kind}:${w.tx_id || i}:${w.asset_id || ''}`, kind: w.kind, tone, what, detail, amount, exact, date: w.date || null, tx_id: w.tx_id || null, tx_hash: w.tx_hash || null, network: w.network || null, account: acct(w.account_id), action: act, message: w.message || '' };
+  });
+  rows.sort((a, b) => TONE_ORDER[a.tone] - TONE_ORDER[b.tone] || String(b.date || '').localeCompare(String(a.date || '')));
+  if (wallet.length) {
+    const dates = wallet.map((w) => w.date).filter(Boolean).sort();
+    const accts = [...new Set(wallet.map((w) => w.account_id).filter(Boolean))];
+    rows.push({ key: 'wallet-imports', kind: 'wallet_imports', tone: 'info', what: `${wallet.length} wallet import${wallet.length === 1 ? '' : 's'} without a price or sent outside your accounts`, detail: 'The chain gives quantities, not prices', amount: null, exact: null, date: dates.length ? dates[dates.length - 1] : null, date_from: dates.length > 1 ? dates[0] : null, tx_id: null, tx_hash: null, network: null, account: accts.length === 1 ? acct(accts[0]) : accts.length ? { id: accts.join(', '), name: `${accts.length} accounts` } : null, action: 'transactions', message: 'Correct an entry to add a price. Nothing is estimated.', count: wallet.length });
+  }
+  return rows;
+}
+
+const ATTENTION_SHOWN = 5;
+
+function attentionCard(ctx, pf) {
+  const symbols = new Map(pf.positions.map((p) => [p.asset_id, p.symbol || String(p.asset_id).toUpperCase()]));
+  const accounts = new Map((pf.accounts || []).map((a) => [a.account_id, a.name || a.account_id]));
+  const rows = attentionRows(pf.warnings, { symbols, accounts });
+  if (!rows.length) return null;
+  const columns = [
+    { label: 'Date · record', render: (r) => h('div', { class: 'au-rec' },
+      h('div', { class: 'au-date' }, r.date ? (r.date_from && r.date_from.slice(0, 10) !== r.date.slice(0, 10) ? `${fmtDate(r.date_from)} – ${fmtDate(r.date)}` : fmtDate(r.date)) : '—'),
+      r.tx_id ? h('div', { class: 'au-id' }, h('code', { class: 'mono', title: r.tx_id }, shortId(r.tx_id)), copyButton(r.tx_id, `record ID ${r.tx_id}`)) : null,
+      r.tx_hash ? h('div', { class: 'au-id' }, EXPLORERS[r.network] ? link(shortId(r.tx_hash), `${EXPLORERS[r.network]}/tx/${r.tx_hash}`, { class: 'mono', title: r.tx_hash, rel: 'noopener noreferrer', target: '_blank' }) : h('code', { class: 'mono', title: r.tx_hash }, shortId(r.tx_hash)), copyButton(r.tx_hash, 'transaction hash')) : null) },
+    { label: 'Account', render: (r) => (r.account ? h('span', { title: r.account.id }, r.account.name) : null) },
+    { label: 'What differs', render: (r) => h('div', { class: 'au-what', title: r.message },
+      stateText(r.what, r.tone),
+      r.amount ? h('span', { class: 'au-amt num', title: `Exact: ${r.amount.exact} ${r.amount.symbol || ''}`.trim(), dataset: { exact: r.amount.exact } }, r.amount.text) : null,
+      r.detail ? h('div', { class: 'au-detail' }, r.detail) : null) },
+    { label: 'Action', render: (r) => attentionAction(ctx, r) },
+  ];
+  const head = rows.slice(0, ATTENTION_SHOWN);
+  const rest = rows.slice(ATTENTION_SHOWN);
+  return card(`Records that need attention (${rows.reduce((n, r) => n + (r.count || 1), 0)})`, [
+    h('div', { class: 'audit' }, table(columns, head, { caption: 'Records that need attention' })),
+    rest.length ? details(`${rest.length} more`, h('div', { class: 'audit audit-more' }, table(columns, rest, { caption: 'More records that need attention' })), { id: 'pf-attention-more' }) : null,
+  ], { note: 'Nothing is estimated to fill these gaps. The exact figures are in each row\'s tooltip.' });
+}
+
+function attentionAction(ctx, r) {
+  if (r.action === 'record-purchase') return link('Record purchase', '#/portfolio?tab=record', { class: 'btn small' });
+  if (r.action === 'record-deposit') return link('Record deposit', '#/portfolio?tab=record', { class: 'btn small' });
+  if (r.action === 'record-arrival') return link('Record arrival', '#/portfolio?tab=record', { class: 'btn small' });
+  if (r.action === 'transactions') return link('Open transactions', '#/portfolio?tab=transactions', { class: 'btn small' });
+  if (r.action !== 'correct' || !r.tx_id) return null;
+  const b = button('Correct', null, { kind: 'small', key: `au-fix-${r.key}` });
+  b.setAttribute('aria-label', `Correct transaction ${r.tx_id}`);
+  b.onclick = action(b, async () => {
+    const ledger = await ctx.api.get('/api/portfolio/ledger');
+    const t = ledger.transactions.find((x) => x.tx_id === r.tx_id && !x.voided);
+    if (!t) throw new Error('That entry is no longer active; see Transactions.');
+    openCorrectDialog(ctx, t, ledger);
+    return undefined;
+  });
+  return b;
+}
+
 const STATE_TEXT = {
   no_records: ['Nothing recorded in the ledger', 'info', 'Researching a token never creates a position. Record transactions under Record & import, or track a wallet under Wallets.'],
   empty: ['All positions closed', 'info', 'Every recorded position is closed. Realized results and fees stay below.'],
@@ -125,8 +215,6 @@ async function positionsTab(ctx) {
   } catch (err) {
     walletCard = callout(`Wallet balances could not be shown: ${err.message}. The ledger below is unaffected.`, 'warn');
   }
-  const walletNotes = pf.warnings.filter((w) => w.source === 'wallet_sync' && WALLET_NOTE_KINDS.has(w.kind));
-  const otherNotes = pf.warnings.filter((w) => !walletNotes.includes(w));
   const t = pf.totals;
   const open = pf.positions.filter((p) => !p.closed);
   const closed = pf.positions.filter((p) => p.closed);
@@ -157,9 +245,7 @@ async function positionsTab(ctx) {
       summaryItem('Realized (known)', fmtUsd(t.realized_known_usd), t.realized_unknown_positions ? `${t.realized_unknown_positions} position(s) with unknown basis` : 'all sales have known basis'),
       summaryItem('Fees paid', fmtUsd(t.fees_usd), t.fees_crypto_cost_usd ? `includes ${fmtUsd(t.fees_crypto_cost_usd)} paid in crypto (at cost)` : 'USD and in-kind, at cost'),
       summaryItem('Stale prices', String(t.stale_count || 0), t.stale_count ? t.stale_assets.join(', ') : 'none')) : null,
-    pf.warnings.length ? card('Records that need attention', h('ul', { class: 'list' },
-      otherNotes.map((w) => h('li', null, w.message)),
-      walletNotes.length ? h('li', null, `${walletNotes.length} wallet import${walletNotes.length === 1 ? '' : 's'} with no recorded price, or sent to an address outside your accounts. The chain gives quantities, not prices; Correct an entry to add one.`) : null), { note: 'Nothing is estimated to fill these gaps.' }) : null,
+    attentionCard(ctx, pf),
     (pf.quarantine || []).length ? card('Quarantined records', table([
       { label: 'Record', render: (q) => h('code', { class: 'small' }, q.tx_id || q.id || '?') },
       { label: 'Why', wrap: true, render: (q) => q.reason || q.message || '' },
