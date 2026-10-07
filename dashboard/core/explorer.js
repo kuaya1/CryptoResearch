@@ -10,7 +10,9 @@
 // as plain JSON. Writes go one way only, by the CLI: `explorer export
 // --fixtures` sends the FICTIONAL fixture records through the database
 // function public.explorer_import(), which stores each report whole or not
-// at all and refuses changed content under a known report ID. Opening the
+// at all and refuses changed content under a known report ID. Real records
+// can only be previewed, one project at a time (`explorer export --project
+// <id> --dry-run`, no network); sending them is not enabled. Opening the
 // Explorer reads; it never writes, screens, prices or starts research.
 //
 // Configuration (never in the page, logs, settings or Git):
@@ -26,6 +28,7 @@
 
 const { secretsFile } = require('./providers');
 const adapter = require('./explorer-adapter');
+const { reportSortKey } = require('./reports');
 
 const READ_TIMEOUT_MS = 8000;
 const EXPORT_TIMEOUT_MS = 30000;
@@ -134,8 +137,8 @@ function navInfo(ws, { hosted = false } = {}) {
 
 const scrub = (s, key) => (key ? String(s).split(key).join('[secret]') : String(s));
 
-async function rest(cfg, method, pathQuery, { body = null, timeoutMs = readTimeoutMs() } = {}) {
-  const headers = { apikey: cfg._key, accept: 'application/json' };
+async function rest(cfg, method, pathQuery, { body = null, timeoutMs = readTimeoutMs(), headers: extra = null, withHeaders = false } = {}) {
+  const headers = { ...(extra || {}), apikey: cfg._key, accept: 'application/json' };
   // A legacy service_role key is a JWT and goes in Authorization too; a
   // secret key goes in apikey only (Supabase refuses it as a bearer token).
   if (cfg.key_kind === 'service_role_jwt') headers.authorization = `Bearer ${cfg._key}`;
@@ -159,8 +162,54 @@ async function rest(cfg, method, pathQuery, { body = null, timeoutMs = readTimeo
     const code = res.status === 401 || res.status === 403 ? 'REFUSED_BY_SUPABASE' : res.status >= 500 ? 'SUPABASE_ERROR' : 'BAD_REQUEST';
     throw new ExplorerError(code, `Supabase answered ${res.status}: ${scrub(said, cfg._key).slice(0, 300)}`, { http_status: res.status });
   }
-  return json;
+  return withHeaders ? { json, headers: res.headers } : json;
 }
+
+// Every row of one query, page by page: PostgREST's Range header with an
+// exact count. Supabase caps each answer at its own row limit (1,000 by
+// default) whatever the page asked for, so the next page starts after the
+// rows actually received. The query's order must be unique (it ends with the
+// table's key), so pages neither overlap nor skip; `key` names each row, and
+// a row read twice, or a count that changes between pages (an export landing
+// mid-read), makes the read incomplete. The stated total is checked at the
+// end: nothing is ever drawn from a silently shortened list.
+// CR_EXPLORER_PAGE_SIZE makes the pages small in tests.
+const pageSize = () => Math.max(1, Math.min(MAX_ROWS, Number(process.env.CR_EXPLORER_PAGE_SIZE) || MAX_ROWS));
+const MAX_PAGES = 500;
+
+async function restAll(cfg, pathQuery, key) {
+  const size = pageSize();
+  const rows = [];
+  const seen = new Set();
+  let total = null;
+  let pages = 0;
+  for (;;) {
+    if (pages >= MAX_PAGES) throw new ExplorerError('INCOMPLETE', `Stopped after ${MAX_PAGES} pages with ${rows.length} rows read; the read is incomplete.`);
+    const from = rows.length;
+    const { json, headers } = await rest(cfg, 'GET', pathQuery, { headers: { 'range-unit': 'items', range: `${from}-${from + size - 1}`, prefer: 'count=exact' }, withHeaders: true });
+    pages += 1;
+    const got = Array.isArray(json) ? json : [];
+    const m = /^(?:(\d+)-(\d+)|\*)\/(\d+|\*)$/.exec(String(headers.get('content-range') || '').trim());
+    if (!m || m[3] === '*') throw new ExplorerError('INCOMPLETE', 'Supabase did not state how many rows there are, so a complete read cannot be confirmed.');
+    if (got.length && Number(m[1]) !== from) throw new ExplorerError('INCOMPLETE', `Supabase answered rows from ${m[1]} when rows from ${from} were asked for; the read is incomplete.`);
+    if (total !== null && Number(m[3]) !== total) throw new ExplorerError('INCOMPLETE', `The Explorer changed while it was being read (${total} rows, then ${m[3]}); the read is incomplete. Refresh to read it again.`);
+    total = Number(m[3]);
+    for (const row of got) {
+      const k = key(row);
+      if (seen.has(k)) throw new ExplorerError('INCOMPLETE', `Row ${k} came back twice across pages; the read is incomplete. Refresh to read it again.`);
+      seen.add(k);
+      rows.push(row);
+    }
+    if (rows.length >= total) break;
+    if (!got.length) throw new ExplorerError('INCOMPLETE', `Supabase returned ${rows.length} of ${total} rows and then none; the read is incomplete.`);
+  }
+  if (rows.length !== total) throw new ExplorerError('INCOMPLETE', `Read ${rows.length} rows where Supabase counts ${total}; the read is incomplete.`);
+  return { rows, total, pages };
+}
+
+const byProject = (p) => p.project_id;
+const byReport = (r) => r.report_id;
+const byScore = (s) => `${s.report_id}/${s.category_id}`;
 
 // ---- reading (GET /api/explorer) --------------------------------------------
 
@@ -192,10 +241,25 @@ function shapeScore(s) {
   };
 }
 
+// The desk's latest-report rule (reports.js reportSortKey, the same code),
+// applied to what the Explorer stores: the stated analysis day, checked
+// against the save time by the desk's own check, so a day more than a day
+// after the save sorts at the save time and can never keep a report
+// "latest". A report stored without a day (none stated, or a stated time the
+// desk would not use: export leaves those out) sorts at its save time. The
+// report ID last, so the order is total. Newest is the largest key.
+function orderKey(r) {
+  const t = Date.parse(r.saved_at || '');
+  const saved = Number.isFinite(t) ? new Date(t).toISOString() : '';
+  const desk = r.research_date ? reportSortKey({ assessment: { analysis_at: String(r.research_date) }, meta: { imported_at: saved } }) : `${saved}|${saved}`;
+  return `${desk}|${r.report_id}`;
+}
+
 function shapeReport(r) {
   const scores = (Array.isArray(r.category_scores) ? r.category_scores : []).map(shapeScore).sort((a, b) => (a.position || 0) - (b.position || 0));
   return {
     ...r,
+    order_key: orderKey(r),
     grade_value: num(r.grade_value),
     grade_low: num(r.grade_low),
     grade_high: num(r.grade_high),
@@ -216,16 +280,24 @@ async function read(ws, { refresh = false, env = process.env, now = Date.now } =
   const age = mine ? now() - mine.at : Infinity;
   if (mine && (age < (refresh ? MIN_REFRESH_MS : CACHE_MS))) return { ...mine.data, checked_at: base.checked_at, served: 'cache' };
   try {
-    const [projects, reports, exportsList] = await Promise.all([
-      rest(cfg, 'GET', `/projects?select=${PROJECT_COLUMNS.join(',')}&order=name.asc&limit=${MAX_ROWS}`),
-      rest(cfg, 'GET', `/reports?select=${REPORT_COLUMNS.join(',')},category_scores(${SCORE_COLUMNS.join(',')})&order=saved_at.desc&limit=${MAX_ROWS}`),
-      rest(cfg, 'GET', `/export_runs?select=${EXPORT_COLUMNS.join(',')}&order=finished_at.desc&limit=1`),
+    // Every row, page by page (restAll), each query in a unique order. The
+    // reports first: an export stores a report, its project and its grades
+    // in one transaction, so projects and grades read after the reports
+    // cover every report listed. Grades of a report that landed after the
+    // reports were read are left for the next read.
+    const reports = await restAll(cfg, `/reports?select=${REPORT_COLUMNS.join(',')}&order=saved_at.desc,report_id.asc`, byReport);
+    const [projects, scores, exportsList] = await Promise.all([
+      restAll(cfg, `/projects?select=${PROJECT_COLUMNS.join(',')}&order=name.asc,project_id.asc`, byProject),
+      restAll(cfg, `/category_scores?select=report_id,${SCORE_COLUMNS.join(',')}&order=report_id.asc,category_id.asc`, byScore),
+      rest(cfg, 'GET', `/export_runs?select=${EXPORT_COLUMNS.join(',')}&order=finished_at.desc,export_id.asc&limit=1`),
     ]);
+    const grades = new Map(reports.rows.map((r) => [r.report_id, []]));
+    for (const s of scores.rows) if (grades.has(s.report_id)) grades.get(s.report_id).push(s);
     const last = Array.isArray(exportsList) && exportsList.length ? exportsList[0] : null;
     const lastAt = last ? Date.parse(last.finished_at) : NaN;
     const stale = !last || !Number.isFinite(lastAt) || now() - lastAt > STALE_DAYS * 86400000;
-    const list = Array.isArray(reports) ? reports.map(shapeReport) : [];
-    const datasets = [...new Set([...(projects || []).map((p) => p.dataset), ...list.map((r) => r.dataset)])].filter(Boolean).sort();
+    const list = reports.rows.map((r) => shapeReport({ ...r, category_scores: grades.get(r.report_id) }));
+    const datasets = [...new Set([...projects.rows.map((p) => p.dataset), ...list.map((r) => r.dataset)])].filter(Boolean).sort();
     const data = {
       ...base,
       state: !last ? 'empty' : stale ? 'stale' : 'ok',
@@ -236,8 +308,9 @@ async function read(ws, { refresh = false, env = process.env, now = Date.now } =
       datasets,
       stale_after_days: STALE_DAYS,
       last_export: last,
-      truncated: list.length >= MAX_ROWS || (projects || []).length >= MAX_ROWS,
-      projects: projects || [],
+      totals: { projects: projects.total, reports: reports.total, category_scores: list.reduce((n, r) => n + r.category_scores.length, 0) },
+      pages: { projects: projects.pages, reports: reports.pages, category_scores: scores.pages },
+      projects: projects.rows,
       reports: list,
     };
     memory = { url: cfg.url, at: now(), data };
@@ -246,6 +319,61 @@ async function read(ws, { refresh = false, env = process.env, now = Date.now } =
     const reason = err instanceof ExplorerError ? err.message : `The Explorer could not be read: ${scrub(err.message, cfg._key)}`;
     if (mine) return { ...mine.data, state: 'unavailable', reason, checked_at: base.checked_at, served: 'memory', copy_fetched_at: mine.data.fetched_at };
     return { ...base, state: 'unavailable', reason, projects: [], reports: [] };
+  }
+}
+
+// ---- one project, for Second opinion (GET /api/explorer/compare) -------------
+
+const PROJECT_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const IDS_PER_QUERY = 100;
+
+// Every report of one project and every category grade of those reports,
+// for the comparison panel. Read-only. Three queries, each paged until the
+// database's own count is reached (restAll): its reports; the project row;
+// the category scores whose report_id is one of those reports (the join,
+// done by report ID; never a request per category). Nothing is computed or
+// written here: the page compares (public/compare-model.js).
+async function compareData(ws, projectId, { env = process.env, now = Date.now } = {}) {
+  if (!PROJECT_ID_RE.test(String(projectId || ''))) throw new ExplorerError('BAD_ID', 'Not a project ID.');
+  const cfg = resolve(ws, env);
+  const base = { state: cfg.state, configured: cfg.state === 'configured', checked_at: new Date(now()).toISOString(), project_id: projectId };
+  if (cfg.state === 'off') return { ...base, reason: 'The Research Explorer is switched off on this desk.', reports: [] };
+  if (cfg.state === 'not_configured') return { ...base, reason: cfg.problems[0] || `Missing ${cfg.missing.map((m) => m.replace(/ \(.*$/, '')).join(' and ')}.`, reports: [] };
+  try {
+    const id = encodeURIComponent(projectId);
+    // The reports first, then the project and the grades (see read()).
+    const reports = await restAll(cfg, `/reports?project_id=eq.${id}&select=${REPORT_COLUMNS.join(',')}&order=saved_at.desc,report_id.asc`, byReport);
+    const projects = await restAll(cfg, `/projects?project_id=eq.${id}&select=${PROJECT_COLUMNS.join(',')}&order=project_id.asc`, byProject);
+    const project = projects.rows[0] || null;
+    if (!project) return { ...base, state: 'not_found', reason: `No project "${projectId}" in the Explorer.`, reports: [] };
+    const scores = { rows: [], total: 0, pages: 0 };
+    const ids = reports.rows.map((r) => r.report_id);
+    for (let i = 0; i < ids.length; i += IDS_PER_QUERY) {
+      const list = ids.slice(i, i + IDS_PER_QUERY).map((x) => `"${x}"`).join(',');
+      const part = await restAll(cfg, `/category_scores?report_id=in.(${encodeURIComponent(list)})&select=report_id,${SCORE_COLUMNS.join(',')}&order=report_id.asc,category_id.asc`, byScore);
+      scores.rows.push(...part.rows);
+      scores.total += part.total;
+      scores.pages += part.pages;
+    }
+    const gradesOf = new Map();
+    for (const s of scores.rows) {
+      if (!gradesOf.has(s.report_id)) gradesOf.set(s.report_id, []);
+      gradesOf.get(s.report_id).push(s);
+    }
+    return {
+      ...base,
+      state: 'ok',
+      served: 'supabase',
+      fetched_at: new Date(now()).toISOString(),
+      demo: project.dataset === 'demo',
+      project,
+      reports: reports.rows.map((r) => shapeReport({ ...r, category_scores: gradesOf.get(r.report_id) || [] })),
+      totals: { reports: reports.total, category_scores: scores.total },
+      pages: { projects: projects.pages, reports: reports.pages, category_scores: scores.pages },
+    };
+  } catch (err) {
+    const reason = err instanceof ExplorerError ? err.message : `The comparison could not be read: ${scrub(err.message, cfg._key)}`;
+    return { ...base, state: 'unavailable', reason, reports: [] };
   }
 }
 
@@ -293,15 +421,45 @@ async function exportFixtures(ws, { dryRun = false, env = process.env } = {}) {
   };
 }
 
-// The desk's real records. Prepared (explorer-adapter.js deskSources) and
-// deliberately not enabled: copying real research to Supabase is Eric's
-// decision, made in a later version.
+// The desk's real records, all projects at once. Prepared (explorer-adapter.js
+// deskSources) and deliberately not enabled: copying real research to
+// Supabase is Eric's decision, made in a later version.
 function exportDesk() {
-  throw new ExplorerError('REFUSED', 'Exporting real desk records to the Explorer is prepared but not enabled in this version. Only the FICTIONAL fixtures are exported (explorer export --fixtures).');
+  throw new ExplorerError('REFUSED', 'Exporting all real desk records to the Explorer is prepared but not enabled. Preview one project with: explorer export --project <id> --dry-run');
+}
+
+const sha256 = (text) => require('crypto').createHash('sha256').update(text, 'utf8').digest('hex');
+
+// One real project, the canary. --dry-run reads its records through the same
+// adapter and returns the exact request body explorer_import would receive,
+// with the SHA-256 of that body and of each report row: no key is read, no
+// network call is made and nothing is written. Sending stays refused until
+// Eric enables real-record export.
+function exportProject(ws, projectId, { dryRun = false } = {}) {
+  if (!dryRun) {
+    throw new ExplorerError('REFUSED', `Sending real desk records to the Explorer is not enabled. Nothing was sent. Preview exactly what would be sent with: explorer export --project ${String(projectId).slice(0, 80)} --dry-run`);
+  }
+  const { batch, skipped } = adapter.buildBatch(ws, adapter.deskSourceFor(ws, projectId), { dataset: 'desk', source: `desk:projects/${projectId}` });
+  const body = JSON.stringify({ batch });
+  return {
+    status: 'dry_run',
+    dataset: 'desk',
+    project_id: projectId,
+    sent: false,
+    network: 'none',
+    request: { method: 'POST', path: '/rest/v1/rpc/explorer_import', body_bytes: Buffer.byteLength(body, 'utf8'), body_sha256: sha256(body) },
+    projects: batch.projects.length,
+    reports: batch.reports.length,
+    category_scores: batch.reports.reduce((n, r) => n + r.category_scores.length, 0),
+    hashes: batch.reports.map((r) => ({ report_id: r.report_id, model: r.model, saved_at: r.saved_at, category_scores: r.category_scores.length, row_sha256: sha256(JSON.stringify(r)) })),
+    hash_note: 'SHA-256 of the exact JSON this desk would send (the request body, and each report row as sent). Supabase computes its own content hash from the values it stores, so its content_sha256 differs; the same payload sent twice comes back "unchanged" there.',
+    skipped,
+    batch,
+  };
 }
 
 function resetMemory() {
   memory = null;
 }
 
-module.exports = { ExplorerError, keyKind, resolve, status, navInfo, read, exportFixtures, exportDesk, fixtureBatch, resetMemory, STALE_DAYS, URL_RE };
+module.exports = { ExplorerError, keyKind, resolve, status, navInfo, read, compareData, shapeReport, orderKey, exportFixtures, exportDesk, exportProject, fixtureBatch, resetMemory, STALE_DAYS, URL_RE };

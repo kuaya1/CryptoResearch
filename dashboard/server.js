@@ -967,6 +967,8 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, queueIde
   // a key the page never sees, behind the same sign-in and token as every
   // other route. A read only: it never writes, screens or starts research.
   route('GET', '/api/explorer', (m, req, res, body, url) => require('./core/explorer').read(ws, { refresh: url.searchParams.get('refresh') === '1' }));
+  // Second opinion: one project's reports and category grades, every row.
+  route('GET', '/api/explorer/compare', (m, req, res, body, url) => require('./core/explorer').compareData(ws, String(url.searchParams.get('project') || '')));
   route('GET', '/api/doctor', async () => require('./core/doctor').doctor(ws));
   route('POST', '/api/doctor/write-test', async () => require('./core/doctor').doctor(ws, { writeProbe: true }));
   route('GET', '/api/research/providers', () => coherent(() => ({ providers: research.providerStatus(ws), readiness: research.readiness(ws), budget: ws.settings.research.budget, spend: research.spendSoFar(ws), unattended_enabled: Boolean(ws.settings.research.unattended_enabled), keys_file: require('./core/providers').secretsFile() })));

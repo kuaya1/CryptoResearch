@@ -272,4 +272,17 @@ function deskSources(ws) {
   return out;
 }
 
-module.exports = { ADAPTER_VERSION, FIXTURE_REL, FIXTURE_FILE, AdapterError, projectRow, researchDate, categoryRows, reportRow, buildBatch, loadFixtures, deskSources };
+// One project of the desk's own records, for a single-project preview (the
+// canary): the same reading as deskSources, for one ID. An archived project
+// is left out here too.
+function deskSourceFor(ws, projectId) {
+  const { isProjectId } = require('./ids');
+  if (!isProjectId(projectId)) throw Object.assign(new AdapterError(`"${String(projectId).slice(0, 80)}" is not a project ID (lowercase letters, digits and dashes; see node dashboard/cli.js project list).`), { code: 'BAD_ID' });
+  const { getProject } = require('./projects');
+  const { loadReports } = require('./reports');
+  const project = getProject(ws, projectId);
+  if (project.status === 'archived') throw Object.assign(new AdapterError(`${projectId} is archived; archived projects are not exported.`), { code: 'REFUSED' });
+  return [{ project, reports: loadReports(ws, projectId) }];
+}
+
+module.exports = { ADAPTER_VERSION, FIXTURE_REL, FIXTURE_FILE, AdapterError, projectRow, researchDate, categoryRows, reportRow, buildBatch, loadFixtures, deskSources, deskSourceFor };

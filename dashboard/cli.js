@@ -126,7 +126,10 @@ Data, jobs and maintenance
                                          the project URL (the secret key goes in CR_SUPABASE_SECRET_KEY or
                                          "supabase_secret_key" in ~/.cryptoresearch/secrets.json)
   explorer export --fixtures [--dry-run] send the FICTIONAL demo records one way to Supabase; repeatable,
-                                         nothing duplicated, changed content refused (real records: not enabled)
+                                         nothing duplicated, changed content refused
+  explorer export --project <id> --dry-run
+                                         preview one real project: the exact request body and its SHA-256
+                                         hashes; no network, nothing written (sending real records: not enabled)
   demo build                             build the FICTIONAL demo workspace (dashboard/demo-workspace)
   test                                   run the automated tests
 
@@ -802,11 +805,18 @@ async function run(argv) {
         return { status: 'saved', verified: out.verified, ...st, next: st.state === 'configured' ? 'node dashboard/cli.js explorer status' : st.state === 'off' ? 'Switched off.' : `Still missing: ${[...st.problems, ...st.missing].join('; ')}` };
       }
       if (sub === 'export') {
+        const usage = 'explorer export --fixtures [--dry-run] | --project <project_id> --dry-run (real records: a preview only; nothing is sent)';
+        if ([flags.fixtures, flags.project, flags.desk].filter(Boolean).length > 1) throw Object.assign(new Error(`Choose one of --fixtures, --project <id> or --desk. ${usage}`), { code: 'USAGE' });
         if (flags.desk) return xp.exportDesk();
-        if (!flags.fixtures) throw Object.assign(new Error('explorer export --fixtures [--dry-run] (only the FICTIONAL fixtures are exported in this version)'), { code: 'USAGE' });
+        if (flags.project !== undefined) {
+          const id = one(flags.project);
+          if (typeof id !== 'string' || !id.trim()) throw Object.assign(new Error(`--project needs a project ID. ${usage}`), { code: 'USAGE' });
+          return xp.exportProject(ws, id.trim(), { dryRun: Boolean(flags.dry_run) });
+        }
+        if (!flags.fixtures) throw Object.assign(new Error(usage), { code: 'USAGE' });
         return xp.exportFixtures(ws, { dryRun: Boolean(flags.dry_run) });
       }
-      throw Object.assign(new Error('explorer status | configure --url <url> | --off | --on | export --fixtures [--dry-run]'), { code: 'USAGE' });
+      throw Object.assign(new Error('explorer status | configure --url <url> | --off | --on | export --fixtures [--dry-run] | export --project <id> --dry-run'), { code: 'USAGE' });
     }
     case 'restored-copy': {
       // A restored copy holds research (no provider asked for anything) until

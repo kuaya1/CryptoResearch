@@ -40,7 +40,8 @@
 .xp-who .sub { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .xp-who .tick { font-size: var(--fs-caption); font-weight: 500; color: var(--text-3); text-transform: uppercase; }
 .xp-model { flex: none; padding: 0 8px; line-height: 18px; border-radius: var(--r-pill); background: var(--surface-sunken); font-size: var(--fs-caption); font-weight: 500; color: var(--text-2); }
-.xp-toggle { margin-left: auto; min-height: 28px; }
+.xp-toggle, .xp-compare { margin-left: auto; min-height: 28px; }
+.xp-compare + .xp-toggle { margin-left: 0; }
 
 .xp-score { grid-area: score; display: flex; align-items: center; gap: 10px; min-width: 0; }
 .xp-bar { flex: 1 1 auto; min-width: 60px; }
@@ -95,4 +96,98 @@
   .xp-kv dd { margin-bottom: 6px; }
   .xp-cats li { grid-template-columns: minmax(0, 1fr) 70px auto 10px; gap: var(--s2); }
   .xp-tools .seg { max-width: 100%; overflow-x: auto; }
+}
+
+/* Second opinion (views/explorer-compare.js): the comparison dialog. Who and
+   what first, then the scope, then paired bars per category, then each
+   model's own words on demand. */
+dialog.xp-cmp-dlg { max-width: min(1000px, calc(100vw - 24px)); }
+@media (max-width: 600px) { dialog.xp-cmp-dlg { max-width: 100vw; } }
+.xp-cmp-loading { margin: 0; color: var(--text-2); }
+.xp-cmp-head { display: flex; align-items: center; gap: 10px; margin-bottom: var(--s3); min-width: 0; }
+.xp-cmp-head .logo { width: 28px; height: 28px; min-width: 28px; font-size: var(--fs-caption); font-weight: 600; color: var(--text-2); background: var(--bg); box-shadow: inset 0 0 0 1px var(--border); }
+.xp-cmp-head .names { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
+.xp-cmp-head .pname { font-size: 16px; font-weight: 600; color: var(--text); }
+.xp-cmp-head .tick { font-size: var(--fs-small); font-weight: 500; color: var(--text-3); text-transform: uppercase; }
+.xp-cmp-head .xp-demo { margin-left: auto; }
+.xp-cmp-pickers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2) var(--s3); margin-bottom: var(--s4); }
+.xp-cmp-pick { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.xp-cmp-pick .lbl { font-size: var(--fs-small); font-weight: 500; color: var(--text-2); }
+.xp-cmp-pick select { width: 100%; min-width: 0; }
+
+.xp-cmp-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); margin-bottom: var(--s3); }
+.xp-cmp-side { min-width: 0; padding: var(--s3) 14px; border-radius: var(--r-well); background: var(--surface-sunken); font-size: var(--fs-small); }
+.xp-cmp-side .who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-bottom: var(--s2); }
+.xp-cmp-side .model { font-size: 14px; font-weight: 600; color: var(--text); }
+.xp-cmp-side .where { font-size: var(--fs-caption); color: var(--text-2); }
+.xp-cmp-side .grade-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: var(--s2); }
+.xp-cmp-side .grade-line .xp-grade { background: var(--surface); }
+.xp-cmp-side .verdict { font-size: var(--fs-caption); color: var(--text-2); }
+.xp-cmp-side .unscored, .xp-cmp-side .none { margin: 6px 0 0; color: var(--text-2); }
+.xp-cmp-side .xp-kv { grid-template-columns: minmax(64px, 80px) minmax(0, 1fr); }
+
+/* Scope and authorship: two separate facts, two wells. */
+.xp-cmp-facts-pair { display: grid; gap: var(--s2); margin-bottom: var(--s3); }
+.xp-cmp-scope, .xp-cmp-author { padding: var(--s3) 14px; border-radius: var(--r-well); font-size: var(--fs-small); color: var(--text); }
+.xp-cmp-scope.ok, .xp-cmp-author.ok { background: var(--t4-bg); }
+.xp-cmp-scope.warn, .xp-cmp-author.warn { background: var(--warn-weak); }
+.xp-cmp-author p { margin: 0; }
+.xp-cmp-scope .head { margin: 0 0 var(--s2); }
+.xp-cmp-scope .caveat { margin: var(--s2) 0 0; color: var(--text-2); }
+.xp-cmp-facts { display: grid; grid-template-columns: minmax(96px, 130px) minmax(0, 1fr); gap: 2px var(--s3); margin: 0; }
+.xp-cmp-facts dt { color: var(--text-2); }
+.xp-cmp-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.xp-cmp-facts dd.differs { font-weight: 600; }
+.xp-cmp-facts .vs { color: var(--warn); }
+.xp-cmp-facts .same { color: var(--text-2); }
+.xp-cmp-facts dd.missing { font-weight: 600; }
+.xp-cmp-facts dd.missing .sep { color: var(--text-2); font-weight: 400; }
+.xp-cmp-facts dd.none { color: var(--text-2); }
+.xp-cmp-facts dt.apart, .xp-cmp-facts dt.apart + dd { margin-top: 4px; }
+.xp-cmp-scope .versions { margin: var(--s2) 0 0; }
+.xp-cmp-counts { margin: 0 0 var(--s3); font-size: var(--fs-small); color: var(--text-2); }
+
+.xp-cmp-listhead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); padding-top: var(--s3); border-top: 1px solid var(--separator); }
+.xp-cmp-listhead h3 { font-family: var(--sans); font-size: 14px; font-weight: 600; }
+.xp-cmp-listhead .note { flex-basis: 100%; margin: 0; font-size: var(--fs-caption); color: var(--text-2); }
+.xp-cmp-rows { list-style: none; margin: var(--s2) 0 0; padding: 0; }
+.xp-cmp-row { display: grid; grid-template-columns: minmax(140px, 0.8fr) minmax(0, 1.8fr) minmax(200px, 1fr); grid-template-areas: "name pair verdict" "more more more"; align-items: center; gap: 0 var(--s4); padding: 10px 0; border-top: 1px solid var(--separator); }
+.xp-cmp-row .name { grid-area: name; display: flex; flex-direction: column; gap: 2px; min-width: 0; font-weight: 500; color: var(--text); }
+.xp-cmp-row .name .alt { font-size: var(--fs-caption); font-weight: 400; color: var(--text-2); }
+.xp-cmp-row .pair { grid-area: pair; display: grid; gap: 6px; min-width: 0; }
+.xp-cmp-line { display: grid; grid-template-columns: 62px minmax(60px, 1fr) 52px 112px; align-items: center; gap: var(--s2); min-width: 0; }
+.xp-cmp-line .model { font-size: var(--fs-caption); font-weight: 600; color: var(--text-2); }
+/* Two reports by one model read "Claude (original)" and "Claude (revision)", or "(first)" and "(second)". */
+@media (min-width: 701px) { .xp-cmp-rows.same-model .xp-cmp-line { grid-template-columns: 132px minmax(60px, 1fr) 52px 112px; } }
+.xp-cmp-line .xp-bar .cbar { height: 6px; }
+.xp-cmp-line .conf { font-size: var(--fs-caption); color: var(--text-2); white-space: nowrap; }
+.xp-cmp-row .verdict { grid-area: verdict; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px var(--s2); min-width: 0; }
+.xp-cmp-row .verdict .xp-toggle { flex: none; }
+.xp-cmp-label { min-width: 0; padding: 1px 8px; line-height: 18px; border-radius: 10px; background: var(--surface-sunken); font-size: var(--fs-caption); font-weight: 500; color: var(--text); }
+.xp-cmp-row.g-notable .xp-cmp-label { font-weight: 600; box-shadow: inset 0 0 0 1px var(--border); }
+/* Evidence missing: an outline like the dashed unknown track, never a fill. */
+.xp-cmp-row.g-missing .xp-cmp-label { background: transparent; box-shadow: inset 0 0 0 1px var(--control-border); }
+.xp-cmp-row.g-other .xp-cmp-label, .xp-cmp-label.k-one { color: var(--text-2); }
+.xp-cmp-row .more { grid-area: more; min-width: 0; }
+.xp-cmp-row .more[hidden] { display: none; }
+.xp-cmp-row .more .detail { margin: var(--s2) 0; font-size: var(--fs-small); color: var(--text-2); }
+.xp-cmp-words-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); }
+.xp-cmp-words { min-width: 0; padding: var(--s3) 14px; border-radius: var(--r-well); background: var(--surface-sunken); font-size: var(--fs-small); }
+.xp-cmp-words h4 { margin: 0 0 var(--s2); font-family: var(--sans); font-size: var(--fs-small); font-weight: 600; color: var(--text); }
+.xp-cmp-words .xp-kv dd.none, .xp-cmp-words p.none { color: var(--text-2); }
+.xp-cmp-flags p { margin: var(--s2) 0 0; }
+.xp-cmp-foot { margin: var(--s4) 0 0; font-size: var(--fs-caption); color: var(--text-2); }
+
+/* Phones: every block stacks; each model is its own row (name, value and
+   confidence, then its bar). */
+@media (max-width: 700px) {
+  .xp-cmp-pickers, .xp-cmp-sides, .xp-cmp-words-pair { grid-template-columns: minmax(0, 1fr); }
+  .xp-cmp-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "name" "pair" "verdict" "more"; gap: 8px; }
+  .xp-cmp-line { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "model conf val" "bar bar bar"; gap: 4px var(--s2); }
+  .xp-cmp-line .model { grid-area: model; }
+  .xp-cmp-line .conf { grid-area: conf; }
+  .xp-cmp-line .xp-val { grid-area: val; }
+  .xp-cmp-line .xp-bar { grid-area: bar; }
+  .xp-cmp-facts { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .xp-cmp-facts dd { margin-bottom: 6px; }
 }

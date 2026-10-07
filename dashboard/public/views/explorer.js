@@ -12,6 +12,7 @@
 // - The sync time, a stale export and an unavailable mirror are said; the
 //   rest of the desk does not depend on any of it.
 import { h, clear, logo, scoreTier, PROVIDERS, PROVIDER_LABELS, fmtDate, fmtDateTime, fmtAgo, icon, announce } from '../ui.js';
+import { sortKey } from '../compare-model.js';
 
 const STATE_WORDS = { ok: 'Synced', stale: 'Stale', unavailable: 'Supabase unavailable', not_configured: 'Not set up', off: 'Switched off', empty: 'Nothing exported yet' };
 const CONFIDENCE = { high: 'high confidence', medium: 'medium confidence', low: 'low confidence' };
@@ -24,6 +25,7 @@ let cache = null; // { data, got }
 let mounted = null;
 let filters = null;
 let announceTimer = null;
+let currentCtx = null; // for actions that open from a row (Compare opinions)
 const openDetails = new Set(); // report IDs whose details are open, kept across filter changes
 
 // ---- pure pieces (tested in ui-logic tests) --------------------------------
@@ -87,8 +89,9 @@ export function categoriesOf(reports) {
 }
 
 // The reports in view: the model and search filters, and either each
-// project's latest save per model or every save (earlier ones and revisions
-// listed in their own rows, never merged).
+// project's latest report per model (the desk's own rule, as Compare
+// opinions uses) or every save (earlier ones and revisions listed in their
+// own rows, never merged). Filters run over every row the server read.
 export function selectReports(data, f) {
   const reports = (data && data.reports) || [];
   const projects = new Map(((data && data.projects) || []).map((p) => [p.project_id, p]));
@@ -98,7 +101,7 @@ export function selectReports(data, f) {
     if (!saves.has(k)) saves.set(k, []);
     saves.get(k).push(r);
   }
-  for (const list of saves.values()) list.sort((a, b) => String(b.saved_at).localeCompare(String(a.saved_at)) || String(b.report_id).localeCompare(String(a.report_id)));
+  for (const list of saves.values()) list.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
   const q = norm(f.q);
   return reports
     .filter((r) => f.model === 'all' || r.model === f.model)
@@ -188,7 +191,7 @@ function revisionChips(e) {
     out.push(h('span', { class: 'xp-chip rev', title: [`Revises ${r.revision_of}`, BASIS_WORDS[r.revision_basis] ? `, ${BASIS_WORDS[r.revision_basis]}` : '', r.revision_note ? `. ${r.revision_note}` : ''].join('') }, `Revision · ${REVISION_WORDS[r.revision_kind] || 'reason not stated'}`));
   }
   if (e.revisedBy.length) out.push(h('span', { class: 'xp-chip', title: `Revised by ${e.revisedBy.join(', ')}` }, 'Revised later'));
-  else if (e.newer > 0) out.push(h('span', { class: 'xp-chip', title: 'A later save of the same model on this project exists' }, 'Earlier save'));
+  else if (e.newer > 0) out.push(h('span', { class: 'xp-chip', title: 'The same model has a later report on this project (by the desk\'s latest-report rule)' }, 'Earlier save'));
   return out;
 }
 
@@ -251,6 +254,10 @@ function row(e, categoryId, label) {
       panel.hidden = true;
     }
   });
+  // Second opinion: this project's reports side by side (views/explorer-compare.js).
+  const compare = h('button', { type: 'button', class: 'quiet small xp-compare', dataset: { key: `xp-compare-${r.report_id}` } }, 'Compare opinions');
+  compare.setAttribute('aria-label', `Compare opinions on ${p.name}`);
+  compare.addEventListener('click', () => import('./explorer-compare.js').then((m) => m.openCompare(currentCtx, p)));
   return h('li', { class: 'xp-row', 'aria-label': said },
     h('div', { class: 'xp-who' },
       logo({ project_id: p.project_id, name: p.name, symbol: p.ticker }, { size: 24 }),
@@ -265,6 +272,7 @@ function row(e, categoryId, label) {
       h('span', { class: `xp-grade g-${r.grade_status}`, title: r.grade_reason || (r.grade_status === 'withheld' ? 'At least one weighted component is not scored; coverage is the share of weight scored, not the score.' : 'Calculated by the desk from the six weighted components; never the model\'s own total.') }, gradeText(r)),
       flagChip(s.evidence_flags),
       ...revisionChips(e),
+      compare,
       toggle),
     panel);
 }
@@ -292,7 +300,7 @@ function stateCallout(data) {
   if (data.state === 'ok') return null;
   const kind = data.state === 'unavailable' ? 'bad' : data.state === 'stale' || data.state === 'empty' ? 'warn' : 'info';
   const text = data.reason || STATE_WORDS[data.state];
-  return h('div', { class: `callout ${kind}` }, text, data.truncated ? ' Only the first 1,000 rows are shown.' : '');
+  return h('div', { class: `callout ${kind}` }, text);
 }
 
 function seg(label, options, current, onPick, key) {
@@ -381,6 +389,7 @@ async function load(ctx, { refresh = false } = {}) {
 }
 
 export async function renderExplorer(ctx, route) {
+  currentCtx = ctx;
   const reason = ctx.state.renderReason;
   // A live redraw of another part of the desk leaves this page as it is.
   if ((reason === 'live' || reason === 'same') && mounted && mounted.isConnected) return mounted;
