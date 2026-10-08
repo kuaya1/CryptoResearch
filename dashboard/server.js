@@ -352,7 +352,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   const mcpOrigins = new Set([...allowedOrigins, 'https://claude.ai', 'https://chatgpt.com', 'https://gemini.google.com']);
   // A research request from an assistant can queue paid API jobs (other
   // models): the runner picks them up at once instead of at its next tick.
-  const mcp = hosted ? require('./mcp').makeMcp(ws, { version: require('./core/revision').revision().short || '1.0.0', rebuild: (areas) => rebuild(areas), log: (...a) => { if (!quiet) console.log(...a); }, kick: () => setTimeout(() => researchTick(), 300) }) : null;
+  const mcp = hosted ? require('./mcp').makeMcp(ws, { version: require('./core/revision').revision().short || '1.0.0', rebuild: (areas) => rebuild(areas), log: (...a) => { if (!quiet) console.log(...a); }, kick: () => setTimeout(() => researchTick(), 300), connections: () => oauth.connections() }) : null;
   // The offsite package for this PC's daily pull (CR_BACKUP_KEY, read per request).
   const offsite = hosted ? require('./core/offsite').makeOffsiteRoute(ws, { env: process.env, log: (...a) => { if (!quiet) console.log(...a); } }) : null;
   const clients = new Set();
@@ -717,7 +717,12 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
             throw new HttpError(403, 'Origin not allowed');
           }
           const who = oauth.authenticate(req);
-          if (!who) return oauth.challenge(res, { invalid: Boolean(req.headers.authorization) });
+          if (!who) {
+            // Why, in words (no token is logged): a client signing in for the
+            // first time, or one whose access expired and should refresh.
+            if (!quiet) console.log(`MCP sign-in needed: ${oauth.refusal(req)}`);
+            return oauth.challenge(res, { invalid: Boolean(req.headers.authorization) });
+          }
           return await mcp(req, res, who);
         }
       }

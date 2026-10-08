@@ -553,6 +553,22 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     return { grant_id: rec.grant_id, client_id: rec.client_id, client_name: g.client_name, assistant, scope: rec.scope };
   }
 
+  // Why a request to /mcp has no usable token, for the log: never the token,
+  // only what kind of refusal it is, the assistant when the token is known,
+  // and the connection's short key (the same as the MCP log lines' conn).
+  function refusal(req) {
+    const header = String(req.headers.authorization || '');
+    if (!header) return 'no access token (a client starting to sign in, or probing)';
+    const m = header.match(/^Bearer\s+([A-Za-z0-9._~+/=-]{20,200})$/);
+    if (!m) return 'an Authorization header that is not a bearer token';
+    const rec = store.access[hashOf(m[1])];
+    if (!rec) return 'an unknown access token (expired and cleared, or from another desk): the client should use its refresh token, or Eric reconnects';
+    const g = store.grants[rec.grant_id];
+    const who = `${g ? PROVIDER_LABELS[PROVIDERS.includes(g.assistant) ? g.assistant : 'claude'] : 'unknown connection'}; conn ${hashOf(rec.grant_id).slice(0, 8)}`;
+    if (!g || g.revoked_at) return `a token of a disconnected connection (${who}): Eric reconnects from the assistant`;
+    return `an access token that expired at ${rec.expires_at} (${who}): the client should use its refresh token`;
+  }
+
   function challenge(res, { invalid = false } = {}) {
     res.writeHead(401, {
       'Content-Type': 'application/json; charset=utf-8',
@@ -577,6 +593,7 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
       return false;
     },
     authenticate,
+    refusal,
     challenge,
     // For Settings > Connected apps.
     connections() {

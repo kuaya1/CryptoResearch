@@ -432,7 +432,7 @@ test('connector: the Cowork workflow (find, add once, research, draft, resume, s
   assert.equal(research.listRuns(d.ws, pid).length, 1);
 
   const draft = await tool(d, access, 'save_research_draft', { project_id: pid, run_id: runId, draft_markdown: '## 1. Legitimacy\nFICTIONAL draft so far, with sources.\n', note: 'section 1 drafted' });
-  assert.equal(draft.data.status, 'saved');
+  assert.deepEqual([draft.data.status, draft.data.report_saved, draft.data.claimed], ['draft_saved', false, false], 'a draft, never a report; the job was already Cowork\'s');
   // An interruption: two hours with no sign of life.
   runOp(d.ws, { type: 'test_idle', summary: 'simulate an interrupted session' }, (op) => {
     const rel = `projects/${pid}/research/${runId}/run.json`;
@@ -663,7 +663,7 @@ test('connector: one Cowork request for all three models; ChatGPT and Gemini do 
   const mislabeled = await tool(d, gemini.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: gptText.replace('FICTIONAL', 'FICTIONAL variant') });
   assert.equal(mislabeled.isError, true);
   assert.match(mislabeled.text, /^Not saved: .*model: the report says "ChatGPT", the run's is "Gemini"/);
-  assert.equal((await tool(d, gemini.access, 'save_research_draft', { project_id: pid, run_id: runId, draft_markdown: '## 1. Legitimacy\nFICTIONAL Gemini draft.\n', note: 'section 1' })).data.status, 'saved');
+  assert.equal((await tool(d, gemini.access, 'save_research_draft', { project_id: pid, run_id: runId, draft_markdown: '## 1. Legitimacy\nFICTIONAL Gemini draft.\n', note: 'section 1' })).data.status, 'draft_saved');
   idle(d.ws, pid, runId, 'gemini', 2);
   const gv = await tool(d, gemini.access, 'get_research', { project_id: pid });
   assert.equal(gv.data.run.yours.activity.interrupted, true);
@@ -1490,8 +1490,8 @@ test('connector: Gemini does its waiting research with one call Eric approves: p
   const runId = all.data.run.run_id;
   // What Gemini is told when it connects; Claude in Cowork keeps its drafts.
   const init = await rpc(d, gemini.access, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'Gemini', version: 'test' } });
-  assert.match(init.json.result.instructions, /5\. In Gemini, every call that saves something \(add_project, start_research, save_research_draft, save_report and the like\) makes Eric approve it, so keep them to a minimum: do not save drafts unless he asks/);
-  assert.match(init.json.result.instructions, /call pending_research and do only its next item: get_research with that project_id and run_id gives you the run's prompt without taking the job \(nothing for Eric to approve\); research it, save_report once with that run_id, and tell Eric the receipt \(status and report ID\)\. One project per request: the next one is Eric's next request\..* Do not call start_research for a waiting job\./);
+  assert.match(init.json.result.instructions, /5\. In Gemini, every call that saves something \(add_project, start_research, save_research_draft, save_report and the like\) makes Eric approve it, so keep them to a minimum: save each finished report once with save_report, and save a draft only when Eric asks for one \(a first draft also marks the job as yours/);
+  assert.match(init.json.result.instructions, /call pending_research, with project set to the project he named, and do only its next task: first tell Eric which project and run you are doing \(say_first\), then follow next_action: get_research with that project_id and run_id gives you the run's prompt without taking the job \(nothing for Eric to approve\); research it, save_report once with that run_id, and tell Eric the receipt \(status, report ID, grade or why it is withheld, and what is still waiting\)\. If he named a project and the reply says nothing is waiting for it, say so; never do another project instead\..* One project per request: the next one is Eric's next request\..* Do not call start_research for a waiting job\./);
   const claudeInit = await rpc(d, claude.access, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'Claude', version: 'test' } });
   assert.match(claudeInit.json.result.instructions, /5\. For long research, save_research_draft as you go/);
   // The reads Gemini needs are marked read-only (Gemini asks nothing for them); a save never is.
@@ -1502,7 +1502,7 @@ test('connector: Gemini does its waiting research with one call Eric approves: p
   const pend = await tool(d, gemini.access, 'pending_research', {});
   assert.equal(pend.data.pending[0].run_id, runId);
   assert.equal(pend.data.next.run_id, runId, 'one project per request: the next one');
-  assert.match(pend.data.message, /Do only the next one now: .*get_research with that project_id and run_id gives you the run's prompt \(read-only, nothing for Eric to approve\); research it, save_report once with that run_id, and tell Eric the receipt \(status and report ID\)\. That save is the only call Eric has to approve/);
+  assert.match(pend.data.message, /Do only the next one now: .*Tell Eric which project you are doing first\. Call get_research with project_id "[^"]+" and run_id "[^"]+": it gives the run's frozen prompt without taking the job\. Research it, then save_report once with the same project_id and run_id\. That save is the only call Eric has to approve/);
   const view = await tool(d, gemini.access, 'get_research', { project_id: pid, run_id: runId });
   const promptFile = fs.readFileSync(path.join(d.ws.root, 'projects', pid, 'research', runId, 'prompt.md'), 'utf8');
   assert.ok(view.text.includes(promptFile), 'the run\'s own prompt, without taking the job');
@@ -1554,7 +1554,8 @@ test('connector: the frozen prompt arrives complete in the structured result and
     assert.equal(fromText, prompt, `${who}: the text block carries the complete prompt`);
     assert.equal(sha256(Buffer.from(fromText, 'utf8')), run.prompt.sha256);
     // The record block points to it rather than repeating it.
-    assert.match(JSON.parse(res.content[0].text).run.prompt, /^\(the run's frozen prompt is the last text block below: \d+ characters, SHA-256 [0-9a-f]{64}\)$/);
+    assert.match(JSON.parse(res.content[0].text).run.prompt, /^\(the run's frozen prompt is the text block below that starts "--- Research prompt for run_\S+", followed by the end-of-prompt line: \d+ characters, SHA-256 [0-9a-f]{64}\)$/);
+    assert.equal(res.content[res.content.length - 1].text, `--- End of the research prompt for ${runId}: ${prompt.length} characters, SHA-256 ${run.prompt.sha256} ---`, `${who}: the end-of-prompt line closes the text form`);
   };
   delivered(started, 'start_research');
   // The JSON-RPC answer as it travels: parsed from the raw HTTP body.
@@ -1564,7 +1565,7 @@ test('connector: the frozen prompt arrives complete in the structured result and
   delivered({ ...raw.json.result, data: raw.json.result.structuredContent }, 'get_research (raw)');
   // A saved draft comes back in full in both forms too.
   const draft = `## 1. Legitimacy\n${'FICTIONAL draft line with a dated source (2026-10-03).\n'.repeat(400)}`;
-  assert.equal((await tool(d, claude.access, 'save_research_draft', { project_id: pid, run_id: runId, draft_markdown: draft, note: 'section 1' })).data.status, 'saved');
+  assert.equal((await tool(d, claude.access, 'save_research_draft', { project_id: pid, run_id: runId, draft_markdown: draft, note: 'section 1' })).data.status, 'draft_saved');
   const withDraft = await tool(d, claude.access, 'get_research', { project_id: pid });
   assert.equal(withDraft.data.run.draft, draft, 'the structured result carries the complete draft');
   assert.ok(withDraft.content.some((c) => c.text === `--- Your saved draft for ${runId} ---\n${draft}`), 'the text carries the complete draft');

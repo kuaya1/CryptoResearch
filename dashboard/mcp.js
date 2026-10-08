@@ -52,6 +52,29 @@ const ASK_HOW = {
   chatgpt: 'in a ChatGPT chat with the CryptoResearch app turned on (+ menu)',
   gemini: 'in Gemini after typing @ and picking CryptoResearch',
 };
+// Where each assistant's connection is added, for one that is not connected.
+const CONNECT_WHERE = {
+  claude: 'claude.ai > Settings > Connectors',
+  chatgpt: 'ChatGPT > Settings > Apps & Connectors (developer mode)',
+  gemini: 'the Gemini web app > Settings > Connected Apps > custom apps',
+};
+
+// Diagnostic log lines say where a handoff got to, never what it carried:
+// no token, credential, address or report text. Addresses are shortened and
+// anything shaped like a token is replaced (redactLog). Each HTTP request
+// gets a reference (ref), shown in an error the assistant receives too, and
+// each connection a short key (conn) derived from its grant, so one session's
+// calls can be followed in the log.
+function redactLog(s) {
+  return String(s)
+    .replace(/\b(Bearer|Basic)\s+\S+/gi, '$1 [redacted]')
+    .replace(/\b0x([0-9a-fA-F]{4})[0-9a-fA-F]{32}([0-9a-fA-F]{4})\b/g, '0x$1…$2')
+    .replace(/\b(bc1|tb1)[02-9ac-hj-np-z]{25,62}\b/gi, '$1…')
+    // Tokens and base58 addresses: long, with upper case, lower case and digits.
+    .replace(/[A-Za-z0-9_-]{32,}/g, (m) => (/[A-Z]/.test(m) && /[a-z]/.test(m) && /\d/.test(m) ? '[redacted]' : m));
+}
+const newRef = () => `m${require('crypto').randomBytes(5).toString('hex')}`;
+const connKey = (who) => (who && who.grant_id ? sha256(String(who.grant_id)).slice(0, 8) : 'none');
 
 function instructionsFor(me) {
   const label = PROVIDER_LABELS[me];
@@ -60,10 +83,10 @@ function instructionsFor(me) {
   // as few as possible: one save_report per project.
   const confirms = me !== 'claude';
   const step5 = confirms
-    ? `5. In ${label}, every call that saves something (add_project, start_research, save_research_draft, save_report and the like) makes Eric approve it, so keep them to a minimum: do not save drafts unless he asks, and save each finished report once with save_report.`
+    ? `5. In ${label}, every call that saves something (add_project, start_research, save_research_draft, save_report and the like) makes Eric approve it, so keep them to a minimum: save each finished report once with save_report, and save a draft only when Eric asks for one (a first draft also marks the job as yours, so the desk shows you working on it, and paused if the session stops).`
     : '5. For long research, save_research_draft as you go, so an interruption loses nothing.';
   const step7 = confirms
-    ? `7. When Eric asks you to do your waiting research ("${WAITING_PHRASE}"), call pending_research and do only its next item: get_research with that project_id and run_id gives you the run's prompt without taking the job (nothing for Eric to approve); research it, save_report once with that run_id, and tell Eric the receipt (status and report ID). One project per request: the next one is Eric's next request. When he asks you to resume research on a project, get_research gives you that run, its prompt and any draft you saved; continue from there. Do not call start_research for a waiting job.`
+    ? `7. When Eric asks you to do your waiting research ("${WAITING_PHRASE}", or "... on <project>"), call pending_research, with project set to the project he named, and do only its next task: first tell Eric which project and run you are doing (say_first), then follow next_action: get_research with that project_id and run_id gives you the run's prompt without taking the job (nothing for Eric to approve); research it, save_report once with that run_id, and tell Eric the receipt (status, report ID, grade or why it is withheld, and what is still waiting). If he named a project and the reply says nothing is waiting for it, say so; never do another project instead. The prompt's text block is followed by an end-of-prompt line with its length and SHA-256: if that line is missing, the prompt was cut off in transit, so call get_research again; never rebuild the prompt. One project per request: the next one is Eric's next request. When he asks you to resume research on a project, pending_research (or get_research) gives you that run, its prompt and any draft you saved; continue from there. Do not call start_research for a waiting job. If the desk says your connection expired or was refused, ask Eric to reconnect the CryptoResearch app: the job and any draft stay as they are.`
     : '7. When Eric asks you to do your waiting research, call pending_research and do each item with start_research.';
   return `This is Eric's private CryptoResearch desk (his watchlist, research reports and portfolio). It holds records; you do the research yourself. This connection belongs to ${label}: what you save here is filed as ${label}'s work, so save only research you did yourself.
 
@@ -180,14 +203,14 @@ const TOOLS = [
   {
     name: 'pending_research',
     title: 'Research waiting for you',
-    description: 'Lists the research runs on the desk waiting for your model (for example after Eric asked Cowork for all three models), and the ones you started and have not finished. Claude takes each with start_research; ChatGPT and Gemini read each one\'s prompt with get_research (project_id, run_id) and save once with save_report, so Eric approves only that save.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    description: 'Read-only. The research waiting for your model (for example after Eric asked Cowork for all three models) and the research you started and have not finished, with your next task: the exact project, model, run ID, execution note, prompt version and hash, any draft you saved, and the calls to make. Work you started comes first, then the oldest waiting job. When Eric names a project ("Do my waiting CryptoResearch research on Velodrome"), pass it as project: only that project\'s task is given, and if nothing is waiting for it the reply says so and gives no other project instead. Claude takes each task with start_research; ChatGPT and Gemini read its prompt with get_research (project_id, run_id) and save once with save_report, so Eric approves only that save.',
+    inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'Optional: the project Eric named (name, ticker or project ID).' } }, additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
     name: 'desk_status',
     title: 'Desk status: which models run automatically, limits and spend',
-    description: 'Read-only. Says which models research automatically on their paid API (and about what one attempt reserves), which need setup and what is missing (for example the OpenAI or Gemini API key, which only Eric adds in Render\'s environment: never ask for a key in chat), what their open jobs are doing, the research limits and spend so far (reservations, estimates and uncertain attempts count until reconciled), price freshness, the latest backup and the code revision the desk runs. Use it when Eric asks whether everything is set up, before telling him which models will run by themselves. With project_id it also shows the preflight of that project\'s open run: for each job not yet sent, the model, token and search limits and the reservation for the run\'s saved prompt, and whether the limits admit them now (nothing is sent).',
+    description: 'Read-only. assistants gives, per assistant (Claude, ChatGPT, Gemini), whether its connection is signed in and used, whether it has opened sessions or called tools since the desk started (a connection that called no tool has started nothing), its route (manual through its connection, automatic on its paid API, or on hold), the research waiting for it, and the one thing Eric does next. It also says which models research automatically on their paid API (and about what one attempt reserves), which need setup and what is missing (for example the OpenAI or Gemini API key, which only Eric adds in Render\'s environment: never ask for a key in chat), what their open jobs are doing, the research limits and spend so far (reservations, estimates and uncertain attempts count until reconciled), price freshness, the latest backup and the code revision the desk runs. Use it when Eric asks whether everything is set up, before telling him which models will run by themselves. With project_id it also shows the preflight of that project\'s open run: for each job not yet sent, the model, token and search limits and the reservation for the run\'s saved prompt, and whether the limits admit them now (nothing is sent).',
     inputSchema: { type: 'object', properties: { project_id: { type: 'string', description: 'Optional: a project whose open research run to preflight (lowercase ID, e.g. "aleo").' } }, additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
@@ -201,7 +224,7 @@ const TOOLS = [
   {
     name: 'save_research_draft',
     title: 'Save research in progress',
-    description: 'Optional, for long research: saves (replaces) your working draft for your open research job, with a short note on where you are. If the session is interrupted, the research can resume from it. The dashboard shows the job as active while drafts keep arriving. In ChatGPT and Gemini every call asks Eric to approve it, so skip it there unless he asks.',
+    description: 'Optional, for long research: saves (replaces) your working draft for your research job in this run, with a short note on where you are. A first draft for a job still waiting for your model takes it as yours in the same save (status "draft_saved", claimed: true): the dashboard then shows you working on it, and paused after 30 minutes without activity, and the research resumes from the draft (pending_research and get_research return it). A draft is never a report: nothing is graded and the job stays open until save_report. A model on hold takes no new job. In ChatGPT and Gemini every call asks Eric to approve it, so skip it there unless he asks.',
     inputSchema: { type: 'object', required: ['project_id', 'run_id', 'draft_markdown'], additionalProperties: false, properties: { project_id: projectRef, run_id: runRef, draft_markdown: { type: 'string', description: 'Everything you have so far: sections written, sources found with dates, open questions.' }, note: { type: 'string', description: 'One line on progress, e.g. "sections 1-6 drafted; tokenomics next".' } } },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -401,6 +424,108 @@ function compactReport(r, { all = [], currentId = null } = {}) {
   return out;
 }
 
+// Per assistant, in one place: is its connection signed in and used, has it
+// opened sessions or called tools since the desk restarted (a connection that
+// listed the tools and called none has started nothing), its route, the
+// research waiting for it, and the one thing Eric does next. Connections come
+// from the sign-in records (names and times only, never a token or client
+// ID); activity is kept in memory, so reading this writes nothing.
+const at16 = (iso) => (iso ? `${String(iso).slice(0, 16).replace('T', ' ')} UTC` : null);
+function assistantsView(ws, ctx) {
+  let conns = null;
+  try {
+    conns = typeof ctx.connections === 'function' ? ctx.connections() || [] : null;
+  } catch (_) {
+    conns = null;
+  }
+  const ready = research.readiness(ws);
+  const activity = ctx.activity || { since: null, models: {} };
+  const since = activity.since ? ` since the desk restarted (${at16(activity.since)})` : '';
+  const out = {};
+  for (const p of PROVIDERS) {
+    const label = PROVIDER_LABELS[p];
+    const m = ready.models[p];
+    const mine = conns ? conns.filter((c) => c.assistant === p) : [];
+    const lastUsed = mine.map((c) => c.last_used_at).filter(Boolean).sort().pop() || null;
+    const a = activity.models[p] || { sessions: 0, tool_calls: 0, last_call: null };
+    const jobs = ordered(research.pendingFor(ws, p));
+    const started = jobs.filter((x) => x.state === 'started');
+    const waiting = jobs.filter((x) => x.state !== 'started');
+    const hold = m.on_hold || null;
+    const connected = conns ? mine.length > 0 : null;
+    const first = jobs[0] || null;
+    const says = [];
+    says.push(connected === null ? `${label}: connections are made on the online desk only` : connected ? `${label}: connected${lastUsed ? `, last used ${at16(lastUsed)}` : ''}` : `${label}: not connected`);
+    if (hold) says.push(`on hold since ${hold.since || 'an earlier date'} (Eric's decision): nothing new is assigned to it`);
+    else if (m.status === 'automatic') says.push('automatic: its paid API researches its jobs in the background, within the limits');
+    else says.push(`manual: ${p === 'claude' ? 'Claude in Cowork' : label} researches through its own connection when Eric asks; nothing is billed`);
+    if (started.length) says.push(`${started.length} started and not finished: ${andList(started.map((x) => `${x.name}${stateOf(x) === 'interrupted' ? ' (paused)' : ''}`))}`);
+    if (waiting.length) says.push(`${waiting.length} job${waiting.length === 1 ? '' : 's'} waiting: ${andList(waiting.map((x) => x.name))}`);
+    if (!jobs.length) says.push('nothing waiting');
+    if (connected && activity.since) {
+      says.push(a.tool_calls
+        ? `called ${a.tool_calls} tool${a.tool_calls === 1 ? '' : 's'}${since} (last ${a.last_call.name}, ${at16(a.last_call.at)})`
+        : a.sessions
+          ? `opened ${a.sessions} session${a.sessions === 1 ? '' : 's'}${since} and called no tool, so nothing was researched or saved through it`
+          : `no session${since}`);
+    }
+    let action;
+    if (connected === false) action = `Add the CryptoResearch connector in ${CONNECT_WHERE[p]} (this desk's address ending in /mcp) and approve it on the desk's page.`;
+    else if (hold) action = `To use ${label} again, lift the hold in Settings > Research models & budget; then ${ASK_HOW[p]}, say "${WAITING_PHRASE} on <project>". Until then nothing is needed.`;
+    else if (m.status === 'automatic') action = 'Nothing: its jobs run on its API by themselves.';
+    else if (first) action = `${ASK_HOW[p][0].toUpperCase()}${ASK_HOW[p].slice(1)}, say: "${WAITING_PHRASE} on ${first.name}".${p === 'claude' ? '' : ` ${label} asks you to approve its one save.`}`;
+    else action = p === 'claude' ? 'Nothing waiting. In Cowork, ask: "Research <project> with all three models".' : `Nothing waiting. Ask Claude in Cowork to research a project "with all three models"; then ${ASK_HOW[p]}, say "${WAITING_PHRASE} on <project>".`;
+    if (connected && !hold && p === 'gemini' && jobs.length && !a.tool_calls && a.sessions) action += ' Gemini uses the app only when the message starts with @CryptoResearch.';
+    out[p] = {
+      connected,
+      connections: conns ? mine.length : null,
+      last_used_at: lastUsed,
+      route: m.status,
+      on_hold: Boolean(hold),
+      waiting: waiting.length,
+      started: started.length,
+      since_restart: activity.since ? { since: activity.since, sessions: a.sessions, tool_calls: a.tool_calls, last_call: a.last_call } : null,
+      says: `${says.join('; ')}.`,
+      action,
+      ...(p !== 'claude' ? { fallback: `If ${label} does not call the desk's tools, the manual route always works: on the project's page, Evidence > Research runs > Copy prompt, paste it into ${label}, then Import report for ${label} on the same run (it is checked against the run like any save).` } : {}),
+    };
+  }
+  return out;
+}
+
+// A save's receipt, compact and the same however often the same report is
+// delivered: the report and run, whether this report is the one the model's
+// job in the run links to, whether it counts on the desk (and its grade, or
+// why it is withheld), its warning and error counts as saved, what it revises,
+// and what is still open: the other models in this run and the other runs
+// waiting for this model. Read-only.
+function receiptOf(ws, { status, verified, reportId, runId, projectId, me, saved, after }) {
+  const job = after && after.jobs ? after.jobs[me] : null;
+  const elig = saved ? eligibilityOf(saved) : null;
+  const counts = Boolean(elig && elig.eligible && !elig.needs_text);
+  const g = saved && saved.grade;
+  return {
+    status,
+    report_id: reportId || null,
+    run_id: runId,
+    project_id: projectId,
+    model: me,
+    verified,
+    completes_job: Boolean(job && job.state === 'completed' && job.report_id === reportId),
+    job_state: job ? job.state : null,
+    eligible: elig ? elig.eligible && !elig.needs_text : null,
+    excluded_reason: elig && !counts ? (elig.needs_text ? 'a PDF without its text' : elig.excluded_reason) : null,
+    grade: counts && g ? { status: g.status, display: g.display || null, label: g.label || null, coverage_pct: typeof g.coverage_pct === 'number' ? g.coverage_pct : null } : null,
+    warnings: saved && typeof saved.warnings === 'number' ? saved.warnings : null,
+    errors: saved && typeof saved.errors === 'number' ? saved.errors : null,
+    revision_of: saved && saved.revision && saved.revision.kind === 'revision' ? saved.revision.of : null,
+    remaining: {
+      this_run: after ? Object.fromEntries(PROVIDERS.filter((p) => p !== me && after.jobs[p] && research.OPEN_STATES.has(after.jobs[p].state)).map((p) => [p, after.jobs[p].state])) : {},
+      other_runs_waiting_for_you: research.pendingFor(ws, me).filter((x) => x.run_id !== runId).map((x) => ({ project_id: x.project_id, name: x.name, run_id: x.run_id })),
+    },
+  };
+}
+
 // Why a saved report's grade is withheld, part by part, as the desk read it:
 // each investment component of the report's rubric with its status (and, for
 // an unknown one, the model's own missing_data), plus the first format errors,
@@ -511,7 +636,7 @@ function frozenPrompt(ws, run) {
     return { text: null, delivery: { status: 'hash_mismatch', frozen_sha256: frozen, file_sha256: sha, message: 'This run\'s saved prompt no longer matches the SHA-256 recorded when the run started, so it is not given out. Tell Eric; never rebuild the prompt from the templates or other files.' } };
   }
   const text = buf.toString('utf8');
-  return { text, delivery: { status: 'verified', sha256: sha, chars: text.length, note: 'run.prompt is this run\'s frozen prompt, byte for byte as saved when the run started (its SHA-256 matches the one recorded then). Follow it exactly; never rebuild it from the templates or other files.' } };
+  return { text, delivery: { status: 'verified', sha256: sha, chars: text.length, note: 'run.prompt is this run\'s frozen prompt, byte for byte as saved when the run started (its SHA-256 matches the one recorded then). Follow it exactly; never rebuild it from the templates or other files. In the text form, the prompt\'s block is followed by an end-of-prompt line giving its length and SHA-256: if you cannot see that line, the answer was cut off on its way to you, so call get_research again.' } };
 }
 
 function runView(ws, projectId, run, ctx, { prompt = false } = {}) {
@@ -656,6 +781,55 @@ function modelsAsked(args) {
 
 const cellText = (c) => (!c ? null : c.status === 'scored' ? c.value : c.status === 'range' ? `${c.low}-${c.high}` : c.status);
 const listLabels = (ps) => ps.map((p) => PROVIDER_LABELS[p]).join(', ').replace(/, ([^,]*)$/, ' and $1');
+const andList = (xs) => xs.join(', ').replace(/, ([^,]*)$/, ' and $1');
+
+// A pending item's state in words: waiting (nobody has it), started (this
+// model's assistant has it and was active in the last 30 minutes) or
+// interrupted (it has it and went quiet).
+const stateOf = (x) => (x.state === 'started' ? (x.activity && x.activity.interrupted ? 'interrupted' : 'started') : 'waiting');
+// Work a model started comes first, then the oldest waiting job.
+const ordered = (items) => [...items.filter((x) => x.state === 'started'), ...items.filter((x) => x.state !== 'started')];
+
+// The draft a model saved for a job, as the job records it (a job released
+// back to waiting keeps its draft for when it is taken again).
+function draftOf(ws, item, me) {
+  const run = research.loadRun(ws, item.project_id, item.run_id);
+  const job = run && run.jobs ? run.jobs[me] : null;
+  return job && job.draft_saved_at ? { saved_at: job.draft_saved_at, chars: job.draft_chars || null } : null;
+}
+
+// The next research task for this model, in full: the exact project, model,
+// run, what the run froze for it (prompt version and hash, execution note),
+// any draft it saved, and the calls to make. Read-only.
+function taskOf(ws, item, ctx) {
+  const run = research.loadRun(ws, item.project_id, item.run_id);
+  const job = run.jobs[ctx.me];
+  const p = projects.getProject(ws, item.project_id);
+  const state = stateOf(item);
+  const draft = draftOf(ws, item, ctx.me);
+  const ids = `project_id "${item.project_id}" and run_id "${item.run_id}"`;
+  const fromDraft = draft ? ` and continue from your draft (${draft.chars || '?'} characters, saved ${draft.saved_at})` : '';
+  const next = ctx.me === 'claude'
+    ? `Call start_research with project_id "${item.project_id}" and Eric's words as owner_request: it ${state === 'waiting' ? 'takes this waiting job over' : 'resumes this job'} with the run's frozen prompt${draft ? ' and your draft' : ''}; then save_report with run_id "${item.run_id}".`
+    : `Call get_research with ${ids}: it gives the run's frozen prompt${job.execution ? ' (your execution notes first)' : ''} without taking the job${fromDraft}. Research it, then save_report once with the same project_id and run_id.`;
+  return {
+    project_id: item.project_id,
+    name: item.name,
+    symbol: p.symbol || null,
+    model: ctx.me,
+    run_id: item.run_id,
+    run_created_at: item.created_at,
+    state,
+    requested: item.owner_request || null,
+    owner_instructions: item.owner_instructions || null,
+    prompt: { version: run.prompt ? run.prompt.version : null, sha256: run.prompt ? run.prompt.sha256 : null },
+    execution_note: job.execution ? { ref: job.execution.ref, sha256: job.execution.sha256 } : null,
+    horizon: run.horizon ? { start_date: run.horizon.start_date, end_date: run.horizon.end_date } : null,
+    draft,
+    next_action: next,
+    say_first: `Doing ${ctx.label}'s waiting research on ${item.name}${p.symbol ? ` (${p.symbol})` : ''}, run ${item.run_id}${state === 'waiting' ? '' : draft ? ', resuming from the saved draft' : ', resuming'}.`,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Tool implementations. Each returns a plain object; text for the model is
@@ -979,28 +1153,74 @@ const handlers = {
   },
 
   pending_research(ws, args, ctx) {
-    const items = research.pendingFor(ws, ctx.me);
+    const q = typeof args.project === 'string' ? args.project.trim().slice(0, 200) : '';
+    // Work this model started comes first (resume before anything new), then
+    // the oldest waiting job.
+    const all = ordered(research.pendingFor(ws, ctx.me));
+    const named = (list) => andList(list.map((x) => x.name)).replace(/^$/, 'nothing');
     const hold = research.heldProviders(ws)[ctx.me];
     if (hold) {
-      // Kept, not handed out (a job it had already taken can still be resumed with get_research).
-      return { status: 'on_hold', model: ctx.me, pending: [], held_jobs: items.length, message: `${ctx.label} is on hold on this desk${hold.since ? ` since ${hold.since}` : ''}: its ${items.length} waiting job${items.length === 1 ? ' is' : 's are'} kept but not handed out, and nothing new is assigned. Tell Eric; he can lift the hold in Settings.` };
+      // Kept, not handed out. A job it took before the hold keeps its draft
+      // and is finished when Eric lifts the hold (or asks for that job).
+      const held = all.map((x) => ({ project_id: x.project_id, name: x.name, run_id: x.run_id, state: stateOf(x), draft_saved_at: draftOf(ws, x, ctx.me) ? draftOf(ws, x, ctx.me).saved_at : null }));
+      const startedOnes = held.filter((x) => x.state !== 'waiting');
+      return {
+        status: 'on_hold',
+        model: ctx.me,
+        pending: [],
+        next: null,
+        held,
+        held_jobs: held.length,
+        message: `${ctx.label} is on hold on this desk${hold.since ? ` since ${hold.since}` : ''}: nothing new is assigned and nothing is handed out now.${held.length ? ` ${held.length} job${held.length === 1 ? ' is' : 's are'} kept for ${ctx.label}: ${andList(held.map((x) => `${x.name} (${x.state}${x.draft_saved_at ? ', draft saved' : ''})`))}.` : ''}${startedOnes.length ? ` ${andList(startedOnes.map((x) => x.name))} ${startedOnes.length === 1 ? 'was' : 'were'} started before the hold; ${startedOnes.length === 1 ? 'its draft is' : 'their drafts are'} kept for when the hold is lifted.` : ''} Tell Eric; he can lift the hold in Settings.`,
+      };
     }
-    // ChatGPT and Gemini do one project per request, then report its receipt.
-    const next = items[0] || null;
+    let items = all;
+    let status = 'ok';
+    let scope = '';
+    if (q) {
+      const s = q.toLowerCase();
+      const cands = projects.listProjects(ws).filter((p) => !p.broken && matches(p, q));
+      const exact = cands.filter((p) => [p.project_id, p.name, p.symbol, ...(p.aliases || [])].filter(Boolean).some((h) => String(h).toLowerCase() === s));
+      const ids = new Set((exact.length ? exact : cands).map((p) => p.project_id));
+      items = all.filter((x) => ids.has(x.project_id));
+      const projectsWithWork = [...new Set(items.map((x) => x.project_id))];
+      if (!ids.size) status = 'no_match';
+      else if (!items.length) status = 'none_for_project';
+      else if (projectsWithWork.length > 1) status = 'ambiguous';
+      scope = ids.size === 1 ? ` on ${(exact[0] || cands[0]).name}` : ` matching "${q}"`;
+    }
+    if (status !== 'ok') {
+      const why = status === 'no_match'
+        ? `No project on the desk matches "${q}".`
+        : status === 'none_for_project'
+          ? `Nothing is waiting for ${ctx.label}${scope}.`
+          : `"${q}" matches more than one project with work waiting for ${ctx.label}: ${named(items)}. Ask Eric which one.`;
+      return {
+        status,
+        model: ctx.me,
+        pending: status === 'ambiguous' ? items : [],
+        next: null,
+        message: `${why} Nothing was started and no other project is given instead.${status !== 'ambiguous' ? ` Waiting for ${ctx.label}: ${all.length ? named(all) : 'nothing'}.` : ''}`,
+      };
+    }
+    // One project per request: the next task, in full.
+    const next = items.length ? taskOf(ws, items[0], ctx) : null;
+    const others = items.slice(1);
     return {
       status: 'ok',
       model: ctx.me,
       pending: items,
-      ...(ctx.me !== 'claude' ? { next } : {}),
+      next,
       message: items.length
         ? ctx.me === 'claude'
-          ? `${items.length} research ${items.length === 1 ? 'job is' : 'jobs are'} waiting for ${ctx.label}. Do each with start_research (project_id, and Eric's words as owner_request); it takes the waiting job over with the run's prompt.`
-          : `${items.length} research ${items.length === 1 ? 'job is' : 'jobs are'} waiting for ${ctx.label}. Do only the next one now: ${next.name} (${next.project_id}, ${next.run_id}). get_research with that project_id and run_id gives you the run's prompt (read-only, nothing for Eric to approve); research it, save_report once with that run_id, and tell Eric the receipt (status and report ID). That save is the only call Eric has to approve; do not save drafts unless he asks. The others wait for his next request.`
+          ? `${items.length} research ${items.length === 1 ? 'job is' : 'jobs are'} waiting for ${ctx.label}${scope}. Do each with start_research (project_id, and Eric's words as owner_request); it takes the waiting job over with the run's prompt.`
+          : `${items.length} research ${items.length === 1 ? 'job is' : 'jobs are'} waiting for ${ctx.label}${scope}. Do only the next one now: ${next.name} (${next.project_id}, ${next.run_id}${next.state !== 'waiting' ? `, ${next.state}, with your draft` : ''}). Tell Eric which project you are doing first. ${next.next_action} That save is the only call Eric has to approve; save a draft only if he asks.${others.length ? ` Also waiting: ${named(others)}. They wait for Eric's next request; he can name one ("${WAITING_PHRASE} on ${others[0].name}").` : ''}${!q ? ` If Eric named a project, do that project instead: call pending_research again with project set to it, or take its project_id and run_id from pending; if it is not in pending, nothing is waiting for it, so say so and do no other project.` : ''}`
         : `Nothing is waiting for ${ctx.label}.`,
     };
   },
 
-  desk_status(ws, args = {}) {
+  desk_status(ws, args = {}, ctx = {}) {
+    const assistants = assistantsView(ws, ctx);
     const rev = require('./core/revision');
     const r = rev.revision();
     const ready = research.readiness(ws);
@@ -1015,11 +1235,12 @@ const handlers = {
     return {
       status: 'ok',
       revision: r,
+      assistants,
       research: ready,
       prices,
       backups: { latest: last ? { name: last.name, created_at: last.created_at, hours_ago: ageH, status: last.status } : null, count: backups.length, offsite_key: b.offsite.configured ? 'set' : 'not set', offsite_last_served: b.offsite.last_served || null, independent_copy: 'not visible from the desk: the PC that pulls copies verifies and lists them', level: b.level, summary: b.summary },
       ...(args && typeof args.project_id === 'string' && args.project_id ? { preflight: research.preflight(ws, pid(args)) || { note: 'No open research run for this project.' } } : {}),
-      message: `The desk runs ${rev.revisionLine(r)}. ${ready.summary} Prices: ${f.freshness}${f.note ? ` (${f.note})` : ''}. ${b.summary}`,
+      message: `The desk runs ${rev.revisionLine(r)}. Assistants: ${PROVIDERS.map((p) => assistants[p].says).join(' ')} ${ready.summary} Prices: ${f.freshness}${f.note ? ` (${f.note})` : ''}. ${b.summary}`,
     };
   },
 
@@ -1045,8 +1266,26 @@ const handlers = {
   save_research_draft(ws, args, ctx) {
     const id = pid(args);
     const runId = runIdOf(args);
-    const out = research.saveAssistantDraft(ws, id, runId, { text: args.draft_markdown, note: args.note || null, provider: ctx.me });
-    return { status: out.status, saved_at: out.at, chars: out.chars, verified: out.verified };
+    const project = projects.getProject(ws, id);
+    if (project.status === 'archived') throw new OpError('INVALID', `${project.name} is archived; nothing was saved. Ask Eric whether to restore it (restore_project).`);
+    // A first draft for a job still waiting for this model takes it, in the
+    // same verified save (research.saveAssistantDraft).
+    const out = research.saveAssistantDraft(ws, id, runId, { text: args.draft_markdown, note: typeof args.note === 'string' ? args.note : null, provider: ctx.me, claim: true, client: ctx.client });
+    const status = out.verified === false ? 'unverified' : 'draft_saved';
+    return {
+      status,
+      what: 'draft',
+      report_saved: false,
+      claimed: Boolean(out.claimed),
+      job_state: 'running',
+      run_id: runId,
+      saved_at: out.at,
+      chars: out.chars,
+      verified: out.verified !== false,
+      message: status === 'unverified'
+        ? `The desk wrote your draft for ${runId} but could not confirm it read back as written. Call save_research_draft again with the same text.`
+        : `Draft saved for ${runId} (${out.chars} characters).${out.claimed ? ` The job is yours now: the desk shows ${ctx.label} working on it, and paused after 30 minutes without activity.` : ''} This is not a report: nothing is graded and the job stays open until save_report saves the finished report.`,
+    };
   },
 
   save_report(ws, args, ctx) {
@@ -1161,12 +1400,17 @@ const handlers = {
     const checks = saved && saved.structure && saved.structure.flagged ? saved.structure : null;
     const withheld = isWithheld ? ` Its grade is withheld: ${g.reason || 'not every weighted component is scored.'} That is an acceptable result: an unknown part stays unknown when the evidence does not settle it. components shows each part as it was read, with any format errors${checks ? '; structure_checks names parts left unscored while your report scores related ground (a prompt to check, not an instruction to score them)' : ''}. Save again only if the JSON block misstates your written report (then pass revision with kind format_fix and say what was misstated). Do not save again to obtain a complete grade.` : '';
     const status = r.status === 'duplicate' ? 'unchanged' : verified ? 'saved' : 'unverified';
+    // The counts are the saved report's own, so a save repeated after a lost
+    // answer gets the same receipt as the first, never zeros.
+    const count = (k) => (typeof r[k] === 'number' ? r[k] : saved && typeof saved[k] === 'number' ? saved[k] : 0);
+    const receipt = receiptOf(ws, { status, verified, reportId: r.report_id, runId, projectId: id, me, saved, after });
     const result = {
       status,
-      message: `${status === 'unchanged' ? (r.stamps_only ? `This report is already saved as ${r.report_id}: the new text differs only in its restamped analysis and access times (the same day), so nothing new was stored.` : `This exact report is already saved (${r.report_id}).`) : status === 'saved' ? `Saved ${label} report ${r.report_id} for ${id}; it is on the project page now.` : `The desk wrote ${label} report ${r.report_id} for ${id} but could not confirm the save (it did not read back as written). Call save_report again with the same text; if it did land, nothing changes.`}${withheld}${othersLine(othersOpen)}`,
+      message: `${status === 'unchanged' ? (r.stamps_only ? `This report is already saved as ${r.report_id}: the new text differs only in its restamped analysis and access times (the same day), so nothing new was stored.` : `This exact report is already saved (${r.report_id}).`) : status === 'saved' ? `Saved ${label} report ${r.report_id} for ${id}; it is on the project page now.` : `The desk wrote ${label} report ${r.report_id} for ${id} but could not confirm the save (it did not read back as written). Call save_report again with the same text; if it did land, nothing changes.`}${withheld}${othersLine(othersOpen)}${receipt.remaining.other_runs_waiting_for_you.length ? ` Also waiting for ${label}: ${andList(receipt.remaining.other_runs_waiting_for_you.map((x) => x.name))} (Eric's next request).` : ''}`,
+      receipt,
       report: compactReport(saved, { all, currentId: latest ? latest.report_id : null }),
       run: runOut,
-      validation: { errors: r.errors || 0, warnings: r.warnings || 0, ambiguous: r.ambiguous || 0, note: r.note || null },
+      validation: { errors: count('errors'), warnings: count('warnings'), ambiguous: r.ambiguous || 0, note: r.note || null },
       verified,
     };
     if (isWithheld) Object.assign(result, gradeGaps(ws, id, r.report_id));
@@ -1369,20 +1613,26 @@ function toResult(name, out) {
   const prompt = run && typeof run.prompt === 'string' ? run.prompt : null;
   const draft = run && typeof run.draft === 'string' ? run.draft : null;
   const notes = run && typeof run.execution_notes === 'string' ? run.execution_notes : null;
+  const promptSha = run ? (run.prompt_delivery && run.prompt_delivery.sha256) || run.prompt_sha256 : null;
   const structured = run ? { ...rest, run } : rest;
   const forText = run ? {
     ...rest,
     run: {
       ...run,
       ...(notes !== null ? { execution_notes: `(your execution notes are the text block just before the prompt: ${notes.length} characters, SHA-256 ${run.execution_delivery ? run.execution_delivery.sha256 : '?'})` } : {}),
-      ...(prompt !== null ? { prompt: `(the run's frozen prompt is the last text block below: ${prompt.length} characters, SHA-256 ${run.prompt_delivery ? run.prompt_delivery.sha256 : run.prompt_sha256})` } : {}),
+      ...(prompt !== null ? { prompt: `(the run's frozen prompt is the text block below that starts "--- Research prompt for ${run.run_id}", followed by the end-of-prompt line: ${prompt.length} characters, SHA-256 ${promptSha})` } : {}),
       ...(draft !== null ? { draft: `(your saved draft is the text block below: ${draft.length} characters)` } : {}),
     },
   } : rest;
   const blocks = [{ type: 'text', text: JSON.stringify(forText, null, 2) }];
   if (draft !== null) blocks.push({ type: 'text', text: `--- Your saved draft for ${run.run_id} ---\n${draft}` });
   if (notes !== null) blocks.push({ type: 'text', text: `--- Execution notes for ${run.run_id} (for you only; read them first. The prompt below is unchanged and decides) ---\n${notes}` });
-  if (prompt !== null) blocks.push({ type: 'text', text: `--- Research prompt for ${run.run_id} (follow it exactly) ---\n${prompt}` });
+  if (prompt !== null) {
+    // The prompt's block holds the frozen bytes only; a line after it says how
+    // long it is, so an answer cut off in transit can be told from a whole one.
+    blocks.push({ type: 'text', text: `--- Research prompt for ${run.run_id} (follow it exactly) ---\n${prompt}` });
+    blocks.push({ type: 'text', text: `--- End of the research prompt for ${run.run_id}: ${prompt.length} characters, SHA-256 ${promptSha} ---` });
+  }
   return { content: blocks, structuredContent: structured, isError: false };
 }
 
@@ -1416,39 +1666,61 @@ function logDetail(name, args, out) {
   const r = out.run;
   if (r && r.jobs) parts.push(`${r.run_id}: ${Object.entries(r.jobs).map(([p, j]) => `${PROVIDER_LABELS[p]} ${j.state}`).join(', ')}`);
   else if (r && r.run_id) parts.push(`${r.run_id}: ${r.state || '?'}`);
+  // The handoff, in stages: the prompt given out (its length and hash, never
+  // its text), a draft (and whether it took the job), the save.
+  if (r && r.prompt_delivery) {
+    const d = r.prompt_delivery;
+    parts.push(d.status === 'verified' ? `handoff: prompt delivered ${d.chars} chars, sha256 ${String(d.sha256).slice(0, 12)}${r.execution_delivery ? `, execution note ${r.execution_delivery.ref || '?'}` : ''}` : `handoff: prompt NOT delivered (${d.status})`);
+  }
+  if (name === 'save_research_draft' && out.run_id) parts.push(`${out.run_id}: ${out.claimed ? 'claimed; ' : ''}draft ${out.chars} chars`);
   if (name === 'save_report' && out.report && out.report.report_id) {
     const g = out.report.grade;
-    parts.push(`report ${out.report.report_id}`);
+    const rc = out.receipt || {};
+    parts.push(`save: report ${out.report.report_id} ${rc.completes_job ? 'completes the job' : `does not complete the job (job ${rc.job_state || '?'})`}${rc.revision_of ? `, a revision of ${rc.revision_of}` : ''}`);
     if (g) parts.push(`grade ${g.display ? `${g.display}${g.label ? ` ${g.label}` : ''}` : g.status}${g.status === 'withheld' && g.coverage_pct !== null && g.coverage_pct !== undefined ? ` (${g.coverage_pct}% of the weight scored)` : ''}`);
   }
-  if (name === 'pending_research' && Array.isArray(out.pending)) parts.push(`${out.pending.length} waiting`);
+  if (name === 'pending_research' && Array.isArray(out.pending)) parts.push(`${out.pending.length} waiting${args && args.project ? ' (project named)' : ''}${out.next ? `; next ${out.next.run_id} (${out.next.state})` : ''}${out.held ? `; ${out.held.length} held` : ''}`);
   if (!r && out.project && out.project.project_id) parts.push(out.project.project_id);
   return parts.length ? ` [${parts.join('; ')}]` : '';
 }
 
-// fundamentalsFetch: tests only (a stub for DefiLlama's API).
-function makeMcp(ws, { rebuild = () => {}, version = '1.0.0', log = () => {}, kick = () => {}, fundamentalsFetch = null } = {}) {
-  async function call(name, args, who) {
-    const fn = handlers[name];
-    if (!fn) return { content: [{ type: 'text', text: `Unknown tool ${name}.` }], isError: true };
-    const ctx = { ...contextFor(who), kick, fundamentalsFetch };
+// fundamentalsFetch: tests only (a stub for DefiLlama's API). connections:
+// the sign-in's list of connections (names, assistants and times only), for
+// desk_status.
+function makeMcp(ws, { rebuild = () => {}, version = '1.0.0', log = () => {}, kick = () => {}, fundamentalsFetch = null, connections = null } = {}) {
+  // What each assistant did since this process started, in memory only (a
+  // read writes nothing): sessions opened, tool lists, tool calls.
+  const activity = { since: new Date().toISOString(), models: Object.fromEntries(PROVIDERS.map((p) => [p, { sessions: 0, tools_lists: 0, tool_calls: 0, last_session_at: null, last_call: null }])) };
+  const say = (line) => log(redactLog(line));
+
+  async function call(name, args, who, ref) {
+    const fn = Object.prototype.hasOwnProperty.call(handlers, name) ? handlers[name] : null;
+    const ctx = { ...contextFor(who), kick, fundamentalsFetch, connections, activity };
+    const by = `${ctx.label}${ctx.client && ctx.client !== ctx.label ? `: ${ctx.client}` : ''}`;
+    const where = ` ref ${ref} conn ${connKey(who)}`;
+    const mine = activity.models[ctx.me];
+    mine.tool_calls += 1;
+    mine.last_call = { name: fn ? name : 'unknown tool', at: new Date().toISOString() };
+    if (!fn) {
+      say(`MCP unknown tool ${String(name).slice(0, 60)} (${by})${where}`);
+      return { content: [{ type: 'text', text: `Unknown tool ${String(name).slice(0, 60)}. (ref ${ref})` }], isError: true };
+    }
     // Records made through a connection are attributed to it.
     const cw = Object.create(ws, { actor: { value: ctx.actor, writable: true, enumerable: true }, _idem: { value: null, writable: true } });
-    const by = `${ctx.label}${ctx.client && ctx.client !== ctx.label ? `: ${ctx.client}` : ''}`;
-    const a = args && typeof args === 'object' ? args : {};
+    const a = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
     try {
       const out = await fn(cw, a, ctx);
-      if (!handlers[name].readOnly) rebuild(['mcp']);
-      log(`MCP ${name}: ${out && out.status ? out.status : 'ok'} (${by})${logDetail(name, a, out)}`);
+      if (!fn.readOnly) rebuild(['mcp']);
+      say(`MCP ${name}: ${out && out.status ? out.status : 'ok'} (${by})${logDetail(name, a, out)}${where}`);
       return toResult(name, out);
     } catch (err) {
-      log(`MCP ${name}: ${err.code || 'error'} (${by}): ${String(err.message).slice(0, 160)}`);
+      say(`MCP ${name}: ${err.code || 'error'} (${by}): ${String(err.message).slice(0, 160)}${where}`);
       const known = err instanceof OpError || err.code;
-      return { content: [{ type: 'text', text: known ? `${err.message}${err.code ? ` (${err.code})` : ''}` : `The desk could not do that: ${err.message}` }], isError: true };
+      return { content: [{ type: 'text', text: `${known ? `${err.message}${err.code ? ` (${err.code})` : ''}` : `The desk could not do that: ${err.message}`} (ref ${ref})` }], isError: true };
     }
   }
 
-  async function rpc(msg, who) {
+  async function rpc(msg, who, ref = newRef()) {
     if (!msg || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') {
       return msg && msg.id !== undefined ? { jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32600, message: 'Invalid request' } } : null;
     }
@@ -1460,7 +1732,10 @@ function makeMcp(ws, { rebuild = () => {}, version = '1.0.0', log = () => {}, ki
         const asked = msg.params && msg.params.protocolVersion;
         const client = msg.params && msg.params.clientInfo ? `${msg.params.clientInfo.name || '?'} ${msg.params.clientInfo.version || ''}`.trim() : 'unknown client';
         const ctx = contextFor(who);
-        log(`MCP initialize (${client}; ${ctx.label}; protocol ${asked || '?'})`);
+        const seen = activity.models[ctx.me];
+        seen.sessions += 1;
+        seen.last_session_at = new Date().toISOString();
+        say(`MCP initialize (${client}; ${ctx.label}; protocol ${asked || '?'}) ref ${ref} conn ${connKey(who)}`);
         return reply({
           protocolVersion: PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0],
           capabilities: { tools: { listChanged: false } },
@@ -1471,11 +1746,12 @@ function makeMcp(ws, { rebuild = () => {}, version = '1.0.0', log = () => {}, ki
       case 'ping':
         return reply({});
       case 'tools/list':
-        log(`MCP tools/list (${TOOLS.length} tools; ${contextFor(who).label})`);
+        activity.models[contextFor(who).me].tools_lists += 1;
+        say(`MCP tools/list (${TOOLS.length} tools; ${contextFor(who).label}) ref ${ref} conn ${connKey(who)}`);
         return reply({ tools: TOOLS });
       case 'tools/call': {
         const p = msg.params || {};
-        return reply(await call(String(p.name || ''), p.arguments || {}, who));
+        return reply(await call(String(p.name || ''), p.arguments || {}, who, ref));
       }
       default:
         if (msg.method.startsWith('notifications/')) return null;
@@ -1500,8 +1776,9 @@ function makeMcp(ws, { rebuild = () => {}, version = '1.0.0', log = () => {}, ki
       return res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: err.status === 413 ? 'Request too large' : 'Parse error' } }));
     }
     const replies = [];
+    const ref = newRef();
     for (const m of Array.isArray(body) ? body : [body]) {
-      const r = await rpc(m, who);
+      const r = await rpc(m, who, ref);
       if (r) replies.push(r);
     }
     if (!replies.length) {
@@ -1540,4 +1817,4 @@ handlers.start_research = function start_research(ws, args, ctx) {
 
 for (const t of TOOLS) if (handlers[t.name]) handlers[t.name].readOnly = Boolean(t.annotations && t.annotations.readOnlyHint);
 
-module.exports = { makeMcp, TOOLS, INSTRUCTIONS, instructionsFor, modelsAsked, PROTOCOL_VERSIONS, WAITING_PHRASE };
+module.exports = { makeMcp, TOOLS, INSTRUCTIONS, instructionsFor, modelsAsked, redactLog, PROTOCOL_VERSIONS, WAITING_PHRASE };

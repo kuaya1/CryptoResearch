@@ -2430,23 +2430,41 @@ function readAssistantDraft(ws, projectId, runId, provider = 'claude') {
 }
 
 // Saves (replaces) an assistant's working draft for its open job, in the same
-// verified save as the job's "still working" marker.
-function saveAssistantDraft(ws, projectId, runId, { text, note = null, provider = 'claude' }) {
+// verified save as the job's "still working" marker. claim: a job still
+// waiting for this model's answer (no paid API has it) is taken over by the
+// same save, so an assistant that reads the prompt without taking the job
+// (ChatGPT and Gemini, to keep Eric's approvals to one) shows as working from
+// its first draft, then as paused, and resumes from it. A model on hold takes
+// nothing new; a job a paid API has, or one already finished, is never taken.
+function saveAssistantDraft(ws, projectId, runId, { text, note = null, provider = 'claude', claim = false, client = null }) {
   const body = typeof text === 'string' ? text : '';
   const label = PROVIDER_LABELS[provider];
   if (!body.trim()) throw new OpError('INVALID', 'The draft is empty.');
   if (Buffer.byteLength(body) > MAX_DRAFT_BYTES) throw new OpError('INVALID', `The draft is larger than ${MAX_DRAFT_BYTES / 1024} KB.`);
   const rel = `${runDir(projectId, runId)}/run.json`;
+  const held = claim ? heldProviders(ws)[provider] : null;
   const out = runOp(ws, { type: provider === 'claude' ? 'research_cowork_draft' : 'research_assistant_draft', summary: `${provider === 'claude' ? 'Cowork' : label} draft for ${runId}` }, (op) => {
     const run = op.readJson(rel, null);
     const job = run && run.jobs ? run.jobs[provider] : null;
-    if (!job || !isAssistantJob(job)) throw new OpError('NOT_FOUND', provider === 'claude' ? `${runId} has no Claude job assigned to Cowork.` : `${runId} has no ${label} job taken by ${label}.`);
-    if (job.state !== 'running') throw new OpError('CONFLICT', `This run's ${label} job is ${job.state}; start or resume research to get an open run.`);
     const at = new Date().toISOString();
+    let claimed = false;
+    if (claim && job && job.state === 'unconfigured' && !isAssistantJob(job)) {
+      if (held) throw new OpError('REFUSED', `${label} is on hold on this desk${held.since ? ` since ${held.since}` : ''}: it takes no new job, so this draft was not saved and the job stays waiting. Tell Eric; he can lift the hold in Settings.`);
+      Object.assign(job, {
+        state: 'running',
+        mode: assistantMode(provider),
+        fallback: null,
+        note: provider === 'claude' ? 'Taken over by Claude in Cowork (desk connector) with its first draft; it completes when Cowork saves its report.' : `Taken over by ${label} through its desk connection with its first draft; it completes when ${label} saves its report.`,
+      });
+      if (client) job.connector_client = String(client).slice(0, 100);
+      claimed = true;
+    }
+    if (!job || !isAssistantJob(job)) throw new OpError('NOT_FOUND', provider === 'claude' ? `${runId} has no Claude job assigned to Cowork.` : `${runId} has no ${label} job taken by ${label}${job ? ` (it is ${job.state}${job.mode === 'api' ? ', with the paid API' : ''})` : ''}.`);
+    if (job.state !== 'running') throw new OpError('CONFLICT', `This run's ${label} job is ${job.state}; a draft is kept only for open research. Use pending_research or get_research for open work.`);
     op.write(draftRel(projectId, runId, provider), body);
     Object.assign(job, { progress_at: at, progress_note: note ? String(note).slice(0, 300) : job.progress_note || null, draft_saved_at: at, draft_chars: body.length, updated_at: at });
     op.writeJson(rel, run);
-    return { at, chars: body.length };
+    return { at, chars: body.length, claimed };
   });
   return { status: 'saved', ...out.result, files: out.files, verified: out.verified };
 }
