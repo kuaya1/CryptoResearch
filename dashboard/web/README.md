@@ -20,7 +20,8 @@ Run from this folder (or `npm run ui` / `npm run ui:build` at the repo root):
 | `npm install` | Once, from the lockfile (`package-lock.json`). Node 24. |
 | `npm run dev` | A FICTIONAL offline desk (`scripts/dev-desk.cjs`) and Vite in front of it with immediate refresh. Open the URL it prints. Nothing leaves this PC: research runners, prices, DefiLlama, GoPlus and wallets are stubbed off; no key is set. Ctrl+C stops both and deletes the fictional workspace. |
 | `npm run build` | The production bundle into `../public/app/` with `build.json` (a hash of every source file). Commit it with the source: the test suite fails when the bundle is older than its source. |
-| `npm run check` | Headless Chrome on the built app over a fictional desk: no write or error on opening any page, keyboard and focus, Back and deep links, the phone first screen, 200% zoom, rendered contrast in light and dark, reduced motion, accessible names, load and navigation timings, bundle size. |
+| `npm run check` | Headless Chrome on the built app over a fictional desk: no write or error on opening any page, keyboard and focus, Back and deep links, the phone first screen, 200% zoom, rendered contrast in light and dark, reduced motion, accessible names, load and navigation timings, bundle size (`scripts/check.mjs`); then the React review's reproductions behind a fault proxy (`scripts/regress.mjs`, `scripts/fault-proxy.mjs`): no mixed-report render under delayed reads, refreshes and 20+ rapid switches; startup and route failures recoverable; the chosen model and report kept across sections and Back; section and model-tab keyboard; the real phone entry; the inspector's risk right after the verdict; no writes. |
+| `npm run check:dev` | The same regression checks against the Vite dev server. |
 
 The dev server is never used in production: `dashboard/server.js` loads
 nothing from this folder.

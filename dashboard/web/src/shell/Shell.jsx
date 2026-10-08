@@ -148,20 +148,27 @@ export function TabBar() {
   );
 }
 
-// A phone's top bar: the wordmark and the connection.
-export function TopBar() {
+// The Test or Demo tag of a workspace that is not real; on a phone it is the
+// whole notice (no banner row above the work). Nothing for a real workspace.
+export function WsTag() {
   const d = useDesk();
   const ws = d.session && d.session.workspace;
   const kind = ws && ws.kind !== 'real' ? (ws.kind === 'demo' ? 'Demo' : 'Test') : null;
-  // On a phone the tag is the whole notice (no banner row above the work).
-  const notice = kind ? `${ws.kind === 'demo' ? 'Fictional demo data' : 'Test workspace'}: not real research, prices or holdings` : null;
+  if (!kind) return null;
+  const notice = `${ws.kind === 'demo' ? 'Fictional demo data' : 'Test workspace'}: not real research, prices or holdings`;
+  return <span className="ws-tag" title={notice}><span aria-hidden="true">{kind}</span><span className="sr-only">{notice}</span></span>;
+}
+
+// A phone's top bar: the wordmark and the connection. A brief opened from
+// the inspector puts its back bar here instead (html.has-backbar).
+export function TopBar() {
   return (
     <header className="topbar">
       <a className="brand" href="#/watchlist" data-key="top-brand">
         <Mark className="brand-mark" />
         <span className="brand-word">CryptoResearch</span>
       </a>
-      {kind ? <span className="ws-tag" title={notice}><span aria-hidden="true">{kind}</span><span className="sr-only">{notice}</span></span> : null}
+      <WsTag />
       <span className="spacer" />
       <LiveDot />
     </header>

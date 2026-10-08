@@ -106,7 +106,7 @@ select.input { padding-right: 28px; appearance: none; background-image: var(--i-
   border: 0; border-bottom: 2px solid transparent; background: none; cursor: pointer; text-decoration: none;
 }
 .tab:hover { color: var(--text); text-decoration: none; }
-.tab[aria-selected="true"], .tab.is-active { color: var(--text); border-bottom-color: var(--accent); }
+.tab[aria-selected="true"], .tab[aria-current="page"], .tab.is-active { color: var(--text); border-bottom-color: var(--accent); }
 .tab .tab-count { font-size: var(--fs-xs); color: var(--text-3); font-variant-numeric: tabular-nums; }
 
 /* ---- pills, chips, tags ---- */

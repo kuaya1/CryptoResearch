@@ -903,7 +903,11 @@ export function reportsTab(ctx, d, route) {
   const broken = d.reports.filter((r) => r.broken);
   const latestIds = new Set(Object.values(d.comparison.latest).filter(Boolean).map((x) => x.report_id));
   const want = route.query.get('report');
-  const sel = good.find((r) => r.report_id === want) || good.find((r) => latestIds.has(r.report_id)) || good[0];
+  // A model chosen on the project page with no report of its own: said, and
+  // no other model's report is opened in its place (review 2026-10-08, F4).
+  const wantModel = route.query.get('model');
+  const noneFor = !want && PROVIDERS.includes(wantModel) && !good.some((r) => r.meta.provider === wantModel) ? wantModel : null;
+  const sel = noneFor ? null : good.find((r) => r.report_id === want) || good.find((r) => latestIds.has(r.report_id) && (!wantModel || r.meta.provider === wantModel)) || good.find((r) => latestIds.has(r.report_id)) || good[0];
   const list = h('nav', { class: 'report-list', 'aria-label': 'Reports' },
     PROVIDERS.filter((p) => good.some((r) => r.meta.provider === p)).map((p) => [
       h('div', { class: 'group-label' }, PROVIDER_LABELS[p]),
@@ -914,7 +918,7 @@ export function reportsTab(ctx, d, route) {
           h('div', { class: 'line2' }, [r.assessment.verdict ? r.assessment.verdict.charAt(0) + r.assessment.verdict.slice(1).toLowerCase() : 'No verdict', latestIds.has(r.report_id) ? 'latest' : 'earlier', r.revision && r.revision.kind === 'revision' ? (r.revision.basis === 'existing_evidence' ? 'revision, same evidence' : r.revision.basis === 'new_sources' ? 'revision, new sources' : 're-saved') : null, r.corrections.length ? `${r.corrections.length} correction(s)` : null].filter(Boolean).join(' · ')));
       }),
     ]));
-  let main = h('div', null);
+  let main = noneFor ? h('div', { class: 'report-main' }, callout(`No ${PROVIDER_LABELS[noneFor]} report on this project yet. Pick another model's report from the list.`, 'info')) : h('div', null);
   if (sel) {
     const a = sel.assessment;
     const ex = sel.extraction || {};

@@ -126,6 +126,7 @@
     backdrop-filter: saturate(1.4) blur(10px);
     border-bottom: 1px solid var(--border);
   }
+  html.has-backbar .topbar { display: none; }
   .topbar .spacer { flex: 1; }
   .topbar .live-label { display: none; }
   .tabbar {

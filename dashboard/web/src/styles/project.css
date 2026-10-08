@@ -7,7 +7,17 @@
 .crumbs a { color: var(--text-2); }
 .backbar { position: sticky; top: 8px; z-index: 20; display: flex; align-items: center; gap: 10px; margin: 0 -8px 10px; padding: 6px 8px; border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface) 92%, transparent); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
 .backbar-t { flex: 1; min-width: 0; font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-@media (max-width: 767.98px) { .backbar { top: 48px; margin: 0 -16px 8px; border-radius: 0; padding: 6px 12px; border-bottom: 1px solid var(--separator); } }
+.backbar .ws-tag { display: none; }
+/* On a phone a brief opened from the inspector has its back bar in place of
+   the top bar (html.has-backbar; review 2026-10-08, F5), with the workspace's
+   Test or Demo tag. */
+@media (max-width: 767.98px) {
+  .backbar { top: 48px; margin: 0 -16px 8px; border-radius: 0; padding: 6px 12px; border-bottom: 1px solid var(--separator); }
+  html.has-backbar .backbar { top: 0; margin-top: -10px; padding-top: calc(6px + env(safe-area-inset-top)); }
+  .backbar .ws-tag { display: inline-flex; }
+}
+.pp-error, .pp-wait .note { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.pp-wait { margin-top: 14px; }
 
 /* ---- header ---- */
 .ph { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin: 4px 0 16px; }
@@ -15,6 +25,7 @@
 .ph-names { min-width: 0; flex: 1; }
 .ph h1 { font-size: var(--fs-2xl); font-weight: 600; letter-spacing: -0.015em; line-height: 1.2; overflow-wrap: anywhere; }
 .ph-ticker { font-size: var(--fs-md); font-weight: 500; color: var(--text-3); letter-spacing: 0; }
+.ph-wholename { display: none; }
 .ph-mk { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-top: 6px; font-variant-numeric: tabular-nums; }
 .ph-mk-price { font-size: var(--fs-lg); font-weight: 600; }
 .ph-mk-chg { font-size: var(--fs-sm); font-weight: 600; }
@@ -30,6 +41,11 @@
 @media (max-width: 767.98px) {
   .ph { margin: 2px 0 10px; }
   .ph h1 { font-size: 20px; }
+  /* A very long name: two lines, the whole name one tap away (and always in
+     the text a screen reader reads). */
+  .ph h1.is-long { font-size: 18px; }
+  .ph h1.is-clamped { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .ph-wholename { display: inline-flex; margin-top: 2px; font-size: var(--fs-xs); }
   .ph-ticker { font-size: var(--fs-sm); }
   .ph-id { gap: 12px; }
   .ph-id .logo { width: 34px !important; height: 34px !important; }

@@ -404,7 +404,9 @@ test('the brief\'s styles use the desk\'s tokens only; the page is wired into th
   // The React Overview reads the same model; the inspector's link opens it
   // with one history entry to return through (crBrief).
   assert.match(web('views/project/ProjectPage.jsx'), /briefModel\(\{ detail: d, row, index: d0\.index, provider: prov, reportId, hosted: hosted\(\) \}\)/);
-  assert.match(web('views/inspector/Inspector.jsx'), /navigate\(`#\/project\/\$\{encodeURIComponent\(pid\)\}\/brief\?model=claude`, \{ state: \{ crBrief: pid, from: 'watchlist' \} \}\)/);
+  // Since the review of 2026-10-08 (F4) it opens the Brief of the model chosen
+  // in the inspector, not always Claude's.
+  assert.match(web('views/inspector/Inspector.jsx'), /navigate\(`#\/project\/\$\{encodeURIComponent\(pid\)\}\/brief\?model=\$\{sel\}`, \{ state: \{ crBrief: pid, from: 'watchlist' \} \}\)/);
   // The link opens the brief's address with one history entry to return through.
   const ui = read('ui.js');
   assert.match(ui, /const href = `#\/project\/\$\{encodeURIComponent\(pid\)\}\/brief\?model=claude`;/);

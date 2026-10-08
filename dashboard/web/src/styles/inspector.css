@@ -134,6 +134,29 @@ html.has-drawer { overflow: hidden; }
 .mp-resume { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: var(--fs-xs); }
 .mp-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .part-loading { display: grid; gap: 8px; padding: 6px 0; }
+.vchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ev-chip { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font: inherit; font-size: var(--fs-xs); font-weight: 600; background: var(--warn-weak); color: var(--warn); border-color: var(--pill-warn-line); }
+.ev-chip.ev-serious { background: var(--neg-weak); color: var(--neg); border-color: var(--pill-bad-line); }
+.ev-chip .ev-dot { margin-top: 0; }
+.ev-chip:hover { filter: brightness(0.97); }
+
+/* right after the verdict: the strongest risk, what would confirm and what
+   would break the view (review 2026-10-08, F7) */
+.ikeys { margin: 10px 0 0; display: flex; flex-direction: column; gap: 6px; }
+.ik { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 10px; align-items: baseline; font-size: var(--fs-sm); }
+.ik dt { font-size: var(--fs-xs); font-weight: 600; color: var(--text-3); }
+.ik dd { margin: 0; min-width: 0; }
+.ik ul { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 2px; color: var(--text); line-height: 1.45; }
+.ik-risk { grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 10px 12px; border-radius: var(--r-lg); background: var(--neg-weak); box-shadow: inset 0 0 0 1px var(--pill-bad-line); }
+.ik-risk dt { color: var(--neg); }
+.ik-t { color: var(--text); font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
+.ik-confirm dt { color: var(--pos); }
+.ik-break dt { color: var(--neg); }
+.mmore { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.mmore:empty { display: none; }
+.mmore > .fold { border-top: 0; border-radius: var(--r-lg); background: var(--surface-sunken); padding: 0 12px; }
+.mmore > .fold > summary { min-height: 36px; }
+.mp-wait { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: var(--fs-sm); }
 
 /* folds */
 .fold { border-top: 1px solid var(--separator); }

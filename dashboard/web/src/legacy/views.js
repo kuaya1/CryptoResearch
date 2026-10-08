@@ -9,15 +9,25 @@ import '../../../public/brief.css';
 import '../../../public/brief-views.css';
 import '../../../public/explorer.css';
 import './bridge.css';
+import { retryingImport } from '../components/Boundary.jsx';
 
+// Each page's code is asked for again after a failed download (a fresh
+// request; browsers keep a failed module fetch otherwise; review 2026-10-08, F3).
+const intake = retryingImport(() => import('../../../public/views/intake.js'));
+const project = retryingImport(() => import('../../../public/views/project.js'));
+const portfolio = retryingImport(() => import('../../../public/views/portfolio.js'));
+const research = retryingImport(() => import('../../../public/views/research.js'));
+const updates = retryingImport(() => import('../../../public/views/updates.js'));
+const settings = retryingImport(() => import('../../../public/views/settings.js'));
+const explorer = retryingImport(() => import('../../../public/views/explorer.js'));
 export const LEGACY_VIEWS = {
-  new: () => import('../../../public/views/intake.js').then((m) => m.renderIntake),
-  project: () => import('../../../public/views/project.js').then((m) => m.renderProject),
-  portfolio: () => import('../../../public/views/portfolio.js').then((m) => m.renderPortfolio),
-  research: () => import('../../../public/views/research.js').then((m) => m.renderResearch),
-  updates: () => import('../../../public/views/updates.js').then((m) => m.renderUpdates),
-  settings: () => import('../../../public/views/settings.js').then((m) => m.renderSettings),
-  explorer: () => import('../../../public/views/explorer.js').then((m) => m.renderExplorer),
+  new: () => intake().then((m) => m.renderIntake),
+  project: () => project().then((m) => m.renderProject),
+  portfolio: () => portfolio().then((m) => m.renderPortfolio),
+  research: () => research().then((m) => m.renderResearch),
+  updates: () => updates().then((m) => m.renderUpdates),
+  settings: () => settings().then((m) => m.renderSettings),
+  explorer: () => explorer().then((m) => m.renderExplorer),
 };
 
 // The research, sector and add-project dialogs, opened from React views too.

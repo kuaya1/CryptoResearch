@@ -57,4 +57,16 @@ abbr[title] { text-decoration: none; cursor: help; }
   *, *::before, *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; }
 }
 .boot-error { max-width: 560px; margin: 15vh auto; padding: 0 24px; }
+.boot-error .be-why { font-size: var(--fs-md); color: var(--text); }
+.boot-error .faint { margin-top: 6px; }
+.be-actions, .ve-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+/* A view or part that could not be shown (review 2026-10-08, F3). */
+.view-error { max-width: 640px; margin: 24px; padding: 16px 18px; border-radius: var(--r-lg); background: var(--neg-weak); box-shadow: inset 0 0 0 1px var(--pill-bad-line); }
+.view-error .ve-title { font-weight: 600; color: var(--text); }
+.view-error .ve-why { margin-top: 4px; color: var(--text); }
+.view-error.is-compact { margin: 16px; }
+.view-error.is-compact .ve-actions { margin-top: 10px; }
+.lg-part-error { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--r-lg); background: var(--surface-sunken); font-size: var(--fs-sm); color: var(--text-2); }
+.inspector.is-error { display: flex; flex-direction: column; }
+.insp-error { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .boot-error h1 { font-family: var(--font-serif); font-weight: 400; font-size: 26px; margin-bottom: 12px; }

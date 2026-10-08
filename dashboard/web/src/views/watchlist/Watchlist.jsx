@@ -5,7 +5,7 @@
 // beside the list from 1280px and is a drawer over it below (full screen on
 // a phone). Live updates redraw in place and never reorder the rows you are
 // reading (Re-sort offers it).
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Search, ListFilter, Columns3, ArrowUpDown, Plus, X } from 'lucide-react';
 import { announce } from '../../../../public/ui.js';
 import {
@@ -17,11 +17,14 @@ import { ui } from '../../lib/desk.js';
 import { nav, pageReady, claimFocus } from '../../lib/router.js';
 import { Menu, MenuItem, MenuLabel, MenuSep, MenuRadio, MenuCheck } from '../../components/Menu.jsx';
 import { loadLegacy } from '../../components/Dom.jsx';
+import { Boundary, ViewError, retryableLazy } from '../../components/Boundary.jsx';
 import { legacyCtx } from '../../legacy/ctx.js';
 import { StatusStrip } from './StatusStrip.jsx';
 import { ProjectTable, ProjectCards } from './ProjectTable.jsx';
 import { view, openPanel, closePanel, isWide, markReviewed } from './state.js';
-const Inspector = lazy(() => import('../inspector/Inspector.jsx'));
+// The inspector in its own boundary: if it cannot be drawn, it says so in
+// its place with Try again and Close, and the list keeps working.
+const Inspector = retryableLazy(() => import('../inspector/Inspector.jsx'));
 
 const typing = (el) => Boolean(el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)));
 
@@ -356,7 +359,15 @@ export default function Watchlist() {
 
         <div className="wl-body">{body}</div>
       </div>
-      {selectedRow ? <Suspense fallback={<div className={`inspector ${wide ? 'is-docked' : 'is-modal'} is-loading`} role="status"><span className="sr-only">Loading the project…</span></div>}><Inspector key="inspector" pid={pid} wide={wide} /></Suspense> : null}
+      {selectedRow ? (
+        <Boundary
+          resetKey={pid}
+          onRetry={() => Inspector.retry()}
+          fallback={(error, retry) => <aside className={`inspector ${wide ? 'is-docked' : 'is-modal'} is-error`} aria-label="Project details"><ViewError error={error} retry={retry} what="The project's details" compact><button type="button" className="btn btn-sm btn-ghost" data-key="panel-close" onClick={closePanel}>Close</button></ViewError></aside>}
+        >
+          <Suspense fallback={<div className={`inspector ${wide ? 'is-docked' : 'is-modal'} is-loading`} role="status"><span className="sr-only">Loading the project…</span></div>}><Inspector key="inspector" pid={pid} wide={wide} /></Suspense>
+        </Boundary>
+      ) : null}
     </div>
   );
 }

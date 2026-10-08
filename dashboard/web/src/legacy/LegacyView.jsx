@@ -8,6 +8,7 @@ import { useDesk } from '../lib/hooks.js';
 import { nav, routeKey, pageReady, findKey, restoreScrollers } from '../lib/router.js';
 import { legacyCtx, legacyState } from './ctx.js';
 import { h } from '../../../public/ui.js';
+import { isChunkError } from '../components/Boundary.jsx';
 
 function captureState(root) {
   const details = {};
@@ -68,7 +69,14 @@ export default function LegacyView({ load, name }) {
       node = await view(legacyCtx, nav.route);
     } catch (err) {
       console.error(err);
-      node = h('div', { class: 'callout bad' }, `Could not show this page: ${err.message}. Your files are unchanged.`);
+      // Said in place with Try again (draws it once more, never a write);
+      // the shell around it keeps working (review 2026-10-08, F3).
+      const again = h('button', { type: 'button', class: 'btn btn-sm btn-primary', dataset: { key: 'view-retry' } }, 'Try again');
+      again.addEventListener('click', () => draw('nav'));
+      const reload = h('button', { type: 'button', class: 'btn btn-sm', dataset: { key: 'view-reload' } }, 'Reload the page');
+      reload.addEventListener('click', () => location.reload());
+      const why = isChunkError(err) ? 'Part of the desk could not be downloaded: the connection dropped, or the desk was updated since this page was opened (Reload gets the new version).' : `Something went wrong while drawing it: ${err.message}.`;
+      node = h('div', { class: 'view-error', role: 'alert' }, h('p', { class: 've-title' }, 'This page could not be shown'), h('p', { class: 've-why' }, why), h('p', { class: 'faint' }, 'Your records are unchanged; nothing was saved or sent.'), h('div', { class: 've-actions' }, again, reload));
     }
     if (mine !== seq.current || !host.current) return;
     if (root.firstChild !== node || root.childNodes.length !== 1) root.replaceChildren(node);

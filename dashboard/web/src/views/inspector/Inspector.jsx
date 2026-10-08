@@ -28,7 +28,8 @@ import { Dom, loadLegacy } from '../../components/Dom.jsx';
 import { ScoreBar } from '../../components/Gauge.jsx';
 import { badgeOpts } from '../watchlist/ProjectTable.jsx';
 import { view, closePanel, markReviewed, restoreProject, archiveProject, setWatching } from '../watchlist/state.js';
-import { ModelPanel, latestOf } from './ModelPanel.jsx';
+import { ModelPanel } from './ModelPanel.jsx';
+import { opinionOf, opinionsAgree } from '../../lib/opinion.js';
 
 // Folds and rows you opened stay open for this project across a model
 // switch and a refresh; another project starts closed.
@@ -235,8 +236,11 @@ function ResearchDetails({ d, p, detail }) {
   );
 }
 
-function ComparePart({ d, detail }) {
+function ComparePart({ d, p, detail }) {
   if (!detail) return null;
+  // Side by side only when every model's opinion in the record is the one
+  // the list shows (review 2026-10-08, F1).
+  if (!opinionsAgree(p, detail)) return <div className="part-loading" role="status"><span className="sr-only">Loading the models' reports…</span><span className="skel w80" /><span className="skel w60" /></div>;
   const c = detail.comparison;
   const present = PROVIDERS.filter((x) => c.latest[x]);
   if (present.length < 2) return <p className="faint">Model differences appear once at least two models have graded this project.</p>;
@@ -308,8 +312,10 @@ function ChecksPart({ detail }) {
 function EvidencePart({ d, p, prov, detail }) {
   const sum = p.providers && p.providers[prov];
   if (!detail) return <div className="part-loading" role="status"><span className="sr-only">Loading the evidence checks…</span><span className="skel w80" /><span className="skel w60" /></div>;
-  const r = latestOf(detail, prov, sum);
-  if (!r || r.broken) return null;
+  const op = opinionOf(p, prov, detail);
+  const r = op.status === 'ok' ? op.report : null;
+  if (!r) return sum ? <div className="part-loading" role="status"><span className="sr-only">Loading the evidence checks…</span><span className="skel w80" /><span className="skel w60" /></div> : null;
+  if (r.broken) return null;
   const a = r.assessment || {};
   const sources = a.sources || [];
   const claims = Array.isArray(a.claims) ? a.claims : [];
@@ -317,7 +323,7 @@ function EvidencePart({ d, p, prov, detail }) {
   const n = Object.fromEntries(TAGS.map(([t]) => [t, claims.filter((c) => c.evidence_tag === t).length]));
   const other = claims.length - TAGS.reduce((s, [t]) => s + n[t], 0);
   return (
-    <div className="ev-model" id={`insp-ev-${prov}`} tabIndex={-1}>
+    <div className="ev-model" id={`insp-ev-${prov}`} tabIndex={-1} data-report={r.report_id}>
       {claims.length ? (
         <div className="evq">
           <div className="evbar" aria-hidden="true">{TAGS.filter(([t]) => n[t]).map(([t, cls]) => <span key={t} className={cls} style={{ width: `${(n[t] / claims.length) * 100}%` }} />)}</div>
@@ -395,14 +401,14 @@ function MarketDetails({ p }) {
 export default function Inspector({ pid, wide }) {
   const d = useDesk();
   const p = d.index.projects.find((x) => x.project_id === pid);
-  const { d: detail, error } = useProject(pid);
+  const { d: detail, current, error, retry } = useProject(pid);
   const root = useRef(null);
   const heading = useRef(null);
   const body = useRef(null);
   const [, force] = useState(0);
   const [L, setL] = useState(null);
   const [busy, setBusy] = useState(false);
-  useEffect(() => { loadLegacy().then(setL); }, []);
+  useEffect(() => { loadLegacy().then(setL, () => {}); }, []);
   if (openedFor !== pid) {
     opened.clear();
     openedFor = pid;
@@ -531,24 +537,30 @@ export default function Inspector({ pid, wide }) {
             </div>
           ) : null}
           <ProblemLines d={d} p={p} onPick={(prov) => pickModel(prov)} />
-          {error ? <p className="note note-warn">{`Could not load the full record: ${error.message}. The summary above is current.`}</p> : null}
+          {error ? (
+            <div className="note note-warn insp-error" role="alert">
+              <span>{`Could not load the full record: ${error.message}. The summary above is current.`}</span>
+              <button type="button" className="btn btn-sm" data-key={`insp-retry-${pid}`} onClick={retry}>Try again</button>
+            </div>
+          ) : null}
 
           <section className="insp-sec insp-verdict" aria-labelledby="insp-sec-verdict">
             <div className="sec-head">
               <h3 className="sec-title" id="insp-sec-verdict">Verdict</h3>
+              {/* The Brief of the model chosen here (review 2026-10-08, F4). */}
               <a
                 className="btn btn-sm brief-link"
-                href={`#/project/${encodeURIComponent(pid)}/brief?model=claude`}
+                href={`#/project/${encodeURIComponent(pid)}/brief?model=${sel}`}
                 data-key={`brief-${pid}`}
-                aria-label={`Claude Brief: ${p.name}`}
+                aria-label={`${PROVIDER_LABELS[sel]} Brief: ${p.name}`}
                 onClick={(e) => {
                   if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
                   e.preventDefault();
                   view.briefReturn = pid;
-                  navigate(`#/project/${encodeURIComponent(pid)}/brief?model=claude`, { state: { crBrief: pid, from: 'watchlist' } });
+                  navigate(`#/project/${encodeURIComponent(pid)}/brief?model=${sel}`, { state: { crBrief: pid, from: 'watchlist' } });
                 }}
               >
-                <FileText size={14} aria-hidden="true" /><span>Claude Brief</span>
+                <FileText size={14} aria-hidden="true" /><span>{`${PROVIDER_LABELS[sel]} Brief`}</span>
               </a>
             </div>
             <Tabs.Root value={sel} onValueChange={(v) => pickModel(v)} activationMode="automatic">
@@ -566,7 +578,7 @@ export default function Inspector({ pid, wide }) {
                 })}
               </Tabs.List>
               <Tabs.Content value={sel} className="mtab-panel" tabIndex={-1}>
-                <ModelPanel d={d} p={p} prov={sel} detail={detail} opened={opened} />
+                <ModelPanel d={d} p={p} prov={sel} detail={detail} current={current} failed={Boolean(error)} opened={opened} />
               </Tabs.Content>
             </Tabs.Root>
           </section>
@@ -582,7 +594,7 @@ export default function Inspector({ pid, wide }) {
             {selRep ? <Fold id={`insp-evd-${sel}`} title="Evidence and sources"><EvidencePart d={d} p={p} prov={sel} detail={detail} /></Fold> : null}
             {selRep ? <Fold id={`insp-timing-${sel}`} title="Timing, risks and the report"><TimingFacts d={d} p={p} prov={sel} /></Fold> : null}
             <Fold id={`insp-onchain-${pid}`} title="On-chain fundamentals"><Onchain p={p} /></Fold>
-            {reports >= 2 ? <Fold id={`insp-compare-${pid}`} title="Compare the models"><ComparePart d={d} detail={detail} /></Fold> : null}
+            {reports >= 2 ? <Fold id={`insp-compare-${pid}`} title="Compare the models"><ComparePart d={d} p={p} detail={detail} /></Fold> : null}
             {m ? <Fold id={`insp-market-${pid}`} title="Market details"><MarketDetails p={p} /></Fold> : null}
             <Fold id={`insp-research-${pid}`} title="Research details"><ResearchDetails d={d} p={p} detail={detail} /></Fold>
             <ChecksPart detail={detail} />
@@ -601,7 +613,7 @@ export default function Inspector({ pid, wide }) {
             ) : <span className="if-ok"><Check size={14} aria-hidden="true" />Reviewed</span>}
           </p>
           <div className="if-act">
-            {selRep ? <a className="btn btn-sm" href={`#/project/${encodeURIComponent(pid)}/report?report=${encodeURIComponent(selRep.report_id)}`} data-key={`report-${pid}-${sel}`}>Open report</a> : null}
+            {selRep ? <a className="btn btn-sm" href={`#/project/${encodeURIComponent(pid)}/report?report=${encodeURIComponent(selRep.report_id)}`} data-key={`report-${pid}-${sel}`} data-report={selRep.report_id}>Open report</a> : null}
             {needsReview(p) ? <button type="button" className="btn btn-sm btn-primary" data-key="panel-reviewed" aria-keyshortcuts="R" title="Mark reviewed (R marks it and moves to the next project to review)" disabled={busy} onClick={() => markReviewed(p, { onBusy: setBusy })}>Mark reviewed</button> : null}
           </div>
         </footer>

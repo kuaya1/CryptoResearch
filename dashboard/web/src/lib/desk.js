@@ -2,6 +2,10 @@
 // view preferences, and live updates. React reads it through useDesk(); the
 // views the app still hosts get the same through legacyCtx() (legacy.js).
 //
+// Startup, sign-out and project reads follow the review of 2026-10-08
+// (audits/2026-10-08-codex-react-review): see boot, signedOut and
+// projectDetail below.
+//
 // Ported from the former app shell (public/app.js) with its rules intact:
 // - every request is bounded: a read gives up after 20 s, a write after
 //   120 s and then says its outcome is unknown (audit V2-006);
@@ -33,7 +37,14 @@ export const desk = {
   // Why the last change happened: 'boot', 'live' (a change on the server),
   // 'refresh' (after a write here).
   reason: 'boot',
+  // Startup: an error is { kind, message, retry } (said with Try again);
+  // starting until the first index; checking while a page restored from the
+  // back/forward cache re-checks its session; signedOut once the online desk
+  // has signed out (nothing protected is kept).
   error: null,
+  starting: true,
+  checking: false,
+  signedOut: false,
   version: 0,
 };
 
@@ -65,7 +76,23 @@ async function parse(res) {
   return body;
 }
 
-const toLogin = () => location.assign('/login');
+// Signed out (the online desk): the workspace leaves memory and the screen
+// before the sign-in page opens, so no protected record stays visible, also
+// on a page the browser restores from its back/forward cache.
+export function signedOut() {
+  stopLive();
+  desk.signedOut = true;
+  desk.index = null;
+  desk.projects.clear();
+  desk.token = null;
+  desk.ui = {};
+  emit('signed_out');
+  location.assign('/login');
+}
+const toLogin = () => {
+  if (desk.session && desk.session.hosted) signedOut();
+  else location.assign('/login');
+};
 
 async function call(path, init = {}, read = (res) => res, { timeoutMs = null, signal = null } = {}) {
   const write = (init.method || 'GET') !== 'GET';
@@ -187,29 +214,108 @@ export async function loadIndex() {
   return desk.index;
 }
 
-const inflight = new Map();
-export async function projectDetail(id, { fresh = false } = {}) {
-  if (!fresh && desk.projects.has(id)) return desk.projects.get(id);
+// One project's full record. Readers of the same record share one request;
+// each reader can leave (its signal), and the request is cancelled only when
+// every reader has left. A change that drops the record while it is on its
+// way (dropProject: a live update, a refresh after a write) cancels that
+// request and marks it obsolete, so its late answer is never cached or
+// handed out as current: the readers still waiting are given the record as
+// it is now, read again (review 2026-10-08, F1).
+const inflight = new Map(); // `${id}#${generation}` -> { id, gen, ctrl, waiters, obsolete, promise }
+const OBSOLETE = Symbol('obsolete');
+const abortError = () => Object.assign(new Error('The read was cancelled.'), { name: 'AbortError' });
+
+export function projectDetail(id, { fresh = false, signal = null } = {}) {
+  if (signal && signal.aborted) return Promise.reject(abortError());
+  if (!fresh && desk.projects.has(id)) return Promise.resolve(desk.projects.get(id));
   const gen = desk.projectGen.get(id) || 0;
   const key = `${id}#${gen}`;
-  if (!fresh && inflight.has(key)) return inflight.get(key);
-  const p = api.get(`/api/projects/${encodeURIComponent(id)}`).then((d) => {
-    // A newer change dropped this record while it was on its way: keep it
-    // only if nothing changed since.
-    if ((desk.projectGen.get(id) || 0) === gen) desk.projects.set(id, d);
-    return d;
-  }).finally(() => inflight.delete(key));
-  inflight.set(key, p);
-  return p;
+  let entry = fresh ? null : inflight.get(key);
+  if (!entry) {
+    const ctrl = new AbortController();
+    entry = { id, gen, ctrl, waiters: 0, obsolete: false };
+    const mine = entry;
+    entry.promise = api.get(`/api/projects/${encodeURIComponent(id)}`, { signal: ctrl.signal }).then(
+      (d) => {
+        if (mine.obsolete || (desk.projectGen.get(id) || 0) !== gen) return OBSOLETE;
+        if (!d || !d.project || d.project.project_id !== id || !Array.isArray(d.reports)) {
+          const e = new Error('The project record could not be read.');
+          e.code = 'INVALID_RECORD';
+          throw e;
+        }
+        desk.projects.set(id, d);
+        return d;
+      },
+      (err) => {
+        if (mine.obsolete) return OBSOLETE;
+        throw err;
+      },
+    ).finally(() => { if (inflight.get(key) === mine) inflight.delete(key); });
+    entry.promise.catch(() => {});
+    inflight.set(key, entry);
+  }
+  const shared = entry;
+  shared.waiters += 1;
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const finish = () => {
+      done = true;
+      shared.waiters -= 1;
+      if (signal) signal.removeEventListener('abort', leave);
+    };
+    function leave() {
+      if (done) return;
+      finish();
+      if (shared.waiters <= 0 && !shared.obsolete && inflight.get(key) === shared) {
+        inflight.delete(key);
+        shared.ctrl.abort();
+      }
+      reject(abortError());
+    }
+    if (signal) signal.addEventListener('abort', leave, { once: true });
+    shared.promise.then(
+      (d) => {
+        if (done) return;
+        finish();
+        if (d === OBSOLETE) resolve(projectDetail(id, { signal }));
+        else resolve(d);
+      },
+      (err) => {
+        if (done) return;
+        finish();
+        reject(err);
+      },
+    );
+  });
 }
 
 function dropProject(id) {
   desk.projects.delete(id);
   desk.projectGen.set(id, (desk.projectGen.get(id) || 0) + 1);
+  for (const [key, entry] of inflight) {
+    if (entry.id !== id || entry.obsolete) continue;
+    entry.obsolete = true;
+    inflight.delete(key);
+    entry.ctrl.abort();
+  }
 }
 function dropAllProjects() {
-  for (const id of [...desk.projects.keys(), ...desk.projectGen.keys()]) dropProject(id);
+  const ids = new Set([...desk.projects.keys(), ...desk.projectGen.keys(), ...[...inflight.values()].map((x) => x.id)]);
+  for (const id of ids) dropProject(id);
 }
+
+// A record that holds no report the list names for it (out of step): read
+// it once more; after that the view says so instead of asking again.
+const resynced = new Set();
+export function resyncOnce(id, reportId) {
+  const key = `${id}#${reportId}`;
+  if (resynced.has(key)) return false;
+  resynced.add(key);
+  dropProject(id);
+  emit('resync');
+  return true;
+}
+export const wasResynced = (id, reportId) => resynced.has(`${id}#${reportId}`);
 
 // After a write: reload and redraw in place.
 export async function refresh() {
@@ -301,9 +407,13 @@ async function pollVersion() {
     if (live.ctrl !== ctrl) return;
     live.ctrl = null;
     if (err && err.status === 401) {
+      if (desk.session && desk.session.hosted) {
+        if (!desk.signedOut) signedOut();
+        return;
+      }
       live.mode = 'signed_out';
       emit();
-      if (!desk.session || !desk.session.hosted) toast('This dashboard was restarted with another session. Reload the page to continue.', 'bad');
+      toast('This dashboard was restarted with another session. Reload the page to continue.', 'bad');
       return;
     }
     live.failures += 1;
@@ -350,37 +460,56 @@ export function liveStatus() {
 
 // ---- start ---------------------------------------------------------------------------
 
-export async function boot() {
-  let sres;
+// The session, read once at start (and again by Try again): bounded to 20 s,
+// and every way it can fail is said in words with Try again, never an
+// endless Loading (review 2026-10-08, F2). A 401 follows the sign-in contract.
+export const SESSION_TIMEOUT_MS = 20000;
+
+class BootError extends Error {
+  constructor(kind, message) {
+    super(message);
+    this.kind = kind;
+  }
+}
+const unreachable = () => (location.protocol === 'https:' ? 'Could not reach the research desk. Check your connection, then try again.' : 'Could not reach the local dashboard server. Start it with "Open Dashboard.cmd", then try again.');
+
+async function readSession(timeoutMs) {
+  const ctrl = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, timeoutMs);
   try {
-    sres = await fetch('/api/session');
-  } catch (_) {
-    desk.error = location.protocol === 'https:' ? 'Could not reach the research desk. Check your connection and reload.' : 'Could not reach the local dashboard server. Start it with "Open Dashboard.cmd".';
-    emit('boot');
-    return false;
+    let res;
+    try {
+      res = await fetch('/api/session', { signal: ctrl.signal, cache: 'no-store' });
+    } catch (_) {
+      if (timedOut) throw new BootError('timeout', `The desk did not answer within ${Math.round(timeoutMs / 1000)} seconds.`);
+      throw new BootError('network', unreachable());
+    }
+    if (res.status === 401) return null;
+    const type = res.headers.get('content-type') || '';
+    let body = null;
+    try {
+      body = type.includes('application/json') ? await res.json() : null;
+    } catch (_) {
+      if (timedOut) throw new BootError('timeout', `The desk did not answer within ${Math.round(timeoutMs / 1000)} seconds.`);
+      body = null;
+    }
+    if (!res.ok) throw new BootError('http', `The desk answered with an error (${res.status}${body && body.error ? `: ${body.error}` : ''}).`);
+    if (!body || typeof body.token !== 'string' || !body.token || !body.workspace || typeof body.workspace !== 'object') {
+      throw new BootError('invalid', 'The desk\'s answer could not be read as a session.');
+    }
+    return body;
+  } finally {
+    clearTimeout(timer);
   }
-  if (sres.status === 401) {
-    toLogin();
-    return false;
-  }
-  desk.session = await sres.json();
-  desk.token = desk.session.token;
-  try {
-    desk.ui = await api.get('/api/ui-state');
-  } catch (_) {
-    desk.ui = browserStore.get('ui', {}) || {};
-  }
-  if (!desk.ui || typeof desk.ui !== 'object') desk.ui = {};
-  try {
-    await loadIndex();
-  } catch (err) {
-    desk.error = `Could not load your workspace: ${err.message}`;
-    emit('boot');
-    return false;
-  }
-  emit('boot');
-  startPolling();
+}
+
+let listening = false;
+function listen() {
+  if (listening) return;
+  listening = true;
   document.addEventListener('visibilitychange', () => {
+    if (!desk.index) return;
     if (document.hidden) {
       stopPolling();
       desk.live.mode = 'paused';
@@ -389,12 +518,80 @@ export async function boot() {
   });
   window.addEventListener('pagehide', stopPolling);
   window.addEventListener('pageshow', (e) => {
-    if (e.persisted) startPolling();
+    if (!e.persisted || !desk.index) return;
+    // Restored from the back/forward cache: on the online desk the session
+    // is checked again with the records hidden, so a signed-out page shows
+    // nothing it held.
+    if (desk.session && desk.session.hosted) {
+      desk.checking = true;
+      emit();
+      readSession(SESSION_TIMEOUT_MS).then((s) => {
+        if (!s) return signedOut();
+        desk.checking = false;
+        emit();
+        return startPolling();
+      }, (err) => {
+        desk.error = { kind: err.kind || 'network', message: err.message, retry: true };
+        desk.index = null;
+        desk.projects.clear();
+        desk.checking = false;
+        emit('boot');
+      });
+    } else startPolling();
   });
   window.addEventListener('online', () => {
     if (desk.live.mode === 'reconnecting') startPolling();
   });
-  return true;
+}
+
+let booting = null;
+export function boot(opts = {}) {
+  if (!booting) booting = start(opts).finally(() => { booting = null; });
+  return booting;
+}
+
+async function start({ timeoutMs = SESSION_TIMEOUT_MS } = {}) {
+  desk.error = null;
+  desk.starting = true;
+  emit('boot');
+  try {
+    const s = await readSession(timeoutMs);
+    if (!s) {
+      location.assign('/login');
+      return false;
+    }
+    desk.session = s;
+    desk.token = s.token;
+    try {
+      desk.ui = await api.get('/api/ui-state');
+    } catch (_) {
+      desk.ui = browserStore.get('ui', {}) || {};
+    }
+    if (!desk.ui || typeof desk.ui !== 'object') desk.ui = {};
+    try {
+      await loadIndex();
+      if (!desk.index || !Array.isArray(desk.index.projects)) throw new BootError('invalid', 'The workspace\'s answer could not be read.');
+    } catch (err) {
+      desk.index = null;
+      if (desk.signedOut) return false;
+      throw err instanceof BootError ? err : new BootError(err.code === 'CLIENT_TIMEOUT' ? 'timeout' : 'http', `Could not load your workspace: ${err.message}`);
+    }
+    desk.error = null;
+    desk.starting = false;
+    emit('boot');
+    listen();
+    startPolling();
+    return true;
+  } catch (err) {
+    desk.error = { kind: err.kind || 'unknown', message: err.message || String(err), retry: true };
+    desk.starting = false;
+    emit('boot');
+    return false;
+  }
+}
+
+export function stopLive() {
+  stopPolling();
 }
 
 export const hosted = () => Boolean(desk.session && desk.session.hosted);

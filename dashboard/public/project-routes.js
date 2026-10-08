@@ -13,6 +13,46 @@ export const PROJECT_TABS = [
   ['notes', 'Notes'],
 ];
 
+const MODELS = ['claude', 'chatgpt', 'gemini'];
+
+// The opinion a project page has chosen, from its address (review
+// 2026-10-08, F4): { model, report }, each null when not chosen. On Full
+// report the model is the shown report's own, and the report counts as
+// chosen only when it is not that model's latest eligible report (`latest`,
+// the desk's own selector), so visiting a report never pins the latest.
+export function selectionOf(tab, query, { latest = {}, providerOf = () => null } = {}) {
+  const q = new URLSearchParams(query);
+  let model = MODELS.includes(q.get('model')) ? q.get('model') : null;
+  const report = q.get('report') || null;
+  if (tab === 'report') {
+    if (!report) return { model, report: null };
+    const prov = providerOf(report) || model;
+    return { model: prov, report: prov && latest[prov] === report ? null : report };
+  }
+  if (report && !model) model = providerOf(report);
+  return { model, report: model ? report : null };
+}
+
+// A link to another section of the same project carrying that choice: the
+// Overview and Evidence keep the model and a chosen report; Full report opens
+// the chosen report, else the model's latest; Compare, Market and Notes carry
+// it for the way back (Compare keeps its own pair apart). Nothing chosen: the
+// plain address, as before.
+export function sectionHref(pid, to, sel = {}, { latest = {} } = {}) {
+  const q = new URLSearchParams();
+  const model = MODELS.includes(sel.model) ? sel.model : null;
+  if (to === 'report') {
+    const rid = sel.report || (model ? latest[model] || null : null);
+    if (rid) q.set('report', rid);
+    if (model) q.set('model', model);
+  } else {
+    if (model) q.set('model', model);
+    if (model && sel.report) q.set('report', sel.report);
+  }
+  const qs = q.toString();
+  return `#/project/${encodeURIComponent(pid)}/${to}${qs ? `?${qs}` : ''}`;
+}
+
 // The project page's former tabs and the Claude Brief's own page, mapped to
 // their new home. The hash to go to, or null.
 export function projectRedirect(name, args, query) {

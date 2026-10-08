@@ -1,11 +1,20 @@
 // The selected model's panel in the inspector, in reading order: its verdict
-// (the investment grade as the desk calculated it, or why there is none;
-// the verdict, analysis date and horizon), its evidence flag and revision,
-// the project's review items, the thesis (the take in three lines, the
-// strongest risk the report backs with a source, what would confirm and
-// break it, your note), the 13 diagnostic category grades, and the rest of
-// its risks. Every model keeps its own numbers; unknown stays unknown and is
-// never drawn as zero; nothing missing is filled in.
+// (the investment grade as the desk calculated it, or why there is none; the
+// verdict, analysis date and horizon; the grade's warnings as chips), then at
+// once the strongest sourced risk and what would confirm and break it (review
+// 2026-10-08, F7), then the six weighted components, the revision, what a
+// withheld grade is missing, the project's review items, the take, what to
+// watch and your note, the 13 diagnostic category grades and the rest of its
+// risks.
+//
+// Every part drawn from the report comes from one report: the one the list's
+// summary names, found in the project record with the same grade, verdict
+// and date (lib/opinion.js). While the record does not hold it (loading, kept
+// from before a change), those parts say so instead of showing another
+// report's words; the grade, verdict and "Open report" stay the summary's
+// own, the same report (review 2026-10-08, F1). Every model keeps its own
+// numbers; unknown stays unknown and is never drawn as zero; nothing missing
+// is filled in.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUpRight, RotateCcw, TriangleAlert, Copy } from 'lucide-react';
 import {
@@ -15,7 +24,8 @@ import {
 import { splitAttention, kindWord, attentionHref } from '../../../../public/watchlist-model.js';
 import { keyPoints, TAG_WORDS } from '../../../../public/brief-model.js';
 import { profileOf, categoryRows, scorecardCounts, statesConfidence, categoryFlags, CONFIDENCE_LABELS } from '../../../../public/thesis-ui.js';
-import { api, refresh, hosted } from '../../lib/desk.js';
+import { api, refresh, hosted, resyncOnce, wasResynced } from '../../lib/desk.js';
+import { opinionOf } from '../../lib/opinion.js';
 import { legacyCtx } from '../../legacy/ctx.js';
 import { Gauge, ScoreBar } from '../../components/Gauge.jsx';
 import { Dom, loadLegacy } from '../../components/Dom.jsx';
@@ -37,11 +47,8 @@ const SHORT = {
   category_potential: 'Category potential', chart_quality: 'Chart quality', evidence_confidence: 'Evidence confidence',
 };
 
-export function latestOf(d, prov, sum) {
-  if (!d || !sum) return null;
-  const meta = d.comparison && d.comparison.latest ? d.comparison.latest[prov] : null;
-  return d.reports.find((x) => x.report_id === sum.report_id) || (meta ? d.reports.find((x) => x.report_id === meta.report_id) : null) || null;
-}
+// The report the panel's report-derived parts are drawn from, or null.
+const fullOf = (op) => (op.status === 'ok' && op.report && !op.report.broken ? op.report : null);
 
 // ---- the verdict ---------------------------------------------------------------------
 
@@ -134,18 +141,17 @@ function Components({ d, rep, grading }) {
   );
 }
 
-function GradeBlock({ d, p, prov, detail, opened }) {
-  const rep = p.providers && p.providers[prov];
+// The verdict: the grade (or why there is none) with the verdict, analysis
+// date and horizon, and the grade's warnings as chips beside it. Everything
+// here is the list's summary of the one report the panel shows.
+function Verdict({ d, p, prov, op }) {
+  const rep = op.summary;
   const job = p.research && p.research.providers && p.research.providers[prov];
   const opts = badgeOpts(d, prov);
   const info = pillInfo(prov, rep, job, opts);
   const pid = p.project_id;
   const who = PROVIDER_LABELS[prov];
-  const grading = d.index.rubrics.grading;
-  const anchors = grading.favorable_anchors || [];
-  const full = latestOf(detail, prov, rep);
-  const resume = <Resume d={d} p={p} prov={prov} job={job} info={info} />;
-  const hasResume = Boolean(job && RESUME_WHERE[prov] && !onHoldOf(d.index, prov) && (info.kind === 'interrupted' || info.job === 'interrupted' || (job.state === 'unconfigured' && (job.released || job.draft_saved_at))));
+  const anchors = d.index.rubrics.grading.favorable_anchors || [];
   const rel = rep ? fmtRelDay(rep.analysis_at) : null;
   const facts = rep ? (
     <dl className="vfacts">
@@ -155,12 +161,23 @@ function GradeBlock({ d, p, prov, detail, opened }) {
     </dl>
   ) : null;
   const mt = rep && rep.model_total && rep.model_total.status === 'mismatch' ? rep.model_total : null;
-  const delta = mt ? <span className="pill pill-warn" title={mt.message} aria-label={mt.message}>{`Own total differs by ${typeof mt.difference === 'number' ? mt.difference.toFixed(1) : '?'}`}</span> : null;
-  const parts = rep && !rep.needs_text ? (
-    <details className="fold fold-parts" data-key={`ig-parts-${pid}-${prov}`} open={opened.get(`parts-${prov}`)} onToggle={(e) => opened.set(`parts-${prov}`, e.currentTarget.open)}>
-      <summary title="What the investment grade is calculated from: each component score times its weight. The diagnostic categories never enter it.">Six weighted components</summary>
-      {detail ? (full ? <Components d={d} rep={full} grading={grading} /> : <p className="faint">The report could not be read.</p>) : <Loading label="the six weighted parts" />}
-    </details>
+  const level = rep ? evidenceLevel(rep.evidence) : null;
+  const chips = mt || level ? (
+    <div className="vchips">
+      {mt ? <span className="pill pill-warn" title={mt.message} aria-label={mt.message}>{`Own total differs by ${typeof mt.difference === 'number' ? mt.difference.toFixed(1) : '?'}`}</span> : null}
+      {level ? (
+        <button
+          type="button"
+          className={`pill ev-chip ev-${level}`}
+          data-key={`ev-jump-${prov}`}
+          title={`${evidenceText(rep.evidence)}. Open the flags.`}
+          aria-label={`${level === 'serious' ? 'Serious evidence flag' : 'Evidence flag'}: ${evidenceText(rep.evidence)}. Open the flags`}
+          onClick={() => { const el = document.querySelector(`[data-key="insp-evd-${prov}"]`); if (el) { el.open = true; el.scrollIntoView({ block: 'start', behavior: 'smooth' }); } }}
+        >
+          <span className={`ev-dot ${level}`} aria-hidden="true" />{level === 'serious' ? 'Serious evidence flag' : 'Evidence flag'}
+        </button>
+      ) : null}
+    </div>
   ) : null;
   let body;
   if (rep && (info.kind === 'grade' || info.kind === 'range')) {
@@ -169,9 +186,8 @@ function GradeBlock({ d, p, prov, detail, opened }) {
       <div className="vblock">
         <div className="vrow">
           <div className="vgauge"><Gauge grade={rep.grade} word={word} serious={info.ev === 'serious'} /></div>
-          <div className="vside">{facts}{delta}</div>
+          <div className="vside">{facts}{chips}</div>
         </div>
-        {parts}
       </div>
     );
   } else if (rep && info.kind === 'pdf') {
@@ -184,8 +200,6 @@ function GradeBlock({ d, p, prov, detail, opened }) {
     );
   } else if (rep) {
     const pct = rep.grade ? rep.grade.coverage_pct : null;
-    const why = rep.grade && rep.grade.status === 'withheld' ? withheldReason(prov, rep.grade, rep.unscored) : null;
-    const checks = rep.structure && rep.structure.flagged && Array.isArray(rep.structure.flags) ? rep.structure.flags.length : 0;
     body = (
       <div className="vblock vwithheld">
         <div className="vw-head">
@@ -197,20 +211,8 @@ function GradeBlock({ d, p, prov, detail, opened }) {
             <div className="cov-lbl">{`${pct}% of the investment weight scored`}</div>
           </div>
         ) : null}
-        {why && why.items.length ? (
-          <div className="vw-missing">
-            <h4>Not scored</h4>
-            <ul>{why.items.map((x) => <li key={x.label}><strong>{x.label}</strong>{` · ${x.status}`}{x.note ? <span className="faint">{`: “${x.note.length > 200 ? `${x.note.slice(0, 199)}…` : x.note}”`}</span> : null}</li>)}</ul>
-          </div>
-        ) : null}
-        {checks ? (
-          <details className="fold" data-key={`ig-check-${pid}-${prov}`}>
-            <summary><span><strong>Check</strong>{` · ${checks} note${checks === 1 ? '' : 's'}`}</span></summary>
-            <ul className="plain-list">{rep.structure.flags.slice(0, 3).map((fl) => <li key={fl.message}>{fl.message}</li>)}</ul>
-          </details>
-        ) : null}
         {facts}
-        {parts}
+        {chips}
       </div>
     );
   } else {
@@ -225,20 +227,108 @@ function GradeBlock({ d, p, prov, detail, opened }) {
       </div>
     );
   }
-  const level = rep ? evidenceLevel(rep.evidence) : null;
+  return <div className="mhead" data-report={op.report_id || ''}>{body}</div>;
+}
+
+// What waits for the report itself: loading, or a record out of step with
+// the list (read once more, then said with a way to read both again).
+function ReportWait({ p, prov, op, current, failed, label }) {
+  const who = PROVIDER_LABELS[prov];
+  if (failed) return <p className="faint mp-wait">{`${who}'s report could not be loaded; the grade above is from the list.`}</p>;
+  if (op.status === 'pending' && current && wasResynced(p.project_id, op.report_id)) {
+    return (
+      <div className="note note-warn mp-wait" role="status">
+        <span>{`The list names ${who}'s report ${op.report_id}, which this project's record does not hold yet. Nothing from another report is shown in its place.`}</span>
+        <button type="button" className="btn btn-sm" data-key={`resync-${p.project_id}-${prov}`} onClick={() => refresh().catch((err) => toast(err.message, 'bad'))}>Read again</button>
+      </div>
+    );
+  }
+  return <Loading label={label || `${who}'s report`} />;
+}
+
+// Right after the verdict: the strongest risk the report backs with a cited
+// source (else its first risk, said as unsourced), what would confirm it and
+// what would break it, each "Not reported" when the report gives none.
+function KeyPoints({ p, prov, full, wait }) {
+  const pid = p.project_id;
+  const who = PROVIDER_LABELS[prov];
+  if (!full) return <div className="ikeys is-wait" data-part="keypoints">{wait}</div>;
+  const a = full.assessment || {};
+  if (a.needs_text) return null;
+  const k = keyPoints(a);
+  const risk = k.risk;
+  const src = risk && risk.sources[0];
+  const srcName = src ? src.title || src.publisher || src.url || src.source_id : null;
+  const list = (items) => (Array.isArray(items) ? items : []).map((f) => (f && f.text ? String(f.text).trim() : typeof f === 'string' ? f.trim() : '')).filter(Boolean).slice(0, 2);
+  const confirm = list(a.conviction_increases);
+  const breaks = list(a.invalidators);
+  const nr = <span className="tl-nr">Not reported</span>;
+  return (
+    <dl className="ikeys" data-part="keypoints" data-report={full.report_id} aria-label={`${who}'s strongest risk, and what would confirm or break the view`}>
+      <div className="ik ik-risk">
+        <dt title={risk && risk.sourced ? 'The strongest risk the report backs with a cited source' : 'No listed risk cites a source'}>{risk && risk.sourced ? 'Strongest sourced risk' : 'Strongest risk'}</dt>
+        <dd>
+          {risk ? (
+            <>
+              <p className="ik-t" data-part="risk-text">{risk.text}</p>
+              <p className="tl-cite">
+                {risk.tags.map((tg) => <span key={tg} className={`etag t-${tg.toLowerCase()}`} title={TAG_TITLES[tg]}>{TAG_WORDS[tg]}</span>)}
+                {src && src.url ? <a href={src.url} target="_blank" rel="noopener noreferrer nofollow" data-key={`th-risk-src-${pid}-${prov}`}>{srcName}<ArrowUpRight size={12} aria-hidden="true" /></a> : src ? <span>{srcName}</span> : <span className="faint">No source cited</span>}
+                {risk.sources.length > 1 ? <span className="faint">{` +${risk.sources.length - 1}`}</span> : null}
+              </p>
+            </>
+          ) : nr}
+        </dd>
+      </div>
+      <div className="ik ik-confirm">
+        <dt>Would confirm</dt>
+        <dd>{confirm.length ? <ul>{confirm.map((x) => <li key={x}>{x}</li>)}</ul> : nr}</dd>
+      </div>
+      <div className="ik ik-break">
+        <dt>Would break it</dt>
+        <dd>{breaks.length ? <ul>{breaks.map((x) => <li key={x}>{x}</li>)}</ul> : nr}</dd>
+      </div>
+    </dl>
+  );
+}
+
+// After the key points: the six weighted components, the revision, what a
+// withheld grade is missing, timing notes, and the research actions.
+function VerdictMore({ d, p, prov, op, full, wait, opened }) {
+  const rep = op.summary;
+  const job = p.research && p.research.providers && p.research.providers[prov];
+  const opts = badgeOpts(d, prov);
+  const info = pillInfo(prov, rep, job, opts);
+  const pid = p.project_id;
+  const who = PROVIDER_LABELS[prov];
+  const grading = d.index.rubrics.grading;
+  const resume = <Resume d={d} p={p} prov={prov} job={job} info={info} />;
+  const hasResume = Boolean(job && RESUME_WHERE[prov] && !onHoldOf(d.index, prov) && (info.kind === 'interrupted' || info.job === 'interrupted' || (job.state === 'unconfigured' && (job.released || job.draft_saved_at))));
+  const parts = rep && !rep.needs_text ? (
+    <details className="fold fold-parts" data-key={`ig-parts-${pid}-${prov}`} open={opened.get(`parts-${prov}`)} onToggle={(e) => opened.set(`parts-${prov}`, e.currentTarget.open)}>
+      <summary title="What the investment grade is calculated from: each component score times its weight. The diagnostic categories never enter it.">Six weighted components</summary>
+      {full ? <Components d={d} rep={full} grading={grading} /> : <Loading label="the six weighted parts" />}
+    </details>
+  ) : null;
+  const why = rep && rep.grade && rep.grade.status === 'withheld' ? withheldReason(prov, rep.grade, rep.unscored) : null;
+  const checks = rep && rep.structure && rep.structure.flagged && Array.isArray(rep.structure.flags) ? rep.structure.flags.length : 0;
   const rv = rep && rep.revision && rep.revision.kind === 'revision' ? rep.revision : null;
   const t = rep && rep.analysis_timing;
   return (
-    <div className="mhead">
-      {body}
-      {level ? (
-        <p className={`evline ev-${level}`}>
-          <span className={`ev-dot ${level}`} aria-hidden="true" />
-          <span><strong>{level === 'serious' ? 'Serious flag' : 'Flag'}</strong>{` · ${evidenceText(rep.evidence)} · `}
-            <button type="button" className="btn-link" data-key={`ev-jump-${prov}`} onClick={() => { const el = document.querySelector(`[data-key="insp-evd-${prov}"]`); if (el) { el.open = true; el.scrollIntoView({ block: 'start', behavior: 'smooth' }); } }}>See the flags</button>
-          </span>
-        </p>
+    <div className="mmore">
+      {why && why.items.length ? (
+        <div className="vw-missing">
+          <h4>Not scored</h4>
+          <ul>{why.items.map((x) => <li key={x.label}><strong>{x.label}</strong>{` · ${x.status}`}{x.note ? <span className="faint">{`: “${x.note.length > 200 ? `${x.note.slice(0, 199)}…` : x.note}”`}</span> : null}</li>)}</ul>
+        </div>
       ) : null}
+      {checks ? (
+        <details className="fold" data-key={`ig-check-${pid}-${prov}`}>
+          <summary><span><strong>Check</strong>{` · ${checks} note${checks === 1 ? '' : 's'}`}</span></summary>
+          <ul className="plain-list">{rep.structure.flags.slice(0, 3).map((fl) => <li key={fl.message}>{fl.message}</li>)}</ul>
+        </details>
+      ) : null}
+      {parts}
       {rv ? (
         <details className="fold rev" data-key={`rev-${pid}-${prov}`}>
           <summary><RotateCcw size={13} aria-hidden="true" /><span><strong>{rv.basis === 'existing_evidence' ? 'Revision using existing evidence' : rv.basis === 'new_sources' ? `Revision with ${rv.sources.added} new source${rv.sources.added === 1 ? '' : 's'}` : 'Re-saved with the same scores'}</strong>{` · ${who}, ${rv.minutes_after} min after the first save`}</span></summary>
@@ -262,7 +352,7 @@ function Loading({ label }) {
   return <div className="part-loading" role="status"><span className="sr-only">{`Loading ${label}…`}</span><span className="skel w80" /><span className="skel w60" /></div>;
 }
 
-// ---- the thesis ------------------------------------------------------------------------
+// ---- the take, what to watch, your note ----------------------------------------------------
 
 function Take({ text, id }) {
   const ref = useRef(null);
@@ -280,44 +370,19 @@ function Take({ text, id }) {
   );
 }
 
-function Thesis({ d, p, prov, detail }) {
+function Thesis({ p, prov, detail, full, wait }) {
   const pid = p.project_id;
   const note = detail && detail.conviction ? String(detail.conviction.text || '').trim() : '';
   const sum = p.providers && p.providers[prov];
-  const r = latestOf(detail, prov, sum);
-  const a = r && !r.broken ? r.assessment || {} : null;
+  const a = full ? full.assessment || {} : null;
   let model = null;
-  if (!detail) model = <Loading label="the thesis" />;
+  if (sum && !a) model = wait;
   else if (a && !a.needs_text && !(sum && sum.needs_text)) {
     const metric = a.next_metric_to_monitor;
-    const list = (items) => (Array.isArray(items) ? items : []).filter((f) => f && f.text).slice(0, 2);
-    const confirm = list(a.conviction_increases);
-    const invalid = list(a.invalidators);
-    const risk = keyPoints(a).risk;
-    const any = a.final_take || (metric && metric.metric) || confirm.length || invalid.length;
-    const nr = (k) => <div className="tl"><span className="tl-k">{k}</span><span className="tl-nr">Not reported</span></div>;
-    const src = risk && risk.sources[0];
-    const srcName = src ? src.title || src.publisher || src.url || src.source_id : null;
     model = (
       <>
-        {!any && !risk ? <p className="faint">{`No thesis in ${PROVIDER_LABELS[prov]}'s data block.`}</p> : null}
-        {a.final_take ? <Take text={a.final_take} id={`take-${pid}-${prov}`} /> : null}
-        {risk ? (
-          <div className="tl tl-risk">
-            <span className="tl-k" title={risk.sourced ? 'The strongest risk the report backs with a cited source' : 'No listed risk cites a source'}>Risk</span>
-            <div className="tl-body">
-              <p className="tl-risk-text">{risk.text}</p>
-              <p className="tl-cite">
-                {risk.tags.map((tg) => <span key={tg} className={`etag t-${tg.toLowerCase()}`} title={TAG_TITLES[tg]}>{TAG_WORDS[tg]}</span>)}
-                {src && src.url ? <a href={src.url} target="_blank" rel="noopener noreferrer nofollow" data-key={`th-risk-src-${pid}-${prov}`}>{srcName}<ArrowUpRight size={12} aria-hidden="true" /></a> : src ? <span>{srcName}</span> : <span className="faint">No source cited</span>}
-                {risk.sources.length > 1 ? <span className="faint">{` +${risk.sources.length - 1}`}</span> : null}
-              </p>
-            </div>
-          </div>
-        ) : nr('Risk')}
+        {a.final_take ? <Take text={a.final_take} id={`take-${pid}-${prov}`} /> : <p className="faint">{`No final take in ${PROVIDER_LABELS[prov]}'s data block.`}</p>}
         {metric && metric.metric ? <div className="tl"><span className="tl-k">Watch</span><span>{metric.metric}{metric.threshold ? ` (${metric.threshold})` : ''}</span></div> : null}
-        {confirm.length ? <div className="tl tl-confirm"><span className="tl-k">Confirms</span><ul>{confirm.map((x) => <li key={x.text}>{x.text}</li>)}</ul></div> : nr('Confirms')}
-        {invalid.length ? <div className="tl tl-break"><span className="tl-k">Breaks</span><ul>{invalid.map((x) => <li key={x.text}>{x.text}</li>)}</ul></div> : nr('Breaks')}
       </>
     );
   }
@@ -337,12 +402,11 @@ function Thesis({ d, p, prov, detail }) {
 
 // ---- the 13 diagnostic categories ---------------------------------------------------------
 
-function Categories({ d, p, prov, detail, opened }) {
+function Categories({ d, p, prov, detail, full, wait, opened }) {
   const sum = p.providers && p.providers[prov];
   if (!sum) return null;
-  if (!detail) return <section className="insp-sec"><Loading label="the category grades" /></section>;
-  const r = latestOf(detail, prov, sum);
-  if (!r || r.broken) return <p className="faint">The report could not be read.</p>;
+  if (!full) return null;
+  const r = full;
   const a = r.assessment || {};
   if (a.needs_text || sum.needs_text) return <p className="faint">The saved report is a PDF: its category grades can be read once a text copy is imported.</p>;
   const profile = profileOf(d.index.rubrics.profiles, a, detail.profile);
@@ -355,7 +419,7 @@ function Categories({ d, p, prov, detail, opened }) {
   const current = detail.research_contract && detail.research_contract.sector_profile;
   const older = Boolean(current && a.sector_profile && a.sector_profile !== current);
   return (
-    <section className="insp-sec cats" aria-labelledby={`insp-cats-${prov}`}>
+    <section className="insp-sec cats" aria-labelledby={`insp-cats-${prov}`} data-report={r.report_id}>
       <div className="sec-head">
         <h3 className="sec-title" id={`insp-cats-${prov}`} title="The report's category grades: diagnostics shown beside the investment grade, never averaged into it">Diagnostic categories</h3>
         <span className="sec-meta">{`${counts.scored} of ${counts.total} scored${counts.unknown ? ` · ${counts.unknown} unknown` : ''}`}{older ? <span title={`This report used ${a.sector_profile}; new research uses ${current}`}>{` · ${a.sector_profile}`}</span> : null}</span>
@@ -422,12 +486,10 @@ function Categories({ d, p, prov, detail, opened }) {
 
 // ---- the rest of its risks ------------------------------------------------------------------
 
-function Risks({ d, p, prov, detail }) {
+function Risks({ d, p, prov, full }) {
   const sum = p.providers && p.providers[prov];
-  if (!sum || !detail) return null;
-  const r = latestOf(detail, prov, sum);
-  if (!r || r.broken) return null;
-  const a = r.assessment || {};
+  if (!sum || !full) return null;
+  const a = full.assessment || {};
   const shown = keyPoints(a).risk;
   const facts = (a.bearish_facts || []).filter((f) => f && f.text && !(shown && f.text.trim() === shown.text)).slice(0, 3);
   const defs = d.index.rubrics.grading.risk_scores || [];
@@ -436,7 +498,7 @@ function Risks({ d, p, prov, detail }) {
   const title = shown ? 'More risks' : 'Strongest risks';
   if (!facts.length && !scores.length) return shown ? null : <section className="insp-sec risks"><h3 className="sec-title">{title}</h3><p className="faint">No risks listed.</p></section>;
   return (
-    <section className="insp-sec risks" aria-label={`${PROVIDER_LABELS[prov]}'s ${title.toLowerCase()}`}>
+    <section className="insp-sec risks" aria-label={`${PROVIDER_LABELS[prov]}'s ${title.toLowerCase()}`} data-report={full.report_id}>
       <h3 className="sec-title">{title}</h3>
       {facts.length ? <ol className="risk-list">{facts.map((f) => <li key={f.text}>{f.text}</li>)}</ol> : null}
       {scores.length ? (
@@ -478,11 +540,8 @@ function ReviewItems({ d, p }) {
 
 // ---- text and data block differ ----------------------------------------------------------------
 
-function TextCheck({ p, prov, detail }) {
-  const sum = p.providers && p.providers[prov];
-  if (!sum || !detail) return null;
-  const r = latestOf(detail, prov, sum);
-  const tx = r && !r.broken ? r.text_scores : null;
+function TextCheck({ p, prov, full }) {
+  const tx = full ? full.text_scores : null;
   if (!tx || !Array.isArray(tx.mismatches) || !tx.mismatches.length) return null;
   const n = tx.mismatches.length;
   return (
@@ -496,16 +555,25 @@ function TextCheck({ p, prov, detail }) {
   );
 }
 
-export function ModelPanel({ d, p, prov, detail, opened }) {
-  const graded = Boolean(p.providers && p.providers[prov] && !p.providers[prov].needs_text);
+export function ModelPanel({ d, p, prov, detail, current = true, failed = false, opened }) {
+  const op = opinionOf(p, prov, detail);
+  const full = fullOf(op);
+  const graded = Boolean(op.summary && !op.summary.needs_text);
+  // A current record that does not hold the list's report: read it once more.
+  useEffect(() => {
+    if (op.status === 'pending' && current) resyncOnce(p.project_id, op.report_id);
+  }, [op.status, current, p.project_id, op.report_id]);
+  const wait = op.summary && !full ? <ReportWait p={p} prov={prov} op={op} current={current} failed={failed && !detail} /> : null;
   return (
-    <div className="mpanel">
-      <GradeBlock d={d} p={p} prov={prov} detail={detail} opened={opened} />
-      {graded ? <TextCheck p={p} prov={prov} detail={detail} /> : null}
+    <div className="mpanel" data-report={op.report_id || ''} data-opinion={op.status}>
+      <Verdict d={d} p={p} prov={prov} op={op} />
+      {graded ? <KeyPoints p={p} prov={prov} full={full} wait={wait} /> : null}
+      <VerdictMore d={d} p={p} prov={prov} op={op} full={full} wait={wait} opened={opened} />
+      {graded ? <TextCheck p={p} prov={prov} full={full} /> : null}
       <ReviewItems d={d} p={p} />
-      <Thesis d={d} p={p} prov={prov} detail={detail} />
-      {graded ? <Categories d={d} p={p} prov={prov} detail={detail} opened={opened} /> : null}
-      {graded ? <Risks d={d} p={p} prov={prov} detail={detail} /> : null}
+      <Thesis p={p} prov={prov} detail={detail} full={full} wait={graded ? null : wait} />
+      {graded ? <Categories d={d} p={p} prov={prov} detail={detail} full={full} wait={wait} opened={opened} /> : null}
+      {graded ? <Risks d={d} p={p} prov={prov} full={full} /> : null}
     </div>
   );
 }

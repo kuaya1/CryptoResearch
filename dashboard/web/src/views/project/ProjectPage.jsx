@@ -6,13 +6,21 @@
 // place and focus, also after moving between the project's tabs. Drawing a
 // view never fetches prices, screens, posts or starts research; the actions
 // are explicit buttons.
+//
+// The sections are page navigation (links, the current one marked), and each
+// carries the opinion chosen here (?model=, ?report=) so Evidence, Full report
+// and Back keep the same model and report (review 2026-10-08, F4, F6). An
+// opinion is drawn only when the record holds the very report the list names
+// (lib/opinion.js), else the view waits (F1).
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Ellipsis, Check, Play } from 'lucide-react';
 import { PROVIDERS, PROVIDER_LABELS, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, fmtSignedPct, onHoldOf, toast } from '../../../../public/ui.js';
 import { briefModel, marketNow } from '../../../../public/brief-model.js';
-import { PROJECT_TABS } from '../../../../public/project-routes.js';
+import { PROJECT_TABS, selectionOf, sectionHref } from '../../../../public/project-routes.js';
 import { useDesk, useProject, useMedia } from '../../lib/hooks.js';
-import { api, refresh, hosted } from '../../lib/desk.js';
+import { api, refresh, hosted, resyncOnce, wasResynced } from '../../lib/desk.js';
+import { opinionOf, opinionsAgree } from '../../lib/opinion.js';
+import { WsTag } from '../../shell/Shell.jsx';
 import { nav, navigate, pageReady, claimFocus, hrefWith } from '../../lib/router.js';
 import { legacyCtx } from '../../legacy/ctx.js';
 import { Logo } from '../../components/Logo.jsx';
@@ -58,6 +66,8 @@ function MarketFacts({ row }) {
 
 function Header({ d, row, phone }) {
   const p = d.project;
+  const [wholeName, setWholeName] = useState(false);
+  const longName = String(p.name || '').length > 48;
   const id = p.identity;
   const sector = d.sector || p.sector;
   const archived = p.status === 'archived';
@@ -73,7 +83,8 @@ function Header({ d, row, phone }) {
       <div className="ph-id">
         <Logo p={{ ...row, project_id: p.project_id, name: p.name, symbol: p.symbol }} size={40} />
         <div className="ph-names">
-          <h1>{p.name}{p.symbol ? <span className="ph-ticker">{` ${p.symbol}`}</span> : null}</h1>
+          <h1 id="ph-name" className={longName ? `is-long${wholeName ? '' : ' is-clamped'}` : undefined}>{p.name}{p.symbol ? <span className="ph-ticker">{` ${p.symbol}`}</span> : null}</h1>
+          {longName && phone ? <button type="button" className="btn-link ph-wholename" aria-expanded={wholeName} aria-controls="ph-name" data-key="ph-wholename" onClick={() => setWholeName(!wholeName)}>{wholeName ? 'Shorter name' : 'Whole name'}</button> : null}
           <MarketFacts row={row} />
           <p className="ph-meta">
             {sector ? <button type="button" className="btn-link" data-key="project-sector" aria-label={`Sector: ${sector.label || sector.primary}. Change sector`} onClick={async () => { const L = await loadLegacy(); L.openSectorDialog(legacyCtx, { ...projectish, sector }); }}>{sector.label || sector.primary}</button> : null}
@@ -187,7 +198,7 @@ export default function ProjectPage() {
   const route = nav.route;
   const pid = route.args[0];
   const tab = PROJECT_TABS.some(([t]) => t === route.args[1]) ? route.args[1] : 'brief';
-  const { d, error } = useProject(pid);
+  const { d, current, error, retry } = useProject(pid);
   const phone = useMedia('(max-width: 767.98px)');
   const row = d0.index.projects.find((x) => x.project_id === pid) || {};
   const prov = PROVIDERS.includes(route.query.get('model')) ? route.query.get('model') : 'claude';
@@ -247,28 +258,55 @@ export default function ProjectPage() {
     requestAnimationFrame(go);
   }, [Boolean(d), pid, tab, route.query.toString()]);
 
+  // The opinion this page shows: the record must hold the report the list
+  // names for the chosen model (an explicitly chosen report is immutable and
+  // needs no check); a comparison needs every model to agree.
+  const latest = d ? Object.fromEntries(PROVIDERS.map((x) => [x, d.comparison && d.comparison.latest && d.comparison.latest[x] ? d.comparison.latest[x].report_id : null])) : {};
+  const providerOf = (rid) => { const r = d ? d.reports.find((x) => x.report_id === rid) : null; return r && r.meta ? r.meta.provider : null; };
+  const agrees = (x) => {
+    if (!d || !row.project_id) return true;
+    const o = opinionOf(row, x, d);
+    return o.status === 'none' ? !latest[x] : o.status === 'ok' && latest[x] === o.report_id;
+  };
+  const waiting = d ? (tab === 'compare' ? Boolean(row.project_id) && !opinionsAgree(row, d) : (tab === 'brief' || tab === 'evidence') && !reportId && !agrees(prov)) : false;
+  const waitKey = tab === 'compare' ? 'all' : (row.providers && row.providers[prov] && row.providers[prov].report_id) || 'none';
+  useEffect(() => {
+    if (waiting && current) resyncOnce(pid, waitKey);
+  }, [waiting, current, pid, waitKey]);
+  // On a phone a brief opened from the inspector has its back bar in place
+  // of the top bar.
+  useLayoutEffect(() => {
+    const on = Boolean(d) && fromInspector;
+    document.documentElement.classList.toggle('has-backbar', on);
+    return () => document.documentElement.classList.remove('has-backbar');
+  }, [Boolean(d), fromInspector]);
+
   if (!d) {
     return (
       <div className="pp">
         <nav className="crumbs"><a href="#/watchlist">Watchlist</a></nav>
-        {error ? <p className="note note-bad">{`Could not load project "${pid}": ${error.message}`}</p> : <div className="page-loading" role="status"><span className="sr-only">Loading the project…</span><span className="skel w60" /><span className="skel w80" /><span className="skel w40" /></div>}
+        {error ? (
+          <div className="note note-bad pp-error" role="alert">
+            <span>{`Could not load project "${pid}": ${error.message}`}</span>
+            <button type="button" className="btn btn-sm" data-key="project-retry" onClick={retry}>Try again</button>
+          </div>
+        ) : <div className="page-loading" role="status"><span className="sr-only">Loading the project…</span><span className="skel w60" /><span className="skel w80" /><span className="skel w40" /></div>}
       </div>
     );
   }
 
   const p = d.project;
+  const sel = selectionOf(tab, route.query, { latest, providerOf });
   const tabLink = (t, label) => {
-    const href = `#/project/${enc(pid)}/${t}`;
+    const href = sectionHref(pid, t, sel, { latest });
     const count = t === 'report' && d.reports.length ? d.reports.length : null;
     return (
       <a
         key={t}
-        role="tab"
         href={href}
         id={`tab-${t}`}
         className="tab"
-        aria-selected={t === tab}
-        aria-controls="tabpanel"
+        aria-current={t === tab ? 'page' : undefined}
         data-key={`tab-${t}`}
         onClick={(e) => {
           if (!plain(e) || !(history.state && history.state.crBrief === pid)) return;
@@ -285,8 +323,26 @@ export default function ProjectPage() {
   const barLabel = tab === 'compare' ? 'Compare' : tab === 'evidence' ? `${PROVIDER_LABELS[prov]}'s evidence` : `${PROVIDER_LABELS[prov]} Brief`;
   const from = st && st.crBrief === pid ? st.from : null;
 
+  const stuck = waiting && current && wasResynced(pid, waitKey);
+  const wait = (
+    <div className="pp-wait">
+      {stuck ? (
+        <div className="note note-warn" role="status">
+          <span>The list and this project's record name different reports. Nothing from another report is shown in their place.</span>
+          <button type="button" className="btn btn-sm" data-key="pp-resync" onClick={() => refresh().catch((err) => toast(err.message, 'bad'))}>Read again</button>
+        </div>
+      ) : <div className="page-loading" role="status"><span className="sr-only">Loading the report…</span><span className="skel w60" /><span className="skel w80" /><span className="skel w40" /></div>}
+    </div>
+  );
   let body;
-  if (tab === 'brief') {
+  if (waiting) {
+    body = (
+      <>
+        {tab === 'compare' ? null : <ModelTabs row={row} sel={prov} />}
+        {wait}
+      </>
+    );
+  } else if (tab === 'brief') {
     body = (
       <>
         <Digest d={d} pid={pid} />
@@ -329,16 +385,17 @@ export default function ProjectPage() {
             <ArrowLeft size={15} aria-hidden="true" /><span>{from === 'project' ? 'Project' : 'Watchlist'}</span>
           </a>
           <span className="backbar-t" aria-hidden="true"><span className="faint">{barLabel}</span></span>
-          {m && m.report_id ? <a className="btn btn-sm" href={`#/project/${enc(pid)}/report?report=${enc(m.report_id)}`} data-key="brief-report">Full report</a> : null}
+          <WsTag />
+          {m && m.report_id && !waiting ? <a className="btn btn-sm" href={sectionHref(pid, 'report', { model: prov, report: m.report_id }, { latest })} data-key="brief-report">Full report</a> : null}
         </div>
       ) : (
         <nav className="crumbs" aria-label="Breadcrumb"><a href={`#/watchlist?p=${enc(pid)}`} data-key="crumb-watchlist">Watchlist</a><span aria-hidden="true">/</span><span aria-current="page">{p.name}</span></nav>
       )}
       <Header d={d} row={row} phone={phone} />
-      <div className="tabs pp-tabs" role="tablist" aria-label="Project sections">
+      <nav className="tabs pp-tabs" aria-label="Project sections">
         {PROJECT_TABS.map(([t, label]) => tabLink(t, label))}
-      </div>
-      <div id="tabpanel" role="tabpanel" aria-labelledby={`tab-${tab}`} className="pp-panel">{body}</div>
+      </nav>
+      <div id="tabpanel" className="pp-panel">{body}</div>
     </div>
   );
 }
