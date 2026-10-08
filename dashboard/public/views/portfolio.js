@@ -2,7 +2,7 @@
 // subtotal shows its coverage, and every allocation names its denominator.
 import {
   h, card, table, stateText, fmtUsd, fmtNum, fmtPct, fmtDate, fmtDateTime, freshnessText, callout, empty, link, field, fieldError, input, select,
-  button, action, tabStrip, safeSection, submissionId, openDialog, fmtAmount, shortId, copyButton, details,
+  button, action, tabStrip, safeSection, submissionId, openDialog, fmtAmount, shortId, copyButton, details, plural,
 } from '../ui.js';
 import { walletHoldingsCard, walletsTab } from './wallets.js';
 
@@ -96,6 +96,14 @@ const TONE_ORDER = { bad: 0, warn: 1, info: 2 };
 export function attentionRows(warnings, { symbols = new Map(), accounts = new Map() } = {}) {
   const sym = (id) => symbols.get(id) || String(id || '').toUpperCase();
   const acct = (id) => (id ? { id, name: accounts.get(id) || id } : null);
+  const esc = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g, (c) => `\\${c}`);
+  const named = [...[...accounts].map(([id, name]) => [id, name]), ...[...symbols].map(([id, s]) => [id, s])].filter(([id, name]) => id && name && id !== name).sort((a, b) => b[0].length - a[0].length);
+  const readable = (w) => {
+    let s = String(w.message || '').replace(/^tx_\S+:\s*/, '').replace(/\btx_[0-9A-Za-z:.-]+_([A-Za-z0-9]+)\b/g, '…$1');
+    if (w.asset_id && !symbols.has(w.asset_id)) s = s.replace(new RegExp(`(?<![\\w-])${esc(w.asset_id)}(?![\\w-])`, 'g'), () => sym(w.asset_id));
+    for (const [id, name] of named) s = s.replace(new RegExp(`(?<![\\w-])${esc(id)}(?![\\w-])`, 'g'), () => name);
+    return s;
+  };
   const wallet = warnings.filter((w) => w.source === 'wallet_sync' && WALLET_NOTE_KINDS.has(w.kind));
   const rows = warnings.filter((w) => !wallet.includes(w)).map((w, i) => {
     const exact = w.quantity ?? w.tx_quantity ?? null;
@@ -104,13 +112,13 @@ export function attentionRows(warnings, { symbols = new Map(), accounts = new Ma
     const [what, detail, tone, act] = words ? words(w, amt) : [String(w.message || w.kind).replace(/^tx_\S+:\s*/, ''), null, 'info', w.tx_id ? 'correct' : null];
     // The amount is already in the words for the kinds that name one.
     const amount = w.quantity === undefined && amt.text && w.asset_id !== 'usd' ? amt : null;
-    return { key: `${w.kind}:${w.tx_id || i}:${w.asset_id || ''}`, kind: w.kind, tone, what, detail, amount, exact, date: w.date || null, tx_id: w.tx_id || null, tx_hash: w.tx_hash || null, network: w.network || null, account: acct(w.account_id), action: act, message: w.message || '' };
+    return { key: `${w.kind}:${w.tx_id || i}:${w.asset_id || ''}`, kind: w.kind, tone, what, detail, amount, exact, date: w.date || null, tx_id: w.tx_id || null, tx_hash: w.tx_hash || null, network: w.network || null, account: acct(w.account_id), action: act, message: w.message || '', tip: readable(w) };
   });
   rows.sort((a, b) => TONE_ORDER[a.tone] - TONE_ORDER[b.tone] || String(b.date || '').localeCompare(String(a.date || '')));
   if (wallet.length) {
     const dates = wallet.map((w) => w.date).filter(Boolean).sort();
     const accts = [...new Set(wallet.map((w) => w.account_id).filter(Boolean))];
-    rows.push({ key: 'wallet-imports', kind: 'wallet_imports', tone: 'info', what: `${wallet.length} wallet import${wallet.length === 1 ? '' : 's'} without a price or sent outside your accounts`, detail: 'The chain gives quantities, not prices', amount: null, exact: null, date: dates.length ? dates[dates.length - 1] : null, date_from: dates.length > 1 ? dates[0] : null, tx_id: null, tx_hash: null, network: null, account: accts.length === 1 ? acct(accts[0]) : accts.length ? { id: accts.join(', '), name: `${accts.length} accounts` } : null, action: 'transactions', message: 'Correct an entry to add a price. Nothing is estimated.', count: wallet.length });
+    rows.push({ key: 'wallet-imports', kind: 'wallet_imports', tone: 'info', what: `${wallet.length} wallet import${wallet.length === 1 ? '' : 's'} without a price or sent outside your accounts`, detail: 'The chain gives quantities, not prices', amount: null, exact: null, date: dates.length ? dates[dates.length - 1] : null, date_from: dates.length > 1 ? dates[0] : null, tx_id: null, tx_hash: null, network: null, account: accts.length === 1 ? acct(accts[0]) : accts.length ? { id: accts.join(', '), name: `${accts.length} accounts` } : null, action: 'transactions', message: 'Correct an entry to add a price. Nothing is estimated.', tip: 'Correct an entry to add a price. Nothing is estimated.', count: wallet.length });
   }
   return rows;
 }
@@ -128,7 +136,7 @@ function attentionCard(ctx, pf) {
       r.tx_id ? h('div', { class: 'au-id' }, h('code', { class: 'mono', title: r.tx_id }, shortId(r.tx_id)), copyButton(r.tx_id, `record ID ${r.tx_id}`)) : null,
       r.tx_hash ? h('div', { class: 'au-id' }, EXPLORERS[r.network] ? link(shortId(r.tx_hash), `${EXPLORERS[r.network]}/tx/${r.tx_hash}`, { class: 'mono', title: r.tx_hash, rel: 'noopener noreferrer', target: '_blank' }) : h('code', { class: 'mono', title: r.tx_hash }, shortId(r.tx_hash)), copyButton(r.tx_hash, 'transaction hash')) : null) },
     { label: 'Account', render: (r) => (r.account ? h('span', { title: r.account.id }, r.account.name) : null) },
-    { label: 'What differs', render: (r) => h('div', { class: 'au-what', title: r.message },
+    { label: 'What differs', render: (r) => h('div', { class: 'au-what', title: r.tip },
       stateText(r.what, r.tone),
       r.amount ? h('span', { class: 'au-amt num', title: `Exact: ${r.amount.exact} ${r.amount.symbol || ''}`.trim(), dataset: { exact: r.amount.exact } }, r.amount.text) : null,
       r.detail ? h('div', { class: 'au-detail' }, r.detail) : null) },
@@ -160,6 +168,13 @@ function attentionAction(ctx, r) {
   return b;
 }
 
+// An account's kind in words.
+const KIND_WORDS = { exchange: 'Exchange', self_custody: 'Self-custody wallet', bank: 'Bank', broker: 'Broker', other: 'Other' };
+function kindWords(k) {
+  if (!k) return null;
+  return KIND_WORDS[k] || `${String(k).charAt(0).toUpperCase()}${String(k).slice(1).replace(/_/g, ' ')}`;
+}
+
 const STATE_TEXT = {
   no_records: ['Nothing recorded in the ledger', 'info', 'Researching a token never creates a position. Record transactions under Record & import, or track a wallet under Wallets.'],
   empty: ['All positions closed', 'info', 'Every recorded position is closed. Realized results and fees stay below.'],
@@ -187,7 +202,7 @@ function pnl(v) {
 
 function basisCell(p) {
   if (p.cost_basis_status === 'known') return fmtUsd(p.cost_basis_known_usd);
-  if (p.cost_basis_status === 'partial') return h('span', { title: 'Unknown purchase history means unknown cost basis. Nothing is guessed.' }, fmtUsd(p.cost_basis_known_usd), h('span', { class: 'note-line' }, `+ ${fmtNum(p.unknown_basis_quantity)} units with unknown cost`));
+  if (p.cost_basis_status === 'partial') return h('span', { title: 'Unknown purchase history means unknown cost basis. Nothing is guessed.' }, fmtUsd(p.cost_basis_known_usd), h('span', { class: 'note-line' }, `+ ${fmtAmount(p.unknown_basis_quantity)} units with unknown cost`));
   return h('span', { class: 'unknown', title: 'No recorded purchase price' }, 'Unknown');
 }
 
@@ -216,6 +231,8 @@ async function positionsTab(ctx) {
     walletCard = callout(`Wallet balances could not be shown: ${err.message}. The ledger below is unaffected.`, 'warn');
   }
   const t = pf.totals;
+  const names = new Map((pf.accounts || []).map((a) => [a.account_id, a.name || a.account_id]));
+  const accountName = (id) => names.get(id) || id;
   const open = pf.positions.filter((p) => !p.closed);
   const closed = pf.positions.filter((p) => p.closed);
   const [stateLabel, stateKind, stateNote] = STATE_TEXT[t.valuation_state] || [t.valuation_state, '', ''];
@@ -223,14 +240,14 @@ async function positionsTab(ctx) {
 
   const positions = table([
     { label: 'Asset', render: (p) => h('div', { style: { minWidth: '120px' } }, p.project_id ? h('a', { href: `#/watchlist?p=${encodeURIComponent(p.project_id)}`, title: 'Open its research summary' }, p.symbol || p.asset_id) : h('strong', null, p.symbol || p.asset_id), h('div', { class: 'small muted' }, p.name), p.kind !== 'token' ? h('div', { class: 'small faint' }, p.kind.replace(/_/g, ' ')) : null) },
-    { label: 'Accounts', render: (p) => h('div', { class: 'small' }, p.by_account.map((a) => h('div', { class: 'nowrap' }, `${a.account_id}: ${fmtNum(a.quantity)}`)), p.in_transit_quantity ? h('div', { class: 'warn-text' }, `${fmtNum(p.in_transit_quantity)} in transit`) : null, p.quarantined_quantity ? h('div', { class: 'warn-text', title: 'Units held back until a conflicting record is resolved' }, `${fmtNum(p.quarantined_quantity)} quarantined`) : null) },
-    { label: 'Quantity', num: true, render: (p) => h('span', { title: `Exact: ${p.quantity_exact}` }, fmtNum(p.quantity)) },
+    { label: 'Accounts', render: (p) => h('div', { class: 'small' }, p.by_account.map((a) => h('div', { class: 'nowrap', title: `${a.account_id}: ${a.quantity_exact ?? a.quantity}` }, `${accountName(a.account_id)}: ${fmtAmount(a.quantity_exact ?? a.quantity)}`)), p.in_transit_quantity ? h('div', { class: 'warn-text' }, `${fmtAmount(p.in_transit_quantity)} in transit`) : null, p.quarantined_quantity ? h('div', { class: 'warn-text', title: 'Units held back until a conflicting record is resolved' }, `${fmtAmount(p.quarantined_quantity)} quarantined`) : null) },
+    { label: 'Quantity', num: true, render: (p) => h('span', { title: `Exact: ${p.quantity_exact}`, dataset: { exact: String(p.quantity_exact ?? p.quantity) } }, fmtAmount(p.quantity_exact ?? p.quantity)) },
     { label: 'Price', num: true, render: (p) => { const f = freshnessText(p.price.status, p.price.age_minutes); return h('div', null, p.price.usd === null ? h('span', { class: 'unknown' }, 'No price') : fmtUsd(p.price.usd), p.price.status === 'fresh' ? null : h('span', { class: `note-line${f.tone === 'ok' ? '' : ' warn-text'}` }, f.text)); } },
     { label: 'Value', num: true, render: (p) => (p.value_usd === null ? h('span', { class: 'unknown', title: 'No usable price; the value is unknown, not zero' }, 'Unknown') : fmtUsd(p.value_usd)) },
     { label: h('span', { title: `Share of ${denominator}` }, 'Allocation', h('span', { class: 'th-sub' }, `of ${denominator}`)), num: true, render: (p) => (p.allocation_pct === null ? h('span', { class: 'unknown' }, 'Unpriced') : fmtPct(p.allocation_pct)) },
     { label: 'Cost basis', render: basisCell },
     { label: 'Unrealized (known lots)', num: true, render: (p) => pnl(p.unrealized_known_usd) },
-    { label: 'Realized', num: true, render: (p) => h('div', null, pnl(p.realized_known_usd), p.realized_unknown_quantity ? h('span', { class: 'note-line' }, `+ ${fmtNum(p.realized_unknown_quantity)} units with unknown cost`) : null) },
+    { label: 'Realized', num: true, render: (p) => h('div', null, pnl(p.realized_known_usd), p.realized_unknown_quantity ? h('span', { class: 'note-line' }, `+ ${fmtAmount(p.realized_unknown_quantity)} units with unknown cost`) : null) },
     { label: 'Fees', num: true, render: (p) => fmtUsd((p.fees_usd || 0) + (p.fees_crypto_cost_usd || 0)) },
     { label: 'vs BTC (capital comparison)', render: btcCell },
   ], open, { empty: 'No open positions.' });
@@ -240,9 +257,9 @@ async function positionsTab(ctx) {
     walletCard,
     callout(h('span', null, h('strong', null, `${stateLabel}. `), stateNote), stateKind === 'ok' ? 'ok' : stateKind === 'bad' ? 'bad' : stateKind === 'warn' ? 'warn' : 'info'),
     open.length ? h('div', { class: 'summary-row' },
-      summaryItem('Priced value', fmtUsd(t.value_priced_usd), `${t.priced_count} of ${t.open_count} open position(s) priced${t.unpriced_count ? ` · unpriced: ${t.unpriced_assets.join(', ')}` : ''}`),
+      summaryItem('Priced value', fmtUsd(t.value_priced_usd), `${t.priced_count} of ${plural(t.open_count, 'open position')} priced${t.unpriced_count ? ` · unpriced: ${t.unpriced_assets.join(', ')}` : ''}`),
       summaryItem('Cash & stablecoins', t.cash_stable_pct === null ? '—' : fmtPct(t.cash_stable_pct), `${fmtUsd(t.cash_stable_usd)} · share of ${denominator}`),
-      summaryItem('Realized (known)', fmtUsd(t.realized_known_usd), t.realized_unknown_positions ? `${t.realized_unknown_positions} position(s) with unknown basis` : 'all sales have known basis'),
+      summaryItem('Realized (known)', fmtUsd(t.realized_known_usd), t.realized_unknown_positions ? `${plural(t.realized_unknown_positions, 'position')} with unknown basis` : 'all sales have known basis'),
       summaryItem('Fees paid', fmtUsd(t.fees_usd), t.fees_crypto_cost_usd ? `includes ${fmtUsd(t.fees_crypto_cost_usd)} paid in crypto (at cost)` : 'USD and in-kind, at cost'),
       summaryItem('Stale prices', String(t.stale_count || 0), t.stale_count ? t.stale_assets.join(', ') : 'none')) : null,
     attentionCard(ctx, pf),
@@ -272,13 +289,12 @@ async function positionsTab(ctx) {
     closed.length ? card('Closed positions', table([
       { label: 'Asset', render: (p) => p.symbol || p.asset_id },
       { label: 'Realized (known)', num: true, render: (p) => pnl(p.realized_known_usd) },
-      { label: 'Unknown units', num: true, render: (p) => (p.realized_unknown_quantity ? fmtNum(p.realized_unknown_quantity) : '—') },
+      { label: 'Unknown units', num: true, render: (p) => (p.realized_unknown_quantity ? fmtAmount(p.realized_unknown_quantity) : '—') },
       { label: 'Fees', num: true, render: (p) => fmtUsd((p.fees_usd || 0) + (p.fees_crypto_cost_usd || 0)) },
     ], closed), { note: 'Kept with their realized results and fees.' }) : null,
     card('Accounts', pf.accounts.length ? table([
-      { label: 'Account', key: 'account_id' },
-      { label: 'Name', key: 'name' },
-      { label: 'Kind', key: 'kind' },
+      { label: 'Account', render: (a) => h('div', null, a.name || a.account_id, a.name && a.name !== a.account_id ? h('div', { class: 'small muted' }, h('code', { class: 'mono', title: 'The account ID, as used in CSV imports' }, a.account_id)) : null) },
+      { label: 'Kind', render: (a) => kindWords(a.kind) },
       { label: 'Chain', key: 'chain' },
       { label: 'Public address', render: (a) => (a.public_address ? h('code', { class: 'wrap-anywhere' }, a.public_address) : null) },
     ], pf.accounts) : empty('No accounts yet.')));

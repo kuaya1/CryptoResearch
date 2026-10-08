@@ -335,6 +335,11 @@ function pageTitle(route) {
 
 const scrollMemory = new Map();     // routeKey -> { y, scrollers }
 const activatorMemory = new Map();  // routeKey -> data-key of the control used to leave
+// The last click, so a page change can tell whether that click left the page
+// (its control is where focus returns on Back) or came earlier, such as a fold
+// opened before leaving by a link without a key (live test, 2026-10-08).
+let lastClick = null;               // { route, key, at }
+const LEAVE_CLICK_MS = 2000;
 
 function keyOf(el) {
   if (!el || el === document.body) return null;
@@ -420,6 +425,13 @@ async function render({ reason = 'nav' } = {}) {
   if (!LOADERS[route.name]) route = { name: 'watchlist', args: [], query: new URLSearchParams() };
   const prev = state.route;
   const samePage = prev && routeKey(prev) === routeKey(route);
+  if (prev && !samePage && reason !== 'live' && reason !== 'refresh') {
+    // Leaving a page: remember the control that left it, only when the last
+    // click was that control; otherwise Back puts focus on the page itself.
+    const left = lastClick && lastClick.route === routeKey(prev) && Date.now() - lastClick.at < LEAVE_CLICK_MS ? lastClick.key : null;
+    if (left) activatorMemory.set(routeKey(prev), left);
+    else activatorMemory.delete(routeKey(prev));
+  }
   const keep = reason === 'live' || reason === 'refresh' || samePage;
   const snapshot = keep ? captureState() : null;
   state.route = route;
@@ -706,11 +718,9 @@ async function boot() {
     }, 120);
   }, { passive: true });
   document.addEventListener('click', (e) => {
-    const k = keyOf(e.target);
-    if (k && state.route) {
-      activatorMemory.set(routeKey(state.route), k);
-      scrollMemory.set(routeKey(state.route), { y: window.scrollY, scrollers: captureScrollers() });
-    }
+    if (!state.route) return;
+    lastClick = { route: routeKey(state.route), key: keyOf(e.target), at: Date.now() };
+    scrollMemory.set(routeKey(state.route), { y: window.scrollY, scrollers: captureScrollers() });
   }, true);
   const main = document.getElementById('main');
   main.addEventListener('input', (e) => {

@@ -23,15 +23,21 @@ async function load() {
 const mods = load();
 test.after(() => { if (tmp) fs.rmSync(tmp, { recursive: true, force: true }); });
 
-test('amounts: two decimals from 1,000, four below, four significant under 1; a minus sign, no trailing zeros', async () => {
+test('amounts: always two decimals from 1, four significant digits under 1 (at least two decimals); a minus sign', async () => {
   const { ui } = await mods;
   assert.equal(ui.fmtAmount('3383.859022'), '3,383.86');
-  assert.equal(ui.fmtAmount('1.25491'), '1.2549');
+  assert.equal(ui.fmtAmount('-20164.6'), '−20,164.60', 'side by side with −5.97, never −20,164.6');
+  assert.equal(ui.fmtAmount('-5.97264'), '−5.97');
+  assert.equal(ui.fmtAmount('-512.8188'), '−512.82', 'the same asset reads the same way as 3,289.86');
+  assert.equal(ui.fmtAmount('1.25491'), '1.25');
+  assert.equal(ui.fmtAmount('2.5000'), '2.50');
   assert.equal(ui.fmtAmount('0.0523149'), '0.05231');
-  assert.equal(ui.fmtAmount('2.5000'), '2.5');
+  assert.equal(ui.fmtAmount('0.5'), '0.50');
   assert.equal(ui.fmtAmount('0'), '0');
-  assert.equal(ui.fmtAmount('-12.5'), '−12.5');
   assert.equal(ui.fmtAmount(null), '—');
+  assert.equal(ui.plural(1, 'event'), '1 event');
+  assert.equal(ui.plural(73, 'chain event'), '73 chain events');
+  assert.equal(ui.plural(2, 'open position'), '2 open positions');
 });
 
 test('short IDs: a hash keeps its start and end, a ledger ID its last part', async () => {
@@ -51,7 +57,8 @@ test('attention: a shortfall reads as words with a rounded amount, keeps the exa
   assert.equal(r.tone, 'warn');
   assert.equal(r.action, 'record-purchase');
   assert.deepEqual(r.account, { id: 'ex', name: 'Exchange' });
-  assert.equal(r.message, shortfall.message, 'the full sentence stays as the tooltip');
+  assert.equal(r.message, shortfall.message, 'the stored sentence is kept');
+  assert.equal(r.tip, '3383.859022 ZAMA more than recorded in Exchange. Earlier purchases are probably missing; the missing units are treated as unknown cost.', 'the tooltip: display names, the exact figure, no raw ID');
   assert.doesNotMatch(`${r.what} ${r.detail}`, /tx_|\d{5,}/, 'no raw ID and no full-precision figure in the words');
 });
 
@@ -66,7 +73,7 @@ test('attention: quarantines first, wallet notes as one row, an unknown kind wit
   ]);
   assert.deepEqual(rows.map((r) => r.kind), ['transfer_quarantined', 'unknown_basis', 'something_new', 'wallet_imports']);
   assert.equal(rows[0].tone, 'bad');
-  assert.equal(rows[1].amount.text, '5 X', 'the transaction\'s amount beside the words');
+  assert.equal(rows[1].amount.text, '5.00 X', 'the transaction\'s amount beside the words');
   assert.equal(rows[2].what, 'a new kind of note.');
   const w = rows[3];
   assert.equal(w.count, 2);
@@ -93,4 +100,22 @@ test('static: the Portfolio keeps sentence-case labels and draws no card shadow'
   assert.ok(part.length > 1000, 'the balance sheet and Portfolio rules exist');
   assert.doesNotMatch(part, /text-transform:\s*uppercase/);
   assert.doesNotMatch(part.replace(/box-shadow: 1px 0 0 var\(--separator\), 0 1px 0 var\(--separator\)/g, ''), /box-shadow:\s*(?!none)[^;]*rgba/, 'hairlines only, no elevation');
+});
+
+test('live test fixes: logo images on a light plate, the chosen model tab distinct, one marker per flagged item', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  const block = (start) => { const i = css.indexOf(start); return css.slice(i, css.indexOf('\n}', i)); };
+  assert.match(block(':root {'), /--logo-plate: #ffffff;/);
+  assert.match(block(':root[data-theme="dark"] {'), /--logo-plate: #e4e4e4;/, 'a dark mark stays visible in dark');
+  assert.match(css, /\.logo\.has-img, \.proj-cell \.logo\.has-img[^{]*\{ background: var\(--logo-plate\); \}/);
+  assert.match(block(':root[data-theme="dark"] {'), /--tab-chosen: #2c2c2c;/);
+  assert.match(css, /button\.mtab\[aria-selected="true"\] \{ background: var\(--tab-chosen\); border-color: var\(--control-border\); box-shadow: none; \}/);
+  assert.match(css, /\.list:has\(> li > \.state:first-child\) \{ list-style: none; padding-left: 0; \}/);
+});
+
+test('live test fixes: Back returns focus to the control that left the page, not to a fold opened earlier', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  assert.match(app, /Date\.now\(\) - lastClick\.at < LEAVE_CLICK_MS \? lastClick\.key : null/);
+  assert.match(app, /else activatorMemory\.delete\(routeKey\(prev\)\);/);
+  assert.doesNotMatch(app, /if \(k && state\.route\) \{\n\s+activatorMemory\.set/, 'a click alone no longer names the way back');
 });

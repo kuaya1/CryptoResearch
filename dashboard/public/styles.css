@@ -23,6 +23,8 @@
   --surface-selected: #f6f7f9;    /* pressed, and the open project's row (its ink edge says it) */
   --surface-sunken: #f8f9fa;      /* wells inside a panel: the amber signal keeps 3:1 on it */
   --surface-band: #f1f3f5;        /* a panel's header band: between the slate and the white */
+  --tab-chosen: #ffffff;          /* the chosen model tab on its track */
+  --logo-plate: #ffffff;          /* behind a project's logo image: CoinGecko draws them for a light ground */
   /* Text: ink and one gray for labels and metadata (each at least 4.5:1 on
      white, the canvas, the wells and the pressed fill) */
   --text: #111827;
@@ -149,7 +151,7 @@
    the same earned color, chosen in Settings or followed from the device with
    "Match this device". Text colors are at least 4.5:1 on its surfaces. */
 :root[data-theme="dark"] {
-  --bg: #121212; --surface: #1a1a1a; --surface-raised: #202020; --surface-hover: #1f1f1f; --surface-selected: #262626; --surface-sunken: #161616; --surface-band: #212121;
+  --bg: #121212; --surface: #1a1a1a; --surface-raised: #202020; --surface-hover: #1f1f1f; --surface-selected: #262626; --surface-sunken: #161616; --surface-band: #212121; --tab-chosen: #2c2c2c; --logo-plate: #e4e4e4;
   --text: #ededed; --text-2: #b4b4b4; --text-3: #9b9b9b;
   --separator: #252525; --border: #2e2e2e; --control-border: #6b6b6b;
   --accent: #ededed; --accent-hover: #ffffff; --accent-text: #ededed; --accent-weak: #262626; --on-accent: #121212;
@@ -175,7 +177,7 @@
 }
 @media (prefers-color-scheme: dark) {
   :root[data-theme="system"] {
-    --bg: #121212; --surface: #1a1a1a; --surface-raised: #202020; --surface-hover: #1f1f1f; --surface-selected: #262626; --surface-sunken: #161616; --surface-band: #212121;
+    --bg: #121212; --surface: #1a1a1a; --surface-raised: #202020; --surface-hover: #1f1f1f; --surface-selected: #262626; --surface-sunken: #161616; --surface-band: #212121; --tab-chosen: #2c2c2c; --logo-plate: #e4e4e4;
     --text: #ededed; --text-2: #b4b4b4; --text-3: #9b9b9b;
     --separator: #252525; --border: #2e2e2e; --control-border: #6b6b6b;
     --accent: #ededed; --accent-hover: #ffffff; --accent-text: #ededed; --accent-weak: #262626; --on-accent: #121212;
@@ -2341,9 +2343,12 @@ table.wl tbody tr.selected td, table.wl tbody tr.selected:hover td, table.wl tbo
 @container wl (max-width: 719px) {
   table.wl tbody tr { border-color: var(--border); border-radius: var(--r-card); }
 }
-/* Monograms: one neutral tone; a project's identity is not a metric. */
+/* Monograms: one neutral tone; a project's identity is not a metric. A logo
+   image sits on a light plate in both themes (live test, 2026-10-08: on the
+   dark page colour a black mark such as Ondo's disappeared). */
 .logo { box-shadow: inset 0 0 0 1px var(--border); }
 .logo:not(.has-img) { --logo-bg: var(--surface-sunken); --logo-ink: var(--text-2); }
+.logo.has-img, .proj-cell .logo.has-img, .xp-who .logo.has-img, .xp-cmp-head .logo.has-img { background: var(--logo-plate); }
 
 /* The inspector: a white panel with a hairline on the canvas. */
 @media (min-width: 1280px) {
@@ -2360,6 +2365,11 @@ table.wl tbody tr.selected td, table.wl tbody tr.selected:hover td, table.wl tbo
 .th-block, .cstrip { border-color: transparent; border-radius: var(--r-well); background: var(--surface-sunken); }
 .mtabs { border-color: transparent; border-radius: var(--r-well); }
 button.mtab { border-radius: var(--r-md); }
+/* The chosen model tab: its own fill and a firmer edge, so it stands out on
+   its track in both themes (in dark the fills were 26 against 22). */
+button.mtab[aria-selected="true"] { background: var(--tab-chosen); border-color: var(--control-border); box-shadow: none; }
+/* A list whose items lead with their own state sign takes no bullet as well. */
+.list:has(> li > .state:first-child) { list-style: none; padding-left: 0; }
 .xlink { border-color: transparent; border-radius: var(--r-pill); }
 .cchip { border-radius: var(--r-pill); }
 /* Big figures: the display cut of the system sans, tight. */

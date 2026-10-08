@@ -247,16 +247,25 @@ export function fmtNum(n, digits = 4) {
 }
 
 // A token amount for reading, from its exact decimal string: grouped, two
-// decimals from 1,000 up, four below that, four significant digits under 1;
-// trailing zeros dropped. Display only: the exact string stays with the
-// element (its tooltip and data-exact).
+// decimals from 1 up (always two, so figures side by side line up), four
+// significant digits under 1 (at least two decimals). Display only: the exact
+// string stays with the element (its tooltip and data-exact).
 export function fmtAmount(s) {
   if (s === null || s === undefined || s === '') return '—';
   const n = Number(s);
   if (!Number.isFinite(n)) return String(s);
   const a = Math.abs(n);
-  const opts = a === 0 ? { maximumFractionDigits: 0 } : a >= 1000 ? { maximumFractionDigits: 2 } : a >= 1 ? { maximumFractionDigits: 4 } : { maximumSignificantDigits: 4 };
-  return new Intl.NumberFormat('en-US', opts).format(n).replace(/^-/, '−');
+  if (a === 0) return '0';
+  let out = a >= 1
+    ? new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)
+    : new Intl.NumberFormat('en-US', { maximumSignificantDigits: 4 }).format(n);
+  if (a < 1) { const dec = (out.split('.')[1] || '').length; if (dec < 2) out = `${out.includes('.') ? out : `${out}.`}${'0'.repeat(2 - dec)}`; }
+  return out.replace(/^-/, '−');
+}
+
+// A count and its noun, singular or plural ("1 event", "73 events").
+export function plural(n, one, many = `${one}s`) {
+  return `${typeof n === 'number' ? n.toLocaleString('en-US') : n} ${Number(n) === 1 ? one : many}`;
 }
 
 // A long identifier for reading: its start and end around an ellipsis
