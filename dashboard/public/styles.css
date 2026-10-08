@@ -1,7 +1,8 @@
 /* CryptoResearch design tokens: the one layer every page and component uses.
    Day Desk (Eric, 2026-10-07, after the Nightdesk reference): gray panels,
    ledger figures, and color held back until the numbers earn it. A cool
-   chalk canvas, white panels with a 1px hairline and no decorative shadow,
+   slate canvas, white panels on it with a 1px hairline, a header band
+   across the top of each panel and no decorative shadow,
    ink for the active choice and the one primary action. The baseline is
    monochrome: green, red and amber appear only where a figure or a state
    earns them (a rise, a fall or an invalidation, a warning), and blue only
@@ -12,22 +13,25 @@
    sign or a shape. Change colors here, never in a component rule. */
 
 :root {
-  /* Surfaces: a chalk canvas, white panels on it, chalk wells inside them */
-  --bg: #f8f9fa;                  /* the canvas */
+  /* Surfaces: a cool slate canvas (Eric, 2026-10-07: the panels must stand
+     off it), white panels on it, a band across each panel's head, chalk
+     wells inside a panel */
+  --bg: #eceef2;                  /* the canvas */
   --surface: #ffffff;             /* panels: cards, the list, the inspector */
   --surface-raised: #ffffff;      /* menus, dialogs, toasts */
   --surface-hover: #f9fafb;       /* a row or control under the pointer */
   --surface-selected: #f6f7f9;    /* pressed, and the open project's row (its ink edge says it) */
-  --surface-sunken: #f8f9fa;      /* wells inside a panel, in the canvas tone: the amber signal keeps 3:1 on it */
+  --surface-sunken: #f8f9fa;      /* wells inside a panel: the amber signal keeps 3:1 on it */
+  --surface-band: #f1f3f5;        /* a panel's header band: between the slate and the white */
   /* Text: ink and one gray for labels and metadata (each at least 4.5:1 on
      white, the canvas, the wells and the pressed fill) */
   --text: #111827;
   --text-2: #4b5563;              /* secondary prose */
-  --text-3: #6b7280;              /* labels, metadata, captions: 4.5:1 on the pressed fill */
+  --text-3: #5f6672;              /* labels, metadata, captions: 4.5:1 on the slate canvas (#6b7280 was 4.2:1 there) */
   /* Lines: a hairline round every panel, lighter rules inside it */
   --separator: #edeff2;
   --border: #e5e7eb;
-  --control-border: #878d99;      /* at least 3:1 on white and the canvas: field and checkbox edges */
+  --control-border: #80868f;      /* at least 3:1 on white and the slate canvas: field and checkbox edges */
   /* The accent: ink for the active choice, the primary action, selection and focus */
   --accent: #111827;              /* fills; white text on it is 17.7:1 */
   --accent-hover: #1f2937;
@@ -49,15 +53,18 @@
   --work-text: #1d4ed8;
   --work-weak: #eff6ff;
   /* Earned color. The signal tones are the reference values, for dots,
-     bars, rules, chart lines and signs (each at least 3:1 on white); words
-     use the deeper step of the same hue (at least 4.5:1 on every fill). */
+     bars, rules, chart lines and signs (each at least 3:1 on white and on
+     a well, where charts and bars live; on the slate canvas and a header
+     band a dot is a little under 3:1 and always has its word beside it);
+     words use the deeper step of the same hue (at least 4.5:1 on every
+     fill, the canvas included). */
   --pos-strong: #16a34a;          /* a rise, an inflow, a clean check: signal */
   --neg-strong: #dc2626;          /* a fall, an invalidation, a failure: signal */
   --warn-strong: #d97706;         /* a warning: signal */
-  --pos: #15803d;                 /* the same as words */
-  --pos-text: #15803d;            /* a rise as text in the list */
+  --pos: #147a3a;                 /* the same as words: 4.5:1 on the slate canvas too */
+  --pos-text: #147a3a;            /* a rise as text in the list */
   --neg: #b91c1c;
-  --warn: #b45309;
+  --warn: #ad4f08;
   --pos-weak: #f0fdf4;
   --neg-weak: #fef2f2;
   --warn-weak: #fffbeb;
@@ -142,7 +149,7 @@
    the same earned color, chosen in Settings or followed from the device with
    "Match this device". Text colors are at least 4.5:1 on its surfaces. */
 :root[data-theme="dark"] {
-  --bg: #121212; --surface: #1a1a1a; --surface-raised: #202020; --surface-hover: #1f1f1f; --surface-selected: #262626; --surface-sunken: #161616;
+  --bg: #121212; --surface: #1a1a1a; --surface-raised: #202020; --surface-hover: #1f1f1f; --surface-selected: #262626; --surface-sunken: #161616; --surface-band: #212121;
   --text: #ededed; --text-2: #b4b4b4; --text-3: #9b9b9b;
   --separator: #252525; --border: #2e2e2e; --control-border: #6b6b6b;
   --accent: #ededed; --accent-hover: #ffffff; --accent-text: #ededed; --accent-weak: #262626; --on-accent: #121212;
@@ -168,7 +175,7 @@
 }
 @media (prefers-color-scheme: dark) {
   :root[data-theme="system"] {
-    --bg: #121212; --surface: #1a1a1a; --surface-raised: #202020; --surface-hover: #1f1f1f; --surface-selected: #262626; --surface-sunken: #161616;
+    --bg: #121212; --surface: #1a1a1a; --surface-raised: #202020; --surface-hover: #1f1f1f; --surface-selected: #262626; --surface-sunken: #161616; --surface-band: #212121;
     --text: #ededed; --text-2: #b4b4b4; --text-3: #9b9b9b;
     --separator: #252525; --border: #2e2e2e; --control-border: #6b6b6b;
     --accent: #ededed; --accent-hover: #ffffff; --accent-text: #ededed; --accent-weak: #262626; --on-accent: #121212;
@@ -2256,8 +2263,8 @@ button.cc-copy.done { color: var(--pos-text); font-size: var(--fs-caption); font
    own text keeps proportional figures (.report-body sets its own). */
 body { font-variant-numeric: var(--figures); }
 
-/* The bar sits on the canvas with a hairline under it. */
-.topbar { background: color-mix(in srgb, var(--bg) 90%, transparent); border-bottom: 1px solid var(--border); }
+/* The bar is a white band over the slate canvas, a hairline under it. */
+.topbar { background: color-mix(in srgb, var(--surface) 94%, transparent); border-bottom: 1px solid var(--border); }
 .brand .tag { background: var(--surface); border-color: var(--border); }
 .status-dot { background: var(--surface); border-color: var(--border); }
 /* Navigation: quiet words; the current page an ink tab. */
@@ -2269,9 +2276,14 @@ body { font-variant-numeric: var(--figures); }
 .mainnav .count { background: var(--surface); border-color: var(--border); color: var(--text-2); }
 .mainnav a.active .count { background: color-mix(in srgb, var(--on-accent) 18%, transparent); border-color: transparent; color: var(--on-accent); }
 
-/* Panels: white, a 1px hairline, 10px corners, no shadow. */
-.card { padding: var(--s4); border-color: var(--border); border-radius: var(--r-card); }
-.card > .card-head { margin-bottom: 10px; }
+/* Panels: white, a 1px hairline, 10px corners, no shadow. Each panel's
+   head is a band (--surface-band) across its full width with a hairline
+   under it: a card's title row, the watchlist's column header, the
+   inspector's head, a dialog's head, the Brief's title row (brief.css). */
+.card { --card-pad: var(--s4); padding: var(--card-pad); border-color: var(--border); border-radius: var(--r-card); }
+.card > .card-head { margin: calc(-1 * var(--card-pad)) calc(-1 * var(--card-pad)) var(--s3); padding: 8px var(--card-pad); min-height: 44px; align-items: center; background: var(--surface-band); border-bottom: 1px solid var(--border); border-radius: calc(var(--r-card) - 1px) calc(var(--r-card) - 1px) 0 0; }
+.card > .card-head .note { margin-top: 0; }
+dialog .dlg-head { background: var(--surface-band); border-bottom-color: var(--border); }
 .summary-row, .status-strip, .ss-panel, .reader, .report-list, .table-scroll { border-color: var(--border); border-radius: var(--r-card); }
 .empty { border-radius: var(--r-card); }
 .summary-row .value { font-family: var(--font-display); }
@@ -2320,6 +2332,8 @@ input[type="file"]::file-selector-button, input[type="file"]:focus-visible { bor
   table.wl tbody tr:last-child td:last-child { border-bottom-right-radius: var(--r-card); }
   table.wl th button.sort, table.wl th .th, table.wl th .th .lbl, table.wl th .lbl { font-weight: 500; color: var(--text-3); }
   table.wl th[aria-sort] button.sort, table.wl th[aria-sort] .lbl, table.wl th[aria-sort] .th .lbl { color: var(--text); }
+  /* The column header is the list's band. */
+  table.wl thead th, table.wl thead th.c-project { background: var(--surface-band); }
 }
 /* The open project: the pressed fill and an ink edge (not colour alone). */
 table.wl tbody tr.selected td, table.wl tbody tr.selected:hover td, table.wl tbody tr.selected:focus-within td, table.wl tbody tr.selected td.c-project { background: var(--surface-selected); }
@@ -2339,7 +2353,7 @@ table.wl tbody tr.selected td, table.wl tbody tr.selected:hover td, table.wl tbo
 @media (min-width: 761px) and (max-width: 1279.98px) {
   #panel-root .panel { top: 12px; right: 12px; bottom: 12px; border: 1px solid var(--border); border-radius: var(--r-card); overflow: hidden; box-shadow: var(--shadow-pop); }
 }
-.panel-head { border-bottom-color: var(--separator); }
+.panel-head { background: var(--surface-band); border-bottom-color: var(--border); }
 /* Parts inside it: gray wells without a border. A withheld grade keeps its
    dashed edge (.ig.withheld). */
 .ig { border-color: transparent; border-radius: var(--r-well); background: var(--surface-sunken); }
