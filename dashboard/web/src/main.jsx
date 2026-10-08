@@ -1,6 +1,7 @@
 import '../../public/tokens.css';
 import './styles/base.css';
 import './styles/components.css';
+import './styles/ui.css';
 import './styles/shell.css';
 import './styles/watchlist.css';
 import './styles/inspector.css';

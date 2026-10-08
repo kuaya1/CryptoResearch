@@ -4,11 +4,13 @@
 // focus, open sections, scroll positions and drafts; while you are typing in
 // it, a bar offers the update instead. Its stylesheet is scoped under .lg.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { useDesk } from '../lib/hooks.js';
 import { nav, routeKey, pageReady, findKey, restoreScrollers } from '../lib/router.js';
 import { legacyCtx, legacyState } from './ctx.js';
 import { h } from '../../../public/ui.js';
 import { isChunkError } from '../components/Boundary.jsx';
+import { Slots, findSlots } from './slots.jsx';
 
 function captureState(root) {
   const details = {};
@@ -50,6 +52,7 @@ export default function LegacyView({ load, name }) {
   const seq = useRef(0);
   const last = useRef({ key: null, version: -1 });
   const [stale, setStale] = useState(false);
+  const [slots, setSlots] = useState([]);
   const route = nav.route;
   const key = route ? `${routeKey(route)}#${route.query.get('p') || ''}` : '';
 
@@ -80,6 +83,9 @@ export default function LegacyView({ load, name }) {
     }
     if (mine !== seq.current || !host.current) return;
     if (root.firstChild !== node || root.childNodes.length !== 1) root.replaceChildren(node);
+    // Drawn at once (never inside a render: this runs after an await), so
+    // the restore below measures the page with its slots filled.
+    flushSync(() => setSlots(findSlots(root, mine)));
     if (typeof node.afterMount === 'function') {
       try {
         node.afterMount();
@@ -126,6 +132,7 @@ export default function LegacyView({ load, name }) {
         </div>
       ) : null}
       <div className={`lg lg-view lg-${name}`} ref={host} />
+      <Slots slots={slots} />
     </>
   );
 }

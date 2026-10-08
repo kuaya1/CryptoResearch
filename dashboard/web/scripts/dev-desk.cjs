@@ -258,7 +258,7 @@ function contractFor(symbol) {
     is_anti_whale: '0', is_open_source: '1', buy_tax: '0', sell_tax: '0', owner_address: '0x0000000000000000000000000000000000000000',
     holder_count: '12345', lp_holder_count: '67', is_in_dex: '1', trust_list: '0',
   };
-  const VARIANT = { [contractFor('XLMN')]: { is_mintable: '1', is_proxy: '1' }, [contractFor('XEMB')]: { sell_tax: '0.12', is_blacklisted: '1', owner_address: '0x00000000000000000000000000000000000000ab' }, [contractFor('XKST')]: { is_proxy: '1' } };
+  const VARIANT = { [contractFor('XLMN')]: { is_mintable: '1', is_proxy: '1' }, [contractFor('XEMB')]: { sell_tax: '0.12', is_blacklisted: '1', owner_address: '0x00000000000000000000000000000000000000ab' }, [contractFor('XKST')]: { is_proxy: '1', owner_change_balance: '1', hidden_owner: '1' } };
   const goplus = async (url) => {
     const addr = (String(url).match(/contract_addresses=([^&]+)/) || [])[1];
     const a = decodeURIComponent(addr || '').toLowerCase();

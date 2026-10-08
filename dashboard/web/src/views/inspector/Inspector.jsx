@@ -12,7 +12,7 @@ import {
 } from '../../../../public/ui.js';
 import {
   mkt, marketStrings, noPriceReason, defaultModel, priceClock, fundamentalsTile, defillamaBound, rowProject,
-  contractChipModel, badgeRank, contractChecks, shortAddr, needsReview, progressSteps, STEP_NAMES, setupShort,
+  contractChipModel, contractChecks, shortAddr, needsReview, progressSteps, STEP_NAMES, setupShort,
 } from '../../../../public/watchlist-model.js';
 import { jobKey, researchState, stateText } from '../../../../public/ui.js';
 import { useDesk, useProject } from '../../lib/hooks.js';
@@ -28,6 +28,9 @@ import { Dom, loadLegacy } from '../../components/Dom.jsx';
 import { badgeOpts } from '../watchlist/ProjectTable.jsx';
 import { view, closePanel, markReviewed, restoreProject, archiveProject, setWatching } from '../watchlist/state.js';
 import { ModelPanel } from './ModelPanel.jsx';
+import { MetricRibbon } from '../../components/ui/MetricRibbon.jsx';
+import { SecurityAuditStrip } from '../../components/ui/SecurityAuditStrip.jsx';
+import { ModelTabMatrix } from '../../components/ui/ModelTabMatrix.jsx';
 import { opinionOf, opinionsAgree } from '../../lib/opinion.js';
 
 // Folds and rows you opened stay open for this project across a model
@@ -77,14 +80,16 @@ function Stats({ p }) {
   const m = mkt(p);
   const s = marketStrings(m) || {};
   const none = (label, v) => (m ? <UnknownFigure label={label} value={v} /> : <Unknown label={label} />);
-  const stat = (k, v, title) => <div className="ih-stat" title={title}><dt>{k}</dt><dd>{v}</dd></div>;
   return (
-    <dl className="ih-stats" aria-label="Asset overview">
-      {stat('MC', s.mcap || none('Market cap', m && m.market_cap_usd), 'Market cap (CoinGecko)')}
-      {stat('Vol 24h', s.volume || none('Volume', m && m.volume_24h_usd), 'Trading volume over 24 hours')}
-      {stat('FDV', s.fdv || none('FDV', m && m.fdv_usd), 'Fully diluted valuation')}
-      {stat('FDV/MC', s.fdvMc || <Unknown label="FDV over market cap" />, 'Fully diluted valuation over market cap, from the two figures shown')}
-    </dl>
+    <MetricRibbon
+      label="Asset overview"
+      items={[
+        { key: 'mc', label: 'MC', value: s.mcap || none('Market cap', m && m.market_cap_usd), title: 'Market cap (CoinGecko)' },
+        { key: 'vol', label: 'Vol 24h', value: s.volume || none('Volume', m && m.volume_24h_usd), title: 'Trading volume over 24 hours' },
+        { key: 'fdv', label: 'FDV', value: s.fdv || none('FDV', m && m.fdv_usd), title: 'Fully diluted valuation' },
+        { key: 'fdvmc', label: 'FDV/MC', value: s.fdvMc || <Unknown label="FDV over market cap" />, title: 'Fully diluted valuation over market cap, from the two figures shown' },
+      ]}
+    />
   );
 }
 
@@ -123,26 +128,7 @@ function ContractChips({ p }) {
         {m.status ? <span className={`pill${m.status.tone === 'warn' ? ' pill-warn' : ''}`} title={m.status.title || undefined}>{m.status.word}</span> : null}
         {m.age ? <span className={`cc-age${m.stale ? ' is-stale' : ''}`} title={m.ageTitle} aria-label={`Screened by GoPlus ${m.age} ago${m.stale ? ', stale' : ''}`}>{m.stale ? <Clock size={12} aria-hidden="true" /> : null}<span aria-hidden="true">{`GoPlus ${m.age}`}</span></span> : null}
       </div>
-      {/* The audit strip (Eric, 2026-10-08): the four standing checks in one
-          bordered row of equal cells, "Mint: No"; only a risky answer becomes
-          an alert badge; severe flags follow as alert badges of their own.
-          Every answer is a word; nothing is labelled safe. */}
-      <ul className="cc-audit" aria-label="Contract checks from GoPlus">
-        {m.chips.map((c) => (
-          <li key={c.key} className={`cc-cell is-${c.dot}`} title={c.title || undefined} aria-label={c.aria}>
-            <span className={c.dot === 'risky' ? 'cc-alert' : 'cc-quiet'} aria-hidden="true"><span className="cc-l">{`${c.label}:`}</span> <span className="cc-val">{c.value}</span></span>
-          </li>
-        ))}
-      </ul>
-      {m.extra.length ? (
-        <ul className="cc-flags" aria-label="Severe contract flags from GoPlus">
-          {[...m.extra].sort((a, b) => badgeRank(a) - badgeRank(b)).map((b) => (
-            <li key={b.key} className="cc-alert" title={b.title} aria-label={b.aria}>
-              <span className="cc-l" aria-hidden="true">{b.label}</span>{b.value !== null ? <span className="cc-val" aria-hidden="true">{`: ${b.value}`}</span> : null}
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      <SecurityAuditStrip model={m} />
     </div>
   );
 }
@@ -571,22 +557,24 @@ export default function Inspector({ pid, wide }) {
               </a>
             </div>
             <Tabs.Root value={sel} onValueChange={(v) => pickModel(v)} activationMode="automatic">
-              <Tabs.List className="mtabs" aria-label="Model">
-                {PROVIDERS.map((prov) => {
+              {/* A segmented control: the model and its grade in one line; a
+                  model on hold with no report and no job reads "Hold". */}
+              <ModelTabMatrix
+                models={PROVIDERS.map((prov) => {
                   const rep = p.providers && p.providers[prov];
                   const job = p.research && p.research.providers && p.research.providers[prov];
                   const info = pillInfo(prov, rep, job, badgeOpts(d, prov));
-                  // A segmented control: the model and its grade in one line;
-                  // a model on hold with no report and no job reads "Hold".
                   const hold = !rep && !job ? onHoldOf(d.index, prov) : null;
-                  return (
-                    <Tabs.Trigger key={prov} value={prov} className="mtab" data-key={`insp-tab-${prov}`} aria-label={hold ? `${PROVIDER_LABELS[prov]}: on hold on this desk, no report` : info.text.replace(/[.\s]+$/, '')}>
-                      <span className="mtab-name" aria-hidden="true"><span className="n-full">{PROVIDER_LABELS[prov]}</span><span className="n-short">{PROVIDER_SHORT[prov]}</span></span>
-                      {hold ? <span className="mtab-hold" aria-hidden="true">Hold</span> : <GradePill provider={prov} report={rep} job={job} opts={badgeOpts(d, prov)} showSub={false} className="gp-compact" aria-hidden="true" />}
-                    </Tabs.Trigger>
-                  );
+                  return {
+                    key: prov,
+                    name: PROVIDER_LABELS[prov],
+                    short: PROVIDER_SHORT[prov],
+                    dataKey: `insp-tab-${prov}`,
+                    aria: hold ? `${PROVIDER_LABELS[prov]}: on hold on this desk, no report` : info.text.replace(/[.\s]+$/, ''),
+                    badge: hold ? <span className="mtab-hold" aria-hidden="true">Hold</span> : <GradePill provider={prov} report={rep} job={job} opts={badgeOpts(d, prov)} showSub={false} className="gp-compact" aria-hidden="true" />,
+                  };
                 })}
-              </Tabs.List>
+              />
               <Tabs.Content value={sel} className="mtab-panel" tabIndex={-1}>
                 <ModelPanel d={d} p={p} prov={sel} detail={detail} current={current} failed={Boolean(error)} opened={opened} />
               </Tabs.Content>

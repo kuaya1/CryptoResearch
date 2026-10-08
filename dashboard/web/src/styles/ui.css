@@ -1,0 +1,87 @@
+/* The terminal's component library (web/src/components/ui, Eric, 2026-10-08):
+   the metric ribbon, the diagnostic row, the model tab matrix, the security
+   audit strip's alert rows and the ledger. Tokens only. */
+
+/* ---- MetricRibbon: equal cells divided by hairlines, a micro label over a
+   bold tabular value (10px uppercase labels: this ribbon's recorded
+   exception to "nothing under 12px, sentence case"). ---- */
+.mribbon {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 14px 0 12px;
+  background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--r-card); overflow: hidden;
+}
+.mribbon-cell { padding: 8px 10px; min-width: 0; }
+.mribbon-cell + .mribbon-cell { border-left: 1px solid var(--border); }
+.mribbon-cell dt { font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-label); line-height: 1.4; }
+.mribbon-cell dd { margin: 2px 0 0; font-size: 13px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 359.98px) {
+  .mribbon { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mribbon-cell:nth-child(3) { border-left: 0; }
+  .mribbon-cell:nth-child(n+3) { border-top: 1px solid var(--border); }
+}
+
+/* ---- DiagnosticSegmentBar: a fixed name column, a 6px track in the grade's
+   own tier, the figure right-aligned with the stated confidence. ---- */
+.dsb { display: grid; grid-template-columns: minmax(96px, 132px) minmax(0, 1fr) 52px; gap: 12px; align-items: center; min-width: 0; }
+.dsb-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--fs-sm); color: var(--text); }
+.dsb-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsb-name .ev-dot { margin-top: 0; flex: none; }
+.dsb-score { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 4px; font-variant-numeric: tabular-nums; }
+.dsb-v { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+.dsb.is-unknown .dsb-v { color: var(--text-3); font-weight: 500; }
+.dsb-conf { font-size: 12px; font-weight: 600; color: var(--text-3); }
+
+/* ---- SecurityAuditStrip: severe flags and a recent change as full-width
+   alert rows under the strip (the strip itself is inspector.css .cc-audit). ---- */
+.sa-crit { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.sa-crit-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-radius: var(--r-control);
+  background: var(--check-risk-bg); border: 1px solid var(--check-risk-line); color: var(--check-risk-ink);
+  font-size: var(--fs-xs); font-weight: 500; line-height: 1.4;
+}
+.sa-crit-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--neg-strong); }
+.sa-crit-k { font-weight: 700; }
+
+/* ---- LedgerTable: holdings as rows that never wrap into columns. ---- */
+.ledger { list-style: none; margin: 0; padding: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); overflow: hidden; }
+.ledger-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; }
+.ledger-row + .ledger-row { border-top: 1px solid var(--separator); }
+.ledger-logo { display: inline-flex; }
+.ledger-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ledger-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ledger-sym { font-size: var(--fs-sm); font-weight: 600; color: var(--text); white-space: nowrap; }
+a.ledger-sym { text-decoration: none; }
+a.ledger-sym:hover { text-decoration: underline; text-decoration-color: var(--link-line); }
+.ledger-chip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 6px; border-radius: var(--r-pill); background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--border); color: var(--text-2); font-size: var(--fs-xs); line-height: 20px; }
+.ledger-name { font-size: var(--fs-xs); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ledger-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.ledger-tag { padding: 0 6px; border-radius: var(--r-control); font-size: var(--fs-xs); line-height: 20px; color: var(--text-2); background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--separator); }
+.ledger-tag.tone-warn { color: var(--warn); background: var(--warn-weak); box-shadow: inset 0 0 0 1px var(--pill-warn-line); }
+.ledger-figs { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; text-align: right; font-variant-numeric: tabular-nums; }
+.ledger-amt { font-size: var(--fs-sm); font-weight: 600; color: var(--text); white-space: nowrap; }
+.ledger-val { font-size: var(--fs-xs); color: var(--text-2); white-space: nowrap; }
+.ledger-val.is-unknown { color: var(--text-3); font-style: italic; }
+.ledger-more { grid-column: 2 / -1; }
+.ledger-more > summary { display: inline-flex; align-items: center; min-height: 32px; font-size: var(--fs-xs); font-weight: 500; color: var(--text-2); cursor: pointer; text-decoration: underline; text-decoration-color: var(--link-line); text-underline-offset: 3px; }
+.ledger-more > summary::-webkit-details-marker { display: none; }
+.ledger-more dl { margin: 2px 0 4px; padding: 8px 10px; display: grid; gap: 4px; border-radius: var(--r-well); background: var(--surface-sunken); }
+.ledger-fact { display: grid; grid-template-columns: minmax(96px, 40%) minmax(0, 1fr); gap: 8px; font-size: var(--fs-xs); line-height: 1.45; }
+.ledger-fact dt { color: var(--text-3); }
+.ledger-fact dd { margin: 0; color: var(--text); text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.ledger-fact dd.tone-pos { color: var(--pos); }
+.ledger-fact dd.tone-neg { color: var(--neg); }
+.ledger-fact dd.tone-warn { color: var(--warn); }
+
+/* The hosted Portfolio leaves a slot beside its positions table: on a phone
+   the ledger takes the table's place, so nothing is cut off or scrolled
+   sideways; a wider screen keeps every column of the table. */
+.slot-ledger { display: none; }
+/* Inside a card the ledger is its rows, never a box within the box. */
+.card .ledger { background: transparent; border: 0; border-radius: 0; }
+.card .ledger-row { padding-left: 0; padding-right: 0; }
+@media (max-width: 767.98px) {
+  .lg .pos-table { display: none; }
+  .slot-ledger { display: block; }
+}

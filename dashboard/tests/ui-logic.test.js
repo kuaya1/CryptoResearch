@@ -490,7 +490,8 @@ test('status strip and header: secondary figures step aside (Dom and Total first
   assert.match(strip, /kinds\.length === 1 \? kinds\[0\] : `\$\{critical\.length\} need action`/, 'what needs action is named in words, never a bare count');
   // The inspector's four figures in one row, the name never cut short.
   const insp = web('styles', 'inspector.css');
-  assert.match(insp, /\.ih-stats \{\s*display: grid; grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/);
+  assert.match(web('styles', 'ui.css'), /\.mribbon \{\s*display: grid; grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/);
+  assert.match(web('views', 'inspector', 'Inspector.jsx'), /<MetricRibbon\s/, 'the inspector draws its four figures as the metric ribbon');
   assert.match(insp, /\.ih-name \{[^}]*-webkit-line-clamp: 3/, 'the name wraps up to three lines');
   assert.doesNotMatch(insp, /\.ih-name \{[^}]*text-overflow: ellipsis/);
 });

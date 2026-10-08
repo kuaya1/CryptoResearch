@@ -34,7 +34,9 @@ nothing from this folder.
 - `src/shell/` the sidebar, the phone top bar and tab bar, the More sheet.
 - `src/components/` the small component library: grade pills, the metric header and
   score bars, figures, logos, menus (Radix), the `Dom` adapter for parts the
-  app still hosts.
+  app still hosts; `src/components/ui/` the terminal's components
+  (MetricRibbon, DiagnosticSegmentBar, ModelTabMatrix, SecurityAuditStrip,
+  LedgerTable), styled in `src/styles/ui.css`.
 - `src/views/` the watchlist, the inspector and the project page (Overview in
   React; Compare, Evidence, Full report, Market and Notes hosted).
 - `src/legacy/` hosts the views not yet ported (Portfolio and wallets, New

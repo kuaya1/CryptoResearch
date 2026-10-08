@@ -29,6 +29,7 @@ import { opinionOf } from '../../lib/opinion.js';
 import { legacyCtx } from '../../legacy/ctx.js';
 import { ScoreBar } from '../../components/ScoreBar.jsx';
 import { MetricHeader } from '../../components/MetricHeader.jsx';
+import { DiagnosticSegmentBar } from '../../components/ui/DiagnosticSegmentBar.jsx';
 import { Dom, loadLegacy } from '../../components/Dom.jsx';
 import { pillInfo } from '../../components/GradePill.jsx';
 import { badgeOpts } from '../watchlist/ProjectTable.jsx';
@@ -422,7 +423,7 @@ function Categories({ d, p, prov, detail, full, wait, opened }) {
           if (na) {
             return (
               <li key={x.id} className="cat-na">
-                <span className="cat-name" title={x.label}>{name}</span>
+                <span className="dsb-name" title={x.label}><span className="dsb-label">{name}</span></span>
                 <span className="cat-na-word" title={(x.def && x.def.na_reason) || (s && s.rationale) || ''}>Not applicable</span>
               </li>
             );
@@ -439,15 +440,15 @@ function Categories({ d, p, prov, detail, full, wait, opened }) {
             <li key={x.id}>
               <details className={`cat${scored ? '' : ' is-unknown'}${fl.length ? (serious ? ' has-serious' : ' has-flag') : ''}`} data-key={okey} open={opened.get(okey)} onToggle={(e) => opened.set(okey, e.currentTarget.open)}>
                 <summary aria-label={`${x.label}: ${scored ? `${scoreWords(s)}${word ? `, ${word}` : ''}${conf && CONFIDENCE_LABELS[s.confidence] ? `, confidence ${CONFIDENCE_LABELS[s.confidence].toLowerCase()}` : ''}` : value}${fl.length ? `; ${serious ? 'serious evidence flag' : 'evidence flag'}` : ''}. Open for the reasons`}>
-                  <span className="cat-name" title={x.label} aria-hidden="true">
-                    {name}
-                    {fl.length ? <span className={`ev-dot ${serious ? 'serious' : 'material'}`} title={fl.map((f) => f.beside || f.message).join(' ')} /> : null}
-                  </span>
-                  <ScoreBar score={s} />
-                  <span className="cat-score" aria-hidden="true">
-                    <span className="cat-v">{scored ? value : '?'}</span>
-                    {conf && scored && CONF_LETTER[s.confidence] ? <span className="cat-conf" title={`${CONFIDENCE_LABELS[s.confidence]} confidence, as the model states it`}>{CONF_LETTER[s.confidence]}</span> : null}
-                  </span>
+                  <DiagnosticSegmentBar
+                    label={name}
+                    title={x.label}
+                    score={s}
+                    value={scored ? value : '?'}
+                    known={scored}
+                    mark={fl.length ? <span className={`ev-dot ${serious ? 'serious' : 'material'}`} title={fl.map((f) => f.beside || f.message).join(' ')} /> : null}
+                    confidence={conf && scored && CONF_LETTER[s.confidence] ? { letter: CONF_LETTER[s.confidence], title: `${CONFIDENCE_LABELS[s.confidence]} confidence, as the model states it` } : null}
+                  />
                   {short ? <span className="cat-why">{short}</span> : null}
                 </summary>
                 <div className="cat-detail">

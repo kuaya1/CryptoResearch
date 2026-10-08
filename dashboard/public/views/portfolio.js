@@ -195,6 +195,31 @@ export async function renderPortfolio(ctx, route) {
     h('div', { id: 'tabpanel', role: 'tabpanel', 'aria-labelledby': `tab-${tab}` }, body));
 }
 
+// A position's facts as the wide table's columns say them, in words, for the
+// phone ledger's Details fold (price with its reason, allocation, results,
+// fees, the BTC comparison, the split across accounts). Unknown stays a word.
+function positionFacts(p, { why, denominator, accountName }) {
+  const money = (v) => (v === null || v === undefined ? { v: 'unknown' } : { v: fmtUsd(v), tone: v > 0 ? 'pos' : v < 0 ? 'neg' : null });
+  const facts = [];
+  facts.push({ k: 'Price', v: p.price.usd === null ? `No price${why ? ` · ${why}` : ''}` : `${fmtUsd(p.price.usd)}${why ? ` · ${why}` : ''}`, tone: p.price.usd === null || why ? 'warn' : null });
+  facts.push({ k: 'Allocation', v: p.allocation_pct === null ? 'Unpriced' : `${fmtPct(p.allocation_pct)} of ${denominator}` });
+  facts.push({ k: 'Unrealized (known lots)', ...money(p.unrealized_known_usd) });
+  const realized = money(p.realized_known_usd);
+  facts.push({ k: 'Realized', ...realized, v: `${realized.v}${p.realized_unknown_quantity ? ` + ${fmtAmount(p.realized_unknown_quantity)} units with unknown cost` : ''}` });
+  facts.push({ k: 'Fees', v: fmtUsd((p.fees_usd || 0) + (p.fees_crypto_cost_usd || 0)) });
+  const b = p.btc_relative;
+  if (!b || b.status === 'not_applicable') facts.push({ k: 'vs BTC', v: 'Not applicable' });
+  else if (b.status !== 'computed') {
+    // The reasons in words; a record's ID stays in the tooltip, never as text.
+    const words = [...new Set((b.reasons || []).map((r) => String(r).replace(/^\S+:\s+/, '')))];
+    facts.push({ k: 'vs BTC', v: `Withheld${words.length ? `: ${words.join('; ')}` : ''}`, title: [b.method, ...(b.reasons || [])].filter(Boolean).join('\n') || null });
+  }
+  else facts.push({ k: 'vs BTC', v: `${b.result_btc >= 0 ? '+' : ''}${b.result_btc.toFixed(5)} BTC (${b.result_pct >= 0 ? '+' : ''}${b.result_pct.toFixed(1)}%)${b.price_status === 'stale' ? ' · BTC price stale' : ''}`, tone: b.result_btc >= 0 ? 'pos' : 'neg', title: [b.method, b.definition].filter(Boolean).join('. ') || null });
+  const accts = p.by_account || [];
+  if (accts.length > 1) for (const a of accts) facts.push({ k: `In ${accountName(a.account_id)}`, v: fmtAmount(a.quantity_exact ?? a.quantity), title: `Exact: ${a.quantity_exact ?? a.quantity}` });
+  return facts;
+}
+
 function pnl(v) {
   if (v === null || v === undefined) return h('span', { class: 'unknown' }, 'unknown');
   return h('span', { class: v > 0 ? 'pos' : v < 0 ? 'neg' : '' }, fmtUsd(v));
@@ -252,6 +277,51 @@ async function positionsTab(ctx) {
     { label: 'vs BTC (capital comparison)', render: btcCell },
   ], open, { empty: 'No open positions.' });
 
+  // On a phone the positions read as ledger rows (the app's LedgerTable,
+  // web/src/components/ui, drawn into this slot) instead of a table cut off at
+  // the screen's edge; a wider screen keeps the table. Same records, same
+  // words: amounts rounded with the exact decimal as their tooltip, an
+  // unpriced value "Value unknown", never zero, accounts by name.
+  const ledger = h('div', { class: 'slot-ledger', dataset: { reactSlot: 'ledger' } });
+  ledger.slotProps = {
+    label: 'Recorded positions',
+    empty: 'No open positions.',
+    rows: open.map((p) => {
+      const qty = p.quantity_exact ?? p.quantity;
+      const accts = p.by_account || [];
+      const tags = [];
+      if (p.cost_basis_status === 'known') tags.push({ text: `Cost ${fmtUsd(p.cost_basis_known_usd)}` });
+      else if (p.cost_basis_status === 'partial') tags.push({ text: `Cost ${fmtUsd(p.cost_basis_known_usd)} · ${fmtAmount(p.unknown_basis_quantity)} units with unknown cost`, title: 'Unknown purchase history means unknown cost basis. Nothing is guessed.' });
+      else tags.push({ text: 'Cost unknown', title: 'No recorded purchase price' });
+      // The price's reason in words, as the wide table's note line gives it.
+      const pf = freshnessText(p.price.status, p.price.age_minutes);
+      const why = p.price.status === 'fresh' ? null : p.price.status === 'no_price_source' ? 'no price source' : p.price.status === 'unknown_asset' ? 'unknown asset' : pf.text === 'No price' ? null : pf.text;
+      if (p.price.usd === null) tags.push({ text: why ? `No price · ${why}` : 'No price', tone: 'warn', title: p.price.note || null });
+      else if (why) tags.push({ text: why, tone: pf.tone === 'ok' ? 'none' : 'warn' });
+      if (p.in_transit_quantity) tags.push({ text: `${fmtAmount(p.in_transit_quantity)} in transit`, tone: 'warn' });
+      if (p.quarantined_quantity) tags.push({ text: `${fmtAmount(p.quarantined_quantity)} quarantined`, tone: 'warn', title: 'Units held back until a conflicting record is resolved' });
+      if (p.kind && p.kind !== 'token') tags.push({ text: p.kind.replace(/_/g, ' ') });
+      return {
+        id: p.asset_id,
+        pid: p.project_id || null,
+        symbol: p.symbol || p.asset_id,
+        href: p.project_id ? `#/watchlist?p=${encodeURIComponent(p.project_id)}` : null,
+        hrefTitle: 'Open its research summary',
+        name: p.name || null,
+        chip: accts.length === 1 ? accountName(accts[0].account_id) : accts.length ? plural(accts.length, 'account') : null,
+        chipTitle: accts.length ? accts.map((a) => `${accountName(a.account_id)}: ${a.quantity_exact ?? a.quantity}`).join('\n') : null,
+        tags,
+        amount: fmtAmount(qty),
+        amountExact: String(qty),
+        amountTitle: `Exact: ${qty}`,
+        value: p.value_usd === null ? 'Value unknown' : fmtUsd(p.value_usd),
+        valueKnown: p.value_usd !== null,
+        valueTitle: p.value_usd === null ? 'No usable price; the value is unknown, not zero' : p.allocation_pct === null ? null : `${fmtPct(p.allocation_pct)} of ${denominator}`,
+        facts: positionFacts(p, { why, denominator, accountName }),
+      };
+    }),
+  };
+
   const limits = pf.limits || {};
   return h('div', null,
     walletCard,
@@ -267,7 +337,7 @@ async function positionsTab(ctx) {
       { label: 'Record', render: (q) => h('code', { class: 'small' }, q.tx_id || q.id || '?') },
       { label: 'Why', wrap: true, render: (q) => q.reason || q.message || '' },
     ], pf.quarantine), { note: 'Held out of positions until you resolve them. Nothing was deleted.' }) : null,
-    card('Recorded positions', positions, {
+    card('Recorded positions', [h('div', { class: 'pos-table' }, positions), ledger], {
       note: open.length ? `From the ledger (your entries and recorded wallet activity). Allocation denominator: ${denominator}. Unpriced positions are excluded from it and listed as unpriced. Research grades stay on the watchlist; select an asset to see them.` : null,
       actions: [link('Record transactions', '#/portfolio?tab=record')],
     }),
