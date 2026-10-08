@@ -262,7 +262,6 @@
   .brief .bf-grade.withheld .bf-wh { font-size: 15px; line-height: 1.25; }
   .brief .bf-grade.withheld .bf-gcap { display: none; }
   .brief .bf-grade { justify-self: stretch; }
-  .brief .bf-grade .ggauge { width: 124px; }
   .brief .bf-grade .bf-gcap { margin-top: 0; }
   .brief .bf-vlabel { font-size: 17px; margin-bottom: 0; }
   .bf-vfacts { margin-top: 8px; gap: 4px 16px; flex-direction: column; }

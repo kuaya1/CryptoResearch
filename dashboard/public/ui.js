@@ -773,39 +773,17 @@ export function scoreTier(v) {
   if (typeof v !== 'number' || !Number.isFinite(v)) return null;
   return v < 40 ? 1 : v < 60 ? 2 : v < 75 ? 3 : v < 90 ? 4 : 5;
 }
-export const TIER_EDGES = [[0, 40], [40, 60], [60, 75], [75, 90], [90, 100]];
-
-// A point on the gauge's half circle for a score (0 at the left end, 100 at
-// the right), and the arc between two scores, clockwise over the top.
-export function gaugePoint(s, { cx = 90, cy = 90, r = 76 } = {}) {
-  const a = Math.PI * (1 - Math.max(0, Math.min(100, s)) / 100);
-  return [cx + r * Math.cos(a), cy - r * Math.sin(a)];
-}
-export function gaugeArc(s0, s1, geo = {}) {
-  const [x0, y0] = gaugePoint(s0, geo);
-  const [x1, y1] = gaugePoint(s1, geo);
-  const r = geo.r || 76;
-  return `M${x0.toFixed(2)} ${y0.toFixed(2)}A${r} ${r} 0 0 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
-}
-
-// The investment grade as a half-circle gauge: five muted segments on the
-// spectrum (the grade's own segment a shade stronger), a marker at the grade
-// or a span for a range, the number and the rubric's word in the middle.
-export function gradeGauge(g, { word = null, serious = false } = {}) {
+// The investment grade as figures, no gauge (Eric, 2026-10-08): the
+// caption, the grade in large tabular figures (a range as its two ends) and
+// the rubric's word in a bordered tag in the grade's tier; the metric
+// header's right side (the app's MetricHeader draws the same classes).
+export function gradeFigure(g, { word = null, caption = 'Investment grade', captionTitle = null } = {}) {
   if (!g || !['firm', 'range'].includes(g.status)) return null;
-  const geo = { cx: 90, cy: 90, r: 76 };
-  const low = g.status === 'range' ? g.low : g.value;
-  const high = g.status === 'range' ? g.high : g.value;
-  const tier = scoreTier(low);
-  const gap = 3.2;
-  const segs = TIER_EDGES.map(([a, b], i) => svg('path', { class: `gseg t${i + 1}${i + 1 === tier ? ' on' : ''}`, d: gaugeArc(a === 0 ? 1.5 : a + gap / 2, b === 100 ? 98.5 : b - gap / 2, geo) }));
-  const mark = g.status === 'range'
-    ? svg('path', { class: 'gspan', d: gaugeArc(Math.max(1.5, low), Math.min(98.5, Math.max(high, low + 0.8)), geo) })
-    : (() => { const [x, y] = gaugePoint(Math.max(1.5, Math.min(98.5, low)), geo); return svg('circle', { class: 'gdot', cx: x.toFixed(2), cy: y.toFixed(2), r: '6.5' }); })();
-  return svg('svg', { class: `ggauge${serious ? ' ev-serious' : ''}`, width: '180', height: '100', viewBox: '0 0 180 100', role: 'img', 'aria-label': `Investment grade ${g.display} of 100${word ? `, ${word}` : ''}` },
-    ...segs, mark,
-    svg('text', { class: 'gnum', x: '90', y: '76', 'text-anchor': 'middle' }, g.display),
-    word ? svg('text', { class: 'gword', x: '90', y: '95', 'text-anchor': 'middle' }, word) : null);
+  const tier = scoreTier(g.status === 'range' ? g.low : g.value) || 3;
+  return h('div', { class: 'mh-score', role: 'img', 'aria-label': `Investment grade ${g.display} of 100${word ? `, ${word}` : ''}` },
+    h('span', { class: 'mh-cap', 'aria-hidden': 'true', title: captionTitle }, g.status === 'range' ? `${caption} · a range` : caption),
+    h('span', { class: `mh-num${g.status === 'range' ? ' is-range' : ''}`, 'aria-hidden': 'true' }, g.display),
+    word ? h('span', { class: `mh-tag tier-${tier}`, 'aria-hidden': 'true' }, word) : null);
 }
 
 // The Claude Brief of a project (views/brief.js) as a link, so it also opens

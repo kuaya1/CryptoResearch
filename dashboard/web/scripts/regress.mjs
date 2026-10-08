@@ -105,9 +105,9 @@ const MONITOR = (sig) => `(() => {
     const prov = tab ? tab.dataset.key.replace('insp-tab-', '') : null;
     const link = insp.querySelector('.insp-foot [data-key^="report-"]');
     const id = link ? new URLSearchParams((link.getAttribute('href') || '').split('?')[1] || '').get('report') : null;
-    const gauge = insp.querySelector('.mpanel .gauge');
+    const gauge = insp.querySelector('.mpanel [data-part="grade-score"]');
     const label = gauge ? gauge.getAttribute('aria-label') || '' : '';
-    const verdict = txt(insp.querySelector('.mpanel .v-verdict'));
+    const verdict = txt(insp.querySelector('.mpanel .mh-verdict'));
     const risk = txt(insp.querySelector('.mpanel [data-part="risk-text"]') || insp.querySelector('.mpanel .tl-risk-text'));
     window.__mix.checks += 1;
     const v = [];
@@ -165,7 +165,7 @@ try {
       const t0 = Date.now();
       // The index changes within a poll (2.5 s); the record is held 15 s.
       await waitFor(tab, `document.querySelector('.insp-foot [data-key^="report-"]') && document.querySelector('.insp-foot [data-key^="report-"]').getAttribute('href').includes(${JSON.stringify(NEW_REPORT_ID)})`, 9000);
-      const during = await tab.evalJs("({ link: (document.querySelector('.insp-foot [data-key^=\"report-\"]') || {}).href || null, gauge: (document.querySelector('.mpanel .gauge') || { getAttribute: () => null }).getAttribute('aria-label'), risk: (document.querySelector('.mpanel [data-part=\"risk-text\"], .mpanel .tl-risk-text') || {}).textContent || null, loading: Boolean(document.querySelector('.mpanel [role=\"status\"]')) })");
+      const during = await tab.evalJs("({ link: (document.querySelector('.insp-foot [data-key^=\"report-\"]') || {}).href || null, grade: (document.querySelector('.mpanel [data-part=\"grade-score\"]') || { getAttribute: () => null }).getAttribute('aria-label'), risk: (document.querySelector('.mpanel [data-part=\"risk-text\"], .mpanel .tl-risk-text') || {}).textContent || null, loading: Boolean(document.querySelector('.mpanel [role=\"status\"]')) })");
       evidence.f1_during_delay = during;
       await sleep(Math.max(0, 16500 - (Date.now() - t0)));
       proxy.set({ projectDelay: 0 });
@@ -339,7 +339,7 @@ try {
       await t2.send('Network.setCacheDisabled', { cacheDisabled: true });
       await go(t2, `#/watchlist?p=${P.relay}`, "document.querySelector('.inspector .mpanel')");
       await sleep(1500);
-      const parts = await t2.evalJs("({ verdict: Boolean(document.querySelector('.inspector .vgauge, .inspector .vblock')), partError: [...document.querySelectorAll('.inspector .lg-part-error')].length, rows: Boolean(document.querySelector('.wl-table tbody tr')) })");
+      const parts = await t2.evalJs("({ verdict: Boolean(document.querySelector('.inspector .mh, .inspector .vblock')), partError: [...document.querySelectorAll('.inspector .lg-part-error')].length, rows: Boolean(document.querySelector('.wl-table tbody tr')) })");
       evidence.f3_parts = parts;
       record('F3', 'a missing hosted-parts chunk leaves the inspector and list working, with a retry', parts.verdict && parts.rows && parts.partError > 0, parts);
       await t2.close();
@@ -437,6 +437,23 @@ try {
     await waitFor(tab, "location.hash.includes('/brief') && document.querySelector('.ov-verdict')", 6000);
     const c = { url: await tab.evalJs('location.hash'), tab: await tab.evalJs("(document.querySelector('[data-key^=\"pb-tab-\"][aria-selected=\"true\"]') || {}).dataset.key") };
     record('F4', 'Overview -> Compare -> Overview keeps ChatGPT', /model=chatgpt/.test(c.url) && c.tab === 'pb-tab-chatgpt', c);
+    // Straight between the hosted sections, each draws its own part: two with
+    // equal inputs (Compare and Full report, Market and Notes) once shared one
+    // and kept the first drawn (found 2026-10-08).
+    {
+      const SECTION = { compare: 'Compare the models', report: null, market: 'Market data', notes: 'What changed since your last review' };
+      const drawn = "(() => { const p = document.querySelector('.pp-panel'); const t = p ? p.textContent : ''; return { compare: /Compare the models/.test(t), report: Boolean(document.getElementById('report-title')), market: /Market data/.test(t), notes: /What changed since your last review/.test(t), crashed: /could not be shown/.test(document.body.textContent) }; })()";
+      await go(tab, `#/project/${P.relay}/compare`, "/Compare the models/.test((document.querySelector('.pp-panel') || {}).textContent || '')");
+      const seen = [];
+      for (const t of ['report', 'market', 'notes', 'compare']) {
+        await tab.click(sectionLink(t));
+        await waitFor(tab, t === 'report' ? "document.getElementById('report-title')" : `/${SECTION[t]}/.test((document.querySelector('.pp-panel') || {}).textContent || '')`, 6000);
+        const s = await tab.evalJs(drawn);
+        seen.push({ section: t, ...s });
+      }
+      const okAll = seen.every((s) => !s.crashed && s[s.section] && Object.keys(SECTION).filter((k) => k !== s.section).every((k) => !s[k]));
+      record('F4', 'Compare -> Full report -> Market -> Notes -> Compare: each section draws its own content', okAll, seen);
+    }
     await tab.close();
   }
 

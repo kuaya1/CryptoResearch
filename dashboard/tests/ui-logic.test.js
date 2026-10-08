@@ -319,7 +319,7 @@ test('inspector: opens on a calculated grade, then any saved report, then Claude
   // The React bars: an unknown score is an empty dashed track (ScoreBar), never a fill.
   const web = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'styles', 'inspector.css'), 'utf8');
   assert.match(web, /\.bar\.is-unknown \{[^}]*background: transparent;[^}]*repeating-linear-gradient/);
-  const bar = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'components', 'Gauge.jsx'), 'utf8');
+  const bar = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'components', 'ScoreBar.jsx'), 'utf8');
   assert.match(bar, /return <span className="bar is-unknown" aria-hidden="true" \/>;/);
 });
 
@@ -687,21 +687,16 @@ test('the list\'s market figures: compact USD with two decimals (the shared form
   assert.deepEqual(now.columns, ['price', 'spark', 'sector', 'research'], 'choices made in this layout are kept, in its order');
 });
 
-test('one 0–100 spectrum on the rubric anchors, and the gauge geometry', async () => {
+test('one 0–100 spectrum on the rubric anchors; the grade is figures, never a gauge', async () => {
   const { ui } = await mods;
   assert.deepEqual([0, 15.8, 39.9, 40, 59.9, 60, 74.9, 75, 89.9, 90, 100].map(ui.scoreTier), [1, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5]);
   assert.equal(ui.scoreTier(null), null);
   assert.equal(ui.scoreTier(NaN), null);
-  const geo = { cx: 90, cy: 90, r: 76 };
-  const near = (a, b) => Math.abs(a - b) < 1e-9;
-  const [x0, y0] = ui.gaugePoint(0, geo);
-  const [x50, y50] = ui.gaugePoint(50, geo);
-  const [x100, y100] = ui.gaugePoint(100, geo);
-  assert.ok(near(x0, 14) && near(y0, 90), '0 at the left end');
-  assert.ok(near(x50, 90) && near(y50, 14), '50 at the top');
-  assert.ok(near(x100, 166) && near(y100, 90), '100 at the right end');
-  assert.deepEqual(ui.gaugePoint(140, geo), ui.gaugePoint(100, geo), 'clamped');
-  assert.equal(ui.gaugeArc(0, 50, geo), 'M14.00 90.00A76 76 0 0 1 90.00 14.00', 'clockwise over the top');
+  // The half-circle gauge is gone (Eric, 2026-10-08): no geometry, no drawing.
+  for (const gone of ['gradeGauge', 'gaugeArc', 'gaugePoint', 'TIER_EDGES']) assert.equal(ui[gone], undefined, `ui.${gone} is removed`);
+  assert.equal(typeof ui.gradeFigure, 'function');
+  assert.equal(ui.gradeFigure(null), null, 'no figure without a calculated grade');
+  assert.equal(ui.gradeFigure({ status: 'withheld' }), null, 'withheld is never drawn as a number');
 });
 
 test('inspector tiles: DefiLlama 30-day totals as saved, "—" with the reason otherwise; a partial month is not a total', async () => {

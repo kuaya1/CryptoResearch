@@ -18,7 +18,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUpRight, RotateCcw, TriangleAlert, Copy } from 'lucide-react';
 import {
-  PROVIDER_LABELS, fmtDate, fmtDateTime, fmtRelDay, anchorText, withheldReason, withheldLabel, researchState, jobKey, onHoldOf,
+  PROVIDER_LABELS, fmtDate, fmtDateTime, fmtRelDay, anchorText, withheldReason, researchState, jobKey, onHoldOf,
   copyText, toast, TAG_TITLES, COVERAGE_MEANS, evidenceLevel, evidenceText,
 } from '../../../../public/ui.js';
 import { splitAttention, kindWord, attentionHref } from '../../../../public/watchlist-model.js';
@@ -27,7 +27,8 @@ import { profileOf, categoryRows, scorecardCounts, statesConfidence, categoryFla
 import { api, refresh, hosted, resyncOnce, wasResynced } from '../../lib/desk.js';
 import { opinionOf } from '../../lib/opinion.js';
 import { legacyCtx } from '../../legacy/ctx.js';
-import { Gauge, ScoreBar } from '../../components/Gauge.jsx';
+import { ScoreBar } from '../../components/ScoreBar.jsx';
+import { MetricHeader } from '../../components/MetricHeader.jsx';
 import { Dom, loadLegacy } from '../../components/Dom.jsx';
 import { pillInfo } from '../../components/GradePill.jsx';
 import { badgeOpts } from '../watchlist/ProjectTable.jsx';
@@ -153,17 +154,19 @@ function Verdict({ d, p, prov, op }) {
   const who = PROVIDER_LABELS[prov];
   const anchors = d.index.rubrics.grading.favorable_anchors || [];
   const rel = rep ? fmtRelDay(rep.analysis_at) : null;
-  const facts = rep ? (
-    <dl className="vfacts">
-      <div><dt>Verdict</dt><dd className="v-verdict">{rep.verdict ? `${rep.verdict.charAt(0)}${rep.verdict.slice(1).toLowerCase()}` : <span className="faint">No verdict</span>}</dd></div>
-      <div><dt>Analysis</dt><dd>{fmtDate(rep.analysis_at)}{rel ? <span className="faint">{` · ${rel}`}</span> : null}{info.stale ? <span className="v-stale"> · stale</span> : null}</dd></div>
-      <div><dt>Horizon</dt><dd>{rep.horizon || 'not stated'}</dd></div>
-    </dl>
+  const verdictWords = rep && rep.verdict ? `${rep.verdict.charAt(0)}${rep.verdict.slice(1).toLowerCase()}` : null;
+  // Under the header: when the model analysed it (with the research age) and
+  // the horizon; the price's own time stays in the inspector's head.
+  const sub = rep ? (
+    <>
+      <span><b>{`Analyzed ${rep.analysis_at ? fmtDate(rep.analysis_at) : 'date not stated'}`}</b>{rel ? ` · ${rel}` : ''}{info.stale ? <span className="v-stale"> · stale</span> : null}</span>
+      <span>{`Horizon ${rep.horizon || 'not stated'}`}</span>
+    </>
   ) : null;
   const mt = rep && rep.model_total && rep.model_total.status === 'mismatch' ? rep.model_total : null;
   const level = rep ? evidenceLevel(rep.evidence) : null;
   const chips = mt || level ? (
-    <div className="vchips">
+    <>
       {mt ? <span className="pill pill-warn" title={mt.message} aria-label={mt.message}>{`Own total differs by ${typeof mt.difference === 'number' ? mt.difference.toFixed(1) : '?'}`}</span> : null}
       {level ? (
         <button
@@ -177,42 +180,29 @@ function Verdict({ d, p, prov, op }) {
           <span className={`ev-dot ${level}`} aria-hidden="true" />{level === 'serious' ? 'Serious evidence flag' : 'Evidence flag'}
         </button>
       ) : null}
-    </div>
+    </>
   ) : null;
+  const captionTitle = `Calculated by the desk from ${who}'s six weighted component scores; never ${who}'s own total`;
+  // The metric header (no gauge; Eric, 2026-10-08): the model and its
+  // verdict, the desk's grade with its rubric word, the analysis and horizon.
+  const header = (grade, word = null) => <MetricHeader who={who} model={rep.model_version || null} verdict={verdictWords} grade={grade} word={word} tier={info.tier} captionTitle={captionTitle} sub={sub} chips={chips} />;
   let body;
   if (rep && (info.kind === 'grade' || info.kind === 'range')) {
     const word = anchorText(anchors, rep.grade.status === 'range' ? { status: 'range', low: rep.grade.low, high: rep.grade.high } : { status: 'scored', value: rep.grade.value });
-    body = (
-      <div className="vblock">
-        <div className="vrow">
-          <div className="vgauge"><Gauge grade={rep.grade} word={word} serious={info.ev === 'serious'} /></div>
-          <div className="vside">{facts}{chips}</div>
-        </div>
-      </div>
-    );
+    body = <div className="vblock">{header(rep.grade, word)}</div>;
   } else if (rep && info.kind === 'pdf') {
     body = (
       <div className="vblock vstate">
-        <p className="vstate-title">PDF saved: needs a text copy</p>
+        {header({ status: 'none', label: 'PDF saved', reason: 'Needs a text copy to be graded' })}
         <p><a href={`#/updates?tab=import&project=${encodeURIComponent(pid)}&provider=${prov}`} data-key={`pdf-import-${pid}-${prov}`}>{`Import ${who}'s text to grade it`}</a></p>
-        {facts}
       </div>
     );
   } else if (rep) {
     const pct = rep.grade ? rep.grade.coverage_pct : null;
+    const withheld = Boolean(rep.grade && rep.grade.status === 'withheld');
     body = (
       <div className="vblock vwithheld">
-        <div className="vw-head">
-          <span className="vw-word">{rep.grade && rep.grade.status === 'withheld' ? withheldLabel(pct) : 'No grade'}</span>
-        </div>
-        {typeof pct === 'number' ? (
-          <div className="cov" title={COVERAGE_MEANS}>
-            <div className="cov-track" aria-hidden="true"><div className="cov-fill" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} /></div>
-            <div className="cov-lbl">{`${pct}% of the investment weight scored`}</div>
-          </div>
-        ) : null}
-        {facts}
-        {chips}
+        {header(withheld ? { status: 'withheld', coverage: typeof pct === 'number' ? pct : null, reason: rep.grade.reason || null } : { status: 'none', label: 'No grade' })}
       </div>
     );
   } else {

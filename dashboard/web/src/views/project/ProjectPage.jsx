@@ -12,9 +12,9 @@
 // and Back keep the same model and report (review 2026-10-08, F4, F6). An
 // opinion is drawn only when the record holds the very report the list names
 // (lib/opinion.js), else the view waits (F1).
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Ellipsis, Check, Play } from 'lucide-react';
-import { PROVIDERS, PROVIDER_LABELS, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, fmtSignedPct, onHoldOf, toast } from '../../../../public/ui.js';
+import { PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, fmtSignedPct, onHoldOf, toast } from '../../../../public/ui.js';
 import { briefModel, marketNow } from '../../../../public/brief-model.js';
 import { PROJECT_TABS, selectionOf, sectionHref } from '../../../../public/project-routes.js';
 import { useDesk, useProject, useMedia } from '../../lib/hooks.js';
@@ -180,7 +180,7 @@ function ModelTabs({ row, sel }) {
         const verdict = rep && rep.verdict ? `${rep.verdict.charAt(0)}${rep.verdict.slice(1).toLowerCase().replace(/_/g, ' ')}` : null;
         return (
           <button key={prov} type="button" role="tab" id={`pb-tab-${prov}`} className="ptab" aria-selected={on} aria-controls="pb-model" tabIndex={on ? 0 : -1} data-key={`pb-tab-${prov}`} aria-label={`${info.text.replace(/[.\s]+$/, '')}${verdict ? `. Verdict: ${verdict}` : ''}`} title={verdict || undefined} onClick={() => { if (!on) go(prov); }}>
-            <span className="ptab-top" aria-hidden="true"><span className="ptab-name">{PROVIDER_LABELS[prov]}</span><GradePill provider={prov} report={rep} job={job} opts={opts} showSub={false} /></span>
+            <span className="ptab-top" aria-hidden="true"><span className="ptab-name"><span className="n-full">{PROVIDER_LABELS[prov]}</span><span className="n-short">{PROVIDER_SHORT[prov]}</span></span><GradePill provider={prov} report={rep} job={job} opts={opts} showSub={false} /></span>
             {verdict ? <span className="ptab-verdict" aria-hidden="true">{verdict}</span> : <span className="ptab-verdict faint" aria-hidden="true">{info.kind === 'none' ? 'No report' : ''}</span>}
           </button>
         );
@@ -395,7 +395,10 @@ export default function ProjectPage() {
       <nav className="tabs pp-tabs" aria-label="Project sections">
         {PROJECT_TABS.map(([t, label]) => tabLink(t, label))}
       </nav>
-      <div id="tabpanel" className="pp-panel">{body}</div>
+      {/* Each section mounts its own parts: two hosted sections with equal
+          inputs (Compare and Full report, Market and Notes) would otherwise
+          share one part and keep the first one drawn. */}
+      <div id="tabpanel" className="pp-panel"><Fragment key={tab}>{body}</Fragment></div>
     </div>
   );
 }

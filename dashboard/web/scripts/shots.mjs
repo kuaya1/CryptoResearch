@@ -45,6 +45,15 @@ const SHOTS = [
   { name: 'portfolio-1440', w: 1440, url: '#/portfolio' },
   { name: 'settings-1440', w: 1440, url: '#/settings' },
   { name: 'new-390', w: 390, url: '#/new' },
+  { name: 'portfolio-390', w: 390, url: '#/portfolio', full: true },
+  { name: 'evidence-390', w: 390, url: `#/project/${P.relay}/evidence` },
+  { name: 'insp-360', w: 360, h: 780, url: `#/watchlist?p=${P.relay}` },
+  { name: 'project-360', w: 360, h: 780, url: `#/project/${P.relay}/brief` },
+  { name: 'wl-1440-dark-list', w: 1440, url: '#/watchlist', theme: 'dark' },
+  { name: 'insp-390-dark', w: 390, url: `#/watchlist?p=${P.relay}`, theme: 'dark' },
+  { name: 'project-390-dark', w: 390, url: `#/project/${P.relay}/brief`, theme: 'dark' },
+  { name: 'insp-390-full', w: 390, url: `#/watchlist?p=${P.relay}`, insp: true },
+  { name: 'insp-390-ember', w: 390, url: `#/watchlist?p=${P.ember}`, insp: true },
 ];
 
 const b = await launch();

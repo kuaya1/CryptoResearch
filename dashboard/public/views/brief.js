@@ -20,7 +20,7 @@
 // keeps its inspector, filters and place); on a phone its bar replaces the
 // top bar. The project page (views/project.js) draws the tabs around it.
 import {
-  h, details, gradeGauge, coverageMeter, unscoredList, structureNotes, fmtDate, fmtDateTime, daysSince,
+  h, details, gradeFigure, coverageMeter, unscoredList, structureNotes, fmtDate, fmtDateTime, daysSince,
   icon, stateText, button, scoreTier, PROVIDER_LABELS, COVERAGE_MEANS, TAG_TITLES,
 } from '../ui.js';
 import { briefModel, TAG_WORDS, CERTAINTY_WORDS } from '../brief-model.js';
@@ -206,7 +206,7 @@ function gradeBlock(m) {
   const g = m.grade;
   const cap = (text) => h('p', { class: 'bf-gcap', title: `Calculated by the desk from ${WHO}'s six weighted component scores under ${g.rubric || 'its rubric'}; never ${WHO}'s own total` }, text);
   if (g.status === 'firm' || g.status === 'range') {
-    return h('div', { class: 'bf-grade' }, gradeGauge(g.grade, { word: g.word, serious: m.evidence.level === 'serious' }), cap(g.status === 'range' ? 'Investment grade · a range' : 'Investment grade'));
+    return h('div', { class: 'bf-grade' }, gradeFigure(g.grade, { word: g.word, captionTitle: `Calculated by the desk from ${WHO}'s six weighted component scores under ${g.rubric || 'its rubric'}; never ${WHO}'s own total` }));
   }
   if (g.status === 'withheld') {
     const w = g.why;

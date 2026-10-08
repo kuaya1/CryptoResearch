@@ -633,10 +633,10 @@ table.wl td.nodata { color: var(--text-2); font-size: var(--fs-small); white-spa
 .logo { width: 28px; height: 28px; border-radius: 50%; flex: none; display: inline-flex; align-items: center; justify-content: center; font-size: var(--fs-caption); font-weight: 700; letter-spacing: 0.02em; color: var(--logo-ink, #3d3a33); background: var(--logo-bg, #ece9e1); overflow: hidden; box-shadow: inset 0 0 0 1px rgba(24, 24, 27, 0.08); }
 .logo.has-img { background: var(--surface); }
 .logo img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.logo.tone-0 { --logo-bg: #e4e9f7; --logo-ink: #2c3e8f; }
+.logo.tone-0 { --logo-bg: #e8ecf1; --logo-ink: #334155; }
 .logo.tone-1 { --logo-bg: #e3f0ea; --logo-ink: #1d5a3c; }
 .logo.tone-2 { --logo-bg: #f5e9da; --logo-ink: #7a4614; }
-.logo.tone-3 { --logo-bg: #efe4ef; --logo-ink: #6a2f6a; }
+.logo.tone-3 { --logo-bg: #e6eeec; --logo-ink: #2f5547; }
 .logo.tone-4 { --logo-bg: #e2eef0; --logo-ink: #1f5560; }
 .logo.tone-5 { --logo-bg: #f3e6e3; --logo-ink: #7d3128; }
 :root[data-theme="dark"] .logo:not(.has-img) { --logo-bg: #2a2c32; --logo-ink: #d6d8de; }
@@ -1724,25 +1724,6 @@ button.gb:is(.is-none, .is-on_hold):hover { border-color: var(--border); }
 .cbar .fill.tier-5 { background: var(--t5-fill); }
 .cbar .range.tier-5 { background: repeating-linear-gradient(135deg, var(--t5-fill) 0 3px, var(--t5-arc) 3px 6px); }
 
-/* The grade gauge: five muted segments on the spectrum, the grade's own a
-   shade stronger, a marker (or a span for a range), the number and the word. */
-.ggauge { display: block; flex: none; overflow: visible; }
-.ggauge .gseg { fill: none; stroke-width: 11; stroke-linecap: round; }
-.ggauge .gseg.t1 { stroke: var(--t1-arc); }
-.ggauge .gseg.t1.on { stroke: var(--t1-fill); }
-.ggauge .gseg.t2 { stroke: var(--t2-arc); }
-.ggauge .gseg.t2.on { stroke: var(--t2-fill); }
-.ggauge .gseg.t3 { stroke: var(--t3-arc); }
-.ggauge .gseg.t3.on { stroke: var(--t3-fill); }
-.ggauge .gseg.t4 { stroke: var(--t4-arc); }
-.ggauge .gseg.t4.on { stroke: var(--t4-fill); }
-.ggauge .gseg.t5 { stroke: var(--t5-arc); }
-.ggauge .gseg.t5.on { stroke: var(--t5-fill); }
-.ggauge .gdot { fill: var(--text); stroke: var(--surface); stroke-width: 3; }
-.ggauge .gspan { fill: none; stroke: var(--text); stroke-width: 5; stroke-linecap: round; }
-.ggauge .gnum { font-family: var(--sans); font-variant-numeric: tabular-nums lining-nums; font-size: 24px; font-weight: 700; letter-spacing: -0.04em; fill: var(--text); }
-.ggauge .gword { font-family: var(--font); font-size: var(--fs-caption); font-weight: 600; fill: var(--text-2); }
-.ggauge.ev-serious .gdot { fill: var(--text-3); }
 .ig-row { align-items: center; gap: 4px 18px; flex-wrap: nowrap; }
 .ig-side { flex: 1; min-width: 0; display: grid; gap: 8px; justify-items: start; }
 .ig-side .ig-facts { flex-direction: column; align-items: flex-start; gap: 3px; margin: 0; padding: 0; border: 0; }
@@ -2106,6 +2087,7 @@ input[type="file"]::file-selector-button, input[type="file"]:focus-visible { bor
 .seg button, .seg a, .seg .seg-off { border-radius: var(--r-md); }
 .seg button[aria-pressed="true"], .seg a[aria-current="true"] { background: var(--accent); color: var(--on-accent); box-shadow: none; }
 .seg button[aria-pressed="true"]:hover, .seg a[aria-current="true"]:hover { background: var(--accent-hover); color: var(--on-accent); }
+.seg button[aria-pressed="true"]:focus-visible, .seg a[aria-current="true"]:focus-visible { outline-color: var(--on-accent); }
 
 /* The list: one white panel. Header labels in the metadata gray; the sorted
    column's label in ink. */
@@ -2158,7 +2140,6 @@ button.mtab[aria-selected="true"] { background: var(--tab-chosen); border-color:
 .cchip { border-radius: var(--r-pill); }
 /* Big figures: the display cut of the system sans, tight. */
 .price-big, .provider-grade .big, .grade .big { font-family: var(--font-display); letter-spacing: -0.025em; }
-.ggauge .gnum { font-family: var(--font-display); }
 
 /* ---- The desk's frame and the watchlist table (Eric, 2026-10-05, evening) ----
    The top bar and the status strip span the window with the bar's own 24px
@@ -2243,7 +2224,8 @@ a.wh-sym:hover { text-decoration: underline; text-underline-offset: 3px; text-de
 .net-pill { flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border: 1px solid var(--border); border-radius: var(--r-pill); font-size: var(--fs-caption); font-weight: 500; color: var(--text-2); background: var(--surface); white-space: nowrap; }
 .wh-name { display: flex; align-items: center; gap: 4px; margin-top: 1px; font-size: var(--fs-small); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .wh-tags { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
-.wh-fig { text-align: right; white-space: nowrap; }
+.wh-tags > * { white-space: nowrap; }
+.wh-fig { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .wh-qty { font-size: 15px; font-weight: 600; color: var(--text); }
 .wh-val { margin-top: 1px; font-size: var(--fs-body); color: var(--text-2); }
 .wh-noprice { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border: 1px dashed var(--control-border); border-radius: var(--r-pill); font-size: var(--fs-caption); font-weight: 500; color: var(--text-3); }
@@ -2253,7 +2235,11 @@ a.wh-sym:hover { text-decoration: underline; text-underline-offset: 3px; text-de
 .card > .wh-total + details.disclosure, .card > .wh-table + details.disclosure, .card > .empty + details.disclosure { margin-top: var(--s3); }
 @container (max-width: 640px) {
   .wh-cols { display: none; }
-  .wh-row { grid-template-columns: 32px minmax(0, 1fr) auto; grid-template-areas: "logo asset fig" "logo tags tags"; row-gap: 6px; align-items: start; }
+  /* A phone: the 32px logo, symbol and network on the first line with the
+     figures right-aligned; the record's tags on their own line under the
+     name (Eric, 2026-10-08 polish). */
+  .wh-row { grid-template-columns: 32px minmax(0, 1fr) auto; grid-template-areas: "logo asset fig" "logo tags tags"; column-gap: 12px; row-gap: 6px; align-items: start; padding: 12px 0; }
+  .wh-line { min-height: 22px; }
   .wh-row > .logo { grid-area: logo; }
   .wh-asset { grid-area: asset; }
   .wh-tags { grid-area: tags; }

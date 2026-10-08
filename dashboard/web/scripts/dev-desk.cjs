@@ -87,7 +87,7 @@ function pngOf(w, h, px) {
   ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 6; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
-const HUES = [[87, 95, 207], [14, 116, 144], [217, 119, 6], [22, 163, 74], [190, 24, 93], [37, 99, 235], [124, 58, 237], [15, 23, 42], [234, 88, 12], [8, 145, 178]];
+const HUES = [[71, 85, 105], [14, 116, 144], [217, 119, 6], [22, 163, 74], [190, 24, 93], [37, 99, 235], [101, 163, 13], [15, 23, 42], [234, 88, 12], [8, 145, 178]];
 function logoPng(seed) {
   const S = 96;
   const rnd = seeded(seed);
@@ -236,6 +236,20 @@ function contractFor(symbol) {
     { type: 'buy', account_id: 'dev-exchange', asset_id: cg.complete, quantity: '3000', price_usd: '0.82', date: addDays(day, -12) },
   ], { source: 'dev' });
 
+  // A tracked wallet with one balance read, written as a sync would (FICTIONAL
+  // address and tokens; no provider is asked): ETH, a verified project token
+  // and a token no identity names, for the Portfolio balance sheet.
+  const walletsCore = require(`${ROOT}/core/wallets.js`);
+  const devWallet = walletsCore.addWallet(ws, { label: 'Dev wallet (FICTIONAL)', address: '0x00000000000000000000000000000000000de71e', networks: ['eth'] });
+  const walletRec = walletsCore.walletById(ws, devWallet.wallet_id);
+  const xhal = contractFor('XHAL').toLowerCase();
+  const stray = contractFor('XUNK').toLowerCase();
+  walletsCore.storeMetadata(ws, 'eth', [
+    { contract: xhal, name: 'Example Halcyon Rollup (FICTIONAL)', symbol: 'XHAL', decimals: 18 },
+    { contract: stray, name: 'Unknown token (FICTIONAL)', symbol: 'XUNK', decimals: 18 },
+  ]);
+  walletsCore.storeBalances(ws, walletRec, 'eth', { native_raw: '1532000000000000000', tokens: [{ contract: xhal, balance_raw: '2500000000000000000000' }, { contract: stray, balance_raw: '4000000000000000000000' }], block: 20000000 });
+
   // Contract screens from a stubbed GoPlus (nothing is sent anywhere).
   const CLEAN = {
     is_mintable: '0', is_proxy: '0', is_blacklisted: '0', is_whitelisted: '0', owner_change_balance: '0', hidden_owner: '0',
@@ -277,6 +291,7 @@ function contractFor(symbol) {
   add('none', 'XNON', 'Example Unresearched Token (FICTIONAL)', 0.00093, 2.6e6, 2611, [-2.2, -9.1, -18.6], -0.09);
   add('long', 'XLNG', 'Example Long (FICTIONAL)', 0.0042, 3.1e6, 2405, [-3.4, -12.5, -28.1], -0.13);
   for (const x of EXTRA) add(x.key, x.symbol, x.name, x.price, x.mcap, x.rank, x.ch, x.drift);
+  assets.ethereum = obs('ethereum', 'ETH', 'Ethereum (FICTIONAL price)', 2450, { market_cap_usd: 2.9e11, market_cap_rank: 2, change_24h_pct: 1.1, change_7d_pct: 3.2, change_30d_pct: 6.4 });
   atomicWrite(ws.abs('market-data/latest.json'), jsonText({ schema_version: 'cr.market-latest.v2', provider: 'fictional-demo', rank_source: 'FICTIONAL demo rank', note: 'FICTIONAL prices for frontend development.', fetched_at: iso(60000), assets }));
   atomicWrite(ws.abs('market-data/status.json'), jsonText({ schema_version: 'cr.market-status.v2', state: 'ok', last_attempt_at: iso(60000), last_success_at: iso(60000), last_trigger: 'dev', last_error: null, consecutive_failures: 0, note: 'FICTIONAL', calls: { month: iso(0).slice(0, 7), month_count: 0, day: iso(0).slice(0, 10), day_count: 0 } }));
 

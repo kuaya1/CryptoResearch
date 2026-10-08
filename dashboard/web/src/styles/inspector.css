@@ -8,8 +8,9 @@
 .inspector.is-docked {
   position: sticky; top: 8px;
   height: calc(100vh - 16px); height: calc(100dvh - 16px);
-  border-left: 1px solid var(--border);
-  border-radius: 0 var(--r-panel) var(--r-panel) 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  overflow: hidden;
   animation: insp-in 160ms var(--ease);
 }
 .inspector.is-modal {
@@ -54,16 +55,19 @@ html.has-drawer { overflow: hidden; }
 }
 .xlink:hover { color: var(--text); background: var(--surface-hover); text-decoration: none; }
 @media (pointer: coarse) { .xlink { height: 36px; padding: 0 12px; } }
+/* The four market figures: a bordered grid of four cells, uppercase micro
+   labels over bold tabular values (Eric, 2026-10-08 polish: 10px labels, an
+   explicit exception to "nothing under 12px, sentence case" for this grid). */
 .ih-stats {
   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin: 14px -20px 0; padding: 0 8px;
-  border-top: 1px solid var(--separator); border-bottom: 1px solid var(--separator);
+  margin: 14px 0 12px;
+  border: 1px solid var(--border); border-radius: var(--r-card); overflow: hidden;
 }
-.ih-stat { padding: 9px 12px; min-width: 0; }
-.ih-stat + .ih-stat { border-left: 1px solid var(--separator); }
-.ih-stat dt { font-size: var(--fs-xs); color: var(--text-3); }
-.ih-stat dd { margin: 1px 0 0; font-size: var(--fs-md); font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-@media (max-width: 360px) { .ih-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ih-stat:nth-child(3) { border-left: 0; } .ih-stat:nth-child(n+3) { border-top: 1px solid var(--separator); } }
+.ih-stat { padding: 8px 10px; min-width: 0; }
+.ih-stat + .ih-stat { border-left: 1px solid var(--border); }
+.ih-stat dt { font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-label); line-height: 1.4; }
+.ih-stat dd { margin: 2px 0 0; font-size: 13px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 359.98px) { .ih-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ih-stat:nth-child(3) { border-left: 0; } .ih-stat:nth-child(n+3) { border-top: 1px solid var(--border); } }
 
 /* ---- body ---- */
 .insp-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 20px 24px; }
@@ -84,31 +88,28 @@ html.has-drawer { overflow: hidden; }
 .insp-archived { margin-top: 14px; justify-content: space-between; align-items: center; }
 
 /* model tabs */
-.mtabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; border-radius: calc(var(--r-lg) + 2px); background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--separator); }
+/* The model selector: a segmented control in a slate housing, each segment
+   the model and its grade on one line ("Claude 64.3", "Gemini Hold"); the
+   chosen one white with a hairline and bold words (Eric, 2026-10-08 polish). */
+.mtabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; padding: 3px; border-radius: var(--r-card); background: var(--surface-track); }
 .mtab {
-  display: flex; flex-direction: column; align-items: center; gap: 5px;
-  padding: 7px 4px 8px; border: 0; border-radius: var(--r-lg);
-  background: transparent; color: var(--text-2); font: inherit; font-size: var(--fs-xs); font-weight: 500; cursor: pointer; min-width: 0;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 2px 6px;
+  min-height: 34px; padding: 4px 6px; border: 1px solid transparent; border-radius: var(--r-control);
+  background: transparent; color: var(--text-2); font: inherit; font-size: var(--fs-sm); font-weight: 500; cursor: pointer; min-width: 0;
 }
-.mtab:hover { color: var(--text); background: color-mix(in srgb, var(--surface) 60%, transparent); }
-.mtab[data-state="active"] { background: var(--tab-chosen); color: var(--text); box-shadow: 0 0 0 1px var(--border), 0 1px 2px rgba(16, 24, 40, 0.06); }
+.mtab:hover { color: var(--text); background: color-mix(in srgb, var(--surface) 55%, transparent); }
+.mtab[data-state="active"] { background: var(--surface); color: var(--text); font-weight: 600; border-color: transparent; box-shadow: var(--shadow-seg); }
 .mtab .gp { cursor: inherit; }
+.mtab .gp-compact .gp { min-width: 0; width: auto; height: 20px; padding: 0 6px; font-size: var(--fs-xs); }
+.mtab-hold { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 500; color: var(--text-3); box-shadow: inset 0 0 0 1px var(--border); }
+@media (pointer: coarse) { .mtab { min-height: 40px; } }
 .mtab-panel:focus { outline: none; }
 .mtab-panel:focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; border-radius: var(--r-md); }
 
 /* the verdict */
 .mhead { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
 .vblock { display: flex; flex-direction: column; gap: 10px; }
-.vrow { display: grid; grid-template-columns: 172px minmax(0, 1fr); gap: 16px; align-items: center; }
-.vgauge { display: grid; place-items: center; }
-.vfacts { margin: 0; display: flex; flex-direction: column; gap: 6px; }
-.vfacts > div { display: grid; grid-template-columns: 68px minmax(0, 1fr); gap: 8px; align-items: baseline; }
-.vfacts dt { font-size: var(--fs-xs); color: var(--text-3); }
-.vfacts dd { margin: 0; font-size: var(--fs-sm); min-width: 0; overflow-wrap: anywhere; }
-.v-verdict { font-weight: 600; }
 .v-stale { color: var(--warn); font-weight: 500; }
-.vside { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; min-width: 0; }
-@media (max-width: 400px) { .vrow { grid-template-columns: minmax(0, 1fr); justify-items: center; } .vside { width: 100%; } }
 .vstate-title { font-size: var(--fs-md); font-weight: 600; }
 .vwithheld .vw-word { font-size: var(--fs-lg); font-weight: 600; }
 .cov { display: flex; flex-direction: column; gap: 4px; }
@@ -268,18 +269,23 @@ html.has-drawer { overflow: hidden; }
 .cc-chain { color: var(--text-2); }
 .cc-age { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs); color: var(--text-3); margin-left: auto; }
 .cc-age.is-stale { color: var(--warn); }
-.cc-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
-.cchip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border-radius: var(--r-pill); background: var(--surface); box-shadow: inset 0 0 0 1px var(--border); font-size: var(--fs-xs); }
-.cc-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--text-3); }
-.cchip.dot-clean .cc-dot { background: var(--pos-strong); }
-.cchip.dot-risky .cc-dot { background: var(--warn-strong); }
-.cchip.dot-unknown .cc-dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-3); }
-.cchip.dot-none .cc-dot { background: var(--border); }
-.cc-l { color: var(--text-2); }
-.cc-val { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
-.cchip.is-severe { background: var(--neg-weak); box-shadow: inset 0 0 0 1px var(--pill-bad-line); }
-.cchip.is-severe .cc-dot { background: var(--neg-strong); }
-.cchip.is-severe .cc-l, .cchip.is-severe .cc-val { color: var(--neg); }
+/* The contract audit strip (Eric, 2026-10-08): the four standing checks
+   in one bordered row of equal cells ("Mint: No"), quiet slate; only a risky
+   answer becomes an alert badge, and severe flags follow as alert badges of
+   their own. 11px here by Eric's spec, an explicit exception to "nothing under
+   12px" for this strip; alert words use the red's deeper step so they read at
+   5.9:1. */
+.cc-audit { list-style: none; margin: 0; padding: 6px 10px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); background: var(--check-ok-bg); border: 1px solid var(--check-ok-line); border-radius: var(--r-control); font-size: 11px; line-height: 1.4; font-variant-numeric: tabular-nums; }
+.cc-cell { display: flex; align-items: center; min-width: 0; padding: 0 6px; }
+.cc-cell + .cc-cell { border-left: 1px solid var(--check-ok-line); }
+.cc-cell:first-child { padding-left: 0; }
+.cc-quiet { color: var(--check-ok-ink); min-width: 0; overflow-wrap: anywhere; }
+.cc-quiet .cc-val { font-weight: 600; }
+.cc-cell.is-unknown .cc-quiet { font-style: italic; }
+.cc-alert { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 0 0.25em; padding: 1px 5px; border-radius: 4px; background: var(--check-risk-bg); border: 1px solid var(--check-risk-line); color: var(--check-risk-ink); font-weight: 600; max-width: 100%; }
+.cc-alert .cc-val { font-weight: 700; }
+.cc-flags { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; font-size: 11px; line-height: 1.4; }
+@media (max-width: 479.98px) { .cc-audit { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 4px; } .cc-cell:nth-child(3) { border-left: 0; padding-left: 0; } }
 
 /* the folded rows */
 .insp-folds { margin-top: 18px; border-bottom: 1px solid var(--separator); }
@@ -329,7 +335,8 @@ html.has-drawer { overflow: hidden; }
 .evbar > span { display: block; height: 100%; }
 .evbar .t-v, .ev-legend .t-v { background: var(--pos-strong); }
 .evbar .t-c, .ev-legend .t-c { background: var(--text-3); }
-.evbar .t-i, .ev-legend .t-i { background: color-mix(in srgb, var(--accent) 55%, var(--surface)); }
+.evbar > span + span { box-shadow: inset 1px 0 0 var(--surface); }
+.evbar .t-i, .ev-legend .t-i { background: repeating-linear-gradient(90deg, color-mix(in srgb, var(--fav-bar) 40%, var(--surface)) 0 3px, var(--surface) 3px 5px); }
 .evbar .t-s, .ev-legend .t-s { background: var(--warn-strong); }
 .ev-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; font-size: var(--fs-xs); color: var(--text-2); }
 .ev-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
@@ -346,22 +353,30 @@ html.has-drawer { overflow: hidden; }
 .if-ok { display: inline-flex; align-items: center; gap: 5px; color: var(--pos); font-weight: 500; }
 .if-dot { color: var(--text-3); }
 .if-act { display: flex; gap: 6px; margin-left: auto; }
-.inspector.is-docked .insp-foot { border-radius: 0 0 var(--r-panel) 0; }
+.inspector.is-docked .insp-foot { border-radius: 0 0 calc(var(--r-card) - 1px) calc(var(--r-card) - 1px); }
 
 /* parts reused from the hosted views, inside the inspector */
 .inspector .lg-part { font-size: var(--fs-sm); }
 .inspector .dex-slot:empty, .inspector .chart-slot:empty { display: none; }
 
-/* ---- the gauge ---- */
-.gauge { display: block; overflow: visible; }
-/* Five pastel segments on the spectrum; the grade's own segment in its full
-   tone; the grade an ink dot (a range an ink span) on top. */
-.gauge .gseg { fill: none; stroke-width: 11; stroke-linecap: round; }
-.gauge .gseg.t1 { stroke: var(--t1-arc); } .gauge .gseg.t2 { stroke: var(--t2-arc); } .gauge .gseg.t3 { stroke: var(--t3-arc); } .gauge .gseg.t4 { stroke: var(--t4-arc); } .gauge .gseg.t5 { stroke: var(--t5-arc); }
-.gauge .gseg.on.t1 { stroke: var(--t1-fill); } .gauge .gseg.on.t2 { stroke: var(--t2-fill); } .gauge .gseg.on.t3 { stroke: var(--t3-fill); } .gauge .gseg.on.t4 { stroke: var(--t4-fill); } .gauge .gseg.on.t5 { stroke: var(--t5-fill); }
-.gauge .gdot { fill: var(--text); stroke: var(--surface); stroke-width: 3.5; }
-.gauge .gspan { fill: none; stroke: var(--text); stroke-width: 5; stroke-linecap: round; }
-.gauge .gnum { font-family: var(--sans); font-size: 34px; font-weight: 600; letter-spacing: -0.03em; fill: var(--text); font-variant-numeric: tabular-nums; }
-.gauge .gnum.is-long { font-size: 24px; letter-spacing: -0.02em; }
-.gauge .gword { font-family: var(--sans); font-size: 12.5px; font-weight: 500; fill: var(--text-2); }
-.gauge.ev-serious .gnum { fill: var(--text); }
+
+
+/* On a phone the inspector's body is the canvas and its parts are white
+   cards; the head and foot stay white (Eric, 2026-10-08 polish). */
+@media (max-width: 767.98px) {
+  .inspector.is-modal { background: var(--bg); }
+  .inspector.is-modal .insp-head { background: var(--surface); border-bottom: 1px solid var(--border); }
+  .inspector.is-modal .insp-body { padding: 10px 12px 20px; }
+  .inspector.is-modal .insp-body > .insp-sec, .inspector.is-modal .insp-body > .insp-folds, .inspector.is-modal .insp-body > .insp-problems, .inspector.is-modal .insp-body > .insp-archived {
+    margin-top: 10px; padding: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow-lift);
+  }
+  .inspector.is-modal .insp-body > :first-child { margin-top: 0; }
+  .inspector.is-modal .insp-folds { padding-top: 4px; padding-bottom: 4px; }
+}
+/* A narrow phone: the model segments stay one line each. */
+@media (max-width: 399.98px) {
+  .inspector.is-modal .insp-body { padding: 10px 10px 20px; }
+  .inspector.is-modal .insp-body > .insp-sec, .inspector.is-modal .insp-body > .insp-folds, .inspector.is-modal .insp-body > .insp-problems, .inspector.is-modal .insp-body > .insp-archived { padding: 12px; }
+  .mtab { padding: 4px 3px; gap: 2px 4px; font-size: var(--fs-xs); }
+  .mtab .gp-compact .gp, .mtab-hold { padding: 0 4px; }
+}

@@ -96,7 +96,7 @@
 /* ---- the verdict ---------------------------------------------------------------- */
 .bf-vgrid { display: grid; grid-template-columns: 196px minmax(0, 1fr); gap: var(--s4) 32px; align-items: center; }
 .bf-grade { display: flex; flex-direction: column; align-items: center; min-width: 0; }
-.bf-grade .ggauge { width: 196px; height: auto; }
+.bf-grade .mh-score { align-items: center; text-align: center; }
 .bf-gcap { margin: 4px 0 0; font-size: 12px; font-weight: 600; color: var(--text-3); text-align: center; cursor: help; }
 .bf-grade.withheld { align-items: stretch; padding: 14px 16px; border: 1px dashed var(--control-border); border-radius: var(--r-well, var(--r-lg)); background: repeating-linear-gradient(135deg, var(--surface) 0 6px, color-mix(in srgb, var(--surface-sunken) 70%, var(--surface)) 6px 12px); }
 .bf-grade.withheld .bf-gcap { text-align: left; }

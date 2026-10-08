@@ -202,3 +202,39 @@ test('watchlist rules shared by the React list: sort flips, filters count, sourc
   assert.equal(wl.sourcesOf({ projects: [{ market: { rank_source_label: 'CoinGecko market-cap rank' } }] }, { workspace: { kind: 'real' } }).price, 'CoinGecko');
   assert.equal(wl.prefsToSave({ columns: ['rank'], sort: { key: 'rank', dir: 'asc' }, filters: {} }).v, wl.PREFS_VERSION);
 });
+
+test('no purple or indigo anywhere the desk draws: sources, the sign-in pages, the favicon and the built bundle (Eric, 2026-10-08)', () => {
+  const files = [
+    ...walk(path.join(DASH, 'public'), (p) => /\.(css|js|svg|html)$/.test(p)),
+    ...walk(path.join(WEB, 'src'), (p) => /\.(css|jsx?)$/.test(p)),
+    path.join(WEB, 'index.html'), path.join(DASH, 'hosted.js'), path.join(DASH, 'oauth.js'),
+  ];
+  const hsl = (r, g, b) => {
+    const [R, G, B] = [r, g, b].map((v) => v / 255);
+    const max = Math.max(R, G, B);
+    const min = Math.min(R, G, B);
+    const l = (max + min) / 2;
+    const d = max - min;
+    if (!d) return { h: 0, s: 0, l };
+    const s = d / (1 - Math.abs(2 * l - 1));
+    const h = max === R ? 60 * (((G - B) / d) % 6) : max === G ? 60 * ((B - R) / d + 2) : 60 * ((R - G) / d + 4);
+    return { h: (h + 360) % 360, s, l };
+  };
+  const found = [];
+  for (const f of files) {
+    const s = fs.readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const colors = [];
+    for (const m of s.matchAll(/#([0-9a-f]{6}|[0-9a-f]{3})(?![0-9a-z_-])/gi)) {
+      const x = m[1].length === 3 ? m[1].split('').map((c) => c + c).join('') : m[1];
+      colors.push([m[0], parseInt(x.slice(0, 2), 16), parseInt(x.slice(2, 4), 16), parseInt(x.slice(4, 6), 16)]);
+    }
+    for (const m of s.matchAll(/rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/g)) colors.push([m[0], +m[1], +m[2], +m[3]]);
+    for (const [text, r, g, b] of colors) {
+      const c = hsl(r, g, b);
+      // Indigo, violet and purple: a hue from 228 to 300 degrees with real
+      // colour in it (slate greys, navy shadows and the Working blue stay out).
+      if (c.h >= 228 && c.h <= 300 && c.s >= 0.25 && c.l > 0.08 && c.l < 0.97) found.push(`${path.relative(DASH, f)}: ${text}`);
+    }
+  }
+  assert.deepEqual(found, [], 'purple or indigo colours');
+});

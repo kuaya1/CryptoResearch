@@ -1,5 +1,5 @@
 /* The frame: sidebar (wide), icon rail (tablet), top bar and tab bar (phone),
-   and the white work panel. */
+   and the work area: the slate canvas, its parts white cards on it. */
 
 .app {
   display: grid;
@@ -9,13 +9,13 @@
   background: var(--bg);
 }
 .app-main { min-width: 0; padding: 8px 8px 8px 0; display: flex; flex-direction: column; gap: 8px; }
+/* Every page lays its white cards straight on the canvas, so a card stands
+   forward instead of white on white (Eric, 2026-10-08 refactor; it was one
+   white sheet over the slate on the watchlist and the project page). */
 .page {
   flex: 1 1 auto;
   min-width: 0;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-panel);
-  box-shadow: var(--shadow-panel);
+  background: transparent;
   min-height: calc(100vh - 16px);
   min-height: calc(100dvh - 16px);
   position: relative;
@@ -54,7 +54,7 @@
   transition: border-color var(--dur) var(--ease), background-color var(--dur) var(--ease);
 }
 .sb-new:hover { text-decoration: none; border-color: var(--control-border); }
-.sb-new.is-active { border-color: var(--accent-line); box-shadow: 0 0 0 1px var(--accent-line); }
+.sb-new.is-active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .sb-new-plus { width: 16px; text-align: center; font-size: 17px; line-height: 1; color: var(--accent); font-weight: 400; }
 
 .sb-nav { display: flex; flex-direction: column; gap: 1px; }
@@ -68,7 +68,7 @@
   transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 .nav-item:hover { background: var(--sidebar-hover); color: var(--text); text-decoration: none; }
-.nav-item.is-active { background: var(--sidebar-active); color: var(--text); box-shadow: 0 0 0 1px var(--border), 0 1px 2px rgba(16, 24, 40, 0.05); }
+.nav-item.is-active { background: var(--sidebar-active); color: var(--text); font-weight: 600; box-shadow: 0 0 0 1px var(--border), var(--shadow-lift); }
 .nav-ico { flex: none; color: var(--text-3); }
 .nav-item.is-active .nav-ico { color: var(--accent); }
 .nav-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -115,7 +115,8 @@
 @media (max-width: 767.98px) {
   .app { grid-template-columns: minmax(0, 1fr); }
   .app-main { padding: 0; gap: 0; }
-  .page { border: 0; border-radius: 0; box-shadow: none; min-height: calc(100dvh - 48px); padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+  /* A phone's page is the canvas; its cards are white (Eric, 2026-10-08 polish). */
+  .page { min-height: calc(100dvh - 48px); padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
   .demo-banner { border-radius: 0; }
   .topbar {
     display: flex; align-items: center; gap: 10px;
@@ -133,7 +134,7 @@
     display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
     padding: 4px 6px calc(4px + env(safe-area-inset-bottom));
-    background: color-mix(in srgb, var(--surface) 94%, transparent);
+    background: var(--surface); /* solid, so the idle labels keep 4.8:1 */
     -webkit-backdrop-filter: saturate(1.4) blur(12px);
     backdrop-filter: saturate(1.4) blur(12px);
     border-top: 1px solid var(--border);
@@ -142,7 +143,12 @@
     flex-direction: column; justify-content: center; gap: 2px;
     min-height: 52px; padding: 4px 2px; font-size: var(--fs-xs); text-align: center; position: relative;
   }
-  .tabbar .nav-item.is-active { background: transparent; box-shadow: none; color: var(--accent-text); }
+  /* Slate when idle, obsidian when chosen, with a 2px mark over it. */
+  .tabbar .nav-item { color: var(--text-label); font-weight: 500; }
+  .tabbar .nav-item:hover { color: var(--text); }
+  .tabbar .nav-item.is-active { background: transparent; box-shadow: none; color: var(--text); font-weight: 600; }
+  .tabbar .nav-item.is-active::before { content: ""; position: absolute; top: -4px; left: 50%; width: 28px; height: 2px; margin-left: -14px; border-radius: 0 0 2px 2px; background: var(--accent); }
+  .tabbar .nav-item.is-active .nav-ico { color: var(--text); }
   .tabbar .nav-ico { width: 20px; height: 20px; }
   .tabbar .nav-count { position: absolute; top: 4px; left: calc(50% + 6px); margin: 0; font-size: 12px; line-height: 16px; min-width: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent-weak); color: var(--accent-text); }
 }
@@ -180,3 +186,4 @@
 /* A live update while you type in a hosted view: offered, never forced. */
 .update-bar { position: sticky; top: 8px; z-index: 30; display: flex; align-items: center; gap: 12px; margin: 12px 16px 0; padding: 8px 12px; border-radius: var(--r-lg); background: var(--accent-weak); color: var(--text); border: 1px solid var(--accent-line); font-size: var(--fs-sm); }
 .update-bar .btn { margin-left: auto; }
+

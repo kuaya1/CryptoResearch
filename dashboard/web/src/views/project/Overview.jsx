@@ -16,7 +16,8 @@ import { TAG_WORDS, CERTAINTY_WORDS, checksWord } from '../../../../public/brief
 import { CONFIDENCE_LABELS } from '../../../../public/thesis-ui.js';
 import { navigate } from '../../lib/router.js';
 import { legacyCtx } from '../../legacy/ctx.js';
-import { Gauge, ScoreBar } from '../../components/Gauge.jsx';
+import { ScoreBar } from '../../components/ScoreBar.jsx';
+import { MetricHeader } from '../../components/MetricHeader.jsx';
 import { Dom, loadLegacy } from '../../components/Dom.jsx';
 
 const enc = encodeURIComponent;
@@ -179,34 +180,24 @@ export function Notices({ list, m, pid, who, label, view = 'overview' }) {
 
 // ---- the verdict ----------------------------------------------------------------------
 
-function GradeBlock({ m, who }) {
+// The grade as the metric header (no gauge; Eric, 2026-10-08): the model and
+// its verdict, the desk's calculated grade (never the model's own total) with
+// the rubric's word, withheld as the share of the weight scored.
+function GradeBlock({ m, who, verdict, sub }) {
   const g = m.grade;
-  const cap = <p className="og-cap" title={`Calculated by the desk from ${who}'s six weighted component scores under ${g.rubric || 'its rubric'}; never ${who}'s own total`}>{g.status === 'range' ? 'Investment grade · a range' : 'Investment grade'}</p>;
-  if (g.status === 'firm' || g.status === 'range') {
-    // On a phone the gauge is drawn smaller, so its word sits under it as text
-    // (never below 12px); the gauge's own name already says it.
-    return <div className="og-grade"><Gauge grade={g.grade} word={g.word} serious={m.evidence.level === 'serious'} size={200} />{g.word ? <p className="og-word" aria-hidden="true">{g.word}</p> : null}{cap}</div>;
-  }
-  if (g.status === 'withheld') {
-    return (
-      <div className="og-grade is-withheld">
-        <p className="og-wh">Grade withheld</p>
-        {typeof g.coverage === 'number' ? (
-          <div className="cov" title={COVERAGE_MEANS}>
-            <div className="cov-track" aria-hidden="true"><div className="cov-fill" style={{ width: `${Math.max(0, Math.min(100, g.coverage))}%` }} /></div>
-            <div className="cov-lbl">{`${g.coverage}% of the investment weight scored`}</div>
-          </div>
-        ) : <p className="faint">{g.reason || 'No grade is calculated.'}</p>}
-        {cap}
-      </div>
-    );
-  }
-  return <div className="og-grade is-withheld"><p className="og-wh">No grade</p><p className="faint">{g.reason || 'No grade was calculated.'}</p>{cap}</div>;
+  const a = (m.report && m.report.assessment) || {};
+  const captionTitle = `Calculated by the desk from ${who}'s six weighted component scores under ${g.rubric || 'its rubric'}; never ${who}'s own total`;
+  const scored = g.status === 'firm' || g.status === 'range';
+  const grade = scored ? { status: g.status, display: g.grade.display }
+    : g.status === 'withheld' ? { status: 'withheld', coverage: typeof g.coverage === 'number' ? g.coverage : null, reason: g.reason || 'No grade is calculated.' }
+      : { status: 'none', label: 'No grade', reason: g.reason || 'No grade was calculated.' };
+  const tier = scored ? scoreTier(g.status === 'range' ? g.grade.low : g.grade.value) : null;
+  return <MetricHeader who={who} model={a.model_version || null} verdict={verdict} grade={grade} word={scored ? g.word : null} tier={tier} captionTitle={captionTitle} sub={sub} chips={<GradeFlags m={m} />} />;
 }
 
 function ageWords(at, staleDays) {
   const d = daysSince(at);
-  if (d === null) return { text: at || 'Date not stated', rel: null, stale: false };
+  if (d === null) return { text: at || 'date not stated', rel: null, stale: false };
   const rel = d === 0 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`;
   return { text: fmtDate(at), rel, stale: Boolean(staleDays && d > staleDays) };
 }
@@ -261,24 +252,20 @@ function Verdict({ m, pid, who, staleDays }) {
   const first = (n) => GRADE_NOTICES.includes(n.kind);
   return (
     <section className={`ov-verdict${m.report_id && m.is_latest ? ' is-latest' : ''}`} id="bf-verdict" aria-label={`${who}'s verdict`}>
-      <div className="ov-vgrid">
-        <GradeBlock m={m} who={who} />
-        <div className="ov-vtext">
-          <p className="ov-vwho">{`${who}'s verdict`}</p>
-          <p className="ov-vlabel" title="The verdict as the report writes it">{v.label || <span className="faint">No verdict given</span>}</p>
-          <dl className="ov-vfacts">
-            <div><dt>Analysis</dt><dd>{age.text}{age.rel ? <span className="faint">{` · ${age.rel}`}</span> : null}{age.stale ? <span className="v-stale"> · stale</span> : null}</dd></div>
-            <div>
-              <dt>Horizon</dt>
-              <dd>
-                <span className="hz-full">{hz.start && hz.end ? windowWords(hz.start, hz.end) : hz.text || 'Not stated'}{hz.months ? <span className="faint">{` · ${hz.months} month${hz.months === 1 ? '' : 's'}${hz.mode === 'long_term' ? ', long-term exception' : ''}`}</span> : null}</span>
-                {hz.months && hz.end ? <span className="hz-short">{`${hz.months} month${hz.months === 1 ? '' : 's'}`}<span className="faint">{` · to ${fmtDate(hz.end)}`}</span></span> : null}
-              </dd>
-            </div>
-          </dl>
-          <GradeFlags m={m} />
-        </div>
-      </div>
+      <GradeBlock
+        m={m}
+        who={who}
+        sub={(
+          <>
+            <span><b>{`Analyzed ${age.text}`}</b>{age.rel ? ` · ${age.rel}` : ''}{age.stale ? <span className="v-stale"> · stale</span> : null}</span>
+            <span className={hz.months && hz.end ? 'has-short' : undefined}>
+              <span className="hz-full">{`Horizon ${hz.start && hz.end ? windowWords(hz.start, hz.end) : hz.text || 'not stated'}`}{hz.months ? ` · ${hz.months} month${hz.months === 1 ? '' : 's'}${hz.mode === 'long_term' ? ', long-term exception' : ''}` : ''}</span>
+              {hz.months && hz.end ? <span className="hz-short">{`Horizon ${hz.months} month${hz.months === 1 ? '' : 's'} · to ${fmtDate(hz.end)}`}</span> : null}
+            </span>
+          </>
+        )}
+        verdict={v.label}
+      />
       <KeyPoints m={m} who={who} />
       {m.grade.status === 'withheld' && m.grade.why.items.length ? (
         <div className="ov-missing">

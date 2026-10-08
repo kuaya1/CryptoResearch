@@ -32,7 +32,7 @@ nothing from this folder.
   live poll, API calls), the hash router (`router.js`: Back, deep links, scroll
   and focus memory) and hooks.
 - `src/shell/` the sidebar, the phone top bar and tab bar, the More sheet.
-- `src/components/` the small component library: grade pills, the gauge and
+- `src/components/` the small component library: grade pills, the metric header and
   score bars, figures, logos, menus (Radix), the `Dom` adapter for parts the
   app still hosts.
 - `src/views/` the watchlist, the inspector and the project page (Overview in

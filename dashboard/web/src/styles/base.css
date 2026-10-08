@@ -22,7 +22,10 @@ body {
 h1, h2, h3, h4 { margin: 0; color: var(--text); line-height: 1.25; font-family: var(--sans); }
 p { margin: 0; }
 a { color: var(--accent-text); text-decoration: none; }
-a:hover { text-decoration: underline; text-underline-offset: 3px; }
+/* Links are ink (no purple): a plain link and a text button carry a hairline
+   underline, so they read as links without color (Eric, 2026-10-08 polish). */
+a:not([class]), .btn-link { text-decoration: underline; text-decoration-color: var(--link-line); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: currentColor; }
 button { font: inherit; color: inherit; }
 img { max-width: 100%; }
 code, .mono { font-family: var(--mono); font-size: max(0.92em, var(--fs-caption)); }
@@ -49,6 +52,9 @@ abbr[title] { text-decoration: none; cursor: help; }
 
 /* Loading: quiet lines where content will be; the words are for screen readers. */
 .boot, .page-loading { display: grid; gap: 10px; padding: 32px; max-width: 640px; }
+/* The page is the slate canvas, so a loading page is its own white card, or
+   its skeletons vanish into the slate. */
+.page-loading { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); }
 .skel { display: block; height: 12px; border-radius: 6px; background: linear-gradient(90deg, var(--track) 0%, var(--surface-hover) 50%, var(--track) 100%); background-size: 200% 100%; animation: skel 1.4s ease-in-out infinite; }
 .skel.w40 { width: 40%; } .skel.w60 { width: 60%; } .skel.w80 { width: 80%; }
 @keyframes skel { from { background-position: 100% 0; } to { background-position: -100% 0; } }

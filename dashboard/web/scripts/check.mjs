@@ -309,6 +309,17 @@ try {
       if (low && low.length) fail(`${theme} ${name}: text below contrast`, low.slice(0, 4));
     }
     await tab.close();
+    // A phone: the tab bar, the cards on the canvas, risky contract badges.
+    const ph = await tabFor(390, { theme });
+    const ember = (index.projects.find((p) => /Ember/.test(p.name)) || {}).project_id;
+    for (const [name, url, ready] of [['phone watchlist', '#/watchlist', "document.querySelector('.wl-cards')"], ['phone inspector', `#/watchlist?p=${ember || P.relay}`, "document.querySelector('.inspector .mpanel')"], ['phone overview', `#/project/${P.relay}/brief`, "document.querySelector('.ov-verdict')"], ['phone portfolio', '#/portfolio', "document.querySelector('.lg-portfolio .page-head')"], ['phone new', '#/new', "document.querySelector('.lg-new *, .lg-intake *')"]]) {
+      await go(ph, url, ready);
+      await sleep(700);
+      const low = await ph.evalJs(CONTRAST);
+      report.contrast[`${theme} ${name}`] = low;
+      if (low && low.length) fail(`${theme} ${name}: text below contrast`, low.slice(0, 4));
+    }
+    await ph.close();
   }
 } finally {
   await b.kill();

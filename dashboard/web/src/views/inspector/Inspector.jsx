@@ -8,7 +8,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
 import { X, Ellipsis, ExternalLink, Copy, Check, FileText, Clock } from 'lucide-react';
 import {
-  PROVIDERS, PROVIDER_LABELS, fmtDate, fmtDateTime, fmtAgo, freshnessText, fmtMarketFigure, onHoldOf, toast, announce,
+  PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, fmtDate, fmtDateTime, fmtAgo, freshnessText, fmtMarketFigure, onHoldOf, toast, announce,
 } from '../../../../public/ui.js';
 import {
   mkt, marketStrings, noPriceReason, defaultModel, priceClock, fundamentalsTile, defillamaBound, rowProject,
@@ -25,7 +25,6 @@ import { Change, Spark, Unknown, UnknownFigure } from '../../components/figures.
 import { GradePill, pillInfo } from '../../components/GradePill.jsx';
 import { Menu, MenuItem, MenuSep } from '../../components/Menu.jsx';
 import { Dom, loadLegacy } from '../../components/Dom.jsx';
-import { ScoreBar } from '../../components/Gauge.jsx';
 import { badgeOpts } from '../watchlist/ProjectTable.jsx';
 import { view, closePanel, markReviewed, restoreProject, archiveProject, setWatching } from '../watchlist/state.js';
 import { ModelPanel } from './ModelPanel.jsx';
@@ -124,18 +123,26 @@ function ContractChips({ p }) {
         {m.status ? <span className={`pill${m.status.tone === 'warn' ? ' pill-warn' : ''}`} title={m.status.title || undefined}>{m.status.word}</span> : null}
         {m.age ? <span className={`cc-age${m.stale ? ' is-stale' : ''}`} title={m.ageTitle} aria-label={`Screened by GoPlus ${m.age} ago${m.stale ? ', stale' : ''}`}>{m.stale ? <Clock size={12} aria-hidden="true" /> : null}<span aria-hidden="true">{`GoPlus ${m.age}`}</span></span> : null}
       </div>
-      <ul className="cc-chips" aria-label="Contract checks from GoPlus">
+      {/* The audit strip (Eric, 2026-10-08): the four standing checks in one
+          bordered row of equal cells, "Mint: No"; only a risky answer becomes
+          an alert badge; severe flags follow as alert badges of their own.
+          Every answer is a word; nothing is labelled safe. */}
+      <ul className="cc-audit" aria-label="Contract checks from GoPlus">
         {m.chips.map((c) => (
-          <li key={c.key} className={`cchip dot-${c.dot}`} title={c.title || undefined} aria-label={c.aria}>
-            <span className="cc-dot" aria-hidden="true" /><span className="cc-l" aria-hidden="true">{c.label}</span><span className="cc-val" aria-hidden="true">{c.value}</span>
-          </li>
-        ))}
-        {[...m.extra].sort((a, b) => badgeRank(a) - badgeRank(b)).map((b) => (
-          <li key={b.key} className="cchip dot-risky is-severe" title={b.title} aria-label={b.aria}>
-            <span className="cc-dot" aria-hidden="true" /><span className="cc-l" aria-hidden="true">{b.label}</span>{b.value !== null ? <span className="cc-val" aria-hidden="true">{b.value}</span> : null}
+          <li key={c.key} className={`cc-cell is-${c.dot}`} title={c.title || undefined} aria-label={c.aria}>
+            <span className={c.dot === 'risky' ? 'cc-alert' : 'cc-quiet'} aria-hidden="true"><span className="cc-l">{`${c.label}:`}</span> <span className="cc-val">{c.value}</span></span>
           </li>
         ))}
       </ul>
+      {m.extra.length ? (
+        <ul className="cc-flags" aria-label="Severe contract flags from GoPlus">
+          {[...m.extra].sort((a, b) => badgeRank(a) - badgeRank(b)).map((b) => (
+            <li key={b.key} className="cc-alert" title={b.title} aria-label={b.aria}>
+              <span className="cc-l" aria-hidden="true">{b.label}</span>{b.value !== null ? <span className="cc-val" aria-hidden="true">{`: ${b.value}`}</span> : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }
@@ -569,10 +576,13 @@ export default function Inspector({ pid, wide }) {
                   const rep = p.providers && p.providers[prov];
                   const job = p.research && p.research.providers && p.research.providers[prov];
                   const info = pillInfo(prov, rep, job, badgeOpts(d, prov));
+                  // A segmented control: the model and its grade in one line;
+                  // a model on hold with no report and no job reads "Hold".
+                  const hold = !rep && !job ? onHoldOf(d.index, prov) : null;
                   return (
-                    <Tabs.Trigger key={prov} value={prov} className="mtab" data-key={`insp-tab-${prov}`} aria-label={info.text.replace(/[.\s]+$/, '')}>
-                      <span className="mtab-name" aria-hidden="true">{PROVIDER_LABELS[prov]}</span>
-                      <GradePill provider={prov} report={rep} job={job} opts={badgeOpts(d, prov)} showSub={false} aria-hidden="true" />
+                    <Tabs.Trigger key={prov} value={prov} className="mtab" data-key={`insp-tab-${prov}`} aria-label={hold ? `${PROVIDER_LABELS[prov]}: on hold on this desk, no report` : info.text.replace(/[.\s]+$/, '')}>
+                      <span className="mtab-name" aria-hidden="true"><span className="n-full">{PROVIDER_LABELS[prov]}</span><span className="n-short">{PROVIDER_SHORT[prov]}</span></span>
+                      {hold ? <span className="mtab-hold" aria-hidden="true">Hold</span> : <GradePill provider={prov} report={rep} job={job} opts={badgeOpts(d, prov)} showSub={false} className="gp-compact" aria-hidden="true" />}
                     </Tabs.Trigger>
                   );
                 })}
