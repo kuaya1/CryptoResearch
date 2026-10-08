@@ -12,7 +12,7 @@
 /* On the page (not inside the inspector) the model tabs sit on the slate
    canvas: a light track with the panels' hairline, so the chosen tab (a
    white card) stands out as it does in the inspector. */
-.mtabs.pb-mtabs { background: var(--surface-sunken); border: 1px solid var(--border); border-radius: var(--r-card); }
+.mtabs.pb-mtabs { background: var(--surface-sunken); border: 1px solid var(--border); border-radius: var(--r-lg); }
 .mtab .mt-verdict { font-size: 12px; color: var(--text-3); padding-left: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* A phone: the verdict wraps to two lines rather than being cut at one
    (Eric, 2026-10-06); the tab's accessible name has it in full. */

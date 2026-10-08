@@ -171,7 +171,7 @@ select.input { padding-right: 28px; appearance: none; background-image: var(--i-
   display: grid; grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas: "main score" "sub score" "chips chips";
   gap: 6px 16px; align-items: start;
-  padding: 12px 14px; border-radius: var(--r-card);
+  padding: 12px 14px; border-radius: var(--r-lg);
   background: var(--surface-sunken); border: 1px solid var(--border);
 }
 .mh-main { grid-area: main; min-width: 0; }

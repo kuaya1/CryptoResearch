@@ -10,6 +10,7 @@
   height: calc(100vh - 16px); height: calc(100dvh - 16px);
   border: 1px solid var(--border);
   border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
   overflow: hidden;
   animation: insp-in 160ms var(--ease);
 }
@@ -79,7 +80,7 @@ html.has-drawer { overflow: hidden; }
 /* The model selector: a segmented control in a slate housing, each segment
    the model and its grade on one line ("Claude 64.3", "Gemini Hold"); the
    chosen one white with a hairline and bold words (Eric, 2026-10-08 polish). */
-.mtabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; padding: 3px; border-radius: var(--r-card); background: var(--surface-track); }
+.mtabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; padding: 3px; border-radius: var(--r-lg); background: var(--surface-track); }
 .mtab {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 2px 6px;
   min-height: 34px; padding: 4px 6px; border: 1px solid transparent; border-radius: var(--r-control);
@@ -102,7 +103,7 @@ html.has-drawer { overflow: hidden; }
 .vwithheld .vw-word { font-size: var(--fs-lg); font-weight: 600; }
 .cov { display: flex; flex-direction: column; gap: 4px; }
 .cov-track { height: 8px; border-radius: 4px; background: repeating-linear-gradient(135deg, var(--surface-sunken) 0 4px, var(--track) 4px 6px); box-shadow: inset 0 0 0 1px var(--border); overflow: hidden; }
-.cov-fill { height: 100%; background: var(--text-3); border-radius: 4px 0 0 4px; }
+.cov-fill { height: 100%; background: var(--bar-ink); border-radius: 4px 0 0 4px; }
 .cov-lbl { font-size: var(--fs-xs); color: var(--text-2); }
 .vw-missing h4 { font-size: var(--fs-xs); font-weight: 600; color: var(--text-3); margin-bottom: 4px; }
 .vw-missing ul, .plain-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); color: var(--text-2); }
@@ -177,8 +178,8 @@ html.has-drawer { overflow: hidden; }
 
 /* bars on the one 0–100 spectrum */
 .bar { position: relative; display: block; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
-.bar-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--t-fill); }
-.bar-span { position: absolute; top: 0; bottom: 0; border-radius: 3px; background: var(--t-fill); opacity: 0.85; }
+.bar-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--bar-ink); }
+.bar-span { position: absolute; top: 0; bottom: 0; border-radius: 3px; background: var(--bar-ink); opacity: 0.85; }
 .bar-fill.risk, .bar-span.risk { background: var(--risk-bar); }
 .bar-fill.from-right { left: auto; right: 0; }
 .bar.is-unknown { background: transparent; box-shadow: inset 0 0 0 1px var(--border); background-image: repeating-linear-gradient(90deg, var(--border) 0 3px, transparent 3px 6px); background-size: 100% 1px; background-repeat: no-repeat; background-position: 0 50%; }
@@ -349,7 +350,7 @@ html.has-drawer { overflow: hidden; }
   .inspector.is-modal .insp-head { background: var(--surface); border-bottom: 1px solid var(--border); }
   .inspector.is-modal .insp-body { padding: 10px 12px 20px; }
   .inspector.is-modal .insp-body > .insp-sec, .inspector.is-modal .insp-body > .insp-folds, .inspector.is-modal .insp-body > .insp-problems, .inspector.is-modal .insp-body > .insp-archived {
-    margin-top: 10px; padding: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow-lift);
+    margin-top: 10px; padding: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow-card);
   }
   .inspector.is-modal .insp-body > :first-child { margin-top: 0; }
   .inspector.is-modal .insp-folds { padding-top: 4px; padding-bottom: 4px; }

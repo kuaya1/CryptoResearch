@@ -79,7 +79,7 @@
 
 /* ---- model tabs on the project page ---- */
 /* The model selector: the same segmented control as the inspector's. */
-.ptabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; padding: 3px; margin-bottom: 16px; border-radius: var(--r-card); background: var(--surface-track); }
+.ptabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; padding: 3px; margin-bottom: 16px; border-radius: var(--r-lg); background: var(--surface-track); }
 .ptab { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 9px 12px; border: 0; border-radius: var(--r-control); background: transparent; color: var(--text-2); font: inherit; text-align: left; cursor: pointer; min-width: 0; }
 .ptab:hover { background: color-mix(in srgb, var(--surface) 60%, transparent); color: var(--text); }
 .ptab[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-seg); }
@@ -102,7 +102,7 @@
 /* ---- the sheet ---- */
 .sheet { min-width: 0; }
 @media (min-width: 768px) {
-  .pb-view .sheet { padding: 16px 24px 24px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); }
+  .pb-view .sheet { padding: 16px 24px 24px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow-card); }
 }
 /* On a phone the project page sits on the canvas; the Overview is one white
    panel and the review line a white card (Eric, 2026-10-08 polish). */

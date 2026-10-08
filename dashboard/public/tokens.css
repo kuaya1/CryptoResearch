@@ -4,10 +4,11 @@
    a component rule.
 
    The Workspace look (Eric, 2026-10-08, frontend redesign; obsidian ink,
-   Eric, 2026-10-08 polish): a calm light research workspace in the spirit of
-   Linear. A cool slate canvas (#ECEEF2) carries the sidebar and, on a phone,
-   the page itself; white panels and cards with a slate-200 hairline and 8px
-   corners stand forward on it. Ink text, and obsidian ink (#0F172A) for the
+   Eric, 2026-10-08 polish; elevated cards, Eric, 2026-10-08, after the
+   CATMIN reference): a calm light research workspace. A neutral gray canvas
+   (#F3F4F6) carries every page; white cards with a #E5E7EB hairline, 12px
+   corners and a soft two-layer shadow float on it. Score and progress bars
+   are ink on a light track; status pills are pastel with dark words. Ink text, and obsidian ink (#0F172A) for the
    current place, the primary action, links and focus: no purple. Green, red
    and amber stay earned: a rise or fall, a warning, a state, a risky contract
    check; every meaning also has a word or a sign. Every number is tabular.
@@ -20,7 +21,7 @@
 
 :root {
   /* Surfaces */
-  --bg: #eceef2;                  /* the canvas: sidebar, gutters, a phone's page */
+  --bg: #f3f4f6;                  /* the canvas under every page and the sidebar */
   --surface: #ffffff;             /* the work panel, cards, the inspector */
   --surface-raised: #ffffff;      /* menus, dialogs, toasts */
   --surface-hover: #f4f6f9;       /* a row or control under the pointer */
@@ -28,8 +29,8 @@
   --surface-sunken: #f8fafc;      /* wells inside a panel */
   --surface-band: #f8fafc;        /* a table's header band */
   --surface-track: #e2e8f0;       /* a segmented control's housing (Eric, 2026-10-08) */
-  --sidebar: #eceef2;
-  --sidebar-hover: #e2e5ea;
+  --sidebar: #f3f4f6;
+  --sidebar-hover: #e5e7eb;
   --sidebar-active: #ffffff;
   --tab-chosen: #ffffff;
   --logo-plate: #ffffff;          /* behind a logo image: CoinGecko draws for a light ground */
@@ -39,7 +40,7 @@
   --text-3: #5b6472;              /* labels, metadata: 5.1:1 on the canvas, 6.0:1 on white */
   --text-label: #64748b;          /* micro-labels and the tab bar, on white only: 4.8:1 */
   /* Lines */
-  --border: #d8dbe0;              /* the panel's and the card's hairline (Eric, 2026-10-08) */
+  --border: #e5e7eb;              /* the card's hairline (Eric, 2026-10-08, elevated cards) */
   --separator: #edf0f4;           /* rules inside a panel */
   --control-border: #868c97;      /* field and checkbox edges: 3:1 on white */
   --button-border: #cbd5e1;       /* a secondary button's edge (Eric, 2026-10-08) */
@@ -63,22 +64,23 @@
   --on-highlight: #8a3f0a;
   /* Working: blue, a state, never the accent */
   --work: #2563eb;
-  --work-text: #1d4ed8;
-  --work-weak: #eff6ff;
+  --work-text: #1e40af;
+  --work-weak: #dbeafe;
   /* Earned color: signals for dots, bars and lines; the deeper step for words */
   --pos-strong: #16a34a;
   --neg-strong: #dc2626;
   --warn-strong: #d97706;
-  --pos: #147a3a;
-  --pos-text: #147a3a;
-  --neg: #b42318;
-  --warn: #a14a07;
-  --pos-weak: #effaf3;
-  --neg-weak: #fef2f2;
-  --warn-weak: #fff8eb;
+  --pos: #166534;
+  --pos-text: #166534;
+  --neg: #991b1b;
+  --warn: #92400e;
+  --pos-weak: #dcfce7;            /* pastel status tints with dark words (-100 over -800) */
+  --neg-weak: #fee2e2;
+  --warn-weak: #fffbeb;          /* amber-50: the amber signal keeps 3:1 on it */
   --risk-bar: #dc2626;
-  --fav-bar: #4b5563;
-  --track: #e8ecf1;
+  --fav-bar: #111827;
+  --bar-ink: #111827;             /* score and progress bars: ink, never a rainbow (Eric, 2026-10-08) */
+  --track: #e5e7eb;
   --row-hover: #f4f6f9;
   --scrollbar: #cfd3da;
   /* Grade bands (the rubric's letters), kept for the views that name them */
@@ -90,14 +92,14 @@
   /* The one 0–100 spectrum on the rubric's anchors: 1 below 40 (red), 2 to
      59 (amber), 3 to 74 (gray), 4 to 89 (muted green), 5 from 90 (green). Ink
      on its tint at least 5.5:1; fills at least 3:1 on white. */
-  --t1-ink: #b42318; --t1-bg: #fef3f2; --t1-line: rgba(220, 38, 38, 0.22); --t1-fill: #e0383e; --t1-arc: #f8d3d3;
-  --t2-ink: #8a3f0a; --t2-bg: #fff6e8; --t2-line: rgba(217, 119, 6, 0.28); --t2-fill: #df7f0e; --t2-arc: #f7dfb5;
-  --t3-ink: #3d434d; --t3-bg: #f1f2f5; --t3-line: rgba(21, 23, 28, 0.12); --t3-fill: #7d8490; --t3-arc: #e2e5ea;
-  --t4-ink: #275f40; --t4-bg: #eef7f1; --t4-line: rgba(47, 103, 71, 0.22); --t4-fill: #4f9a6b; --t4-arc: #cfe4d6;
-  --t5-ink: #126a37; --t5-bg: #e8f8ee; --t5-line: rgba(22, 163, 74, 0.28); --t5-fill: #19a14f; --t5-arc: #bfe9cf;
+  --t1-ink: #991b1b; --t1-bg: #fef2f2; --t1-line: rgba(220, 38, 38, 0.22); --t1-fill: #e0383e; --t1-arc: #f8d3d3;
+  --t2-ink: #92400e; --t2-bg: #fffbeb; --t2-line: rgba(217, 119, 6, 0.28); --t2-fill: #df7f0e; --t2-arc: #f7dfb5;
+  --t3-ink: #374151; --t3-bg: #f3f4f6; --t3-line: rgba(21, 23, 28, 0.12); --t3-fill: #7d8490; --t3-arc: #e2e5ea;
+  --t4-ink: #166534; --t4-bg: #f0fdf4; --t4-line: rgba(47, 103, 71, 0.22); --t4-fill: #4f9a6b; --t4-arc: #cfe4d6;
+  --t5-ink: #14532d; --t5-bg: #dcfce7; --t5-line: rgba(22, 163, 74, 0.28); --t5-fill: #19a14f; --t5-arc: #bfe9cf;
   /* Pills, fields */
-  --pill-ink: #3d434d; --pill-warn-bg: #fff8eb; --pill-warn-ink: #9a4708; --pill-warn-line: rgba(217, 119, 6, 0.32); --pill-warn-dash: rgba(217, 119, 6, 0.5);
-  --pill-bad-bg: #fef2f2; --pill-bad-ink: #b42318; --pill-bad-line: rgba(220, 38, 38, 0.24); --pill-bad-dot: #dc2626;
+  --pill-ink: #374151; --pill-warn-bg: #fffbeb; --pill-warn-ink: #92400e; --pill-warn-line: rgba(217, 119, 6, 0.32); --pill-warn-dash: rgba(217, 119, 6, 0.5);
+  --pill-bad-bg: #fee2e2; --pill-bad-ink: #991b1b; --pill-bad-line: rgba(220, 38, 38, 0.24); --pill-bad-dot: #dc2626;
   /* Contract checks: a clear answer is a quiet neutral badge; a risk is a
      red alert badge (the red's deeper step as words, so it reads at 6:1) */
   --check-ok-bg: #f8fafc; --check-ok-ink: #64748b; --check-ok-line: #e2e8f0;
@@ -132,8 +134,8 @@
   /* Space, shape, depth */
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px; --s10: 40px;
   --r-sm: 4px; --r-md: 6px; --r-lg: 8px; --r-xl: 12px;
-  --r-card: 8px; --r-panel: 12px; --r-well: 8px; --r-pill: 999px; --r-field: 6px; --r-control: 6px;
-  --shadow-card: none;
+  --r-card: 12px; --r-panel: 12px; --r-well: 8px; --r-pill: 999px; --r-field: 6px; --r-control: 6px;
+  --shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px -1px rgba(0, 0, 0, 0.04);   /* a card floats off the canvas */
   --shadow-panel: 0 1px 2px rgba(15, 23, 42, 0.05);
   --shadow-lift: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.03);
   --shadow-seg: 0 1px 2px rgba(15, 23, 42, 0.10), 0 0 0 1px rgba(15, 23, 42, 0.04);   /* the chosen segment's 1px lift */
@@ -174,7 +176,7 @@
   --pos-strong: #22c55e; --neg-strong: #ef4444; --warn-strong: #f59e0b;
   --pos: #4ade80; --pos-text: #4ade80; --neg: #f87171; --warn: #fbbf24;
   --pos-weak: rgba(34, 197, 94, 0.12); --neg-weak: rgba(239, 68, 68, 0.12); --warn-weak: rgba(245, 158, 11, 0.12);
-  --risk-bar: #ef4444; --fav-bar: #b7bac1; --track: #26282e; --row-hover: #1e2025; --scrollbar: #3a3d45;
+  --risk-bar: #ef4444; --fav-bar: #b7bac1; --bar-ink: #e5e7eb; --track: #26282e; --row-hover: #1e2025; --scrollbar: #3a3d45;
   --band-a: #4ade80; --band-a-bg: rgba(74, 222, 128, 0.11); --band-a-chip: #4ade80;
   --band-b: #86c99b; --band-b-bg: rgba(134, 201, 155, 0.11); --band-b-chip: #86c99b;
   --band-c: #c6c8cd; --band-c-bg: rgba(255, 255, 255, 0.06); --band-c-chip: #c6c8cd;
@@ -210,7 +212,7 @@
     --pos-strong: #22c55e; --neg-strong: #ef4444; --warn-strong: #f59e0b;
     --pos: #4ade80; --pos-text: #4ade80; --neg: #f87171; --warn: #fbbf24;
     --pos-weak: rgba(34, 197, 94, 0.12); --neg-weak: rgba(239, 68, 68, 0.12); --warn-weak: rgba(245, 158, 11, 0.12);
-    --risk-bar: #ef4444; --fav-bar: #b7bac1; --track: #26282e; --row-hover: #1e2025; --scrollbar: #3a3d45;
+    --risk-bar: #ef4444; --fav-bar: #b7bac1; --bar-ink: #e5e7eb; --track: #26282e; --row-hover: #1e2025; --scrollbar: #3a3d45;
     --band-a: #4ade80; --band-a-bg: rgba(74, 222, 128, 0.11); --band-a-chip: #4ade80;
     --band-b: #86c99b; --band-b-bg: rgba(134, 201, 155, 0.11); --band-b-chip: #86c99b;
     --band-c: #c6c8cd; --band-c-bg: rgba(255, 255, 255, 0.06); --band-c-chip: #c6c8cd;

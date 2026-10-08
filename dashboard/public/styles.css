@@ -1363,7 +1363,7 @@ details.page-fold > summary { font-size: 15px; min-height: 44px; }
 .update-bar button { background: var(--primary); color: var(--on-primary); border-color: var(--primary); min-height: 30px; border-radius: 999px; }
 @media (max-width: 640px) { .toast { left: var(--s4); right: var(--s4); bottom: var(--s4); max-width: none; } }
 
-.receipt { border: 1px solid var(--separator); border-radius: var(--r-lg); padding: var(--s4); margin-top: var(--s3); background: var(--surface); box-shadow: var(--shadow-card); }
+.receipt { border: 1px solid var(--separator); border-radius: var(--r-lg); padding: var(--s4); margin-top: var(--s3); background: var(--surface); }
 .receipt h3 { display: flex; gap: var(--s2); align-items: center; margin-bottom: var(--s2); }
 .receipt .rows { list-style: none; margin: 0; padding: 0; }
 .receipt .rows li { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: var(--s3); padding: var(--s2) 0; border-top: 1px solid var(--separator); font-size: var(--fs-small); }
@@ -1475,7 +1475,7 @@ dialog .dlg-foot { display: flex; justify-content: flex-end; gap: var(--s2); pad
 .intake-list a:hover .intake-name { text-decoration: underline; }
 .intake-name { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
 .intake-meta { display: inline-flex; gap: var(--s2); align-items: center; font-size: var(--fs-small); flex-wrap: wrap; }
-.intake-cand { border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s4); margin-bottom: var(--s3); background: var(--surface); box-shadow: var(--shadow-card); }
+.intake-cand { border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s4); margin-bottom: var(--s3); background: var(--surface); }
 .intake-cand-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s2); flex-wrap: wrap; margin-bottom: var(--s2); }
 .intake-cand-head h3 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }
 .intake-cand .kv { margin-bottom: var(--s3); }
@@ -1713,16 +1713,11 @@ button.gb:is(.is-none, .is-on_hold):hover { border-color: var(--border); }
 }
 
 /* Category and part bars: each fill in its own score's tier. */
-.cbar .fill.tier-1 { background: var(--t1-fill); }
-.cbar .range.tier-1 { background: repeating-linear-gradient(135deg, var(--t1-fill) 0 3px, var(--t1-arc) 3px 6px); }
-.cbar .fill.tier-2 { background: var(--t2-fill); }
-.cbar .range.tier-2 { background: repeating-linear-gradient(135deg, var(--t2-fill) 0 3px, var(--t2-arc) 3px 6px); }
-.cbar .fill.tier-3 { background: var(--t3-fill); }
-.cbar .range.tier-3 { background: repeating-linear-gradient(135deg, var(--t3-fill) 0 3px, var(--t3-arc) 3px 6px); }
-.cbar .fill.tier-4 { background: var(--t4-fill); }
-.cbar .range.tier-4 { background: repeating-linear-gradient(135deg, var(--t4-fill) 0 3px, var(--t4-arc) 3px 6px); }
-.cbar .fill.tier-5 { background: var(--t5-fill); }
-.cbar .range.tier-5 { background: repeating-linear-gradient(135deg, var(--t5-fill) 0 3px, var(--t5-arc) 3px 6px); }
+/* Score bars are ink on a light track (Eric, 2026-10-08: "dark ink fills
+   rather than rainbow bars"); the figure beside it and its word carry the
+   grade, a range is a hatched span between its two ends. */
+.cbar .fill { background: var(--bar-ink); }
+.cbar .range { background: repeating-linear-gradient(135deg, var(--bar-ink) 0 3px, var(--track) 3px 6px); }
 
 .ig-row { align-items: center; gap: 4px 18px; flex-wrap: nowrap; }
 .ig-side { flex: 1; min-width: 0; display: grid; gap: 8px; justify-items: start; }
@@ -2053,6 +2048,7 @@ body { font-variant-numeric: var(--figures); }
 dialog .dlg-head { background: var(--surface-band); border-bottom-color: var(--border); }
 .summary-row, .status-strip, .ss-panel, .reader, .report-list, .table-scroll { border-color: var(--border); border-radius: var(--r-card); }
 .empty { border-radius: var(--r-card); }
+.card .empty { border-radius: var(--r-lg); }
 .summary-row .value { font-family: var(--font-display); }
 dialog { border-color: var(--border); border-radius: var(--r-card); }
 .menu, .insp-menu { border-color: var(--border); border-radius: var(--r-lg); }
@@ -2262,8 +2258,10 @@ a.wh-sym:hover { text-decoration: underline; text-underline-offset: 3px; text-de
 .summary-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 0; padding: 0; overflow: hidden; }
 .summary-row .item { display: grid; grid-template-rows: auto auto 1fr; align-content: start; padding: 14px 16px 12px; box-shadow: 1px 0 0 var(--separator), 0 1px 0 var(--separator); }
 @media (max-width: 480px) { .summary-row .item:last-child:nth-child(odd) { grid-column: 1 / -1; } }
-.summary-row .label { font-size: var(--fs-caption); font-weight: 500; color: var(--text-3); }
-.summary-row .value { margin-top: 6px; font-size: 22px; line-height: 1.2; }
+/* The reference KPI type (Eric, 2026-10-08, elevated cards): a label over a bold figure. */
+.summary-row .label { font-size: var(--fs-md); font-weight: 500; color: var(--text); }
+.summary-row .item { container-type: inline-size; }
+.summary-row .value { margin-top: 6px; font-size: clamp(var(--fs-xl), 15.5cqi, var(--fs-2xl)); font-weight: 700; line-height: 1.2; white-space: nowrap; }
 .summary-row .hint { margin-top: 4px; color: var(--text-2); }
 
 /* Records that need attention (views/portfolio.js): an audit table. Date and

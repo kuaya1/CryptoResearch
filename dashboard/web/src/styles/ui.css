@@ -2,19 +2,20 @@
    the metric ribbon, the diagnostic row, the model tab matrix, the security
    audit strip's alert rows and the ledger. Tokens only. */
 
-/* ---- MetricRibbon: equal cells divided by hairlines, a micro label over a
-   bold tabular value (10px uppercase labels: this ribbon's recorded
-   exception to "nothing under 12px, sentence case"). ---- */
+/* ---- MetricRibbon: equal cells divided by hairlines, a sentence-case label
+   over a bold tabular figure (Eric, 2026-10-08, elevated cards). ---- */
 .mribbon {
   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 14px 0 12px;
   background: var(--surface);
-  border: 1px solid var(--border); border-radius: var(--r-card); overflow: hidden;
+  border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden;
 }
 .mribbon-cell { padding: 8px 10px; min-width: 0; }
 .mribbon-cell + .mribbon-cell { border-left: 1px solid var(--border); }
-.mribbon-cell dt { font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-label); line-height: 1.4; }
-.mribbon-cell dd { margin: 2px 0 0; font-size: 13px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mribbon-cell dt { font-size: var(--fs-xs); font-weight: 500; color: var(--text-3); line-height: 1.4; }
+.mribbon-cell dd { margin: 2px 0 0; font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 419.98px) { .mribbon-cell { padding: 8px; } .mribbon-cell dd { font-size: 14px; } }
+@media (max-width: 379.98px) { .mribbon-cell dd { font-size: 13px; } }
 @media (max-width: 359.98px) {
   .mribbon { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mribbon-cell:nth-child(3) { border-left: 0; }
@@ -45,7 +46,7 @@
 .sa-crit-k { font-weight: 700; }
 
 /* ---- LedgerTable: holdings as rows that never wrap into columns. ---- */
-.ledger { list-style: none; margin: 0; padding: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); overflow: hidden; }
+.ledger { list-style: none; margin: 0; padding: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow-card); overflow: hidden; }
 .ledger-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; }
 .ledger-row + .ledger-row { border-top: 1px solid var(--separator); }
 .ledger-logo { display: inline-flex; }
@@ -79,7 +80,7 @@ a.ledger-sym:hover { text-decoration: underline; text-decoration-color: var(--li
    sideways; a wider screen keeps every column of the table. */
 .slot-ledger { display: none; }
 /* Inside a card the ledger is its rows, never a box within the box. */
-.card .ledger { background: transparent; border: 0; border-radius: 0; }
+.card .ledger { background: transparent; border: 0; border-radius: 0; box-shadow: none; }
 .card .ledger-row { padding-left: 0; padding-right: 0; }
 @media (max-width: 767.98px) {
   .lg .pos-table { display: none; }

@@ -54,7 +54,7 @@ abbr[title] { text-decoration: none; cursor: help; }
 .boot, .page-loading { display: grid; gap: 10px; padding: 32px; max-width: 640px; }
 /* The page is the slate canvas, so a loading page is its own white card, or
    its skeletons vanish into the slate. */
-.page-loading { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); }
+.page-loading { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow-card); }
 .skel { display: block; height: 12px; border-radius: 6px; background: linear-gradient(90deg, var(--track) 0%, var(--surface-hover) 50%, var(--track) 100%); background-size: 200% 100%; animation: skel 1.4s ease-in-out infinite; }
 .skel.w40 { width: 40%; } .skel.w60 { width: 60%; } .skel.w80 { width: 80%; }
 @keyframes skel { from { background-position: 100% 0; } to { background-position: -100% 0; } }
