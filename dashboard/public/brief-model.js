@@ -526,6 +526,24 @@ export function evidenceOf(r, categories) {
   };
 }
 
+// How many claims and category grades the desk's evidence checks flagged, in
+// words.
+export function flaggedText(ev) {
+  const claims = ev.flagged_claims || ev.flagged || 0;
+  const cats = ev.flagged_categories || 0;
+  return [claims ? `${claims} claim${claims === 1 ? '' : 's'}` : null, cats ? `${cats} category grade${cats === 1 ? '' : 's'}` : null].filter(Boolean).join(' and ') || 'nothing';
+}
+
+// A clean result in words that claim no more than the checks do: they found
+// no inconsistency, they did not verify the facts, and with too little to
+// check they say so.
+export function checksWord(ev) {
+  if (!ev) return 'not run';
+  const cov = ev.coverage && typeof ev.coverage === 'object' ? ev.coverage.status : ev.coverage;
+  if (cov === 'none') return 'coverage insufficient';
+  return cov === 'partial' ? 'no inconsistencies detected · partial coverage' : 'no inconsistencies detected';
+}
+
 // The exact records the brief is drawn from: project, report, run and the
 // original's SHA-256, with the versions the report declares.
 export function provenanceOf(r, d, run) {

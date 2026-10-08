@@ -176,9 +176,23 @@ test('server: logos load without the token but same-origin only; ledger and look
   const body = JSON.parse(ledger.body.toString('utf8'));
   assert.ok(Array.isArray(body.transactions) && Array.isArray(body.accounts) && Array.isArray(body.assets));
   assert.ok(body.assets.some((a) => a.asset_id === 'example-payfi-fictional'), 'verified project identities are recordable assets');
-  // The page itself carries no secrets.
-  const page = (await request(port, { path: '/app.js' })).body.toString('utf8');
-  assert.equal(/api[_-]?key|secret/i.test(page), false);
+  // The page itself carries no secrets: the app page at / and every script it
+  // loads first (the built bundle, dashboard/web) hold no key, and no key-shaped
+  // value appears in any of the app's assets.
+  const root = await request(port, { path: '/' });
+  assert.equal(root.status, 200);
+  const html = root.body.toString('utf8');
+  assert.match(html, /<script type="module" crossorigin src="\/app\/assets\/index-[\w-]+\.js"><\/script>/);
+  const first = [...html.matchAll(/(?:src|href)="(\/app\/assets\/[^"]+\.js)"/g)].map((m) => m[1]);
+  assert.ok(first.length >= 2, 'the entry and its preloads');
+  for (const p of first) {
+    const js = (await request(port, { path: p })).body.toString('utf8');
+    assert.equal(/api[_-]?key|secret/i.test(p === first[0] ? js : ''), false, `${p}: no key named in the entry`);
+  }
+  for (const f of fs.readdirSync(path.join(__dirname, '..', 'public', 'app', 'assets'))) {
+    const s = fs.readFileSync(path.join(__dirname, '..', 'public', 'app', 'assets', f), 'utf8');
+    assert.doesNotMatch(s, /sk-ant-[\w-]{10}|sk-proj-[\w-]{10}|sk-[A-Za-z0-9]{32}|AIza[\w-]{30}|sb_secret_[\w-]{10}|eyJhbGciOi/, `${f}: a key-shaped value`);
+  }
 });
 
 test('server: a repeated paste is saved once; a fixed retry reuses the saved copy', async (t) => {

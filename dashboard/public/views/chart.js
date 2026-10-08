@@ -13,8 +13,8 @@
 // as you left it while you move between projects (J/K). At most one frame
 // exists: it is removed when you close the section, move to another project,
 // symbol or source, or close the inspector, however it closes. A live redraw
-// keeps the same frame (watchlist.js moves it with Node.moveBefore where the
-// browser can, so it does not reload).
+// keeps the same frame (the app's Dom part draws it again only when the
+// project changes, so it does not reload).
 //
 // Which source:
 //   1. the one you switched to for this project, in this page session

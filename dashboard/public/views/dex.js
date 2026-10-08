@@ -1,5 +1,5 @@
 // DexScreener in the project inspector: the header's DexScreener link (drawn
-// by views/watchlist.js headLinks from dexLink), the DEX liquidity card at the
+// by the app's inspector from dexLink), the DEX liquidity card at the
 // top of the inspector, and the pool the technical chart shows for a token
 // that trades mainly on DEXs (views/chart.js).
 //

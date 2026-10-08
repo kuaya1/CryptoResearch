@@ -1176,7 +1176,9 @@ export function openDialog(title, body, { onClose = null, wide = false } = {}) {
         : opener && opener.id ? document.getElementById(opener.id) : null;
     if (target && typeof target.focus === 'function') target.focus();
   });
-  document.body.appendChild(dlg);
+  // In the app's scoped portal (index.html #lg-portal), where these dialogs'
+  // own styles apply; the top layer shows it above everything either way.
+  (document.getElementById('lg-portal') || document.body).appendChild(dlg);
   dlg.showModal();
   const first = dlg.querySelector('input:not([type="hidden"]), select, textarea');
   if (first) first.focus();

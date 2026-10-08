@@ -21,23 +21,19 @@ import { renderMarkdown } from '../md.js';
 import { openResearchDialog, openSectorDialog, waitingActions, waitingStep } from './dialogs.js';
 import { briefPanel, evidencePanel, bindBriefKeys, topBar } from './brief.js';
 import { comparePanel } from './brief-compare.js';
-import { marketNow } from '../brief-model.js';
+import { marketNow, flaggedText, checksWord } from '../brief-model.js';
 import { positionCard } from '../position-ui.js';
 import {
   profileOf, categoryRows, scorecardCounts, confidenceLine, categoryTable, categoryGlance, positivesAndRisks, chartCycleBlock, catalystsBlock,
   judgmentBlock, reviewBlock, scenariosBlock, codeReviewBlock,
 } from '../thesis-ui.js';
 
-// The brief's three views first (Overview keeps the address "brief", so every
-// link to the Brief lands on it), then the report, the market and your notes.
-const TABS = [
-  ['brief', 'Overview'],
-  ['compare', 'Compare'],
-  ['evidence', 'Evidence'],
-  ['report', 'Full report'],
-  ['market', 'Market'],
-  ['notes', 'Notes'],
-];
+// The tabs and where former addresses lead live in project-routes.js (pure,
+// shared with the app shell); re-exported here for the tests.
+import { PROJECT_TABS as TABS, projectRedirect } from '../project-routes.js';
+
+export { projectRedirect };
+
 // The views drawn as a brief: opened from the inspector, they keep its Back bar.
 const BRIEF_VIEWS = ['brief', 'compare', 'evidence'];
 
@@ -47,42 +43,6 @@ const FOLDS = {
   brief: { scorecard: 'pb-scorecard', headline: 'pb-headline' },
   evidence: { checks: 'brief-ev-checks', claims: 'pb-claims', technical: 'pb-technical', runs: 'pb-runs', identity: 'pb-identity' },
 };
-
-// The project page's former tabs and the Claude Brief's own page, mapped to
-// their new home (Eric, 2026-10-05, D1). Pure: the hash to go to, or null.
-export function projectRedirect(name, args, query) {
-  const q = new URLSearchParams(query);
-  const enc = encodeURIComponent;
-  const pid = args[0];
-  if (!pid) return null;
-  const to = (tab, params) => {
-    const qs = new URLSearchParams(params).toString();
-    return `#/project/${enc(pid)}/${tab}${qs ? `?${qs}` : ''}`;
-  };
-  if (name === 'brief') return to('brief', { model: 'claude', ...(q.get('report') ? { report: q.get('report') } : {}) });
-  if (name !== 'project') return null;
-  const tab = args[1];
-  const model = q.get('provider') || q.get('model');
-  const run = q.get('run') ? { run: q.get('run') } : {};
-  // The Brief's former folds now live on its other views (2026-10-07).
-  if (tab === 'brief') {
-    const open = q.get('open');
-    if (open === 'compare') return to('compare', {});
-    if (open === 'evidence') return to('evidence', { ...(model ? { model } : {}), open: 'claims' });
-    if (open === 'runs' || (!open && q.get('run'))) return to('evidence', { open: 'runs', ...run });
-    if (open === 'identity') return to('evidence', { open: 'identity' });
-    return null;
-  }
-  switch (tab) {
-    case undefined: case 'overview': return to('brief', {});
-    case 'scorecards': return to('brief', { ...(model ? { model } : {}), open: 'scorecard' });
-    case 'reports': return to('report', q.get('report') ? { report: q.get('report') } : {});
-    case 'comparison': return to('compare', {});
-    case 'research': return to('evidence', { open: 'runs', ...run });
-    case 'history': return to('notes', {});
-    default: return TABS.some(([t]) => t === tab) ? null : to('brief', {});
-  }
-}
 
 const viewState = { raw: {}, focusTab: null };
 const textCache = new Map();
@@ -406,7 +366,7 @@ function compareTab(ctx, d, row, route) {
 // Evidence: the model tabs, the chosen model's evidence; then, folded, your
 // own checks of its claims and your questions, its technical records, the
 // research runs and the token identity.
-function evidenceTab(ctx, d, row, latest, route) {
+export function evidenceTab(ctx, d, row, latest, route) {
   const pid = d.project.project_id;
   const prov = modelOf(route);
   const { m, sheet } = evidencePanel(ctx, { d, row, pid, provider: prov, reportId: route.query.get('report') || null });
@@ -426,7 +386,7 @@ function evidenceTab(ctx, d, row, latest, route) {
 
 // Your own checks of one report's claims, your dispute questions, and every
 // open question on the project (each model's and yours).
-function claimsBody(ctx, d, r) {
+export function claimsBody(ctx, d, r) {
   const pid = d.project.project_id;
   const latest = latestReports(d);
   const disputeTopic = input({ placeholder: 'e.g. category:token_value_capture or metric:revenue_usd' });
@@ -455,7 +415,7 @@ function claimsBody(ctx, d, r) {
 // citation structure, extraction notes, the binding to its run, your
 // corrections, how this model's reports changed, and the normalized data as
 // saved (loaded only when opened).
-function technicalBody(ctx, d, r, prov) {
+export function technicalBody(ctx, d, r, prov) {
   const integ = r.integrity || {};
   const issues = (r.extraction && r.extraction.issues) || [];
   const mp = (r.meta && r.meta.provenance) || {};
@@ -532,7 +492,7 @@ function modelStatus(ctx, d, row, prov, latest, { route = true } = {}) {
 // What changed since your last review, with Mark reviewed: one line that
 // names the changes in words, the list one tap away (the full history is on
 // the Notes tab), so the verdict and its risk stay in the first view.
-function reviewDigest(ctx, d) {
+export function reviewDigest(ctx, d) {
   const pid = d.project.project_id;
   const ch = d.changes || {};
   const n = (k, one, many = `${one}s`) => (k ? `${k} ${k === 1 ? one : many}` : null);
@@ -552,7 +512,7 @@ function reviewDigest(ctx, d) {
 }
 
 // Your headline: one report, or one of your own decisions.
-function headlineBody(ctx, d) {
+export function headlineBody(ctx, d) {
   const pid = d.project.project_id;
   const hl = d.headline;
   const options = [{ value: '', label: 'Choose a report or decision…' }];
@@ -587,7 +547,7 @@ function reviewedButton(ctx, pid, key = 'ov-reviewed') {
 
 const SCORECARD_NOTE = 'Three separate panels, never mixed: the category grades (higher is better) are diagnostics and are never averaged into the grade; the grade comes from six weighted components (20/25/20/15/10/10); the four downside-risk scores are higher-is-worse. A missing input withholds the grade and shows how much weight was scored.';
 
-function scorecardBody(ctx, d, latest, prov) {
+export function scorecardBody(ctx, d, latest, prov) {
   const pid = d.project.project_id;
   const r = latest[prov];
   const a = r.assessment;
@@ -725,26 +685,15 @@ function claimReviewControls(ctx, d, r, c, rev) {
   return h('div', { style: { display: 'grid', gap: '6px', minWidth: '210px' } }, check, corr, btn);
 }
 
-// How many claims and category grades the evidence checks flagged, in words.
-export function flaggedText(ev) {
-  const claims = ev.flagged_claims || ev.flagged || 0;
-  const cats = ev.flagged_categories || 0;
-  return [claims ? `${claims} claim${claims === 1 ? '' : 's'}` : null, cats ? `${cats} category grade${cats === 1 ? '' : 's'}` : null].filter(Boolean).join(' and ') || 'nothing';
-}
+// How many claims and category grades the evidence checks flagged, and a
+// clean result in words that claim no more than the checks do: pure, in
+// brief-model.js (the React views use them too).
+export { flaggedText, checksWord };
 
 // The desk's evidence checks on one report's claims and category grades
 // (core/evidence.js): flags with the reason and what would settle each;
 // never a score change.
 const SEVERITY_TONE = { high: 'bad', medium: 'warn', low: '' };
-// A clean result in words that claim no more than the checks do: they found
-// no inconsistency, they did not verify the facts, and with too little to
-// check they say so.
-export function checksWord(ev) {
-  if (!ev) return 'not run';
-  const cov = ev.coverage && typeof ev.coverage === 'object' ? ev.coverage.status : ev.coverage;
-  if (cov === 'none') return 'coverage insufficient';
-  return cov === 'partial' ? 'no inconsistencies detected · partial coverage' : 'no inconsistencies detected';
-}
 export function evidenceChecksBlock(ev) {
   if (!ev) return null;
   const cov = ev.coverage && typeof ev.coverage === 'object' ? ev.coverage.status : ev.coverage;
@@ -947,7 +896,7 @@ function revisionText(rv) {
   return `${head}, ${rv.minutes_after} min after ${rv.of}: ${what}. ${rv.declared && rv.declared.note ? `The model's reason: ${rv.declared.note}` : 'No reason was recorded with this save.'}`;
 }
 
-function reportsTab(ctx, d, route) {
+export function reportsTab(ctx, d, route) {
   const pid = d.project.project_id;
   if (!d.reports.length) return callout('No reports imported yet. Older analyses stay here as dated records once they exist.', 'info');
   const good = d.reports.filter((r) => !r.broken);
@@ -1149,7 +1098,7 @@ const EVIDENCE_NOTE = 'Separate things: the analyst tag ([V] means the analyst s
 // ---------------------------------------------------------------------------
 // Market data
 
-function marketTab(ctx, d) {
+export function marketTab(ctx, d) {
   const m = d.market;
   const pos = d.position;
   let body;
@@ -1187,7 +1136,7 @@ function marketTab(ctx, d) {
 // ---------------------------------------------------------------------------
 // Notes and history
 
-function historyTab(ctx, d) {
+export function historyTab(ctx, d) {
   const pid = d.project.project_id;
   const note = h('textarea', { name: 'conviction-note', placeholder: 'Your conviction note in your own words…', 'aria-label': 'Conviction note' }, d.conviction ? d.conviction.text : '');
   const conv = select([{ value: '', label: 'Conviction (optional)' }, 'low', 'medium', 'high'], { 'aria-label': 'Conviction', name: 'conviction' });
@@ -1530,7 +1479,7 @@ const noted = (run) => (run.providers || []).filter((p) => run.jobs[p] && run.jo
 
 // The research runs (with the standing prompt files) and the token identity,
 // two folded sections of the Brief.
-function researchParts(ctx, d, row, route = null) {
+export function researchParts(ctx, d, row, route = null) {
   const pid = d.project.project_id;
   const runs = d.research.runs || [];
   const wantRun = route ? route.query.get('run') : null;

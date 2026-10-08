@@ -1,227 +1,9 @@
-/* CryptoResearch design tokens: the one layer every page and component uses.
-   Day Desk (Eric, 2026-10-07, after the Nightdesk reference): gray panels,
-   ledger figures, and color held back until the numbers earn it. A cool
-   slate canvas, white panels on it with a 1px hairline, a header band
-   across the top of each panel and no decorative shadow,
-   ink for the active choice and the one primary action. The baseline is
-   monochrome: green, red and amber appear only where a figure or a state
-   earns them (a rise, a fall or an invalidation, a warning), and blue only
-   for Working. Every number is set in tabular figures. Shadows are kept for
-   what floats (menus, dialogs, the drawer). Dark is the same desk at night
-   (Settings, per browser; "Match this device" follows the system). Status
-   colors are small signals only: every meaning is also carried by a word, a
-   sign or a shape. Change colors here, never in a component rule. */
+/* CryptoResearch component styles for the views the React app still hosts
+   (dashboard/web mounts them in its shell). The tokens they use live in
+   tokens.css, the one token layer; in the app bundle every rule here is
+   scoped under .lg (dashboard/web/vite.config.js), so nothing here reaches
+   the React components. Change colors in tokens.css, never here. */
 
-:root {
-  /* Surfaces: a cool slate canvas (Eric, 2026-10-07: the panels must stand
-     off it), white panels on it, a band across each panel's head, chalk
-     wells inside a panel */
-  --bg: #eceef2;                  /* the canvas */
-  --surface: #ffffff;             /* panels: cards, the list, the inspector */
-  --surface-raised: #ffffff;      /* menus, dialogs, toasts */
-  --surface-hover: #f9fafb;       /* a row or control under the pointer */
-  --surface-selected: #f6f7f9;    /* pressed, and the open project's row (its ink edge says it) */
-  --surface-sunken: #f8f9fa;      /* wells inside a panel: the amber signal keeps 3:1 on it */
-  --surface-band: #f1f3f5;        /* a panel's header band: between the slate and the white */
-  --tab-chosen: #ffffff;          /* the chosen model tab on its track */
-  --logo-plate: #ffffff;          /* behind a project's logo image: CoinGecko draws them for a light ground */
-  /* Text: ink and one gray for labels and metadata (each at least 4.5:1 on
-     white, the canvas, the wells and the pressed fill) */
-  --text: #111827;
-  --text-2: #4b5563;              /* secondary prose */
-  --text-3: #5f6672;              /* labels, metadata, captions: 4.5:1 on the slate canvas (#6b7280 was 4.2:1 there) */
-  /* Lines: a hairline round every panel, lighter rules inside it */
-  --separator: #edeff2;
-  --border: #e5e7eb;
-  --control-border: #80868f;      /* at least 3:1 on white and the slate canvas: field and checkbox edges */
-  /* The accent: ink for the active choice, the primary action, selection and focus */
-  --accent: #111827;              /* fills; white text on it is 17.7:1 */
-  --accent-hover: #1f2937;
-  --accent-text: #111827;         /* accent as text or a ring */
-  --accent-weak: #f6f7f9;
-  --on-accent: #ffffff;
-  --primary: var(--accent);
-  --primary-hover: var(--accent-hover);
-  --on-primary: var(--on-accent);
-  --focus: var(--accent-text);
-  /* No decorative highlight: the token names stay for the one label that
-     needs a caution fill (the Explorer's "Demo data"), amber with dark amber
-     text. The open project's row is the pressed fill and an ink edge. */
-  --highlight: #fef3c7;
-  --highlight-weak: #fffbeb;
-  --on-highlight: #92400e;        /* text on the caution fill: 6.4:1 */
-  /* Working: blue, a state like amber Waiting, never the accent */
-  --work: #2563eb;
-  --work-text: #1d4ed8;
-  --work-weak: #eff6ff;
-  /* Earned color. The signal tones are the reference values, for dots,
-     bars, rules, chart lines and signs (each at least 3:1 on white and on
-     a well, where charts and bars live; on the slate canvas and a header
-     band a dot is a little under 3:1 and always has its word beside it);
-     words use the deeper step of the same hue (at least 4.5:1 on every
-     fill, the canvas included). */
-  --pos-strong: #16a34a;          /* a rise, an inflow, a clean check: signal */
-  --neg-strong: #dc2626;          /* a fall, an invalidation, a failure: signal */
-  --warn-strong: #d97706;         /* a warning: signal */
-  --pos: #147a3a;                 /* the same as words: 4.5:1 on the slate canvas too */
-  --pos-text: #147a3a;            /* a rise as text in the list */
-  --neg: #b91c1c;
-  --warn: #ad4f08;
-  --pos-weak: #f0fdf4;
-  --neg-weak: #fef2f2;
-  --warn-weak: #fffbeb;
-  --risk-bar: #dc2626;
-  --fav-bar: #4b5563;
-  --track: #eef0f2;
-  --row-hover: #f9fafb;           /* a row or control under the pointer */
-  --scrollbar: #d1d5db;
-  /* Grade bands (the rubric's letters A to F): the earned hues, muted.
-     Green for the upper grades, gray in the middle, amber and rust below;
-     red is kept for a charge that needs checking, never for a letter. Each
-     text color is at least 5.4:1 on its tint and on white; white on each
-     chip at least 5.9:1. The number and the letter always say the band too. */
-  --band-a: #166534; --band-a-bg: #f0fdf4; --band-a-chip: #166534;
-  --band-b: #2f6747; --band-b-bg: #f2f7f4; --band-b-chip: #2f6747;
-  --band-c: #4b5563; --band-c-bg: #f3f4f6; --band-c-chip: #4b5563;
-  --band-d: #92400e; --band-d-bg: #fffbeb; --band-d-chip: #92400e;
-  --band-f: #9a3412; --band-f-bg: #fff7ed; --band-f-chip: #9a3412;
-  /* The 0–100 spectrum (rubric anchors): 1 poor or severe (red), 2 weak
-     (amber), 3 adequate or mixed (gray), 4 strong (muted green), 5
-     exceptional (the full green). Ink on tint at least 5.5:1; fills at
-     least 3:1 on white. */
-  --t1-ink: #b91c1c; --t1-bg: #fef2f2; --t1-line: rgba(220, 38, 38, 0.2); --t1-fill: #dc2626; --t1-arc: #f9d4d4;
-  --t2-ink: #92400e; --t2-bg: #fffbeb; --t2-line: rgba(217, 119, 6, 0.24); --t2-fill: #d97706; --t2-arc: #f6dfb4;
-  --t3-ink: #374151; --t3-bg: #f3f4f6; --t3-line: rgba(17, 24, 39, 0.1); --t3-fill: #6b7280; --t3-arc: #e5e7eb;
-  --t4-ink: #2f6747; --t4-bg: #f2f7f4; --t4-line: rgba(47, 103, 71, 0.2); --t4-fill: #5b9a72; --t4-arc: #d3e5d9;
-  --t5-ink: #166534; --t5-bg: #ecfdf3; --t5-line: rgba(22, 163, 74, 0.26); --t5-fill: #16a34a; --t5-arc: #bdebcd;
-  /* Model pills, inspector badges, bars and fields */
-  --pill-ink: #374151; --pill-warn-bg: #fffbeb; --pill-warn-ink: #b45309; --pill-warn-line: rgba(217, 119, 6, 0.3); --pill-warn-dash: rgba(217, 119, 6, 0.5);
-  --pill-bad-bg: #fef2f2; --pill-bad-ink: #b91c1c; --pill-bad-line: rgba(220, 38, 38, 0.22); --pill-bad-dot: #dc2626;
-  --field-hover: #c9cdd3; --field-focus: #9ca3af; --field-ring: rgba(17, 24, 39, 0.08);
-  --on-chip: #ffffff;
-  --new-dot: var(--accent-text);
-  /* Type: the system sans for reading and for every number (tabular, lining
-     figures: ledger columns line up); the book serif for the wordmark only;
-     monospace only for contract addresses, hashes and exchange symbols. No
-     web font. */
-  --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font: var(--sans);
-  --font-display: "Segoe UI Variable Display", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
-  --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
-  --figures: tabular-nums lining-nums;
-  --fs-caption: 12px;             /* V1 (Eric, 2026-10-05): the smallest text anywhere; was 11.5px, and every smaller size now uses this token */
-  --fs-small: 12px;
-  --fs-body: 13px;
-  --fs-read: 15px;
-  --fs-h3: 13px;
-  --fs-h2: 14px;
-  --fs-h1: 24px;
-  /* Space, shape, depth: squared-off panels and controls, pills only for
-     chips and status words */
-  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px; --s10: 40px;
-  --r-sm: 4px; --r-md: 6px; --r-lg: 8px; --r-xl: 10px;
-  --r-card: var(--r-xl); --r-well: var(--r-lg); --r-pill: 999px; --r-field: 6px; --r-control: 6px;   /* panels, wells inside a panel, chips, text fields, buttons */
-  --shadow-card: none;
-  --shadow-pop: 0 8px 24px rgba(17, 24, 39, 0.08), 0 1px 2px rgba(17, 24, 39, 0.04);
-  --shadow-drawer: -8px 0 24px rgba(17, 24, 39, 0.07);
-  --scrim: rgba(17, 24, 39, 0.24);
-  /* Sizes: dense rows; touch rows and controls larger */
-  --topbar-h: 48px;
-  --control-h: 32px;
-  --touch: 44px;
-  --row-h: 40px;
-  --row-h-touch: 52px;
-  --head-h: 32px;
-  --cell-y: 7px;                  /* a ledger table's cell padding, top and bottom */
-  --cell-x: 12px;
-  --wl-row-h: 48px;               /* watchlist rows (were 60px): the type keeps its size */
-  --wl-head-h: 40px;
-  /* Model badges: one fixed width in every column, ranges included, so
-     grades line up */
-  --badge-w: 56px;
-  --badge-h: 24px;
-  /* Motion: short, and none when reduced motion is asked for */
-  --dur: 140ms;
-  --ease: cubic-bezier(0.2, 0, 0, 1);
-  color-scheme: light;
-}
-
-/* Night Desk, the dark palette: graphite panels with the same hairlines and
-   the same earned color, chosen in Settings or followed from the device with
-   "Match this device". Text colors are at least 4.5:1 on its surfaces. */
-:root[data-theme="dark"] {
-  --bg: #121212; --surface: #1a1a1a; --surface-raised: #202020; --surface-hover: #1f1f1f; --surface-selected: #262626; --surface-sunken: #161616; --surface-band: #212121; --tab-chosen: #2c2c2c; --logo-plate: #e4e4e4;
-  --text: #ededed; --text-2: #b4b4b4; --text-3: #9b9b9b;
-  --separator: #252525; --border: #2e2e2e; --control-border: #6b6b6b;
-  --accent: #ededed; --accent-hover: #ffffff; --accent-text: #ededed; --accent-weak: #262626; --on-accent: #121212;
-  --highlight: rgba(245, 158, 11, 0.16); --highlight-weak: rgba(245, 158, 11, 0.08); --on-highlight: #fbbf24;
-  --work: #60a5fa; --work-text: #93c5fd; --work-weak: rgba(59, 130, 246, 0.16);
-  --pos-strong: #22c55e; --neg-strong: #ef4444; --warn-strong: #f59e0b;
-  --pos: #4ade80; --pos-text: #4ade80; --neg: #f87171; --warn: #fbbf24;
-  --pos-weak: rgba(34, 197, 94, 0.12); --neg-weak: rgba(239, 68, 68, 0.12); --warn-weak: rgba(245, 158, 11, 0.12);
-  --risk-bar: #ef4444; --fav-bar: #b4b4b4; --track: #262626; --row-hover: #1f1f1f; --scrollbar: #3a3a3a;
-  --band-a: #4ade80; --band-a-bg: rgba(74, 222, 128, 0.11); --band-a-chip: #4ade80;
-  --band-b: #86c99b; --band-b-bg: rgba(134, 201, 155, 0.11); --band-b-chip: #86c99b;
-  --band-c: #c4c4c4; --band-c-bg: rgba(255, 255, 255, 0.06); --band-c-chip: #c4c4c4;
-  --band-d: #fbbf24; --band-d-bg: rgba(251, 191, 36, 0.11); --band-d-chip: #fbbf24;
-  --band-f: #fb923c; --band-f-bg: rgba(251, 146, 60, 0.12); --band-f-chip: #fb923c;
-  --on-chip: #121212;
-  --t1-ink: #f87171; --t1-bg: rgba(239, 68, 68, 0.12); --t1-line: rgba(239, 68, 68, 0.3); --t1-fill: #ef4444; --t1-arc: rgba(239, 68, 68, 0.3); --t2-ink: #fbbf24; --t2-bg: rgba(245, 158, 11, 0.12); --t2-line: rgba(245, 158, 11, 0.3); --t2-fill: #f59e0b; --t2-arc: rgba(245, 158, 11, 0.3); --t3-ink: #d4d4d4; --t3-bg: rgba(255, 255, 255, 0.06); --t3-line: rgba(255, 255, 255, 0.12); --t3-fill: #8f8f8f; --t3-arc: rgba(255, 255, 255, 0.14); --t4-ink: #86c99b; --t4-bg: rgba(134, 201, 155, 0.12); --t4-line: rgba(134, 201, 155, 0.28); --t4-fill: #6faf85; --t4-arc: rgba(134, 201, 155, 0.28); --t5-ink: #4ade80; --t5-bg: rgba(34, 197, 94, 0.14); --t5-line: rgba(34, 197, 94, 0.32); --t5-fill: #22c55e; --t5-arc: rgba(34, 197, 94, 0.32);
-  --pill-ink: #d4d4d4; --pill-warn-bg: rgba(245, 158, 11, 0.12); --pill-warn-ink: #fbbf24; --pill-warn-line: rgba(245, 158, 11, 0.3); --pill-warn-dash: rgba(245, 158, 11, 0.5); --pill-bad-bg: rgba(239, 68, 68, 0.12); --pill-bad-ink: #f87171; --pill-bad-line: rgba(239, 68, 68, 0.3); --pill-bad-dot: #ef4444; --field-hover: #6b6b6b; --field-focus: #8f8f8f; --field-ring: rgba(255, 255, 255, 0.08);
-  --shadow-card: none;
-  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.03);
-  --shadow-drawer: -16px 0 40px rgba(0, 0, 0, 0.45);
-  --scrim: rgba(0, 0, 0, 0.55);
-  color-scheme: dark;
-}
-@media (prefers-color-scheme: dark) {
-  :root[data-theme="system"] {
-    --bg: #121212; --surface: #1a1a1a; --surface-raised: #202020; --surface-hover: #1f1f1f; --surface-selected: #262626; --surface-sunken: #161616; --surface-band: #212121; --tab-chosen: #2c2c2c; --logo-plate: #e4e4e4;
-    --text: #ededed; --text-2: #b4b4b4; --text-3: #9b9b9b;
-    --separator: #252525; --border: #2e2e2e; --control-border: #6b6b6b;
-    --accent: #ededed; --accent-hover: #ffffff; --accent-text: #ededed; --accent-weak: #262626; --on-accent: #121212;
-    --highlight: rgba(245, 158, 11, 0.16); --highlight-weak: rgba(245, 158, 11, 0.08); --on-highlight: #fbbf24;
-    --work: #60a5fa; --work-text: #93c5fd; --work-weak: rgba(59, 130, 246, 0.16);
-    --pos-strong: #22c55e; --neg-strong: #ef4444; --warn-strong: #f59e0b;
-    --pos: #4ade80; --pos-text: #4ade80; --neg: #f87171; --warn: #fbbf24;
-    --pos-weak: rgba(34, 197, 94, 0.12); --neg-weak: rgba(239, 68, 68, 0.12); --warn-weak: rgba(245, 158, 11, 0.12);
-    --risk-bar: #ef4444; --fav-bar: #b4b4b4; --track: #262626; --row-hover: #1f1f1f; --scrollbar: #3a3a3a;
-    --band-a: #4ade80; --band-a-bg: rgba(74, 222, 128, 0.11); --band-a-chip: #4ade80;
-    --band-b: #86c99b; --band-b-bg: rgba(134, 201, 155, 0.11); --band-b-chip: #86c99b;
-    --band-c: #c4c4c4; --band-c-bg: rgba(255, 255, 255, 0.06); --band-c-chip: #c4c4c4;
-    --band-d: #fbbf24; --band-d-bg: rgba(251, 191, 36, 0.11); --band-d-chip: #fbbf24;
-    --band-f: #fb923c; --band-f-bg: rgba(251, 146, 60, 0.12); --band-f-chip: #fb923c;
-    --on-chip: #121212;
-    --t1-ink: #f87171; --t1-bg: rgba(239, 68, 68, 0.12); --t1-line: rgba(239, 68, 68, 0.3); --t1-fill: #ef4444; --t1-arc: rgba(239, 68, 68, 0.3); --t2-ink: #fbbf24; --t2-bg: rgba(245, 158, 11, 0.12); --t2-line: rgba(245, 158, 11, 0.3); --t2-fill: #f59e0b; --t2-arc: rgba(245, 158, 11, 0.3); --t3-ink: #d4d4d4; --t3-bg: rgba(255, 255, 255, 0.06); --t3-line: rgba(255, 255, 255, 0.12); --t3-fill: #8f8f8f; --t3-arc: rgba(255, 255, 255, 0.14); --t4-ink: #86c99b; --t4-bg: rgba(134, 201, 155, 0.12); --t4-line: rgba(134, 201, 155, 0.28); --t4-fill: #6faf85; --t4-arc: rgba(134, 201, 155, 0.28); --t5-ink: #4ade80; --t5-bg: rgba(34, 197, 94, 0.14); --t5-line: rgba(34, 197, 94, 0.32); --t5-fill: #22c55e; --t5-arc: rgba(34, 197, 94, 0.32);
-    --pill-ink: #d4d4d4; --pill-warn-bg: rgba(245, 158, 11, 0.12); --pill-warn-ink: #fbbf24; --pill-warn-line: rgba(245, 158, 11, 0.3); --pill-warn-dash: rgba(245, 158, 11, 0.5); --pill-bad-bg: rgba(239, 68, 68, 0.12); --pill-bad-ink: #f87171; --pill-bad-line: rgba(239, 68, 68, 0.3); --pill-bad-dot: #ef4444; --field-hover: #6b6b6b; --field-focus: #8f8f8f; --field-ring: rgba(255, 255, 255, 0.08);
-    --shadow-card: none;
-    --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.03);
-    --shadow-drawer: -16px 0 40px rgba(0, 0, 0, 0.45);
-    --scrim: rgba(0, 0, 0, 0.55);
-    color-scheme: dark;
-  }
-}
-@media (prefers-reduced-motion: reduce) { :root { --dur: 0ms; } }
-
-/* Icons as local SVG masks (no requests): drawn in currentColor, always next
-   to words that carry the same meaning. */
-:root {
-  --i-info: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='6.2'/%3E%3Cpath d='M8 7.3v3.5M8 5h.01'/%3E%3C/svg%3E");
-  --i-warn: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 2.2 14.3 13.3H1.7Z'/%3E%3Cpath d='M8 6.4v3.1M8 11.3h.01'/%3E%3C/svg%3E");
-  --i-alert: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='6.2'/%3E%3Cpath d='M8 4.9v3.6M8 10.9h.01'/%3E%3C/svg%3E");
-  --i-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='6.2'/%3E%3Cpath d='m5.3 8.2 1.8 1.8 3.6-3.9'/%3E%3C/svg%3E");
-  --i-search: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.4'/%3E%3Cpath d='m10.3 10.3 3.4 3.4'/%3E%3C/svg%3E");
-  --i-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4.5 6.2 3.5 3.6 3.5-3.6'/%3E%3C/svg%3E");
-  --i-refresh: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13.1 8.4A5.2 5.2 0 1 1 11.6 4.3'/%3E%3Cpath d='M13.3 2.5v3.1h-3.1'/%3E%3C/svg%3E");
-  --i-shield: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 1.8 13 3.6v3.9c0 3.1-2.1 5.4-5 6.6-2.9-1.2-5-3.5-5-6.6V3.6Z'/%3E%3Cpath d='m5.8 8.1 1.6 1.6 2.9-3.1'/%3E%3C/svg%3E");
-  --i-clock: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='6.2'/%3E%3Cpath d='M8 4.7V8l2.2 1.4'/%3E%3C/svg%3E");
-}
-:root {
-  --i-models: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5'%3E%3Ccircle cx='8' cy='8' r='5.6' stroke-opacity='0.45'/%3E%3Ccircle cx='8' cy='2.6' r='1.7' fill='black'/%3E%3Ccircle cx='3.3' cy='10.7' r='1.7' fill='black'/%3E%3Ccircle cx='12.7' cy='10.7' r='1.7' fill='black'/%3E%3C/svg%3E");
-  --i-coin: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='6.3'/%3E%3Cpath d='M6.3 4.9h2.6a1.5 1.5 0 0 1 0 3H6.3V4.9Zm0 3h3a1.6 1.6 0 0 1 0 3.2h-3V7.9ZM7.2 3.9v1M7.2 11.1v1'/%3E%3C/svg%3E");
-  --i-tray: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 9.2 3.8 3.6h8.4L14 9.2v3.4a.8.8 0 0 1-.8.8H2.8a.8.8 0 0 1-.8-.8Z'/%3E%3Cpath d='M2 9.2h3.3l.9 1.6h3.6l.9-1.6H14'/%3E%3C/svg%3E");
-}
 .ico { display: inline-block; width: 16px; height: 16px; flex: none; background: currentColor; -webkit-mask: var(--i, var(--i-info)) center / contain no-repeat; mask: var(--i, var(--i-info)) center / contain no-repeat; }
 .i-clock { --i: var(--i-clock); } .i-refresh { --i: var(--i-refresh); } .i-models { --i: var(--i-models); } .i-coin { --i: var(--i-coin); }
 .i-tray { --i: var(--i-tray); } .i-warn { --i: var(--i-warn); } .i-alert { --i: var(--i-alert); } .i-check { --i: var(--i-check); } .i-shield { --i: var(--i-shield); }
@@ -338,7 +120,6 @@ kbd { font-family: var(--sans); font-size: var(--fs-caption); line-height: 16px;
 .status-dot.paused .dot { background: var(--text-3); }
 .menu-btn { display: none; }
 .menu-btn::before { content: ""; width: 16px; height: 16px; background: currentColor; -webkit-mask: var(--i-menu) center / contain no-repeat; mask: var(--i-menu) center / contain no-repeat; }
-:root { --i-menu: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round'%3E%3Cpath d='M2.5 4.5h11M2.5 8h11M2.5 11.5h11'/%3E%3C/svg%3E"); }
 @media (pointer: coarse) { .mainnav a { min-height: var(--touch); } }
 @media (max-width: 860px) {
   .topbar-inner { padding: 0 var(--s4); gap: var(--s2); height: auto; min-height: var(--topbar-h); flex-wrap: wrap; }
@@ -581,7 +362,11 @@ tr.flag td:first-child { box-shadow: inset 3px 0 0 var(--warn-strong); }
 td.wrap { min-width: 200px; overflow-wrap: anywhere; }
 tr.faint td { color: var(--text-3); }
 
-/* ---------- Watchlist ---------- */
+/* ---------- Watchlist ----------
+   The watchlist, its strip and the inspector frame are drawn by the React app
+   since 2026-10-08 (dashboard/web/src/views); the rules below that styled the
+   former views/watchlist.js stay only until they are pruned. The parts the
+   app still hosts (chart, DEX card, timing facts) keep using theirs. */
 .wl-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--s2) var(--s4); margin-bottom: var(--s3); min-width: 0; }
 .wl-head .title { display: flex; align-items: baseline; gap: 2px var(--s3); min-width: 0; flex-wrap: wrap; flex: 1 1 480px; }
 .wl-head h1 { font-size: 24px; }
@@ -1536,7 +1321,6 @@ details.rev-line .rev-body p { margin: 0 0 6px; }
 .empty h2 { margin-bottom: var(--s2); font-family: var(--sans); font-weight: 600; font-size: 21px; }
 .empty p { max-width: 52ch; margin-left: auto; margin-right: auto; }
 .empty .btn-row { justify-content: center; margin-top: var(--s4); }
-:root { --i-empty: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236b675e' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 13.5 6 6.5h12l2.5 7v4.5a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1Z'/%3E%3Cpath d='M3.5 13.5H8l1.2 2.2h5.6l1.2-2.2h4.5'/%3E%3C/svg%3E"); }
 /* Callouts: a sign and a rule in the meaning's color, the words carry it too. */
 .callout { position: relative; border-radius: var(--r-md); padding: 11px 14px 11px 40px; border: 1px solid var(--separator); background: var(--surface-sunken); font-size: var(--fs-small); color: var(--text-2); margin-bottom: var(--s3); overflow-wrap: anywhere; }
 .callout::before { content: ""; position: absolute; left: 14px; top: 12px; width: 16px; height: 16px; background: var(--text-3); -webkit-mask: var(--i-info) center / contain no-repeat; mask: var(--i-info) center / contain no-repeat; }

@@ -264,8 +264,12 @@ test('hosted: everything needs sign-in; the session cookie is HttpOnly, Secure a
   assert.equal(root.headers.location, '/login');
   assert.equal((await req(port, { path: '/api/index' })).status, 401);
   assert.equal((await req(port, { path: '/api/session' })).status, 401);
-  assert.equal((await req(port, { path: '/app.js' })).status, 303, 'the app itself is behind sign-in');
+  assert.equal((await req(port, { path: '/app/index.html' })).status, 303, 'the app itself is behind sign-in');
+  const asset = fs.readdirSync(path.join(__dirname, '..', 'public', 'app', 'assets')).find((f) => f.endsWith('.js'));
+  assert.equal((await req(port, { path: `/app/assets/${asset}` })).status, 303, 'and so are its scripts');
+  assert.equal((await req(port, { path: '/views/portfolio.js' })).status, 303, 'and the views it bundles');
   assert.equal((await req(port, { path: '/styles.css' })).status, 200, 'the sign-in page can load its styles');
+  assert.equal((await req(port, { path: '/tokens.css' })).status, 200, 'and the one token layer');
   const login = await req(port, { path: '/login' });
   assert.equal(login.status, 200);
   assert.match(login.text, /type="password"/);

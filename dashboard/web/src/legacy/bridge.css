@@ -1,0 +1,12 @@
+/* The views the app still hosts, at home in the new shell. Every rule here is
+   scoped under .lg like their own stylesheets (this file is not, so it
+   names .lg itself). The page head is the shell's own (watchlist.css), so a
+   hosted page's title and cards line up with the watchlist's. */
+.lg-view { padding: 0 24px 48px; min-width: 0; }
+.lg-view .page-head { padding: 18px 0 12px; margin-bottom: 8px; }
+@media (max-width: 767.98px) {
+  .lg-view { padding: 0 16px 32px; }
+  .lg-view .page-head { padding: 14px 0 10px; }
+}
+/* The project page draws its own model tabs above a hosted Evidence view. */
+.pp-panel .lg .pb-mtabs { display: none; }

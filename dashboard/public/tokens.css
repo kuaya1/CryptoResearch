@@ -1,0 +1,243 @@
+/* CryptoResearch design tokens: the one token layer for the whole desk (the
+   React app in dashboard/web, the views it still hosts from dashboard/public,
+   and the sign-in pages). Change colors, type, space and shape here, never in
+   a component rule.
+
+   The Workspace look (Eric, 2026-10-08, frontend redesign): a calm light
+   research workspace in the spirit of Linear. A soft gray canvas carries the
+   sidebar; the work sits on one white panel with a hairline edge. Ink text,
+   one restrained indigo for the current place, the primary action, links
+   and focus. Green, red and amber stay earned: a rise or fall, a warning, a
+   state; every meaning also has a word or a sign. Every number is tabular.
+   Dark is the same desk at night (graphite), chosen per browser in Settings;
+   light is the default and gets the primary design attention.
+
+   Text tones are at least 4.5:1 on every surface they sit on (white panel,
+   canvas, wells, hover and selected fills), in both themes. Signal tones
+   (dots, bars, chart lines) are at least 3:1 on white and on the wells. */
+
+:root {
+  /* Surfaces */
+  --bg: #eef0f3;                  /* the canvas: sidebar and gutters */
+  --surface: #ffffff;             /* the work panel, cards, the inspector */
+  --surface-raised: #ffffff;      /* menus, dialogs, toasts */
+  --surface-hover: #f5f6f8;       /* a row or control under the pointer */
+  --surface-selected: #eef0f9;    /* the open project's row, pressed (the accent edge says it too) */
+  --surface-sunken: #f7f8fa;      /* wells inside a panel */
+  --surface-band: #f9fafb;        /* a table's header band */
+  --sidebar: #eef0f3;
+  --sidebar-hover: #e4e7ec;
+  --sidebar-active: #ffffff;
+  --tab-chosen: #ffffff;
+  --logo-plate: #ffffff;          /* behind a logo image: CoinGecko draws for a light ground */
+  /* Text */
+  --text: #15171c;
+  --text-2: #464b55;              /* secondary prose */
+  --text-3: #626873;              /* labels, metadata: 4.6:1 on the canvas, 5.6:1 on white */
+  /* Lines */
+  --border: #e1e4e9;              /* the panel's hairline */
+  --separator: #eceef1;           /* rules inside a panel */
+  --control-border: #868c97;      /* field and checkbox edges: 3:1 on white */
+  --button-border: #d9dce2;       /* a button's edge (its label identifies it) */
+  /* The accent: indigo, held back for the current place, the primary
+     action, links and focus */
+  --accent: #575fcf;              /* fills; white text on it is 5.0:1 */
+  --accent-hover: #4b52bd;
+  --accent-text: #4a51c2;         /* accent as text: 5.9:1 on white */
+  --accent-weak: #eef0fc;
+  --accent-line: rgba(87, 95, 207, 0.32);
+  --on-accent: #ffffff;
+  --primary: var(--accent);
+  --primary-hover: var(--accent-hover);
+  --on-primary: var(--on-accent);
+  --focus: #575fcf;
+  --focus-ring: 0 0 0 3px rgba(87, 95, 207, 0.22);
+  /* The one caution fill (the Explorer's "Demo data", the demo banner) */
+  --highlight: #fef3c7;
+  --highlight-weak: #fffbeb;
+  --on-highlight: #8a3f0a;
+  /* Working: blue, a state, never the accent */
+  --work: #2563eb;
+  --work-text: #1d4ed8;
+  --work-weak: #eff6ff;
+  /* Earned color: signals for dots, bars and lines; the deeper step for words */
+  --pos-strong: #16a34a;
+  --neg-strong: #dc2626;
+  --warn-strong: #d97706;
+  --pos: #147a3a;
+  --pos-text: #147a3a;
+  --neg: #b42318;
+  --warn: #a14a07;
+  --pos-weak: #effaf3;
+  --neg-weak: #fef3f2;
+  --warn-weak: #fff8eb;
+  --risk-bar: #dc2626;
+  --fav-bar: #4b5563;
+  --track: #eceef2;
+  --row-hover: #f5f6f8;
+  --scrollbar: #cfd3da;
+  /* Grade bands (the rubric's letters), kept for the views that name them */
+  --band-a: #166534; --band-a-bg: #effaf3; --band-a-chip: #166534;
+  --band-b: #2f6747; --band-b-bg: #f0f7f3; --band-b-chip: #2f6747;
+  --band-c: #464b55; --band-c-bg: #f2f3f5; --band-c-chip: #464b55;
+  --band-d: #8a3f0a; --band-d-bg: #fff8eb; --band-d-chip: #8a3f0a;
+  --band-f: #9a3412; --band-f-bg: #fff4ed; --band-f-chip: #9a3412;
+  /* The one 0–100 spectrum on the rubric's anchors: 1 below 40 (red), 2 to
+     59 (amber), 3 to 74 (gray), 4 to 89 (muted green), 5 from 90 (green). Ink
+     on its tint at least 5.5:1; fills at least 3:1 on white. */
+  --t1-ink: #b42318; --t1-bg: #fef3f2; --t1-line: rgba(220, 38, 38, 0.22); --t1-fill: #e0383e; --t1-arc: #f8d3d3;
+  --t2-ink: #8a3f0a; --t2-bg: #fff6e8; --t2-line: rgba(217, 119, 6, 0.28); --t2-fill: #df7f0e; --t2-arc: #f7dfb5;
+  --t3-ink: #3d434d; --t3-bg: #f1f2f5; --t3-line: rgba(21, 23, 28, 0.12); --t3-fill: #7d8490; --t3-arc: #e2e5ea;
+  --t4-ink: #275f40; --t4-bg: #eef7f1; --t4-line: rgba(47, 103, 71, 0.22); --t4-fill: #4f9a6b; --t4-arc: #cfe4d6;
+  --t5-ink: #126a37; --t5-bg: #e8f8ee; --t5-line: rgba(22, 163, 74, 0.28); --t5-fill: #19a14f; --t5-arc: #bfe9cf;
+  /* Pills, fields */
+  --pill-ink: #3d434d; --pill-warn-bg: #fff8eb; --pill-warn-ink: #9a4708; --pill-warn-line: rgba(217, 119, 6, 0.32); --pill-warn-dash: rgba(217, 119, 6, 0.5);
+  --pill-bad-bg: #fef3f2; --pill-bad-ink: #b42318; --pill-bad-line: rgba(220, 38, 38, 0.24); --pill-bad-dot: #dc2626;
+  --field-bg: #ffffff; --field-hover: #6f7581; --field-focus: #575fcf; --field-ring: rgba(87, 95, 207, 0.18);
+  --on-chip: #ffffff;
+  --new-dot: var(--accent);
+  /* Type: the system sans for reading and every number (tabular figures);
+     the book serif for the wordmark only; monospace only for contract
+     addresses, hashes and exchange symbols. No web font. */
+  --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font: var(--sans);
+  --font-display: "Segoe UI Variable Display", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+  --figures: tabular-nums lining-nums;
+  /* Type scale: nothing under 12px anywhere */
+  --fs-caption: 12px;
+  --fs-small: 12px;
+  --fs-body: 13px;
+  --fs-read: 15px;
+  --fs-h3: 13px;
+  --fs-h2: 14px;
+  --fs-h1: 24px;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+  --fs-2xl: 24px;
+  --fs-3xl: 34px;
+  /* Space, shape, depth */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px; --s10: 40px;
+  --r-sm: 4px; --r-md: 6px; --r-lg: 8px; --r-xl: 12px;
+  --r-card: 10px; --r-panel: 12px; --r-well: 8px; --r-pill: 999px; --r-field: 6px; --r-control: 6px;
+  --shadow-card: none;
+  --shadow-panel: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-pop: 0 10px 28px rgba(16, 24, 40, 0.12), 0 2px 6px rgba(16, 24, 40, 0.06), 0 0 0 1px rgba(16, 24, 40, 0.06);
+  --shadow-drawer: -10px 0 32px rgba(16, 24, 40, 0.10);
+  --scrim: rgba(15, 18, 25, 0.32);
+  /* Sizes */
+  --topbar-h: 48px;
+  --sidebar-w: 220px;
+  --control-h: 32px;
+  --touch: 44px;
+  --row-h: 40px;
+  --row-h-touch: 52px;
+  --head-h: 32px;
+  --cell-y: 7px;
+  --cell-x: 12px;
+  --wl-row-h: 52px;
+  --wl-head-h: 36px;
+  --badge-w: 56px;
+  --badge-h: 24px;
+  --inspector-w: 460px;
+  /* Motion: short, and none when reduced motion is asked for */
+  --dur: 140ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  color-scheme: light;
+}
+
+/* Night: graphite panels with the same hairlines and earned color. */
+:root[data-theme="dark"] {
+  --bg: #0f1013; --surface: #17181c; --surface-raised: #1d1e23; --surface-hover: #1e2025; --surface-selected: #23263a; --surface-sunken: #131417; --surface-band: #1a1b20;
+  --sidebar: #0f1013; --sidebar-hover: #1b1c21; --sidebar-active: #1f2026; --tab-chosen: #2a2c33; --logo-plate: #e6e7ea;
+  --text: #e9eaed; --text-2: #b7bac1; --text-3: #959aa3;
+  --border: #272930; --separator: #212329; --control-border: #6c717c; --button-border: #30333b;
+  --accent: #6169dc; --accent-hover: #6f77e6; --accent-text: #9aa0f2; --accent-weak: #22243a; --accent-line: rgba(140, 147, 242, 0.4); --on-accent: #ffffff;
+  --focus: #8c93f2; --focus-ring: 0 0 0 3px rgba(140, 147, 242, 0.28);
+  --highlight: rgba(245, 158, 11, 0.16); --highlight-weak: rgba(245, 158, 11, 0.08); --on-highlight: #fbbf24;
+  --work: #60a5fa; --work-text: #93c5fd; --work-weak: rgba(59, 130, 246, 0.16);
+  --pos-strong: #22c55e; --neg-strong: #ef4444; --warn-strong: #f59e0b;
+  --pos: #4ade80; --pos-text: #4ade80; --neg: #f87171; --warn: #fbbf24;
+  --pos-weak: rgba(34, 197, 94, 0.12); --neg-weak: rgba(239, 68, 68, 0.12); --warn-weak: rgba(245, 158, 11, 0.12);
+  --risk-bar: #ef4444; --fav-bar: #b7bac1; --track: #26282e; --row-hover: #1e2025; --scrollbar: #3a3d45;
+  --band-a: #4ade80; --band-a-bg: rgba(74, 222, 128, 0.11); --band-a-chip: #4ade80;
+  --band-b: #86c99b; --band-b-bg: rgba(134, 201, 155, 0.11); --band-b-chip: #86c99b;
+  --band-c: #c6c8cd; --band-c-bg: rgba(255, 255, 255, 0.06); --band-c-chip: #c6c8cd;
+  --band-d: #fbbf24; --band-d-bg: rgba(251, 191, 36, 0.11); --band-d-chip: #fbbf24;
+  --band-f: #fb923c; --band-f-bg: rgba(251, 146, 60, 0.12); --band-f-chip: #fb923c;
+  --on-chip: #121212;
+  --t1-ink: #f87171; --t1-bg: rgba(239, 68, 68, 0.13); --t1-line: rgba(239, 68, 68, 0.32); --t1-fill: #ef4444; --t1-arc: rgba(239, 68, 68, 0.3);
+  --t2-ink: #fbbf24; --t2-bg: rgba(245, 158, 11, 0.13); --t2-line: rgba(245, 158, 11, 0.32); --t2-fill: #f59e0b; --t2-arc: rgba(245, 158, 11, 0.3);
+  --t3-ink: #d3d5da; --t3-bg: rgba(255, 255, 255, 0.07); --t3-line: rgba(255, 255, 255, 0.13); --t3-fill: #8e939c; --t3-arc: rgba(255, 255, 255, 0.14);
+  --t4-ink: #8ccfa2; --t4-bg: rgba(134, 201, 155, 0.13); --t4-line: rgba(134, 201, 155, 0.3); --t4-fill: #6fb486; --t4-arc: rgba(134, 201, 155, 0.28);
+  --t5-ink: #4ade80; --t5-bg: rgba(34, 197, 94, 0.15); --t5-line: rgba(34, 197, 94, 0.34); --t5-fill: #22c55e; --t5-arc: rgba(34, 197, 94, 0.32);
+  --pill-ink: #d3d5da; --pill-warn-bg: rgba(245, 158, 11, 0.13); --pill-warn-ink: #fbbf24; --pill-warn-line: rgba(245, 158, 11, 0.32); --pill-warn-dash: rgba(245, 158, 11, 0.5);
+  --pill-bad-bg: rgba(239, 68, 68, 0.13); --pill-bad-ink: #f87171; --pill-bad-line: rgba(239, 68, 68, 0.32); --pill-bad-dot: #ef4444;
+  --field-bg: #131417; --field-hover: #7d828d; --field-focus: #8c93f2; --field-ring: rgba(140, 147, 242, 0.2);
+  --shadow-card: none;
+  --shadow-panel: 0 0 0 1px rgba(255, 255, 255, 0.02);
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --shadow-drawer: -16px 0 40px rgba(0, 0, 0, 0.5);
+  --scrim: rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] {
+    --bg: #0f1013; --surface: #17181c; --surface-raised: #1d1e23; --surface-hover: #1e2025; --surface-selected: #23263a; --surface-sunken: #131417; --surface-band: #1a1b20;
+    --sidebar: #0f1013; --sidebar-hover: #1b1c21; --sidebar-active: #1f2026; --tab-chosen: #2a2c33; --logo-plate: #e6e7ea;
+    --text: #e9eaed; --text-2: #b7bac1; --text-3: #959aa3;
+    --border: #272930; --separator: #212329; --control-border: #6c717c; --button-border: #30333b;
+    --accent: #6169dc; --accent-hover: #6f77e6; --accent-text: #9aa0f2; --accent-weak: #22243a; --accent-line: rgba(140, 147, 242, 0.4); --on-accent: #ffffff;
+    --focus: #8c93f2; --focus-ring: 0 0 0 3px rgba(140, 147, 242, 0.28);
+    --highlight: rgba(245, 158, 11, 0.16); --highlight-weak: rgba(245, 158, 11, 0.08); --on-highlight: #fbbf24;
+    --work: #60a5fa; --work-text: #93c5fd; --work-weak: rgba(59, 130, 246, 0.16);
+    --pos-strong: #22c55e; --neg-strong: #ef4444; --warn-strong: #f59e0b;
+    --pos: #4ade80; --pos-text: #4ade80; --neg: #f87171; --warn: #fbbf24;
+    --pos-weak: rgba(34, 197, 94, 0.12); --neg-weak: rgba(239, 68, 68, 0.12); --warn-weak: rgba(245, 158, 11, 0.12);
+    --risk-bar: #ef4444; --fav-bar: #b7bac1; --track: #26282e; --row-hover: #1e2025; --scrollbar: #3a3d45;
+    --band-a: #4ade80; --band-a-bg: rgba(74, 222, 128, 0.11); --band-a-chip: #4ade80;
+    --band-b: #86c99b; --band-b-bg: rgba(134, 201, 155, 0.11); --band-b-chip: #86c99b;
+    --band-c: #c6c8cd; --band-c-bg: rgba(255, 255, 255, 0.06); --band-c-chip: #c6c8cd;
+    --band-d: #fbbf24; --band-d-bg: rgba(251, 191, 36, 0.11); --band-d-chip: #fbbf24;
+    --band-f: #fb923c; --band-f-bg: rgba(251, 146, 60, 0.12); --band-f-chip: #fb923c;
+    --on-chip: #121212;
+    --t1-ink: #f87171; --t1-bg: rgba(239, 68, 68, 0.13); --t1-line: rgba(239, 68, 68, 0.32); --t1-fill: #ef4444; --t1-arc: rgba(239, 68, 68, 0.3);
+    --t2-ink: #fbbf24; --t2-bg: rgba(245, 158, 11, 0.13); --t2-line: rgba(245, 158, 11, 0.32); --t2-fill: #f59e0b; --t2-arc: rgba(245, 158, 11, 0.3);
+    --t3-ink: #d3d5da; --t3-bg: rgba(255, 255, 255, 0.07); --t3-line: rgba(255, 255, 255, 0.13); --t3-fill: #8e939c; --t3-arc: rgba(255, 255, 255, 0.14);
+    --t4-ink: #8ccfa2; --t4-bg: rgba(134, 201, 155, 0.13); --t4-line: rgba(134, 201, 155, 0.3); --t4-fill: #6fb486; --t4-arc: rgba(134, 201, 155, 0.28);
+    --t5-ink: #4ade80; --t5-bg: rgba(34, 197, 94, 0.15); --t5-line: rgba(34, 197, 94, 0.34); --t5-fill: #22c55e; --t5-arc: rgba(34, 197, 94, 0.32);
+    --pill-ink: #d3d5da; --pill-warn-bg: rgba(245, 158, 11, 0.13); --pill-warn-ink: #fbbf24; --pill-warn-line: rgba(245, 158, 11, 0.32); --pill-warn-dash: rgba(245, 158, 11, 0.5);
+    --pill-bad-bg: rgba(239, 68, 68, 0.13); --pill-bad-ink: #f87171; --pill-bad-line: rgba(239, 68, 68, 0.32); --pill-bad-dot: #ef4444;
+    --field-bg: #131417; --field-hover: #7d828d; --field-focus: #8c93f2; --field-ring: rgba(140, 147, 242, 0.2);
+    --shadow-card: none;
+    --shadow-panel: 0 0 0 1px rgba(255, 255, 255, 0.02);
+    --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
+    --shadow-drawer: -16px 0 40px rgba(0, 0, 0, 0.5);
+    --scrim: rgba(0, 0, 0, 0.55);
+    color-scheme: dark;
+  }
+}
+@media (prefers-reduced-motion: reduce) { :root { --dur: 0ms; } }
+
+/* Icons as local SVG masks (no requests), drawn in currentColor; always next
+   to words that carry the same meaning. */
+:root {
+  --i-info: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='6.2'/%3E%3Cpath d='M8 7.3v3.5M8 5h.01'/%3E%3C/svg%3E");
+  --i-warn: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 2.2 14.3 13.3H1.7Z'/%3E%3Cpath d='M8 6.4v3.1M8 11.3h.01'/%3E%3C/svg%3E");
+  --i-alert: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='6.2'/%3E%3Cpath d='M8 4.9v3.6M8 10.9h.01'/%3E%3C/svg%3E");
+  --i-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='6.2'/%3E%3Cpath d='m5.3 8.2 1.8 1.8 3.6-3.9'/%3E%3C/svg%3E");
+  --i-search: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.4'/%3E%3Cpath d='m10.3 10.3 3.4 3.4'/%3E%3C/svg%3E");
+  --i-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4.5 6.2 3.5 3.6 3.5-3.6'/%3E%3C/svg%3E");
+  --i-refresh: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13.1 8.4A5.2 5.2 0 1 1 11.6 4.3'/%3E%3Cpath d='M13.3 2.5v3.1h-3.1'/%3E%3C/svg%3E");
+  --i-shield: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 1.8 13 3.6v3.9c0 3.1-2.1 5.4-5 6.6-2.9-1.2-5-3.5-5-6.6V3.6Z'/%3E%3Cpath d='m5.8 8.1 1.6 1.6 2.9-3.1'/%3E%3C/svg%3E");
+  --i-clock: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='6.2'/%3E%3Cpath d='M8 4.7V8l2.2 1.4'/%3E%3C/svg%3E");
+  --i-models: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5'%3E%3Ccircle cx='8' cy='8' r='5.6' stroke-opacity='0.45'/%3E%3Ccircle cx='8' cy='2.6' r='1.7' fill='black'/%3E%3Ccircle cx='3.3' cy='10.7' r='1.7' fill='black'/%3E%3Ccircle cx='12.7' cy='10.7' r='1.7' fill='black'/%3E%3C/svg%3E");
+  --i-coin: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='6.3'/%3E%3Cpath d='M6.3 4.9h2.6a1.5 1.5 0 0 1 0 3H6.3V4.9Zm0 3h3a1.6 1.6 0 0 1 0 3.2h-3V7.9ZM7.2 3.9v1M7.2 11.1v1'/%3E%3C/svg%3E");
+  --i-tray: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 9.2 3.8 3.6h8.4L14 9.2v3.4a.8.8 0 0 1-.8.8H2.8a.8.8 0 0 1-.8-.8Z'/%3E%3Cpath d='M2 9.2h3.3l.9 1.6h3.6l.9-1.6H14'/%3E%3C/svg%3E");
+  --i-menu: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round'%3E%3Cpath d='M2.5 4.5h11M2.5 8h11M2.5 11.5h11'/%3E%3C/svg%3E");
+  --i-empty: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236b675e' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 13.5 6 6.5h12l2.5 7v4.5a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1Z'/%3E%3Cpath d='M3.5 13.5H8l1.2 2.2h5.6l1.2-2.2h4.5'/%3E%3C/svg%3E");
+}

@@ -17,7 +17,8 @@ async function load() {
   fs.cpSync(path.join(__dirname, '..', 'public'), tmp, { recursive: true });
   fs.writeFileSync(path.join(tmp, 'package.json'), '{ "type": "module" }');
   const ui = await import(pathToFileURL(path.join(tmp, 'ui.js')).href);
-  const wl = await import(pathToFileURL(path.join(tmp, 'views', 'watchlist.js')).href);
+  // The watchlist's rules (the React watchlist in dashboard/web draws from them).
+  const wl = await import(pathToFileURL(path.join(tmp, 'watchlist-model.js')).href);
   const dialogs = await import(pathToFileURL(path.join(tmp, 'views', 'dialogs.js')).href);
   return { ui, wl, dialogs };
 }
@@ -278,10 +279,16 @@ test('theme: light is the default, also for a browser that used the dark default
   assert.equal(run('dark'), 'dark');
   assert.equal(run('system'), 'system');
   assert.equal(run('<script>'), 'light', 'anything else is ignored');
-  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
-  const root = css.slice(css.indexOf(':root {'), css.indexOf('}', css.indexOf(':root {')));
+  // The one token layer (tokens.css, Eric 2026-10-08): light by default, dark a choice.
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'tokens.css'), 'utf8');
+  const root = css.slice(css.indexOf(':root {'), css.indexOf('\n}', css.indexOf(':root {')));
   assert.match(root, /color-scheme: light/, 'the default palette is the light one');
   assert.match(css, /:root\[data-theme="dark"\] \{[^}]*color-scheme: dark/, 'dark stays available');
+  assert.match(css, /@media \(prefers-color-scheme: dark\) \{\s*:root\[data-theme="system"\] \{[^}]*color-scheme: dark/, '"match this device" follows the system');
+  // The app loads it before the first paint's stylesheet, after theme.js.
+  const page = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  assert.ok(page.indexOf('/theme.js') > 0 && page.indexOf('/theme.js') < page.indexOf('/src/main.jsx'), 'the theme is applied before the app loads');
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'main.jsx'), 'utf8'), /^import '\.\.\/\.\.\/public\/tokens\.css';/m);
 });
 
 test('research progress: each model\'s way from prompt to grade, without inventing a step', async () => {
@@ -309,6 +316,11 @@ test('inspector: opens on a calculated grade, then any saved report, then Claude
   assert.equal(wl.defaultModel(null), 'claude');
   const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
   assert.match(css, /\.cbar\.unknown \{[^}]*background: transparent;[^}]*dashed/, 'an unknown category is an empty dashed track, never a zero');
+  // The React bars: an unknown score is an empty dashed track (ScoreBar), never a fill.
+  const web = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'styles', 'inspector.css'), 'utf8');
+  assert.match(web, /\.bar\.is-unknown \{[^}]*background: transparent;[^}]*repeating-linear-gradient/);
+  const bar = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'components', 'Gauge.jsx'), 'utf8');
+  assert.match(bar, /return <span className="bar is-unknown" aria-hidden="true" \/>;/);
 });
 
 test('one formatter for the list and the inspector: the same row reads the same in both; two decimals for every change', async () => {
@@ -324,13 +336,16 @@ test('one formatter for the list and the inspector: the same row reads the same 
   assert.equal(wl.marketStrings({ ...row, market_cap_usd: null }).fdvMc, null, 'no market cap, no ratio');
   assert.equal(ui.fmtChangePct(null), null);
   // Both views draw their figures from marketStrings and the shared formatters, never their own.
-  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'watchlist.js'), 'utf8');
-  const body = (name) => src.slice(src.indexOf(`function ${name}(`), src.indexOf('\n}\n', src.indexOf(`function ${name}(`)));
-  assert.match(body('cellFor'), /marketStrings\(m\)\.mcap/);
-  assert.match(body('deltaCell'), /fmtChangePct\(n\)/);
-  assert.match(body('headMarket'), /marketStrings\(m\)/);
-  assert.doesNotMatch(body('headMarket'), /fmtSignedPct|toFixed\(1\)\}%/);
-  assert.doesNotMatch(src, /cmcCompact/);
+  const web = (f) => fs.readFileSync(path.join(__dirname, '..', 'web', 'src', ...f.split('/')), 'utf8');
+  const body = (src, name) => src.slice(src.indexOf(`function ${name}(`), src.indexOf('\n}\n', src.indexOf(`function ${name}(`)));
+  const table = web('views/watchlist/ProjectTable.jsx');
+  assert.match(body(table, 'Cell'), /const s = marketStrings\(m\) \|\| \{\};/);
+  assert.match(body(table, 'Cell'), /s\.mcap/);
+  assert.match(body(web('components/figures.jsx'), 'Change'), /fmtChangePct\(value\)/);
+  const insp = web('views/inspector/Inspector.jsx');
+  assert.match(body(insp, 'HeadMarket'), /marketStrings\(m\)/);
+  assert.doesNotMatch(body(insp, 'HeadMarket'), /fmtSignedPct|toFixed\(1\)\}%/);
+  assert.doesNotMatch(table + insp, /cmcCompact/);
 });
 
 test('price clock: the drawer reads the bar\'s refresh time when that refresh stored the price, and says so when it kept an older one', async () => {
@@ -368,8 +383,10 @@ test('a model on hold: its header and its dashes follow the model status, for an
   const chatgptHeld = { settings: { research: { on_hold: { chatgpt: { since: null } } } } };
   assert.equal(wl.holdCell(chatgptHeld, 'chatgpt', null).hold, true, 'not hardcoded to Gemini');
   assert.equal(wl.holdCell({ settings: {} }, 'gemini', null).hold, false);
-  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'watchlist.js'), 'utf8');
-  assert.doesNotMatch(src, /'gemini'[^\n]*on hold|on hold[^\n]*'gemini'/i, 'no model is named in the on-hold code');
+  for (const f of [['public', 'watchlist-model.js'], ['web', 'src', 'views', 'watchlist', 'ProjectTable.jsx'], ['web', 'src', 'views', 'inspector', 'ModelPanel.jsx']]) {
+    const src = fs.readFileSync(path.join(__dirname, '..', ...f), 'utf8');
+    assert.doesNotMatch(src, /'gemini'[^\n]*on hold|on hold[^\n]*'gemini'/i, `no model is named in the on-hold code (${f.join('/')})`);
+  }
 });
 
 test('R: only a plain R outside fields, with nothing open, on a project with something to review; it goes to the next one to review in the list\'s order', async () => {
@@ -393,8 +410,9 @@ test('R: only a plain R outside fields, with nothing open, on a project with som
   assert.equal(wl.nextToReview(['d', 'c', 'b', 'a'], projects, 'c'), 'a', 'in the order shown');
   assert.equal(wl.nextToReview(['a', 'b'], projects, 'a'), null, 'none left: All caught up');
   // The browser's own keys stay the browser's: the handler checks before acting.
-  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'watchlist.js'), 'utf8');
-  assert.match(src, /reviewKeyAllowed\(e, \{ busy: Boolean\(busy\), project \}\)/);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'views', 'watchlist', 'Watchlist.jsx'), 'utf8');
+  assert.match(src, /reviewKeyAllowed\(e, \{ busy: Boolean\(busy\) \|\| reviewBusy, project \}\)/);
+  assert.match(src, /markReviewed\(project, \{ advance: true/);
 });
 
 test('contract chips: always Mint, Blacklist (Freeze on Solana), Proxy and Tax, with a clean, risky or unknown dot; n/a for a native coin', async () => {
@@ -411,14 +429,14 @@ test('contract chips: always Mint, Blacklist (Freeze on Solana), Proxy and Tax, 
 });
 
 test('inspector scroll: the body\'s keep-scroll key names the project, so the page\'s restore keeps a redraw in place and never carries a place to another project', () => {
-  const wl = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'watchlist.js'), 'utf8');
-  const app = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
-  // app.js restores every [data-keep-scroll] element by its key after a render.
-  assert.match(app, /querySelector\(`\[data-keep-scroll="\$\{CSS\.escape\(key\)\}"\]`\)/);
-  assert.match(wl, /class: 'panel-body', 'data-keep-scroll': `panel:\$\{pid\}`/, 'one key per project');
-  assert.doesNotMatch(wl, /'data-keep-scroll': 'panel'/, 'no shared key left');
-  // And the panel itself resets to the top when the project changes.
-  assert.match(wl, /if \(reopened\) \{\n\s+const body = panel\.querySelector\('\.panel-body'\);\n\s+if \(body\) body\.scrollTop = 0;/);
+  const web = (...f) => fs.readFileSync(path.join(__dirname, '..', 'web', 'src', ...f), 'utf8');
+  const insp = web('views', 'inspector', 'Inspector.jsx');
+  // The router restores every [data-keep-scroll] element by its key.
+  assert.match(web('lib', 'router.js'), /querySelector\(`\[data-keep-scroll="\$\{CSS\.escape\(key\)\}"\]`\)/);
+  assert.match(insp, /className="insp-body" ref=\{body\} data-keep-scroll=\{`panel:\$\{pid\}`\}/, 'one key per project');
+  assert.doesNotMatch(insp, /data-keep-scroll="panel"/, 'no shared key');
+  // And the inspector's body starts at its top when the project changes.
+  assert.match(insp, /if \(changed && body\.current\) body\.current\.scrollTop = 0;/);
 });
 
 test('evidence marks in the pills: a solid dot for a serious flag, a ring for a material one (the last rule for each wins)', () => {
@@ -428,38 +446,53 @@ test('evidence marks in the pills: a solid dot for a serious flag, a ring for a 
   assert.match(material, /background: transparent/, 'material: hollow');
   assert.match(material, /box-shadow: inset 0 0 0 1\.5px var\(--warn-strong\)/, 'material: a ring');
   assert.match(css, /:is\(table\.wl, \.mtabs\) \.gb\.ev-serious \.ev,[^}]*background: var\(--warn-strong\)/, 'serious: solid');
+  // The React pills (GradePill): the same marks.
+  const web = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'styles', 'watchlist.css'), 'utf8');
+  assert.match(web, /\.gp-ev \{[^}]*background: var\(--warn-strong\)/, 'serious: solid');
+  assert.match(web, /\.gp\.ev-material \.gp-ev \{ background: transparent; box-shadow: inset 0 0 0 1\.5px var\(--warn-strong\); \}/, 'material: a ring');
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'components', 'GradePill.jsx'), 'utf8'), /\$\{info\.ev \? ` ev-\$\{info\.ev\}` : ''\}/);
 });
 
 test('static: no CoinMarketCap tokens or colors, no "Inter", the serif only on the wordmark', () => {
-  const dir = path.join(__dirname, '..', 'public');
+  // The sources (the hosted views in public, the React app in web/src); the
+  // built bundle in public/app is made from them.
   const files = [];
-  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (/\.(css|js|html)$/.test(e.name)) files.push(p); } };
-  walk(dir);
-  const all = files.map((f) => [path.relative(dir, f), fs.readFileSync(f, 'utf8')]);
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) { if (e.name !== 'app' && e.name !== 'node_modules') walk(p); } else if (/\.(css|js|jsx|html)$/.test(e.name)) files.push(p); } };
+  const root = path.join(__dirname, '..');
+  walk(path.join(root, 'public'));
+  walk(path.join(root, 'web', 'src'));
+  const all = files.map((f) => [path.relative(root, f).split(path.sep).join('/'), fs.readFileSync(f, 'utf8')]);
   for (const [f, s] of all) {
     assert.doesNotMatch(s, /--cmc-/, `${f}: a --cmc- token`);
     assert.doesNotMatch(s, /#16c784|#ea3943|#0d1421|#58667e|#eff2f5/i, `${f}: a CoinMarketCap color`);
     assert.doesNotMatch(s, /font-family:[^;]*\bInter\b/, `${f}: Inter in a font stack`);
   }
-  const css = all.filter(([f]) => f.endsWith('.css')).map(([, s]) => s).join('\n');
-  const serif = css.split('\n').filter((l) => l.includes('var(--font-serif)'));
-  assert.deepEqual(serif.map((l) => l.trim().split(' {')[0]), ['.brand'], 'the serif is the wordmark\'s alone');
+  const serif = (prefix) => all.filter(([f]) => f.startsWith(prefix) && f.endsWith('.css')).map(([, s]) => s).join('\n')
+    .split('\n').filter((l) => l.includes('var(--font-serif)')).map((l) => l.trim().split(' {')[0]);
+  assert.deepEqual(serif('public/'), ['.brand'], 'the serif is the wordmark\'s alone');
+  assert.deepEqual(serif('web/src/').sort(), ['.boot-error h1', '.brand-word'], 'the serif is the wordmark\'s alone');
 });
 
-test('status strip and header: figures step aside in order (breadth last), every step has a rule; four tiles sit in one row', async () => {
-  const { wl } = await mods;
-  assert.equal(wl.STRIP_FIT[wl.STRIP_FIT.length - 1], 'ss-fit-breadth', 'market breadth is the last figure to go');
-  assert.ok(wl.STRIP_FIT.indexOf('ss-fit-kinds') < wl.STRIP_FIT.indexOf('ss-fit-total'), 'the kinds of action go before any market figure');
-  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
-  for (const step of wl.STRIP_FIT) assert.ok(css.includes(`.status-strip.${step} `), `${step} has a rule`);
-  // A phone (V5): three labels step aside after the shared order, each with a
-  // rule; none of them is a warning.
-  assert.deepEqual(wl.STRIP_FIT_PHONE, ['ss-fit-plabel', 'ss-fit-dom', 'ss-fit-qlabel']);
-  for (const step of wl.STRIP_FIT_PHONE) assert.ok(css.includes(`.status-strip.${step} `), `${step} has a rule`);
-  assert.doesNotMatch(css, /\.status-strip\.ss-fit-(plabel|dom|qlabel)[^{]*\.(bad|bad-word|i-alert)\b/, 'warnings keep their words on a phone');
-  const four = [...css.matchAll(/^\.ov-stats\.four \{ grid-template-columns: repeat\((\d), /gm)].map((m) => m[1]);
-  assert.equal(four[four.length - 1], '4', 'the last word on four tiles (outside the narrowest phones): one row of four');
-  assert.doesNotMatch(css.slice(css.lastIndexOf('Inspector header, tiles')), /\.pt-name \{[^}]*text-overflow: ellipsis/, 'the name is never cut short');
+test('status strip and header: secondary figures step aside (Dom and Total first), what needs action keeps its words and comes first on a phone; four figures sit in one row', () => {
+  const web = (...f) => fs.readFileSync(path.join(__dirname, '..', 'web', 'src', ...f), 'utf8');
+  const css = web('styles', 'watchlist.css');
+  const phone = css.slice(css.indexOf('@media (max-width: 767.98px)'), css.indexOf('@container (max-width: 920px)'));
+  assert.match(phone, /\.ss-attn \{ order: -1;/, 'on a phone what needs action and the review queue come first');
+  assert.match(phone, /\.ss-dom, \.ss-total, [^{]*\{ display: none; \}/, 'dominance and the total step aside on a phone');
+  assert.doesNotMatch(phone, /\.(ss-warn|is-bad|ss-attn|ss-kinds)[^{]*\{[^}]*display: none/, 'warnings keep their words on a phone');
+  const narrow = css.slice(css.indexOf('@container (max-width: 920px)'));
+  assert.match(narrow, /^@container \(max-width: 920px\) \{\s*\.ss-dom, \.ss-total[,\s{]/, 'a narrower list (the inspector beside it) drops Dom and Total first');
+  assert.doesNotMatch(narrow.slice(0, narrow.indexOf('}')), /ss-warn|is-bad|ss-attn|ss-kinds|ss-win/, 'warnings and each change\'s window keep their words in a narrower list');
+  // Each part's accessible name keeps what a phone hides.
+  const strip = web('views', 'watchlist', 'StatusStrip.jsx');
+  assert.match(strip, /label=\{`Prices: \$\{m\.last_success_at \? ps\.asOf : 'not fetched yet'\}/);
+  assert.match(strip, /label=\{`Needs action: \$\{critical\.map\(\(a\) => a\.title\)\.join\('; '\)\}\. Details`\}/);
+  assert.match(strip, /kinds\.length === 1 \? kinds\[0\] : `\$\{critical\.length\} need action`/, 'what needs action is named in words, never a bare count');
+  // The inspector's four figures in one row, the name never cut short.
+  const insp = web('styles', 'inspector.css');
+  assert.match(insp, /\.ih-stats \{\s*display: grid; grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/);
+  assert.match(insp, /\.ih-name \{[^}]*-webkit-line-clamp: 3/, 'the name wraps up to three lines');
+  assert.doesNotMatch(insp, /\.ih-name \{[^}]*text-overflow: ellipsis/);
 });
 
 test('logos: the crisp cached image is preferred, the earlier small one serves until it arrives', () => {
@@ -808,7 +841,12 @@ test('market figures: a missing or zero market cap, FDV or volume is unknown ("â
   assert.equal(now.volume, '$400.00K');
   // Every view goes through the rule, never a bare typeof check.
   const src = (f) => fs.readFileSync(path.join(__dirname, '..', 'public', f), 'utf8');
-  assert.doesNotMatch(src('views/watchlist.js'), /typeof m\.(market_cap_usd|fdv_usd|volume_24h_usd) === 'number'/);
+  const web = (f) => fs.readFileSync(path.join(__dirname, '..', 'web', 'src', ...f.split('/')), 'utf8');
+  for (const f of ['views/watchlist/ProjectTable.jsx', 'views/inspector/Inspector.jsx', 'views/project/ProjectPage.jsx']) {
+    assert.doesNotMatch(web(f), /typeof m\.(market_cap_usd|fdv_usd|volume_24h_usd) === 'number'/, f);
+  }
+  assert.doesNotMatch(src('watchlist-model.js'), /typeof m\.(market_cap_usd|fdv_usd|volume_24h_usd) === 'number'/);
+  assert.match(web('components/figures.jsx'), /marketFigureReason\(label, value\)/, 'an unknown figure says why');
   assert.doesNotMatch(src('views/project.js'), /fmtCompactUsd\(m\.(fdv_usd|volume_24h_usd)\)\]/);
   // The market now is the project page's header (2026-10-07), from the same rule.
   assert.match(src('views/project.js'), /unknownFigure\('Market cap', mk\.mcap_usd\)/);

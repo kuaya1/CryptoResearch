@@ -103,19 +103,25 @@ test('static: the Portfolio keeps sentence-case labels and draws no card shadow'
 });
 
 test('live test fixes: logo images on a light plate, the chosen model tab distinct, one marker per flagged item', () => {
+  // The tokens live in tokens.css, the one token layer (2026-10-08).
+  const tokens = fs.readFileSync(path.join(__dirname, '..', 'public', 'tokens.css'), 'utf8');
   const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
-  const block = (start) => { const i = css.indexOf(start); return css.slice(i, css.indexOf('\n}', i)); };
+  const block = (start) => { const i = tokens.indexOf(start); return tokens.slice(i, tokens.indexOf('\n}', i)); };
   assert.match(block(':root {'), /--logo-plate: #ffffff;/);
-  assert.match(block(':root[data-theme="dark"] {'), /--logo-plate: #e4e4e4;/, 'a dark mark stays visible in dark');
+  assert.match(block(':root[data-theme="dark"] {'), /--logo-plate: #e6e7ea;/, 'a dark mark stays visible in dark');
   assert.match(css, /\.logo\.has-img, \.proj-cell \.logo\.has-img[^{]*\{ background: var\(--logo-plate\); \}/);
-  assert.match(block(':root[data-theme="dark"] {'), /--tab-chosen: #2c2c2c;/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'styles', 'watchlist.css'), 'utf8'), /\.logo\.has-img \{ background: var\(--logo-plate\); \}/);
+  assert.match(block(':root[data-theme="dark"] {'), /--tab-chosen: #2a2c33;/);
   assert.match(css, /button\.mtab\[aria-selected="true"\] \{ background: var\(--tab-chosen\); border-color: var\(--control-border\); box-shadow: none; \}/);
   assert.match(css, /\.list:has\(> li > \.state:first-child\) \{ list-style: none; padding-left: 0; \}/);
+  // No token is defined anywhere else: styles.css only uses them.
+  assert.doesNotMatch(css, /^:root(\[[^\]]*\])? \{/m);
 });
 
 test('live test fixes: Back returns focus to the control that left the page, not to a fold opened earlier', () => {
-  const app = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  // The app's router (dashboard/web) keeps the former shell's rule.
+  const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'lib', 'router.js'), 'utf8');
   assert.match(app, /Date\.now\(\) - lastClick\.at < LEAVE_CLICK_MS \? lastClick\.key : null/);
   assert.match(app, /else activatorMemory\.delete\(routeKey\(prev\)\);/);
-  assert.doesNotMatch(app, /if \(k && state\.route\) \{\n\s+activatorMemory\.set/, 'a click alone no longer names the way back');
+  assert.doesNotMatch(app, /if \(k && (state|nav)\.route\) \{\n\s+activatorMemory\.set/, 'a click alone never names the way back');
 });

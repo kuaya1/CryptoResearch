@@ -394,12 +394,17 @@ test('the brief\'s styles use the desk\'s tokens only; the page is wired into th
   assert.ok(!/\b(rgb|rgba|hsl|hsla)\(/i.test(noComments), 'no raw colour function');
   assert.ok(!/font-family:(?!\s*var\()/.test(noComments), 'type from the tokens');
   assert.ok(!/text-transform:\s*uppercase/.test(noComments), 'sentence case');
-  assert.match(read('index.html'), /<link rel="stylesheet" href="\/brief\.css">/);
+  // The app bundles the hosted views' stylesheets (scoped, dashboard/web).
+  const web = (f) => fs.readFileSync(path.join(__dirname, '..', 'web', 'src', ...f.split('/')), 'utf8');
+  assert.match(web('legacy/views.js'), /import '\.\.\/\.\.\/\.\.\/public\/brief\.css';/);
   // The Brief is the project page's default tab (D1); its old address redirects.
-  assert.match(read('app.js'), /if \(route\.name === 'brief' \|\| route\.name === 'project'\)/);
-  assert.match(read('views/project.js'), /if \(name === 'brief'\) return to\('brief', \{ model: 'claude'/);
+  assert.match(web('lib/router.js'), /if \(route\.name === 'brief' \|\| route\.name === 'project'\)/);
+  assert.match(read('project-routes.js'), /if \(name === 'brief'\) return to\('brief', \{ model: 'claude'/);
   assert.match(read('views/project.js'), /briefPanel\(ctx, \{ d, row, pid, provider: prov/);
-  assert.match(read('views/watchlist.js'), /briefLink\(ctx, p, \{ from: 'watchlist'/);
+  // The React Overview reads the same model; the inspector's link opens it
+  // with one history entry to return through (crBrief).
+  assert.match(web('views/project/ProjectPage.jsx'), /briefModel\(\{ detail: d, row, index: d0\.index, provider: prov, reportId, hosted: hosted\(\) \}\)/);
+  assert.match(web('views/inspector/Inspector.jsx'), /navigate\(`#\/project\/\$\{encodeURIComponent\(pid\)\}\/brief\?model=claude`, \{ state: \{ crBrief: pid, from: 'watchlist' \} \}\)/);
   // The link opens the brief's address with one history entry to return through.
   const ui = read('ui.js');
   assert.match(ui, /const href = `#\/project\/\$\{encodeURIComponent\(pid\)\}\/brief\?model=claude`;/);
@@ -408,4 +413,8 @@ test('the brief\'s styles use the desk\'s tokens only; the page is wired into th
   // (through every project tab entry since it was opened: crDepth).
   assert.match(read('views/brief.js'), /st\.crBrief === pid\) history\.go\(-\(Number\(st\.crDepth\) \|\| 1\)\);\s*else ctx\.navigate\(`#\/watchlist\?p=\$\{enc\(pid\)\}`, \{ replace: true \}\)/);
   assert.match(read('views/project.js'), /crDepth: \(Number\(now\.crDepth\) \|\| 1\) \+ 1/);
+  // The React project page keeps the same way back.
+  const page = web('views/project/ProjectPage.jsx');
+  assert.match(page, /if \(st && st\.crBrief === pid\) history\.go\(-\(Number\(st\.crDepth\) \|\| 1\)\);\s*else navigate\(`#\/watchlist\?p=\$\{enc\(pid\)\}`, \{ replace: true \}\);/);
+  assert.match(page, /crDepth: \(Number\(now\.crDepth\) \|\| 1\) \+ 1/);
 });

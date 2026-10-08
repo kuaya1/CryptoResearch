@@ -610,7 +610,12 @@ test('F7: the phone drawer takes the containing width (no 100vw under a classic 
   assert.match(rule, /left: 0/);
   assert.match(rule, /right: 0/);
   assert.match(rule, /width: auto/);
-  const wl = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'watchlist.js'), 'utf8');
+  // The React inspector (dashboard/web): a phone drawer spans the containing
+  // block (left and right 0), never 100vw.
+  const web = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'styles', 'inspector.css'), 'utf8');
+  assert.doesNotMatch(web, /100vw/);
+  assert.match(web, /@media \(max-width: 767\.98px\) \{ \.inspector\.is-modal \{ left: 0; right: 0; width: auto;/);
+  const wl = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'views', 'watchlist', 'ProjectTable.jsx'), 'utf8');
   assert.doesNotMatch(wl, /scorecard on hover/i);
   assert.match(wl, /Space or Enter opens and closes a project/);
 });

@@ -207,7 +207,16 @@ test('opening the views only reads: no write, fetch, refresh, research or Explor
   assert.match(project, /d = await ctx\.projectDetail\(id\)/);
   assert.match(project, /compare: \(\) => compareTab\(ctx, d, row, route\)/);
   assert.match(project, /evidencePanel\(ctx, \{ d, row, pid, provider: prov/);
-  assert.match(project, /\['brief', 'Overview'\],\s*\['compare', 'Compare'\],\s*\['evidence', 'Evidence'\]/);
+  assert.match(read('project-routes.js'), /\['brief', 'Overview'\],\s*\['compare', 'Compare'\],\s*\['evidence', 'Evidence'\]/);
+  // The React project page and its Overview read only: no write, fetch or
+  // research outside an explicit action, and no report text as HTML.
+  const webRoot = path.join(__dirname, '..', 'web', 'src');
+  const overview = code(fs.readFileSync(path.join(webRoot, 'views', 'project', 'Overview.jsx'), 'utf8'));
+  for (const re of [/dangerouslySetInnerHTML/, /\.innerHTML/, /\bfetch\(/, /api\.post\(/, /\brefresh\(/, /\/api\/explorer/, /\/research\/run|start_research/]) {
+    assert.ok(!re.test(overview), `Overview.jsx must not match ${re}`);
+  }
+  // The Overview's only action is the research dialog the inspector also offers (a click, never on render).
+  assert.match(overview, /onClick=\{async \(\) => \{ const L = await loadLegacy\(\);[\s\S]{0,240}L\.openResearchDialog\(/);
 });
 
 test('the Overview reads in order: the verdict with its warnings and key points, the category grades, then apart the six components; the evidence has its own view', () => {
@@ -276,5 +285,11 @@ test('the views\' styles use the desk\'s tokens only, in light and dark alike', 
   assert.ok(!/font-family:(?!\s*var\()/.test(noComments), 'type from the tokens');
   assert.ok(!/text-transform:\s*uppercase/.test(noComments), 'sentence case');
   assert.ok(!/font-size:\s*(?:[0-9]|1[01])(?:\.\d+)?px/.test(noComments), 'nothing under 12px');
-  assert.match(read('index.html'), /<link rel="stylesheet" href="\/brief-views\.css">/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'legacy', 'views.js'), 'utf8'), /import '\.\.\/\.\.\/\.\.\/public\/brief-views\.css';/);
+  // The React project page's styles: tokens only, nothing under 12px.
+  const web = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'styles', 'project.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.ok(!/#[0-9a-f]{3,8}\b/i.test(web), 'no raw hex colour');
+  assert.ok(!/font-family:(?!\s*var\()/.test(web), 'type from the tokens');
+  assert.ok(!/text-transform:\s*uppercase/.test(web), 'sentence case');
+  assert.ok(!/font-size:\s*(?:[0-9]|1[01])(?:\.\d+)?px/.test(web), 'nothing under 12px');
 });

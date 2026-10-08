@@ -1,12 +1,14 @@
 {
   "name": "cryptoresearch-workspace",
   "private": true,
-  "description": "Private local crypto watchlist, research and portfolio dashboard. No npm dependencies.",
+  "description": "Private local crypto watchlist, research and portfolio dashboard. The server has no npm dependencies; the browser app is built in dashboard/web and committed to dashboard/public/app.",
   "scripts": {
     "test": "node dashboard/cli.js test",
     "dashboard": "node dashboard/cli.js serve --open",
     "doctor": "node dashboard/cli.js doctor",
-    "start": "node server.js"
+    "start": "node server.js",
+    "ui": "npm --prefix dashboard/web run dev",
+    "ui:build": "npm --prefix dashboard/web run build"
   },
   "engines": {
     "node": "24.x"

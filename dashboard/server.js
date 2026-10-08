@@ -47,8 +47,13 @@ const research = require('./core/research');
 const intake = require('./core/intake');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
+// The browser app: React components built by Vite (dashboard/web) into
+// public/app and committed, so neither this PC nor Render runs a build. Its
+// page is served at /; its hashed assets never change under one name.
+const APP_PAGE = '/app/index.html';
+const APP_ASSETS = '/app/assets/';
 // What the sign-in page itself needs before anyone is signed in.
-const LOGIN_ASSETS = new Set(['/styles.css', '/position.css', '/favicon.svg']);
+const LOGIN_ASSETS = new Set(['/tokens.css', '/styles.css', '/position.css', '/favicon.svg']);
 // A page that asked for anything in this long counts as open (hosted mode
 // refreshes prices at the foreground interval only while a page is open).
 const PAGE_OPEN_MS = 10 * 60000;
@@ -779,7 +784,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     } catch (_) {
       throw new HttpError(400, 'Bad path');
     }
-    if (pathname === '/') pathname = '/index.html';
+    if (pathname === '/' || pathname === '/index.html') pathname = APP_PAGE;
     if (pathname.includes('\0') || pathname.includes('\\') || pathname.split('/').some((s) => s === '..' || s === '.')) throw new HttpError(404, 'Not found');
     const abs = path.resolve(PUBLIC_DIR, `.${pathname}`);
     const back = path.relative(PUBLIC_DIR, abs);
@@ -787,7 +792,9 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     const type = STATIC_TYPES[path.extname(abs).toLowerCase()];
     const info = fileInfo(abs);
     if (!type || !info || !info.isFile) throw new HttpError(404, 'Not found');
-    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache' });
+    // A content-hashed asset never changes under its name; everything else is
+    // checked with the server on each use.
+    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': pathname.startsWith(APP_ASSETS) ? 'private, max-age=31536000, immutable' : 'no-cache' });
     if (req.method === 'HEAD') return res.end();
     fs.createReadStream(abs).pipe(res);
   }
