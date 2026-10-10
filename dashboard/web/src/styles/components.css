@@ -9,8 +9,8 @@
 /* ---- buttons ---- */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  height: var(--control-h); padding: 0 12px;
-  border: 1px solid var(--button-border); border-radius: var(--r-control);
+  height: var(--control-h); padding: 0 14px;
+  border: 1px solid var(--button-border); border-radius: var(--r-button);
   background: var(--surface); color: var(--text);
   font: inherit; font-size: var(--fs-sm); font-weight: 500; line-height: 1;
   white-space: nowrap; cursor: pointer; text-decoration: none;
@@ -20,7 +20,7 @@
 .btn:hover { background: var(--surface-hover); text-decoration: none; }
 .btn:active { background: var(--surface-selected); }
 .btn:disabled, .btn[aria-disabled="true"] { opacity: 0.55; cursor: default; }
-/* The one primary action: obsidian ink, white words (Eric, 2026-10-08 polish). */
+/* The one primary action: a black pill, white words (2026-10-10). */
 .btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 500; box-shadow: var(--shadow-lift); }
 .btn-primary:hover, .btn-primary:active { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn-ghost { background: transparent; border-color: transparent; box-shadow: none; color: var(--text-2); }
@@ -65,9 +65,9 @@ kbd {
 select.input { padding-right: 28px; appearance: none; background-image: var(--i-chevron); background-repeat: no-repeat; background-position: right 8px center; background-size: 14px; }
 
 /* ---- a segmented choice ---- */
-.seg { display: inline-flex; align-items: center; padding: 2px; gap: 2px; background: var(--surface-track); border: 1px solid var(--border); border-radius: calc(var(--r-control) + 2px); }
+.seg { display: inline-flex; align-items: center; padding: 2px; gap: 2px; background: var(--surface-track); border: 1px solid var(--border); border-radius: var(--r-button); }
 .seg button {
-  height: 26px; padding: 0 10px; border: 0; border-radius: var(--r-control);
+  height: 26px; padding: 0 12px; border: 0; border-radius: var(--r-button);
   background: transparent; color: var(--text-2); font-size: var(--fs-xs); font-weight: 500; cursor: pointer; white-space: nowrap;
 }
 .seg button:hover { color: var(--text); }
@@ -177,10 +177,10 @@ select.input { padding-right: 28px; appearance: none; background-image: var(--i-
 .mh-main { grid-area: main; min-width: 0; }
 .mh-who { font-size: var(--fs-xs); font-weight: 600; color: var(--text-3); }
 .mh-model { font-weight: 500; overflow-wrap: anywhere; }
-.mh-verdict { margin-top: 2px; font-size: 17px; font-weight: 700; line-height: 1.25; letter-spacing: -0.01em; color: var(--text); overflow-wrap: anywhere; }
+.mh-verdict { margin-top: 2px; font-family: var(--font-display); font-size: 17px; font-weight: 700; line-height: 1.25; letter-spacing: -0.015em; color: var(--text); overflow-wrap: anywhere; }
 .mh-score { grid-area: score; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; text-align: right; min-width: 0; }
 .mh-cap { font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; }
-.mh-num { font-size: 32px; font-weight: 700; line-height: 1; letter-spacing: -0.02em; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mh-num { font-family: var(--font-display); font-size: 34px; font-weight: 700; line-height: 1; letter-spacing: -0.03em; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .mh-num.is-range { font-size: 26px; }
 .mh-tag { display: inline-flex; align-items: center; justify-content: center; min-height: 22px; max-width: 160px; padding: 2px 8px; border-radius: var(--r-control); border: 1px solid var(--t-line); background: var(--t-bg); color: var(--t-ink); font-size: var(--fs-xs); font-weight: 600; line-height: 1.3; text-align: center; }
 .mh-wh { font-size: 20px; font-weight: 700; line-height: 1.1; color: var(--text); }
@@ -198,6 +198,7 @@ select.input { padding-right: 28px; appearance: none; background-image: var(--i-
 @media (max-width: 519.98px) {
   .mh { grid-template-areas: "main score" "sub sub" "chips chips"; gap: 6px 12px; padding: 10px 12px; }
   .mh-verdict { font-size: 16px; }
+  .mh-num { font-size: 32px; }
   .mh-cap { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .mh-tag { max-width: 52vw; }
   .mh-sub { gap: 0 8px; }

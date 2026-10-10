@@ -111,7 +111,7 @@ test('live test fixes: logo images on a light plate, the chosen model tab distin
   assert.match(block(':root[data-theme="dark"] {'), /--logo-plate: #e6e7ea;/, 'a dark mark stays visible in dark');
   assert.match(css, /\.logo\.has-img, \.proj-cell \.logo\.has-img[^{]*\{ background: var\(--logo-plate\); \}/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'styles', 'watchlist.css'), 'utf8'), /\.logo\.has-img \{ background: var\(--logo-plate\); \}/);
-  assert.match(block(':root[data-theme="dark"] {'), /--tab-chosen: #2a2c33;/);
+  assert.match(block(':root[data-theme="dark"] {'), /--tab-chosen: #2a2a2a;/, 'the chosen tab stands out in dark (neutral, 2026-10-10)');
   assert.match(css, /button\.mtab\[aria-selected="true"\] \{ background: var\(--tab-chosen\); border-color: var\(--control-border\); box-shadow: none; \}/);
   assert.match(css, /\.list:has\(> li > \.state:first-child\) \{ list-style: none; padding-left: 0; \}/);
   // No token is defined anywhere else: styles.css only uses them.

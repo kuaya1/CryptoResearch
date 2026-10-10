@@ -453,7 +453,7 @@ test('evidence marks in the pills: a solid dot for a serious flag, a ring for a 
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'components', 'GradePill.jsx'), 'utf8'), /\$\{info\.ev \? ` ev-\$\{info\.ev\}` : ''\}/);
 });
 
-test('static: no CoinMarketCap tokens or colors, no "Inter", the serif only on the wordmark', () => {
+test('static: no CoinMarketCap tokens or colors, no "Inter" in any font stack or font token, no serif; the wordmark is the display sans', () => {
   // The sources (the hosted views in public, the React app in web/src); the
   // built bundle in public/app is made from them.
   const files = [];
@@ -465,12 +465,14 @@ test('static: no CoinMarketCap tokens or colors, no "Inter", the serif only on t
   for (const [f, s] of all) {
     assert.doesNotMatch(s, /--cmc-/, `${f}: a --cmc- token`);
     assert.doesNotMatch(s, /#16c784|#ea3943|#0d1421|#58667e|#eff2f5/i, `${f}: a CoinMarketCap color`);
-    assert.doesNotMatch(s, /font-family:[^;]*\bInter\b/, `${f}: Inter in a font stack`);
+    assert.doesNotMatch(s, /(font-family|--[\w-]*font[\w-]*|--sans|--mono):[^;]*\bInter\b/, `${f}: Inter in a font stack`);
   }
-  const serif = (prefix) => all.filter(([f]) => f.startsWith(prefix) && f.endsWith('.css')).map(([, s]) => s).join('\n')
-    .split('\n').filter((l) => l.includes('var(--font-serif)')).map((l) => l.trim().split(' {')[0]);
-  assert.deepEqual(serif('public/'), ['.brand'], 'the serif is the wordmark\'s alone');
-  assert.deepEqual(serif('web/src/').sort(), ['.boot-error h1', '.brand-word'], 'the serif is the wordmark\'s alone');
+  // Crisp Studio (Eric, 2026-10-10): the book serif is retired; the wordmark
+  // is the display sans in bold.
+  const css = all.filter(([f]) => f.endsWith('.css')).map(([, s]) => s).join('\n');
+  assert.doesNotMatch(css, /--font-serif|\bGeorgia\b|Palatino|Iowan/, 'no serif anywhere');
+  assert.match(css, /\.brand-word \{[^}]*font-family: var\(--font-display\)/, 'the app\'s wordmark is the display sans');
+  assert.match(css, /\.brand \{[^}]*font-family: var\(--font-display\)/, 'the hosted views\' wordmark is the display sans');
 });
 
 test('status strip and header: secondary figures step aside (Dom and Total first), what needs action keeps its words and comes first on a phone; four figures sit in one row', () => {

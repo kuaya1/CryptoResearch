@@ -33,16 +33,16 @@ html.has-drawer { overflow: hidden; }
 .ih-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: start; }
 .ih-row h2 {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
-  font-size: 18px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; padding-top: 6px; min-width: 0;
+  font-family: var(--font-display); font-size: var(--fs-title); font-weight: 600; letter-spacing: var(--track-title); line-height: 1.25; padding-top: 5px; min-width: 0;
 }
 .ih-row h2:focus { outline: none; }
 .ih-row h2:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-sm); }
 .ih-name { overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.ih-sym { display: inline-block; vertical-align: 2px; margin-left: 2px; font-size: var(--fs-xs); font-weight: 600; line-height: 18px; color: var(--text-2); background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--separator); border-radius: var(--r-sm); padding: 0 6px; letter-spacing: 0.02em; }
+.ih-sym { font-family: var(--sans); display: inline-block; vertical-align: 2px; margin-left: 2px; font-size: var(--fs-xs); font-weight: 600; line-height: 18px; color: var(--text-2); background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--separator); border-radius: var(--r-sm); padding: 0 6px; letter-spacing: 0.02em; }
 .ih-win { display: flex; gap: 2px; margin-right: -6px; }
 .ih-sub { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; margin: 10px 0 0 48px; }
 .ih-price { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
-.ih-price-v { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+.ih-price-v { font-family: var(--font-display); font-size: 22px; font-weight: 600; letter-spacing: var(--track-title); }
 .ih-chg { font-size: var(--fs-sm); font-weight: 600; padding: 1px 6px; border-radius: var(--r-sm); }
 .ih-chg.up { background: var(--pos-weak); }
 .ih-chg.down { background: var(--neg-weak); }
@@ -51,7 +51,7 @@ html.has-drawer { overflow: hidden; }
 .ih-links { display: flex; gap: 6px; flex-wrap: wrap; }
 .xlink {
   display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px;
-  border-radius: var(--r-control); border: 1px solid var(--button-border);
+  border-radius: var(--r-button); border: 1px solid var(--button-border);
   color: var(--text-2); font-size: var(--fs-xs); font-weight: 500; text-decoration: none;
 }
 .xlink:hover { color: var(--text); background: var(--surface-hover); text-decoration: none; }

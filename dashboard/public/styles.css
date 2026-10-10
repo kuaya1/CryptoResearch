@@ -25,7 +25,8 @@ body {
 a { color: var(--text); text-decoration: underline; text-decoration-color: var(--border); text-decoration-thickness: 1px; text-underline-offset: 3px; transition: text-decoration-color var(--dur) var(--ease), color var(--dur) var(--ease); }
 a:hover { text-decoration-color: currentColor; }
 h1, h2, h3, h4 { margin: 0; line-height: 1.25; font-family: var(--font-display); color: var(--text); }
-h1 { font-family: var(--sans); font-size: var(--fs-h1); font-weight: 600; letter-spacing: -0.005em; line-height: 1.15; }
+/* Page titles: big and tight in the display cut (Eric, 2026-10-10, after Framer). */
+h1 { font-family: var(--font-display); font-size: var(--fs-display); font-weight: 600; letter-spacing: var(--track-display); line-height: 1.08; }
 h2 { font-size: var(--fs-h2); font-weight: 600; letter-spacing: -0.005em; }
 h3 { font-size: var(--fs-h3); font-weight: 600; }
 p { margin: 0 0 var(--s2); }
@@ -88,7 +89,7 @@ kbd { font-family: var(--sans); font-size: var(--fs-caption); line-height: 16px;
   padding: 0 var(--s6);
   min-width: 0;
 }
-.brand { font-family: var(--font-serif); font-weight: 400; font-size: 19px; letter-spacing: -0.01em; white-space: nowrap; color: var(--text); text-decoration: none; display: inline-flex; align-items: center; gap: 10px; min-height: var(--touch); margin-right: var(--s3); }
+.brand { font-family: var(--font-display); font-weight: 700; font-size: 18px; letter-spacing: -0.035em; white-space: nowrap; color: var(--text); text-decoration: none; display: inline-flex; align-items: center; gap: 10px; min-height: var(--touch); margin-right: var(--s3); }
 .brand .mark { width: 26px; height: 26px; flex: none; color: var(--accent); }
 .brand .tag { font-family: var(--font); font-size: var(--fs-caption); font-weight: 600; border: 1px solid var(--border); border-radius: 999px; padding: 0 7px; line-height: 18px; color: var(--text-2); letter-spacing: 0; background: var(--surface-sunken); }
 .mainnav { display: flex; align-items: center; gap: 2px; min-width: 0; height: 100%; }
@@ -130,7 +131,6 @@ kbd { font-family: var(--sans); font-size: var(--fs-caption); line-height: 16px;
   .mainnav a { min-height: var(--touch); font-size: var(--fs-read); padding: 0 var(--s3); }
   .status-dot { padding: 3px 8px; border-color: transparent; background: transparent; }
   .status-text { display: none; }
-  h1 { font-size: 23px; }
 }
 
 /* ---------- Page layout (list + optional detail column) ---------- */
@@ -1506,7 +1506,7 @@ dialog .dlg-foot { display: flex; justify-content: flex-end; gap: var(--s2); pad
 .login-card { width: min(420px, 100%); display: grid; gap: var(--s3); padding: 28px 28px 24px; border-radius: var(--r-xl); box-shadow: var(--shadow-pop); border-color: var(--separator); }
 .login-card .brandline { display: flex; align-items: center; gap: 10px; margin-bottom: 2px; }
 .login-card .brandline svg { width: 30px; height: 30px; color: var(--accent); flex: none; }
-.login-card h1 { margin: 0; font-size: 26px; }
+.login-card h1 { margin: 0; font-size: 26px; letter-spacing: var(--track-title); }
 .login-card > p { margin: 0; }
 .login-card .callout { margin: 0; }
 .login-card input[type="password"] { width: 100%; min-height: var(--touch); font-size: 16px; }
@@ -2071,12 +2071,12 @@ th { color: var(--text-3); font-weight: 500; }
 thead th { border-bottom-color: var(--border); }
 td.num { font-size: var(--fs-body); letter-spacing: 0; }
 
-/* Controls: squared off. The primary action is the one ink button. */
-button, .btn { border-radius: var(--r-control); }
-button.icon { border-radius: var(--r-control); }
+/* Controls: pills (2026-10-10). The primary action is the one black button. */
+button, .btn { border-radius: var(--r-button); }
+button.icon { border-radius: var(--r-button); }
 input[type="text"], input[type="number"], input[type="date"], input[type="url"], input[type="search"], input[type="password"], select, textarea { border-radius: var(--r-field); }
 .search input { border-radius: var(--r-field); }
-input[type="file"]::file-selector-button, input[type="file"]:focus-visible { border-radius: var(--r-control); }
+input[type="file"]::file-selector-button, input[type="file"]:focus-visible { border-radius: var(--r-button); }
 /* A segmented choice: a track with a hairline, the chosen segment an ink tab. */
 .seg { padding: 2px; border-color: var(--border); border-radius: var(--r-lg); background: var(--surface); }
 .card .seg, .panel .seg, dialog .seg { background: var(--surface-sunken); }

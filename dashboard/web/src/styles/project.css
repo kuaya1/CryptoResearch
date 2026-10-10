@@ -23,8 +23,9 @@
 .ph { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin: 4px 0 16px; }
 .ph-id { display: flex; align-items: flex-start; gap: 14px; min-width: 0; flex: 1 1 420px; }
 .ph-names { min-width: 0; flex: 1; }
-.ph h1 { font-size: var(--fs-2xl); font-weight: 600; letter-spacing: -0.015em; line-height: 1.2; overflow-wrap: anywhere; }
-.ph-ticker { font-size: var(--fs-md); font-weight: 500; color: var(--text-3); letter-spacing: 0; }
+/* The project's name: big and tight in the display cut (2026-10-10). */
+.ph h1 { font-family: var(--font-display); font-size: var(--fs-display); font-weight: 600; letter-spacing: var(--track-display); line-height: 1.08; overflow-wrap: anywhere; }
+.ph-ticker { font-family: var(--sans); font-size: var(--fs-lg); font-weight: 500; color: var(--text-3); letter-spacing: 0; }
 .ph-wholename { display: none; }
 .ph-mk { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-top: 6px; font-variant-numeric: tabular-nums; }
 .ph-mk-price { font-size: var(--fs-lg); font-weight: 600; }
@@ -40,7 +41,9 @@
 .ph-more { margin-left: auto; margin-top: 2px; }
 @media (max-width: 767.98px) {
   .ph { margin: 2px 0 10px; }
-  .ph h1 { font-size: 20px; }
+  /* A phone keeps the strongest risk on the first screen: titles a step down. */
+  .ph h1 { font-size: 20px; letter-spacing: var(--track-title); }
+  .ov-h { font-size: var(--fs-lg); letter-spacing: -0.01em; }
   /* A very long name: two lines, the whole name one tap away (and always in
      the text a screen reader reads). */
   .ph h1.is-long { font-size: 18px; }
@@ -119,7 +122,7 @@
 
 .ov-sec { padding: 24px 0; border-top: 1px solid var(--separator); min-width: 0; }
 .ov-verdict { padding: 18px 0 20px; }
-.ov-h { font-size: var(--fs-lg); font-weight: 600; letter-spacing: -0.01em; margin-bottom: 14px; display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+.ov-h { font-family: var(--font-display); font-size: var(--fs-title); font-weight: 600; letter-spacing: var(--track-title); margin-bottom: 14px; display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
 .ov-h-sub { font-size: var(--fs-xs); font-weight: 400; color: var(--text-3); letter-spacing: 0; }
 .ov-h3 { font-size: var(--fs-sm); font-weight: 600; margin-bottom: 8px; display: flex; align-items: baseline; gap: 8px; }
 .none { color: var(--text-3); font-size: var(--fs-sm); }

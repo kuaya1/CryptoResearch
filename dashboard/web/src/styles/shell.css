@@ -36,11 +36,14 @@
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-.sb-brand { display: flex; align-items: center; gap: 8px; padding: 2px 6px 12px; min-height: 40px; }
+.sb-brand { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 2px 6px 12px; min-height: 40px; }
+/* The wordmark keeps its width; a workspace tag that does not fit goes under it. */
+.sb-brand .brand { flex: none; gap: 8px; }
 .brand { display: inline-flex; align-items: center; gap: 9px; color: var(--text); text-decoration: none; min-width: 0; }
 .brand:hover { text-decoration: none; }
 .brand-mark { width: 22px; height: 22px; flex: none; color: var(--accent); }
-.brand-word { font-family: var(--font-serif); font-size: 17px; letter-spacing: -0.01em; white-space: nowrap; }
+/* The wordmark: the display sans in bold, tight (the book serif is retired, 2026-10-10). */
+.brand-word { font-family: var(--font-display); font-weight: 700; font-size: 16px; letter-spacing: -0.04em; white-space: nowrap; }
 .ws-tag { font-size: var(--fs-xs); font-weight: 600; color: var(--on-highlight); background: var(--highlight); border-radius: var(--r-pill); padding: 0 8px; line-height: 20px; }
 .sb-demo { margin: -4px 0 12px; padding: 7px 10px; border-radius: var(--r-md); background: var(--highlight); color: var(--on-highlight); font-size: var(--fs-xs); font-weight: 500; line-height: 1.4; }
 
@@ -48,9 +51,9 @@
   display: flex; align-items: center; gap: 10px;
   height: 34px; padding: 0 10px; margin: 0 0 10px;
   background: var(--surface); color: var(--text);
-  border: 1px solid var(--button-border); border-radius: var(--r-control);
+  border: 1px solid var(--button-border); border-radius: var(--r-button);
   font-weight: 500; font-size: var(--fs-sm);
-  box-shadow: 0 1px 1px rgba(16, 24, 40, 0.04);
+  box-shadow: var(--shadow-lift);
   transition: border-color var(--dur) var(--ease), background-color var(--dur) var(--ease);
 }
 .sb-new:hover { text-decoration: none; border-color: var(--control-border); }
@@ -60,20 +63,22 @@
 .sb-nav { display: flex; flex-direction: column; gap: 1px; }
 .nav-item {
   display: flex; align-items: center; gap: 10px;
-  min-height: 32px; padding: 0 10px;
-  border-radius: var(--r-control);
+  min-height: 32px; padding: 0 12px;
+  border-radius: var(--r-button);
   color: var(--text-2); font-weight: 500; font-size: var(--fs-sm);
   text-decoration: none; white-space: nowrap;
   border: 0; background: transparent; cursor: pointer; width: 100%; text-align: left;
   transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 .nav-item:hover { background: var(--sidebar-hover); color: var(--text); text-decoration: none; }
-.nav-item.is-active { background: var(--sidebar-active); color: var(--text); font-weight: 600; box-shadow: 0 0 0 1px var(--border), var(--shadow-lift); }
+/* The current place: a black pill, white words (Crisp Studio, 2026-10-10). */
+.nav-item.is-active { background: var(--sidebar-active); color: var(--on-sidebar-active); font-weight: 600; box-shadow: none; }
+.nav-item.is-active:hover { background: var(--sidebar-active); color: var(--on-sidebar-active); }
 .nav-ico { flex: none; color: var(--text-3); }
-.nav-item.is-active .nav-ico { color: var(--accent); }
+.nav-item.is-active .nav-ico { color: var(--on-sidebar-active); }
 .nav-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .nav-count { margin-left: auto; font-size: var(--fs-xs); font-weight: 500; color: var(--text-3); font-variant-numeric: tabular-nums; }
-.nav-item.is-active .nav-count { color: var(--text-2); }
+.nav-item.is-active .nav-count { color: var(--on-sidebar-active-2); }
 .nav-dot { position: absolute; top: 8px; right: calc(50% - 14px); width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--surface); }
 
 .sb-foot { margin-top: auto; display: flex; flex-direction: column; gap: 6px; padding-top: 12px; }
@@ -94,7 +99,7 @@
   border-radius: var(--r-md); padding: 5px 12px;
   font-size: var(--fs-xs); font-weight: 600; text-align: center;
 }
-.topbar .brand-word { font-size: 16px; }
+.topbar .brand-word { font-size: 17px; }
 
 /* ---- tablet: an icon rail ---- */
 @media (max-width: 1023.98px) {
