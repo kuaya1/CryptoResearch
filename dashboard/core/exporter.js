@@ -406,18 +406,20 @@ function compareSummaries(a, b) {
 // ---------------------------------------------------------------------------
 // Complete package
 
-function exportPackage(ws) {
+// The package's parts, read once under the lock and in one synchronous pass,
+// so its records are one moment's: the header, and each file's bytes, hash
+// and encoding. Contents stay Buffers until they are written out.
+function packageSnapshot(ws) {
   return withLock(ws, 'package', () => {
     recoverLocked(ws);
     // A package copies bytes, so it is still made when a save could not be
     // verified, but it says so: its records may be mixed.
     const consistency = consistencyNow(ws);
-    const files = inventoryOf(ws.root, PACKAGE_INCLUDE).map((rel) => {
+    const entries = inventoryOf(ws.root, PACKAGE_INCLUDE).map((rel) => {
       const buf = fs.readFileSync(path.join(ws.root, ...rel.split('/')));
-      const text = isProbablyText(rel, buf);
-      return { path: rel, bytes: buf.length, sha256: sha256(buf), encoding: text ? 'utf8' : 'base64', content: text ? buf.toString('utf8') : buf.toString('base64') };
+      return { path: rel, buf, bytes: buf.length, sha256: sha256(buf), text: isProbablyText(rel, buf) };
     });
-    return {
+    const header = {
       schema_version: 'cr.package.v1',
       kind: 'complete_package',
       created_at: new Date().toISOString(),
@@ -425,14 +427,54 @@ function exportPackage(ws) {
       inventory: {
         included: PACKAGE_INCLUDE,
         omitted: ['application code and launchers (in sealed backups)', 'dashboard/index (rebuilt automatically)', '.cr except research captures and the repairs ledger (locks, staging, sign-in sessions and connection grants)', 'backups/ and audits/'],
-        files: files.length,
-        bytes: files.reduce((s, f) => s + f.bytes, 0),
+        files: entries.length,
+        bytes: entries.reduce((s, f) => s + f.bytes, 0),
       },
       consistency,
       summary: semanticSummary(ws),
-      files,
     };
+    return { header, entries };
   }, { timeoutMs: 60000 });
+}
+
+const packageFile = (e) => ({ path: e.path, bytes: e.bytes, sha256: e.sha256, encoding: e.text ? 'utf8' : 'base64', content: e.text ? e.buf.toString('utf8') : e.buf.toString('base64') });
+
+function exportPackage(ws) {
+  const { header, entries } = packageSnapshot(ws);
+  return { ...header, files: entries.map(packageFile) };
+}
+
+// Writes a package snapshot as JSON to a stream (an HTTP response), one file
+// at a time, waiting for the stream to drain: the same bytes as
+// JSON.stringify({ ...package, ...extra }) without ever holding the whole
+// text. Built as one string, a 57 MB package took the online desk past its
+// 512 MB limit (Render restarted it, 2026-10-10), and the heap it grew was
+// kept after each daily pull. Each file's bytes are let go once written.
+// Resolves with the count of files written; rejects if the stream closes or
+// fails first (nothing more is written then).
+async function writePackage(snapshot, out, extra = {}) {
+  const { header, entries } = snapshot;
+  const gone = () => out.destroyed || out.writableEnded;
+  const drained = () => new Promise((resolve, reject) => {
+    const settle = (err) => { out.off('drain', onDrain); out.off('close', onClose); out.off('error', onError); if (err) reject(err); else resolve(); };
+    const onDrain = () => settle();
+    const onClose = () => settle(new Error('the connection closed before the package was sent'));
+    const onError = (e) => settle(e);
+    out.on('drain', onDrain); out.on('close', onClose); out.on('error', onError);
+  });
+  const put = async (text) => {
+    if (gone()) throw new Error('the connection closed before the package was sent');
+    if (!out.write(text)) await drained();
+  };
+  const head = JSON.stringify(header);
+  await put(`${head.slice(0, -1)}${head.length > 2 ? ',' : ''}"files":[`);
+  for (let i = 0; i < entries.length; i++) {
+    await put(`${i ? ',' : ''}${JSON.stringify(packageFile(entries[i]))}`);
+    entries[i] = null;
+  }
+  const tail = JSON.stringify(extra);
+  await put(tail.length > 2 ? `],${tail.slice(1)}` : ']}');
+  return entries.length;
 }
 
 function isProbablyText(rel, buf) {
@@ -830,7 +872,7 @@ function restoreBackup(ws, name, { confirm = false, to = null, overlay = false, 
 }
 
 module.exports = {
-  exportAll, exportJson, exportPackage, restorePackage, csvTable, toCsv, csvCell,
+  exportAll, exportJson, exportPackage, packageSnapshot, writePackage, restorePackage, csvTable, toCsv, csvCell,
   createBackup, listBackups, verifyBackup, restoreBackup, restoreBackupTo, restoreBackupOverlay, restoreBackupPointInTime, pruneBackups,
   semanticSummary, PROVIDERS, EXPORT_INVENTORY,
 };

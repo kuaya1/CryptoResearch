@@ -73,16 +73,32 @@ function makeOffsiteRoute(ws, { env = process.env, log = () => {}, now = () => D
       log('Offsite package refused: wrong or missing backup key.');
       return send(res, 401, { error: 'The backup key was refused.', code: 'REFUSED' });
     }
-    const pkg = require('./exporter').exportPackage(ws);
-    pkg.desk = { revision: require('./revision').revision(), served_at: new Date().toISOString() };
-    log(`Offsite package served: ${pkg.inventory.files} files, ${pkg.inventory.bytes} bytes${pkg.consistency && pkg.consistency.verified === false ? ' (an earlier save was not verified)' : ''}.`);
-    // A note of what was handed out, for this desk's backup status. Whether
-    // the PC verified and kept it is known only on the PC.
-    try {
-      const { withLock, replaceFile } = require('./ops');
-      withLock(ws, 'offsite_served', () => replaceFile(ws, ws.abs(SERVED_REL), jsonText({ schema_version: 'cr.offsite-served.v1', served_at: pkg.desk.served_at, files: pkg.inventory.files, bytes: pkg.inventory.bytes, desk_revision: pkg.desk.revision ? pkg.desk.revision.short || null : null })));
-    } catch (_) { /* a status note only; the package was served */ }
-    return send(res, 200, pkg);
+    // The records are read at once (one moment's), then written out one file
+    // at a time: the package is never one string in memory (exporter.js
+    // writePackage; the desk has 512 MB). A failure here is before any byte
+    // is sent and answers as before.
+    const exporter = require('./exporter');
+    const snap = exporter.packageSnapshot(ws);
+    const desk = { revision: require('./revision').revision(), served_at: new Date().toISOString() };
+    const { files, bytes } = snap.header.inventory;
+    const unverified = snap.header.consistency && snap.header.consistency.verified === false;
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    return exporter.writePackage(snap, res, { desk }).then(() => {
+      log(`Offsite package served: ${files} files, ${bytes} bytes${unverified ? ' (an earlier save was not verified)' : ''}.`);
+      // A note of what was handed out, for this desk's backup status, before
+      // the response ends. Whether the PC verified and kept it is known only
+      // on the PC.
+      try {
+        const { withLock, replaceFile } = require('./ops');
+        withLock(ws, 'offsite_served', () => replaceFile(ws, ws.abs(SERVED_REL), jsonText({ schema_version: 'cr.offsite-served.v1', served_at: desk.served_at, files, bytes, desk_revision: desk.revision ? desk.revision.short || null : null })));
+      } catch (_) { /* a status note only; the package was served */ }
+      res.end();
+    }, (err) => {
+      // The connection closed or failed part way: no note, and the PC's copy
+      // fails its checks, so nothing incomplete is kept.
+      log(`Offsite package not completed: ${err.message}.`);
+      res.destroy();
+    });
   };
 }
 

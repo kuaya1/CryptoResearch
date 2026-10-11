@@ -107,6 +107,18 @@ test('local server: loopback only, host and origin checks, token, traversal, liv
     assert.equal(r.status, 400);
   });
 
+  await t.test('the complete package downloads whole, written one file at a time', async () => {
+    const r = await request(port, { path: '/api/export/package', headers: { 'x-cr-token': token } });
+    assert.equal(r.status, 200);
+    assert.match(r.headers['content-disposition'], /cryptoresearch-complete-package\.json/);
+    assert.equal(r.headers['cache-control'], 'no-store');
+    const pkg = JSON.parse(r.body);
+    assert.equal(pkg.schema_version, 'cr.package.v1');
+    assert.equal(pkg.files.length, pkg.inventory.files);
+    assert.equal(require('../core/offsite').verifyPackage(pkg).ok, true);
+    assert.equal((await request(port, { path: '/api/export/package' })).status, 401, 'never without the session token');
+  });
+
   await t.test('a valid same-origin write works', async () => {
     const r = await request(port, { method: 'POST', path: '/api/projects', headers: good, body: { name: 'Server Test Project', identity_status: 'pending' } });
     assert.equal(r.status, 200, r.body);

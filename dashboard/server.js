@@ -1017,7 +1017,8 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   route('GET', '/api/inbox/text', (m, req, res, body, url) => inbox.readInboxText(ws, String(url.searchParams.get('key') || '')));
   route('GET', '/api/ui-state', () => readJson(ws.abs(UI_STATE_REL), {}));
   route('GET', '/api/export.json', () => ({ _raw: JSON.stringify(exporter.exportJson(ws), null, 2), _type: 'application/json; charset=utf-8', _extra: { 'Content-Disposition': 'attachment; filename="cryptoresearch-portable-export.json"' } }));
-  route('GET', '/api/export/package', () => ({ _raw: JSON.stringify(exporter.exportPackage(ws)), _type: 'application/json; charset=utf-8', _extra: { 'Content-Disposition': 'attachment; filename="cryptoresearch-complete-package.json"' } }));
+  // Written one file at a time (exporter.writePackage): never one string in memory.
+  route('GET', '/api/export/package', () => ({ _stream: exporter.packageSnapshot(ws), _type: 'application/json; charset=utf-8', _extra: { 'Content-Disposition': 'attachment; filename="cryptoresearch-complete-package.json"' } }));
   route('GET', '/api/export/inventory', () => ({ portable: exporter.EXPORT_INVENTORY }));
   route('GET', '/api/export/([a-z]+)\\.csv', (m) => ({ _raw: exporter.csvTable(ws, m[1]), _type: 'text/csv; charset=utf-8', _extra: { 'Content-Disposition': `attachment; filename="${m[1]}.csv"` } }));
   route('GET', '/api/schedule', () => require('./core/schedule').status(ws));
@@ -1265,6 +1266,10 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
       const body = req.method === 'POST' ? await readBody(req) : null;
       const out = await r.handler(m, req, res, body, url);
       if (out && out._raw !== undefined) return send(res, 200, out._raw, out._type, out._extra || {});
+      if (out && out._stream) {
+        res.writeHead(200, { 'Content-Type': out._type, 'Cache-Control': 'no-store', ...(out._extra || {}) });
+        return exporter.writePackage(out._stream, res).then(() => res.end(), () => res.destroy());
+      }
       return send(res, 200, out === undefined ? { ok: true } : out);
     }
     throw new HttpError(404, 'Unknown API route');

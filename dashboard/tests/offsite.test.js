@@ -461,3 +461,54 @@ test('offsite drill: pulled copy verified, restored in isolation, originals and 
   assert.match(bad.message, /did not verify, so it was not restored/);
   assert.equal(fs.existsSync(path.join(path.dirname(dest), 'second')), false);
 });
+
+// Render restarted the online desk on 2026-10-10 when a 57 MB package, built
+// as one string for the daily pull, took it past its 512 MB limit. The
+// package is now written one file at a time; its bytes are unchanged.
+test('offsite: the package is written one file at a time, byte for byte what JSON.stringify gave, and stops cleanly when the reader goes away', async (t) => {
+  const { Writable } = require('stream');
+  const { ws, root, cleanup } = tempWorkspace('pkgstream');
+  t.after(cleanup);
+  addFixtureProject(ws);
+  // Text with characters outside ASCII, an empty file and a binary file.
+  fs.writeFileSync(path.join(root, 'inbox', 'note.md'), 'Fictional — “quoted” ≈ 12%\n'.repeat(2000));
+  fs.writeFileSync(path.join(root, 'inbox', 'empty.txt'), '');
+  fs.mkdirSync(path.join(root, 'market-data', 'logos'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'market-data', 'logos', 'x.lg.png'), Buffer.from(Array.from({ length: 4096 }, (_, i) => i % 256)));
+  const collect = (opts = {}) => {
+    const chunks = [];
+    const w = new Writable({ highWaterMark: 1024, ...opts, write(c, _e, cb) { chunks.push(Buffer.from(c)); setImmediate(cb); } });
+    // The caller ends the stream (the route's res.end()); read what reached it then.
+    w.text = async () => { await new Promise((resolve) => w.end(resolve)); return Buffer.concat(chunks).toString('utf8'); };
+    return w;
+  };
+  const snap = exporter.packageSnapshot(ws);
+  const desk = { revision: { short: 'abc1234' }, served_at: '2026-10-11T00:00:00.000Z' };
+  const expected = JSON.stringify({ ...snap.header, files: snap.entries.map((e) => ({ path: e.path, bytes: e.bytes, sha256: e.sha256, encoding: e.text ? 'utf8' : 'base64', content: e.text ? e.buf.toString('utf8') : e.buf.toString('base64') })), desk });
+  const out = collect();
+  let drains = 0;
+  out.on('drain', () => { drains += 1; });
+  assert.equal(await exporter.writePackage(snap, out, { desk }), snap.header.inventory.files);
+  assert.ok(drains > 0, 'it waited for the reader');
+  const text = await out.text();
+  assert.equal(text, expected, 'the same bytes as one JSON.stringify of the package');
+  assert.ok(snap.entries.every((e) => e === null), 'each file is let go once written');
+  const pkg = JSON.parse(text);
+  assert.equal(offsite.verifyPackage(pkg).ok, true);
+  assert.ok(pkg.files.some((f) => f.path === 'market-data/logos/x.lg.png' && f.encoding === 'base64'));
+  // Without extra fields it is exactly exportPackage's shape.
+  const plain = collect();
+  await exporter.writePackage(exporter.packageSnapshot(ws), plain);
+  assert.deepEqual(Object.keys(JSON.parse(await plain.text())), Object.keys(exporter.exportPackage(ws)));
+  // A reader that goes away part way: it rejects at once, writes nothing more, never hangs.
+  const early = collect();
+  const run = exporter.writePackage(exporter.packageSnapshot(ws), early);
+  setImmediate(() => early.destroy());
+  await assert.rejects(run, /closed before the package was sent/);
+  // Neither route builds the package as one string any more.
+  const route = fs.readFileSync(path.join(__dirname, '..', 'core', 'offsite.js'), 'utf8');
+  const fn = route.slice(route.indexOf('function makeOffsiteRoute'), route.indexOf('// Verifying a package'));
+  assert.match(fn, /writePackage\(/);
+  assert.doesNotMatch(fn, /exportPackage\(|send\(res, 200/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'), /route\('GET', '\/api\/export\/package', \(\) => \(\{ _stream: exporter\.packageSnapshot\(ws\)/);
+});
