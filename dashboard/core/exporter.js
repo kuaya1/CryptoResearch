@@ -108,6 +108,7 @@ function collect(ws) {
       conviction_note: notes.readConvictionNote(ws, p.project_id),
       prompts: promptFiles(ws, p.project_id),
       research_runs: researchRuns(ws, p.project_id),
+      forensics: forensicRecords(ws, p.project_id),
     };
     projects.push(full);
     for (const r of reports) {
@@ -159,11 +160,32 @@ function researchRuns(ws, projectId) {
   }
 }
 
+// A project's forensic records for the portable export: every audit, every
+// receipt with its full text and SHA-256, the recorded checkpoint outcomes,
+// the monitoring opt-in and the monitor observations.
+function forensicRecords(ws, projectId) {
+  const F = require('./forensics');
+  const receipts = F.listReceipts(ws, projectId).map((r) => {
+    if (r.broken || !r.text) return r;
+    let text = null;
+    try { text = fs.readFileSync(ws.abs(r.text.path), 'utf8'); } catch (_) { text = null; }
+    return { ...r, text_content: text, text_content_sha256: text === null ? null : sha256(text) };
+  });
+  return {
+    audits: F.listAudits(ws, projectId),
+    receipts,
+    resolutions: Object.fromEntries(receipts.filter((r) => r.receipt_id && !r.broken).map((r) => [r.receipt_id, F.resolutionsOf(ws, projectId, r.receipt_id)])),
+    profile: F.readProfile(ws, projectId),
+    observations: F.readObservations(ws, projectId, { from: 0 }),
+  };
+}
+
 const EXPORT_INVENTORY = {
   included: [
     'workspace marker, settings, all rubric and profile versions with their pinned hashes',
     'every project record, with every report: original text (or base64 for PDFs) and its SHA-256, structured record, corrections, effective values, citation check',
     'journal, conviction notes, review events, claim checks, disputes, research runs, prompt files with hashes',
+    'forensic audits, receipts with their full text and SHA-256, recorded checkpoint outcomes, the monitoring opt-in and monitor observations',
     'portfolio accounts, assets, transactions (including voided), limits, events, and the computed positions',
     'latest market observation per asset and the market status',
   ],

@@ -8,6 +8,7 @@
 import { toast } from '../../../../public/ui.js';
 import { needsReview, nextToReview } from '../../../../public/watchlist-model.js';
 import { desk, api, refresh } from '../../lib/desk.js';
+import { seenOf, sendReview, undoReview, newRequestId, STILL_LOADING } from '../../lib/review.js';
 import { nav, navigate, hrefWith } from '../../lib/router.js';
 
 export const view = {
@@ -47,36 +48,69 @@ export function closePanel() {
   else navigate(hrefWith({ p: null }), { replace: true });
 }
 
-// Mark reviewed (only with changes to review), offer Undo for six seconds,
+// Mark reviewed (only with changes to review; the menu's item always) with
+// the reports the inspector drew (lib/review.js), offer Undo for six seconds,
 // and with `advance` move to the next project in the list's order that has
-// changes to review ("All caught up" when none).
-export async function markReviewed(p, { advance = false, onBusy = null } = {}) {
-  if (!needsReview(p)) return;
+// changes to review ("All caught up" when none). Nothing is marked while the
+// opinion is still loading, and a newer report than the one drawn is said,
+// never marked. A lost answer offers Try again with the same request.
+export async function markReviewed(p, { advance = false, onBusy = null, force = false, retry = null } = {}) {
+  if (!force && !retry && !needsReview(p)) return;
   const pid = p.project_id;
+  const drawn = retry || seenOf(p, desk.projects.get(pid) || null);
+  if (!drawn.ready) {
+    toast(STILL_LOADING);
+    return;
+  }
+  const requestId = (retry && retry.requestId) || newRequestId();
   const order = view.order || [];
   const next = advance ? nextToReview(order, desk.index.projects, pid) : null;
   if (onBusy) onBusy(true);
   let out;
   try {
-    out = await api.post(`/api/projects/${encodeURIComponent(pid)}/reviewed`, {});
-  } catch (err) {
-    toast(err.message, 'bad');
+    out = await sendReview(pid, { seen: drawn.seen, requestId });
+  } finally {
     if (onBusy) onBusy(false);
+  }
+  if (out.kind === 'signed_out') return;
+  if (out.kind === 'no_answer') {
+    toast(out.message, 'bad', { action: { label: 'Try again', key: 'retry-review', onClick: () => markReviewed(p, { advance, onBusy, retry: { ready: true, seen: drawn.seen, requestId } }) } });
     return;
   }
-  const res = (out && out.result) || {};
-  toast(`Marked ${p.name} reviewed`, '', {
-    ms: 6000,
-    action: {
-      label: 'Undo',
-      key: 'undo-review',
-      onClick: async () => {
-        await api.post(`/api/projects/${encodeURIComponent(pid)}/reviewed/undo`, { previous: res.previous === undefined ? null : res.previous, expect: res.reviewed_at });
-        toast(`${p.name}: review undone`);
-        await refresh();
+  if (out.kind === 'refused') {
+    toast(out.message, 'bad');
+    return;
+  }
+  if (out.kind === 'newer') {
+    const first = out.newer.find((n) => n.report_id) || null;
+    toast(out.message, 'bad', {
+      action: {
+        label: 'Show it',
+        key: 'show-newer',
+        onClick: async () => {
+          if (first) view.inspectorTab[pid] = first.provider;
+          await refresh();
+        },
       },
-    },
-  });
+    });
+    return;
+  }
+  const res = out.result;
+  if (out.kind === 'unchanged') toast(out.message);
+  else {
+    toast(`Marked ${p.name} reviewed`, '', {
+      ms: 6000,
+      action: {
+        label: 'Undo',
+        key: 'undo-review',
+        onClick: async () => {
+          await undoReview(pid, res);
+          toast(`${p.name}: review undone`);
+          await refresh();
+        },
+      },
+    });
+  }
   if (advance) {
     if (next) {
       const name = document.querySelector(`[data-key="pname-${CSS.escape(next)}"]`);
@@ -84,7 +118,6 @@ export async function markReviewed(p, { advance = false, onBusy = null } = {}) {
     } else toast('All caught up');
   }
   await refresh();
-  if (onBusy) onBusy(false);
 }
 
 export async function restoreProject(p) {

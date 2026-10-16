@@ -167,6 +167,8 @@ const EXTRA = [
   { key: 'vireo', name: 'Vireo Games (FICTIONAL)', symbol: 'XVIR', profile: 'general-token@2', claude: 29, gpt: null, price: 0.0011, mcap: 4.2e6, rank: 2210, ch: [-1.2, -6.6, -22.4], drift: -0.1, archived: true },
 ];
 
+const offline0 = async () => ({ status: 'noop', message: 'FICTIONAL dev desk: offline' });
+
 function contractFor(symbol) {
   return `0x${crypto.createHash('sha1').update(`FICTIONAL-DEV-${symbol}`).digest('hex')}`;
 }
@@ -311,6 +313,52 @@ function contractFor(symbol) {
   for (let i = 0; i < 100; i++) rows.push({ id: `fictional-coin-${i}`, symbol: `xc${i}`, name: `Fictional coin ${i}`, current_price: 1 + i, market_cap: 1e9 - i * 5e6, price_change_percentage_7d_in_currency: (rnd() - 0.5) * 20, price_change_percentage_30d_in_currency: (rnd() - 0.55) * 40, last_updated: capturedAt });
   const global = { data: { total_market_cap: { usd: 2.14e12 }, total_volume: { usd: 7.2e10 }, market_cap_percentage: { btc: 56.4, eth: 11.8 }, market_cap_change_percentage_24h_usd: -0.42, updated_at: Math.floor(Date.now() / 1000) } };
   cycle.saveSnapshot(ws, cycle.buildSnapshot({ global, rows, capturedAt, fictional: true }));
+
+  // Forensics (FICTIONAL): the relay project has an assessment from 20 days
+  // ago with ChatGPT's challenge, product checks with a 4-day outage that
+  // recovered, daily repository reads and 45 days of volume, so the tab draws
+  // past and upcoming checkpoints and dated conditional estimates; Ember has
+  // an audit open with nothing saved; every other project has nothing.
+  {
+    const F = require(`${ROOT}/core/forensics.js`);
+    const FX = require(`${ROOT}/tests/forensic-fixtures.js`);
+    const pid = pids.complete;
+    const t0 = Date.now() - 20 * 86400000;
+    const a = F.createAudit(ws, { project_id: pid, assistant: 'claude', challenge: true, channel: 'dev' });
+    const auditFile = ws.abs(F.auditRel(pid, a.audit_id));
+    const audit = readJson(auditFile);
+    audit.created_at = new Date(t0 - 3600000).toISOString();
+    atomicWrite(auditFile, jsonText(audit));
+    // CoinGecko volume for 45 days, falling about 2% a day (FICTIONAL).
+    const vid = cg.complete;
+    const byMonth = new Map();
+    for (let h = 45 * 24; h >= 0; h -= 6) {
+      const at = new Date(Date.now() - h * 3600000).toISOString();
+      const line = { fetched_at: at, provider: 'fictional-demo', trigger: 'dev', assets: [{ id: vid, source_last_updated_at: at, price_usd: 1.07, volume_24h_usd: Math.round(9.5e6 * 0.98 ** ((45 * 24 - h) / 24)) }] };
+      const m = at.slice(0, 7);
+      byMonth.set(m, [...(byMonth.get(m) || []), JSON.stringify(line)]);
+    }
+    fs.mkdirSync(ws.abs('market-data/observations'), { recursive: true });
+    for (const [m, lines] of byMonth) fs.appendFileSync(ws.abs(`market-data/observations/${m}.jsonl`), `${lines.join('\n')}\n`);
+    const asOf = new Date(t0).toISOString();
+    const s = F.saveReport(ws, { project_id: pid, audit_id: a.audit_id, provider: 'claude', text: FX.reportText(F.loadAudit(ws, pid, a.audit_id), { assessment_as_of: asOf, delivery: { observations: [] } }) });
+    F.saveReport(ws, { project_id: pid, audit_id: a.audit_id, provider: 'chatgpt', text: FX.challengeText(F.loadAudit(ws, pid, a.audit_id), s.receipt) });
+    F.setMonitoring(ws, pid, { approve: { receipt_id: s.receipt_id }, enabled: true, by: 'dev' });
+    const prof = F.readProfile(ws, pid);
+    const pc = prof.targets.product_checks[0];
+    const gh = prof.targets.repositories[0];
+    for (let h = 0; h <= 20 * 24; h += 6) {
+      const at = new Date(t0 + h * 3600000).toISOString();
+      const down = h >= 6 * 24 && h < 10 * 24;
+      F.appendObservation(ws, pid, { kind: 'product_check', target_id: pc.target_id, label: pc.label, url: pc.url, observed_at: at, outcome: down ? 'fail' : 'pass', http_status: down ? 503 : 200, error: down ? 'Answered 503.' : null, excerpt: down ? null : 'All systems operational (FICTIONAL)' });
+      if (h % 24 === 0) F.appendObservation(ws, pid, { kind: 'repository_read', target_id: gh.target_id, repository: `github.com/${gh.owner}/${gh.repo}`, observed_at: at, status: 'ok', latest_delivery_at: new Date(t0 - 52 * 86400000).toISOString(), latest_commit: { sha: 'f1c7i0n4l', at: new Date(t0 - 52 * 86400000).toISOString(), message: 'FICTIONAL commit' } });
+    }
+    F.recordDueResolutions(ws, pid, { now: Date.now() });
+    F.createAudit(ws, { project_id: pids.ember, channel: 'dev' });
+    const mon = require(`${ROOT}/core/forensic-monitor.js`);
+    mon.isDue = () => false;
+    mon.refresh = offline0;
+  }
 
   // The archived one last, so its history stays.
   const vireo = EXTRA.find((x) => x.archived);

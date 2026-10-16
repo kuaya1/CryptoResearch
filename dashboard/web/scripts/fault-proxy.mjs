@@ -4,7 +4,11 @@
 // hangs or answers HTML, a missing app chunk, a forced live change, and a
 // "new report" snapshot of one opinion (a renamed report with another grade,
 // verdict and risks, consistent in the index and the project record, so a
-// mixed render is detectable).
+// mixed render is detectable). For the review check-in: a POST forwarded to
+// the desk whose answer is then dropped (the desk wrote, the page never
+// hears), a POST refused with 503 (never forwarded), and the live change
+// notice held back so a report saved meanwhile is not redrawn. POST bodies
+// are kept in the log for the checks.
 import http from 'node:http';
 
 export const NEW_REPORT_ID = 'fictional-new-revision';
@@ -22,6 +26,7 @@ export async function startFaultProxy({ target, port = 0, project = null, provid
     session: 'normal', // normal | hang | html | expired | badjson | hosted
     projectDelay: 0, indexDelay: 0, projectFail: false, indexFail: false,
     blockChunk: '', bump: 0, snapshot: 'original', signedOut: false,
+    dropPost: '', failPost: '', holdVersion: null,
   };
   const log = [];
   const sockets = new Set();
@@ -44,6 +49,8 @@ export async function startFaultProxy({ target, port = 0, project = null, provid
     try {
       let body = '';
       for await (const b of req) body += b;
+      if (req.method === 'POST') entry.body = body.slice(0, 4000);
+      if (req.method === 'POST' && cfg.failPost && p.includes(cfg.failPost)) { entry.status = 503; entry.forwarded = false; return json(res, 503, { error: 'FICTIONAL desk unavailable' }); }
       const headers = { ...req.headers, host: t.host };
       delete headers.connection;
       if (headers.origin) headers.origin = t.origin;
@@ -57,6 +64,7 @@ export async function startFaultProxy({ target, port = 0, project = null, provid
         if (v) {
           if (p === '/api/session' && cfg.session === 'hosted') v.hosted = true;
           if (p === '/api/version' && cfg.bump) { v.seq += cfg.bump; v.changes = [{ areas: ['all'], projects: null }]; }
+          if (p === '/api/version' && cfg.holdVersion !== null) { v.seq = cfg.holdVersion; v.changes = []; }
           if (p === '/api/index') {
             if (cfg.bump && v.live) v.live.seq += cfg.bump;
             if (cfg.snapshot === 'new' && project) {
@@ -94,6 +102,13 @@ export async function startFaultProxy({ target, port = 0, project = null, provid
         const t0 = Date.now();
         while (Date.now() - t0 < delay && cfg[which] > 0) await new Promise((r) => setTimeout(r, 50));
       }
+      // The desk answered; the page never hears it.
+      if (req.method === 'POST' && cfg.dropPost && p.includes(cfg.dropPost)) {
+        entry.status = out.status;
+        entry.dropped = true;
+        res.socket.destroy();
+        return undefined;
+      }
       const h = Object.fromEntries(out.headers);
       delete h['content-length'];
       delete h['content-encoding'];
@@ -112,7 +127,7 @@ export async function startFaultProxy({ target, port = 0, project = null, provid
     cfg,
     log,
     set(next) { Object.assign(cfg, next); },
-    reset() { Object.assign(cfg, { session: 'normal', projectDelay: 0, indexDelay: 0, projectFail: false, indexFail: false, blockChunk: '', bump: 0, snapshot: 'original', signedOut: false }); },
+    reset() { Object.assign(cfg, { session: 'normal', projectDelay: 0, indexDelay: 0, projectFail: false, indexFail: false, blockChunk: '', bump: 0, snapshot: 'original', signedOut: false, dropPost: '', failPost: '', holdVersion: null }); },
     async close() {
       for (const s of sockets) s.destroy();
       await new Promise((r) => server.close(r));

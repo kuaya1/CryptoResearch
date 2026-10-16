@@ -755,13 +755,15 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
       // A read that met a save in progress, an interrupted save or an
       // unverified commit is 503: nothing mixed is ever returned (V2-001).
       const readErr = READ_CODES.has(err.code);
-      const status = err.status || (err.code === 'NOT_FOUND' ? 404 : ['INVALID', 'BAD_ID', 'BAD_PATH', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT', 'UNSAFE_PATH'].includes(err.code) ? 400 : ['WORKSPACE_BUSY', 'WRITES_BLOCKED'].includes(err.code) ? 409 : readErr ? 503 : 500);
+      const status = err.status || (err.code === 'NOT_FOUND' ? 404 : ['INVALID', 'BAD_ID', 'BAD_PATH', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT', 'UNSAFE_PATH'].includes(err.code) ? 400 : ['WORKSPACE_BUSY', 'WRITES_BLOCKED', 'NEWER_REPORT'].includes(err.code) ? 409 : readErr ? 503 : 500);
       if (status >= 500 && !readErr) console.error(err);
       const retryMs = readErr && err.code !== 'READ_UNSAFE' ? (err.details && err.details.retry_after_ms) || 1000 : null;
       if (!res.headersSent) {
         res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...(retryMs ? { 'Retry-After': String(Math.max(1, Math.ceil(retryMs / 1000))) } : {}) });
       }
-      res.end(JSON.stringify({ error: status >= 500 && !readErr ? `Server error: ${err.message}` : err.message, code: err.code || null, retry_after_ms: retryMs, saved: readErr && req.method === 'GET' ? false : ['INVALID', 'BAD_ID', 'BAD_PATH', 'NOT_FOUND', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'WORKSPACE_BUSY', 'WRITES_BLOCKED', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT', 'UNSAFE_PATH', 'GENERATION_UNWRITABLE'].includes(err.code) || err.status ? false : 'unknown' }));
+      // A review refused for a newer report names it (model, report, time saved).
+      const newer = err.code === 'NEWER_REPORT' && err.details && Array.isArray(err.details.newer) ? { newer: err.details.newer } : {};
+      res.end(JSON.stringify({ error: status >= 500 && !readErr ? `Server error: ${err.message}` : err.message, code: err.code || null, retry_after_ms: retryMs, saved: readErr && req.method === 'GET' ? false : ['INVALID', 'BAD_ID', 'BAD_PATH', 'NOT_FOUND', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'WORKSPACE_BUSY', 'WRITES_BLOCKED', 'NEWER_REPORT', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT', 'UNSAFE_PATH', 'GENERATION_UNWRITABLE'].includes(err.code) || err.status ? false : 'unknown', ...newer }));
     }
   });
 
@@ -1007,8 +1009,46 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   });
   route('GET', '/api/projects/([^/]+)/changes', (m, req, res, body, url) => {
     const id = pid(m[1]);
-    return coherent(() => require('./core/digest').changesSince(ws, id, { since: url.searchParams.get('since') || null, latestMarket: market.readLatest(ws) }));
+    return coherent(() => require('./core/digest').changesSince(ws, id, { since: url.searchParams.get('since') || null, base: url.searchParams.get('base') || null, latestMarket: market.readLatest(ws) }));
   });
+  // Forensics & Resilience (core/forensics.js). The read is the tab's whole
+  // model and writes nothing; every change below is an explicit request.
+  const forensics = require('./core/forensics');
+  const auditId = (id) => {
+    if (!forensics.AUDIT_RE.test(id)) throw new HttpError(400, 'Invalid forensic audit ID');
+    return id;
+  };
+  const receiptId = (id) => {
+    if (!forensics.RECEIPT_RE.test(id)) throw new HttpError(400, 'Invalid forensic receipt ID');
+    return id;
+  };
+  route('GET', '/api/projects/([^/]+)/forensics', (m) => coherent(() => forensics.view(ws, pid(m[1]))));
+  route('GET', '/api/projects/([^/]+)/forensics/audits/([^/]+)/prompt', (m, req, res, body, url) => {
+    const id = pid(m[1]);
+    const a = forensics.loadAudit(ws, id, auditId(m[2]));
+    if (!a) throw new HttpError(404, 'No such forensic audit');
+    const p = forensics.promptFor(ws, a, url.searchParams.get('role') === 'challenge' ? 'challenge' : 'investigator');
+    if (!p) throw new HttpError(404, 'That role has no frozen prompt yet');
+    if (!p.text) throw new HttpError(409, p.error);
+    return { _raw: p.text, _type: 'text/plain; charset=utf-8' };
+  });
+  route('GET', '/api/projects/([^/]+)/forensics/receipts/([^/]+)/text', (m) => {
+    const id = pid(m[1]);
+    const r = forensics.loadReceipt(ws, id, receiptId(m[2]));
+    if (!r) throw new HttpError(404, 'No such forensic receipt');
+    const text = fs.readFileSync(ws.abs(r.text.path), 'utf8');
+    return { _raw: text, _type: 'text/plain; charset=utf-8' };
+  });
+  route('POST', '/api/projects/([^/]+)/forensics/audits', (m, req, res, body) => once(body, () => after(forensics.createAudit(ws, { project_id: pid(m[1]), challenge: body.challenge === true, channel: 'dashboard', utterance: typeof body.utterance === 'string' ? body.utterance : null, owner_focus: typeof body.focus === 'string' ? body.focus : null, refresh: body.refresh === true }))));
+  route('POST', '/api/projects/([^/]+)/forensics/audits/([^/]+)/import', (m, req, res, body) => after(forensics.saveReport(ws, { project_id: pid(m[1]), audit_id: auditId(m[2]), provider: provider(String(body.provider || '')), text: String(body.text || ''), revision: body.revision && typeof body.revision === 'object' ? body.revision : null, channel: 'dashboard import' })));
+  route('POST', '/api/projects/([^/]+)/forensics/audits/([^/]+)/challenge', (m) => after(forensics.requestChallenge(ws, pid(m[1]), auditId(m[2]))));
+  route('POST', '/api/projects/([^/]+)/forensics/audits/([^/]+)/cancel', (m, req, res, body) => after(forensics.cancelAudit(ws, pid(m[1]), auditId(m[2]), typeof body.reason === 'string' ? body.reason : null)));
+  route('POST', '/api/projects/([^/]+)/forensics/monitoring', (m, req, res, body) => after(forensics.setMonitoring(ws, pid(m[1]), {
+    enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
+    approve: body.approve && typeof body.approve === 'object' && typeof body.approve.receipt_id === 'string' ? { receipt_id: receiptId(body.approve.receipt_id), product_checks: Array.isArray(body.approve.product_checks) ? body.approve.product_checks.map(String).slice(0, 5) : undefined, repositories: Array.isArray(body.approve.repositories) ? body.approve.repositories.map(String).slice(0, 3) : undefined } : null,
+    remove: Array.isArray(body.remove) ? body.remove.map(String).slice(0, 10) : [],
+    by: 'dashboard',
+  })));
   route('GET', '/api/portfolio/ledger', () => coherent(() => {
     const reg = portfolio.assetRegistry(ws);
     return { transactions: portfolio.loadTransactions(ws), accounts: portfolio.loadAccounts(ws), assets: Array.from(reg instanceof Map ? reg.values() : Object.values(reg || {})).map((a) => ({ asset_id: a.asset_id, symbol: a.symbol || null, name: a.name || null, kind: a.kind || null, decimals: a.decimals, project_id: a.project_id || null })) };
@@ -1107,7 +1147,9 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   route('POST', '/api/projects/([^/]+)/archive', (m, req, res, body) => after(projects.archiveProject(ws, pid(m[1]), typeof body.reason === 'string' ? body.reason.slice(0, 300) : null)));
   route('POST', '/api/projects/([^/]+)/restore', (m) => after(projects.restoreProject(ws, pid(m[1]))));
   route('POST', '/api/projects/([^/]+)/fields', (m, req, res, body) => after(projects.updateProjectFields(ws, pid(m[1]), body)));
-  route('POST', '/api/projects/([^/]+)/reviewed', (m, req, res, body) => after(projects.markReviewed(ws, pid(m[1]), { note: body.note || null })));
+  // Mark reviewed: with `seen` (the reports drawn on screen) a receipt, refused
+  // with 409 NEWER_REPORT when a newer one arrived; without it, the clock only.
+  route('POST', '/api/projects/([^/]+)/reviewed', (m, req, res, body) => after(projects.markReviewed(ws, pid(m[1]), { seen: body.seen === undefined ? null : body.seen, note: body.note || null, request_id: body.request_id === undefined ? null : body.request_id })));
   // Undo of one mark-reviewed (the cursor it replaced, while it is still the latest).
   route('POST', '/api/projects/([^/]+)/reviewed/undo', (m, req, res, body) => after(projects.restoreReview(ws, pid(m[1]), { previous: body.previous === undefined ? null : body.previous, expect: body.expect || null })));
   route('POST', '/api/projects/([^/]+)/prompts', (m, req, res, body) => after(projects.generatePrompts(ws, pid(m[1]), body.providers || PROVIDERS)));

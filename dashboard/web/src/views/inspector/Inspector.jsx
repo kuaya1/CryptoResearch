@@ -17,7 +17,7 @@ import {
 import { jobKey, researchState, stateText } from '../../../../public/ui.js';
 import { useDesk, useProject } from '../../lib/hooks.js';
 import { nav, claimFocus } from '../../lib/router.js';
-import { hosted, api, refresh } from '../../lib/desk.js';
+import { hosted } from '../../lib/desk.js';
 import { navigate } from '../../lib/router.js';
 import { legacyCtx } from '../../legacy/ctx.js';
 import { Logo } from '../../components/Logo.jsx';
@@ -32,6 +32,7 @@ import { MetricRibbon } from '../../components/ui/MetricRibbon.jsx';
 import { SecurityAuditStrip } from '../../components/ui/SecurityAuditStrip.jsx';
 import { ModelTabMatrix } from '../../components/ui/ModelTabMatrix.jsx';
 import { opinionOf, opinionsAgree } from '../../lib/opinion.js';
+import { seenOf, STILL_LOADING } from '../../lib/review.js';
 
 // Folds and rows you opened stay open for this project across a model
 // switch and a refresh; another project starts closed.
@@ -408,6 +409,8 @@ export default function Inspector({ pid, wide }) {
   }
   const sel = view.inspectorTab[pid] && PROVIDERS.includes(view.inspectorTab[pid]) ? view.inspectorTab[pid] : defaultModel(p.providers);
   const modal = !wide;
+  // The reports drawn here, which Mark reviewed sends (nothing while loading).
+  const drawn = seenOf(p, current ? detail : null);
 
   // Opening: focus moves into the inspector (its title, or the model's tab
   // when a grade opened it); a peek beside the list leaves focus on the row.
@@ -505,7 +508,7 @@ export default function Inspector({ pid, wide }) {
                 {archived ? null : <MenuItem data-key="menu-research" onSelect={async () => { const Lm = await loadLegacy(); Lm.openResearchDialog(legacyCtx, p); }}>Run research…</MenuItem>}
                 {archived ? null : <MenuItem data-key="menu-watch" desc={p.on_watchlist ? 'On your watchlist now' : null} onSelect={() => setWatching(p, !p.on_watchlist)}>{p.on_watchlist ? 'Stop watching' : 'Watch'}</MenuItem>}
                 {p.sector ? <MenuItem data-key="menu-sector" desc={p.sector.label} onSelect={async () => { const Lm = await loadLegacy(); Lm.openSectorDialog(legacyCtx, p); }}>Change sector</MenuItem> : null}
-                <MenuItem data-key="menu-reviewed" onSelect={async () => { try { await api.post(`/api/projects/${encodeURIComponent(pid)}/reviewed`, {}); toast('Marked reviewed. New changes are counted from now.'); await refresh(); } catch (err) { toast(err.message, 'bad'); } }}>Mark reviewed</MenuItem>
+                <MenuItem data-key="menu-reviewed" desc={drawn.ready ? null : STILL_LOADING} disabled={!drawn.ready} onSelect={() => markReviewed(p, { force: true, onBusy: setBusy })}>Mark reviewed</MenuItem>
                 {p.held ? <MenuItem href="#/portfolio" data-key="menu-held">Holding in Portfolio</MenuItem> : null}
                 <MenuSep />
                 {archived
@@ -612,7 +615,7 @@ export default function Inspector({ pid, wide }) {
           </p>
           <div className="if-act">
             {selRep ? <a className="btn btn-sm" href={`#/project/${encodeURIComponent(pid)}/report?report=${encodeURIComponent(selRep.report_id)}`} data-key={`report-${pid}-${sel}`} data-report={selRep.report_id}>Open report</a> : null}
-            {needsReview(p) ? <button type="button" className="btn btn-sm btn-primary" data-key="panel-reviewed" aria-keyshortcuts="R" title="Mark reviewed (R marks it and moves to the next project to review)" disabled={busy} onClick={() => markReviewed(p, { onBusy: setBusy })}>Mark reviewed</button> : null}
+            {needsReview(p) ? <button type="button" className="btn btn-sm btn-primary" data-key="panel-reviewed" aria-keyshortcuts="R" title={drawn.ready ? 'Mark reviewed (R marks it and moves to the next project to review)' : STILL_LOADING} aria-disabled={drawn.ready ? undefined : 'true'} disabled={busy || !drawn.ready} onClick={() => markReviewed(p, { onBusy: setBusy })}>{drawn.ready ? 'Mark reviewed' : STILL_LOADING}</button> : null}
           </div>
         </footer>
       </aside>

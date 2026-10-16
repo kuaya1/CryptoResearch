@@ -8,6 +8,7 @@ export const PROJECT_TABS = [
   ['brief', 'Overview'],
   ['compare', 'Compare'],
   ['evidence', 'Evidence'],
+  ['forensics', 'Forensics'],
   ['report', 'Full report'],
   ['market', 'Market'],
   ['notes', 'Notes'],
@@ -51,6 +52,26 @@ export function sectionHref(pid, to, sel = {}, { latest = {} } = {}) {
   }
   const qs = q.toString();
   return `#/project/${encodeURIComponent(pid)}/${to}${qs ? `?${qs}` : ''}`;
+}
+
+// The review check-in's base (Overview, ?base=<receipt>): the review receipt
+// its rows start from, so a reload, Back or a new tab draws the same
+// comparison. Null for your latest review.
+const RECEIPT_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/;
+export function baseOf(query) {
+  const v = new URLSearchParams(query).get('base');
+  return v && RECEIPT_RE.test(v) && !v.includes('..') ? v : null;
+}
+
+// The Overview's check-in from a given review receipt, keeping the model and
+// report chosen on the page.
+export function checkInHref(pid, base, sel = {}) {
+  const q = new URLSearchParams();
+  if (MODELS.includes(sel.model)) q.set('model', sel.model);
+  if (MODELS.includes(sel.model) && sel.report) q.set('report', sel.report);
+  if (base && RECEIPT_RE.test(base)) q.set('base', base);
+  const qs = q.toString();
+  return `#/project/${encodeURIComponent(pid)}/brief${qs ? `?${qs}` : ''}`;
 }
 
 // The project page's former tabs and the Claude Brief's own page, mapped to

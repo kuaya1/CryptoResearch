@@ -15,7 +15,10 @@
 //      390x844: the strongest-risk block above the tab bar;
 //   F6 the project's section navigation and the model tabs by keyboard;
 //   F7 the inspector: the risk, confirm and break right after the verdict.
-//   node scripts/regress.mjs [--dev] [--only F1,F4] [--json <file>] [--shots <dir>]
+//   RC the review check-in (audits/2026-10-15-rea-evaluation): the reports
+//      seen are sent and refused when a newer one arrived, a lost answer is
+//      applied once, Undo, the check-in address (runs last: it writes).
+//   node scripts/regress.mjs [--dev] [--only F1,F4,RC] [--json <file>] [--shots <dir>]
 import { fork } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -23,6 +26,11 @@ import { fileURLToPath } from 'node:url';
 import { launch, sleep } from './cdp.mjs';
 import { startFaultProxy, NEW_REPORT_ID, NEW_RISK } from './fault-proxy.mjs';
 import { keyPoints } from '../../public/brief-model.js';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const { reportText } = require('../../tests/brief-fixtures.js');
+const { addDays, ymdInTz } = require('../../core/dates.js');
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const arg = (name, fallback) => {
@@ -572,6 +580,316 @@ try {
   const research = proxy.log.filter((e) => /\/research|\/retry|\/market\/refresh|\/reviewed/.test(e.path) && e.method !== 'GET');
   evidence.writes = writes.map((e) => `${e.method} ${e.path}`);
   record('ALL', 'no write, research start, refresh or review mark during any of these checks', writes.length === 0 && research.length === 0, evidence.writes);
+
+  // ---------------------------------------------------------------------------------------
+  // RC: the review check-in (audits/2026-10-15-rea-evaluation, section 3). Mark
+  // reviewed sends the reports drawn on screen; a newer report refuses it with
+  // nothing written; a lost answer offers Try again, which the desk applies
+  // once. Runs last: these cases write receipts and import FICTIONAL reports
+  // on the dev desk. Each asserts that no request but GETs and the POST under
+  // test reached the desk, and reads the result from the desk itself.
+  if (want('RC')) {
+    proxy.reset();
+    const deskHeaders = { 'x-cr-token': s0.token, 'content-type': 'application/json', origin: deskInfo.url };
+    const deskGet = async (p) => (await fetch(`${deskInfo.url}${p}`, { headers: deskHeaders })).json();
+    const deskPost = async (p, body) => {
+      const r = await fetch(`${deskInfo.url}${p}`, { method: 'POST', headers: deskHeaders, body: JSON.stringify(body) });
+      return { status: r.status, body: await r.json() };
+    };
+    const detail = (pid) => deskGet(`/api/projects/${encodeURIComponent(pid)}`);
+    const receiptsOf = async (pid) => (await detail(pid)).journal.filter((e) => e.type === 'review_completed');
+    const rowOf = async (pid) => (await deskGet('/api/index')).projects.find((x) => x.project_id === pid);
+    const seenRow = (row) => Object.fromEntries(['claude', 'chatgpt', 'gemini'].map((m) => {
+      const s = row && row.providers ? row.providers[m] : null;
+      return [m, s && s.report_id && !s.needs_text && s.latest_eligible !== false ? s.report_id : null];
+    }));
+    let saves = 0;
+    // A FICTIONAL Claude report saved through the desk's own import API.
+    const importClaude = async (pid, { profile = null } = {}) => {
+      const d = await detail(pid);
+      const day = ymdInTz();
+      const end = addDays(day, 120);
+      saves += 1;
+      const text = reportText({ project: { project_id: pid, name: d.project.name }, symbol: d.project.symbol || 'XRC', profile: profile || d.project.sector_profile, analysisAt: new Date().toISOString(),
+        horizon: { start: day, end, text: `4 months (${day} to ${end})`, mode: 'position' },
+        edit: (j) => { j.summary = `FICTIONAL check-in save ${saves}.`; j.bearish_facts[0].text = `FICTIONAL check-in risk ${saves}.`; } });
+      const r = await deskPost('/api/import/text', { provider: 'claude', text, project_id: pid });
+      const res = r.body && (r.body.result || r.body);
+      if (r.status !== 200 || !res || res.status !== 'ingested') throw new Error(`fictional import failed: ${JSON.stringify(r.body).slice(0, 300)}`);
+      return res.report_id;
+    };
+    const writesSince = (i) => proxy.log.slice(i).filter((e) => e.method !== 'GET' && e.method !== 'HEAD');
+    const onlyPosts = (i, allowed) => writesSince(i).every((e) => e.method === 'POST' && allowed.some((a) => (a instanceof RegExp ? a.test(e.path) : e.path === a)));
+    const rv = (pid) => `/api/projects/${encodeURIComponent(pid)}/reviewed`;
+    const openCheckIn = async (tab, pid, query = '') => {
+      await go(tab, `#/project/${pid}/brief${query}`, "document.querySelector('.ov-verdict') && document.querySelector('[data-key=\"pb-digest\"]')", 10000);
+      await tab.evalJs("(() => { const d = document.querySelector('[data-key=\"pb-digest\"]'); if (d && !d.open) d.querySelector('summary').click(); return true; })()");
+      return waitFor(tab, "document.querySelector('[data-key=\"pb-digest\"]').open && document.querySelector('[data-key=\"ci-head\"]')", 6000);
+    };
+    const markBtn = "document.querySelector('[data-key=\"ov-reviewed\"]')";
+    const clickMark = (tab) => tab.evalJs(`(() => { const b = ${markBtn}; if (!b || b.disabled) return false; b.click(); return true; })()`);
+    const msg = (tab) => tab.evalJs("(document.querySelector('[data-key=\"ci-msg\"]') || {}).textContent || null");
+    // Projects to try it on: verified, not archived, a Claude report to read
+    // and changes to review; one per case, so the cases never meet.
+    const pool = (await deskGet('/api/index')).projects
+      .filter((p) => !p.broken && p.status !== 'archived' && p.identity_status === 'verified' && p.providers && p.providers.claude && p.providers.claude.report_id && !p.providers.claude.needs_text && p.changes && p.changes.item_count > 0)
+      .map((p) => p.project_id);
+    const take = () => {
+      const id = pool.shift();
+      if (!id) throw new Error('no fictional project left for the check-in cases');
+      return id;
+    };
+    const signature = (tab) => tab.evalJs("(() => { const rows = [...document.querySelectorAll('.ci-row')].map((r) => [r.dataset.key, [...r.querySelectorAll('[data-report]')].map((a) => a.dataset.report).join('>')]); return JSON.stringify({ head: (document.querySelector('[data-key=\"ci-head\"]') || {}).textContent || null, rows }); })()");
+
+    // N7: opening the watchlist, the inspector, the Overview and its check-in writes nothing.
+    {
+      const pid = pool[0];
+      const i0 = proxy.log.length;
+      const tab = await openTab(1440);
+      await go(tab, `#/watchlist?p=${pid}`, "document.querySelector('.inspector .mpanel')", 10000);
+      await openCheckIn(tab, pid);
+      await openCheckIn(tab, pid, '?base=fictional-unknown-receipt');
+      await waitFor(tab, "document.querySelector('.ci-lost')", 6000);
+      const lost = await text(tab, '.ci-lost');
+      await sleep(600);
+      record('RC', 'N7 opening the watchlist, inspector, Overview and check-in writes nothing', writesSince(i0).length === 0, writesSince(i0).map((e) => `${e.method} ${e.path}`));
+      record('RC', 'N7 an unknown base receipt is said, the latest review shown', /was not found; your latest review is shown/.test(lost || ''), { lost });
+      await tab.close();
+    }
+
+    // N8: R in the watchlist sends the inspector's drawn reports and moves on.
+    {
+      const pid = take();
+      const tab = await openTab(1440);
+      await go(tab, `#/watchlist?p=${pid}`, "document.querySelector('.inspector .mpanel')", 10000);
+      await waitFor(tab, "document.querySelector('[data-key=\"panel-reviewed\"]') && !document.querySelector('[data-key=\"panel-reviewed\"]').disabled", 8000);
+      const want = seenRow(await rowOf(pid));
+      await tab.evalJs('document.activeElement && document.activeElement.blur(); true');
+      const i0 = proxy.log.length;
+      await tab.key('r', { code: 'KeyR', vk: 82 });
+      await waitFor(tab, `new URLSearchParams(location.hash.split('?')[1] || '').get('p') !== ${JSON.stringify(pid)}`, 6000);
+      await sleep(600);
+      const post = proxy.log.slice(i0).find((e) => e.method === 'POST' && e.path === rv(pid));
+      const sent = post ? JSON.parse(post.body) : null;
+      const rs = await receiptsOf(pid);
+      const moved = await hashQ(tab, 'p');
+      evidence.rc_n8 = { sent: sent && sent.seen, want, receipts: rs.map((e) => e.linked_report_ids), moved };
+      record('RC', 'N8 R sends the inspector\'s drawn report IDs and the receipt names them', sent && JSON.stringify(sent.seen) === JSON.stringify(want) && rs.length === 1 && JSON.stringify(rs[0].linked_report_ids) === JSON.stringify(Object.values(want).filter(Boolean)), evidence.rc_n8);
+      record('RC', 'N8 the choice moves to the next project with changes', moved && moved !== pid, { moved });
+      record('RC', 'N8 only the one POST under test reached the desk', onlyPosts(i0, [rv(pid)]), writesSince(i0).map((e) => `${e.method} ${e.path}`));
+      await tab.close();
+    }
+
+    // I3, then N3 and N4 on the same project.
+    {
+      const pid = take();
+      const tab = await openTab(1440);
+      await openCheckIn(tab, pid);
+      await waitFor(tab, `${markBtn} && !${markBtn}.disabled`, 8000);
+      const i0 = proxy.log.length;
+      // I3: a double click.
+      await tab.evalJs(`(() => { const b = ${markBtn}; b.click(); b.click(); return true; })()`);
+      await waitFor(tab, `!${markBtn} || /Already reviewed/.test((document.querySelector('[data-key="ci-msg"]') || {}).textContent || '')`, 8000);
+      await sleep(800);
+      const rs = await receiptsOf(pid);
+      record('RC', 'I3 a double click makes one receipt', rs.length === 1, { receipts: rs.length, posts: proxy.log.slice(i0).filter((e) => e.method === 'POST').length });
+      record('RC', 'I3 only the POST under test reached the desk', onlyPosts(i0, [rv(pid)]), writesSince(i0).map((e) => `${e.method} ${e.path}`));
+      const receipt = rs[0] && rs[0].entry_id;
+      const then = rs[0] && rs[0].linked_report_ids[0];
+      // N3: the address with the receipt survives reload, Back and Forward, a new tab.
+      const newer = await importClaude(pid);
+      const addr = `?base=${encodeURIComponent(receipt)}`;
+      const i1 = proxy.log.length;
+      await openCheckIn(tab, pid, addr);
+      await waitFor(tab, `document.querySelector('[data-key="ci-now-claude"][data-report="${newer}"]')`, 8000);
+      const s1 = await signature(tab);
+      await tab.evalJs('location.reload(); true');
+      await sleep(400);
+      await tab.evalJs(WAIT);
+      await waitFor(tab, `document.querySelector('[data-key="ci-now-claude"][data-report="${newer}"]')`, 10000);
+      const s2 = await signature(tab);
+      await tab.evalJs(`location.hash = '#/project/${pid}/notes'; true`);
+      await waitFor(tab, "location.hash.includes('/notes')", 5000);
+      await sleep(500);
+      await tab.evalJs('history.back(); true');
+      await waitFor(tab, `document.querySelector('[data-key="ci-now-claude"][data-report="${newer}"]')`, 8000);
+      const s3 = await signature(tab);
+      await tab.evalJs('history.forward(); true');
+      await waitFor(tab, "location.hash.includes('/notes')", 5000);
+      await tab.evalJs('history.back(); true');
+      await waitFor(tab, `document.querySelector('[data-key="ci-now-claude"][data-report="${newer}"]')`, 8000);
+      const s4 = await signature(tab);
+      const t2 = await openTab(1440);
+      await go(t2, `#/project/${pid}/brief${addr}`, `document.querySelector('[data-key="ci-now-claude"][data-report="${newer}"]')`, 10000);
+      const s5 = await signature(t2);
+      await t2.close();
+      evidence.rc_n3 = { receipt, then, newer, s1, same: [s2, s3, s4, s5].map((s) => s === s1) };
+      record('RC', 'N3 the check-in address keeps the same base and now-side across reload, Back/Forward and a new tab', s1.includes(then) && s1.includes(newer) && [s2, s3, s4, s5].every((s) => s === s1), evidence.rc_n3);
+      record('RC', 'N3 then names the receipt\'s report', await tab.evalJs(`Boolean(document.querySelector('[data-key="ci-then-claude"][data-report="${then}"]'))`), evidence.rc_n3);
+      // N4: a newer report saved later; the kept address says so in words.
+      const newest = await importClaude(pid);
+      await openCheckIn(tab, pid, addr);
+      await waitFor(tab, `document.querySelector('[data-key="ci-now-claude"][data-report="${newest}"]')`, 8000);
+      const n4 = { words: await text(tab, '[data-key="ci-newer-claude"]'), then: await tab.evalJs(`Boolean(document.querySelector('[data-key="ci-then-claude"][data-report="${then}"]'))`), between: await text(tab, '[data-key="ci-between-claude"]') };
+      evidence.rc_n4 = n4;
+      record('RC', 'N4 a newer report than the kept address is said in words, with a link; the then side is not replaced', /^A newer Claude report exists/.test(n4.words || '') && n4.then && /1 earlier Claude report not shown/.test(n4.between || ''), n4);
+      record('RC', 'N3/N4 reading the check-in wrote nothing', writesSince(i1).length === 0, writesSince(i1).map((e) => `${e.method} ${e.path}`));
+      await tab.close();
+    }
+
+    // N5: then and now under different profiles.
+    {
+      const pid = take();
+      await deskPost(rv(pid), { seen: seenRow(await rowOf(pid)), request_id: 'rc_n5_setup_0001' });
+      const d = await detail(pid);
+      const other = d.project.sector_profile === 'general-token@2' ? 'network-infrastructure@2' : 'general-token@2';
+      await importClaude(pid, { profile: other });
+      const tab = await openTab(1440);
+      await openCheckIn(tab, pid);
+      await waitFor(tab, "document.querySelector('[data-key=\"ci-nc-claude\"]')", 8000);
+      const nc = await text(tab, '[data-key="ci-nc-claude"]');
+      const cats = await tab.evalJs("document.querySelectorAll('[data-key=\"ci-row-claude\"] .ci-cats li').length");
+      record('RC', 'N5 different profiles: "Not directly comparable" with the reason, no category numbers', /^Not directly comparable: .*profile/.test(nc || '') && cats === 0, { nc, cats });
+      await tab.close();
+    }
+
+    // I1: a report saved after the check-in was drawn.
+    {
+      const pid = take();
+      const tab = await openTab(1440);
+      await openCheckIn(tab, pid);
+      await waitFor(tab, `${markBtn} && !${markBtn}.disabled`, 8000);
+      await tab.evalJs("(() => { const t = document.querySelector('[data-key=\"ci-note\"]'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(t, 'FICTIONAL draft note'); t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
+      const before = await detail(pid);
+      // The page does not hear of the save (the live notice is held back).
+      proxy.set({ holdVersion: (await deskGet('/api/version')).seq });
+      const fresh = await importClaude(pid);
+      const i0 = proxy.log.length;
+      await clickMark(tab);
+      await waitFor(tab, "/Nothing was marked/.test((document.querySelector('[data-key=\"ci-msg\"]') || {}).textContent || '')", 8000);
+      const said = await msg(tab);
+      const after = await detail(pid);
+      const note = await tab.evalJs("document.querySelector('[data-key=\"ci-note\"]').value");
+      const post = proxy.log.slice(i0).find((e) => e.method === 'POST' && e.path === rv(pid));
+      evidence.rc_i1 = { said, status: post && post.status, journal: [before.journal.length, after.journal.length], note };
+      record('RC', 'I1 409: the message names Claude and the time saved; nothing was marked', post && post.status === 409 && /^A newer Claude report arrived while you were reading \(saved .+\)\. Nothing was marked\./.test(said || ''), evidence.rc_i1);
+      record('RC', 'I1 the journal and the review on file are unchanged; the note draft is kept', after.journal.length === before.journal.length && JSON.stringify(after.project.review) === JSON.stringify(before.project.review) && note === 'FICTIONAL draft note', evidence.rc_i1);
+      await tab.evalJs("document.querySelector('[data-key=\"ci-show\"]').click(); true");
+      const shown = await waitFor(tab, `document.querySelector('[data-key="ci-now-claude"][data-report="${fresh}"], [data-key="ci-row-claude"] [data-report="${fresh}"]')`, 8000);
+      record('RC', 'I1 Show it redraws with the new now-side', shown !== null);
+      await waitFor(tab, `${markBtn} && !${markBtn}.disabled`, 6000);
+      await clickMark(tab);
+      await waitFor(tab, `!${markBtn}`, 8000);
+      await sleep(500);
+      const rs = await receiptsOf(pid);
+      record('RC', 'I1 the next Mark reviewed succeeds and names the new report', rs.length === 1 && rs[0].linked_report_ids.includes(fresh) && rs[0].text === 'FICTIONAL draft note', rs.map((e) => [e.linked_report_ids, e.text]));
+      record('RC', 'I1 only the POSTs under test reached the desk', onlyPosts(i0, [rv(pid)]), writesSince(i0).map((e) => `${e.method} ${e.path}`));
+      proxy.reset();
+      await tab.close();
+    }
+
+    // I2: the desk wrote, the answer was lost; Try again answers "unchanged".
+    {
+      const pid = take();
+      const tab = await openTab(1440);
+      await openCheckIn(tab, pid);
+      await waitFor(tab, `${markBtn} && !${markBtn}.disabled`, 8000);
+      proxy.set({ dropPost: '/reviewed' });
+      const i0 = proxy.log.length;
+      await clickMark(tab);
+      await waitFor(tab, "/did not answer/.test((document.querySelector('[data-key=\"ci-msg\"]') || {}).textContent || '')", 12000);
+      const first = await msg(tab);
+      const wrote = (await receiptsOf(pid)).length;
+      proxy.set({ dropPost: '' });
+      await tab.evalJs("document.querySelector('[data-key=\"ci-retry\"]').click(); true");
+      await waitFor(tab, "/Already reviewed at/.test((document.querySelector('[data-key=\"ci-msg\"]') || {}).textContent || '')", 8000);
+      const second = await msg(tab);
+      const posts = proxy.log.slice(i0).filter((e) => e.method === 'POST' && e.path === rv(pid)).map((e) => JSON.parse(e.body).request_id);
+      const rs = await receiptsOf(pid);
+      evidence.rc_i2 = { first, wrote, second, request_ids: posts, receipts: rs.length };
+      record('RC', 'I2 a lost answer says "Not marked: the desk did not answer." (the desk did write)', /^Not marked: the desk did not answer\./.test(first || '') && wrote === 1, evidence.rc_i2);
+      record('RC', 'I2 Try again resends the same request and is answered "Already reviewed"; exactly one receipt', /^Already reviewed at /.test(second || '') && posts.length >= 2 && posts.every((x) => x === posts[0]) && rs.length === 1, evidence.rc_i2);
+      record('RC', 'I2 only the POSTs under test reached the desk', onlyPosts(i0, [rv(pid)]), writesSince(i0).map((e) => `${e.method} ${e.path}`));
+      await tab.close();
+    }
+
+    // I4: 503 (or no network): nothing written, the note kept, Try again offered.
+    {
+      const pid = take();
+      const tab = await openTab(1440);
+      await openCheckIn(tab, pid);
+      await waitFor(tab, `${markBtn} && !${markBtn}.disabled`, 8000);
+      await tab.evalJs("(() => { const t = document.querySelector('[data-key=\"ci-note\"]'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(t, 'FICTIONAL kept note'); t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
+      proxy.set({ failPost: '/reviewed' });
+      const i0 = proxy.log.length;
+      await clickMark(tab);
+      await waitFor(tab, "/did not answer/.test((document.querySelector('[data-key=\"ci-msg\"]') || {}).textContent || '')", 8000);
+      const st = { said: await msg(tab), retry: await tab.evalJs("Boolean(document.querySelector('[data-key=\"ci-retry\"]'))"), note: await tab.evalJs("document.querySelector('[data-key=\"ci-note\"]').value"), receipts: (await receiptsOf(pid)).length, forwarded: proxy.log.slice(i0).filter((e) => e.method === 'POST' && e.forwarded !== false).length };
+      evidence.rc_i4 = st;
+      record('RC', 'I4 a 503: "Not marked", Try again, zero writes, the note kept', /^Not marked: the desk did not answer\./.test(st.said || '') && st.retry && st.note === 'FICTIONAL kept note' && st.receipts === 0 && st.forwarded === 0, st);
+      proxy.reset();
+      await tab.close();
+    }
+
+    // I5: the online desk's session expires before the click.
+    if (!DEV) {
+      const pid = take();
+      proxy.set({ session: 'hosted' });
+      const tab = await openTab(1440);
+      await openCheckIn(tab, pid);
+      await waitFor(tab, `${markBtn} && !${markBtn}.disabled`, 8000);
+      proxy.set({ signedOut: true });
+      const i0 = proxy.log.length;
+      await clickMark(tab);
+      await sleep(3000);
+      const st = { where: await tab.evalJs('location.pathname'), rows: await tab.evalJs("Boolean(document.querySelector('.ci-row'))"), forwarded: writesSince(i0).filter((e) => e.status !== 401).length };
+      proxy.reset();
+      st.receipts = (await receiptsOf(pid)).length;
+      st.item_count = ((await rowOf(pid)).changes || {}).item_count;
+      evidence.rc_i5 = st;
+      record('RC', 'I5 an expired session goes to sign-in, writes nothing, protected data leaves the screen; the project is still unreviewed', st.where === '/login' && !st.rows && st.forwarded === 0 && st.receipts === 0 && st.item_count > 0, st);
+      await tab.close();
+    }
+
+    // I6: the tab closed with the check-in open and a note typed.
+    {
+      const pid = take();
+      const i0 = proxy.log.length;
+      const tab = await openTab(1440);
+      await openCheckIn(tab, pid);
+      await tab.evalJs("(() => { const t = document.querySelector('[data-key=\"ci-note\"]'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(t, 'FICTIONAL never sent'); t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
+      await tab.close();
+      await sleep(500);
+      const back = await openTab(1440);
+      await openCheckIn(back, pid);
+      const again = await waitFor(back, `${markBtn} && !${markBtn}.disabled`, 8000);
+      record('RC', 'I6 closing the tab writes nothing; on return the same unreviewed state (a missing chunk is F3)', writesSince(i0).length === 0 && (await receiptsOf(pid)).length === 0 && again !== null, writesSince(i0).map((e) => `${e.method} ${e.path}`));
+      await back.close();
+    }
+
+    // R1: Undo within six seconds puts back the previous review.
+    {
+      const pid = take();
+      const tab = await openTab(1440);
+      await openCheckIn(tab, pid);
+      await waitFor(tab, `${markBtn} && !${markBtn}.disabled`, 8000);
+      const before = (await detail(pid)).project.review;
+      const i0 = proxy.log.length;
+      await clickMark(tab);
+      await waitFor(tab, "document.querySelector('[data-key=\"undo-review\"]')", 6000);
+      await tab.evalJs("document.querySelector('[data-key=\"undo-review\"]').click(); true");
+      await waitFor(tab, `${markBtn}`, 8000);
+      await sleep(500);
+      const d = await detail(pid);
+      const j = d.journal.slice().reverse().filter((e) => e.type === 'review_completed' || (e.type === 'note' && e.text === 'Reopened for review'));
+      const st = { before, after: d.project.review, journal: j.map((e) => [e.type, e.text]), button: await tab.evalJs(`Boolean(${markBtn})`) };
+      evidence.rc_r1 = st;
+      record('RC', 'R1 Undo restores the previous review; the receipt stays, then "Reopened for review"; changes count again', JSON.stringify(st.after) === JSON.stringify(st.before) && st.journal.length === 2 && st.journal[0][0] === 'review_completed' && st.journal[1][1] === 'Reopened for review' && st.button, st);
+      record('RC', 'R1 only the mark and its Undo reached the desk', onlyPosts(i0, [rv(pid), `${rv(pid)}/undo`]), writesSince(i0).map((e) => `${e.method} ${e.path}`));
+      await tab.close();
+    }
+    proxy.reset();
+  }
 } finally {
   await b.kill();
   await proxy.close();

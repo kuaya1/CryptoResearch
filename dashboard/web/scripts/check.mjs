@@ -105,7 +105,10 @@ try {
     ['updates', '#/updates', "document.querySelector('.lg-updates *')"],
     ['explorer', '#/explorer', "document.querySelector('.lg-explorer *')"],
     ['new', '#/new', "document.querySelector('.lg-new *, .lg-intake *')"],
+    ['forensics', `#/project/${P.relay}/forensics`, "document.querySelector('.fx-cps')"],
+    ['forensics empty', `#/project/${P.none}/forensics`, "document.querySelector('.fx-empty')"],
   ];
+  const FX_PAGES = PAGES.slice(-2);
   const NAMES = `(() => {
     const out = [];
     for (const el of document.querySelectorAll('button, a[href], input:not([type=hidden]), select, textarea, [role=button], [role=tab], [role=menuitem]')) {
@@ -320,6 +323,93 @@ try {
       if (low && low.length) fail(`${theme} ${name}: text below contrast`, low.slice(0, 4));
     }
     await ph.close();
+  }
+
+  // ---- Forensics: the entry flow, keyboard and focus, phones, contrast ----------------
+  {
+    // Watchlist -> inspector -> project page -> Forensics, by clicks.
+    const tab = await tabFor(1440);
+    await go(tab, '#/watchlist', "document.querySelector('.wl-table tbody tr')");
+    const before = tab.writes.length;
+    await tab.evalJs(`(() => { const n = document.querySelector('[data-key="pname-${P.relay}"]'); if (n) n.click(); return Boolean(n); })()`);
+    const insp = await tab.evalJs(`__wait(() => /p=${P.relay}/.test(location.hash) && [...document.querySelectorAll('.inspector a, .inspector button')].some((x) => /Claude Brief/.test(x.textContent)), 8000)`);
+    ok(Boolean(insp), 'forensics flow: the watchlist row opens the inspector');
+    await tab.evalJs("(() => { const a = [...document.querySelectorAll('.inspector a, .inspector button')].find((x) => /Claude Brief/.test(x.textContent)); if (a) a.click(); return Boolean(a); })()");
+    const page = await tab.evalJs("__wait(() => document.querySelector('.ov-verdict') && document.querySelector('[data-key=\"tab-forensics\"]'), 8000)");
+    ok(Boolean(page), 'forensics flow: the inspector\'s Brief link opens the project page with a Forensics section');
+    await tab.evalJs("(() => { const a = document.querySelector('[data-key=\"tab-forensics\"]'); if (a) a.click(); return Boolean(a); })()");
+    const drawn = await tab.evalJs("__wait(() => document.querySelector('.fx-cps') && /forensics/.test(location.hash), 8000)");
+    ok(Boolean(drawn), 'forensics flow: the project page\'s Forensics tab draws the timeline');
+    ok(tab.writes.length === before, 'forensics flow: opening it wrote nothing', tab.writes.slice(before));
+    // The order the brief sets: assessment, concern and counterevidence, states, timeline, conditions, details.
+    const order = await tab.evalJs("[...document.querySelectorAll('.fx > *')].map((n) => n.className.split(' ').filter((c) => /^fx-(assess|keys|card|details|actions)$/.test(c)).join(' ') + ':' + ((n.querySelector('.fx-h') || {}).textContent || ''))");
+    report.forensics_order = order;
+    ok(/assess/.test(order[0] || '') && /keys/.test(order[1] || '') && /Current states/.test(order[2] || '') && /Resilience timeline/.test(order[3] || '') && /outlook/.test(order[4] || '') && /details/.test(order[5] || ''), 'forensics: sections in the brief\'s order', order);
+    // Observed outcomes and conditional estimates are drawn apart; no percentage.
+    const facts = await tab.evalJs("({ past: document.querySelectorAll('.fx-cp.is-past').length, cond: document.querySelectorAll('.fx-cp-cond li').length, label: /not a calibrated probability/.test(document.querySelector('.fx-legend').textContent), pct: /\\d+(\\.\\d+)?\\s?% (chance|probability)/i.test(document.querySelector('.fx').textContent), unknownZero: [...document.querySelectorAll('.fx-exit-cost')].some((n) => n.textContent.trim() === '0.00%') })");
+    report.forensics_facts = facts;
+    ok(facts.past >= 2 && facts.label && !facts.pct, 'forensics: past checkpoints drawn, conditional label shown, no probability', facts);
+    // Keyboard: the Sources fold opens from an evidence chip and focus lands on the source.
+    await tab.evalJs("document.querySelector('.fx-src-cap').focus(); true");
+    await tab.key('Enter', { vk: 13 });
+    await sleep(500);
+    const focused = await tab.evalJs("(document.activeElement && document.activeElement.id) || ''");
+    ok(/^fx-src-/.test(focused) && await tab.evalJs("document.querySelector('[data-key=\"fx-sources\"]').open"), 'forensics: an evidence chip opens its captured source with focus', { focused });
+    // The import dialog (a project with an audit open): Escape closes it and
+    // focus returns to its button.
+    const emberFx = (index.projects.find((p) => /Ember/.test(p.name)) || {}).project_id;
+    await go(tab, `#/project/${emberFx}/forensics`, "document.querySelector('[data-key=\"fx-import\"]')");
+    const hasImport = await tab.evalJs("Boolean(document.querySelector('[data-key=\"fx-import-chal\"], [data-key=\"fx-import\"]'))");
+    ok(hasImport, 'forensics: an open audit offers Import');
+    if (hasImport) {
+      await tab.evalJs("(document.querySelector('[data-key=\"fx-import\"]') || document.querySelector('[data-key=\"fx-import-chal\"]')).focus(); true");
+      await tab.key('Enter', { vk: 13 });
+      await sleep(400);
+      ok(await tab.evalJs("Boolean(document.querySelector('dialog.fx-dialog[open]'))"), 'forensics: Import opens its dialog');
+      await tab.key('Escape', { vk: 27 });
+      await sleep(400);
+      ok(await tab.evalJs("!document.querySelector('dialog.fx-dialog[open]') && /fx-import/.test((document.activeElement || {}).dataset ? document.activeElement.dataset.key : '')"), 'forensics: Escape closes the dialog and focus returns to its button');
+    }
+    ok(tab.writes.length === before, 'forensics: reading, folding and closing wrote nothing', tab.writes.slice(before));
+    await tab.close();
+  }
+  for (const [w, mobile] of [[720, false], [640, false], [390, true], [360, true], [320, true]]) {
+    const tab = await tabFor(w, { mobile, height: mobile ? 780 : 450, scale: mobile ? 2 : 2 });
+    for (const [name, url, ready] of FX_PAGES) {
+      await go(tab, url, ready);
+      await sleep(500);
+      const over = await tab.evalJs('document.documentElement.scrollWidth - innerWidth');
+      report.overflow[`${w} ${name}`] = over;
+      if (over > 1) fail(`${w}px ${name}: the page scrolls sideways by ${over}px`);
+    }
+    if (mobile) {
+      const stacked = await tab.evalJs("(() => { const cps = [...document.querySelectorAll('.fx-cp')]; if (cps.length < 2) return null; const a = cps[0].getBoundingClientRect(), b = cps[1].getBoundingClientRect(); return b.top >= a.bottom - 1; })()");
+      if (stacked === false) fail(`${w}px forensics: the checkpoint cards do not stack`);
+    }
+    await tab.close();
+  }
+  for (const theme of ['light', 'dark']) {
+    for (const w of [1440, 390]) {
+      const tab = await tabFor(w, { theme });
+      for (const [name, url, ready] of FX_PAGES) {
+        await go(tab, url, ready);
+        await tab.evalJs("document.querySelectorAll('.fx details').forEach((d) => { d.open = true; }); true");
+        await sleep(600);
+        const low = await tab.evalJs(CONTRAST.replace('r.top > innerHeight * 3', 'r.top > innerHeight * 40'));
+        report.contrast[`${theme} ${w} ${name}`] = low;
+        if (low && low.length) fail(`${theme} ${w}px ${name}: text below contrast`, low.slice(0, 4));
+      }
+      await tab.close();
+    }
+  }
+  {
+    const tab = await tabFor(1440);
+    await tab.media([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
+    await go(tab, FX_PAGES[0][1], FX_PAGES[0][2]);
+    await sleep(600);
+    const running = await tab.evalJs("document.getAnimations().filter((a) => a.playState === 'running' && (a.effect && a.effect.getTiming().duration > 0)).length");
+    if (running) fail('forensics: animations run with reduced motion', running);
+    await tab.close();
   }
 } finally {
   await b.kill();

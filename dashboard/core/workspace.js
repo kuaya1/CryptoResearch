@@ -77,6 +77,31 @@ const DEFAULT_SETTINGS = {
     alert_days: 14,
     packet_mode: 'monitor',
   },
+  // Forensics & Resilience (forensics.js, forensic-monitor.js). preferences
+  // are Eric's own screening choices, never universal rules: each new
+  // forensic receipt freezes the values in force. monitor runs only for
+  // projects whose monitoring Eric turned on, with the targets he approved.
+  forensics: {
+    preferences: {
+      exit_position_usd: 500,
+      exit_cost_limit_pct: 5,
+      delivery_window_days: 60,
+      volume_review_fraction: 0.5,
+      reported_liquidity_review_usd: null,
+      volume_to_liquidity_review_ratio: null,
+    },
+    monitor: {
+      enabled: true,
+      product_interval_hours: 6,
+      repo_interval_hours: 24,
+      timeout_seconds: 10,
+      max_bytes: 262144,
+      max_projects_per_run: 20,
+      monthly_request_budget: 3000,
+      backoff_initial_minutes: 10,
+      backoff_max_minutes: 720,
+    },
+  },
   rank_sources: {
     coingecko: { enabled: true, note: 'CoinGecko market-cap rank, from the same /coins/markets call as prices.' },
     coinmarketcap: { enabled: false, note: 'Optional. Needs a CoinMarketCap API key in ~/.cryptoresearch/secrets.json (coinmarketcap_api_key) and a CoinMarketCap ID on each project.' },

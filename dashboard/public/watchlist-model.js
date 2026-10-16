@@ -519,6 +519,28 @@ export function nextToReview(order, projects, pid) {
   }
   return null;
 }
+// The reports a list row names, one per model, as Mark reviewed sends them
+// (`seen`): each model's latest eligible report, or null where the row has
+// none (no report, or only one without text, which the desk never selects).
+export function seenFromRow(p) {
+  const out = {};
+  for (const m of ['claude', 'chatgpt', 'gemini']) {
+    const s = p && p.providers ? p.providers[m] : null;
+    out[m] = s && s.report_id && !s.broken && !s.needs_text && s.latest_eligible !== false ? s.report_id : null;
+  }
+  return out;
+}
+
+// The words for a review the desk refused because a newer report arrived
+// (409 newer_report): each model, and when its report was saved.
+export function newerReportWords(newer, when = (s) => s) {
+  const labels = { claude: 'Claude', chatgpt: 'ChatGPT', gemini: 'Gemini' };
+  const parts = (Array.isArray(newer) ? newer : []).map((n) => (n.report_id
+    ? `A newer ${labels[n.provider] || n.provider} report arrived while you were reading${n.saved_at ? ` (saved ${when(n.saved_at)})` : ''}.`
+    : `The ${labels[n.provider] || n.provider} report you were reading is no longer current.`));
+  return `${parts.length ? parts.join(' ') : 'A newer report arrived while you were reading.'} Nothing was marked.`;
+}
+
 // R counts only as a plain key, outside fields, with no dialog or menu open,
 // on a project with something to review.
 export function reviewKeyAllowed(e, { busy = false, project = null } = {}) {

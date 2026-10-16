@@ -1,0 +1,8 @@
+{
+  "schema_version": "cr.template-lock.v1",
+  "note": "The published forensic prompt texts, pinned. Never edit one in place: publish the next version (forensic-prompt.v2.md) and pin it here.",
+  "sha256": {
+    "forensic-prompt.v1.md": "0d2447b2f17c1fea40b77a088dc4a53871b1420f6d2d7629d5a1739480e819e7",
+    "forensic-challenge.v1.md": "a35dc8fd5a21f2e1adac996163db562ad9b4983d8bed98e2df8c1a3f2725042b"
+  }
+}

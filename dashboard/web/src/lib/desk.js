@@ -70,6 +70,7 @@ async function parse(res) {
     err.code = body && body.code;
     err.saved = body && body.saved;
     err.status = res.status;
+    if (body && Array.isArray(body.newer)) err.newer = body.newer;
     err.retryAfterMs = body && typeof body.retry_after_ms === 'number' ? body.retry_after_ms : (Number(res.headers.get('retry-after')) * 1000 || null);
     throw err;
   }

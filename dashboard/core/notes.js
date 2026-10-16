@@ -277,6 +277,7 @@ module.exports = {
   CORROBORATION,
   setConvictionNote,
   addJournal,
+  journalEntry,
   loadJournal,
   addEvent,
   updateEventStatus,

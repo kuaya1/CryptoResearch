@@ -80,6 +80,44 @@
   .digest .faint { color: var(--text-2); }
 }
 
+/* The check-in under the line: a row per model (then, now, between, what
+   moved), rows ruled apart, never boxed inside the band. */
+.digest { flex-wrap: wrap; }
+.digest:has(.dg-d[open]) { align-items: flex-start; }
+.dg-d .ci { display: grid; gap: 10px; margin-top: 10px; white-space: normal; }
+.ci-head { margin: 0; color: var(--text-2); }
+.ci-head.is-inferred { color: var(--warn); }
+.ci-lost { margin: 0; color: var(--warn); }
+.ci-rows { list-style: none; margin: 0; padding: 0; }
+.ci-row { padding: 10px 0; border-top: 1px solid var(--separator); min-width: 0; }
+.ci-model { margin: 0 0 4px; }
+.ci-same { color: var(--text-2); }
+.ci-newer { margin: 0 0 6px; font-weight: 500; color: var(--text); }
+.ci-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.ci-side { min-width: 0; }
+.ci-k { display: block; font-size: var(--fs-caption); color: var(--text-3); }
+.ci-rep, .ci-grade, .ci-none { margin: 0; overflow-wrap: anywhere; }
+.ci-none { color: var(--text-2); }
+.ci-between, .ci-nc { margin: 6px 0 0; color: var(--text-2); }
+.ci-moved { display: grid; gap: 8px; margin: 8px 0 0; }
+.ci-mv { display: grid; grid-template-columns: 150px repeat(2, minmax(0, 1fr)); gap: 2px 12px; }
+.ci-mv dt { color: var(--text-3); }
+.ci-mv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.ci-mv dd:only-of-type { grid-column: 2 / -1; }
+.ci-t { display: block; }
+.ci-cats { margin: 0; padding-left: 16px; }
+.ci-price, .ci-notes { margin: 0; color: var(--text-2); }
+.ci-note { display: grid; gap: 4px; color: var(--text-2); }
+.ci-note textarea { width: 100%; min-height: 56px; padding: 6px 8px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--control-border); border-radius: var(--r-field); resize: vertical; }
+.ci .dg-all { margin: 0; margin-left: 0; }
+.dg-msg { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; color: var(--text); }
+.dg-msg.is-bad { color: var(--neg); }
+@media (max-width: 767.98px) {
+  .ci-mv { grid-template-columns: minmax(0, 1fr); }
+  .ci-mv dd:only-of-type { grid-column: auto; }
+  .dg-msg { padding: 2px 6px 4px 0; }
+}
+
 /* ---- model tabs on the project page ---- */
 /* The model selector: the same segmented control as the inspector's. */
 .ptabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; padding: 3px; margin-bottom: 16px; border-radius: var(--r-lg); background: var(--surface-track); }

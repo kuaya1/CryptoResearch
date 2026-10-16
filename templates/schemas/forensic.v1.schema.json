@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cr.forensic.v1",
+  "title": "CryptoResearch forensic assessment, version 1",
+  "description": "The JSON block the investigator (Claude) ends a cr-forensic-prompt@1 assessment with. The five binding fields must name the audit, project, prompt version, role and model exactly. Findings keep observation, inference and hypothesis apart; wallet findings keep launch acquisitions, present holdings and inferred common control apart; unknown is null with the reason, never zero; forecast.probabilities stays null (cr-probability-gate@1 registers no method). The desk computes deadlines, exit estimates, scenarios and outcome states itself (core/forensic-model.js); it never edits this block.",
+  "type": "object",
+  "required": ["format", "forensic_audit_id", "project_id", "prompt_version", "role", "model", "plain_assessment", "findings", "sources"],
+  "properties": {
+    "format": { "const": "cr.forensic.v1" },
+    "forensic_audit_id": { "type": "string", "pattern": "^fa_\\d{4}-\\d{2}-\\d{2}T\\d{6}Z_[a-z2-9]{5}$" },
+    "project_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "prompt_version": { "const": "cr-forensic-prompt@1" },
+    "role": { "const": "investigator" },
+    "model": { "const": "claude" },
+    "model_version": { "type": ["string", "null"] },
+    "assessment_as_of": { "type": ["string", "null"], "description": "When the assessment was finished (ISO 8601); never after the save. It is the timeline's frozen origin." },
+    "plain_assessment": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "evidence_coverage": {
+      "type": "object",
+      "properties": {
+        "areas": {
+          "type": "object",
+          "properties": {
+            "product": { "$ref": "#/$defs/coverage" },
+            "code": { "$ref": "#/$defs/coverage" },
+            "controls": { "$ref": "#/$defs/coverage" },
+            "allocations": { "$ref": "#/$defs/coverage" },
+            "wallets": { "$ref": "#/$defs/coverage" },
+            "liquidity": { "$ref": "#/$defs/coverage" },
+            "claims": { "$ref": "#/$defs/coverage" }
+          }
+        },
+        "notes": { "type": ["string", "null"] }
+      }
+    },
+    "strongest_concern": { "$ref": "#/$defs/findingRef" },
+    "strongest_counterevidence": { "$ref": "#/$defs/findingRef" },
+    "explanations_compared": { "type": "array", "items": { "type": "object", "required": ["explanation"], "properties": { "explanation": { "type": "string" }, "supported_by": { "type": "array", "items": { "type": "string" } }, "weakened_by": { "type": "array", "items": { "type": "string" } }, "assessment": { "enum": ["more_likely", "less_likely", "cannot_tell"] } } } },
+    "sources": { "type": "array", "items": { "$ref": "#/$defs/source" } },
+    "claims": { "type": "array", "items": { "type": "object", "required": ["claim_id", "claim"], "properties": { "claim_id": { "type": "string" }, "claim": { "type": "string" }, "made_by_source_id": { "type": ["string", "null"] } } } },
+    "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+    "category_grades": {
+      "type": "object",
+      "properties": {
+        "product_reality": { "$ref": "#/$defs/grade" },
+        "disclosure_consistency": { "$ref": "#/$defs/grade" },
+        "control_transparency": { "$ref": "#/$defs/grade" },
+        "incentive_alignment": { "$ref": "#/$defs/grade" },
+        "liquidity_resilience": { "$ref": "#/$defs/grade" },
+        "delivery_continuity": { "$ref": "#/$defs/grade" }
+      }
+    },
+    "liquidity": { "type": "object", "properties": { "observations": { "type": "array", "items": { "$ref": "#/$defs/liquidityObservation" } }, "notes": { "type": ["string", "null"] } } },
+    "operational": { "type": "object", "properties": { "observations": { "type": "array", "items": { "type": "object", "properties": { "obs_id": { "type": "string" }, "check": { "type": "string" }, "url": { "type": ["string", "null"] }, "observed_at": { "type": ["string", "null"] }, "outcome": { "enum": ["worked", "failed", "partial", "not_tested"] }, "source_id": { "type": ["string", "null"] }, "note": { "type": ["string", "null"] } } } } } },
+    "delivery": { "type": "object", "properties": { "observations": { "type": "array", "items": { "type": "object", "properties": { "obs_id": { "type": "string" }, "repository": { "type": "string" }, "observed_at": { "type": ["string", "null"] }, "latest_commit_at": { "type": ["string", "null"] }, "latest_commit": { "type": ["string", "null"] }, "latest_release_at": { "type": ["string", "null"] }, "latest_release": { "type": ["string", "null"] }, "source_id": { "type": ["string", "null"] } } } } } },
+    "scenarios": { "type": "array", "maxItems": 6, "items": { "type": "object", "required": ["scenario"], "properties": { "scenario": { "enum": ["deterioration", "stabilization", "recovery"] }, "assumptions": { "type": ["string", "null"] }, "warning_signs": { "type": "array", "items": { "type": "string" } }, "would_invalidate": { "type": ["string", "null"] } } } },
+    "watch_items": { "type": "array", "items": { "type": "object", "required": ["signal"], "properties": { "by": { "enum": ["72h", "7d", "14d", "30d", "90d", "120d", null] }, "signal": { "type": "string" }, "worsens_if": { "type": ["string", "null"] }, "improves_if": { "type": ["string", "null"] }, "source_or_check": { "type": ["string", "null"] } } } },
+    "conditions": { "type": "object", "properties": { "worsen": { "type": "array", "items": { "type": "string" } }, "improve": { "type": "array", "items": { "type": "string" } } } },
+    "next_evidence": { "type": "array", "items": { "type": "object", "required": ["evidence"], "properties": { "evidence": { "type": "string" }, "would_change": { "type": ["string", "null"] }, "how_to_get": { "type": ["string", "null"] } } } },
+    "monitoring_targets": { "type": "object", "properties": { "product_checks": { "type": "array", "maxItems": 5, "items": { "type": "object", "required": ["url"], "properties": { "label": { "type": "string" }, "url": { "type": "string" }, "expect_status": { "type": ["integer", "null"] }, "expect_text": { "type": ["string", "null"] }, "capability": { "type": ["string", "null"] }, "source_id": { "type": ["string", "null"] } } } }, "repositories": { "type": "array", "maxItems": 3, "items": { "type": "object", "required": ["owner", "repo"], "properties": { "host": { "const": "github" }, "owner": { "type": "string" }, "repo": { "type": "string" }, "source_id": { "type": ["string", "null"] } } } } } },
+    "forecast": { "type": "object", "properties": { "probabilities": { "type": "null", "description": "Always null: no probability method is registered (cr-probability-gate@1). A figure given here is kept and never shown." } } }
+  },
+  "$defs": {
+    "coverage": { "enum": ["covered", "partial", "unknown"] },
+    "findingRef": { "type": ["object", "null"], "properties": { "finding_id": { "type": ["string", "null"] }, "statement": { "type": ["string", "null"] } } },
+    "source": {
+      "type": "object",
+      "required": ["source_id"],
+      "properties": {
+        "source_id": { "type": "string" },
+        "url": { "type": ["string", "null"] },
+        "publisher": { "type": ["string", "null"] },
+        "type": { "enum": ["primary", "chain", "repository", "secondary", "ai_summary", "other"] },
+        "retrieved_at": { "type": ["string", "null"] },
+        "event_time": { "type": ["string", "null"] },
+        "block_or_commit": { "type": ["string", "null"] },
+        "tx_signature": { "type": ["string", "null"] },
+        "excerpt": { "type": ["string", "null"] },
+        "content_sha256": { "type": ["string", "null"] }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": ["finding_id", "kind", "statement", "source_ids"],
+      "properties": {
+        "finding_id": { "type": "string" },
+        "claim_id": { "type": ["string", "null"] },
+        "area": { "enum": ["product", "code", "controls", "allocations", "wallets", "liquidity", "claims", null] },
+        "kind": { "enum": ["observation", "inference", "hypothesis"] },
+        "statement": { "type": "string", "minLength": 1 },
+        "source_ids": { "type": "array", "items": { "type": "string" } },
+        "event_time": { "type": ["string", "null"] },
+        "retrieved_at": { "type": ["string", "null"] },
+        "block_or_commit": { "type": ["string", "null"] },
+        "severity": { "enum": ["info", "low", "medium", "high", "critical", null] },
+        "confidence": { "enum": ["high", "medium", "low", null] },
+        "alternative_explanation": { "type": ["string", "null"] },
+        "missing_evidence": { "type": ["string", "null"] },
+        "would_confirm": { "type": ["string", "null"] },
+        "would_overturn": { "type": ["string", "null"] },
+        "wallet_relation": { "enum": ["launch_acquisition", "present_holding", "inferred_common_control", null] },
+        "basis": { "type": "array", "items": { "type": "string" } },
+        "discontinuation": { "enum": ["shutdown", "support_withdrawn", "reversal", null] }
+      }
+    },
+    "grade": {
+      "type": "object",
+      "properties": {
+        "score": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+        "confidence": { "enum": ["high", "medium", "low", null] },
+        "finding_ids": { "type": "array", "items": { "type": "string" } },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
+    "liquidityObservation": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "obs_id": { "type": "string" },
+        "kind": { "enum": ["executable_quote", "pool_reserves", "reported_liquidity", "volume"] },
+        "source_id": { "type": ["string", "null"] },
+        "venue": { "type": ["string", "null"] },
+        "chain": { "type": ["string", "null"] },
+        "pool": { "type": ["string", "null"] },
+        "mechanism": { "enum": ["aggregator", "constant_product", "concentrated", "stable", "orderbook", "unknown"] },
+        "route_scope": { "enum": ["aggregator", "single_venue"] },
+        "retrieved_at": { "type": ["string", "null"] },
+        "base_reserve": { "type": ["number", "null"], "description": "The project token's reserve in token units, never half a USD figure." },
+        "quote_reserve": { "type": ["number", "null"] },
+        "quote_token": { "type": ["string", "null"] },
+        "quote_usd_price": { "type": ["number", "null"] },
+        "fee_bps": { "type": ["number", "null"] },
+        "reported_liquidity_usd": { "type": ["number", "null"] },
+        "volume_24h_usd": { "type": ["number", "null"] },
+        "quote": { "type": ["object", "null"], "properties": { "sell_usd": { "type": ["number", "null"] }, "received_usd": { "type": ["number", "null"] }, "fees_usd": { "type": ["number", "null"] }, "price_impact_pct": { "type": ["number", "null"] }, "gas_usd": { "type": ["number", "null"] }, "gas_included": { "type": "boolean" }, "route": { "type": ["string", "null"] }, "no_route": { "type": "boolean" } } },
+        "method_note": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

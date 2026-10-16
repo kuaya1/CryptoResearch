@@ -4,6 +4,7 @@ import {
   h, card, table, stateText, fmtDateTime, fmtAgo, fmtSignedPct, select, field, fieldError, button, action, busy, callout, details,
   announce, tabStrip, safeSection, store, session, submissionId, jobKey, researchState, PROVIDERS, PROVIDER_LABELS,
 } from '../ui.js';
+import { seenFromRow } from '../watchlist-model.js';
 
 const TABS = [
   ['changes', 'Since last review'],
@@ -58,10 +59,10 @@ function changesTab(ctx) {
         if (!(p.changes && p.changes.item_count)) return null;
         const b = button('Mark reviewed', null, { kind: 'small', key: `reviewed-${p.project_id}` });
         b.setAttribute('aria-label', `Mark ${p.name} reviewed`);
-        b.onclick = action(b, async () => { await ctx.api.post(`/api/projects/${encodeURIComponent(p.project_id)}/reviewed`, {}); await ctx.refresh(); return true; }, `${p.name} marked reviewed`);
+        b.onclick = action(b, async () => { await ctx.api.post(`/api/projects/${encodeURIComponent(p.project_id)}/reviewed`, { seen: seenFromRow(p), request_id: submissionId() }); await ctx.refresh(); return true; }, `${p.name} marked reviewed`);
         return b;
       } },
-    ], rows, { empty: 'No projects yet.' }), { note: 'A digest only proposes what to look at. It never changes grades, reports or your headline. Mark reviewed moves your review point to now.' }));
+    ], rows, { empty: 'No projects yet.' }), { note: 'A digest only proposes what to look at. It never changes grades, reports or your headline. Mark reviewed records the reports listed for each model as the ones you reviewed.' }));
 }
 
 function projectOptions(ctx, { auto = true } = {}) {

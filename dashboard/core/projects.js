@@ -8,7 +8,7 @@ const { slugify, isProjectId, isRecordId } = require('./ids');
 const { stageProjectPrompts } = require('./prompts');
 const { safeUrl } = require('./reports');
 const { validate, loadSchema } = require('./schema');
-const { PROVIDERS } = require('./workspace');
+const { PROVIDERS, PROVIDER_LABELS } = require('./workspace');
 const { SECTORS, normalizeSector } = require('./sectors');
 const { chainInfo } = require('./chains');
 
@@ -563,20 +563,72 @@ function updateProjectFields(ws, id, fields) {
   });
 }
 
-// Your review cursor: "changes since my last review" are measured from here.
-// The cursor it replaced comes back with the result, so the page can offer to
-// undo this one step.
-function markReviewed(ws, id, { note = null } = {}) {
-  return mutateProject(ws, id, 'mark_reviewed', `Reviewed ${id}`, (p) => {
-    const previous = p.review && typeof p.review === 'object' ? { last_reviewed_at: p.review.last_reviewed_at || null, note: p.review.note || null } : null;
-    p.review = { last_reviewed_at: new Date().toISOString(), note: note || null };
-    return { previous, reviewed_at: p.review.last_reviewed_at };
+const REQUEST_ID_RE = /^[A-Za-z0-9_-]{8,80}$/;
+
+// The reports a review saw, one per model: a report ID or null (no eligible
+// report drawn for that model). Every model is named, so "nothing" is said.
+function reviewSeen(seen) {
+  if (!seen || typeof seen !== 'object' || Array.isArray(seen)) throw new OpError('INVALID', 'The reports seen are an object naming each model\'s report ID or null.');
+  const out = {};
+  for (const m of PROVIDERS) {
+    const v = seen[m] === undefined ? null : seen[m];
+    if (v !== null && !isRecordId(v)) throw new OpError('INVALID', `The ${m} report seen is not a report ID.`);
+    out[m] = v;
+  }
+  const extra = Object.keys(seen).filter((k) => !PROVIDERS.includes(k));
+  if (extra.length) throw new OpError('INVALID', `Unknown model in the reports seen: ${extra.join(', ')}.`);
+  return out;
+}
+
+const sameSeen = (a, b) => Boolean(a && b) && PROVIDERS.every((m) => (a[m] || null) === (b[m] || null));
+const reviewCopy = (r) => (r && typeof r === 'object' ? JSON.parse(JSON.stringify(r)) : null);
+
+// Mark reviewed. With `seen` (each model's report as drawn on screen) it is a
+// receipt, in one locked operation, the lock report imports also take: it is
+// refused, with nothing written, when a model's latest eligible report is not
+// the one seen (NEWER_REPORT); the same request again, or the same reports as
+// the review on file, answer "unchanged" with that receipt; otherwise a
+// review_completed journal entry names the reports seen and keeps the note.
+// Without `seen` (the connector, the CLI) only the clock is recorded, as
+// before, with no receipt. The review it replaced comes back with the result,
+// so the page can offer to undo this one step.
+function markReviewed(ws, id, { seen = null, note = null, request_id = null } = {}) {
+  const text = typeof note === 'string' && note.trim() ? note.trim().slice(0, 2000) : null;
+  if (seen === null || seen === undefined) {
+    return mutateProject(ws, id, 'mark_reviewed', `Reviewed ${id}`, (p) => {
+      const previous = reviewCopy(p.review);
+      p.review = { last_reviewed_at: new Date().toISOString(), note: text };
+      return { status: 'reviewed', previous, reviewed_at: p.review.last_reviewed_at, receipt_id: null };
+    });
+  }
+  const want = reviewSeen(seen);
+  if (request_id !== null && (typeof request_id !== 'string' || !REQUEST_ID_RE.test(request_id))) throw new OpError('INVALID', 'The request ID is 8 to 80 letters, digits, - or _.');
+  return mutateProject(ws, id, 'mark_reviewed', `Reviewed ${id}`, (p, op) => {
+    const { loadReports } = require('./reports');
+    const { latestByProvider } = require('./compare');
+    const latest = latestByProvider(loadReports(ws, id));
+    const moved = PROVIDERS.filter((m) => (latest[m] ? latest[m].report_id : null) !== want[m]);
+    if (moved.length) {
+      const newer = moved.map((m) => ({ provider: m, seen: want[m], report_id: latest[m] ? latest[m].report_id : null, saved_at: latest[m] ? latest[m].meta.imported_at || null : null }));
+      const words = newer.map((n) => (n.report_id ? `a newer ${PROVIDER_LABELS[n.provider]} report (${n.report_id}, saved ${n.saved_at || 'at an unknown time'})` : `no current ${PROVIDER_LABELS[n.provider]} report (the one you saw is no longer current)`));
+      throw new OpError('NEWER_REPORT', `Not marked: there is ${words.join(' and ')}. Nothing was marked.`, { newer });
+    }
+    const cur = p.review && typeof p.review === 'object' ? p.review : null;
+    if (cur && cur.receipt_id && ((request_id && cur.request_id === request_id) || sameSeen(cur.seen, want))) {
+      return { status: 'unchanged', receipt_id: cur.receipt_id, reviewed_at: cur.last_reviewed_at, seen: cur.seen };
+    }
+    const previous = reviewCopy(cur);
+    const entry = require('./notes').journalEntry(ws, op, id, { type: 'review_completed', text, linked_report_ids: PROVIDERS.map((m) => want[m]).filter(Boolean) });
+    p.review = { last_reviewed_at: entry.created_at, note: text, seen: want, receipt_id: entry.entry_id, request_id: request_id || null };
+    return { status: 'reviewed', previous, reviewed_at: entry.created_at, receipt_id: entry.entry_id, seen: want };
   });
 }
 
-// Undo of one mark-reviewed: puts back the cursor it replaced (the same
-// field, the same shape; nothing else changes), and only while the cursor is
-// still the one that mark set, so a later review is never undone.
+// Undo of one mark-reviewed: puts back the review it replaced (its cursor,
+// note and receipt; nothing else changes), and only while the review on file
+// is still the one that mark set, so a later review is never undone. The
+// receipt being undone stays (it is true that you looked); a "Reopened for
+// review" note naming the same reports follows it in the journal.
 function restoreReview(ws, id, { previous = null, expect = null } = {}) {
   if (typeof expect !== 'string' || Number.isNaN(Date.parse(expect))) throw new OpError('INVALID', 'Undo needs the review time it undoes.');
   let restore = null;
@@ -585,12 +637,26 @@ function restoreReview(ws, id, { previous = null, expect = null } = {}) {
     const at = previous.last_reviewed_at === undefined ? null : previous.last_reviewed_at;
     if (at !== null && (typeof at !== 'string' || Number.isNaN(Date.parse(at)) || Date.parse(at) > Date.parse(expect))) throw new OpError('INVALID', 'The earlier review time must be a time before the review it undoes.');
     restore = { last_reviewed_at: at, note: typeof previous.note === 'string' ? previous.note.slice(0, 2000) : null };
+    if (previous.receipt_id !== undefined && previous.receipt_id !== null) {
+      if (!isRecordId(previous.receipt_id)) throw new OpError('INVALID', 'The earlier review\'s receipt is not a record ID.');
+      if (previous.request_id !== undefined && previous.request_id !== null && (typeof previous.request_id !== 'string' || !REQUEST_ID_RE.test(previous.request_id))) throw new OpError('INVALID', 'The earlier review\'s request ID is not valid.');
+      Object.assign(restore, { seen: reviewSeen(previous.seen), receipt_id: previous.receipt_id, request_id: previous.request_id || null });
+    }
   }
-  return mutateProject(ws, id, 'restore_review', `Undo review ${id}`, (p) => {
+  return mutateProject(ws, id, 'restore_review', `Undo review ${id}`, (p, op) => {
     const current = p.review && p.review.last_reviewed_at;
-    if (current !== expect) throw new OpError('CONFLICT', 'The review mark changed since; nothing was undone.');
+    if (current !== expect) throw new OpError('CONFLICT', 'A later review exists; nothing was undone.');
+    if (restore && restore.receipt_id) {
+      const receipt = op.readJson(`projects/${id}/journal/${restore.receipt_id}.json`, null);
+      if (!receipt || receipt.type !== 'review_completed') throw new OpError('INVALID', `No review receipt "${restore.receipt_id}" to put back.`);
+    }
+    const undone = p.review;
     p.review = restore;
-    return { restored: restore };
+    let reopened = null;
+    if (undone && undone.receipt_id) {
+      reopened = require('./notes').journalEntry(ws, op, id, { type: 'note', text: 'Reopened for review', linked_report_ids: PROVIDERS.map((m) => (undone.seen || {})[m]).filter(Boolean) }).entry_id;
+    }
+    return { restored: restore, reopened_entry_id: reopened };
   });
 }
 

@@ -216,10 +216,10 @@ test('connector: Claude discovers the sign-in, registers, gets the passphrase co
   const note = await req(d.port, { method: 'POST', path: '/mcp', headers: { 'content-type': 'application/json', authorization: `Bearer ${c.access}` }, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) });
   assert.equal(note.status, 202);
   const list = await rpc(d, c.access, 'tools/list', {});
-  assert.deepEqual(list.json.result.tools.map((x) => x.name).sort(), ['add_account', 'add_project', 'archive_project', 'cancel_research', 'compare_reports', 'desk_status', 'find_projects', 'get_report', 'get_research', 'list_accounts', 'pending_research', 'portfolio_overview', 'record_transaction', 'restore_project', 'save_report', 'save_research_draft', 'start_research', 'update_project_identity']);
+  assert.deepEqual(list.json.result.tools.map((x) => x.name).sort(), ['add_account', 'add_project', 'archive_project', 'cancel_research', 'compare_reports', 'desk_status', 'find_projects', 'get_forensic_audit', 'get_report', 'get_research', 'list_accounts', 'pending_forensics', 'pending_research', 'portfolio_overview', 'record_transaction', 'restore_project', 'save_forensic_draft', 'save_forensic_report', 'save_report', 'save_research_draft', 'start_forensic_audit', 'start_research', 'update_project_identity']);
   // ChatGPT asks to confirm every tool without readOnlyHint: reads are marked read-only.
   const readOnly = list.json.result.tools.filter((x) => x.annotations && x.annotations.readOnlyHint).map((x) => x.name).sort();
-  assert.deepEqual(readOnly, ['compare_reports', 'desk_status', 'find_projects', 'get_report', 'get_research', 'list_accounts', 'pending_research', 'portfolio_overview']);
+  assert.deepEqual(readOnly, ['compare_reports', 'desk_status', 'find_projects', 'get_forensic_audit', 'get_report', 'get_research', 'list_accounts', 'pending_forensics', 'pending_research', 'portfolio_overview']);
   assert.equal((await req(d.port, { method: 'GET', path: '/mcp', headers: { authorization: `Bearer ${c.access}` } })).status, 405);
   // A forged or stale token is refused with invalid_token.
   const bad = await req(d.port, { method: 'POST', path: '/mcp', headers: { 'content-type': 'application/json', authorization: 'Bearer forged-token-forged-token-forged' }, body: '{}' });

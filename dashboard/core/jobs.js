@@ -7,6 +7,8 @@
 //   screening  GoPlus contract flags of verified contracts  weekly per project (screening.js); a contract change at once
 //   wallets   read-only sync of tracked wallet addresses  every wallet_sync.interval_minutes per network, or when
 //             asked (walletsync.js); only with a tracked wallet and an Alchemy key
+//   forensics opt-in product checks and repository reads, and checkpoint outcomes that came due
+//             (forensic-monitor.js); only for projects whose monitoring Eric turned on; never a model call
 //   research  run queued research jobs (explicit requests or configured schedules only)
 //   snapshot  daily portfolio snapshot                   once per day (America/New_York)
 //   reviews   daily review findings                      once per day
@@ -25,7 +27,7 @@ const { ymdInTz } = require('./dates');
 const JOB_STATE_REL = 'logs/jobs-state.json';
 const JOB_LOG_REL = 'logs/jobs.jsonl';
 const FINDINGS_REL = 'logs/review-findings.json';
-const JOB_NAMES = ['requests', 'inbox', 'market', 'fundamentals', 'screening', 'wallets', 'research', 'snapshot', 'reviews', 'backup', 'offsite'];
+const JOB_NAMES = ['requests', 'inbox', 'market', 'fundamentals', 'screening', 'wallets', 'forensics', 'research', 'snapshot', 'reviews', 'backup', 'offsite'];
 const DAILY = new Set(['snapshot', 'reviews', 'backup', 'offsite']);
 const OK_STATUSES = new Set(['ok', 'noop', 'attention', 'skipped', 'partial', 'busy', 'backoff', 'budget_paused', 'not_due']);
 
@@ -74,6 +76,14 @@ function isDue(ws, name, state, now = Date.now(), opts = {}) {
       // while Alchemy's rate limit, a key refusal or a used-up plan runs.
       try {
         return require('./walletsync').isDue(ws, now);
+      } catch (_) {
+        return false;
+      }
+    case 'forensics':
+      // Closed without a monitored project, in a restored copy, and while
+      // GitHub's rate limit or a failure backoff runs.
+      try {
+        return require('./forensic-monitor').isDue(ws, now);
       } catch (_) {
         return false;
       }
@@ -169,6 +179,11 @@ async function runJobBody(ws, name, trigger) {
       // Its own lease, gate, backoff and compute-unit budget are inside refresh().
       const r = await require('./walletsync').refresh(ws, { trigger });
       return { status: r.status === 'not_configured' || r.status === 'held' ? 'skipped' : r.status, summary: r.message, error: r.status === 'failed' ? r.message : null };
+    }
+    case 'forensics': {
+      // Its own lease, gate, backoff and budget are inside refresh().
+      const r = await require('./forensic-monitor').refresh(ws, { trigger });
+      return { status: r.status === 'held' ? 'skipped' : r.status, summary: r.message, error: r.status === 'failed' ? r.message : null };
     }
     case 'research': {
       const r = await require('./research').runDueJobs(ws, { trigger });

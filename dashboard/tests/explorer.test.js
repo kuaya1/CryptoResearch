@@ -1166,8 +1166,10 @@ test('finding 6: an empty side names a missing model only in the opening pair; a
 // FICTIONAL report with its grades, an export receipt and a higher marker.
 function landExport(st, n) {
   const tpl = st.reports.get('2026-10-06_chatgpt_demo0009');
-  const id = `2026-10-07_claude_land${String(n).padStart(4, '0')}`;
-  const at = `2026-10-07T1${n % 10}:00:00.000Z`;
+  // Stamped from the real clock, which the Explorer's freshness check reads:
+  // a fixed date made this export "stale" a week after it was written.
+  const at = new Date(Date.now() - (10 - (n % 10)) * 60000).toISOString();
+  const id = `${at.slice(0, 10)}_claude_land${String(n).padStart(4, '0')}`;
   st.reports.set(id, { ...tpl, report_id: id, model: 'claude', saved_at: at, order_basis: 'save_time', order_at: at, research_date: null });
   st.exports.push({ export_id: `exp-land-${n}`, dataset: 'demo', source: 'test', adapter_version: 'test', started_at: at, finished_at: at, reports_inserted: 1, reports_unchanged: 0, reports_refused: 0 });
   st.generation += 1;

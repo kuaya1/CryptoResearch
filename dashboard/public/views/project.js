@@ -30,7 +30,8 @@ import {
 
 // The tabs and where former addresses lead live in project-routes.js (pure,
 // shared with the app shell); re-exported here for the tests.
-import { PROJECT_TABS as TABS, projectRedirect } from '../project-routes.js';
+import { PROJECT_TABS as TABS, projectRedirect, checkInHref } from '../project-routes.js';
+import { seenFromRow } from '../watchlist-model.js';
 
 export { projectRedirect };
 
@@ -100,6 +101,8 @@ export async function renderProject(ctx, route) {
     report: () => reportsTab(ctx, d, route),
     market: () => marketTab(ctx, d),
     notes: () => historyTab(ctx, d),
+    // The Forensics tab is React only (web/src/views/project/Forensics.jsx).
+    forensics: () => callout('The Forensics tab is drawn by the app.', 'info'),
   })[tab]());
   // Opened from the inspector (ui.js briefLink): the brief's own bar, whose
   // Back (and Escape) returns there, on each of the brief's three views.
@@ -536,9 +539,16 @@ export function headlineBody(ctx, d) {
   return h('div', null, h('p', { class: 'small', style: { margin: '0 0 8px' } }, headlineText), details('Change the headline', h('div', { class: 'actions' }, sel, save, clearBtn), { id: 'ov-headline' }));
 }
 
+// Mark reviewed with the reports the list names for each model (never just
+// the clock); the desk refuses, writing nothing, when a newer one arrived.
 function reviewedButton(ctx, pid, key = 'ov-reviewed') {
   const b = button('Mark reviewed', null, { kind: 'small', key });
-  b.onclick = action(b, async () => { await ctx.api.post(`/api/projects/${pid}/reviewed`, {}); await ctx.refresh(); return true; }, 'Marked reviewed. New changes are counted from now.');
+  b.onclick = action(b, async () => {
+    const row = ((ctx.state.index && ctx.state.index.projects) || []).find((x) => x.project_id === pid) || null;
+    await ctx.api.post(`/api/projects/${pid}/reviewed`, { seen: seenFromRow(row), request_id: submissionId() });
+    await ctx.refresh();
+    return true;
+  }, 'Marked reviewed');
   return b;
 }
 
@@ -1218,6 +1228,7 @@ export function historyTab(ctx, d) {
         d.journal.length ? h('ul', { class: 'list', style: { listStyle: 'none', padding: 0 } }, d.journal.map((j) => h('li', { style: { padding: '8px 0', borderBottom: '1px solid var(--separator)' } },
           h('div', { class: 'small muted' }, `${j.type.replace(/_/g, ' ')} · ${fmtDateTime(j.created_at)} · via ${j.via || '?'}`),
           j.decision ? h('strong', null, `${j.decision.replace('_', ' ')}${j.conviction ? ` (${j.conviction})` : ''} `) : null, j.text ? h('span', null, j.text) : null,
+          (j.linked_report_ids || []).length && (j.type === 'review_completed' || j.type === 'note') ? h('div', { class: 'small muted' }, `Reports seen: ${j.linked_report_ids.join(', ')}`, j.type === 'review_completed' ? [' · ', h('a', { href: checkInHref(pid, j.entry_id), dataset: { key: `checkin-${j.entry_id}` } }, 'Check-in from this review')] : null) : null,
           j.reasons && j.reasons.length ? h('div', { class: 'small muted' }, `Reasons: ${j.reasons.join('; ')}`) : null,
           j.source_request_text ? h('div', { class: 'small faint' }, `From request: “${j.source_request_text}”`) : null))) : h('p', { class: 'small muted' }, 'No journal entries yet. Every note change and decision is kept as a dated entry.'),
       ], { note: 'Private: never sent to a model by default.' }),

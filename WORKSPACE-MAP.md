@@ -58,6 +58,13 @@ CryptoResearch/
 │       │   ├── cowork-draft.md         Claude-in-Cowork's working draft while it researches (connector), kept if interrupted
 │       │   ├── <provider>-draft.md     ChatGPT's or Gemini's working draft through its own connection (chatgpt-, gemini-)
 │       │   └── responses/<provider>-attempt<N>.json   Raw API response, saved before normalization
+│       ├── forensics/              Forensics & Resilience (core/forensics.js); no paid model call
+│       │   ├── audits/<audit_id>/      audit.json (roles, frozen definitions and preferences), prompt.investigator.md,
+│       │   │                           prompt.challenge.<receipt_id>.md, evidence-packet.json, drafts/<role>.md
+│       │   ├── receipts/<receipt_id>.json|.md   Immutable assessment and challenge receipts and the text as saved
+│       │   ├── observations/YYYY-MM.jsonl       Monitor observations (product checks, repository reads), each hashed
+│       │   ├── resolutions/<receipt_id>.jsonl   Checkpoint outcomes, append-only; a correction is a new line
+│       │   └── profile.json            Your monitoring opt-in and the targets you approved
 │       └── reports/<YYYY-MM-DD>_<provider>_<hash>/
 │           ├── original.md|txt|json|pdf   The report exactly as received (never changed)
 │           ├── meta.json                  Provider, channel, declared provider, attested vs self-reported, hashes
@@ -85,6 +92,7 @@ CryptoResearch/
 │   ├── status.json             Last attempt / success / error, backoff, monthly call count
 │   ├── logos/                  Small logo images cached from CoinGecko's image CDN
 │   ├── observations/YYYY-MM.jsonl   Append-only market history (about hourly)
+│   ├── forensics/status.json   The forensic monitor's GitHub gate, backoff and request counts (no address or key)
 │   └── context/                Market-cycle snapshots: BTC trend, dominance, breadth (about hourly)
 │       ├── latest.json             The last valid snapshot (kept when a fetch fails)
 │       └── YYYY-MM.jsonl           Every snapshot, append-only; research runs cite them by snapshot ID

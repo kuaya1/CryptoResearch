@@ -14,11 +14,11 @@
 // (lib/opinion.js), else the view waits (F1).
 import { Fragment, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Ellipsis, Check, Play } from 'lucide-react';
-import { PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, fmtSignedPct, onHoldOf, toast } from '../../../../public/ui.js';
+import { PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, onHoldOf, toast } from '../../../../public/ui.js';
 import { briefModel, marketNow } from '../../../../public/brief-model.js';
 import { PROJECT_TABS, selectionOf, sectionHref } from '../../../../public/project-routes.js';
 import { useDesk, useProject, useMedia } from '../../lib/hooks.js';
-import { api, refresh, hosted, resyncOnce, wasResynced } from '../../lib/desk.js';
+import { refresh, hosted, resyncOnce, wasResynced } from '../../lib/desk.js';
 import { opinionOf, opinionsAgree } from '../../lib/opinion.js';
 import { WsTag } from '../../shell/Shell.jsx';
 import { nav, navigate, pageReady, claimFocus, hrefWith } from '../../lib/router.js';
@@ -31,6 +31,8 @@ import { Dom, loadLegacy } from '../../components/Dom.jsx';
 import { badgeOpts } from '../watchlist/ProjectTable.jsx';
 import { archiveProject, restoreProject, setWatching } from '../watchlist/state.js';
 import Overview from './Overview.jsx';
+import { CheckIn } from './CheckIn.jsx';
+import Forensics from './Forensics.jsx';
 
 const enc = encodeURIComponent;
 const BRIEF_VIEWS = ['brief', 'compare', 'evidence'];
@@ -111,49 +113,6 @@ function Header({ d, row, phone }) {
         </div>
       )}
     </header>
-  );
-}
-
-// What changed since your last review: one line naming the changes, the list
-// one tap away (the full history is on Notes), with Mark reviewed.
-function Digest({ d, pid }) {
-  const [busy, setBusy] = useState(false);
-  const ch = d.changes || {};
-  const n = (k, one, many = `${one}s`) => (k ? `${k} ${k === 1 ? one : many}` : null);
-  const grades = (ch.provider_changes || []).filter((c) => c.from_report);
-  const words = [n((ch.new_reports || []).length, 'new report'), n(grades.length, 'grade change'), n((ch.research_runs || []).length, 'research run'), ch.price && typeof ch.price.change_pct === 'number' ? `price ${fmtSignedPct(ch.price.change_pct)}` : null].filter(Boolean);
-  const since = ch.since ? `Since ${ch.cursor_source === 'project created' ? 'the project was added' : fmtDateTime(ch.since)}. A digest never changes grades, reports or your headline.` : undefined;
-  const mark = async () => {
-    setBusy(true);
-    try {
-      await api.post(`/api/projects/${enc(pid)}/reviewed`, {});
-      toast('Marked reviewed. New changes are counted from now.');
-      await refresh();
-    } catch (err) {
-      toast(err.message, 'bad');
-    } finally {
-      setBusy(false);
-    }
-  };
-  // On a phone the line is just the changes (the label stays for screen
-  // readers), so it keeps to one line beside Mark reviewed.
-  const head = <span className="dg-t"><strong id="pb-digest-h" className="dg-label">Since your last review</strong><span className="faint"><span className="dg-sep">{' · '}</span>{words.length ? words.join(', ') : 'nothing new'}</span></span>;
-  return (
-    <section className={`digest${ch.item_count ? ' has' : ''}`} aria-labelledby="pb-digest-h" title={since}>
-      {ch.item_count ? (
-        <details className="dg-d" data-key="pb-digest">
-          <summary>{head}</summary>
-          <ul className="plain-list">
-            {(ch.new_reports || []).map((r) => <li key={r.report_id || `${r.provider}${r.analysis_at}`}>{`New ${PROVIDER_LABELS[r.provider]} report (${fmtDate(r.analysis_at)}): ${r.verdict || 'no verdict'}`}</li>)}
-            {grades.map((c) => <li key={`${c.provider}-${c.from_report}`}>{`${PROVIDER_LABELS[c.provider]} grade ${c.grade_from || 'none'} → ${c.grade_to || 'none'}${c.verdict_from !== c.verdict_to ? `; verdict ${c.verdict_from || 'none'} → ${c.verdict_to || 'none'}` : ''}`}</li>)}
-            {(ch.research_runs || []).map((r) => <li key={r.run_id || r.created_at}>{`Research run ${String(r.status).replace(/_/g, ' ')} (${r.providers.map((x) => PROVIDER_LABELS[x]).join(', ')})`}</li>)}
-            {ch.price && typeof ch.price.change_pct === 'number' ? <li>{`Price ${fmtSignedPct(ch.price.change_pct)} since then`}</li> : null}
-            <li className="dg-all"><a href={`#/project/${enc(pid)}/notes`} data-key="pb-all-changes">All changes</a></li>
-          </ul>
-        </details>
-      ) : <p className="dg-d none">{head}</p>}
-      {ch.item_count ? <button type="button" className="btn btn-sm" data-key="ov-reviewed" disabled={busy} onClick={mark}>Mark reviewed</button> : null}
-    </section>
   );
 }
 
@@ -345,7 +304,7 @@ export default function ProjectPage() {
   } else if (tab === 'brief') {
     body = (
       <>
-        <Digest d={d} pid={pid} />
+        <CheckIn key={pid} d={d} current={current} row={row} pid={pid} />
         <ModelTabs row={row} sel={prov} />
         <div id="pb-model" role="tabpanel" aria-labelledby={`pb-tab-${prov}`}>
           <Overview m={m} d={d} row={row} pid={pid} staleDays={staleDays} />
@@ -369,6 +328,8 @@ export default function ProjectPage() {
         <Hosted build={(L) => L.evidenceTab(legacyCtx, d, row, L.latestReports(d), route).node} deps={[d, route.query.toString()]} />
       </>
     );
+  } else if (tab === 'forensics') {
+    body = <Forensics pid={pid} />;
   } else if (tab === 'report') {
     body = <Hosted build={(L) => L.reportsTab(legacyCtx, d, route)} deps={[d, route.query.toString()]} after={(node) => { const toc = node && node.querySelector && node.querySelector('.report-toc'); if (toc && typeof toc.watch === 'function') toc.watch(); }} />;
   } else if (tab === 'market') {

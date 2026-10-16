@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cr.forensic-challenge.v1",
+  "title": "CryptoResearch forensic challenge, version 1",
+  "description": "The JSON block ChatGPT ends a cr-forensic-challenge@1 review with. It names the audit, project, prompt, role and model, and the receipt and block hash it challenges, exactly as its frozen prompt gives them. It is saved as its own receipt and never changes the assessment it reviews.",
+  "type": "object",
+  "required": ["format", "forensic_audit_id", "project_id", "prompt_version", "role", "model", "challenges_receipt_id", "assessment_sha256", "overall", "finding_reviews"],
+  "properties": {
+    "format": { "const": "cr.forensic-challenge.v1" },
+    "forensic_audit_id": { "type": "string", "pattern": "^fa_\\d{4}-\\d{2}-\\d{2}T\\d{6}Z_[a-z2-9]{5}$" },
+    "project_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "prompt_version": { "const": "cr-forensic-challenge@1" },
+    "role": { "const": "challenge" },
+    "model": { "const": "chatgpt" },
+    "challenges_receipt_id": { "type": "string", "pattern": "^fr_\\d{4}-\\d{2}-\\d{2}T\\d{6}Z_[a-z2-9]{5}$" },
+    "assessment_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "model_version": { "type": ["string", "null"] },
+    "as_of": { "type": ["string", "null"] },
+    "overall": { "type": "string", "minLength": 1 },
+    "finding_reviews": { "type": "array", "items": { "type": "object", "required": ["finding_id", "verdict"], "properties": { "finding_id": { "type": "string" }, "verdict": { "enum": ["supported", "overstated", "unsupported", "needs_evidence", "not_checked"] }, "attribution_check": { "type": ["string", "null"] }, "calculation_check": { "type": ["string", "null"] }, "benign_explanation": { "type": ["string", "null"] }, "omitted_evidence": { "type": ["string", "null"] }, "source_ids": { "type": "array", "items": { "type": "string" } } } } },
+    "calculation_checks": { "type": "array", "items": { "type": "object", "required": ["subject", "result"], "properties": { "subject": { "type": "string" }, "result": { "enum": ["agrees", "disagrees", "cannot_check"] }, "detail": { "type": ["string", "null"] } } } },
+    "omitted_evidence": { "type": "array", "items": { "type": "object", "required": ["evidence"], "properties": { "evidence": { "type": "string" }, "why_it_matters": { "type": ["string", "null"] }, "source_id": { "type": ["string", "null"] } } } },
+    "benign_explanations": { "type": "array", "items": { "type": "object", "required": ["explanation"], "properties": { "for_finding_id": { "type": ["string", "null"] }, "explanation": { "type": "string" }, "plausibility": { "enum": ["high", "medium", "low"] } } } },
+    "sources": { "type": "array", "items": { "type": "object", "required": ["source_id"], "properties": { "source_id": { "type": "string" }, "url": { "type": ["string", "null"] }, "publisher": { "type": ["string", "null"] }, "type": { "enum": ["primary", "chain", "repository", "secondary", "ai_summary", "other"] }, "retrieved_at": { "type": ["string", "null"] }, "excerpt": { "type": ["string", "null"] } } } }
+  }
+}

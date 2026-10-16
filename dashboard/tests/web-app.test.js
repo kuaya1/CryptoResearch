@@ -128,7 +128,21 @@ test('the app shows report text as text: no HTML from strings anywhere in the Re
 test('the app writes only from explicit actions, and nothing from the boot or a live update', () => {
   const files = walk(path.join(WEB, 'src'), (p) => /\.(jsx?)$/.test(p)).map((f) => [path.relative(path.join(WEB, 'src'), f).split(path.sep).join('/'), fs.readFileSync(f, 'utf8')]);
   const writers = files.filter(([, s]) => /api\.post\(/.test(s)).map(([f]) => f).sort();
-  assert.deepEqual(writers, ['lib/desk.js', 'views/inspector/Inspector.jsx', 'views/inspector/ModelPanel.jsx', 'views/project/ProjectPage.jsx', 'views/watchlist/StatusStrip.jsx', 'views/watchlist/state.js']);
+  assert.deepEqual(writers, ['lib/desk.js', 'lib/review.js', 'views/inspector/ModelPanel.jsx', 'views/project/Forensics.jsx', 'views/watchlist/StatusStrip.jsx', 'views/watchlist/state.js']);
+  // The Forensics tab writes only from its buttons: open an audit, import an
+  // answer, approve targets, turn monitoring on or off. Never on drawing it.
+  const fx = files.find(([f]) => f === 'views/project/Forensics.jsx')[1];
+  assert.deepEqual([...fx.matchAll(/api\.post\(`([^`]+)`/g)].map((m) => m[1]).sort(), ['/api/projects/${enc(pid)}/forensics/audits', '/api/projects/${enc(pid)}/forensics/audits/${enc(audit.audit_id)}/import', '/api/projects/${enc(pid)}/forensics/monitoring', '/api/projects/${enc(pid)}/forensics/monitoring'].sort());
+  assert.doesNotMatch(fx.slice(fx.indexOf('function useForensics'), fx.indexOf('// ---- small parts')), /api\.post/);
+  // Mark reviewed has one client (lib/review.js): the mark and its Undo, sent
+  // only from the check-in's Mark reviewed and the watchlist's action.
+  const review = files.find(([f]) => f === 'lib/review.js')[1];
+  assert.deepEqual([...review.matchAll(/api\.post\(`([^`]+)`/g)].map((m) => m[1]), ['/api/projects/${encodeURIComponent(pid)}/reviewed', '/api/projects/${encodeURIComponent(pid)}/reviewed/undo']);
+  const senders = files.filter(([f, s]) => f !== 'lib/review.js' && /sendReview\(/.test(s)).map(([f]) => f).sort();
+  assert.deepEqual(senders, ['views/project/CheckIn.jsx', 'views/watchlist/state.js']);
+  for (const [f, s] of files.filter(([n]) => senders.includes(n))) {
+    for (const m of s.matchAll(/await sendReview\(/g)) assert.match(s.slice(Math.max(0, m.index - 1500), m.index), /const mark = async|export async function markReviewed/, `${f}: a review mark outside an action`);
+  }
   // The desk client's own write is the saved view preferences, after a choice.
   const desk = files.find(([f]) => f === 'lib/desk.js')[1];
   assert.deepEqual([...desk.matchAll(/api\.post\('([^']+)'/g)].map((m) => m[1]), ['/api/ui-state']);
@@ -137,7 +151,7 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   const poll = desk.slice(desk.indexOf('async function pollVersion'), desk.indexOf('// The connection in words'));
   assert.doesNotMatch(poll, /api\.post|research|refresh\(\)/);
   // Every other write sits in a handler (onClick, onSelect) or an action function.
-  for (const [f, s] of files.filter(([n]) => n !== 'lib/desk.js' && n !== 'views/watchlist/state.js')) {
+  for (const [f, s] of files.filter(([n]) => n !== 'lib/desk.js' && n !== 'lib/review.js' && n !== 'views/watchlist/state.js')) {
     for (const m of s.matchAll(/api\.post\(/g)) {
       const before = s.slice(Math.max(0, m.index - 900), m.index);
       assert.match(before, /(onClick|onSelect)=\{async|const (mark|doRefresh) = async|async \(\) => \{/, `${f}: a write outside an action`);

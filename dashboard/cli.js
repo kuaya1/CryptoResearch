@@ -68,6 +68,21 @@ Reports
   report correct <project> <report_id> --field diagnostic_scores.legitimacy --value '<json>' --reason TEXT
   compare <project>
 
+Forensics & Resilience (no paid model call; Claude investigates, ChatGPT may challenge; Gemini has no role)
+  forensics view <id>                    the Forensics tab's read model (writes nothing)
+  forensics start <id> [--challenge] [--channel cowork] [--focus TEXT] [--restart] [--refresh]
+                                         open (or resume) a forensic audit: frozen prompt and evidence packet
+  forensics prompt <id> <audit_id> [--role challenge]   print a role's frozen prompt
+  forensics import <id> <audit_id> --provider claude|chatgpt --text-file FILE
+                   [--revision-kind format_fix|reassessment|new_evidence|other --revision-note TEXT]
+  forensics challenge <id> <audit_id>    ask ChatGPT to challenge the latest assessment
+  forensics cancel <id> <audit_id> [--reason TEXT]
+  forensics monitor <id> [--approve <receipt_id> [--check URL]... [--repo owner/repo]...] [--remove <target_id>]...
+                   [--on | --off]        Eric's opt-in: approve proposed targets, then turn monitoring on
+  forensics run [<id>] [--force]         product checks, repository reads and due checkpoint outcomes now
+  forensics correct <id> <receipt_id> --checkpoint 30d --event delivery_inactivity --outcome unresolved --reason TEXT
+                                         a recorded outcome is never rewritten: this appends a correction
+
 Your notes and calendar
   note conviction <project> --text TEXT | --text-file FILE [--conviction low|medium|high]
   journal add <project> --type decision --decision watch --text TEXT [--reason R]... [--conviction medium]
@@ -109,7 +124,7 @@ Data, jobs and maintenance
   screen refresh [<id>...]               GoPlus contract flags now (contracts of verified identities;
                                          skips the failure backoff, never GoPlus's rate limit)
   screen status [<id>]                   saved contract screens: flags, taxes, alerts, what is not screenable
-  job run [requests|inbox|market|fundamentals|screening|wallets|research|snapshot|reviews|backup|offsite]... [--all-due] [--trigger scheduler]
+  job run [requests|inbox|market|fundamentals|screening|wallets|forensics|research|snapshot|reviews|backup|offsite]... [--all-due] [--trigger scheduler]
   schedule install|status|run|remove
   requests process | requests status <request_id>
   index rebuild
@@ -746,6 +761,49 @@ async function run(argv) {
         return { overview: sc.overview(ws), projects: list.map((p) => ({ project_id: p.project_id, ...sc.summary(ws, p) })) };
       }
       throw Object.assign(new Error('screen refresh [<id>...] | screen status [<id>]'), { code: 'USAGE' });
+    }
+    case 'forensics': {
+      const fo = require('./core/forensics');
+      const pid = rest[0];
+      const aid = rest[1];
+      if (sub === 'view' || sub === 'status') return fo.view(ws, need(pid, `forensics ${sub} <project>`));
+      if (sub === 'start') {
+        const r = fo.createAudit(ws, { project_id: need(pid, 'forensics start <project> [--challenge]'), challenge: Boolean(flags.challenge), channel: one(flags.channel) || actor, assistant: /cowork/i.test(String(one(flags.channel) || '')) ? 'claude' : null, utterance: one(flags.utterance) || null, owner_focus: one(flags.focus) || null, restart: Boolean(flags.restart), refresh: Boolean(flags.refresh), allow_pending_identity: Boolean(flags.allow_pending_identity) });
+        return { ...r, audit: undefined, ...(['created', 'restarted', 'resumed'].includes(r.status) ? await afterWrite(ws, pid) : {}) };
+      }
+      if (sub === 'prompt') {
+        const a = fo.loadAudit(ws, need(pid, 'forensics prompt <project> <audit_id> [--role challenge]'), need(aid, 'forensics prompt <project> <audit_id>'));
+        if (!a) throw Object.assign(new Error(`No forensic audit ${aid}`), { code: 'NOT_FOUND' });
+        const p = fo.promptFor(ws, a, one(flags.role) === 'challenge' ? 'challenge' : 'investigator');
+        if (!p || !p.text) throw Object.assign(new Error(p ? p.error : 'That role has no frozen prompt yet.'), { code: 'NOT_FOUND' });
+        return flags.json ? p : { _text: p.text };
+      }
+      if (sub === 'import') {
+        const text = need(readTextArg(flags), 'forensics import <project> <audit_id> --provider claude|chatgpt --text-file FILE');
+        const kind = one(flags.revision_kind);
+        const r = fo.saveReport(ws, { project_id: need(pid, 'project'), audit_id: need(aid, 'audit_id'), provider: need(one(flags.provider), '--provider claude|chatgpt'), text, revision: kind ? { kind, note: one(flags.revision_note) || '' } : null, channel: one(flags.channel) || 'cli import' });
+        return { status: r.status, receipt_id: r.receipt_id, verified: r.verified, message: r.message, ...(r.status === 'saved' ? await afterWrite(ws, pid) : {}) };
+      }
+      if (sub === 'challenge') {
+        const r = fo.requestChallenge(ws, need(pid, 'forensics challenge <project> <audit_id>'), need(aid, 'audit_id'));
+        return { status: r.noop ? 'unchanged' : 'saved', ...r.result, verified: r.verified };
+      }
+      if (sub === 'cancel') return fo.cancelAudit(ws, need(pid, 'project'), need(aid, 'audit_id'), one(flags.reason) || null);
+      if (sub === 'monitor') {
+        const enabled = flags.on ? true : flags.off ? false : undefined;
+        const approve = one(flags.approve) ? { receipt_id: one(flags.approve), product_checks: list(flags.check).length ? list(flags.check) : undefined, repositories: list(flags.repo).length ? list(flags.repo) : undefined } : null;
+        const r = fo.setMonitoring(ws, need(pid, 'forensics monitor <project> [--approve <receipt_id> [--check URL]... [--repo owner/repo]...] [--remove <target_id>]... [--on|--off]'), { enabled, approve, remove: list(flags.remove), by: actor });
+        return { status: r.noop ? 'unchanged' : 'saved', ...r.result, verified: r.verified };
+      }
+      if (sub === 'run') {
+        const r = await require('./core/forensic-monitor').refresh(ws, { trigger: one(flags.trigger) || 'cli', force: Boolean(flags.force), projectIds: pid ? [pid] : null });
+        return r;
+      }
+      if (sub === 'correct') {
+        const r = fo.correctResolution(ws, need(pid, 'project'), need(aid, 'receipt_id'), { checkpoint: one(flags.checkpoint), event: one(flags.event), outcome: one(flags.outcome), reason: one(flags.reason) });
+        return { status: 'saved', ...r.result, verified: r.verified };
+      }
+      throw Object.assign(new Error('forensics view|start|prompt|import|challenge|cancel|monitor|run|correct (see help)'), { code: 'USAGE' });
     }
     case 'job': {
       const jobs = require('./core/jobs');

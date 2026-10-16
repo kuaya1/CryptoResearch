@@ -225,6 +225,25 @@ async function doctor(ws, { writeProbe = false } = {}) {
     }
   } catch (_) { /* wallet module optional */ }
 
+  try {
+    // Forensics: receipts, open audits and the monitor, read only.
+    const F = require('./forensics');
+    let receipts = 0;
+    let open = 0;
+    let monitored = 0;
+    for (const p of require('./projects').listProjects(ws)) {
+      if (p.broken) continue;
+      receipts += F.listReceipts(ws, p.project_id).filter((r) => r.kind === 'assessment').length;
+      if (F.openAudit(ws, p.project_id)) open += 1;
+      const prof = F.readProfile(ws, p.project_id);
+      if (prof.monitoring && prof.monitoring.enabled) monitored += 1;
+    }
+    const m = require('./forensic-monitor').statusView(ws);
+    add('Forensics', true, receipts || open || monitored
+      ? `${receipts} saved assessment(s), ${open} audit(s) open, monitoring on for ${monitored} project(s); monitor requests this month ${m.requests_this_month} of ${m.monthly_budget}${m.last_run_at ? `; last run ${m.last_run_at}` : ''}${m.github_wait_until ? `; GitHub asked to wait until ${m.github_wait_until}` : ''}${m.held ? '; held in this restored copy' : ''}. No model is called for it.`
+      : 'No forensic audit yet; nothing is monitored.', 'info');
+  } catch (_) { /* forensics optional */ }
+
   const pendingReq = require('./requests').pendingRequests(ws);
   add('Queued requests', pendingReq.length === 0, pendingReq.length ? `${pendingReq.length} pending (not saved yet)` : 'None pending', pendingReq.length ? 'warn' : 'ok');
   const inboxSt = require('./inbox').inboxStatus(ws);

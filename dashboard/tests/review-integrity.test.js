@@ -619,3 +619,359 @@ test('F7: the phone drawer takes the containing width (no 100vw under a classic 
   assert.doesNotMatch(wl, /scorecard on hover/i);
   assert.match(wl, /Space or Enter opens and closes a project/);
 });
+
+// ---------------------------------------------------------------------------
+// The review check-in (audits/2026-10-15-rea-evaluation, section 3): Mark
+// reviewed records the reports seen, by ID, in one locked operation; it is
+// refused, with nothing written, when a newer report arrived since the view
+// was drawn; a lost answer or a second click never makes a second receipt.
+// FICTIONAL workspaces and reports only.
+
+const notesCore = require('../core/notes');
+const { reportText } = require('./brief-fixtures');
+const { addDays, ymdInTz } = require('../core/dates');
+const checkInMod = import('../public/checkin-model.js');
+const watchlistMod = import('../public/watchlist-model.js');
+
+const CHK = 'Example Check-in Network (FICTIONAL)';
+
+function checkin(t, label) {
+  const { ws, root } = setup(t, label);
+  const res = projects.addProject(ws, {
+    name: CHK, symbol: 'XCHK', sector_profile: 'network-infrastructure@2',
+    official_website: 'https://xchk.example/', coingecko_id: 'example-checkin-fictional',
+    assets: [{ chain: 'ethereum', contract_address: '0x00000000000000000000000000000000000c4ec1' }],
+    evidence: [{ url: 'https://xchk.example/token', note: 'FICTIONAL test evidence' }],
+  });
+  assert.equal(res.status, 'created', res.message);
+  const pid = res.project_id;
+  const proj = { project_id: pid, name: CHK };
+  // Each save is a later instant than the one before, so the desk's order
+  // never rests on a tie.
+  let last = 0;
+  let n = 0;
+  const save = (provider, { run = null, revision = null, profile = null, edit = null } = {}) => {
+    while (Date.now() <= last) { /* next millisecond */ }
+    n += 1;
+    const day = run ? run.horizon.start_date : ymdInTz();
+    const end = run ? run.horizon.end_date : addDays(day, 120);
+    const horizon = run ? { start: day, end, text: run.horizon.text, mode: run.horizon.mode } : { start: day, end, text: `4 months (${day} to ${end})`, mode: 'position' };
+    const text = reportText({ project: proj, symbol: 'XCHK', profile: profile || (run ? run.sector_profile : 'network-infrastructure@2'), run, analysisAt: day, horizon,
+      edit: (j) => {
+        if (provider !== 'claude') { j.provider = provider; j.model_self_identification = `FICTIONAL test fixture labeled as ${provider === 'chatgpt' ? 'ChatGPT' : 'Gemini'}`; }
+        j.summary = `FICTIONAL save ${n} by ${provider}.`;
+        if (edit) edit(j);
+      } });
+    const out = inbox.importContent(ws, provider, { content: text, projectId: pid, ...(run ? { runId: run.run_id } : {}), ...(revision ? { revision } : {}) });
+    assert.equal(out.result.status, 'ingested', out.result.message);
+    last = Date.now();
+    return out.result.report_id;
+  };
+  const run = (providers = ['claude']) => research.createRun(ws, { project_id: pid, providers, channel: 'dashboard', force_new: true }).run;
+  // What a view draws: the list row's reports for each model.
+  const drawn = async () => (await watchlistMod).seenFromRow(indexer.buildIndex(ws).projects.find((x) => x.project_id === pid));
+  const receipts = () => notesCore.loadJournal(ws, pid).filter((e) => e.type === 'review_completed');
+  return { ws, root, pid, save, run, drawn, receipts };
+}
+
+test('check-in N1: no receipt is "First review"; Mark reviewed writes one review_completed entry naming both reports, verified, and nothing is left to review', async (t) => {
+  const c = checkin(t, 'ci-n1');
+  const a = c.save('claude');
+  const g = c.save('chatgpt');
+  const before = digest.changesSince(c.ws, c.pid);
+  assert.equal(before.review.basis, 'none');
+  assert.deepEqual(before.models.map((m) => [m.provider, m.then_basis, m.then, m.now.report_id]), [['claude', 'none', null, a], ['chatgpt', 'none', null, g]]);
+  const cm = await checkInMod;
+  const view = cm.checkInModel(before, indexer.projectDetail(c.ws, c.pid), indexer.buildIndex(c.ws));
+  assert.equal(view.head.text, 'First review');
+  assert.ok(view.rows.every((r) => r.then === null && r.then_note === 'First review'), 'the then side is empty, never guessed');
+  const seen = await c.drawn();
+  assert.deepEqual(seen, { claude: a, chatgpt: g, gemini: null });
+  const out = projects.markReviewed(c.ws, c.pid, { seen, note: 'FICTIONAL: first look.', request_id: 'req_n1_000001' });
+  assert.equal(out.verified, true);
+  assert.equal(out.result.status, 'reviewed');
+  const rs = c.receipts();
+  assert.equal(rs.length, 1);
+  assert.deepEqual(rs[0].linked_report_ids, [a, g]);
+  assert.equal(rs[0].text, 'FICTIONAL: first look.');
+  assert.equal(rs[0].entry_id, out.result.receipt_id);
+  const p = projects.getProject(c.ws, c.pid);
+  assert.deepEqual(p.review, { last_reviewed_at: rs[0].created_at, note: 'FICTIONAL: first look.', seen, receipt_id: rs[0].entry_id, request_id: 'req_n1_000001' });
+  const row = indexer.buildIndex(c.ws).projects.find((x) => x.project_id === c.pid);
+  assert.equal(row.changes.item_count, 0, 'the list counts nothing to review');
+  assert.equal((await watchlistMod).needsReview(row), false, 'the inspector shows Reviewed');
+});
+
+test('check-in N2: then is the report the receipt names, now the latest, the reports between are counted; grade, verdict, strongest risk with sources, confirm and break then and now; an unchanged model is "Same report"', async (t) => {
+  const c = checkin(t, 'ci-n2');
+  const a = c.save('claude');
+  const g = c.save('chatgpt');
+  projects.markReviewed(c.ws, c.pid, { seen: await c.drawn(), request_id: 'req_n2_000001' });
+  const r1 = c.run();
+  const b = c.save('claude', { run: r1, edit: (j) => { j.verdict = 'UNFAVORABLE VALUATION'; j.bearish_facts[0].text = 'FICTIONAL B: the fee switch vote failed.'; } });
+  const cc = c.save('claude', { run: r1, revision: { kind: 'reassessment', note: 'FICTIONAL: re-read the vote.' }, edit: (j) => { j.verdict = 'UNFAVORABLE VALUATION'; j.bearish_facts[0].text = 'FICTIONAL C: the fee switch vote failed and the treasury sold.'; j.conviction_increases = ['FICTIONAL: a second vote passes.']; j.invalidators = ['FICTIONAL: the treasury sells again.']; } });
+  const ch = digest.changesSince(c.ws, c.pid);
+  assert.equal(ch.review.basis, 'receipt');
+  const cl = ch.models.find((m) => m.provider === 'claude');
+  assert.equal(cl.then.report_id, a);
+  assert.equal(cl.now.report_id, cc);
+  assert.deepEqual(cl.between.map((x) => x.report_id), [b]);
+  assert.equal(cl.comparable.ok, true);
+  const gp = ch.models.find((m) => m.provider === 'chatgpt');
+  assert.equal(gp.same, true);
+  assert.equal(gp.then.report_id, g);
+  const cm = await checkInMod;
+  const view = cm.checkInModel(ch, indexer.projectDetail(c.ws, c.pid), indexer.buildIndex(c.ws));
+  const row = view.rows.find((r) => r.provider === 'claude');
+  assert.equal(row.between_words, '1 earlier Claude report not shown');
+  assert.equal(row.newer, true, 'a newer report than the one reviewed is said');
+  assert.equal(row.moved.verdict.changed, true);
+  assert.equal(row.moved.verdict.now, 'Unfavorable valuation');
+  assert.notEqual(row.moved.verdict.then, 'Unfavorable valuation');
+  assert.equal(row.moved.risk.changed, true);
+  assert.equal(row.moved.risk.now.text, 'FICTIONAL C: the fee switch vote failed and the treasury sold.');
+  assert.ok(row.moved.risk.then.text && row.moved.risk.then.text !== row.moved.risk.now.text);
+  assert.ok(Array.isArray(row.moved.risk.now.sources), 'the risk keeps its sources');
+  assert.equal(row.moved.confirm.now, 'FICTIONAL: a second vote passes.');
+  assert.equal(row.moved.break.now, 'FICTIONAL: the treasury sells again.');
+  assert.equal(row.moved.revision.note, 'FICTIONAL: re-read the vote.');
+  assert.ok(row.then.grade_words && row.now.grade_words);
+  const same = view.rows.find((r) => r.provider === 'chatgpt');
+  assert.equal(same.same, true);
+  assert.equal(same.moved, null);
+});
+
+test('check-in N5: then and now under different profiles are "Not directly comparable" with the reason; no category numbers are compared', async (t) => {
+  const c = checkin(t, 'ci-n5');
+  c.save('claude');
+  projects.markReviewed(c.ws, c.pid, { seen: await c.drawn() });
+  c.save('claude', { profile: 'general-token@2' });
+  const ch = digest.changesSince(c.ws, c.pid);
+  const cl = ch.models.find((m) => m.provider === 'claude');
+  assert.equal(cl.comparable.ok, false);
+  assert.match(cl.comparable.reason, /profile network-infrastructure@2 then, general-token@2 now/);
+  assert.equal(cl.moved, null);
+  const view = (await checkInMod).checkInModel(ch, indexer.projectDetail(c.ws, c.pid), indexer.buildIndex(c.ws));
+  const row = view.rows.find((r) => r.provider === 'claude');
+  assert.match(row.not_comparable, /^Not directly comparable: /);
+  assert.equal(row.moved, null);
+});
+
+test('check-in N6: two reviews with notes keep both receipts and both notes, in order; nothing is overwritten', async (t) => {
+  const c = checkin(t, 'ci-n6');
+  c.save('claude');
+  const first = projects.markReviewed(c.ws, c.pid, { seen: await c.drawn(), note: 'FICTIONAL: note one.', request_id: 'req_n6_000001' });
+  c.save('claude');
+  const second = projects.markReviewed(c.ws, c.pid, { seen: await c.drawn(), note: 'FICTIONAL: note two.', request_id: 'req_n6_000002' });
+  const rs = c.receipts().reverse();
+  assert.deepEqual(rs.map((e) => [e.entry_id, e.text]), [[first.result.receipt_id, 'FICTIONAL: note one.'], [second.result.receipt_id, 'FICTIONAL: note two.']]);
+  assert.equal(projects.getProject(c.ws, c.pid).review.note, 'FICTIONAL: note two.');
+});
+
+test('check-in I1: a report imported after the view was drawn refuses the mark (NEWER_REPORT), names the model and time, writes nothing; the next mark succeeds', async (t) => {
+  const c = checkin(t, 'ci-i1');
+  c.save('claude');
+  c.save('chatgpt');
+  projects.markReviewed(c.ws, c.pid, { seen: await c.drawn(), note: 'FICTIONAL: watching the vote.' });
+  const seen = await c.drawn();
+  const reviewBefore = projects.getProject(c.ws, c.pid).review;
+  const journalBefore = notesCore.loadJournal(c.ws, c.pid).length;
+  const fresh = c.save('claude', { edit: (j) => { j.summary = 'FICTIONAL: a report the reader never saw.'; } });
+  let err = null;
+  try { projects.markReviewed(c.ws, c.pid, { seen, note: 'FICTIONAL: draft kept.', request_id: 'req_i1_000001' }); } catch (e) { err = e; }
+  assert.ok(err, 'refused');
+  assert.equal(err.code, 'NEWER_REPORT');
+  assert.equal(err.details.newer.length, 1);
+  assert.equal(err.details.newer[0].provider, 'claude');
+  assert.equal(err.details.newer[0].report_id, fresh);
+  assert.ok(err.details.newer[0].saved_at);
+  assert.equal(notesCore.loadJournal(c.ws, c.pid).length, journalBefore, 'no journal entry');
+  assert.deepEqual(projects.getProject(c.ws, c.pid).review, reviewBefore, 'the review on file is unchanged');
+  const words = (await watchlistMod).newerReportWords(err.details.newer, () => '10:05');
+  assert.equal(words, 'A newer Claude report arrived while you were reading (saved 10:05). Nothing was marked.');
+  // The next mark, from the redrawn view, succeeds.
+  const ok = projects.markReviewed(c.ws, c.pid, { seen: await c.drawn(), request_id: 'req_i1_000002' });
+  assert.equal(ok.result.status, 'reviewed');
+  assert.equal(ok.result.seen.claude, fresh);
+});
+
+test('check-in I1 over HTTP: the route answers 409 with the newer report named and saved: false; a call without seen keeps the clock-only mark', async (t) => {
+  const c = checkin(t, 'ci-i1-http');
+  c.save('claude');
+  const seen = await c.drawn();
+  c.save('claude');
+  const { start } = require('../server');
+  const srv = await start(c.ws, { port: 47600 + Math.floor(Math.random() * 300), quiet: true });
+  t.after(() => { try { srv.shutdown(); } catch (_) { /* stopped */ } });
+  const http = require('http');
+  const ask = (opts, body = null) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: srv.port, ...opts, headers: { host: `127.0.0.1:${srv.port}`, ...(opts.headers || {}) } }, (res) => {
+      const chunks = [];
+      res.on('data', (x) => chunks.push(x));
+      res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('error', reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+  const token = JSON.parse((await ask({ path: '/api/session' })).body).token;
+  const headers = { 'x-cr-token': token, 'content-type': 'application/json', origin: `http://127.0.0.1:${srv.port}` };
+  const r = await ask({ method: 'POST', path: `/api/projects/${c.pid}/reviewed`, headers }, { seen, note: null, request_id: 'req_http_00001' });
+  assert.equal(r.status, 409);
+  const body = JSON.parse(r.body);
+  assert.equal(body.code, 'NEWER_REPORT');
+  assert.equal(body.saved, false);
+  assert.equal(body.newer[0].provider, 'claude');
+  assert.equal(c.receipts().length, 0);
+  const ok = await ask({ method: 'POST', path: `/api/projects/${c.pid}/reviewed`, headers }, { seen: await c.drawn(), note: null, request_id: 'req_http_00002' });
+  assert.equal(ok.status, 200, ok.body);
+  assert.equal(JSON.parse(ok.body).result.status, 'reviewed');
+  const legacy = await ask({ method: 'POST', path: `/api/projects/${c.pid}/reviewed`, headers }, {});
+  assert.equal(legacy.status, 200);
+  assert.equal(JSON.parse(legacy.body).result.receipt_id, null);
+});
+
+test('check-in I2/I3/I7: the same request again, a second click, or another device with the same reports answer "unchanged" with the existing receipt; exactly one receipt', async (t) => {
+  const c = checkin(t, 'ci-i2');
+  c.save('claude');
+  const seen = await c.drawn();
+  const first = projects.markReviewed(c.ws, c.pid, { seen, note: 'FICTIONAL: one.', request_id: 'req_i2_000001' });
+  // I2: the answer was lost; Try again sends the same request.
+  const again = projects.markReviewed(c.ws, c.pid, { seen, note: 'FICTIONAL: one.', request_id: 'req_i2_000001' });
+  assert.equal(again.result.status, 'unchanged');
+  assert.equal(again.result.receipt_id, first.result.receipt_id);
+  assert.equal(again.noop, true, 'nothing written');
+  // I3: a second click (a new request) with the same reports.
+  const click2 = projects.markReviewed(c.ws, c.pid, { seen, request_id: 'req_i3_000002' });
+  assert.equal(click2.result.status, 'unchanged');
+  // I7: the desktop marks what the phone already marked.
+  const desktop = projects.markReviewed(c.ws, c.pid, { seen, request_id: 'req_i7_000003' });
+  assert.equal(desktop.result.status, 'unchanged');
+  assert.equal(desktop.result.reviewed_at, first.result.reviewed_at, '"Already reviewed at" the first device\'s time');
+  assert.equal(c.receipts().length, 1, 'exactly one receipt on disk');
+  assert.equal(projects.getProject(c.ws, c.pid).review.request_id, 'req_i2_000001');
+});
+
+test('check-in I8: a device still showing the older report is refused after another marked the newer one', async (t) => {
+  const c = checkin(t, 'ci-i8');
+  c.save('claude');
+  const desktopSeen = await c.drawn();
+  c.save('claude');
+  projects.markReviewed(c.ws, c.pid, { seen: await c.drawn(), request_id: 'req_i8_phone01' });
+  assert.throws(() => projects.markReviewed(c.ws, c.pid, { seen: desktopSeen, request_id: 'req_i8_desk001' }), (e) => e.code === 'NEWER_REPORT');
+  assert.equal(c.receipts().length, 1);
+});
+
+test('check-in I9: the desk restarting between drawing and the click changes nothing: the same check applies from disk', async (t) => {
+  const c = checkin(t, 'ci-i9');
+  c.save('claude');
+  const seen = await c.drawn();
+  const ws2 = openWorkspace({ root: c.root, actor: 'test' });
+  const out = projects.markReviewed(ws2, c.pid, { seen, request_id: 'req_i9_000001' });
+  assert.equal(out.result.status, 'reviewed');
+  c.save('claude');
+  const ws3 = openWorkspace({ root: c.root, actor: 'test' });
+  assert.throws(() => projects.markReviewed(ws3, c.pid, { seen, request_id: 'req_i9_000002' }), (e) => e.code === 'NEWER_REPORT');
+});
+
+test('check-in R1/R2: Undo restores the previous review with its receipt and adds "Reopened for review"; the receipt stays; Undo under a later review is refused', async (t) => {
+  const c = checkin(t, 'ci-r1');
+  c.save('claude');
+  const first = projects.markReviewed(c.ws, c.pid, { seen: await c.drawn(), note: 'FICTIONAL: first.', request_id: 'req_r1_000001' });
+  const newer = c.save('claude');
+  const second = projects.markReviewed(c.ws, c.pid, { seen: await c.drawn(), request_id: 'req_r1_000002' });
+  const kept = projects.getProject(c.ws, c.pid).review;
+  // R2: undoing the first while the second stands.
+  assert.throws(() => projects.restoreReview(c.ws, c.pid, { previous: first.result.previous, expect: first.result.reviewed_at }), (e) => e.code === 'CONFLICT' && e.message === 'A later review exists; nothing was undone.');
+  assert.deepEqual(projects.getProject(c.ws, c.pid).review, kept, 'nothing changed');
+  // R1: undoing the second puts back the first, receipt included.
+  const undo = projects.restoreReview(c.ws, c.pid, { previous: second.result.previous, expect: second.result.reviewed_at });
+  assert.equal(undo.verified, true);
+  const back = projects.getProject(c.ws, c.pid).review;
+  assert.equal(back.receipt_id, first.result.receipt_id);
+  assert.equal(back.last_reviewed_at, first.result.reviewed_at);
+  assert.equal(back.note, 'FICTIONAL: first.');
+  assert.deepEqual(back.seen, first.result.seen);
+  const j = notesCore.loadJournal(c.ws, c.pid).reverse();
+  assert.deepEqual(j.map((e) => e.type), ['review_completed', 'review_completed', 'note']);
+  assert.equal(j[1].entry_id, second.result.receipt_id, 'the undone receipt stays');
+  assert.equal(j[2].text, 'Reopened for review');
+  assert.deepEqual(j[2].linked_report_ids, [newer]);
+  const ch = digest.changesSince(c.ws, c.pid);
+  assert.ok(ch.item_count > 0, 'changes count again');
+  assert.equal(ch.models.find((m) => m.provider === 'claude').now.report_id, newer);
+});
+
+test('check-in R3: a review saved before receipts is "inferred from the time"; the next mark makes the first receipt and the old cursor is not rewritten', async (t) => {
+  const c = checkin(t, 'ci-r3');
+  const a = c.save('claude');
+  const old = projects.markReviewed(c.ws, c.pid, { note: 'FICTIONAL: a clock-only review.' });
+  assert.equal(old.result.receipt_id, null);
+  assert.equal(c.receipts().length, 0);
+  const b = c.save('claude');
+  const ch = digest.changesSince(c.ws, c.pid);
+  assert.equal(ch.review.basis, 'inferred_by_time');
+  const cl = ch.models.find((m) => m.provider === 'claude');
+  assert.equal(cl.then_basis, 'inferred_by_time');
+  assert.equal(cl.then.report_id, a);
+  assert.equal(cl.now.report_id, b);
+  const view = (await checkInMod).checkInModel(ch, indexer.projectDetail(c.ws, c.pid), indexer.buildIndex(c.ws), { when: () => 'Oct 15' });
+  assert.equal(view.head.text, 'Reviewed Oct 15, report not recorded (inferred from the time)');
+  const mark = projects.markReviewed(c.ws, c.pid, { seen: await c.drawn(), request_id: 'req_r3_000001' });
+  assert.equal(mark.result.status, 'reviewed');
+  assert.deepEqual(mark.result.previous, { last_reviewed_at: old.result.reviewed_at, note: 'FICTIONAL: a clock-only review.' }, 'the old cursor comes back unchanged for Undo');
+  assert.equal(c.receipts().length, 1, 'only the new receipt; the old review is not migrated');
+});
+
+test('check-in R4: a receipt\'s report later excluded or gone is said by its ID and its grade is never shown; Mark reviewed works against the current reports', async (t) => {
+  const c = checkin(t, 'ci-r4');
+  const a = c.save('claude');
+  const g = c.save('chatgpt');
+  projects.markReviewed(c.ws, c.pid, { seen: await c.drawn(), request_id: 'req_r4_000001' });
+  notesCore.addCorrection(c.ws, c.pid, a, 'eligibility', { excluded: true, reason: 'FICTIONAL: wrong project.' }, 'FICTIONAL test');
+  fs.rmSync(path.join(c.root, 'projects', c.pid, 'reports', g), { recursive: true, force: true });
+  const ch = digest.changesSince(c.ws, c.pid);
+  const cl = ch.models.find((m) => m.provider === 'claude');
+  assert.equal(cl.then.status, 'excluded');
+  assert.equal(cl.now, null);
+  const gp = ch.models.find((m) => m.provider === 'chatgpt');
+  assert.equal(gp.then.status, 'missing');
+  const view = (await checkInMod).checkInModel(ch, indexer.projectDetail(c.ws, c.pid), indexer.buildIndex(c.ws));
+  const row = view.rows.find((r) => r.provider === 'claude');
+  assert.equal(row.then, null, 'no grade drawn from it');
+  assert.match(row.then_note, /excluded since; its grade is not shown/);
+  assert.match(view.rows.find((r) => r.provider === 'chatgpt').then_note, /is no longer on file/);
+  const seen = await c.drawn();
+  assert.deepEqual(seen, { claude: null, chatgpt: null, gemini: null });
+  const out = projects.markReviewed(c.ws, c.pid, { seen, request_id: 'req_r4_000002' });
+  assert.equal(out.result.status, 'reviewed');
+});
+
+test('check-in R4 (quarantined): a receipt\'s report the desk later quarantines is said as quarantined, never with its grade', async () => {
+  const cm = await checkInMod;
+  const ch = { review: { basis: 'receipt', receipt_id: 'r1', reviewed_at: '2026-10-15T10:00:00.000Z', latest: true }, models: [{ provider: 'claude', then_basis: 'receipt', then: { report_id: '2026-10-15_claude_aaaa0001', status: 'quarantined' }, now: null, same: false, between: [], comparable: null, moved: null }] };
+  const detail = { reports: [{ report_id: '2026-10-15_claude_aaaa0001', meta: { provider: 'claude' }, assessment: { eligibility: { excluded: true, quarantined: true } }, grade: { status: 'firm', value: 90, display: '90' } }] };
+  const view = cm.checkInModel(ch, detail, { rubrics: {} });
+  assert.equal(view.rows[0].then, null);
+  assert.match(view.rows[0].then_note, /^Report 2026-1…aa0001 was quarantined since; its grade is not shown\.$/);
+  assert.doesNotMatch(JSON.stringify(view.rows[0]), /"90"/);
+});
+
+test('check-in R5: a restored copy shows the same receipts and the same rows, with no provider call', async (t) => {
+  const c = checkin(t, 'ci-r5');
+  c.save('claude');
+  projects.markReviewed(c.ws, c.pid, { seen: await c.drawn(), note: 'FICTIONAL: before the copy.' });
+  c.save('claude');
+  const exporter = require('../core/exporter');
+  const os = require('os');
+  const sbx = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-ci-restore-'));
+  t.after(() => fs.rmSync(sbx, { recursive: true, force: true }));
+  const dest = path.join(sbx, 'restored');
+  const r = exporter.restorePackage(JSON.parse(JSON.stringify(exporter.exportPackage(c.ws))), dest);
+  assert.equal(r.status, 'restored_and_verified', JSON.stringify(r.reconciliation));
+  const copy = openWorkspace({ root: dest, actor: 'test' });
+  const strip = (d) => ({ review: d.review, models: d.models, item_count: d.item_count });
+  assert.deepEqual(strip(digest.changesSince(copy, c.pid)), strip(digest.changesSince(c.ws, c.pid)));
+  assert.deepEqual(notesCore.loadJournal(copy, c.pid).map((e) => e.entry_id), notesCore.loadJournal(c.ws, c.pid).map((e) => e.entry_id));
+  assert.equal(globalThis.fetch.mock.callCount(), 0, 'no provider was asked anything');
+});
