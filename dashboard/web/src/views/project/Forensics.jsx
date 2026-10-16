@@ -48,6 +48,7 @@ const pct = (v, d = 2) => (typeof v === 'number' && Number.isFinite(v) ? `${v.to
 const usd = (v) => (typeof v === 'number' && Number.isFinite(v) ? (Math.abs(v) >= 1000 ? fmtCompactUsd(v) : fmtPrice(v)) : '—');
 const words = (s) => (s ? s.replace(/_/g, ' ') : '');
 const shortHash = (h) => (h ? `${h.slice(0, 10)}…` : null);
+const shortAddr = (a) => (a && a.length > 14 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a || '');
 
 function openFold(key, anchor = null) {
   const d = document.querySelector(`[data-key="${key}"]`);
@@ -241,11 +242,11 @@ function ExitTable({ exits }) {
             <span role="cell" className="fx-exit-basis">
               {b ? (
                 <>
-                  <span>{b.method === 'executable_quote' ? `${b.route_scope === 'aggregator' ? 'Aggregator' : 'Venue'} quote` : 'Constant-product pool'}{b.venue ? ` · ${b.venue}` : ''}</span>
-                  <span className="faint">{[b.retrieved_at ? fmtDateTime(b.retrieved_at) : null, b.route ? `route ${b.route}` : null, b.source_id].filter(Boolean).join(' · ')}</span>
+                  <span>{b.method === 'executable_quote' ? `${b.route_scope === 'aggregator' ? 'Aggregator' : 'Venue'} quote` : 'Constant-product pool'}{b.venue ? ` · ${b.venue}` : ''}{b.chain ? ` · ${b.chain}` : ''}{b.captured_by === 'monitor' ? ' · monitor' : ''}</span>
+                  <span className="faint">{[b.retrieved_at ? fmtDateTime(b.retrieved_at) : null, b.route ? `route ${b.route}` : null, b.source_id, x.earlier ? `${x.earlier} earlier reading${x.earlier === 1 ? '' : 's'}` : null].filter(Boolean).join(' · ')}</span>
                   <span className="faint" title={(b.limitations || []).join(' ')}>{(b.limitations || [])[0]}</span>
                 </>
-              ) : <span className="faint">{x.note}</span>}
+              ) : <span className="faint">{x.status === 'no_route' && x.as_of ? `${x.note} ${fmtDateTime(x.as_of)}.` : x.note}</span>}
             </span>
           </div>
         );
@@ -495,6 +496,15 @@ function SourceList({ c }) {
   );
 }
 
+// One exit quote in words: the size, what it would receive and its cost, or
+// why it is no reading.
+const QUOTE_WORDS = { no_route: 'no route', not_covered: 'token not listed by the quote source (no reading)', error: 'no answer (no reading)', not_quoted: 'not asked' };
+function quoteLine(o) {
+  const head = `${o.provider_label || 'Quote'}${o.chain ? ` on ${o.chain}` : ''}${o.size_usd ? `, sell $${o.size_usd.toLocaleString('en-US')}` : ''}`;
+  if (o.outcome === 'quoted') return `${head}: receives ${usd(o.received_usd)}${typeof o.cost_pct === 'number' ? `, cost ${pct(o.cost_pct)}` : ''}`;
+  return `${head}: ${QUOTE_WORDS[o.outcome] || words(o.outcome)}`;
+}
+
 function Observations({ v }) {
   const list = v.monitoring.recent;
   if (!list.length) return <p className="none">No monitor observation on record. Monitoring is off until you turn it on.</p>;
@@ -504,7 +514,8 @@ function Observations({ v }) {
         <li key={o.obs_id} id={`fx-obs-${o.obs_id}`} tabIndex={-1}>
           <span className="fx-mono faint">{o.obs_id}</span>
           <span>{fmtDateTime(o.observed_at)}</span>
-          <span>{o.kind === 'product_check' ? `${o.label || o.url}: ${o.outcome}${o.http_status ? ` (${o.http_status})` : ''}` : `${o.repository}: ${o.outcome}${o.latest_delivery_at ? `, last delivery ${fmtDate(o.latest_delivery_at)}` : ''}`}</span>
+          <span>{o.kind === 'product_check' ? `${o.label || o.url}: ${o.outcome}${o.http_status ? ` (${o.http_status})` : ''}` : o.kind === 'executable_quote' ? quoteLine(o) : `${o.repository}: ${o.outcome}${o.latest_delivery_at ? `, last delivery ${fmtDate(o.latest_delivery_at)}` : ''}`}</span>
+          {o.kind === 'executable_quote' && o.route ? <span className="faint">{`route ${o.route}`}</span> : null}
           {o.error ? <span className="faint">{o.error}</span> : null}
           {o.excerpt ? <blockquote className="fx-excerpt">{o.excerpt}</blockquote> : null}
           <span className="faint fx-mono" title="This observation's own SHA-256, written when it was recorded">{`SHA-256 ${shortHash(o.sha256)}`}</span>
@@ -577,7 +588,7 @@ function Method({ v }) {
       <dl className="fx-f-dl">
         {EVENTS.map((e) => {
           const x = d.events[e];
-          return <div key={e}><dt>{x.label}</dt><dd>{x.definition} <span className="faint">{`Cadence: ${x.cadence} ${x.persistence ? `Persistence: ${x.persistence.hours} h, ${x.persistence.min_readings} reading(s). ` : ''}${x.recovery ? `Recovery: ${x.recovery.hours} h, ${x.recovery.min_readings} reading(s). ` : ''}${x.freshness_hours ? `Freshness: ${x.freshness_hours} h. ` : ''}Resolution: ${x.resolution} Limits: ${x.limits}`}</span></dd></div>;
+          return <div key={e}><dt>{x.label}</dt><dd>{x.definition} <span className="faint">{`Cadence: ${(v.cadence_now && v.cadence_now[e]) || x.cadence} ${x.persistence ? `Persistence: ${x.persistence.hours} h, ${x.persistence.min_readings} reading(s). ` : ''}${x.recovery ? `Recovery: ${x.recovery.hours} h, ${x.recovery.min_readings} reading(s). ` : ''}${x.freshness_hours ? `Freshness: ${x.freshness_hours} h. ` : ''}Resolution: ${x.resolution} Limits: ${x.limits}`}</span></dd></div>;
         })}
       </dl>
       <h4 className="fx-h4">Your screening preferences</h4>
@@ -687,7 +698,27 @@ function Actions({ v, pid }) {
   const proposedChecks = m.proposed.product_checks.filter((p) => !p.approved && p.allowed && p.allowed.ok);
   const proposedRepos = m.proposed.repositories.filter((p) => !p.approved);
   const blocked = m.proposed.product_checks.filter((p) => !p.approved && p.allowed && !p.allowed.ok);
-  const nTargets = m.targets.product_checks.length + m.targets.repositories.length;
+  const quoteOptions = m.proposed.exit_quotes || [];
+  const quotable = quoteOptions.filter((o) => o.supported && !o.approved);
+  const notQuotable = quoteOptions.filter((o) => !o.supported);
+  const quoteTargets = m.exit_quote_targets || [];
+  const nTargets = m.targets.product_checks.length + m.targets.repositories.length + quoteTargets.length;
+  const sizes = v.preferences.exit_sizes_usd.map((s) => `$${s.toLocaleString('en-US')}`).join(', ');
+  const waits = (m.status.quote_providers || []).filter((p) => p.wait_until);
+  // Every monitoring change is one explicit click, sent from here.
+  const changeMonitoring = async (key, body, said) => {
+    setBusy(key);
+    try {
+      const out = await api.post(`/api/projects/${enc(pid)}/forensics/monitoring`, body);
+      const r = out.result || {};
+      toast(said(r), (r.refused || []).length && !(r.added || []).length && !(r.removed || []).length && body.enabled === undefined ? 'bad' : undefined);
+      await refresh();
+    } catch (err) {
+      toast(err.message, 'bad');
+    } finally {
+      setBusy(null);
+    }
+  };
   const closeImport = () => {
     setImporting(null);
     requestAnimationFrame(() => { if (opener.current) opener.current.focus(); });
@@ -754,6 +785,15 @@ function Actions({ v, pid }) {
         <ul className="fx-list">
           {m.targets.product_checks.map((t) => <li key={t.target_id}><b>{t.label}</b>{` · ${t.url}`}<span className="faint">{` · every ${m.status.product_interval_hours} h${t.expect_text ? ` · expects "${t.expect_text}"` : ''}`}</span></li>)}
           {m.targets.repositories.map((t) => <li key={t.target_id}><b>{`github.com/${t.owner}/${t.repo}`}</b><span className="faint">{` · every ${m.status.repo_interval_hours} h`}</span></li>)}
+          {quoteTargets.map((t) => (
+            <li key={t.target_id} className="fx-quote-target">
+              <b title={`Asks ${t.provider_label} what selling ${sizes} of the token for ${t.quote_symbol} would receive. Quotes only: nothing is signed, approved or sent.`}>{`Exit quotes on ${t.chain_label}`}</b>
+              {` · ${t.provider_label}, sold for ${t.quote_symbol}`}
+              <span className="faint fx-mono" title={t.contract_address}>{` · ${shortAddr(t.contract_address)}`}</span>
+              <span className="faint">{` · every ${m.status.quote_interval_hours} h · ${t.last_at ? `last asked ${fmtAgo(t.last_at)}` : 'not asked yet'}`}</span>
+              <button type="button" className="btn-link fx-remove" disabled={busy === `rm-${t.target_id}`} data-key={`fx-remove-${t.target_id}`} aria-label={`Stop exit quotes on ${t.chain_label}`} onClick={() => changeMonitoring(`rm-${t.target_id}`, { remove: [t.target_id] }, (r) => ((r.removed || []).length ? `Exit quotes on ${t.chain_label} stopped` : 'Nothing changed'))}>Remove</button>
+            </li>
+          ))}
         </ul>
       ) : <p className="none">No target approved.</p>}
       {proposedChecks.length || proposedRepos.length ? (
@@ -764,48 +804,44 @@ function Actions({ v, pid }) {
             className="btn btn-sm"
             disabled={busy === 'approve'}
             data-key="fx-approve"
-            onClick={async () => {
-              setBusy('approve');
-              try {
-                const out = await api.post(`/api/projects/${enc(pid)}/forensics/monitoring`, { approve: { receipt_id: m.proposed.receipt_id, product_checks: proposedChecks.map((p) => p.url), repositories: proposedRepos.map((p) => `${p.owner}/${p.repo}`) } });
-                const r = out.result || {};
-                toast(`${(r.added || []).length} approved${(r.refused || []).length ? `, ${(r.refused || []).length} refused` : ''}`);
-                await refresh();
-              } catch (err) {
-                toast(err.message, 'bad');
-              } finally {
-                setBusy(null);
-              }
-            }}
+            onClick={() => changeMonitoring('approve', { approve: { receipt_id: m.proposed.receipt_id, product_checks: proposedChecks.map((p) => p.url), repositories: proposedRepos.map((p) => `${p.owner}/${p.repo}`) } }, (r) => `${(r.added || []).length} approved${(r.refused || []).length ? `, ${(r.refused || []).length} refused` : ''}`)}
           >
             Approve these targets
           </button>
         </div>
       ) : null}
       {blocked.length ? <p className="faint">{`Not checkable: ${blocked.map((p) => `${p.url} (${p.allowed.reason})`).join('; ')}`}</p> : null}
+      {quotable.length ? (
+        <div className="fx-proposed fx-quotes-proposed">
+          <p>{`Exit quotes can be asked on ${quotable.map((o) => `${o.chain_label} (${o.provider_label})`).join(', ')}`}</p>
+          {quotable.map((o) => (
+            <button
+              key={o.key}
+              type="button"
+              className="btn btn-sm"
+              disabled={busy === `quote-${o.key}`}
+              data-key={`fx-approve-quote-${o.chain_id}`}
+              title={`Every ${m.status.quote_interval_hours} hours while monitoring is on, asks ${o.provider_label} what selling ${sizes} of ${shortAddr(o.contract_address)} for ${o.quote_symbol} would receive. Quotes only: nothing is signed, approved or sent.`}
+              onClick={() => changeMonitoring(`quote-${o.key}`, { approve_quotes: [o.key] }, (r) => ((r.added || []).length ? `Exit quotes approved on ${o.chain_label}` : ((r.refused || [])[0] || {}).reason || 'Nothing changed'))}
+            >
+              {`Approve exit quotes on ${o.chain_label}`}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {notQuotable.length ? <p className="faint">{`No exit quotes: ${notQuotable.map((o) => `${o.chain_label} (${o.reason})`).join('; ')}`}</p> : null}
       {nTargets ? (
         <button
           type="button"
           className="btn btn-sm"
           disabled={busy === 'monitor'}
           data-key="fx-monitor-toggle"
-          onClick={async () => {
-            setBusy('monitor');
-            try {
-              await api.post(`/api/projects/${enc(pid)}/forensics/monitoring`, { enabled: !m.enabled });
-              toast(m.enabled ? 'Monitoring turned off' : 'Monitoring turned on');
-              await refresh();
-            } catch (err) {
-              toast(err.message, 'bad');
-            } finally {
-              setBusy(null);
-            }
-          }}
+          onClick={() => changeMonitoring('monitor', { enabled: !m.enabled }, () => (m.enabled ? 'Monitoring turned off' : 'Monitoring turned on'))}
         >
           {m.enabled ? 'Turn monitoring off' : 'Turn monitoring on'}
         </button>
       ) : null}
-      <p className="faint fx-act-note">{`Monitor: ${m.status.held ? 'held in this restored copy' : m.status.enabled ? `${m.status.requests_this_month} of ${m.status.monthly_budget} requests this month${m.status.last_run_at ? ` · last run ${fmtAgo(m.status.last_run_at)}` : ''}${m.status.github_wait_until ? ` · GitHub asked to wait until ${fmtDateTime(m.status.github_wait_until)}` : ''}` : 'turned off in settings'}`}</p>
+      <p className="faint fx-act-note">{`Monitor: ${m.status.held ? 'held in this restored copy' : m.status.enabled ? `${m.status.requests_this_month} of ${m.status.monthly_budget} requests this month${m.status.last_run_at ? ` · last run ${fmtAgo(m.status.last_run_at)}` : ''}${m.status.github_wait_until ? ` · GitHub asked to wait until ${fmtDateTime(m.status.github_wait_until)}` : ''}${waits.map((p) => ` · ${p.label} asked to wait until ${fmtDateTime(p.wait_until)}`).join('')}` : 'turned off in settings'}`}</p>
       {importing ? <ImportDialog pid={pid} audit={importing.audit} role={importing.role} onClose={closeImport} /> : null}
     </section>
   );

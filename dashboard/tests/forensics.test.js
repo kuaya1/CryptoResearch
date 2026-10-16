@@ -735,3 +735,317 @@ test('connector: Claude investigates, ChatGPT challenges, Gemini is refused; pro
   const gp = await call('gemini', 'pending_forensics', {});
   assert.equal(gp.data.status, 'no_role');
 });
+
+// ---------------------------------------------------------------------------
+// 14. Exit quotes from the monitor (exitquotes.js), against stubbed quote
+// sources: Eric approves each chain; quotes only, at fixed origins; each
+// answer is a dated aggregator observation that liquidityReadings reads
+// unchanged; no route counts only from the aggregator; an error, a token it
+// does not list, a rate limit or a spent budget is no reading.
+
+const XQ = require('../core/exitquotes');
+const SOL_MINT = 'FiCTxmp1Token111111111111111111111111111111';
+const BASE_TOKEN = `0x${require('crypto').createHash('sha1').update('FICTIONAL-XQ-BASE').digest('hex')}`;
+const TRON_TOKEN = 'TFiCTxmp1Token11111111111111111111';
+const USDC_SOL = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const XQ_CG = 'exit-quote-fictional';
+const XQ_PRICE = 0.25;
+const QUOTE_ORIGINS = ['https://api.jup.ag', 'https://aggregator-api.kyberswap.com', 'https://api.coingecko.com'];
+const noSleep = async () => {};
+
+function quoteSetup(label, settings) {
+  const t = tempWorkspace(label, settings);
+  const p = require('../core/projects').addProject(t.ws, { name: 'Exit Quote Example (FICTIONAL)', symbol: 'XQX', official_website: 'https://example.org/xqx', coingecko_id: XQ_CG, assets: [{ chain: 'solana', contract_address: SOL_MINT }, { chain: 'base', contract_address: BASE_TOKEN }, { chain: 'tron', contract_address: TRON_TOKEN }], evidence: [{ url: 'https://example.org/xqx', note: 'fictional' }] });
+  return { ...t, pid: p.project_id };
+}
+
+// CoinGecko's price as this desk stores it (market-data/latest.json).
+function storePrice(ws, atMs, price = XQ_PRICE) {
+  fs.mkdirSync(path.join(ws.root, 'market-data'), { recursive: true });
+  atomicWrite(path.join(ws.root, 'market-data', 'latest.json'), jsonText({ provider: 'coingecko', assets: { [XQ_CG]: { id: XQ_CG, price_usd: price, source_last_updated_at: at(atMs), fetched_at: at(atMs) } } }));
+}
+
+const keyOf = (v, chain) => v.monitoring.proposed.exit_quotes.find((o) => o.chain === chain).key;
+
+// The three origins, stubbed. jupiter(url) and kyber(url) return { cost } (the
+// share lost, quoted at the stored price) or a whole answer { status, body,
+// headers } or { throw }.
+function quoteFetch({ jupiter = () => ({ cost: 0.02 }), kyber = () => ({ cost: 0.03 }), coingecko = null } = {}, seen = []) {
+  return async (url, init = {}) => {
+    const u = new URL(url);
+    seen.push({ url: u.toString(), origin: u.origin, headers: init.headers || {}, redirect: init.redirect || null });
+    let r;
+    if (u.origin === 'https://api.coingecko.com') {
+      r = coingecko ? coingecko(u) : { status: 200, body: { id: XQ_CG, detail_platforms: { solana: { decimal_place: 6, contract_address: SOL_MINT }, base: { decimal_place: 18, contract_address: `0x${BASE_TOKEN.slice(2).toUpperCase()}` }, tron: { decimal_place: 6, contract_address: TRON_TOKEN } } } };
+    } else if (u.origin === 'https://api.jup.ag') {
+      const amount = u.searchParams.get('amount');
+      const a = jupiter(u);
+      const sold = (Number(amount) / 1e6) * XQ_PRICE;
+      r = a.cost === undefined ? a : { status: 200, body: { inputMint: u.searchParams.get('inputMint'), inAmount: amount, outputMint: u.searchParams.get('outputMint'), outAmount: String(Math.floor(sold * (1 - a.cost) * 1e6)), otherAmountThreshold: '1', swapMode: 'ExactIn', slippageBps: 50, platformFee: null, priceImpactPct: String(a.cost * 0.8), routePlan: [{ swapInfo: { ammKey: 'FICTIONAL', label: 'Fictional AMM', inputMint: SOL_MINT, outputMint: USDC_SOL, inAmount: amount, outAmount: '1' }, percent: 100 }], contextSlot: 1, swapUsdValue: String(sold) } };
+    } else if (u.origin === 'https://aggregator-api.kyberswap.com') {
+      const amount = u.searchParams.get('amountIn');
+      const a = kyber(u);
+      const sold = (Number(amount) / 1e18) * XQ_PRICE;
+      r = a.cost === undefined ? a : { status: 200, body: { code: 0, message: 'successfully', data: { routeSummary: { tokenIn: u.searchParams.get('tokenIn').toLowerCase(), amountIn: amount, amountInUsd: String(sold), tokenOut: u.searchParams.get('tokenOut').toLowerCase(), amountOut: String(Math.floor(sold * (1 - a.cost) * 1e6)), amountOutUsd: String(sold * (1 - a.cost)), gas: '1', gasPrice: '1', gasUsd: '0.05', l1FeeUsd: '0.01', route: [[{ pool: '0xpool', tokenIn: 'a', tokenOut: 'b', exchange: 'fictional-dex' }]], routeID: 'FICTIONAL', timestamp: 1 } }, requestId: 'FICTIONAL' } };
+    } else {
+      throw new Error(`unexpected origin ${u.origin}`);
+    }
+    if (r.throw) throw Object.assign(new Error(r.throw), { name: r.throw === 'timeout' ? 'AbortError' : 'Error' });
+    return { status: r.status, ok: r.status >= 200 && r.status < 300, headers: { get: (k) => ((r.headers || {})[k.toLowerCase()] ?? null) }, text: async () => JSON.stringify(r.body ?? null), json: async () => r.body ?? null };
+  };
+}
+
+test('exit quotes: only a verified contract on a covered chain can be quoted; amounts and answers are read exactly', () => {
+  const identity = (status) => ({ identity: { status, coingecko_id: XQ_CG, assets: [{ chain: 'solana', contract_address: SOL_MINT }, { chain: 'base', contract_address: BASE_TOKEN }, { chain: 'tron', contract_address: TRON_TOKEN }, { chain: 'not-a-real-chain', contract_address: 'X' }, { chain: 'ethereum', contract_address: '0x123' }, { chain: 'base', contract_address: USDC_BASE }] } });
+  const o = XQ.quoteOptions(identity('verified'));
+  const by = (chain, addr) => o.find((x) => x.chain === chain && (!addr || x.contract_address === addr));
+  assert.equal(by('solana').supported, true);
+  assert.equal(by('solana').provider, 'jupiter');
+  assert.equal(by('base', BASE_TOKEN).provider, 'kyberswap');
+  assert.match(by('tron').reason, /No keyless aggregator quote source on Tron/);
+  assert.match(by('not-a-real-chain').reason, /not a chain this desk recognizes/);
+  assert.match(by('ethereum').reason, /address shape/);
+  assert.match(by('base', USDC_BASE).reason, /quote currency itself/);
+  assert.ok(XQ.quoteOptions(identity('pending')).every((x) => !x.supported), 'an unverified identity is quoted nowhere');
+  // Base units: 15 significant digits, cut and never rounded up.
+  assert.equal(XQ.toBaseUnits(500 / XQ_PRICE, 6), '2000000000');
+  assert.equal(XQ.toBaseUnits(500 / XQ_PRICE, 18), `2000${'0'.repeat(18)}`);
+  assert.equal(XQ.toBaseUnits(1 / 3, 6), '333333');
+  assert.equal(XQ.toBaseUnits(1e-9, 6), null, 'less than one base unit sells nothing');
+  // The request names a token, a currency and an amount: never a wallet.
+  const jUrl = XQ.requestUrl(XQ.PROVIDERS.jupiter, XQ.PROVIDERS.jupiter.chains.solana, { token: SOL_MINT, amountIn: '1' });
+  const kUrl = XQ.requestUrl(XQ.PROVIDERS.kyberswap, XQ.PROVIDERS.kyberswap.chains[8453], { token: BASE_TOKEN, amountIn: '1' });
+  assert.equal(new URL(jUrl).origin + new URL(jUrl).pathname, 'https://api.jup.ag/swap/v1/quote');
+  assert.equal(new URL(kUrl).origin + new URL(kUrl).pathname, 'https://aggregator-api.kyberswap.com/base/api/v1/routes');
+  for (const u of [jUrl, kUrl]) assert.doesNotMatch(u, /taker|userPublicKey|wallet|sender|recipient|[?&]to=|[?&]from=/i);
+  // Jupiter's priceImpactPct is a fraction; its no-route codes are no route;
+  // a token it does not trade and a server error are no reading.
+  const ctxJ = { token: SOL_MINT, quote: XQ.PROVIDERS.jupiter.chains.solana.quote, amountIn: '2000000000' };
+  const okJ = XQ.readJupiter({ status: 200, body: { inputMint: SOL_MINT, outputMint: USDC_SOL, inAmount: '2000000000', outAmount: '490000000', swapMode: 'ExactIn', priceImpactPct: '0.177', routePlan: [{ swapInfo: { label: 'A' }, percent: 60 }, { swapInfo: { label: 'B' }, percent: 40 }] } }, ctxJ);
+  assert.equal(okJ.status, 'quoted');
+  assert.equal(okJ.received_usd, 490);
+  assert.equal(okJ.price_impact_pct, 17.7);
+  assert.equal(okJ.route, 'A 60%, B 40%');
+  assert.equal(XQ.readJupiter({ status: 200, body: { inputMint: SOL_MINT, outputMint: USDC_SOL, inAmount: '1', outAmount: '490000000' } }, ctxJ).status, 'error', 'an answer for another amount is not used');
+  for (const code of ['NO_ROUTES_FOUND', 'COULD_NOT_FIND_ANY_ROUTE', 'ROUTE_PLAN_DOES_NOT_CONSUME_ALL_THE_AMOUNT']) assert.equal(XQ.readJupiter({ status: 400, body: { error: 'x', errorCode: code } }, ctxJ).status, 'no_route', code);
+  assert.equal(XQ.readJupiter({ status: 400, body: { error: 'x', errorCode: 'TOKEN_NOT_TRADABLE' } }, ctxJ).status, 'not_covered');
+  const down = XQ.readJupiter({ status: 503, body: null }, ctxJ);
+  assert.equal(down.status, 'error');
+  assert.equal(down.transient, true);
+  const ctxK = { token: BASE_TOKEN, quote: XQ.PROVIDERS.kyberswap.chains[8453].quote, amountIn: '5' };
+  for (const code of [4008, 4010]) assert.equal(XQ.readKyber({ status: 400, body: { code, message: 'route not found' } }, ctxK).status, 'no_route');
+  assert.equal(XQ.readKyber({ status: 400, body: { code: 4011 } }, ctxK).status, 'not_covered');
+  const big = XQ.readKyber({ status: 400, body: { code: 4009 } }, ctxK);
+  assert.equal(big.status, 'error');
+  assert.equal(big.transient, false, 'a refused size is no reading, and not an outage');
+  const okK = XQ.readKyber({ status: 200, body: { code: 0, data: { routeSummary: { tokenIn: BASE_TOKEN, amountIn: '5', tokenOut: USDC_BASE.toLowerCase(), amountOut: '99000000', amountInUsd: '100', amountOutUsd: '99', gasUsd: '0.05', l1FeeUsd: '0.01', route: [[{ exchange: 'x' }, { exchange: 'y' }]] } } } }, ctxK);
+  assert.equal(okK.received_usd, 99);
+  assert.equal(okK.gas_usd, 0.06, 'the network fee includes the L1 fee');
+  assert.equal(okK.price_impact_pct, 1);
+  assert.equal(okK.route, 'x > y');
+  // A 429's wait: Retry-After, KyberSwap's reset-after, else ten minutes.
+  const hdr = (h) => ({ status: 429, headers: { get: (k) => h[k] ?? null } });
+  assert.equal(XQ.rateLimitUntil(hdr({ 'retry-after': '120' }), T0), T0 + 120000);
+  assert.equal(XQ.rateLimitUntil(hdr({ 'x-ratelimit-reset-after': '10' }), T0), T0 + 60000, 'at least a minute');
+  assert.equal(XQ.rateLimitUntil(hdr({}), T0), T0 + 600000);
+  assert.equal(XQ.rateLimitUntil({ status: 200 }, T0), null);
+});
+
+test('exit quotes are approved per chain by an explicit choice; the tab reads them and writes nothing', async (t) => {
+  const { ws, pid, root, cleanup } = quoteSetup('fo-xq-approve');
+  t.after(cleanup);
+  let v = F.view(ws, pid);
+  assert.equal(v.monitoring.proposed.exit_quotes.length, 3);
+  assert.deepEqual(v.monitoring.proposed.exit_quotes.filter((o) => o.supported).map((o) => o.chain).sort(), ['base', 'solana']);
+  assert.match(v.cadence_now.liquidity_impairment, /every 12 hours on the chains you approved/);
+  assert.equal(v.definitions.events.liquidity_impairment.version, D.EVENTS_VERSION, 'the published definitions are kept as they are');
+  const out = F.setMonitoring(ws, pid, { approve_quotes: ['solana:NotOnFi1e1111111111111111111111111', `tron:${TRON_TOKEN}`, keyOf(v, 'solana')] });
+  assert.equal(out.result.added.length, 1);
+  assert.equal(out.result.refused.length, 2, 'only a contract on file, on a covered chain');
+  const prof = F.readProfile(ws, pid);
+  assert.equal(prof.targets.exit_quotes[0].provider, 'jupiter');
+  assert.equal(prof.targets.exit_quotes[0].contract_address, SOL_MINT);
+  assert.equal(prof.monitoring.enabled, false, 'approving a chain does not turn monitoring on');
+  F.setMonitoring(ws, pid, { enabled: true });
+  assert.equal(F.readProfile(ws, pid).monitoring.enabled, true, 'an exit-quote chain alone is enough to monitor');
+  const before = hashTree(root);
+  const calls = await noNetwork(async () => { v = F.view(ws, pid); });
+  assert.equal(calls, 0);
+  assert.deepEqual(hashTree(root), before, 'reading the tab asked nothing and wrote nothing');
+  assert.equal(v.monitoring.proposed.exit_quotes.find((o) => o.chain === 'solana').approved, true);
+  assert.equal(v.monitoring.exit_quote_targets[0].last_at, null);
+  const rm = F.setMonitoring(ws, pid, { remove: [prof.targets.exit_quotes[0].target_id] });
+  assert.deepEqual(rm.result.removed, [prof.targets.exit_quotes[0].target_id]);
+  assert.equal(F.readProfile(ws, pid).targets.exit_quotes.length, 0);
+});
+
+test('the monitor quotes each approved chain at each size, at fixed origins; each answer is a dated aggregator observation', async (t) => {
+  const { ws, pid, cleanup } = quoteSetup('fo-xq-run');
+  t.after(cleanup);
+  const v0 = F.view(ws, pid);
+  F.setMonitoring(ws, pid, { approve_quotes: [keyOf(v0, 'solana'), keyOf(v0, 'base')], enabled: true });
+  const now = Date.now();
+  storePrice(ws, now - 30 * 60000);
+  const seen = [];
+  const r = await monitor.refresh(ws, { now, fetchImpl: quoteFetch({}, seen), sleep: noSleep });
+  assert.equal(r.status, 'ok', r.message);
+  assert.equal(r.counts.quotes, 6, 'three sizes on two chains');
+  assert.equal(seen.filter((s) => s.origin === 'https://api.coingecko.com').length, 2, 'the decimals of each contract, once');
+  assert.ok(seen.every((s) => QUOTE_ORIGINS.includes(s.origin)), 'fixed origins only');
+  assert.ok(seen.filter((s) => s.origin !== 'https://api.coingecko.com').every((s) => s.redirect === 'error'), 'no redirect is followed');
+  assert.ok(seen.every((s) => !/taker|userPublicKey|wallet|sender|recipient/i.test(s.url)), 'no wallet in any request');
+  assert.ok(seen.filter((s) => s.origin === 'https://aggregator-api.kyberswap.com').every((s) => s.headers['x-client-id']), 'KyberSwap is told who asks');
+  const jup500 = seen.find((s) => s.origin === 'https://api.jup.ag' && new URL(s.url).searchParams.get('amount') === '2000000000');
+  assert.ok(jup500, '$500 at $0.25 is 2,000 tokens of 6 decimals');
+  assert.equal(new URL(jup500.url).searchParams.get('outputMint'), USDC_SOL);
+  assert.ok(seen.some((s) => s.origin === 'https://aggregator-api.kyberswap.com' && new URL(s.url).searchParams.get('amountIn') === `2000${'0'.repeat(18)}`), 'the Base contract\'s 18 decimals, matched case-insensitively');
+  assert.equal(monitor.statusView(ws, now).requests_this_month, 8, 'every request counted against the monthly budget');
+  const obs = F.readObservations(ws, pid, { to: now + H }).filter((o) => o.kind === 'executable_quote');
+  assert.equal(obs.length, 6);
+  for (const o of obs) {
+    assert.equal(o.route_scope, 'aggregator');
+    assert.equal(o.source, 'monitor');
+    assert.equal(o.observed_at, at(now));
+    assert.equal(o.status, 'quoted');
+    assert.match(o.quote.route, /Fictional AMM|fictional-dex/);
+    assert.equal(o.price.usd, XQ_PRICE);
+    assert.match(o.note, /nothing was signed, approved or sent/);
+    assert.match(o.sha256, /^[0-9a-f]{64}$/);
+  }
+  const k500 = obs.find((o) => o.provider === 'kyberswap' && o.size_usd === 500);
+  assert.equal(k500.quote.gas_usd, 0.06);
+  const v = F.view(ws, pid, { now: now + 60000 });
+  const row = v.liquidity.exits.find((x) => x.size_usd === 500);
+  assert.equal(row.status, 'estimated');
+  assert.equal(row.best.captured_by, 'monitor');
+  assert.equal(row.best.venue, 'Jupiter', 'the cheaper of the two routes in the latest run');
+  assert.equal(row.best.retrieved_at, at(now));
+  assert.ok(Math.abs(row.best.cost_pct - 2) < 0.01, 'Jupiter lost 2% and stated no network fee');
+  assert.ok(row.best.limitations.some((l) => /USDC valued at \$1\.00/.test(l)));
+  assert.equal(v.states.liquidity.state, 'within', 'one aggregator reading within the limit');
+  assert.equal(v.states.liquidity.latest_at, at(now));
+  assert.ok(v.monitoring.recent.some((o) => o.kind === 'executable_quote' && o.provider_label === 'KyberSwap' && o.size_usd === 2000));
+  // Not due again within the interval; the next run reuses the decimals.
+  assert.equal((await monitor.refresh(ws, { now: now + H, fetchImpl: quoteFetch({}, seen), sleep: noSleep })).status, 'noop');
+  storePrice(ws, now + 12 * H);
+  const n = seen.length;
+  await monitor.refresh(ws, { now: now + 12 * H + 10 * 60000, fetchImpl: quoteFetch({}, seen), sleep: noSleep });
+  assert.equal(seen.length - n, 6);
+  assert.ok(seen.slice(n).every((s) => s.origin !== 'https://api.coingecko.com'), 'the decimals on record are reused');
+  // A stale price sets no size: nothing is asked.
+  const m = seen.length;
+  await monitor.refresh(ws, { now: now + 30 * H, fetchImpl: quoteFetch({}, seen), sleep: noSleep });
+  assert.equal(seen.length, m);
+  const stale = F.readObservations(ws, pid, { to: now + 31 * H }).filter((o) => o.status === 'not_quoted');
+  assert.equal(stale.length, 2);
+  assert.match(stale[0].error, /No CoinGecko price stored in the last 6 hours/);
+});
+
+test('the liquidity outcome resolves from the monitor\'s quotes: an episode, its recovery and checkpoint outcomes', async (t) => {
+  const { ws, pid, cleanup } = quoteSetup('fo-xq-resolve');
+  t.after(cleanup);
+  const a = F.createAudit(ws, { project_id: pid, assistant: 'claude' });
+  const s = F.saveReport(ws, { project_id: pid, audit_id: a.audit_id, provider: 'claude', text: FX.reportText(a.audit) });
+  const O = Date.parse(s.receipt.origin);
+  F.setMonitoring(ws, pid, { approve_quotes: [keyOf(F.view(ws, pid), 'solana')], enabled: true });
+  // Every 12 hours from an hour after the origin: within the 5% limit, then
+  // over it (8%) from 61 h to 133 h, then within again.
+  const over = (k) => k >= 5 && k <= 11;
+  let state72 = null;
+  for (let k = 0; k <= 20; k++) {
+    const T = O + H + k * 12 * H;
+    storePrice(ws, T - 20 * 60000);
+    const r = await monitor.refresh(ws, { now: T, fetchImpl: quoteFetch({ jupiter: () => ({ cost: over(k) ? 0.08 : 0.02 }) }), sleep: noSleep });
+    assert.equal(r.counts.quotes, 3, `run ${k}: ${r.message}`);
+    if (k === 6) assert.equal(F.view(ws, pid, { now: T + 60000 }).states.liquidity.state, 'watch', 'over the limit, not yet for 72 hours');
+    if (k === 11) state72 = F.view(ws, pid, { now: T + 60000 }).states.liquidity;
+  }
+  assert.equal(state72.state, 'occurred', 'over the limit in every aggregator reading for 72 hours');
+  const end = O + H + 20 * 12 * H + 60000;
+  const v = F.view(ws, pid, { now: end });
+  assert.equal(v.states.liquidity.state, 'recovered', 'back within the limit for 72 hours');
+  const lines = F.resolutionsOf(ws, pid, s.receipt_id);
+  const by = (cp) => lines.find((x) => x.checkpoint === cp && x.event === 'liquidity_impairment');
+  assert.equal(by('72h').outcome, 'not_occurred', 'quotes covered the first 72 hours, none over the limit for long enough');
+  assert.equal(by('7d').outcome, 'occurred', 'the episode was confirmed before day 7');
+  const cp7 = v.timeline.checkpoints.find((c) => c.id === '7d');
+  assert.equal(cp7.observed.liquidity_impairment.outcome, 'occurred');
+  assert.equal(cp7.observed.liquidity_impairment.recorded, true);
+});
+
+test('an error or an unlisted token is no reading; a 429 and an outage are waited out; budget, identity and restores stop quotes', async (t) => {
+  const { ws, pid, cleanup } = quoteSetup('fo-xq-fail');
+  t.after(cleanup);
+  const v0 = F.view(ws, pid);
+  F.setMonitoring(ws, pid, { approve_quotes: [keyOf(v0, 'solana'), keyOf(v0, 'base')], enabled: true });
+  const now = Date.now();
+  storePrice(ws, now);
+  const seen = [];
+  const r1 = await monitor.refresh(ws, { now, fetchImpl: quoteFetch({ jupiter: () => ({ status: 503, body: null }), kyber: () => ({ status: 429, headers: { 'retry-after': '600' }, body: null }) }, seen), sleep: noSleep });
+  assert.equal(r1.counts.quote_errors, 1, 'one failed request, then the provider is left alone');
+  assert.equal(seen.filter((s) => s.origin === 'https://api.jup.ag').length, 1);
+  assert.equal(seen.filter((s) => s.origin === 'https://aggregator-api.kyberswap.com').length, 1);
+  let obs = F.readObservations(ws, pid, { to: now + H }).filter((o) => o.kind === 'executable_quote');
+  assert.equal(obs.length, 1, 'a rate limit is no observation about the token');
+  assert.equal(obs[0].status, 'error');
+  assert.equal(obs[0].quote, null);
+  let v = F.view(ws, pid, { now: now + 60000 });
+  assert.equal(v.states.liquidity.state, 'unknown', 'a provider error is unknown, never a cost');
+  assert.ok(v.liquidity.exits.every((x) => x.best === null));
+  const st = monitor.statusView(ws, now + 60000);
+  const jw = st.quote_providers.find((p) => p.id === 'jupiter');
+  const kw = st.quote_providers.find((p) => p.id === 'kyberswap');
+  assert.ok(jw.wait_until && jw.failures === 1, 'the outage starts a backoff, kept on disk');
+  assert.equal(kw.wait_until, at(now + 600000), 'the 429\'s Retry-After is honored');
+  // Before the waits end nothing is asked, even when forced.
+  const n = seen.length;
+  await monitor.refresh(ws, { now: now + 5 * 60000, fetchImpl: quoteFetch({}, seen), sleep: noSleep, force: true });
+  assert.equal(seen.length, n);
+  // Later: Jupiter does not trade the token (no reading); KyberSwap finds no
+  // route (a reading over the limit, from an aggregator).
+  const later = now + 13 * H;
+  storePrice(ws, later);
+  await monitor.refresh(ws, { now: later, fetchImpl: quoteFetch({ jupiter: () => ({ status: 400, body: { error: 'not tradable', errorCode: 'TOKEN_NOT_TRADABLE' } }), kyber: () => ({ status: 400, body: { code: 4008, message: 'route not found' } }) }, seen), sleep: noSleep });
+  obs = F.readObservations(ws, pid, { to: later + H }).filter((o) => o.kind === 'executable_quote' && o.observed_at === at(later));
+  assert.equal(obs.filter((o) => o.status === 'not_covered').length, 3);
+  assert.ok(obs.filter((o) => o.status === 'not_covered').every((o) => o.quote === null));
+  assert.equal(obs.filter((o) => o.status === 'no_route').length, 3);
+  v = F.view(ws, pid, { now: later + 60000 });
+  assert.equal(v.states.liquidity.state, 'watch', 'no route from the aggregator counts as beyond the limit');
+  assert.equal(v.liquidity.exits.find((x) => x.size_usd === 500).status, 'no_route');
+  assert.equal(monitor.statusView(ws, later).quote_providers.find((p) => p.id === 'jupiter').failures, 0, 'an answer ends the backoff');
+  // CoinGecko lists another contract: the decimals are unknown, nothing is asked.
+  const x = quoteSetup('fo-xq-mismatch');
+  t.after(x.cleanup);
+  F.setMonitoring(x.ws, x.pid, { approve_quotes: [keyOf(F.view(x.ws, x.pid), 'base')], enabled: true });
+  storePrice(x.ws, now);
+  const seenX = [];
+  await monitor.refresh(x.ws, { now, fetchImpl: quoteFetch({ coingecko: () => ({ status: 200, body: { id: XQ_CG, detail_platforms: { base: { decimal_place: 18, contract_address: '0x0000000000000000000000000000000000000001' } } } }) }, seenX), sleep: noSleep });
+  assert.equal(seenX.filter((s) => s.origin === 'https://aggregator-api.kyberswap.com').length, 0);
+  const nq = F.readObservations(x.ws, x.pid, { to: now + H }).filter((o) => o.kind === 'executable_quote');
+  assert.equal(nq.length, 1);
+  assert.match(nq[0].error, /does not list this exact contract/);
+  // The monthly budget: a CoinGecko lookup and one quote, then it stops.
+  const b = quoteSetup('fo-xq-budget', { forensics: { monitor: { enabled: true, monthly_request_budget: 2 } } });
+  t.after(b.cleanup);
+  F.setMonitoring(b.ws, b.pid, { approve_quotes: [keyOf(F.view(b.ws, b.pid), 'solana')], enabled: true });
+  storePrice(b.ws, now);
+  const seenB = [];
+  const rb = await monitor.refresh(b.ws, { now, fetchImpl: quoteFetch({}, seenB), sleep: noSleep });
+  assert.equal(rb.counts.budget, true);
+  assert.equal(seenB.length, 2);
+  assert.equal(F.readObservations(b.ws, b.pid, { to: now + H }).filter((o) => o.quote).length, 1);
+  // A contract dropped from the identity is no longer asked.
+  require('../core/projects').updateIdentity(b.ws, b.pid, { assets: [{ chain: 'base', contract_address: BASE_TOKEN }] });
+  const seenD = [];
+  await monitor.refresh(b.ws, { now: now + 13 * H, fetchImpl: quoteFetch({}, seenD), sleep: noSleep });
+  assert.equal(seenD.length, 0);
+  assert.match(F.readObservations(b.ws, b.pid, { to: now + 14 * H }).pop().error, /no longer lists this contract/);
+  // A restored copy sends nothing.
+  atomicWrite(path.join(b.root, 'config', 'restored-copy.json'), jsonText({ research_held: true, restored_at: at(now) }));
+  let sentHeld = 0;
+  const held = await monitor.refresh(b.ws, { now: now + 26 * H, fetchImpl: async () => { sentHeld += 1; throw new Error('no'); }, sleep: noSleep });
+  assert.equal(held.status, 'held');
+  assert.equal(sentHeld, 0);
+});

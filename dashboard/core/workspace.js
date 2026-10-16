@@ -94,6 +94,8 @@ const DEFAULT_SETTINGS = {
       enabled: true,
       product_interval_hours: 6,
       repo_interval_hours: 24,
+      quote_interval_hours: 12,
+      quote_price_max_age_hours: 6,
       timeout_seconds: 10,
       max_bytes: 262144,
       max_projects_per_run: 20,

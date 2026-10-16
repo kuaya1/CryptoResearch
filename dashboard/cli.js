@@ -77,9 +77,11 @@ Forensics & Resilience (no paid model call; Claude investigates, ChatGPT may cha
                    [--revision-kind format_fix|reassessment|new_evidence|other --revision-note TEXT]
   forensics challenge <id> <audit_id>    ask ChatGPT to challenge the latest assessment
   forensics cancel <id> <audit_id> [--reason TEXT]
-  forensics monitor <id> [--approve <receipt_id> [--check URL]... [--repo owner/repo]...] [--remove <target_id>]...
-                   [--on | --off]        Eric's opt-in: approve proposed targets, then turn monitoring on
-  forensics run [<id>] [--force]         product checks, repository reads and due checkpoint outcomes now
+  forensics monitor <id> [--approve <receipt_id> [--check URL]... [--repo owner/repo]...] [--quote <chain_id:contract>]...
+                   [--remove <target_id>]... [--on | --off]
+                                         Eric's opt-in: approve proposed targets and exit-quote chains (keys from
+                                         forensics view: monitoring.proposed.exit_quotes), then turn monitoring on
+  forensics run [<id>] [--force]         product checks, repository reads, exit quotes and due checkpoint outcomes now
   forensics correct <id> <receipt_id> --checkpoint 30d --event delivery_inactivity --outcome unresolved --reason TEXT
                                          a recorded outcome is never rewritten: this appends a correction
 
@@ -792,7 +794,7 @@ async function run(argv) {
       if (sub === 'monitor') {
         const enabled = flags.on ? true : flags.off ? false : undefined;
         const approve = one(flags.approve) ? { receipt_id: one(flags.approve), product_checks: list(flags.check).length ? list(flags.check) : undefined, repositories: list(flags.repo).length ? list(flags.repo) : undefined } : null;
-        const r = fo.setMonitoring(ws, need(pid, 'forensics monitor <project> [--approve <receipt_id> [--check URL]... [--repo owner/repo]...] [--remove <target_id>]... [--on|--off]'), { enabled, approve, remove: list(flags.remove), by: actor });
+        const r = fo.setMonitoring(ws, need(pid, 'forensics monitor <project> [--approve <receipt_id> [--check URL]... [--repo owner/repo]...] [--quote <chain_id:contract>]... [--remove <target_id>]... [--on|--off]'), { enabled, approve, approve_quotes: list(flags.quote), remove: list(flags.remove), by: actor });
         return { status: r.noop ? 'unchanged' : 'saved', ...r.result, verified: r.verified };
       }
       if (sub === 'run') {

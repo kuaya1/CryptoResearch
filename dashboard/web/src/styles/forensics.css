@@ -191,6 +191,10 @@
 .fx-proposed { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 8px 0; padding: 10px 12px; border-radius: var(--r-well); background: var(--surface-sunken); font-size: var(--fs-sm); overflow-wrap: anywhere; }
 .fx-proposed p { flex: 1 1 260px; min-width: 0; }
 .fx-actions .btn-sm { margin-top: 6px; }
+.fx-quotes-proposed .btn-sm { margin-top: 0; }
+.fx-quote-target { overflow-wrap: anywhere; }
+.fx-remove { display: inline-flex; align-items: center; min-height: 32px; margin-left: 8px; padding: 0 4px; font-size: var(--fs-sm); }
+@media (pointer: coarse) { .fx-remove { min-height: 44px; } }
 .fx-dialog { width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; border: 1px solid var(--border); border-radius: var(--r-card); background: var(--surface); color: var(--text); box-shadow: var(--shadow-pop); }
 .fx-dialog::backdrop { background: var(--scrim); }
 .fx-dialog-head { padding: 12px 20px; background: var(--surface-band); border-bottom: 1px solid var(--separator); }

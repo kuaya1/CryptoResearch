@@ -130,9 +130,12 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   const writers = files.filter(([, s]) => /api\.post\(/.test(s)).map(([f]) => f).sort();
   assert.deepEqual(writers, ['lib/desk.js', 'lib/review.js', 'views/inspector/ModelPanel.jsx', 'views/project/Forensics.jsx', 'views/watchlist/StatusStrip.jsx', 'views/watchlist/state.js']);
   // The Forensics tab writes only from its buttons: open an audit, import an
-  // answer, approve targets, turn monitoring on or off. Never on drawing it.
+  // answer, and monitoring changes (approve targets or an exit-quote chain,
+  // remove one, turn monitoring on or off), all through changeMonitoring.
+  // Never on drawing it.
   const fx = files.find(([f]) => f === 'views/project/Forensics.jsx')[1];
-  assert.deepEqual([...fx.matchAll(/api\.post\(`([^`]+)`/g)].map((m) => m[1]).sort(), ['/api/projects/${enc(pid)}/forensics/audits', '/api/projects/${enc(pid)}/forensics/audits/${enc(audit.audit_id)}/import', '/api/projects/${enc(pid)}/forensics/monitoring', '/api/projects/${enc(pid)}/forensics/monitoring'].sort());
+  assert.deepEqual([...fx.matchAll(/api\.post\(`([^`]+)`/g)].map((m) => m[1]).sort(), ['/api/projects/${enc(pid)}/forensics/audits', '/api/projects/${enc(pid)}/forensics/audits/${enc(audit.audit_id)}/import', '/api/projects/${enc(pid)}/forensics/monitoring'].sort());
+  assert.ok([...fx.matchAll(/changeMonitoring\(/g)].length >= 4 && [...fx.matchAll(/onClick=\{\(\) => changeMonitoring\(/g)].length === [...fx.matchAll(/changeMonitoring\(`|changeMonitoring\('/g)].length, 'every monitoring change is a click');
   assert.doesNotMatch(fx.slice(fx.indexOf('function useForensics'), fx.indexOf('// ---- small parts')), /api\.post/);
   // Mark reviewed has one client (lib/review.js): the mark and its Undo, sent
   // only from the check-in's Mark reviewed and the watchlist's action.
@@ -150,11 +153,13 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   // Live updates read the version and the index only.
   const poll = desk.slice(desk.indexOf('async function pollVersion'), desk.indexOf('// The connection in words'));
   assert.doesNotMatch(poll, /api\.post|research|refresh\(\)/);
-  // Every other write sits in a handler (onClick, onSelect) or an action function.
+  // Every other write sits in a handler (onClick, onSelect) or an action
+  // function called only from one (the Forensics tab's changeMonitoring:
+  // checked above, every call is an onClick).
   for (const [f, s] of files.filter(([n]) => n !== 'lib/desk.js' && n !== 'lib/review.js' && n !== 'views/watchlist/state.js')) {
     for (const m of s.matchAll(/api\.post\(/g)) {
       const before = s.slice(Math.max(0, m.index - 900), m.index);
-      assert.match(before, /(onClick|onSelect)=\{async|const (mark|doRefresh) = async|async \(\) => \{/, `${f}: a write outside an action`);
+      assert.match(before, /(onClick|onSelect)=\{async|const (mark|doRefresh|changeMonitoring) = async|async \(\) => \{/, `${f}: a write outside an action`);
     }
   }
   // Nothing starts research: the research dialog is the only way, and it opens on a click.

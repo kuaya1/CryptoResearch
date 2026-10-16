@@ -231,7 +231,7 @@ const VERDICTS = ['supported', 'overstated', 'unsupported', 'needs_evidence', 'n
 
 // Checks this release cannot do automatically, said in the tab.
 const UNSUPPORTED = Object.freeze([
-  ['executable_quotes', 'Automatic executable exit quotes: not in this release. Exit estimates come from quotes and reserves captured in audits, with their source and time.'],
+  ['executable_quotes', 'Automatic executable exit quotes only on the chains you approve per project, sold for USDC: Solana through Jupiter; Ethereum, Base, Arbitrum One, Optimism, Polygon, Avalanche C-Chain, Linea, Unichain and Sonic through KyberSwap. Other chains, other quote currencies, single venues and order books come from quotes and reserves captured in audits, with their source and time.'],
   ['dex_server', 'DexScreener data is read by your browser on demand and never stored, so the monitor does not use it.'],
   ['wallet_tracing', 'Automatic tracing of creator or treasury wallets: not in this release. Wallet findings come from the investigator\'s cited transactions.'],
   ['other_code_hosts', 'Repositories outside GitHub, and private repositories, are not monitored.'],

@@ -7,8 +7,9 @@
 //   screening  GoPlus contract flags of verified contracts  weekly per project (screening.js); a contract change at once
 //   wallets   read-only sync of tracked wallet addresses  every wallet_sync.interval_minutes per network, or when
 //             asked (walletsync.js); only with a tracked wallet and an Alchemy key
-//   forensics opt-in product checks and repository reads, and checkpoint outcomes that came due
-//             (forensic-monitor.js); only for projects whose monitoring Eric turned on; never a model call
+//   forensics opt-in product checks, repository reads and aggregator exit quotes (quotes only), and
+//             checkpoint outcomes that came due (forensic-monitor.js, exitquotes.js); only for projects
+//             whose monitoring Eric turned on and chains he approved; never a model call
 //   research  run queued research jobs (explicit requests or configured schedules only)
 //   snapshot  daily portfolio snapshot                   once per day (America/New_York)
 //   reviews   daily review findings                      once per day

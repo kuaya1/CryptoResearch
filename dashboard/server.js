@@ -1046,6 +1046,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   route('POST', '/api/projects/([^/]+)/forensics/monitoring', (m, req, res, body) => after(forensics.setMonitoring(ws, pid(m[1]), {
     enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
     approve: body.approve && typeof body.approve === 'object' && typeof body.approve.receipt_id === 'string' ? { receipt_id: receiptId(body.approve.receipt_id), product_checks: Array.isArray(body.approve.product_checks) ? body.approve.product_checks.map(String).slice(0, 5) : undefined, repositories: Array.isArray(body.approve.repositories) ? body.approve.repositories.map(String).slice(0, 3) : undefined } : null,
+    approve_quotes: Array.isArray(body.approve_quotes) ? body.approve_quotes.map(String).slice(0, 5) : [],
     remove: Array.isArray(body.remove) ? body.remove.map(String).slice(0, 10) : [],
     by: 'dashboard',
   })));

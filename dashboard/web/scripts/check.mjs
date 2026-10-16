@@ -349,6 +349,11 @@ try {
     const facts = await tab.evalJs("({ past: document.querySelectorAll('.fx-cp.is-past').length, cond: document.querySelectorAll('.fx-cp-cond li').length, label: /not a calibrated probability/.test(document.querySelector('.fx-legend').textContent), pct: /\\d+(\\.\\d+)?\\s?% (chance|probability)/i.test(document.querySelector('.fx').textContent), unknownZero: [...document.querySelectorAll('.fx-exit-cost')].some((n) => n.textContent.trim() === '0.00%') })");
     report.forensics_facts = facts;
     ok(facts.past >= 2 && facts.label && !facts.pct, 'forensics: past checkpoints drawn, conditional label shown, no probability', facts);
+    // The monitor's aggregator exit quotes (FICTIONAL): dated estimates marked
+    // monitor, the approved chain with its Remove; drawing them wrote nothing.
+    const xq = await tab.evalJs("({ monitor: [...document.querySelectorAll('.fx-exit-basis')].filter((n) => / · monitor/.test(n.textContent)).length, dated: [...document.querySelectorAll('.fx-exit-basis')].some((n) => /\\d{4}|\\d:\\d\\d/.test(n.textContent)), target: (document.querySelector('.fx-quote-target') || {}).textContent || null, remove: Boolean(document.querySelector('[data-key^=\"fx-remove-xq_\"]')) })");
+    report.forensics_exit_quotes = xq;
+    ok(xq.monitor >= 2 && xq.dated && /Exit quotes on Ethereum/.test(xq.target || '') && xq.remove && tab.writes.length === before, 'forensics: the monitor\'s exit quotes are drawn, dated, with the approved chain and its Remove', xq);
     // Keyboard: the Sources fold opens from an evidence chip and focus lands on the source.
     await tab.evalJs("document.querySelector('.fx-src-cap').focus(); true");
     await tab.key('Enter', { vk: 13 });

@@ -353,6 +353,24 @@ function contractFor(symbol) {
       F.appendObservation(ws, pid, { kind: 'product_check', target_id: pc.target_id, label: pc.label, url: pc.url, observed_at: at, outcome: down ? 'fail' : 'pass', http_status: down ? 503 : 200, error: down ? 'Answered 503.' : null, excerpt: down ? null : 'All systems operational (FICTIONAL)' });
       if (h % 24 === 0) F.appendObservation(ws, pid, { kind: 'repository_read', target_id: gh.target_id, repository: `github.com/${gh.owner}/${gh.repo}`, observed_at: at, status: 'ok', latest_delivery_at: new Date(t0 - 52 * 86400000).toISOString(), latest_commit: { sha: 'f1c7i0n4l', at: new Date(t0 - 52 * 86400000).toISOString(), message: 'FICTIONAL commit' } });
     }
+    // Exit quotes approved on the relay's (FICTIONAL) Ethereum contract, every
+    // 12 hours: within the 5% limit at $500 until a thin stretch from day 12
+    // to day 16 (an episode that recovers); $2,000 finds no route then.
+    // Nothing is asked of any quote source: these are written as fixtures.
+    const xo = require(`${ROOT}/core/exitquotes.js`).quoteOptions(projects.getProject(ws, pid)).find((o) => o.supported);
+    if (xo) {
+      F.setMonitoring(ws, pid, { approve_quotes: [xo.key], by: 'dev' });
+      const xt = F.readProfile(ws, pid).targets.exit_quotes[0];
+      for (let h = 0; h <= 20 * 24; h += 12) {
+        const at = new Date(t0 + h * 3600000).toISOString();
+        const thin = h >= 12 * 24 && h < 16 * 24;
+        for (const size of [100, 500, 2000]) {
+          const cost = (size === 100 ? 0.9 : size === 500 ? 2.4 : 6.1) * (thin ? 2.6 : 1) + (h % 48) / 100;
+          const noRoute = thin && size === 2000;
+          F.appendObservation(ws, pid, { kind: 'executable_quote', source: 'monitor', target_id: xt.target_id, provider: xt.provider, provider_label: 'KyberSwap', venue: 'KyberSwap', mechanism: 'aggregator', route_scope: 'aggregator', chain: xt.chain_label, chain_id: xt.chain_id, contract_address: xt.contract_address, observed_at: at, retrieved_at: at, size_usd: size, status: noRoute ? 'no_route' : 'quoted', quote: noRoute ? { sell_usd: size, received_usd: null, no_route: true, route: null } : { sell_usd: size, received_usd: Math.round(size * (1 - cost / 100) * 100) / 100, fees_usd: null, price_impact_pct: Math.round((cost - 0.3) * 100) / 100, gas_usd: 0.42, gas_included: false, route: 'FICTIONAL pool A > FICTIONAL pool B', no_route: false, valuation_note: 'FICTIONAL dev quote: nothing was asked of any quote source.' }, note: 'FICTIONAL dev desk fixture.' });
+        }
+      }
+    }
     F.recordDueResolutions(ws, pid, { now: Date.now() });
     F.createAudit(ws, { project_id: pids.ember, channel: 'dev' });
     const mon = require(`${ROOT}/core/forensic-monitor.js`);

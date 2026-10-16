@@ -12,16 +12,23 @@
 //                    repo_interval_hours: the repository (archived or not),
 //                    the latest commit on the default branch and the latest
 //                    published release. Three requests per repository.
+//   exit quotes      for each chain Eric approved, an aggregator's executable
+//                    quote to sell each exit size for USDC (exitquotes.js:
+//                    Jupiter on Solana, KyberSwap on EVM chains), every
+//                    quote_interval_hours; one request per size, plus a
+//                    CoinGecko lookup of the token's decimals once a month.
+//                    Quotes only: nothing is signed, approved or sent.
 //   resolutions      the checkpoint outcomes that came due (forensics.js
 //                    recordDueResolutions), once a day
 //
 // Every runner shares one lease, the GitHub rate-limit gate (a 403 or 429 with
-// its reset time is honored), the failure backoff and the monthly request
-// budget; each request is counted on disk before it is sent. A restored copy
-// sends nothing until Eric releases it. The optional GitHub token
-// (CR_GITHUB_TOKEN, in the environment only) is never stored or logged.
+// its reset time is honored), each quote provider's own gate (a 429) and
+// failure backoff (an error or timeout), the failure backoff and the monthly
+// request budget; each request is counted on disk before it is sent. A
+// restored copy sends nothing until Eric releases it. The optional GitHub
+// token (CR_GITHUB_TOKEN, in the environment only) is never stored or logged.
 //
-// Files: market-data/forensics/status.json (gate, backoff, counts; holds no
+// Files: market-data/forensics/status.json (gates, backoff, counts; holds no
 // address or key). The observations themselves are records of the project
 // (projects/<id>/forensics/observations/), appended through forensics.js.
 
@@ -89,7 +96,7 @@ function monitoredProjects(ws) {
   return require('./projects').listProjects(ws).filter((p) => {
     if (p.broken || p.status === 'archived') return false;
     const prof = F.readProfile(ws, p.project_id);
-    return prof.monitoring && prof.monitoring.enabled && ((prof.targets.product_checks || []).length || (prof.targets.repositories || []).length);
+    return prof.monitoring && prof.monitoring.enabled && ((prof.targets.product_checks || []).length || (prof.targets.repositories || []).length || (prof.targets.exit_quotes || []).length);
   });
 }
 
@@ -98,15 +105,26 @@ function lastObservedAt(obs, targetId) {
   return 0;
 }
 
-// The targets due now: { project, target, kind }.
+// A quote provider's wait: its 429 (retry_after_until) or its failure
+// backoff (backoff_until), whichever ends later; null when it may be asked.
+function quoteGate(status, provider, now) {
+  const g = (status.quote_gates || {})[provider] || {};
+  const t = Math.max(g.retry_after_until ? Date.parse(g.retry_after_until) || 0 : 0, g.backoff_until ? Date.parse(g.backoff_until) || 0 : 0);
+  return t > now ? isoOf(t) : null;
+}
+
+// The targets due now: { project, target, kind }. A quote target whose
+// provider is waiting is not due.
 function dueTargets(ws, now, cfg = cfgOf(ws)) {
   const F = require('./forensics');
+  const st = readStatus(ws);
   const out = [];
   for (const p of monitoredProjects(ws)) {
     const prof = F.readProfile(ws, p.project_id);
     const obs = F.readObservations(ws, p.project_id, { from: now - 7 * 24 * HOUR, to: now });
     for (const t of prof.targets.product_checks || []) if (now - lastObservedAt(obs, t.target_id) >= cfg.product_interval_hours * HOUR - 5 * 60000) out.push({ project: p, target: t, kind: 'product_check' });
     for (const t of prof.targets.repositories || []) if (now - lastObservedAt(obs, t.target_id) >= cfg.repo_interval_hours * HOUR - 5 * 60000) out.push({ project: p, target: t, kind: 'repository' });
+    for (const t of prof.targets.exit_quotes || []) if (!quoteGate(st, t.provider, now) && now - lastObservedAt(obs, t.target_id) >= cfg.quote_interval_hours * HOUR - 5 * 60000) out.push({ project: p, target: t, kind: 'exit_quote' });
   }
   return out;
 }
@@ -114,6 +132,30 @@ function dueTargets(ws, now, cfg = cfgOf(ws)) {
 function gate(status, now) {
   const until = status.github_retry_after_until ? Date.parse(status.github_retry_after_until) : 0;
   return until > now ? status.github_retry_after_until : null;
+}
+
+// After a quote target: a 429 sets the provider's wait; an error or timeout
+// starts or lengthens its backoff; an answer (a quote, no route, not listed)
+// ends the backoff.
+function noteQuoteOutcome(ws, cfg, provider, out, now) {
+  if (!out.gate && !out.failure && !out.answered) return;
+  updateStatus(ws, (s) => {
+    const gates = { ...(s.quote_gates || {}) };
+    const g = { ...(gates[provider] || {}) };
+    if (out.gate) g.retry_after_until = isoOf(out.gate.until);
+    if (out.failure) {
+      g.failures = (g.failures || 0) + 1;
+      const mins = Math.min(cfg.backoff_max_minutes, cfg.backoff_initial_minutes * 2 ** (g.failures - 1));
+      g.backoff_until = isoOf(now + mins * 60000 * (0.9 + crypto.randomInt(0, 200) / 1000));
+      g.last_failure_at = isoOf(now);
+    } else if (out.answered) {
+      g.failures = 0;
+      g.backoff_until = null;
+      g.last_answer_at = isoOf(now);
+    }
+    gates[provider] = g;
+    return { ...s, quote_gates: gates };
+  });
 }
 
 function isDue(ws, now = Date.now()) {
@@ -245,7 +287,7 @@ async function repositoryRead(ws, target, { cfg, fetchImpl, now, reserve }) {
 // The run
 
 async function refresh(ws, opts = {}) {
-  const { trigger = 'manual', fetchImpl = fetch, lookupImpl, transport, force = false, projectIds = null } = opts;
+  const { trigger = 'manual', fetchImpl = fetch, lookupImpl, transport, force = false, projectIds = null, sleep = null, cgGetImpl = null } = opts;
   const now = () => (opts.now !== undefined ? opts.now : Date.now());
   const cfg = cfgOf(ws);
   if (!cfg.enabled) return { status: 'skipped', message: 'Forensic monitoring is turned off in settings.' };
@@ -256,7 +298,7 @@ async function refresh(ws, opts = {}) {
   const lease = acquireLease(ws, LEASE, 30 * 60000, { label: trigger });
   if (!lease) return { status: 'busy', message: 'Another forensic monitor run is in progress.' };
   const F = require('./forensics');
-  const counts = { checks: 0, reads: 0, failed: 0, not_checkable: 0, budget: false, rate_limited: null, resolutions: 0 };
+  const counts = { checks: 0, reads: 0, failed: 0, not_checkable: 0, quotes: 0, quotes_answered: 0, no_route: 0, quote_errors: 0, quote_waits: {}, budget: false, rate_limited: null, resolutions: 0 };
   try {
     let due = dueTargets(ws, t0, cfg);
     if (Array.isArray(projectIds)) due = due.filter((d) => projectIds.includes(d.project.project_id));
@@ -264,6 +306,27 @@ async function refresh(ws, opts = {}) {
     for (const d of due) {
       if (!perProject.has(d.project.project_id) && perProject.size >= cfg.max_projects_per_run) continue;
       perProject.set(d.project.project_id, true);
+      if (d.kind === 'exit_quote') {
+        // A provider that said to wait earlier in this run is not asked again.
+        if (quoteGate(readStatus(ws), d.target.provider, now())) continue;
+        const XQ = require('./exitquotes');
+        const pid = d.project.project_id;
+        const latest = F.listReceipts(ws, pid).filter((r) => !r.broken && r.kind === 'assessment' && r.preferences).sort((a, b) => String(a.origin).localeCompare(String(b.origin))).pop();
+        const sizes = XQ.sizesFor(F.prefsOf(ws), latest ? [latest.preferences.exit_position_usd] : []);
+        const recent = F.readObservations(ws, pid, { from: now() - 31 * 24 * HOUR, to: now() }).filter((o) => o.target_id === d.target.target_id);
+        const out = await XQ.quoteTarget(ws, { project: d.project, target: d.target, sizes, cfg, fetchImpl, now, reserve: () => reserveRequest(ws, cfg, now()), sleep, observations: recent, cgGetImpl });
+        for (const o of out.observations) {
+          F.appendObservation(ws, pid, o);
+          if (o.quote) counts.quotes += 1;
+          if (o.status === 'no_route') counts.no_route += 1;
+          if (o.status === 'error') counts.quote_errors += 1;
+        }
+        counts.quotes_answered += out.answered;
+        noteQuoteOutcome(ws, cfg, d.target.provider, out, now());
+        if (out.gate) counts.quote_waits[d.target.provider] = isoOf(out.gate.until);
+        if (out.stop === 'budget') { counts.budget = true; break; }
+        continue;
+      }
       if (d.kind === 'product_check') {
         if (!reserveRequest(ws, cfg, now())) { counts.budget = true; break; }
         const obs = await productCheck(ws, d.target, { cfg, lookupImpl, transport, now });
@@ -295,7 +358,7 @@ async function refresh(ws, opts = {}) {
         } catch (_) { /* one project's records never stop the others */ }
       }
     }
-    const allFailed = counts.checks > 0 && counts.failed + counts.not_checkable === counts.checks && counts.reads === 0;
+    const allFailed = counts.checks > 0 && counts.failed + counts.not_checkable === counts.checks && counts.reads === 0 && counts.quotes_answered === 0;
     updateStatus(ws, (s) => ({
       ...s,
       last_run_at: isoOf(now()),
@@ -305,10 +368,11 @@ async function refresh(ws, opts = {}) {
       consecutive_failures: allFailed ? (s.consecutive_failures || 0) + 1 : 0,
       next_allowed_at: allFailed ? isoOf(now() + Math.min(cfg.backoff_max_minutes, cfg.backoff_initial_minutes * 2 ** Math.max(0, (s.consecutive_failures || 0))) * 60000 * (0.9 + crypto.randomInt(0, 200) / 1000)) : null,
     }));
-    const did = counts.checks + counts.reads + counts.resolutions;
+    const did = counts.checks + counts.reads + counts.resolutions + counts.quotes + counts.quote_errors;
+    const waits = Object.entries(counts.quote_waits).map(([p, until]) => `${p} asked to wait until ${until}`);
     return {
-      status: !did ? 'noop' : counts.budget ? 'budget_paused' : counts.failed ? 'attention' : 'ok',
-      message: !did ? 'No forensic observation was due.' : `${counts.checks} product check(s) (${counts.failed} failed, ${counts.not_checkable} not checkable), ${counts.reads} repository read(s), ${counts.resolutions} checkpoint outcome(s) recorded${counts.budget ? '; the monthly request budget is used up' : ''}${counts.rate_limited ? `; GitHub asked to wait until ${counts.rate_limited}` : ''}.`,
+      status: !did ? 'noop' : counts.budget ? 'budget_paused' : counts.failed || counts.quote_errors ? 'attention' : 'ok',
+      message: !did ? 'No forensic observation was due.' : `${counts.checks} product check(s) (${counts.failed} failed, ${counts.not_checkable} not checkable), ${counts.reads} repository read(s), ${counts.quotes} exit quote(s) (${counts.no_route} no route, ${counts.quote_errors} error(s)), ${counts.resolutions} checkpoint outcome(s) recorded${counts.budget ? '; the monthly request budget is used up' : ''}${counts.rate_limited ? `; GitHub asked to wait until ${counts.rate_limited}` : ''}${waits.length ? `; ${waits.join('; ')}` : ''}.`,
       counts,
     };
   } finally {
@@ -331,8 +395,10 @@ function statusView(ws, now = Date.now()) {
     monthly_budget: cfg.monthly_request_budget,
     product_interval_hours: cfg.product_interval_hours,
     repo_interval_hours: cfg.repo_interval_hours,
+    quote_interval_hours: cfg.quote_interval_hours,
+    quote_providers: Object.values(require('./exitquotes').PROVIDERS).map((p) => ({ id: p.id, label: p.label, origin: p.origin, limit: p.limit, wait_until: quoteGate(st, p.id, now), failures: ((st.quote_gates || {})[p.id] || {}).failures || 0 })),
     github_token: Boolean(process.env.CR_GITHUB_TOKEN),
   };
 }
 
-module.exports = { STATUS_REL, isDue, dueTargets, refresh, productCheck, repositoryRead, statusView, readStatus };
+module.exports = { STATUS_REL, isDue, dueTargets, refresh, productCheck, repositoryRead, statusView, readStatus, quoteGate };

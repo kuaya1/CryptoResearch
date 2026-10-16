@@ -101,6 +101,11 @@ const MONITOR_DEFAULTS = {
   enabled: true,
   product_interval_hours: 6,
   repo_interval_hours: 24,
+  // Exit quotes: every 12 hours gives six readings in the 72-hour
+  // persistence and freshness windows; the sizes are set from a CoinGecko
+  // price no older than 6 hours.
+  quote_interval_hours: 12,
+  quote_price_max_age_hours: 6,
   timeout_seconds: 10,
   max_bytes: 256 * 1024,
   max_projects_per_run: 20,
@@ -166,9 +171,16 @@ function readText(ws, rel) {
   }
 }
 
+function emptyProfile(pid) {
+  return { schema_version: 'cr.forensic-profile.v1', project_id: pid, monitoring: { enabled: false }, targets: { product_checks: [], repositories: [], exit_quotes: [] } };
+}
+
+// A profile from before exit quotes has no exit_quotes list: it reads as empty.
 function readProfile(ws, pid) {
   const p = readJson(ws.abs(profileRel(pid)), null);
-  return p && typeof p === 'object' ? p : { schema_version: 'cr.forensic-profile.v1', project_id: pid, monitoring: { enabled: false }, targets: { product_checks: [], repositories: [] } };
+  if (!p || typeof p !== 'object') return emptyProfile(pid);
+  const t = p.targets && typeof p.targets === 'object' ? p.targets : {};
+  return { ...p, targets: { ...t, product_checks: t.product_checks || [], repositories: t.repositories || [], exit_quotes: t.exit_quotes || [] } };
 }
 
 function monthsBetween(fromMs, toMs) {
@@ -242,10 +254,28 @@ function monitoringSummary(ws, pid, { now }) {
     const last = list[list.length - 1] || null;
     return { readings_30d: list.length, passes: list.filter((o) => o.outcome === 'pass').length, failures: list.filter((o) => o.outcome === 'fail').length, latest: last ? { observed_at: last.observed_at, outcome: last.outcome || last.status || null, http_status: last.http_status || null, latest_delivery_at: last.latest_delivery_at || null } : null };
   };
+  // Exit quotes: the readings at each size, and the latest run's answers.
+  const quotes = (t) => {
+    const list = obs.filter((o) => o.target_id === t.target_id && o.kind === 'executable_quote');
+    const lastAt = list.length ? list[list.length - 1].observed_at.slice(0, 13) : null;
+    return {
+      target_id: t.target_id,
+      chain: t.chain_label || t.chain,
+      contract_address: t.contract_address,
+      quote_source: t.provider,
+      readings_30d: list.filter((o) => o.quote).length,
+      errors_30d: list.filter((o) => o.status === 'error').length,
+      latest: lastAt ? list.filter((o) => o.observed_at.slice(0, 13) === lastAt).map((o) => {
+        const e = o.quote && o.size_usd ? M.exitEstimate(o, o.size_usd) : null;
+        return { observed_at: o.observed_at, size_usd: o.size_usd || null, status: o.status, received_usd: o.quote ? o.quote.received_usd : null, cost_pct: e && e.status === 'estimated' ? e.cost_pct : null, route: o.quote ? o.quote.route : null, error: o.error || null };
+      }) : [],
+    };
+  };
   return {
     enabled: Boolean(prof.monitoring && prof.monitoring.enabled),
     product_checks: (prof.targets.product_checks || []).map((t) => ({ target_id: t.target_id, label: t.label, url: t.url, expect_status: t.expect_status || null, expect_text: t.expect_text || null, ...per(t.target_id) })),
     repositories: (prof.targets.repositories || []).map((t) => ({ target_id: t.target_id, repository: `github.com/${t.owner}/${t.repo}`, ...per(t.target_id) })),
+    exit_quotes: (prof.targets.exit_quotes || []).map(quotes),
   };
 }
 
@@ -799,15 +829,32 @@ function saveReport(ws, { project_id: pid, audit_id: aid, provider, text, revisi
 // ---------------------------------------------------------------------------
 // Monitoring: Eric's opt-in and the targets he approved
 
-function setMonitoring(ws, pid, { enabled = undefined, approve = null, remove = [], by = null } = {}) {
+// approve_quotes: the exit-quote chains Eric approved, each by its key from
+// the tab's options (exitquotes.js quoteOptions: "<chain_id>:<contract>", a
+// contract of the project's verified identity on a chain a quote source covers).
+function setMonitoring(ws, pid, { enabled = undefined, approve = null, approve_quotes = [], remove = [], by = null } = {}) {
   const project = require('./projects').getProject(ws, pid);
   const netguard = require('./netguard');
+  const XQ = require('./exitquotes');
   const at = new Date().toISOString();
   return runOp(ws, { type: 'forensic_monitoring', summary: `Forensic monitoring for ${pid}` }, (op) => {
-    const prof = op.readJson(profileRel(pid), null) || { schema_version: 'cr.forensic-profile.v1', project_id: pid, monitoring: { enabled: false }, targets: { product_checks: [], repositories: [] } };
-    prof.targets = prof.targets || { product_checks: [], repositories: [] };
+    const prof = op.readJson(profileRel(pid), null) || emptyProfile(pid);
+    prof.targets = prof.targets || {};
+    for (const k of ['product_checks', 'repositories', 'exit_quotes']) prof.targets[k] = prof.targets[k] || [];
     const added = [];
     const refused = [];
+    if (Array.isArray(approve_quotes) && approve_quotes.length) {
+      const options = XQ.quoteOptions(project);
+      for (const key of approve_quotes.map(String).slice(0, 5)) {
+        const o = options.find((x) => x.key === key);
+        if (!o) { refused.push({ target: key.slice(0, 120), reason: 'Not a contract in this project\'s identity.' }); continue; }
+        if (!o.supported) { refused.push({ target: key, reason: o.reason }); continue; }
+        if (prof.targets.exit_quotes.some((t) => t.target_id === o.target_id)) continue;
+        if (prof.targets.exit_quotes.length >= 3) { refused.push({ target: key, reason: 'At most three exit-quote chains per project.' }); continue; }
+        prof.targets.exit_quotes.push({ target_id: o.target_id, chain: o.chain, chain_id: o.chain_id, chain_label: o.chain_label, contract_address: o.contract_address, provider: o.provider, quote_symbol: o.quote_symbol, approved_at: at, approved_by: by || ws.actor || null });
+        added.push(o.target_id);
+      }
+    }
     if (approve && approve.receipt_id) {
       const r = loadReceipt(ws, pid, approve.receipt_id);
       if (!r || r.kind !== 'assessment') throw new OpError('NOT_FOUND', `No assessment ${approve.receipt_id} for ${pid}.`);
@@ -837,7 +884,7 @@ function setMonitoring(ws, pid, { enabled = undefined, approve = null, remove = 
     }
     const removed = [];
     for (const tid of Array.isArray(remove) ? remove : []) {
-      for (const k of ['product_checks', 'repositories']) {
+      for (const k of ['product_checks', 'repositories', 'exit_quotes']) {
         const i = prof.targets[k].findIndex((t) => t.target_id === tid);
         if (i >= 0) {
           prof.removed = [...(prof.removed || []), { ...prof.targets[k][i], removed_at: at, removed_by: by || ws.actor || null }];
@@ -847,7 +894,7 @@ function setMonitoring(ws, pid, { enabled = undefined, approve = null, remove = 
       }
     }
     if (enabled === true) {
-      if (!prof.targets.product_checks.length && !prof.targets.repositories.length) throw new OpError('INVALID', `Nothing to monitor for ${project.name}: approve a product check or a repository from an assessment first.`);
+      if (!prof.targets.product_checks.length && !prof.targets.repositories.length && !prof.targets.exit_quotes.length) throw new OpError('INVALID', `Nothing to monitor for ${project.name}: approve a product check or a repository from an assessment, or an exit-quote chain, first.`);
       if (!prof.monitoring.enabled) prof.monitoring = { enabled: true, enabled_at: at, enabled_by: by || ws.actor || null };
     } else if (enabled === false && prof.monitoring.enabled) {
       prof.monitoring = { ...prof.monitoring, enabled: false, disabled_at: at, disabled_by: by || ws.actor || null };
@@ -890,7 +937,12 @@ function dedupeLiquidity(list) {
 function readingsFor(ws, pid, { receipts, prefs, marketPriceUsd = null, now = Date.now() }) {
   const obs = readObservations(ws, pid, { from: now - 400 * DAY, to: now });
   const assessed = receipts.filter((r) => r.kind === 'assessment');
-  const liqObs = dedupeLiquidity(assessed.flatMap((r) => ((r.assessment.liquidity || {}).observations || []).map((o) => ({ ...o, receipt_id: r.receipt_id }))));
+  // Liquidity: quotes and reserves captured in audits, and the monitor's
+  // aggregator quotes (exitquotes.js). An error or a token the source does
+  // not list carries no quote, so it is no reading.
+  const captured = assessed.flatMap((r) => ((r.assessment.liquidity || {}).observations || []).map((o) => ({ ...o, receipt_id: r.receipt_id })));
+  const quoted = obs.filter((o) => o.kind === 'executable_quote' && o.source === 'monitor' && o.quote && typeof o.quote === 'object');
+  const liqObs = dedupeLiquidity([...captured, ...quoted]);
   const liquidity = M.liquidityReadings(liqObs, { positionUsd: prefs.exit_position_usd, limitPct: prefs.exit_cost_limit_pct, marketPriceUsd });
   // Operational: each approved check, and each check captured in an audit.
   // An audit's capture of an address the monitor checks joins that check's
@@ -1081,6 +1133,9 @@ function view(ws, pid, { now = Date.now() } = {}) {
   const proposed = current ? current.assessment.monitoring_targets : { product_checks: [], repositories: [] };
   const approvedUrls = new Set((prof.targets.product_checks || []).map((t) => t.url));
   const approvedRepos = new Set((prof.targets.repositories || []).map((t) => `${t.owner}/${t.repo}`.toLowerCase()));
+  const XQ = require('./exitquotes');
+  const approvedQuotes = new Set((prof.targets.exit_quotes || []).map((t) => t.target_id));
+  const lastQuote = (tid) => r.observations.filter((o) => o.target_id === tid && o.kind === 'executable_quote').pop() || null;
   const a = current ? current.assessment : null;
   const sIdx = a ? sourceIndex(a) : {};
   const findingById = a ? Object.fromEntries(a.findings.map((f) => [f.finding_id, f])) : {};
@@ -1100,6 +1155,9 @@ function view(ws, pid, { now = Date.now() } = {}) {
     generated_at: iso(now),
     read_only: true,
     definitions: { events: D.EVENTS, liquidity: D.LIQUIDITY, scenarios: D.SCENARIOS, probability: D.PROBABILITY, rubric: D.RUBRIC, areas: D.AREAS, checkpoints: D.CHECKPOINTS, unsupported: D.UNSUPPORTED, hash_note: D.HASH_NOTE },
+    // How readings arrive on this desk now. cr-forensic-events@1 is kept as
+    // published; its cadence sentence predates the monitor's exit quotes.
+    cadence_now: { liquidity_impairment: XQ.cadenceWords(monitorCfg(ws)) },
     preferences: prefs,
     preferences_in_use: usePrefs,
     roles: { investigator: { provider: 'claude', on_hold: Boolean(held.claude) }, challenge: { provider: 'chatgpt', on_hold: Boolean(held.chatgpt) }, gemini: { role: null, on_hold: Boolean(held.gemini), note: 'Gemini has no forensic role in this release.' } },
@@ -1186,8 +1244,14 @@ function view(ws, pid, { now = Date.now() } = {}) {
         receipt_id: current ? current.receipt_id : null,
         product_checks: (proposed.product_checks || []).map((p) => ({ ...p, approved: approvedUrls.has(p.url), allowed: require('./netguard').validateUrl(p.url) })),
         repositories: (proposed.repositories || []).map((p) => ({ ...p, approved: approvedRepos.has(`${p.owner}/${p.repo}`.toLowerCase()) })),
+        // Exit quotes come from the verified identity, not from an assessment.
+        exit_quotes: XQ.quoteOptions(project).map((o) => ({ ...o, approved: Boolean(o.target_id && approvedQuotes.has(o.target_id)) })),
       },
-      recent: r.observations.slice(-40).reverse().map((o) => ({ obs_id: o.obs_id, kind: o.kind, target_id: o.target_id, label: o.label || null, url: o.url || null, repository: o.repository || null, observed_at: o.observed_at, outcome: o.outcome || o.status || null, http_status: o.http_status || null, error: o.error || null, latest_delivery_at: o.latest_delivery_at || null, body_sha256: o.body_sha256 || null, sha256: o.sha256, excerpt: o.excerpt || null })),
+      exit_quote_targets: (prof.targets.exit_quotes || []).map((t) => {
+        const last = lastQuote(t.target_id);
+        return { ...t, provider_label: (XQ.PROVIDERS[t.provider] || {}).label || t.provider, last_at: last ? last.observed_at : null, last_status: last ? last.status : null };
+      }),
+      recent: r.observations.slice(-40).reverse().map((o) => ({ obs_id: o.obs_id, kind: o.kind, target_id: o.target_id, label: o.label || null, url: o.url || null, repository: o.repository || null, observed_at: o.observed_at, outcome: o.outcome || o.status || null, http_status: o.http_status || null, error: o.error || null, latest_delivery_at: o.latest_delivery_at || null, body_sha256: o.body_sha256 || null, sha256: o.sha256, excerpt: o.excerpt || null, ...(o.kind === 'executable_quote' ? { chain: o.chain || null, provider_label: o.provider_label || null, size_usd: o.size_usd || null, received_usd: o.quote ? o.quote.received_usd : null, cost_pct: o.quote && o.size_usd ? (M.exitEstimate(o, o.size_usd) || {}).cost_pct ?? null : null, route: o.quote ? o.quote.route : null } : {}) })),
       status: require('./forensic-monitor').statusView(ws, now),
     },
     receipts: [...assessed].reverse().map((x) => ({ receipt_id: x.receipt_id, audit_id: x.audit_id, model: x.model, origin: x.origin, saved_at: x.saved_at, revision_of: x.revision_of, revision: x.revision, evidence_added: x.evidence_added, plain_assessment: x.assessment.plain_assessment, scenarios_at_origin: x.scenarios_at_origin || null, resolutions: resolutionsOf(ws, pid, x.receipt_id) })),

@@ -250,7 +250,7 @@ function combineStates(list) {
 // not speak to that size. Never a transaction.
 function exitEstimate(obs, sizeUsd, { marketPriceUsd = null } = {}) {
   if (!obs || !isNum(sizeUsd) || sizeUsd <= 0) return null;
-  const base = { obs_id: obs.obs_id || null, size_usd: sizeUsd, venue: obs.venue || null, chain: obs.chain || null, retrieved_at: obs.retrieved_at || null, source_id: obs.source_id || null, version: D.LIQUIDITY_VERSION };
+  const base = { obs_id: obs.obs_id || null, size_usd: sizeUsd, venue: obs.venue || null, chain: obs.chain || null, retrieved_at: obs.retrieved_at || null, source_id: obs.source_id || null, captured_by: obs.source === 'monitor' ? 'monitor' : 'audit', version: D.LIQUIDITY_VERSION };
   if (obs.kind === 'executable_quote') {
     const q = obs.quote || {};
     const sell = num(q.sell_usd);
@@ -267,6 +267,7 @@ function exitEstimate(obs, sizeUsd, { marketPriceUsd = null } = {}) {
     const limitations = ['A quote at one moment; it can change by the time an order is sent.'];
     if (scope !== 'aggregator') limitations.push('One venue: other routes were not asked, so the cost through the best route may be lower.');
     if (gas === null) limitations.push('Network fee not stated.');
+    if (typeof q.valuation_note === 'string') limitations.push(str(q.valuation_note, 300));
     return { ...base, method: 'executable_quote', route_scope: scope, status: 'estimated', quoted_usd: round(sell), received_usd: round(recv, 4), cost_pct: round(Math.max(-100, cost), 3), fees_usd: num(q.fees_usd), price_impact_pct: num(q.price_impact_pct), gas_usd: gas, route: str(q.route, 300), limitations };
   }
   if (obs.kind === 'pool_reserves') {
@@ -297,18 +298,26 @@ function exitEstimate(obs, sizeUsd, { marketPriceUsd = null } = {}) {
   return null;
 }
 
-// The exit estimates of a set of captured readings at each size: every
-// supported estimate, and the reading's status per size.
+// The exit estimates of a set of readings at each size: every supported
+// estimate, and the current one per size. Current is the latest hour with a
+// reading at that size (an estimate or "no route"); within it, the cheapest
+// route. An older, cheaper reading is history, never the current best.
 function exitTable(observations, sizes, opts = {}) {
   const obs = Array.isArray(observations) ? observations : [];
+  const hour = (r) => (isoOrNull(r.retrieved_at) || '').slice(0, 13);
   return sizes.map((size) => {
     const rows = obs.map((o) => exitEstimate(o, size, opts)).filter(Boolean);
-    const estimated = rows.filter((r) => r.status === 'estimated').sort((a, b) => a.cost_pct - b.cost_pct);
-    const noRoute = rows.filter((r) => r.status === 'no_route');
+    const speaking = rows.filter((r) => r.status === 'estimated' || r.status === 'no_route');
+    const latest = speaking.map(hour).sort().pop();
+    const current = latest === undefined ? [] : speaking.filter((r) => hour(r) === latest);
+    const estimated = current.filter((r) => r.status === 'estimated').sort((a, b) => a.cost_pct - b.cost_pct);
+    const noRoute = current.filter((r) => r.status === 'no_route');
     return {
       size_usd: size,
       estimates: rows,
       best: estimated[0] || null,
+      as_of: current.length ? current.map((r) => r.retrieved_at).filter(Boolean).sort()[0] || null : null,
+      earlier: speaking.length - current.length,
       status: estimated.length ? 'estimated' : noRoute.length ? 'no_route' : 'no_supported_estimate',
       note: estimated.length ? null : noRoute.length ? 'No route found at this size by the quote source asked.' : 'No supported estimate at this size: no executable quote at it and no constant-product reserves.',
     };
