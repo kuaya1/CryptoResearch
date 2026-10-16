@@ -631,7 +631,87 @@ function sealOf(items) {
   return sha256(JSON.stringify(items.map((i) => [i.path, i.bytes, i.sha256])));
 }
 
-function createBackup(ws, { reason = 'manual' } = {}) {
+// ---------------------------------------------------------------------------
+// Disk space. Same-disk backups never fill the disk: on 2026-10-16 the online
+// desk's 1 GB disk filled with fourteen daily copies of about 60 MB each, and
+// every write failed (ENOSPC), the next start included.
+
+const MB = 1024 * 1024;
+const BACKUP_FLOOR = 2; // the newest complete copies never removed for space
+
+// Free and total bytes of the file system holding dir, or null when they
+// cannot be read (then nothing is removed or refused on their account).
+function diskSpace(dir, statfs = fs.statfsSync) {
+  try {
+    const s = statfs(dir);
+    const free = Number(s.bavail) * Number(s.bsize);
+    const total = Number(s.blocks) * Number(s.bsize);
+    return Number.isFinite(free) && Number.isFinite(total) && total > 0 ? { free, total } : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// The room kept free for the records themselves: a tenth of the disk, at
+// least 64 MB and at most 512 MB.
+function reserveBytes(total) {
+  return Math.min(512 * MB, Math.max(64 * MB, Math.round(total * 0.1)));
+}
+
+const mbText = (b) => `${Math.round(b / MB)} MB`;
+
+function snapshotsOn(root) {
+  const dir = path.join(root, 'backups', 'snapshots');
+  return listDir(dir, { dirs: true }).sort().map((name) => {
+    const m = readJson(path.join(dir, name, 'MANIFEST.json'), null);
+    return { name, dir: path.join(dir, name), complete: Boolean(m && m.complete), bytes: m && Number.isFinite(m.bytes) ? m.bytes : null };
+  });
+}
+
+// Removes same-disk backups until needFree bytes are free: an unfinished copy
+// first (an interrupted one can never be verified or restored), then the
+// oldest. Never the newest BACKUP_FLOOR complete copies, a protected one or a
+// pre-restore one. The offsite copies on the PC are not touched.
+function freeDiskSpace(root, needFree, { protect = [], statfs } = {}) {
+  let space = diskSpace(root, statfs);
+  const removed = [];
+  if (!space) return { space: null, removed, enough: null };
+  const all = snapshotsOn(root);
+  const keep = new Set([...all.filter((s) => s.complete).slice(-BACKUP_FLOOR).map((s) => s.name), ...protect]);
+  const order = [...all.filter((s) => !s.complete), ...all.filter((s) => s.complete)].filter((s) => !keep.has(s.name) && !s.name.includes('pre-restore'));
+  for (const s of order) {
+    if (space.free >= needFree) break;
+    try {
+      rmrf(s.dir);
+      removed.push({ name: s.name, complete: s.complete });
+    } catch (_) { /* cannot delete here; kept */ }
+    space = diskSpace(root, statfs) || space;
+  }
+  return { space, removed, enough: space.free >= needFree };
+}
+
+// At start, before anything is written: when the disk is fuller than its
+// reserve, room is made the same way. Returns what it found and did.
+function relieveFullDisk(root, { statfs } = {}) {
+  const space = diskSpace(root, statfs);
+  if (!space) return { space: null, removed: [], reserve: null };
+  const reserve = reserveBytes(space.total);
+  if (space.free >= reserve) return { space, removed: [], reserve };
+  const r = freeDiskSpace(root, reserve, { statfs });
+  return { space: r.space, removed: r.removed, reserve, enough: r.enough, before: space };
+}
+
+// The disk in one line (the online desk's start log).
+function diskLine(root, { statfs } = {}) {
+  const space = diskSpace(root, statfs);
+  const snaps = snapshotsOn(root);
+  const bytes = snaps.reduce((s, x) => s + (x.bytes || 0), 0);
+  return space
+    ? `${mbText(space.free)} free of ${mbText(space.total)}; ${snaps.length} same-disk backup${snaps.length === 1 ? '' : 's'} (${mbText(bytes)}), reserve ${mbText(reserveBytes(space.total))}`
+    : `free space unknown; ${snaps.length} same-disk backup${snaps.length === 1 ? '' : 's'}`;
+}
+
+function createBackup(ws, { reason = 'manual', statfs } = {}) {
   const name = `${fileTs()}_${reason}`;
   const dest = backupDir(ws, name);
   const result = withLock(ws, 'backup', () => {
@@ -640,42 +720,75 @@ function createBackup(ws, { reason = 'manual' } = {}) {
     // verified (it may be needed to investigate), and its manifest says so.
     const consistency = consistencyNow(ws);
     const files = inventoryOf(ws.root, BACKUP_INCLUDE);
+    // Room for the copy plus the reserve, made by removing the oldest
+    // same-disk copies when needed; refused rather than filling the disk.
+    let pruned = [];
+    const space = diskSpace(ws.root, statfs);
+    if (space) {
+      const need = files.reduce((s, rel) => {
+        try {
+          return s + fs.statSync(path.join(ws.root, ...rel.split('/'))).size;
+        } catch (_) {
+          return s;
+        }
+      }, 0);
+      const want = need + reserveBytes(space.total);
+      if (space.free < want) {
+        const r = freeDiskSpace(ws.root, want, { statfs });
+        pruned = r.removed.map((x) => x.name);
+        if (pruned.length) logOp(ws, { phase: 'backup_pruned_for_space', removed: pruned, free: r.space.free, needed: want });
+        if (!r.enough) {
+          throw new OpError('NO_SPACE', `No backup was made: ${mbText(r.space.free)} free on the disk, and the copy needs ${mbText(need)} plus a ${mbText(reserveBytes(space.total))} reserve for the records.${pruned.length ? ` ${pruned.length} older same-disk cop${pruned.length === 1 ? 'y was' : 'ies were'} removed;` : ''} the newest ${BACKUP_FLOOR} are kept. The offsite copies on the PC are the backup until the disk is larger.`, { free: r.space.free, needed: want, removed: pruned });
+        }
+      }
+    }
     const items = [];
     let n = 0;
-    for (const rel of files) {
-      const buf = fs.readFileSync(path.join(ws.root, ...rel.split('/')));
-      writeDurable(path.join(dest, 'files', ...rel.split('/')), buf);
-      items.push({ path: rel, bytes: buf.length, sha256: sha256(buf) });
-      if (++n % 200 === 0) renewLock(ws);
+    try {
+      for (const rel of files) {
+        const buf = fs.readFileSync(path.join(ws.root, ...rel.split('/')));
+        writeDurable(path.join(dest, 'files', ...rel.split('/')), buf);
+        items.push({ path: rel, bytes: buf.length, sha256: sha256(buf) });
+        if (++n % 200 === 0) renewLock(ws);
+      }
+      return sealBackup(ws, { name, reason, dest, items, consistency, pruned });
+    } catch (err) {
+      // An interrupted copy is never left behind to hold the space.
+      try { rmrf(dest); } catch (_) { /* removed at the next start or backup */ }
+      throw err;
     }
-    const manifest = {
-      schema_version: 'cr.backup.v2',
-      name,
-      reason,
-      created_at: new Date().toISOString(),
-      source_root: ws.root,
-      workspace: ws.meta,
-      node: process.version,
-      consistent: consistency.verified
-        ? 'Captured while holding the workspace write lock: no record write could run during the copy.'
-        : `Captured while holding the workspace write lock, but an earlier save was not verified: ${consistency.reason}`,
-      consistency,
-      include: BACKUP_INCLUDE,
-      excluded: ['.cr except research captures and the repairs ledger (locks, staging, sign-in sessions and connection grants)', 'dashboard/index (derived)', 'dashboard/demo-workspace (fictional, rebuilt on demand)', 'backups/', 'audits/'],
-      files: items.length,
-      bytes: items.reduce((s, i) => s + i.bytes, 0),
-      summary: semanticSummary(ws),
-      items,
-      seal: sealOf(items),
-      complete: true,
-    };
-    writeDurable(path.join(dest, 'MANIFEST.json'), jsonText(manifest));
-    writeDurable(path.join(dest, 'BACKUP-INFO.json'), jsonText({ created_at: manifest.created_at, reason, source: ws.root, files: items.length, sealed: true, records_verified: consistency.verified, restore: `node dashboard/cli.js backup restore ${name} --to <empty folder>` }));
-    logOp(ws, { phase: 'backup', name, files: items.length, reason, seal: manifest.seal, records_verified: consistency.verified });
-    return { name, path: dest, files: items.length, bytes: manifest.bytes, seal: manifest.seal, consistency };
   }, { timeoutMs: 60000 });
   pruneBackups(ws, { protect: [name] });
   return result;
+}
+
+// The manifest that seals a finished copy (createBackup, under its lock).
+function sealBackup(ws, { name, reason, dest, items, consistency, pruned }) {
+  const manifest = {
+    schema_version: 'cr.backup.v2',
+    name,
+    reason,
+    created_at: new Date().toISOString(),
+    source_root: ws.root,
+    workspace: ws.meta,
+    node: process.version,
+    consistent: consistency.verified
+      ? 'Captured while holding the workspace write lock: no record write could run during the copy.'
+      : `Captured while holding the workspace write lock, but an earlier save was not verified: ${consistency.reason}`,
+    consistency,
+    include: BACKUP_INCLUDE,
+    excluded: ['.cr except research captures and the repairs ledger (locks, staging, sign-in sessions and connection grants)', 'dashboard/index (derived)', 'dashboard/demo-workspace (fictional, rebuilt on demand)', 'backups/', 'audits/'],
+    files: items.length,
+    bytes: items.reduce((s, i) => s + i.bytes, 0),
+    summary: semanticSummary(ws),
+    items,
+    seal: sealOf(items),
+    complete: true,
+  };
+  writeDurable(path.join(dest, 'MANIFEST.json'), jsonText(manifest));
+  writeDurable(path.join(dest, 'BACKUP-INFO.json'), jsonText({ created_at: manifest.created_at, reason, source: ws.root, files: items.length, sealed: true, records_verified: consistency.verified, restore: `node dashboard/cli.js backup restore ${name} --to <empty folder>` }));
+  logOp(ws, { phase: 'backup', name, files: items.length, reason, seal: manifest.seal, records_verified: consistency.verified });
+  return { name, path: dest, files: items.length, bytes: manifest.bytes, seal: manifest.seal, consistency, pruned_for_space: pruned };
 }
 
 function readManifest(ws, name) {
@@ -896,5 +1009,6 @@ function restoreBackup(ws, name, { confirm = false, to = null, overlay = false, 
 module.exports = {
   exportAll, exportJson, exportPackage, packageSnapshot, writePackage, restorePackage, csvTable, toCsv, csvCell,
   createBackup, listBackups, verifyBackup, restoreBackup, restoreBackupTo, restoreBackupOverlay, restoreBackupPointInTime, pruneBackups,
+  diskSpace, reserveBytes, freeDiskSpace, relieveFullDisk, diskLine, BACKUP_FLOOR,
   semanticSummary, PROVIDERS, EXPORT_INVENTORY,
 };

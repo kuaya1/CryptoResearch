@@ -243,6 +243,16 @@ function mergeMissing(target, defaults) {
 
 function prepareWorkspace(cfg) {
   const { initWorkspace, openWorkspace } = require('./core/workspace');
+  // A full disk stops every write, this start included (2026-10-16): before
+  // anything is written, same-disk backups make room, an interrupted one
+  // first, then the oldest, never the newest two (core/exporter.js).
+  if (fs.existsSync(cfg.dataDir)) {
+    const relief = require('./core/exporter').relieveFullDisk(cfg.dataDir, { statfs: cfg.statfs });
+    if (relief.removed.length || relief.enough === false) {
+      const mb = (b) => `${Math.round(b / 1048576)} MB`;
+      console.log(`Disk was full (${mb(relief.before.free)} free, reserve ${mb(relief.reserve)}): removed ${relief.removed.length} same-disk backup(s) to make room (${relief.removed.map((r) => `${r.name}${r.complete ? '' : ', unfinished'}`).join('; ') || 'none removable'}); now ${mb(relief.space.free)} free. The offsite copies on the PC were not touched.`);
+    }
+  }
   mkdirp(cfg.dataDir);
   const fresh = !fs.existsSync(path.join(cfg.dataDir, 'workspace.json'));
   if (fresh) initWorkspace(cfg.dataDir, { kind: 'real', name: 'CryptoResearch', templatesFrom: path.join(CODE_DIR, 'templates') });
@@ -475,6 +485,7 @@ async function main(env = process.env) {
   console.log(researchSummary(ws));
   console.log(`Readiness: ${require('./core/research').readiness(ws).summary}`);
   console.log(recordsSummary(ws));
+  console.log(`Disk: ${require('./core/exporter').diskLine(ws.root, { statfs: cfg.statfs })}.`);
   try {
     for (const line of healthLines(ws)) console.log(line);
   } catch (err) {
