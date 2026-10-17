@@ -105,10 +105,13 @@ try {
     ['updates', '#/updates', "document.querySelector('.lg-updates *')"],
     ['explorer', '#/explorer', "document.querySelector('.lg-explorer *')"],
     ['new', '#/new', "document.querySelector('.lg-new *, .lg-intake *')"],
+    ['agenda', '#/agenda', "document.querySelector('.ag-card')"],
     ['forensics', `#/project/${P.relay}/forensics`, "document.querySelector('.fx-cps')"],
     ['forensics empty', `#/project/${P.none}/forensics`, "document.querySelector('.fx-empty')"],
+    ['forensics board', `#/project/${P.long}/forensics`, "document.querySelector('.fx-board .fx-dg')"],
   ];
-  const FX_PAGES = PAGES.slice(-2);
+  const FX_PAGES = PAGES.slice(-3);
+  const AGENDA = PAGES.find(([n]) => n === 'agenda');
   const NAMES = `(() => {
     const out = [];
     for (const el of document.querySelectorAll('button, a[href], input:not([type=hidden]), select, textarea, [role=button], [role=tab], [role=menuitem]')) {
@@ -345,7 +348,7 @@ try {
     // changes, states, timeline, conditions, details (review F14).
     const order = await tab.evalJs("[...document.querySelectorAll('.fx > *')].map((n) => n.className.split(' ').filter((c) => /^fx-(assess|keys|card|details|actions)$/.test(c)).join(' ') + ':' + ((n.querySelector('.fx-h') || {}).textContent || ''))");
     report.forensics_order = order;
-    ok(/assess/.test(order[0] || '') && /keys/.test(order[1] || '') && /fx-card/.test(order[2] || '') && /Evidence changes/.test(order[3] || '') && /Current states/.test(order[4] || '') && /Resilience timeline/.test(order[5] || '') && /outlook/.test(order[6] || '') && /details/.test(order[7] || ''), 'forensics: sections in the brief\'s order', order);
+    ok(/assess/.test(order[0] || '') && /keys/.test(order[1] || '') && /fx-card/.test(order[2] || '') && /Evidence changes/.test(order[3] || '') && /Current states/.test(order[4] || '') && /Exit at a fixed quantity/.test(order[5] || '') && /Resilience timeline/.test(order[6] || '') && /outlook/.test(order[7] || '') && /details/.test(order[8] || ''), 'forensics: sections in the brief\'s order, the fixed-quantity exit after the states', order);
     const keysOrder = await tab.evalJs("[...document.querySelectorAll('.fx-keys > *')].map((n) => n.className)");
     ok(/is-concern/.test(keysOrder[0] || '') && /fx-next/.test(keysOrder[1] || '') && /is-counter/.test(keysOrder[2] || ''), 'forensics: concern, then the next action, then counterevidence, in reading order', keysOrder);
     // Observed outcomes and conditional estimates are drawn apart; no percentage.
@@ -423,6 +426,113 @@ try {
     ok(Boolean(reviewed) && posted.length === 1 && /\/forensics\/reviews$/.test(posted[0]), 'forensics: Mark reviewed sends one POST and the change reads as reviewed', posted);
     await tab.close();
   }
+  // ---- the re-audit's five parts (2026-10-17): read, then one write per click --------
+  {
+    const tab = await tabFor(1440);
+    // Fixed-token exit comparison: stored quotes only on opening.
+    await go(tab, `#/project/${P.relay}/forensics`, "document.querySelector('.fx-xc .fx-xc-t')");
+    let before = tab.writes.length;
+    const xc = await tab.evalJs("(() => { const ts = [...document.querySelectorAll('.fx-xc .fx-xc-t')]; const cells = (t, i) => [...t.querySelectorAll('.fx-xc-r:not(.fx-xc-head)')].map((r) => r.children[i].textContent); return { tables: ts.length, usdSells: ts[0] ? cells(ts[0], 1) : [], tokenSells: ts[1] ? cells(ts[1], 1) : [], tokenWorth: ts[1] ? cells(ts[1], 2) : [], button: (document.querySelector('[data-key^=\"fx-xc-quote-\"]') || {}).textContent || null, note: /never transactions/.test((document.querySelector('.fx-xcs') || {}).textContent || '') }; })()");
+    report.forensics_exit_compare = xc;
+    ok(xc.tables === 2 && new Set(xc.usdSells).size > 1 && xc.tokenSells.length >= 3 && new Set(xc.tokenSells).size === 1 && new Set(xc.tokenWorth).size > 1 && /Quote this quantity now/.test(xc.button || '') && xc.note && tab.writes.length === before, 'exit compare: fixed dollars sell a changing quantity, fixed tokens the same one at a changing worth; drawn from stored quotes, nothing sent', xc);
+    // The register folds open with each frozen estimate and its reading.
+    await tab.evalJs("document.querySelector('[data-key=\"fx-register\"]').open = true; true");
+    await tab.evalJs("__wait(() => document.querySelectorAll('.fx-or-row').length >= 3, 4000)");
+    const reg = await tab.evalJs("[...document.querySelectorAll('.fx-or-st')].map((n) => n.textContent)");
+    report.forensics_register = reg;
+    ok(Array.isArray(reg) && reg.length >= 3 && reg.every((w) => w.length > 2) && !/\d+(\.\d+)?\s?%\s?(accura|hit|correct|probab)/i.test(await tab.evalJs("document.querySelector('.fx-or').textContent")) && tab.writes.length === before, 'register: frozen estimates beside their readings, no accuracy or probability figure, nothing written', reg);
+    // "Quote this quantity now": one POST, one more fixed-token row.
+    const rows0 = await tab.evalJs("document.querySelectorAll('.fx-xc .fx-xc-t')[1].querySelectorAll('.fx-xc-r:not(.fx-xc-head)').length");
+    await tab.evalJs("document.querySelector('[data-key^=\"fx-xc-quote-\"]').click(); true");
+    const more = await tab.evalJs(`__wait(() => document.querySelectorAll('.fx-xc .fx-xc-t')[1] && document.querySelectorAll('.fx-xc .fx-xc-t')[1].querySelectorAll('.fx-xc-r:not(.fx-xc-head)').length === ${rows0 + 1}, 8000)`);
+    const sent = tab.writes.slice(before);
+    ok(Boolean(more) && sent.length === 1 && /\/forensics\/exit-compare\/quote$/.test(sent[0]), 'exit compare: "Quote this quantity now" sends one request and the new reading appears', sent);
+    // Download case: a read, never a write.
+    before = tab.writes.length;
+    await tab.evalJs("document.querySelector('.fx-assess-more [data-key^=\"fx-case-\"]').click(); true");
+    const saved = await tab.evalJs("__wait(() => /Case package saved/.test(document.body.textContent), 8000)");
+    ok(Boolean(saved) && tab.writes.length === before, 'case: Download case reads the package and writes nothing', tab.writes.slice(before));
+    // The disagreement board on the challenged long case.
+    await go(tab, `#/project/${P.long}/forensics`, "document.querySelector('.fx-board .fx-dg')");
+    before = tab.writes.length;
+    const bd = await tab.evalJs("({ items: document.querySelectorAll('.fx-dg').length, sides: [...document.querySelectorAll('.fx-dg')].every((d) => d.querySelectorAll('.fx-dg-side').length === 2), receipts: [...document.querySelectorAll('.fx-dg-side .fx-h4')].map((h) => h.textContent).slice(0, 2), resolve: document.querySelectorAll('.fx-dg-resolve li').length, saveDisabled: document.querySelector('[data-key$=\"-save\"][data-key^=\"fx-dg-\"]').disabled })");
+    report.forensics_board = bd;
+    ok(bd.items === 2 && bd.sides && /^Claude · fr_/.test(bd.receipts[0] || '') && /^ChatGPT · fr_/.test(bd.receipts[1] || '') && bd.resolve >= 2 && bd.saveDisabled && tab.writes.length === before, 'board: both positions with their receipts and what would resolve it; Save waits for a reason; nothing written', bd);
+    // Keyboard: the judgment's choices and reason are reachable and named.
+    const first = await tab.evalJs("document.querySelector('.fx-dg').dataset.key");
+    await tab.evalJs(`document.querySelector('[data-key="${first}-challenge_accepted"]').focus(); true`);
+    await tab.key(' ', { code: 'Space', vk: 32 });
+    await tab.evalJs(`(() => { const t = document.querySelector('[data-key="${first}-reason"]'); t.focus(); return true; })()`);
+    await tab.type('FICTIONAL: the cited hot wallet funds many unrelated accounts.');
+    const enabled = await tab.evalJs(`!document.querySelector('[data-key="${first}-save"]').disabled && document.querySelector('[data-key="${first}-challenge_accepted"]').checked`);
+    ok(enabled, 'board: a choice by keyboard and a typed reason enable Save');
+    await tab.evalJs(`document.querySelector('[data-key="${first}-save"]').click(); true`);
+    const judged = await tab.evalJs(`__wait(() => /Your judgment: Challenge accepted/.test((document.querySelector('[data-key="${first}"]') || {}).textContent || ''), 8000)`);
+    const posted = tab.writes.slice(before);
+    ok(Boolean(judged) && posted.length === 1 && /\/forensics\/judgments$/.test(posted[0]), 'board: Save judgment sends one POST and the judgment reads back', posted);
+    await go(tab, `#/project/${P.long}/forensics`, "document.querySelector('.fx-board .fx-dg')");
+    ok(await tab.evalJs(`/Your judgment: Challenge accepted/.test(document.querySelector('[data-key="${first}"]').textContent) && /1 open/.test(document.querySelector('.fx-board .fx-head-sub').textContent)`), 'board: after a reload the judgment is still there, the other disagreement still open');
+    // The agenda: one primary per project, snooze by keyboard, reload, reopen.
+    before = tab.writes.length;
+    await go(tab, AGENDA[1], AGENDA[2]);
+    const ag = await tab.evalJs("({ cards: document.querySelectorAll('.ag-card').length, primaries: [...document.querySelectorAll('.ag-card')].map((c) => c.querySelectorAll('.ag-item.is-primary').length), basis: [...document.querySelectorAll('.ag-item.is-primary .ag-basis')].map((n) => n.textContent), why: [...document.querySelectorAll('.ag-item.is-primary .ag-why')].every((n) => n.textContent.length > 20) })");
+    report.agenda = ag;
+    ok(ag.cards >= 3 && ag.primaries.every((n) => n <= 1) && ag.basis.length >= 3 && ag.basis.every((w) => ['Sourced', 'Conditional estimate', 'Your choice'].includes(w)) && ag.why && tab.writes.length === before, 'agenda: at most one primary per project, each with why and its basis in words; nothing written', ag);
+    const card = await tab.evalJs("document.querySelector('.ag-card').getAttribute('aria-labelledby')");
+    const snoozeKey = await tab.evalJs(`document.querySelector('[aria-labelledby="${card}"] .ag-item.is-primary [data-key$="-snooze"]').dataset.key`);
+    await tab.evalJs(`document.querySelector('[data-key="${snoozeKey}"]').focus(); true`);
+    await tab.key('Enter', { vk: 13 });
+    ok(await tab.evalJs("__wait(() => document.activeElement && document.activeElement.type === 'date', 3000)"), 'agenda: Snooze… opens a date field with focus');
+    await tab.key('Escape', { vk: 27 });
+    ok(await tab.evalJs(`__wait(() => (document.activeElement || {}).dataset && document.activeElement.dataset.key === '${snoozeKey}', 3000)`), 'agenda: Escape closes it and focus returns to Snooze…');
+    await tab.evalJs(`document.querySelector('[data-key="${snoozeKey}"]').click(); true`);
+    await tab.evalJs("__wait(() => document.querySelector('[data-key$=\"-snooze-save\"]'), 3000)");
+    await tab.evalJs("document.querySelector('[data-key$=\"-snooze-save\"]').click(); true");
+    const snoozed = await tab.evalJs(`__wait(() => /Snoozed or done/.test((document.querySelector('[aria-labelledby="${card}"]') || {}).textContent || ''), 8000)`);
+    const sentAg = tab.writes.slice(before);
+    ok(Boolean(snoozed) && sentAg.length === 1 && /\/agenda$/.test(sentAg[0]), 'agenda: Snooze sends one POST and the item steps aside', sentAg);
+    await go(tab, AGENDA[1], AGENDA[2]);
+    ok(await tab.evalJs(`/Snoozed or done \\(1\\)/.test(document.querySelector('[aria-labelledby="${card}"]').textContent)`), 'agenda: the snooze survives a reload');
+    await tab.evalJs(`(() => { const c = document.querySelector('[aria-labelledby="${card}"]'); const d = c.querySelector('[data-key^="ag-set-"]'); d.open = true; d.querySelector('[data-key$="-reopen"]').click(); return true; })()`);
+    const back = await tab.evalJs(`__wait(() => !/Snoozed or done/.test((document.querySelector('[aria-labelledby="${card}"]') || {}).textContent || ''), 8000)`);
+    ok(Boolean(back) && tab.writes.length === before + 2, 'agenda: Reopen sends one POST and the item is back', tab.writes.slice(before));
+    // Browsing an earlier receipt changes nothing on the agenda.
+    const agBefore = await tab.evalJs("[...document.querySelectorAll('.ag-item.is-primary .ag-title')].map((n) => n.textContent).join('|')");
+    await go(tab, `#/project/${P.relay}/forensics`, "document.querySelector('[data-key^=\"fx-show-\"]')");
+    await tab.evalJs("(() => { document.querySelector('[data-key=\"fx-receipts\"]').open = true; document.querySelector('[data-key^=\"fx-show-\"]').click(); return true; })()");
+    await tab.evalJs("__wait(() => document.querySelector('.fx-hist'), 8000)");
+    await go(tab, AGENDA[1], AGENDA[2]);
+    ok(await tab.evalJs(`[...document.querySelectorAll('.ag-item.is-primary .ag-title')].map((n) => n.textContent).join('|')`) === agBefore, 'agenda: browsing an earlier receipt does not change it');
+    await tab.close();
+  }
+  // The agenda and the board on phones, both themes: no sideways scroll,
+  // every control at least 44px tall, the primary action on the first screen.
+  for (const [w, h] of [[390, 844], [360, 780]]) {
+    for (const theme of ['light', 'dark']) {
+      const tab = await tabFor(w, { mobile: true, height: h, theme });
+      await go(tab, AGENDA[1], AGENDA[2]);
+      await sleep(400);
+      const m = await tab.evalJs("(() => { window.scrollTo(0, 0); const p = document.querySelector('.ag-item.is-primary .ag-why'); const bar = document.querySelector('.tabbar'); const fold = bar ? bar.getBoundingClientRect().top : innerHeight; const small = [...document.querySelectorAll('.ag-item.is-primary .ag-acts .btn')].filter((b) => b.getBoundingClientRect().height < 43.5).length; return { whyBottom: p ? Math.round(p.getBoundingClientRect().bottom) : null, fold: Math.round(fold), small, scrollW: document.documentElement.scrollWidth - innerWidth }; })()");
+      report[`agenda_${w}_${theme}`] = m;
+      ok(m.whyBottom !== null && m.whyBottom <= m.fold && m.small === 0 && m.scrollW <= 1, `${w}x${h} ${theme} agenda: the first project's next action and why are on the first screen; 44px controls; no sideways scroll`, m);
+      await go(tab, `#/project/${P.long}/forensics`, "document.querySelector('.fx-board .fx-dg')");
+      const bm = await tab.evalJs("(() => { const s = [...document.querySelectorAll('.fx-dg')][0].querySelectorAll('.fx-dg-side'); const a = s[0].getBoundingClientRect(), b = s[1].getBoundingClientRect(); return { stacked: b.top >= a.bottom - 1, scrollW: document.documentElement.scrollWidth - innerWidth }; })()");
+      ok(bm.stacked && bm.scrollW <= 1, `${w}x${h} ${theme} board: the two positions stack; no sideways scroll`, bm);
+      await tab.close();
+    }
+  }
+  for (const theme of ['light', 'dark']) {
+    for (const w of [1440, 390]) {
+      const tab = await tabFor(w, { theme });
+      await go(tab, AGENDA[1], AGENDA[2]);
+      await tab.evalJs("document.querySelectorAll('.ag details').forEach((d) => { d.open = true; }); true");
+      await sleep(500);
+      const low = await tab.evalJs(CONTRAST.replace('r.top > innerHeight * 3', 'r.top > innerHeight * 40'));
+      report.contrast[`${theme} ${w} agenda`] = low;
+      if (low && low.length) fail(`${theme} ${w}px agenda: text below contrast`, low.slice(0, 4));
+      await tab.close();
+    }
+  }
   // F14: on a phone, the whole strongest concern with its qualification is on
   // the first screen, above the tab bar, in both themes.
   for (const [w, h] of [[390, 844], [360, 780]]) {
@@ -437,9 +547,13 @@ try {
       // concern, which offers an explicit way to read it whole.
       await go(tab, `#/project/${P.long}/forensics`, "document.querySelector('.fx-key.is-concern')");
       await sleep(400);
-      const L = await tab.evalJs("(() => { window.scrollTo(0, 0); const k = document.querySelector('.fx-key.is-concern'); const core = k.querySelector('.fx-key-core'); const bar = document.querySelector('.tabbar'); const fold = bar ? bar.getBoundingClientRect().top : innerHeight; const q = core.querySelector('.fx-key-q'); const btn = core.querySelector('.fx-key-whole'); return { kind: (core.querySelector('.fx-kind') || {}).textContent || '', note: Boolean(q), qBottom: q ? Math.round(q.getBoundingClientRect().bottom) : null, coreTop: Math.round(core.getBoundingClientRect().top), coreBottom: Math.round(core.getBoundingClientRect().bottom), fold: Math.round(fold), button: btn ? btn.textContent : null, clamped: Boolean(core.querySelector('.fx-key-t.is-clamped')), scrollW: document.documentElement.scrollWidth - innerWidth }; })()");
+      const L = await tab.evalJs("(() => { window.scrollTo(0, 0); const k = document.querySelector('.fx-key.is-concern'); const core = k.querySelector('.fx-key-core'); const bar = document.querySelector('.tabbar'); const fold = bar ? bar.getBoundingClientRect().top : innerHeight; const q = core.querySelector('.fx-key-q'); const kind = core.querySelector('.fx-kind'); const src = core.querySelector('.fx-key-class .fx-src'); const t = core.querySelector('.fx-key-t'); const btn = core.querySelector('.fx-key-whole'); const b = (n) => (n ? Math.round(n.getBoundingClientRect().bottom) : null); return { heading: (core.querySelector('.fx-key-h') || {}).textContent || '', kind: kind ? kind.textContent : '', kindBottom: b(kind), srcBottom: b(src), note: Boolean(q), qBottom: b(q), statementTop: t ? Math.round(t.getBoundingClientRect().top) : null, fold: Math.round(fold), button: btn ? btn.textContent : null, clamped: Boolean(core.querySelector('.fx-key-t.is-clamped')), scrollW: document.documentElement.scrollWidth - innerWidth }; })()");
       report[`forensics_long_${w}_${theme}`] = L;
       ok(/Hypothesis, unestablished/.test(L.kind) && L.note && L.clamped && /Show the whole concern/.test(L.button || '') && L.scrollW <= 1, `${w}x${h} ${theme} long case: the concern keeps its qualification and offers "Show the whole concern"`, L);
+      // Re-audit R08: measured, not only present. The classification, its
+      // uncertainty and the source sit above the fixed navigation, before
+      // the allegation, and the allegation's first line is visible too.
+      ok(L.kindBottom !== null && L.kindBottom <= L.fold && L.srcBottom !== null && L.srcBottom <= L.fold && L.qBottom !== null && L.qBottom <= L.fold && L.statementTop !== null && L.statementTop >= L.qBottom && L.statementTop + 20 <= L.fold && /^Main concern/.test(L.heading), `${w}x${h} ${theme} long case: "Main concern", its classification, uncertainty and source are above the tab bar, before the allegation`, L);
       if (L.button) {
         await tab.evalJs("document.querySelector('.fx-key.is-concern .fx-key-whole').click(); true");
         await sleep(200);

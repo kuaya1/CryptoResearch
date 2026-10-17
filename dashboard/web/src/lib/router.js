@@ -23,7 +23,7 @@ const LEGACY = {
   calendar: '#/research?tab=calendar',
 };
 const LEGACY_IMPORT_TABS = { reports: '#/updates?tab=import', inbox: '#/updates?tab=inbox', portfolio: '#/portfolio?tab=record', settings: '#/settings?tab=general', data: '#/settings?tab=data', privacy: '#/settings?tab=system' };
-export const ROUTE_NAMES = ['new', 'watchlist', 'project', 'portfolio', 'research', 'updates', 'settings', 'explorer'];
+export const ROUTE_NAMES = ['new', 'watchlist', 'project', 'portfolio', 'research', 'agenda', 'updates', 'settings', 'explorer'];
 
 export function parseHash(hash = location.hash) {
   const raw = hash.replace(/^#\/?/, '') || 'watchlist';

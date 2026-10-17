@@ -5,12 +5,14 @@
 //   1. the plain assessment, its age, the receipt shown, a one-line coverage
 //   2. the strongest concern with its qualification (kind, references), then
 //      the next useful action, then the strongest counterevidence
-//   3. evidence changes to review (forensic-review.js)
-//   4. the liquidity, operational, delivery and discontinuation states now
+//   3. evidence changes to review (forensic-review.js), then the
+//      disagreements between Claude and ChatGPT (forensics/Disagreements.jsx)
+//   4. the liquidity, operational, delivery and discontinuation states now,
+//      then the fixed-token exit comparison (forensics/ExitCompare.jsx)
 //   5. the resilience timeline from the receipt's frozen origin
 //   6. what would worsen or improve the outlook
-//   7. findings, grades, sources, observations, the challenge, receipts and
-//      the methodology, folded
+//   7. findings, grades, sources, observations, the challenge, receipts (each
+//      with Download case), the outcome register and the methodology, folded
 // then the audit and monitoring actions, each an explicit click. Observed
 // facts are drawn apart from scenarios (dashed, labeled conditional); unknown
 // is never zero; no probability is shown; grades are never averaged. A kind,
@@ -23,6 +25,11 @@ import { desk, api, refresh } from '../../lib/desk.js';
 import { useDesk } from '../../lib/hooks.js';
 import { hrefWith } from '../../lib/router.js';
 import { DiagnosticSegmentBar } from '../../components/ui/DiagnosticSegmentBar.jsx';
+// The re-audit's improvements (2026-10-17), each its own module.
+import { CaseButton } from './forensics/CaseButton.jsx';
+import { Disagreements } from './forensics/Disagreements.jsx';
+import { ExitCompare } from './forensics/ExitCompare.jsx';
+import { OutcomeRegister, registerCount } from './forensics/OutcomeRegister.jsx';
 
 const enc = encodeURIComponent;
 const EVENT_SHORT = { liquidity_impairment: 'Liquidity', operational_degradation: 'Operations', delivery_inactivity: 'Delivery', confirmed_discontinuation: 'Discontinuation' };
@@ -186,9 +193,26 @@ function Assessment({ v, pid }) {
       </section>
     );
   }
+  if (c.integrity && !c.integrity.ok) {
+    // lifecycle@3 (re-audit R07): nothing is drawn from a stored projection
+    // that disagrees with its verified original.
+    return (
+      <section className="fx-card fx-assess" aria-labelledby="fx-title">
+        <div className="fx-head"><h2 id="fx-title" className="fx-h">Forensic assessment</h2><span className="fx-head-sub fx-mono">{c.receipt_id}</span></div>
+        <div className="fx-integrity" role="alert">
+          <TriangleAlert size={16} aria-hidden="true" />
+          <div>
+            <p className="fx-integrity-t">This receipt does not agree with its original, so nothing on this page is drawn from it.</p>
+            <ul className="fx-list">{c.integrity.problems.map((p) => <li key={p}>{p}</li>)}</ul>
+            <p className="faint">Nothing was repaired or rewritten. Restore the project from a backup, or read the original to see what was saved.</p>
+            <p><TextButton pid={pid} rid={c.receipt_id} sha={c.text_sha256} label="Read the original" /></p>
+          </div>
+        </div>
+      </section>
+    );
+  }
   const asOf = c.assessment_as_of || c.origin;
   const ageDays = Math.floor(c.age_hours / 24);
-  const flags = (c.checks || []).filter((f) => f.level !== 'note');
   return (
     <section className="fx-card fx-assess" aria-labelledby="fx-title">
       <div className="fx-head">
@@ -205,32 +229,32 @@ function Assessment({ v, pid }) {
       <p className="fx-lead">{c.plain_assessment || <span className="faint">The assessment states no plain summary.</span>}</p>
       <p className="fx-meta">
         <span><b>{`Assessed ${fmtDate(asOf)}`}</b>{` · ${ageDays === 0 ? 'today' : ageDays === 1 ? 'yesterday' : `${ageDays} days ago`}`}</span>
-        <span className="fx-mono" title="This receipt's ID: the findings, grades and sources shown are its own.">{c.receipt_id}</span>
       </p>
-      {/* A consequential warning stays at the top; the rest of the receipt
-          details and the coverage follow the concern (review F14). */}
-      {flags.length ? (
-        <ul className="fx-notes">
-          <li className="fx-note is-warn"><TriangleAlert size={14} aria-hidden="true" /><span>{`The desk's checks flag ${flags.length} item${flags.length === 1 ? '' : 's'} in the findings (flags only; nothing is changed). `}<button type="button" className="btn-link" data-key="fx-flags-jump" onClick={() => openFold('fx-findings')}>See the findings</button></span></li>
-        </ul>
-      ) : null}
     </section>
   );
 }
 
 // The receipt's other facts and the evidence coverage, after the concern.
-function AssessmentDetails({ v }) {
+function AssessmentDetails({ v, pid }) {
   const c = v.current;
   if (!c) return null;
   const ch = v.challenge;
   const formatNotes = (c.validation && c.validation.errors) || [];
+  const flags = (c.checks || []).filter((f) => f.level !== 'note');
   return (
     <section className="fx-card fx-assess-more" aria-label="The receipt and its evidence coverage">
+      {flags.length ? (
+        <ul className="fx-notes fx-notes-top">
+          <li className="fx-note is-warn"><TriangleAlert size={14} aria-hidden="true" /><span>{`The desk's checks flag ${flags.length} item${flags.length === 1 ? '' : 's'} in the findings (flags only; nothing is changed). `}<button type="button" className="btn-link" data-key="fx-flags-jump" onClick={() => openFold('fx-findings')}>See the findings</button></span></li>
+        </ul>
+      ) : null}
       <p className="fx-meta">
+        <span className="fx-mono" title="This receipt's ID: the findings, grades and sources shown are its own.">{c.receipt_id}</span>
         <span title="The timeline's checkpoints are counted from this frozen time and never move.">{c.origin_basis === 'inherited' ? `Timeline origin ${fmtDateTime(c.origin)}, kept from ${c.origin_of || 'the forecast it revises'}` : `Timeline origin ${fmtDateTime(c.origin)}`}</span>
         {c.revision_of ? <span title={c.revision ? c.revision.note : undefined}>{`A revision of ${c.revision_of} (${words(c.revision && c.revision.kind)})${c.evidence_added && c.evidence_added.length ? `, ${c.evidence_added.length} new source${c.evidence_added.length === 1 ? '' : 's'}` : ''}`}</span> : null}
         {c.predecessor ? <span>{`A new audit after ${c.predecessor.receipt_id} (origin ${fmtDate(c.predecessor.origin)})`}</span> : null}
         <span>{ch ? `ChatGPT challenge saved ${fmtDate(ch.saved_at)}` : v.earlier_challenge ? 'ChatGPT challenged an earlier receipt' : 'No ChatGPT challenge'}</span>
+        <CaseButton pid={pid} rid={c.receipt_id} />
       </p>
       <Coverage c={c.coverage} eligibility={c.eligibility} />
       {formatNotes.length || (c.probability && c.probability.status === 'withheld') ? (
@@ -254,7 +278,10 @@ function KeyFinding({ title, tone, r, idx }) {
   const [full, setFull] = useState(false);
   const f = r && r.finding;
   const supported = f && f.eligibility && f.eligibility.eligible;
-  const heading = tone === 'concern' ? (f && !supported ? 'Strongest concern, as the report states it' : title) : title;
+  const unestablished = f && f.shown_kind === 'hypothesis';
+  // Re-audit R08: the classification, whether the references hold and the
+  // source come before the allegation, so its uncertainty is read first.
+  const heading = tone === 'concern' ? (unestablished ? 'Main concern' : f && !supported ? 'Main concern, as the report states it' : title) : title;
   const text = r ? r.statement || (f && f.statement) || '' : '';
   const long = text.length > LONG_CONCERN;
   return (
@@ -263,19 +290,19 @@ function KeyFinding({ title, tone, r, idx }) {
         <h3 className="fx-key-h">{heading}</h3>
         {!r || (!r.statement && !f) ? <p className="fx-key-none">Not stated in the assessment</p> : (
           <>
-            <p className={`fx-key-t${long && !full ? ' is-clamped' : ''}`}>{text}</p>
-            {long ? <button type="button" className="btn-link fx-key-whole" aria-expanded={full} data-key={`fx-whole-${tone}`} onClick={() => setFull((x) => !x)}>{full ? 'Show less' : 'Show the whole concern'}</button> : null}
             {f ? (
               <>
-                <p className="fx-key-m">
-                  <span className="fx-id">{f.finding_id}</span>
+                <p className="fx-key-m fx-key-class">
                   <KindTag f={f} />
                   <Standing f={f} />
                   <Sources ids={f.source_ids} idx={idx} />
+                  <span className="fx-id">{f.finding_id}</span>
                 </p>
                 {f.kind_note ? <p className="fx-key-q" role="note"><TriangleAlert size={13} aria-hidden="true" /><span>{f.kind_note}</span></p> : null}
               </>
             ) : <p className="fx-key-m"><span className="fx-src is-missing">{`${r.finding_id || 'No finding'}: not in the findings`}</span></p>}
+            <p className={`fx-key-t${long && !full ? ' is-clamped' : ''}`}>{text}</p>
+            {long ? <button type="button" className="btn-link fx-key-whole" aria-expanded={full} data-key={`fx-whole-${tone}`} onClick={() => setFull((x) => !x)}>{full ? 'Show less' : 'Show the whole concern'}</button> : null}
           </>
         )}
       </div>
@@ -817,6 +844,7 @@ function Receipts({ v, pid }) {
             <p className="fx-receipt-acts">
               {r.selected ? null : <a href={receiptHref(r.latest ? null : r.receipt_id)} data-key={`fx-show-${r.receipt_id}`}>{r.latest ? 'Show the latest' : 'Show this receipt'}</a>}
               <TextButton pid={pid} rid={r.receipt_id} sha={r.text_sha256} />
+              {r.integrity_ok ? <CaseButton pid={pid} rid={r.receipt_id} /> : <span className="fx-flag">Does not agree with its original</span>}
             </p>
           </li>
         );
@@ -878,6 +906,7 @@ function Details({ v, pid }) {
       {fold('fx-observations', 'Monitor observations', <Observations v={v} />, v.monitoring.recent.length)}
       {fold('fx-challenge', 'ChatGPT challenge', <Challenge v={v} />)}
       {v.receipts.length ? fold('fx-receipts', 'Receipts and revisions', <Receipts v={v} pid={pid} />, v.receipts.length) : null}
+      {v.outcomes && v.outcomes.items.length ? fold('fx-register', 'Outcome register', <OutcomeRegister v={v} pid={pid} />, registerCount(v)) : null}
       {fold('fx-method', 'Methodology', <Method v={v} />)}
     </section>
   );
@@ -1249,24 +1278,30 @@ export default function Forensics({ pid, receipt = null }) {
       </div>
     ) : <div className="page-loading" role="status"><span className="sr-only">Loading the forensic records…</span><span className="skel w60" /><span className="skel w80" /><span className="skel w40" /></div>;
   }
-  const c = v.current;
+  // A receipt whose projection disagrees with its original is shown by its
+  // identity only: every other section reads as if no assessment were shown.
+  const broken = Boolean(v.current && v.current.integrity && !v.current.integrity.ok);
+  const vv = broken ? { ...v, current: null, challenge: null } : v;
+  const c = vv.current;
   return (
     <div className="fx">
       <Assessment v={v} pid={pid} />
       {c ? (
         <div className="fx-keys">
           <KeyFinding title="Strongest supported concern" tone="concern" r={c.strongest_concern} idx={c.source_index} />
-          <NextAction v={v} />
+          <NextAction v={vv} />
           <KeyFinding title="Strongest counterevidence" tone="counter" r={c.strongest_counterevidence} idx={c.source_index} />
         </div>
-      ) : <NextAction v={v} />}
-      <AssessmentDetails v={v} />
-      <EvidenceChanges v={v} pid={pid} />
-      <States v={v} />
-      <Timeline v={v} />
-      <Conditions v={v} />
-      <Details v={v} pid={pid} />
-      <Actions v={v} pid={pid} />
+      ) : <NextAction v={vv} />}
+      <AssessmentDetails v={vv} pid={pid} />
+      <EvidenceChanges v={vv} pid={pid} />
+      <Disagreements v={vv} pid={pid} />
+      <States v={vv} />
+      <ExitCompare v={vv} pid={pid} symbol={v.symbol} />
+      <Timeline v={vv} />
+      <Conditions v={vv} />
+      <Details v={vv} pid={pid} />
+      <Actions v={vv} pid={pid} />
     </div>
   );
 }

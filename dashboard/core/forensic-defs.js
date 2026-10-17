@@ -158,12 +158,36 @@ const LIQUIDITY_2 = Object.freeze({
 // cr-forensic-eligibility@1 (core/forensic-eligibility.js), liquidity@2, and
 // lifecycle@2 (repository readings per observation batch with coverage; a
 // valid zero is a reading; incomplete product reads are no reading).
-const METHOD_VERSION = 'cr-forensic-method@2';
-const METHOD = Object.freeze({
-  version: METHOD_VERSION,
+const METHOD_2 = Object.freeze({
+  version: 'cr-forensic-method@2',
   parts: Object.freeze(['cr-forensic-eligibility@1', LIQUIDITY_VERSION_2, 'cr-forensic-lifecycle@2', 'cr-forensic-scenarios@2']),
   previous: 'cr-forensic-method@1',
   note: 'Outcomes recorded under the earlier method stay on record; where this method reads a different outcome, a correction line names both methods and the reason.',
+});
+// cr-forensic-liquidity@3 (2026-10-17, re-audit R04): as @2, except that a
+// positive transfer tax is never applied as a multiplier. Its mechanism and
+// whether a quote includes it are not known, so with a positive tax the cost
+// without it is a lower bound, and proceeds and cost share one basis
+// (receives, less an external network fee).
+const LIQUIDITY_VERSION_3 = 'cr-forensic-liquidity@3';
+const LIQUIDITY_3 = Object.freeze({
+  ...LIQUIDITY_2,
+  version: LIQUIDITY_VERSION_3,
+  completeness: 'A total cost needs the network fee (stated, or included in the quote) and a transfer tax known to be 0% (from the GoPlus contract screen within 7 days of the reading). With a positive tax, how it applies and whether the quote includes it are not known, so the cost shown, without it, is "at least" that figure: it can show the exit over your limit, never within it.',
+});
+// The derivation the tab and the checkpoint outcomes use now (method@3,
+// 2026-10-17, after the re-audit R01-R07): cr-forensic-eligibility@2
+// (exact official host, full chain references conferring no attribution,
+// every cited source usable, explicit contracts, bound repositories),
+// liquidity@3, lifecycle@3 (a receipt's projection must agree with its
+// verified original before it feeds anything) and scenarios@3 (a day's
+// readings count from when they were observed).
+const METHOD_VERSION = 'cr-forensic-method@3';
+const METHOD = Object.freeze({
+  version: METHOD_VERSION,
+  parts: Object.freeze(['cr-forensic-eligibility@2', LIQUIDITY_VERSION_3, 'cr-forensic-lifecycle@3', 'cr-forensic-scenarios@3']),
+  previous: 'cr-forensic-method@2',
+  note: 'Outcomes recorded under an earlier method stay on record; where this method reads a different outcome, a correction line names both methods and the reason.',
 });
 
 // cr-forensic-scenarios@1: conditional threshold estimates.
@@ -193,6 +217,11 @@ const SCENARIOS = Object.freeze({
 // missing day stays missing, never zero.
 const SCENARIOS_VERSION_2 = 'cr-forensic-scenarios@2';
 const SCENARIOS_2 = Object.freeze({ ...SCENARIOS, version: SCENARIOS_VERSION_2, zero: 'A zero reading is a reading: it decides the current state. A rate of change cannot be projected from zero, so no date is estimated from it.' });
+// cr-forensic-scenarios@3 (2026-10-17, re-audit R05): as @2; a day's
+// readings count from the time they were observed (never hidden until a noon
+// label passes), and today's point is labeled a partial day.
+const SCENARIOS_VERSION_3 = 'cr-forensic-scenarios@3';
+const SCENARIOS_3 = Object.freeze({ ...SCENARIOS_2, version: SCENARIOS_VERSION_3, partial_day: 'Today\'s point is the median of the readings so far today, labeled a partial day; future readings are never included.' });
 
 // cr-probability-gate@1. A numerical probability is shown only for a method
 // registered here with: historical data under the same event definitions,
@@ -281,11 +310,16 @@ module.exports = {
   LIQUIDITY_VERSION,
   LIQUIDITY_VERSION_2,
   LIQUIDITY_2,
+  LIQUIDITY_VERSION_3,
+  LIQUIDITY_3,
   METHOD_VERSION,
   METHOD,
+  METHOD_2,
   SCENARIOS_VERSION,
   SCENARIOS_VERSION_2,
   SCENARIOS_2,
+  SCENARIOS_VERSION_3,
+  SCENARIOS_3,
   PROBABILITY_GATE,
   RUBRIC_VERSION,
   PROMPT_VERSION,

@@ -9,6 +9,7 @@ import { Boundary, ViewError, retryableLazy, retryingImport } from './components
 import Watchlist from './views/watchlist/Watchlist.jsx';
 
 const ProjectPage = retryableLazy(() => import('./views/project/ProjectPage.jsx'));
+const Agenda = retryableLazy(() => import('./views/agenda/Agenda.jsx'));
 const LegacyView = retryableLazy(() => import('./legacy/LegacyView.jsx'));
 const legacy = retryingImport(() => import('./legacy/views.js'));
 
@@ -38,7 +39,9 @@ function RouteView() {
     ? <Watchlist />
     : route.name === 'project'
       ? <Suspense fallback={<Loading />}><ProjectPage key={route.args[0]} /></Suspense>
-      : (
+      : route.name === 'agenda'
+        ? <Suspense fallback={<Loading />}><Agenda /></Suspense>
+        : (
         <Suspense fallback={<Loading />}>
           <LegacyView key={route.name} name={route.name} load={() => legacy().then((m) => m.LEGACY_VIEWS[route.name]())} />
         </Suspense>
@@ -46,7 +49,7 @@ function RouteView() {
   return (
     <Boundary
       resetKey={key}
-      onRetry={() => { ProjectPage.retry(); LegacyView.retry(); }}
+      onRetry={() => { ProjectPage.retry(); Agenda.retry(); LegacyView.retry(); }}
       fallback={(error, retry) => <ViewError error={error} retry={retry} what={route.name === 'project' ? 'This project' : 'This page'}><a className="btn btn-sm btn-ghost" href="#/watchlist">Watchlist</a></ViewError>}
     >
       {view}

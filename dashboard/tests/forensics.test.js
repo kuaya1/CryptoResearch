@@ -245,8 +245,15 @@ test('quotes speak only to their size; "no route" counts only from an aggregator
   assert.equal(noGas[0].beyond, null, 'the network fee unknown: "at least 0.2%", not within');
   const overLow = M.liquidityReadings([q(500, 400, 'aggregator', { gas_usd: null })], { positionUsd: 500, limitPct: 5 });
   assert.equal(overLow[0].beyond, true, 'a lower bound already over the limit, from an aggregator, is over it');
+  // liquidity@3 (re-audit R04): a positive tax is not applied as a
+  // multiplier (its mechanism and whether the quote includes it are not
+  // known); the cost without it is a valid lower bound that reconciles with
+  // what the quote receives, less the network fee.
   const taxed = M.exitEstimate(q(500, 490), 500, { tax: { pct: 10, source: 'GoPlus' } });
-  assert.ok(Math.abs(taxed.cost_pct - (100 - (100 - 2.2) * 0.9)) < 1e-6, 'a transfer tax applies to what the sale receives');
+  assert.ok(Math.abs(taxed.cost_pct - 2.2) < 1e-6);
+  assert.equal(taxed.cost_complete, false);
+  assert.match(taxed.missing_costs.join(' '), /10% transfer tax/);
+  assert.equal(taxed.net_received_usd, 489);
 });
 
 // ---------------------------------------------------------------------------

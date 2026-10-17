@@ -10,15 +10,20 @@
 //   measurement_changed  a measured value changed (a check's outcome or
 //                        status, a repository's latest delivery, release or
 //                        state, a quote's answer or its side of your limit)
-//   capture_changed      the captured page changed beyond whitespace; what
-//                        that means is not established by the desk
-//   cosmetic_only        the bytes changed, but the page is the same under
-//                        cr-forensic-normalize@1 (whitespace only)
+//   capture_changed      the captured bytes changed; what that means is not
+//                        assessed by the desk
+//   cosmetic_only        formatting only: a JSON answer whose parsed value is
+//                        identical under cr-forensic-normalize@2 (every key,
+//                        string and number equal); never for HTML or text
 //   read_failed          the read failed or was incomplete: no measurement
 //
 // and, per target, "no relevant change" since the last change. A raw hash
 // change is never called a factual change; the normalization removes no
 // number, date or statement (forensic-monitor.js normalizeBody).
+//
+// @2 (2026-10-17, re-audit R06): formatting-only needs JSON compared under
+// normalize@2 on both sides; any other byte change, readings normalized under
+// @1 included, is a capture change whose significance is not assessed.
 //
 // Eric's review: an acknowledgment of a target's latest change, with an
 // optional note, appended to projects/<id>/forensics/reviews.jsonl. It means
@@ -30,13 +35,13 @@
 const { runOp, OpError } = require('./ops');
 const { readJsonLines, sha256 } = require('./fsx');
 
-const VERSION = 'cr-forensic-review@1';
+const VERSION = 'cr-forensic-review@2';
 const RELEVANT = new Set(['measurement_changed', 'capture_changed', 'read_failed']);
 const MEANING = 'Reviewed by Eric. This records that he looked at the change; it does not make any claim true, resolve an allegation or change a grade.';
 const CLASS_WORDS = {
   measurement_changed: 'Measurement changed',
-  capture_changed: 'Captured page changed; significance not established',
-  cosmetic_only: 'Cosmetic only (whitespace)',
+  capture_changed: 'Captured page changed; significance not assessed',
+  cosmetic_only: 'Formatting only (the same JSON)',
   read_failed: 'Read failed or incomplete',
   no_relevant_change: 'No relevant change',
 };
@@ -56,6 +61,7 @@ function stateOf(o, ctx) {
       m: [o.outcome, o.http_status || null, o.expect_met ? o.expect_met.text : null],
       raw: o.body_sha256 || null,
       norm: o.body_norm_sha256 || null,
+      normv: o.normalization || null,
       words: `${o.outcome === 'pass' ? 'Passed' : 'Failed'} (HTTP ${o.http_status || '?'}${o.expect && o.expect.text ? `; expected text ${o.expect_met && o.expect_met.text ? 'found' : 'not found'}` : ''})`,
       values: { outcome: o.outcome, http_status: o.http_status || null, body_sha256: o.body_sha256 || null, body_norm_sha256: o.body_norm_sha256 || null, excerpt: o.excerpt || null },
     };
@@ -120,8 +126,11 @@ function changesOf(target, list, ctx) {
     }
     let cls = null;
     if (JSON.stringify(s.m) !== JSON.stringify(base.s.m)) cls = 'measurement_changed';
-    else if (s.norm && base.s.norm && s.norm !== base.s.norm) cls = 'capture_changed';
-    else if (s.raw && base.s.raw && s.raw !== base.s.raw) cls = s.norm && base.s.norm ? 'cosmetic_only' : 'capture_changed';
+    else if ((s.raw || base.s.raw) && s.raw !== base.s.raw) {
+      const NV = require('./forensic-monitor').NORMALIZE_VERSION;
+      const formatting = Boolean(s.norm && base.s.norm && s.norm === base.s.norm && s.normv === NV && base.s.normv === NV);
+      cls = formatting ? 'cosmetic_only' : 'capture_changed';
+    }
     if (cls) items.push({ item_id: itemId([target.target_id, cls, base.obs.obs_id, o.obs_id]), class: cls, at: o.observed_at, previous: obsView(base.obs, base.s), current: obsView(o, s) });
     base = { obs: o, s };
   }
@@ -162,7 +171,8 @@ function queue(ws, pid, { receipts, observations, profile, limitPct = null, tax 
   for (const x of targets) {
     if (seen.has(x.t.target_id)) continue;
     seen.add(x.t.target_id);
-    const obs = (observations || []).filter((o) => o.target_id === x.t.target_id && o.kind === x.obsKind);
+    // An explicit fixed-token quote Eric asked for is not a monitor reading.
+    const obs = (observations || []).filter((o) => o.target_id === x.t.target_id && o.kind === x.obsKind && o.source !== 'explicit');
     // Exit quotes: each size is its own series.
     const series = x.kind === 'exit_quote' ? [...new Set(obs.map((o) => o.size_usd))].map((size) => ({ key: `${x.t.target_id}:${size}`, list: obs.filter((o) => o.size_usd === size) })) : [{ key: x.t.target_id, list: obs }];
     let items = [];
@@ -198,7 +208,7 @@ function queue(ws, pid, { receipts, observations, profile, limitPct = null, tax 
       label: x.label,
       removed: Boolean(x.removed),
       state,
-      state_words: { open: 'Changed, to review', reopened: 'Changed again since your review', reviewed: 'Reviewed', cosmetic_only: 'Only cosmetic changes', no_relevant_change: 'No relevant change' }[state],
+      state_words: { open: 'Changed, to review', reopened: 'Changed again since your review', reviewed: 'Reviewed', cosmetic_only: 'Formatting changes only', no_relevant_change: 'No relevant change' }[state],
       unavailable: failing,
       readings: obs.length,
       latest,

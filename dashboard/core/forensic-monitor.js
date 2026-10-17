@@ -34,7 +34,7 @@
 
 const crypto = require('crypto');
 const { readJson, jsonText, sha256 } = require('./fsx');
-const { withLock, replaceFile } = require('./ops');
+const { withLock, replaceFile, OpError } = require('./ops');
 const { acquireLease, releaseLease } = require('./leases');
 const { ymdInTz } = require('./dates');
 
@@ -100,8 +100,10 @@ function monitoredProjects(ws) {
   });
 }
 
+// An explicit request (a fixed-token comparison) never moves the monitor's
+// own schedule.
 function lastObservedAt(obs, targetId) {
-  for (let i = obs.length - 1; i >= 0; i--) if (obs[i].target_id === targetId) return Date.parse(obs[i].observed_at);
+  for (let i = obs.length - 1; i >= 0; i--) if (obs[i].target_id === targetId && obs[i].source !== 'explicit') return Date.parse(obs[i].observed_at);
   return 0;
 }
 
@@ -230,17 +232,32 @@ async function productCheck(ws, target, { cfg, lookupImpl, transport, now }) {
     scope = 'status_and_text';
     why = `The expected text was not found, but ${readWords}: no reading.`;
   }
-  return { ...base, outcome, scope, read, http_status: r.status, final_url: r.final_url, content_type: r.content_type, bytes: r.bytes, truncated: Boolean(r.truncated), read_error: r.read_error || null, body_sha256: sha256(body), body_norm_sha256: read === 'complete' ? sha256(normalizeBody(text)) : null, normalization: NORMALIZE_VERSION, expect_met: { status: statusOk, text: target.expect_text ? (outcome === 'incomplete' ? null : found) : null }, excerpt: target.expect_text ? excerptAround(text, target.expect_text) : null, error: why };
+  return { ...base, outcome, scope, read, http_status: r.status, final_url: r.final_url, content_type: r.content_type, bytes: r.bytes, truncated: Boolean(r.truncated), read_error: r.read_error || null, body_sha256: sha256(body), body_norm_sha256: read === 'complete' ? sha256(normalizeBody(text, r.content_type)) : null, normalization: NORMALIZE_VERSION, expect_met: { status: statusOk, text: target.expect_text ? (outcome === 'incomplete' ? null : found) : null }, excerpt: target.expect_text ? excerptAround(text, target.expect_text) : null, error: why };
 }
 
-// cr-forensic-normalize@1: the documented comparison behind "cosmetic only"
-// in the review queue. Line endings become \n, every run of whitespace one
-// space, and the ends are trimmed. Nothing else is touched: no number, date,
-// word, letter case, markup or script text is removed or changed, so two
-// bodies equal under it differ only in whitespace.
-const NORMALIZE_VERSION = 'cr-forensic-normalize@1';
-function normalizeBody(text) {
-  return String(text || '').replace(/\r\n?/g, '\n').replace(/\s+/g, ' ').trim();
+// cr-forensic-normalize@2 (2026-10-17, re-audit R06): the documented
+// comparison behind "formatting only" in the review queue. @1 collapsed every
+// run of whitespace, which also erased changes inside JSON strings, <pre>
+// blocks and scripts; the desk has no parser for those meanings. Now:
+//   - JSON (a JSON content type and a body that parses): the parsed value,
+//     keys sorted, every string, number and literal exactly as parsed. Only
+//     formatting and key order are ignored.
+//   - anything else (HTML, text, unknown): the bytes as they are. Any change
+//     is a change whose significance is not assessed.
+const NORMALIZE_VERSION = 'cr-forensic-normalize@2';
+function canonicalJson(v) {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
+  if (v && typeof v === 'object') return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`;
+  return JSON.stringify(v);
+}
+function normalizeBody(text, contentType = null) {
+  const body = String(text || '');
+  if (/\bjson\b/i.test(String(contentType || ''))) {
+    try {
+      return `json:${canonicalJson(JSON.parse(body))}`;
+    } catch (_) { /* not JSON after all: the bytes */ }
+  }
+  return `raw:${body}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -424,6 +441,48 @@ async function refresh(ws, opts = {}) {
   }
 }
 
+// One explicit fixed-token quote, on Eric's click (the fixed-token exit
+// comparison, forensic-exitcompare.js): the same adapter, request budget,
+// provider gate, lease and restored-copy hold as the monitor; the target must
+// be one he approved. Never a transaction. The same request_id again returns
+// the observation it made, with no second request.
+async function quoteFixedToken(ws, pid, { target_id: targetId, amount_in: amountIn, request_id: requestId = null, fetchImpl = fetch, cgGetImpl = null, sleep = null, now: nowIn = undefined } = {}) {
+  const F = require('./forensics');
+  const XQ = require('./exitquotes');
+  const now = () => (nowIn !== undefined ? nowIn : Date.now());
+  const cfg = cfgOf(ws);
+  const rid = typeof requestId === 'string' && /^[A-Za-z0-9_-]{8,80}$/.test(requestId) ? requestId : null;
+  if (!rid) throw new OpError('INVALID', 'An explicit quote needs a request_id, so a retry never sends a second request.');
+  if (typeof amountIn !== 'string' || !/^[1-9][0-9]{0,59}$/.test(amountIn)) throw new OpError('INVALID', 'Name the token quantity in base units.');
+  const recent = F.readObservations(ws, pid, { from: now() - 31 * 24 * HOUR, to: now() + HOUR });
+  const prior = recent.find((o) => o.request_ref === rid);
+  if (prior) return { status: 'unchanged', observation: prior };
+  if (!cfg.enabled) throw new OpError('REFUSED', 'Forensic quoting is turned off in settings.');
+  if (heldCopy(ws)) throw new OpError('REFUSED', 'A restored copy: no quote is asked until the copy is released.');
+  const project = require('./projects').getProject(ws, pid);
+  const target = (F.readProfile(ws, pid).targets.exit_quotes || []).find((t) => t.target_id === targetId);
+  if (!target) throw new OpError('NOT_FOUND', 'That exit-quote chain is not approved for this project.');
+  if (!require('./forensic-exitcompare').referenceAmounts(ws, pid, target).has(amountIn)) throw new OpError('INVALID', 'Only the comparison\'s reference quantity can be quoted (what your position size bought at the first quote after an assessment).');
+  const wait = quoteGate(readStatus(ws), target.provider, now());
+  if (wait) throw new OpError('REFUSED', `${target.provider} asked this desk to wait until ${wait}; nothing was sent.`);
+  const lease = acquireLease(ws, LEASE, 10 * 60000, { label: 'explicit quote' });
+  if (!lease) throw new OpError('CONFLICT', 'A forensic monitor run is in progress; try again in a moment.');
+  try {
+    // Under the lease: a retry that raced the first request finds its answer.
+    const raced = F.readObservations(ws, pid, { from: now() - 31 * 24 * HOUR, to: now() + HOUR }).find((o) => o.request_ref === rid);
+    if (raced) return { status: 'unchanged', observation: raced };
+    const out = await XQ.quoteTarget(ws, { project, target, sizes: [], amounts: [amountIn], request_id: rid, cfg, fetchImpl, now, reserve: () => reserveRequest(ws, cfg, now()), sleep, observations: recent.filter((o) => o.target_id === targetId), cgGetImpl });
+    const written = out.observations.map((o) => F.appendObservation(ws, pid, { ...o, request_ref: rid }));
+    noteQuoteOutcome(ws, cfg, target.provider, out, now());
+    if (out.stop === 'budget') throw new OpError('REFUSED', 'The monthly request budget is used up; nothing was sent.');
+    if (out.gate) throw new OpError('REFUSED', `${target.provider} asked this desk to wait; nothing more was sent.`);
+    if (out.skip) throw new OpError('REFUSED', out.skip);
+    return { status: 'saved', observation: written[written.length - 1] || null };
+  } finally {
+    releaseLease(ws, LEASE, lease);
+  }
+}
+
 function statusView(ws, now = Date.now()) {
   const st = readStatus(ws);
   const cfg = cfgOf(ws);
@@ -445,4 +504,4 @@ function statusView(ws, now = Date.now()) {
   };
 }
 
-module.exports = { STATUS_REL, NORMALIZE_VERSION, normalizeBody, isDue, dueTargets, refresh, productCheck, repositoryRead, statusView, readStatus, quoteGate };
+module.exports = { STATUS_REL, NORMALIZE_VERSION, normalizeBody, isDue, dueTargets, refresh, productCheck, repositoryRead, statusView, readStatus, quoteGate, quoteFixedToken };

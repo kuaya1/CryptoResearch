@@ -84,6 +84,10 @@ Forensics & Resilience (no paid model call; Claude investigates, ChatGPT may cha
   forensics run [<id>] [--force]         product checks, repository reads, exit quotes and due checkpoint outcomes now
   forensics correct <id> <receipt_id> --checkpoint 30d --event delivery_inactivity --outcome unresolved --reason TEXT
                                          a recorded outcome is never rewritten: this appends a correction
+  forensics case <id> <receipt_id> [--out FILE]
+                                         one receipt as a verifiable case package (originals, pins, observations,
+                                         one replayable exit calculation, what is missing); reads only
+  forensics case-verify --file FILE      checks a case package offline and replays its calculation (no network)
 
 Your notes and calendar
   note conviction <project> --text TEXT | --text-file FILE [--conviction low|medium|high]
@@ -805,7 +809,19 @@ async function run(argv) {
         const r = fo.correctResolution(ws, need(pid, 'project'), need(aid, 'receipt_id'), { checkpoint: one(flags.checkpoint), event: one(flags.event), outcome: one(flags.outcome), reason: one(flags.reason) });
         return { status: 'saved', ...r.result, verified: r.verified };
       }
-      throw Object.assign(new Error('forensics view|start|prompt|import|challenge|cancel|monitor|run|correct (see help)'), { code: 'USAGE' });
+      // The case package of one receipt, and its offline verification.
+      if (sub === 'case') {
+        const pkg = require('./core/forensic-case').buildCase(ws, need(pid, 'forensics case <project> <receipt_id> [--out FILE]'), need(aid, 'receipt_id'));
+        const out = one(flags.out);
+        if (!out) return pkg;
+        fs.writeFileSync(out, JSON.stringify(pkg, null, 2));
+        return { status: 'written', file: out, receipt_id: aid, artifacts: pkg.manifest.artifacts.length, missing: pkg.manifest.missing.length, calculation: pkg.manifest.calculation.status };
+      }
+      if (sub === 'case-verify') {
+        const f = need(one(flags.file) || pid, 'forensics case-verify --file FILE');
+        return require('./core/forensic-case').verifyCase(JSON.parse(fs.readFileSync(f, 'utf8')));
+      }
+      throw Object.assign(new Error('forensics view|start|prompt|import|challenge|cancel|monitor|run|correct|case|case-verify (see help)'), { code: 'USAGE' });
     }
     case 'job': {
       const jobs = require('./core/jobs');

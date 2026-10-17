@@ -389,9 +389,14 @@ async function quoteTarget(ws, opts) {
   const p = PROVIDERS[target.provider];
   const chain = p && p.chains[target.chain_id];
   const info = chainInfo(target.chain_id);
+  // opts.amounts: exact token quantities in base units (an explicit
+  // fixed-token comparison request from Eric), instead of dollar sizes.
+  const fixedToken = Array.isArray(opts.amounts) && opts.amounts.length > 0;
   const base = {
     kind: 'executable_quote',
-    source: 'monitor',
+    source: fixedToken ? 'explicit' : 'monitor',
+    basis_kind: fixedToken ? 'fixed_token' : 'fixed_usd',
+    ...(fixedToken && opts.request_id ? { request_ref: String(opts.request_id).slice(0, 80) } : {}),
     target_id: target.target_id,
     provider: target.provider,
     provider_label: p ? p.label : target.provider,
@@ -448,15 +453,19 @@ async function quoteTarget(ws, opts) {
   const token = { decimals: dec.decimals, platform: dec.platform, chain_id: target.chain_id, contract_address: target.contract_address, source: `CoinGecko /coins/{id} detail_platforms.${dec.platform}, for this exact contract`, checked_at: dec.checked_at };
   const quoteToken = { symbol: chain.quote.symbol, address: chain.quote.address, decimals: chain.quote.decimals, valued_usd: 1 };
   const valuation = `${chain.quote.symbol} valued at $1.00; the cost is measured against CoinGecko's price of ${price.as_of.slice(0, 16).replace('T', ' ')} UTC.`;
-  for (const size of sizes) {
-    const amountIn = baseUnitsFor(size, price.usd, dec.decimals);
+  const plan = fixedToken ? opts.amounts.map((a) => ({ amountIn: /^[1-9][0-9]{0,59}$/.test(String(a)) ? String(a) : null })) : sizes.map((size) => ({ size }));
+  for (const step of plan) {
+    const amountIn = fixedToken ? step.amountIn : baseUnitsFor(step.size, price.usd, dec.decimals);
     const at = () => isoOf(now());
     if (!amountIn) {
-      out.observations.push({ ...base, observed_at: at(), retrieved_at: at(), size_usd: size, status: 'not_quoted', price, token, quote_token: quoteToken, quote: null, error: 'The size is below one base unit of the token at this price.' });
+      out.observations.push({ ...base, observed_at: at(), retrieved_at: at(), size_usd: step.size || null, status: 'not_quoted', price, token, quote_token: quoteToken, quote: null, error: fixedToken ? 'The quantity is not a whole number of base units.' : 'The size is below one base unit of the token at this price.' });
       continue;
     }
     const amountTokens = unitsText(amountIn, dec.decimals);
     const sellUsd = round(Number(amountTokens) * price.usd, 6);
+    // A fixed-token request sells that quantity; its dollar value is the
+    // stored price times it.
+    const size = fixedToken ? round(sellUsd, 2) : step.size;
     const url = requestUrl(p, chain, { token: target.contract_address, amountIn });
     // Checked before anything is sent: chain, token, currency and amount.
     const problem = outboundProblem(p, chain, url, { token: target.contract_address, amountIn, decimals: dec.decimals, priceUsd: price.usd, sizeUsd: size });

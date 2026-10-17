@@ -358,8 +358,8 @@ function contractFor(symbol) {
     for (let h = 0; h <= 20 * 24; h += 6) {
       const at = new Date(t0 + h * 3600000).toISOString();
       const down = h >= 6 * 24 && h < 10 * 24;
-      const page = `<p>All systems operational (FICTIONAL)</p>${h >= 14 * 24 ? '<p>Settlement now batched hourly (FICTIONAL)</p>' : ''}${h >= 17 * 24 ? '\n\n' : ''}`;
-      F.appendObservation(ws, pid, { kind: 'product_check', target_id: pc.target_id, label: pc.label, url: pc.url, observed_at: at, outcome: down ? 'fail' : 'pass', scope: 'status_and_text', read: 'complete', http_status: down ? 503 : 200, error: down ? 'Answered 503.' : null, excerpt: down ? null : 'All systems operational (FICTIONAL)', body_sha256: down ? null : pageHash(page), body_norm_sha256: down ? null : pageHash(normPage(page)), normalization: 'cr-forensic-normalize@1', expect_met: { status: !down, text: down ? null : true } });
+      const page = h < 14 * 24 ? '{"status":"operational (FICTIONAL)"}' : h < 17 * 24 ? '{"status":"operational (FICTIONAL)","settlement":"hourly (FICTIONAL)"}' : '{\n  "settlement": "hourly (FICTIONAL)",\n  "status": "operational (FICTIONAL)"\n}';
+      F.appendObservation(ws, pid, { kind: 'product_check', target_id: pc.target_id, label: pc.label, url: pc.url, observed_at: at, outcome: down ? 'fail' : 'pass', scope: 'status_and_text', read: 'complete', http_status: down ? 503 : 200, content_type: 'application/json', error: down ? 'Answered 503.' : null, excerpt: down ? null : 'operational (FICTIONAL)', body_sha256: down ? null : pageHash(page), body_norm_sha256: down ? null : pageHash(normPage(page, 'application/json')), normalization: require(`${ROOT}/core/forensic-monitor.js`).NORMALIZE_VERSION, expect_met: { status: !down, text: down ? null : true } });
       if (h % 24 === 0) F.appendObservation(ws, pid, { kind: 'repository_read', target_id: gh.target_id, repository: `github.com/${gh.owner}/${gh.repo}`, observed_at: at, status: 'ok', latest_delivery_at: new Date(t0 - 52 * 86400000).toISOString(), latest_commit: { sha: 'f1c7i0n4l', at: new Date(t0 - 52 * 86400000).toISOString(), message: 'FICTIONAL commit' } });
     }
     // Exit quotes approved on the relay's (FICTIONAL) Ethereum contract, every
@@ -370,34 +370,79 @@ function contractFor(symbol) {
     if (xo) {
       F.setMonitoring(ws, pid, { approve_quotes: [xo.key], by: 'dev' });
       const xt = F.readProfile(ws, pid).targets.exit_quotes[0];
+      // The price falls 0.6% a day (FICTIONAL), so a fixed-dollar exit sells
+      // more tokens each day while a fixed-token exit sells the same ones.
+      const px = (h) => Math.round(1.07 * (1 - (0.006 * h) / 24) * 1e6) / 1e6;
+      const units = (tokens) => (BigInt(Math.round(tokens * 1e6)) * 10n ** 12n).toString();
+      const token = { decimals: 18, platform: 'ethereum', chain_id: xt.chain_id, contract_address: xt.contract_address, source: 'FICTIONAL dev desk fixture', checked_at: new Date().toISOString() };
+      const quoteRow = (at, size, cost, extra = {}) => ({ kind: 'executable_quote', source: 'monitor', basis_kind: 'fixed_usd', target_id: xt.target_id, provider: xt.provider, provider_label: 'KyberSwap', venue: 'KyberSwap', mechanism: 'aggregator', route_scope: 'aggregator', chain: xt.chain_label, chain_id: xt.chain_id, contract_address: xt.contract_address, observed_at: at, retrieved_at: at, token, ...extra });
       for (let h = 0; h <= 20 * 24; h += 12) {
         const at = new Date(t0 + h * 3600000).toISOString();
         const thin = h >= 12 * 24 && h < 16 * 24;
+        const price = { usd: px(h), as_of: at, source: 'FICTIONAL dev price' };
         for (const size of [100, 500, 2000]) {
           const cost = (size === 100 ? 0.9 : size === 500 ? 2.4 : 6.1) * (thin ? 2.6 : 1) + (h % 48) / 100;
           const noRoute = thin && size === 2000;
-          F.appendObservation(ws, pid, { kind: 'executable_quote', source: 'monitor', target_id: xt.target_id, provider: xt.provider, provider_label: 'KyberSwap', venue: 'KyberSwap', mechanism: 'aggregator', route_scope: 'aggregator', chain: xt.chain_label, chain_id: xt.chain_id, contract_address: xt.contract_address, observed_at: at, retrieved_at: at, size_usd: size, status: noRoute ? 'no_route' : 'quoted', quote: noRoute ? { sell_usd: size, received_usd: null, no_route: true, route: null } : { sell_usd: size, received_usd: Math.round(size * (1 - cost / 100) * 100) / 100, fees_usd: null, price_impact_pct: Math.round((cost - 0.3) * 100) / 100, gas_usd: 0.42, gas_included: false, route: 'FICTIONAL pool A > FICTIONAL pool B', no_route: false, valuation_note: 'FICTIONAL dev quote: nothing was asked of any quote source.' }, note: 'FICTIONAL dev desk fixture.' });
+          F.appendObservation(ws, pid, quoteRow(at, size, cost, { size_usd: size, amount_in: units(size / px(h)), price, status: noRoute ? 'no_route' : 'quoted', quote: noRoute ? { sell_usd: size, received_usd: null, no_route: true, route: null } : { sell_usd: size, received_usd: Math.round(size * (1 - cost / 100) * 100) / 100, fees_usd: null, price_impact_pct: Math.round((cost - 0.3) * 100) / 100, gas_usd: 0.42, gas_included: false, route: 'FICTIONAL pool A > FICTIONAL pool B', no_route: false, valuation_note: 'FICTIONAL dev quote: nothing was asked of any quote source.' }, note: 'FICTIONAL dev desk fixture.' }));
         }
+      }
+      // Three explicit fixed-token quotes for what $500 bought at the first
+      // quote after the assessment (FICTIONAL; nothing was asked).
+      const ref = 500 / px(0);
+      for (const [i, d] of [4, 11, 18].entries()) {
+        const h = d * 24 + 1;
+        const at = new Date(t0 + h * 3600000).toISOString();
+        const sell = Math.round(ref * px(h) * 100) / 100;
+        const cost = 2.4 * (h >= 12 * 24 && h < 16 * 24 ? 2.6 : 1);
+        F.appendObservation(ws, pid, quoteRow(at, sell, cost, { source: 'explicit', basis_kind: 'fixed_token', request_ref: `dev-fixed-token-${i}`, size_usd: sell, amount_in: units(ref), price: { usd: px(h), as_of: at, source: 'FICTIONAL dev price' }, status: 'quoted', quote: { sell_usd: sell, received_usd: Math.round(sell * (1 - cost / 100) * 100) / 100, fees_usd: null, price_impact_pct: cost - 0.3, gas_usd: 0.42, gas_included: false, route: 'FICTIONAL pool A > FICTIONAL pool B', no_route: false }, note: 'FICTIONAL dev desk fixture.' }));
       }
     }
     F.recordDueResolutions(ws, pid, { now: Date.now() });
     // A long, warning-heavy case (FICTIONAL), on the project with the
     // extraordinarily long name: a long strongest concern resting on a weak
     // common-control basis, and a finding citing a source not in the list.
-    const la = F.createAudit(ws, { project_id: pids.long, assistant: 'claude', channel: 'dev', allow_pending_identity: true });
+    // ChatGPT challenged it (FICTIONAL): F2 unsupported and F3 needing
+    // evidence, two disagreements for the board, with long positions.
+    const la = F.createAudit(ws, { project_id: pids.long, assistant: 'claude', channel: 'dev', allow_pending_identity: true, challenge: true });
     if (la.audit_id) {
       const lAudit = F.loadAudit(ws, pids.long, la.audit_id);
       const lb = FX.block(lAudit);
       const longText = 'FICTIONAL. The deployer and three wallets that received 30% of supply at launch were funded from the same exchange hot wallet within one hour, and two of them later sold into the only pool during a thin stretch in week two; the team has not said who controls them, and the vesting contract the docs describe is not the one on chain.';
-      F.saveReport(ws, { project_id: pids.long, audit_id: la.audit_id, provider: 'claude', text: FX.reportText(lAudit, {
+      const ls = F.saveReport(ws, { project_id: pids.long, audit_id: la.audit_id, provider: 'claude', text: FX.reportText(lAudit, {
         strongest_concern: { finding_id: 'F2', statement: longText },
         findings: [lb.findings[0], { ...lb.findings[1], area: 'wallets', kind: 'observation', wallet_relation: 'inferred_common_control', basis: ['shared_exchange_funder', 'similar_timing'], statement: longText }, { ...lb.findings[2], source_ids: ['S4', 'S99'] }],
       }) });
+      if (ls.receipt) {
+        F.saveReport(ws, { project_id: pids.long, audit_id: la.audit_id, provider: 'chatgpt', text: FX.challengeText(F.loadAudit(ws, pids.long, la.audit_id), ls.receipt, {
+          finding_reviews: [
+            { finding_id: 'F1', verdict: 'supported', attribution_check: 'FICTIONAL. The docs are the project\'s own.', source_ids: ['S1'] },
+            { finding_id: 'F2', verdict: 'unsupported', attribution_check: 'FICTIONAL. A shared exchange hot wallet funds thousands of unrelated accounts every hour; funding from it within one hour is not evidence of common control, and the two sales were small against the pool on those days.', benign_explanation: 'FICTIONAL. Early buyers withdrawing from the same large exchange.', omitted_evidence: 'FICTIONAL. The exchange\'s own withdrawal volume in that hour.', source_ids: ['X1'] },
+            { finding_id: 'F3', verdict: 'needs_evidence', attribution_check: 'FICTIONAL. The module is named but not shown at the stated commit.', source_ids: ['X1'] },
+          ],
+        }) });
+      }
     }
     F.createAudit(ws, { project_id: pids.ember, channel: 'dev' });
     const mon = require(`${ROOT}/core/forensic-monitor.js`);
     mon.isDue = () => false;
     mon.refresh = offline0;
+    // "Quote this quantity now" runs the real path (gates, budget, lease,
+    // reference quantity, the observation it saves) against a FICTIONAL quote
+    // source: nothing leaves this machine.
+    const explicitQuote = mon.quoteFixedToken;
+    mon.quoteFixedToken = (w, p, o) => explicitQuote(w, p, {
+      ...o,
+      fetchImpl: async (u) => {
+        const url = new URL(u);
+        const amountIn = url.searchParams.get('amountIn');
+        const latest = require(`${ROOT}/core/market.js`).readLatest(w).assets || {};
+        const usd = ((latest[cg.complete] || {}).price_usd || 1) * Number(BigInt(amountIn) / 10n ** 12n) / 1e6;
+        const body = { code: 0, data: { routeSummary: { tokenIn: url.searchParams.get('tokenIn'), tokenOut: url.searchParams.get('tokenOut'), amountIn, amountOut: String(Math.floor(usd * 0.975 * 1e6)), amountInUsd: String(usd), amountOutUsd: String(usd * 0.975), gasUsd: '0.42', route: [[{ exchange: 'fictional-dex' }]] } } };
+        return { status: 200, headers: { get: () => null }, text: async () => JSON.stringify(body) };
+      },
+      cgGetImpl: async () => { throw new Error('FICTIONAL dev desk: offline'); },
+      sleep: async () => {},
+    });
   }
 
   // The archived one last, so its history stays.

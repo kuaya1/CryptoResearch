@@ -128,7 +128,19 @@ test('the app shows report text as text: no HTML from strings anywhere in the Re
 test('the app writes only from explicit actions, and nothing from the boot or a live update', () => {
   const files = walk(path.join(WEB, 'src'), (p) => /\.(jsx?)$/.test(p)).map((f) => [path.relative(path.join(WEB, 'src'), f).split(path.sep).join('/'), fs.readFileSync(f, 'utf8')]);
   const writers = files.filter(([, s]) => /api\.post\(/.test(s)).map(([f]) => f).sort();
-  assert.deepEqual(writers, ['lib/desk.js', 'lib/review.js', 'views/inspector/ModelPanel.jsx', 'views/project/Forensics.jsx', 'views/watchlist/StatusStrip.jsx', 'views/watchlist/state.js']);
+  assert.deepEqual(writers, ['lib/desk.js', 'lib/review.js', 'views/agenda/Agenda.jsx', 'views/inspector/ModelPanel.jsx', 'views/project/Forensics.jsx', 'views/project/forensics/Disagreements.jsx', 'views/project/forensics/ExitCompare.jsx', 'views/project/forensics/OutcomeRegister.jsx', 'views/watchlist/StatusStrip.jsx', 'views/watchlist/state.js']);
+  // The re-audit's parts (2026-10-17) each post one path, from a button:
+  // a judgment, an explicit fixed-token quote, an outcome note, and the
+  // agenda's Done, Snooze and Reopen. The case package is a read.
+  const posts = (f) => [...files.find(([n]) => n === f)[1].matchAll(/api\.post\(`([^`]+)`|api\.post\((path)/g)].map((m) => m[1] || m[2]);
+  assert.deepEqual(posts('views/project/forensics/Disagreements.jsx'), ['/api/projects/${enc(pid)}/forensics/judgments']);
+  assert.deepEqual(posts('views/project/forensics/ExitCompare.jsx'), ['/api/projects/${enc(pid)}/forensics/exit-compare/quote']);
+  assert.deepEqual(posts('views/project/forensics/OutcomeRegister.jsx'), ['/api/projects/${enc(pid)}/forensics/outcome-notes']);
+  const agenda = files.find(([n]) => n === 'views/agenda/Agenda.jsx')[1];
+  assert.deepEqual(posts('views/agenda/Agenda.jsx'), ['path', 'path', 'path']);
+  assert.match(agenda, /const path = `\/api\/projects\/\$\{enc\(pid\)\}\/agenda`;/);
+  assert.doesNotMatch(agenda.slice(agenda.indexOf('function useAgenda'), agenda.indexOf('function Act')), /api\.post/, 'reading the agenda never writes');
+  assert.doesNotMatch(files.find(([n]) => n === 'views/project/forensics/CaseButton.jsx')[1], /api\.post/, 'downloading a case is a read');
   // The Forensics tab writes only from its buttons: open an audit, import an
   // answer or a revision, mark an evidence change reviewed, and monitoring
   // changes (approve targets or an exit-quote chain, remove one, turn

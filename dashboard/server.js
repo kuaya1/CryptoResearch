@@ -1041,6 +1041,14 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     // (a changed file is a 409 integrity error, never served as the original).
     return forensics.receiptText(ws, id, receiptId(m[2]));
   });
+  // The case package of one receipt (core/forensic-case.js): read only, no
+  // provider or model call; a receipt that disagrees with its original is a
+  // 409 integrity error.
+  route('GET', '/api/projects/([^/]+)/forensics/receipts/([^/]+)/case', (m) => {
+    const id = pid(m[1]);
+    const rid = receiptId(m[2]);
+    return coherent(() => require('./core/forensic-case').buildCase(ws, id, rid));
+  });
   route('POST', '/api/projects/([^/]+)/forensics/audits', (m, req, res, body) => once(body, () => after(forensics.createAudit(ws, { project_id: pid(m[1]), challenge: body.challenge === true, channel: 'dashboard', utterance: typeof body.utterance === 'string' ? body.utterance : null, owner_focus: typeof body.focus === 'string' ? body.focus : null, refresh: body.refresh === true }))));
   route('POST', '/api/projects/([^/]+)/forensics/audits/([^/]+)/import', (m, req, res, body) => after(forensics.saveReport(ws, { project_id: pid(m[1]), audit_id: auditId(m[2]), provider: provider(String(body.provider || '')), text: String(body.text || ''), revision: body.revision && typeof body.revision === 'object' ? body.revision : null, channel: 'dashboard import' })));
   route('POST', '/api/projects/([^/]+)/forensics/audits/([^/]+)/challenge', (m) => after(forensics.requestChallenge(ws, pid(m[1]), auditId(m[2]))));
@@ -1059,6 +1067,42 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     approve: body.approve && typeof body.approve === 'object' && typeof body.approve.receipt_id === 'string' ? { receipt_id: receiptId(body.approve.receipt_id), product_checks: Array.isArray(body.approve.product_checks) ? body.approve.product_checks.map(String).slice(0, 5) : undefined, repositories: Array.isArray(body.approve.repositories) ? body.approve.repositories.map(String).slice(0, 3) : undefined } : null,
     approve_quotes: Array.isArray(body.approve_quotes) ? body.approve_quotes.map(String).slice(0, 5) : [],
     remove: Array.isArray(body.remove) ? body.remove.map(String).slice(0, 10) : [],
+    by: 'dashboard',
+  })));
+  // Eric's judgment of a disagreement (forensic-disagreements.js): his
+  // workflow decision, never verification; no opinion or grade changes.
+  route('POST', '/api/projects/([^/]+)/forensics/judgments', (m, req, res, body) => after(require('./core/forensic-disagreements').judge(ws, pid(m[1]), {
+    disagreement_id: String(body.disagreement_id || ''),
+    judgment: String(body.judgment || ''),
+    reason: typeof body.reason === 'string' ? body.reason : '',
+    request_id: typeof body.request_id === 'string' ? body.request_id : null,
+    by: 'dashboard',
+  })));
+  // One explicit fixed-token exit quote Eric asks for (forensic-monitor.js
+  // quoteFixedToken): a keyless GET through the approved adapter, inside its
+  // budget gate; never a transaction. The same request_id is "unchanged".
+  route('POST', '/api/projects/([^/]+)/forensics/exit-compare/quote', async (m, req, res, body) => after(await require('./core/forensic-monitor').quoteFixedToken(ws, pid(m[1]), {
+    target_id: String(body.target_id || ''),
+    amount_in: String(body.amount_in || ''),
+    request_id: typeof body.request_id === 'string' ? body.request_id : null,
+  })));
+  // Eric's interpretation of one outcome-register row (forensic-outcomes.js).
+  route('POST', '/api/projects/([^/]+)/forensics/outcome-notes', (m, req, res, body) => after(require('./core/forensic-outcomes').addNote(ws, pid(m[1]), {
+    receipt_id: receiptId(String(body.receipt_id || '')),
+    row_id: String(body.row_id || ''),
+    note: typeof body.note === 'string' ? body.note : '',
+    request_id: typeof body.request_id === 'string' ? body.request_id : null,
+    by: 'dashboard',
+  })));
+  // The review agenda (forensic-agenda.js): a read that writes nothing, and
+  // Eric's complete / snooze / reopen as replay-safe lines.
+  route('GET', '/api/agenda', () => coherent(() => require('./core/forensic-agenda').agenda(ws)));
+  route('POST', '/api/projects/([^/]+)/agenda', (m, req, res, body) => after(require('./core/forensic-agenda').act(ws, pid(m[1]), {
+    item_id: String(body.item_id || ''),
+    action: String(body.action || ''),
+    until: typeof body.until === 'string' ? body.until : null,
+    note: typeof body.note === 'string' ? body.note : null,
+    request_id: typeof body.request_id === 'string' ? body.request_id : null,
     by: 'dashboard',
   })));
   route('GET', '/api/portfolio/ledger', () => coherent(() => {

@@ -25,7 +25,7 @@ function block(audit, over = {}) {
       { source_id: 'S1', url: 'https://example.com/xmpl/docs/api', publisher: 'Example PayFi (FICTIONAL)', type: 'primary', retrieved_at: now, excerpt: 'POST /v1/transfers settles within one block.' },
       { source_id: 'S2', url: 'https://example.org/explorer/contract/FICTIONAL', publisher: 'Example explorer', type: 'chain', retrieved_at: now, block_or_commit: 'block 1234567', excerpt: 'Proxy admin: 2-of-3 multisig.' },
       { source_id: 'S3', url: 'https://example.org/aggregator/quote?sell=500', publisher: 'Example aggregator', type: 'secondary', retrieved_at: now, excerpt: 'Sell $500 XMPL: receive 491.20 USDC, route A > B.' },
-      { source_id: 'S4', url: 'https://example.com/xmpl/github', publisher: 'Example PayFi', type: 'repository', retrieved_at: now, block_or_commit: 'abc1234', excerpt: 'Release v2.1.0.' },
+      { source_id: 'S4', url: 'https://example.com/xmpl/github', publisher: 'Example PayFi', type: 'repository', retrieved_at: now, block_or_commit: 'abc1234', excerpt: 'Release v2.1.0. Our code is at github.com/example/xmpl.' },
     ],
     claims: [{ claim_id: 'C1', claim: 'Transfers settle within one block.', made_by_source_id: 'S1' }],
     findings: [

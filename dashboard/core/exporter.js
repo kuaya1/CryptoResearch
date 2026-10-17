@@ -165,6 +165,7 @@ function researchRuns(ws, projectId) {
 // the monitoring opt-in and the monitor observations.
 function forensicRecords(ws, projectId) {
   const F = require('./forensics');
+  const approved = F.approvedReposOf(F.readProfile(ws, projectId));
   const receipts = F.listReceipts(ws, projectId).map((r) => {
     if (r.broken || !r.text) return r;
     let text = null;
@@ -172,7 +173,7 @@ function forensicRecords(ws, projectId) {
     // The desk's reading beside the saved assessment (never replacing it):
     // each finding's kind as shown and whether its references hold, and
     // which grades the desk uses (cr-forensic-eligibility@1).
-    const ev = r.kind === 'assessment' ? F.eligibilityOf(r) : null;
+    const ev = r.kind === 'assessment' ? F.eligibilityOf(r, approved) : null;
     const desk = ev ? { version: ev.version, findings: Object.fromEntries(Object.entries(ev.findings).map(([id, f]) => [id, { shown_kind: f.effective_kind, standing: f.standing, reasons: f.reasons }])), grades: ev.grades } : null;
     return { ...r, text_content: text, text_content_sha256: text === null ? null : sha256(text), ...(desk ? { desk_reading: desk } : {}) };
   });
@@ -184,6 +185,11 @@ function forensicRecords(ws, projectId) {
     observations: F.readObservations(ws, projectId, { from: 0 }),
     // Eric's reviews of evidence changes (forensic-review.js), every line.
     evidence_reviews: require('./forensic-review').readReviews(ws, projectId),
+    // Eric's judgments of disagreements, his outcome notes and his agenda
+    // actions, every line (2026-10-17).
+    judgments: require('./forensic-disagreements').readJudgments(ws, projectId),
+    outcome_notes: require('./forensic-outcomes').readNotes(ws, projectId),
+    agenda_actions: require('./forensic-agenda').readActions(ws, projectId),
   };
 }
 

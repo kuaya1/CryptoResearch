@@ -256,14 +256,19 @@ function scopeOf(o) {
   return `a|${lc(o.chain)}|${lc(o.contract_address || o.pool)}|${lc(o.venue)}|${lc(o.route_scope)}|${lc(o.kind)}`;
 }
 
-// What is known of a cost besides the quoted amount. tax: { pct, source }
-// when the contract screen states the transfer tax (0 included), else null.
+// What is known of a cost besides the quoted amount. tax: { pct, source,
+// checked_at } when the contract screen states the transfer tax, else null.
+// liquidity@3 (re-audit R04): a positive tax is never applied as a
+// multiplier. Whether it is taken from the input or the output, and whether a
+// quote already includes it, are not known, so the cost without it is a lower
+// bound (a transfer tax only ever reduces what a sale receives).
 function completeness({ gasKnown, gasWords, tax }) {
   const missing = [];
   const included = [];
   if (gasKnown) included.push(gasWords);
   else missing.push('network fee');
-  if (tax && isNum(tax.pct)) included.push(tax.pct > 0 ? `token transfer tax ${tax.pct}% (${tax.source})` : `no token transfer tax (${tax.source})`);
+  if (tax && isNum(tax.pct) && tax.pct === 0) included.push(`no token transfer tax (${tax.source})`);
+  else if (tax && isNum(tax.pct) && tax.pct > 0) missing.push(`the effect of its ${tax.pct}% transfer tax (${tax.source})`);
   else missing.push('token transfer tax');
   return { missing, included, complete: missing.length === 0 };
 }
@@ -273,9 +278,8 @@ function completeness({ gasKnown, gasWords, tax }) {
 function exitEstimate(obs, sizeUsd, { marketPriceUsd = null, tax = null } = {}) {
   if (!obs || !isNum(sizeUsd) || sizeUsd <= 0) return null;
   const basis = obs.source === 'monitor' && obs.amount_in ? { kind: 'fixed_usd', size_usd: sizeUsd, amount_in: String(obs.amount_in), token_decimals: obs.token ? obs.token.decimals : null, price_usd: obs.price ? obs.price.usd : null, price_as_of: obs.price ? obs.price.as_of : null } : { kind: 'fixed_usd', size_usd: sizeUsd };
-  const base = { obs_id: obs.obs_id || null, size_usd: sizeUsd, venue: obs.venue || null, chain: obs.chain || null, contract_address: obs.contract_address || null, pool: obs.pool || null, retrieved_at: obs.retrieved_at || null, source_id: obs.source_id || null, captured_by: obs.source === 'monitor' ? 'monitor' : 'audit', basis, one_way: true, version: D.LIQUIDITY_VERSION_2 };
-  const taxPct = tax && isNum(tax.pct) ? tax.pct : null;
-  const withTax = (costPct) => (taxPct ? 100 - (100 - costPct) * (1 - taxPct / 100) : costPct);
+  const taxUsed = tax && isNum(tax.pct) ? { pct: tax.pct, source: tax.source || null, checked_at: tax.checked_at || null } : null;
+  const base = { obs_id: obs.obs_id || null, size_usd: sizeUsd, venue: obs.venue || null, chain: obs.chain || null, contract_address: obs.contract_address || null, pool: obs.pool || null, retrieved_at: obs.retrieved_at || null, source_id: obs.source_id || null, captured_by: obs.source === 'monitor' ? 'monitor' : 'audit', basis, one_way: true, tax: taxUsed, version: D.LIQUIDITY_VERSION_3 };
   if (obs.kind === 'executable_quote') {
     const q = obs.quote || {};
     const sell = num(q.sell_usd);
@@ -290,12 +294,15 @@ function exitEstimate(obs, sizeUsd, { marketPriceUsd = null, tax = null } = {}) 
     const gasIncluded = q.gas_included === true;
     const extra = gas !== null && gas > 0 && !gasIncluded ? gas : 0;
     const c = completeness({ gasKnown: gas !== null || gasIncluded, gasWords: gasIncluded ? 'network fee, inside the quote' : `network fee $${round(gas || 0, 4)}`, tax });
-    const cost = withTax(((sell - recv + extra) / sell) * 100);
+    // One basis for proceeds and cost: what the quote receives, less an
+    // external network fee; cost = (sell - net) / sell.
+    const net = recv - extra;
+    const cost = ((sell - net) / sell) * 100;
     const limitations = ['A quote at one moment; it can change by the time an order is sent.'];
     if (scope !== 'aggregator') limitations.push('One venue: other routes were not asked, so the cost through the best route may be lower.');
     if (!c.complete) limitations.unshift(`Cost incomplete: ${c.missing.join(' and ')} unknown, so this is at least the figure shown.`);
     if (typeof q.valuation_note === 'string') limitations.push(str(q.valuation_note, 300));
-    return { ...base, method: 'executable_quote', route_scope: scope, status: 'estimated', quoted_usd: round(sell), received_usd: round(recv, 4), cost_pct: round(Math.max(-100, cost), 3), cost_complete: c.complete, missing_costs: c.missing, included_costs: ['price impact and route fees, inside the quoted amount', ...c.included], fees_usd: num(q.fees_usd), price_impact_pct: num(q.price_impact_pct), gas_usd: gas, gas_included: gasIncluded, route: str(q.route, 300), limitations };
+    return { ...base, method: 'executable_quote', route_scope: scope, status: 'estimated', quoted_usd: round(sell), received_usd: round(recv, 4), net_received_usd: round(net, 4), cost_pct: round(Math.max(-100, cost), 3), cost_complete: c.complete, missing_costs: c.missing, included_costs: ['price impact and route fees, inside the quoted amount', ...c.included], fees_usd: num(q.fees_usd), price_impact_pct: num(q.price_impact_pct), gas_usd: gas, gas_included: gasIncluded, route: str(q.route, 300), limitations };
   }
   if (obs.kind === 'pool_reserves') {
     const mech = D.LIQUIDITY.mechanisms[obs.mechanism] ? obs.mechanism : 'unknown';
@@ -314,14 +321,14 @@ function exitEstimate(obs, sizeUsd, { marketPriceUsd = null, tax = null } = {}) 
     const out = (inEff * Rq) / (Rb + inEff);
     const recv = out * qUsd;
     const c = completeness({ gasKnown: false, gasWords: null, tax });
-    const cost = withTax((1 - recv / sizeUsd) * 100);
+    const cost = (1 - recv / sizeUsd) * 100;
     const impact = (inEff / (Rb + inEff)) * 100;
     const limitations = [`Cost incomplete: ${c.missing.join(' and ')} not included, so this is at least the figure shown.`, 'A calculation from one pool\'s reserves at one moment, not a quote: other routes were not considered, so the cost through the best route may be lower.', 'Valued at the pool\'s own price.'];
     if (isNum(marketPriceUsd) && marketPriceUsd > 0) {
       const dev = (mid / marketPriceUsd - 1) * 100;
       if (Math.abs(dev) > 10) limitations.push(`The pool's price differs from the market price by ${round(dev, 1)}%: the pool may be stale or thin.`);
     }
-    return { ...base, method: 'constant_product', mechanism: mech, route_scope: 'single_pool', status: 'estimated', received_usd: round(recv, 4), cost_pct: round(cost, 3), cost_complete: c.complete, missing_costs: c.missing, included_costs: [`pool fee ${round(feeBps / 100, 3)}%`, 'price impact from the reserves', ...c.included], fee_pct: round(feeBps / 100, 3), price_impact_pct: round(impact, 3), pool_price_usd: mid, limitations };
+    return { ...base, method: 'constant_product', mechanism: mech, route_scope: 'single_pool', status: 'estimated', received_usd: round(recv, 4), net_received_usd: round(recv, 4), cost_pct: round(cost, 3), cost_complete: c.complete, missing_costs: c.missing, included_costs: [`pool fee ${round(feeBps / 100, 3)}%`, 'price impact from the reserves', ...c.included], fee_pct: round(feeBps / 100, 3), price_impact_pct: round(impact, 3), pool_price_usd: mid, limitations };
   }
   return null;
 }
@@ -419,7 +426,11 @@ function median(values) {
   return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
 }
 
-// Hourly or irregular readings as one median per UTC day.
+// Hourly or irregular readings as one median per UTC day. t is the day's
+// noon (for spacing); last_t and last_at are the time of its latest actual
+// reading, which is what decides whether a day is in or out at a given time
+// (scenarios@3, re-audit R05: a day's readings count from when they were
+// observed, not from a noon label).
 function dailySeries(points) {
   const days = new Map();
   for (const p of Array.isArray(points) ? points : []) {
@@ -427,18 +438,20 @@ function dailySeries(points) {
     const v = num(p && p.value);
     if (!Number.isFinite(t) || v === null) continue;
     const day = iso(t).slice(0, 10);
-    const list = days.get(day) || [];
-    list.push(v);
-    days.set(day, list);
+    const d = days.get(day) || { list: [], last: -Infinity };
+    d.list.push(v);
+    d.last = Math.max(d.last, t);
+    days.set(day, d);
   }
-  return [...days.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, list]) => ({ day, t: Date.parse(`${day}T12:00:00Z`), value: median(list), n: list.length }));
+  return [...days.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, d]) => ({ day, t: Date.parse(`${day}T12:00:00Z`), last_t: d.last, last_at: iso(d.last), value: median(d.list), n: d.list.length }));
 }
+const seenBy = (p) => (isNum(p.last_t) ? p.last_t : p.t);
 
 // The baseline a review level is set from: the median daily value over the
 // 30 days up to the origin, or null with the reason.
 function baselineAt(series, origin, { days = 30, minPoints = D.SCENARIOS.min_points } = {}) {
   const O = tOf(origin);
-  const pts = (series || []).filter((p) => p.t <= O && p.t > O - days * DAY && isNum(p.value) && p.value >= 0);
+  const pts = (series || []).filter((p) => seenBy(p) <= O && p.t > O - days * DAY && isNum(p.value) && p.value >= 0);
   if (pts.length < minPoints) return { value: null, points: pts.length, reason: `Only ${pts.length} daily readings in the ${days} days before the origin (at least ${minPoints} are needed).` };
   return { value: median(pts.map((p) => p.value)), points: pts.length, from: pts[0].day, to: pts[pts.length - 1].day };
 }
@@ -447,7 +460,7 @@ function baselineAt(series, origin, { days = 30, minPoints = D.SCENARIOS.min_poi
 // reserves) or 'higher' (exit cost). Each scenario states its assumption; the
 // date is when the series would cross the level under it, never a probability.
 function scenarioEstimates(series, { threshold, worse = 'lower', origin, now = Date.now(), metric = 'value', unit = 'usd' } = {}) {
-  const S = D.SCENARIOS_2;
+  const S = D.SCENARIOS_3;
   const out = { version: S.version, label: S.label, metric, unit, threshold: isNum(threshold) ? threshold : null, worse, origin: origin || null, invalidation: S.invalidation };
   const O = tOf(origin);
   const horizonEnd = Number.isFinite(O) ? O + D.HORIZON_HOURS * HOUR : now + D.HORIZON_HOURS * HOUR;
@@ -456,10 +469,12 @@ function scenarioEstimates(series, { threshold, worse = 'lower', origin, now = D
   // Every valid reading counts, zero included; a missing day is simply
   // absent. Rates of change are logarithmic, so they use the positive
   // readings only and stop at a zero.
-  const all = (Array.isArray(series) ? series : []).filter((p) => isNum(p.t) && p.t >= start && p.t <= now && isNum(p.value) && p.value >= 0).sort((a, b) => a.t - b.t);
+  const all = (Array.isArray(series) ? series : []).filter((p) => isNum(p.t) && p.t >= start && seenBy(p) <= now && isNum(p.value) && p.value >= 0).sort((a, b) => a.t - b.t);
+  const today = iso(now).slice(0, 10);
+  const latestOf = (p) => ({ day: p.day, value: p.value, at: p.last_at || null, partial: p.day === today, readings: p.n || null });
   const zeros = all.filter((p) => p.value === 0).length;
   const pts = all.filter((p) => p.value > 0);
-  const insufficient = (words, next) => ({ ...out, status: 'insufficient', words: `Insufficient history to estimate: ${words}`, next_observation: next, latest: all.length ? { day: all[all.length - 1].day, value: all[all.length - 1].value } : null, basis: { points: all.length, zero_readings: zeros } });
+  const insufficient = (words, next) => ({ ...out, status: 'insufficient', words: `Insufficient history to estimate: ${words}`, next_observation: next, latest: all.length ? latestOf(all[all.length - 1]) : null, basis: { points: all.length, zero_readings: zeros } });
   if (all.length < S.min_points) {
     const need = S.min_points - all.length;
     return insufficient(`${all.length} daily reading${all.length === 1 ? '' : 's'} in the window (${S.min_points} needed).`, `${need} more daily reading${need === 1 ? '' : 's'}, through about ${iso(Math.max(now, all.length ? all[all.length - 1].t : now) + need * DAY).slice(0, 10)}.`);
@@ -468,7 +483,7 @@ function scenarioEstimates(series, { threshold, worse = 'lower', origin, now = D
   const last = all[all.length - 1];
   const spanDays = (last.t - first.t) / DAY;
   if (spanDays < S.min_span_days) return insufficient(`the readings span ${Math.round(spanDays)} days (${S.min_span_days} needed).`, `Daily readings through about ${iso(first.t + S.min_span_days * DAY).slice(0, 10)}.`);
-  const ageH = (now - (last.t + 12 * HOUR)) / HOUR;
+  const ageH = (now - (isNum(last.last_t) ? last.last_t : last.t + 12 * HOUR)) / HOUR;
   if (ageH > S.freshness_hours) return insufficient(`the latest daily reading (${last.day}) is ${hoursText(ageH)} old.`, 'A new reading of this measure.');
   if (last.value === 0) {
     const beyond = worse === 'lower';
@@ -477,7 +492,7 @@ function scenarioEstimates(series, { threshold, worse = 'lower', origin, now = D
       ...out,
       status: 'estimated',
       beyond_now: beyond,
-      latest: { day: last.day, value: 0 },
+      latest: latestOf(last),
       projection: 'unavailable_at_zero',
       scenarios: ['deterioration', 'stabilization', 'recovery'].map((kind) => ({ kind, assumption: S.kinds[kind], rate_pct_per_week: null, note: null, crosses_at: null, direction: null, within_horizon: false, words: beyond && kind !== 'recovery' ? `The latest reading (${last.day}) is zero, past the level of ${round(threshold, 4)}.` : stop })),
       basis: { window_from: first.day, window_to: last.day, points: all.length, weekly_changes: 0, data_age_hours: round(Math.max(0, ageH), 1), zero_readings: zeros },
@@ -532,7 +547,7 @@ function scenarioEstimates(series, { threshold, worse = 'lower', origin, now = D
     ...out,
     status: 'estimated',
     beyond_now: beyondNow,
-    latest: { day: last.day, value: latest },
+    latest: latestOf(last),
     scenarios,
     basis: { window_from: first.day, window_to: last.day, points: all.length, weekly_changes: weekly.length, worst_week_pct: pct(worst), best_week_pct: pct(bestG), data_age_hours: round(Math.max(0, ageH), 1), zero_readings: zeros, rates_note: zeros ? `${zeros} zero reading${zeros === 1 ? '' : 's'} in the window: rates of change are measured between positive readings only.` : null },
   };

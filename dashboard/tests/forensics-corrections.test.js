@@ -345,7 +345,10 @@ test('F05: a format-fix revision 20 days later keeps the origin, deadlines, thre
 // F06: repository order manufactures nothing; genuine inactivity still resolves.
 
 test('F06: an active repository listed after a stale one is no inactivity episode, in either order', (t) => {
-  const repos = (first, second) => ({ delivery: { observations: [first, second] } });
+  // Both repositories bound to the project: its own docs page names them
+  // (eligibility@2 binds a repository only so, or by identity or approval).
+  const named = FX.block({ audit_id: 'fa_x', project_id: 'x' }).sources.map((s) => (s.source_id === 'S4' ? { ...s, excerpt: 'FICTIONAL: our code is at github.com/example/xmpl and github.com/example/old.' } : s));
+  const repos = (first, second) => ({ sources: named, delivery: { observations: [first, second] } });
   const now = Date.now();
   const stale = { obs_id: 'R1', repository: 'github.com/example/old', observed_at: at(now - 60000), latest_commit_at: at(now - 100 * DAY), source_id: 'S4' };
   const active = { obs_id: 'R2', repository: 'github.com/example/xmpl', observed_at: at(now - 60000), latest_commit_at: at(now - DAY), source_id: 'S4' };
@@ -416,7 +419,7 @@ test('F07: a latest zero volume is shown and is past a positive level; no date i
   assert.equal(sc.beyond_now, true, 'zero is below a positive volume level');
   assert.equal(sc.projection, 'unavailable_at_zero');
   assert.ok(sc.scenarios.every((x) => x.crosses_at === null));
-  assert.equal(sc.version, D.SCENARIOS_VERSION_2);
+  assert.equal(sc.version, D.SCENARIOS_VERSION_3);
   // Missing: the last three days absent. Nothing is filled in as zero; the
   // latest real reading is older than the freshness window, so: unknown.
   const m = setup('fc-f07-missing');
@@ -645,18 +648,21 @@ function queueSetup(label) {
   return { ...x, s, pc: prof.targets.product_checks[0], gh: prof.targets.repositories[0] };
 }
 
-function check(ws, pid, pc, t, { outcome = 'pass', page = 'A', status = null, read = 'complete', error = null } = {}) {
+// One product-check observation as the monitor records it (normalize@2:
+// a JSON answer canonicalized, anything else its bytes).
+function check(ws, pid, pc, t, { outcome = 'pass', page = '{"status":"A"}', status = null, read = 'complete', error = null } = {}) {
   const ok = outcome === 'pass' || outcome === 'fail';
-  return F.appendObservation(ws, pid, { kind: 'product_check', target_id: pc.target_id, label: pc.label, url: pc.url, observed_at: at(t), outcome, read, http_status: status || (outcome === 'fail' ? 503 : outcome === 'pass' ? 200 : null), error, body_sha256: ok && outcome === 'pass' ? sha256(page) : null, body_norm_sha256: ok && outcome === 'pass' ? sha256(monitor.normalizeBody(page)) : null, expect_met: { status: outcome === 'pass', text: outcome === 'pass' ? true : null } });
+  const type = page.trim().startsWith('{') ? 'application/json' : 'text/html';
+  return F.appendObservation(ws, pid, { kind: 'product_check', target_id: pc.target_id, label: pc.label, url: pc.url, observed_at: at(t), outcome, read, http_status: status || (outcome === 'fail' ? 503 : outcome === 'pass' ? 200 : null), content_type: type, error, body_sha256: ok && outcome === 'pass' ? sha256(page) : null, body_norm_sha256: ok && outcome === 'pass' ? sha256(monitor.normalizeBody(page, type)) : null, normalization: monitor.NORMALIZE_VERSION, expect_met: { status: outcome === 'pass', text: outcome === 'pass' ? true : null } });
 }
 
 test('queue: each change is classified, linked to its receipt, finding and source, and the receipt\'s capture is unchanged', (t) => {
   const { ws, pid, root, s, pc, cleanup } = queueSetup('fc-q1');
   t.after(cleanup);
   const T = Date.now() - 10 * H;
-  check(ws, pid, pc, T, { page: '<p>All systems operational 2026-10-01 v1.2</p>' });
-  check(ws, pid, pc, T + H, { page: '<p>All systems operational   2026-10-01 v1.2</p>\n' }); // whitespace only
-  check(ws, pid, pc, T + 2 * H, { page: '<p>All systems operational 2026-10-02 v1.3</p>' }); // a date and a number changed
+  check(ws, pid, pc, T, { page: '{"status":"operational","date":"2026-10-01","version":"1.2"}' });
+  check(ws, pid, pc, T + H, { page: '{\n  "version": "1.2",\n  "status": "operational",\n  "date": "2026-10-01"\n}' }); // JSON formatting and key order only
+  check(ws, pid, pc, T + 2 * H, { page: '{"status":"operational","date":"2026-10-02","version":"1.3"}' }); // a date and a number changed
   check(ws, pid, pc, T + 3 * H, { outcome: 'fail' });
   check(ws, pid, pc, T + 4 * H, { outcome: 'incomplete', error: 'cut' });
   check(ws, pid, pc, T + 5 * H, { outcome: 'incomplete', error: 'cut' });
@@ -676,8 +682,8 @@ test('queue: each change is classified, linked to its receipt, finding and sourc
   assert.equal(th.mapping.frozen.excerpt, s.receipt.assessment.sources.find((x) => x.source_id === 'S1').excerpt, 'the frozen capture is shown as saved');
   const cap = th.items.find((i) => i.class === 'capture_changed');
   assert.ok(cap.previous && cap.current && cap.previous.observed_at < cap.current.observed_at, 'previous and new observations with their dates');
-  assert.notEqual(monitor.normalizeBody('v1.2 2026-10-01'), monitor.normalizeBody('v1.3 2026-10-02'), 'the normalization keeps numbers and dates');
-  assert.equal(monitor.normalizeBody(' a \r\n\r\n b '), 'a b');
+  assert.notEqual(monitor.normalizeBody('{"v":"1.2","d":"2026-10-01"}', 'application/json'), monitor.normalizeBody('{"v":"1.3","d":"2026-10-02"}', 'application/json'), 'the normalization keeps numbers and dates');
+  assert.notEqual(monitor.normalizeBody(' a \r\n\r\n b ', 'text/html'), monitor.normalizeBody('a b', 'text/html'), 'HTML and text: every byte counts');
   // The same observations give the same item IDs on every read.
   assert.deepEqual(F.view(ws, pid).evidence_changes.threads.find((x) => x.target_id === pc.target_id).items.map((i) => i.item_id), th.items.map((i) => i.item_id));
   assert.equal(v.evidence_changes.to_review, 1);
@@ -689,9 +695,9 @@ test('queue: a review names the latest change (a newer one is refused), keeps a 
   const { ws, pid, root, pc, cleanup } = queueSetup('fc-q2');
   t.after(cleanup);
   const T = Date.now() - 10 * H;
-  check(ws, pid, pc, T, { page: 'A' });
+  check(ws, pid, pc, T);
   check(ws, pid, pc, T + H, { outcome: 'fail' });
-  check(ws, pid, pc, T + 2 * H, { page: 'A' });
+  check(ws, pid, pc, T + 2 * H);
   let th = F.view(ws, pid).evidence_changes.threads.find((x) => x.target_id === pc.target_id);
   const [first, latest] = th.items;
   const gradesBefore = JSON.stringify(F.view(ws, pid).current.category_grades);
@@ -710,8 +716,8 @@ test('queue: a review names the latest change (a newer one is refused), keeps a 
   assert.equal(th.state, 'reviewed');
   assert.equal(th.reviews[0].note, 'FICTIONAL: looked at the outage and the recovery.');
   assert.equal(JSON.stringify(F.view(ws, pid).current.category_grades), gradesBefore, 'a review changes no grade');
-  // Cosmetic only: it stays reviewed. A failed read: reopened.
-  check(ws, pid, pc, T + 3 * H, { page: ' A ' });
+  // Formatting only (the same JSON): it stays reviewed. A failed read: reopened.
+  check(ws, pid, pc, T + 3 * H, { page: '{ "status" : "A" }' });
   assert.equal(F.view(ws, pid).evidence_changes.threads.find((x) => x.target_id === pc.target_id).state, 'reviewed');
   check(ws, pid, pc, T + 4 * H, { outcome: 'incomplete', error: 'cut' });
   th = F.view(ws, pid).evidence_changes.threads.find((x) => x.target_id === pc.target_id);
@@ -759,7 +765,7 @@ test('queue, receipts and deadlines survive a backup and an isolated restore, wh
   const { ws, pid, root, pc, s, cleanup } = queueSetup('fc-q4');
   t.after(cleanup);
   const T = Date.now() - 5 * H;
-  check(ws, pid, pc, T, { page: 'A' });
+  check(ws, pid, pc, T);
   check(ws, pid, pc, T + H, { outcome: 'fail' });
   const th = F.view(ws, pid).evidence_changes.threads.find((x) => x.target_id === pc.target_id);
   RV.acknowledge(ws, pid, { target_id: pc.target_id, item_id: th.latest_relevant.item_id, note: 'FICTIONAL note' });
@@ -832,9 +838,9 @@ test('queue over HTTP: a review is an explicit POST; a newer change is a 409 nam
   const { ws, pid, root, pc, cleanup } = queueSetup('fc-q5');
   t.after(cleanup);
   const T = Date.now() - 5 * H;
-  check(ws, pid, pc, T, { page: 'A' });
+  check(ws, pid, pc, T);
   check(ws, pid, pc, T + H, { outcome: 'fail' });
-  check(ws, pid, pc, T + 2 * H, { page: 'A' });
+  check(ws, pid, pc, T + 2 * H);
   const { start } = require('../server');
   const srv = await start(ws, { port: 49700 + Math.floor(Math.random() * 90), quiet: true });
   t.after(() => { try { srv.shutdown(); } catch (_) { /* stopped */ } });

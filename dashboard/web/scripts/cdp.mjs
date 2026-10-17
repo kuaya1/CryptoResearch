@@ -79,6 +79,10 @@ export async function launch() {
           await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode: vk, modifiers: mods, ...(text ? { text, unmodifiedText: text } : {}) });
           await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: vk, modifiers: mods });
         },
+        // Types into the focused field as a keyboard would (input events).
+        async type(text) {
+          await send('Input.insertText', { text });
+        },
         async click(selector) {
           const box = await evalJs(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
           if (!box) throw new Error(`no element ${selector}`);

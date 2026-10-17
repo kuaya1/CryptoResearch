@@ -1,4 +1,4 @@
-import { Eye, SquarePen, Wallet, FlaskConical, Inbox, Database, Settings } from 'lucide-react';
+import { Eye, SquarePen, Wallet, FlaskConical, CalendarClock, Inbox, Database, Settings } from 'lucide-react';
 import { followedCount } from '../../../public/ui.js';
 
 // The desk's pages, in the order the navigation shows them. Explorer appears
@@ -8,6 +8,8 @@ export const SECTIONS = [
   { id: 'new', label: 'New research', icon: SquarePen },
   { id: 'portfolio', label: 'Portfolio', icon: Wallet },
   { id: 'research', label: 'Research', icon: FlaskConical },
+  // The review agenda (views/agenda, 2026-10-17): one next action per project.
+  { id: 'agenda', label: 'Agenda', icon: CalendarClock },
   { id: 'updates', label: 'Updates', icon: Inbox },
   { id: 'explorer', label: 'Explorer', icon: Database },
   { id: 'settings', label: 'Settings', icon: Settings },
