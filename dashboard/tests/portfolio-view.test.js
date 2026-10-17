@@ -108,10 +108,10 @@ test('live test fixes: logo images on a light plate, the chosen model tab distin
   const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
   const block = (start) => { const i = tokens.indexOf(start); return tokens.slice(i, tokens.indexOf('\n}', i)); };
   assert.match(block(':root {'), /--logo-plate: #ffffff;/);
-  assert.match(block(':root[data-theme="dark"] {'), /--logo-plate: #e6e7ea;/, 'a dark mark stays visible in dark');
+  assert.match(block(':root[data-theme="dark"] {'), /--logo-plate: #e9e5e2;/, 'a dark mark stays visible in dark (the warm ramp, 2026-10-17)');
   assert.match(css, /\.logo\.has-img, \.proj-cell \.logo\.has-img[^{]*\{ background: var\(--logo-plate\); \}/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'styles', 'watchlist.css'), 'utf8'), /\.logo\.has-img \{ background: var\(--logo-plate\); \}/);
-  assert.match(block(':root[data-theme="dark"] {'), /--tab-chosen: #2a2a2a;/, 'the chosen tab stands out in dark (neutral, 2026-10-10)');
+  assert.match(block(':root[data-theme="dark"] {'), /--tab-chosen: #2c2a28;/, 'the chosen tab stands out in dark (the warm ramp, 2026-10-17)');
   assert.match(css, /button\.mtab\[aria-selected="true"\] \{ background: var\(--tab-chosen\); border-color: var\(--control-border\); box-shadow: none; \}/);
   assert.match(css, /\.list:has\(> li > \.state:first-child\) \{ list-style: none; padding-left: 0; \}/);
   // No token is defined anywhere else: styles.css only uses them.

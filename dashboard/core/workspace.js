@@ -81,15 +81,10 @@ const DEFAULT_SETTINGS = {
   // are Eric's own screening choices, never universal rules: each new
   // forensic receipt freezes the values in force. monitor runs only for
   // projects whose monitoring Eric turned on, with the targets he approved.
+  // The defaults are forensic-defs.js PREFERENCE_DEFAULTS, the one list
+  // (Preferences > Screening edits them; server.js validateSettingsPatch).
   forensics: {
-    preferences: {
-      exit_position_usd: 500,
-      exit_cost_limit_pct: 5,
-      delivery_window_days: 60,
-      volume_review_fraction: 0.5,
-      reported_liquidity_review_usd: null,
-      volume_to_liquidity_review_ratio: null,
-    },
+    preferences: (({ exit_sizes_usd: sizes, ...rest }) => ({ exit_sizes_usd: sizes.slice(), ...rest }))(require('./forensic-defs').PREFERENCE_DEFAULTS),
     monitor: {
       enabled: true,
       product_interval_hours: 6,

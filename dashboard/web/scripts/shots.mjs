@@ -54,6 +54,25 @@ const SHOTS = [
   { name: 'project-390-dark', w: 390, url: `#/project/${P.relay}/brief`, theme: 'dark' },
   { name: 'insp-390-full', w: 390, url: `#/watchlist?p=${P.relay}`, insp: true },
   { name: 'insp-390-ember', w: 390, url: `#/watchlist?p=${P.ember}`, insp: true },
+  { name: 'review-1440', w: 1440, url: '#/review' },
+  { name: 'review-1024', w: 1024, h: 768, url: '#/review' },
+  { name: 'review-up-1440', w: 1440, url: '#/review?seg=upcoming' },
+  { name: 'review-imp-1440', w: 1440, url: '#/review?seg=imports' },
+  { name: 'review-390', w: 390, url: '#/review' },
+  { name: 'review-390-open', w: 390, url: `#/review?p=${P.relay}` },
+  { name: 'review-1440-dark', w: 1440, url: '#/review', theme: 'dark' },
+  { name: 'fx-360-long', w: 360, h: 780, url: `#/project/${P.long}/forensics` },
+  { name: 'pf-attention-1440', w: 1440, url: '#/portfolio?tab=attention' },
+  { name: 'research-ev-1440', w: 1440, url: '#/research?tab=evidence' },
+  { name: 'research-1440', w: 1440, url: '#/research' },
+  { name: 'prefs-1440-screening', w: 1440, url: '#/watchlist?prefs=screening' },
+  { name: 'prefs-1440-models', w: 1440, url: '#/watchlist?prefs=models' },
+  { name: 'prefs-1440-data', w: 1440, url: '#/watchlist?prefs=data' },
+  { name: 'prefs-1440-dev', w: 1440, url: '#/watchlist?prefs=developer' },
+  { name: 'prefs-390', w: 390, url: '#/watchlist?prefs=screening' },
+  { name: 'cmdk-1440', w: 1440, url: '#/watchlist', js: "document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }))" },
+  { name: 'cmdk-1440-q', w: 1440, url: '#/watchlist', js: "(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })); await new Promise((r) => setTimeout(r, 400)); const i = document.querySelector('.cmdk-input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, 'relay forensics'); i.dispatchEvent(new Event('input', { bubbles: true })); })()" },
+  { name: 'cmdk-390', w: 390, url: '#/watchlist', js: "document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }))" },
 ];
 
 const b = await launch();
@@ -71,6 +90,10 @@ try {
       // The inspector's body, whole: grow the drawer to its content.
       await tab.evalJs("(() => { const i = document.querySelector('.inspector'); const b = i.querySelector('.insp-body'); i.style.height = 'auto'; i.style.position = 'relative'; b.style.overflow = 'visible'; })()");
       await sleep(300);
+    }
+    if (s.js) {
+      await tab.evalJs(s.js);
+      await sleep(900);
     }
     await tab.shot(path.join(out, `${s.name}.png`), { full: Boolean(s.full || s.insp) });
     results[s.name] = { errors: [...tab.errors], writes: [...tab.writes] };

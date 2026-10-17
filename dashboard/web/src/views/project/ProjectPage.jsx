@@ -1,22 +1,26 @@
-// One page per project (#/project/<id>/<tab>): the identity and the market
-// now in the header (with its own time, apart from any research date), then
-// Overview (the default, at the address "brief"), Compare, Evidence, Full
-// report, Market and Notes. Opened from the inspector (its Claude Brief
-// link), a back bar, Back and Escape return there with the list's filters,
-// place and focus, also after moving between the project's tabs. Drawing a
-// view never fetches prices, screens, posts or starts research; the actions
-// are explicit buttons.
+// One page per project (#/project/<id>/<section>): the deep audit, Level 2
+// (DESIGN_AND_IA_BLUEPRINT.md §3.3; Eric, 2026-10-17). The header carries the
+// identity and the market now (with its own time, apart from any research
+// date) and the actions: Run research, Start forensic audit, Watching and the
+// menu (Archive). Under it the model switcher, a segmented control:
+// Claude | ChatGPT | Gemini | Compare (Compare is a mode, not a section, at
+// the address "compare"); then the sections as underline tabs with counts:
+// Brief (the address "brief"), Evidence, Forensics, Market, Contract, Report,
+// Record and Notes. Opened from the inspector (Open full research), a back bar,
+// Back and Escape return there with the list's filters, place and focus, also
+// after moving between the project's sections. Drawing a section never
+// fetches prices, screens, posts or starts research; the actions are explicit.
 //
 // The sections are page navigation (links, the current one marked), and each
-// carries the opinion chosen here (?model=, ?report=) so Evidence, Full report
-// and Back keep the same model and report (review 2026-10-08, F4, F6). An
-// opinion is drawn only when the record holds the very report the list names
+// carries the opinion chosen here (?model=, ?report=) so Evidence, Report and
+// Back keep the same model and report (review 2026-10-08, F4, F6). An opinion
+// is drawn only when the record holds the very report the list names
 // (lib/opinion.js), else the view waits (F1).
 import { Fragment, useEffect, useLayoutEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Ellipsis, Check, Play } from 'lucide-react';
-import { PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, fmtDate, fmtDateTime, fmtAgo, fmtAsOf, onHoldOf, toast } from '../../../../public/ui.js';
+import { ArrowLeft, Ellipsis, Check, Play, ShieldCheck } from 'lucide-react';
+import { PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, fmtDateTime, fmtAgo, fmtAsOf, toast } from '../../../../public/ui.js';
 import { briefModel, marketNow } from '../../../../public/brief-model.js';
-import { PROJECT_TABS, selectionOf, sectionHref } from '../../../../public/project-routes.js';
+import { PROJECT_TABS, PROJECT_VIEWS, MODEL_VIEWS, selectionOf, sectionHref } from '../../../../public/project-routes.js';
 import { useDesk, useProject, useMedia } from '../../lib/hooks.js';
 import { refresh, hosted, resyncOnce, wasResynced } from '../../lib/desk.js';
 import { opinionOf, opinionsAgree } from '../../lib/opinion.js';
@@ -30,21 +34,30 @@ import { Menu, MenuItem } from '../../components/Menu.jsx';
 import { Dom, loadLegacy } from '../../components/Dom.jsx';
 import { badgeOpts } from '../watchlist/ProjectTable.jsx';
 import { archiveProject, restoreProject, setWatching } from '../watchlist/state.js';
-import Overview from './Overview.jsx';
+import Brief from './Overview.jsx';
 import { CheckIn } from './CheckIn.jsx';
 import Forensics from './Forensics.jsx';
+import Compare from './Compare.jsx';
+import Evidence from './Evidence.jsx';
+import Market from './Market.jsx';
+import Contract from './Contract.jsx';
+import Report from './Report.jsx';
+import Record from './Record.jsx';
+import Notes from './Notes.jsx';
 
 const enc = encodeURIComponent;
-const BRIEF_VIEWS = ['brief', 'compare', 'evidence'];
-// Each view's folded sections, by the name an address opens them with.
+// Each section's folds, by the name an address opens them with (?open=).
 const FOLDS = {
-  brief: { scorecard: 'pb-scorecard', headline: 'pb-headline' },
-  evidence: { checks: 'brief-ev-checks', claims: 'pb-claims', technical: 'pb-technical', runs: 'pb-runs', identity: 'pb-identity' },
+  brief: { scorecard: 'pb-scorecard' },
+  evidence: { checks: 'brief-ev-checks', claims: 'pb-claims' },
+  record: { runs: 'pb-runs', technical: 'pb-technical', headline: 'pb-headline', history: 'rec-history', forensic: 'rec-forensic' },
+  contract: { identity: 'pb-identity', edit: 'identity-edit' },
+  forensics: { start: 'fx-start' },
 };
 const plain = (e) => e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
 
-// Leaving a brief opened from the inspector: back to that entry (all the way,
-// past the project's own tabs), else to the project in the watchlist.
+// Leaving a project opened from the inspector: back to that entry (all the
+// way, past the project's own sections), else to the project on the Desk.
 function closeBrief(pid) {
   const st = history.state;
   if (st && st.crBrief === pid) history.go(-(Number(st.crDepth) || 1));
@@ -79,6 +92,9 @@ function Header({ d, row, phone }) {
     const L = await loadLegacy();
     L.openResearchDialog(legacyCtx, projectish);
   };
+  // Start forensic audit opens the Forensics section on its Start button:
+  // the audit itself is that button's explicit click (with its options).
+  const forensicHref = `#/project/${enc(p.project_id)}/forensics?open=start`;
   const toggleWatch = async () => { await setWatching(projectish, !watching); toast('Watchlist updated'); };
   return (
     <header className="ph">
@@ -89,15 +105,16 @@ function Header({ d, row, phone }) {
           {longName && phone ? <button type="button" className="btn-link ph-wholename" aria-expanded={wholeName} aria-controls="ph-name" data-key="ph-wholename" onClick={() => setWholeName(!wholeName)}>{wholeName ? 'Shorter name' : 'Whole name'}</button> : null}
           <MarketFacts row={row} />
           <p className="ph-meta">
+            {d.position && !d.position.closed ? <span className="badge is-accent">Held</span> : null}
+            <a className={`badge${id.status === 'verified' ? '' : ' is-warn'}`} href={`#/project/${enc(p.project_id)}/contract?open=identity`} title={(id.unknowns || []).join(' ') || 'Token identity, contracts and evidence'} data-key="project-identity">{id.status === 'verified' ? 'Identity verified' : `Identity ${id.status}`}</a>
             {sector ? <button type="button" className="btn-link" data-key="project-sector" aria-label={`Sector: ${sector.label || sector.primary}. Change sector`} onClick={async () => { const L = await loadLegacy(); L.openSectorDialog(legacyCtx, { ...projectish, sector }); }}>{sector.label || sector.primary}</button> : null}
-            <a href={`#/project/${enc(p.project_id)}/evidence?open=identity`} title={(id.unknowns || []).join(' ') || 'Token identity, contracts and evidence'} data-key="project-identity">{id.status === 'verified' ? 'Identity verified' : `Identity ${id.status}`}</a>
-            {d.position && !d.position.closed ? <span className="pill pill-accent">Held</span> : null}
             {id.official_website ? <a href={id.official_website} target="_blank" rel="noopener noreferrer nofollow" className="wrap-anywhere">{id.official_website.replace(/^https?:\/\//, '').replace(/\/$/, '')}</a> : null}
           </p>
         </div>
         {phone ? (
           <Menu label={`Actions for ${p.name}`} align="end" trigger={<button type="button" className="btn btn-ghost btn-icon ph-more" aria-label={`Actions for ${p.name}`} data-key="project-more"><Ellipsis size={18} aria-hidden="true" /></button>}>
             {archived ? null : <MenuItem data-key="project-menu-research" onSelect={runResearch}>Run research…</MenuItem>}
+            {archived ? null : <MenuItem data-key="project-menu-forensic" href={forensicHref}>Start forensic audit</MenuItem>}
             {archived ? null : <MenuItem data-key="project-menu-watch" desc={watching ? 'On your watchlist now' : null} onSelect={toggleWatch}>{watching ? 'Stop watching' : 'Watch'}</MenuItem>}
             {archived
               ? <MenuItem data-key="project-menu-restore" desc="Back as it was, with its history" onSelect={() => restoreProject(projectish)}>Restore</MenuItem>
@@ -108,34 +125,51 @@ function Header({ d, row, phone }) {
       {phone ? null : (
         <div className="ph-actions">
           {archived ? null : <button type="button" className="btn btn-primary" id="project-research-btn" data-key="project-research" onClick={runResearch}><Play size={14} aria-hidden="true" />Run research</button>}
+          {archived ? null : <a className="btn" href={forensicHref} data-key="project-forensic"><ShieldCheck size={14} aria-hidden="true" />Start forensic audit</a>}
           {archived ? null : <button type="button" className="btn" aria-pressed={watching} data-key="project-watch" title={watching ? 'On your watchlist. Click to stop watching.' : 'Add to your watchlist'} onClick={toggleWatch}>{watching ? <><Check size={14} aria-hidden="true" />Watching</> : 'Watch'}</button>}
-          <button type="button" className="btn btn-ghost" data-key={archived ? 'project-restore' : 'project-archive'} title={archived ? 'Bring it back as it was, with its history' : 'Off your lists; nothing is deleted. Undo right after.'} onClick={() => (archived ? restoreProject(projectish) : archiveProject(projectish))}>{archived ? 'Restore' : 'Archive'}</button>
+          <Menu label={`More actions for ${p.name}`} align="end" trigger={<button type="button" className="btn btn-ghost btn-icon" aria-label={`More actions for ${p.name}`} data-key="project-menu"><Ellipsis size={18} aria-hidden="true" /></button>}>
+            {archived
+              ? <MenuItem data-key="project-restore" desc="Back as it was, with its history" onSelect={() => restoreProject(projectish)}>Restore</MenuItem>
+              : <MenuItem data-key="project-archive" desc="Off your lists; nothing is deleted. Undo right after." onSelect={() => archiveProject(projectish)}>Archive</MenuItem>}
+          </Menu>
         </div>
       )}
     </header>
   );
 }
 
-function ModelTabs({ row, sel }) {
+// The model switcher: Claude | ChatGPT | Gemini | Compare (a segmented
+// control; Left, Right, Home and End move along it; focus stays on the chosen
+// segment). A model shows the current section for that model (Brief when
+// Compare was open); Compare shows the two latest reports side by side.
+function ModelSwitcher({ row, sel, tab, pid }) {
   const desk = useDesk();
-  const go = (prov) => {
-    navigate(hrefWith({ model: prov, report: null, open: null, run: null }), { replace: true, state: history.state });
-    requestAnimationFrame(() => { const t = document.querySelector(`[data-key="pb-tab-${prov}"]`); if (t) t.focus({ preventScroll: true }); });
+  const keys = [...PROVIDERS, 'compare'];
+  const current = tab === 'compare' ? 'compare' : sel;
+  const go = (k) => {
+    // Compare keeps the chosen model for the way back to its Brief.
+    const to = k === 'compare'
+      ? `#/project/${enc(pid)}/compare${sel ? `?model=${sel}` : ''}`
+      : tab === 'compare'
+        ? `#/project/${enc(pid)}/brief?model=${k}`
+        : hrefWith({ model: k, report: null, open: null, run: null });
+    navigate(to, { replace: true, state: history.state });
+    requestAnimationFrame(() => { const t = document.querySelector(`[data-key="pb-tab-${k}"]`); if (t) t.focus({ preventScroll: true }); });
   };
   return (
     <div className="ptabs" role="tablist" aria-label="Model" onKeyDown={(e) => {
-      const i = PROVIDERS.indexOf(sel);
-      const to = e.key === 'ArrowRight' ? PROVIDERS[(i + 1) % 3] : e.key === 'ArrowLeft' ? PROVIDERS[(i + 2) % 3] : e.key === 'Home' ? PROVIDERS[0] : e.key === 'End' ? PROVIDERS[2] : null;
+      const i = keys.indexOf(current);
+      const to = e.key === 'ArrowRight' ? keys[(i + 1) % keys.length] : e.key === 'ArrowLeft' ? keys[(i + keys.length - 1) % keys.length] : e.key === 'Home' ? keys[0] : e.key === 'End' ? keys[keys.length - 1] : null;
       if (!to) return;
       e.preventDefault();
-      if (to !== sel) go(to);
+      if (to !== current) go(to);
     }}>
       {PROVIDERS.map((prov) => {
         const rep = row.providers && row.providers[prov];
         const job = row.research && row.research.providers && row.research.providers[prov];
         const opts = badgeOpts(desk, prov);
         const info = pillInfo(prov, rep, job, opts);
-        const on = prov === sel;
+        const on = prov === current;
         const verdict = rep && rep.verdict ? `${rep.verdict.charAt(0)}${rep.verdict.slice(1).toLowerCase().replace(/_/g, ' ')}` : null;
         return (
           <button key={prov} type="button" role="tab" id={`pb-tab-${prov}`} className="ptab" aria-selected={on} aria-controls="pb-model" tabIndex={on ? 0 : -1} data-key={`pb-tab-${prov}`} aria-label={`${info.text.replace(/[.\s]+$/, '')}${verdict ? `. Verdict: ${verdict}` : ''}`} title={verdict || undefined} onClick={() => { if (!on) go(prov); }}>
@@ -144,30 +178,30 @@ function ModelTabs({ row, sel }) {
           </button>
         );
       })}
+      <button type="button" role="tab" id="pb-tab-compare" className="ptab ptab-compare" aria-selected={current === 'compare'} aria-controls="pb-model" tabIndex={current === 'compare' ? 0 : -1} data-key="pb-tab-compare" aria-label="Compare the models' reports side by side" onClick={() => { if (current !== 'compare') go('compare'); }}>
+        <span className="ptab-top" aria-hidden="true"><span className="ptab-name">Compare</span></span>
+        <span className="ptab-verdict" aria-hidden="true">Side by side</span>
+      </button>
     </div>
   );
-}
-
-function Hosted({ build, deps, after = null }) {
-  return <Dom className="lg-view-part" build={(L) => { const node = build(L); if (after) requestAnimationFrame(() => after(node)); return node; }} deps={deps} />;
 }
 
 export default function ProjectPage() {
   const d0 = useDesk();
   const route = nav.route;
   const pid = route.args[0];
-  const tab = PROJECT_TABS.some(([t]) => t === route.args[1]) ? route.args[1] : 'brief';
+  const tab = PROJECT_VIEWS.includes(route.args[1]) ? route.args[1] : 'brief';
   const { d, current, error, retry } = useProject(pid);
   const phone = useMedia('(max-width: 767.98px)');
   const row = d0.index.projects.find((x) => x.project_id === pid) || {};
   const prov = PROVIDERS.includes(route.query.get('model')) ? route.query.get('model') : 'claude';
   const reportId = route.query.get('report') || null;
   const st = history.state;
-  const fromInspector = BRIEF_VIEWS.includes(tab) && st && st.crBrief === pid;
+  const fromInspector = Boolean(st && st.crBrief === pid);
   const staleDays = (d0.index.settings && d0.index.settings.freshness && d0.index.settings.freshness.research_stale_days) || 90;
   const m = useMemo(() => (d && (tab === 'brief' || tab === 'evidence') ? briefModel({ detail: d, row, index: d0.index, provider: prov, reportId, hosted: hosted() }) : null), [d, d0.index, prov, reportId, tab]);
 
-  // Escape leaves a brief opened from the inspector; never while typing or
+  // Escape leaves a project opened from the inspector; never while typing or
   // with a dialog or menu open.
   useEffect(() => {
     const onKey = (e) => {
@@ -176,7 +210,7 @@ export default function ProjectPage() {
       const s = history.state;
       if (!s || s.crBrief !== r.args[0]) return;
       const t = e.target;
-      if (document.querySelector('dialog[open]') || document.querySelector('.menu') || (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)))) return;
+      if (document.querySelector('dialog[open]') || document.querySelector('.menu') || document.querySelector('.prefs.is-open') || (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)))) return;
       e.preventDefault();
       closeBrief(r.args[0]);
     };
@@ -185,17 +219,17 @@ export default function ProjectPage() {
   }, []);
 
   // In place: start where Back left it, or at the top; an address that names
-  // a folded section (?open=, ?run=) brings it into view once, with focus.
-  const open = FOLDS[tab] ? FOLDS[tab][route.query.get('open') || (tab === 'evidence' && route.query.get('run') ? 'runs' : '')] : null;
-  const run = tab === 'evidence' ? route.query.get('run') : null;
+  // a folded part (?open=, ?run=) brings it into view once, with focus.
+  const open = FOLDS[tab] ? FOLDS[tab][route.query.get('open') || (tab === 'record' && route.query.get('run') ? 'runs' : '')] : null;
+  const run = tab === 'record' ? route.query.get('run') : null;
   useLayoutEffect(() => {
     if (!d) return;
     pageReady();
     if (nav.reason === 'same' || d0.reason === 'live') return;
     if (!open && !run) {
       if (fromInspector && nav.reason === 'nav') {
-        const t = document.getElementById('bf-title');
-        if (t) { t.focus({ preventScroll: true }); claimFocus(); }
+        const t = document.getElementById('bf-title') || document.getElementById('ph-name');
+        if (t) { if (!t.hasAttribute('tabindex')) t.setAttribute('tabindex', '-1'); t.focus({ preventScroll: true }); claimFocus(); }
       }
       return;
     }
@@ -205,13 +239,14 @@ export default function ProjectPage() {
     const go = () => {
       const el = find();
       if (!el) {
-        if (tries++ < 40) requestAnimationFrame(go);
+        if (tries++ < 60) requestAnimationFrame(go);
         return;
       }
       if (el.tagName === 'DETAILS') el.open = true;
+      if (run) { const det = document.querySelector(`[data-key="pb-runs"]`); if (det && det.tagName === 'DETAILS') det.open = true; const rd = document.querySelector(`[data-key="run-${CSS.escape(run)}"]`); if (rd && rd.tagName === 'DETAILS') rd.open = true; }
       el.scrollIntoView({ block: 'start' });
       const head = (run && el.querySelector(`[data-key="run-${CSS.escape(run)}"] > summary`)) || el.querySelector(':scope > summary') || el;
-      if (head === el && !el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+      if (head === el && !el.hasAttribute('tabindex') && !['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName)) el.setAttribute('tabindex', '-1');
       head.focus({ preventScroll: true });
     };
     requestAnimationFrame(go);
@@ -232,7 +267,7 @@ export default function ProjectPage() {
   useEffect(() => {
     if (waiting && current) resyncOnce(pid, waitKey);
   }, [waiting, current, pid, waitKey]);
-  // On a phone a brief opened from the inspector has its back bar in place
+  // On a phone a project opened from the inspector has its back bar in place
   // of the top bar.
   useLayoutEffect(() => {
     const on = Boolean(d) && fromInspector;
@@ -243,7 +278,7 @@ export default function ProjectPage() {
   if (!d) {
     return (
       <div className="pp">
-        <nav className="crumbs"><a href="#/watchlist">Watchlist</a></nav>
+        <nav className="crumbs" aria-label="Breadcrumb"><a href={`#/watchlist?p=${enc(pid)}`}>Desk</a></nav>
         {error ? (
           <div className="note note-bad pp-error" role="alert">
             <span>{`Could not load project "${pid}": ${error.message}`}</span>
@@ -256,16 +291,26 @@ export default function ProjectPage() {
 
   const p = d.project;
   const sel = selectionOf(tab, route.query, { latest, providerOf });
+  // Counts beside the sections: the chosen report's claims, the reports and
+  // the research runs on record.
+  const chosen = d.reports.find((r) => !r.broken && r.report_id === (reportId || latest[prov])) || null;
+  const COUNTS = {
+    evidence: chosen && chosen.assessment && Array.isArray(chosen.assessment.claims) ? chosen.assessment.claims.length : null,
+    report: d.reports.length || null,
+    record: (d.research && d.research.runs ? d.research.runs.length : 0) || null,
+  };
+  const COUNT_WORDS = { evidence: 'claims', report: 'reports', record: 'research runs' };
+  const navTab = tab === 'compare' ? 'brief' : tab;
   const tabLink = (t, label) => {
     const href = sectionHref(pid, t, sel, { latest });
-    const count = t === 'report' && d.reports.length ? d.reports.length : null;
+    const count = COUNTS[t];
     return (
       <a
         key={t}
         href={href}
         id={`tab-${t}`}
         className="tab"
-        aria-current={t === tab ? 'page' : undefined}
+        aria-current={t === navTab ? 'page' : undefined}
         data-key={`tab-${t}`}
         onClick={(e) => {
           if (!plain(e) || !(history.state && history.state.crBrief === pid)) return;
@@ -275,11 +320,11 @@ export default function ProjectPage() {
           navigate(href, { state: { ...now, crDepth: (Number(now.crDepth) || 1) + 1 } });
         }}
       >
-        {label}{count ? <span className="tab-count" aria-label={`${count} report${count === 1 ? '' : 's'}`}>{count}</span> : null}
+        {label}{count ? <span className="tab-count" aria-label={`, ${count} ${COUNT_WORDS[t]}`}>{count}</span> : null}
       </a>
     );
   };
-  const barLabel = tab === 'compare' ? 'Compare' : tab === 'evidence' ? `${PROVIDER_LABELS[prov]}'s evidence` : `${PROVIDER_LABELS[prov]} Brief`;
+  const barLabel = tab === 'compare' ? 'Compare' : MODEL_VIEWS.includes(tab) ? `${PROVIDER_LABELS[prov]} · ${(PROJECT_TABS.find(([t]) => t === tab) || [null, 'Brief'])[1]}` : (PROJECT_TABS.find(([t]) => t === tab) || [null, ''])[1];
   const from = st && st.crBrief === pid ? st.from : null;
 
   const stuck = waiting && current && wasResynced(pid, waitKey);
@@ -293,72 +338,62 @@ export default function ProjectPage() {
       ) : <div className="page-loading" role="status"><span className="sr-only">Loading the report…</span><span className="skel w60" /><span className="skel w80" /><span className="skel w40" /></div>}
     </div>
   );
+  const props = { d, row, pid, prov, reportId, route, current };
   let body;
   if (waiting) {
-    body = (
-      <>
-        {tab === 'compare' ? null : <ModelTabs row={row} sel={prov} />}
-        {wait}
-      </>
-    );
+    body = wait;
   } else if (tab === 'brief') {
     body = (
       <>
         <CheckIn key={pid} d={d} current={current} row={row} pid={pid} />
-        <ModelTabs row={row} sel={prov} />
         <div id="pb-model" role="tabpanel" aria-labelledby={`pb-tab-${prov}`}>
-          <Overview m={m} d={d} row={row} pid={pid} staleDays={staleDays} />
+          <Brief m={m} d={d} row={row} pid={pid} staleDays={staleDays} />
         </div>
         <details className="fold page-fold" data-key="pb-scorecard" title="Three separate panels, never mixed: the category grades are diagnostics and are never averaged into the grade; the grade comes from six weighted components; the downside-risk scores are higher-is-worse.">
           <summary>{`Full scorecard · ${PROVIDER_LABELS[prov]}`}</summary>
-          <Hosted build={(L) => { const latest = L.latestReports(d); return latest[prov] ? L.scorecardBody(legacyCtx, d, latest, prov) : L.h('p', { class: 'small muted' }, `No gradable ${PROVIDER_LABELS[prov]} report yet.`); }} deps={[d, prov]} />
-        </details>
-        <details className="fold page-fold" data-key="pb-headline" title="The headline is your choice: one report, or one of your own decisions.">
-          <summary>Your headline</summary>
-          <Hosted build={(L) => L.headlineBody(legacyCtx, d)} deps={[d]} />
+          <Dom className="lg-view-part" build={(L) => { const lt = L.latestReports(d); return lt[prov] ? L.scorecardBody(legacyCtx, d, lt, prov) : L.h('p', { class: 'small muted' }, `No gradable ${PROVIDER_LABELS[prov]} report yet.`); }} deps={[d, prov]} />
         </details>
       </>
     );
   } else if (tab === 'compare') {
-    body = <Hosted build={(L) => L.comparePanel(legacyCtx, { d, row, pid, query: route.query })} deps={[d, route.query.toString()]} />;
+    body = <div id="pb-model" role="tabpanel" aria-labelledby="pb-tab-compare"><Compare {...props} /></div>;
   } else if (tab === 'evidence') {
-    body = (
-      <>
-        <ModelTabs row={row} sel={prov} />
-        <Hosted build={(L) => L.evidenceTab(legacyCtx, d, row, L.latestReports(d), route).node} deps={[d, route.query.toString()]} />
-      </>
-    );
+    body = <div id="pb-model" role="tabpanel" aria-labelledby={`pb-tab-${prov}`}><Evidence {...props} m={m} /></div>;
   } else if (tab === 'forensics') {
     body = <Forensics pid={pid} receipt={route.query.get('receipt') || null} />;
   } else if (tab === 'report') {
-    body = <Hosted build={(L) => L.reportsTab(legacyCtx, d, route)} deps={[d, route.query.toString()]} after={(node) => { const toc = node && node.querySelector && node.querySelector('.report-toc'); if (toc && typeof toc.watch === 'function') toc.watch(); }} />;
+    body = <div id="pb-model" role="tabpanel" aria-labelledby={`pb-tab-${prov}`}><Report {...props} /></div>;
   } else if (tab === 'market') {
-    body = <Hosted build={(L) => L.marketTab(legacyCtx, d)} deps={[d]} />;
+    body = <Market {...props} />;
+  } else if (tab === 'contract') {
+    body = <Contract {...props} />;
+  } else if (tab === 'record') {
+    body = <Record {...props} />;
   } else {
-    body = <Hosted build={(L) => L.historyTab(legacyCtx, d)} deps={[d]} />;
+    body = <Notes {...props} />;
   }
 
   return (
-    <div className={`pp pp-${tab}${BRIEF_VIEWS.includes(tab) ? ' pb-view' : ''}`}>
+    <div className={`pp pp-${tab}${MODEL_VIEWS.includes(tab) ? ' pb-view' : ''}`}>
       {fromInspector ? (
         <div className="backbar">
-          <a className="btn btn-ghost btn-sm backbar-back" href={`#/watchlist?p=${enc(pid)}`} data-key="brief-back" aria-label={`Close the brief and return to ${from === 'project' ? `the ${p.name} page` : 'the watchlist'}`} title="Back (Esc)" onClick={(e) => { if (!plain(e)) return; e.preventDefault(); closeBrief(pid); }}>
-            <ArrowLeft size={15} aria-hidden="true" /><span>{from === 'project' ? 'Project' : 'Watchlist'}</span>
+          <a className="btn btn-ghost btn-sm backbar-back" href={`#/watchlist?p=${enc(pid)}`} data-key="brief-back" aria-label={`Close the full research and return to ${from === 'project' ? `the ${p.name} page` : 'the Desk'}`} title="Back (Esc)" onClick={(e) => { if (!plain(e)) return; e.preventDefault(); closeBrief(pid); }}>
+            <ArrowLeft size={15} aria-hidden="true" /><span>{from === 'project' ? 'Project' : 'Desk'}</span>
           </a>
           <span className="backbar-t" aria-hidden="true"><span className="faint">{barLabel}</span></span>
           <WsTag />
-          {m && m.report_id && !waiting ? <a className="btn btn-sm" href={sectionHref(pid, 'report', { model: prov, report: m.report_id }, { latest })} data-key="brief-report">Full report</a> : null}
+          {m && m.report_id && !waiting && tab === 'brief' ? <a className="btn btn-sm" href={sectionHref(pid, 'report', { model: prov, report: m.report_id }, { latest })} data-key="brief-report">Full report</a> : null}
         </div>
       ) : (
-        <nav className="crumbs" aria-label="Breadcrumb"><a href={`#/watchlist?p=${enc(pid)}`} data-key="crumb-watchlist">Watchlist</a><span aria-hidden="true">/</span><span aria-current="page">{p.name}</span></nav>
+        <nav className="crumbs" aria-label="Breadcrumb"><a href={`#/watchlist?p=${enc(pid)}`} data-key="crumb-watchlist">Desk</a><span aria-hidden="true">/</span><span aria-current="page">{p.name}</span></nav>
       )}
       <Header d={d} row={row} phone={phone} />
+      {MODEL_VIEWS.includes(tab) ? <ModelSwitcher row={row} sel={prov} tab={tab} pid={pid} /> : null}
       <nav className="tabs pp-tabs" aria-label="Project sections">
         {PROJECT_TABS.map(([t, label]) => tabLink(t, label))}
       </nav>
-      {/* Each section mounts its own parts: two hosted sections with equal
-          inputs (Compare and Full report, Market and Notes) would otherwise
-          share one part and keep the first one drawn. */}
+      {/* Each section mounts its own parts: two sections with equal inputs
+          would otherwise share one part and keep the first one drawn. */}
       <div id="tabpanel" className="pp-panel"><Fragment key={tab}>{body}</Fragment></div>
     </div>
   );

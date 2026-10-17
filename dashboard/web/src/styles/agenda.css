@@ -16,9 +16,9 @@
 .ag-title { font-size: var(--fs-md); font-weight: 600; color: var(--text); }
 .ag-when { font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; }
 .ag-when.is-due { color: var(--warn); font-weight: 600; }
-.ag-basis { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 500; color: var(--text-2); background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--separator); white-space: nowrap; }
+.ag-basis { display: inline-flex; align-items: center; height: var(--badge-h); padding: 0 9px; border-radius: var(--r-badge); font-size: var(--fs-xs); font-weight: 500; color: var(--text-2); background: var(--badge-bg); box-shadow: none; white-space: nowrap; }
 .ag-basis.is-conditional { background: transparent; box-shadow: none; border: 1px dashed var(--text-3); }
-.ag-basis.is-owner { color: var(--text); box-shadow: inset 0 0 0 1px var(--control-border); }
+.ag-basis.is-owner { color: var(--text); box-shadow: none; }
 .ag-why { font-size: var(--fs-sm); line-height: 1.5; color: var(--text-2); overflow-wrap: anywhere; }
 .ag-src { font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .ag-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 4px; }

@@ -86,8 +86,11 @@ function prefsOf(ws) {
   const d = D.PREFERENCE_DEFAULTS;
   const pos = (v, fb, max) => (isNum(v) && v > 0 && v <= max ? v : fb);
   const opt = (v, max) => (isNum(v) && v > 0 && v <= max ? v : null);
+  // One to five sizes, each above zero, without repeats (Preferences >
+  // Screening); otherwise the defaults.
+  const sizes = Array.isArray(s.exit_sizes_usd) ? [...new Set(s.exit_sizes_usd.filter((v) => isNum(v) && v > 0 && v <= 1e9))].sort((a, b) => a - b).slice(0, 5) : [];
   return {
-    exit_sizes_usd: d.exit_sizes_usd.slice(),
+    exit_sizes_usd: sizes.length ? sizes : d.exit_sizes_usd.slice(),
     exit_position_usd: pos(s.exit_position_usd, d.exit_position_usd, 1e9),
     exit_cost_limit_pct: pos(s.exit_cost_limit_pct, d.exit_cost_limit_pct, 100),
     delivery_window_days: Number.isInteger(s.delivery_window_days) && s.delivery_window_days >= 7 && s.delivery_window_days <= 365 ? s.delivery_window_days : d.delivery_window_days,
@@ -1651,6 +1654,103 @@ function view(ws, pid, { now = Date.now(), receipt: wantReceipt = null } = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// The index row's forensic summary: what the Desk's Risk and "Exit @ $500"
+// columns and the inspector's risk strip read (DESIGN_AND_IA_BLUEPRINT.md
+// §3.1, §3.2). It is drawn from the same view the Forensics tab reads, so the
+// two never disagree; it writes nothing and asks nothing. null when the
+// project has no forensic record at all (never "within" by default); unknown
+// stays unknown. Kept for a few minutes per project while its forensic files,
+// the stored prices and the preferences are unchanged, so a rebuild of the
+// index on every save stays cheap.
+const SUMMARY_TTL_MS = 5 * 60000;
+const summaryCache = new Map();
+function treeSignature(abs) {
+  const parts = [];
+  const walk = (dir) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (_) {
+      return;
+    }
+    for (const e of entries) {
+      const p = `${dir}/${e.name}`;
+      if (e.isDirectory()) walk(p);
+      else {
+        try {
+          const st = fs.statSync(p);
+          parts.push(`${p}:${st.size}:${st.mtimeMs}`);
+        } catch (_) { /* gone meanwhile */ }
+      }
+    }
+  };
+  walk(abs);
+  return parts.sort().join('|');
+}
+
+function summary(ws, pid, { now = Date.now() } = {}) {
+  const abs = ws.abs(dirOf(pid));
+  if (!exists(abs)) return null;
+  let latestSig = '';
+  try {
+    const st = fs.statSync(ws.abs('market-data/latest.json'));
+    latestSig = `${st.size}:${st.mtimeMs}`;
+  } catch (_) { /* no prices stored */ }
+  const sig = `${treeSignature(abs)}#${latestSig}#${JSON.stringify((ws.settings && ws.settings.forensics) || {})}`;
+  const hit = summaryCache.get(pid);
+  if (hit && hit.sig === sig && now - hit.at < SUMMARY_TTL_MS) return hit.value;
+  let value;
+  try {
+    const v = view(ws, pid, { now });
+    const c = v.current;
+    const intact = Boolean(c && (!c.integrity || c.integrity.ok));
+    const prefs = v.preferences_in_use || v.preferences;
+    const row = (v.liquidity.exits || []).find((x) => x.size_usd === prefs.exit_position_usd) || null;
+    const b = row ? row.best : null;
+    const cost = b && isNum(b.cost_pct) ? b.cost_pct : null;
+    const complete = b ? b.cost_complete !== false : null;
+    // Over the limit is said only when the figure shows it (a lower bound
+    // over the limit counts; a lower bound under it says nothing).
+    const beyond = row && row.status === 'no_route' ? true : cost === null ? null : cost > prefs.exit_cost_limit_pct ? true : complete ? false : null;
+    const open = v.audits.find((a) => a.audit_id === v.open_audit) || null;
+    value = {
+      audited: intact,
+      receipt_id: c ? c.receipt_id : null,
+      integrity_ok: c ? intact : null,
+      model: intact ? c.model : null,
+      assessment_as_of: intact ? c.assessment_as_of || c.origin : null,
+      age_hours: intact ? c.age_hours : null,
+      open_audit: open ? { audit_id: open.audit_id, investigator: open.jobs.investigator ? open.jobs.investigator.state : null, challenge: open.jobs.challenge ? open.jobs.challenge.state : null } : null,
+      states: {
+        liquidity_impairment: v.states.liquidity.state,
+        operational_degradation: v.states.operational.state,
+        delivery_inactivity: v.states.delivery.state,
+        confirmed_discontinuation: v.states.discontinuation.state,
+      },
+      exit: row ? {
+        size_usd: row.size_usd,
+        status: row.status,
+        cost_pct: cost,
+        cost_complete: complete,
+        missing_costs: b ? b.missing_costs || [] : [],
+        as_of: row.as_of || (b && b.retrieved_at) || null,
+        limit_pct: prefs.exit_cost_limit_pct,
+        beyond,
+        note: row.note || null,
+      } : null,
+      position_usd: prefs.exit_position_usd,
+      limit_pct: prefs.exit_cost_limit_pct,
+      monitoring: Boolean(v.monitoring && v.monitoring.enabled),
+      to_review: v.evidence_changes ? v.evidence_changes.to_review || 0 : 0,
+    };
+  } catch (err) {
+    value = { audited: false, unavailable: true, error: err.message };
+  }
+  summaryCache.set(pid, { sig, at: now, value });
+  return value;
+}
+
+// ---------------------------------------------------------------------------
 // Work waiting for a model, desk-wide (the connector's pending_forensics)
 
 function pendingFor(ws, provider) {
@@ -1717,5 +1817,6 @@ module.exports = {
   recordDueResolutions,
   correctResolution,
   view,
+  summary,
   pendingFor,
 };

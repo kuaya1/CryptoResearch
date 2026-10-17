@@ -1,0 +1,39 @@
+/* The Market section (views/project/Market.jsx): the market now, the DEX
+   pools, DefiLlama's daily series as single-series ink columns (one axis, a
+   missing day dashed at the baseline, never a zero), the technical chart. */
+
+.mk-now { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.mk-price { font-family: var(--font-display); font-size: var(--fs-2xl); font-weight: 600; letter-spacing: var(--track-title); }
+.mk-chg { font-size: var(--fs-md); font-weight: 600; }
+.mk-when { font-size: var(--fs-xs); color: var(--text-3); }
+.mk-when.is-stale { color: var(--warn); font-weight: 500; }
+.mk-spark { max-width: 100%; overflow: hidden; }
+.mk-spark svg { width: 100%; height: auto; }
+.mk-dex .dexc { margin: 0; }
+.mk-tv { min-height: 120px; }
+
+.mk-src { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: var(--fs-sm); }
+.mk-series { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px 20px; }
+@media (max-width: 1279.98px) { .mk-series { grid-template-columns: minmax(0, 1fr); } }
+.mk-metric { min-width: 0; }
+.mk-metric-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 10px; margin-bottom: 6px; }
+.mk-metric-head h3 { font-size: var(--fs-sm); font-weight: 600; }
+.mk-total { font-size: var(--fs-xs); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.mk-total strong { font-size: var(--fs-md); color: var(--text); }
+
+.mk-chart { position: relative; min-width: 0; }
+.mk-chart svg { display: block; touch-action: pan-y; }
+.mk-chart svg:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.mk-grid { stroke: var(--separator); stroke-width: 1; }
+.mk-tick { fill: var(--text-3); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.mk-bar { fill: var(--bar-ink); }
+.mk-bar.is-on { fill: var(--accent-hover); }
+.mk-chart svg:hover .mk-bar:not(.is-on) { opacity: 0.55; }
+.mk-zero { fill: var(--text-3); }
+.mk-missing { fill: none; stroke: var(--control-border); stroke-width: 1; stroke-dasharray: 2 2; }
+.mk-missing.is-on, .mk-zero.is-on { stroke: var(--text); }
+.mk-cross { stroke: var(--text-3); stroke-width: 1; }
+.mk-tip { position: absolute; top: -4px; min-width: 140px; display: flex; flex-direction: column; gap: 1px; padding: 6px 10px; border-radius: var(--r-control); background: var(--surface-raised); box-shadow: var(--shadow-pop); font-size: var(--fs-xs); color: var(--text-2); pointer-events: none; font-variant-numeric: tabular-nums; }
+.mk-tip strong { font-size: var(--fs-sm); color: var(--text); }
+.mk-table { margin-top: 6px; }
+.mk-table .l2-table-wrap { max-height: 280px; overflow: auto; }

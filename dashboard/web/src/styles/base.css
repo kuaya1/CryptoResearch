@@ -75,4 +75,4 @@ abbr[title] { text-decoration: none; cursor: help; }
 .lg-part-error { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--r-lg); background: var(--surface-sunken); font-size: var(--fs-sm); color: var(--text-2); }
 .inspector.is-error { display: flex; flex-direction: column; }
 .insp-error { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
-.boot-error h1 { font-family: var(--font-display); font-weight: 700; font-size: 26px; letter-spacing: var(--track-title); margin-bottom: 12px; }
+.boot-error h1 { font-family: var(--font-display); font-weight: 700; font-size: var(--fs-2xl); letter-spacing: var(--track-title); margin-bottom: 12px; }

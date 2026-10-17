@@ -18,7 +18,7 @@
 .pb-mk-f { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
 .pb-mk .k { font-size: var(--fs-caption); font-weight: 500; color: var(--text-3); }
 .pb-mk .v { font-weight: 600; font-variant-numeric: tabular-nums lining-nums; }
-.pb-mk .v.price { font-size: 15px; }
+.pb-mk .v.price { font-size: var(--fs-md); }
 .pb-mk .chg { font-weight: 500; font-variant-numeric: tabular-nums lining-nums; }
 .pb-mk .chg.up { color: var(--pos-text); }
 .pb-mk .chg.down { color: var(--neg); }
@@ -93,14 +93,14 @@
 .bf-evlink-t { margin: 0; font-size: var(--fs-body); color: var(--text-2); }
 
 /* ---- the Evidence view ------------------------------------------------------------------------ */
-.bf-concl-t { margin: 0; font-size: 15px; line-height: 1.5; color: var(--text); }
+.bf-concl-t { margin: 0; font-size: var(--fs-md); line-height: 1.5; color: var(--text); }
 .bf-concl .bf-gflags { margin-top: var(--s3); }
 .bf-evview .bf-verdict .bf-notices { margin-top: var(--s4); }
 .bf-claims { list-style: none; margin: var(--s4) 0 0; padding: 0; }
 .bf-claim { padding: 10px 0; border-top: 1px solid var(--separator); min-width: 0; }
 .bf-claims .bf-claim:last-child { border-bottom: 1px solid var(--separator); }
 .bf-claim-m { margin: 0 0 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
-.bf-claim-t { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--text); max-width: 80ch; }
+.bf-claim-t { margin: 0; font-size: var(--fs-sm); line-height: 1.5; color: var(--text); max-width: 80ch; }
 .bf-claim .bf-flagline { margin: 6px 0 0; font-size: var(--fs-small); }
 .bf-evview .src-list li { margin: 4px 0; }
 .bf-evview [data-key="brief-ev-checks"]:focus { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: var(--r-sm); }
@@ -119,12 +119,12 @@
 .cmp-side.is-empty { background: transparent; border: 1px dashed var(--control-border); }
 .cmp-who { margin: 0 0 4px; font-size: var(--fs-body); font-weight: 600; color: var(--text); }
 .cmp-grade-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
-.cmp-grade { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.15; color: var(--text); font-variant-numeric: tabular-nums lining-nums; cursor: help; }
+.cmp-grade { font-size: var(--fs-2xl); font-weight: 600; letter-spacing: -0.02em; line-height: 1.15; color: var(--text); font-variant-numeric: tabular-nums lining-nums; cursor: help; }
 .cmp-grade.tier-1 { color: var(--t1-ink); }
 .cmp-grade.tier-2 { color: var(--t2-ink); }
 .cmp-grade.tier-4 { color: var(--t4-ink); }
 .cmp-grade.tier-5 { color: var(--t5-ink); }
-.cmp-grade.g-withheld, .cmp-grade.g-none, .cmp-grade.g-invalid_weights { font-size: 18px; letter-spacing: 0; color: var(--text-2); }
+.cmp-grade.g-withheld, .cmp-grade.g-none, .cmp-grade.g-invalid_weights { font-size: var(--fs-xl); letter-spacing: 0; color: var(--text-2); }
 .cmp-grade-k { font-size: var(--fs-caption); color: var(--text-3); }
 .cmp-verdict { margin: 6px 0 0; font-size: var(--fs-body); font-weight: 500; }
 .cmp-meta { margin: 6px 0 0; font-size: var(--fs-small); color: var(--text-3); }
@@ -228,7 +228,7 @@
   .pb-head { gap: var(--s2); margin-bottom: var(--s2); }
   .pb-head-name { align-items: flex-start; gap: 10px; }
   .pb-head-name .logo { margin-top: 2px; }
-  .pb-head h1 { flex: 1; font-size: 18px; line-height: 1.25; padding-top: 6px; }
+  .pb-head h1 { flex: 1; font-size: var(--fs-xl); line-height: 1.25; padding-top: 6px; }
   .pb-head .actions { display: none; }
   .pb-more { display: block; flex: none; margin: -2px -10px 0 auto; }
   .pb-mk { gap: 2px 14px; margin-top: 6px; }
@@ -259,11 +259,11 @@
   .brief .bf-vgrid { grid-template-columns: 124px minmax(0, 1fr); gap: 4px 14px; align-items: center; justify-items: stretch; }
   .brief .bf-vgrid:has(.bf-grade.withheld) { grid-template-columns: 136px minmax(0, 1fr); align-items: start; }
   .brief .bf-grade.withheld { padding: 10px 11px; }
-  .brief .bf-grade.withheld .bf-wh { font-size: 15px; line-height: 1.25; }
+  .brief .bf-grade.withheld .bf-wh { font-size: var(--fs-md); line-height: 1.25; }
   .brief .bf-grade.withheld .bf-gcap { display: none; }
   .brief .bf-grade { justify-self: stretch; }
   .brief .bf-grade .bf-gcap { margin-top: 0; }
-  .brief .bf-vlabel { font-size: 17px; margin-bottom: 0; }
+  .brief .bf-vlabel { font-size: var(--fs-lg); margin-bottom: 0; }
   .bf-vfacts { margin-top: 8px; gap: 4px 16px; flex-direction: column; }
   .bf-vfacts > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; }
   .bf-vfacts dd { margin: 0; }
@@ -282,8 +282,8 @@
   .cmp-pickers, .cmp-sides { gap: 8px; }
   .cmp-pick select { padding-left: 8px; padding-right: 22px; text-overflow: ellipsis; }
   .cmp-side { padding: 10px 12px; }
-  .cmp-grade { font-size: 24px; }
-  .cmp-grade.g-withheld, .cmp-grade.g-none, .cmp-grade.g-invalid_weights { font-size: 16px; }
+  .cmp-grade { font-size: var(--fs-xl); }
+  .cmp-grade.g-withheld, .cmp-grade.g-none, .cmp-grade.g-invalid_weights { font-size: var(--fs-lg); }
   .cmp-grade-k { flex-basis: 100%; }
   .cmp-verdict { margin-top: 4px; line-height: 1.35; }
   .cmp-meta { line-height: 1.4; }

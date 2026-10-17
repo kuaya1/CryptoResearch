@@ -140,7 +140,7 @@ function importReceipt(ctx, rec) {
     h('div', { class: 'btn-row' }, href ? h('a', { class: 'btn small primary', href }, 'Open report') : null, another));
 }
 
-function importTab(ctx, route) {
+export function importTab(ctx, route) {
   const q = route.query;
   const draft = store.get('importDraft', {}) || {};
   const last = session.get(RECEIPT_KEY, null);
@@ -294,7 +294,7 @@ function fixControls(ctx, f) {
 
 const INBOX_STATUS = { new: ['Waiting', ''], prompt: ['A prompt, not a report', 'warn'], needs_project: ['Needs a project', 'warn'], provider_mismatch: ['Model label conflict', 'warn'], run_mismatch: ['Does not match its run', 'warn'], failed: ['Not imported', 'bad'] };
 
-function inboxTab(ctx) {
+export function inboxTab(ctx) {
   const idx = ctx.state.index;
   const inbox = idx.imports.inbox;
   const scan = button('Scan inbox now', null, { kind: 'small' });
@@ -318,7 +318,7 @@ function inboxTab(ctx) {
 
 const RECEIPT_STATE = { done: ['Done', 'ok'], unchanged: ['Already applied', 'ok'], rejected: ['Rejected', 'bad'], conflict: ['Conflict', 'bad'], failed: ['Failed', 'bad'], pending: ['Pending', 'wait'] };
 
-function requestsTab(ctx) {
+export function requestsTab(ctx) {
   const idx = ctx.state.index;
   const proc = button('Apply queued requests now', null, { kind: 'small' });
   proc.onclick = action(proc, async () => { const r = await ctx.api.post('/api/requests/process', {}); await ctx.refresh(); return r; }, (r) => `${r.processed || 0} request(s) processed`);

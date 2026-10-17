@@ -1,0 +1,114 @@
+/* The project page's Record and Contract sections (views/project/Record.jsx,
+   Contract.jsx): the audit trail (research details, runs and their jobs,
+   the headline, report history, technical records, forensic receipts) and
+   the token's identity and contract checks. Built on the section kit
+   (l2.css); the contract rows reuse the inspector's cc-* rules. Tokens only;
+   nothing under 12px; a wide table scrolls in its own wrap on a phone. */
+
+.rc-h3 { margin: 0; font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+.rc-h4 { margin: 0; font-size: var(--fs-xs); font-weight: 600; color: var(--text-2); }
+.rc-line { margin: 0; font-size: var(--fs-sm); line-height: 1.5; max-width: 80ch; overflow-wrap: anywhere; }
+.rc-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.rc-top > .rc-line { flex: 1 1 280px; }
+.rc-sub { min-width: 0; padding-top: 10px; border-top: 1px solid var(--separator); }
+.rc-sub > * + * { margin-top: 8px; }
+.l2-fold-body > .rc-sub:first-child { padding-top: 0; border-top: 0; }
+.rc-err { color: var(--neg); }
+.rc-warn { color: var(--warn); }
+
+/* ---- a research run: its jobs, attempts, partial answers and prompts ---- */
+.rc-run { min-width: 0; padding-top: 12px; border-top: 1px solid var(--separator); }
+.rc-run > * + * { margin-top: 10px; }
+.rc-run:focus { outline: none; }
+.rc-run-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.rc-run-head .faint { font-size: var(--fs-xs); }
+.rc-broken { margin: 0; }
+.rc-jobs td:first-child { white-space: nowrap; }
+.rc-jobs td:nth-child(2) { min-width: 200px; }
+.rc-jobs td:nth-child(4) { min-width: 180px; }
+.rc-jobs td:last-child { min-width: 180px; }
+
+/* A state in words with its sign; the colour only repeats the words. */
+.rc-state { display: inline-flex; align-items: baseline; gap: 6px; font-weight: 500; color: var(--text-2); }
+.rc-state::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; transform: translateY(-1px); }
+.rc-state.is-ok { color: var(--pos); }
+.rc-state.is-bad { color: var(--neg); }
+.rc-state.is-warn { color: var(--warn); }
+.rc-state.is-work { color: var(--work-text); }
+
+.rc-step { margin: 4px 0 0; font-size: var(--fs-xs); line-height: 1.5; color: var(--text-2); max-width: 64ch; }
+.rc-attempt { font-size: var(--fs-xs); line-height: 1.5; overflow-wrap: anywhere; }
+.rc-attempt + .rc-attempt { margin-top: 3px; }
+
+.rc-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.rc-acts > .rc-step { flex-basis: 100%; margin: 0; }
+.rc-acts > .l2-fold { flex-basis: 100%; border-top: 0; }
+.rc-acts > .l2-fold > summary { min-height: 32px; font-size: var(--fs-xs); font-weight: 500; }
+.rc-acts > .l2-fold > .l2-fold-body { padding: 0 0 4px; }
+
+/* Reconcile one attempt: amount, not charged, how you know. */
+.rc-reconcile { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; max-width: 760px; }
+.rc-reconcile label { display: grid; gap: 4px; flex: 1 1 180px; font-size: var(--fs-xs); color: var(--text-3); }
+.rc-reconcile label.rc-check { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; min-height: 32px; font-size: var(--fs-sm); color: var(--text); }
+
+/* A hash in full, with its copy button. */
+.rc-hashline { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; max-width: 100%; }
+.rc-hashline .l2-hash { overflow-wrap: anywhere; word-break: break-all; }
+
+/* ---- your headline ---- */
+.rc-pins > li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
+.rc-pin-t { flex: 1 1 260px; min-width: 0; }
+.rc-pin-t > p { margin: 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.rc-pin-t > p + p { margin-top: 2px; }
+.rc-pin-t > .l2-mono { font-size: var(--fs-xs); }
+.rc-standing { margin: 2px 0 0; font-size: var(--fs-xs); color: var(--text-2); }
+.rc-standing.is-bad { color: var(--neg); }
+.rc-standing.is-warn { color: var(--warn); }
+
+/* ---- report history and technical records ---- */
+.rc-hist > li > p { margin: 0; }
+.rc-hist > li > p + p { margin-top: 2px; }
+.rc-hist .l2-mono { display: block; font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.rc-changes { margin-top: 4px; font-size: var(--fs-xs); }
+.rc-which .l2-mono { overflow-wrap: anywhere; }
+.rc-issues > * + * { margin-top: 8px; }
+
+/* ---- forensic receipts ---- */
+.rc-fx td { font-size: var(--fs-xs); }
+.rc-fx td:last-child { min-width: 220px; }
+
+/* ---- Contract: the token identity ---- */
+.ct-identity:focus { outline: none; }
+.ct-addr { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
+.ct-full { overflow-wrap: anywhere; word-break: break-all; color: var(--text); }
+.ct-chains > li { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+.ct-chain { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+.ct-cand-asset { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; max-width: 100%; }
+.ct-ev { font-size: var(--fs-sm); }
+.ct-ev li { overflow-wrap: anywhere; }
+.ct-dl { overflow-wrap: anywhere; }
+
+/* The identity form: every asset a row of chain, contract and remove. */
+.ct-form { max-width: 720px; }
+.ct-assets { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.ct-assets > legend { margin-bottom: 4px; padding: 0; font-size: var(--fs-xs); font-weight: 600; color: var(--text-2); }
+.ct-asset-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; align-items: end; gap: 8px; }
+@media (max-width: 767.98px) {
+  .ct-asset-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "chain remove" "contract contract";
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--separator);
+  }
+  .ct-asset-row > label:first-child { grid-area: chain; }
+  .ct-asset-row > label:nth-child(2) { grid-area: contract; }
+  .ct-asset-row > button { grid-area: remove; }
+}
+
+/* ---- Contract: the checks ---- */
+.ct-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.ct-status .cc-age { margin-left: 0; }
+.ct-alerts { font-size: var(--fs-sm); }
+.ct-contract { min-width: 0; }
+.ct-contract .cc-head { align-items: center; }
+.ct-k { font-weight: 600; color: var(--text-2); }

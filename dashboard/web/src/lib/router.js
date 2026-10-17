@@ -17,13 +17,17 @@ import { projectRedirect } from '../../../public/project-routes.js';
 const LEGACY = {
   overview: '#/watchlist',
   projects: '#/watchlist',
+  desk: '#/watchlist',
   holdings: '#/portfolio',
   compare: '#/research?tab=compare',
   evidence: '#/research?tab=evidence',
-  calendar: '#/research?tab=calendar',
+  calendar: '#/review?seg=upcoming',
 };
-const LEGACY_IMPORT_TABS = { reports: '#/updates?tab=import', inbox: '#/updates?tab=inbox', portfolio: '#/portfolio?tab=record', settings: '#/settings?tab=general', data: '#/settings?tab=data', privacy: '#/settings?tab=system' };
-export const ROUTE_NAMES = ['new', 'watchlist', 'project', 'portfolio', 'research', 'agenda', 'updates', 'settings', 'explorer'];
+const LEGACY_IMPORT_TABS = { reports: '#/review?seg=imports', inbox: '#/review?seg=imports&imp=inbox', portfolio: '#/portfolio?tab=record', settings: '#/watchlist?prefs=data', data: '#/watchlist?prefs=data', privacy: '#/watchlist?prefs=system' };
+export const ROUTE_NAMES = ['new', 'watchlist', 'project', 'portfolio', 'research', 'review', 'settings', 'explorer'];
+// Settings moved into the Preferences drawer (§3.6): its former tabs, by the
+// section that holds them now.
+const SETTINGS_TABS = { research: 'models', general: 'data', rubrics: 'rubrics', data: 'data', system: 'system', activity: 'activity', appearance: 'appearance', screening: 'screening', forensics: 'screening', developer: 'developer', explorer: 'developer' };
 
 export function parseHash(hash = location.hash) {
   const raw = hash.replace(/^#\/?/, '') || 'watchlist';
@@ -37,11 +41,13 @@ export function parseHash(hash = location.hash) {
   return { name: parts[0] || 'watchlist', args: parts.slice(1), query: new URLSearchParams(qs || '') };
 }
 
-// A page's identity: its address without the inspector's ?p=.
+// A page's identity: its address without the inspector's ?p= and the
+// Preferences drawer's ?prefs= (opening either never redraws the page).
 export function routeKey(route) {
   if (!route) return '';
   const q = new URLSearchParams(route.query);
   q.delete('p');
+  q.delete('prefs');
   return `${route.name}/${route.args.join('/')}?${q.toString()}`;
 }
 
@@ -97,11 +103,31 @@ function resolve() {
     route = parseHash();
   }
   if (route.name === 'imports') {
-    history.replaceState(history.state, '', LEGACY_IMPORT_TABS[route.query.get('tab')] || '#/updates?tab=import');
+    history.replaceState(history.state, '', LEGACY_IMPORT_TABS[route.query.get('tab')] || '#/review?seg=imports');
     route = parseHash();
   }
-  if (route.name === 'updates' && route.query.get('tab') === 'activity') {
-    history.replaceState(history.state, '', '#/settings?tab=activity');
+  // Updates and the Agenda are the Review page now (§3.4): their tabs map to
+  // its segments, and an import link keeps its project, model and run.
+  if (route.name === 'updates' || route.name === 'agenda') {
+    const tab = route.query.get('tab');
+    const keep = new URLSearchParams();
+    for (const k of ['project', 'provider', 'run']) if (route.query.get(k)) keep.set(k, route.query.get(k));
+    let to;
+    if (route.name === 'agenda') to = '#/review?seg=queue&group=due';
+    else if (tab === 'activity') to = '#/watchlist?prefs=activity';
+    else if (tab === 'import') to = `#/review?seg=imports${keep.toString() ? `&${keep.toString()}` : ''}`;
+    else if (tab === 'inbox' || tab === 'requests') to = `#/review?seg=imports&imp=${tab}`;
+    else to = '#/review?seg=queue&group=changed';
+    history.replaceState(history.state, '', to);
+    route = parseHash();
+  }
+  if (route.name === 'research' && route.query.get('tab') === 'calendar') {
+    history.replaceState(history.state, '', '#/review?seg=upcoming');
+    route = parseHash();
+  }
+  // Settings is the Preferences drawer over the Desk (§3.6).
+  if (route.name === 'settings') {
+    history.replaceState(history.state, '', `#/watchlist?prefs=${SETTINGS_TABS[route.query.get('tab')] || 'appearance'}`);
     route = parseHash();
   }
   if (route.name === 'brief' || route.name === 'project') {
@@ -210,11 +236,11 @@ export function startRouter() {
 }
 
 // The document title for a route.
-export function pageTitle(route, sections) {
+export function pageTitle(route, sections, titles = {}) {
   if (route.name === 'project') {
     const p = desk.index && desk.index.projects.find((x) => x.project_id === route.args[0]);
     return `${p ? p.name : 'Project'} · CryptoResearch`;
   }
   const s = sections.find((x) => x.id === route.name);
-  return `${s ? s.label : 'Watchlist'} · CryptoResearch`;
+  return `${s ? s.label : titles[route.name] || 'Desk'} · CryptoResearch`;
 }

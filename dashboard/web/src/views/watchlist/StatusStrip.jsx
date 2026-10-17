@@ -1,14 +1,18 @@
-// The status strip: one compact line under the title, in three groups:
-// [prices, with a rate-limit badge and its countdown, and Refresh] |
-// [Bitcoin and the market, only with a captured snapshot: each change names
-// its window] | [breadth over 30 days, what needs action (always named in
-// words, never a count alone), the review queue]. Each part opens its
-// details right under the strip; routine setup lives in Settings.
+// The Desk's KPI strip (DESIGN_AND_IA_BLUEPRINT.md §3.1; Eric, 2026-10-17):
+// one panel split by hairlines into five cells, each a way in: Market
+// (Bitcoin's price and 7-day change, dominance; opens the market details),
+// Total cap (with its 24-hour change), Beat BTC 30d (filters the list to the
+// coins ahead of Bitcoin), Needs review (the one count, D3: projects; opens
+// Review) and Research waiting (the model jobs in progress or waiting; shows
+// that view). Each change names its window. Under it, what needs action is
+// always in view, named in words. The price refresh is the header's Refresh
+// prices button (RefreshButton).
 import { useEffect, useState } from 'react';
-import { RefreshCw, Clock, TriangleAlert, Inbox, Coins, ChevronDown, ArrowUpRight } from 'lucide-react';
+import { RefreshCw, TriangleAlert, ArrowUpRight, ChevronDown } from 'lucide-react';
 import { fmtAgo, fmtAsOf, fmtChangePct, fmtMarketUsd, priceStatus, toast } from '../../../../public/ui.js';
-import { splitAttention, kindWord, breadthWords, countdownText, refreshToast, attentionHref } from '../../../../public/watchlist-model.js';
-import { api, refresh, ui } from '../../lib/desk.js';
+import { splitAttention, kindWord, countdownText, refreshToast, attentionHref, deskKpis } from '../../../../public/watchlist-model.js';
+import { api, refresh, desk } from '../../lib/desk.js';
+import { navigate } from '../../lib/router.js';
 import { Dom } from '../../components/Dom.jsx';
 import { view } from './state.js';
 
@@ -26,161 +30,173 @@ function Chg({ n, win, label }) {
   if (!s) return null;
   const dir = n < 0 ? 'down' : n > 0 ? 'up' : 'flat';
   return (
-    <span className={`ss-chg chg ${dir}`}>
+    <span className={`kpi-chg chg ${dir}`}>
       <span aria-hidden="true">{s}</span>
-      <span className="ss-win" aria-hidden="true">{win}</span>
+      <span className="kpi-win" aria-hidden="true">{win}</span>
       <span className="sr-only">{`${s.replace('−', 'minus ')} ${label}`}</span>
     </span>
   );
 }
 
-function Part({ id, open, onToggle, tone = '', children, label, className = '' }) {
-  return (
-    <button type="button" className={`ss-part ${tone ? `is-${tone}` : ''} ${className}`.trim()} aria-expanded={open === id} aria-controls="ss-panel" data-key={`ss-${id}`} aria-label={label} onClick={() => onToggle(id)}>
-      {children}
-      <ChevronDown className="ss-caret" size={13} strokeWidth={2} aria-hidden="true" />
-    </button>
-  );
-}
+// Refresh prices (the header's secondary action): asks CoinGecko now; a
+// rate limit is said with its countdown.
+// Refresh prices now: the Desk's button and the command menu's "Refresh
+// prices", each an explicit choice (CoinGecko's budget and rate limit apply).
+export const refreshPrices = async () => {
+  const m = desk.index ? desk.index.freshness.market : null;
+  try {
+    const out = await api.post('/api/market/refresh', {});
+    toast(...refreshToast(out));
+    await refresh();
+  } catch (err) {
+    toast(...refreshToast({ result: { status: 'failed', message: err.message }, status: m }));
+  }
+};
 
-function AttentionList({ items, prefix }) {
-  return (
-    <ul className="att-list">
-      {items.map((a, i) => (
-        <li key={`${a.kind}-${a.project_id || ''}-${i}`} className={`att att-${a.severity || 'low'}`}>
-          <span className={`att-kind sev-${a.severity || 'low'}`}>{a.severity === 'high' && !kindWord(a).match(/^(Check|Research|Saving|Unreadable|Import)/) ? 'Urgent' : kindWord(a)}</span>
-          <span className="att-text">
-            <span className="att-title">{a.title}</span>
-            {a.detail ? <span className="att-detail" title={a.detail}>{a.detail}</span> : null}
-          </span>
-          {a.action ? <a className="btn btn-sm" href={attentionHref(a)} data-key={`${prefix}-${i}`}>Open<ArrowUpRight size={13} aria-hidden="true" /></a> : null}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-export function StatusStrip({ d, sources }) {
-  const idx = d.index;
-  const { critical, rest } = splitAttention(idx.attention || []);
-  if (!view.stripReady && ui.get('reviewOpen', false)) view.strip = view.strip || 'review';
-  view.stripReady = true;
-  const [open, setOpen] = useState(view.strip);
+export function RefreshButton({ d }) {
+  const m = d.index.freshness.market;
   const [busy, setBusy] = useState(false);
-  let shown = open;
-  if (shown === 'review' && !rest.length) shown = null;
-  if (shown === 'action' && !critical.length) shown = null;
-  const m = idx.freshness.market;
-  const ps = priceStatus(m);
   useTick(Boolean(m.rate_limited && m.retry_at));
-  const mc = idx.market_context;
-  const snap = mc && mc.snapshot;
-  const hasSnap = Boolean(snap && snap.bitcoin && typeof snap.bitcoin.price_usd === 'number');
-  const bw = hasSnap ? breadthWords(snap.breadth && snap.breadth.d30) : null;
-  const high = rest.filter((a) => a.severity === 'high').length;
-  const toggle = (id) => {
-    const next = shown === id ? null : id;
-    view.strip = next;
-    if ((id === 'review' || shown === 'review') && rest.length) ui.set('reviewOpen', next === 'review');
-    setOpen(next);
-  };
+  const left = m.rate_limited ? countdownText(m.retry_at) : null;
   const doRefresh = async () => {
     setBusy(true);
     try {
-      const out = await api.post('/api/market/refresh', {});
-      toast(...refreshToast(out));
-      await refresh();
-    } catch (err) {
-      toast(...refreshToast({ result: { status: 'failed', message: err.message }, status: m }));
+      await refreshPrices();
     } finally {
       setBusy(false);
     }
   };
-  const demo = snap && snap.provider === 'fictional-demo';
-  const dom = snap && snap.dominance && typeof snap.dominance.btc_pct === 'number' ? snap.dominance.btc_pct : null;
-  const tm = (snap && snap.total_market) || {};
-  const kinds = [...new Set(critical.map(kindWord))];
-  const anyHigh = critical.some((a) => a.severity === 'high' || ['research_uncertain', 'research_failed', 'writes_blocked', 'broken_record'].includes(a.kind));
-  const left = m.rate_limited ? countdownText(m.retry_at) : null;
-
   return (
-    <section className="ss" aria-label="Status">
-      <div className="ss-line">
-        <div className="ss-group">
-          <Part id="prices" open={shown} onToggle={toggle} tone={ps.problem ? 'warn' : ''} label={`Prices: ${m.last_success_at ? ps.asOf : 'not fetched yet'}${ps.problem && !m.rate_limited ? `, ${ps.text}` : ''}. Details`}>
-            <Clock className="ss-ico" size={14} strokeWidth={1.8} aria-hidden="true" />
-            <span className="ss-k ss-plabel">Prices{sources.price === 'CoinGecko' ? null : <span className="ss-demo"> (demo)</span>}</span>
-            <span className="ss-v">{m.last_success_at ? fmtAgo(m.last_success_at) : 'not fetched'}</span>
-            {ps.problem && !m.rate_limited ? <span className="ss-warn">{ps.text}</span> : null}
-          </Part>
-          {m.rate_limited ? (
-            <span className="ss-rl" role="note" title={`The price source is limiting requests${m.retry_at ? `; the next automatic try is after ${fmtAsOf(m.retry_at)}` : ''}. Prices keep their age until then.`}>
-              <span className="ss-rl-dot" aria-hidden="true" />Rate limited
-              {left ? <span className="ss-rl-count" aria-hidden="true">{left === 'due' ? 'retry due' : left}</span> : null}
-              {m.retry_at ? <span className="sr-only">{`, next try after ${fmtAsOf(m.retry_at)}`}</span> : null}
-            </span>
-          ) : null}
-          <button type="button" className="btn btn-ghost btn-sm ss-refresh" data-key="refresh-prices" aria-label="Refresh prices now" disabled={busy} onClick={doRefresh}>
-            <RefreshCw size={13} strokeWidth={2} className={busy ? 'spin' : ''} aria-hidden="true" />
-            <span className="ss-refresh-lbl">{busy ? 'Refreshing…' : 'Refresh'}</span>
-          </button>
-        </div>
-        {hasSnap ? (
-          <div className="ss-group ss-market">
-            <Part id="market" open={shown} onToggle={toggle} tone={mc.status === 'stale' ? 'warn' : ''} label={`Bitcoin ${Math.round(snap.bitcoin.price_usd).toLocaleString('en-US')} dollars${dom !== null ? `, dominance ${dom.toFixed(1)} percent` : ''}. Market details`}>
-              <Coins className="ss-ico" size={14} strokeWidth={1.8} aria-hidden="true" />
-              <span className="ss-k">BTC{demo ? <span className="ss-demo"> (demo)</span> : null}</span>
-              <span className="ss-v">{`$${Math.round(snap.bitcoin.price_usd).toLocaleString('en-US')}`}</span>
-              <Chg n={snap.bitcoin.change_7d_pct} win="7d" label="over 7 days" />
-              {dom !== null ? <span className="ss-sub ss-dom"><span className="ss-dot" aria-hidden="true">·</span><span className="ss-k" title="Bitcoin dominance: its share of the total crypto market cap (CoinGecko /global)">Dom</span><span className="ss-v">{`${dom.toFixed(1)}%`}</span></span> : null}
-              {typeof tm.market_cap_usd === 'number' ? <span className="ss-sub ss-total"><span className="ss-dot" aria-hidden="true">·</span><span className="ss-k" title="Total crypto market cap (CoinGecko /global)">Total</span><span className="ss-v">{fmtMarketUsd(tm.market_cap_usd)}</span><Chg n={tm.market_cap_change_24h_pct} win="24h" label="total market cap over 24 hours" /></span> : null}
-              {mc.status === 'stale' ? <span className="ss-warn">stale</span> : null}
-            </Part>
-            {bw ? (
-              <Part id="breadth" open={shown} onToggle={toggle} label={`${bw.title} Details`} className="ss-breadth">
-                {typeof snap.breadth.d30.share_pct === 'number' ? <span className="breadth-bar" aria-hidden="true"><span style={{ width: `${Math.max(0, Math.min(100, snap.breadth.d30.share_pct))}%` }} /></span> : null}
-                <span className="ss-v">{bw.text}</span>
-                <span className="ss-win">{bw.window}</span>
-              </Part>
-            ) : null}
-          </div>
-        ) : null}
-        {critical.length || rest.length ? (
-          <div className="ss-group ss-attn">
-            {critical.length ? (
-              <Part id="action" open={shown} onToggle={toggle} tone={anyHigh ? 'bad' : 'warn'} label={`Needs action: ${critical.map((a) => a.title).join('; ')}. Details`}>
-                <TriangleAlert className="ss-ico" size={14} strokeWidth={1.9} aria-hidden="true" />
-                <span className="ss-v">{kinds.length === 1 ? kinds[0] : `${critical.length} need action`}</span>
-                {critical.length > 1 && kinds.length === 1 ? <span className="ss-k">{`×${critical.length}`}</span> : null}
-                {kinds.length > 1 ? <span className="ss-k ss-kinds">{kinds.join(' · ')}</span> : null}
-              </Part>
-            ) : null}
-            {rest.length ? (
-              <Part id="review" open={shown} onToggle={toggle} tone={high ? 'warn' : ''} label={`${rest.length} ${rest.length === 1 ? 'item' : 'items'} in the review queue (one project can have several)${high ? `, ${high} urgent` : ''}. Details`}>
-                <Inbox className="ss-ico" size={14} strokeWidth={1.8} aria-hidden="true" />
-                <span className="ss-v">{rest.length}</span>
-                <span className="ss-k">to review</span>
-                {high ? <span className="ss-warn">{`${high} urgent`}</span> : null}
-              </Part>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
-      {shown ? (
-        <div className="ss-panel" id="ss-panel" role="region" aria-label="Status details">
-          {shown === 'action' ? <><h2>{`Needs action (${critical.length})`}</h2><AttentionList items={critical} prefix="alert" /></> : null}
-          {shown === 'review' ? <><h2>{`To review (${rest.length})`}</h2><AttentionList items={rest} prefix="att" /></> : null}
-          {shown === 'prices' ? (
+    <>
+      {m.rate_limited ? (
+        <span className="badge is-warn kpi-rl" role="note" title={`The price source is limiting requests${m.retry_at ? `; the next automatic try is after ${fmtAsOf(m.retry_at)}` : ''}. Prices keep their age until then.`}>
+          Rate limited{left ? <span className="kpi-rl-count" aria-hidden="true">{left === 'due' ? ' · retry due' : ` · ${left}`}</span> : null}
+          {m.retry_at ? <span className="sr-only">{`, next try after ${fmtAsOf(m.retry_at)}`}</span> : null}
+        </span>
+      ) : null}
+      <button type="button" className="btn" data-key="refresh-prices" aria-label="Refresh prices now" disabled={busy} onClick={doRefresh}>
+        <RefreshCw size={14} strokeWidth={2} className={busy ? 'spin' : ''} aria-hidden="true" />
+        <span>{busy ? 'Refreshing…' : 'Refresh prices'}</span>
+      </button>
+    </>
+  );
+}
+
+function Cell({ id, label, children, onClick, title, sub = null, active = false, aria }) {
+  const inner = (
+    <>
+      <span className="kpi-k">{label}</span>
+      <span className="kpi-v">{children}</span>
+      {sub ? <span className="kpi-s">{sub}</span> : null}
+    </>
+  );
+  if (!onClick) return <div className="kpi-cell" title={title} data-key={`kpi-${id}`}>{inner}</div>;
+  return (
+    <button type="button" className={`kpi-cell is-link${active ? ' is-on' : ''}`} title={title} data-key={`kpi-${id}`} aria-label={aria} aria-pressed={active || undefined} onClick={onClick}>
+      {inner}
+      <ArrowUpRight className="kpi-go" size={13} aria-hidden="true" />
+    </button>
+  );
+}
+
+export function KpiStrip({ d, agenda = null, sources, filters, onView, onBeat }) {
+  const idx = d.index;
+  const k = deskKpis(idx, agenda);
+  const m = idx.freshness.market;
+  const ps = priceStatus(m);
+  const [open, setOpen] = useState(view.strip === 'market' ? 'market' : null);
+  const toggle = (id) => { const next = open === id ? null : id; view.strip = next; setOpen(next); };
+  const demo = k.market && k.market.demo;
+  return (
+    <section className="kpi" aria-label="Market and what needs you">
+      <div className="kpi-row">
+        <Cell
+          id="market"
+          label={<>Market{demo || sources.price !== 'CoinGecko' ? <span className="kpi-demo"> (demo)</span> : null}</>}
+          onClick={k.market ? () => toggle('market') : null}
+          active={open === 'market'}
+          aria={k.market ? `Bitcoin ${Math.round(k.market.btc).toLocaleString('en-US')} dollars${k.market.dominance !== null ? `, dominance ${k.market.dominance.toFixed(1)} percent` : ''}. Market details` : undefined}
+          title={k.market ? 'Bitcoin, its 7-day change and its dominance of the total market cap (CoinGecko /global)' : 'No market snapshot captured yet'}
+          sub={<span className={ps.problem ? 'kpi-warn' : undefined} title={ps.note || undefined}>{`Prices ${m.last_success_at ? fmtAgo(m.last_success_at) : 'not fetched'}${ps.problem && !m.rate_limited ? ` · ${ps.text}` : ''}`}</span>}
+        >
+          {k.market ? (
             <>
-              <h2>Prices</h2>
-              <p>{`${m.last_success_at ? ps.asOf : 'No prices fetched yet'} · source: ${sources.price}.`}</p>
-              {ps.note ? <p className={ps.problem ? 'ss-warn-text' : ''}>{ps.problem ? 'Note: ' : ''}{ps.note}</p> : null}
-              {ps.retryAt ? <p>{`Next try after ${fmtAsOf(ps.retryAt)}.`}</p> : null}
+              <span className="kpi-num">{`BTC $${Math.round(k.market.btc).toLocaleString('en-US')}`}</span>
+              <Chg n={k.market.change_7d} win="7d" label="over 7 days" />
+              {k.market.dominance !== null ? <span className="kpi-sub2">{`Dom ${k.market.dominance.toFixed(1)}%`}</span> : null}
+              {k.market.stale ? <span className="kpi-warn">stale</span> : null}
             </>
-          ) : null}
-          {shown === 'market' || shown === 'breadth' ? <Dom build={(L) => L.marketStrip(idx)} deps={[idx]} /> : null}
+          ) : <span className="faint">No snapshot</span>}
+          {open === 'market' ? <ChevronDown className="kpi-open" size={13} aria-hidden="true" /> : null}
+        </Cell>
+        <Cell id="total" label="Total cap" title="Total crypto market cap (CoinGecko /global)">
+          {k.total ? <><span className="kpi-num">{fmtMarketUsd(k.total.usd)}</span><Chg n={k.total.change_24h} win="24h" label="total market cap over 24 hours" /></> : <span className="faint">—</span>}
+        </Cell>
+        <Cell
+          id="beat"
+          label="Beat BTC (30d)"
+          onClick={k.beat ? onBeat : null}
+          active={filters.beat === 'yes'}
+          title={k.beat ? `${k.beat.words.title} Select to show the projects on your list that beat Bitcoin over 30 days.` : 'No breadth figure captured yet'}
+          aria={k.beat ? `${k.beat.n} of ${k.beat.of} beat Bitcoin over 30 days. Show the projects on your list that did` : undefined}
+        >
+          {k.beat ? (
+            <>
+              <span className="kpi-num">{`${k.beat.n} / ${k.beat.of}`}</span>
+              {typeof k.beat.share === 'number' ? <span className="breadth-bar" aria-hidden="true"><span style={{ width: `${Math.max(0, Math.min(100, k.beat.share))}%` }} /></span> : null}
+            </>
+          ) : <span className="faint">—</span>}
+        </Cell>
+        <Cell
+          id="review"
+          label="Needs review"
+          onClick={() => navigate('#/review')}
+          title="Projects with changes since your review, a review of yours due, or research waiting for you. One project counts once."
+          aria={`${k.review.projects} project${k.review.projects === 1 ? '' : 's'} need your review. Open Review`}
+        >
+          <span className="kpi-num">{k.review.projects}</span><span className="kpi-unit">{k.review.projects === 1 ? 'project' : 'projects'}</span>
+        </Cell>
+        <Cell
+          id="waiting"
+          label="Research waiting"
+          onClick={() => onView('waiting')}
+          active={filters.owned === 'waiting'}
+          title="Model jobs queued, working, paused or waiting for you (a model on hold has none)"
+          aria={`${k.waiting.jobs} research job${k.waiting.jobs === 1 ? '' : 's'} waiting on a model. Show them`}
+        >
+          <span className="kpi-num">{k.waiting.jobs}</span><span className="kpi-unit">{k.waiting.jobs === 1 ? 'job' : 'jobs'}</span>
+        </Cell>
+      </div>
+      {open === 'market' ? (
+        <div className="kpi-panel" role="region" aria-label="Market details">
+          <Dom build={(L) => L.marketStrip(idx)} deps={[idx]} />
         </div>
       ) : null}
+    </section>
+  );
+}
+
+// What needs action, never folded away: a paid call that may have been
+// billed with no answer, research that failed or stalled, records or saving
+// that need recovery. Each says its kind in words, with its way in.
+export function ActionBand({ d }) {
+  const { critical } = splitAttention(d.index.attention || []);
+  const [all, setAll] = useState(false);
+  if (!critical.length) return null;
+  const anyHigh = critical.some((a) => a.severity === 'high' || ['research_uncertain', 'research_failed', 'writes_blocked', 'broken_record'].includes(a.kind));
+  return (
+    <section className={`action-band ${anyHigh ? 'is-bad' : 'is-warn'}`} aria-label={`Needs action: ${critical.length}`}>
+      <TriangleAlert className="ab-ico" size={15} aria-hidden="true" />
+      <ul className="ab-list">
+        {(all ? critical : critical.slice(0, 4)).map((a, i) => (
+          <li key={`${a.kind}-${a.project_id || ''}-${i}`}>
+            <strong>{kindWord(a)}</strong>
+            <span className="ab-t" title={a.detail || undefined}>{` · ${a.title}`}</span>
+            {a.action ? <a className="ab-go" href={attentionHref(a)} data-key={`alert-${i}`}>Open</a> : null}
+          </li>
+        ))}
+        {critical.length > 4 ? <li><button type="button" className="btn btn-ghost btn-sm ab-more" data-key="alert-more" aria-expanded={all} onClick={() => setAll(!all)}>{all ? 'Show fewer' : `${critical.length - 4} more`}</button></li> : null}
+      </ul>
     </section>
   );
 }

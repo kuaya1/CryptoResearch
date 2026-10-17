@@ -349,6 +349,16 @@ function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = 
     } catch (err) {
       screening = { state: 'unavailable', reason: `The saved contract screen could not be read: ${err.message}` };
     }
+    // The forensic summary (forensics.js summary, the Forensics tab's own
+    // view): the Desk's Risk and Exit columns; null with no forensic record.
+    let forensic = null;
+    if (!light) {
+      try {
+        forensic = require('./forensics').summary(ws, p.project_id, { now });
+      } catch (err) {
+        forensic = { audited: false, unavailable: true, error: err.message };
+      }
+    }
     const position = held.get(p.project_id) || null;
     const archived = p.status === 'archived';
 
@@ -527,6 +537,7 @@ function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = 
       market: mkt,
       fundamentals,
       screening,
+      forensic,
       created_at: p.created_at,
       updated_at: p.updated_at,
     });

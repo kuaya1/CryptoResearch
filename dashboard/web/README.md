@@ -1,9 +1,11 @@
 # The desk's browser app (React + Vite)
 
-The browser app for CryptoResearch: the watchlist, the project inspector and
-the project page, and the shell (sidebar, phone top bar and tab bar) around
-every other page. React, a component library and a dev server with immediate
-refresh were approved by Eric on 2026-10-08.
+The browser app for CryptoResearch: the Desk (Level 0), the project inspector
+(Level 1), the project page (Level 2), Review, the command menu, Preferences,
+and the shell (the rail, the phone top bar and tab bar) around every other
+page. React, a component library and a dev server with immediate refresh were
+approved by Eric on 2026-10-08; the layout follows
+`DESIGN_AND_IA_BLUEPRINT.md` at the repository root (approved 2026-10-17).
 
 The Node server (`dashboard/server.js`) needs **no** npm packages. This folder
 is build tooling only: its production build is committed to
@@ -31,18 +33,29 @@ nothing from this folder.
 - `src/lib/` the desk store (`desk.js`: one read of `/api/index`, the bounded
   live poll, API calls), the hash router (`router.js`: Back, deep links, scroll
   and focus memory) and hooks.
-- `src/shell/` the sidebar, the phone top bar and tab bar, the More sheet.
+- `src/shell/` the rail (Desk, Review, Portfolio, Research; Search, Preferences,
+  the connection and Sign out at its foot; 208px or 56px), the phone top bar and
+  tab bar, the More sheet, the command menu (`CommandMenu.jsx`, ⌘K / Ctrl+K)
+  and the Preferences drawer (`Preferences.jsx`, ⌘, / Ctrl+,, `?prefs=<section>`
+  on any page; `overlays.js` opens both).
 - `src/components/` the small component library: grade pills, the metric header and
   score bars, figures, logos, menus (Radix), the `Dom` adapter for parts the
   app still hosts; `src/components/ui/` the terminal's components
   (MetricRibbon, DiagnosticSegmentBar, ModelTabMatrix, SecurityAuditStrip,
   LedgerTable), styled in `src/styles/ui.css`.
-- `src/views/` the watchlist, the inspector and the project page (Overview in
-  React; Compare, Evidence, Full report, Market and Notes hosted).
+- `src/views/` the Desk (`watchlist/`: the KPI strip, the view tabs, the
+  seven-column table), the inspector (`inspector/`: six blocks), the project
+  page (`project/`: Brief, Evidence, Forensics with its four segments, Market,
+  Contract, Report, Record and Notes, and Compare as the model switcher's
+  fourth segment; shared parts in `project/kit.jsx`) and Review (`review/`:
+  the queue, the chosen project and the evidence for the change, with the
+  Upcoming and Imports segments).
+- `src/lib/agenda.js` reads the review agenda once per index for the rail, the
+  Desk and Review, so all three count the same projects.
 - `src/legacy/` hosts the views not yet ported (Portfolio and wallets, New
-  research, Research, Updates, Explorer, Settings, and the project page's
-  other tabs) inside the shell, unchanged in behaviour. Their stylesheets are
-  scoped under `.lg` at build time (`scope-legacy.js`).
+  research, Research, Explorer, the Imports tabs and the Settings sections the
+  Preferences drawer shows) inside the shell, unchanged in behaviour. Their
+  stylesheets are scoped under `.lg` at build time (`scope-legacy.js`).
 - `src/styles/` the app's CSS. The one token layer is
   `dashboard/public/tokens.css` (light, dark, reduced motion, icons), shared
   with the hosted views, the sign-in page and the OAuth consent page.
@@ -50,7 +63,9 @@ nothing from this folder.
 The pure rules stay in `dashboard/public` and are shared by both sides:
 `ui.js` (formatters, states, tiers), `brief-model.js`, `thesis-ui.js`,
 `compare-desk.js` / `compare-model.js`, `watchlist-model.js` (sorting,
-filters, readiness, contract checks) and `project-routes.js`.
+filters, views, readiness, contract checks, the canonical grade, the Risk and
+Exit cells, the KPI figures), `review-model.js` (the Review queue and the
+calendar) and `project-routes.js`.
 
 ## Rules
 

@@ -1,0 +1,89 @@
+/* The project page's sections (Level 2): panels, folds, facts, tables,
+   pagers, filters and segmented choices (views/project/kit.jsx). Warm ledger
+   (§3.7): white panels with a hairline and 4px corners on the canvas, no
+   shadow; a panel's head is a band; dense rows ruled by the separator. */
+
+.l2-stack { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.l2-grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+@media (max-width: 1023.98px) { .l2-grid2 { grid-template-columns: minmax(0, 1fr); } }
+
+.l2-panel { min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); }
+.l2-panel-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; padding: 10px 16px; background: var(--surface-band); border-bottom: 1px solid var(--border); border-radius: var(--r-card) var(--r-card) 0 0; }
+.l2-panel-t { font-size: var(--fs-md); font-weight: 600; letter-spacing: 0; }
+.l2-panel-t:focus { outline: none; }
+.l2-panel-sub { font-size: var(--fs-xs); color: var(--text-3); }
+.l2-panel-act { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.l2-panel-body { padding: 14px 16px; min-width: 0; }
+.l2-panel-body > * + * { margin-top: 12px; }
+.l2-panel-body > .l2-table-wrap:first-child { margin: -14px -16px 0; }
+@media (max-width: 767.98px) {
+  .l2-panel-head { padding: 9px 12px; }
+  .l2-panel-body { padding: 12px; }
+  .l2-panel-body > .l2-table-wrap:first-child { margin: -12px -12px 0; }
+}
+
+/* A fold: the summary is a row with its title and a count; open, its body
+   sits under a hairline. */
+.l2-fold { border-top: 1px solid var(--separator); min-width: 0; }
+.l2-panel-body > .l2-fold:first-child { border-top: 0; }
+.l2-fold > summary { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px 0; cursor: pointer; list-style: none; font-weight: 600; font-size: var(--fs-sm); color: var(--text); }
+.l2-fold > summary::-webkit-details-marker { display: none; }
+.l2-fold > summary::before { content: ""; width: 12px; height: 12px; flex: none; background: var(--text-3); -webkit-mask: var(--i-chevron) center / contain no-repeat; mask: var(--i-chevron) center / contain no-repeat; transform: rotate(-90deg); transition: transform var(--dur) var(--ease); }
+.l2-fold[open] > summary::before { transform: none; }
+.l2-fold > summary:hover .l2-fold-t { text-decoration: underline; text-decoration-color: var(--link-line); text-underline-offset: 3px; }
+.l2-fold-body { padding: 4px 0 14px 20px; min-width: 0; }
+.l2-fold-body > * + * { margin-top: 10px; }
+@media (max-width: 767.98px) { .l2-fold-body { padding-left: 0; } }
+.l2-count { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 6px; border-radius: var(--r-pill); background: var(--badge-bg); color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; }
+
+/* Facts: label over value in a grid; a wide fact takes the row. */
+.l2-kv { margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px 18px; }
+.l2-kv > div { min-width: 0; }
+.l2-kv > div.is-wide { grid-column: 1 / -1; }
+.l2-kv dt { font-size: var(--fs-xs); color: var(--text-3); }
+.l2-kv dd { margin: 2px 0 0; font-size: var(--fs-sm); color: var(--text); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+
+/* A dense ledger table: 12px heads, rows ruled by the separator. */
+.l2-table-wrap { overflow-x: auto; min-width: 0; }
+.l2-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); font-variant-numeric: tabular-nums lining-nums; }
+.l2-table th { height: var(--head-h); padding: 0 var(--cell-x); text-align: left; font-size: var(--fs-xs); font-weight: 500; color: var(--text-3); background: var(--surface-band); border-bottom: 1px solid var(--border); white-space: nowrap; }
+.l2-table td { padding: var(--cell-y) var(--cell-x); border-bottom: 1px solid var(--separator); vertical-align: top; color: var(--text); overflow-wrap: anywhere; }
+.l2-table tr:last-child td { border-bottom: 0; }
+.l2-table .num { text-align: right; white-space: nowrap; }
+.l2-table tbody tr:hover td { background: var(--row-hover); }
+
+.l2-pre { margin: 0; padding: 12px 14px; max-height: 480px; overflow: auto; border-radius: var(--r-well); background: var(--surface-sunken); border: 1px solid var(--separator); font-family: var(--mono); font-size: var(--fs-xs); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+
+.l2-pager { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; font-size: var(--fs-xs); color: var(--text-3); }
+.l2-pager-n { margin-right: auto; font-variant-numeric: tabular-nums; }
+.l2-pager-p { font-variant-numeric: tabular-nums; }
+
+/* Filters over a list: fields in a row, the active ones as removable
+   label | value chips (as on the Desk). */
+.l2-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; }
+.l2-filters label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-xs); color: var(--text-3); min-width: 140px; }
+.l2-filters .input { height: 30px; }
+
+.l2-seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; border-radius: var(--r-button); background: var(--surface-track); border: 1px solid var(--border); }
+.l2-seg button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 0; border-radius: calc(var(--r-button) - 2px); background: transparent; color: var(--text-2); font: inherit; font-size: var(--fs-sm); font-weight: 500; cursor: pointer; white-space: nowrap; }
+.l2-seg button:hover { color: var(--text); }
+.l2-seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--shadow-seg); }
+@media (pointer: coarse) { .l2-seg button { height: 36px; } }
+
+.l2-ext { display: inline-flex; align-items: center; gap: 3px; overflow-wrap: anywhere; }
+.l2-mono { font-family: var(--mono); font-size: var(--fs-xs); }
+.l2-hash { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-2); }
+.l2-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.l2-note { font-size: var(--fs-xs); color: var(--text-3); max-width: 80ch; }
+.l2-lead { font-size: var(--fs-md); line-height: 1.6; color: var(--text); max-width: 72ch; }
+.l2-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); }
+.l2-plain { list-style: none; margin: 0; padding: 0; }
+.l2-rows { list-style: none; margin: 0; padding: 0; }
+.l2-rows > li { padding: 10px 0; border-top: 1px solid var(--separator); min-width: 0; }
+.l2-rows > li:first-child { border-top: 0; padding-top: 0; }
+.l2-form { display: grid; gap: 10px; max-width: 640px; }
+.l2-form label { display: grid; gap: 4px; font-size: var(--fs-xs); color: var(--text-3); }
+.l2-form textarea.input { height: auto; min-height: 72px; padding: 8px 10px; resize: vertical; line-height: 1.5; }
+.l2-form .l2-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.l2-form .l2-row > label { flex: 1 1 160px; }
+.l2-err { color: var(--neg); font-size: var(--fs-xs); }

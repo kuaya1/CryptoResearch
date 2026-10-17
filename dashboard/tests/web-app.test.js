@@ -128,11 +128,28 @@ test('the app shows report text as text: no HTML from strings anywhere in the Re
 test('the app writes only from explicit actions, and nothing from the boot or a live update', () => {
   const files = walk(path.join(WEB, 'src'), (p) => /\.(jsx?)$/.test(p)).map((f) => [path.relative(path.join(WEB, 'src'), f).split(path.sep).join('/'), fs.readFileSync(f, 'utf8')]);
   const writers = files.filter(([, s]) => /api\.post\(/.test(s)).map(([f]) => f).sort();
-  assert.deepEqual(writers, ['lib/desk.js', 'lib/review.js', 'views/agenda/Agenda.jsx', 'views/inspector/ModelPanel.jsx', 'views/project/Forensics.jsx', 'views/project/forensics/Disagreements.jsx', 'views/project/forensics/ExitCompare.jsx', 'views/project/forensics/OutcomeRegister.jsx', 'views/watchlist/StatusStrip.jsx', 'views/watchlist/state.js']);
+  assert.deepEqual(writers, ['lib/desk.js', 'lib/review.js', 'shell/Preferences.jsx', 'views/agenda/Agenda.jsx', 'views/inspector/ModelPanel.jsx', 'views/project/Contract.jsx', 'views/project/Evidence.jsx', 'views/project/Forensics.jsx', 'views/project/Notes.jsx', 'views/project/Record.jsx', 'views/project/Report.jsx', 'views/project/forensics/Disagreements.jsx', 'views/project/forensics/ExitCompare.jsx', 'views/project/forensics/OutcomeRegister.jsx', 'views/review/Review.jsx', 'views/watchlist/StatusStrip.jsx', 'views/watchlist/state.js']);
   // The re-audit's parts (2026-10-17) each post one path, from a button:
   // a judgment, an explicit fixed-token quote, an outcome note, and the
   // agenda's Done, Snooze and Reopen. The case package is a read.
-  const posts = (f) => [...files.find(([n]) => n === f)[1].matchAll(/api\.post\(`([^`]+)`|api\.post\((path)/g)].map((m) => m[1] || m[2]);
+  const posts = (f) => [...files.find(([n]) => n === f)[1].matchAll(/api\.post\(`([^`]+)`|api\.post\('([^']+)'|api\.post\((path)/g)].map((m) => m[1] || m[2] || m[3]);
+  // The Level 2 sections ported to React (DESIGN_AND_IA_BLUEPRINT.md §3.3,
+  // 2026-10-17) post the same paths the hosted views did, each from its own
+  // button; the Review page adds and completes your reviews; Preferences
+  // saves settings (the Screening branch); the command menu writes nothing
+  // itself (it presses the page's own buttons and opens the same dialogs).
+  const uniq = (f) => [...new Set(posts(f))].sort();
+  assert.deepEqual(uniq('views/project/Contract.jsx'), ['/api/projects/${enc(pid)}/identity']);
+  assert.deepEqual(uniq('views/project/Evidence.jsx'), ['/api/projects/${enc(pid)}/claims', '/api/projects/${enc(pid)}/disputes']);
+  assert.deepEqual(uniq('views/project/Notes.jsx'), ['/api/projects/${enc(pid)}/journal', '/api/projects/${enc(pid)}/note', '/api/scopes/${enc(pid)}/events', '/api/scopes/${enc(pid)}/events/${enc(e.event_id)}']);
+  assert.deepEqual(uniq('views/project/Record.jsx'), ['/api/projects/${enc(pid)}/headline', '/api/projects/${enc(pid)}/prompts', '/api/projects/${enc(pid)}/research/${enc(run.run_id)}/jobs/${prov}/reconcile', '/api/projects/${enc(pid)}/research/${enc(runId)}/jobs/${prov}/cancel', '/api/projects/${enc(pid)}/research/${enc(runId)}/jobs/${prov}/retry']);
+  assert.deepEqual(uniq('views/project/Report.jsx'), ['/api/projects/${enc(pid)}/reports/${enc(rid)}/corrections']);
+  assert.deepEqual(uniq('views/review/Review.jsx'), ["/api/scopes/${enc(c.project_id || 'portfolio')}/events/${enc(c.event_id)}", '/api/scopes/${enc(scope)}/events']);
+  assert.deepEqual(uniq('shell/Preferences.jsx'), ['/api/settings']);
+  assert.deepEqual(uniq('views/watchlist/StatusStrip.jsx'), ['/api/market/refresh']);
+  assert.doesNotMatch(files.find(([n]) => n === 'shell/CommandMenu.jsx')[1], /api\.post|sendReview\(/, 'the command menu writes nothing itself');
+  const prefsSrc = files.find(([n]) => n === 'shell/Preferences.jsx')[1];
+  assert.match(prefsSrc, /api\.post\('\/api\/settings', \{ forensics: \{ preferences: out \} \}\)/, 'Preferences saves only the Screening branch itself');
   assert.deepEqual(posts('views/project/forensics/Disagreements.jsx'), ['/api/projects/${enc(pid)}/forensics/judgments']);
   assert.deepEqual(posts('views/project/forensics/ExitCompare.jsx'), ['/api/projects/${enc(pid)}/forensics/exit-compare/quote']);
   assert.deepEqual(posts('views/project/forensics/OutcomeRegister.jsx'), ['/api/projects/${enc(pid)}/forensics/outcome-notes']);

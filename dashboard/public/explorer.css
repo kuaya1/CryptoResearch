@@ -36,10 +36,10 @@
 .xp-who { grid-area: who; display: flex; align-items: center; gap: 10px; min-width: 0; }
 .xp-who .logo { width: 24px; height: 24px; min-width: 24px; font-size: var(--fs-caption); font-weight: 600; color: var(--text-2); background: var(--bg); box-shadow: inset 0 0 0 1px var(--border); }
 .xp-who .names { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.xp-who .pname { font-size: 14px; font-weight: 600; line-height: 1.3; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xp-who .pname { font-size: var(--fs-md); font-weight: 600; line-height: 1.3; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .xp-who .sub { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .xp-who .tick { font-size: var(--fs-caption); font-weight: 500; color: var(--text-3); text-transform: uppercase; }
-.xp-model { flex: none; padding: 0 8px; line-height: 18px; border-radius: var(--r-pill); background: var(--surface-sunken); font-size: var(--fs-caption); font-weight: 500; color: var(--text-2); }
+.xp-model { flex: none; padding: 0 8px; line-height: 18px; border-radius: var(--r-badge); background: var(--surface-sunken); font-size: var(--fs-caption); font-weight: 500; color: var(--text-2); }
 .xp-toggle, .xp-compare { margin-left: auto; min-height: 28px; }
 .xp-compare + .xp-toggle { margin-left: 0; }
 
@@ -56,10 +56,10 @@
 .xp-val.tier-5 { color: var(--t5-ink); }
 
 .xp-meta { grid-area: meta; display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s3); min-width: 0; font-size: var(--fs-caption); color: var(--text-2); }
-.xp-grade { padding: 0 8px; line-height: 20px; border-radius: var(--r-pill); background: var(--surface-sunken); color: var(--text); font-weight: 500; white-space: nowrap; }
+.xp-grade { padding: 0 8px; line-height: 20px; border-radius: var(--r-badge); background: var(--surface-sunken); color: var(--text); font-weight: 500; white-space: nowrap; }
 /* Withheld: hatched, as on the rest of the desk. */
-.xp-grade.g-withheld, .xp-grade.g-invalid_weights { background: repeating-linear-gradient(135deg, var(--track) 0 4px, var(--surface) 4px 8px); box-shadow: inset 0 0 0 1px var(--border); color: var(--text-2); }
-.xp-chip { padding: 0 8px; line-height: 20px; border-radius: var(--r-pill); border: 1px solid var(--separator); color: var(--text-2); white-space: nowrap; }
+.xp-grade.g-withheld, .xp-grade.g-invalid_weights { background: repeating-linear-gradient(135deg, var(--track) 0 4px, var(--surface) 4px 8px); box-shadow: none; color: var(--text-2); }
+.xp-chip { padding: 0 8px; line-height: 20px; border-radius: var(--r-badge); border: 0; color: var(--text-2); white-space: nowrap; }
 .xp-chip.rev { border-color: var(--border); color: var(--text); }
 .xp-flag { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-weight: 500; color: var(--text); }
 .xp-flag .mark { width: 8px; height: 8px; border-radius: 50%; flex: none; }
@@ -107,7 +107,7 @@ dialog.xp-cmp-dlg { max-width: min(1000px, calc(100vw - 24px)); }
 .xp-cmp-head { display: flex; align-items: center; gap: 10px; margin-bottom: var(--s3); min-width: 0; }
 .xp-cmp-head .logo { width: 28px; height: 28px; min-width: 28px; font-size: var(--fs-caption); font-weight: 600; color: var(--text-2); background: var(--bg); box-shadow: inset 0 0 0 1px var(--border); }
 .xp-cmp-head .names { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
-.xp-cmp-head .pname { font-size: 16px; font-weight: 600; color: var(--text); }
+.xp-cmp-head .pname { font-size: var(--fs-lg); font-weight: 600; color: var(--text); }
 .xp-cmp-head .tick { font-size: var(--fs-small); font-weight: 500; color: var(--text-3); text-transform: uppercase; }
 .xp-cmp-head .xp-demo { margin-left: auto; }
 .xp-cmp-pickers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2) var(--s3); margin-bottom: var(--s4); }
@@ -120,7 +120,7 @@ dialog.xp-cmp-dlg { max-width: min(1000px, calc(100vw - 24px)); }
    details folded under it. */
 .xp-cmp-summary { display: grid; gap: 6px; margin-bottom: var(--s3); }
 .xp-cmp-line1 { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; font-size: var(--fs-small); }
-.xp-cmp-line1 .model { font-size: 14px; font-weight: 600; color: var(--text); }
+.xp-cmp-line1 .model { font-size: var(--fs-md); font-weight: 600; color: var(--text); }
 .xp-cmp-line1 .xp-grade { background: var(--surface-sunken); }
 .xp-cmp-line1.empty .none { color: var(--text-2); }
 .xp-cmp-status { margin-bottom: var(--s2); padding: 10px 14px; border-radius: var(--r-well); font-size: var(--fs-small); color: var(--text); }
@@ -135,7 +135,7 @@ dialog.xp-cmp-dlg { max-width: min(1000px, calc(100vw - 24px)); }
 .xp-cmp-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); margin-bottom: var(--s3); }
 .xp-cmp-side { min-width: 0; padding: var(--s3) 14px; border-radius: var(--r-well); background: var(--surface-sunken); font-size: var(--fs-small); }
 .xp-cmp-side .who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-bottom: var(--s2); }
-.xp-cmp-side .model { font-size: 14px; font-weight: 600; color: var(--text); }
+.xp-cmp-side .model { font-size: var(--fs-md); font-weight: 600; color: var(--text); }
 .xp-cmp-side .where { font-size: var(--fs-caption); color: var(--text-2); }
 .xp-cmp-side .grade-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: var(--s2); }
 .xp-cmp-side .grade-line .xp-grade { background: var(--surface); }
@@ -165,7 +165,7 @@ dialog.xp-cmp-dlg { max-width: min(1000px, calc(100vw - 24px)); }
 .xp-cmp-counts { margin: 0 0 var(--s3); font-size: var(--fs-small); color: var(--text-2); }
 
 .xp-cmp-listhead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); padding-top: var(--s3); border-top: 1px solid var(--separator); }
-.xp-cmp-listhead h3 { font-family: var(--sans); font-size: 14px; font-weight: 600; }
+.xp-cmp-listhead h3 { font-family: var(--sans); font-size: var(--fs-md); font-weight: 600; }
 .xp-cmp-listhead .note { flex-basis: 100%; margin: 0; font-size: var(--fs-caption); color: var(--text-2); }
 .xp-cmp-rows { list-style: none; margin: var(--s2) 0 0; padding: 0; }
 .xp-cmp-row { display: grid; grid-template-columns: minmax(140px, 0.8fr) minmax(0, 1.8fr) minmax(200px, 1fr); grid-template-areas: "name pair verdict" "more more more"; align-items: center; gap: 0 var(--s4); padding: 10px 0; border-top: 1px solid var(--separator); }

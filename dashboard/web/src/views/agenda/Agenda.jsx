@@ -6,16 +6,16 @@
 // Done, Snooze and Reopen are explicit clicks, each with one request ID kept
 // until it is answered, so a retry after a lost answer is "unchanged". No
 // notification, no research, no grade or monitoring change.
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { fmtDate, toast } from '../../../../public/ui.js';
 import { api, refresh } from '../../lib/desk.js';
-import { useDesk } from '../../lib/hooks.js';
+import { useAgendaRead } from '../../lib/agenda.js';
 import '../../styles/agenda.css';
 
 const enc = encodeURIComponent;
 const rid = (p) => `${p}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
-const SUPPORT = {
+export const SUPPORT = {
   receipt: (s) => `Receipt ${s.receipt_id}${s.checkpoint ? `, ${s.checkpoint} checkpoint` : ''}${s.metric ? `, ${s.metric.replace(/_/g, ' ')}` : ''}`,
   challenge: (s) => `Challenge ${s.receipt_id} of ${s.assessment_receipt_id}, finding ${s.finding_id}`,
   observation: (s) => `Observation ${s.obs_id || '—'}`,
@@ -23,25 +23,14 @@ const SUPPORT = {
   event: () => 'Your review on the Notes tab',
 };
 
-// GET /api/agenda, read again when the index changes; an answer that a
-// newer read replaced is never drawn.
-function useAgenda() {
-  const d = useDesk();
-  const [attempt, setAttempt] = useState(0);
-  const [st, setSt] = useState({ a: null, error: null });
-  const index = d.index;
-  useEffect(() => {
-    const ctrl = new AbortController();
-    api.get('/api/agenda', { signal: ctrl.signal }).then(
-      (a) => { if (!ctrl.signal.aborted) setSt({ a, error: null }); },
-      (error) => { if (!ctrl.signal.aborted && error.name !== 'AbortError') setSt((s) => ({ a: s.a, error })); },
-    );
-    return () => ctrl.abort();
-  }, [index, attempt]);
-  return { ...st, retry: () => setAttempt((x) => x + 1) };
+// GET /api/agenda, read again when the index changes (one read shared with
+// the rail and the Desk, lib/agenda.js); an answer that a newer read replaced
+// is never drawn.
+export function useAgenda() {
+  return useAgendaRead();
 }
 
-function Act({ pid, item }) {
+export function Act({ pid, item }) {
   const [snoozing, setSnoozing] = useState(false);
   const [until, setUntil] = useState(() => ymd(Date.now() + 7 * 86400000));
   const [busy, setBusy] = useState(false);
@@ -116,7 +105,7 @@ function Act({ pid, item }) {
   );
 }
 
-function Item({ pid, item, primary = false }) {
+export function Item({ pid, item, primary = false, acts = true }) {
   const s = item.support || {};
   return (
     <div className={`ag-item${primary ? ' is-primary' : ''}${item.due ? ' is-due' : ''}`}>
@@ -127,7 +116,7 @@ function Item({ pid, item, primary = false }) {
       </p>
       <p className="ag-why">{item.why}</p>
       <p className="ag-src faint">{(SUPPORT[s.kind] || (() => ''))(s)}{item.snoozed ? ` · snoozed until ${fmtDate(item.snoozed.until)}` : ''}{item.completed ? ` · done ${fmtDate(item.completed.at)}` : ''}</p>
-      <Act pid={pid} item={item} />
+      {acts ? <Act pid={pid} item={item} /> : null}
     </div>
   );
 }

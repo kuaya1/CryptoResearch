@@ -13,9 +13,9 @@
 .mribbon-cell { padding: 8px 10px; min-width: 0; }
 .mribbon-cell + .mribbon-cell { border-left: 1px solid var(--border); }
 .mribbon-cell dt { font-size: var(--fs-xs); font-weight: 500; color: var(--text-3); line-height: 1.4; }
-.mribbon-cell dd { margin: 2px 0 0; font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-@media (max-width: 419.98px) { .mribbon-cell { padding: 8px; } .mribbon-cell dd { font-size: 14px; } }
-@media (max-width: 379.98px) { .mribbon-cell dd { font-size: 13px; } }
+.mribbon-cell dd { margin: 2px 0 0; font-size: var(--fs-md); font-weight: 700; letter-spacing: -0.01em; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 419.98px) { .mribbon-cell { padding: 8px; } .mribbon-cell dd { font-size: var(--fs-md); } }
+@media (max-width: 379.98px) { .mribbon-cell dd { font-size: var(--fs-sm); } }
 @media (max-width: 359.98px) {
   .mribbon { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mribbon-cell:nth-child(3) { border-left: 0; }
@@ -31,7 +31,7 @@
 .dsb-score { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 4px; font-variant-numeric: tabular-nums; }
 .dsb-v { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
 .dsb.is-unknown .dsb-v { color: var(--text-3); font-weight: 500; }
-.dsb-conf { font-size: 12px; font-weight: 600; color: var(--text-3); }
+.dsb-conf { font-size: var(--fs-xs); font-weight: 600; color: var(--text-3); }
 
 /* ---- SecurityAuditStrip: severe flags and a recent change as full-width
    alert rows under the strip (the strip itself is inspector.css .cc-audit). ---- */
@@ -55,11 +55,11 @@
 .ledger-sym { font-size: var(--fs-sm); font-weight: 600; color: var(--text); white-space: nowrap; }
 a.ledger-sym { text-decoration: none; }
 a.ledger-sym:hover { text-decoration: underline; text-decoration-color: var(--link-line); }
-.ledger-chip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 6px; border-radius: var(--r-pill); background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--border); color: var(--text-2); font-size: var(--fs-xs); line-height: 20px; }
+.ledger-chip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 6px; border-radius: var(--r-badge); background: var(--badge-bg); box-shadow: none; color: var(--text-2); font-size: var(--fs-xs); line-height: var(--badge-h); }
 .ledger-name { font-size: var(--fs-xs); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ledger-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
-.ledger-tag { padding: 0 6px; border-radius: var(--r-control); font-size: var(--fs-xs); line-height: 20px; color: var(--text-2); background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--separator); }
-.ledger-tag.tone-warn { color: var(--warn); background: var(--warn-weak); box-shadow: inset 0 0 0 1px var(--pill-warn-line); }
+.ledger-tag { padding: 0 6px; border-radius: var(--r-badge); font-size: var(--fs-xs); line-height: var(--badge-h); color: var(--text-2); background: var(--badge-bg); box-shadow: none; }
+.ledger-tag.tone-warn { color: var(--warn); background: var(--warn-weak); box-shadow: none; }
 .ledger-figs { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; text-align: right; font-variant-numeric: tabular-nums; }
 .ledger-amt { font-size: var(--fs-sm); font-weight: 600; color: var(--text); white-space: nowrap; }
 .ledger-val { font-size: var(--fs-xs); color: var(--text-2); white-space: nowrap; }

@@ -404,9 +404,12 @@ test('the brief\'s styles use the desk\'s tokens only; the page is wired into th
   // The React Overview reads the same model; the inspector's link opens it
   // with one history entry to return through (crBrief).
   assert.match(web('views/project/ProjectPage.jsx'), /briefModel\(\{ detail: d, row, index: d0\.index, provider: prov, reportId, hosted: hosted\(\) \}\)/);
-  // Since the review of 2026-10-08 (F4) it opens the Brief of the model chosen
-  // in the inspector, not always Claude's.
-  assert.match(web('views/inspector/Inspector.jsx'), /navigate\(`#\/project\/\$\{encodeURIComponent\(pid\)\}\/brief\?model=\$\{sel\}`, \{ state: \{ crBrief: pid, from: 'watchlist' \} \}\)/);
+  // Since the Level 1 cut (DESIGN_AND_IA_BLUEPRINT.md §3.2, D1, 2026-10-17)
+  // "Open full research" opens the Brief of the model whose grade the
+  // inspector shows (your pinned headline, else Claude's current report).
+  const insp = web('views/inspector/Inspector.jsx');
+  assert.match(insp, /const prov = canon\.provider \|\| 'claude';\s*const fullHref = `#\/project\/\$\{enc\(pid\)\}\/brief\?model=\$\{prov\}`;/);
+  assert.match(insp, /navigate\(fullHref, \{ state: \{ crBrief: pid, from: 'watchlist' \} \}\)/);
   // The link opens the brief's address with one history entry to return through.
   const ui = read('ui.js');
   assert.match(ui, /const href = `#\/project\/\$\{encodeURIComponent\(pid\)\}\/brief\?model=claude`;/);

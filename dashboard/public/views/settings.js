@@ -72,6 +72,33 @@ export async function renderSettings(ctx, route) {
   return page;
 }
 
+// One section of the Preferences drawer (DESIGN_AND_IA_BLUEPRINT.md §3.6,
+// ?prefs=<section> on any page; web/src/shell/Preferences.jsx): a node at
+// once, filled when its reads answer, with the same cards and forms as the
+// Settings page had. Data holds the dashboard settings (General) and the
+// backups and exports; Screening and Developer are drawn by the drawer itself.
+export function prefsSection(ctx, id) {
+  const build = {
+    appearance: () => [appearanceCard()],
+    models: async () => [await safeSection('Research models & budget', () => researchTab(ctx))],
+    rubrics: async () => [await safeSection('Rubrics', () => rubricsTab(ctx))],
+    data: async () => [await safeSection('Dashboard settings', () => generalTab(ctx)), await safeSection('Backups & exports', () => dataTab(ctx))],
+    system: async () => [await safeSection('System & privacy', () => systemTab(ctx))],
+    activity: async () => [await safeSection('Activity', () => activityTab(ctx))],
+  }[id];
+  const box = h('div', { class: 'prefs-sec', 'aria-busy': 'true' }, h('p', { class: 'small muted' }, 'Loading…'));
+  if (!build) {
+    box.replaceChildren();
+    box.removeAttribute('aria-busy');
+    return box;
+  }
+  Promise.resolve().then(build).then(
+    (nodes) => { box.replaceChildren(...[].concat(nodes).filter(Boolean)); box.removeAttribute('aria-busy'); },
+    (err) => { box.replaceChildren(callout(`This section could not be shown: ${err.message}. Your files are unchanged.`, 'bad')); box.removeAttribute('aria-busy'); },
+  );
+  return box;
+}
+
 function generalTab(ctx) {
   const s = ctx.state.index.settings;
   const r = ctx.state.index.rubrics;

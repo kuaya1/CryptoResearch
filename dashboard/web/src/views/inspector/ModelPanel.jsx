@@ -1,248 +1,156 @@
-// The selected model's panel in the inspector, in reading order: its verdict
-// (the investment grade as the desk calculated it, or why there is none; the
-// verdict, analysis date and horizon; the grade's warnings as chips), then at
-// once the strongest sourced risk and what would confirm and break it (review
-// 2026-10-08, F7), then the six weighted components, the revision, what a
-// withheld grade is missing, the project's review items, the take, what to
-// watch and your note, the 13 diagnostic category grades and the rest of its
-// risks.
+// The inspector's body, Level 1 (DESIGN_AND_IA_BLUEPRINT.md §3.2; Eric,
+// 2026-10-17): what this is, what the call is, what could break it, what to
+// do, in six blocks and about a screen and a half:
+//   1. the executive verdict: the canonical grade (D1: your pinned headline
+//      report, else Claude's current eligible report) with its rubric word,
+//      the verdict, the analysis age and horizon, the three-model consensus
+//      line (each model a link to its Brief) and an evidence flag;
+//   2. bull and bear: the strongest sourced risk and the top "would confirm",
+//      with "would break it" under the risk;
+//   3. risk and exit: the forensic states, the exit at your size against your
+//      limit, the deepest DEX pool and the GoPlus flags, or "Not audited";
+//   4. the thesis in three lines (Read full brief) and the watch item;
+//   5. what needs you (only when something does), at most three lines, each
+//      with its action;
+//   6. your note.
+// Everything else (the 13 categories, the six components, the downside
+// panel, the DEX card, the contract checks, the chart, the evidence, the
+// research details and the exact prompt) lives on the project page (Level 2).
 //
-// Every part drawn from the report comes from one report: the one the list's
-// summary names, found in the project record with the same grade, verdict
-// and date (lib/opinion.js). While the record does not hold it (loading, kept
-// from before a change), those parts say so instead of showing another
-// report's words; the grade, verdict and "Open report" stay the summary's
-// own, the same report (review 2026-10-08, F1). Every model keeps its own
-// numbers; unknown stays unknown and is never drawn as zero; nothing missing
-// is filled in.
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowUpRight, RotateCcw, TriangleAlert, Copy } from 'lucide-react';
+// Every part drawn from the report comes from one report: the canonical one,
+// found in the project record with the same grade, verdict and date
+// (lib/opinion.js), or your pinned headline report by its ID. While the record
+// does not hold it, those parts say so instead of showing another report's
+// words (review 2026-10-08, F1). Unknown stays unknown; nothing is averaged.
+import { useEffect, useState } from 'react';
+import { ArrowUpRight, ArrowRight, RotateCcw, TriangleAlert } from 'lucide-react';
 import {
-  PROVIDER_LABELS, fmtDate, fmtDateTime, fmtRelDay, anchorText, withheldReason, researchState, jobKey, onHoldOf,
-  copyText, toast, TAG_TITLES, COVERAGE_MEANS, evidenceLevel, evidenceText,
+  PROVIDER_LABELS, fmtDate, fmtDateTime, fmtRelDay, fmtCompactUsd, researchState, onHoldOf, jobKey, toast, TAG_TITLES, evidenceLevel, evidenceText, submissionId, safeUrl,
 } from '../../../../public/ui.js';
-import { splitAttention, kindWord, attentionHref } from '../../../../public/watchlist-model.js';
-import { keyPoints, TAG_WORDS } from '../../../../public/brief-model.js';
-import { profileOf, categoryRows, scorecardCounts, statesConfidence, categoryFlags, CONFIDENCE_LABELS } from '../../../../public/thesis-ui.js';
-import { api, refresh, hosted, resyncOnce, wasResynced } from '../../lib/desk.js';
+import { canonicalOf, canonicalGrade, consensusOf, exitCell, reviewReasons, agendaRowOf, riskSignals, contractChipModel, kindWord, attentionHref, rowProject } from '../../../../public/watchlist-model.js';
+import { useAgendaRead } from '../../lib/agenda.js';
+import { keyPoints, TAG_WORDS, verdictOf } from '../../../../public/brief-model.js';
+import { api, refresh, resyncOnce, wasResynced } from '../../lib/desk.js';
+import { navigate } from '../../lib/router.js';
 import { opinionOf } from '../../lib/opinion.js';
-import { legacyCtx } from '../../legacy/ctx.js';
-import { ScoreBar } from '../../components/ScoreBar.jsx';
 import { MetricHeader } from '../../components/MetricHeader.jsx';
-import { DiagnosticSegmentBar } from '../../components/ui/DiagnosticSegmentBar.jsx';
-import { Dom, loadLegacy } from '../../components/Dom.jsx';
-import { pillInfo } from '../../components/GradePill.jsx';
-import { badgeOpts } from '../watchlist/ProjectTable.jsx';
+import { loadLegacy } from '../../components/Dom.jsx';
 
-const isScored = (s) => Boolean(s) && (s.status === 'scored' || s.status === 'range');
-const scoreText = (s) => (s.status === 'range' ? `${s.low}–${s.high}` : String(s.value));
-const scoreWords = (s) => (s.status === 'range' ? `${s.low} to ${s.high} out of 100 (a range)` : `${s.value} out of 100`);
-const CONF_LETTER = { high: 'H', medium: 'M', low: 'L' };
+const enc = encodeURIComponent;
+const plain = (e) => e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
 
-// Short names for a narrow row; the full name is the row's title and label.
-const SHORT = {
-  legitimacy: 'Legitimacy', development_credibility: 'Development', build_operational_quality: 'Build quality', code_quality: 'Code quality',
-  product_reality: 'Live product', technology_usefulness: 'Technology', organic_demand: 'Organic demand', token_value_capture: 'Value capture',
-  valuation_supply_attractiveness: 'Valuation & supply', chart_structure: 'Chart', cycle_timing: 'Cycle & catalysts', volume_liquidity: 'Volume & liquidity',
-  btc_relative_opportunity: 'Against BTC', builder_operations: 'Builders & ops', product_usefulness: 'Product use', credit_risk_transparency: 'Credit-risk clarity',
-  protocol_risk_transparency: 'Protocol-risk clarity', technical_risk_transparency: 'Tech-risk clarity', differentiation: 'Differentiation',
-  category_potential: 'Category potential', chart_quality: 'Chart quality', evidence_confidence: 'Evidence confidence',
-};
-
-// The report the panel's report-derived parts are drawn from, or null.
-const fullOf = (op) => (op.status === 'ok' && op.report && !op.report.broken ? op.report : null);
-
-// ---- the verdict ---------------------------------------------------------------------
-
-const RESUME_WHERE = { claude: 'In Cowork (or a Claude chat with the CryptoResearch connector)', chatgpt: 'In a ChatGPT chat with the CryptoResearch app turned on' };
-const RESUME_OPEN = { claude: 'https://claude.ai/new', chatgpt: 'https://chatgpt.com/' };
-
-function Resume({ d, p, prov, job, info }) {
-  if (!job || !RESUME_WHERE[prov] || onHoldOf(d.index, prov)) return null;
-  const stalled = info.kind === 'interrupted' || info.job === 'interrupted';
-  const released = job.state === 'unconfigured' && (job.released || job.draft_saved_at);
-  if (!stalled && !released) return null;
-  const sentence = `Resume my CryptoResearch research on ${p.name}`;
-  const since = job.progress_at || job.draft_saved_at || job.updated_at;
+// A link into the project page that keeps the way back to this inspector
+// (Back, Escape and the back bar return here).
+export function DeepLink({ pid, href, children, className = '', dataKey, title = null, ariaLabel = null }) {
   return (
-    <div className="mp-resume">
-      <button
-        type="button"
-        className="btn btn-sm"
-        data-key={`resume-${p.project_id}-${prov}`}
-        aria-label={`Resume ${PROVIDER_LABELS[prov]}'s research: copy the sentence and open ${PROVIDER_LABELS[prov]}`}
-        onClick={async () => {
-          try { await copyText(sentence); } catch (_) { /* said below */ }
-          if (hosted()) window.open(RESUME_OPEN[prov], '_blank', 'noopener');
-          toast(`Copied: “${sentence}”. ${RESUME_WHERE[prov]}, paste it. This job shows Working again only when ${PROVIDER_LABELS[prov]} saves a draft or its report.`);
-        }}
-      >
-        <Copy size={13} aria-hidden="true" />Resume
-      </button>
-      <span className="faint">{`${released ? 'Released back to waiting' : 'Paused'}${since ? ` · last activity ${fmtDateTime(since)}` : ''}${job.draft_saved_at ? ` · draft saved ${fmtDateTime(job.draft_saved_at)}` : ' · no draft saved'}`}</span>
-    </div>
+    <a
+      href={href}
+      className={className || undefined}
+      data-key={dataKey}
+      title={title || undefined}
+      aria-label={ariaLabel || undefined}
+      onClick={(e) => {
+        if (!plain(e)) return;
+        e.preventDefault();
+        navigate(href, { state: { crBrief: pid, from: 'watchlist' } });
+      }}
+    >
+      {children}
+    </a>
   );
 }
 
-function Actions({ d, p, prov, job, info, opts, rep, resume }) {
-  const pid = p.project_id;
-  const [busy, setBusy] = useState(false);
-  const who = PROVIDER_LABELS[prov];
-  const out = [];
-  // A model on hold gets nothing new: no retry (the server refuses one too).
-  if (job && job.state === 'failed' && !opts.onHold) {
-    out.push(
-      <button key="retry" type="button" className="btn btn-sm" data-key={`retry-${pid}-${prov}`} disabled={busy} onClick={async () => {
-        setBusy(true);
-        try {
-          const r = await api.post(`/api/projects/${encodeURIComponent(pid)}/research/${encodeURIComponent(job.run_id)}/jobs/${prov}/retry`, {});
-          toast(r.message || 'Retry queued');
-          await refresh();
-        } catch (err) {
-          toast(err.message, 'bad');
-          setBusy(false);
-        }
-      }}><RotateCcw size={13} aria-hidden="true" />Retry</button>,
-    );
+// The report the inspector's report-derived parts come from: the canonical
+// one, or null while the record does not hold it.
+export function canonicalReport(p, detail) {
+  const c = canonicalOf(p);
+  if (c.source === 'headline') {
+    if (!detail) return { status: 'loading', c, report: null, report_id: c.report.report_id };
+    const r = (detail.reports || []).find((x) => x && x.report_id === c.report.report_id && !x.broken) || null;
+    return { status: r ? 'ok' : 'pending', c, report: r, report_id: c.report.report_id };
   }
-  // A waiting job (no API runs it): the sentence for its assistant, or the
-  // prompt to paste by hand. A model on hold gets no prompt to act.
-  if (job && job.state === 'unconfigured' && !opts.onHold && !resume) {
-    out.push(<Dom key="waiting" className="mp-waiting" build={(L) => L.waitingActions(legacyCtx, { pid, runId: job.run_id, provider: prov, key: `${pid}-${prov}` })} deps={[pid, prov, job.run_id]} />);
-  }
-  if (job && ['interrupted', 'uncertain', 'incomplete', 'conflict', 'held'].includes(info.job || info.kind)) out.push(<a key="runs" className="btn btn-sm" href={`#/project/${encodeURIComponent(pid)}/evidence?open=runs`} data-key={`runs-${pid}-${prov}`}>Research runs</a>);
-  if (!rep && !job && p.status !== 'archived' && !opts.onHold) {
-    out.push(<button key="run" type="button" className="btn btn-sm" data-key={`run-${pid}-${prov}`} onClick={async () => { const L = await loadLegacy(); L.openResearchDialog(legacyCtx, p, { providers: [prov] }); }}>{`Run ${who} research`}</button>);
-  }
-  return out.length ? <div className="mp-actions">{out}</div> : null;
+  const op = opinionOf(p, 'claude', detail);
+  return { status: op.status, c, report: op.status === 'ok' ? op.report : null, report_id: op.report_id };
 }
 
-function Components({ d, rep, grading }) {
-  const a = (rep && rep.assessment) || {};
-  const anchors = grading.favorable_anchors || [];
+function Loading({ label }) {
+  return <div className="part-loading" role="status"><span className="sr-only">{`Loading ${label}…`}</span><span className="skel w80" /><span className="skel w60" /></div>;
+}
+
+// ---- 1. the executive verdict -------------------------------------------------------------
+
+function Consensus({ d, p }) {
+  const cs = consensusOf(p, d.index);
+  const pid = p.project_id;
   return (
-    <ul className="parts" aria-label="The six weighted parts of the investment grade">
-      {grading.investment_components.map((c) => {
-        const s = (a.investment_components || {})[c.id];
-        const scored = isScored(s);
-        const value = !s ? 'not given' : scored ? scoreText(s) : s.status === 'not_applicable' ? 'N/A' : 'unknown';
-        const word = scored ? anchorText(anchors, s) : null;
-        const why = scored ? s.rationale : s ? s.missing_data || s.rationale : null;
-        return (
-          <li key={c.id}>
-            <div className="part-top">
-              <span className="part-name">{c.label}<span className="part-w">{`${c.weight_bp / 100}%`}</span></span>
-              <span className="part-v"><strong>{value}</strong>{word ? <span className="faint">{` · ${word}`}</span> : null}</span>
-            </div>
-            <span role="img" aria-label={scored ? scoreWords(s) : 'Unknown, no score'}><ScoreBar score={s} /></span>
-            {why ? <p className="part-why">{why}</p> : null}
-          </li>
-        );
-      })}
-    </ul>
+    <p className="iv-cons" aria-label={`Each model's own grade: ${cs.text}`}>
+      {cs.models.map((m, i) => (
+        <span key={m.provider} className={`iv-cm is-${m.mark}`}>
+          {i ? <span className="iv-sep" aria-hidden="true">·</span> : null}
+          <span className={`cg-dot is-${m.mark}`} aria-hidden="true" />
+          <DeepLink pid={pid} href={`#/project/${enc(pid)}/brief?model=${m.provider}`} dataKey={`iv-model-${m.provider}`} ariaLabel={`${m.name}: ${m.words}. Open ${m.name}'s Brief`}>
+            <span className="iv-cm-n">{m.label}</span> <span className="iv-cm-v">{m.words}</span>
+          </DeepLink>
+        </span>
+      ))}
+      {cs.spread !== null ? <span className="iv-spread" title="Points between the highest and lowest firm grade. Agreement is not independent confirmation."><span className="iv-sep" aria-hidden="true">·</span>{` spread ${cs.spread.toFixed(1)}`}</span> : null}
+    </p>
   );
 }
 
-// The verdict: the grade (or why there is none) with the verdict, analysis
-// date and horizon, and the grade's warnings as chips beside it. Everything
-// here is the list's summary of the one report the panel shows.
-function Verdict({ d, p, prov, op }) {
-  const rep = op.summary;
-  const job = p.research && p.research.providers && p.research.providers[prov];
-  const opts = badgeOpts(d, prov);
-  const info = pillInfo(prov, rep, job, opts);
+function VerdictCard({ d, p, cr }) {
   const pid = p.project_id;
-  const who = PROVIDER_LABELS[prov];
-  const anchors = d.index.rubrics.grading.favorable_anchors || [];
+  const g = canonicalGrade(p, d.index);
+  const c = cr.c;
+  const rep = c.report;
+  const who = c.source === 'headline' ? `Your headline · ${PROVIDER_LABELS[c.provider] || 'report'}` : PROVIDER_LABELS[c.provider || 'claude'];
+  const vw = rep && rep.verdict ? verdictOf({ verdict: rep.verdict }) : null;
+  const verdict = vw && vw.label ? vw.label : rep && rep.verdict ? `${rep.verdict.charAt(0)}${rep.verdict.slice(1).toLowerCase()}` : null;
   const rel = rep ? fmtRelDay(rep.analysis_at) : null;
-  const verdictWords = rep && rep.verdict ? `${rep.verdict.charAt(0)}${rep.verdict.slice(1).toLowerCase()}` : null;
-  // Under the header: when the model analysed it (with the research age) and
-  // the horizon; the price's own time stays in the inspector's head.
   const sub = rep ? (
     <>
-      <span><b>{`Analyzed ${rep.analysis_at ? fmtDate(rep.analysis_at) : 'date not stated'}`}</b>{rel ? ` · ${rel}` : ''}{info.stale ? <span className="v-stale"> · stale</span> : null}</span>
+      <span><b>{`Analyzed ${rep.analysis_at ? fmtDate(rep.analysis_at) : 'date not stated'}`}</b>{rel ? ` · ${rel}` : ''}</span>
       <span>{`Horizon ${rep.horizon || 'not stated'}`}</span>
     </>
   ) : null;
-  const mt = rep && rep.model_total && rep.model_total.status === 'mismatch' ? rep.model_total : null;
-  const level = rep ? evidenceLevel(rep.evidence) : null;
-  const chips = mt || level ? (
-    <>
-      {mt ? <span className="pill pill-warn" title={mt.message} aria-label={mt.message}>{`Own total differs by ${typeof mt.difference === 'number' ? mt.difference.toFixed(1) : '?'}`}</span> : null}
-      {level ? (
-        <button
-          type="button"
-          className={`pill ev-chip ev-${level}`}
-          data-key={`ev-jump-${prov}`}
-          title={`${evidenceText(rep.evidence)}. Open the flags.`}
-          aria-label={`${level === 'serious' ? 'Serious evidence flag' : 'Evidence flag'}: ${evidenceText(rep.evidence)}. Open the flags`}
-          onClick={() => { const el = document.querySelector(`[data-key="insp-evd-${prov}"]`); if (el) { el.open = true; el.scrollIntoView({ block: 'start', behavior: 'smooth' }); } }}
-        >
-          <span className={`ev-dot ${level}`} aria-hidden="true" />{level === 'serious' ? 'Serious evidence flag' : 'Evidence flag'}
-        </button>
-      ) : null}
-    </>
+  const level = rep && !rep.needs_text ? evidenceLevel(rep.evidence) : null;
+  const flags = rep && rep.evidence ? (rep.evidence.high || 0) + (rep.evidence.medium || 0) : 0;
+  const chips = level ? (
+    <DeepLink pid={pid} href={`#/project/${enc(pid)}/evidence?model=${c.provider || 'claude'}&open=checks`} className={`badge iv-ev ev-${level} ${level === 'serious' ? 'is-bad' : 'is-warn'}`} dataKey={`iv-ev-${pid}`} title={`${evidenceText(rep.evidence)}. Open the flags.`} ariaLabel={`${level === 'serious' ? 'Serious evidence flag' : 'Evidence flag'}: ${evidenceText(rep.evidence)}. Open the flags`}>
+      <TriangleAlert size={12} aria-hidden="true" />{`${level === 'serious' ? 'Serious evidence flag' : 'Evidence flag'}${flags > 1 ? ` · ${flags}` : ''}`}
+    </DeepLink>
   ) : null;
-  const captionTitle = `Calculated by the desk from ${who}'s six weighted component scores; never ${who}'s own total`;
-  // The metric header (no gauge; Eric, 2026-10-08): the model and its
-  // verdict, the desk's grade with its rubric word, the analysis and horizon.
-  const header = (grade, word = null) => <MetricHeader who={who} model={rep.model_version || null} verdict={verdictWords} grade={grade} word={word} tier={info.tier} captionTitle={captionTitle} sub={sub} chips={chips} />;
-  let body;
-  if (rep && (info.kind === 'grade' || info.kind === 'range')) {
-    const word = anchorText(anchors, rep.grade.status === 'range' ? { status: 'range', low: rep.grade.low, high: rep.grade.high } : { status: 'scored', value: rep.grade.value });
-    body = <div className="vblock">{header(rep.grade, word)}</div>;
-  } else if (rep && info.kind === 'pdf') {
-    body = (
-      <div className="vblock vstate">
-        {header({ status: 'none', label: 'PDF saved', reason: 'Needs a text copy to be graded' })}
-        <p><a href={`#/updates?tab=import&project=${encodeURIComponent(pid)}&provider=${prov}`} data-key={`pdf-import-${pid}-${prov}`}>{`Import ${who}'s text to grade it`}</a></p>
-      </div>
-    );
-  } else if (rep) {
-    const pct = rep.grade ? rep.grade.coverage_pct : null;
-    const withheld = Boolean(rep.grade && rep.grade.status === 'withheld');
-    body = (
-      <div className="vblock vwithheld">
-        {header(withheld ? { status: 'withheld', coverage: typeof pct === 'number' ? pct : null, reason: rep.grade.reason || null } : { status: 'none', label: 'No grade' })}
-      </div>
-    );
-  } else {
-    const key = jobKey(job, null, { onHold: opts.onHold });
-    const st = researchState(info.kind, { provider: prov, hosted: hosted() });
-    const hold = onHoldOf(d.index, prov);
-    body = (
-      <div className="vblock vnone">
-        <p className="vstate-title">{`No report from ${who}`}</p>
-        {key ? <p className={`state-word tone-${st.tone || 'none'}`}>{info.kind === 'waiting' && hosted() ? 'Waiting for you' : st.long}</p> : <p className="faint">{hold ? `On hold${hold.since ? ` since ${fmtDate(hold.since)}` : ''}` : 'Not researched yet'}</p>}
-        {job && job.error ? <p className="v-error">{job.error}</p> : null}
-      </div>
-    );
-  }
-  return <div className="mhead" data-report={op.report_id || ''}>{body}</div>;
+  const grade = g.kind === 'grade' || g.kind === 'range'
+    ? { status: g.kind === 'range' ? 'range' : 'firm', display: g.value }
+    : g.kind === 'withheld' ? { status: 'withheld', coverage: g.coverage, reason: rep && rep.grade ? rep.grade.reason || null : null }
+      : { status: 'none', label: g.kind === 'job' ? researchState(g.job, { provider: c.provider || 'claude' }).short : g.value, reason: g.kind === 'pdf' ? 'Needs a text copy to be graded' : g.kind === 'job' ? null : c.note };
+  return (
+    <section className="iv-card" aria-labelledby="iv-h" data-part="verdict" data-provider={c.provider || 'claude'} data-report={rep ? rep.report_id || '' : ''} data-source={c.source}>
+      <h3 className="sr-only" id="iv-h">Verdict</h3>
+      <MetricHeader
+        who={who}
+        model={rep && rep.model_version ? rep.model_version : null}
+        verdict={verdict}
+        grade={grade}
+        word={g.word}
+        tier={g.tier}
+        caption={c.source === 'headline' ? 'Headline grade' : 'Grade'}
+        captionTitle={`${c.note}. Calculated by the desk from the six weighted component scores; never the model's own total, never an average of the models.`}
+        sub={sub}
+        chips={chips}
+      />
+      <Consensus d={d} p={p} />
+    </section>
+  );
 }
 
-// What waits for the report itself: loading, or a record out of step with
-// the list (read once more, then said with a way to read both again).
-function ReportWait({ p, prov, op, current, failed, label }) {
-  const who = PROVIDER_LABELS[prov];
-  if (failed) return <p className="faint mp-wait">{`${who}'s report could not be loaded; the grade above is from the list.`}</p>;
-  if (op.status === 'pending' && current && wasResynced(p.project_id, op.report_id)) {
-    return (
-      <div className="note note-warn mp-wait" role="status">
-        <span>{`The list names ${who}'s report ${op.report_id}, which this project's record does not hold yet. Nothing from another report is shown in its place.`}</span>
-        <button type="button" className="btn btn-sm" data-key={`resync-${p.project_id}-${prov}`} onClick={() => refresh().catch((err) => toast(err.message, 'bad'))}>Read again</button>
-      </div>
-    );
-  }
-  return <Loading label={label || `${who}'s report`} />;
-}
+// ---- 2. bull and bear -------------------------------------------------------------------------
 
-// Right after the verdict: the strongest risk the report backs with a cited
-// source (else its first risk, said as unsourced), what would confirm it and
-// what would break it, each "Not reported" when the report gives none.
-function KeyPoints({ p, prov, full, wait }) {
+function Triggers({ p, cr, wait }) {
   const pid = p.project_id;
-  const who = PROVIDER_LABELS[prov];
+  const [more, setMore] = useState(false);
+  if (!cr.c.report || cr.c.report.needs_text) return null;
+  const full = cr.report;
   if (!full) return <div className="ikeys is-wait" data-part="keypoints">{wait}</div>;
   const a = full.assessment || {};
   if (a.needs_text) return null;
@@ -250,321 +158,307 @@ function KeyPoints({ p, prov, full, wait }) {
   const risk = k.risk;
   const src = risk && risk.sources[0];
   const srcName = src ? src.title || src.publisher || src.url || src.source_id : null;
-  const list = (items) => (Array.isArray(items) ? items : []).map((f) => (f && f.text ? String(f.text).trim() : typeof f === 'string' ? f.trim() : '')).filter(Boolean).slice(0, 2);
+  const srcUrl = src && src.url && /^https?:/i.test(safeUrl(src.url) || '') ? safeUrl(src.url) : null;
+  const list = (items) => (Array.isArray(items) ? items : []).map((f) => (f && f.text ? String(f.text).trim() : typeof f === 'string' ? f.trim() : '')).filter(Boolean);
   const confirm = list(a.conviction_increases);
   const breaks = list(a.invalidators);
   const nr = <span className="tl-nr">Not reported</span>;
+  const extra = confirm.length - 1 + (breaks.length - 1 > 0 ? breaks.length - 1 : 0);
   return (
-    <dl className="ikeys" data-part="keypoints" data-report={full.report_id} aria-label={`${who}'s strongest risk, and what would confirm or break the view`}>
+    <dl className="ikeys iv-tr" data-part="keypoints" data-report={full.report_id} aria-label="The strongest risk, and what would confirm or break the view">
       <div className="ik ik-risk">
-        <dt title={risk && risk.sourced ? 'The strongest risk the report backs with a cited source' : 'No listed risk cites a source'}>{risk && risk.sourced ? 'Strongest sourced risk' : 'Strongest risk'}</dt>
+        <dt title={risk && risk.sourced ? 'The strongest risk the report backs with a cited source' : 'No listed risk cites a source'}>{risk && risk.sourced ? 'Bear · strongest sourced risk' : 'Bear · strongest risk'}</dt>
         <dd>
           {risk ? (
             <>
-              <p className="ik-t" data-part="risk-text">{risk.text}</p>
+              <p className="ik-t clamp-2" data-part="risk-text" title={risk.text}>{risk.text}</p>
               <p className="tl-cite">
                 {risk.tags.map((tg) => <span key={tg} className={`etag t-${tg.toLowerCase()}`} title={TAG_TITLES[tg]}>{TAG_WORDS[tg]}</span>)}
-                {src && src.url ? <a href={src.url} target="_blank" rel="noopener noreferrer nofollow" data-key={`th-risk-src-${pid}-${prov}`}>{srcName}<ArrowUpRight size={12} aria-hidden="true" /></a> : src ? <span>{srcName}</span> : <span className="faint">No source cited</span>}
-                {risk.sources.length > 1 ? <span className="faint">{` +${risk.sources.length - 1}`}</span> : null}
+                {srcUrl ? <a href={srcUrl} target="_blank" rel="noopener noreferrer nofollow" data-key={`th-risk-src-${pid}`}>{srcName}<ArrowUpRight size={12} aria-hidden="true" /></a> : src ? <span>{srcName}</span> : <span className="faint">No source cited</span>}
               </p>
             </>
           ) : nr}
         </dd>
       </div>
       <div className="ik ik-confirm">
-        <dt>Would confirm</dt>
-        <dd>{confirm.length ? <ul>{confirm.map((x) => <li key={x}>{x}</li>)}</ul> : nr}</dd>
+        <dt>Bull · would confirm</dt>
+        <dd>
+          {confirm.length ? <p className="ik-t clamp-2" title={confirm[0]}>{confirm[0]}</p> : nr}
+          {more && confirm.length > 1 ? <ul className="ik-more">{confirm.slice(1).map((x) => <li key={x}>{x}</li>)}</ul> : null}
+        </dd>
       </div>
       <div className="ik ik-break">
         <dt>Would break it</dt>
-        <dd>{breaks.length ? <ul>{breaks.map((x) => <li key={x}>{x}</li>)}</ul> : nr}</dd>
+        <dd>
+          {breaks.length ? <p className="ik-t clamp-1" title={breaks[0]}>{breaks[0]}</p> : nr}
+          {more && breaks.length > 1 ? <ul className="ik-more">{breaks.slice(1).map((x) => <li key={x}>{x}</li>)}</ul> : null}
+        </dd>
       </div>
+      {extra > 0 ? (
+        <div className="ik-foot">
+          <button type="button" className="btn-link" aria-expanded={more} data-key={`iv-more-${pid}`} onClick={() => setMore(!more)}>{more ? 'Show less' : `+${extra} more`}</button>
+        </div>
+      ) : null}
     </dl>
   );
 }
 
-// After the key points: the six weighted components, the revision, what a
-// withheld grade is missing, timing notes, and the research actions.
-function VerdictMore({ d, p, prov, op, full, wait, opened }) {
-  const rep = op.summary;
-  const job = p.research && p.research.providers && p.research.providers[prov];
-  const opts = badgeOpts(d, prov);
-  const info = pillInfo(prov, rep, job, opts);
+// ---- 3. risk and exit -------------------------------------------------------------------------
+
+const FX_STATE_WORDS = { occurred: 'Occurred', watch: 'Watch', recovered: 'Recovered', within: 'Within', not_established: 'Not established', unknown: 'Unknown', reversed: 'Reversed' };
+const FX_LABELS = { liquidity_impairment: 'Liquidity', operational_degradation: 'Operations', delivery_inactivity: 'Delivery', confirmed_discontinuation: 'Discontinuation' };
+const toneOf = (s) => (s === 'occurred' ? 'is-bad' : s === 'watch' ? 'is-warn' : s === 'unknown' || s === 'not_established' ? 'is-unknown' : '');
+
+// The deepest DEX pool, asked of DexScreener by this browser only once the
+// inspector has rested 250 ms on this project (dex.js; chain-scoped, for the
+// verified identity's contracts only, never stored).
+function useTopPool(p) {
+  const [st, setSt] = useState({ pid: null, pool: undefined, error: null });
+  useEffect(() => {
+    let alive = true;
+    const t = setTimeout(async () => {
+      try {
+        const L = await loadLegacy();
+        const targets = L.dexTargets(rowProject(p));
+        if (!targets.length) { if (alive) setSt({ pid: p.project_id, pool: null, error: null, none: true }); return; }
+        const answer = L.peekLookup(targets) || await L.lookupTargets(targets);
+        const ref = p.market && typeof p.market.price_usd === 'number' ? p.market.price_usd : null;
+        if (alive) setSt({ pid: p.project_id, pool: L.topPool(answer, targets, { refPrice: ref }), error: null, thin: L.THIN_USD });
+      } catch (error) {
+        if (alive) setSt({ pid: p.project_id, pool: null, error });
+      }
+    }, 250);
+    return () => { alive = false; clearTimeout(t); };
+  }, [p.project_id]);
+  return st.pid === p.project_id ? st : { pid: null, pool: undefined, error: null };
+}
+
+function RiskStrip({ d, p }) {
   const pid = p.project_id;
-  const who = PROVIDER_LABELS[prov];
-  const grading = d.index.rubrics.grading;
-  const resume = <Resume d={d} p={p} prov={prov} job={job} info={info} />;
-  const hasResume = Boolean(job && RESUME_WHERE[prov] && !onHoldOf(d.index, prov) && (info.kind === 'interrupted' || info.job === 'interrupted' || (job.state === 'unconfigured' && (job.released || job.draft_saved_at))));
-  const parts = rep && !rep.needs_text ? (
-    <details className="fold fold-parts" data-key={`ig-parts-${pid}-${prov}`} open={opened.get(`parts-${prov}`)} onToggle={(e) => opened.set(`parts-${prov}`, e.currentTarget.open)}>
-      <summary title="What the investment grade is calculated from: each component score times its weight. The diagnostic categories never enter it.">Six weighted components</summary>
-      {full ? <Components d={d} rep={full} grading={grading} /> : <Loading label="the six weighted parts" />}
-    </details>
-  ) : null;
-  const why = rep && rep.grade && rep.grade.status === 'withheld' ? withheldReason(prov, rep.grade, rep.unscored) : null;
-  const checks = rep && rep.structure && rep.structure.flagged && Array.isArray(rep.structure.flags) ? rep.structure.flags.length : 0;
-  const rv = rep && rep.revision && rep.revision.kind === 'revision' ? rep.revision : null;
-  const t = rep && rep.analysis_timing;
+  const f = p.forensic;
+  const ex = exitCell(p);
+  const pool = useTopPool(p);
+  const m = contractChipModel(p.screening);
+  const risky = m.chips.filter((x) => x.dot === 'risky');
+  const severe = m.extra.filter((b) => b.tone === 'severe');
+  const fxHref = `#/project/${enc(pid)}/forensics`;
+  const audited = f && f.audited;
+  const states = audited ? Object.entries(f.states) : [];
+  // The canonical report's top downside score (risk_scores; the Desk's Risk
+  // column falls back to it); the full panel is on the Brief.
+  const down = riskSignals(p, d.index).find((x) => x.kind === 'downside');
   return (
-    <div className="mmore">
-      {why && why.items.length ? (
-        <div className="vw-missing">
-          <h4>Not scored</h4>
-          <ul>{why.items.map((x) => <li key={x.label}><strong>{x.label}</strong>{` · ${x.status}`}{x.note ? <span className="faint">{`: “${x.note.length > 200 ? `${x.note.slice(0, 199)}…` : x.note}”`}</span> : null}</li>)}</ul>
-        </div>
-      ) : null}
-      {checks ? (
-        <details className="fold" data-key={`ig-check-${pid}-${prov}`}>
-          <summary><span><strong>Check</strong>{` · ${checks} note${checks === 1 ? '' : 's'}`}</span></summary>
-          <ul className="plain-list">{rep.structure.flags.slice(0, 3).map((fl) => <li key={fl.message}>{fl.message}</li>)}</ul>
-        </details>
-      ) : null}
-      {parts}
-      {rv ? (
-        <details className="fold rev" data-key={`rev-${pid}-${prov}`}>
-          <summary><RotateCcw size={13} aria-hidden="true" /><span><strong>{rv.basis === 'existing_evidence' ? 'Revision using existing evidence' : rv.basis === 'new_sources' ? `Revision with ${rv.sources.added} new source${rv.sources.added === 1 ? '' : 's'}` : 'Re-saved with the same scores'}</strong>{` · ${who}, ${rv.minutes_after} min after the first save`}</span></summary>
-          <div className="fold-body">
-            <p>{rep.revision_label}</p>
-            {rv.declared ? null : <p className="faint">No reason recorded.</p>}
-            {rep.run_link && rep.run_link.report_id && rep.run_link.report_id !== rep.report_id ? <p className="faint">{`The run links the first save (${rep.run_link.report_id}).`}</p> : null}
-            <a href={`#/project/${encodeURIComponent(pid)}/report?report=${encodeURIComponent(rv.of)}`} data-key={`rev-of-${pid}-${prov}`}>Open the earlier report</a>
-          </div>
-        </details>
-      ) : null}
-      {t && ['after_save', 'future'].includes(t.status) ? <p className="newer-line">{`Stated analysis time: ${t.minutes_after_save !== null && t.minutes_after_save < 2880 ? `${t.minutes_after_save} min` : 'more than a day'} after the save`}</p> : null}
-      {rep && info.newerText ? <p className={`newer-line${info.problem ? ' is-problem' : ''}`}>{info.newerText}</p> : null}
-      {resume}
-      <Actions d={d} p={p} prov={prov} job={job} info={info} opts={opts} rep={rep} resume={hasResume} />
-    </div>
-  );
-}
-
-function Loading({ label }) {
-  return <div className="part-loading" role="status"><span className="sr-only">{`Loading ${label}…`}</span><span className="skel w80" /><span className="skel w60" /></div>;
-}
-
-// ---- the take, what to watch, your note ----------------------------------------------------
-
-function Take({ text, id }) {
-  const ref = useRef(null);
-  const [open, setOpen] = useState(false);
-  const [long, setLong] = useState(false);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (el && !open) setLong(el.scrollHeight > el.clientHeight + 1);
-  }, [text, open]);
-  return (
-    <div className="take">
-      <p ref={ref} id={id} className={`take-text${open ? '' : ' clamp-3'}`}>{text}</p>
-      {long || open ? <button type="button" className="btn-link take-more" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>{open ? 'Show less' : 'Show more'}</button> : null}
-    </div>
-  );
-}
-
-function Thesis({ p, prov, detail, full, wait }) {
-  const pid = p.project_id;
-  const note = detail && detail.conviction ? String(detail.conviction.text || '').trim() : '';
-  const sum = p.providers && p.providers[prov];
-  const a = full ? full.assessment || {} : null;
-  let model = null;
-  if (sum && !a) model = wait;
-  else if (a && !a.needs_text && !(sum && sum.needs_text)) {
-    const metric = a.next_metric_to_monitor;
-    model = (
-      <>
-        {a.final_take ? <Take text={a.final_take} id={`take-${pid}-${prov}`} /> : <p className="faint">{`No final take in ${PROVIDER_LABELS[prov]}'s data block.`}</p>}
-        {metric && metric.metric ? <div className="tl"><span className="tl-k">Watch</span><span>{metric.metric}{metric.threshold ? ` (${metric.threshold})` : ''}</span></div> : null}
-      </>
-    );
-  }
-  return (
-    <section className="insp-sec thesis" aria-labelledby="insp-sec-thesis">
-      <h3 className="sec-title" id="insp-sec-thesis">Thesis</h3>
-      {model}
-      <p className="tl-note" title={note && detail.conviction.updated_at ? `Your note, saved ${fmtDateTime(detail.conviction.updated_at)}` : undefined}>
-        <span className="tl-k">Your note</span>
-        {note ? <span className="tl-note-text">{note}</span> : <span className="faint">{detail ? 'No conviction note yet' : '…'}</span>}
-        <span className="tl-dot" aria-hidden="true">·</span>
-        <a href={`#/project/${encodeURIComponent(pid)}/notes`} data-key={`note-edit-${pid}`}>{note ? 'Edit' : 'Write your note'}</a>
+    <section className="iv-risk" aria-labelledby="iv-risk-h">
+      <h3 className="iv-h" id="iv-risk-h">Risk and exit</h3>
+      <ul className="iv-chips" aria-label="Forensic outcomes, exit and contract flags">
+        {audited ? states.map(([k, s]) => <li key={k}><span className={`badge ${toneOf(s)}`} title={`${FX_LABELS[k]}: ${FX_STATE_WORDS[s] || s}, from the forensic monitor`}>{`${FX_LABELS[k]}: ${FX_STATE_WORDS[s] || s}`}</span></li>) : (
+          <li><span className="badge is-unknown">{f && f.open_audit ? 'Audit open · no assessment yet' : 'Not audited'}</span>{' '}<DeepLink pid={pid} href={`${fxHref}?open=start`} className="iv-link" dataKey={`iv-fx-start-${pid}`}>{f && f.open_audit ? 'Open the audit' : 'Start forensic audit'}</DeepLink></li>
+        )}
+        {down ? <li><span className={`badge ${down.tone === 'bad' ? 'is-bad' : down.tone === 'warn' ? 'is-warn' : ''}`} title={down.title}>{down.text}</span></li> : null}
+        <li><span className={`badge ${ex.tone === 'bad' ? 'is-bad' : ex.tone === 'ok' ? 'is-ok' : 'is-unknown'}`} title={ex.title}>{`Exit @ $${ex.size}: ${ex.text}`}</span><span className="iv-limit faint">{` limit ${ex.limit}%`}</span></li>
+        {severe.map((b) => <li key={b.key}><span className="badge is-bad" title={b.title}>{`${b.label}${b.value ? ` ${b.value}` : ''}`}</span></li>)}
+        {m.state === 'native_chain' ? <li><span className="badge" title={m.title || undefined}>Native coin · no contract</span></li>
+          : risky.length ? risky.map((x) => <li key={x.key}><span className="badge is-warn" title={x.title || x.aria}>{`${x.label}: ${x.value}`}</span></li>)
+            : m.chips.every((x) => x.dot === 'unknown') ? <li><span className="badge is-unknown" title={(m.status && (m.status.title || m.status.word)) || m.title || 'No GoPlus answer on record'}>{(m.status && m.status.word) || 'GoPlus: no answer'}</span></li>
+              : <li><span className="badge" title="GoPlus answered no mint, blacklist, proxy or tax flag. Nothing here means safe.">GoPlus: no flag</span></li>}
+      </ul>
+      <p className="iv-pool">
+        <span className="faint">Top pool </span>
+        {pool.pool === undefined ? <span className="faint" aria-busy="true">…</span>
+          : pool.error ? <span className="faint">{`DexScreener could not be read: ${pool.error.message}`}</span>
+            : !pool.pool ? <span className="faint">{pool.none ? 'No verified contract to look up' : 'No decentralized pool indexed'}</span>
+              : (
+                <span title={`${pool.pool.chain}${pool.pool.pairAddress ? ` · ${pool.pool.pairAddress}` : ''} · DexScreener, asked by this browser`}>
+                  {`${pool.pool.dex} · ${pool.pool.pair}${pool.pool.multiChain ? ` · ${pool.pool.chain}` : ''} · `}
+                  <strong>{pool.pool.liquidity === null ? '—' : fmtCompactUsd(pool.pool.liquidity)}</strong>
+                  {pool.pool.thin ? <span className="badge is-warn iv-thin">thin</span> : null}
+                </span>
+              )}
+        <DeepLink pid={pid} href={`#/project/${enc(pid)}/market`} className="iv-link" dataKey={`iv-market-${pid}`}>Pools</DeepLink>
+        <DeepLink pid={pid} href={`#/project/${enc(pid)}/contract`} className="iv-link" dataKey={`iv-contract-${pid}`}>Contract</DeepLink>
       </p>
     </section>
   );
 }
 
-// ---- the 13 diagnostic categories ---------------------------------------------------------
+// ---- 4. thesis and watch -----------------------------------------------------------------------
 
-function Categories({ d, p, prov, detail, full, wait, opened }) {
-  const sum = p.providers && p.providers[prov];
-  if (!sum) return null;
-  if (!full) return null;
-  const r = full;
-  const a = r.assessment || {};
-  if (a.needs_text || sum.needs_text) return <p className="faint">The saved report is a PDF: its category grades can be read once a text copy is imported.</p>;
-  const profile = profileOf(d.index.rubrics.profiles, a, detail.profile);
-  const rows = categoryRows(profile, a);
-  if (!rows.length) return <p className="faint">This report grades no categories.</p>;
-  const counts = scorecardCounts(rows);
-  const conf = statesConfidence(rows);
-  const flags = (r.evidence && r.evidence.flags) || [];
-  const anchors = d.index.rubrics.grading.favorable_anchors || [];
-  const current = detail.research_contract && detail.research_contract.sector_profile;
-  const older = Boolean(current && a.sector_profile && a.sector_profile !== current);
+function Take({ text, id }) {
+  return <p id={id} className="take-text clamp-3" title={text.length > 280 ? text : undefined}>{text}</p>;
+}
+
+function Thesis({ p, cr, wait }) {
+  const pid = p.project_id;
+  const prov = cr.c.provider || 'claude';
+  const a = cr.report ? cr.report.assessment || {} : null;
+  let body;
+  if (cr.c.report && !a && !cr.c.report.needs_text) body = wait;
+  else if (a && !a.needs_text) {
+    const metric = a.next_metric_to_monitor;
+    body = (
+      <>
+        {a.final_take ? <Take text={a.final_take} id={`take-${pid}`} /> : <p className="faint">{`No final take in ${PROVIDER_LABELS[prov]}'s data block.`}</p>}
+        {metric && metric.metric ? <p className="tl iv-watch"><span className="tl-k">Watch</span><span className="iv-watch-t">{metric.metric}{metric.threshold ? ` (${metric.threshold})` : ''}</span></p> : null}
+      </>
+    );
+  } else body = <p className="faint">No report to draw a thesis from.</p>;
   return (
-    <section className="insp-sec cats" aria-labelledby={`insp-cats-${prov}`} data-report={r.report_id}>
+    <section className="insp-sec thesis iv-thesis" aria-labelledby="insp-sec-thesis">
       <div className="sec-head">
-        <h3 className="sec-title" id={`insp-cats-${prov}`} title="The report's category grades: diagnostics shown beside the investment grade, never averaged into it">Diagnostic categories</h3>
-        <span className="sec-meta">{`${counts.scored} of ${counts.total} scored${counts.unknown ? ` · ${counts.unknown} unknown` : ''}`}{older ? <span title={`This report used ${a.sector_profile}; new research uses ${current}`}>{` · ${a.sector_profile}`}</span> : null}</span>
+        <h3 className="iv-h" id="insp-sec-thesis">Thesis</h3>
+        <DeepLink pid={pid} href={`#/project/${enc(pid)}/brief?model=${prov}`} className="iv-link" dataKey={`iv-brief-${pid}`}>Read full brief<ArrowRight size={13} aria-hidden="true" /></DeepLink>
       </div>
-      <ul className="cat-rows" aria-label={`${PROVIDER_LABELS[prov]}'s category grades, 0 to 100, higher is better`}>
-        {rows.map((x) => {
-          const s = x.score;
-          const name = SHORT[x.id] || x.label;
-          const na = (x.def && x.def.applicable === false) || (s && s.status === 'not_applicable');
-          if (na) {
-            return (
-              <li key={x.id} className="cat-na">
-                <span className="dsb-name" title={x.label}><span className="dsb-label">{name}</span></span>
-                <span className="cat-na-word" title={(x.def && x.def.na_reason) || (s && s.rationale) || ''}>Not applicable</span>
-              </li>
-            );
+      {body}
+    </section>
+  );
+}
+
+// ---- 5. what needs you -------------------------------------------------------------------------
+
+const PROBLEM_WORDS = { uncertain: 'Check charge', failed: 'Research failed', incomplete: 'Research incomplete', conflict: 'Answer quarantined', interrupted: 'Research paused', held: 'Held by archive' };
+
+function NeedsYou({ d, p, detail }) {
+  const { a: agenda } = useAgendaRead();
+  const pid = p.project_id;
+  const [busy, setBusy] = useState(null);
+  const [all, setAll] = useState(false);
+  const lines = [];
+  const att = (d.index.attention || []).filter((a) => a.project_id === p.project_id);
+  // Research that needs you, per model (a held model is never retried).
+  for (const prov of ['claude', 'chatgpt', 'gemini']) {
+    const job = p.research && p.research.providers && p.research.providers[prov];
+    if (!job) continue;
+    const hold = Boolean(onHoldOf(d.index, prov));
+    const key = jobKey(job, null, { onHold: hold });
+    if (key === 'waiting') {
+      lines.push({ key: `wait-${prov}`, sev: 'medium', kind: 'Waiting for you', text: `${PROVIDER_LABELS[prov]} research is ready when you ask its assistant`, action: <DeepLink pid={pid} href={`#/project/${enc(pid)}/record?open=runs`} className="btn btn-sm" dataKey={`iv-wait-${prov}`}>Open the prompt</DeepLink> });
+    } else if (PROBLEM_WORDS[key]) {
+      const canRetry = job.state === 'failed' && !hold && job.run_id;
+      lines.push({
+        key: `job-${prov}`,
+        sev: key === 'uncertain' ? 'high' : 'medium',
+        kind: PROBLEM_WORDS[key],
+        text: `${PROVIDER_LABELS[prov]}${job.error ? `: ${job.error}` : ''}`,
+        action: canRetry ? (
+          <button type="button" className="btn btn-sm" data-key={`retry-${pid}-${prov}`} disabled={busy === `retry-${prov}`} onClick={async () => {
+            setBusy(`retry-${prov}`);
+            try {
+              const r = await api.post(`/api/projects/${encodeURIComponent(pid)}/research/${encodeURIComponent(job.run_id)}/jobs/${prov}/retry`, {});
+              toast(r.message || 'Retry queued');
+              await refresh();
+            } catch (err) {
+              toast(err.message, 'bad');
+            } finally {
+              setBusy(null);
+            }
+          }}><RotateCcw size={13} aria-hidden="true" />Retry</button>
+        ) : <DeepLink pid={pid} href={`#/project/${enc(pid)}/record?open=runs`} className="btn btn-sm" dataKey={`iv-runs-${prov}`}>Research runs</DeepLink>,
+      });
+    }
+  }
+  for (const a of att.filter((x) => ['writes_blocked', 'broken_record', 'import_failed'].includes(x.kind))) lines.push({ key: a.kind, sev: 'high', kind: kindWord(a), text: a.title, action: null });
+  // What changed and your reviews due (D3).
+  for (const [i, r] of reviewReasons(p, d.index, agendaRowOf(agenda, pid)).entries()) {
+    if (r.kind === 'changed') lines.push({ key: 'changed', sev: 'low', kind: 'Review suggested', text: r.words, action: <DeepLink pid={pid} href={`#/project/${enc(pid)}/notes`} className="btn btn-sm" dataKey={`history-${pid}`}>What changed</DeepLink> });
+    if (r.kind === 'due') lines.push({ key: `due-${i}`, sev: 'medium', kind: 'Review due', text: r.words, action: r.item ? <DeepLink pid={pid} href={`#/review?p=${enc(pid)}`} className="btn btn-sm" dataKey={`iv-review-${pid}`}>Review</DeepLink> : <DeepLink pid={pid} href={`#/project/${enc(pid)}/notes`} className="btn btn-sm" dataKey={`iv-due-${pid}`}>Your reviews</DeepLink> });
+  }
+  // A model's suggested review date not on your calendar yet: add it.
+  const sug = att.find((a) => a.kind === 'review_suggested');
+  if (sug) {
+    const pc = ['claude', 'chatgpt', 'gemini'].map((prov) => ({ prov, s: p.providers && p.providers[prov] && p.providers[prov].position })).find((x) => x.s && x.s.next_review_date);
+    lines.push({
+      key: 'suggested',
+      sev: 'low',
+      kind: 'Review suggested',
+      text: sug.title.replace(`${p.name}: `, ''),
+      action: pc ? (
+        <button type="button" className="btn btn-sm" data-key={`iv-add-review-${pid}`} disabled={busy === 'add-review'} onClick={async () => {
+          setBusy('add-review');
+          try {
+            const r = await api.post(`/api/scopes/${encodeURIComponent(pid)}/events`, { type: 'review', title: `Review thesis (${PROVIDER_LABELS[pc.prov]} suggested this date)`, due: pc.s.next_review_date, note: pc.s.review_trigger || null, submission_id: submissionId() });
+            toast(r && r.status === 'exists' ? 'Already on your reviews' : `Review added for ${fmtDate(pc.s.next_review_date)}`);
+            await refresh();
+          } catch (err) {
+            toast(err.message, 'bad');
+          } finally {
+            setBusy(null);
           }
-          const scored = isScored(s);
-          const fl = categoryFlags(flags, x.id);
-          const serious = fl.some((f) => f.severity === 'high');
-          const value = !s ? 'Not in report' : scored ? scoreText(s) : 'Unknown';
-          const word = scored ? anchorText(anchors, s) : null;
-          const short = !s ? 'Not graded in this report' : scored ? null : s.missing_data || null;
-          const item = (k, v) => (v ? [<dt key={`${k}-t`}>{k}</dt>, <dd key={`${k}-d`}>{v}</dd>] : []);
-          const okey = `cat-${prov}-${x.id}`;
-          return (
-            <li key={x.id}>
-              <details className={`cat${scored ? '' : ' is-unknown'}${fl.length ? (serious ? ' has-serious' : ' has-flag') : ''}`} data-key={okey} open={opened.get(okey)} onToggle={(e) => opened.set(okey, e.currentTarget.open)}>
-                <summary aria-label={`${x.label}: ${scored ? `${scoreWords(s)}${word ? `, ${word}` : ''}${conf && CONFIDENCE_LABELS[s.confidence] ? `, confidence ${CONFIDENCE_LABELS[s.confidence].toLowerCase()}` : ''}` : value}${fl.length ? `; ${serious ? 'serious evidence flag' : 'evidence flag'}` : ''}. Open for the reasons`}>
-                  <DiagnosticSegmentBar
-                    label={name}
-                    title={x.label}
-                    score={s}
-                    value={scored ? value : '?'}
-                    known={scored}
-                    mark={fl.length ? <span className={`ev-dot ${serious ? 'serious' : 'material'}`} title={fl.map((f) => f.beside || f.message).join(' ')} /> : null}
-                    confidence={conf && scored && CONF_LETTER[s.confidence] ? { letter: CONF_LETTER[s.confidence], title: `${CONFIDENCE_LABELS[s.confidence]} confidence, as the model states it` } : null}
-                  />
-                  {short ? <span className="cat-why">{short}</span> : null}
-                </summary>
-                <div className="cat-detail">
-                  <p className="cat-full">{x.label}{word ? <span className="faint">{` · ${word}`}</span> : null}</p>
-                  {fl.map((f) => (
-                    <p key={f.message} className={`evline ev-${f.severity === 'high' ? 'serious' : 'material'}`}><TriangleAlert size={13} aria-hidden="true" /><span><strong>{f.severity === 'high' ? 'Serious evidence flag. ' : 'Evidence flag. '}</strong>{f.beside || f.message}</span></p>
-                  ))}
-                  <dl>
-                    {item(scored ? 'Why this grade' : 'Why unknown', scored ? s.rationale || 'No reason given.' : (s && s.missing_data) || 'Not stated.')}
-                    {item('Strongest evidence', s && s.strongest_evidence)}
-                    {item('Confidence', scored && CONFIDENCE_LABELS[s.confidence] ? CONFIDENCE_LABELS[s.confidence] : null)}
-                    {item('Main weakness', s && s.main_weakness)}
-                    {item('Would raise it', s && s.would_raise)}
-                    {item('Would lower it', s && s.would_lower)}
-                    {item('Cites', s && Array.isArray(s.evidence_refs) && s.evidence_refs.length ? s.evidence_refs.join(', ') : null)}
-                  </dl>
-                </div>
-              </details>
-            </li>
-          );
-        })}
+        }}>Add to my reviews</button>
+      ) : null,
+    });
+  }
+  const differ = att.find((a) => a.kind === 'disagreement');
+  if (differ) lines.push({ key: 'differ', sev: 'medium', kind: 'Models differ', text: differ.detail || differ.title, action: <DeepLink pid={pid} href={`#/project/${enc(pid)}/compare`} className="btn btn-sm" dataKey={`iv-compare-${pid}`}>Compare</DeepLink> });
+  for (const a of att.filter((x) => ['grade_mismatch', 'extraction', 'needs_text', 'identity_price', 'contract_change', 'alert', 'stale_research', 'fundamentals_binding'].includes(x.kind))) {
+    lines.push({ key: `${a.kind}-${lines.length}`, sev: a.severity || 'low', kind: kindWord(a), text: a.title.replace(`${p.name}: `, ''), action: a.action ? <a className="btn btn-sm" href={attentionHref(a)} data-key={`iv-att-${a.kind}-${pid}`}>Open</a> : null });
+  }
+  if (p.identity_status !== 'verified') lines.push({ key: 'identity', sev: 'medium', kind: 'Identity pending', text: (p.identity_unknowns || []).join(' ') || 'The token is not confirmed, so no prices or holdings use it.', action: <DeepLink pid={pid} href={`#/project/${enc(pid)}/contract?open=identity`} className="btn btn-sm" dataKey={`fix-identity-${pid}`}>Complete the identity</DeepLink> });
+  if (!lines.length) return null;
+  const order = { high: 0, medium: 1, low: 2 };
+  const sorted = lines.sort((x, y) => order[x.sev] - order[y.sev]);
+  const shown = all ? sorted : sorted.slice(0, 3);
+  return (
+    <section className="iv-needs" aria-labelledby="iv-needs-h">
+      <h3 className="iv-h" id="iv-needs-h">Needs you</h3>
+      <ul className="iv-lines">
+        {shown.map((l) => (
+          <li key={l.key} className={`iv-line sev-${l.sev}`}>
+            <span className="iv-line-t"><strong>{l.kind}</strong><span className="iv-line-d" title={l.text}>{` · ${l.text}`}</span></span>
+            {l.action}
+          </li>
+        ))}
       </ul>
+      {sorted.length > 3 ? <button type="button" className="btn-link iv-all" aria-expanded={all} data-key={`iv-needs-all-${pid}`} onClick={() => setAll(!all)}>{all ? 'Show fewer' : `${sorted.length - 3} more`}</button> : null}
     </section>
   );
 }
 
-// ---- the rest of its risks ------------------------------------------------------------------
+// ---- 6. your note --------------------------------------------------------------------------------
 
-function Risks({ d, p, prov, full }) {
-  const sum = p.providers && p.providers[prov];
-  if (!sum || !full) return null;
-  const a = full.assessment || {};
-  const shown = keyPoints(a).risk;
-  const facts = (a.bearish_facts || []).filter((f) => f && f.text && !(shown && f.text.trim() === shown.text)).slice(0, 3);
-  const defs = d.index.rubrics.grading.risk_scores || [];
-  const top = (s) => (s.status === 'range' ? s.high : s.value);
-  const scores = defs.map((def) => ({ def, s: (a.risk_scores || {})[def.id] })).filter((x) => isScored(x.s)).sort((x, y) => top(y.s) - top(x.s));
-  const title = shown ? 'More risks' : 'Strongest risks';
-  if (!facts.length && !scores.length) return shown ? null : <section className="insp-sec risks"><h3 className="sec-title">{title}</h3><p className="faint">No risks listed.</p></section>;
+function YourNote({ p, detail }) {
+  const pid = p.project_id;
+  const note = detail && detail.conviction ? String(detail.conviction.text || '').trim() : '';
   return (
-    <section className="insp-sec risks" aria-label={`${PROVIDER_LABELS[prov]}'s ${title.toLowerCase()}`} data-report={full.report_id}>
-      <h3 className="sec-title">{title}</h3>
-      {facts.length ? <ol className="risk-list">{facts.map((f) => <li key={f.text}>{f.text}</li>)}</ol> : null}
-      {scores.length ? (
-        <p className="risk-scores">
-          <span className="tl-k">Downside, higher is worse</span>
-          {scores.map((x, i) => <span key={x.def.id} className="rs">{i ? ' · ' : ''}{`${x.def.label.replace(/ risk$/i, '')} `}<strong>{scoreText(x.s)}</strong></span>)}
-        </p>
-      ) : null}
-    </section>
+    <p className="tl-note iv-note" title={note && detail.conviction.updated_at ? `Your note, saved ${fmtDateTime(detail.conviction.updated_at)}` : undefined}>
+      <span className="tl-k">Your note</span>
+      {note ? <span className="tl-note-text">{note}</span> : <span className="faint">{detail ? 'None yet' : '…'}</span>}
+      <span className="tl-dot" aria-hidden="true">·</span>
+      <DeepLink pid={pid} href={`#/project/${enc(pid)}/notes`} dataKey={`note-edit-${pid}`}>{note ? 'Edit' : 'Add a note'}</DeepLink>
+    </p>
   );
 }
 
-// ---- review items for this project --------------------------------------------------------------
+// ---- the body --------------------------------------------------------------------------------
 
-const JOB_KINDS = new Set(['research_uncertain', 'research_failed', 'research_incomplete', 'research_conflict', 'research_interrupted', 'identity']);
-export const projectItems = (d, p) => (d.index.attention || []).filter((a) => a.project_id === p.project_id && !JOB_KINDS.has(a.kind));
-
-function ReviewItems({ d, p }) {
-  const items = splitAttention(projectItems(d, p)).rest;
-  if (!items.length) return null;
-  return (
-    <ul className="insp-items" aria-label="Needs a look">
-      {items.map((a, i) => (
-        <li key={`${a.kind}-${i}`}>
-          <details className={`item-fold sev-${a.severity || 'low'}`} data-key={`previews-${p.project_id}-d-${i}`}>
-            <summary><span className="item-kind">{kindWord(a)}</span><span className="item-title">{a.title}</span></summary>
-            {a.detail || a.action ? (
-              <div className="fold-body">
-                {a.detail ? <p>{a.detail}</p> : null}
-                {a.action ? <a href={attentionHref(a)} data-key={`previews-${p.project_id}-${i}`}>Open</a> : null}
-              </div>
-            ) : null}
-          </details>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-// ---- text and data block differ ----------------------------------------------------------------
-
-function TextCheck({ p, prov, full }) {
-  const tx = full ? full.text_scores : null;
-  if (!tx || !Array.isArray(tx.mismatches) || !tx.mismatches.length) return null;
-  const n = tx.mismatches.length;
-  return (
-    <details className="fold text-check" data-key={`text-check-${p.project_id}-${prov}`}>
-      <summary><TriangleAlert size={13} aria-hidden="true" /><span><strong>Text and data block differ</strong>{` · ${n} score${n === 1 ? '' : 's'}`}</span></summary>
-      <div className="fold-body">
-        <ul className="plain-list">{tx.mismatches.map((m) => <li key={m.label}>{`${m.label}: ${m.text.join(' and ')} in the text, ${m.data} in the data block`}</li>)}</ul>
-        <p className="faint">The grade uses the data block as saved; the text is kept as written, and neither is changed.</p>
+function ReportWait({ p, cr, current, failed }) {
+  const who = PROVIDER_LABELS[cr.c.provider || 'claude'];
+  if (failed) return <p className="faint mp-wait">{`${who}'s report could not be loaded; the grade above is from the list.`}</p>;
+  if (cr.status === 'pending' && current && wasResynced(p.project_id, cr.report_id)) {
+    return (
+      <div className="note note-warn mp-wait" role="status">
+        <span>{`The list names ${who}'s report ${cr.report_id}, which this project's record does not hold yet. Nothing from another report is shown in its place.`}</span>
+        <button type="button" className="btn btn-sm" data-key={`resync-${p.project_id}`} onClick={() => refresh().catch((err) => toast(err.message, 'bad'))}>Read again</button>
       </div>
-    </details>
-  );
+    );
+  }
+  return <Loading label={`${who}'s report`} />;
 }
 
-export function ModelPanel({ d, p, prov, detail, current = true, failed = false, opened }) {
-  const op = opinionOf(p, prov, detail);
-  const full = fullOf(op);
-  const graded = Boolean(op.summary && !op.summary.needs_text);
+export function ModelPanel({ d, p, detail, current = true, failed = false }) {
+  const cr = canonicalReport(p, detail);
   // A current record that does not hold the list's report: read it once more.
   useEffect(() => {
-    if (op.status === 'pending' && current) resyncOnce(p.project_id, op.report_id);
-  }, [op.status, current, p.project_id, op.report_id]);
-  const wait = op.summary && !full ? <ReportWait p={p} prov={prov} op={op} current={current} failed={failed && !detail} /> : null;
+    if (cr.status === 'pending' && current && cr.c.source !== 'headline') resyncOnce(p.project_id, cr.report_id);
+  }, [cr.status, current, p.project_id, cr.report_id]);
+  const wait = cr.c.report && !cr.report ? <ReportWait p={p} cr={cr} current={current} failed={failed && !detail} /> : null;
   return (
-    <div className="mpanel" data-report={op.report_id || ''} data-opinion={op.status}>
-      <Verdict d={d} p={p} prov={prov} op={op} />
-      {graded ? <KeyPoints p={p} prov={prov} full={full} wait={wait} /> : null}
-      <VerdictMore d={d} p={p} prov={prov} op={op} full={full} wait={wait} opened={opened} />
-      {graded ? <TextCheck p={p} prov={prov} full={full} /> : null}
-      <ReviewItems d={d} p={p} />
-      <Thesis p={p} prov={prov} detail={detail} full={full} wait={graded ? null : wait} />
-      {graded ? <Categories d={d} p={p} prov={prov} detail={detail} full={full} wait={wait} opened={opened} /> : null}
-      {graded ? <Risks d={d} p={p} prov={prov} full={full} /> : null}
+    <div className="mpanel iv" data-report={cr.report_id || ''} data-opinion={cr.status} data-provider={cr.c.provider || 'claude'}>
+      <VerdictCard d={d} p={p} cr={cr} />
+      <Triggers p={p} cr={cr} wait={wait} />
+      <RiskStrip d={d} p={p} />
+      <Thesis p={p} cr={cr} wait={wait} />
+      <NeedsYou d={d} p={p} detail={detail} />
+      <YourNote p={p} detail={detail} />
     </div>
   );
 }

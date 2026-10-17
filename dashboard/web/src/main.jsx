@@ -7,6 +7,8 @@ import './styles/watchlist.css';
 import './styles/inspector.css';
 import './styles/project.css';
 import './styles/forensics.css';
+import './styles/l2.css';
+import './styles/market.css';
 import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import { start } from './lib/start.js';

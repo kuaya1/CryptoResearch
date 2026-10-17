@@ -126,7 +126,10 @@ function useChanges(d, pid, base) {
   return { ch: got.ch, loading: false, error: got.error };
 }
 
-export function CheckIn({ d, current, row, pid }) {
+// markRef (the Review page's action bar): set on every draw to { can, busy,
+// run } so its "Mark reviewed (⌘↵)" uses this same mark, note included;
+// hideButton leaves the button to that bar. startOpen opens the rows.
+export function CheckIn({ d, current, row, pid, markRef = null, hideButton = false, startOpen = false }) {
   const dk = useDesk();
   const base = baseOf(nav.route.query);
   const { ch: changes, loading, error } = useChanges(d, pid, base);
@@ -199,13 +202,14 @@ export function CheckIn({ d, current, row, pid }) {
     await refresh();
   };
 
+  if (markRef) markRef.current = { can: canMark && drawn.ready, busy, mark: () => mark(), label: drawn.ready ? 'Mark reviewed' : STILL_LOADING };
   // On a phone the line is just the changes (the label stays for screen
   // readers), so it keeps to one line beside Mark reviewed.
   const head = <span className="dg-t"><strong id="pb-digest-h" className="dg-label">Since your last review</strong><span className="faint"><span className="dg-sep">{' · '}</span>{words.length ? words.join(', ') : 'nothing new'}</span></span>;
   const label = drawn.ready ? 'Mark reviewed' : STILL_LOADING;
   return (
     <section className={`digest${ch.item_count ? ' has' : ''}`} aria-labelledby="pb-digest-h" title={ch.since ? `Since ${ch.cursor_source === 'project created' ? 'the project was added' : fmtDateTime(ch.since)}. A digest never changes grades, reports or your headline.` : undefined}>
-      <details className="dg-d" data-key="pb-digest" open={Boolean(base) || undefined}>
+      <details className="dg-d" data-key="pb-digest" open={Boolean(base) || startOpen || undefined}>
         <summary>{head}</summary>
         <div className="ci">
           <p className={`ci-head${model.head.inferred ? ' is-inferred' : ''}`} data-key="ci-head">{loading ? 'Loading that review…' : model.head.text}</p>
@@ -225,7 +229,7 @@ export function CheckIn({ d, current, row, pid }) {
           <p className="dg-all"><a href={`#/project/${enc(pid)}/notes`} data-key="pb-all-changes">All changes</a></p>
         </div>
       </details>
-      {canMark ? <button type="button" className="btn btn-sm" data-key="ov-reviewed" title={drawn.ready ? undefined : STILL_LOADING} disabled={busy || !drawn.ready} onClick={() => mark()}>{label}</button> : null}
+      {canMark && !hideButton ? <button type="button" className="btn btn-sm" data-key="ov-reviewed" title={drawn.ready ? undefined : STILL_LOADING} disabled={busy || !drawn.ready} onClick={() => mark()}>{label}</button> : null}
       {msg ? (
         <p className={`dg-msg${msg.tone ? ` is-${msg.tone}` : ''}`} role="status" data-key="ci-msg">
           <span>{msg.text}</span>

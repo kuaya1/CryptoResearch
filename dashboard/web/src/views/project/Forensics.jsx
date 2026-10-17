@@ -23,7 +23,8 @@ import { ArrowUpRight, TriangleAlert, Copy, Play, Upload, ShieldCheck, History }
 import { fmtDate, fmtDateTime, fmtAgo, fmtCompactUsd, fmtPrice, PROVIDER_LABELS, toast, copyText } from '../../../../public/ui.js';
 import { desk, api, refresh } from '../../lib/desk.js';
 import { useDesk } from '../../lib/hooks.js';
-import { hrefWith } from '../../lib/router.js';
+import { hrefWith, nav, navigate } from '../../lib/router.js';
+import { Segments } from './kit.jsx';
 import { DiagnosticSegmentBar } from '../../components/ui/DiagnosticSegmentBar.jsx';
 // The re-audit's improvements (2026-10-17), each its own module.
 import { CaseButton } from './forensics/CaseButton.jsx';
@@ -64,17 +65,36 @@ const words = (s) => (s ? s.replace(/_/g, ' ') : '');
 const shortHash = (h) => (h ? `${h.slice(0, 10)}…` : null);
 const shortAddr = (a) => (a && a.length > 14 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a || '');
 
+// The tab's four segments (§3.3, one level of segmented control inside the
+// tab): Assessment | Exits | Timeline | Receipts, in the address as ?fx=.
+export const SEGMENTS = [['assessment', 'Assessment'], ['exits', 'Exits'], ['timeline', 'Timeline'], ['receipts', 'Receipts']];
+const segOf = (route) => {
+  const v = route && route.query.get('fx');
+  return SEGMENTS.some(([k]) => k === v) ? v : 'assessment';
+};
+const goSeg = (seg) => navigate(hrefWith({ fx: seg === 'assessment' ? null : seg }), { replace: true, state: history.state });
+// Where each fold lives, so a jump from another segment switches first.
+const FOLD_SEG = { 'fx-findings': 'receipts', 'fx-grades': 'receipts', 'fx-sources': 'receipts', 'fx-observations': 'receipts', 'fx-challenge': 'receipts', 'fx-receipts': 'receipts', 'fx-register': 'receipts', 'fx-method': 'receipts', 'fx-queue': 'assessment', 'fx-cov': 'assessment', 'fx-exits': 'exits', 'fx-exit-compare': 'exits' };
+
 function openFold(key, anchor = null) {
-  const d = document.querySelector(`[data-key="${key}"]`);
-  if (!d) return;
-  if (d.tagName === 'DETAILS') d.open = true;
-  requestAnimationFrame(() => {
-    const el = (anchor && document.getElementById(anchor)) || d;
-    el.scrollIntoView({ block: anchor ? 'center' : 'start' });
-    const f = anchor ? el : d.querySelector('summary') || d;
-    if (f && !f.hasAttribute('tabindex') && f.tagName !== 'SUMMARY') f.setAttribute('tabindex', '-1');
-    if (f) f.focus({ preventScroll: true });
-  });
+  if (!document.querySelector(`[data-key="${key}"]`) && FOLD_SEG[key] && FOLD_SEG[key] !== segOf(nav.route)) goSeg(FOLD_SEG[key]);
+  let tries = 0;
+  const go = () => {
+    const d = document.querySelector(`[data-key="${key}"]`);
+    if (!d) {
+      if (tries++ < 40) requestAnimationFrame(go);
+      return;
+    }
+    if (d.tagName === 'DETAILS') d.open = true;
+    requestAnimationFrame(() => {
+      const el = (anchor && document.getElementById(anchor)) || d;
+      el.scrollIntoView({ block: anchor ? 'center' : 'start' });
+      const f = anchor ? el : d.querySelector('summary') || d;
+      if (f && !f.hasAttribute('tabindex') && f.tagName !== 'SUMMARY') f.setAttribute('tabindex', '-1');
+      if (f) f.focus({ preventScroll: true });
+    });
+  };
+  go();
 }
 
 // GET /api/projects/<id>/forensics[?receipt=], read again when a live update
@@ -106,7 +126,7 @@ function useForensics(pid, receipt) {
   return { v: mine ? st.v : null, error: mine ? st.error : null, retry: () => setAttempt((a) => a + 1) };
 }
 
-const receiptHref = (rid) => hrefWith({ receipt: rid || null });
+const receiptHref = (rid) => hrefWith({ receipt: rid || null, fx: null });
 
 // ---- small parts --------------------------------------------------------------------
 
@@ -401,15 +421,39 @@ function ExitTable({ exits, oneWay }) {
 
 function States({ v }) {
   const s = v.states;
-  const L = v.liquidity;
-  const vol = L.observed_volume;
   return (
     <section className="fx-card" aria-labelledby="fx-states-h">
       <div className="fx-head"><h2 id="fx-states-h" className="fx-h">Current states</h2><span className="fx-head-sub">Four outcomes, kept apart; they can overlap</span></div>
       <div className="fx-tiles">
         {EVENTS.map((e) => <StateTile key={e} id={e} s={s[e === 'liquidity_impairment' ? 'liquidity' : e === 'operational_degradation' ? 'operational' : e === 'delivery_inactivity' ? 'delivery' : 'discontinuation']} />)}
       </div>
-      <h3 className="fx-h3" title={L.categories.execution_estimates}>Hypothetical exits <span className="fx-h3-sub">Estimates, never transactions</span></h3>
+      {s.operational.checks && s.operational.checks.length ? (
+        <>
+          <h3 className="fx-h3">Product checks</h3>
+          <ul className="fx-checks">
+            {s.operational.checks.map((c) => (
+              <li key={c.key} className="fx-check">
+                <span className="fx-check-n">{c.label}<span className="faint">{c.source === 'audit' ? ' · captured in an audit' : ' · monitored'}</span></span>
+                <StateWord state={c.state} title={readable(c.why)} />
+                <span className="fx-check-r" aria-label="Recent readings">{(c.recent || []).map((r, i) => <span key={i} className={`fx-dot ${r.beyond === true ? 'is-fail' : r.beyond === false ? 'is-pass' : 'is-none'}`} title={`${fmtDateTime(r.at)}: ${r.beyond === true ? 'failed' : r.beyond === false ? 'passed' : 'said nothing'}`} />)}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+      <p className="fx-act-note"><button type="button" className="btn-link" data-key="fx-to-exits" onClick={() => openFold('fx-exits')}>Hypothetical exits at your sizes</button></p>
+    </section>
+  );
+}
+
+// The Exits segment: what an exit at your sizes would receive and cost, the
+// reported reserves, the observed volume and any suspected artificial activity.
+function Exits({ v }) {
+  const L = v.liquidity;
+  const vol = L.observed_volume;
+  return (
+    <section className="fx-card" aria-labelledby="fx-exits-h" data-key="fx-exits" tabIndex={-1}>
+      <div className="fx-head"><h2 id="fx-exits-h" className="fx-h" title={L.categories.execution_estimates}>Hypothetical exits</h2><span className="fx-head-sub">Estimates, never transactions</span></div>
       <ExitTable exits={L.exits} oneWay={[L.one_way, L.completeness].filter(Boolean).join(' ')} />
       <div className="fx-liq">
         <div className="fx-liq-c">
@@ -427,20 +471,6 @@ function States({ v }) {
           {L.suspected_artificial.length ? <ul className="fx-list">{L.suspected_artificial.map((f) => <li key={f.finding_id}>{`${f.finding_id}: ${f.statement}`}{f.method_stated ? null : <span className="fx-flag"> No method stated</span>}</li>)}</ul> : <p className="none">None stated with a method</p>}
         </div>
       </div>
-      {s.operational.checks && s.operational.checks.length ? (
-        <>
-          <h3 className="fx-h3">Product checks</h3>
-          <ul className="fx-checks">
-            {s.operational.checks.map((c) => (
-              <li key={c.key} className="fx-check">
-                <span className="fx-check-n">{c.label}<span className="faint">{c.source === 'audit' ? ' · captured in an audit' : ' · monitored'}</span></span>
-                <StateWord state={c.state} title={readable(c.why)} />
-                <span className="fx-check-r" aria-label="Recent readings">{(c.recent || []).map((r, i) => <span key={i} className={`fx-dot ${r.beyond === true ? 'is-fail' : r.beyond === false ? 'is-pass' : 'is-none'}`} title={`${fmtDateTime(r.at)}: ${r.beyond === true ? 'failed' : r.beyond === false ? 'passed' : 'said nothing'}`} />)}</span>
-              </li>
-            ))}
-          </ul>
-        </>
-      ) : null}
     </section>
   );
 }
@@ -789,8 +819,8 @@ function Method({ v }) {
           return <div key={e}><dt>{x.label}</dt><dd>{x.definition} <span className="faint">{`Cadence: ${(v.cadence_now && v.cadence_now[e]) || x.cadence} ${x.persistence ? `Persistence: ${x.persistence.hours} h, ${x.persistence.min_readings} reading(s). ` : ''}${x.recovery ? `Recovery: ${x.recovery.hours} h, ${x.recovery.min_readings} reading(s). ` : ''}${x.freshness_hours ? `Freshness: ${x.freshness_hours} h. ` : ''}Resolution: ${x.resolution} Limits: ${x.limits}`}</span></dd></div>;
         })}
       </dl>
-      <h4 className="fx-h4">Your screening preferences</h4>
-      <p className="faint">{p.note}</p>
+      <h4 className="fx-h4">Your screening preferences <a className="fx-h4-link" href={hrefWith({ prefs: 'screening' })} data-key="fx-prefs-edit-method">Edit</a></h4>
+      <p className="faint">{v.selected && v.selected.receipt_id ? `The values this receipt froze. ${p.note}` : p.note}</p>
       <ul className="fx-list">
         <li>{`Exit sizes ${p.exit_sizes_usd.map((s) => `$${s.toLocaleString('en-US')}`).join(', ')}; position $${p.exit_position_usd}; exit-cost limit ${p.exit_cost_limit_pct}%`}</li>
         <li>{`Delivery window ${p.delivery_window_days} days; volume review level ${p.volume_review_fraction} of the 30-day median before the origin`}</li>
@@ -1205,25 +1235,50 @@ export default function Forensics({ pid, receipt = null }) {
   const broken = Boolean(v.current && v.current.integrity && !v.current.integrity.ok);
   const vv = broken ? { ...v, current: null, challenge: null } : v;
   const c = vv.current;
+  const seg = segOf(nav.route);
+  const pf = v.preferences_in_use || v.preferences;
   return (
     <div className="fx">
-      <Assessment v={v} pid={pid} />
-      {c ? (
-        <div className="fx-keys">
-          <KeyFinding title="Strongest supported concern" tone="concern" r={c.strongest_concern} idx={c.source_index} />
-          <NextAction v={vv} />
-          <KeyFinding title="Strongest counterevidence" tone="counter" r={c.strongest_counterevidence} idx={c.source_index} />
-        </div>
-      ) : <NextAction v={vv} />}
-      <AssessmentDetails v={vv} pid={pid} />
-      <EvidenceChanges v={vv} pid={pid} />
-      <Disagreements v={vv} pid={pid} />
-      <States v={vv} />
-      <ExitCompare v={vv} pid={pid} symbol={v.symbol} />
-      <Timeline v={vv} />
-      <Conditions v={vv} />
-      <Details v={vv} pid={pid} />
-      <Actions v={vv} pid={pid} />
+      <div className="fx-segbar">
+        <Segments
+          value={seg}
+          label="Forensics"
+          dataKey="fx-seg"
+          onChange={goSeg}
+          options={SEGMENTS.map(([k, w]) => [k, w, k === 'receipts' ? (v.receipts.length + v.challenges.length) || null : k === 'exits' ? null : undefined])}
+        />
+        <a className="fx-prefs-link" href={hrefWith({ prefs: 'screening' })} data-key="fx-prefs-edit" title={`In use here: exit position $${pf.exit_position_usd}, exit-cost limit ${pf.exit_cost_limit_pct}%, delivery window ${pf.delivery_window_days} days`}>Your screening preferences · Edit</a>
+      </div>
+      {seg === 'assessment' ? (
+        <>
+          <Assessment v={v} pid={pid} />
+          {c ? (
+            <div className="fx-keys">
+              <KeyFinding title="Strongest supported concern" tone="concern" r={c.strongest_concern} idx={c.source_index} />
+              <NextAction v={vv} />
+              <KeyFinding title="Strongest counterevidence" tone="counter" r={c.strongest_counterevidence} idx={c.source_index} />
+            </div>
+          ) : <NextAction v={vv} />}
+          <AssessmentDetails v={vv} pid={pid} />
+          <EvidenceChanges v={vv} pid={pid} />
+          <Disagreements v={vv} pid={pid} />
+          <States v={vv} />
+          <Actions v={vv} pid={pid} />
+        </>
+      ) : null}
+      {seg === 'exits' ? (
+        <>
+          <Exits v={vv} />
+          <ExitCompare v={vv} pid={pid} symbol={v.symbol} />
+        </>
+      ) : null}
+      {seg === 'timeline' ? (
+        <>
+          <Timeline v={vv} />
+          <Conditions v={vv} />
+        </>
+      ) : null}
+      {seg === 'receipts' ? <Details v={vv} pid={pid} /> : null}
     </div>
   );
 }

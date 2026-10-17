@@ -297,6 +297,36 @@ function validateSettingsPatch(patch, ws = null) {
       }
     }
   }
+  if (patch.forensics && patch.forensics.preferences) {
+    // Eric's screening preferences (Preferences > Screening; core/forensics.js
+    // prefsOf reads them with the same bounds). Each new forensic receipt
+    // freezes the values in force; saved receipts keep theirs.
+    const p = patch.forensics.preferences;
+    const o = {};
+    const above = (v, hi, label) => {
+      const n = num(v, 0, hi, label);
+      if (!(n > 0)) throw new OpError('INVALID', `${label} must be more than 0`);
+      return n;
+    };
+    const optional = (v, hi, label) => (v === null || v === '' ? null : above(v, hi, label));
+    if (p.exit_sizes_usd !== undefined) {
+      if (!Array.isArray(p.exit_sizes_usd)) throw new OpError('INVALID', 'Exit sizes must be a list of amounts in USD');
+      const list = [...new Set(p.exit_sizes_usd.map((v) => above(v, 1e9, 'Each exit size (USD)')))].sort((a, b) => a - b);
+      if (!list.length || list.length > 5) throw new OpError('INVALID', 'Give one to five exit sizes');
+      o.exit_sizes_usd = list;
+    }
+    if (p.exit_position_usd !== undefined) o.exit_position_usd = above(p.exit_position_usd, 1e9, 'Position size for exits (USD)');
+    if (p.exit_cost_limit_pct !== undefined) o.exit_cost_limit_pct = above(p.exit_cost_limit_pct, 100, 'Exit cost limit (%)');
+    if (p.delivery_window_days !== undefined) {
+      const n = num(p.delivery_window_days, 7, 365, 'Delivery window (days)');
+      if (!Number.isInteger(n)) throw new OpError('INVALID', 'Delivery window must be a whole number of days from 7 to 365');
+      o.delivery_window_days = n;
+    }
+    if (p.volume_review_fraction !== undefined) o.volume_review_fraction = above(p.volume_review_fraction, 1, 'Volume review fraction');
+    if (p.reported_liquidity_review_usd !== undefined) o.reported_liquidity_review_usd = optional(p.reported_liquidity_review_usd, 1e12, 'Reported liquidity review level (USD)');
+    if (p.volume_to_liquidity_review_ratio !== undefined) o.volume_to_liquidity_review_ratio = optional(p.volume_to_liquidity_review_ratio, 1e6, 'Volume to liquidity review ratio');
+    out.forensics = { preferences: o };
+  }
   return out;
 }
 

@@ -1,0 +1,97 @@
+/* Review (#/review; DESIGN_AND_IA_BLUEPRINT.md §3.4): the queue, the chosen
+   project and the evidence for the change, side by side; each pane scrolls on
+   its own and the action bar keeps its place under the centre pane. */
+.rv-page { display: flex; flex-direction: column; height: 100dvh; min-height: 0; }
+.rv-pagehead { flex: none; }
+.rv-segs { align-self: flex-end; }
+.rv-segs button { display: inline-flex; align-items: center; gap: 6px; }
+.rv-note { margin: 0 24px 10px; }
+
+.rv-panes { flex: 1; min-height: 0; display: grid; grid-template-columns: 300px minmax(0, 1fr) 360px; border-top: 1px solid var(--border); background: var(--surface); }
+.rv-panes.is-two { grid-template-columns: 280px minmax(0, 1fr); }
+@media (min-width: 1600px) { .rv-panes { grid-template-columns: 320px minmax(0, 1fr) 420px; } }
+.rv-left, .rv-right { min-height: 0; overflow: auto; overscroll-behavior: contain; background: var(--bg); }
+.rv-left { border-right: 1px solid var(--border); }
+.rv-right { border-left: 1px solid var(--border); }
+.rv-mid { min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.rv-empty { align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 48px 24px; }
+.rv-empty h2 { font-size: var(--fs-lg); font-weight: 600; }
+
+/* ---- the queue ---- */
+.rv-queue { display: flex; flex-direction: column; padding: 8px 0 24px; }
+.rv-group + .rv-group { border-top: 1px solid var(--separator); margin-top: 6px; padding-top: 6px; }
+.rv-gh { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 16px 4px; font-size: var(--fs-xs); font-weight: 500; color: var(--text-3); }
+.rv-gn { font-variant-numeric: tabular-nums; min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--r-pill); background: var(--badge-bg); color: var(--text-2); display: inline-flex; align-items: center; justify-content: center; }
+.rv-items { list-style: none; margin: 0; padding: 0 8px; display: flex; flex-direction: column; gap: 1px; }
+.rv-item { display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: 100%; min-height: 44px; padding: 7px 8px; border: 0; border-radius: var(--r-lg); background: transparent; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.rv-item:hover { background: var(--surface-hover); }
+.rv-item.is-on { background: var(--surface-selected); box-shadow: inset 2px 0 0 var(--accent); }
+.rv-item:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.rv-it { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--fs-sm); font-weight: 500; }
+.rv-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-it .ticker { color: var(--text-3); font-weight: 400; font-size: var(--fs-xs); }
+.rv-ir { font-size: var(--fs-xs); color: var(--text-2); line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.rv-none { padding: 2px 16px 6px; font-size: var(--fs-xs); color: var(--text-3); }
+
+/* ---- the chosen project ---- */
+.rv-centre { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.rv-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 16px 24px 24px; display: flex; flex-direction: column; gap: 14px; }
+.rv-right .rv-scroll { padding: 16px 16px 24px; }
+.rv-head { display: flex; align-items: center; gap: 12px; }
+.rv-head-n { flex: 1; min-width: 0; }
+.rv-title { font-family: var(--font-display); font-size: var(--fs-xl); font-weight: 600; letter-spacing: var(--track-display); line-height: 1.25; outline: none; }
+.rv-title .ticker { font-family: var(--sans); font-size: var(--fs-sm); font-weight: 400; color: var(--text-3); letter-spacing: 0; }
+.rv-head .btn { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+.rv-centre .mpanel { padding: 0; }
+
+.rv-bar { flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 24px; border-top: 1px solid var(--border); background: var(--surface); }
+.rv-bar-sp { flex: 1; }
+.rv-bar .ag-acts { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rv-bar .btn-primary { display: inline-flex; align-items: center; gap: 8px; }
+.rv-kbd { font: inherit; font-size: var(--fs-xs); opacity: 0.75; }
+
+/* ---- the evidence for the change ---- */
+.rv-ev { display: flex; flex-direction: column; gap: 14px; }
+.rv-ph { font-size: var(--fs-sm); font-weight: 600; }
+.rv-evs { display: flex; flex-direction: column; gap: 6px; padding-top: 12px; border-top: 1px solid var(--separator); }
+.rv-evs h3 { font-size: var(--fs-xs); font-weight: 500; color: var(--text-3); }
+.rv-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; font-size: var(--fs-sm); }
+.rv-li-t { font-size: var(--fs-sm); }
+.rv-li-m { font-size: var(--fs-xs); line-height: 1.45; }
+.rv-li-a { display: flex; gap: 12px; flex-wrap: wrap; font-size: var(--fs-xs); }
+.rv-price { font-size: var(--fs-md); font-weight: 500; font-variant-numeric: tabular-nums; }
+.rv-ev .ag-item { padding: 8px 0; border-top: 0; }
+
+/* ---- Upcoming and Imports ---- */
+.rv-wide { flex: 1; min-height: 0; overflow: auto; border-top: 1px solid var(--border); padding: 16px 24px 48px; }
+.rv-up { max-width: 1280px; }
+.rv-imp { max-width: 1280px; display: flex; flex-direction: column; gap: 12px; }
+.rv-imp .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.rv-imp .tab { padding: 8px 10px; font-size: var(--fs-sm); color: var(--text-2); border-bottom: 2px solid transparent; white-space: nowrap; text-decoration: none; }
+.rv-imp .tab[aria-current="page"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 500; }
+
+/* ---- a phone: one column of cards; the open card in place ---- */
+.rv-page.is-phone { height: auto; min-height: 0; }
+.is-phone .rv-queue { padding: 0 0 16px; }
+.is-phone .rv-group { margin: 0 12px; }
+.is-phone .rv-items { padding: 0; gap: 8px; }
+.is-phone .rv-item { background: var(--surface); border: 1px solid var(--border); padding: 10px 12px; }
+.is-phone .rv-group + .rv-group { border-top: 0; margin-top: 10px; }
+.is-phone .rv-gh { padding: 6px 2px; }
+.rv-card-open { display: flex; flex-direction: column; border-top: 1px solid var(--border); background: var(--surface); touch-action: pan-y; }
+.rv-back { align-self: flex-start; margin: 8px 8px 0; display: inline-flex; align-items: center; gap: 6px; }
+.is-phone .rv-centre { min-height: 0; }
+.is-phone .rv-scroll { overflow: visible; padding: 8px 12px 16px; }
+/* Above the tab bar (shell.css: 52px items, 4px padding twice, a 1px rule). */
+.is-phone .rv-bar { position: sticky; bottom: calc(61px + env(safe-area-inset-bottom)); padding: 8px 12px; z-index: 5; }
+.is-phone .rv-kbd { display: none; }
+@media (max-width: 767.98px) {
+  .rv-wide { padding: 12px 12px 40px; }
+  .rv-pagehead .rv-segs { width: 100%; }
+  .rv-pagehead .rv-segs button { flex: 1; justify-content: center; }
+}
+.is-phone .rv-head { flex-wrap: wrap; align-items: flex-start; }
+.is-phone .rv-head-n { flex-basis: calc(100% - 44px); }
+.is-phone .rv-head .btn { order: 3; }
+.is-phone .rv-title { font-size: var(--fs-lg); }
+@media (pointer: coarse) { .rv-bar .btn, .rv-back { min-height: 44px; } }

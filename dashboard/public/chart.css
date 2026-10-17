@@ -61,7 +61,7 @@
 .tv-foot { margin-top: 6px; }
 .tv-foot-row { display: flex; align-items: center; justify-content: flex-end; gap: var(--s2, 8px) var(--s4, 16px); flex-wrap: wrap; }
 .tvchart [hidden] { display: none; }
-.tv-wait { margin: 0; padding: 12px; font-size: 12px; color: var(--text-3); }
+.tv-wait { margin: 0; padding: 12px; font-size: var(--fs-xs); color: var(--text-3); }
 .tv-set { display: flex; gap: var(--s2, 8px); margin-top: 6px; }
 .tv-set[hidden] { display: none; }
 .tv-set input { flex: 1; min-width: 0; }

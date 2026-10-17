@@ -48,10 +48,20 @@ function openCorrectDialog(ctx, t, ledger) {
 
 const TABS = [
   ['positions', 'Positions'],
+  ['attention', 'Needs attention'],
   ['wallets', 'Wallets'],
   ['transactions', 'Transactions'],
   ['record', 'Record & import'],
 ];
+
+// What needs you in the ledger (DESIGN_AND_IA_BLUEPRINT.md §3.5; the rail's
+// Portfolio count, web/src/shell/sections.js portfolioNeeds): each warning,
+// each quarantined record and each wallet event waiting for your decision.
+export function needsCount(index) {
+  const pf = (index && index.portfolio) || {};
+  const wallet = ((index && index.attention) || []).filter((a) => a.kind === 'wallet_decision').length;
+  return (pf.warnings || []).length + (pf.quarantine || []).length + wallet;
+}
 
 // Where a ledger entry came from, in words; a wallet import names its
 // network and transaction.
@@ -125,7 +135,7 @@ export function attentionRows(warnings, { symbols = new Map(), accounts = new Ma
 
 const ATTENTION_SHOWN = 5;
 
-function attentionCard(ctx, pf) {
+function attentionCard(ctx, pf, { shown = ATTENTION_SHOWN } = {}) {
   const symbols = new Map(pf.positions.map((p) => [p.asset_id, p.symbol || String(p.asset_id).toUpperCase()]));
   const accounts = new Map((pf.accounts || []).map((a) => [a.account_id, a.name || a.account_id]));
   const rows = attentionRows(pf.warnings, { symbols, accounts });
@@ -142,8 +152,8 @@ function attentionCard(ctx, pf) {
       r.detail ? h('div', { class: 'au-detail' }, r.detail) : null) },
     { label: 'Action', render: (r) => attentionAction(ctx, r) },
   ];
-  const head = rows.slice(0, ATTENTION_SHOWN);
-  const rest = rows.slice(ATTENTION_SHOWN);
+  const head = rows.slice(0, shown);
+  const rest = rows.slice(shown);
   return card(`Records that need attention (${rows.reduce((n, r) => n + (r.count || 1), 0)})`, [
     h('div', { class: 'audit' }, table(columns, head, { caption: 'Records that need attention' })),
     rest.length ? details(`${rest.length} more`, h('div', { class: 'audit audit-more' }, table(columns, rest, { caption: 'More records that need attention' })), { id: 'pf-attention-more' }) : null,
@@ -187,8 +197,17 @@ const STATE_TEXT = {
 
 export async function renderPortfolio(ctx, route) {
   const tab = TABS.some(([t]) => t === route.query.get('tab')) ? route.query.get('tab') : 'positions';
-  const strip = tabStrip(TABS.map(([t, label]) => ({ id: t, label, href: `#/portfolio${t === 'positions' ? '' : `?tab=${t}`}` })), tab, { label: 'Portfolio sections' });
-  const body = await safeSection(TABS.find(([t]) => t === tab)[1], () => ({ positions: positionsTab, wallets: walletsTab, transactions: transactionsTab, record: recordTab })[tab](ctx));
+  const idx = ctx.state.index;
+  const pf = idx.portfolio || {};
+  const open = (pf.positions || []).filter((x) => !x.closed).length;
+  const needs = needsCount(idx);
+  const counts = {
+    positions: open ? { count: open, countLabel: plural(open, 'open position') } : null,
+    attention: needs ? { count: needs, countLabel: `${plural(needs, 'record')} need${needs === 1 ? 's' : ''} attention` } : null,
+    transactions: (pf.transaction_count || pf.transactions_count) ? { count: pf.transaction_count || pf.transactions_count, countLabel: plural(pf.transaction_count || pf.transactions_count, 'transaction') } : null,
+  };
+  const strip = tabStrip(TABS.map(([t, label]) => ({ id: t, label, href: `#/portfolio${t === 'positions' ? '' : `?tab=${t}`}`, ...(counts[t] || {}) })), tab, { label: 'Portfolio sections' });
+  const body = await safeSection(TABS.find(([t]) => t === tab)[1], () => ({ positions: positionsTab, attention: attentionTab, wallets: walletsTab, transactions: transactionsTab, record: recordTab })[tab](ctx));
   return h('div', null,
     h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Portfolio'))),
     strip,
@@ -332,11 +351,7 @@ async function positionsTab(ctx) {
       summaryItem('Realized (known)', fmtUsd(t.realized_known_usd), t.realized_unknown_positions ? `${plural(t.realized_unknown_positions, 'position')} with unknown basis` : 'all sales have known basis'),
       summaryItem('Fees paid', fmtUsd(t.fees_usd), t.fees_crypto_cost_usd ? `includes ${fmtUsd(t.fees_crypto_cost_usd)} paid in crypto (at cost)` : 'USD and in-kind, at cost'),
       summaryItem('Stale prices', String(t.stale_count || 0), t.stale_count ? t.stale_assets.join(', ') : 'none')) : null,
-    attentionCard(ctx, pf),
-    (pf.quarantine || []).length ? card('Quarantined records', table([
-      { label: 'Record', render: (q) => h('code', { class: 'small' }, q.tx_id || q.id || '?') },
-      { label: 'Why', wrap: true, render: (q) => q.reason || q.message || '' },
-    ], pf.quarantine), { note: 'Held out of positions until you resolve them. Nothing was deleted.' }) : null,
+    needsCount(idx) ? callout(h('span', null, h('strong', null, `${plural(needsCount(idx), 'record')} need${needsCount(idx) === 1 ? 's' : ''} attention. `), link('Open Needs attention', '#/portfolio?tab=attention', { dataset: { key: 'pf-needs-link' } })), 'warn') : null,
     card('Recorded positions', [h('div', { class: 'pos-table' }, positions), ledger], {
       note: open.length ? `From the ledger (your entries and recorded wallet activity). Allocation denominator: ${denominator}. Unpriced positions are excluded from it and listed as unpriced. Research grades stay on the watchlist; select an asset to see them.` : null,
       actions: [link('Record transactions', '#/portfolio?tab=record')],
@@ -368,6 +383,26 @@ async function positionsTab(ctx) {
       { label: 'Chain', key: 'chain' },
       { label: 'Public address', render: (a) => (a.public_address ? h('code', { class: 'wrap-anywhere' }, a.public_address) : null) },
     ], pf.accounts) : empty('No accounts yet.')));
+}
+
+// Needs attention: the records that need you, in full (the ledger's
+// warnings as an audit table, quarantines first; the quarantined records;
+// wallet events waiting for your decision). Nothing here is estimated.
+function attentionTab(ctx) {
+  const idx = ctx.state.index;
+  const pf = idx.portfolio;
+  const wallet = (idx.attention || []).filter((a) => a.kind === 'wallet_decision');
+  const audit = attentionCard(ctx, pf, { shown: 25 });
+  const quarantine = (pf.quarantine || []).length ? card('Quarantined records', table([
+    { label: 'Record', render: (q) => h('code', { class: 'small' }, q.tx_id || q.id || '?') },
+    { label: 'Why', wrap: true, render: (q) => q.reason || q.message || '' },
+  ], pf.quarantine), { note: 'Held out of positions until you resolve them. Nothing was deleted.' }) : null;
+  const decisions = wallet.length ? card(`Wallet events waiting for you (${wallet.length})`, table([
+    { label: 'Event', wrap: true, render: (a) => h('div', null, h('strong', null, a.title), a.detail ? h('div', { class: 'small muted' }, a.detail) : null) },
+    { label: '', render: (a) => link('Decide', a.action || '#/portfolio?tab=wallets', { class: 'btn small' }) },
+  ], wallet), { note: 'A possible swap, an overlap with your own entries or a reversal waits for your word; nothing is decided for you.' }) : null;
+  if (!audit && !quarantine && !decisions) return h('div', null, callout('Nothing in the ledger needs your attention.', 'ok'));
+  return h('div', null, audit, quarantine, decisions);
 }
 
 async function transactionsTab(ctx) {

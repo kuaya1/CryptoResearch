@@ -5,69 +5,86 @@
 // review order. Pure: the React watchlist and inspector (dashboard/web) draw
 // from it and the tests check it.
 import {
-  PROVIDERS, PROVIDER_LABELS, marketFigure, fmtPrice, fmtChangePct, fmtMarketFigure, fmtCompactUsd,
-  fmtDate, fmtDateTime, fmtAgo, onHoldOf,
+  PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, RESEARCH_STATE, marketFigure, fmtPrice, fmtChangePct, fmtMarketFigure, fmtCompactUsd,
+  fmtDate, fmtDateTime, fmtAgo, onHoldOf, jobKey, anchorText, scoreTier,
 } from './ui.js';
 
-// Column catalogue, in the CoinMarketCap order: # (rank, drawn before the
-// name), price, 24h, 7d and 30d change, market cap, volume, the 7-day chart,
-// then the three models. Optional columns (off at first) sit before the
-// models. When the list is narrower than its columns, the least essential
-// give way; every value stays in the inspector.
+// The Desk's column catalogue (Level 0, DESIGN_AND_IA_BLUEPRINT.md §3.1; Eric,
+// 2026-10-17): the project (frozen, always shown), then seven by default:
+// Price / 24h, 7D, Grade (the canonical grade, D1, with the three-model
+// consensus glyph), Risk (one waterfall: forensic state, else the downside
+// score, else a GoPlus flag, else "Not audited"), Last research, and the
+// pinned Action that appears on hover. Everything else stays one choice away
+// in the Columns picker, nothing removed: Exit @ $500 (off by default, D2),
+// the market columns, the sector and each model's own grade. When the list
+// is narrower than its columns, the least essential give way (the phone keeps
+// Project, Price / 24h, Grade and Risk); every value stays in the inspector.
+// The former Liquidity column was dead UI (no source is configured) and is
+// gone until a source is set.
 export const COLUMNS = [
-  { id: 'rank', label: '#', title: 'Market-cap rank, as reported by CoinGecko', def: true, sort: 'rank', num: true, market: true },
-  { id: 'price', label: 'Price', def: true, sort: 'price', num: true, market: true },
-  { id: 'change24h', label: '24h %', title: 'Price change over the last 24 hours', def: true, sort: 'change24h', num: true, market: true },
-  { id: 'change7d', label: '7d %', title: 'Price change over the last 7 days (rolling)', def: true, sort: 'change7d', num: true, market: true },
-  { id: 'change30d', label: '30d %', title: 'Price change over the last 30 days (rolling)', def: true, sort: 'change30d', num: true, market: true },
-  { id: 'mcap', label: 'Market Cap', title: 'Price × circulating supply, as reported by CoinGecko', def: true, sort: 'mcap', num: true, market: true },
+  { id: 'rank', label: '#', title: 'Market-cap rank, as reported by CoinGecko', sort: 'rank', num: true, market: true },
+  { id: 'priceStack', label: 'Price / 24h', title: 'The price, with its change over 24 hours under it', def: true, sort: 'price', num: true, market: true },
+  { id: 'spark', label: '7D', title: 'Price over the last 7 days (provider series); the 7-day change on hover', def: true, sort: 'change7d', market: true },
+  { id: 'grade', label: 'Grade', title: 'Your pinned headline report\'s grade, else Claude\'s current eligible report; the dots are Claude, GPT and Gemini. Never an average.', def: true, sort: 'grade' },
+  { id: 'risk', label: 'Risk', title: 'The highest-severity signal available: a forensic outcome, else the report\'s top downside score, else a GoPlus contract flag; "Not audited" when none exists', def: true, sort: 'risk' },
+  { id: 'exit', label: 'Exit @ $500', title: 'Estimated cost of selling your exit size, against your exit-cost limit (Preferences, Screening)', sort: 'exit', num: true },
+  { id: 'lastResearch', label: 'Last research', title: 'Age of the latest report\'s analysis; amber once a suggested review date has passed', def: true, sort: 'lastResearch' },
+  { id: 'price', label: 'Price', sort: 'price', num: true, market: true },
+  { id: 'change24h', label: '24h %', title: 'Price change over the last 24 hours', sort: 'change24h', num: true, market: true },
+  { id: 'change7d', label: '7d %', title: 'Price change over the last 7 days (rolling)', sort: 'change7d', num: true, market: true },
+  { id: 'change30d', label: '30d %', title: 'Price change over the last 30 days (rolling)', sort: 'change30d', num: true, market: true },
+  { id: 'mcap', label: 'Market cap', title: 'Price × circulating supply, as reported by CoinGecko', sort: 'mcap', num: true, market: true },
   { id: 'mcapChange', label: 'Mkt cap 24h %', title: 'Market-cap change over 24 hours, as reported by CoinGecko', sort: 'mcapChange', num: true, market: true },
   { id: 'fdv', label: 'FDV', title: 'Fully diluted valuation: price × maximum (or total) supply', sort: 'fdv', num: true, market: true },
-  { id: 'volume', label: 'Volume(24h)', title: 'Trading volume over the last 24 hours, in USD', def: true, sort: 'volume', num: true, market: true },
+  { id: 'volume', label: 'Volume 24h', title: 'Trading volume over the last 24 hours, in USD', sort: 'volume', num: true, market: true },
   { id: 'volChange', label: 'Volume change', title: 'Measured against our own stored observation from about 24 hours earlier', sort: 'volChange', num: true, market: true },
-  { id: 'spark', label: '7D Chart', title: 'Price over the last 7 days (provider series)', def: true, market: true },
   { id: 'sector', label: 'Sector', sort: 'sector' },
-  { id: 'lastResearch', label: 'Last research', title: 'Latest report analysis date', sort: 'lastResearch' },
-  { id: 'liquidity', label: 'Liquidity', disabled: 'No liquidity source is configured (CoinGecko /coins/markets does not report liquidity).' },
-  { id: 'research', label: 'Research', def: true },
+  { id: 'research', label: 'Model grades', title: 'Each model\'s own grade in its own column: Claude, GPT, Gemini. Never combined.' },
 ];
+export const DEFAULT_COLUMNS = COLUMNS.filter((c) => c.def).map((c) => c.id);
 
 export const SORT_NAMES = {
   name: ['Project', 'A to Z', 'Z to A'], rank: ['Rank (CoinGecko)', 'highest first', 'lowest first'], price: ['Price', 'lowest first', 'highest first'],
   change24h: ['24H change', 'lowest first', 'highest first'], change7d: ['7D change', 'lowest first', 'highest first'], change30d: ['30D change', 'lowest first', 'highest first'],
   mcap: ['Market cap', 'smallest first', 'largest first'], mcapChange: ['Market cap 24H change', 'lowest first', 'highest first'], fdv: ['FDV', 'smallest first', 'largest first'],
   volume: ['Volume', 'smallest first', 'largest first'], volChange: ['Volume change', 'lowest first', 'highest first'], sector: ['Sector', 'A to Z', 'Z to A'],
-  lastResearch: ['Last research', 'oldest first', 'newest first'], 'grade:claude': ['Claude grade', 'lowest first', 'highest first'],
+  lastResearch: ['Last research', 'oldest first', 'newest first'], grade: ['Grade', 'lowest first', 'highest first'], risk: ['Risk', 'least first', 'most first'],
+  exit: ['Exit cost', 'lowest first', 'highest first'], 'grade:claude': ['Claude grade', 'lowest first', 'highest first'],
   'grade:chatgpt': ['GPT grade', 'lowest first', 'highest first'], 'grade:gemini': ['Gemini grade', 'lowest first', 'highest first'],
 };
 
-// The list opens on what you follow: watched or held. Projects you stopped
-// watching stay one choice away ("Not watching"); "All" shows everything.
-// Holdings themselves live in Portfolio: there is no "held" view of grades.
-export const DEFAULT_FILTERS = { sector: '', owned: 'watching', coverage: 'any', ret30: 'any', archived: false };
+// The views (underline tabs with counts, §3.1): what you follow (watched or
+// held), what needs your review (D3: one project counts once), what waits on
+// a model, what you hold, what you stopped watching, everything. Archived
+// projects are a view of the ⋯ menu (the archived filter). Holdings
+// themselves live in Portfolio.
+export const DEFAULT_FILTERS = { sector: '', owned: 'watching', coverage: 'any', ret30: 'any', beat: 'any', archived: false };
 export const DEFAULT_SORT = { key: 'rank', dir: 'asc' };
 export const COVERAGE = [['any', 'Any coverage'], ['all3', 'Graded by all three models'], ['missing', 'Missing a model grade'], ['none', 'No research yet'], ['attention', 'Failed or withheld']];
 export const RET30 = [['any', 'Any'], ['pos', 'Positive'], ['neg', 'Negative']];
-export const OWNED = [['watching', 'Watching'], ['off', 'Not watching'], ['all', 'All']];
-export const PREFS_VERSION = 3;
+export const BEAT = [['any', 'Any'], ['yes', 'Beat BTC over 30 days'], ['no', 'Behind BTC over 30 days']];
+export const VIEWS = [['watching', 'Watching'], ['review', 'Needs review'], ['waiting', 'Waiting on a model'], ['held', 'Held'], ['off', 'Not watching'], ['all', 'All']];
+export const OWNED = VIEWS;
+export const PREFS_VERSION = 4;
 
 // The saved preferences (config/ui-state.json, key "watchlist"), read through
-// ctx.ui.get. Columns saved before the CoinMarketCap layout (v3) start from
-// its defaults; sort and filters are kept.
+// ctx.ui.get. Columns saved before the Desk's layout (v4) start from its
+// defaults; sort and filters are kept.
 export function prefs(ctx) {
   const saved = ctx.ui.get('watchlist', {}) || {};
-  const keepCols = Array.isArray(saved.columns) && saved.v >= 3;
-  const cols = keepCols ? COLUMNS.filter((x) => saved.columns.includes(x.id) && !x.disabled).map((x) => x.id) : COLUMNS.filter((c) => c.def).map((c) => c.id);
-  if (!cols.includes('research')) cols.push('research');
+  const keepCols = Array.isArray(saved.columns) && saved.v >= 4;
+  const cols = keepCols ? COLUMNS.filter((x) => saved.columns.includes(x.id)).map((x) => x.id) : DEFAULT_COLUMNS.slice();
   const filters = { ...DEFAULT_FILTERS, ...(saved.filters || {}) };
   // Version 1 only: there, "all" was the old default, not a choice.
   if (!(saved.v >= 2) && filters.owned === 'all') filters.owned = DEFAULT_FILTERS.owned;
-  if (!OWNED.some(([v]) => v === filters.owned)) filters.owned = DEFAULT_FILTERS.owned;
-  return { columns: cols, sort: saved.sort && SORT_NAMES[saved.sort.key] ? saved.sort : DEFAULT_SORT, filters };
+  if (!VIEWS.some(([v]) => v === filters.owned)) filters.owned = DEFAULT_FILTERS.owned;
+  if (!BEAT.some(([v]) => v === filters.beat)) filters.beat = 'any';
+  const density = saved.density === 'compact' ? 'compact' : 'comfortable';
+  return { columns: cols, sort: saved.sort && SORT_NAMES[saved.sort.key] ? saved.sort : DEFAULT_SORT, filters, density };
 }
 
 export function prefsToSave(p) {
-  return { v: PREFS_VERSION, columns: p.columns, sort: p.sort, filters: p.filters };
+  return { v: PREFS_VERSION, columns: p.columns, sort: p.sort, filters: p.filters, density: p.density || 'comfortable' };
 }
 
 // A new sort: the same key flips its direction; a new key starts ascending for
@@ -114,6 +131,9 @@ export function sortValue(p, key) {
     case 'volChange': return m ? m.volume_change_24h_pct ?? null : null;
     case 'sector': return p.sector ? p.sector.label.toLowerCase() : null;
     case 'lastResearch': return p.last_report_at || null;
+    case 'grade': return canonicalGrade(p, null).sort;
+    case 'risk': { const r = riskCell(p, null); return r.kind === 'none' ? null : r.rank; }
+    case 'exit': return exitCell(p).sort;
     default: return key.startsWith('grade:') ? gradeSortValue(p, key.slice(6)) : null;
   }
 }
@@ -147,17 +167,20 @@ export function coverageOf(p) {
   };
 }
 
-export function matches(p, f, q) {
+export function matches(p, f, q, index = null, agenda = null) {
   if (p.broken) return false;
   if (!f.archived && p.status === 'archived') return false;
   if (f.archived && p.status !== 'archived') return false;
   if (f.sector && (!p.sector || p.sector.primary !== f.sector)) return false;
   // An archived project is never on the watchlist, so the Archived filter
-  // lists every archived project whatever the watching filter says.
-  if (!f.archived) {
-    if (f.owned === 'held' && !p.held) return false;
-    if (f.owned === 'watching' && !(p.on_watchlist || p.held)) return false;
-    if (f.owned === 'off' && (p.on_watchlist || p.held)) return false;
+  // lists every archived project whatever the view says.
+  if (!f.archived && !inView(p, f.owned, index, agenda)) return false;
+  if (f.beat && f.beat !== 'any') {
+    const m = mkt(p);
+    const v = m && m.vs_btc ? m.vs_btc.vs_btc_30d_pct : null;
+    if (typeof v !== 'number') return false;
+    if (f.beat === 'yes' && !(v > 0)) return false;
+    if (f.beat === 'no' && !(v < 0)) return false;
   }
   const cov = coverageOf(p);
   if (f.coverage === 'all3' && cov.gradedCount < 3) return false;
@@ -178,9 +201,22 @@ export function matches(p, f, q) {
   return true;
 }
 
-// How many filters are on, beyond the watching choice.
+// Whether a project is in one of the Desk's views (the archived filter aside).
+export function inView(p, view, index = null, agenda = null) {
+  if (!p || p.broken) return false;
+  switch (view) {
+    case 'held': return Boolean(p.held);
+    case 'watching': return Boolean(p.on_watchlist || p.held);
+    case 'off': return !(p.on_watchlist || p.held);
+    case 'review': return reviewReasons(p, index, agendaRowOf(agenda, p.project_id)).length > 0;
+    case 'waiting': return waitingJobs(p, index).length > 0;
+    default: return true;
+  }
+}
+
+// How many filters are on, beyond the view.
 export function filterCount(f) {
-  return [f.sector, f.coverage !== 'any', f.ret30 !== 'any', f.archived].filter(Boolean).length;
+  return [f.sector, f.coverage !== 'any', f.ret30 !== 'any', f.beat && f.beat !== 'any', f.archived].filter(Boolean).length;
 }
 
 // Why a project shows no price, in words.
@@ -626,4 +662,250 @@ export function contractChecks(s) {
   const labelOf = (a) => (s.contracts.find((c) => c.address === a.address && (!a.chain_id || c.chain_id === a.chain_id)) || {}).label || a.chain;
   const alerts = (Array.isArray(s.alerts) ? s.alerts : []).map((a) => ({ at: a.at, label: labelOf(a), address: a.address, words: a.words }));
   return { fetched_at: s.fetched_at, state: s.state, contracts, alerts };
+}
+
+// ---- the Desk (Level 0) and the inspector (Level 1): DESIGN_AND_IA_BLUEPRINT.md §3.1, §3.2 ----
+
+const ymd = (s) => (typeof s === 'string' && /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : null);
+function daysFrom(a, b) {
+  const x = Date.parse(`${ymd(a)}T00:00:00Z`);
+  const y = Date.parse(`${ymd(b)}T00:00:00Z`);
+  return Number.isNaN(x) || Number.isNaN(y) ? null : Math.round((y - x) / 86400000);
+}
+const todayOf = (index) => (index && index.today) || new Date().toISOString().slice(0, 10);
+const anchorsOf = (index) => (index && index.rubrics && index.rubrics.grading && index.rubrics.grading.favorable_anchors) || [];
+const holdOf = (index, prov) => Boolean(index && onHoldOf(index, prov));
+
+// D1, the canonical grade (Eric, 2026-10-17): your pinned headline report when
+// you pinned one, else Claude's current eligible report. Never an average of
+// the models; the consensus glyph beside it shows each model apart.
+export function canonicalOf(p) {
+  const h = p && p.headline;
+  if (h && h.type === 'report' && h.report_id && !h.broken) {
+    return { source: 'headline', provider: h.provider || null, report: h, note: `Your pinned headline: the ${PROVIDER_LABELS[h.provider] || 'chosen'} report` };
+  }
+  const c = p && p.providers ? p.providers.claude : null;
+  if (c && !c.broken && !c.needs_text && c.latest_eligible !== false) return { source: 'claude', provider: 'claude', report: c, note: "Claude's current eligible report" };
+  return { source: 'none', provider: 'claude', report: c && !c.broken ? c : null, note: c && c.needs_text ? "Claude's report is a PDF without a text copy" : 'No Claude report yet' };
+}
+
+const JOB_WAITING = new Set(['queued', 'dispatching', 'running', 'cowork', 'connector', 'waiting', 'interrupted']);
+const JOB_PROBLEM = new Set(['failed', 'uncertain', 'incomplete', 'conflict']);
+
+// The Grade cell: the canonical report's grade (a range as its two ends), its
+// rubric word and tier; withheld, PDF, no grade or the research state in words.
+export function canonicalGrade(p, index = null) {
+  const c = canonicalOf(p);
+  const r = c.report;
+  const g = r ? r.grade : null;
+  const base = { ...c, word: null, tier: null, sort: null, coverage: null, job: null };
+  if (r && !r.needs_text && g && (g.status === 'firm' || g.status === 'range')) {
+    const s = g.status === 'range' ? { status: 'range', low: g.low, high: g.high } : { status: 'scored', value: g.value };
+    return { ...base, kind: g.status === 'range' ? 'range' : 'grade', value: g.display, word: anchorText(anchorsOf(index), s), tier: scoreTier(g.status === 'range' ? g.low : g.value), sort: g.status === 'range' ? g.low : g.value };
+  }
+  if (r && r.needs_text) return { ...base, kind: 'pdf', value: 'PDF' };
+  if (r && g && g.status === 'withheld') return { ...base, kind: 'withheld', value: 'Withheld', coverage: typeof g.coverage_pct === 'number' ? g.coverage_pct : null };
+  if (r) return { ...base, kind: 'nograde', value: 'No grade' };
+  const prov = c.provider || 'claude';
+  const job = p && p.research && p.research.providers ? p.research.providers[prov] : null;
+  const key = jobKey(job, null, { onHold: holdOf(index, prov) });
+  if (key && RESEARCH_STATE[key]) return { ...base, kind: 'job', job: key, value: RESEARCH_STATE[key].short };
+  if (holdOf(index, prov)) return { ...base, kind: 'hold', value: 'On hold' };
+  return { ...base, kind: 'none', value: 'Not researched' };
+}
+
+// The three-model consensus (Claude, GPT, Gemini): a mark each (graded,
+// waiting, withheld, a problem, on hold or none), the words, and the spread
+// between the firm grades. Agreement is not independent confirmation, and
+// nothing here is averaged.
+export function consensusOf(p, index = null) {
+  const models = PROVIDERS.map((prov) => {
+    const r = p && p.providers ? p.providers[prov] : null;
+    const job = p && p.research && p.research.providers ? p.research.providers[prov] : null;
+    const hold = holdOf(index, prov);
+    const key = jobKey(job, null, { onHold: hold });
+    const g = r && !r.broken && !r.needs_text ? r.grade : null;
+    const out = { provider: prov, label: PROVIDER_SHORT[prov], name: PROVIDER_LABELS[prov], value: null, low: null, high: null, report_id: r && !r.broken ? r.report_id : null };
+    if (g && g.status === 'firm') return { ...out, mark: 'graded', words: g.display, value: g.value };
+    if (g && g.status === 'range') return { ...out, mark: 'graded', words: g.display, low: g.low, high: g.high };
+    if (g && g.status === 'withheld') return { ...out, mark: 'withheld', words: `withheld${typeof g.coverage_pct === 'number' ? ` (${g.coverage_pct}% scored)` : ''}` };
+    if (r && r.needs_text) return { ...out, mark: 'withheld', words: 'PDF only' };
+    if (r && !r.broken) return { ...out, mark: 'withheld', words: 'no grade' };
+    if (key && JOB_WAITING.has(key)) return { ...out, mark: 'waiting', words: key === 'waiting' ? 'waiting for you' : key === 'interrupted' ? 'paused' : RESEARCH_STATE[key].short.toLowerCase() };
+    if (key && JOB_PROBLEM.has(key)) return { ...out, mark: 'problem', words: RESEARCH_STATE[key].short.toLowerCase() };
+    if (hold || key === 'on_hold') return { ...out, mark: 'hold', words: 'on hold' };
+    return { ...out, mark: 'none', words: 'no report' };
+  });
+  const firm = models.filter((m) => typeof m.value === 'number').map((m) => m.value);
+  const spread = firm.length >= 2 ? Math.round((Math.max(...firm) - Math.min(...firm)) * 10) / 10 : null;
+  const ranged = models.some((m) => m.low !== null);
+  const text = `${models.map((m) => `${m.label} ${m.words}`).join(' · ')}${spread !== null ? ` · spread ${spread.toFixed(1)}${ranged ? ' (firm grades only)' : ''}` : ''}`;
+  return { models, spread, text };
+}
+
+// The Risk cell (one waterfall, §3.1): the highest-severity signal available
+// (a forensic outcome when an audit exists, the canonical report's top
+// downside score, a GoPlus contract flag), ties broken in that order; "Not
+// audited" when none exists. Never blank, never green by default. Every
+// signal found is in its title, so the one shown hides none.
+const FX_WORDS = { liquidity_impairment: 'Liquidity impaired', operational_degradation: 'Operations degraded', delivery_inactivity: 'Delivery inactive', confirmed_discontinuation: 'Discontinued' };
+const FX_SHORT = { liquidity_impairment: 'liquidity', operational_degradation: 'operations', delivery_inactivity: 'delivery', confirmed_discontinuation: 'discontinuation' };
+const SEV = { bad: 3, warn: 2, neutral: 1 };
+export function riskSignals(p, index = null) {
+  const out = [];
+  const f = p && p.forensic;
+  if (f && f.audited && f.states) {
+    const states = Object.entries(f.states);
+    const occurred = states.filter(([, s]) => s === 'occurred');
+    const watch = states.filter(([, s]) => s === 'watch');
+    if (occurred.length) out.push({ kind: 'forensic', tone: 'bad', text: FX_WORDS[occurred[0][0]], more: occurred.length - 1, title: `Forensic outcome now: ${occurred.map(([k]) => FX_WORDS[k].toLowerCase()).join(', ')}` });
+    else if (watch.length) out.push({ kind: 'forensic', tone: 'warn', text: `Watch: ${FX_SHORT[watch[0][0]]}`, more: watch.length - 1, title: `Forensic outcome on watch: ${watch.map(([k]) => FX_SHORT[k]).join(', ')}` });
+    else out.push({ kind: 'forensic', tone: 'neutral', text: 'Audited · no outcome now', more: 0, title: `Forensic states: ${states.map(([k, s]) => `${FX_SHORT[k]} ${String(s).replace(/_/g, ' ')}`).join(', ')}` });
+  } else if (f && f.open_audit) {
+    out.push({ kind: 'forensic', tone: 'neutral', text: 'Audit open', more: 0, title: `Forensic audit ${f.open_audit.audit_id}: investigator ${f.open_audit.investigator || 'waiting'}; no assessment saved yet` });
+  }
+  const c = canonicalOf(p);
+  const risks = c.report && Array.isArray(c.report.top_risks) ? c.report.top_risks.filter((r) => r && (r.status === 'scored' || r.status === 'range')) : [];
+  if (risks.length) {
+    const labels = Object.fromEntries(((index && index.rubrics && index.rubrics.grading && index.rubrics.grading.risk_scores) || []).map((x) => [x.id, x.label]));
+    const hi = (r) => (r.status === 'range' ? r.high : r.value);
+    const top = risks.slice().sort((a, b) => hi(b) - hi(a))[0];
+    const v = hi(top);
+    out.push({ kind: 'downside', tone: v >= 70 ? 'bad' : v >= 50 ? 'warn' : 'neutral', text: `Downside ${top.status === 'range' ? `${top.low}–${top.high}` : top.value}`, more: 0, title: `${labels[top.id] || top.id}: ${top.status === 'range' ? `${top.low} to ${top.high}` : top.value} of 100 (higher is worse), from ${c.source === 'headline' ? 'your headline report' : "Claude's report"}` });
+  }
+  const m = contractChipModel(p && p.screening);
+  if (m.state !== 'native_chain') {
+    const byKey = Object.fromEntries(m.badges.map((b) => [b.key, b]));
+    const severe = byKey.severe || byKey.alert;
+    const watchFlags = ['mint', 'blacklist', 'proxy'].filter((k) => byKey[k] && byKey[k].state === 'present').map((k) => byKey[k].label);
+    const tax = byKey.tax && byKey.tax.tone !== 'plain' ? byKey.tax : null;
+    if (severe) out.push({ kind: 'goplus', tone: 'bad', text: severe.key === 'alert' ? 'Contract changed' : severe.label, more: 0, title: `GoPlus: ${severe.title || severe.label}` });
+    else if (tax && tax.tone === 'severe') out.push({ kind: 'goplus', tone: 'bad', text: `Tax ${tax.value}`, more: 0, title: `GoPlus: sell tax ${tax.value}` });
+    else if (watchFlags.length || tax) out.push({ kind: 'goplus', tone: 'warn', text: [...watchFlags, tax ? `Tax ${tax.value}` : null].filter(Boolean).slice(0, 2).join(' · '), more: Math.max(0, watchFlags.length + (tax ? 1 : 0) - 2), title: `GoPlus: ${[...watchFlags.map((w) => `${w}: yes`), tax ? `sell tax ${tax.value}` : null].filter(Boolean).join(', ')}` });
+  }
+  return out;
+}
+
+export function riskCell(p, index = null) {
+  const all = riskSignals(p, index);
+  if (!all.length) return { kind: 'none', tone: 'unknown', text: 'Not audited', more: 0, rank: 0, title: 'No forensic audit, no downside score in the report and no GoPlus flag on record. Nothing here means safe.', signals: [] };
+  const order = { forensic: 0, downside: 1, goplus: 2 };
+  const top = all.slice().sort((a, b) => (SEV[b.tone] - SEV[a.tone]) || (order[a.kind] - order[b.kind]))[0];
+  return { ...top, rank: SEV[top.tone] * 10 + (2 - order[top.kind]), title: all.map((s) => s.title).join('\n'), signals: all };
+}
+
+// The "Exit @ $500" cell (D2: in the Columns picker, off by default): the
+// estimated cost of selling your exit size against your limit, from the
+// forensic monitor's quotes or pool reserves. A lower bound ("at least") over
+// the limit counts as over; under it, it says nothing. Unknown is the norm.
+export function exitCell(p) {
+  const f = p && p.forensic;
+  const x = f && f.exit;
+  const size = (x && x.size_usd) || (f && f.position_usd) || 500;
+  const limit = (x && x.limit_pct) || (f && f.limit_pct) || 5;
+  if (!x) return { text: 'Unknown', tone: 'unknown', sort: null, size, limit, title: f ? `No exit estimate at $${size}` : 'Not audited: no exit quote or pool reserves on record' };
+  if (x.status === 'no_route') return { text: 'No route', tone: 'bad', sort: 1000, size, limit, title: `No route for a $${size} exit${x.as_of ? ` (${fmtDateTime(x.as_of)})` : ''}` };
+  if (typeof x.cost_pct !== 'number') return { text: 'Unknown', tone: 'unknown', sort: null, size, limit, title: x.note || `No supported estimate at $${size}` };
+  const pct = `${x.cost_complete === false ? '≥ ' : ''}${x.cost_pct.toFixed(2)}%`;
+  const tone = x.beyond === true ? 'bad' : x.beyond === false ? 'ok' : 'unknown';
+  const stale = x.status === 'stale';
+  return { text: pct, tone: stale && tone !== 'bad' ? 'unknown' : tone, sort: x.cost_pct, size, limit, stale, title: `$${size} exit: ${x.cost_complete === false ? `at least ${x.cost_pct.toFixed(2)}% (${(x.missing_costs || []).join(' and ') || 'some costs'} unknown)` : `${x.cost_pct.toFixed(2)}%`} against your ${limit}% limit${x.as_of ? `, ${fmtDateTime(x.as_of)}` : ''}${stale ? ' (stale)' : ''}` };
+}
+
+// Jobs in progress or waiting on a model (or on you, for manual research);
+// a model on hold has none.
+export function waitingJobs(p, index = null) {
+  const out = [];
+  for (const prov of PROVIDERS) {
+    const job = p && p.research && p.research.providers ? p.research.providers[prov] : null;
+    if (!job) continue;
+    const key = jobKey(job, null, { onHold: holdOf(index, prov) });
+    if (key && JOB_WAITING.has(key)) out.push({ provider: prov, key });
+  }
+  return out;
+}
+
+// D3, the one "Needs review" unit (Eric, 2026-10-17): projects. A project
+// counts once when anything needs you: changes since your last review, a
+// review of yours due or overdue, or research waiting for you.
+export function reviewReasons(p, index = null, agendaRow = null) {
+  if (!p || p.broken || p.status === 'archived') return [];
+  const out = [];
+  const n = p.changes && p.changes.item_count;
+  if (n > 0) out.push({ kind: 'changed', words: `${n} change${n === 1 ? '' : 's'} since ${p.changes.cursor_source === 'project created' ? 'added' : 'your last review'}` });
+  const nr = p.next_review;
+  if (nr && nr.date && (nr.overdue || nr.date <= todayOf(index))) out.push({ kind: 'due', words: nr.overdue ? `Review overdue since ${fmtDate(nr.date)}` : 'Review due today' });
+  // The agenda's primary item when it is due (GET /api/agenda); without the
+  // agenda, the forensic evidence changes the index counts stand in for it.
+  const f = p.forensic;
+  const ag = agendaRow && agendaRow.primary && agendaRow.primary.due && !agendaRow.primary.completed && !agendaRow.primary.snoozed ? agendaRow.primary : null;
+  if (ag && !(ag.kind === 'owner_review' && out.some((r) => r.kind === 'due'))) out.push({ kind: 'due', words: ag.title, item: ag });
+  else if (!agendaRow && f && f.to_review) out.push({ kind: 'due', words: `${f.to_review} forensic evidence change${f.to_review === 1 ? '' : 's'} to review` });
+  const mine = waitingJobs(p, index).filter((j) => j.key === 'waiting');
+  if (mine.length) out.push({ kind: 'waiting', words: `${mine.map((j) => PROVIDER_LABELS[j.provider]).join(', ')} research waiting for you` });
+  if (f && f.open_audit && f.open_audit.investigator === 'waiting') out.push({ kind: 'waiting', words: 'Forensic audit waiting for Claude' });
+  const differ = ((index && index.attention) || []).find((a) => a.project_id === p.project_id && a.kind === 'disagreement');
+  if (differ) out.push({ kind: 'differ', words: String(differ.title).replace(`${p.name}: `, '') });
+  return out;
+}
+
+// One project's row in the agenda (GET /api/agenda), or null.
+const agendaMaps = new WeakMap();
+export function agendaRowOf(agenda, pid) {
+  if (!agenda || !Array.isArray(agenda.rows)) return null;
+  let m = agendaMaps.get(agenda);
+  if (!m) { m = new Map(agenda.rows.map((r) => [r.project_id, r])); agendaMaps.set(agenda, m); }
+  return m.get(pid) || null;
+}
+
+// The Action verb (pinned, on hover): one verb for the state the project is in.
+export function actionOf(p, index = null, agenda = null) {
+  if (!p) return null;
+  if (p.status === 'archived') return { verb: 'Restore', kind: 'restore' };
+  if (p.identity_status !== 'verified') return { verb: 'Complete identity', kind: 'identity' };
+  const paused = waitingJobs(p, index).find((j) => j.key === 'interrupted');
+  if (paused) return { verb: 'Resume', kind: 'resume', provider: paused.provider };
+  if (reviewReasons(p, index, agendaRowOf(agenda, p.project_id)).length) return { verb: 'Review', kind: 'review' };
+  const any = PROVIDERS.some((x) => (p.providers && p.providers[x]) || (p.research && p.research.providers && p.research.providers[x]));
+  if (!any) return { verb: 'Research', kind: 'research' };
+  return { verb: 'Open', kind: 'open' };
+}
+
+// The Last research cell: the age of the latest report's analysis, amber once
+// a suggested review date (yours or the canonical report's) has passed.
+export function lastResearchCell(p, index = null) {
+  const at = p && p.last_report_at;
+  if (!at) return { text: 'Never', tone: 'unknown', sort: null, title: 'No report saved yet' };
+  const today = todayOf(index);
+  const days = daysFrom(at, today);
+  const c = canonicalOf(p).report;
+  const suggested = c && c.position && c.position.next_review_date ? c.position.next_review_date : null;
+  const passed = Boolean((suggested && suggested < today) || (p.next_review && p.next_review.overdue));
+  const text = days === null ? fmtDate(at) : days <= 0 ? 'Today' : days < 60 ? `${days}d` : `${Math.round(days / 30)}mo`;
+  return { text, tone: passed ? 'warn' : '', sort: at, title: `Latest analysis ${fmtDate(at)}${suggested ? `; suggested review ${fmtDate(suggested)}${suggested < today ? ' (passed)' : ''}` : ''}${p.next_review ? `; your review ${fmtDate(p.next_review.date)}${p.next_review.overdue ? ' (overdue)' : ''}` : ''}` };
+}
+
+// The Desk's KPI strip (§3.1): one panel split by hairlines into five cells.
+export function deskKpis(index, agenda = null) {
+  const live = ((index && index.projects) || []).filter((p) => !p.broken && p.status !== 'archived');
+  const mc = index && index.market_context;
+  const snap = mc && mc.snapshot && mc.snapshot.bitcoin && typeof mc.snapshot.bitcoin.price_usd === 'number' ? mc.snapshot : null;
+  const b30 = snap && snap.breadth ? snap.breadth.d30 : null;
+  const review = live.filter((p) => reviewReasons(p, index, agendaRowOf(agenda, p.project_id)).length);
+  const jobs = live.flatMap((p) => waitingJobs(p, index).map((j) => ({ ...j, project_id: p.project_id })));
+  return {
+    market: snap ? { btc: snap.bitcoin.price_usd, change_7d: snap.bitcoin.change_7d_pct ?? null, dominance: snap.dominance && typeof snap.dominance.btc_pct === 'number' ? snap.dominance.btc_pct : null, stale: mc.status === 'stale', demo: snap.provider === 'fictional-demo' } : null,
+    total: snap && snap.total_market && typeof snap.total_market.market_cap_usd === 'number' ? { usd: snap.total_market.market_cap_usd, change_24h: snap.total_market.market_cap_change_24h_pct ?? null } : null,
+    beat: b30 && typeof b30.beating_btc === 'number' ? { n: b30.beating_btc, of: b30.counted, share: typeof b30.share_pct === 'number' ? b30.share_pct : null, words: breadthWords(b30) } : null,
+    review: { projects: review.length, ids: review.map((p) => p.project_id) },
+    waiting: { jobs: jobs.length, projects: new Set(jobs.map((j) => j.project_id)).size },
+  };
+}
+
+// The sticky footer: "48 projects · 2 held · $17,294 priced value".
+export function deskFooter(index, shown) {
+  const pf = index && index.portfolio && index.portfolio.totals;
+  const held = shown.filter((p) => p.held).length;
+  const priced = pf && typeof pf.value_priced_usd === 'number' ? pf.value_priced_usd : null;
+  return { projects: shown.length, held, priced, unpriced: pf ? pf.unpriced_count || 0 : 0 };
 }

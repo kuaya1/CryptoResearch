@@ -2,17 +2,26 @@
 // ones lead (Eric, 2026-10-05, D1; the brief's three views, 2026-10-07).
 // Pure, for the app shell and the tests; views/project.js re-exports it.
 
-// The brief's three views first (Overview keeps the address "brief", so every
-// link to the Brief lands on it), then the report, the market and your notes.
+// The deep audit's sections (Level 2, DESIGN_AND_IA_BLUEPRINT.md §3.3; Eric,
+// 2026-10-17): Brief (the address "brief", so every link to the Brief lands
+// on it), Evidence, Forensics, Market, Contract (split out of Market), Report,
+// Record (the run, its exact prompt, history and receipts) and Notes. Compare
+// is no longer a section: it is a mode of the model switcher (Claude |
+// ChatGPT | Gemini | Compare) at its own address, "compare".
 export const PROJECT_TABS = [
-  ['brief', 'Overview'],
-  ['compare', 'Compare'],
+  ['brief', 'Brief'],
   ['evidence', 'Evidence'],
   ['forensics', 'Forensics'],
-  ['report', 'Full report'],
   ['market', 'Market'],
+  ['contract', 'Contract'],
+  ['report', 'Report'],
+  ['record', 'Record'],
   ['notes', 'Notes'],
 ];
+// Every address a project page answers: the sections and the Compare mode.
+export const PROJECT_VIEWS = [...PROJECT_TABS.map(([t]) => t), 'compare'];
+// The sections that show the model switcher (each draws one model's report).
+export const MODEL_VIEWS = ['brief', 'compare', 'evidence', 'report'];
 
 const MODELS = ['claude', 'chatgpt', 'gemini'];
 
@@ -90,13 +99,23 @@ export function projectRedirect(name, args, query) {
   const tab = args[1];
   const model = q.get('provider') || q.get('model');
   const run = q.get('run') ? { run: q.get('run') } : {};
-  // The Brief's former folds now live on its other views (2026-10-07).
+  const keep = (k) => (q.get(k) ? { [k]: q.get(k) } : {});
+  const open = q.get('open');
+  // The Brief's former folds live on its other views (2026-10-07); the run,
+  // the technical records and the headline on Record, the token identity on
+  // Contract (2026-10-17).
   if (tab === 'brief') {
-    const open = q.get('open');
     if (open === 'compare') return to('compare', {});
     if (open === 'evidence') return to('evidence', { ...(model ? { model } : {}), open: 'claims' });
-    if (open === 'runs' || (!open && q.get('run'))) return to('evidence', { open: 'runs', ...run });
-    if (open === 'identity') return to('evidence', { open: 'identity' });
+    if (open === 'runs' || (!open && q.get('run'))) return to('record', { ...(model ? { model } : {}), open: 'runs', ...run });
+    if (open === 'identity') return to('contract', { open: 'identity' });
+    if (open === 'headline') return to('record', { open: 'headline' });
+    return null;
+  }
+  if (tab === 'evidence') {
+    if (open === 'runs' || (!open && q.get('run'))) return to('record', { ...keep('model'), open: 'runs', ...run });
+    if (open === 'identity') return to('contract', { open: 'identity' });
+    if (open === 'technical') return to('record', { ...keep('model'), ...keep('report'), open: 'technical' });
     return null;
   }
   switch (tab) {
@@ -104,8 +123,9 @@ export function projectRedirect(name, args, query) {
     case 'scorecards': return to('brief', { ...(model ? { model } : {}), open: 'scorecard' });
     case 'reports': return to('report', q.get('report') ? { report: q.get('report') } : {});
     case 'comparison': return to('compare', {});
-    case 'research': return to('evidence', { open: 'runs', ...run });
+    case 'research': return to('record', { open: 'runs', ...run });
     case 'history': return to('notes', {});
-    default: return PROJECT_TABS.some(([t]) => t === tab) ? null : to('brief', {});
+    case 'identity': return to('contract', { open: 'identity' });
+    default: return PROJECT_VIEWS.includes(tab) ? null : to('brief', {});
   }
 }

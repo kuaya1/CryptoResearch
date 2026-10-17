@@ -475,25 +475,23 @@ test('static: no CoinMarketCap tokens or colors, no "Inter" in any font stack or
   assert.match(css, /\.brand \{[^}]*font-family: var\(--font-display\)/, 'the hosted views\' wordmark is the display sans');
 });
 
-test('status strip and header: secondary figures step aside (Dom and Total first), what needs action keeps its words and comes first on a phone; four figures sit in one row', () => {
+test('the KPI strip (DESIGN_AND_IA_BLUEPRINT.md §3.1): five figures in one panel; on a phone Total steps aside and four sit two by two; what needs action keeps its words; the inspector\'s name is never cut short', () => {
   const web = (...f) => fs.readFileSync(path.join(__dirname, '..', 'web', 'src', ...f), 'utf8');
   const css = web('styles', 'watchlist.css');
-  const phone = css.slice(css.indexOf('@media (max-width: 767.98px)'), css.indexOf('@container (max-width: 920px)'));
-  assert.match(phone, /\.ss-attn \{ order: -1;/, 'on a phone what needs action and the review queue come first');
-  assert.match(phone, /\.ss-dom, \.ss-total, [^{]*\{ display: none; \}/, 'dominance and the total step aside on a phone');
-  assert.doesNotMatch(phone, /\.(ss-warn|is-bad|ss-attn|ss-kinds)[^{]*\{[^}]*display: none/, 'warnings keep their words on a phone');
-  const narrow = css.slice(css.indexOf('@container (max-width: 920px)'));
-  assert.match(narrow, /^@container \(max-width: 920px\) \{\s*\.ss-dom, \.ss-total[,\s{]/, 'a narrower list (the inspector beside it) drops Dom and Total first');
-  assert.doesNotMatch(narrow.slice(0, narrow.indexOf('}')), /ss-warn|is-bad|ss-attn|ss-kinds|ss-win/, 'warnings and each change\'s window keep their words in a narrower list');
-  // Each part's accessible name keeps what a phone hides.
+  assert.match(css, /\.kpi-row \{ display: grid; grid-template-columns: repeat\(5, minmax\(0, 1fr\)\); gap: 1px; background: var\(--border\);/, 'one panel, its hairlines the gaps of one grid');
+  const phone = css.slice(css.indexOf('@media (max-width: 767.98px)'));
+  assert.match(phone, /\.kpi-row \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}/, 'two by two on a phone');
+  assert.match(phone, /\.kpi-cell\[data-key="kpi-total"\] \{ display: none; \}/, 'Total steps aside on a phone (the Market panel keeps it)');
+  assert.doesNotMatch(phone, /\.action-band[^{]*\{[^}]*display: none/, 'what needs action keeps its words on a phone');
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'public', 'position-ui.js'), 'utf8'), /'Total market cap'/, 'the Market panel names the total market cap');
+  // Each cell's accessible name says it in full; what needs action is named
+  // in words, each item with its kind, and none is out of reach.
   const strip = web('views', 'watchlist', 'StatusStrip.jsx');
-  assert.match(strip, /label=\{`Prices: \$\{m\.last_success_at \? ps\.asOf : 'not fetched yet'\}/);
-  assert.match(strip, /label=\{`Needs action: \$\{critical\.map\(\(a\) => a\.title\)\.join\('; '\)\}\. Details`\}/);
-  assert.match(strip, /kinds\.length === 1 \? kinds\[0\] : `\$\{critical\.length\} need action`/, 'what needs action is named in words, never a bare count');
-  // The inspector's four figures in one row, the name never cut short.
+  assert.match(strip, /aria=\{`\$\{k\.review\.projects\} project\$\{k\.review\.projects === 1 \? '' : 's'\} need your review\. Open Review`\}/);
+  assert.match(strip, /<strong>\{kindWord\(a\)\}<\/strong>/);
+  assert.match(strip, /\(all \? critical : critical\.slice\(0, 4\)\)/, 'the rest open in place');
+  // The inspector's name wraps up to three lines, never cut short.
   const insp = web('styles', 'inspector.css');
-  assert.match(web('styles', 'ui.css'), /\.mribbon \{\s*display: grid; grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/);
-  assert.match(web('views', 'inspector', 'Inspector.jsx'), /<MetricRibbon\s/, 'the inspector draws its four figures as the metric ribbon');
   assert.match(insp, /\.ih-name \{[^}]*-webkit-line-clamp: 3/, 'the name wraps up to three lines');
   assert.doesNotMatch(insp, /\.ih-name \{[^}]*text-overflow: ellipsis/);
 });
@@ -627,11 +625,14 @@ test('evidence flags: a serious flag sits beside the grade and is said in words;
   assert.equal(ui.evidenceText({ flagged: 3, high: 0, medium: 2 }), '3 claims flagged by evidence checks (2 material)');
 });
 
-test('watchlist: holdings stay in Portfolio, so a saved "held" view opens on what you follow', async () => {
+test('the Desk\'s views (DESIGN_AND_IA_BLUEPRINT.md §3.1): a saved view is kept, Held among them; an unknown one opens on what you follow', async () => {
   const { wl } = await mods;
   const ctxWith = (saved) => ({ ui: { get: () => saved } });
-  assert.equal(wl.prefs(ctxWith({ v: 2, filters: { owned: 'held' } })).filters.owned, 'watching');
+  assert.deepEqual(wl.VIEWS.map(([v]) => v), ['watching', 'review', 'waiting', 'held', 'off', 'all']);
+  assert.equal(wl.prefs(ctxWith({ v: 2, filters: { owned: 'held' } })).filters.owned, 'held');
   assert.equal(wl.prefs(ctxWith({ v: 2, filters: { owned: 'off' } })).filters.owned, 'off');
+  assert.equal(wl.prefs(ctxWith({ v: 4, filters: { owned: 'nonsense' } })).filters.owned, 'watching');
+  assert.equal(wl.prefs(ctxWith({ v: 1, filters: { owned: 'all' } })).filters.owned, 'watching', 'version 1\'s "all" was its default, not a choice');
 });
 
 test('Add project: a listing or explorer link is searched by its slug, never saved as the website or the name', async () => {
@@ -683,11 +684,16 @@ test('the list\'s market figures: compact USD with two decimals (the shared form
   assert.equal(ui.fmtMarketUsd(12.5), '$12.50');
   assert.equal(ui.fmtMarketUsd(null), null);
   const store = (saved) => ({ ui: { get: () => saved, set: () => {} } });
-  const old = wl.prefs(store({ v: 2, columns: ['rank', 'price', 'sector', 'research'], sort: { key: 'mcap', dir: 'desc' }, filters: { owned: 'all' } }));
-  assert.deepEqual(old.columns, ['rank', 'price', 'change24h', 'change7d', 'change30d', 'mcap', 'volume', 'spark', 'research'], 'the CMC order');
+  // The Desk's seven columns (§3.1, D2): Exit @ $500 and the market figures
+  // wait in the Columns picker.
+  assert.deepEqual(wl.DEFAULT_COLUMNS, ['priceStack', 'spark', 'grade', 'risk', 'lastResearch']);
+  assert.ok(!wl.DEFAULT_COLUMNS.includes('exit') && wl.COLUMNS.some((c) => c.id === 'exit'), 'Exit is in the picker, off by default');
+  const old = wl.prefs(store({ v: 3, columns: ['rank', 'price', 'sector', 'research'], sort: { key: 'mcap', dir: 'desc' }, filters: { owned: 'all' } }));
+  assert.deepEqual(old.columns, wl.DEFAULT_COLUMNS, 'columns saved before the Desk start from its defaults');
   assert.deepEqual(old.sort, { key: 'mcap', dir: 'desc' }, 'the sort is kept');
-  const now = wl.prefs(store({ v: 3, columns: ['spark', 'price', 'sector'], sort: { key: 'rank', dir: 'asc' }, filters: {} }));
-  assert.deepEqual(now.columns, ['price', 'spark', 'sector', 'research'], 'choices made in this layout are kept, in its order');
+  assert.equal(old.filters.owned, 'all', 'and so are the filters');
+  const now = wl.prefs(store({ v: 4, columns: ['sector', 'exit', 'spark', 'priceStack'], sort: { key: 'rank', dir: 'asc' }, filters: {} }));
+  assert.deepEqual(now.columns, ['priceStack', 'spark', 'exit', 'sector'], 'choices made in this layout are kept, in its order');
 });
 
 test('one 0–100 spectrum on the rubric anchors; the grade is figures, never a gauge', async () => {
@@ -894,18 +900,25 @@ test('one page per project (D1): every former project tab and the Brief page red
   assert.equal(go('project', [P, 'scorecards'], 'provider=chatgpt'), '#/project/p1/brief?model=chatgpt&open=scorecard');
   assert.equal(go('project', [P, 'reports'], 'report=r1'), '#/project/p1/report?report=r1');
   assert.equal(go('project', [P, 'comparison']), '#/project/p1/compare');
-  assert.equal(go('project', [P, 'research'], 'run=run1'), '#/project/p1/evidence?open=runs&run=run1');
+  assert.equal(go('project', [P, 'research'], 'run=run1'), '#/project/p1/record?open=runs&run=run1');
   // The Brief's former folds, by their old addresses.
   assert.equal(go('project', [P, 'brief'], 'open=compare'), '#/project/p1/compare');
   assert.equal(go('project', [P, 'brief'], 'model=chatgpt&open=evidence'), '#/project/p1/evidence?model=chatgpt&open=claims');
-  assert.equal(go('project', [P, 'brief'], 'open=runs&run=run1'), '#/project/p1/evidence?open=runs&run=run1');
-  assert.equal(go('project', [P, 'brief'], 'run=run1'), '#/project/p1/evidence?open=runs&run=run1');
-  assert.equal(go('project', [P, 'brief'], 'open=identity'), '#/project/p1/evidence?open=identity');
+  assert.equal(go('project', [P, 'brief'], 'open=runs&run=run1'), '#/project/p1/record?open=runs&run=run1');
+  assert.equal(go('project', [P, 'brief'], 'run=run1'), '#/project/p1/record?open=runs&run=run1');
+  assert.equal(go('project', [P, 'brief'], 'open=identity'), '#/project/p1/contract?open=identity');
+  // Level 2 (2026-10-17): the runs and technical records are on Record, the
+  // token identity on Contract, the headline on Record.
+  assert.equal(go('project', [P, 'evidence'], 'open=runs'), '#/project/p1/record?open=runs');
+  assert.equal(go('project', [P, 'evidence'], 'model=chatgpt&open=technical'), '#/project/p1/record?model=chatgpt&open=technical');
+  assert.equal(go('project', [P, 'evidence'], 'open=identity'), '#/project/p1/contract?open=identity');
+  assert.equal(go('project', [P, 'brief'], 'open=headline'), '#/project/p1/record?open=headline');
+  assert.equal(go('project', [P, 'identity']), '#/project/p1/contract?open=identity');
   assert.equal(go('project', [P, 'brief'], 'model=chatgpt&open=scorecard'), null, 'the scorecard stays on the Overview');
   assert.equal(go('project', [P, 'history']), '#/project/p1/notes');
   assert.equal(go('brief', [P]), '#/project/p1/brief?model=claude');
   assert.equal(go('brief', [P], 'report=r2'), '#/project/p1/brief?model=claude&report=r2');
   // The new tabs stay where they are.
-  for (const t of ['brief', 'compare', 'evidence', 'report', 'market', 'notes']) assert.equal(go('project', [P, t]), null);
+  for (const t of ['brief', 'compare', 'evidence', 'forensics', 'market', 'contract', 'report', 'record', 'notes']) assert.equal(go('project', [P, t]), null);
   assert.equal(go('project', [P, 'nonsense']), '#/project/p1/brief');
 });

@@ -11,7 +11,7 @@
 // starts nothing.
 import { useLayoutEffect, useRef, useState } from 'react';
 import { TriangleAlert, Clock, RotateCcw, FileText, ArrowUpRight, ChevronDown } from 'lucide-react';
-import { fmtDate, fmtDateTime, daysSince, scoreTier, PROVIDER_LABELS, COVERAGE_MEANS, TAG_TITLES } from '../../../../public/ui.js';
+import { fmtDate, fmtDateTime, daysSince, scoreTier, PROVIDER_LABELS, COVERAGE_MEANS, TAG_TITLES, safeUrl } from '../../../../public/ui.js';
 import { TAG_WORDS, CERTAINTY_WORDS, checksWord } from '../../../../public/brief-model.js';
 import { CONFIDENCE_LABELS } from '../../../../public/thesis-ui.js';
 import { navigate } from '../../lib/router.js';
@@ -63,12 +63,15 @@ export function TagChips({ tags }) {
 
 export function CiteLine({ f }) {
   const s0 = f.sources[0];
+  // A report's link is data: http(s) only (ui.js safeUrl).
+  const u0 = s0 && s0.url ? safeUrl(s0.url) : null;
+  const href0 = u0 && /^https?:/i.test(u0) ? u0 : null;
   return (
     <p className="cite">
       <TagChips tags={f.tags} />
       {f.sources.length ? (
         <>
-          {s0.url ? <a href={s0.url} target="_blank" rel="noopener noreferrer nofollow" title={[s0.publisher, s0.accessed_at ? `accessed ${s0.accessed_at}` : null].filter(Boolean).join(' · ') || undefined}>{s0.title || s0.publisher || s0.url}<ArrowUpRight size={12} aria-hidden="true" /></a> : <span>{s0.title || s0.source_id}</span>}
+          {href0 ? <a href={href0} target="_blank" rel="noopener noreferrer nofollow" title={[s0.publisher, s0.accessed_at ? `accessed ${s0.accessed_at}` : null].filter(Boolean).join(' · ') || undefined}>{s0.title || s0.publisher || s0.url}<ArrowUpRight size={12} aria-hidden="true" /></a> : <span>{s0.title || s0.source_id}</span>}
           {f.sources.length > 1 ? <span className="faint" title={f.sources.slice(1).map((s) => s.title || s.url || s.source_id).join('\n')}>{`+${f.sources.length - 1} more`}</span> : null}
         </>
       ) : null}
@@ -496,8 +499,37 @@ function ForAgainst({ m, who }) {
   return (
     <div className="ov-two">
       <Section id="supports" title="What supports it"><FactList items={m.supports} label={`${who}'s strongest positives`} /></Section>
-      <Section id="threatens" title="What threatens it"><FactList items={m.threatens} label={`${who}'s strongest risks`} /><RiskBars m={m} /></Section>
+      <Section id="threatens" title="What threatens it"><FactList items={m.threatens} label={`${who}'s strongest risks`} /></Section>
     </div>
+  );
+}
+
+// The scorecards first, side by side at desktop width (§3.3): the 13
+// diagnostic categories in their four groups beside the six weighted
+// components the grade is calculated from and the downside-risk scores. Three
+// separate panels, never mixed or averaged.
+function Scorecards({ m, who }) {
+  return (
+    <div className="ov-scorecards">
+      <Categories m={m} who={who} />
+      <div className="ov-score-side">
+        <Inputs m={m} who={who} />
+        <RiskBars m={m} />
+      </div>
+    </div>
+  );
+}
+
+// What code the report says it read (code_review): kept with the brief, the
+// Build and code category's detail.
+function CodeRead({ m, who }) {
+  const cr = m.report && m.report.assessment ? m.report.assessment.code_review : null;
+  if (!cr || (typeof cr === 'object' && !Object.keys(cr).length)) return null;
+  return (
+    <details className="fold ov-code" data-key="brief-code">
+      <summary>{`Code that was read · ${who}`}</summary>
+      <Dom build={(L) => L.codeReviewBlock(m.report.assessment)} deps={[m.report_id]} />
+    </details>
   );
 }
 
@@ -710,10 +742,10 @@ export function EmptyBrief({ m, d, row, pid, who }) {
       if (e.job.error && e.job.key === 'failed') lines.push(<p key="je" className="v-error">{e.job.error}</p>);
     } else if (e.hold) lines.push(<p key="h">{`${who} is on hold on this desk${e.hold.since ? ` since ${fmtDate(e.hold.since)}` : ''}: nothing new is assigned to it.`}</p>);
     else if (e.archived) lines.push(<p key="a">The project is archived: its records are kept, and no research is offered here.</p>);
-    if (e.pdf) lines.push(<p key="pdf">{`A PDF report from ${fmtDate(e.pdf.saved_at)} is saved and needs a text copy before it can be read. `}<a href={`#/updates?tab=import&project=${enc(pid)}&provider=${m.provider}`} data-key="brief-pdf-import">Import the text</a></p>);
+    if (e.pdf) lines.push(<p key="pdf">{`A PDF report from ${fmtDate(e.pdf.saved_at)} is saved and needs a text copy before it can be read. `}<a href={`#/review?seg=imports&project=${enc(pid)}&provider=${m.provider}`} data-key="brief-pdf-import">Import the text</a></p>);
     if (e.excluded) lines.push(<p key="ex">{`A report is excluded from comparison${e.excluded.reason ? `: ${e.excluded.reason}` : ''}.`}</p>);
   }
-  const runHref = `#/project/${enc(pid)}/evidence?model=${m.provider}&open=runs`;
+  const runHref = `#/project/${enc(pid)}/record?model=${m.provider}&open=runs`;
   return (
     <section className="ov-sec ov-empty" aria-labelledby="bf-h-empty">
       <div className="ov-empty-mark" aria-hidden="true"><FileText size={22} /></div>
@@ -757,12 +789,12 @@ export default function Overview({ m, d, row, pid, staleDays }) {
     <article className="sheet" id="brief-sheet" aria-labelledby="bf-title">
       <SheetHead m={m} title={`${who} Brief`} />
       <Verdict m={m} pid={pid} who={who} staleDays={staleDays} />
-      <Categories m={m} who={who} />
-      <Inputs m={m} who={who} />
+      <Scorecards m={m} who={who} />
       <Thesis m={m} who={who} />
       <ForAgainst m={m} who={who} />
       <Watch m={m} who={who} pid={pid} />
       <Scenarios m={m} who={who} />
+      <CodeRead m={m} who={who} />
       <EvidenceLine m={m} pid={pid} />
       <YourNote d={d} row={row} pid={pid} who={who} />
     </article>

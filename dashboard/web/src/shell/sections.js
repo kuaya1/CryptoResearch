@@ -1,38 +1,45 @@
-import { Eye, SquarePen, Wallet, FlaskConical, CalendarClock, Inbox, Database, Settings } from 'lucide-react';
-import { followedCount } from '../../../public/ui.js';
+import { LayoutList, Inbox, Wallet, FlaskConical } from 'lucide-react';
+import { deskKpis } from '../../../public/watchlist-model.js';
 
-// The desk's pages, in the order the navigation shows them. Explorer appears
-// only where the server says to show it (set up, or on this PC).
+// The rail's four daily places (DESIGN_AND_IA_BLUEPRINT.md §3.0; Eric,
+// 2026-10-17): Desk (the watchlist's address, so every saved link keeps
+// working), Review (replaces Updates and Agenda), Portfolio and Research.
+// Preferences (a drawer, ⌘,) and the command menu (⌘K) sit at the rail's
+// foot; New research is the command menu's "Research a project" and the
+// Desk's "+ Add project"; Explorer lives under Preferences → Developer.
 export const SECTIONS = [
-  { id: 'watchlist', label: 'Watchlist', icon: Eye },
-  { id: 'new', label: 'New research', icon: SquarePen },
+  { id: 'watchlist', label: 'Desk', icon: LayoutList },
+  { id: 'review', label: 'Review', icon: Inbox },
   { id: 'portfolio', label: 'Portfolio', icon: Wallet },
   { id: 'research', label: 'Research', icon: FlaskConical },
-  // The review agenda (views/agenda, 2026-10-17): one next action per project.
-  { id: 'agenda', label: 'Agenda', icon: CalendarClock },
-  { id: 'updates', label: 'Updates', icon: Inbox },
-  { id: 'explorer', label: 'Explorer', icon: Database },
-  { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
-export function visibleSections(desk, active) {
-  const show = desk.session && desk.session.explorer && desk.session.explorer.show;
-  return SECTIONS.filter((s) => s.id !== 'explorer' || show || active === 'explorer');
+// Pages that are not on the rail keep their names for the window title.
+export const PAGE_TITLES = { new: 'New research', explorer: 'Research Explorer', settings: 'Preferences', updates: 'Review', agenda: 'Review' };
+
+export function visibleSections() {
+  return SECTIONS;
 }
 
-// The counts beside the pages: projects you follow, research in progress,
-// what changed since your review and what waits in the inbox.
-export function navCounts(index) {
+// Portfolio records that need you: the ledger's warnings, quarantined
+// records and wallet events waiting for your decision.
+export function portfolioNeeds(index) {
+  if (!index) return 0;
+  const pf = index.portfolio || {};
+  const wallet = (index.attention || []).filter((a) => a.kind === 'wallet_decision').length;
+  return (pf.warnings || []).length + (pf.quarantine || []).length + wallet;
+}
+
+// A count beside a place only where it means "needs you" (§3.0): Review, the
+// projects that need a review (D3: one project counts once); Portfolio, the
+// records that need attention.
+export function navCounts(index, agenda = null) {
   if (!index) return {};
-  const projects = (index.projects || []).filter((p) => !p.broken && p.status !== 'archived');
-  const changed = projects.filter((p) => p.changes && p.changes.item_count > 0).length;
-  const pending = ((index.imports && index.imports.requests_pending) || []).length + (((index.imports && index.imports.inbox) || {}).in_inbox || []).length;
-  const running = projects.filter((p) => p.research && Object.values(p.research.providers || {}).some((j) => j && ['queued', 'running', 'dispatching'].includes(j.state))).length;
-  const followed = followedCount(projects);
+  const k = deskKpis(index, agenda);
+  const pf = portfolioNeeds(index);
   const s = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   return {
-    watchlist: followed ? { n: followed, title: `${s(followed, 'project', 'projects')} you watch or hold` } : null,
-    research: running ? { n: running, title: `${s(running, 'project', 'projects')} with research in progress` } : null,
-    updates: changed + pending ? { n: changed + pending, title: `${s(changed, 'project', 'projects')} changed since your last review${pending ? `; ${s(pending, 'item', 'items')} waiting in the inbox or request queue` : ''}` } : null,
+    review: k.review.projects ? { n: k.review.projects, title: `${s(k.review.projects, 'project needs', 'projects need')} your review` } : null,
+    portfolio: pf ? { n: pf, title: `${s(pf, 'record needs', 'records need')} attention` } : null,
   };
 }

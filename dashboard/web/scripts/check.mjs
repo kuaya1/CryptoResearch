@@ -92,26 +92,35 @@ try {
     ['watchlist', '#/watchlist', "document.querySelector('.wl-table tbody tr')"],
     ['inspector', `#/watchlist?p=${P.relay}`, "document.querySelector('.inspector .ov-vlabel, .inspector .verdict, .inspector h2')"],
     ['overview', `#/project/${P.relay}/brief`, "document.querySelector('.ov-verdict')"],
-    ['compare', `#/project/${P.relay}/compare`, "document.querySelector('.pp-panel .lg *')"],
-    ['evidence', `#/project/${P.relay}/evidence`, "document.querySelector('.pp-panel .lg *')"],
-    ['report', `#/project/${P.relay}/report`, "document.querySelector('.pp-panel .lg *')"],
-    ['market', `#/project/${P.relay}/market`, "document.querySelector('.pp-panel .lg *')"],
-    ['notes', `#/project/${P.relay}/notes`, "document.querySelector('.pp-panel .lg *')"],
+    ['compare', `#/project/${P.relay}/compare`, "document.querySelector('.pp-panel .l2-panel')"],
+    ['evidence', `#/project/${P.relay}/evidence`, "document.querySelector('.pp-panel .l2-panel')"],
+    ['report', `#/project/${P.relay}/report`, "document.querySelector('.pp-panel .l2-panel')"],
+    ['market', `#/project/${P.relay}/market`, "document.querySelector('.pp-panel .l2-panel')"],
+    ['contract', `#/project/${P.relay}/contract`, "document.querySelector('.pp-panel .l2-panel')"],
+    ['record', `#/project/${P.relay}/record`, "document.querySelector('.pp-panel .l2-panel')"],
+    ['notes', `#/project/${P.relay}/notes`, "document.querySelector('.pp-panel .l2-panel')"],
     ['withheld', `#/project/${P.withheld}/brief`, "document.querySelector('.ov-verdict')"],
     ['none', `#/project/${P.none}/brief`, "document.querySelector('.pp')"],
     ['portfolio', '#/portfolio', "document.querySelector('.lg-portfolio .page-head')"],
-    ['settings', '#/settings', "document.querySelector('.lg-settings .page-head')"],
+    ['preferences', '#/watchlist?prefs=appearance', "document.querySelector('.prefs .prefs-sec:not([aria-busy])')"],
+    ['preferences screening', '#/watchlist?prefs=screening', "document.querySelector('[data-key=\"prefs-screening-form\"]')"],
+    ['preferences models', '#/watchlist?prefs=models', "document.querySelector('.prefs .prefs-sec:not([aria-busy]) *')"],
+    ['preferences data', '#/watchlist?prefs=data', "document.querySelector('.prefs .prefs-sec:not([aria-busy]) *')"],
     ['research', '#/research', "document.querySelector('.lg-research *')"],
-    ['updates', '#/updates', "document.querySelector('.lg-updates *')"],
+    ['research evidence', '#/research?tab=evidence', "document.querySelector('.lg-research table')"],
+    ['portfolio attention', '#/portfolio?tab=attention', "document.querySelector('.lg-portfolio .page-head')"],
+    ['review', '#/review', "document.querySelector('.rv-queue .rv-item')"],
+    ['review upcoming', '#/review?seg=upcoming', "document.querySelector('.rv-up')"],
+    ['review imports', '#/review?seg=imports', "document.querySelector('.rv-imp .lg *')"],
     ['explorer', '#/explorer', "document.querySelector('.lg-explorer *')"],
     ['new', '#/new', "document.querySelector('.lg-new *, .lg-intake *')"],
-    ['agenda', '#/agenda', "document.querySelector('.ag-card')"],
-    ['forensics', `#/project/${P.relay}/forensics`, "document.querySelector('.fx-cps')"],
+    ['forensics', `#/project/${P.relay}/forensics`, "document.querySelector('.fx-assess')"],
     ['forensics empty', `#/project/${P.none}/forensics`, "document.querySelector('.fx-empty')"],
     ['forensics board', `#/project/${P.long}/forensics`, "document.querySelector('.fx-board .fx-dg')"],
   ];
   const FX_PAGES = PAGES.slice(-3);
-  const AGENDA = PAGES.find(([n]) => n === 'agenda');
+  const pg = (n) => PAGES.find(([x]) => x === n);
+  const REVIEW = pg('review');
   const NAMES = `(() => {
     const out = [];
     for (const el of document.querySelectorAll('button, a[href], input:not([type=hidden]), select, textarea, [role=button], [role=tab], [role=menuitem]')) {
@@ -200,8 +209,8 @@ try {
     await tab.evalJs('window.scrollTo(0, 320); true');
     await sleep(200);
     const y0 = await tab.evalJs('Math.round(scrollY)');
-    const brief = await tab.evalJs("(() => { const a = [...document.querySelectorAll('.inspector a, .inspector button')].find((x) => /Claude Brief/.test(x.textContent)); if (!a) return false; window.__t = performance.now(); a.click(); return true; })()");
-    ok(brief, 'the inspector links the Claude Brief');
+    const brief = await tab.evalJs(`(() => { const a = document.querySelector('.inspector [data-key="brief-${P.relay}"]'); if (!a || !/Open full research/.test(a.textContent)) return false; window.__t = performance.now(); a.click(); return true; })()`);
+    ok(brief, 'the inspector links the full research page (Open full research)');
     const tb = await tab.evalJs("__wait(() => document.querySelector('.ov-verdict'))");
     report.timings.inspector_to_overview_ms = tb && Math.round(tb - (await tab.evalJs('window.__t')));
     await tab.evalJs('window.__t = performance.now(); history.back(); true');
@@ -213,7 +222,7 @@ try {
     ok(Math.abs(y1 - y0) <= 4, 'the list keeps its place', { before: y0, after: y1 });
 
     // A deep link to a fold opens it with focus on its heading.
-    await go(tab, `#/project/${P.relay}/evidence?open=claims`, "document.querySelector('.pp-panel .lg *')");
+    await go(tab, `#/project/${P.relay}/evidence?open=claims`, "document.querySelector('.pp-panel .l2-panel')");
     await sleep(900);
     ok(await tab.evalJs("(() => { const a = document.activeElement; const d = a && a.closest('details'); return Boolean(d && d.open); })()"), '?open=claims opens the fold with focus on it');
     await tab.close();
@@ -249,7 +258,7 @@ try {
       else if (m.bottom > m.fold) fail(`${w}×${h} ${k}: the strongest risk ends below the first screen`, m);
     }
     if (w === 390) {
-      await go(tab, '#/watchlist', "document.querySelector('.wl-cards, .wl-table')");
+      await go(tab, '#/watchlist', "document.querySelector('.wl-table tbody tr')");
       const more = await tab.evalJs("(() => { const b = [...document.querySelectorAll('.tabbar button')].find((x) => /More/.test(x.textContent)); if (!b) return false; b.focus(); b.click(); return true; })()");
       await sleep(300);
       ok(more && (await tab.evalJs("Boolean(document.querySelector('dialog.msheet[open]'))")), 'More opens its sheet');
@@ -263,7 +272,7 @@ try {
   // ---- no sideways page scroll: 200% zoom (720, 640) and 320 ------------------------
   for (const [w, mobile] of [[720, false], [640, false], [320, true]]) {
     const tab = await tabFor(w, { mobile, height: mobile ? 700 : 450, scale: 2 });
-    for (const [name, url, ready] of [PAGES[0], PAGES[1], PAGES[2], PAGES[4], PAGES[10], PAGES[11]]) {
+    for (const [name, url, ready] of [pg('watchlist'), pg('inspector'), pg('overview'), pg('evidence'), pg('portfolio'), pg('preferences'), pg('review')]) {
       await go(tab, url, ready);
       await sleep(500);
       const over = await tab.evalJs('document.documentElement.scrollWidth - innerWidth');
@@ -307,7 +316,7 @@ try {
   })()`;
   for (const theme of ['light', 'dark']) {
     const tab = await tabFor(1440, { theme });
-    for (const [name, url, ready] of [PAGES[1], PAGES[2], PAGES[10], PAGES[11]]) {
+    for (const [name, url, ready] of [pg('inspector'), pg('overview'), pg('portfolio'), pg('preferences'), pg('review')]) {
       await go(tab, url, ready);
       await sleep(700);
       const low = await tab.evalJs(CONTRAST);
@@ -318,7 +327,7 @@ try {
     // A phone: the tab bar, the cards on the canvas, risky contract badges.
     const ph = await tabFor(390, { theme });
     const ember = (index.projects.find((p) => /Ember/.test(p.name)) || {}).project_id;
-    for (const [name, url, ready] of [['phone watchlist', '#/watchlist', "document.querySelector('.wl-cards')"], ['phone inspector', `#/watchlist?p=${ember || P.relay}`, "document.querySelector('.inspector .mpanel')"], ['phone overview', `#/project/${P.relay}/brief`, "document.querySelector('.ov-verdict')"], ['phone portfolio', '#/portfolio', "document.querySelector('.lg-portfolio .page-head')"], ['phone new', '#/new', "document.querySelector('.lg-new *, .lg-intake *')"]]) {
+    for (const [name, url, ready] of [['phone watchlist', '#/watchlist', "document.querySelector('.wl-table tbody tr')"], ['phone review', '#/review', "document.querySelector('.rv-queue .rv-item')"], ['phone preferences', '#/watchlist?prefs=screening', "document.querySelector('[data-key=\"prefs-screening-form\"]')"], ['phone inspector', `#/watchlist?p=${ember || P.relay}`, "document.querySelector('.inspector .mpanel')"], ['phone overview', `#/project/${P.relay}/brief`, "document.querySelector('.ov-verdict')"], ['phone portfolio', '#/portfolio', "document.querySelector('.lg-portfolio .page-head')"], ['phone new', '#/new', "document.querySelector('.lg-new *, .lg-intake *')"]]) {
       await go(ph, url, ready);
       await sleep(700);
       const low = await ph.evalJs(CONTRAST);
@@ -335,29 +344,55 @@ try {
     await go(tab, '#/watchlist', "document.querySelector('.wl-table tbody tr')");
     const before = tab.writes.length;
     await tab.evalJs(`(() => { const n = document.querySelector('[data-key="pname-${P.relay}"]'); if (n) n.click(); return Boolean(n); })()`);
-    const insp = await tab.evalJs(`__wait(() => /p=${P.relay}/.test(location.hash) && [...document.querySelectorAll('.inspector a, .inspector button')].some((x) => /Claude Brief/.test(x.textContent)), 8000)`);
+    const insp = await tab.evalJs(`__wait(() => /p=${P.relay}/.test(location.hash) && document.querySelector('.inspector [data-key="brief-${P.relay}"]'), 8000)`);
     ok(Boolean(insp), 'forensics flow: the watchlist row opens the inspector');
-    await tab.evalJs("(() => { const a = [...document.querySelectorAll('.inspector a, .inspector button')].find((x) => /Claude Brief/.test(x.textContent)); if (a) a.click(); return Boolean(a); })()");
+    await tab.evalJs(`(() => { const a = document.querySelector('.inspector [data-key="brief-${P.relay}"]'); if (a) a.click(); return Boolean(a); })()`);
     const page = await tab.evalJs("__wait(() => document.querySelector('.ov-verdict') && document.querySelector('[data-key=\"tab-forensics\"]'), 8000)");
-    ok(Boolean(page), 'forensics flow: the inspector\'s Brief link opens the project page with a Forensics section');
+    ok(Boolean(page), 'forensics flow: the inspector\'s Open full research opens the project page with a Forensics section');
     await tab.evalJs("(() => { const a = document.querySelector('[data-key=\"tab-forensics\"]'); if (a) a.click(); return Boolean(a); })()");
-    const drawn = await tab.evalJs("__wait(() => document.querySelector('.fx-cps') && /forensics/.test(location.hash), 8000)");
+    const drawn = await tab.evalJs("__wait(() => document.querySelector('.fx-assess') && /forensics/.test(location.hash), 8000)");
     ok(Boolean(drawn), 'forensics flow: the project page\'s Forensics tab draws the timeline');
     ok(tab.writes.length === before, 'forensics flow: opening it wrote nothing', tab.writes.slice(before));
-    // The order: assessment, concern + next + counterevidence, evidence
-    // changes, states, timeline, conditions, details (review F14).
-    const order = await tab.evalJs("[...document.querySelectorAll('.fx > *')].map((n) => n.className.split(' ').filter((c) => /^fx-(assess|keys|card|details|actions)$/.test(c)).join(' ') + ':' + ((n.querySelector('.fx-h') || {}).textContent || ''))");
+    // The order (review F14; four segments since 2026-10-17, §3.3): the
+    // Assessment reads assessment, concern + next + counterevidence, evidence
+    // changes and states; Exits the exit estimates and the fixed-quantity
+    // exit; Timeline the timeline and its conditions; Receipts the details.
+    const ORDER = "[...document.querySelectorAll('.fx > *')].map((n) => n.className.split(' ').filter((c) => /^fx-(segbar|assess|keys|card|details|actions)$/.test(c)).join(' ') + ':' + ((n.querySelector('.fx-h') || {}).textContent || ''))";
+    const order = await tab.evalJs(ORDER);
     report.forensics_order = order;
-    ok(/assess/.test(order[0] || '') && /keys/.test(order[1] || '') && /fx-card/.test(order[2] || '') && /Evidence changes/.test(order[3] || '') && /Current states/.test(order[4] || '') && /Exit at a fixed quantity/.test(order[5] || '') && /Resilience timeline/.test(order[6] || '') && /outlook/.test(order[7] || '') && /details/.test(order[8] || ''), 'forensics: sections in the brief\'s order, the fixed-quantity exit after the states', order);
+    ok(/segbar/.test(order[0] || '') && /assess/.test(order[1] || '') && /keys/.test(order[2] || '') && /fx-card/.test(order[3] || '') && /Evidence changes/.test(order[4] || '') && order.slice(5).some((x) => /Current states/.test(x)), 'forensics: the Assessment segment in the brief\'s order', order);
+    const segs = await tab.evalJs("[...document.querySelectorAll('.fx-segbar [data-key^=\"fx-seg-\"]')].map((b) => b.dataset.key.slice(7))");
+    ok(segs.join(',') === 'assessment,exits,timeline,receipts', 'forensics: Assessment, Exits, Timeline and Receipts', segs);
+    ok(await tab.evalJs("Boolean(document.querySelector('.fx-segbar [data-key=\"fx-prefs-edit\"]'))"), 'forensics: "Your screening preferences · Edit" beside the segments');
+    await tab.evalJs("document.querySelector('[data-key=\"fx-seg-exits\"]').click(); true");
+    await tab.evalJs(`__wait(() => /fx=exits/.test(location.hash) && document.querySelector('[data-key="fx-exits"]'), 8000)`);
+    const exitsOrder = await tab.evalJs(ORDER);
+    ok(Array.isArray(exitsOrder) && exitsOrder.some((x) => /Exit at a fixed quantity/.test(x)), 'forensics: the Exits segment holds the exit estimates and the fixed-quantity exit', exitsOrder);
+    await tab.evalJs("document.querySelector('[data-key=\"fx-seg-timeline\"]').click(); true");
+    await tab.evalJs(`__wait(() => /fx=timeline/.test(location.hash) && document.querySelector('.fx-cps'), 8000)`);
+    const tlOrder = await tab.evalJs(ORDER);
+    ok(Array.isArray(tlOrder) && /Resilience timeline/.test(tlOrder.join('|')) && /outlook/.test(tlOrder.join('|')), 'forensics: the Timeline segment holds the timeline and its conditions', tlOrder);
+    await tab.evalJs("document.querySelector('[data-key=\"fx-seg-receipts\"]').click(); true");
+    await tab.evalJs(`__wait(() => /fx=receipts/.test(location.hash) && document.querySelector('[data-key="fx-receipts"]'), 8000)`);
+    const rcOrder = await tab.evalJs(ORDER);
+    ok(Array.isArray(rcOrder) && rcOrder.some((x) => /details/.test(x)), 'forensics: the Receipts segment holds the details', rcOrder);
+    await tab.evalJs("document.querySelector('[data-key=\"fx-seg-assessment\"]').click(); true");
+    await tab.evalJs("__wait(() => document.querySelector('.fx-keys') && !/fx=/.test(location.hash), 8000)");
     const keysOrder = await tab.evalJs("[...document.querySelectorAll('.fx-keys > *')].map((n) => n.className)");
     ok(/is-concern/.test(keysOrder[0] || '') && /fx-next/.test(keysOrder[1] || '') && /is-counter/.test(keysOrder[2] || ''), 'forensics: concern, then the next action, then counterevidence, in reading order', keysOrder);
     // Observed outcomes and conditional estimates are drawn apart; no percentage.
-    const facts = await tab.evalJs("({ past: document.querySelectorAll('.fx-cp.is-past').length, cond: document.querySelectorAll('.fx-cp-cond li').length, label: /not a calibrated probability/.test(document.querySelector('.fx-legend').textContent), pct: /\\d+(\\.\\d+)?\\s?% (chance|probability)/i.test(document.querySelector('.fx').textContent), unknownZero: [...document.querySelectorAll('.fx-exit-cost')].some((n) => n.textContent.trim() === '0.00%') })");
-    report.forensics_facts = facts;
-    ok(facts.past >= 2 && facts.label && !facts.pct, 'forensics: past checkpoints drawn, conditional label shown, no probability', facts);
+    await go(tab, `#/project/${P.relay}/forensics?fx=timeline`, "document.querySelector('.fx-cps')");
+    const facts = await tab.evalJs("({ past: document.querySelectorAll('.fx-cp.is-past').length, cond: document.querySelectorAll('.fx-cp-cond li').length, label: /not a calibrated probability/.test(document.querySelector('.fx-legend').textContent), pct: /\\d+(\\.\\d+)?\\s?% (chance|probability)/i.test(document.querySelector('.fx').textContent) })");
     // The monitor's aggregator exit quotes (FICTIONAL): dated estimates marked
-    // monitor, the approved chain with its Remove; drawing them wrote nothing.
-    const xq = await tab.evalJs("({ monitor: [...document.querySelectorAll('.fx-exit-basis')].filter((n) => / · monitor/.test(n.textContent)).length, dated: [...document.querySelectorAll('.fx-exit-basis')].some((n) => /\\d{4}|\\d:\\d\\d/.test(n.textContent)), target: (document.querySelector('.fx-quote-target') || {}).textContent || null, remove: Boolean(document.querySelector('[data-key^=\"fx-remove-xq_\"]')) })");
+    // monitor, unknown never zero; the approved chain with its Remove on the
+    // Assessment; drawing them wrote nothing.
+    await go(tab, `#/project/${P.relay}/forensics?fx=exits`, "document.querySelector('[data-key=\"fx-exits\"]')");
+    facts.unknownZero = await tab.evalJs("[...document.querySelectorAll('.fx-exit-cost')].some((n) => n.textContent.trim() === '0.00%')");
+    report.forensics_facts = facts;
+    ok(facts.past >= 2 && facts.label && !facts.pct && !facts.unknownZero, 'forensics: past checkpoints drawn, conditional label shown, no probability, no unknown cost as zero', facts);
+    const xqExits = await tab.evalJs("({ monitor: [...document.querySelectorAll('.fx-exit-basis')].filter((n) => / · monitor/.test(n.textContent)).length, dated: [...document.querySelectorAll('.fx-exit-basis')].some((n) => /\\d{4}|\\d:\\d\\d/.test(n.textContent)) })");
+    await go(tab, `#/project/${P.relay}/forensics`, "document.querySelector('.fx-keys')");
+    const xq = { ...xqExits, ...(await tab.evalJs("({ target: (document.querySelector('.fx-quote-target') || {}).textContent || null, remove: Boolean(document.querySelector('[data-key^=\"fx-remove-xq_\"]')) })")) };
     report.forensics_exit_quotes = xq;
     ok(xq.monitor >= 2 && xq.dated && /Exit quotes on Ethereum/.test(xq.target || '') && xq.remove && tab.writes.length === before, 'forensics: the monitor\'s exit quotes are drawn, dated, with the approved chain and its Remove', xq);
     // Keyboard: the Sources fold opens from an evidence chip and focus lands on the source.
@@ -384,7 +419,7 @@ try {
     ok(tab.writes.length === before, 'forensics: reading, folding and closing wrote nothing', tab.writes.slice(before));
     // F13: an earlier receipt by its address; a reload keeps the choice; Back
     // returns to the latest. Its own receipt ID is shown.
-    await go(tab, `#/project/${P.relay}/forensics`, "document.querySelector('.fx-cps')");
+    await go(tab, `#/project/${P.relay}/forensics?fx=receipts`, "document.querySelector('[data-key=\"fx-receipts\"]')");
     const rel = await tab.evalJs("[...document.querySelectorAll('[data-key^=\"fx-show-\"]')].map((a) => a.dataset.key.slice(8))");
     ok(rel.length >= 1, 'forensics: an earlier receipt can be chosen', rel);
     if (rel.length) {
@@ -398,9 +433,10 @@ try {
       const kept = await tab.evalJs(`__wait(() => document.querySelector('.fx-hist') && /receipt=${early}/.test(location.hash), 10000)`);
       ok(Boolean(kept), 'forensics: a reload keeps the chosen receipt');
       await tab.evalJs('history.back(); true');
-      const back = await tab.evalJs("__wait(() => !/receipt=/.test(location.hash) && document.querySelector('.fx-cps') && !document.querySelector('.fx-hist'), 8000)");
+      const back = await tab.evalJs("__wait(() => !/receipt=/.test(location.hash) && document.querySelector('.fx-segbar') && !document.querySelector('.fx-hist'), 8000)");
       ok(Boolean(back), 'forensics: Back returns to the latest assessment');
       // A slow answer for one receipt never replaces a later choice.
+      await go(tab, `#/project/${P.relay}/forensics`, "document.querySelector('.fx-meta .fx-mono')");
       const latest = await tab.evalJs("(document.querySelector('.fx-meta .fx-mono') || {}).textContent || ''");
       await tab.evalJs(`(() => { const real = window.fetch; window.__fxReal = real; window.fetch = (u, o) => (String(u).includes('receipt=${early}') ? new Promise((r) => setTimeout(r, 1500)).then(() => real(u, o)) : real(u, o)); location.hash = location.hash.split('?')[0] + '?receipt=${early}'; setTimeout(() => { location.hash = location.hash.split('?')[0]; }, 150); return true; })()`);
       await sleep(2600);
@@ -410,6 +446,7 @@ try {
     }
     // F12: the original opens in the app, its hash checked, through the
     // signed-in client; Escape closes it and focus returns.
+    await go(tab, `#/project/${P.relay}/forensics?fx=receipts`, "document.querySelector('[data-key=\"fx-receipts\"]')");
     await tab.evalJs("(() => { document.querySelector('[data-key=\"fx-receipts\"]').open = true; const b = document.querySelector('[data-key^=\"fx-text-fr_\"]'); b.focus(); return true; })()");
     await tab.key('Enter', { vk: 13 });
     const viewer = await tab.evalJs("__wait(() => { const d = document.querySelector('dialog.fx-viewer[open]'); return d && /matches the receipt/.test(d.textContent) && d.querySelector('.fx-viewer-text').textContent.length > 500; }, 8000)");
@@ -419,6 +456,7 @@ try {
     ok(await tab.evalJs("!document.querySelector('dialog.fx-viewer[open]') && /fx-text-/.test((document.activeElement && document.activeElement.dataset.key) || '')"), 'forensics: Escape closes the original and focus returns to its button');
     ok(tab.writes.length === before, 'forensics: choosing receipts and reading originals wrote nothing', tab.writes.slice(before));
     // The review queue: Mark reviewed is the one write, sent on its click.
+    await go(tab, `#/project/${P.relay}/forensics`, "document.querySelector('.fx-keys')");
     const ack = await tab.evalJs("(() => { const b = document.querySelector('[data-key^=\"fx-ack-\"]'); if (!b) return null; const k = b.dataset.key; b.click(); return k; })()");
     ok(Boolean(ack), 'forensics: an evidence change offers Mark reviewed');
     const reviewed = await tab.evalJs(`__wait(() => !document.querySelector('[data-key="${ack}"]'), 8000)`);
@@ -430,25 +468,28 @@ try {
   {
     const tab = await tabFor(1440);
     // Fixed-token exit comparison: stored quotes only on opening.
-    await go(tab, `#/project/${P.relay}/forensics`, "document.querySelector('.fx-xc .fx-xc-t')");
+    await go(tab, `#/project/${P.relay}/forensics?fx=exits`, "document.querySelector('.fx-xc .fx-xc-t')");
     let before = tab.writes.length;
     const xc = await tab.evalJs("(() => { const ts = [...document.querySelectorAll('.fx-xc .fx-xc-t')]; const cells = (t, i) => [...t.querySelectorAll('.fx-xc-r:not(.fx-xc-head)')].map((r) => r.children[i].textContent); return { tables: ts.length, usdSells: ts[0] ? cells(ts[0], 1) : [], tokenSells: ts[1] ? cells(ts[1], 1) : [], tokenWorth: ts[1] ? cells(ts[1], 2) : [], button: (document.querySelector('[data-key^=\"fx-xc-quote-\"]') || {}).textContent || null, note: /never transactions/.test((document.querySelector('.fx-xcs') || {}).textContent || '') }; })()");
     report.forensics_exit_compare = xc;
     ok(xc.tables === 2 && new Set(xc.usdSells).size > 1 && xc.tokenSells.length >= 3 && new Set(xc.tokenSells).size === 1 && new Set(xc.tokenWorth).size > 1 && /Quote this quantity now/.test(xc.button || '') && xc.note && tab.writes.length === before, 'exit compare: fixed dollars sell a changing quantity, fixed tokens the same one at a changing worth; drawn from stored quotes, nothing sent', xc);
-    // The register folds open with each frozen estimate and its reading.
-    await tab.evalJs("document.querySelector('[data-key=\"fx-register\"]').open = true; true");
-    await tab.evalJs("__wait(() => document.querySelectorAll('.fx-or-row').length >= 3, 4000)");
-    const reg = await tab.evalJs("[...document.querySelectorAll('.fx-or-st')].map((n) => n.textContent)");
-    report.forensics_register = reg;
-    ok(Array.isArray(reg) && reg.length >= 3 && reg.every((w) => w.length > 2) && !/\d+(\.\d+)?\s?%\s?(accura|hit|correct|probab)/i.test(await tab.evalJs("document.querySelector('.fx-or').textContent")) && tab.writes.length === before, 'register: frozen estimates beside their readings, no accuracy or probability figure, nothing written', reg);
     // "Quote this quantity now": one POST, one more fixed-token row.
     const rows0 = await tab.evalJs("document.querySelectorAll('.fx-xc .fx-xc-t')[1].querySelectorAll('.fx-xc-r:not(.fx-xc-head)').length");
     await tab.evalJs("document.querySelector('[data-key^=\"fx-xc-quote-\"]').click(); true");
     const more = await tab.evalJs(`__wait(() => document.querySelectorAll('.fx-xc .fx-xc-t')[1] && document.querySelectorAll('.fx-xc .fx-xc-t')[1].querySelectorAll('.fx-xc-r:not(.fx-xc-head)').length === ${rows0 + 1}, 8000)`);
     const sent = tab.writes.slice(before);
     ok(Boolean(more) && sent.length === 1 && /\/forensics\/exit-compare\/quote$/.test(sent[0]), 'exit compare: "Quote this quantity now" sends one request and the new reading appears', sent);
+    await go(tab, `#/project/${P.relay}/forensics?fx=receipts`, "document.querySelector('[data-key=\"fx-register\"]')");
+    before = tab.writes.length;
+    // The register folds open with each frozen estimate and its reading.
+    await tab.evalJs("document.querySelector('[data-key=\"fx-register\"]').open = true; true");
+    await tab.evalJs("__wait(() => document.querySelectorAll('.fx-or-row').length >= 3, 4000)");
+    const reg = await tab.evalJs("[...document.querySelectorAll('.fx-or-st')].map((n) => n.textContent)");
+    report.forensics_register = reg;
+    ok(Array.isArray(reg) && reg.length >= 3 && reg.every((w) => w.length > 2) && !/\d+(\.\d+)?\s?%\s?(accura|hit|correct|probab)/i.test(await tab.evalJs("document.querySelector('.fx-or').textContent")) && tab.writes.length === before, 'register: frozen estimates beside their readings, no accuracy or probability figure, nothing written', reg);
     // Download case: a read, never a write.
     before = tab.writes.length;
+    await go(tab, `#/project/${P.relay}/forensics`, "document.querySelector('.fx-assess-more [data-key^=\"fx-case-\"]')");
     await tab.evalJs("document.querySelector('.fx-assess-more [data-key^=\"fx-case-\"]').click(); true");
     const saved = await tab.evalJs("__wait(() => /Case package saved/.test(document.body.textContent), 8000)");
     ok(Boolean(saved) && tab.writes.length === before, 'case: Download case reads the package and writes nothing', tab.writes.slice(before));
@@ -480,49 +521,60 @@ try {
     ok(Boolean(orig) && await tab.evalJs(`Boolean(document.querySelector('[data-key="${first}-text-claude"]'))`), 'board: each side links its receipt\'s original; ChatGPT\'s opens with its SHA-256 checked');
     await tab.key('Escape', { vk: 27 });
     ok(await tab.evalJs(`__wait(() => !document.querySelector('dialog.fx-viewer[open]') && document.activeElement && document.activeElement.dataset.key === '${first}-text-chatgpt', 3000)`) && tab.writes.length === w0, 'board: Escape closes the original, focus returns to its link, nothing written');
-    // The agenda: one primary per project, snooze by keyboard, reload, reopen.
+    // Review (DESIGN_AND_IA_BLUEPRINT.md §3.4; the agenda's items in the
+    // evidence pane, the primary in the action bar): each project once, the
+    // rail and the page counting the same projects; Snooze by keyboard, a
+    // reload, Reopen; nothing written on opening.
     before = tab.writes.length;
-    await go(tab, AGENDA[1], AGENDA[2]);
-    const ag = await tab.evalJs("({ cards: document.querySelectorAll('.ag-card').length, primaries: [...document.querySelectorAll('.ag-card')].map((c) => c.querySelectorAll('.ag-item.is-primary').length), basis: [...document.querySelectorAll('.ag-item.is-primary .ag-basis')].map((n) => n.textContent), why: [...document.querySelectorAll('.ag-item.is-primary .ag-why')].every((n) => n.textContent.length > 20) })");
-    report.agenda = ag;
-    ok(ag.cards >= 3 && ag.primaries.every((n) => n <= 1) && ag.basis.length >= 3 && ag.basis.every((w) => ['Sourced', 'Conditional estimate', 'Your choice'].includes(w)) && ag.why && tab.writes.length === before, 'agenda: at most one primary per project, each with why and its basis in words; nothing written', ag);
-    const card = await tab.evalJs("document.querySelector('.ag-card').getAttribute('aria-labelledby')");
-    const snoozeKey = await tab.evalJs(`document.querySelector('[aria-labelledby="${card}"] .ag-item.is-primary [data-key$="-snooze"]').dataset.key`);
+    await go(tab, REVIEW[1], REVIEW[2]);
+    await tab.evalJs("__wait(() => document.querySelector('.rv-ev .ag-item'), 8000)");
+    const rv = await tab.evalJs("({ items: document.querySelectorAll('.rv-item[data-pid]').length, pids: new Set([...document.querySelectorAll('.rv-item[data-pid]')].map((b) => b.dataset.pid)).size, rail: ((document.querySelector('[data-key=\"nav-review\"] .nav-count') || {}).textContent || '').trim(), head: ((document.querySelector('.rv-pagehead .ph-count') || {}).textContent || '').trim(), primaries: document.querySelectorAll('.rv-ev .ag-item.is-primary').length, basis: [...document.querySelectorAll('.rv-ev .ag-basis')].map((n) => n.textContent), why: [...document.querySelectorAll('.rv-ev .ag-why')].every((n) => n.textContent.length > 20), mark: Boolean(document.querySelector('.rv-bar [data-key=\"rv-mark\"]')), pid: (document.querySelector('.rv-item.is-on') || { dataset: {} }).dataset.pid || null })");
+    report.review = rv;
+    ok(rv.items >= 3 && rv.items === rv.pids && rv.rail === rv.head && Number(rv.head) === rv.items && rv.primaries <= 1 && rv.basis.length >= 1 && rv.basis.every((w) => ['Sourced', 'Conditional estimate', 'Your choice'].includes(w)) && rv.why && rv.mark && tab.writes.length === before, 'review: each project once, the rail and the page count the same projects; at most one primary, each item with why and its basis in words; nothing written', rv);
+    const RV = `#/review?p=${rv.pid}`;
+    await go(tab, RV, "document.querySelector('.rv-bar [data-key$=\"-snooze\"]')");
+    const snoozeKey = await tab.evalJs("document.querySelector('.rv-bar [data-key$=\"-snooze\"]').dataset.key");
     await tab.evalJs(`document.querySelector('[data-key="${snoozeKey}"]').focus(); true`);
     await tab.key('Enter', { vk: 13 });
-    ok(await tab.evalJs("__wait(() => document.activeElement && document.activeElement.type === 'date', 3000)"), 'agenda: Snooze… opens a date field with focus');
+    ok(await tab.evalJs("__wait(() => document.activeElement && document.activeElement.type === 'date', 3000)"), 'review: Snooze… opens a date field with focus');
     await tab.key('Escape', { vk: 27 });
-    ok(await tab.evalJs(`__wait(() => (document.activeElement || {}).dataset && document.activeElement.dataset.key === '${snoozeKey}', 3000)`), 'agenda: Escape closes it and focus returns to Snooze…');
+    ok(await tab.evalJs(`__wait(() => (document.activeElement || {}).dataset && document.activeElement.dataset.key === '${snoozeKey}', 3000)`), 'review: Escape closes it and focus returns to Snooze…');
     await tab.evalJs(`document.querySelector('[data-key="${snoozeKey}"]').click(); true`);
-    await tab.evalJs("__wait(() => document.querySelector('[data-key$=\"-snooze-save\"]'), 3000)");
-    await tab.evalJs("document.querySelector('[data-key$=\"-snooze-save\"]').click(); true");
-    const snoozed = await tab.evalJs(`__wait(() => /Snoozed or done/.test((document.querySelector('[aria-labelledby="${card}"]') || {}).textContent || ''), 8000)`);
+    await tab.evalJs("__wait(() => document.querySelector('.rv-bar [data-key$=\"-snooze-save\"]'), 3000)");
+    await tab.evalJs("document.querySelector('.rv-bar [data-key$=\"-snooze-save\"]').click(); true");
+    const snoozed = await tab.evalJs("__wait(() => /Snoozed or done/.test((document.querySelector('.rv-ev') || {}).textContent || ''), 8000)");
     const sentAg = tab.writes.slice(before);
-    ok(Boolean(snoozed) && sentAg.length === 1 && /\/agenda$/.test(sentAg[0]), 'agenda: Snooze sends one POST and the item steps aside', sentAg);
-    await go(tab, AGENDA[1], AGENDA[2]);
-    ok(await tab.evalJs(`/Snoozed or done \\(1\\)/.test(document.querySelector('[aria-labelledby="${card}"]').textContent)`), 'agenda: the snooze survives a reload');
-    await tab.evalJs(`(() => { const c = document.querySelector('[aria-labelledby="${card}"]'); const d = c.querySelector('[data-key^="ag-set-"]'); d.open = true; d.querySelector('[data-key$="-reopen"]').click(); return true; })()`);
-    const back = await tab.evalJs(`__wait(() => !/Snoozed or done/.test((document.querySelector('[aria-labelledby="${card}"]') || {}).textContent || ''), 8000)`);
-    ok(Boolean(back) && tab.writes.length === before + 2, 'agenda: Reopen sends one POST and the item is back', tab.writes.slice(before));
+    ok(Boolean(snoozed) && sentAg.length === 1 && /\/agenda$/.test(sentAg[0]), 'review: Snooze sends one POST and the item steps aside', sentAg);
+    await go(tab, RV, "document.querySelector('.rv-ev')");
+    ok(await tab.evalJs("__wait(() => /Snoozed or done \\(1\\)/.test(document.querySelector('.rv-ev').textContent), 8000)"), 'review: the snooze survives a reload');
+    await tab.evalJs(`(() => { const d = document.querySelector('[data-key="rv-set-${rv.pid}"]'); d.open = true; d.querySelector('[data-key$="-reopen"]').click(); return true; })()`);
+    const back = await tab.evalJs("__wait(() => !/Snoozed or done/.test((document.querySelector('.rv-ev') || {}).textContent || ''), 8000)");
+    ok(Boolean(back) && tab.writes.length === before + 2, 'review: Reopen sends one POST and the item is back', tab.writes.slice(before));
     // Browsing an earlier receipt changes nothing on the agenda.
-    const agBefore = await tab.evalJs("[...document.querySelectorAll('.ag-item.is-primary .ag-title')].map((n) => n.textContent).join('|')");
-    await go(tab, `#/project/${P.relay}/forensics`, "document.querySelector('[data-key^=\"fx-show-\"]')");
+    await go(tab, `#/review?p=${P.relay}`, "document.querySelector('.rv-ev .ag-item')");
+    const agBefore = await tab.evalJs("[...document.querySelectorAll('.rv-ev .ag-title')].map((n) => n.textContent).join('|')");
+    await go(tab, `#/project/${P.relay}/forensics?fx=receipts`, "document.querySelector('[data-key^=\"fx-show-\"]')");
     await tab.evalJs("(() => { document.querySelector('[data-key=\"fx-receipts\"]').open = true; document.querySelector('[data-key^=\"fx-show-\"]').click(); return true; })()");
     await tab.evalJs("__wait(() => document.querySelector('.fx-hist'), 8000)");
-    await go(tab, AGENDA[1], AGENDA[2]);
-    ok(await tab.evalJs(`[...document.querySelectorAll('.ag-item.is-primary .ag-title')].map((n) => n.textContent).join('|')`) === agBefore, 'agenda: browsing an earlier receipt does not change it');
+    await go(tab, `#/review?p=${P.relay}`, "document.querySelector('.rv-ev .ag-item')");
+    ok(await tab.evalJs("[...document.querySelectorAll('.rv-ev .ag-title')].map((n) => n.textContent).join('|')") === agBefore, 'review: browsing an earlier receipt does not change the agenda');
     await tab.close();
   }
-  // The agenda and the board on phones, both themes: no sideways scroll,
-  // every control at least 44px tall, the primary action on the first screen.
+  // Review and the board on phones, both themes: no sideways scroll, every
+  // control at least 44px tall, the first project and why it waits on the
+  // first screen.
   for (const [w, h] of [[390, 844], [360, 780]]) {
     for (const theme of ['light', 'dark']) {
       const tab = await tabFor(w, { mobile: true, height: h, theme });
-      await go(tab, AGENDA[1], AGENDA[2]);
+      await go(tab, REVIEW[1], REVIEW[2]);
       await sleep(400);
-      const m = await tab.evalJs("(() => { window.scrollTo(0, 0); const p = document.querySelector('.ag-item.is-primary .ag-why'); const bar = document.querySelector('.tabbar'); const fold = bar ? bar.getBoundingClientRect().top : innerHeight; const small = [...document.querySelectorAll('.ag-item.is-primary .ag-acts .btn')].filter((b) => b.getBoundingClientRect().height < 43.5).length; return { whyBottom: p ? Math.round(p.getBoundingClientRect().bottom) : null, fold: Math.round(fold), small, scrollW: document.documentElement.scrollWidth - innerWidth }; })()");
-      report[`agenda_${w}_${theme}`] = m;
-      ok(m.whyBottom !== null && m.whyBottom <= m.fold && m.small === 0 && m.scrollW <= 1, `${w}x${h} ${theme} agenda: the first project's next action and why are on the first screen; 44px controls; no sideways scroll`, m);
+      const m = await tab.evalJs("(() => { window.scrollTo(0, 0); const p = document.querySelector('.rv-item .rv-ir'); const bar = document.querySelector('.tabbar'); const fold = bar ? bar.getBoundingClientRect().top : innerHeight; const small = [...document.querySelectorAll('.rv-item')].filter((b) => b.getBoundingClientRect().height < 43.5).length; return { whyBottom: p ? Math.round(p.getBoundingClientRect().bottom) : null, fold: Math.round(fold), small, scrollW: document.documentElement.scrollWidth - innerWidth }; })()");
+      report[`review_${w}_${theme}`] = m;
+      ok(m.whyBottom !== null && m.whyBottom <= m.fold && m.small === 0 && m.scrollW <= 1, `${w}x${h} ${theme} review: the first project and why it waits are on the first screen; 44px cards; no sideways scroll`, m);
+      await go(tab, `#/review?p=${P.relay}`, "document.querySelector('.rv-bar [data-key=\"rv-mark\"]')");
+      await sleep(300);
+      const mb = await tab.evalJs("(() => { const small = [...document.querySelectorAll('.rv-bar .btn')].filter((b) => b.getBoundingClientRect().height < 43.5).length; const bar = document.querySelector('.rv-bar').getBoundingClientRect(); const tabs = document.querySelector('.tabbar'); return { small, barBottom: Math.round(bar.bottom), fold: Math.round(tabs ? tabs.getBoundingClientRect().top : innerHeight), scrollW: document.documentElement.scrollWidth - innerWidth }; })()");
+      ok(mb.small === 0 && mb.barBottom <= mb.fold + 1 && mb.scrollW <= 1, `${w}x${h} ${theme} review card: the action bar stays above the tab bar with 44px controls; no sideways scroll`, mb);
       await go(tab, `#/project/${P.long}/forensics`, "document.querySelector('.fx-board .fx-dg')");
       const bm = await tab.evalJs("(() => { const s = [...document.querySelectorAll('.fx-dg')][0].querySelectorAll('.fx-dg-side'); const a = s[0].getBoundingClientRect(), b = s[1].getBoundingClientRect(); return { stacked: b.top >= a.bottom - 1, scrollW: document.documentElement.scrollWidth - innerWidth }; })()");
       ok(bm.stacked && bm.scrollW <= 1, `${w}x${h} ${theme} board: the two positions stack; no sideways scroll`, bm);
@@ -532,12 +584,12 @@ try {
   for (const theme of ['light', 'dark']) {
     for (const w of [1440, 390]) {
       const tab = await tabFor(w, { theme });
-      await go(tab, AGENDA[1], AGENDA[2]);
-      await tab.evalJs("document.querySelectorAll('.ag details').forEach((d) => { d.open = true; }); true");
+      await go(tab, `#/review?p=${P.relay}`, "document.querySelector('.rv-ev .ag-item')");
+      await tab.evalJs("document.querySelectorAll('.rv details').forEach((d) => { d.open = true; }); true");
       await sleep(500);
       const low = await tab.evalJs(CONTRAST.replace('r.top > innerHeight * 3', 'r.top > innerHeight * 40'));
-      report.contrast[`${theme} ${w} agenda`] = low;
-      if (low && low.length) fail(`${theme} ${w}px agenda: text below contrast`, low.slice(0, 4));
+      report.contrast[`${theme} ${w} review`] = low;
+      if (low && low.length) fail(`${theme} ${w}px review: text below contrast`, low.slice(0, 4));
       await tab.close();
     }
   }

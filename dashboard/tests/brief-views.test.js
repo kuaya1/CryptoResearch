@@ -207,13 +207,18 @@ test('opening the views only reads: no write, fetch, refresh, research or Explor
   assert.match(project, /d = await ctx\.projectDetail\(id\)/);
   assert.match(project, /compare: \(\) => compareTab\(ctx, d, row, route\)/);
   assert.match(project, /evidencePanel\(ctx, \{ d, row, pid, provider: prov/);
-  assert.match(read('project-routes.js'), /\['brief', 'Overview'\],\s*\['compare', 'Compare'\],\s*\['evidence', 'Evidence'\]/);
-  // The React project page and its Overview read only: no write, fetch or
-  // research outside an explicit action, and no report text as HTML.
+  // Level 2 (DESIGN_AND_IA_BLUEPRINT.md §3.3, 2026-10-17): the Brief first,
+  // then Evidence; Compare is a mode of the model switcher at its own address.
+  assert.match(read('project-routes.js'), /\['brief', 'Brief'\],\s*\['evidence', 'Evidence'\]/);
+  assert.match(read('project-routes.js'), /PROJECT_VIEWS = \[\.\.\.PROJECT_TABS\.map\(\(\[t\]\) => t\), 'compare'\]/);
+  // The React project page's Brief, Compare and Market read only: no write,
+  // fetch or research outside an explicit action, and no report text as HTML.
   const webRoot = path.join(__dirname, '..', 'web', 'src');
   const overview = code(fs.readFileSync(path.join(webRoot, 'views', 'project', 'Overview.jsx'), 'utf8'));
-  for (const re of [/dangerouslySetInnerHTML/, /\.innerHTML/, /\bfetch\(/, /api\.post\(/, /\brefresh\(/, /\/api\/explorer/, /\/research\/run|start_research/]) {
-    assert.ok(!re.test(overview), `Overview.jsx must not match ${re}`);
+  for (const [name, src] of [['Overview.jsx', overview], ...['Compare.jsx', 'Market.jsx'].map((n) => [n, code(fs.readFileSync(path.join(webRoot, 'views', 'project', n), 'utf8'))])]) {
+    for (const re of [/dangerouslySetInnerHTML/, /\.innerHTML/, /\bfetch\(/, /api\.post\(/, /\brefresh\(/, /\/api\/explorer/, /\/research\/run|start_research/]) {
+      assert.ok(!re.test(src), `${name} must not match ${re}`);
+    }
   }
   // The Overview's only action is the research dialog the inspector also offers (a click, never on render).
   assert.match(overview, /onClick=\{async \(\) => \{ const L = await loadLegacy\(\);[\s\S]{0,240}L\.openResearchDialog\(/);

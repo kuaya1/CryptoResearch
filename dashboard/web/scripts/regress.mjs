@@ -98,8 +98,9 @@ const olderClaude = (claudeReports.find((r) => r.report_id !== latestClaude && r
 // ---- page helpers -------------------------------------------------------------------------
 const WAIT = 'window.__wait = (test, ms = 6000) => new Promise((resolve) => { const t0 = performance.now(); (function f() { let v = null; try { v = test(); } catch (_) { v = null; } if (v) resolve(Math.round(performance.now() - t0)); else if (performance.now() - t0 > ms) resolve(null); else requestAnimationFrame(f); })(); }); true';
 // The mixed-report monitor: on every change to the page, the inspector's
-// grade, verdict and strongest risk must belong to the report its "Open
-// report" link names, and that report to the project and model on screen.
+// grade, verdict and strongest risk must belong to the report its panel says
+// it draws (data-report, the Level 1 inspector of 2026-10-17), and that
+// report to the project and model on screen (data-provider).
 const MONITOR = (sig) => `(() => {
   if (window.__mix) return true;
   const SIG = ${JSON.stringify(sig)};
@@ -109,10 +110,9 @@ const MONITOR = (sig) => `(() => {
     const insp = document.querySelector('.inspector');
     if (!insp) return;
     const pid = new URLSearchParams(location.hash.split('?')[1] || '').get('p');
-    const tab = insp.querySelector('[data-key^="insp-tab-"][aria-selected="true"]');
-    const prov = tab ? tab.dataset.key.replace('insp-tab-', '') : null;
-    const link = insp.querySelector('.insp-foot [data-key^="report-"]');
-    const id = link ? new URLSearchParams((link.getAttribute('href') || '').split('?')[1] || '').get('report') : null;
+    const panel = insp.querySelector('.mpanel');
+    const prov = panel ? panel.dataset.provider || null : null;
+    const id = panel ? panel.dataset.report || null : null;
     const gauge = insp.querySelector('.mpanel [data-part="grade-score"]');
     const label = gauge ? gauge.getAttribute('aria-label') || '' : '';
     const verdict = txt(insp.querySelector('.mpanel .mh-verdict'));
@@ -124,7 +124,7 @@ const MONITOR = (sig) => `(() => {
     if (!id && risk) v.push('a risk with no report');
     if (s) {
       if (s.project !== pid) v.push('report of ' + s.project + ' under ' + pid);
-      if (prov && s.provider !== prov) v.push('report of ' + s.provider + ' under the ' + prov + ' tab');
+      if (prov && s.provider !== prov) v.push('report of ' + s.provider + ' drawn under ' + prov);
       if (s.grade && label && label.indexOf('grade ' + s.grade + ' of') < 0) v.push('grade [' + label + '] is not ' + s.grade);
       if (verdict && s.verdict && verdict !== s.verdict) v.push('verdict ' + verdict + ' is not ' + s.verdict);
       if (risk && s.risk && risk !== s.risk) v.push('risk [' + risk.slice(0, 60) + '] is not [' + s.risk.slice(0, 60) + ']');
@@ -172,8 +172,8 @@ try {
       proxy.set({ projectDelay: 15000, snapshot: 'new', bump: proxy.cfg.bump + 1 });
       const t0 = Date.now();
       // The index changes within a poll (2.5 s); the record is held 15 s.
-      await waitFor(tab, `document.querySelector('.insp-foot [data-key^="report-"]') && document.querySelector('.insp-foot [data-key^="report-"]').getAttribute('href').includes(${JSON.stringify(NEW_REPORT_ID)})`, 9000);
-      const during = await tab.evalJs("({ link: (document.querySelector('.insp-foot [data-key^=\"report-\"]') || {}).href || null, grade: (document.querySelector('.mpanel [data-part=\"grade-score\"]') || { getAttribute: () => null }).getAttribute('aria-label'), risk: (document.querySelector('.mpanel [data-part=\"risk-text\"], .mpanel .tl-risk-text') || {}).textContent || null, loading: Boolean(document.querySelector('.mpanel [role=\"status\"]')) })");
+      await waitFor(tab, `(document.querySelector('.inspector .mpanel') || { dataset: {} }).dataset.report === ${JSON.stringify(NEW_REPORT_ID)}`, 9000);
+      const during = await tab.evalJs("({ link: (document.querySelector('.inspector .mpanel') || { dataset: {} }).dataset.report || null, grade: (document.querySelector('.mpanel [data-part=\"grade-score\"]') || { getAttribute: () => null }).getAttribute('aria-label'), risk: (document.querySelector('.mpanel [data-part=\"risk-text\"], .mpanel .tl-risk-text') || {}).textContent || null, loading: Boolean(document.querySelector('.mpanel [role=\"status\"]')) })");
       evidence.f1_during_delay = during;
       await sleep(Math.max(0, 16500 - (Date.now() - t0)));
       proxy.set({ projectDelay: 0 });
@@ -181,12 +181,13 @@ try {
       const mix = await tab.evalJs('window.__mix');
       evidence.f1_delayed = { checks: mix.checks, violations: mix.violations.slice(0, 5), count: mix.violations.length };
       record('F1', 'a 15 s delayed record never mixes two reports', mix.violations.length === 0 && mix.checks > 0, evidence.f1_delayed);
-      const after = await tab.evalJs("({ link: (document.querySelector('.insp-foot [data-key^=\"report-\"]') || {}).getAttribute ? document.querySelector('.insp-foot [data-key^=\"report-\"]').getAttribute('href') : null, risk: (document.querySelector('.mpanel [data-part=\"risk-text\"], .mpanel .tl-risk-text') || {}).textContent || null })");
+      const after = await tab.evalJs("({ link: (document.querySelector('.inspector .mpanel') || { dataset: {} }).dataset.report || null, risk: (document.querySelector('.mpanel [data-part=\"risk-text\"], .mpanel .tl-risk-text') || {}).textContent || null })");
       record('F1', 'the new opinion arrives whole after the delay', after.link && after.link.includes(NEW_REPORT_ID) && after.risk === NEW_RISK, after);
       await tab.close();
     }
-    // F1b: 24 rapid switches of project and model, with refreshes landing
-    // while a record is still on its way.
+    // F1b: rapid switches of project (J, K and the address; the Level 1
+    // inspector draws one opinion, the canonical report), with refreshes
+    // landing while a record is still on its way.
     {
       proxy.reset();
       const tab = await openTab(1440);
@@ -196,10 +197,11 @@ try {
       proxy.set({ projectDelay: 1200 });
       const actions = [];
       let snap = 'original';
-      const seq = ['tab:chatgpt', 'j', 'tab:claude', 'refresh', 'k', 'tab:gemini', 'tab:claude', 'j', 'refresh', 'k', 'tab:chatgpt', 'tab:claude', 'j', 'j', 'refresh', 'k', 'k', 'tab:chatgpt', 'refresh', 'tab:claude', 'j', 'k', 'tab:gemini', 'tab:claude', 'refresh', 'j', 'k'];
+      const seq = ['go:withheld', 'j', 'go:relay', 'refresh', 'k', 'go:ranges', 'go:relay', 'j', 'refresh', 'k', 'go:withheld', 'go:relay', 'j', 'j', 'refresh', 'k', 'k', 'go:ranges', 'refresh', 'go:relay', 'j', 'k', 'go:long', 'go:relay', 'refresh', 'j', 'k'];
       for (const [i, a] of seq.entries()) {
-        if (a.startsWith('tab:')) {
-          try { await tab.click(`[data-key="insp-tab-${a.slice(4)}"]`); } catch (_) { /* that tab is not drawn for this project */ }
+        if (a.startsWith('go:')) {
+          const id = P[a.slice(3)];
+          if (id) await tab.evalJs(`location.hash = '#/watchlist?p=${id}'; true`);
         } else if (a === 'refresh') {
           snap = snap === 'original' ? 'new' : 'original';
           proxy.set({ snapshot: snap, bump: proxy.cfg.bump + 1 });
@@ -213,7 +215,6 @@ try {
       // Back to the relay project's Claude opinion in the same page, settled.
       await tab.evalJs(`location.hash = '#/watchlist?p=${P.relay}'; true`);
       await waitFor(tab, "document.querySelector('.inspector .mpanel')", 6000);
-      await tab.click('[data-key="insp-tab-claude"]').catch(() => {});
       const trace = [];
       const t0 = Date.now();
       let settled = null;
@@ -227,7 +228,7 @@ try {
       const mix = await tab.evalJs('window.__mix');
       evidence.f1_rapid = { actions: actions.length, checks: mix.checks, reports_seen: Object.keys(mix.seen).length, violations: mix.violations.slice(0, 5), count: mix.violations.length };
       record('F1', `${actions.filter((a) => a !== 'refresh').length} rapid switches and ${actions.filter((a) => a === 'refresh').length} refreshes never mix reports`, mix.violations.length === 0 && mix.checks > 20, evidence.f1_rapid);
-      const final = await tab.evalJs("(() => { const m = document.querySelector('.mpanel'); return { hash: location.hash, opinion: m && m.dataset.opinion, report: m && m.dataset.report, wait: ((document.querySelector('.mp-wait') || {}).textContent || '').slice(0, 160), risk: ((document.querySelector('.mpanel [data-part=\"risk-text\"]') || {}).textContent || '').slice(0, 80), tab: (document.querySelector('[data-key^=\"insp-tab-\"][aria-selected=\"true\"]') || {}).dataset ? document.querySelector('[data-key^=\"insp-tab-\"][aria-selected=\"true\"]').dataset.key : null }; })()");
+      const final = await tab.evalJs("(() => { const m = document.querySelector('.mpanel'); return { hash: location.hash, opinion: m && m.dataset.opinion, report: m && m.dataset.report, wait: ((document.querySelector('.mp-wait') || {}).textContent || '').slice(0, 160), risk: ((document.querySelector('.mpanel [data-part=\"risk-text\"]') || {}).textContent || '').slice(0, 80), provider: m && m.dataset.provider }; })()");
       evidence.f1_settled = final;
       record('F1', 'after the switches the opinion settles whole (not stuck loading)', settled !== null && settled <= 6000, { settled_ms: settled, final, trace: evidence.f1_settle_trace });
       await tab.close();
@@ -341,15 +342,22 @@ try {
       await t3.evalJs("(() => { const bt = [...document.querySelectorAll('main [role=\"alert\"] button')].find((x) => /try again/i.test(x.textContent)); if (bt) bt.click(); return Boolean(bt); })()");
       record('F3', 'and Try again opens it once the chunk is back', (await waitFor(t3, "document.querySelector('.lg-portfolio .page-head')", 8000)) !== null);
       await t3.close();
-      // The hosted parts' chunk missing: the inspector still opens.
+      // The hosted parts' chunk missing: the inspector still opens (since the
+      // Level 1 cut it hosts no part; its top pool says DexScreener could
+      // not be read), and the project page's hosted parts (Market: the DEX
+      // card, the chart) say so in place with Try again, the page around them
+      // intact.
       proxy.set({ blockChunk: 'parts-' });
       const t2 = await openTab(1440);
       await t2.send('Network.setCacheDisabled', { cacheDisabled: true });
       await go(t2, `#/watchlist?p=${P.relay}`, "document.querySelector('.inspector .mpanel')");
       await sleep(1500);
-      const parts = await t2.evalJs("({ verdict: Boolean(document.querySelector('.inspector .mh, .inspector .vblock')), partError: [...document.querySelectorAll('.inspector .lg-part-error')].length, rows: Boolean(document.querySelector('.wl-table tbody tr')) })");
+      const parts = await t2.evalJs("({ verdict: Boolean(document.querySelector('.inspector .mh, .inspector .vblock')), rows: Boolean(document.querySelector('.wl-table tbody tr')) })");
+      await go(t2, `#/project/${P.relay}/market`, "document.querySelector('.pp-panel .l2-panel')");
+      await waitFor(t2, "document.querySelector('.pp-panel .lg-part-error')", 6000);
+      Object.assign(parts, await t2.evalJs("({ partError: document.querySelectorAll('.pp-panel .lg-part-error').length, retry: [...document.querySelectorAll('.pp-panel .lg-part-error button')].some((b) => /try again/i.test(b.textContent)), panels: document.querySelectorAll('.pp-panel .l2-panel').length })"));
       evidence.f3_parts = parts;
-      record('F3', 'a missing hosted-parts chunk leaves the inspector and list working, with a retry', parts.verdict && parts.rows && parts.partError > 0, parts);
+      record('F3', 'a missing hosted-parts chunk leaves the inspector, the list and the project page working, with a retry in place of each hosted part', parts.verdict && parts.rows && parts.partError > 0 && parts.retry && parts.panels >= 2, parts);
       await t2.close();
       proxy.reset();
     }
@@ -377,7 +385,7 @@ try {
   if (want('F4')) {
     proxy.reset();
     const tab = await openTab(1440);
-    const sectionLink = (t) => `[data-key="tab-${t}"]`;
+    const sectionLink = (t) => (t === 'compare' ? '[data-key="pb-tab-compare"]' : `[data-key="tab-${t}"]`);
     const originalHref = "(() => { const a = [...document.querySelectorAll('.pp-panel a')].find((x) => /original report/i.test(x.textContent)); return a ? a.getAttribute('href') : null; })()";
     // Overview, ChatGPT chosen.
     await go(tab, `#/project/${P.relay}/brief`, "document.querySelector('.ov-verdict')");
@@ -454,6 +462,11 @@ try {
       await go(tab, `#/project/${P.relay}/compare`, "/Compare the models/.test((document.querySelector('.pp-panel') || {}).textContent || '')");
       const seen = [];
       for (const t of ['report', 'market', 'notes', 'compare']) {
+        // Compare is on the model switcher, which the model views show.
+        if (t === 'compare' && !(await tab.evalJs("Boolean(document.querySelector('[data-key=\"pb-tab-compare\"]'))"))) {
+          await tab.click(sectionLink('brief'));
+          await waitFor(tab, "document.querySelector('[data-key=\"pb-tab-compare\"]')", 6000);
+        }
         await tab.click(sectionLink(t));
         await waitFor(tab, t === 'report' ? "document.getElementById('report-title')" : `/${SECTION[t]}/.test((document.querySelector('.pp-panel') || {}).textContent || '')`, 6000);
         const s = await tab.evalJs(drawn);
@@ -479,7 +492,7 @@ try {
       const f = await tab.evalJs("(document.activeElement || {}).dataset ? document.activeElement.dataset.key : null");
       record('F6', 'section tabs: Right Arrow moves to the next section', f === 'tab-report', { focus: f, ...kind });
     } else {
-      record('F6', 'sections are navigation links: a nav with aria-current, no tab roles', kind && kind.tag === 'NAV' && kind.tabs === 0 && kind.links >= 6 && /Overview/.test(kind.current || ''), kind);
+      record('F6', 'sections are navigation links: a nav with aria-current, no tab roles', kind && kind.tag === 'NAV' && kind.tabs === 0 && kind.links >= 8 && /Brief/.test(kind.current || ''), kind);
       await tab.evalJs("document.querySelector('[data-key=\"tab-evidence\"]').focus(); true");
       await tab.key('Enter', { vk: 13 });
       const went = await waitFor(tab, "location.hash.includes('/evidence')", 4000);
@@ -488,7 +501,8 @@ try {
       const cur = await tab.evalJs("(document.querySelector('[aria-label=\"Project sections\"] [aria-current=\"page\"]') || {}).textContent");
       record('F6', 'the current section is marked', /Evidence/.test(cur || ''), { cur });
     }
-    // The model tabs are real tabs: arrows, Home and End move the choice and focus.
+    // The model switcher (Claude | ChatGPT | Gemini | Compare) is real tabs:
+    // arrows, Home and End move the choice and focus.
     await go(tab, `#/project/${P.relay}/brief?model=claude`, "document.querySelector('.ov-verdict')");
     await tab.evalJs("document.querySelector('[data-key=\"pb-tab-claude\"]').focus(); true");
     const step = async (key, vk) => {
@@ -501,7 +515,7 @@ try {
     const r3 = await step('Home', 36);
     const r4 = await step('ArrowLeft', 37);
     evidence.f6_model_tabs = [r1, r2, r3, r4];
-    record('F6', 'model tabs: Right, End, Home, Left move choice and focus', r1.focus === 'pb-tab-chatgpt' && r1.selected === 'pb-tab-chatgpt' && r2.focus === 'pb-tab-gemini' && r3.focus === 'pb-tab-claude' && r4.focus === 'pb-tab-gemini' && /model=gemini/.test(r4.url), evidence.f6_model_tabs);
+    record('F6', 'model tabs: Right, End, Home, Left move choice and focus (End and Left from the first reach Compare)', r1.focus === 'pb-tab-chatgpt' && r1.selected === 'pb-tab-chatgpt' && r2.focus === 'pb-tab-compare' && /\/compare/.test(r2.url) && r3.focus === 'pb-tab-claude' && /model=claude/.test(r3.url) && r4.focus === 'pb-tab-compare' && r4.selected === 'pb-tab-compare', evidence.f6_model_tabs);
     // Escape closes a brief opened from the inspector and focus returns.
     await go(tab, `#/watchlist?p=${P.relay}`, "document.querySelector('.inspector .mpanel')");
     await tab.evalJs("(() => { const a = document.querySelector('[data-key^=\"brief-\"]'); if (a) a.click(); return Boolean(a); })()");
@@ -550,8 +564,8 @@ try {
         for (const [k, id] of cases) {
           const tab = await openTab(w, { height: h });
           await go(tab, '#/watchlist', "document.querySelector('.wl-cards [data-pid], .wl-table tbody tr')");
-          // The real entry: the card's name opens the inspector, its Claude
-          // Brief link opens the Overview.
+          // The real entry: the row's name opens the inspector, its Open full
+          // research opens the Brief.
           await tab.click(`[data-pid="${id}"] .pname`);
           await waitFor(tab, "document.querySelector('.inspector.is-modal [data-key^=\"brief-\"]')", 8000);
           await sleep(300);
