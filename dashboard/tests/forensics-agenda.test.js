@@ -130,6 +130,45 @@ test('agenda: browsing an earlier receipt does not change it; it reads the lates
   assert.ok(!all(rowFor(A.agenda(x.ws, { now }))).some((i) => i.kind === 'disagreement'), 'the latest receipt has no challenge yet');
 });
 
+test('agenda: research age against Eric\'s freshness limit, the assessment\'s age, and a monitored check that cannot be read', (t) => {
+  const x = agendaSetup('ag-fresh');
+  t.after(x.cleanup);
+  // Research age: the limit is Eric's setting; the date is the report's own
+  // analysis date plus that limit.
+  x.ws.settings.freshness = { ...(x.ws.settings.freshness || {}), research_stale_days: 30 };
+  const rep = require('../core/reports').loadReports(x.ws, NET).find((r) => r.report_id === x.report_id);
+  const analysed = String(rep.assessment.analysis_at).slice(0, 10);
+  const stale = all(rowFor(A.agenda(x.ws))).find((i) => i.kind === 'research_stale');
+  assert.equal(stale.basis, 'owner');
+  assert.equal(stale.basis_words, 'Your choice');
+  assert.match(stale.title, /30-day freshness limit/);
+  assert.equal(stale.due_at.slice(0, 10), ymd(Date.parse(`${analysed}T00:00:00Z`) + 30 * DAY));
+  assert.match(stale.why, new RegExp(`as of ${analysed}`));
+  // The assessment's age is said with its checkpoint; past the last one the
+  // receipt's horizon has ended.
+  const late = Date.parse(x.s.receipt.deadlines[x.s.receipt.deadlines.length - 1].at) + DAY;
+  const cp = all(rowFor(A.agenda(x.ws, { now: Date.parse(x.s.receipt.deadlines[1].at) + 1000 }))).find((i) => i.kind === 'checkpoint' && i.due);
+  assert.match(cp.why, /assessed \d+ days? ago/);
+  const ended = all(rowFor(A.agenda(x.ws, { now: late }))).find((i) => i.kind === 'checkpoint' && i.due);
+  assert.match(ended.title, /^Reassess: the horizon of receipt/);
+  assert.match(ended.why, /a new audit starts a new origin/);
+  // A monitored check that passed, then cannot be read (FICTIONAL).
+  F.setMonitoring(x.ws, NET, { approve: { receipt_id: x.s.receipt_id }, enabled: true });
+  const pc = F.readProfile(x.ws, NET).targets.product_checks[0];
+  assert.ok(pc, 'the fixture proposes a product check');
+  const t0 = Date.now() - 3 * DAY;
+  F.appendObservation(x.ws, NET, { kind: 'product_check', target_id: pc.target_id, label: pc.label, url: pc.url, observed_at: new Date(t0).toISOString(), outcome: 'pass', http_status: 200, read: 'complete', body_sha256: 'a'.repeat(64) });
+  for (const d of [1, 2]) F.appendObservation(x.ws, NET, { kind: 'product_check', target_id: pc.target_id, label: pc.label, url: pc.url, observed_at: new Date(t0 + d * DAY).toISOString(), outcome: 'error', error: 'FICTIONAL: connection refused' });
+  const before = hashTree(path.join(x.root, 'projects'));
+  const se = all(rowFor(A.agenda(x.ws))).find((i) => i.kind === 'stale_evidence');
+  assert.deepEqual(hashTree(path.join(x.root, 'projects')), before, 'reading writes nothing');
+  assert.ok(se, 'a check that cannot be read is on the agenda');
+  assert.equal(se.basis, 'sourced');
+  assert.equal(se.due, true);
+  assert.match(se.why, /no successful reading since .*2 failed readings.*Unknown meanwhile/);
+  assert.equal(se.support.target_id, pc.target_id);
+});
+
 test('agenda: a receipt that disagrees with its original is the first thing to check', (t) => {
   const x = agendaSetup('ag-integrity');
   t.after(x.cleanup);

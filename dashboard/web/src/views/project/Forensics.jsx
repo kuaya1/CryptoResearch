@@ -19,7 +19,7 @@
 // a grade or a source is shown as the desk's eligibility checks read it
 // (cr-forensic-eligibility@1), the report's own value beside it.
 import { useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, TriangleAlert, Copy, Play, Upload, ShieldCheck, FileText, Download, History } from 'lucide-react';
+import { ArrowUpRight, TriangleAlert, Copy, Play, Upload, ShieldCheck, History } from 'lucide-react';
 import { fmtDate, fmtDateTime, fmtAgo, fmtCompactUsd, fmtPrice, PROVIDER_LABELS, toast, copyText } from '../../../../public/ui.js';
 import { desk, api, refresh } from '../../lib/desk.js';
 import { useDesk } from '../../lib/hooks.js';
@@ -27,6 +27,7 @@ import { hrefWith } from '../../lib/router.js';
 import { DiagnosticSegmentBar } from '../../components/ui/DiagnosticSegmentBar.jsx';
 // The re-audit's improvements (2026-10-17), each its own module.
 import { CaseButton } from './forensics/CaseButton.jsx';
+import { TextButton } from './forensics/TextButton.jsx';
 import { Disagreements } from './forensics/Disagreements.jsx';
 import { ExitCompare } from './forensics/ExitCompare.jsx';
 import { OutcomeRegister, registerCount } from './forensics/OutcomeRegister.jsx';
@@ -740,85 +741,6 @@ function atOrigin(s) {
     return `${name}: ${x.status === 'insufficient' ? 'insufficient history' : 'no level set'}`;
   };
   return [one('volume', s.volume), one('exit cost', s.exit_cost), one('delivery', s.delivery)].filter(Boolean).join('; ');
-}
-
-async function sha256Hex(text) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-// The original text of a receipt, read through the signed-in client (no
-// token in any address), shown here with its pin checked twice: by the
-// server against the receipt, and here against the SHA-256 the list shows.
-// The download is made from the same bytes. Review F12.
-function TextViewer({ pid, rid, sha, onClose }) {
-  const ref = useRef(null);
-  const [st, setSt] = useState({ state: 'loading' });
-  useEffect(() => {
-    const d = ref.current;
-    if (d && !d.open) d.showModal();
-    const ctrl = new AbortController();
-    api.get(`/api/projects/${enc(pid)}/forensics/receipts/${enc(rid)}/text`, { signal: ctrl.signal }).then(
-      async (r) => {
-        if (ctrl.signal.aborted) return;
-        if (!r || r.receipt_id !== rid || typeof r.text !== 'string') return setSt({ state: 'error', message: 'The answer was not this receipt\'s text.' });
-        const got = await sha256Hex(r.text);
-        if (ctrl.signal.aborted) return;
-        if (got !== r.sha256 || (sha && got !== sha)) return setSt({ state: 'error', message: `The text read does not match the receipt's SHA-256 (${(sha || r.sha256).slice(0, 12)}…); it is not shown.` });
-        setSt({ state: 'ok', r, got });
-      },
-      (err) => { if (!ctrl.signal.aborted && err.name !== 'AbortError') setSt({ state: 'error', message: err.status === 401 ? 'Your session has ended. Sign in again to read the original.' : err.message }); },
-    );
-    return () => { ctrl.abort(); if (d && d.open) d.close(); };
-  }, [pid, rid]);
-  return (
-    <dialog ref={ref} className="fx-dialog fx-viewer" aria-labelledby="fx-viewer-h" onClose={onClose}>
-      <div className="fx-dialog-head"><h2 id="fx-viewer-h" className="fx-h">{`The full text as saved · ${rid}`}</h2></div>
-      <div className="fx-dialog-body">
-        {st.state === 'loading' ? <p role="status">Reading the saved text…</p> : null}
-        {st.state === 'error' ? <p className="fx-error" role="alert">{st.message}</p> : null}
-        {st.state === 'ok' ? (
-          <>
-            <p className="faint">{`${PROVIDER_LABELS[st.r.model && st.r.model.provider] || ''} · saved ${fmtDateTime(st.r.saved_at)} · ${st.r.chars.toLocaleString('en-US')} characters · SHA-256 ${st.got} (matches the receipt; the JSON block matches too)`}</p>
-            <pre className="fx-viewer-text" tabIndex={0}>{st.r.text}</pre>
-          </>
-        ) : null}
-      </div>
-      <div className="fx-dialog-foot">
-        {st.state === 'ok' ? (
-          <button
-            type="button"
-            className="btn"
-            data-key="fx-viewer-download"
-            onClick={() => {
-              const url = URL.createObjectURL(new Blob([st.r.text], { type: 'text/markdown;charset=utf-8' }));
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `${rid}.md`;
-              document.body.appendChild(a);
-              a.click();
-              a.remove();
-              setTimeout(() => URL.revokeObjectURL(url), 2000);
-            }}
-          >
-            <Download size={14} aria-hidden="true" />Download
-          </button>
-        ) : null}
-        <button type="button" className="btn" data-key="fx-viewer-close" onClick={() => ref.current.close()}>Close</button>
-      </div>
-    </dialog>
-  );
-}
-
-function TextButton({ pid, rid, sha, label = 'The full text as saved' }) {
-  const [open, setOpen] = useState(false);
-  const opener = useRef(null);
-  return (
-    <>
-      <button ref={opener} type="button" className="btn-link fx-text-btn" data-key={`fx-text-${rid}`} onClick={() => setOpen(true)}><FileText size={13} aria-hidden="true" />{label}</button>
-      {open ? <TextViewer pid={pid} rid={rid} sha={sha} onClose={() => { setOpen(false); requestAnimationFrame(() => { if (opener.current) opener.current.focus(); }); }} /> : null}
-    </>
-  );
 }
 
 function Receipts({ v, pid }) {

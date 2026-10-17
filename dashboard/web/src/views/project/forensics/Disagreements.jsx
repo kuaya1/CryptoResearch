@@ -10,7 +10,9 @@
 import { useState } from 'react';
 import { fmtDateTime, toast } from '../../../../../public/ui.js';
 import { api, refresh } from '../../../lib/desk.js';
+import { hrefWith } from '../../../lib/router.js';
 import { enc, words, requestId } from './fmt.js';
+import { TextButton } from './TextButton.jsx';
 
 const VERDICT = { overstated: 'Overstated', unsupported: 'Unsupported', needs_evidence: 'Needs evidence' };
 const STATE = { unjudged: 'No judgment yet', unresolved: 'Unresolved', challenge_accepted: 'Challenge accepted', challenge_rejected: 'Challenge rejected' };
@@ -90,6 +92,10 @@ function Item({ pid, item, v }) {
   const c = item.claude;
   const ch = item.challenge;
   const base = `fx-dg-${item.disagreement_id}`;
+  // Each side's exact receipt: its original text (pin checked), and for a
+  // revised assessment the receipt it revises.
+  const cur = v.current && v.current.receipt_id === c.receipt_id ? v.current : null;
+  const chal = v.challenge && v.challenge.receipt_id === ch.receipt_id ? v.challenge : null;
   return (
     <article className={`fx-dg is-${item.state}`} aria-labelledby={`${base}-h`} data-key={base}>
       <p className="fx-dg-top">
@@ -108,12 +114,20 @@ function Item({ pid, item, v }) {
             </>
           )}
           <p className="fx-dg-src"><span className="faint">Sources </span><SourceLinks ids={c.source_ids} find={(id) => idx[id]} /></p>
+          <p className="fx-dg-links">
+            <TextButton pid={pid} rid={c.receipt_id} sha={cur ? cur.text_sha256 : null} label="Claude's original" dataKey={`${base}-text-claude`} />
+            {cur && cur.revision_of ? <a href={hrefWith({ receipt: cur.revision_of })} data-key={`${base}-revises`}>{`Revises ${cur.revision_of}`}</a> : null}
+          </p>
         </section>
         <section className="fx-dg-side" aria-label={`ChatGPT's challenge, receipt ${ch.receipt_id}`}>
           <h4 className="fx-h4">{`ChatGPT · ${ch.receipt_id}`}</h4>
           {[['Attribution', ch.attribution_check], ['Calculation', ch.calculation_check], ['Benign explanation', ch.benign_explanation], ['Omitted evidence', ch.omitted_evidence]].filter(([, t]) => t).map(([k, t]) => <p key={k} className="fx-dg-text"><span className="faint">{`${k}: `}</span>{t}</p>)}
           {ch.benign_explanations.map((b, i) => <p key={i} className="faint">{`Also offered: ${b.explanation} (plausibility ${b.plausibility})`}</p>)}
           <p className="fx-dg-src"><span className="faint">Sources </span><SourceLinks ids={ch.source_ids} find={(id) => chSources.find((s) => s.source_id === id)} /></p>
+          <p className="fx-dg-links">
+            <TextButton pid={pid} rid={ch.receipt_id} sha={chal ? chal.text_sha256 : null} label="ChatGPT's original" dataKey={`${base}-text-chatgpt`} />
+            <span className="faint">{`Challenges ${c.receipt_id} exactly (its block ${String(c.block_sha256 || '').slice(0, 10)}…)`}</span>
+          </p>
         </section>
       </div>
       <div className="fx-dg-resolve">

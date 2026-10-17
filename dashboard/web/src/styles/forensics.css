@@ -342,6 +342,8 @@
 .fx-dg-text { font-size: var(--fs-sm); line-height: 1.5; color: var(--text); margin-bottom: 4px; }
 .fx-dg-src { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 6px; font-size: var(--fs-xs); }
 .fx-dg-src a.fx-src, .fx-dg-src span.fx-src { padding: 0 8px; font-family: var(--mono); }
+.fx-dg-links { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; margin-top: 4px; font-size: var(--fs-xs); }
+@media (pointer: coarse) { .fx-dg-links a { min-height: 44px; display: inline-flex; align-items: center; } }
 .fx-dg-resolve .fx-h4 { margin-top: 0; }
 .fx-dg-last { font-size: var(--fs-sm); overflow-wrap: anywhere; }
 .fx-dg-judge { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; justify-items: start; }

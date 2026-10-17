@@ -58,7 +58,9 @@ The reading method is `cr-forensic-method@3` (parts listed in Methodology).
   the shown assessment that ChatGPT's challenge of that exact receipt reviewed
   as overstated, unsupported or needing evidence. Both positions as saved,
   their receipt IDs, their sources (linked), and what would resolve it, taken
-  from the two reports' own fields.
+  from the two reports' own fields. Each side links its exact receipt's
+  original text (opened in the app with its SHA-256 checked), and a revised
+  assessment links the receipt it revises (second pass, 2026-10-17).
 - Eric's judgment: Unresolved, Challenge accepted or Challenge rejected, with
   a reason (required). Stored append-only in
   `projects/<id>/forensics/judgments.jsonl` (`cr.forensic-judgment.v1`),
@@ -116,6 +118,15 @@ The reading method is `cr-forensic-method@3` (parts listed in Methodology).
   that disagrees with its original), *Conditional estimate* (a crossing frozen
   at a receipt's origin, never a forecast) or *Your choice* (a review date
   Eric set). Undated items are listed, never made primary.
+- Second pass (2026-10-17, after `7b5f897`): the agenda also reads
+  assessment age and evidence freshness. Each checkpoint item says how old
+  the assessment is; past the last checkpoint it reads "Reassess: the horizon
+  of receipt … has ended". A monitored check with no successful reading since
+  a date is its own sourced item (what it measures reads Unknown meanwhile).
+  Each model's latest report reaches Eric's research freshness limit
+  (Settings, `freshness.research_stale_days`) on its analysis date plus that
+  limit, basis "Your choice"; a report with no analysis date says its age is
+  unknown.
 - Always read from the latest intact receipt and the latest eligible reports:
   browsing an earlier receipt does not change it.
 - Done, Snooze (until a date) and Reopen (`POST /api/projects/<id>/agenda`) are
@@ -140,9 +151,9 @@ The reading method is `cr-forensic-method@3` (parts listed in Methodology).
 
 ## 4. Tests and checks run (fictional workspaces, stubbed providers)
 
-- `node dashboard/cli.js test`: 724 tests. Last full run 723 passed; the one
-  failure was Windows refusing a reserved local port (`EACCES 127.0.0.1:49664`)
-  in `forensics-corrections`, which passed 22/22 when run again alone.
+- `node dashboard/cli.js test`: 724 tests for `7b5f897` (one run had a
+  Windows reserved-port refusal, `EACCES 127.0.0.1:49664`, that passed 22/22
+  alone); after the second pass 725 of 725 passed.
 - New suites: `forensics-recheck` (R01–R07), `forensics-case`,
   `forensics-board`, `forensics-exitcompare`, `forensics-outcomes`,
   `forensics-agenda`. They cover writes and replays (duplicate and lost

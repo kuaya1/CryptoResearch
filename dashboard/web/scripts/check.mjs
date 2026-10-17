@@ -472,6 +472,14 @@ try {
     ok(Boolean(judged) && posted.length === 1 && /\/forensics\/judgments$/.test(posted[0]), 'board: Save judgment sends one POST and the judgment reads back', posted);
     await go(tab, `#/project/${P.long}/forensics`, "document.querySelector('.fx-board .fx-dg')");
     ok(await tab.evalJs(`/Your judgment: Challenge accepted/.test(document.querySelector('[data-key="${first}"]').textContent) && /1 open/.test(document.querySelector('.fx-board .fx-head-sub').textContent)`), 'board: after a reload the judgment is still there, the other disagreement still open');
+    // Each side links its exact receipt's original, pin checked; a read only.
+    const w0 = tab.writes.length;
+    await tab.evalJs(`document.querySelector('[data-key="${first}-text-chatgpt"]').focus(); true`);
+    await tab.key('Enter', { vk: 13 });
+    const orig = await tab.evalJs("__wait(() => { const d = document.querySelector('dialog.fx-viewer[open]'); return d && /matches the receipt/.test(d.textContent) && /fr_/.test(d.querySelector('.fx-h').textContent); }, 8000)");
+    ok(Boolean(orig) && await tab.evalJs(`Boolean(document.querySelector('[data-key="${first}-text-claude"]'))`), 'board: each side links its receipt\'s original; ChatGPT\'s opens with its SHA-256 checked');
+    await tab.key('Escape', { vk: 27 });
+    ok(await tab.evalJs(`__wait(() => !document.querySelector('dialog.fx-viewer[open]') && document.activeElement && document.activeElement.dataset.key === '${first}-text-chatgpt', 3000)`) && tab.writes.length === w0, 'board: Escape closes the original, focus returns to its link, nothing written');
     // The agenda: one primary per project, snooze by keyboard, reload, reopen.
     before = tab.writes.length;
     await go(tab, AGENDA[1], AGENDA[2]);

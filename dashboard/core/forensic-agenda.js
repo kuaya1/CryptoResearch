@@ -31,7 +31,7 @@ const BASIS = Object.freeze({ sourced: 'Sourced', conditional: 'Conditional esti
 const PROVIDER_LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', gemini: 'Gemini' };
 // Order among items that are due: what is wrong with the record first, then
 // what waits on Eric's judgment, then the dated reviews.
-const RANK = { integrity: 0, disagreement: 1, evidence_change: 2, checkpoint: 3, owner_review: 4, model_review: 5, horizon_end: 6, conditional: 7 };
+const RANK = { integrity: 0, disagreement: 1, evidence_change: 2, stale_evidence: 3, checkpoint: 4, owner_review: 5, model_review: 6, horizon_end: 7, research_stale: 8, conditional: 9 };
 const UPCOMING_DAYS = 30;
 
 const actionsRel = (pid) => `${require('./forensics').dirOf(pid)}/agenda.jsonl`;
@@ -73,15 +73,28 @@ function candidates(ws, project, { now = Date.now() } = {}) {
         const f = firsts[0] || null;
         add({ kind: 'evidence_change', key: open.map((t) => t.latest_relevant_item_id).sort().join(','), title: `Review ${total === 1 ? 'an evidence change' : `${total} evidence changes`}`, why: f ? `${f.t.label}: ${f.g.class_words.toLowerCase()}${f.g.current && f.g.current.words ? ` (${f.g.current.words})` : ''} on ${String(f.g.first_at).slice(0, 10)}, not reviewed yet.` : 'A monitored check changed since your last review.', due_at: f ? f.g.first_at : latest.saved_at, basis: 'sourced', support: { kind: 'observation', target_id: f ? f.t.target_id : null, obs_id: f && f.g.current ? f.g.current.obs_id : null, item_id: f ? f.g.item_id : null }, href: `#/project/${pid}/forensics` });
       }
-      // The latest checkpoint that has passed, and the next one.
+      // Evidence freshness: a monitored target that cannot be read now (its
+      // outcome reads Unknown until it can), from the failing stretch on record.
+      for (const t of (ec && Array.isArray(ec.threads) ? ec.threads : []).filter((x) => x.unavailable && !x.removed)) {
+        const fail = [...(t.items || [])].reverse().find((i) => i.class === 'read_failed' && !i.ended_at) || null;
+        if (!fail) continue;
+        add({ kind: 'stale_evidence', key: `${t.target_id}|${fail.item_id}`, title: `${t.label} cannot be read`, why: `The monitor has had no successful reading since ${String(fail.at).slice(0, 10)} (${fail.count || 1} failed reading${(fail.count || 1) === 1 ? '' : 's'}); what it measures reads Unknown meanwhile, never as passing or failing.`, due_at: fail.at, basis: 'sourced', support: { kind: 'observation', target_id: t.target_id, obs_id: fail.last_obs_id || (fail.current && fail.current.obs_id) || null, item_id: fail.item_id }, href: `#/project/${pid}/forensics` });
+      }
+      // The latest checkpoint that has passed, and the next one. The
+      // assessment's age is said with them; past the last checkpoint the
+      // receipt's horizon has ended and only a new audit starts a new origin.
       const cps = (v.timeline && v.timeline.checkpoints) || [];
       const passed = cps.filter((c) => c.status === 'past');
       const lastPassed = passed[passed.length - 1] || null;
+      const asOf = latest.assessment_as_of || latest.origin;
+      const ageDays = Math.max(0, Math.floor((now - Date.parse(asOf)) / DAY));
+      const age = `assessed ${ageDays === 0 ? 'today' : ageDays === 1 ? '1 day ago' : `${ageDays} days ago`} (${String(asOf).slice(0, 10)})`;
+      const next = cps.find((c) => c.status === 'upcoming');
       if (lastPassed) {
         const watch = lastPassed.watch || [];
-        add({ kind: 'checkpoint', key: `${rid}|${lastPassed.id}`, title: `Review the ${lastPassed.label} checkpoint`, why: `The ${lastPassed.label} checkpoint of receipt ${rid} passed on ${lastPassed.at.slice(0, 10)}${watch.length ? `, with ${watch.length === 1 ? 'a watch item' : `${watch.length} watch items`} from the assessment (${watch[0].signal})` : ''}.`, due_at: lastPassed.at, basis: 'sourced', support: { kind: 'receipt', receipt_id: rid, checkpoint: lastPassed.id }, href: `#/project/${pid}/forensics` });
+        const ended = !next;
+        add({ kind: 'checkpoint', key: `${rid}|${lastPassed.id}`, title: ended ? `Reassess: the horizon of receipt ${rid} has ended` : `Review the ${lastPassed.label} checkpoint`, why: ended ? `Its last checkpoint (${lastPassed.label}) passed on ${lastPassed.at.slice(0, 10)}; ${age}. Nothing later is read under this receipt; a new audit starts a new origin.` : `The ${lastPassed.label} checkpoint of receipt ${rid} passed on ${lastPassed.at.slice(0, 10)}; ${age}${watch.length ? `; ${watch.length === 1 ? 'a watch item' : `${watch.length} watch items`} from the assessment (${watch[0].signal})` : ''}.`, due_at: lastPassed.at, basis: 'sourced', support: { kind: 'receipt', receipt_id: rid, checkpoint: lastPassed.id }, href: `#/project/${pid}/forensics` });
       }
-      const next = cps.find((c) => c.status === 'upcoming');
       if (next) add({ kind: 'checkpoint', key: `${rid}|${next.id}`, title: `Review the ${next.label} checkpoint`, why: `The ${next.label} checkpoint of receipt ${rid} is on ${next.at.slice(0, 10)}${(next.watch || []).length ? `, with ${next.watch.length === 1 ? 'a watch item' : `${next.watch.length} watch items`}` : ''}.`, due_at: next.at, basis: 'sourced', support: { kind: 'receipt', receipt_id: rid, checkpoint: next.id }, href: `#/project/${pid}/forensics` });
       // Conditional crossings frozen at the origin (never live estimates).
       const sao = latest.scenarios_at_origin || {};
@@ -98,12 +111,20 @@ function candidates(ws, project, { now = Date.now() } = {}) {
   const { loadReports } = require('./reports');
   const { latestByProvider } = require('./compare');
   const latestReports = latestByProvider(loadReports(ws, pid));
+  // Research age against Eric's own freshness limit (Settings).
+  const staleDays = Number((((ws.settings || {}).freshness) || {}).research_stale_days) || 90;
   for (const [prov, r] of Object.entries(latestReports)) {
     if (!r) continue;
     const pc = r.assessment.position_context || null;
     const review = pc && pc.timing ? ymd(pc.timing.next_review_date) : null;
     const label = PROVIDER_LABELS[prov] || prov;
     const href = `#/project/${pid}/brief?model=${prov}`;
+    const analysed = ymd(r.assessment.analysis_at) || ymd(r.meta && r.meta.imported_at);
+    if (analysed) {
+      const at = startOfDay(analysed) + staleDays * DAY;
+      const day = new Date(at).toISOString().slice(0, 10);
+      add({ kind: 'research_stale', key: `${r.report_id}|${staleDays}`, title: at <= now ? `${label}'s research is past your ${staleDays}-day freshness limit` : `${label}'s research reaches your ${staleDays}-day freshness limit on ${day}`, why: `${label}'s report ${r.report_id} reads the project as of ${analysed}; your research freshness limit in Settings is ${staleDays} days.`, due_at: `${day}T12:00:00.000Z`, basis: 'owner', support: { kind: 'report', report_id: r.report_id, provider: prov }, href });
+    } else add({ kind: 'research_stale', key: `${r.report_id}|undated`, title: `${label}'s research has no analysis date`, why: `${label}'s report ${r.report_id} states no analysis date, so its age is unknown.`, due_at: null, basis: 'sourced', support: { kind: 'report', report_id: r.report_id, provider: prov }, href });
     if (review) add({ kind: 'model_review', key: `${r.report_id}|${review}`, title: `Review the research: ${label} suggested ${review}`, why: `${label}'s report ${r.report_id} suggests a review on ${review}${pc.timing.review_trigger ? ` (${String(pc.timing.review_trigger).slice(0, 200)})` : ''}. A model's suggestion, not your calendar.`, due_at: `${review}T12:00:00.000Z`, basis: 'sourced', support: { kind: 'report', report_id: r.report_id, provider: prov }, href });
     const end = pc && pc.horizon ? ymd(pc.horizon.end_date) : null;
     if (end) add({ kind: 'horizon_end', key: `${r.report_id}|${end}`, title: `${label}'s research horizon ends ${end}`, why: `The horizon of ${label}'s report ${r.report_id} runs to ${end}: past it, its view no longer covers the period.`, due_at: `${end}T12:00:00.000Z`, basis: 'sourced', support: { kind: 'report', report_id: r.report_id, provider: prov }, href });
