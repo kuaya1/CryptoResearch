@@ -1,21 +1,27 @@
-// The Forensics tab (#/project/<id>/forensics): the forensic assessment of
-// one project, read from GET /api/projects/<id>/forensics (core/forensics.js
-// view, which writes nothing), in this order:
-//   1. the plain assessment, its age and its evidence coverage
-//   2. the strongest supported concern and the strongest counterevidence
-//   3. the liquidity, operational, delivery and discontinuation states now
-//   4. the resilience timeline from the receipt's frozen origin
-//   5. what would worsen or improve the outlook
-//   6. findings, grades, sources, observations, the challenge, receipts and
+// The Forensics tab (#/project/<id>/forensics[?receipt=<id>]): the forensic
+// assessment of one project, read from GET /api/projects/<id>/forensics
+// (core/forensics.js view, which writes nothing), in this order, the phone's
+// first screen first (review F14):
+//   1. the plain assessment, its age, the receipt shown, a one-line coverage
+//   2. the strongest concern with its qualification (kind, references), then
+//      the next useful action, then the strongest counterevidence
+//   3. evidence changes to review (forensic-review.js)
+//   4. the liquidity, operational, delivery and discontinuation states now
+//   5. the resilience timeline from the receipt's frozen origin
+//   6. what would worsen or improve the outlook
+//   7. findings, grades, sources, observations, the challenge, receipts and
 //      the methodology, folded
 // then the audit and monitoring actions, each an explicit click. Observed
 // facts are drawn apart from scenarios (dashed, labeled conditional); unknown
-// is never zero; no probability is shown; grades are never averaged.
+// is never zero; no probability is shown; grades are never averaged. A kind,
+// a grade or a source is shown as the desk's eligibility checks read it
+// (cr-forensic-eligibility@1), the report's own value beside it.
 import { useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, TriangleAlert, Copy, Play, Upload, ShieldCheck } from 'lucide-react';
+import { ArrowUpRight, TriangleAlert, Copy, Play, Upload, ShieldCheck, FileText, Download, History } from 'lucide-react';
 import { fmtDate, fmtDateTime, fmtAgo, fmtCompactUsd, fmtPrice, PROVIDER_LABELS, toast, copyText } from '../../../../public/ui.js';
 import { desk, api, refresh } from '../../lib/desk.js';
 import { useDesk } from '../../lib/hooks.js';
+import { hrefWith } from '../../lib/router.js';
 import { DiagnosticSegmentBar } from '../../components/ui/DiagnosticSegmentBar.jsx';
 
 const enc = encodeURIComponent;
@@ -63,26 +69,36 @@ function openFold(key, anchor = null) {
   });
 }
 
-// GET /api/projects/<id>/forensics, read again when a live update or a save
-// drops the project's record (desk.projectGen). The last answer is kept while
-// a newer one loads.
-function useForensics(pid) {
+// GET /api/projects/<id>/forensics[?receipt=], read again when a live update
+// or a save drops the project's record (desk.projectGen). The last answer is
+// kept while a newer one loads, but only for the same project and the same
+// receipt: a slow answer for another receipt is never shown (each read is
+// cancelled when the choice changes, and an answer is checked against it).
+function useForensics(pid, receipt) {
   useDesk();
   const gen = desk.projectGen.get(pid) || 0;
   const [attempt, setAttempt] = useState(0);
-  const key = `${pid}#${gen}#${attempt}`;
-  const [st, setSt] = useState({ pid: null, key: null, v: null, error: null });
+  const want = receipt || '';
+  const key = `${pid}#${want}#${gen}#${attempt}`;
+  const [st, setSt] = useState({ pid: null, want: null, key: null, v: null, error: null });
   useEffect(() => {
     const ctrl = new AbortController();
-    api.get(`/api/projects/${enc(pid)}/forensics`, { signal: ctrl.signal }).then(
-      (v) => { if (!ctrl.signal.aborted) setSt({ pid, key, v, error: null }); },
-      (error) => { if (!ctrl.signal.aborted && error.name !== 'AbortError') setSt((s) => ({ pid, key, v: s.pid === pid ? s.v : null, error })); },
+    api.get(`/api/projects/${enc(pid)}/forensics${want ? `?receipt=${enc(want)}` : ''}`, { signal: ctrl.signal }).then(
+      (v) => {
+        if (ctrl.signal.aborted) return;
+        const shown = v && v.current ? v.current.receipt_id : null;
+        if (want && shown !== want) return; // an answer for another receipt is never drawn
+        setSt({ pid, want, key, v, error: null });
+      },
+      (error) => { if (!ctrl.signal.aborted && error.name !== 'AbortError') setSt((s) => ({ pid, want, key, v: s.pid === pid && s.want === want ? s.v : null, error })); },
     );
     return () => ctrl.abort();
   }, [key]);
-  const mine = st.pid === pid;
+  const mine = st.pid === pid && st.want === want;
   return { v: mine ? st.v : null, error: mine ? st.error : null, retry: () => setAttempt((a) => a + 1) };
 }
+
+const receiptHref = (rid) => hrefWith({ receipt: rid || null });
 
 // ---- small parts --------------------------------------------------------------------
 
@@ -107,27 +123,49 @@ function Sources({ ids, idx }) {
   return <span className="fx-srcs">{ids.map((id) => <SourceChip key={id} id={id} idx={idx} />)}</span>;
 }
 
+// The kind as the desk reads it; the author's own kind kept beside it when
+// it differs (review F03: the headline and the detail say the same).
 function KindTag({ f }) {
   const k = f.shown_kind || f.kind;
-  return <span className={`fx-kind k-${k}`} title={f.shown_kind && f.shown_kind !== f.kind ? `Read as an inference: common control of wallets is never an observation (stated as ${f.kind}).` : undefined}>{KIND_WORDS[k] || k}</span>;
+  const differs = f.original_kind && f.original_kind !== k;
+  return (
+    <span className={`fx-kind k-${k}`} title={f.kind_note || undefined}>
+      {k === 'hypothesis' && f.wallet_relation === 'inferred_common_control' ? 'Hypothesis, unestablished' : KIND_WORDS[k] || k}
+      {differs ? <span className="fx-kind-orig">{` · stated as ${KIND_WORDS[f.original_kind] || f.original_kind}`}</span> : null}
+    </span>
+  );
 }
 
-function Coverage({ c }) {
+// Whether a finding's references hold (resolved, dated, something preserved
+// to re-read). Holding is not verification: the desk reads no meaning.
+function Standing({ f }) {
+  const e = f && f.eligibility;
+  if (!e) return null;
+  return e.eligible
+    ? <span className="fx-stand is-holds" title="Every cited source exists, is dated and preserved something to re-read. The desk does not check that a source says what the finding says.">References hold</span>
+    : <span className="fx-stand is-claim" title={e.reasons.join('; ')}>{`Report claim: ${e.reasons[0] || 'references do not hold'}`}</span>;
+}
+
+// One line by default (review F14); the seven areas behind Details.
+function Coverage({ c, eligibility }) {
   return (
-    <div className="fx-cov">
-      <p className="fx-cov-sum" title={c.note}>
-        <b>{`${c.covered} of ${c.of}`}</b>{` evidence areas covered with sourced findings · ${c.partial} partial · ${c.unknown} unknown`}
-      </p>
+    <details className="fx-cov" data-key="fx-cov">
+      <summary className="fx-cov-sum" title={c.note}>
+        <b>{`${c.covered} of ${c.of}`}</b>{` evidence areas covered by findings whose references hold · ${c.partial} partial · ${c.unknown} unknown`}
+        <span className="fx-cov-more">Details</span>
+      </summary>
+      {eligibility && eligibility.report_claims ? <p className="fx-cov-claims">{`${eligibility.report_claims} of ${eligibility.findings} findings are report claims only: their references do not resolve to dated, preserved sources, so they cover nothing.`}</p> : null}
       <ol className="fx-cov-areas" aria-label="Evidence coverage by area">
         {c.areas.map((a) => (
-          <li key={a.area} className={`fx-cov-a is-${a.status}`} title={`${a.label}: ${COV_WORDS[a.status]}${a.note ? `. ${a.note}` : ''}`}>
+          <li key={a.area} className={`fx-cov-a is-${a.status}`} title={`${a.label}: ${COV_WORDS[a.status]} (declared ${COV_WORDS[a.declared] || a.declared})${a.note ? `. ${a.note}` : ''}`}>
             <span className="fx-cov-mark" aria-hidden="true" />
             <span className="fx-cov-n">{AREA_SHORT[a.area] || a.label}</span>
             <span className="fx-cov-w">{COV_WORDS[a.status]}</span>
           </li>
         ))}
       </ol>
-    </div>
+      <p className="faint fx-cov-note">{c.note}</p>
+    </details>
   );
 }
 
@@ -148,27 +186,55 @@ function Assessment({ v, pid }) {
       </section>
     );
   }
+  const asOf = c.assessment_as_of || c.origin;
   const ageDays = Math.floor(c.age_hours / 24);
-  const ch = v.challenge;
-  const formatNotes = (c.validation && c.validation.errors) || [];
   const flags = (c.checks || []).filter((f) => f.level !== 'note');
   return (
     <section className="fx-card fx-assess" aria-labelledby="fx-title">
       <div className="fx-head">
-        <h2 id="fx-title" className="fx-h">Forensic assessment</h2>
+        <h2 id="fx-title" className="fx-h">{c.is_latest ? 'Forensic assessment' : 'Earlier forensic assessment'}</h2>
         <span className="fx-head-sub">{`${PROVIDER_LABELS[c.model.provider] || c.model.provider}${c.model.model_version ? ` (${c.model.model_version})` : ''} · ${c.versions.prompt}`}</span>
       </div>
+      {!c.is_latest ? (
+        <p className="fx-hist" role="note">
+          <History size={14} aria-hidden="true" />
+          <span>{`Showing receipt ${c.receipt_id}, saved ${fmtDate(c.saved_at)}: its findings, grades, sources and timeline. The states, exits and monitoring below are current. `}</span>
+          <a href={receiptHref(null)} data-key="fx-latest">Show the latest assessment</a>
+        </p>
+      ) : null}
       <p className="fx-lead">{c.plain_assessment || <span className="faint">The assessment states no plain summary.</span>}</p>
       <p className="fx-meta">
-        <span><b>{`Assessed ${fmtDate(c.origin)}`}</b>{` · ${ageDays === 0 ? 'today' : ageDays === 1 ? 'yesterday' : `${ageDays} days ago`}`}</span>
-        <span title="The timeline's checkpoints are counted from this frozen time and never move.">{`Timeline origin ${fmtDateTime(c.origin)}`}</span>
+        <span><b>{`Assessed ${fmtDate(asOf)}`}</b>{` · ${ageDays === 0 ? 'today' : ageDays === 1 ? 'yesterday' : `${ageDays} days ago`}`}</span>
+        <span className="fx-mono" title="This receipt's ID: the findings, grades and sources shown are its own.">{c.receipt_id}</span>
+      </p>
+      {/* A consequential warning stays at the top; the rest of the receipt
+          details and the coverage follow the concern (review F14). */}
+      {flags.length ? (
+        <ul className="fx-notes">
+          <li className="fx-note is-warn"><TriangleAlert size={14} aria-hidden="true" /><span>{`The desk's checks flag ${flags.length} item${flags.length === 1 ? '' : 's'} in the findings (flags only; nothing is changed). `}<button type="button" className="btn-link" data-key="fx-flags-jump" onClick={() => openFold('fx-findings')}>See the findings</button></span></li>
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
+// The receipt's other facts and the evidence coverage, after the concern.
+function AssessmentDetails({ v }) {
+  const c = v.current;
+  if (!c) return null;
+  const ch = v.challenge;
+  const formatNotes = (c.validation && c.validation.errors) || [];
+  return (
+    <section className="fx-card fx-assess-more" aria-label="The receipt and its evidence coverage">
+      <p className="fx-meta">
+        <span title="The timeline's checkpoints are counted from this frozen time and never move.">{c.origin_basis === 'inherited' ? `Timeline origin ${fmtDateTime(c.origin)}, kept from ${c.origin_of || 'the forecast it revises'}` : `Timeline origin ${fmtDateTime(c.origin)}`}</span>
         {c.revision_of ? <span title={c.revision ? c.revision.note : undefined}>{`A revision of ${c.revision_of} (${words(c.revision && c.revision.kind)})${c.evidence_added && c.evidence_added.length ? `, ${c.evidence_added.length} new source${c.evidence_added.length === 1 ? '' : 's'}` : ''}`}</span> : null}
+        {c.predecessor ? <span>{`A new audit after ${c.predecessor.receipt_id} (origin ${fmtDate(c.predecessor.origin)})`}</span> : null}
         <span>{ch ? `ChatGPT challenge saved ${fmtDate(ch.saved_at)}` : v.earlier_challenge ? 'ChatGPT challenged an earlier receipt' : 'No ChatGPT challenge'}</span>
       </p>
-      <Coverage c={c.coverage} />
-      {formatNotes.length || flags.length || (c.probability && c.probability.status === 'withheld') ? (
+      <Coverage c={c.coverage} eligibility={c.eligibility} />
+      {formatNotes.length || (c.probability && c.probability.status === 'withheld') ? (
         <ul className="fx-notes">
-          {flags.length ? <li className="fx-note is-warn"><TriangleAlert size={14} aria-hidden="true" /><span>{`The desk's checks flag ${flags.length} item${flags.length === 1 ? '' : 's'} in the findings (flags only; nothing is changed). `}<button type="button" className="btn-link" data-key="fx-flags-jump" onClick={() => openFold('fx-findings')}>See the findings</button></span></li> : null}
           {formatNotes.length ? <li className="fx-note"><span>{`${formatNotes.length} format note${formatNotes.length === 1 ? '' : 's'} kept with the receipt: ${formatNotes.slice(0, 2).join('; ')}${formatNotes.length > 2 ? '…' : ''}`}</span></li> : null}
           {c.probability && c.probability.status === 'withheld' ? <li className="fx-note"><span>{c.probability.reason}</span></li> : null}
         </ul>
@@ -177,29 +243,64 @@ function Assessment({ v, pid }) {
   );
 }
 
-// ---- 2. strongest concern and counterevidence ---------------------------------------------
+// ---- 2. strongest concern, the next action, counterevidence ------------------------------
 
+const LONG_CONCERN = 220;
+
+// The essential part (the statement, its kind, whether its references hold,
+// the warning on it and its source) is kept together first; a long statement
+// reads as four lines on a phone with an explicit "Show the whole concern".
 function KeyFinding({ title, tone, r, idx }) {
+  const [full, setFull] = useState(false);
   const f = r && r.finding;
+  const supported = f && f.eligibility && f.eligibility.eligible;
+  const heading = tone === 'concern' ? (f && !supported ? 'Strongest concern, as the report states it' : title) : title;
+  const text = r ? r.statement || (f && f.statement) || '' : '';
+  const long = text.length > LONG_CONCERN;
   return (
     <div className={`fx-key is-${tone}`}>
-      <h3 className="fx-key-h">{title}</h3>
-      {!r || (!r.statement && !f) ? <p className="fx-key-none">Not stated in the assessment</p> : (
-        <>
-          <p className="fx-key-t">{r.statement || (f && f.statement)}</p>
-          {f ? (
-            <p className="fx-key-m">
-              <span className="fx-id">{f.finding_id}</span>
-              <KindTag f={f} />
-              {f.severity ? <span>{`Severity ${f.severity}`}</span> : null}
-              {f.confidence ? <span>{`Evidence confidence ${f.confidence}`}</span> : null}
-              <Sources ids={f.source_ids} idx={idx} />
-            </p>
-          ) : <p className="fx-key-m"><span className="fx-src is-missing">{`${r.finding_id || 'No finding'}: not in the findings`}</span></p>}
-          {f && f.alternative_explanation ? <p className="fx-key-alt"><span className="k">Alternative explanation</span>{f.alternative_explanation}</p> : null}
-        </>
-      )}
+      <div className="fx-key-core">
+        <h3 className="fx-key-h">{heading}</h3>
+        {!r || (!r.statement && !f) ? <p className="fx-key-none">Not stated in the assessment</p> : (
+          <>
+            <p className={`fx-key-t${long && !full ? ' is-clamped' : ''}`}>{text}</p>
+            {long ? <button type="button" className="btn-link fx-key-whole" aria-expanded={full} data-key={`fx-whole-${tone}`} onClick={() => setFull((x) => !x)}>{full ? 'Show less' : 'Show the whole concern'}</button> : null}
+            {f ? (
+              <>
+                <p className="fx-key-m">
+                  <span className="fx-id">{f.finding_id}</span>
+                  <KindTag f={f} />
+                  <Standing f={f} />
+                  <Sources ids={f.source_ids} idx={idx} />
+                </p>
+                {f.kind_note ? <p className="fx-key-q" role="note"><TriangleAlert size={13} aria-hidden="true" /><span>{f.kind_note}</span></p> : null}
+              </>
+            ) : <p className="fx-key-m"><span className="fx-src is-missing">{`${r.finding_id || 'No finding'}: not in the findings`}</span></p>}
+          </>
+        )}
+      </div>
+      {f && (f.severity || f.confidence) ? <p className="fx-key-m">{f.severity ? <span>{`Severity ${f.severity}`}</span> : null}{f.confidence ? <span>{`Evidence confidence ${f.confidence}`}</span> : null}</p> : null}
+      {f && f.alternative_explanation ? <p className="fx-key-alt"><span className="k">Alternative explanation</span>{f.alternative_explanation}</p> : null}
+      {f && f.missing_evidence && tone === 'concern' ? <p className="fx-key-alt"><span className="k">Not known yet</span>{f.missing_evidence}</p> : null}
     </div>
+  );
+}
+
+// The next useful step, in one place: evidence changes waiting for a look,
+// and the next evidence the assessment names.
+function NextAction({ v }) {
+  const q = v.evidence_changes;
+  const c = v.current;
+  const next = c && c.next_evidence && c.next_evidence[0];
+  if (!(q && q.to_review) && !next) return null;
+  return (
+    <section className="fx-card fx-next" aria-labelledby="fx-next-h">
+      <h2 id="fx-next-h" className="fx-next-h">Next</h2>
+      <ul className="fx-next-list">
+        {q && q.to_review ? <li><button type="button" className="btn-link" data-key="fx-next-queue" onClick={() => openFold('fx-queue', 'fx-queue-h')}>{`Review ${q.to_review} evidence change${q.to_review === 1 ? '' : 's'}`}</button>{q.unavailable ? <span className="faint">{` · ${q.unavailable} target${q.unavailable === 1 ? '' : 's'} not readable now`}</span> : null}</li> : null}
+        {next ? <li><b>{next.evidence}</b>{next.how_to_get ? <span className="faint">{` · ${next.how_to_get}`}</span> : null}</li> : null}
+      </ul>
+    </section>
   );
 }
 
@@ -215,6 +316,8 @@ function StateTile({ id, s }) {
         <StateWord state={s.state} disc={disc} title={def.definition} />
       </div>
       <p className="fx-tile-why">{readable(s.why)}</p>
+      {id === 'liquidity_impairment' && s.recent && s.recent.length && s.recent[s.recent.length - 1].note ? <p className="fx-tile-why">{readable(s.recent[s.recent.length - 1].note)}</p> : null}
+      {disc && s.not_counted && s.not_counted.length ? <p className="fx-tile-why">{`Not counted: ${s.not_counted.slice(0, 2).map((x) => `${x.finding_id} (${x.why_not})`).join('; ')}${s.not_counted.length > 2 ? '…' : ''}`}</p> : null}
       <p className="fx-tile-m">
         {s.latest_at ? <span>{`Latest reading ${fmtAgo(s.latest_at)}`}</span> : null}
         {def.freshness_hours ? <span>{`Fresh for ${def.freshness_hours >= 48 ? `${Math.round(def.freshness_hours / 24)} days` : `${def.freshness_hours} h`}`}</span> : null}
@@ -226,7 +329,16 @@ function StateTile({ id, s }) {
   );
 }
 
-function ExitTable({ exits }) {
+// A cost as the estimate states it: complete, or "at least" with what is
+// unknown (review F09; said in the cell, never only in a tooltip).
+function CostCell({ b }) {
+  if (b.cost_complete === false) return <><span className="fx-cost-lb">{`at least ${pct(b.cost_pct)}`}</span><span className="fx-cost-miss">{`${(b.missing_costs || []).join(' and ')} unknown`}</span></>;
+  return pct(b.cost_pct);
+}
+
+const methodWords = (b) => (b.method === 'executable_quote' ? `${b.route_scope === 'aggregator' ? 'Aggregator' : 'Venue'} quote` : 'Calculated from one pool\'s reserves');
+
+function ExitTable({ exits, oneWay }) {
   return (
     <div className="fx-exits" role="table" aria-label="Hypothetical exit estimates">
       <div className="fx-exit fx-exit-head" role="row">
@@ -234,23 +346,27 @@ function ExitTable({ exits }) {
       </div>
       {exits.map((x) => {
         const b = x.best;
+        const others = (x.routes || []).filter((r) => !b || r.obs_id !== b.obs_id || r.retrieved_at !== b.retrieved_at);
         return (
           <div key={x.size_usd} className={`fx-exit is-${x.status}`} role="row">
             <span role="cell" className="fx-exit-size">{`$${x.size_usd.toLocaleString('en-US')}`}</span>
             <span role="cell">{b ? usd(b.received_usd) : <span className="faint">—</span>}</span>
-            <span role="cell" className="fx-exit-cost">{b ? pct(b.cost_pct) : <span className="faint">{x.status === 'no_route' ? 'No route' : 'Unknown'}</span>}</span>
+            <span role="cell" className="fx-exit-cost">{b ? <CostCell b={b} /> : <span className="faint">{x.status === 'no_route' ? 'No route' : x.status === 'stale' ? 'Stale' : 'Unknown'}</span>}</span>
             <span role="cell" className="fx-exit-basis">
               {b ? (
                 <>
-                  <span>{b.method === 'executable_quote' ? `${b.route_scope === 'aggregator' ? 'Aggregator' : 'Venue'} quote` : 'Constant-product pool'}{b.venue ? ` · ${b.venue}` : ''}{b.chain ? ` · ${b.chain}` : ''}{b.captured_by === 'monitor' ? ' · monitor' : ''}</span>
-                  <span className="faint">{[b.retrieved_at ? fmtDateTime(b.retrieved_at) : null, b.route ? `route ${b.route}` : null, b.source_id, x.earlier ? `${x.earlier} earlier reading${x.earlier === 1 ? '' : 's'}` : null].filter(Boolean).join(' · ')}</span>
-                  <span className="faint" title={(b.limitations || []).join(' ')}>{(b.limitations || [])[0]}</span>
+                  <span>{methodWords(b)}{b.venue ? ` · ${b.venue}` : ''}{b.chain ? ` · ${b.chain}` : ''}{b.captured_by === 'monitor' ? ' · monitor' : ' · captured in an audit'}</span>
+                  <span className="faint">{[b.retrieved_at ? `${fmtDateTime(b.retrieved_at)} (${fmtAgo(b.retrieved_at)})` : null, b.basis && b.basis.amount_in ? `sells ${b.basis.amount_in} base units at $${b.basis.price_usd}` : null, b.route ? `route ${b.route}` : null, b.source_id, x.earlier ? `${x.earlier} earlier reading${x.earlier === 1 ? '' : 's'}` : null].filter(Boolean).join(' · ')}</span>
+                  {b.included_costs && b.included_costs.length ? <span className="faint">{`Included: ${b.included_costs.join('; ')}`}</span> : null}
+                  {(b.limitations || []).map((l, i) => <span key={i} className={i === 0 && b.cost_complete === false ? 'fx-exit-warn' : 'faint'}>{l}</span>)}
+                  {others.length ? <span className="faint">{`Other current routes: ${others.map((r) => `${r.venue || methodWords(r)} ${r.status === 'no_route' ? 'no route' : r.status === 'estimated' ? `${r.cost_complete === false ? 'at least ' : ''}${pct(r.cost_pct)}` : words(r.status)} (${fmtDateTime(r.retrieved_at)}${r.stale ? ', stale' : ''})`).join('; ')}`}</span> : null}
                 </>
               ) : <span className="faint">{x.status === 'no_route' && x.as_of ? `${x.note} ${fmtDateTime(x.as_of)}.` : x.note}</span>}
             </span>
           </div>
         );
       })}
+      {oneWay ? <p className="fx-exit-foot faint" role="note">{oneWay}</p> : null}
     </div>
   );
 }
@@ -266,7 +382,7 @@ function States({ v }) {
         {EVENTS.map((e) => <StateTile key={e} id={e} s={s[e === 'liquidity_impairment' ? 'liquidity' : e === 'operational_degradation' ? 'operational' : e === 'delivery_inactivity' ? 'delivery' : 'discontinuation']} />)}
       </div>
       <h3 className="fx-h3" title={L.categories.execution_estimates}>Hypothetical exits <span className="fx-h3-sub">Estimates, never transactions</span></h3>
-      <ExitTable exits={L.exits} />
+      <ExitTable exits={L.exits} oneWay={[L.one_way, L.completeness].filter(Boolean).join(' ')} />
       <div className="fx-liq">
         <div className="fx-liq-c">
           <h4 className="fx-h4" title={L.categories.reported_reserves}>Reported reserves</h4>
@@ -306,7 +422,13 @@ function States({ v }) {
 function Outcome({ o, past }) {
   if (!o) return <span className="fx-out is-pending">Pending</span>;
   const w = o.outcome === 'pending' && past ? 'Awaiting readings' : OUTCOME_WORDS[o.outcome] || words(o.outcome);
-  return <span className={`fx-out is-${o.outcome}`} title={[readable(o.reason), o.recorded ? 'Recorded' : 'Read now, not yet recorded', o.corrects ? `corrects ${o.corrects}` : null].filter(Boolean).join(' · ')}>{w}</span>;
+  const tip = [readable(o.reason), o.recorded ? `Recorded under ${o.method}` : 'Read now, not yet recorded', o.corrects ? `corrects ${o.corrects}${o.previous_method ? ` (recorded under ${o.previous_method})` : ''}` : null].filter(Boolean).join(' · ');
+  return (
+    <span className="fx-out-w">
+      <span className={`fx-out is-${o.outcome}`} title={tip}>{w}</span>
+      {o.differs_now ? <span className="fx-out-diff" title={readable(o.differs_now.reason) || undefined}>{`${o.differs_now.method} reads ${(OUTCOME_WORDS[o.differs_now.outcome] || words(o.differs_now.outcome)).toLowerCase()}`}</span> : null}
+    </span>
+  );
 }
 
 function Checkpoint({ c }) {
@@ -345,15 +467,19 @@ function ScenarioBlock({ title, s }) {
   if (s.status === 'insufficient') return <div className="fx-scn"><h4 className="fx-h4">{title}</h4><p className="fx-insuff">{readable(s.words)}</p>{s.next_observation ? <p className="faint">{`Next useful observation: ${readable(s.next_observation)}`}</p> : null}</div>;
   if (s.status === 'estimated' && !s.scenarios) return <div className="fx-scn"><h4 className="fx-h4">{title}</h4><p className="fx-cond-line">{readable(s.words)}</p><p className="faint">{`Assumption: ${s.assumption}`}</p></div>;
   const b = s.basis || {};
+  const fmtV = (x) => (s.unit === 'pct' ? pct(x) : usd(x));
   return (
     <div className="fx-scn">
       <h4 className="fx-h4">{title}</h4>
-      <p className="faint">{`Level ${s.unit === 'pct' ? pct(s.threshold) : usd(s.threshold)} · latest ${s.unit === 'pct' ? pct(s.latest.value) : usd(s.latest.value)} (${fmtDate(s.latest.day)}) · window ${fmtDate(b.window_from)} to ${fmtDate(b.window_to)}, ${b.points} days, ${b.weekly_changes} weekly changes · data ${Math.round(b.data_age_hours || 0)} h old`}</p>
+      <p className="faint">{`Level ${fmtV(s.threshold)} · latest ${fmtV(s.latest.value)} (${fmtDate(s.latest.day)}) · window ${fmtDate(b.window_from)} to ${fmtDate(b.window_to)}, ${b.points} days, ${b.weekly_changes} weekly changes · data ${Math.round(b.data_age_hours || 0)} h old`}</p>
+      {s.projection === 'unavailable_at_zero' ? <p className="fx-scn-zero" role="note">{`The latest reading is zero. ${s.beyond_now ? 'It is past the level now. ' : ''}No date is projected from a zero.`}</p> : null}
+      {b.rates_note ? <p className="faint">{b.rates_note}</p> : null}
+      {s.cost_note ? <p className="faint">{s.cost_note}</p> : null}
       <ul className="fx-scn-list">
         {s.scenarios.map((x) => (
           <li key={x.kind} className={`fx-scn-r is-${x.kind}`}>
             <span className="fx-scn-k">{SCEN_WORDS[x.kind]}</span>
-            <span className="fx-scn-a">{`${x.assumption} (${x.rate_pct_per_week > 0 ? '+' : ''}${x.rate_pct_per_week}% a week)`}</span>
+            <span className="fx-scn-a">{typeof x.rate_pct_per_week === 'number' ? `${x.assumption} (${x.rate_pct_per_week > 0 ? '+' : ''}${x.rate_pct_per_week}% a week)` : x.assumption}</span>
             <span className="fx-scn-w">{readable(x.words)}</span>
           </li>
         ))}
@@ -440,8 +566,9 @@ function Findings({ c }) {
     <ul className="fx-findings">
       {c.findings.map((f) => (
         <li key={f.finding_id} className="fx-f" id={`fx-f-${f.finding_id}`}>
-          <p className="fx-f-top"><span className="fx-id">{f.finding_id}</span><KindTag f={f} />{f.area ? <span className="fx-area">{words(f.area)}</span> : null}{f.severity ? <span>{`Severity ${f.severity}`}</span> : null}{f.confidence ? <span>{`Confidence ${f.confidence}`}</span> : null}{f.wallet_relation ? <span className="fx-area">{words(f.wallet_relation)}</span> : null}</p>
+          <p className="fx-f-top"><span className="fx-id">{f.finding_id}</span><KindTag f={f} /><Standing f={f} />{f.area ? <span className="fx-area">{words(f.area)}</span> : null}{f.severity ? <span>{`Severity ${f.severity}`}</span> : null}{f.confidence ? <span>{`Confidence ${f.confidence}`}</span> : null}{f.wallet_relation ? <span className="fx-area">{words(f.wallet_relation)}</span> : null}</p>
           <p className="fx-f-t">{f.statement}</p>
+          {f.kind_note ? <p className="fx-key-q" role="note"><TriangleAlert size={13} aria-hidden="true" /><span>{f.kind_note}</span></p> : null}
           <dl className="fx-f-dl">
             <div><dt>Sources</dt><dd><Sources ids={f.source_ids} idx={c.source_index} /></dd></div>
             {f.event_time || f.retrieved_at ? <div><dt>Times</dt><dd>{[f.event_time ? `event ${fmtDateTime(f.event_time)}` : null, f.retrieved_at ? `retrieved ${fmtDateTime(f.retrieved_at)}` : null].filter(Boolean).join(' · ')}</dd></div> : null}
@@ -466,10 +593,15 @@ function Grades({ c, rubric }) {
       <ul className="fx-grade-list">
         {rubric.categories.map(([id, name, def]) => {
           const g = c.category_grades[id];
-          const known = g && g.status === 'scored';
+          const scored = g && g.status === 'scored';
+          // The report's grade is kept as saved; the desk uses it only when
+          // the findings it rests on have references that hold.
+          const used = scored && (!g.desk || g.desk.usable);
+          const label = used ? `${g.score}, confidence ${g.confidence}` : scored ? `the report says ${g.score}; not used by the desk: ${g.desk.reason}` : 'unknown';
           return (
-            <li key={id} aria-label={`${name}: ${known ? `${g.score}, confidence ${g.confidence}` : 'unknown'}`} title={`${def}${g && g.reason ? ` ${g.reason}` : ''}`}>
-              <DiagnosticSegmentBar label={name} title={def} score={known ? { status: 'scored', value: g.score } : null} value={known ? String(g.score) : 'Unknown'} known={known} confidence={known ? { letter: g.confidence[0].toUpperCase(), title: `Confidence ${g.confidence}` } : null} />
+            <li key={id} aria-label={`${name}: ${label}`} title={`${def}${g && g.reason ? ` ${g.reason}` : ''}`}>
+              <DiagnosticSegmentBar label={name} title={def} score={used ? { status: 'scored', value: g.score } : null} value={used ? String(g.score) : scored ? 'Withheld' : 'Unknown'} known={used} confidence={used ? { letter: g.confidence[0].toUpperCase(), title: `Confidence ${g.confidence}` } : null} />
+              {scored && !used ? <p className="fx-grade-why fx-grade-held">{`The report's grade ${g.score} (${g.confidence}) is not used: ${g.desk.reason}.`}</p> : null}
               {g && g.reason ? <p className="fx-grade-why">{g.reason}{g.finding_ids && g.finding_ids.length ? <span className="faint">{` · ${g.finding_ids.join(', ')}`}</span> : null}</p> : null}
             </li>
           );
@@ -480,12 +612,29 @@ function Grades({ c, rubric }) {
   );
 }
 
-function SourceList({ c }) {
+const CAPTURE_WORDS = { excerpt: 'excerpt kept', hash: 'content hash kept', chain_reference: 'chain reference', commit_reference: 'commit reference', none: 'nothing kept to re-read' };
+const ATTRIB_WORDS = { official_domain: 'on the project\'s own site', chain_reference: 'a chain record', repository: 'a code repository', not_established: 'not tied to the project' };
+
+// What the desk could check about one source: never "verified".
+function SourceCheck({ k }) {
+  if (!k) return null;
+  return (
+    <p className={`fx-src-check ${k.usable ? 'is-ok' : 'is-no'}`}>
+      <span>{k.usable ? 'Usable as evidence' : 'Not usable as evidence'}</span>
+      <span className="faint">{[CAPTURE_WORDS[k.capture], k.dated ? 'dated' : 'undated', ATTRIB_WORDS[k.attribution]].filter(Boolean).join(' · ')}</span>
+      {k.self_labelled_primary ? <span className="fx-flag">Labelled primary by the report; the label alone does not establish authority</span> : null}
+      {!k.usable && k.reasons.length ? <span className="faint">{k.reasons.join('; ')}</span> : null}
+    </p>
+  );
+}
+
+function SourceList({ c, prefix = 'fx-src' }) {
   return (
     <ul className="fx-sources">
       {c.sources.map((s) => (
-        <li key={s.source_id} id={`fx-src-${s.source_id}`} tabIndex={-1} className="fx-source">
-          <p className="fx-f-top"><span className="fx-id">{s.source_id}</span><span className="fx-area">{words(s.type)}</span>{s.publisher ? <span>{s.publisher}</span> : null}</p>
+        <li key={s.source_id} id={`${prefix}-${s.source_id}`} tabIndex={-1} className="fx-source">
+          <p className="fx-f-top"><span className="fx-id">{s.source_id}</span><span className="fx-area">{`${words(s.type)} (as the report labels it)`}</span>{s.publisher ? <span>{s.publisher}</span> : null}</p>
+          <SourceCheck k={s.check} />
           {s.url ? <p><a href={s.url} target="_blank" rel="noopener noreferrer nofollow" className="wrap-anywhere">{s.url}<ArrowUpRight size={12} aria-hidden="true" /></a></p> : <p className="faint">{s.url_given ? `Address not opened by the desk: ${s.url_given}` : 'No address given'}</p>}
           <p className="faint">{[s.retrieved_at ? `Retrieved ${fmtDateTime(s.retrieved_at)}` : 'Retrieval time not stated', s.event_time ? `event ${fmtDateTime(s.event_time)}` : null, s.block_or_commit ? `at ${s.block_or_commit}` : null, s.tx_signature ? `tx ${s.tx_signature}` : null].filter(Boolean).join(' · ')}</p>
           {s.excerpt ? <blockquote className="fx-excerpt">{s.excerpt}</blockquote> : null}
@@ -530,16 +679,24 @@ function Challenge({ v }) {
   if (!ch) return <p className="none">{v.earlier_challenge ? `ChatGPT challenged an earlier receipt (${v.earlier_challenge.challenges_receipt_id}).` : 'No ChatGPT challenge. Claude-only assessments are complete without one.'}</p>;
   const counts = {};
   for (const r of ch.finding_reviews) counts[r.verdict] = (counts[r.verdict] || 0) + 1;
+  // The challenger's own sources, by receipt-qualified ID (review F13).
+  const idx = Object.fromEntries((ch.sources || []).map((s) => [s.source_id, s]));
+  const XChip = ({ id }) => (idx[id]
+    ? <button type="button" className="fx-src fx-src-btn" data-key={`fx-xsrc-${id}`} title={`${ch.receipt_id} · ${id}: ${[idx[id].publisher, idx[id].retrieved_at ? `retrieved ${fmtDateTime(idx[id].retrieved_at)}` : null].filter(Boolean).join(' · ')}`} onClick={() => openFold('fx-challenge', `fx-xsrc-${id}`)}>{`${id}`}<span className="faint">{' · challenge'}</span></button>
+    : <span className="fx-src is-missing" title="Not in the challenge's source list">{id}</span>);
   return (
     <div className="fx-chal">
       <p className="faint">{`${ch.receipt_id} · saved ${fmtDateTime(ch.saved_at)} · challenges ${ch.challenges_receipt_id}. Kept apart; it changes nothing in the assessment.`}</p>
       {ch.overall ? <p className="fx-lead-s">{ch.overall}</p> : null}
       <p className="fx-verdicts">{Object.entries(counts).map(([k, n]) => <span key={k} className={`fx-vd is-${k}`}>{`${VERDICT_WORDS[k] || k} ${n}`}</span>)}</p>
       <ul className="fx-list">
-        {ch.finding_reviews.map((r, i) => <li key={i}><b>{`${r.finding_id}: ${VERDICT_WORDS[r.verdict] || r.verdict}`}</b>{[r.attribution_check, r.calculation_check, r.benign_explanation, r.omitted_evidence].filter(Boolean).map((t, j) => <span key={j} className="faint">{` · ${t}`}</span>)}</li>)}
+        {ch.finding_reviews.map((r, i) => <li key={i}><b>{`${r.finding_id}: ${VERDICT_WORDS[r.verdict] || r.verdict}`}</b>{[r.attribution_check, r.calculation_check, r.benign_explanation, r.omitted_evidence].filter(Boolean).map((t, j) => <span key={j} className="faint">{` · ${t}`}</span>)}{r.source_ids && r.source_ids.length ? <span className="fx-srcs">{' '}{r.source_ids.map((id) => <XChip key={id} id={id} />)}</span> : null}</li>)}
       </ul>
-      {ch.omitted_evidence.length ? <><h4 className="fx-h4">Omitted evidence</h4><ul className="fx-list">{ch.omitted_evidence.map((o, i) => <li key={i}>{o.evidence}{o.why_it_matters ? <span className="faint">{` · ${o.why_it_matters}`}</span> : null}</li>)}</ul></> : null}
+      {ch.calculation_checks && ch.calculation_checks.length ? <><h4 className="fx-h4">Calculation checks</h4><ul className="fx-list">{ch.calculation_checks.map((x, i) => <li key={i}><b>{`${x.subject}: ${x.result === 'agrees' ? 'agrees' : x.result === 'disagrees' ? 'disagrees' : 'cannot check'}`}</b>{x.detail ? <span className="faint">{` · ${x.detail}`}</span> : null}</li>)}</ul></> : null}
+      {ch.omitted_evidence.length ? <><h4 className="fx-h4">Omitted evidence</h4><ul className="fx-list">{ch.omitted_evidence.map((o, i) => <li key={i}>{o.evidence}{o.why_it_matters ? <span className="faint">{` · ${o.why_it_matters}`}</span> : null}{o.source_id ? <> <XChip id={o.source_id} /></> : null}</li>)}</ul></> : null}
       {ch.benign_explanations.length ? <><h4 className="fx-h4">Benign explanations</h4><ul className="fx-list">{ch.benign_explanations.map((o, i) => <li key={i}>{`${o.for_finding_id ? `${o.for_finding_id}: ` : ''}${o.explanation}`}<span className="faint">{` · plausibility ${o.plausibility}`}</span></li>)}</ul></> : null}
+      {ch.sources && ch.sources.length ? <><h4 className="fx-h4">{`The challenge's sources (${ch.receipt_id})`}</h4><SourceList c={ch} prefix="fx-xsrc" /></> : null}
+      <p><TextButton pid={v.project_id} rid={ch.receipt_id} sha={ch.text_sha256} label="The challenge's full text as saved" /></p>
     </div>
   );
 }
@@ -558,6 +715,85 @@ function atOrigin(s) {
   return [one('volume', s.volume), one('exit cost', s.exit_cost), one('delivery', s.delivery)].filter(Boolean).join('; ');
 }
 
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// The original text of a receipt, read through the signed-in client (no
+// token in any address), shown here with its pin checked twice: by the
+// server against the receipt, and here against the SHA-256 the list shows.
+// The download is made from the same bytes. Review F12.
+function TextViewer({ pid, rid, sha, onClose }) {
+  const ref = useRef(null);
+  const [st, setSt] = useState({ state: 'loading' });
+  useEffect(() => {
+    const d = ref.current;
+    if (d && !d.open) d.showModal();
+    const ctrl = new AbortController();
+    api.get(`/api/projects/${enc(pid)}/forensics/receipts/${enc(rid)}/text`, { signal: ctrl.signal }).then(
+      async (r) => {
+        if (ctrl.signal.aborted) return;
+        if (!r || r.receipt_id !== rid || typeof r.text !== 'string') return setSt({ state: 'error', message: 'The answer was not this receipt\'s text.' });
+        const got = await sha256Hex(r.text);
+        if (ctrl.signal.aborted) return;
+        if (got !== r.sha256 || (sha && got !== sha)) return setSt({ state: 'error', message: `The text read does not match the receipt's SHA-256 (${(sha || r.sha256).slice(0, 12)}…); it is not shown.` });
+        setSt({ state: 'ok', r, got });
+      },
+      (err) => { if (!ctrl.signal.aborted && err.name !== 'AbortError') setSt({ state: 'error', message: err.status === 401 ? 'Your session has ended. Sign in again to read the original.' : err.message }); },
+    );
+    return () => { ctrl.abort(); if (d && d.open) d.close(); };
+  }, [pid, rid]);
+  return (
+    <dialog ref={ref} className="fx-dialog fx-viewer" aria-labelledby="fx-viewer-h" onClose={onClose}>
+      <div className="fx-dialog-head"><h2 id="fx-viewer-h" className="fx-h">{`The full text as saved · ${rid}`}</h2></div>
+      <div className="fx-dialog-body">
+        {st.state === 'loading' ? <p role="status">Reading the saved text…</p> : null}
+        {st.state === 'error' ? <p className="fx-error" role="alert">{st.message}</p> : null}
+        {st.state === 'ok' ? (
+          <>
+            <p className="faint">{`${PROVIDER_LABELS[st.r.model && st.r.model.provider] || ''} · saved ${fmtDateTime(st.r.saved_at)} · ${st.r.chars.toLocaleString('en-US')} characters · SHA-256 ${st.got} (matches the receipt; the JSON block matches too)`}</p>
+            <pre className="fx-viewer-text" tabIndex={0}>{st.r.text}</pre>
+          </>
+        ) : null}
+      </div>
+      <div className="fx-dialog-foot">
+        {st.state === 'ok' ? (
+          <button
+            type="button"
+            className="btn"
+            data-key="fx-viewer-download"
+            onClick={() => {
+              const url = URL.createObjectURL(new Blob([st.r.text], { type: 'text/markdown;charset=utf-8' }));
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `${rid}.md`;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              setTimeout(() => URL.revokeObjectURL(url), 2000);
+            }}
+          >
+            <Download size={14} aria-hidden="true" />Download
+          </button>
+        ) : null}
+        <button type="button" className="btn" data-key="fx-viewer-close" onClick={() => ref.current.close()}>Close</button>
+      </div>
+    </dialog>
+  );
+}
+
+function TextButton({ pid, rid, sha, label = 'The full text as saved' }) {
+  const [open, setOpen] = useState(false);
+  const opener = useRef(null);
+  return (
+    <>
+      <button ref={opener} type="button" className="btn-link fx-text-btn" data-key={`fx-text-${rid}`} onClick={() => setOpen(true)}><FileText size={13} aria-hidden="true" />{label}</button>
+      {open ? <TextViewer pid={pid} rid={rid} sha={sha} onClose={() => { setOpen(false); requestAnimationFrame(() => { if (opener.current) opener.current.focus(); }); }} /> : null}
+    </>
+  );
+}
+
 function Receipts({ v, pid }) {
   return (
     <ul className="fx-receipts">
@@ -566,12 +802,22 @@ function Receipts({ v, pid }) {
         for (const x of r.resolutions) out[`${x.checkpoint}:${x.event}`] = x;
         const recorded = Object.values(out);
         return (
-          <li key={r.receipt_id}>
-            <p className="fx-f-top"><span className="fx-id">{r.receipt_id}</span><span>{`${PROVIDER_LABELS[r.model.provider] || r.model.provider} · origin ${fmtDateTime(r.origin)}`}</span>{r.revision_of ? <span className="fx-area">{`revision of ${r.revision_of}`}</span> : null}</p>
+          <li key={r.receipt_id} className={r.selected ? 'is-selected' : undefined} aria-current={r.selected ? 'true' : undefined}>
+            <p className="fx-f-top">
+              <span className="fx-id">{r.receipt_id}</span>
+              <span>{`${PROVIDER_LABELS[r.model.provider] || r.model.provider} · assessed ${fmtDate(r.assessment_as_of || r.origin)} · origin ${fmtDateTime(r.origin)}${r.origin_basis === 'inherited' ? ' (kept)' : ''}`}</span>
+              {r.revision_of ? <span className="fx-area">{`revision of ${r.revision_of}${r.revision ? ` · ${words(r.revision.kind)}` : ''}`}</span> : null}
+              {r.latest ? <span className="fx-area">Latest</span> : null}
+              {r.selected ? <span className="fx-area">Shown</span> : null}
+            </p>
+            {r.revision && r.revision.note ? <p className="faint">{`Why: ${r.revision.note}`}</p> : null}
             {r.plain_assessment ? <p className="fx-f-t">{r.plain_assessment}</p> : null}
             <p className="faint">{recorded.length ? `${recorded.length} checkpoint outcome${recorded.length === 1 ? '' : 's'} recorded: ${recorded.filter((x) => x.outcome === 'occurred').length} occurred, ${recorded.filter((x) => x.outcome === 'not_occurred').length} did not, ${recorded.filter((x) => x.outcome === 'unresolved').length} unresolved.` : 'No checkpoint outcome recorded yet.'}</p>
             {r.scenarios_at_origin ? <p className="faint">{`Projected at the origin (conditional): ${atOrigin(r.scenarios_at_origin)}`}</p> : null}
-            <p><a href={`/api/projects/${enc(pid)}/forensics/receipts/${enc(r.receipt_id)}/text`} target="_blank" rel="noopener noreferrer" data-key={`fx-text-${r.receipt_id}`}>The full text as saved</a></p>
+            <p className="fx-receipt-acts">
+              {r.selected ? null : <a href={receiptHref(r.latest ? null : r.receipt_id)} data-key={`fx-show-${r.receipt_id}`}>{r.latest ? 'Show the latest' : 'Show this receipt'}</a>}
+              <TextButton pid={pid} rid={r.receipt_id} sha={r.text_sha256} />
+            </p>
           </li>
         );
       })}
@@ -584,6 +830,8 @@ function Method({ v }) {
   const p = v.preferences_in_use;
   return (
     <div className="fx-method">
+      <h4 className="fx-h4">{`How the desk reads this now (${v.method.version})`}</h4>
+      <p className="faint">{`${v.method.parts.join(', ')}. ${v.method.note}`}</p>
       <h4 className="fx-h4">{`Outcome definitions (${d.events.liquidity_impairment.version})`}</h4>
       <dl className="fx-f-dl">
         {EVENTS.map((e) => {
@@ -600,10 +848,10 @@ function Method({ v }) {
       </ul>
       <h4 className="fx-h4">{`Liquidity (${d.liquidity.version})`}</h4>
       <ul className="fx-list">{Object.entries(d.liquidity.mechanisms).map(([k, w]) => <li key={k}><b>{words(k)}:</b>{` ${w}`}</li>)}</ul>
-      <p className="faint">{d.liquidity.note}</p>
+      <p className="faint">{[d.liquidity.scope, d.liquidity.completeness, d.liquidity.one_way, d.liquidity.note].filter(Boolean).join(' ')}</p>
       <h4 className="fx-h4">{`Scenarios (${d.scenarios.version})`}</h4>
       <ul className="fx-list">{Object.entries(d.scenarios.kinds).map(([k, w]) => <li key={k}><b>{SCEN_WORDS[k]}:</b>{` ${w}`}</li>)}</ul>
-      <p className="faint">{`At least ${d.scenarios.min_points} daily readings over ${d.scenarios.min_span_days} days, ${d.scenarios.min_weekly_changes} weekly changes, the latest within ${d.scenarios.freshness_hours} h; otherwise "Insufficient history to estimate". ${d.scenarios.invalidation}`}</p>
+      <p className="faint">{`At least ${d.scenarios.min_points} daily readings over ${d.scenarios.min_span_days} days, ${d.scenarios.min_weekly_changes} weekly changes, the latest within ${d.scenarios.freshness_hours} h; otherwise "Insufficient history to estimate". ${d.scenarios.zero ? `${d.scenarios.zero} ` : ''}${d.scenarios.invalidation}`}</p>
       <h4 className="fx-h4">{`Probabilities (${d.probability.version})`}</h4>
       <p className="faint">{d.probability.note}</p>
       <ul className="fx-list faint">{d.probability.requirements.map((r, i) => <li key={i}>{r}</li>)}</ul>
@@ -635,11 +883,135 @@ function Details({ v, pid }) {
   );
 }
 
+// ---- 3. evidence changes to review (forensic-review.js) -------------------------------------
+
+const when = (a, b) => (a && b && a !== b ? `${fmtDateTime(a)} to ${fmtDateTime(b)}` : fmtDateTime(a || b));
+
+// What a monitored target bears on, as the records say; never inferred.
+function Mapping({ m }) {
+  if (!m) return null;
+  if (m.status === 'mapped') {
+    return (
+      <p className="fx-th-map">
+        <span>{`Bears on ${m.finding_ids.join(', ')} in ${m.receipt_id}, through source ${m.source_id}`}</span>
+        {m.frozen ? <span className="faint">{`The receipt's capture is unchanged: ${[m.frozen.retrieved_at ? `retrieved ${fmtDateTime(m.frozen.retrieved_at)}` : 'retrieval time not stated', m.frozen.content_sha256 ? `SHA-256 ${shortHash(m.frozen.content_sha256)}` : null, m.frozen.excerpt ? 'excerpt kept' : null].filter(Boolean).join(' · ')}`}</span> : null}
+        {m.current_receipt_id ? <span className="faint">{`Proposed in an earlier receipt; the latest assessment is ${m.current_receipt_id}.`}</span> : null}
+      </p>
+    );
+  }
+  return <p className="fx-th-map is-unmapped"><span>{m.status === 'unmapped' ? 'Unmapped' : m.status === 'source_only' ? 'No finding linked' : 'Receipt only'}</span><span className="faint">{m.reason}</span></p>;
+}
+
+function ChangeRow({ g }) {
+  const span = g.class === 'read_failed' ? `${fmtDateTime(g.first_at)}${g.ended_at ? ` until ${fmtDateTime(g.ended_at)}` : ', still failing'}` : when(g.first_at, g.last_at);
+  return (
+    <li className={`fx-ch is-${g.class}`}>
+      <p className="fx-ch-top"><b>{g.class_words}</b>{g.count > 1 ? <span className="faint">{` · ${g.count} ${g.class === 'read_failed' ? 'readings' : 'times'}`}</span> : null}<span className="faint">{` · ${span}`}</span></p>
+      <dl className="fx-ch-dl">
+        <div><dt>Before</dt><dd>{g.previous ? `${g.previous.words} (${fmtDateTime(g.previous.observed_at)})` : 'No earlier successful reading'}</dd></div>
+        <div><dt>{g.class === 'read_failed' ? 'Then' : 'Now'}</dt><dd>{g.current ? `${g.current.words} (${fmtDateTime(g.current.observed_at)})` : '—'}</dd></div>
+        {g.class === 'capture_changed' || g.class === 'cosmetic_only' ? <div><dt>Page</dt><dd className="fx-mono">{`SHA-256 ${shortHash(g.previous && g.previous.values && g.previous.values.body_sha256) || '—'} → ${shortHash(g.current && g.current.values && g.current.values.body_sha256) || '—'}`}</dd></div> : null}
+      </dl>
+    </li>
+  );
+}
+
+function Thread({ t, pid }) {
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const toReview = t.state === 'open' || t.state === 'reopened';
+  const rows = toReview ? t.since_review : [];
+  const noteId = `fx-th-note-${t.target_id}`;
+  return (
+    <article className={`fx-th is-${t.state}`} aria-labelledby={`fx-th-${t.target_id}`}>
+      <p className="fx-th-top">
+        <b id={`fx-th-${t.target_id}`}>{t.label}</b>
+        <span className={`fx-th-st is-${t.state}`}>{t.state_words}</span>
+        {t.unavailable ? <span className="fx-th-st is-unavailable">Not readable now</span> : null}
+        {t.removed ? <span className="faint">Removed from monitoring</span> : null}
+      </p>
+      <Mapping m={t.mapping} />
+      {rows.length ? <ul className="fx-chs">{rows.map((g) => <ChangeRow key={g.item_id} g={g} />)}</ul> : null}
+      {!toReview ? <p className="faint">{t.latest ? `Latest reading ${fmtDateTime(t.latest.observed_at)}: ${t.latest.words}` : 'No successful reading yet.'}{t.items_total ? ` · ${t.items_total} change${t.items_total === 1 ? '' : 's'} on record` : ''}</p> : null}
+      {toReview && t.latest_relevant ? (
+        <div className="fx-th-ack">
+          <label className="fx-label" htmlFor={noteId}>Your note (optional)</label>
+          <textarea id={noteId} className="fx-textarea fx-textarea-s" rows={2} value={note} onChange={(e) => setNote(e.target.value)} data-key={`fx-th-note-${t.target_id}`} />
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={busy}
+            data-key={`fx-ack-${t.target_id}`}
+            title="Records that you looked at this change. It does not make any claim true, resolve an allegation or change a grade."
+            onClick={async () => {
+              setBusy(true);
+              try {
+                const out = await api.post(`/api/projects/${enc(pid)}/forensics/reviews`, { target_id: t.target_id, item_id: t.latest_relevant.item_id, note: note.trim() || null, request_id: `fq${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}` });
+                toast((out.result && out.result.status) === 'unchanged' ? 'Already marked reviewed' : 'Marked reviewed: you looked at it; nothing else changes');
+                setNote('');
+                await refresh();
+              } catch (err) {
+                toast(err.message, 'bad');
+                await refresh();
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {`Mark reviewed (latest change ${fmtDate(t.latest_relevant.at)})`}
+          </button>
+        </div>
+      ) : null}
+      {t.reviews.length ? (
+        <details className="fx-th-hist" data-key={`fx-th-hist-${t.target_id}`}>
+          <summary>{`Your reviews (${t.reviews.length})`}</summary>
+          <ul className="fx-list">{[...t.reviews].reverse().map((r) => <li key={r.review_id}>{`${fmtDateTime(r.reviewed_at)} · ${words(r.item_class)}`}{r.note ? <span className="faint">{` · ${r.note}`}</span> : null}</li>)}</ul>
+        </details>
+      ) : null}
+    </article>
+  );
+}
+
+function EvidenceChanges({ v, pid }) {
+  const q = v.evidence_changes;
+  if (!q || !q.threads.length) return null;
+  const toReview = q.threads.filter((t) => t.state === 'open' || t.state === 'reopened');
+  const rest = q.threads.filter((t) => !(t.state === 'open' || t.state === 'reopened'));
+  return (
+    <section className="fx-card fx-queue" aria-labelledby="fx-queue-h" data-key="fx-queue">
+      <div className="fx-head">
+        <h2 id="fx-queue-h" className="fx-h" tabIndex={-1}>Evidence changes</h2>
+        <span className="fx-head-sub">{toReview.length ? `${toReview.length} to review` : 'Nothing to review'}{q.unavailable ? ` · ${q.unavailable} not readable now` : ''}</span>
+      </div>
+      {toReview.length ? <div className="fx-ths">{toReview.map((t) => <Thread key={t.target_id} t={t} pid={pid} />)}</div> : <p className="none">No change waiting for your review.</p>}
+      {rest.length ? (
+        <details className="fold fx-fold" data-key="fx-queue-rest">
+          <summary>Other monitored targets<span className="fx-count">{rest.length}</span></summary>
+          <div className="fx-ths">{rest.map((t) => <Thread key={t.target_id} t={t} pid={pid} />)}</div>
+        </details>
+      ) : null}
+      <p className="faint fx-act-note" title={`Compared under ${q.normalization}: whitespace only. Built from the monitor's existing observations.`}>{q.meaning}</p>
+    </section>
+  );
+}
+
 // ---- actions: audits and monitoring (explicit clicks only) ---------------------------------
 
-function ImportDialog({ pid, audit, role, onClose }) {
+const REVISION_KINDS = [
+  ['format_fix', 'Format fix: the same assessment, corrected in form'],
+  ['new_evidence', 'New evidence: a new source or a new capture of one'],
+  ['reassessment', 'Reassessment: the same evidence, read again'],
+  ['other', 'Other'],
+];
+
+// revisionOf: the receipt a revision would revise (an import into an audit
+// whose job is already answered); the save keeps that receipt's origin and
+// deadlines, and the original stays as it is.
+function ImportDialog({ pid, audit, role, revisionOf = null, onClose }) {
   const ref = useRef(null);
   const [text, setText] = useState('');
+  const [kind, setKind] = useState('format_fix');
+  const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   useEffect(() => {
@@ -648,10 +1020,22 @@ function ImportDialog({ pid, audit, role, onClose }) {
     return () => { if (d && d.open) d.close(); };
   }, []);
   const provider = role === 'challenge' ? 'chatgpt' : 'claude';
+  const needNote = revisionOf && note.trim().length < 15;
   return (
     <dialog ref={ref} className="fx-dialog" aria-labelledby="fx-import-h" onClose={onClose}>
-      <div className="fx-dialog-head"><h2 id="fx-import-h" className="fx-h">{`Import ${PROVIDER_LABELS[provider]}'s ${role === 'challenge' ? 'challenge' : 'assessment'}`}</h2></div>
+      <div className="fx-dialog-head"><h2 id="fx-import-h" className="fx-h">{revisionOf ? `Import a revision of ${revisionOf}` : `Import ${PROVIDER_LABELS[provider]}'s ${role === 'challenge' ? 'challenge' : 'assessment'}`}</h2></div>
       <div className="fx-dialog-body">
+        {revisionOf ? (
+          <>
+            <p className="faint">{`A new receipt, linked to ${revisionOf}. It keeps that receipt's timeline origin and deadlines; the original and its text stay as they are. A new forecast is a new audit, never a revision.`}</p>
+            <label className="fx-label" htmlFor="fx-rev-kind">What kind of revision</label>
+            <select id="fx-rev-kind" className="fx-select" value={kind} onChange={(e) => setKind(e.target.value)} data-key="fx-rev-kind">
+              {REVISION_KINDS.map(([k, w]) => <option key={k} value={k}>{w}</option>)}
+            </select>
+            <label className="fx-label" htmlFor="fx-rev-note">What changed and why (a sentence or two)</label>
+            <textarea id="fx-rev-note" className="fx-textarea fx-textarea-s" value={note} onChange={(e) => setNote(e.target.value)} rows={3} data-key="fx-rev-note" />
+          </>
+        ) : null}
         <label className="fx-label" htmlFor="fx-import-text">{`The complete answer, with its JSON block (audit ${audit.audit_id})`}</label>
         <textarea id="fx-import-text" className="fx-textarea" value={text} onChange={(e) => setText(e.target.value)} rows={12} spellCheck={false} />
         {error ? <p className="fx-error" role="alert">{error}</p> : null}
@@ -661,13 +1045,13 @@ function ImportDialog({ pid, audit, role, onClose }) {
         <button
           type="button"
           className="btn btn-primary"
-          disabled={busy || text.trim().length < 50}
+          disabled={busy || text.trim().length < 50 || needNote}
           data-key="fx-import-save"
           onClick={async () => {
             setBusy(true);
             setError(null);
             try {
-              const out = await api.post(`/api/projects/${enc(pid)}/forensics/audits/${enc(audit.audit_id)}/import`, { provider, text });
+              const out = await api.post(`/api/projects/${enc(pid)}/forensics/audits/${enc(audit.audit_id)}/import`, revisionOf ? { provider, text, revision: { kind, note: note.trim() } } : { provider, text });
               toast(out.message || 'Saved');
               ref.current.close();
               await refresh();
@@ -692,6 +1076,11 @@ function Actions({ v, pid }) {
   const opener = useRef(null);
   const open = v.audits.find((a) => a.audit_id === v.open_audit) || null;
   const latestAudit = v.audits[0] || null;
+  // A revision goes into the audit of the latest assessment, whose
+  // investigator job is already answered.
+  const latestRid = v.selected ? v.selected.latest_receipt_id : null;
+  const latestRec = latestRid ? v.receipts.find((r) => r.receipt_id === latestRid) : null;
+  const revAudit = latestRec ? v.audits.find((a) => a.audit_id === latestRec.audit_id && a.jobs.investigator && a.jobs.investigator.raw_state === 'completed') || null : null;
   const chalAudit = v.audits.find((a) => a.jobs.challenge && ['waiting', 'running', 'paused'].includes(a.jobs.challenge.state)) || null;
   const m = v.monitoring;
   const held = v.roles.challenge.on_hold;
@@ -776,6 +1165,7 @@ function Actions({ v, pid }) {
           </button>
         ) : null}
         {open ? <button type="button" className="btn" data-key="fx-import" onClick={(e) => { opener.current = e.currentTarget; setImporting({ audit: open, role: 'investigator' }); }}><Upload size={14} aria-hidden="true" />Import Claude's answer</button> : null}
+        {!open && revAudit && latestRid ? <button type="button" className="btn" data-key="fx-import-revision" title={`A corrected or updated text for ${latestRid}: a new receipt that keeps its origin and deadlines`} onClick={(e) => { opener.current = e.currentTarget; setImporting({ audit: revAudit, role: 'investigator', revisionOf: latestRid }); }}><Upload size={14} aria-hidden="true" />{`Import a revision of ${latestRid}`}</button> : null}
         {chalAudit ? <button type="button" className="btn" data-key="fx-copy-chal" onClick={async () => { try { await copyText(await api.text(`/api/projects/${enc(pid)}/forensics/audits/${enc(chalAudit.audit_id)}/prompt?role=challenge`)); } catch (err) { toast(err.message, 'bad'); } }}><Copy size={14} aria-hidden="true" />Copy ChatGPT's challenge prompt</button> : null}
         {chalAudit ? <button type="button" className="btn" data-key="fx-import-chal" onClick={(e) => { opener.current = e.currentTarget; setImporting({ audit: chalAudit, role: 'challenge' }); }}><Upload size={14} aria-hidden="true" />Import ChatGPT's challenge</button> : null}
       </div>
@@ -842,15 +1232,15 @@ function Actions({ v, pid }) {
         </button>
       ) : null}
       <p className="faint fx-act-note">{`Monitor: ${m.status.held ? 'held in this restored copy' : m.status.enabled ? `${m.status.requests_this_month} of ${m.status.monthly_budget} requests this month${m.status.last_run_at ? ` · last run ${fmtAgo(m.status.last_run_at)}` : ''}${m.status.github_wait_until ? ` · GitHub asked to wait until ${fmtDateTime(m.status.github_wait_until)}` : ''}${waits.map((p) => ` · ${p.label} asked to wait until ${fmtDateTime(p.wait_until)}`).join('')}` : 'turned off in settings'}`}</p>
-      {importing ? <ImportDialog pid={pid} audit={importing.audit} role={importing.role} onClose={closeImport} /> : null}
+      {importing ? <ImportDialog pid={pid} audit={importing.audit} role={importing.role} revisionOf={importing.revisionOf || null} onClose={closeImport} /> : null}
     </section>
   );
 }
 
 // ---- the tab ---------------------------------------------------------------------------------
 
-export default function Forensics({ pid }) {
-  const { v, error, retry } = useForensics(pid);
+export default function Forensics({ pid, receipt = null }) {
+  const { v, error, retry } = useForensics(pid, receipt);
   if (!v) {
     return error ? (
       <div className="note note-bad pp-error" role="alert">
@@ -864,11 +1254,14 @@ export default function Forensics({ pid }) {
     <div className="fx">
       <Assessment v={v} pid={pid} />
       {c ? (
-        <div className="fx-two fx-keys">
+        <div className="fx-keys">
           <KeyFinding title="Strongest supported concern" tone="concern" r={c.strongest_concern} idx={c.source_index} />
+          <NextAction v={v} />
           <KeyFinding title="Strongest counterevidence" tone="counter" r={c.strongest_counterevidence} idx={c.source_index} />
         </div>
-      ) : null}
+      ) : <NextAction v={v} />}
+      <AssessmentDetails v={v} />
+      <EvidenceChanges v={v} pid={pid} />
       <States v={v} />
       <Timeline v={v} />
       <Conditions v={v} />

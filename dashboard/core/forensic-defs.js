@@ -138,6 +138,34 @@ const LIQUIDITY = Object.freeze({
   note: 'Never a transaction: estimates read quotes and reserves at one time. One pool does not represent every route, and a pool\'s base reserve is never assumed to be half its displayed USD liquidity.',
 });
 
+// cr-forensic-liquidity@2 (2026-10-16, after the independent review F08/F09):
+// the same mechanisms as @1, read differently. The current reading of each
+// route scope (chain, contract or pool, quote source, size) is its latest
+// answer within the freshness window, never the cheapest answer of an hour.
+// A cost is complete only when the network fee and the token's transfer tax
+// are known (stated by the quote, or 0% or a figure in the contract screen);
+// otherwise it is a lower bound ("at least"), which can show a cost over the
+// limit but never a pass within it.
+const LIQUIDITY_VERSION_2 = 'cr-forensic-liquidity@2';
+const LIQUIDITY_2 = Object.freeze({
+  ...LIQUIDITY,
+  version: LIQUIDITY_VERSION_2,
+  scope: 'A route scope is the chain, the contract or pool, the quote source or venue, and the size. Its current reading is its latest answer (a quote or "no route") within the freshness window; an earlier answer of the same scope is history.',
+  completeness: 'A total cost needs the network fee (stated, or included in the quote) and the token\'s transfer tax (0% or a figure in the GoPlus contract screen). Without them the cost is "at least" that figure: it can show the exit over your limit, never within it.',
+  one_way: 'Every estimate is a one-way sell into the quote currency; buying back is not included.',
+});
+// The derivation the tab and the checkpoint outcomes use now:
+// cr-forensic-eligibility@1 (core/forensic-eligibility.js), liquidity@2, and
+// lifecycle@2 (repository readings per observation batch with coverage; a
+// valid zero is a reading; incomplete product reads are no reading).
+const METHOD_VERSION = 'cr-forensic-method@2';
+const METHOD = Object.freeze({
+  version: METHOD_VERSION,
+  parts: Object.freeze(['cr-forensic-eligibility@1', LIQUIDITY_VERSION_2, 'cr-forensic-lifecycle@2', 'cr-forensic-scenarios@2']),
+  previous: 'cr-forensic-method@1',
+  note: 'Outcomes recorded under the earlier method stay on record; where this method reads a different outcome, a correction line names both methods and the reason.',
+});
+
 // cr-forensic-scenarios@1: conditional threshold estimates.
 const SCENARIOS = Object.freeze({
   version: SCENARIOS_VERSION,
@@ -158,6 +186,13 @@ const SCENARIOS = Object.freeze({
     confirmed_discontinuation: 'Never projected: it is established only by attributable evidence.',
   }),
 });
+// cr-forensic-scenarios@2 (2026-10-16, review F07): the same assumptions and
+// minimums; a valid zero is a reading. The latest valid reading, zero
+// included, decides whether the level is already crossed; rates of change
+// use the positive readings only, and from a zero no date is projected. A
+// missing day stays missing, never zero.
+const SCENARIOS_VERSION_2 = 'cr-forensic-scenarios@2';
+const SCENARIOS_2 = Object.freeze({ ...SCENARIOS, version: SCENARIOS_VERSION_2, zero: 'A zero reading is a reading: it decides the current state. A rate of change cannot be projected from zero, so no date is estimated from it.' });
 
 // cr-probability-gate@1. A numerical probability is shown only for a method
 // registered here with: historical data under the same event definitions,
@@ -244,7 +279,13 @@ const HASH_NOTE = 'A SHA-256 shows that captured content has not changed since i
 module.exports = {
   EVENTS_VERSION,
   LIQUIDITY_VERSION,
+  LIQUIDITY_VERSION_2,
+  LIQUIDITY_2,
+  METHOD_VERSION,
+  METHOD,
   SCENARIOS_VERSION,
+  SCENARIOS_VERSION_2,
+  SCENARIOS_2,
   PROBABILITY_GATE,
   RUBRIC_VERSION,
   PROMPT_VERSION,

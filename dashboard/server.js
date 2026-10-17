@@ -755,7 +755,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
       // A read that met a save in progress, an interrupted save or an
       // unverified commit is 503: nothing mixed is ever returned (V2-001).
       const readErr = READ_CODES.has(err.code);
-      const status = err.status || (err.code === 'NOT_FOUND' ? 404 : ['INVALID', 'BAD_ID', 'BAD_PATH', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT', 'UNSAFE_PATH'].includes(err.code) ? 400 : ['WORKSPACE_BUSY', 'WRITES_BLOCKED', 'NEWER_REPORT'].includes(err.code) ? 409 : readErr ? 503 : 500);
+      const status = err.status || (err.code === 'NOT_FOUND' ? 404 : ['INVALID', 'BAD_ID', 'BAD_PATH', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT', 'UNSAFE_PATH'].includes(err.code) ? 400 : ['WORKSPACE_BUSY', 'WRITES_BLOCKED', 'NEWER_REPORT', 'INTEGRITY'].includes(err.code) ? 409 : readErr ? 503 : 500);
       if (status >= 500 && !readErr) console.error(err);
       const retryMs = readErr && err.code !== 'READ_UNSAFE' ? (err.details && err.details.retry_after_ms) || 1000 : null;
       if (!res.headersSent) {
@@ -763,7 +763,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
       }
       // A review refused for a newer report names it (model, report, time saved).
       const newer = err.code === 'NEWER_REPORT' && err.details && Array.isArray(err.details.newer) ? { newer: err.details.newer } : {};
-      res.end(JSON.stringify({ error: status >= 500 && !readErr ? `Server error: ${err.message}` : err.message, code: err.code || null, retry_after_ms: retryMs, saved: readErr && req.method === 'GET' ? false : ['INVALID', 'BAD_ID', 'BAD_PATH', 'NOT_FOUND', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'WORKSPACE_BUSY', 'WRITES_BLOCKED', 'NEWER_REPORT', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT', 'UNSAFE_PATH', 'GENERATION_UNWRITABLE'].includes(err.code) || err.status ? false : 'unknown', ...newer }));
+      res.end(JSON.stringify({ error: status >= 500 && !readErr ? `Server error: ${err.message}` : err.message, code: err.code || null, retry_after_ms: retryMs, saved: readErr && req.method === 'GET' ? false : ['INVALID', 'BAD_ID', 'BAD_PATH', 'NOT_FOUND', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'WORKSPACE_BUSY', 'WRITES_BLOCKED', 'NEWER_REPORT', 'INTEGRITY', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT', 'UNSAFE_PATH', 'GENERATION_UNWRITABLE'].includes(err.code) || err.status ? false : 'unknown', ...newer }));
     }
   });
 
@@ -1022,7 +1022,10 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     if (!forensics.RECEIPT_RE.test(id)) throw new HttpError(400, 'Invalid forensic receipt ID');
     return id;
   };
-  route('GET', '/api/projects/([^/]+)/forensics', (m) => coherent(() => forensics.view(ws, pid(m[1]))));
+  route('GET', '/api/projects/([^/]+)/forensics', (m, req, res, body, url) => {
+    const rq = url.searchParams.get('receipt');
+    return coherent(() => forensics.view(ws, pid(m[1]), { receipt: rq ? receiptId(rq) : null }));
+  });
   route('GET', '/api/projects/([^/]+)/forensics/audits/([^/]+)/prompt', (m, req, res, body, url) => {
     const id = pid(m[1]);
     const a = forensics.loadAudit(ws, id, auditId(m[2]));
@@ -1034,15 +1037,23 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   });
   route('GET', '/api/projects/([^/]+)/forensics/receipts/([^/]+)/text', (m) => {
     const id = pid(m[1]);
-    const r = forensics.loadReceipt(ws, id, receiptId(m[2]));
-    if (!r) throw new HttpError(404, 'No such forensic receipt');
-    const text = fs.readFileSync(ws.abs(r.text.path), 'utf8');
-    return { _raw: text, _type: 'text/plain; charset=utf-8' };
+    // JSON through the signed-in client: the text with its pin checked here
+    // (a changed file is a 409 integrity error, never served as the original).
+    return forensics.receiptText(ws, id, receiptId(m[2]));
   });
   route('POST', '/api/projects/([^/]+)/forensics/audits', (m, req, res, body) => once(body, () => after(forensics.createAudit(ws, { project_id: pid(m[1]), challenge: body.challenge === true, channel: 'dashboard', utterance: typeof body.utterance === 'string' ? body.utterance : null, owner_focus: typeof body.focus === 'string' ? body.focus : null, refresh: body.refresh === true }))));
   route('POST', '/api/projects/([^/]+)/forensics/audits/([^/]+)/import', (m, req, res, body) => after(forensics.saveReport(ws, { project_id: pid(m[1]), audit_id: auditId(m[2]), provider: provider(String(body.provider || '')), text: String(body.text || ''), revision: body.revision && typeof body.revision === 'object' ? body.revision : null, channel: 'dashboard import' })));
   route('POST', '/api/projects/([^/]+)/forensics/audits/([^/]+)/challenge', (m) => after(forensics.requestChallenge(ws, pid(m[1]), auditId(m[2]))));
   route('POST', '/api/projects/([^/]+)/forensics/audits/([^/]+)/cancel', (m, req, res, body) => after(forensics.cancelAudit(ws, pid(m[1]), auditId(m[2]), typeof body.reason === 'string' ? body.reason : null)));
+  // Eric's review of an evidence change (forensic-review.js): it records that
+  // he looked, nothing else; a newer change than the one named is a 409.
+  route('POST', '/api/projects/([^/]+)/forensics/reviews', (m, req, res, body) => after(require('./core/forensic-review').acknowledge(ws, pid(m[1]), {
+    target_id: String(body.target_id || ''),
+    item_id: String(body.item_id || ''),
+    note: typeof body.note === 'string' ? body.note : null,
+    request_id: typeof body.request_id === 'string' ? body.request_id : null,
+    by: 'dashboard',
+  })));
   route('POST', '/api/projects/([^/]+)/forensics/monitoring', (m, req, res, body) => after(forensics.setMonitoring(ws, pid(m[1]), {
     enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
     approve: body.approve && typeof body.approve === 'object' && typeof body.approve.receipt_id === 'string' ? { receipt_id: receiptId(body.approve.receipt_id), product_checks: Array.isArray(body.approve.product_checks) ? body.approve.product_checks.map(String).slice(0, 5) : undefined, repositories: Array.isArray(body.approve.repositories) ? body.approve.repositories.map(String).slice(0, 3) : undefined } : null,

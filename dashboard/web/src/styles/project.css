@@ -57,7 +57,7 @@
   .ph-mk-price { font-size: var(--fs-md); }
   .ph-mk-f { font-size: var(--fs-xs); }
   .ph-mk-when { flex-basis: 100%; }
-  .pb-view .crumbs { display: none; }
+  .pb-view .crumbs, .pp-forensics .crumbs { display: none; }
 }
 
 .pp-tabs { margin-bottom: 18px; }

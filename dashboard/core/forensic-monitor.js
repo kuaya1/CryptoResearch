@@ -195,11 +195,52 @@ async function productCheck(ws, target, { cfg, lookupImpl, transport, now }) {
   }
   const body = r.body || Buffer.alloc(0);
   const text = body.toString('utf8');
+  // What the read itself was (lifecycle@2, review F10): complete, cut at the
+  // cap, cut by the time limit, or unreadable (a broken compression or a
+  // stream that failed). Status, body and capability are separate facts.
+  const read = r.read_error === 'timeout' ? 'timed_out' : r.read_error === 'bad_encoding' ? 'bad_encoding' : r.read_error ? 'read_error' : r.truncated ? 'cut_at_cap' : 'complete';
   const statusOk = target.expect_status ? r.status === target.expect_status : r.status >= 200 && r.status < 400;
-  const textOk = target.expect_text ? text.toLowerCase().includes(String(target.expect_text).toLowerCase()) : true;
-  const outcome = statusOk && textOk ? 'pass' : 'fail';
-  const why = !statusOk ? `Answered ${r.status}${target.expect_status ? `, expected ${target.expect_status}` : ''}.` : !textOk ? `The expected text was not found${r.truncated ? ` in the first ${Math.round(cfg.max_bytes / 1024)} KB` : ''}.` : null;
-  return { ...base, outcome, http_status: r.status, final_url: r.final_url, content_type: r.content_type, bytes: r.bytes, truncated: Boolean(r.truncated), body_sha256: sha256(body), expect_met: { status: statusOk, text: target.expect_text ? textOk : null }, excerpt: target.expect_text ? excerptAround(text, target.expect_text) : null, error: why };
+  const found = target.expect_text ? text.toLowerCase().includes(String(target.expect_text).toLowerCase()) : null;
+  const readWords = { cut_at_cap: `the answer was cut at ${Math.round(cfg.max_bytes / 1024)} KB`, timed_out: 'the answer stopped at the time limit', bad_encoding: 'the answer\'s compression was broken', read_error: 'the answer could not be read to the end' }[read] || null;
+  let outcome;
+  let scope;
+  let why = null;
+  if (!statusOk) {
+    outcome = 'fail';
+    scope = 'status';
+    why = `Answered ${r.status}${target.expect_status ? `, expected ${target.expect_status}` : ''}.`;
+  } else if (!target.expect_text) {
+    // Only the status is tested: a cap is expected for a large page; an
+    // unreadable body is said, and only the status is called passed.
+    scope = 'status_only';
+    outcome = read === 'bad_encoding' || read === 'read_error' ? 'incomplete' : 'pass';
+    if (outcome === 'incomplete') why = `The status was ${r.status}, but ${readWords}: no reading.`;
+    else if (read !== 'complete') why = `Only the status was tested; ${readWords}.`;
+  } else if (found) {
+    outcome = 'pass';
+    scope = 'status_and_text';
+    if (read !== 'complete') why = `The expected text was found before ${readWords}.`;
+  } else if (read === 'complete') {
+    outcome = 'fail';
+    scope = 'status_and_text';
+    why = 'The expected text was not found in the complete answer.';
+  } else {
+    // Not found in a part of the answer: not evidence the text is absent.
+    outcome = 'incomplete';
+    scope = 'status_and_text';
+    why = `The expected text was not found, but ${readWords}: no reading.`;
+  }
+  return { ...base, outcome, scope, read, http_status: r.status, final_url: r.final_url, content_type: r.content_type, bytes: r.bytes, truncated: Boolean(r.truncated), read_error: r.read_error || null, body_sha256: sha256(body), body_norm_sha256: read === 'complete' ? sha256(normalizeBody(text)) : null, normalization: NORMALIZE_VERSION, expect_met: { status: statusOk, text: target.expect_text ? (outcome === 'incomplete' ? null : found) : null }, excerpt: target.expect_text ? excerptAround(text, target.expect_text) : null, error: why };
+}
+
+// cr-forensic-normalize@1: the documented comparison behind "cosmetic only"
+// in the review queue. Line endings become \n, every run of whitespace one
+// space, and the ends are trimmed. Nothing else is touched: no number, date,
+// word, letter case, markup or script text is removed or changed, so two
+// bodies equal under it differ only in whitespace.
+const NORMALIZE_VERSION = 'cr-forensic-normalize@1';
+function normalizeBody(text) {
+  return String(text || '').replace(/\r\n?/g, '\n').replace(/\s+/g, ' ').trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -220,8 +261,8 @@ async function ghGet(path, { fetchImpl, timeoutMs }) {
   try {
     const res = await fetchImpl(url.toString(), { headers: ghHeaders(), signal: ctrl.signal, redirect: 'error' });
     let body = null;
-    const text = await res.text();
-    if (text.length > 2 * 1024 * 1024) throw new Error('Answer too large');
+    // Counted as it arrives; over the cap the read stops (review P3).
+    const text = await require('./netguard').readBodyBounded(res, 2 * 1024 * 1024, ctrl);
     try { body = text ? JSON.parse(text) : null; } catch (_) { body = null; }
     return { status: res.status, body, headers: res.headers };
   } finally {
@@ -298,7 +339,7 @@ async function refresh(ws, opts = {}) {
   const lease = acquireLease(ws, LEASE, 30 * 60000, { label: trigger });
   if (!lease) return { status: 'busy', message: 'Another forensic monitor run is in progress.' };
   const F = require('./forensics');
-  const counts = { checks: 0, reads: 0, failed: 0, not_checkable: 0, quotes: 0, quotes_answered: 0, no_route: 0, quote_errors: 0, quote_waits: {}, budget: false, rate_limited: null, resolutions: 0 };
+  const counts = { checks: 0, reads: 0, failed: 0, not_checkable: 0, incomplete: 0, quotes: 0, quotes_answered: 0, no_route: 0, quote_errors: 0, quote_waits: {}, budget: false, rate_limited: null, resolutions: 0, corrections: 0 };
   try {
     let due = dueTargets(ws, t0, cfg);
     if (Array.isArray(projectIds)) due = due.filter((d) => projectIds.includes(d.project.project_id));
@@ -334,6 +375,7 @@ async function refresh(ws, opts = {}) {
         counts.checks += 1;
         if (obs.outcome === 'fail') counts.failed += 1;
         if (obs.outcome === 'not_checkable') counts.not_checkable += 1;
+        if (obs.outcome === 'incomplete') counts.incomplete += 1;
       } else {
         if (gate(readStatus(ws), now())) continue;
         const out = await repositoryRead(ws, d.target, { cfg, fetchImpl, now, reserve: () => reserveRequest(ws, cfg, now()) });
@@ -354,7 +396,9 @@ async function refresh(ws, opts = {}) {
       for (const p of require('./projects').listProjects(ws)) {
         if (p.broken) continue;
         try {
-          counts.resolutions += F.recordDueResolutions(ws, p.project_id, { now: now() }).written;
+          const rr = F.recordDueResolutions(ws, p.project_id, { now: now() });
+          counts.resolutions += rr.written;
+          counts.corrections += rr.corrected || 0;
         } catch (_) { /* one project's records never stop the others */ }
       }
     }
@@ -368,11 +412,11 @@ async function refresh(ws, opts = {}) {
       consecutive_failures: allFailed ? (s.consecutive_failures || 0) + 1 : 0,
       next_allowed_at: allFailed ? isoOf(now() + Math.min(cfg.backoff_max_minutes, cfg.backoff_initial_minutes * 2 ** Math.max(0, (s.consecutive_failures || 0))) * 60000 * (0.9 + crypto.randomInt(0, 200) / 1000)) : null,
     }));
-    const did = counts.checks + counts.reads + counts.resolutions + counts.quotes + counts.quote_errors;
+    const did = counts.checks + counts.reads + counts.resolutions + counts.corrections + counts.quotes + counts.quote_errors;
     const waits = Object.entries(counts.quote_waits).map(([p, until]) => `${p} asked to wait until ${until}`);
     return {
       status: !did ? 'noop' : counts.budget ? 'budget_paused' : counts.failed || counts.quote_errors ? 'attention' : 'ok',
-      message: !did ? 'No forensic observation was due.' : `${counts.checks} product check(s) (${counts.failed} failed, ${counts.not_checkable} not checkable), ${counts.reads} repository read(s), ${counts.quotes} exit quote(s) (${counts.no_route} no route, ${counts.quote_errors} error(s)), ${counts.resolutions} checkpoint outcome(s) recorded${counts.budget ? '; the monthly request budget is used up' : ''}${counts.rate_limited ? `; GitHub asked to wait until ${counts.rate_limited}` : ''}${waits.length ? `; ${waits.join('; ')}` : ''}.`,
+      message: !did ? 'No forensic observation was due.' : `${counts.checks} product check(s) (${counts.failed} failed, ${counts.incomplete} incomplete, ${counts.not_checkable} not checkable), ${counts.reads} repository read(s), ${counts.quotes} exit quote(s) (${counts.no_route} no route, ${counts.quote_errors} error(s)), ${counts.resolutions} checkpoint outcome(s) recorded${counts.corrections ? ` and ${counts.corrections} re-read under ${require("./forensic-defs").METHOD_VERSION}` : ""}${counts.budget ? '; the monthly request budget is used up' : ''}${counts.rate_limited ? `; GitHub asked to wait until ${counts.rate_limited}` : ''}${waits.length ? `; ${waits.join('; ')}` : ''}.`,
       counts,
     };
   } finally {
@@ -401,4 +445,4 @@ function statusView(ws, now = Date.now()) {
   };
 }
 
-module.exports = { STATUS_REL, isDue, dueTargets, refresh, productCheck, repositoryRead, statusView, readStatus, quoteGate };
+module.exports = { STATUS_REL, NORMALIZE_VERSION, normalizeBody, isDue, dueTargets, refresh, productCheck, repositoryRead, statusView, readStatus, quoteGate };

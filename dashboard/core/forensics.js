@@ -38,6 +38,7 @@ const { compactTs, randomId, isProjectId } = require('./ids');
 const { PROVIDER_LABELS } = require('./workspace');
 const D = require('./forensic-defs');
 const M = require('./forensic-model');
+const E = require('./forensic-eligibility');
 
 const AUDIT_RE = /^fa_\d{4}-\d{2}-\d{2}T\d{6}Z_[a-z2-9]{5}$/;
 const RECEIPT_RE = /^fr_\d{4}-\d{2}-\d{2}T\d{6}Z_[a-z2-9]{5}$/;
@@ -171,6 +172,26 @@ function readText(ws, rel) {
   }
 }
 
+// A frozen file (an evidence packet, a prompt, a saved text) read back and
+// checked against the SHA-256 recorded when it was frozen. A mismatch is an
+// integrity failure: nothing is handed out, saved or built on it, and the
+// frozen record is never rebuilt from current templates or observations.
+function verifiedFrozen(ws, rel, want, what) {
+  const text = rel ? readText(ws, rel) : null;
+  if (text === null) throw new OpError('INTEGRITY', `${what} is missing (${rel || 'no path on record'}). Nothing was handed out or saved; restore it from a backup.`, { path: rel || null });
+  if (sha256(text) !== want) throw new OpError('INTEGRITY', `${what} does not match its recorded SHA-256 (${String(want || '').slice(0, 12)}…): it changed after it was frozen. Nothing was handed out or saved, and it is not rebuilt; restore it from a backup.`, { path: rel });
+  return text;
+}
+
+// The eligibility projection (cr-forensic-eligibility@1) of an assessment
+// receipt under its own frozen identity; computed once per read.
+const EV = new WeakMap();
+function eligibilityOf(r) {
+  if (!r || r.kind !== 'assessment' || !r.assessment) return null;
+  if (!EV.has(r)) EV.set(r, E.evaluate(r.assessment, { identity: r.identity }));
+  return EV.get(r);
+}
+
 function emptyProfile(pid) {
   return { schema_version: 'cr.forensic-profile.v1', project_id: pid, monitoring: { enabled: false }, targets: { product_checks: [], repositories: [], exit_quotes: [] } };
 }
@@ -254,10 +275,11 @@ function monitoringSummary(ws, pid, { now }) {
     const last = list[list.length - 1] || null;
     return { readings_30d: list.length, passes: list.filter((o) => o.outcome === 'pass').length, failures: list.filter((o) => o.outcome === 'fail').length, latest: last ? { observed_at: last.observed_at, outcome: last.outcome || last.status || null, http_status: last.http_status || null, latest_delivery_at: last.latest_delivery_at || null } : null };
   };
-  // Exit quotes: the readings at each size, and the latest run's answers.
+  // Exit quotes: the readings at each size, and each size's latest answer.
   const quotes = (t) => {
     const list = obs.filter((o) => o.target_id === t.target_id && o.kind === 'executable_quote');
-    const lastAt = list.length ? list[list.length - 1].observed_at.slice(0, 13) : null;
+    const bySize = new Map();
+    for (const o of list) bySize.set(o.size_usd || null, o);
     return {
       target_id: t.target_id,
       chain: t.chain_label || t.chain,
@@ -265,10 +287,10 @@ function monitoringSummary(ws, pid, { now }) {
       quote_source: t.provider,
       readings_30d: list.filter((o) => o.quote).length,
       errors_30d: list.filter((o) => o.status === 'error').length,
-      latest: lastAt ? list.filter((o) => o.observed_at.slice(0, 13) === lastAt).map((o) => {
+      latest: [...bySize.values()].map((o) => {
         const e = o.quote && o.size_usd ? M.exitEstimate(o, o.size_usd) : null;
-        return { observed_at: o.observed_at, size_usd: o.size_usd || null, status: o.status, received_usd: o.quote ? o.quote.received_usd : null, cost_pct: e && e.status === 'estimated' ? e.cost_pct : null, route: o.quote ? o.quote.route : null, error: o.error || null };
-      }) : [],
+        return { observed_at: o.observed_at, size_usd: o.size_usd || null, status: o.status, received_usd: o.quote ? o.quote.received_usd : null, cost_pct: e && e.status === 'estimated' ? e.cost_pct : null, cost_complete: e ? e.cost_complete ?? null : null, missing_costs: e ? e.missing_costs || [] : [], route: o.quote ? o.quote.route : null, error: o.error || null };
+      }),
     };
   };
   return {
@@ -312,7 +334,7 @@ function buildPacket(ws, project, { now = Date.now(), prefs = prefsOf(ws) } = {}
     contract_controls: controls,
     monitoring: monitoringSummary(ws, project.project_id, { now }),
     earlier_receipts: earlier,
-    definitions: { events: D.EVENTS_VERSION, liquidity: D.LIQUIDITY_VERSION, scenarios: D.SCENARIOS_VERSION, probability_gate: D.PROBABILITY_GATE, rubric: D.RUBRIC_VERSION },
+    definitions: { events: D.EVENTS_VERSION, liquidity: D.LIQUIDITY_VERSION_2, scenarios: D.SCENARIOS_VERSION_2, eligibility: E.VERSION, probability_gate: D.PROBABILITY_GATE, rubric: D.RUBRIC_VERSION },
     preferences: prefs,
     not_supported_here: D.UNSUPPORTED.map(([id, words]) => ({ id, words })),
     excluded: ['your holdings and transactions', 'your notes and journal', 'other models\' reports, scores and challenges'],
@@ -526,7 +548,7 @@ function createAudit(ws, args = {}) {
     utterance: typeof args.utterance === 'string' ? args.utterance.slice(0, 2000) : null,
     owner_focus: focus,
     identity: identitySnapshot(project),
-    definitions: { events: D.EVENTS_VERSION, liquidity: D.LIQUIDITY_VERSION, scenarios: D.SCENARIOS_VERSION, probability_gate: D.PROBABILITY_GATE, rubric: D.RUBRIC_VERSION, format: D.REPORT_FORMAT, challenge_format: D.CHALLENGE_FORMAT },
+    definitions: { events: D.EVENTS_VERSION, liquidity: D.LIQUIDITY_VERSION_2, scenarios: D.SCENARIOS_VERSION_2, eligibility: E.VERSION, method: D.METHOD_VERSION, probability_gate: D.PROBABILITY_GATE, rubric: D.RUBRIC_VERSION, format: D.REPORT_FORMAT, challenge_format: D.CHALLENGE_FORMAT },
     preferences: prefs,
     evidence_packet: { path: `${dir}/evidence-packet.json`, sha256: packetSha, captured_at: packet.captured_at, schema_version: packet.schema_version },
     prompt: null,
@@ -570,7 +592,8 @@ function requestChallenge(ws, pid, aid) {
   if (!a0) throw new OpError('NOT_FOUND', `No forensic audit ${aid} for ${pid}.`);
   const project = require('./projects').getProject(ws, pid);
   const latest = investigatorReceipts(listReceipts(ws, pid)).filter((r) => r.audit_id === aid).pop() || null;
-  const packetText = readText(ws, a0.evidence_packet.path) || '';
+  // The challenger gets the same captured evidence the recorded pin names.
+  const packetText = latest ? verifiedFrozen(ws, a0.evidence_packet.path, a0.evidence_packet.sha256, 'The frozen evidence packet') : '';
   const at = new Date().toISOString();
   return updateAudit(ws, pid, aid, (a, op) => {
     const j = a.jobs.challenge;
@@ -590,14 +613,33 @@ function freezeChallenge(op, audit, job, { project, receipt, packetText, ws }) {
   Object.assign(job, { state: 'waiting', challenges_receipt_id: receipt.receipt_id, assessment_sha256: receipt.block_sha256, prompt: { version: D.CHALLENGE_VERSION, path: rel, sha256: sha256(prompt), chars: prompt.length }, note: 'Waiting for ChatGPT: ask ChatGPT (CryptoResearch app on) to do its waiting forensic challenge, or paste the prompt into ChatGPT and import the answer.', updated_at: new Date().toISOString() });
 }
 
+// A role's frozen prompt for a handoff, checked against its pin; the evidence
+// packet it was built from is checked too.
 function promptFor(ws, audit, role) {
   const j = audit.jobs && audit.jobs[role];
   const rel = role === 'investigator' ? audit.prompt && audit.prompt.path : j && j.prompt && j.prompt.path;
   if (!rel) return null;
-  const text = readText(ws, rel);
   const want = role === 'investigator' ? audit.prompt.sha256 : j.prompt.sha256;
-  if (text === null || sha256(text) !== want) return { text: null, error: `The frozen ${role} prompt does not match its recorded SHA-256; it is not handed out.` };
-  return { text, sha256: want, chars: text.length, version: role === 'investigator' ? audit.prompt.version : j.prompt.version };
+  try {
+    const text = verifiedFrozen(ws, rel, want, `The frozen ${role} prompt`);
+    verifiedFrozen(ws, audit.evidence_packet && audit.evidence_packet.path, audit.evidence_packet && audit.evidence_packet.sha256, 'The frozen evidence packet');
+    return { text, sha256: want, chars: text.length, version: role === 'investigator' ? audit.prompt.version : j.prompt.version };
+  } catch (err) {
+    if (err.code !== 'INTEGRITY') throw err;
+    return { text: null, error: err.message, code: 'INTEGRITY' };
+  }
+}
+
+// The full text of a receipt as saved, with its pins checked: the text's
+// SHA-256, and the JSON block's against the one the receipt records.
+function receiptText(ws, pid, rid) {
+  const r = loadReceipt(ws, pid, rid);
+  if (!r) throw new OpError('NOT_FOUND', `No forensic receipt ${rid} for ${pid}.`);
+  const text = verifiedFrozen(ws, r.text && r.text.path, r.text && r.text.sha256, `The saved text of ${rid}`);
+  const found = findBlock(text, r.kind === 'challenge' ? D.CHALLENGE_FORMAT : D.REPORT_FORMAT);
+  const blockOk = Boolean(found.obj) && sha256(JSON.stringify(found.obj)) === r.block_sha256;
+  if (!blockOk) throw new OpError('INTEGRITY', `The saved text of ${rid} matches its SHA-256, but its JSON block does not match the block recorded with the receipt.`);
+  return { receipt_id: rid, kind: r.kind, role: r.role, model: r.model, saved_at: r.saved_at, sha256: r.text.sha256, block_sha256: r.block_sha256, chars: text.length, verified: true, text };
 }
 
 function readDraft(ws, pid, aid, role) {
@@ -662,8 +704,24 @@ function findBlock(text, format) {
   return found || { obj: null, errors };
 }
 
+// An address as one key: scheme and host in lower case, the path and query as
+// written (paths can be case-sensitive), no trailing slash.
 function urlKey(u) {
-  return String(u || '').trim().replace(/\/+$/, '').toLowerCase();
+  const s = String(u || '').trim();
+  if (!s) return '';
+  try {
+    const x = new URL(s);
+    return `${x.protocol}//${x.host.toLowerCase()}${x.pathname.replace(/\/+$/, '')}${x.search}`;
+  } catch (_) {
+    return s.replace(/\/+$/, '');
+  }
+}
+
+// What a source's evidence is: its address and what it preserved (a content
+// hash, an excerpt, a block, commit or transaction). The same address with a
+// new capture is new evidence; a new retrieval time alone is not.
+function evidenceKey(s) {
+  return sha256(JSON.stringify([urlKey(s.url), s.content_sha256 || null, s.excerpt ? normalizedTextHash(s.excerpt) : null, s.block_or_commit || null, s.tx_signature || null]));
 }
 
 function frozenThresholds(ws, audit, origin, prefs) {
@@ -683,10 +741,14 @@ function frozenThresholds(ws, audit, origin, prefs) {
 function scenariosAtOrigin(ws, pid, audit, origin, prefs, thresholds, assessment) {
   const O = Date.parse(origin);
   const vol = volumeSeries(ws, audit.identity && audit.identity.coingecko_id, { now: O, days: 60 });
-  const liq = M.liquidityReadings((assessment.liquidity || {}).observations || [], { positionUsd: prefs.exit_position_usd, limitPct: prefs.exit_cost_limit_pct }).filter((x) => x.cost_pct !== null && Date.parse(x.at) <= O);
-  const deliveries = ((assessment.delivery || {}).observations || []).flatMap((o) => [o.latest_commit_at, o.latest_release_at]).filter(Boolean).filter((t) => Date.parse(t) <= O).sort();
+  // Only measurements bound to this project's frozen identity and sources.
+  const ev = E.evaluate(assessment, { identity: audit.identity });
+  const bound = ((assessment.liquidity || {}).observations || []).filter((o) => E.bindLiquidity(o, ev, { savedAt: iso(O + AS_OF_SLACK_MS) }).bound);
+  const liq = M.liquidityReadings(bound, { positionUsd: prefs.exit_position_usd, limitPct: prefs.exit_cost_limit_pct }).filter((x) => x.cost_pct !== null && Date.parse(x.at) <= O);
+  const deliveries = ((assessment.delivery || {}).observations || []).filter((o) => E.bindRepository(o, ev).bound).flatMap((o) => [o.latest_commit_at, o.latest_release_at]).filter(Boolean).filter((t) => Date.parse(t) <= O).sort();
   return {
-    version: D.SCENARIOS_VERSION,
+    version: D.SCENARIOS_VERSION_2,
+    method: D.METHOD_VERSION,
     at: origin,
     volume: M.scenarioEstimates(vol, { threshold: thresholds.volume_review_usd, worse: 'lower', origin, now: O, metric: 'volume_24h_usd' }),
     exit_cost: M.scenarioEstimates(M.dailySeries(liq.map((x) => ({ at: x.at, value: x.cost_pct }))), { threshold: prefs.exit_cost_limit_pct, worse: 'higher', origin, now: O, metric: 'exit_cost_pct', unit: 'pct' }),
@@ -736,17 +798,45 @@ function saveReport(ws, { project_id: pid, audit_id: aid, provider, text, revisi
     const kinds = require('./revisions').REVISION_KINDS;
     const note = rv && typeof rv.note === 'string' ? rv.note.trim() : '';
     if (!rv || !kinds[rv.kind] || note.length < 15) throw new OpError('INVALID', `Not saved: ${last.receipt_id} is already saved for this ${role}. A different text is a revision: pass revision { kind, note } (format_fix, reassessment, new_evidence or other, and in a sentence or two what changed and why). The original receipt and its deadlines stay as they are.`);
-    const before = new Set((((last.assessment || last.challenge) || {}).sources || []).map((s) => urlKey(s.url)).filter(Boolean));
-    evidenceAdded = (content.sources || []).filter((s) => s.url && !before.has(urlKey(s.url))).map((s) => ({ source_id: s.source_id, url: s.url, retrieved_at: s.retrieved_at }));
-    if (rv.kind === 'new_evidence' && !evidenceAdded.length) throw new OpError('INVALID', `Not saved: revision kind new_evidence, but no source is new since ${last.receipt_id}. Cite the new sources, or use reassessment.`);
+    // New evidence is a new address, or a new capture (content hash, excerpt,
+    // block, commit or transaction) at an address already cited.
+    const beforeSources = ((last.assessment || last.challenge) || {}).sources || [];
+    const beforeKeys = new Set(beforeSources.map(evidenceKey));
+    const beforeUrls = new Set(beforeSources.map((s) => urlKey(s.url)).filter(Boolean));
+    evidenceAdded = (content.sources || []).filter((s) => (s.url || s.tx_signature || s.block_or_commit) && !beforeKeys.has(evidenceKey(s))).map((s) => ({ source_id: s.source_id, url: s.url, retrieved_at: s.retrieved_at, change: s.url && beforeUrls.has(urlKey(s.url)) ? 'new_capture_same_address' : 'new_address' }));
+    if (rv.kind === 'new_evidence' && !evidenceAdded.length) throw new OpError('INVALID', `Not saved: revision kind new_evidence, but no source holds evidence that is new since ${last.receipt_id} (a new address, or a new capture at one already cited: content hash, excerpt, block, commit or transaction). A new retrieval time alone is not new evidence; use reassessment.`);
     rev = { kind: rv.kind, note: note.slice(0, 600), of: last.receipt_id };
+  }
+  // The frozen files this save builds on, checked against their pins before
+  // anything is written. A mismatch refuses the save; the text is kept as the
+  // job's draft when the job is open, so nothing is lost.
+  let packetText;
+  try {
+    const p = role === 'investigator' ? audit.prompt : job.prompt;
+    verifiedFrozen(ws, p && p.path, p && p.sha256, `The frozen ${role} prompt`);
+    packetText = verifiedFrozen(ws, audit.evidence_packet && audit.evidence_packet.path, audit.evidence_packet && audit.evidence_packet.sha256, 'The frozen evidence packet');
+  } catch (err) {
+    if (err.code !== 'INTEGRITY') throw err;
+    let kept = false;
+    if (job.state === 'running' && Buffer.byteLength(body) <= MAX_DRAFT) {
+      try {
+        saveDraft(ws, pid, aid, { provider, text: body, note: 'Kept as a draft: the save was refused by an integrity check.' });
+        kept = true;
+      } catch (_) { /* the refusal below still stands */ }
+    }
+    throw new OpError('INTEGRITY', `Not saved: ${err.message}${kept ? ' The text was kept as this job\'s draft.' : ' Keep the text: it can be saved once the frozen files are restored.'}`, err.details);
   }
   const now = Date.now();
   const asOfRaw = role === 'investigator' ? content.assessment_as_of : content.as_of;
   const asOf = asOfRaw ? Date.parse(asOfRaw) : null;
   if (asOf !== null && asOf > now + AS_OF_SLACK_MS) throw new OpError('INVALID', `Not saved: ${role === 'investigator' ? 'assessment_as_of' : 'as_of'} (${asOfRaw}) is after the time of saving. Set it to when you finished.`);
   if (asOf !== null && asOf < Date.parse(audit.created_at) - AS_OF_SLACK_MS) throw new OpError('INVALID', `Not saved: ${role === 'investigator' ? 'assessment_as_of' : 'as_of'} (${asOfRaw}) is before the audit was opened (${audit.created_at}).`);
-  const origin = asOf !== null ? iso(Math.min(asOf, now)) : iso(now);
+  const asOfIso = asOf !== null ? iso(Math.min(asOf, now)) : iso(now);
+  // A revision keeps the forecast it revises: the same origin, deadlines,
+  // preferences, thresholds and origin estimates (lifecycle@2, review F05).
+  // Only a new audit starts a new origin, linked to the one before it.
+  const inherit = role === 'investigator' && last && last.origin && Array.isArray(last.deadlines) ? last : null;
+  const origin = inherit ? inherit.origin : asOfIso;
   const rid = `fr_${compactTs(new Date(now))}_${randomId(5)}`;
   const savedAt = iso(now);
   const blockSha = sha256(JSON.stringify(b));
@@ -772,26 +862,36 @@ function saveReport(ws, { project_id: pid, audit_id: aid, provider, text, revisi
   };
   let receipt;
   if (role === 'investigator') {
-    const prefs = audit.preferences || prefsOf(ws);
-    const thresholds = frozenThresholds(ws, audit, origin, prefs);
+    const prefs = inherit ? inherit.preferences : audit.preferences || prefsOf(ws);
+    const thresholds = inherit ? inherit.thresholds : frozenThresholds(ws, audit, origin, prefs);
+    const before = !inherit ? investigatorReceipts(listReceipts(ws, pid)).filter((r) => r.audit_id !== aid).pop() || null : null;
+    const ev = E.evaluate(content, { identity: audit.identity });
+    const held = Object.values(ev.findings).filter((f) => f.eligible).length;
     receipt = {
       ...base,
       origin,
-      origin_basis: asOf !== null ? 'assessment_as_of' : 'saved_at',
-      deadlines: M.deadlinesFrom(origin),
+      origin_basis: inherit ? 'inherited' : asOf !== null ? 'assessment_as_of' : 'saved_at',
+      origin_of: inherit ? (inherit.origin_of || inherit.receipt_id) : null,
+      // A format fix is the same assessment: it keeps the date (and so the
+      // age) of what it fixes; the block's own time is kept beside it.
+      assessment_as_of: inherit && rev && rev.kind === 'format_fix' ? inherit.assessment_as_of || inherit.origin : asOfIso,
+      block_as_of: asOfIso,
+      predecessor: before ? { receipt_id: before.receipt_id, audit_id: before.audit_id, origin: before.origin } : null,
+      deadlines: inherit ? inherit.deadlines : M.deadlinesFrom(origin),
       preferences: prefs,
       thresholds,
       // The desk's conditional estimates as they stood at the origin, kept so
       // a later outcome can be set against them; the tab's estimates move on.
-      scenarios_at_origin: scenariosAtOrigin(ws, pid, audit, origin, prefs, thresholds, content),
+      scenarios_at_origin: inherit ? inherit.scenarios_at_origin || null : scenariosAtOrigin(ws, pid, audit, origin, prefs, thresholds, content),
       assessment: content,
       checks: M.findingChecks(content),
+      eligibility_at_save: { version: E.VERSION, findings: Object.keys(ev.findings).length, references_hold: held, report_claims: Object.keys(ev.findings).length - held },
+      method: D.METHOD_VERSION,
       probability: M.probabilityGate(content.forecast.probabilities),
     };
   } else {
-    receipt = { ...base, as_of: origin, challenges_receipt_id: job.challenges_receipt_id, assessment_sha256: job.assessment_sha256, challenge: content };
+    receipt = { ...base, as_of: asOfIso, challenges_receipt_id: job.challenges_receipt_id, assessment_sha256: job.assessment_sha256, challenge: content };
   }
-  const packetText = readText(ws, audit.evidence_packet.path) || '';
   const out = runOp(ws, { type: 'forensic_receipt', summary: `${label(provider)} forensic ${receipt.kind} for ${pid}` }, (op) => {
     // Under the lock: the same text may have landed meanwhile.
     const again = priorOf().find((r) => r.text && r.text.normalized_sha256 === textHash);
@@ -821,7 +921,7 @@ function saveReport(ws, { project_id: pid, audit_id: aid, provider, text, revisi
     verified: out.verified,
     files: out.files,
     message: out.verified
-      ? `Saved ${label(provider)}'s forensic ${receipt.kind} ${rid} for ${project.name}.${receipt.origin ? ` Timeline origin ${receipt.origin}; checkpoints to ${receipt.deadlines[receipt.deadlines.length - 1].at.slice(0, 10)}.` : ''}${rev ? ` A revision of ${rev.of} (${rev.kind}); the original and its deadlines are unchanged.` : ''}${norm.errors.length ? ` ${norm.errors.length} format note${norm.errors.length === 1 ? '' : 's'} kept with it.` : ''}${flagged ? ` The desk's checks flag ${flagged} item${flagged === 1 ? '' : 's'} (flags only).` : ''}${receipt.probability && receipt.probability.status === 'withheld' ? ` ${receipt.probability.reason}` : ''}`
+      ? `Saved ${label(provider)}'s forensic ${receipt.kind} ${rid} for ${project.name}.${receipt.origin ? ` Timeline origin ${receipt.origin}${receipt.origin_basis === 'inherited' ? ', kept from the forecast it revises' : ''}; checkpoints to ${receipt.deadlines[receipt.deadlines.length - 1].at.slice(0, 10)}.` : ''}${rev ? ` A revision of ${rev.of} (${rev.kind}); the original receipt is unchanged.` : ''}${receipt.eligibility_at_save && receipt.eligibility_at_save.report_claims ? ` ${receipt.eligibility_at_save.report_claims} of ${receipt.eligibility_at_save.findings} findings have references the desk could not resolve to dated, preserved sources: they stay the report's claims and feed no coverage, grade or outcome.` : ''}${norm.errors.length ? ` ${norm.errors.length} format note${norm.errors.length === 1 ? '' : 's'} kept with it.` : ''}${flagged ? ` The desk's checks flag ${flagged} item${flagged === 1 ? '' : 's'} (flags only).` : ''}${receipt.probability && receipt.probability.status === 'withheld' ? ` ${receipt.probability.reason}` : ''}`
       : `The desk wrote ${rid} but could not confirm it read back as written. Save the same text again; if it landed, nothing changes.`,
   };
 }
@@ -934,67 +1034,163 @@ function dedupeLiquidity(list) {
   return [...seen.values()];
 }
 
-function readingsFor(ws, pid, { receipts, prefs, marketPriceUsd = null, now = Date.now() }) {
+// The token transfer tax the GoPlus contract screen states for a contract
+// (sell tax, 0 included), for readings within a week of the screen; else
+// unknown. Used to tell a complete exit cost from a lower bound.
+const TAX_NEAR_MS = 7 * DAY;
+function taxIndex(ws, pid, now = Date.now()) {
+  let block = null;
+  try {
+    block = require('./screening').packetBlock(ws, require('./projects').getProject(ws, pid), { now });
+  } catch (_) {
+    return () => null;
+  }
+  const { addressKey } = require('./chains');
+  const list = (block && Array.isArray(block.contracts) ? block.contracts : []).filter((x) => x.status === 'ok' && x.taxes && typeof x.taxes.sell_pct === 'number');
+  return (chainId, address, at) => {
+    if (!chainId || !address) return null;
+    const c = list.find((x) => String(x.chain_id) === String(chainId) && (x.family ? addressKey(x.family, x.address) === addressKey(x.family, address) : x.address === address));
+    if (!c) return null;
+    const checked = c.checked_at || block.fetched_at || null;
+    if (!checked || !Number.isFinite(Date.parse(at)) || Math.abs(Date.parse(at) - Date.parse(checked)) > TAX_NEAR_MS) return null;
+    return { pct: c.taxes.sell_pct, source: `GoPlus contract screen of ${String(checked).slice(0, 10)}` };
+  };
+}
+
+// One reading per moment: readings at the same time never count twice
+// (persistence needs time to pass). mode 'last': the reading made last at
+// that time stands (it already holds the earlier ones); 'agree': independent
+// answers, and answers that conflict at one moment are unknown.
+function collapseSameTime(readings, mode = 'agree') {
+  const by = new Map();
+  for (const r of readings) {
+    const prev = by.get(r.at);
+    if (!prev || mode === 'last') { by.set(r.at, { ...r }); continue; }
+    const known = (x) => x.beyond === true || x.beyond === false;
+    if (!known(prev)) by.set(r.at, { ...r });
+    else if (known(r) && r.beyond !== prev.beyond) by.set(r.at, { ...prev, beyond: null, note: 'Readings at the same moment disagree: unknown.' });
+  }
+  return [...by.values()].sort((a, b) => String(a.at).localeCompare(String(b.at)));
+}
+
+const repoKey = (s) => {
+  const m = String(s || '').trim().match(/(?:https?:\/\/)?(github\.com|gitlab\.com)\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?\/?$/i);
+  return m ? `${m[1]}/${m[2]}/${m[3]}`.toLowerCase() : String(s || '').trim().toLowerCase();
+};
+
+// The readings the outcomes are read from (cr-forensic-method@2). Captured
+// measurements count only when bound to the frozen identity of the receipt
+// that captured them and to a usable source of it (forensic-eligibility.js);
+// the rest are listed as not counted, with the reason. Monitor quotes count
+// for a receipt only when their contract is in its frozen identity.
+function readingsFor(ws, pid, { receipts, prefs, marketPriceUsd = null, now = Date.now(), identityReceipt = null, taxOf = null, profile = null }) {
   const obs = readObservations(ws, pid, { from: now - 400 * DAY, to: now });
   const assessed = receipts.filter((r) => r.kind === 'assessment');
+  const prof = profile || readProfile(ws, pid);
+  const unbound = [];
   // Liquidity: quotes and reserves captured in audits, and the monitor's
   // aggregator quotes (exitquotes.js). An error or a token the source does
   // not list carries no quote, so it is no reading.
-  const captured = assessed.flatMap((r) => ((r.assessment.liquidity || {}).observations || []).map((o) => ({ ...o, receipt_id: r.receipt_id })));
-  const quoted = obs.filter((o) => o.kind === 'executable_quote' && o.source === 'monitor' && o.quote && typeof o.quote === 'object');
+  const captured = [];
+  for (const r of assessed) {
+    const ev = eligibilityOf(r);
+    for (const o of (r.assessment.liquidity || {}).observations || []) {
+      if (!['executable_quote', 'pool_reserves', 'reported_liquidity'].includes(o.kind)) continue;
+      const b = E.bindLiquidity(o, ev, { savedAt: r.saved_at });
+      if (b.bound) captured.push({ ...o, receipt_id: r.receipt_id, chain_id: b.chain.chain_id || null, contract_address: o.contract_address || b.chain.contract || null });
+      else unbound.push({ receipt_id: r.receipt_id, obs_id: o.obs_id, measure: 'liquidity', reason: `Not counted: ${b.reason}.` });
+    }
+  }
+  const idEv = eligibilityOf(identityReceipt || assessed[assessed.length - 1] || null);
+  const monitorQuotes = obs.filter((o) => o.kind === 'executable_quote' && o.source === 'monitor' && o.quote && typeof o.quote === 'object');
+  const quoted = monitorQuotes.filter((o) => !idEv || E.monitorQuoteBound(o, idEv));
+  if (quoted.length < monitorQuotes.length) unbound.push({ receipt_id: identityReceipt ? identityReceipt.receipt_id : null, obs_id: null, measure: 'exit_quote', reason: `Not counted: ${monitorQuotes.length - quoted.length} monitor quote${monitorQuotes.length - quoted.length === 1 ? '' : 's'} for a contract that is not in this receipt's frozen identity.` });
   const liqObs = dedupeLiquidity([...captured, ...quoted]);
-  const liquidity = M.liquidityReadings(liqObs, { positionUsd: prefs.exit_position_usd, limitPct: prefs.exit_cost_limit_pct, marketPriceUsd });
-  // Operational: each approved check, and each check captured in an audit.
-  // An audit's capture of an address the monitor checks joins that check's
-  // readings; any other capture is its own check, marked as from an audit.
+  const tax = (o) => (taxOf ? taxOf(o.chain_id, o.contract_address, o.retrieved_at) : null);
+  const liquidity = M.liquidityReadings(liqObs, { positionUsd: prefs.exit_position_usd, limitPct: prefs.exit_cost_limit_pct, marketPriceUsd, taxOf: tax });
+  // Operational: each approved check, and each check captured in an audit on
+  // the project's own site. An audit's capture of an address the monitor
+  // checks joins that check's readings; any other is its own check, marked as
+  // from an audit. An incomplete read (cut, unreadable) is no reading.
   const operational = {};
   const byUrl = new Map();
   for (const o of obs.filter((x) => x.kind === 'product_check')) {
     if (!operational[o.target_id]) operational[o.target_id] = { label: o.label || o.target_id, source: 'monitor', url: o.url || null, readings: [] };
     if (o.url) byUrl.set(urlKey(o.url), o.target_id);
-    operational[o.target_id].readings.push({ at: o.observed_at, beyond: o.outcome === 'fail' ? true : o.outcome === 'pass' ? false : null, obs_id: o.obs_id, note: o.error || null });
+    operational[o.target_id].readings.push({ at: o.observed_at, beyond: o.outcome === 'fail' ? true : o.outcome === 'pass' ? false : null, outcome: o.outcome || null, obs_id: o.obs_id, note: o.error || null });
   }
   for (const r of assessed) {
+    const ev = eligibilityOf(r);
     for (const o of (r.assessment.operational || {}).observations || []) {
       if (!o.observed_at) continue;
+      const b = E.bindProduct(o, ev, { savedAt: r.saved_at });
+      if (!b.bound) { unbound.push({ receipt_id: r.receipt_id, obs_id: o.obs_id, measure: 'operational', reason: `Not counted: ${b.reason}.` }); continue; }
       const key = (o.url && byUrl.get(urlKey(o.url))) || `audit:${o.url || o.check || o.obs_id}`;
       if (!operational[key]) operational[key] = { label: o.check || o.url || o.obs_id, source: 'audit', url: o.url || null, readings: [] };
-      operational[key].readings.push({ at: o.observed_at, beyond: o.outcome === 'failed' ? true : o.outcome === 'worked' ? false : null, obs_id: o.obs_id, receipt_id: r.receipt_id });
+      operational[key].readings.push({ at: o.observed_at, beyond: o.outcome === 'failed' ? true : o.outcome === 'worked' ? false : null, outcome: o.outcome, obs_id: o.obs_id, receipt_id: r.receipt_id });
     }
   }
-  for (const x of Object.values(operational)) x.readings.sort((a, b) => String(a.at).localeCompare(String(b.at)));
-  // Delivery: repository reads by the monitor and by the investigator.
-  const points = [];
-  for (const o of obs.filter((x) => x.kind === 'repository_read')) points.push({ at: o.observed_at, ok: o.status === 'ok', latest: o.latest_delivery_at || null, obs_id: o.obs_id, repository: o.repository });
+  for (const x of Object.values(operational)) x.readings = collapseSameTime(x.readings.sort((a, b) => String(a.at).localeCompare(String(b.at))), 'agree');
+  // Delivery (lifecycle@2): a monitor read stands alone; an assessment's
+  // repository list is one batch, read together. "No delivery in the window"
+  // needs every repository in scope (those Eric approved, and those read in
+  // the freshness window) read successfully within that window; any known
+  // delivery within the delivery window is "delivered"; otherwise unknown.
+  const approved = (prof.targets.repositories || []).map((t) => repoKey(`github.com/${t.owner}/${t.repo}`));
+  const batches = [];
+  for (const o of obs.filter((x) => x.kind === 'repository_read')) batches.push({ at: o.observed_at, source: 'monitor', reads: [{ repo: repoKey(o.repository), ok: o.status === 'ok', latest: o.latest_delivery_at || null, obs_id: o.obs_id }] });
   for (const r of assessed) {
+    const ev = eligibilityOf(r);
+    const reads = [];
     for (const o of (r.assessment.delivery || {}).observations || []) {
       if (!o.observed_at) continue;
+      const b = E.bindRepository(o, ev, { savedAt: r.saved_at });
+      if (!b.bound) { unbound.push({ receipt_id: r.receipt_id, obs_id: o.obs_id, measure: 'delivery', reason: `Not counted: ${b.reason}.` }); continue; }
       const latest = [o.latest_commit_at, o.latest_release_at].filter(Boolean).sort().pop() || null;
-      points.push({ at: o.observed_at, ok: Boolean(latest), latest, obs_id: o.obs_id, receipt_id: r.receipt_id, repository: o.repository });
+      reads.push({ repo: repoKey(o.repository), ok: Boolean(latest), latest, obs_id: o.obs_id, at: o.observed_at });
     }
+    if (reads.length) batches.push({ at: reads.map((x) => x.at).sort().pop(), source: 'audit', receipt_id: r.receipt_id, reads });
   }
-  points.sort((a, b) => String(a.at).localeCompare(String(b.at)));
-  let latestDelivery = null;
+  batches.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  const fresh = D.EVENTS.delivery_inactivity.freshness_hours * M.HOUR;
   const windowMs = prefs.delivery_window_days * DAY;
-  const delivery = points.map((p) => {
-    if (p.ok && p.latest && (!latestDelivery || p.latest > latestDelivery)) latestDelivery = p.latest;
-    const known = p.ok && latestDelivery;
-    return { at: p.at, beyond: known ? Date.parse(p.at) - Date.parse(latestDelivery) > windowMs : null, latest_delivery_at: latestDelivery, obs_id: p.obs_id, repository: p.repository || null };
-  });
+  const lastRead = new Map();
+  let latestDelivery = null;
+  const raw = [];
+  for (const b of batches) {
+    const t = Date.parse(b.at);
+    for (const x of b.reads) {
+      lastRead.set(x.repo, { t, ok: x.ok });
+      if (x.ok && x.latest && (!latestDelivery || x.latest > latestDelivery)) latestDelivery = x.latest;
+    }
+    const scope = new Set([...approved, ...[...lastRead.entries()].filter(([, v]) => t - v.t <= fresh).map(([k]) => k)]);
+    const covered = [...scope].filter((k) => { const v = lastRead.get(k); return v && v.ok && t - v.t <= fresh; }).length;
+    const delivered = Boolean(latestDelivery) && t - Date.parse(latestDelivery) <= windowMs;
+    const beyond = delivered ? false : scope.size && covered === scope.size ? true : null;
+    raw.push({ at: b.at, beyond, latest_delivery_at: latestDelivery, coverage: { in_scope: scope.size, read: covered }, obs_ids: b.reads.map((x) => x.obs_id), repository: b.reads.length === 1 ? b.reads[0].repo : null, receipt_id: b.receipt_id || null, note: beyond === null ? `${covered} of ${scope.size} ${scope.size === 1 ? 'repository' : 'repositories'} read successfully in the last ${Math.round(fresh / DAY)} days and no delivery known in the window: not enough to say there was none.` : null });
+  }
+  const delivery = collapseSameTime(raw, 'last');
+  // Discontinuation: only a finding stated as an observation whose references
+  // hold and tie it to the project (its own domain or a chain reference). A
+  // "primary" label alone never does.
   const discontinuation = [];
   for (const r of assessed) {
-    const primary = new Set((r.assessment.sources || []).filter((s) => s.type === 'primary' || s.type === 'chain').map((s) => s.source_id));
+    const ev = eligibilityOf(r);
     for (const f of r.assessment.findings || []) {
-      if (f.discontinuation) discontinuation.push({ at: f.event_time || r.origin, kind: f.discontinuation, primary: f.source_ids.some((s) => primary.has(s)) && f.kind === 'observation', receipt_id: r.receipt_id, finding_id: f.finding_id });
+      if (!f.discontinuation) continue;
+      const fe = ev.findings[f.finding_id];
+      const ok = Boolean(fe && fe.attributable && fe.effective_kind === 'observation');
+      const why = ok ? null : !fe ? 'not a finding' : fe.effective_kind !== 'observation' ? `read as ${fe.effective_kind}` : fe.reasons.length ? fe.reasons.join('; ') : 'none of its sources is the project\'s own domain or a chain reference';
+      discontinuation.push({ at: f.event_time || f.retrieved_at || r.assessment_as_of || r.origin, kind: f.discontinuation, primary: ok, receipt_id: r.receipt_id, finding_id: f.finding_id, why_not: why });
     }
   }
-  return { liquidity, liqObs, operational, delivery, latestDelivery, discontinuation, observations: obs };
+  return { liquidity, liqObs, operational, delivery, latestDelivery, discontinuation, observations: obs, unbound, tax };
 }
 
 // What happened by each checkpoint of a receipt, under the receipt's own
 // frozen preferences: [{ checkpoint, deadline, event, result }].
-function resolveReceipt(ws, pid, receipt, { receipts, now = Date.now() }) {
-  const r = readingsFor(ws, pid, { receipts, prefs: receipt.preferences, now });
+function resolveReceipt(ws, pid, receipt, { receipts, now = Date.now(), taxOf = null, readings = null }) {
+  const r = readings || readingsFor(ws, pid, { receipts, prefs: receipt.preferences, now, identityReceipt: receipt, taxOf: taxOf || taxIndex(ws, pid, now) });
   const out = [];
   for (const c of receipt.deadlines || []) {
     for (const e of D.EVENT_IDS) {
@@ -1019,29 +1215,52 @@ function resolveReceipt(ws, pid, receipt, { receipts, now = Date.now() }) {
   return out;
 }
 
+const methodOf = (line) => line.method || 'cr-forensic-method@1';
+
 // Records the outcomes that are due and not yet on record (the monitor job;
-// never a read). Append-only: an outcome on record is never rewritten.
+// never a read). Append-only: an outcome on record is never rewritten. An
+// outcome the desk recorded under the earlier method (cr-forensic-method@1,
+// before the independent review's corrections) that this method reads
+// differently gets one correction line naming both methods and the reason;
+// the line it corrects stays, and Eric's own corrections are left as they are.
 function recordDueResolutions(ws, pid, { now = Date.now() } = {}) {
   const receipts = listReceipts(ws, pid).filter((x) => !x.broken);
+  const taxOf = taxIndex(ws, pid, now);
   let written = 0;
+  let corrected = 0;
   for (const rc of investigatorReceipts(receipts)) {
-    const have = new Set(resolutionsOf(ws, pid, rc.receipt_id).map((x) => `${x.checkpoint}:${x.event}`));
-    const due = resolveReceipt(ws, pid, rc, { receipts, now }).filter((x) => x.result.outcome !== 'pending' && !have.has(`${x.checkpoint}:${x.event}`));
-    if (!due.length) continue;
+    const latestOf = new Map();
+    for (const x of resolutionsOf(ws, pid, rc.receipt_id)) latestOf.set(`${x.checkpoint}:${x.event}`, x);
     const at = iso(now);
-    const lines = due.map((x) => ({ schema_version: 'cr.forensic-resolution.v1', entry_id: `rs_${sha256(`${rc.receipt_id}:${x.checkpoint}:${x.event}:${at}`).slice(0, 14)}`, receipt_id: rc.receipt_id, checkpoint: x.checkpoint, deadline: x.deadline, event: x.event, event_version: D.EVENTS_VERSION, outcome: x.result.outcome, at: x.result.at || null, reason: x.result.reason || null, basis: { readings: x.result.readings ?? null, first_at: x.result.first_at || null, last_at: x.result.last_at || null }, recorded_at: at, recorded_by: ws.actor || 'forensics', corrects: null }));
+    const lines = [];
+    for (const x of resolveReceipt(ws, pid, rc, { receipts, now, taxOf })) {
+      if (x.result.outcome === 'pending') continue;
+      const key = `${x.checkpoint}:${x.event}`;
+      const prev = latestOf.get(key);
+      const entry = { schema_version: 'cr.forensic-resolution.v1', entry_id: `rs_${sha256(`${rc.receipt_id}:${key}:${at}`).slice(0, 14)}`, receipt_id: rc.receipt_id, checkpoint: x.checkpoint, deadline: x.deadline, event: x.event, event_version: D.EVENTS_VERSION, method: D.METHOD_VERSION, outcome: x.result.outcome, at: x.result.at || null, reason: x.result.reason || null, basis: { readings: x.result.readings ?? null, first_at: x.result.first_at || null, last_at: x.result.last_at || null }, recorded_at: at, recorded_by: ws.actor || 'forensics', corrects: null };
+      if (!prev) { lines.push(entry); continue; }
+      const manual = prev.corrects && !prev.method;
+      if (manual || methodOf(prev) === D.METHOD_VERSION || prev.outcome === x.result.outcome) continue;
+      lines.push({ ...entry, entry_id: `rs_${sha256(`${rc.receipt_id}:${key}:${at}:m`).slice(0, 14)}`, corrects: prev.entry_id, previous_method: methodOf(prev), reason: `Re-read under ${D.METHOD_VERSION} (${D.METHOD.parts.join(', ')}) with the readings on record: ${x.result.reason || `${x.result.outcome.replace(/_/g, ' ')}.`} The ${prev.outcome.replace(/_/g, ' ')} line recorded under ${methodOf(prev)} stays on record.` });
+    }
+    if (!lines.length) continue;
     const rel = resolutionsRel(pid, rc.receipt_id);
-    runOp(ws, { type: 'forensic_resolutions', summary: `Record ${lines.length} checkpoint outcome(s) for ${rc.receipt_id}` }, (op) => {
+    const res = runOp(ws, { type: 'forensic_resolutions', summary: `Record ${lines.length} checkpoint outcome(s) for ${rc.receipt_id}` }, (op) => {
       const cur = op.readText(rel, '');
-      const already = new Set(cur.split('\n').filter(Boolean).map((l) => { try { const j = JSON.parse(l); return `${j.checkpoint}:${j.event}`; } catch (_) { return null; } }).filter(Boolean));
-      const fresh = lines.filter((l) => !already.has(`${l.checkpoint}:${l.event}`));
+      const latest = new Map();
+      for (const l of cur.split('\n').filter(Boolean)) { try { const j = JSON.parse(l); latest.set(`${j.checkpoint}:${j.event}`, j); } catch (_) { /* a broken line is kept as it is */ } }
+      // Under the lock: another run may have recorded or corrected meanwhile.
+      const fresh = lines.filter((l) => { const p = latest.get(`${l.checkpoint}:${l.event}`); return l.corrects ? p && p.entry_id === l.corrects : !p; });
       if (!fresh.length) return { noop: true };
       op.write(rel, `${cur}${cur && !cur.endsWith('\n') ? '\n' : ''}${fresh.map((l) => JSON.stringify(l)).join('\n')}\n`);
-      return { written: fresh.length };
+      return { written: fresh.filter((l) => !l.corrects).length, corrected: fresh.filter((l) => l.corrects).length };
     });
-    written += due.length;
+    if (res.result && !res.result.noop) {
+      written += res.result.written || 0;
+      corrected += res.result.corrected || 0;
+    }
   }
-  return { written };
+  return { written, corrected };
 }
 
 // Eric's correction of a recorded outcome: a new line that names the one it
@@ -1076,20 +1295,30 @@ function sourceIndex(a) {
   return Object.fromEntries((a.sources || []).map((s) => [s.source_id, s]));
 }
 
-function view(ws, pid, { now = Date.now() } = {}) {
+// The tab's read model. receipt: an earlier assessment receipt to show in
+// place of the latest one (its findings, grades, sources and timeline);
+// the observed states and the monitoring stay current, apart from it.
+function view(ws, pid, { now = Date.now(), receipt: wantReceipt = null } = {}) {
   const project = require('./projects').getProject(ws, pid);
   const prefs = prefsOf(ws);
   const held = heldProviders(ws);
   const audits = listAudits(ws, pid);
   const receipts = listReceipts(ws, pid).filter((r) => !r.broken);
   const assessed = investigatorReceipts(receipts);
-  const current = assessed[assessed.length - 1] || null;
+  const latestReceipt = assessed[assessed.length - 1] || null;
+  let current = latestReceipt;
+  if (wantReceipt) {
+    current = assessed.find((x) => x.receipt_id === wantReceipt) || null;
+    if (!current) throw new OpError('NOT_FOUND', `No forensic assessment ${wantReceipt} for ${project.name}.`);
+  }
   const challenges = receipts.filter((r) => r.kind === 'challenge').sort((a, b) => String(a.saved_at).localeCompare(String(b.saved_at)));
   const latest = require('./market').readLatest(ws);
   const cg = project.identity && project.identity.status === 'verified' ? project.identity.coingecko_id : null;
   const mk = cg && latest.assets ? latest.assets[cg] : null;
   const usePrefs = current ? current.preferences : prefs;
-  const r = readingsFor(ws, pid, { receipts, prefs: usePrefs, marketPriceUsd: mk ? mk.price_usd : null, now });
+  const prof = readProfile(ws, pid);
+  const taxOf = taxIndex(ws, pid, now);
+  const r = readingsFor(ws, pid, { receipts, prefs: usePrefs, marketPriceUsd: mk ? mk.price_usd : null, now, identityReceipt: current, taxOf, profile: prof });
   // Outcome states now.
   const liquidityState = M.evaluateEvent(D.EVENTS.liquidity_impairment, r.liquidity, { now });
   const opChecks = Object.entries(r.operational).map(([key, x]) => ({ key, label: x.label, source: x.source, url: x.url, ...M.evaluateEvent(D.EVENTS.operational_degradation, x.readings, { now }), recent: x.readings.slice(-8) }));
@@ -1098,28 +1327,37 @@ function view(ws, pid, { now = Date.now() } = {}) {
   const discState = M.discontinuationState(r.discontinuation);
   // Liquidity tables.
   const sizes = [...new Set([...usePrefs.exit_sizes_usd, usePrefs.exit_position_usd])].sort((a, b) => a - b);
-  const exits = M.exitTable(r.liqObs, sizes, { marketPriceUsd: mk ? mk.price_usd : null });
+  const exits = M.exitTable(r.liqObs, sizes, { marketPriceUsd: mk ? mk.price_usd : null, taxOf: r.tax, now });
   const reported = r.liqObs.filter((o) => o.kind === 'reported_liquidity' || (o.kind === 'pool_reserves' && o.reported_liquidity_usd !== null)).map((o) => ({ obs_id: o.obs_id, venue: o.venue, pool: o.pool, chain: o.chain, mechanism: o.mechanism, reported_liquidity_usd: o.reported_liquidity_usd, retrieved_at: o.retrieved_at, source_id: o.source_id, receipt_id: o.receipt_id }));
   const series = volumeSeries(ws, cg, { now, days: 150 });
   const origin = current ? current.origin : null;
   // Scenarios.
+  const costPoints = r.liquidity.filter((x) => x.cost_pct !== null);
   const scen = {
     volume: M.scenarioEstimates(series, { threshold: current ? current.thresholds.volume_review_usd : null, worse: 'lower', origin, now, metric: 'volume_24h_usd' }),
-    exit_cost: M.scenarioEstimates(M.dailySeries(r.liquidity.filter((x) => x.cost_pct !== null).map((x) => ({ at: x.at, value: x.cost_pct }))), { threshold: usePrefs.exit_cost_limit_pct, worse: 'higher', origin, now, metric: 'exit_cost_pct', unit: 'pct' }),
+    exit_cost: M.scenarioEstimates(M.dailySeries(costPoints.map((x) => ({ at: x.at, value: x.cost_pct }))), { threshold: usePrefs.exit_cost_limit_pct, worse: 'higher', origin, now, metric: 'exit_cost_pct', unit: 'pct' }),
     delivery: M.deliveryCrossing(r.latestDelivery, usePrefs.delivery_window_days, { origin }),
     not_projected: D.SCENARIOS.not_projected,
   };
+  const lower = costPoints.filter((x) => x.cost_complete === false).length;
+  if (lower) scen.exit_cost.cost_note = `${lower} of ${costPoints.length} cost readings are lower bounds (network fee or transfer tax unknown), so this series can understate the cost.`;
   if (usePrefs.reported_liquidity_review_usd) scen.reported_liquidity = M.scenarioEstimates(M.dailySeries(reported.filter((x) => x.reported_liquidity_usd !== null).map((x) => ({ at: x.retrieved_at, value: x.reported_liquidity_usd }))), { threshold: usePrefs.reported_liquidity_review_usd, worse: 'lower', origin, now, metric: 'reported_liquidity_usd' });
-  // The timeline from the current receipt's frozen origin.
+  // The timeline from the shown receipt's frozen origin.
   let tl = null;
   if (current) {
     const recorded = resolutionsOf(ws, pid, current.receipt_id);
-    const live = resolveReceipt(ws, pid, current, { receipts, now });
+    const live = resolveReceipt(ws, pid, current, { receipts, now, readings: r });
     const pick = (event, c) => {
       const rec = recorded.filter((x) => x.checkpoint === c.id && x.event === event).pop();
-      if (rec) return { outcome: rec.outcome, at: rec.at || null, reason: rec.reason || null, recorded: true, entry_id: rec.entry_id, corrects: rec.corrects || null };
       const l = live.find((x) => x.checkpoint === c.id && x.event === event);
-      return l ? { ...l.result, recorded: false } : { outcome: 'pending', recorded: false };
+      if (rec) {
+        const out = { outcome: rec.outcome, at: rec.at || null, reason: rec.reason || null, recorded: true, entry_id: rec.entry_id, corrects: rec.corrects || null, method: methodOf(rec), previous_method: rec.previous_method || null };
+        // Recorded under the earlier method and read differently now: said,
+        // until the monitor's next run records the correction line.
+        if (l && l.result.outcome !== 'pending' && l.result.outcome !== rec.outcome && methodOf(rec) !== D.METHOD_VERSION && !(rec.corrects && !rec.method)) out.differs_now = { outcome: l.result.outcome, reason: l.result.reason || null, method: D.METHOD_VERSION };
+        return out;
+      }
+      return l ? { ...l.result, recorded: false, method: D.METHOD_VERSION } : { outcome: 'pending', recorded: false };
     };
     const conditional = [];
     for (const [metric, s] of Object.entries({ volume: scen.volume, exit_cost: scen.exit_cost })) {
@@ -1129,7 +1367,6 @@ function view(ws, pid, { now = Date.now() } = {}) {
     if (scen.delivery.status === 'estimated' && scen.delivery.within_horizon) conditional.push({ metric: 'delivery', scenario: 'no_new_delivery', crosses_at: scen.delivery.crosses_at, direction: 'beyond', words: scen.delivery.words });
     tl = M.timeline({ origin: current.origin, deadlines: current.deadlines, now, resolve: pick, conditional, watch: current.assessment.watch_items || [] });
   }
-  const prof = readProfile(ws, pid);
   const proposed = current ? current.assessment.monitoring_targets : { product_checks: [], repositories: [] };
   const approvedUrls = new Set((prof.targets.product_checks || []).map((t) => t.url));
   const approvedRepos = new Set((prof.targets.repositories || []).map((t) => `${t.owner}/${t.repo}`.toLowerCase()));
@@ -1137,9 +1374,17 @@ function view(ws, pid, { now = Date.now() } = {}) {
   const approvedQuotes = new Set((prof.targets.exit_quotes || []).map((t) => t.target_id));
   const lastQuote = (tid) => r.observations.filter((o) => o.target_id === tid && o.kind === 'executable_quote').pop() || null;
   const a = current ? current.assessment : null;
-  const sIdx = a ? sourceIndex(a) : {};
-  const findingById = a ? Object.fromEntries(a.findings.map((f) => [f.finding_id, f])) : {};
+  // One finding index for the headline, the detail, the grades and the
+  // export: the kind shown is the eligibility pass's effective kind, the
+  // author's kind kept as original metadata.
+  const ev = current ? eligibilityOf(current) : null;
+  const findingsV = a ? a.findings.map((f) => {
+    const fe = ev.findings[f.finding_id];
+    return { ...f, flags: (current.checks || []).filter((c) => c.finding_id === f.finding_id), shown_kind: fe.effective_kind, original_kind: f.kind, kind_note: fe.kind_note, eligibility: { standing: fe.standing, eligible: fe.eligible, attributable: fe.attributable, missing: fe.missing, usable_sources: fe.usable_sources, reasons: fe.reasons } };
+  }) : [];
+  const findingById = Object.fromEntries(findingsV.map((f) => [f.finding_id, f]));
   const keyFinding = (refx) => (refx && refx.finding_id ? { ...refx, finding: findingById[refx.finding_id] || null } : refx || null);
+  const sourcesV = a ? a.sources.map((s) => ({ ...s, check: ev.sources[s.source_id] })) : [];
   const challengeOf = current ? challenges.filter((c) => c.challenges_receipt_id === current.receipt_id).pop() || null : null;
   const earlierChallenge = !challengeOf && challenges.length ? challenges[challenges.length - 1] : null;
   let controls = null;
@@ -1148,13 +1393,17 @@ function view(ws, pid, { now = Date.now() } = {}) {
   } catch (_) {
     controls = { state: 'unavailable', reason: 'The saved contract screen could not be read.' };
   }
+  const heldCount = findingsV.filter((f) => f.eligibility.eligible).length;
+  // The evidence-change review queue, from the observations already read.
+  const evidenceChanges = require('./forensic-review').queue(ws, pid, { receipts: assessed, observations: r.observations, profile: prof, limitPct: usePrefs.exit_cost_limit_pct, tax: r.tax, currentId: latestReceipt ? latestReceipt.receipt_id : null });
   return {
     schema_version: 'cr.forensic-view.v1',
     project_id: pid,
     name: project.name,
     generated_at: iso(now),
     read_only: true,
-    definitions: { events: D.EVENTS, liquidity: D.LIQUIDITY, scenarios: D.SCENARIOS, probability: D.PROBABILITY, rubric: D.RUBRIC, areas: D.AREAS, checkpoints: D.CHECKPOINTS, unsupported: D.UNSUPPORTED, hash_note: D.HASH_NOTE },
+    method: D.METHOD,
+    definitions: { events: D.EVENTS, liquidity: D.LIQUIDITY_2, scenarios: D.SCENARIOS_2, probability: D.PROBABILITY, rubric: D.RUBRIC, areas: D.AREAS, checkpoints: D.CHECKPOINTS, unsupported: D.UNSUPPORTED, hash_note: D.HASH_NOTE, eligibility: E.VERSION },
     // How readings arrive on this desk now. cr-forensic-events@1 is kept as
     // published; its cadence sentence predates the monitor's exit quotes.
     cadence_now: { liquidity_impairment: XQ.cadenceWords(monitorCfg(ws)) },
@@ -1163,15 +1412,21 @@ function view(ws, pid, { now = Date.now() } = {}) {
     roles: { investigator: { provider: 'claude', on_hold: Boolean(held.claude) }, challenge: { provider: 'chatgpt', on_hold: Boolean(held.chatgpt) }, gemini: { role: null, on_hold: Boolean(held.gemini), note: 'Gemini has no forensic role in this release.' } },
     audits: audits.filter((x) => !x.broken).map((x) => ({ audit_id: x.audit_id, created_at: x.created_at, channel: x.channel, prompt: x.prompt, evidence_packet: x.evidence_packet, owner_focus: x.owner_focus || null, jobs: Object.fromEntries(Object.entries(x.jobs || {}).map(([k, j]) => [k, jobView(j, now)])) })),
     open_audit: (() => { const o = openAudit(ws, pid); return o ? o.audit_id : null; })(),
+    selected: current ? { receipt_id: current.receipt_id, is_latest: current === latestReceipt, latest_receipt_id: latestReceipt ? latestReceipt.receipt_id : null } : null,
     current: current ? {
       receipt_id: current.receipt_id,
       audit_id: current.audit_id,
+      is_latest: current === latestReceipt,
       model: current.model,
       versions: current.versions,
+      method: current.method || 'cr-forensic-method@1',
       origin: current.origin,
       origin_basis: current.origin_basis,
+      origin_of: current.origin_of || null,
+      assessment_as_of: current.assessment_as_of || current.origin,
+      predecessor: current.predecessor || null,
       saved_at: current.saved_at,
-      age_hours: Math.max(0, Math.round((now - Date.parse(current.origin)) / 360000) / 10),
+      age_hours: Math.max(0, Math.round((now - Date.parse(current.assessment_as_of || current.origin)) / 360000) / 10),
       deadlines: current.deadlines,
       revision_of: current.revision_of,
       revision: current.revision,
@@ -1184,15 +1439,17 @@ function view(ws, pid, { now = Date.now() } = {}) {
       preferences: current.preferences,
       thresholds: current.thresholds,
       plain_assessment: a.plain_assessment,
-      coverage: M.coverageOf(a),
+      coverage: E.coverage(a, ev),
+      eligibility: { version: E.VERSION, findings: findingsV.length, references_hold: heldCount, report_claims: findingsV.length - heldCount, sources: sourcesV.length, sources_usable: sourcesV.filter((s) => s.check.usable).length, note: 'References hold: every cited source exists, is dated and preserved something to re-read. That is not verification: the desk does not check that a source says what a finding says.' },
+      not_counted: r.unbound,
       strongest_concern: keyFinding(a.strongest_concern),
       strongest_counterevidence: keyFinding(a.strongest_counterevidence),
       explanations_compared: a.explanations_compared,
-      findings: a.findings.map((f) => ({ ...f, flags: current.checks.filter((c) => c.finding_id === f.finding_id), shown_kind: f.wallet_relation === 'inferred_common_control' && f.kind === 'observation' ? 'inference' : f.kind })),
+      findings: findingsV,
       claims: a.claims,
-      sources: a.sources,
-      source_index: sIdx,
-      category_grades: a.category_grades,
+      sources: sourcesV,
+      source_index: Object.fromEntries(sourcesV.map((s) => [s.source_id, s])),
+      category_grades: Object.fromEntries(Object.entries(a.category_grades).map(([id, g]) => [id, { ...g, desk: ev.grades[id] }])),
       scenarios: a.scenarios,
       watch_items: a.watch_items,
       conditions: a.conditions,
@@ -1202,25 +1459,31 @@ function view(ws, pid, { now = Date.now() } = {}) {
       probability: current.probability,
       liquidity_notes: a.liquidity.notes,
     } : null,
-    challenge: challengeOf ? { receipt_id: challengeOf.receipt_id, model: challengeOf.model, as_of: challengeOf.as_of, saved_at: challengeOf.saved_at, challenges_receipt_id: challengeOf.challenges_receipt_id, ...challengeOf.challenge, validation: challengeOf.validation } : null,
+    challenge: challengeOf ? (() => {
+      const cev = E.evaluate({ sources: challengeOf.challenge.sources || [], findings: [] }, { identity: current.identity });
+      return { receipt_id: challengeOf.receipt_id, model: challengeOf.model, as_of: challengeOf.as_of, saved_at: challengeOf.saved_at, challenges_receipt_id: challengeOf.challenges_receipt_id, assessment_sha256: challengeOf.assessment_sha256, text_sha256: challengeOf.text && challengeOf.text.sha256, ...challengeOf.challenge, sources: (challengeOf.challenge.sources || []).map((s) => ({ ...s, check: cev.sources[s.source_id] })), validation: challengeOf.validation };
+    })() : null,
     earlier_challenge: earlierChallenge ? { receipt_id: earlierChallenge.receipt_id, challenges_receipt_id: earlierChallenge.challenges_receipt_id, saved_at: earlierChallenge.saved_at } : null,
     states: {
       liquidity: { ...liquidityState, definition: D.EVENTS.liquidity_impairment, position_usd: usePrefs.exit_position_usd, limit_pct: usePrefs.exit_cost_limit_pct, recent: r.liquidity.slice(-8) },
       operational: { ...opState, definition: D.EVENTS.operational_degradation, checks: opChecks },
       delivery: { ...deliveryState, definition: D.EVENTS.delivery_inactivity, latest_delivery_at: r.latestDelivery, window_days: usePrefs.delivery_window_days, recent: r.delivery.slice(-8) },
-      discontinuation: { ...discState, definition: D.EVENTS.confirmed_discontinuation },
+      discontinuation: { ...discState, definition: D.EVENTS.confirmed_discontinuation, not_counted: r.discontinuation.filter((x) => !x.primary).map((x) => ({ receipt_id: x.receipt_id, finding_id: x.finding_id, kind: x.kind, why_not: x.why_not })) },
     },
     liquidity: {
       categories: D.LIQUIDITY.categories,
       exits,
       reported_reserves: reported,
       observed_volume: { source: 'CoinGecko 24-hour volume, stored hourly by this desk (one median per UTC day)', latest: series.length ? series[series.length - 1] : null, days: series.slice(-60).map((p) => ({ day: p.day, value: p.value })), volume_to_liquidity_review_ratio: usePrefs.volume_to_liquidity_review_ratio },
-      suspected_artificial: a ? a.findings.filter((f) => f.area === 'liquidity' && /\b(wash|artificial|inorganic|self[- ]trad)/i.test(f.statement)).map((f) => ({ finding_id: f.finding_id, kind: f.kind, statement: f.statement, method_stated: Boolean(f.basis.length || /method/i.test(f.statement)) })) : [],
+      suspected_artificial: findingsV.filter((f) => f.area === 'liquidity' && /\b(wash|artificial|inorganic|self[- ]trad)/i.test(f.statement)).map((f) => ({ finding_id: f.finding_id, kind: f.shown_kind, statement: f.statement, method_stated: Boolean(f.basis.length || /method/i.test(f.statement)) })),
+      completeness: D.LIQUIDITY_2.completeness,
+      one_way: D.LIQUIDITY_2.one_way,
       note: D.LIQUIDITY.note,
     },
     controls,
     scenarios: scen,
     timeline: tl,
+    evidence_changes: evidenceChanges,
     desk_triggers: {
       worsen: [
         `Exit cost for $${usePrefs.exit_position_usd} above your ${usePrefs.exit_cost_limit_pct}% limit in every reading for 72 hours (an aggregator quote, or no route).`,
@@ -1230,7 +1493,7 @@ function view(ws, pid, { now = Date.now() } = {}) {
         ...(controls && Array.isArray(controls.alerts) && controls.alerts.length ? controls.alerts.map((x) => `GoPlus: ${x.words}`) : []),
       ],
       improve: [
-        'Back within your exit-cost limit for 72 hours.',
+        'Back within your exit-cost limit for 72 hours (a complete cost: network fee and transfer tax known).',
         'A failing product check passes again for 12 hours.',
         'A new release or default-branch commit.',
         'An attributable reversal of a shutdown.',
@@ -1251,11 +1514,16 @@ function view(ws, pid, { now = Date.now() } = {}) {
         const last = lastQuote(t.target_id);
         return { ...t, provider_label: (XQ.PROVIDERS[t.provider] || {}).label || t.provider, last_at: last ? last.observed_at : null, last_status: last ? last.status : null };
       }),
-      recent: r.observations.slice(-40).reverse().map((o) => ({ obs_id: o.obs_id, kind: o.kind, target_id: o.target_id, label: o.label || null, url: o.url || null, repository: o.repository || null, observed_at: o.observed_at, outcome: o.outcome || o.status || null, http_status: o.http_status || null, error: o.error || null, latest_delivery_at: o.latest_delivery_at || null, body_sha256: o.body_sha256 || null, sha256: o.sha256, excerpt: o.excerpt || null, ...(o.kind === 'executable_quote' ? { chain: o.chain || null, provider_label: o.provider_label || null, size_usd: o.size_usd || null, received_usd: o.quote ? o.quote.received_usd : null, cost_pct: o.quote && o.size_usd ? (M.exitEstimate(o, o.size_usd) || {}).cost_pct ?? null : null, route: o.quote ? o.quote.route : null } : {}) })),
+      recent: r.observations.slice(-40).reverse().map((o) => {
+        const base = { obs_id: o.obs_id, kind: o.kind, target_id: o.target_id, label: o.label || null, url: o.url || null, repository: o.repository || null, observed_at: o.observed_at, outcome: o.outcome || o.status || null, http_status: o.http_status || null, error: o.error || null, latest_delivery_at: o.latest_delivery_at || null, body_sha256: o.body_sha256 || null, sha256: o.sha256, excerpt: o.excerpt || null };
+        if (o.kind !== 'executable_quote') return base;
+        const e = o.quote && o.size_usd ? M.exitEstimate(o, o.size_usd, { tax: r.tax(o) }) : null;
+        return { ...base, chain: o.chain || null, provider_label: o.provider_label || null, size_usd: o.size_usd || null, amount_in: o.amount_in || null, received_usd: o.quote ? o.quote.received_usd : null, cost_pct: e && e.status === 'estimated' ? e.cost_pct : null, cost_complete: e ? e.cost_complete ?? null : null, missing_costs: e ? e.missing_costs || [] : [], route: o.quote ? o.quote.route : null };
+      }),
       status: require('./forensic-monitor').statusView(ws, now),
     },
-    receipts: [...assessed].reverse().map((x) => ({ receipt_id: x.receipt_id, audit_id: x.audit_id, model: x.model, origin: x.origin, saved_at: x.saved_at, revision_of: x.revision_of, revision: x.revision, evidence_added: x.evidence_added, plain_assessment: x.assessment.plain_assessment, scenarios_at_origin: x.scenarios_at_origin || null, resolutions: resolutionsOf(ws, pid, x.receipt_id) })),
-    challenges: challenges.map((c) => ({ receipt_id: c.receipt_id, challenges_receipt_id: c.challenges_receipt_id, saved_at: c.saved_at, model: c.model })),
+    receipts: [...assessed].reverse().map((x) => ({ receipt_id: x.receipt_id, audit_id: x.audit_id, model: x.model, origin: x.origin, origin_basis: x.origin_basis || null, origin_of: x.origin_of || null, assessment_as_of: x.assessment_as_of || x.origin, predecessor: x.predecessor || null, method: x.method || 'cr-forensic-method@1', saved_at: x.saved_at, revision_of: x.revision_of, revision: x.revision, evidence_added: x.evidence_added, text_sha256: x.text && x.text.sha256, plain_assessment: x.assessment.plain_assessment, scenarios_at_origin: x.scenarios_at_origin || null, resolutions: resolutionsOf(ws, pid, x.receipt_id), selected: x === current, latest: x === latestReceipt })),
+    challenges: challenges.map((c) => ({ receipt_id: c.receipt_id, challenges_receipt_id: c.challenges_receipt_id, saved_at: c.saved_at, model: c.model, text_sha256: c.text && c.text.sha256 })),
   };
 }
 
@@ -1312,6 +1580,12 @@ module.exports = {
   setMonitoring,
   appendObservation,
   readingsFor,
+  taxIndex,
+  eligibilityOf,
+  evidenceKey,
+  urlKey,
+  verifiedFrozen,
+  receiptText,
   resolveReceipt,
   recordDueResolutions,
   correctResolution,

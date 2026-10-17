@@ -341,10 +341,13 @@ try {
     const drawn = await tab.evalJs("__wait(() => document.querySelector('.fx-cps') && /forensics/.test(location.hash), 8000)");
     ok(Boolean(drawn), 'forensics flow: the project page\'s Forensics tab draws the timeline');
     ok(tab.writes.length === before, 'forensics flow: opening it wrote nothing', tab.writes.slice(before));
-    // The order the brief sets: assessment, concern and counterevidence, states, timeline, conditions, details.
+    // The order: assessment, concern + next + counterevidence, evidence
+    // changes, states, timeline, conditions, details (review F14).
     const order = await tab.evalJs("[...document.querySelectorAll('.fx > *')].map((n) => n.className.split(' ').filter((c) => /^fx-(assess|keys|card|details|actions)$/.test(c)).join(' ') + ':' + ((n.querySelector('.fx-h') || {}).textContent || ''))");
     report.forensics_order = order;
-    ok(/assess/.test(order[0] || '') && /keys/.test(order[1] || '') && /Current states/.test(order[2] || '') && /Resilience timeline/.test(order[3] || '') && /outlook/.test(order[4] || '') && /details/.test(order[5] || ''), 'forensics: sections in the brief\'s order', order);
+    ok(/assess/.test(order[0] || '') && /keys/.test(order[1] || '') && /fx-card/.test(order[2] || '') && /Evidence changes/.test(order[3] || '') && /Current states/.test(order[4] || '') && /Resilience timeline/.test(order[5] || '') && /outlook/.test(order[6] || '') && /details/.test(order[7] || ''), 'forensics: sections in the brief\'s order', order);
+    const keysOrder = await tab.evalJs("[...document.querySelectorAll('.fx-keys > *')].map((n) => n.className)");
+    ok(/is-concern/.test(keysOrder[0] || '') && /fx-next/.test(keysOrder[1] || '') && /is-counter/.test(keysOrder[2] || ''), 'forensics: concern, then the next action, then counterevidence, in reading order', keysOrder);
     // Observed outcomes and conditional estimates are drawn apart; no percentage.
     const facts = await tab.evalJs("({ past: document.querySelectorAll('.fx-cp.is-past').length, cond: document.querySelectorAll('.fx-cp-cond li').length, label: /not a calibrated probability/.test(document.querySelector('.fx-legend').textContent), pct: /\\d+(\\.\\d+)?\\s?% (chance|probability)/i.test(document.querySelector('.fx').textContent), unknownZero: [...document.querySelectorAll('.fx-exit-cost')].some((n) => n.textContent.trim() === '0.00%') })");
     report.forensics_facts = facts;
@@ -376,7 +379,74 @@ try {
       ok(await tab.evalJs("!document.querySelector('dialog.fx-dialog[open]') && /fx-import/.test((document.activeElement || {}).dataset ? document.activeElement.dataset.key : '')"), 'forensics: Escape closes the dialog and focus returns to its button');
     }
     ok(tab.writes.length === before, 'forensics: reading, folding and closing wrote nothing', tab.writes.slice(before));
+    // F13: an earlier receipt by its address; a reload keeps the choice; Back
+    // returns to the latest. Its own receipt ID is shown.
+    await go(tab, `#/project/${P.relay}/forensics`, "document.querySelector('.fx-cps')");
+    const rel = await tab.evalJs("[...document.querySelectorAll('[data-key^=\"fx-show-\"]')].map((a) => a.dataset.key.slice(8))");
+    ok(rel.length >= 1, 'forensics: an earlier receipt can be chosen', rel);
+    if (rel.length) {
+      const early = rel[0];
+      await tab.evalJs(`(() => { document.querySelector('[data-key="fx-receipts"]').open = true; document.querySelector('[data-key="fx-show-${early}"]').click(); return true; })()`);
+      const shown = await tab.evalJs(`__wait(() => /receipt=${early}/.test(location.hash) && document.querySelector('.fx-hist') && [...document.querySelectorAll('.fx-meta .fx-mono')].some((n) => n.textContent === '${early}'), 8000)`);
+      ok(Boolean(shown), 'forensics: the earlier receipt is shown whole, with its own ID and a note that it is history');
+      await tab.evalJs('setTimeout(() => location.reload(), 0); true');
+      await sleep(2500);
+      await tab.evalJs(WAIT);
+      const kept = await tab.evalJs(`__wait(() => document.querySelector('.fx-hist') && /receipt=${early}/.test(location.hash), 10000)`);
+      ok(Boolean(kept), 'forensics: a reload keeps the chosen receipt');
+      await tab.evalJs('history.back(); true');
+      const back = await tab.evalJs("__wait(() => !/receipt=/.test(location.hash) && document.querySelector('.fx-cps') && !document.querySelector('.fx-hist'), 8000)");
+      ok(Boolean(back), 'forensics: Back returns to the latest assessment');
+      // A slow answer for one receipt never replaces a later choice.
+      const latest = await tab.evalJs("(document.querySelector('.fx-meta .fx-mono') || {}).textContent || ''");
+      await tab.evalJs(`(() => { const real = window.fetch; window.__fxReal = real; window.fetch = (u, o) => (String(u).includes('receipt=${early}') ? new Promise((r) => setTimeout(r, 1500)).then(() => real(u, o)) : real(u, o)); location.hash = location.hash.split('?')[0] + '?receipt=${early}'; setTimeout(() => { location.hash = location.hash.split('?')[0]; }, 150); return true; })()`);
+      await sleep(2600);
+      const after = await tab.evalJs("({ id: (document.querySelector('.fx-meta .fx-mono') || {}).textContent || '', hist: Boolean(document.querySelector('.fx-hist')), hash: location.hash })");
+      await tab.evalJs('window.fetch = window.__fxReal || window.fetch; true');
+      ok(after.id === latest && !after.hist && !/receipt=/.test(after.hash), 'forensics: a delayed answer for an earlier receipt does not replace the latest one chosen after it', { latest, after });
+    }
+    // F12: the original opens in the app, its hash checked, through the
+    // signed-in client; Escape closes it and focus returns.
+    await tab.evalJs("(() => { document.querySelector('[data-key=\"fx-receipts\"]').open = true; const b = document.querySelector('[data-key^=\"fx-text-fr_\"]'); b.focus(); return true; })()");
+    await tab.key('Enter', { vk: 13 });
+    const viewer = await tab.evalJs("__wait(() => { const d = document.querySelector('dialog.fx-viewer[open]'); return d && /matches the receipt/.test(d.textContent) && d.querySelector('.fx-viewer-text').textContent.length > 500; }, 8000)");
+    ok(Boolean(viewer), 'forensics: the full text as saved opens in the app with its SHA-256 checked');
+    await tab.key('Escape', { vk: 27 });
+    await sleep(300);
+    ok(await tab.evalJs("!document.querySelector('dialog.fx-viewer[open]') && /fx-text-/.test((document.activeElement && document.activeElement.dataset.key) || '')"), 'forensics: Escape closes the original and focus returns to its button');
+    ok(tab.writes.length === before, 'forensics: choosing receipts and reading originals wrote nothing', tab.writes.slice(before));
+    // The review queue: Mark reviewed is the one write, sent on its click.
+    const ack = await tab.evalJs("(() => { const b = document.querySelector('[data-key^=\"fx-ack-\"]'); if (!b) return null; const k = b.dataset.key; b.click(); return k; })()");
+    ok(Boolean(ack), 'forensics: an evidence change offers Mark reviewed');
+    const reviewed = await tab.evalJs(`__wait(() => !document.querySelector('[data-key="${ack}"]'), 8000)`);
+    const posted = tab.writes.slice(before);
+    ok(Boolean(reviewed) && posted.length === 1 && /\/forensics\/reviews$/.test(posted[0]), 'forensics: Mark reviewed sends one POST and the change reads as reviewed', posted);
     await tab.close();
+  }
+  // F14: on a phone, the whole strongest concern with its qualification is on
+  // the first screen, above the tab bar, in both themes.
+  for (const [w, h] of [[390, 844], [360, 780]]) {
+    for (const theme of ['light', 'dark']) {
+      const tab = await tabFor(w, { mobile: true, height: h, theme });
+      await go(tab, `#/project/${P.relay}/forensics`, "document.querySelector('.fx-key.is-concern')");
+      await sleep(400);
+      const m = await tab.evalJs("(() => { window.scrollTo(0, 0); const k = document.querySelector('.fx-key.is-concern .fx-key-core'); const bar = document.querySelector('.tabbar'); const fold = bar ? bar.getBoundingClientRect().top : innerHeight; const r = k.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), fold: Math.round(fold), scrollW: document.documentElement.scrollWidth - innerWidth }; })()");
+      report[`forensics_first_screen_${w}_${theme}`] = m;
+      ok(m.bottom <= m.fold && m.scrollW <= 1, `${w}x${h} ${theme}: the strongest concern and its qualification are above the tab bar`, m);
+      // The long, warning-heavy case: the qualification stays with the
+      // concern, which offers an explicit way to read it whole.
+      await go(tab, `#/project/${P.long}/forensics`, "document.querySelector('.fx-key.is-concern')");
+      await sleep(400);
+      const L = await tab.evalJs("(() => { window.scrollTo(0, 0); const k = document.querySelector('.fx-key.is-concern'); const core = k.querySelector('.fx-key-core'); const bar = document.querySelector('.tabbar'); const fold = bar ? bar.getBoundingClientRect().top : innerHeight; const q = core.querySelector('.fx-key-q'); const btn = core.querySelector('.fx-key-whole'); return { kind: (core.querySelector('.fx-kind') || {}).textContent || '', note: Boolean(q), qBottom: q ? Math.round(q.getBoundingClientRect().bottom) : null, coreTop: Math.round(core.getBoundingClientRect().top), coreBottom: Math.round(core.getBoundingClientRect().bottom), fold: Math.round(fold), button: btn ? btn.textContent : null, clamped: Boolean(core.querySelector('.fx-key-t.is-clamped')), scrollW: document.documentElement.scrollWidth - innerWidth }; })()");
+      report[`forensics_long_${w}_${theme}`] = L;
+      ok(/Hypothesis, unestablished/.test(L.kind) && L.note && L.clamped && /Show the whole concern/.test(L.button || '') && L.scrollW <= 1, `${w}x${h} ${theme} long case: the concern keeps its qualification and offers "Show the whole concern"`, L);
+      if (L.button) {
+        await tab.evalJs("document.querySelector('.fx-key.is-concern .fx-key-whole').click(); true");
+        await sleep(200);
+        ok(await tab.evalJs("!document.querySelector('.fx-key.is-concern .fx-key-t').classList.contains('is-clamped') && document.querySelector('.fx-key.is-concern .fx-key-whole').getAttribute('aria-expanded') === 'true'"), `${w}x${h} ${theme} long case: the whole concern opens in place`);
+      }
+      await tab.close();
+    }
   }
   for (const [w, mobile] of [[720, false], [640, false], [390, true], [360, true], [320, true]]) {
     const tab = await tabFor(w, { mobile, height: mobile ? 780 : 450, scale: mobile ? 2 : 2 });

@@ -52,6 +52,7 @@ node_modules/
 # Audits: only the reviewed reports below are tracked
 
 /audits/*/*
+!/audits/2026-10-16-forensics-corrections/README.md
 !/audits/2026-10-16-forensics/README.md
 !/audits/2026-10-16-forensics/PLAN.md
 !/audits/2026-10-08-react-review-fixes/README.md

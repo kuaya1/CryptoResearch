@@ -126,16 +126,51 @@ function quoteOptions(project) {
   return out;
 }
 
+// A finite positive number as an exact fraction n / d (d a power of ten),
+// read from its shortest round-trip text: the value the stored JSON holds.
+function decimalParts(x) {
+  if (!(typeof x === 'number' && Number.isFinite(x) && x > 0)) return null;
+  const m = String(x).match(/^(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i);
+  if (!m) return null;
+  let scale = (m[2] || '').length - (m[3] ? Number(m[3]) : 0);
+  let n = BigInt(`${m[1]}${m[2] || ''}`);
+  if (scale < 0) {
+    n *= 10n ** BigInt(-scale);
+    scale = 0;
+  }
+  return { n, d: 10n ** BigInt(scale) };
+}
+
+const decimalsOk = (d) => Number.isInteger(d) && d >= 0 && d <= 36;
+
 // A token amount in base units (a decimal integer string), from a whole-token
-// amount and the token's decimals; 15 significant digits are kept and the rest
-// is cut, never rounded up. null when nothing would be sold.
+// amount and the token's decimals, in integer arithmetic: cut, never rounded
+// up. Zero decimals is a valid token. null when nothing would be sold.
 function toBaseUnits(tokens, decimals) {
-  if (!(typeof tokens === 'number' && Number.isFinite(tokens) && tokens > 0) || !Number.isInteger(decimals) || decimals < 0 || decimals > 36) return null;
-  const [mant, e] = tokens.toExponential(14).split('e');
-  const digits = mant.replace('.', '');
-  const exp = Number(e) - 14 + decimals;
-  const s = (exp >= 0 ? digits + '0'.repeat(exp) : digits.slice(0, Math.max(0, digits.length + exp))).replace(/^0+/, '');
-  return s || null;
+  const t = decimalParts(tokens);
+  if (!t || !decimalsOk(decimals)) return null;
+  const v = (t.n * 10n ** BigInt(decimals)) / t.d;
+  return v > 0n ? v.toString() : null;
+}
+
+// The base units a USD size buys at a USD price: floor(size / price x
+// 10^decimals), computed exactly from the two stored numbers (no float
+// division). null when nothing would be sold.
+function baseUnitsFor(sizeUsd, priceUsd, decimals) {
+  const s = decimalParts(sizeUsd);
+  const p = decimalParts(priceUsd);
+  if (!s || !p || !decimalsOk(decimals)) return null;
+  const v = (s.n * p.d * 10n ** BigInt(decimals)) / (s.d * p.n);
+  return v > 0n ? v.toString() : null;
+}
+
+// A base-unit amount back in whole tokens, as a decimal string (exact).
+function unitsText(units, decimals) {
+  const s = String(units).padStart(decimals + 1, '0');
+  if (!decimals) return s;
+  const whole = s.slice(0, s.length - decimals);
+  const frac = s.slice(s.length - decimals).replace(/0+$/, '');
+  return frac ? `${whole}.${frac}` : whole;
 }
 
 const unitsToNumber = (s, decimals) => (typeof s === 'string' && /^\d{1,60}$/.test(s) ? Number(s) / 10 ** decimals : null);
@@ -158,8 +193,9 @@ async function getJson(url, origin, { fetchImpl, timeoutMs, headers }) {
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetchImpl(u.toString(), { headers, signal: ctrl.signal, redirect: 'error' });
-    const text = await res.text();
-    if (text.length > MAX_ANSWER_BYTES) throw new Error('Answer too large');
+    // Read while counting: an answer over the cap is cut off as it arrives,
+    // never buffered whole first (review P3). The timer covers the read.
+    const text = await require('./netguard').readBodyBounded(res, MAX_ANSWER_BYTES, ctrl);
     let body = null;
     try { body = text ? JSON.parse(text) : null; } catch (_) { body = null; }
     return { status: res.status, body, headers: res.headers };
@@ -279,25 +315,60 @@ function readKyber(res, ctx) {
 // ---------------------------------------------------------------------------
 // The token's decimals, from CoinGecko's entry for this exact contract
 
-async function lookupDecimals(ws, { coingeckoId, family, address, fetchImpl, cgGetImpl }) {
+// CoinGecko's asset platform for each chain quoted here (its /asset_platforms
+// ids; checked against the live list 2026-10-16). The same address can be a
+// different token, with different decimals, on another chain: the platform is
+// chosen by the chain first, and only then is its address compared.
+const CG_PLATFORM = Object.freeze({ 1: 'ethereum', 8453: 'base', 42161: 'arbitrum-one', 10: 'optimistic-ethereum', 137: 'polygon-pos', 43114: 'avalanche', 59144: 'linea', 130: 'unichain', 146: 'sonic', solana: 'solana' });
+
+async function lookupDecimals(ws, { coingeckoId, chainId, family, address, fetchImpl, cgGetImpl }) {
+  const platform = CG_PLATFORM[chainId];
+  if (!platform) return { decimals: null, reason: `No CoinGecko platform is on record for chain ${chainId}, so the decimals are not looked up.` };
   const cgGet = cgGetImpl || require('./intake').cgGet;
   const coin = await cgGet(ws, `/coins/${encodeURIComponent(coingeckoId)}${DETAIL_Q}`, fetchImpl, { retries: 0, maxWaitMs: 0 });
   if (!coin) return { decimals: null, reason: `CoinGecko does not know ${coingeckoId}.` };
-  const want = addressKey(family, address);
-  const hit = Object.values((coin && coin.detail_platforms) || {}).find((d) => d && typeof d.contract_address === 'string' && addressKey(family, d.contract_address) === want);
-  if (!hit) return { decimals: null, reason: `CoinGecko does not list this exact contract for ${coingeckoId}, so its decimals are not known.` };
-  if (!Number.isInteger(hit.decimal_place) || hit.decimal_place < 0 || hit.decimal_place > 36) return { decimals: null, reason: `CoinGecko lists the contract without usable decimals for ${coingeckoId}.` };
-  return { decimals: hit.decimal_place };
+  const dp = coin && coin.detail_platforms && typeof coin.detail_platforms === 'object' ? coin.detail_platforms : {};
+  const hit = Object.prototype.hasOwnProperty.call(dp, platform) ? dp[platform] : null;
+  if (!hit || typeof hit.contract_address !== 'string' || !hit.contract_address.trim()) return { decimals: null, reason: `CoinGecko lists no ${platform} contract for ${coingeckoId}; decimals from another chain are never used, so this contract's decimals are not known.` };
+  if (addressKey(family, hit.contract_address) !== addressKey(family, address)) return { decimals: null, reason: `CoinGecko's ${platform} contract for ${coingeckoId} is another address, so this contract's decimals are not known.` };
+  if (!decimalsOk(hit.decimal_place)) return { decimals: null, reason: `CoinGecko lists the ${platform} contract without usable decimals for ${coingeckoId}.` };
+  return { decimals: hit.decimal_place, platform, contract_address: hit.contract_address.trim() };
 }
 
-// The decimals recorded with this target's latest quote, while fresh.
+// The decimals recorded with this target's latest quote, while fresh: only
+// when recorded for this chain, this contract and this CoinGecko platform
+// (a record from before the platform was kept is not reused).
 function knownDecimals(observations, target, now) {
+  const platform = CG_PLATFORM[target.chain_id];
+  const info = chainInfo(target.chain_id);
+  const same = (a) => (info ? addressKey(info.family, a) === addressKey(info.family, target.contract_address) : a === target.contract_address);
   for (let i = (observations || []).length - 1; i >= 0; i--) {
     const o = observations[i];
-    if (o.target_id !== target.target_id || !o.token || !Number.isInteger(o.token.decimals) || o.contract_address !== target.contract_address) continue;
+    if (o.target_id !== target.target_id || !o.token || !decimalsOk(o.token.decimals) || String(o.chain_id) !== String(target.chain_id) || !same(o.contract_address) || !platform || o.token.platform !== platform) continue;
     const t = Date.parse(o.token.checked_at);
-    if (Number.isFinite(t) && now - t <= DECIMALS_FRESH_DAYS * 24 * HOUR) return { decimals: o.token.decimals, checked_at: o.token.checked_at };
+    if (Number.isFinite(t) && now - t <= DECIMALS_FRESH_DAYS * 24 * HOUR) return { decimals: o.token.decimals, checked_at: o.token.checked_at, platform };
   }
+  return null;
+}
+
+// The request, checked before it is sent: the chain's own path, this
+// contract, the quote currency, and an amount that sells the size asked
+// (truncation only, never more). Returns null, or why it is not sent.
+function outboundProblem(p, chain, url, { token, amountIn, decimals, priceUsd, sizeUsd }) {
+  const u = new URL(url);
+  const q = u.searchParams;
+  const tokenParam = p.id === 'jupiter' ? q.get('inputMint') : q.get('tokenIn');
+  const outParam = p.id === 'jupiter' ? q.get('outputMint') : q.get('tokenOut');
+  const amountParam = p.id === 'jupiter' ? q.get('amount') : q.get('amountIn');
+  if (u.origin !== p.origin) return 'the request is not for the quote source\'s fixed origin';
+  if (p.id !== 'jupiter' && u.pathname !== `/${chain.path}/api/v1/routes`) return 'the request names another chain';
+  if (tokenParam !== token) return 'the request names another token';
+  if (outParam !== chain.quote.address) return 'the request names another quote currency';
+  if (amountParam !== amountIn || !/^[1-9]\d{0,59}$/.test(amountIn)) return 'the request amount is not the amount computed';
+  const p2 = decimalParts(priceUsd);
+  const sold = (BigInt(amountIn) * p2.n * 1000000n) / (10n ** BigInt(decimals) * p2.d); // micro-USD
+  const want = BigInt(Math.round(sizeUsd * 1e6));
+  if (sold > want || want - sold > want / 100n + 1n) return `the amount sells $${Number(sold) / 1e6}, not the $${sizeUsd} asked`;
   return null;
 }
 
@@ -361,7 +432,7 @@ async function quoteTarget(ws, opts) {
     }
     let r;
     try {
-      r = await lookupDecimals(ws, { coingeckoId: cg, family: info.family, address: target.contract_address, fetchImpl, cgGetImpl: opts.cgGetImpl });
+      r = await lookupDecimals(ws, { coingeckoId: cg, chainId: target.chain_id, family: info.family, address: target.contract_address, fetchImpl, cgGetImpl: opts.cgGetImpl });
     } catch (err) {
       // A 429 just met closes CoinGecko's shared gate: the next run checks it
       // before asking. Anything else waits for the next interval.
@@ -372,19 +443,27 @@ async function quoteTarget(ws, opts) {
       return notQuoted(`The token's decimals could not be read from CoinGecko (${clean(err.message, 160)}).`);
     }
     if (r.decimals === null) return notQuoted(r.reason);
-    dec = { decimals: r.decimals, checked_at: isoOf(now()) };
+    dec = { decimals: r.decimals, checked_at: isoOf(now()), platform: r.platform };
   }
-  const token = { decimals: dec.decimals, source: 'CoinGecko /coins/{id} detail_platforms, for this exact contract', checked_at: dec.checked_at };
+  const token = { decimals: dec.decimals, platform: dec.platform, chain_id: target.chain_id, contract_address: target.contract_address, source: `CoinGecko /coins/{id} detail_platforms.${dec.platform}, for this exact contract`, checked_at: dec.checked_at };
   const quoteToken = { symbol: chain.quote.symbol, address: chain.quote.address, decimals: chain.quote.decimals, valued_usd: 1 };
   const valuation = `${chain.quote.symbol} valued at $1.00; the cost is measured against CoinGecko's price of ${price.as_of.slice(0, 16).replace('T', ' ')} UTC.`;
   for (const size of sizes) {
-    const amountIn = toBaseUnits(size / price.usd, dec.decimals);
+    const amountIn = baseUnitsFor(size, price.usd, dec.decimals);
     const at = () => isoOf(now());
     if (!amountIn) {
       out.observations.push({ ...base, observed_at: at(), retrieved_at: at(), size_usd: size, status: 'not_quoted', price, token, quote_token: quoteToken, quote: null, error: 'The size is below one base unit of the token at this price.' });
       continue;
     }
-    const sellUsd = round((Number(amountIn) / 10 ** dec.decimals) * price.usd, 6);
+    const amountTokens = unitsText(amountIn, dec.decimals);
+    const sellUsd = round(Number(amountTokens) * price.usd, 6);
+    const url = requestUrl(p, chain, { token: target.contract_address, amountIn });
+    // Checked before anything is sent: chain, token, currency and amount.
+    const problem = outboundProblem(p, chain, url, { token: target.contract_address, amountIn, decimals: dec.decimals, priceUsd: price.usd, sizeUsd: size });
+    if (problem) {
+      out.observations.push({ ...base, observed_at: at(), retrieved_at: at(), size_usd: size, amount_in: amountIn, status: 'not_quoted', price, token, quote_token: quoteToken, quote: null, error: `Not sent: ${problem}.` });
+      continue;
+    }
     if (!reserve()) {
       out.stop = 'budget';
       return out;
@@ -392,13 +471,12 @@ async function quoteTarget(ws, opts) {
     const wait = (lastSent.get(p.id) || 0) + p.min_interval_ms - Date.now();
     if (wait > 0) await sleep(wait);
     lastSent.set(p.id, Date.now());
-    const url = requestUrl(p, chain, { token: target.contract_address, amountIn });
     const sentAt = now();
     let res;
     try {
       res = await getJson(url, p.origin, { fetchImpl, timeoutMs: cfg.timeout_seconds * 1000, headers: headersFor(p) });
     } catch (err) {
-      out.observations.push({ ...base, observed_at: isoOf(sentAt), retrieved_at: isoOf(sentAt), size_usd: size, amount_in: amountIn, status: 'error', price, token, quote_token: quoteToken, quote: null, error: clean(`${p.label} did not answer (${err.name === 'AbortError' ? 'timeout' : err.message}). That is no reading.`, 240), note: NEVER_A_TRADE });
+      out.observations.push({ ...base, observed_at: isoOf(sentAt), retrieved_at: isoOf(sentAt), size_usd: size, amount_in: amountIn, amount_tokens: amountTokens, status: 'error', price, token, quote_token: quoteToken, quote: null, error: clean(`${p.label} did not answer (${err.name === 'AbortError' ? 'timeout' : err.message}). That is no reading.`, 240), note: NEVER_A_TRADE });
       out.failure = true;
       return out;
     }
@@ -409,7 +487,7 @@ async function quoteTarget(ws, opts) {
     }
     const ctx = { token: target.contract_address, quote: chain.quote, amountIn };
     const a = p.id === 'jupiter' ? readJupiter(res, ctx) : readKyber(res, ctx);
-    const obs = { ...base, observed_at: isoOf(sentAt), retrieved_at: isoOf(sentAt), size_usd: size, amount_in: amountIn, status: a.status, price, token, quote_token: quoteToken, http_status: a.http_status ?? res.status };
+    const obs = { ...base, observed_at: isoOf(sentAt), retrieved_at: isoOf(sentAt), size_usd: size, amount_in: amountIn, amount_tokens: amountTokens, status: a.status, price, token, quote_token: quoteToken, http_status: a.http_status ?? res.status };
     if (a.status === 'quoted') {
       obs.quote = { sell_usd: sellUsd, received_usd: round(a.received_usd, 6), fees_usd: null, fees_note: 'Pool and route fees are inside the quoted amount; not stated apart.', price_impact_pct: a.price_impact_pct, price_impact_basis: a.price_impact_basis, gas_usd: a.gas_usd, gas_included: false, route: a.route, no_route: false, valuation_note: valuation };
       Object.assign(obs, { hops: a.hops, provider_usd: a.provider_usd, context: a.context, request_id: a.request_id || null });
@@ -451,6 +529,11 @@ module.exports = {
   targetIdOf,
   quoteOptions,
   toBaseUnits,
+  baseUnitsFor,
+  unitsText,
+  decimalParts,
+  outboundProblem,
+  CG_PLATFORM,
   rateLimitUntil,
   requestUrl,
   readJupiter,

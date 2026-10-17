@@ -228,8 +228,25 @@ test('quotes speak only to their size; "no route" counts only from an aggregator
   const thinPool = M.liquidityReadings([{ kind: 'pool_reserves', mechanism: 'constant_product', base_reserve: 1e5, quote_reserve: 1e3, quote_usd_price: 1, fee_bps: 30, retrieved_at: at(T0) }], { positionUsd: 500, limitPct: 5 });
   assert.equal(thinPool[0].beyond, null);
   assert.match(thinPool[0].note, /other routes were not read/);
+  // liquidity@2 (review F09): a cost with an unknown part is a lower bound.
+  // It can show the exit over the limit, never within it.
+  const e500 = M.exitEstimate(q(500, 490), 500);
+  assert.equal(e500.cost_complete, false);
+  assert.deepEqual(e500.missing_costs, ['token transfer tax']);
+  assert.match(e500.limitations[0], /^Cost incomplete: token transfer tax unknown/, 'the missing part is the first thing said, not a tooltip');
   const wide = M.liquidityReadings([{ kind: 'pool_reserves', mechanism: 'constant_product', base_reserve: 1e7, quote_reserve: 1e6, quote_usd_price: 1, fee_bps: 30, retrieved_at: at(T0) }], { positionUsd: 500, limitPct: 5 });
-  assert.equal(wide[0].beyond, false, 'one route within the limit is evidence the exit can be done');
+  assert.equal(wide[0].beyond, null, 'a reserve calculation without the network fee and tax is not a pass');
+  assert.match(wide[0].note, /^At least .* network fee and token transfer tax unknown: not counted as within your limit/);
+  const tax0 = () => ({ pct: 0, source: 'GoPlus contract screen of 2026-10-01' });
+  const complete = M.liquidityReadings([q(500, 490)], { positionUsd: 500, limitPct: 5, taxOf: tax0 });
+  assert.equal(complete[0].beyond, false, 'a complete cost within the limit on one route is evidence the exit can be done');
+  assert.equal(complete[0].cost_complete, true);
+  const noGas = M.liquidityReadings([q(500, 499, 'aggregator', { gas_usd: null })], { positionUsd: 500, limitPct: 5, taxOf: tax0 });
+  assert.equal(noGas[0].beyond, null, 'the network fee unknown: "at least 0.2%", not within');
+  const overLow = M.liquidityReadings([q(500, 400, 'aggregator', { gas_usd: null })], { positionUsd: 500, limitPct: 5 });
+  assert.equal(overLow[0].beyond, true, 'a lower bound already over the limit, from an aggregator, is over it');
+  const taxed = M.exitEstimate(q(500, 490), 500, { tax: { pct: 10, source: 'GoPlus' } });
+  assert.ok(Math.abs(taxed.cost_pct - (100 - (100 - 2.2) * 0.9)) < 1e-6, 'a transfer tax applies to what the sale receives');
 });
 
 // ---------------------------------------------------------------------------
@@ -323,11 +340,17 @@ test('a revision keeps the original receipt, its origin and deadlines; it disclo
   const changed = FX.block(a.audit);
   const newText = FX.reportText(a.audit, { plain_assessment: 'FICTIONAL. Revised after a new disclosure page.', sources: [...changed.sources, { source_id: 'S5', url: 'https://example.com/xmpl/disclosures', publisher: 'Example PayFi', type: 'primary', retrieved_at: at(Date.now()) }] });
   assert.throws(() => F.saveReport(ws, { project_id: pid, audit_id: a.audit_id, provider: 'claude', text: newText }), /revision/);
-  assert.throws(() => F.saveReport(ws, { project_id: pid, audit_id: a.audit_id, provider: 'claude', text: FX.reportText(a.audit, { plain_assessment: 'FICTIONAL. Reworded only.' }), revision: { kind: 'new_evidence', note: 'New sources were retrieved since.' } }), /no source is new/);
+  assert.throws(() => F.saveReport(ws, { project_id: pid, audit_id: a.audit_id, provider: 'claude', text: FX.reportText(a.audit, { plain_assessment: 'FICTIONAL. Reworded only.' }), revision: { kind: 'new_evidence', note: 'New sources were retrieved since.' } }), /no source holds evidence that is new/);
   const s2 = F.saveReport(ws, { project_id: pid, audit_id: a.audit_id, provider: 'claude', text: newText, revision: { kind: 'new_evidence', note: 'A new disclosure page names the multisig signers.' } });
   assert.equal(s2.status, 'saved');
   assert.equal(s2.receipt.revision_of, s1.receipt_id);
   assert.deepEqual(s2.receipt.evidence_added.map((x) => x.source_id), ['S5']);
+  assert.equal(s2.receipt.evidence_added[0].change, 'new_address');
+  // A revision keeps the forecast it revises (review F05).
+  assert.equal(s2.receipt.origin, s1.receipt.origin);
+  assert.equal(s2.receipt.origin_basis, 'inherited');
+  assert.deepEqual(s2.receipt.deadlines, s1.receipt.deadlines);
+  assert.deepEqual(s2.receipt.thresholds, s1.receipt.thresholds);
   assert.equal(sha256(fs.readFileSync(file1)), hash1, 'the original receipt is unchanged');
   assert.equal(sha256(fs.readFileSync(path.join(root, s1.receipt.text.path))), text1, 'the original text is unchanged');
   const orig = F.loadReceipt(ws, pid, s1.receipt_id);
@@ -396,7 +419,7 @@ test('outcomes come due after their checkpoint, are recorded once, and a correct
   // 60-day window passes 60 days after it.
   const lastDelivery = at(O - 50 * DAY);
   for (let d = 1; d <= 40; d++) F.appendObservation(ws, pid, { kind: 'repository_read', target_id: 'gh_test', repository: 'github.com/example/xmpl', observed_at: at(O + d * DAY), status: 'ok', latest_delivery_at: lastDelivery });
-  assert.deepEqual(F.recordDueResolutions(ws, pid, { now: O + 30 * H }), { written: 0 }, 'nothing is due before a checkpoint and its grace');
+  assert.deepEqual(F.recordDueResolutions(ws, pid, { now: O + 30 * H }), { written: 0, corrected: 0 }, 'nothing is due before a checkpoint and its grace');
   const w = F.recordDueResolutions(ws, pid, { now: O + 40 * DAY });
   assert.ok(w.written > 0);
   const lines = F.resolutionsOf(ws, pid, s.receipt_id);
@@ -410,7 +433,8 @@ test('outcomes come due after their checkpoint, are recorded once, and a correct
   assert.equal(by('90d', 'delivery_inactivity'), undefined, 'not due yet');
   const file = path.join(root, 'projects', pid, 'forensics', 'resolutions', `${s.receipt_id}.jsonl`);
   const first = fs.readFileSync(file, 'utf8');
-  assert.deepEqual(F.recordDueResolutions(ws, pid, { now: O + 40 * DAY + H }), { written: 0 }, 'recorded once');
+  assert.deepEqual(F.recordDueResolutions(ws, pid, { now: O + 40 * DAY + H }), { written: 0, corrected: 0 }, 'recorded once');
+  assert.ok(F.resolutionsOf(ws, pid, s.receipt_id).every((x) => x.method === D.METHOD_VERSION), 'each line names the method it was read under');
   F.correctResolution(ws, pid, s.receipt_id, { checkpoint: '30d', event: 'delivery_inactivity', outcome: 'unresolved', reason: 'The repository moved to another host in week two.' });
   const after = fs.readFileSync(file, 'utf8');
   assert.ok(after.startsWith(first), 'the original lines are untouched');
@@ -766,6 +790,18 @@ function storePrice(ws, atMs, price = XQ_PRICE) {
   atomicWrite(path.join(ws.root, 'market-data', 'latest.json'), jsonText({ provider: 'coingecko', assets: { [XQ_CG]: { id: XQ_CG, price_usd: price, source_last_updated_at: at(atMs), fetched_at: at(atMs) } } }));
 }
 
+// A fictional GoPlus contract screen on record for a project: every screenable
+// contract with the given sell tax (what makes an exit cost complete).
+function storeScreen(ws, pid, atMs, sellPct = 0) {
+  const S = require('../core/screening');
+  const project = require('../core/projects').getProject(ws, pid);
+  const contracts = S.contractsOf(project.identity);
+  const when = at(atMs);
+  const snapshot = { fetched_at: when, contracts: contracts.filter((c) => c.screenable).map((c) => ({ chain: c.chain, chain_id: c.chain_id, label: c.label, family: c.family, address: c.address, status: 'ok', partial: false, checked_at: when, checks: {}, taxes: { buy_pct: 0, sell_pct: sellPct }, owner: null, source: null, severe: [], watch: [], unknown: [], notes: [] })) };
+  fs.mkdirSync(path.join(ws.root, 'market-data', 'screening'), { recursive: true });
+  atomicWrite(path.join(ws.root, 'market-data', 'screening', `${pid}.json`), jsonText({ schema_version: 'cr.screening-project.v1', project_id: pid, contracts_key: S.contractsKey(contracts), snapshot, last_attempt: { at: when, outcome: 'ok' }, transitions: [] }));
+}
+
 const keyOf = (v, chain) => v.monitoring.proposed.exit_quotes.find((o) => o.chain === chain).key;
 
 // The three origins, stubbed. jupiter(url) and kyber(url) return { cost } (the
@@ -923,8 +959,21 @@ test('the monitor quotes each approved chain at each size, at fixed origins; eac
   assert.equal(row.best.retrieved_at, at(now));
   assert.ok(Math.abs(row.best.cost_pct - 2) < 0.01, 'Jupiter lost 2% and stated no network fee');
   assert.ok(row.best.limitations.some((l) => /USDC valued at \$1\.00/.test(l)));
-  assert.equal(v.states.liquidity.state, 'within', 'one aggregator reading within the limit');
-  assert.equal(v.states.liquidity.latest_at, at(now));
+  assert.equal(row.best.cost_complete, false);
+  assert.match(row.best_words, /^at least 2(\.\d+)?%; network fee and token transfer tax unknown$/);
+  assert.equal(row.routes.length, 2, 'each route scope keeps its own latest answer');
+  assert.equal(v.states.liquidity.state, 'unknown', 'lower bounds within the limit are not a pass (review F09)');
+  assert.match(v.states.liquidity.recent[v.states.liquidity.recent.length - 1].note, /not counted as within your limit/);
+  // With the transfer tax on record (a contract screen of 0%), KyberSwap's
+  // quote states its network fee: a complete cost, within the limit.
+  storeScreen(ws, pid, now);
+  const vt = F.view(ws, pid, { now: now + 60000 });
+  assert.equal(vt.states.liquidity.state, 'within', 'one complete aggregator cost within the limit');
+  assert.equal(vt.states.liquidity.latest_at, at(now));
+  const kRow = vt.liquidity.exits.find((x) => x.size_usd === 500).routes.find((x) => x.venue === 'KyberSwap');
+  assert.equal(kRow.cost_complete, true);
+  assert.ok(kRow.included_costs.some((c) => /no token transfer tax \(GoPlus contract screen/.test(c)));
+  assert.equal(vt.liquidity.exits.find((x) => x.size_usd === 500).routes.find((x) => x.venue === 'Jupiter').cost_complete, false, 'Jupiter still states no network fee');
   assert.ok(v.monitoring.recent.some((o) => o.kind === 'executable_quote' && o.provider_label === 'KyberSwap' && o.size_usd === 2000));
   // Not due again within the interval; the next run reuses the decimals.
   assert.equal((await monitor.refresh(ws, { now: now + H, fetchImpl: quoteFetch({}, seen), sleep: noSleep })).status, 'noop');
@@ -948,7 +997,10 @@ test('the liquidity outcome resolves from the monitor\'s quotes: an episode, its
   const a = F.createAudit(ws, { project_id: pid, assistant: 'claude' });
   const s = F.saveReport(ws, { project_id: pid, audit_id: a.audit_id, provider: 'claude', text: FX.reportText(a.audit) });
   const O = Date.parse(s.receipt.origin);
-  F.setMonitoring(ws, pid, { approve_quotes: [keyOf(F.view(ws, pid), 'solana')], enabled: true });
+  // KyberSwap on Base states its network fee, and the contract screen states
+  // a 0% transfer tax: complete costs, which can read within the limit.
+  F.setMonitoring(ws, pid, { approve_quotes: [keyOf(F.view(ws, pid), 'base')], enabled: true });
+  storeScreen(ws, pid, O + 5 * DAY);
   // Every 12 hours from an hour after the origin: within the 5% limit, then
   // over it (8%) from 61 h to 133 h, then within again.
   const over = (k) => k >= 5 && k <= 11;
@@ -956,7 +1008,7 @@ test('the liquidity outcome resolves from the monitor\'s quotes: an episode, its
   for (let k = 0; k <= 20; k++) {
     const T = O + H + k * 12 * H;
     storePrice(ws, T - 20 * 60000);
-    const r = await monitor.refresh(ws, { now: T, fetchImpl: quoteFetch({ jupiter: () => ({ cost: over(k) ? 0.08 : 0.02 }) }), sleep: noSleep });
+    const r = await monitor.refresh(ws, { now: T, fetchImpl: quoteFetch({ kyber: () => ({ cost: over(k) ? 0.08 : 0.02 }) }), sleep: noSleep });
     assert.equal(r.counts.quotes, 3, `run ${k}: ${r.message}`);
     if (k === 6) assert.equal(F.view(ws, pid, { now: T + 60000 }).states.liquidity.state, 'watch', 'over the limit, not yet for 72 hours');
     if (k === 11) state72 = F.view(ws, pid, { now: T + 60000 }).states.liquidity;
@@ -965,11 +1017,15 @@ test('the liquidity outcome resolves from the monitor\'s quotes: an episode, its
   const end = O + H + 20 * 12 * H + 60000;
   const v = F.view(ws, pid, { now: end });
   assert.equal(v.states.liquidity.state, 'recovered', 'back within the limit for 72 hours');
+  // The monitor records due outcomes once a calendar day, so whether its last
+  // run here falls on a new day depends on the hour the test runs: record
+  // them now, as that daily step does.
+  F.recordDueResolutions(ws, pid, { now: end });
   const lines = F.resolutionsOf(ws, pid, s.receipt_id);
   const by = (cp) => lines.find((x) => x.checkpoint === cp && x.event === 'liquidity_impairment');
   assert.equal(by('72h').outcome, 'not_occurred', 'quotes covered the first 72 hours, none over the limit for long enough');
   assert.equal(by('7d').outcome, 'occurred', 'the episode was confirmed before day 7');
-  const cp7 = v.timeline.checkpoints.find((c) => c.id === '7d');
+  const cp7 = F.view(ws, pid, { now: end }).timeline.checkpoints.find((c) => c.id === '7d');
   assert.equal(cp7.observed.liquidity_impairment.outcome, 'occurred');
   assert.equal(cp7.observed.liquidity_impairment.recorded, true);
 });
@@ -1025,7 +1081,7 @@ test('an error or an unlisted token is no reading; a 429 and an outage are waite
   assert.equal(seenX.filter((s) => s.origin === 'https://aggregator-api.kyberswap.com').length, 0);
   const nq = F.readObservations(x.ws, x.pid, { to: now + H }).filter((o) => o.kind === 'executable_quote');
   assert.equal(nq.length, 1);
-  assert.match(nq[0].error, /does not list this exact contract/);
+  assert.match(nq[0].error, /CoinGecko's base contract for .* is another address/);
   // The monthly budget: a CoinGecko lookup and one quote, then it stops.
   const b = quoteSetup('fo-xq-budget', { forensics: { monitor: { enabled: true, monthly_request_budget: 2 } } });
   t.after(b.cleanup);

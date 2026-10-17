@@ -130,11 +130,13 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   const writers = files.filter(([, s]) => /api\.post\(/.test(s)).map(([f]) => f).sort();
   assert.deepEqual(writers, ['lib/desk.js', 'lib/review.js', 'views/inspector/ModelPanel.jsx', 'views/project/Forensics.jsx', 'views/watchlist/StatusStrip.jsx', 'views/watchlist/state.js']);
   // The Forensics tab writes only from its buttons: open an audit, import an
-  // answer, and monitoring changes (approve targets or an exit-quote chain,
-  // remove one, turn monitoring on or off), all through changeMonitoring.
-  // Never on drawing it.
+  // answer or a revision, mark an evidence change reviewed, and monitoring
+  // changes (approve targets or an exit-quote chain, remove one, turn
+  // monitoring on or off), all through changeMonitoring. Never on drawing it.
   const fx = files.find(([f]) => f === 'views/project/Forensics.jsx')[1];
-  assert.deepEqual([...fx.matchAll(/api\.post\(`([^`]+)`/g)].map((m) => m[1]).sort(), ['/api/projects/${enc(pid)}/forensics/audits', '/api/projects/${enc(pid)}/forensics/audits/${enc(audit.audit_id)}/import', '/api/projects/${enc(pid)}/forensics/monitoring'].sort());
+  assert.deepEqual([...fx.matchAll(/api\.post\(`([^`]+)`/g)].map((m) => m[1]).sort(), ['/api/projects/${enc(pid)}/forensics/audits', '/api/projects/${enc(pid)}/forensics/audits/${enc(audit.audit_id)}/import', '/api/projects/${enc(pid)}/forensics/monitoring', '/api/projects/${enc(pid)}/forensics/reviews'].sort());
+  const ack = fx.indexOf('/forensics/reviews');
+  assert.match(fx.slice(Math.max(0, ack - 600), ack), /onClick=\{async \(\) => \{/, 'an evidence review is sent only from its button');
   assert.ok([...fx.matchAll(/changeMonitoring\(/g)].length >= 4 && [...fx.matchAll(/onClick=\{\(\) => changeMonitoring\(/g)].length === [...fx.matchAll(/changeMonitoring\(`|changeMonitoring\('/g)].length, 'every monitoring change is a click');
   assert.doesNotMatch(fx.slice(fx.indexOf('function useForensics'), fx.indexOf('// ---- small parts')), /api\.post/);
   // Mark reviewed has one client (lib/review.js): the mark and its Undo, sent

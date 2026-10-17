@@ -343,14 +343,23 @@ function contractFor(symbol) {
     const asOf = new Date(t0).toISOString();
     const s = F.saveReport(ws, { project_id: pid, audit_id: a.audit_id, provider: 'claude', text: FX.reportText(F.loadAudit(ws, pid, a.audit_id), { assessment_as_of: asOf, delivery: { observations: [] } }) });
     F.saveReport(ws, { project_id: pid, audit_id: a.audit_id, provider: 'chatgpt', text: FX.challengeText(F.loadAudit(ws, pid, a.audit_id), s.receipt) });
+    // A format-fix revision two days ago (FICTIONAL): it keeps the original's
+    // origin and deadlines, and the original stays selectable as history.
+    F.saveReport(ws, { project_id: pid, audit_id: a.audit_id, provider: 'claude', text: FX.reportText(F.loadAudit(ws, pid, a.audit_id), { assessment_as_of: new Date(Date.now() - 2 * 86400000).toISOString(), delivery: { observations: [] }, plain_assessment: 'FICTIONAL. The advertised payment API answers and settles test transfers; the team holds an upgrade key it disclosed. Exit liquidity at $500 is within the limit on one aggregator quote. Delivery is regular. (Reworded.)' }), revision: { kind: 'format_fix', note: 'FICTIONAL: the summary was reworded; nothing else changed.' } });
     F.setMonitoring(ws, pid, { approve: { receipt_id: s.receipt_id }, enabled: true, by: 'dev' });
     const prof = F.readProfile(ws, pid);
     const pc = prof.targets.product_checks[0];
     const gh = prof.targets.repositories[0];
+    // The checked page (FICTIONAL): its text changes on day 14 (a captured
+    // change for the review queue) and only its whitespace on day 17 (a
+    // cosmetic one), hashed as the monitor hashes it.
+    const pageHash = (s) => crypto.createHash('sha256').update(s).digest('hex');
+    const normPage = require(`${ROOT}/core/forensic-monitor.js`).normalizeBody;
     for (let h = 0; h <= 20 * 24; h += 6) {
       const at = new Date(t0 + h * 3600000).toISOString();
       const down = h >= 6 * 24 && h < 10 * 24;
-      F.appendObservation(ws, pid, { kind: 'product_check', target_id: pc.target_id, label: pc.label, url: pc.url, observed_at: at, outcome: down ? 'fail' : 'pass', http_status: down ? 503 : 200, error: down ? 'Answered 503.' : null, excerpt: down ? null : 'All systems operational (FICTIONAL)' });
+      const page = `<p>All systems operational (FICTIONAL)</p>${h >= 14 * 24 ? '<p>Settlement now batched hourly (FICTIONAL)</p>' : ''}${h >= 17 * 24 ? '\n\n' : ''}`;
+      F.appendObservation(ws, pid, { kind: 'product_check', target_id: pc.target_id, label: pc.label, url: pc.url, observed_at: at, outcome: down ? 'fail' : 'pass', scope: 'status_and_text', read: 'complete', http_status: down ? 503 : 200, error: down ? 'Answered 503.' : null, excerpt: down ? null : 'All systems operational (FICTIONAL)', body_sha256: down ? null : pageHash(page), body_norm_sha256: down ? null : pageHash(normPage(page)), normalization: 'cr-forensic-normalize@1', expect_met: { status: !down, text: down ? null : true } });
       if (h % 24 === 0) F.appendObservation(ws, pid, { kind: 'repository_read', target_id: gh.target_id, repository: `github.com/${gh.owner}/${gh.repo}`, observed_at: at, status: 'ok', latest_delivery_at: new Date(t0 - 52 * 86400000).toISOString(), latest_commit: { sha: 'f1c7i0n4l', at: new Date(t0 - 52 * 86400000).toISOString(), message: 'FICTIONAL commit' } });
     }
     // Exit quotes approved on the relay's (FICTIONAL) Ethereum contract, every
@@ -372,6 +381,19 @@ function contractFor(symbol) {
       }
     }
     F.recordDueResolutions(ws, pid, { now: Date.now() });
+    // A long, warning-heavy case (FICTIONAL), on the project with the
+    // extraordinarily long name: a long strongest concern resting on a weak
+    // common-control basis, and a finding citing a source not in the list.
+    const la = F.createAudit(ws, { project_id: pids.long, assistant: 'claude', channel: 'dev', allow_pending_identity: true });
+    if (la.audit_id) {
+      const lAudit = F.loadAudit(ws, pids.long, la.audit_id);
+      const lb = FX.block(lAudit);
+      const longText = 'FICTIONAL. The deployer and three wallets that received 30% of supply at launch were funded from the same exchange hot wallet within one hour, and two of them later sold into the only pool during a thin stretch in week two; the team has not said who controls them, and the vesting contract the docs describe is not the one on chain.';
+      F.saveReport(ws, { project_id: pids.long, audit_id: la.audit_id, provider: 'claude', text: FX.reportText(lAudit, {
+        strongest_concern: { finding_id: 'F2', statement: longText },
+        findings: [lb.findings[0], { ...lb.findings[1], area: 'wallets', kind: 'observation', wallet_relation: 'inferred_common_control', basis: ['shared_exchange_funder', 'similar_timing'], statement: longText }, { ...lb.findings[2], source_ids: ['S4', 'S99'] }],
+      }) });
+    }
     F.createAudit(ws, { project_id: pids.ember, channel: 'dev' });
     const mon = require(`${ROOT}/core/forensic-monitor.js`);
     mon.isDue = () => false;

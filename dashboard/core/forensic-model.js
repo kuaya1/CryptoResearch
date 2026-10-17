@@ -212,7 +212,7 @@ function discontinuationState(entries, { at = null } = {}) {
   const unattributed = all.length - attributable.length;
   const latest = attributable[attributable.length - 1] || null;
   if (!latest) {
-    return { event: 'confirmed_discontinuation', version: D.EVENTS_VERSION, state: 'not_established', why: `No attributable shutdown or withdrawal evidence on record.${unattributed ? ` ${unattributed} mention${unattributed === 1 ? '' : 's'} without a primary source ${unattributed === 1 ? 'does' : 'do'} not count.` : ''} Absence of such evidence is not called health.`, unattributed };
+    return { event: 'confirmed_discontinuation', version: D.EVENTS_VERSION, state: 'not_established', why: `No attributable shutdown or withdrawal evidence on record.${unattributed ? ` ${unattributed} mention${unattributed === 1 ? '' : 's'} without attributable evidence (an observation with a dated, preserved source on the project's own domain or a chain reference) ${unattributed === 1 ? 'does' : 'do'} not count.` : ''} Absence of such evidence is not called health.`, unattributed };
   }
   if (latest.kind === 'reversal') {
     return { event: 'confirmed_discontinuation', version: D.EVENTS_VERSION, state: 'reversed', since: latest.at, why: `An attributable reversal (${latest.finding_id || 'finding'}) answers the earlier shutdown evidence.`, evidence: latest, unattributed };
@@ -246,29 +246,56 @@ function combineStates(list) {
 // ---------------------------------------------------------------------------
 // Liquidity: exit estimates by mechanism (cr-forensic-liquidity@1)
 
+// The route scope a reading belongs to (cr-forensic-liquidity@2): the
+// monitor's quotes by source, chain and contract; an assessment's readings by
+// chain, contract or pool, venue, route scope and kind. The size is applied
+// by the caller.
+function scopeOf(o) {
+  const lc = (s) => String(s || '').trim().toLowerCase();
+  if (o.source === 'monitor') return `m|${lc(o.provider)}|${lc(o.chain_id)}|${lc(o.contract_address)}`;
+  return `a|${lc(o.chain)}|${lc(o.contract_address || o.pool)}|${lc(o.venue)}|${lc(o.route_scope)}|${lc(o.kind)}`;
+}
+
+// What is known of a cost besides the quoted amount. tax: { pct, source }
+// when the contract screen states the transfer tax (0 included), else null.
+function completeness({ gasKnown, gasWords, tax }) {
+  const missing = [];
+  const included = [];
+  if (gasKnown) included.push(gasWords);
+  else missing.push('network fee');
+  if (tax && isNum(tax.pct)) included.push(tax.pct > 0 ? `token transfer tax ${tax.pct}% (${tax.source})` : `no token transfer tax (${tax.source})`);
+  else missing.push('token transfer tax');
+  return { missing, included, complete: missing.length === 0 };
+}
+
 // One reading's hypothetical exit at one size, or null when the reading does
-// not speak to that size. Never a transaction.
-function exitEstimate(obs, sizeUsd, { marketPriceUsd = null } = {}) {
+// not speak to that size. Never a transaction. A one-way sell.
+function exitEstimate(obs, sizeUsd, { marketPriceUsd = null, tax = null } = {}) {
   if (!obs || !isNum(sizeUsd) || sizeUsd <= 0) return null;
-  const base = { obs_id: obs.obs_id || null, size_usd: sizeUsd, venue: obs.venue || null, chain: obs.chain || null, retrieved_at: obs.retrieved_at || null, source_id: obs.source_id || null, captured_by: obs.source === 'monitor' ? 'monitor' : 'audit', version: D.LIQUIDITY_VERSION };
+  const basis = obs.source === 'monitor' && obs.amount_in ? { kind: 'fixed_usd', size_usd: sizeUsd, amount_in: String(obs.amount_in), token_decimals: obs.token ? obs.token.decimals : null, price_usd: obs.price ? obs.price.usd : null, price_as_of: obs.price ? obs.price.as_of : null } : { kind: 'fixed_usd', size_usd: sizeUsd };
+  const base = { obs_id: obs.obs_id || null, size_usd: sizeUsd, venue: obs.venue || null, chain: obs.chain || null, contract_address: obs.contract_address || null, pool: obs.pool || null, retrieved_at: obs.retrieved_at || null, source_id: obs.source_id || null, captured_by: obs.source === 'monitor' ? 'monitor' : 'audit', basis, one_way: true, version: D.LIQUIDITY_VERSION_2 };
+  const taxPct = tax && isNum(tax.pct) ? tax.pct : null;
+  const withTax = (costPct) => (taxPct ? 100 - (100 - costPct) * (1 - taxPct / 100) : costPct);
   if (obs.kind === 'executable_quote') {
     const q = obs.quote || {};
     const sell = num(q.sell_usd);
     const scope = obs.route_scope === 'aggregator' ? 'aggregator' : 'single_venue';
     if (sell === null || sell <= 0 || Math.abs(sell - sizeUsd) / sizeUsd > D.LIQUIDITY.quote_size_tolerance) return null;
     if (q.no_route === true) {
-      return { ...base, method: 'executable_quote', route_scope: scope, status: 'no_route', quoted_usd: sell, received_usd: null, cost_pct: null, limitations: [scope === 'aggregator' ? 'The quote source found no route at this size.' : 'This venue found no route at this size; other venues were not asked.'] };
+      return { ...base, method: 'executable_quote', route_scope: scope, status: 'no_route', quoted_usd: sell, received_usd: null, cost_pct: null, cost_complete: null, missing_costs: [], included_costs: [], limitations: [scope === 'aggregator' ? 'The quote source found no route at this size.' : 'This venue found no route at this size; other venues were not asked.'] };
     }
     const recv = num(q.received_usd);
     if (recv === null || recv < 0) return null;
     const gas = num(q.gas_usd);
-    const extra = gas !== null && gas > 0 && q.gas_included !== true ? gas : 0;
-    const cost = ((sell - recv + extra) / sell) * 100;
+    const gasIncluded = q.gas_included === true;
+    const extra = gas !== null && gas > 0 && !gasIncluded ? gas : 0;
+    const c = completeness({ gasKnown: gas !== null || gasIncluded, gasWords: gasIncluded ? 'network fee, inside the quote' : `network fee $${round(gas || 0, 4)}`, tax });
+    const cost = withTax(((sell - recv + extra) / sell) * 100);
     const limitations = ['A quote at one moment; it can change by the time an order is sent.'];
     if (scope !== 'aggregator') limitations.push('One venue: other routes were not asked, so the cost through the best route may be lower.');
-    if (gas === null) limitations.push('Network fee not stated.');
+    if (!c.complete) limitations.unshift(`Cost incomplete: ${c.missing.join(' and ')} unknown, so this is at least the figure shown.`);
     if (typeof q.valuation_note === 'string') limitations.push(str(q.valuation_note, 300));
-    return { ...base, method: 'executable_quote', route_scope: scope, status: 'estimated', quoted_usd: round(sell), received_usd: round(recv, 4), cost_pct: round(Math.max(-100, cost), 3), fees_usd: num(q.fees_usd), price_impact_pct: num(q.price_impact_pct), gas_usd: gas, route: str(q.route, 300), limitations };
+    return { ...base, method: 'executable_quote', route_scope: scope, status: 'estimated', quoted_usd: round(sell), received_usd: round(recv, 4), cost_pct: round(Math.max(-100, cost), 3), cost_complete: c.complete, missing_costs: c.missing, included_costs: ['price impact and route fees, inside the quoted amount', ...c.included], fees_usd: num(q.fees_usd), price_impact_pct: num(q.price_impact_pct), gas_usd: gas, gas_included: gasIncluded, route: str(q.route, 300), limitations };
   }
   if (obs.kind === 'pool_reserves') {
     const mech = D.LIQUIDITY.mechanisms[obs.mechanism] ? obs.mechanism : 'unknown';
@@ -286,75 +313,100 @@ function exitEstimate(obs, sizeUsd, { marketPriceUsd = null } = {}) {
     const inEff = baseIn * (1 - f);
     const out = (inEff * Rq) / (Rb + inEff);
     const recv = out * qUsd;
-    const cost = (1 - recv / sizeUsd) * 100;
+    const c = completeness({ gasKnown: false, gasWords: null, tax });
+    const cost = withTax((1 - recv / sizeUsd) * 100);
     const impact = (inEff / (Rb + inEff)) * 100;
-    const limitations = ['One pool at one moment: other routes were not considered, so the cost through the best route may be lower.', 'Valued at the pool\'s own price.'];
+    const limitations = [`Cost incomplete: ${c.missing.join(' and ')} not included, so this is at least the figure shown.`, 'A calculation from one pool\'s reserves at one moment, not a quote: other routes were not considered, so the cost through the best route may be lower.', 'Valued at the pool\'s own price.'];
     if (isNum(marketPriceUsd) && marketPriceUsd > 0) {
       const dev = (mid / marketPriceUsd - 1) * 100;
       if (Math.abs(dev) > 10) limitations.push(`The pool's price differs from the market price by ${round(dev, 1)}%: the pool may be stale or thin.`);
     }
-    return { ...base, method: 'constant_product', mechanism: mech, route_scope: 'single_pool', status: 'estimated', received_usd: round(recv, 4), cost_pct: round(cost, 3), fee_pct: round(feeBps / 100, 3), price_impact_pct: round(impact, 3), pool_price_usd: mid, limitations };
+    return { ...base, method: 'constant_product', mechanism: mech, route_scope: 'single_pool', status: 'estimated', received_usd: round(recv, 4), cost_pct: round(cost, 3), cost_complete: c.complete, missing_costs: c.missing, included_costs: [`pool fee ${round(feeBps / 100, 3)}%`, 'price impact from the reserves', ...c.included], fee_pct: round(feeBps / 100, 3), price_impact_pct: round(impact, 3), pool_price_usd: mid, limitations };
   }
   return null;
 }
 
-// The exit estimates of a set of readings at each size: every supported
-// estimate, and the current one per size. Current is the latest hour with a
-// reading at that size (an estimate or "no route"); within it, the cheapest
-// route. An older, cheaper reading is history, never the current best.
-function exitTable(observations, sizes, opts = {}) {
+// "1.84%" or "at least 1.84%; network fee unknown".
+function costWords(e) {
+  if (!e || e.status !== 'estimated') return null;
+  return e.cost_complete ? `${e.cost_pct}%` : `at least ${e.cost_pct}%; ${e.missing_costs.join(' and ')} unknown`;
+}
+
+// The exit estimates of a set of readings at each size (liquidity@2): every
+// reading, the current reading of each route scope (its latest answer, kept
+// apart when older than the freshness window), and the best current route.
+// An older answer of the same scope is history, whatever it cost.
+function exitTable(observations, sizes, { marketPriceUsd = null, taxOf = null, now = Date.now(), freshnessHours = D.EVENTS.liquidity_impairment.freshness_hours } = {}) {
   const obs = Array.isArray(observations) ? observations : [];
-  const hour = (r) => (isoOrNull(r.retrieved_at) || '').slice(0, 13);
+  const fresh = freshnessHours * HOUR;
   return sizes.map((size) => {
-    const rows = obs.map((o) => exitEstimate(o, size, opts)).filter(Boolean);
-    const speaking = rows.filter((r) => r.status === 'estimated' || r.status === 'no_route');
-    const latest = speaking.map(hour).sort().pop();
-    const current = latest === undefined ? [] : speaking.filter((r) => hour(r) === latest);
-    const estimated = current.filter((r) => r.status === 'estimated').sort((a, b) => a.cost_pct - b.cost_pct);
-    const noRoute = current.filter((r) => r.status === 'no_route');
+    const rows = obs.map((o) => {
+      const e = exitEstimate(o, size, { marketPriceUsd, tax: taxOf ? taxOf(o) : null });
+      return e ? { ...e, scope: scopeOf(o), t: tOf(e.retrieved_at) } : null;
+    }).filter(Boolean);
+    const speaking = rows.filter((r) => (r.status === 'estimated' || r.status === 'no_route') && Number.isFinite(r.t)).sort((a, b) => a.t - b.t);
+    const latest = new Map();
+    for (const r of speaking) latest.set(r.scope, r);
+    const current = [...latest.values()].map((r) => ({ ...r, age_hours: round((now - r.t) / HOUR, 1), stale: now - r.t > fresh }));
+    const live = current.filter((r) => !r.stale);
+    const estimated = live.filter((r) => r.status === 'estimated').sort((a, b) => a.cost_pct - b.cost_pct);
+    const noRoute = live.filter((r) => r.status === 'no_route');
+    const status = estimated.length ? 'estimated' : noRoute.length ? 'no_route' : current.length ? 'stale' : 'no_supported_estimate';
+    const strip = ({ t, ...r }) => r;
     return {
       size_usd: size,
-      estimates: rows,
-      best: estimated[0] || null,
-      as_of: current.length ? current.map((r) => r.retrieved_at).filter(Boolean).sort()[0] || null : null,
+      estimates: rows.map(strip),
+      routes: current.map(strip),
+      best: estimated[0] ? strip(estimated[0]) : null,
+      best_words: estimated[0] ? costWords(estimated[0]) : null,
+      as_of: estimated[0] ? estimated[0].retrieved_at : live.length ? live.map((r) => r.retrieved_at).sort().pop() : null,
       earlier: speaking.length - current.length,
-      status: estimated.length ? 'estimated' : noRoute.length ? 'no_route' : 'no_supported_estimate',
-      note: estimated.length ? null : noRoute.length ? 'No route found at this size by the quote source asked.' : 'No supported estimate at this size: no executable quote at it and no constant-product reserves.',
+      status,
+      note: estimated.length ? null : noRoute.length ? 'No route found at this size by the quote source asked.' : current.length ? `The latest reading at this size is older than ${Math.round(fresh / HOUR)} hours.` : 'No supported estimate at this size: no executable quote at it and no constant-product reserves.',
     };
   });
 }
 
-// Readings for liquidity impairment at your position size and limit. A
-// reading over the limit counts only when the quote considered routes (an
-// aggregator): one pool or one venue over the limit says nothing about the
-// best route. A reading within the limit through any one route counts.
-function liquidityReadings(observations, { positionUsd, limitPct, marketPriceUsd = null }) {
-  const byTime = new Map();
+// Readings for liquidity impairment at your position size and limit
+// (liquidity@2). At each reading time, every route scope's latest answer
+// within the freshness window is current. Within: a complete cost within the
+// limit on any current route. Beyond: none within, and a current aggregator
+// route says "no route" or costs over the limit (a lower bound over the limit
+// is enough). One pool or venue over the limit, or a lower bound within it,
+// counts as no reading.
+function liquidityReadings(observations, { positionUsd, limitPct, marketPriceUsd = null, taxOf = null, freshnessHours = D.EVENTS.liquidity_impairment.freshness_hours } = {}) {
+  const ests = [];
   for (const o of Array.isArray(observations) ? observations : []) {
     const at = isoOrNull(o && o.retrieved_at);
     if (!at) continue;
-    const e = exitEstimate(o, positionUsd, { marketPriceUsd });
-    if (!e) continue;
-    const key = at.slice(0, 13);
-    const list = byTime.get(key) || [];
-    list.push({ ...e, at });
-    byTime.set(key, list);
+    const e = exitEstimate(o, positionUsd, { marketPriceUsd, tax: taxOf ? taxOf(o) : null });
+    if (!e || (e.status !== 'estimated' && e.status !== 'no_route')) continue;
+    ests.push({ ...e, at, t: tOf(at), scope: scopeOf(o) });
   }
+  ests.sort((a, b) => a.t - b.t);
+  const fresh = freshnessHours * HOUR;
   const out = [];
-  for (const list of byTime.values()) {
-    const at = list.map((x) => x.at).sort()[0];
-    const within = list.filter((x) => x.status === 'estimated' && x.cost_pct <= limitPct);
-    const aggOver = list.filter((x) => x.route_scope === 'aggregator' && (x.status === 'no_route' || (x.status === 'estimated' && x.cost_pct > limitPct)));
-    const best = list.filter((x) => x.status === 'estimated').sort((a, b) => a.cost_pct - b.cost_pct)[0] || null;
+  for (const t of [...new Set(ests.map((e) => e.t))]) {
+    const latest = new Map();
+    for (const e of ests) {
+      if (e.t > t) break;
+      if (t - e.t <= fresh) latest.set(e.scope, e);
+      else latest.delete(e.scope);
+    }
+    const cur = [...latest.values()];
+    const within = cur.filter((x) => x.status === 'estimated' && x.cost_complete && x.cost_pct <= limitPct);
+    const over = cur.filter((x) => x.route_scope === 'aggregator' && (x.status === 'no_route' || (x.status === 'estimated' && x.cost_pct > limitPct)));
+    const lower = cur.filter((x) => x.status === 'estimated' && !x.cost_complete && x.cost_pct <= limitPct);
+    const best = cur.filter((x) => x.status === 'estimated').sort((a, b) => a.cost_pct - b.cost_pct)[0] || null;
     let beyond = null;
     let note = null;
     if (within.length) beyond = false;
-    else if (aggOver.length) beyond = true;
-    else if (list.some((x) => x.status === 'estimated' || x.status === 'no_route')) note = 'Over your limit through one pool or venue only; other routes were not read, so this reading is not counted.';
-    else note = 'No supported estimate at your position size.';
-    out.push({ at, beyond, cost_pct: best ? best.cost_pct : null, method: best ? best.method : null, obs_ids: list.map((x) => x.obs_id).filter(Boolean), note });
+    else if (over.length) beyond = true;
+    else if (lower.length) note = `At least ${lower[0].cost_pct}% with the ${lower[0].missing_costs.join(' and ')} unknown: not counted as within your limit.`;
+    else note = 'Over your limit through one pool or venue only; other routes were not read, so this reading is not counted.';
+    out.push({ at: iso(t), beyond, cost_pct: best ? best.cost_pct : null, cost_complete: best ? best.cost_complete : null, method: best ? best.method : null, obs_ids: cur.map((x) => x.obs_id).filter(Boolean), routes: cur.length, note });
   }
-  return out.sort((a, b) => tOf(a.at) - tOf(b.at));
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -386,7 +438,7 @@ function dailySeries(points) {
 // 30 days up to the origin, or null with the reason.
 function baselineAt(series, origin, { days = 30, minPoints = D.SCENARIOS.min_points } = {}) {
   const O = tOf(origin);
-  const pts = (series || []).filter((p) => p.t <= O && p.t > O - days * DAY && p.value > 0);
+  const pts = (series || []).filter((p) => p.t <= O && p.t > O - days * DAY && isNum(p.value) && p.value >= 0);
   if (pts.length < minPoints) return { value: null, points: pts.length, reason: `Only ${pts.length} daily readings in the ${days} days before the origin (at least ${minPoints} are needed).` };
   return { value: median(pts.map((p) => p.value)), points: pts.length, from: pts[0].day, to: pts[pts.length - 1].day };
 }
@@ -395,26 +447,42 @@ function baselineAt(series, origin, { days = 30, minPoints = D.SCENARIOS.min_poi
 // reserves) or 'higher' (exit cost). Each scenario states its assumption; the
 // date is when the series would cross the level under it, never a probability.
 function scenarioEstimates(series, { threshold, worse = 'lower', origin, now = Date.now(), metric = 'value', unit = 'usd' } = {}) {
-  const S = D.SCENARIOS;
+  const S = D.SCENARIOS_2;
   const out = { version: S.version, label: S.label, metric, unit, threshold: isNum(threshold) ? threshold : null, worse, origin: origin || null, invalidation: S.invalidation };
   const O = tOf(origin);
   const horizonEnd = Number.isFinite(O) ? O + D.HORIZON_HOURS * HOUR : now + D.HORIZON_HOURS * HOUR;
   if (!isNum(threshold) || threshold <= 0) return { ...out, status: 'no_threshold', words: 'No level is set for this measure, so no crossing is estimated.' };
   const start = now - S.window_days * DAY;
-  const all = (Array.isArray(series) ? series : []).filter((p) => isNum(p.t) && p.t >= start && p.t <= now);
-  const zeros = all.filter((p) => !(p.value > 0)).length;
-  const pts = all.filter((p) => p.value > 0).sort((a, b) => a.t - b.t);
-  const insufficient = (words, next) => ({ ...out, status: 'insufficient', words: `Insufficient history to estimate: ${words}`, next_observation: next, basis: { points: pts.length, excluded_zero: zeros } });
-  if (pts.length < S.min_points) {
-    const need = S.min_points - pts.length;
-    return insufficient(`${pts.length} daily reading${pts.length === 1 ? '' : 's'} in the window (${S.min_points} needed).`, `${need} more daily reading${need === 1 ? '' : 's'}, through about ${iso(Math.max(now, pts.length ? pts[pts.length - 1].t : now) + need * DAY).slice(0, 10)}.`);
+  // Every valid reading counts, zero included; a missing day is simply
+  // absent. Rates of change are logarithmic, so they use the positive
+  // readings only and stop at a zero.
+  const all = (Array.isArray(series) ? series : []).filter((p) => isNum(p.t) && p.t >= start && p.t <= now && isNum(p.value) && p.value >= 0).sort((a, b) => a.t - b.t);
+  const zeros = all.filter((p) => p.value === 0).length;
+  const pts = all.filter((p) => p.value > 0);
+  const insufficient = (words, next) => ({ ...out, status: 'insufficient', words: `Insufficient history to estimate: ${words}`, next_observation: next, latest: all.length ? { day: all[all.length - 1].day, value: all[all.length - 1].value } : null, basis: { points: all.length, zero_readings: zeros } });
+  if (all.length < S.min_points) {
+    const need = S.min_points - all.length;
+    return insufficient(`${all.length} daily reading${all.length === 1 ? '' : 's'} in the window (${S.min_points} needed).`, `${need} more daily reading${need === 1 ? '' : 's'}, through about ${iso(Math.max(now, all.length ? all[all.length - 1].t : now) + need * DAY).slice(0, 10)}.`);
   }
-  const first = pts[0];
-  const last = pts[pts.length - 1];
+  const first = all[0];
+  const last = all[all.length - 1];
   const spanDays = (last.t - first.t) / DAY;
   if (spanDays < S.min_span_days) return insufficient(`the readings span ${Math.round(spanDays)} days (${S.min_span_days} needed).`, `Daily readings through about ${iso(first.t + S.min_span_days * DAY).slice(0, 10)}.`);
   const ageH = (now - (last.t + 12 * HOUR)) / HOUR;
   if (ageH > S.freshness_hours) return insufficient(`the latest daily reading (${last.day}) is ${hoursText(ageH)} old.`, 'A new reading of this measure.');
+  if (last.value === 0) {
+    const beyond = worse === 'lower';
+    const stop = 'A rate of change cannot be projected from a zero reading, so no date is estimated under this assumption.';
+    return {
+      ...out,
+      status: 'estimated',
+      beyond_now: beyond,
+      latest: { day: last.day, value: 0 },
+      projection: 'unavailable_at_zero',
+      scenarios: ['deterioration', 'stabilization', 'recovery'].map((kind) => ({ kind, assumption: S.kinds[kind], rate_pct_per_week: null, note: null, crosses_at: null, direction: null, within_horizon: false, words: beyond && kind !== 'recovery' ? `The latest reading (${last.day}) is zero, past the level of ${round(threshold, 4)}.` : stop })),
+      basis: { window_from: first.day, window_to: last.day, points: all.length, weekly_changes: 0, data_age_hours: round(Math.max(0, ageH), 1), zero_readings: zeros },
+    };
+  }
   // Weekly changes, each between two readings 6 to 8 days apart, scaled to 7 days.
   const weekly = [];
   for (const p of pts) {
@@ -466,7 +534,7 @@ function scenarioEstimates(series, { threshold, worse = 'lower', origin, now = D
     beyond_now: beyondNow,
     latest: { day: last.day, value: latest },
     scenarios,
-    basis: { window_from: first.day, window_to: last.day, points: pts.length, weekly_changes: weekly.length, worst_week_pct: pct(worst), best_week_pct: pct(bestG), data_age_hours: round(Math.max(0, ageH), 1), excluded_zero: zeros },
+    basis: { window_from: first.day, window_to: last.day, points: all.length, weekly_changes: weekly.length, worst_week_pct: pct(worst), best_week_pct: pct(bestG), data_age_hours: round(Math.max(0, ageH), 1), zero_readings: zeros, rates_note: zeros ? `${zeros} zero reading${zeros === 1 ? '' : 's'} in the window: rates of change are measured between positive readings only.` : null },
   };
 }
 
@@ -553,6 +621,7 @@ function normLiquidityObs(o, i) {
     source_id: typeof o.source_id === 'string' ? o.source_id.trim().slice(0, 40) : null,
     venue: str(o.venue, 120),
     chain: str(o.chain, 60),
+    contract_address: str(o.contract_address, 120),
     pool: str(o.pool, 120),
     mechanism: oneOf(o.mechanism, Object.keys(D.LIQUIDITY.mechanisms)) || 'unknown',
     route_scope: oneOf(o.route_scope, ['aggregator', 'single_venue']) || 'single_venue',
@@ -668,8 +737,7 @@ function findingChecks(a) {
     if (missing.length) add(f.finding_id, 'unknown_source', 'material', `Cites ${missing.join(', ')}, which the source list does not have.`);
     if (f.wallet_relation === 'inferred_common_control' && f.kind === 'observation') add(f.finding_id, 'common_control_as_observation', 'serious', 'Common control of wallets is an inference, never an observation: the desk reads this finding as an inference.');
     if (f.wallet_relation === 'inferred_common_control' && f.basis.length && f.basis.every((b) => D.WEAK_CONTROL_BASES.includes(b))) add(f.finding_id, 'weak_common_control_basis', 'serious', 'A shared exchange funder, similar balances, a zero-balance deployer or similar timing does not on its own establish common control.');
-    if (f.discontinuation && f.discontinuation !== 'reversal' && !f.source_ids.some((s) => (a.sources || []).some((x) => x.source_id === s && (x.type === 'primary' || x.type === 'chain')))) add(f.finding_id, 'discontinuation_without_primary', 'serious', 'Shutdown or withdrawal needs a primary, attributable source; without one it does not count as confirmed discontinuation.');
-    const text = `${f.statement} ${f.alternative_explanation || ''}`;
+    if (f.discontinuation && f.discontinuation !== 'reversal' && !f.source_ids.some((s) => (a.sources || []).some((x) => x.source_id === s && (x.type === 'primary' || x.type === 'chain')))) add(f.finding_id, 'discontinuation_without_primary', 'serious', 'Shutdown or withdrawal needs a primary, attributable source; without one it does not count as confirmed discontinuation.');    const text = `${f.statement} ${f.alternative_explanation || ''}`;
     if (/\b(zero|no|nil)\s+revenue\b/i.test(text) && !f.source_ids.length) add(f.finding_id, 'zero_revenue_from_missing', 'material', 'Unavailable revenue data is not zero revenue.');
     if (/\b(hosting|server|cloud|api)\s+(bill|bills|cost|costs|spend|spending)\b|\brunway\b|\bmotive/i.test(text) && f.kind === 'observation') add(f.finding_id, 'private_cost_inferred', 'material', 'Hosting bills, API spending, runway and motives cannot be observed from a technology stack.');
     if (/\bhash(es)?\b[^.]{0,40}\b(prove|proves|confirm|confirms|verif)/i.test(text)) add(f.finding_id, 'hash_as_truth', 'note', D.HASH_NOTE);

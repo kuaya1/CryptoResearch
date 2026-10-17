@@ -169,7 +169,12 @@ function forensicRecords(ws, projectId) {
     if (r.broken || !r.text) return r;
     let text = null;
     try { text = fs.readFileSync(ws.abs(r.text.path), 'utf8'); } catch (_) { text = null; }
-    return { ...r, text_content: text, text_content_sha256: text === null ? null : sha256(text) };
+    // The desk's reading beside the saved assessment (never replacing it):
+    // each finding's kind as shown and whether its references hold, and
+    // which grades the desk uses (cr-forensic-eligibility@1).
+    const ev = r.kind === 'assessment' ? F.eligibilityOf(r) : null;
+    const desk = ev ? { version: ev.version, findings: Object.fromEntries(Object.entries(ev.findings).map(([id, f]) => [id, { shown_kind: f.effective_kind, standing: f.standing, reasons: f.reasons }])), grades: ev.grades } : null;
+    return { ...r, text_content: text, text_content_sha256: text === null ? null : sha256(text), ...(desk ? { desk_reading: desk } : {}) };
   });
   return {
     audits: F.listAudits(ws, projectId),
@@ -177,6 +182,8 @@ function forensicRecords(ws, projectId) {
     resolutions: Object.fromEntries(receipts.filter((r) => r.receipt_id && !r.broken).map((r) => [r.receipt_id, F.resolutionsOf(ws, projectId, r.receipt_id)])),
     profile: F.readProfile(ws, projectId),
     observations: F.readObservations(ws, projectId, { from: 0 }),
+    // Eric's reviews of evidence changes (forensic-review.js), every line.
+    evidence_reviews: require('./forensic-review').readReviews(ws, projectId),
   };
 }
 
@@ -185,7 +192,7 @@ const EXPORT_INVENTORY = {
     'workspace marker, settings, all rubric and profile versions with their pinned hashes',
     'every project record, with every report: original text (or base64 for PDFs) and its SHA-256, structured record, corrections, effective values, citation check',
     'journal, conviction notes, review events, claim checks, disputes, research runs, prompt files with hashes',
-    'forensic audits, receipts with their full text and SHA-256, recorded checkpoint outcomes, the monitoring opt-in and monitor observations',
+    'forensic audits, receipts with their full text and SHA-256, recorded checkpoint outcomes, the monitoring opt-in, monitor observations and the reviews of evidence changes',
     'portfolio accounts, assets, transactions (including voided), limits, events, and the computed positions',
     'latest market observation per asset and the market status',
   ],

@@ -206,4 +206,38 @@ async function safeGet(raw, { timeoutMs = 10000, maxBytes = 256 * 1024, maxRedir
   }
 }
 
-module.exports = { addressAllowed, validateUrl, guardedLookup, safeGet, errorClass, USER_AGENT };
+// A fetch() answer's body as text, read while counting bytes: over maxBytes
+// the read stops and the request is aborted, so an oversized answer is never
+// buffered whole (the quote and GitHub readers; review P3). A declared
+// Content-Length over the cap is refused before reading. An answer object
+// without a stream (a test stub) is read with text() and checked after.
+async function readBodyBounded(res, maxBytes, ctrl = null) {
+  const tooLarge = () => Object.assign(new Error(`Answer too large (over ${Math.round(maxBytes / 1024)} KB)`), { code: 'CR_TOO_LARGE' });
+  const h = res && res.headers && typeof res.headers.get === 'function' ? res.headers.get('content-length') : null;
+  if (h !== null && h !== undefined && Number(h) > maxBytes) {
+    try { if (ctrl) ctrl.abort(); } catch (_) { /* closed */ }
+    throw tooLarge();
+  }
+  if (res && res.body && typeof res.body.getReader === 'function') {
+    const reader = res.body.getReader();
+    const chunks = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        try { await reader.cancel(); } catch (_) { /* closed */ }
+        try { if (ctrl) ctrl.abort(); } catch (_) { /* closed */ }
+        throw tooLarge();
+      }
+      chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+    }
+    return Buffer.concat(chunks).toString('utf8');
+  }
+  const text = await res.text();
+  if (Buffer.byteLength(text) > maxBytes) throw tooLarge();
+  return text;
+}
+
+module.exports = { addressAllowed, validateUrl, guardedLookup, safeGet, readBodyBounded, errorClass, USER_AGENT };

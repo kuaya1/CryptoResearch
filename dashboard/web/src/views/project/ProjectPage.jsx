@@ -329,7 +329,7 @@ export default function ProjectPage() {
       </>
     );
   } else if (tab === 'forensics') {
-    body = <Forensics pid={pid} />;
+    body = <Forensics pid={pid} receipt={route.query.get('receipt') || null} />;
   } else if (tab === 'report') {
     body = <Hosted build={(L) => L.reportsTab(legacyCtx, d, route)} deps={[d, route.query.toString()]} after={(node) => { const toc = node && node.querySelector && node.querySelector('.report-toc'); if (toc && typeof toc.watch === 'function') toc.watch(); }} />;
   } else if (tab === 'market') {
