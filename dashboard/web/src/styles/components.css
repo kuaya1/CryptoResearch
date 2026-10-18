@@ -155,8 +155,8 @@ select.input { padding-right: 28px; appearance: none; background-image: var(--i-
 /* ---- callouts ---- */
 .note {
   display: flex; gap: 10px; align-items: flex-start;
-  padding: 10px 12px; border-radius: var(--r-lg);
-  background: var(--surface-sunken); border: 1px solid var(--separator);
+  padding: 10px 14px; border-radius: var(--r-well);
+  background: var(--surface-sunken); border: 0;
   color: var(--text-2); font-size: var(--fs-sm);
 }
 .note-warn { background: var(--warn-weak); border-color: var(--pill-warn-line); color: var(--text); }
@@ -178,8 +178,8 @@ select.input { padding-right: 28px; appearance: none; background-image: var(--i-
   display: grid; grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas: "main score" "sub score" "chips chips";
   gap: 6px 16px; align-items: start;
-  padding: 12px 14px; border-radius: var(--r-lg);
-  background: var(--surface-sunken); border: 1px solid var(--border);
+  padding: 16px 18px; border-radius: var(--r-well);
+  background: var(--surface-sunken);
 }
 .mh-main { grid-area: main; min-width: 0; }
 .mh-who { font-size: var(--fs-xs); font-weight: 600; color: var(--text-3); }

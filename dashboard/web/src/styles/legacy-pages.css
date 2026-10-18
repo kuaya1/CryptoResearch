@@ -15,6 +15,18 @@
 .lg.lg-portfolio .summary-row .value { font-size: var(--fs-kpi-lg); font-weight: 600; letter-spacing: -0.02em; }
 .lg.lg-portfolio .summary-row .hint { font-size: var(--fs-sm); }
 .lg.lg-portfolio .summary-row .item { padding: 18px 22px 16px; }
+/* The valuation state as a quiet dot and its words at the head of the
+   figures (the Apple HIG pass, 2026-10-18); its sentence is the tooltip. */
+.lg.lg-portfolio .summary-head { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin: 0; padding: 14px 22px 2px; font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); }
+.lg.lg-portfolio .summary-head .state-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--text-3); }
+.lg.lg-portfolio .summary-head.is-ok .state-dot { background: var(--dot-pos); }
+.lg.lg-portfolio .summary-head.is-warn .state-dot { background: var(--dot-warn); }
+.lg.lg-portfolio .summary-head.is-bad .state-dot { background: var(--dot-neg); }
+.lg.lg-portfolio .summary-row .item { box-shadow: 1px 0 0 var(--separator); }
+.lg.lg-portfolio .summary-row { margin-bottom: 24px; }
+.lg.lg-portfolio .card { margin-bottom: 24px; }
+.lg.lg-portfolio .grid.two { gap: 24px; margin-bottom: 24px; }
+.lg.lg-portfolio .grid.two > .card { margin-bottom: 0; }
 .lg.lg-portfolio .pos-table table td { font-size: var(--fs-body-lg); padding-top: 12px; padding-bottom: 12px; }
 .lg.lg-portfolio .wh-table, .lg.lg-portfolio .wh-total { max-width: 1080px; }
 .lg.lg-portfolio .wh-total { font-size: var(--fs-md); }
@@ -45,9 +57,16 @@
 .lg.lg-research .rs-latest .gb .l { font-size: var(--fs-sm); line-height: 18px; padding: 0 5px; }
 .lg.lg-research table td { font-size: var(--fs-md); }
 
+@media (max-width: 480px) {
+  /* The head is the first child, so the fifth figure is the sixth child. */
+  .lg.lg-portfolio .summary-row .item:last-child:nth-child(odd) { grid-column: auto; }
+  .lg.lg-portfolio .summary-row .item:last-child:nth-child(even) { grid-column: 1 / -1; }
+  .lg.lg-portfolio .summary-row .item { box-shadow: 1px 0 0 var(--separator), 0 1px 0 var(--separator); }
+}
 @media (max-width: 767.98px) {
   .lg.lg-view .page-head h1 { font-size: var(--fs-2xl); }
   .lg.lg-portfolio .summary-row .value { font-size: var(--fs-xl); }
   .lg.lg-portfolio .summary-row .item { padding: 12px 14px; }
+  .lg.lg-portfolio .summary-head { padding: 12px 14px 0; }
   .lg.lg-research .rs-latest table { table-layout: auto; }
 }

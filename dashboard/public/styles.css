@@ -159,8 +159,8 @@ input[type="file"]:focus-visible { outline: 2px solid var(--focus); outline-offs
 /* ---------- Surfaces ---------- */
 .card {
   background: var(--surface);
-  border: 1px solid var(--separator);
-  border-radius: var(--r-lg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
   box-shadow: var(--shadow-card);
   padding: var(--s4);
   margin-bottom: var(--s3);
@@ -179,7 +179,7 @@ input[type="file"]:focus-visible { outline: 2px solid var(--focus); outline-offs
 .grid > .card { margin-bottom: 0; }
 @media (max-width: 1100px) { .grid.three { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .grid.two, .grid.three { grid-template-columns: minmax(0, 1fr); } .card { padding: var(--s4); } }
-.summary-row { display: flex; flex-wrap: wrap; gap: var(--s4) var(--s8); padding: var(--s4) var(--s5); margin-bottom: var(--s4); background: var(--surface); border: 1px solid var(--separator); border-radius: var(--r-lg); box-shadow: var(--shadow-card); }
+.summary-row { display: flex; flex-wrap: wrap; gap: var(--s4) var(--s8); padding: var(--s4) var(--s5); margin-bottom: var(--s4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow-card); }
 .summary-row .item { min-width: 0; }
 .summary-row .label { font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0; color: var(--text-3); }
 .summary-row .value { font-size: var(--fs-xl); font-weight: 600; font-variant-numeric: tabular-nums lining-nums; font-family: var(--sans); font-variant-numeric: tabular-nums lining-nums; letter-spacing: -0.03em; margin-top: 2px; }
@@ -347,7 +347,7 @@ button.chip:hover { border-color: var(--border); background: var(--row-hover); }
 
 /* ---------- Tables ---------- */
 .table-wrap, .table-scroll { overflow-x: auto; max-width: 100%; min-width: 0; -webkit-overflow-scrolling: touch; position: relative; }
-.table-scroll { background: var(--surface); border: 1px solid var(--separator); border-radius: var(--r-lg); box-shadow: var(--shadow-card); }
+.table-scroll { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow-card); }
 table { border-collapse: collapse; width: 100%; font-size: var(--fs-body); }
 caption { text-align: left; }
 th, td { padding: 9px 12px; border-bottom: 1px solid var(--separator); text-align: left; vertical-align: top; }
@@ -1373,7 +1373,7 @@ details.page-fold > summary { font-size: var(--fs-md); min-height: 44px; }
 
 /* Report reading: long reports set like a book page, a comfortable measure
    and line height; tables, code and lists stay in the interface type. */
-.reader { max-width: 76ch; background: var(--surface); border: 1px solid var(--separator); border-radius: var(--r-lg); box-shadow: var(--shadow-card); padding: 30px 40px 34px; }
+.reader { max-width: 76ch; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow-card); padding: 30px 40px 34px; }
 @media (max-width: 640px) { .reader { padding: 20px 18px 24px; border-radius: var(--r-md); } }
 .report-body { font-family: var(--sans); font-size: var(--fs-read); line-height: 1.7; overflow-wrap: anywhere; color: var(--text); font-variant-numeric: lining-nums; }
 .report-body h1, .report-body h2, .report-body h3, .report-body h4, .report-body h5, .report-body h6 { font-family: var(--font-display); margin: 1.6em 0 0.5em; font-size: var(--fs-lg); font-weight: 650; letter-spacing: -0.005em; }
@@ -2056,7 +2056,7 @@ dialog { border-color: var(--border); border-radius: var(--r-card); }
 /* Inside a panel a part is a well or a row, never a second bordered box:
    an alert keeps only its rule in the meaning's color, a callout its tint. */
 .alert { border-top-color: transparent; border-right-color: transparent; border-bottom-color: transparent; border-radius: var(--r-md); }
-.callout { border-color: transparent; border-radius: var(--r-md); }
+.callout, .callout.info, .callout.warn, .callout.bad, .callout.ok { border-color: transparent; border-radius: var(--r-well); }
 
 /* Stat panels: compact; the label in the metadata gray over its figure. */
 .summary-row { gap: var(--s3) var(--s6); padding: var(--s3) var(--s4); }

@@ -17,7 +17,7 @@
 
 /* ---- the KPI strip: one panel split by hairlines into five cells ---- */
 .kpi { padding: 0 24px; }
-.kpi-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--r-card); overflow: hidden; }
+.kpi-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--r-card); overflow: hidden; box-shadow: var(--shadow-card); }
 .kpi-cell { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; padding: 20px 24px; border: 0; background: var(--surface); color: var(--text); font: inherit; text-align: left; }
 .kpi-cell:focus-visible { outline-offset: -2px; }
 .kpi-cell.is-link { cursor: pointer; }
@@ -38,7 +38,7 @@
 .kpi-open { color: var(--text-3); }
 .kpi-rl { gap: 4px; }
 .kpi-rl-count { font-variant-numeric: tabular-nums; font-weight: 500; }
-.kpi-panel { margin-top: 8px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); }
+.kpi-panel { margin-top: 8px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow-card); }
 .breadth-bar { display: inline-block; width: 64px; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; align-self: center; }
 .breadth-bar > span { display: block; height: 100%; background: var(--bar-ink); border-radius: 3px; }
 .spin { animation: spin 0.9s linear infinite; }
@@ -86,7 +86,7 @@
 
 /* ---- the ledger ---- */
 .wl-body { min-width: 0; }
-.wl-scroll { min-width: 0; margin: 0 24px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); }
+.wl-scroll { min-width: 0; margin: 0 24px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow-card); }
 .wl-table { width: 100%; border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums lining-nums; }
 .wl-table th {
   position: sticky; top: 0; z-index: 3;

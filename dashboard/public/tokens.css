@@ -19,18 +19,23 @@
    ramp warm-shifted (#151413 / #1c1b1a / #242220), chosen per browser in
    Preferences; light is the default and gets the primary design attention.
 
+   Apple HIG pass (Eric, 2026-10-18): a #f6f6f4 canvas, white cards at 12px
+   with a 6% hairline and a 3% shadow, 8px buttons; grouping by whitespace and
+   the #faf9f7 tint, never a box inside a card; bull, bear and risk cards are
+   neutral with an 8px status dot.
+
    Text tones are at least 4.5:1 on every surface they sit on (white panel,
    canvas, rail, wells, hover and selected fills), in both themes. Signal
    tones (dots, bars, chart lines) are at least 3:1 on white and on the wells. */
 
 :root {
   /* Surfaces: canvas -> white panel -> sand */
-  --bg: #fcfbfa;                  /* the canvas under every page */
+  --bg: #f6f6f4;                  /* the canvas under every page (Apple HIG pass, 2026-10-18) */
   --surface: #ffffff;             /* panels, cards, the inspector, the table */
   --surface-raised: #ffffff;      /* menus, dialogs, toasts, drawers */
   --surface-hover: #f6f5f3;       /* a row or control under the pointer */
   --surface-selected: #efece9;    /* the open project's row, pressed (the ink edge says it too) */
-  --surface-sunken: #f8f7f5;      /* wells inside a panel */
+  --surface-sunken: #faf9f7;      /* wells inside a panel: a tint, never a box */
   --surface-band: #faf9f7;        /* a panel's header band */
   --surface-track: #f4f2f0;       /* a segmented control's housing */
   --sidebar: #f4f2f0;             /* the sand rail */
@@ -46,7 +51,7 @@
   --text-3: #6b6765;              /* labels, metadata: 5.4:1 on the canvas, 5.0:1 on the rail, 4.6:1 on the red tint */
   --text-label: #6b6765;          /* micro-labels and the tab bar */
   /* Lines */
-  --border: #e9e5e2;              /* the panel's hairline, the quiet divider */
+  --border: rgba(0, 0, 0, 0.06);  /* the panel's hairline, the quiet divider */
   --separator: #f4f2f0;           /* grid lines and rules inside a panel */
   --control-border: #8c8682;      /* field and checkbox edges: 3.6:1 on white */
   --button-border: #d2cecb;       /* a secondary button's edge */
@@ -84,6 +89,11 @@
   --neg-weak: #fee2e2;
   --warn-weak: #fffbeb;           /* amber-50: the amber signal keeps 3:1 on it */
   --risk-bar: #dc2626;
+  /* Status dots (8px) on neutral cards: the one colour a bull or bear card,
+     a risk or a trigger carries; its words say the same */
+  --dot-neg: #e5484d;
+  --dot-pos: #30a46c;
+  --dot-warn: #d97706;
   --fav-bar: #1a1919;
   --bar-ink: #1a1919;             /* score and progress bars: ink, never a rainbow */
   --track: #efece9;
@@ -163,12 +173,12 @@
   --track-title: -0.01em;
   /* Space, shape, depth: almost square, hairlines instead of shadows */
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px; --s10: 40px;
-  --r-sm: 2px; --r-md: 4px; --r-lg: 4px; --r-xl: 6px;
-  --r-card: 4px; --r-panel: 4px; --r-well: 4px; --r-field: 4px; --r-control: 4px;
-  --r-button: 6px;                /* buttons */
+  --r-sm: 2px; --r-md: 4px; --r-lg: 8px; --r-xl: 10px;
+  --r-card: 12px; --r-panel: 12px; --r-well: 8px; --r-field: 4px; --r-control: 4px;
+  --r-button: 8px;                /* buttons */
   --r-badge: 4px;                 /* status badges */
   --r-pill: 999px;                /* count badges, toggles and dots only */
-  --shadow-card: none;            /* a panel is its hairline */
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.03);   /* a card's whisper of lift */
   --shadow-panel: none;
   --shadow-lift: none;
   --shadow-seg: 0 0 0 1px rgba(26, 25, 25, 0.10);   /* the chosen segment's edge */
@@ -207,7 +217,7 @@
   --bg: #151413; --surface: #1c1b1a; --surface-raised: #242220; --surface-hover: #242220; --surface-selected: #2c2a28; --surface-sunken: #181716; --surface-band: #201f1d; --surface-track: #242220;
   --sidebar: #1a1918; --sidebar-hover: #242220; --sidebar-active: #2c2a28; --on-sidebar-active: #f4f2f0; --on-sidebar-active-2: #bdb8b4; --tab-chosen: #2c2a28; --logo-plate: #e9e5e2;
   --text: #f4f2f0; --text-2: #bdb8b4; --text-3: #9c9692; --text-label: #9c9692;
-  --border: #2e2c2a; --separator: #252321; --control-border: #6e6a66; --button-border: #3a3734;
+  --border: rgba(255, 255, 255, 0.07); --separator: #252321; --control-border: #6e6a66; --button-border: #3a3734;
   --accent: #f4f2f0; --accent-hover: #dcd8d4; --accent-text: #f4f2f0; --accent-weak: rgba(244, 242, 240, 0.07); --accent-line: rgba(244, 242, 240, 0.2); --link-line: rgba(244, 242, 240, 0.3); --on-accent: #1a1919;
   --focus: #f4f2f0; --focus-ring: 0 0 0 3px rgba(244, 242, 240, 0.24);
   --highlight: rgba(245, 158, 11, 0.16); --highlight-weak: rgba(245, 158, 11, 0.08); --on-highlight: #fbbf24;
@@ -215,7 +225,7 @@
   --pos-strong: #22c55e; --neg-strong: #ef4444; --warn-strong: #f59e0b;
   --pos: #4ade80; --pos-text: #4ade80; --neg: #f87171; --warn: #fbbf24;
   --pos-weak: rgba(34, 197, 94, 0.12); --neg-weak: rgba(239, 68, 68, 0.12); --warn-weak: rgba(245, 158, 11, 0.12);
-  --risk-bar: #ef4444; --fav-bar: #bdb8b4; --bar-ink: #e9e5e2; --track: #2e2c2a; --row-hover: #242220; --row-focus: #2c2a28; --scrollbar: #3a3734;
+  --dot-neg: #e5484d; --dot-pos: #30a46c; --dot-warn: #f59e0b; --risk-bar: #ef4444; --fav-bar: #bdb8b4; --bar-ink: #e9e5e2; --track: #2e2c2a; --row-hover: #242220; --row-focus: #2c2a28; --scrollbar: #3a3734;
   --band-a: #4ade80; --band-a-bg: rgba(74, 222, 128, 0.11); --band-a-chip: #4ade80;
   --band-b: #86c99b; --band-b-bg: rgba(134, 201, 155, 0.11); --band-b-chip: #86c99b;
   --band-c: #c9c4c0; --band-c-bg: rgba(244, 242, 240, 0.06); --band-c-chip: #c9c4c0;
@@ -231,7 +241,7 @@
   --pill-bad-bg: rgba(239, 68, 68, 0.13); --pill-bad-ink: #f87171; --pill-bad-line: rgba(239, 68, 68, 0.32); --pill-bad-dot: #ef4444;
   --check-ok-bg: rgba(244, 242, 240, 0.04); --check-ok-ink: #a8a29e; --check-ok-line: #2e2c2a; --check-risk-bg: rgba(239, 68, 68, 0.13); --check-risk-ink: #fca5a5; --check-risk-line: rgba(248, 113, 113, 0.45);
   --field-bg: #181716; --field-hover: #8c8682; --field-focus: #f4f2f0; --field-ring: rgba(244, 242, 240, 0.2);
-  --shadow-card: none; --shadow-panel: none; --shadow-lift: none; --shadow-seg: 0 0 0 1px rgba(244, 242, 240, 0.10);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.24); --shadow-panel: none; --shadow-lift: none; --shadow-seg: 0 0 0 1px rgba(244, 242, 240, 0.10);
   --shadow-pop: 0 0 0 1px rgba(244, 242, 240, 0.06), 0 12px 32px rgba(0, 0, 0, 0.5);
   --shadow-drawer: -1px 0 0 rgba(244, 242, 240, 0.05), -16px 0 40px rgba(0, 0, 0, 0.5);
   --scrim: rgba(10, 9, 9, 0.6);
@@ -242,7 +252,7 @@
     --bg: #151413; --surface: #1c1b1a; --surface-raised: #242220; --surface-hover: #242220; --surface-selected: #2c2a28; --surface-sunken: #181716; --surface-band: #201f1d; --surface-track: #242220;
     --sidebar: #1a1918; --sidebar-hover: #242220; --sidebar-active: #2c2a28; --on-sidebar-active: #f4f2f0; --on-sidebar-active-2: #bdb8b4; --tab-chosen: #2c2a28; --logo-plate: #e9e5e2;
     --text: #f4f2f0; --text-2: #bdb8b4; --text-3: #9c9692; --text-label: #9c9692;
-    --border: #2e2c2a; --separator: #252321; --control-border: #6e6a66; --button-border: #3a3734;
+    --border: rgba(255, 255, 255, 0.07); --separator: #252321; --control-border: #6e6a66; --button-border: #3a3734;
     --accent: #f4f2f0; --accent-hover: #dcd8d4; --accent-text: #f4f2f0; --accent-weak: rgba(244, 242, 240, 0.07); --accent-line: rgba(244, 242, 240, 0.2); --link-line: rgba(244, 242, 240, 0.3); --on-accent: #1a1919;
     --focus: #f4f2f0; --focus-ring: 0 0 0 3px rgba(244, 242, 240, 0.24);
     --highlight: rgba(245, 158, 11, 0.16); --highlight-weak: rgba(245, 158, 11, 0.08); --on-highlight: #fbbf24;
@@ -250,7 +260,7 @@
     --pos-strong: #22c55e; --neg-strong: #ef4444; --warn-strong: #f59e0b;
     --pos: #4ade80; --pos-text: #4ade80; --neg: #f87171; --warn: #fbbf24;
     --pos-weak: rgba(34, 197, 94, 0.12); --neg-weak: rgba(239, 68, 68, 0.12); --warn-weak: rgba(245, 158, 11, 0.12);
-    --risk-bar: #ef4444; --fav-bar: #bdb8b4; --bar-ink: #e9e5e2; --track: #2e2c2a; --row-hover: #242220; --row-focus: #2c2a28; --scrollbar: #3a3734;
+    --dot-neg: #e5484d; --dot-pos: #30a46c; --dot-warn: #f59e0b; --risk-bar: #ef4444; --fav-bar: #bdb8b4; --bar-ink: #e9e5e2; --track: #2e2c2a; --row-hover: #242220; --row-focus: #2c2a28; --scrollbar: #3a3734;
     --band-a: #4ade80; --band-a-bg: rgba(74, 222, 128, 0.11); --band-a-chip: #4ade80;
     --band-b: #86c99b; --band-b-bg: rgba(134, 201, 155, 0.11); --band-b-chip: #86c99b;
     --band-c: #c9c4c0; --band-c-bg: rgba(244, 242, 240, 0.06); --band-c-chip: #c9c4c0;
@@ -266,7 +276,7 @@
     --pill-bad-bg: rgba(239, 68, 68, 0.13); --pill-bad-ink: #f87171; --pill-bad-line: rgba(239, 68, 68, 0.32); --pill-bad-dot: #ef4444;
     --check-ok-bg: rgba(244, 242, 240, 0.04); --check-ok-ink: #a8a29e; --check-ok-line: #2e2c2a; --check-risk-bg: rgba(239, 68, 68, 0.13); --check-risk-ink: #fca5a5; --check-risk-line: rgba(248, 113, 113, 0.45);
     --field-bg: #181716; --field-hover: #8c8682; --field-focus: #f4f2f0; --field-ring: rgba(244, 242, 240, 0.2);
-    --shadow-card: none; --shadow-panel: none; --shadow-lift: none; --shadow-seg: 0 0 0 1px rgba(244, 242, 240, 0.10);
+    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.24); --shadow-panel: none; --shadow-lift: none; --shadow-seg: 0 0 0 1px rgba(244, 242, 240, 0.10);
     --shadow-pop: 0 0 0 1px rgba(244, 242, 240, 0.06), 0 12px 32px rgba(0, 0, 0, 0.5);
     --shadow-drawer: -1px 0 0 rgba(244, 242, 240, 0.05), -16px 0 40px rgba(0, 0, 0, 0.5);
     --scrim: rgba(10, 9, 9, 0.6);

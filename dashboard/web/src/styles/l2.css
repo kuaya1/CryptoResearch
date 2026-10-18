@@ -7,7 +7,7 @@
 .l2-grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
 @media (max-width: 1023.98px) { .l2-grid2 { grid-template-columns: minmax(0, 1fr); } }
 
-.l2-panel { min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); }
+.l2-panel { min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); box-shadow: var(--shadow-card); }
 .l2-panel-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; padding: 10px 16px; background: var(--surface-band); border-bottom: 1px solid var(--border); border-radius: var(--r-card) var(--r-card) 0 0; }
 .l2-panel-t { font-size: var(--fs-md); font-weight: 600; letter-spacing: 0; }
 .l2-panel-t:focus { outline: none; }

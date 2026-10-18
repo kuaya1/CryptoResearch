@@ -51,7 +51,7 @@ test('type floor: no React source draws text under 12.5px; monograms start at 13
   assert.match(fs.readFileSync(path.join(DASH, 'public', 'ui.js'), 'utf8'), /fontSize: `\$\{Math\.max\(13, Math\.round\(size \* 0\.38\)\)\}px`/);
 });
 
-test('the Desk at the executive scale: 15px rows, 26px badges, balanced columns; the inspector\'s risk is a 2x2 grid', () => {
+test('the Desk at the executive scale: 15px rows, 26px badges, balanced columns; the inspector\'s key metrics are one strip of four', () => {
   const wl = fs.readFileSync(path.join(DASH, 'web', 'src', 'styles', 'watchlist.css'), 'utf8');
   assert.match(wl, /\.wl-table td \{\s*height: var\(--wl-row-h\); padding: 8px 16px;[\s\S]*?font-size: var\(--fs-ui\);/);
   assert.match(wl, /\.wl-table \.risk-badge, \.wl-table \.gcell-band, \.wl-table \.gcell-wh \{ height: var\(--badge-h-lg\); padding: 0 10px; border-radius: var\(--r-badge-lg\); font-size: var\(--fs-sm\);/);
@@ -59,7 +59,9 @@ test('the Desk at the executive scale: 15px rows, 26px badges, balanced columns;
   for (const c of ['c-name', 'c-priceStack', 'c-spark', 'c-grade', 'c-risk', 'c-lastResearch', 'c-act']) assert.match(wl, new RegExp(`\\.wl-table \\.${c} \\{ width: \\d+%; \\}`), c);
   assert.doesNotMatch(wl, /\.c-(name|grade|spark)[^{]*\{[^}]*width: 1%/, 'no column shrinks to 1% and pushes the slack elsewhere');
   const insp = fs.readFileSync(path.join(DASH, 'web', 'src', 'styles', 'inspector.css'), 'utf8');
-  assert.match(insp, /\.iv-rgrid \{ display: grid; grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
+  // The Apple HIG pass (2026-10-18): four columns, hairlines between, no outer box.
+  assert.match(insp, /\.iv-rgrid \{ display: grid; grid-template-columns: repeat\(4, minmax\(0, 1fr\)\); \}/);
+  assert.match(insp, /\.iv-rc \+ \.iv-rc \{ border-left: 1px solid var\(--border\); \}/);
   const mp = fs.readFileSync(path.join(DASH, 'web', 'src', 'views', 'inspector', 'ModelPanel.jsx'), 'utf8');
   for (const part of ['forensic', 'downside', 'exit', 'pool']) assert.match(mp, new RegExp(`className="iv-rc" data-part="${part}"`), part);
 });

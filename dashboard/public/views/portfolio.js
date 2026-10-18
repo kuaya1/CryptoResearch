@@ -342,20 +342,27 @@ async function positionsTab(ctx) {
   };
 
   const limits = pf.limits || {};
+  // The order (the Apple HIG pass, 2026-10-18): the figures first, then the
+  // recorded positions, the wallet balances, and sector and limits side by
+  // side. The valuation state is a quiet dot and its words in the figures'
+  // head (its sentence the tooltip); Needs attention is its own tab, so no
+  // banner repeats it here. With nothing open, the state stays a line of its
+  // own, as nothing else would say it.
+  const tone = stateKind === 'ok' ? 'ok' : stateKind === 'bad' ? 'bad' : stateKind === 'warn' ? 'warn' : 'info';
   return h('div', null,
-    walletCard,
-    callout(h('span', null, h('strong', null, `${stateLabel}. `), stateNote), stateKind === 'ok' ? 'ok' : stateKind === 'bad' ? 'bad' : stateKind === 'warn' ? 'warn' : 'info'),
+    open.length ? null : callout(h('span', null, h('strong', null, `${stateLabel}. `), stateNote), tone),
     open.length ? h('div', { class: 'summary-row' },
+      h('p', { class: `summary-head is-${tone}`, title: stateNote, dataset: { key: 'pf-state' } }, h('span', { class: 'state-dot', 'aria-hidden': 'true' }), stateLabel),
       summaryItem('Priced value', fmtUsd(t.value_priced_usd), `${t.priced_count} of ${plural(t.open_count, 'open position')} priced${t.unpriced_count ? ` · unpriced: ${t.unpriced_assets.join(', ')}` : ''}`),
       summaryItem('Cash & stablecoins', t.cash_stable_pct === null ? '—' : fmtPct(t.cash_stable_pct), `${fmtUsd(t.cash_stable_usd)} · share of ${denominator}`),
       summaryItem('Realized (known)', fmtUsd(t.realized_known_usd), t.realized_unknown_positions ? `${plural(t.realized_unknown_positions, 'position')} with unknown basis` : 'all sales have known basis'),
       summaryItem('Fees paid', fmtUsd(t.fees_usd), t.fees_crypto_cost_usd ? `includes ${fmtUsd(t.fees_crypto_cost_usd)} paid in crypto (at cost)` : 'USD and in-kind, at cost'),
       summaryItem('Stale prices', String(t.stale_count || 0), t.stale_count ? t.stale_assets.join(', ') : 'none')) : null,
-    needsCount(idx) ? callout(h('span', null, h('strong', null, `${plural(needsCount(idx), 'record')} need${needsCount(idx) === 1 ? 's' : ''} attention. `), link('Open Needs attention', '#/portfolio?tab=attention', { dataset: { key: 'pf-needs-link' } })), 'warn') : null,
     card('Recorded positions', [h('div', { class: 'pos-table' }, positions), ledger], {
       note: open.length ? `From the ledger (your entries and recorded wallet activity). Allocation denominator: ${denominator}. Unpriced positions are excluded from it and listed as unpriced. Research grades stay on the watchlist; select an asset to see them.` : null,
       actions: [link('Record transactions', '#/portfolio?tab=record')],
     }),
+    walletCard,
     h('div', { class: 'grid two' },
       card('Sector concentration', table([
         { label: 'Sector', render: (s) => s.sector },

@@ -46,6 +46,21 @@ const fmtScore = (s) => {
 // A category's ID in words (token_value_capture → Token value capture).
 const words = (id) => { const t = String(id || '').replace(/_/g, ' '); return t.charAt(0).toUpperCase() + t.slice(1); };
 const VERDICT = (v) => (v ? `${v.charAt(0)}${v.slice(1).toLowerCase()}` : 'No verdict');
+// One reason in a few words for the queue's one line ("3 changes · Models
+// differ"); the full sentence is the line's tooltip.
+export function shortReason(r) {
+  const w = String(r.words || '');
+  if (r.kind === 'changed') return w.replace(/ since .*$/, '');
+  if (r.kind === 'differ') return 'Models differ';
+  if (r.kind === 'waiting') return /^Forensic audit/.test(w) ? 'Audit waiting' : w.replace(/ research waiting for you$/, ' waiting');
+  if (r.kind === 'due') {
+    if (/^Review overdue/.test(w)) return 'Review overdue';
+    if (/^Review due/.test(w)) return w;
+    if (r.item) return r.item.due ? 'Review due' : 'Review scheduled';
+    return w.replace(/ evidence change(s?) to review$/, ' change$1');
+  }
+  return w;
+}
 
 // ---- the queue ------------------------------------------------------------------------
 
@@ -71,7 +86,7 @@ function QueueList({ d, q, sel, onPick }) {
                   <li key={x.pid}>
                     <button type="button" className={`rv-item${sel === x.pid ? ' is-on' : ''}`} aria-current={sel === x.pid ? 'true' : undefined} data-key={`rv-item-${x.pid}`} data-pid={x.pid} onClick={() => onPick(x.pid)}>
                       <span className="rv-it">{p ? <Logo p={p} size={20} /> : null}<span className="rv-name">{x.name}</span>{x.symbol ? <span className="ticker">{x.symbol}</span> : null}</span>
-                      <span className="rv-ir">{x.reasons.map((r) => r.words).join(' · ')}</span>
+                      <span className="rv-ir" title={x.reasons.map((r) => r.words).join('\n')}>{[...new Set(x.reasons.map(shortReason))].join(' · ')}</span>
                     </button>
                   </li>
                 );
@@ -85,6 +100,37 @@ function QueueList({ d, q, sel, onPick }) {
 }
 
 // ---- the evidence for the change ---------------------------------------------------------------
+
+// New reports by model, Claude first, each model's latest first (by the time
+// it was saved; the report ID breaks a tie).
+const MODEL_ORDER = ['claude', 'chatgpt', 'gemini'];
+function byModel(reports) {
+  const groups = new Map();
+  for (const r of reports) {
+    if (!groups.has(r.provider)) groups.set(r.provider, []);
+    groups.get(r.provider).push(r);
+  }
+  const at = (r) => `${r.imported_at || ''}|${r.report_id}`;
+  for (const list of groups.values()) list.sort((a, b) => (at(a) < at(b) ? 1 : at(a) > at(b) ? -1 : 0));
+  const rank = (prov) => { const i = MODEL_ORDER.indexOf(prov); return i < 0 ? 9 : i; };
+  return [...groups.entries()].sort((a, b) => rank(a[0]) - rank(b[0]));
+}
+
+function ReportLine({ pid, r, full }) {
+  const e = full && full.evidence;
+  const flags = e ? (e.high || 0) + (e.medium || 0) : 0;
+  const claims = full && full.assessment && Array.isArray(full.assessment.claims) ? full.assessment.claims.length : null;
+  return (
+    <>
+      <p className="rv-li-t" title={`Report ${r.report_id}`}><strong>{PROVIDER_LABELS[r.provider] || r.provider}</strong>{` · ${VERDICT(r.verdict)}`}</p>
+      <p className="rv-li-m faint">{`Saved ${fmtDateTime(r.imported_at)}${r.analysis_at ? ` · analysis ${fmtDate(r.analysis_at)}` : ''}${full && full.grade && full.grade.display ? ` · grade ${full.grade.display}` : full && full.grade && full.grade.status === 'withheld' ? ' · grade withheld' : ''}${claims !== null ? ` · ${claims} claims` : ''}${flags ? ` · ${flags} evidence flag${flags === 1 ? '' : 's'}` : ''}`}</p>
+      <p className="rv-li-a">
+        <DeepLink pid={pid} href={`#/project/${enc(pid)}/evidence?model=${r.provider}&report=${enc(r.report_id)}`} dataKey={`rv-ev-${r.report_id}`}>Its evidence</DeepLink>
+        <DeepLink pid={pid} href={`#/project/${enc(pid)}/report?report=${enc(r.report_id)}&model=${r.provider}`} dataKey={`rv-rep-${r.report_id}`}>The report</DeepLink>
+      </p>
+    </>
+  );
+}
 
 function Evidence({ d, p, detail, agendaRow }) {
   const pid = p.project_id;
@@ -100,23 +146,18 @@ function Evidence({ d, p, detail, agendaRow }) {
       {ch && ch.new_reports && ch.new_reports.length ? (
         <section className="rv-evs" aria-labelledby="rv-ev-reports">
           <h3 id="rv-ev-reports">New reports<span className="rv-evs-n">{ch.new_reports.length}</span></h3>
-          <ul className="rv-list">
-            {ch.new_reports.map((r) => {
-              const full = report(r.report_id);
-              const e = full && full.evidence;
-              const flags = e ? (e.high || 0) + (e.medium || 0) : 0;
-              const claims = full && full.assessment && Array.isArray(full.assessment.claims) ? full.assessment.claims.length : null;
-              return (
-                <li key={r.report_id}>
-                  <p className="rv-li-t" title={`Report ${r.report_id}`}><strong>{PROVIDER_LABELS[r.provider] || r.provider}</strong>{` · ${VERDICT(r.verdict)}`}</p>
-                  <p className="rv-li-m faint">{`Saved ${fmtDateTime(r.imported_at)}${r.analysis_at ? ` · analysis ${fmtDate(r.analysis_at)}` : ''}${full && full.grade && full.grade.display ? ` · grade ${full.grade.display}` : full && full.grade && full.grade.status === 'withheld' ? ' · grade withheld' : ''}${claims !== null ? ` · ${claims} claims` : ''}${flags ? ` · ${flags} evidence flag${flags === 1 ? '' : 's'}` : ''}`}</p>
-                  <p className="rv-li-a">
-                    <DeepLink pid={pid} href={`#/project/${enc(pid)}/evidence?model=${r.provider}&report=${enc(r.report_id)}`} dataKey={`rv-ev-${r.report_id}`}>Its evidence</DeepLink>
-                    <DeepLink pid={pid} href={`#/project/${enc(pid)}/report?report=${enc(r.report_id)}&model=${r.provider}`} dataKey={`rv-rep-${r.report_id}`}>The report</DeepLink>
-                  </p>
-                </li>
-              );
-            })}
+          <ul className="rv-list rv-models">
+            {byModel(ch.new_reports).map(([prov, list]) => (
+              <li key={prov} className="rv-model" data-key={`rv-model-${prov}`}>
+                <ReportLine pid={pid} r={list[0]} full={report(list[0].report_id)} />
+                {list.length > 1 ? (
+                  <details className="rv-earlier" data-key={`rv-earlier-${prov}`}>
+                    <summary>{`+${list.length - 1} earlier run${list.length === 2 ? '' : 's'}`}</summary>
+                    <ul className="rv-list">{list.slice(1).map((r) => <li key={r.report_id}><ReportLine pid={pid} r={r} full={report(r.report_id)} /></li>)}</ul>
+                  </details>
+                ) : null}
+              </li>
+            ))}
           </ul>
         </section>
       ) : null}
@@ -207,7 +248,7 @@ function Centre({ d, p, item, onPrev, onNext, hasPrev, hasNext, phone }) {
         </header>
         {error ? <div className="note note-warn" role="alert"><span>{`Could not load the record: ${error.message}`}</span><button type="button" className="btn btn-sm" onClick={retry}>Try again</button></div> : null}
         {detail ? <CheckIn key={pid} d={detail} current={current} row={p} pid={pid} markRef={markRef} hideButton startOpen /> : null}
-        <ModelPanel d={d} p={p} detail={detail} current={current} failed={Boolean(error)} />
+        <ModelPanel d={d} p={p} detail={detail} current={current} failed={Boolean(error)} mode="review" />
         {phone ? <Evidence d={d} p={p} detail={detail} agendaRow={item ? item.agenda : null} /> : null}
       </div>
       <div className="rv-bar" role="toolbar" aria-label="Review actions">

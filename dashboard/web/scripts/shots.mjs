@@ -83,6 +83,20 @@ const SHOTS = [
   { name: 'cmdk-1440', w: 1440, url: '#/watchlist', js: "document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }))" },
   { name: 'cmdk-1440-q', w: 1440, url: '#/watchlist', js: "(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })); await new Promise((r) => setTimeout(r, 400)); const i = document.querySelector('.cmdk-input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, 'relay forensics'); i.dispatchEvent(new Event('input', { bubbles: true })); })()" },
   { name: 'cmdk-390', w: 390, url: '#/watchlist', js: "document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }))" },
+  // The Apple HIG pass (2026-10-18): each changed view whole, light and dark.
+  { name: 'hig-brief-1440', w: 1440, url: `#/project/${P.relay}/brief`, full: true },
+  { name: 'hig-brief-1440-dark', w: 1440, url: `#/project/${P.relay}/brief`, full: true, theme: 'dark' },
+  { name: 'hig-brief-ranges-1440', w: 1440, url: `#/project/${P.ranges}/brief`, full: true },
+  { name: 'hig-brief-390', w: 390, url: `#/project/${P.relay}/brief`, full: true },
+  { name: 'hig-review-1440', w: 1440, url: `#/review?p=${P.relay}` },
+  { name: 'hig-review-1440-dark', w: 1440, url: `#/review?p=${P.relay}`, theme: 'dark' },
+  { name: 'hig-insp-1440', w: 1440, url: `#/watchlist?p=${P.relay}`, insp: true },
+  { name: 'hig-insp-1440-dark', w: 1440, url: `#/watchlist?p=${P.relay}`, insp: true, theme: 'dark' },
+  { name: 'hig-insp-390', w: 390, url: `#/watchlist?p=${P.relay}` },
+  { name: 'hig-portfolio-1440', w: 1440, url: '#/portfolio', full: true },
+  { name: 'hig-portfolio-1440-dark', w: 1440, url: '#/portfolio', full: true, theme: 'dark' },
+  { name: 'hig-desk-1440', w: 1440, url: '#/watchlist' },
+  { name: 'hig-desk-1440-dark', w: 1440, url: '#/watchlist', theme: 'dark' },
 ];
 
 const b = await launch();

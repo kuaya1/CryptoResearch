@@ -12,7 +12,7 @@
 // answer offers Try again with the same request, which the desk applies once.
 // The note draft stays until a review is saved.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Plus } from 'lucide-react';
 import { fmtDate, fmtDateTime, fmtSignedPct, fmtPrice, toast } from '../../../../public/ui.js';
 import { checkInModel } from '../../../../public/checkin-model.js';
 import { baseOf, sectionHref } from '../../../../public/project-routes.js';
@@ -145,6 +145,8 @@ export function CheckIn({ d, current, row, pid, markRef = null, hideButton = fal
     else drafts.delete(pid);
     setNoteState(v);
   };
+  // The note is one quiet line until you add one (a kept draft opens it).
+  const [noteOpen, setNoteOpen] = useState(() => Boolean(drafts.get(pid)));
   const [msg, setMsg] = useState(null); // { text, tone, action }
   const retry = useRef(null); // the request a Try again resends
   const model = useMemo(() => checkInModel(ch, d, dk.index, { when: fmtDateTime }), [ch, d, dk.index]);
@@ -226,10 +228,12 @@ export function CheckIn({ d, current, row, pid, markRef = null, hideButton = fal
               {ch.journal_entries.map((j) => <li key={j.entry_id}>{`${String(j.type).replace(/_/g, ' ')} · ${fmtDateTime(j.created_at)}${j.text ? `: ${j.text}` : ''}`}</li>)}
             </ul>
           ) : null}
-          <label className="ci-note">
-            <span>Note (optional)</span>
-            <textarea data-key="ci-note" maxLength={NOTE_MAX} rows={2} value={note} onChange={(e) => setNote(e.target.value.slice(0, NOTE_MAX))} />
-          </label>
+          {noteOpen || note ? (
+            <label className="ci-note">
+              <span>Review note (optional)</span>
+              <textarea data-key="ci-note" maxLength={NOTE_MAX} rows={2} value={note} autoFocus={noteOpen && !note} onChange={(e) => setNote(e.target.value.slice(0, NOTE_MAX))} />
+            </label>
+          ) : <button type="button" className="btn-link ci-note-add" data-key="ci-note-add" onClick={() => setNoteOpen(true)}><Plus size={14} aria-hidden="true" />Add review note</button>}
           <p className="dg-all"><a href={`#/project/${enc(pid)}/notes`} data-key="pb-all-changes">All changes</a></p>
         </div>
       </details>

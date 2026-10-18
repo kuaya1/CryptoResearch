@@ -203,7 +203,9 @@ function Triggers({ p, cr, wait }) {
   );
 }
 
-// ---- 3. risk and exit -------------------------------------------------------------------------
+// ---- 3. key metrics: one horizontal strip of four (forensic status, downside
+// risk, the exit at your size, the top pool and the contract; the Apple HIG
+// pass, 2026-10-18) -------------------------------------------------------------------------
 
 const FX_STATE_WORDS = { occurred: 'Occurred', watch: 'Watch', recovered: 'Recovered', within: 'Within', not_established: 'Not established', unknown: 'Unknown', reversed: 'Reversed' };
 const FX_LABELS = { liquidity_impairment: 'Liquidity', operational_degradation: 'Operations', delivery_inactivity: 'Delivery', confirmed_discontinuation: 'Discontinuation' };
@@ -269,7 +271,7 @@ function RiskStrip({ d, p }) {
           : { text: 'GoPlus: no flag', tone: '', title: 'GoPlus answered no mint, blacklist, proxy or tax flag. Nothing here means safe.' };
   return (
     <section className="iv-risk" aria-labelledby="iv-risk-h">
-      <h3 className="iv-h" id="iv-risk-h">Risk and exit</h3>
+      <h3 className="iv-h" id="iv-risk-h">Key metrics</h3>
       <div className="iv-rgrid">
         <div className="iv-rc" data-part="forensic">
           <p className="iv-rc-k">Forensic status</p>
@@ -292,7 +294,7 @@ function RiskStrip({ d, p }) {
           <p className="iv-rc-s">{`${ex.limit}% limit`}</p>
         </div>
         <div className="iv-rc" data-part="pool">
-          <p className="iv-rc-k">Top pool and contract</p>
+          <p className="iv-rc-k">Top pool</p>
           <p className="iv-rc-v iv-pool">
             {pool.pool === undefined ? <span className="faint" aria-busy="true">…</span>
               : pool.error ? <span className="is-unknown" title={pool.error.message}>DexScreener unread</span>
@@ -440,6 +442,7 @@ function NeedsYou({ d, p, detail }) {
       <ul className="iv-lines">
         {shown.map((l) => (
           <li key={l.key} className={`iv-line sev-${l.sev}`}>
+            <span className="iv-line-dot" aria-hidden="true" />
             <span className="iv-line-t"><strong>{l.kind}</strong><span className="iv-line-d" title={l.text}>{` · ${l.text}`}</span></span>
             {l.action}
           </li>
@@ -481,7 +484,9 @@ function ReportWait({ p, cr, current, failed }) {
   return <Loading label={`${who}'s report`} />;
 }
 
-export function ModelPanel({ d, p, detail, current = true, failed = false }) {
+// mode "review": the Review page's centre, the verdict and bull and bear only
+// (the model cards above it are the check-in's; the rest is one click away).
+export function ModelPanel({ d, p, detail, current = true, failed = false, mode = 'inspector' }) {
   const cr = canonicalReport(p, detail);
   // A current record that does not hold the list's report: read it once more.
   useEffect(() => {
@@ -492,10 +497,14 @@ export function ModelPanel({ d, p, detail, current = true, failed = false }) {
     <div className="mpanel iv" data-report={cr.report_id || ''} data-opinion={cr.status} data-provider={cr.c.provider || 'claude'}>
       <VerdictCard d={d} p={p} cr={cr} />
       <Triggers p={p} cr={cr} wait={wait} />
-      <RiskStrip d={d} p={p} />
-      <Thesis p={p} cr={cr} wait={wait} />
-      <NeedsYou d={d} p={p} detail={detail} />
-      <YourNote p={p} detail={detail} />
+      {mode === 'review' ? null : (
+        <>
+          <RiskStrip d={d} p={p} />
+          <Thesis p={p} cr={cr} wait={wait} />
+          <NeedsYou d={d} p={p} detail={detail} />
+          <YourNote p={p} detail={detail} />
+        </>
+      )}
     </div>
   );
 }

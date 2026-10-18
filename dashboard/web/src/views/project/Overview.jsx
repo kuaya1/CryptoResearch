@@ -217,29 +217,53 @@ function RiskText({ text }) {
   );
 }
 
+// One trigger: the report's first, the rest one click away (the whole list
+// lives here only; the Apple HIG pass, 2026-10-18, removed its repeat under
+// What to watch).
+function Trigger({ first, rest, missing, id }) {
+  const [open, setOpen] = useState(false);
+  if (!first) return missing;
+  return (
+    <>
+      <p className="key-t">{first}</p>
+      {rest.length ? (
+        <>
+          <ul className="key-rest" id={id} hidden={!open}>{rest.map((t) => <li key={t}>{t}</li>)}</ul>
+          <button type="button" className="btn-link key-rest-btn" aria-expanded={open} aria-controls={id} data-key={id} onClick={() => setOpen(!open)}>{open ? 'Show less' : `+${rest.length} more`}</button>
+        </>
+      ) : null}
+    </>
+  );
+}
+
+// Key triggers: the strongest sourced risk, then what would confirm the
+// thesis beside what would invalidate it. Neutral cards; an 8px dot carries
+// the sign and the label says it.
 function KeyPoints({ m, who }) {
   const k = m.key;
   if (!k) return null;
   const missing = <p className="key-t key-none">{`Not reported in ${who}'s report`}</p>;
-  const more = (n, what) => (n ? <span className="key-more">{`+${n} more ${what}`}</span> : null);
   return (
-    <dl className="keys" aria-label="Key points from the report">
-      <div className="key key-risk">
-        <dt>{k.risk && k.risk.sourced ? 'Strongest sourced risk' : 'Strongest risk'}</dt>
-        <dd>
-          {k.risk ? <RiskText text={k.risk.text} /> : missing}
-          {k.risk ? (k.risk.sourced ? <CiteLine f={k.risk} /> : <p className="cite"><span className="etag none">No source cited for any listed risk</span></p>) : null}
-        </dd>
-      </div>
-      <div className="key key-confirm">
-        <dt>Would confirm</dt>
-        <dd>{k.confirm ? <p className="key-t">{k.confirm}</p> : missing}{more(k.confirm_more, 'under What to watch')}</dd>
-      </div>
-      <div className="key key-break">
-        <dt>Would break it</dt>
-        <dd>{k.break ? <p className="key-t">{k.break}</p> : missing}{more(k.break_more, 'under What to watch')}</dd>
-      </div>
-    </dl>
+    <div className="keys-wrap">
+      <h3 className="keys-h">Key triggers</h3>
+      <dl className="keys" aria-label="Key triggers from the report">
+        <div className="key key-risk">
+          <dt>{k.risk && k.risk.sourced ? 'Strongest sourced risk' : 'Strongest risk'}</dt>
+          <dd>
+            {k.risk ? <RiskText text={k.risk.text} /> : missing}
+            {k.risk ? (k.risk.sourced ? <CiteLine f={k.risk} /> : <p className="cite"><span className="etag none">No source cited for any listed risk</span></p>) : null}
+          </dd>
+        </div>
+        <div className="key key-confirm">
+          <dt>Would confirm</dt>
+          <dd><Trigger first={k.confirm} rest={m.watch.confirms.slice(1)} missing={missing} id="bf-confirm-rest" /></dd>
+        </div>
+        <div className="key key-break">
+          <dt>Would invalidate</dt>
+          <dd><Trigger first={k.break} rest={m.watch.breaks.slice(1)} missing={missing} id="bf-break-rest" /></dd>
+        </div>
+      </dl>
+    </div>
   );
 }
 
@@ -495,12 +519,27 @@ function RiskBars({ m }) {
   );
 }
 
+// Thesis pillars: what supports it beside what threatens it, once. The
+// strongest sourced risk already leads the Key triggers, so it is not
+// repeated here; the line says where it is.
 function ForAgainst({ m, who }) {
+  const lead = m.key && m.key.risk ? m.key.risk.text : null;
+  const threatens = m.threatens.filter((f) => f.text !== lead);
+  const moved = threatens.length < m.threatens.length;
   return (
-    <div className="ov-two">
-      <Section id="supports" title="What supports it"><FactList items={m.supports} label={`${who}'s strongest positives`} /></Section>
-      <Section id="threatens" title="What threatens it"><FactList items={m.threatens} label={`${who}'s strongest risks`} /></Section>
-    </div>
+    <Section id="pillars" title="Thesis pillars">
+      <div className="pillars">
+        <div className="pillar is-pos">
+          <h3 className="pillar-h">Supports</h3>
+          <FactList items={m.supports} label={`${who}'s strongest positives`} />
+        </div>
+        <div className="pillar is-neg">
+          <h3 className="pillar-h">Threatens</h3>
+          {threatens.length || !moved ? <FactList items={threatens} label={`${who}'s strongest risks`} /> : null}
+          {moved ? <p className="pillar-note">The strongest sourced risk is under Key triggers.</p> : null}
+        </div>
+      </div>
+    </Section>
   );
 }
 
@@ -600,10 +639,6 @@ function Watch({ m, who, pid }) {
       {w.review_trigger_only ? <p className="ow-ev-x"><span className="k">Review sooner if</span>{w.review_trigger_only}</p> : null}
       {w.undated.length ? <div className="ow-aside"><h3 className="ov-h3">Date unknown</h3><ul>{w.undated.map((x) => <li key={x.title}>{x.title}<span className="faint">{` · ${CERTAINTY_WORDS[x.certainty]}`}</span></li>)}</ul></div> : null}
       {w.outside.length ? <div className="ow-aside"><h3 className="ov-h3">Outside the horizon</h3><ul>{w.outside.map((x) => <li key={x.title}>{x.title}<span className="faint">{` · ${windowWords(x.start, x.end)} · ${CERTAINTY_WORDS[x.certainty]}`}</span></li>)}</ul></div> : null}
-      <div className="ov-two tight">
-        <div className="ow-cond is-confirm"><h3 className="ov-h3">Would strengthen it</h3>{w.confirms.length ? <ul>{w.confirms.slice(0, 5).map((t) => <li key={t}>{t}</li>)}</ul> : <p className="none">None given in the report.</p>}</div>
-        <div className="ow-cond is-break"><h3 className="ov-h3">Would invalidate it</h3>{w.breaks.length ? <ul>{w.breaks.slice(0, 5).map((t) => <li key={t}>{t}</li>)}</ul> : <p className="none">None given in the report.</p>}</div>
-      </div>
       {w.metric ? (
         <div className="ow-metric">
           <h3 className="ov-h3">The one development to watch</h3>
@@ -623,31 +658,15 @@ function Watch({ m, who, pid }) {
 
 // ---- the scenarios -------------------------------------------------------------------------
 
+// Bear, base and bull as three cards (the Apple HIG pass, 2026-10-18: the
+// probability bar and the price plot only repeated them): the case and its
+// probability, the price range large, the range against BTC as a badge, the
+// assumptions as bullets, then the outcome and what breaks it.
 function Scenarios({ m, who }) {
   const s = m.scenarios;
   if (!s) return null;
   const order = ['bear', 'base', 'bull'];
   const rows = s.rows.slice().sort((x, y) => (order.indexOf(x.id) + 1 || 9) - (order.indexOf(y.id) + 1 || 9));
-  const clampPct = (v) => Math.max(0, Math.min(100, Number(v)));
-  let plot = null;
-  if (s.plot) {
-    const ranged = rows.filter((x) => x.range);
-    const lo = Math.min(...ranged.map((x) => x.range.low));
-    const hi = Math.max(...ranged.map((x) => x.range.high));
-    const span = hi - lo || hi || 1;
-    const at = (v) => clampPct(((v - lo) / span) * 100);
-    plot = (
-      <div className="splot" role="img" aria-label={`${who}'s price ranges: ${ranged.map((x) => `${x.label} ${x.price}`).join('; ')}`}>
-        {ranged.map((x) => (
-          <div key={x.id} className="splot-row">
-            <span className="splot-l">{x.label}</span>
-            <span className="splot-track"><span className={`splot-range is-${x.id}`} style={{ left: `${at(x.range.low)}%`, width: `${Math.max(1.5, at(x.range.high) - at(x.range.low))}%` }} /></span>
-            <span className="splot-v fig">{x.price}</span>
-          </div>
-        ))}
-      </div>
-    );
-  }
   const notes = [
     s.probability && s.probability.status !== 'ok' ? s.probability.message : null,
     s.targets && !['given', 'none'].includes(s.targets.status) ? s.targets.message : null,
@@ -655,24 +674,19 @@ function Scenarios({ m, who }) {
   ].filter(Boolean);
   return (
     <Section id="scenarios" title="Scenarios" sub={`Forecasts: ${who}'s own estimates, not facts`}>
-      {s.bar ? (
-        <div className="sbar" role="img" aria-label={`${who}'s probabilities: ${rows.map((x) => `${x.label} ${x.probability}%`).join(', ')}`}>
-          {rows.map((x) => <span key={x.id} className={`sbar-seg is-${x.id}`} style={{ width: `${x.probability}%` }}>{x.probability >= 12 ? <span>{`${x.label} ${x.probability}%`}</span> : null}</span>)}
-        </div>
-      ) : null}
-      {plot}
       <div className="scns">
         {rows.map((x) => (
-          <div key={x.id} className={`scn is-${x.id}`}>
-            <div className="scn-head"><h3>{`${x.label} case`}</h3>{x.probability !== null ? <span className="scn-prob" title={`${who}'s subjective estimate`}>{`${x.probability}%`}</span> : <span className="scn-prob none">No probability</span>}</div>
-            <dl>
-              {x.outcome ? <><dt>Outcome</dt><dd>{x.outcome}</dd></> : null}
-              <dt>Price</dt><dd>{x.price ? <span className="fig">{x.price}</span> : <span className="faint">No range given</span>}</dd>
-              <dt>Against BTC</dt><dd>{x.vsBtc ? <span className="fig">{x.vsBtc}</span> : <span className="faint">No range given</span>}</dd>
-              {x.assumptions.length ? <><dt>Assumes</dt><dd><ul>{x.assumptions.map(([k, val]) => <li key={k}><span className="faint">{`${k}: `}</span>{val}</li>)}</ul></dd></> : null}
-              {x.invalidation ? <><dt>Breaks if</dt><dd>{x.invalidation}</dd></> : null}
-            </dl>
-          </div>
+          <article key={x.id} className={`scn is-${x.id}`} aria-labelledby={`bf-scn-${x.id}`}>
+            <h3 className="scn-head" id={`bf-scn-${x.id}`}>
+              <span className="scn-name">{x.label}</span>
+              {x.probability !== null ? <span className="scn-prob" title={`${who}'s subjective estimate`}>{`${x.probability}%`}</span> : <span className="scn-prob none">No probability</span>}
+            </h3>
+            <p className="scn-price">{x.price ? <span className="fig">{x.price}</span> : <span className="none">No price range given</span>}</p>
+            <p className="scn-btc-row">{x.vsBtc ? <span className="scn-btc fig">{`${x.vsBtc} vs BTC`}</span> : <span className="none">No range against BTC</span>}</p>
+            {x.assumptions.length ? <ul className="scn-as" aria-label="Assumes">{x.assumptions.map(([k, val]) => <li key={k}><span className="faint">{`${k}: `}</span>{val}</li>)}</ul> : null}
+            {x.outcome ? <p className="scn-out"><span className="k">Outcome</span>{x.outcome}</p> : null}
+            {x.invalidation ? <p className="scn-out"><span className="k">Breaks if</span>{x.invalidation}</p> : null}
+          </article>
         ))}
       </div>
       {notes.length ? <ul className="scn-notes">{notes.map((n) => <li key={n}>{n}</li>)}</ul> : null}

@@ -35,10 +35,10 @@ html.has-drawer { overflow: hidden; }
 
 /* ---- head ---- */
 .insp-head { flex: none; padding: 16px 24px 14px; border-bottom: 1px solid var(--border); background: var(--surface); }
-.ih-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: start; }
+.ih-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 12px; align-items: start; }
 .ih-row h2 {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
-  font-family: var(--font-display); font-size: var(--fs-head); font-weight: 600; letter-spacing: var(--track-title); line-height: 1.25; padding-top: 3px; min-width: 0;
+  font-family: var(--font-display); font-size: var(--fs-head); font-weight: 700; letter-spacing: var(--track-title); line-height: 1.25; padding-top: 4px; min-width: 0;
 }
 .ih-row h2:focus { outline: none; }
 .ih-row h2:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-sm); }
@@ -46,16 +46,18 @@ html.has-drawer { overflow: hidden; }
 .ih-sym { font-family: var(--sans); display: inline-block; vertical-align: 3px; margin-left: 2px; font-size: var(--fs-sm); font-weight: 600; line-height: 22px; color: var(--text-2); background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--separator); border-radius: var(--r-sm); padding: 0 6px; letter-spacing: 0.02em; }
 .ih-win { display: flex; gap: 2px; margin-right: -6px; }
 .ih-held { vertical-align: 2px; }
-.ih-sub { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; margin: 10px 0 0 44px; }
-.ih-price { display: flex; align-items: baseline; gap: 4px 10px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
-.ih-fact { font-size: var(--fs-md); color: var(--text); white-space: nowrap; }
-.ih-fact .k { color: var(--text-2); font-size: var(--fs-sm); margin-right: 4px; }
+.ih-sub { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; margin: 4px 0 0 48px; }
+.ih-price { display: flex; align-items: center; gap: 8px; padding-top: 4px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ih-facts { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; margin: 0; font-size: var(--fs-ui-sm); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.ih-dot { color: var(--text-3); }
+.ih-fact { color: var(--text-2); white-space: nowrap; }
+.ih-fact .k { margin-right: 4px; }
 .ih-links-btn { gap: 5px; }
-.ih-price-v { font-family: var(--font-display); font-size: var(--fs-head); font-weight: 600; letter-spacing: var(--track-title); }
-.ih-chg { font-size: var(--fs-md); font-weight: 600; padding: 2px 8px; border-radius: var(--r-badge-lg); }
+.ih-price-v { font-family: var(--font-display); font-size: var(--fs-head); font-weight: 700; letter-spacing: var(--track-title); line-height: 1.25; }
+.ih-chg { font-size: var(--fs-sm); font-weight: 600; padding: 2px 8px; border-radius: var(--r-pill); }
 .ih-chg.up { background: var(--pos-weak); }
 .ih-chg.down { background: var(--neg-weak); }
-.ih-fresh { font-size: var(--fs-sm); color: var(--text-3); }
+.ih-fresh { color: var(--text-2); }
 .ih-fresh.is-warn { color: var(--warn); }
 .ih-links { display: flex; gap: 6px; flex-wrap: wrap; }
 .xlink {
@@ -73,7 +75,7 @@ html.has-drawer { overflow: hidden; }
 .iv-h { font-size: var(--fs-ui); font-weight: 600; color: var(--text); margin: 0 0 10px; }
 .iv-link { display: inline-flex; align-items: center; gap: 3px; font-size: var(--fs-sm); font-weight: 500; }
 /* 1. the executive verdict: the metric header and the consensus line */
-.iv-card .mh { background: var(--surface); padding: 20px; }
+.iv-card .mh { padding: 20px; }
 .iv-card .mh-verdict { font-size: var(--fs-head); font-weight: 600; line-height: 1.25; }
 .iv-card .mh-num { font-size: var(--fs-page); font-weight: 700; }
 .iv-ev { gap: 5px; text-decoration: none; }
@@ -100,11 +102,13 @@ html.has-drawer { overflow: hidden; }
 .cg-dot.is-withheld::after { transform: rotate(-45deg); }
 /* 2. bull and bear in two columns; "would break it" under the bear */
 .ikeys.iv-tr { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.iv-tr .ik { display: block; padding: 16px; border-radius: var(--r-card); }
-.iv-tr .ik dt { margin-bottom: 8px; font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
+.iv-tr .ik { display: block; padding: 16px 18px; border-radius: var(--r-well); background: var(--surface-sunken); box-shadow: none; }
+.iv-tr .ik dt { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); }
+.iv-tr .ik dt::before { content: ""; width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--dot-neg); }
+.iv-tr .ik-confirm dt::before { background: var(--dot-pos); }
 .iv-tr .ik-risk { grid-column: 1; grid-row: 1; }
-.iv-tr .ik-confirm { grid-column: 2; grid-row: 1 / span 2; background: var(--pos-weak); }
-.iv-tr .ik-break { grid-column: 1; grid-row: 2; background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--separator); }
+.iv-tr .ik-confirm { grid-column: 2; grid-row: 1 / span 2; }
+.iv-tr .ik-break { grid-column: 1; grid-row: 2; }
 .iv-tr .ik-foot { grid-column: 1 / -1; }
 .iv-tr .ik-t { font-size: var(--fs-body-lg); font-weight: 500; line-height: 1.5; }
 .iv-tr .ik-more { margin: 8px 0 0; padding-left: 16px; font-size: var(--fs-md); line-height: 1.5; color: var(--text); }
@@ -117,21 +121,30 @@ html.has-drawer { overflow: hidden; }
 }
 /* 3. risk and exit: four cells in a bordered 2x2 grid (forensic status,
    downside risk, the exit at your size, the top pool and the contract) */
-.iv-rgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--r-card); overflow: hidden; }
-.iv-rc { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 14px 16px; background: var(--surface); }
+.iv-rgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.iv-rc { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 2px 14px; }
+.iv-rc:first-child { padding-left: 0; }
+.iv-rc:last-child { padding-right: 0; }
+.iv-rc + .iv-rc { border-left: 1px solid var(--border); }
 .iv-rc-k { font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); }
-.iv-rc-v { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: var(--fs-xl); font-weight: 600; line-height: 1.25; color: var(--text); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.iv-rc-v { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: var(--fs-lg); font-weight: 600; line-height: 1.25; color: var(--text); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .iv-rc-v.is-bad { color: var(--neg); }
 .iv-rc-v.is-warn { color: var(--warn); }
 .iv-rc-v.is-ok { color: var(--pos); }
-.iv-rc-v.is-unknown, .iv-rc-v .is-unknown { color: var(--text-3); font-size: var(--fs-lg); font-weight: 500; }
+.iv-rc-v.is-unknown, .iv-rc-v .is-unknown { color: var(--text-3); font-size: var(--fs-md); font-weight: 500; }
 .iv-rc-of { font-size: var(--fs-md); font-weight: 500; color: var(--text-3); }
 .iv-rc-s { font-size: var(--fs-sm); line-height: 1.4; color: var(--text-2); overflow-wrap: anywhere; }
 .iv-gp.is-bad { color: var(--neg); font-weight: 500; }
 .iv-gp.is-warn { color: var(--warn); font-weight: 500; }
 .iv-rc-a { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: auto; padding-top: 6px; }
 .iv-thin { margin-left: 2px; }
-@media (max-width: 399.98px) { .iv-rgrid { grid-template-columns: minmax(0, 1fr); } }
+/* A narrow drawer or a phone: two by two, the hairlines kept between. */
+@media (max-width: 599.98px) {
+  .iv-rgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 14px; }
+  .iv-rc:nth-child(odd) { padding-left: 0; border-left: 0; }
+  .iv-rc:nth-child(even) { padding-right: 0; }
+  .iv-rc:nth-child(n+3) { padding-top: 14px; border-top: 1px solid var(--border); }
+}
 /* 4. thesis and watch */
 .iv-thesis { margin: 0; gap: 8px; }
 .iv-thesis .take-text { font-size: var(--fs-ui); line-height: 1.6; }
@@ -141,11 +154,13 @@ html.has-drawer { overflow: hidden; }
 .iv-watch { margin-top: 2px; }
 .iv-watch-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 /* 5. what needs you: at most three lines, each with its action */
-.iv-lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.iv-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px 10px 14px; border-radius: var(--r-card); background: var(--surface-sunken); box-shadow: inset 3px 0 0 var(--text-3); font-size: var(--fs-md); line-height: 1.4; }
-.iv-line.sev-high { background: var(--neg-weak); box-shadow: inset 3px 0 0 var(--neg-strong); }
-.iv-line.sev-medium { background: var(--warn-weak); box-shadow: inset 3px 0 0 var(--warn-strong); }
-.iv-line-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.iv-lines { list-style: none; margin: 0; padding: 4px 16px; border-radius: var(--r-well); background: var(--surface-sunken); }
+.iv-line { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 8px 0; font-size: var(--fs-md); line-height: 1.4; }
+.iv-line + .iv-line { border-top: 1px solid var(--border); }
+.iv-line-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--text-3); }
+.iv-line.sev-high .iv-line-dot { background: var(--dot-neg); }
+.iv-line.sev-medium .iv-line-dot { background: var(--dot-warn); }
+.iv-line-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .iv-line-d { color: var(--text-2); }
 .iv-line .btn { flex: none; }
 .iv-all { margin-top: 8px; font-size: var(--fs-sm); }
@@ -228,11 +243,8 @@ html.has-drawer { overflow: hidden; }
 .ik dt { font-size: var(--fs-xs); font-weight: 600; color: var(--text-3); }
 .ik dd { margin: 0; min-width: 0; }
 .ik ul { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 2px; color: var(--text); line-height: 1.45; }
-.ik-risk { grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 10px 12px; border-radius: var(--r-lg); background: var(--neg-weak); box-shadow: inset 0 0 0 1px var(--pill-bad-line); }
-.ik-risk dt { color: var(--neg); }
+.ik-risk { grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 10px 12px; border-radius: var(--r-well); background: var(--surface-sunken); }
 .ik-t { color: var(--text); font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
-.ik-confirm dt { color: var(--pos); }
-.ik-break dt { color: var(--neg); }
 .mmore { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
 .mmore:empty { display: none; }
 .mmore > .fold { border-top: 0; border-radius: var(--r-lg); background: var(--surface-sunken); padding: 0 12px; }
@@ -438,6 +450,12 @@ html.has-drawer { overflow: hidden; }
 /* A phone: the full-screen sheet keeps its head and foot; a swipe down on the
    head closes it. */
 @media (max-width: 767.98px) {
+  /* The price steps under the name; the menu and close keep the first row. */
+  .ih-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .ih-row > .logo { grid-column: 1; grid-row: 1; }
+  .ih-row h2 { grid-column: 2; grid-row: 1; }
+  .ih-row .ih-win { grid-column: 3; grid-row: 1; }
+  .ih-row .ih-price { grid-column: 2 / -1; grid-row: 2; padding-top: 0; }
   .insp-head { padding: 14px 14px 10px; }
   .insp-body { padding: 12px 14px 18px; }
   .insp-foot { padding-left: 14px; padding-right: 14px; }

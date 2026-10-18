@@ -32,9 +32,23 @@ import { seenOf, STILL_LOADING } from '../../lib/review.js';
 const enc = encodeURIComponent;
 const plain = (e) => e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
 
+// The header row's price: 22px bold with its 24h pill, beside the name.
+function HeadPrice({ p }) {
+  const m = mkt(p);
+  if (!m) return null;
+  const s = marketStrings(m);
+  return (
+    <div className="ih-price">
+      <span className="ih-price-v">{s.price}</span>
+      {s.change24h ? <span className={`ih-chg ${m.change_24h_pct < 0 ? 'down' : 'up'}`} title="Price change over 24 hours"><Change value={m.change_24h_pct} label="over 24 hours" /></span> : null}
+    </div>
+  );
+}
+
+// Under the name, one muted line: MC · FDV/MC · the price's age.
 function HeadMarket({ p, freshness }) {
   const m = mkt(p);
-  if (!m) return <div className="ih-price none"><span className="faint">{`No price: ${(noPriceReason(p) || 'unknown').toLowerCase()}`}</span></div>;
+  if (!m) return <p className="ih-facts none"><span className="faint">{`No price: ${(noPriceReason(p) || 'unknown').toLowerCase()}`}</span></p>;
   const f = freshnessText(m.status, m.age_minutes);
   const fresh = m.status === 'fresh';
   const s = marketStrings(m);
@@ -42,15 +56,15 @@ function HeadMarket({ p, freshness }) {
   const source = m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Fictional demo data' : `Source: ${m.source || 'CoinGecko'}`;
   const none = (label, v) => <UnknownFigure label={label} value={v} />;
   return (
-    <div className="ih-price">
-      <span className="ih-price-v">{s.price}</span>
-      {s.change24h ? <span className={`ih-chg ${m.change_24h_pct < 0 ? 'down' : 'up'}`} title="Price change over 24 hours"><Change value={m.change_24h_pct} label="over 24 hours" /></span> : null}
+    <p className="ih-facts">
+      <span className="ih-fact" title="Market cap (CoinGecko)"><span className="k">MC</span>{s.mcap || none('Market cap', m.market_cap_usd)}</span>
+      <span className="ih-dot" aria-hidden="true">·</span>
+      <span className="ih-fact" title="Fully diluted valuation over market cap, from the two figures (FDV and volume are on the Market section)"><span className="k">FDV/MC</span>{s.fdvMc || <Unknown label="FDV over market cap" />}</span>
+      <span className="ih-dot" aria-hidden="true">·</span>
       <span className={`ih-fresh${fresh && !clock.kept ? '' : ' is-warn'}`} title={`${source}, as of ${fmtDateTime(m.as_of)}${clock.kept ? `. The last price refresh (${fmtAgo(freshness.last_success_at)}) did not update this asset, so its last valid price is kept.` : ''}`}>
         {fresh ? clock.text || fmtAgo(m.fetched_at || m.as_of) : f.text}
       </span>
-      <span className="ih-fact" title="Market cap (CoinGecko)"><span className="k">MC</span>{s.mcap || none('Market cap', m.market_cap_usd)}</span>
-      <span className="ih-fact" title="Fully diluted valuation over market cap, from the two figures (FDV and volume are on the Market section)"><span className="k">FDV/MC</span>{s.fdvMc || <Unknown label="FDV over market cap" />}</span>
-    </div>
+    </p>
   );
 }
 
@@ -178,12 +192,13 @@ export default function Inspector({ pid, wide }) {
         <header className="insp-head" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
           {modal ? <span className="insp-grip" aria-hidden="true" /> : null}
           <div className="ih-row">
-            <Logo p={p} size={32} />
+            <Logo p={p} size={36} />
             <h2 id="insp-title" ref={heading} tabIndex={-1} title={p.name}>
               <span className="ih-name">{p.name}{p.symbol ? <>{' '}<span className="ih-sym">{p.symbol}</span></> : null}</span>
               {p.held ? <span className="badge is-accent ih-held" title="You hold this: see Portfolio">Held</span> : null}
               {p.identity_status !== 'verified' ? <span className="badge is-warn ih-held" title={(p.identity_unknowns || []).join(' ') || 'Identity not confirmed: no prices or holdings use it'}>Identity pending</span> : null}
             </h2>
+            <HeadPrice p={p} />
             <div className="ih-win">
               <Menu
                 label={`Actions for ${p.name}`}

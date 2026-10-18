@@ -638,7 +638,10 @@ try {
     const openCheckIn = async (tab, pid, query = '') => {
       await go(tab, `#/project/${pid}/brief${query}`, "document.querySelector('.ov-verdict') && document.querySelector('[data-key=\"pb-digest\"]')", 10000);
       await tab.evalJs("(() => { const d = document.querySelector('[data-key=\"pb-digest\"]'); if (d && !d.open) d.querySelector('summary').click(); return true; })()");
-      return waitFor(tab, "document.querySelector('[data-key=\"pb-digest\"]').open && document.querySelector('[data-key=\"ci-head\"]')", 6000);
+      // The note is one line until it is opened (the Apple HIG pass, 2026-10-18).
+      await waitFor(tab, "document.querySelector('[data-key=\"ci-note-add\"], [data-key=\"ci-note\"]')", 6000);
+      await tab.evalJs("(() => { const a = document.querySelector('[data-key=\"ci-note-add\"]'); if (a) a.click(); return true; })()");
+      return waitFor(tab, "document.querySelector('[data-key=\"pb-digest\"]').open && document.querySelector('[data-key=\"ci-head\"]') && document.querySelector('[data-key=\"ci-note\"]')", 6000);
     };
     const markBtn = "document.querySelector('[data-key=\"ov-reviewed\"]')";
     const clickMark = (tab) => tab.evalJs(`(() => { const b = ${markBtn}; if (!b || b.disabled) return false; b.click(); return true; })()`);
