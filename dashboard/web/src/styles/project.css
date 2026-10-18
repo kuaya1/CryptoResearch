@@ -88,16 +88,28 @@
 .ci-head { margin: 0; color: var(--text-2); }
 .ci-head.is-inferred { color: var(--warn); }
 .ci-lost { margin: 0; color: var(--warn); }
-.ci-rows { list-style: none; margin: 0; padding: 0; }
-.ci-row { padding: 10px 0; border-top: 1px solid var(--separator); min-width: 0; }
-.ci-model { margin: 0 0 4px; }
-.ci-same { color: var(--text-2); }
-.ci-newer { margin: 0 0 6px; font-weight: 500; color: var(--text); }
-.ci-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.ci-side { min-width: 0; }
-.ci-k { display: block; font-size: var(--fs-caption); color: var(--text-3); }
-.ci-rep, .ci-grade, .ci-none { margin: 0; overflow-wrap: anywhere; }
-.ci-none { color: var(--text-2); }
+/* One card per model, side by side (the 2026-10-18 polish pass): the model,
+   its grade then and now, its verdict now, the two reports by date. */
+.ci-rows { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.ci-row { min-width: 0; }
+.ci-card { display: flex; flex-direction: column; gap: 6px; padding: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); }
+.ci-model { margin: 0; font-size: var(--fs-md); }
+.ci-same { color: var(--text-2); font-weight: 400; }
+.ci-move { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 2px 0 0; font-size: var(--fs-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ci-from, .ci-arrow { color: var(--text-3); }
+.ci-to { color: var(--text); }
+.ci-verdict { margin: 0; font-size: var(--fs-ui); font-weight: 500; line-height: 1.35; color: var(--text); overflow-wrap: anywhere; }
+.ci-verdict.is-none { font-weight: 400; color: var(--text-2); }
+.ci-newer { margin: 0; font-weight: 500; color: var(--text); }
+.ci-reps { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 4px 0 0; font-size: var(--fs-sm); }
+.ci-reps > div { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.ci-reps dt, .ci-reps dd { margin: 0; }
+.ci-k { font-size: var(--fs-sm); color: var(--text-3); }
+.ci-reps > .ci-k { margin-right: 6px; }
+.ci-none { margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
+.ci-card .ci-moved { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--separator); }
+.ci-card .ci-mv { grid-template-columns: minmax(0, 1fr); }
+.ci-card .ci-mv dd:only-of-type { grid-column: auto; }
 .ci-between, .ci-nc { margin: 6px 0 0; color: var(--text-2); }
 .ci-moved { display: grid; gap: 8px; margin: 8px 0 0; }
 .ci-mv { display: grid; grid-template-columns: 150px repeat(2, minmax(0, 1fr)); gap: 2px 12px; }

@@ -83,7 +83,7 @@ function Cell({ col, d, p, sources, onSector, onOpen }) {
     case 'rank': return m && m.market_cap_rank ? <span className="rk" title={m.rank_source_label || 'CoinGecko market-cap rank'}>{m.market_cap_rank}</span> : <Unknown label="Rank" />;
     case 'priceStack': return <PriceCell p={p} stacked />;
     case 'price': return <PriceCell p={p} />;
-    case 'spark': return <span className="spark-cell" title={m && typeof m.change_7d_pct === 'number' ? `7 days: ${s.change7d}` : undefined}><Spark values={m && m.sparkline_7d} change={m ? m.change_7d_pct : null} width={96} height={30} label={`${p.symbol || p.name} 7-day price${m && s.change7d ? `, ${s.change7d}` : ''}`} /></span>;
+    case 'spark': return <span className="spark-cell" title={m && typeof m.change_7d_pct === 'number' ? `7 days: ${s.change7d}` : undefined}><Spark values={m && m.sparkline_7d} change={m ? m.change_7d_pct : null} width={110} height={32} label={`${p.symbol || p.name} 7-day price${m && s.change7d ? `, ${s.change7d}` : ''}`} /></span>;
     case 'grade': return <GradeCell d={d} p={p} onOpen={onOpen} />;
     case 'risk': return <RiskBadge d={d} p={p} />;
     case 'exit': { const x = exitCell(p); return <span className={`exit-cell is-${x.tone}`} title={x.title}>{x.text}</span>; }
@@ -256,7 +256,7 @@ export function ProjectTable({ d, rows, columns, sort, onSort, selected, recent,
                 {rankFirst && shown('rank') ? <td className="c-rank num"><Cell col="rank" d={d} p={p} sources={sources} /></td> : null}
                 <td className="c-name">
                   <div className="proj">
-                    <Logo p={p} size={28} />
+                    <Logo p={p} size={32} />
                     <div className="proj-names">
                       <span className="proj-top">
                         <button

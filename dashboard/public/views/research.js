@@ -35,12 +35,12 @@ function runsTab(ctx) {
   // name, the spend, the limits and the queued jobs stay here.
   const routes = PROVIDERS.map((p) => `${PROVIDER_LABELS[p]}: ${routeWords(idx, p, (r.providers || {})[p] || { mode: 'manual', reason: 'unknown' }, { hosted }).route}`).join(' · ');
   return h('div', null,
-    card('Latest research per project', table([
+    card('Latest research per project', h('div', { class: 'rs-latest' }, table([
       { label: 'Project', render: (p) => h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/evidence?open=runs` }, p.name) },
       { label: 'Latest run', render: (p) => (p.research && p.research.latest_run ? h('div', null, stateText(sentence(p.research.latest_run.status), p.research.latest_run.status === 'completed' ? 'ok' : p.research.latest_run.status === 'failed' ? 'bad' : 'wait'), h('div', { class: 'small muted' }, `${fmtAgo(p.research.latest_run.created_at)} · ${p.research.latest_run.horizon ? p.research.latest_run.horizon.text : ''}`)) : h('span', { class: 'faint small' }, 'None')) },
       { label: 'Models', render: (p) => h('div', { class: 'grades' }, PROVIDERS.map((prov) => gradeBadge(prov, p.providers && p.providers[prov], p.research && p.research.providers && p.research.providers[prov], { staleDays, hosted, onHold: Boolean(onHoldOf(ctx.state.index, prov)) }))) },
       { label: 'Reports', num: true, render: (p) => String(p.report_count || 0) },
-    ], projects, { empty: 'No projects yet.' }), {
+    ], projects, { empty: 'No projects yet.' })), {
       note: `Each model's job is independent: a failure in one never erases another's result. Price refreshes never start research. ${routes}. Spend this month: $${(r.spend && r.spend.monthly) || 0} · today: $${(r.spend && r.spend.daily) || 0} · budget per run ${money(r.budget && r.budget.per_run_usd)}, day ${money(r.budget && r.budget.daily_usd)}, month ${money(r.budget && r.budget.monthly_usd)} · unattended runs ${r.unattended_enabled ? 'on' : 'off'}`,
       actions: [runNow, h('a', { class: 'btn small', href: ctx.hrefWith ? ctx.hrefWith({ prefs: 'models' }) : '#/settings?tab=research', dataset: { key: 'research-routes' } }, hosted ? 'Routes, API keys and limits' : 'Routes and API access')],
     }));

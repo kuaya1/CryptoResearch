@@ -1,0 +1,53 @@
+/* The hosted pages at the executive scale (the 2026-10-18 polish pass).
+   Unscoped on purpose: these rules name one hosted page (.lg.lg-portfolio,
+   .lg.lg-research), which the .lg scoping of dashboard/public/*.css cannot;
+   the doubled class outranks the scoped rules they refine. */
+
+/* ---- every hosted page: the title at 32/600, larger tabs ---- */
+.lg.lg-view .page-head h1 { font-family: var(--font-display); font-size: var(--fs-page); font-weight: 600; letter-spacing: var(--track-display); line-height: 1.2; }
+.lg.lg-view .tabs [role="tab"] { font-size: var(--fs-ui); font-weight: 500; }
+.lg.lg-view .tabs .count { font-size: var(--fs-sm); }
+.lg.lg-view .card-title, .lg.lg-view .card > header h2 { font-size: var(--fs-ui); }
+.lg.lg-view table th { font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); }
+
+/* ---- Portfolio: figures at 28/600, ledger rows at 14.5, numbers beside their assets ---- */
+.lg.lg-portfolio .summary-row .label { font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); }
+.lg.lg-portfolio .summary-row .value { font-size: var(--fs-kpi-lg); font-weight: 600; letter-spacing: -0.02em; }
+.lg.lg-portfolio .summary-row .hint { font-size: var(--fs-sm); }
+.lg.lg-portfolio .summary-row .item { padding: 18px 22px 16px; }
+.lg.lg-portfolio .pos-table table td { font-size: var(--fs-body-lg); padding-top: 12px; padding-bottom: 12px; }
+.lg.lg-portfolio .wh-table, .lg.lg-portfolio .wh-total { max-width: 1080px; }
+.lg.lg-portfolio .wh-total { font-size: var(--fs-md); }
+.lg.lg-portfolio .wh-total .num { font-size: var(--fs-lg); }
+@container (min-width: 641px) { .lg.lg-portfolio .wh-cols, .lg.lg-portfolio .wh-row { grid-template-columns: 32px minmax(200px, 320px) minmax(0, 1fr) minmax(150px, auto); } }
+.lg.lg-portfolio .wh-cols { font-size: var(--fs-sm); color: var(--text-2); }
+.lg.lg-portfolio .wh-row { font-size: var(--fs-body-lg); padding-top: 10px; padding-bottom: 10px; }
+.lg.lg-portfolio .wh-sym { font-size: var(--fs-ui); font-weight: 600; }
+.lg.lg-portfolio .wh-name { font-size: var(--fs-sm); color: var(--text-2); }
+.lg.lg-portfolio .wh-qty { font-size: var(--fs-ui); font-weight: 600; }
+.lg.lg-portfolio .wh-val { font-size: var(--fs-sm); }
+.lg.lg-portfolio .wh-id strong { font-size: var(--fs-ui); }
+.lg.lg-portfolio .audit td { font-size: var(--fs-md); }
+
+/* ---- Research: the latest research per project in balanced columns ---- */
+.lg.lg-research .rs-latest table { table-layout: fixed; width: 100%; }
+.lg.lg-research .rs-latest th:nth-child(1) { width: 30%; }
+.lg.lg-research .rs-latest th:nth-child(2) { width: 26%; }
+.lg.lg-research .rs-latest th:nth-child(3) { width: 36%; }
+.lg.lg-research .rs-latest th:nth-child(4) { width: 8%; }
+.lg.lg-research .rs-latest td { padding-top: 14px; padding-bottom: 14px; font-size: var(--fs-md); vertical-align: middle; }
+.lg.lg-research .rs-latest td:first-child a { font-size: var(--fs-ui); font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.lg.lg-research .rs-latest .state { font-size: var(--fs-ui-sm); }
+.lg.lg-research .rs-latest .grades { flex-wrap: wrap; gap: 8px; }
+.lg.lg-research .rs-latest .gb { min-height: 46px; padding: 8px 14px; }
+.lg.lg-research .rs-latest .gb .p { font-size: var(--fs-sm); }
+.lg.lg-research .rs-latest .gb .v { font-size: var(--fs-ui); font-weight: 700; }
+.lg.lg-research .rs-latest .gb .l { font-size: var(--fs-sm); line-height: 18px; padding: 0 5px; }
+.lg.lg-research table td { font-size: var(--fs-md); }
+
+@media (max-width: 767.98px) {
+  .lg.lg-view .page-head h1 { font-size: var(--fs-2xl); }
+  .lg.lg-portfolio .summary-row .value { font-size: var(--fs-xl); }
+  .lg.lg-portfolio .summary-row .item { padding: 12px 14px; }
+  .lg.lg-research .rs-latest table { table-layout: auto; }
+}

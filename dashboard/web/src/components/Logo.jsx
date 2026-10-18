@@ -11,7 +11,7 @@ export function Logo({ p, size = 28 }) {
   const src = m.logo_url || null;
   const ok = state.src === src && state.ok;
   return (
-    <span className={`logo${ok ? ' has-img' : ''}`} style={{ width: size, height: size, fontSize: Math.max(11, Math.round(size * 0.38)) }} aria-hidden="true">
+    <span className={`logo${ok ? ' has-img' : ''}`} style={{ width: size, height: size, fontSize: Math.max(13, Math.round(size * 0.38)) }} aria-hidden="true">
       {src ? (
         <img
           src={src}

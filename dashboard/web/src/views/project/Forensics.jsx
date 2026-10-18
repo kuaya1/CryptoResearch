@@ -238,7 +238,7 @@ function Assessment({ v, pid }) {
     <section className="fx-card fx-assess" aria-labelledby="fx-title">
       <div className="fx-head">
         <h2 id="fx-title" className="fx-h">{c.is_latest ? 'Forensic assessment' : 'Earlier forensic assessment'}</h2>
-        <span className="fx-head-sub">{`${PROVIDER_LABELS[c.model.provider] || c.model.provider}${c.model.model_version ? ` (${c.model.model_version})` : ''} · ${c.versions.prompt}`}</span>
+        <span className="fx-head-sub">{`${PROVIDER_LABELS[c.model.provider] || c.model.provider}${c.model.model_version ? ` (${c.model.model_version})` : ''}`}<span className="fx-head-prompt">{` · ${c.versions.prompt}`}</span></span>
       </div>
       {!c.is_latest ? (
         <p className="fx-hist" role="note">

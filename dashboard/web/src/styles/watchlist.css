@@ -6,8 +6,8 @@
 .ph-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .ph-eyebrow { font-size: var(--fs-lg); color: var(--text-3); font-weight: 400; }
 /* The page title: 40/48, set tight (§3.7). */
-.page-head h1 { display: flex; align-items: baseline; gap: 10px; font-family: var(--font-display); font-size: var(--fs-display); font-weight: 600; letter-spacing: var(--track-display); line-height: 1.2; }
-.ph-count { font-family: var(--sans); font-size: var(--fs-md); font-weight: 500; color: var(--text-3); letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.page-head h1 { display: flex; align-items: baseline; gap: 10px; font-family: var(--font-display); font-size: var(--fs-page); font-weight: 600; letter-spacing: var(--track-display); line-height: 1.2; }
+.ph-count { font-family: var(--sans); font-size: var(--fs-lg); font-weight: 500; color: var(--text-3); letter-spacing: 0; font-variant-numeric: tabular-nums; }
 .ph-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 .wl { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; }
@@ -18,28 +18,28 @@
 /* ---- the KPI strip: one panel split by hairlines into five cells ---- */
 .kpi { padding: 0 24px; }
 .kpi-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--r-card); overflow: hidden; }
-.kpi-cell { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; padding: 12px 16px; border: 0; background: var(--surface); color: var(--text); font: inherit; text-align: left; }
+.kpi-cell { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; padding: 20px 24px; border: 0; background: var(--surface); color: var(--text); font: inherit; text-align: left; }
 .kpi-cell:focus-visible { outline-offset: -2px; }
 .kpi-cell.is-link { cursor: pointer; }
 .kpi-cell.is-link:hover { background: var(--surface-hover); }
 .kpi-cell.is-on { background: var(--surface-selected); box-shadow: inset 0 -2px 0 var(--accent); }
-.kpi-k { font-size: var(--fs-md); color: var(--text-3); white-space: nowrap; }
+.kpi-k { font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); white-space: nowrap; }
 .kpi-v { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; font-variant-numeric: tabular-nums; }
-.kpi-num { font-size: var(--fs-xl); font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
-.kpi-unit { font-size: var(--fs-sm); color: var(--text-3); }
+.kpi-num { font-size: var(--fs-kpi); font-weight: 600; letter-spacing: -0.02em; line-height: 1.15; white-space: nowrap; }
+.kpi-unit { font-size: var(--fs-sm); color: var(--text-2); }
 .kpi-chg { font-size: var(--fs-sm); font-weight: 500; white-space: nowrap; }
-.kpi-win { margin-left: 3px; font-size: var(--fs-xs); color: var(--text-3); }
+.kpi-win { margin-left: 3px; font-size: var(--fs-sm); color: var(--text-3); }
 .kpi-sub2 { font-size: var(--fs-sm); color: var(--text-2); white-space: nowrap; }
-.kpi-s { font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.kpi-s { font-size: var(--fs-sm); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .kpi-warn { color: var(--warn); font-weight: 500; }
 .kpi-demo { color: var(--text-3); }
-.kpi-go { position: absolute; top: 12px; right: 12px; color: var(--text-3); opacity: 0; transition: opacity var(--dur) var(--ease); }
+.kpi-go { position: absolute; top: 16px; right: 16px; color: var(--text-3); opacity: 0; transition: opacity var(--dur) var(--ease); }
 .kpi-cell.is-link:hover .kpi-go, .kpi-cell.is-link:focus-visible .kpi-go { opacity: 1; }
 .kpi-open { color: var(--text-3); }
 .kpi-rl { gap: 4px; }
 .kpi-rl-count { font-variant-numeric: tabular-nums; font-weight: 500; }
 .kpi-panel { margin-top: 8px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); }
-.breadth-bar { display: inline-block; width: 48px; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; align-self: center; }
+.breadth-bar { display: inline-block; width: 64px; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; align-self: center; }
 .breadth-bar > span { display: block; height: 100%; background: var(--bar-ink); border-radius: 3px; }
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -53,7 +53,7 @@
 .action-band.is-bad { background: var(--neg-weak); }
 .ab-ico { flex: none; margin-top: 2px; color: var(--warn-strong); }
 .action-band.is-bad .ab-ico { color: var(--neg-strong); }
-.ab-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); min-width: 0; }
+.ab-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-md); min-width: 0; }
 .ab-list li { display: flex; flex-wrap: wrap; gap: 0 8px; align-items: baseline; }
 .ab-t { color: var(--text-2); overflow-wrap: anywhere; }
 .ab-go { font-weight: 500; }
@@ -61,10 +61,10 @@
 /* ---- the views: underline tabs with counts ---- */
 .views { display: flex; gap: 2px; margin: 14px 24px 0; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
 .views::-webkit-scrollbar { display: none; }
-.view-tab { display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 12px; margin-bottom: -1px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--text-2); font: inherit; font-size: var(--fs-md); font-weight: 500; white-space: nowrap; cursor: pointer; }
+.view-tab { display: inline-flex; align-items: center; gap: 8px; height: 48px; padding: 0 14px; margin-bottom: -1px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--text-2); font: inherit; font-size: var(--fs-ui); font-weight: 500; white-space: nowrap; cursor: pointer; }
 .view-tab:hover { color: var(--text); }
 .view-tab[aria-pressed="true"] { color: var(--text); border-bottom-color: var(--accent); }
-.view-count { display: inline-grid; place-items: center; min-width: 20px; height: 18px; padding: 0 6px; border-radius: var(--r-pill); box-shadow: inset 0 0 0 1px var(--border); color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; }
+.view-count { display: inline-grid; place-items: center; min-width: 24px; height: 22px; padding: 0 7px; border-radius: var(--r-pill); box-shadow: inset 0 0 0 1px var(--border); color: var(--text-2); font-size: var(--fs-sm); font-weight: 600; font-variant-numeric: tabular-nums; }
 .view-tab[aria-pressed="true"] .view-count { box-shadow: inset 0 0 0 1px var(--accent); color: var(--text); }
 
 /* ---- the filter bar ---- */
@@ -90,9 +90,9 @@
 .wl-table { width: 100%; border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums lining-nums; }
 .wl-table th {
   position: sticky; top: 0; z-index: 3;
-  height: var(--wl-head-h); padding: 0 12px;
-  background: var(--surface-band); color: var(--text-3);
-  font-size: var(--fs-xs); font-weight: 500; text-align: left; white-space: nowrap;
+  height: var(--wl-head-h); padding: 0 16px;
+  background: var(--surface-band); color: var(--text-2);
+  font-size: var(--fs-sm); font-weight: 500; text-align: left; white-space: nowrap;
   border-bottom: 1px solid var(--border);
 }
 .wl-table thead th:first-child { border-top-left-radius: calc(var(--r-card) - 1px); }
@@ -106,12 +106,12 @@
 .th-lbl { display: inline-flex; align-items: center; gap: 4px; }
 .th-hold { font-size: var(--fs-xs); color: var(--text-3); font-weight: 400; }
 .wl-table td {
-  height: var(--wl-row-h); padding: 0 12px;
+  height: var(--wl-row-h); padding: 8px 16px;
   border-bottom: 1px solid var(--separator);
-  font-size: var(--fs-md); color: var(--text); white-space: nowrap;
+  font-size: var(--fs-ui); color: var(--text); white-space: nowrap;
   transition: background-color 90ms var(--ease);
 }
-.density-compact .wl-table td { height: 36px; font-size: var(--fs-sm); }
+.density-compact .wl-table td { height: 44px; padding-top: 6px; padding-bottom: 6px; font-size: var(--fs-md); }
 .density-compact .proj-sub { display: none; }
 @media (pointer: coarse) { .wl-table td { height: var(--row-h-touch); } }
 .wl-table td.num { text-align: right; }
@@ -123,63 +123,70 @@
 .wl-table tbody tr.is-recent td { background: color-mix(in srgb, var(--surface-selected) 45%, var(--surface)); }
 .wl-table tbody tr:last-child td { border-bottom: 0; }
 /* The project: frozen on the left with a 2px divider. */
-.wl-table .c-name { position: sticky; left: 0; z-index: 2; width: 1%; background: var(--surface); box-shadow: inset -2px 0 0 var(--separator); }
+.wl-table .c-name { position: sticky; left: 0; z-index: 2; background: var(--surface); box-shadow: inset -2px 0 0 var(--separator); }
 .wl-table th.c-name { z-index: 4; background: var(--surface-band); }
-.c-rank { width: 1%; color: var(--text-3); font-size: var(--fs-sm) !important; }
+.c-rank { color: var(--text-3); font-size: var(--fs-sm) !important; }
 .wl-table th.c-rank, .wl-table td.c-rank { padding-right: 4px; }
-.proj { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.proj-names { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; }
+.proj { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.proj-names { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; }
 .proj-top { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; max-width: 100%; }
-.proj-sub { display: inline-flex; align-items: center; gap: 6px; min-height: 16px; line-height: 16px; }
-.proj-sector { font-size: var(--fs-xs); color: var(--text-3); }
+.proj-sub { display: inline-flex; align-items: center; gap: 6px; min-height: 18px; line-height: 18px; }
+.proj-sector { font-size: var(--fs-sm); color: var(--text-2); }
 .pname {
-  display: block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding: 0; border: 0; background: none; color: var(--text); cursor: pointer;
-  font: inherit; font-size: var(--fs-md); font-weight: 600; letter-spacing: -0.005em; line-height: 1.3; text-align: left;
+  font: inherit; font-size: var(--fs-ui); font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; text-align: left;
 }
 .pname:hover { text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 3px; }
-@container (max-width: 1100px) { .pname { max-width: 180px; } .wl-table td, .wl-table th { padding: 0 9px; } }
+/* Width tiers: every default column in view down to a 1048px list (1280
+   without the inspector); below, the rubric word steps aside first. */
+@container (max-width: 1240px) { .pname { max-width: 200px; } .wl-table td, .wl-table th { padding-left: 14px; padding-right: 14px; } .wl-table .risk-badge { max-width: 180px; } }
+@container (max-width: 1100px) { .pname { max-width: 170px; } .gcell-band { display: none; } .wl-table td, .wl-table th { padding-left: 12px; padding-right: 12px; } .wl-table .risk-badge { max-width: 160px; } }
 @container (max-width: 760px) { .pname { max-width: 140px; } }
 /* A narrow list (the inspector docked beside it): the rubric word steps aside
    (it stays in the grade's label and title) and the Action column with it. */
 @container (max-width: 920px) { .gcell-band { display: none; } .wl-table .c-act { display: none; } .risk-badge { max-width: 170px; } }
-@container (max-width: 640px) { .pname { max-width: 120px; } .risk-badge { max-width: 132px; } .proj-sub .proj-sector { display: none; } }
-.ticker { flex: none; font-size: var(--fs-xs); font-weight: 500; color: var(--text-3); }
+
+.ticker { flex: none; font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); }
 .marks { display: inline-flex; gap: 6px; align-items: center; }
-.mark { font-size: var(--fs-xs); font-weight: 500; line-height: 18px; padding: 0 6px; border-radius: var(--r-badge); background: var(--badge-bg); color: var(--text-2); white-space: nowrap; }
+.mark { font-size: var(--fs-xs); font-weight: 500; line-height: 20px; padding: 0 7px; border-radius: var(--r-badge); background: var(--badge-bg); color: var(--text-2); white-space: nowrap; }
 .mark-held { background: var(--accent-weak); color: var(--accent-text); box-shadow: inset 0 0 0 1px var(--border); }
 .mark-flag { background: var(--warn-weak); color: var(--warn); }
-.price-cell { display: inline-flex; flex-direction: column; align-items: flex-end; line-height: 1.2; }
-.price { font-weight: 500; }
-.price-chg { font-size: var(--fs-xs); }
+.price-cell { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px; line-height: 1.2; }
+.price { font-size: var(--fs-ui); font-weight: 600; font-variant-numeric: tabular-nums; }
+.price-chg { font-size: var(--fs-sm); font-weight: 500; }
 .price-note { font-size: var(--fs-xs); color: var(--warn); white-space: nowrap; }
 .wrap-notes .price-note { white-space: normal; max-width: 120px; text-align: right; }
 .wrap-notes .price-note .pn { white-space: nowrap; }
 .rk { color: var(--text-3); }
-.c-spark { width: 1%; }
 .spark-cell { display: block; }
-.spark { display: block; margin-left: auto; }
+.spark { display: block; margin: 0 auto; }
 .spark.up path { stroke: var(--pos-strong); }
 .spark.down path { stroke: var(--neg-strong); }
 .spark.none line { stroke: var(--border); }
 .chip-btn { border: 0; background: var(--badge-bg); color: var(--text-2); font: inherit; font-size: var(--fs-xs); padding: 2px 8px; border-radius: var(--r-badge); cursor: pointer; }
 .chip-btn:hover { color: var(--text); background: var(--surface-hover); }
 /* The Grade: the canonical figure, its rubric word as a badge, the glyph. */
-.c-grade { width: 1%; }
-.gcell { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 2px 4px; margin: 0 -4px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.gcell { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 2px 4px; margin: 0 -4px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .gcell:hover { background: var(--surface-hover); }
 .gcell-main { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.gcell-v { font-size: var(--fs-md); font-weight: 600; font-variant-numeric: tabular-nums; }
-.gcell-band { height: 20px; padding: 0 6px; background: var(--t-bg); color: var(--t-ink); font-weight: 600; }
+.gcell-v { font-size: var(--fs-ui); font-weight: 600; font-variant-numeric: tabular-nums; }
+.gcell-band { background: var(--t-bg); color: var(--t-ink); font-weight: 600; }
 .gcell-wh { background: repeating-linear-gradient(135deg, var(--surface-sunken) 0 4px, var(--track) 4px 6px); color: var(--text-2); }
-.gcell-none { font-size: var(--fs-sm); color: var(--text-3); }
-.gcell-state { font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); }
+.gcell-none { font-size: var(--fs-md); color: var(--text-3); }
+.gcell-state { font-size: var(--fs-md); font-weight: 500; color: var(--text-2); }
 .gcell-state.is-waiting, .gcell-state.is-interrupted { color: var(--warn); }
 .gcell-state.is-running, .gcell-state.is-dispatching, .gcell-state.is-cowork, .gcell-state.is-connector, .gcell-state.is-queued { color: var(--work-text); }
 .gcell-state.is-failed, .gcell-state.is-uncertain { color: var(--neg); }
 .gcell-pin { font-size: var(--fs-xs); color: var(--text-3); }
 .cg { display: inline-flex; gap: 4px; align-items: center; height: 10px; }
-.risk-badge { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.risk-badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.wl-table .risk-badge, .wl-table .gcell-band, .wl-table .gcell-wh { height: var(--badge-h-lg); padding: 0 10px; border-radius: var(--r-badge-lg); font-size: var(--fs-sm); font-weight: 500; line-height: var(--badge-h-lg); }
+/* A long rubric word ("Weak to adequate or mixed") wraps in its badge
+   rather than widening the Grade column. */
+.wl-table .gcell-main { white-space: normal; }
+.wl-table .gcell-band { height: auto; min-height: var(--badge-h-lg); max-width: 150px; padding-top: 3px; padding-bottom: 3px; line-height: 1.3; white-space: normal; }
+.wl-table .exit-cell, .wl-table .lr-cell { font-size: var(--fs-md); }
 .risk-more { color: inherit; opacity: 0.8; }
 .exit-cell { font-weight: 500; }
 .exit-cell.is-bad { color: var(--neg); }
@@ -189,9 +196,29 @@
 .lr-cell.is-warn { color: var(--warn); font-weight: 600; }
 .lr-cell.is-unknown { color: var(--text-3); }
 /* The Action: pinned at the right, shown on hover and keyboard focus. */
-.wl-table .c-act { width: 1%; padding: 0 8px; text-align: right; }
+.wl-table .c-act { padding: 0 12px; text-align: right; }
+/* Column proportions (2026-10-18): the widths Eric gave at a 1100px list
+   (Project 240, Price 140, 7D 140, Grade 150, Risk 220, Last research 130),
+   shared out in the same proportions as the list widens, so the space goes
+   to every column instead of one blank one. A column never narrows below
+   its content; past that the least essential give way (ProjectTable.jsx
+   FIT_ORDER). */
+.wl-table .c-name { width: 26%; }
+.wl-table .c-priceStack { width: 12%; }
+.wl-table .c-spark { width: 12%; }
+.wl-table .c-grade { width: 13%; }
+.wl-table .c-risk { width: 19%; }
+.wl-table .c-lastResearch { width: 11%; }
+.wl-table .c-act { width: 7%; }
+.wl-table .c-rank { width: 4%; }
+.wl-table .c-price, .wl-table .c-exit { width: 10%; }
+.wl-table .c-change24h, .wl-table .c-change7d, .wl-table .c-change30d, .wl-table .c-mcapChange, .wl-table .c-volChange { width: 8%; }
+.wl-table .c-mcap, .wl-table .c-fdv, .wl-table .c-volume { width: 10%; }
+.wl-table .c-sector { width: 11%; }
+.wl-table .c-research { width: 18%; }
+@container (min-width: 1100px) { .wl-table td.c-name .proj { min-width: 240px; } }
 .wl-table td.c-act { background: transparent; }
-.row-act { display: inline-flex; align-items: center; gap: 2px; height: 28px; padding: 0 8px 0 10px; border: 1px solid var(--button-border); border-radius: var(--r-button); background: var(--surface); color: var(--text); font: inherit; font-size: var(--fs-sm); font-weight: 500; cursor: pointer; opacity: 0; transition: opacity var(--dur) var(--ease); white-space: nowrap; }
+.row-act { display: inline-flex; align-items: center; gap: 2px; height: 32px; padding: 0 8px 0 10px; border: 1px solid var(--button-border); border-radius: var(--r-button); background: var(--surface); color: var(--text); font: inherit; font-size: var(--fs-sm); font-weight: 500; cursor: pointer; opacity: 0; transition: opacity var(--dur) var(--ease); white-space: nowrap; }
 .wl-table tbody tr:hover .row-act, .wl-table tbody tr:focus-within .row-act, .row-act:focus-visible { opacity: 1; }
 @media (pointer: coarse) { .wl-table .c-act { display: none; } }
 .c-prov { width: 72px; text-align: center !important; }
@@ -199,7 +226,7 @@
 .wl-table th.c-prov .th-sort { margin: 0 auto; }
 .wl-table td.c-prov { padding: 0 6px; }
 /* The sticky summary footer. */
-.wl-table tfoot td { position: sticky; bottom: 0; z-index: 3; height: 36px; padding: 0 16px; background: var(--surface-band); border-top: 1px solid var(--border); border-bottom: 0; color: var(--text-2); font-size: var(--fs-sm); cursor: default; }
+.wl-table tfoot td { position: sticky; bottom: 0; z-index: 3; height: 44px; padding: 0 16px; background: var(--surface-band); border-top: 1px solid var(--border); border-bottom: 0; color: var(--text-2); font-size: var(--fs-sm); cursor: default; }
 .wl-table tfoot td:hover { background: var(--surface-band); }
 
 /* ---- model pills: the figure in its tier, or the state in words ---- */
@@ -254,6 +281,30 @@ button.gp:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--t-fill, var(--t
 .logo img.loading { position: absolute; opacity: 0; }
 .logo-mono { line-height: 1; }
 
+/* ---- a narrow list (the 620/680px inspector docked beside it, 2026-10-18):
+   Project, Price / 24h, Grade and Risk stay in view; long words wrap or step
+   down, the same way a phone's list does (below) ---- */
+@container (max-width: 800px) {
+  .wl-table td, .wl-table th { padding-left: 10px; padding-right: 10px; }
+  .pname { max-width: 140px; }
+  .wl-table .proj-top .ticker, .proj-sub .proj-sector { display: none; }
+  .wl-table .risk-badge { max-width: 128px; }
+  .wl-table .gcell-main { white-space: normal; }
+  .wl-table .gcell-wh, .wl-table .gcell-none, .wl-table .gcell-state { display: inline-block; max-width: 72px; height: auto; padding-top: 3px; padding-bottom: 3px; line-height: 1.25; white-space: normal; }
+}
+@container (max-width: 480px) {
+  .wl-table td, .wl-table th { padding-left: 6px; padding-right: 6px; }
+  .wl-table .proj .logo { width: 24px !important; height: 24px !important; }
+  .proj { gap: 8px; }
+  .pname { max-width: 88px; }
+  .wl-table .price, .wl-table .gcell-v, .wl-table .pname { font-size: var(--fs-md); }
+  .wl-table .price-chg { font-size: var(--fs-xs); }
+  .wl-table .marks, .wl-table .proj-sub { flex-wrap: wrap; }
+  .wl-table .mark { display: inline-block; max-width: 80px; white-space: normal; line-height: 1.25; }
+  .wl-table .risk-badge { max-width: 72px; height: auto; padding-top: 3px; padding-bottom: 3px; line-height: 1.3; white-space: normal; display: -webkit-inline-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .wl-table .price-note { white-space: normal; max-width: 60px; text-align: right; }
+}
+
 /* ---- a phone: Project, Price / 24h, Grade and Risk (§5) ---- */
 @media (max-width: 767.98px) {
   .page-head { padding: 12px 12px 8px; }
@@ -276,16 +327,22 @@ button.gp:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--t-fill, var(--t
   .results-line, .reorder { padding-left: 12px; padding-right: 12px; }
   .wl-scroll { margin: 0 12px; }
   .wl-table td, .wl-table th { padding: 0 6px; }
+  .wl-table td { height: 52px; font-size: var(--fs-md); }
+  .wl-table th { height: 36px; }
+  .wl-table .price, .wl-table .gcell-v, .wl-table .pname { font-size: var(--fs-md); }
+  .wl-table .price-chg { font-size: var(--fs-xs); }
+  .wl-table .risk-badge, .wl-table .gcell-band, .wl-table .gcell-wh { height: var(--badge-h); line-height: var(--badge-h); padding: 0 6px; border-radius: var(--r-badge); font-size: var(--fs-xs); }
+  .view-count { min-width: 20px; height: 20px; font-size: var(--fs-xs); }
   .wl-table .c-name { position: static; box-shadow: none; }
   .wl-table .proj-top .ticker { display: none; }
   .wl-table .proj .logo { width: 24px !important; height: 24px !important; }
-  .pname { max-width: 80px; }
+  .pname { max-width: 72px; }
   .wl-table .marks, .wl-table .proj-sub { flex-wrap: wrap; }
   .wl-table .mark { display: inline-block; max-width: 80px; white-space: normal; line-height: 1.25; }
   .wl-table .price-cell .price { font-size: var(--fs-sm); }
   .wl-table .gcell-none, .wl-table .gcell-state { display: inline-block; max-width: 56px; white-space: normal; line-height: 1.25; }
   .proj { gap: 8px; }
-  .wl-table .risk-badge { max-width: 64px; height: auto; min-height: var(--badge-h); padding-top: 2px; padding-bottom: 2px; line-height: 1.3; white-space: normal; display: -webkit-inline-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .wl-table .risk-badge { max-width: 70px; padding-left: 4px; padding-right: 4px; height: auto; min-height: var(--badge-h); padding-top: 2px; padding-bottom: 2px; line-height: 1.3; white-space: normal; display: -webkit-inline-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 }
 @media (max-width: 767.98px) {
   /* A withheld grade and a stale price's note wrap rather than widen their columns. */
@@ -294,4 +351,4 @@ button.gp:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--t-fill, var(--t
   .wl-table .price-note { white-space: normal; max-width: 60px; text-align: right; }
   .wl-table .price-note .pn { white-space: normal; }
 }
-@media (max-width: 379.98px) { .pname { max-width: 64px; } .wl-table .mark { max-width: 64px; } .wl-table .risk-badge { max-width: 58px; } .wl-table td, .wl-table th { padding: 0 5px; } }
+@media (max-width: 379.98px) { .pname { max-width: 58px; } .wl-table .mark { max-width: 64px; } .wl-table .risk-badge { max-width: 68px; } .wl-table td, .wl-table th { padding: 0 5px; } }

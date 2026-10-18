@@ -9,16 +9,17 @@ const arg = (name, fallback) => {
 };
 const base = arg('--base', 'http://127.0.0.1:5173');
 const widths = String(arg('--w', '360,390')).split(',').map(Number);
+const hash = arg('--url', '#/watchlist');
 const b = await launch();
 try {
   for (const w of widths) {
     const tab = await b.openTab(base);
-    await tab.size(w, { height: 800 });
-    await tab.go(`${base}/#/watchlist`, 2400);
+    await tab.size(w, { height: 900 });
+    await tab.go(`${base}/${hash}`, 2400);
     const out = await tab.evalJs(`(() => {
       const sc = document.querySelector('.wl-scroll');
-      const ths = [...document.querySelectorAll('.wl-table thead th')].map((th) => [th.className, Math.round(th.getBoundingClientRect().width)]);
-      return JSON.stringify({ client: sc && sc.clientWidth, scroll: sc && sc.scrollWidth, ths });
+      const ths = [...document.querySelectorAll('.wl-table thead th')].map((th) => [th.className.split(' ')[0], Math.round(th.getBoundingClientRect().width)]); const name = Math.max(...[...document.querySelectorAll('.wl-table td.c-name .proj')].map((n) => n.scrollWidth));
+      return JSON.stringify({ client: sc && sc.clientWidth, scroll: sc && sc.scrollWidth, ths, name });
     })()`);
     console.log(w, out);
     await tab.close();

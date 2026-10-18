@@ -22,6 +22,15 @@ export const SUPPORT = {
   report: (s) => `Report ${s.report_id}`,
   event: () => 'Your review on the Notes tab',
 };
+// The record behind an item in words; its ID is the tooltip (raw IDs never
+// stand in the text, the 2026-10-18 polish pass).
+export const SUPPORT_WORDS = {
+  receipt: (s) => `From a forensic receipt${s.checkpoint ? `, ${s.checkpoint} checkpoint` : ''}${s.metric ? `, ${s.metric.replace(/_/g, ' ')}` : ''}`,
+  challenge: (s) => `From ChatGPT's challenge, finding ${s.finding_id}`,
+  observation: () => 'From a monitor observation',
+  report: () => 'From a saved report',
+  event: () => 'Your review on the Notes tab',
+};
 
 // GET /api/agenda, read again when the index changes (one read shared with
 // the rail and the Desk, lib/agenda.js); an answer that a newer read replaced
@@ -115,7 +124,7 @@ export function Item({ pid, item, primary = false, acts = true }) {
         <span className={`ag-basis is-${item.basis}`} title={item.basis === 'conditional' ? 'A conditional threshold estimate frozen at a receipt\'s origin: not a forecast.' : item.basis === 'owner' ? 'A date you set.' : 'A date or state a stored record gives.'}>{item.basis_words}</span>
       </p>
       <p className="ag-why">{item.why}</p>
-      <p className="ag-src faint">{(SUPPORT[s.kind] || (() => ''))(s)}{item.snoozed ? ` · snoozed until ${fmtDate(item.snoozed.until)}` : ''}{item.completed ? ` · done ${fmtDate(item.completed.at)}` : ''}</p>
+      <p className="ag-src faint" title={(SUPPORT[s.kind] || (() => ''))(s) || undefined}>{(SUPPORT_WORDS[s.kind] || (() => ''))(s)}{item.snoozed ? ` · snoozed until ${fmtDate(item.snoozed.until)}` : ''}{item.completed ? ` · done ${fmtDate(item.completed.at)}` : ''}</p>
       {acts ? <Act pid={pid} item={item} /> : null}
     </div>
   );

@@ -254,39 +254,66 @@ function RiskStrip({ d, p }) {
   const fxHref = `#/project/${enc(pid)}/forensics`;
   const audited = f && f.audited;
   const states = audited ? Object.entries(f.states) : [];
+  const signals = riskSignals(p, d.index);
+  const fx = signals.find((x) => x.kind === 'forensic');
   // The canonical report's top downside score (risk_scores; the Desk's Risk
   // column falls back to it); the full panel is on the Brief.
-  const down = riskSignals(p, d.index).find((x) => x.kind === 'downside');
+  const down = signals.find((x) => x.kind === 'downside');
+  const tone = (t) => (t === 'bad' ? 'is-bad' : t === 'warn' ? 'is-warn' : t === 'ok' ? 'is-ok' : '');
+  // GoPlus in words: the severe flags first, then the risky checks; nothing
+  // here ever reads as safe.
+  const contract = m.state === 'native_chain' ? { text: 'Native coin · no contract', tone: '', title: m.title || undefined }
+    : severe.length ? { text: severe.map((b) => `${b.label}${b.value ? ` ${b.value}` : ''}`).join(' · '), tone: 'bad', title: severe.map((b) => b.title || b.label).join('\n') }
+      : risky.length ? { text: risky.map((x) => `${x.label}: ${x.value}`).join(' · '), tone: 'warn', title: risky.map((x) => x.title || x.aria).join('\n') }
+        : m.chips.every((x) => x.dot === 'unknown') ? { text: (m.status && m.status.word) || 'GoPlus: no answer', tone: 'unknown', title: (m.status && (m.status.title || m.status.word)) || m.title || 'No GoPlus answer on record' }
+          : { text: 'GoPlus: no flag', tone: '', title: 'GoPlus answered no mint, blacklist, proxy or tax flag. Nothing here means safe.' };
   return (
     <section className="iv-risk" aria-labelledby="iv-risk-h">
       <h3 className="iv-h" id="iv-risk-h">Risk and exit</h3>
-      <ul className="iv-chips" aria-label="Forensic outcomes, exit and contract flags">
-        {audited ? states.map(([k, s]) => <li key={k}><span className={`badge ${toneOf(s)}`} title={`${FX_LABELS[k]}: ${FX_STATE_WORDS[s] || s}, from the forensic monitor`}>{`${FX_LABELS[k]}: ${FX_STATE_WORDS[s] || s}`}</span></li>) : (
-          <li><span className="badge is-unknown">{f && f.open_audit ? 'Audit open · no assessment yet' : 'Not audited'}</span>{' '}<DeepLink pid={pid} href={`${fxHref}?open=start`} className="iv-link" dataKey={`iv-fx-start-${pid}`}>{f && f.open_audit ? 'Open the audit' : 'Start forensic audit'}</DeepLink></li>
-        )}
-        {down ? <li><span className={`badge ${down.tone === 'bad' ? 'is-bad' : down.tone === 'warn' ? 'is-warn' : ''}`} title={down.title}>{down.text}</span></li> : null}
-        <li><span className={`badge ${ex.tone === 'bad' ? 'is-bad' : ex.tone === 'ok' ? 'is-ok' : 'is-unknown'}`} title={ex.title}>{`Exit @ $${ex.size}: ${ex.text}`}</span><span className="iv-limit faint">{` limit ${ex.limit}%`}</span></li>
-        {severe.map((b) => <li key={b.key}><span className="badge is-bad" title={b.title}>{`${b.label}${b.value ? ` ${b.value}` : ''}`}</span></li>)}
-        {m.state === 'native_chain' ? <li><span className="badge" title={m.title || undefined}>Native coin · no contract</span></li>
-          : risky.length ? risky.map((x) => <li key={x.key}><span className="badge is-warn" title={x.title || x.aria}>{`${x.label}: ${x.value}`}</span></li>)
-            : m.chips.every((x) => x.dot === 'unknown') ? <li><span className="badge is-unknown" title={(m.status && (m.status.title || m.status.word)) || m.title || 'No GoPlus answer on record'}>{(m.status && m.status.word) || 'GoPlus: no answer'}</span></li>
-              : <li><span className="badge" title="GoPlus answered no mint, blacklist, proxy or tax flag. Nothing here means safe.">GoPlus: no flag</span></li>}
-      </ul>
-      <p className="iv-pool">
-        <span className="faint">Top pool </span>
-        {pool.pool === undefined ? <span className="faint" aria-busy="true">…</span>
-          : pool.error ? <span className="faint">{`DexScreener could not be read: ${pool.error.message}`}</span>
-            : !pool.pool ? <span className="faint">{NO_POOL[pool.none] || 'No decentralized pool indexed'}</span>
-              : (
-                <span title={`${pool.pool.chain}${pool.pool.pairAddress ? ` · ${pool.pool.pairAddress}` : ''} · DexScreener, asked by this browser`}>
-                  {`${pool.pool.dex} · ${pool.pool.pair}${pool.pool.multiChain ? ` · ${pool.pool.chain}` : ''} · `}
-                  <strong>{pool.pool.liquidity === null ? '—' : fmtCompactUsd(pool.pool.liquidity)}</strong>
-                  {pool.pool.thin ? <span className="badge is-warn iv-thin">thin</span> : null}
-                </span>
-              )}
-        <DeepLink pid={pid} href={`#/project/${enc(pid)}/market`} className="iv-link" dataKey={`iv-market-${pid}`}>Pools</DeepLink>
-        <DeepLink pid={pid} href={`#/project/${enc(pid)}/contract`} className="iv-link" dataKey={`iv-contract-${pid}`}>Contract</DeepLink>
-      </p>
+      <div className="iv-rgrid">
+        <div className="iv-rc" data-part="forensic">
+          <p className="iv-rc-k">Forensic status</p>
+          <p className={`iv-rc-v ${audited ? tone(fx && fx.tone) : 'is-unknown'}`} title={fx ? fx.title : 'No forensic audit on record'}>{audited ? fx.text : f && f.open_audit ? 'Audit open' : 'Not audited'}</p>
+          {audited ? <p className="iv-rc-s">{states.map(([k, s]) => `${FX_LABELS[k]} ${(FX_STATE_WORDS[s] || s).toLowerCase()}`).join(' · ')}</p> : f && f.open_audit ? <p className="iv-rc-s">No assessment saved yet</p> : null}
+          <p className="iv-rc-a">
+            {audited
+              ? <DeepLink pid={pid} href={fxHref} className="iv-link" dataKey={`iv-fx-${pid}`}>Open Forensics</DeepLink>
+              : <DeepLink pid={pid} href={`${fxHref}?open=start`} className="btn btn-sm" dataKey={`iv-fx-start-${pid}`}>{f && f.open_audit ? 'Open the audit' : 'Start audit'}</DeepLink>}
+          </p>
+        </div>
+        <div className="iv-rc" data-part="downside">
+          <p className="iv-rc-k">Downside risk</p>
+          <p className={`iv-rc-v ${down ? tone(down.tone) : 'is-unknown'}`} title={down ? down.title : 'The report gives no downside score'}>{down ? <>{down.value}<span className="iv-rc-of"> / 100</span></> : 'Not scored'}</p>
+          <p className="iv-rc-s">{down ? `${down.label} · higher is worse` : 'No downside score in the report'}</p>
+        </div>
+        <div className="iv-rc" data-part="exit">
+          <p className="iv-rc-k">{`Exit @ $${ex.size}`}</p>
+          <p className={`iv-rc-v ${ex.tone === 'bad' ? 'is-bad' : ex.tone === 'ok' ? 'is-ok' : 'is-unknown'}`} title={ex.title}>{ex.text}</p>
+          <p className="iv-rc-s">{`${ex.limit}% limit`}</p>
+        </div>
+        <div className="iv-rc" data-part="pool">
+          <p className="iv-rc-k">Top pool and contract</p>
+          <p className="iv-rc-v iv-pool">
+            {pool.pool === undefined ? <span className="faint" aria-busy="true">…</span>
+              : pool.error ? <span className="is-unknown" title={pool.error.message}>DexScreener unread</span>
+                : !pool.pool ? <span className="is-unknown">{NO_POOL[pool.none] ? 'Not looked up' : 'No pool indexed'}</span>
+                  : (
+                    <span title={`${pool.pool.chain}${pool.pool.pairAddress ? ` · ${pool.pool.pairAddress}` : ''} · DexScreener, asked by this browser`}>
+                      {pool.pool.liquidity === null ? '—' : fmtCompactUsd(pool.pool.liquidity)}
+                      {pool.pool.thin ? <span className="badge is-warn iv-thin">Thin</span> : null}
+                    </span>
+                  )}
+          </p>
+          <p className="iv-rc-s">
+            {pool.pool ? `${pool.pool.dex} · ${pool.pool.pair}${pool.pool.multiChain ? ` · ${pool.pool.chain}` : ''}` : pool.error ? `DexScreener could not be read: ${pool.error.message}` : pool.pool === null && NO_POOL[pool.none] ? NO_POOL[pool.none] : pool.pool === null ? 'DexScreener lists no pool for this contract' : null}
+          </p>
+          <p className={`iv-rc-s iv-gp ${contract.tone === 'bad' ? 'is-bad' : contract.tone === 'warn' ? 'is-warn' : ''}`} title={contract.title}>{contract.text}</p>
+          <p className="iv-rc-a">
+            <DeepLink pid={pid} href={`#/project/${enc(pid)}/market`} className="iv-link" dataKey={`iv-market-${pid}`}>Pools</DeepLink>
+            <DeepLink pid={pid} href={`#/project/${enc(pid)}/contract`} className="iv-link" dataKey={`iv-contract-${pid}`}>Contract</DeepLink>
+          </p>
+        </div>
+      </div>
     </section>
   );
 }

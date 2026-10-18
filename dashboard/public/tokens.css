@@ -126,11 +126,16 @@
   --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
   --figures: tabular-nums lining-nums;
-  /* The one type scale (nothing under 12px anywhere): 12 metadata, column
-     heads and badges; 13 the body; 14 table cells, navigation and card
-     titles; 16 tabs and lead text; 20 section titles and KPI values; 28 big
-     figures; 40 page titles. */
-  --fs-xs: 12px;
+  /* The one type scale (nothing under 12.5px anywhere, Eric, 2026-10-18):
+     12.5 metadata and captions; 13 column heads, badges and the body; 14
+     controls and card titles; 16 lead text; 20 section titles; 28 big
+     figures; 40 the project's name. The executive scale (the 2026-10-18
+     polish pass) adds the sizes the Desk, the rail, the inspector and Review
+     read at: 13.5 queue summaries and research badges, 14.5 trigger and
+     ledger text, 15 rows, navigation, tabs and the thesis, 22 the inspector's
+     headings and price, 26 KPI figures, 28 the Portfolio's figures, 32 page
+     titles and the inspector's grade. */
+  --fs-xs: 12.5px;
   --fs-sm: 13px;
   --fs-md: 14px;
   --fs-lg: 16px;
@@ -143,10 +148,17 @@
   --fs-body: var(--fs-sm);
   --fs-h3: var(--fs-sm);
   --fs-h2: var(--fs-md);
-  --fs-h1: var(--fs-2xl);         /* the hosted views' page titles */
+  --fs-h1: var(--fs-page);        /* the hosted views' page titles */
   --fs-title: var(--fs-xl);       /* a page's section titles and the inspector's project name */
   --fs-display: clamp(28px, 1.5vw + 18px, 40px);   /* page titles and the project's name: 40px from 1440, 28px on a phone */
   --fs-read: 15px;                /* the report's reading view (68ch measure): prose only, never a control */
+  --fs-ui-sm: 13.5px;
+  --fs-body-lg: 14.5px;
+  --fs-ui: 15px;
+  --fs-head: 22px;
+  --fs-kpi: 26px;
+  --fs-kpi-lg: 28px;
+  --fs-page: 32px;
   --track-display: -0.02em;       /* 40/48 titles: -0.8px */
   --track-title: -0.01em;
   /* Space, shape, depth: almost square, hairlines instead of shadows */
@@ -165,7 +177,7 @@
   --scrim: rgba(244, 242, 240, 0.8);   /* a warm frost, not a dark scrim */
   /* Sizes */
   --topbar-h: 48px;
-  --sidebar-w: 208px;             /* the rail, expanded */
+  --sidebar-w: 232px;             /* the rail, expanded */
   --rail-w: 56px;                 /* the rail, collapsed to its icons */
   --control-h: 32px;
   --touch: 44px;
@@ -174,12 +186,14 @@
   --head-h: 32px;
   --cell-y: 7px;
   --cell-x: 12px;
-  --wl-row-h: 44px;
-  --wl-head-h: 32px;
+  --wl-row-h: 60px;               /* the Desk's rows on a desktop (52px on a phone) */
+  --wl-head-h: 40px;
   --badge-w: 56px;
   --badge-h: 22px;
-  --inspector-w: 560px;           /* 1280–1599px; 640px from 1600px (shell.css) */
-  --inspector-w-wide: 640px;
+  --inspector-w: 620px;           /* 1280–1599px; 680px from 1600px (watchlist.css) */
+  --inspector-w-wide: 680px;
+  --badge-h-lg: 26px;             /* status and risk badges in the Desk's rows */
+  --r-badge-lg: 6px;
   /* Motion: short, and none when reduced motion is asked for */
   --dur: 140ms;
   --ease: cubic-bezier(0.2, 0, 0, 1);

@@ -398,4 +398,4 @@
 /* A phone keeps the strongest concern on the first screen: the segments take
    the row and the preferences link steps aside (Receipts > Method keeps its
    Edit link; Preferences is under More). */
-@media (max-width: 767.98px) { .fx-segbar .l2-seg { width: 100%; } .fx-segbar .l2-seg button { flex: 1 1 0; padding: 0 6px; } .fx-segbar .fx-prefs-link { display: none; } .fx { gap: 8px; } .fx-head { padding-top: 10px; padding-bottom: 10px; } }
+@media (max-width: 767.98px) { .fx-segbar .l2-seg { width: 100%; } .fx-segbar .l2-seg button { flex: 1 1 0; padding: 0 6px; } .fx-segbar .fx-prefs-link { display: none; } .fx { gap: 6px; } .fx-head { padding-top: 10px; padding-bottom: 10px; } .fx-assess .fx-head-prompt { display: none; } .fx-assess { padding-bottom: 12px; } }

@@ -771,7 +771,7 @@ export function riskSignals(p, index = null) {
     const hi = (r) => (r.status === 'range' ? r.high : r.value);
     const top = risks.slice().sort((a, b) => hi(b) - hi(a))[0];
     const v = hi(top);
-    out.push({ kind: 'downside', tone: v >= 70 ? 'bad' : v >= 50 ? 'warn' : 'neutral', text: `Downside ${top.status === 'range' ? `${top.low}–${top.high}` : top.value}`, more: 0, title: `${labels[top.id] || top.id}: ${top.status === 'range' ? `${top.low} to ${top.high}` : top.value} of 100 (higher is worse), from ${c.source === 'headline' ? 'your headline report' : "Claude's report"}` });
+    out.push({ kind: 'downside', tone: v >= 70 ? 'bad' : v >= 50 ? 'warn' : 'neutral', text: `Downside ${top.status === 'range' ? `${top.low}–${top.high}` : top.value}`, value: top.status === 'range' ? `${top.low}–${top.high}` : String(top.value), label: labels[top.id] || top.id, more: 0, title: `${labels[top.id] || top.id}: ${top.status === 'range' ? `${top.low} to ${top.high}` : top.value} of 100 (higher is worse), from ${c.source === 'headline' ? 'your headline report' : "Claude's report"}` });
   }
   const m = contractChipModel(p && p.screening);
   if (m.state !== 'native_chain') {

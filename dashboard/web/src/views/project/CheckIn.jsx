@@ -12,6 +12,7 @@
 // answer offers Try again with the same request, which the desk applies once.
 // The note draft stays until a review is saved.
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowRight } from 'lucide-react';
 import { fmtDate, fmtDateTime, fmtSignedPct, fmtPrice, toast } from '../../../../public/ui.js';
 import { checkInModel } from '../../../../public/checkin-model.js';
 import { baseOf, sectionHref } from '../../../../public/project-routes.js';
@@ -29,20 +30,6 @@ const drafts = new Map();
 
 function reportHref(pid, prov, id) {
   return sectionHref(pid, 'report', { model: prov, report: id });
-}
-
-function Side({ s, note, pid, prov, label }) {
-  if (!s) return <div className="ci-side"><span className="ci-k">{label}</span><p className="ci-none">{note}</p></div>;
-  return (
-    <div className="ci-side">
-      <span className="ci-k">{label}</span>
-      <p className="ci-rep">
-        <a href={reportHref(pid, prov, s.report_id)} data-key={`ci-${label.toLowerCase()}-${prov}`} data-report={s.report_id} title={s.report_id}>{s.short}</a>
-        <span className="faint">{s.analysis_at ? ` · ${fmtDate(s.analysis_at)}` : ''}</span>
-      </p>
-      <p className="ci-grade"><strong>{s.grade_words}</strong>{s.verdict ? <span>{` · ${s.verdict}`}</span> : null}</p>
-    </div>
-  );
 }
 
 function Then({ label, then, now }) {
@@ -76,25 +63,42 @@ function Moved({ mv, who }) {
   );
 }
 
+// A report named by its analysis date; its ID is the tooltip (raw IDs never
+// stand in the text, the 2026-10-18 polish pass).
+function RepLink({ s, pid, prov, label }) {
+  const when = s.analysis_at ? fmtDate(s.analysis_at) : s.saved_at ? `Saved ${fmtDate(s.saved_at)}` : 'Undated report';
+  return <a href={reportHref(pid, prov, s.report_id)} data-key={`ci-${label}-${prov}`} data-report={s.report_id} title={`Report ${s.report_id}`}>{when}</a>;
+}
+
+// One model as a card: its name, the grade then and now, its verdict now,
+// and the two reports by their dates.
 function Row({ r, pid }) {
+  const from = r.then ? r.then.grade_words : 'None';
+  const to = r.now ? r.now.grade_words : 'None';
   return (
-    <li className="ci-row" data-key={`ci-row-${r.provider}`} data-same={r.same ? 'true' : 'false'}>
+    <li className="ci-row ci-card" data-key={`ci-row-${r.provider}`} data-same={r.same ? 'true' : 'false'}>
       <p className="ci-model">
         <strong>{r.who}</strong>
         {r.on_hold ? <span className="faint"> · on hold</span> : null}
         {r.same ? <span className="ci-same"> · Same report</span> : null}
       </p>
-      {r.newer ? <p className="ci-newer" data-key={`ci-newer-${r.provider}`}>{`A newer ${r.who} report exists · `}<a href={reportHref(pid, r.provider, r.now.report_id)}>{`Open ${r.now.short}`}</a></p> : null}
-      {r.same ? null : (
-        <div className="ci-sides">
-          <Side s={r.then} note={r.then_note} pid={pid} prov={r.provider} label="Then" />
-          <Side s={r.now} note={r.now_note} pid={pid} prov={r.provider} label="Now" />
-        </div>
+      <p className="ci-move" aria-label={r.same ? `Grade ${to}, unchanged` : `Grade ${from} then, ${to} now`}>
+        {r.same ? <span className="ci-to">{to}</span> : <><span className="ci-from">{from}</span><ArrowRight size={14} aria-hidden="true" className="ci-arrow" /><span className="ci-to">{to}</span></>}
+      </p>
+      {r.now && r.now.verdict ? <p className="ci-verdict">{r.now.verdict}</p> : r.now_note ? <p className="ci-verdict is-none">{r.now_note}</p> : null}
+      {r.newer ? <p className="ci-newer" data-key={`ci-newer-${r.provider}`}>{`A newer ${r.who} report exists · `}<a href={reportHref(pid, r.provider, r.now.report_id)} title={`Report ${r.now.report_id}`}>{`Open the ${r.now.analysis_at ? fmtDate(r.now.analysis_at) : 'newer'} report`}</a></p> : null}
+      {r.same ? (
+        r.now ? <p className="ci-reps"><span className="ci-k">Report</span><RepLink s={r.now} pid={pid} prov={r.provider} label="now" /></p> : null
+      ) : (
+        <dl className="ci-reps">
+          <div><dt className="ci-k">Then</dt><dd>{r.then ? <RepLink s={r.then} pid={pid} prov={r.provider} label="then" /> : <span className="ci-none">{r.then_note}</span>}</dd></div>
+          <div><dt className="ci-k">Now</dt><dd>{r.now ? <RepLink s={r.now} pid={pid} prov={r.provider} label="now" /> : <span className="ci-none">{r.now_note}</span>}</dd></div>
+        </dl>
       )}
       {r.between_words ? (
         <p className="ci-between" data-key={`ci-between-${r.provider}`}>
           {`${r.between_words}: `}
-          {r.between.map((b, i) => <span key={b.report_id}>{i ? ', ' : ''}<a href={reportHref(pid, r.provider, b.report_id)} title={b.report_id}>{b.short}</a></span>)}
+          {r.between.map((b, i) => <span key={b.report_id}>{i ? ', ' : ''}<a href={reportHref(pid, r.provider, b.report_id)} title={`Report ${b.report_id}`}>{b.analysis_at ? fmtDate(b.analysis_at) : 'undated'}</a></span>)}
         </p>
       ) : null}
       {r.not_comparable ? <p className="ci-nc" data-key={`ci-nc-${r.provider}`}>{r.not_comparable}</p> : null}

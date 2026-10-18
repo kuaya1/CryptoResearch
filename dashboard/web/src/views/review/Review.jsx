@@ -43,6 +43,8 @@ const fmtScore = (s) => {
   if (s.status === 'range') return `${s.low}–${s.high}`;
   return s.status === 'not_applicable' ? 'N/A' : 'unknown';
 };
+// A category's ID in words (token_value_capture → Token value capture).
+const words = (id) => { const t = String(id || '').replace(/_/g, ' '); return t.charAt(0).toUpperCase() + t.slice(1); };
 const VERDICT = (v) => (v ? `${v.charAt(0)}${v.slice(1).toLowerCase()}` : 'No verdict');
 
 // ---- the queue ------------------------------------------------------------------------
@@ -97,7 +99,7 @@ function Evidence({ d, p, detail, agendaRow }) {
       {!detail ? <div className="part-loading" role="status"><span className="sr-only">Loading the record…</span><span className="skel w80" /><span className="skel w60" /></div> : null}
       {ch && ch.new_reports && ch.new_reports.length ? (
         <section className="rv-evs" aria-labelledby="rv-ev-reports">
-          <h3 id="rv-ev-reports">{`New reports (${ch.new_reports.length})`}</h3>
+          <h3 id="rv-ev-reports">New reports<span className="rv-evs-n">{ch.new_reports.length}</span></h3>
           <ul className="rv-list">
             {ch.new_reports.map((r) => {
               const full = report(r.report_id);
@@ -106,7 +108,7 @@ function Evidence({ d, p, detail, agendaRow }) {
               const claims = full && full.assessment && Array.isArray(full.assessment.claims) ? full.assessment.claims.length : null;
               return (
                 <li key={r.report_id}>
-                  <p className="rv-li-t"><strong>{PROVIDER_LABELS[r.provider] || r.provider}</strong>{` · ${VERDICT(r.verdict)}`}</p>
+                  <p className="rv-li-t" title={`Report ${r.report_id}`}><strong>{PROVIDER_LABELS[r.provider] || r.provider}</strong>{` · ${VERDICT(r.verdict)}`}</p>
                   <p className="rv-li-m faint">{`Saved ${fmtDateTime(r.imported_at)}${r.analysis_at ? ` · analysis ${fmtDate(r.analysis_at)}` : ''}${full && full.grade && full.grade.display ? ` · grade ${full.grade.display}` : full && full.grade && full.grade.status === 'withheld' ? ' · grade withheld' : ''}${claims !== null ? ` · ${claims} claims` : ''}${flags ? ` · ${flags} evidence flag${flags === 1 ? '' : 's'}` : ''}`}</p>
                   <p className="rv-li-a">
                     <DeepLink pid={pid} href={`#/project/${enc(pid)}/evidence?model=${r.provider}&report=${enc(r.report_id)}`} dataKey={`rv-ev-${r.report_id}`}>Its evidence</DeepLink>
@@ -120,13 +122,13 @@ function Evidence({ d, p, detail, agendaRow }) {
       ) : null}
       {ch && ch.provider_changes && ch.provider_changes.length ? (
         <section className="rv-evs" aria-labelledby="rv-ev-grades">
-          <h3 id="rv-ev-grades">What moved</h3>
+          <h3 id="rv-ev-grades">Grade changes</h3>
           <ul className="rv-list">
             {ch.provider_changes.map((c) => (
               <li key={c.provider}>
                 <p className="rv-li-t"><strong>{PROVIDER_LABELS[c.provider]}</strong>{` · grade ${c.grade_from || 'none'} → ${c.grade_to || 'none'}`}</p>
                 {c.verdict_from !== c.verdict_to ? <p className="rv-li-m">{`Verdict ${VERDICT(c.verdict_from)} → ${VERDICT(c.verdict_to)}`}</p> : null}
-                {c.diff && c.diff.changes && c.diff.changes.length ? <p className="rv-li-m faint">{c.diff.changes.slice(0, 5).map((x) => `${x.id} ${fmtScore(x.from)}→${fmtScore(x.to)}`).join(' · ')}{c.diff.changes.length > 5 ? ` · +${c.diff.changes.length - 5}` : ''}</p> : null}
+                {c.diff && c.diff.changes && c.diff.changes.length ? <p className="rv-li-m faint">{c.diff.changes.slice(0, 5).map((x) => `${words(x.id)} ${fmtScore(x.from)} → ${fmtScore(x.to)}`).join(' · ')}{c.diff.changes.length > 5 ? ` · +${c.diff.changes.length - 5}` : ''}</p> : null}
               </li>
             ))}
           </ul>
@@ -134,7 +136,7 @@ function Evidence({ d, p, detail, agendaRow }) {
       ) : null}
       {items.length || set.length ? (
         <section className="rv-evs" aria-labelledby="rv-ev-agenda">
-          <h3 id="rv-ev-agenda">On the agenda</h3>
+          <h3 id="rv-ev-agenda">Scheduled reviews<span className="rv-evs-n">{items.length}</span></h3>
           {items.map((i) => { const first = Boolean(agendaRow.primary && agendaRow.primary.item_id === i.item_id); return <Item key={i.item_id} pid={pid} item={i} primary={first} acts={!first} />; })}
           {set.length ? (
             <details className="fold ag-fold" data-key={`rv-set-${pid}`}>

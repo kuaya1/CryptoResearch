@@ -9,6 +9,8 @@ import '../../../public/brief.css';
 import '../../../public/brief-views.css';
 import '../../../public/explorer.css';
 import './bridge.css';
+// The hosted pages at the executive scale (unscoped; after the scoped sheets).
+import '../styles/legacy-pages.css';
 import { retryingImport } from '../components/Boundary.jsx';
 
 // Each page's code is asked for again after a failed download (a fresh

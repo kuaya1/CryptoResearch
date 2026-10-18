@@ -39,7 +39,7 @@ function NavItem({ s, active, count, compact = false, onClick }) {
       data-key={`nav-${s.id}`}
       onClick={onClick}
     >
-      <Icon className="nav-ico" size={16} strokeWidth={1.75} aria-hidden="true" />
+      <Icon className="nav-ico" size={18} strokeWidth={1.75} aria-hidden="true" />
       <span className="nav-label">{s.label}</span>
       {count ? <span className="nav-count" aria-hidden="true" title={count.title}>{count.n}</span> : null}
     </a>
@@ -101,12 +101,12 @@ export function Sidebar({ collapsed, onCollapse }) {
       </nav>
       <div className="sb-foot">
         <button type="button" className="nav-item sb-util" data-key="nav-command" aria-keyshortcuts={mac() ? 'Meta+K' : 'Control+K'} title={collapsed ? `Search and commands (${mac() ? '⌘K' : 'Ctrl K'})` : undefined} onClick={() => openCommand()}>
-          <Search className="nav-ico" size={16} strokeWidth={1.75} aria-hidden="true" />
+          <Search className="nav-ico" size={18} strokeWidth={1.75} aria-hidden="true" />
           <span className="nav-label">Search</span>
           <kbd className="nav-kbd" aria-hidden="true">{mac() ? '⌘K' : 'Ctrl K'}</kbd>
         </button>
         <button type="button" className={`nav-item sb-util${prefsOpen ? ' is-on' : ''}`} data-key="nav-settings" aria-keyshortcuts={mac() ? 'Meta+Comma' : 'Control+Comma'} aria-expanded={prefsOpen} title={collapsed ? 'Preferences' : undefined} onClick={() => openPrefs('appearance')}>
-          <Settings className="nav-ico" size={16} strokeWidth={1.75} aria-hidden="true" />
+          <Settings className="nav-ico" size={18} strokeWidth={1.75} aria-hidden="true" />
           <span className="nav-label">Preferences</span>
         </button>
         <div className="sb-status">
