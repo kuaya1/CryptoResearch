@@ -279,9 +279,13 @@ button.gp:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--t-fill, var(--t
   .wl-table .c-name { position: static; box-shadow: none; }
   .wl-table .proj-top .ticker { display: none; }
   .wl-table .proj .logo { width: 24px !important; height: 24px !important; }
-  .pname { max-width: 92px; }
+  .pname { max-width: 80px; }
+  .wl-table .marks, .wl-table .proj-sub { flex-wrap: wrap; }
+  .wl-table .mark { display: inline-block; max-width: 80px; white-space: normal; line-height: 1.25; }
+  .wl-table .price-cell .price { font-size: var(--fs-sm); }
+  .wl-table .gcell-none, .wl-table .gcell-state { display: inline-block; max-width: 56px; white-space: normal; line-height: 1.25; }
   .proj { gap: 8px; }
-  .wl-table .risk-badge { max-width: 70px; height: auto; min-height: var(--badge-h); padding-top: 2px; padding-bottom: 2px; line-height: 1.3; white-space: normal; display: -webkit-inline-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .wl-table .risk-badge { max-width: 64px; height: auto; min-height: var(--badge-h); padding-top: 2px; padding-bottom: 2px; line-height: 1.3; white-space: normal; display: -webkit-inline-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 }
 @media (max-width: 767.98px) {
   /* A withheld grade and a stale price's note wrap rather than widen their columns. */
@@ -290,4 +294,4 @@ button.gp:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--t-fill, var(--t
   .wl-table .price-note { white-space: normal; max-width: 60px; text-align: right; }
   .wl-table .price-note .pn { white-space: normal; }
 }
-@media (max-width: 379.98px) { .pname { max-width: 72px; } .wl-table .risk-badge { max-width: 64px; } .wl-table td, .wl-table th { padding: 0 5px; } }
+@media (max-width: 379.98px) { .pname { max-width: 64px; } .wl-table .mark { max-width: 64px; } .wl-table .risk-badge { max-width: 58px; } .wl-table td, .wl-table th { padding: 0 5px; } }

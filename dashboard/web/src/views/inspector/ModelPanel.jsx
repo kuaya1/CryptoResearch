@@ -212,6 +212,14 @@ const toneOf = (s) => (s === 'occurred' ? 'is-bad' : s === 'watch' ? 'is-warn' :
 // The deepest DEX pool, asked of DexScreener by this browser only once the
 // inspector has rested 250 ms on this project (dex.js; chain-scoped, for the
 // verified identity's contracts only, never stored).
+// Why there is no pool to look up, by dexTargets' state.
+const NO_POOL = {
+  unverified: 'Identity not verified: no contract to look up',
+  native: 'Native coin: no token contract',
+  none: 'No contract recorded to look up',
+  unmatched: 'Its chain is not one DexScreener lists',
+};
+
 function useTopPool(p) {
   const [st, setSt] = useState({ pid: null, pool: undefined, error: null });
   useEffect(() => {
@@ -219,8 +227,10 @@ function useTopPool(p) {
     const t = setTimeout(async () => {
       try {
         const L = await loadLegacy();
-        const targets = L.dexTargets(rowProject(p));
-        if (!targets.length) { if (alive) setSt({ pid: p.project_id, pool: null, error: null, none: true }); return; }
+        // dexTargets answers { state, targets }: the verified identity's
+        // contracts on chains DexScreener lists, or why there are none.
+        const { state, targets } = L.dexTargets(rowProject(p));
+        if (!targets.length) { if (alive) setSt({ pid: p.project_id, pool: null, error: null, none: state }); return; }
         const answer = L.peekLookup(targets) || await L.lookupTargets(targets);
         const ref = p.market && typeof p.market.price_usd === 'number' ? p.market.price_usd : null;
         if (alive) setSt({ pid: p.project_id, pool: L.topPool(answer, targets, { refPrice: ref }), error: null, thin: L.THIN_USD });
@@ -266,7 +276,7 @@ function RiskStrip({ d, p }) {
         <span className="faint">Top pool </span>
         {pool.pool === undefined ? <span className="faint" aria-busy="true">…</span>
           : pool.error ? <span className="faint">{`DexScreener could not be read: ${pool.error.message}`}</span>
-            : !pool.pool ? <span className="faint">{pool.none ? 'No verified contract to look up' : 'No decentralized pool indexed'}</span>
+            : !pool.pool ? <span className="faint">{NO_POOL[pool.none] || 'No decentralized pool indexed'}</span>
               : (
                 <span title={`${pool.pool.chain}${pool.pool.pairAddress ? ` · ${pool.pool.pairAddress}` : ''} · DexScreener, asked by this browser`}>
                   {`${pool.pool.dex} · ${pool.pool.pair}${pool.pool.multiChain ? ` · ${pool.pool.chain}` : ''} · `}

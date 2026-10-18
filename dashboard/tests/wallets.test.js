@@ -1049,7 +1049,8 @@ test('failed transactions: a listed one counts its fee once; one Alchemy does no
   const row = wallets.reconcileAll(ws, { pf }).find((x) => x.asset_id === 'ethereum');
   assert.equal(row.status, 'history_partial');
   assert.equal(row.difference, `-${FEE}`);
-  assert.match(row.notes.join(' '), /1 transaction\(s\) this wallet sent on Ethereum are not in Alchemy's history/);
+  assert.match(row.notes.join(' '), /1 transaction this wallet sent on Ethereum is not in Alchemy's history, so its fee is not recorded/);
+  assert.doesNotMatch(row.notes.join(' '), /\(s\)/, 'counts take their plural in words');
   assert.ok(wallets.attentionItems(ws, { pf, now: NOW }).some((a) => a.kind === 'wallet_history_gap'));
   assert.equal(wallets.overview(ws, { market: marketAt({}), now: NOW }).wallets[0].networks[0].history_gap, 1);
   // Read again, twice: the fee stays once, the gap stays said.

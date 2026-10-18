@@ -102,6 +102,8 @@ for (const [id, n] of Object.entries(NETWORKS)) {
 const SUSPICIOUS_NAME = /(https?:|www\.|t\.me|\.(com|io|net|org|xyz|app|site|top|vip|link|gift|live|club|pro)\b|claim|reward|visit|voucher|bonus|redeem|\$\s?\d)/i;
 
 const isoOf = (ms) => new Date(ms).toISOString();
+// A count with its noun in words (never "(s)").
+const count = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const shortHash = (parts) => sha256(JSON.stringify(parts)).slice(0, 12);
 
 function cfgOf(ws) {
@@ -1169,7 +1171,7 @@ function importReady(ws, { now = Date.now() } = {}) {
             const overlap = missing.find((x) => manual.keys.has(`${x.account_id}|${x.asset_id}`));
             if (overlap) {
               const ids = manual.keys.get(`${overlap.account_id}|${overlap.asset_id}`);
-              mark('held', { hold: { code: 'manual_records', needs_decision: true, reason: `You recorded ${ids.length} transaction(s) for ${overlap.asset_id} in ${overlap.account_id} yourself (${ids.slice(0, 3).join(', ')}${ids.length > 3 ? ', …' : ''}). Recording this too could count the same units twice.`, match_tx_ids: ids.slice(0, 10) } });
+              mark('held', { hold: { code: 'manual_records', needs_decision: true, reason: `You recorded ${count(ids.length, 'transaction')} for ${overlap.asset_id} in ${overlap.account_id} yourself (${ids.slice(0, 3).join(', ')}${ids.length > 3 ? ', …' : ''}). Recording this too could count the same units twice.`, match_tx_ids: ids.slice(0, 10) } });
               counts.held++;
               continue;
             }
@@ -1301,7 +1303,7 @@ function reconcileWallet(ws, w, { map, ledger, state = null }) {
     if (!st.history_complete_to) historyIncomplete.push(network);
     if (info.coverage && !info.coverage.internal) nativeNoInternal.add(info.native.asset_id);
     const gap = sentGapOf(st);
-    if (gap) sentGaps.set(info.native.asset_id, [...(sentGaps.get(info.native.asset_id) || []), `${gap} transaction(s) this wallet sent on ${info.label} are not in Alchemy's history, so their fees are not recorded`]);
+    if (gap) sentGaps.set(info.native.asset_id, [...(sentGaps.get(info.native.asset_id) || []), `${count(gap, 'transaction')} this wallet sent on ${info.label} ${gap === 1 ? 'is' : 'are'} not in Alchemy's history, so ${gap === 1 ? 'its fee is' : 'their fees are'} not recorded`]);
     const bal = loadBalances(ws, w.wallet_id, network);
     const snap = bal && bal.last_complete;
     if (!snap) {
@@ -1584,16 +1586,16 @@ function attentionItems(ws, { pf, now = Date.now() } = {}) {
       }
       const st = status.networks[`${w.wallet_id}:${network}`];
       if (w.status === 'active' && st && ['stale', 'failing', 'unavailable'].includes(st.state) && status.summary.configured) out.push({ kind: 'wallet_sync', severity: 'medium', project_id: null, title: `Wallet ${w.label} on ${NETWORKS[network].label}: ${st.words}`, detail: st.last_error || 'The last good view stays on screen with its age.', action: '#/portfolio?tab=wallets' });
-      if (w.status === 'active' && st && st.history_gap) out.push({ kind: 'wallet_history_gap', severity: 'low', project_id: null, title: `Wallet ${w.label} on ${NETWORKS[network].label}: history incomplete`, detail: `${st.history_gap} transaction(s) this wallet sent are not in Alchemy's history, so their fees are not recorded. The balance difference stays visible.`, action: '#/portfolio?tab=wallets' });
+      if (w.status === 'active' && st && st.history_gap) out.push({ kind: 'wallet_history_gap', severity: 'low', project_id: null, title: `Wallet ${w.label} on ${NETWORKS[network].label}: history incomplete`, detail: `${count(st.history_gap, 'transaction')} this wallet sent ${st.history_gap === 1 ? 'is' : 'are'} not in Alchemy's history, so ${st.history_gap === 1 ? 'its fee is' : 'their fees are'} not recorded. The balance difference stays visible.`, action: '#/portfolio?tab=wallets' });
       if (w.status === 'active' && st && st.state === 'unsupported') out.push({ kind: 'wallet_unsupported', severity: 'low', project_id: null, title: `Wallet ${w.label}: ${NETWORKS[network].label} is not read`, detail: 'Alchemy\'s transfer history does not cover it; its earlier records stay as they are.', action: '#/portfolio?tab=wallets' });
     }
     const decisions = asked.size;
-    if (decisions) out.push({ kind: 'wallet_decision', severity: 'medium', project_id: null, title: `Wallet ${w.label}: ${decisions} transaction(s) wait for your decision`, detail: 'A possible swap, an overlap with an asset you recorded in that account yourself, or a possible move between your accounts.', action: '#/portfolio?tab=wallets' });
-    if (voided) out.push({ kind: 'wallet_reversed', severity: 'medium', project_id: null, title: `Wallet ${w.label}: ${voided} recorded transaction(s) were reversed on chain`, detail: 'Their ledger entries were voided with the evidence; nothing was deleted.', action: '#/portfolio?tab=wallets' });
+    if (decisions) out.push({ kind: 'wallet_decision', severity: 'medium', project_id: null, title: `Wallet ${w.label}: ${count(decisions, 'transaction')} ${decisions === 1 ? 'waits' : 'wait'} for your decision`, detail: 'A possible swap, an overlap with an asset you recorded in that account yourself, or a possible move between your accounts.', action: '#/portfolio?tab=wallets' });
+    if (voided) out.push({ kind: 'wallet_reversed', severity: 'medium', project_id: null, title: `Wallet ${w.label}: ${count(voided, 'recorded transaction')} ${voided === 1 ? 'was' : 'were'} reversed on chain`, detail: 'Their ledger entries were voided with the evidence; nothing was deleted.', action: '#/portfolio?tab=wallets' });
   }
   try {
     const mismatches = reconcileAll(ws, { pf, state }).filter((r) => r.status === 'mismatch');
-    if (mismatches.length) out.push({ kind: 'wallet_mismatch', severity: 'medium', project_id: null, title: `Wallet balances differ from your ledger for ${mismatches.length} asset(s)`, detail: mismatches.slice(0, 4).map((r) => `${r.asset_id} in ${r.account_id}: chain ${r.observed}, ledger ${r.recorded}`).join('; '), action: '#/portfolio?tab=wallets' });
+    if (mismatches.length) out.push({ kind: 'wallet_mismatch', severity: 'medium', project_id: null, title: `Wallet balances differ from your ledger for ${count(mismatches.length, 'asset')}`, detail: mismatches.slice(0, 4).map((r) => `${r.asset_id} in ${r.account_id}: chain ${r.observed}, ledger ${r.recorded}`).join('; '), action: '#/portfolio?tab=wallets' });
   } catch (_) { /* a reconciliation failure never hides the rest */ }
   return out;
 }
