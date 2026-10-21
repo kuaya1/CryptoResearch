@@ -102,18 +102,26 @@ function gradeFlagWords(n) {
   return [n.errors ? `${n.errors} extraction error${n.errors === 1 ? '' : 's'}` : null, n.ambiguous ? `${n.ambiguous} ambiguous value${n.ambiguous === 1 ? '' : 's'}` : null].filter(Boolean).join(', ');
 }
 
-export function GradeFlags({ m }) {
+// Each chip jumps to its sentence below. On the Overview the evidence flag has
+// no sentence there (the chip says it already): it opens the Evidence view at
+// the desk's checks instead.
+export function GradeFlags({ m, pid = null, view = 'evidence' }) {
   const ns = m.notices.filter((n) => GRADE_NOTICES.includes(n.kind));
   if (!ns.length) return null;
+  const evidenceHref = pid ? `#/project/${enc(pid)}/evidence?model=${m.provider}${m.is_latest ? '' : `&report=${enc(m.report_id)}`}&open=checks` : null;
   return (
     <ul className="gflags" aria-label="Warnings about this grade">
-      {ns.map((n) => (
-        <li key={n.kind}>
-          <button type="button" className={`gflag tone-${n.tone}${n.kind === 'evidence' ? ` ev-${n.level}` : ''}`} data-key={`brief-gflag-${n.kind}`} onClick={() => jumpTo(`brief-notice-${n.kind}`)}>
-            <TriangleAlert size={13} strokeWidth={2} aria-hidden="true" /><span>{gradeFlagWords(n)}</span>
-          </button>
-        </li>
-      ))}
+      {ns.map((n) => {
+        const cls = `gflag tone-${n.tone}${n.kind === 'evidence' ? ` ev-${n.level}` : ''}`;
+        const inner = <><TriangleAlert size={13} strokeWidth={2} aria-hidden="true" /><span>{gradeFlagWords(n)}</span></>;
+        return (
+          <li key={n.kind}>
+            {n.kind === 'evidence' && view === 'overview' && evidenceHref
+              ? <ViewLink pid={pid} href={evidenceHref} className={cls} dataKey={`brief-gflag-${n.kind}`}>{inner}</ViewLink>
+              : <button type="button" className={cls} data-key={`brief-gflag-${n.kind}`} onClick={() => jumpTo(`brief-notice-${n.kind}`)}>{inner}</button>}
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -186,7 +194,7 @@ export function Notices({ list, m, pid, who, label, view = 'overview' }) {
 // The grade as the metric header (no gauge; Eric, 2026-10-08): the model and
 // its verdict, the desk's calculated grade (never the model's own total) with
 // the rubric's word, withheld as the share of the weight scored.
-function GradeBlock({ m, who, verdict, sub }) {
+function GradeBlock({ m, pid, who, verdict, sub }) {
   const g = m.grade;
   const a = (m.report && m.report.assessment) || {};
   const captionTitle = `Calculated by the desk from ${who}'s six weighted component scores under ${g.rubric || 'its rubric'}; never ${who}'s own total`;
@@ -195,7 +203,7 @@ function GradeBlock({ m, who, verdict, sub }) {
     : g.status === 'withheld' ? { status: 'withheld', coverage: typeof g.coverage === 'number' ? g.coverage : null, reason: g.reason || 'No grade is calculated.' }
       : { status: 'none', label: 'No grade', reason: g.reason || 'No grade was calculated.' };
   const tier = scored ? scoreTier(g.status === 'range' ? g.grade.low : g.grade.value) : null;
-  return <MetricHeader who={who} model={a.model_version || null} verdict={verdict} grade={grade} word={scored ? g.word : null} tier={tier} captionTitle={captionTitle} sub={sub} chips={<GradeFlags m={m} />} />;
+  return <MetricHeader who={who} model={a.model_version || null} verdict={verdict} grade={grade} word={scored ? g.word : null} tier={tier} captionTitle={captionTitle} sub={sub} chips={<GradeFlags m={m} pid={pid} view="overview" />} />;
 }
 
 function ageWords(at, staleDays) {
@@ -277,10 +285,14 @@ function Verdict({ m, pid, who, staleDays }) {
   const review = w.review && w.review.start >= w.today ? w.review : null;
   const lead = v.summary || v.final_take;
   const first = (n) => GRADE_NOTICES.includes(n.kind);
+  // The evidence flag is the chip in the header (it opens the Evidence view);
+  // its full sentence is on that view, not repeated here.
+  const gradeNotices = m.notices.filter((n) => first(n) && n.kind !== 'evidence');
   return (
     <section className={`ov-verdict${m.report_id && m.is_latest ? ' is-latest' : ''}`} id="bf-verdict" aria-label={`${who}'s verdict`}>
       <GradeBlock
         m={m}
+        pid={pid}
         who={who}
         sub={(
           <>
@@ -307,6 +319,13 @@ function Verdict({ m, pid, who, staleDays }) {
         </div>
       ) : null}
       {lead ? <div className="ov-why"><h3 className="ov-h3">{`${who}'s summary`}</h3><p className="ov-lead">{lead}</p></div> : <p className="none">{`No summary in ${who}'s data block.`}</p>}
+      {v.falsifiable ? (
+        <div className="ov-why" data-key="brief-falsifiable">
+          <h3 className="ov-h3" title={`${who}'s own ${v.falsifiable.label || 'judgment'}, not a verified fact`}>Falsifiable thesis</h3>
+          <p className="ov-lead">{v.falsifiable.text}</p>
+          {v.falsifiable.test ? <p className="faint">{`Would disprove it: ${v.falsifiable.test}`}</p> : null}
+        </div>
+      ) : null}
       {v.timing || v.market || next || review ? (
         <p className="ov-views" title={`${who}'s own views for this horizon; they change no score`}>
           {v.timing ? <span className="ov-view" title={v.timing.rationale || undefined}><span className="k">Timing</span>{v.timing.word}</span> : null}
@@ -315,7 +334,7 @@ function Verdict({ m, pid, who, staleDays }) {
           {review ? <span className="ov-view" title={review.trigger ? `Sooner if: ${review.trigger}` : undefined}><span className="k">Review</span>{fmtDate(review.start)}</span> : null}
         </p>
       ) : null}
-      <Notices list={m.notices.filter(first)} m={m} pid={pid} who={who} label="Warnings about this grade" />
+      <Notices list={gradeNotices} m={m} pid={pid} who={who} label="Warnings about this grade" />
       <Notices list={m.notices.filter((n) => !first(n))} m={m} pid={pid} who={who} label="Before you rely on this brief" />
     </section>
   );

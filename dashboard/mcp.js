@@ -660,10 +660,11 @@ function jobView(job, run, me, ws) {
     const ask = `Eric says "${WAITING_PHRASE}" ${ASK_HOW[job.provider]} (or pastes the prompt into ${label} and imports the answer)`;
     if (hold) progress = `on hold: ${label} is paused on this desk${hold.since ? ` since ${hold.since}` : ''}; this waiting job is kept and is not handed out`;
     else if (job.provider === me) progress = 'waiting for you';
-    else if (st && st.mode === 'api') progress = `waiting for ${label}; its API is set up now, so Eric's next request for ${label} on this project sends this job to the API (or ${ask})`;
+    else if (st && st.mode === 'api') progress = `waiting for ${label}; its API is set up now, so Eric's next request for ${label} on this project, or "Send waiting jobs to their APIs" in Preferences > Models & budget, sends this job to the API (or ${ask})`;
     else progress = `waiting for ${label} to do it through its connection (manual research, nothing to set up): ${ask}`;
   }
   else if (job.state === 'queued' && job.hold) progress = 'held by archive, not sent: its project was archived before this request was sent; restoring the project does not send it, and it is sent only if Eric sends it again from the dashboard';
+  else if (job.state === 'queued' && job.budget_wait && job.not_before && Date.parse(job.not_before) > Date.now()) progress = `queued for the ${label} API, waiting for ${job.budget_wait.limit === 'monthly' ? "the month's" : "the day's"} research budget; it is asked again after ${job.not_before} (nothing sent or billed)`;
   else if (job.state === 'queued') progress = job.not_before && Date.parse(job.not_before) > Date.now() ? `queued for the ${label} API, which asked to slow down; it is asked again after ${job.not_before} (not billed)` : `queued for the ${label} API in the background`;
   else if (job.state === 'dispatching') {
     const last = (job.attempts || [])[(job.attempts || []).length - 1];

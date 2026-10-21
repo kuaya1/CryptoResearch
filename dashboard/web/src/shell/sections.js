@@ -1,3 +1,4 @@
+import { needsCount } from '../../../public/portfolio-model.js';
 import { LayoutList, Inbox, Wallet, FlaskConical } from 'lucide-react';
 import { deskKpis } from '../../../public/watchlist-model.js';
 
@@ -21,13 +22,10 @@ export function visibleSections() {
   return SECTIONS;
 }
 
-// Portfolio records that need you: the ledger's warnings, quarantined
-// records and wallet events waiting for your decision.
+// Portfolio records that need you: one per row of its Needs attention tab
+// (public/portfolio-model.js, the same rule as the tab's own count).
 export function portfolioNeeds(index) {
-  if (!index) return 0;
-  const pf = index.portfolio || {};
-  const wallet = (index.attention || []).filter((a) => a.kind === 'wallet_decision').length;
-  return (pf.warnings || []).length + (pf.quarantine || []).length + wallet;
+  return needsCount(index);
 }
 
 // A count beside a place only where it means "needs you" (§3.0): Review, the

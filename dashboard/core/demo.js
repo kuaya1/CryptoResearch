@@ -114,6 +114,12 @@ function mockReport(ws, provider, run) {
       technology_without_token: view('path in which the product works and the token does not benefit.', 'judgment'),
       within_holding_period: view('view of what could happen inside the horizon.', 'speculation'),
       advantage_over_btc: view('view on holding this rather than BTC.', 'judgment'),
+      // cr-research-prompt@6's three tests.
+      ...(require('./thesis').judgmentKeysFor(run.prompt && run.prompt.version).some(([k]) => k === 'falsifiable_thesis') ? {
+        payment_waterfall: view('waterfall: demo users pay fees; about $0.20 of each $1 reaches the holder after incentives.', 'judgment'),
+        per_token_cash_flow: view('holder cash flow per staked token grows slower than staked supply over 90 days: diluted.', 'judgment'),
+        falsifiable_thesis: view('thesis: the market assumes the demo token captures fees; the docs show 20% does; the fee switch vote in the horizon makes it observable.', 'judgment'),
+      } : {}),
     },
   } : {};
   const scenarioItem = (c, p) => ({

@@ -18,6 +18,9 @@ const MINUS = '−';
 export const RESEARCH_STATE = {
   none: { short: 'None', long: 'No research yet', tone: '' },
   queued: { short: 'Queued', long: 'Queued: it starts shortly; not saved yet', tone: 'wait' },
+  // Queued for its API, but the day's or month's research limit is used up:
+  // asked again when it resets; nothing was sent or billed.
+  budget: { short: 'Queued', long: 'Queued, waiting for the research budget: the day\'s or month\'s limit is used up, so it is asked again when it resets. Nothing was sent or billed', tone: 'wait' },
   dispatching: { short: 'Working', long: 'Running on the API in the background: not saved yet', tone: 'work' },
   running: { short: 'Working', long: 'Working on it: not saved yet', tone: 'work' },
   cowork: { short: 'Working', long: 'Claude in Cowork is researching it: not saved yet', tone: 'work' },
@@ -659,6 +662,7 @@ export function jobKey(job, runCreatedAt = null, { onHold = false } = {}) {
   if (job.state === 'unconfigured') return onHold ? 'on_hold' : 'waiting';
   if (job.state === 'queued' && job.hold) return 'held';
   if (job.state === 'queued' && onHold) return 'on_hold';
+  if (job.state === 'queued' && job.budget_wait && job.not_before && Date.parse(job.not_before) > Date.now()) return 'budget';
   // An answer that arrived but stopped before finishing is its own state,
   // apart from a request that failed outright.
   if (job.state === 'failed' && lastOutcome(job) === 'incomplete') return 'incomplete';

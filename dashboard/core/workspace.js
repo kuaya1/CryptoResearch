@@ -94,7 +94,7 @@ const DEFAULT_SETTINGS = {
       timeout_seconds: 10,
       max_bytes: 262144,
       max_projects_per_run: 20,
-      monthly_request_budget: 3000,
+      monthly_request_budget: 8000,
       backoff_initial_minutes: 10,
       backoff_max_minutes: 720,
     },

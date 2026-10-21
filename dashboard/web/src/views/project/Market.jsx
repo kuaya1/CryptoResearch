@@ -7,10 +7,12 @@
 // DefiLlama did not report is drawn as missing, never as zero), the on-chain
 // activity no source provides (said so), the technical chart and your
 // position. Drawing it writes nothing and asks no paid provider.
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { fmtPrice, fmtCompactUsd, fmtDateTime, fmtDate, fmtAgo, freshnessText, fmtNum } from '../../../../public/ui.js';
-import { marketStrings, rowProject, defillamaBound } from '../../../../public/watchlist-model.js';
+import { marketStrings, rowProject, defillamaBound, taxRevenueNote } from '../../../../public/watchlist-model.js';
 import { legacyCtx } from '../../legacy/ctx.js';
+import { api } from '../../lib/desk.js';
+import { PROVIDER_LABELS } from '../../../../public/ui.js';
 import { Dom } from '../../components/Dom.jsx';
 import { Change, Spark, Unknown, UnknownFigure } from '../../components/figures.jsx';
 import { Panel, KV, None, ExtLink, enc } from './kit.jsx';
@@ -193,8 +195,10 @@ function Fundamentals({ d, row }) {
     );
   }
   const b = f.binding || {};
+  const taxNote = taxRevenueNote(row.screening, f);
   return (
     <>
+      {taxNote ? <p className="l2-note is-warn" data-key="mk-tax-revenue">{taxNote}</p> : null}
       <p className="mk-src">
         <span>{`DefiLlama ${b.scope || f.scope || ''} ${b.slug || f.slug || ''}`.replace(/\s+/g, ' ').trim()}</span>
         {win ? <span className="faint">{` · 30 completed UTC days, ${fmtDate(win.start)} to ${fmtDate(win.end)}`}</span> : null}
@@ -244,6 +248,49 @@ function Fundamentals({ d, row }) {
   );
 }
 
+// What happened after each of this project's reports (core/report-outcomes.js):
+// the return against BTC from the research run's start, at 30, 60, 90 and
+// 120 days. Read when the section opens; nothing is written or fetched from
+// a provider.
+const signedPct = (x) => (typeof x === 'number' ? `${x > 0 ? '+' : x < 0 ? '−' : ''}${Math.abs(x).toFixed(2)}%` : '—');
+function Outcomes({ pid }) {
+  const [st, setSt] = useState({ pid: null, data: null, error: null });
+  useEffect(() => {
+    let alive = true;
+    api.get(`/api/projects/${enc(pid)}/outcomes`).then((data) => { if (alive) setSt({ pid, data, error: null }); }, (error) => { if (alive) setSt({ pid, data: null, error }); });
+    return () => { alive = false; };
+  }, [pid]);
+  if (st.pid !== pid) return <p className="faint" aria-busy="true">Reading the price records…</p>;
+  if (st.error) return <None>{`Outcomes could not be read: ${st.error.message}`}</None>;
+  const o = st.data;
+  if (!o.reports.length) return <None>No eligible report yet.</None>;
+  const days = o.horizons_days;
+  const cell = (h) => {
+    if (!h) return '—';
+    if (h.status === 'pending') return <span className="faint">{`Due ${fmtDate(h.due)}`}</span>;
+    if (h.status === 'no_price') return <span className="faint" title={h.reason}>No price</span>;
+    return <span className={h.vs_btc_pct > 0 ? 'pos' : h.vs_btc_pct < 0 ? 'neg' : ''} title={`${signedPct(h.return_pct)} against BTC's ${signedPct(h.btc_return_pct)}, ${fmtDate(h.at)}`}>{signedPct(h.vs_btc_pct)}</span>;
+  };
+  const rows = o.reports.slice().sort((a, b) => String(b.start.at || '').localeCompare(String(a.start.at || '')));
+  return (
+    <div className="l2-table-wrap">
+      <table className="l2-table">
+        <thead><tr><th scope="col">Report</th><th scope="col">Verdict</th><th scope="col">Start</th>{days.map((x) => <th key={x} scope="col" className="num">{`${x}d vs BTC`}</th>)}</tr></thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.report_id}>
+              <td><a href={`#/project/${enc(pid)}/report?report=${enc(r.report_id)}`} data-key={`mk-out-${r.report_id}`}>{PROVIDER_LABELS[r.provider] || r.provider}</a>{r.grade && r.grade.display ? <span className="faint">{` · ${r.grade.display}`}</span> : null}</td>
+              <td>{r.verdict ? r.verdict.charAt(0) + r.verdict.slice(1).toLowerCase() : '—'}</td>
+              <td title={r.note || (r.start.basis === 'run_packet' ? "When the research run's evidence packet was captured" : 'When the report was saved (it answers no run)')}>{r.start.project ? `${fmtDate(r.start.at)} · ${fmtPrice(r.start.project.price_usd)}` : <span className="faint">No price</span>}</td>
+              {days.map((x) => <td key={x} className="num">{cell(r.horizons.find((h) => h.days === x))}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function Market({ d, row, pid }) {
   const pos = d.position && !d.position.closed ? d.position : null;
   const proj = useMemo(() => rowProject({ ...row, project_id: pid, name: d.project.name, symbol: d.project.symbol }), [row, pid]);
@@ -263,6 +310,9 @@ export default function Market({ d, row, pid }) {
       </div>
       <Panel id="mk-fund" title="Fees and revenue (DefiLlama)" note="Dated daily series as saved for the latest 30 completed UTC days; fees, revenue and holders revenue stay separate and no valuation ratio is computed. A partial month is not a total.">
         <Fundamentals d={d} row={row} />
+      </Panel>
+      <Panel id="mk-outcomes" title="After each report" note="Return against BTC from each research run's start, at 30, 60, 90 and 120 days, from the desk's hourly price records; nothing interpolated. Not a forecast or an accuracy figure; it changes no grade.">
+        <Outcomes pid={pid} />
       </Panel>
       <Panel id="mk-chart" title="Technical chart">
         <Dom className="chart-slot mk-tv" build={(L) => L.technicalChart(legacyCtx, d.project)} deps={[pid]} />

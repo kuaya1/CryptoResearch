@@ -39,7 +39,19 @@ const JUDGMENT_KEYS = [
   ['technology_without_token', 'Could the technology succeed while the token performs poorly'],
   ['within_holding_period', 'What could happen within the holding period'],
   ['advantage_over_btc', 'Advantage over holding BTC for the same period'],
+  // cr-research-prompt@6 adds section 4's two tests and the one-sentence
+  // thesis (Eric, 2026-10-21). Read wherever a report gives them; a report
+  // without them (every earlier prompt) keeps its block exactly as before.
+  ['payment_waterfall', 'Who still pays if the price stops rising, and how $1 reaches the holder'],
+  ['per_token_cash_flow', 'Holder cash flow per token against supply growth'],
+  ['falsifiable_thesis', 'One-sentence falsifiable thesis'],
 ];
+const V6_JUDGMENT_KEYS = new Set(['payment_waterfall', 'per_token_cash_flow', 'falsifiable_thesis']);
+// The judgment parts a prompt version asks for.
+function judgmentKeysFor(promptVersion) {
+  const m = /^cr-research-prompt@(\d+)$/.exec(String(promptVersion || '').trim());
+  return JUDGMENT_KEYS.filter(([key]) => !V6_JUDGMENT_KEYS.has(key) || (Boolean(m) && Number(m[1]) >= 6));
+}
 const MAX_TEXT = 4000;
 
 // cr-research-prompt@5 and later ask for these blocks.
@@ -165,14 +177,15 @@ function normalizeJudgment(raw, { asked = false } = {}) {
   let unlabeled = 0;
   for (const [key] of JUDGMENT_KEYS) {
     const item = raw[key];
+    const later = V6_JUDGMENT_KEYS.has(key);
     if (item === undefined || item === null || item === '') {
-      out[key] = null;
+      if (!later) out[key] = null;
       continue;
     }
     const o = isObj(item) ? item : { view: item };
     const view = str(o.view) || str(o.text);
     if (!view) {
-      out[key] = null;
+      if (!later) out[key] = null;
       continue;
     }
     const label = enumOf(o.label, JUDGMENT_LABELS, `independent_judgment.${key}.label`, issues, null);
@@ -182,7 +195,7 @@ function normalizeJudgment(raw, { asked = false } = {}) {
   if (unlabeled) issues.push({ severity: 'warning', field: 'independent_judgment', message: `${unlabeled} view(s) are not labeled judgment or speculation; shown without a label.` });
   if (!Object.values(out).some(Boolean)) return { block: null, issues: asked ? [{ severity: 'warning', field: 'independent_judgment', message: 'The independent_judgment block is empty, so the model\'s own view is unknown.' }] : issues };
   return {
-    block: { schema_version: 'cr.independent-judgment.v1', ...out, note: 'The model\'s own judgment and speculation. Neither is a verified fact, and neither changes a score.' },
+    block: { schema_version: Object.keys(out).some((k) => V6_JUDGMENT_KEYS.has(k)) ? 'cr.independent-judgment.v2' : 'cr.independent-judgment.v1', ...out, note: 'The model\'s own judgment and speculation. Neither is a verified fact, and neither changes a score.' },
     issues,
   };
 }
@@ -228,6 +241,7 @@ module.exports = {
   SOURCE_ACCESS,
   DEPLOYED_LINK,
   JUDGMENT_KEYS,
+  judgmentKeysFor,
   JUDGMENT_LABELS,
   asksFor,
   normalizeCodeReview,

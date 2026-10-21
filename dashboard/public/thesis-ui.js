@@ -32,6 +32,10 @@ const JUDGMENT_QUESTIONS = [
   ['technology_without_token', 'Could the technology succeed while the token performs poorly?'],
   ['within_holding_period', 'What could happen within the holding period'],
   ['advantage_over_btc', 'Advantage over holding BTC for the same period'],
+  // cr-research-prompt@6's three tests (absent from earlier reports).
+  ['payment_waterfall', 'If the price stops rising, who still pays, and how $1 reaches the holder'],
+  ['per_token_cash_flow', 'Holder cash flow per token against supply growth'],
+  ['falsifiable_thesis', 'One-sentence falsifiable thesis'],
 ];
 const SOURCE_ACCESS = { public: 'Public source', partial: 'Partly public source', none: 'No public source', unknown: 'Source access not stated' };
 const DEPLOYED_LINK = { verified: 'Connected to what is deployed', partial: 'Partly connected to what is deployed', not_verified: 'Not connected to what is deployed', not_applicable: 'Nothing deployed to connect to', unknown: 'Connection to what is deployed not stated' };

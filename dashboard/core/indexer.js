@@ -298,6 +298,14 @@ function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = 
   // CoinGecko IDs the last price refresh asked for and did not get back.
   const notReturned = new Set(market.freshness(ws, now).missing_ids || []);
   const pf = portfolio.computePortfolio(ws, { market: latestMarket, now });
+  // Wallet-import notes Eric accepted as unknown (portfolio.js acceptUnknown):
+  // the page and the rail's count leave them out; the warnings stay as computed.
+  try {
+    const ack = portfolio.acknowledged(ws);
+    pf.acknowledged = { keys: [...ack.keys], count: ack.count, last_at: ack.last_at };
+  } catch (_) {
+    pf.acknowledged = { keys: [], count: 0, last_at: null };
+  }
   const held = new Map(pf.positions.filter((p) => !p.closed && p.project_id).map((p) => [p.project_id, p]));
   const projectsOut = [];
   const calendar = [];

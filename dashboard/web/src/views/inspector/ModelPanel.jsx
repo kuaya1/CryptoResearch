@@ -29,7 +29,7 @@ import {
 } from '../../../../public/ui.js';
 import { canonicalOf, canonicalGrade, consensusOf, exitCell, reviewReasons, agendaRowOf, riskSignals, contractChipModel, kindWord, attentionHref, rowProject } from '../../../../public/watchlist-model.js';
 import { useAgendaRead } from '../../lib/agenda.js';
-import { keyPoints, TAG_WORDS, verdictOf } from '../../../../public/brief-model.js';
+import { keyPoints, TAG_WORDS, verdictOf, falsifiableOf } from '../../../../public/brief-model.js';
 import { api, refresh, resyncOnce, wasResynced } from '../../lib/desk.js';
 import { navigate } from '../../lib/router.js';
 import { opinionOf } from '../../lib/opinion.js';
@@ -285,13 +285,13 @@ function RiskStrip({ d, p }) {
         </div>
         <div className="iv-rc" data-part="downside">
           <p className="iv-rc-k">Downside risk</p>
-          <p className={`iv-rc-v ${down ? tone(down.tone) : 'is-unknown'}`} title={down ? down.title : 'The report gives no downside score'}>{down ? <>{down.value}<span className="iv-rc-of"> / 100</span></> : 'Not scored'}</p>
-          <p className="iv-rc-s">{down ? `${down.label} · higher is worse` : 'No downside score in the report'}</p>
+          {/* The score's name and direction stay in its tooltip and accessible name, not as prose in the strip. */}
+          <p className={`iv-rc-v ${down ? tone(down.tone) : 'is-unknown'}`} title={down ? down.title : 'The report gives no downside score'}>{down ? <>{down.value}<span className="iv-rc-of"> / 100</span><span className="sr-only">{` · ${down.label}, higher is worse`}</span></> : 'Not scored'}</p>
         </div>
         <div className="iv-rc" data-part="exit">
           <p className="iv-rc-k">{`Exit @ $${ex.size}`}</p>
           <p className={`iv-rc-v ${ex.tone === 'bad' ? 'is-bad' : ex.tone === 'ok' ? 'is-ok' : 'is-unknown'}`} title={ex.title}>{ex.text}</p>
-          <p className="iv-rc-s">{`${ex.limit}% limit`}</p>
+          <p className="iv-rc-s">{`${ex.basis ? `${ex.basis} · ` : ''}${ex.limit}% limit`}</p>
         </div>
         <div className="iv-rc" data-part="pool">
           <p className="iv-rc-k">Top pool</p>
@@ -334,9 +334,11 @@ function Thesis({ p, cr, wait }) {
   if (cr.c.report && !a && !cr.c.report.needs_text) body = wait;
   else if (a && !a.needs_text) {
     const metric = a.next_metric_to_monitor;
+    const ft = falsifiableOf(a);
     body = (
       <>
         {a.final_take ? <Take text={a.final_take} id={`take-${pid}`} /> : <p className="faint">{`No final take in ${PROVIDER_LABELS[prov]}'s data block.`}</p>}
+        {ft ? <p className="tl iv-watch" title={ft.test ? `Would disprove it: ${ft.test}` : undefined}><span className="tl-k">Test</span><span className="iv-watch-t">{ft.text}</span></p> : null}
         {metric && metric.metric ? <p className="tl iv-watch"><span className="tl-k">Watch</span><span className="iv-watch-t">{metric.metric}{metric.threshold ? ` (${metric.threshold})` : ''}</span></p> : null}
       </>
     );

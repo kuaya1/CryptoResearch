@@ -106,7 +106,7 @@ test('new runs get prompt @5 with the current version of the project\'s profile:
   assert.equal(currentProfileRef(ws, 'unknown-profile@7'), 'unknown-profile@7', 'an unknown reference is never rewritten');
 
   const r = research.createRun(ws, { project_id: PAYFI, providers: ['claude', 'chatgpt', 'gemini'] });
-  assert.equal(r.run.prompt.version, 'cr-research-prompt@5');
+  assert.equal(r.run.prompt.version, 'cr-research-prompt@6');
   assert.equal(r.run.sector_profile, 'payfi-credit@2');
   assert.equal(r.run.rubric_version, 'cr-grading@1', 'the grading rubric and its weights are unchanged');
   assert.ok(fs.readFileSync(projectFile).equals(before), 'creating a run does not rewrite the project record');
@@ -117,7 +117,7 @@ test('new runs get prompt @5 with the current version of the project\'s profile:
   assert.equal(readJson(path.join(root, r.run.evidence_packet.path)).project.scoring_profile, 'payfi-credit@2');
 
   // The decision, the standard of work and the holding period.
-  assert.match(p, /^<!-- CR-PROMPT cr-research-prompt@5 /);
+  assert.match(p, /^<!-- CR-PROMPT cr-research-prompt@6 /);
   assert.match(p, /Sector profile: payfi-credit@2 · Grading system: cr-grading@1/);
   assert.match(p, /> Is this a legitimate, well-built project whose token offers an attractive opportunity during my holding period, and what evidence would confirm or invalidate that opportunity\?/);
   assert.match(p, /Work at your highest reasoning capability\./);
@@ -206,11 +206,13 @@ test('the three @2 profiles carry the same thirteen categories, each with its ow
   assert.deepEqual(ws.rubrics.grading.investment_components.map((c) => c.weight_bp), [2000, 2500, 2000, 1500, 1000, 1000]);
 });
 
-test('published versions are never edited: the prompt templates and appendices @1 to @5, both report schemas and the grading rubric keep their fingerprints', () => {
+test('published versions are never edited: the prompt templates and appendices @1 to @6, both report schemas and the grading rubric keep their fingerprints', () => {
   // A change to any of these files is a new version, not an edit. (@5 and the
   // v2 schema were published on 2026-10-03; the @2 profiles are pinned in
   // RUBRIC-LOCK.json like every rubric file.)
   const published = {
+    'templates/research-prompt.v6.md': 'e13194d5d7a4eae41eb2a83901801560d2c2d784288cc2c965d2d6a76b3607ab',
+    'templates/grading-appendix.v6.md': '6e3ae30f9afd3a1659136fdf3ff56e95441e02f00eca93f84a456fd7f8cf0695',
     'templates/research-prompt.v5.md': '70b3b298c3404a5232c787e793e7952ea7a489184f4801e27e2d5533aac8826e',
     'templates/grading-appendix.v5.md': '3271356f528ba33414503ae74dd5769022d1b61cab4a6e714725247ad61b7272',
     'templates/schemas/report.v2.schema.json': 'bb2cc581901099f74518e5b5e2defe105dc7c192771ed3749b7395bcd56c200f',
@@ -277,7 +279,7 @@ test('earlier work is preserved: a run\'s frozen prompt, stored reports and thei
   const fresh = loadReports(ws, PAYFI).filter((r) => r.assessment.research_run_id === second.run_id);
   assert.equal(fresh.length, 3);
   for (const r of fresh) {
-    assert.equal(r.assessment.prompt_version, 'cr-research-prompt@5');
+    assert.equal(r.assessment.prompt_version, 'cr-research-prompt@6');
     assert.equal(r.assessment.sector_profile, 'payfi-credit@2');
     assert.deepEqual(Object.keys(r.assessment.diagnostic_scores), IDS);
   }
@@ -525,7 +527,7 @@ test('comparison and summaries: reports of one run compare under the profile ver
   assert.equal(d.diffs.claude[d.diffs.claude.length - 1].comparable, false);
   assert.match(d.diffs.claude[d.diffs.claude.length - 1].note, /different rubric, profile or horizon/);
   // What a new run on this project would use; the record still names the first version.
-  assert.deepEqual(d.research_contract, { sector_profile: 'payfi-credit@2', project_profile: 'payfi-credit@1', prompt_version: 'cr-research-prompt@5', rubric_version: 'cr-grading@1', category_grades: 13 });
+  assert.deepEqual(d.research_contract, { sector_profile: 'payfi-credit@2', project_profile: 'payfi-credit@1', prompt_version: 'cr-research-prompt@6', rubric_version: 'cr-grading@1', category_grades: 13 });
   // The summary of each new report counts its category grades; it never totals them.
   const latest = d.history.claude[d.history.claude.length - 1];
   assert.equal(latest.report_id, research.loadRun(ws, PAYFI, created.run_id).jobs.claude.report_id);

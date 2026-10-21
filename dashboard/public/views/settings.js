@@ -3,7 +3,7 @@
 // backups), system status and activity under Advanced.
 import {
   h, card, table, stateText, fmtDateTime, fmtNum, fmtAgo, field, input, select, button, action, callout, kv, details, tabStrip, safeSection,
-  priceStatus, toast, store, PROVIDERS, PROVIDER_LABELS,
+  priceStatus, toast, store, plural, PROVIDERS, PROVIDER_LABELS,
 } from '../ui.js';
 
 // The color theme is this browser's choice (theme.js applies it before the
@@ -256,12 +256,20 @@ async function researchTab(ctx) {
       h('li', null, 'Put in only the keys you want to use, for example ', h('code', null, '{ "anthropic_api_key": "…", "openai_api_key": "…", "gemini_api_key": "…" }'), '. Environment variables ANTHROPIC_API_KEY, OPENAI_API_KEY and GEMINI_API_KEY also work.'),
       h('li', null, 'Set the model ID and token prices above (from each provider\'s pricing page), then the three limits.'),
       h('li', null, 'Restart the dashboard. The Route column shows "Automatic (API)" when everything needed is present; until then it shows "Manual · ready by paste and import", with the optional automatic route\'s missing setting below it.')));
+  // Jobs still waiting for a model's assistant whose API is set up now: one
+  // click sends them all to the runner, which admits each within the limits.
+  const wq = info.waiting_for_api || { sendable: 0, left: {} };
+  const leftWords = [wq.left.held ? `${plural(wq.left.held, 'job')} of a model on hold` : null, wq.left.manual ? `${plural(wq.left.manual, 'job')} of a model without its API` : null, wq.left.identity ? `${plural(wq.left.identity, 'job')} on a project whose identity is not verified` : null, wq.left.archived ? `${plural(wq.left.archived, 'job')} on an archived project` : null].filter(Boolean);
+  const sendWaiting = button(`Send waiting jobs to their APIs (${wq.sendable})`, null, { kind: 'small', key: 'send-waiting' });
+  sendWaiting.disabled = !wq.sendable;
+  sendWaiting.title = `${wq.sendable ? `${plural(wq.sendable, 'job')} can go to its model's API now; each is checked against the per-run, daily and monthly limits before it is sent, and one the day's or month's limit stops waits for it.` : 'No waiting job has its model\'s API set up.'}${leftWords.length ? ` Left as they are: ${leftWords.join('; ')}.` : ''}`;
+  sendWaiting.onclick = action(sendWaiting, async () => { const r = await ctx.api.post('/api/research/send-waiting', { expect: wq.sendable }); await ctx.refresh(); return r; }, (r) => (r && r.sent && r.sent.length ? `${plural(r.sent.length, 'job')} sent to the runner` : 'Nothing was waiting for an API'));
   return h('div', null,
     ready ? card('Readiness', [
       h('p', null, ready.summary),
       h('ul', { class: 'list small' }, PROVIDERS.map((p) => h('li', null, ready.models[p].sentence))),
       h('p', { class: 'small muted' }, `${ready.retries_note} ${ready.limits_note}`),
-    ]) : null,
+    ], { actions: [sendWaiting] }) : null,
     callout(hosted
       ? h('span', null, 'API access is separate from consumer subscriptions (Claude Pro/Max, ChatGPT Plus, Gemini Advanced are not API keys). On this online desk, keys are set in Render > Environment and read only by the desk\'s server; they are never shown here, sent to the browser, written to settings, exported or logged. Without a key, a model\'s job waits for you: tell its assistant to do its waiting research, or paste the prompt and import the answer.')
       : h('span', null, 'API access is separate from consumer subscriptions (Claude Pro/Max, ChatGPT Plus, Gemini Advanced are not API keys). Keys are read only by the local server from environment variables or ', h('code', null, info.keys_file), '; they are never shown here, sent to the browser, written to settings, exported or logged. Without a key, a model\'s job waits for you to paste its answer.'), 'info'),
@@ -521,7 +529,7 @@ function activityTab(ctx) {
   const idx = ctx.state.index;
   const mf = idx.freshness.market;
   const jobs = idx.freshness.jobs.jobs || {};
-  const jobRows = ['requests', 'inbox', 'market', 'fundamentals', 'screening', 'wallets', 'research', 'snapshot', 'reviews', 'backup', ...(ctx.state.session && ctx.state.session.hosted ? [] : ['offsite'])].map((name) => ({ name, ...(jobs[name] || {}) }));
+  const jobRows = ['requests', 'inbox', 'market', 'fundamentals', 'screening', 'wallets', 'forensics', 'research', 'snapshot', 'reviews', 'backup', ...(ctx.state.session && ctx.state.session.hosted ? [] : ['offsite'])].map((name) => ({ name, ...(jobs[name] || {}) }));
   const runner = idx.freshness.jobs.runner || {};
   const JOB_STATE = { ok: ['OK', 'ok'], done: ['OK', 'ok'], failed: ['Failed', 'bad'], attention: ['Needs attention', 'warn'] };
   const ps = priceStatus(mf);

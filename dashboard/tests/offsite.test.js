@@ -484,7 +484,11 @@ test('offsite: the package is written one file at a time, byte for byte what JSO
   };
   const snap = exporter.packageSnapshot(ws);
   const desk = { revision: { short: 'abc1234' }, served_at: '2026-10-11T00:00:00.000Z' };
-  const expected = JSON.stringify({ ...snap.header, files: snap.entries.map((e) => ({ path: e.path, bytes: e.bytes, sha256: e.sha256, encoding: e.text ? 'utf8' : 'base64', content: e.text ? e.buf.toString('utf8') : e.buf.toString('base64') })), desk });
+  // The snapshot's files are staged copies on the disk, not bytes in memory.
+  assert.ok(fs.existsSync(snap.stage) && snap.entries.every((e) => !e.buf && fs.existsSync(e.staged)));
+  const expected = JSON.stringify({ ...snap.header, files: snap.entries.map((e) => { const buf = fs.readFileSync(e.staged); return { path: e.path, bytes: e.bytes, sha256: e.sha256, encoding: e.text ? 'utf8' : 'base64', content: e.text ? buf.toString('utf8') : buf.toString('base64') }; }), desk });
+  // A record saved after the snapshot does not reach this package.
+  fs.writeFileSync(path.join(root, 'inbox', 'note.md'), 'changed after the snapshot\n');
   const out = collect();
   let drains = 0;
   out.on('drain', () => { drains += 1; });
@@ -493,6 +497,7 @@ test('offsite: the package is written one file at a time, byte for byte what JSO
   const text = await out.text();
   assert.equal(text, expected, 'the same bytes as one JSON.stringify of the package');
   assert.ok(snap.entries.every((e) => e === null), 'each file is let go once written');
+  assert.equal(fs.existsSync(snap.stage), false, 'the stage is removed once written');
   const pkg = JSON.parse(text);
   assert.equal(offsite.verifyPackage(pkg).ok, true);
   assert.ok(pkg.files.some((f) => f.path === 'market-data/logos/x.lg.png' && f.encoding === 'base64'));
@@ -502,9 +507,11 @@ test('offsite: the package is written one file at a time, byte for byte what JSO
   assert.deepEqual(Object.keys(JSON.parse(await plain.text())), Object.keys(exporter.exportPackage(ws)));
   // A reader that goes away part way: it rejects at once, writes nothing more, never hangs.
   const early = collect();
-  const run = exporter.writePackage(exporter.packageSnapshot(ws), early);
+  const earlySnap = exporter.packageSnapshot(ws);
+  const run = exporter.writePackage(earlySnap, early);
   setImmediate(() => early.destroy());
   await assert.rejects(run, /closed before the package was sent/);
+  assert.equal(fs.existsSync(earlySnap.stage), false, 'an interrupted package leaves no stage');
   // Neither route builds the package as one string any more.
   const route = fs.readFileSync(path.join(__dirname, '..', 'core', 'offsite.js'), 'utf8');
   const fn = route.slice(route.indexOf('function makeOffsiteRoute'), route.indexOf('// Verifying a package'));

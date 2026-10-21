@@ -5,6 +5,7 @@ import {
   button, action, tabStrip, safeSection, submissionId, openDialog, fmtAmount, shortId, copyButton, details, plural,
 } from '../ui.js';
 import { walletHoldingsCard, walletsTab } from './wallets.js';
+import { needsCount as countNeeds, openWarnings, isWalletNote, warningKey } from '../portfolio-model.js';
 
 const TX_TYPES = ['buy', 'sell', 'transfer_out', 'transfer_in', 'income', 'fee', 'deposit_cash', 'withdraw_cash'];
 
@@ -55,12 +56,10 @@ const TABS = [
 ];
 
 // What needs you in the ledger (DESIGN_AND_IA_BLUEPRINT.md §3.5; the rail's
-// Portfolio count, web/src/shell/sections.js portfolioNeeds): each warning,
-// each quarantined record and each wallet event waiting for your decision.
+// Portfolio count, web/src/shell/sections.js portfolioNeeds): one per row of
+// the table (public/portfolio-model.js).
 export function needsCount(index) {
-  const pf = (index && index.portfolio) || {};
-  const wallet = ((index && index.attention) || []).filter((a) => a.kind === 'wallet_decision').length;
-  return (pf.warnings || []).length + (pf.quarantine || []).length + wallet;
+  return countNeeds(index);
 }
 
 // Where a ledger entry came from, in words; a wallet import names its
@@ -77,8 +76,8 @@ function sourceCell(t) {
 }
 
 // Wallet imports carry no prices and leave to addresses outside your
-// accounts: expected notes, counted in one line instead of one per entry.
-const WALLET_NOTE_KINDS = new Set(['external_deposit', 'external_transfer_out', 'unknown_basis', 'unknown_proceeds']);
+// accounts: expected notes, counted in one line instead of one per entry
+// (WALLET_NOTE_KINDS, public/portfolio-model.js).
 
 // Records that need attention, as rows of an audit table: what differs in a
 // few words (the full sentence stays the row's tooltip), the amount rounded
@@ -114,7 +113,7 @@ export function attentionRows(warnings, { symbols = new Map(), accounts = new Ma
     for (const [id, name] of named) s = s.replace(new RegExp(`(?<![\\w-])${esc(id)}(?![\\w-])`, 'g'), () => name);
     return s;
   };
-  const wallet = warnings.filter((w) => w.source === 'wallet_sync' && WALLET_NOTE_KINDS.has(w.kind));
+  const wallet = warnings.filter(isWalletNote);
   const rows = warnings.filter((w) => !wallet.includes(w)).map((w, i) => {
     const exact = w.quantity ?? w.tx_quantity ?? null;
     const amt = { exact, symbol: w.asset_id ? sym(w.asset_id) : null, text: exact === null ? null : `${fmtAmount(exact)} ${w.asset_id ? sym(w.asset_id) : ''}`.trim(), usd: exact === null ? null : fmtUsd(Number(exact)) };
@@ -128,7 +127,7 @@ export function attentionRows(warnings, { symbols = new Map(), accounts = new Ma
   if (wallet.length) {
     const dates = wallet.map((w) => w.date).filter(Boolean).sort();
     const accts = [...new Set(wallet.map((w) => w.account_id).filter(Boolean))];
-    rows.push({ key: 'wallet-imports', kind: 'wallet_imports', tone: 'info', what: `${wallet.length} wallet import${wallet.length === 1 ? '' : 's'} without a price or sent outside your accounts`, detail: 'The chain gives quantities, not prices', amount: null, exact: null, date: dates.length ? dates[dates.length - 1] : null, date_from: dates.length > 1 ? dates[0] : null, tx_id: null, tx_hash: null, network: null, account: accts.length === 1 ? acct(accts[0]) : accts.length ? { id: accts.join(', '), name: `${accts.length} accounts` } : null, action: 'transactions', message: 'Correct an entry to add a price. Nothing is estimated.', tip: 'Correct an entry to add a price. Nothing is estimated.', count: wallet.length });
+    rows.push({ key: 'wallet-imports', kind: 'wallet_imports', tone: 'info', what: `${wallet.length} wallet import${wallet.length === 1 ? '' : 's'} without a price or sent outside your accounts`, detail: 'The chain gives quantities, not prices', amount: null, exact: null, date: dates.length ? dates[dates.length - 1] : null, date_from: dates.length > 1 ? dates[0] : null, tx_id: null, tx_hash: null, network: null, account: accts.length === 1 ? acct(accts[0]) : accts.length ? { id: accts.join(', '), name: `${accts.length} accounts` } : null, action: 'transactions', message: 'Correct an entry to add a price. Nothing is estimated.', tip: 'Correct an entry to add a price, or accept them as unknown. Nothing is estimated.', count: wallet.length, keys: wallet.map(warningKey) });
   }
   return rows;
 }
@@ -138,7 +137,8 @@ const ATTENTION_SHOWN = 5;
 function attentionCard(ctx, pf, { shown = ATTENTION_SHOWN } = {}) {
   const symbols = new Map(pf.positions.map((p) => [p.asset_id, p.symbol || String(p.asset_id).toUpperCase()]));
   const accounts = new Map((pf.accounts || []).map((a) => [a.account_id, a.name || a.account_id]));
-  const rows = attentionRows(pf.warnings, { symbols, accounts });
+  // Wallet-import notes accepted as unknown leave the table (portfolio-model.js).
+  const rows = attentionRows(openWarnings(pf), { symbols, accounts });
   if (!rows.length) return null;
   const columns = [
     { label: 'Date · record', render: (r) => h('div', { class: 'au-rec' },
@@ -154,9 +154,11 @@ function attentionCard(ctx, pf, { shown = ATTENTION_SHOWN } = {}) {
   ];
   const head = rows.slice(0, shown);
   const rest = rows.slice(shown);
-  return card(`Records that need attention (${rows.reduce((n, r) => n + (r.count || 1), 0)})`, [
+  const acc = pf.acknowledged && pf.acknowledged.count ? pf.acknowledged : null;
+  return card(`Records that need attention (${rows.length})`, [
     h('div', { class: 'audit' }, table(columns, head, { caption: 'Records that need attention' })),
     rest.length ? details(`${rest.length} more`, h('div', { class: 'audit audit-more' }, table(columns, rest, { caption: 'More records that need attention' })), { id: 'pf-attention-more' }) : null,
+    acc ? h('p', { class: 'small muted' }, `${plural(acc.count, 'wallet-import note')} accepted as unknown${acc.last_at ? `, latest ${fmtDate(acc.last_at)}` : ''}; their cost basis stays unknown.`) : null,
   ], { note: 'Nothing is estimated to fill these gaps. The exact figures are in each row\'s tooltip.' });
 }
 
@@ -164,7 +166,14 @@ function attentionAction(ctx, r) {
   if (r.action === 'record-purchase') return link('Record purchase', '#/portfolio?tab=record', { class: 'btn small' });
   if (r.action === 'record-deposit') return link('Record deposit', '#/portfolio?tab=record', { class: 'btn small' });
   if (r.action === 'record-arrival') return link('Record arrival', '#/portfolio?tab=record', { class: 'btn small' });
-  if (r.action === 'transactions') return link('Open transactions', '#/portfolio?tab=transactions', { class: 'btn small' });
+  if (r.action === 'transactions') {
+    const open = link('Open transactions', '#/portfolio?tab=transactions', { class: 'btn small' });
+    if (!r.keys || !r.keys.length) return open;
+    const accept = button('Accept as unknown', null, { kind: 'small', key: 'au-accept-unknown' });
+    accept.title = 'Their cost basis or proceeds stay unknown; nothing is priced, estimated or recorded. They leave Needs attention; a later import comes back.';
+    accept.onclick = () => openAcceptDialog(ctx, r);
+    return h('div', { class: 'actions' }, accept, open);
+  }
   if (r.action !== 'correct' || !r.tx_id) return null;
   const b = button('Correct', null, { kind: 'small', key: `au-fix-${r.key}` });
   b.setAttribute('aria-label', `Correct transaction ${r.tx_id}`);
@@ -176,6 +185,35 @@ function attentionAction(ctx, r) {
     return undefined;
   });
   return b;
+}
+
+// Accept the wallet-import notes as unknown (core/portfolio.js acceptUnknown):
+// the notes shown, with a one-time ID, after a confirmation that says what it
+// does and does not do.
+function openAcceptDialog(ctx, r) {
+  const note = input({ name: 'ack-note', placeholder: 'Optional, e.g. airdrops and transfers I do not track' });
+  const save = button(`Accept ${plural(r.keys.length, 'note')} as unknown`, null, { kind: 'primary', type: 'submit' });
+  const errorBox = h('div', { role: 'alert' });
+  const sid = submissionId();
+  let dlg = null;
+  const form = h('form', { class: 'form-stack' },
+    h('p', null, `${r.what}. Accepting them as unknown takes them out of Needs attention and the Portfolio count. Their cost basis or proceeds stay unknown: nothing is priced, estimated or recorded in the ledger, and positions do not change. A wallet import that appears later comes back.`),
+    field('Note', note, 'Kept with the record'),
+    errorBox,
+    h('div', { class: 'dlg-foot' }, save));
+  form.onsubmit = action(save, async () => {
+    try {
+      const out = await ctx.api.post('/api/portfolio/acknowledge', { keys: r.keys, note: note.value.trim() || null, request_id: sid });
+      if (dlg) dlg.close();
+      await ctx.refresh();
+      return out;
+    } catch (err) {
+      errorBox.replaceChildren(callout(`Not accepted: ${err.message}`, 'bad'));
+      return undefined;
+    }
+  }, (out) => (out && out.status === 'saved' ? `${plural(out.accepted, 'note')} accepted as unknown` : 'Already accepted'));
+  dlg = openDialog('Accept wallet imports as unknown', form);
+  return dlg;
 }
 
 // An account's kind in words.

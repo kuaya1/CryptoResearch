@@ -117,12 +117,12 @@ test('a run gets the position prompt (@5) with its dates and the market snapshot
   // Before any market snapshot: the prompt says the context is unknown.
   const r0 = research.createRun(ws, { project_id: PID, providers: ['claude', 'chatgpt', 'gemini'] });
   const run0 = r0.run;
-  assert.equal(run0.prompt.version, 'cr-research-prompt@5');
+  assert.equal(run0.prompt.version, 'cr-research-prompt@6');
   assert.equal(run0.horizon.recipe, 'position-cycle@1');
   assert.equal(run0.horizon.start_date, ymdInTz());
   assert.equal(run0.evidence_packet.market_snapshot_id, null);
   const prompt0 = fs.readFileSync(path.join(root, run0.prompt.path), 'utf8');
-  assert.match(prompt0, /CR-PROMPT cr-research-prompt@5/);
+  assert.match(prompt0, /CR-PROMPT cr-research-prompt@6/);
   assert.ok(prompt0.includes(`${run0.horizon.start_date} to ${run0.horizon.end_date}`));
   assert.match(prompt0, /none was available when this run was created/);
   assert.match(prompt0, /"position_context"/);
@@ -261,7 +261,7 @@ test('mock providers answer a position run end to end; grades come from the scor
     const pc = r.assessment.position_context;
     assert.ok(pc, `${r.meta.provider} has a position block`);
     assert.equal(pc.run_binding.horizon_matches, true);
-    assert.equal(r.assessment.prompt_version, 'cr-research-prompt@5');
+    assert.equal(r.assessment.prompt_version, 'cr-research-prompt@6');
     assert.equal(r.assessment.sector_profile, 'payfi-credit@2', 'the run used the current version of the project\'s profile');
   }
 });

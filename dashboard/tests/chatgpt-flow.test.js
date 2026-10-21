@@ -160,7 +160,7 @@ test('execution note: a new run freezes ChatGPT\'s note with its job; the prompt
   assert.equal(sha256(fs.readFileSync(path.join(root, 'templates', 'execution', 'chatgpt.v1.md'))), 'a7ad4872d8db69af998d73ee928741f4d8c68b8169fee994b50e31cd92129106');
   assert.equal(sha256(fs.readFileSync(path.join(root, 'templates', 'execution', 'chatgpt.v2.md'))), 'fddb85f49c79d6f119544828fe59efd939d9846af7cce640657e62e880482d8d');
   const run = research.createRun(ws, { project_id: pid, providers: ['claude', 'chatgpt', 'gemini'] }).run;
-  assert.equal(run.prompt.version, 'cr-research-prompt@5');
+  assert.equal(run.prompt.version, 'cr-research-prompt@6');
   assert.equal(run.prompt.identical_for_all_providers, true);
   const rec = run.jobs.chatgpt.execution;
   assert.equal(rec.ref, 'cr-execution-chatgpt@2', 'a job made now gets note @2');
@@ -172,7 +172,7 @@ test('execution note: a new run freezes ChatGPT\'s note with its job; the prompt
   // Bound to this run; the prompt decides; the discipline of 2026-10-04.
   assert.ok(text.startsWith('<!-- CR-EXECUTION cr-execution-chatgpt@2 '));
   assert.ok(text.includes(`research run ${run.run_id} (ChatGPT)`));
-  assert.ok(text.includes(`cr-research-prompt@5, SHA-256 ${run.prompt.sha256}, holding period ${run.horizon.start_date} to ${run.horizon.end_date}`));
+  assert.ok(text.includes(`cr-research-prompt@6, SHA-256 ${run.prompt.sha256}, holding period ${run.horizon.start_date} to ${run.horizon.end_date}`));
   assert.ok(!/\{\{[A-Z_]+\}\}/.test(text), 'every placeholder filled');
   for (const phrase of [
     /Where they seem to differ from the prompt, the prompt decides\./,

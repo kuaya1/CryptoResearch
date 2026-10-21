@@ -65,6 +65,29 @@ function runtimeInfo(ws) {
   return { version: process.versions.node, major, exec_path: process.execPath, support: support.status, note: support.note, project_pin: pkg && pkg.volta ? pkg.volta.node || null : null };
 }
 
+// The process's memory against its ceilings: V8's heap limit (Node sizes it
+// from the container's memory limit unless --max-old-space-size is set) and
+// the container's own limit (process.constrainedMemory(), 0 when none). The
+// online desk has 512 MB; its start log carries this line so the real heap
+// ceiling is on record before anyone pins one.
+function memoryInfo() {
+  const mb = (n) => Math.round(n / 1048576);
+  const heap = require('v8').getHeapStatistics();
+  const mu = process.memoryUsage();
+  let constrained = 0;
+  try {
+    constrained = typeof process.constrainedMemory === 'function' ? Number(process.constrainedMemory()) || 0 : 0;
+  } catch (_) { /* unknown */ }
+  // A limit as large as the address space means no container limit.
+  if (constrained >= 2 ** 50) constrained = 0;
+  const flag = (process.execArgv.concat(String(process.env.NODE_OPTIONS || '').split(/\s+/))).find((a) => /^--max-old-space-size=/.test(a)) || null;
+  return { rss_mb: mb(mu.rss), heap_used_mb: mb(mu.heapUsed), heap_limit_mb: mb(heap.heap_size_limit), external_mb: mb(mu.external + (mu.arrayBuffers || 0)), container_mb: constrained ? mb(constrained) : null, heap_flag: flag };
+}
+
+function memoryLine(m = memoryInfo()) {
+  return `RSS ${m.rss_mb} MB of ${m.container_mb ? `${m.container_mb} MB (container limit)` : 'no container limit'}; heap ${m.heap_used_mb} MB used, limit ${m.heap_limit_mb} MB (${m.heap_flag || 'sized by Node'}); buffers ${m.external_mb} MB`;
+}
+
 // What this session can do in this folder, by actually trying it.
 function sessionCapabilities(ws) {
   const caps = ops.capabilities(ws);
@@ -99,6 +122,8 @@ async function doctor(ws, { writeProbe = false } = {}) {
   const rt = runtimeInfo(ws);
   add('Node.js', rt.major >= 20, `v${rt.version} (${rt.exec_path}) — ${rt.note}${rt.project_pin ? ` Project pin: node ${rt.project_pin}.` : ''}`, rt.major < 20 ? 'fail' : rt.support === 'end-of-life' ? 'warn' : 'ok');
   add('Operating system', true, `${os.type()} ${os.release()} (${process.platform}), host ${os.hostname()}`, 'ok');
+  const mem = memoryInfo();
+  add('Memory', true, memoryLine(mem), mem.container_mb && mem.rss_mb > mem.container_mb * 0.8 ? 'warn' : 'info');
   const sandboxHint = process.platform === 'linux' && /^\/(sessions|mnt|workspace)\b/.test(ws.root);
   add('Workspace folder', ws.kind === 'real' || ws.kind === 'demo' || ws.kind === 'test', `${ws.root} (kind: ${ws.kind}, id: ${ws.meta.workspace_id})${sandboxHint ? ' — looks like a mounted folder inside a sandbox; writes are verified by reading them back' : ''}`, 'ok');
   if (/[\\/]OneDrive[\\/]/i.test(ws.root)) add('Cloud sync', false, 'This folder is inside OneDrive, so portfolio data syncs to the cloud. Move it if that is not intended.', 'warn');
@@ -285,4 +310,4 @@ async function doctor(ws, { writeProbe = false } = {}) {
   return { status: worst, write_test: writeProbe ? 'run' : 'not_run', verified_write: writeProbe ? wt.status === 'ok' : null, checked_at: new Date().toISOString(), runtime: rt, session: caps, checks };
 }
 
-module.exports = { doctor, serverStatus, sessionCapabilities, runtimeInfo };
+module.exports = { doctor, serverStatus, sessionCapabilities, runtimeInfo, memoryInfo, memoryLine };

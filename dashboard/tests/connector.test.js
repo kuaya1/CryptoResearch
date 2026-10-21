@@ -1441,18 +1441,18 @@ test(`connector: a newly added project is researched with prompt @5 through the 
   const all = await tool(d, claude.access, 'start_research', { project_id: pid, owner_request: 'Research Example Network with all three models (FICTIONAL)', models: 'all' });
   assert.equal(all.data.status, 'created', all.text);
   const runId = all.data.run.run_id;
-  assert.equal(all.data.run.prompt_version, 'cr-research-prompt@5');
+  assert.equal(all.data.run.prompt_version, 'cr-research-prompt@6');
   assert.equal(all.data.run.sector_profile, 'network-infrastructure@2');
   assert.equal(all.data.run.rubric_version, 'cr-grading@1');
   const promptFile = fs.readFileSync(path.join(d.ws.root, 'projects', pid, 'research', runId, 'prompt.md'), 'utf8');
-  assert.match(promptFile, /^<!-- CR-PROMPT cr-research-prompt@5 /);
+  assert.match(promptFile, /^<!-- CR-PROMPT cr-research-prompt@6 /);
   assert.ok(all.text.includes(promptFile), 'Claude gets the run prompt');
   for (const id of ['legitimacy', 'development_credibility', 'build_operational_quality', 'code_quality', 'product_reality', 'technology_usefulness', 'organic_demand', 'token_value_capture', 'valuation_supply_attractiveness', 'chart_structure', 'cycle_timing', 'volume_liquidity', 'btc_relative_opportunity']) assert.ok(promptFile.includes(`- \`${id}\` (`), id);
   // ChatGPT and Gemini take their own jobs and get exactly the same prompt.
   for (const [who, conn] of [['ChatGPT', chatgpt], ['Gemini', gemini]]) {
     const took = await tool(d, conn.access, 'start_research', { project_id: pid, owner_request: 'Do my waiting CryptoResearch research' });
     assert.equal(took.data.status, 'resumed', took.text);
-    assert.equal(took.data.run.prompt_version, 'cr-research-prompt@5');
+    assert.equal(took.data.run.prompt_version, 'cr-research-prompt@6');
     assert.ok(took.text.includes(promptFile), `${who} gets exactly the same prompt`);
   }
   // Each model saves its own report; the reply says how its category grades were read.

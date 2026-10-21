@@ -33,4 +33,4 @@ export const LEGACY_VIEWS = {
 };
 
 // The research, sector and add-project dialogs, opened from React views too.
-export { openResearchDialog, openSectorDialog, openAddProjectDialog, waitingActions } from '../../../public/views/dialogs.js';
+export { openResearchDialog, openSectorDialog, openAddProjectDialog, openExitQuotesDialog, waitingActions } from '../../../public/views/dialogs.js';

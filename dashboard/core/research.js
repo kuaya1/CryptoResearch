@@ -759,15 +759,50 @@ function budgetCheck(ws, reservation, { runId = null, now = new Date() } = {}) {
   const spent = spendSoFar(ws, now, { runId });
   const runSoFar = runId ? spent.run : 0;
   if (units(runSoFar) + units(reservation) > units(b.per_run_usd)) {
-    return { ok: false, reason: `This call's reservation of ${usd(reservation)} plus ${usd(runSoFar)} already counted for this run (every model and attempt) would pass the per-run limit of ${usd(b.per_run_usd)}.` };
+    return { ok: false, limit: 'per_run', reason: `This call's reservation of ${usd(reservation)} plus ${usd(runSoFar)} already counted for this run (every model and attempt) would pass the per-run limit of ${usd(b.per_run_usd)}.` };
   }
+  // A call that fits the per-run limit but not today's or this month's could
+  // run once that window has room: say which limit it is, so the runner can
+  // wait for it instead of failing the job (budgetWait).
+  const fits = (limit) => units(reservation) <= units(limit);
   if (units(spent.daily) + units(reservation) > units(b.daily_usd)) {
-    return { ok: false, reason: `Today's research spend (${usd(spent.daily)}, counting reservations of calls whose cost is not known yet) plus this call's reservation of ${usd(reservation)} would pass the daily limit of ${usd(b.daily_usd)}.` };
+    return { ok: false, limit: fits(b.daily_usd) && fits(b.monthly_usd) ? 'daily' : 'too_large', spent, reason: `Today's research spend (${usd(spent.daily)}, counting reservations of calls whose cost is not known yet) plus this call's reservation of ${usd(reservation)} would pass the daily limit of ${usd(b.daily_usd)}.` };
   }
   if (units(spent.monthly) + units(reservation) > units(b.monthly_usd)) {
-    return { ok: false, reason: `This month's research spend (${usd(spent.monthly)}, counting reservations of calls whose cost is not known yet) plus this call's reservation of ${usd(reservation)} would pass the monthly limit of ${usd(b.monthly_usd)}.` };
+    return { ok: false, limit: fits(b.monthly_usd) ? 'monthly' : 'too_large', spent, reason: `This month's research spend (${usd(spent.monthly)}, counting reservations of calls whose cost is not known yet) plus this call's reservation of ${usd(reservation)} would pass the monthly limit of ${usd(b.monthly_usd)}.` };
   }
   return { ok: true, reservation, spent };
+}
+
+// When only today's or this month's limit stops a call, the job waits in the
+// queue instead of failing: it is asked again at the first minute of the next
+// day (or month) in the desk's time zone, the window the limit counts, or
+// within 15 minutes while calls whose cost is not known yet hold
+// reservations (their recorded cost is usually lower, which frees room the
+// same day). Nothing is sent or billed while it waits; each later admission
+// checks every limit again under the lock.
+const BUDGET_RECHECK_MS = 15 * 60000;
+function nextBudgetWindow(now, limit) {
+  const key = (t) => (limit === 'monthly' ? ymdInTz(new Date(t)).slice(0, 7) : ymdInTz(new Date(t)));
+  const step = limit === 'monthly' ? 86400000 : 3600000;
+  const cur = key(now.getTime());
+  let hi = now.getTime() + step;
+  while (key(hi) === cur) hi += step;
+  let lo = hi - step;
+  while (hi - lo > 1) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    if (key(mid) === cur) lo = mid;
+    else hi = mid;
+  }
+  return new Date(hi);
+}
+
+function budgetWait(check, now) {
+  if (check.limit !== 'daily' && check.limit !== 'monthly') return null;
+  const reset = nextBudgetWindow(now, check.limit).getTime();
+  const open = check.spent && check.spent.open_reservations_usd > 0;
+  const until = new Date(open ? Math.min(reset, now.getTime() + BUDGET_RECHECK_MS) : reset).toISOString();
+  return { limit: check.limit, until, resets_at: new Date(reset).toISOString(), recheck: open && Date.parse(until) < reset };
 }
 
 // ---------------------------------------------------------------------------
@@ -1096,6 +1131,8 @@ function retryJob(ws, projectId, runId, provider) {
     switchToApiRoute(job, st);
     job.note = `Sent to the ${PROVIDER_LABELS[provider]} API (${st.model || st.mode}) by your retry.`;
     delete job.not_before;
+    delete job.budget_wait;
+    delete job.budget_refused;
     job.state = 'queued';
     job.max_attempts = Math.max(job.max_attempts || 2, (job.attempts || []).length + 1);
     job.error = null;
@@ -1309,6 +1346,16 @@ function admitAttempt(ws, projectId, runId, provider, { mode, model, plan, deliv
     }
     if (mode === 'api') {
       const check = budgetCheck(ws, plan.total_usd, { runId, now });
+      const wait = check.ok ? null : budgetWait(check, now);
+      if (wait) {
+        job.not_before = wait.until;
+        job.budget_refused = true;
+        job.budget_wait = { limit: wait.limit, until: wait.until, resets_at: wait.resets_at, at };
+        job.error = `Waiting for ${wait.limit === 'daily' ? "the day's" : "the month's"} budget, not sent: ${check.reason} ${wait.recheck ? `Asked again after ${wait.until}, when calls still running may have freed room; at the latest when the limit resets (${wait.resets_at}).` : `Asked again when the limit resets (${wait.until}).`} Nothing was sent or billed.`;
+        job.updated_at = at;
+        op.writeJson(rel, run);
+        return { admitted: false, status: 'budget_refused', reason: check.reason, until: wait.until, limit: wait.limit };
+      }
       if (!check.ok) {
         job.state = 'failed';
         job.error = `Not sent: ${check.reason}`;
@@ -1335,6 +1382,7 @@ function admitAttempt(ws, projectId, runId, provider, { mode, model, plan, deliv
     job.state = mode === 'api' ? 'dispatching' : 'running';
     job.error = null;
     delete job.budget_refused;
+    delete job.budget_wait;
     job.updated_at = at;
     op.writeJson(rel, run);
     ledger(ws, run, job, attempt, { at, estimate_usd: plan ? plan.total_usd : null, kind: 'reservation', note: 'reserved before the call; counts until the actual cost is known' });
@@ -1827,7 +1875,7 @@ async function runOneJob(ws, { project_id: projectId, run, job }, { fetchImpl, t
     // model with one, its execution note's version and hash.
     const delivered = { prompt_sha256: fresh.prompt.sha256, execution: note ? { ref: note.delivery.ref, sha256: note.delivery.sha256 } : null };
     const adm = admitAttempt(ws, projectId, run.run_id, provider, { mode: status.mode, model: status.model || null, plan, delivered });
-    if (!adm.admitted) return { provider, status: adm.status, reason: adm.reason, state: adm.state };
+    if (!adm.admitted) return { provider, status: adm.status, reason: adm.reason, state: adm.state, ...(adm.until ? { until: adm.until, limit: adm.limit } : {}) };
     const attemptId = adm.attempt.attempt_id;
     if (!markDispatched(ws, projectId, run.run_id, provider, attemptId).send) return { provider, status: 'canceled' };
     // ChatGPT and Gemini: the provider runs it in the background; its ID is
@@ -2194,14 +2242,16 @@ async function runDueJobs(ws, { trigger = 'cli', fetchImpl = undefined, now = Da
   };
   await Promise.all(Array.from({ length: Math.min(max, todo.length) }, worker));
   const done = results.filter((r) => r.status === 'completed').length;
-  const failed = results.filter((r) => ['failed', 'error', 'budget_refused', 'refused'].includes(r.status)).length;
+  // A job waiting for the day's or month's budget is counted apart: it stays queued.
+  const budgetWaits = results.filter((r) => r.status === 'budget_refused' && r.until).length;
+  const failed = results.filter((r) => ['failed', 'error', 'budget_refused', 'refused'].includes(r.status) && !r.until).length;
   const uncertain = results.filter((r) => r.status === 'uncertain' || r.status === 'unsaved').length;
   const captured = results.filter((r) => r.status === 'captured').length;
   const background = results.filter((r) => r.status === 'submitted' || r.status === 'running').length;
   const quiet = !created.length && results.every((r) => ['running', 'waiting', 'busy', 'skipped'].includes(r.status));
   return {
     status: !todo.length && !created.length ? (released.length ? 'ok' : 'noop') : failed || uncertain || captured ? 'attention' : quiet && !released.length ? 'noop' : 'ok',
-    summary: `${todo.length || created.length ? `${done} research job(s) completed, ${failed} failed or refused${background ? `, ${background} running in the background` : ''}${uncertain ? `, ${uncertain} uncertain (may have been billed; reconcile or retry)` : ''}${captured ? `, ${captured} answer(s) captured and waiting to be saved by the next run` : ''}, ${created.length} scheduled run(s) created${skippedSchedules.length ? `, ${skippedSchedules.length} schedule(s) waiting (${skippedSchedules[0].reason})` : ''}` : skippedSchedules.length ? `Research refresh due for ${skippedSchedules.length} project(s), not started: ${skippedSchedules[0].reason}` : 'No research jobs waiting'}${released.length ? `; ${released.length} idle assistant claim(s) released back to waiting (drafts kept)` : ''}`,
+    summary: `${todo.length || created.length ? `${done} research job(s) completed, ${failed} failed or refused${budgetWaits ? `, ${budgetWaits} waiting for the budget` : ''}${background ? `, ${background} running in the background` : ''}${uncertain ? `, ${uncertain} uncertain (may have been billed; reconcile or retry)` : ''}${captured ? `, ${captured} answer(s) captured and waiting to be saved by the next run` : ''}, ${created.length} scheduled run(s) created${skippedSchedules.length ? `, ${skippedSchedules.length} schedule(s) waiting (${skippedSchedules[0].reason})` : ''}` : skippedSchedules.length ? `Research refresh due for ${skippedSchedules.length} project(s), not started: ${skippedSchedules[0].reason}` : 'No research jobs waiting'}${released.length ? `; ${released.length} idle assistant claim(s) released back to waiting (drafts kept)` : ''}`,
     results,
     created,
     released,
@@ -2217,7 +2267,7 @@ function researchStateFor(ws, projectId) {
   for (const p of PROVIDERS) {
     const run = runs.find((r) => r.jobs[p]);
     const last = run ? lastAttempt(run.jobs[p]) : null;
-    byProvider[p] = run ? { run_id: run.run_id, state: run.jobs[p].state, mode: run.jobs[p].mode, error: run.jobs[p].error || null, report_id: run.jobs[p].report_id || null, updated_at: run.jobs[p].updated_at, progress_at: run.jobs[p].progress_at || null, run_created_at: run.created_at, background: Boolean(last && last.phase === 'submitted'), provider_status: last && last.phase === 'submitted' ? last.provider_status || null : null, not_before: run.jobs[p].not_before || null, outcome: run.jobs[p].outcome || (last && last.outcome ? last.outcome : null), quarantined_report_id: run.jobs[p].quarantined_report_id || null, hold: run.jobs[p].hold || null, draft_saved_at: run.jobs[p].draft_saved_at || null, released: run.jobs[p].released || null } : null;
+    byProvider[p] = run ? { run_id: run.run_id, state: run.jobs[p].state, mode: run.jobs[p].mode, error: run.jobs[p].error || null, report_id: run.jobs[p].report_id || null, updated_at: run.jobs[p].updated_at, progress_at: run.jobs[p].progress_at || null, run_created_at: run.created_at, background: Boolean(last && last.phase === 'submitted'), provider_status: last && last.phase === 'submitted' ? last.provider_status || null : null, not_before: run.jobs[p].not_before || null, budget_wait: run.jobs[p].budget_wait || null, outcome: run.jobs[p].outcome || (last && last.outcome ? last.outcome : null), quarantined_report_id: run.jobs[p].quarantined_report_id || null, hold: run.jobs[p].hold || null, draft_saved_at: run.jobs[p].draft_saved_at || null, released: run.jobs[p].released || null } : null;
   }
   return { latest_run: latest ? { run_id: latest.run_id, status: latest.status, created_at: latest.created_at, providers: latest.providers, horizon: latest.horizon } : null, providers: byProvider, runs: runs.length };
 }
@@ -2387,6 +2437,52 @@ function sendWaitingToApi(ws, projectId, runId, list = PROVIDERS) {
   return sent;
 }
 
+// The same, across the desk: every job still waiting for a model's assistant
+// goes to that model's API once it is set up, when Eric asks for it
+// ("Send waiting jobs to their APIs"). Each run keeps its frozen prompt,
+// packet and horizon, so the answer stays comparable with the reports already
+// saved for it. Only projects with a verified identity (every model
+// researches the same project) and not archived; a model on hold and a job an
+// assistant has taken are left as they are. The budget is checked per call
+// when the runner admits it, and a call the day's or month's limit stops
+// waits for it (budgetWait). Returns what was sent and what was left, and why.
+function waitingForApi(ws, list = PROVIDERS) {
+  const st = providerStatus(ws);
+  const held = heldProviders(ws);
+  const out = { sendable: [], left: { identity: 0, archived: 0, held: 0, manual: 0 } };
+  for (const p of listProjects(ws)) {
+    if (p.broken) continue;
+    for (const r of listRuns(ws, p.project_id)) {
+      if (r.broken) continue;
+      for (const prov of normalizeProviders(list)) {
+        const j = r.jobs && r.jobs[prov];
+        if (!j || j.state !== 'unconfigured' || isAssistantJob(j)) continue;
+        if (held[prov]) out.left.held += 1;
+        else if (!st[prov] || (st[prov].mode !== 'api' && st[prov].mode !== 'mock')) out.left.manual += 1;
+        else if (p.status === 'archived') out.left.archived += 1;
+        else if (!p.identity || p.identity.status !== 'verified') out.left.identity += 1;
+        else out.sendable.push({ project_id: p.project_id, run_id: r.run_id, provider: prov });
+      }
+    }
+  }
+  return out;
+}
+
+function sendAllWaitingToApi(ws, { list = PROVIDERS } = {}) {
+  const w = waitingForApi(ws, list);
+  const byRun = new Map();
+  for (const x of w.sendable) {
+    const k = `${x.project_id}\u0000${x.run_id}`;
+    if (!byRun.has(k)) byRun.set(k, { project_id: x.project_id, run_id: x.run_id, providers: [] });
+    byRun.get(k).providers.push(x.provider);
+  }
+  const sent = [];
+  for (const g of byRun.values()) {
+    for (const prov of sendWaitingToApi(ws, g.project_id, g.run_id, g.providers)) sent.push({ project_id: g.project_id, run_id: g.run_id, provider: prov });
+  }
+  return { sent, left: w.left };
+}
+
 // After a model saved its report for one run, its jobs in other runs on the
 // same project keep waiting. Each run froze its own contract (prompt and hash,
 // rubric, profile, horizon, evidence packet), and its prompt names the run, so
@@ -2499,6 +2595,9 @@ module.exports = {
   adoptJob,
   addProviders,
   sendWaitingToApi,
+  sendAllWaitingToApi,
+  waitingForApi,
+  nextBudgetWindow,
   hasBackgroundWork,
   otherWaitingRuns,
   pendingFor,

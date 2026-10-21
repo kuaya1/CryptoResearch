@@ -11,12 +11,13 @@ const TABS = [
   ['runs', 'Research jobs'],
   ['compare', 'Model comparison'],
   ['evidence', 'Evidence'],
+  ['outcomes', 'Outcomes'],
 ];
 
 export async function renderResearch(ctx, route) {
   const tab = TABS.some(([t]) => t === route.query.get('tab')) ? route.query.get('tab') : 'runs';
   const strip = tabStrip(TABS.map(([t, label]) => ({ id: t, label, href: `#/research?tab=${t}` })), tab, { label: 'Research sections' });
-  const body = await safeSection(TABS.find(([t]) => t === tab)[1], () => ({ runs: runsTab, compare: compareTab, evidence: evidenceTab })[tab](ctx, route));
+  const body = await safeSection(TABS.find(([t]) => t === tab)[1], () => ({ runs: runsTab, compare: compareTab, evidence: evidenceTab, outcomes: outcomesTab })[tab](ctx, route));
   return h('div', null,
     h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Research'))),
     strip,
@@ -44,6 +45,45 @@ function runsTab(ctx) {
       note: `Each model's job is independent: a failure in one never erases another's result. Price refreshes never start research. ${routes}. Spend this month: $${(r.spend && r.spend.monthly) || 0} · today: $${(r.spend && r.spend.daily) || 0} · budget per run ${money(r.budget && r.budget.per_run_usd)}, day ${money(r.budget && r.budget.daily_usd)}, month ${money(r.budget && r.budget.monthly_usd)} · unattended runs ${r.unattended_enabled ? 'on' : 'off'}`,
       actions: [runNow, h('a', { class: 'btn small', href: ctx.hrefWith ? ctx.hrefWith({ prefs: 'models' }) : '#/settings?tab=research', dataset: { key: 'research-routes' } }, hosted ? 'Routes, API keys and limits' : 'Routes and API access')],
     }));
+}
+
+// What happened after each report (core/report-outcomes.js): each model's
+// counts at 30, 60, 90 and 120 days, a median against BTC only from enough
+// matured reports, then every report's own row. Fixed model order; never a
+// ranking or a winner.
+const pctText = (x) => (typeof x === 'number' ? `${x > 0 ? '+' : x < 0 ? '−' : ''}${Math.abs(x).toFixed(2)}%` : '—');
+function horizonCell(h) {
+  if (!h) return h_('—');
+  if (h.status === 'pending') return h_(`Due ${fmtDate(h.due)}`, 'faint', `Measured on ${fmtDate(h.due)}`);
+  if (h.status === 'no_price') return h_('No price', 'faint', h.reason);
+  return h_(pctText(h.vs_btc_pct), h.vs_btc_pct > 0 ? 'pos' : h.vs_btc_pct < 0 ? 'neg' : '', `${pctText(h.return_pct)} against BTC's ${pctText(h.btc_return_pct)}, ${fmtDate(h.at)}`);
+}
+function h_(text, cls = '', title = null) {
+  return h('span', { class: `num ${cls}`.trim(), title }, text);
+}
+async function outcomesTab(ctx) {
+  const o = await ctx.api.get('/api/research/outcomes');
+  const days = o.horizons_days || [30, 60, 90, 120];
+  const models = card('By model', table([
+    { label: 'Model', render: (m) => h('strong', null, PROVIDER_LABELS[m.provider]) },
+    { label: 'Reports', num: true, render: (m) => String(m.reports) },
+    ...days.map((d) => ({ label: `${d} days`, render: (m) => {
+      const x = m.horizons.find((y) => y.days === d);
+      if (!x) return '—';
+      return h('div', { title: x.note || `Median against BTC over ${x.matured} matured reports; ${x.beat_btc} beat BTC` },
+        x.median_vs_btc_pct === null ? h('span', { class: 'faint' }, `${x.matured} matured${x.pending ? ` · ${x.pending} pending` : ''}`) : h('span', null, h('span', { class: 'num' }, pctText(x.median_vs_btc_pct)), h('span', { class: 'small muted' }, ` · ${x.beat_btc} of ${x.matured} beat BTC`)));
+    } })),
+  ], o.models), { note: o.meaning });
+  const rows = o.reports.slice().sort((a, b) => String(b.start.at || '').localeCompare(String(a.start.at || '')) || a.name.localeCompare(b.name));
+  const list = card('After each report', pagedTable([
+    { label: 'Project', render: (r) => h('a', { href: `#/project/${encodeURIComponent(r.project_id)}/market` }, r.name) },
+    { label: 'Model', render: (r) => PROVIDER_LABELS[r.provider] || r.provider },
+    { label: 'Verdict', render: (r) => h('span', { class: 'small' }, r.verdict ? r.verdict.charAt(0) + r.verdict.slice(1).toLowerCase() : '—') },
+    { label: 'Grade', render: (r) => h('span', { class: 'num', title: r.grade && r.grade.reason ? r.grade.reason : null }, r.grade ? (r.grade.display || (r.grade.status === 'withheld' ? 'Withheld' : '—')) : '—') },
+    { label: 'Start', render: (r) => h('span', { class: 'small', title: r.note || (r.start.basis === 'run_packet' ? "When the research run's evidence packet was captured" : 'When the report was saved (it answers no run)') }, r.start.project ? `${fmtDate(r.start.at)}` : 'No price') },
+    ...days.map((d) => ({ label: `${d}d vs BTC`, num: true, render: (r) => horizonCell(r.horizons.find((x) => x.days === d)) })),
+  ], rows, { size: 50, label: 'Report outcomes', empty: 'No eligible reports yet.' }));
+  return h('div', null, models, list);
 }
 
 // A long list a page at a time: the desk's claims are never drawn all at

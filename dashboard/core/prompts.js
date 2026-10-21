@@ -37,14 +37,24 @@ const PROMPT_VERSION = 'cr-research-prompt@2';
 const PROMPT_VERSION_V3 = 'cr-research-prompt@3';
 const PROMPT_VERSION_V4 = 'cr-research-prompt@4';
 const PROMPT_VERSION_V5 = 'cr-research-prompt@5';
+// cr-research-prompt@6 (new runs from 2026-10-21) is @5 with three tests
+// added (Eric's prosecutor questions): who still pays if the price stops
+// rising and how $1 reaches the holder (the waterfall), holder cash flow per
+// token against supply growth (dilution), and a one-sentence falsifiable
+// thesis. Same sections, profiles, report format (cr.report.v2: three more
+// independent_judgment parts) and weights; @5 stays readable and reproducible.
+const PROMPT_VERSION_V6 = 'cr-research-prompt@6';
 // The prompts written for the position-cycle recipe.
-const POSITION_PROMPTS = new Set([PROMPT_VERSION_V3, PROMPT_VERSION_V4, PROMPT_VERSION_V5]);
+const POSITION_PROMPTS = new Set([PROMPT_VERSION_V3, PROMPT_VERSION_V4, PROMPT_VERSION_V5, PROMPT_VERSION_V6]);
 const isPositionPrompt = (v) => POSITION_PROMPTS.has(typeof v === 'string' ? v.trim() : v);
 // Report-contract rules introduced with @4 (source types, critical claims,
 // optional probabilities) hold for @4 and every later position prompt.
-const hasV4Contract = (v) => v === PROMPT_VERSION_V4 || v === PROMPT_VERSION_V5;
+const hasV4Contract = (v) => v === PROMPT_VERSION_V4 || v === PROMPT_VERSION_V5 || v === PROMPT_VERSION_V6;
+// @5 and @6 share the thirteen category grades and the cr.report.v2 format.
+const isV5Family = (v) => v === PROMPT_VERSION_V5 || v === PROMPT_VERSION_V6;
 // A scoring profile says which prompt it was written for. Only a profile
-// written for @5 (its thirteen categories and sector focus) gets that prompt.
+// written for @5 (its thirteen categories and sector focus) gets that prompt,
+// or @6, which asks the same categories.
 const writtenForV5 = (profile) => Boolean(profile) && profile.written_for === PROMPT_VERSION_V5;
 const DEFAULT_HORIZON = '24 months';
 
@@ -156,7 +166,7 @@ function buildSkeleton(ws, profile, { provider = null, projectId = null, project
     unresolved_questions: [],
     original_report_reference: { note: 'The written report above this JSON block is the original.' },
   };
-  if (promptVersion === PROMPT_VERSION_V5) return positionSkeleton(contractV5(contractV4(skeleton), profile), { runId, horizon: positionHorizon });
+  if (isV5Family(promptVersion)) return positionSkeleton(contractV5(contractV4(skeleton), profile, promptVersion), { runId, horizon: positionHorizon });
   if (promptVersion === PROMPT_VERSION_V4) return positionSkeleton(contractV4(skeleton), { runId, horizon: positionHorizon });
   if (promptVersion === PROMPT_VERSION_V3) return positionSkeleton(skeleton, { runId, horizon: positionHorizon });
   if (promptVersion !== PROMPT_VERSION_V1) {
@@ -181,7 +191,7 @@ function contractV4(skeleton) {
 // raise or lower it; the code_review, chart_cycle and independent_judgment
 // blocks; each scenario lists the observations it builds on and the claims it
 // cites, and price targets may stay null with the reason.
-function contractV5(skeleton, profile) {
+function contractV5(skeleton, profile, version = PROMPT_VERSION_V5) {
   const diagnostic = {};
   for (const c of profile.diagnostic_categories) diagnostic[c.id] = c.applicable === false ? skeleton.diagnostic_scores[c.id] : unknownGrade();
   const view = () => ({ view: null, label: null, supporting_evidence: [], disconfirming_test: null });
@@ -230,7 +240,7 @@ function contractV5(skeleton, profile) {
           claim_ids: [],
         })),
       };
-      out.independent_judgment = Object.fromEntries(require('./thesis').JUDGMENT_KEYS.map(([key]) => [key, view()]));
+      out.independent_judgment = Object.fromEntries(require('./thesis').judgmentKeysFor(version).map(([key]) => [key, view()]));
     } else {
       out[k] = v;
     }
@@ -364,6 +374,7 @@ const POSITION_FILES = {
   [PROMPT_VERSION_V3]: { prompt: 'research-prompt.v3.md', appendix: 'grading-appendix.v3.md' },
   [PROMPT_VERSION_V4]: { prompt: 'research-prompt.v4.md', appendix: 'grading-appendix.v4.md' },
   [PROMPT_VERSION_V5]: { prompt: 'research-prompt.v5.md', appendix: 'grading-appendix.v5.md' },
+  [PROMPT_VERSION_V6]: { prompt: 'research-prompt.v6.md', appendix: 'grading-appendix.v6.md' },
 };
 const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
 // How many category grades a profile asks for, in words ("thirteen").
@@ -390,9 +401,9 @@ function buildAppendixV3(ws, profile, { provider = null, projectId = null, proje
     HORIZON_START: horizon.start_date,
     HORIZON_END: horizon.end_date,
     DIAGNOSTIC_LIST: diagnosticList(profile),
-    COMPONENT_LIST: componentList(grading, { repeatNote: version !== PROMPT_VERSION_V5 }),
+    COMPONENT_LIST: componentList(grading, { repeatNote: !isV5Family(version) }),
     CATEGORY_COUNT: categoryCount(profile),
-    JSON_SKELETON: compactJson(skeleton, '', version === PROMPT_VERSION_V5 ? 380 : 220),
+    JSON_SKELETON: compactJson(skeleton, '', isV5Family(version) ? 380 : 220),
   });
 }
 
@@ -480,7 +491,7 @@ function promptValuesV3(ws, project, profile, { horizon, rubricRef, runId, packe
 // @2 profiles), and @4 otherwise; older text gets @2.
 function promptVersionFor(horizon, profile = null) {
   if (!(horizon && typeof horizon === 'object' && horizon.recipe)) return PROMPT_VERSION;
-  return writtenForV5(profile) ? PROMPT_VERSION_V5 : PROMPT_VERSION_V4;
+  return writtenForV5(profile) ? PROMPT_VERSION_V6 : PROMPT_VERSION_V4;
 }
 
 // The template a position-recipe prompt version is written from.
@@ -521,7 +532,7 @@ function buildRunPrompt(ws, project, { runId, horizon, rubricRef, packet, ownerI
   const profile = ws.rubrics.profiles[profileRef || project.sector_profile];
   if (!profile) throw new Error(`Unknown sector profile ${profileRef || project.sector_profile}`);
   const v = version || promptVersionFor(horizon, profile);
-  if (v === PROMPT_VERSION_V5 && !writtenForV5(profile)) throw new Error(`${PROMPT_VERSION_V5} needs a scoring profile written for it; ${profile.profile_ref} is not.`);
+  if (isV5Family(v) && !writtenForV5(profile)) throw new Error(`${v} needs a scoring profile written for it (one written for ${PROMPT_VERSION_V5}); ${profile.profile_ref} is not.`);
   if (isPositionPrompt(v)) {
     const template = readText(path.join(ws.root, 'templates', positionTemplate(v)));
     return fill(template, promptValuesV3(ws, project, profile, { horizon, rubricRef, runId, packet, provider: null, ownerInstructions, version: v }));
@@ -561,4 +572,4 @@ function listPromptFiles(ws, projectId) {
   return out;
 }
 
-module.exports = { PROMPT_VERSION, PROMPT_VERSION_V1, PROMPT_VERSION_V3, PROMPT_VERSION_V4, PROMPT_VERSION_V5, isPositionPrompt, hasV4Contract, DEFAULT_HORIZON, buildSkeleton, buildAppendix, buildAppendixV2, buildAppendixV3, buildProjectPrompt, buildRunPrompt, promptVersionFor, researchProfile, stageProjectPrompts, listPromptFiles };
+module.exports = { PROMPT_VERSION, PROMPT_VERSION_V1, PROMPT_VERSION_V3, PROMPT_VERSION_V4, PROMPT_VERSION_V5, PROMPT_VERSION_V6, isPositionPrompt, isV5Family, hasV4Contract, DEFAULT_HORIZON, buildSkeleton, buildAppendix, buildAppendixV2, buildAppendixV3, buildProjectPrompt, buildRunPrompt, promptVersionFor, researchProfile, stageProjectPrompts, listPromptFiles };

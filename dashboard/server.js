@@ -712,7 +712,12 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   const intakeTimer = setInterval(() => sweepIntake(), 60000);
   // DefiLlama fundamentals ride along: due per project every 12 hours, under
   // the lease, gate and backoff they share with the scheduled task and the CLI.
-  const dailyTimer = setInterval(() => jobs.runJobs(ws, ['snapshot', 'reviews', 'backup', 'fundamentals', 'screening'], { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 30 * 60000);
+  // So does the forensic monitor (approved exit quotes, product checks and
+  // repository reads when due, and the day's checkpoint resolutions): on the
+  // online desk nothing else runs it, and on the PC its lease keeps it from
+  // overlapping the hourly task.
+  const DAILY_JOBS = ['snapshot', 'reviews', 'backup', 'fundamentals', 'screening', 'forensics'];
+  const dailyTimer = setInterval(() => jobs.runJobs(ws, DAILY_JOBS, { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 30 * 60000);
 
   const api = makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTick, queueIdentify, clients, sockets, oauth });
 
@@ -839,7 +844,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     setTimeout(() => marketTick(false), 1500),
     setTimeout(() => sweepIntake(), 2500),
     setTimeout(() => researchTick(), 5000),
-    setTimeout(() => jobs.runJobs(ws, ['snapshot', 'reviews', 'backup', 'fundamentals', 'screening'], { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 8000),
+    setTimeout(() => jobs.runJobs(ws, DAILY_JOBS, { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 8000),
     setTimeout(() => walletTick(), 12000),
   ];
 
@@ -1092,6 +1097,24 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     request_id: typeof body.request_id === 'string' ? body.request_id : null,
     by: 'dashboard',
   })));
+  // Exit quotes on every project in one click (forensics.js
+  // approveAllExitQuotes): the plan first (a read), then Eric's approval with
+  // the count he saw (`expect`); more to add than shown is a 409. The first
+  // quotes are asked for right away, in the background, under the monitor's
+  // own lease, gates and budget.
+  route('GET', '/api/forensics/exit-quotes', () => coherent(() => {
+    const plan = forensics.exitQuotePlan(ws);
+    return { add: plan.add.map(({ key, ...x }) => x), kept: plan.kept, none: plan.none, sizes_usd: forensics.prefsOf(ws).exit_sizes_usd, quote_interval_hours: forensics.monitorCfg(ws).quote_interval_hours, monthly_request_budget: forensics.monitorCfg(ws).monthly_request_budget };
+  }));
+  route('POST', '/api/forensics/exit-quotes', (m, req, res, body) => {
+    const expect = body && Number.isInteger(body.expect) ? body.expect : null;
+    if (expect === null) throw new HttpError(400, 'Say how many projects you approved (expect).');
+    const n = forensics.exitQuotePlan(ws).add.length;
+    if (n > expect) throw new HttpError(409, `${n} projects would get exit quotes now, not ${expect} as shown. Nothing was approved; look again and approve.`);
+    const out = forensics.approveAllExitQuotes(ws, { by: 'dashboard' });
+    if (out.added.length) setTimeout(() => jobs.runJob(ws, 'forensics', { trigger: 'dashboard', onlyDue: true }).then(() => rebuild(['api'])).catch(() => {}), 300);
+    return after({ status: out.added.length ? 'saved' : 'unchanged', ...out });
+  });
   route('POST', '/api/projects/([^/]+)/forensics/monitoring', (m, req, res, body) => after(forensics.setMonitoring(ws, pid(m[1]), {
     enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
     approve: body.approve && typeof body.approve === 'object' && typeof body.approve.receipt_id === 'string' ? { receipt_id: receiptId(body.approve.receipt_id), product_checks: Array.isArray(body.approve.product_checks) ? body.approve.product_checks.map(String).slice(0, 5) : undefined, repositories: Array.isArray(body.approve.repositories) ? body.approve.repositories.map(String).slice(0, 3) : undefined } : null,
@@ -1160,7 +1183,29 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   route('GET', '/api/explorer/compare', (m, req, res, body, url) => require('./core/explorer').compareData(ws, String(url.searchParams.get('project') || '')));
   route('GET', '/api/doctor', async () => require('./core/doctor').doctor(ws));
   route('POST', '/api/doctor/write-test', async () => require('./core/doctor').doctor(ws, { writeProbe: true }));
-  route('GET', '/api/research/providers', () => coherent(() => ({ providers: research.providerStatus(ws), readiness: research.readiness(ws), budget: ws.settings.research.budget, spend: research.spendSoFar(ws), unattended_enabled: Boolean(ws.settings.research.unattended_enabled), keys_file: require('./core/providers').secretsFile() })));
+  route('GET', '/api/research/providers', () => coherent(() => {
+    const w = research.waitingForApi(ws);
+    return { providers: research.providerStatus(ws), readiness: research.readiness(ws), budget: ws.settings.research.budget, spend: research.spendSoFar(ws), unattended_enabled: Boolean(ws.settings.research.unattended_enabled), keys_file: require('./core/providers').secretsFile(), waiting_for_api: { sendable: w.sendable.length, left: w.left } };
+  }));
+  // Eric's go-ahead for every job still waiting for a model's assistant whose
+  // API is set up now (research.js sendAllWaitingToApi); the runner then sends
+  // them one admission at a time, within the limits.
+  // What happened after each report (core/report-outcomes.js): read only,
+  // computed from the stored price records on request.
+  route('GET', '/api/research/outcomes', () => coherent(() => require('./core/report-outcomes').deskOutcomes(ws)));
+  route('GET', '/api/projects/([^/]+)/outcomes', (m) => coherent(() => require('./core/report-outcomes').projectOutcomes(ws, pid(m[1]))));
+  // `expect` is the count the button showed: more waiting than that is a 409,
+  // so a click never sends jobs Eric did not see.
+  route('POST', '/api/research/send-waiting', (m, req, res, body) => {
+    const expect = body && Number.isInteger(body.expect) ? body.expect : null;
+    if (expect !== null) {
+      const now = research.waitingForApi(ws).sendable.length;
+      if (now > expect) throw new HttpError(409, `${now} jobs can go to their APIs now, not ${expect} as shown. Nothing was sent; look again and send.`);
+    }
+    const out = research.sendAllWaitingToApi(ws);
+    if (out.sent.length) setTimeout(() => researchTick(), 300);
+    return after({ status: out.sent.length ? 'queued' : 'unchanged', ...out });
+  });
 
   // Research requests: a link, name or screenshot plus optional instructions.
   // Saved first, identified in the background, researched once Eric confirms
@@ -1288,6 +1333,9 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   route('POST', '/api/portfolio/transactions', (m, req, res, body) => once(body, () => after(portfolio.addTransactions(ws, Array.isArray(body.transactions) ? body.transactions : [body], { source: 'dashboard' }))));
   route('POST', '/api/portfolio/transactions/([^/]+)/void', (m, req, res, body) => after(portfolio.voidTransaction(ws, rid(m[1]), body.reason)));
   route('POST', '/api/portfolio/transactions/([^/]+)/correct', (m, req, res, body) => after(portfolio.correctTransaction(ws, rid(m[1]), body.transaction && typeof body.transaction === 'object' ? body.transaction : {}, body.reason)));
+  // Wallet-import notes accepted as unknown (portfolio.js acceptUnknown): only
+  // notes shown now; nothing is priced or recorded in the ledger.
+  route('POST', '/api/portfolio/acknowledge', (m, req, res, body) => after(portfolio.acceptUnknown(ws, { keys: Array.isArray(body.keys) ? body.keys.map(String).slice(0, 5000) : [], note: typeof body.note === 'string' ? body.note : null, request_id: typeof body.request_id === 'string' ? body.request_id : null, by: 'dashboard' })));
   route('POST', '/api/portfolio/csv', (m, req, res, body) => after(portfolio.importCsv(ws, String(body.csv || ''), { filename: body.filename || 'dashboard.csv', defaultAccount: body.account_id || null, allowIdentical: Boolean(body.allow_identical) })));
   route('POST', '/api/portfolio/accounts', (m, req, res, body) => after(portfolio.addAccount(ws, body)));
   // Tracked wallets (core/wallets.js, core/walletsync.js): public addresses,

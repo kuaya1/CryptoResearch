@@ -413,6 +413,19 @@ export function defillamaBound(f) {
   return Boolean(f && f.state && !['unmapped', 'disabled'].includes(f.state));
 }
 
+// A token that taxes its own sales, beside the revenue DefiLlama reports for
+// it: part of that revenue may be the tax its sellers pay, not use of the
+// product. Said as the two facts side by side; no share is computed, since
+// no source here measures the tax collected. null when GoPlus reports no tax
+// above zero or no DefiLlama entity is bound.
+export function taxRevenueNote(screening, fundamentals) {
+  if (!defillamaBound(fundamentals)) return null;
+  const taxes = (screening && Array.isArray(screening.contracts) ? screening.contracts : []).map((c) => c && c.sell_tax_pct).filter((x) => typeof x === 'number' && Number.isFinite(x) && x > 0);
+  if (!taxes.length) return null;
+  const top = Math.max(...taxes);
+  return `GoPlus reports a ${top}% sell tax on this token: part of the revenue DefiLlama reports may be that tax, paid by holders who sell, rather than use of the product. The desk does not split the two.`;
+}
+
 // The index row as dex.js reads a project: the verified identity's contracts
 // from the saved screen summary.
 export function rowProject(p) {
@@ -809,7 +822,10 @@ export function exitCell(p) {
   const pct = `${x.cost_complete === false ? '≥ ' : ''}${x.cost_pct.toFixed(2)}%`;
   const tone = x.beyond === true ? 'bad' : x.beyond === false ? 'ok' : 'unknown';
   const stale = x.status === 'stale';
-  return { text: pct, tone: stale && tone !== 'bad' ? 'unknown' : tone, sort: x.cost_pct, size, limit, stale, title: `$${size} exit: ${x.cost_complete === false ? `at least ${x.cost_pct.toFixed(2)}% (${(x.missing_costs || []).join(' and ') || 'some costs'} unknown)` : `${x.cost_pct.toFixed(2)}%`} against your ${limit}% limit${x.as_of ? `, ${fmtDateTime(x.as_of)}` : ''}${stale ? ' (stale)' : ''}` };
+  // The figure's basis in a word: an executable quote at that size, or a
+  // constant-product pool's own reserves (never a USD liquidity figure).
+  const basis = x.method === 'executable_quote' ? { word: 'Quote', long: x.route_scope === 'aggregator' ? 'an aggregator\'s executable quote' : 'an executable quote at one venue' } : x.method === 'constant_product' ? { word: 'Reserve est.', long: 'a constant-product pool\'s reserves' } : null;
+  return { text: pct, tone: stale && tone !== 'bad' ? 'unknown' : tone, sort: x.cost_pct, size, limit, stale, basis: basis ? basis.word : null, title: `$${size} exit: ${x.cost_complete === false ? `at least ${x.cost_pct.toFixed(2)}% (${(x.missing_costs || []).join(' and ') || 'some costs'} unknown)` : `${x.cost_pct.toFixed(2)}%`} against your ${limit}% limit${basis ? `, from ${basis.long}` : ''}${x.as_of ? `, ${fmtDateTime(x.as_of)}` : ''}${stale ? ' (stale)' : ''}` };
 }
 
 // Jobs in progress or waiting on a model (or on you, for manual research);

@@ -194,6 +194,7 @@
 .gflag { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 0; border-radius: var(--r-badge); font: inherit; font-size: var(--fs-xs); font-weight: 600; cursor: pointer; background: var(--warn-weak); color: var(--warn); box-shadow: none; }
 .gflag.ev-serious { background: var(--neg-weak); color: var(--neg); box-shadow: none; }
 .gflag.tone-info { background: var(--badge-bg); color: var(--text-2); box-shadow: none; }
+a.gflag { text-decoration: none; }
 @media (max-width: 767.98px) {
   /* On a phone the sheet is one white band and the header is its first row,
      flat on it rather than a well inside it. */

@@ -486,6 +486,7 @@ async function main(env = process.env) {
   console.log(`Readiness: ${require('./core/research').readiness(ws).summary}`);
   console.log(recordsSummary(ws));
   console.log(`Disk: ${require('./core/exporter').diskLine(ws.root, { statfs: cfg.statfs })}.`);
+  console.log(`Memory: ${require('./core/doctor').memoryLine()}.`);
   try {
     for (const line of healthLines(ws)) console.log(line);
   } catch (err) {

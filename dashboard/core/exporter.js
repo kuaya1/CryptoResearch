@@ -441,19 +441,61 @@ function compareSummaries(a, b) {
 // ---------------------------------------------------------------------------
 // Complete package
 
-// The package's parts, read once under the lock and in one synchronous pass,
-// so its records are one moment's: the header, and each file's bytes, hash
-// and encoding. Contents stay Buffers until they are written out.
-function packageSnapshot(ws) {
-  return withLock(ws, 'package', () => {
+// The package's parts are one moment's records: under the lock, every file is
+// copied into a stage on the same disk (.cr/package-stage/<stamp>, never in
+// the package itself); then, outside the lock, each staged copy is hashed and
+// classified one at a time, and writePackage reads each again, checks its
+// hash and lets it go. Memory holds about one file at a time, not the whole
+// package (the daily offsite pull of about 57 MB grew the online desk's heap
+// by that much each day, 2026-10-18 to 2026-10-21). The stage is removed when
+// the package is written, or at the next package and at start if it was not.
+const STAGE_REL = '.cr/package-stage';
+
+// olderThanMs: only stages at least that old (a package being written now
+// keeps its own); at start, every one.
+function sweepPackageStages(root, { olderThanMs = 0, now = Date.now() } = {}) {
+  const dir = path.join(root, ...STAGE_REL.split('/'));
+  for (const name of listDir(dir, { dirs: true })) {
+    try {
+      const at = fs.statSync(path.join(dir, name)).mtimeMs;
+      if (now - at >= olderThanMs) rmrf(path.join(dir, name));
+    } catch (_) { /* removed at the next sweep */ }
+  }
+}
+const STAGE_MAX_AGE_MS = 2 * 3600000;
+
+function packageSnapshot(ws, { statfs } = {}) {
+  sweepPackageStages(ws.root, { olderThanMs: STAGE_MAX_AGE_MS });
+  const stage = path.join(ws.root, ...STAGE_REL.split('/'), `${fileTs()}_${process.pid}`);
+  const snap = withLock(ws, 'package', () => {
     recoverLocked(ws);
     // A package copies bytes, so it is still made when a save could not be
     // verified, but it says so: its records may be mixed.
     const consistency = consistencyNow(ws);
-    const entries = inventoryOf(ws.root, PACKAGE_INCLUDE).map((rel) => {
-      const buf = fs.readFileSync(path.join(ws.root, ...rel.split('/')));
-      return { path: rel, buf, bytes: buf.length, sha256: sha256(buf), text: isProbablyText(rel, buf) };
-    });
+    const rels = inventoryOf(ws.root, PACKAGE_INCLUDE);
+    const need = rels.reduce((s, rel) => {
+      try {
+        return s + fs.statSync(path.join(ws.root, ...rel.split('/'))).size;
+      } catch (_) {
+        return s;
+      }
+    }, 0);
+    const space = diskSpace(ws.root, statfs);
+    if (space && space.free < need + reserveBytes(space.total)) {
+      throw new OpError('NO_SPACE', `No package was made: ${mbText(space.free)} free on the disk, and its staged copy needs ${mbText(need)} plus a ${mbText(reserveBytes(space.total))} reserve for the records.`, { free: space.free, needed: need });
+    }
+    let entries;
+    try {
+      entries = rels.map((rel) => {
+        const dst = path.join(stage, ...rel.split('/'));
+        mkdirp(path.dirname(dst));
+        fs.copyFileSync(path.join(ws.root, ...rel.split('/')), dst);
+        return { path: rel, staged: dst };
+      });
+    } catch (err) {
+      try { rmrf(stage); } catch (_) { /* swept later */ }
+      throw err;
+    }
     const header = {
       schema_version: 'cr.package.v1',
       kind: 'complete_package',
@@ -463,20 +505,49 @@ function packageSnapshot(ws) {
         included: PACKAGE_INCLUDE,
         omitted: ['application code and launchers (in sealed backups)', 'dashboard/index (rebuilt automatically)', '.cr except research captures and the repairs ledger (locks, staging, sign-in sessions and connection grants)', 'backups/ and audits/'],
         files: entries.length,
-        bytes: entries.reduce((s, f) => s + f.bytes, 0),
+        bytes: 0,
       },
       consistency,
       summary: semanticSummary(ws),
     };
     return { header, entries };
   }, { timeoutMs: 60000 });
+  // Outside the lock: each staged copy's size, hash and encoding, one at a time.
+  try {
+    for (const e of snap.entries) {
+      const buf = fs.readFileSync(e.staged);
+      e.bytes = buf.length;
+      e.sha256 = sha256(buf);
+      e.text = isProbablyText(e.path, buf);
+    }
+  } catch (err) {
+    try { rmrf(stage); } catch (_) { /* swept later */ }
+    throw err;
+  }
+  snap.header.inventory.bytes = snap.entries.reduce((s, f) => s + f.bytes, 0);
+  snap.stage = stage;
+  snap.release = () => {
+    try { rmrf(stage); } catch (_) { /* swept at the next package or start */ }
+  };
+  return snap;
 }
 
-const packageFile = (e) => ({ path: e.path, bytes: e.bytes, sha256: e.sha256, encoding: e.text ? 'utf8' : 'base64', content: e.text ? e.buf.toString('utf8') : e.buf.toString('base64') });
+// A staged file read back, checked against the hash taken from it.
+function stagedBytes(e) {
+  const buf = fs.readFileSync(e.staged);
+  if (sha256(buf) !== e.sha256) throw new OpError('INTEGRITY', `The staged copy of ${e.path} changed while the package was written; nothing more is written.`);
+  return buf;
+}
+
+const packageFile = (e, buf) => ({ path: e.path, bytes: e.bytes, sha256: e.sha256, encoding: e.text ? 'utf8' : 'base64', content: e.text ? buf.toString('utf8') : buf.toString('base64') });
 
 function exportPackage(ws) {
-  const { header, entries } = packageSnapshot(ws);
-  return { ...header, files: entries.map(packageFile) };
+  const snap = packageSnapshot(ws);
+  try {
+    return { ...snap.header, files: snap.entries.map((e) => packageFile(e, stagedBytes(e))) };
+  } finally {
+    snap.release();
+  }
 }
 
 // Writes a package snapshot as JSON to a stream (an HTTP response), one file
@@ -484,10 +555,19 @@ function exportPackage(ws) {
 // JSON.stringify({ ...package, ...extra }) without ever holding the whole
 // text. Built as one string, a 57 MB package took the online desk past its
 // 512 MB limit (Render restarted it, 2026-10-10), and the heap it grew was
-// kept after each daily pull. Each file's bytes are let go once written.
+// kept after each daily pull. Each file is read from the stage, checked and
+// let go once written, and the stage is removed when it ends, either way.
 // Resolves with the count of files written; rejects if the stream closes or
 // fails first (nothing more is written then).
 async function writePackage(snapshot, out, extra = {}) {
+  try {
+    return await writeStaged(snapshot, out, extra);
+  } finally {
+    if (snapshot.release) snapshot.release();
+  }
+}
+
+async function writeStaged(snapshot, out, extra) {
   const { header, entries } = snapshot;
   const gone = () => out.destroyed || out.writableEnded;
   const drained = () => new Promise((resolve, reject) => {
@@ -504,7 +584,7 @@ async function writePackage(snapshot, out, extra = {}) {
   const head = JSON.stringify(header);
   await put(`${head.slice(0, -1)}${head.length > 2 ? ',' : ''}"files":[`);
   for (let i = 0; i < entries.length; i++) {
-    await put(`${i ? ',' : ''}${JSON.stringify(packageFile(entries[i]))}`);
+    await put(`${i ? ',' : ''}${JSON.stringify(packageFile(entries[i], stagedBytes(entries[i])))}`);
     entries[i] = null;
   }
   const tail = JSON.stringify(extra);
@@ -706,6 +786,8 @@ function freeDiskSpace(root, needFree, { protect = [], statfs } = {}) {
 // At start, before anything is written: when the disk is fuller than its
 // reserve, room is made the same way. Returns what it found and did.
 function relieveFullDisk(root, { statfs } = {}) {
+  // A package stage left by a pull that never finished goes first.
+  sweepPackageStages(root);
   const space = diskSpace(root, statfs);
   if (!space) return { space: null, removed: [], reserve: null };
   const reserve = reserveBytes(space.total);

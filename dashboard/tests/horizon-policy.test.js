@@ -51,7 +51,7 @@ test('finding 5: a new run says a typical hold is 3 to 4 months inside the 4-mon
   assert.equal(run.horizon.typical_hold_months, 3);
   assert.equal(run.horizon.typical_hold_max_months, 4);
   const p = promptOf(ws, run);
-  assert.equal(run.prompt.version, 'cr-research-prompt@5');
+  assert.equal(run.prompt.version, 'cr-research-prompt@6');
   // The investor context.
   assert.match(p, /- Style: position trading\. A typical hold is about 3 to 4 months, and 4 months is the planning ceiling\./);
   assert.doesNotMatch(p, /about 2 months/);

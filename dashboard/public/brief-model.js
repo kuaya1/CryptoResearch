@@ -131,6 +131,15 @@ export const VERDICT_WORDS = {
 export const TIMING_WORDS = { early: 'Early', developing: 'Developing', extended: 'Extended', thesis_impaired: 'Thesis impaired' };
 export const MARKET_WORDS = { bitcoin_led: 'Bitcoin-led', broad_altcoin_participation: 'Broad altcoin participation', mixed: 'Mixed', contracting: 'Contracting' };
 
+// The one-sentence falsifiable thesis a report gives (cr-research-prompt@6's
+// independent_judgment.falsifiable_thesis), with its label and the test that
+// would disprove it; null for earlier reports and when the model gave none.
+export function falsifiableOf(a) {
+  const x = a && a.independent_judgment && a.independent_judgment.falsifiable_thesis;
+  const text = x && str(x.view);
+  return text ? { text, label: x.label || null, test: str(x.disconfirming_test) } : null;
+}
+
 export function verdictOf(a) {
   const v = str(a.verdict);
   const pc = a.position_context || null;
@@ -140,6 +149,8 @@ export function verdictOf(a) {
     raw: v,
     summary: str(a.summary),
     final_take: str(a.final_take),
+    // The model's one-sentence falsifiable thesis (cr-research-prompt@6), as written.
+    falsifiable: falsifiableOf(a),
     timing: view(pc && pc.timing, TIMING_WORDS),
     market: view(pc && pc.market, MARKET_WORDS),
   };

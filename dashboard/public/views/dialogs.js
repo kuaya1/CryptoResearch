@@ -234,6 +234,48 @@ export function openSectorDialog(ctx, project) {
   };
 }
 
+// ---- Exit quotes on every project ------------------------------------------
+// One approval for the whole desk (core/forensics.js approveAllExitQuotes):
+// the dialog lists what it adds, at which sizes and how often, then sends the
+// count shown, so a click never approves a project that was not listed.
+export async function openExitQuotesDialog(ctx) {
+  let plan;
+  try {
+    plan = await ctx.api.get('/api/forensics/exit-quotes');
+  } catch (err) {
+    toast(err.message, 'bad');
+    return null;
+  }
+  const sizes = (plan.sizes_usd || []).map((s) => `$${s.toLocaleString('en-US')}`).join(', ');
+  const perMonth = plan.add.length * (plan.sizes_usd || []).length * Math.round((24 / (plan.quote_interval_hours || 12)) * 30);
+  const btn = button(plan.add.length ? `Approve exit quotes for ${plan.add.length} project${plan.add.length === 1 ? '' : 's'}` : 'Nothing to add', null, { kind: 'primary', type: 'submit' });
+  btn.disabled = !plan.add.length;
+  const errorBox = h('div', { role: 'alert' });
+  const list = (rows, fmt) => h('ul', { class: 'list small' }, rows.map((r) => h('li', null, fmt(r))));
+  const form = h('form', { class: 'form-stack' },
+    plan.add.length ? h('p', null, `Each project's verified contract is quoted for sale into USDC at ${sizes} every ${plan.quote_interval_hours} hours, by a keyless aggregator (KyberSwap, or Jupiter on Solana): no wallet, signature or swap. About ${perMonth.toLocaleString('en-US')} requests a month, within the monitor's ${Number(plan.monthly_request_budget).toLocaleString('en-US')}.`) : h('p', null, 'Every project that can be quoted already has its exit quotes, or a monitoring choice of yours.'),
+    plan.add.length ? details(`Projects to add (${plan.add.length})`, list(plan.add, (r) => `${r.name} · ${r.chain} · ${r.source}`), { open: plan.add.length <= 8 }) : null,
+    plan.kept.length ? details(`Left as they are (${plan.kept.length})`, list(plan.kept, (r) => `${r.name} · ${r.quoted ? 'already quoted' : r.monitoring ? 'monitoring on' : 'your monitoring choice'}`)) : null,
+    plan.none.length ? details(`Cannot be quoted (${plan.none.length})`, list(plan.none, (r) => `${r.name}: ${r.reason}`)) : null,
+    errorBox,
+    h('div', { class: 'dlg-foot' }, btn));
+  const dlg = openDialog('Exit quotes for every project', form);
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    busy(btn, true, 'Approving…');
+    try {
+      const out = await ctx.api.post('/api/forensics/exit-quotes', { expect: plan.add.length });
+      toast(out.added.length ? `Exit quotes approved for ${out.added.length} project${out.added.length === 1 ? '' : 's'}; the first quotes arrive within the hour` : 'Nothing was added');
+      dlg.close();
+      await ctx.refresh();
+    } catch (err) {
+      busy(btn, false);
+      errorBox.replaceChildren(callout(`Not approved: ${err.message}`, 'bad'));
+    }
+  };
+  return dlg;
+}
+
 // ---- Add project: name or URL first, details only when needed -------------
 
 // Pages that name a project without being its own website: block explorers,

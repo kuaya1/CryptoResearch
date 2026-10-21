@@ -297,6 +297,7 @@ export default function Watchlist() {
               <MenuItem data-key="desk-reset-cols" onSelect={() => save({ ...pf, columns: DEFAULT_COLUMNS.slice() })}>Reset columns</MenuItem>
               {reordered ? <MenuItem data-key="desk-resort" onSelect={() => { resetOrder(); announce('Re-sorted.'); }}>Re-sort now</MenuItem> : null}
               <MenuItem data-key="desk-new" href="#/new">New research from a link or screenshot</MenuItem>
+              <MenuItem data-key="desk-exit-quotes" onSelect={async () => { const L = await loadLegacy(); L.openExitQuotesDialog(legacyCtx); }}>Quote exits for every project…</MenuItem>
             </Menu>
             {phone ? null : <RefreshButton d={d} />}
             <button type="button" className="btn btn-primary" id="add-project-btn" data-key="add-project" onClick={addProject}>

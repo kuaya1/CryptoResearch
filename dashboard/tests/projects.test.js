@@ -42,7 +42,7 @@ test('spoken add-project request creates the folder, files and prompts, and the 
   // record keeps the profile it was added with, and new research uses the
   // current version of that profile (thirteen category grades, prompt @5).
   assert.equal(p.sector_profile, 'network-infrastructure@1', 'the project record is not rewritten');
-  assert.match(prompt, /CR-PROMPT cr-research-prompt@5/);
+  assert.match(prompt, /CR-PROMPT cr-research-prompt@6/);
   assert.match(prompt, /Sector profile: network-infrastructure@2/);
   assert.match(prompt, /`development_credibility` \(Development credibility\)/);
   assert.match(prompt, /`btc_relative_opportunity` \(BTC-relative asymmetric opportunity\)/);

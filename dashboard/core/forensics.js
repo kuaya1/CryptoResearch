@@ -113,7 +113,9 @@ const MONITOR_DEFAULTS = {
   timeout_seconds: 10,
   max_bytes: 256 * 1024,
   max_projects_per_run: 20,
-  monthly_request_budget: 3000,
+  // Keyless GET quotes at three sizes every 12 hours for a desk of about 40
+  // quotable projects is about 7,000 requests a month (approveAllExitQuotes).
+  monthly_request_budget: 8000,
   backoff_initial_minutes: 10,
   backoff_max_minutes: 720,
 };
@@ -1085,6 +1087,57 @@ function setMonitoring(ws, pid, { enabled = undefined, approve = null, approve_q
   });
 }
 
+// Exit quotes for the whole desk in one click (Eric, 2026-10-21: an exit
+// figure on every project, not only the audited ones). For each project with
+// a verified identity that is not archived and not a native coin, the first
+// contract on a chain a keyless quote source covers is approved as its
+// exit-quote target, exactly as the Forensics tab's own approval does, and
+// monitoring is turned on; without an assessment that runs exit quotes and
+// nothing else (no product check or repository is ever added here). A
+// project with any monitoring choice of Eric's already (a target approved,
+// or monitoring he turned off) is left exactly as it is. Returns what would
+// be or was added, what was left as it is, and why the rest have none.
+function exitQuotePlan(ws) {
+  const XQ = require('./exitquotes');
+  const out = { add: [], kept: [], none: [] };
+  for (const p of require('./projects').listProjects(ws)) {
+    if (p.broken || p.status === 'archived') continue;
+    const id = p.identity || {};
+    if (id.status !== 'verified') continue;
+    const row = { project_id: p.project_id, name: p.name };
+    if (id.native_chain === true) {
+      out.none.push({ ...row, reason: 'A native coin: there is no token contract to quote.' });
+      continue;
+    }
+    const prof = readProfile(ws, p.project_id);
+    const t = prof.targets;
+    if (t.exit_quotes.length || t.product_checks.length || t.repositories.length || (prof.monitoring && (prof.monitoring.enabled || prof.monitoring.disabled_at))) {
+      out.kept.push({ ...row, quoted: t.exit_quotes.length > 0, monitoring: Boolean(prof.monitoring && prof.monitoring.enabled) });
+      continue;
+    }
+    const options = XQ.quoteOptions(p);
+    const opt = options.find((o) => o.supported);
+    if (!opt) out.none.push({ ...row, reason: (options[0] && options[0].reason) || 'No token contract on record.' });
+    else out.add.push({ ...row, key: opt.key, chain: opt.chain_label, source: opt.provider_label });
+  }
+  return out;
+}
+
+function approveAllExitQuotes(ws, { by = null } = {}) {
+  const plan = exitQuotePlan(ws);
+  const out = { added: [], kept: plan.kept, none: plan.none.slice() };
+  for (const x of plan.add) {
+    try {
+      const r = setMonitoring(ws, x.project_id, { enabled: true, approve_quotes: [x.key], by });
+      if (r.result && r.result.added && r.result.added.length) out.added.push({ project_id: x.project_id, name: x.name, chain: x.chain, source: x.source });
+      else out.none.push({ project_id: x.project_id, name: x.name, reason: (r.result && r.result.refused && r.result.refused[0] && r.result.refused[0].reason) || 'Not approved.' });
+    } catch (err) {
+      out.none.push({ project_id: x.project_id, name: x.name, reason: err.message });
+    }
+  }
+  return out;
+}
+
 // A monitor observation: appended once, with its own SHA-256 over its fields
 // (the record without obs_id and sha256, in the order written).
 function appendObservation(ws, pid, obs) {
@@ -1733,6 +1786,10 @@ function summary(ws, pid, { now = Date.now() } = {}) {
         cost_pct: cost,
         cost_complete: complete,
         missing_costs: b ? b.missing_costs || [] : [],
+        // How the figure was made: an executable quote (an aggregator's, or
+        // one venue's) or a constant-product pool's own reserves.
+        method: b ? b.method || null : null,
+        route_scope: b ? b.route_scope || null : null,
         as_of: row.as_of || (b && b.retrieved_at) || null,
         limit_pct: prefs.exit_cost_limit_pct,
         beyond,
@@ -1801,6 +1858,8 @@ module.exports = {
   findBlock,
   saveReport,
   setMonitoring,
+  exitQuotePlan,
+  approveAllExitQuotes,
   appendObservation,
   readingsFor,
   taxIndex,

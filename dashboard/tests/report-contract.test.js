@@ -54,7 +54,7 @@ test('prompt @4 is still reproduced for an older run: the source types, the [V] 
   // New runs moved on to @5 (prompt-v5.test.js). An older run's @4 prompt is
   // rebuilt from its own template and the profile version it was made under,
   // which is the one the project record still names.
-  assert.equal(r.run.prompt.version, 'cr-research-prompt@5');
+  assert.equal(r.run.prompt.version, 'cr-research-prompt@6');
   assert.equal(getProject(ws, PID).sector_profile, 'payfi-credit@1');
   const older = { runId: r.run.run_id, horizon: r.run.horizon, rubricRef: r.run.rubric_version, packet: JSON.parse(fs.readFileSync(path.join(root, r.run.evidence_packet.path), 'utf8')) };
   const p = prompts.buildRunPrompt(ws, getProject(ws, PID), { ...older, version: prompts.PROMPT_VERSION_V4 });

@@ -321,6 +321,10 @@ const JUDGMENT_QUESTIONS = [
   ['technology_without_token', 'Could the technology succeed while the token performs poorly?'],
   ['within_holding_period', 'What could happen within the holding period'],
   ['advantage_over_btc', 'Advantage over holding BTC for the same period'],
+  // cr-research-prompt@6's three tests (absent from earlier reports).
+  ['payment_waterfall', 'If the price stops rising, who still pays, and how $1 reaches the holder'],
+  ['per_token_cash_flow', 'Holder cash flow per token against supply growth'],
+  ['falsifiable_thesis', 'One-sentence falsifiable thesis'],
 ];
 
 // The model's final judgment, then its own views, each labeled judgment or

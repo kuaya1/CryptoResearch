@@ -950,6 +950,70 @@ function computePortfolio(ws, { market = null, now = Date.now() } = {}) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Accepted as unknown (Eric, 2026-10-21): the notes of imported wallet
+// activity (a purchase or sale price the chain does not give, units sent to
+// or arriving from outside his accounts) can be accepted as unknown in one
+// click, so they leave Needs attention. That is all it does: the cost basis
+// stays unknown, nothing is priced, estimated or recorded in the ledger, and
+// a note that appears later comes back. Append-only
+// (portfolio/acknowledgments.jsonl); only notes shown at the time can be
+// accepted, and the same request_id or the same notes again is unchanged.
+const ACK_REL = 'portfolio/acknowledgments.jsonl';
+const WALLET_NOTE_KINDS = new Set(['external_deposit', 'external_transfer_out', 'unknown_basis', 'unknown_proceeds']);
+const isWalletNote = (w) => Boolean(w) && w.source === 'wallet_sync' && WALLET_NOTE_KINDS.has(w.kind);
+const warningKey = (w) => `${w.kind}:${w.tx_id || ''}:${w.asset_id || ''}`;
+
+function readAcknowledgments(ws) {
+  let text = '';
+  try {
+    text = require('fs').readFileSync(ws.abs(ACK_REL), 'utf8');
+  } catch (_) {
+    return [];
+  }
+  const out = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      out.push(JSON.parse(line));
+    } catch (_) { /* a damaged line is skipped, never repaired */ }
+  }
+  return out;
+}
+
+// The keys accepted so far, and when the latest was.
+function acknowledged(ws) {
+  const list = readAcknowledgments(ws);
+  const keys = new Set();
+  for (const a of list) for (const k of Array.isArray(a.keys) ? a.keys : []) keys.add(k);
+  return { keys, count: keys.size, last_at: list.length ? list[list.length - 1].at : null };
+}
+
+function acceptUnknown(ws, { keys, note = null, request_id: requestId = null, by = null } = {}) {
+  if (!Array.isArray(keys) || !keys.length) throw new OpError('INVALID', 'Name the wallet-import notes to accept as unknown.');
+  const want = [...new Set(keys.map(String))];
+  const pf = computePortfolio(ws, { market: { assets: {} } });
+  const shown = new Map(pf.warnings.filter(isWalletNote).map((w) => [warningKey(w), w]));
+  const notShown = want.filter((k) => !shown.has(k));
+  if (notShown.length) throw new OpError('CONFLICT', `${notShown.length} of these notes ${notShown.length === 1 ? 'is' : 'are'} not a current wallet-import note (${notShown.slice(0, 3).join(', ')}). Nothing was accepted; look again.`);
+  const rid = typeof requestId === 'string' && /^[A-Za-z0-9_-]{6,80}$/.test(requestId) ? requestId : null;
+  const text = typeof note === 'string' && note.trim() ? note.trim().slice(0, 600) : null;
+  const out = runOp(ws, { type: 'portfolio_acknowledge', summary: `Accept ${want.length} wallet-import note(s) as unknown` }, (op) => {
+    const cur = op.readText(ACK_REL, '');
+    const lines = cur.split('\n').filter((l) => l.trim()).map((l) => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
+    const prior = rid ? lines.find((l) => l.request_id === rid) : null;
+    if (prior) return { unchanged: true, ack: prior };
+    const already = new Set(lines.flatMap((l) => (Array.isArray(l.keys) ? l.keys : [])));
+    const fresh = want.filter((k) => !already.has(k));
+    if (!fresh.length) return { unchanged: true, ack: null };
+    const at = new Date().toISOString();
+    const ack = { schema_version: 'cr.portfolio-ack.v1', ack_id: `pa_${compactTs(new Date(at))}_${randomId(6)}`, kind: 'accepted_unknown', keys: fresh, note: text, at, by: by || ws.actor || null, request_id: rid, meaning: 'Accepted as unknown: the cost basis or proceeds stay unknown; nothing was priced, estimated or recorded in the ledger.' };
+    op.write(ACK_REL, `${cur}${cur && !cur.endsWith('\n') ? '\n' : ''}${JSON.stringify(ack)}\n`);
+    return { unchanged: false, ack };
+  });
+  return { status: out.result.unchanged ? 'unchanged' : 'saved', accepted: out.result.ack ? out.result.ack.keys.length : 0, ack_id: out.result.ack ? out.result.ack.ack_id : null, verified: out.verified, files: out.files };
+}
+
 function snapshotIfDue(ws, market) {
   const day = ymdInTz();
   const rel = `portfolio/snapshots/${day}.json`;
@@ -981,6 +1045,11 @@ function snapshotIfDue(ws, market) {
 
 module.exports = {
   TX_TYPES,
+  WALLET_NOTE_KINDS,
+  isWalletNote,
+  warningKey,
+  acknowledged,
+  acceptUnknown,
   METHOD_TEXT,
   BTC_DEFINITION,
   loadAccounts,
