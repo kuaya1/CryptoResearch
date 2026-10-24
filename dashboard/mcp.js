@@ -1820,12 +1820,13 @@ const handlers = {
     return { status: steps.length ? 'ok' : 'none', steps, next: next ? { ...next, next_action: how } : null, message: steps.length ? `${where}; ${todo.length} with work for Claude.` : 'No project is in the autonomous pilot. Eric turns it on per project (the inspector, or tickets pilot <id> --on).' };
   },
 
-  start_ticket(ws, args, ctx) {
+  async start_ticket(ws, args, ctx) {
     if (ctx.me !== 'claude') throw new OpError('REFUSED', `Claude is the Prosecutor in Phase 1; ${ctx.label} has no ticket role. Nothing was opened.`);
     const T = ticketsCore();
     const id = pid(args);
     need(args, 'owner_request', 'owner_request (Eric\'s words)');
-    const out = T.createTicket(ws, { project_id: id, channel: ctx.channel, utterance: args.owner_request, assistant: true, mode: 'cowork', refresh: args.refresh === true, restart: args.restart === true });
+    const exit_quote = await T.prepareExitQuote(ws, id).catch(() => null);
+    const out = T.createTicket(ws, { exit_quote, project_id: id, channel: ctx.channel, utterance: args.owner_request, assistant: true, mode: 'cowork', refresh: args.refresh === true, restart: args.restart === true });
     if (!out.ticket_id || !['created', 'resumed'].includes(out.status)) return { status: out.status, message: out.message, receipt_id: out.receipt_id || null };
     return { status: out.status, message: `${out.message} Follow the prompt below exactly, then save_ticket with ticket_id "${out.ticket_id}".`, run: ticketRunView(ws, id, out.ticket_id, { prompt: true }) };
   },

@@ -843,7 +843,8 @@ async function run(argv) {
       if (sub === 'view' || sub === 'status') return tk.view(ws, need(pid, `tickets ${sub} <project>`));
       if (sub === 'queue') return { steps: tk.pilotQueue(ws, { project: pid || null }), pending: tk.pendingFor(ws) };
       if (sub === 'start') {
-        const r = tk.createTicket(ws, { project_id: need(pid, 'tickets start <project> [--refresh] [--restart]'), channel: one(flags.channel) || actor, assistant: Boolean(flags.assistant), mode: one(flags.mode) || 'cli', utterance: one(flags.utterance) || null, refresh: Boolean(flags.refresh), restart: Boolean(flags.restart) });
+        const exit_quote = await tk.prepareExitQuote(ws, need(pid, 'tickets start <project> [--refresh] [--restart]')).catch(() => null);
+        const r = tk.createTicket(ws, { exit_quote, project_id: need(pid, 'tickets start <project> [--refresh] [--restart]'), channel: one(flags.channel) || actor, assistant: Boolean(flags.assistant), mode: one(flags.mode) || 'cli', utterance: one(flags.utterance) || null, refresh: Boolean(flags.refresh), restart: Boolean(flags.restart) });
         return { status: r.status, ticket_id: r.ticket_id || null, receipt_id: r.receipt_id || null, message: r.message, prompt_path: r.ticket ? r.ticket.prompt.path : null, ...(['created', 'resumed'].includes(r.status) ? await afterWrite(ws, pid) : {}) };
       }
       if (sub === 'prompt') {
