@@ -72,12 +72,16 @@ ChatGPT and Gemini have no ticket role in Phase 1.
 
 ## HTTP routes (`dashboard/server.js`)
 
-- `GET /api/projects/<id>/tickets`: the ticket in force, the open ticket, the history and the sizing. Writes nothing.
-- `GET /api/projects/<id>/tickets/<tk>/prompt` and `GET .../tickets/receipts/<tr>/text`: the frozen prompt and the saved text. Both are checked against their pins.
-- `POST /api/projects/<id>/tickets`: opens a ticket.
-- `POST .../tickets/<tk>/import`: saves a ticket (dashboard import).
-- `POST .../tickets/decisions`: takes `{ receipt_id, action, request_id }`. A newer ticket returns 409 `NEWER_REPORT`.
-- `POST .../tickets/pilot`: takes `{ on }`.
+- Reads (write nothing): `GET /api/projects/<id>/tickets`, `.../tickets/<tk>/prompt`, `.../tickets/receipts/<tr>/text` (pins checked).
+- Writes: `POST .../tickets` (open), `.../tickets/<tk>/import` (save), `.../tickets/decisions` `{ receipt_id, action, request_id }` (a newer ticket is 409 `NEWER_REPORT`), `.../tickets/pilot` `{ on }`.
+
+## Sub-agents and commands (Claude Code, Eric's subscription)
+
+| File | Role |
+|---|---|
+| `.claude/agents/forensic-researcher.md` | Agent 1. Runs one research step (`cr-research-prompt@6`, five working phases: load, identity and on-chain, AMM exit from the desk's readings, fundamentals, save). Never touches tickets |
+| `.claude/agents/junior-trader-prosecutor.md` | Agent 2. In its own context, `start_ticket` → frozen `cr-ticket-prompt@1` → `save_ticket` (or the CLI). Never sizes, decides or orders |
+| `.claude/commands/pilot-run.md` | `/pilot-run [project] [online\|local]`. Reads the pilot queue and hands each step to the right sub-agent until `pm_review`. Works under `/loop` or `/schedule` |
 
 ## CLI and the one-command runner
 
@@ -96,20 +100,14 @@ npm run pilot -- --project=olas --dry-run         say what would run
 
 ## How the OLAS pilot chain runs
 
-1. Eric turns the pilot on for OLAS, in the inspector (PM decision > Autonomous pilot) or with `tickets pilot olas --on`.
-2. `autonomous_pilot_queue` reports `research` when Claude's OLAS report is missing, older than `research_stale_days` (90), or has a Claude run open. Claude researches and calls `save_report`.
-3. Next it reports `ticket`. `start_ticket` freezes a packet containing:
-   - Agent 1's report ID and text hash;
-   - the grade;
-   - the exit readings at $500 and $2,000;
-   - price, sell tax, DefiLlama, and whether Eric holds the asset;
-   - the sizing rules.
+OLAS is `olas-autonolas` and lives only on the online desk.
 
-   The prompt carries the report's text fenced as evidence. The Prosecutor runs and calls `save_ticket`.
-4. The desk sizes the ticket. The queue then reports `pm_review`, and the inspector shows the PM Decision Card.
-5. A new Claude report on OLAS moves the queue back to `ticket` (a new ticket on the new report). The old ticket stays on record and is marked as superseded.
+1. The queue says `research` when Claude's report is missing, older than 90 days or has a Claude run open; Agent 1 researches and saves.
+2. It then says `ticket`. `start_ticket` freezes the packet (Agent 1's report ID and hash, grade, exits at $500 and $2,000, price, sell tax, DefiLlama, held, sizing) and the prompt with the report fenced as evidence. Agent 2 prosecutes and saves.
+3. The desk sizes it, the queue says `pm_review` and the inspector shows the PM Decision Card. A new Claude report sends the queue back to `ticket`; the old ticket is kept and marked superseded.
+4. The $500 tier needs a current exit reading: approve exit quotes (Forensics > Exits). Without one the ticket is capped at $0, saying why.
 
-For OLAS specifically, the $500 tier needs a current exit reading. Exit quotes must be approved for the project (Forensics > Exits, or Desk options > Quote exits for every project). Without one, the ticket is capped at $0 and says why.
+First live ticket: `tr_2026-10-24T175256Z_g3cug` (2026-10-24), HARD_PASS, $0. Claude's report graded 26.3 and the Prosecutor scored 15; there was no exit reading. It is waiting for Eric's review.
 
 ## UI files
 
@@ -130,10 +128,20 @@ For OLAS specifically, the $500 tier needs a current exit reading. Exit quotes m
 - `dashboard/tests/review-queue.test.js` covers the under-40 filter and the pending-ticket reason.
 - Run everything with `node dashboard/cli.js test`. After any UI edit, rebuild the bundle with `npm run ui:build`.
 
-## Not in Phase 1
+## Autonomous Build Backlog
 
-- ChatGPT as Prosecutor.
-- A Settings screen for `tickets.sizing`.
-- Live exit quotes fetched by the ticket itself (it reads the monitor's latest readings).
-- Journal entries for decisions (decisions live in `decisions.jsonl`).
-- Any exchange or wallet connection.
+For a `/loop` or scheduled Claude Code session: take the first unchecked item, follow `CLAUDE.md` (Simple change workflow: edit here, run the tests, rebuild after UI edits, report), check it off, and stop. Never commit or push unless Eric asked in this session. Items marked *(Eric)* need his decision first: ask, don't build.
+
+- [x] Phase 1 tickets, connector tools, PM Decision Card, under-40 filter (f715a3e, live 2026-10-24)
+- [x] Sub-agents `forensic-researcher`, `junior-trader-prosecutor` and `/pilot-run`
+- [ ] Pilot runner: drop `shell: true` in `dashboard/scripts/pilot.js` (Node DEP0190 warning); resolve `claude.exe` on Windows instead
+- [ ] PM Decision Card: show prices with at least two decimals ($0.70, not $0.7)
+- [ ] `autonomous_pilot_queue` with a named project says "1 project in the pilot" even when its pilot is off: say "named, not in the pilot"
+- [ ] Preferences > Screening: edit `tickets.sizing` (same bounds as `tickets.sizingOf`), with tests
+- [ ] Record each PM decision as a journal entry too, so Notes shows it (decisions.jsonl stays the record)
+- [ ] Ticket packet: say which exit sizes the monitor is not quoting, and link to approving exit quotes
+- [ ] Pilot: when a ticket is opened with no exit reading, ask for one fixed-size quote first (`forensic-monitor.js` `quoteFixedToken`; same gates and budget)
+- [ ] *(Eric)* Bind OLAS's DefiLlama entity so the fundamental invalidation trigger is checked
+- [ ] *(Eric)* ChatGPT as a second Prosecutor (`cr-ticket-challenge@1`, its own receipt, never averaged)
+- [ ] *(Eric)* Put more projects in the pilot; a scheduled `/pilot-run` cadence
+- Never in scope: an exchange or wallet connection, placing orders, moving money.
