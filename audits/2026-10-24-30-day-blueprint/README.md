@@ -239,7 +239,7 @@ Done when:
 | Measure | Target |
 |---|---|
 | Backlog items merged to `main` | 7–20, with those marked *(Eric)* only where he said go |
-| Branches waiting at any moment | at most 4 |
+| Branches waiting at any moment | at most 4 (9 items during Eric's surge, 2026-10-24 to 10-27 23:00 ET) |
 | Backlog pushes with a CI run | 100% |
 | Pilot projects with a current ticket | ETH, ZAMA and at least 3 more |
 | Tickets reading "holding" across a gap | 0 |
