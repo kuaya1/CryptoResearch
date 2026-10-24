@@ -722,3 +722,66 @@ test('get_ticket: a project with no ticket says so; an earlier receipt reads as 
   assert.equal(g.text.text, null);
   assert.match(g.text.note, /no Prosecutor ran/);
 });
+
+// ---------------------------------------------------------------------------
+// No born-invalidated tickets (item 22)
+
+function stubPrice(t, id, price) {
+  const market = require('../core/market');
+  const real = market.readLatest.real || market.readLatest;
+  const stub = (...a) => { const m = real(...a); return { ...m, assets: { ...(m.assets || {}), [id]: { price_usd: price, source_last_updated_at: '2026-10-24T10:00:00.000Z' } } }; };
+  stub.real = real;
+  market.readLatest = stub;
+  t.after(() => { market.readLatest = real; });
+}
+const withTrigger = (tk, trig, type = 'ACCUMULATE') => { const base = JSON.parse(answer(tk).match(/```json\n([\s\S]*)\n```/)[1]); return answer(tk, { proposal: { ...base.proposal, proposal_type: type, invalidation_trigger: { ...base.proposal.invalidation_trigger, metric: null, ...trig } } }); };
+const openTicket = (t, s) => { stubHeld(t, s.pid, false); const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket; withExit(s.ws, s.pid, tk.ticket_id, 1.5); return T.loadTicket(s.ws, s.pid, tk.ticket_id); };
+const CG = 'example-payfi-fictional';
+
+test('a price trigger at or above the price now is refused and writes nothing; one below is saved', (t) => {
+  const s = withReport(t);
+  const tk = openTicket(t, s);
+  stubPrice(t, CG, 0.65);
+  const before = hashTree(s.root);
+  assert.throws(() => T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: withTrigger(tk, { price_usd: 0.7 }) }), (e) => e.code === 'INVALID' && /at or above the price now \(\$0\.65/.test(e.message) && /Set a threshold below the current price/.test(e.message));
+  assert.throws(() => T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: withTrigger(tk, { price_usd: 0.65 }) }), (e) => e.code === 'INVALID', 'equal is at or above');
+  assert.deepEqual(hashTree(s.root), before, 'a refusal writes nothing');
+  const ok = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: withTrigger(tk, { price_usd: 0.5 }) });
+  assert.equal(ok.status, 'saved');
+  assert.equal(ok.receipt.desk.trigger_breached_at_save, undefined);
+});
+
+test('a metric floor above the packet\'s complete 30-day total is refused, naming the total', (t) => {
+  const s = withReport(t);
+  const f = require('../core/fundamentals');
+  const real = f.summary;
+  f.summary = () => ({ state: 'ok', fetched_at: '2026-10-20T00:00:00.000Z', metrics: { fees: { status: 'complete', total_30d_usd: 50000 } } });
+  t.after(() => { f.summary = real; });
+  const tk = openTicket(t, s);
+  const block = (floor) => answer(tk, { proposal: { ...JSON.parse(answer(tk).match(/```json\n([\s\S]*)\n```/)[1]).proposal, invalidation_trigger: { price_usd: 0.5, metric: { key: 'fees', below_30d_usd: floor }, statement: 'x' } } });
+  assert.throws(() => T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: block(100000) }), (e) => e.code === 'INVALID' && /50000/.test(e.message) && /2026-10-20/.test(e.message));
+  assert.equal(T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: block(40000) }).status, 'saved');
+});
+
+test('HARD_PASS and TRIM_EXIT with a breached trigger are saved and labeled', (t) => {
+  for (const type of ['HARD_PASS', 'TRIM_EXIT']) {
+    const s = withReport(t);
+    const tk = openTicket(t, s);
+    stubPrice(t, CG, 0.65);
+    const out = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: withTrigger(tk, { price_usd: 0.7 }, type) });
+    assert.equal(out.status, 'saved', type);
+    assert.equal(out.receipt.desk.trigger_breached_at_save.kind, 'price');
+    assert.match(out.receipt.desk.trigger_breached_at_save.words, /0\.65/);
+  }
+});
+
+test('with no price on file the check is skipped, never refused', (t) => {
+  const s = withReport(t);
+  const tk = openTicket(t, s);
+  const market = require('../core/market');
+  const real = market.readLatest.real || market.readLatest;
+  market.readLatest = (...a) => ({ ...real(...a), assets: {} });
+  t.after(() => { market.readLatest = real; });
+  assert.equal(tk.basis.market.price_usd ?? null, null, 'the fixture packet holds no price');
+  assert.equal(T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: withTrigger(tk, { price_usd: 0.7 }) }).status, 'saved');
+});

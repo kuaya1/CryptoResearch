@@ -155,6 +155,7 @@ export function PMDecisionCard({ p }) {
         </p>
       </div>
       {t.non_consensus_thesis ? <p className="pm-thesis">{t.non_consensus_thesis}</p> : null}
+      {t.trigger_breached_at_save ? <p className="pm-alert" title={t.trigger_breached_at_save.words}>Trigger already breached when saved</p> : null}
       {t.status === 'invalidated' && t.invalidation ? <p className="pm-alert">{t.invalidation.words}</p> : null}
       <div className="iv-rgrid pm-grid">
         <div className="iv-rc">

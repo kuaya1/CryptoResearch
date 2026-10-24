@@ -754,6 +754,44 @@ function normalizeBlock(b) {
 
 const normalizedTextHash = (text) => sha256(String(text).replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').trim());
 
+// A ticket must not be invalidated the moment it is saved. The price now is
+// the latest stored reading, else the frozen packet's; the metric total is the
+// packet's complete 30-day total. A check with no reading is skipped, not
+// passed. Returns null, or { kind, words, refusal }.
+const EXEMPT_FROM_BORN_CHECK = new Set(['HARD_PASS', 'TRIM_EXIT']);
+function bornInvalidated(ws, project, ticket, inv) {
+  if (!inv) return null;
+  let packet = null;
+  try { packet = JSON.parse(verifiedFrozen(ws, ticket.packet.path, ticket.packet.sha256, 'The frozen ticket packet')); } catch (_) { packet = null; }
+  if (isNum(inv.price_usd)) {
+    let now = null;
+    try { now = marketOf(ws, project); } catch (_) { now = null; }
+    const pk = (packet && packet.market) || (ticket.basis && ticket.basis.market);
+    const cur = now && isNum(now.price_usd) ? now : pk && isNum(pk.price_usd) ? pk : null;
+    if (cur && inv.price_usd >= cur.price_usd) {
+      const when = cur.as_of || 'an unknown time';
+      return {
+        kind: 'price',
+        words: `The invalidation price $${inv.price_usd} was at or above the price when saved ($${cur.price_usd} at ${when}).`,
+        refusal: `the invalidation price $${inv.price_usd} is at or above the price now ($${cur.price_usd} at ${when}): the ticket would be invalidated the moment it is saved. Set a threshold below the current price.`,
+      };
+    }
+  }
+  if (inv.metric) {
+    const f = packet && packet.fundamentals;
+    const m = f && f.metrics ? f.metrics[inv.metric.key] : null;
+    if (m && m.status === 'complete' && isNum(m.total_30d_usd) && inv.metric.below_30d_usd > m.total_30d_usd) {
+      const when = (f && f.fetched_at) || 'an unknown date';
+      return {
+        kind: 'metric',
+        words: `The ${inv.metric.key} floor $${inv.metric.below_30d_usd} was above the packet's complete 30-day total ($${m.total_30d_usd}, ${when}).`,
+        refusal: `the ${inv.metric.key} floor $${inv.metric.below_30d_usd} is above the packet's complete 30-day total ($${m.total_30d_usd}, ${when}): the ticket would be invalidated the moment it is saved. Set a floor below the total.`,
+      };
+    }
+  }
+  return null;
+}
+
 function saveTicket(ws, { project_id: pid, ticket_id: tid, text, revision = null, channel = null }) {
   if (require('./research').heldProviders(ws).claude) throw new OpError('REFUSED', 'Claude is on hold on this desk; nothing was saved.');
   const body = typeof text === 'string' ? text : '';
@@ -795,6 +833,9 @@ function saveTicket(ws, { project_id: pid, ticket_id: tid, text, revision = null
   if (Number.isFinite(asOf) && asOf > now + AS_OF_SLACK_MS) throw new OpError('INVALID', `Not saved: as_of (${c.as_of}) is after the time of saving.`);
   if (Number.isFinite(asOf) && asOf < Date.parse(ticket.created_at) - AS_OF_SLACK_MS) throw new OpError('INVALID', `Not saved: as_of (${c.as_of}) is before the ticket was opened (${ticket.created_at}).`);
   const g = gate(ticket.basis, ticket.sizing, c.proposal.proposal_type);
+  const breached = bornInvalidated(ws, project, ticket, c.proposal.invalidation_trigger);
+  const exemptType = EXEMPT_FROM_BORN_CHECK.has(c.proposal.proposal_type) || EXEMPT_FROM_BORN_CHECK.has(g.proposal_type);
+  if (breached && !exemptType) throw new OpError('INVALID', `Not saved: ${breached.refusal} The draft is kept.`, { trigger: breached.kind });
   const exits = ticket.basis.exits || [];
   const at500 = exits.find((x) => x.size_usd === ticket.sizing.exit_size_usd) || null;
   const at2000 = exits.find((x) => x.size_usd === 2000) || null;
@@ -835,6 +876,7 @@ function saveTicket(ws, { project_id: pid, ticket_id: tid, text, revision = null
       exits_missing: exitsMissing(exits, pid),
       sell_tax: null,
       invalidation_version: INVALIDATION_VERSION,
+      ...(breached && exemptType ? { trigger_breached_at_save: { kind: breached.kind, words: breached.words } } : {}),
     },
     // Both agents' own figures and verdicts, side by side; the spread is the
     // difference between the two, never their average.
@@ -1118,6 +1160,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       exit_cost_500_complete: d.exit_cost_500_complete ?? null,
       exit_cost_2000_usd_pct: d.exit_cost_2000_usd_pct ?? null,
       exits_missing: d.exits_missing || [],
+      trigger_breached_at_save: d.trigger_breached_at_save || null,
       suggested_risk_usd: d.suggested_risk_usd || 0,
       starter_risk_usd: d.sizing ? d.sizing.starter_risk_usd : SIZING_DEFAULTS.starter_risk_usd,
       pm_approved_risk_usd: decision ? decision.pm_approved_risk_usd : null,
