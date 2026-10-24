@@ -93,11 +93,11 @@ PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you deci
   tickets candidates [--json]           who could go in the pilot: held first, then by grade, with today's gate (writes nothing)
   tickets queue [<id>]                   the autonomous pilot's next step per project (research, ticket, your review)
   tickets pilot <id> --on|--off          put a project in the autonomous pilot (your opt-in)
-  tickets start <id> [--refresh] [--restart] [--assistant]
+  tickets start <id> [--refresh] [--restart] [--force-prosecution] [--assistant]
                                          open (or resume) the Prosecutor's ticket on Claude's current report
   tickets prompt <id> <ticket_id>        print the frozen Prosecutor prompt (cr-ticket-prompt@1)
   tickets import <id> <ticket_id> --text-file FILE [--revision-note TEXT]
-  tickets view <id>                      the ticket in force: status, desk sizing, invalidation, history (writes nothing)
+  tickets view <id> [--receipt tr_…] [--include-text]  the ticket in force (or that receipt): status, desk sizing, invalidation with every check, history (writes nothing)
   tickets decide <id> <receipt_id> --action approve|halve|veto|undo [--note TEXT]
   tickets cancel <id> <ticket_id> [--reason TEXT]
   npm run pilot -- --project=<id> [--desk local|online] [--dry-run]
@@ -841,13 +841,13 @@ async function run(argv) {
       const tk = require('./core/tickets');
       const pid = rest[0];
       const tid = rest[1];
-      if (sub === 'view' || sub === 'status') return tk.view(ws, need(pid, `tickets ${sub} <project>`));
+      if (sub === 'view' || sub === 'status') return tk.read(ws, need(pid, `tickets ${sub} <project>`), { receiptId: one(flags.receipt) || null, includeText: Boolean(flags['include-text'] || flags.include_text) });
       if (sub === 'candidates') return { candidates: tk.pilotCandidates(ws) };
       if (sub === 'queue') return { steps: tk.pilotQueue(ws, { project: pid || null }), pending: tk.pendingFor(ws) };
       if (sub === 'start') {
         const exit_quote = await tk.prepareExitQuote(ws, need(pid, 'tickets start <project> [--refresh] [--restart]')).catch(() => null);
-        const r = tk.createTicket(ws, { exit_quote, project_id: need(pid, 'tickets start <project> [--refresh] [--restart]'), channel: one(flags.channel) || actor, assistant: Boolean(flags.assistant), mode: one(flags.mode) || 'cli', utterance: one(flags.utterance) || null, refresh: Boolean(flags.refresh), restart: Boolean(flags.restart) });
-        return { status: r.status, ticket_id: r.ticket_id || null, receipt_id: r.receipt_id || null, message: r.message, prompt_path: r.ticket ? r.ticket.prompt.path : null, ...(['created', 'resumed'].includes(r.status) ? await afterWrite(ws, pid) : {}) };
+        const r = tk.createTicket(ws, { exit_quote, project_id: need(pid, 'tickets start <project> [--refresh] [--restart]'), channel: one(flags.channel) || actor, assistant: Boolean(flags.assistant), mode: one(flags.mode) || 'cli', utterance: one(flags.utterance) || null, refresh: Boolean(flags.refresh), restart: Boolean(flags.restart), force_prosecution: Boolean(flags['force-prosecution'] || flags.force_prosecution) });
+        return { status: r.status, gate_closed: r.gate_closed === true, ticket_id: r.ticket_id || null, receipt_id: r.receipt_id || null, message: r.message, prompt_path: r.ticket ? r.ticket.prompt.path : null, ...(['created', 'resumed', 'gate_closed'].includes(r.status) ? await afterWrite(ws, pid) : {}) };
       }
       if (sub === 'prompt') {
         const t = tk.loadTicket(ws, need(pid, 'tickets prompt <project> <ticket_id>'), need(tid, 'tickets prompt <project> <ticket_id>'));

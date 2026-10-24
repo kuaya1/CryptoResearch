@@ -118,6 +118,13 @@ function runLocal(o) {
       if (saved.verified === false) throw new Error('The report did not read back as written; run the pilot again (an identical save is recognized).');
       continue;
     }
+    if (s.step === 'gate_closed') {
+      if (o.dryRun) return say('    would save the desk\'s gate receipt (no Prosecutor runs).');
+      const g = cli(['tickets', 'start', o.project, '--utterance', 'autonomous pilot (npm run pilot)']);
+      say(`    desk gate: ${g.status} ${g.receipt_id || ''} — ${g.message}`);
+      if (g.verified === false) throw new Error('The desk\'s gate receipt did not read back as written; run the pilot again.');
+      continue;
+    }
     if (s.step === 'ticket') {
       if (o.dryRun) return say('    would run Agent 2 (the Prosecutor) with claude -p, then save the ticket.');
       const t = cli(['tickets', 'start', o.project, '--assistant', '--mode', 'cli', '--utterance', 'autonomous pilot (npm run pilot)']);
@@ -142,6 +149,7 @@ function runOnline(o) {
     `Run the CryptoResearch autonomous pilot for the project "${o.project}" on Eric's online desk, using only the CryptoResearch connector's tools and web search.`,
     `1. Call autonomous_pilot_queue with project "${o.project}". Do its next step, then call it again, until the step is pm_review or done (at most ${MAX_STEPS} steps).`,
     '2. A "research" step is Agent 1: Claude\'s investment research. Use start_research for Claude only (owner_request "autonomous pilot") or resume the open run, follow its frozen prompt exactly with your own web research, and save_report with the whole report.',
+    '2b. A "gate_closed" step needs no Prosecutor: call start_ticket (owner_request "autonomous pilot") once, which saves the desk\'s gate receipt, then call autonomous_pilot_queue again.',
     '3. A "ticket" step is Agent 2: start_ticket (owner_request "autonomous pilot"), take the Prosecutor\'s role the prompt gives you, apart from the report\'s author, and save_ticket with the whole text and its JSON block.',
     '4. Never decide a ticket, never choose a dollar amount, never place or simulate an order. Stop at pm_review.',
     '5. End with one line per step: the step, the record saved (report or receipt ID) and the desk\'s message.',

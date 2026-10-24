@@ -1155,7 +1155,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   route('POST', '/api/projects/([^/]+)/tickets', async (m, req, res, body) => {
     // The fixed-size quote is asked first (async, outside the idempotent save); a retry finds the reading and asks nothing.
     const exit_quote = await tickets.prepareExitQuote(ws, pid(m[1])).catch(() => null);
-    return once(body, () => after(tickets.createTicket(ws, { project_id: pid(m[1]), channel: 'dashboard', utterance: typeof body.utterance === 'string' ? body.utterance : null, refresh: body.refresh === true, exit_quote })));
+    return once(body, () => after(tickets.createTicket(ws, { project_id: pid(m[1]), channel: 'dashboard', utterance: typeof body.utterance === 'string' ? body.utterance : null, refresh: body.refresh === true, force_prosecution: body.force_prosecution === true, exit_quote })));
   });
   route('POST', '/api/projects/([^/]+)/tickets/(tk_[^/]+)/import', (m, req, res, body) => after(tickets.saveTicket(ws, { project_id: pid(m[1]), ticket_id: ticketId(m[2]), text: String(body.text || ''), revision: body.revision && typeof body.revision === 'object' ? body.revision : null, channel: 'dashboard import' })));
   route('POST', '/api/projects/([^/]+)/tickets/decisions', (m, req, res, body) => after(tickets.decide(ws, pid(m[1]), {
