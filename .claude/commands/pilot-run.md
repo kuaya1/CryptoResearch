@@ -13,6 +13,7 @@ Read `DESK_STATE.md` first.
 2. **Dispatch each project's next step to a sub-agent, one project at a time.** Pass only the project ID, the desk (online or local) and the step's run or ticket ID.
    - `research`: launch the `forensic-researcher` sub-agent.
    - `ticket`: launch the `junior-trader-prosecutor` sub-agent, never in the same context as the researcher.
+   - `gate_closed`: the grade alone rules out new risk for an asset Eric does not hold. Call `start_ticket` (or `node dashboard/cli.js tickets start <project_id>`) yourself, once: the desk saves its own gate receipt. Never launch the Prosecutor sub-agent for it.
    - `pm_review` or `done`: nothing to do; move on.
 
    After a sub-agent returns, read the queue again for that project (research is followed by a ticket). Stop at `pm_review`. Take at most 4 steps per project.

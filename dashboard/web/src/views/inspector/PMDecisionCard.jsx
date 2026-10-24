@@ -106,6 +106,42 @@ export function PMDecisionCard({ p }) {
     }
   };
   const inv = t.invalidation_trigger || {};
+  // The desk's own gate (cr-ticket-pregate@1): the grade alone ruled out new
+  // risk, so no Prosecutor ran. Its reasons and the two ways out only.
+  if (t.desk_gate) {
+    return (
+      <section className="pm-card" aria-labelledby={`pm-h-${pid}`} data-status={t.status} data-kind="desk_gate">
+        <div className="pm-head">
+          <h3 className="iv-h" id={`pm-h-${pid}`}>PM decision</h3>
+          <span className={`badge ${st.tone}`}>{st.word}</span>
+        </div>
+        <div className="pm-call">
+          <p className="pm-type">Desk gate · no Prosecutor run</p>
+          <p className="pm-risk"><span className="pm-risk-s">{`${TYPE_WORDS[t.proposal_type] || t.proposal_type} · no risk`}</span></p>
+        </div>
+        {(t.gate_reasons || []).map((reason) => <p className="pm-thesis" key={reason}>{reason}</p>)}
+        <div className="pm-dis">
+          <p className="pm-dis-row"><span className="pm-dis-k">Researcher</span><span>{`${(t.researcher || {}).grade_display || (t.researcher || {}).grade || '—'} · ${(t.researcher || {}).verdict || 'no verdict'}`}</span></p>
+        </div>
+        {t.superseded_by_report ? <p className="faint pm-note">{`Claude has a newer report (${t.superseded_by_report}); this gate is on the earlier one.`}</p> : null}
+        <div className="pm-actions">
+          {decided ? (
+            <p className="pm-decided">
+              <span>{DECIDED_WORDS[decided.action] || 'Decided'}{decided.action === 'pass' && decided.archive === 'archived' ? ' · archived' : ''}</span>
+              <span className="faint">{` · ${fmtDateTime(decided.at)}`}</span>
+              <button type="button" className="btn btn-sm" data-key={`pm-undo-${pid}`} disabled={Boolean(busy)} onClick={() => decide('undo')}>Undo</button>
+            </p>
+          ) : (
+            <>
+              <button type="button" className="btn btn-sm btn-primary" data-key={`pm-pass-${pid}`} disabled={Boolean(busy)} title={p.held ? 'You hold it, so it stays on the Desk' : 'Archives the project; Undo restores it'} onClick={() => decide('pass')}>{'Confirm Pass & Archive'}</button>
+              <button type="button" className="btn btn-sm" data-key={`pm-watch-${pid}`} disabled={Boolean(busy)} onClick={() => decide('watch')}>{'Override → Watch'}</button>
+            </>
+          )}
+        </div>
+        <PilotLine p={p} t={t} busy={busy} setBusy={setBusy} />
+      </section>
+    );
+  }
   return (
     <section className="pm-card" aria-labelledby={`pm-h-${pid}`} data-status={t.status}>
       <div className="pm-head">

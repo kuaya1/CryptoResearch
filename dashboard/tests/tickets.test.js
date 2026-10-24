@@ -384,3 +384,145 @@ test('missing exit quotes are named in the packet, the receipt and the view, wit
   assert.deepEqual(saved.receipt.desk.exits_missing.map((m) => m.size_usd), [500, 2000]);
   assert.deepEqual(T.view(s.ws, s.pid).ticket.exits_missing.map((m) => m.size_usd), [500, 2000]);
 });
+
+// ---------------------------------------------------------------------------
+// The desk's pre-gate (cr-ticket-pregate@1, Eric 2026-10-24)
+
+// Floors high enough that the fixture's grade is under them, so the grade
+// alone rules out new risk. min_grade_any stays low: WATCH_ONLY, not HARD_PASS.
+function gradeClosed(ws, floors = { min_grade_new_entry: 99, min_grade_any: 5 }) {
+  ws.settings.tickets = { sizing: floors };
+}
+
+function stubHeld(t, pid, held) {
+  const portfolio = require('../core/portfolio');
+  const real = portfolio.computePortfolio;
+  portfolio.computePortfolio = (...a) => { const pf = real(...a); return { ...pf, positions: held ? [{ project_id: pid, closed: false }] : [] }; };
+  t.after(() => { portfolio.computePortfolio = real; });
+}
+
+test('pre-gate: a grade under the new-entry floor on an asset not held gets the desk\'s own receipt, no prompt and no model text', (t) => {
+  const s = withReport(t);
+  gradeClosed(s.ws);
+  stubHeld(t, s.pid, false);
+  const out = T.createTicket(s.ws, { project_id: s.pid, assistant: true });
+  assert.equal(out.status, 'gate_closed');
+  assert.equal(out.gate_closed, true);
+  const r = out.receipt;
+  assert.match(r.receipt_id, T.RECEIPT_RE);
+  assert.equal(r.kind, 'desk_gate');
+  assert.equal(r.pregate_version, 'cr-ticket-pregate@1');
+  assert.equal(r.prosecution, null);
+  assert.equal(r.proposal, null);
+  assert.equal(r.agent_disagreement, null);
+  assert.equal(r.desk.proposal_type, 'WATCH_ONLY');
+  assert.equal(r.desk.suggested_risk_usd, 0);
+  assert.match(r.desk.gate.reasons.join(' '), /for a new entry/);
+  const packetText = fs.readFileSync(s.ws.abs(r.packet.path), 'utf8');
+  assert.equal(sha256(packetText), r.packet.sha256, 'the frozen packet is kept beside the receipt');
+  assert.equal(T.listTickets(s.ws, s.pid).length, 0, 'no ticket job, so no prompt file');
+  assert.equal(T.pendingFor(s.ws).length, 0, 'nothing waits for a Prosecutor');
+  assert.throws(() => T.receiptText(s.ws, s.pid, r.receipt_id), (e) => e.code === 'INVALID', 'there is no model text');
+  // Under min_grade_any it is a HARD_PASS.
+  const s2 = withReport(t);
+  gradeClosed(s2.ws, { min_grade_new_entry: 99, min_grade_any: 98 });
+  stubHeld(t, s2.pid, false);
+  assert.equal(T.createTicket(s2.ws, { project_id: s2.pid }).receipt.desk.proposal_type, 'HARD_PASS');
+});
+
+test('pre-gate: the same report again is unchanged with the same receipt; a held project, a grade over the floor and force_prosecution open a normal ticket', (t) => {
+  const s = withReport(t);
+  gradeClosed(s.ws);
+  stubHeld(t, s.pid, false);
+  const first = T.createTicket(s.ws, { project_id: s.pid });
+  const again = T.createTicket(s.ws, { project_id: s.pid });
+  assert.equal(again.status, 'unchanged');
+  assert.equal(again.receipt_id, first.receipt_id);
+  assert.equal(T.createTicket(s.ws, { project_id: s.pid, refresh: true }).receipt_id, first.receipt_id, 'refresh alone does not run a Prosecutor');
+  assert.equal(fs.readdirSync(s.ws.abs(`projects/${s.pid}/tickets/receipts`)).filter((f) => /^tr_.*\.json$/.test(f) && !f.includes('packet')).length, 1);
+  const forced = T.createTicket(s.ws, { project_id: s.pid, force_prosecution: true });
+  assert.equal(forced.status, 'created', 'force_prosecution opens the normal ticket');
+  assert.ok(forced.ticket.prompt.sha256);
+  // Held: a normal ticket although the grade is under the floor.
+  const h = withReport(t);
+  gradeClosed(h.ws);
+  stubHeld(t, h.pid, true);
+  assert.equal(T.createTicket(h.ws, { project_id: h.pid }).status, 'created');
+  // A grade over the floor: a normal ticket.
+  const g = withReport(t);
+  gradeClosed(g.ws, { min_grade_new_entry: 1, min_grade_any: 0 });
+  stubHeld(t, g.pid, false);
+  assert.equal(T.createTicket(g.ws, { project_id: g.pid }).status, 'created');
+  // An unreadable portfolio is not "not held": a normal ticket.
+  const u = withReport(t);
+  gradeClosed(u.ws);
+  const portfolio = require('../core/portfolio');
+  const realPf = portfolio.computePortfolio;
+  portfolio.computePortfolio = () => { throw new Error('unreadable'); };
+  t.after(() => { portfolio.computePortfolio = realPf; });
+  assert.equal(T.createTicket(u.ws, { project_id: u.pid }).status, 'created');
+});
+
+test('pre-gate: nextStep goes gate_closed, then pm_review; the view, summary and invalidation read the desk receipt', (t) => {
+  const s = withReport(t);
+  gradeClosed(s.ws);
+  stubHeld(t, s.pid, false);
+  T.setPilot(s.ws, s.pid, true);
+  const step = T.pilotQueue(s.ws)[0];
+  assert.equal(step.step, 'gate_closed');
+  assert.match(step.reasons[0], /for a new entry/);
+  const out = T.createTicket(s.ws, { project_id: s.pid });
+  const after = T.pilotQueue(s.ws)[0];
+  assert.equal(after.step, 'pm_review');
+  assert.equal(after.receipt_id, out.receipt_id);
+  const v = T.view(s.ws, s.pid);
+  assert.equal(v.ticket.desk_gate, true);
+  assert.equal(v.ticket.status, 'pending_pm_review');
+  assert.equal(v.ticket.prosecution, null);
+  assert.equal(v.ticket.agent_disagreement, null);
+  assert.equal(v.ticket.invalidation.invalidated, false);
+  assert.match(v.ticket.invalidation.words, /the desk's gate, not a Prosecutor/);
+  assert.equal(v.ticket.researcher.report_id, out.receipt.researcher.report_id);
+  assert.equal(T.summary(s.ws, s.pid).desk_gate, true);
+  assert.equal(v.history.length, 1);
+});
+
+test('pre-gate: pass and watch and undo are accepted on the desk\'s receipt; approve, halve and trim are refused; pass archives and undo restores', (t) => {
+  const s = withReport(t);
+  gradeClosed(s.ws);
+  stubHeld(t, s.pid, false);
+  const projects = require('../core/projects');
+  const rid = T.createTicket(s.ws, { project_id: s.pid }).receipt_id;
+  for (const action of ['approve', 'halve', 'trim']) assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: rid, action }), (e) => e.code === 'REFUSED' && /desk's gate/.test(e.message), action);
+  const pass = T.decide(s.ws, s.pid, { receipt_id: rid, action: 'pass' });
+  assert.equal(pass.result.project_archived, true);
+  assert.equal(projects.getProject(s.ws, s.pid).status, 'archived');
+  assert.equal(T.view(s.ws, s.pid).ticket.status, 'passed');
+  const undo = T.decide(s.ws, s.pid, { receipt_id: rid, action: 'undo' });
+  assert.equal(undo.result.project_restored, true);
+  assert.equal(projects.getProject(s.ws, s.pid).status, 'active');
+  T.decide(s.ws, s.pid, { receipt_id: rid, action: 'watch' });
+  assert.equal(T.view(s.ws, s.pid).ticket.status, 'watching');
+});
+
+test('pre-gate: an existing Prosecutor receipt reads as before, and the index row builds with the desk receipt', (t) => {
+  const s = withReport(t);
+  stubHeld(t, s.pid, false);
+  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
+  const saved = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) });
+  const v = T.view(s.ws, s.pid);
+  assert.equal(v.ticket.desk_gate, false);
+  assert.equal(v.ticket.kind, 'prosecutor');
+  assert.equal(v.ticket.prosecution.verdict, 'thesis_damaged');
+  assert.equal(v.ticket.agent_disagreement.prosecutor.conviction_score, 38);
+  assert.equal(T.receiptText(s.ws, s.pid, saved.receipt_id).verified, true);
+  // A later desk receipt (the grade floor now closes it) is read beside it.
+  gradeClosed(s.ws);
+  T.createTicket(s.ws, { project_id: s.pid, refresh: true });
+  assert.equal(T.view(s.ws, s.pid).history.length, 2);
+  assert.equal(T.view(s.ws, s.pid).ticket.desk_gate, true);
+  const index = require('../core/indexer').buildIndex(s.ws);
+  const row = index.projects.find((p) => p.project_id === s.pid);
+  assert.equal(row.ticket.desk_gate, true);
+  assert.equal(row.ticket.status, 'pending_pm_review');
+});

@@ -92,7 +92,7 @@ Forensics & Resilience (no paid model call; Claude investigates, ChatGPT may cha
 PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you decide; no order is ever placed)
   tickets queue [<id>]                   the autonomous pilot's next step per project (research, ticket, your review)
   tickets pilot <id> --on|--off          put a project in the autonomous pilot (your opt-in)
-  tickets start <id> [--refresh] [--restart] [--assistant]
+  tickets start <id> [--refresh] [--restart] [--force-prosecution] [--assistant]
                                          open (or resume) the Prosecutor's ticket on Claude's current report
   tickets prompt <id> <ticket_id>        print the frozen Prosecutor prompt (cr-ticket-prompt@1)
   tickets import <id> <ticket_id> --text-file FILE [--revision-note TEXT]
@@ -844,8 +844,8 @@ async function run(argv) {
       if (sub === 'queue') return { steps: tk.pilotQueue(ws, { project: pid || null }), pending: tk.pendingFor(ws) };
       if (sub === 'start') {
         const exit_quote = await tk.prepareExitQuote(ws, need(pid, 'tickets start <project> [--refresh] [--restart]')).catch(() => null);
-        const r = tk.createTicket(ws, { exit_quote, project_id: need(pid, 'tickets start <project> [--refresh] [--restart]'), channel: one(flags.channel) || actor, assistant: Boolean(flags.assistant), mode: one(flags.mode) || 'cli', utterance: one(flags.utterance) || null, refresh: Boolean(flags.refresh), restart: Boolean(flags.restart) });
-        return { status: r.status, ticket_id: r.ticket_id || null, receipt_id: r.receipt_id || null, message: r.message, prompt_path: r.ticket ? r.ticket.prompt.path : null, ...(['created', 'resumed'].includes(r.status) ? await afterWrite(ws, pid) : {}) };
+        const r = tk.createTicket(ws, { exit_quote, project_id: need(pid, 'tickets start <project> [--refresh] [--restart]'), channel: one(flags.channel) || actor, assistant: Boolean(flags.assistant), mode: one(flags.mode) || 'cli', utterance: one(flags.utterance) || null, refresh: Boolean(flags.refresh), restart: Boolean(flags.restart), force_prosecution: Boolean(flags['force-prosecution'] || flags.force_prosecution) });
+        return { status: r.status, gate_closed: r.gate_closed === true, ticket_id: r.ticket_id || null, receipt_id: r.receipt_id || null, message: r.message, prompt_path: r.ticket ? r.ticket.prompt.path : null, ...(['created', 'resumed', 'gate_closed'].includes(r.status) ? await afterWrite(ws, pid) : {}) };
       }
       if (sub === 'prompt') {
         const t = tk.loadTicket(ws, need(pid, 'tickets prompt <project> <ticket_id>'), need(tid, 'tickets prompt <project> <ticket_id>'));

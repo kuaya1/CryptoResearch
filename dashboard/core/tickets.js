@@ -40,6 +40,10 @@ const FORMAT = 'cr.ticket.v1';
 // keeps the version it froze: @1 tickets are read without the exemption.
 const SIZING_VERSION = 'cr-ticket-sizing@2';
 const INVALIDATION_VERSION = 'cr-ticket-invalidation@1';
+// The desk's pre-gate (Eric, 2026-10-24): when the grade alone rules out new
+// risk and he does not hold the asset, no Prosecutor runs; the desk saves its
+// own gate result as a receipt (kind desk_gate), with no proposal.
+const PREGATE_VERSION = 'cr-ticket-pregate@1';
 const PACKET_FORMAT = 'cr.ticket-packet.v1';
 const TICKET_RE = /^tk_\d{4}-\d{2}-\d{2}T\d{6}Z_[a-z2-9]{5}$/;
 const RECEIPT_RE = /^tr_\d{4}-\d{2}-\d{2}T\d{6}Z_[a-z2-9]{5}$/;
@@ -364,6 +368,17 @@ function gate(basis, sizing, proposalType = null) {
   };
 }
 
+// Does the grade alone rule out new risk for an asset Eric does not hold? Only
+// a known "not held" counts (an unreadable portfolio opens a normal ticket).
+// Returns the gate's grade reason, else null.
+function pregateReason(researcher, held, sizing) {
+  if (held !== false) return null;
+  const grade = gateGrade(researcher.grade);
+  if (grade !== null && grade >= sizing.min_grade_new_entry) return null;
+  const g = gate({ researcher, held: false, exits: [], native: null }, sizing);
+  return g.reasons[0] || null;
+}
+
 // ---------------------------------------------------------------------------
 // Prompt
 
@@ -508,13 +523,14 @@ function createTicket(ws, args = {}) {
   if (reportText === null) throw new OpError('INTEGRITY', `The original text of ${researcher.report_id} is missing (${researcher.original.path}). Nothing was opened.`);
   researcher.original.sha256 = sha256(reportText);
   researcher.original.chars = reportText.length;
-  if (!args.refresh && !args.restart) {
-    const done = listReceipts(ws, pid).filter((r) => !r.broken && r.researcher && r.researcher.report_id === researcher.report_id).pop();
-    if (done) return { status: 'exists', project_id: pid, receipt_id: done.receipt_id, ticket_id: done.ticket_id, message: `A ticket on Claude's current report (${researcher.report_id}) is already saved (${done.receipt_id}). Nothing new was opened; pass refresh: true only when Eric asks for another.` };
-  }
+  const sizing = sizingOf(ws);
+  const held = heldOf(ws, pid, now);
+  const pregate = args.force_prosecution !== true && !args.restart && pregateReason(researcher, held, sizing) !== null;
+  const onReport = listReceipts(ws, pid).filter((r) => !r.broken && r.researcher && r.researcher.report_id === researcher.report_id && !(args.force_prosecution === true && r.kind === 'desk_gate')).pop() || null;
+  if (pregate && onReport && onReport.kind === 'desk_gate') return { status: 'unchanged', gate_closed: true, project_id: pid, receipt_id: onReport.receipt_id, receipt: onReport, verified: true, message: `The desk's gate on Claude's current report (${researcher.report_id}) is already saved (${onReport.receipt_id}). No Prosecutor runs; pass force_prosecution: true only when Eric asks for one.` };
+  if (!args.refresh && !args.restart && onReport) return { status: 'exists', project_id: pid, receipt_id: onReport.receipt_id, ticket_id: onReport.ticket_id, message: `A ticket on Claude's current report (${researcher.report_id}) is already saved (${onReport.receipt_id}). Nothing new was opened; pass refresh: true only when Eric asks for another.` };
   if (open && args.restart) cancelTicket(ws, pid, open.ticket_id, 'Eric asked to start the ticket over.');
   const tid = `tk_${compactTs(new Date(now))}_${randomId(5)}`;
-  const sizing = sizingOf(ws);
   const sizes = [...new Set([sizing.exit_size_usd, 2000])].sort((a, b) => a - b);
   const packet = {
     schema_version: PACKET_FORMAT,
@@ -527,7 +543,7 @@ function createTicket(ws, args = {}) {
     ...(args.exit_quote ? { exit_quote_attempt: args.exit_quote } : {}),
     sell_tax: taxOf(ws, project, now),
     fundamentals: fundamentalsOf(ws, project, now),
-    held: heldOf(ws, pid, now),
+    held,
     sizing,
     native: null,
     notes: [
@@ -541,6 +557,7 @@ function createTicket(ws, args = {}) {
   packet.exits_missing = exitsMissing(packet.exits, pid);
   const packetText = jsonText(packet);
   const packetSha = sha256(packetText);
+  if (pregate) return closeGate(ws, { pid, project, researcher, packet, packetText, packetSha, sizing, now });
   const dir = ticketDir(pid, tid);
   const ticket = {
     schema_version: 'cr.ticket-job.v1',
@@ -567,6 +584,76 @@ function createTicket(ws, args = {}) {
     return { ticket_id: tid };
   });
   return { status: 'created', project_id: pid, ticket_id: tid, ticket, verified: out.verified, files: out.files, message: `Opened ticket ${tid} for ${project.name} on Claude's report ${researcher.report_id}.` };
+}
+
+// The pre-gate's receipt: the same frozen packet as a ticket would carry (kept
+// beside the receipt, create-only) and the gate's own result with no
+// proposal. No prompt is rendered and nothing goes to a model.
+function closeGate(ws, { pid, project, researcher, packet, packetText, packetSha, sizing, now }) {
+  const basis = { researcher, held: packet.held, exits: packet.exits, market: packet.market, native: packet.native };
+  const g = gate(basis, sizing);
+  const at500 = packet.exits.find((x) => x.size_usd === sizing.exit_size_usd) || null;
+  const at2000 = packet.exits.find((x) => x.size_usd === 2000) || null;
+  const rid = `tr_${compactTs(new Date(now))}_${randomId(5)}`;
+  const savedAt = iso(now);
+  const { original, ...researcherNoPath } = researcher;
+  const receipt = {
+    schema_version: 'cr.ticket-receipt.v1',
+    kind: 'desk_gate',
+    pregate_version: PREGATE_VERSION,
+    receipt_id: rid,
+    ticket_id: null,
+    project_id: pid,
+    saved_at: savedAt,
+    as_of: savedAt,
+    model: null,
+    versions: { pregate: PREGATE_VERSION, sizing: sizing.version },
+    prompt_sha256: null,
+    packet: { path: receiptRel(pid, rid, 'packet.json'), sha256: packetSha, captured_at: packet.captured_at },
+    text: null,
+    block_sha256: null,
+    revision_of: null,
+    revision: null,
+    researcher: { report_id: researcher.report_id, verdict: researcher.verdict, grade: researcher.grade, analysis_at: researcher.analysis_at, original_sha256: original ? original.sha256 : null },
+    prosecution: null,
+    proposal: null,
+    desk: {
+      sizing,
+      gate: g,
+      proposal_type: g.proposal_type,
+      model_proposal_type: null,
+      suggested_risk_usd: g.suggested_risk_usd,
+      exit_basis: g.exit_basis,
+      exit_cost_500_usd_pct: at500 ? at500.cost_pct : null,
+      exit_cost_500_complete: at500 ? at500.cost_complete : null,
+      exit_cost_500_as_of: at500 ? at500.as_of : null,
+      exit_cost_2000_usd_pct: at2000 ? at2000.cost_pct : null,
+      exit_cost_2000_complete: at2000 ? at2000.cost_complete : null,
+      exits_missing: packet.exits_missing,
+      sell_tax: packet.sell_tax || null,
+    },
+    agent_disagreement: null,
+    sources: [],
+    validation: { errors: [] },
+  };
+  const out = runOp(ws, { type: 'ticket_desk_gate', summary: `Desk gate for ${pid}` }, (op) => {
+    const again = listReceipts(ws, pid).find((r) => !r.broken && r.kind === 'desk_gate' && r.researcher && r.researcher.report_id === researcher.report_id);
+    if (again) return { replay: again };
+    op.write(receipt.packet.path, packetText, { mode: 'create' });
+    op.writeJson(receiptRel(pid, rid), receipt, { mode: 'create' });
+    return { receipt_id: rid };
+  });
+  if (out.result && out.result.replay) return { status: 'unchanged', gate_closed: true, project_id: pid, receipt_id: out.result.replay.receipt_id, receipt: out.result.replay, verified: true, message: `The desk's gate on this report is already saved as ${out.result.replay.receipt_id}.` };
+  return {
+    status: 'gate_closed',
+    gate_closed: true,
+    project_id: pid,
+    receipt_id: rid,
+    receipt,
+    verified: out.verified,
+    files: out.files,
+    message: `The desk's gate is closed for ${project.name}: ${g.proposal_type}, no risk. ${g.reasons[0] || ''} No Prosecutor ran; the receipt ${rid} waits for Eric's review (pass force_prosecution: true to open one anyway).`,
+  };
 }
 
 function cancelTicket(ws, pid, tid, reason = null) {
@@ -781,6 +868,7 @@ function saveTicket(ws, { project_id: pid, ticket_id: tid, text, revision = null
 function receiptText(ws, pid, rid) {
   const r = readJson(ws.abs(receiptRel(pid, rid)), null);
   if (!r) throw new OpError('NOT_FOUND', `No ticket receipt ${rid} for ${pid}.`);
+  if (r.kind === 'desk_gate') throw new OpError('INVALID', `${rid} is the desk's gate, not a Prosecutor's ticket: it has no saved text.`);
   const text = verifiedFrozen(ws, r.text && r.text.path, r.text && r.text.sha256, `The saved text of ${rid}`);
   return { receipt_id: rid, saved_at: r.saved_at, sha256: r.text.sha256, chars: text.length, verified: true, text };
 }
@@ -806,6 +894,7 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
   const out = runOp(ws, { type: 'ticket_decision', summary: `PM ${action} on ${rid} for ${pid}` }, (op) => {
     const r = op.readJson(receiptRel(pid, rid), null);
     if (!r) throw new OpError('NOT_FOUND', `No ticket ${rid} for ${pid}.`);
+    if (r.kind === 'desk_gate' && !['pass', 'watch', 'undo'].includes(action)) throw new OpError('REFUSED', `This is the desk's gate, not a Prosecutor's ticket (${r.desk && r.desk.proposal_type || 'no proposal'}, no risk): ${action} does not apply. Confirm the pass or keep it on watch.`);
     const cur = op.readText(rel, '');
     const lines = cur.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
     const prior = reqId ? lines.find((l) => l.request_id === reqId) : null;
@@ -881,6 +970,7 @@ function journalDecision(ws, pid, d, undone) {
 // trigger when DefiLlama's latest complete 30-day total, fetched after the
 // ticket, is under its threshold. Unknown is unknown, never "holding".
 function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals = null } = {}) {
+  if (receipt.kind === 'desk_gate') return { version: INVALIDATION_VERSION, invalidated: false, checks: [], words: 'No invalidation trigger: the desk\'s gate, not a Prosecutor.' };
   const inv = receipt.proposal && receipt.proposal.invalidation_trigger;
   if (!inv) return { version: INVALIDATION_VERSION, invalidated: false, checks: [] };
   const checks = [];
@@ -943,7 +1033,11 @@ function view(ws, pid, { now = Date.now(), fundamentals = null } = {}) {
     const decision = decisionFor(decisions, current.receipt_id);
     const invalidation = invalidationOf(ws, project, current, { now, fundamentals });
     const d = current.desk || {};
+    const pr = current.proposal || {};
+    const gateOnly = current.kind === 'desk_gate';
     ticket = {
+      kind: gateOnly ? 'desk_gate' : 'prosecutor',
+      desk_gate: gateOnly,
       receipt_id: current.receipt_id,
       ticket_id: current.ticket_id,
       saved_at: current.saved_at,
@@ -952,10 +1046,10 @@ function view(ws, pid, { now = Date.now(), fundamentals = null } = {}) {
       model_proposal_type: d.model_proposal_type,
       capped: d.gate ? d.gate.capped : null,
       gate_reasons: d.gate ? d.gate.reasons : [],
-      non_consensus_thesis: current.proposal.non_consensus_thesis,
-      entry_zone: current.proposal.entry_zone,
-      upside_target: current.proposal.upside_target,
-      invalidation_trigger: current.proposal.invalidation_trigger,
+      non_consensus_thesis: pr.non_consensus_thesis || null,
+      entry_zone: pr.entry_zone || null,
+      upside_target: pr.upside_target || null,
+      invalidation_trigger: pr.invalidation_trigger || null,
       exit_basis: d.exit_basis || 'measured',
       exit_cost_500_usd_pct: d.exit_cost_500_usd_pct ?? null,
       exit_cost_500_complete: d.exit_cost_500_complete ?? null,
@@ -965,10 +1059,11 @@ function view(ws, pid, { now = Date.now(), fundamentals = null } = {}) {
       starter_risk_usd: d.sizing ? d.sizing.starter_risk_usd : SIZING_DEFAULTS.starter_risk_usd,
       pm_approved_risk_usd: decision ? decision.pm_approved_risk_usd : null,
       decision: decision ? { decision_id: decision.decision_id, action: decision.action, at: decision.decided_at, note: decision.note, archive: decision.archive || null } : null,
-      prosecution: { verdict: current.prosecution.verdict, conviction_score: current.prosecution.conviction_score, fatal_flaws: current.prosecution.fatal_flaws, tests: current.prosecution.tests },
-      agent_disagreement: current.agent_disagreement,
+      prosecution: current.prosecution ? { verdict: current.prosecution.verdict, conviction_score: current.prosecution.conviction_score, fatal_flaws: current.prosecution.fatal_flaws, tests: current.prosecution.tests } : null,
+      agent_disagreement: current.agent_disagreement || null,
       invalidation,
       researcher_report_id: current.researcher.report_id,
+      researcher: { report_id: current.researcher.report_id, grade: gateGrade(current.researcher.grade), grade_display: current.researcher.grade ? current.researcher.grade.display : null, verdict: current.researcher.verdict },
       superseded_by_report: researcher && researcher.report_id !== current.researcher.report_id ? researcher.report_id : null,
       format_notes: current.validation ? current.validation.errors : [],
     };
@@ -1027,6 +1122,10 @@ function nextStep(ws, pid, { now = Date.now() } = {}) {
   const open = openTicket(ws, pid);
   if (open) return { ...base, step: 'ticket', ticket_id: open.ticket_id, state: open.job.state, report_id: open.basis.researcher.report_id, why: `Ticket ${open.ticket_id} is open: write the Prosecutor's ticket (Agent 2).` };
   const v = view(ws, pid, { now });
+  if (!v.ticket || v.ticket.researcher_report_id !== r.report_id) {
+    const why = pregateReason(r, heldOf(ws, pid, now), sizingOf(ws));
+    if (why) return { ...base, step: 'gate_closed', ticket_id: null, report_id: r.report_id, reasons: [why], why: `The desk's gate is closed on Claude's current report ${r.report_id}: ${why} No Prosecutor runs; call start_ticket (tickets start) to save the desk's receipt.` };
+  }
   if (!v.ticket || v.ticket.researcher_report_id !== r.report_id) return { ...base, step: 'ticket', ticket_id: null, report_id: r.report_id, why: `No ticket on Claude's current report ${r.report_id}: open one (Agent 2).` };
   if (v.ticket.status === 'pending_pm_review') return { ...base, step: 'pm_review', receipt_id: v.ticket.receipt_id, why: 'The ticket waits for Eric\'s PM review. Nothing for an agent to do.' };
   return { ...base, step: 'done', receipt_id: v.ticket.receipt_id, status: v.ticket.status, why: `The ticket is ${v.ticket.status.replace(/_/g, ' ')}. Nothing for an agent to do until Claude's report changes.` };
@@ -1052,6 +1151,7 @@ module.exports = {
   FORMAT,
   SIZING_VERSION,
   INVALIDATION_VERSION,
+  PREGATE_VERSION,
   SIZING_DEFAULTS,
   TICKET_RE,
   RECEIPT_RE,
