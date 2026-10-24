@@ -388,7 +388,7 @@ const TOOLS = [
     name: 'autonomous_pilot_queue',
     title: 'The autonomous pilot: next step per project (Claude)',
     description: 'Read-only. For each project Eric put in the autonomous pilot (or the one named), the next step of the two-agent chain: "research" (Agent 1: Claude\'s investment research is missing, stale or open: use pending_research or start_research), "ticket" (Agent 2: call start_ticket), "pm_review" (the ticket waits for Eric; nothing to do) or "done". Do the steps in order, one project at a time.',
-    inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'Optional: one project (name, ticker or project ID), in the pilot or not.' } }, additionalProperties: false },
+    inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'Optional: one project (name, ticker or project ID), in the pilot or not.' }, candidates: { type: 'boolean', description: 'true: instead of the queue, list who could go in the pilot (held first, then by grade, with today\'s gate result). Opts nothing in.' } }, additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
@@ -1802,6 +1802,7 @@ const handlers = {
 
   autonomous_pilot_queue(ws, args) {
     const T = ticketsCore();
+    if (args.candidates === true) { const candidates = T.pilotCandidates(ws); return { status: candidates.length ? 'ok' : 'none', candidates, message: `${candidates.length} verified project${candidates.length === 1 ? '' : 's'} read; nothing was opted in or written. Eric chooses the pilot.` }; }
     const q = typeof args.project === 'string' ? args.project.trim().slice(0, 200) : '';
     const named = q ? projects.listProjects(ws).filter((p) => !p.broken && matches(p, q)) : null;
     if (named && !named.length) return { status: 'none_for_project', steps: [], message: `No project matches "${q}".` };

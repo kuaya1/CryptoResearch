@@ -183,11 +183,13 @@ test('invalidation is read on every read against the hourly prices; the stored t
     fs.appendFileSync(path.join(dir, `${at.slice(0, 7)}.jsonl`), `${JSON.stringify({ fetched_at: at, provider: 'coingecko', assets: [{ id: cg, price_usd: price, source_last_updated_at: at, fetched_at: at }] })}\n`);
   };
   const t0 = Date.parse(saved.receipt.saved_at);
+  obs(0.86, t0 + 1000);
   obs(0.85, t0 + 3600000);
-  let v = T.view(s.ws, s.pid, { now: t0 + 2 * 3600000 });
+  let v = T.view(s.ws, s.pid, { now: t0 + 2 * 3600000 - 1000 });
   assert.equal(v.ticket.status, 'pending_pm_review');
   assert.equal(v.ticket.invalidation.checks.find((c) => c.kind === 'price').status, 'holding');
   assert.equal(v.ticket.invalidation.checks.find((c) => c.kind === 'metric').status, 'not_bound', 'no DefiLlama binding: not checked, never "holding"');
+  obs(0.84, t0 + 2 * 3600000);
   obs(0.69, t0 + 3 * 3600000);
   const receiptFile = s.ws.abs(`projects/${s.pid}/tickets/receipts/${saved.receipt_id}.json`);
   const before = fs.readFileSync(receiptFile, 'utf8');
@@ -383,4 +385,123 @@ test('missing exit quotes are named in the packet, the receipt and the view, wit
   const saved = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) });
   assert.deepEqual(saved.receipt.desk.exits_missing.map((m) => m.size_usd), [500, 2000]);
   assert.deepEqual(T.view(s.ws, s.pid).ticket.exits_missing.map((m) => m.size_usd), [500, 2000]);
+});
+
+test('pilot candidates: held first, then by grade, no report last; the gate with no proposal; nothing written, nothing opted in', (t) => {
+  const s = withReport(t);
+  const projects = require('../core/projects');
+  const bare = projects.addProject(s.ws, { name: 'Bare Example (FICTIONAL)', symbol: 'BARE', official_website: 'https://bare-fictional.test', coingecko_id: 'bare-example-fictional', assets: [{ chain: 'other-chain', contract_address: 'FICTIONAL-CONTRACT-BARE' }], evidence: [{ url: 'https://bare-fictional.test', note: 'fictional' }], sector_profile: 'payfi-credit@1' }).project_id;
+  const tree = hashTree(s.root);
+  const rows = T.pilotCandidates(s.ws);
+  assert.deepEqual(hashTree(s.root), tree, 'reading writes nothing');
+  const ids = rows.map((r) => r.project_id);
+  assert.ok(ids.includes(s.pid));
+  // A verified project is listed only when its identity is verified.
+  const withR = rows.find((r) => r.project_id === s.pid);
+  const without = rows.find((r) => r.project_id === bare);
+  assert.equal(without.grade, null);
+  assert.equal(without.report_id, null);
+  assert.ok(ids.indexOf(s.pid) < ids.indexOf(bare), 'a project without a report comes after one with a grade');
+  assert.equal(withR.in_pilot, false);
+  assert.equal(withR.gate.risk_allowed, false, 'no exit reading, so no new risk');
+  assert.equal(withR.exit_reading.present, false);
+  assert.equal(withR.exit_reading.size_usd, 500);
+  assert.ok(withR.report_id);
+  assert.ok(withR.report_age_days === null || withR.report_age_days >= 0);
+  assert.ok('report_prompt_version' in withR);
+  assert.equal(T.pilotQueue(s.ws).length, 0, 'nothing was opted into the pilot');
+});
+
+test('pilot candidates: a held project comes before a better-graded one', (t) => {
+  const s = withReport(t);
+  const projects = require('../core/projects');
+  const other = projects.addProject(s.ws, { name: 'Other Example (FICTIONAL)', symbol: 'OTHR', official_website: 'https://othr-fictional.test', coingecko_id: 'other-example-fictional', assets: [{ chain: 'other-chain', contract_address: 'FICTIONAL-CONTRACT-OTHR' }], evidence: [{ url: 'https://othr-fictional.test', note: 'fictional' }], sector_profile: 'payfi-credit@1' }).project_id;
+  const portfolio = require('../core/portfolio');
+  const real = portfolio.computePortfolio;
+  portfolio.computePortfolio = () => ({ positions: [{ closed: false, project_id: other }] });
+  t.after(() => { portfolio.computePortfolio = real; });
+  const rows = T.pilotCandidates(s.ws);
+  assert.equal(rows[0].project_id, other);
+  assert.equal(rows[0].held, true);
+  assert.ok(rows[0].gate.allowed_types.includes('TRIM_EXIT'));
+  assert.equal(rows.find((r) => r.project_id === s.pid).held, false);
+});
+
+// Invalidation coverage (cr-ticket-invalidation@2).
+function coverageSetup(t) {
+  const s = withReport(t);
+  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
+  withExit(s.ws, s.pid, tk.ticket_id, 1.5);
+  const saved = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk.ticket_id)) });
+  const t0 = Date.parse(saved.receipt.saved_at);
+  const obs = (price, atMs) => {
+    const at = new Date(atMs).toISOString();
+    const dir = s.ws.abs('market-data/observations');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, `${at.slice(0, 7)}.jsonl`), `${JSON.stringify({ fetched_at: at, provider: 'coingecko', assets: [{ id: 'example-payfi-fictional', price_usd: price, source_last_updated_at: at, fetched_at: at }] })}\n`);
+  };
+  const price = (now) => T.view(s.ws, s.pid, { now }).ticket.invalidation.checks.find((c) => c.kind === 'price');
+  return { ...s, saved, t0, obs, price };
+}
+const H = 3600000;
+
+test('invalidation@2: a 12 h gap with the low inside reads unknown, not holding; full coverage reads holding', (t) => {
+  const c = coverageSetup(t);
+  assert.equal(c.saved.receipt.desk.invalidation_version, T.INVALIDATION_VERSION);
+  for (const h of [0.5, 1, 2, 3, 16, 17, 18, 19, 20]) c.obs(0.9, c.t0 + h * H);
+  const thin = c.price(c.t0 + 20.5 * H);
+  assert.equal(thin.status, 'unknown');
+  assert.ok(thin.coverage.coverage_pct < 90);
+  assert.equal(thin.coverage.gaps.length, 1);
+  assert.equal(thin.coverage.gaps[0].hours, 13);
+  assert.match(thin.words, /gaps over 6 h/);
+  const v = T.view(c.ws, c.pid, { now: c.t0 + 20.5 * H });
+  assert.equal(v.ticket.invalidation.invalidated, false);
+  assert.equal(v.ticket.status, 'pending_pm_review');
+  for (const h of [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]) c.obs(0.9, c.t0 + h * H);
+  const full = c.price(c.t0 + 20.5 * H);
+  assert.equal(full.status, 'holding');
+  assert.equal(full.coverage.coverage_pct, 100);
+  assert.deepEqual(full.coverage.gaps, []);
+});
+
+test('invalidation@2: a reading at or below the threshold still triggers inside a gap; the threshold is Eric\'s setting', (t) => {
+  const c = coverageSetup(t);
+  c.obs(0.69, c.t0 + 2 * H);
+  assert.equal(c.price(c.t0 + 20 * H).status, 'triggered');
+  const d = coverageSetup(t);
+  d.obs(0.9, d.t0 + 1 * H);
+  d.obs(0.9, d.t0 + 2 * H);
+  assert.equal(d.price(d.t0 + 4 * H).status, 'unknown', '2 of 4 hours is under 90%');
+  d.ws.settings = { ...d.ws.settings, tickets: { invalidation: { min_coverage_pct: 40 } } };
+  assert.equal(d.price(d.t0 + 4 * H).status, 'holding');
+});
+
+test('invalidation@2: a superseded or stale basis is said and the status is unchanged; an @1 receipt reads as before', (t) => {
+  const c = coverageSetup(t);
+  for (let h = 1; h <= 3; h++) c.obs(0.9, c.t0 + h * H);
+  const fresh = T.view(c.ws, c.pid, { now: c.t0 + 3.5 * H });
+  assert.equal(fresh.ticket.invalidation.basis_stale, undefined);
+  const stale = T.view(c.ws, c.pid, { now: c.t0 + 400 * 86400000 });
+  assert.match(stale.ticket.invalidation.basis_stale.why, /days old/);
+  assert.notEqual(stale.ticket.status, undefined);
+  // The same receipt without a version is read under @1: one reading, no coverage rule.
+  const project = require('../core/projects').getProject(c.ws, c.pid);
+  const receipt = JSON.parse(JSON.stringify(c.saved.receipt));
+  delete receipt.desk.invalidation_version;
+  const old = T.invalidationOf(c.ws, project, receipt, { now: c.t0 + 400 * 86400000 });
+  assert.equal(old.version, T.INVALIDATION_V1);
+  assert.equal(old.basis_stale, undefined);
+  assert.equal(old.checks.find((x) => x.kind === 'price').coverage, undefined);
+  assert.equal(old.checks.find((x) => x.kind === 'price').status, 'holding');
+});
+
+test('settings: tickets.invalidation.min_coverage_pct is bounded by the server', () => {
+  const { validateSettingsPatch } = require('../server');
+  assert.deepEqual(validateSettingsPatch({ tickets: { invalidation: { min_coverage_pct: 80 } } }).tickets.invalidation, { min_coverage_pct: 80 });
+  const both = validateSettingsPatch({ tickets: { sizing: { standard_risk_usd: 400 }, invalidation: { min_coverage_pct: 75 } } });
+  assert.equal(both.tickets.sizing.standard_risk_usd, 400);
+  assert.equal(both.tickets.invalidation.min_coverage_pct, 75);
+  for (const v of [0, -1, 101, 'x']) assert.throws(() => validateSettingsPatch({ tickets: { invalidation: { min_coverage_pct: v } } }), (e) => e.code === 'INVALID');
+  assert.equal(T.sizingOf({ settings: {} }).version, T.SIZING_VERSION);
 });
