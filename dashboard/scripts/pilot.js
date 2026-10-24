@@ -61,12 +61,28 @@ function cli(args, { text = false } = {}) {
   }
 }
 
+// The Claude Code executable, found without a shell (a shell option is Node's
+// DEP0190 warning). Elsewhere `claude` on PATH; on Windows the real claude.exe,
+// from PATH or its usual install folders (a .cmd shim needs a shell).
+function resolveClaude({ platform = process.platform, env = process.env, exists = fs.existsSync } = {}) {
+  if (platform !== 'win32') return 'claude';
+  const win = path.win32;
+  const dirs = String(env.PATH || env.Path || '').split(';').filter(Boolean);
+  const home = env.USERPROFILE || '';
+  const known = [home && win.join(home, '.local', 'bin'), env.LOCALAPPDATA && win.join(env.LOCALAPPDATA, 'Programs', 'claude'), env.LOCALAPPDATA && win.join(env.LOCALAPPDATA, 'AnthropicClaude')].filter(Boolean);
+  for (const d of [...dirs, ...known]) {
+    const f = win.join(d, 'claude.exe');
+    if (exists(f)) return f;
+  }
+  throw new Error('claude.exe was not found on PATH or in its usual install folders. Install Claude Code, or add its folder to PATH.');
+}
+
 // One `claude -p` session: the prompt on stdin (a frozen prompt is far longer
 // than a Windows command line), only the tools named, the answer as text.
 function claude(prompt, { tools, model, timeoutMin }) {
   const args = ['-p', '--output-format', 'text', '--allowedTools', tools.join(',')];
   if (model) args.push('--model', model);
-  const r = spawnSync('claude', args, { cwd: os.tmpdir(), input: prompt, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: timeoutMin * 60000, shell: process.platform === 'win32' });
+  const r = spawnSync(resolveClaude(), args, { cwd: os.tmpdir(), input: prompt, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: timeoutMin * 60000 });
   if (r.error) throw new Error(`claude -p could not run: ${r.error.message}`);
   if (r.status !== 0) throw new Error(`claude -p stopped (exit ${r.status}): ${(r.stderr || '').trim().slice(0, 600)}`);
   return r.stdout;
@@ -148,9 +164,13 @@ function main() {
   else throw new Error('--desk is local or online.');
 }
 
-try {
-  main();
-} catch (err) {
-  process.stderr.write(`pilot: ${err.message}\n`);
-  process.exitCode = 1;
+module.exports = { resolveClaude };
+
+if (require.main === module) {
+  try {
+    main();
+  } catch (err) {
+    process.stderr.write(`pilot: ${err.message}\n`);
+    process.exitCode = 1;
+  }
 }
