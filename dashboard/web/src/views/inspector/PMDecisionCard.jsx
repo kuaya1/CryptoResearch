@@ -35,6 +35,9 @@ function prosecutorWords(q, fatal) {
 }
 
 function exitText(t) {
+  // A native L1 coin of the size the rules name passes without a DEX quote:
+  // said as its basis, never as a measured cost.
+  if (t.exit_basis === 'native_l1_liquid') return { text: 'Native L1', tone: 'is-ok', title: 'The chain\'s own coin above the market-cap threshold in your sizing rules: no DEX quote is needed' };
   if (t.exit_cost_500_usd_pct === null || t.exit_cost_500_usd_pct === undefined) return { text: 'No reading', tone: 'is-unknown' };
   const v = `${t.exit_cost_500_complete ? '' : '≥ '}${t.exit_cost_500_usd_pct}%`;
   return { text: v, tone: t.exit_cost_500_usd_pct > 5 ? 'is-bad' : t.exit_cost_500_complete ? 'is-ok' : 'is-unknown' };
@@ -133,7 +136,7 @@ export function PMDecisionCard({ p }) {
         </div>
         <div className="iv-rc">
           <p className="iv-rc-k">Exit @ $500</p>
-          <p className={`iv-rc-v ${ex.tone}`} title={t.exit_cost_500_complete === false ? 'A lower bound: part of the cost is unknown' : 'The desk\'s own exit reading'}>{ex.text}</p>
+          <p className={`iv-rc-v ${ex.tone}`} title={ex.title || (t.exit_cost_500_complete === false ? 'A lower bound: part of the cost is unknown' : 'The desk\'s own exit reading')}>{ex.text}</p>
           <p className="iv-rc-s">5% limit</p>
         </div>
       </div>

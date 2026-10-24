@@ -281,3 +281,32 @@ test('the pilot queue names whether a project named outright is in the pilot', a
   T.setPilot(s.ws, s.pid, true);
   assert.match(await ask(), /pilot on/);
 });
+
+test('native L1 exemption (cr-ticket-sizing@2): the chain\'s own coin at $10B+ passes the exit check without a DEX quote; a smaller coin, a token, or a ticket frozen under @1 does not', (t) => {
+  const s = T.sizingOf({ settings: {} });
+  assert.equal(s.version, 'cr-ticket-sizing@2');
+  assert.equal(s.native_l1_min_market_cap_usd, 10e9);
+  const basis = (native, cap) => ({ researcher: { grade: { status: 'firm', value: 60 } }, held: true, exits: [], native: { native_chain: native, market_cap_usd: cap } });
+  const eth = T.gate(basis(true, 280e9), s, 'ACCUMULATE');
+  assert.equal(eth.exit_basis, 'native_l1_liquid');
+  assert.equal(eth.suggested_risk_usd, 500);
+  const small = T.gate(basis(true, 2e9), s, 'ACCUMULATE');
+  assert.equal(small.exit_basis, 'measured');
+  assert.equal(small.suggested_risk_usd, 0);
+  assert.equal(T.gate(basis(false, 280e9), s, 'ACCUMULATE').suggested_risk_usd, 0, 'a token always needs a measured exit');
+  assert.equal(T.gate({ ...basis(true, 280e9), native: undefined }, s, 'ACCUMULATE').suggested_risk_usd, 0, 'no native record (an @1 basis) is no exemption');
+  const v1 = { ...s, version: 'cr-ticket-sizing@1' };
+  delete v1.native_l1_min_market_cap_usd;
+  assert.equal(T.gate(basis(true, 280e9), v1, 'ACCUMULATE').suggested_risk_usd, 0, 'a ticket frozen under @1 keeps its rules');
+  assert.equal(T.gate(basis(true, 280e9), v1, 'ACCUMULATE').version, 'cr-ticket-sizing@1');
+  const lowGrade = T.gate({ ...basis(true, 280e9), researcher: { grade: { status: 'firm', value: 30 } } }, s, 'ACCUMULATE');
+  assert.equal(lowGrade.suggested_risk_usd, 0, 'the exemption covers the exit only, never the grade floors');
+});
+
+test('a new ticket freezes whether the coin is native and its market cap, and the prompt states the exemption', (t) => {
+  const s = withReport(t);
+  const tk = T.createTicket(s.ws, { project_id: s.pid }).ticket;
+  assert.deepEqual(tk.basis.native, { native_chain: false, market_cap_usd: null });
+  assert.equal(tk.sizing.version, 'cr-ticket-sizing@2');
+  assert.match(T.promptFor(s.ws, tk).text, /native L1 coin/);
+});
