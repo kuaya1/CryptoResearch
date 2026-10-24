@@ -130,7 +130,11 @@ Live tickets (2026-10-24), both $0 and waiting for Eric: OLAS `tr_2026-10-24T175
 
 ## Autonomous Build Backlog
 
-For a `/loop` or scheduled Claude Code session (e.g. the hourly cloud routine): take up to **two** unchecked items per session, in order, following `CLAUDE.md` (edit, run `node dashboard/cli.js test`, rebuild the bundle after UI edits). Build item A and run the tests; build item B and run the tests again across both changes; check both off here and report. Both go on one branch and one pull request for Eric (e.g. `claude/backlog-batch-items-1-and-2`). If A's tests fail, fix A or stop and report; never start B on a red suite. If only one buildable item is left, or the next is marked *(Eric)*, take the one. A scheduled routine never pushes to `main` and never force-pushes. Items marked *(Eric)* need his decision first: ask, don't build.
+**Each cloud routine or scheduled run must take up to 2 unchecked backlog items at a time, implement and test them together, and bundle them into a single combined feature branch and PR.**
+
+For a `/loop` or scheduled Claude Code session (e.g. the hourly cloud routine): take the next two buildable items in order (unchecked, not marked *(Eric)*, not already on an open `claude/backlog-*` branch), following `CLAUDE.md` (edit, run `node dashboard/cli.js test`, rebuild the bundle after UI edits). Build item A and run the tests; build item B and run the tests again across both changes; check both off here and report. Both go on one branch and one pull request for Eric (`claude/backlog-batch-items-<a>-and-<b>`). If A's tests fail, fix A or stop and report; never start B on a red suite. If only one buildable item is left, take the one. A scheduled routine never pushes to `main` and never force-pushes. Items marked *(Eric)* need his decision first: ask, don't build.
+
+Built and waiting for Eric's merge (2026-10-24): items 1–4 on `claude/backlog-native-l1`, `claude/backlog-ticket-sizing`, `claude/backlog-pm-journal`, `claude/backlog-missing-exit-quotes`. Next batch: items 5 and 6.
 
 - [x] Phase 1 tickets, connector tools, PM Decision Card, under-40 filter (f715a3e, live 2026-10-24)
 - [x] Sub-agents `forensic-researcher`, `junior-trader-prosecutor` and `/pilot-run`
@@ -140,7 +144,7 @@ For a `/loop` or scheduled Claude Code session (e.g. the hourly cloud routine): 
 - [ ] **3. PM decisions in the journal.** Each `decide()` action (`approve`, `halve`, `veto`, `pass`, `watch`, `trim`, and `undo`) also writes a structured journal entry (`notes.js`, `journal.v1.schema.json`; type decision, linked receipt ID, approved risk) so it shows in Notes. `decisions.jsonl` stays the source of truth; a journal failure never loses the decision. Tests.
 - [ ] **4. Missing exit quotes, in words.** The packet records which sizes ($500, $2,000) have no current reading and why; the PM Decision Card lists them with a link to `#/project/<id>/forensics?tab=exits` (or the tab's real address) to approve quotes. Tests for the packet field.
 - [ ] **5. Fixed-size quote before sizing.** When `createTicket` finds no $500 reading on a verified, quotable token, ask for one fixed-size quote first (`forensic-monitor.js` `quoteFixedToken`: the existing adapter, gates, budget, hold and one request ID; never a wallet or swap). Async, so it belongs to the route and CLI, not the pure create; a failed or refused quote falls back to $0 with the reason. Tests with a stubbed network.
-- [ ] Pilot runner: drop `shell: true` in `dashboard/scripts/pilot.js` (Node DEP0190 warning); resolve `claude.exe` on Windows instead
+- [ ] **6. Pilot runner:** drop `shell: true` in `dashboard/scripts/pilot.js` (Node DEP0190 warning); resolve `claude.exe` on Windows instead
 - [ ] *(Eric)* Bind OLAS's DefiLlama entity so the fundamental invalidation trigger is checked
 - [ ] *(Eric)* ChatGPT as a second Prosecutor (`cr-ticket-challenge@1`, its own receipt, never averaged)
 - [ ] *(Eric)* Put more projects in the pilot; a scheduled `/pilot-run` cadence
