@@ -1037,6 +1037,61 @@ function pilotQueue(ws, { project = null, now = Date.now() } = {}) {
   return list.map((p) => nextStep(ws, p.project_id, { now }));
 }
 
+// Who could go in the pilot, read-only. Held projects first, then verified,
+// active projects by the desk's calculated grade of Claude's current eligible
+// report (a range by its low end; withheld and no report last). Each row gives
+// the gate's result today with no proposal, whether an exit reading exists at
+// the sizing's exit size, the report's age and prompt version, and whether the
+// project is already in the pilot. Writes nothing and opts nothing in.
+function pilotCandidates(ws, { now = Date.now() } = {}) {
+  const sizing = sizingOf(ws);
+  const rows = [];
+  for (const p of require('./projects').listProjects(ws)) {
+    if (p.broken || p.status === 'archived') continue;
+    const project = require('./projects').getProject(ws, p.project_id);
+    if (!project.identity || project.identity.status !== 'verified') continue;
+    const pid = p.project_id;
+    const researcher = researcherOf(ws, pid);
+    const held = heldOf(ws, pid, now) === true;
+    const exits = exitsOf(ws, pid, [sizing.exit_size_usd], now);
+    const market = marketOf(ws, project);
+    const basis = {
+      researcher: researcher || { grade: null },
+      held,
+      exits,
+      market,
+      native: { native_chain: project.identity.native_chain === true, market_cap_usd: isNum(market.market_cap_usd) ? market.market_cap_usd : null },
+    };
+    const g = gate(basis, sizing);
+    const grade = researcher ? gateGrade(researcher.grade) : null;
+    let promptVersion = null;
+    if (researcher) {
+      try {
+        const r = require('./compare').latestByProvider(require('./reports').loadReports(ws, pid)).claude;
+        promptVersion = (r && r.assessment && r.assessment.prompt_version) || null;
+      } catch (_) { /* left unknown */ }
+    }
+    const ageDays = researcher && researcher.analysis_at && Number.isFinite(Date.parse(researcher.analysis_at)) ? round((now - Date.parse(researcher.analysis_at)) / 86400000, 1) : null;
+    const native = g.exit_basis === 'native_l1_liquid';
+    rows.push({
+      project_id: pid,
+      name: project.name,
+      held,
+      grade,
+      grade_display: researcher && researcher.grade ? researcher.grade.display || researcher.grade.status : null,
+      report_id: researcher ? researcher.report_id : null,
+      report_age_days: ageDays,
+      report_prompt_version: promptVersion,
+      gate: { risk_allowed: g.risk_allowed, allowed_types: g.allowed_types, suggested_risk_usd: g.suggested_risk_usd, exit_basis: g.exit_basis, reasons: g.reasons },
+      exit_reading: { size_usd: sizing.exit_size_usd, present: native ? null : Boolean(exits[0] && isNum(exits[0].cost_pct)), cost_pct: exits[0] ? exits[0].cost_pct : null, note: native ? 'Native L1: no DEX quote is needed.' : exits[0] ? exits[0].note || null : null },
+      in_pilot: Boolean(readProfile(ws, pid).pilot),
+    });
+  }
+  const rank = (r) => (r.grade === null ? -Infinity : r.grade);
+  rows.sort((a, b) => (a.held === b.held ? 0 : a.held ? -1 : 1) || (rank(b) === rank(a) ? 0 : rank(b) > rank(a) ? 1 : -1) || a.project_id.localeCompare(b.project_id));
+  return rows;
+}
+
 function pendingFor(ws) {
   const out = [];
   for (const p of require('./projects').listProjects(ws)) {
@@ -1080,5 +1135,6 @@ module.exports = {
   setPilot,
   nextStep,
   pilotQueue,
+  pilotCandidates,
   pendingFor,
 };

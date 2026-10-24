@@ -384,3 +384,43 @@ test('missing exit quotes are named in the packet, the receipt and the view, wit
   assert.deepEqual(saved.receipt.desk.exits_missing.map((m) => m.size_usd), [500, 2000]);
   assert.deepEqual(T.view(s.ws, s.pid).ticket.exits_missing.map((m) => m.size_usd), [500, 2000]);
 });
+
+test('pilot candidates: held first, then by grade, no report last; the gate with no proposal; nothing written, nothing opted in', (t) => {
+  const s = withReport(t);
+  const projects = require('../core/projects');
+  const bare = projects.addProject(s.ws, { name: 'Bare Example (FICTIONAL)', symbol: 'BARE', official_website: 'https://bare-fictional.test', coingecko_id: 'bare-example-fictional', assets: [{ chain: 'other-chain', contract_address: 'FICTIONAL-CONTRACT-BARE' }], evidence: [{ url: 'https://bare-fictional.test', note: 'fictional' }], sector_profile: 'payfi-credit@1' }).project_id;
+  const tree = hashTree(s.root);
+  const rows = T.pilotCandidates(s.ws);
+  assert.deepEqual(hashTree(s.root), tree, 'reading writes nothing');
+  const ids = rows.map((r) => r.project_id);
+  assert.ok(ids.includes(s.pid));
+  // A verified project is listed only when its identity is verified.
+  const withR = rows.find((r) => r.project_id === s.pid);
+  const without = rows.find((r) => r.project_id === bare);
+  assert.equal(without.grade, null);
+  assert.equal(without.report_id, null);
+  assert.ok(ids.indexOf(s.pid) < ids.indexOf(bare), 'a project without a report comes after one with a grade');
+  assert.equal(withR.in_pilot, false);
+  assert.equal(withR.gate.risk_allowed, false, 'no exit reading, so no new risk');
+  assert.equal(withR.exit_reading.present, false);
+  assert.equal(withR.exit_reading.size_usd, 500);
+  assert.ok(withR.report_id);
+  assert.ok(withR.report_age_days === null || withR.report_age_days >= 0);
+  assert.ok('report_prompt_version' in withR);
+  assert.equal(T.pilotQueue(s.ws).length, 0, 'nothing was opted into the pilot');
+});
+
+test('pilot candidates: a held project comes before a better-graded one', (t) => {
+  const s = withReport(t);
+  const projects = require('../core/projects');
+  const other = projects.addProject(s.ws, { name: 'Other Example (FICTIONAL)', symbol: 'OTHR', official_website: 'https://othr-fictional.test', coingecko_id: 'other-example-fictional', assets: [{ chain: 'other-chain', contract_address: 'FICTIONAL-CONTRACT-OTHR' }], evidence: [{ url: 'https://othr-fictional.test', note: 'fictional' }], sector_profile: 'payfi-credit@1' }).project_id;
+  const portfolio = require('../core/portfolio');
+  const real = portfolio.computePortfolio;
+  portfolio.computePortfolio = () => ({ positions: [{ closed: false, project_id: other }] });
+  t.after(() => { portfolio.computePortfolio = real; });
+  const rows = T.pilotCandidates(s.ws);
+  assert.equal(rows[0].project_id, other);
+  assert.equal(rows[0].held, true);
+  assert.ok(rows[0].gate.allowed_types.includes('TRIM_EXIT'));
+  assert.equal(rows.find((r) => r.project_id === s.pid).held, false);
+});

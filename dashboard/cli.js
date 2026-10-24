@@ -90,6 +90,7 @@ Forensics & Resilience (no paid model call; Claude investigates, ChatGPT may cha
   forensics case-verify --file FILE      checks a case package offline and replays its calculation (no network)
 
 PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you decide; no order is ever placed)
+  tickets candidates [--json]           who could go in the pilot: held first, then by grade, with today's gate (writes nothing)
   tickets queue [<id>]                   the autonomous pilot's next step per project (research, ticket, your review)
   tickets pilot <id> --on|--off          put a project in the autonomous pilot (your opt-in)
   tickets start <id> [--refresh] [--restart] [--assistant]
@@ -841,6 +842,7 @@ async function run(argv) {
       const pid = rest[0];
       const tid = rest[1];
       if (sub === 'view' || sub === 'status') return tk.view(ws, need(pid, `tickets ${sub} <project>`));
+      if (sub === 'candidates') return { candidates: tk.pilotCandidates(ws) };
       if (sub === 'queue') return { steps: tk.pilotQueue(ws, { project: pid || null }), pending: tk.pendingFor(ws) };
       if (sub === 'start') {
         const exit_quote = await tk.prepareExitQuote(ws, need(pid, 'tickets start <project> [--refresh] [--restart]')).catch(() => null);
@@ -868,7 +870,7 @@ async function run(argv) {
         return { status: r.noop ? 'unchanged' : 'saved', pilot: !flags.off, verified: r.verified, ...(await afterWrite(ws, pid)) };
       }
       if (sub === 'cancel') return tk.cancelTicket(ws, need(pid, 'project'), need(tid, 'ticket_id'), one(flags.reason) || null);
-      throw Object.assign(new Error('tickets view|queue|start|prompt|import|decide|pilot|cancel (see help)'), { code: 'USAGE' });
+      throw Object.assign(new Error('tickets view|queue|candidates|start|prompt|import|decide|pilot|cancel (see help)'), { code: 'USAGE' });
     }
     case 'job': {
       const jobs = require('./core/jobs');
