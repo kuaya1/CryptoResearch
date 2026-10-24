@@ -89,6 +89,19 @@ Forensics & Resilience (no paid model call; Claude investigates, ChatGPT may cha
                                          one replayable exit calculation, what is missing); reads only
   forensics case-verify --file FILE      checks a case package offline and replays its calculation (no network)
 
+PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you decide; no order is ever placed)
+  tickets queue [<id>]                   the autonomous pilot's next step per project (research, ticket, your review)
+  tickets pilot <id> --on|--off          put a project in the autonomous pilot (your opt-in)
+  tickets start <id> [--refresh] [--restart] [--assistant]
+                                         open (or resume) the Prosecutor's ticket on Claude's current report
+  tickets prompt <id> <ticket_id>        print the frozen Prosecutor prompt (cr-ticket-prompt@1)
+  tickets import <id> <ticket_id> --text-file FILE [--revision-note TEXT]
+  tickets view <id>                      the ticket in force: status, desk sizing, invalidation, history (writes nothing)
+  tickets decide <id> <receipt_id> --action approve|halve|veto|undo [--note TEXT]
+  tickets cancel <id> <ticket_id> [--reason TEXT]
+  npm run pilot -- --project=<id> [--desk local|online] [--dry-run]
+                                         the whole chain with Claude Code (claude -p) on your subscription
+
 Your notes and calendar
   note conviction <project> --text TEXT | --text-file FILE [--conviction low|medium|high]
   journal add <project> --type decision --decision watch --text TEXT [--reason R]... [--conviction medium]
@@ -822,6 +835,39 @@ async function run(argv) {
         return require('./core/forensic-case').verifyCase(JSON.parse(fs.readFileSync(f, 'utf8')));
       }
       throw Object.assign(new Error('forensics view|start|prompt|import|challenge|cancel|monitor|run|correct|case|case-verify (see help)'), { code: 'USAGE' });
+    }
+    case 'tickets': {
+      const tk = require('./core/tickets');
+      const pid = rest[0];
+      const tid = rest[1];
+      if (sub === 'view' || sub === 'status') return tk.view(ws, need(pid, `tickets ${sub} <project>`));
+      if (sub === 'queue') return { steps: tk.pilotQueue(ws, { project: pid || null }), pending: tk.pendingFor(ws) };
+      if (sub === 'start') {
+        const r = tk.createTicket(ws, { project_id: need(pid, 'tickets start <project> [--refresh] [--restart]'), channel: one(flags.channel) || actor, assistant: Boolean(flags.assistant), mode: one(flags.mode) || 'cli', utterance: one(flags.utterance) || null, refresh: Boolean(flags.refresh), restart: Boolean(flags.restart) });
+        return { status: r.status, ticket_id: r.ticket_id || null, receipt_id: r.receipt_id || null, message: r.message, prompt_path: r.ticket ? r.ticket.prompt.path : null, ...(['created', 'resumed'].includes(r.status) ? await afterWrite(ws, pid) : {}) };
+      }
+      if (sub === 'prompt') {
+        const t = tk.loadTicket(ws, need(pid, 'tickets prompt <project> <ticket_id>'), need(tid, 'tickets prompt <project> <ticket_id>'));
+        if (!t) throw Object.assign(new Error(`No ticket ${tid}`), { code: 'NOT_FOUND' });
+        const p = tk.promptFor(ws, t);
+        if (!p.text) throw Object.assign(new Error(p.error), { code: 'INTEGRITY' });
+        return flags.json ? p : { _text: p.text };
+      }
+      if (sub === 'import') {
+        const text = need(readTextArg(flags), 'tickets import <project> <ticket_id> --text-file FILE [--revision-note TEXT]');
+        const r = tk.saveTicket(ws, { project_id: need(pid, 'project'), ticket_id: need(tid, 'ticket_id'), text, revision: one(flags.revision_note) ? { note: one(flags.revision_note) } : null, channel: one(flags.channel) || 'cli import' });
+        return { status: r.status, receipt_id: r.receipt_id, verified: r.verified, message: r.message, ...(r.status === 'saved' ? await afterWrite(ws, pid) : {}) };
+      }
+      if (sub === 'decide') {
+        const r = tk.decide(ws, need(pid, 'tickets decide <project> <receipt_id> --action approve|halve|veto|undo'), { receipt_id: need(tid, 'receipt_id'), action: need(one(flags.action), '--action approve|halve|veto|undo'), note: one(flags.note) || null, by: actor });
+        return { ...r.result, verified: r.verified, ...(await afterWrite(ws, pid)) };
+      }
+      if (sub === 'pilot') {
+        const r = tk.setPilot(ws, need(pid, 'tickets pilot <project> --on|--off'), !flags.off, { by: actor });
+        return { status: r.noop ? 'unchanged' : 'saved', pilot: !flags.off, verified: r.verified, ...(await afterWrite(ws, pid)) };
+      }
+      if (sub === 'cancel') return tk.cancelTicket(ws, need(pid, 'project'), need(tid, 'ticket_id'), one(flags.reason) || null);
+      throw Object.assign(new Error('tickets view|queue|start|prompt|import|decide|pilot|cancel (see help)'), { code: 'USAGE' });
     }
     case 'job': {
       const jobs = require('./core/jobs');

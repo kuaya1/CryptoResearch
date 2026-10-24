@@ -367,6 +367,16 @@ function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = 
         forensic = { audited: false, unavailable: true, error: err.message };
       }
     }
+    // The PM ticket (tickets.js summary): the inspector's PM Decision Card and
+    // the Review queue; null with no ticket record.
+    let ticket = null;
+    if (!light) {
+      try {
+        ticket = require('./tickets').summary(ws, p.project_id, { now, fundamentals });
+      } catch (err) {
+        ticket = { unavailable: true, error: err.message };
+      }
+    }
     const position = held.get(p.project_id) || null;
     const archived = p.status === 'archived';
 
@@ -546,6 +556,7 @@ function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = 
       fundamentals,
       screening,
       forensic,
+      ticket,
       created_at: p.created_at,
       updated_at: p.updated_at,
     });

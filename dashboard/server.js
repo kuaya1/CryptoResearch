@@ -1097,6 +1097,37 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     request_id: typeof body.request_id === 'string' ? body.request_id : null,
     by: 'dashboard',
   })));
+  // PM trade tickets (core/tickets.js). The read writes nothing; a decision
+  // records Eric's choice and places no order.
+  const tickets = require('./core/tickets');
+  const ticketId = (id) => {
+    if (!tickets.TICKET_RE.test(id)) throw new HttpError(400, 'Invalid ticket ID');
+    return id;
+  };
+  const ticketReceipt = (id) => {
+    if (!tickets.RECEIPT_RE.test(id)) throw new HttpError(400, 'Invalid ticket receipt ID');
+    return id;
+  };
+  route('GET', '/api/projects/([^/]+)/tickets', (m) => coherent(() => tickets.view(ws, pid(m[1]))));
+  route('GET', '/api/projects/([^/]+)/tickets/(tk_[^/]+)/prompt', (m) => {
+    const id = pid(m[1]);
+    const t = tickets.loadTicket(ws, id, ticketId(m[2]));
+    if (!t) throw new HttpError(404, 'No such ticket');
+    const p = tickets.promptFor(ws, t);
+    if (!p.text) throw new HttpError(409, p.error);
+    return { _raw: p.text, _type: 'text/plain; charset=utf-8' };
+  });
+  route('GET', '/api/projects/([^/]+)/tickets/receipts/([^/]+)/text', (m) => tickets.receiptText(ws, pid(m[1]), ticketReceipt(m[2])));
+  route('POST', '/api/projects/([^/]+)/tickets', (m, req, res, body) => once(body, () => after(tickets.createTicket(ws, { project_id: pid(m[1]), channel: 'dashboard', utterance: typeof body.utterance === 'string' ? body.utterance : null, refresh: body.refresh === true }))));
+  route('POST', '/api/projects/([^/]+)/tickets/(tk_[^/]+)/import', (m, req, res, body) => after(tickets.saveTicket(ws, { project_id: pid(m[1]), ticket_id: ticketId(m[2]), text: String(body.text || ''), revision: body.revision && typeof body.revision === 'object' ? body.revision : null, channel: 'dashboard import' })));
+  route('POST', '/api/projects/([^/]+)/tickets/decisions', (m, req, res, body) => after(tickets.decide(ws, pid(m[1]), {
+    receipt_id: ticketReceipt(String(body.receipt_id || '')),
+    action: String(body.action || ''),
+    note: typeof body.note === 'string' ? body.note : null,
+    request_id: typeof body.request_id === 'string' ? body.request_id : null,
+    by: 'dashboard',
+  })));
+  route('POST', '/api/projects/([^/]+)/tickets/pilot', (m, req, res, body) => after(tickets.setPilot(ws, pid(m[1]), body.on === true, { by: 'dashboard' })));
   // Exit quotes on every project in one click (forensics.js
   // approveAllExitQuotes): the plan first (a read), then Eric's approval with
   // the count he saw (`expect`); more to add than shown is a 409. The first

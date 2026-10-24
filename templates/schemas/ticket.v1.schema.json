@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cr.ticket.v1",
+  "title": "PM trade ticket (the Prosecutor's block, cr-ticket-prompt@1)",
+  "description": "What the Prosecutor (Agent 2, Claude) returns. The desk adds what no model may decide: the exit cost from its own readings, the suggested risk from Eric's sizing rules (cr-ticket-sizing@1), the status from his decisions and invalidation read against prices and DefiLlama (cr-ticket-invalidation@1). core/tickets.js normalizes and checks the block; this schema documents it.",
+  "type": "object",
+  "required": ["format", "ticket_id", "project_id", "prompt_version", "role", "model", "researcher_report_id", "researcher_report_sha256", "prosecution", "proposal"],
+  "properties": {
+    "format": { "const": "cr.ticket.v1" },
+    "ticket_id": { "type": "string", "pattern": "^tk_\\d{4}-\\d{2}-\\d{2}T\\d{6}Z_[a-z2-9]{5}$" },
+    "project_id": { "type": "string" },
+    "prompt_version": { "const": "cr-ticket-prompt@1" },
+    "role": { "const": "prosecutor" },
+    "model": { "const": "claude" },
+    "model_version": { "type": ["string", "null"] },
+    "as_of": { "type": ["string", "null"], "format": "date-time" },
+    "researcher_report_id": { "type": "string" },
+    "researcher_report_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "prosecution": {
+      "type": "object",
+      "required": ["verdict"],
+      "properties": {
+        "verdict": { "enum": ["thesis_survives", "thesis_damaged", "fatal_flaw"] },
+        "conviction_score": { "type": ["integer", "null"], "minimum": 0, "maximum": 100, "description": "The Prosecutor's own reading; never Agent 1's grade or an average with it." },
+        "tests": {
+          "type": "object",
+          "properties": {
+            "mercenary_emissions": { "$ref": "#/$defs/test" },
+            "tax_revenue": { "$ref": "#/$defs/test" },
+            "exit_slippage": { "$ref": "#/$defs/test" },
+            "unverified_claims": { "$ref": "#/$defs/test" }
+          }
+        },
+        "fatal_flaws": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["finding"],
+            "properties": {
+              "test": { "enum": ["mercenary_emissions", "tax_revenue", "exit_slippage", "unverified_claims", "other"] },
+              "severity": { "enum": ["fatal", "serious", "minor"] },
+              "finding": { "type": "string" },
+              "source_ids": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "strongest_bull_rebuttal": { "type": "string" }
+      }
+    },
+    "proposal": {
+      "type": "object",
+      "required": ["proposal_type", "non_consensus_thesis"],
+      "properties": {
+        "proposal_type": { "enum": ["ACCUMULATE", "LIMIT_TRAP", "TRIM_EXIT", "WATCH_ONLY", "HARD_PASS"] },
+        "non_consensus_thesis": { "type": "string", "description": "One sentence." },
+        "entry_zone": { "type": ["object", "null"], "properties": { "low_usd": { "type": ["number", "null"] }, "high_usd": { "type": ["number", "null"] }, "basis": { "type": "string" } } },
+        "upside_target": { "type": ["object", "null"], "properties": { "price_usd": { "type": ["number", "null"] }, "basis": { "type": "string" } } },
+        "invalidation_trigger": {
+          "type": "object",
+          "properties": {
+            "price_usd": { "type": ["number", "null"] },
+            "metric": { "type": ["object", "null"], "properties": { "key": { "enum": ["fees", "revenue", "holders_revenue"] }, "below_30d_usd": { "type": ["number", "null"] } } },
+            "statement": { "type": "string" }
+          }
+        }
+      }
+    },
+    "agent_disagreement_note": { "type": "string" },
+    "sources": {
+      "type": "array",
+      "items": { "type": "object", "properties": { "source_id": { "type": "string" }, "url": { "type": "string" }, "publisher": { "type": "string" }, "retrieved_at": { "type": "string" }, "excerpt": { "type": "string" } } }
+    }
+  },
+  "$defs": {
+    "test": {
+      "type": "object",
+      "properties": {
+        "result": { "enum": ["pass", "fail", "unknown"] },
+        "finding": { "type": "string" },
+        "source_ids": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

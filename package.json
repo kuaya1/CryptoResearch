@@ -8,7 +8,8 @@
     "doctor": "node dashboard/cli.js doctor",
     "start": "node server.js",
     "ui": "npm --prefix dashboard/web run dev",
-    "ui:build": "npm --prefix dashboard/web run build"
+    "ui:build": "npm --prefix dashboard/web run build",
+    "pilot": "node dashboard/scripts/pilot.js"
   },
   "engines": {
     "node": "24.x"

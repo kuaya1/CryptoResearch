@@ -122,3 +122,27 @@ test('upcoming: overdue, dated, invalidators, alerts, undated catalysts and past
   assert.equal(u.invalidators.length, 1);
   assert.equal(u.alerts.length, 1);
 });
+
+test('review queue: under 40 and not held is left out and counted; held stays; a pending PM ticket waits for Eric; the pilot takes Claude\'s waiting research', async () => {
+  const { rq } = await mods;
+  const graded = (v) => ({ providers: { claude: { report_id: 'r1', grade: { status: 'firm', value: v, display: String(v) } } } });
+  const index = {
+    today: '2026-10-24',
+    projects: [
+      row('low', { ...changed(2), ...graded(31) }),
+      row('lowheld', { ...changed(1), ...graded(31), held: true }),
+      row('mid', { ...changed(1), ...graded(61) }),
+      row('tkt', { ...graded(62), ticket: { pilot: true, status: 'pending_pm_review', proposal_type: 'ACCUMULATE' }, research: { providers: { claude: { state: 'unconfigured', provider: 'claude' } } } }),
+    ],
+    attention: [],
+  };
+  const q = rq.reviewQueue(index);
+  assert.deepEqual(q.flat.map((x) => x.pid).sort(), ['lowheld', 'mid', 'tkt']);
+  assert.equal(q.hidden_low, 1);
+  const tkt = q.flat.find((x) => x.pid === 'tkt');
+  assert.ok(tkt.reasons.some((r) => r.ticket && /PM ticket waiting/.test(r.words)));
+  assert.ok(!tkt.reasons.some((r) => /Claude research waiting/.test(r.words)), 'the pilot runs Claude, not Eric');
+  const all = rq.reviewQueue(index, null, { includeLow: true });
+  assert.ok(all.flat.some((x) => x.pid === 'low'));
+  assert.equal(all.hidden_low, 0);
+});

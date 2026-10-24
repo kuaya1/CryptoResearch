@@ -844,9 +844,24 @@ export function waitingJobs(p, index = null) {
 // D3, the one "Needs review" unit (Eric, 2026-10-17): projects. A project
 // counts once when anything needs you: changes since your last review, a
 // review of yours due or overdue, or research waiting for you.
-export function reviewReasons(p, index = null, agendaRow = null) {
+// Under 40 (the canonical grade, a range by its low end) and not held is
+// noise for the PM's queue (Eric, 2026-10-24): it is left out of the reasons,
+// and counted apart (lowGradeHidden) so the Review page can say how many and
+// show them; includeLow puts them back.
+export const LOW_GRADE_FLOOR = 40;
+export function lowGradeHidden(p, index = null) {
+  if (!p || p.broken || p.status === 'archived' || p.held) return false;
+  const g = canonicalGrade(p, index);
+  return (g.kind === 'grade' || g.kind === 'range') && typeof g.sort === 'number' && g.sort < LOW_GRADE_FLOOR;
+}
+
+export function reviewReasons(p, index = null, agendaRow = null, { includeLow = false } = {}) {
   if (!p || p.broken || p.status === 'archived') return [];
+  if (!includeLow && lowGradeHidden(p, index)) return [];
   const out = [];
+  // A PM ticket the Prosecutor saved waits for Eric's decision.
+  const t = p.ticket;
+  if (t && t.status === 'pending_pm_review') out.push({ kind: 'waiting', words: `PM ticket waiting for your decision (${String(t.proposal_type || '').replace(/_/g, ' ').toLowerCase()})`, ticket: true });
   const n = p.changes && p.changes.item_count;
   if (n > 0) out.push({ kind: 'changed', words: `${n} change${n === 1 ? '' : 's'} since ${p.changes.cursor_source === 'project created' ? 'added' : 'your last review'}` });
   const nr = p.next_review;
@@ -857,7 +872,8 @@ export function reviewReasons(p, index = null, agendaRow = null) {
   const ag = agendaRow && agendaRow.primary && agendaRow.primary.due && !agendaRow.primary.completed && !agendaRow.primary.snoozed ? agendaRow.primary : null;
   if (ag && !(ag.kind === 'owner_review' && out.some((r) => r.kind === 'due'))) out.push({ kind: 'due', words: ag.title, item: ag });
   else if (!agendaRow && f && f.to_review) out.push({ kind: 'due', words: `${f.to_review} forensic evidence change${f.to_review === 1 ? '' : 's'} to review` });
-  const mine = waitingJobs(p, index).filter((j) => j.key === 'waiting');
+  // In the autonomous pilot, Claude's research is run by the pilot, not by hand.
+  const mine = waitingJobs(p, index).filter((j) => j.key === 'waiting' && !(j.provider === 'claude' && t && t.pilot));
   if (mine.length) out.push({ kind: 'waiting', words: `${mine.map((j) => PROVIDER_LABELS[j.provider]).join(', ')} research waiting for you` });
   if (f && f.open_audit && f.open_audit.investigator === 'waiting') out.push({ kind: 'waiting', words: 'Forensic audit waiting for Claude' });
   const differ = ((index && index.attention) || []).find((a) => a.project_id === p.project_id && a.kind === 'disagreement');

@@ -7,7 +7,7 @@
 // the first group it qualifies for, with every reason it has named beside it,
 // so the groups add up to the Desk's "Needs review" count plus the imports.
 import { PROVIDER_LABELS, fmtDate } from './ui.js';
-import { reviewReasons } from './watchlist-model.js';
+import { reviewReasons, lowGradeHidden } from './watchlist-model.js';
 
 export const GROUPS = [
   ['changed', 'Changed since review'],
@@ -19,19 +19,24 @@ export const GROUPS = [
 
 // Each project's reasons (watchlist-model.js reviewReasons, the Desk's own
 // rule, with the agenda's due item), each named with its group.
-export function projectReasons(p, index, agendaRow = null) {
-  return reviewReasons(p, index, agendaRow).map((r) => ({ ...r, group: r.kind }));
+export function projectReasons(p, index, agendaRow = null, opts = {}) {
+  return reviewReasons(p, index, agendaRow, opts).map((r) => ({ ...r, group: r.kind }));
 }
 
 // The queue: { groups: [{ id, label, items: [{ pid, name, symbol, reasons, agenda }] }], imports: [...], total }.
-export function reviewQueue(index, agenda = null) {
+// Projects graded under 40 that Eric does not hold are left out unless
+// includeLow; hidden_low counts those that would have been in it.
+export function reviewQueue(index, agenda = null, { includeLow = false } = {}) {
   const rows = new Map(((agenda && agenda.rows) || []).map((r) => [r.project_id, r]));
   const order = GROUPS.map(([id]) => id);
   const byGroup = Object.fromEntries(order.map((id) => [id, []]));
+  let hiddenLow = 0;
   for (const p of (index.projects || [])) {
     if (!p || p.broken || p.status === 'archived') continue;
     const row = rows.get(p.project_id) || null;
-    const reasons = projectReasons(p, index, row);
+    const low = lowGradeHidden(p, index);
+    const reasons = projectReasons(p, index, row, { includeLow });
+    if (!includeLow && low && projectReasons(p, index, row, { includeLow: true }).length) hiddenLow += 1;
     if (!reasons.length) continue;
     const first = order.find((g) => reasons.some((r) => r.group === g));
     byGroup[first].push({ pid: p.project_id, name: p.name, symbol: p.symbol || null, reasons, agenda: row, changes: p.changes ? p.changes.item_count || 0 : 0, due: row && row.primary && row.primary.due ? row.primary.due_at || null : null });
@@ -47,7 +52,7 @@ export function reviewQueue(index, agenda = null) {
   ];
   const groups = GROUPS.map(([id, label]) => ({ id, label, items: id === 'imports' ? [] : byGroup[id], count: id === 'imports' ? imports.length : byGroup[id].length }));
   const flat = groups.flatMap((g) => g.items.map((x) => ({ ...x, group: g.id })));
-  return { groups, imports, flat, projects: flat.length, total: flat.length + imports.length };
+  return { groups, imports, flat, projects: flat.length, total: flat.length + imports.length, hidden_low: hiddenLow, include_low: includeLow };
 }
 
 // The calendar, as the Review page's Upcoming segment draws it (it was the

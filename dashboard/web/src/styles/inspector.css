@@ -164,6 +164,29 @@ html.has-drawer { overflow: hidden; }
 .iv-line-d { color: var(--text-2); }
 .iv-line .btn { flex: none; }
 .iv-all { margin-top: 8px; font-size: var(--fs-sm); }
+/* PM decision: the Prosecutor's ticket, sized by the desk, with Eric's three
+   decisions (PMDecisionCard.jsx). One tinted well, no box inside it. */
+.pm-card { display: flex; flex-direction: column; gap: 14px; padding: 18px 20px; border-radius: var(--r-well); background: var(--surface-sunken); }
+.pm-card .iv-h { margin: 0; }
+.pm-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pm-call { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.pm-type { margin: 0; font-size: var(--fs-head); font-weight: 700; line-height: 1.2; color: var(--text); }
+.pm-risk { margin: 0; font-size: var(--fs-head); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); }
+.pm-risk-s { font-size: var(--fs-md); font-weight: 500; color: var(--text-2); }
+.pm-thesis { margin: 0; font-size: var(--fs-ui); line-height: 1.6; color: var(--text); }
+.pm-alert { margin: 0; font-size: var(--fs-md); font-weight: 500; color: var(--neg); }
+.pm-grid .iv-rc-v { font-size: var(--fs-ui); }
+.pm-dis { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-md); line-height: 1.45; }
+.pm-dis-row { margin: 0; display: flex; gap: 10px; }
+.pm-dis-k { flex: none; width: 92px; color: var(--text-2); font-weight: 500; }
+.pm-dis-note { margin: 4px 0 0; color: var(--text); white-space: pre-wrap; }
+.pm-dis .btn-link { align-self: flex-start; font-size: var(--fs-sm); }
+.pm-note { margin: 0; font-size: var(--fs-sm); }
+.pm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.pm-decided { margin: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: var(--fs-md); font-weight: 500; }
+.pm-pilot { margin: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 10px; border-top: 1px solid var(--border); font-size: var(--fs-sm); color: var(--text-2); }
+.pm-pilot-k { font-weight: 500; color: var(--text); }
+.pm-pilot .btn-link { margin-left: auto; }
 /* 6. your note */
 .iv-note { margin: 0; }
 .insp-sec { margin-top: 20px; }

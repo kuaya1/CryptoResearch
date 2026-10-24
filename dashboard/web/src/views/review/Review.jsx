@@ -95,6 +95,12 @@ function QueueList({ d, q, sel, onPick }) {
           ) : <p className="rv-none">Nothing here</p>}
         </section>
       ))}
+      {q.hidden_low || q.include_low ? (
+        <p className="rv-low">
+          {q.include_low ? 'Showing projects graded under 40' : `${q.hidden_low} graded under 40 hidden (not held)`}
+          <button type="button" className="btn-link" data-key="rv-low" onClick={() => setQuery({ low: q.include_low ? null : '1' })}>{q.include_low ? 'Hide them' : 'Show'}</button>
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -403,7 +409,8 @@ export default function Review() {
   const phone = useMedia('(max-width: 767.98px)');
   const wide = useMedia('(min-width: 1280px)');
   const { a: agenda, error: agendaError } = useAgenda();
-  const q = useMemo(() => reviewQueue(d.index, agenda), [d.index, agenda]);
+  const includeLow = route.query.get('low') === '1';
+  const q = useMemo(() => reviewQueue(d.index, agenda, { includeLow }), [d.index, agenda, includeLow]);
   const ordered = useMemo(() => (group ? [...q.flat.filter((x) => x.group === group), ...q.flat.filter((x) => x.group !== group)] : q.flat), [q, group]);
   // The chosen project: the address's, else the first in the queue. A project
   // that leaves the queue (reviewed, done) gives its place to the next one.

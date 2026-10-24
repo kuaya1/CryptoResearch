@@ -35,6 +35,7 @@ import { navigate } from '../../lib/router.js';
 import { opinionOf } from '../../lib/opinion.js';
 import { MetricHeader } from '../../components/MetricHeader.jsx';
 import { loadLegacy } from '../../components/Dom.jsx';
+import { PMDecisionCard } from './PMDecisionCard.jsx';
 
 const enc = encodeURIComponent;
 const plain = (e) => e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
@@ -372,6 +373,9 @@ function NeedsYou({ d, p, detail }) {
     const hold = Boolean(onHoldOf(d.index, prov));
     const key = jobKey(job, null, { onHold: hold });
     if (key === 'waiting') {
+      // In the autonomous pilot Claude's research is the chain's Agent 1, run
+      // by the pilot (the PM Decision Card says where it stands), not by hand.
+      if (prov === 'claude' && p.ticket && p.ticket.pilot) continue;
       lines.push({ key: `wait-${prov}`, sev: 'medium', kind: 'Waiting for you', text: `${PROVIDER_LABELS[prov]} research is ready when you ask its assistant`, action: <DeepLink pid={pid} href={`#/project/${enc(pid)}/record?open=runs`} className="btn btn-sm" dataKey={`iv-wait-${prov}`}>Open the prompt</DeepLink> });
     } else if (PROBLEM_WORDS[key]) {
       const canRetry = job.state === 'failed' && !hold && job.run_id;
@@ -503,6 +507,7 @@ export function ModelPanel({ d, p, detail, current = true, failed = false, mode 
         <>
           <RiskStrip d={d} p={p} />
           <Thesis p={p} cr={cr} wait={wait} />
+          <PMDecisionCard p={p} />
           <NeedsYou d={d} p={p} detail={detail} />
           <YourNote p={p} detail={detail} />
         </>

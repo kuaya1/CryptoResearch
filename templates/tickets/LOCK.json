@@ -1,0 +1,7 @@
+{
+  "schema_version": "cr.template-lock.v1",
+  "note": "The published ticket prompt texts, pinned. Never edit one in place: publish the next version (ticket-prompt.v2.md) and pin it here.",
+  "sha256": {
+    "ticket-prompt.v1.md": "2bbd6a60e571aed13e60813535af623ee00e0da16b75e326bb308e293350e06c"
+  }
+}
