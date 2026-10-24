@@ -39,7 +39,10 @@ const FORMAT = 'cr.ticket.v1';
 // the exit check without a DEX quote (exit_basis native_l1_liquid). A ticket
 // keeps the version it froze: @1 tickets are read without the exemption.
 const SIZING_VERSION = 'cr-ticket-sizing@2';
-const INVALIDATION_VERSION = 'cr-ticket-invalidation@1';
+const INVALIDATION_VERSION = 'cr-ticket-invalidation@2';
+const INVALIDATION_V1 = 'cr-ticket-invalidation@1';
+const MIN_COVERAGE_DEFAULT = 90;
+const MAX_GAP_HOURS = 6;
 const PACKET_FORMAT = 'cr.ticket-packet.v1';
 const TICKET_RE = /^tk_\d{4}-\d{2}-\d{2}T\d{6}Z_[a-z2-9]{5}$/;
 const RECEIPT_RE = /^tr_\d{4}-\d{2}-\d{2}T\d{6}Z_[a-z2-9]{5}$/;
@@ -123,6 +126,13 @@ function sizingOf(ws) {
     native_l1_min_market_cap_usd: pos(s.native_l1_min_market_cap_usd, d.native_l1_min_market_cap_usd, 1e15),
     note: SIZING_NOTE,
   };
+}
+
+// Eric's choice, not a universal rule: the share of hours since a ticket with
+// at least one hourly price reading below which a price check reads unknown.
+function minCoveragePct(ws) {
+  const v = ws.settings && ws.settings.tickets && ws.settings.tickets.invalidation && ws.settings.tickets.invalidation.min_coverage_pct;
+  return isNum(v) && v > 0 && v <= 100 ? v : MIN_COVERAGE_DEFAULT;
 }
 
 // ---------------------------------------------------------------------------
@@ -737,6 +747,7 @@ function saveTicket(ws, { project_id: pid, ticket_id: tid, text, revision = null
       exit_cost_2000_complete: at2000 ? at2000.cost_complete : null,
       exits_missing: exitsMissing(exits, pid),
       sell_tax: null,
+      invalidation_version: INVALIDATION_VERSION,
     },
     // Both agents' own figures and verdicts, side by side; the spread is the
     // difference between the two, never their average.
@@ -874,20 +885,55 @@ function journalDecision(ws, pid, d, undone) {
 }
 
 // ---------------------------------------------------------------------------
-// Invalidation, evaluated on read (cr-ticket-invalidation@1)
+// Invalidation, evaluated on read (cr-ticket-invalidation@1, @2)
+
+// Hours since the ticket with at least one hourly reading, out of the whole
+// hours elapsed, and every stretch over MAX_GAP_HOURS without a reading (from
+// the ticket or the last reading to the next reading or now).
+function coverageOf(times, startMs, endMs) {
+  const hoursElapsed = Math.floor((endMs - startMs) / HOUR);
+  const have = new Set();
+  for (const t of times) {
+    const k = Math.floor((t - startMs) / HOUR);
+    if (k >= 0 && k < hoursElapsed) have.add(k);
+  }
+  const marks = [startMs, ...[...times].sort((a, b) => a - b), endMs];
+  const gaps = [];
+  for (let i = 1; i < marks.length; i++) if (marks[i] - marks[i - 1] > MAX_GAP_HOURS * HOUR) gaps.push({ from: iso(marks[i - 1]), to: iso(marks[i]), hours: round((marks[i] - marks[i - 1]) / HOUR, 1) });
+  return { hours_elapsed: hoursElapsed, hours_with_reading: have.size, coverage_pct: hoursElapsed ? round((have.size / hoursElapsed) * 100, 1) : null, gaps };
+}
+
+// The Researcher's report this receipt answers, when it is no longer the basis
+// to lean on: superseded by a newer eligible report, or past the research
+// freshness limit. The status of the ticket does not change.
+function basisStale(ws, project, receipt, now) {
+  const why = [];
+  try {
+    const r = researcherOf(ws, project.project_id);
+    if (r && receipt.researcher && r.report_id !== receipt.researcher.report_id) why.push(`Claude's report ${receipt.researcher.report_id} is superseded by ${r.report_id}.`);
+  } catch (_) { /* left unread */ }
+  const staleDays = (ws.settings && ws.settings.freshness && ws.settings.freshness.research_stale_days) || 90;
+  const at = receipt.researcher && Date.parse(receipt.researcher.analysis_at);
+  if (Number.isFinite(at) && (now - at) / 86400000 > staleDays) why.push(`The report it answers is ${Math.round((now - at) / 86400000)} days old, past ${staleDays}.`);
+  return why.length ? { why: why.join(' ') } : null;
+}
 
 // The lowest hourly price recorded since the ticket was saved, and the price
-// now. A price trigger fires when any reading is at or below it; the metric
+// now (cr-ticket-invalidation@2 adds the coverage of those readings). A price trigger fires when any reading is at or below it; the metric
 // trigger when DefiLlama's latest complete 30-day total, fetched after the
 // ticket, is under its threshold. Unknown is unknown, never "holding".
 function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals = null } = {}) {
+  // A receipt made before the coverage rule has no version on it: read as @1.
+  const v1 = !(receipt.desk && receipt.desk.invalidation_version);
+  const version = v1 ? INVALIDATION_V1 : INVALIDATION_VERSION;
   const inv = receipt.proposal && receipt.proposal.invalidation_trigger;
-  if (!inv) return { version: INVALIDATION_VERSION, invalidated: false, checks: [] };
+  if (!inv) return { version, invalidated: false, checks: [] };
   const checks = [];
   const savedMs = Date.parse(receipt.saved_at);
   const cg = project.identity && project.identity.coingecko_id;
   if (isNum(inv.price_usd)) {
     let low = null;
+    const times = [];
     if (cg) {
       const market = require('./market');
       const months = [];
@@ -898,16 +944,24 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
         for (const pt of market.historyMonth(ws, m, cache).get(cg) || []) {
           const t = Date.parse(pt.source_last_updated_at || pt.fetched_at);
           if (!Number.isFinite(t) || t < savedMs || t > now || !isNum(pt.price_usd)) continue;
+          times.push(t);
           if (!low || pt.price_usd < low.price_usd) low = { price_usd: pt.price_usd, at: iso(t) };
         }
       }
       const latest = (market.readLatest(ws).assets || {})[cg];
       const lt = latest ? Date.parse(latest.source_last_updated_at || latest.fetched_at) : NaN;
+      if (latest && isNum(latest.price_usd) && Number.isFinite(lt) && lt >= savedMs && lt <= now) times.push(lt);
       if (latest && isNum(latest.price_usd) && Number.isFinite(lt) && lt >= savedMs && (!low || latest.price_usd < low.price_usd)) low = { price_usd: latest.price_usd, at: iso(lt) };
     }
-    checks.push(low === null
-      ? { kind: 'price', status: 'unknown', threshold_usd: inv.price_usd, words: 'No price recorded since the ticket.' }
-      : { kind: 'price', status: low.price_usd <= inv.price_usd ? 'triggered' : 'holding', threshold_usd: inv.price_usd, lowest_usd: low.price_usd, at: low.at, words: low.price_usd <= inv.price_usd ? `Price reached $${low.price_usd} at ${low.at}, at or below the invalidation price $${inv.price_usd}.` : `Lowest price since the ticket $${low.price_usd}, above $${inv.price_usd}.` });
+    const cov = v1 ? null : coverageOf(times, savedMs, now);
+    const triggered = low !== null && low.price_usd <= inv.price_usd;
+    const thin = cov && cov.hours_elapsed >= 1 && cov.coverage_pct < minCoveragePct(ws);
+    const covWords = cov && cov.hours_elapsed >= 1 ? ` Coverage: ${cov.hours_with_reading} of ${cov.hours_elapsed} hours since the ticket had a reading${cov.gaps.length ? `; gaps over ${MAX_GAP_HOURS} h: ${cov.gaps.map((g) => `${g.from} to ${g.to}`).join('; ')}` : ''}.` : '';
+    const base = low === null ? null : { price_usd: low.price_usd, at: low.at };
+    if (low === null) checks.push({ kind: 'price', status: 'unknown', threshold_usd: inv.price_usd, ...(cov ? { coverage: cov } : {}), words: `No price recorded since the ticket.${covWords}` });
+    else if (triggered) checks.push({ kind: 'price', status: 'triggered', threshold_usd: inv.price_usd, lowest_usd: low.price_usd, at: low.at, ...(cov ? { coverage: cov } : {}), words: `Price reached $${low.price_usd} at ${low.at}, at or below the invalidation price $${inv.price_usd}.${covWords}` });
+    else if (thin) checks.push({ kind: 'price', status: 'unknown', threshold_usd: inv.price_usd, lowest_usd: base.price_usd, at: base.at, coverage: cov, words: `Not enough price readings to say the price held: ${cov.coverage_pct}% of the hours since the ticket have one, under your ${minCoveragePct(ws)}%. Lowest seen $${low.price_usd}, above $${inv.price_usd}.${covWords}` });
+    else checks.push({ kind: 'price', status: 'holding', threshold_usd: inv.price_usd, lowest_usd: low.price_usd, at: low.at, ...(cov ? { coverage: cov } : {}), words: `Lowest price since the ticket $${low.price_usd}, above $${inv.price_usd}.${covWords}` });
   }
   if (inv.metric) {
     const f = fundamentals || fundamentalsOf(ws, project, now);
@@ -919,7 +973,12 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
     else checks.push({ kind: 'metric', status: m.total_30d_usd < inv.metric.below_30d_usd ? 'triggered' : 'holding', key: inv.metric.key, threshold_usd: inv.metric.below_30d_usd, value_usd: m.total_30d_usd, at: f.fetched_at, words: `30-day ${inv.metric.key} $${Math.round(m.total_30d_usd).toLocaleString('en-US')} ${m.total_30d_usd < inv.metric.below_30d_usd ? 'under' : 'not under'} $${inv.metric.below_30d_usd.toLocaleString('en-US')}.` });
   }
   const hit = checks.find((c) => c.status === 'triggered') || null;
-  return { version: INVALIDATION_VERSION, invalidated: Boolean(hit), by: hit ? hit.kind : null, words: hit ? hit.words : null, checks };
+  const out = { version, invalidated: Boolean(hit), by: hit ? hit.kind : null, words: hit ? hit.words : null, checks };
+  if (!v1) {
+    const stale = basisStale(ws, project, receipt, now);
+    if (stale) out.basis_stale = stale;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -1107,6 +1166,7 @@ module.exports = {
   FORMAT,
   SIZING_VERSION,
   INVALIDATION_VERSION,
+  INVALIDATION_V1,
   SIZING_DEFAULTS,
   TICKET_RE,
   RECEIPT_RE,

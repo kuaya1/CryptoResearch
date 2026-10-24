@@ -349,6 +349,18 @@ function validateSettingsPatch(patch, ws = null) {
     if (o.min_grade_any !== undefined && o.min_grade_new_entry !== undefined && o.min_grade_any > o.min_grade_new_entry) throw new OpError('INVALID', 'The minimum grade for any new risk cannot be above the minimum for a new entry');
     out.tickets = { sizing: o };
   }
+  if (patch.tickets && patch.tickets.invalidation) {
+    // Eric's minimum price coverage for an invalidation check (core/tickets.js
+    // invalidationSettings reads it with the same bounds).
+    const iv = patch.tickets.invalidation;
+    const o = {};
+    if (iv.min_coverage_pct !== undefined) {
+      const n = num(iv.min_coverage_pct, 0, 100, 'Minimum price coverage (%)');
+      if (!(n > 0)) throw new OpError('INVALID', 'Minimum price coverage (%) must be more than 0');
+      o.min_coverage_pct = n;
+    }
+    out.tickets = { ...(out.tickets || {}), invalidation: o };
+  }
   return out;
 }
 
