@@ -631,6 +631,9 @@ function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = 
     timezone: 'America/New_York',
     workspace: { name: ws.meta.name, kind: ws.kind, workspace_id: ws.meta.workspace_id, root: ws.root },
     settings,
+    // The ticket sizing in force (tickets.sizingOf: saved values within
+    // bounds, else the defaults), for Preferences > Screening.
+    ticket_sizing: require('./tickets').sizingOf(ws),
     rubrics: {
       grading: ws.rubrics.grading,
       labels: ws.rubrics.labels,

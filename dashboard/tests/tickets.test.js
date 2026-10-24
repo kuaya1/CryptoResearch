@@ -310,3 +310,33 @@ test('a new ticket freezes whether the coin is native and its market cap, and th
   assert.equal(tk.sizing.version, 'cr-ticket-sizing@2');
   assert.match(T.promptFor(s.ws, tk).text, /native L1 coin/);
 });
+
+test('ticket sizing in Preferences: the server takes it within the same bounds as sizingOf; new tickets freeze it, saved tickets keep theirs', (t) => {
+  const { validateSettingsPatch } = require('../server');
+  const ok = validateSettingsPatch({ tickets: { sizing: { standard_risk_usd: 400, starter_risk_usd: 200, exit_size_usd: 400, max_exit_cost_pct: 4, min_grade_new_entry: 60, min_grade_any: 45, native_l1_min_market_cap_usd: 20e9 } } });
+  assert.deepEqual(ok.tickets.sizing, { standard_risk_usd: 400, starter_risk_usd: 200, exit_size_usd: 400, max_exit_cost_pct: 4, min_grade_new_entry: 60, min_grade_any: 45, native_l1_min_market_cap_usd: 20e9 });
+  const bad = (sizing, re) => assert.throws(() => validateSettingsPatch({ tickets: { sizing } }), (e) => e.code === 'INVALID' && re.test(e.message));
+  bad({ standard_risk_usd: 0 }, /more than 0/);
+  bad({ standard_risk_usd: -5 }, /between/);
+  bad({ max_exit_cost_pct: 101 }, /between 0 and 100/);
+  bad({ min_grade_any: 120 }, /between 0 and 100/);
+  bad({ standard_risk_usd: 100, starter_risk_usd: 300 }, /starter tranche/);
+  bad({ min_grade_new_entry: 40, min_grade_any: 50 }, /minimum grade/);
+  bad({ native_l1_min_market_cap_usd: 'x' }, /between/);
+  // Saved values are read by sizingOf; out of bounds falls back to the defaults.
+  const s = withReport(t);
+  const before = T.createTicket(s.ws, { project_id: s.pid }).ticket;
+  assert.equal(before.sizing.standard_risk_usd, 500);
+  const file = path.join(s.root, 'config', 'settings.json');
+  const cfg = readJson(file);
+  cfg.tickets = { sizing: { standard_risk_usd: 400, starter_risk_usd: 999, min_grade_any: 140 } };
+  atomicWrite(file, jsonText(cfg));
+  const ws2 = require('../core/workspace').openWorkspace({ root: s.root, actor: 'test' });
+  const now = T.sizingOf(ws2);
+  assert.equal(now.standard_risk_usd, 400);
+  assert.equal(now.starter_risk_usd, 400, 'the starter tranche never exceeds standard risk');
+  assert.equal(now.min_grade_any, 40, 'out of bounds reads as the default');
+  assert.equal(T.loadTicket(ws2, s.pid, before.ticket_id).sizing.standard_risk_usd, 500, 'a saved ticket keeps the values it froze');
+  const after = T.createTicket(ws2, { project_id: s.pid, restart: true }).ticket;
+  assert.equal(after.sizing.standard_risk_usd, 400, 'a new ticket freezes the values in force');
+});

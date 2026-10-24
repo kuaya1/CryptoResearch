@@ -31,7 +31,7 @@ No paid API key is needed. Both agents run on Eric's Claude subscription, throug
 
 - The grade is the desk's calculated grade of Claude's current report. A range is read by its low end; a withheld grade means no grade.
 - A proposal the rules don't allow is capped to WATCH_ONLY at $0. The model's own type is kept beside the capped one, with the reason.
-- The rules can be overridden in settings `tickets.sizing`. Each ticket freezes the values it was made under.
+- Eric edits them in Preferences > Screening ("Your ticket sizing"), saved as settings `tickets.sizing`. Each ticket freezes the values it was made under.
 
 ## Records (files, create-only, backed up with the project)
 
@@ -137,7 +137,7 @@ For a `/loop` or scheduled Claude Code session (e.g. the 4-hour cloud routine): 
 - [x] Sub-agents `forensic-researcher`, `junior-trader-prosecutor` and `/pilot-run`
 - [x] PM Decision Card polish, drawer nag, pilot on/off wording (954f87d)
 - [x] **1. Native L1 exemption** (`cr-ticket-sizing@2`, branch `backlog/weekend`): `gate()` `nativeL1Liquid`, packet and basis `native`, receipt `desk.exit_basis`, card shows "Native L1"; `@1` tickets unchanged. Tests in `tickets.test.js`.
-- [ ] **2. Preferences > Screening: ticket sizing.** A panel editing `tickets.sizing` (standard and starter risk, exit size, max exit cost %, the two grade floors), saved through `POST /api/settings` with `server.js` `validateSettingsPatch` using the same bounds as `tickets.sizingOf`; labeled as Eric's choices. Unit tests in `tests/tickets.test.js` for the bounds and that saved tickets keep their frozen values.
+- [x] **2. Preferences > Screening: ticket sizing** (branch `backlog/weekend`): "Your ticket sizing" panel (`shell/Preferences.jsx` `TicketSizing`, the seven values incl. the native L1 floor), read from the index's `ticket_sizing` (the values in force), saved as `tickets.sizing` through `validateSettingsPatch` (same bounds; starter ≤ standard, any-risk floor ≤ new-entry floor). Tests in `tickets.test.js`.
 - [ ] **3. PM decisions in the journal.** Each `decide()` action (`approve`, `halve`, `veto`, `pass`, `watch`, `trim`, and `undo`) also writes a structured journal entry (`notes.js`, `journal.v1.schema.json`; type decision, linked receipt ID, approved risk) so it shows in Notes. `decisions.jsonl` stays the source of truth; a journal failure never loses the decision. Tests.
 - [ ] **4. Missing exit quotes, in words.** The packet records which sizes ($500, $2,000) have no current reading and why; the PM Decision Card lists them with a link to `#/project/<id>/forensics?tab=exits` (or the tab's real address) to approve quotes. Tests for the packet field.
 - [ ] **5. Fixed-size quote before sizing.** When `createTicket` finds no $500 reading on a verified, quotable token, ask for one fixed-size quote first (`forensic-monitor.js` `quoteFixedToken`: the existing adapter, gates, budget, hold and one request ID; never a wallet or swap). Async, so it belongs to the route and CLI, not the pure create; a failed or refused quote falls back to $0 with the reason. Tests with a stubbed network.
