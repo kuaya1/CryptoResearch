@@ -12,6 +12,9 @@
 !/.gitignore
 !/.gitattributes
 
+# GitHub Actions: CI and the backlog PR workflow (no secrets, no records)
+!/.github/
+
 # Application source, tests and test fixtures (fictional data only)
 !/dashboard/
 !/package.json

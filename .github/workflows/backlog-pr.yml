@@ -1,0 +1,59 @@
+# Opens or updates the pull request for a backlog branch once its tests pass
+# (blueprint W2.2, DESK_STATE item 11). Uses only GITHUB_TOKEN. Needs
+# Settings > Actions > General > "Allow GitHub Actions to create and approve
+# pull requests". It never merges, approves or pushes: Eric merges.
+name: backlog-pr
+
+on:
+  workflow_run:
+    workflows: [test]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
+jobs:
+  pr:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      startsWith(github.event.workflow_run.head_branch, 'claude/backlog-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fetch the test counts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: test-summary
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      # Everything from the event goes through env, never into the script text.
+      - name: Open or update the pull request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          # Only the commit that was tested gets a PR; a newer push has its own run.
+          tip=$(gh api "repos/$REPO/git/ref/heads/$BRANCH" --jq .object.sha)
+          if [ "$tip" != "$SHA" ]; then
+            echo "The branch moved past the tested commit ${SHA:0:7}; its own run handles it."
+            exit 0
+          fi
+          commits=$(gh api "repos/$REPO/compare/main...$SHA" --jq '.commits[] | "- `" + .sha[0:7] + "` " + (.commit.message | split("\n")[0])')
+          counts="No test counts were found for this run."
+          if [ -f test-summary.md ]; then counts=$(cat test-summary.md); fi
+          body=$(printf 'Backlog branch `%s`, tested at `%s` ([the run](%s)).\n\n%s\n\n%s\n\nOpened by the backlog-pr workflow after test.yml passed. It never merges.\n' "$BRANCH" "${SHA:0:7}" "$RUN_URL" "$commits" "$counts")
+          owner=${REPO%%/*}
+          number=$(gh api "repos/$REPO/pulls?state=open&base=main&head=$owner:$BRANCH" --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh api -X PATCH "repos/$REPO/pulls/$number" -f body="$body" --jq .html_url
+          else
+            gh api -X POST "repos/$REPO/pulls" -f title="Backlog: ${BRANCH#claude/backlog-}" -f head="$BRANCH" -f base=main -f body="$body" --jq .html_url
+          fi

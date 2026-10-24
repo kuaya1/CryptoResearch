@@ -1,0 +1,47 @@
+# CI for the desk (blueprint W2.1, DESK_STATE item 10): the full suite on
+# every push to a claude/ branch and on every pull request to main.
+# The tests use fictional workspaces only; no secret is read.
+name: test
+
+on:
+  push:
+    branches: ['claude/**']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+      - name: Run the full suite
+        shell: bash
+        run: node dashboard/cli.js test 2>&1 | tee test-output.txt
+      # The counts go to the job summary and to an artifact backlog-pr.yml
+      # puts in the pull request. Node prints them as "ℹ tests n" or "# tests n".
+      - name: Counts
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### node dashboard/cli.js test"
+            echo
+            grep -E '^(ℹ|#) (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) ' test-output.txt | sed -E 's/^(ℹ|#) /- /' || echo "No counts in the output."
+          } | tee test-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-summary
+          path: test-summary.md
+          retention-days: 14
