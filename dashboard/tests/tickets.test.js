@@ -281,3 +281,34 @@ test('the pilot queue names whether a project named outright is in the pilot', a
   T.setPilot(s.ws, s.pid, true);
   assert.match(await ask(), /pilot on/);
 });
+
+test('each PM decision and its undo also appears in the journal, and a journal failure keeps the decision', (t) => {
+  const s = withReport(t);
+  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
+  withExit(s.ws, s.pid, tk.ticket_id, 2);
+  const saved = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk.ticket_id)) });
+  const notes = require('../core/notes');
+  const a = T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'halve', note: 'half first' });
+  assert.equal(a.result.journal.status, 'saved');
+  let j = notes.loadJournal(s.ws, s.pid).filter((e) => e.type === 'decision');
+  assert.equal(j.length, 1);
+  assert.ok(j[0].reasons.includes('pm_action: halve'));
+  assert.ok(j[0].reasons.includes(`receipt: ${saved.receipt_id}`));
+  assert.ok(j[0].reasons.some((r) => /^approved_risk_usd: 250$/.test(r)));
+  // The same decision again writes nothing new.
+  assert.equal(T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'halve' }).result.status, 'unchanged');
+  assert.equal(notes.loadJournal(s.ws, s.pid).filter((e) => e.type === 'decision').length, 1);
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'undo' });
+  j = notes.loadJournal(s.ws, s.pid).filter((e) => e.type === 'decision');
+  assert.equal(j.length, 2);
+  assert.ok(j.some((e) => e.reasons.includes('pm_action: undo')));
+  // A journal failure never loses the decision.
+  const orig = notes.addJournal;
+  notes.addJournal = () => { throw new Error('disk full'); };
+  try {
+    const v = T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'veto' });
+    assert.equal(v.result.status, 'saved');
+    assert.equal(v.result.journal.status, 'failed');
+  } finally { notes.addJournal = orig; }
+  assert.equal(T.view(s.ws, s.pid).ticket.decision.action, 'veto');
+});

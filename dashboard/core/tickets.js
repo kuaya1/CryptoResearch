@@ -789,8 +789,30 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
       projects.restoreProject(ws, pid);
       res.project_restored = true;
     }
+    res.journal = journalDecision(ws, pid, res.decision, res.undone);
   }
   return out;
+}
+
+// The decision also shows in Notes as a journal entry (type decision). The
+// schema's decision words do not cover every PM action, so the action, the
+// receipt and the approved risk are stated in reasons; decisions.jsonl stays
+// the source of truth and a journal failure never loses or blocks a decision.
+function journalDecision(ws, pid, d, undone) {
+  try {
+    const undo = d.action === 'undo';
+    const shown = undo ? undone : d;
+    const reasons = [`pm_action: ${d.action}`, `receipt: ${d.receipt_id}`, `decision_id: ${d.decision_id}`];
+    if (undo) reasons.push(`undoes: ${undone.decision_id}`);
+    else if (isNum(d.pm_approved_risk_usd)) reasons.push(`approved_risk_usd: ${d.pm_approved_risk_usd}`);
+    const text = undo
+      ? `PM undid ${shown.action} on ticket ${d.receipt_id}.`
+      : `PM ${d.action} on ticket ${d.receipt_id}${isNum(d.pm_approved_risk_usd) ? `, approved risk ${usd(d.pm_approved_risk_usd)}` : ''}.${d.note ? ` ${d.note}` : ''}`;
+    const entry = require('./notes').addJournal(ws, pid, { type: 'decision', decision: d.action === 'watch' || d.action === 'trim' ? d.action : null, text, reasons });
+    return { status: 'saved', entry_id: entry.entry_id };
+  } catch (err) {
+    return { status: 'failed', error: String(err && err.message || err).slice(0, 200) };
+  }
 }
 
 // ---------------------------------------------------------------------------
