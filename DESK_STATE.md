@@ -18,7 +18,7 @@ The two agents are never averaged. Each keeps its own figure and verdict, shown 
 
 No paid API key is needed. Both agents run on Eric's Claude subscription, through the connector or through `claude -p`. The paid-API runner in `research.js` still works for Agent 1 if keys are added in Render later.
 
-## Sizing rules (`cr-ticket-sizing@1`, Eric's choices)
+## Sizing rules (`cr-ticket-sizing@2`, Eric's choices; `@1` tickets keep theirs)
 
 | Rule | Value |
 |---|---|
@@ -27,10 +27,11 @@ No paid API key is needed. Both agents run on Eric's Claude subscription, throug
 | Grade under 40 | no new risk (HARD_PASS or WATCH_ONLY), $0 |
 | Grade under 55, not held | no new entry, $0 |
 | Held, any grade | TRIM_EXIT is always allowed (it takes no new risk) |
+| Native L1, $10B+ market cap (`@2`) | passes the exit check without a DEX quote (`exit_basis: native_l1_liquid`); the grade floors still apply |
 
 - The grade is the desk's calculated grade of Claude's current report. A range is read by its low end; a withheld grade means no grade.
 - A proposal the rules don't allow is capped to WATCH_ONLY at $0. The model's own type is kept beside the capped one, with the reason.
-- The rules can be overridden in settings `tickets.sizing`. Each ticket freezes the values it was made under.
+- Eric edits them in Preferences > Screening ("Your ticket sizing"), saved as settings `tickets.sizing`. Each ticket freezes the values it was made under.
 
 ## Records (files, create-only, backed up with the project)
 
@@ -134,17 +135,17 @@ Live tickets (2026-10-24), both $0 and waiting for Eric: OLAS `tr_2026-10-24T175
 
 For a `/loop` or scheduled Claude Code session (e.g. the hourly cloud routine): take the next two buildable items in order (unchecked, not marked *(Eric)*, not already on an open `claude/backlog-*` branch), following `CLAUDE.md` (edit, run `node dashboard/cli.js test`, rebuild the bundle after UI edits). Build item A and run the tests; build item B and run the tests again across both changes; check both off here and report. Both go on one branch and one pull request for Eric (`claude/backlog-batch-items-<a>-and-<b>`). If A's tests fail, fix A or stop and report; never start B on a red suite. If only one buildable item is left, take the one. A scheduled routine never pushes to `main` and never force-pushes. Items marked *(Eric)* need his decision first: ask, don't build.
 
-Built and waiting for Eric's merge (2026-10-24): items 1–4 on `claude/backlog-native-l1`, `claude/backlog-ticket-sizing`, `claude/backlog-pm-journal`, `claude/backlog-missing-exit-quotes`. Next batch: items 5 and 6.
+Merged for Eric (2026-10-24): items 1–6 on one train branch, `claude/train-2026-10-24`, from `claude/backlog-native-l1`, `claude/backlog-ticket-sizing`, `claude/backlog-pm-journal`, `claude/backlog-missing-exit-quotes` and `claude/backlog-batch-items-5-and-6`, with the bundle rebuilt once and the full suite run. It is not yet on `main`.
 
 - [x] Phase 1 tickets, connector tools, PM Decision Card, under-40 filter (f715a3e, live 2026-10-24)
 - [x] Sub-agents `forensic-researcher`, `junior-trader-prosecutor` and `/pilot-run`
 - [x] PM Decision Card polish, drawer nag, pilot on/off wording (954f87d)
-- [ ] **1. Native L1 exemption** (Eric, 2026-10-24): in `core/tickets.js` `gate()`, a native coin (`identity.native_chain`) with market cap of at least $10B from the stored CoinGecko row passes the exit check without a DEX quote; the packet and receipt say `exit_basis: 'native_l1_liquid'` (otherwise `'measured'`). This is a new rules version: `cr-ticket-sizing@2`, frozen into new tickets; `@1` tickets keep theirs. Tests: ETH at $10B+ passes, a native coin under $10B and any token do not.
-- [ ] **2. Preferences > Screening: ticket sizing.** A panel editing `tickets.sizing` (standard and starter risk, exit size, max exit cost %, the two grade floors), saved through `POST /api/settings` with `server.js` `validateSettingsPatch` using the same bounds as `tickets.sizingOf`; labeled as Eric's choices. Unit tests in `tests/tickets.test.js` for the bounds and that saved tickets keep their frozen values.
-- [ ] **3. PM decisions in the journal.** Each `decide()` action (`approve`, `halve`, `veto`, `pass`, `watch`, `trim`, and `undo`) also writes a structured journal entry (`notes.js`, `journal.v1.schema.json`; type decision, linked receipt ID, approved risk) so it shows in Notes. `decisions.jsonl` stays the source of truth; a journal failure never loses the decision. Tests.
-- [ ] **4. Missing exit quotes, in words.** The packet records which sizes ($500, $2,000) have no current reading and why; the PM Decision Card lists them with a link to `#/project/<id>/forensics?tab=exits` (or the tab's real address) to approve quotes. Tests for the packet field.
-- [ ] **5. Fixed-size quote before sizing.** When `createTicket` finds no $500 reading on a verified, quotable token, ask for one fixed-size quote first (`forensic-monitor.js` `quoteFixedToken`: the existing adapter, gates, budget, hold and one request ID; never a wallet or swap). Async, so it belongs to the route and CLI, not the pure create; a failed or refused quote falls back to $0 with the reason. Tests with a stubbed network.
-- [ ] **6. Pilot runner:** drop `shell: true` in `dashboard/scripts/pilot.js` (Node DEP0190 warning); resolve `claude.exe` on Windows instead
+- [x] **1. Native L1 exemption** (`cr-ticket-sizing@2`): `gate()` `nativeL1Liquid`, packet and basis `native`, receipt `desk.exit_basis`, card shows "Native L1"; `@1` tickets unchanged. Tests in `tickets.test.js`.
+- [x] **2. Preferences > Screening: ticket sizing**: "Your ticket sizing" panel (`shell/Preferences.jsx` `TicketSizing`, the seven values incl. the native L1 floor), read from the index's `ticket_sizing` (the values in force), saved as `tickets.sizing` through `validateSettingsPatch` (same bounds; starter ≤ standard, any-risk floor ≤ new-entry floor). Tests in `tickets.test.js`.
+- [x] **3. PM decisions in the journal.** (built: `journalDecision` in `core/tickets.js`; action, receipt and approved risk in `reasons`, no schema change) Each `decide()` action (`approve`, `halve`, `veto`, `pass`, `watch`, `trim`, and `undo`) also writes a structured journal entry (`notes.js`, `journal.v1.schema.json`; type decision, linked receipt ID, approved risk) so it shows in Notes. `decisions.jsonl` stays the source of truth; a journal failure never loses the decision. Tests.
+- [x] **4. Missing exit quotes, in words.** *(done: packet `exits_missing`, receipt desk field, Decision Card line linking `?fx=exits`; tests)* The packet records which sizes ($500, $2,000) have no current reading and why; the PM Decision Card lists them with a link to `#/project/<id>/forensics?tab=exits` (or the tab's real address) to approve quotes. Tests for the packet field.
+- [x] **5. Fixed-size quote before sizing.** (built: `tickets.prepareExitQuote` + `forensic-monitor.quoteSizeUsd`, wired in route, CLI and connector; packet `exit_quote_attempt`; tests in `tickets-exit-quote.test.js`) When `createTicket` finds no $500 reading on a verified, quotable token, ask for one fixed-size quote first (`forensic-monitor.js` `quoteFixedToken`: the existing adapter, gates, budget, hold and one request ID; never a wallet or swap). Async, so it belongs to the route and CLI, not the pure create; a failed or refused quote falls back to $0 with the reason. Tests with a stubbed network.
+- [x] **6. Pilot runner:** (built: `resolveClaude`, no shell, claude.exe from PATH or install folders; `pilot-runner.test.js`) drop `shell: true` in `dashboard/scripts/pilot.js` (Node DEP0190 warning); resolve `claude.exe` on Windows instead
 - [ ] *(Eric)* Bind OLAS's DefiLlama entity so the fundamental invalidation trigger is checked
 - [ ] *(Eric)* ChatGPT as a second Prosecutor (`cr-ticket-challenge@1`, its own receipt, never averaged)
 - [ ] *(Eric)* Put more projects in the pilot; a scheduled `/pilot-run` cadence

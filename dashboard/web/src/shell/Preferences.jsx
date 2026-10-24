@@ -3,7 +3,8 @@
 // in eight sections over the page you were on. Appearance, Models & budget,
 // Rubrics, Data (the dashboard settings and backups and exports), System and
 // Activity are the same cards and forms as before (views/settings.js
-// prefsSection); Screening edits your forensic screening preferences (D5);
+// prefsSection); Screening edits your forensic screening preferences (D5)
+// and your PM ticket sizing;
 // Developer holds the Explorer (D4) and the running code. Opening it writes
 // nothing; each save is its own button.
 import { useEffect, useRef, useState } from 'react';
@@ -96,6 +97,72 @@ function Screening({ d }) {
           <div className="l2-actions">
             <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !dirty} data-key="prefs-screening-save">{busy ? 'Saving…' : 'Save screening preferences'}</button>
             {dirty ? <button type="button" className="btn btn-ghost btn-sm" data-key="prefs-screening-undo" onClick={() => { setForm(Object.fromEntries(FIELDS.map(([k]) => [k, asText(k, saved[k])]))); setErr(null); }}>Discard changes</button> : null}
+          </div>
+        </form>
+      </div>
+    </section>
+  );
+}
+
+// ---- Screening: tickets.sizing (core/tickets.js sizingOf) -------------------------------------
+
+const SIZING_FIELDS = [
+  ['standard_risk_usd', 'Standard risk, 1.0R (USD)', 'What Approve Risk grants on a ticket that passes every check.'],
+  ['starter_risk_usd', 'Starter tranche, 0.5R (USD)', 'What Halve Size grants; never more than standard risk.'],
+  ['exit_size_usd', 'Exit size checked (USD)', 'The size whose measured exit cost the ticket checks.'],
+  ['max_exit_cost_pct', 'Maximum exit cost (%)', 'Standard risk needs the exit cost at that size known in full and at most this.'],
+  ['min_grade_new_entry', 'Minimum grade for a new entry', 'Under this, no new entry and no adding to a held position: 0 to 100.'],
+  ['min_grade_any', 'Minimum grade for any new risk', 'Under this, no new risk at all: 0 to 100, at most the new-entry minimum.'],
+  ['native_l1_min_market_cap_usd', 'Native L1 market cap floor (USD)', 'A chain\'s own coin at or above this market cap passes the exit check without a DEX quote.'],
+];
+
+function TicketSizing({ d }) {
+  const inForce = d.index.ticket_sizing || {};
+  const key = JSON.stringify(inForce);
+  const fresh = () => Object.fromEntries(SIZING_FIELDS.map(([k]) => [k, inForce[k] === undefined || inForce[k] === null ? '' : String(inForce[k])]));
+  const [form, setForm] = useState(fresh);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const dirty = SIZING_FIELDS.some(([k]) => form[k] !== fresh()[k]);
+  useEffect(() => { if (!dirty) setForm(fresh()); }, [key]);
+  const save = async () => {
+    const out = {};
+    for (const [k, label] of SIZING_FIELDS) {
+      const n = Number(String(form[k]).trim().replace(/[$,_%]/g, ''));
+      if (String(form[k]).trim() === '' || !Number.isFinite(n)) { setErr(`${label}: a number is needed.`); return; }
+      out[k] = n;
+    }
+    setErr(null);
+    setBusy(true);
+    try {
+      await api.post('/api/settings', { tickets: { sizing: out } });
+      toast('Ticket sizing saved. New tickets freeze these values; saved tickets keep theirs.');
+      await refresh();
+    } catch (e) {
+      setErr(e.message);
+      toast(e.message, 'bad');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="l2-panel" aria-labelledby="prefs-sizing-h">
+      <header className="l2-panel-head">
+        <h3 className="l2-panel-t" id="prefs-sizing-h" title={`Your sizing rules for PM tickets (${inForce.version || 'cr-ticket-sizing'}), not universal rules. The desk applies them after the Prosecutor saves; each new ticket freezes the values in force.`}>Your ticket sizing</h3>
+      </header>
+      <div className="l2-panel-body">
+        <form className="l2-form prefs-form" data-key="prefs-sizing-form" onSubmit={(e) => { e.preventDefault(); save(); }}>
+          {SIZING_FIELDS.map(([k, label, hint]) => (
+            <label key={k} className="prefs-field" title={hint}>
+              <span>{label}</span>
+              <input className="input" type="text" inputMode="decimal" value={form[k]} aria-describedby={`prefs-hint-${k}`} data-key={`prefs-${k}`} onChange={(e) => { setForm({ ...form, [k]: e.target.value }); setErr(null); }} />
+              <span id={`prefs-hint-${k}`} className="sr-only">{hint}</span>
+            </label>
+          ))}
+          {err ? <p className="l2-err" role="alert">{err}</p> : null}
+          <div className="l2-actions">
+            <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !dirty} data-key="prefs-sizing-save">{busy ? 'Saving…' : 'Save ticket sizing'}</button>
+            {dirty ? <button type="button" className="btn btn-ghost btn-sm" data-key="prefs-sizing-undo" onClick={() => { setForm(fresh()); setErr(null); }}>Discard changes</button> : null}
           </div>
         </form>
       </div>
@@ -220,7 +287,7 @@ export default function Preferences() {
           </nav>
           <div className="prefs-body" ref={body}>
             <h3 className="prefs-title" id="prefs-title" tabIndex={-1}>{label}</h3>
-            {section === 'screening' ? <Screening d={d} />
+            {section === 'screening' ? <><Screening d={d} /><TicketSizing d={d} /></>
               : section === 'developer' ? <Developer d={d} />
                 : <Dom key={section} build={(L) => L.prefsSection(legacyCtx, section)} deps={[section, settingsKey]} />}
             {section === 'appearance' ? <DeskDefaults /> : null}

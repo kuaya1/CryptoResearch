@@ -281,3 +281,106 @@ test('the pilot queue names whether a project named outright is in the pilot', a
   T.setPilot(s.ws, s.pid, true);
   assert.match(await ask(), /pilot on/);
 });
+
+test('native L1 exemption (cr-ticket-sizing@2): the chain\'s own coin at $10B+ passes the exit check without a DEX quote; a smaller coin, a token, or a ticket frozen under @1 does not', (t) => {
+  const s = T.sizingOf({ settings: {} });
+  assert.equal(s.version, 'cr-ticket-sizing@2');
+  assert.equal(s.native_l1_min_market_cap_usd, 10e9);
+  const basis = (native, cap) => ({ researcher: { grade: { status: 'firm', value: 60 } }, held: true, exits: [], native: { native_chain: native, market_cap_usd: cap } });
+  const eth = T.gate(basis(true, 280e9), s, 'ACCUMULATE');
+  assert.equal(eth.exit_basis, 'native_l1_liquid');
+  assert.equal(eth.suggested_risk_usd, 500);
+  const small = T.gate(basis(true, 2e9), s, 'ACCUMULATE');
+  assert.equal(small.exit_basis, 'measured');
+  assert.equal(small.suggested_risk_usd, 0);
+  assert.equal(T.gate(basis(false, 280e9), s, 'ACCUMULATE').suggested_risk_usd, 0, 'a token always needs a measured exit');
+  assert.equal(T.gate({ ...basis(true, 280e9), native: undefined }, s, 'ACCUMULATE').suggested_risk_usd, 0, 'no native record (an @1 basis) is no exemption');
+  const v1 = { ...s, version: 'cr-ticket-sizing@1' };
+  delete v1.native_l1_min_market_cap_usd;
+  assert.equal(T.gate(basis(true, 280e9), v1, 'ACCUMULATE').suggested_risk_usd, 0, 'a ticket frozen under @1 keeps its rules');
+  assert.equal(T.gate(basis(true, 280e9), v1, 'ACCUMULATE').version, 'cr-ticket-sizing@1');
+  const lowGrade = T.gate({ ...basis(true, 280e9), researcher: { grade: { status: 'firm', value: 30 } } }, s, 'ACCUMULATE');
+  assert.equal(lowGrade.suggested_risk_usd, 0, 'the exemption covers the exit only, never the grade floors');
+});
+
+test('a new ticket freezes whether the coin is native and its market cap, and the prompt states the exemption', (t) => {
+  const s = withReport(t);
+  const tk = T.createTicket(s.ws, { project_id: s.pid }).ticket;
+  assert.deepEqual(tk.basis.native, { native_chain: false, market_cap_usd: null });
+  assert.equal(tk.sizing.version, 'cr-ticket-sizing@2');
+  assert.match(T.promptFor(s.ws, tk).text, /native L1 coin/);
+});
+
+test('ticket sizing in Preferences: the server takes it within the same bounds as sizingOf; new tickets freeze it, saved tickets keep theirs', (t) => {
+  const { validateSettingsPatch } = require('../server');
+  const ok = validateSettingsPatch({ tickets: { sizing: { standard_risk_usd: 400, starter_risk_usd: 200, exit_size_usd: 400, max_exit_cost_pct: 4, min_grade_new_entry: 60, min_grade_any: 45, native_l1_min_market_cap_usd: 20e9 } } });
+  assert.deepEqual(ok.tickets.sizing, { standard_risk_usd: 400, starter_risk_usd: 200, exit_size_usd: 400, max_exit_cost_pct: 4, min_grade_new_entry: 60, min_grade_any: 45, native_l1_min_market_cap_usd: 20e9 });
+  const bad = (sizing, re) => assert.throws(() => validateSettingsPatch({ tickets: { sizing } }), (e) => e.code === 'INVALID' && re.test(e.message));
+  bad({ standard_risk_usd: 0 }, /more than 0/);
+  bad({ standard_risk_usd: -5 }, /between/);
+  bad({ max_exit_cost_pct: 101 }, /between 0 and 100/);
+  bad({ min_grade_any: 120 }, /between 0 and 100/);
+  bad({ standard_risk_usd: 100, starter_risk_usd: 300 }, /starter tranche/);
+  bad({ min_grade_new_entry: 40, min_grade_any: 50 }, /minimum grade/);
+  bad({ native_l1_min_market_cap_usd: 'x' }, /between/);
+  // Saved values are read by sizingOf; out of bounds falls back to the defaults.
+  const s = withReport(t);
+  const before = T.createTicket(s.ws, { project_id: s.pid }).ticket;
+  assert.equal(before.sizing.standard_risk_usd, 500);
+  const file = path.join(s.root, 'config', 'settings.json');
+  const cfg = readJson(file);
+  cfg.tickets = { sizing: { standard_risk_usd: 400, starter_risk_usd: 999, min_grade_any: 140 } };
+  atomicWrite(file, jsonText(cfg));
+  const ws2 = require('../core/workspace').openWorkspace({ root: s.root, actor: 'test' });
+  const now = T.sizingOf(ws2);
+  assert.equal(now.standard_risk_usd, 400);
+  assert.equal(now.starter_risk_usd, 400, 'the starter tranche never exceeds standard risk');
+  assert.equal(now.min_grade_any, 40, 'out of bounds reads as the default');
+  assert.equal(T.loadTicket(ws2, s.pid, before.ticket_id).sizing.standard_risk_usd, 500, 'a saved ticket keeps the values it froze');
+  const after = T.createTicket(ws2, { project_id: s.pid, restart: true }).ticket;
+  assert.equal(after.sizing.standard_risk_usd, 400, 'a new ticket freezes the values in force');
+});
+test('each PM decision and its undo also appears in the journal, and a journal failure keeps the decision', (t) => {
+  const s = withReport(t);
+  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
+  withExit(s.ws, s.pid, tk.ticket_id, 2);
+  const saved = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk.ticket_id)) });
+  const notes = require('../core/notes');
+  const a = T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'halve', note: 'half first' });
+  assert.equal(a.result.journal.status, 'saved');
+  let j = notes.loadJournal(s.ws, s.pid).filter((e) => e.type === 'decision');
+  assert.equal(j.length, 1);
+  assert.ok(j[0].reasons.includes('pm_action: halve'));
+  assert.ok(j[0].reasons.includes(`receipt: ${saved.receipt_id}`));
+  assert.ok(j[0].reasons.some((r) => /^approved_risk_usd: 250$/.test(r)));
+  // The same decision again writes nothing new.
+  assert.equal(T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'halve' }).result.status, 'unchanged');
+  assert.equal(notes.loadJournal(s.ws, s.pid).filter((e) => e.type === 'decision').length, 1);
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'undo' });
+  j = notes.loadJournal(s.ws, s.pid).filter((e) => e.type === 'decision');
+  assert.equal(j.length, 2);
+  assert.ok(j.some((e) => e.reasons.includes('pm_action: undo')));
+  // A journal failure never loses the decision.
+  const orig = notes.addJournal;
+  notes.addJournal = () => { throw new Error('disk full'); };
+  try {
+    const v = T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'veto' });
+    assert.equal(v.result.status, 'saved');
+    assert.equal(v.result.journal.status, 'failed');
+  } finally { notes.addJournal = orig; }
+  assert.equal(T.view(s.ws, s.pid).ticket.decision.action, 'veto');
+});
+
+test('missing exit quotes are named in the packet, the receipt and the view, with the Exits tab address', (t) => {
+  const s = withReport(t);
+  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
+  const frozen = JSON.parse(fs.readFileSync(s.ws.abs(tk.packet.path), 'utf8'));
+  assert.deepEqual(frozen.exits_missing.map((m) => m.size_usd), [500, 2000], 'both sizes have no reading in the fixture');
+  for (const m of frozen.exits_missing) {
+    assert.ok(m.reason && m.reason.length > 10, "a reason in words");
+    assert.equal(m.link, `#/project/${encodeURIComponent(s.pid)}/forensics?fx=exits`);
+  }
+  const saved = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) });
+  assert.deepEqual(saved.receipt.desk.exits_missing.map((m) => m.size_usd), [500, 2000]);
+  assert.deepEqual(T.view(s.ws, s.pid).ticket.exits_missing.map((m) => m.size_usd), [500, 2000]);
+});
