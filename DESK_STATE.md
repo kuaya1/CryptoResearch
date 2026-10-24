@@ -130,7 +130,7 @@ Live tickets (2026-10-24), both $0 and waiting for Eric: OLAS `tr_2026-10-24T175
 
 ## Autonomous Build Backlog
 
-For a `/loop` or scheduled Claude Code session (e.g. the 4-hour cloud routine): take the first unchecked item, follow `CLAUDE.md` (edit, run `node dashboard/cli.js test`, rebuild the bundle after UI edits), check it off here, and report. A scheduled routine commits to its own branch and opens a pull request for Eric; it never pushes to `main` and never force-pushes. Items marked *(Eric)* need his decision first: ask, don't build.
+For a `/loop` or scheduled Claude Code session (e.g. the hourly cloud routine): take up to **two** unchecked items per session, in order, following `CLAUDE.md` (edit, run `node dashboard/cli.js test`, rebuild the bundle after UI edits). Build item A and run the tests; build item B and run the tests again across both changes; check both off here and report. Both go on one branch and one pull request for Eric (e.g. `claude/backlog-batch-items-1-and-2`). If A's tests fail, fix A or stop and report; never start B on a red suite. If only one buildable item is left, or the next is marked *(Eric)*, take the one. A scheduled routine never pushes to `main` and never force-pushes. Items marked *(Eric)* need his decision first: ask, don't build.
 
 - [x] Phase 1 tickets, connector tools, PM Decision Card, under-40 filter (f715a3e, live 2026-10-24)
 - [x] Sub-agents `forensic-researcher`, `junior-trader-prosecutor` and `/pilot-run`
