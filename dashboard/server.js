@@ -1398,6 +1398,15 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     const ledger = walletsCore.importReady(ws);
     return after({ ...out, ledger: { status: ledger.status, recorded: ledger.recorded, held: ledger.held } });
   });
+  // Several possible moves to Eric's own accounts recorded as transfers at
+  // once (wallets.js resolveOwnTransfers): only the ones shown and still
+  // waiting; the import right after links each send to its arrival.
+  route('POST', '/api/wallets/events/own-transfers', (m, req, res, body) => {
+    const items = Array.isArray(body.items) ? body.items.slice(0, 500).map((x) => ({ wallet_id: String((x && x.wallet_id) || ''), network: String((x && x.network) || ''), event_key: String((x && x.event_key) || '') })) : [];
+    const out = walletsCore.resolveOwnTransfers(ws, { items, note: typeof body.note === 'string' ? body.note : null });
+    const ledger = walletsCore.importReady(ws);
+    return after({ ...out, ledger: { status: ledger.status, recorded: ledger.recorded, held: ledger.held } });
+  });
   route('POST', '/api/portfolio/limits', (m, req, res, body) => after(portfolio.setLimits(ws, body)));
   // A refresh within a minute of the last successful one returns the saved
   // status without calling CoinGecko, so repeated presses or reloads never

@@ -12,7 +12,7 @@ It closes the loop on one asset at a time:
    - the exit cost at $500 and $2,000, from its own exit-quote readings;
    - the suggested risk, from Eric's sizing rules;
    - the status, from Eric's decisions and an invalidation check run each time the ticket is read.
-4. **Eric, the PM.** He picks Approve Risk, Halve Size or Veto / Archive. A decision records his choice. **Nothing places an order or moves money.**
+4. **Eric, the PM.** On a ticket that suggests risk: Approve Risk, Halve Size or Veto / Archive. On a $0 ticket: Confirm Pass & Archive (archives the project unless held; Undo restores it), Override → Watch, or Acknowledge Trim. Statuses: `risk_granted`, `vetoed`, `passed`, `watching`, `trim_acknowledged`. A decision records his choice. **Nothing places an order or moves money.**
 
 The two agents are never averaged. Each keeps its own figure and verdict, shown side by side, with the spread (Researcher minus Prosecutor).
 
@@ -46,11 +46,11 @@ projects/<id>/tickets/
                                     desk { gate, proposal_type, suggested_risk_usd, exit_cost_500_usd_pct, ... },
                                     agent_disagreement { researcher, prosecutor, spread_points, note }
   receipts/<tr_...>.md              the full text as saved
-  decisions.jsonl                   Eric's decisions, append-only (approve, halve, veto, undo),
+  decisions.jsonl                   Eric's decisions, append-only (approve, halve, veto, pass, watch, trim, undo),
                                     each with pm_approved_risk_usd
 ```
 
-- **Status:** `pending_pm_review`, `risk_granted`, `vetoed` or `invalidated`. It is computed every time the ticket is read and never stored.
+- **Status:** `pending_pm_review`, `risk_granted`, `vetoed`, `passed`, `watching`, `trim_acknowledged` or `invalidated`. It is computed every time the ticket is read and never stored.
 - **Invalidation (`cr-ticket-invalidation@1`):** the ticket is invalidated when either of these fires:
   - any hourly price since the ticket was saved is at or below the invalidation price;
   - the bound DefiLlama 30-day total, fetched after the ticket, is under its floor.
@@ -107,7 +107,7 @@ OLAS is `olas-autonolas` and lives only on the online desk.
 3. The desk sizes it, the queue says `pm_review` and the inspector shows the PM Decision Card. A new Claude report sends the queue back to `ticket`; the old ticket is kept and marked superseded.
 4. The $500 tier needs a current exit reading: approve exit quotes (Forensics > Exits). Without one the ticket is capped at $0, saying why.
 
-First live ticket: `tr_2026-10-24T175256Z_g3cug` (2026-10-24), HARD_PASS, $0. Claude's report graded 26.3 and the Prosecutor scored 15; there was no exit reading. It is waiting for Eric's review.
+Live tickets (2026-10-24), both $0 and waiting for Eric: OLAS `tr_2026-10-24T175256Z_g3cug`, HARD_PASS (Researcher 26.3, Prosecutor 15). ZAMA (held) `tr_2026-10-24T182937Z_vzsbf`, TRIM_EXIT (Researcher 35.5, Prosecutor 18; invalidation $0.045). Neither has an exit reading or a DefiLlama binding.
 
 ## UI files
 
@@ -135,8 +135,10 @@ For a `/loop` or scheduled Claude Code session: take the first unchecked item, f
 - [x] Phase 1 tickets, connector tools, PM Decision Card, under-40 filter (f715a3e, live 2026-10-24)
 - [x] Sub-agents `forensic-researcher`, `junior-trader-prosecutor` and `/pilot-run`
 - [ ] Pilot runner: drop `shell: true` in `dashboard/scripts/pilot.js` (Node DEP0190 warning); resolve `claude.exe` on Windows instead
-- [ ] PM Decision Card: show prices with at least two decimals ($0.70, not $0.7)
-- [ ] `autonomous_pilot_queue` with a named project says "1 project in the pilot" even when its pilot is off: say "named, not in the pilot"
+- [x] PM Decision Card: prices with at least two decimals; one "fatal flaw" with its test; $0 tickets get Confirm Pass & Archive / Override → Watch (Watch only: Confirm Watch / Pass & Archive; Trim: Acknowledge Trim / Override → Watch)
+- [x] Drawer: no "Waiting for you" research nag on a project with a ticket or graded under 40
+- [x] `autonomous_pilot_queue`: a named project says "pilot on" or "pilot off"
+- [ ] *(Eric)* Native coins (ETH) have no exit quotes, so the gate always gives $0: exempt native coins from the exit check, or use another liquidity basis
 - [ ] Preferences > Screening: edit `tickets.sizing` (same bounds as `tickets.sizingOf`), with tests
 - [ ] Record each PM decision as a journal entry too, so Notes shows it (decisions.jsonl stays the record)
 - [ ] Ticket packet: say which exit sizes the monitor is not quoting, and link to approving exit quotes

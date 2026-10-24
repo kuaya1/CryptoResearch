@@ -175,7 +175,7 @@ const KIND_WORDS = {
 export function eventStatus(e) {
   const l = e.ledger || {};
   if (e.state === 'reverted') return l.status === 'voided' ? ['Reversed on chain · ledger entry voided', 'bad'] : ['Reversed on chain', 'bad'];
-  if (l.status === 'recorded') return ['Recorded', 'ok'];
+  if (l.status === 'recorded') return l.linked ? ['Recorded · one transfer with your arrival entry', 'ok'] : ['Recorded', 'ok'];
   if (l.status === 'skipped') return [l.decision && /swap/.test(e.classification) ? 'You left it unrecorded' : 'You said it is already recorded', ''];
   if (e.classification === 'awaiting_receipt') return ['Waiting for its receipt', 'wait'];
   if (l.status === 'held') return l.hold && l.hold.needs_decision && !l.decision ? ['Needs your decision', 'warn'] : ['Held', 'warn'];
@@ -200,9 +200,12 @@ function amountCell(e) {
 // The two choices, in the words of why the event is held.
 const DECISION_WORDS = {
   possible_swap: ['Record as swap', 'Leave unrecorded', 'Recorded as a sale and a purchase at unknown price', 'Left out of the ledger. The balances still show it.'],
-  possible_own_transfer: ['Record as sent', 'Already recorded', 'Recorded in the ledger', 'Kept out of the ledger. Your own entry stays as it is.'],
+  possible_own_transfer: ['Record as sent elsewhere', 'Already recorded', 'Recorded in the ledger', 'Kept out of the ledger. Your own entry stays as it is.'],
+  own_transfer_unmatched: ['Record as sent elsewhere', 'Already recorded', 'Recorded in the ledger', 'Kept out of the ledger. Your own entry stays as it is.'],
   manual_records: ['Record in ledger', 'Already recorded', 'Recorded in the ledger', 'Kept out of the ledger. Your own entry stays as it is.'],
 };
+const isOwnMove = (e) => Boolean(e.ledger && e.ledger.hold && e.ledger.hold.code === 'possible_own_transfer');
+const OWN_MOVE_TIP = 'One transfer between your accounts: the send and your arrival entry share a transfer ID, so the units keep their cost and dates (no gain or loss). An arrival without an ID is corrected to carry it; the original stays, voided, with the reason.';
 
 function decisionButtons(ctx, e) {
   const post = (decision) => ctx.api.post('/api/wallets/events/resolve', { wallet_id: e.wallet_id, network: e.network, event_key: e.event_key, decision });
@@ -211,7 +214,38 @@ function decisionButtons(ctx, e) {
   rec.onclick = action(rec, async () => { const r = await post('record'); await ctx.refresh(); return r; }, (r) => (r.ledger && r.ledger.recorded ? recDone : 'Saved; it is recorded once it is final and mapped'));
   const skip = button(skipWord, null, { kind: 'small', key: `skip-${e.event_key}` });
   skip.onclick = action(skip, async () => { const r = await post('skip'); await ctx.refresh(); return r; }, skipDone);
-  return h('span', { class: 'btn-row' }, rec, skip);
+  if (!isOwnMove(e)) return h('span', { class: 'btn-row' }, rec, skip);
+  // A possible move to one of your own accounts: recorded as one transfer.
+  const own = button('Record as a move to your account', null, { kind: 'small', key: `own-${e.event_key}` });
+  own.title = OWN_MOVE_TIP;
+  own.onclick = action(own, async () => { const r = await post('own_transfer'); await ctx.refresh(); return r; }, (r) => (r.ledger && r.ledger.recorded ? 'Recorded as one transfer between your accounts' : 'Saved; it is linked once it is final and mapped'));
+  return h('span', { class: 'btn-row' }, own, rec, skip);
+}
+
+// Every possible move to your own accounts at once, after a confirmation
+// that lists them (core/wallets.js resolveOwnTransfers).
+function openOwnMovesDialog(ctx, moves) {
+  const save = button(`Record ${plural(moves.length, 'move')} as transfers`, null, { kind: 'primary', type: 'submit' });
+  const errorBox = h('div', { role: 'alert' });
+  let dlg = null;
+  const form = h('form', { class: 'form-stack' },
+    h('p', null, `Each send below is recorded as one transfer with the arrival you recorded: both share a transfer ID, so the units keep their cost and dates and no gain or loss is recorded. An arrival without an ID is corrected to carry it; the original stays, voided, with the reason. A send whose arrival has changed is asked again instead.`),
+    h('ul', { class: 'list small' }, moves.map((e) => h('li', null, h('strong', null, `${fmtAmount(e.amount)} ${e.symbol || ''}`.trim()), ` · ${e.wallet_label} · ${fmtDate(e.at)} · `, h('span', { class: 'muted' }, e.ledger.hold.reason)))),
+    errorBox,
+    h('div', { class: 'dlg-foot' }, save));
+  form.onsubmit = action(save, async () => {
+    try {
+      const r = await ctx.api.post('/api/wallets/events/own-transfers', { items: moves.map((e) => ({ wallet_id: e.wallet_id, network: e.network, event_key: e.event_key })) });
+      if (dlg) dlg.close();
+      await ctx.refresh();
+      return r;
+    } catch (err) {
+      errorBox.replaceChildren(callout(`Not saved: ${err.message}`, 'bad'));
+      return undefined;
+    }
+  }, (r) => `${plural((r.ledger && r.ledger.recorded) || 0, 'transfer')} recorded${r.ledger && r.ledger.held ? `; ${plural(r.ledger.held, 'event')} still held` : ''}`);
+  dlg = openDialog('Record moves between your accounts', form);
+  return dlg;
 }
 
 function walletCard(ctx, w, o) {
@@ -390,6 +424,9 @@ export async function walletsTab(ctx) {
   const names = new Map(o.wallets.map((w) => [w.wallet_id, w.label]));
   const tracked = o.wallets.filter((w) => w.status !== 'removed');
   const held = o.held;
+  const ownMoves = held.filter(isOwnMove);
+  const ownMovesButton = button(`Record all ${ownMoves.length} moves between your accounts`, () => openOwnMovesDialog(ctx, ownMoves), { kind: 'small', key: 'own-moves-all' });
+  ownMovesButton.title = OWN_MOVE_TIP;
   const recon = o.reconciliation.filter((r) => r.status !== 'matches');
   const assetOf = new Map(o.holdings.filter((r) => r.asset_id).map((r) => [r.asset_id, r]));
   const accountNames = new Map((o.accounts || []).map((a) => [a.account_id, a.name || a.account_id]));
@@ -407,7 +444,7 @@ export async function walletsTab(ctx) {
       e.swap_legs ? h('div', { class: 'wl-net-head' }, h('strong', null, 'Possible swap'), h('span', { class: 'btn-row' }, e.swap_legs.map((x) => amountCell({ ...x })))) : h('div', { class: 'wl-net-head' }, h('strong', null, (KIND_WORDS[e.classification] || (() => e.classification))(e, names)), amountCell(e)),
       h('div', { class: 'small muted' }, `${e.wallet_label} · ${e.network_label} · ${fmtDate(e.at)}`),
       h('div', { class: 'small' }, e.ledger.hold.reason),
-      decisionButtons(ctx, e)))), { note: 'A possible swap, an overlap with your own entries, or a possible move between your accounts. Nothing is recorded over your entries, and no swap is assumed, without you.' }) : null,
+      decisionButtons(ctx, e)))), { note: 'A possible swap, an overlap with your own entries, or a possible move between your accounts. Nothing is recorded over your entries, and no swap is assumed, without you.', actions: ownMoves.length > 1 ? [ownMovesButton] : null }) : null,
     tracked.length || o.wallets.length ? o.wallets.map((w) => walletCard(ctx, w, o)) : empty('No wallet tracked yet. Add one below: a label, its public address and the networks to follow.'),
     recon.length ? card('Reconciliation', table([
       { label: 'Asset', render: (r) => { const a = assetOf.get(r.asset_id); return h('div', null, h('strong', { title: r.asset_id }, a && a.symbol ? a.symbol : r.asset_id), a && a.name ? h('span', { class: 'muted' }, ` ${a.name}`) : null, h('div', { class: 'small muted', title: `Ledger account: ${r.account_id}` }, where(r))); } },

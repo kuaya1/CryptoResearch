@@ -1033,6 +1033,57 @@ function entriesFor(unit, ctx) {
   return { entries };
 }
 
+// An arrival that already has its send: a transfer ID that an active
+// transfer_out uses too.
+function linkedArrival(txs, t) {
+  return Boolean(t.transfer_id) && txs.some((o) => !o.voided && o.type === 'transfer_out' && o.transfer_id === t.transfer_id && o.tx_id !== t.tx_id);
+}
+
+// Eric's arrival entry as it stands now: the one he matched, or the entry
+// that corrected it since (corrected_by), followed to the active one.
+function currentEntry(txs, txId) {
+  const byId = new Map(txs.map((t) => [t.tx_id, t]));
+  let t = byId.get(txId) || null;
+  const seen = new Set();
+  while (t && t.voided && t.corrected_by && !seen.has(t.tx_id)) {
+    seen.add(t.tx_id);
+    t = byId.get(t.corrected_by) || null;
+  }
+  return t && !t.voided ? t : null;
+}
+
+// How a send Eric called a move to his own account is linked to the arrival
+// he recorded: the arrival is checked again now (same asset, another
+// account, 95 to 100% of what was sent, not linked to another send), the send
+// takes the arrival's own transfer ID when it has an unused one, or a new
+// one, and an arrival without an ID gets a corrected copy that carries it.
+// Returns { transfer_id, twin, corrected } with the send's entry updated, or
+// { hold } saying why it cannot be linked (the decision is then asked again).
+function ownTransferLink(txs, missing, decision, { network, event, registry, accountIds }) {
+  const again = (reason) => ({ hold: { code: 'own_transfer_unmatched', needs_decision: true, reason } });
+  const send = missing.find((x) => x.type === 'transfer_out' && !x.transfer_id);
+  if (!send) return again('There is no send to link here; decide again.');
+  const twin = currentEntry(txs, decision.twin_tx_id);
+  if (!twin) return again(`The arrival you matched (${decision.twin_tx_id}) is no longer an active entry. Decide again.`);
+  if (twin.type !== 'transfer_in' || twin.asset_id !== send.asset_id || twin.account_id === send.account_id) return again(`${twin.tx_id} is no longer an arrival of ${send.asset_id} in another account. Decide again.`);
+  const q = D.of(send.quantity);
+  const m = D.of(twin.quantity);
+  if (!(m <= q && m * 100n >= q * 95n)) return again(`${twin.tx_id} now records ${twin.quantity} ${twin.asset_id}, not 95 to 100% of the ${send.quantity} sent. Decide again.`);
+  if (linkedArrival(txs, twin)) return again(`${twin.tx_id} is already linked to another send (transfer ${twin.transfer_id}). Decide again.`);
+  const transferId = twin.transfer_id || `wo-${network}-${event.tx_hash.slice(2, 14)}-${shortHash([event.event_key]).slice(0, 8)}`;
+  send.transfer_id = transferId;
+  send.note = `To your account ${twin.account_id} on ${netLabel(network)} (tx ${txRef(event)}); arrives as ${twin.tx_id}`;
+  if (twin.transfer_id) return { transfer_id: transferId, twin, corrected: null };
+  const { tx_id: _id, external_id: _ext, ...fields } = twin;
+  const { tx, errors } = portfolio.normalizeTx({ ...fields, transfer_id: transferId }, { source: 'correction' });
+  if (!errors.length) errors.push(...portfolio.validateTx(tx, registry, accountIds, txs.filter((t) => t !== twin)));
+  if (!errors.length) errors.push(...portfolio.transferIdErrors(tx, txs.filter((t) => t !== twin)));
+  if (errors.length) return again(`The arrival cannot carry the transfer ID: ${errors.join('; ')}`);
+  delete tx.tx_id_supplied;
+  tx.corrects = twin.tx_id;
+  return { transfer_id: transferId, twin, corrected: tx };
+}
+
 // The units of one wallet view's final, undecided events: each transfer leg
 // and each fee on its own, a swap (or possible swap) as one.
 function unitsOf(events, wallet, network) {
@@ -1134,6 +1185,9 @@ function importReady(ws, { now = Date.now() } = {}) {
             }
           };
           const decision = unit.events[0].ledger.decision || null;
+          // "Record it" and "a move to my own account" both pass the holds
+          // that wait for Eric; only the second links the two legs.
+          const decided = Boolean(decision && (decision.choice === 'record' || decision.choice === 'own_transfer'));
           if (decision && decision.choice === 'skip') {
             mark('skipped', { hold: null, reason: SWAPLIKE.has(unit.events[0].classification) ? 'You chose to leave it unrecorded.' : 'You said this is already recorded.' });
             continue;
@@ -1167,7 +1221,7 @@ function importReady(ws, { now = Date.now() } = {}) {
           }
           const missing = built.entries.filter((x, i) => !existing[i]);
           // Transactions Eric recorded himself for the same account and asset.
-          if (!(decision && decision.choice === 'record')) {
+          if (!decided) {
             const overlap = missing.find((x) => manual.keys.has(`${x.account_id}|${x.asset_id}`));
             if (overlap) {
               const ids = manual.keys.get(`${overlap.account_id}|${overlap.asset_id}`);
@@ -1179,7 +1233,8 @@ function importReady(ws, { now = Date.now() } = {}) {
             if (outExt) {
               const q = D.of(outExt.quantity);
               const t0 = Date.parse(outExt.date);
-              const twin = manual.list.find((t) => t.type === 'transfer_in' && t.asset_id === outExt.asset_id && t.account_id !== outExt.account_id && Math.abs(Date.parse(t.date) - t0) <= 3 * 86400000 && (() => { const m = D.of(t.quantity); return m <= q && m * 100n >= q * 95n; })());
+              // An arrival already linked to a send is not offered again.
+              const twin = manual.list.find((t) => t.type === 'transfer_in' && t.asset_id === outExt.asset_id && t.account_id !== outExt.account_id && !linkedArrival(txs, t) && Math.abs(Date.parse(t.date) - t0) <= 3 * 86400000 && (() => { const m = D.of(t.quantity); return m <= q && m * 100n >= q * 95n; })());
               if (twin) {
                 mark('held', { hold: { code: 'possible_own_transfer', needs_decision: true, reason: `This may be a move to your account ${twin.account_id}: you recorded ${twin.quantity} ${twin.asset_id} arriving there on ${String(twin.date).slice(0, 10)} (${twin.tx_id}).`, match_tx_ids: [twin.tx_id] } });
                 counts.held++;
@@ -1190,6 +1245,18 @@ function importReady(ws, { now = Date.now() } = {}) {
           const registry = map.registry;
           const added = [];
           let invalid = null;
+          // A move to one of Eric's own accounts (his decision): the send and
+          // the arrival he recorded become one transfer, sharing a transfer
+          // ID, so the units keep their lots and cost (no gain or loss).
+          let link = null;
+          if (decision && decision.choice === 'own_transfer') {
+            link = ownTransferLink(txs, missing, decision, { network, event: unit.events[0], registry, accountIds });
+            if (link.hold) {
+              mark('held', { hold: link.hold, decision: null });
+              counts.held++;
+              continue;
+            }
+          }
           for (const x of missing) {
             const { _event: ev, ...input } = x;
             const { tx, errors } = portfolio.normalizeTx(input, { source: SOURCE });
@@ -1208,12 +1275,22 @@ function importReady(ws, { now = Date.now() } = {}) {
             counts.held++;
             continue;
           }
+          // Eric's arrival is corrected to carry the shared ID, the standard
+          // way: the original is voided with the reason and stays; the
+          // corrected copy replaces it. Same save as the send.
+          if (link && link.corrected) {
+            link.twin.voided = true;
+            link.twin.void_reason = `Corrected: linked as one transfer to the wallet send on ${netLabel(network)} (tx ${unit.events[0].tx_hash}), your decision`;
+            link.twin.voided_at = at;
+            link.twin.corrected_by = link.corrected.tx_id;
+            txs.push(link.corrected);
+          }
           for (const t of added) {
             txs.push(t);
             byExternal.set(t.external_id, t);
           }
           ledgerChanged = true;
-          mark('recorded', { hold: null, tx_ids: built.entries.map((x) => (byExternal.get(x.external_id) || {}).tx_id).filter(Boolean) });
+          mark('recorded', { hold: null, tx_ids: built.entries.map((x) => (byExternal.get(x.external_id) || {}).tx_id).filter(Boolean), ...(link ? { linked: { transfer_id: link.transfer_id, arrival_tx_id: link.corrected ? link.corrected.tx_id : link.twin.tx_id, corrected_tx_id: link.corrected ? link.twin.tx_id : null } } : {}) });
           counts.recorded++;
         }
         if (changed) op.writeJson(rel, doc);
@@ -1232,10 +1309,14 @@ function importReady(ws, { now = Date.now() } = {}) {
 // Eric's decision on a held event: record it, or keep it out (already
 // recorded, or not a swap). The next import applies it (right away from the
 // dashboard).
+// "own_transfer" (only for a send held as a possible move to Eric's own
+// account): record it as one transfer with the arrival he recorded, linked
+// by a shared transfer ID when the next import records it (ownTransferLink).
 function resolveEvent(ws, { wallet_id, network, event_key, decision, note = null }) {
   const w = walletById(ws, wallet_id);
   if (!networkInfo(network)) throw new OpError('INVALID', 'Unknown network');
-  if (!['record', 'skip'].includes(decision)) throw new OpError('INVALID', 'Decide "record" (record it in the ledger) or "skip" (keep it out of the ledger).');
+  if (!['record', 'skip', 'own_transfer'].includes(decision)) throw new OpError('INVALID', 'Decide "record" (record it in the ledger), "own_transfer" (record it as a move to your own account) or "skip" (keep it out of the ledger).');
+  if (decision === 'own_transfer') return resolveOwnTransfers(ws, { items: [{ wallet_id, network, event_key }], note });
   const out = runOp(ws, { type: 'wallet_decision', summary: `Wallet event decision (${w.label})` }, (op) => {
     const rel = eventsRel(w.wallet_id, network);
     const doc = op.readJson(rel, null);
@@ -1266,6 +1347,57 @@ function resolveEvent(ws, { wallet_id, network, event_key, decision, note = null
       }
     }
     return { status: 'saved', events: group.length + mirrored };
+  });
+  return { ...out.result, files: out.files, verified: out.verified };
+}
+
+// The possible moves to Eric's own accounts waiting for his decision: every
+// send held as possible_own_transfer with no decision yet, with the arrival
+// it may match.
+function ownTransferCandidates(ws) {
+  const reg = loadRegistry(ws);
+  const out = [];
+  for (const w of reg.wallets) {
+    for (const network of w.networks || []) {
+      if (!networkInfo(network)) continue;
+      const doc = readJson(ws.abs(eventsRel(w.wallet_id, network)), null);
+      for (const e of (doc && doc.events) || []) {
+        const l = e.ledger || {};
+        if (l.status !== 'held' || l.decision || !l.hold || l.hold.code !== 'possible_own_transfer' || !(l.hold.match_tx_ids || []).length) continue;
+        out.push({ wallet_id: w.wallet_id, wallet_label: w.label, network, event_key: e.event_key, tx_hash: e.tx_hash, at: e.block_timestamp, amount: e.amount, symbol: e.asset && e.asset.symbol, arrival_tx_id: l.hold.match_tx_ids[0], reason: l.hold.reason });
+      }
+    }
+  }
+  return out;
+}
+
+// Eric's decision for several possible moves at once, in one save: each must
+// still be waiting as a possible move to his own account (else nothing is
+// saved). The next import links each send to its arrival (ownTransferLink),
+// or asks again for one whose arrival changed.
+function resolveOwnTransfers(ws, { items, note = null }) {
+  if (!Array.isArray(items) || !items.length) throw new OpError('INVALID', 'Name the possible moves to record.');
+  const reg = loadRegistry(ws);
+  const text = note ? String(note).slice(0, 300) : null;
+  const out = runOp(ws, { type: 'wallet_decision', summary: `Record ${items.length} possible move(s) to your own accounts` }, (op) => {
+    const docs = new Map();
+    const at = new Date().toISOString();
+    for (const it of items) {
+      const w = reg.wallets.find((x) => x.wallet_id === String(it.wallet_id || ''));
+      if (!w) throw new OpError('NOT_FOUND', `No tracked wallet ${String(it.wallet_id || '').slice(0, 60)}`);
+      if (!networkInfo(String(it.network || ''))) throw new OpError('INVALID', 'Unknown network');
+      const rel = eventsRel(w.wallet_id, it.network);
+      if (!docs.has(rel)) docs.set(rel, op.readJson(rel, null));
+      const doc = docs.get(rel);
+      const e = doc && doc.events.find((x) => x.event_key === String(it.event_key || ''));
+      if (!e) throw new OpError('NOT_FOUND', 'No such wallet event');
+      const l = e.ledger || {};
+      if (l.status !== 'held' || l.decision || !l.hold || l.hold.code !== 'possible_own_transfer' || !(l.hold.match_tx_ids || []).length) throw new OpError('CONFLICT', `${w.label}: the event ${e.tx_hash.slice(0, 10)}… is not waiting as a possible move to your own account any more. Nothing was saved; look again.`);
+      e.ledger = { ...l, decision: { choice: 'own_transfer', twin_tx_id: l.hold.match_tx_ids[0], at, note: text } };
+      e.history.push({ at, change: `you said it is a move to your own account (arrival ${l.hold.match_tx_ids[0]})` });
+    }
+    for (const [rel, doc] of docs) op.writeJson(rel, doc);
+    return { status: 'saved', events: items.length };
   });
   return { ...out.result, files: out.files, verified: out.verified };
 }
@@ -1667,6 +1799,8 @@ module.exports = {
   mapContext,
   importReady,
   resolveEvent,
+  resolveOwnTransfers,
+  ownTransferCandidates,
   reconcileAll,
   overview,
   attentionItems,

@@ -750,6 +750,91 @@ test('a held transfer between two tracked wallets is one decision; a send that m
   assert.equal(a.status, 'saved');
 });
 
+// A send Eric calls a move to his own account (2026-10-21): the wallet's
+// send and the arrival he recorded become one transfer, sharing a transfer
+// ID, so the units keep their lots and cost and nothing counts as sold or
+// deposited. His arrival entry is corrected the standard way (the original
+// stays, voided, with the reason).
+async function ownMoveDesk(t, label) {
+  const { ws } = setup(t, label);
+  addToken(ws);
+  portfolio.addAccount(ws, { account_id: 'coinbase', name: 'Coinbase' });
+  portfolio.addAccount(ws, { account_id: 'kraken', name: 'Kraken' });
+  portfolio.addTransactions(ws, [{ type: 'transfer_in', date: iso(NOW - DAY), account_id: 'coinbase', asset_id: 'xtkn-fictional', quantity: '9.9', price_usd: null }], { source: 'manual' });
+  portfolio.addTransactions(ws, [{ type: 'transfer_in', date: iso(NOW - 2 * DAY), account_id: 'kraken', asset_id: 'xtkn-fictional', quantity: '20', price_usd: null, transfer_id: 'my-kraken-move' }], { source: 'manual' });
+  const a = wallets.addWallet(ws, { label: 'MetaMask', address: A, networks: ['eth'] });
+  const f = chain({ pageSize: 10 });
+  f.setMeta('eth', TOKEN, XTKN_META);
+  f.tokenSend('eth', { from: EXT, to: A, raw: wei('100'), at: NOW - 9 * DAY });
+  const toCoinbase = f.tokenSend('eth', { from: A, to: EXT, raw: wei('10'), at: NOW - DAY - HOUR });
+  const toKraken = f.tokenSend('eth', { from: A, to: EXT, raw: wei('20'), at: NOW - 2 * DAY - HOUR, log: 7 });
+  f.setToken('eth', A, TOKEN, wei('70'));
+  await sync(ws, f);
+  return { ws, a, toCoinbase, toKraken };
+}
+
+test('a move to your own account is one transfer: the send and your arrival share a transfer ID, your entry corrected, nothing deposited or sent away', async (t) => {
+  const { ws, a, toCoinbase } = await ownMoveDesk(t, 'al-own');
+  const o = wallets.overview(ws, { market: marketAt({}), now: NOW });
+  const held = o.held.find((x) => x.tx_hash === toCoinbase.hash);
+  assert.equal(held.ledger.hold.code, 'possible_own_transfer');
+  const arrival = ledger(ws).find((x) => x.account_id === 'coinbase');
+  const before = portfolio.computePortfolio(ws, { market: { assets: {} } });
+  assert.ok(before.warnings.some((w) => w.kind === 'external_deposit' && w.tx_id === arrival.tx_id), 'before: a deposit with unknown cost');
+  // Only a send held as a possible move can be decided this way.
+  const plain = o.held.find((x) => x.ledger.hold.code !== 'possible_own_transfer');
+  if (plain) assert.throws(() => wallets.resolveEvent(ws, { wallet_id: plain.wallet_id, network: 'eth', event_key: plain.event_key, decision: 'own_transfer' }), /not waiting as a possible move/);
+  const r = wallets.resolveEvent(ws, { wallet_id: a.wallet_id, network: 'eth', event_key: held.event_key, decision: 'own_transfer' });
+  assert.equal(r.verified, true);
+  wallets.importReady(ws, { now: NOW });
+  const txs = ledger(ws);
+  const send = txs.find((x) => x.type === 'transfer_out' && x.provenance && x.provenance.tx_hash === toCoinbase.hash);
+  assert.ok(send.transfer_id && send.transfer_id.startsWith('wo-eth-'));
+  assert.match(send.note, /^To your account coinbase on Ethereum/);
+  const old = txs.find((x) => x.tx_id === arrival.tx_id);
+  assert.equal(old.voided, true, 'your original entry stays, voided');
+  assert.match(old.void_reason, /^Corrected: linked as one transfer to the wallet send on Ethereum/);
+  const fixed = txs.find((x) => x.tx_id === old.corrected_by);
+  assert.deepEqual([fixed.type, fixed.account_id, fixed.quantity, fixed.transfer_id, fixed.corrects, fixed.source], ['transfer_in', 'coinbase', '9.9', send.transfer_id, arrival.tx_id, 'correction']);
+  const pf = portfolio.computePortfolio(ws, { market: { assets: {} } });
+  assert.ok(!pf.warnings.some((w) => (w.kind === 'external_deposit' && w.tx_id === fixed.tx_id) || (w.kind === 'external_transfer_out' && w.tx_id === send.tx_id)), 'neither a deposit nor a send outside your accounts');
+  assert.equal(accountQty(ws, 'coinbase', 'xtkn-fictional'), '9.9', 'the 0.1 not arriving is a fee paid in kind');
+  const e = wallets.loadEvents(ws, a.wallet_id, 'eth').find((x) => x.event_key === held.event_key);
+  assert.equal(e.ledger.status, 'recorded', JSON.stringify(e.ledger));
+  assert.deepEqual(e.ledger.linked, { transfer_id: send.transfer_id, arrival_tx_id: fixed.tx_id, corrected_tx_id: arrival.tx_id });
+  // Importing again changes nothing; the linked arrival is never offered for another send.
+  const again = wallets.importReady(ws, { now: NOW });
+  assert.equal(again.recorded, 0);
+  assert.equal(ledger(ws).length, txs.length);
+});
+
+test('moves in bulk: one save for every possible move shown; an arrival that already has an ID keeps it; one that changed is asked again', async (t) => {
+  const { ws, toCoinbase, toKraken } = await ownMoveDesk(t, 'al-own-bulk');
+  const moves = wallets.ownTransferCandidates(ws);
+  assert.deepEqual(moves.map((m) => m.tx_hash).sort(), [toCoinbase.hash, toKraken.hash].sort());
+  // Eric voids his Coinbase arrival before deciding: that move is asked again.
+  const cb = ledger(ws).find((x) => x.account_id === 'coinbase');
+  portfolio.voidTransaction(ws, cb.tx_id, 'FICTIONAL: entered twice');
+  const r = wallets.resolveOwnTransfers(ws, { items: moves.map((m) => ({ wallet_id: m.wallet_id, network: m.network, event_key: m.event_key })) });
+  assert.equal(r.events, 2);
+  const out = wallets.importReady(ws, { now: NOW });
+  assert.equal(out.recorded, 1);
+  const txs = ledger(ws);
+  const kraken = txs.find((x) => x.account_id === 'kraken' && !x.voided);
+  assert.equal(kraken.transfer_id, 'my-kraken-move', 'an arrival with its own unused ID keeps it, uncorrected');
+  assert.equal(kraken.voided, false);
+  const send = txs.find((x) => x.type === 'transfer_out' && x.provenance && x.provenance.tx_hash === toKraken.hash);
+  assert.equal(send.transfer_id, 'my-kraken-move');
+  const events = wallets.loadEvents(ws, moves[0].wallet_id, 'eth');
+  const asked = events.find((x) => x.event_key === moves.find((m) => m.tx_hash === toCoinbase.hash).event_key).ledger;
+  assert.equal(asked.status, 'held');
+  assert.equal(asked.hold.code, 'own_transfer_unmatched');
+  assert.equal(asked.decision, null, 'the decision is asked again');
+  assert.match(asked.hold.reason, /is no longer an active entry/);
+  // A batch naming an event that is not waiting any more saves nothing.
+  assert.throws(() => wallets.resolveOwnTransfers(ws, { items: [{ wallet_id: moves[0].wallet_id, network: 'eth', event_key: moves.find((m) => m.tx_hash === toKraken.hash).event_key }] }), /not waiting as a possible move/);
+});
+
 test('exact quantities: 6, 18 and 24 decimals without floats; the ledger refuses what it cannot keep exactly', async (t) => {
   assert.equal(wallets.unitsToDecimal('1234567', 6), '1.234567');
   assert.equal(wallets.unitsToDecimal('1', 18), '0.000000000000000001');
@@ -1088,7 +1173,7 @@ test('partial or malformed answers never void a recorded entry, finality never g
   assert.equal(r2.status, 'ok', r2.message);
   const e = wallets.loadEvents(ws, w.wallet_id, 'eth').find((x) => x.tx_hash === got.hash);
   assert.equal(e.state, 'final', 'finality never goes back');
-  assert.equal(e.ledger.status, 'recorded');
+  assert.equal(e.ledger.status, 'recorded', JSON.stringify(e.ledger));
   assert.equal(e.asset.contract, TOKEN.toLowerCase(), 'an answer without the contract is not a change');
   assert.ok(!ledger(ws).some((x) => x.voided), 'nothing voided');
   assert.equal(accountQty(ws, w.account_id, 'xtkn-fictional'), recordedQty);

@@ -1811,7 +1811,13 @@ const handlers = {
     const how = next ? (next.step === 'research'
       ? (next.run_id ? `Call pending_research with project "${next.project_id}" (or start_research with Eric's words): it resumes run ${next.run_id}. Research it and save_report; then call autonomous_pilot_queue again.` : `Call start_research with project_id "${next.project_id}" and owner_request "autonomous pilot" (Claude only). Research it and save_report; then call autonomous_pilot_queue again.`)
       : `Call start_ticket with project_id "${next.project_id}" and owner_request "autonomous pilot", follow the Prosecutor prompt, then save_ticket.`) : null;
-    return { status: steps.length ? 'ok' : 'none', steps, next: next ? { ...next, next_action: how } : null, message: steps.length ? `${steps.length} project${steps.length === 1 ? '' : 's'} in the pilot; ${todo.length} with work for Claude.` : 'No project is in the autonomous pilot. Eric turns it on per project (the inspector, or tickets pilot <id> --on).' };
+    // A project named outright is read whether or not it is in the pilot;
+    // the words say which (only projects with the pilot on count as in it).
+    const inPilot = steps.filter((s) => s.pilot).length;
+    const where = named
+      ? `${steps.map((s) => `${s.name}: pilot ${s.pilot ? 'on' : 'off'}`).join('; ')}`
+      : `${inPilot} project${inPilot === 1 ? '' : 's'} in the pilot`;
+    return { status: steps.length ? 'ok' : 'none', steps, next: next ? { ...next, next_action: how } : null, message: steps.length ? `${where}; ${todo.length} with work for Claude.` : 'No project is in the autonomous pilot. Eric turns it on per project (the inspector, or tickets pilot <id> --on).' };
   },
 
   start_ticket(ws, args, ctx) {

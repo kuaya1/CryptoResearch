@@ -240,3 +240,44 @@ test('connector: only Claude prosecutes; the tools hand out the frozen prompt an
   const q = await callAs('claude', 'autonomous_pilot_queue', { project: s.pid });
   assert.equal(q.structuredContent.steps[0].step, 'pm_review');
 });
+
+test('a $0 ticket is passed (archiving the project, Undo restores it) or kept on watch; approve, halve and veto are for tickets that suggest risk', (t) => {
+  const s = withReport(t);
+  const projects = require('../core/projects');
+  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
+  const saved = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) });
+  assert.equal(saved.receipt.desk.suggested_risk_usd, 0);
+  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'trim' }), (e) => e.code === 'REFUSED', 'a trim needs a TRIM_EXIT proposal');
+  const pass = T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'pass' });
+  assert.equal(pass.result.project_archived, true);
+  assert.equal(projects.getProject(s.ws, s.pid).status, 'archived');
+  assert.equal(T.view(s.ws, s.pid).ticket.status, 'passed');
+  const undo = T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'undo' });
+  assert.equal(undo.result.project_restored, true);
+  assert.equal(projects.getProject(s.ws, s.pid).status, 'active');
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'watch' });
+  assert.equal(T.view(s.ws, s.pid).ticket.status, 'watching');
+  // A ticket that suggests risk is not "passed" or "watched".
+  const tk2 = T.createTicket(s.ws, { project_id: s.pid, assistant: true, refresh: true }).ticket;
+  withExit(s.ws, s.pid, tk2.ticket_id, 2);
+  const risky = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk2.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk2.ticket_id)) });
+  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: risky.receipt_id, action: 'pass' }), (e) => e.code === 'REFUSED');
+});
+
+test('the pilot queue names whether a project named outright is in the pilot', async (t) => {
+  const s = withReport(t);
+  assert.equal(T.nextStep(s.ws, s.pid).pilot, false);
+  const { makeMcp } = require('../mcp');
+  const handle = makeMcp(s.ws);
+  const ask = async () => {
+    let body = '';
+    const req = require('stream').Readable.from([Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'autonomous_pilot_queue', arguments: { project: s.pid } } }))]);
+    req.method = 'POST';
+    await handle(req, { writeHead() {}, end(b) { body = b || ''; } }, { assistant: 'claude' });
+    return JSON.parse(body).result.structuredContent.message;
+  };
+  assert.match(await ask(), /pilot off/);
+  assert.doesNotMatch(await ask(), /in the pilot/);
+  T.setPilot(s.ws, s.pid, true);
+  assert.match(await ask(), /pilot on/);
+});

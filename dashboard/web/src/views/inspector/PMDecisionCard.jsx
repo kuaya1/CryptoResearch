@@ -11,15 +11,28 @@ import { toast, submissionId, fmtDateTime } from '../../../../public/ui.js';
 import { api, refresh } from '../../lib/desk.js';
 
 const enc = encodeURIComponent;
-const usd = (n) => (typeof n === 'number' ? `$${n.toLocaleString('en-US', { maximumFractionDigits: n < 1 ? 6 : 2 })}` : '—');
+const usd = (n) => (typeof n === 'number' ? `$${n.toLocaleString('en-US', { minimumFractionDigits: n >= 1000 ? 0 : 2, maximumFractionDigits: n < 1 ? 6 : 2 })}` : '—');
 const TYPE_WORDS = { ACCUMULATE: 'Accumulate', LIMIT_TRAP: 'Limit trap', TRIM_EXIT: 'Trim / exit', WATCH_ONLY: 'Watch only', HARD_PASS: 'Hard pass' };
 const STATUS = {
   pending_pm_review: { word: 'Pending your review', tone: 'is-warn' },
   risk_granted: { word: 'Risk granted', tone: 'is-ok' },
   vetoed: { word: 'Vetoed', tone: '' },
+  passed: { word: 'Passed', tone: '' },
+  watching: { word: 'Watching', tone: '' },
+  trim_acknowledged: { word: 'Trim acknowledged', tone: '' },
   invalidated: { word: 'Invalidated', tone: 'is-bad' },
 };
 const VERDICT_WORDS = { thesis_survives: 'thesis survives', thesis_damaged: 'thesis damaged', fatal_flaw: 'fatal flaw' };
+const TEST_WORDS = { mercenary_emissions: 'mercenary emissions', tax_revenue: 'tax revenue', exit_slippage: 'exit slippage', unverified_claims: 'unverified claims', other: 'other' };
+const DECIDED_WORDS = { veto: 'Vetoed', pass: 'Pass confirmed', watch: 'Kept on watch', trim: 'Trim acknowledged' };
+
+// The Prosecutor's line: its own score, then either its fatal flaws (with the
+// first one's test) or its verdict, never both saying "fatal flaw".
+function prosecutorWords(q, fatal) {
+  const score = q.conviction_score ?? '—';
+  if (fatal.length) return `${score} · ${fatal.length} fatal flaw${fatal.length === 1 ? '' : 's'} (${TEST_WORDS[fatal[0].test] || fatal[0].test})`;
+  return `${score} · ${VERDICT_WORDS[q.verdict] || q.verdict || 'no verdict'}`;
+}
 
 function exitText(t) {
   if (t.exit_cost_500_usd_pct === null || t.exit_cost_500_usd_pct === undefined) return { text: 'No reading', tone: 'is-unknown' };
@@ -78,7 +91,10 @@ export function PMDecisionCard({ p }) {
     try {
       const out = await api.post(`/api/projects/${enc(pid)}/tickets/decisions`, { receipt_id: t.receipt_id, action, request_id: submissionId() });
       const d = out && out.result ? out.result.decision : out && out.decision;
-      toast(action === 'undo' ? 'Decision undone' : action === 'veto' ? 'Ticket vetoed' : `Risk granted: ${usd(d ? d.pm_approved_risk_usd : null)}`);
+      const r = out && out.result ? out.result : out || {};
+      toast(action === 'undo' ? (r.project_restored ? 'Decision undone; project restored' : 'Decision undone')
+        : action === 'pass' ? (r.project_archived ? 'Pass confirmed; project archived' : 'Pass confirmed; kept because you hold it')
+          : DECIDED_WORDS[action] || `Risk granted: ${usd(d ? d.pm_approved_risk_usd : null)}`);
       await refresh();
     } catch (err) {
       toast(err.message, 'bad');
@@ -123,7 +139,7 @@ export function PMDecisionCard({ p }) {
       </div>
       <div className="pm-dis" title={dis.note || undefined}>
         <p className="pm-dis-row"><span className="pm-dis-k">Researcher</span><span>{`${r.grade_display || r.grade || '—'} · ${r.verdict || 'no verdict'}`}</span></p>
-        <p className="pm-dis-row"><span className="pm-dis-k">Prosecutor</span><span>{`${q.conviction_score ?? '—'} · ${VERDICT_WORDS[q.verdict] || q.verdict || 'no verdict'}${fatal.length ? ` · ${fatal.length} fatal flaw${fatal.length === 1 ? '' : 's'}` : ''}`}</span></p>
+        <p className="pm-dis-row"><span className="pm-dis-k">Prosecutor</span><span>{prosecutorWords(q, fatal)}</span></p>
         {typeof dis.spread_points === 'number' ? <p className="pm-dis-row"><span className="pm-dis-k">Spread</span><span>{`${dis.spread_points > 0 ? '+' : ''}${dis.spread_points} points (researcher minus prosecutor)`}</span></p> : null}
         {dis.note ? (
           <>
@@ -136,15 +152,30 @@ export function PMDecisionCard({ p }) {
       <div className="pm-actions">
         {decided ? (
           <p className="pm-decided">
-            <span>{decided.action === 'veto' ? 'Vetoed' : `Approved ${usd(t.pm_approved_risk_usd)}`}</span>
+            <span>{DECIDED_WORDS[decided.action] || `Approved ${usd(t.pm_approved_risk_usd)}`}{decided.action === 'pass' && decided.archive === 'archived' ? ' · archived' : ''}</span>
             <span className="faint">{` · ${fmtDateTime(decided.at)}`}</span>
             <button type="button" className="btn btn-sm" data-key={`pm-undo-${pid}`} disabled={Boolean(busy)} onClick={() => decide('undo')}>Undo</button>
           </p>
+        ) : risk > 0 ? (
+          <>
+            <button type="button" className="btn btn-sm btn-primary" data-key={`pm-approve-${pid}`} disabled={Boolean(busy) || t.status === 'invalidated'} title={`Grant ${usd(risk)} of risk`} onClick={() => decide('approve')}>{`Approve Risk (${usd(risk)})`}</button>
+            <button type="button" className="btn btn-sm" data-key={`pm-halve-${pid}`} disabled={Boolean(busy) || t.status === 'invalidated'} title="The starter tranche" onClick={() => decide('halve')}>{`Halve Size (${usd(Math.min(t.starter_risk_usd, risk))})`}</button>
+            <button type="button" className="btn btn-sm" data-key={`pm-veto-${pid}`} disabled={Boolean(busy)} onClick={() => decide('veto')}>Veto / Archive</button>
+          </>
+        ) : t.proposal_type === 'TRIM_EXIT' ? (
+          <>
+            <button type="button" className="btn btn-sm btn-primary" data-key={`pm-trim-${pid}`} disabled={Boolean(busy)} title="Records that you saw the trim proposal; it places no order" onClick={() => decide('trim')}>Acknowledge Trim</button>
+            <button type="button" className="btn btn-sm" data-key={`pm-watch-${pid}`} disabled={Boolean(busy)} onClick={() => decide('watch')}>{'Override → Watch'}</button>
+          </>
+        ) : t.proposal_type === 'WATCH_ONLY' ? (
+          <>
+            <button type="button" className="btn btn-sm btn-primary" data-key={`pm-watch-${pid}`} disabled={Boolean(busy)} onClick={() => decide('watch')}>Confirm Watch</button>
+            <button type="button" className="btn btn-sm" data-key={`pm-pass-${pid}`} disabled={Boolean(busy)} title={p.held ? 'You hold it, so it stays on the Desk' : 'Archives the project; Undo restores it'} onClick={() => decide('pass')}>{'Pass & Archive'}</button>
+          </>
         ) : (
           <>
-            <button type="button" className="btn btn-sm btn-primary" data-key={`pm-approve-${pid}`} disabled={Boolean(busy) || !(risk > 0) || t.status === 'invalidated'} title={risk > 0 ? `Grant ${usd(risk)} of risk` : 'This ticket suggests no risk'} onClick={() => decide('approve')}>Approve Risk</button>
-            <button type="button" className="btn btn-sm" data-key={`pm-halve-${pid}`} disabled={Boolean(busy) || !(risk > 0) || t.status === 'invalidated'} title={risk > 0 ? `Grant ${usd(Math.min(t.starter_risk_usd, risk))}, the starter tranche` : 'This ticket suggests no risk'} onClick={() => decide('halve')}>Halve Size</button>
-            <button type="button" className="btn btn-sm" data-key={`pm-veto-${pid}`} disabled={Boolean(busy)} onClick={() => decide('veto')}>Veto / Archive</button>
+            <button type="button" className="btn btn-sm btn-primary" data-key={`pm-pass-${pid}`} disabled={Boolean(busy)} title={p.held ? 'You hold it, so it stays on the Desk' : 'Archives the project; Undo restores it'} onClick={() => decide('pass')}>{'Confirm Pass & Archive'}</button>
+            <button type="button" className="btn btn-sm" data-key={`pm-watch-${pid}`} disabled={Boolean(busy)} onClick={() => decide('watch')}>{'Override → Watch'}</button>
           </>
         )}
       </div>

@@ -45,7 +45,11 @@ const RISK_TAKING = new Set(['ACCUMULATE', 'LIMIT_TRAP']);
 const VERDICTS = ['thesis_survives', 'thesis_damaged', 'fatal_flaw'];
 const TESTS = ['mercenary_emissions', 'tax_revenue', 'exit_slippage', 'unverified_claims'];
 const METRIC_KEYS = ['fees', 'revenue', 'holders_revenue'];
-const ACTIONS = ['approve', 'halve', 'veto', 'undo'];
+// approve, halve and veto answer a ticket that suggests risk; pass (and
+// archive the project unless it is held), watch and trim answer one that
+// suggests none (Eric, 2026-10-24: vetoing a hard pass read backwards).
+const ACTIONS = ['approve', 'halve', 'veto', 'pass', 'watch', 'trim', 'undo'];
+const STATUS_OF = { approve: 'risk_granted', halve: 'risk_granted', veto: 'vetoed', pass: 'passed', watch: 'watching', trim: 'trim_acknowledged' };
 const MIN_TEXT = 600;
 const MAX_TEXT = 400 * 1024;
 const MAX_DRAFT = 400 * 1024;
@@ -740,7 +744,8 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
   const text = note === null || note === undefined ? null : String(note).replace(/\r\n/g, '\n').trim().slice(0, 1000) || null;
   const reqId = typeof requestId === 'string' && /^[A-Za-z0-9_-]{8,80}$/.test(requestId) ? requestId : null;
   const rel = decisionsRel(pid);
-  return runOp(ws, { type: 'ticket_decision', summary: `PM ${action} on ${rid} for ${pid}` }, (op) => {
+  const held = action === 'pass' ? heldOf(ws, pid, Date.now()) === true : false;
+  const out = runOp(ws, { type: 'ticket_decision', summary: `PM ${action} on ${rid} for ${pid}` }, (op) => {
     const r = op.readJson(receiptRel(pid, rid), null);
     if (!r) throw new OpError('NOT_FOUND', `No ticket ${rid} for ${pid}.`);
     const cur = op.readText(rel, '');
@@ -757,16 +762,35 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
       line = { action: 'undo', undoes: inForce.decision_id };
     } else {
       const suggested = r.desk ? r.desk.suggested_risk_usd : 0;
-      if ((action === 'approve' || action === 'halve') && !(suggested > 0)) throw new OpError('REFUSED', `This ticket suggests no risk (${r.desk ? r.desk.proposal_type : 'no proposal'}): there is nothing to approve. Veto it, or wait for a new ticket.`);
+      const type = r.desk ? r.desk.proposal_type : null;
+      if ((action === 'approve' || action === 'halve') && !(suggested > 0)) throw new OpError('REFUSED', `This ticket suggests no risk (${type || 'no proposal'}): there is nothing to approve. Confirm the pass, or keep watching.`);
+      if ((action === 'pass' || action === 'watch') && suggested > 0) throw new OpError('REFUSED', `This ticket suggests ${usd(suggested)} of risk: approve, halve or veto it.`);
+      if (action === 'trim' && type !== 'TRIM_EXIT') throw new OpError('REFUSED', `This ticket proposes ${type || 'nothing'}, not a trim.`);
       if (inForce && inForce.action === action) return { status: 'unchanged', decision: inForce };
       const starter = r.desk && r.desk.sizing ? r.desk.sizing.starter_risk_usd : SIZING_DEFAULTS.starter_risk_usd;
       const approved = action === 'approve' ? suggested : action === 'halve' ? Math.min(starter, suggested) : 0;
-      line = { action, pm_approved_risk_usd: approved, suggested_risk_usd: suggested, proposal_type: r.desk ? r.desk.proposal_type : null };
+      line = { action, pm_approved_risk_usd: approved, suggested_risk_usd: suggested, proposal_type: type };
+      // A confirmed pass archives the project (reversible; Undo restores it),
+      // except one Eric holds, which stays watched.
+      if (action === 'pass') line.archive = held ? 'kept: held' : 'archived';
     }
     const full = { schema_version: 'cr.ticket-decision.v1', decision_id: `td_${sha256(`${pid}:${rid}:${action}:${at}:${lines.length}`).slice(0, 14)}`, project_id: pid, receipt_id: rid, ticket_id: r.ticket_id, ...line, note: text, decided_at: at, decided_by: by || ws.actor || null, request_id: reqId, meaning: 'Eric\'s PM decision on the ticket: it records his choice and places no order.' };
     op.write(rel, `${cur}${cur && !cur.endsWith('\n') ? '\n' : ''}${JSON.stringify(full)}\n`);
-    return { status: 'saved', decision: full };
+    return { status: 'saved', decision: full, undone: action === 'undo' ? inForce : null };
   });
+  const res = out.result || {};
+  if (res.status === 'saved') {
+    const projects = require('./projects');
+    if (action === 'pass' && res.decision.archive === 'archived') {
+      projects.archiveProject(ws, pid, `PM confirmed the pass on ticket ${rid}.`);
+      res.project_archived = true;
+    }
+    if (action === 'undo' && res.undone && res.undone.archive === 'archived') {
+      projects.restoreProject(ws, pid);
+      res.project_restored = true;
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -824,7 +848,7 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
 function statusOf(decision, invalidation) {
   if (invalidation && invalidation.invalidated) return 'invalidated';
   if (!decision) return 'pending_pm_review';
-  return decision.action === 'veto' ? 'vetoed' : 'risk_granted';
+  return STATUS_OF[decision.action] || 'risk_granted';
 }
 
 function view(ws, pid, { now = Date.now(), fundamentals = null } = {}) {
@@ -858,7 +882,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null } = {}) {
       suggested_risk_usd: d.suggested_risk_usd || 0,
       starter_risk_usd: d.sizing ? d.sizing.starter_risk_usd : SIZING_DEFAULTS.starter_risk_usd,
       pm_approved_risk_usd: decision ? decision.pm_approved_risk_usd : null,
-      decision: decision ? { decision_id: decision.decision_id, action: decision.action, at: decision.decided_at, note: decision.note } : null,
+      decision: decision ? { decision_id: decision.decision_id, action: decision.action, at: decision.decided_at, note: decision.note, archive: decision.archive || null } : null,
       prosecution: { verdict: current.prosecution.verdict, conviction_score: current.prosecution.conviction_score, fatal_flaws: current.prosecution.fatal_flaws, tests: current.prosecution.tests },
       agent_disagreement: current.agent_disagreement,
       invalidation,
@@ -908,7 +932,7 @@ function setPilot(ws, pid, on, { by = null } = {}) {
 function nextStep(ws, pid, { now = Date.now() } = {}) {
   const research = require('./research');
   const project = require('./projects').getProject(ws, pid);
-  const base = { project_id: pid, name: project.name };
+  const base = { project_id: pid, name: project.name, pilot: Boolean(readProfile(ws, pid).pilot) };
   if (project.status === 'archived') return { ...base, step: 'blocked', why: 'Archived.' };
   if (!project.identity || project.identity.status !== 'verified') return { ...base, step: 'blocked', why: 'The identity is not verified.' };
   const staleDays = (ws.settings.freshness && ws.settings.freshness.research_stale_days) || 90;

@@ -366,6 +366,8 @@ function NeedsYou({ d, p, detail }) {
   const [all, setAll] = useState(false);
   const lines = [];
   const att = (d.index.attention || []).filter((a) => a.project_id === p.project_id);
+  const cg = canonicalGrade(p, d.index);
+  const quietResearch = Boolean(p.ticket && p.ticket.status) || ((cg.kind === 'grade' || cg.kind === 'range') && typeof cg.sort === 'number' && cg.sort < 40);
   // Research that needs you, per model (a held model is never retried).
   for (const prov of ['claude', 'chatgpt', 'gemini']) {
     const job = p.research && p.research.providers && p.research.providers[prov];
@@ -376,6 +378,9 @@ function NeedsYou({ d, p, detail }) {
       // In the autonomous pilot Claude's research is the chain's Agent 1, run
       // by the pilot (the PM Decision Card says where it stands), not by hand.
       if (prov === 'claude' && p.ticket && p.ticket.pilot) continue;
+      // A project with a PM ticket (open or decided), or graded under 40, does
+      // not nag for any model's manual research (Eric, 2026-10-24).
+      if (quietResearch) continue;
       lines.push({ key: `wait-${prov}`, sev: 'medium', kind: 'Waiting for you', text: `${PROVIDER_LABELS[prov]} research is ready when you ask its assistant`, action: <DeepLink pid={pid} href={`#/project/${enc(pid)}/record?open=runs`} className="btn btn-sm" dataKey={`iv-wait-${prov}`}>Open the prompt</DeepLink> });
     } else if (PROBLEM_WORDS[key]) {
       const canRetry = job.state === 'failed' && !hold && job.run_id;
