@@ -247,6 +247,17 @@ function exitsOf(ws, pid, sizes, now) {
   });
 }
 
+// Which sizes have no current reading, and why, in words, with the address of
+// the Forensics tab's Exits segment where quotes are approved.
+function exitsMissing(exits, pid) {
+  return (exits || []).filter((x) => !isNum(x.cost_pct)).map((x) => ({
+    size_usd: x.size_usd,
+    status: x.status || 'no_reading',
+    reason: x.note || `No current exit reading at ${usd(x.size_usd)}.`,
+    link: `#/project/${encodeURIComponent(pid)}/forensics?fx=exits`,
+  }));
+}
+
 function heldOf(ws, pid, now) {
   try {
     const market = require('./market').readLatest(ws);
@@ -474,6 +485,7 @@ function createTicket(ws, args = {}) {
     researcher: { report_id: researcher.report_id, run_id: researcher.run_id, analysis_at: researcher.analysis_at, verdict: researcher.verdict, grade: researcher.grade, rubric_version: researcher.rubric_version, sector_profile: researcher.sector_profile, original_sha256: researcher.original.sha256 },
     market: marketOf(ws, project),
     exits: exitsOf(ws, pid, sizes, now),
+    exits_missing: [],
     sell_tax: taxOf(ws, project, now),
     fundamentals: fundamentalsOf(ws, project, now),
     held: heldOf(ws, pid, now),
@@ -483,6 +495,7 @@ function createTicket(ws, args = {}) {
       'held: whether Eric records an open position in this token (Portfolio); never its size.',
     ],
   };
+  packet.exits_missing = exitsMissing(packet.exits, pid);
   const packetText = jsonText(packet);
   const packetSha = sha256(packetText);
   const dir = ticketDir(pid, tid);
@@ -678,6 +691,7 @@ function saveTicket(ws, { project_id: pid, ticket_id: tid, text, revision = null
       exit_cost_500_as_of: at500 ? at500.as_of : null,
       exit_cost_2000_usd_pct: at2000 ? at2000.cost_pct : null,
       exit_cost_2000_complete: at2000 ? at2000.cost_complete : null,
+      exits_missing: exitsMissing(exits, pid),
       sell_tax: null,
     },
     // Both agents' own figures and verdicts, side by side; the spread is the
@@ -879,6 +893,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null } = {}) {
       exit_cost_500_usd_pct: d.exit_cost_500_usd_pct ?? null,
       exit_cost_500_complete: d.exit_cost_500_complete ?? null,
       exit_cost_2000_usd_pct: d.exit_cost_2000_usd_pct ?? null,
+      exits_missing: d.exits_missing || [],
       suggested_risk_usd: d.suggested_risk_usd || 0,
       starter_risk_usd: d.sizing ? d.sizing.starter_risk_usd : SIZING_DEFAULTS.starter_risk_usd,
       pm_approved_risk_usd: decision ? decision.pm_approved_risk_usd : null,

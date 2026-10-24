@@ -137,6 +137,12 @@ export function PMDecisionCard({ p }) {
           <p className="iv-rc-s">5% limit</p>
         </div>
       </div>
+      {(t.exits_missing || []).length ? (
+        <p className="faint" data-key={`pm-missing-${pid}`}>
+          {`No current exit reading at ${t.exits_missing.map((m) => `$${m.size_usd.toLocaleString("en-US")}`).join(' or ')}. `}
+          <a href={t.exits_missing[0].link} title={t.exits_missing.map((m) => m.reason).join(' ')}>Approve exit quotes</a>
+        </p>
+      ) : null}
       <div className="pm-dis" title={dis.note || undefined}>
         <p className="pm-dis-row"><span className="pm-dis-k">Researcher</span><span>{`${r.grade_display || r.grade || '—'} · ${r.verdict || 'no verdict'}`}</span></p>
         <p className="pm-dis-row"><span className="pm-dis-k">Prosecutor</span><span>{prosecutorWords(q, fatal)}</span></p>
