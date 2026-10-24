@@ -133,7 +133,13 @@ Live tickets (2026-10-24), both $0 and waiting for Eric: OLAS `tr_2026-10-24T175
 
 **Each cloud routine or scheduled run must take up to 2 unchecked backlog items at a time, implement and test them together, and bundle them into a single combined feature branch and PR.**
 
-For a `/loop` or scheduled Claude Code session (e.g. the hourly cloud routine): take the next two buildable items in order (unchecked, not marked *(Eric)*, not already on an open `claude/backlog-*` branch), following `CLAUDE.md` (edit, run `node dashboard/cli.js test`, rebuild the bundle after UI edits). Build item A and run the tests; build item B and run the tests again across both changes; check both off here and report. Both go on one branch and one pull request for Eric (`claude/backlog-batch-items-<a>-and-<b>`). If A's tests fail, fix A or stop and report; never start B on a red suite. If only one buildable item is left, take the one. A scheduled routine never pushes to `main` and never force-pushes. Items marked *(Eric)* need his decision first: ask, don't build.
+For a `/loop` or scheduled Claude Code session (e.g. the hourly cloud routine), from 2026-10-24 (blueprint Appendix A):
+
+- **Taken.** An item is taken when it is ticked here, or when a commit on `origin/main` or on an `origin/claude/backlog-*` branch carries `Backlog-Item: <n>` for it (older commits name it in their subject, `backlog: <item text>`).
+- **WIP cap.** Items whose commits are on branches not yet merged into `origin/main` are waiting. When 4 or more are waiting, build nothing and report the cap. Check this first, before reading the long docs.
+- **Build.** Take the next two buildable items in order: unchecked, not marked *(Eric)*, not taken. Follow `CLAUDE.md`: edit, run `node dashboard/cli.js test`, and rebuild the bundle after UI edits. Build item A and run the tests; build item B and run the tests again across both changes. If A's tests fail, fix A or stop and report; never start B on a red suite. After any fix, run the whole suite again before pushing. If only one buildable item is left, take the one.
+- **Branch.** Both go on one branch (`claude/backlog-batch-items-<a>-and-<b>`). Use one commit per item, each with a `Backlog-Item: <n>` line. **Don't tick the boxes here on the branch:** the merge train ticks them on `main`. The `test` workflow runs on the push, and `backlog-pr` opens the pull request for Eric when it passes.
+- **Never** push to `main` or force-push. Items marked *(Eric)* need his decision first: ask, don't build.
 
 Merged into `main` (2026-10-24): items 1–6, through one train branch (`claude/train-2026-10-24`, PR #2) built from the five backlog branches, with the bundle rebuilt once and the full suite run. The source branches were then deleted. Items 10 and 11 were built locally the same day. CI (`.github/workflows/test.yml`) now runs on every `claude/**` push, and `backlog-pr.yml` opens the PR once it is green.
 

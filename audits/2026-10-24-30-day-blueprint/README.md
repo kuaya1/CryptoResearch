@@ -285,6 +285,8 @@ Replace steps 2–3 and 7 of `trig_01Hw89ZHE8kWp2rQe3Kw3D26` with:
 
 Keep the rest as is: one branch, never `main`, never force, never merge.
 
+**Applied 2026-10-24**, with one addition. Once branches no longer tick boxes, a backlog PR merged from the phone and its branch deleted would leave the item looking unbuilt. So each commit now carries `Backlog-Item: <n>`, and an item named that way in `origin/main`'s history counts as taken (`DESK_STATE.md`, batch rule). The routine also no longer opens PRs itself: `backlog-pr.yml` does that.
+
 ## Appendix B: Duet's standing instructions (for Eric to paste)
 
 ```
