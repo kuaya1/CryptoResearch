@@ -526,3 +526,78 @@ test('pre-gate: an existing Prosecutor receipt reads as before, and the index ro
   assert.equal(row.ticket.desk_gate, true);
   assert.equal(row.ticket.status, 'pending_pm_review');
 });
+
+// ---------------------------------------------------------------------------
+// get_ticket (connector, read-only) and `tickets view`
+
+test('get_ticket: an invalidated ticket names the trigger and the reading that fired; a named receipt and its text are read; a missing project is NOT_FOUND; nothing is written', async (t) => {
+  const s = withReport(t);
+  stubHeld(t, s.pid, false);
+  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
+  withExit(s.ws, s.pid, tk.ticket_id, 1.5);
+  const saved = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk.ticket_id)) });
+  const t0 = Date.parse(saved.receipt.saved_at);
+  const dir = s.ws.abs('market-data/observations');
+  fs.mkdirSync(dir, { recursive: true });
+  const at = new Date(t0).toISOString();
+  fs.appendFileSync(path.join(dir, `${at.slice(0, 7)}.jsonl`), `${JSON.stringify({ fetched_at: at, provider: 'coingecko', assets: [{ id: 'example-payfi-fictional', price_usd: 0.69, source_last_updated_at: at, fetched_at: at }] })}\n`);
+
+  const { makeMcp, TOOLS } = require('../mcp');
+  const def = TOOLS.find((x) => x.name === 'get_ticket');
+  assert.ok(def && def.annotations.readOnlyHint === true);
+  const handle = makeMcp(s.ws);
+  const callAs = async (assistant, name, args) => {
+    let body = '';
+    const req = require('stream').Readable.from([Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }))]);
+    req.method = 'POST';
+    const res = { writeHead() {}, end(b) { body = b || ''; } };
+    await handle(req, res, { assistant });
+    return JSON.parse(body).result;
+  };
+  const tree = hashTree(s.root);
+  for (const who of ['claude', 'chatgpt']) {
+    const out = await callAs(who, 'get_ticket', { project_id: s.pid });
+    assert.equal(out.isError, false, who);
+    const v = out.structuredContent;
+    assert.equal(v.ticket.status, 'invalidated');
+    assert.equal(v.ticket.latest, true);
+    assert.equal(v.ticket.invalidation.by, 'price');
+    assert.match(v.ticket.invalidation.words, /0\.69/);
+    assert.equal(v.ticket.invalidation.fired.lowest_usd, 0.69, 'the reading that fired');
+    assert.ok(v.ticket.invalidation.checks.length >= 2, 'every check is listed');
+    assert.equal(v.history[0].receipt_id, saved.receipt_id);
+    assert.ok(Array.isArray(v.ticket.exits_missing));
+    assert.equal(v.text, undefined, 'no text unless asked');
+  }
+  const withText = (await callAs('claude', 'get_ticket', { project_id: s.pid, receipt_id: saved.receipt_id, include_text: true })).structuredContent;
+  assert.equal(withText.text.verified, true);
+  assert.equal(sha256(withText.text.text), withText.text.sha256);
+  assert.equal((await callAs('claude', 'get_ticket', { project_id: s.pid, receipt_id: 'tr_2020-01-01T000000Z_aaaaa' })).isError, true, 'an unknown receipt is NOT_FOUND');
+  assert.equal((await callAs('claude', 'get_ticket', { project_id: 'no-such-project' })).isError, true);
+  assert.throws(() => T.read(s.ws, 'no-such-project'), (e) => e.code === 'NOT_FOUND');
+  assert.throws(() => T.read(s.ws, s.pid, { receiptId: 'tr_2020-01-01T000000Z_aaaaa' }), (e) => e.code === 'NOT_FOUND');
+  assert.throws(() => T.read(s.ws, s.pid, { receiptId: 'nonsense' }), (e) => e.code === 'BAD_ID');
+  assert.deepEqual(hashTree(s.root), tree, 'get_ticket writes nothing');
+
+  // The saved text's pin is checked: a changed text is an INTEGRITY refusal.
+  const textFile = s.ws.abs(`projects/${s.pid}/tickets/receipts/${saved.receipt_id}.md`);
+  fs.appendFileSync(textFile, 'tampered');
+  assert.throws(() => T.read(s.ws, s.pid, { includeText: true }), (e) => e.code === 'INTEGRITY');
+  assert.equal(T.read(s.ws, s.pid).ticket.status, 'invalidated', 'without the text, the ticket still reads');
+});
+
+test('get_ticket: a project with no ticket says so; an earlier receipt reads as not the latest; a desk gate has no text', async (t) => {
+  const s = withReport(t);
+  assert.equal(T.read(s.ws, s.pid).ticket, null);
+  stubHeld(t, s.pid, false);
+  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
+  const first = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) });
+  gradeClosed(s.ws);
+  const gated = T.createTicket(s.ws, { project_id: s.pid, refresh: true });
+  assert.equal(gated.status, 'gate_closed');
+  assert.equal(T.read(s.ws, s.pid, { receiptId: first.receipt_id }).ticket.latest, false);
+  const g = T.read(s.ws, s.pid, { includeText: true });
+  assert.equal(g.ticket.receipt_id, gated.receipt_id);
+  assert.equal(g.text.text, null);
+  assert.match(g.text.note, /no Prosecutor ran/);
+});

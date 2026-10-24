@@ -1009,7 +1009,7 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
     else checks.push({ kind: 'metric', status: m.total_30d_usd < inv.metric.below_30d_usd ? 'triggered' : 'holding', key: inv.metric.key, threshold_usd: inv.metric.below_30d_usd, value_usd: m.total_30d_usd, at: f.fetched_at, words: `30-day ${inv.metric.key} $${Math.round(m.total_30d_usd).toLocaleString('en-US')} ${m.total_30d_usd < inv.metric.below_30d_usd ? 'under' : 'not under'} $${inv.metric.below_30d_usd.toLocaleString('en-US')}.` });
   }
   const hit = checks.find((c) => c.status === 'triggered') || null;
-  return { version: INVALIDATION_VERSION, invalidated: Boolean(hit), by: hit ? hit.kind : null, words: hit ? hit.words : null, checks };
+  return { version: INVALIDATION_VERSION, invalidated: Boolean(hit), by: hit ? hit.kind : null, words: hit ? hit.words : null, fired: hit, checks };
 }
 
 // ---------------------------------------------------------------------------
@@ -1021,11 +1021,14 @@ function statusOf(decision, invalidation) {
   return STATUS_OF[decision.action] || 'risk_granted';
 }
 
-function view(ws, pid, { now = Date.now(), fundamentals = null } = {}) {
+// receiptId: read that saved ticket as the one in force (an earlier receipt
+// shows `latest: false`); without it, the latest. Reading writes nothing.
+function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null } = {}) {
   const project = require('./projects').getProject(ws, pid);
   const receipts = listReceipts(ws, pid).filter((r) => !r.broken);
   const decisions = readDecisions(ws, pid);
-  const current = receipts[receipts.length - 1] || null;
+  const current = receiptId ? receipts.find((r) => r.receipt_id === receiptId) || null : receipts[receipts.length - 1] || null;
+  if (receiptId && !current) throw new OpError('NOT_FOUND', `No ticket receipt ${receiptId} for ${pid}.`);
   const open = openTicket(ws, pid);
   const researcher = researcherOf(ws, pid);
   let ticket = null;
@@ -1038,6 +1041,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null } = {}) {
     ticket = {
       kind: gateOnly ? 'desk_gate' : 'prosecutor',
       desk_gate: gateOnly,
+      latest: current === receipts[receipts.length - 1],
       receipt_id: current.receipt_id,
       ticket_id: current.ticket_id,
       saved_at: current.saved_at,
@@ -1077,6 +1081,22 @@ function view(ws, pid, { now = Date.now(), fundamentals = null } = {}) {
     history: receipts.map((r) => ({ receipt_id: r.receipt_id, ticket_id: r.ticket_id, saved_at: r.saved_at, proposal_type: r.desk && r.desk.proposal_type, decision: decisionFor(decisions, r.receipt_id) ? decisionFor(decisions, r.receipt_id).action : null })).reverse(),
     sizing: sizingOf(ws),
   };
+}
+
+// The read behind get_ticket and `tickets view`: the view (the latest receipt,
+// or the named one) and, with includeText, that receipt's saved text, its pins
+// checked as on GET .../tickets/receipts/<tr>/text (a mismatch is an INTEGRITY
+// refusal). A desk-gate receipt has no text. Writes nothing.
+function read(ws, pid, { receiptId = null, includeText = false, now = Date.now() } = {}) {
+  if (receiptId !== null && !RECEIPT_RE.test(String(receiptId))) throw new OpError('BAD_ID', `"${receiptId}" is not a ticket receipt ID (tr_...).`);
+  const out = view(ws, pid, { now, receiptId });
+  if (includeText) {
+    const rid = out.ticket ? out.ticket.receipt_id : null;
+    if (!rid) out.text = null;
+    else if (out.ticket.desk_gate) out.text = { receipt_id: rid, text: null, note: 'The desk\'s gate has no saved text: no Prosecutor ran.' };
+    else out.text = receiptText(ws, pid, rid);
+  }
+  return out;
 }
 
 // The index row's ticket: what the inspector's PM Decision Card and the
@@ -1176,6 +1196,7 @@ module.exports = {
   decide,
   invalidationOf,
   view,
+  read,
   summary,
   setPilot,
   nextStep,

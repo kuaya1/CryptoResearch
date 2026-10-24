@@ -410,6 +410,22 @@ const TOOLS = [
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
+    name: 'get_ticket',
+    title: 'Read a project\'s PM ticket (any model)',
+    description: 'Read-only; writes nothing. The ticket in force on a project (or the one saved receipt named): its status, proposal and the type the desk capped it to, the gate\'s reasons, the exit costs and the sizes with no reading, the invalidation with every check, its words and the reading that fired, the history (receipt, saved at, type, decision) and the open ticket. With include_text, the saved text of that receipt, its pins checked (a mismatch is refused, nothing returned). Use it to explain why a ticket reads as it does.',
+    inputSchema: {
+      type: 'object',
+      required: ['project_id'],
+      additionalProperties: false,
+      properties: {
+        project_id: projectRef,
+        receipt_id: { type: 'string', description: 'Optional: an earlier ticket receipt (tr_...); without it, the latest.' },
+        include_text: { type: 'boolean', description: 'Also return the receipt\'s saved text, verified against its SHA-256.' },
+      },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
     name: 'pending_tickets',
     title: 'Open PM tickets waiting for the Prosecutor',
     description: 'Read-only. Tickets opened and not yet saved, oldest first (one you started first). With project, only that project. With include_prompt, the next one\'s frozen prompt byte for byte.',
@@ -1833,6 +1849,14 @@ const handlers = {
     if (out.gate_closed) return { status: out.status, gate_closed: true, message: out.message, receipt_id: out.receipt_id, reasons: out.receipt && out.receipt.desk.gate.reasons, proposal_type: out.receipt && out.receipt.desk.proposal_type, link: `#/?p=${id}` };
     if (!out.ticket_id || !['created', 'resumed'].includes(out.status)) return { status: out.status, message: out.message, receipt_id: out.receipt_id || null };
     return { status: out.status, message: `${out.message} Follow the prompt below exactly, then save_ticket with ticket_id "${out.ticket_id}".`, run: ticketRunView(ws, id, out.ticket_id, { prompt: true }) };
+  },
+
+  get_ticket(ws, args) {
+    const T = ticketsCore();
+    const id = pid(args);
+    const receiptId = typeof args.receipt_id === 'string' && args.receipt_id.trim() ? args.receipt_id.trim() : null;
+    const out = T.read(ws, id, { receiptId, includeText: args.include_text === true });
+    return { status: out.ticket ? 'ok' : 'none', ...out, message: out.ticket ? `${out.ticket.status.replace(/_/g, ' ')}: ${out.ticket.proposal_type}${out.ticket.invalidation && out.ticket.invalidation.words ? `. ${out.ticket.invalidation.words}` : ''}` : 'No ticket has been saved for this project.' };
   },
 
   pending_tickets(ws, args, ctx) {
