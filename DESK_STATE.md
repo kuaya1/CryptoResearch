@@ -18,7 +18,7 @@ The two agents are never averaged. Each keeps its own figure and verdict, shown 
 
 No paid API key is needed. Both agents run on Eric's Claude subscription, through the connector or through `claude -p`. The paid-API runner in `research.js` still works for Agent 1 if keys are added in Render later.
 
-## Sizing rules (`cr-ticket-sizing@1`, Eric's choices)
+## Sizing rules (`cr-ticket-sizing@2`, Eric's choices; `@1` tickets keep theirs)
 
 | Rule | Value |
 |---|---|
@@ -27,6 +27,7 @@ No paid API key is needed. Both agents run on Eric's Claude subscription, throug
 | Grade under 40 | no new risk (HARD_PASS or WATCH_ONLY), $0 |
 | Grade under 55, not held | no new entry, $0 |
 | Held, any grade | TRIM_EXIT is always allowed (it takes no new risk) |
+| Native L1, $10B+ market cap (`@2`) | passes the exit check without a DEX quote (`exit_basis: native_l1_liquid`); the grade floors still apply |
 
 - The grade is the desk's calculated grade of Claude's current report. A range is read by its low end; a withheld grade means no grade.
 - A proposal the rules don't allow is capped to WATCH_ONLY at $0. The model's own type is kept beside the capped one, with the reason.
@@ -135,7 +136,7 @@ For a `/loop` or scheduled Claude Code session (e.g. the 4-hour cloud routine): 
 - [x] Phase 1 tickets, connector tools, PM Decision Card, under-40 filter (f715a3e, live 2026-10-24)
 - [x] Sub-agents `forensic-researcher`, `junior-trader-prosecutor` and `/pilot-run`
 - [x] PM Decision Card polish, drawer nag, pilot on/off wording (954f87d)
-- [ ] **1. Native L1 exemption** (Eric, 2026-10-24): in `core/tickets.js` `gate()`, a native coin (`identity.native_chain`) with market cap of at least $10B from the stored CoinGecko row passes the exit check without a DEX quote; the packet and receipt say `exit_basis: 'native_l1_liquid'` (otherwise `'measured'`). This is a new rules version: `cr-ticket-sizing@2`, frozen into new tickets; `@1` tickets keep theirs. Tests: ETH at $10B+ passes, a native coin under $10B and any token do not.
+- [x] **1. Native L1 exemption** (`cr-ticket-sizing@2`, branch `backlog/weekend`): `gate()` `nativeL1Liquid`, packet and basis `native`, receipt `desk.exit_basis`, card shows "Native L1"; `@1` tickets unchanged. Tests in `tickets.test.js`.
 - [ ] **2. Preferences > Screening: ticket sizing.** A panel editing `tickets.sizing` (standard and starter risk, exit size, max exit cost %, the two grade floors), saved through `POST /api/settings` with `server.js` `validateSettingsPatch` using the same bounds as `tickets.sizingOf`; labeled as Eric's choices. Unit tests in `tests/tickets.test.js` for the bounds and that saved tickets keep their frozen values.
 - [ ] **3. PM decisions in the journal.** Each `decide()` action (`approve`, `halve`, `veto`, `pass`, `watch`, `trim`, and `undo`) also writes a structured journal entry (`notes.js`, `journal.v1.schema.json`; type decision, linked receipt ID, approved risk) so it shows in Notes. `decisions.jsonl` stays the source of truth; a journal failure never loses the decision. Tests.
 - [ ] **4. Missing exit quotes, in words.** The packet records which sizes ($500, $2,000) have no current reading and why; the PM Decision Card lists them with a link to `#/project/<id>/forensics?tab=exits` (or the tab's real address) to approve quotes. Tests for the packet field.

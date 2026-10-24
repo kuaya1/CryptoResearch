@@ -35,7 +35,10 @@ const { compactTs, randomId, isProjectId } = require('./ids');
 
 const PROMPT_VERSION = 'cr-ticket-prompt@1';
 const FORMAT = 'cr.ticket.v1';
-const SIZING_VERSION = 'cr-ticket-sizing@1';
+// @2 (Eric, 2026-10-24): a native L1 coin of at least $10B market cap passes
+// the exit check without a DEX quote (exit_basis native_l1_liquid). A ticket
+// keeps the version it froze: @1 tickets are read without the exemption.
+const SIZING_VERSION = 'cr-ticket-sizing@2';
 const INVALIDATION_VERSION = 'cr-ticket-invalidation@1';
 const PACKET_FORMAT = 'cr.ticket-packet.v1';
 const TICKET_RE = /^tk_\d{4}-\d{2}-\d{2}T\d{6}Z_[a-z2-9]{5}$/;
@@ -70,6 +73,7 @@ const SIZING_DEFAULTS = Object.freeze({
   max_exit_cost_pct: 5,
   min_grade_new_entry: 55,
   min_grade_any: 40,
+  native_l1_min_market_cap_usd: 10e9,
 });
 const SIZING_NOTE = 'Your sizing rules (settings, tickets.sizing), not universal rules. New tickets freeze the values in force; saved tickets keep theirs.';
 
@@ -116,6 +120,7 @@ function sizingOf(ws) {
     max_exit_cost_pct: pos(s.max_exit_cost_pct, d.max_exit_cost_pct, 100),
     min_grade_new_entry: grade(s.min_grade_new_entry, d.min_grade_new_entry),
     min_grade_any: grade(s.min_grade_any, d.min_grade_any),
+    native_l1_min_market_cap_usd: pos(s.native_l1_min_market_cap_usd, d.native_l1_min_market_cap_usd, 1e15),
     note: SIZING_NOTE,
   };
 }
@@ -283,7 +288,19 @@ function fundamentalsOf(ws, project, now) {
 }
 
 // ---------------------------------------------------------------------------
-// The sizing gate (cr-ticket-sizing@1): deterministic, from the frozen basis
+// The sizing gate (cr-ticket-sizing@1, @2): deterministic, from the frozen
+// basis and the sizing the ticket froze.
+
+// A native L1 coin (the identity says so; never inferred) whose stored market
+// cap is at least the frozen threshold: its exit at Eric's size is not
+// measured by a DEX quote (none exists for a chain's own coin), so it passes
+// the exit check on that basis, said as such. Only under sizing that carries
+// the threshold (@2 and later).
+function nativeL1Liquid(basis, sizing) {
+  const min = sizing.native_l1_min_market_cap_usd;
+  const n = basis.native || {};
+  return isNum(min) && n.native_chain === true && isNum(n.market_cap_usd) && n.market_cap_usd >= min;
+}
 
 function gate(basis, sizing, proposalType = null) {
   const grade = gateGrade(basis.researcher.grade);
@@ -305,7 +322,9 @@ function gate(basis, sizing, proposalType = null) {
     reasons.push(`Grade ${grade} is under ${sizing.min_grade_new_entry}: a held position is not added to.`);
   }
   let exitOk = false;
-  if (!exit || exit.cost_pct === null) reasons.push(`No current exit reading at ${usd(sizing.exit_size_usd)}: the exit cost is not proven within ${sizing.max_exit_cost_pct}%.`);
+  const native = nativeL1Liquid(basis, sizing);
+  if (native) exitOk = true;
+  else if (!exit || exit.cost_pct === null) reasons.push(`No current exit reading at ${usd(sizing.exit_size_usd)}: the exit cost is not proven within ${sizing.max_exit_cost_pct}%.`);
   else if (exit.cost_pct > sizing.max_exit_cost_pct) reasons.push(`Exit cost at ${usd(sizing.exit_size_usd)} is ${exit.cost_complete ? '' : 'at least '}${exit.cost_pct}%, over ${sizing.max_exit_cost_pct}%.`);
   else if (!exit.cost_complete) reasons.push(`Exit cost at ${usd(sizing.exit_size_usd)} is at least ${exit.cost_pct}% (${(exit.missing_costs || []).join(', ') || 'a cost'} unknown): a lower bound does not prove it within ${sizing.max_exit_cost_pct}%.`);
   else exitOk = true;
@@ -319,9 +338,10 @@ function gate(basis, sizing, proposalType = null) {
   }
   if (!type) type = riskAllowed ? null : grade !== null && grade < sizing.min_grade_any ? 'HARD_PASS' : 'WATCH_ONLY';
   return {
-    version: SIZING_VERSION,
+    version: sizing.version || SIZING_VERSION,
     grade_used: grade,
     held,
+    exit_basis: native ? 'native_l1_liquid' : 'measured',
     exit_cost_pct: exit ? exit.cost_pct : null,
     exit_cost_complete: exit ? exit.cost_complete : null,
     risk_allowed: riskAllowed,
@@ -383,6 +403,7 @@ function sizingBlock(s) {
     `- Standard risk (1.0R): ${usd(s.standard_risk_usd)}, only when the desk's measured exit cost at ${usd(s.exit_size_usd)} is at most ${s.max_exit_cost_pct}% (known in full, not a lower bound) and Agent 1's grade is at least ${s.min_grade_new_entry}.`,
     `- Starter tranche (0.5R): ${usd(s.starter_risk_usd)}, Eric's choice at review ("Halve Size").`,
     `- Grade under ${s.min_grade_any}: no new risk (HARD_PASS or WATCH_ONLY). Under ${s.min_grade_new_entry} for an asset Eric does not hold: no new entry (WATCH_ONLY or HARD_PASS).`,
+    ...(isNum(s.native_l1_min_market_cap_usd) ? [`- A native L1 coin (the chain's own coin, per its verified identity) with a market cap of at least ${usd(s.native_l1_min_market_cap_usd)} passes the exit check without a DEX quote (exit basis "native L1 liquid"); a token never does.`] : []),
     '- The desk applies these rules itself after you save. You propose the type; you never choose a dollar amount.',
   ].join('\n');
 }
@@ -478,11 +499,15 @@ function createTicket(ws, args = {}) {
     fundamentals: fundamentalsOf(ws, project, now),
     held: heldOf(ws, pid, now),
     sizing,
+    native: null,
     notes: [
       'exits: the desk\'s own exit-quote readings (aggregator quotes or constant-product reserves) as the Forensics tab reads them; a cost not known in full is a lower bound.',
       'held: whether Eric records an open position in this token (Portfolio); never its size.',
     ],
   };
+  // Whether the identity says this is the chain's own coin (never inferred
+  // from a missing contract), with the stored market cap the exemption reads.
+  packet.native = { native_chain: project.identity.native_chain === true, market_cap_usd: isNum(packet.market.market_cap_usd) ? packet.market.market_cap_usd : null };
   const packetText = jsonText(packet);
   const packetSha = sha256(packetText);
   const dir = ticketDir(pid, tid);
@@ -495,7 +520,7 @@ function createTicket(ws, args = {}) {
     channel: args.channel || ws.actor || 'cli',
     utterance: typeof args.utterance === 'string' ? args.utterance.slice(0, 2000) : null,
     versions: { prompt: PROMPT_VERSION, format: FORMAT, sizing: SIZING_VERSION, invalidation: INVALIDATION_VERSION },
-    basis: { researcher, held: packet.held, exits: packet.exits, market: packet.market },
+    basis: { researcher, held: packet.held, exits: packet.exits, market: packet.market, native: packet.native },
     sizing,
     packet: { path: `${dir}/packet.json`, sha256: packetSha, captured_at: at },
     prompt: null,
@@ -673,6 +698,7 @@ function saveTicket(ws, { project_id: pid, ticket_id: tid, text, revision = null
       proposal_type: g.proposal_type,
       model_proposal_type: c.proposal.proposal_type,
       suggested_risk_usd: g.suggested_risk_usd,
+      exit_basis: g.exit_basis,
       exit_cost_500_usd_pct: at500 ? at500.cost_pct : null,
       exit_cost_500_complete: at500 ? at500.cost_complete : null,
       exit_cost_500_as_of: at500 ? at500.as_of : null,
@@ -876,6 +902,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null } = {}) {
       entry_zone: current.proposal.entry_zone,
       upside_target: current.proposal.upside_target,
       invalidation_trigger: current.proposal.invalidation_trigger,
+      exit_basis: d.exit_basis || 'measured',
       exit_cost_500_usd_pct: d.exit_cost_500_usd_pct ?? null,
       exit_cost_500_complete: d.exit_cost_500_complete ?? null,
       exit_cost_2000_usd_pct: d.exit_cost_2000_usd_pct ?? null,
