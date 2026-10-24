@@ -148,4 +148,52 @@ Built and waiting for Eric's merge (2026-10-24): items 1–4 on `claude/backlog-
 - [ ] *(Eric)* Bind OLAS's DefiLlama entity so the fundamental invalidation trigger is checked
 - [ ] *(Eric)* ChatGPT as a second Prosecutor (`cr-ticket-challenge@1`, its own receipt, never averaged)
 - [ ] *(Eric)* Put more projects in the pilot; a scheduled `/pilot-run` cadence
+
+30-day blueprint items (2026-10-24, `audits/2026-10-24-30-day-blueprint/README.md`; the W-number is its section):
+
+- [ ] **7. Pilot candidates, read-only (W1.2).** `core/tickets.js` `pilotCandidates(ws)`, CLI `tickets candidates [--json]`, and `autonomous_pilot_queue` with `candidates: true`. Order: held projects first, then verified, active projects by the desk's calculated grade of Claude's current eligible report (a range by its low end; withheld and no report last). Each row gives the gate's result today with no proposal (`gate(basis, sizing)`: allowed types, suggested risk, reasons), whether an exit reading exists at the sizing's exit size, the report's age and prompt version, and whether it is already in the pilot. It writes nothing and opts nothing in. Tests: ordering, held first, unknown grade last, nothing written.
+- [ ] **8. Invalidation coverage, `cr-ticket-invalidation@2` (W1.4).** In `invalidationOf`, the price check states its coverage: hours since the ticket with at least one hourly reading, out of hours elapsed. Any gap over 6 h is named with its start and end. Coverage under settings `tickets.invalidation.min_coverage_pct` (default 90, labeled as Eric's choice, bounded in `validateSettingsPatch`) reads `unknown`, never `holding`; a reading at or below the threshold still reads `triggered`. A receipt whose Researcher report is superseded or past `freshness.research_stale_days` gets `basis_stale: { why }`, and its status is unchanged. New receipts record `desk.invalidation_version`; one without it is read under @1, unchanged. Tests: a 12 h gap with the low inside reads unknown, full coverage reads holding, a reading in the window still triggers, an @1 receipt reads as before.
+- [ ] *(Eric)* **9. Pre-gate (W1.3).** When the gate forces $0 and the project is not held, `nextStep` returns `gate_closed` with the reasons instead of `ticket`, and the PM card offers Confirm Pass & Archive from a `desk_gate` receipt with no model text. Recommended. It changes what a ticket is.
+- [ ] *(Eric)* **10. CI, in a local session (W2.1).** `.github/workflows/test.yml`: on a push to `claude/**` and on PRs to `main`, `ubuntu-latest`, Node 24.21.0, `node dashboard/cli.js test`, with the counts in the job summary. It is local because pushing workflow files needs the `workflow` token scope.
+- [ ] *(Eric)* **11. Backlog PRs from Actions, in a local session (W2.2).** `.github/workflows/backlog-pr.yml`: after `test.yml` is green on a `claude/backlog-*` push, open or update one PR to `main` (commits and test counts) with `GITHUB_TOKEN`; a red run opens nothing. Eric allows Actions to create PRs in the repo settings.
+- [ ] **12. Merge train (W2.3).** `dashboard/scripts/merge-train.js`, `npm run train [-- --push]`. From `origin/main`, merge each waiting `origin/claude/backlog-*` branch in item order (stacked branches after their base) onto `claude/train-<YYYY-MM-DD>`. A conflict only in `dashboard/public/app/**` or `DESK_STATE.md` takes `main`'s side, then the bundle is rebuilt once (`npm ci && npm run build` in `dashboard/web`) and the merged items are ticked. Any other conflict stops and names the branch and files. Then the full suite runs and the script prints what was merged and skipped and the counts. It pushes only with `--push` and never touches `main`. Tests use a temporary git repo fixture: a clean train, a bundle-only conflict resolved, a code conflict stopped.
+- [ ] **13. Rollback-safe records (W2.5).** `tickets.view`, `tickets.summary` and the indexer read a receipt or ticket from an unknown sizing or invalidation version (for example `@9`) as "made under a newer rule (`<version>`): shown as saved, not re-read", never throwing, with its saved figures as they are. Tests: a fictional workspace holding `@9` receipts renders, and the index builds.
+- [ ] **14. Guardrail invariants (W2.6).** `dashboard/tests/guardrails.test.js` runs over the API answers of a rich fictional workspace (projects with reports from two models, tickets, forensics):
+  - no desk-generated text puts a % beside probability, chance or likely;
+  - no unknown value is serialized as 0 where the record has none;
+  - there are no averaged or midpoint grade fields;
+  - every two-agent or two-model view carries both figures;
+  - nothing is labeled safe.
+
+  Tests only; if one finds a real breach, fix it in the same item and name it.
+- [ ] **15. Daily brief, `cr-daily-brief@1` (W3.1).** `dashboard/core/brief-daily.js`, `GET /api/brief/daily?since=<iso>`, CLI `brief daily [--json] [--since]`, and a read-only connector tool `daily_brief` for every model. Each line has its `#/…` deep link:
+  - PM cards waiting, with their age;
+  - tickets invalidated since `since`;
+  - tickets on a stale or superseded basis;
+  - pilot projects missing an exit reading;
+  - held positions' value and 24h change (unknown said);
+  - research waiting per model;
+  - Review's Models differ group;
+  - backup age and price freshness.
+
+  It is deterministic and gives the SHA-256 of its text. It writes nothing. A section it could not read says so, never "nothing". Tests on a fictional workspace, including that a read writes nothing.
+- [ ] *(Eric)* **16. Read-only connector grant (W3.2).** The OAuth consent offers "Read only". Such a connection lists and accepts only the read tools (`desk_status`, `find_projects`, `get_report`, `compare_reports`, `portfolio_overview`, `list_accounts`, `pending_research`, `pending_forensics`, `pending_tickets`, `autonomous_pilot_queue`, `get_forensic_audit`, `daily_brief`). A write is refused with the reason, and `desk_status.assistants` shows the kind. It is for Duet. It touches `oauth.js` and `mcp.js`.
+- [ ] *(Eric)* **17. Voice intake, in a local session (W3.4).** `.github/workflows/backlog-intake.yml`: on `issues: labeled`, only when the label is `ready` and the sender is `kuaya1`, open a PR that adds the issue, quoted and linked, as the next numbered item. It builds nothing; Eric merges it like any PR.
+- [ ] **18. Paper book, `cr-paper@1` (W4.1).** `dashboard/core/paper.js`, append-only `paper/positions.jsonl` (backed up and exported, never in `portfolio/`, Portfolio counts or wallets). A `risk_granted` decision opens a position of `pm_approved_risk_usd`:
+  - entry at the hourly reading nearest the decision within 6 h, else "no entry price", never a later one;
+  - entry cost "unknown", never 0.
+
+  It closes at the first hourly reading at or below the invalidation price (that reading), on `trim_acknowledged`, or at the horizon's end. Its return against BTC uses the same records. A $0 ticket gets a shadow line ("Shadow: not taken"). Undo of the decision voids the position with a reason, never deleting it. No total, median or hit rate before 20 have closed. It shows under Research > Outcomes as "Paper". Tests.
+- [ ] **19. Scenario harness (W4.2).** `dashboard/tests/sim/*.test.js` with price paths in `dashboard/tests/fixtures/sim/`, zero network. Each case asserts statuses and words:
+  1. a wick through the invalidation price;
+  2. a 12 h price gap with the low inside;
+  3. CoinGecko 429 and a stale price;
+  4. the aggregator's no-route answer;
+  5. an unknown sell tax;
+  6. a report superseded mid-ticket;
+  7. a decision on a superseded receipt (409);
+  8. agents 40 points apart;
+  9. ETH under the native exemption;
+  10. a paper position across an invalidation.
+- [ ] *(Eric)* **20. Final blitz audit, in a local session (W4.5).** A fresh Opus session reviews `git diff a4d0c2e..main` against the blueprint's §1 invariants and writes `audits/2026-11-23-blitz-audit/README.md`.
 - Never in scope: an exchange or wallet connection, placing orders, moving money.
