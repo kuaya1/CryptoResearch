@@ -370,3 +370,17 @@ test('each PM decision and its undo also appears in the journal, and a journal f
   } finally { notes.addJournal = orig; }
   assert.equal(T.view(s.ws, s.pid).ticket.decision.action, 'veto');
 });
+
+test('missing exit quotes are named in the packet, the receipt and the view, with the Exits tab address', (t) => {
+  const s = withReport(t);
+  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
+  const frozen = JSON.parse(fs.readFileSync(s.ws.abs(tk.packet.path), 'utf8'));
+  assert.deepEqual(frozen.exits_missing.map((m) => m.size_usd), [500, 2000], 'both sizes have no reading in the fixture');
+  for (const m of frozen.exits_missing) {
+    assert.ok(m.reason && m.reason.length > 10, "a reason in words");
+    assert.equal(m.link, `#/project/${encodeURIComponent(s.pid)}/forensics?fx=exits`);
+  }
+  const saved = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) });
+  assert.deepEqual(saved.receipt.desk.exits_missing.map((m) => m.size_usd), [500, 2000]);
+  assert.deepEqual(T.view(s.ws, s.pid).ticket.exits_missing.map((m) => m.size_usd), [500, 2000]);
+});
