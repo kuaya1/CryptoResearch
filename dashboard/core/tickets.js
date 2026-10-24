@@ -467,6 +467,23 @@ function updateTicket(ws, pid, tid, mutate, summary, type = 'ticket_update') {
   });
 }
 
+// Before sizing: when the verified token has no current reading at the exit
+// size, ask for one fixed-size quote (forensic-monitor.js quoteSizeUsd: the
+// approved adapter, its gates, budget and hold; never a wallet or swap). Async,
+// so it belongs to the route and CLI, not the pure createTicket. A failed or
+// refused quote falls back to "no reading" with the reason, which the packet
+// carries (exit_quote_attempt). Writes nothing when a reading exists.
+async function prepareExitQuote(ws, pid, opts = {}) {
+  const now = opts.now !== undefined ? opts.now : Date.now();
+  const project = require('./projects').getProject(ws, pid);
+  if (project.status === 'archived' || !project.identity || project.identity.status !== 'verified') return null;
+  const size = sizingOf(ws).exit_size_usd;
+  const [row] = exitsOf(ws, pid, [size], now);
+  if (row.status !== 'unavailable' && row.cost_pct !== null) return null;
+  const out = await require('./forensic-monitor').quoteSizeUsd(ws, pid, { size_usd: size, fetchImpl: opts.fetchImpl, cgGetImpl: opts.cgGetImpl, sleep: opts.sleep, now: opts.now });
+  return { size_usd: size, status: out.status, reason: out.reason || null, asked_at: iso(Date.now()) };
+}
+
 // Opens the Prosecutor's ticket on Claude's current report (or resumes the
 // one open). assistant: true when Claude takes it at once (connector, CLI
 // runner). refresh: a new ticket although one was saved on the same report.
@@ -507,6 +524,7 @@ function createTicket(ws, args = {}) {
     market: marketOf(ws, project),
     exits: exitsOf(ws, pid, sizes, now),
     exits_missing: [],
+    ...(args.exit_quote ? { exit_quote_attempt: args.exit_quote } : {}),
     sell_tax: taxOf(ws, project, now),
     fundamentals: fundamentalsOf(ws, project, now),
     held: heldOf(ws, pid, now),
@@ -1050,6 +1068,7 @@ module.exports = {
   readDraft,
   promptFor,
   createTicket,
+  prepareExitQuote,
   cancelTicket,
   saveDraft,
   saveTicket,

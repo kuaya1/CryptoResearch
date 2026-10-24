@@ -483,6 +483,44 @@ async function quoteFixedToken(ws, pid, { target_id: targetId, amount_in: amount
   }
 }
 
+// One fixed-size ($) exit quote the PM ticket asks for when no reading exists
+// at the sizing size (tickets.js prepareExitQuote): the first approved
+// exit-quote chain, the same adapter, request budget, provider gate, lease
+// and restored-copy hold as the monitor. Never a wallet or a transaction. It
+// never throws: a refusal or failure is a reason in words, so the ticket
+// falls back to "no reading".
+async function quoteSizeUsd(ws, pid, { size_usd: sizeUsd, fetchImpl = fetch, cgGetImpl = null, sleep = null, now: nowIn = undefined } = {}) {
+  const F = require('./forensics');
+  const XQ = require('./exitquotes');
+  const now = () => (nowIn !== undefined ? nowIn : Date.now());
+  const cfg = cfgOf(ws);
+  if (!cfg.enabled) return { status: 'refused', reason: 'Forensic quoting is turned off in settings.' };
+  if (heldCopy(ws)) return { status: 'refused', reason: 'A restored copy asks no quote until it is released.' };
+  const project = require('./projects').getProject(ws, pid);
+  const targets = F.readProfile(ws, pid).targets.exit_quotes || [];
+  if (!targets.length) return { status: 'no_target', reason: 'No exit-quote chain is approved for this project (Forensics > Exits).' };
+  const target = targets.find((t) => !quoteGate(readStatus(ws), t.provider, now()));
+  if (!target) return { status: 'refused', reason: `${targets[0].provider} asked this desk to wait; nothing was sent.` };
+  const lease = acquireLease(ws, LEASE, 10 * 60000, { label: 'ticket exit quote' });
+  if (!lease) return { status: 'refused', reason: 'A forensic monitor run is in progress.' };
+  try {
+    const recent = F.readObservations(ws, pid, { from: now() - 31 * 24 * HOUR, to: now() + HOUR });
+    const out = await XQ.quoteTarget(ws, { project, target, sizes: [sizeUsd], cfg, fetchImpl, now, reserve: () => reserveRequest(ws, cfg, now()), sleep, observations: recent.filter((o) => o.target_id === target.target_id), cgGetImpl });
+    for (const o of out.observations) F.appendObservation(ws, pid, o);
+    noteQuoteOutcome(ws, cfg, target.provider, out, now());
+    if (out.stop === 'budget') return { status: 'refused', reason: 'The monthly request budget is used up; nothing was sent.' };
+    if (out.gate) return { status: 'refused', reason: `${target.provider} asked this desk to wait; nothing more was sent.` };
+    if (out.skip) return { status: 'refused', reason: out.skip };
+    const last = out.observations[out.observations.length - 1] || null;
+    if (!out.answered || !last || !last.quote) return { status: 'no_answer', reason: last && last.status === 'no_route' ? `${target.provider} found no route at ${sizeUsd} USD.` : `${target.provider} gave no usable quote${last && last.error ? ` (${String(last.error).slice(0, 160)})` : ''}.` };
+    return { status: 'quoted', observation: last };
+  } catch (err) {
+    return { status: 'error', reason: `The quote could not be asked: ${String(err.message).slice(0, 200)}` };
+  } finally {
+    releaseLease(ws, LEASE, lease);
+  }
+}
+
 function statusView(ws, now = Date.now()) {
   const st = readStatus(ws);
   const cfg = cfgOf(ws);
@@ -504,4 +542,4 @@ function statusView(ws, now = Date.now()) {
   };
 }
 
-module.exports = { STATUS_REL, NORMALIZE_VERSION, normalizeBody, isDue, dueTargets, refresh, productCheck, repositoryRead, statusView, readStatus, quoteGate, quoteFixedToken };
+module.exports = { STATUS_REL, NORMALIZE_VERSION, normalizeBody, isDue, dueTargets, refresh, productCheck, repositoryRead, statusView, readStatus, quoteGate, quoteFixedToken, quoteSizeUsd };
