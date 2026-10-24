@@ -177,6 +177,29 @@ Merged into `main` (2026-10-24): items 1–6, through one train branch (`claude/
     - `nextStep` goes `gate_closed`, then `pm_review`;
     - the view and the index build;
     - an existing Prosecutor receipt reads as before.
+Items 21–23 (Eric, 2026-10-24, after ETH's ticket `tr_2026-10-24T184348Z_hrwks` read "invalidated" with no tool able to say why) are placed here on purpose, ahead of 12–20:
+
+- [ ] **21. `get_ticket`, read-only.** A connector tool in `dashboard/mcp.js` for every model, writing nothing, that returns `tickets.view(ws, pid)`:
+  - the current ticket: status, proposal and capped type, gate reasons, exits, `exits_missing`, invalidation with every check, its `words` and the reading that fired;
+  - the history (receipt ID, saved at, type, decision) and the open ticket;
+  - with `receipt_id`, that receipt's view;
+  - with `include_text: true`, the saved text, pins checked as on `GET …/tickets/receipts/<tr>/text` (a mismatch is an INTEGRITY refusal).
+
+  `node dashboard/cli.js tickets view <id> --json` prints the same object. Add `get_ticket` to item 16's read-only list. Tests: an invalidated ticket names the trigger and reading; a missing project is NOT_FOUND; nothing is written.
+- [ ] **22. No born-invalidated tickets.** In `saveTicket`, after the block is normalized and before anything is written:
+  - **Price:** if the proposal's `invalidation_trigger.price_usd` is at or above the price at save time (the latest stored hourly price, else the frozen packet's `market.price_usd`), refuse with INVALID: "Not saved: the invalidation price $X is at or above the price now ($Y at <time>): the ticket would be invalidated the moment it is saved. Set a threshold below the current price." The draft is kept.
+  - **Metric:** if `invalidation_trigger.metric.below_30d_usd` is above the packet's complete 30-day total for that metric, refuse the same way, naming the total and its date.
+  - **Exempt:** `HARD_PASS` and `TRIM_EXIT` are saved as before. Their receipt carries `desk.trigger_breached_at_save: { kind, words }`, and the PM card says "Trigger already breached when saved" instead of a bare Invalidated.
+  - **No reading:** the check says it was skipped, never "passed".
+  - **Tests:** a price trigger above the price is refused and writes nothing; one below is saved; a metric floor above the packet's total is refused; the HARD_PASS and TRIM_EXIT exemptions are saved and labeled; no price on file skips the check.
+- [ ] **23. Re-open a ticket after invalidation or a rule upgrade.** A new PM action `reopen` in `decide` (`ACTIONS`, journaled like the others through item 3). It is allowed only when the current ticket is `invalidated`, or was sized under an older rules version than `sizingOf(ws).version` (for example `@1` while `@2` is in force); otherwise it is refused with the reason.
+  - After a `reopen`, `nextStep` returns `ticket` with `refresh: true` and why. The connector's next action calls `start_ticket` with `refresh: true`, which already exists. The new receipt supersedes the old one, which is kept.
+  - With Claude's report still fresh, no new research is asked for.
+  - CLI: `tickets start <id> --reopen`, with the same check. `start_ticket` takes `reopen: true` as the checked form of `refresh`.
+  - PM Decision Card: "Re-open ticket" under these two conditions only. Rebuild the bundle.
+  - `nextStep`'s `done` words for an invalidated ticket name the way out: "Invalidated: Re-open ticket on the card (or tickets start --reopen)".
+  - Nothing re-opens automatically.
+  - Tests: reopen is refused on a pending ticket; it is allowed on an invalidated one and on a `@1` ticket under `@2`; `nextStep` gives `ticket` with refresh; the old receipt is kept; undo of the reopen restores `done`.
 - [x] **10. CI (W2.1)** (built locally 2026-10-24: `.github/workflows/test.yml`; pushes to `claude/**` and PRs to `main`, `ubuntu-latest`, Node 24.21.0, `node dashboard/cli.js test`, the counts in the job summary and a `test-summary` artifact)
 - [x] **11. Backlog PRs from Actions (W2.2)** (built locally 2026-10-24: `.github/workflows/backlog-pr.yml`; after `test` succeeds on a push to `claude/backlog-*`, opens or updates one PR to `main` with the commits and counts through `GITHUB_TOKEN` and the REST API, only for the commit that was tested; a red run opens nothing. Needs Eric's repo setting: Actions > General > "Allow GitHub Actions to create and approve pull requests")
 - [ ] **12. Merge train (W2.3).** `dashboard/scripts/merge-train.js`, `npm run train [-- --push]`. From `origin/main`, merge each waiting `origin/claude/backlog-*` branch in item order (stacked branches after their base) onto `claude/train-<YYYY-MM-DD>`. A conflict only in `dashboard/public/app/**` or `DESK_STATE.md` takes `main`'s side, then the bundle is rebuilt once (`npm ci && npm run build` in `dashboard/web`) and the merged items are ticked. Any other conflict stops and names the branch and files. Then the full suite runs and the script prints what was merged and skipped and the counts. It pushes only with `--push` and never touches `main`. Tests use a temporary git repo fixture: a clean train, a bundle-only conflict resolved, a code conflict stopped.
