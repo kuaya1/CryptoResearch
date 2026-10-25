@@ -305,7 +305,8 @@ async function run(argv) {
   if (cmd === 'test') {
     const { spawnSync } = require('child_process');
     const dir = path.join(__dirname, 'tests');
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.test.js')).map((f) => path.join(dir, f));
+    const sim = path.join(dir, 'sim');
+    const files = [dir, sim].filter((d) => fs.existsSync(d)).flatMap((d) => fs.readdirSync(d).filter((f) => f.endsWith('.test.js')).map((f) => path.join(d, f)));
     const r = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit' });
     process.exitCode = r.status;
     return { _silent: true };

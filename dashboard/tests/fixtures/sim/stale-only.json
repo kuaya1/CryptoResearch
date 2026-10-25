@@ -1,0 +1,16 @@
+{
+ "description": "Only readings from before the ticket: the price is stale.",
+ "unit": "hours from the reference time",
+ "points": [
+  {
+   "h": -30,
+   "price": 0.9,
+   "btc": 100
+  },
+  {
+   "h": -6,
+   "price": 0.88,
+   "btc": 100
+  }
+ ]
+}

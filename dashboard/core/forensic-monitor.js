@@ -512,7 +512,7 @@ async function quoteSizeUsd(ws, pid, { size_usd: sizeUsd, fetchImpl = fetch, cgG
     if (out.gate) return { status: 'refused', reason: `${target.provider} asked this desk to wait; nothing more was sent.` };
     if (out.skip) return { status: 'refused', reason: out.skip };
     const last = out.observations[out.observations.length - 1] || null;
-    if (!out.answered || !last || !last.quote) return { status: 'no_answer', reason: last && last.status === 'no_route' ? `${target.provider} found no route at ${sizeUsd} USD.` : `${target.provider} gave no usable quote${last && last.error ? ` (${String(last.error).slice(0, 160)})` : ''}.` };
+    if (!out.answered || !last || !last.quote || last.quote.no_route === true) return { status: 'no_answer', reason: last && (last.status === 'no_route' || (last.quote && last.quote.no_route === true)) ? `${target.provider} found no route at ${sizeUsd} USD.` : `${target.provider} gave no usable quote${last && last.error ? ` (${String(last.error).slice(0, 160)})` : ''}.` };
     return { status: 'quoted', observation: last };
   } catch (err) {
     return { status: 'error', reason: `The quote could not be asked: ${String(err.message).slice(0, 200)}` };
