@@ -82,17 +82,40 @@ function atOrBefore(list, ms, tolerance = ENTRY_TOLERANCE_MS) {
   return best && ms - best.t <= tolerance ? best : null;
 }
 
-function horizonEndOf(ws, receipt) {
-  try {
-    const runId = receipt.researcher && receipt.researcher.run_id;
+const dayIso = (end) => {
+  const ms = /^\d{4}-\d{2}-\d{2}$/.test(String(end || '')) ? Date.parse(`${end}T00:00:00Z`) : NaN;
+  return Number.isFinite(ms) ? iso(ms) : null;
+};
+
+// The end of the research run's horizon, and where it was read: the horizon
+// the receipt froze (receipts from 2026-10-25 on), else the run the receipt
+// names, else the run named in the ticket's verified frozen packet (receipts
+// saved before the run was carried over, review A05). Never a default length:
+// with none of these, null and the reason.
+function horizonOf(ws, receipt) {
+  const pid = receipt.project_id;
+  const r = receipt.researcher || {};
+  if (r.horizon && dayIso(r.horizon.end_date)) return { end: dayIso(r.horizon.end_date), source: 'receipt', run_id: r.horizon.run_id || r.run_id || null };
+  const fromRun = (runId, source) => {
     if (!runId) return null;
-    const run = require('./research').loadRun(ws, receipt.project_id, runId);
-    const end = run && run.horizon && run.horizon.end_date;
-    const ms = end ? Date.parse(`${end}T00:00:00Z`) : NaN;
-    return Number.isFinite(ms) ? iso(ms) : null;
-  } catch (_) {
-    return null;
-  }
+    try {
+      const run = require('./research').loadRun(ws, pid, runId);
+      const end = dayIso(run && run.horizon && run.horizon.end_date);
+      return end ? { end, source, run_id: runId } : null;
+    } catch (_) {
+      return null;
+    }
+  };
+  const named = fromRun(r.run_id, 'run');
+  if (named) return named;
+  try {
+    if (receipt.packet && receipt.packet.path && receipt.packet.sha256) {
+      const pk = JSON.parse(require('./forensics').verifiedFrozen(ws, receipt.packet.path, receipt.packet.sha256, 'The frozen ticket packet'));
+      const viaPacket = fromRun(pk.researcher && pk.researcher.run_id, 'packet_run');
+      if (viaPacket) return viaPacket;
+    }
+  } catch (_) { /* an unreadable packet names no run */ }
+  return { end: null, source: null, run_id: null, why: 'The report this ticket answers names no research run with a horizon end on record: the position has no horizon and stays open until another close.' };
 }
 
 // A granting decision opens a position. Never blocks or loses the decision:
@@ -108,6 +131,7 @@ function openForDecision(ws, project, receipt, decision) {
     entry = r ? { status: 'priced', price_usd: r.price_usd, at: iso(r.t), gap_hours: round((at - r.t) / HOUR, 1) } : { status: 'no_entry_price', reason: 'No hourly price within 6 hours at or before the decision; a later reading is never used.' };
   }
   const inv = receipt.proposal && receipt.proposal.invalidation_trigger;
+  const horizon = horizonOf(ws, { ...receipt, project_id: decision.project_id });
   const out = append(ws, `Open a paper position for ${decision.receipt_id}`, (lines) => {
     if (lines.some((l) => l.event === 'open' && l.decision_id === decision.decision_id)) return null;
     const opened = new Date().toISOString();
@@ -124,7 +148,10 @@ function openForDecision(ws, project, receipt, decision) {
       risk_usd: decision.pm_approved_risk_usd,
       proposal_type: decision.proposal_type || (receipt.desk && receipt.desk.proposal_type) || null,
       invalidation_price_usd: inv && isNum(inv.price_usd) ? inv.price_usd : null,
-      horizon_end: horizonEndOf(ws, { ...receipt, project_id: decision.project_id }),
+      horizon_end: horizon.end,
+      horizon_source: horizon.source,
+      run_id: horizon.run_id,
+      ...(horizon.end ? {} : { horizon_note: horizon.why }),
       entry,
       entry_cost: { status: 'unknown', usd: null, note: 'Fees and slippage are unknown; not taken as 0.' },
       opened_at: opened,
@@ -132,6 +159,16 @@ function openForDecision(ws, project, receipt, decision) {
     };
   });
   return { status: out.result.status, position_id: out.result.record ? out.result.record.position_id : null };
+}
+
+const HORIZON_ENRICHMENT = 'cr-paper-horizon@1';
+
+function receiptOf(ws, open) {
+  try {
+    return require('./tickets').listReceipts(ws, open.project_id).find((r) => !r.broken && r.receipt_id === open.receipt_id) || null;
+  } catch (_) {
+    return null;
+  }
 }
 
 // Undo of the granting decision voids the position, with the reason.
@@ -150,12 +187,22 @@ function readPosition(ws, open, voided, project, decisions, now) {
   const row = {
     position_id: open.position_id, project_id: open.project_id, name: project ? project.name : null, symbol: project ? project.symbol || null : null,
     receipt_id: open.receipt_id, decision_id: open.decision_id, decided_at: open.decided_at, risk_usd: open.risk_usd, proposal_type: open.proposal_type,
-    invalidation_price_usd: open.invalidation_price_usd, horizon_end: open.horizon_end, entry: open.entry, entry_cost: open.entry_cost,
+    invalidation_price_usd: open.invalidation_price_usd, horizon_end: open.horizon_end, horizon_source: open.horizon_source || null, entry: open.entry, entry_cost: open.entry_cost,
   };
   if (voided) return { ...row, state: 'voided', voided_at: voided.voided_at, reason: voided.reason, close: null, return: null };
+  // A position opened before its receipt carried the run (review A05) has no
+  // stored horizon: it is read from the receipt's frozen packet when that run
+  // proves one (cr-paper-horizon@1, said so, nothing written), else said
+  // missing; never a default length.
+  if (!open.horizon_end) {
+    const receipt = receiptOf(ws, open);
+    const h = receipt ? horizonOf(ws, { ...receipt, project_id: open.project_id }) : { end: null, why: 'The receipt this position came from could not be read: the position has no horizon.' };
+    if (h.end) Object.assign(row, { horizon_end: h.end, horizon_source: `${h.source}, read for this position (${HORIZON_ENRICHMENT})` });
+    else row.horizon_missing = h.why;
+  }
   const cg = project && project.identity && project.identity.coingecko_id;
   const openMs = Date.parse(open.decided_at);
-  const horizonMs = open.horizon_end ? Date.parse(open.horizon_end) : null;
+  const horizonMs = row.horizon_end ? Date.parse(row.horizon_end) : null;
   const trim = decisions
     .filter((d) => d.action === 'trim' && Date.parse(d.decided_at) > openMs)
     .sort((a, b) => a.decided_at.localeCompare(b.decided_at))[0] || null;
@@ -172,7 +219,7 @@ function readPosition(ws, open, voided, project, decisions, now) {
     if (hit) candidates.push({ kind: 'invalidated', at: hit.t, price_usd: hit.price_usd, words: `First hourly reading at or below the invalidation price $${open.invalidation_price_usd}: $${hit.price_usd} at ${iso(hit.t)}.` });
   }
   if (trimLive) candidates.push({ kind: 'trim_acknowledged', at: Date.parse(trimLive.decided_at), words: `Trim acknowledged by the PM at ${trimLive.decided_at}.` });
-  if (horizonMs !== null && horizonMs <= now) candidates.push({ kind: 'horizon_end', at: horizonMs, words: `The horizon ended on ${open.horizon_end.slice(0, 10)}.` });
+  if (horizonMs !== null && horizonMs <= now) candidates.push({ kind: 'horizon_end', at: horizonMs, words: `The horizon ended on ${row.horizon_end.slice(0, 10)}.` });
   candidates.sort((a, b) => a.at - b.at);
   const first = candidates[0] || null;
   let close = null;

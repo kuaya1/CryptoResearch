@@ -1,9 +1,31 @@
 # Opens or updates the pull request for a backlog branch once its tests pass
-# (blueprint W2.2, DESK_STATE item 11). Uses only GITHUB_TOKEN. Needs
-# Settings > Actions > General > "Allow GitHub Actions to create and approve
-# pull requests". Since 2026-10-25 (Eric) it also merges the PR it opened once
-# test.yml passed on that exact commit, and deletes the branch. A merge it
-# cannot make (conflict, protection) leaves the PR open for `npm run train`.
+# (blueprint W2.2, DESK_STATE item 11), and promotes it into main only as a
+# tested composition (Eric, 2026-10-25: zero-click merge; reworked after the
+# review of 2026-10-25, audits/2026-10-25-codex-autonomy-review, A01/A02).
+#
+#   pr       main's checkout only: reads the branch as data, opens or updates
+#            the PR, and checks the scope (dashboard/scripts/backlog-promote.js
+#            scope). A protected path or an item not on main's backlog waits
+#            for Eric: the PR stays open, nothing is merged.
+#   compose  merges the tested head onto main as it is now and runs the full
+#            suite on that tree, with a read-only token and no secret. When
+#            the branch already contains main, the tree is the head the push
+#            run tested and the suite is not run twice.
+#   promote  runs no branch code: re-creates the merge, checks it is the tree
+#            that passed, and pushes it to main only while main is still the
+#            commit it was tested on. The result is read back from GitHub; the
+#            branch is deleted only after a confirmed merge, at the tested
+#            commit. Anything else fails the job with the reason.
+#   deploy   reports separately whether the online desk serves the merge
+#            (repository variable DESK_HEALTH_URL, its /healthz); a merge is
+#            never called a deployment. Nothing is rolled back.
+#
+# Competing promotions are serialized by the compare-and-swap push: of two that
+# race, the second is refused because main moved, and is re-run (Re-run all
+# jobs) or trained, which tests it again on the new main. No concurrency group:
+# GitHub would cancel all but one pending run, and every test run triggers
+# this workflow. Uses only GITHUB_TOKEN. Needs Settings > Actions > General >
+# "Allow GitHub Actions to create and approve pull requests".
 name: backlog-pr
 
 on:
@@ -11,10 +33,7 @@ on:
     workflows: [test]
     types: [completed]
 
-permissions:
-  contents: write
-  pull-requests: write
-  actions: read
+permissions: {}
 
 jobs:
   pr:
@@ -25,19 +44,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: write
+      contents: read
       pull-requests: write
       actions: read
+    outputs:
+      go: ${{ steps.pr.outputs.go }}
+      number: ${{ steps.pr.outputs.number }}
+      base: ${{ steps.pr.outputs.base }}
+      scope_ok: ${{ steps.scope.outputs.scope_ok }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
       - name: Fetch the test counts
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
           name: test-summary
+          path: ${{ runner.temp }}/counts
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
       # Everything from the event goes through env, never into the script text.
-      - name: Open or update the pull request
+      - name: Read the branch and open or update the pull request
+        id: pr
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -46,35 +77,140 @@ jobs:
           SHA: ${{ github.event.workflow_run.head_sha }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
-          # Only the commit that was tested gets a PR; a newer push has its own run.
-          tip=$(gh api "repos/$REPO/git/ref/heads/$BRANCH" --jq .object.sha)
+          # Only the commit that was tested goes further; a newer push has its own run.
+          tip=$(gh api "repos/$REPO/git/ref/heads/$BRANCH" --jq .object.sha 2>/dev/null || true)
           if [ "$tip" != "$SHA" ]; then
-            echo "The branch moved past the tested commit ${SHA:0:7}; its own run handles it."
+            echo "The branch is at ${tip:-nothing}, not the tested ${SHA:0:7}; its own run handles it." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "go=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          commits=$(gh api "repos/$REPO/compare/main...$SHA" --jq '.commits[] | "- `" + .sha[0:7] + "` " + (.commit.message | split("\n")[0])')
+          git fetch -q origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+          base=$(git rev-parse origin/main)
+          commits=$(git log --format='- `%h` %s' "$base..$SHA")
           counts="No test counts were found for this run."
-          if [ -f test-summary.md ]; then counts=$(cat test-summary.md); fi
-          body=$(printf 'Backlog branch `%s`, tested at `%s` ([the run](%s)).\n\n%s\n\n%s\n\nOpened by the backlog-pr workflow after test.yml passed; it merges this PR when the merge is clean.\n' "$BRANCH" "${SHA:0:7}" "$RUN_URL" "$commits" "$counts")
+          if [ -f "$RUNNER_TEMP/counts/test-summary.md" ]; then counts=$(cat "$RUNNER_TEMP/counts/test-summary.md"); fi
+          body=$(printf 'Backlog branch `%s`, tested at `%s` ([the run](%s)).\n\n%s\n\n%s\n\nOpened by the backlog-pr workflow. It merges only the tree that passed the suite on top of main, while main is unchanged, and only within the authorized scope; otherwise this PR waits for Eric.\n' "$BRANCH" "${SHA:0:7}" "$RUN_URL" "$commits" "$counts")
           owner=${REPO%%/*}
           number=$(gh api "repos/$REPO/pulls?state=open&base=main&head=$owner:$BRANCH" --jq '.[0].number // empty')
           if [ -n "$number" ]; then
             gh api -X PATCH "repos/$REPO/pulls/$number" -f body="$body" --jq .html_url
           else
-            gh api -X POST "repos/$REPO/pulls" -f title="Backlog: ${BRANCH#claude/backlog-}" -f head="$BRANCH" -f base=main -f body="$body" --jq .html_url
+            number=$(gh api -X POST "repos/$REPO/pulls" -f title="Backlog: ${BRANCH#claude/backlog-}" -f head="$BRANCH" -f base=main -f body="$body" --jq .number)
           fi
-          if [ -z "$number" ]; then
-            number=$(gh api "repos/$REPO/pulls?state=open&base=main&head=$owner:$BRANCH" --jq '.[0].number // empty')
+          if ! [[ "$number" =~ ^[0-9]+$ ]]; then
+            echo "### No pull request could be opened or found for $BRANCH" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
-          # Merge only the commit that was tested (sha makes GitHub refuse a newer tip).
-          code=$(gh api -X PUT "repos/$REPO/pulls/$number/merge" -f merge_method=merge -f sha="$SHA" --jq .merged 2>merge-err.txt && echo 200 || echo fail)
-          if [ "$code" = "200" ]; then
-            gh api -X DELETE "repos/$REPO/git/refs/heads/$BRANCH" || echo "Merged, but the branch could not be deleted."
-            echo "### Merged PR #$number into main; branch $BRANCH deleted." >> "$GITHUB_STEP_SUMMARY"
+          { echo "go=true"; echo "number=$number"; echo "base=$base"; } >> "$GITHUB_OUTPUT"
+      - name: Check the scope Eric authorized
+        id: scope
+        if: steps.pr.outputs.go == 'true'
+        shell: bash
+        env:
+          BASE: ${{ steps.pr.outputs.base }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: node dashboard/scripts/backlog-promote.js scope --base "$BASE" --head "$SHA"
+
+  compose:
+    needs: pr
+    if: needs.pr.outputs.go == 'true' && needs.pr.outputs.scope_ok == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    outputs:
+      tree: ${{ steps.merge.outputs.tree }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      # The merge is made with main's own script, before any branch code runs.
+      - name: Merge the tested head onto main
+        id: merge
+        shell: bash
+        env:
+          BASE: ${{ needs.pr.outputs.base }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          NUMBER: ${{ needs.pr.outputs.number }}
+        run: |
+          git fetch -q origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+          cp dashboard/scripts/backlog-promote.js "$RUNNER_TEMP/backlog-promote.js"
+          node "$RUNNER_TEMP/backlog-promote.js" compose --base "$BASE" --head "$SHA" --message "Merge pull request #$NUMBER from $GITHUB_REPOSITORY_OWNER/$BRANCH"
+      - uses: actions/setup-node@v4
+        if: steps.merge.outputs.contains_base != 'true'
+        with:
+          node-version: 24.21.0
+      - name: Run the full suite on the composed tree
+        if: steps.merge.outputs.contains_base != 'true'
+        shell: bash
+        run: node dashboard/cli.js test 2>&1 | tail -n 40
+      - name: Clean build of the browser app (reported, not a gate)
+        continue-on-error: true
+        shell: bash
+        run: |
+          if npm --prefix dashboard/web ci --no-audit --no-fund >/dev/null && npm --prefix dashboard/web run build >/dev/null && git diff --quiet -- dashboard/public/app; then
+            echo "Clean build: matches the committed bundle." >> "$GITHUB_STEP_SUMMARY"
           else
-            {
-              echo "### PR #$number was NOT merged"
-              echo "The merge was refused (HTTP 405 or 409: a conflict, a branch rule or a moved tip). The PR stays open; resolve it with \`npm run train\`."
-              echo '```'; cat merge-err.txt; echo '```'
-            } | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "Clean build: does NOT match the committed bundle (or failed). Not a merge gate; look at it." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
+
+  promote:
+    needs: [pr, compose]
+    if: needs.compose.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: read
+    outputs:
+      merge: ${{ steps.promote.outputs.merge }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Push the tested merge to main if main is unchanged
+        id: promote
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ needs.pr.outputs.base }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          TREE: ${{ needs.compose.outputs.tree }}
+          NUMBER: ${{ needs.pr.outputs.number }}
+        run: |
+          cp dashboard/scripts/backlog-promote.js "$RUNNER_TEMP/backlog-promote.js"
+          node "$RUNNER_TEMP/backlog-promote.js" promote --base "$BASE" --head "$SHA" --branch "$BRANCH" --tree "$TREE" --repo "$GITHUB_REPOSITORY" --number "$NUMBER" --message "Merge pull request #$NUMBER from $GITHUB_REPOSITORY_OWNER/$BRANCH"
+
+  deploy:
+    needs: promote
+    if: needs.promote.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: {}
+    steps:
+      - name: Does the online desk serve the merge?
+        shell: bash
+        env:
+          URL: ${{ vars.DESK_HEALTH_URL }}
+          MERGE: ${{ needs.promote.outputs.merge }}
+        run: |
+          if [ -z "$URL" ]; then
+            echo "Deployment not checked: set the repository variable DESK_HEALTH_URL to the desk's /healthz address." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          for i in $(seq 1 40); do
+            rev=$(curl -fsS --max-time 10 "$URL" 2>/dev/null | sed -n 's/^revision \([0-9a-f]\{7,40\}\).*/\1/p' | head -n 1)
+            if [ -n "$rev" ] && [ "${MERGE#"$rev"}" != "$MERGE" ]; then
+              echo "Deployed: the desk serves ${MERGE:0:7}." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "### Not deployed yet: after 13 minutes the desk serves ${rev:-an unknown revision}, not ${MERGE:0:7}. The merge stands; nothing was rolled back." >> "$GITHUB_STEP_SUMMARY"
+          exit 1

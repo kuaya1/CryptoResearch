@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
-const { tempWorkspace, addFixtureProject, importAllFixtures, hashTree } = require('./helpers');
+const { tempWorkspace, addFixtureProject, importAllFixtures, hashTree, withExitReadings, freshPrice } = require('./helpers');
 const T = require('../core/tickets');
 const B = require('../core/brief-daily');
 const { sha256, readJson, atomicWrite, jsonText } = require('../core/fsx');
@@ -43,11 +43,8 @@ function answer(ticket) {
 
 function savedTicket(t, s) {
   stubHeld(t, s.pid, true);
-  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
-  const rel = `projects/${s.pid}/tickets/${tk.ticket_id}/ticket.json`;
-  const job = readJson(s.ws.abs(rel));
-  job.basis.exits = [{ size_usd: 500, status: 'current', cost_pct: 1.5, cost_complete: true, missing_costs: [] }, { size_usd: 2000, status: 'current', cost_pct: 3, cost_complete: true }];
-  atomicWrite(s.ws.abs(rel), jsonText(job));
+  const tk = withExitReadings(1.5, () => T.createTicket(s.ws, { project_id: s.pid, assistant: true })).ticket;
+  freshPrice(s.ws, 'example-payfi-fictional', 0.85);
   return T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk.ticket_id)) });
 }
 
@@ -133,6 +130,46 @@ test('daily brief: a section it cannot read says so, never nothing; the others s
     assert.equal(byId(down, id).state, 'unreadable', id);
     assert.match(byId(down, id).lines[0].text, /index could not be built/);
   }
+});
+
+test('daily brief (review A07): a ticket that cannot be read is named in each ticket section, which is partial with no count, never "None right now"; a read writes nothing', async (t) => {
+  const s = setup(t);
+  const saved = savedTicket(t, s);
+  const rel = `projects/${s.pid}/tickets/receipts/${saved.receipt_id}.json`;
+  const r = readJson(s.ws.abs(rel));
+  r.researcher = null;
+  atomicWrite(s.ws.abs(rel), jsonText(r));
+  const sum = T.summary(s.ws, s.pid);
+  assert.equal(sum.unavailable, true, 'the real summary cannot read it');
+  const tree = hashTree(s.root);
+  const out = B.brief(s.ws, { now: Date.parse(saved.receipt.saved_at) + 3600000 });
+  assert.deepEqual(hashTree(s.root), tree, 'a read writes nothing');
+  for (const id of ['pm_cards', 'invalidated', 'stale_basis']) {
+    const sec = byId(out, id);
+    assert.equal(sec.state, 'partial', id);
+    assert.equal(sec.count, null, `${id}: the count is unknown`);
+    assert.equal(sec.unreadable_count, 1, id);
+    assert.match(sec.lines[0].text, /^Example PayFi \(FICTIONAL\): the ticket could not be read \(.+\), so whether it .+ is unknown\.$/, id);
+    assert.equal(sec.lines[0].link, `#/?p=${s.pid}`);
+    assert.ok(!sec.lines.some((l) => l.text === 'None right now.'), id);
+  }
+  assert.match(out.text, /PM cards waiting for you \(0 read; 1 could not be read, so the count is unknown\)/);
+  // The drawer says it in words, with no count that looks complete.
+  const { briefView } = await import('../public/daily-brief-model.js');
+  const v = briefView(out);
+  const cards = v.sections.find((x) => x.id === 'pm_cards');
+  assert.equal(cards.partial, true);
+  assert.equal(cards.count, null);
+  assert.equal(cards.count_words, '0 read, 1 could not be read');
+  assert.equal(cards.empty, false);
+  assert.equal(v.waiting, null);
+  assert.equal(v.partial >= 3, true);
+  // A healthy desk with no ticket still reads "None right now".
+  const h = setup(t);
+  const calm = byId(B.brief(h.ws, { now: Date.now() }), 'pm_cards');
+  assert.equal(calm.state, 'ok');
+  assert.equal(calm.count, 0);
+  assert.equal(calm.lines[0].text, 'None right now.');
 });
 
 test('daily brief: the text is deterministic, its SHA-256 is of that text, and a read (CLI, route, connector) writes nothing', async (t) => {

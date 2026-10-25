@@ -767,42 +767,118 @@ function normalizeBlock(b) {
 
 const normalizedTextHash = (text) => sha256(String(text).replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').trim());
 
-// A ticket must not be invalidated the moment it is saved. The price now is
-// the latest stored reading, else the frozen packet's; the metric total is the
-// packet's complete 30-day total. A check with no reading is skipped, not
-// passed. Returns null, or { kind, words, refusal }.
+// The basis the desk sizes from is the verified frozen packet (review A08,
+// 2026-10-25). The job record keeps a copy for reading; a copy that differs
+// from the packet it pins is an INTEGRITY refusal, never sized: a changed job
+// file must not create an exit reading, a holding or a grade the packet does
+// not hold.
+function frozenBasis(ticket, packet) {
+  const canon = require('./requests').stableStringify;
+  const b = ticket.basis || {};
+  const r = b.researcher || {};
+  const p = packet.researcher || {};
+  const fields = [
+    ['researcher.report_id', r.report_id, p.report_id],
+    ['researcher.run_id', r.run_id, p.run_id],
+    ['researcher.grade', r.grade, p.grade],
+    ['researcher.original_sha256', r.original && r.original.sha256, p.original_sha256],
+    ['held', b.held, packet.held],
+    ['exits', b.exits, packet.exits],
+    ['market', b.market, packet.market],
+    ['native', b.native, packet.native],
+    ['sizing', ticket.sizing, packet.sizing],
+  ];
+  const diffs = fields.filter(([, a, z]) => canon(a === undefined ? null : a) !== canon(z === undefined ? null : z)).map(([k]) => k);
+  if (diffs.length) throw new OpError('INTEGRITY', `Not saved: the ticket's basis differs from its frozen packet (${diffs.join(', ')}). The desk sizes only from the verified packet; nothing was written. Keep the text: a new ticket (refresh) sizes it on a fresh packet.`, { fields: diffs });
+  return { researcher: { ...r, grade: p.grade === undefined ? null : p.grade, run_id: p.run_id === undefined ? null : p.run_id }, held: packet.held, exits: packet.exits || [], market: packet.market || null, native: packet.native === undefined ? null : packet.native };
+}
+
+// The horizon of the research run the report was made under, read from the
+// run record, so the paper position knows when it ends. Null when the report
+// names no run or the run states no end date.
+function runHorizonOf(ws, pid, runId) {
+  if (!runId) return null;
+  try {
+    const run = require('./research').loadRun(ws, pid, runId);
+    const h = run && run.horizon;
+    if (!h || !/^\d{4}-\d{2}-\d{2}$/.test(String(h.end_date || ''))) return null;
+    return { run_id: runId, start_date: h.start_date || null, end_date: h.end_date, text: h.text || null, source: 'research_run' };
+  } catch (_) {
+    return null;
+  }
+}
+
+// The admission check at commit (cr-ticket-admission@1, 2026-10-25, review
+// A03), run inside the save's lock against the stored data as it stands then.
+// A trigger already breached is refused (HARD_PASS and TRIM_EXIT are saved and
+// labeled). A check that cannot be made (no usable invalidation price, no
+// stored price, a price older than the freshness limit) is said as unchecked
+// and holds a risk-taking ticket to $0: unknown is never a pass. A stored
+// hourly price is not proof the market did not move after it.
+const ADMISSION_VERSION = 'cr-ticket-admission@1';
+const ADMISSION_LIMIT = 'A stored price is not proof the market did not move after it was read.';
 const EXEMPT_FROM_BORN_CHECK = new Set(['HARD_PASS', 'TRIM_EXIT']);
-function bornInvalidated(ws, project, ticket, inv) {
-  if (!inv) return null;
-  let packet = null;
-  try { packet = JSON.parse(verifiedFrozen(ws, ticket.packet.path, ticket.packet.sha256, 'The frozen ticket packet')); } catch (_) { packet = null; }
-  if (isNum(inv.price_usd)) {
-    let now = null;
-    try { now = marketOf(ws, project); } catch (_) { now = null; }
-    const pk = (packet && packet.market) || (ticket.basis && ticket.basis.market);
-    const cur = now && isNum(now.price_usd) ? now : pk && isNum(pk.price_usd) ? pk : null;
-    if (cur && inv.price_usd >= cur.price_usd) {
+function admissionOf(ws, project, packet, inv, now) {
+  const staleMin = (ws.settings && ws.settings.freshness && ws.settings.freshness.price_stale_minutes) || 90;
+  const out = { version: ADMISSION_VERSION, checked_at: iso(now), price_stale_minutes: staleMin, price: null, metric: null, breached: null, limit: ADMISSION_LIMIT };
+  const trig = inv || {};
+  if (!isNum(trig.price_usd)) {
+    out.price = { status: 'unchecked', threshold_usd: null, reason: 'No usable invalidation price: the desk cannot watch this ticket by price.' };
+  } else {
+    let latest = null;
+    try { latest = marketOf(ws, project); } catch (_) { latest = null; }
+    const pk = packet.market || null;
+    const cur = latest && isNum(latest.price_usd) ? { ...latest, source: 'latest' } : pk && isNum(pk.price_usd) ? { ...pk, source: 'packet' } : null;
+    if (!cur) {
+      out.price = { status: 'unchecked', threshold_usd: trig.price_usd, reason: `No stored price to check the invalidation price $${trig.price_usd} against${latest && latest.note ? ` (${latest.note.replace(/\.$/, '')})` : ''}.` };
+    } else {
+      const at = Date.parse(cur.as_of);
+      const age = Number.isFinite(at) ? Math.max(0, Math.round((now - at) / 60000)) : null;
       const when = cur.as_of || 'an unknown time';
-      return {
-        kind: 'price',
-        words: `The invalidation price $${inv.price_usd} was at or above the price when saved ($${cur.price_usd} at ${when}).`,
-        refusal: `the invalidation price $${inv.price_usd} is at or above the price now ($${cur.price_usd} at ${when}): the ticket would be invalidated the moment it is saved. Set a threshold below the current price.`,
-      };
+      const base = { threshold_usd: trig.price_usd, price_usd: cur.price_usd, as_of: cur.as_of || null, age_minutes: age, source: cur.source };
+      if (trig.price_usd >= cur.price_usd) {
+        out.price = { status: 'breached', ...base };
+        out.breached = {
+          kind: 'price',
+          words: `The invalidation price $${trig.price_usd} was at or above the price when saved ($${cur.price_usd} at ${when}).`,
+          refusal: `the invalidation price $${trig.price_usd} is at or above the price now ($${cur.price_usd} at ${when}): the ticket would be invalidated the moment it is saved. Set a threshold below the current price.`,
+        };
+      } else if (age === null || age > staleMin) {
+        out.price = { status: 'unchecked', ...base, reason: `The stored price ($${cur.price_usd} at ${when}) is ${age === null ? 'of unknown age' : `${age} min old`}, past your ${staleMin}-minute freshness limit: it does not show the trigger $${trig.price_usd} still clear.` };
+      } else {
+        out.price = { status: 'clear', ...base, words: `The invalidation price $${trig.price_usd} is below the stored price $${cur.price_usd} (${when}, ${age} min old).` };
+      }
     }
   }
-  if (inv.metric) {
-    const f = packet && packet.fundamentals;
-    const m = f && f.metrics ? f.metrics[inv.metric.key] : null;
-    if (m && m.status === 'complete' && isNum(m.total_30d_usd) && inv.metric.below_30d_usd > m.total_30d_usd) {
-      const when = (f && f.fetched_at) || 'an unknown date';
-      return {
-        kind: 'metric',
-        words: `The ${inv.metric.key} floor $${inv.metric.below_30d_usd} was above the packet's complete 30-day total ($${m.total_30d_usd}, ${when}).`,
-        refusal: `the ${inv.metric.key} floor $${inv.metric.below_30d_usd} is above the packet's complete 30-day total ($${m.total_30d_usd}, ${when}): the ticket would be invalidated the moment it is saved. Set a floor below the total.`,
-      };
-    }
+  if (trig.metric) {
+    const pick = (f, source) => {
+      const m = f && f.metrics ? f.metrics[trig.metric.key] : null;
+      return m && m.status === 'complete' && isNum(m.total_30d_usd) ? { total_30d_usd: m.total_30d_usd, fetched_at: f.fetched_at || null, source } : null;
+    };
+    const got = pick(fundamentalsOf(ws, project, now), 'latest') || pick(packet.fundamentals, 'packet');
+    const base = { key: trig.metric.key, threshold_usd: trig.metric.below_30d_usd };
+    if (!got) out.metric = { status: 'unchecked', ...base, reason: `No complete 30-day ${trig.metric.key} total on file: the floor is not checked.` };
+    else if (trig.metric.below_30d_usd > got.total_30d_usd) {
+      const when = got.fetched_at || 'an unknown date';
+      out.metric = { status: 'breached', ...base, ...got };
+      if (!out.breached) {
+        out.breached = {
+          kind: 'metric',
+          words: `The ${trig.metric.key} floor $${trig.metric.below_30d_usd} was above the complete 30-day total on file ($${got.total_30d_usd}, ${when}).`,
+          refusal: `the ${trig.metric.key} floor $${trig.metric.below_30d_usd} is above the complete 30-day total on file ($${got.total_30d_usd}, ${when}): the ticket would be invalidated the moment it is saved. Set a floor below the total.`,
+        };
+      }
+    } else out.metric = { status: 'clear', ...base, ...got };
   }
-  return null;
+  return out;
+}
+
+// The gate's result with the admission check applied: a risk-taking ticket
+// whose price check is not clear suggests no risk, said as a cap.
+function admitted(g, admission) {
+  if (!(g.suggested_risk_usd > 0) || (admission.price && admission.price.status === 'clear')) return g;
+  const why = `${(admission.price && admission.price.reason) || 'The invalidation price could not be checked.'} No risk is suggested until it can be checked (${ADMISSION_VERSION}).`;
+  return { ...g, risk_allowed: false, allowed_types: g.allowed_types.filter((x) => !RISK_TAKING.has(x)), proposal_type: 'WATCH_ONLY', capped: { from: g.proposal_type, reason: why }, suggested_risk_usd: 0, reasons: [why], admission_hold: true };
 }
 
 function saveTicket(ws, { project_id: pid, ticket_id: tid, text, revision = null, channel = null }) {
@@ -834,83 +910,90 @@ function saveTicket(ws, { project_id: pid, ticket_id: tid, text, revision = null
     if (note.length < 15) throw new OpError('INVALID', `Not saved: ${last.receipt_id} is already saved for this ticket. A different text is a revision: pass revision { note } saying in a sentence what changed and why.`);
     rev = { of: last.receipt_id, note: note.slice(0, 600) };
   }
+  let packet;
   try {
     verifiedFrozen(ws, ticket.prompt.path, ticket.prompt.sha256, 'The frozen Prosecutor prompt');
-    verifiedFrozen(ws, ticket.packet.path, ticket.packet.sha256, 'The frozen ticket packet');
+    packet = JSON.parse(verifiedFrozen(ws, ticket.packet.path, ticket.packet.sha256, 'The frozen ticket packet'));
   } catch (err) {
     if (err.code !== 'INTEGRITY') throw err;
     throw new OpError('INTEGRITY', `Not saved: ${err.message} Keep the text: it can be saved once the frozen files are restored.`, err.details);
   }
-  const now = Date.now();
+  const basis = frozenBasis(ticket, packet);
   const asOf = c.as_of ? Date.parse(c.as_of) : NaN;
-  if (Number.isFinite(asOf) && asOf > now + AS_OF_SLACK_MS) throw new OpError('INVALID', `Not saved: as_of (${c.as_of}) is after the time of saving.`);
+  if (Number.isFinite(asOf) && asOf > Date.now() + AS_OF_SLACK_MS) throw new OpError('INVALID', `Not saved: as_of (${c.as_of}) is after the time of saving.`);
   if (Number.isFinite(asOf) && asOf < Date.parse(ticket.created_at) - AS_OF_SLACK_MS) throw new OpError('INVALID', `Not saved: as_of (${c.as_of}) is before the ticket was opened (${ticket.created_at}).`);
-  const g = gate(ticket.basis, ticket.sizing, c.proposal.proposal_type);
-  const breached = bornInvalidated(ws, project, ticket, c.proposal.invalidation_trigger);
-  const exemptType = EXEMPT_FROM_BORN_CHECK.has(c.proposal.proposal_type) || EXEMPT_FROM_BORN_CHECK.has(g.proposal_type);
-  if (breached && !exemptType) throw new OpError('INVALID', `Not saved: ${breached.refusal} The draft is kept.`, { trigger: breached.kind });
-  const exits = ticket.basis.exits || [];
+  const exits = basis.exits;
   const at500 = exits.find((x) => x.size_usd === ticket.sizing.exit_size_usd) || null;
   const at2000 = exits.find((x) => x.size_usd === 2000) || null;
-  const rgrade = ticket.basis.researcher.grade;
-  const rid = `tr_${compactTs(new Date(now))}_${randomId(5)}`;
-  const savedAt = iso(now);
-  const receipt = {
-    schema_version: 'cr.ticket-receipt.v1',
-    receipt_id: rid,
-    ticket_id: tid,
-    project_id: pid,
-    saved_at: savedAt,
-    as_of: Number.isFinite(asOf) ? iso(Math.min(asOf, now)) : savedAt,
-    model: { provider: 'claude', role: 'prosecutor', model_version: c.model_version, channel: channel || ws.actor || null, saved_by: ws.actor || null },
-    versions: ticket.versions,
-    prompt_sha256: ticket.prompt.sha256,
-    packet: ticket.packet,
-    text: { path: receiptRel(pid, rid, 'md'), sha256: sha256(body), normalized_sha256: textHash, chars: body.length },
-    block_sha256: sha256(JSON.stringify(b)),
-    revision_of: rev ? rev.of : null,
-    revision: rev,
-    researcher: { report_id: ticket.basis.researcher.report_id, verdict: ticket.basis.researcher.verdict, grade: rgrade, analysis_at: ticket.basis.researcher.analysis_at },
-    prosecution: c.prosecution,
-    proposal: c.proposal,
-    // What the desk computed, beside what the model wrote.
-    desk: {
-      sizing: ticket.sizing,
-      gate: g,
-      proposal_type: g.proposal_type,
-      model_proposal_type: c.proposal.proposal_type,
-      suggested_risk_usd: g.suggested_risk_usd,
-      exit_basis: g.exit_basis,
-      exit_cost_500_usd_pct: at500 ? at500.cost_pct : null,
-      exit_cost_500_complete: at500 ? at500.cost_complete : null,
-      exit_cost_500_as_of: at500 ? at500.as_of : null,
-      exit_cost_2000_usd_pct: at2000 ? at2000.cost_pct : null,
-      exit_cost_2000_complete: at2000 ? at2000.cost_complete : null,
-      exits_missing: exitsMissing(exits, pid),
-      sell_tax: null,
-      invalidation_version: INVALIDATION_VERSION,
-      ...(breached && exemptType ? { trigger_breached_at_save: { kind: breached.kind, words: breached.words } } : {}),
-    },
-    // Both agents' own figures and verdicts, side by side; the spread is the
-    // difference between the two, never their average.
-    agent_disagreement: {
-      researcher: { report_id: ticket.basis.researcher.report_id, grade: gateGrade(rgrade), grade_display: rgrade ? rgrade.display : null, verdict: ticket.basis.researcher.verdict },
-      prosecutor: { conviction_score: c.prosecution.conviction_score, verdict: c.prosecution.verdict, fatal_flaws: c.prosecution.fatal_flaws.filter((f) => f.severity === 'fatal').length },
-      spread_points: isNum(gateGrade(rgrade)) && isNum(c.prosecution.conviction_score) ? round(gateGrade(rgrade) - c.prosecution.conviction_score, 2) : null,
-      note: c.agent_disagreement_note,
-    },
-    sources: c.sources,
-    validation: { errors: norm.errors },
-  };
-  try {
-    const pk = JSON.parse(verifiedFrozen(ws, ticket.packet.path, ticket.packet.sha256, 'The frozen ticket packet'));
-    receipt.desk.sell_tax = pk.sell_tax || null;
-  } catch (_) { /* checked above */ }
+  const rgrade = basis.researcher.grade;
+  let receipt = null;
+  let g = null;
+  // Everything that decides the ticket's risk is read inside the lock, so a
+  // price stored between a check and the write cannot slip past it (A03).
   const out = runOp(ws, { type: 'ticket_receipt', summary: `PM ticket for ${pid}` }, (op) => {
     const again = prior().find((r) => r.text && r.text.normalized_sha256 === textHash);
     if (again) return { replay: again };
     const t = op.readJson(ticketRel(pid, tid), null);
     if (!t || t.job.state === 'canceled') throw new OpError('CONFLICT', `Ticket ${tid} is no longer open.`);
+    const now = Date.now();
+    const g0 = gate(basis, ticket.sizing, c.proposal.proposal_type);
+    const admission = admissionOf(ws, project, packet, c.proposal.invalidation_trigger, now);
+    const breached = admission.breached;
+    const exemptType = EXEMPT_FROM_BORN_CHECK.has(c.proposal.proposal_type) || EXEMPT_FROM_BORN_CHECK.has(g0.proposal_type);
+    if (breached && !exemptType) throw new OpError('INVALID', `Not saved: ${breached.refusal} The draft is kept.`, { trigger: breached.kind });
+    g = admitted(g0, admission);
+    const rid = `tr_${compactTs(new Date(now))}_${randomId(5)}`;
+    const savedAt = iso(now);
+    receipt = {
+      schema_version: 'cr.ticket-receipt.v1',
+      receipt_id: rid,
+      ticket_id: tid,
+      project_id: pid,
+      saved_at: savedAt,
+      as_of: Number.isFinite(asOf) ? iso(Math.min(asOf, now)) : savedAt,
+      model: { provider: 'claude', role: 'prosecutor', model_version: c.model_version, channel: channel || ws.actor || null, saved_by: ws.actor || null },
+      versions: ticket.versions,
+      prompt_sha256: ticket.prompt.sha256,
+      packet: ticket.packet,
+      text: { path: receiptRel(pid, rid, 'md'), sha256: sha256(body), normalized_sha256: textHash, chars: body.length },
+      block_sha256: sha256(JSON.stringify(b)),
+      revision_of: rev ? rev.of : null,
+      revision: rev,
+      // The run and its horizon travel with the receipt, so the paper book
+      // knows when a position ends (A05).
+      researcher: { report_id: basis.researcher.report_id, verdict: basis.researcher.verdict, grade: rgrade, analysis_at: basis.researcher.analysis_at, run_id: basis.researcher.run_id, horizon: runHorizonOf(ws, pid, basis.researcher.run_id) },
+      prosecution: c.prosecution,
+      proposal: c.proposal,
+      // What the desk computed, beside what the model wrote.
+      desk: {
+        sizing: ticket.sizing,
+        gate: g,
+        proposal_type: g.proposal_type,
+        model_proposal_type: c.proposal.proposal_type,
+        suggested_risk_usd: g.suggested_risk_usd,
+        exit_basis: g.exit_basis,
+        exit_cost_500_usd_pct: at500 ? at500.cost_pct : null,
+        exit_cost_500_complete: at500 ? at500.cost_complete : null,
+        exit_cost_500_as_of: at500 ? at500.as_of : null,
+        exit_cost_2000_usd_pct: at2000 ? at2000.cost_pct : null,
+        exit_cost_2000_complete: at2000 ? at2000.cost_complete : null,
+        exits_missing: exitsMissing(exits, pid),
+        sell_tax: packet.sell_tax || null,
+        invalidation_version: INVALIDATION_VERSION,
+        admission: { version: admission.version, checked_at: admission.checked_at, price_stale_minutes: admission.price_stale_minutes, price: admission.price, metric: admission.metric, held_risk: g.admission_hold ? { from: g0.proposal_type, risk_usd: g0.suggested_risk_usd, reason: g.capped.reason } : null, limit: admission.limit },
+        ...(breached && exemptType ? { trigger_breached_at_save: { kind: breached.kind, words: breached.words } } : {}),
+      },
+      // Both agents' own figures and verdicts, side by side; the spread is the
+      // difference between the two, never their average.
+      agent_disagreement: {
+        researcher: { report_id: basis.researcher.report_id, grade: gateGrade(rgrade), grade_display: rgrade ? rgrade.display : null, verdict: basis.researcher.verdict },
+        prosecutor: { conviction_score: c.prosecution.conviction_score, verdict: c.prosecution.verdict, fatal_flaws: c.prosecution.fatal_flaws.filter((f) => f.severity === 'fatal').length },
+        spread_points: isNum(gateGrade(rgrade)) && isNum(c.prosecution.conviction_score) ? round(gateGrade(rgrade) - c.prosecution.conviction_score, 2) : null,
+        note: c.agent_disagreement_note,
+      },
+      sources: c.sources,
+      validation: { errors: norm.errors },
+    };
     op.write(receipt.text.path, body, { mode: 'create' });
     op.writeJson(receiptRel(pid, rid), receipt, { mode: 'create' });
     Object.assign(t.job, { state: 'completed', receipt_id: rid, receipts: [...(t.job.receipts || []), rid], completed_at: savedAt, updated_at: savedAt });
@@ -918,6 +1001,7 @@ function saveTicket(ws, { project_id: pid, ticket_id: tid, text, revision = null
     return { receipt_id: rid };
   });
   if (out.result && out.result.replay) return { status: 'unchanged', receipt_id: out.result.replay.receipt_id, receipt: out.result.replay, verified: true, message: `This exact text is already saved as ${out.result.replay.receipt_id}.` };
+  const rid = receipt.receipt_id;
   const capped = g.capped ? ` The desk capped ${g.capped.from} to ${g.proposal_type}: ${g.capped.reason}` : '';
   return {
     status: out.verified ? 'saved' : 'unverified',
@@ -977,19 +1061,55 @@ function reopenReason(ws, project, receipt, { now = Date.now() } = {}) {
   return null;
 }
 
-function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: requestId = null, by = null }) {
+// What a grant must hold at the moment it is recorded (review A04,
+// 2026-10-25): the ticket is not invalidated, its invalidation can be read
+// under this code's rules, and the report it answers is still Claude's
+// current one. Read inside the decision's lock; a refusal names the change.
+function grantBlock(ws, project, receipt, now) {
+  const inv = invalidationOf(ws, project, receipt, { now });
+  if (inv.unread) return { code: 'REFUSED', message: `Not recorded: ${inv.words} Whether it is invalidated cannot be read here, so it cannot be approved.`, changed: [{ kind: 'rules', words: inv.words }] };
+  if (inv.invalidated) return { code: 'INVALIDATED', message: `Not recorded: this ticket is invalidated. ${inv.words} An approval applies to the ticket as you saw it, so nothing was granted; re-open it for a new review.`, changed: [{ kind: 'invalidated', by: inv.by, words: inv.words }] };
+  let cur = null;
+  try { cur = researcherOf(ws, project.project_id); } catch (_) { cur = null; }
+  const was = receipt.researcher && receipt.researcher.report_id;
+  if (was && (!cur || cur.report_id !== was)) {
+    const words = cur ? `Claude's report ${was}, which this ticket answers, is superseded by ${cur.report_id}.` : `Claude's report ${was}, which this ticket answers, is no longer Claude's current eligible report.`;
+    return { code: 'BASIS_CHANGED', message: `Not recorded: ${words} Nothing was granted; a ticket on the current report needs your review.`, changed: [{ kind: 'report', from: was, to: cur ? cur.report_id : null, words }] };
+  }
+  return null;
+}
+
+// The card's `seen` (status, suggested risk, superseded report) against the
+// ticket now: what differs, in words. Empty when it matches or nothing was sent.
+function seenChanges(seen, now) {
+  if (!seen || typeof seen !== 'object') return [];
+  const out = [];
+  const cmp = (key, label) => {
+    if (!Object.prototype.hasOwnProperty.call(seen, key)) return;
+    const a = seen[key] === undefined ? null : seen[key];
+    const b = now[key] === undefined ? null : now[key];
+    if (JSON.stringify(a) !== JSON.stringify(b)) out.push({ kind: key, from: a, to: b, words: `${label}: you saw ${JSON.stringify(a)}, it is now ${JSON.stringify(b)}` });
+  };
+  cmp('status', 'Status');
+  cmp('suggested_risk_usd', 'Suggested risk');
+  cmp('superseded_by_report', 'Newer Claude report');
+  return out;
+}
+
+function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: requestId = null, by = null, seen = null }) {
   if (!RECEIPT_RE.test(String(rid))) throw new OpError('BAD_ID', 'Name the ticket you decided (its receipt ID).');
   if (!ACTIONS.includes(action)) throw new OpError('INVALID', `The decision is one of ${ACTIONS.join(', ')}.`);
   const text = note === null || note === undefined ? null : String(note).replace(/\r\n/g, '\n').trim().slice(0, 1000) || null;
   const reqId = typeof requestId === 'string' && /^[A-Za-z0-9_-]{8,80}$/.test(requestId) ? requestId : null;
   const rel = decisionsRel(pid);
   const held = action === 'pass' ? heldOf(ws, pid, Date.now()) === true : false;
+  let proj = null;
+  const project = () => proj || (proj = require('./projects').getProject(ws, pid));
   let reopen = null;
   if (action === 'reopen') {
-    const project = require('./projects').getProject(ws, pid);
     const rec = readJson(ws.abs(receiptRel(pid, rid)), null);
     if (rec) {
-      reopen = reopenReason(ws, project, rec);
+      reopen = reopenReason(ws, project(), rec);
       if (!reopen && rec.kind !== 'desk_gate') throw new OpError('REFUSED', 'Re-open applies only to an invalidated ticket, or one sized under an older rules version than the one in force. This ticket is neither.');
     }
   }
@@ -999,8 +1119,16 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
     if (r.kind === 'desk_gate' && !['pass', 'watch', 'undo'].includes(action)) throw new OpError('REFUSED', `This is the desk's gate, not a Prosecutor's ticket (${r.desk && r.desk.proposal_type || 'no proposal'}, no risk): ${action} does not apply. Confirm the pass or keep it on watch.`);
     const cur = op.readText(rel, '');
     const lines = cur.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
+    // A replay names whether the decision is still the one in force, so its
+    // consequences are completed once, never for a decision taken back (A06).
+    const replay = (d) => {
+      const mine = lines.filter((l) => l.receipt_id === rid);
+      if (d.action === 'undo') return { status: 'unchanged', decision: d, live: mine[mine.length - 1] === d, undone: lines.find((l) => l.decision_id === d.undoes) || null };
+      const now = decisionFor(lines, rid);
+      return { status: 'unchanged', decision: d, live: Boolean(now && now.decision_id === d.decision_id), undone: null };
+    };
     const prior = reqId ? lines.find((l) => l.request_id === reqId) : null;
-    if (prior) return { status: 'unchanged', decision: prior };
+    if (prior) return replay(prior);
     const latest = listReceipts(ws, pid).filter((x) => !x.broken).pop();
     if (action !== 'undo' && latest && latest.receipt_id !== rid) throw new OpError('NEWER_REPORT', `Not recorded: a newer ticket was saved (${latest.receipt_id}, ${latest.saved_at}). Look at it, then decide that one.`, { newer: [{ receipt_id: latest.receipt_id, saved_at: latest.saved_at }] });
     const inForce = decisionFor(lines, rid);
@@ -1012,12 +1140,28 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
     } else {
       const suggested = r.desk ? r.desk.suggested_risk_usd : 0;
       const type = r.desk ? r.desk.proposal_type : null;
-      if (action === 'reopen' && inForce && inForce.action === 'reopen') return { status: 'unchanged', decision: inForce };
+      if (action === 'reopen' && inForce && inForce.action === 'reopen') return replay(inForce);
       if ((action === 'approve' || action === 'halve') && !(suggested > 0)) throw new OpError('REFUSED', `This ticket suggests no risk (${type || 'no proposal'}): there is nothing to approve. Confirm the pass, or keep watching.`);
       if ((action === 'pass' || action === 'watch') && suggested > 0) throw new OpError('REFUSED', `This ticket suggests ${usd(suggested)} of risk: approve, halve or veto it.`);
       if (action === 'reopen' && !reopen) throw new OpError('REFUSED', 'Re-open applies only to an invalidated ticket, or one sized under an older rules version.');
       if (action === 'trim' && type !== 'TRIM_EXIT') throw new OpError('REFUSED', `This ticket proposes ${type || 'nothing'}, not a trim.`);
-      if (inForce && inForce.action === action) return { status: 'unchanged', decision: inForce };
+      if (inForce && inForce.action === action) return replay(inForce);
+      // One live paper exposure per ticket: a grant in force is undone before
+      // another grant or a veto replaces it (its position is then voided).
+      if (inForce && (inForce.action === 'approve' || inForce.action === 'halve') && ['approve', 'halve', 'veto'].includes(action)) throw new OpError('CONFLICT', `Not recorded: the ${inForce.action} decision (${inForce.decision_id}, ${usd(inForce.pm_approved_risk_usd)}) is in force. Undo it first, then record the ${action}.`);
+      const now = Date.now();
+      if (action === 'approve' || action === 'halve') {
+        const block = grantBlock(ws, project(), r, now);
+        if (block) throw new OpError(block.code, block.message, { changed: block.changed });
+      }
+      // Only a grant must match what the card showed: a veto, pass or watch on a
+      // ticket that changed meanwhile takes no risk.
+      const changed = seen && (action === 'approve' || action === 'halve') ? seenChanges(seen, (() => {
+        let superseded = null;
+        try { const c = researcherOf(ws, pid); superseded = c && r.researcher && c.report_id !== r.researcher.report_id ? c.report_id : null; } catch (_) { superseded = null; }
+        return { status: statusOf(inForce, invalidationOf(ws, project(), r, { now })), suggested_risk_usd: suggested || 0, superseded_by_report: superseded };
+      })()) : [];
+      if (changed.length) throw new OpError('CHANGED', `Not recorded: the ticket changed since you saw it. ${changed.map((x) => x.words).join('; ')}. Look at it again, then decide.`, { changed });
       const starter = r.desk && r.desk.sizing ? r.desk.sizing.starter_risk_usd : SIZING_DEFAULTS.starter_risk_usd;
       const approved = action === 'approve' ? suggested : action === 'halve' ? Math.min(starter, suggested) : 0;
       line = { action, pm_approved_risk_usd: approved, suggested_risk_usd: suggested, proposal_type: type, ...(action === 'reopen' ? { reopen: reopen } : {}) };
@@ -1025,38 +1169,54 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
       // except one Eric holds, which stays watched.
       if (action === 'pass') line.archive = held ? 'kept: held' : 'archived';
     }
+    // The consequences, stated with the decision so a retry completes them.
+    const grants = (d) => d && (d.action === 'approve' || d.action === 'halve');
+    line.effects = {
+      archive: action === 'pass' && line.archive === 'archived' ? 'archive' : action === 'undo' && inForce.archive === 'archived' ? 'restore' : null,
+      paper: grants(line) ? 'open' : action === 'undo' && grants(inForce) ? 'void' : null,
+      journal: 'entry',
+    };
     const full = { schema_version: 'cr.ticket-decision.v1', decision_id: `td_${sha256(`${pid}:${rid}:${action}:${at}:${lines.length}`).slice(0, 14)}`, project_id: pid, receipt_id: rid, ticket_id: r.ticket_id, ...line, note: text, decided_at: at, decided_by: by || ws.actor || null, request_id: reqId, meaning: 'Eric\'s PM decision on the ticket: it records his choice and places no order.' };
     op.write(rel, `${cur}${cur && !cur.endsWith('\n') ? '\n' : ''}${JSON.stringify(full)}\n`);
-    return { status: 'saved', decision: full, undone: action === 'undo' ? inForce : null };
+    return { status: 'saved', decision: full, live: true, undone: action === 'undo' ? inForce : null };
   });
   const res = out.result || {};
-  if (res.status === 'saved') {
-    const projects = require('./projects');
-    if (action === 'pass' && res.decision.archive === 'archived') {
-      projects.archiveProject(ws, pid, `PM confirmed the pass on ticket ${rid}.`);
-      res.project_archived = true;
-    }
-    if (action === 'undo' && res.undone && res.undone.archive === 'archived') {
-      projects.restoreProject(ws, pid);
-      res.project_restored = true;
-    }
-    res.journal = journalDecision(ws, pid, res.decision, res.undone);
-    res.paper = paperBook(ws, pid, rid, action, res);
+  if (res.live) Object.assign(res, effectsOf(ws, pid, rid, res.decision, res.undone));
+  return out;
+}
+
+// The decision's consequences: the project archived or restored, the journal
+// entry, the paper position opened or voided. Each is idempotent, so a replay
+// of the same request (or the same decision again) completes what a failure
+// left undone and duplicates nothing. A failure here is told, never allowed
+// to lose or block the decision.
+function effectsOf(ws, pid, rid, d, undone) {
+  const out = {};
+  const projects = require('./projects');
+  const step = (fn) => { try { return fn(); } catch (err) { return { status: 'failed', error: String(err && err.message || err).slice(0, 200) }; } };
+  if (d.action === 'pass' && d.archive === 'archived') {
+    out.archive = step(() => projects.archiveProject(ws, pid, `PM confirmed the pass on ticket ${rid}.`));
+    if (out.archive.status !== 'failed') out.project_archived = true;
   }
+  if (d.action === 'undo' && undone && undone.archive === 'archived') {
+    out.restore = step(() => projects.restoreProject(ws, pid));
+    if (out.restore.status !== 'failed') out.project_restored = true;
+  }
+  out.journal = journalDecision(ws, pid, d, undone);
+  out.paper = paperBook(ws, pid, rid, d, undone);
   return out;
 }
 
 // A decision that grants risk opens a paper position (core/paper.js, kept
-// apart from the portfolio); Undo voids it. A failure here is told, never
-// allowed to lose or block the decision.
-function paperBook(ws, pid, rid, action, res) {
+// apart from the portfolio); Undo voids it.
+function paperBook(ws, pid, rid, d, undone) {
   try {
     const paper = require('./paper');
-    if (action === 'approve' || action === 'halve') {
+    if (d.action === 'approve' || d.action === 'halve') {
       const receipt = readJson(ws.abs(receiptRel(pid, rid)), null);
-      return receipt ? paper.openForDecision(ws, require('./projects').getProject(ws, pid), { ...receipt, project_id: pid }, res.decision) : { status: 'skipped' };
+      return receipt ? paper.openForDecision(ws, require('./projects').getProject(ws, pid), { ...receipt, project_id: pid }, d) : { status: 'skipped' };
     }
-    if (action === 'undo' && res.undone && (res.undone.action === 'approve' || res.undone.action === 'halve')) return paper.voidForDecision(ws, res.undone.decision_id, `The ${res.undone.action} decision on ${rid} was undone.`);
+    if (d.action === 'undo' && undone && (undone.action === 'approve' || undone.action === 'halve')) return paper.voidForDecision(ws, undone.decision_id, `The ${undone.action} decision on ${rid} was undone.`);
     return null;
   } catch (err) {
     return { status: 'failed', error: String(err && err.message || err).slice(0, 200) };
@@ -1067,8 +1227,12 @@ function paperBook(ws, pid, rid, action, res) {
 // schema's decision words do not cover every PM action, so the action, the
 // receipt and the approved risk are stated in reasons; decisions.jsonl stays
 // the source of truth and a journal failure never loses or blocks a decision.
+// One entry per decision: an entry naming its decision_id is not written again.
 function journalDecision(ws, pid, d, undone) {
   try {
+    const notes = require('./notes');
+    const have = notes.loadJournal(ws, pid).find((e) => e.type === 'decision' && Array.isArray(e.reasons) && e.reasons.includes(`decision_id: ${d.decision_id}`));
+    if (have) return { status: 'unchanged', entry_id: have.entry_id };
     const undo = d.action === 'undo';
     const shown = undo ? undone : d;
     const reasons = [`pm_action: ${d.action}`, `receipt: ${d.receipt_id}`, `decision_id: ${d.decision_id}`];
@@ -1187,6 +1351,18 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
 // ---------------------------------------------------------------------------
 // Reading: the ticket in force and its status
 
+// Whether a grant in force has its paper position: 'open', 'missing' (the
+// decision is recorded but its position is not; the same decision again
+// completes it), or null for a decision that grants nothing.
+function paperStateOf(ws, decision) {
+  if (!decision || !(decision.action === 'approve' || decision.action === 'halve') || !(decision.pm_approved_risk_usd > 0)) return null;
+  try {
+    return require('./paper').readRecords(ws).some((l) => l.event === 'open' && l.decision_id === decision.decision_id) ? 'open' : 'missing';
+  } catch (_) {
+    return null;
+  }
+}
+
 function statusOf(decision, invalidation) {
   if (decision && decision.action === 'reopen') return 'reopened';
   if (invalidation && invalidation.invalidated) return 'invalidated';
@@ -1233,6 +1409,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       exit_cost_2000_usd_pct: d.exit_cost_2000_usd_pct ?? null,
       exits_missing: d.exits_missing || [],
       trigger_breached_at_save: d.trigger_breached_at_save || null,
+      admission: d.admission || null,
       rule_note: (newerRuleOf(current) || {}).words || null,
       can_reopen: (() => {
         if (gateOnly || current !== receipts[receipts.length - 1] || open || (decision && decision.action === 'reopen')) return null;
@@ -1241,7 +1418,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       suggested_risk_usd: d.suggested_risk_usd || 0,
       starter_risk_usd: d.sizing ? d.sizing.starter_risk_usd : SIZING_DEFAULTS.starter_risk_usd,
       pm_approved_risk_usd: decision ? decision.pm_approved_risk_usd : null,
-      decision: decision ? { decision_id: decision.decision_id, action: decision.action, at: decision.decided_at, note: decision.note, archive: decision.archive || null } : null,
+      decision: decision ? { decision_id: decision.decision_id, action: decision.action, at: decision.decided_at, note: decision.note, archive: decision.archive || null, paper: paperStateOf(ws, decision) } : null,
       prosecution: current.prosecution ? { verdict: current.prosecution.verdict, conviction_score: current.prosecution.conviction_score, fatal_flaws: current.prosecution.fatal_flaws, tests: current.prosecution.tests } : null,
       agent_disagreement: current.agent_disagreement || null,
       invalidation,
@@ -1559,6 +1736,7 @@ module.exports = {
   INVALIDATION_VERSION,
   INVALIDATION_V1,
   PREGATE_VERSION,
+  ADMISSION_VERSION,
   SIZING_DEFAULTS,
   TICKET_RE,
   RECEIPT_RE,

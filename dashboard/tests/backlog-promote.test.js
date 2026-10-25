@@ -1,0 +1,200 @@
+'use strict';
+// Backlog promotion (scripts/backlog-promote.js, review A01/A02 2026-10-25): a
+// temporary git repo with a bare origin. Two branches that are green alone and
+// red together never both reach main; a moved main or branch is refused; the
+// result is read back from the remote; the branch is deleted only at the
+// tested commit; the scope gate holds protected paths and unlisted items for
+// Eric. No network, no npm, no real suite.
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawnSync } = require('child_process');
+const P = require('../scripts/backlog-promote');
+
+const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' };
+const g = (cwd, ...args) => { const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: ENV }); assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`); return r.stdout.trim(); };
+const put = (cwd, rel, text) => { fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true }); fs.writeFileSync(path.join(cwd, rel), text); };
+const DESK = '## Autonomous Build Backlog\n- [ ] **1. One.** a\n- [ ] **2. Two.** b\n- [ ] *(Eric)* **3. Three.** c\n- [x] **4. Four.** d\n';
+
+// The fixture's "suite": every caller names the library's current name. A
+// rename (branch A) and a new caller of the old name (branch B) each pass
+// alone, merge cleanly, and fail together.
+const suite = (dir) => {
+  const name = fs.readFileSync(path.join(dir, 'dashboard/core/lib.txt'), 'utf8').trim();
+  return fs.readdirSync(path.join(dir, 'dashboard/core/callers')).every((f) => fs.readFileSync(path.join(dir, 'dashboard/core/callers', f), 'utf8').trim() === name);
+};
+
+function fixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-promote-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const origin = path.join(root, 'origin.git');
+  g(root, 'init', '-q', '--bare', '-b', 'main', origin);
+  const clone = (name) => { const d = path.join(root, name); g(root, 'clone', '-q', origin, d); g(d, 'config', 'core.autocrlf', 'false'); return d; };
+  const work = clone('work');
+  g(work, 'checkout', '-q', '-b', 'main');
+  put(work, 'DESK_STATE.md', DESK);
+  put(work, 'dashboard/core/lib.txt', 'old\n');
+  put(work, 'dashboard/core/callers/c1.txt', 'old\n');
+  put(work, 'templates/prompt.v1.md', 'v1\n');
+  g(work, 'add', '-A'); g(work, 'commit', '-qm', 'base'); g(work, 'push', '-q', '-u', 'origin', 'main');
+  const branch = (name, files, { item = 1, from = 'origin/main', message = null } = {}) => {
+    g(work, 'fetch', '-q', 'origin');
+    g(work, 'checkout', '-q', '-B', name, from);
+    for (const [f, c] of Object.entries(files)) put(work, f, c);
+    g(work, 'add', '-A'); g(work, 'commit', '-qm', message || `backlog: item ${item}\n\nBacklog-Item: ${item}`);
+    g(work, 'push', '-q', '-f', 'origin', name);
+    return g(work, 'rev-parse', 'HEAD');
+  };
+  const mainSha = () => g(work, 'ls-remote', 'origin', 'refs/heads/main').split(/\s+/)[0];
+  // The workflow's three jobs, each in a fresh clone as on a runner.
+  let n = 0;
+  const runner = () => clone(`runner-${n++}`);
+  const testRun = (head) => {
+    const c = runner();
+    const base = mainSha();
+    const out = P.compose(c, { base, head });
+    return { base, ...out, green: out.status === 'composed' && suite(c) };
+  };
+  return { root, work, branch, mainSha, runner, testRun, origin };
+}
+
+test('A01: two branches green alone and red together never both reach main; the second is tested on the new main and held', (t) => {
+  const f = fixture(t);
+  const a = f.branch('claude/backlog-a', { 'dashboard/core/lib.txt': 'new\n', 'dashboard/core/callers/c1.txt': 'new\n' }, { item: 1 });
+  const b = f.branch('claude/backlog-b', { 'dashboard/core/callers/c2.txt': 'old\n' }, { item: 2 });
+  const base0 = f.mainSha();
+  // Each push run is green on its own (the old admission rule's only check).
+  assert.equal(f.testRun(a).green, true);
+  const bAlone = f.testRun(b);
+  assert.equal(bAlone.green, true);
+  // A is promoted: its composed tree passed on main as it was.
+  const ta = f.testRun(a);
+  const pa = P.promote(f.runner(), { base: ta.base, head: a, branch: 'claude/backlog-a', tree: ta.tree });
+  assert.equal(pa.status, 'merged');
+  assert.notEqual(f.mainSha(), base0);
+  // B's head is exactly the tested SHA, but main moved: its old green result
+  // cannot be used (compare-and-swap) ...
+  const stale = P.promote(f.runner(), { base: bAlone.base, head: b, branch: 'claude/backlog-b', tree: bAlone.tree });
+  assert.equal(stale.status, 'base_moved');
+  assert.match(P.summaryOf('promote', stale), /^### Not merged: main moved/);
+  // ... and B composed on the new main merges cleanly but fails the suite, so
+  // the workflow never reaches promote.
+  const tb = f.testRun(b);
+  assert.equal(tb.status, 'composed', 'a clean merge');
+  assert.equal(tb.green, false, 'red together');
+  assert.equal(f.mainSha(), pa.merge, 'main holds only A');
+});
+
+test('A01/A02: a confirmed merge lands the exact tested tree with both parents, says merged, and deletes the branch at the tested commit', (t) => {
+  const f = fixture(t);
+  const head = f.branch('claude/backlog-one', { 'dashboard/core/callers/c3.txt': 'old\n' }, { item: 1 });
+  const tr = f.testRun(head);
+  const gh = (args) => { assert.deepEqual(args.slice(0, 2), ['api', 'repos/o/r/pulls/7']); return JSON.stringify({ merged: true, state: 'closed', merge_commit_sha: 'x' }); };
+  const r = P.promote(f.runner(), { base: tr.base, head, branch: 'claude/backlog-one', tree: tr.tree, repo: 'o/r', number: 7, gh });
+  assert.equal(r.status, 'merged');
+  assert.equal(f.mainSha(), r.merge);
+  const check = f.runner();
+  assert.equal(g(check, 'rev-parse', 'origin/main^{tree}'), tr.tree, 'the tree that passed');
+  assert.deepEqual(g(check, 'log', '-1', '--format=%P', 'origin/main').split(' '), [tr.base, head]);
+  assert.equal(r.branch_deleted, true);
+  assert.equal(g(f.work, 'ls-remote', '--heads', 'origin', 'claude/backlog-one'), '');
+  const words = P.summaryOf('promote', r);
+  assert.match(words, /^### Merged into main as [0-9a-f]{7}/);
+  assert.match(words, /PR #7 reads merged/);
+  assert.match(words, /Branch claude\/backlog-one deleted/);
+  assert.match(words, /Deployment is reported on its own/);
+});
+
+test('A01: a moved branch and a re-created tree that differs are refused; nothing lands', (t) => {
+  const f = fixture(t);
+  const head = f.branch('claude/backlog-one', { 'dashboard/core/callers/c3.txt': 'old\n' }, { item: 1 });
+  const tr = f.testRun(head);
+  const before = f.mainSha();
+  const wrong = P.promote(f.runner(), { base: tr.base, head, branch: 'claude/backlog-one', tree: 'f'.repeat(40) });
+  assert.equal(wrong.status, 'tree_mismatch');
+  f.branch('claude/backlog-one', { 'dashboard/core/callers/c4.txt': 'old\n' }, { item: 1, from: 'claude/backlog-one' });
+  const moved = P.promote(f.runner(), { base: tr.base, head, branch: 'claude/backlog-one', tree: tr.tree });
+  assert.equal(moved.status, 'head_moved');
+  assert.match(P.summaryOf('promote', moved), /^### Not merged: the branch moved/);
+  assert.equal(f.mainSha(), before);
+  assert.throws(() => P.promote(f.runner(), { base: tr.base, head, branch: 'main', tree: tr.tree }), /not a backlog branch/);
+});
+
+test('A02: the remote decides the result: a refused push is "not merged" with main unchanged; a reply lost after the push landed is still a merge', (t) => {
+  const f = fixture(t);
+  const head = f.branch('claude/backlog-one', { 'dashboard/core/callers/c3.txt': 'old\n' }, { item: 1 });
+  const tr = f.testRun(head);
+  const before = f.mainSha();
+  const refused = P.promote(f.runner(), { base: tr.base, head, branch: 'claude/backlog-one', tree: tr.tree, push: () => { throw new Error('HTTP 409 (FICTIONAL)'); } });
+  assert.equal(refused.status, 'push_failed');
+  assert.equal(refused.branch_deleted, false, 'no delete without a merge');
+  assert.match(P.summaryOf('promote', refused), /^### Not merged: the push was refused\n\nHTTP 409/);
+  assert.equal(f.mainSha(), before);
+  assert.match(g(f.work, 'ls-remote', '--heads', 'origin', 'claude/backlog-one'), /claude\/backlog-one/, 'the branch is kept');
+  const lost = P.promote(f.runner(), { base: tr.base, head, branch: 'claude/backlog-one', tree: tr.tree, push: (cwd, remote, merge) => { g(cwd, 'push', '-q', remote, `${merge}:refs/heads/main`); throw new Error('timed out (FICTIONAL)'); } });
+  assert.equal(lost.status, 'merged');
+  assert.equal(f.mainSha(), lost.merge);
+  assert.equal(lost.branch_deleted, true);
+});
+
+test('A02: a branch that moved after the merge is kept, and the PR state that cannot be read is said', (t) => {
+  const f = fixture(t);
+  const head = f.branch('claude/backlog-one', { 'dashboard/core/callers/c3.txt': 'old\n' }, { item: 1 });
+  const tr = f.testRun(head);
+  const push = (cwd, remote, merge, base) => {
+    g(cwd, 'push', '-q', `--force-with-lease=refs/heads/main:${base}`, remote, `${merge}:refs/heads/main`);
+    f.branch('claude/backlog-one', { 'dashboard/core/callers/c5.txt': 'old\n' }, { item: 1, from: 'claude/backlog-one' });
+  };
+  const gh = () => { throw new Error('HTTP 502 (FICTIONAL)'); };
+  const r = P.promote(f.runner(), { base: tr.base, head, branch: 'claude/backlog-one', tree: tr.tree, push, repo: 'o/r', number: 9, gh });
+  assert.equal(r.status, 'merged');
+  assert.equal(r.branch_deleted, false);
+  assert.match(r.branch_note, /moved past the tested commit/);
+  assert.match(g(f.work, 'ls-remote', '--heads', 'origin', 'claude/backlog-one'), /claude\/backlog-one/);
+  assert.match(P.summaryOf('promote', r), /The PR's state could not be read \(HTTP 502/);
+});
+
+test('A01: the scope gate holds protected paths, a backlog edit, an edited template, a commit with no item and an item not buildable for Eric', (t) => {
+  const f = fixture(t);
+  const base = f.mainSha();
+  const scope = (files, opts) => { const head = f.branch(`claude/backlog-s${Math.random().toString(36).slice(2, 7)}`, files, opts); return P.scopeCheck(f.work, { base, head }); };
+  const ok = scope({ 'dashboard/core/callers/c9.txt': 'old\n', 'templates/prompt.v2.md': 'v2\n' }, { item: 2 });
+  assert.equal(ok.ok, true, ok.reasons.join('; '));
+  assert.deepEqual(ok.items, [2]);
+  assert.match(P.summaryOf('scope', ok), /^Scope: items 2, 1 commit, no protected path\.$/);
+  const cases = [
+    [{ '.github/workflows/test.yml': 'x\n' }, { item: 1 }, /\.github\/workflows\/test\.yml: CI and promotion workflows/],
+    [{ 'dashboard/mcp.js': 'x\n' }, { item: 1 }, /authorization/],
+    [{ 'dashboard/core/portfolio.js': 'x\n' }, { item: 1 }, /financial records/],
+    [{ 'dashboard/scripts/backlog-promote.js': 'x\n' }, { item: 1 }, /promotion controls/],
+    [{ 'dashboard/web/package.json': '{}\n' }, { item: 1 }, /dependencies/],
+    [{ 'DESK_STATE.md': `${DESK}- [ ] **5. Self-approved.** x\n` }, { item: 1 }, /DESK_STATE\.md: the backlog/],
+    [{ 'templates/prompt.v1.md': 'v1 edited\n' }, { item: 1 }, /a published template is edited/],
+    [{ 'dashboard/core/x.txt': 'x\n' }, { message: 'backlog: no trailer' }, /names no Backlog-Item/],
+    [{ 'dashboard/core/x.txt': 'x\n' }, { item: 9 }, /item 9 is not on main's backlog/],
+    [{ 'dashboard/core/x.txt': 'x\n' }, { item: 3 }, /item 3 is marked \(Eric\)/],
+    [{ 'dashboard/core/x.txt': 'x\n' }, { item: 4 }, /item 4 is already ticked/],
+  ];
+  for (const [files, opts, re] of cases) {
+    const r = scope(files, opts);
+    assert.equal(r.ok, false, String(re));
+    assert.ok(r.reasons.some((x) => re.test(x)), `${re}: ${r.reasons.join('; ')}`);
+    assert.match(P.summaryOf('scope', r), /^### Needs Eric: not promoted/);
+  }
+  assert.deepEqual([...P.backlogItems(DESK).entries()].map(([k, v]) => [k, v.ticked, v.eric]), [[1, false, false], [2, false, false], [3, false, true], [4, true, false]]);
+});
+
+test('A01: a conflict with main is said and lands nothing', (t) => {
+  const f = fixture(t);
+  f.branch('claude/backlog-x', { 'dashboard/core/lib.txt': 'mid\n' }, { item: 1 });
+  const x = f.testRun(g(f.work, 'rev-parse', 'HEAD'));
+  assert.equal(P.promote(f.runner(), { base: x.base, head: g(f.work, 'rev-parse', 'HEAD'), branch: 'claude/backlog-x', tree: x.tree }).status, 'merged');
+  const y = f.branch('claude/backlog-y', { 'dashboard/core/lib.txt': 'other\n' }, { item: 2, from: g(f.work, 'rev-parse', 'HEAD~1') });
+  const c = f.testRun(y);
+  assert.equal(c.status, 'conflict');
+  assert.deepEqual(c.files, ['dashboard/core/lib.txt']);
+  assert.match(P.summaryOf('compose', c), /does not merge cleanly onto main/);
+});

@@ -65,4 +65,32 @@ function importAllFixtures(ws) {
   return inbox.scanInbox(ws, { force: true });
 }
 
-module.exports = { FIXTURES, tempWorkspace, addFixtureProject, dropFixture, dropText, hashTree, importAllFixtures };
+// A measured exit at $500 and $2,000 handed to a new ticket the way the
+// Forensics projection hands it (tickets.js exitsOf reads forensics.view),
+// for the duration of fn only, so it is frozen into the ticket's packet that
+// the sizing gate reads. Fictional readings; nothing is fetched.
+function withExitReadings(costPct, fn, { complete = true } = {}) {
+  const F = require('../core/forensics');
+  const real = F.view;
+  const at = new Date().toISOString();
+  const row = (size, cost) => ({ size_usd: size, status: 'current', as_of: at, note: null, best: { cost_pct: cost, cost_complete: complete, missing_costs: complete ? [] : ['network fee'], method: 'executable_quote', route_scope: 'aggregator', retrieved_at: at } });
+  F.view = () => ({ liquidity: { exits: [row(500, costPct), row(2000, costPct * 2)] } });
+  try {
+    return fn();
+  } finally {
+    F.view = real;
+  }
+}
+
+// A stored price a minute old (market-data/latest.json), for a ticket's
+// admission check at save. Fictional.
+function freshPrice(ws, id, price, ageMs = 60000) {
+  const file = ws.abs('market-data/latest.json');
+  let cur = { assets: {} };
+  try { cur = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { /* none yet */ }
+  const at = new Date(Date.now() - ageMs).toISOString();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  atomicWrite(file, jsonText({ ...cur, provider: 'coingecko', assets: { ...(cur.assets || {}), [id]: { id, price_usd: price, source_last_updated_at: at, fetched_at: at } } }));
+}
+
+module.exports = { FIXTURES, tempWorkspace, addFixtureProject, dropFixture, dropText, hashTree, importAllFixtures, withExitReadings, freshPrice };

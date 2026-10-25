@@ -834,15 +834,15 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
       // A read that met a save in progress, an interrupted save or an
       // unverified commit is 503: nothing mixed is ever returned (V2-001).
       const readErr = READ_CODES.has(err.code);
-      const status = err.status || (err.code === 'NOT_FOUND' ? 404 : ['INVALID', 'BAD_ID', 'BAD_PATH', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT', 'UNSAFE_PATH'].includes(err.code) ? 400 : ['WORKSPACE_BUSY', 'WRITES_BLOCKED', 'NEWER_REPORT', 'INTEGRITY'].includes(err.code) ? 409 : readErr ? 503 : 500);
+      const status = err.status || (err.code === 'NOT_FOUND' ? 404 : ['INVALID', 'BAD_ID', 'BAD_PATH', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT', 'UNSAFE_PATH'].includes(err.code) ? 400 : ['WORKSPACE_BUSY', 'WRITES_BLOCKED', 'NEWER_REPORT', 'INTEGRITY', 'INVALIDATED', 'BASIS_CHANGED', 'CHANGED'].includes(err.code) ? 409 : readErr ? 503 : 500);
       if (status >= 500 && !readErr) console.error(err);
       const retryMs = readErr && err.code !== 'READ_UNSAFE' ? (err.details && err.details.retry_after_ms) || 1000 : null;
       if (!res.headersSent) {
         res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...(retryMs ? { 'Retry-After': String(Math.max(1, Math.ceil(retryMs / 1000))) } : {}) });
       }
       // A review refused for a newer report names it (model, report, time saved).
-      const newer = err.code === 'NEWER_REPORT' && err.details && Array.isArray(err.details.newer) ? { newer: err.details.newer } : {};
-      res.end(JSON.stringify({ error: status >= 500 && !readErr ? `Server error: ${err.message}` : err.message, code: err.code || null, retry_after_ms: retryMs, saved: readErr && req.method === 'GET' ? false : ['INVALID', 'BAD_ID', 'BAD_PATH', 'NOT_FOUND', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'WORKSPACE_BUSY', 'WRITES_BLOCKED', 'NEWER_REPORT', 'INTEGRITY', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT', 'UNSAFE_PATH', 'GENERATION_UNWRITABLE'].includes(err.code) || err.status ? false : 'unknown', ...newer }));
+      const newer = err.code === 'NEWER_REPORT' && err.details && Array.isArray(err.details.newer) ? { newer: err.details.newer } : ['INVALIDATED', 'BASIS_CHANGED', 'CHANGED'].includes(err.code) && err.details && Array.isArray(err.details.changed) ? { changed: err.details.changed } : {};
+      res.end(JSON.stringify({ error: status >= 500 && !readErr ? `Server error: ${err.message}` : err.message, code: err.code || null, retry_after_ms: retryMs, saved: readErr && req.method === 'GET' ? false : ['INVALID', 'BAD_ID', 'BAD_PATH', 'NOT_FOUND', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'WORKSPACE_BUSY', 'WRITES_BLOCKED', 'NEWER_REPORT', 'INTEGRITY', 'INVALIDATED', 'BASIS_CHANGED', 'CHANGED', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT', 'UNSAFE_PATH', 'GENERATION_UNWRITABLE'].includes(err.code) || err.status ? false : 'unknown', ...newer }));
     }
   });
 
@@ -1173,6 +1173,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     action: String(body.action || ''),
     note: typeof body.note === 'string' ? body.note : null,
     request_id: typeof body.request_id === 'string' ? body.request_id : null,
+    seen: body.seen && typeof body.seen === 'object' && !Array.isArray(body.seen) ? body.seen : null,
     by: 'dashboard',
   })));
   // The batch gate (tickets.js batchGate): `dry_run` is a read; `expect` is

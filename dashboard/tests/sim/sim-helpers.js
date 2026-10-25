@@ -6,7 +6,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { tempWorkspace, addFixtureProject, importAllFixtures } = require('../helpers');
+const { tempWorkspace, addFixtureProject, importAllFixtures, withExitReadings, freshPrice } = require('../helpers');
 const T = require('../../core/tickets');
 const { readJson, atomicWrite, jsonText } = require('../../core/fsx');
 
@@ -47,13 +47,6 @@ function answer(ticket, over = {}) {
   return `# Prosecution (FICTIONAL)\n\n${'The four tests and the flaws, written out for the test fixture. '.repeat(12)}\n\n\`\`\`json\n${JSON.stringify(b, null, 2)}\n\`\`\`\n`;
 }
 
-function withExit(ws, pid, tid, costPct, complete = true) {
-  const rel = `projects/${pid}/tickets/${tid}/ticket.json`;
-  const t = readJson(ws.abs(rel));
-  t.basis.exits = [{ size_usd: 500, status: 'current', cost_pct: costPct, cost_complete: complete, missing_costs: complete ? [] : ['network fee'] }, { size_usd: 2000, status: 'current', cost_pct: costPct * 2, cost_complete: complete }];
-  atomicWrite(ws.abs(rel), jsonText(t));
-}
-
 
 function stubHeld(t, pid, held) {
   const portfolio = require('../../core/portfolio');
@@ -70,11 +63,12 @@ function workspace(t) {
   return { ...w, pid };
 }
 
-// A saved ticket with a proven exit, so the gate allows risk.
-function savedTicket(t, s, { cost = 1.5, refresh = false, over = {} } = {}) {
+// A saved ticket with a proven exit frozen into its packet and a fresh stored
+// price for the admission check, so the gate allows risk.
+function savedTicket(t, s, { cost = 1.5, refresh = false, over = {}, price = 0.85 } = {}) {
   stubHeld(t, s.pid, false);
-  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true, refresh }).ticket;
-  withExit(s.ws, s.pid, tk.ticket_id, cost);
+  const tk = withExitReadings(cost, () => T.createTicket(s.ws, { project_id: s.pid, assistant: true, refresh })).ticket;
+  if (price !== null) freshPrice(s.ws, CG, price);
   return T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk.ticket_id), over) });
 }
 
@@ -96,4 +90,4 @@ function replay(ws, name, refMs) {
 
 const priceCheck = (ws, pid, now) => T.view(ws, pid, { now }).ticket.invalidation.checks.find((c) => c.kind === 'price');
 
-module.exports = { H, CG, T, answer, withExit, stubHeld, workspace, savedTicket, loadPath, replay, priceCheck, readJson, atomicWrite, jsonText };
+module.exports = { H, CG, T, answer, stubHeld, workspace, savedTicket, loadPath, replay, priceCheck, readJson, atomicWrite, jsonText };

@@ -14,7 +14,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('http');
-const { tempWorkspace, addFixtureProject, importAllFixtures } = require('./helpers');
+const { tempWorkspace, addFixtureProject, importAllFixtures, withExitReadings, freshPrice } = require('./helpers');
 const { start } = require('../server');
 const T = require('../core/tickets');
 const { readJson, atomicWrite, jsonText } = require('../core/fsx');
@@ -89,11 +89,8 @@ async function richWorkspace(t) {
   const portfolio = require('../core/portfolio');
   const real = portfolio.computePortfolio;
   portfolio.computePortfolio = (...a) => { const pf = real(...a); return { ...pf, positions: [{ project_id: pid, closed: false }] }; };
-  const tk = T.createTicket(ws, { project_id: pid, assistant: true }).ticket;
-  const rel = `projects/${pid}/tickets/${tk.ticket_id}/ticket.json`;
-  const job = readJson(ws.abs(rel));
-  job.basis.exits = [{ size_usd: 500, status: 'current', cost_pct: 1.5, cost_complete: true, missing_costs: [] }, { size_usd: 2000, status: 'current', cost_pct: 3, cost_complete: true }];
-  atomicWrite(ws.abs(rel), jsonText(job));
+  const tk = withExitReadings(1.5, () => T.createTicket(ws, { project_id: pid, assistant: true })).ticket;
+  freshPrice(ws, 'example-payfi-fictional', 0.85);
   const saved = T.saveTicket(ws, { project_id: pid, ticket_id: tk.ticket_id, text: ticketAnswer(T.loadTicket(ws, pid, tk.ticket_id)) });
   portfolio.computePortfolio = real;
   const srv = await start(ws, { port: PORT + Math.floor(Math.random() * 90), quiet: true });

@@ -1898,7 +1898,8 @@ const handlers = {
   daily_brief(ws, args) {
     const since = typeof args.since === 'string' && args.since.trim() ? args.since.trim().slice(0, 40) : null;
     const out = require('./core/brief-daily').brief(ws, { since });
-    return { status: 'ok', ...out, message: `${out.format}: ${out.sections.filter((x) => x.state === 'ok').length} of ${out.sections.length} sections read; SHA-256 ${out.text_sha256}. Nothing was written.` };
+    const partial = out.sections.filter((x) => x.state === 'partial').length;
+    return { status: 'ok', ...out, message: `${out.format}: ${out.sections.filter((x) => x.state === 'ok').length} of ${out.sections.length} sections read in full${partial ? `, ${partial} in part (a record could not be read; its count is unknown)` : ''}; SHA-256 ${out.text_sha256} (of the text's bytes, not a completeness check). Nothing was written.` };
   },
 
   pending_tickets(ws, args, ctx) {

@@ -56,13 +56,13 @@ export default function DailyBrief() {
             {v && !v.ok ? <p role="alert" className="dbrief-bad">{v.why}</p> : null}
             {v && v.ok ? (
               <>
-                <p className="dbrief-meta" title={v.hash}>{`cr-daily-brief@1 · as of ${v.as_of} · text SHA-256 ${v.hash_short}…`}{v.unreadable ? ` · ${v.unreadable} ${v.unreadable === 1 ? 'section' : 'sections'} could not be read` : ''}</p>
+                <p className="dbrief-meta" title={v.hash}>{`cr-daily-brief@1 · as of ${v.as_of} · text SHA-256 ${v.hash_short}…`}{v.unreadable ? ` · ${v.unreadable} ${v.unreadable === 1 ? 'section' : 'sections'} could not be read` : ''}{v.partial ? ` · ${v.partial} ${v.partial === 1 ? 'section' : 'sections'} read in part` : ''}</p>
                 {v.sections.map((s) => (
                   <section key={s.id} className="dbrief-sec" aria-labelledby={`dbrief-${s.id}`}>
-                    <h3 id={`dbrief-${s.id}`}>{s.title}{s.count !== null ? ` (${s.count})` : ''}</h3>
+                    <h3 id={`dbrief-${s.id}`}>{s.title}{s.count !== null ? ` (${s.count})` : s.count_words ? ` (${s.count_words})` : ''}</h3>
                     <ul>
                       {s.lines.map((l, i) => (
-                        <li key={i} className={`dbrief-line${s.unreadable ? ' dbrief-bad' : s.empty ? ' dbrief-none' : ''}`}>
+                        <li key={i} className={`dbrief-line${s.unreadable || l.unreadable ? ' dbrief-bad' : s.empty ? ' dbrief-none' : ''}`}>
                           {l.href ? <a href={l.href}>{l.text}</a> : l.text}
                         </li>
                       ))}

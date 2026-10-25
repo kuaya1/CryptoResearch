@@ -10,7 +10,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { tempWorkspace, addFixtureProject, importAllFixtures, hashTree } = require('./helpers');
+const { tempWorkspace, addFixtureProject, importAllFixtures, hashTree, withExitReadings, freshPrice } = require('./helpers');
 const T = require('../core/tickets');
 const { sha256, readJson, atomicWrite, jsonText } = require('../core/fsx');
 
@@ -63,13 +63,13 @@ function answer(ticket, over = {}) {
   return `# Prosecution (FICTIONAL)\n\n${'The four tests and the flaws, written out for the test fixture. '.repeat(12)}\n\n\`\`\`json\n${JSON.stringify(b, null, 2)}\n\`\`\`\n`;
 }
 
-// A measured exit at $500 in the ticket's basis (the job record, not the
-// frozen packet), for the paths that need a proven exit.
-function withExit(ws, pid, tid, costPct, complete = true) {
-  const rel = `projects/${pid}/tickets/${tid}/ticket.json`;
-  const t = readJson(ws.abs(rel));
-  t.basis.exits = [{ size_usd: 500, status: 'current', cost_pct: costPct, cost_complete: complete, missing_costs: complete ? [] : ['network fee'] }, { size_usd: 2000, status: 'current', cost_pct: costPct * 2, cost_complete: complete }];
-  atomicWrite(ws.abs(rel), jsonText(t));
+// A ticket opened with a measured exit frozen into its packet (the path a real
+// reading takes: exitsOf, then the packet the gate reads) and a fresh stored
+// price above the answer's $0.70 trigger, for the paths that need risk.
+function riskTicket(s, costPct, opts = {}, { complete = true, price = 0.85 } = {}) {
+  const out = withExitReadings(costPct, () => T.createTicket(s.ws, { project_id: s.pid, assistant: true, ...opts }), { complete });
+  if (price !== null) freshPrice(s.ws, 'example-payfi-fictional', price);
+  return out.ticket;
 }
 
 test('the sizing gate: $500 only with a proven exit within 5% and a grade of 55; nothing new under 40, or under 55 unless held', () => {
@@ -150,8 +150,7 @@ test('decisions: approve gives the suggested $500, halve the $250 starter, veto 
   const tk0 = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
   const zero = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk0.ticket_id, text: answer(tk0) });
   assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: zero.receipt_id, action: 'approve' }), (e) => e.code === 'REFUSED');
-  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true, refresh: true }).ticket;
-  withExit(s.ws, s.pid, tk.ticket_id, 2.4);
+  const tk = riskTicket(s, 2.4, { refresh: true });
   const saved = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk.ticket_id)) });
   assert.equal(saved.receipt.desk.proposal_type, 'ACCUMULATE');
   assert.equal(saved.receipt.desk.suggested_risk_usd, 500);
@@ -172,8 +171,7 @@ test('decisions: approve gives the suggested $500, halve the $250 starter, veto 
 
 test('invalidation is read on every read against the hourly prices; the stored ticket is never rewritten; reading writes nothing', (t) => {
   const s = withReport(t);
-  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
-  withExit(s.ws, s.pid, tk.ticket_id, 1.5);
+  const tk = riskTicket(s, 1.5);
   const saved = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk.ticket_id)) });
   const cg = 'example-payfi-fictional';
   const obs = (price, atMs) => {
@@ -260,8 +258,7 @@ test('a $0 ticket is passed (archiving the project, Undo restores it) or kept on
   T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'watch' });
   assert.equal(T.view(s.ws, s.pid).ticket.status, 'watching');
   // A ticket that suggests risk is not "passed" or "watched".
-  const tk2 = T.createTicket(s.ws, { project_id: s.pid, assistant: true, refresh: true }).ticket;
-  withExit(s.ws, s.pid, tk2.ticket_id, 2);
+  const tk2 = riskTicket(s, 2, { refresh: true });
   const risky = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk2.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk2.ticket_id)) });
   assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: risky.receipt_id, action: 'pass' }), (e) => e.code === 'REFUSED');
 });
@@ -344,8 +341,7 @@ test('ticket sizing in Preferences: the server takes it within the same bounds a
 });
 test('each PM decision and its undo also appears in the journal, and a journal failure keeps the decision', (t) => {
   const s = withReport(t);
-  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
-  withExit(s.ws, s.pid, tk.ticket_id, 2);
+  const tk = riskTicket(s, 2);
   const saved = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk.ticket_id)) });
   const notes = require('../core/notes');
   const a = T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'halve', note: 'half first' });
@@ -430,8 +426,7 @@ test('pilot candidates: a held project comes before a better-graded one', (t) =>
 // Invalidation coverage (cr-ticket-invalidation@2).
 function coverageSetup(t) {
   const s = withReport(t);
-  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
-  withExit(s.ws, s.pid, tk.ticket_id, 1.5);
+  const tk = riskTicket(s, 1.5);
   const saved = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk.ticket_id)) });
   const t0 = Date.parse(saved.receipt.saved_at);
   const obs = (price, atMs) => {
@@ -654,8 +649,7 @@ test('pre-gate: an existing Prosecutor receipt reads as before, and the index ro
 test('get_ticket: an invalidated ticket names the trigger and the reading that fired; a named receipt and its text are read; a missing project is NOT_FOUND; nothing is written', async (t) => {
   const s = withReport(t);
   stubHeld(t, s.pid, false);
-  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
-  withExit(s.ws, s.pid, tk.ticket_id, 1.5);
+  const tk = riskTicket(s, 1.5);
   const saved = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk.ticket_id)) });
   const t0 = Date.parse(saved.receipt.saved_at);
   const dir = s.ws.abs('market-data/observations');
@@ -735,7 +729,7 @@ function stubPrice(t, id, price) {
   t.after(() => { market.readLatest = real; });
 }
 const withTrigger = (tk, trig, type = 'ACCUMULATE') => { const base = JSON.parse(answer(tk).match(/```json\n([\s\S]*)\n```/)[1]); return answer(tk, { proposal: { ...base.proposal, proposal_type: type, invalidation_trigger: { ...base.proposal.invalidation_trigger, metric: null, ...trig } } }); };
-const openTicket = (t, s) => { stubHeld(t, s.pid, false); const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket; withExit(s.ws, s.pid, tk.ticket_id, 1.5); return T.loadTicket(s.ws, s.pid, tk.ticket_id); };
+const openTicket = (t, s) => { stubHeld(t, s.pid, false); return riskTicket(s, 1.5); };
 const CG = 'example-payfi-fictional';
 
 test('a price trigger at or above the price now is refused and writes nothing; one below is saved', (t) => {
@@ -791,8 +785,7 @@ test('with no price on file the check is skipped, never refused', (t) => {
 
 function savedTicket(t, s) {
   stubHeld(t, s.pid, false);
-  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
-  withExit(s.ws, s.pid, tk.ticket_id, 1.5);
+  const tk = riskTicket(s, 1.5);
   return T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk.ticket_id)) });
 }
 function dropPrice(ws, at0, price) {
@@ -1229,4 +1222,282 @@ test('paper model: positions split open, closed and voided; the shadow rows say 
   assert.equal(rows[1].vs_btc_text, '+36.36%');
   assert.deepEqual(M.shadowCounts(book), { total: 2, measured: 1, rose: 1, unknown: 1 });
   assert.deepEqual(M.splitPositions(null), { open: [], closed: [], voided: [] });
+});
+
+// ---------------------------------------------------------------------------
+// Independent review 2026-10-25 (audits/2026-10-25-codex-autonomy-review):
+// A03 admission at the commit, A04 a grant against the ticket as it is now,
+// A05 the run's horizon in the paper book, A06 one live exposure and replayed
+// consequences, A08 sizing from the verified packet.
+
+const decisionLines = (s) => T.readDecisions(s.ws, s.pid);
+const blockOf = (text) => JSON.parse(text.match(/```json\n([\s\S]*)\n```/)[1]);
+
+test('A03: a price stored after the text is checked and before the lock is taken is read at the commit; the born-invalidated ticket is refused and nothing is written', (t) => {
+  const s = withReport(t);
+  const tk = openTicket(t, s);
+  const market = require('../core/market');
+  const real = market.readLatest;
+  // A read outside the save's lock sees $0.85; the commit, under the lock,
+  // sees the $0.65 a price update stored in between.
+  market.readLatest = (ws, ...a) => { const m = real(ws, ...a); return ws._lockHeld ? { ...m, assets: { ...m.assets, [CG]: { ...m.assets[CG], price_usd: 0.65 } } } : m; };
+  t.after(() => { market.readLatest = real; });
+  const before = hashTree(s.root);
+  assert.throws(() => T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: withTrigger(tk, { price_usd: 0.7 }) }), (e) => e.code === 'INVALID' && /price now \(\$0\.65/.test(e.message));
+  assert.deepEqual(hashTree(s.root), before, 'a refusal at the commit writes nothing');
+  assert.equal(T.listReceipts(s.ws, s.pid).length, 0);
+  market.readLatest = real;
+  const ok = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: withTrigger(tk, { price_usd: 0.7 }) });
+  assert.equal(ok.receipt.desk.suggested_risk_usd, 500, 'a valid, fresh case is admitted');
+  assert.equal(ok.receipt.desk.admission.version, T.ADMISSION_VERSION);
+  assert.equal(ok.receipt.desk.admission.price.status, 'clear');
+  assert.equal(ok.receipt.desk.admission.price.price_usd, 0.85);
+  assert.match(ok.receipt.desk.admission.limit, /not proof the market did not move/);
+});
+
+test('A03: no stored price, a stale price or an unusable trigger is unchecked and holds a risk-taking ticket to $0, said as a cap; the receipt is kept', (t) => {
+  const cases = [
+    ['no price', (s) => fs.rmSync(s.ws.abs('market-data/latest.json')), {}, /No stored price/],
+    ['stale price', (s) => freshPrice(s.ws, CG, 0.85, 3 * HOURMS), {}, /past your 90-minute freshness limit/],
+    ['malformed trigger', () => {}, { price_usd: 'nonsense' }, /No usable invalidation price/],
+    ['no trigger', () => {}, { price_usd: null }, /No usable invalidation price/],
+  ];
+  for (const [label, prep, trig, re] of cases) {
+    const s = withReport(t);
+    const tk = openTicket(t, s);
+    prep(s);
+    const out = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: withTrigger(tk, trig) });
+    assert.equal(out.status, 'saved', label);
+    const d = out.receipt.desk;
+    assert.equal(d.suggested_risk_usd, 0, `${label}: unknown is never a pass`);
+    assert.equal(d.proposal_type, 'WATCH_ONLY', label);
+    assert.equal(d.gate.capped.from, 'ACCUMULATE', label);
+    assert.match(d.gate.capped.reason, re, label);
+    assert.equal(d.admission.price.status, 'unchecked', label);
+    assert.deepEqual(d.admission.held_risk && d.admission.held_risk.risk_usd, 500, label);
+    assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: out.receipt_id, action: 'approve' }), (e) => e.code === 'REFUSED', `${label}: nothing to approve`);
+  }
+});
+
+test('A03: the metric floor is checked against the complete 30-day total on file at the commit, not only the frozen packet\'s', (t) => {
+  const s = withReport(t);
+  const f = require('../core/fundamentals');
+  const real = f.summary;
+  let total = 200000;
+  f.summary = () => ({ state: 'ok', fetched_at: '2026-10-25T00:00:00.000Z', metrics: { fees: { status: 'complete', total_30d_usd: total } } });
+  t.after(() => { f.summary = real; });
+  const tk = openTicket(t, s);
+  total = 50000;
+  const text = answer(tk, { proposal: { ...blockOf(answer(tk)).proposal, invalidation_trigger: { price_usd: 0.5, metric: { key: 'fees', below_30d_usd: 100000 }, statement: 'x' } } });
+  assert.throws(() => T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text }), (e) => e.code === 'INVALID' && /50000/.test(e.message));
+});
+
+test('A08: the desk sizes from the verified packet: an exit, holding or grade changed only in the job record is an INTEGRITY refusal with nothing written', (t) => {
+  for (const [field, mutate] of [
+    ['exits', (job) => { job.basis.exits = [{ size_usd: 500, status: 'current', cost_pct: 1, cost_complete: true, missing_costs: [] }, { size_usd: 2000, status: 'current', cost_pct: 2, cost_complete: true }]; }],
+    ['held', (job) => { job.basis.held = true; }],
+    ['researcher.grade', (job) => { job.basis.researcher.grade = { status: 'firm', value: 99, display: '99' }; }],
+  ]) {
+    const s = withReport(t);
+    stubHeld(t, s.pid, false);
+    const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
+    freshPrice(s.ws, CG, 0.85);
+    const frozen = JSON.parse(fs.readFileSync(s.ws.abs(tk.packet.path), 'utf8'));
+    assert.equal(frozen.exits[0].cost_pct, null, 'the packet holds no exit reading');
+    const rel = `projects/${s.pid}/tickets/${tk.ticket_id}/ticket.json`;
+    const job = readJson(s.ws.abs(rel));
+    mutate(job);
+    atomicWrite(s.ws.abs(rel), jsonText(job));
+    const before = hashTree(s.root);
+    assert.throws(() => T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk.ticket_id)) }), (e) => e.code === 'INTEGRITY' && e.details.fields.includes(field), field);
+    assert.deepEqual(hashTree(s.root), before, `${field}: nothing written`);
+  }
+  // The same reading frozen into the packet the real way is sized.
+  const s = withReport(t);
+  stubHeld(t, s.pid, false);
+  const tk = riskTicket(s, 1);
+  const frozen = JSON.parse(fs.readFileSync(s.ws.abs(tk.packet.path), 'utf8'));
+  assert.equal(frozen.exits[0].cost_pct, 1);
+  const out = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) });
+  assert.equal(out.receipt.desk.suggested_risk_usd, 500);
+  assert.equal(out.receipt.desk.exit_cost_500_usd_pct, 1);
+  assert.equal(out.receipt.desk.exit_cost_500_as_of, frozen.exits[0].as_of, 'the cost keeps its time');
+});
+
+test('A04: an approval is refused once the ticket is invalidated (409 INVALIDATED, nothing written, no paper position); a veto is still recorded', (t) => {
+  const P = require('../core/paper');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  assert.equal(saved.receipt.desk.suggested_risk_usd, 500);
+  dropPrice(s.ws, Date.parse(saved.receipt.saved_at), 0.69);
+  assert.equal(T.view(s.ws, s.pid).ticket.status, 'invalidated');
+  for (const action of ['approve', 'halve']) {
+    assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action, request_id: `req_a04_${action}` }), (e) => e.code === 'INVALIDATED' && /0\.69/.test(e.message) && e.details.changed[0].kind === 'invalidated', action);
+  }
+  assert.equal(decisionLines(s).length, 0);
+  assert.equal(P.readRecords(s.ws).length, 0, 'no paper position');
+  // A veto takes no risk: it is recorded although the card still showed the
+  // ticket pending.
+  assert.equal(T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'veto', seen: { status: 'pending_pm_review', suggested_risk_usd: 500, superseded_by_report: null } }).result.status, 'saved');
+});
+
+test('A04: a grant on a ticket whose report is superseded is refused, naming the newer report; the card\'s seen state must match the ticket now', (t) => {
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  const compare = require('../core/compare');
+  const real = compare.latestByProvider;
+  compare.latestByProvider = (...a) => { const l = real(...a); return { ...l, claude: { ...l.claude, report_id: 'r-newer-fictional' } }; };
+  t.after(() => { compare.latestByProvider = real; });
+  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' }), (e) => e.code === 'BASIS_CHANGED' && /superseded by r-newer-fictional/.test(e.message));
+  compare.latestByProvider = real;
+  // The card's seen state: a different status or suggested risk is CHANGED.
+  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve', seen: { status: 'pending_pm_review', suggested_risk_usd: 250, superseded_by_report: null } }), (e) => e.code === 'CHANGED' && /Suggested risk: you saw 250, it is now 500/.test(e.message));
+  assert.equal(decisionLines(s).length, 0);
+  const seen = { status: 'pending_pm_review', suggested_risk_usd: 500, superseded_by_report: null };
+  const ok = T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve', request_id: 'req_a04_seen01', seen });
+  assert.equal(ok.result.status, 'saved');
+  assert.equal(T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve', request_id: 'req_a04_seen01', seen }).result.status, 'unchanged', 'its replay still works');
+});
+
+test('A04: the server answers a refused grant with 409 and the named change', async (t) => {
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  dropPrice(s.ws, Date.parse(saved.receipt.saved_at), 0.69);
+  const { start } = require('../server');
+  const http = require('http');
+  const srv = await start(s.ws, { port: 49800 + Math.floor(Math.random() * 90), quiet: true });
+  t.after(() => { try { srv.shutdown(); } catch (_) { /* stopped */ } });
+  const call =(method, p, token, body) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: srv.port, method, path: p, headers: { host: `127.0.0.1:${srv.port}`, ...(token ? { 'x-cr-token': token } : {}), ...(body ? { 'content-type': 'application/json', origin: `http://127.0.0.1:${srv.port}` } : {}) } }, (res) => { let b = ''; res.on('data', (c) => { b += c; }); res.on('end', () => resolve({ status: res.statusCode, json: JSON.parse(b || 'null') })); });
+    req.on('error', reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+  const token = (await call('GET', '/api/session')).json.token;
+  const r = await call('POST', `/api/projects/${s.pid}/tickets/decisions`, token, { receipt_id: saved.receipt_id, action: 'approve', request_id: 'req_a04_http01', seen: { status: 'pending_pm_review', suggested_risk_usd: 500, superseded_by_report: null } });
+  assert.equal(r.status, 409);
+  assert.equal(r.json.code, 'INVALIDATED');
+  assert.equal(r.json.saved, false);
+  assert.equal(r.json.changed[0].kind, 'invalidated');
+});
+
+test('A05: a report made under a research run carries the run and its horizon from the ticket to the paper position, which closes at the horizon end with nothing edited', (t) => {
+  const { buildBriefWorkspace, IDS } = require('./brief-fixtures');
+  const P = require('../core/paper');
+  const fx = buildBriefWorkspace('a05-horizon');
+  t.after(fx.cleanup);
+  const ws = fx.ws;
+  const pid = fx.pids.complete;
+  const run = require('../core/research').loadRun(ws, pid, fx.runs.complete);
+  ws.settings.tickets = { sizing: { min_grade_new_entry: 1, min_grade_any: 0 } };
+  stubHeld(t, pid, false);
+  const tk = withExitReadings(1, () => T.createTicket(ws, { project_id: pid, assistant: true })).ticket;
+  assert.equal(tk.basis.researcher.run_id, run.run_id, 'the report names its run');
+  freshPrice(ws, `${IDS.complete}-cg`, 1.2);
+  const saved = T.saveTicket(ws, { project_id: pid, ticket_id: tk.ticket_id, text: answer(tk) });
+  assert.equal(saved.receipt.desk.suggested_risk_usd, 500);
+  assert.equal(saved.receipt.researcher.run_id, run.run_id, 'the receipt keeps the run');
+  assert.equal(saved.receipt.researcher.horizon.end_date, run.horizon.end_date);
+  T.decide(ws, pid, { receipt_id: saved.receipt_id, action: 'approve' });
+  const [open] = P.readRecords(ws);
+  assert.equal(open.horizon_end, `${run.horizon.end_date}T00:00:00.000Z`);
+  assert.equal(open.horizon_source, 'receipt');
+  const paperFile = fs.readFileSync(ws.abs(P.REL), 'utf8');
+  const end = Date.parse(open.horizon_end);
+  const before = P.book(ws, { now: end - 86400000 }).positions[0];
+  assert.equal(before.state, 'open');
+  const after = P.book(ws, { now: end + 86400000 }).positions[0];
+  assert.equal(after.state, 'closed');
+  assert.equal(after.close.kind, 'horizon_end');
+  assert.equal(fs.readFileSync(ws.abs(P.REL), 'utf8'), paperFile, 'the paper file was not edited');
+  // A position opened before receipts carried the run reads its horizon from
+  // the ticket's frozen packet, labeled, and writes nothing.
+  const rRel = `projects/${pid}/tickets/receipts/${saved.receipt_id}.json`;
+  const r = readJson(ws.abs(rRel));
+  delete r.researcher.run_id;
+  delete r.researcher.horizon;
+  atomicWrite(ws.abs(rRel), jsonText(r));
+  fs.writeFileSync(ws.abs(P.REL), `${JSON.stringify({ ...open, horizon_end: null, horizon_source: null })}\n`);
+  const tree = hashTree(fx.root);
+  const old = P.book(ws, { now: end + 86400000 }).positions[0];
+  assert.deepEqual(hashTree(fx.root), tree, 'reading writes nothing');
+  assert.equal(old.horizon_end, open.horizon_end);
+  assert.match(old.horizon_source, /packet_run, read for this position \(cr-paper-horizon@1\)/);
+  assert.equal(old.close.kind, 'horizon_end');
+});
+
+test('A05: a position whose receipt names no run says its horizon is missing, never a default length', (t) => {
+  const P = require('../core/paper');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  assert.equal(saved.receipt.researcher.run_id, null, 'the fixture report names no run');
+  assert.equal(saved.receipt.researcher.horizon, null);
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' });
+  const [open] = P.readRecords(s.ws);
+  assert.equal(open.horizon_end, null);
+  assert.match(open.horizon_note, /no horizon/);
+  const p = P.book(s.ws, { now: Date.now() + 400 * 86400000 }).positions[0];
+  assert.equal(p.state, 'open');
+  assert.match(p.horizon_missing, /no horizon/);
+});
+
+test('A06: a grant in force is undone before another grant or a veto replaces it; Approve then Halve leaves one live position', (t) => {
+  const P = require('../core/paper');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve', request_id: 'req_a06_appr01' });
+  for (const action of ['halve', 'veto']) assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action, request_id: `req_a06_${action}01` }), (e) => e.code === 'CONFLICT' && /Undo it first/.test(e.message), action);
+  assert.equal(P.book(s.ws).counts.positions, 1);
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'undo', request_id: 'req_a06_undo01' });
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'halve', request_id: 'req_a06_halv02' });
+  const b = P.book(s.ws);
+  assert.equal(b.counts.positions, 1, 'one live exposure');
+  assert.equal(b.counts.voided, 1, 'the approve\'s position is kept, voided');
+  assert.equal(b.positions.find((x) => x.state !== 'voided').risk_usd, 250);
+  assert.equal(T.view(s.ws, s.pid).ticket.pm_approved_risk_usd, 250);
+  assert.equal(require('../core/portfolio').loadTransactions(s.ws).length, 0, 'the portfolio is untouched');
+});
+
+test('A06: a paper or archive step that failed after the decision is completed by replaying the same request, once; nothing is duplicated', (t) => {
+  const P = require('../core/paper');
+  const notes = require('../core/notes');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  const realOpen = P.openForDecision;
+  P.openForDecision = () => { throw new Error('disk full (FICTIONAL)'); };
+  const first = T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve', request_id: 'req_a06_paper01' });
+  P.openForDecision = realOpen;
+  assert.equal(first.result.status, 'saved');
+  assert.equal(first.result.paper.status, 'failed');
+  assert.equal(T.view(s.ws, s.pid).ticket.decision.paper, 'missing', 'the missing position is said');
+  const again = T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve', request_id: 'req_a06_paper01' });
+  assert.equal(again.result.status, 'unchanged');
+  assert.equal(again.result.paper.status, 'saved');
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve', request_id: 'req_a06_paper01' });
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve', request_id: 'req_a06_paper02' });
+  assert.equal(P.readRecords(s.ws).filter((l) => l.event === 'open').length, 1, 'one position');
+  assert.equal(T.view(s.ws, s.pid).ticket.decision.paper, 'open');
+  assert.equal(notes.loadJournal(s.ws, s.pid).filter((e) => e.type === 'decision').length, 1, 'one journal entry');
+  assert.equal(decisionLines(s).length, 1, 'one decision');
+  assert.deepEqual(decisionLines(s)[0].effects, { archive: null, paper: 'open', journal: 'entry' }, 'the consequences are stated with the decision');
+  // An undone grant is never re-opened by replaying its request.
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'undo', request_id: 'req_a06_undo02' });
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve', request_id: 'req_a06_paper01' });
+  assert.equal(P.book(s.ws).counts.positions, 0);
+
+  // A $0 ticket's pass whose archive failed is archived on replay.
+  const z = withReport(t);
+  const tk = T.createTicket(z.ws, { project_id: z.pid, assistant: true }).ticket;
+  const zero = T.saveTicket(z.ws, { project_id: z.pid, ticket_id: tk.ticket_id, text: answer(tk) });
+  const projects = require('../core/projects');
+  const realArchive = projects.archiveProject;
+  projects.archiveProject = () => { throw new Error('busy (FICTIONAL)'); };
+  const pass = T.decide(z.ws, z.pid, { receipt_id: zero.receipt_id, action: 'pass', request_id: 'req_a06_pass01' });
+  projects.archiveProject = realArchive;
+  assert.equal(pass.result.archive.status, 'failed');
+  assert.equal(projects.getProject(z.ws, z.pid).status, 'active');
+  const replay = T.decide(z.ws, z.pid, { receipt_id: zero.receipt_id, action: 'pass', request_id: 'req_a06_pass01' });
+  assert.equal(replay.result.project_archived, true);
+  assert.equal(projects.getProject(z.ws, z.pid).status, 'archived');
+  assert.equal(notes.loadJournal(z.ws, z.pid).filter((e) => e.type === 'decision').length, 1);
 });

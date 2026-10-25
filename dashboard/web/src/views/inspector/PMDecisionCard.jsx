@@ -90,15 +90,19 @@ export function PMDecisionCard({ p }) {
   const fatal = ((t.prosecution && t.prosecution.fatal_flaws) || []).filter((f) => f.severity === 'fatal');
   const risk = t.suggested_risk_usd || 0;
   const decided = t.decision;
-  const decide = async (action) => {
+  // The card sends what it shows (status, suggested risk, a newer report), so
+  // the desk refuses a decision on a ticket that changed since it was drawn.
+  const decide = async (action, { repair = false } = {}) => {
     setBusy(action);
     try {
-      const out = await api.post(`/api/projects/${enc(pid)}/tickets/decisions`, { receipt_id: t.receipt_id, action, request_id: submissionId() });
+      const seen = action === 'undo' ? undefined : { status: t.status, suggested_risk_usd: t.suggested_risk_usd || 0, superseded_by_report: t.superseded_by_report || null };
+      const out = await api.post(`/api/projects/${enc(pid)}/tickets/decisions`, { receipt_id: t.receipt_id, action, request_id: submissionId(), ...(seen && !repair ? { seen } : {}) });
       const d = out && out.result ? out.result.decision : out && out.decision;
       const r = out && out.result ? out.result : out || {};
-      toast(action === 'undo' ? (r.project_restored ? 'Decision undone; project restored' : 'Decision undone')
-        : action === 'pass' ? (r.project_archived ? 'Pass confirmed; project archived' : 'Pass confirmed; kept because you hold it')
-          : DECIDED_WORDS[action] || `Risk granted: ${usd(d ? d.pm_approved_risk_usd : null)}`);
+      toast(repair ? (r.paper && r.paper.status !== 'failed' ? 'Paper position completed' : `Paper position not completed: ${(r.paper && r.paper.error) || 'unknown error'}`)
+        : action === 'undo' ? (r.project_restored ? 'Decision undone; project restored' : 'Decision undone')
+          : action === 'pass' ? (r.project_archived ? 'Pass confirmed; project archived' : 'Pass confirmed; kept because you hold it')
+            : DECIDED_WORDS[action] || `Risk granted: ${usd(d ? d.pm_approved_risk_usd : null)}`, repair && !(r.paper && r.paper.status !== 'failed') ? 'bad' : undefined);
       await refresh();
     } catch (err) {
       toast(err.message, 'bad');
@@ -203,6 +207,7 @@ export function PMDecisionCard({ p }) {
           <p className="pm-decided">
             <span>{DECIDED_WORDS[decided.action] || `Approved ${usd(t.pm_approved_risk_usd)}`}{decided.action === 'pass' && decided.archive === 'archived' ? ' · archived' : ''}</span>
             <span className="faint">{` · ${fmtDateTime(decided.at)}`}</span>
+            {decided.paper === 'missing' ? <button type="button" className="btn btn-sm" data-key={`pm-repair-${pid}`} disabled={Boolean(busy)} title="The decision is recorded but its paper position is not: records the same decision again, which completes it once" onClick={() => decide(decided.action, { repair: true })}>Complete paper position</button> : null}
             <button type="button" className="btn btn-sm" data-key={`pm-undo-${pid}`} disabled={Boolean(busy)} onClick={() => decide('undo')}>Undo</button>
           </p>
         ) : risk > 0 ? (
