@@ -7,14 +7,14 @@
 // a phone: a top bar (the wordmark, the Test or Demo tag, search, the
 // connection) and a tab bar (Desk, Review, Portfolio, More).
 import { useEffect, useRef, useState } from 'react';
-import { Ellipsis, LogOut, X, Search, Settings, PanelLeftClose, PanelLeftOpen, SquarePen, FlaskConical } from 'lucide-react';
+import { Ellipsis, LogOut, X, Search, Settings, PanelLeftClose, PanelLeftOpen, SquarePen, FlaskConical, Newspaper } from 'lucide-react';
 import { store } from '../../../public/ui.js';
 import { useDesk } from '../lib/hooks.js';
 import { useAgendaRead } from '../lib/agenda.js';
 import { liveStatus } from '../lib/desk.js';
 import { nav } from '../lib/router.js';
 import { visibleSections, navCounts, SECTIONS } from './sections.js';
-import { openCommand, openPrefs, prefsOf } from './overlays.js';
+import { openCommand, openPrefs, openBrief, prefsOf } from './overlays.js';
 import { Mark } from '../components/Mark.jsx';
 
 const mac = () => /Mac|iPhone|iPad/.test(navigator.platform || '');
@@ -104,6 +104,10 @@ export function Sidebar({ collapsed, onCollapse }) {
           <Search className="nav-ico" size={18} strokeWidth={1.75} aria-hidden="true" />
           <span className="nav-label">Search</span>
           <kbd className="nav-kbd" aria-hidden="true">{mac() ? '⌘K' : 'Ctrl K'}</kbd>
+        </button>
+        <button type="button" className="nav-item sb-util" data-key="nav-brief" title={collapsed ? 'Daily Brief' : undefined} onClick={() => openBrief()}>
+          <Newspaper className="nav-ico" size={18} strokeWidth={1.75} aria-hidden="true" />
+          <span className="nav-label">Daily Brief</span>
         </button>
         <button type="button" className={`nav-item sb-util${prefsOpen ? ' is-on' : ''}`} data-key="nav-settings" aria-keyshortcuts={mac() ? 'Meta+Comma' : 'Control+Comma'} aria-expanded={prefsOpen} title={collapsed ? 'Preferences' : undefined} onClick={() => openPrefs('appearance')}>
           <Settings className="nav-ico" size={18} strokeWidth={1.75} aria-hidden="true" />
@@ -208,6 +212,7 @@ export function TopBar() {
       <WsTag />
       <span className="spacer" />
       <button type="button" className="btn btn-ghost btn-icon topbar-search" data-key="top-search" aria-label="Search and commands" onClick={() => openCommand()}><Search size={18} aria-hidden="true" /></button>
+      <button type="button" className="btn btn-ghost btn-icon topbar-brief" data-key="top-brief" aria-label="Daily Brief" onClick={() => openBrief()}><Newspaper size={18} aria-hidden="true" /></button>
       <LiveDot />
     </header>
   );

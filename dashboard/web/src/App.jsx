@@ -12,6 +12,7 @@ import Watchlist from './views/watchlist/Watchlist.jsx';
 const ProjectPage = retryableLazy(() => import('./views/project/ProjectPage.jsx'));
 const Review = retryableLazy(() => import('./views/review/Review.jsx'));
 const CommandMenu = retryableLazy(() => import('./shell/CommandMenu.jsx'));
+const DailyBrief = retryableLazy(() => import('./shell/DailyBrief.jsx'));
 const Preferences = retryableLazy(() => import('./shell/Preferences.jsx'));
 const LegacyView = retryableLazy(() => import('./legacy/LegacyView.jsx'));
 const legacy = retryingImport(() => import('./legacy/views.js'));
@@ -184,6 +185,9 @@ export default function App() {
       </Boundary>
       <Boundary resetKey="cmdk" fallback={() => null}>
         <Suspense fallback={null}><CommandMenu /></Suspense>
+      </Boundary>
+      <Boundary resetKey="brief" fallback={() => null}>
+        <Suspense fallback={null}><DailyBrief /></Suspense>
       </Boundary>
     </div>
   );
