@@ -490,3 +490,7 @@ html.has-drawer { overflow: hidden; }
   .if-act { width: 100%; }
   .if-act .btn { flex: 1 1 0; }
 }
+
+.pm-plan { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 16px; }
+.pm-plan-cell { display: flex; flex-direction: column; gap: 2px; margin: 0; font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) { .pm-plan { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
