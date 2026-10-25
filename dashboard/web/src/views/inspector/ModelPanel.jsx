@@ -108,10 +108,13 @@ function VerdictCard({ d, p, cr }) {
   const vw = rep && rep.verdict ? verdictOf({ verdict: rep.verdict }) : null;
   const verdict = vw && vw.label ? vw.label : rep && rep.verdict ? `${rep.verdict.charAt(0)}${rep.verdict.slice(1).toLowerCase()}` : null;
   const rel = rep ? fmtRelDay(rep.analysis_at) : null;
+  // Claude's change since its own earlier report (core/report-delta.js), shown only on Claude's current report.
+  const rd = rep && c.provider !== 'chatgpt' && c.provider !== 'gemini' && c.source !== 'headline' && p.report_delta && p.report_delta.status === 'ok' && p.report_delta.new_report_id === rep.report_id ? p.report_delta : null;
   const sub = rep ? (
     <>
       <span><b>{`Analyzed ${rep.analysis_at ? fmtDate(rep.analysis_at) : 'date not stated'}`}</b>{rel ? ` · ${rel}` : ''}</span>
       <span>{`Horizon ${rep.horizon || 'not stated'}`}</span>
+      {rd ? <span data-key={`iv-delta-${pid}`} title={rd.grade_note || rd.category_note || undefined}>{rd.line}</span> : null}
     </>
   ) : null;
   const level = rep && !rep.needs_text ? evidenceLevel(rep.evidence) : null;

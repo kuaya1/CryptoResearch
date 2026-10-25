@@ -1249,6 +1249,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       researcher: { report_id: current.researcher.report_id, grade: gateGrade(current.researcher.grade), grade_display: current.researcher.grade ? current.researcher.grade.display : null, verdict: current.researcher.verdict },
       superseded_by_report: researcher && researcher.report_id !== current.researcher.report_id ? researcher.report_id : null,
       format_notes: current.validation ? current.validation.errors : [],
+      report_delta: (() => { try { return require('./report-delta').reportDelta(ws, require('./reports').loadReports(ws, pid)); } catch (_) { return null; } })(),
     };
   }
   const profile = readProfile(ws, pid);
