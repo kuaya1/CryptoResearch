@@ -1,0 +1,187 @@
+# Visual proof for backlog pull requests (Eric, 2026-10-25; his choices 1a 2a
+# 3a 4a in audits/2026-10-25-visual-proof/PLAN.md). After a green `test` run
+# on a push to a claude/backlog-* branch:
+#
+#   capture  checks out the tested head and runs its own code, read-only and
+#            with no secret: proof-shots.mjs on the FICTIONAL desk (Desk,
+#            inspector, Review, Portfolio at 1440x900, measured), then the two
+#            browser check scripts (npm run check), report-only, never a gate.
+#            Uploads it all as the artifact visual-proof-<sha>.
+#   publish  runs no branch code: main's own sanity-report.js reads that
+#            artifact as data (fixed names, PNG signatures, bounded sizes,
+#            numbers only), commits the PNGs to the orphan branch
+#            `visual-proof` under <sha>/, and posts or updates one comment on
+#            the pull request whose head is this commit, open or already
+#            merged. The report also goes to the job summary and an artifact.
+#
+# backlog-pr.yml is not touched and never waits for this: promotion is
+# unchanged, so the comment can land after the merge, and says so. CI has no
+# access to the live desk, so no live record is read or posted here.
+# Uses only GITHUB_TOKEN.
+name: visual-proof
+
+on:
+  workflow_run:
+    workflows: [test]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  capture:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      startsWith(github.event.workflow_run.head_branch, 'claude/backlog-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+      - name: Find Chrome
+        id: chrome
+        shell: bash
+        run: echo "path=$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser || true)" >> "$GITHUB_OUTPUT"
+      - name: Capture the four views on the fictional desk
+        continue-on-error: true
+        shell: bash
+        env:
+          CHROME: ${{ steps.chrome.outputs.path }}
+        run: node dashboard/web/scripts/proof-shots.mjs --out "$RUNNER_TEMP/proof"
+      # Report-only: their output is read for counts, and a failure here never
+      # stops anything.
+      - name: Browser checks (check.mjs), report-only
+        continue-on-error: true
+        shell: bash
+        env:
+          CHROME: ${{ steps.chrome.outputs.path }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/proof"
+          node dashboard/web/scripts/check.mjs > "$RUNNER_TEMP/proof/check.txt" 2>&1
+      - name: Browser checks (regress.mjs), report-only
+        continue-on-error: true
+        shell: bash
+        env:
+          CHROME: ${{ steps.chrome.outputs.path }}
+        run: node dashboard/web/scripts/regress.mjs > "$RUNNER_TEMP/proof/regress.txt" 2>&1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: visual-proof-${{ github.event.workflow_run.head_sha }}
+          path: ${{ runner.temp }}/proof
+          retention-days: 30
+          if-no-files-found: warn
+
+  publish:
+    needs: capture
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Fetch the visual proof
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: visual-proof-${{ github.event.workflow_run.head_sha }}
+          path: ${{ runner.temp }}/proof
+      - name: Fetch the test counts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: test-summary
+          path: ${{ runner.temp }}/counts
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      # Everything from the event goes through env, never into the script text.
+      - name: Render the report, publish the screenshots, post the comment
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+          # main's own copy, before anything from the branch is read.
+          cp dashboard/scripts/sanity-report.js "$RUNNER_TEMP/sanity-report.js"
+          owner=${REPO%%/*}
+          # The pull request whose head is this commit: backlog-pr.yml opens it
+          # from the same test run, so wait for it a little.
+          number=""
+          for i in 1 2 3 4 5 6; do
+            number=$(gh api "repos/$REPO/pulls?state=all&head=$owner:$BRANCH&per_page=10" --jq "[.[] | select(.head.sha == \"$SHA\")][0].number // empty" || true)
+            [ -n "$number" ] && break
+            sleep 20
+          done
+          url=""; state=""
+          if [[ "$number" =~ ^[0-9]+$ ]]; then
+            url=$(gh api "repos/$REPO/pulls/$number" --jq .html_url)
+            state=$(gh api "repos/$REPO/pulls/$number" --jq 'if .merged_at then "merged" else .state end')
+            git fetch -q origin "+refs/pull/$number/head:refs/remotes/pr/$number"
+          else
+            git fetch -q origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" || true
+          fi
+          # The batch is what the branch brings: from main before its merge
+          # (the merge's first parent) when merged, else from main now.
+          base=$(git log --first-parent --merges --format='%H %P' -n 300 origin/main | awk -v s="$SHA" '$3 == s { print $2; exit }')
+          base=${base:-origin/main}
+          images="https://github.com/$REPO/raw/visual-proof/$SHA"
+          args=(--pr --head "$SHA" --branch "$BRANCH" --base "$base" --repo "$REPO" --run-url "$RUN_URL" --proof "$RUNNER_TEMP/proof" --tests "$RUNNER_TEMP/counts/test-summary.md" --images-base "$images" --images-out "$RUNNER_TEMP/images" --out "$RUNNER_TEMP/report.md")
+          [ -n "$url" ] && args+=(--pr-url "$url" --pr-state "$state")
+          node "$RUNNER_TEMP/sanity-report.js" "${args[@]}"
+          # The screenshots, on the orphan branch visual-proof under <sha>/.
+          if compgen -G "$RUNNER_TEMP/images/*.png" > /dev/null; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            wt="$RUNNER_TEMP/vp"
+            if git fetch -q origin "+refs/heads/visual-proof:refs/remotes/origin/visual-proof" 2>/dev/null; then
+              git worktree add -q -B visual-proof "$wt" origin/visual-proof
+            else
+              git worktree add -q --orphan -b visual-proof "$wt"
+            fi
+            mkdir -p "$wt/$SHA"
+            cp "$RUNNER_TEMP/images/"*.png "$wt/$SHA/"
+            git -C "$wt" add "$SHA"
+            if ! git -C "$wt" diff --cached --quiet; then
+              git -C "$wt" commit -qm "Visual proof for $BRANCH at ${SHA:0:7}"
+              pushed=false
+              for i in 1 2 3; do
+                if git -C "$wt" push -q origin visual-proof; then pushed=true; break; fi
+                git -C "$wt" fetch -q origin "+refs/heads/visual-proof:refs/remotes/origin/visual-proof" && git -C "$wt" rebase -q origin/visual-proof
+              done
+              $pushed || echo "The screenshots could not be pushed to visual-proof; the comment's images will not load." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+          # One comment per pull request, updated on each run for its head.
+          if [ -n "$url" ]; then
+            cid=$(gh api --paginate "repos/$REPO/issues/$number/comments?per_page=100" --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- cr-visual-proof -->"))) | .id' | head -n 1 || true)
+            if [ -n "$cid" ]; then
+              gh api -X PATCH "repos/$REPO/issues/comments/$cid" -F "body=@$RUNNER_TEMP/report.md" --jq .html_url
+            else
+              gh api -X POST "repos/$REPO/issues/$number/comments" -F "body=@$RUNNER_TEMP/report.md" --jq .html_url
+            fi
+          else
+            echo "No pull request has ${SHA:0:7} as its head; the report is above and in the artifact." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: morning-report-${{ github.event.workflow_run.head_sha }}
+          path: ${{ runner.temp }}/report.md
+          retention-days: 30
+          if-no-files-found: ignore
