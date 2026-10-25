@@ -903,3 +903,143 @@ test('a desk-gate receipt from a newer pre-gate version is shown as saved', (t) 
   assert.match(v.rule_note, /cr-ticket-pregate@9/);
   assert.doesNotThrow(() => require('../core/indexer').buildIndex(s.ws));
 });
+
+// ---------------------------------------------------------------------------
+// The paper book, cr-paper@1 (item 18)
+
+function bothPrices(ws, atMs, price, btc) {
+  const dir = ws.abs('market-data/observations');
+  fs.mkdirSync(dir, { recursive: true });
+  const at = new Date(atMs).toISOString();
+  fs.appendFileSync(path.join(dir, `${at.slice(0, 7)}.jsonl`), `${JSON.stringify({ fetched_at: at, provider: 'coingecko', assets: [{ id: 'example-payfi-fictional', price_usd: price, source_last_updated_at: at, fetched_at: at }, { id: 'bitcoin', price_usd: btc, source_last_updated_at: at, fetched_at: at }] })}\n`);
+}
+const HOURMS = 3600000;
+
+test('paper: a granting decision opens a position at the hourly price at or before it; it closes at the first reading at or below the invalidation price; return against BTC; entry cost unknown; the portfolio is untouched', (t) => {
+  const P = require('../core/paper');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  const now0 = Date.now();
+  bothPrices(s.ws, now0 - 2 * HOURMS, 1.0, 100);
+  bothPrices(s.ws, now0 + 1 * HOURMS, 0.95, 105);
+  bothPrices(s.ws, now0 + 2 * HOURMS, 0.69, 110);
+  bothPrices(s.ws, now0 + 3 * HOURMS, 0.5, 110);
+  const dec = T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' });
+  assert.equal(dec.result.paper.status, 'saved');
+  assert.equal(T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' }).result.status, 'unchanged');
+  assert.equal(P.readRecords(s.ws).length, 1);
+  const before = hashTree(s.root);
+  const b = P.book(s.ws, { now: now0 + 5 * HOURMS });
+  assert.deepEqual(hashTree(s.root), before, 'reading the book writes nothing');
+  assert.equal(b.positions.length, 1);
+  const p = b.positions[0];
+  assert.equal(p.risk_usd, 500);
+  assert.equal(p.entry.status, 'priced');
+  assert.equal(p.entry.price_usd, 1.0, 'the reading before the decision, never a later one');
+  assert.deepEqual(p.entry_cost, { status: 'unknown', usd: null, note: 'Fees and slippage are unknown; not taken as 0.' });
+  assert.equal(p.state, 'closed');
+  assert.equal(p.close.kind, 'invalidated');
+  assert.equal(p.close.price_usd, 0.69, 'that reading, not the lower one after it');
+  assert.equal(p.return.status, 'realized');
+  assert.equal(p.return.return_pct, -31);
+  assert.equal(p.return.btc_return_pct, 10);
+  assert.equal(p.return.vs_btc_pct, -37.27);
+  assert.equal(p.return.pnl_usd, -155);
+  assert.match(b.summary.note, /Too few to judge: 1 of 20/);
+  assert.equal(b.summary.median_vs_btc_pct, undefined, 'no median before 20 have closed');
+  assert.equal(require('../core/portfolio').loadTransactions(s.ws).length, 0, 'no ledger entry');
+  assert.equal(P.REL, 'paper/positions.jsonl');
+  // Open, before the invalidation reading exists.
+  const early = P.book(s.ws, { now: now0 + 90 * 60000 });
+  assert.equal(early.positions[0].state, 'open');
+  assert.equal(early.positions[0].return.status, 'unrealized');
+});
+
+test('paper: no hourly price at or before the decision is "no entry price", never a later one; undo voids the position and keeps it on record', (t) => {
+  const P = require('../core/paper');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  const now0 = Date.now();
+  bothPrices(s.ws, now0 - 8 * HOURMS, 1.0, 100); // outside 6 h
+  bothPrices(s.ws, now0 + 1 * HOURMS, 0.9, 100); // after the decision
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'halve' });
+  let p = P.book(s.ws, { now: now0 + 2 * HOURMS }).positions[0];
+  assert.equal(p.risk_usd, 250);
+  assert.equal(p.entry.status, 'no_entry_price');
+  assert.equal(p.return.status, 'unknown');
+  assert.match(p.return.why, /No entry price/);
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'undo' });
+  const lines = P.readRecords(s.ws);
+  assert.deepEqual(lines.map((l) => l.event), ['open', 'void']);
+  assert.match(lines[1].reason, /undone/);
+  const b = P.book(s.ws, { now: now0 + 2 * HOURMS });
+  p = b.positions[0];
+  assert.equal(p.state, 'voided');
+  assert.equal(b.counts.voided, 1);
+  assert.equal(b.counts.positions, 0);
+});
+
+test('paper: a trim acknowledged by the PM, or the end of the horizon, closes it; the earliest close wins; a $0 ticket is a shadow line, not a position', (t) => {
+  const P = require('../core/paper');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  const now0 = Date.now();
+  bothPrices(s.ws, now0 - HOURMS, 1.0, 100);
+  bothPrices(s.ws, now0 + 4 * HOURMS, 1.2, 100);
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' });
+  const file = s.ws.abs(P.REL);
+  const open = JSON.parse(fs.readFileSync(file, 'utf8').trim());
+  // Horizon ends 12 hours after the decision (fictional end date written into the record).
+  open.horizon_end = new Date(now0 + 12 * HOURMS).toISOString();
+  fs.writeFileSync(file, `${JSON.stringify(open)}\n`);
+  let p = P.book(s.ws, { now: now0 + 20 * HOURMS }).positions[0];
+  assert.equal(p.close.kind, 'horizon_end');
+  assert.equal(p.close.price_usd, null, 'no reading within 6 hours before the horizon end: the exit price is unknown');
+  assert.equal(p.return.status, 'unknown');
+  // A trim before the horizon wins.
+  const decFile = s.ws.abs(`projects/${s.pid}/tickets/decisions.jsonl`);
+  fs.appendFileSync(decFile, `${JSON.stringify({ decision_id: 'td_fictional_trim', receipt_id: 'tr_2099-01-01T000000Z_aaaaa', action: 'trim', decided_at: new Date(now0 + 2 * HOURMS).toISOString() })}\n`);
+  bothPrices(s.ws, now0 + 2 * HOURMS - 60000, 1.1, 100);
+  p = P.book(s.ws, { now: now0 + 20 * HOURMS }).positions[0];
+  assert.equal(p.close.kind, 'trim_acknowledged');
+  assert.equal(p.close.price_usd, 1.1);
+  assert.equal(p.return.return_pct, 10);
+  assert.equal(p.return.btc_return_pct, 0);
+});
+
+test('paper: a ticket that grants no risk shows "Shadow: not taken" and opens no position; a decision without risk opens none', (t) => {
+  const P = require('../core/paper');
+  const s = withReport(t);
+  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
+  const zero = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) });
+  assert.equal(zero.receipt.desk.suggested_risk_usd, 0);
+  T.decide(s.ws, s.pid, { receipt_id: zero.receipt_id, action: 'watch' });
+  const b = P.book(s.ws);
+  assert.equal(b.positions.length, 0);
+  assert.equal(b.shadow.length, 1);
+  assert.equal(b.shadow[0].line, 'Shadow: not taken');
+  assert.equal(b.shadow[0].receipt_id, zero.receipt_id);
+  assert.equal(fs.existsSync(s.ws.abs(P.REL)), false, 'nothing was written');
+});
+
+test('paper: from twenty closed positions a median and a hit count appear; the book is part of the export and the package', (t) => {
+  const P = require('../core/paper');
+  const s = withReport(t);
+  const base = Date.now() - 40 * 86400000;
+  const lines = [];
+  for (let i = 0; i < 20; i++) {
+    lines.push(JSON.stringify({ schema_version: 'cr.paper.v1', event: 'open', position_id: `pp_f${i}`, project_id: s.pid, receipt_id: 'tr_x', decision_id: `td_f${i}`, decided_at: new Date(base + i * 3600000).toISOString(), risk_usd: 100, invalidation_price_usd: null, horizon_end: new Date(base + 30 * 86400000).toISOString(), entry: { status: 'priced', price_usd: 1, at: new Date(base + i * 3600000).toISOString() }, entry_cost: { status: 'unknown', usd: null } }));
+  }
+  fs.mkdirSync(s.ws.abs('paper'), { recursive: true });
+  fs.writeFileSync(s.ws.abs(P.REL), `${lines.join('\n')}\n`);
+  bothPrices(s.ws, base - HOURMS, 1, 100);
+  for (let i = 0; i < 40; i++) bothPrices(s.ws, base + i * 6 * HOURMS + 3600000, 1 + i * 0.01, 100);
+  bothPrices(s.ws, base + 30 * 86400000 - HOURMS, 1.2, 100);
+  const b = P.book(s.ws, { now: Date.now() });
+  assert.equal(b.counts.measured_closed, 20);
+  assert.equal(b.summary.closed, 20);
+  assert.ok(typeof b.summary.median_vs_btc_pct === 'number');
+  assert.equal(b.summary.of, 20);
+  const ex = require('../core/exporter');
+  assert.ok(ex.exportJson(s.ws).paper.positions.length === 20);
+});

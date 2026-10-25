@@ -90,6 +90,7 @@ Forensics & Resilience (no paid model call; Claude investigates, ChatGPT may cha
   forensics case-verify --file FILE      checks a case package offline and replays its calculation (no network)
 
 PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you decide; no order is ever placed)
+  paper [--json]                         the paper book: PM-approved tickets as paper positions, apart from the portfolio (writes nothing)
   tickets candidates [--json]           who could go in the pilot: held first, then by grade, with today's gate (writes nothing)
   tickets queue [<id>]                   the autonomous pilot's next step per project (research, ticket, your review)
   tickets pilot <id> --on|--off          put a project in the autonomous pilot (your opt-in)
@@ -844,6 +845,7 @@ async function run(argv) {
       // main strips --json before run(), so it is read from argv here.
       return flags.json || process.argv.includes('--json') ? out : { _text: `${out.text}\n\nSHA-256 of this text: ${out.text_sha256}\n` };
     }
+    case 'paper': return require('./core/paper').book(ws);
     case 'tickets': {
       const tk = require('./core/tickets');
       const pid = rest[0];

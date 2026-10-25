@@ -1041,8 +1041,26 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
       res.project_restored = true;
     }
     res.journal = journalDecision(ws, pid, res.decision, res.undone);
+    res.paper = paperBook(ws, pid, rid, action, res);
   }
   return out;
+}
+
+// A decision that grants risk opens a paper position (core/paper.js, kept
+// apart from the portfolio); Undo voids it. A failure here is told, never
+// allowed to lose or block the decision.
+function paperBook(ws, pid, rid, action, res) {
+  try {
+    const paper = require('./paper');
+    if (action === 'approve' || action === 'halve') {
+      const receipt = readJson(ws.abs(receiptRel(pid, rid)), null);
+      return receipt ? paper.openForDecision(ws, require('./projects').getProject(ws, pid), { ...receipt, project_id: pid }, res.decision) : { status: 'skipped' };
+    }
+    if (action === 'undo' && res.undone && (res.undone.action === 'approve' || res.undone.action === 'halve')) return paper.voidForDecision(ws, res.undone.decision_id, `The ${res.undone.action} decision on ${rid} was undone.`);
+    return null;
+  } catch (err) {
+    return { status: 'failed', error: String(err && err.message || err).slice(0, 200) };
+  }
 }
 
 // The decision also shows in Notes as a journal entry (type decision). The

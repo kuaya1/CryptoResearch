@@ -69,7 +69,7 @@ const STATIC_TYPES = {
   '.ico': 'image/x-icon',
   '.png': 'image/png',
 };
-const WATCH_TOP = new Set(['projects', 'portfolio', 'market-data', 'inbox', 'config', 'templates', 'logs']);
+const WATCH_TOP = new Set(['projects', 'portfolio', 'paper', 'market-data', 'inbox', 'config', 'templates', 'logs']);
 // Beyond the desk's own origin, only the inspector's market views: the frames
 // of its technical chart (TradingView's widget, DexScreener's pool chart;
 // public/views/chart.js) and DexScreener's public API, which the browser asks
@@ -1261,6 +1261,8 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   // them one admission at a time, within the limits.
   // What happened after each report (core/report-outcomes.js): read only,
   // computed from the stored price records on request.
+  // The paper book (core/paper.js): read only, apart from the portfolio.
+  route('GET', '/api/paper', () => coherent(() => require('./core/paper').book(ws)));
   route('GET', '/api/research/outcomes', () => coherent(() => require('./core/report-outcomes').deskOutcomes(ws)));
   // The daily brief (core/brief-daily.js): read only, nothing stored.
   route('GET', '/api/brief/daily', (m, req, res, body, url) => coherent(() => require('./core/brief-daily').brief(ws, { since: url.searchParams.get('since') || null })));
