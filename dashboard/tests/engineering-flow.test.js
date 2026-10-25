@@ -319,6 +319,47 @@ test('promotion asks the desk about this exact head: unknown, unverified, paused
   assert.equal(plain.engineering, false);
 });
 
+test('both delegations active: application work declared with no review is promoted only after the ChatGPT review its delegation requires', async (t) => {
+  const f = fixture(t);
+  const { ws, cleanup } = tempWorkspace('engflow-match'); t.after(cleanup);
+  I.activatePolicy(ws, OWNER, { template: 'eng-app@1', goal_id: 'desk-polish', goal: 'Polish the desk (FICTIONAL)' }, o());
+  I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o(1));
+  const file = 'dashboard/web/src/shell/Fictional.jsx';
+  const p = I.prepareTask(ws, CHAT, { ...docsTask('Fictional panel (FICTIONAL)', file), goal_id: 'desk-polish', required_review: 'none' }, o());
+  assert.equal(p.match.delegation.template, 'eng-app@1');
+  const s = I.submitTask(ws, CHAT, { task_id: p.task_id, version: 1, content_sha256: p.content_sha256 }, o());
+  assert.equal(s.status, 'admitted', s.says);
+  const id = p.task_id;
+  const c = I.claimTask(ws, W1, { task_id: id }, o());
+  const a = bindAndPush(f, ws, id, { token: c.claim_token });
+  assert.equal((await BP.admit(f.runner(), { branch: `claude/admission-${id}`, head: a.head, desk: DESK_URL, fetchJson: deskOf(ws) })).status, 'merged');
+  const c2 = I.claimTask(ws, W1, { task_id: id }, o());
+  const st = W.admissionStatus(f.work, { task: id, entrySha256: a.entry_sha256 });
+  I.recordEvent(ws, W1, { task_id: id, claim_token: c2.claim_token, type: 'admission_confirmed', main_sha: st.main_sha, entry_sha256: st.entry_sha256 }, o());
+  g(f.work, 'fetch', '-q', 'origin');
+  g(f.work, 'checkout', '-q', '-B', `claude/candidate-eng-${a.number}`, 'origin/main');
+  put(f.work, file, 'export default function Fictional() { return null; }\n');
+  g(f.work, 'add', '-A'); g(f.work, 'commit', '-qm', `web: fictional panel\n\nBacklog-Item: ${a.number}`);
+  const head = g(f.work, 'rev-parse', 'HEAD');
+  const base = f.mainSha();
+  const ev = W.evidence(f.work, { head, base: 'origin/main' });
+  const scope = BP.scopeCheck(f.work, { base, head });
+  assert.equal(scope.ok, true, scope.reasons.join('; '));
+  I.recordEvent(ws, W1, { task_id: id, claim_token: c2.claim_token, type: 'candidate', branch: `claude/candidate-eng-${a.number}`, head_sha: head, base_sha: ev.base_sha, merge_base_sha: ev.merge_base_sha, files: ev.files, diff: ev.diff }, o());
+  const v = I.recordEvent(ws, W1, { task_id: id, claim_token: c2.claim_token, type: 'verification', head_sha: head, command: 'node dashboard/cli.js test', exit_code: 0, total: 5, passed: 5, failed: 0, output_tail: 'ok', acceptance: [{ index: 0, met: true, evidence: 'file present' }] }, o());
+  assert.equal(v.status, 'review_pending');
+  const check = () => BP.engineeringCheck(f.work, { base, head, branch: `claude/backlog-eng-${a.number}`, scope, desk: DESK_URL, fetchJson: deskOf(ws) });
+  // Verified and inside scope, but its delegation's ChatGPT review has not passed: refused.
+  const held = await check();
+  assert.equal(held.ok, false);
+  assert.equal(held.attestation.required_review, 'chatgpt');
+  assert.match(held.reasons.join(' '), /desk: the required chatgpt review has not passed on this head/);
+  I.saveReview(ws, CHAT, { task_id: id, head_sha: head, merge_base_sha: ev.merge_base_sha, result: 'pass', read: { diff: true, tests: true, acceptance: true } }, o());
+  const ok = await check();
+  assert.equal(ok.ok, true, ok.reasons.join('; '));
+  assert.equal(ok.attestation.review_state, 'pass');
+});
+
 test('GitHub readback that cannot be read says unknown, never a pass; a token is never in the answer', async () => {
   const fail = makeGithub({ fetchImpl: async () => { throw new Error('ENOTFOUND'); }, revision: () => ({ commit: 'c'.repeat(40) }), env: { CR_GITHUB_TOKEN: 'fictional-github-token' } });
   const r = await fail.readback({ number: 5, head_sha: 'a'.repeat(40), merge_sha: 'b'.repeat(40) });
