@@ -208,12 +208,14 @@ function categoriesBlock(v, d, st, setOrder) {
     seg);
   if (!v.second || order === 'profile') {
     const rows = [...v.rows].sort((x, y) => x.position - y.position);
-    return h('section', { class: 'bf-sec cmp-cats', 'aria-labelledby': 'cmp-h-cats' }, head, h('ol', { class: 'cmp-rows' }, rows.map((r) => categoryRow(v, r, d, false))));
+    return h('section', { class: 'bf-sec cmp-cats', 'aria-labelledby': 'cmp-h-cats' }, head, h('ol', { class: 'cmp-rows' }, rows.map((r) => categoryRow(v, r, d, st.open === null && st.category === r.category_id))));
   }
   // The first comparable difference opens with its basis, the first time, on
   // a wide screen (on a phone the list comes first).
   const wide = typeof matchMedia !== 'function' || matchMedia('(min-width: 761px)').matches;
-  const firstNotable = st.open === null && wide ? v.rows.find((r) => r.result && r.result.group === 'notable') : null;
+  // ?category=<id> (a spread alert's link) opens that category instead, on any width.
+  const named = st.open === null && st.category ? v.rows.find((r) => r.category_id === st.category) : null;
+  const firstNotable = named || (st.open === null && wide ? v.rows.find((r) => r.result && r.result.group === 'notable') : null);
   return h('section', { class: 'bf-sec cmp-cats', 'aria-labelledby': 'cmp-h-cats' }, head,
     GROUPS.map(([g, title, sub]) => {
       const rows = v.rows.filter((r) => r.result && r.result.group === g);
@@ -247,10 +249,10 @@ function rubricBlock(v, rows, { id, title, sub, risk = false, weights = null }) 
 const STATE = new Map();
 
 function stateFor(pid, query) {
-  const seed = ['a', 'b', 'order'].map((k) => `${k}=${query.get(k) || ''}`).join('&');
+  const seed = ['a', 'b', 'order', 'category'].map((k) => `${k}=${query.get(k) || ''}`).join('&');
   let st = STATE.get(pid);
-  if (!st || (st.seed !== seed && (query.has('a') || query.has('b') || query.has('order')))) {
-    st = { seed, a: query.get('a'), b: query.get('b'), order: query.get('order') === 'profile' ? 'profile' : 'inspection', picked: query.has('a') || query.has('b'), open: null };
+  if (!st || (st.seed !== seed && (query.has('a') || query.has('b') || query.has('order') || query.has('category')))) {
+    st = { seed, a: query.get('a'), b: query.get('b'), order: query.get('order') === 'profile' ? 'profile' : 'inspection', picked: query.has('a') || query.has('b'), category: query.get('category') || null, open: null };
     STATE.set(pid, st);
   }
   return st;

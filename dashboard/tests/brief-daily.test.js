@@ -78,7 +78,7 @@ test('daily brief: a PM card waiting is listed with its age and link; held, mode
   const differ = byId(out, 'models_differ');
   assert.equal(differ.state, 'ok');
   assert.ok(differ.lines.every((l) => /^#\/project\/.+\/compare$/.test(l.link) || l.link === null));
-  assert.equal(out.sections.map((x) => x.id).join(), 'pm_cards,invalidated,stale_basis,pilot_exits,held,research_waiting,models_differ,freshness');
+  assert.equal(out.sections.map((x) => x.id).join(), 'pm_cards,invalidated,stale_basis,pilot_exits,held,research_waiting,models_differ,spread,freshness');
 });
 
 test('daily brief: a ticket invalidated since a time is listed with the reading that fired; one before it is not; no since lists every one', (t) => {

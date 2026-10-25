@@ -442,7 +442,7 @@ function NeedsYou({ d, p, detail }) {
   }
   const differ = att.find((a) => a.kind === 'disagreement');
   if (differ) lines.push({ key: 'differ', sev: 'medium', kind: 'Models differ', text: differ.detail || differ.title, action: <DeepLink pid={pid} href={`#/project/${enc(pid)}/compare`} className="btn btn-sm" dataKey={`iv-compare-${pid}`}>Compare</DeepLink> });
-  for (const a of att.filter((x) => ['grade_mismatch', 'extraction', 'needs_text', 'identity_price', 'contract_change', 'alert', 'stale_research', 'fundamentals_binding'].includes(x.kind))) {
+  for (const a of att.filter((x) => ['grade_mismatch', 'extraction', 'needs_text', 'identity_price', 'contract_change', 'alert', 'stale_research', 'fundamentals_binding', 'spread'].includes(x.kind))) {
     lines.push({ key: `${a.kind}-${lines.length}`, sev: a.severity || 'low', kind: kindWord(a), text: a.title.replace(`${p.name}: `, ''), action: a.action ? <a className="btn btn-sm" href={attentionHref(a)} data-key={`iv-att-${a.kind}-${pid}`}>Open</a> : null });
   }
   if (p.identity_status !== 'verified') lines.push({ key: 'identity', sev: 'medium', kind: 'Identity pending', text: (p.identity_unknowns || []).join(' ') || 'The token is not confirmed, so no prices or holdings use it.', action: <DeepLink pid={pid} href={`#/project/${enc(pid)}/contract?open=identity`} className="btn btn-sm" dataKey={`fix-identity-${pid}`}>Complete the identity</DeepLink> });

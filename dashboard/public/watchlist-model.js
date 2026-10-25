@@ -315,7 +315,7 @@ export function attentionHref(a) {
 // Every other kind in a word or two, so no item reads as a bare warning.
 export const KIND_WORDS = {
   request_pending: 'Request pending', research_waiting: 'Waiting for you', review_overdue: 'Review overdue', review_due: 'Review due',
-  review_upcoming: 'Review soon', review_suggested: 'Review suggested', disagreement: 'Models differ', alert: 'Price alert',
+  review_upcoming: 'Review soon', review_suggested: 'Review suggested', disagreement: 'Models differ', spread: 'Grade spread', alert: 'Price alert',
   extraction: 'Check report', needs_text: 'Needs text', identity_price: 'No price', stale_research: 'Old research', grade_mismatch: 'Total differs',
   market_stale: 'Prices stale', scheduler_quiet: 'Task quiet', limit: 'Limit', research_refresh_due: 'Refresh due',
 };

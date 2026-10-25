@@ -125,6 +125,16 @@ function brief(ws, { since = null, now = Date.now() } = {}) {
     .filter((a) => a.kind === 'disagreement' && a.project_id && rows.some((r) => r.project_id === a.project_id))
     .map((a) => ({ text: String(a.title), link: `#/project/${a.project_id}/compare` })));
 
+  section('spread', 'Grade spreads', true, () => {
+    const out = [];
+    for (const r of rows) {
+      const sp = r.spread;
+      if (!sp) continue;
+      for (const a of sp.alerts) out.push({ text: `${r.name}: ${a.words}`, link: a.link });
+    }
+    return out;
+  });
+
   section('freshness', 'Backup and prices', false, () => {
     const out = [];
     const b = require('./offsite').backupStatus(ws, process.env, now);

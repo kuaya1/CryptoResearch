@@ -95,4 +95,4 @@ function reportDelta(ws, reports) {
   return out;
 }
 
-module.exports = { reportDelta };
+module.exports = { reportDelta, gradeOf };

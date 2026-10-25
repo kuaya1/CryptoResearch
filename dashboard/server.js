@@ -349,6 +349,16 @@ function validateSettingsPatch(patch, ws = null) {
     if (o.min_grade_any !== undefined && o.min_grade_new_entry !== undefined && o.min_grade_any > o.min_grade_new_entry) throw new OpError('INVALID', 'The minimum grade for any new risk cannot be above the minimum for a new entry');
     out.tickets = { sizing: o };
   }
+  if (patch.alerts && patch.alerts.spread) {
+    // Eric's spread-alert thresholds (core/spread.js thresholds reads them
+    // with the same bounds): the grade gap between Claude and another model,
+    // and between Claude's grade and the Prosecutor's conviction.
+    const sp = patch.alerts.spread;
+    const o = {};
+    if (sp.grade_points !== undefined) o.grade_points = num(sp.grade_points, 1, 100, 'Grade spread alert (points)');
+    if (sp.conviction_points !== undefined) o.conviction_points = num(sp.conviction_points, 1, 100, 'Prosecutor spread alert (points)');
+    out.alerts = { spread: o };
+  }
   if (patch.tickets && patch.tickets.invalidation) {
     // Eric's minimum price coverage for an invalidation check (core/tickets.js
     // invalidationSettings reads it with the same bounds).
