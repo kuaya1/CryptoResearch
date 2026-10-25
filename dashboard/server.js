@@ -1165,6 +1165,16 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     request_id: typeof body.request_id === 'string' ? body.request_id : null,
     by: 'dashboard',
   })));
+  // The batch gate (tickets.js batchGate): `dry_run` is a read; `expect` is
+  // the count shown, and more to make than that is a 409 with nothing written.
+  route('POST', '/api/tickets/batch-gate', (m, req, res, body) => {
+    const below = body && typeof body.below === 'number' ? body.below : null;
+    const plan = tickets.batchGate(ws, { below, dryRun: true });
+    const expect = body && Number.isInteger(body.expect) ? body.expect : null;
+    if (expect !== null && plan.made.length > expect) throw new HttpError(409, `${plan.made.length} projects would get a desk gate now, not ${expect} as shown. Nothing was made; look again and run it.`);
+    if (body && body.dry_run === true) return plan;
+    return after(tickets.batchGate(ws, { below }));
+  });
   route('POST', '/api/projects/([^/]+)/tickets/pilot', (m, req, res, body) => after(tickets.setPilot(ws, pid(m[1]), body.on === true, { by: 'dashboard' })));
   // Exit quotes on every project in one click (forensics.js
   // approveAllExitQuotes): the plan first (a read), then Eric's approval with

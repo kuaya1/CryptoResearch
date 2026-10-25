@@ -92,6 +92,7 @@ Forensics & Resilience (no paid model call; Claude investigates, ChatGPT may cha
 PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you decide; no order is ever placed)
   paper [--json]                         the paper book: PM-approved tickets as paper positions, apart from the portfolio (writes nothing)
   tickets candidates [--json]           who could go in the pilot: held first, then by grade, with today's gate (writes nothing)
+  tickets batch-gate [--below 40] [--dry-run] [--json]   desk gate receipts for every unheld, verified project graded under 40 (no exit quote, no Prosecutor, no model)
   tickets queue [<id>]                   the autonomous pilot's next step per project (research, ticket, your review)
   tickets pilot <id> --on|--off          put a project in the autonomous pilot (your opt-in)
   tickets start <id> [--refresh] [--reopen] [--restart] [--force-prosecution] [--assistant]
@@ -853,6 +854,11 @@ async function run(argv) {
       const tid = rest[1];
       if (sub === 'view' || sub === 'status') return tk.read(ws, need(pid, `tickets ${sub} <project>`), { receiptId: one(flags.receipt) || null, includeText: Boolean(flags['include-text'] || flags.include_text) });
       if (sub === 'candidates') return { candidates: tk.pilotCandidates(ws) };
+      if (sub === 'batch-gate') {
+        const below = one(flags.below);
+        const r = tk.batchGate(ws, { below: below === undefined || below === null || below === true ? null : Number(below), dryRun: Boolean(flags['dry-run'] || flags.dry_run) });
+        return r.made.length && !r.dry_run ? { ...r, ...(await afterWrite(ws, r.made[0].project_id)) } : r;
+      }
       if (sub === 'queue') return { steps: tk.pilotQueue(ws, { project: pid || null }), pending: tk.pendingFor(ws) };
       if (sub === 'start') {
         const exit_quote = await tk.prepareExitQuote(ws, need(pid, 'tickets start <project> [--refresh] [--restart]')).catch(() => null);
@@ -880,7 +886,7 @@ async function run(argv) {
         return { status: r.noop ? 'unchanged' : 'saved', pilot: !flags.off, verified: r.verified, ...(await afterWrite(ws, pid)) };
       }
       if (sub === 'cancel') return tk.cancelTicket(ws, need(pid, 'project'), need(tid, 'ticket_id'), one(flags.reason) || null);
-      throw Object.assign(new Error('tickets view|queue|candidates|start|prompt|import|decide|pilot|cancel (see help)'), { code: 'USAGE' });
+      throw Object.assign(new Error('tickets view|queue|candidates|batch-gate|start|prompt|import|decide|pilot|cancel (see help)'), { code: 'USAGE' });
     }
     case 'job': {
       const jobs = require('./core/jobs');

@@ -1392,6 +1392,64 @@ function pilotCandidates(ws, { now = Date.now() } = {}) {
   return rows;
 }
 
+// Eric's filter for the batch gate: a grade under 40 (his choice), never
+// above the sizing's new-entry floor (above it the pre-gate would not close).
+const BATCH_GATE_BELOW = 40;
+
+function batchGateBelow(ws, below) {
+  const cap = sizingOf(ws).min_grade_new_entry;
+  if (below === null || below === undefined) return Math.min(BATCH_GATE_BELOW, cap);
+  if (!isNum(below) || below < 0) throw new OpError('INVALID', '--below must be a number of 0 or more.');
+  if (below > cap) throw new OpError('INVALID', `--below ${below} is above the new-entry floor (${cap}): the batch gate may lower Eric's filter, never raise it past the floor.`);
+  return below;
+}
+
+// Every active, verified project Eric does not hold whose Claude current
+// eligible report grades under `below` goes through createTicket, so each gets
+// the pre-gate's desk receipt. No exit quote is asked for, no prompt is
+// rendered and no model is called. `dryRun` writes nothing. Each project is
+// said as made, unchanged or skipped with its reason.
+function batchGate(ws, { below = null, dryRun = false, now = Date.now() } = {}) {
+  const limit = batchGateBelow(ws, below);
+  const projects = require('./projects');
+  const out = { below: limit, dry_run: dryRun === true, made: [], unchanged: [], skipped: [] };
+  const skip = (p, reason) => out.skipped.push({ project_id: p.project_id, name: p.name || p.project_id, reason });
+  const todo = [];
+  for (const p of projects.listProjects(ws)) {
+    if (p.broken) continue;
+    if (p.status === 'archived') { skip(p, 'Archived.'); continue; }
+    const project = projects.getProject(ws, p.project_id);
+    if (!project.identity || project.identity.status !== 'verified') { skip(project, 'Identity not verified.'); continue; }
+    const pid = p.project_id;
+    const researcher = researcherOf(ws, pid);
+    if (!researcher) { skip(project, 'No eligible Claude report.'); continue; }
+    const grade = gateGrade(researcher.grade);
+    if (grade === null) { skip(project, `Grade withheld or none (${(researcher.grade && researcher.grade.display) || 'no grade'}): the grade alone decides nothing.`); continue; }
+    if (grade >= limit) { skip(project, `Grade ${grade} is not under ${limit}.`); continue; }
+    const held = heldOf(ws, pid, now);
+    if (held === true) { skip(project, 'Held: a held position gets a Prosecutor.'); continue; }
+    if (held === null) { skip(project, 'Holdings unreadable, so "not held" is not known.'); continue; }
+    if (openTicket(ws, pid)) { skip(project, 'A Prosecutor ticket is open.'); continue; }
+    const receipts = listReceipts(ws, pid).filter((r) => !r.broken && r.researcher && r.researcher.report_id === researcher.report_id);
+    const gateReceipt = receipts.find((r) => r.kind === 'desk_gate');
+    if (gateReceipt) { out.unchanged.push({ project_id: pid, name: project.name, receipt_id: gateReceipt.receipt_id, reason: `The desk's gate already answers ${researcher.report_id}.` }); continue; }
+    if (receipts.length) { skip(project, `A ticket (${receipts[receipts.length - 1].receipt_id}) already answers ${researcher.report_id}.`); continue; }
+    todo.push({ pid, project, grade });
+  }
+  for (const { pid, project, grade } of todo) {
+    if (dryRun) { out.made.push({ project_id: pid, name: project.name, grade, receipt_id: null, reason: 'Would get a desk gate receipt.' }); continue; }
+    try {
+      const r = createTicket(ws, { project_id: pid, channel: 'batch-gate' });
+      if (r.status === 'gate_closed') out.made.push({ project_id: pid, name: project.name, grade, receipt_id: r.receipt_id, reason: r.receipt.desk.gate.reasons[0] || null });
+      else if (r.status === 'unchanged') out.unchanged.push({ project_id: pid, name: project.name, receipt_id: r.receipt_id, reason: 'The desk\'s gate already answers this report.' });
+      else skip(project, r.message || `Not gated (${r.status}).`);
+    } catch (e) {
+      skip(project, e.message);
+    }
+  }
+  return out;
+}
+
 function pendingFor(ws) {
   const out = [];
   for (const p of require('./projects').listProjects(ws)) {
@@ -1440,5 +1498,6 @@ module.exports = {
   nextStep,
   pilotQueue,
   pilotCandidates,
+  batchGate,
   pendingFor,
 };
