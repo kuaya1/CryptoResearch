@@ -1,6 +1,6 @@
 # Desk state: the Junior Trader pipeline (Phase 1)
 
-Last updated 2026-10-24. This page covers the PM trade ticket pipeline. The rest of the desk is described in `CLAUDE.md` and `COWORK-INSTRUCTIONS.md`.
+Last updated 2026-10-25. This page covers the PM trade ticket pipeline. The rest of the desk is described in `CLAUDE.md` and `COWORK-INSTRUCTIONS.md`.
 
 ## What it does
 
@@ -131,18 +131,30 @@ Live tickets (2026-10-24), both $0 and waiting for Eric: OLAS `tr_2026-10-24T175
 
 ## Autonomous Build Backlog
 
-**Each cloud routine or scheduled run takes up to 3 unchecked backlog items at a time (Eric's surge, until 2026-10-27 23:00 ET; 2 after it), implements and tests them together, and bundles them into one combined feature branch and PR.**
+**Each cloud routine or scheduled run takes up to 5 unchecked backlog items at a time (Eric's surge, until 2026-10-28 23:00 ET; 3 after it), implements and tests them together, and bundles them into one combined feature branch and PR.**
 
-For a `/loop` or scheduled Claude Code session (e.g. the hourly cloud routine), from 2026-10-24 (blueprint Appendix A; surge sizes from 2026-10-24 evening, Eric):
+For a `/loop` or scheduled Claude Code session (e.g. the hourly cloud routine), from 2026-10-24 (blueprint Appendix A; surge sizes from 2026-10-24 evening, Eric; five items and a cap of 15 from 2026-10-25, Eric):
 
 - **Taken.** An item is taken when it is ticked here, or when a commit on `origin/main` or on an `origin/claude/backlog-*` branch carries `Backlog-Item: <n>` for it (older commits name it in their subject, `backlog: <item text>`).
-- **WIP cap.** Items whose commits are on branches not yet merged into `origin/main` are waiting (count each item once). Until 2026-10-27 23:00 ET (New York), build nothing when 9 or more are waiting; after that, when 4 or more are. Report the cap. Check this first, before reading the long docs.
-- **Build.** Take the next buildable items in order, three during the surge and two after it: unchecked, not marked *(Eric)*, not taken. Follow `CLAUDE.md`: edit, run `node dashboard/cli.js test`, and rebuild the bundle after UI edits. Build one item and run the tests, then the next, running the tests again across everything on the branch. If an item's tests fail, fix it or stop and report; never start the next on a red suite. After any fix, run the whole suite again before pushing. If fewer buildable items are left, take those.
+- **WIP cap.** Items whose commits are on branches not yet merged into `origin/main` are waiting (count each item once). Until 2026-10-28 23:00 ET (New York; 2026-10-29T03:00:00Z), build nothing when 15 or more are waiting; after that, when 6 or more are. Report the cap. Check this first, before reading the long docs.
+- **Build.** Take the next buildable items in order, five during the surge and three after it: unchecked, not marked *(Eric)*, not taken. Follow `CLAUDE.md`: edit, run `node dashboard/cli.js test`, and rebuild the bundle after UI edits. Build one item and run the tests, then the next, running the tests again across everything on the branch. If an item's tests fail, fix it or stop and report; never start the next on a red suite. After any fix, run the whole suite again before pushing. If fewer buildable items are left, take those.
 - **Base.** When a backlog branch is waiting, start from the newest waiting one (stacked), so the batch builds on the work before it and the branches never conflict; otherwise from `origin/main`. The PR then lists the earlier batch's commits too: merging the newest merges them all.
-- **Branch.** The batch goes on one branch, `claude/backlog-batch-items-<a>-<b>-<c>` (or `-<a>-and-<b>` for two). Use one commit per item, each with a `Backlog-Item: <n>` line. **Don't tick the boxes here on the branch:** the merge train ticks them on `main`. The `test` workflow runs on the push, and when it passes `backlog-pr` opens the pull request and merges it into `main`, deleting the branch (Eric, 2026-10-25: a green `claude/backlog-*` branch is auto-merged by `backlog-pr.yml`; a failing run never opens or merges a PR; a refused merge leaves the PR open for `npm run train`). Since the review of 2026-10-25 (A01/A02, `dashboard/scripts/backlog-promote.js`) it merges only the tree that passed the full suite on top of `main` as it is, and only while `main` is still that commit; the result is read back from GitHub and the branch is deleted only at the tested commit. **Every commit carries its `Backlog-Item: <n>` line.** A commit without one, an item not unchecked on `main`'s backlog or marked *(Eric)*, or a change to a protected path (`.github/`, `.claude/`, `CLAUDE.md`, `COWORK-INSTRUCTIONS.md`, `DESK_STATE.md`, `oauth.js`, `mcp.js`, `hosted.js`, `server.js`, the ledger and wallet code, the promotion scripts, `package*.json`, an existing template) leaves the PR open for Eric.
+- **Branch.** The batch goes on one branch, `claude/backlog-batch-items-<a>-<b>-<c>-<d>-<e>`, one number per item (`-<a>-and-<b>` for two). Use one commit per item, each with a `Backlog-Item: <n>` line. **Don't tick the boxes here on the branch:** the merge train ticks them on `main`. The `test` workflow runs on the push, and when it passes `backlog-pr` opens the pull request and merges it into `main`, deleting the branch (Eric, 2026-10-25: a green `claude/backlog-*` branch is auto-merged by `backlog-pr.yml`; a failing run never opens or merges a PR; a refused merge leaves the PR open for `npm run train`). Since the review of 2026-10-25 (A01/A02, `dashboard/scripts/backlog-promote.js`) it merges only the tree that passed the full suite on top of `main` as it is, and only while `main` is still that commit; the result is read back from GitHub and the branch is deleted only at the tested commit. **Every commit carries its `Backlog-Item: <n>` line.** A commit without one, an item not unchecked on `main`'s backlog or marked *(Eric)*, or a change to a protected path leaves the PR open for Eric.
+- **Zero-click scope (A01).** A batch merges with no click only when no commit touches a path in `PROTECTED` (`dashboard/scripts/backlog-promote.js`, the list that decides):
+  - `.github/`, `.claude/`, `CLAUDE.md`, `COWORK-INSTRUCTIONS.md`, `DESK_STATE.md`;
+  - the promotion scripts `dashboard/scripts/backlog-promote.js`, `backlog-intake.js`, `merge-train.js`;
+  - `dashboard/oauth.js`, `dashboard/mcp.js`, `dashboard/hosted.js`, and the root `server.js`;
+  - the ledger and wallet code: `dashboard/core/portfolio.js`, `wallets.js`, `walletsync.js`, `alchemy.js`;
+  - `package.json` and `package-lock.json`, at the root and in `dashboard/web`; `render.yaml`;
+  - the record folders (`portfolio/`, `paper/`, `projects/`, `config/`, `secrets/`);
+  - an edit to, or removal of, an existing file under `templates/` (adding a new version is allowed).
+
+  `dashboard/server.js`, `dashboard/cli.js` and `dashboard/core/paper.js` are not protected. A batch that touches a protected path waits for Eric as a whole, and so does every batch stacked on it.
 - **Never** push to `main` or force-push. Items marked *(Eric)* need his decision first: ask, don't build.
 
 Merged into `main` (2026-10-24): items 1–6, through one train branch (`claude/train-2026-10-24`, PR #2) built from the five backlog branches, with the bundle rebuilt once and the full suite run. The source branches were then deleted. Items 10 and 11 were built locally the same day. CI (`.github/workflows/test.yml`) now runs on every `claude/**` push, and `backlog-pr.yml` opens the PR once it is green. Items 7, 8, 9 and 21 were merged the same evening (PRs #3 and #4, through `claude/train-items-7-8-9-21`; `tickets.js` overlaps kept from both sides, the bundle rebuilt once, the full suite run), and both branches were deleted.
+
+Merged into `main` (2026-10-25) by `backlog-pr.yml`, three items per PR: 30–32 (PR #9), 33–35 (PR #10, then merged with the autonomy review fixes as `5001595`), 36–38 (PR #11) and 39–41 (PR #12). The workflow deleted each branch, and the boxes were ticked here on `main`.
 
 - [x] Phase 1 tickets, connector tools, PM Decision Card, under-40 filter (f715a3e, live 2026-10-24)
 - [x] Sub-agents `forensic-researcher`, `junior-trader-prosecutor` and `/pilot-run`
@@ -292,35 +304,35 @@ Phase 3 (Eric, 2026-10-25), to keep the builder fed while the `@6` Watchlist Sur
 
 Phase 4 (Eric, 2026-10-25): the open recommendations of `audits/2026-10-25-codex-autonomy-review` and the blueprint's W4.4. Every item obeys the blueprint's §1 invariants. An item whose text says it touches a protected path is built like any other; its PR then waits for Eric's merge.
 
-- [ ] **36. Complete missing decision consequences: `tickets reconcile`.** `dashboard/core/tickets.js` `reconcileEffects(ws, { project = null, dryRun = false })`, CLI `tickets reconcile [<project>] [--dry-run] [--json]`. A failed paper or journal step after a decision is today completed only when the same decision is sent again (review A06).
+- [x] **36. Complete missing decision consequences: `tickets reconcile`.** `dashboard/core/tickets.js` `reconcileEffects(ws, { project = null, dryRun = false })`, CLI `tickets reconcile [<project>] [--dry-run] [--json]`. A failed paper or journal step after a decision is today completed only when the same decision is sent again (review A06).
   - For each decision in force that grants risk and has no paper position, open it through `paper.openForDecision`, with the entry at or before `decided_at` as always.
   - For each decision line with no journal entry naming its `decision_id`, add that entry through `journalDecision`, its text naming the decision's own time.
   - It never archives or restores a project (Eric may have restored it since a pass), never voids a position, and never changes `decisions.jsonl`. A pass whose archive step failed is named, not archived.
   - It prints what it completed and what was already complete.
   - Tests: a grant whose paper step failed is completed once and a second run is all unchanged; an undone grant gets nothing; a failed archive is named and left; `--dry-run` writes nothing.
   - Done when one command repairs every recorded-but-incomplete decision without inventing one.
-- [ ] **37. Older receipts sized from a job record: integrity-limited.** A receipt saved before `frozenBasis` (review A08) may have been sized from a job record that differs from its frozen packet.
+- [x] **37. Older receipts sized from a job record: integrity-limited.** A receipt saved before `frozenBasis` (review A08) may have been sized from a job record that differs from its frozen packet.
   - `tickets.view` recomputes `gate()` for a Prosecutor receipt from its verified frozen packet (`receipt.packet`), under the receipt's own `desk.sizing` and `proposal.proposal_type`. It compares the result with the receipt's `desk` exit costs and its risk before any admission hold (`desk.admission.held_risk.risk_usd` when held, else `desk.suggested_risk_usd`).
   - A difference reads `integrity: { status: 'limited', fields, words }`. A packet that cannot be verified reads `integrity: { status: 'unverified', words }`. A match reads `ok`. Receipts written since frozenBasis are also checked, and should read `ok`.
   - `decide` refuses `approve` and `halve` on a limited or unverified receipt (409 `INTEGRITY`, naming the fields); `veto`, `pass` and `watch` stay allowed. The PM Decision Card shows the words. The receipt's bytes never change. Rebuild the bundle.
   - Tests: a receipt made from a mutated job (fixture) reads limited and cannot be approved but can be vetoed; a normal receipt reads ok; a missing packet reads unverified; reading writes nothing.
-- [ ] **38. A sampled breach, said.** The rule `cr-ticket-invalidation@2` is unchanged; this adds words and fields only.
+- [x] **38. A sampled breach, said.** The rule `cr-ticket-invalidation@2` is unchanged; this adds words and fields only.
   - A `triggered` price check whose coverage is under `tickets.invalidation.min_coverage_pct` carries `sampled: true`. Its words add "a sampled reading: n of m hours had one", the reading's time and its source (an hourly observation, or `latest.json`).
   - With full coverage it is `sampled: false`, and every fired check names its source.
   - The PM Decision Card's invalidated line and the daily brief's invalidated section show it. The status stays `triggered`: the published rule decides, and the label only says how much was seen. Rebuild the bundle.
   - Tests: two readings in 24 h with one under the trigger read triggered and sampled with the words; full coverage reads not sampled; a reading from `latest.json` names it.
-- [ ] **39. Daily brief: tickets waiting on a repair or a fresh price.** A new section, `ticket_repairs`, in `dashboard/core/brief-daily.js`, after `stale_basis`, with the same partial and unreadable rules as items 15 and the review's A07.
+- [x] **39. Daily brief: tickets waiting on a repair or a fresh price.** A new section, `ticket_repairs`, in `dashboard/core/brief-daily.js`, after `stale_basis`, with the same partial and unreadable rules as items 15 and the review's A07.
   - A grant in force whose paper position is missing (`decision.paper === 'missing'`): "complete it on the card (Complete paper position) or `tickets reconcile`".
   - A ticket held to $0 by the admission check (`admission.held_risk`), with its reason: "refresh prices, then ask for a new ticket (refresh)".
   - Each line is a deep link to the project. Update `public/daily-brief-model.js` if its section order or words need it, and rebuild the bundle.
   - Tests: both cases are listed with their words and links; a healthy desk reads "None right now."; an unreadable ticket makes the section partial; a read writes nothing.
-- [ ] **40. Pre-gate: say why the grade closed it, with an override on the card.** A withheld grade from a retrieval gap reads today like a weak project (review, stress test 2).
+- [x] **40. Pre-gate: say why the grade closed it, with an override on the card.** A withheld grade from a retrieval gap reads today like a weak project (review, stress test 2).
   - `closeGate` records `desk.gate.reason_kind`: `grade_low` (a firm grade, or a range's low end, under the floor) or `grade_withheld`. A withheld grade also gets `desk.gate.withheld`, with the report's scored share and the investment components it left unscored, from the report's own `investment_components`.
   - `pregate_version` stays `cr-ticket-pregate@1`: the rule is unchanged and only what it records grows. Older receipts read as `reason_kind: null`, said "not recorded".
   - `nextStep`'s `gate_closed` words name the kind.
   - The PM Decision Card's desk-gate view says it. It gets "Ask the Prosecutor anyway", which, after a confirm, posts `POST /api/projects/<id>/tickets` with `force_prosecution: true` (the route already takes it) and is labeled as Eric's override. Rebuild the bundle.
   - Tests: an under-floor grade reads `grade_low`; a withheld grade reads `grade_withheld` with its components; an older receipt reads not recorded; the override opens a normal ticket.
-- [ ] **41. Shadow gate: fixed 30-day results beside "since saved".** Today `paper.js` `shadowGate`'s `since` follows the latest price, so a day-30 +100% reads +200% at day 35 (the review's added probe).
+- [x] **41. Shadow gate: fixed 30-day results beside "since saved".** Today `paper.js` `shadowGate`'s `since` follows the latest price, so a day-30 +100% reads +200% at day 35 (the review's added probe).
   - Each row also gets `day30`, from the hourly reading at or before the receipt (within 6 h) to the one at or before receipt + 30 days (within 24 h): the change and the change against BTC. Its status is `matured`, `immature` (before day 30) or `unevaluable` (a price missing), never 0. Once matured it never changes.
   - Archived projects' receipts are included.
   - A cohort line per receipt month gives the matured, immature and unevaluable counts. There is no median, hit rate or "the gate was right" before 20 have matured, and never a probability.
@@ -359,5 +371,86 @@ Phase 4 (Eric, 2026-10-25): the open recommendations of `audits/2026-10-25-codex
   - Under @3, the exemption holds only when the packet's market cap is no older than `freshness.price_stale_minutes`. Otherwise the exit check reads "native L1 exemption unavailable: market cap from <time>".
   - Tickets frozen under @2 and @1 keep their rules.
   - This is a sizing change, so it needs Eric's go first (blueprint W2.7).
+
+Phase 5, heavy Track 2 (Eric, 2026-10-25). Eric's message numbered these 42–56, but 42–47 were already Phase 4's, so they are 48–62 here: his 42 is 48 and his 56 is 62. Every item stays in files `PROTECTED` does not list (see "Zero-click scope" above). Research > Outcomes is the hosted view `dashboard/public/views/research.js` (with `dashboard/public/paper-model.js`); there is no `Research.jsx`.
+
+- [ ] **48. Near-miss prosecution floor (`pregate_max_grade: 48`).** In `dashboard/core/tickets.js` (`SIZING_DEFAULTS`, `sizingOf`, `pregateReason`) and `Preferences.jsx`, add `pregate_max_grade`: default `48`, bounded `0 <= pregate_max_grade <= min_grade_new_entry` (in `validateSettingsPatch`, `dashboard/server.js`, as item 2).
+  - `pregateReason` closes the pre-gate without a Prosecutor only when an unheld project's grade is withheld, none, or under `pregate_max_grade` (48).
+  - Unheld candidates graded `48` to `< min_grade_new_entry` (55), or whose grade range has a high end `>= 55`, open a normal Prosecutor ticket. Agent 2 then writes the adversarial prosecution and the trade plan.
+  - `gate()` still caps suggested risk at `$0` (`WATCH_ONLY`).
+  - The pre-gate rule changes, so new desk receipts record `cr-ticket-pregate@2`, following CLAUDE.md's standing rule that a changed rule is a new version. Receipts made under `@1` keep theirs, and item 13's version table knows `@2`.
+  - Rebuild the bundle. Tests in `tickets.test.js`.
+- [ ] **49. UI: Trade Plan Geometry & R-Multiple strip on `PMDecisionCard.jsx`.** In `dashboard/core/tickets.js` (`view`) and `PMDecisionCard.jsx`, compute `trade_plan_geometry`.
+  - Inputs: the receipt's `proposal` (`entry_zone`, `upside_target`, `invalidation_trigger.price_usd`) and the latest stored market price, when it is fresh and known.
+  - Outputs:
+    - the price's position against the entry zone (`in_zone`, `above_zone`, `below_zone`, with a `%`);
+    - `% to upside_target`;
+    - `% to invalidation_trigger`;
+    - a deterministic `reward_risk_ratio`: `(upside - ref_price) / (ref_price - stop_price)` when `upside > ref_price > stop_price`.
+  - Render a crisp Trade Plan strip on `PMDecisionCard.jsx`. Never invent missing numbers; say unknown.
+  - Rebuild the bundle. Tests in `tickets.test.js` and `web-app.test.js`.
+- [ ] **50. Track 2 trade plan lines in `brief-daily.js` and `DailyBrief.jsx`.** In `dashboard/core/brief-daily.js`, give each waiting Prosecutor ticket's line in `pm_cards` its compact trade plan whenever the receipt has those fields: `Entry $low–$high, target $up, invalidation $stop, R:R X.Xx; Researcher <grade> vs Prosecutor <conviction>`. Say `"unknown"` for each one that is absent. Rebuild the bundle if the UI changes. Tests in `brief-daily.test.js`.
+- [ ] **51. `tickets run-cycle`: unified Track 2 pipeline orchestrator.** In `dashboard/core/tickets.js` (`runCycle`) and `dashboard/cli.js` (`tickets run-cycle [--limit 10] [--dry-run] [--json]`):
+  - Run, in order and deterministically: (1) `autoPilotSync`, (2) `batchGate`, (3) `quoteCandidates` (up to `limit`), (4) `pilotQueue`.
+  - Return one combined JSON receipt with the counts and the next steps for Agent 1 and Agent 2.
+  - Do not touch `mcp.js` or any protected file. Tests in `tickets.test.js`.
+- [ ] **52. UI: Interactive 4-Test Prosecution Matrix on `PMDecisionCard.jsx`.** In `PMDecisionCard.jsx` (and `inspector.css`), render the Prosecutor's four tests (`mercenary_emissions`, `tax_revenue`, `exit_slippage`, `unverified_claims`) as interactive status pills (`pass`, `fail`, `unknown`). Each expands to show the test's `finding` and its linked `source_ids`, plus `strongest_bull_rebuttal`. Rebuild the bundle. Tests in `web-app.test.js`.
+- [ ] **53. Invalidation proximity radar (`within 10%` warning).** In `dashboard/core/tickets.js` (`invalidationOf` / `view`) and `dashboard/core/brief-daily.js`:
+  - It applies to a non-invalidated ticket with an active price trigger whose fresh stored price is within `10%` above `invalidation_trigger.price_usd` (`(price - stop) / stop <= 0.10`).
+  - Attach `near_invalidation: { distance_pct, price_usd, threshold_usd, words }`.
+  - Surface a `"Near invalidation"` section in `brief-daily.js` and a warning badge on `PMDecisionCard.jsx`.
+  - Rebuild the bundle. Tests in `tickets.test.js` and `brief-daily.test.js`.
+- [ ] **54. UI: Track 2 Pilot Queue & Candidate Board in Research.** In `dashboard/public/views/research.js` (and its model in `dashboard/public/`), add a `"Track 2 Pilot Queue"` section of `pilotCandidates` rows. There is no read route for the rows yet, so add `GET /api/tickets/candidates` in `dashboard/server.js`; it writes nothing. Each row shows:
+  - the grade;
+  - the `@5 -> @6` report delta;
+  - `$500` / `$2,000` exit-quote readiness;
+  - the current pipeline step (`research`, `ticket`, `gate_closed`, `pm_review`, `done`);
+  - a Pilot opt-in/out toggle button that calls `POST /api/projects/<id>/tickets/pilot`.
+
+  Rebuild the bundle. Tests in `web-app.test.js`.
+- [ ] **55. Paper Book MFE / MAE excursion analytics in `paper.js` and Research.** In `dashboard/core/paper.js` (`readPosition`) and the Outcomes Paper UI (`dashboard/public/views/research.js` / `paper-model.js`):
+  - From the stored hourly price series between `entry.at` and `close.at` (or now), compute `max_favorable_pct` (the highest hourly price against entry) and `max_adverse_pct` (the lowest hourly price against entry).
+  - Compute them only when the entry is priced and the series covers the period; `unknown` when no readings exist.
+  - Render MFE / MAE columns in the Paper Book table.
+  - Rebuild the bundle. Tests in `tickets.test.js`.
+- [ ] **56. UI: Side-by-Side Researcher vs. Prosecutor Disagreement Card on `PMDecisionCard.jsx`.** In `PMDecisionCard.jsx`, when `agent_disagreement` is present, render a structured comparison block:
+  - Agent 1's grade and verdict beside Agent 2's conviction and verdict;
+  - `spread_points` and `agent_disagreement_note`;
+  - when the project has `spread` alerts, a deep link to the widest diverging rubric category in Compare.
+
+  Rebuild the bundle. Tests in `web-app.test.js`.
+- [ ] **57. Fundamental metric floor headroom in `invalidationOf` and `PMDecisionCard.jsx`.** In `dashboard/core/tickets.js` (`invalidationOf`), when `inv.metric` is bound and has a complete 30-day total after the ticket (`status: 'holding'`), include `headroom_pct` = `round(((total_30d_usd - below_30d_usd) / below_30d_usd) * 100, 1)`. Show it on `PMDecisionCard.jsx` and in `invalidation.checks`. Rebuild the bundle. Tests in `tickets.test.js`.
+- [ ] **58. UI: 7-Day Track 2 Telemetry Digest Card in `Research > Outcomes`.** Expose `tickets.digest(ws, { days: 7 })` (from item 34) on `GET /api/tickets/digest` in `dashboard/server.js`. In `Research > Outcomes` (`dashboard/public/views/research.js`), render a `"7-Day Desk Telemetry"` summary bar showing:
+  - `@6` reports completed;
+  - Prosecutor tickets against `desk_gate` passes;
+  - invalidations fired;
+  - the `ticket_repairs` count.
+
+  Rebuild the bundle. Tests in `tickets.test.js` and `web-app.test.js`.
+- [ ] **59. 20-case adversarial simulation suite (`tests/sim/`).** Expand `dashboard/tests/sim/*.test.js` from 10 to 20 deterministic simulation cases. The new cases cover:
+  - a stale price (over 90 minutes) capped at $0 on save (A03);
+  - a price drop that lands before the save's lock (A03);
+  - a 409 on Approve after invalidation (A04);
+  - a 409 on Approve after a superseding report (A04);
+  - Approve, then Undo, then Halve, leaving a single paper position (A06);
+  - a paper position closing on the bound run's `horizon_end` (A05);
+  - a near-miss prosecution (`grade 52` gets a Prosecutor and `$0 WATCH_ONLY`; item 48);
+  - the `shadow_gate` fixed day-30 cohort against a moving price;
+  - MFE/MAE across a price wick (item 55);
+  - a corrupt receipt surfaced in `daily_brief` `ticket_repairs` (A07).
+- [ ] **60. One-click `tickets reconcile` repair command and API route.** In `dashboard/core/tickets.js` (`reconcileDesk(ws)`), `dashboard/server.js` (`POST /api/tickets/reconcile`) and `dashboard/cli.js` (`tickets reconcile [--json]`):
+  - Scan every project for decisions whose post-commit side effects (`paper`, `journal` or `archive`) are missing or incomplete.
+  - Repair them idempotently from the existing decision records, and return a deterministic repair report.
+  - Add a `"Reconcile desk"` button in `DailyBrief.jsx` when `ticket_repairs` is non-empty.
+  - Item 36 already built `reconcileEffects` and the CLI `tickets reconcile`. Build on them, and keep item 36's rule for a failed archive: name it, never archive, because Eric may have restored the project since. The archive repair waits for Eric's word.
+  - Rebuild the bundle. Tests in `tickets.test.js`.
+- [ ] **61. Watchlist Exit-Liquidity Matrix (`tickets exit-matrix` & Forensics UI).** In `dashboard/core/tickets.js` (`exitMatrix(ws)`), `dashboard/server.js` (`GET /api/tickets/exit-matrix`) and `dashboard/cli.js` (`tickets exit-matrix [--json]`), return a deterministic table of every verified active project, sorted by grade, with:
+  - its `$500` and `$2,000` exit cost %;
+  - completeness and the missing cost components;
+  - the chain and the quote's age;
+  - its `native_l1_liquid` status.
+
+  Render a compact Exit Matrix view in Research (`dashboard/public/views/research.js`) or Forensics. Rebuild the bundle. Tests in `tickets.test.js`.
+- [ ] **62. Core ticket formatting & geometry extraction (`dashboard/core/ticket-format.js`).** Extract the pure formatting, number rounding, currency and percent helpers, and the trade-plan geometry math (item 49), from `dashboard/core/tickets.js` into `dashboard/core/ticket-format.js`. Re-export any needed helpers from `tickets.js`, so every caller stays 100% compatible and `tickets.js` stays clean, fast and maintainable. Full test suite green.
 
 - Never in scope: an exchange or wallet connection, placing orders, moving money.
