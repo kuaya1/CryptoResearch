@@ -2118,7 +2118,25 @@ function digest(ws, { days = 7, now = Date.now() } = {}) {
     return { total_usd: round(total, 4), calls: Object.values(byProvider).reduce((x, y) => x + y.calls, 0), by_provider: byProvider, estimated_or_open_calls: estimated, undated_not_counted: undated, today_usd: spent.daily, month_usd: spent.monthly, limits: { daily_usd: b.daily_usd ?? null, monthly_usd: b.monthly_usd ?? null }, note: 'Reservations and estimates count at their recorded amount.' };
   });
 
-  return { format: DIGEST_FORMAT, days: n, since: iso(since), until: iso(now), unreadable_projects: broken, reports_v6: reportsV6, tickets, grade_spreads: spreads, invalidations: invalidated, provider_budget: budget };
+  // Item 58: tickets waiting on a repair (a grant whose paper position is
+  // missing) or held to $0 by the admission check; the count the daily brief's
+  // ticket_repairs section lists. A project that cannot be read is named.
+  const repairs = section(() => {
+    let count = 0;
+    const unread = [];
+    for (const p of live) {
+      if (p.status === 'archived') continue;
+      let v;
+      try { v = view(ws, p.project_id, { now }); } catch (err) { unread.push({ project_id: p.project_id, why: err.message }); continue; }
+      const t = v.ticket;
+      if (!t) continue;
+      if (t.decision && t.decision.paper === 'missing') count += 1;
+      if (t.admission && t.admission.held_risk && t.status === 'pending_pm_review') count += 1;
+    }
+    return { count, not_read: unread, note: 'Grants whose paper position is missing, and tickets held to $0 by the admission check.' };
+  });
+
+  return { format: DIGEST_FORMAT, days: n, since: iso(since), until: iso(now), unreadable_projects: broken, reports_v6: reportsV6, tickets, grade_spreads: spreads, invalidations: invalidated, ticket_repairs: repairs, provider_budget: budget };
 }
 
 function digestText(d) {
@@ -2137,6 +2155,7 @@ function digestText(d) {
     const v = d.invalidations;
     L.push(`Invalidation triggers fired: ${v.fired}${v.triggers.length ? ` — ${v.triggers.map((t) => `${t.name} (${t.by}, ${t.at.slice(0, 10)})`).join('; ')}` : ''}${v.not_read.length ? `; ${v.not_read.length} not read` : ''}`);
   }
+  if (d.ticket_repairs && !bad(d.ticket_repairs, 'Ticket repairs')) L.push(`Tickets waiting on a repair: ${d.ticket_repairs.count}${d.ticket_repairs.not_read.length ? `; ${d.ticket_repairs.not_read.length} not read` : ''}`);
   if (!bad(d.provider_budget, 'Provider budget')) {
     const b = d.provider_budget;
     L.push(`Provider budget used: $${b.total_usd} over ${b.calls} calls${Object.keys(b.by_provider).length ? ` (${Object.entries(b.by_provider).sort().map(([k, v]) => `${k} $${v.usd}`).join(', ')})` : ''}; today $${b.today_usd}, this month $${b.month_usd}${b.undated_not_counted ? `; ${b.undated_not_counted} charges with no time not counted` : ''}`);

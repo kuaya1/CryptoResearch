@@ -103,7 +103,7 @@ async function richWorkspace(t) {
 }
 
 async function answers(r) {
-  const paths = ['/api/index', `/api/projects/${r.pid}`, `/api/projects/${r.bare}`, `/api/projects/${r.pid}/tickets`, `/api/projects/${r.bare}/tickets`, `/api/projects/${r.pid}/forensics`, `/api/projects/${r.pid}/outcomes`, '/api/research/outcomes', '/api/portfolio/ledger', '/api/agenda', '/api/wallets'];
+  const paths = ['/api/index', `/api/projects/${r.pid}`, `/api/projects/${r.bare}`, `/api/projects/${r.pid}/tickets`, `/api/projects/${r.bare}/tickets`, `/api/projects/${r.pid}/forensics`, `/api/projects/${r.pid}/outcomes`, '/api/research/outcomes', '/api/tickets/digest', '/api/portfolio/ledger', '/api/agenda', '/api/wallets'];
   const out = {};
   for (const p of paths) out[p] = await get(r.port, r.token, p);
   return out;

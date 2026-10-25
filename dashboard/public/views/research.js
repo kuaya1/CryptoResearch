@@ -114,7 +114,28 @@ async function outcomesTab(ctx) {
     { label: 'Start', render: (r) => h('span', { class: 'small', title: r.note || (r.start.basis === 'run_packet' ? "When the research run's evidence packet was captured" : 'When the report was saved (it answers no run)') }, r.start.project ? `${fmtDate(r.start.at)}` : 'No price') },
     ...days.map((d) => ({ label: `${d}d vs BTC`, num: true, render: (r) => horizonCell(r.horizons.find((x) => x.days === d)) })),
   ], rows, { size: 50, label: 'Report outcomes', empty: 'No eligible reports yet.' }));
-  return h('div', null, models, list, await paperCard(ctx));
+  return h('div', null, await digestBar(ctx), models, list, await paperCard(ctx));
+}
+
+// The seven-day desk telemetry (tickets.digest): @6 reports completed,
+// Prosecutor tickets against desk-gate passes, invalidations fired and tickets
+// waiting on a repair. A part the desk could not read is said, never zero.
+async function digestBar(ctx) {
+  let d;
+  try {
+    d = await ctx.api.get('/api/tickets/digest');
+  } catch (_) {
+    return card('7-Day Desk Telemetry', h('p', { class: 'muted' }, 'The digest could not be read.'));
+  }
+  const cell = (label, sec, value, title) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '140px' }, title: sec.status === 'ok' ? title : sec.why },
+    h('span', { class: 'small muted' }, label), h('strong', { class: 'num' }, sec.status === 'ok' ? String(value) : 'Unreadable'));
+  const r = d.reports_v6; const t = d.tickets; const i = d.invalidations; const rp = d.ticket_repairs || { status: 'unreadable', why: 'Not reported.' };
+  return card('7-Day Desk Telemetry', h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '24px' } },
+    cell(`${r.prompt || '@6'} reports completed`, r, r.completed, `${r.eligible} eligible`),
+    cell('Prosecutor tickets', t, t.prosecutor_tickets, 'Saved in the window'),
+    cell('Desk-gate passes', t, t.desk_gate_passes, 'Saved in the window'),
+    cell('Invalidations fired', i, i.fired, i.note),
+    cell('Ticket repairs', rp, rp.count, rp.note)));
 }
 
 // The paper book (core/paper.js): PM-approved tickets as paper positions,

@@ -1970,3 +1970,16 @@ test('item 57: a holding metric floor carries its headroom over the floor, one d
   assert.equal(hit.status, 'triggered');
   assert.equal(hit.headroom_pct, undefined);
 });
+
+test('item 58: the seven-day digest counts tickets waiting on a repair and the desk page reads it', (t) => {
+  const s = withReport(t);
+  const d = T.digest(s.ws, { days: 7 });
+  assert.equal(d.ticket_repairs.status, 'ok');
+  assert.equal(d.ticket_repairs.count, 0);
+  assert.match(T.digestText(d), /Tickets waiting on a repair: 0/);
+  const research = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'research.js'), 'utf8');
+  assert.match(research, /7-Day Desk Telemetry/);
+  assert.match(research, /\/api\/tickets\/digest/);
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(server, /route\('GET', '\/api\/tickets\/digest'/);
+});

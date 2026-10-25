@@ -1327,6 +1327,8 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   // The paper book (core/paper.js): read only, apart from the portfolio.
   route('GET', '/api/tickets/candidates', () => coherent(() => ({ format: 'cr-pilot-board@1', writes_nothing: true, rows: tickets.candidateBoard(ws) })));
   route('GET', '/api/paper', () => coherent(() => require('./core/paper').book(ws)));
+  // The seven-day Track 2 digest (tickets.digest, item 34): read only.
+  route('GET', '/api/tickets/digest', () => coherent(() => tickets.digest(ws, { days: 7 })));
   route('GET', '/api/research/outcomes', () => coherent(() => require('./core/report-outcomes').deskOutcomes(ws)));
   // The daily brief (core/brief-daily.js): read only, nothing stored.
   route('GET', '/api/brief/daily', (m, req, res, body, url) => coherent(() => require('./core/brief-daily').brief(ws, { since: url.searchParams.get('since') || null })));
