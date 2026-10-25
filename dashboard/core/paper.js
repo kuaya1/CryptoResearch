@@ -183,13 +183,37 @@ function voidForDecision(ws, decisionId, reason) {
 
 // One position, read: its close (if any) from the hourly records and the
 // decisions, its return against BTC, or why there is none.
+// Item 55: how far the hourly price went for and against the position between
+// its entry reading and its close (or now). The highest and lowest hourly
+// readings in that span, each against the entry price. Known only when the
+// entry is priced and the series covers the span: at least one reading after
+// the entry, the latest within `tolerance` of the end. Otherwise unknown with
+// the reason, never 0. Computed on read; nothing is stored.
+function excursionOf(series, entry, endMs, tolerance) {
+  const none = (why) => ({ status: 'unknown', why, max_favorable_pct: null, max_adverse_pct: null });
+  if (!entry || entry.status !== 'priced' || !isNum(entry.price_usd) || !(entry.price_usd > 0)) return none('No entry price: the excursion cannot be measured.');
+  const startMs = Date.parse(entry.at);
+  if (!Number.isFinite(startMs)) return none('The entry has no reading time.');
+  const span = (series || []).filter((r) => r.t >= startMs && r.t <= endMs);
+  if (!span.length) return none('No hourly readings between the entry and the end.');
+  if (endMs - span[span.length - 1].t > tolerance) return none('The hourly readings stop well before the end of the position: the series does not cover it.');
+  let hi = span[0];
+  let lo = span[0];
+  for (const r of span) {
+    if (r.price_usd > hi.price_usd) hi = r;
+    if (r.price_usd < lo.price_usd) lo = r;
+  }
+  const vs = (p) => round((p / entry.price_usd - 1) * 100, 2);
+  return { status: 'known', max_favorable_pct: vs(hi.price_usd), max_favorable_at: iso(hi.t), max_adverse_pct: vs(lo.price_usd), max_adverse_at: iso(lo.t), readings: span.length };
+}
+
 function readPosition(ws, open, voided, project, decisions, now) {
   const row = {
     position_id: open.position_id, project_id: open.project_id, name: project ? project.name : null, symbol: project ? project.symbol || null : null,
     receipt_id: open.receipt_id, decision_id: open.decision_id, decided_at: open.decided_at, risk_usd: open.risk_usd, proposal_type: open.proposal_type,
     invalidation_price_usd: open.invalidation_price_usd, horizon_end: open.horizon_end, horizon_source: open.horizon_source || null, entry: open.entry, entry_cost: open.entry_cost,
   };
-  if (voided) return { ...row, state: 'voided', voided_at: voided.voided_at, reason: voided.reason, close: null, return: null };
+  if (voided) return { ...row, state: 'voided', voided_at: voided.voided_at, reason: voided.reason, close: null, return: null, max_favorable_pct: null, max_adverse_pct: null, excursion: null };
   // A position opened before its receipt carried the run (review A05) has no
   // stored horizon: it is read from the receipt's frozen packet when that run
   // proves one (cr-paper-horizon@1, said so, nothing written), else said
@@ -247,7 +271,8 @@ function readPosition(ws, open, voided, project, decisions, now) {
     const b = b0 && b1 ? b1.price_usd / b0.price_usd - 1 : null;
     ret = { status: close ? 'realized' : 'unrealized', return_pct: round(r * 100, 2), pnl_usd: round(open.risk_usd * r, 2), btc_return_pct: b === null ? null : round(b * 100, 2), vs_btc_pct: b === null ? null : round(((1 + r) / (1 + b) - 1) * 100, 2), ...(b === null ? { btc_note: 'No BTC price on record at one of the two times.' } : {}), basis: 'Return on the entry price to the exit (or the latest reading); the paper amount is the approved risk, taken as the amount at entry. Fees and slippage are unknown and not included.' };
   }
-  return { ...row, state, close, return: ret };
+  const exc = excursionOf(mine, open.entry, endMs, close ? ENTRY_TOLERANCE_MS : 48 * HOUR);
+  return { ...row, state, close, return: ret, max_favorable_pct: exc.max_favorable_pct, max_adverse_pct: exc.max_adverse_pct, excursion: exc };
 }
 
 // Tickets that granted no risk: a shadow line each, never a position.

@@ -7,7 +7,7 @@ import {
 } from '../ui.js';
 import { comparisonBlock } from './project.js';
 import { stepWord, exitCell, deltaText } from '../pilot-board-model.js';
-import { splitPositions, returnWords, summaryLine, shadowRows, shadowCounts, shadowCohortLines } from '../paper-model.js';
+import { splitPositions, returnWords, excursionWords, summaryLine, shadowRows, shadowCounts, shadowCohortLines } from '../paper-model.js';
 
 const TABS = [
   ['runs', 'Research jobs'],
@@ -130,6 +130,10 @@ async function paperCard(ctx) {
     const r = returnWords(x);
     return h('span', r.text === '—' ? { class: 'faint', title: r.title } : { class: `num ${r.tone}`.trim(), title: r.title }, r.text);
   };
+  const excursionCell = (x, which) => {
+    const e = excursionWords(x, which);
+    return h('span', e.text === '—' ? { class: 'faint', title: e.title } : { class: `num ${e.tone}`.trim(), title: e.title }, e.text);
+  };
   const stateWord = { open: 'Open', closed: 'Closed', voided: 'Voided' };
   const cols = [
     { label: 'Project', render: (x) => h('a', { href: `#/project/${encodeURIComponent(x.project_id)}/market` }, x.name || x.project_id) },
@@ -137,6 +141,8 @@ async function paperCard(ctx) {
     { label: 'Entry', render: (x) => x.entry.status === 'priced' ? h('span', { class: 'num', title: `Hourly reading ${fmtDate(x.entry.at)}; entry cost unknown` }, `$${x.entry.price_usd}`) : h('span', { class: 'faint', title: x.entry.reason }, 'No entry price') },
     { label: 'State', render: (x) => h('span', { title: x.close ? x.close.words : x.reason || null }, stateWord[x.state] || x.state) },
     { label: 'Return', num: true, render: ret },
+    { label: 'MFE', num: true, render: (x) => excursionCell(x, 'mfe') },
+    { label: 'MAE', num: true, render: (x) => excursionCell(x, 'mae') },
   ];
   const parts = splitPositions(b);
   const group = (title, rows, label) => h('div', null,

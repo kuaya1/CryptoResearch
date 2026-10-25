@@ -970,6 +970,57 @@ test('paper: a granting decision opens a position at the hourly price at or befo
   assert.equal(early.positions[0].return.status, 'unrealized');
 });
 
+test('paper (item 55): MFE and MAE are the best and worst hourly price against the entry up to the close; unknown, never 0, without a priced entry or readings', async (t) => {
+  const P = require('../core/paper');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  const now0 = Date.now();
+  bothPrices(s.ws, now0 - 2 * HOURMS, 1.0, 100);
+  bothPrices(s.ws, now0 + 0.5 * HOURMS, 1.2, 101);
+  bothPrices(s.ws, now0 + 1 * HOURMS, 0.95, 105);
+  bothPrices(s.ws, now0 + 2 * HOURMS, 0.69, 110);
+  bothPrices(s.ws, now0 + 3 * HOURMS, 0.3, 110);
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' });
+  const before = hashTree(s.root);
+  const closed = P.book(s.ws, { now: now0 + 5 * HOURMS }).positions[0];
+  assert.deepEqual(hashTree(s.root), before, 'reading writes nothing');
+  assert.equal(closed.state, 'closed');
+  assert.equal(closed.max_favorable_pct, 20);
+  assert.equal(closed.max_adverse_pct, -31, 'the close reading, not the lower one after it');
+  assert.equal(closed.excursion.status, 'known');
+  assert.equal(closed.excursion.readings, 4);
+  const open = P.book(s.ws, { now: now0 + 90 * 60000 }).positions[0];
+  assert.equal(open.state, 'open');
+  assert.equal(open.max_favorable_pct, 20);
+  assert.equal(open.max_adverse_pct, -5, 'the 0.95 reading at +1 h, before the later ones exist');
+  // A close long ago still reads from the same span.
+  const far = P.book(s.ws, { now: now0 + 400 * HOURMS }).positions[0];
+  assert.equal(far.state, 'closed');
+  assert.equal(far.max_adverse_pct, -31);
+  // The model words it.
+  const M = await import('../public/paper-model.js');
+  assert.equal(M.excursionWords(closed, 'mfe').text, '+20.00%');
+  assert.equal(M.excursionWords(closed, 'mae').text, '−31.00%');
+  assert.equal(M.excursionWords({ excursion: { status: 'unknown', why: 'No entry price' } }, 'mfe').text, '—');
+  assert.equal(M.excursionWords(null, 'mae').text, '—');
+});
+
+test('paper (item 55): without a priced entry the excursion is unknown with the reason', (t) => {
+  const P = require('../core/paper');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' });
+  const p = P.book(s.ws, { now: Date.now() + HOURMS }).positions[0];
+  if (p.entry.status !== 'priced') {
+    assert.equal(p.max_favorable_pct, null);
+    assert.equal(p.max_adverse_pct, null);
+    assert.equal(p.excursion.status, 'unknown');
+    assert.match(p.excursion.why, /No entry price/);
+  } else {
+    assert.ok(['known', 'unknown'].includes(p.excursion.status));
+  }
+});
+
 test('paper: no hourly price at or before the decision is "no entry price", never a later one; undo voids the position and keeps it on record', (t) => {
   const P = require('../core/paper');
   const s = withReport(t);
