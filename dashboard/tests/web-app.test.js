@@ -201,6 +201,12 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   // The Trade Plan strip (item 49) reads the view's geometry and says unknown, never a made-up number.
   assert.match(pm, /trade_plan_geometry/);
   assert.match(pm, /Reward : risk/);
+  // The four-test matrix (item 52): pills with pass, fail or unknown; a missing test is unknown.
+  assert.match(pm, /near_invalidation/);
+  assert.match(pm, /Disagreement/);
+  assert.match(pm, /TestMatrix/);
+  assert.match(pm, /strongest_bull_rebuttal/);
+  assert.match(pm, /: 'unknown'\)/);
   assert.match(pm, /<span className="is-unknown">unknown<\/span>/);
   assert.equal([...pm.matchAll(/decide\('/g)].length, [...pm.matchAll(/onClick=\{\(\) => decide\('/g)].length, 'every PM decision is a click');
   // Every other write sits in a handler (onClick, onSelect) or an action

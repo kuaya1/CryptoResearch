@@ -1500,6 +1500,21 @@ function statusOf(decision, invalidation) {
 
 // receiptId: read that saved ticket as the one in force (an earlier receipt
 // shows `latest: false`); without it, the latest. Reading writes nothing.
+// Item 53: the invalidation proximity radar. A non-invalidated Prosecutor
+// ticket still in play (not vetoed or passed) whose fresh stored price sits
+// within NEAR_INVALIDATION_PCT above its invalidation price. Arithmetic on the
+// geometry's own fresh price; a stale or missing price says nothing.
+const NEAR_INVALIDATION_PCT = 10;
+function nearInvalidation(status, geometry) {
+  if (!geometry || ['invalidated', 'vetoed', 'passed'].includes(status)) return null;
+  const price = geometry.price && geometry.price.status === 'fresh' ? geometry.price.price_usd : null;
+  const stop = geometry.stop_usd;
+  if (!isNum(price) || !isNum(stop) || !(stop > 0) || !(price > stop)) return null;
+  const distance = round(((price - stop) / stop) * 100, 2);
+  if (distance > NEAR_INVALIDATION_PCT) return null;
+  return { distance_pct: distance, price_usd: price, threshold_usd: stop, words: `Near invalidation: the price $${price} is ${distance}% above the invalidation price $${stop} (within ${NEAR_INVALIDATION_PCT}%).` };
+}
+
 // Trade Plan geometry (item 49, `cr-ticket-geometry@1`): where the stored price
 // sits against the receipt's own entry zone, target and invalidation price.
 // Arithmetic only: a missing number is said unknown, never filled in, and a
@@ -1586,6 +1601,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
         try { latest = marketOf(ws, project); } catch (_) { latest = null; }
         return tradePlanGeometry(current.proposal, latest, { now, staleMinutes: (ws.settings && ws.settings.freshness && ws.settings.freshness.price_stale_minutes) || 90 });
       })(),
+      near_invalidation: null,
       exit_basis: d.exit_basis || 'measured',
       exit_cost_500_usd_pct: d.exit_cost_500_usd_pct ?? null,
       exit_cost_500_complete: d.exit_cost_500_complete ?? null,
@@ -1603,7 +1619,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       starter_risk_usd: d.sizing ? d.sizing.starter_risk_usd : SIZING_DEFAULTS.starter_risk_usd,
       pm_approved_risk_usd: decision ? decision.pm_approved_risk_usd : null,
       decision: decision ? { decision_id: decision.decision_id, action: decision.action, at: decision.decided_at, note: decision.note, archive: decision.archive || null, paper: paperStateOf(ws, decision) } : null,
-      prosecution: current.prosecution ? { verdict: current.prosecution.verdict, conviction_score: current.prosecution.conviction_score, fatal_flaws: current.prosecution.fatal_flaws, tests: current.prosecution.tests } : null,
+      prosecution: current.prosecution ? { verdict: current.prosecution.verdict, conviction_score: current.prosecution.conviction_score, fatal_flaws: current.prosecution.fatal_flaws, tests: current.prosecution.tests, strongest_bull_rebuttal: current.prosecution.strongest_bull_rebuttal || '' } : null,
       agent_disagreement: current.agent_disagreement || null,
       invalidation,
       researcher_report_id: current.researcher.report_id,
@@ -1613,6 +1629,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       report_delta: (() => { try { return require('./report-delta').reportDelta(ws, require('./reports').loadReports(ws, pid)); } catch (_) { return null; } })(),
     };
   }
+  if (ticket) ticket.near_invalidation = nearInvalidation(ticket.status, ticket.trade_plan_geometry);
   const profile = readProfile(ws, pid);
   return {
     project_id: pid,
@@ -1753,6 +1770,25 @@ function pilotCandidates(ws, { now = Date.now() } = {}) {
   const rank = (r) => (r.grade === null ? -Infinity : r.grade);
   rows.sort((a, b) => (a.held === b.held ? 0 : a.held ? -1 : 1) || (rank(b) === rank(a) ? 0 : rank(b) > rank(a) ? 1 : -1) || a.project_id.localeCompare(b.project_id));
   return rows;
+}
+
+// Item 54: the Track 2 pilot queue as a board. Each candidate row (the read
+// above) with the pipeline step the chain needs next, the change since Claude's
+// earlier report (@5 to @6) and whether the $500 and $2,000 exit readings are
+// in. Read-only: it writes nothing and asks no provider. A native L1 coin
+// needs no DEX quote (ready: null); a step that cannot be read says so.
+function candidateBoard(ws, { now = Date.now() } = {}) {
+  const sizing = sizingOf(ws);
+  const sizes = [...new Set([sizing.exit_size_usd, 2000])].sort((a, b) => a - b);
+  return pilotCandidates(ws, { now }).map((c) => {
+    let step = { step: 'unknown', why: 'The next step could not be read.' };
+    try { step = nextStep(ws, c.project_id, { now }); } catch (err) { step = { step: 'unknown', why: `The next step could not be read: ${err.message}` }; }
+    let delta = null;
+    try { delta = require('./report-delta').reportDelta(ws, require('./reports').loadReports(ws, c.project_id)); } catch (_) { delta = null; }
+    const native = c.gate && c.gate.exit_basis === 'native_l1_liquid';
+    const exits = exitsOf(ws, c.project_id, sizes, now).map((e) => ({ size_usd: e.size_usd, ready: native ? null : isNum(e.cost_pct), cost_pct: e.cost_pct, cost_complete: e.cost_complete, note: native ? 'Native L1: no DEX quote is needed.' : e.note }));
+    return { ...c, step: step.step, step_why: step.why || null, report_delta: delta, exits };
+  });
 }
 
 // Backlog item 30. Opt in (pilot: true) every verified, active project whose
@@ -2130,6 +2166,7 @@ module.exports = {
   gate,
   pregateReason,
   tradePlanGeometry,
+  nearInvalidation,
   gateGrade,
   skeleton,
   researcherOf,
@@ -2155,6 +2192,7 @@ module.exports = {
   nextStep,
   pilotQueue,
   pilotCandidates,
+  candidateBoard,
   batchGate,
   autoPilotSync,
   quoteCandidates,

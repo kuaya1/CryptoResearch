@@ -109,6 +109,10 @@ function brief(ws, { since = null, now = Date.now() } = {}) {
       return { text: `${r.name}: ${t.invalidation.words || 'invalidated'}${at ? '' : ' (reading time not on record)'}`, link: link(r.project_id) };
     })]);
 
+  section('near_invalidation', 'Near invalidation', true, () => [...unreadableTickets('is near its invalidation price'), ...rows
+    .filter((r) => ticketOf(r) && ticketOf(r).near_invalidation)
+    .map((r) => ({ text: `${r.name}: ${ticketOf(r).near_invalidation.words}`, link: link(r.project_id) }))]);
+
   section('stale_basis', 'Tickets on a stale or superseded basis', true, () => [...unreadableTickets('stands on a stale basis'), ...rows
     .filter((r) => { const t = ticketOf(r); return t && !t.desk_gate && (t.superseded_by_report || (t.invalidation && t.invalidation.basis_stale)); })
     .map((r) => {

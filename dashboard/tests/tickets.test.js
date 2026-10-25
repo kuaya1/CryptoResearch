@@ -970,6 +970,57 @@ test('paper: a granting decision opens a position at the hourly price at or befo
   assert.equal(early.positions[0].return.status, 'unrealized');
 });
 
+test('paper (item 55): MFE and MAE are the best and worst hourly price against the entry up to the close; unknown, never 0, without a priced entry or readings', async (t) => {
+  const P = require('../core/paper');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  const now0 = Date.now();
+  bothPrices(s.ws, now0 - 2 * HOURMS, 1.0, 100);
+  bothPrices(s.ws, now0 + 0.5 * HOURMS, 1.2, 101);
+  bothPrices(s.ws, now0 + 1 * HOURMS, 0.95, 105);
+  bothPrices(s.ws, now0 + 2 * HOURMS, 0.69, 110);
+  bothPrices(s.ws, now0 + 3 * HOURMS, 0.3, 110);
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' });
+  const before = hashTree(s.root);
+  const closed = P.book(s.ws, { now: now0 + 5 * HOURMS }).positions[0];
+  assert.deepEqual(hashTree(s.root), before, 'reading writes nothing');
+  assert.equal(closed.state, 'closed');
+  assert.equal(closed.max_favorable_pct, 20);
+  assert.equal(closed.max_adverse_pct, -31, 'the close reading, not the lower one after it');
+  assert.equal(closed.excursion.status, 'known');
+  assert.equal(closed.excursion.readings, 4);
+  const open = P.book(s.ws, { now: now0 + 90 * 60000 }).positions[0];
+  assert.equal(open.state, 'open');
+  assert.equal(open.max_favorable_pct, 20);
+  assert.equal(open.max_adverse_pct, -5, 'the 0.95 reading at +1 h, before the later ones exist');
+  // A close long ago still reads from the same span.
+  const far = P.book(s.ws, { now: now0 + 400 * HOURMS }).positions[0];
+  assert.equal(far.state, 'closed');
+  assert.equal(far.max_adverse_pct, -31);
+  // The model words it.
+  const M = await import('../public/paper-model.js');
+  assert.equal(M.excursionWords(closed, 'mfe').text, '+20.00%');
+  assert.equal(M.excursionWords(closed, 'mae').text, '−31.00%');
+  assert.equal(M.excursionWords({ excursion: { status: 'unknown', why: 'No entry price' } }, 'mfe').text, '—');
+  assert.equal(M.excursionWords(null, 'mae').text, '—');
+});
+
+test('paper (item 55): without a priced entry the excursion is unknown with the reason', (t) => {
+  const P = require('../core/paper');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' });
+  const p = P.book(s.ws, { now: Date.now() + HOURMS }).positions[0];
+  if (p.entry.status !== 'priced') {
+    assert.equal(p.max_favorable_pct, null);
+    assert.equal(p.max_adverse_pct, null);
+    assert.equal(p.excursion.status, 'unknown');
+    assert.match(p.excursion.why, /No entry price/);
+  } else {
+    assert.ok(['known', 'unknown'].includes(p.excursion.status));
+  }
+});
+
 test('paper: no hourly price at or before the decision is "no entry price", never a later one; undo voids the position and keeps it on record', (t) => {
   const P = require('../core/paper');
   const s = withReport(t);
@@ -1786,6 +1837,74 @@ test('trade plan geometry: view() carries it on a saved Prosecutor ticket, unkno
     assert.equal(g.reward_risk_ratio, null);
     assert.match(g.words, /unknown/);
   }
+});
+
+test('view() carries the four tests and the strongest bull rebuttal for the card (item 52)', (t) => {
+  const s = withReport(t);
+  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
+  T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) });
+  const pr = T.view(s.ws, s.pid).ticket.prosecution;
+  assert.equal(pr.strongest_bull_rebuttal, 'Emissions taper next quarter.');
+  for (const k of ['mercenary_emissions', 'tax_revenue', 'exit_slippage', 'unverified_claims']) assert.ok(['pass', 'fail', 'unknown'].includes(pr.tests[k].result), k);
+});
+
+test('near invalidation (item 53): within 10% above the stop only, never on a stale or missing price, an invalidated or vetoed ticket', () => {
+  const geo = (price, status = 'fresh', stop = 0.7) => ({ price: { status, price_usd: price }, stop_usd: stop });
+  const n = T.nearInvalidation('pending_pm_review', geo(0.75));
+  assert.equal(n.distance_pct, 7.14);
+  assert.equal(n.threshold_usd, 0.7);
+  assert.equal(n.price_usd, 0.75);
+  assert.match(n.words, /7\.14% above/);
+  assert.equal(T.nearInvalidation('pending_pm_review', geo(0.77)).distance_pct, 10);
+  assert.equal(T.nearInvalidation('pending_pm_review', geo(0.78)), null);
+  assert.equal(T.nearInvalidation('pending_pm_review', geo(0.75, 'stale')), null);
+  assert.equal(T.nearInvalidation('pending_pm_review', geo(0.69)), null, 'at or below the stop is the invalidation rule, not this one');
+  assert.equal(T.nearInvalidation('pending_pm_review', geo(0.75, 'fresh', null)), null);
+  assert.equal(T.nearInvalidation('invalidated', geo(0.75)), null);
+  assert.equal(T.nearInvalidation('vetoed', geo(0.75)), null);
+  assert.equal(T.nearInvalidation('risk_granted', null), null);
+});
+
+test('near invalidation (item 53): view() attaches it from a fresh stored price', (t) => {
+  const s = withReport(t);
+  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
+  T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) });
+  const v = T.view(s.ws, s.pid).ticket;
+  const g = v.trade_plan_geometry;
+  assert.deepEqual(v.near_invalidation, T.nearInvalidation(v.status, g));
+});
+
+test('candidate board (item 54): rows carry step, delta and the $500 and $2,000 readings; a read writes nothing', (t) => {
+  const s = withReport(t);
+  const tree = hashTree(s.root);
+  const rows = T.candidateBoard(s.ws);
+  assert.deepEqual(hashTree(s.root), tree, 'reading writes nothing');
+  const row = rows.find((r) => r.project_id === s.pid);
+  assert.ok(row);
+  assert.deepEqual(row.exits.map((e) => e.size_usd), [500, 2000]);
+  for (const e of row.exits) assert.ok(e.ready === true || e.ready === false || e.ready === null);
+  assert.ok(['research', 'ticket', 'gate_closed', 'pm_review', 'done', 'blocked', 'unknown'].includes(row.step), row.step);
+  assert.ok('report_delta' in row && 'in_pilot' in row);
+  assert.deepEqual(rows.map((r) => r.project_id), T.pilotCandidates(s.ws).map((r) => r.project_id), 'the same order as the candidates');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(server, /route\('GET', '\/api\/tickets\/candidates'/);
+  assert.doesNotMatch(server.match(/route\('GET', '\/api\/tickets\/candidates'.*/)[0], /setPilot|\.post\(|writeJson/);
+});
+
+test('candidate board (item 54): the model words step, exits and the @5 to @6 change', async (t) => {
+  const os = require('os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-pilot-board-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.copyFileSync(path.join(__dirname, '..', 'public', 'pilot-board-model.js'), path.join(dir, 'm.mjs'));
+  const m = await import(require('url').pathToFileURL(path.join(dir, 'm.mjs')).href);
+  assert.equal(m.stepWord('gate_closed'), 'Gate closed');
+  assert.equal(m.stepWord('pm_review'), 'PM review');
+  assert.equal(m.exitCell({ size_usd: 2000, ready: true, cost_pct: 1.2, cost_complete: true }).text, '$2,000 ready');
+  assert.equal(m.exitCell({ size_usd: 500, ready: false, cost_pct: null, note: 'none' }).text, '$500 missing');
+  assert.equal(m.exitCell({ size_usd: 500, ready: null }).text, '$500 native');
+  assert.equal(m.deltaText({ status: 'ok', grade_delta: 4.2, prompt_versions: { previous: 'cr-research-prompt@5', new: 'cr-research-prompt@6' } }).text, '+4.2 @5 → @6');
+  assert.equal(m.deltaText({ status: 'none', line: 'No earlier eligible Claude report to compare.' }).text, '—');
+  assert.equal(m.deltaText(null).text, '—');
 });
 
 // ---------------------------------------------------------------------------

@@ -28,6 +28,16 @@ export function returnWords(position) {
   return { text: pctText(r.return_pct), tone: r.return_pct > 0 ? 'pos' : r.return_pct < 0 ? 'neg' : '', title: `${r.status === 'realized' ? 'Realized' : 'Unrealized'}; ${vs}` };
 }
 
+// MFE / MAE (item 55): the best and worst hourly price against the entry, in
+// words and tone; "—" with the reason when the series does not cover the span.
+export function excursionWords(position, which) {
+  const e = position && position.excursion;
+  const v = e && e.status === 'known' ? (which === 'mfe' ? e.max_favorable_pct : e.max_adverse_pct) : null;
+  if (!isNum(v)) return { text: '—', tone: '', title: e && e.why ? e.why : 'No excursion.' };
+  const at = which === 'mfe' ? e.max_favorable_at : e.max_adverse_at;
+  return { text: pctText(v), tone: v > 0 ? 'pos' : v < 0 ? 'neg' : '', title: `${which === 'mfe' ? 'Highest' : 'Lowest'} hourly price against the entry, ${at}; ${e.readings} hourly readings` };
+}
+
 // The book's summary line: the counts, then its own note or median.
 export function summaryLine(book) {
   const c = (book && book.counts) || { open: 0, closed: 0, voided: 0 };

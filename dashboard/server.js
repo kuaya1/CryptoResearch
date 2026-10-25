@@ -1325,6 +1325,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   // What happened after each report (core/report-outcomes.js): read only,
   // computed from the stored price records on request.
   // The paper book (core/paper.js): read only, apart from the portfolio.
+  route('GET', '/api/tickets/candidates', () => coherent(() => ({ format: 'cr-pilot-board@1', writes_nothing: true, rows: tickets.candidateBoard(ws) })));
   route('GET', '/api/paper', () => coherent(() => require('./core/paper').book(ws)));
   route('GET', '/api/research/outcomes', () => coherent(() => require('./core/report-outcomes').deskOutcomes(ws)));
   // The daily brief (core/brief-daily.js): read only, nothing stored.
