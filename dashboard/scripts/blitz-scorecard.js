@@ -72,29 +72,68 @@ function branchesWaiting(cwd, main, now) {
   return row(m.id, m.measure, m.target, NM, n, reads, `${n} items wait now, within the cap of ${cap}; earlier moments were not recorded.`);
 }
 
+// Backlog heads: the second parent of each backlog merge on main (a merge whose
+// subject names a claude/backlog-* branch, or whose merged commits carry a
+// Backlog-Item trailer) and the head of each waiting branch.
+function backlogHeads(cwd, main) {
+  const heads = new Map();
+  const merges = run(cwd, 'git', ['log', main, '--merges', '--format=%H %P']).out.split('\n').filter(Boolean);
+  for (const l of merges) {
+    const [, p1, p2] = l.split(' ');
+    if (!p2) continue;
+    const named = /claude\/backlog-/.test(run(cwd, 'git', ['log', '-1', '--format=%s', l.split(' ')[0]]).out);
+    if (named || trailers(run(cwd, 'git', ['log', `${p1}..${p2}`, '--format=%B']).out).length) heads.set(p2, { sha: p2, branch: null, kind: 'merged' });
+  }
+  for (const b of backlogBranches(cwd, main).filter((x) => !x.merged)) heads.set(b.sha, { sha: b.sha, branch: b.branch, kind: 'waiting' });
+  return [...heads.values()];
+}
+
+// Backlog heads tested on that exact commit: a head counts as covered only
+// with a test.yml run on its SHA. A run on an earlier commit of the branch
+// does not cover its head, and a head with no visible run (its branch may be
+// deleted) is said not visible, never counted as covered.
 function ciCoverage(cwd, main, gh) {
-  const reads = ['gh run list --workflow test.yml', 'git for-each-ref origin/claude/backlog-*'];
-  const m = { id: 'ci_coverage', measure: 'Backlog pushes with a CI run', target: '100%' };
+  const reads = ['gh run list --workflow test.yml (headSha)', `git log ${main || 'main'} --merges (backlog merges)`, 'git for-each-ref origin/claude/backlog-*'];
+  const m = { id: 'ci_coverage', measure: 'Backlog heads tested on that exact commit', target: '100%' };
+  if (!main) return unreadable(m.id, m.measure, m.target, reads, 'No main branch to read.');
   if (gh(cwd, ['auth', 'status']).status !== 0) return unreadable(m.id, m.measure, m.target, reads, 'gh is not signed in.');
-  const r = gh(cwd, ['run', 'list', '--workflow', 'test.yml', '--limit', '300', '--json', 'headBranch,conclusion']);
+  const r = gh(cwd, ['run', 'list', '--workflow', 'test.yml', '--limit', '500', '--json', 'headSha,headBranch,event']);
   if (r.status !== 0) return unreadable(m.id, m.measure, m.target, reads, `gh run list failed: ${r.err.slice(0, 200)}`);
   let runs;
   try { runs = JSON.parse(r.out || '[]'); } catch (_) { return unreadable(m.id, m.measure, m.target, reads, 'gh answered with unreadable JSON.'); }
-  const withRun = new Set(runs.map((x) => x.headBranch).filter((b) => /^claude\/backlog-/.test(b || '')));
-  const known = new Set([...withRun, ...(main ? backlogBranches(cwd, main).map((b) => b.branch) : [])]);
-  if (!known.size) return unreadable(m.id, m.measure, m.target, reads, 'No backlog branch is known.');
-  const covered = [...known].filter((b) => withRun.has(b)).length;
-  const pct = Math.round((covered / known.size) * 1000) / 10;
-  return row(m.id, m.measure, m.target, covered === known.size ? 'met' : 'not met', pct, reads, `${covered} of ${known.size} backlog branches have a run (one push per branch is read; a branch deleted without a run is not visible).`);
+  if (!Array.isArray(runs)) return unreadable(m.id, m.measure, m.target, reads, 'gh answered with unreadable JSON.');
+  const shas = new Set(runs.map((x) => x && x.headSha).filter(Boolean));
+  const heads = backlogHeads(cwd, main);
+  if (!heads.length) return unreadable(m.id, m.measure, m.target, reads, 'No backlog head is known.');
+  const covered = heads.filter((h) => shas.has(h.sha));
+  const missing = heads.filter((h) => !shas.has(h.sha));
+  const pct = Math.round((covered.length / heads.length) * 1000) / 10;
+  const name = (h) => `${(h.branch || 'merged head')} ${h.sha.slice(0, 7)}`;
+  return row(m.id, m.measure, m.target, missing.length === 0 ? 'met' : 'not met', pct, reads,
+    `${covered.length} of ${heads.length} backlog heads have a test.yml run on that exact commit.${missing.length ? ` No run visible for ${missing.map(name).join(', ')} (a deleted branch or an old run is not visible, so it is not counted as covered).` : ''}`);
 }
 
+// Only a structured record counts: audits/*/rollback-drill.json with
+// schema_version cr.rollback-drill.v1. Prose never does ("not passed" contains
+// "passed").
 function rollbackDrill(cwd) {
-  const reads = ['audits/** (a rollback-drill record)'];
+  const reads = ['audits/*/rollback-drill.json (cr.rollback-drill.v1)'];
   const m = { id: 'rollback_drill', measure: 'Rollback drill', target: 'passed once' };
-  const files = run(cwd, 'git', ['ls-files', 'audits']).out.split('\n').filter((f) => /rollback-drill/i.test(f));
-  if (!files.length) return unreadable(m.id, m.measure, m.target, reads, 'No rollback-drill record is in audits/.');
-  const text = files.map((f) => { try { return fs.readFileSync(path.join(cwd, f), 'utf8'); } catch (_) { return ''; } }).join('\n');
-  return row(m.id, m.measure, m.target, /\bpassed\b/i.test(text) ? 'met' : 'not met', /\bpassed\b/i.test(text) ? 'passed' : 'recorded, not passed', files);
+  const files = run(cwd, 'git', ['ls-files', 'audits']).out.split('\n').filter((f) => /^audits\/[^/]+\/rollback-drill\.json$/.test(f));
+  if (!files.length) return unreadable(m.id, m.measure, m.target, reads, 'No rollback-drill.json record is in audits/.');
+  const records = [];
+  const bad = [];
+  for (const f of files) {
+    try {
+      const rec = JSON.parse(fs.readFileSync(path.join(cwd, f), 'utf8'));
+      if (rec && rec.schema_version === 'cr.rollback-drill.v1' && (rec.result === 'passed' || rec.result === 'failed')) records.push({ f, rec });
+      else bad.push(f);
+    } catch (_) { bad.push(f); }
+  }
+  const passed = records.find((x) => x.rec.result === 'passed');
+  if (passed) return row(m.id, m.measure, m.target, 'met', 'passed', [passed.f], `From ${passed.rec.from} to ${passed.rec.to}.`);
+  if (records.length) return row(m.id, m.measure, m.target, 'not met', 'recorded, not passed', records.map((x) => x.f), `Latest result: ${records[records.length - 1].rec.result}.`);
+  return unreadable(m.id, m.measure, m.target, bad, `The record could not be read as cr.rollback-drill.v1: ${bad.join(', ')}.`);
 }
 
 // ---------------------------------------------------------------------------
