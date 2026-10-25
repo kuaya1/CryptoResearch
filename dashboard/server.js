@@ -1185,6 +1185,16 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     if (body && body.dry_run === true) return plan;
     return after(tickets.batchGate(ws, { below }));
   });
+  // Auto-pilot sync (tickets.js autoPilotSync): same `dry_run` and `expect`
+  // rules as the batch gate.
+  route('POST', '/api/tickets/auto-pilot-sync', (m, req, res, body) => {
+    const min = body && typeof body.min === 'number' ? body.min : null;
+    const plan = tickets.autoPilotSync(ws, { min, dryRun: true });
+    const expect = body && Number.isInteger(body.expect) ? body.expect : null;
+    if (expect !== null && plan.opted_in.length > expect) throw new HttpError(409, `${plan.opted_in.length} projects would enter the pilot now, not ${expect} as shown. Nothing was changed; look again and run it.`);
+    if (body && body.dry_run === true) return plan;
+    return after(tickets.autoPilotSync(ws, { min }));
+  });
   route('POST', '/api/projects/([^/]+)/tickets/pilot', (m, req, res, body) => after(tickets.setPilot(ws, pid(m[1]), body.on === true, { by: 'dashboard' })));
   // Exit quotes on every project in one click (forensics.js
   // approveAllExitQuotes): the plan first (a read), then Eric's approval with

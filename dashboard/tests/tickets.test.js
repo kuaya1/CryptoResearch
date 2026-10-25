@@ -1101,3 +1101,73 @@ test('batch gate: --below may lower Eric\'s filter, never raise it past the new-
   assert.throws(() => T.batchGate(s.ws, { below: 56, dryRun: true }), (e) => e.code === 'INVALID');
   assert.throws(() => T.batchGate(s.ws, { below: -1, dryRun: true }), (e) => e.code === 'INVALID');
 });
+
+// ---------------------------------------------------------------------------
+// Auto-pilot sync (backlog item 30)
+
+// Claude's current report as a given prompt version and grade (the stored
+// fixture is @1 and 60.5), for the cases the fixtures do not hold.
+function stubClaudeReport(t, { version = 'cr-research-prompt@6', grade = { status: 'firm', value: 62, display: '62' } } = {}) {
+  const compare = require('../core/compare');
+  const rubrics = require('../core/rubrics');
+  const realLatest = compare.latestByProvider;
+  const realGrade = rubrics.gradeAssessment;
+  compare.latestByProvider = (...a) => {
+    const l = realLatest(...a);
+    return l.claude ? { ...l, claude: { ...l.claude, assessment: { ...l.claude.assessment, prompt_version: version } } } : l;
+  };
+  rubrics.gradeAssessment = () => grade;
+  t.after(() => { compare.latestByProvider = realLatest; rubrics.gradeAssessment = realGrade; });
+}
+
+test('auto-pilot sync: a verified @6 project graded 45+ is opted in; 44, a low end under 45, withheld, @5, no report, archived and unverified are skipped with words; a second run is unchanged; dry run writes nothing', (t) => {
+  const s = withReport(t);
+  stubClaudeReport(t);
+  const projects = require('../core/projects');
+  const bare = projects.addProject(s.ws, { name: 'Bare Example (FICTIONAL)', symbol: 'BARE', official_website: 'https://bare-fictional.test', coingecko_id: 'bare-example-fictional', assets: [{ chain: 'other-chain', contract_address: 'FICTIONAL-CONTRACT-BARE' }], evidence: [{ url: 'https://bare-fictional.test', note: 'fictional' }], sector_profile: 'payfi-credit@1' }).project_id;
+  const tree = hashTree(s.root);
+  const dry = T.autoPilotSync(s.ws, { dryRun: true });
+  assert.deepEqual(hashTree(s.root), tree, 'a dry run writes nothing');
+  assert.deepEqual(dry.opted_in.map((r) => r.project_id), [s.pid]);
+  assert.ok(dry.skipped.some((r) => r.project_id === bare && /No eligible Claude report/.test(r.reason)));
+  assert.equal(T.pilotQueue(s.ws).length, 0);
+  const run = T.autoPilotSync(s.ws);
+  assert.deepEqual(run.opted_in.map((r) => r.project_id), [s.pid]);
+  assert.equal(T.pilotQueue(s.ws).length, 1);
+  const again = T.autoPilotSync(s.ws);
+  assert.equal(again.opted_in.length, 0);
+  assert.deepEqual(again.unchanged.map((r) => r.project_id), [s.pid]);
+  // The floor is the default 45, adjustable.
+  assert.equal(T.autoPilotSync(s.ws, { dryRun: true }).min, 45);
+  assert.throws(() => T.autoPilotSync(s.ws, { min: 101 }), /--min/);
+});
+
+test('auto-pilot sync: below the floor, a range by its low end, withheld, an older prompt and an archived project are skipped', (t) => {
+  const check = (stub, setupFn) => {
+    const s = withReport(t);
+    stubClaudeReport(t, stub);
+    if (setupFn) setupFn(s);
+    const r = T.autoPilotSync(s.ws);
+    assert.equal(r.opted_in.length, 0);
+    assert.equal(T.pilotQueue(s.ws).length, 0, 'nothing opted in');
+    return r.skipped.find((x) => x.project_id === s.pid);
+  };
+  assert.match(check({ grade: { status: 'firm', value: 44, display: '44' } }).reason, /Grade 44 is under 45/);
+  assert.match(check({ grade: { status: 'range', low: 40, high: 60, display: '40–60' } }).reason, /Grade 40 is under 45/);
+  assert.match(check({ grade: { status: 'withheld', display: 'Withheld' } }).reason, /withheld/i);
+  assert.match(check({ version: 'cr-research-prompt@5' }).reason, /@5/);
+  assert.match(check({}, (s) => require('../core/projects').archiveProject(s.ws, s.pid)).reason, /Archived/);
+  // A range whose low end is 45 or more qualifies.
+  const q = withReport(t);
+  stubClaudeReport(t, { grade: { status: 'range', low: 46, high: 60, display: '46–60' } });
+  assert.equal(T.autoPilotSync(q.ws).opted_in.length, 1);
+});
+
+test('auto-pilot sync: never opts a project out', (t) => {
+  const s = withReport(t);
+  stubClaudeReport(t, { version: 'cr-research-prompt@5' });
+  T.setPilot(s.ws, s.pid, true);
+  const r = T.autoPilotSync(s.ws);
+  assert.equal(r.opted_in.length, 0);
+  assert.equal(T.pilotQueue(s.ws).length, 1, 'still in the pilot');
+});
