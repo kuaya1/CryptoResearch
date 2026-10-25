@@ -75,7 +75,7 @@ test('daily brief: a PM card waiting is listed with its age and link; held, mode
   const differ = byId(out, 'models_differ');
   assert.equal(differ.state, 'ok');
   assert.ok(differ.lines.every((l) => /^#\/project\/.+\/compare$/.test(l.link) || l.link === null));
-  assert.equal(out.sections.map((x) => x.id).join(), 'pm_cards,invalidated,stale_basis,pilot_exits,held,research_waiting,models_differ,spread,freshness');
+  assert.equal(out.sections.map((x) => x.id).join(), 'pm_cards,invalidated,stale_basis,ticket_repairs,pilot_exits,held,research_waiting,models_differ,spread,freshness');
 });
 
 test('daily brief: a ticket invalidated since a time is listed with the reading that fired; one before it is not; no since lists every one', (t) => {
@@ -243,4 +243,30 @@ test('daily brief: the CLI prints the text and its hash, or the JSON', async (t)
   assert.match(text.stdout, /SHA-256 of this text: [0-9a-f]{64}/);
   assert.match(text.stdout, /PM cards waiting for you/);
   assert.deepEqual(hashTree(s.root), tree, 'the CLI wrote nothing');
+});
+
+test('daily brief (item 39): tickets waiting on a repair or a fresh price are listed with words and links; a healthy desk reads None right now; an unreadable ticket makes it partial; a read writes nothing', (t) => {
+  const s = setup(t);
+  const saved = savedTicket(t, s);
+  const now = Date.parse(saved.receipt.saved_at) + 3600000;
+  const healthy = byId(B.brief(s.ws, { now }), 'ticket_repairs');
+  assert.equal(healthy.state, 'ok');
+  assert.equal(healthy.lines[0].text, 'None right now.');
+  const real = T.summary;
+  const tree = hashTree(s.root);
+  T.summary = (...a) => ({ ...real(...a), decision: { action: 'approve', paper: 'missing' } });
+  const paper = byId(B.brief(s.ws, { now }), 'ticket_repairs');
+  assert.match(paper.lines[0].text, /paper position is missing: complete it on the card \(Complete paper position\) or `tickets reconcile`\./);
+  assert.equal(paper.lines[0].link, `#/?p=${s.pid}`);
+  T.summary = (...a) => ({ ...real(...a), status: 'pending_pm_review', admission: { held_risk: { reason: 'The stored price is 3 days old.' } } });
+  const held = byId(B.brief(s.ws, { now }), 'ticket_repairs');
+  assert.match(held.lines[0].text, /held to \$0 by the admission check \(The stored price is 3 days old\): refresh prices, then ask for a new ticket \(refresh\)\./);
+  assert.equal(held.lines[0].link, `#/?p=${s.pid}`);
+  T.summary = () => ({ unavailable: true, error: 'unreadable (FICTIONAL)' });
+  const bad = byId(B.brief(s.ws, { now }), 'ticket_repairs');
+  T.summary = real;
+  assert.equal(bad.state, 'partial');
+  assert.equal(bad.count, null);
+  assert.equal(bad.unreadable_count, 1);
+  assert.deepEqual(hashTree(s.root), tree, 'a read writes nothing');
 });
