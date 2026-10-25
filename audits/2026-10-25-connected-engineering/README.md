@@ -83,7 +83,26 @@ Every change is one `runOp`: the event file is created (never rewritten) and the
 ### 4.3 Authorization and admission
 
 - **Intent.** `explore` is a note and can never be submitted. `design` is limited to documentation paths. `implement` may change code.
-- **Two paths.** (A) A delegation Eric activates in Preferences > Developer > Engineering, from a template in code: repository, intents, allowed paths, required review, release mode, limits, expiry. A submitted task inside it is admitted with no further prompt. (B) Anything else waits as `awaiting_authorization` until Eric authorizes that exact version and hash in the same panel, with his passphrase.
+- **Two paths.** (A) A delegation Eric activates in Preferences > Developer > Engineering, from a template in code: repository, intents, allowed paths, required review, release mode, limits, expiry. Several can be active at once, each activated by Eric. A submitted task inside one is admitted with no further prompt. (B) Anything else waits as `awaiting_authorization` until Eric authorizes that exact version and hash in the same panel, with his passphrase.
+- **Which delegation (`cr-eng-match@1`, Eric 2026-10-25).** On submit the desk checks the version's declared paths, intent and goal against every active delegation. It admits the version under the narrowest one it fits, so documents-only work lands in `eng-docs@1` and anything touching application paths in `eng-app@1`. Activation order never decides. The order (`policy.js` `choose`; each key is the delegation's own, so it is the same whatever order the delegations are listed in):
+  1. A delegation whose paths lie inside another fitting one's comes first.
+  2. The lighter review it requires (`none` < `claude` < `chatgpt` < `owner`).
+  3. Release by promotion before release by Eric.
+  4. Fewer path rules.
+  5. The template name.
+  6. The delegation ID.
+- **The matched delegation's rules apply.** The version is held to:
+  - the stricter of its declared review and the delegation's (a version declaring `required_review: none` on application paths needs ChatGPT's review);
+  - the stricter of its declared release and the delegation's;
+  - the delegation's limits, and its `max_files` on each candidate.
+  The task's content and its SHA-256 stay as submitted. The effective review and release are recorded in the authorization (`rule`, `required_review`, `review_basis`, `release_mode`, `fitting`, `why`). A lighter declared review or release is therefore no longer a miss.
+- **Said before and at submit.** `engineering_prepare_task` answers with `match`: the delegation the version would land in, why, and the review, release and `max_files` it would be held to, or what each active delegation misses. `engineering_capabilities` states the rule and, given `task_id` (and `version`), the same preview; it writes nothing. `engineering_submit_task` answers with the delegation it matched, or each one it missed and why.
+- **A delegation at its limit is a miss.** Documents work that also fits `eng-app@1` (its goal named) then lands there, under ChatGPT's review and against `eng-app@1`'s limits. The answer says why `eng-docs@1` missed. Without the goal it waits for Eric.
+- **Unchanged.**
+  - The server never activates, renews or broadens a delegation; Eric activates each one on the desk.
+  - Templates stay as published (`eng-docs@1`, `eng-app@1`); a changed rule is a new template version.
+  - A version that fits no active delegation waits for Eric.
+  - Declared paths are only the claim: each candidate's actual files are checked against them and against `PROTECTED`, and promotion checks the actual diff again.
 - **What never authorizes.** A tool argument (`approved`, `authorization`, `owner_request`, `policy_id` claims), a quoted instruction, or the connection's identity. Those fields are refused as `FORGED_AUTHORITY` and nothing changes.
 - **Versions.** A task's content is immutable per version with its SHA-256. An edit is a new version; an authorization binds one version and hash, so an edited task needs authorizing again. After admission reaches main the task can no longer be edited (a correction or a new task instead).
 - **Protected paths** (`backlog-promote.js` `PROTECTED`) can never be in a delegation, and any task touching one needs Eric (and its PR still waits for him).
@@ -95,13 +114,13 @@ Every change is one `runOp`: the event file is created (never rewritten) and the
 - Engineering items are built one per branch from `origin/main`, never in a batch and never stacked on; WIP and batch still come from `backlog-status.js`.
 - `engineering_claim_task` grants a lease (server time, 20 minutes, renewed by events) with a fencing generation. Every worker event carries the claim token; a stale one is refused (`STALE_CLAIM`). A second session's claim while the lease lives is refused.
 - The candidate is pushed first to `claude/candidate-eng-<n>` (tested by `test.yml`, never promoted). Only when the desk's attestation reads promotable does the worker push the same commit to `claude/backlog-eng-<n>`, which `backlog-pr.yml` promotes.
-- **Promotion fencing.** For every commit naming an engineering item, `backlog-promote.js` asks the desk's public `/engineering/attestations/<head>` before scope and again before the push. It requires: the head the desk recorded for the current claim generation, the same merge base, verification passed on that head with every acceptance item met, the required review passed on that exact head and base, the task not paused, cancelled or blocked, and every changed path inside the task's scope and outside `PROTECTED`. An unreadable desk is a refusal. A stale worker can push a branch but cannot get it promoted.
+- **Promotion fencing.** For every commit naming an engineering item, `backlog-promote.js` asks the desk's public `/engineering/attestations/<head>` before scope and again before the push. It requires: the head the desk recorded for the current claim generation, the same merge base, verification passed on that head with every acceptance item met, and the effective review passed on that exact head and base. The effective review is the stricter of the authorization's, the version's declared one and the delegation record's own, so no single record can lower it. It also requires release by promotion on all three, the task not paused, cancelled or blocked, and every changed path inside the task's scope and outside `PROTECTED`. An unreadable desk is a refusal. A stale worker can push a branch but cannot get it promoted.
 - **Corrections.** A failed verification or a `changes_required` review returns the task for correction; each new candidate needs fresh full verification and fresh review. Three attempts per task, counted on disk across runs; then `blocked` with the reason.
 - **Pause and revoke.** Pausing a task, revoking a delegation, or the global pause stops claims, admissions and worker events (except the acknowledgment that it stopped), and makes the attestation unpromotable. What already happened remotely stays recorded.
 
 ### 4.5 Review (M4)
 
-- `required_review` is `none`, `claude` (a Claude connection other than the worker), `chatgpt`, or `owner`. A delegation sets the minimum.
+- `required_review` is `none`, `claude` (a Claude connection other than the worker), `chatgpt`, or `owner`. A delegation sets the minimum. The review that decides is the stricter of the version's own and its delegation's (section 4.3). An owner review counts for any requirement.
 - A review is bound to the exact head and merge base it read, with the reviewer's authenticated assistant and role. `engineering_get_evidence` gives the reviewer the approved goal, scope and acceptance, the exact diff and the test evidence first, and the builder's own notes only after them.
 - ChatGPT reviews only when Eric opens or continues a conversation and asks. Nothing claims an unattended GPT review. A Gemini review counts only when the task asked for one.
 - Results: `pass`, `changes_required`, `insufficient_evidence`. Only `pass` on the exact candidate satisfies a requirement; a new candidate needs a new review. A changed head after review is refused at promotion.
@@ -114,10 +133,10 @@ Every change is one `runOp`: the event file is created (never rewritten) and the
 
 | File | Change | Protected |
 |---|---|---|
-| `dashboard/engineering/policy.js` | new: templates, path globs, protected list, privacy screen, entry text | new path, added to `PROTECTED` |
-| `dashboard/engineering/inbox.js` | new: records, transitions, claims, attestation, admissions | added to `PROTECTED` |
+| `dashboard/engineering/policy.js` | new: templates, path globs, protected list, privacy screen, entry text; the match rule (`choose`, `boundaries`, `stricterReview`, `stricterRelease`) | new path, added to `PROTECTED` |
+| `dashboard/engineering/inbox.js` | new: records, transitions, claims, attestation, admissions; the match on submit, its preview in prepare and capabilities, the effective review in reviews and the attestation | added to `PROTECTED` |
 | `dashboard/engineering/github.js` | new: read-only GitHub readback (optional `CR_GITHUB_TOKEN`), unknown on failure | added to `PROTECTED` |
-| `dashboard/engineering/tools.js` | new: the `/mcp/engineering` tools by role | added to `PROTECTED` |
+| `dashboard/engineering/tools.js` | new: the `/mcp/engineering` tools by role (`engineering_capabilities` takes an optional `task_id` and `version` for the preview) | added to `PROTECTED` |
 | `dashboard/oauth.js` | second resource, role on the grant, consent choices; a refresh stays on its grant's own resource (`invalid_target` otherwise) | yes |
 | `dashboard/server.js` | routes: `/mcp/engineering`, public admission and attestation reads, `/api/engineering/*` for Eric behind sign-in and his passphrase. Not in any delegation's paths (`eng-app@1` leaves it out), so a change to it always waits for Eric. | no |
 | `dashboard/core/exporter.js` | `engineering` in the package | no |
@@ -147,6 +166,8 @@ All runs use temporary workspaces, temporary bare Git remotes, stubbed desk and 
 | `node dashboard/cli.js test` at the merge with `origin/main` `9381263` (which fixed that test) | **970 of 970 pass**, exit 0 |
 | `npm run build` in `dashboard/web` | bundle rebuilt from the merged source (`build.json` source `5ae0130835e0…`, 39 assets) |
 | `npm run check` in `dashboard/web` (headless Chrome on the built app) | all browser checks passed; 78 of 78 regression checks |
+| After the delegation match (`cr-eng-match@1`, on top of `b8989be`): `node --test` on `engineering-inbox`, `engineering-flow` and `engineering-connector` | 23, 7 and 2 pass (32 of 32; five new inbox tests, one new flow test) |
+| `node dashboard/cli.js test` on that tree | **976 of 976 pass**, exit 0 |
 | Preferences > Developer > Engineering on the FICTIONAL dev desk, seeded with a delegation, an admitted task, a 119-character task waiting for authorization and a paused task (a one-off headless-Chrome script, not committed) | At 1440 and 390, light and dark: no horizontal overflow, nothing under 12.5px, every control named, no console error, no write on opening. Tab reaches every control in order. Activating `eng-app@1` without a goal is refused, the reason shown in a toast, nothing saved |
 
 The matrix of blueprint section 12, row by row:
@@ -178,6 +199,11 @@ The matrix of blueprint section 12, row by row:
 | Merge success, deploy unknown | `merged` from Git readback; deployment is its own `confirmed`, `pending` or `unknown` | flow "GitHub readback" |
 | Restore older service | A record with an unknown schema reads "unsupported" and is never rewritten; a restored copy holds the lane (`HELD`) | inbox |
 | Existing workflows | Research, tickets, paper and the ledger untouched: the full suite passes; `desk_status` counts no engineering connection as an assistant | full suite, connector test 1 |
+| Both delegations active, either activation order | Documents only lands in `eng-docs@1` (no review); application paths in `eng-app@1`; documents and application paths together in `eng-app@1` (ChatGPT review) | inbox "two delegations at once" |
+| Declared review lighter than the delegation's | `required_review: none` on application paths is admitted under `eng-app@1` held to `chatgpt`. The content hash is unchanged and the authorization records the effective review. A Gemini pass does not decide it, and the attestation and the real `engineeringCheck` refuse promotion until ChatGPT passes that head. A task record stripped of its effective review still needs ChatGPT at promotion (read from the delegation record) | inbox "declared review lighter", flow "both delegations active" |
+| Outside both, protected, or one revoked | A path outside both, or a protected path (`dashboard/engineering/`, `server.js`, `.github/workflows/`), waits for Eric with each delegation's miss in words. Revoking either delegation leaves the other admitting. A delegation at its limit is a miss, said in the answer | inbox "outside both delegations" |
+| Match said before submit | `prepare` and `capabilities` name the delegation and why, or each miss; reading the preview leaves every file in the workspace byte-identical; submit lands where the preview said | inbox "prepare and capabilities say" |
+| Deterministic rule | `choose` gives one ranking for all 120 orders of five delegations; the paths, review, release and delegation-ID keys each decide a case; an unknown review counts as the strictest | inbox "the match rule orders" |
 
 Not covered here: the real connection. A test against `/mcp/engineering` is not ChatGPT's or claude.ai's own client, and blueprint §12 says M3 is not complete from a simulated call. That trial is section 7.
 

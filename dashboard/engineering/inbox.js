@@ -136,9 +136,13 @@ function authorizationHolds(ws, t, op) {
   return { ok: true };
 }
 
+// The review that decides a task: the stricter of its version's declared
+// review and the one its authorization recorded (inside a delegation, the
+// stricter of the declared review and the delegation's).
+const requiredReview = (t) => P.stricterReview(t.required_review || 'none', t.authorization ? t.authorization.required_review : null);
+
 // The latest review per reviewer kind on the current candidate.
-function reviewState(t) {
-  const need = t.required_review || 'none';
+function reviewState(t, need = requiredReview(t)) {
   const cand = t.candidate;
   const onHead = cand ? (t.reviews || []).filter((r) => r.head_sha === cand.head_sha && r.merge_base_sha === cand.merge_base_sha) : [];
   const counts = (r) => r.reviewer.kind === 'owner' || r.reviewer.kind === need;
@@ -194,7 +198,7 @@ function view(ws, t, who, { now = Date.now() } = {}) {
     content_sha256: t.versions[t.versions.length - 1].content_sha256,
     content,
     executable: t.intent !== 'explore',
-    authorization: t.authorization ? { kind: t.authorization.kind, version: t.authorization.version, policy_id: t.authorization.policy_id || null, template: t.authorization.template || null, at: t.authorization.at, holds: authorizationHolds(ws, t).ok } : null,
+    authorization: t.authorization ? { kind: t.authorization.kind, version: t.authorization.version, policy_id: t.authorization.policy_id || null, template: t.authorization.template || null, rule: t.authorization.rule || null, why: t.authorization.why || null, required_review: requiredReview(t), review_basis: t.authorization.review_basis || null, release_mode: t.authorization.release_mode || null, at: t.authorization.at, holds: authorizationHolds(ws, t).ok } : null,
     admission: t.admission ? { number: t.admission.number, state: t.admission.state, entry_sha256: t.admission.entry_sha256 || null, branch: t.admission.number ? `claude/admission-${t.task_id}` : null, confirmed_main_sha: t.admission.confirmed_main_sha || null } : null,
     lease,
     generation: t.generation,
@@ -297,7 +301,9 @@ function prepareTask(ws, who, args = {}, opts = {}) {
   // A replayed request names the task it made the first time.
   const tid = (r.result && r.result.task_id) || id;
   const t = readRaw(ws, rel.task(tid));
-  return { task_id: tid, version: t.current_version, content_sha256: t.versions[t.versions.length - 1].content_sha256, status: t.status, executable: content.intent !== 'explore', unchanged: Boolean(r.result && r.result.unchanged) || Boolean(r.replayed), verified: r.verified, says: content.intent === 'explore' ? `Saved ${id} as a note (explore). Nothing is queued and nothing will be built.` : `Saved ${id} version ${t.current_version} (sha256 ${t.versions[t.versions.length - 1].content_sha256.slice(0, 12)}). It is a draft: nothing is queued until it is submitted.`, next_action: nextAction(t, now) };
+  // Which delegation this version would be admitted under if submitted now.
+  const match = content.intent === 'explore' ? null : matchForTask(ws, t, t.current_version, now);
+  return { task_id: tid, version: t.current_version, content_sha256: t.versions[t.versions.length - 1].content_sha256, status: t.status, executable: content.intent !== 'explore', unchanged: Boolean(r.result && r.result.unchanged) || Boolean(r.replayed), verified: r.verified, match, says: content.intent === 'explore' ? `Saved ${id} as a note (explore). Nothing is queued and nothing will be built.` : `Saved ${id} version ${t.current_version} (sha256 ${t.versions[t.versions.length - 1].content_sha256.slice(0, 12)}). It is a draft: nothing is queued until it is submitted. ${match.says}`, next_action: nextAction(t, now) };
 }
 
 function openUnder(ws, policyId, exceptId) {
@@ -305,6 +311,46 @@ function openUnder(ws, policyId, exceptId) {
 }
 function admittedSince(ws, policyId, since, exceptId) {
   return taskIds(ws).map((id) => readRaw(ws, rel.task(id))).filter((t) => t && t.task_id !== exceptId && supported(t, S.task) && t.authorization && t.authorization.policy_id === policyId && Date.parse(t.authorization.at) > since).length;
+}
+
+// Every active delegation, whether a version fits it (and why not), and the
+// one it is admitted under (P.choose, P.MATCH_RULE). Reads only.
+function matchOf(ws, content, { now, exceptId = null, op = null }) {
+  const active = policies(ws, op).filter((p) => policyActive(p, now));
+  const rows = active.map((p) => ({ policy: p, reasons: P.fits(p, content, { now, openUnderPolicy: openUnder(ws, p.policy_id, exceptId), admittedLastDay: admittedSince(ws, p.policy_id, now - 86400000, exceptId) }) }));
+  const pick = P.choose(rows.filter((r) => !r.reasons.length).map((r) => r.policy));
+  return { active, rows, pick };
+}
+const missedText = (m) => (m.active.length ? `outside every active delegation: ${m.rows.map((r) => `${r.policy.policy_id} (${r.policy.template}): ${r.reasons.join('; ')}`).join(' | ')}` : 'no delegation is active');
+const reviewWords = (b) => `review ${b.required_review}${b.review_basis.declared !== b.required_review ? ` (declared ${b.review_basis.declared}; the delegation requires ${b.review_basis.delegation})` : ''}`;
+// The match in words for a connection: the delegation it is (or would be)
+// admitted under and the rules it is held to, or what each delegation misses.
+function matchView(m, content, { would }) {
+  const out = { rule: P.MATCH_RULE, delegation: null, considered: m.rows.map((r) => ({ policy_id: r.policy.policy_id, template: r.policy.template, fits: !r.reasons.length, chosen: Boolean(m.pick && m.pick.policy === r.policy), reasons: r.reasons })) };
+  if (m.pick) {
+    const p = m.pick.policy;
+    const b = P.boundaries(p, content);
+    out.delegation = { policy_id: p.policy_id, template: p.template, title: p.title, decided_by: m.pick.decided_by, why: m.pick.why, required_review: b.required_review, review_basis: b.review_basis, release_mode: b.release_mode, limits: b.limits, expires_at: p.expires_at };
+    out.says = `${would ? 'Would be admitted' : 'Admitted'} under ${p.template} (${p.policy_id}), ${m.pick.why}. Held to ${reviewWords(b)}, release ${b.release_mode}, at most ${b.limits.max_files} files.`;
+  } else out.says = `${would ? 'Would wait' : 'Waits'} for Eric to authorize this exact version on the desk: ${missedText(m)}.`;
+  return out;
+}
+// The same for an authorization already recorded.
+function authorizedView(t) {
+  const a = t.authorization;
+  if (a.kind !== 'policy') return { rule: null, delegation: null, considered: [], says: `Authorized by Eric for version ${a.version}; held to review ${requiredReview(t)}.` };
+  const b = { required_review: requiredReview(t), review_basis: a.review_basis || { declared: t.required_review, delegation: null }, release_mode: a.release_mode || null };
+  return { rule: a.rule || null, delegation: { policy_id: a.policy_id, template: a.template, why: a.why || null, required_review: b.required_review, review_basis: b.review_basis, release_mode: b.release_mode }, considered: [], says: `Admitted under ${a.template} (${a.policy_id})${a.why ? `, ${a.why}` : ''}. Held to review ${b.required_review}.` };
+}
+// What a saved version of a task would match now, for a connection deciding
+// whether to submit it. Writes nothing.
+function matchForTask(ws, t, version, now) {
+  if (t.intent === 'explore') return { rule: P.MATCH_RULE, delegation: null, considered: [], says: 'An explore note is never submitted or built.' };
+  if (t.authorization && t.authorization.version === version) return authorizedView(t);
+  const v = loadVersion(ws, t.task_id, version);
+  const out = matchView(matchOf(ws, v.content, { now, exceptId: t.task_id }), v.content, { would: true });
+  if (loadState(ws).paused) out.says += ' Engineering is paused on the desk: a submit is refused until Eric resumes it.';
+  return out;
 }
 
 function submitTask(ws, who, args = {}, opts = {}) {
@@ -322,31 +368,33 @@ function submitTask(ws, who, args = {}, opts = {}) {
     if (t.intent === 'explore') fail('NOT_EXECUTABLE', `${id} is an explore note: it is never submitted or built. Prepare a design or implement task for work to be done.`);
     if (!['prepared', 'awaiting_authorization'].includes(t.status)) return { unchanged: true };
     const v = loadVersion(ws, id, t.current_version, ctx.op);
-    const active = policies(ws, ctx.op).filter((p) => policyActive(p, now));
-    const tried = [];
-    for (const p of active) {
-      const why = P.fits(p, v.content, { now, openUnderPolicy: openUnder(ws, p.policy_id, id), admittedLastDay: admittedSince(ws, p.policy_id, now - 86400000, id) });
-      if (!why.length) {
-        t.authorization = { kind: 'policy', policy_id: p.policy_id, template: p.template, version: t.current_version, content_sha256: last.content_sha256, at: iso(now) };
-        t.admission = { number: null, state: 'unbound', entry_sha256: null, history: [] };
-        setStatus(t, 'admitted', `inside delegation ${p.policy_id} (${p.template})`, now);
-        ctx.emit('admitted', { kind: 'policy', policy_id: p.policy_id, version: t.current_version, content_sha256: last.content_sha256 }, byOf(who));
-        return { unchanged: false };
-      }
-      tried.push(`${p.policy_id} (${p.template}): ${why.join('; ')}`);
+    // The narrowest delegation it fits, never the first activated; its
+    // review, release and limits apply. The content and its hash are as
+    // submitted: the effective rules live in the authorization.
+    const m = matchOf(ws, v.content, { now, exceptId: id, op: ctx.op });
+    const match = matchView(m, v.content, { would: false });
+    if (m.pick) {
+      const p = m.pick.policy;
+      const b = P.boundaries(p, v.content);
+      t.authorization = { kind: 'policy', policy_id: p.policy_id, template: p.template, version: t.current_version, content_sha256: last.content_sha256, at: iso(now), rule: P.MATCH_RULE, why: m.pick.why, fitting: m.pick.ranked.map((x) => x.policy_id), required_review: b.required_review, review_basis: b.review_basis, release_mode: b.release_mode };
+      t.admission = { number: null, state: 'unbound', entry_sha256: null, history: [] };
+      setStatus(t, 'admitted', `inside delegation ${p.policy_id} (${p.template}), ${m.pick.why}; ${reviewWords(b)}`, now);
+      ctx.emit('admitted', { kind: 'policy', policy_id: p.policy_id, template: p.template, version: t.current_version, content_sha256: last.content_sha256, rule: P.MATCH_RULE, decided_by: m.pick.decided_by, fitting: t.authorization.fitting, required_review: b.required_review, release_mode: b.release_mode }, byOf(who));
+      return { unchanged: false, match };
     }
-    const reason = active.length ? `outside every active delegation: ${tried.join(' | ')}` : 'no delegation is active';
-    if (t.status === 'awaiting_authorization' && t.status_reason === reason) return { unchanged: true };
+    const reason = missedText(m);
+    if (t.status === 'awaiting_authorization' && t.status_reason === reason) return { unchanged: true, match };
     setStatus(t, 'awaiting_authorization', reason, now);
     ctx.emit('awaiting_authorization', { version: t.current_version, content_sha256: last.content_sha256, reason }, byOf(who));
-    return { unchanged: false };
+    return { unchanged: false, match };
   });
   const t = readRaw(ws, rel.task(id));
+  const match = (r.result && r.result.match) || (t.authorization && t.authorization.version === t.current_version ? authorizedView(t) : null);
   const words = {
-    admitted: `Admitted inside Eric's delegation ${t.authorization && t.authorization.policy_id}. It is not on the backlog yet: the builder adds it as a numbered item, then builds it.`,
+    admitted: `Admitted inside Eric's delegation ${t.authorization && t.authorization.policy_id} (${t.authorization && t.authorization.template}), held to review ${requiredReview(t)}. It is not on the backlog yet: the builder adds it as a numbered item, then builds it.`,
     awaiting_authorization: `Not admitted: ${t.status_reason}. It waits for Eric to authorize version ${t.current_version} on the desk. Nothing is queued.`,
   }[t.status] || `Already ${t.status}; nothing changed.`;
-  return { task_id: id, version: t.current_version, status: t.status, admitted: t.status === 'admitted' || ['queued', 'claimed', 'implementing', 'verifying', 'review_pending', 'ready_for_promotion', 'merged'].includes(t.status), unchanged: Boolean(r.result && r.result.unchanged), verified: r.verified, says: words, next_action: nextAction(t, now) };
+  return { task_id: id, version: t.current_version, status: t.status, admitted: t.status === 'admitted' || ['queued', 'claimed', 'implementing', 'verifying', 'review_pending', 'ready_for_promotion', 'merged'].includes(t.status), unchanged: Boolean(r.result && r.result.unchanged), verified: r.verified, match, says: words, next_action: nextAction(t, now) };
 }
 
 // --- owner ------------------------------------------------------------------------
@@ -411,7 +459,8 @@ function authorizeTask(ws, who, id, { version, content_sha256 } = {}, opts = {})
       if (t.authorization && t.authorization.version === t.current_version) return { unchanged: true };
       fail('NOT_WAITING', `${id} is ${t.status}, not waiting for your authorization.`);
     }
-    t.authorization = { kind: 'owner', version: t.current_version, content_sha256: last.content_sha256, at: iso(now), receipt: P.sha256(`${id}|${t.current_version}|${last.content_sha256}|${iso(now)}`) };
+    const v = loadVersion(ws, id, t.current_version, ctx.op);
+    t.authorization = { kind: 'owner', version: t.current_version, content_sha256: last.content_sha256, at: iso(now), receipt: P.sha256(`${id}|${t.current_version}|${last.content_sha256}|${iso(now)}`), required_review: v.content.required_review, release_mode: v.content.release_mode };
     t.admission = { number: null, state: 'unbound', entry_sha256: null, history: [] };
     setStatus(t, 'admitted', 'authorized by Eric', now);
     ctx.emit('authorized_by_owner', { version: t.current_version, content_sha256: last.content_sha256 }, { kind: 'owner' });
@@ -776,12 +825,13 @@ function saveReview(ws, who, args = {}, opts = {}) {
     const dup = t.reviews.find((x) => x.head_sha === c.head_sha && x.reviewer.kind === reviewer.kind && x.reviewer.conn === reviewer.conn && x.findings_sha256 === fsha);
     if (dup) { out = { review_id: dup.review_id, unchanged: true }; return out; }
     const rid = `rev-${ymd(now)}-${rnd(3)}`;
-    const assigned = reviewer.kind === 'owner' || reviewer.kind === t.required_review || v.content.reviews_requested.includes(reviewer.kind);
+    const need = requiredReview(t);
+    const assigned = reviewer.kind === 'owner' || reviewer.kind === need || v.content.reviews_requested.includes(reviewer.kind);
     const limited = !(read.diff && read.tests);
     ctx.op.writeJson(rel.review(t.task_id, rid), { schema_version: S.review, review_id: rid, task_id: t.task_id, version: t.current_version, head_sha: c.head_sha, merge_base_sha: c.merge_base_sha, diff_sha256: c.diff_sha256, result, findings, method: args.method ? String(args.method).slice(0, 300) : null, read, limited, summary: args.summary ? String(args.summary).slice(0, 2000) : null, reviewer, assigned, at: iso(now) }, { mode: 'create' });
     t.reviews.push({ review_id: rid, head_sha: c.head_sha, merge_base_sha: c.merge_base_sha, result, reviewer, assigned, limited, findings_sha256: fsha, at: iso(now) });
     ctx.emit('review_saved', { review_id: rid, result, reviewer: reviewer.kind, head_sha: c.head_sha, assigned, limited }, byOf(who));
-    const deciding = reviewer.kind === 'owner' || reviewer.kind === t.required_review;
+    const deciding = reviewer.kind === 'owner' || reviewer.kind === need;
     if (deciding && result === 'changes_required' && ['review_pending', 'ready_for_promotion', 'verifying'].includes(t.status)) {
       const cid = `cor-${ymd(now)}-${rnd(3)}`;
       t.corrections.push({ correction_id: cid, at: iso(now), by: reviewer, head_sha: c.head_sha, review_id: rid, resolved_by_head: null });
@@ -825,7 +875,7 @@ function requestCorrection(ws, who, args = {}, opts = {}) {
   });
   if (r.replayed && r.result) cid = r.result.correction_id;
   const t = readRaw(ws, rel.task(String(args.task_id)));
-  return { task_id: t.task_id, correction_id: cid, status: t.status, verified: r.verified, says: `Correction ${cid} recorded for ${t.task_id}; the worker corrects it within the approved scope, and the corrected candidate needs fresh verification${t.required_review !== 'none' ? ' and a fresh review' : ''}.`, next_action: nextAction(t, now) };
+  return { task_id: t.task_id, correction_id: cid, status: t.status, verified: r.verified, says: `Correction ${cid} recorded for ${t.task_id}; the worker corrects it within the approved scope, and the corrected candidate needs fresh verification${requiredReview(t) !== 'none' ? ' and a fresh review' : ''}.`, next_action: nextAction(t, now) };
 }
 
 // --- reads --------------------------------------------------------------------------
@@ -939,11 +989,16 @@ function attestationView(ws, headSha, opts = {}) {
     if (!t.admission || t.admission.state !== 'confirmed') reasons.push('its admission is not confirmed on main');
     const ver = t.verification;
     if (!ver || ver.head_sha !== headSha || !ver.ok) reasons.push('no passing verification with every acceptance check met is recorded for this head');
-    const rs = reviewState(t);
-    if (!rs.satisfied) reasons.push(`the required ${rs.required} review has not passed on this head (${rs.state})`);
     const content = v && supported(v, S.version) ? v.content : null;
-    if (content && content.release_mode === 'owner') reasons.push('this task is released by Eric (release mode owner)');
-    return { schema_version: S.attestation, head_sha: headSha, task_id: t.task_id, version: t.current_version, content_sha256: t.versions[t.versions.length - 1].content_sha256, number: t.admission ? t.admission.number : null, merge_base_sha: c ? c.merge_base_sha : null, generation: c ? c.generation : null, allowed_paths: content ? content.scope.paths : [], required_review: rs.required, review_state: rs.state, promotable: reasons.length === 0, reasons, at: iso(now) };
+    // The stricter of what the authorization recorded, the version's declared
+    // rule and the delegation's own: no record can lower another.
+    const a = t.authorization;
+    const pol = a && a.kind === 'policy' ? readRaw(ws, rel.policy(a.policy_id)) : null;
+    const rs = reviewState(t, P.stricterReview(requiredReview(t), content && content.required_review, pol && pol.required_review));
+    if (!rs.satisfied) reasons.push(`the required ${rs.required} review has not passed on this head (${rs.state})`);
+    const release = P.stricterRelease(content && content.release_mode, a && a.release_mode, pol && pol.release_mode);
+    if (release === 'owner') reasons.push('this task is released by Eric (release mode owner)');
+    return { schema_version: S.attestation, head_sha: headSha, task_id: t.task_id, version: t.current_version, content_sha256: t.versions[t.versions.length - 1].content_sha256, number: t.admission ? t.admission.number : null, merge_base_sha: c ? c.merge_base_sha : null, generation: c ? c.generation : null, allowed_paths: content ? content.scope.paths : [], delegation: a && a.kind === 'policy' ? { policy_id: a.policy_id, template: a.template } : null, required_review: rs.required, review_state: rs.state, release_mode: release, promotable: reasons.length === 0, reasons, at: iso(now) };
   });
 }
 
@@ -965,19 +1020,34 @@ function ownerView(ws, who, opts = {}) {
   });
 }
 
-function capabilities(ws, who, opts = {}) {
+// With task_id (and a version, else the current one): the delegation that
+// version would be admitted under now and why, or what each one misses.
+function capabilities(ws, who, args = {}, opts = {}) {
   requireRole(who, 'reader', 'engineering_capabilities');
+  refuseUnknown(args, ['task_id', 'version']);
   const now = nowOf(opts);
   const s = loadState(ws);
   const active = policies(ws).filter((p) => policyActive(p, now));
   const role = who.kind === 'owner' ? 'owner' : who.role;
+  let preview;
+  if (args.task_id) {
+    preview = readConsistent(ws, () => {
+      const t = loadTask(ws, String(args.task_id));
+      requireSupported(t);
+      const n = args.version === undefined || args.version === null ? t.current_version : Number(args.version);
+      if (!t.versions.some((x) => x.version === n)) fail('NOT_FOUND', `Task ${t.task_id} has no version ${args.version}.`);
+      return { task_id: t.task_id, version: n, current: n === t.current_version, status: t.status, ...matchForTask(ws, t, n, now) };
+    });
+  }
   return {
     repo: P.REPO,
     role,
     assistant: who.assistant || null,
     paused: Boolean(s.paused),
     can: { read: true, review: can(who, 'reviewer'), submit: can(who, 'submitter'), work: can(who, 'worker') },
-    delegations: active.map((p) => ({ policy_id: p.policy_id, template: p.template, title: p.title, intents: p.intents, allowed_paths: p.allowed_paths, required_review: p.required_review, release_mode: p.release_mode, goal_id: p.goal_id, expires_at: p.expires_at })),
+    delegations: active.map((p) => ({ policy_id: p.policy_id, template: p.template, title: p.title, intents: p.intents, allowed_paths: p.allowed_paths, required_review: p.required_review, release_mode: p.release_mode, limits: p.limits, goal_id: p.goal_id, expires_at: p.expires_at })),
+    matching: `${P.MATCH_RULE}: a submitted version is admitted under the narrowest active delegation it fits, never the first activated: (1) a delegation whose paths lie inside another's comes first, then (2) the lighter review it requires (${P.REVIEWS.join(' < ')}), (3) release by promotion before release by Eric, (4) fewer path rules, (5) the template name, (6) the delegation ID. It is held to the stricter of its declared review and release and the delegation's, and to the delegation's limits and max_files. Fitting none, it waits for Eric. Pass task_id to see where a saved version would land.`,
+    ...(preview ? { preview } : {}),
     intents: { explore: 'a note only; never built', design: `documents only (${P.DESIGN_PATHS.join(', ')})`, implement: 'code inside the approved scope' },
     unavailable: ['an unattended ChatGPT review (ChatGPT reviews only in a conversation Eric opens)', 'a wake-up trigger (the builder runs hourly)', 'Gemini automation (an assigned review only when Eric asks)', 'merging, deploying or approving by any connection'],
     lifecycle: 'prepared → awaiting_authorization → admitted → queued → claimed → implementing → verifying → review_pending → ready_for_promotion → merged; also blocked, paused, cancelled, superseded. Deployment is read separately.',
