@@ -46,7 +46,7 @@ const INVALIDATION_V1 = 'cr-ticket-invalidation@1';
 const RULE_KINDS = [
   { name: 'sizing', current: SIZING_VERSION, of: (r) => r.versions && r.versions.sizing },
   { name: 'invalidation', current: INVALIDATION_VERSION, of: (r) => (r.desk && r.desk.invalidation_version) || (r.versions && r.versions.invalidation) },
-  { name: 'pregate', current: 'cr-ticket-pregate@1', of: (r) => r.pregate_version || (r.versions && r.versions.pregate) },
+  { name: 'pregate', current: 'cr-ticket-pregate@2', of: (r) => r.pregate_version || (r.versions && r.versions.pregate) },
 ];
 const versionNumber = (v) => { const m = /@(\d+)$/.exec(String(v || '')); return m ? Number(m[1]) : null; };
 const MIN_COVERAGE_DEFAULT = 90;
@@ -54,7 +54,10 @@ const MAX_GAP_HOURS = 6;
 // The desk's pre-gate (Eric, 2026-10-24): when the grade alone rules out new
 // risk and he does not hold the asset, no Prosecutor runs; the desk saves its
 // own gate result as a receipt (kind desk_gate), with no proposal.
-const PREGATE_VERSION = 'cr-ticket-pregate@1';
+// @2 (item 48): the grade closes the gate only under `pregate_max_grade`
+// (default 48), so a near miss (48 up to the new-entry floor, or a range whose
+// high end reaches it) gets a Prosecutor; @1 receipts keep their own rule.
+const PREGATE_VERSION = 'cr-ticket-pregate@2';
 const PACKET_FORMAT = 'cr.ticket-packet.v1';
 const TICKET_RE = /^tk_\d{4}-\d{2}-\d{2}T\d{6}Z_[a-z2-9]{5}$/;
 const RECEIPT_RE = /^tr_\d{4}-\d{2}-\d{2}T\d{6}Z_[a-z2-9]{5}$/;
@@ -87,6 +90,7 @@ const SIZING_DEFAULTS = Object.freeze({
   exit_size_usd: 500,
   max_exit_cost_pct: 5,
   min_grade_new_entry: 55,
+  pregate_max_grade: 48,
   min_grade_any: 40,
   native_l1_min_market_cap_usd: 10e9,
 });
@@ -127,14 +131,16 @@ function sizingOf(ws) {
   const pos = (v, fb, max) => (isNum(v) && v > 0 && v <= max ? v : fb);
   const grade = (v, fb) => (isNum(v) && v >= 0 && v <= 100 ? v : fb);
   const standard = pos(s.standard_risk_usd, d.standard_risk_usd, 1e9);
+  const minNew = grade(s.min_grade_new_entry, d.min_grade_new_entry);
   return {
     version: SIZING_VERSION,
     standard_risk_usd: standard,
     starter_risk_usd: Math.min(pos(s.starter_risk_usd, d.starter_risk_usd, 1e9), standard),
     exit_size_usd: pos(s.exit_size_usd, d.exit_size_usd, 1e9),
     max_exit_cost_pct: pos(s.max_exit_cost_pct, d.max_exit_cost_pct, 100),
-    min_grade_new_entry: grade(s.min_grade_new_entry, d.min_grade_new_entry),
+    min_grade_new_entry: minNew,
     min_grade_any: grade(s.min_grade_any, d.min_grade_any),
+    pregate_max_grade: Math.min(grade(s.pregate_max_grade, d.pregate_max_grade), minNew),
     native_l1_min_market_cap_usd: pos(s.native_l1_min_market_cap_usd, d.native_l1_min_market_cap_usd, 1e15),
     note: SIZING_NOTE,
   };
@@ -417,13 +423,19 @@ function withheldOf(ws, pid, researcher) {
 
 const KIND_WORDS = { grade_low: 'the grade is under the floor', grade_withheld: 'the grade is withheld (a component was not scored), not a weak score' };
 
-// Does the grade alone rule out new risk for an asset Eric does not hold? Only
+// Does the grade alone rule out new risk for an asset Eric does not hold
+// (cr-ticket-pregate@2, pregate_max_grade)? Only
 // a known "not held" counts (an unreadable portfolio opens a normal ticket).
 // Returns the gate's grade reason, else null.
 function pregateReason(researcher, held, sizing) {
   if (held !== false) return null;
   const grade = gateGrade(researcher.grade);
   if (grade !== null && grade >= sizing.min_grade_new_entry) return null;
+  // cr-ticket-pregate@2: a near miss gets a Prosecutor. The gate stays closed
+  // only for a withheld or missing grade, or one under pregate_max_grade whose
+  // range (if any) does not reach the new-entry floor at its high end.
+  if (grade !== null && grade >= sizing.pregate_max_grade) return null;
+  if (grade !== null && isNum(researcher.grade.high) && researcher.grade.high >= sizing.min_grade_new_entry) return null;
   const g = gate({ researcher, held: false, exits: [], native: null }, sizing);
   return g.reasons[0] || null;
 }
@@ -2013,6 +2025,7 @@ module.exports = {
   PROPOSALS,
   sizingOf,
   gate,
+  pregateReason,
   gateGrade,
   skeleton,
   researcherOf,

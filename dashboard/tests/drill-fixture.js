@@ -39,7 +39,7 @@ function buildDrillWorkspace() {
     const held = (on) => { portfolio.computePortfolio = (...a) => { const pf = realPf(...a); return { ...pf, positions: on ? [{ project_id: pid, closed: false }] : [] }; }; };
     try {
       // 1. The desk's own gate: the grade alone rules out new risk.
-      ws.settings.tickets = { sizing: { min_grade_new_entry: 99, min_grade_any: 5 } };
+      ws.settings.tickets = { sizing: { min_grade_new_entry: 99, pregate_max_grade: 99, min_grade_any: 5 } };
       held(false);
       const gate = T.createTicket(ws, { project_id: pid, assistant: true });
       if (gate.status !== 'gate_closed') throw new Error('The fixture could not make a desk gate.');

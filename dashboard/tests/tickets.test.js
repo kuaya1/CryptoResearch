@@ -506,7 +506,7 @@ test('settings: tickets.invalidation.min_coverage_pct is bounded by the server',
 
 // Floors high enough that the fixture's grade is under them, so the grade
 // alone rules out new risk. min_grade_any stays low: WATCH_ONLY, not HARD_PASS.
-function gradeClosed(ws, floors = { min_grade_new_entry: 99, min_grade_any: 5 }) {
+function gradeClosed(ws, floors = { min_grade_new_entry: 99, pregate_max_grade: 99, min_grade_any: 5 }) {
   ws.settings.tickets = { sizing: floors };
 }
 
@@ -527,7 +527,7 @@ test('pre-gate: a grade under the new-entry floor on an asset not held gets the 
   const r = out.receipt;
   assert.match(r.receipt_id, T.RECEIPT_RE);
   assert.equal(r.kind, 'desk_gate');
-  assert.equal(r.pregate_version, 'cr-ticket-pregate@1');
+  assert.equal(r.pregate_version, 'cr-ticket-pregate@2');
   assert.equal(r.prosecution, null);
   assert.equal(r.proposal, null);
   assert.equal(r.agent_disagreement, null);
@@ -541,9 +541,31 @@ test('pre-gate: a grade under the new-entry floor on an asset not held gets the 
   assert.throws(() => T.receiptText(s.ws, s.pid, r.receipt_id), (e) => e.code === 'INVALID', 'there is no model text');
   // Under min_grade_any it is a HARD_PASS.
   const s2 = withReport(t);
-  gradeClosed(s2.ws, { min_grade_new_entry: 99, min_grade_any: 98 });
+  gradeClosed(s2.ws, { min_grade_new_entry: 99, pregate_max_grade: 99, min_grade_any: 98 });
   stubHeld(t, s2.pid, false);
   assert.equal(T.createTicket(s2.ws, { project_id: s2.pid }).receipt.desk.proposal_type, 'HARD_PASS');
+});
+
+test('pre-gate @2 (item 48): pregate_max_grade defaults to 48, is bounded by the new-entry floor, and a near miss opens a Prosecutor ticket capped at $0', (t) => {
+  const { validateSettingsPatch } = require('../server');
+  assert.equal(T.sizingOf({ settings: {} }).pregate_max_grade, 48);
+  assert.equal(T.sizingOf({ settings: { tickets: { sizing: { min_grade_new_entry: 30 } } } }).pregate_max_grade, 30, 'never above the new-entry floor');
+  assert.equal(T.sizingOf({ settings: { tickets: { sizing: { pregate_max_grade: 20 } } } }).pregate_max_grade, 20);
+  assert.throws(() => validateSettingsPatch({ tickets: { sizing: { pregate_max_grade: 60, min_grade_new_entry: 55 } } }), (e) => e.code === 'INVALID');
+  assert.deepEqual(validateSettingsPatch({ tickets: { sizing: { pregate_max_grade: 48 } } }).tickets.sizing, { pregate_max_grade: 48 });
+  const sz = (o) => ({ ...T.sizingOf({ settings: {} }), ...o });
+  const rep = (grade) => ({ grade });
+  assert.equal(T.pregateReason(rep({ status: 'firm', value: 47 }), false, sz()) !== null, true, '47 is under 48: closed');
+  assert.equal(T.pregateReason(rep({ status: 'firm', value: 48 }), false, sz()), null, '48 opens a ticket');
+  assert.equal(T.pregateReason(rep({ status: 'firm', value: 54 }), false, sz()), null, 'a near miss opens a ticket');
+  assert.equal(T.pregateReason(rep({ status: 'range', low: 40, high: 58 }), false, sz()), null, 'a range reaching the floor opens a ticket');
+  assert.notEqual(T.pregateReason(rep({ status: 'range', low: 40, high: 50 }), false, sz()), null, 'a range under the floor and under 48 at its low end stays closed');
+  assert.notEqual(T.pregateReason(rep({ status: 'withheld' }), false, sz()), null, 'withheld stays closed');
+  assert.equal(T.pregateReason(rep({ status: 'firm', value: 47 }), true, sz()), null, 'a held project is never pre-gated');
+  // The gate itself still caps risk at $0 for a near miss.
+  const g = T.gate({ researcher: rep({ status: 'firm', value: 52 }), held: false, exits: [], native: null }, sz());
+  assert.equal(g.suggested_risk_usd, 0);
+  assert.equal(g.proposal_type, 'WATCH_ONLY');
 });
 
 test('pre-gate: the same report again is unchanged with the same receipt; a held project, a grade over the floor and force_prosecution open a normal ticket', (t) => {

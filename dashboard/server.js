@@ -343,10 +343,12 @@ function validateSettingsPatch(patch, ws = null) {
     if (s.exit_size_usd !== undefined) o.exit_size_usd = above(s.exit_size_usd, 1e9, 'Exit size checked (USD)');
     if (s.max_exit_cost_pct !== undefined) o.max_exit_cost_pct = above(s.max_exit_cost_pct, 100, 'Maximum exit cost (%)');
     if (s.min_grade_new_entry !== undefined) o.min_grade_new_entry = num(s.min_grade_new_entry, 0, 100, 'Minimum grade for a new entry');
+    if (s.pregate_max_grade !== undefined) o.pregate_max_grade = num(s.pregate_max_grade, 0, 100, 'Highest grade the desk closes without a Prosecutor');
     if (s.min_grade_any !== undefined) o.min_grade_any = num(s.min_grade_any, 0, 100, 'Minimum grade for any new risk');
     if (s.native_l1_min_market_cap_usd !== undefined) o.native_l1_min_market_cap_usd = above(s.native_l1_min_market_cap_usd, 1e15, 'Native L1 market cap floor (USD)');
     if (o.starter_risk_usd !== undefined && o.standard_risk_usd !== undefined && o.starter_risk_usd > o.standard_risk_usd) throw new OpError('INVALID', 'The starter tranche cannot be larger than standard risk');
     if (o.min_grade_any !== undefined && o.min_grade_new_entry !== undefined && o.min_grade_any > o.min_grade_new_entry) throw new OpError('INVALID', 'The minimum grade for any new risk cannot be above the minimum for a new entry');
+    if (o.pregate_max_grade !== undefined && o.min_grade_new_entry !== undefined && o.pregate_max_grade > o.min_grade_new_entry) throw new OpError('INVALID', 'The highest grade closed without a Prosecutor cannot be above the minimum for a new entry');
     out.tickets = { sizing: o };
   }
   if (patch.alerts && patch.alerts.spread) {
