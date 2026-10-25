@@ -9,7 +9,7 @@
 // review and tests still decide.
 
 const crypto = require('crypto');
-const { PROTECTED } = require('../scripts/backlog-promote');
+const { PROTECTED, DELEGATION_RESTRICTED } = require('../scripts/backlog-promote');
 
 const REPO = 'kuaya1/CryptoResearch';
 const INTENTS = ['explore', 'design', 'implement'];
@@ -48,7 +48,38 @@ const TEMPLATES = {
     max_days: 30,
     requires_goal: true,
   },
+  // Eric, 2026-10-25 (review finding 6, "UI and tests only"): eng-app@1
+  // without dashboard/core/ or dashboard/cli.js. Core financial and
+  // investment logic goes through his own intake or his authorization.
+  'eng-app@2': {
+    template: 'eng-app@2',
+    title: 'Browser app, views and tests for one goal',
+    says: 'The browser app, its views, public scripts, tests and engineering documents for the goal Eric names, each candidate reviewed by ChatGPT before it merges. Nothing in dashboard/core/ (core financial and investment logic), no server routes and no protected path: those always wait for Eric.',
+    repo_full_name: REPO,
+    intents: ['design', 'implement'],
+    allowed_paths: ['dashboard/web/src/**', 'dashboard/public/**', 'dashboard/tests/**', 'docs/engineering/**'],
+    required_review: 'chatgpt',
+    release_mode: 'promote',
+    limits: { max_open_tasks: 3, max_admissions_per_day: 5, max_files: 30 },
+    max_days: 30,
+    requires_goal: true,
+  },
 };
+// Kept so their records stay readable, never offered for a new activation.
+const RETIRED = {
+  'eng-app@1': 'retired on 2026-10-25 for eng-app@2, which leaves out dashboard/core/ (Eric\'s decision on review finding 6)',
+};
+// Paths no delegation reaches, whatever its template says (Eric, 2026-10-25):
+// a version naming one waits for his authorization of that exact version,
+// and promotion holds a delegated branch whose diff touches one.
+const RESTRICTED = DELEGATION_RESTRICTED;
+// A glob reaches a restricted directory when the part before its first
+// wildcard could lead into it (dashboard/*/x.js and **/x.js both can).
+function restrictedWhy(glob) {
+  const lead = glob.includes('*') ? glob.slice(0, glob.indexOf('*')) : null;
+  const hit = RESTRICTED.find((x) => (lead === null ? x.re.test(glob) : x.prefix.startsWith(lead) || lead.startsWith(x.prefix)));
+  return hit ? hit.why : null;
+}
 
 const sha256 = (s) => crypto.createHash('sha256').update(typeof s === 'string' ? s : JSON.stringify(s)).digest('hex');
 
@@ -210,7 +241,9 @@ function fits(policy, c, { now, openUnderPolicy = 0, admittedLastDay = 0 } = {})
   const allowed = c.intent === 'design' ? DESIGN_PATHS.filter((d) => policy.allowed_paths.some((p) => within(d, p))) : policy.allowed_paths;
   for (const p of c.scope.paths) {
     const why = globTouchesProtected(p);
+    const core = restrictedWhy(p);
     if (why) r.push(`${p} can reach a protected path (${why})`);
+    else if (core) r.push(`${p} can reach dashboard/core/ (${core}); it waits for Eric`);
     else if (!allowed.some((g) => within(p, g))) r.push(`${p} is outside the delegated paths`);
   }
   // A lighter declared review or release is no miss: the delegation's own
@@ -301,7 +334,7 @@ function entryText({ number, task_id, version, content_sha256, policy_id, conten
 const ENTRY_MARK_RE = /\*\(engineering task (eng-\d{8}-[0-9a-f]{6}) v(\d+), sha256 ([0-9a-f]{16})/;
 
 module.exports = {
-  REPO, INTENTS, REVIEWS, RELEASE_MODES, TEMPLATES, DESIGN_PATHS, MAX_ATTEMPTS, LEASE_MS, LIMITS,
+  REPO, INTENTS, REVIEWS, RELEASE_MODES, TEMPLATES, RETIRED, RESTRICTED, restrictedWhy, DESIGN_PATHS, MAX_ATTEMPTS, LEASE_MS, LIMITS,
   sha256, canonical, contentHash, globRe, matches, within, protectedWhy, globTouchesProtected, PROTECTED_SAMPLES,
   screen, contentOf, validateContent, fits, entryText, ENTRY_MARK_RE, PATH_RE,
   stricterReview, stricterRelease, boundaries, choose, MATCH_RULE, MATCH_KEYS,

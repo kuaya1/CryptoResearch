@@ -50,6 +50,18 @@ const PROTECTED = [
   { re: /^render\.ya?ml$/, why: 'deployment' },
   { re: /^(portfolio|paper|projects|config|secrets)\//, why: 'records, never committed' },
 ];
+// Lines of an unprotected file that mount a protected part (Eric's decision
+// on review finding 2, 2026-10-25): a branch that adds, changes or removes one
+// waits for him as a protected path does; the rest of the file still merges.
+const PROTECTED_LINES = [
+  { path: 'dashboard/server.js', re: /engineering/i, why: 'the mount of the engineering routes (dashboard/engineering/routes.js)' },
+];
+// Paths no delegation reaches (Eric's decision on review finding 6): an
+// engineering item a delegation admitted is held when its diff touches one;
+// only a version Eric authorized himself may.
+const DELEGATION_RESTRICTED = [
+  { re: /^dashboard\/core\//, prefix: 'dashboard/core/', why: 'core financial and investment logic, which no delegation changes' },
+];
 
 function run(cwd, cmd, args, { allowFail = false, env = {} } = {}) {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', env: { ...process.env, ...IDENTITY, ...env }, maxBuffer: 256 * 1024 * 1024 });
@@ -82,8 +94,16 @@ function scopeCheck(cwd, { base, head }) {
   const changed = git(cwd, ['diff', '--no-renames', '--name-status', `${base}...${head}`]).out.split('\n').filter(Boolean).map((l) => { const [st, ...p] = l.split('\t'); return { status: st[0], path: p.join('\t') }; });
   for (const c of changed) {
     const hit = PROTECTED.find((x) => x.re.test(c.path));
+    const lines = PROTECTED_LINES.find((x) => x.path === c.path);
     if (hit) reasons.push(`${c.path}: ${hit.why}`);
     else if (/^templates\//.test(c.path) && c.status !== 'A') reasons.push(`${c.path}: a published template is ${c.status === 'D' ? 'removed' : 'edited'} (publish a new version instead)`);
+    else if (lines) {
+      // Only the hunks' own lines (after the first @@), never the file header.
+      const d = git(cwd, ['diff', '--no-renames', '--no-color', '-U0', `${base}...${head}`, '--', c.path]).out.split('\n');
+      const body = d.slice(Math.max(0, d.findIndex((l) => l.startsWith('@@'))));
+      const touched = c.status === 'D' || body.some((l) => /^[+-]/.test(l) && lines.re.test(l));
+      if (touched) reasons.push(`${c.path}: ${lines.why}`);
+    }
   }
   const desk = git(cwd, ['show', `${base}:DESK_STATE.md`], { allowFail: true });
   const backlog = backlogItems(desk.status === 0 ? desk.out : '');
@@ -448,6 +468,8 @@ async function engineeringCheck(cwd, { base, head, branch, scope, desk, fetchJso
     }
     const allowed = Array.isArray(att.allowed_paths) ? att.allowed_paths : [];
     for (const f of scope.changed) if (!allowed.some((g) => globRe(g).test(f))) reasons.push(`${f} is outside the task's approved scope`);
+    // Whatever the task record says: a delegation never changes these.
+    if (att.delegation) for (const f of scope.changed) { const r = DELEGATION_RESTRICTED.find((x) => x.re.test(f)); if (r) reasons.push(`${f}: ${r.why}; this item was admitted by delegation ${att.delegation.policy_id} (${att.delegation.template}), so it waits for Eric`); }
   }
   return { engineering: true, ok: reasons.length === 0, reasons, item: n, task_id: it.task_id, attestation: att ? { promotable: att.promotable, review_state: att.review_state, required_review: att.required_review, merge_base_sha: att.merge_base_sha, diff_sha256: att.diff_sha256 } : null };
 }
@@ -531,4 +553,4 @@ async function main(argv, { fetchJson = defaultFetchJson } = {}) {
 
 if (require.main === module) main(process.argv.slice(2)).then((c) => { process.exitCode = c; }, (err) => { process.stderr.write(`${err && err.message || err}\n`); process.exitCode = 1; });
 
-module.exports = { PROTECTED, ENG_MARK_RE, backlogItems, scopeCheck, compose, promote, summaryOf, insertEntry, entryProblems, deskReason, candidateDiff, admissionDiff, admit, engineeringCheck, main };
+module.exports = { PROTECTED, PROTECTED_LINES, DELEGATION_RESTRICTED, ENG_MARK_RE, backlogItems, scopeCheck, compose, promote, summaryOf, insertEntry, entryProblems, deskReason, candidateDiff, admissionDiff, admit, engineeringCheck, main };

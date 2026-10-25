@@ -1,0 +1,103 @@
+'use strict';
+// The engineering inbox's HTTP routes (Connected Engineering v1, 2026-10-25;
+// moved out of dashboard/server.js on Eric's decision on review finding 2):
+// the /mcp/engineering connector, the public admission and attestation reads
+// the workflows check, and Eric's own /api/engineering decisions. They live
+// under dashboard/engineering/, which backlog-promote.js PROTECTED holds for
+// Eric, so a branch that changes them never merges on its own;
+// dashboard/server.js only mounts them, and promotion holds a server.js
+// change that touches that mount.
+
+const { OpError } = require('../core/ops');
+const inbox = require('./inbox');
+
+const OWNER = { kind: 'owner' };
+const ENG_CONFLICT = new Set(['PAUSED', 'CLAIMED', 'STALE_VERSION', 'HASH_MISMATCH', 'WRONG_STATE', 'WRONG_CANDIDATE', 'NOT_EDITABLE', 'EDIT_AFTER_ADMISSION', 'CEILING', 'NOT_CLAIMABLE', 'HELD', 'UNSUPPORTED_SCHEMA']);
+const PUBLIC_READ_RE = /^\/engineering\/(?:admissions\/(eng-\d{8}-[0-9a-f]{6})|attestations\/([0-9a-f]{40}))$/;
+
+// oauth and auth are null on this PC (no connector, no sign-in); HttpError
+// and readCodes are the server's own, so errors read as every other route's.
+function makeEngineeringRoutes(ws, { oauth = null, auth = null, origins = new Set(), version = '1.0.0', log = () => {}, github = null, HttpError, readCodes = new Set() } = {}) {
+  const engMcp = oauth ? require('./tools').makeEngineeringMcp(ws, { version, log, github }) : null;
+
+  // /mcp/engineering, with its own OAuth resource and one role per
+  // connection; none of the desk's research, ticket or portfolio tools.
+  async function connector(req, res, url) {
+    if (!oauth || (url.pathname !== '/mcp/engineering' && url.pathname !== '/mcp/engineering/')) return false;
+    const o = req.headers.origin;
+    if (o && !origins.has(o)) {
+      log(`MCP engineering request refused: Origin ${String(o).slice(0, 80)} is not allowed`);
+      throw new HttpError(403, 'Origin not allowed');
+    }
+    const grant = oauth.authenticate(req, { audience: 'engineering' });
+    if (!grant) {
+      log(`MCP engineering sign-in needed: ${oauth.refusal(req, { audience: 'engineering' })}`);
+      oauth.challenge(res, { invalid: Boolean(req.headers.authorization), audience: 'engineering' });
+      return true;
+    }
+    await engMcp(req, res, grant);
+    return true;
+  }
+
+  // What the engineering-admission and backlog-pr workflows check
+  // (backlog-promote.js): public and read-only, with no private content
+  // (task IDs, hashes, backlog numbers, paths, states and reason codes only).
+  function publicRead(req, res, url) {
+    const m = PUBLIC_READ_RE.exec(url.pathname);
+    if (!m) return false;
+    if (req.method !== 'GET') throw new HttpError(405, 'Method not allowed');
+    const v = m[1] ? inbox.admissionView(ws, m[1]) : inbox.attestationView(ws, m[2]);
+    res.writeHead(v ? 200 : 404, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(v || { error: 'Not found' }));
+    return true;
+  }
+
+  // Preferences > Developer > Engineering: Eric's own decisions, behind the
+  // desk's sign-in. Activating a delegation and authorizing a task take his
+  // passphrase again on the online desk.
+  function mount(route) {
+    const eng = async (fn) => {
+      try {
+        return await fn();
+      } catch (err) {
+        if (err instanceof OpError && !err.status && !readCodes.has(err.code) && !['WORKSPACE_BUSY', 'WRITES_BLOCKED', 'IDEMPOTENCY_CONFLICT'].includes(err.code)) err.status = err.code === 'NOT_FOUND' ? 404 : ENG_CONFLICT.has(err.code) ? 409 : 400;
+        throw err;
+      }
+    };
+    const passphrase = async (req, body) => {
+      if (!auth) return;
+      const check = await auth.verifyPassphrase(req, String((body && body.password) || ''));
+      if (!check.ok) throw new HttpError(check.locked ? 429 : 403, check.locked ? 'Too many attempts. Wait a few minutes and try again.' : 'That passphrase is not right. Nothing was changed.');
+    };
+    const engTask = (s) => { if (!inbox.TASK_ID_RE.test(s)) throw new HttpError(400, 'Not an engineering task ID'); return s; };
+    // The task's own state stays readable as task_status.
+    const saved = (r) => ({ ...r, ...(r && r.status ? { task_status: r.status } : {}), status: 'saved' });
+    route('GET', '/api/engineering', () => eng(() => ({
+      ...inbox.ownerView(ws, OWNER),
+      mcp_url: oauth ? oauth.engineeringResource : null,
+      connections: oauth ? oauth.connections().filter((c) => c.audience === 'engineering') : [],
+    })));
+    route('POST', '/api/engineering/pause', (m, req, res, body) => eng(() => saved(inbox.setPaused(ws, OWNER, { paused: Boolean(body.paused), reason: body.reason || null }))));
+    route('POST', '/api/engineering/policies', (m, req, res, body) => eng(async () => {
+      await passphrase(req, body);
+      return saved(inbox.activatePolicy(ws, OWNER, { template: body.template, goal_id: body.goal_id || null, goal: body.goal || null, days: body.days || null }));
+    }));
+    route('POST', '/api/engineering/policies/(pol-\\d{8}-[0-9a-f]{6})/revoke', (m, req, res, body) => eng(() => saved(inbox.revokePolicy(ws, OWNER, m[1], { reason: body.reason || null }))));
+    route('POST', '/api/engineering/tasks/([^/]+)/authorize', (m, req, res, body) => eng(async () => {
+      await passphrase(req, body);
+      return saved(inbox.authorizeTask(ws, OWNER, engTask(m[1]), { version: Number(body.version), content_sha256: String(body.content_sha256 || '') }));
+    }));
+    route('POST', '/api/engineering/tasks/([^/]+)/pause', (m, req, res, body) => eng(() => saved(inbox.pauseTask(ws, OWNER, engTask(m[1]), { reason: body.reason || null }))));
+    route('POST', '/api/engineering/tasks/([^/]+)/resume', (m) => eng(() => saved(inbox.resumeTask(ws, OWNER, engTask(m[1])))));
+    route('POST', '/api/engineering/tasks/([^/]+)/cancel', (m, req, res, body) => eng(() => saved(inbox.cancelTask(ws, OWNER, engTask(m[1]), { reason: body.reason || null }))));
+    route('POST', '/api/engineering/tasks/([^/]+)/reopen', (m) => eng(() => saved(inbox.reopenTask(ws, OWNER, engTask(m[1])))));
+    route('POST', '/api/engineering/tasks/([^/]+)/review', (m, req, res, body) => eng(() => {
+      const { password, ...args } = body || {};
+      return saved(inbox.saveReview(ws, OWNER, { ...args, task_id: engTask(m[1]) }));
+    }));
+  }
+
+  return { connector, publicRead, mount };
+}
+
+module.exports = { makeEngineeringRoutes, PUBLIC_READ_RE };

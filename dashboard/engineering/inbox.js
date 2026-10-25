@@ -415,7 +415,10 @@ function activatePolicy(ws, who, { template, goal_id = null, goal = null, days =
   const now = nowOf(opts);
   requireOwner(who);
   const tpl = P.TEMPLATES[template];
-  if (!tpl) fail('BAD_INPUT', `Unknown delegation template ${String(template).slice(0, 40)}. Templates: ${Object.keys(P.TEMPLATES).join(', ')}.`);
+  const offered = Object.keys(P.TEMPLATES).filter((k) => !P.RETIRED[k]);
+  if (!tpl) fail('BAD_INPUT', `Unknown delegation template ${String(template).slice(0, 40)}. Templates: ${offered.join(', ')}.`);
+  // A retired template's delegations stay readable; no new one is activated.
+  if (P.RETIRED[template]) fail('RETIRED', `${template} is ${P.RETIRED[template]}. Templates: ${offered.join(', ')}.`);
   if (tpl.requires_goal && !(goal_id && goal)) fail('BAD_INPUT', `${template} covers one goal: give its goal_id and the goal in a sentence.`);
   if (goal_id && !/^[a-z0-9][a-z0-9-]{1,78}$/.test(goal_id)) fail('BAD_INPUT', 'goal_id is lower-case letters, digits and hyphens.');
   const d = days === null || days === undefined || days === '' ? tpl.max_days : Number(days);
@@ -743,6 +746,7 @@ function recordEvent(ws, who, args = {}, opts = {}) {
         if (t.authorization.kind === 'policy') {
           const p = ctx.op.readJson(rel.policy(t.authorization.policy_id), null);
           if (p && files.length > p.limits.max_files) problems.push(`${files.length} files is over the delegation's ${p.limits.max_files}`);
+          for (const f of files) { const core = P.restrictedWhy(f); if (core) problems.push(`${f} is in dashboard/core/ (${core})`); }
         }
         if (problems.length) fail('SCOPE', `Candidate refused: ${problems.join('; ')}. Nothing was recorded; change the branch to stay inside the approved scope.`);
         if (!rebuild && t.attempts.count >= t.attempts.max) {
@@ -1068,7 +1072,7 @@ function ownerView(ws, who, opts = {}) {
     return {
       paused: Boolean(s.paused),
       paused_reason: s.paused_reason || null,
-      templates: Object.values(P.TEMPLATES).map((x) => ({ template: x.template, title: x.title, says: x.says, intents: x.intents, allowed_paths: x.allowed_paths, required_review: x.required_review, release_mode: x.release_mode, limits: x.limits, max_days: x.max_days, requires_goal: x.requires_goal })),
+      templates: Object.values(P.TEMPLATES).filter((x) => !P.RETIRED[x.template]).map((x) => ({ template: x.template, title: x.title, says: x.says, intents: x.intents, allowed_paths: x.allowed_paths, required_review: x.required_review, release_mode: x.release_mode, limits: x.limits, max_days: x.max_days, requires_goal: x.requires_goal })),
       policies: policies(ws).map((p) => ({ ...p, active: policyActive(p, now) })),
       tasks: list.map((t) => (supported(t, S.task) ? view(ws, t, who, { now }) : { task_id: t.task_id, unsupported: true, schema_version: t.schema_version })).sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || ''))),
     };
