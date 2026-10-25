@@ -41,11 +41,11 @@ function answer(ticket) {
   return `# Prosecution (FICTIONAL)\n\n${'The four tests and the flaws, written out for the test fixture. '.repeat(12)}\n\n\`\`\`json\n${JSON.stringify(b, null, 2)}\n\`\`\`\n`;
 }
 
-function savedTicket(t, s) {
+function savedTicket(t, s, edit = (x) => x) {
   stubHeld(t, s.pid, true);
   const tk = withExitReadings(1.5, () => T.createTicket(s.ws, { project_id: s.pid, assistant: true })).ticket;
   freshPrice(s.ws, 'example-payfi-fictional', 0.85);
-  return T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk.ticket_id)) });
+  return T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: edit(answer(T.loadTicket(s.ws, s.pid, tk.ticket_id))) });
 }
 
 function dropPrice(ws, atMs, price) {
@@ -56,6 +56,26 @@ function dropPrice(ws, atMs, price) {
 }
 
 const byId = (out, id) => out.sections.find((x) => x.id === id);
+
+test('daily brief (item 50): a waiting Prosecutor ticket carries its compact trade plan and the two verdicts', (t) => {
+  const s = setup(t);
+  const saved = savedTicket(t, s);
+  const out = B.brief(s.ws, { now: Date.parse(saved.receipt.saved_at) + 20 * 60000 });
+  const line = byId(out, 'pm_cards').lines[0].text;
+  assert.match(line, /Entry \$0\.8–\$0\.9, target \$1\.4, invalidation \$0\.7, R:R 3\.7x; Researcher .+ vs Prosecutor 38\./);
+  // The same card hours later: the stored price is past the freshness limit, so the ratio is unknown, not stale arithmetic.
+  const late = byId(B.brief(s.ws, { now: Date.parse(saved.receipt.saved_at) + 5 * 3600000 }), 'pm_cards').lines[0].text;
+  assert.match(late, /R:R unknown;/);
+});
+
+test('daily brief (item 50): each plan number the receipt lacks reads unknown', (t) => {
+  const s = setup(t);
+  const saved = savedTicket(t, s, (txt) => txt.replace(/"upside_target": \{[^}]*\}/, '"upside_target": null'));
+  const out = B.brief(s.ws, { now: Date.parse(saved.receipt.saved_at) + 3600000 });
+  const line = byId(out, 'pm_cards').lines[0].text;
+  assert.match(line, /target unknown, invalidation \$0\.7, R:R unknown; Researcher/);
+  assert.doesNotMatch(line, /undefined|NaN|null/);
+});
 
 test('daily brief: a PM card waiting is listed with its age and link; held, models differ and research waiting are named', (t) => {
   const s = setup(t);
