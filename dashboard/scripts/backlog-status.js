@@ -17,9 +17,15 @@ const { spawnSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..', '..');
 const STATE_FILE = 'DESK_STATE.md';
-const SURGE_ENDS = '2026-10-28T03:00:00Z'; // 2026-10-27 23:00 New York time
-const SURGE = { cap: 9, batch: 3 };
-const AFTER = { cap: 4, batch: 2 };
+// Eric's surge rule as DESK_STATE.md and the routine state it (2026-10-25:
+// five items and a cap of 15 until 2026-10-28 23:00 New York time, then three
+// and six); item 42 was written with 9/3, then 4/2 from 2026-10-27.
+const SURGE_ENDS = '2026-10-29T03:00:00Z'; // 2026-10-28 23:00 New York time
+const SURGE = { cap: 15, batch: 5 };
+const AFTER = { cap: 6, batch: 3 };
+// An item the engineering inbox admitted (Connected Engineering v1): built
+// alone, only through the engineering lane, never in a batch.
+const ENGINEERING_RE = /\*\(engineering task (eng-\d{8}-[0-9a-f]{6}) v(\d+), sha256 ([0-9a-f]{16})/;
 
 function git(cwd, args, { allowFail = false } = {}) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
@@ -37,7 +43,9 @@ function parseBacklog(state) {
   const items = [];
   for (const line of section.split('\n')) {
     const m = /^\s*- \[([ xX])\] (\*\([^)]*\)\* )?\*\*(\d+)\.\s*([^*]*)/.exec(line);
-    if (m) items.push({ n: Number(m[3]), checked: m[1] !== ' ', eric: !!m[2] && /Eric/i.test(m[2]), text: m[4].trim() });
+    if (!m) continue;
+    const eng = ENGINEERING_RE.exec(line);
+    items.push({ n: Number(m[3]), checked: m[1] !== ' ', eric: !!m[2] && /Eric/i.test(m[2]), text: m[4].trim(), engineering: eng ? { task_id: eng[1], version: Number(eng[2]), sha256_prefix: eng[3] } : null });
   }
   return items;
 }
@@ -52,8 +60,9 @@ function baseOf(cwd, branches) {
 }
 
 function status(cwd = ROOT, { now = new Date() } = {}) {
-  const mergedSet = new Set(git(cwd, ['branch', '-r', '--merged', 'origin/main', '--list', 'origin/claude/backlog-*']).out.split('\n').map((s) => s.trim()).filter(Boolean));
-  const all = git(cwd, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/remotes/origin/claude/backlog-*']).out.split('\n').map((s) => s.trim()).filter(Boolean);
+  // Engineering candidates waiting for review are work in progress too.
+  const mergedSet = new Set(git(cwd, ['branch', '-r', '--merged', 'origin/main', '--list', 'origin/claude/backlog-*', 'origin/claude/candidate-eng-*']).out.split('\n').map((s) => s.trim()).filter(Boolean));
+  const all = git(cwd, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/remotes/origin/claude/backlog-*', 'refs/remotes/origin/claude/candidate-eng-*']).out.split('\n').map((s) => s.trim()).filter(Boolean);
   const branches = all.filter((b) => !mergedSet.has(b)).map((ref) => ({
     branch: ref.replace(/^origin\//, ''),
     items: [...new Set(trailers(git(cwd, ['log', `origin/main..${ref}`, '--format=%B']).out))].sort((a, b) => a - b),
@@ -66,7 +75,8 @@ function status(cwd = ROOT, { now = new Date() } = {}) {
   const lim = limitsAt(now);
   const headroom = Math.max(0, Math.min(lim.batch, lim.cap - waitingItems.length));
   const taken = (it) => it.checked || onMain.has(it.n) || waitingItems.includes(it.n);
-  const buildable = backlog.filter((it) => !it.eric && !taken(it));
+  const buildable = backlog.filter((it) => !it.eric && !it.engineering && !taken(it));
+  const engineering = backlog.filter((it) => it.engineering && !it.checked).map((it) => ({ item: it.n, task_id: it.engineering.task_id, version: it.engineering.version, taken: taken(it) }));
   return {
     at: now.toISOString(),
     cap: lim.cap,
@@ -79,7 +89,9 @@ function status(cwd = ROOT, { now = new Date() } = {}) {
     headroom,
     next: buildable.slice(0, headroom).map((it) => ({ item: it.n, text: it.text })),
     buildable_after: buildable.slice(headroom, headroom + 3).map((it) => it.n),
-    base: baseOf(cwd, branches),
+    // An engineering branch is never a base: a batch never waits on its review.
+    base: baseOf(cwd, branches.filter((b) => /^claude\/backlog-(?!eng-)/.test(b.branch))),
+    engineering,
   };
 }
 
@@ -101,4 +113,4 @@ if (require.main === module) {
   } catch (e) { process.stderr.write(`${e.message}\n`); process.exit(1); }
 }
 
-module.exports = { status, words, parseBacklog, limitsAt, SURGE_ENDS };
+module.exports = { status, words, parseBacklog, limitsAt, SURGE_ENDS, ENGINEERING_RE };
