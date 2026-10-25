@@ -22,6 +22,8 @@ function fixture(t) {
   g(root, 'init', '-q', '--bare', '-b', 'main', origin);
   const work = path.join(root, 'work');
   g(root, 'clone', '-q', origin, work);
+  // A Windows global core.autocrlf=true would check files out with CRLF.
+  g(work, 'config', 'core.autocrlf', 'false');
   g(work, 'checkout', '-q', '-b', 'main');
   put(work, 'DESK_STATE.md', '## Autonomous Build Backlog\n- [ ] **1. One.** a\n- [ ] **2. Two.** b\n- [ ] **3. Three.** c\n');
   put(work, 'dashboard/public/app/bundle.js', 'bundle v0\n');

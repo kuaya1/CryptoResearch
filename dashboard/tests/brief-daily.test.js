@@ -161,8 +161,24 @@ test('daily brief: the text is deterministic, its SHA-256 is of that text, and a
   }
   // The route.
   const { start } = require('../server');
+  // Daily jobs marked done today, the startup inbox job awaited and the tree
+  // left to settle, so the server's own background writes (jobs state, index
+  // rebuild) land before the tree is hashed.
+  const today = require('../core/dates').ymdInTz(new Date());
+  atomicWrite(s.ws.abs('logs/jobs-state.json'), jsonText({ schema_version: 'cr.jobs-state.v1', jobs: { snapshot: { last_success_day: today }, reviews: { last_success_day: today }, backup: { last_success_day: today } }, runner: {} }));
   const srv = await start(s.ws, { port: 47900 + Math.floor(Math.random() * 90), quiet: true });
   t.after(() => { try { srv.shutdown(); } catch (_) { /* stopped */ } });
+  for (let i = 0; i < 150; i++) {
+    const st = readJson(s.ws.abs('logs/jobs-state.json'), { jobs: {} });
+    if (st.jobs && st.jobs.inbox && st.jobs.inbox.last_run_at) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  for (let i = 0, prev = null; i < 40; i++) {
+    const h = JSON.stringify(hashTree(s.root));
+    if (h === prev) break;
+    prev = h;
+    await new Promise((r) => setTimeout(r, 500));
+  }
   const get = (p, headers = {}) => new Promise((resolve, reject) => {
     http.get({ host: '127.0.0.1', port: srv.port, path: p, headers: { host: `127.0.0.1:${srv.port}`, ...headers } }, (res) => {
       const c = [];
