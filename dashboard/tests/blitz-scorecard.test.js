@@ -68,17 +68,62 @@ test('git rows: items merged from trailers and ticks, branches waiting, CI throu
   assert.equal(byId(after, 'branches_waiting').status, 'not met');
   assert.equal(byId(after, 'branches_waiting').value, 6);
 
-  const ok = (args) => (args[0] === 'auth' ? { status: 0, out: '', err: '' } : { status: 0, out: JSON.stringify([{ headBranch: 'claude/backlog-batch-items-9-10' }, { headBranch: 'claude/backlog-slug-11' }]), err: '' });
-  const ci = byId(scorecard({ cwd: r.work, ws: null, now: NOW, gh: (cwd, args) => ok(args) }), 'ci_coverage');
+  const sha = (b) => g(r.work, 'rev-parse', `origin/${b}`);
+  const runsFor = (branches) => (cwd, args) => (args[0] === 'auth' ? { status: 0, out: '', err: '' } : { status: 0, out: JSON.stringify(branches.map((b) => ({ headBranch: b, headSha: sha(b), event: 'push' }))), err: '' });
+  const ci = byId(scorecard({ cwd: r.work, ws: null, now: NOW, gh: runsFor(['claude/backlog-batch-items-9-10', 'claude/backlog-slug-11']) }), 'ci_coverage');
   assert.equal(ci.status, 'not met');
-  assert.match(ci.note, /2 of 6 backlog branches/);
-  const all = byId(scorecard({ cwd: r.work, ws: null, now: NOW, gh: (cwd, args) => (args[0] === 'auth' ? { status: 0, out: '', err: '' } : { status: 0, out: JSON.stringify(['claude/backlog-batch-items-9-10', ...[11, 12, 13, 14, 15].map((i) => `claude/backlog-slug-${i}`)].map((b) => ({ headBranch: b }))), err: '' }) }), 'ci_coverage');
+  assert.match(ci.note, /2 of 6 backlog heads/);
+  assert.match(ci.note, /No run visible for/);
+  const all = byId(scorecard({ cwd: r.work, ws: null, now: NOW, gh: runsFor(['claude/backlog-batch-items-9-10', ...[11, 12, 13, 14, 15].map((i) => `claude/backlog-slug-${i}`)]) }), 'ci_coverage');
   assert.equal(all.status, 'met');
   assert.equal(all.value, 100);
+});
 
+test('a run on an earlier commit of a branch does not cover its head, and a merged head with no run is not counted', (t) => {
+  const r = repo(t);
+  r.branch('claude/backlog-early', 9);
+  r.fetch();
+  const early = g(r.work, 'rev-parse', 'origin/claude/backlog-early');
+  g(r.work, 'checkout', '-q', 'claude/backlog-early');
+  put(r.work, 'later.txt', 'later'); g(r.work, 'add', '-A'); g(r.work, 'commit', '-qm', 'more\n\nBacklog-Item: 9'); g(r.work, 'push', '-q', 'origin', 'claude/backlog-early'); g(r.work, 'checkout', '-q', 'main');
+  r.fetch();
+  const head = g(r.work, 'rev-parse', 'origin/claude/backlog-early');
+  const gh = (shas) => (cwd, args) => (args[0] === 'auth' ? { status: 0, out: '', err: '' } : { status: 0, out: JSON.stringify(shas.map((headSha) => ({ headSha, headBranch: 'claude/backlog-early', event: 'push' }))), err: '' });
+  const onEarlier = byId(scorecard({ cwd: r.work, ws: null, now: NOW, gh: gh([early]) }), 'ci_coverage');
+  assert.equal(onEarlier.status, 'not met');
+  assert.equal(onEarlier.value, 0);
+  assert.equal(byId(scorecard({ cwd: r.work, ws: null, now: NOW, gh: gh([early, head]) }), 'ci_coverage').status, 'met');
+  // The branch merges to main and is deleted: its head has no run visible.
+  g(r.work, 'merge', '-q', '--no-ff', '-m', 'Merge claude/backlog-early', 'origin/claude/backlog-early');
+  r.push();
+  g(r.work, 'push', '-q', 'origin', '--delete', 'claude/backlog-early');
+  g(r.work, 'fetch', '-q', 'origin', '--prune');
+  const gone = byId(scorecard({ cwd: r.work, ws: null, now: NOW, gh: gh([]) }), 'ci_coverage');
+  assert.equal(gone.status, 'not met');
+  assert.match(gone.note, /merged head/);
+  assert.equal(byId(scorecard({ cwd: r.work, ws: null, now: NOW, gh: gh([head]) }), 'ci_coverage').status, 'met');
+});
+
+test('the rollback drill reads only a structured record: prose never counts', (t) => {
+  const r = repo(t);
+  const status = () => byId(scorecard({ cwd: r.work, ws: null, now: NOW, gh: signedOut }), 'rollback_drill');
   put(r.work, 'audits/2026-11-01-rollback-drill/README.md', 'The drill passed.');
   g(r.work, 'add', '-A');
-  assert.equal(byId(scorecard({ cwd: r.work, ws: null, now: NOW, gh: signedOut }), 'rollback_drill').status, 'met');
+  assert.equal(status().status, 'not measurable from records', 'a markdown file is not a record');
+  put(r.work, 'audits/2026-11-02-x/rollback-drill.json', '{ not json');
+  g(r.work, 'add', '-A');
+  const bad = status();
+  assert.equal(bad.status, 'not measurable from records');
+  assert.match(bad.note, /could not be read/);
+  put(r.work, 'audits/2026-11-02-x/rollback-drill.json', JSON.stringify({ schema_version: 'cr.rollback-drill.v1', result: 'failed', from: 'a', to: 'b', checked: [] }));
+  g(r.work, 'add', '-A');
+  assert.equal(status().status, 'not met');
+  put(r.work, 'audits/2026-11-02-x/rollback-drill.json', JSON.stringify({ schema_version: 'cr.rollback-drill.v1', result: 'passed', from: 'a', to: 'b', checked: ['tickets.view'] }));
+  g(r.work, 'add', '-A');
+  assert.equal(status().status, 'met');
+  put(r.work, 'audits/2026-11-02-x/rollback-drill.json', JSON.stringify({ schema_version: 'other', result: 'passed' }));
+  g(r.work, 'add', '-A');
+  assert.equal(status().status, 'not measurable from records', 'a wrong schema is not a record');
 });
 
 test('a folder that is not a git repository reads not measurable, never a guess', (t) => {
