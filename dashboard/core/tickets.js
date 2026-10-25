@@ -1903,6 +1903,56 @@ async function quoteCandidates(ws, { limit = 15, dryRun = false, fetchImpl, cgGe
   }
   return out;
 }
+// `tickets run-cycle` (item 51): the Track 2 pipeline in one deterministic pass,
+// in this order: autoPilotSync, batchGate, quoteCandidates (up to `limit`),
+// pilotQueue. It answers one combined receipt with each step's counts and the
+// next steps for Agent 1 (research) and Agent 2 (ticket). A step that throws is
+// said in `errors` and the later steps still run. It calls no model, places no
+// order, and `dryRun` writes and sends nothing (the queue then shows the
+// records as they stand, before any opt-in the pass would make).
+const CYCLE_FORMAT = 'cr-run-cycle@1';
+
+async function runCycle(ws, { limit = 10, dryRun = false, now = Date.now(), fetchImpl, cgGetImpl, sleep } = {}) {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new OpError('INVALID', '--limit is a whole number from 1 to 200.');
+  const dry = dryRun === true;
+  const out = { format: CYCLE_FORMAT, ran_at: iso(now), dry_run: dry, limit, steps: {}, counts: {}, next: { agent1_research: [], agent2_ticket: [], for_eric: [] }, errors: [] };
+  const step = async (name, fn) => {
+    try {
+      return await fn();
+    } catch (err) {
+      out.errors.push({ step: name, code: err.code || null, message: err.message });
+      return null;
+    }
+  };
+  const sync = await step('auto_pilot_sync', () => autoPilotSync(ws, { dryRun: dry }));
+  out.steps.auto_pilot_sync = sync ? { min: sync.min, opted_in: sync.opted_in, unchanged: sync.unchanged.length, skipped: sync.skipped.length } : null;
+  const gates = await step('batch_gate', () => batchGate(ws, { dryRun: dry, now }));
+  out.steps.batch_gate = gates ? { below: gates.below, made: gates.made, unchanged: gates.unchanged.length, skipped: gates.skipped.length } : null;
+  const quotes = await step('quote_candidates', () => quoteCandidates(ws, { limit, dryRun: dry, fetchImpl, cgGetImpl, sleep, now }));
+  out.steps.quote_candidates = quotes ? { sizes: quotes.sizes, quoted: quotes.quoted, current: quotes.current.length, skipped: quotes.skipped.length, stopped: quotes.stopped } : null;
+  const queue = await step('pilot_queue', () => pilotQueue(ws, { now }));
+  out.steps.pilot_queue = queue ? { steps: queue.length } : null;
+  for (const q of queue || []) {
+    const row = { project_id: q.project_id, name: q.name || null, step: q.step, why: q.why };
+    if (q.step === 'research') out.next.agent1_research.push({ ...row, run_id: q.run_id || null });
+    else if (q.step === 'ticket') out.next.agent2_ticket.push({ ...row, ticket_id: q.ticket_id || null, report_id: q.report_id || null });
+    else if (q.step === 'pm_review') out.next.for_eric.push({ ...row, receipt_id: q.receipt_id || null });
+  }
+  const byStep = {};
+  for (const q of queue || []) byStep[q.step] = (byStep[q.step] || 0) + 1;
+  out.counts = {
+    opted_in: sync ? sync.opted_in.length : null,
+    gates_made: gates ? gates.made.length : null,
+    quoted: quotes ? quotes.quoted.length : null,
+    queue: byStep,
+    agent1_research: out.next.agent1_research.length,
+    agent2_ticket: out.next.agent2_ticket.length,
+    waiting_for_eric: out.next.for_eric.length,
+    errors: out.errors.length,
+  };
+  return out;
+}
+
 function pendingFor(ws) {
   const out = [];
   for (const p of require('./projects').listProjects(ws)) {
@@ -2108,5 +2158,7 @@ module.exports = {
   batchGate,
   autoPilotSync,
   quoteCandidates,
+  runCycle,
+  CYCLE_FORMAT,
   pendingFor,
 };

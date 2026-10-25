@@ -1787,3 +1787,49 @@ test('trade plan geometry: view() carries it on a saved Prosecutor ticket, unkno
     assert.match(g.words, /unknown/);
   }
 });
+
+// ---------------------------------------------------------------------------
+// run-cycle (backlog item 51)
+
+test('run-cycle: auto-pilot-sync, batch-gate, quotes and the queue in one receipt with next steps for Agent 1 and Agent 2; a dry run writes nothing; a second run opts in nobody', async (t) => {
+  const s = withReport(t);
+  stubClaudeReport(t);
+  stubHeld(t, s.pid, false);
+  await assert.rejects(() => T.runCycle(s.ws, { limit: 0 }), (e) => e.code === 'INVALID');
+  const tree = hashTree(s.root);
+  const dry = await T.runCycle(s.ws, { dryRun: true });
+  assert.deepEqual(hashTree(s.root), tree, 'a dry run writes nothing');
+  assert.equal(dry.format, 'cr-run-cycle@1');
+  assert.equal(dry.dry_run, true);
+  assert.equal(dry.counts.opted_in, 1, 'would opt in the qualifying project');
+  assert.deepEqual(dry.errors, []);
+  assert.equal(dry.steps.pilot_queue.steps, 0, 'nothing is in the pilot yet in a dry run');
+
+  const run = await T.runCycle(s.ws, { limit: 5 });
+  assert.equal(run.limit, 5);
+  assert.deepEqual(run.errors, []);
+  assert.deepEqual(run.steps.auto_pilot_sync.opted_in.map((r) => r.project_id), [s.pid]);
+  assert.equal(run.counts.gates_made, 0, 'a grade over the filter of 40 is not batch-gated');
+  assert.equal(run.counts.quoted, 0, 'no chain is approved, so no quote is asked for');
+  assert.equal(run.steps.pilot_queue.steps, 1);
+  assert.equal(run.counts.agent1_research + run.counts.agent2_ticket + run.counts.waiting_for_eric + (run.counts.queue.gate_closed || 0) + (run.counts.queue.done || 0), 1);
+  const next = [...run.next.agent1_research, ...run.next.agent2_ticket, ...run.next.for_eric];
+  for (const n of next) assert.equal(n.project_id, s.pid);
+  assert.equal(T.pendingFor(s.ws).length, 0, 'no Prosecutor job is made by the cycle');
+
+  const again = await T.runCycle(s.ws);
+  assert.equal(again.counts.opted_in, 0);
+  assert.equal(again.steps.auto_pilot_sync.unchanged, 1);
+});
+
+test('run-cycle: the CLI answers the same receipt, and --limit must be a whole number', async (t) => {
+  const s = withReport(t);
+  stubClaudeReport(t);
+  stubHeld(t, s.pid, false);
+  const cli = require('../cli');
+  const r = await cli.run(['tickets', 'run-cycle', '--dry-run', '--limit', '3', '--workspace', s.ws.root]);
+  assert.equal(r.format, 'cr-run-cycle@1');
+  assert.equal(r.limit, 3);
+  assert.equal(r.dry_run, true);
+  await assert.rejects(() => cli.run(['tickets', 'run-cycle', '--limit', 'x', '--workspace', s.ws.root]), /whole number/);
+});
