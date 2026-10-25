@@ -853,3 +853,53 @@ test('reopen: a ticket sized under @1 while @2 is in force can be re-opened; not
   assert.equal(T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'reopen' }).result.status, 'unchanged');
   assert.equal(T.nextStep(s.ws, s.pid).refresh, true);
 });
+
+// ---------------------------------------------------------------------------
+// Rollback-safe records (item 13): a receipt from a newer rules version
+test('a receipt made under a newer sizing or invalidation version (@9) is shown as saved, not re-read; the view, summary, next step and index do not throw', (t) => {
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  const rel = `projects/${s.pid}/tickets/receipts/${saved.receipt_id}.json`;
+  const before = T.view(s.ws, s.pid).ticket;
+  const r = readJson(s.ws.abs(rel));
+  r.versions.sizing = 'cr-ticket-sizing@9';
+  r.desk.invalidation_version = 'cr-ticket-invalidation@9';
+  atomicWrite(s.ws.abs(rel), jsonText(r));
+  // Even a price far under the trigger is not read against the newer rule.
+  dropPrice(s.ws, Date.parse(saved.receipt.saved_at), 0.1);
+  const v = T.view(s.ws, s.pid).ticket;
+  assert.match(v.rule_note, /newer rule \(cr-ticket-sizing@9, cr-ticket-invalidation@9\): shown as saved, not re-read/);
+  assert.equal(v.invalidation.unread, true);
+  assert.deepEqual(v.invalidation.checks, []);
+  assert.notEqual(v.status, 'invalidated');
+  assert.equal(v.can_reopen, null, 'a newer rule is not an upgrade');
+  assert.equal(v.suggested_risk_usd, before.suggested_risk_usd, 'the saved figures are as they are');
+  assert.equal(v.proposal_type, before.proposal_type);
+  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'reopen' }), (e) => e.code === 'REFUSED');
+  assert.doesNotThrow(() => T.nextStep(s.ws, s.pid));
+  const sum = T.summary(s.ws, s.pid);
+  assert.equal(sum.unavailable, undefined);
+  assert.match(sum.rule_note, /newer rule/);
+  const row = require('../core/indexer').buildIndex(s.ws).projects.find((p) => p.project_id === s.pid);
+  assert.match(row.ticket.rule_note, /newer rule/);
+  // An older or current version carries no note.
+  r.versions.sizing = 'cr-ticket-sizing@1';
+  delete r.desk.invalidation_version;
+  atomicWrite(s.ws.abs(rel), jsonText(r));
+  assert.equal(T.view(s.ws, s.pid).ticket.rule_note, null);
+});
+
+test('a desk-gate receipt from a newer pre-gate version is shown as saved', (t) => {
+  const s = withReport(t);
+  stubHeld(t, s.pid, false);
+  gradeClosed(s.ws);
+  const made = T.createTicket(s.ws, { project_id: s.pid, assistant: true });
+  const rel = `projects/${s.pid}/tickets/receipts/${made.receipt.receipt_id}.json`;
+  const r = readJson(s.ws.abs(rel));
+  r.pregate_version = 'cr-ticket-pregate@9';
+  atomicWrite(s.ws.abs(rel), jsonText(r));
+  const v = T.view(s.ws, s.pid).ticket;
+  assert.equal(v.desk_gate, true);
+  assert.match(v.rule_note, /cr-ticket-pregate@9/);
+  assert.doesNotThrow(() => require('../core/indexer').buildIndex(s.ws));
+});

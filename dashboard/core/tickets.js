@@ -41,6 +41,14 @@ const FORMAT = 'cr.ticket.v1';
 const SIZING_VERSION = 'cr-ticket-sizing@2';
 const INVALIDATION_VERSION = 'cr-ticket-invalidation@2';
 const INVALIDATION_V1 = 'cr-ticket-invalidation@1';
+// Rollback safety (2026-10-25): a receipt made under a newer rules version than
+// this code knows is shown as saved, never re-read and never thrown on.
+const RULE_KINDS = [
+  { name: 'sizing', current: SIZING_VERSION, of: (r) => r.versions && r.versions.sizing },
+  { name: 'invalidation', current: INVALIDATION_VERSION, of: (r) => (r.desk && r.desk.invalidation_version) || (r.versions && r.versions.invalidation) },
+  { name: 'pregate', current: 'cr-ticket-pregate@1', of: (r) => r.pregate_version || (r.versions && r.versions.pregate) },
+];
+const versionNumber = (v) => { const m = /@(\d+)$/.exec(String(v || '')); return m ? Number(m[1]) : null; };
 const MIN_COVERAGE_DEFAULT = 90;
 const MAX_GAP_HOURS = 6;
 // The desk's pre-gate (Eric, 2026-10-24): when the grade alone rules out new
@@ -942,11 +950,25 @@ function decisionFor(lines, rid) {
   return mine.filter((l) => l.action !== 'undo' && !undone.has(l.decision_id)).pop() || null;
 }
 
+// The rules versions on a receipt that are newer than this code knows, in
+// words; null when none. Same family only: cr-ticket-sizing@9 against @2.
+function newerRuleOf(receipt) {
+  if (!receipt) return null;
+  const newer = [];
+  for (const k of RULE_KINDS) {
+    const v = k.of(receipt);
+    const n = versionNumber(v);
+    const cur = versionNumber(k.current);
+    if (typeof v === 'string' && n !== null && cur !== null && n > cur && v.split('@')[0] === k.current.split('@')[0]) newer.push(v);
+  }
+  return newer.length ? { versions: newer, words: `Made under a newer rule (${newer.join(', ')}): shown as saved, not re-read.` } : null;
+}
+
 // Why a saved ticket may be re-opened: it is invalidated, or it was sized under
 // an older rules version than the one in force. Null when neither holds.
 // Nothing re-opens automatically.
 function reopenReason(ws, project, receipt, { now = Date.now() } = {}) {
-  if (!receipt || receipt.kind === 'desk_gate') return null;
+  if (!receipt || receipt.kind === 'desk_gate' || newerRuleOf(receipt)) return null;
   const inv = invalidationOf(ws, project, receipt, { now });
   if (inv.invalidated) return { kind: 'invalidated', why: inv.words || 'The ticket is invalidated.' };
   const was = receipt.versions && receipt.versions.sizing;
@@ -1084,6 +1106,8 @@ function basisStale(ws, project, receipt, now) {
 // ticket, is under its threshold. Unknown is unknown, never "holding".
 function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals = null } = {}) {
   if (receipt.kind === 'desk_gate') return { version: INVALIDATION_VERSION, invalidated: false, checks: [], words: 'No invalidation trigger: the desk\'s gate, not a Prosecutor.' };
+  const newer = newerRuleOf(receipt);
+  if (newer) return { version: (receipt.desk && receipt.desk.invalidation_version) || INVALIDATION_VERSION, invalidated: false, unread: true, checks: [], words: newer.words, rule_note: newer.words };
   // A receipt made before the coverage rule has no version on it: read as @1.
   const v1 = !(receipt.desk && receipt.desk.invalidation_version);
   const version = v1 ? INVALIDATION_V1 : INVALIDATION_VERSION;
@@ -1191,6 +1215,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       exit_cost_2000_usd_pct: d.exit_cost_2000_usd_pct ?? null,
       exits_missing: d.exits_missing || [],
       trigger_breached_at_save: d.trigger_breached_at_save || null,
+      rule_note: (newerRuleOf(current) || {}).words || null,
       can_reopen: (() => {
         if (gateOnly || current !== receipts[receipts.length - 1] || open || (decision && decision.action === 'reopen')) return null;
         return reopenReason(ws, project, current, { now });
@@ -1360,6 +1385,7 @@ function pendingFor(ws) {
 }
 
 module.exports = {
+  newerRuleOf,
   PROMPT_VERSION,
   FORMAT,
   SIZING_VERSION,
