@@ -290,4 +290,74 @@ Phase 3 (Eric, 2026-10-25), to keep the builder fed while the `@6` Watchlist Sur
 - [x] **34. `tickets digest`: weekly performance and quota telemetry.** `dashboard/core/tickets.js` plus CLI `tickets digest [--days 7] [--json]`: `@6` reports completed, Prosecutor tickets against `desk_gate` passes, the distribution of grade spreads between models, invalidated triggers fired, and provider budget used, all over the last 7 days, deterministic, with an unreadable section said and never counted as zero. It writes nothing. Tests on a fictional workspace.
 - [x] **35. Tick step for merged backlog branches.** When a `claude/backlog-*` branch merges, the `Backlog-Item: <n>` items it carries are ticked in `DESK_STATE.md` cleanly: a `tick` mode in `dashboard/scripts/merge-train.js` (`npm run train -- --tick-main`) that reads the trailers on `main` and ticks the unticked ones, with a post-merge step in `backlog-pr.yml` that opens no extra PR if nothing needs ticking. Never edits anything but the checkbox. Tests with a temporary git repo.
 
+Phase 4 (Eric, 2026-10-25): the open recommendations of `audits/2026-10-25-codex-autonomy-review` and the blueprint's W4.4. Every item obeys the blueprint's §1 invariants. An item whose text says it touches a protected path is built like any other; its PR then waits for Eric's merge.
+
+- [ ] **36. Complete missing decision consequences: `tickets reconcile`.** `dashboard/core/tickets.js` `reconcileEffects(ws, { project = null, dryRun = false })`, CLI `tickets reconcile [<project>] [--dry-run] [--json]`. A failed paper or journal step after a decision is today completed only when the same decision is sent again (review A06).
+  - For each decision in force that grants risk and has no paper position, open it through `paper.openForDecision`, with the entry at or before `decided_at` as always.
+  - For each decision line with no journal entry naming its `decision_id`, add that entry through `journalDecision`, its text naming the decision's own time.
+  - It never archives or restores a project (Eric may have restored it since a pass), never voids a position, and never changes `decisions.jsonl`. A pass whose archive step failed is named, not archived.
+  - It prints what it completed and what was already complete.
+  - Tests: a grant whose paper step failed is completed once and a second run is all unchanged; an undone grant gets nothing; a failed archive is named and left; `--dry-run` writes nothing.
+  - Done when one command repairs every recorded-but-incomplete decision without inventing one.
+- [ ] **37. Older receipts sized from a job record: integrity-limited.** A receipt saved before `frozenBasis` (review A08) may have been sized from a job record that differs from its frozen packet.
+  - `tickets.view` recomputes `gate()` for a Prosecutor receipt from its verified frozen packet (`receipt.packet`), under the receipt's own `desk.sizing` and `proposal.proposal_type`. It compares the result with the receipt's `desk` exit costs and its risk before any admission hold (`desk.admission.held_risk.risk_usd` when held, else `desk.suggested_risk_usd`).
+  - A difference reads `integrity: { status: 'limited', fields, words }`. A packet that cannot be verified reads `integrity: { status: 'unverified', words }`. A match reads `ok`. Receipts written since frozenBasis are also checked, and should read `ok`.
+  - `decide` refuses `approve` and `halve` on a limited or unverified receipt (409 `INTEGRITY`, naming the fields); `veto`, `pass` and `watch` stay allowed. The PM Decision Card shows the words. The receipt's bytes never change. Rebuild the bundle.
+  - Tests: a receipt made from a mutated job (fixture) reads limited and cannot be approved but can be vetoed; a normal receipt reads ok; a missing packet reads unverified; reading writes nothing.
+- [ ] **38. A sampled breach, said.** The rule `cr-ticket-invalidation@2` is unchanged; this adds words and fields only.
+  - A `triggered` price check whose coverage is under `tickets.invalidation.min_coverage_pct` carries `sampled: true`. Its words add "a sampled reading: n of m hours had one", the reading's time and its source (an hourly observation, or `latest.json`).
+  - With full coverage it is `sampled: false`, and every fired check names its source.
+  - The PM Decision Card's invalidated line and the daily brief's invalidated section show it. The status stays `triggered`: the published rule decides, and the label only says how much was seen. Rebuild the bundle.
+  - Tests: two readings in 24 h with one under the trigger read triggered and sampled with the words; full coverage reads not sampled; a reading from `latest.json` names it.
+- [ ] **39. Daily brief: tickets waiting on a repair or a fresh price.** A new section, `ticket_repairs`, in `dashboard/core/brief-daily.js`, after `stale_basis`, with the same partial and unreadable rules as items 15 and the review's A07.
+  - A grant in force whose paper position is missing (`decision.paper === 'missing'`): "complete it on the card (Complete paper position) or `tickets reconcile`".
+  - A ticket held to $0 by the admission check (`admission.held_risk`), with its reason: "refresh prices, then ask for a new ticket (refresh)".
+  - Each line is a deep link to the project. Update `public/daily-brief-model.js` if its section order or words need it, and rebuild the bundle.
+  - Tests: both cases are listed with their words and links; a healthy desk reads "None right now."; an unreadable ticket makes the section partial; a read writes nothing.
+- [ ] **40. Pre-gate: say why the grade closed it, with an override on the card.** A withheld grade from a retrieval gap reads today like a weak project (review, stress test 2).
+  - `closeGate` records `desk.gate.reason_kind`: `grade_low` (a firm grade, or a range's low end, under the floor) or `grade_withheld`. A withheld grade also gets `desk.gate.withheld`, with the report's scored share and the investment components it left unscored, from the report's own `investment_components`.
+  - `pregate_version` stays `cr-ticket-pregate@1`: the rule is unchanged and only what it records grows. Older receipts read as `reason_kind: null`, said "not recorded".
+  - `nextStep`'s `gate_closed` words name the kind.
+  - The PM Decision Card's desk-gate view says it. It gets "Ask the Prosecutor anyway", which, after a confirm, posts `POST /api/projects/<id>/tickets` with `force_prosecution: true` (the route already takes it) and is labeled as Eric's override. Rebuild the bundle.
+  - Tests: an under-floor grade reads `grade_low`; a withheld grade reads `grade_withheld` with its components; an older receipt reads not recorded; the override opens a normal ticket.
+- [ ] **41. Shadow gate: fixed 30-day results beside "since saved".** Today `paper.js` `shadowGate`'s `since` follows the latest price, so a day-30 +100% reads +200% at day 35 (the review's added probe).
+  - Each row also gets `day30`, from the hourly reading at or before the receipt (within 6 h) to the one at or before receipt + 30 days (within 24 h): the change and the change against BTC. Its status is `matured`, `immature` (before day 30) or `unevaluable` (a price missing), never 0. Once matured it never changes.
+  - Archived projects' receipts are included.
+  - A cohort line per receipt month gives the matured, immature and unevaluable counts. There is no median, hit rate or "the gate was right" before 20 have matured, and never a probability.
+  - Research > Outcomes' Shadow toggle (`public/paper-model.js`, `public/views/research.js`) shows the day-30 column beside "since saved". Rebuild the bundle.
+  - Tests: the review's probe (+100% at day 30, +200% at day 35) keeps day30 at +100%; immature and unevaluable read so; an archived project's receipt is listed; nothing is written.
+- [ ] **42. Backlog status, computed: `dashboard/scripts/backlog-status.js`.** The WIP cap is today an instruction, not a check, and "stop at 9" allows 8 + 3 (review, stress test 1).
+  - `node dashboard/scripts/backlog-status.js [--json]` reads git and `DESK_STATE.md` on `origin/main` only (fetch first) and writes nothing.
+  - It gives:
+    - the waiting items (the `Backlog-Item` trailers on `origin/claude/backlog-*` branches not merged into `origin/main`, each counted once, with their branches);
+    - the cap and batch size in force by New York time (9 and 3 until 2026-10-27 23:00 ET, then 4 and 2);
+    - the headroom: how many items may start now, counting what this run would add, so 8 waiting with a cap of 9 starts 1;
+    - the next buildable items in order (unchecked, not *(Eric)*, not taken on `origin/main` or a waiting branch);
+    - the base to build on (the newest waiting branch, else `origin/main`).
+  - No npm script: `package.json` is a protected path.
+  - Tests with a temporary git repo (the merge-train fixture style): the waiting count, the cap switch at the date, headroom with 8 waiting, taken and *(Eric)* items skipped, and the base choice.
+  - Done when one command gives the routine everything its first step decides (Eric then points the routine prompt at it).
+- [ ] **43. Scorecard: exact heads, and a structured drill result.** In `dashboard/scripts/blitz-scorecard.js`:
+  - `ci_coverage` becomes "Backlog heads tested on that exact commit". Each merged backlog head (the second parent of each backlog merge on `origin/main`) and each waiting branch's head counts as covered only with a `test.yml` run on that exact SHA (`gh run list --json headSha,headBranch,event`). A branch deleted with no run is said not visible, never counted as covered.
+  - `rollback_drill` reads only a structured record: `audits/*/rollback-drill.json` with `schema_version: 'cr.rollback-drill.v1'`, `result: 'passed' | 'failed'`, `from`, `to`, `checked`. It is met only on `result: 'passed'`. Prose never counts ("not passed" contains "passed").
+  - Tests: a run on an earlier commit of the branch does not cover its head; a markdown file saying "not passed" is not met; a passed JSON record is met; an unreadable record says so.
+- [ ] **44. Rollback drill (W4.4): `dashboard/scripts/rollback-drill.js`.** `node dashboard/scripts/rollback-drill.js --from <ref> [--json] [--record <audit-dir>]`.
+  - It builds a FICTIONAL workspace with this checkout's code, reusing the test fixtures: a Prosecutor receipt, a desk gate, an admission-held receipt, decisions and a paper position.
+  - In a temporary `git worktree` at `<ref>` (the previous release), it runs that code's `tickets.view`, `tickets.summary`, `paper.book`, `indexer.buildIndex` and `brief-daily` over the workspace in a child process.
+  - It passes when nothing throws and records made under newer rules read as "made under a newer rule" (item 13).
+  - With `--record`, it writes `rollback-drill.json` in item 43's shape into the named audit folder; otherwise it writes nothing outside its temporary folder. It refuses a non-test workspace, never touches the real workspace or a branch, and removes the worktree.
+  - Tests with a temporary git repo and an injected reader: a passing and a failing drill, the record's shape, and the worktree removed.
+- [ ] **45. Set cost says what its date does.** `portfolio set-cost` (CLI, `dashboard/cli.js`) and its route `POST /api/portfolio/set-cost` (`dashboard/server.js`, which adds the words to `portfolio.setCost`'s answer) name the original entry's date and the corrected date. There is no UI form for it today, and this item adds none.
+  - When the dates differ, the answer says the units count as held from the new date instead of the old one, so holdings and results between the two dates change (review, stress test 5). With no `--acquired-at`, it says the original date is kept.
+  - Words only: no change to `core/portfolio.js`, a protected path.
+  - Tests: the CLI's output and the route's answer name both dates; the same date says nothing changes.
+- [ ] **46. Promotion follow-ups. This touches protected paths (`dashboard/scripts/backlog-promote.js`, `.github/workflows/backlog-pr.yml`), so its PR waits for Eric.**
+  - After a confirmed merge, the promote job ticks the merged items' boxes on `main` (merge-train.js `untickedOnMain` and `tick`, with `tickMain`'s checkbox-only check) in a second compare-and-swap push. This is item 35's post-merge step, which the 2026-10-25 rewrite left out. Nothing to tick pushes nothing.
+  - When `main` moved during a promotion (`base_moved`), the job asks for one re-run of the workflow for the same head (`actions: write`), at most once per head, and says so in the summary.
+  - Tests in `backlog-promote.test.js`: ticks after a merge with nothing else changed; nothing to tick pushes nothing; a moved main asks for one re-run, and a second refusal asks for none.
+- [ ] *(Eric)* **47. Native L1 exemption needs a fresh market cap, `cr-ticket-sizing@3`.** `nativeL1Liquid` reads the stored market cap without its age (review, stress test 3).
+  - Under @3, the exemption holds only when the packet's market cap is no older than `freshness.price_stale_minutes`. Otherwise the exit check reads "native L1 exemption unavailable: market cap from <time>".
+  - Tickets frozen under @2 and @1 keep their rules.
+  - This is a sizing change, so it needs Eric's go first (blueprint W2.7).
+
 - Never in scope: an exchange or wallet connection, placing orders, moving money.
