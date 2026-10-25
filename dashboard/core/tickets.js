@@ -1388,13 +1388,13 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
           const t = Date.parse(pt.source_last_updated_at || pt.fetched_at);
           if (!Number.isFinite(t) || t < savedMs || t > now || !isNum(pt.price_usd)) continue;
           times.push(t);
-          if (!low || pt.price_usd < low.price_usd) low = { price_usd: pt.price_usd, at: iso(t) };
+          if (!low || pt.price_usd < low.price_usd) low = { price_usd: pt.price_usd, at: iso(t), source: 'hourly observation' };
         }
       }
       const latest = (market.readLatest(ws).assets || {})[cg];
       const lt = latest ? Date.parse(latest.source_last_updated_at || latest.fetched_at) : NaN;
       if (latest && isNum(latest.price_usd) && Number.isFinite(lt) && lt >= savedMs && lt <= now) times.push(lt);
-      if (latest && isNum(latest.price_usd) && Number.isFinite(lt) && lt >= savedMs && (!low || latest.price_usd < low.price_usd)) low = { price_usd: latest.price_usd, at: iso(lt) };
+      if (latest && isNum(latest.price_usd) && Number.isFinite(lt) && lt >= savedMs && (!low || latest.price_usd < low.price_usd)) low = { price_usd: latest.price_usd, at: iso(lt), source: 'latest.json' };
     }
     const cov = v1 ? null : coverageOf(times, savedMs, now);
     const triggered = low !== null && low.price_usd <= inv.price_usd;
@@ -1402,7 +1402,12 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
     const covWords = cov && cov.hours_elapsed >= 1 ? ` Coverage: ${cov.hours_with_reading} of ${cov.hours_elapsed} hours since the ticket had a reading${cov.gaps.length ? `; gaps over ${MAX_GAP_HOURS} h: ${cov.gaps.map((g) => `${g.from} to ${g.to}`).join('; ')}` : ''}.` : '';
     const base = low === null ? null : { price_usd: low.price_usd, at: low.at };
     if (low === null) checks.push({ kind: 'price', status: 'unknown', threshold_usd: inv.price_usd, ...(cov ? { coverage: cov } : {}), words: `No price recorded since the ticket.${covWords}` });
-    else if (triggered) checks.push({ kind: 'price', status: 'triggered', threshold_usd: inv.price_usd, lowest_usd: low.price_usd, at: low.at, ...(cov ? { coverage: cov } : {}), words: `Price reached $${low.price_usd} at ${low.at}, at or below the invalidation price $${inv.price_usd}.${covWords}` });
+    else if (triggered) {
+      // The published rule decides; the label only says how much was seen (item 38).
+      const sampled = Boolean(thin);
+      const sampledWords = sampled ? ` A sampled reading: ${cov.hours_with_reading} of ${cov.hours_elapsed} hours had one; this one is from ${low.at} (${low.source}).` : '';
+      checks.push({ kind: 'price', status: 'triggered', threshold_usd: inv.price_usd, lowest_usd: low.price_usd, at: low.at, source: low.source, sampled, ...(cov ? { coverage: cov } : {}), words: `Price reached $${low.price_usd} at ${low.at} (${low.source}), at or below the invalidation price $${inv.price_usd}.${sampledWords}${covWords}` });
+    }
     else if (thin) checks.push({ kind: 'price', status: 'unknown', threshold_usd: inv.price_usd, lowest_usd: base.price_usd, at: base.at, coverage: cov, words: `Not enough price readings to say the price held: ${cov.coverage_pct}% of the hours since the ticket have one, under your ${minCoveragePct(ws)}%. Lowest seen $${low.price_usd}, above $${inv.price_usd}.${covWords}` });
     else checks.push({ kind: 'price', status: 'holding', threshold_usd: inv.price_usd, lowest_usd: low.price_usd, at: low.at, ...(cov ? { coverage: cov } : {}), words: `Lowest price since the ticket $${low.price_usd}, above $${inv.price_usd}.${covWords}` });
   }
@@ -1416,7 +1421,7 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
     else checks.push({ kind: 'metric', status: m.total_30d_usd < inv.metric.below_30d_usd ? 'triggered' : 'holding', key: inv.metric.key, threshold_usd: inv.metric.below_30d_usd, value_usd: m.total_30d_usd, at: f.fetched_at, words: `30-day ${inv.metric.key} $${Math.round(m.total_30d_usd).toLocaleString('en-US')} ${m.total_30d_usd < inv.metric.below_30d_usd ? 'under' : 'not under'} $${inv.metric.below_30d_usd.toLocaleString('en-US')}.` });
   }
   const hit = checks.find((c) => c.status === 'triggered') || null;
-  const out = { version, invalidated: Boolean(hit), by: hit ? hit.kind : null, words: hit ? hit.words : null, fired: hit, checks };
+  const out = { version, invalidated: Boolean(hit), by: hit ? hit.kind : null, words: hit ? hit.words : null, fired: hit, ...(hit && hit.kind === 'price' ? { sampled: hit.sampled } : {}), checks };
   if (!v1) {
     const stale = basisStale(ws, project, receipt, now);
     if (stale) out.basis_stale = stale;

@@ -1587,3 +1587,36 @@ test('integrity: a normal receipt reads ok; a receipt whose figures differ from 
   assert.equal(u.status, 'unverified');
   assert.match(u.words, /veto, pass or watch/);
 });
+
+test('invalidation@2: a triggered price check under the coverage rule is "sampled" and says so; full coverage is not; the status stays triggered (backlog item 38)', (t) => {
+  const c = coverageSetup(t);
+  c.obs(0.9, c.t0 + 1 * H);
+  c.obs(0.69, c.t0 + 20 * H);
+  const thin = c.price(c.t0 + 24 * H);
+  assert.equal(thin.status, 'triggered');
+  assert.equal(thin.sampled, true);
+  assert.equal(thin.source, 'hourly observation');
+  assert.match(thin.words, /A sampled reading: 2 of 24 hours had one; this one is from /);
+  assert.match(thin.words, /hourly observation/);
+  const v = T.view(c.ws, c.pid, { now: c.t0 + 24 * H });
+  assert.equal(v.ticket.status, 'invalidated', 'the published rule decides');
+  assert.equal(v.ticket.invalidation.sampled, true);
+  assert.match(v.ticket.invalidation.words, /sampled reading/);
+  const f = coverageSetup(t);
+  for (let h = 0; h < 4; h++) f.obs(h === 3 ? 0.69 : 0.9, f.t0 + (h + 0.5) * H);
+  const full = f.price(f.t0 + 4.5 * H);
+  assert.equal(full.status, 'triggered');
+  assert.equal(full.sampled, false);
+  assert.equal(full.source, 'hourly observation');
+  assert.doesNotMatch(full.words, /sampled/);
+  assert.match(full.words, /\(hourly observation\)/);
+});
+
+test('invalidation@2: a breach read from latest.json names it', (t) => {
+  const c = coverageSetup(t);
+  freshPrice(c.ws, 'example-payfi-fictional', 0.69, 0);
+  const p = c.price(Date.now() + 60000);
+  assert.equal(p.status, 'triggered');
+  assert.equal(p.source, 'latest.json');
+  assert.match(p.words, /\(latest\.json\)/);
+});
