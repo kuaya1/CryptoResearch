@@ -41,30 +41,30 @@ function fixture(t, count = 14) {
 }
 const STATE = 'DESK_STATE.md';
 const SURGE = new Date('2026-10-26T12:00:00Z');
-const AFTER = new Date('2026-10-28T03:00:00Z');
+const AFTER = new Date('2026-10-29T03:00:00Z');
 
 test('the backlog section only: checked, Eric and numbered lines', () => {
   const items = parseBacklog('## Autonomous Build Backlog\n- [x] **1. A.** t\n- [ ] *(Eric)* **2. B.** t\n- [ ] **3. C.** t\n## Other\n- [ ] **4. D.** t\n');
   assert.deepEqual(items.map((i) => [i.n, i.checked, i.eric]), [[1, true, false], [2, false, true], [3, false, false]]);
 });
 
-test('nothing waiting: surge batch of three, Eric and ticked items skipped, base is main', (t) => {
+test('nothing waiting: surge batch of five, Eric and ticked items skipped, base is main', (t) => {
   const { work } = fixture(t);
   const s = status(work, { now: SURGE });
-  assert.equal(s.cap, 9); assert.equal(s.batch, 3); assert.equal(s.surge, true);
+  assert.equal(s.cap, 15); assert.equal(s.batch, 5); assert.equal(s.surge, true);
   assert.equal(s.waiting_count, 0);
-  assert.equal(s.headroom, 3);
-  assert.deepEqual(s.next.map((x) => x.item), [3, 4, 5]);
+  assert.equal(s.headroom, 5);
+  assert.deepEqual(s.next.map((x) => x.item), [3, 4, 5, 6, 7]);
   assert.equal(s.base, 'origin/main');
 });
 
-test('the cap switches at 2026-10-28T03:00Z', (t) => {
+test('the cap switches at 2026-10-29T03:00Z (2026-10-28 23:00 New York)', (t) => {
   const { work } = fixture(t);
-  const before = status(work, { now: new Date('2026-10-28T02:59:59Z') });
+  const before = status(work, { now: new Date('2026-10-29T02:59:59Z') });
   const after = status(work, { now: AFTER });
-  assert.deepEqual([before.cap, before.batch], [9, 3]);
-  assert.deepEqual([after.cap, after.batch, after.surge], [4, 2, false]);
-  assert.deepEqual(after.next.map((x) => x.item), [3, 4]);
+  assert.deepEqual([before.cap, before.batch], [15, 5]);
+  assert.deepEqual([after.cap, after.batch, after.surge], [6, 3, false]);
+  assert.deepEqual(after.next.map((x) => x.item), [3, 4, 5]);
 });
 
 test('waiting items count once, are taken, and the newest branch is the base', (t) => {
@@ -76,27 +76,43 @@ test('waiting items count once, are taken, and the newest branch is the base', (
   assert.deepEqual(s.waiting.map((w) => w.item), [3, 4, 5, 6, 7]);
   assert.deepEqual(s.waiting.find((w) => w.item === 3).branches.sort(), ['claude/backlog-batch-items-3-4-5', 'claude/backlog-batch-items-6-and-7']);
   assert.equal(s.waiting_count, 5);
-  assert.deepEqual(s.next.map((x) => x.item), [8, 9, 10]);
+  assert.deepEqual(s.next.map((x) => x.item), [8, 9, 10, 11, 12]);
   assert.equal(s.base, 'origin/claude/backlog-batch-items-6-and-7');
   assert.match(words(s), /Base: origin\/claude\/backlog-batch-items-6-and-7/);
 });
 
-test('8 waiting under a cap of 9 starts one; 9 waiting is at the cap', (t) => {
-  const { work, branch, fetch } = fixture(t);
-  branch('claude/backlog-a', [3, 4, 5, 6]);
-  branch('claude/backlog-b', [7, 8, 9, 10], 'claude/backlog-a');
+test('14 waiting under a cap of 15 starts one; 15 waiting is at the cap', (t) => {
+  const { work, branch, fetch } = fixture(t, 20);
+  branch('claude/backlog-a', [3, 4, 5, 6, 7, 8, 9]);
+  branch('claude/backlog-b', [10, 11, 12, 13, 14, 15, 16], 'claude/backlog-a');
   fetch();
   let s = status(work, { now: SURGE });
-  assert.equal(s.waiting_count, 8);
+  assert.equal(s.waiting_count, 14);
   assert.equal(s.headroom, 1);
-  assert.deepEqual(s.next.map((x) => x.item), [11]);
-  branch('claude/backlog-c', [11], 'claude/backlog-b');
+  assert.deepEqual(s.next.map((x) => x.item), [17]);
+  branch('claude/backlog-c', [17], 'claude/backlog-b');
   fetch();
   s = status(work, { now: SURGE });
   assert.equal(s.at_cap, true);
   assert.equal(s.headroom, 0);
   assert.deepEqual(s.next, []);
-  assert.match(words(s), /WIP cap: 9 items waiting for merge/);
+  assert.match(words(s), /WIP cap: 15 items waiting for merge/);
+});
+
+test('an engineering item is never in a batch; its candidate counts as waiting but is never the base', (t) => {
+  const { work, branch, fetch } = fixture(t, 6);
+  const state = fs.readFileSync(path.join(work, STATE), 'utf8').replace('\n## Later', '- [ ] **7. Write the trial note** *(engineering task eng-20261025-abc123 v1, sha256 0123456789abcdef, delegation pol-20261025-def456; built only through the engineering lane)*\n  - Outcome: o\n\n## Later');
+  put(work, STATE, state);
+  g(work, 'add', '-A'); g(work, 'commit', '-qm', 'admission'); g(work, 'push', '-q', 'origin', 'main');
+  assert.deepEqual(parseBacklog(state).find((i) => i.n === 7).engineering, { task_id: 'eng-20261025-abc123', version: 1, sha256_prefix: '0123456789abcdef' });
+  branch('claude/backlog-batch-items-3-and-4', [3, 4]);
+  branch('claude/candidate-eng-7', [7]);
+  fetch();
+  const s = status(work, { now: SURGE });
+  assert.deepEqual(s.next.map((x) => x.item), [5, 6]);
+  assert.deepEqual(s.engineering, [{ item: 7, task_id: 'eng-20261025-abc123', version: 1, taken: true }]);
+  assert.equal(s.waiting_count, 3);
+  assert.equal(s.base, 'origin/claude/backlog-batch-items-3-and-4');
 });
 
 test('a merged branch is not waiting, and an item on main by trailer is taken though unticked', (t) => {
@@ -107,7 +123,7 @@ test('a merged branch is not waiting, and an item on main by trailer is taken th
   fetch();
   const s = status(work, { now: SURGE });
   assert.equal(s.waiting_count, 0);
-  assert.deepEqual(s.next.map((x) => x.item), [4, 5, 6]);
+  assert.deepEqual(s.next.map((x) => x.item), [4, 5, 6, 7, 8]);
   assert.equal(s.base, 'origin/main');
 });
 

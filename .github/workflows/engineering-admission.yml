@@ -1,0 +1,47 @@
+# Adds an engineering task's bound entry to main's backlog (Connected
+# Engineering v1, 2026-10-25; audits/2026-10-25-connected-engineering).
+#
+# The builder pushes claude/admission-<task> holding one commit that adds the
+# entry the desk bound for that task. This job runs main's own script, never
+# the branch's code (dashboard/scripts/backlog-promote.js admission): it reads
+# the branch as data, asks the desk's public admission record
+# (DESK_URL/engineering/admissions/<task>) whether that exact entry, number and
+# version may join, re-applies the entry onto main as it is now (never a
+# merge, so two admissions never conflict), pushes it by compare-and-swap,
+# reads main back and deletes the branch. A paused or unreadable desk, a
+# revoked delegation, a number already on main or on an open intake branch,
+# or any other change in the branch is a refusal with the reason: nothing
+# reaches main then, and the builder records it and allocates again.
+#
+# It adds a backlog line only; nothing is built or merged by it. Uses only
+# GITHUB_TOKEN. No concurrency group: GitHub would cancel all but one pending
+# run; the compare-and-swap push serializes them instead.
+name: engineering-admission
+
+on:
+  push:
+    branches: ['claude/admission-eng-*']
+
+permissions: {}
+
+jobs:
+  admit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      # Everything from the event goes through env, never into the script text.
+      - name: Add the bound entry to main
+        shell: bash
+        env:
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          DESK_URL: ${{ vars.DESK_URL || 'https://cryptoresearch.onrender.com' }}
+        run: |
+          cp dashboard/scripts/backlog-promote.js "$RUNNER_TEMP/backlog-promote.js"
+          node "$RUNNER_TEMP/backlog-promote.js" admission --branch "$BRANCH" --head "$SHA"

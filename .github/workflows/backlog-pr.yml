@@ -16,6 +16,10 @@
 #            commit it was tested on. The result is read back from GitHub; the
 #            branch is deleted only after a confirmed merge, at the tested
 #            commit. Anything else fails the job with the reason.
+#            An engineering item (claude/backlog-eng-<n>, Connected
+#            Engineering v1) is promoted alone, and only while the desk's
+#            public attestation of that exact head holds (scope and promote
+#            both ask it; an unreadable desk is a refusal).
 #   deploy   reports separately whether the online desk serves the merge
 #            (repository variable DESK_HEALTH_URL, its /healthz); a merge is
 #            never called a deployment. Nothing is rolled back.
@@ -102,6 +106,8 @@ jobs:
             exit 1
           fi
           { echo "go=true"; echo "number=$number"; echo "base=$base"; } >> "$GITHUB_OUTPUT"
+      # An engineering item (Connected Engineering v1) is also checked against
+      # the desk's public attestation of this exact head (DESK_URL).
       - name: Check the scope Eric authorized
         id: scope
         if: steps.pr.outputs.go == 'true'
@@ -109,7 +115,9 @@ jobs:
         env:
           BASE: ${{ steps.pr.outputs.base }}
           SHA: ${{ github.event.workflow_run.head_sha }}
-        run: node dashboard/scripts/backlog-promote.js scope --base "$BASE" --head "$SHA"
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          DESK_URL: ${{ vars.DESK_URL || 'https://cryptoresearch.onrender.com' }}
+        run: node dashboard/scripts/backlog-promote.js scope --base "$BASE" --head "$SHA" --branch "$BRANCH"
 
   compose:
     needs: pr
@@ -183,6 +191,7 @@ jobs:
           SHA: ${{ github.event.workflow_run.head_sha }}
           TREE: ${{ needs.compose.outputs.tree }}
           NUMBER: ${{ needs.pr.outputs.number }}
+          DESK_URL: ${{ vars.DESK_URL || 'https://cryptoresearch.onrender.com' }}
         run: |
           cp dashboard/scripts/backlog-promote.js "$RUNNER_TEMP/backlog-promote.js"
           node "$RUNNER_TEMP/backlog-promote.js" promote --base "$BASE" --head "$SHA" --branch "$BRANCH" --tree "$TREE" --repo "$GITHUB_REPOSITORY" --number "$NUMBER" --message "Merge pull request #$NUMBER from $GITHUB_REPOSITORY_OWNER/$BRANCH"

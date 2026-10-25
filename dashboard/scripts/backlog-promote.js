@@ -41,7 +41,8 @@ const PROTECTED = [
   { re: /^\.claude\//, why: 'agent definitions and permissions' },
   { re: /^(CLAUDE|COWORK-INSTRUCTIONS)\.md$/, why: 'agent instructions' },
   { re: /^DESK_STATE\.md$/, why: 'the backlog (a branch never edits it; Eric adds and ticks items)' },
-  { re: /^dashboard\/scripts\/(backlog-promote|backlog-intake|merge-train)\.js$/, why: 'promotion controls' },
+  { re: /^dashboard\/scripts\/(backlog-promote|backlog-intake|merge-train|engineering-worker)\.js$/, why: 'promotion controls' },
+  { re: /^dashboard\/engineering\//, why: 'engineering authorization (the inbox, delegations and their connector)' },
   { re: /^dashboard\/(oauth|mcp|hosted)\.js$/, why: 'authorization (sign-in and connector grants)' },
   { re: /^server\.js$/, why: 'the hosted entry point' },
   { re: /^dashboard\/core\/(portfolio|wallets|walletsync|alchemy)\.js$/, why: 'financial records (the ledger and wallets)' },
@@ -59,10 +60,19 @@ function run(cwd, cmd, args, { allowFail = false, env = {} } = {}) {
 const git = (cwd, args, opts) => run(cwd, 'git', args, opts);
 const revParse = (cwd, ref) => { const r = git(cwd, ['rev-parse', '--verify', '-q', `${ref}^{commit}`], { allowFail: true }); return r.status === 0 ? r.out : null; };
 
-// The items main's backlog holds: number -> { ticked, eric }.
+// An item the desk's engineering inbox admitted (Connected Engineering v1,
+// 2026-10-25): its line names the private task, its version and a hash prefix.
+const ENG_MARK_RE = /\*\(engineering task (eng-\d{8}-[0-9a-f]{6}) v(\d+), sha256 ([0-9a-f]{16})/;
+
+// The items main's backlog holds: number -> { ticked, eric, engineering }.
 function backlogItems(text) {
   const out = new Map();
-  for (const m of String(text || '').matchAll(/^\s*- \[([ x])\] (\*\(Eric\)\* )?\*\*(\d+)\./gm)) out.set(Number(m[3]), { ticked: m[1] === 'x', eric: Boolean(m[2]) });
+  const s = String(text || '');
+  for (const m of s.matchAll(/^\s*- \[([ x])\] (\*\(Eric\)\* )?\*\*(\d+)\./gm)) {
+    const end = s.indexOf('\n', m.index);
+    const eng = ENG_MARK_RE.exec(s.slice(m.index, end < 0 ? s.length : end));
+    out.set(Number(m[3]), { ticked: m[1] === 'x', eric: Boolean(m[2]), engineering: eng ? { task_id: eng[1], version: Number(eng[2]), sha256_prefix: eng[3] } : null });
+  }
   return out;
 }
 
@@ -161,8 +171,215 @@ function promote(cwd, { base, head, branch, tree, message, remote = 'origin', re
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Engineering lane (Connected Engineering v1, Eric 2026-10-25;
+// audits/2026-10-25-connected-engineering). The desk's private inbox decides
+// what is authorized; this script only reads its public, sanitized answers:
+//   /engineering/admissions/<task>  whether a bound entry may join the backlog
+//   /engineering/attestations/<sha> whether that exact head may be promoted
+// An unreadable desk is a refusal, never a pass.
+
+const ADMISSION_BRANCH_RE = /^claude\/admission-(eng-\d{8}-[0-9a-f]{6})$/;
+const ENG_BRANCH_RE = /^claude\/backlog-eng-(\d+)$/;
+const sha256hex = (s) => require('crypto').createHash('sha256').update(s).digest('hex');
+function globRe(glob) {
+  let re = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === '*' && glob[i + 1] === '*') { i += 1; if (glob[i + 1] === '/') { i += 1; re += '(?:.*/)?'; } else re += '.*'; } else if (c === '*') re += '[^/]*';
+    else re += c.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${re}$`);
+}
+
+// The desk's public JSON: { status, json } (null json when not JSON). Only
+// https, or http to this machine for tests.
+async function defaultFetchJson(url) {
+  const u = new URL(url);
+  if (!(u.protocol === 'https:' || (u.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(u.hostname)))) throw new Error(`refusing to read ${u.protocol}//${u.host}`);
+  const res = await fetch(u, { headers: { accept: 'application/json' }, redirect: 'error', signal: AbortSignal.timeout(15000) });
+  const text = await res.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch (_) { /* not JSON */ }
+  return { status: res.status, json };
+}
+async function deskRead(fetchJson, desk, path) {
+  if (!desk) return { error: 'no desk address is set (DESK_URL)' };
+  try {
+    const r = await fetchJson(`${String(desk).replace(/\/+$/, '')}${path}`);
+    if (r.status === 404) return { missing: true };
+    if (r.status !== 200 || !r.json) return { error: `the desk answered ${r.status}` };
+    return { json: r.json };
+  } catch (err) {
+    return { error: `the desk could not be read (${String(err && err.message || err).slice(0, 160)})` };
+  }
+}
+
+// Where an admission adds its entry: after the backlog's last numbered item
+// and its indented lines, before anything else in the section.
+function insertEntry(text, entry) {
+  const lines = String(text).split('\n');
+  const s = lines.findIndex((l) => /^## Autonomous Build Backlog/.test(l));
+  if (s < 0) throw new Error('DESK_STATE.md has no "## Autonomous Build Backlog" section');
+  let e = lines.findIndex((l, i) => i > s && /^## /.test(l));
+  if (e < 0) e = lines.length;
+  let last = -1;
+  for (let i = s + 1; i < e; i++) if (/^\s*- \[[ xX]\] (\*\([^)]*\)\* )?\*\*\d+\./.test(lines[i])) last = i;
+  let at = e;
+  if (last >= 0) {
+    at = last + 1;
+    while (at < e && (lines[at].startsWith('  ') || (lines[at] === '' && at + 1 < e && lines[at + 1].startsWith('  ')))) at += 1;
+  }
+  const add = String(entry).replace(/\n$/, '').split('\n');
+  lines.splice(at, 0, ...add);
+  return lines.join('\n');
+}
+
+// The added text of an admission branch, read as data: it may change only
+// DESK_STATE.md, by exactly one entry inserted where insertEntry puts it.
+function admissionDiff(cwd, { base, head }) {
+  const reasons = [];
+  const names = git(cwd, ['diff', '--no-renames', '--name-only', base, head]).out.split('\n').filter(Boolean);
+  if (names.length !== 1 || names[0] !== 'DESK_STATE.md') reasons.push(`an admission changes only DESK_STATE.md, not ${names.join(', ') || 'nothing'}`);
+  const diff = git(cwd, ['diff', '--no-renames', '--no-color', '-U0', base, head, '--', 'DESK_STATE.md']).out.split('\n');
+  const hunks = diff.filter((l) => l.startsWith('@@')).length;
+  const removed = diff.filter((l) => l.startsWith('-') && !l.startsWith('---'));
+  const added = diff.filter((l) => l.startsWith('+') && !l.startsWith('+++')).map((l) => l.slice(1));
+  if (removed.length) reasons.push('an admission removes or changes no line');
+  if (hunks !== 1) reasons.push(`an admission adds one block, not ${hunks}`);
+  const entry = added.length ? `${added.join('\n')}\n` : '';
+  const before = git(cwd, ['show', `${base}:DESK_STATE.md`], { allowFail: true });
+  const after = git(cwd, ['show', `${head}:DESK_STATE.md`], { allowFail: true });
+  if (!reasons.length && before.status === 0 && after.status === 0) {
+    let want = null;
+    try { want = insertEntry(rawShow(cwd, base, 'DESK_STATE.md'), entry); } catch (err) { reasons.push(err.message); }
+    if (want !== null && want !== rawShow(cwd, head, 'DESK_STATE.md')) reasons.push('the entry is not where an admission adds it (after the backlog\'s last item)');
+  }
+  const first = added[0] || '';
+  const num = /^- \[ \] \*\*(\d+)\. /.exec(first);
+  const mark = ENG_MARK_RE.exec(first);
+  if (!num || !mark) reasons.push('the added block does not start with an unticked engineering item line');
+  return { reasons, entry, number: num ? Number(num[1]) : null, task_id: mark ? mark[1] : null, version: mark ? Number(mark[2]) : null, sha256_prefix: mark ? mark[3] : null };
+}
+// File content exactly as stored (git show trims nothing when read raw).
+function rawShow(cwd, rev, file) {
+  const r = spawnSync('git', ['show', `${rev}:${file}`], { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (r.status !== 0) throw new Error(`${file} is not in ${String(rev).slice(0, 12)}`);
+  return r.stdout;
+}
+
+// Numbers an open intake branch adds (Eric's ready-label flow), so an
+// admission never takes one of them.
+function intakeNumbers(cwd, remote) {
+  const refs = git(cwd, ['ls-remote', remote, 'refs/heads/claude/intake-issue-*'], { allowFail: true }).out.split('\n').filter(Boolean).map((l) => l.split(/\s+/)[1]);
+  const nums = new Set();
+  for (const ref of refs) {
+    const local = `refs/remotes/${remote}/${ref.replace('refs/heads/', '')}`;
+    if (git(cwd, ['fetch', '-q', remote, `+${ref}:${local}`], { allowFail: true }).status !== 0) continue;
+    const t = git(cwd, ['show', `${local}:DESK_STATE.md`], { allowFail: true });
+    if (t.status === 0) for (const n of backlogItems(t.out).keys()) nums.add(n);
+  }
+  return nums;
+}
+
+// Adds a bound entry to main by compare-and-swap. The desk's admission record
+// decides; the branch only carries the entry. The entry is re-applied onto
+// main as it is (never a merge), so two admissions never conflict.
+async function admit(cwd, { branch, head, desk, remote = 'origin', fetchJson = defaultFetchJson, push = defaultPush, tries = 3 }) {
+  const m = ADMISSION_BRANCH_RE.exec(String(branch));
+  if (!m) throw new Error(`${branch} is not an admission branch`);
+  if (!SHA_RE.test(String(head))) throw new Error('head must be a full commit SHA');
+  const taskId = m[1];
+  const out = { status: null, task_id: taskId, branch, head, number: null, merge: null, base: null, reasons: [], branch_deleted: false };
+  const tip = remoteRef(cwd, remote, `refs/heads/${branch}`);
+  if (tip !== head) return { ...out, status: 'head_moved', branch_tip: tip };
+  git(cwd, ['fetch', '-q', remote, `+refs/heads/main:refs/remotes/${remote}/main`, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
+  const mb = git(cwd, ['merge-base', `refs/remotes/${remote}/main`, head]).out;
+  const d = admissionDiff(cwd, { base: mb, head });
+  out.number = d.number;
+  if (d.task_id && d.task_id !== taskId) d.reasons.push(`the entry names ${d.task_id}, not ${taskId}`);
+  if (d.reasons.length) return { ...out, status: 'refused', reasons: d.reasons };
+  const a = await deskRead(fetchJson, desk, `/engineering/admissions/${taskId}`);
+  if (a.error || a.missing) return { ...out, status: 'refused', reasons: [a.error || `the desk has no admission for ${taskId}`] };
+  const rec = a.json;
+  const want = [];
+  if (rec.admissible !== true) want.push(...(rec.reasons || ['not admissible']).map((x) => `desk: ${x}`));
+  if (rec.task_id !== taskId) want.push('desk: another task');
+  if (rec.number !== d.number) want.push(`desk: the bound number is ${rec.number}, not ${d.number}`);
+  if (rec.version !== d.version) want.push(`desk: the current version is ${rec.version}, not ${d.version}`);
+  if (rec.entry_sha256 !== sha256hex(d.entry)) want.push('desk: the entry is not the bound entry (hash differs)');
+  if (!String(rec.content_sha256 || '').startsWith(d.sha256_prefix || '-')) want.push('desk: the content hash differs');
+  if (want.length) return { ...out, status: 'refused', reasons: want };
+  for (let i = 0; i < tries; i++) {
+    git(cwd, ['fetch', '-q', remote, `+refs/heads/main:refs/remotes/${remote}/main`]);
+    const base = revParse(cwd, `refs/remotes/${remote}/main`);
+    out.base = base;
+    const text = rawShow(cwd, base, 'DESK_STATE.md');
+    if (text.includes(d.entry)) { out.status = 'already_on_main'; out.merge = base; break; }
+    const items = backlogItems(text);
+    if (items.has(d.number)) return { ...out, status: 'refused', reasons: [`number ${d.number} is already on main's backlog (number_taken)`], number_taken: true };
+    if (intakeNumbers(cwd, remote).has(d.number)) return { ...out, status: 'refused', reasons: [`number ${d.number} is on an open intake branch (number_taken)`], number_taken: true };
+    const next = insertEntry(text, d.entry);
+    git(cwd, ['checkout', '-q', '--detach', '-f', base]);
+    fs.writeFileSync(require('path').join(cwd, 'DESK_STATE.md'), next);
+    const added = [...next.matchAll(new RegExp(`^\\s*- \\[[ xX]\\] (\\*\\([^)]*\\)\\* )?\\*\\*${d.number}\\.`, 'gm'))].length;
+    if (added !== 1) return { ...out, status: 'refused', reasons: [`number ${d.number} would appear ${added} times`] };
+    git(cwd, ['add', 'DESK_STATE.md']);
+    git(cwd, ['commit', '-q', '-m', `admission: backlog item ${d.number} for ${taskId} v${d.version}\n\nAdded by engineering-admission from the desk's bound entry; built only through the engineering lane.\n\nEngineering-Admission: ${taskId} v${d.version}\nEntry-SHA256: ${rec.entry_sha256}`]);
+    const merge = revParse(cwd, 'HEAD');
+    try { push(cwd, remote, merge, base); } catch (err) { out.error = String(err && err.message || err).slice(0, 300); }
+    const after = remoteRef(cwd, remote, 'refs/heads/main');
+    if (after === merge) { out.status = 'merged'; out.merge = merge; break; }
+    if (after === base) return { ...out, status: 'push_failed', main: after };
+    out.status = 'base_moved';
+  }
+  if (out.status === 'merged' || out.status === 'already_on_main') {
+    git(cwd, ['push', '--porcelain', `--force-with-lease=refs/heads/${branch}:${head}`, remote, '--delete', branch], { allowFail: true });
+    out.branch_deleted = remoteRef(cwd, remote, `refs/heads/${branch}`) === null;
+  }
+  return out;
+}
+
+// For a branch whose commits name an engineering item: promoted alone, from
+// its own branch, only while the desk attests this exact head (verified,
+// reviewed as required, not paused, inside its approved paths).
+async function engineeringCheck(cwd, { base, head, branch, scope, desk, fetchJson = defaultFetchJson }) {
+  const desk0 = git(cwd, ['show', `${base}:DESK_STATE.md`], { allowFail: true });
+  const items = backlogItems(desk0.status === 0 ? desk0.out : '');
+  const eng = scope.items.filter((n) => items.get(n) && items.get(n).engineering);
+  if (!eng.length) return { engineering: false, ok: true, reasons: [] };
+  const n = eng[0];
+  const it = items.get(n).engineering;
+  const reasons = [];
+  if (scope.items.length !== 1) reasons.push(`engineering item ${n} is promoted alone, never with items ${scope.items.filter((x) => x !== n).join(', ')}`);
+  const m = ENG_BRANCH_RE.exec(String(branch || ''));
+  if (!m || Number(m[1]) !== n) reasons.push(`engineering item ${n} is promoted only from claude/backlog-eng-${n}`);
+  const a = await deskRead(fetchJson, desk, `/engineering/attestations/${head}`);
+  let att = null;
+  if (a.error) reasons.push(a.error);
+  else if (a.missing) reasons.push(`the desk has no record of head ${head.slice(0, 12)} for ${it.task_id}`);
+  else {
+    att = a.json;
+    if (att.promotable !== true) reasons.push(...(att.reasons || ['not promotable']).map((x) => `desk: ${x}`));
+    if (att.task_id !== it.task_id) reasons.push(`desk: the head belongs to ${att.task_id}, not ${it.task_id}`);
+    if (att.number !== n) reasons.push(`desk: the task holds item ${att.number}, not ${n}`);
+    if (att.version !== it.version) reasons.push(`desk: the task is at version ${att.version}, item ${n} names version ${it.version}`);
+    const mb = git(cwd, ['merge-base', base, head], { allowFail: true }).out;
+    if (mb !== att.merge_base_sha) reasons.push(`the merge base ${String(mb).slice(0, 12)} is not the one verified and reviewed (${String(att.merge_base_sha).slice(0, 12)}); the candidate needs rebuilding`);
+    const allowed = Array.isArray(att.allowed_paths) ? att.allowed_paths : [];
+    for (const f of scope.changed) if (!allowed.some((g) => globRe(g).test(f))) reasons.push(`${f} is outside the task's approved scope`);
+  }
+  return { engineering: true, ok: reasons.length === 0, reasons, item: n, task_id: it.task_id, attestation: att ? { promotable: att.promotable, review_state: att.review_state, required_review: att.required_review } : null };
+}
+
 // One plain summary per result; only a confirmed merge says merged.
 function summaryOf(kind, r) {
+  if (kind === 'admission') {
+    if (r.status === 'merged') return `### Admitted: backlog item ${r.number} for ${r.task_id} is on main as ${String(r.merge).slice(0, 7)}\n\nThe desk's bound entry, added by compare-and-swap. ${r.branch_deleted ? `Branch ${r.branch} deleted.` : `Branch ${r.branch} kept.`}`;
+    if (r.status === 'already_on_main') return `Backlog item ${r.number} for ${r.task_id} was already on main; nothing added.`;
+    return `### Not admitted (${r.status})\n\n${(r.reasons || []).map((x) => `- ${x}`).join('\n') || r.error || 'No reason was given.'}\n\nMain is unchanged. The builder reads this back and, for a taken number, binds the next one.`;
+  }
+  if (kind === 'engineering') return r.ok ? `Engineering item ${r.item} (${r.task_id}): the desk attests this head.` : `### Engineering item ${r.item} (${r.task_id}) is not promoted\n\n${r.reasons.map((x) => `- ${x}`).join('\n')}`;
   const short = (s) => (s ? String(s).slice(0, 7) : 'unknown');
   if (kind === 'scope') return r.ok ? `Scope: items ${r.items.join(', ') || 'none'}, ${r.commits} ${r.commits === 1 ? 'commit' : 'commits'}, no protected path.` : `### Needs Eric: not promoted\n\n${r.reasons.map((x) => `- ${x}`).join('\n')}\n\nThe PR stays open for his review.`;
   if (kind === 'compose') return r.status === 'composed' ? `Composed ${short(r.head)} onto main ${short(r.base)} (tree ${short(r.tree)}${r.contains_base ? ', the branch already contains main' : ''}).` : `### Not promoted: the branch does not merge cleanly onto main ${short(r.base)}\n\nConflicts: ${(r.files || []).join(', ') || 'unknown'}. Resolve it with \`npm run train\`.`;
@@ -183,13 +400,21 @@ function emit(kind, result, flat) {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-function main(argv) {
+async function main(argv, { fetchJson = defaultFetchJson } = {}) {
   const [kind, ...rest] = argv;
   const flags = {};
   for (let i = 0; i < rest.length; i += 2) flags[rest[i].replace(/^--/, '')] = rest[i + 1];
   const cwd = process.cwd();
+  const desk = flags.desk || process.env.DESK_URL || null;
   if (kind === 'scope') {
     const r = scopeCheck(cwd, { base: flags.base, head: flags.head });
+    if (r.ok) {
+      const e = await engineeringCheck(cwd, { base: flags.base, head: flags.head, branch: flags.branch, scope: r, desk, fetchJson });
+      if (e.engineering) {
+        r.engineering = e;
+        if (!e.ok) { r.ok = false; r.reasons.push(...e.reasons); }
+      }
+    }
     emit(kind, r, { scope_ok: r.ok, items: r.items.join(' ') });
     return 0;
   }
@@ -199,15 +424,31 @@ function main(argv) {
     return r.status === 'composed' ? 0 : 1;
   }
   if (kind === 'promote') {
+    // The desk is asked again just before the push: a pause, a revoked
+    // delegation or a newer candidate since the scope check stops it here.
+    git(cwd, ['fetch', '-q', 'origin', `+refs/heads/${flags.branch}:refs/remotes/origin/${flags.branch}`], { allowFail: true });
+    if (revParse(cwd, flags.head)) {
+      const sc = scopeCheck(cwd, { base: flags.base, head: flags.head });
+      const e = await engineeringCheck(cwd, { base: flags.base, head: flags.head, branch: flags.branch, scope: sc, desk, fetchJson });
+      if (e.engineering && !e.ok) {
+        emit('engineering', e, { status: 'engineering_refused', merge: '', branch_deleted: false });
+        return 1;
+      }
+    }
     const gh = (args) => run(cwd, 'gh', args).out;
     const r = promote(cwd, { base: flags.base, head: flags.head, branch: flags.branch, tree: flags.tree, message: flags.message, repo: flags.repo, number: flags.number, gh, prWaitMs: 30000 });
     emit(kind, r, { status: r.status, merge: r.merge, branch_deleted: r.branch_deleted });
     return r.status === 'merged' ? 0 : 1;
   }
-  process.stderr.write('Usage: backlog-promote.js scope|compose|promote --base <sha> --head <sha> [--branch b --tree t --repo o/r --number n --message m]\n');
+  if (kind === 'admission') {
+    const r = await admit(cwd, { branch: flags.branch, head: flags.head, desk, fetchJson });
+    emit(kind, r, { status: r.status, merge: r.merge, number: r.number });
+    return r.status === 'merged' || r.status === 'already_on_main' ? 0 : 1;
+  }
+  process.stderr.write('Usage: backlog-promote.js scope|compose|promote|admission --base <sha> --head <sha> [--branch b --tree t --repo o/r --number n --message m --desk https://…]\n');
   return 2;
 }
 
-if (require.main === module) process.exitCode = main(process.argv.slice(2));
+if (require.main === module) main(process.argv.slice(2)).then((c) => { process.exitCode = c; }, (err) => { process.stderr.write(`${err && err.message || err}\n`); process.exitCode = 1; });
 
-module.exports = { PROTECTED, backlogItems, scopeCheck, compose, promote, summaryOf };
+module.exports = { PROTECTED, ENG_MARK_RE, backlogItems, scopeCheck, compose, promote, summaryOf, insertEntry, admissionDiff, admit, engineeringCheck, main };

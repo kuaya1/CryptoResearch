@@ -37,6 +37,11 @@
 !/CLAUDE.md
 !/DESK_STATE.md
 !/CONVERSATIONS.md
+# Engineering design notes the engineering lane writes (design tasks, public
+# repository: no records, holdings, credentials or client details)
+!/docs/
+/docs/*
+!/docs/engineering/
 
 # Claude Code sub-agents and commands for the pilot (never settings,
 # launch configs or worktrees)
@@ -64,6 +69,7 @@ node_modules/
 # Audits: only the reviewed reports below are tracked
 
 /audits/*/*
+!/audits/2026-10-25-connected-engineering/README.md
 !/audits/2026-10-25-visual-proof/README.md
 !/audits/2026-10-25-visual-proof/PLAN.md
 !/audits/2026-10-25-visual-proof/SAMPLE-REPORT.md
