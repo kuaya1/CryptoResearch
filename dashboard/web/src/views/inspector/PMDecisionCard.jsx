@@ -124,6 +124,7 @@ export function PMDecisionCard({ p }) {
         <div className="pm-dis">
           <p className="pm-dis-row"><span className="pm-dis-k">Researcher</span><span>{`${(t.researcher || {}).grade_display || (t.researcher || {}).grade || '—'} · ${(t.researcher || {}).verdict || 'no verdict'}`}</span></p>
         </div>
+        {t.report_delta && t.report_delta.status === 'ok' ? <p className="faint pm-note" data-key={`pm-delta-${pid}`} title={t.report_delta.grade_note || t.report_delta.category_note || undefined}>{`Claude's report: ${t.report_delta.line}`}</p> : null}
         {t.superseded_by_report ? <p className="faint pm-note">{`Claude has a newer report (${t.superseded_by_report}); this gate is on the earlier one.`}</p> : null}
         <div className="pm-actions">
           {decided ? (
@@ -186,6 +187,7 @@ export function PMDecisionCard({ p }) {
       ) : null}
       <div className="pm-dis" title={dis.note || undefined}>
         <p className="pm-dis-row"><span className="pm-dis-k">Researcher</span><span>{`${r.grade_display || r.grade || '—'} · ${r.verdict || 'no verdict'}`}</span></p>
+        {t.report_delta && t.report_delta.status === 'ok' ? <p className="pm-dis-row" data-key={`pm-delta-${pid}`} title={t.report_delta.grade_note || t.report_delta.category_note || undefined}><span className="pm-dis-k">Since last</span><span>{t.report_delta.line}</span></p> : null}
         <p className="pm-dis-row"><span className="pm-dis-k">Prosecutor</span><span>{prosecutorWords(q, fatal)}</span></p>
         {typeof dis.spread_points === 'number' ? <p className="pm-dis-row"><span className="pm-dis-k">Spread</span><span>{`${dis.spread_points > 0 ? '+' : ''}${dis.spread_points} points (researcher minus prosecutor)`}</span></p> : null}
         {dis.note ? (

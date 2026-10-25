@@ -70,6 +70,7 @@ Reports
 
 Forensics & Resilience (no paid model call; Claude investigates, ChatGPT may challenge; Gemini has no role)
   forensics view <id>                    the Forensics tab's read model (writes nothing)
+  forensics quote-candidates [--limit 15] [--dry-run] [--json]   ask the $500 and $2,000 exit quotes for pilot candidates graded 40+ with no current reading (approved chains only; never approves one)
   forensics start <id> [--challenge] [--channel cowork] [--focus TEXT] [--restart] [--refresh]
                                          open (or resume) a forensic audit: frozen prompt and evidence packet
   forensics prompt <id> <audit_id> [--role challenge]   print a role's frozen prompt
@@ -92,6 +93,7 @@ Forensics & Resilience (no paid model call; Claude investigates, ChatGPT may cha
 PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you decide; no order is ever placed)
   paper [--json]                         the paper book: PM-approved tickets as paper positions, apart from the portfolio (writes nothing)
   tickets candidates [--json]           who could go in the pilot: held first, then by grade, with today's gate (writes nothing)
+  tickets batch-gate [--below 40] [--dry-run] [--json]   desk gate receipts for every unheld, verified project graded under 40 (no exit quote, no Prosecutor, no model)
   tickets queue [<id>]                   the autonomous pilot's next step per project (research, ticket, your review)
   tickets pilot <id> --on|--off          put a project in the autonomous pilot (your opt-in)
   tickets start <id> [--refresh] [--reopen] [--restart] [--force-prosecution] [--assistant]
@@ -789,6 +791,11 @@ async function run(argv) {
       const fo = require('./core/forensics');
       const pid = rest[0];
       const aid = rest[1];
+      if (sub === 'quote-candidates') {
+        const lim = one(flags.limit);
+        const r = await require('./core/tickets').quoteCandidates(ws, { limit: lim === undefined ? 15 : Number(lim), dryRun: Boolean(flags['dry-run'] || flags.dry_run) });
+        return r.dry_run || !r.quoted.length ? r : { ...r, ...(await afterWrite(ws, null)) };
+      }
       if (sub === 'view' || sub === 'status') return fo.view(ws, need(pid, `forensics ${sub} <project>`));
       if (sub === 'start') {
         const r = fo.createAudit(ws, { project_id: need(pid, 'forensics start <project> [--challenge]'), challenge: Boolean(flags.challenge), channel: one(flags.channel) || actor, assistant: /cowork/i.test(String(one(flags.channel) || '')) ? 'claude' : null, utterance: one(flags.utterance) || null, owner_focus: one(flags.focus) || null, restart: Boolean(flags.restart), refresh: Boolean(flags.refresh), allow_pending_identity: Boolean(flags.allow_pending_identity) });
@@ -838,7 +845,7 @@ async function run(argv) {
         const f = need(one(flags.file) || pid, 'forensics case-verify --file FILE');
         return require('./core/forensic-case').verifyCase(JSON.parse(fs.readFileSync(f, 'utf8')));
       }
-      throw Object.assign(new Error('forensics view|start|prompt|import|challenge|cancel|monitor|run|correct|case|case-verify (see help)'), { code: 'USAGE' });
+      throw Object.assign(new Error('forensics view|start|quote-candidates|prompt|import|challenge|cancel|monitor|run|correct|case|case-verify (see help)'), { code: 'USAGE' });
     }
     case 'brief': {
       if (sub !== 'daily') throw Object.assign(new Error('brief daily [--json] [--since ISO] (see help)'), { code: 'USAGE' });
@@ -853,6 +860,11 @@ async function run(argv) {
       const tid = rest[1];
       if (sub === 'view' || sub === 'status') return tk.read(ws, need(pid, `tickets ${sub} <project>`), { receiptId: one(flags.receipt) || null, includeText: Boolean(flags['include-text'] || flags.include_text) });
       if (sub === 'candidates') return { candidates: tk.pilotCandidates(ws) };
+      if (sub === 'batch-gate') {
+        const below = one(flags.below);
+        const r = tk.batchGate(ws, { below: below === undefined || below === null || below === true ? null : Number(below), dryRun: Boolean(flags['dry-run'] || flags.dry_run) });
+        return r.made.length && !r.dry_run ? { ...r, ...(await afterWrite(ws, r.made[0].project_id)) } : r;
+      }
       if (sub === 'queue') return { steps: tk.pilotQueue(ws, { project: pid || null }), pending: tk.pendingFor(ws) };
       if (sub === 'start') {
         const exit_quote = await tk.prepareExitQuote(ws, need(pid, 'tickets start <project> [--refresh] [--restart]')).catch(() => null);
@@ -880,7 +892,7 @@ async function run(argv) {
         return { status: r.noop ? 'unchanged' : 'saved', pilot: !flags.off, verified: r.verified, ...(await afterWrite(ws, pid)) };
       }
       if (sub === 'cancel') return tk.cancelTicket(ws, need(pid, 'project'), need(tid, 'ticket_id'), one(flags.reason) || null);
-      throw Object.assign(new Error('tickets view|queue|candidates|start|prompt|import|decide|pilot|cancel (see help)'), { code: 'USAGE' });
+      throw Object.assign(new Error('tickets view|queue|candidates|batch-gate|start|prompt|import|decide|pilot|cancel (see help)'), { code: 'USAGE' });
     }
     case 'job': {
       const jobs = require('./core/jobs');

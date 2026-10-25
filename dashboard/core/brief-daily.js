@@ -58,7 +58,7 @@ function brief(ws, { since = null, now = Date.now() } = {}) {
   section('pm_cards', 'PM cards waiting for you', true, () => rows
     .filter((r) => ticketOf(r) && ticketOf(r).status === 'pending_pm_review')
     .sort((a, b) => String(ticketOf(a).saved_at).localeCompare(String(ticketOf(b).saved_at)))
-    .map((r) => ({ text: `${r.name}: ${String(ticketOf(r).proposal_type || 'ticket').replace(/_/g, ' ')}${ticketOf(r).desk_gate ? ' (desk gate)' : ''}, waiting ${age(ticketOf(r).saved_at, now)}.`, link: link(r.project_id) })));
+    .map((r) => ({ text: `${r.name}: ${String(ticketOf(r).proposal_type || 'ticket').replace(/_/g, ' ')}${ticketOf(r).desk_gate ? ' (desk gate)' : ''}, waiting ${age(ticketOf(r).saved_at, now)}.${r.report_delta && r.report_delta.status === 'ok' ? ` Claude's report: ${r.report_delta.line}.` : ''}`, link: link(r.project_id) })));
 
   section('invalidated', sinceMs === null ? 'Tickets invalidated (no since given: all)' : `Tickets invalidated since ${new Date(sinceMs).toISOString()}`, true, () => rows
     .filter((r) => {

@@ -557,6 +557,7 @@ function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = 
       screening,
       forensic,
       ticket,
+      report_delta: (() => { try { return require('./report-delta').reportDelta(ws, reports); } catch (_) { return null; } })(),
       created_at: p.created_at,
       updated_at: p.updated_at,
     });

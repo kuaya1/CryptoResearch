@@ -1043,3 +1043,61 @@ test('paper: from twenty closed positions a median and a hit count appear; the b
   const ex = require('../core/exporter');
   assert.ok(ex.exportJson(s.ws).paper.positions.length === 20);
 });
+
+// ---------------------------------------------------------------------------
+// Batch gate (backlog item 24)
+
+test('batch gate: an unheld grade under the filter gets a desk receipt; held, high, no report, archived and unverified are skipped; a second run is all unchanged; dry run writes nothing', (t) => {
+  const s = withReport(t);
+  gradeClosed(s.ws);
+  stubHeld(t, s.pid, false);
+  const projects = require('../core/projects');
+  const bare = projects.addProject(s.ws, { name: 'Bare Example (FICTIONAL)', symbol: 'BARE', official_website: 'https://bare-fictional.test', coingecko_id: 'bare-example-fictional', assets: [{ chain: 'other-chain', contract_address: 'FICTIONAL-CONTRACT-BARE' }], evidence: [{ url: 'https://bare-fictional.test', note: 'fictional' }], sector_profile: 'payfi-credit@1' }).project_id;
+  const tree = hashTree(s.root);
+  const dry = T.batchGate(s.ws, { below: 90, dryRun: true });
+  assert.deepEqual(hashTree(s.root), tree, 'a dry run writes nothing');
+  assert.deepEqual(dry.made.map((r) => r.project_id), [s.pid]);
+  assert.equal(dry.made[0].receipt_id, null);
+  assert.ok(dry.skipped.some((r) => r.project_id === bare && /No eligible Claude report/.test(r.reason)));
+  const run = T.batchGate(s.ws, { below: 90 });
+  assert.equal(run.made.length, 1);
+  assert.match(run.made[0].receipt_id, T.RECEIPT_RE);
+  assert.equal(T.listReceipts(s.ws, s.pid)[0].kind, 'desk_gate');
+  assert.equal(T.pendingFor(s.ws).length, 0, 'no Prosecutor job, no model');
+  const again = T.batchGate(s.ws, { below: 90 });
+  assert.equal(again.made.length, 0);
+  assert.deepEqual(again.unchanged.map((r) => r.receipt_id), [run.made[0].receipt_id]);
+  // Over the filter: the default 40 leaves the fixture's grade alone.
+  const s2 = withReport(t);
+  gradeClosed(s2.ws);
+  stubHeld(t, s2.pid, false);
+  const hi = T.batchGate(s2.ws, {});
+  assert.equal(hi.below, 40);
+  assert.equal(hi.made.length, 0);
+  assert.ok(hi.skipped.some((r) => r.project_id === s2.pid && /not under 40/.test(r.reason)));
+  // Held.
+  const h = withReport(t);
+  gradeClosed(h.ws);
+  stubHeld(t, h.pid, true);
+  assert.ok(T.batchGate(h.ws, { below: 90 }).skipped.some((r) => r.project_id === h.pid && /Held/.test(r.reason)));
+  // Archived.
+  const a = withReport(t);
+  gradeClosed(a.ws);
+  stubHeld(t, a.pid, false);
+  require('../core/projects').archiveProject(a.ws, a.pid);
+  assert.ok(T.batchGate(a.ws, { below: 90 }).skipped.some((r) => r.project_id === a.pid && /Archived/.test(r.reason)));
+  // An open Prosecutor job.
+  const o = withReport(t);
+  gradeClosed(o.ws);
+  stubHeld(t, o.pid, false);
+  T.createTicket(o.ws, { project_id: o.pid, force_prosecution: true });
+  assert.ok(T.batchGate(o.ws, { below: 90 }).skipped.some((r) => r.project_id === o.pid && /open/.test(r.reason)));
+});
+
+test('batch gate: --below may lower Eric\'s filter, never raise it past the new-entry floor', (t) => {
+  const s = withReport(t);
+  assert.equal(T.batchGate(s.ws, { dryRun: true }).below, 40);
+  assert.equal(T.batchGate(s.ws, { below: 20, dryRun: true }).below, 20);
+  assert.throws(() => T.batchGate(s.ws, { below: 56, dryRun: true }), (e) => e.code === 'INVALID');
+  assert.throws(() => T.batchGate(s.ws, { below: -1, dryRun: true }), (e) => e.code === 'INVALID');
+});

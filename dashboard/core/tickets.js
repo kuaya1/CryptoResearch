@@ -1249,6 +1249,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       researcher: { report_id: current.researcher.report_id, grade: gateGrade(current.researcher.grade), grade_display: current.researcher.grade ? current.researcher.grade.display : null, verdict: current.researcher.verdict },
       superseded_by_report: researcher && researcher.report_id !== current.researcher.report_id ? researcher.report_id : null,
       format_notes: current.validation ? current.validation.errors : [],
+      report_delta: (() => { try { return require('./report-delta').reportDelta(ws, require('./reports').loadReports(ws, pid)); } catch (_) { return null; } })(),
     };
   }
   const profile = readProfile(ws, pid);
@@ -1392,6 +1393,110 @@ function pilotCandidates(ws, { now = Date.now() } = {}) {
   return rows;
 }
 
+// Eric's filter for the batch gate: a grade under 40 (his choice), never
+// above the sizing's new-entry floor (above it the pre-gate would not close).
+const BATCH_GATE_BELOW = 40;
+
+function batchGateBelow(ws, below) {
+  const cap = sizingOf(ws).min_grade_new_entry;
+  if (below === null || below === undefined) return Math.min(BATCH_GATE_BELOW, cap);
+  if (!isNum(below) || below < 0) throw new OpError('INVALID', '--below must be a number of 0 or more.');
+  if (below > cap) throw new OpError('INVALID', `--below ${below} is above the new-entry floor (${cap}): the batch gate may lower Eric's filter, never raise it past the floor.`);
+  return below;
+}
+
+// Every active, verified project Eric does not hold whose Claude current
+// eligible report grades under `below` goes through createTicket, so each gets
+// the pre-gate's desk receipt. No exit quote is asked for, no prompt is
+// rendered and no model is called. `dryRun` writes nothing. Each project is
+// said as made, unchanged or skipped with its reason.
+function batchGate(ws, { below = null, dryRun = false, now = Date.now() } = {}) {
+  const limit = batchGateBelow(ws, below);
+  const projects = require('./projects');
+  const out = { below: limit, dry_run: dryRun === true, made: [], unchanged: [], skipped: [] };
+  const skip = (p, reason) => out.skipped.push({ project_id: p.project_id, name: p.name || p.project_id, reason });
+  const todo = [];
+  for (const p of projects.listProjects(ws)) {
+    if (p.broken) continue;
+    if (p.status === 'archived') { skip(p, 'Archived.'); continue; }
+    const project = projects.getProject(ws, p.project_id);
+    if (!project.identity || project.identity.status !== 'verified') { skip(project, 'Identity not verified.'); continue; }
+    const pid = p.project_id;
+    const researcher = researcherOf(ws, pid);
+    if (!researcher) { skip(project, 'No eligible Claude report.'); continue; }
+    const grade = gateGrade(researcher.grade);
+    if (grade === null) { skip(project, `Grade withheld or none (${(researcher.grade && researcher.grade.display) || 'no grade'}): the grade alone decides nothing.`); continue; }
+    if (grade >= limit) { skip(project, `Grade ${grade} is not under ${limit}.`); continue; }
+    const held = heldOf(ws, pid, now);
+    if (held === true) { skip(project, 'Held: a held position gets a Prosecutor.'); continue; }
+    if (held === null) { skip(project, 'Holdings unreadable, so "not held" is not known.'); continue; }
+    if (openTicket(ws, pid)) { skip(project, 'A Prosecutor ticket is open.'); continue; }
+    const receipts = listReceipts(ws, pid).filter((r) => !r.broken && r.researcher && r.researcher.report_id === researcher.report_id);
+    const gateReceipt = receipts.find((r) => r.kind === 'desk_gate');
+    if (gateReceipt) { out.unchanged.push({ project_id: pid, name: project.name, receipt_id: gateReceipt.receipt_id, reason: `The desk's gate already answers ${researcher.report_id}.` }); continue; }
+    if (receipts.length) { skip(project, `A ticket (${receipts[receipts.length - 1].receipt_id}) already answers ${researcher.report_id}.`); continue; }
+    todo.push({ pid, project, grade });
+  }
+  for (const { pid, project, grade } of todo) {
+    if (dryRun) { out.made.push({ project_id: pid, name: project.name, grade, receipt_id: null, reason: 'Would get a desk gate receipt.' }); continue; }
+    try {
+      const r = createTicket(ws, { project_id: pid, channel: 'batch-gate' });
+      if (r.status === 'gate_closed') out.made.push({ project_id: pid, name: project.name, grade, receipt_id: r.receipt_id, reason: r.receipt.desk.gate.reasons[0] || null });
+      else if (r.status === 'unchanged') out.unchanged.push({ project_id: pid, name: project.name, receipt_id: r.receipt_id, reason: 'The desk\'s gate already answers this report.' });
+      else skip(project, r.message || `Not gated (${r.status}).`);
+    } catch (e) {
+      skip(project, e.message);
+    }
+  }
+  return out;
+}
+
+// Exit quotes for pilot candidates (backlog item 25). Each candidate graded
+// QUOTE_MIN_GRADE or over with no current reading at the sizing's exit sizes
+// ($500 and $2,000) is quoted at both through prepareExitQuote's path
+// (forensic-monitor.js quoteSizeUsd: the approved chain, the adapter, budget,
+// gates, hold, never a wallet or swap), so the gate reads them as it does
+// before a ticket. A native coin needs no DEX quote; a project with no
+// approved chain is named, never approved here; a refusal (a 429, the budget)
+// stops that source for the pass. `dryRun` sends nothing.
+const QUOTE_MIN_GRADE = 40;
+
+async function quoteCandidates(ws, { limit = 15, dryRun = false, fetchImpl, cgGetImpl, sleep, now = Date.now() } = {}) {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new OpError('INVALID', '--limit is a whole number from 1 to 200.');
+  const FM = require('./forensic-monitor');
+  const sizing = sizingOf(ws);
+  const sizes = [...new Set([sizing.exit_size_usd, 2000])].sort((a, b) => a - b);
+  const out = { dry_run: dryRun === true, sizes, limit, quoted: [], current: [], skipped: [], stopped: [] };
+  const stopped = new Set();
+  let budgetStop = null;
+  let asked = 0;
+  for (const row of pilotCandidates(ws, { now })) {
+    const item = (extra) => ({ project_id: row.project_id, name: row.name, ...extra });
+    if (row.grade === null || row.grade < QUOTE_MIN_GRADE) { out.skipped.push(item({ reason: row.grade === null ? 'No firm grade.' : `Grade ${row.grade} is under ${QUOTE_MIN_GRADE}: the desk gate decides it, no quote needed.` })); continue; }
+    if (row.gate.exit_basis === 'native_l1_liquid') { out.skipped.push(item({ reason: 'Native L1: no DEX quote is needed.' })); continue; }
+    const missing = exitsOf(ws, row.project_id, sizes, now).filter((x) => x.status === 'unavailable' || x.cost_pct === null).map((x) => x.size_usd);
+    if (!missing.length) { out.current.push(item({ reason: `Current readings at ${sizes.map(usd).join(' and ')}.` })); continue; }
+    const targets = require('./forensics').readProfile(ws, row.project_id).targets.exit_quotes || [];
+    if (!targets.length) { out.skipped.push(item({ reason: 'Needs a chain approved (Forensics > Exits).' })); continue; }
+    if (budgetStop) { out.skipped.push(item({ reason: budgetStop })); continue; }
+    if (targets.every((t) => stopped.has(t.provider))) { out.skipped.push(item({ reason: `${[...new Set(targets.map((t) => t.provider))].join(', ')} is stopped for this pass.` })); continue; }
+    if (asked >= limit) { out.skipped.push(item({ reason: `Over this pass's limit of ${limit} projects.` })); continue; }
+    asked += 1;
+    if (dryRun) { out.quoted.push(item({ sizes: missing.map((z) => ({ size_usd: z, status: 'would_ask' })) })); continue; }
+    const results = [];
+    for (const z of missing) {
+      const r = await FM.quoteSizeUsd(ws, row.project_id, { size_usd: z, fetchImpl, cgGetImpl, sleep, now });
+      results.push({ size_usd: z, status: r.status, reason: r.reason || null });
+      if (r.status === 'refused') {
+        if (/budget/i.test(r.reason || '')) budgetStop = r.reason;
+        else for (const t of targets) { if (!stopped.has(t.provider)) out.stopped.push({ source: t.provider, reason: r.reason }); stopped.add(t.provider); }
+        break;
+      }
+    }
+    out.quoted.push(item({ sizes: results }));
+  }
+  return out;
+}
 function pendingFor(ws) {
   const out = [];
   for (const p of require('./projects').listProjects(ws)) {
@@ -1440,5 +1545,7 @@ module.exports = {
   nextStep,
   pilotQueue,
   pilotCandidates,
+  batchGate,
+  quoteCandidates,
   pendingFor,
 };
