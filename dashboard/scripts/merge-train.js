@@ -4,6 +4,8 @@
 //
 //   npm run train                 merge the waiting backlog branches locally
 //   npm run train -- --push       ...and push claude/train-<date>
+//   npm run train -- --tick-main  tick the checkboxes of items already on main
+//                                 (see tickMain; --push sends claude/tick-<date>)
 //
 // From origin/main it merges each waiting origin/claude/backlog-* branch (one
 // not yet merged into main) onto claude/train-<YYYY-MM-DD>: a stacked branch
@@ -59,11 +61,49 @@ function tick(cwd, items) {
   let text = fs.readFileSync(file, 'utf8');
   const ticked = [];
   for (const n of items) {
-    const re = new RegExp(`^(\\s*- )\\[ \\]( \\*\\*${n}\\.)`, 'm');
+    const re = new RegExp(`^(\\s*- )\\[ \\]( (?:\\*\\([^)]*\\)\\* )?\\*\\*${n}\\.)`, 'm');
     if (re.test(text)) { text = text.replace(re, '$1[x]$2'); ticked.push(n); }
   }
   if (ticked.length) fs.writeFileSync(file, text);
   return ticked;
+}
+
+// The items main carries by trailer (`Backlog-Item: <n>`) whose checkbox is
+// still open in DESK_STATE.md on main, in item order. Reads git only.
+function untickedOnMain(cwd) {
+  const state = git(cwd, ['show', `origin/main:${STATE_FILE}`], { allowFail: true });
+  if (state.status !== 0) throw new Error(`origin/main has no ${STATE_FILE}.`);
+  const body = git(cwd, ['log', 'origin/main', '--format=%B']).out;
+  const items = [...new Set([...body.matchAll(/^Backlog-Item:\s*(\d+)\s*$/gm)].map((m) => Number(m[1])))].sort((a, b) => a - b);
+  return items.filter((n) => new RegExp(`^\\s*- \\[ \\] (?:\\*\\([^)]*\\)\\* )?\\*\\*${n}\\.`, 'm').test(state.out));
+}
+
+// Tick step for merged backlog branches (item 35): the items main carries by
+// trailer and DESK_STATE.md still shows open are ticked on claude/tick-<date>,
+// one commit that changes nothing but those checkboxes. Nothing to tick
+// changes nothing and creates no branch, so no empty PR follows. Never touches
+// main; pushes only the tick branch, and only with push.
+function tickMain(cwd, { date = new Date().toISOString().slice(0, 10), push = false } = {}) {
+  const result = { branch: `claude/tick-${date}`, ticked: [], pushed: false, message: null };
+  git(cwd, ['fetch', 'origin', '--prune']);
+  if (git(cwd, ['status', '--porcelain']).out) throw new Error('The working tree is not clean; commit or stash first.');
+  const open = untickedOnMain(cwd);
+  if (!open.length) { result.branch = null; result.message = 'Nothing to tick.'; return result; }
+  git(cwd, ['checkout', '-q', '-B', result.branch, 'origin/main']);
+  result.ticked = tick(cwd, open);
+  if (!result.ticked.length) { git(cwd, ['checkout', '-q', 'origin/main']); result.branch = null; result.message = 'Nothing to tick.'; return result; }
+  // Only checkboxes: every changed line is a `[ ]` that became `[x]`.
+  const changed = git(cwd, ['diff', '-U0', '--', STATE_FILE]).out.split('\n').filter((l) => /^[+-]/.test(l) && !/^(---|\+\+\+) /.test(l));
+  const minus = changed.filter((l) => l[0] === '-').map((l) => l.slice(1).replace('[ ]', '[x]'));
+  const plus = changed.filter((l) => l[0] === '+').map((l) => l.slice(1));
+  if (!minus.length || minus.length !== plus.length || minus.some((l, i) => l !== plus[i])) {
+    git(cwd, ['checkout', '-q', '--', STATE_FILE]);
+    throw new Error(`The tick would change more than checkboxes in ${STATE_FILE}; nothing was committed.`);
+  }
+  git(cwd, ['add', '--', STATE_FILE]);
+  git(cwd, ['commit', '-q', '-m', `train: tick items ${result.ticked.join(', ')}`]);
+  if (push) { git(cwd, ['push', '-u', 'origin', result.branch]); result.pushed = true; }
+  return result;
 }
 
 function counts(out) {
@@ -138,13 +178,18 @@ function print(r) {
 if (require.main === module) {
   try {
     const args = process.argv.slice(2);
-    const r = train(ROOT, { push: args.includes('--push') });
-    print(r);
-    if (r.stopped || (r.tests && r.tests.ok === false)) process.exitCode = 1;
+    if (args.includes('--tick-main')) {
+      const t = tickMain(ROOT, { push: args.includes('--push') });
+      process.stdout.write(t.ticked.length ? `Ticked ${t.ticked.join(', ')} on ${t.branch}${t.pushed ? ' (pushed)' : ' (not pushed)'}\n` : `${t.message}\n`);
+    } else {
+      const r = train(ROOT, { push: args.includes('--push') });
+      print(r);
+      if (r.stopped || (r.tests && r.tests.ok === false)) process.exitCode = 1;
+    }
   } catch (err) {
     process.stderr.write(`train: ${err.message}\n`);
     process.exitCode = 1;
   }
 }
 
-module.exports = { train, waiting, tick, counts };
+module.exports = { train, waiting, tick, tickMain, untickedOnMain, counts };

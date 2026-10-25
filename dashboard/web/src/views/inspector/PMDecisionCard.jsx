@@ -9,6 +9,7 @@
 import { useState } from 'react';
 import { toast, submissionId, fmtDateTime } from '../../../../public/ui.js';
 import { api, refresh } from '../../lib/desk.js';
+import { ruleNoteOf, deltaBadgeOf } from '../../../../public/pm-card-model.js';
 
 const enc = encodeURIComponent;
 const usd = (n) => (typeof n === 'number' ? `$${n.toLocaleString('en-US', { minimumFractionDigits: n >= 1000 ? 0 : 2, maximumFractionDigits: n < 1 ? 6 : 2 })}` : '—');
@@ -42,6 +43,23 @@ function exitText(t) {
   if (t.exit_cost_500_usd_pct === null || t.exit_cost_500_usd_pct === undefined) return { text: 'No reading', tone: 'is-unknown' };
   const v = `${t.exit_cost_500_complete ? '' : '≥ '}${t.exit_cost_500_usd_pct}%`;
   return { text: v, tone: t.exit_cost_500_usd_pct > 5 ? 'is-bad' : t.exit_cost_500_complete ? 'is-ok' : 'is-unknown' };
+}
+
+// Item 33: the change since Claude's earlier report, with the prompt versions
+// in its tooltip and, when they differ, in the badge's tone.
+function DeltaBadge({ pid, delta, row = false }) {
+  const b = deltaBadgeOf(delta);
+  if (!b) return null;
+  const pill = <span className={`badge ${b.tone}`} title={b.title || undefined}>{b.text}</span>;
+  return row
+    ? <p className="pm-dis-row" data-key={`pm-delta-${pid}`}><span className="pm-dis-k">Since last</span>{pill}</p>
+    : <p className="faint pm-note" data-key={`pm-delta-${pid}`}>{"Claude's report: "}{pill}</p>;
+}
+
+// Item 13's note on a ticket made under a rule this desk does not know.
+function RuleNote({ pid, t }) {
+  const note = ruleNoteOf(t);
+  return note ? <p className="pm-alert" data-key={`pm-rule-${pid}`}>{note}</p> : null;
 }
 
 function PilotLine({ p, t, busy, setBusy }) {
@@ -124,7 +142,8 @@ export function PMDecisionCard({ p }) {
         <div className="pm-dis">
           <p className="pm-dis-row"><span className="pm-dis-k">Researcher</span><span>{`${(t.researcher || {}).grade_display || (t.researcher || {}).grade || '—'} · ${(t.researcher || {}).verdict || 'no verdict'}`}</span></p>
         </div>
-        {t.report_delta && t.report_delta.status === 'ok' ? <p className="faint pm-note" data-key={`pm-delta-${pid}`} title={t.report_delta.grade_note || t.report_delta.category_note || undefined}>{`Claude's report: ${t.report_delta.line}`}</p> : null}
+        <DeltaBadge pid={pid} delta={t.report_delta} />
+        <RuleNote pid={pid} t={t} />
         {t.superseded_by_report ? <p className="faint pm-note">{`Claude has a newer report (${t.superseded_by_report}); this gate is on the earlier one.`}</p> : null}
         <div className="pm-actions">
           {decided ? (
@@ -187,7 +206,7 @@ export function PMDecisionCard({ p }) {
       ) : null}
       <div className="pm-dis" title={dis.note || undefined}>
         <p className="pm-dis-row"><span className="pm-dis-k">Researcher</span><span>{`${r.grade_display || r.grade || '—'} · ${r.verdict || 'no verdict'}`}</span></p>
-        {t.report_delta && t.report_delta.status === 'ok' ? <p className="pm-dis-row" data-key={`pm-delta-${pid}`} title={t.report_delta.grade_note || t.report_delta.category_note || undefined}><span className="pm-dis-k">Since last</span><span>{t.report_delta.line}</span></p> : null}
+        <DeltaBadge pid={pid} delta={t.report_delta} row />
         <p className="pm-dis-row"><span className="pm-dis-k">Prosecutor</span><span>{prosecutorWords(q, fatal)}</span></p>
         {typeof dis.spread_points === 'number' ? <p className="pm-dis-row"><span className="pm-dis-k">Spread</span><span>{`${dis.spread_points > 0 ? '+' : ''}${dis.spread_points} points (researcher minus prosecutor)`}</span></p> : null}
         {dis.note ? (
@@ -197,6 +216,7 @@ export function PMDecisionCard({ p }) {
           </>
         ) : null}
       </div>
+      <RuleNote pid={pid} t={t} />
       {t.superseded_by_report ? <p className="faint pm-note">{`Claude has a newer report (${t.superseded_by_report}); this ticket is on the earlier one.`}</p> : null}
       <div className="pm-actions">
         {decided ? (

@@ -1551,7 +1551,156 @@ function pendingFor(ws) {
   return out.sort((x, y) => (x.state === y.state ? String(x.created_at).localeCompare(String(y.created_at)) : x.state === 'started' ? -1 : 1));
 }
 
+// ---------------------------------------------------------------------------
+// The weekly digest (backlog item 34): what the pilot did over the last N
+// days, from the stored records only. Deterministic for a given workspace and
+// `now`, writes nothing, calls no model. A section that cannot be read is said
+// ("unreadable", with why) and never counted as zero; a broken record is
+// listed by name, not skipped silently.
+
+const DIGEST_FORMAT = 'cr-ticket-digest@1';
+const SPREAD_BANDS = [{ id: 'under_5', label: 'under 5 points', max: 5 }, { id: '5_to_15', label: '5 to under 15', max: 15 }, { id: '15_to_30', label: '15 to under 30', max: 30 }, { id: '30_or_more', label: '30 or more', max: Infinity }];
+
+function digest(ws, { days = 7, now = Date.now() } = {}) {
+  const n = Number(days);
+  if (!Number.isFinite(n) || n <= 0 || n > 366) throw new OpError('BAD_INPUT', 'days must be a number from 1 to 366.');
+  const since = now - n * 86400000;
+  const inWindow = (iso) => { const t = Date.parse(iso); return Number.isFinite(t) && t >= since && t <= now; };
+  const projects = require('./projects').listProjects(ws);
+  const live = projects.filter((p) => !p.broken);
+  const section = (fn) => { try { return { status: 'ok', ...fn() }; } catch (err) { return { status: 'unreadable', why: `Could not be read: ${err.message}` }; } };
+  const reportsOf = (pid) => require('./reports').loadReports(ws, pid);
+  const broken = projects.filter((p) => p.broken).map((p) => p.project_id || p.error || 'unknown project');
+
+  const reportsV6 = section(() => {
+    const { isEligible } = require('./reports');
+    const by = {};
+    let completed = 0; let eligible = 0; let undated = 0;
+    const unreadable = [];
+    for (const p of live) {
+      for (const r of reportsOf(p.project_id)) {
+        if (r.broken) { unreadable.push(r.report_id || `${p.project_id} (a report)`); continue; }
+        if (!r.assessment || r.assessment.prompt_version !== AUTO_PILOT_PROMPT) continue;
+        const at = r.meta && r.meta.imported_at;
+        if (!at || !Number.isFinite(Date.parse(at))) { undated += 1; continue; }
+        if (!inWindow(at)) continue;
+        completed += 1;
+        const prov = (r.meta && r.meta.provider) || 'unknown';
+        by[prov] = (by[prov] || 0) + 1;
+        if (isEligible(r)) eligible += 1;
+      }
+    }
+    return { prompt: AUTO_PILOT_PROMPT, completed, eligible, by_model: by, undated_not_counted: undated, unreadable_records: unreadable };
+  });
+
+  const tickets = section(() => {
+    let prosecutor = 0; let deskGate = 0;
+    const unreadable = [];
+    for (const p of live) {
+      for (const r of listReceipts(ws, p.project_id)) {
+        if (r.broken) { unreadable.push(r.receipt_id); continue; }
+        if (!inWindow(r.saved_at)) continue;
+        if (r.kind === 'desk_gate') deskGate += 1; else prosecutor += 1;
+      }
+    }
+    return { prosecutor_tickets: prosecutor, desk_gate_passes: deskGate, unreadable_records: unreadable };
+  });
+
+  const spreads = section(() => {
+    const { latestByProvider } = require('./compare');
+    const { gradeOf } = require('./report-delta');
+    const counts = Object.fromEntries(SPREAD_BANDS.map((b) => [b.id, 0]));
+    let notCompared = 0;
+    const largest = [];
+    for (const p of live) {
+      if (p.status === 'archived') continue;
+      const latest = latestByProvider(reportsOf(p.project_id));
+      const claude = latest.claude;
+      if (!claude) continue;
+      const gc = gradeOf(ws, claude);
+      for (const prov of ['chatgpt', 'gemini']) {
+        const other = latest[prov];
+        if (!other) continue;
+        const newer = [claude, other].map((r) => (r.meta && r.meta.imported_at) || '').sort().pop();
+        if (!inWindow(newer)) continue;
+        const go = gradeOf(ws, other);
+        if (gc.kind !== 'firm' || go.kind !== 'firm' || claude.assessment.rubric_version !== other.assessment.rubric_version) { notCompared += 1; continue; }
+        const gap = round(Math.abs(gc.value - go.value), 2);
+        counts[SPREAD_BANDS.find((b) => gap < b.max).id] += 1;
+        largest.push({ project_id: p.project_id, name: p.name, other: prov, gap });
+      }
+    }
+    largest.sort((a, b) => b.gap - a.gap || a.project_id.localeCompare(b.project_id) || a.other.localeCompare(b.other));
+    return { bands: SPREAD_BANDS.map((b) => ({ id: b.id, label: b.label, pairs: counts[b.id] })), pairs_compared: Object.values(counts).reduce((x, y) => x + y, 0), not_compared: notCompared, largest: largest.slice(0, 5), note: 'Claude\'s latest eligible report against ChatGPT\'s or Gemini\'s, same rubric, firm grades only, when the newer of the two was saved in the window.' };
+  });
+
+  const invalidated = section(() => {
+    const fired = [];
+    const unread = [];
+    for (const p of live) {
+      const receipts = listReceipts(ws, p.project_id).filter((r) => !r.broken);
+      const cur = receipts[receipts.length - 1];
+      if (!cur || cur.kind === 'desk_gate') continue;
+      let inv;
+      try { inv = invalidationOf(ws, require('./projects').getProject(ws, p.project_id), cur, { now }); } catch (err) { unread.push({ project_id: p.project_id, why: err.message }); continue; }
+      if (inv.unread) { unread.push({ project_id: p.project_id, why: inv.words }); continue; }
+      const hit = inv.fired;
+      if (hit && inWindow(hit.at)) fired.push({ project_id: p.project_id, name: p.name, receipt_id: cur.receipt_id, by: hit.kind, at: hit.at, words: hit.words });
+    }
+    fired.sort((a, b) => a.at.localeCompare(b.at) || a.project_id.localeCompare(b.project_id));
+    return { fired: fired.length, triggers: fired, not_read: unread, note: 'The current ticket of each project, read against prices and DefiLlama; a trigger counts when it fired in the window.' };
+  });
+
+  const budget = section(() => {
+    const research = require('./research');
+    const charges = research.allCharges(ws);
+    const byProvider = {};
+    let total = 0; let undated = 0; let estimated = 0;
+    for (const c of charges) {
+      if (!c.at || !Number.isFinite(Date.parse(c.at))) { undated += 1; continue; }
+      if (!inWindow(c.at)) continue;
+      const row = byProvider[c.provider] || (byProvider[c.provider] = { calls: 0, usd: 0 });
+      row.calls += 1;
+      row.usd = round(row.usd + c.usd, 4);
+      total += c.usd;
+      if (!['actual', 'ledger_actual', 'captured_actual', 'reconciled'].includes(c.basis)) estimated += 1;
+    }
+    const spent = research.spendSoFar(ws, new Date(now));
+    const b = (ws.settings.research || {}).budget || {};
+    return { total_usd: round(total, 4), calls: Object.values(byProvider).reduce((x, y) => x + y.calls, 0), by_provider: byProvider, estimated_or_open_calls: estimated, undated_not_counted: undated, today_usd: spent.daily, month_usd: spent.monthly, limits: { daily_usd: b.daily_usd ?? null, monthly_usd: b.monthly_usd ?? null }, note: 'Reservations and estimates count at their recorded amount.' };
+  });
+
+  return { format: DIGEST_FORMAT, days: n, since: iso(since), until: iso(now), unreadable_projects: broken, reports_v6: reportsV6, tickets, grade_spreads: spreads, invalidations: invalidated, provider_budget: budget };
+}
+
+function digestText(d) {
+  const L = [`Digest, last ${d.days} days (${d.since.slice(0, 10)} to ${d.until.slice(0, 10)})`];
+  const bad = (s, name) => (s.status === 'ok' ? false : (L.push(`${name}: unreadable. ${s.why}`), true));
+  if (!bad(d.reports_v6, '@6 reports')) {
+    const r = d.reports_v6;
+    L.push(`${r.prompt} reports completed: ${r.completed} (${r.eligible} eligible)${Object.keys(r.by_model).length ? ` — ${Object.entries(r.by_model).sort().map(([k, v]) => `${k} ${v}`).join(', ')}` : ''}${r.undated_not_counted ? `; ${r.undated_not_counted} with no save time not counted` : ''}${r.unreadable_records.length ? `; unreadable: ${r.unreadable_records.join(', ')}` : ''}`);
+  }
+  if (!bad(d.tickets, 'Tickets')) L.push(`Prosecutor tickets ${d.tickets.prosecutor_tickets}, desk gate passes ${d.tickets.desk_gate_passes}${d.tickets.unreadable_records.length ? `; unreadable: ${d.tickets.unreadable_records.join(', ')}` : ''}`);
+  if (!bad(d.grade_spreads, 'Grade spreads')) {
+    const s = d.grade_spreads;
+    L.push(`Grade spreads between models (${s.pairs_compared} pairs compared, ${s.not_compared} not compared): ${s.bands.map((b) => `${b.label} ${b.pairs}`).join(', ')}`);
+  }
+  if (!bad(d.invalidations, 'Invalidations')) {
+    const v = d.invalidations;
+    L.push(`Invalidation triggers fired: ${v.fired}${v.triggers.length ? ` — ${v.triggers.map((t) => `${t.name} (${t.by}, ${t.at.slice(0, 10)})`).join('; ')}` : ''}${v.not_read.length ? `; ${v.not_read.length} not read` : ''}`);
+  }
+  if (!bad(d.provider_budget, 'Provider budget')) {
+    const b = d.provider_budget;
+    L.push(`Provider budget used: $${b.total_usd} over ${b.calls} calls${Object.keys(b.by_provider).length ? ` (${Object.entries(b.by_provider).sort().map(([k, v]) => `${k} $${v.usd}`).join(', ')})` : ''}; today $${b.today_usd}, this month $${b.month_usd}${b.undated_not_counted ? `; ${b.undated_not_counted} charges with no time not counted` : ''}`);
+  }
+  if (d.unreadable_projects.length) L.push(`Unreadable projects: ${d.unreadable_projects.join(', ')}`);
+  return L.join('\n');
+}
+
 module.exports = {
+  digest,
+  digestText,
+  DIGEST_FORMAT,
   newerRuleOf,
   PROMPT_VERSION,
   FORMAT,
