@@ -70,6 +70,7 @@ Reports
 
 Forensics & Resilience (no paid model call; Claude investigates, ChatGPT may challenge; Gemini has no role)
   forensics view <id>                    the Forensics tab's read model (writes nothing)
+  forensics quote-candidates [--limit 15] [--dry-run] [--json]   ask the $500 and $2,000 exit quotes for pilot candidates graded 40+ with no current reading (approved chains only; never approves one)
   forensics start <id> [--challenge] [--channel cowork] [--focus TEXT] [--restart] [--refresh]
                                          open (or resume) a forensic audit: frozen prompt and evidence packet
   forensics prompt <id> <audit_id> [--role challenge]   print a role's frozen prompt
@@ -790,6 +791,11 @@ async function run(argv) {
       const fo = require('./core/forensics');
       const pid = rest[0];
       const aid = rest[1];
+      if (sub === 'quote-candidates') {
+        const lim = one(flags.limit);
+        const r = await require('./core/tickets').quoteCandidates(ws, { limit: lim === undefined ? 15 : Number(lim), dryRun: Boolean(flags['dry-run'] || flags.dry_run) });
+        return r.dry_run || !r.quoted.length ? r : { ...r, ...(await afterWrite(ws, null)) };
+      }
       if (sub === 'view' || sub === 'status') return fo.view(ws, need(pid, `forensics ${sub} <project>`));
       if (sub === 'start') {
         const r = fo.createAudit(ws, { project_id: need(pid, 'forensics start <project> [--challenge]'), challenge: Boolean(flags.challenge), channel: one(flags.channel) || actor, assistant: /cowork/i.test(String(one(flags.channel) || '')) ? 'claude' : null, utterance: one(flags.utterance) || null, owner_focus: one(flags.focus) || null, restart: Boolean(flags.restart), refresh: Boolean(flags.refresh), allow_pending_identity: Boolean(flags.allow_pending_identity) });
@@ -839,7 +845,7 @@ async function run(argv) {
         const f = need(one(flags.file) || pid, 'forensics case-verify --file FILE');
         return require('./core/forensic-case').verifyCase(JSON.parse(fs.readFileSync(f, 'utf8')));
       }
-      throw Object.assign(new Error('forensics view|start|prompt|import|challenge|cancel|monitor|run|correct|case|case-verify (see help)'), { code: 'USAGE' });
+      throw Object.assign(new Error('forensics view|start|quote-candidates|prompt|import|challenge|cancel|monitor|run|correct|case|case-verify (see help)'), { code: 'USAGE' });
     }
     case 'brief': {
       if (sub !== 'daily') throw Object.assign(new Error('brief daily [--json] [--since ISO] (see help)'), { code: 'USAGE' });

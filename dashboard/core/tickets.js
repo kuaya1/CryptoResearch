@@ -1450,6 +1450,52 @@ function batchGate(ws, { below = null, dryRun = false, now = Date.now() } = {}) 
   return out;
 }
 
+// Exit quotes for pilot candidates (backlog item 25). Each candidate graded
+// QUOTE_MIN_GRADE or over with no current reading at the sizing's exit sizes
+// ($500 and $2,000) is quoted at both through prepareExitQuote's path
+// (forensic-monitor.js quoteSizeUsd: the approved chain, the adapter, budget,
+// gates, hold, never a wallet or swap), so the gate reads them as it does
+// before a ticket. A native coin needs no DEX quote; a project with no
+// approved chain is named, never approved here; a refusal (a 429, the budget)
+// stops that source for the pass. `dryRun` sends nothing.
+const QUOTE_MIN_GRADE = 40;
+
+async function quoteCandidates(ws, { limit = 15, dryRun = false, fetchImpl, cgGetImpl, sleep, now = Date.now() } = {}) {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new OpError('INVALID', '--limit is a whole number from 1 to 200.');
+  const FM = require('./forensic-monitor');
+  const sizing = sizingOf(ws);
+  const sizes = [...new Set([sizing.exit_size_usd, 2000])].sort((a, b) => a - b);
+  const out = { dry_run: dryRun === true, sizes, limit, quoted: [], current: [], skipped: [], stopped: [] };
+  const stopped = new Set();
+  let budgetStop = null;
+  let asked = 0;
+  for (const row of pilotCandidates(ws, { now })) {
+    const item = (extra) => ({ project_id: row.project_id, name: row.name, ...extra });
+    if (row.grade === null || row.grade < QUOTE_MIN_GRADE) { out.skipped.push(item({ reason: row.grade === null ? 'No firm grade.' : `Grade ${row.grade} is under ${QUOTE_MIN_GRADE}: the desk gate decides it, no quote needed.` })); continue; }
+    if (row.gate.exit_basis === 'native_l1_liquid') { out.skipped.push(item({ reason: 'Native L1: no DEX quote is needed.' })); continue; }
+    const missing = exitsOf(ws, row.project_id, sizes, now).filter((x) => x.status === 'unavailable' || x.cost_pct === null).map((x) => x.size_usd);
+    if (!missing.length) { out.current.push(item({ reason: `Current readings at ${sizes.map(usd).join(' and ')}.` })); continue; }
+    const targets = require('./forensics').readProfile(ws, row.project_id).targets.exit_quotes || [];
+    if (!targets.length) { out.skipped.push(item({ reason: 'Needs a chain approved (Forensics > Exits).' })); continue; }
+    if (budgetStop) { out.skipped.push(item({ reason: budgetStop })); continue; }
+    if (targets.every((t) => stopped.has(t.provider))) { out.skipped.push(item({ reason: `${[...new Set(targets.map((t) => t.provider))].join(', ')} is stopped for this pass.` })); continue; }
+    if (asked >= limit) { out.skipped.push(item({ reason: `Over this pass's limit of ${limit} projects.` })); continue; }
+    asked += 1;
+    if (dryRun) { out.quoted.push(item({ sizes: missing.map((z) => ({ size_usd: z, status: 'would_ask' })) })); continue; }
+    const results = [];
+    for (const z of missing) {
+      const r = await FM.quoteSizeUsd(ws, row.project_id, { size_usd: z, fetchImpl, cgGetImpl, sleep, now });
+      results.push({ size_usd: z, status: r.status, reason: r.reason || null });
+      if (r.status === 'refused') {
+        if (/budget/i.test(r.reason || '')) budgetStop = r.reason;
+        else for (const t of targets) { if (!stopped.has(t.provider)) out.stopped.push({ source: t.provider, reason: r.reason }); stopped.add(t.provider); }
+        break;
+      }
+    }
+    out.quoted.push(item({ sizes: results }));
+  }
+  return out;
+}
 function pendingFor(ws) {
   const out = [];
   for (const p of require('./projects').listProjects(ws)) {
@@ -1499,5 +1545,6 @@ module.exports = {
   pilotQueue,
   pilotCandidates,
   batchGate,
+  quoteCandidates,
   pendingFor,
 };

@@ -392,6 +392,13 @@ const TOOLS = [
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
+    name: 'quote_pilot_candidates',
+    title: 'Ask exit quotes for pilot candidates (Claude)',
+    description: 'Claude only. For each pilot candidate graded 40 or over with no current exit reading at $500 and $2,000, asks one fixed-size quote at each through the approved exit-quote chain (the existing adapter, request budget, provider gates and hold; never a wallet, signature or swap), so the ticket gate reads them. It saves quote observations and nothing else. A native coin is skipped; a project with no approved chain is listed as needing one approved (Forensics > Exits), never approved here; a 429 or refusal stops that source for the pass. With dry_run, nothing is sent.',
+    inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 200, description: 'Most projects to quote in this pass (default 15).' }, dry_run: { type: 'boolean', description: 'List what would be quoted; send nothing.' } }, additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  },
+  {
     name: 'start_ticket',
     title: 'Open (or resume) a PM trade ticket: the Prosecutor\'s frozen prompt (Claude)',
     description: 'Claude only. Opens the Prosecutor\'s ticket on Claude\'s current eligible report for the project (or resumes the open one) and returns its frozen prompt (cr-ticket-prompt@1) with the desk\'s evidence packet (its measured exits at $500 and $2,000, price, sell tax, DefiLlama, whether Eric holds it) and the report\'s text. Follow the prompt exactly, then save_ticket. If a ticket on the same report is already saved, nothing is opened unless refresh: true (ask Eric first).',
@@ -1857,6 +1864,12 @@ const handlers = {
       ? `${steps.map((s) => `${s.name}: pilot ${s.pilot ? 'on' : 'off'}`).join('; ')}`
       : `${inPilot} project${inPilot === 1 ? '' : 's'} in the pilot`;
     return { status: steps.length ? 'ok' : 'none', steps, next: next ? { ...next, next_action: how } : null, message: steps.length ? `${where}; ${todo.length} with work for Claude.` : 'No project is in the autonomous pilot. Eric turns it on per project (the inspector, or tickets pilot <id> --on).' };
+  },
+
+  async quote_pilot_candidates(ws, args, ctx) {
+    if (ctx.me !== 'claude') throw new OpError('REFUSED', `Exit quotes for pilot candidates are Claude's; ${ctx.label} has no ticket role. Nothing was sent.`);
+    const out = await ticketsCore().quoteCandidates(ws, { limit: Number.isInteger(args.limit) ? args.limit : 15, dryRun: args.dry_run === true });
+    return { status: out.dry_run ? 'dry_run' : 'ok', ...out, message: `${out.quoted.length} project${out.quoted.length === 1 ? '' : 's'} ${out.dry_run ? 'would be quoted' : 'quoted'}, ${out.current.length} already current, ${out.skipped.length} skipped.` };
   },
 
   async start_ticket(ws, args, ctx) {
