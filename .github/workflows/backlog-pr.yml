@@ -1,7 +1,9 @@
 # Opens or updates the pull request for a backlog branch once its tests pass
 # (blueprint W2.2, DESK_STATE item 11). Uses only GITHUB_TOKEN. Needs
 # Settings > Actions > General > "Allow GitHub Actions to create and approve
-# pull requests". It never merges, approves or pushes: Eric merges.
+# pull requests". Since 2026-10-25 (Eric) it also merges the PR it opened once
+# test.yml passed on that exact commit, and deletes the branch. A merge it
+# cannot make (conflict, protection) leaves the PR open for `npm run train`.
 name: backlog-pr
 
 on:
@@ -10,7 +12,7 @@ on:
     types: [completed]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
   actions: read
 
@@ -22,6 +24,10 @@ jobs:
       startsWith(github.event.workflow_run.head_branch, 'claude/backlog-')
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
     steps:
       - name: Fetch the test counts
         uses: actions/download-artifact@v4
@@ -49,11 +55,26 @@ jobs:
           commits=$(gh api "repos/$REPO/compare/main...$SHA" --jq '.commits[] | "- `" + .sha[0:7] + "` " + (.commit.message | split("\n")[0])')
           counts="No test counts were found for this run."
           if [ -f test-summary.md ]; then counts=$(cat test-summary.md); fi
-          body=$(printf 'Backlog branch `%s`, tested at `%s` ([the run](%s)).\n\n%s\n\n%s\n\nOpened by the backlog-pr workflow after test.yml passed. It never merges.\n' "$BRANCH" "${SHA:0:7}" "$RUN_URL" "$commits" "$counts")
+          body=$(printf 'Backlog branch `%s`, tested at `%s` ([the run](%s)).\n\n%s\n\n%s\n\nOpened by the backlog-pr workflow after test.yml passed; it merges this PR when the merge is clean.\n' "$BRANCH" "${SHA:0:7}" "$RUN_URL" "$commits" "$counts")
           owner=${REPO%%/*}
           number=$(gh api "repos/$REPO/pulls?state=open&base=main&head=$owner:$BRANCH" --jq '.[0].number // empty')
           if [ -n "$number" ]; then
             gh api -X PATCH "repos/$REPO/pulls/$number" -f body="$body" --jq .html_url
           else
             gh api -X POST "repos/$REPO/pulls" -f title="Backlog: ${BRANCH#claude/backlog-}" -f head="$BRANCH" -f base=main -f body="$body" --jq .html_url
+          fi
+          if [ -z "$number" ]; then
+            number=$(gh api "repos/$REPO/pulls?state=open&base=main&head=$owner:$BRANCH" --jq '.[0].number // empty')
+          fi
+          # Merge only the commit that was tested (sha makes GitHub refuse a newer tip).
+          code=$(gh api -X PUT "repos/$REPO/pulls/$number/merge" -f merge_method=merge -f sha="$SHA" --jq .merged 2>merge-err.txt && echo 200 || echo fail)
+          if [ "$code" = "200" ]; then
+            gh api -X DELETE "repos/$REPO/git/refs/heads/$BRANCH" || echo "Merged, but the branch could not be deleted."
+            echo "### Merged PR #$number into main; branch $BRANCH deleted." >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### PR #$number was NOT merged"
+              echo "The merge was refused (HTTP 405 or 409: a conflict, a branch rule or a moved tip). The PR stays open; resolve it with \`npm run train\`."
+              echo '```'; cat merge-err.txt; echo '```'
+            } | tee -a "$GITHUB_STEP_SUMMARY"
           fi

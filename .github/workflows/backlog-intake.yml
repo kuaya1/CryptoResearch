@@ -1,0 +1,66 @@
+# Voice intake (blueprint W3.4, DESK_STATE item 17): when Eric labels an issue
+# `ready`, a PR adds the issue, quoted and linked, as the next numbered item in
+# DESK_STATE.md. It builds nothing. Only the label `ready` set by `kuaya1`
+# counts; the issue text is data, passed through env and files, never into a
+# script. Needs Settings > Actions > General > "Allow GitHub Actions to create
+# and approve pull requests". Eric merges this PR like any other.
+name: backlog-intake
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+
+jobs:
+  intake:
+    if: >-
+      github.event.label.name == 'ready' &&
+      github.event.sender.login == 'kuaya1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Add the issue as the next item and open the PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+          TITLE: ${{ github.event.issue.title }}
+          BODY: ${{ github.event.issue.body }}
+          URL: ${{ github.event.issue.html_url }}
+        run: |
+          set -euo pipefail
+          branch="claude/intake-issue-$NUMBER"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "Issue #$NUMBER already has an intake branch; nothing to do."
+            exit 0
+          fi
+          node - <<'JS'
+          const fs = require('fs');
+          const file = 'DESK_STATE.md';
+          let text = fs.readFileSync(file, 'utf8');
+          const nums = [...text.matchAll(/^- \[[ x]\] (?:\*\(Eric\)\* )?\*\*(\d+)\./gm)].map((m) => Number(m[1]));
+          const next = Math.max(0, ...nums) + 1;
+          const one = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+          const title = one(process.env.TITLE).slice(0, 120);
+          const quote = String(process.env.BODY || '(no description)').replace(/\r/g, '').trim().split('\n').map((l) => '  > ' + l).join('\n');
+          const entry = `- [ ] **${next}. ${title}** *(from issue [#${process.env.NUMBER}](${process.env.URL}), quoted below; not yet shaped into tests)*\n${quote}\n`;
+          if (!text.endsWith('\n')) text += '\n';
+          fs.writeFileSync(file, text + entry);
+          fs.writeFileSync(process.env.RUNNER_TEMP + '/item', String(next));
+          JS
+          item=$(cat "$RUNNER_TEMP/item")
+          git config user.name "backlog-intake"
+          git config user.email "backlog-intake@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add DESK_STATE.md
+          git commit -m "intake: item $item from issue #$NUMBER"
+          git push origin "$branch"
+          gh api -X POST "repos/$REPO/pulls" -f title="Intake: item $item from issue #$NUMBER" -f head="$branch" -f base=main -f body="Adds issue #$NUMBER, quoted and linked, as item $item of the backlog. It builds nothing. Eric merges it like any PR." --jq .html_url
