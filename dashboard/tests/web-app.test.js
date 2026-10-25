@@ -187,7 +187,7 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   // The PM Decision Card posts Eric's decision and the pilot switch only,
   // each from its own button (decide is called only from onClick).
   const pm = files.find(([n]) => n === 'views/inspector/PMDecisionCard.jsx')[1];
-  assert.deepEqual(uniq('views/inspector/PMDecisionCard.jsx'), ['/api/projects/${enc(pid)}/tickets/decisions', '/api/projects/${enc(pid)}/tickets/pilot']);
+  assert.deepEqual(uniq('views/inspector/PMDecisionCard.jsx'), ['/api/projects/${enc(pid)}/tickets', '/api/projects/${enc(pid)}/tickets/decisions', '/api/projects/${enc(pid)}/tickets/pilot']);
   assert.equal([...pm.matchAll(/decide\('/g)].length, [...pm.matchAll(/onClick=\{\(\) => decide\('/g)].length, 'every PM decision is a click');
   // Every other write sits in a handler (onClick, onSelect) or an action
   // function called only from one (the Forensics tab's changeMonitoring:

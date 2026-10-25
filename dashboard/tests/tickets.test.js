@@ -1620,3 +1620,48 @@ test('invalidation@2: a breach read from latest.json names it', (t) => {
   assert.equal(p.source, 'latest.json');
   assert.match(p.words, /\(latest\.json\)/);
 });
+
+test('pre-gate reason kind (item 40): an under-floor grade reads grade_low; a withheld grade reads grade_withheld with its scored share and unscored components; an older receipt reads not recorded; the override opens a normal ticket', (t) => {
+  const s = withReport(t);
+  gradeClosed(s.ws);
+  stubHeld(t, s.pid, false);
+  const lowStep = T.nextStep(s.ws, s.pid);
+  assert.equal(lowStep.reason_kind, 'grade_low');
+  assert.match(lowStep.why, /the grade is under the floor/);
+  const low = T.createTicket(s.ws, { project_id: s.pid });
+  assert.equal(low.receipt.desk.gate.reason_kind, 'grade_low');
+  assert.equal(low.receipt.desk.gate.withheld, undefined);
+  assert.equal(T.view(s.ws, s.pid).ticket.gate_reason_kind, 'grade_low');
+
+  // An older receipt (no reason_kind recorded) reads null.
+  const rel = low.receipt.packet.path.replace(/[^/]+$/, `${low.receipt_id}.json`);
+  const old = JSON.parse(fs.readFileSync(s.ws.abs(rel), 'utf8'));
+  delete old.desk.gate.reason_kind;
+  fs.writeFileSync(s.ws.abs(rel), JSON.stringify(old, null, 2));
+  assert.equal(T.view(s.ws, s.pid).ticket.gate_reason_kind, null);
+
+  // A withheld grade from a retrieval gap.
+  const w = withReport(t);
+  stubHeld(t, w.pid, false);
+  const rubrics = require('../core/rubrics');
+  const real = rubrics.gradeAssessment;
+  rubrics.gradeAssessment = (...a) => {
+    const g = real(...a);
+    return g ? { ...g, status: 'withheld', value: null, low: null, high: null, display: null, coverage_pct: 80, missing: [{ id: 'liquidity', label: 'Timing and liquidity', status: 'unknown', reason: 'unknown' }] } : g;
+  };
+  t.after(() => { rubrics.gradeAssessment = real; });
+  const whStep = T.nextStep(w.ws, w.pid);
+  assert.equal(whStep.reason_kind, 'grade_withheld');
+  assert.match(whStep.why, /withheld \(a component was not scored\), not a weak score/);
+  const wh = T.createTicket(w.ws, { project_id: w.pid });
+  assert.equal(wh.status, 'gate_closed');
+  assert.equal(wh.receipt.desk.gate.reason_kind, 'grade_withheld');
+  assert.equal(wh.receipt.desk.gate.withheld.scored_pct, 80);
+  assert.deepEqual(wh.receipt.desk.gate.withheld.unscored.map((c) => c.id), ['liquidity']);
+  const v = T.view(w.ws, w.pid).ticket;
+  assert.equal(v.gate_reason_kind, 'grade_withheld');
+  assert.equal(v.gate_withheld.unscored[0].label, 'Timing and liquidity');
+  // The override (the route's force_prosecution) opens a normal ticket.
+  const forced = T.createTicket(w.ws, { project_id: w.pid, force_prosecution: true });
+  assert.equal(forced.status, 'created');
+});
