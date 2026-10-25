@@ -55,3 +55,24 @@ test('the card draws both on the prosecutor and the desk-gate layouts', () => {
   assert.equal((src.match(/<DeltaBadge /g) || []).length, 2);
   assert.equal((src.match(/<RuleNote /g) || []).length, 2);
 });
+
+test('item 56: the widest category link comes from the largest model-spread gap that names a category, else nothing', async () => {
+  const { widestCategoryLink } = await mod;
+  const alert = (other, gap, id) => ({ kind: 'model_spread', other, category: id ? { id, claude: 80, other: 80 - gap, gap } : null, link: `#/project/p/compare${id ? `?category=${id}` : ''}` });
+  const l = widestCategoryLink({ alerts: [alert('chatgpt', 12, 'token_supply'), alert('gemini', 30, 'liquidity_exit')] });
+  assert.equal(l.href, '#/project/p/compare?category=liquidity_exit');
+  assert.match(l.text, /liquidity exit/);
+  assert.match(l.title, /30 points apart/);
+  assert.equal(widestCategoryLink({ alerts: [alert('chatgpt', 12, null)] }), null, 'no category named, none guessed');
+  assert.equal(widestCategoryLink({ alerts: [{ kind: 'prosecutor_spread', gap: 25, link: '#/?p=p' }] }), null);
+  assert.equal(widestCategoryLink(null), null);
+});
+
+test('item 56: the card draws the side-by-side block only when agent_disagreement is present', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'views', 'inspector', 'PMDecisionCard.jsx'), 'utf8');
+  assert.match(src, /t\.agent_disagreement \? <Disagreement/);
+  assert.match(src, /Agent 1 · Researcher/);
+  assert.match(src, /Agent 2 · Prosecutor/);
+  assert.match(src, /dis\.spread_points/);
+  assert.match(src, /widestCategoryLink\(spread\)/);
+});

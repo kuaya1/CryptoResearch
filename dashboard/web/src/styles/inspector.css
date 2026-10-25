@@ -499,3 +499,10 @@ html.has-drawer { overflow: hidden; }
 .pm-test-pills { display: flex; flex-wrap: wrap; gap: 6px; }
 .pm-test { cursor: pointer; border: 0; font: inherit; }
 .pm-test-body { margin-top: 6px; }
+
+/* Item 56: Agent 1 beside Agent 2. */
+.pm-sbs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
+.pm-sbs-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pm-sbs-cell .pm-dis-k { width: auto; margin: 0; }
+.pm-sbs-v { margin: 0; font-size: var(--fs-lg, 16px); font-weight: 700; font-variant-numeric: tabular-nums; }
+.pm-sbs-s { margin: 0; color: var(--text-2); }

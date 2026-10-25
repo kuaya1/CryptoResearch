@@ -9,7 +9,7 @@
 import { useState } from 'react';
 import { toast, submissionId, fmtDateTime } from '../../../../public/ui.js';
 import { api, refresh } from '../../lib/desk.js';
-import { ruleNoteOf, deltaBadgeOf } from '../../../../public/pm-card-model.js';
+import { ruleNoteOf, deltaBadgeOf, widestCategoryLink } from '../../../../public/pm-card-model.js';
 
 const enc = encodeURIComponent;
 const usd = (n) => (typeof n === 'number' ? `$${n.toLocaleString('en-US', { minimumFractionDigits: n >= 1000 ? 0 : 2, maximumFractionDigits: n < 1 ? 6 : 2 })}` : '—');
@@ -40,14 +40,6 @@ function gateKindWords(t) {
 }
 
 const DECIDED_WORDS = { veto: 'Vetoed', pass: 'Pass confirmed', watch: 'Kept on watch', trim: 'Trim acknowledged', reopen: 'Re-opened' };
-
-// The Prosecutor's line: its own score, then either its fatal flaws (with the
-// first one's test) or its verdict, never both saying "fatal flaw".
-function prosecutorWords(q, fatal) {
-  const score = q.conviction_score ?? '—';
-  if (fatal.length) return `${score} · ${fatal.length} fatal flaw${fatal.length === 1 ? '' : 's'} (${TEST_WORDS[fatal[0].test] || fatal[0].test})`;
-  return `${score} · ${VERDICT_WORDS[q.verdict] || q.verdict || 'no verdict'}`;
-}
 
 // Item 52: the Prosecutor's four tests as pills (pass, fail, unknown), each
 // opening to its finding and the sources it cites, then the strongest bull
@@ -149,9 +141,36 @@ function TradePlan({ pid, g }) {
   );
 }
 
+// Item 56: Agent 1 beside Agent 2, never averaged: the researcher's grade and
+// verdict, the Prosecutor's conviction and verdict, the spread between them
+// and the Prosecutor's own note; when the project has model-spread alerts, a
+// link to Compare at the widest diverging category.
+function Disagreement({ pid, t, spread, dis, r, q, fatal }) {
+  const link = widestCategoryLink(spread);
+  return (
+    <div className="pm-dis" data-key={`pm-disagreement-${pid}`} aria-label="Researcher and Prosecutor side by side">
+      <div className="pm-sbs">
+        <div className="pm-sbs-cell" data-key={`pm-agent1-${pid}`}>
+          <p className="pm-dis-k">Agent 1 · Researcher</p>
+          <p className="pm-sbs-v">{r.grade_display || r.grade || '—'}</p>
+          <p className="pm-sbs-s">{r.verdict || 'no verdict'}</p>
+        </div>
+        <div className="pm-sbs-cell" data-key={`pm-agent2-${pid}`}>
+          <p className="pm-dis-k">Agent 2 · Prosecutor</p>
+          <p className="pm-sbs-v">{q.conviction_score ?? '—'}</p>
+          <p className="pm-sbs-s">{fatal.length ? `${fatal.length} fatal flaw${fatal.length === 1 ? '' : 's'} (${TEST_WORDS[fatal[0].test] || fatal[0].test})` : VERDICT_WORDS[q.verdict] || q.verdict || 'no verdict'}</p>
+        </div>
+      </div>
+      <DeltaBadge pid={pid} delta={t.report_delta} row />
+      {typeof dis.spread_points === 'number' ? <p className="pm-dis-row"><span className="pm-dis-k">Spread</span><span>{`${dis.spread_points > 0 ? '+' : ''}${dis.spread_points} points (researcher minus prosecutor)`}</span></p> : null}
+      {dis.note ? <p className="pm-dis-note" data-key={`pm-why-${pid}`}>{dis.note}</p> : null}
+      {link ? <a className="btn-link" href={link.href} title={link.title} data-key={`pm-widest-${pid}`}>{link.text}</a> : null}
+    </div>
+  );
+}
+
 export function PMDecisionCard({ p }) {
   const [busy, setBusy] = useState(null);
-  const [why, setWhy] = useState(false);
   const t = p.ticket;
   const pid = p.project_id;
   if (!t || t.unavailable) return null;
@@ -293,18 +312,7 @@ export function PMDecisionCard({ p }) {
           <a href={t.exits_missing[0].link} title={t.exits_missing.map((m) => m.reason).join(' ')}>Approve exit quotes</a>
         </p>
       ) : null}
-      <div className="pm-dis" title={dis.note || undefined}>
-        <p className="pm-dis-row"><span className="pm-dis-k">Researcher</span><span>{`${r.grade_display || r.grade || '—'} · ${r.verdict || 'no verdict'}`}</span></p>
-        <DeltaBadge pid={pid} delta={t.report_delta} row />
-        <p className="pm-dis-row"><span className="pm-dis-k">Prosecutor</span><span>{prosecutorWords(q, fatal)}</span></p>
-        {typeof dis.spread_points === 'number' ? <p className="pm-dis-row"><span className="pm-dis-k">Spread</span><span>{`${dis.spread_points > 0 ? '+' : ''}${dis.spread_points} points (researcher minus prosecutor)`}</span></p> : null}
-        {dis.note ? (
-          <>
-            <button type="button" className="btn-link" aria-expanded={why} data-key={`pm-why-${pid}`} onClick={() => setWhy(!why)}>{why ? 'Hide the disagreement' : 'Why they disagree'}</button>
-            {why ? <p className="pm-dis-note">{dis.note}</p> : null}
-          </>
-        ) : null}
-      </div>
+      {t.agent_disagreement ? <Disagreement pid={pid} t={t} spread={p.spread} dis={dis} r={r} q={q} fatal={fatal} /> : null}
       <RuleNote pid={pid} t={t} />
       {t.superseded_by_report ? <p className="faint pm-note">{`Claude has a newer report (${t.superseded_by_report}); this ticket is on the earlier one.`}</p> : null}
       <div className="pm-actions">
