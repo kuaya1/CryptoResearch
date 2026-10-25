@@ -1788,6 +1788,15 @@ test('trade plan geometry: view() carries it on a saved Prosecutor ticket, unkno
   }
 });
 
+test('view() carries the four tests and the strongest bull rebuttal for the card (item 52)', (t) => {
+  const s = withReport(t);
+  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
+  T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) });
+  const pr = T.view(s.ws, s.pid).ticket.prosecution;
+  assert.equal(pr.strongest_bull_rebuttal, 'Emissions taper next quarter.');
+  for (const k of ['mercenary_emissions', 'tax_revenue', 'exit_slippage', 'unverified_claims']) assert.ok(['pass', 'fail', 'unknown'].includes(pr.tests[k].result), k);
+});
+
 // ---------------------------------------------------------------------------
 // run-cycle (backlog item 51)
 

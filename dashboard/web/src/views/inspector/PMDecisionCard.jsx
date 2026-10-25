@@ -49,6 +49,38 @@ function prosecutorWords(q, fatal) {
   return `${score} · ${VERDICT_WORDS[q.verdict] || q.verdict || 'no verdict'}`;
 }
 
+// Item 52: the Prosecutor's four tests as pills (pass, fail, unknown), each
+// opening to its finding and the sources it cites, then the strongest bull
+// rebuttal. A test the ticket does not hold reads unknown, never pass.
+const TEST_ORDER = ['mercenary_emissions', 'tax_revenue', 'exit_slippage', 'unverified_claims'];
+const RESULT_TONE = { pass: 'is-ok', fail: 'is-bad', unknown: 'is-unknown' };
+function TestMatrix({ pid, pr }) {
+  const [open, setOpen] = useState(null);
+  if (!pr) return null;
+  const tests = pr.tests || {};
+  const resultOf = (k) => (tests[k] && ['pass', 'fail', 'unknown'].includes(tests[k].result) ? tests[k].result : 'unknown');
+  const cur = open && tests[open] ? tests[open] : null;
+  return (
+    <div className="pm-tests" data-key={`pm-tests-${pid}`} aria-label="The Prosecutor's four tests">
+      <div className="pm-test-pills">
+        {TEST_ORDER.map((k) => {
+          const res = resultOf(k);
+          return (
+            <button type="button" key={k} className={`badge pm-test ${RESULT_TONE[res]}`} data-key={`pm-test-${k}-${pid}`} data-result={res} aria-expanded={open === k} onClick={() => setOpen(open === k ? null : k)}>{`${TEST_WORDS[k]}: ${res}`}</button>
+          );
+        })}
+      </div>
+      {open ? (
+        <div className="pm-test-body" data-key={`pm-test-body-${pid}`}>
+          <p className="pm-dis-note">{cur && cur.finding ? cur.finding : 'No finding recorded for this test.'}</p>
+          <p className="faint pm-note">{cur && Array.isArray(cur.source_ids) && cur.source_ids.length ? `Sources: ${cur.source_ids.join(', ')}` : 'No sources cited.'}</p>
+        </div>
+      ) : null}
+      {pr.strongest_bull_rebuttal ? <p className="pm-dis-note" data-key={`pm-rebuttal-${pid}`}><span className="pm-dis-k">Strongest bull rebuttal</span>{` ${pr.strongest_bull_rebuttal}`}</p> : null}
+    </div>
+  );
+}
+
 function exitText(t) {
   // A native L1 coin of the size the rules name passes without a DEX quote:
   // said as its basis, never as a measured cost.
@@ -253,6 +285,7 @@ export function PMDecisionCard({ p }) {
         </div>
       </div>
       <TradePlan pid={pid} g={t.trade_plan_geometry} />
+      <TestMatrix pid={pid} pr={t.prosecution} />
       {(t.exits_missing || []).length ? (
         <p className="faint" data-key={`pm-missing-${pid}`}>
           {`No current exit reading at ${t.exits_missing.map((m) => `$${m.size_usd.toLocaleString("en-US")}`).join(' or ')}. `}
