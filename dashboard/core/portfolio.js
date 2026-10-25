@@ -338,6 +338,37 @@ function correctTransaction(ws, txId, input, reason) {
   return { status: 'corrected', ...out.result, files: out.files, verified: out.verified, op_id: out.op_id };
 }
 
+// "Set cost" (2026-10-25): Eric gives units that arrived with an unknown cost
+// (a first wallet balance, a deposit) the average cost and date he states. The
+// ledger stays the one record of cost: this is the standard correction (the
+// original voided with the reason, the copy `corrects` it, source
+// `correction`), never a field on the position and never an estimate.
+const COST_SETTABLE = new Set(['transfer_in', 'buy', 'income']);
+function setCost(ws, { asset_id, account_id, avg_cost_usd, acquired_at, tx_id, reason } = {}) {
+  const asset = String(asset_id || '').trim().toLowerCase();
+  const account = String(account_id || '').trim();
+  if (!asset) throw new OpError('INVALID', 'Set cost needs the asset.');
+  if (!account) throw new OpError('INVALID', 'Set cost needs the account.');
+  if (blank(avg_cost_usd)) throw new OpError('INVALID', 'Set cost needs the average cost in USD per unit (your own figure; the desk never estimates one).');
+  let cost;
+  try { cost = D.toString(D.of(avg_cost_usd, { label: 'avg_cost_usd' })); } catch (err) { throw new OpError('INVALID', err.message); }
+  if (D.of(cost) < 0n) throw new OpError('INVALID', 'The average cost cannot be negative.');
+  if (!blank(acquired_at) && !Number.isFinite(Date.parse(acquired_at))) throw new OpError('INVALID', `"${acquired_at}" is not a date: give the acquisition date, such as 2026-09-30.`);
+  const candidates = loadTransactions(ws).filter((t) => !t.voided && t.asset_id === asset && t.account_id === account && COST_SETTABLE.has(t.type) && blank(t.price_usd) && !t.transfer_id);
+  if (tx_id) {
+    if (!candidates.some((t) => t.tx_id === tx_id)) throw new OpError('NOT_FOUND', `${tx_id} is not an active entry of ${asset} in ${account} with an unknown cost.`);
+  } else if (!candidates.length) {
+    throw new OpError('NOT_FOUND', `No entry of ${asset} in ${account} has an unknown cost to set. Nothing was changed.`);
+  } else if (candidates.length > 1) {
+    throw new OpError('AMBIGUOUS', `${candidates.length} entries of ${asset} in ${account} have an unknown cost (${candidates.map((t) => t.tx_id).join(', ')}). Name one with tx_id. Nothing was changed.`);
+  }
+  const target = tx_id ? candidates.find((t) => t.tx_id === tx_id) : candidates[0];
+  const { tx_id: _id, tx_id_supplied: _s, source: _src, created_at: _c, voided: _v, void_reason: _vr, voided_at: _va, corrected_by: _cb, corrects: _co, ...fields } = target;
+  const note = `Cost set by Eric: ${cost} USD per unit${blank(acquired_at) ? '' : `, acquired ${String(acquired_at).trim()}`} (was unknown)`;
+  const r = correctTransaction(ws, target.tx_id, { ...fields, price_usd: cost, date: blank(acquired_at) ? target.date : String(acquired_at).trim(), note: target.note ? `${target.note}. ${note}` : note }, String(reason || '').trim() || 'Eric set the average cost of units that arrived with an unknown cost');
+  return { ...r, status: 'cost_set', asset_id: asset, account_id: account, avg_cost_usd: cost };
+}
+
 function setLimits(ws, { speculative_capital_cap_usd, max_position_pct, max_sector_pct }) {
   const check = (v, label, max) => {
     if (v === undefined) return undefined;
@@ -1061,6 +1092,7 @@ module.exports = {
   addTransactions,
   voidTransaction,
   correctTransaction,
+  setCost,
   setLimits,
   parseCsv,
   importCsv,

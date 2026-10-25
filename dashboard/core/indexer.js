@@ -377,6 +377,10 @@ function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = 
         ticket = { unavailable: true, error: err.message };
       }
     }
+    let spread = null;
+    if (!light) {
+      try { spread = require('./spread').spreadOf(ws, p.project_id, { reports, ticket: ticket && !ticket.unavailable ? ticket : null }); } catch (_) { spread = null; }
+    }
     const position = held.get(p.project_id) || null;
     const archived = p.status === 'archived';
 
@@ -484,6 +488,10 @@ function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = 
       if (comp.flagged.length) {
         attention.push({ kind: 'disagreement', severity: 'medium', project_id: p.project_id, title: `${p.name}: models disagree on ${comp.flagged.length} item${comp.flagged.length === 1 ? '' : 's'}`, detail: comp.flagged.map((f) => `${f.label} (${f.spread})`).join(', ') });
       }
+      // Spread alerts (core/spread.js): Eric's thresholds, firm grades under one rubric only.
+      if (spread && spread.alerts.length) {
+        attention.push({ kind: 'spread', severity: 'medium', project_id: p.project_id, title: `${p.name}: ${spread.alerts.length === 1 ? 'a grade spread' : `${spread.alerts.length} grade spreads`} at or over your threshold`, detail: spread.alerts.map((a) => a.words).join(' '), action: spread.alerts[0].link });
+      }
       for (const prov of PROVIDERS) {
         const s = providers[prov];
         if (!s) continue;
@@ -557,6 +565,7 @@ function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = 
       screening,
       forensic,
       ticket,
+      spread,
       report_delta: (() => { try { return require('./report-delta').reportDelta(ws, reports); } catch (_) { return null; } })(),
       created_at: p.created_at,
       updated_at: p.updated_at,

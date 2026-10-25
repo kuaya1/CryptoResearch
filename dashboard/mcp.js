@@ -1736,10 +1736,13 @@ const handlers = {
 
   portfolio_overview(ws) {
     const pf = portfolio.computePortfolio(ws, { market: market.readLatest(ws) });
+    const brief = new Map(require('./core/position-brief').describe(ws, pf).map((b) => [b.asset_id, b]));
     return {
       as_of: pf.as_of,
       valuation_state: pf.totals ? pf.totals.valuation_state : null,
       positions: pf.positions.filter((p) => !p.closed).map((p) => ({
+        pnl: brief.has(p.asset_id) ? brief.get(p.asset_id).pnl : undefined,
+        invalidation_distance: brief.has(p.asset_id) ? brief.get(p.asset_id).invalidation_distance : undefined,
         asset_id: p.asset_id,
         symbol: p.symbol || null,
         name: p.name || null,

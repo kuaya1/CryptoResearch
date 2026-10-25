@@ -349,6 +349,16 @@ function validateSettingsPatch(patch, ws = null) {
     if (o.min_grade_any !== undefined && o.min_grade_new_entry !== undefined && o.min_grade_any > o.min_grade_new_entry) throw new OpError('INVALID', 'The minimum grade for any new risk cannot be above the minimum for a new entry');
     out.tickets = { sizing: o };
   }
+  if (patch.alerts && patch.alerts.spread) {
+    // Eric's spread-alert thresholds (core/spread.js thresholds reads them
+    // with the same bounds): the grade gap between Claude and another model,
+    // and between Claude's grade and the Prosecutor's conviction.
+    const sp = patch.alerts.spread;
+    const o = {};
+    if (sp.grade_points !== undefined) o.grade_points = num(sp.grade_points, 1, 100, 'Grade spread alert (points)');
+    if (sp.conviction_points !== undefined) o.conviction_points = num(sp.conviction_points, 1, 100, 'Prosecutor spread alert (points)');
+    out.alerts = { spread: o };
+  }
   if (patch.tickets && patch.tickets.invalidation) {
     // Eric's minimum price coverage for an invalidation check (core/tickets.js
     // invalidationSettings reads it with the same bounds).
@@ -1416,6 +1426,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   route('POST', '/api/portfolio/transactions', (m, req, res, body) => once(body, () => after(portfolio.addTransactions(ws, Array.isArray(body.transactions) ? body.transactions : [body], { source: 'dashboard' }))));
   route('POST', '/api/portfolio/transactions/([^/]+)/void', (m, req, res, body) => after(portfolio.voidTransaction(ws, rid(m[1]), body.reason)));
   route('POST', '/api/portfolio/transactions/([^/]+)/correct', (m, req, res, body) => after(portfolio.correctTransaction(ws, rid(m[1]), body.transaction && typeof body.transaction === 'object' ? body.transaction : {}, body.reason)));
+  route('POST', '/api/portfolio/set-cost', (m, req, res, body) => after(portfolio.setCost(ws, { asset_id: body.asset_id, account_id: body.account_id, avg_cost_usd: body.avg_cost_usd, acquired_at: body.acquired_at || null, tx_id: body.tx_id || null, reason: typeof body.reason === 'string' ? body.reason : null })));
   // Wallet-import notes accepted as unknown (portfolio.js acceptUnknown): only
   // notes shown now; nothing is priced or recorded in the ledger.
   route('POST', '/api/portfolio/acknowledge', (m, req, res, body) => after(portfolio.acceptUnknown(ws, { keys: Array.isArray(body.keys) ? body.keys.map(String).slice(0, 5000) : [], note: typeof body.note === 'string' ? body.note : null, request_id: typeof body.request_id === 'string' ? body.request_id : null, by: 'dashboard' })));

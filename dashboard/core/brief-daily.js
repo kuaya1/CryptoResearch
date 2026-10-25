@@ -89,14 +89,22 @@ function brief(ws, { since = null, now = Date.now() } = {}) {
       .map((c) => ({ text: `${c.name || c.project_id}: no current exit reading at $${c.exit_reading.size_usd}.`, link: `#/project/${c.project_id}/forensics?tab=exits` }));
   });
 
-  section('held', 'Held positions', true, () => rows
-    .filter((r) => r.held && r.position)
-    .map((r) => {
-      const v = isNum(r.position.value_usd) ? usd(r.position.value_usd) : 'value unknown';
-      const m = r.market || {};
-      const c = isNum(m.change_24h_pct) ? `24h ${pct(m.change_24h_pct)}` : '24h change unknown';
-      return { text: `${r.name}: ${v}, ${c}${r.position.price_status && r.position.price_status !== 'fresh' && r.position.price_status !== 'ok' ? ` (price ${String(r.position.price_status).replace(/_/g, ' ')})` : ''}.`, link: '#/portfolio' };
-    }));
+  section('held', 'Held positions', true, () => {
+    // Unrealized result and the distance to the invalidation price come from
+    // the ledger and the ticket in force (core/position-brief.js).
+    const pf = require('./portfolio').computePortfolio(ws, { market: require('./market').readLatest(ws) });
+    const detail = new Map(require('./position-brief').describe(ws, pf, { now }).map((b) => [b.project_id, b]));
+    return rows
+      .filter((r) => r.held && r.position)
+      .map((r) => {
+        const v = isNum(r.position.value_usd) ? usd(r.position.value_usd) : 'value unknown';
+        const m = r.market || {};
+        const c = isNum(m.change_24h_pct) ? `24h ${pct(m.change_24h_pct)}` : '24h change unknown';
+        const d = detail.get(r.project_id);
+        const extra = d ? ` ${d.pnl.words} ${d.invalidation_distance.words}` : '';
+        return { text: `${r.name}: ${v}, ${c}${r.position.price_status && r.position.price_status !== 'fresh' && r.position.price_status !== 'ok' ? ` (price ${String(r.position.price_status).replace(/_/g, ' ')})` : ''}.${extra}`, link: '#/portfolio' };
+      });
+  });
 
   section('research_waiting', 'Research waiting per model', true, () => {
     const held = require('./research').heldProviders(ws);
@@ -116,6 +124,16 @@ function brief(ws, { since = null, now = Date.now() } = {}) {
   section('models_differ', 'Models differ', true, () => (index.attention || [])
     .filter((a) => a.kind === 'disagreement' && a.project_id && rows.some((r) => r.project_id === a.project_id))
     .map((a) => ({ text: String(a.title), link: `#/project/${a.project_id}/compare` })));
+
+  section('spread', 'Grade spreads', true, () => {
+    const out = [];
+    for (const r of rows) {
+      const sp = r.spread;
+      if (!sp) continue;
+      for (const a of sp.alerts) out.push({ text: `${r.name}: ${a.words}`, link: a.link });
+    }
+    return out;
+  });
 
   section('freshness', 'Backup and prices', false, () => {
     const out = [];
