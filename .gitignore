@@ -64,6 +64,10 @@ node_modules/
 # Audits: only the reviewed reports below are tracked
 
 /audits/*/*
+!/audits/2026-10-25-visual-proof/README.md
+!/audits/2026-10-25-visual-proof/PLAN.md
+!/audits/2026-10-25-visual-proof/SAMPLE-REPORT.md
+!/audits/2026-10-25-visual-proof/SAMPLE-PR-COMMENT.md
 !/audits/2026-10-24-30-day-blueprint/README.md
 !/audits/2026-10-17-forensics-recheck-response/README.md
 !/audits/2026-10-16-forensics-corrections/README.md
