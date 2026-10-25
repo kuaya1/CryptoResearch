@@ -386,6 +386,37 @@ function gate(basis, sizing, proposalType = null) {
   };
 }
 
+// Why the grade closed the pre-gate (cr-ticket-pregate@1 records more, the rule
+// is unchanged): `grade_low` (a firm grade, or a range's low end, under the
+// floor) or `grade_withheld` (a retrieval gap reads differently from a weak
+// project); null for anything else.
+function gradeReasonKind(grade) {
+  if (!grade) return null;
+  if (gateGrade(grade) !== null) return 'grade_low';
+  return grade.status === 'withheld' ? 'grade_withheld' : null;
+}
+
+// For a withheld grade: the share of investment weight scored and the
+// components the report left unscored, read from the report's own
+// investment_components. null when the report cannot be read again.
+function withheldOf(ws, pid, researcher) {
+  try {
+    const { loadReports } = require('./reports');
+    const r = require('./compare').latestByProvider(loadReports(ws, pid)).claude;
+    if (!r || r.report_id !== researcher.report_id) return null;
+    const g = require('./rubrics').gradeAssessment(ws, r.assessment || {});
+    if (!g || g.status !== 'withheld') return null;
+    return {
+      scored_pct: isNum(g.coverage_pct) ? g.coverage_pct : null,
+      unscored: (g.missing || []).map((m) => ({ id: m.id, label: m.label, status: m.status })),
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+const KIND_WORDS = { grade_low: 'the grade is under the floor', grade_withheld: 'the grade is withheld (a component was not scored), not a weak score' };
+
 // Does the grade alone rule out new risk for an asset Eric does not hold? Only
 // a known "not held" counts (an unreadable portfolio opens a normal ticket).
 // Returns the gate's grade reason, else null.
@@ -642,7 +673,11 @@ function closeGate(ws, { pid, project, researcher, packet, packetText, packetSha
     proposal: null,
     desk: {
       sizing,
-      gate: g,
+      gate: (() => {
+        const reason_kind = gradeReasonKind(researcher.grade);
+        const withheld = reason_kind === 'grade_withheld' ? withheldOf(ws, pid, researcher) : null;
+        return { ...g, reason_kind, ...(withheld ? { withheld } : {}) };
+      })(),
       proposal_type: g.proposal_type,
       model_proposal_type: null,
       suggested_risk_usd: g.suggested_risk_usd,
@@ -1480,6 +1515,8 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       model_proposal_type: d.model_proposal_type,
       capped: d.gate ? d.gate.capped : null,
       gate_reasons: d.gate ? d.gate.reasons : [],
+      gate_reason_kind: gateOnly && d.gate ? d.gate.reason_kind || null : null,
+      gate_withheld: gateOnly && d.gate ? d.gate.withheld || null : null,
       non_consensus_thesis: pr.non_consensus_thesis || null,
       entry_zone: pr.entry_zone || null,
       upside_target: pr.upside_target || null,
@@ -1584,7 +1621,8 @@ function nextStep(ws, pid, { now = Date.now() } = {}) {
   if (v.ticket && v.ticket.status === 'reopened' && v.ticket.researcher_report_id === r.report_id) return { ...base, step: 'ticket', ticket_id: null, report_id: r.report_id, refresh: true, reopen: true, why: `Eric re-opened ticket ${v.ticket.receipt_id}: open a new one on Claude's current report ${r.report_id} (start_ticket with refresh: true). The old receipt is kept.` };
   if (!v.ticket || v.ticket.researcher_report_id !== r.report_id) {
     const why = pregateReason(r, heldOf(ws, pid, now), sizingOf(ws));
-    if (why) return { ...base, step: 'gate_closed', ticket_id: null, report_id: r.report_id, reasons: [why], why: `The desk's gate is closed on Claude's current report ${r.report_id}: ${why} No Prosecutor runs; call start_ticket (tickets start) to save the desk's receipt.` };
+    const kind = gradeReasonKind(r.grade);
+    if (why) return { ...base, step: 'gate_closed', ticket_id: null, report_id: r.report_id, reasons: [why], reason_kind: kind, why: `The desk's gate is closed on Claude's current report ${r.report_id}${kind ? ` (${KIND_WORDS[kind]})` : ''}: ${why} No Prosecutor runs; call start_ticket (tickets start) to save the desk's receipt.` };
   }
   if (!v.ticket || v.ticket.researcher_report_id !== r.report_id) return { ...base, step: 'ticket', ticket_id: null, report_id: r.report_id, why: `No ticket on Claude's current report ${r.report_id}: open one (Agent 2).` };
   if (v.ticket.status === 'pending_pm_review') return { ...base, step: 'pm_review', receipt_id: v.ticket.receipt_id, why: 'The ticket waits for Eric\'s PM review. Nothing for an agent to do.' };

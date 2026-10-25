@@ -55,6 +55,10 @@ export function shadowRows(book) {
       change_text: measured ? pctText(s.change_pct) : '—',
       vs_btc_text: measured ? pctText(s.vs_btc_pct) : '—',
       tone: measured ? (s.change_pct > 0 ? 'pos' : s.change_pct < 0 ? 'neg' : '') : '',
+      day30_text: x.day30 && x.day30.status === 'matured' ? pctText(x.day30.change_pct) : x.day30 && x.day30.status === 'immature' ? 'Not yet' : '—',
+      day30_vs_btc_text: x.day30 && x.day30.status === 'matured' ? pctText(x.day30.vs_btc_pct) : '—',
+      day30_tone: x.day30 && x.day30.status === 'matured' ? (x.day30.change_pct > 0 ? 'pos' : x.day30.change_pct < 0 ? 'neg' : '') : '',
+      day30_title: x.day30 ? (x.day30.status === 'matured' ? `Day 30, fixed: from $${x.day30.from_price_usd} (${x.day30.from_at}) to $${x.day30.to_price_usd} (${x.day30.to_at}); ${x.day30.btc_change_pct === null ? x.day30.btc_note : `BTC ${pctText(x.day30.btc_change_pct)}`}` : x.day30.why) : 'No day-30 reading.',
       title: measured ? `From $${s.from_price_usd} (${s.from_at}) to $${s.to_price_usd} (${s.to_at}); ${s.btc_change_pct === null ? s.btc_note : `BTC ${pctText(s.btc_change_pct)}`}` : s.why,
     };
   });
@@ -66,4 +70,11 @@ export function shadowCounts(book) {
   const rows = (Array.isArray(book && book.shadow_gate) ? book.shadow_gate : []);
   const measured = rows.filter((x) => x.since && x.since.status === 'measured');
   return { total: rows.length, measured: measured.length, rose: measured.filter((x) => x.since.change_pct > 0).length, unknown: rows.length - measured.length };
+}
+
+// The per-month cohort lines: matured, immature and unevaluable counts of the
+// day-30 results. Counts only; no rate or verdict before the book's minimum.
+export function shadowCohortLines(book) {
+  const list = Array.isArray(book && book.shadow_cohorts) ? book.shadow_cohorts : [];
+  return list.map((c) => `${c.month}: ${c.matured} matured · ${c.immature} immature · ${c.unevaluable} unevaluable`);
 }

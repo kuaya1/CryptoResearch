@@ -306,10 +306,45 @@ function shadowGate(ws, projects, now) {
         const bret = b0 && b1 ? b1.price_usd / b0.price_usd - 1 : null;
         since = { status: 'measured', from_price_usd: p0.price_usd, from_at: iso(p0.t), to_price_usd: p1.price_usd, to_at: iso(p1.t), change_pct: round(ret * 100, 2), btc_change_pct: bret === null ? null : round(bret * 100, 2), vs_btc_pct: bret === null ? null : round(((1 + ret) / (1 + bret) - 1) * 100, 2), ...(bret === null ? { btc_note: 'No BTC price on record at one of the two times.' } : {}) };
       }
-      out.push({ project_id: p.project_id, name: p.name, receipt_id: r.receipt_id, saved_at: r.saved_at, kind: r.kind === 'desk_gate' ? 'desk_gate' : 'zero_risk', proposal_type: d.proposal_type || null, line: r.kind === 'desk_gate' ? 'Desk gate: no Prosecutor run' : 'Shadow: not taken', since });
+      // The fixed 30-day result (backlog 41): the reading at or before the
+      // receipt (within 6 h) to the one at or before receipt + 30 days (within
+      // 24 h). Unlike `since` it never follows the latest price, so once
+      // matured it does not change. A missing price is unevaluable, never 0.
+      let day30;
+      const target = at + 30 * 24 * HOUR;
+      if (!p0) day30 = { status: 'unevaluable', why: cg ? 'No hourly price within 6 hours at or before the receipt.' : 'No CoinGecko ID on the project: no hourly records.' };
+      else if (!(now >= target)) day30 = { status: 'immature', matures_at: iso(target), why: 'Fewer than 30 days since the receipt.' };
+      else {
+        const p30 = atOrBefore(mine, target, 24 * HOUR);
+        if (!p30) day30 = { status: 'unevaluable', why: 'No hourly price within 24 hours at or before day 30.' };
+        else {
+          const ret30 = p30.price_usd / p0.price_usd - 1;
+          const b30 = atOrBefore(btc, target, 24 * HOUR);
+          const bret30 = b0 && b30 ? b30.price_usd / b0.price_usd - 1 : null;
+          day30 = { status: 'matured', from_price_usd: p0.price_usd, from_at: iso(p0.t), to_price_usd: p30.price_usd, to_at: iso(p30.t), change_pct: round(ret30 * 100, 2), btc_change_pct: bret30 === null ? null : round(bret30 * 100, 2), vs_btc_pct: bret30 === null ? null : round(((1 + ret30) / (1 + bret30) - 1) * 100, 2), ...(bret30 === null ? { btc_note: 'No BTC price on record at one of the two times.' } : {}) };
+        }
+      }
+      out.push({ project_id: p.project_id, name: p.name, receipt_id: r.receipt_id, saved_at: r.saved_at, kind: r.kind === 'desk_gate' ? 'desk_gate' : 'zero_risk', proposal_type: d.proposal_type || null, line: r.kind === 'desk_gate' ? 'Desk gate: no Prosecutor run' : 'Shadow: not taken', since, day30 });
     }
   }
   return out;
+}
+
+// One line per receipt month: how many day-30 results matured, are still
+// immature or cannot be evaluated. Counts only: no median, hit rate or "the
+// gate was right" is computed, and never a probability.
+const SHADOW_MIN_MATURED = 20;
+function shadowCohorts(rows) {
+  const by = new Map();
+  for (const x of rows) {
+    const month = String(x.saved_at || '').slice(0, 7) || 'unknown';
+    const c = by.get(month) || { month, matured: 0, immature: 0, unevaluable: 0, total: 0 };
+    const st = x.day30 && x.day30.status;
+    c[st === 'matured' ? 'matured' : st === 'immature' ? 'immature' : 'unevaluable'] += 1;
+    c.total += 1;
+    by.set(month, c);
+  }
+  return [...by.values()].sort((a, b) => a.month.localeCompare(b.month));
 }
 
 function book(ws, { now = Date.now() } = {}) {
@@ -330,6 +365,7 @@ function book(ws, { now = Date.now() } = {}) {
   const enough = closedWith.length >= MIN_CLOSED;
   const median = (xs) => { const s = xs.slice().sort((a, b) => a - b); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
   const vs = closedWith.map((x) => x.return.vs_btc_pct).filter(isNum);
+  const shadowRowsOnce = shadowGate(ws, all, now);
   return {
     schema_version: 'cr.paper-book.v1',
     paper_version: VERSION,
@@ -341,7 +377,9 @@ function book(ws, { now = Date.now() } = {}) {
       : { closed: closedWith.length, note: `Too few to judge: ${closedWith.length} of ${MIN_CLOSED} closed positions needed for a total, median or hit rate.` },
     positions,
     shadow: shadows(ws, all),
-    shadow_gate: shadowGate(ws, all, now),
+    shadow_gate: shadowRowsOnce,
+    shadow_cohorts: shadowCohorts(shadowRowsOnce),
+    shadow_min_matured: SHADOW_MIN_MATURED,
   };
 }
 

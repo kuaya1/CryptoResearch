@@ -1620,3 +1620,95 @@ test('invalidation@2: a breach read from latest.json names it', (t) => {
   assert.equal(p.source, 'latest.json');
   assert.match(p.words, /\(latest\.json\)/);
 });
+
+test('pre-gate reason kind (item 40): an under-floor grade reads grade_low; a withheld grade reads grade_withheld with its scored share and unscored components; an older receipt reads not recorded; the override opens a normal ticket', (t) => {
+  const s = withReport(t);
+  gradeClosed(s.ws);
+  stubHeld(t, s.pid, false);
+  const lowStep = T.nextStep(s.ws, s.pid);
+  assert.equal(lowStep.reason_kind, 'grade_low');
+  assert.match(lowStep.why, /the grade is under the floor/);
+  const low = T.createTicket(s.ws, { project_id: s.pid });
+  assert.equal(low.receipt.desk.gate.reason_kind, 'grade_low');
+  assert.equal(low.receipt.desk.gate.withheld, undefined);
+  assert.equal(T.view(s.ws, s.pid).ticket.gate_reason_kind, 'grade_low');
+
+  // An older receipt (no reason_kind recorded) reads null.
+  const rel = low.receipt.packet.path.replace(/[^/]+$/, `${low.receipt_id}.json`);
+  const old = JSON.parse(fs.readFileSync(s.ws.abs(rel), 'utf8'));
+  delete old.desk.gate.reason_kind;
+  fs.writeFileSync(s.ws.abs(rel), JSON.stringify(old, null, 2));
+  assert.equal(T.view(s.ws, s.pid).ticket.gate_reason_kind, null);
+
+  // A withheld grade from a retrieval gap.
+  const w = withReport(t);
+  stubHeld(t, w.pid, false);
+  const rubrics = require('../core/rubrics');
+  const real = rubrics.gradeAssessment;
+  rubrics.gradeAssessment = (...a) => {
+    const g = real(...a);
+    return g ? { ...g, status: 'withheld', value: null, low: null, high: null, display: null, coverage_pct: 80, missing: [{ id: 'liquidity', label: 'Timing and liquidity', status: 'unknown', reason: 'unknown' }] } : g;
+  };
+  t.after(() => { rubrics.gradeAssessment = real; });
+  const whStep = T.nextStep(w.ws, w.pid);
+  assert.equal(whStep.reason_kind, 'grade_withheld');
+  assert.match(whStep.why, /withheld \(a component was not scored\), not a weak score/);
+  const wh = T.createTicket(w.ws, { project_id: w.pid });
+  assert.equal(wh.status, 'gate_closed');
+  assert.equal(wh.receipt.desk.gate.reason_kind, 'grade_withheld');
+  assert.equal(wh.receipt.desk.gate.withheld.scored_pct, 80);
+  assert.deepEqual(wh.receipt.desk.gate.withheld.unscored.map((c) => c.id), ['liquidity']);
+  const v = T.view(w.ws, w.pid).ticket;
+  assert.equal(v.gate_reason_kind, 'grade_withheld');
+  assert.equal(v.gate_withheld.unscored[0].label, 'Timing and liquidity');
+  // The override (the route's force_prosecution) opens a normal ticket.
+  const forced = T.createTicket(w.ws, { project_id: w.pid, force_prosecution: true });
+  assert.equal(forced.status, 'created');
+});
+
+test('shadow gate day 30 (item 41): a fixed 30-day result that does not follow the latest price; immature and unevaluable read so; an archived project is listed; cohort counts; nothing is written', async (t) => {
+  const P = require('../core/paper');
+  const DAY = 24 * HOURMS;
+  const s = withReport(t);
+  gradeClosed(s.ws);
+  stubHeld(t, s.pid, false);
+  const gate = T.createTicket(s.ws, { project_id: s.pid });
+  const at = Date.parse(gate.receipt.saved_at);
+  // Before day 30 and no start price: unevaluable, never 0.
+  assert.equal(P.book(s.ws, { now: at + 10 * HOURMS }).shadow_gate[0].day30.status, 'unevaluable');
+  bothPrices(s.ws, at - HOURMS, 1.0, 100);
+  const young = P.book(s.ws, { now: at + 10 * DAY }).shadow_gate[0];
+  assert.equal(young.day30.status, 'immature');
+  assert.equal(young.day30.change_pct, undefined);
+  // The probe: +100% at day 30, +200% at day 35.
+  bothPrices(s.ws, at + 30 * DAY - HOURMS, 2.0, 110);
+  bothPrices(s.ws, at + 35 * DAY, 3.0, 120);
+  const tree = hashTree(s.root);
+  const b = P.book(s.ws, { now: at + 35 * DAY });
+  assert.deepEqual(hashTree(s.root), tree, 'reading writes nothing');
+  const row = b.shadow_gate[0];
+  assert.equal(row.since.change_pct, 200);
+  assert.equal(row.day30.status, 'matured');
+  assert.equal(row.day30.change_pct, 100);
+  assert.equal(row.day30.btc_change_pct, 10);
+  assert.equal(row.day30.vs_btc_pct, 81.82);
+  // Once matured it never changes, however the price moves later.
+  bothPrices(s.ws, at + 60 * DAY, 9.0, 300);
+  assert.deepEqual(P.book(s.ws, { now: at + 60 * DAY }).shadow_gate[0].day30, row.day30);
+  // One hour after day 30 it is matured at the reading within 24 h before it.
+  assert.equal(P.book(s.ws, { now: at + 30 * DAY + HOURMS }).shadow_gate[0].day30.status, 'matured');
+  // Cohorts: counts per receipt month, no rate.
+  const month = gate.receipt.saved_at.slice(0, 7);
+  assert.deepEqual(b.shadow_cohorts, [{ month, matured: 1, immature: 0, unevaluable: 0, total: 1 }]);
+  assert.equal(b.shadow_min_matured, 20);
+  // An archived project's receipt is still listed.
+  require('../core/projects').archiveProject(s.ws, s.pid);
+  assert.equal(P.book(s.ws, { now: at + 35 * DAY }).shadow_gate.length, 1);
+  // The model words.
+  const M = await import('../public/paper-model.js');
+  const rows = M.shadowRows(b);
+  assert.equal(rows[0].day30_text, '+100.00%');
+  assert.equal(rows[0].day30_vs_btc_text, '+81.82%');
+  assert.deepEqual(M.shadowCohortLines(b), [`${month}: 1 matured · 0 immature · 0 unevaluable`]);
+  assert.equal(M.shadowRows({ shadow_gate: [{ saved_at: 'x', day30: { status: 'immature', why: 'w' } }] })[0].day30_text, 'Not yet');
+});

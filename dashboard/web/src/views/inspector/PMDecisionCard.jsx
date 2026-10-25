@@ -26,6 +26,19 @@ const STATUS = {
 };
 const VERDICT_WORDS = { thesis_survives: 'thesis survives', thesis_damaged: 'thesis damaged', fatal_flaw: 'fatal flaw' };
 const TEST_WORDS = { mercenary_emissions: 'mercenary emissions', tax_revenue: 'tax revenue', exit_slippage: 'exit slippage', unverified_claims: 'unverified claims', other: 'other' };
+// Why the grade closed the desk's gate (cr-ticket-pregate@1): a weak grade
+// reads differently from a withheld one; an older receipt did not record it.
+function gateKindWords(t) {
+  if (t.gate_reason_kind === 'grade_low') return 'The grade is under the floor.';
+  if (t.gate_reason_kind === 'grade_withheld') {
+    const w = t.gate_withheld;
+    const left = w && Array.isArray(w.unscored) && w.unscored.length ? ` Not scored: ${w.unscored.map((c) => c.label || c.id).join(', ')}.` : '';
+    const share = w && typeof w.scored_pct === 'number' ? ` ${w.scored_pct}% of the weight was scored.` : '';
+    return `The grade is withheld, not low: the report left a component unscored.${share}${left}`;
+  }
+  return 'Why the grade closed it: not recorded.';
+}
+
 const DECIDED_WORDS = { veto: 'Vetoed', pass: 'Pass confirmed', watch: 'Kept on watch', trim: 'Trim acknowledged', reopen: 'Re-opened' };
 
 // The Prosecutor's line: its own score, then either its fatal flaws (with the
@@ -128,6 +141,21 @@ export function PMDecisionCard({ p }) {
       setBusy(null);
     }
   };
+  // Eric's override of the desk's gate: after a confirm, a normal ticket is
+  // opened on the same report (force_prosecution), labeled as his choice.
+  const prosecuteAnyway = async () => {
+    if (!window.confirm("The desk's gate is closed on this grade. Ask the Prosecutor anyway? This is your override and may use a paid request.")) return;
+    setBusy('prosecute');
+    try {
+      await api.post(`/api/projects/${enc(pid)}/tickets`, { force_prosecution: true, utterance: "Eric's override of the desk's gate (Ask the Prosecutor anyway)" });
+      toast('Prosecutor asked at your override');
+      await refresh();
+    } catch (err) {
+      toast(err.message, 'bad');
+    } finally {
+      setBusy(null);
+    }
+  };
   const inv = t.invalidation_trigger || {};
   // The desk's own gate (cr-ticket-pregate@1): the grade alone ruled out new
   // risk, so no Prosecutor ran. Its reasons and the two ways out only.
@@ -143,6 +171,7 @@ export function PMDecisionCard({ p }) {
           <p className="pm-risk"><span className="pm-risk-s">{`${TYPE_WORDS[t.proposal_type] || t.proposal_type} · no risk`}</span></p>
         </div>
         {(t.gate_reasons || []).map((reason) => <p className="pm-thesis" key={reason}>{reason}</p>)}
+        <p className="faint pm-note" data-key={`pm-gate-kind-${pid}`}>{gateKindWords(t)}</p>
         <div className="pm-dis">
           <p className="pm-dis-row"><span className="pm-dis-k">Researcher</span><span>{`${(t.researcher || {}).grade_display || (t.researcher || {}).grade || '—'} · ${(t.researcher || {}).verdict || 'no verdict'}`}</span></p>
         </div>
@@ -160,6 +189,7 @@ export function PMDecisionCard({ p }) {
             <>
               <button type="button" className="btn btn-sm btn-primary" data-key={`pm-pass-${pid}`} disabled={Boolean(busy)} title={p.held ? 'You hold it, so it stays on the Desk' : 'Archives the project; Undo restores it'} onClick={() => decide('pass')}>{'Confirm Pass & Archive'}</button>
               <button type="button" className="btn btn-sm" data-key={`pm-watch-${pid}`} disabled={Boolean(busy)} onClick={() => decide('watch')}>{'Override → Watch'}</button>
+              {t.latest && !t.superseded_by_report ? <button type="button" className="btn btn-sm" data-key={`pm-prosecute-${pid}`} disabled={Boolean(busy)} title="Your override: runs a Prosecutor although the desk's gate is closed" onClick={prosecuteAnyway}>Ask the Prosecutor anyway</button> : null}
             </>
           )}
         </div>

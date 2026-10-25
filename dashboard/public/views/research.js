@@ -6,7 +6,7 @@ import {
   tabStrip, safeSection, waitingInstruction, PROVIDERS, PROVIDER_LABELS, onHoldOf,
 } from '../ui.js';
 import { comparisonBlock } from './project.js';
-import { splitPositions, returnWords, summaryLine, shadowRows, shadowCounts } from '../paper-model.js';
+import { splitPositions, returnWords, summaryLine, shadowRows, shadowCounts, shadowCohortLines } from '../paper-model.js';
 
 const TABS = [
   ['runs', 'Research jobs'],
@@ -117,10 +117,13 @@ async function paperCard(ctx) {
   const sc = shadowCounts(b);
   const shadow = h('div', null,
     h('p', { class: 'small muted' }, `${sc.total} receipts took no risk · the price rose after ${sc.rose} of ${sc.measured} measured${sc.unknown ? ` · ${sc.unknown} unknown` : ''}. A fact about the price since each receipt, not a verdict on the gate.`),
+    ...shadowCohortLines(b).map((line) => h('p', { class: 'small muted' }, line)),
     pagedTable([
       { label: 'Project', render: (x) => h('a', { href: `#/project/${encodeURIComponent(x.project_id)}/forensics` }, x.name) },
       { label: 'Receipt', render: (x) => h('span', { class: 'small', title: x.line }, `${x.kind === 'desk_gate' ? 'Desk gate' : 'Zero risk'}${x.proposal_type ? ` · ${x.proposal_type}` : ''} · ${fmtDate(x.saved_at)}`) },
-      { label: 'Price since', num: true, render: (x) => h('span', { class: `num ${x.tone}`.trim(), title: x.title }, x.change_text) },
+      { label: 'Day 30', num: true, render: (x) => h('span', { class: `num ${x.day30_tone}`.trim(), title: x.day30_title }, x.day30_text) },
+      { label: 'Day 30 vs BTC', num: true, render: (x) => h('span', { class: 'num', title: x.day30_title }, x.day30_vs_btc_text) },
+      { label: 'Price since saved', num: true, render: (x) => h('span', { class: `num ${x.tone}`.trim(), title: x.title }, x.change_text) },
       { label: 'Against BTC', num: true, render: (x) => h('span', { class: 'num', title: x.title }, x.vs_btc_text) },
     ], shadowRows(b), { size: 25, label: 'Shadow gate', empty: 'No receipts without risk yet.' }));
   const body = h('div', null, positions);

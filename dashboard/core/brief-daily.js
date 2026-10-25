@@ -103,6 +103,17 @@ function brief(ws, { since = null, now = Date.now() } = {}) {
       return { text: `${r.name}: ${why}`, link: link(r.project_id) };
     })]);
 
+  section('ticket_repairs', 'Tickets waiting on a repair or a fresh price', true, () => [...unreadableTickets('waits on a repair or a fresh price'), ...rows
+    .flatMap((r) => {
+      const t = ticketOf(r);
+      if (!t) return [];
+      const out = [];
+      if (t.decision && t.decision.paper === 'missing') out.push({ text: `${r.name}: the grant is recorded but its paper position is missing: complete it on the card (Complete paper position) or \`tickets reconcile\`.`, link: link(r.project_id) });
+      const held = t.admission && t.admission.held_risk;
+      if (held && t.status === 'pending_pm_review') out.push({ text: `${r.name}: held to $0 by the admission check (${String(held.reason || 'the invalidation price could not be checked').replace(/\.$/, '')}): refresh prices, then ask for a new ticket (refresh).`, link: link(r.project_id) });
+      return out;
+    })]);
+
   section('pilot_exits', 'Pilot projects missing an exit reading', false, () => {
     const T = require('./tickets');
     return T.pilotCandidates(ws, { now })
