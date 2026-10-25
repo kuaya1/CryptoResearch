@@ -1500,6 +1500,21 @@ function statusOf(decision, invalidation) {
 
 // receiptId: read that saved ticket as the one in force (an earlier receipt
 // shows `latest: false`); without it, the latest. Reading writes nothing.
+// Item 53: the invalidation proximity radar. A non-invalidated Prosecutor
+// ticket still in play (not vetoed or passed) whose fresh stored price sits
+// within NEAR_INVALIDATION_PCT above its invalidation price. Arithmetic on the
+// geometry's own fresh price; a stale or missing price says nothing.
+const NEAR_INVALIDATION_PCT = 10;
+function nearInvalidation(status, geometry) {
+  if (!geometry || ['invalidated', 'vetoed', 'passed'].includes(status)) return null;
+  const price = geometry.price && geometry.price.status === 'fresh' ? geometry.price.price_usd : null;
+  const stop = geometry.stop_usd;
+  if (!isNum(price) || !isNum(stop) || !(stop > 0) || !(price > stop)) return null;
+  const distance = round(((price - stop) / stop) * 100, 2);
+  if (distance > NEAR_INVALIDATION_PCT) return null;
+  return { distance_pct: distance, price_usd: price, threshold_usd: stop, words: `Near invalidation: the price $${price} is ${distance}% above the invalidation price $${stop} (within ${NEAR_INVALIDATION_PCT}%).` };
+}
+
 // Trade Plan geometry (item 49, `cr-ticket-geometry@1`): where the stored price
 // sits against the receipt's own entry zone, target and invalidation price.
 // Arithmetic only: a missing number is said unknown, never filled in, and a
@@ -1586,6 +1601,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
         try { latest = marketOf(ws, project); } catch (_) { latest = null; }
         return tradePlanGeometry(current.proposal, latest, { now, staleMinutes: (ws.settings && ws.settings.freshness && ws.settings.freshness.price_stale_minutes) || 90 });
       })(),
+      near_invalidation: null,
       exit_basis: d.exit_basis || 'measured',
       exit_cost_500_usd_pct: d.exit_cost_500_usd_pct ?? null,
       exit_cost_500_complete: d.exit_cost_500_complete ?? null,
@@ -1613,6 +1629,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       report_delta: (() => { try { return require('./report-delta').reportDelta(ws, require('./reports').loadReports(ws, pid)); } catch (_) { return null; } })(),
     };
   }
+  if (ticket) ticket.near_invalidation = nearInvalidation(ticket.status, ticket.trade_plan_geometry);
   const profile = readProfile(ws, pid);
   return {
     project_id: pid,
@@ -2130,6 +2147,7 @@ module.exports = {
   gate,
   pregateReason,
   tradePlanGeometry,
+  nearInvalidation,
   gateGrade,
   skeleton,
   researcherOf,

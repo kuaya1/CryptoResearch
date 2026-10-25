@@ -192,6 +192,7 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   assert.match(pm, /trade_plan_geometry/);
   assert.match(pm, /Reward : risk/);
   // The four-test matrix (item 52): pills with pass, fail or unknown; a missing test is unknown.
+  assert.match(pm, /near_invalidation/);
   assert.match(pm, /TestMatrix/);
   assert.match(pm, /strongest_bull_rebuttal/);
   assert.match(pm, /: 'unknown'\)/);

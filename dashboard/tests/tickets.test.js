@@ -1797,6 +1797,32 @@ test('view() carries the four tests and the strongest bull rebuttal for the card
   for (const k of ['mercenary_emissions', 'tax_revenue', 'exit_slippage', 'unverified_claims']) assert.ok(['pass', 'fail', 'unknown'].includes(pr.tests[k].result), k);
 });
 
+test('near invalidation (item 53): within 10% above the stop only, never on a stale or missing price, an invalidated or vetoed ticket', () => {
+  const geo = (price, status = 'fresh', stop = 0.7) => ({ price: { status, price_usd: price }, stop_usd: stop });
+  const n = T.nearInvalidation('pending_pm_review', geo(0.75));
+  assert.equal(n.distance_pct, 7.14);
+  assert.equal(n.threshold_usd, 0.7);
+  assert.equal(n.price_usd, 0.75);
+  assert.match(n.words, /7\.14% above/);
+  assert.equal(T.nearInvalidation('pending_pm_review', geo(0.77)).distance_pct, 10);
+  assert.equal(T.nearInvalidation('pending_pm_review', geo(0.78)), null);
+  assert.equal(T.nearInvalidation('pending_pm_review', geo(0.75, 'stale')), null);
+  assert.equal(T.nearInvalidation('pending_pm_review', geo(0.69)), null, 'at or below the stop is the invalidation rule, not this one');
+  assert.equal(T.nearInvalidation('pending_pm_review', geo(0.75, 'fresh', null)), null);
+  assert.equal(T.nearInvalidation('invalidated', geo(0.75)), null);
+  assert.equal(T.nearInvalidation('vetoed', geo(0.75)), null);
+  assert.equal(T.nearInvalidation('risk_granted', null), null);
+});
+
+test('near invalidation (item 53): view() attaches it from a fresh stored price', (t) => {
+  const s = withReport(t);
+  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
+  T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) });
+  const v = T.view(s.ws, s.pid).ticket;
+  const g = v.trade_plan_geometry;
+  assert.deepEqual(v.near_invalidation, T.nearInvalidation(v.status, g));
+});
+
 // ---------------------------------------------------------------------------
 // run-cycle (backlog item 51)
 

@@ -263,6 +263,7 @@ export function PMDecisionCard({ p }) {
       {t.non_consensus_thesis ? <p className="pm-thesis">{t.non_consensus_thesis}</p> : null}
       {t.trigger_breached_at_save ? <p className="pm-alert" title={t.trigger_breached_at_save.words}>Trigger already breached when saved</p> : null}
       {t.integrity && t.integrity.status !== 'ok' && t.integrity.words ? <p className="pm-alert" data-key={`pm-integrity-${pid}`}>{t.integrity.words}</p> : null}
+      {t.near_invalidation ? <p className="pm-alert" data-key={`pm-near-${pid}`} title={t.near_invalidation.words}>{`Near invalidation: ${t.near_invalidation.distance_pct}% above ${usd(t.near_invalidation.threshold_usd)}`}</p> : null}
       {t.status === 'invalidated' && t.invalidation ? <p className="pm-alert">{t.invalidation.words}</p> : null}
       <div className="iv-rgrid pm-grid">
         <div className="iv-rc">
