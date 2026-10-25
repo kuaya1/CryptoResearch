@@ -1210,6 +1210,12 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   })));
   // The batch gate (tickets.js batchGate): `dry_run` is a read; `expect` is
   // the count shown, and more to make than that is a 409 with nothing written.
+  // Item 60: complete what recorded decisions left undone, desk-wide
+  // (tickets.reconcileDesk); idempotent, never archives.
+  route('POST', '/api/tickets/reconcile', (m, req, res, body) => {
+    if (body && body.dry_run === true) return tickets.reconcileDesk(ws, { dryRun: true });
+    return after(tickets.reconcileDesk(ws));
+  });
   route('POST', '/api/tickets/batch-gate', (m, req, res, body) => {
     const below = body && typeof body.below === 'number' ? body.below : null;
     const plan = tickets.batchGate(ws, { below, dryRun: true });

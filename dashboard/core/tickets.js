@@ -1371,6 +1371,29 @@ function reconcileEffects(ws, { project = null, dryRun = false } = {}) {
   return out;
 }
 
+// Item 60: the one-click repair. reconcileEffects over every project, as a
+// deterministic report: sorted, counted, with the archive step named and never
+// done (Eric may have restored the project since). Idempotent: a second run
+// completes nothing. `dryRun` reports what would be completed and writes nothing.
+const RECONCILE_FORMAT = 'cr-ticket-reconcile@1';
+function reconcileDesk(ws, { dryRun = false } = {}) {
+  const r = reconcileEffects(ws, { dryRun });
+  const order = (a, b) => a.project_id.localeCompare(b.project_id) || a.decision_id.localeCompare(b.decision_id) || a.step.localeCompare(b.step);
+  const completed = r.completed.slice().sort(order);
+  const failed = completed.filter((x) => x.status === 'failed');
+  return {
+    format: RECONCILE_FORMAT,
+    dry_run: r.dry_run,
+    completed,
+    already_complete: r.already_complete.slice().sort(order),
+    named: r.named.slice().sort(order),
+    counts: { completed: completed.length - failed.length, failed: failed.length, already_complete: r.already_complete.length, named: r.named.length },
+    words: dryRun
+      ? `${completed.length} step${completed.length === 1 ? '' : 's'} would be completed; ${r.named.length} named for you.`
+      : `${completed.length - failed.length} step${completed.length - failed.length === 1 ? '' : 's'} completed${failed.length ? `, ${failed.length} failed` : ''}; ${r.named.length} named for you (an archive is never done here).`,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Invalidation, evaluated on read (cr-ticket-invalidation@1, @2)
 
@@ -2203,6 +2226,8 @@ module.exports = {
   receiptText,
   decide,
   reconcileEffects,
+  reconcileDesk,
+  RECONCILE_FORMAT,
   invalidationOf,
   view,
   read,

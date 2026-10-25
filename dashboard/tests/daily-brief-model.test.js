@@ -42,10 +42,12 @@ test('daily brief view: sections keep their deep links and the hash; an unreadab
   assert.equal(M.briefView({}).why, 'The daily brief could not be read.');
 });
 
-test('daily brief drawer: only reads /api/brief/daily and never posts', () => {
+test('daily brief drawer: reads /api/brief/daily and posts only the explicit Reconcile desk button (item 60)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'shell', 'DailyBrief.jsx'), 'utf8');
   assert.match(src, /api\.get\('\/api\/brief\/daily'\)/);
-  assert.doesNotMatch(src, /api\.post|fetch\(|method:\s*'(POST|PUT|DELETE)'/);
+  assert.doesNotMatch(src, /fetch\(|method:\s*'(POST|PUT|DELETE)'/);
+  assert.deepEqual([...src.matchAll(/api\.post\(([^,)]+)/g)].map((m) => m[1]), ["'/api/tickets/reconcile'"], 'the one post is the repair, from a button');
+  assert.match(src, /onClick=\{reconcile\}/);
   const shell = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'shell', 'Shell.jsx'), 'utf8');
   assert.match(shell, /data-key="top-brief"[^>]*aria-label="Daily Brief"/);
 });

@@ -1983,3 +1983,34 @@ test('item 58: the seven-day digest counts tickets waiting on a repair and the d
   const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(server, /route\('GET', '\/api\/tickets\/digest'/);
 });
+
+test('item 60: reconcileDesk repairs every project\'s missing paper position and journal entry in a sorted report, names an archive and never does it; the second run completes nothing', (t) => {
+  const P = require('../core/paper');
+  const notes = require('../core/notes');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  const origOpen = P.openForDecision;
+  const origJ = notes.addJournal;
+  P.openForDecision = () => { throw new Error('disk full'); };
+  notes.addJournal = () => { throw new Error('disk full'); };
+  try { T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' }); } finally { P.openForDecision = origOpen; notes.addJournal = origJ; }
+  assert.equal(T.view(s.ws, s.pid).ticket.decision.paper, 'missing');
+  const tree = hashTree(s.root);
+  const dry = T.reconcileDesk(s.ws, { dryRun: true });
+  assert.equal(dry.format, T.RECONCILE_FORMAT);
+  assert.equal(dry.dry_run, true);
+  assert.deepEqual(hashTree(s.root), tree, 'a dry run writes nothing');
+  assert.match(dry.words, /^2 steps would be completed/);
+  const r1 = T.reconcileDesk(s.ws);
+  assert.deepEqual(r1.completed.map((c) => `${c.step}:${c.status}`), ['journal:saved', 'paper:saved']);
+  assert.deepEqual(r1.counts, { completed: 2, failed: 0, already_complete: 0, named: 0 });
+  assert.equal(T.view(s.ws, s.pid).ticket.decision.paper, 'open');
+  const r2 = T.reconcileDesk(s.ws);
+  assert.equal(r2.completed.length, 0);
+  assert.equal(r2.counts.already_complete, 2);
+  assert.deepEqual(r2, { ...r2, completed: [] }, 'the same report again');
+  const web = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'shell', 'DailyBrief.jsx'), 'utf8');
+  assert.match(web, /Reconcile desk/);
+  assert.match(web, /\/api\/tickets\/reconcile/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'), /route\('POST', '\/api\/tickets\/reconcile'/);
+});

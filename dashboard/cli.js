@@ -869,7 +869,11 @@ async function run(argv) {
       const pid = rest[0];
       const tid = rest[1];
       if (sub === 'view' || sub === 'status') return tk.read(ws, need(pid, `tickets ${sub} <project>`), { receiptId: one(flags.receipt) || null, includeText: Boolean(flags['include-text'] || flags.include_text) });
-      if (sub === 'reconcile') return tk.reconcileEffects(ws, { project: pid && !String(pid).startsWith('--') ? pid : null, dryRun: Boolean(flags['dry-run'] || flags.dry_run) });
+      if (sub === 'reconcile') {
+        const one = pid && !String(pid).startsWith('--') ? pid : null;
+        const dryRun = Boolean(flags['dry-run'] || flags.dry_run);
+        return one ? tk.reconcileEffects(ws, { project: one, dryRun }) : tk.reconcileDesk(ws, { dryRun });
+      }
       if (sub === 'candidates') return { candidates: tk.pilotCandidates(ws) };
       if (sub === 'digest') {
         const days = one(flags.days);
