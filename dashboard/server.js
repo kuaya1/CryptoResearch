@@ -1262,6 +1262,8 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   // What happened after each report (core/report-outcomes.js): read only,
   // computed from the stored price records on request.
   route('GET', '/api/research/outcomes', () => coherent(() => require('./core/report-outcomes').deskOutcomes(ws)));
+  // The daily brief (core/brief-daily.js): read only, nothing stored.
+  route('GET', '/api/brief/daily', (m, req, res, body, url) => coherent(() => require('./core/brief-daily').brief(ws, { since: url.searchParams.get('since') || null })));
   route('GET', '/api/projects/([^/]+)/outcomes', (m) => coherent(() => require('./core/report-outcomes').projectOutcomes(ws, pid(m[1]))));
   // `expect` is the count the button showed: more waiting than that is a 409,
   // so a click never sends jobs Eric did not see.

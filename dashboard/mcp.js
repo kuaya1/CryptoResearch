@@ -427,6 +427,13 @@ const TOOLS = [
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
+    name: 'daily_brief',
+    title: 'The daily brief (any model)',
+    description: 'Read-only; writes nothing and calls no model. One deterministic read of what needs Eric today (cr-daily-brief@1), each line with its #/ link: PM cards waiting with their age, tickets invalidated since a time, tickets on a stale or superseded basis, pilot projects missing an exit reading, held positions\' value and 24h change (unknown said), research waiting per model, projects where the models differ, and backup age and price freshness. A section it could not read says so, never "nothing". It gives the SHA-256 of its text.',
+    inputSchema: { type: 'object', properties: { since: { type: 'string', description: 'Optional ISO time: tickets invalidated since then. Without it, every invalidated ticket.' } }, additionalProperties: false },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
     name: 'pending_tickets',
     title: 'Open PM tickets waiting for the Prosecutor',
     description: 'Read-only. Tickets opened and not yet saved, oldest first (one you started first). With project, only that project. With include_prompt, the next one\'s frozen prompt byte for byte.',
@@ -1861,6 +1868,12 @@ const handlers = {
     const receiptId = typeof args.receipt_id === 'string' && args.receipt_id.trim() ? args.receipt_id.trim() : null;
     const out = T.read(ws, id, { receiptId, includeText: args.include_text === true });
     return { status: out.ticket ? 'ok' : 'none', ...out, message: out.ticket ? `${out.ticket.status.replace(/_/g, ' ')}: ${out.ticket.proposal_type}${out.ticket.invalidation && out.ticket.invalidation.words ? `. ${out.ticket.invalidation.words}` : ''}` : 'No ticket has been saved for this project.' };
+  },
+
+  daily_brief(ws, args) {
+    const since = typeof args.since === 'string' && args.since.trim() ? args.since.trim().slice(0, 40) : null;
+    const out = require('./core/brief-daily').brief(ws, { since });
+    return { status: 'ok', ...out, message: `${out.format}: ${out.sections.filter((x) => x.state === 'ok').length} of ${out.sections.length} sections read; SHA-256 ${out.text_sha256}. Nothing was written.` };
   },
 
   pending_tickets(ws, args, ctx) {
