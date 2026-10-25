@@ -1228,7 +1228,7 @@ function paperBook(ws, pid, rid, d, undone) {
 // receipt and the approved risk are stated in reasons; decisions.jsonl stays
 // the source of truth and a journal failure never loses or blocks a decision.
 // One entry per decision: an entry naming its decision_id is not written again.
-function journalDecision(ws, pid, d, undone) {
+function journalDecision(ws, pid, d, undone, { late = false } = {}) {
   try {
     const notes = require('./notes');
     const have = notes.loadJournal(ws, pid).find((e) => e.type === 'decision' && Array.isArray(e.reasons) && e.reasons.includes(`decision_id: ${d.decision_id}`));
@@ -1238,14 +1238,55 @@ function journalDecision(ws, pid, d, undone) {
     const reasons = [`pm_action: ${d.action}`, `receipt: ${d.receipt_id}`, `decision_id: ${d.decision_id}`];
     if (undo) reasons.push(`undoes: ${undone.decision_id}`);
     else if (isNum(d.pm_approved_risk_usd)) reasons.push(`approved_risk_usd: ${d.pm_approved_risk_usd}`);
-    const text = undo
+    const base = undo
       ? `PM undid ${shown.action} on ticket ${d.receipt_id}.`
       : `PM ${d.action} on ticket ${d.receipt_id}${isNum(d.pm_approved_risk_usd) ? `, approved risk ${usd(d.pm_approved_risk_usd)}` : ''}.${d.note ? ` ${d.note}` : ''}`;
+    const text = late ? `${base} Decided ${d.decided_at}; this entry was added later by tickets reconcile.` : base;
     const entry = require('./notes').addJournal(ws, pid, { type: 'decision', decision: d.action === 'watch' || d.action === 'trim' ? d.action : null, text, reasons });
     return { status: 'saved', entry_id: entry.entry_id };
   } catch (err) {
     return { status: 'failed', error: String(err && err.message || err).slice(0, 200) };
   }
+}
+
+// Completes what a recorded decision left undone (review A06): the paper
+// position of a grant in force, and the journal entry of any decision line.
+// It never archives or restores a project, never voids a position and never
+// touches decisions.jsonl; a pass whose archive step is not done is named.
+function reconcileEffects(ws, { project = null, dryRun = false } = {}) {
+  const projects = require('./projects');
+  const paper = require('./paper');
+  const out = { dry_run: dryRun === true, completed: [], already_complete: [], named: [] };
+  const pids = project ? [project] : projects.listProjects(ws).filter((p) => !p.broken).map((p) => p.project_id);
+  for (const pid of pids) {
+    const lines = readDecisions(ws, pid);
+    if (!lines.length) continue;
+    const rids = [...new Set(lines.map((l) => l.receipt_id))];
+    for (const d of lines) {
+      const undone = d.action === 'undo' ? lines.find((l) => l.decision_id === d.undoes) || null : null;
+      if (d.action === 'undo' && !undone) continue;
+      const have = require('./notes').loadJournal(ws, pid).some((e) => e.type === 'decision' && Array.isArray(e.reasons) && e.reasons.includes(`decision_id: ${d.decision_id}`));
+      if (have) out.already_complete.push({ project_id: pid, decision_id: d.decision_id, step: 'journal' });
+      else if (dryRun) out.completed.push({ project_id: pid, decision_id: d.decision_id, step: 'journal', status: 'would_add' });
+      else out.completed.push({ project_id: pid, decision_id: d.decision_id, step: 'journal', ...journalDecision(ws, pid, d, undone, { late: true }) });
+    }
+    for (const rid of rids) {
+      const inForce = decisionFor(lines, rid);
+      if (!inForce) continue;
+      if (inForce.action === 'approve' || inForce.action === 'halve') {
+        if (paper.readRecords(ws).some((l) => l.event === 'open' && l.decision_id === inForce.decision_id)) out.already_complete.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper' });
+        else if (dryRun) out.completed.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper', status: 'would_open' });
+        else out.completed.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper', ...paperBook(ws, pid, rid, inForce, null) });
+      }
+      if (inForce.action === 'pass' && inForce.archive === 'archived') {
+        let status = null;
+        try { status = projects.getProject(ws, pid).status; } catch (_) { status = null; }
+        if (status !== 'archived') out.named.push({ project_id: pid, decision_id: inForce.decision_id, step: 'archive', words: `The pass on ${rid} was to archive ${pid}, and it is not archived. Left as it is: archive it, or leave it, yourself.` });
+        else out.already_complete.push({ project_id: pid, decision_id: inForce.decision_id, step: 'archive' });
+      }
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -1908,6 +1949,7 @@ module.exports = {
   saveTicket,
   receiptText,
   decide,
+  reconcileEffects,
   invalidationOf,
   view,
   read,
