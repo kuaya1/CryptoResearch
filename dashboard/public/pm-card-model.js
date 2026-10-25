@@ -1,0 +1,38 @@
+// What the PM Decision Card says about rules and reports (backlog item 33):
+// the ticket's "made under a newer rule" note (core/tickets.js newerRuleOf,
+// item 13) and the change since Claude's earlier report (core/report-delta.js,
+// item 26) as a badge that names the two prompt versions. Pure, for the card
+// and the tests; both are read from the index row on every draw and nothing
+// here is stored, fetched or written.
+
+const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+const signed = (n) => `${n < 0 ? '−' : '+'}${Math.abs(Math.round(n * 100) / 100).toFixed(1)}`;
+// "cr-research-prompt@5" → "@5"; a version without "@" is shown whole.
+const shortVersion = (v) => (typeof v === 'string' && v ? (v.includes('@') ? `@${v.split('@').pop()}` : v) : null);
+
+// The rule note in words, or null when the ticket was made under rules this
+// desk knows.
+export function ruleNoteOf(ticket) {
+  return ticket && typeof ticket.rule_note === 'string' && ticket.rule_note ? ticket.rule_note : null;
+}
+
+// The delta badge: { text, title, tone, versions } or null when there is no
+// comparison to show. A figure reads "+4.2 vs previous @5"; without one the
+// desk's own words stand ("Grade change not given: ..."). A change of prompt
+// version is said in the title and tones the badge, never hidden.
+export function deltaBadgeOf(delta) {
+  if (!delta || delta.status !== 'ok') return null;
+  const pv = delta.prompt_versions || {};
+  const before = shortVersion(pv.previous);
+  const now = shortVersion(pv.new);
+  const changed = Boolean(before && now && pv.previous !== pv.new);
+  const versionWords = before || now
+    ? `Prompt ${pv.previous || 'version not stated'} then, ${pv.new || 'version not stated'} now${changed ? ': a different prompt' : ''}.`
+    : 'Prompt versions not stated.';
+  const text = isNum(delta.grade_delta)
+    ? `${signed(delta.grade_delta)} vs previous${before ? ` ${before}` : ''}${delta.verdict_changed ? `; verdict ${delta.previous_verdict} → ${delta.new_verdict}` : ''}`
+    : String(delta.line || delta.grade_note || 'Change not given');
+  const title = [delta.grade_note, delta.category_note, versionWords].filter(Boolean).join(' ');
+  const tone = changed || !isNum(delta.grade_delta) ? 'is-warn' : delta.grade_delta < 0 ? 'is-bad' : delta.grade_delta > 0 ? 'is-ok' : '';
+  return { text, title, tone, versions: { previous: pv.previous || null, new: pv.new || null } };
+}
