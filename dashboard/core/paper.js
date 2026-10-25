@@ -222,6 +222,49 @@ function shadows(ws, projects) {
   return out;
 }
 
+// The shadow gate (backlog 31): every receipt that took no risk, the pre-gate's
+// desk_gate and a $0 Prosecutor ticket, with what the price did since it was
+// saved, so Eric can see whether the gate turned away winners. The price at
+// save is the hourly reading at or before the receipt (within 6 hours), the
+// price now the latest reading (within 48 hours); an unknown is said, never 0.
+// It is a view of the records: nothing here is a position or changes a ticket.
+function shadowGate(ws, projects, now) {
+  const tickets = require('./tickets');
+  const out = [];
+  for (const p of projects) {
+    let receipts = [];
+    try {
+      receipts = tickets.listReceipts(ws, p.project_id).filter((r) => !r.broken);
+    } catch (_) { continue; }
+    const taken = receipts.filter((r) => r.kind === 'desk_gate' || ((r.desk || {}).proposal_type && !((r.desk.suggested_risk_usd || 0) > 0)));
+    if (!taken.length) continue;
+    const project = require('./projects').getProject(ws, p.project_id);
+    const cg = project && project.identity && project.identity.coingecko_id;
+    const starts = taken.map((r) => Date.parse(r.saved_at)).filter(Number.isFinite);
+    const rd = cg && starts.length ? readings(ws, [cg, 'bitcoin'], Math.min(...starts) - ENTRY_TOLERANCE_MS, now) : new Map();
+    const mine = (cg && rd.get(cg)) || [];
+    const btc = (cg && rd.get('bitcoin')) || [];
+    for (const r of taken) {
+      const d = r.desk || {};
+      const at = Date.parse(r.saved_at);
+      const p0 = Number.isFinite(at) ? atOrBefore(mine, at) : null;
+      const p1 = atOrBefore(mine, now, 48 * HOUR);
+      const b0 = Number.isFinite(at) ? atOrBefore(btc, at) : null;
+      const b1 = atOrBefore(btc, now, 48 * HOUR);
+      let since;
+      if (!p0) since = { status: 'unknown', why: cg ? 'No hourly price within 6 hours at or before the receipt.' : 'No CoinGecko ID on the project: no hourly records.' };
+      else if (!p1) since = { status: 'unknown', why: 'No recent hourly price on record.' };
+      else {
+        const ret = p1.price_usd / p0.price_usd - 1;
+        const bret = b0 && b1 ? b1.price_usd / b0.price_usd - 1 : null;
+        since = { status: 'measured', from_price_usd: p0.price_usd, from_at: iso(p0.t), to_price_usd: p1.price_usd, to_at: iso(p1.t), change_pct: round(ret * 100, 2), btc_change_pct: bret === null ? null : round(bret * 100, 2), vs_btc_pct: bret === null ? null : round(((1 + ret) / (1 + bret) - 1) * 100, 2), ...(bret === null ? { btc_note: 'No BTC price on record at one of the two times.' } : {}) };
+      }
+      out.push({ project_id: p.project_id, name: p.name, receipt_id: r.receipt_id, saved_at: r.saved_at, kind: r.kind === 'desk_gate' ? 'desk_gate' : 'zero_risk', proposal_type: d.proposal_type || null, line: r.kind === 'desk_gate' ? 'Desk gate: no Prosecutor run' : 'Shadow: not taken', since });
+    }
+  }
+  return out;
+}
+
 function book(ws, { now = Date.now() } = {}) {
   const lines = readRecords(ws);
   const voids = new Map(lines.filter((l) => l.event === 'void').map((l) => [l.position_id, l]));
@@ -251,6 +294,7 @@ function book(ws, { now = Date.now() } = {}) {
       : { closed: closedWith.length, note: `Too few to judge: ${closedWith.length} of ${MIN_CLOSED} closed positions needed for a total, median or hit rate.` },
     positions,
     shadow: shadows(ws, all),
+    shadow_gate: shadowGate(ws, all, now),
   };
 }
 

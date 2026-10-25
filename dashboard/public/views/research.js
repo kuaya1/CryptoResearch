@@ -6,6 +6,7 @@ import {
   tabStrip, safeSection, waitingInstruction, PROVIDERS, PROVIDER_LABELS, onHoldOf,
 } from '../ui.js';
 import { comparisonBlock } from './project.js';
+import { splitPositions, returnWords, summaryLine, shadowRows, shadowCounts } from '../paper-model.js';
 
 const TABS = [
   ['runs', 'Research jobs'],
@@ -96,28 +97,44 @@ async function paperCard(ctx) {
     return card('Paper', h('p', { class: 'muted' }, 'The paper book could not be read.'));
   }
   const ret = (x) => {
-    const r = x.return;
-    if (!r || r.status === 'unknown') return h('span', { class: 'faint', title: r ? r.why : null }, '—');
-    return h('span', { class: `num ${r.return_pct > 0 ? 'pos' : r.return_pct < 0 ? 'neg' : ''}`.trim(), title: `${r.status === 'realized' ? 'Realized' : 'Unrealized'}; ${r.btc_return_pct === null ? r.btc_note : `BTC ${pctText(r.btc_return_pct)}, against BTC ${pctText(r.vs_btc_pct)}`}` }, pctText(r.return_pct));
+    const r = returnWords(x);
+    return h('span', r.text === '—' ? { class: 'faint', title: r.title } : { class: `num ${r.tone}`.trim(), title: r.title }, r.text);
   };
   const stateWord = { open: 'Open', closed: 'Closed', voided: 'Voided' };
-  const rows = b.positions.slice().sort((a, c) => String(c.decided_at).localeCompare(String(a.decided_at)));
-  const summary = b.summary.note || `${b.summary.closed} closed · median ${pctText(b.summary.median_vs_btc_pct)} against BTC · ${b.summary.beat_btc} of ${b.summary.of} beat BTC`;
-  return card('Paper', h('div', null,
-    h('p', { class: 'small muted' }, `${b.counts.open} open · ${b.counts.closed} closed${b.counts.voided ? ` · ${b.counts.voided} voided` : ''} · ${summary}`),
+  const cols = [
+    { label: 'Project', render: (x) => h('a', { href: `#/project/${encodeURIComponent(x.project_id)}/market` }, x.name || x.project_id) },
+    { label: 'Risk', num: true, render: (x) => h('span', { class: 'num' }, `$${Number(x.risk_usd).toLocaleString('en-US')}`) },
+    { label: 'Entry', render: (x) => x.entry.status === 'priced' ? h('span', { class: 'num', title: `Hourly reading ${fmtDate(x.entry.at)}; entry cost unknown` }, `$${x.entry.price_usd}`) : h('span', { class: 'faint', title: x.entry.reason }, 'No entry price') },
+    { label: 'State', render: (x) => h('span', { title: x.close ? x.close.words : x.reason || null }, stateWord[x.state] || x.state) },
+    { label: 'Return', num: true, render: ret },
+  ];
+  const parts = splitPositions(b);
+  const group = (title, rows, label) => h('div', null,
+    h('h3', { class: 'small' }, `${title} (${rows.length})`),
+    pagedTable(cols, rows, { size: 25, label, empty: `No ${title.toLowerCase()} positions.` }));
+  const positions = h('div', null, group('Open', parts.open, 'Open paper positions'), group('Closed', parts.closed, 'Closed paper positions'),
+    parts.voided.length ? h('details', null, h('summary', null, `Voided (${parts.voided.length})`), table(cols, parts.voided, { empty: '' })) : null);
+  const sc = shadowCounts(b);
+  const shadow = h('div', null,
+    h('p', { class: 'small muted' }, `${sc.total} receipts took no risk · the price rose after ${sc.rose} of ${sc.measured} measured${sc.unknown ? ` · ${sc.unknown} unknown` : ''}. A fact about the price since each receipt, not a verdict on the gate.`),
     pagedTable([
-      { label: 'Project', render: (x) => h('a', { href: `#/project/${encodeURIComponent(x.project_id)}/market` }, x.name || x.project_id) },
-      { label: 'Risk', num: true, render: (x) => h('span', { class: 'num' }, `$${Number(x.risk_usd).toLocaleString('en-US')}`) },
-      { label: 'Entry', render: (x) => x.entry.status === 'priced' ? h('span', { class: 'num', title: `Hourly reading ${fmtDate(x.entry.at)}; entry cost unknown` }, `$${x.entry.price_usd}`) : h('span', { class: 'faint', title: x.entry.reason }, 'No entry price') },
-      { label: 'State', render: (x) => h('span', { title: x.close ? x.close.words : x.reason || null }, stateWord[x.state] || x.state) },
-      { label: 'Return', num: true, render: ret },
-    ], rows, { size: 25, label: 'Paper positions', empty: 'No paper positions yet.' }),
-    b.shadow.length ? h('details', null, h('summary', null, `Shadow: not taken (${b.shadow.length})`), table([
       { label: 'Project', render: (x) => h('a', { href: `#/project/${encodeURIComponent(x.project_id)}/forensics` }, x.name) },
-      { label: 'Ticket', render: (x) => h('span', { class: 'small' }, `${x.proposal_type} · ${fmtDate(x.saved_at)}`) },
-      { label: '', render: (x) => h('span', { class: 'faint' }, x.line) },
-    ], b.shadow, { empty: '' })) : null,
-  ), { note: b.meaning });
+      { label: 'Receipt', render: (x) => h('span', { class: 'small', title: x.line }, `${x.kind === 'desk_gate' ? 'Desk gate' : 'Zero risk'}${x.proposal_type ? ` · ${x.proposal_type}` : ''} · ${fmtDate(x.saved_at)}`) },
+      { label: 'Price since', num: true, render: (x) => h('span', { class: `num ${x.tone}`.trim(), title: x.title }, x.change_text) },
+      { label: 'Against BTC', num: true, render: (x) => h('span', { class: 'num', title: x.title }, x.vs_btc_text) },
+    ], shadowRows(b), { size: 25, label: 'Shadow gate', empty: 'No receipts without risk yet.' }));
+  const body = h('div', null, positions);
+  const toggle = button('Shadow ($0 gate passes)', null, { kind: 'small' });
+  toggle.setAttribute('aria-pressed', 'false');
+  toggle.onclick = () => {
+    const on = toggle.getAttribute('aria-pressed') !== 'true';
+    toggle.setAttribute('aria-pressed', String(on));
+    body.replaceChildren(on ? shadow : positions);
+  };
+  return card('Paper', h('div', null,
+    h('p', { class: 'small muted' }, summaryLine(b)),
+    body,
+  ), { note: b.meaning, actions: [toggle] });
 }
 
 // A long list a page at a time: the desk's claims are never drawn all at
