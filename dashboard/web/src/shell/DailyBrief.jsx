@@ -15,6 +15,8 @@ export default function DailyBrief() {
   const opener = useRef(null);
   const [open, setOpen] = useState(false);
   const [state, setState] = useState({ loading: false, error: null, view: null });
+  const [fix, setFix] = useState({ busy: false, words: null, bad: false });
+  const [tick, setTick] = useState(0);
   useEffect(() => onBrief(() => { opener.current = document.activeElement; setOpen(true); }), []);
   useEffect(() => {
     const el = dlg.current;
@@ -31,11 +33,23 @@ export default function DailyBrief() {
       (e) => { if (live) setState({ loading: false, error: (e && e.message) || 'The daily brief could not be read.', view: null }); },
     );
     return () => { live = false; };
-  }, [open]);
+  }, [open, tick]);
   // A route change (a deep link, Back) closes it.
   const routeKey = nav.route ? `${nav.route.name}/${nav.route.args.join('/')}${nav.route.query ? nav.route.query.toString() : ''}` : '';
   useEffect(() => { setOpen(false); }, [routeKey]);
   const v = state.view;
+  // Item 60: complete what a recorded decision left undone (a paper position
+  // or a journal entry), desk-wide. Idempotent; it never archives.
+  const reconcile = async () => {
+    setFix({ busy: true, words: null, bad: false });
+    try {
+      const r = await api.post('/api/tickets/reconcile', {});
+      setFix({ busy: false, words: r && r.words ? r.words : 'Done.', bad: Boolean(r && r.counts && r.counts.failed) });
+      setTick((n) => n + 1);
+    } catch (e) {
+      setFix({ busy: false, words: (e && e.message) || 'Reconcile failed.', bad: true });
+    }
+  };
   return (
     <dialog
       ref={dlg}
@@ -67,6 +81,12 @@ export default function DailyBrief() {
                         </li>
                       ))}
                     </ul>
+                    {s.id === 'ticket_repairs' && s.count > 0 ? (
+                      <p>
+                        <button type="button" className="btn" data-key="brief-reconcile" disabled={fix.busy} title="Completes a recorded decision's missing paper position or journal entry. It never archives a project." onClick={reconcile}>{fix.busy ? 'Reconciling…' : 'Reconcile desk'}</button>
+                        {fix.words ? <span role="status" className={fix.bad ? 'dbrief-bad' : 'dbrief-none'}>{` ${fix.words}`}</span> : null}
+                      </p>
+                    ) : null}
                   </section>
                 ))}
               </>

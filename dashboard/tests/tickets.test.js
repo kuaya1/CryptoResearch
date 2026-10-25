@@ -1952,3 +1952,102 @@ test('run-cycle: the CLI answers the same receipt, and --limit must be a whole n
   assert.equal(r.dry_run, true);
   await assert.rejects(() => cli.run(['tickets', 'run-cycle', '--limit', 'x', '--workspace', s.ws.root]), /whole number/);
 });
+
+test('item 57: a holding metric floor carries its headroom over the floor, one decimal; a triggered one carries none', (t) => {
+  const s = withReport(t);
+  const f = require('../core/fundamentals');
+  const real = f.summary;
+  f.summary = () => ({ state: 'ok', fetched_at: '2026-10-25T00:00:00.000Z', metrics: { fees: { status: 'complete', total_30d_usd: 200000 } } });
+  t.after(() => { f.summary = real; });
+  const tk = openTicket(t, s);
+  const text = answer(tk, { proposal: { ...blockOf(answer(tk)).proposal, invalidation_trigger: { price_usd: 0.5, metric: { key: 'fees', below_30d_usd: 100000 }, statement: 'x' } } });
+  T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text });
+  const at = (total) => ({ state: 'ok', fetched_at: new Date(Date.now() + 3600000).toISOString(), metrics: { fees: { status: 'complete', total_30d_usd: total } } });
+  const holding = T.view(s.ws, s.pid, { fundamentals: at(123456) }).ticket.invalidation.checks.find((c) => c.kind === 'metric');
+  assert.equal(holding.status, 'holding');
+  assert.equal(holding.headroom_pct, 23.5);
+  const hit = T.view(s.ws, s.pid, { fundamentals: at(90000) }).ticket.invalidation.checks.find((c) => c.kind === 'metric');
+  assert.equal(hit.status, 'triggered');
+  assert.equal(hit.headroom_pct, undefined);
+});
+
+test('item 58: the seven-day digest counts tickets waiting on a repair and the desk page reads it', (t) => {
+  const s = withReport(t);
+  const d = T.digest(s.ws, { days: 7 });
+  assert.equal(d.ticket_repairs.status, 'ok');
+  assert.equal(d.ticket_repairs.count, 0);
+  assert.match(T.digestText(d), /Tickets waiting on a repair: 0/);
+  const research = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'research.js'), 'utf8');
+  assert.match(research, /7-Day Desk Telemetry/);
+  assert.match(research, /\/api\/tickets\/digest/);
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(server, /route\('GET', '\/api\/tickets\/digest'/);
+});
+
+test('item 60: reconcileDesk repairs every project\'s missing paper position and journal entry in a sorted report, names an archive and never does it; the second run completes nothing', (t) => {
+  const P = require('../core/paper');
+  const notes = require('../core/notes');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  const origOpen = P.openForDecision;
+  const origJ = notes.addJournal;
+  P.openForDecision = () => { throw new Error('disk full'); };
+  notes.addJournal = () => { throw new Error('disk full'); };
+  try { T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' }); } finally { P.openForDecision = origOpen; notes.addJournal = origJ; }
+  assert.equal(T.view(s.ws, s.pid).ticket.decision.paper, 'missing');
+  const tree = hashTree(s.root);
+  const dry = T.reconcileDesk(s.ws, { dryRun: true });
+  assert.equal(dry.format, T.RECONCILE_FORMAT);
+  assert.equal(dry.dry_run, true);
+  assert.deepEqual(hashTree(s.root), tree, 'a dry run writes nothing');
+  assert.match(dry.words, /^2 steps would be completed/);
+  const r1 = T.reconcileDesk(s.ws);
+  assert.deepEqual(r1.completed.map((c) => `${c.step}:${c.status}`), ['journal:saved', 'paper:saved']);
+  assert.deepEqual(r1.counts, { completed: 2, failed: 0, already_complete: 0, named: 0 });
+  assert.equal(T.view(s.ws, s.pid).ticket.decision.paper, 'open');
+  const r2 = T.reconcileDesk(s.ws);
+  assert.equal(r2.completed.length, 0);
+  assert.equal(r2.counts.already_complete, 2);
+  assert.deepEqual(r2, { ...r2, completed: [] }, 'the same report again');
+  const web = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'shell', 'DailyBrief.jsx'), 'utf8');
+  assert.match(web, /Reconcile desk/);
+  assert.match(web, /\/api\/tickets\/reconcile/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'), /route\('POST', '\/api\/tickets\/reconcile'/);
+});
+
+test('item 61: the exit matrix lists every verified active project by grade with the $500 and $2,000 cost, completeness, chain, quote age; an unread cost is null, never 0; reading writes nothing', (t) => {
+  const s = withReport(t);
+  const tree = hashTree(s.root);
+  const bare = T.exitMatrix(s.ws);
+  assert.equal(bare.format, T.EXIT_MATRIX_FORMAT);
+  assert.deepEqual(bare.sizes_usd, [500, 2000]);
+  assert.equal(bare.rows.length, 1);
+  const none = bare.rows[0];
+  assert.equal(none.project_id, s.pid);
+  assert.equal(none.native_l1_liquid, false);
+  assert.equal(none.exits[0].cost_pct, null, 'no reading: null, never 0');
+  assert.equal(none.exits[0].complete, null);
+  const incomplete = withExitReadings(1.5, () => T.exitMatrix(s.ws), { complete: false }).rows[0];
+  assert.equal(incomplete.exits[0].cost_pct, 1.5);
+  assert.equal(incomplete.exits[1].cost_pct, 3);
+  assert.equal(incomplete.exits[0].complete, false);
+  assert.deepEqual(incomplete.exits[0].missing_costs, ['network fee']);
+  assert.equal(typeof incomplete.exits[0].quote_age_minutes, 'number');
+  const full = withExitReadings(1.5, () => T.exitMatrix(s.ws)).rows[0];
+  assert.equal(full.exits[0].complete, true);
+  assert.deepEqual(T.exitMatrix(s.ws, { now: Date.parse(bare.as_of) }), bare, 'the same matrix for the same moment');
+  assert.deepEqual(hashTree(s.root), tree, 'reading writes nothing');
+  const research = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'research.js'), 'utf8');
+  assert.match(research, /\/api\/tickets\/exit-matrix/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'), /route\('GET', '\/api\/tickets\/exit-matrix'/);
+});
+
+test('item 61: the matrix lists only verified, active projects, one row each, best grade first', (t) => {
+  const s = withReport(t);
+  const pr = require('../core/projects');
+  const other = pr.addProject(s.ws, { name: 'Lead Only Example (FICTIONAL)' }).project_id;
+  assert.notEqual(pr.getProject(s.ws, other).identity.status, 'verified');
+  const rows = T.exitMatrix(s.ws).rows;
+  assert.deepEqual(rows.map((r) => r.project_id), [s.pid], 'an unverified project is not listed');
+  assert.equal(rows[0].chain, pr.getProject(s.ws, s.pid).identity.assets[0].chain);
+});
