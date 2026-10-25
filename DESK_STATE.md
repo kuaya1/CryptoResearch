@@ -166,7 +166,7 @@ For a `/loop` or scheduled Claude Code session (e.g. the hourly cloud routine), 
 - **Branch.** The batch goes on one branch, `claude/backlog-batch-items-<a>-<b>-<c>-<d>-<e>`, one number per item (`-<a>-and-<b>` for two). Use one commit per item, each with a `Backlog-Item: <n>` line. **Don't tick the boxes here on the branch:** the merge train ticks them on `main`. The `test` workflow runs on the push, and when it passes `backlog-pr` opens the pull request and merges it into `main`, deleting the branch (Eric, 2026-10-25: a green `claude/backlog-*` branch is auto-merged by `backlog-pr.yml`; a failing run never opens or merges a PR; a refused merge leaves the PR open for `npm run train`). Since the review of 2026-10-25 (A01/A02, `dashboard/scripts/backlog-promote.js`) it merges only the tree that passed the full suite on top of `main` as it is, and only while `main` is still that commit; the result is read back from GitHub and the branch is deleted only at the tested commit. **Every commit carries its `Backlog-Item: <n>` line.** A commit without one, an item not unchecked on `main`'s backlog or marked *(Eric)*, or a change to a protected path leaves the PR open for Eric.
 - **Zero-click scope (A01).** A batch merges with no click only when no commit touches a path in `PROTECTED` (`dashboard/scripts/backlog-promote.js`, the list that decides):
   - `.github/`, `.claude/`, `CLAUDE.md`, `COWORK-INSTRUCTIONS.md`, `DESK_STATE.md`;
-  - the promotion scripts `dashboard/scripts/backlog-promote.js`, `backlog-intake.js`, `merge-train.js`;
+  - the promotion scripts `dashboard/scripts/backlog-promote.js`, `backlog-intake.js`, `merge-train.js`, `engineering-worker.js`, and the engineering inbox `dashboard/engineering/`;
   - `dashboard/oauth.js`, `dashboard/mcp.js`, `dashboard/hosted.js`, and the root `server.js`;
   - the ledger and wallet code: `dashboard/core/portfolio.js`, `wallets.js`, `walletsync.js`, `alchemy.js`;
   - `package.json` and `package-lock.json`, at the root and in `dashboard/web`; `render.yaml`;
@@ -174,6 +174,7 @@ For a `/loop` or scheduled Claude Code session (e.g. the hourly cloud routine), 
   - an edit to, or removal of, an existing file under `templates/` (adding a new version is allowed).
 
   `dashboard/server.js`, `dashboard/cli.js` and `dashboard/core/paper.js` are not protected. A batch that touches a protected path waits for Eric as a whole, and so does every batch stacked on it.
+- **Engineering items (Connected Engineering v1, Eric 2026-10-25; `audits/2026-10-25-connected-engineering`).** An item whose line carries `*(engineering task eng-… v…, sha256 …)*` was admitted from the desk's engineering inbox. It is never in a batch: skip it (`backlog-status.js` leaves it out of `next` and lists it under `engineering`). It is built alone, only through the engineering lane: claimed on the desk's engineering connector, built on `claude/candidate-eng-<n>`, released to `claude/backlog-eng-<n>`, and promoted by `backlog-pr` only while the desk attests that exact head.
 - **Never** push to `main` or force-push. Items marked *(Eric)* need his decision first: ask, don't build.
 - **Order.** Track 2 first (the North Star at the top of this page): Phase 5's open items (52 onward) are built before what is left of Phase 4 (46), which serves the builder itself.
 

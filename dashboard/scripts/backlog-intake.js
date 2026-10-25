@@ -81,9 +81,10 @@ function intake(cwd, { repo, issue, approval, gh, remote = 'origin' }) {
     const n = (/\*\*(\d+)\./.exec(line) || [])[1];
     return { status: 'already_in_backlog', branch, item: n ? Number(n) : null };
   }
-  // Numbers waiting on other open intake branches count as taken.
+  // Numbers waiting on other open intake branches, and on engineering
+  // admission branches (Connected Engineering v1), count as taken.
   const taken = new Set(itemNumbers(mainText));
-  const others = git(cwd, ['ls-remote', '--heads', remote, 'refs/heads/claude/intake-issue-*']).out.split('\n').filter(Boolean).map((l) => l.split(/\s+/)[1].replace('refs/heads/', ''));
+  const others = git(cwd, ['ls-remote', '--heads', remote, 'refs/heads/claude/intake-issue-*', 'refs/heads/claude/admission-*']).out.split('\n').filter(Boolean).map((l) => l.split(/\s+/)[1].replace('refs/heads/', ''));
   for (const b of others) {
     git(cwd, ['fetch', '-q', remote, `+refs/heads/${b}:refs/remotes/intake/${b}`], { allowFail: true });
     for (const n of itemNumbers(git(cwd, ['show', `refs/remotes/intake/${b}:${STATE_FILE}`], { allowFail: true }).out)) taken.add(n);

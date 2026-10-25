@@ -50,6 +50,8 @@
 .prefs-form .l2-err, .prefs-form .l2-actions { grid-column: 1 / -1; }
 .prefs-field { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-xs); color: var(--text-2); }
 .prefs-field .input { height: 32px; }
+/* Preferences > Developer > Engineering */
+.eng-sub { font-size: var(--fs-sm); font-weight: 600; margin-top: 8px; }
 @media (max-width: 767.98px) {
   .prefs { width: 100%; border-left: 0; }
   .prefs-head { padding: 8px 8px 8px 16px; }

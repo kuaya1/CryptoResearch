@@ -128,7 +128,7 @@ test('the app shows report text as text: no HTML from strings anywhere in the Re
 test('the app writes only from explicit actions, and nothing from the boot or a live update', () => {
   const files = walk(path.join(WEB, 'src'), (p) => /\.(jsx?)$/.test(p)).map((f) => [path.relative(path.join(WEB, 'src'), f).split(path.sep).join('/'), fs.readFileSync(f, 'utf8')]);
   const writers = files.filter(([, s]) => /api\.post\(/.test(s)).map(([f]) => f).sort();
-  assert.deepEqual(writers, ['lib/desk.js', 'lib/review.js', 'shell/Preferences.jsx', 'views/agenda/Agenda.jsx', 'views/inspector/ModelPanel.jsx', 'views/inspector/PMDecisionCard.jsx', 'views/project/Contract.jsx', 'views/project/Evidence.jsx', 'views/project/Forensics.jsx', 'views/project/Notes.jsx', 'views/project/Record.jsx', 'views/project/Report.jsx', 'views/project/forensics/Disagreements.jsx', 'views/project/forensics/ExitCompare.jsx', 'views/project/forensics/OutcomeRegister.jsx', 'views/review/Review.jsx', 'views/watchlist/StatusStrip.jsx', 'views/watchlist/state.js']);
+  assert.deepEqual(writers, ['lib/desk.js', 'lib/review.js', 'shell/Engineering.jsx', 'shell/Preferences.jsx', 'views/agenda/Agenda.jsx', 'views/inspector/ModelPanel.jsx', 'views/inspector/PMDecisionCard.jsx', 'views/project/Contract.jsx', 'views/project/Evidence.jsx', 'views/project/Forensics.jsx', 'views/project/Notes.jsx', 'views/project/Record.jsx', 'views/project/Report.jsx', 'views/project/forensics/Disagreements.jsx', 'views/project/forensics/ExitCompare.jsx', 'views/project/forensics/OutcomeRegister.jsx', 'views/review/Review.jsx', 'views/watchlist/StatusStrip.jsx', 'views/watchlist/state.js']);
   // The re-audit's parts (2026-10-17) each post one path, from a button:
   // a judgment, an explicit fixed-token quote, an outcome note, and the
   // agenda's Done, Snooze and Reopen. The case package is a read.
@@ -153,6 +153,16 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   assert.deepEqual(posts('views/project/forensics/Disagreements.jsx'), ['/api/projects/${enc(pid)}/forensics/judgments']);
   assert.deepEqual(posts('views/project/forensics/ExitCompare.jsx'), ['/api/projects/${enc(pid)}/forensics/exit-compare/quote']);
   assert.deepEqual(posts('views/project/forensics/OutcomeRegister.jsx'), ['/api/projects/${enc(pid)}/forensics/outcome-notes']);
+  // Preferences > Developer > Engineering (Connected Engineering v1,
+  // 2026-10-25) posts only under /api/engineering, each from its own button;
+  // opening it is a read.
+  const eng = files.find(([n]) => n === 'shell/Engineering.jsx')[1];
+  assert.deepEqual(posts('shell/Engineering.jsx'), ['path']);
+  assert.doesNotMatch(eng.slice(0, eng.indexOf('const decide')), /api\.post/, 'opening Engineering never writes');
+  const engPaths = [...eng.matchAll(/\bdecide\([^,]+, [`'](\/[^`']+)[`']/g)].map((m) => m[1]);
+  assert.equal(engPaths.length, 8);
+  for (const p of engPaths) assert.match(p, /^\/api\/engineering\//);
+  for (const m of eng.matchAll(/\bdecide\(/g)) assert.match(eng.slice(Math.max(0, m.index - 160), m.index), /(onClick=\{\(\) =>|onSubmit=\{\(e\) =>)[^<]*$/, 'every Engineering decision is a click or a submit');
   const agenda = files.find(([n]) => n === 'views/agenda/Agenda.jsx')[1];
   assert.deepEqual(posts('views/agenda/Agenda.jsx'), ['path', 'path', 'path']);
   assert.match(agenda, /const path = `\/api\/projects\/\$\{enc\(pid\)\}\/agenda`;/);

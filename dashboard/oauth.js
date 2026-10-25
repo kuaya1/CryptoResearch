@@ -45,6 +45,19 @@ const MAX_REDIRECTS = 10;
 const MAX_REGISTRATIONS_PER_HOUR = 30;
 const SCOPE = 'desk';
 const SCOPES = [SCOPE, 'offline_access'];
+// A second resource (Connected Engineering v1, 2026-10-25): the engineering
+// inbox at /mcp/engineering. Every grant belongs to one resource, its
+// audience, and a token of one is refused at the other. An engineering grant
+// carries the one role Eric chose for it on the consent page; it never reads
+// or changes research, tickets, the portfolio or wallets.
+const ENG_SCOPE = 'engineering';
+const ENG_ROLES = ['submitter', 'reviewer', 'worker', 'reader'];
+const ENG_ROLE_WORDS = {
+  submitter: 'prepare and submit engineering tasks, pause them, ask for corrections and save reviews',
+  reviewer: 'read tasks and their evidence and save reviews of a candidate',
+  worker: 'claim admitted tasks and record their admission, build, verification and pushes',
+  reader: 'read tasks, their status and evidence only',
+};
 
 // Claude's hosted connector callback (claude.com/docs/connectors/building/authentication).
 const CLAUDE_CALLBACK = 'https://claude.ai/api/mcp/auth_callback';
@@ -175,6 +188,12 @@ function makeOAuth(ws, { origin, auth, log = () => {}, clock = () => Date.now() 
   // The names a client may use for this one resource (some send the origin).
   const resourceNames = new Set([resource, `${resource}/`, origin, `${origin}/`]);
   const metadataUrl = `${origin}/.well-known/oauth-protected-resource`;
+  const engResource = `${origin}/mcp/engineering`;
+  const engNames = new Set([engResource, `${engResource}/`]);
+  const engMetadataUrl = `${origin}/.well-known/oauth-protected-resource/mcp/engineering`;
+  // The audience a resource name asks for; no name is the desk, as before.
+  const audienceOf = (name) => (!name || resourceNames.has(name) ? 'desk' : engNames.has(name) ? 'engineering' : null);
+  const audienceOfGrant = (g) => (g && g.audience === 'engineering' ? 'engineering' : 'desk');
   const storeFile = ws.abs(STORE_REL);
   let store = readJson(storeFile, null) || { schema_version: 'cr.oauth.v1', clients: {}, grants: {}, access: {}, refresh: {} };
   for (const k of ['clients', 'grants', 'access', 'refresh']) store[k] = store[k] || {};
@@ -221,13 +240,9 @@ function makeOAuth(ws, { origin, auth, log = () => {}, clock = () => Date.now() 
     return { access_token: access, token_type: 'Bearer', expires_in: ACCESS_TTL_S, refresh_token: refresh, scope };
   }
 
-  const protectedResource = () => ({
-    resource,
-    authorization_servers: [origin],
-    scopes_supported: SCOPES,
-    bearer_methods_supported: ['header'],
-    resource_name: 'CryptoResearch desk',
-  });
+  const protectedResource = (audience = 'desk') => (audience === 'engineering'
+    ? { resource: engResource, authorization_servers: [origin], scopes_supported: [ENG_SCOPE, 'offline_access'], bearer_methods_supported: ['header'], resource_name: 'CryptoResearch engineering' }
+    : { resource, authorization_servers: [origin], scopes_supported: SCOPES, bearer_methods_supported: ['header'], resource_name: 'CryptoResearch desk' });
   const serverMetadata = () => ({
     issuer: origin,
     authorization_endpoint: `${origin}/oauth/authorize`,
@@ -239,7 +254,7 @@ function makeOAuth(ws, { origin, auth, log = () => {}, clock = () => Date.now() 
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['none'],
     revocation_endpoint_auth_methods_supported: ['none'],
-    scopes_supported: SCOPES,
+    scopes_supported: [SCOPE, ENG_SCOPE, 'offline_access'],
     // Every authorization response carries iss (RFC 9207); clients register
     // dynamically (no client ID metadata documents).
     authorization_response_iss_parameter_supported: true,
@@ -247,7 +262,34 @@ function makeOAuth(ws, { origin, auth, log = () => {}, clock = () => Date.now() 
     service_documentation: `${origin}/login`,
   });
 
+  // The engineering resource's approval page: the model as on the desk's page,
+  // then one role, and no read-only shortcut (reader is the read-only role).
+  function engineeringConsent(p, { error = null, locked = false, host }) {
+    const local = p.kind === 'local';
+    const who = local ? 'a program on this computer' : PROVIDER_LABELS[p.kind];
+    const msg = locked
+      ? `<p class="callout bad" role="alert">Too many attempts. Wait a few minutes, then start the connection again from ${local ? 'the program' : esc(who)}.</p>`
+      : error ? `<p class="callout bad" role="alert">${esc(error)}</p>` : '';
+    const pick = local
+      ? `<label class="field"><span class="field-label">Which model is it?</span><select name="assistant" required><option value=""${p.guess ? '' : ' selected'}>Choose…</option>${PROVIDERS.map((m) => `<option value="${m}"${p.guess === m ? ' selected' : ''}>${esc(PROVIDER_LABELS[m])}</option>`).join('')}</select></label>`
+      : '';
+    const roles = `<fieldset class="field"><legend class="field-label">Its role</legend>${ENG_ROLES.map((r) => `<label class="small"><input type="radio" name="role" value="${r}" required${p.role_pick === r ? ' checked' : ''}> <strong>${r[0].toUpperCase()}${r.slice(1)}</strong>: ${esc(ENG_ROLE_WORDS[r])}</label>`).join('<br>')}</fieldset>`;
+    return shell(`Connect ${local ? 'a program' : who} to engineering`, `<form class="card login-card" method="post" action="/oauth/authorize"><h1>Connect ${local ? 'a program on this computer' : esc(who)} to engineering</h1>
+<p><strong>${esc(p.client_name || who)}</strong> asks to use the engineering inbox on your desk. It reaches engineering tasks only: never research, tickets, the portfolio, wallets or any money.</p>
+<p class="small muted">Nothing it submits is built until it fits a delegation you activated or you authorize that exact version. Protected controls, deploys and releases stay yours.</p>
+<p class="small">After you approve, you go back to <strong>${esc(host)}</strong>. Approve only if you just started this connection yourself.</p>
+${msg}<input type="hidden" name="request" value="${esc(p.id)}">
+${pick}${roles}<label class="field"><span class="field-label">Desk passphrase</span><input type="password" name="password" autocomplete="current-password" required autofocus></label>
+<div class="btn-row"><button class="btn primary" type="submit" name="decision" value="allow">Approve</button><button class="btn" type="submit" name="decision" value="deny" formnovalidate>Deny</button></div>
+<p id="sending" class="small" role="status" hidden>Sending your answer back to ${local ? 'the program' : esc(who)}. This can take a few seconds: click once and keep this window open.</p></form><script>${SUBMIT_ONCE_JS}</script>`);
+  }
+
   function consentPage(p, { error = null, locked = false } = {}) {
+    if (p.audience === 'engineering') {
+      let host = p.redirect_uri;
+      try { host = new URL(p.redirect_uri).host; } catch (_) { /* shown as given */ }
+      return engineeringConsent(p, { error, locked, host });
+    }
     const host = (() => {
       try {
         return new URL(p.redirect_uri).host;
@@ -382,12 +424,16 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     // From here on, problems go back to the assistant as OAuth errors.
     if (q.response_type !== 'code') return redirectTo(res, redirect, { error: 'unsupported_response_type', state: q.state, iss: origin });
     if (!q.code_challenge || q.code_challenge_method !== 'S256' || !/^[A-Za-z0-9_-]{43,128}$/.test(q.code_challenge)) return redirectTo(res, redirect, { error: 'invalid_request', error_description: 'PKCE with S256 is required.', state: q.state, iss: origin });
-    if (q.resource && !resourceNames.has(q.resource)) return redirectTo(res, redirect, { error: 'invalid_target', error_description: `This server's resource is ${resource}.`, state: q.state, iss: origin });
-    const scope = SCOPES.filter((s) => String(q.scope || SCOPE).split(/\s+/).includes(s)).join(' ') || SCOPE;
+    const audience = audienceOf(q.resource);
+    if (!audience) return redirectTo(res, redirect, { error: 'invalid_target', error_description: `This server's resources are ${resource} and ${engResource}.`, state: q.state, iss: origin });
+    const asked = String(q.scope || (audience === 'engineering' ? ENG_SCOPE : SCOPE)).split(/\s+/);
+    const scope = audience === 'engineering'
+      ? [ENG_SCOPE, ...(asked.includes('offline_access') ? ['offline_access'] : [])].join(' ')
+      : SCOPES.filter((s) => asked.includes(s)).join(' ') || SCOPE;
     const id = newToken(18);
-    const p = { id, client_id: q.client_id, client_name: client.client_name, redirect_uri: redirect, kind, guess: kind === 'local' ? guessLocal(client.client_name) : null, code_challenge: q.code_challenge, state: q.state || null, scope, expires: clock() + PENDING_TTL_MS };
+    const p = { id, client_id: q.client_id, client_name: client.client_name, redirect_uri: redirect, kind, guess: kind === 'local' ? guessLocal(client.client_name) : null, code_challenge: q.code_challenge, state: q.state || null, scope, audience, expires: clock() + PENDING_TTL_MS };
     pending.set(id, p);
-    log(`OAuth: approval page shown (${client.client_name}; ${labelOf(kind)}; return to ${where([redirect])}; resource ${q.resource ? 'given' : 'not given'}; scope ${String(q.scope || 'not given').slice(0, 80)})`);
+    log(`OAuth: approval page shown (${client.client_name}; ${labelOf(kind)}; return to ${where([redirect])}; resource ${q.resource ? audience : 'not given'}; scope ${String(q.scope || 'not given').slice(0, 80)})`);
     return page(res, 200, consentPage(p), { formAction: formActionFor(redirect), script: true });
   }
 
@@ -426,7 +472,8 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
       used.set(p.id, { decision, label, location, codeHash, exchanged: false, at: new Date(clock()).toISOString(), expires: clock() + PENDING_TTL_MS });
       return location;
     };
-    const readOnly = form.get('decision') === 'allow_readonly';
+    const engineering = p.audience === 'engineering';
+    const readOnly = !engineering && form.get('decision') === 'allow_readonly';
     if (form.get('decision') !== 'allow' && !readOnly) {
       log(`OAuth: connection denied (${p.client_name})`);
       return sendTo(res, answered('denied', { location: locationOf(p.redirect_uri, { error: 'access_denied', state: p.state, iss: origin }) }));
@@ -435,6 +482,9 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     // address, or chosen by Eric for a program on this computer.
     const assistant = p.kind === 'local' ? form.get('assistant') : p.kind;
     if (!PROVIDERS.includes(assistant)) return page(res, 200, consentPage(p, { error: 'Choose which model this program is.' }), { formAction, script: true });
+    const role = engineering ? form.get('role') : null;
+    if (engineering && !ENG_ROLES.includes(role)) return page(res, 200, consentPage(p, { error: 'Choose this connection\'s role.' }), { formAction, script: true });
+    if (engineering) p.role_pick = role;
     const check = await auth.verifyPassphrase(req, form.get('password') || '');
     if (!check.ok) {
       log(`OAuth: approval refused (${check.locked ? 'locked after repeated attempts' : 'wrong passphrase'})`);
@@ -442,8 +492,8 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     }
     const code = newToken();
     const codeHash = hashOf(code);
-    codes.set(codeHash, { client_id: p.client_id, redirect_uri: p.redirect_uri, code_challenge: p.code_challenge, scope: p.scope, assistant, read_only: readOnly, request: p.id, expires: clock() + CODE_TTL_MS });
-    log(`OAuth: connection approved (${p.client_name}; ${PROVIDER_LABELS[assistant]}${readOnly ? '; read only' : ''}); sent back to ${where([p.redirect_uri])}, waiting for its token request`);
+    codes.set(codeHash, { client_id: p.client_id, redirect_uri: p.redirect_uri, code_challenge: p.code_challenge, scope: p.scope, assistant, read_only: readOnly, audience: p.audience, role, request: p.id, expires: clock() + CODE_TTL_MS });
+    log(`OAuth: connection approved (${p.client_name}; ${PROVIDER_LABELS[assistant]}${readOnly ? '; read only' : ''}${engineering ? `; engineering ${role}` : ''}); sent back to ${where([p.redirect_uri])}, waiting for its token request`);
     return sendTo(res, answered('approved', { assistant, codeHash, location: locationOf(p.redirect_uri, { code, state: p.state, iss: origin }) }));
   }
 
@@ -488,13 +538,15 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
       if ((form.get('redirect_uri') || c.redirect_uri) !== c.redirect_uri) return refuse(400, 'invalid_grant', `redirect_uri does not match the authorization request (sent ${where([form.get('redirect_uri')])}).`);
       const verifier = form.get('code_verifier') || '';
       if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) || b64url(crypto.createHash('sha256').update(verifier).digest()) !== c.code_challenge) return refuse(400, 'invalid_grant', `PKCE verification failed (${verifier ? 'wrong verifier' : 'no code_verifier'}).`);
-      if (form.get('resource') && !resourceNames.has(form.get('resource'))) return refuse(400, 'invalid_target', `This server's resource is ${resource} (sent ${String(form.get('resource')).slice(0, 100)}).`);
+      const audience = c.audience === 'engineering' ? 'engineering' : 'desk';
+      if (form.get('resource') && audienceOf(form.get('resource')) !== audience) return refuse(400, 'invalid_target', `This authorization is for ${audience === 'engineering' ? engResource : resource} (sent ${String(form.get('resource')).slice(0, 100)}).`);
       const grantId = `grant_${newToken(9)}`;
       store.grants[grantId] = { client_id: clientId, client_name: store.clients[clientId].client_name, assistant: c.assistant, read_only: Boolean(c.read_only), created_at: new Date(clock()).toISOString(), last_used_at: null, revoked_at: null };
+      if (audience === 'engineering') Object.assign(store.grants[grantId], { audience, role: c.role });
       // The approval page, if submitted again, now says the connection is made.
       const done = c.request ? used.get(c.request) : null;
       if (done) Object.assign(done, { exchanged: true, location: null });
-      log(`OAuth: tokens issued for a new connection (${store.clients[clientId].client_name}; ${PROVIDER_LABELS[c.assistant]}${c.read_only ? '; read only' : ''})`);
+      log(`OAuth: tokens issued for a new connection (${store.clients[clientId].client_name}; ${PROVIDER_LABELS[c.assistant]}${c.read_only ? '; read only' : ''}${audience === 'engineering' ? `; engineering ${c.role}` : ''})`);
       return json(res, 200, issue(grantId, clientId, c.scope));
     }
     if (grant === 'refresh_token') {
@@ -506,6 +558,9 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
         if (late) delete store.refresh[key];
         return refuse(400, 'invalid_grant', late ? 'The refresh token was already used and replaced. Reconnect from the assistant.' : 'The refresh token is invalid, expired or revoked. Reconnect from the assistant.');
       }
+      // A refresh stays on the grant's own resource (the desk or engineering).
+      const own = audienceOfGrant(store.grants[r.grant_id]);
+      if (form.get('resource') && audienceOf(form.get('resource')) !== own) return refuse(400, 'invalid_target', `This connection is for ${own === 'engineering' ? engResource : resource} (sent ${String(form.get('resource')).slice(0, 100)}).`);
       // Rotated, not deleted: if the answer to this request is lost, or the
       // assistant refreshes twice at once, the same token still works for a
       // short grace (a fresh pair for the same connection) instead of forcing
@@ -536,14 +591,17 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     return true;
   }
 
-  // The connection behind a request's bearer token, or null.
-  function authenticate(req) {
+  // The connection behind a request's bearer token, or null. audience: the
+  // resource the request reached; a grant of the other one is refused.
+  function authenticate(req, { audience = 'desk' } = {}) {
     const m = String(req.headers.authorization || '').match(/^Bearer\s+([A-Za-z0-9._~+/=-]{20,200})$/);
     if (!m) return null;
     const rec = store.access[hashOf(m[1])];
     if (!rec || Date.parse(rec.expires_at) < clock()) return null;
     const g = store.grants[rec.grant_id];
     if (!g || g.revoked_at) return null;
+    if (audienceOfGrant(g) !== audience) return null;
+    if (audience === 'engineering' && !ENG_ROLES.includes(g.role)) return null;
     const now = clock();
     g.last_used_at = new Date(now).toISOString();
     if (now - lastUseSave > 10 * 60000) {
@@ -552,13 +610,15 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     }
     // Connections made before ChatGPT and Gemini could connect were all Claude's.
     const assistant = PROVIDERS.includes(g.assistant) ? g.assistant : 'claude';
-    return { grant_id: rec.grant_id, client_id: rec.client_id, client_name: g.client_name, assistant, read_only: Boolean(g.read_only), scope: rec.scope };
+    const out = { grant_id: rec.grant_id, client_id: rec.client_id, client_name: g.client_name, assistant, read_only: Boolean(g.read_only), scope: rec.scope, audience };
+    if (audience === 'engineering') out.role = g.role;
+    return out;
   }
 
   // Why a request to /mcp has no usable token, for the log: never the token,
   // only what kind of refusal it is, the assistant when the token is known,
   // and the connection's short key (the same as the MCP log lines' conn).
-  function refusal(req) {
+  function refusal(req, { audience = 'desk' } = {}) {
     const header = String(req.headers.authorization || '');
     if (!header) return 'no access token (a client starting to sign in, or probing)';
     const m = header.match(/^Bearer\s+([A-Za-z0-9._~+/=-]{20,200})$/);
@@ -568,25 +628,29 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     const g = store.grants[rec.grant_id];
     const who = `${g ? PROVIDER_LABELS[PROVIDERS.includes(g.assistant) ? g.assistant : 'claude'] : 'unknown connection'}; conn ${hashOf(rec.grant_id).slice(0, 8)}`;
     if (!g || g.revoked_at) return `a token of a disconnected connection (${who}): Eric reconnects from the assistant`;
+    if (audienceOfGrant(g) !== audience) return `a token for the ${audienceOfGrant(g)} resource sent to the ${audience} resource (${who}): each connection reaches only the resource it was approved for`;
     return `an access token that expired at ${rec.expires_at} (${who}): the client should use its refresh token`;
   }
 
-  function challenge(res, { invalid = false } = {}) {
+  function challenge(res, { invalid = false, audience = 'desk' } = {}) {
+    const eng = audience === 'engineering';
     res.writeHead(401, {
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
-      'WWW-Authenticate': `Bearer resource_metadata="${metadataUrl}", scope="${SCOPE}"${invalid ? ', error="invalid_token"' : ''}`,
+      'WWW-Authenticate': `Bearer resource_metadata="${eng ? engMetadataUrl : metadataUrl}", scope="${eng ? ENG_SCOPE : SCOPE}"${invalid ? ', error="invalid_token"' : ''}`,
     });
     res.end(JSON.stringify({ error: invalid ? 'invalid_token' : 'unauthorized', error_description: 'Sign in to the CryptoResearch desk through the assistant\'s connector or app settings.' }));
   }
 
   return {
     resource,
+    engineeringResource: engResource,
     // Answers the OAuth and discovery routes; returns true when it did.
     async handle(req, res, url) {
       const p = url.pathname;
       if (req.method === 'GET' && (p === '/.well-known/oauth-protected-resource' || p === '/.well-known/oauth-protected-resource/mcp')) return json(res, 200, protectedResource(), { 'Cache-Control': 'max-age=300' }), true;
-      if (req.method === 'GET' && (p === '/.well-known/oauth-authorization-server' || p === '/.well-known/oauth-authorization-server/mcp')) return json(res, 200, serverMetadata(), { 'Cache-Control': 'max-age=300' }), true;
+      if (req.method === 'GET' && p === '/.well-known/oauth-protected-resource/mcp/engineering') return json(res, 200, protectedResource('engineering'), { 'Cache-Control': 'max-age=300' }), true;
+      if (req.method === 'GET' && (p === '/.well-known/oauth-authorization-server' || p === '/.well-known/oauth-authorization-server/mcp' || p === '/.well-known/oauth-authorization-server/mcp/engineering')) return json(res, 200, serverMetadata(), { 'Cache-Control': 'max-age=300' }), true;
       if (p === '/oauth/register' && req.method === 'POST') return await register(req, res), true;
       if (p === '/oauth/authorize' && req.method === 'GET') return authorizeGet(req, res, url), true;
       if (p === '/oauth/authorize' && req.method === 'POST') return await authorizePost(req, res), true;
@@ -603,7 +667,9 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
         .filter(([, g]) => !g.revoked_at)
         .map(([id, g]) => {
           const assistant = PROVIDERS.includes(g.assistant) ? g.assistant : 'claude';
-          return { grant_id: id, client_name: g.client_name, assistant, assistant_label: PROVIDER_LABELS[assistant], kind: g.read_only ? 'read_only' : 'full', created_at: g.created_at, last_used_at: g.last_used_at };
+          const audience = audienceOfGrant(g);
+          if (audience === 'engineering') return { grant_id: id, client_name: g.client_name, assistant, assistant_label: `${PROVIDER_LABELS[assistant]} · engineering ${g.role}`, kind: 'engineering', audience, role: g.role, created_at: g.created_at, last_used_at: g.last_used_at };
+          return { grant_id: id, client_name: g.client_name, assistant, assistant_label: PROVIDER_LABELS[assistant], kind: g.read_only ? 'read_only' : 'full', audience, created_at: g.created_at, last_used_at: g.last_used_at };
         })
         .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
     },
@@ -611,4 +677,4 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
   };
 }
 
-module.exports = { makeOAuth, redirectAllowed, redirectKind, redirectMatches, guessLocal, CLAUDE_CALLBACK, CHATGPT_CALLBACK, STORE_REL };
+module.exports = { makeOAuth, redirectAllowed, redirectKind, redirectMatches, guessLocal, CLAUDE_CALLBACK, CHATGPT_CALLBACK, STORE_REL, ENG_ROLES };
