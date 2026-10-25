@@ -722,3 +722,134 @@ test('get_ticket: a project with no ticket says so; an earlier receipt reads as 
   assert.equal(g.text.text, null);
   assert.match(g.text.note, /no Prosecutor ran/);
 });
+
+// ---------------------------------------------------------------------------
+// No born-invalidated tickets (item 22)
+
+function stubPrice(t, id, price) {
+  const market = require('../core/market');
+  const real = market.readLatest.real || market.readLatest;
+  const stub = (...a) => { const m = real(...a); return { ...m, assets: { ...(m.assets || {}), [id]: { price_usd: price, source_last_updated_at: '2026-10-24T10:00:00.000Z' } } }; };
+  stub.real = real;
+  market.readLatest = stub;
+  t.after(() => { market.readLatest = real; });
+}
+const withTrigger = (tk, trig, type = 'ACCUMULATE') => { const base = JSON.parse(answer(tk).match(/```json\n([\s\S]*)\n```/)[1]); return answer(tk, { proposal: { ...base.proposal, proposal_type: type, invalidation_trigger: { ...base.proposal.invalidation_trigger, metric: null, ...trig } } }); };
+const openTicket = (t, s) => { stubHeld(t, s.pid, false); const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket; withExit(s.ws, s.pid, tk.ticket_id, 1.5); return T.loadTicket(s.ws, s.pid, tk.ticket_id); };
+const CG = 'example-payfi-fictional';
+
+test('a price trigger at or above the price now is refused and writes nothing; one below is saved', (t) => {
+  const s = withReport(t);
+  const tk = openTicket(t, s);
+  stubPrice(t, CG, 0.65);
+  const before = hashTree(s.root);
+  assert.throws(() => T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: withTrigger(tk, { price_usd: 0.7 }) }), (e) => e.code === 'INVALID' && /at or above the price now \(\$0\.65/.test(e.message) && /Set a threshold below the current price/.test(e.message));
+  assert.throws(() => T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: withTrigger(tk, { price_usd: 0.65 }) }), (e) => e.code === 'INVALID', 'equal is at or above');
+  assert.deepEqual(hashTree(s.root), before, 'a refusal writes nothing');
+  const ok = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: withTrigger(tk, { price_usd: 0.5 }) });
+  assert.equal(ok.status, 'saved');
+  assert.equal(ok.receipt.desk.trigger_breached_at_save, undefined);
+});
+
+test('a metric floor above the packet\'s complete 30-day total is refused, naming the total', (t) => {
+  const s = withReport(t);
+  const f = require('../core/fundamentals');
+  const real = f.summary;
+  f.summary = () => ({ state: 'ok', fetched_at: '2026-10-20T00:00:00.000Z', metrics: { fees: { status: 'complete', total_30d_usd: 50000 } } });
+  t.after(() => { f.summary = real; });
+  const tk = openTicket(t, s);
+  const block = (floor) => answer(tk, { proposal: { ...JSON.parse(answer(tk).match(/```json\n([\s\S]*)\n```/)[1]).proposal, invalidation_trigger: { price_usd: 0.5, metric: { key: 'fees', below_30d_usd: floor }, statement: 'x' } } });
+  assert.throws(() => T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: block(100000) }), (e) => e.code === 'INVALID' && /50000/.test(e.message) && /2026-10-20/.test(e.message));
+  assert.equal(T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: block(40000) }).status, 'saved');
+});
+
+test('HARD_PASS and TRIM_EXIT with a breached trigger are saved and labeled', (t) => {
+  for (const type of ['HARD_PASS', 'TRIM_EXIT']) {
+    const s = withReport(t);
+    const tk = openTicket(t, s);
+    stubPrice(t, CG, 0.65);
+    const out = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: withTrigger(tk, { price_usd: 0.7 }, type) });
+    assert.equal(out.status, 'saved', type);
+    assert.equal(out.receipt.desk.trigger_breached_at_save.kind, 'price');
+    assert.match(out.receipt.desk.trigger_breached_at_save.words, /0\.65/);
+  }
+});
+
+test('with no price on file the check is skipped, never refused', (t) => {
+  const s = withReport(t);
+  const tk = openTicket(t, s);
+  const market = require('../core/market');
+  const real = market.readLatest.real || market.readLatest;
+  market.readLatest = (...a) => ({ ...real(...a), assets: {} });
+  t.after(() => { market.readLatest = real; });
+  assert.equal(tk.basis.market.price_usd ?? null, null, 'the fixture packet holds no price');
+  assert.equal(T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: withTrigger(tk, { price_usd: 0.7 }) }).status, 'saved');
+});
+
+// ---------------------------------------------------------------------------
+// Re-open after invalidation or a rules upgrade (item 23)
+
+function savedTicket(t, s) {
+  stubHeld(t, s.pid, false);
+  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
+  withExit(s.ws, s.pid, tk.ticket_id, 1.5);
+  return T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(s.ws, s.pid, tk.ticket_id)) });
+}
+function dropPrice(ws, at0, price) {
+  const dir = ws.abs('market-data/observations');
+  fs.mkdirSync(dir, { recursive: true });
+  const at = new Date(at0).toISOString();
+  fs.appendFileSync(path.join(dir, `${at.slice(0, 7)}.jsonl`), `${JSON.stringify({ fetched_at: at, provider: 'coingecko', assets: [{ id: 'example-payfi-fictional', price_usd: price, source_last_updated_at: at, fetched_at: at }] })}\n`);
+}
+
+test('reopen: refused on a pending ticket and by tickets start --reopen; allowed on an invalidated one, which gets a new ticket and keeps the old receipt; undo restores done', (t) => {
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  assert.equal(T.view(s.ws, s.pid).ticket.can_reopen, null);
+  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'reopen' }), (e) => e.code === 'REFUSED' && /invalidated|older rules/.test(e.message));
+  assert.throws(() => T.createTicket(s.ws, { project_id: s.pid, reopen: true }), (e) => e.code === 'REFUSED');
+  assert.equal(T.nextStep(s.ws, s.pid).step, 'pm_review');
+  dropPrice(s.ws, Date.parse(saved.receipt.saved_at), 0.69);
+  const v = T.view(s.ws, s.pid);
+  assert.equal(v.ticket.status, 'invalidated');
+  assert.equal(v.ticket.can_reopen.kind, 'invalidated');
+  const done = T.nextStep(s.ws, s.pid);
+  assert.equal(done.step, 'done');
+  assert.match(done.why, /Invalidated: Re-open ticket on the card \(or tickets start --reopen\)/);
+  const dec = T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'reopen' });
+  assert.equal(dec.result.status, 'saved');
+  assert.equal(dec.result.journal.status, 'saved');
+  assert.equal(T.view(s.ws, s.pid).ticket.status, 'reopened');
+  const next = T.nextStep(s.ws, s.pid);
+  assert.equal(next.step, 'ticket');
+  assert.equal(next.refresh, true);
+  const again = T.createTicket(s.ws, { project_id: s.pid, assistant: true, reopen: true });
+  assert.equal(again.status, 'created');
+  assert.notEqual(again.ticket_id, saved.ticket_id);
+  const kept = T.listReceipts(s.ws, s.pid).filter((r) => !r.broken);
+  assert.equal(kept.length, 1, 'the old receipt is kept');
+  assert.equal(kept[0].receipt_id, saved.receipt_id);
+  // Undo of the reopen puts the ticket back to invalidated.
+  T.cancelTicket(s.ws, s.pid, again.ticket_id, 'test');
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'undo' });
+  assert.equal(T.view(s.ws, s.pid).ticket.status, 'invalidated');
+  assert.equal(T.nextStep(s.ws, s.pid).step, 'done');
+});
+
+test('reopen: a ticket sized under @1 while @2 is in force can be re-opened; nothing re-opens by itself', (t) => {
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  const rel = `projects/${s.pid}/tickets/receipts/${saved.receipt_id}.json`;
+  const file = fs.existsSync(s.ws.abs(rel)) ? rel : null;
+  assert.ok(file, 'receipt file found');
+  const r = readJson(s.ws.abs(file));
+  assert.equal(r.versions.sizing, T.SIZING_VERSION);
+  assert.equal(T.nextStep(s.ws, s.pid).step, 'pm_review', 'nothing re-opens automatically');
+  r.versions.sizing = 'cr-ticket-sizing@1';
+  atomicWrite(s.ws.abs(file), jsonText(r));
+  assert.equal(T.view(s.ws, s.pid).ticket.can_reopen.kind, 'rules_upgrade');
+  assert.equal(T.nextStep(s.ws, s.pid).step, 'pm_review');
+  assert.equal(T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'reopen' }).result.status, 'saved');
+  assert.equal(T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'reopen' }).result.status, 'unchanged');
+  assert.equal(T.nextStep(s.ws, s.pid).refresh, true);
+});

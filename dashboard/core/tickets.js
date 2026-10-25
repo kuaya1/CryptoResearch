@@ -58,8 +58,8 @@ const METRIC_KEYS = ['fees', 'revenue', 'holders_revenue'];
 // approve, halve and veto answer a ticket that suggests risk; pass (and
 // archive the project unless it is held), watch and trim answer one that
 // suggests none (Eric, 2026-10-24: vetoing a hard pass read backwards).
-const ACTIONS = ['approve', 'halve', 'veto', 'pass', 'watch', 'trim', 'undo'];
-const STATUS_OF = { approve: 'risk_granted', halve: 'risk_granted', veto: 'vetoed', pass: 'passed', watch: 'watching', trim: 'trim_acknowledged' };
+const ACTIONS = ['approve', 'halve', 'veto', 'pass', 'watch', 'trim', 'reopen', 'undo'];
+const STATUS_OF = { approve: 'risk_granted', halve: 'risk_granted', veto: 'vetoed', pass: 'passed', watch: 'watching', trim: 'trim_acknowledged', reopen: 'reopened' };
 const MIN_TEXT = 600;
 const MAX_TEXT = 400 * 1024;
 const MAX_DRAFT = 400 * 1024;
@@ -521,6 +521,11 @@ function createTicket(ws, args = {}) {
   const now = Date.now();
   const at = iso(now);
   const assistant = Boolean(args.assistant);
+  if (args.reopen === true) {
+    const latest = listReceipts(ws, pid).filter((r) => !r.broken).pop() || null;
+    if (!reopenReason(ws, project, latest, { now })) throw new OpError('REFUSED', 'Re-open applies only when the ticket in force is invalidated, or was sized under an older rules version than the one in force. It is neither; nothing was opened.');
+    args = { ...args, refresh: true };
+  }
   const open = openTicket(ws, pid);
   if (open && !args.restart) {
     if (assistant && open.job.state === 'waiting') updateTicket(ws, pid, open.ticket_id, (t) => { if (t.job.state !== 'waiting') return { noop: true }; Object.assign(t.job, { state: 'running', mode: args.mode || 'cowork', updated_at: at, note: 'Taken by Claude.' }); return {}; }, `Claude takes ticket ${open.ticket_id}`);
@@ -754,6 +759,44 @@ function normalizeBlock(b) {
 
 const normalizedTextHash = (text) => sha256(String(text).replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').trim());
 
+// A ticket must not be invalidated the moment it is saved. The price now is
+// the latest stored reading, else the frozen packet's; the metric total is the
+// packet's complete 30-day total. A check with no reading is skipped, not
+// passed. Returns null, or { kind, words, refusal }.
+const EXEMPT_FROM_BORN_CHECK = new Set(['HARD_PASS', 'TRIM_EXIT']);
+function bornInvalidated(ws, project, ticket, inv) {
+  if (!inv) return null;
+  let packet = null;
+  try { packet = JSON.parse(verifiedFrozen(ws, ticket.packet.path, ticket.packet.sha256, 'The frozen ticket packet')); } catch (_) { packet = null; }
+  if (isNum(inv.price_usd)) {
+    let now = null;
+    try { now = marketOf(ws, project); } catch (_) { now = null; }
+    const pk = (packet && packet.market) || (ticket.basis && ticket.basis.market);
+    const cur = now && isNum(now.price_usd) ? now : pk && isNum(pk.price_usd) ? pk : null;
+    if (cur && inv.price_usd >= cur.price_usd) {
+      const when = cur.as_of || 'an unknown time';
+      return {
+        kind: 'price',
+        words: `The invalidation price $${inv.price_usd} was at or above the price when saved ($${cur.price_usd} at ${when}).`,
+        refusal: `the invalidation price $${inv.price_usd} is at or above the price now ($${cur.price_usd} at ${when}): the ticket would be invalidated the moment it is saved. Set a threshold below the current price.`,
+      };
+    }
+  }
+  if (inv.metric) {
+    const f = packet && packet.fundamentals;
+    const m = f && f.metrics ? f.metrics[inv.metric.key] : null;
+    if (m && m.status === 'complete' && isNum(m.total_30d_usd) && inv.metric.below_30d_usd > m.total_30d_usd) {
+      const when = (f && f.fetched_at) || 'an unknown date';
+      return {
+        kind: 'metric',
+        words: `The ${inv.metric.key} floor $${inv.metric.below_30d_usd} was above the packet's complete 30-day total ($${m.total_30d_usd}, ${when}).`,
+        refusal: `the ${inv.metric.key} floor $${inv.metric.below_30d_usd} is above the packet's complete 30-day total ($${m.total_30d_usd}, ${when}): the ticket would be invalidated the moment it is saved. Set a floor below the total.`,
+      };
+    }
+  }
+  return null;
+}
+
 function saveTicket(ws, { project_id: pid, ticket_id: tid, text, revision = null, channel = null }) {
   if (require('./research').heldProviders(ws).claude) throw new OpError('REFUSED', 'Claude is on hold on this desk; nothing was saved.');
   const body = typeof text === 'string' ? text : '';
@@ -795,6 +838,9 @@ function saveTicket(ws, { project_id: pid, ticket_id: tid, text, revision = null
   if (Number.isFinite(asOf) && asOf > now + AS_OF_SLACK_MS) throw new OpError('INVALID', `Not saved: as_of (${c.as_of}) is after the time of saving.`);
   if (Number.isFinite(asOf) && asOf < Date.parse(ticket.created_at) - AS_OF_SLACK_MS) throw new OpError('INVALID', `Not saved: as_of (${c.as_of}) is before the ticket was opened (${ticket.created_at}).`);
   const g = gate(ticket.basis, ticket.sizing, c.proposal.proposal_type);
+  const breached = bornInvalidated(ws, project, ticket, c.proposal.invalidation_trigger);
+  const exemptType = EXEMPT_FROM_BORN_CHECK.has(c.proposal.proposal_type) || EXEMPT_FROM_BORN_CHECK.has(g.proposal_type);
+  if (breached && !exemptType) throw new OpError('INVALID', `Not saved: ${breached.refusal} The draft is kept.`, { trigger: breached.kind });
   const exits = ticket.basis.exits || [];
   const at500 = exits.find((x) => x.size_usd === ticket.sizing.exit_size_usd) || null;
   const at2000 = exits.find((x) => x.size_usd === 2000) || null;
@@ -835,6 +881,7 @@ function saveTicket(ws, { project_id: pid, ticket_id: tid, text, revision = null
       exits_missing: exitsMissing(exits, pid),
       sell_tax: null,
       invalidation_version: INVALIDATION_VERSION,
+      ...(breached && exemptType ? { trigger_breached_at_save: { kind: breached.kind, words: breached.words } } : {}),
     },
     // Both agents' own figures and verdicts, side by side; the spread is the
     // difference between the two, never their average.
@@ -895,6 +942,19 @@ function decisionFor(lines, rid) {
   return mine.filter((l) => l.action !== 'undo' && !undone.has(l.decision_id)).pop() || null;
 }
 
+// Why a saved ticket may be re-opened: it is invalidated, or it was sized under
+// an older rules version than the one in force. Null when neither holds.
+// Nothing re-opens automatically.
+function reopenReason(ws, project, receipt, { now = Date.now() } = {}) {
+  if (!receipt || receipt.kind === 'desk_gate') return null;
+  const inv = invalidationOf(ws, project, receipt, { now });
+  if (inv.invalidated) return { kind: 'invalidated', why: inv.words || 'The ticket is invalidated.' };
+  const was = receipt.versions && receipt.versions.sizing;
+  const inForce = sizingOf(ws).version;
+  if (was && was !== inForce) return { kind: 'rules_upgrade', why: `Sized under ${was}; ${inForce} is in force.` };
+  return null;
+}
+
 function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: requestId = null, by = null }) {
   if (!RECEIPT_RE.test(String(rid))) throw new OpError('BAD_ID', 'Name the ticket you decided (its receipt ID).');
   if (!ACTIONS.includes(action)) throw new OpError('INVALID', `The decision is one of ${ACTIONS.join(', ')}.`);
@@ -902,6 +962,15 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
   const reqId = typeof requestId === 'string' && /^[A-Za-z0-9_-]{8,80}$/.test(requestId) ? requestId : null;
   const rel = decisionsRel(pid);
   const held = action === 'pass' ? heldOf(ws, pid, Date.now()) === true : false;
+  let reopen = null;
+  if (action === 'reopen') {
+    const project = require('./projects').getProject(ws, pid);
+    const rec = readJson(ws.abs(receiptRel(pid, rid)), null);
+    if (rec) {
+      reopen = reopenReason(ws, project, rec);
+      if (!reopen && rec.kind !== 'desk_gate') throw new OpError('REFUSED', 'Re-open applies only to an invalidated ticket, or one sized under an older rules version than the one in force. This ticket is neither.');
+    }
+  }
   const out = runOp(ws, { type: 'ticket_decision', summary: `PM ${action} on ${rid} for ${pid}` }, (op) => {
     const r = op.readJson(receiptRel(pid, rid), null);
     if (!r) throw new OpError('NOT_FOUND', `No ticket ${rid} for ${pid}.`);
@@ -921,13 +990,15 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
     } else {
       const suggested = r.desk ? r.desk.suggested_risk_usd : 0;
       const type = r.desk ? r.desk.proposal_type : null;
+      if (action === 'reopen' && inForce && inForce.action === 'reopen') return { status: 'unchanged', decision: inForce };
       if ((action === 'approve' || action === 'halve') && !(suggested > 0)) throw new OpError('REFUSED', `This ticket suggests no risk (${type || 'no proposal'}): there is nothing to approve. Confirm the pass, or keep watching.`);
       if ((action === 'pass' || action === 'watch') && suggested > 0) throw new OpError('REFUSED', `This ticket suggests ${usd(suggested)} of risk: approve, halve or veto it.`);
+      if (action === 'reopen' && !reopen) throw new OpError('REFUSED', 'Re-open applies only to an invalidated ticket, or one sized under an older rules version.');
       if (action === 'trim' && type !== 'TRIM_EXIT') throw new OpError('REFUSED', `This ticket proposes ${type || 'nothing'}, not a trim.`);
       if (inForce && inForce.action === action) return { status: 'unchanged', decision: inForce };
       const starter = r.desk && r.desk.sizing ? r.desk.sizing.starter_risk_usd : SIZING_DEFAULTS.starter_risk_usd;
       const approved = action === 'approve' ? suggested : action === 'halve' ? Math.min(starter, suggested) : 0;
-      line = { action, pm_approved_risk_usd: approved, suggested_risk_usd: suggested, proposal_type: type };
+      line = { action, pm_approved_risk_usd: approved, suggested_risk_usd: suggested, proposal_type: type, ...(action === 'reopen' ? { reopen: reopen } : {}) };
       // A confirmed pass archives the project (reversible; Undo restores it),
       // except one Eric holds, which stays watched.
       if (action === 'pass') line.archive = held ? 'kept: held' : 'archived';
@@ -1075,6 +1146,7 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
 // Reading: the ticket in force and its status
 
 function statusOf(decision, invalidation) {
+  if (decision && decision.action === 'reopen') return 'reopened';
   if (invalidation && invalidation.invalidated) return 'invalidated';
   if (!decision) return 'pending_pm_review';
   return STATUS_OF[decision.action] || 'risk_granted';
@@ -1118,6 +1190,11 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       exit_cost_500_complete: d.exit_cost_500_complete ?? null,
       exit_cost_2000_usd_pct: d.exit_cost_2000_usd_pct ?? null,
       exits_missing: d.exits_missing || [],
+      trigger_breached_at_save: d.trigger_breached_at_save || null,
+      can_reopen: (() => {
+        if (gateOnly || current !== receipts[receipts.length - 1] || open || (decision && decision.action === 'reopen')) return null;
+        return reopenReason(ws, project, current, { now });
+      })(),
       suggested_risk_usd: d.suggested_risk_usd || 0,
       starter_risk_usd: d.sizing ? d.sizing.starter_risk_usd : SIZING_DEFAULTS.starter_risk_usd,
       pm_approved_risk_usd: decision ? decision.pm_approved_risk_usd : null,
@@ -1201,12 +1278,14 @@ function nextStep(ws, pid, { now = Date.now() } = {}) {
   const open = openTicket(ws, pid);
   if (open) return { ...base, step: 'ticket', ticket_id: open.ticket_id, state: open.job.state, report_id: open.basis.researcher.report_id, why: `Ticket ${open.ticket_id} is open: write the Prosecutor's ticket (Agent 2).` };
   const v = view(ws, pid, { now });
+  if (v.ticket && v.ticket.status === 'reopened' && v.ticket.researcher_report_id === r.report_id) return { ...base, step: 'ticket', ticket_id: null, report_id: r.report_id, refresh: true, reopen: true, why: `Eric re-opened ticket ${v.ticket.receipt_id}: open a new one on Claude's current report ${r.report_id} (start_ticket with refresh: true). The old receipt is kept.` };
   if (!v.ticket || v.ticket.researcher_report_id !== r.report_id) {
     const why = pregateReason(r, heldOf(ws, pid, now), sizingOf(ws));
     if (why) return { ...base, step: 'gate_closed', ticket_id: null, report_id: r.report_id, reasons: [why], why: `The desk's gate is closed on Claude's current report ${r.report_id}: ${why} No Prosecutor runs; call start_ticket (tickets start) to save the desk's receipt.` };
   }
   if (!v.ticket || v.ticket.researcher_report_id !== r.report_id) return { ...base, step: 'ticket', ticket_id: null, report_id: r.report_id, why: `No ticket on Claude's current report ${r.report_id}: open one (Agent 2).` };
   if (v.ticket.status === 'pending_pm_review') return { ...base, step: 'pm_review', receipt_id: v.ticket.receipt_id, why: 'The ticket waits for Eric\'s PM review. Nothing for an agent to do.' };
+  if (v.ticket.status === 'invalidated') return { ...base, step: 'done', receipt_id: v.ticket.receipt_id, status: v.ticket.status, why: 'Invalidated: Re-open ticket on the card (or tickets start --reopen). Nothing for an agent to do until then.' };
   return { ...base, step: 'done', receipt_id: v.ticket.receipt_id, status: v.ticket.status, why: `The ticket is ${v.ticket.status.replace(/_/g, ' ')}. Nothing for an agent to do until Claude's report changes.` };
 }
 

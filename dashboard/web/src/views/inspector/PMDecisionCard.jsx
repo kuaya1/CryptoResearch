@@ -21,10 +21,11 @@ const STATUS = {
   watching: { word: 'Watching', tone: '' },
   trim_acknowledged: { word: 'Trim acknowledged', tone: '' },
   invalidated: { word: 'Invalidated', tone: 'is-bad' },
+  reopened: { word: 'Re-opened', tone: 'is-warn' },
 };
 const VERDICT_WORDS = { thesis_survives: 'thesis survives', thesis_damaged: 'thesis damaged', fatal_flaw: 'fatal flaw' };
 const TEST_WORDS = { mercenary_emissions: 'mercenary emissions', tax_revenue: 'tax revenue', exit_slippage: 'exit slippage', unverified_claims: 'unverified claims', other: 'other' };
-const DECIDED_WORDS = { veto: 'Vetoed', pass: 'Pass confirmed', watch: 'Kept on watch', trim: 'Trim acknowledged' };
+const DECIDED_WORDS = { veto: 'Vetoed', pass: 'Pass confirmed', watch: 'Kept on watch', trim: 'Trim acknowledged', reopen: 'Re-opened' };
 
 // The Prosecutor's line: its own score, then either its fatal flaws (with the
 // first one's test) or its verdict, never both saying "fatal flaw".
@@ -155,6 +156,7 @@ export function PMDecisionCard({ p }) {
         </p>
       </div>
       {t.non_consensus_thesis ? <p className="pm-thesis">{t.non_consensus_thesis}</p> : null}
+      {t.trigger_breached_at_save ? <p className="pm-alert" title={t.trigger_breached_at_save.words}>Trigger already breached when saved</p> : null}
       {t.status === 'invalidated' && t.invalidation ? <p className="pm-alert">{t.invalidation.words}</p> : null}
       <div className="iv-rgrid pm-grid">
         <div className="iv-rc">
@@ -223,6 +225,7 @@ export function PMDecisionCard({ p }) {
             <button type="button" className="btn btn-sm" data-key={`pm-watch-${pid}`} disabled={Boolean(busy)} onClick={() => decide('watch')}>{'Override → Watch'}</button>
           </>
         )}
+        {t.can_reopen && !(decided && decided.action === 'reopen') ? <button type="button" className="btn btn-sm" data-key={`pm-reopen-${pid}`} disabled={Boolean(busy)} title={t.can_reopen.why} onClick={() => decide('reopen')}>Re-open ticket</button> : null}
       </div>
       <PilotLine p={p} t={t} busy={busy} setBusy={setBusy} />
     </section>
