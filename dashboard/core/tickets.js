@@ -1034,6 +1034,39 @@ function decisionFor(lines, rid) {
   return mine.filter((l) => l.action !== 'undo' && !undone.has(l.decision_id)).pop() || null;
 }
 
+// Was the receipt sized from what its verified frozen packet holds (review
+// A08, item 37)? The gate is recomputed from the packet under the receipt's own
+// sizing and proposal type and compared with the exit costs and the risk
+// before any admission hold. `ok`, `limited` (fields differ) or `unverified`
+// (the packet cannot be read as frozen). A desk-gate receipt has no
+// Prosecutor's sizing to check (null). Reads only.
+function integrityOf(ws, receipt) {
+  if (!receipt || receipt.kind === 'desk_gate' || !receipt.desk) return null;
+  let packet;
+  try {
+    if (!receipt.packet || !receipt.packet.path) throw new Error('The receipt names no frozen packet.');
+    packet = JSON.parse(verifiedFrozen(ws, receipt.packet.path, receipt.packet.sha256, 'The frozen ticket packet'));
+  } catch (err) {
+    return { status: 'unverified', words: `Cannot be checked: ${String(err && err.message || err).slice(0, 200)} It cannot be approved or halved; a veto, pass or watch is still allowed.` };
+  }
+  const d = receipt.desk;
+  const sizing = d.sizing || {};
+  const p = packet.researcher || {};
+  const g = gate({ researcher: { grade: p.grade === undefined ? null : p.grade }, held: packet.held, exits: packet.exits || [], market: packet.market || null, native: packet.native === undefined ? null : packet.native }, sizing, receipt.proposal && receipt.proposal.proposal_type);
+  const exitAt = (n) => (packet.exits || []).find((x) => x.size_usd === n) || null;
+  const e500 = exitAt(sizing.exit_size_usd);
+  const e2000 = exitAt(2000);
+  const savedRisk = d.admission && d.admission.held_risk ? d.admission.held_risk.risk_usd : d.suggested_risk_usd;
+  const num = (v) => (v === undefined ? null : v);
+  const fields = [
+    ['exit_cost_500_usd_pct', num(d.exit_cost_500_usd_pct), e500 ? e500.cost_pct : null],
+    ['exit_cost_2000_usd_pct', num(d.exit_cost_2000_usd_pct), e2000 ? e2000.cost_pct : null],
+    ['risk_before_admission_usd', num(savedRisk), g.suggested_risk_usd],
+  ].filter(([, a, z]) => JSON.stringify(a) !== JSON.stringify(z)).map(([k, a, z]) => ({ field: k, saved: a, packet: z }));
+  if (!fields.length) return { status: 'ok', fields: [], words: null };
+  return { status: 'limited', fields, words: `Sized from a job record that differs from its frozen packet (${fields.map((f) => `${f.field}: saved ${JSON.stringify(f.saved)}, packet ${JSON.stringify(f.packet)}`).join('; ')}). It cannot be approved or halved; a veto, pass or watch is still allowed. The receipt is unchanged.` };
+}
+
 // The rules versions on a receipt that are newer than this code knows, in
 // words; null when none. Same family only: cr-ticket-sizing@9 against @2.
 function newerRuleOf(receipt) {
@@ -1151,6 +1184,8 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
       if (inForce && (inForce.action === 'approve' || inForce.action === 'halve') && ['approve', 'halve', 'veto'].includes(action)) throw new OpError('CONFLICT', `Not recorded: the ${inForce.action} decision (${inForce.decision_id}, ${usd(inForce.pm_approved_risk_usd)}) is in force. Undo it first, then record the ${action}.`);
       const now = Date.now();
       if (action === 'approve' || action === 'halve') {
+        const integ = integrityOf(ws, r);
+        if (integ && integ.status !== 'ok') throw new OpError('INTEGRITY', `Not recorded: ${integ.words}`, { fields: (integ.fields || []).map((f) => f.field) });
         const block = grantBlock(ws, project(), r, now);
         if (block) throw new OpError(block.code, block.message, { changed: block.changed });
       }
@@ -1451,6 +1486,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       exits_missing: d.exits_missing || [],
       trigger_breached_at_save: d.trigger_breached_at_save || null,
       admission: d.admission || null,
+      integrity: gateOnly ? null : integrityOf(ws, current),
       rule_note: (newerRuleOf(current) || {}).words || null,
       can_reopen: (() => {
         if (gateOnly || current !== receipts[receipts.length - 1] || open || (decision && decision.action === 'reopen')) return null;
@@ -1920,6 +1956,7 @@ module.exports = {
   digestText,
   DIGEST_FORMAT,
   newerRuleOf,
+  integrityOf,
   PROMPT_VERSION,
   FORMAT,
   SIZING_VERSION,
