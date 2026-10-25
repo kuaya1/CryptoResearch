@@ -10,7 +10,8 @@
     "ui": "npm --prefix dashboard/web run dev",
     "ui:build": "npm --prefix dashboard/web run build",
     "pilot": "node dashboard/scripts/pilot.js",
-    "train": "node dashboard/scripts/merge-train.js"
+    "train": "node dashboard/scripts/merge-train.js",
+    "scorecard": "node dashboard/scripts/blitz-scorecard.js"
   },
   "engines": {
     "node": "24.x"
