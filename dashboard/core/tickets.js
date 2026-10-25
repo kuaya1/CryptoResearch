@@ -1814,6 +1814,55 @@ function candidateBoard(ws, { now = Date.now() } = {}) {
   });
 }
 
+// Item 61: the watchlist's exit-liquidity matrix. Every verified, active
+// project, best grade first (a range by its low end; no grade last), with the
+// desk's $500 and $2,000 exit cost, whether each cost is complete and the
+// components missing, the chain, the quote's age and the native L1 status.
+// Read only: it asks no provider and writes nothing. A missing reading is
+// null with its reason, never 0.
+const EXIT_MATRIX_FORMAT = 'cr-exit-matrix@1';
+const EXIT_MATRIX_SIZES = [500, 2000];
+function exitMatrix(ws, { now = Date.now() } = {}) {
+  const sizing = sizingOf(ws);
+  const rows = [];
+  for (const p of require('./projects').listProjects(ws)) {
+    if (p.broken || p.status === 'archived') continue;
+    const project = require('./projects').getProject(ws, p.project_id);
+    if (!project.identity || project.identity.status !== 'verified') continue;
+    const pid = p.project_id;
+    let researcher = null;
+    try { researcher = researcherOf(ws, pid); } catch (_) { researcher = null; }
+    const market = marketOf(ws, project);
+    const native = nativeL1Liquid({ native: { native_chain: project.identity.native_chain === true, market_cap_usd: isNum(market.market_cap_usd) ? market.market_cap_usd : null } }, sizing);
+    const chains = [...new Set((project.identity.assets || []).map((a) => a.chain).filter(Boolean))].sort();
+    const exits = exitsOf(ws, pid, EXIT_MATRIX_SIZES, now).map((e) => {
+      const at = Date.parse(e.as_of);
+      return {
+        size_usd: e.size_usd,
+        cost_pct: e.cost_pct,
+        complete: isNum(e.cost_pct) ? e.cost_complete !== false : null,
+        missing_costs: isNum(e.cost_pct) ? e.missing_costs || [] : [],
+        quote_age_minutes: Number.isFinite(at) ? Math.max(0, Math.round((now - at) / 60000)) : null,
+        as_of: e.as_of || null,
+        status: e.status,
+        note: e.note || null,
+      };
+    });
+    rows.push({
+      project_id: pid,
+      name: project.name,
+      grade: researcher ? gateGrade(researcher.grade) : null,
+      grade_display: researcher && researcher.grade ? researcher.grade.display || researcher.grade.status : null,
+      chain: native ? (project.identity.native_chain_name || chains[0] || null) : chains.join(', ') || null,
+      native_l1_liquid: native,
+      exits,
+    });
+  }
+  const rank = (r) => (r.grade === null ? -Infinity : r.grade);
+  rows.sort((a, b) => (rank(b) === rank(a) ? 0 : rank(b) > rank(a) ? 1 : -1) || a.project_id.localeCompare(b.project_id));
+  return { format: EXIT_MATRIX_FORMAT, writes_nothing: true, as_of: iso(now), sizes_usd: EXIT_MATRIX_SIZES, rows };
+}
+
 // Backlog item 30. Opt in (pilot: true) every verified, active project whose
 // Claude current eligible report is a cr-research-prompt@6 run with a grade of
 // `min` or more (a range by its low end), so qualifying candidates enter the
@@ -2237,6 +2286,8 @@ module.exports = {
   pilotQueue,
   pilotCandidates,
   candidateBoard,
+  exitMatrix,
+  EXIT_MATRIX_FORMAT,
   batchGate,
   autoPilotSync,
   quoteCandidates,

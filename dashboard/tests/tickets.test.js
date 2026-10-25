@@ -2014,3 +2014,40 @@ test('item 60: reconcileDesk repairs every project\'s missing paper position and
   assert.match(web, /\/api\/tickets\/reconcile/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'), /route\('POST', '\/api\/tickets\/reconcile'/);
 });
+
+test('item 61: the exit matrix lists every verified active project by grade with the $500 and $2,000 cost, completeness, chain, quote age; an unread cost is null, never 0; reading writes nothing', (t) => {
+  const s = withReport(t);
+  const tree = hashTree(s.root);
+  const bare = T.exitMatrix(s.ws);
+  assert.equal(bare.format, T.EXIT_MATRIX_FORMAT);
+  assert.deepEqual(bare.sizes_usd, [500, 2000]);
+  assert.equal(bare.rows.length, 1);
+  const none = bare.rows[0];
+  assert.equal(none.project_id, s.pid);
+  assert.equal(none.native_l1_liquid, false);
+  assert.equal(none.exits[0].cost_pct, null, 'no reading: null, never 0');
+  assert.equal(none.exits[0].complete, null);
+  const incomplete = withExitReadings(1.5, () => T.exitMatrix(s.ws), { complete: false }).rows[0];
+  assert.equal(incomplete.exits[0].cost_pct, 1.5);
+  assert.equal(incomplete.exits[1].cost_pct, 3);
+  assert.equal(incomplete.exits[0].complete, false);
+  assert.deepEqual(incomplete.exits[0].missing_costs, ['network fee']);
+  assert.equal(typeof incomplete.exits[0].quote_age_minutes, 'number');
+  const full = withExitReadings(1.5, () => T.exitMatrix(s.ws)).rows[0];
+  assert.equal(full.exits[0].complete, true);
+  assert.deepEqual(T.exitMatrix(s.ws, { now: Date.parse(bare.as_of) }), bare, 'the same matrix for the same moment');
+  assert.deepEqual(hashTree(s.root), tree, 'reading writes nothing');
+  const research = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'research.js'), 'utf8');
+  assert.match(research, /\/api\/tickets\/exit-matrix/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8'), /route\('GET', '\/api\/tickets\/exit-matrix'/);
+});
+
+test('item 61: the matrix lists only verified, active projects, one row each, best grade first', (t) => {
+  const s = withReport(t);
+  const pr = require('../core/projects');
+  const other = pr.addProject(s.ws, { name: 'Lead Only Example (FICTIONAL)' }).project_id;
+  assert.notEqual(pr.getProject(s.ws, other).identity.status, 'verified');
+  const rows = T.exitMatrix(s.ws).rows;
+  assert.deepEqual(rows.map((r) => r.project_id), [s.pid], 'an unverified project is not listed');
+  assert.equal(rows[0].chain, pr.getProject(s.ws, s.pid).identity.assets[0].chain);
+});

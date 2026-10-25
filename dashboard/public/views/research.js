@@ -47,7 +47,7 @@ async function runsTab(ctx) {
       note: `Each model's job is independent: a failure in one never erases another's result. Price refreshes never start research. ${routes}. Spend this month: $${(r.spend && r.spend.monthly) || 0} · today: $${(r.spend && r.spend.daily) || 0} · budget per run ${money(r.budget && r.budget.per_run_usd)}, day ${money(r.budget && r.budget.daily_usd)}, month ${money(r.budget && r.budget.monthly_usd)} · unattended runs ${r.unattended_enabled ? 'on' : 'off'}`,
       actions: [runNow, h('a', { class: 'btn small', href: ctx.hrefWith ? ctx.hrefWith({ prefs: 'models' }) : '#/settings?tab=research', dataset: { key: 'research-routes' } }, hosted ? 'Routes, API keys and limits' : 'Routes and API access')],
     }));
-  return h('div', null, jobs, await pilotBoard(ctx));
+  return h('div', null, jobs, await pilotBoard(ctx), await exitMatrix(ctx));
 }
 
 // The Track 2 pilot queue (item 54, GET /api/tickets/candidates): each
@@ -76,6 +76,40 @@ async function pilotBoard(ctx) {
       return btn;
     } },
   ], rows, { size: 25, label: 'Pilot candidates', empty: 'No verified, active projects yet.' }), { note: 'Verified, active projects: held first, then by grade. Reading this writes nothing.' });
+}
+
+// The exit-liquidity matrix (item 61, GET /api/tickets/exit-matrix): every
+// verified, active project's $500 and $2,000 exit cost with its completeness,
+// chain, the quote's age and the native L1 status. Reading it writes nothing.
+async function exitMatrix(ctx) {
+  let m;
+  try {
+    m = await ctx.api.get('/api/tickets/exit-matrix');
+  } catch (_) {
+    return card('Exit Matrix', h('p', { class: 'muted' }, 'The exit matrix could not be read.'));
+  }
+  const rows = m.rows || [];
+  const costCell = (r, size) => {
+    if (r.native_l1_liquid) return h('span', { class: 'faint', title: 'Native L1: no DEX quote is needed.' }, 'Native L1');
+    const e = (r.exits || []).find((x) => x.size_usd === size);
+    if (!e || typeof e.cost_pct !== 'number') return h('span', { class: 'faint', title: (e && e.note) || 'No exit reading.' }, 'No reading');
+    const missing = e.missing_costs && e.missing_costs.length ? `at least ${e.cost_pct}%` : `${e.cost_pct}%`;
+    return h('span', { class: 'num', title: e.complete === false ? `Not complete: ${(e.missing_costs || []).join(', ') || 'a cost is unknown'}` : 'Complete' }, e.complete === false ? `≥ ${e.cost_pct}%` : missing);
+  };
+  const ageCell = (r) => {
+    const ages = (r.exits || []).map((e) => e.quote_age_minutes).filter((x) => typeof x === 'number');
+    if (r.native_l1_liquid || !ages.length) return h('span', { class: 'faint' }, '—');
+    const a = Math.max(...ages);
+    return h('span', { class: 'small' }, a >= 120 ? `${Math.round(a / 60)} h` : `${a} min`);
+  };
+  return card(`Exit Matrix (${rows.length})`, pagedTable([
+    { label: 'Project', render: (r) => h('a', { href: `#/project/${encodeURIComponent(r.project_id)}/forensics?fx=exits` }, r.name) },
+    { label: 'Grade', num: true, render: (r) => h('span', { class: 'num' }, r.grade_display || '—') },
+    { label: 'Chain', render: (r) => h('span', { class: 'small' }, r.chain || '—') },
+    ...((m.sizes_usd || [500, 2000]).map((sz) => ({ label: `$${sz.toLocaleString('en-US')} exit`, num: true, render: (r) => costCell(r, sz) }))),
+    { label: 'Quote age', render: ageCell },
+    { label: 'Native L1', render: (r) => h('span', { class: 'small' }, r.native_l1_liquid ? 'Liquid' : 'No') },
+  ], rows, { size: 25, label: 'Exit matrix', empty: 'No verified, active projects yet.' }), { note: 'Verified, active projects by grade. A cost marked ≥ is a lower bound: a component is unknown. Reading this writes nothing.' });
 }
 
 // What happened after each report (core/report-outcomes.js): each model's

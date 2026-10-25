@@ -97,6 +97,7 @@ PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you deci
   tickets digest [--days 7] [--json]    the week's pilot in numbers: @6 reports, Prosecutor tickets against desk gates, grade spreads, fired triggers, provider budget (writes nothing; an unreadable part is said, never zero)
   tickets run-cycle [--limit 10] [--dry-run] [--json]   the Track 2 pipeline in one pass: auto-pilot-sync, batch-gate, exit quotes for candidates (up to --limit), then the pilot queue; one receipt with the counts and the next steps for Agent 1 and Agent 2 (no model, no order)
   tickets batch-gate [--below 40] [--dry-run] [--json]   desk gate receipts for every unheld, verified project graded under 40 (no exit quote, no Prosecutor, no model)
+  tickets exit-matrix [--json]         every verified active project by grade: $500 and $2,000 exit cost, completeness, chain, quote age, native L1 status (writes nothing)
   tickets reconcile [<id>] [--dry-run] [--json]   complete a recorded decision's missing paper position or journal entry (never archives, voids or edits a decision)
   tickets queue [<id>]                   the autonomous pilot's next step per project (research, ticket, your review)
   tickets pilot <id> --on|--off          put a project in the autonomous pilot (your opt-in)
@@ -869,6 +870,7 @@ async function run(argv) {
       const pid = rest[0];
       const tid = rest[1];
       if (sub === 'view' || sub === 'status') return tk.read(ws, need(pid, `tickets ${sub} <project>`), { receiptId: one(flags.receipt) || null, includeText: Boolean(flags['include-text'] || flags.include_text) });
+      if (sub === 'exit-matrix') return tk.exitMatrix(ws);
       if (sub === 'reconcile') {
         const one = pid && !String(pid).startsWith('--') ? pid : null;
         const dryRun = Boolean(flags['dry-run'] || flags.dry_run);
@@ -922,7 +924,7 @@ async function run(argv) {
         return { status: r.noop ? 'unchanged' : 'saved', pilot: !flags.off, verified: r.verified, ...(await afterWrite(ws, pid)) };
       }
       if (sub === 'cancel') return tk.cancelTicket(ws, need(pid, 'project'), need(tid, 'ticket_id'), one(flags.reason) || null);
-      throw Object.assign(new Error('tickets view|queue|reconcile|candidates|digest|batch-gate|auto-pilot-sync|run-cycle|start|prompt|import|decide|pilot|cancel (see help)'), { code: 'USAGE' });
+      throw Object.assign(new Error('tickets view|queue|reconcile|exit-matrix|candidates|digest|batch-gate|auto-pilot-sync|run-cycle|start|prompt|import|decide|pilot|cancel (see help)'), { code: 'USAGE' });
     }
     case 'job': {
       const jobs = require('./core/jobs');
