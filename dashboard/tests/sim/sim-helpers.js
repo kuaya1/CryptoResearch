@@ -90,4 +90,14 @@ function replay(ws, name, refMs) {
 
 const priceCheck = (ws, pid, now) => T.view(ws, pid, { now }).ticket.invalidation.checks.find((c) => c.kind === 'price');
 
-module.exports = { H, CG, T, answer, stubHeld, workspace, savedTicket, loadPath, replay, priceCheck, readJson, atomicWrite, jsonText };
+// One hourly observation of the price (and BTC) at an absolute time.
+function observe(ws, atMs, price, btc = null) {
+  const dir = ws.abs('market-data/observations');
+  fs.mkdirSync(dir, { recursive: true });
+  const at = new Date(atMs).toISOString();
+  const assets = [{ id: CG, price_usd: price, source_last_updated_at: at, fetched_at: at }];
+  if (btc !== null) assets.push({ id: 'bitcoin', price_usd: btc, source_last_updated_at: at, fetched_at: at });
+  fs.appendFileSync(path.join(dir, `${at.slice(0, 7)}.jsonl`), `${JSON.stringify({ fetched_at: at, provider: 'coingecko', assets })}\n`);
+}
+
+module.exports = { observe, H, CG, T, answer, stubHeld, workspace, savedTicket, loadPath, replay, priceCheck, readJson, atomicWrite, jsonText };
