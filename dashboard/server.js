@@ -411,7 +411,9 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
       boundPort = server.address().port;
       break;
     } catch (err) {
-      if (err.code !== 'EADDRINUSE' || hosted) throw err;
+      // On Windows a port another process holds exclusively (the RPC
+      // listeners from 49664) or a reserved one reads EACCES: try the next.
+      if (!['EADDRINUSE', 'EACCES'].includes(err.code) || hosted) throw err;
     }
   }
   if (!boundPort) throw new Error(`No free port between ${startPort} and ${startPort + 14}`);

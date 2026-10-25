@@ -6,6 +6,10 @@
 //   npm run pilot -- --project=olas --desk=online   the online desk, through the
 //                                                   CryptoResearch connector
 //   npm run pilot -- --project=olas --dry-run       say what would run, run nothing
+//   npm run pilot -- --project=olas --force-prosecution --owner-words="…"
+//                                                   a Prosecutor although the desk's
+//                                                   gate closed on the grade (Eric's
+//                                                   override; the gate still sizes)
 //
 // It runs the two-agent chain with Claude Code (`claude -p`) on Eric's own
 // Claude subscription: no API key, nothing billed by the desk.
@@ -33,13 +37,21 @@ const CLI = path.join(ROOT, 'dashboard', 'cli.js');
 const WEB_TOOLS = ['WebSearch', 'WebFetch'];
 const MAX_STEPS = 4;
 
+// Eric's override (2026-10-25): a Prosecutor writes the trade plan although the
+// pre-gate closed on the grade. The desk's gate still sizes it ($0 under the
+// floor); nothing here chooses an amount.
+const FORCE_WORDS = 'Eric (2026-10-25): when Claude\'s @6 grade is 50 or more, or its range reaches 55, the Prosecutor writes the trade plan although the desk\'s gate closed on the grade; the gate still sizes it.';
+
 function parse(argv) {
-  const out = { desk: 'local', dryRun: false, model: null, connector: 'mcp__claude_ai_CryptoResearch', timeoutMin: 60 };
+  const out = { desk: 'local', dryRun: false, model: null, connector: 'mcp__claude_ai_CryptoResearch', timeoutMin: 60, forceProsecution: false, ownerWords: null };
   for (const a of argv) {
-    const [k, v] = a.replace(/^--/, '').split('=');
+    const [k, ...rest] = a.replace(/^--/, '').split('=');
+    const v = rest.join('=');
     if (k === 'project') out.project = v;
     else if (k === 'desk') out.desk = v;
     else if (k === 'dry-run') out.dryRun = true;
+    else if (k === 'force-prosecution') out.forceProsecution = true;
+    else if (k === 'owner-words') out.ownerWords = v || null;
     else if (k === 'model') out.model = v;
     else if (k === 'connector') out.connector = v;
     else if (k === 'timeout-min') out.timeoutMin = Number(v) || out.timeoutMin;
@@ -95,12 +107,26 @@ function scratch(name, text) {
   return f;
 }
 
+// With Eric's override, the gate's own step and an undecided desk-gate receipt
+// on Claude's current report both become a Prosecutor ticket. A desk gate he
+// already decided (pass, watch) is his answer and is left alone.
+function forcedTicket(step, ticket, o) {
+  if (!o.forceProsecution) return false;
+  if (step.step === 'gate_closed') return true;
+  return step.step === 'pm_review' && Boolean(ticket && ticket.desk_gate === true && ticket.status === 'pending_pm_review');
+}
+
 function runLocal(o) {
   for (let i = 0; i < MAX_STEPS; i++) {
     const q = cli(['tickets', 'queue', o.project]);
-    const s = q.steps[0];
+    let s = q.steps[0];
     if (!s) throw new Error(`No project ${o.project} on this desk.`);
     say(`[${i + 1}] ${s.name}: ${s.step} — ${s.why}`);
+    const inForce = o.forceProsecution && s.step === 'pm_review' ? cli(['tickets', 'view', o.project]).ticket : null;
+    if (forcedTicket(s, inForce, o)) {
+      say('    Eric\'s override: a Prosecutor writes the trade plan; the desk\'s gate still sizes it.');
+      s = { ...s, step: 'ticket', force: true };
+    }
     if (s.step === 'research') {
       let runId = s.run_id;
       if (o.dryRun) return say('    would run Agent 1 (Claude research) with claude -p, then import it.');
@@ -127,7 +153,7 @@ function runLocal(o) {
     }
     if (s.step === 'ticket') {
       if (o.dryRun) return say('    would run Agent 2 (the Prosecutor) with claude -p, then save the ticket.');
-      const t = cli(['tickets', 'start', o.project, ...(s.refresh ? ['--reopen'] : []), '--assistant', '--mode', 'cli', '--utterance', 'autonomous pilot (npm run pilot)']);
+      const t = cli(['tickets', 'start', o.project, ...(s.refresh ? ['--reopen'] : []), ...(s.force ? ['--force-prosecution'] : []), '--assistant', '--mode', 'cli', '--utterance', s.force ? (o.ownerWords || FORCE_WORDS) : 'autonomous pilot (npm run pilot)']);
       if (!t.ticket_id) throw new Error(t.message);
       const prompt = cli(['tickets', 'prompt', o.project, t.ticket_id], { text: true });
       say(`    Agent 2: claude -p on the frozen Prosecutor prompt ${t.ticket_id} (${prompt.length} characters)…`);
@@ -144,16 +170,23 @@ function runLocal(o) {
   say(`Stopped after ${MAX_STEPS} steps.`);
 }
 
-function runOnline(o) {
-  const instruction = [
+function onlineInstruction(o) {
+  const words = JSON.stringify(o.ownerWords || FORCE_WORDS);
+  return [
     `Run the CryptoResearch autonomous pilot for the project "${o.project}" on Eric's online desk, using only the CryptoResearch connector's tools and web search.`,
     `1. Call autonomous_pilot_queue with project "${o.project}". Do its next step, then call it again, until the step is pm_review or done (at most ${MAX_STEPS} steps).`,
     '2. A "research" step is Agent 1: Claude\'s investment research. Use start_research for Claude only (owner_request "autonomous pilot") or resume the open run, follow its frozen prompt exactly with your own web research, and save_report with the whole report.',
-    '2b. A "gate_closed" step needs no Prosecutor: call start_ticket (owner_request "autonomous pilot") once, which saves the desk\'s gate receipt, then call autonomous_pilot_queue again.',
+    o.forceProsecution
+      ? `2b. Eric asked for a Prosecutor although the desk's gate closed on the grade (his words: ${words}). On a "gate_closed" step, and on a "pm_review" step whose ticket in force (get_ticket) is the desk's gate receipt (desk_gate: true) still waiting for his review, call start_ticket with force_prosecution: true and owner_request exactly those words, then do step 3 with the ticket it opens. Once per project. Never on a desk gate Eric already decided. If start_ticket opens no ticket, give its message and stop.`
+      : '2b. A "gate_closed" step needs no Prosecutor: call start_ticket (owner_request "autonomous pilot") once, which saves the desk\'s gate receipt, then call autonomous_pilot_queue again.',
     '3. A "ticket" step is Agent 2: start_ticket (owner_request "autonomous pilot"), take the Prosecutor\'s role the prompt gives you, apart from the report\'s author, and save_ticket with the whole text and its JSON block.',
     '4. Never decide a ticket, never choose a dollar amount, never place or simulate an order. Stop at pm_review.',
     '5. End with one line per step: the step, the record saved (report or receipt ID) and the desk\'s message.',
   ].join('\n');
+}
+
+function runOnline(o) {
+  const instruction = onlineInstruction(o);
   if (o.dryRun) return say(`Would run one claude -p session with tools ${o.connector}, ${WEB_TOOLS.join(', ')}:\n\n${instruction}`);
   say(`claude -p on the online desk through ${o.connector}…`);
   say(claude(instruction, { tools: [o.connector, ...WEB_TOOLS], model: o.model, timeoutMin: o.timeoutMin * MAX_STEPS }));
@@ -162,7 +195,7 @@ function runOnline(o) {
 function main() {
   const o = parse(process.argv.slice(2));
   if (o.help || !o.project) {
-    say('npm run pilot -- --project=<id> [--desk=local|online] [--dry-run] [--model=<id>] [--timeout-min=60] [--connector=mcp__claude_ai_CryptoResearch]');
+    say('npm run pilot -- --project=<id> [--desk=local|online] [--dry-run] [--force-prosecution [--owner-words="…"]] [--model=<id>] [--timeout-min=60] [--connector=mcp__claude_ai_CryptoResearch]');
     process.exitCode = o.help ? 0 : 2;
     return;
   }
@@ -172,7 +205,7 @@ function main() {
   else throw new Error('--desk is local or online.');
 }
 
-module.exports = { resolveClaude };
+module.exports = { resolveClaude, parse, forcedTicket, onlineInstruction, FORCE_WORDS };
 
 if (require.main === module) {
   try {

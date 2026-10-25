@@ -28,3 +28,38 @@ test('on Windows a missing claude.exe is a plain error, never a shell lookup', (
 test('the runner no longer spawns through a shell', () => {
   assert.ok(!/shell:\s*/.test(fs.readFileSync(path.join(__dirname, '..', 'scripts', 'pilot.js'), 'utf8')));
 });
+
+// Eric's override (2026-10-25): a Prosecutor on a closed pre-gate. Pure
+// helpers only; nothing is run.
+const { parse, forcedTicket, onlineInstruction, FORCE_WORDS } = require('../scripts/pilot');
+
+test('the override flag and owner words parse, an "=" inside the words kept', () => {
+  const o = parse(['--project=velodrome-finance', '--desk=online', '--force-prosecution', '--owner-words=grade >= 50 = prosecute']);
+  assert.equal(o.project, 'velodrome-finance');
+  assert.equal(o.forceProsecution, true);
+  assert.equal(o.ownerWords, 'grade >= 50 = prosecute');
+  assert.equal(parse(['--project=olas']).forceProsecution, false);
+});
+
+test('the override turns the gate step and an undecided desk gate into a ticket, never a decided one', () => {
+  const on = { forceProsecution: true };
+  const gate = (status) => ({ desk_gate: true, status });
+  assert.equal(forcedTicket({ step: 'gate_closed' }, null, { forceProsecution: false }), false);
+  assert.equal(forcedTicket({ step: 'gate_closed' }, null, on), true);
+  assert.equal(forcedTicket({ step: 'pm_review' }, gate('pending_pm_review'), on), true);
+  assert.equal(forcedTicket({ step: 'pm_review' }, gate('passed'), on), false);
+  assert.equal(forcedTicket({ step: 'pm_review' }, { desk_gate: false, status: 'pending_pm_review' }, on), false);
+  assert.equal(forcedTicket({ step: 'done' }, gate('watching'), on), false);
+  assert.equal(forcedTicket({ step: 'research' }, null, on), false);
+});
+
+test('the online instruction asks for force_prosecution only with the override, in Eric\'s words', () => {
+  const plain = onlineInstruction({ project: 'olas', forceProsecution: false });
+  assert.match(plain, /needs no Prosecutor/);
+  assert.doesNotMatch(plain, /force_prosecution/);
+  const forced = onlineInstruction({ project: 'olas', forceProsecution: true, ownerWords: null });
+  assert.match(forced, /force_prosecution: true/);
+  assert.ok(forced.includes(JSON.stringify(FORCE_WORDS)));
+  assert.match(forced, /Never on a desk gate Eric already decided/);
+  assert.match(forced, /Never decide a ticket, never choose a dollar amount/);
+});

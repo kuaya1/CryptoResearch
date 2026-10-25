@@ -2,6 +2,28 @@
 
 Last updated 2026-10-25. This page covers the PM trade ticket pipeline. The rest of the desk is described in `CLAUDE.md` and `COWORK-INSTRUCTIONS.md`.
 
+## North Star: Track 1 serves Track 2 (Eric, 2026-10-25)
+
+Two tracks run on this desk:
+
+- **Track 1, the self-building codebase.** The backlog below, built by the scheduled builder and merged by `backlog-pr.yml`.
+- **Track 2, the autonomous Junior Trader desk.** Agent 1 researches, the desk measures exits, Agent 2 prosecutes and structures a trade plan (`entry_zone`, `upside_target`, `invalidation_trigger`), and the desk sizes it by Eric's rules. Eric sits in the PM seat for a few minutes a day: Approve Risk ($500), Halve ($250), Veto or Pass.
+
+Track 1 exists to serve Track 2. Every backlog item must directly improve one of four things:
+
+1. Agent 1's research.
+2. The desk's exit measurements (Forensics > Exits).
+3. Agent 2's prosecution and trade plan.
+4. The PM Decision Cards and Paper Book outcomes Eric reads, kept clear and uncorrupted.
+
+An item that serves none of these is not added, or waits behind the ones that do. The invariants still hold:
+
+- the desk's gate sizes every ticket, and a model never chooses an amount;
+- the two agents are never averaged;
+- paper stays apart from the portfolio;
+- unknown is never 0;
+- nothing places an order, connects a wallet or exchange, or moves money.
+
 ## What it does
 
 It closes the loop on one asset at a time:
@@ -93,6 +115,8 @@ node dashboard/cli.js tickets start|prompt|import|view|decide|cancel ...
 npm run pilot -- --project=olas                   whole chain on this folder's desk
 npm run pilot -- --project=olas --desk=online     whole chain on the online desk, via the connector
 npm run pilot -- --project=olas --dry-run         say what would run
+npm run pilot -- --project=olas --desk=online --force-prosecution [--owner-words="…"]
+                                                  a Prosecutor although the gate closed on the grade (Eric's override; the gate still sizes it)
 ```
 
 - `dashboard/scripts/pilot.js` runs each agent as its own `claude -p` session, with the prompt on stdin.
@@ -151,10 +175,11 @@ For a `/loop` or scheduled Claude Code session (e.g. the hourly cloud routine), 
 
   `dashboard/server.js`, `dashboard/cli.js` and `dashboard/core/paper.js` are not protected. A batch that touches a protected path waits for Eric as a whole, and so does every batch stacked on it.
 - **Never** push to `main` or force-push. Items marked *(Eric)* need his decision first: ask, don't build.
+- **Order.** Track 2 first (the North Star at the top of this page): Phase 5's open items (52 onward) are built before what is left of Phase 4 (46), which serves the builder itself.
 
 Merged into `main` (2026-10-24): items 1–6, through one train branch (`claude/train-2026-10-24`, PR #2) built from the five backlog branches, with the bundle rebuilt once and the full suite run. The source branches were then deleted. Items 10 and 11 were built locally the same day. CI (`.github/workflows/test.yml`) now runs on every `claude/**` push, and `backlog-pr.yml` opens the PR once it is green. Items 7, 8, 9 and 21 were merged the same evening (PRs #3 and #4, through `claude/train-items-7-8-9-21`; `tickets.js` overlaps kept from both sides, the bundle rebuilt once, the full suite run), and both branches were deleted.
 
-Merged into `main` (2026-10-25) by `backlog-pr.yml`, three items per PR: 30–32 (PR #9), 33–35 (PR #10, then merged with the autonomy review fixes as `5001595`), 36–38 (PR #11) and 39–41 (PR #12). The workflow deleted each branch, and the boxes were ticked here on `main`.
+Merged into `main` (2026-10-25) by `backlog-pr.yml`, three items per PR: 30–32 (PR #9), 33–35 (PR #10, then merged with the autonomy review fixes as `5001595`), 36–38 (PR #11) and 39–41 (PR #12); then five per PR, 42–44 (PR #14) and 45 with 48–51 (PR #15). The workflow deleted each branch, and the boxes were ticked here on `main`.
 
 - [x] Phase 1 tickets, connector tools, PM Decision Card, under-40 filter (f715a3e, live 2026-10-24)
 - [x] Sub-agents `forensic-researcher`, `junior-trader-prosecutor` and `/pilot-run`
@@ -167,7 +192,10 @@ Merged into `main` (2026-10-25) by `backlog-pr.yml`, three items per PR: 30–32
 - [x] **6. Pilot runner:** (built: `resolveClaude`, no shell, claude.exe from PATH or install folders; `pilot-runner.test.js`) drop `shell: true` in `dashboard/scripts/pilot.js` (Node DEP0190 warning); resolve `claude.exe` on Windows instead
 - [ ] *(Eric)* Bind OLAS's DefiLlama entity so the fundamental invalidation trigger is checked
 - [ ] *(Eric)* ChatGPT as a second Prosecutor (`cr-ticket-challenge@1`, its own receipt, never averaged)
-- [ ] *(Eric)* Put more projects in the pilot; a scheduled `/pilot-run` cadence
+- [x] *(Eric)* Put more projects in the pilot; a scheduled `/pilot-run` cadence. *(Closed by Eric, 2026-10-25.)*
+  - **The cadence.** The 2-hour runner `cr-at6-surge` (`~/.claude/cr-surge/surge.js`, a local scheduled task) runs Agent 1 under `@6`, then `dashboard/scripts/pilot.js --desk=online`. From 2026-10-25 it passes `--force-prosecution` when the desk's `@6` grade is 50 or more, or its range reaches 55, and it first catches up one such project whose desk gate still waits. Since item 48 (`cr-ticket-pregate@2`) the desk opens those Prosecutors itself; the override still reaches desk gates made under `@1` that wait for Eric.
+  - **The opt-in.** `tickets auto-pilot-sync` (item 30) opts qualifying `@6` reports in; `tickets run-cycle` (item 51) runs it with the quotes and the queue.
+  - **What was true on 2026-10-25.** The online pilot list was empty: both commands are CLI-only and reach only this folder's desk, and the connector has no tool for them yet (`mcp.js` is protected). The runner names its projects itself, so it does not need the list. It stops at 2026-10-27 23:00 ET unless Eric extends it.
 
 30-day blueprint items (2026-10-24, `audits/2026-10-24-30-day-blueprint/README.md`; the W-number is its section):
 
@@ -338,7 +366,7 @@ Phase 4 (Eric, 2026-10-25): the open recommendations of `audits/2026-10-25-codex
   - A cohort line per receipt month gives the matured, immature and unevaluable counts. There is no median, hit rate or "the gate was right" before 20 have matured, and never a probability.
   - Research > Outcomes' Shadow toggle (`public/paper-model.js`, `public/views/research.js`) shows the day-30 column beside "since saved". Rebuild the bundle.
   - Tests: the review's probe (+100% at day 30, +200% at day 35) keeps day30 at +100%; immature and unevaluable read so; an archived project's receipt is listed; nothing is written.
-- [ ] **42. Backlog status, computed: `dashboard/scripts/backlog-status.js`.** The WIP cap is today an instruction, not a check, and "stop at 9" allows 8 + 3 (review, stress test 1).
+- [x] **42. Backlog status, computed: `dashboard/scripts/backlog-status.js`.** The WIP cap is today an instruction, not a check, and "stop at 9" allows 8 + 3 (review, stress test 1).
   - `node dashboard/scripts/backlog-status.js [--json]` reads git and `DESK_STATE.md` on `origin/main` only (fetch first) and writes nothing.
   - It gives:
     - the waiting items (the `Backlog-Item` trailers on `origin/claude/backlog-*` branches not merged into `origin/main`, each counted once, with their branches);
@@ -349,17 +377,17 @@ Phase 4 (Eric, 2026-10-25): the open recommendations of `audits/2026-10-25-codex
   - No npm script: `package.json` is a protected path.
   - Tests with a temporary git repo (the merge-train fixture style): the waiting count, the cap switch at the date, headroom with 8 waiting, taken and *(Eric)* items skipped, and the base choice.
   - Done when one command gives the routine everything its first step decides (Eric then points the routine prompt at it).
-- [ ] **43. Scorecard: exact heads, and a structured drill result.** In `dashboard/scripts/blitz-scorecard.js`:
+- [x] **43. Scorecard: exact heads, and a structured drill result.** In `dashboard/scripts/blitz-scorecard.js`:
   - `ci_coverage` becomes "Backlog heads tested on that exact commit". Each merged backlog head (the second parent of each backlog merge on `origin/main`) and each waiting branch's head counts as covered only with a `test.yml` run on that exact SHA (`gh run list --json headSha,headBranch,event`). A branch deleted with no run is said not visible, never counted as covered.
   - `rollback_drill` reads only a structured record: `audits/*/rollback-drill.json` with `schema_version: 'cr.rollback-drill.v1'`, `result: 'passed' | 'failed'`, `from`, `to`, `checked`. It is met only on `result: 'passed'`. Prose never counts ("not passed" contains "passed").
   - Tests: a run on an earlier commit of the branch does not cover its head; a markdown file saying "not passed" is not met; a passed JSON record is met; an unreadable record says so.
-- [ ] **44. Rollback drill (W4.4): `dashboard/scripts/rollback-drill.js`.** `node dashboard/scripts/rollback-drill.js --from <ref> [--json] [--record <audit-dir>]`.
+- [x] **44. Rollback drill (W4.4): `dashboard/scripts/rollback-drill.js`.** `node dashboard/scripts/rollback-drill.js --from <ref> [--json] [--record <audit-dir>]`.
   - It builds a FICTIONAL workspace with this checkout's code, reusing the test fixtures: a Prosecutor receipt, a desk gate, an admission-held receipt, decisions and a paper position.
   - In a temporary `git worktree` at `<ref>` (the previous release), it runs that code's `tickets.view`, `tickets.summary`, `paper.book`, `indexer.buildIndex` and `brief-daily` over the workspace in a child process.
   - It passes when nothing throws and records made under newer rules read as "made under a newer rule" (item 13).
   - With `--record`, it writes `rollback-drill.json` in item 43's shape into the named audit folder; otherwise it writes nothing outside its temporary folder. It refuses a non-test workspace, never touches the real workspace or a branch, and removes the worktree.
   - Tests with a temporary git repo and an injected reader: a passing and a failing drill, the record's shape, and the worktree removed.
-- [ ] **45. Set cost says what its date does.** `portfolio set-cost` (CLI, `dashboard/cli.js`) and its route `POST /api/portfolio/set-cost` (`dashboard/server.js`, which adds the words to `portfolio.setCost`'s answer) name the original entry's date and the corrected date. There is no UI form for it today, and this item adds none.
+- [x] **45. Set cost says what its date does.** `portfolio set-cost` (CLI, `dashboard/cli.js`) and its route `POST /api/portfolio/set-cost` (`dashboard/server.js`, which adds the words to `portfolio.setCost`'s answer) name the original entry's date and the corrected date. There is no UI form for it today, and this item adds none.
   - When the dates differ, the answer says the units count as held from the new date instead of the old one, so holdings and results between the two dates change (review, stress test 5). With no `--acquired-at`, it says the original date is kept.
   - Words only: no change to `core/portfolio.js`, a protected path.
   - Tests: the CLI's output and the route's answer name both dates; the same date says nothing changes.
@@ -374,13 +402,13 @@ Phase 4 (Eric, 2026-10-25): the open recommendations of `audits/2026-10-25-codex
 
 Phase 5, heavy Track 2 (Eric, 2026-10-25). Eric's message numbered these 42–56, but 42–47 were already Phase 4's, so they are 48–62 here: his 42 is 48 and his 56 is 62. Every item stays in files `PROTECTED` does not list (see "Zero-click scope" above). Research > Outcomes is the hosted view `dashboard/public/views/research.js` (with `dashboard/public/paper-model.js`); there is no `Research.jsx`.
 
-- [ ] **48. Near-miss prosecution floor (`pregate_max_grade: 48`).** In `dashboard/core/tickets.js` (`SIZING_DEFAULTS`, `sizingOf`, `pregateReason`) and `Preferences.jsx`, add `pregate_max_grade`: default `48`, bounded `0 <= pregate_max_grade <= min_grade_new_entry` (in `validateSettingsPatch`, `dashboard/server.js`, as item 2).
+- [x] **48. Near-miss prosecution floor (`pregate_max_grade: 48`).** In `dashboard/core/tickets.js` (`SIZING_DEFAULTS`, `sizingOf`, `pregateReason`) and `Preferences.jsx`, add `pregate_max_grade`: default `48`, bounded `0 <= pregate_max_grade <= min_grade_new_entry` (in `validateSettingsPatch`, `dashboard/server.js`, as item 2).
   - `pregateReason` closes the pre-gate without a Prosecutor only when an unheld project's grade is withheld, none, or under `pregate_max_grade` (48).
   - Unheld candidates graded `48` to `< min_grade_new_entry` (55), or whose grade range has a high end `>= 55`, open a normal Prosecutor ticket. Agent 2 then writes the adversarial prosecution and the trade plan.
   - `gate()` still caps suggested risk at `$0` (`WATCH_ONLY`).
   - The pre-gate rule changes, so new desk receipts record `cr-ticket-pregate@2`, following CLAUDE.md's standing rule that a changed rule is a new version. Receipts made under `@1` keep theirs, and item 13's version table knows `@2`.
   - Rebuild the bundle. Tests in `tickets.test.js`.
-- [ ] **49. UI: Trade Plan Geometry & R-Multiple strip on `PMDecisionCard.jsx`.** In `dashboard/core/tickets.js` (`view`) and `PMDecisionCard.jsx`, compute `trade_plan_geometry`.
+- [x] **49. UI: Trade Plan Geometry & R-Multiple strip on `PMDecisionCard.jsx`.** In `dashboard/core/tickets.js` (`view`) and `PMDecisionCard.jsx`, compute `trade_plan_geometry`.
   - Inputs: the receipt's `proposal` (`entry_zone`, `upside_target`, `invalidation_trigger.price_usd`) and the latest stored market price, when it is fresh and known.
   - Outputs:
     - the price's position against the entry zone (`in_zone`, `above_zone`, `below_zone`, with a `%`);
@@ -389,8 +417,8 @@ Phase 5, heavy Track 2 (Eric, 2026-10-25). Eric's message numbered these 42–56
     - a deterministic `reward_risk_ratio`: `(upside - ref_price) / (ref_price - stop_price)` when `upside > ref_price > stop_price`.
   - Render a crisp Trade Plan strip on `PMDecisionCard.jsx`. Never invent missing numbers; say unknown.
   - Rebuild the bundle. Tests in `tickets.test.js` and `web-app.test.js`.
-- [ ] **50. Track 2 trade plan lines in `brief-daily.js` and `DailyBrief.jsx`.** In `dashboard/core/brief-daily.js`, give each waiting Prosecutor ticket's line in `pm_cards` its compact trade plan whenever the receipt has those fields: `Entry $low–$high, target $up, invalidation $stop, R:R X.Xx; Researcher <grade> vs Prosecutor <conviction>`. Say `"unknown"` for each one that is absent. Rebuild the bundle if the UI changes. Tests in `brief-daily.test.js`.
-- [ ] **51. `tickets run-cycle`: unified Track 2 pipeline orchestrator.** In `dashboard/core/tickets.js` (`runCycle`) and `dashboard/cli.js` (`tickets run-cycle [--limit 10] [--dry-run] [--json]`):
+- [x] **50. Track 2 trade plan lines in `brief-daily.js` and `DailyBrief.jsx`.** In `dashboard/core/brief-daily.js`, give each waiting Prosecutor ticket's line in `pm_cards` its compact trade plan whenever the receipt has those fields: `Entry $low–$high, target $up, invalidation $stop, R:R X.Xx; Researcher <grade> vs Prosecutor <conviction>`. Say `"unknown"` for each one that is absent. Rebuild the bundle if the UI changes. Tests in `brief-daily.test.js`.
+- [x] **51. `tickets run-cycle`: unified Track 2 pipeline orchestrator.** In `dashboard/core/tickets.js` (`runCycle`) and `dashboard/cli.js` (`tickets run-cycle [--limit 10] [--dry-run] [--json]`):
   - Run, in order and deterministically: (1) `autoPilotSync`, (2) `batchGate`, (3) `quoteCandidates` (up to `limit`), (4) `pilotQueue`.
   - Return one combined JSON receipt with the counts and the next steps for Agent 1 and Agent 2.
   - Do not touch `mcp.js` or any protected file. Tests in `tickets.test.js`.
