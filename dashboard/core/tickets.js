@@ -1772,6 +1772,25 @@ function pilotCandidates(ws, { now = Date.now() } = {}) {
   return rows;
 }
 
+// Item 54: the Track 2 pilot queue as a board. Each candidate row (the read
+// above) with the pipeline step the chain needs next, the change since Claude's
+// earlier report (@5 to @6) and whether the $500 and $2,000 exit readings are
+// in. Read-only: it writes nothing and asks no provider. A native L1 coin
+// needs no DEX quote (ready: null); a step that cannot be read says so.
+function candidateBoard(ws, { now = Date.now() } = {}) {
+  const sizing = sizingOf(ws);
+  const sizes = [...new Set([sizing.exit_size_usd, 2000])].sort((a, b) => a - b);
+  return pilotCandidates(ws, { now }).map((c) => {
+    let step = { step: 'unknown', why: 'The next step could not be read.' };
+    try { step = nextStep(ws, c.project_id, { now }); } catch (err) { step = { step: 'unknown', why: `The next step could not be read: ${err.message}` }; }
+    let delta = null;
+    try { delta = require('./report-delta').reportDelta(ws, require('./reports').loadReports(ws, c.project_id)); } catch (_) { delta = null; }
+    const native = c.gate && c.gate.exit_basis === 'native_l1_liquid';
+    const exits = exitsOf(ws, c.project_id, sizes, now).map((e) => ({ size_usd: e.size_usd, ready: native ? null : isNum(e.cost_pct), cost_pct: e.cost_pct, cost_complete: e.cost_complete, note: native ? 'Native L1: no DEX quote is needed.' : e.note }));
+    return { ...c, step: step.step, step_why: step.why || null, report_delta: delta, exits };
+  });
+}
+
 // Backlog item 30. Opt in (pilot: true) every verified, active project whose
 // Claude current eligible report is a cr-research-prompt@6 run with a grade of
 // `min` or more (a range by its low end), so qualifying candidates enter the
@@ -2173,6 +2192,7 @@ module.exports = {
   nextStep,
   pilotQueue,
   pilotCandidates,
+  candidateBoard,
   batchGate,
   autoPilotSync,
   quoteCandidates,

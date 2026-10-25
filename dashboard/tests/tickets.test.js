@@ -1823,6 +1823,39 @@ test('near invalidation (item 53): view() attaches it from a fresh stored price'
   assert.deepEqual(v.near_invalidation, T.nearInvalidation(v.status, g));
 });
 
+test('candidate board (item 54): rows carry step, delta and the $500 and $2,000 readings; a read writes nothing', (t) => {
+  const s = withReport(t);
+  const tree = hashTree(s.root);
+  const rows = T.candidateBoard(s.ws);
+  assert.deepEqual(hashTree(s.root), tree, 'reading writes nothing');
+  const row = rows.find((r) => r.project_id === s.pid);
+  assert.ok(row);
+  assert.deepEqual(row.exits.map((e) => e.size_usd), [500, 2000]);
+  for (const e of row.exits) assert.ok(e.ready === true || e.ready === false || e.ready === null);
+  assert.ok(['research', 'ticket', 'gate_closed', 'pm_review', 'done', 'blocked', 'unknown'].includes(row.step), row.step);
+  assert.ok('report_delta' in row && 'in_pilot' in row);
+  assert.deepEqual(rows.map((r) => r.project_id), T.pilotCandidates(s.ws).map((r) => r.project_id), 'the same order as the candidates');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(server, /route\('GET', '\/api\/tickets\/candidates'/);
+  assert.doesNotMatch(server.match(/route\('GET', '\/api\/tickets\/candidates'.*/)[0], /setPilot|\.post\(|writeJson/);
+});
+
+test('candidate board (item 54): the model words step, exits and the @5 to @6 change', async (t) => {
+  const os = require('os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-pilot-board-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.copyFileSync(path.join(__dirname, '..', 'public', 'pilot-board-model.js'), path.join(dir, 'm.mjs'));
+  const m = await import(require('url').pathToFileURL(path.join(dir, 'm.mjs')).href);
+  assert.equal(m.stepWord('gate_closed'), 'Gate closed');
+  assert.equal(m.stepWord('pm_review'), 'PM review');
+  assert.equal(m.exitCell({ size_usd: 2000, ready: true, cost_pct: 1.2, cost_complete: true }).text, '$2,000 ready');
+  assert.equal(m.exitCell({ size_usd: 500, ready: false, cost_pct: null, note: 'none' }).text, '$500 missing');
+  assert.equal(m.exitCell({ size_usd: 500, ready: null }).text, '$500 native');
+  assert.equal(m.deltaText({ status: 'ok', grade_delta: 4.2, prompt_versions: { previous: 'cr-research-prompt@5', new: 'cr-research-prompt@6' } }).text, '+4.2 @5 → @6');
+  assert.equal(m.deltaText({ status: 'none', line: 'No earlier eligible Claude report to compare.' }).text, '—');
+  assert.equal(m.deltaText(null).text, '—');
+});
+
 // ---------------------------------------------------------------------------
 // run-cycle (backlog item 51)
 

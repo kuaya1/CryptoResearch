@@ -6,6 +6,7 @@ import {
   tabStrip, safeSection, waitingInstruction, PROVIDERS, PROVIDER_LABELS, onHoldOf,
 } from '../ui.js';
 import { comparisonBlock } from './project.js';
+import { stepWord, exitCell, deltaText } from '../pilot-board-model.js';
 import { splitPositions, returnWords, summaryLine, shadowRows, shadowCounts, shadowCohortLines } from '../paper-model.js';
 
 const TABS = [
@@ -25,7 +26,7 @@ export async function renderResearch(ctx, route) {
     h('div', { id: 'tabpanel', role: 'tabpanel', 'aria-labelledby': `tab-${tab}` }, body));
 }
 
-function runsTab(ctx) {
+async function runsTab(ctx) {
   const idx = ctx.state.index;
   const r = idx.research || {};
   const projects = idx.projects.filter((p) => !p.broken && p.status !== 'archived');
@@ -36,7 +37,7 @@ function runsTab(ctx) {
   // Each model's route in full is in Preferences > Models & budget; its
   // name, the spend, the limits and the queued jobs stay here.
   const routes = PROVIDERS.map((p) => `${PROVIDER_LABELS[p]}: ${routeWords(idx, p, (r.providers || {})[p] || { mode: 'manual', reason: 'unknown' }, { hosted }).route}`).join(' · ');
-  return h('div', null,
+  const jobs = h('div', null,
     card('Latest research per project', h('div', { class: 'rs-latest' }, table([
       { label: 'Project', render: (p) => h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/evidence?open=runs` }, p.name) },
       { label: 'Latest run', render: (p) => (p.research && p.research.latest_run ? h('div', null, stateText(sentence(p.research.latest_run.status), p.research.latest_run.status === 'completed' ? 'ok' : p.research.latest_run.status === 'failed' ? 'bad' : 'wait'), h('div', { class: 'small muted' }, `${fmtAgo(p.research.latest_run.created_at)} · ${p.research.latest_run.horizon ? p.research.latest_run.horizon.text : ''}`)) : h('span', { class: 'faint small' }, 'None')) },
@@ -46,6 +47,35 @@ function runsTab(ctx) {
       note: `Each model's job is independent: a failure in one never erases another's result. Price refreshes never start research. ${routes}. Spend this month: $${(r.spend && r.spend.monthly) || 0} · today: $${(r.spend && r.spend.daily) || 0} · budget per run ${money(r.budget && r.budget.per_run_usd)}, day ${money(r.budget && r.budget.daily_usd)}, month ${money(r.budget && r.budget.monthly_usd)} · unattended runs ${r.unattended_enabled ? 'on' : 'off'}`,
       actions: [runNow, h('a', { class: 'btn small', href: ctx.hrefWith ? ctx.hrefWith({ prefs: 'models' }) : '#/settings?tab=research', dataset: { key: 'research-routes' } }, hosted ? 'Routes, API keys and limits' : 'Routes and API access')],
     }));
+  return h('div', null, jobs, await pilotBoard(ctx));
+}
+
+// The Track 2 pilot queue (item 54, GET /api/tickets/candidates): each
+// candidate's grade, the @5 to @6 change, the $500 and $2,000 exit readings,
+// the pipeline step and Eric's pilot switch. Reading it writes nothing; only
+// the toggle posts, from its own click.
+async function pilotBoard(ctx) {
+  let b;
+  try {
+    b = await ctx.api.get('/api/tickets/candidates');
+  } catch (_) {
+    return card('Track 2 Pilot Queue', h('p', { class: 'muted' }, 'The pilot queue could not be read.'));
+  }
+  const rows = b.rows || [];
+  return card(`Track 2 Pilot Queue (${rows.length})`, pagedTable([
+    { label: 'Project', render: (r) => h('a', { href: `#/project/${encodeURIComponent(r.project_id)}/forensics` }, r.name) },
+    { label: 'Grade', num: true, render: (r) => h('span', { class: 'num' }, r.grade_display || '—') },
+    { label: '@5 → @6', render: (r) => { const d = deltaText(r.report_delta); return h('span', { class: 'small', title: d.title }, d.text); } },
+    { label: 'Exit readiness', render: (r) => h('div', { class: 'small' }, (r.exits || []).map((e) => { const c = exitCell(e); return h('div', { class: c.tone, title: c.title }, c.text); })) },
+    { label: 'Step', render: (r) => h('span', { title: r.step_why || null }, stepWord(r.step)) },
+    { label: 'Pilot', render: (r) => {
+      const btn = button(r.in_pilot ? 'Turn off' : 'Turn on', null, { kind: 'small' });
+      btn.dataset.key = `pilot-board-${r.project_id}`;
+      btn.setAttribute('aria-pressed', String(Boolean(r.in_pilot)));
+      btn.onclick = action(btn, async () => { await ctx.api.post(`/api/projects/${encodeURIComponent(r.project_id)}/tickets/pilot`, { on: !r.in_pilot }); await ctx.refresh(); return true; }, r.in_pilot ? 'Pilot off for this project' : 'Pilot on for this project');
+      return btn;
+    } },
+  ], rows, { size: 25, label: 'Pilot candidates', empty: 'No verified, active projects yet.' }), { note: 'Verified, active projects: held first, then by grade. Reading this writes nothing.' });
 }
 
 // What happened after each report (core/report-outcomes.js): each model's
