@@ -128,7 +128,7 @@ test('the app shows report text as text: no HTML from strings anywhere in the Re
 test('the app writes only from explicit actions, and nothing from the boot or a live update', () => {
   const files = walk(path.join(WEB, 'src'), (p) => /\.(jsx?)$/.test(p)).map((f) => [path.relative(path.join(WEB, 'src'), f).split(path.sep).join('/'), fs.readFileSync(f, 'utf8')]);
   const writers = files.filter(([, s]) => /api\.post\(/.test(s)).map(([f]) => f).sort();
-  assert.deepEqual(writers, ['lib/desk.js', 'lib/review.js', 'shell/Engineering.jsx', 'shell/Preferences.jsx', 'views/agenda/Agenda.jsx', 'views/inspector/ModelPanel.jsx', 'views/inspector/PMDecisionCard.jsx', 'views/project/Contract.jsx', 'views/project/Evidence.jsx', 'views/project/Forensics.jsx', 'views/project/Notes.jsx', 'views/project/Record.jsx', 'views/project/Report.jsx', 'views/project/forensics/Disagreements.jsx', 'views/project/forensics/ExitCompare.jsx', 'views/project/forensics/OutcomeRegister.jsx', 'views/review/Review.jsx', 'views/watchlist/StatusStrip.jsx', 'views/watchlist/state.js']);
+  assert.deepEqual(writers, ['lib/desk.js', 'lib/review.js', 'shell/DailyBrief.jsx', 'shell/Engineering.jsx', 'shell/Preferences.jsx', 'views/agenda/Agenda.jsx', 'views/inspector/ModelPanel.jsx', 'views/inspector/PMDecisionCard.jsx', 'views/project/Contract.jsx', 'views/project/Evidence.jsx', 'views/project/Forensics.jsx', 'views/project/Notes.jsx', 'views/project/Record.jsx', 'views/project/Report.jsx', 'views/project/forensics/Disagreements.jsx', 'views/project/forensics/ExitCompare.jsx', 'views/project/forensics/OutcomeRegister.jsx', 'views/review/Review.jsx', 'views/watchlist/StatusStrip.jsx', 'views/watchlist/state.js']);
   // The re-audit's parts (2026-10-17) each post one path, from a button:
   // a judgment, an explicit fixed-token quote, an outcome note, and the
   // agenda's Done, Snooze and Reopen. The case package is a read.
@@ -201,6 +201,12 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   // The Trade Plan strip (item 49) reads the view's geometry and says unknown, never a made-up number.
   assert.match(pm, /trade_plan_geometry/);
   assert.match(pm, /Reward : risk/);
+  // The four-test matrix (item 52): pills with pass, fail or unknown; a missing test is unknown.
+  assert.match(pm, /near_invalidation/);
+  assert.match(pm, /Disagreement/);
+  assert.match(pm, /TestMatrix/);
+  assert.match(pm, /strongest_bull_rebuttal/);
+  assert.match(pm, /: 'unknown'\)/);
   assert.match(pm, /<span className="is-unknown">unknown<\/span>/);
   assert.equal([...pm.matchAll(/decide\('/g)].length, [...pm.matchAll(/onClick=\{\(\) => decide\('/g)].length, 'every PM decision is a click');
   // Every other write sits in a handler (onClick, onSelect) or an action

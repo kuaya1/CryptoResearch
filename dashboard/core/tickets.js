@@ -1371,6 +1371,29 @@ function reconcileEffects(ws, { project = null, dryRun = false } = {}) {
   return out;
 }
 
+// Item 60: the one-click repair. reconcileEffects over every project, as a
+// deterministic report: sorted, counted, with the archive step named and never
+// done (Eric may have restored the project since). Idempotent: a second run
+// completes nothing. `dryRun` reports what would be completed and writes nothing.
+const RECONCILE_FORMAT = 'cr-ticket-reconcile@1';
+function reconcileDesk(ws, { dryRun = false } = {}) {
+  const r = reconcileEffects(ws, { dryRun });
+  const order = (a, b) => a.project_id.localeCompare(b.project_id) || a.decision_id.localeCompare(b.decision_id) || a.step.localeCompare(b.step);
+  const completed = r.completed.slice().sort(order);
+  const failed = completed.filter((x) => x.status === 'failed');
+  return {
+    format: RECONCILE_FORMAT,
+    dry_run: r.dry_run,
+    completed,
+    already_complete: r.already_complete.slice().sort(order),
+    named: r.named.slice().sort(order),
+    counts: { completed: completed.length - failed.length, failed: failed.length, already_complete: r.already_complete.length, named: r.named.length },
+    words: dryRun
+      ? `${completed.length} step${completed.length === 1 ? '' : 's'} would be completed; ${r.named.length} named for you.`
+      : `${completed.length - failed.length} step${completed.length - failed.length === 1 ? '' : 's'} completed${failed.length ? `, ${failed.length} failed` : ''}; ${r.named.length} named for you (an archive is never done here).`,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Invalidation, evaluated on read (cr-ticket-invalidation@1, @2)
 
@@ -1465,7 +1488,7 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
     if (!f || f.state === 'unmapped') checks.push({ kind: 'metric', status: 'not_bound', key: inv.metric.key, threshold_usd: inv.metric.below_30d_usd, words: 'No DefiLlama entity is bound: the metric is not checked.' });
     else if (!m || !isNum(m.total_30d_usd) || m.status !== 'complete') checks.push({ kind: 'metric', status: 'unknown', key: inv.metric.key, threshold_usd: inv.metric.below_30d_usd, words: `No complete 30-day ${inv.metric.key} total on file.` });
     else if (!(fetched > savedMs)) checks.push({ kind: 'metric', status: 'unknown', key: inv.metric.key, threshold_usd: inv.metric.below_30d_usd, words: 'The saved total is from before the ticket; it is not read as a change.' });
-    else checks.push({ kind: 'metric', status: m.total_30d_usd < inv.metric.below_30d_usd ? 'triggered' : 'holding', key: inv.metric.key, threshold_usd: inv.metric.below_30d_usd, value_usd: m.total_30d_usd, at: f.fetched_at, words: `30-day ${inv.metric.key} $${Math.round(m.total_30d_usd).toLocaleString('en-US')} ${m.total_30d_usd < inv.metric.below_30d_usd ? 'under' : 'not under'} $${inv.metric.below_30d_usd.toLocaleString('en-US')}.` });
+    else checks.push({ kind: 'metric', status: m.total_30d_usd < inv.metric.below_30d_usd ? 'triggered' : 'holding', key: inv.metric.key, threshold_usd: inv.metric.below_30d_usd, value_usd: m.total_30d_usd, at: f.fetched_at, ...(m.total_30d_usd >= inv.metric.below_30d_usd && inv.metric.below_30d_usd > 0 ? { headroom_pct: round(((m.total_30d_usd - inv.metric.below_30d_usd) / inv.metric.below_30d_usd) * 100, 1) } : {}), words: `30-day ${inv.metric.key} $${Math.round(m.total_30d_usd).toLocaleString('en-US')} ${m.total_30d_usd < inv.metric.below_30d_usd ? 'under' : 'not under'} $${inv.metric.below_30d_usd.toLocaleString('en-US')}.` });
   }
   const hit = checks.find((c) => c.status === 'triggered') || null;
   const out = { version, invalidated: Boolean(hit), by: hit ? hit.kind : null, words: hit ? hit.words : null, fired: hit, ...(hit && hit.kind === 'price' ? { sampled: hit.sampled } : {}), checks };
@@ -1500,6 +1523,21 @@ function statusOf(decision, invalidation) {
 
 // receiptId: read that saved ticket as the one in force (an earlier receipt
 // shows `latest: false`); without it, the latest. Reading writes nothing.
+// Item 53: the invalidation proximity radar. A non-invalidated Prosecutor
+// ticket still in play (not vetoed or passed) whose fresh stored price sits
+// within NEAR_INVALIDATION_PCT above its invalidation price. Arithmetic on the
+// geometry's own fresh price; a stale or missing price says nothing.
+const NEAR_INVALIDATION_PCT = 10;
+function nearInvalidation(status, geometry) {
+  if (!geometry || ['invalidated', 'vetoed', 'passed'].includes(status)) return null;
+  const price = geometry.price && geometry.price.status === 'fresh' ? geometry.price.price_usd : null;
+  const stop = geometry.stop_usd;
+  if (!isNum(price) || !isNum(stop) || !(stop > 0) || !(price > stop)) return null;
+  const distance = round(((price - stop) / stop) * 100, 2);
+  if (distance > NEAR_INVALIDATION_PCT) return null;
+  return { distance_pct: distance, price_usd: price, threshold_usd: stop, words: `Near invalidation: the price $${price} is ${distance}% above the invalidation price $${stop} (within ${NEAR_INVALIDATION_PCT}%).` };
+}
+
 // Trade Plan geometry (item 49, `cr-ticket-geometry@1`): where the stored price
 // sits against the receipt's own entry zone, target and invalidation price.
 // Arithmetic only: a missing number is said unknown, never filled in, and a
@@ -1586,6 +1624,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
         try { latest = marketOf(ws, project); } catch (_) { latest = null; }
         return tradePlanGeometry(current.proposal, latest, { now, staleMinutes: (ws.settings && ws.settings.freshness && ws.settings.freshness.price_stale_minutes) || 90 });
       })(),
+      near_invalidation: null,
       exit_basis: d.exit_basis || 'measured',
       exit_cost_500_usd_pct: d.exit_cost_500_usd_pct ?? null,
       exit_cost_500_complete: d.exit_cost_500_complete ?? null,
@@ -1603,7 +1642,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       starter_risk_usd: d.sizing ? d.sizing.starter_risk_usd : SIZING_DEFAULTS.starter_risk_usd,
       pm_approved_risk_usd: decision ? decision.pm_approved_risk_usd : null,
       decision: decision ? { decision_id: decision.decision_id, action: decision.action, at: decision.decided_at, note: decision.note, archive: decision.archive || null, paper: paperStateOf(ws, decision) } : null,
-      prosecution: current.prosecution ? { verdict: current.prosecution.verdict, conviction_score: current.prosecution.conviction_score, fatal_flaws: current.prosecution.fatal_flaws, tests: current.prosecution.tests } : null,
+      prosecution: current.prosecution ? { verdict: current.prosecution.verdict, conviction_score: current.prosecution.conviction_score, fatal_flaws: current.prosecution.fatal_flaws, tests: current.prosecution.tests, strongest_bull_rebuttal: current.prosecution.strongest_bull_rebuttal || '' } : null,
       agent_disagreement: current.agent_disagreement || null,
       invalidation,
       researcher_report_id: current.researcher.report_id,
@@ -1613,6 +1652,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       report_delta: (() => { try { return require('./report-delta').reportDelta(ws, require('./reports').loadReports(ws, pid)); } catch (_) { return null; } })(),
     };
   }
+  if (ticket) ticket.near_invalidation = nearInvalidation(ticket.status, ticket.trade_plan_geometry);
   const profile = readProfile(ws, pid);
   return {
     project_id: pid,
@@ -1753,6 +1793,74 @@ function pilotCandidates(ws, { now = Date.now() } = {}) {
   const rank = (r) => (r.grade === null ? -Infinity : r.grade);
   rows.sort((a, b) => (a.held === b.held ? 0 : a.held ? -1 : 1) || (rank(b) === rank(a) ? 0 : rank(b) > rank(a) ? 1 : -1) || a.project_id.localeCompare(b.project_id));
   return rows;
+}
+
+// Item 54: the Track 2 pilot queue as a board. Each candidate row (the read
+// above) with the pipeline step the chain needs next, the change since Claude's
+// earlier report (@5 to @6) and whether the $500 and $2,000 exit readings are
+// in. Read-only: it writes nothing and asks no provider. A native L1 coin
+// needs no DEX quote (ready: null); a step that cannot be read says so.
+function candidateBoard(ws, { now = Date.now() } = {}) {
+  const sizing = sizingOf(ws);
+  const sizes = [...new Set([sizing.exit_size_usd, 2000])].sort((a, b) => a - b);
+  return pilotCandidates(ws, { now }).map((c) => {
+    let step = { step: 'unknown', why: 'The next step could not be read.' };
+    try { step = nextStep(ws, c.project_id, { now }); } catch (err) { step = { step: 'unknown', why: `The next step could not be read: ${err.message}` }; }
+    let delta = null;
+    try { delta = require('./report-delta').reportDelta(ws, require('./reports').loadReports(ws, c.project_id)); } catch (_) { delta = null; }
+    const native = c.gate && c.gate.exit_basis === 'native_l1_liquid';
+    const exits = exitsOf(ws, c.project_id, sizes, now).map((e) => ({ size_usd: e.size_usd, ready: native ? null : isNum(e.cost_pct), cost_pct: e.cost_pct, cost_complete: e.cost_complete, note: native ? 'Native L1: no DEX quote is needed.' : e.note }));
+    return { ...c, step: step.step, step_why: step.why || null, report_delta: delta, exits };
+  });
+}
+
+// Item 61: the watchlist's exit-liquidity matrix. Every verified, active
+// project, best grade first (a range by its low end; no grade last), with the
+// desk's $500 and $2,000 exit cost, whether each cost is complete and the
+// components missing, the chain, the quote's age and the native L1 status.
+// Read only: it asks no provider and writes nothing. A missing reading is
+// null with its reason, never 0.
+const EXIT_MATRIX_FORMAT = 'cr-exit-matrix@1';
+const EXIT_MATRIX_SIZES = [500, 2000];
+function exitMatrix(ws, { now = Date.now() } = {}) {
+  const sizing = sizingOf(ws);
+  const rows = [];
+  for (const p of require('./projects').listProjects(ws)) {
+    if (p.broken || p.status === 'archived') continue;
+    const project = require('./projects').getProject(ws, p.project_id);
+    if (!project.identity || project.identity.status !== 'verified') continue;
+    const pid = p.project_id;
+    let researcher = null;
+    try { researcher = researcherOf(ws, pid); } catch (_) { researcher = null; }
+    const market = marketOf(ws, project);
+    const native = nativeL1Liquid({ native: { native_chain: project.identity.native_chain === true, market_cap_usd: isNum(market.market_cap_usd) ? market.market_cap_usd : null } }, sizing);
+    const chains = [...new Set((project.identity.assets || []).map((a) => a.chain).filter(Boolean))].sort();
+    const exits = exitsOf(ws, pid, EXIT_MATRIX_SIZES, now).map((e) => {
+      const at = Date.parse(e.as_of);
+      return {
+        size_usd: e.size_usd,
+        cost_pct: e.cost_pct,
+        complete: isNum(e.cost_pct) ? e.cost_complete !== false : null,
+        missing_costs: isNum(e.cost_pct) ? e.missing_costs || [] : [],
+        quote_age_minutes: Number.isFinite(at) ? Math.max(0, Math.round((now - at) / 60000)) : null,
+        as_of: e.as_of || null,
+        status: e.status,
+        note: e.note || null,
+      };
+    });
+    rows.push({
+      project_id: pid,
+      name: project.name,
+      grade: researcher ? gateGrade(researcher.grade) : null,
+      grade_display: researcher && researcher.grade ? researcher.grade.display || researcher.grade.status : null,
+      chain: native ? (project.identity.native_chain_name || chains[0] || null) : chains.join(', ') || null,
+      native_l1_liquid: native,
+      exits,
+    });
+  }
+  const rank = (r) => (r.grade === null ? -Infinity : r.grade);
+  rows.sort((a, b) => (rank(b) === rank(a) ? 0 : rank(b) > rank(a) ? 1 : -1) || a.project_id.localeCompare(b.project_id));
+  return { format: EXIT_MATRIX_FORMAT, writes_nothing: true, as_of: iso(now), sizes_usd: EXIT_MATRIX_SIZES, rows };
 }
 
 // Backlog item 30. Opt in (pilot: true) every verified, active project whose
@@ -2082,7 +2190,25 @@ function digest(ws, { days = 7, now = Date.now() } = {}) {
     return { total_usd: round(total, 4), calls: Object.values(byProvider).reduce((x, y) => x + y.calls, 0), by_provider: byProvider, estimated_or_open_calls: estimated, undated_not_counted: undated, today_usd: spent.daily, month_usd: spent.monthly, limits: { daily_usd: b.daily_usd ?? null, monthly_usd: b.monthly_usd ?? null }, note: 'Reservations and estimates count at their recorded amount.' };
   });
 
-  return { format: DIGEST_FORMAT, days: n, since: iso(since), until: iso(now), unreadable_projects: broken, reports_v6: reportsV6, tickets, grade_spreads: spreads, invalidations: invalidated, provider_budget: budget };
+  // Item 58: tickets waiting on a repair (a grant whose paper position is
+  // missing) or held to $0 by the admission check; the count the daily brief's
+  // ticket_repairs section lists. A project that cannot be read is named.
+  const repairs = section(() => {
+    let count = 0;
+    const unread = [];
+    for (const p of live) {
+      if (p.status === 'archived') continue;
+      let v;
+      try { v = view(ws, p.project_id, { now }); } catch (err) { unread.push({ project_id: p.project_id, why: err.message }); continue; }
+      const t = v.ticket;
+      if (!t) continue;
+      if (t.decision && t.decision.paper === 'missing') count += 1;
+      if (t.admission && t.admission.held_risk && t.status === 'pending_pm_review') count += 1;
+    }
+    return { count, not_read: unread, note: 'Grants whose paper position is missing, and tickets held to $0 by the admission check.' };
+  });
+
+  return { format: DIGEST_FORMAT, days: n, since: iso(since), until: iso(now), unreadable_projects: broken, reports_v6: reportsV6, tickets, grade_spreads: spreads, invalidations: invalidated, ticket_repairs: repairs, provider_budget: budget };
 }
 
 function digestText(d) {
@@ -2101,6 +2227,7 @@ function digestText(d) {
     const v = d.invalidations;
     L.push(`Invalidation triggers fired: ${v.fired}${v.triggers.length ? ` — ${v.triggers.map((t) => `${t.name} (${t.by}, ${t.at.slice(0, 10)})`).join('; ')}` : ''}${v.not_read.length ? `; ${v.not_read.length} not read` : ''}`);
   }
+  if (d.ticket_repairs && !bad(d.ticket_repairs, 'Ticket repairs')) L.push(`Tickets waiting on a repair: ${d.ticket_repairs.count}${d.ticket_repairs.not_read.length ? `; ${d.ticket_repairs.not_read.length} not read` : ''}`);
   if (!bad(d.provider_budget, 'Provider budget')) {
     const b = d.provider_budget;
     L.push(`Provider budget used: $${b.total_usd} over ${b.calls} calls${Object.keys(b.by_provider).length ? ` (${Object.entries(b.by_provider).sort().map(([k, v]) => `${k} $${v.usd}`).join(', ')})` : ''}; today $${b.today_usd}, this month $${b.month_usd}${b.undated_not_counted ? `; ${b.undated_not_counted} charges with no time not counted` : ''}`);
@@ -2130,6 +2257,7 @@ module.exports = {
   gate,
   pregateReason,
   tradePlanGeometry,
+  nearInvalidation,
   gateGrade,
   skeleton,
   researcherOf,
@@ -2147,6 +2275,8 @@ module.exports = {
   receiptText,
   decide,
   reconcileEffects,
+  reconcileDesk,
+  RECONCILE_FORMAT,
   invalidationOf,
   view,
   read,
@@ -2155,6 +2285,9 @@ module.exports = {
   nextStep,
   pilotQueue,
   pilotCandidates,
+  candidateBoard,
+  exitMatrix,
+  EXIT_MATRIX_FORMAT,
   batchGate,
   autoPilotSync,
   quoteCandidates,

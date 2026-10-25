@@ -1,5 +1,5 @@
 'use strict';
-// Scenario harness (backlog 19, blueprint W4.2): ten situations the desk must
+// Scenario harness (backlog 19, blueprint W4.2): twenty situations the desk must
 // get right, each replayed from a price path in dashboard/tests/fixtures/sim/
 // (or a stubbed answer) with zero network, each asserting statuses and words.
 // Fictional workspaces and fixtures only.
@@ -177,4 +177,167 @@ test('sim 10: a paper position across an invalidation closes at the first readin
   // The same decision undone voids it, still on record.
   T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'undo' });
   assert.equal(P.book(s.ws, { now: ref + 6 * H }).positions[0].state, 'voided');
+});
+
+// ---------------------------------------------------------------------------
+// Cases 11 to 20 (backlog 59): the review fixes A03 to A07 and the Track 2
+// items 41, 48 and 55 replayed as situations. Fictional workspaces only.
+
+const { hashTree, withExitReadings, freshPrice } = require('../helpers');
+
+test('sim 11: a stale price (over 90 minutes) on save is unchecked: the risk is capped at $0 and said as a cap, the receipt kept (A03)', (t) => {
+  const s = S.workspace(t);
+  S.stubHeld(t, s.pid, false);
+  const tk = withExitReadings(1.5, () => T.createTicket(s.ws, { project_id: s.pid, assistant: true })).ticket;
+  freshPrice(s.ws, S.CG, 0.85, 3 * S.H);
+  const out = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: S.answer(T.loadTicket(s.ws, s.pid, tk.ticket_id)) });
+  assert.equal(out.status, 'saved');
+  assert.equal(out.receipt.desk.suggested_risk_usd, 0, 'unknown is never a pass');
+  assert.equal(out.receipt.desk.proposal_type, 'WATCH_ONLY');
+  assert.match(out.receipt.desk.gate.capped.reason, /past your 90-minute freshness limit/);
+  assert.equal(out.receipt.desk.admission.price.status, 'unchecked');
+  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: out.receipt_id, action: 'approve' }), (e) => e.code === 'REFUSED');
+});
+
+test('sim 12: a price drop stored after the text is checked and before the save\'s lock is read at the commit; the ticket is refused and nothing is written (A03)', (t) => {
+  const s = S.workspace(t);
+  S.stubHeld(t, s.pid, false);
+  const tk = withExitReadings(1.5, () => T.createTicket(s.ws, { project_id: s.pid, assistant: true })).ticket;
+  freshPrice(s.ws, S.CG, 0.85);
+  const market = require('../../core/market');
+  const real = market.readLatest;
+  market.readLatest = (ws, ...a) => { const m = real(ws, ...a); return ws._lockHeld ? { ...m, assets: { ...m.assets, [S.CG]: { ...m.assets[S.CG], price_usd: 0.65 } } } : m; };
+  t.after(() => { market.readLatest = real; });
+  const before = hashTree(s.root);
+  const text = S.answer(T.loadTicket(s.ws, s.pid, tk.ticket_id));
+  assert.throws(() => T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text }), (e) => e.code === 'INVALID' && /price now \(\$0\.65/.test(e.message));
+  assert.deepEqual(hashTree(s.root), before, 'a refusal at the commit writes nothing');
+  assert.equal(T.listReceipts(s.ws, s.pid).length, 0);
+});
+
+test('sim 13: Approve and Halve after the price breached the invalidation price are refused with 409 INVALIDATED; a veto is still recorded (A04)', (t) => {
+  const P = require('../../core/paper');
+  const s = S.workspace(t);
+  const saved = S.savedTicket(t, s);
+  S.observe(s.ws, Date.parse(saved.receipt.saved_at), 0.69);
+  assert.equal(T.view(s.ws, s.pid).ticket.status, 'invalidated');
+  for (const action of ['approve', 'halve']) {
+    assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action }), (e) => e.code === 'INVALIDATED' && /0\.69/.test(e.message), action);
+  }
+  assert.equal(T.readDecisions(s.ws, s.pid).length, 0);
+  assert.equal(P.readRecords(s.ws).length, 0, 'no paper position');
+  assert.equal(T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'veto' }).result.status, 'saved');
+});
+
+test('sim 14: Approve on a ticket whose report a newer one superseded is refused with BASIS_CHANGED naming the newer report; nothing is written (A04)', (t) => {
+  const s = S.workspace(t);
+  const saved = S.savedTicket(t, s);
+  const compare = require('../../core/compare');
+  const real = compare.latestByProvider;
+  compare.latestByProvider = (...a) => { const l = real(...a); return { ...l, claude: { ...l.claude, report_id: 'r-newer-fictional' } }; };
+  t.after(() => { compare.latestByProvider = real; });
+  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' }), (e) => e.code === 'BASIS_CHANGED' && /superseded by r-newer-fictional/.test(e.message));
+  assert.equal(T.readDecisions(s.ws, s.pid).length, 0);
+});
+
+test('sim 15: Approve, then Undo, then Halve leaves a single live paper position; the approve\'s position is kept, voided (A06)', (t) => {
+  const P = require('../../core/paper');
+  const s = S.workspace(t);
+  const saved = S.savedTicket(t, s);
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' });
+  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'halve' }), (e) => e.code === 'CONFLICT' && /Undo it first/.test(e.message));
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'undo' });
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'halve' });
+  const b = P.book(s.ws);
+  assert.equal(b.counts.positions, 1);
+  assert.equal(b.counts.voided, 1);
+  assert.equal(b.positions.find((x) => x.state !== 'voided').risk_usd, 250);
+  assert.equal(require('../../core/portfolio').loadTransactions(s.ws).length, 0, 'the portfolio is untouched');
+});
+
+test('sim 16: a paper position closes on its horizon end, with no exit price when no reading is near it, and nothing in the paper file is edited by the read (A05)', (t) => {
+  const P = require('../../core/paper');
+  const s = S.workspace(t);
+  const saved = S.savedTicket(t, s);
+  const now0 = Date.now();
+  S.observe(s.ws, now0 - S.H, 1.0, 100);
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' });
+  const file = s.ws.abs(P.REL);
+  const open = JSON.parse(fs.readFileSync(file, 'utf8').trim());
+  open.horizon_end = new Date(now0 + 12 * S.H).toISOString();
+  fs.writeFileSync(file, `${JSON.stringify(open)}\n`);
+  const text = fs.readFileSync(file, 'utf8');
+  assert.equal(P.book(s.ws, { now: now0 + 6 * S.H }).positions[0].state, 'open', 'before the horizon end');
+  const p = P.book(s.ws, { now: now0 + 20 * S.H }).positions[0];
+  assert.equal(p.state, 'closed');
+  assert.equal(p.close.kind, 'horizon_end');
+  assert.equal(p.close.price_usd, null, 'no reading within 6 hours before the end: unknown, never filled in');
+  assert.equal(fs.readFileSync(file, 'utf8'), text);
+});
+
+test('sim 17: a near-miss (grade 52) gets a Prosecutor from the pre-gate and the sizing gate still says $0 WATCH_ONLY (item 48)', () => {
+  const sz = T.sizingOf({ settings: {} });
+  const rep = (grade) => ({ grade });
+  assert.equal(T.pregateReason(rep({ status: 'firm', value: 52 }), false, sz), null, 'a near miss opens a ticket');
+  assert.equal(T.pregateReason(rep({ status: 'range', low: 40, high: 58 }), false, sz), null, 'a range reaching the floor opens one');
+  assert.notEqual(T.pregateReason(rep({ status: 'firm', value: 40 }), false, sz), null, 'a grade well under stays closed');
+  const g = T.gate({ researcher: rep({ status: 'firm', value: 52 }), held: false, exits: [], native: null }, sz);
+  assert.equal(g.suggested_risk_usd, 0);
+  assert.equal(g.proposal_type, 'WATCH_ONLY');
+});
+
+test('sim 18: the shadow gate\'s day-30 result is fixed at its reading and does not follow a later, moving price (item 41)', (t) => {
+  const P = require('../../core/paper');
+  const DAY = 24 * S.H;
+  const s = S.workspace(t);
+  s.ws.settings.tickets = { sizing: { min_grade_new_entry: 99, pregate_max_grade: 99, min_grade_any: 5 } };
+  S.stubHeld(t, s.pid, false);
+  const gate = T.createTicket(s.ws, { project_id: s.pid });
+  const at = Date.parse(gate.receipt.saved_at);
+  S.observe(s.ws, at - S.H, 1.0, 100);
+  S.observe(s.ws, at + 30 * DAY - S.H, 2.0, 110);
+  S.observe(s.ws, at + 35 * DAY, 3.0, 120);
+  const row = P.book(s.ws, { now: at + 35 * DAY }).shadow_gate[0];
+  assert.equal(row.since.change_pct, 200, 'the live change follows the price');
+  assert.equal(row.day30.status, 'matured');
+  assert.equal(row.day30.change_pct, 100);
+  S.observe(s.ws, at + 60 * DAY, 9.0, 300);
+  assert.deepEqual(P.book(s.ws, { now: at + 60 * DAY }).shadow_gate[0].day30, row.day30, 'matured, it never changes');
+});
+
+test('sim 19: MFE and MAE read across a price wick: the best and worst hourly price up to the close, none after it (item 55)', (t) => {
+  const P = require('../../core/paper');
+  const s = S.workspace(t);
+  const saved = S.savedTicket(t, s);
+  const now0 = Date.now();
+  S.observe(s.ws, now0 - 2 * S.H, 1.0, 100);
+  S.observe(s.ws, now0 + 0.5 * S.H, 1.2, 101);
+  S.observe(s.ws, now0 + 1 * S.H, 0.95, 105);
+  S.observe(s.ws, now0 + 2 * S.H, 0.69, 110);
+  S.observe(s.ws, now0 + 3 * S.H, 0.3, 110);
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' });
+  const p = P.book(s.ws, { now: now0 + 5 * S.H }).positions[0];
+  assert.equal(p.state, 'closed');
+  assert.equal(p.max_favorable_pct, 20);
+  assert.equal(p.max_adverse_pct, -31, 'the close reading, not the lower wick after it');
+  assert.equal(p.excursion.status, 'known');
+});
+
+test('sim 20: a corrupt receipt is named in the daily brief\'s ticket_repairs, which is partial with no count, never "None right now"; the read writes nothing (A07)', (t) => {
+  const B = require('../../core/brief-daily');
+  const s = S.workspace(t);
+  const saved = S.savedTicket(t, s);
+  const rel = `projects/${s.pid}/tickets/receipts/${saved.receipt_id}.json`;
+  const r = S.readJson(s.ws.abs(rel));
+  r.researcher = null;
+  S.atomicWrite(s.ws.abs(rel), S.jsonText(r));
+  const tree = hashTree(s.root);
+  const out = B.brief(s.ws, { now: Date.parse(saved.receipt.saved_at) + S.H });
+  assert.deepEqual(hashTree(s.root), tree, 'a read writes nothing');
+  const sec = out.sections.find((x) => x.id === 'ticket_repairs');
+  assert.equal(sec.state, 'partial');
+  assert.equal(sec.count, null);
+  assert.equal(sec.unreadable_count, 1);
+  assert.match(sec.lines[0].text, /the ticket could not be read/);
+  assert.ok(!sec.lines.some((l) => l.text === 'None right now.'));
 });

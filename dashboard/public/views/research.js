@@ -6,7 +6,8 @@ import {
   tabStrip, safeSection, waitingInstruction, PROVIDERS, PROVIDER_LABELS, onHoldOf,
 } from '../ui.js';
 import { comparisonBlock } from './project.js';
-import { splitPositions, returnWords, summaryLine, shadowRows, shadowCounts, shadowCohortLines } from '../paper-model.js';
+import { stepWord, exitCell, deltaText } from '../pilot-board-model.js';
+import { splitPositions, returnWords, excursionWords, summaryLine, shadowRows, shadowCounts, shadowCohortLines } from '../paper-model.js';
 
 const TABS = [
   ['runs', 'Research jobs'],
@@ -25,7 +26,7 @@ export async function renderResearch(ctx, route) {
     h('div', { id: 'tabpanel', role: 'tabpanel', 'aria-labelledby': `tab-${tab}` }, body));
 }
 
-function runsTab(ctx) {
+async function runsTab(ctx) {
   const idx = ctx.state.index;
   const r = idx.research || {};
   const projects = idx.projects.filter((p) => !p.broken && p.status !== 'archived');
@@ -36,7 +37,7 @@ function runsTab(ctx) {
   // Each model's route in full is in Preferences > Models & budget; its
   // name, the spend, the limits and the queued jobs stay here.
   const routes = PROVIDERS.map((p) => `${PROVIDER_LABELS[p]}: ${routeWords(idx, p, (r.providers || {})[p] || { mode: 'manual', reason: 'unknown' }, { hosted }).route}`).join(' · ');
-  return h('div', null,
+  const jobs = h('div', null,
     card('Latest research per project', h('div', { class: 'rs-latest' }, table([
       { label: 'Project', render: (p) => h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/evidence?open=runs` }, p.name) },
       { label: 'Latest run', render: (p) => (p.research && p.research.latest_run ? h('div', null, stateText(sentence(p.research.latest_run.status), p.research.latest_run.status === 'completed' ? 'ok' : p.research.latest_run.status === 'failed' ? 'bad' : 'wait'), h('div', { class: 'small muted' }, `${fmtAgo(p.research.latest_run.created_at)} · ${p.research.latest_run.horizon ? p.research.latest_run.horizon.text : ''}`)) : h('span', { class: 'faint small' }, 'None')) },
@@ -46,6 +47,69 @@ function runsTab(ctx) {
       note: `Each model's job is independent: a failure in one never erases another's result. Price refreshes never start research. ${routes}. Spend this month: $${(r.spend && r.spend.monthly) || 0} · today: $${(r.spend && r.spend.daily) || 0} · budget per run ${money(r.budget && r.budget.per_run_usd)}, day ${money(r.budget && r.budget.daily_usd)}, month ${money(r.budget && r.budget.monthly_usd)} · unattended runs ${r.unattended_enabled ? 'on' : 'off'}`,
       actions: [runNow, h('a', { class: 'btn small', href: ctx.hrefWith ? ctx.hrefWith({ prefs: 'models' }) : '#/settings?tab=research', dataset: { key: 'research-routes' } }, hosted ? 'Routes, API keys and limits' : 'Routes and API access')],
     }));
+  return h('div', null, jobs, await pilotBoard(ctx), await exitMatrix(ctx));
+}
+
+// The Track 2 pilot queue (item 54, GET /api/tickets/candidates): each
+// candidate's grade, the @5 to @6 change, the $500 and $2,000 exit readings,
+// the pipeline step and Eric's pilot switch. Reading it writes nothing; only
+// the toggle posts, from its own click.
+async function pilotBoard(ctx) {
+  let b;
+  try {
+    b = await ctx.api.get('/api/tickets/candidates');
+  } catch (_) {
+    return card('Track 2 Pilot Queue', h('p', { class: 'muted' }, 'The pilot queue could not be read.'));
+  }
+  const rows = b.rows || [];
+  return card(`Track 2 Pilot Queue (${rows.length})`, pagedTable([
+    { label: 'Project', render: (r) => h('a', { href: `#/project/${encodeURIComponent(r.project_id)}/forensics` }, r.name) },
+    { label: 'Grade', num: true, render: (r) => h('span', { class: 'num' }, r.grade_display || '—') },
+    { label: '@5 → @6', render: (r) => { const d = deltaText(r.report_delta); return h('span', { class: 'small', title: d.title }, d.text); } },
+    { label: 'Exit readiness', render: (r) => h('div', { class: 'small' }, (r.exits || []).map((e) => { const c = exitCell(e); return h('div', { class: c.tone, title: c.title }, c.text); })) },
+    { label: 'Step', render: (r) => h('span', { title: r.step_why || null }, stepWord(r.step)) },
+    { label: 'Pilot', render: (r) => {
+      const btn = button(r.in_pilot ? 'Turn off' : 'Turn on', null, { kind: 'small' });
+      btn.dataset.key = `pilot-board-${r.project_id}`;
+      btn.setAttribute('aria-pressed', String(Boolean(r.in_pilot)));
+      btn.onclick = action(btn, async () => { await ctx.api.post(`/api/projects/${encodeURIComponent(r.project_id)}/tickets/pilot`, { on: !r.in_pilot }); await ctx.refresh(); return true; }, r.in_pilot ? 'Pilot off for this project' : 'Pilot on for this project');
+      return btn;
+    } },
+  ], rows, { size: 25, label: 'Pilot candidates', empty: 'No verified, active projects yet.' }), { note: 'Verified, active projects: held first, then by grade. Reading this writes nothing.' });
+}
+
+// The exit-liquidity matrix (item 61, GET /api/tickets/exit-matrix): every
+// verified, active project's $500 and $2,000 exit cost with its completeness,
+// chain, the quote's age and the native L1 status. Reading it writes nothing.
+async function exitMatrix(ctx) {
+  let m;
+  try {
+    m = await ctx.api.get('/api/tickets/exit-matrix');
+  } catch (_) {
+    return card('Exit Matrix', h('p', { class: 'muted' }, 'The exit matrix could not be read.'));
+  }
+  const rows = m.rows || [];
+  const costCell = (r, size) => {
+    if (r.native_l1_liquid) return h('span', { class: 'faint', title: 'Native L1: no DEX quote is needed.' }, 'Native L1');
+    const e = (r.exits || []).find((x) => x.size_usd === size);
+    if (!e || typeof e.cost_pct !== 'number') return h('span', { class: 'faint', title: (e && e.note) || 'No exit reading.' }, 'No reading');
+    const missing = e.missing_costs && e.missing_costs.length ? `at least ${e.cost_pct}%` : `${e.cost_pct}%`;
+    return h('span', { class: 'num', title: e.complete === false ? `Not complete: ${(e.missing_costs || []).join(', ') || 'a cost is unknown'}` : 'Complete' }, e.complete === false ? `≥ ${e.cost_pct}%` : missing);
+  };
+  const ageCell = (r) => {
+    const ages = (r.exits || []).map((e) => e.quote_age_minutes).filter((x) => typeof x === 'number');
+    if (r.native_l1_liquid || !ages.length) return h('span', { class: 'faint' }, '—');
+    const a = Math.max(...ages);
+    return h('span', { class: 'small' }, a >= 120 ? `${Math.round(a / 60)} h` : `${a} min`);
+  };
+  return card(`Exit Matrix (${rows.length})`, pagedTable([
+    { label: 'Project', render: (r) => h('a', { href: `#/project/${encodeURIComponent(r.project_id)}/forensics?fx=exits` }, r.name) },
+    { label: 'Grade', num: true, render: (r) => h('span', { class: 'num' }, r.grade_display || '—') },
+    { label: 'Chain', render: (r) => h('span', { class: 'small' }, r.chain || '—') },
+    ...((m.sizes_usd || [500, 2000]).map((sz) => ({ label: `$${sz.toLocaleString('en-US')} exit`, num: true, render: (r) => costCell(r, sz) }))),
+    { label: 'Quote age', render: ageCell },
+    { label: 'Native L1', render: (r) => h('span', { class: 'small' }, r.native_l1_liquid ? 'Liquid' : 'No') },
+  ], rows, { size: 25, label: 'Exit matrix', empty: 'No verified, active projects yet.' }), { note: 'Verified, active projects by grade. A cost marked ≥ is a lower bound: a component is unknown. Reading this writes nothing.' });
 }
 
 // What happened after each report (core/report-outcomes.js): each model's
@@ -84,7 +148,28 @@ async function outcomesTab(ctx) {
     { label: 'Start', render: (r) => h('span', { class: 'small', title: r.note || (r.start.basis === 'run_packet' ? "When the research run's evidence packet was captured" : 'When the report was saved (it answers no run)') }, r.start.project ? `${fmtDate(r.start.at)}` : 'No price') },
     ...days.map((d) => ({ label: `${d}d vs BTC`, num: true, render: (r) => horizonCell(r.horizons.find((x) => x.days === d)) })),
   ], rows, { size: 50, label: 'Report outcomes', empty: 'No eligible reports yet.' }));
-  return h('div', null, models, list, await paperCard(ctx));
+  return h('div', null, await digestBar(ctx), models, list, await paperCard(ctx));
+}
+
+// The seven-day desk telemetry (tickets.digest): @6 reports completed,
+// Prosecutor tickets against desk-gate passes, invalidations fired and tickets
+// waiting on a repair. A part the desk could not read is said, never zero.
+async function digestBar(ctx) {
+  let d;
+  try {
+    d = await ctx.api.get('/api/tickets/digest');
+  } catch (_) {
+    return card('7-Day Desk Telemetry', h('p', { class: 'muted' }, 'The digest could not be read.'));
+  }
+  const cell = (label, sec, value, title) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '140px' }, title: sec.status === 'ok' ? title : sec.why },
+    h('span', { class: 'small muted' }, label), h('strong', { class: 'num' }, sec.status === 'ok' ? String(value) : 'Unreadable'));
+  const r = d.reports_v6; const t = d.tickets; const i = d.invalidations; const rp = d.ticket_repairs || { status: 'unreadable', why: 'Not reported.' };
+  return card('7-Day Desk Telemetry', h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '24px' } },
+    cell(`${r.prompt || '@6'} reports completed`, r, r.completed, `${r.eligible} eligible`),
+    cell('Prosecutor tickets', t, t.prosecutor_tickets, 'Saved in the window'),
+    cell('Desk-gate passes', t, t.desk_gate_passes, 'Saved in the window'),
+    cell('Invalidations fired', i, i.fired, i.note),
+    cell('Ticket repairs', rp, rp.count, rp.note)));
 }
 
 // The paper book (core/paper.js): PM-approved tickets as paper positions,
@@ -100,6 +185,10 @@ async function paperCard(ctx) {
     const r = returnWords(x);
     return h('span', r.text === '—' ? { class: 'faint', title: r.title } : { class: `num ${r.tone}`.trim(), title: r.title }, r.text);
   };
+  const excursionCell = (x, which) => {
+    const e = excursionWords(x, which);
+    return h('span', e.text === '—' ? { class: 'faint', title: e.title } : { class: `num ${e.tone}`.trim(), title: e.title }, e.text);
+  };
   const stateWord = { open: 'Open', closed: 'Closed', voided: 'Voided' };
   const cols = [
     { label: 'Project', render: (x) => h('a', { href: `#/project/${encodeURIComponent(x.project_id)}/market` }, x.name || x.project_id) },
@@ -107,6 +196,8 @@ async function paperCard(ctx) {
     { label: 'Entry', render: (x) => x.entry.status === 'priced' ? h('span', { class: 'num', title: `Hourly reading ${fmtDate(x.entry.at)}; entry cost unknown` }, `$${x.entry.price_usd}`) : h('span', { class: 'faint', title: x.entry.reason }, 'No entry price') },
     { label: 'State', render: (x) => h('span', { title: x.close ? x.close.words : x.reason || null }, stateWord[x.state] || x.state) },
     { label: 'Return', num: true, render: ret },
+    { label: 'MFE', num: true, render: (x) => excursionCell(x, 'mfe') },
+    { label: 'MAE', num: true, render: (x) => excursionCell(x, 'mae') },
   ];
   const parts = splitPositions(b);
   const group = (title, rows, label) => h('div', null,

@@ -36,3 +36,18 @@ export function deltaBadgeOf(delta) {
   const tone = changed || !isNum(delta.grade_delta) ? 'is-warn' : delta.grade_delta < 0 ? 'is-bad' : delta.grade_delta > 0 ? 'is-ok' : '';
   return { text, title, tone, versions: { previous: pv.previous || null, new: pv.new || null } };
 }
+
+// Item 56: the deep link from a disagreement to Compare at the category where
+// Claude and another model differ most. Read from the index row's spread
+// alerts (core/spread.js): only a model_spread alert that names a category
+// counts; the widest gap wins, ties by model name. Null when the project has
+// none, never a guessed category.
+export function widestCategoryLink(spread) {
+  const alerts = spread && Array.isArray(spread.alerts) ? spread.alerts : [];
+  const named = alerts.filter((a) => a && a.kind === 'model_spread' && a.category && a.category.id && typeof a.link === 'string');
+  if (!named.length) return null;
+  named.sort((a, b) => (b.category.gap - a.category.gap) || String(a.other).localeCompare(String(b.other)));
+  const a = named[0];
+  const name = a.category.id.replace(/_/g, ' ');
+  return { href: a.link, text: `Widest category: ${name}`, title: `Claude ${a.category.claude} and ${a.other} ${a.category.other} (${a.category.gap} points apart); opens Compare` };
+}

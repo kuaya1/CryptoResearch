@@ -95,7 +95,7 @@ test('daily brief: a PM card waiting is listed with its age and link; held, mode
   const differ = byId(out, 'models_differ');
   assert.equal(differ.state, 'ok');
   assert.ok(differ.lines.every((l) => /^#\/project\/.+\/compare$/.test(l.link) || l.link === null));
-  assert.equal(out.sections.map((x) => x.id).join(), 'pm_cards,invalidated,stale_basis,ticket_repairs,pilot_exits,held,research_waiting,models_differ,spread,freshness');
+  assert.equal(out.sections.map((x) => x.id).join(), 'pm_cards,invalidated,near_invalidation,stale_basis,ticket_repairs,pilot_exits,held,research_waiting,models_differ,spread,freshness');
 });
 
 test('daily brief: a ticket invalidated since a time is listed with the reading that fired; one before it is not; no since lists every one', (t) => {
@@ -146,7 +146,7 @@ test('daily brief: a section it cannot read says so, never nothing; the others s
   indexer.buildIndex = () => { throw new Error('records unreadable (FICTIONAL)'); };
   t.after(() => { indexer.buildIndex = realIndex; });
   const down = B.brief(s.ws, { now: Date.now() });
-  for (const id of ['pm_cards', 'invalidated', 'stale_basis', 'held', 'research_waiting', 'models_differ']) {
+  for (const id of ['pm_cards', 'invalidated', 'near_invalidation', 'stale_basis', 'held', 'research_waiting', 'models_differ']) {
     assert.equal(byId(down, id).state, 'unreadable', id);
     assert.match(byId(down, id).lines[0].text, /index could not be built/);
   }
@@ -164,7 +164,7 @@ test('daily brief (review A07): a ticket that cannot be read is named in each ti
   const tree = hashTree(s.root);
   const out = B.brief(s.ws, { now: Date.parse(saved.receipt.saved_at) + 3600000 });
   assert.deepEqual(hashTree(s.root), tree, 'a read writes nothing');
-  for (const id of ['pm_cards', 'invalidated', 'stale_basis']) {
+  for (const id of ['pm_cards', 'invalidated', 'near_invalidation', 'stale_basis']) {
     const sec = byId(out, id);
     assert.equal(sec.state, 'partial', id);
     assert.equal(sec.count, null, `${id}: the count is unknown`);
@@ -289,4 +289,19 @@ test('daily brief (item 39): tickets waiting on a repair or a fresh price are li
   assert.equal(bad.count, null);
   assert.equal(bad.unreadable_count, 1);
   assert.deepEqual(hashTree(s.root), tree, 'a read writes nothing');
+});
+
+test('daily brief (item 53): a ticket whose fresh price is within 10% above its invalidation price is listed; a farther one is not', (t) => {
+  const s = setup(t);
+  const saved = savedTicket(t, s);
+  const at = Date.parse(saved.receipt.saved_at) + 20 * 60000;
+  // The saved price (0.85) is 21% above the 0.7 stop: nothing near.
+  assert.match(byId(B.brief(s.ws, { now: Date.now() }), 'near_invalidation').lines[0].text, /None right now/);
+  freshPrice(s.ws, 'example-payfi-fictional', 0.75);
+  const sec = byId(B.brief(s.ws, { now: Date.now() }), 'near_invalidation');
+  assert.equal(sec.state, 'ok');
+  assert.equal(sec.count, 1);
+  assert.match(sec.lines[0].text, /Near invalidation: the price \$0\.75 is 7\.14% above the invalidation price \$0\.7/);
+  assert.match(sec.lines[0].link, /^#\/\?p=/);
+  assert.ok(at > 0);
 });
