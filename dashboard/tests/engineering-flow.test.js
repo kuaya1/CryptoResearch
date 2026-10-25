@@ -379,3 +379,162 @@ test('GitHub readback that cannot be read says unknown, never a pass; a token is
   await ok.checks('a'.repeat(40));
   assert.equal(calls, 1, 'a 200 answer is reused for a minute');
 });
+
+// --- the independent review of PR #16 (2026-10-25): findings 1, 3, 4, 8 -------------
+
+const sha256 = (s) => require('crypto').createHash('sha256').update(s).digest('hex');
+
+// Prepared, admitted, on main and confirmed: ready for the worker to build.
+async function confirmed(f, ws, args) {
+  const p = I.prepareTask(ws, CHAT, args, o());
+  assert.equal(I.submitTask(ws, CHAT, { task_id: p.task_id, version: 1, content_sha256: p.content_sha256 }, o()).status, 'admitted');
+  const c = I.claimTask(ws, W1, { task_id: p.task_id }, o());
+  const a = bindAndPush(f, ws, p.task_id, { token: c.claim_token });
+  assert.equal((await BP.admit(f.runner(), { branch: `claude/admission-${p.task_id}`, head: a.head, desk: DESK_URL, fetchJson: deskOf(ws) })).status, 'merged');
+  const c2 = I.claimTask(ws, W1, { task_id: p.task_id }, o());
+  const st = W.admissionStatus(f.work, { task: p.task_id, entrySha256: a.entry_sha256 });
+  I.recordEvent(ws, W1, { task_id: p.task_id, claim_token: c2.claim_token, type: 'admission_confirmed', main_sha: st.main_sha, entry_sha256: st.entry_sha256 }, o());
+  return { id: p.task_id, number: a.number, token: c2.claim_token };
+}
+// One commit on claude/candidate-eng-<n> from main as it is now.
+function build(f, number, files) {
+  g(f.work, 'fetch', '-q', 'origin');
+  g(f.work, 'checkout', '-q', '-B', `claude/candidate-eng-${number}`, 'origin/main');
+  for (const [file, text] of Object.entries(files)) put(f.work, file, text);
+  g(f.work, 'add', '-A'); g(f.work, 'commit', '-qm', `docs: note\n\nBacklog-Item: ${number}`);
+  const head = g(f.work, 'rev-parse', 'HEAD');
+  return { head, ev: W.evidence(f.work, { head, base: 'origin/main' }) };
+}
+function recordBuilt(ws, id, number, token, { head, ev }, { files = ev.files, diff = ev.diff } = {}) {
+  I.recordEvent(ws, W1, { task_id: id, claim_token: token, type: 'candidate', branch: `claude/candidate-eng-${number}`, head_sha: head, base_sha: ev.base_sha, merge_base_sha: ev.merge_base_sha, files, diff }, o());
+  return I.recordEvent(ws, W1, { task_id: id, claim_token: token, type: 'verification', head_sha: head, command: 'node dashboard/cli.js test', exit_code: 0, total: 5, passed: 5, failed: 0, output_tail: 'ok', acceptance: [{ index: 0, met: true, evidence: 'file present' }] }, o());
+}
+const promoteCheck = (f, ws, number, head, base) => BP.engineeringCheck(f.work, { base, head, branch: `claude/backlog-eng-${number}`, scope: BP.scopeCheck(f.work, { base, head }), desk: DESK_URL, fetchJson: deskOf(ws) });
+
+test('admission adds exactly one engineering item: an entry carrying any other line is refused even when its hash is bound', async (t) => {
+  const f = fixture(t);
+  const id = 'eng-20261025-abcdef';
+  const branch = `claude/admission-${id}`;
+  const pushEntry = (entry) => {
+    const text = f.show(f.mainSha(), 'DESK_STATE.md');
+    g(f.work, 'checkout', '-q', '-B', branch, 'origin/main');
+    put(f.work, 'DESK_STATE.md', BP.insertEntry(text, entry));
+    g(f.work, 'commit', '-qam', 'admission'); g(f.work, 'push', '-q', '-f', 'origin', branch);
+    return g(f.work, 'rev-parse', 'HEAD');
+  };
+  // A desk that answers for exactly this entry, as a desk that bound it would.
+  const deskFor = (entry) => async () => ({ status: 200, json: { task_id: id, admissible: true, reasons: [], number: 4, version: 1, entry_sha256: sha256(entry), content_sha256: `0123456789abcdef${'f'.repeat(48)}` } });
+  const item = `- [ ] **4. Lane note (FICTIONAL)** *(engineering task ${id} v1, sha256 0123456789abcdef, delegation pol-20261025-000000; built only through the engineering lane)*`;
+  const bad = [
+    `${item}\n  - Outcome: x\n- [ ] **9. Injected ordinary item.** change the sizing gate\n  - Scope: \`docs/engineering/a.md\`\n`,
+    `${item}\n  - Outcome: x\n- [ ] **2. Two again.**\n`,
+    `${item}\n  - Outcome: x\n  - Scope: \`docs/engineering/a.md\`\n## A new section\n`,
+    `${item}\n  - Outcome: x\n  - Scope: \`docs/engineering/a.md\`\n  - [x] **3. Three, ticked.**\n`,
+  ];
+  const m0 = f.mainSha();
+  for (const entry of bad) {
+    const r = await BP.admit(f.runner(), { branch, head: pushEntry(entry), desk: DESK_URL, fetchJson: deskFor(entry) });
+    assert.equal(r.status, 'refused', entry);
+    assert.match(r.reasons.join(' '), /one engineering item/);
+    assert.equal(f.mainSha(), m0, 'main unchanged');
+  }
+  // The same item with only its own lines lands.
+  const good = `${item}\n  - Outcome: x\n  - Acceptance: ok\n  - Scope: \`docs/engineering/a.md\`\n`;
+  const r = await BP.admit(f.runner(), { branch, head: pushEntry(good), desk: DESK_URL, fetchJson: deskFor(good) });
+  assert.equal(r.status, 'merged', JSON.stringify(r));
+  assert.deepEqual([...BP.backlogItems(f.show(f.mainSha(), 'DESK_STATE.md')).entries()].map(([n, x]) => [n, x.ticked]), [[1, false], [2, true], [3, false], [4, false]]);
+});
+
+test('one task lands under one number: a second admission for a task already on main is refused, and the desk keeps the first', async (t) => {
+  const f = fixture(t);
+  const { ws, cleanup } = tempWorkspace('engflow-once'); t.after(cleanup);
+  I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o());
+  const id = admitted(ws, 'Lane note (FICTIONAL)');
+  const c = I.claimTask(ws, W1, { task_id: id }, o());
+  const a = bindAndPush(f, ws, id, { token: c.claim_token });
+  assert.equal((await BP.admit(f.runner(), { branch: `claude/admission-${id}`, head: a.head, desk: DESK_URL, fetchJson: deskOf(ws) })).status, 'merged');
+  // The worker misreads the run as a refusal, releases the number and binds the next.
+  const c2 = I.claimTask(ws, W1, { task_id: id }, o());
+  I.recordEvent(ws, W1, { task_id: id, claim_token: c2.claim_token, type: 'admission_refused', number: a.number, reason: 'misread' }, o());
+  const c3 = I.claimTask(ws, W1, { task_id: id }, o());
+  const b = bindAndPush(f, ws, id, { token: c3.claim_token });
+  assert.equal(b.number, a.number + 1);
+  const m1 = f.mainSha();
+  const r = await BP.admit(f.runner(), { branch: `claude/admission-${id}`, head: b.head, desk: DESK_URL, fetchJson: deskOf(ws) });
+  assert.equal(r.status, 'refused', JSON.stringify(r));
+  assert.equal(r.task_on_main, a.number);
+  assert.match(r.reasons.join(' '), new RegExp(`${id} is already on main as item ${a.number}`));
+  assert.equal(f.mainSha(), m1);
+  assert.equal([...f.show(m1, 'DESK_STATE.md').matchAll(new RegExp(`engineering task ${id}`, 'g'))].length, 1);
+  // The worker reads main and confirms what is there: the desk takes back the first number.
+  const st = W.admissionStatus(f.work, { task: id, entrySha256: b.entry_sha256 });
+  assert.equal(st.on_main, true);
+  assert.equal(st.number, a.number);
+  assert.equal(st.matches_bound, false);
+  const c4 = I.claimTask(ws, W1, { task_id: id }, o());
+  assert.equal(I.recordEvent(ws, W1, { task_id: id, claim_token: c4.claim_token, type: 'admission_confirmed', main_sha: st.main_sha, entry_sha256: st.entry_sha256 }, o()).status, 'claimed');
+  const v = I.getTask(ws, W1, id, o());
+  assert.equal(v.admission.number, a.number);
+  assert.equal(v.admission.state, 'confirmed');
+  // The later number is free again.
+  const other = admitted(ws, 'Second note (FICTIONAL)', 'docs/engineering/b.md');
+  const co = I.claimTask(ws, W1, { task_id: other }, o());
+  assert.equal(I.recordEvent(ws, W1, { task_id: other, claim_token: co.claim_token, type: 'admission_number', number: b.number, observed_max: b.number - 1, observed_main_sha: m1 }, o()).number, b.number);
+});
+
+test('promotion recomputes the reviewed diff from Git: a decoy the worker sent never promotes the real head', async (t) => {
+  const f = fixture(t);
+  const { ws, cleanup } = tempWorkspace('engflow-decoy'); t.after(cleanup);
+  I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o());
+  const { id, number, token } = await confirmed(f, ws, { ...docsTask('Docs (FICTIONAL)', 'docs/engineering/**'), required_review: 'owner' });
+  const real = build(f, number, { 'docs/engineering/a.md': 'real content A\n', 'docs/engineering/b.md': 'real content B the reviewer never saw\n' });
+  assert.deepEqual(real.ev.files, ['docs/engineering/a.md', 'docs/engineering/b.md']);
+  const decoy = 'diff --git a/docs/engineering/a.md b/docs/engineering/a.md\nnew file mode 100644\n--- /dev/null\n+++ b/docs/engineering/a.md\n@@ -0,0 +1 @@\n+harmless decoy\n';
+  assert.equal(recordBuilt(ws, id, number, token, real, { files: ['docs/engineering/a.md'], diff: decoy }).status, 'review_pending');
+  // What the reviewer is shown says where it came from and how it is held.
+  const ev = I.getEvidence(ws, OWNER, { task_id: id }, o());
+  assert.equal(ev.diff.matches_record, undefined, 'no "matches" that only compares the upload with itself');
+  assert.equal(ev.diff.from, 'worker');
+  assert.match(ev.diff.checked_at_promotion, /recomputes/);
+  I.saveReview(ws, OWNER, { task_id: id, head_sha: real.head, merge_base_sha: real.ev.merge_base_sha, result: 'pass', read: { diff: true, tests: true } }, o());
+  // The desk cannot see Git: it attests the hash and files the review read.
+  const att = I.attestationView(ws, real.head, o());
+  assert.equal(att.promotable, true, att.reasons.join(' '));
+  assert.equal(att.diff_sha256, sha256(decoy));
+  assert.deepEqual(att.files, ['docs/engineering/a.md']);
+  // The workflow recomputes them from Git and refuses.
+  const e = await promoteCheck(f, ws, number, real.head, f.mainSha());
+  assert.equal(e.ok, false);
+  assert.match(e.reasons.join(' '), /the diff the review read is not the Git diff of this head/);
+  assert.match(e.reasons.join(' '), /docs\/engineering\/b\.md is changed but was not in the reviewed diff/);
+});
+
+test('a review covers one head on one base: when main moves the candidate is rebuilt, verified and reviewed again', async (t) => {
+  const f = fixture(t);
+  const { ws, cleanup } = tempWorkspace('engflow-stale'); t.after(cleanup);
+  I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o());
+  const { id, number, token } = await confirmed(f, ws, { ...docsTask('Reviewed note (FICTIONAL)'), required_review: 'owner' });
+  const note = { 'docs/engineering/trial.md': '# Note (FICTIONAL)\n\nprepared, admitted, merged\n' };
+  const first = build(f, number, note);
+  assert.equal(recordBuilt(ws, id, number, token, first).status, 'review_pending');
+  I.saveReview(ws, OWNER, { task_id: id, head_sha: first.head, merge_base_sha: first.ev.merge_base_sha, result: 'pass', read: { diff: true, tests: true } }, o());
+  const m1 = f.mainSha();
+  const ok1 = await promoteCheck(f, ws, number, first.head, m1);
+  assert.equal(ok1.ok, true, ok1.reasons.join('; '));
+  // Another merge lands: the reviewed base is no longer main.
+  const m2 = f.onMain('docs/engineering/other.md', 'someone else (FICTIONAL)\n', 'other merge');
+  const stale = await promoteCheck(f, ws, number, first.head, m2);
+  assert.equal(stale.ok, false);
+  assert.match(stale.reasons.join(' '), /main has moved since the review/);
+  // The worker rebuilds on the new main (no correction attempt used); it is verified and reviewed again.
+  const c2 = I.claimTask(ws, W1, { task_id: id }, o());
+  const again = build(f, number, note);
+  assert.notEqual(again.head, first.head);
+  assert.equal(again.ev.merge_base_sha, m2);
+  assert.equal(recordBuilt(ws, id, number, c2.claim_token, again).status, 'review_pending');
+  assert.equal(I.getTask(ws, W1, id, o()).attempts.count, 1, 'a rebuild on a new main is not a correction attempt');
+  assert.match((await promoteCheck(f, ws, number, again.head, m2)).reasons.join(' '), /desk: the required owner review has not passed on this head/);
+  I.saveReview(ws, OWNER, { task_id: id, head_sha: again.head, merge_base_sha: again.ev.merge_base_sha, result: 'pass', read: { diff: true, tests: true } }, o());
+  const ok2 = await promoteCheck(f, ws, number, again.head, m2);
+  assert.equal(ok2.ok, true, ok2.reasons.join('; '));
+});
