@@ -194,11 +194,68 @@ function fits(policy, c, { now, openUnderPolicy = 0, admittedLastDay = 0 } = {})
     if (why) r.push(`${p} can reach a protected path (${why})`);
     else if (!allowed.some((g) => within(p, g))) r.push(`${p} is outside the delegated paths`);
   }
-  if (!(c.required_review === policy.required_review || c.required_review === 'owner' || policy.required_review === 'none')) r.push(`the delegation requires ${policy.required_review} review`);
-  if (c.release_mode === 'promote' && policy.release_mode !== 'promote') r.push('the delegation releases only by Eric');
+  // A lighter declared review or release is no miss: the delegation's own
+  // applies (boundaries below).
   if (openUnderPolicy >= policy.limits.max_open_tasks) r.push(`the delegation already has ${openUnderPolicy} open ${openUnderPolicy === 1 ? 'task' : 'tasks'} (limit ${policy.limits.max_open_tasks})`);
   if (admittedLastDay >= policy.limits.max_admissions_per_day) r.push(`the delegation admitted ${admittedLastDay} in the last day (limit ${policy.limits.max_admissions_per_day})`);
   return r;
+}
+
+// Reviews in REVIEWS order of strength (owner is Eric's own and counts for
+// any); release by Eric is stricter than promotion. An unknown value counts
+// as the strictest, a missing one has no say.
+function stricterReview(...rs) {
+  let out = 'none';
+  for (const r of rs) {
+    if (r === null || r === undefined) continue;
+    const k = REVIEWS.includes(r) ? r : 'owner';
+    if (REVIEWS.indexOf(k) > REVIEWS.indexOf(out)) out = k;
+  }
+  return out;
+}
+const stricterRelease = (...ms) => (ms.some((m) => m !== null && m !== undefined && m !== 'promote') ? 'owner' : 'promote');
+
+// What a version is held to inside a delegation it fits: the stricter of its
+// declared review and release and the delegation's, and the delegation's
+// limits (max_files is checked on each candidate).
+function boundaries(policy, c) {
+  return {
+    required_review: stricterReview(c.required_review, policy.required_review),
+    review_basis: { declared: c.required_review, delegation: policy.required_review },
+    release_mode: stricterRelease(c.release_mode, policy.release_mode),
+    limits: policy.limits,
+  };
+}
+
+// Which of the delegations a version fits it is admitted under (MATCH_RULE):
+// the narrowest, then the lightest. In order: (1) the fewest other fitting
+// delegations whose paths lie inside its own, so one inside another always
+// comes first; (2) the lighter review it requires; (3) release by promotion
+// before release by Eric; (4) fewer path rules; (5) the template name;
+// (6) the delegation ID. Each key is the delegation's own, so the order the
+// delegations were activated or listed in never decides.
+const MATCH_RULE = 'cr-eng-match@1';
+const MATCH_KEYS = ['paths', 'review', 'release', 'path_rules', 'template', 'policy_id'];
+const pathsInside = (a, b) => a.allowed_paths.every((g) => b.allowed_paths.some((h) => within(g, h)));
+const reviewRank = (r) => (REVIEWS.includes(r) ? REVIEWS.indexOf(r) : REVIEWS.length);
+function choose(fitting) {
+  if (!fitting.length) return null;
+  const inside = (p) => fitting.filter((q) => q !== p && pathsInside(q, p) && !pathsInside(p, q)).length;
+  const ranked = fitting.map((p) => ({ p, k: [inside(p), reviewRank(p.required_review), p.release_mode === 'promote' ? 0 : 1, p.allowed_paths.length, p.template, p.policy_id] }));
+  ranked.sort((a, b) => { const i = a.k.findIndex((x, j) => x !== b.k[j]); return i < 0 ? 0 : a.k[i] < b.k[i] ? -1 : 1; });
+  const [{ p }, next] = ranked;
+  if (!next) return { policy: p, ranked: [p], decided_by: 'only', why: 'the only active delegation it fits' };
+  const q = next.p;
+  const by = MATCH_KEYS[ranked[0].k.findIndex((x, j) => x !== next.k[j])];
+  const why = {
+    paths: pathsInside(p, q) ? `its paths lie inside those of ${q.template} (${q.policy_id}), which it also fits` : `its paths hold fewer of the delegations it fits than ${q.template}'s (${q.policy_id})`,
+    review: `it requires the lighter review (${p.required_review}; ${q.template} requires ${q.required_review})`,
+    release: `it releases by promotion; ${q.template} releases only by Eric`,
+    path_rules: `it has fewer path rules than ${q.template} (${p.allowed_paths.length} against ${q.allowed_paths.length})`,
+    template: `as narrow and as light as ${q.template}; the template name decides`,
+    policy_id: `the same template as ${q.policy_id}; the delegation ID decides`,
+  }[by];
+  return { policy: p, ranked: ranked.map((x) => x.p), decided_by: by, why: `first of the ${ranked.length} active delegations it fits: ${why}` };
 }
 
 // The exact backlog entry an admission adds to DESK_STATE.md (LF endings,
@@ -220,4 +277,5 @@ module.exports = {
   REPO, INTENTS, REVIEWS, RELEASE_MODES, TEMPLATES, DESIGN_PATHS, MAX_ATTEMPTS, LEASE_MS, LIMITS,
   sha256, canonical, contentHash, globRe, matches, within, protectedWhy, globTouchesProtected, PROTECTED_SAMPLES,
   screen, contentOf, validateContent, fits, entryText, ENTRY_MARK_RE, PATH_RE,
+  stricterReview, stricterRelease, boundaries, choose, MATCH_RULE, MATCH_KEYS,
 };

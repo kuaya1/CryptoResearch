@@ -99,8 +99,8 @@ test('roles: each connection does only its role; Eric decides only on the desk; 
   }
   // Reads are open to every role.
   for (const who of [CHAT, GEM, READER, W1]) assert.equal(I.getTask(ws, who, p.task_id, o()).task_id, p.task_id);
-  assert.deepEqual(I.capabilities(ws, W1, o()).can, { read: true, review: false, submit: false, work: true });
-  assert.deepEqual(I.capabilities(ws, CHAT, o()).can, { read: true, review: true, submit: true, work: false });
+  assert.deepEqual(I.capabilities(ws, W1, {}, o()).can, { read: true, review: false, submit: false, work: true });
+  assert.deepEqual(I.capabilities(ws, CHAT, {}, o()).can, { read: true, review: true, submit: true, work: false });
 });
 
 test('explore is a note: never submitted, authorized, claimed or built', (t) => {
@@ -165,11 +165,210 @@ test('a delegation admits only what fits it; anything else waits with the reason
   const app = (over) => submitted(ws2, docsTask({ title: 'App work (FICTIONAL)', goal_id: 'desk-polish', required_review: 'chatgpt', scope: { paths: ['dashboard/web/src/shell/Fictional.jsx'] }, ...over }));
   assert.equal(app().status, 'admitted');
   assert.match(app({ goal_id: 'other-goal' }).says, /covers goal desk-polish, not other-goal/);
-  assert.match(app({ required_review: 'none' }).says, /requires chatgpt review/);
+  // A lighter declared review is no miss: the delegation's ChatGPT review applies.
+  const lax = app({ required_review: 'none' });
+  assert.equal(lax.status, 'admitted');
+  assert.equal(lax.match.delegation.required_review, 'chatgpt');
   assert.match(app({ scope: { paths: ['dashboard/server.js'] } }).says, /dashboard\/server\.js is outside the delegated paths/);
   assert.match(app({ scope: { paths: ['dashboard/oauth.js'] } }).says, /protected path/);
   assert.match(app({ scope: { paths: ['dashboard/engineering/**'] } }).says, /protected path \(engineering authorization/);
   assert.match(app({ intent: 'design', scope: { paths: ['dashboard/web/src/x.js'] } }).says, /outside the delegated paths/);
+});
+
+// Several delegations at once (cr-eng-match@1, Eric 2026-10-25): a version
+// lands in the narrowest one it fits and is held to its rules.
+const GOAL = { goal_id: 'desk-polish', goal: 'Polish the desk (FICTIONAL)' };
+const APP_FILE = 'dashboard/web/src/shell/Fictional.jsx';
+const tree = (root) => {
+  const out = {};
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else out[path.relative(root, p)] = crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex'); } };
+  walk(root);
+  return out;
+};
+
+test('two delegations at once: a version lands in the narrowest one it fits, in either activation order', (t) => {
+  for (const [k, order] of [['eng-docs@1', 'eng-app@1'], ['eng-app@1', 'eng-docs@1']].entries()) {
+    const { ws } = ws0(t, `match-${k}`);
+    const pol = {};
+    order.forEach((tpl, i) => { pol[tpl] = I.activatePolicy(ws, OWNER, { template: tpl, ...(tpl === 'eng-app@1' ? GOAL : {}) }, o(i * MIN)).policy; });
+    const at = o(2 * MIN);
+    const land = (title, paths, over = {}) => submitted(ws, docsTask({ title, goal_id: 'desk-polish', scope: { paths }, ...over }), at);
+    // Documents only: it fits both and lands in eng-docs@1, with no review.
+    const docs = land('Docs only (FICTIONAL)', ['docs/engineering/trial.md']);
+    assert.equal(docs.status, 'admitted', order.join(' then '));
+    assert.equal(docs.match.delegation.template, 'eng-docs@1', order.join(' then '));
+    assert.equal(docs.match.delegation.decided_by, 'paths');
+    assert.match(docs.match.delegation.why, /its paths lie inside those of eng-app@1/);
+    assert.deepEqual(docs.match.considered.map((c) => [c.template, c.fits, c.chosen]).sort(), [['eng-app@1', true, false], ['eng-docs@1', true, true]]);
+    const dv = I.getTask(ws, READER, docs.task_id, at);
+    assert.equal(dv.authorization.policy_id, pol['eng-docs@1'].policy_id);
+    assert.equal(dv.review.required, 'none');
+    // Application paths: only eng-app@1 fits; eng-docs@1's miss is said.
+    const app = land('App only (FICTIONAL)', [APP_FILE], { required_review: 'chatgpt' });
+    assert.equal(app.match.delegation.template, 'eng-app@1');
+    assert.equal(app.match.delegation.decided_by, 'only');
+    assert.match(app.match.considered.find((c) => c.template === 'eng-docs@1').reasons.join(' '), /Fictional\.jsx is outside the delegated paths/);
+    // Documents and application paths together: eng-app@1, held to its review.
+    const mixed = land('Docs and app (FICTIONAL)', ['docs/engineering/mixed.md', 'dashboard/web/src/shell/Mixed.jsx']);
+    assert.equal(mixed.match.delegation.template, 'eng-app@1');
+    const mv = I.getTask(ws, READER, mixed.task_id, at);
+    assert.equal(mv.authorization.policy_id, pol['eng-app@1'].policy_id);
+    assert.equal(mv.review.required, 'chatgpt');
+  }
+});
+
+test('a declared review lighter than the delegation\'s is held to the delegation\'s, through promotion', (t) => {
+  const { ws, root } = ws0(t, 'match-review');
+  I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o());
+  const app = I.activatePolicy(ws, OWNER, { template: 'eng-app@1', ...GOAL }, o()).policy;
+  const s = submitted(ws, docsTask({ title: 'App work, no review declared (FICTIONAL)', goal_id: 'desk-polish', required_review: 'none', scope: { paths: [APP_FILE] } }));
+  assert.equal(s.status, 'admitted');
+  assert.equal(s.match.delegation.template, 'eng-app@1');
+  assert.deepEqual(s.match.delegation.review_basis, { declared: 'none', delegation: 'chatgpt' });
+  assert.match(s.match.says, /review chatgpt \(declared none; the delegation requires chatgpt\)/);
+  assert.match(s.says, /held to review chatgpt/);
+  // The content and its hash stay as submitted; the effective review is the authorization's.
+  const v = I.getTask(ws, READER, s.task_id, o());
+  assert.equal(v.content.required_review, 'none');
+  assert.equal(v.content_sha256, s.content_sha256);
+  assert.equal(v.content_sha256, P.contentHash(v.content));
+  assert.equal(v.authorization.required_review, 'chatgpt');
+  assert.equal(v.authorization.rule, 'cr-eng-match@1');
+  // Built and verified, it waits for ChatGPT and is not promotable.
+  const m = onMain(ws, s.task_id);
+  const c = cand(ws, s.task_id, m.token, m.number, 'v1', { file: APP_FILE });
+  assert.equal(verify(ws, s.task_id, m.token, c.head).status, 'review_pending');
+  const att = I.attestationView(ws, c.head, o());
+  assert.equal(att.promotable, false);
+  assert.equal(att.required_review, 'chatgpt');
+  assert.deepEqual(att.delegation, { policy_id: app.policy_id, template: 'eng-app@1' });
+  assert.match(att.reasons.join(' '), /the required chatgpt review has not passed on this head/);
+  // A Gemini pass does not decide it.
+  assert.equal(I.saveReview(ws, GEM, { task_id: s.task_id, head_sha: c.head, merge_base_sha: MAIN1, result: 'pass', read: { diff: true, tests: true } }, o()).counts_for_requirement, false);
+  // A task record that lost its effective review cannot lower it: promotion
+  // re-reads the delegation's own.
+  const file = path.join(root, 'engineering', 'tasks', s.task_id, 'task.json');
+  const saved = fs.readFileSync(file, 'utf8');
+  const lowered = JSON.parse(saved);
+  lowered.status = 'ready_for_promotion';
+  delete lowered.authorization.required_review;
+  atomicWrite(file, jsonText(lowered));
+  const forged = I.attestationView(ws, c.head, o());
+  assert.equal(forged.promotable, false);
+  assert.equal(forged.required_review, 'chatgpt');
+  atomicWrite(file, saved);
+  // ChatGPT's pass on that head releases it.
+  const pass = I.saveReview(ws, CHAT, { task_id: s.task_id, head_sha: c.head, merge_base_sha: MAIN1, result: 'pass', read: { diff: true, tests: true, acceptance: true } }, o(MIN));
+  assert.equal(pass.counts_for_requirement, true);
+  assert.equal(pass.status, 'ready_for_promotion');
+  const ok = I.attestationView(ws, c.head, o(MIN));
+  assert.equal(ok.promotable, true, ok.reasons.join('; '));
+  assert.equal(ok.review_state, 'pass');
+});
+
+test('outside both delegations or on a protected path it still waits; revoking one leaves the other admitting', (t) => {
+  const { ws } = ws0(t, 'match-refused');
+  const docs = I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o()).policy;
+  const app = I.activatePolicy(ws, OWNER, { template: 'eng-app@1', ...GOAL }, o(MIN)).policy;
+  const land = (title, paths, at = o(2 * MIN)) => submitted(ws, docsTask({ title, goal_id: 'desk-polish', scope: { paths } }), at);
+  const outside = land('Outside both (FICTIONAL)', ['scripts/fictional.sh']);
+  assert.equal(outside.status, 'awaiting_authorization');
+  assert.equal(outside.match.delegation, null);
+  assert.deepEqual(outside.match.considered.map((c) => c.fits), [false, false]);
+  for (const c of outside.match.considered) assert.match(c.reasons.join(' '), /scripts\/fictional\.sh is outside the delegated paths/);
+  assert.match(outside.says, new RegExp(`${docs.policy_id} \\(eng-docs@1\\): scripts/fictional\\.sh is outside the delegated paths`));
+  assert.match(outside.says, new RegExp(`${app.policy_id} \\(eng-app@1\\): scripts/fictional\\.sh is outside the delegated paths`));
+  for (const p of ['dashboard/engineering/policy.js', 'server.js', '.github/workflows/test.yml']) {
+    const prot = land(`Protected ${p} (FICTIONAL)`, ['docs/engineering/x.md', p]);
+    assert.equal(prot.status, 'awaiting_authorization', p);
+    for (const c of prot.match.considered) assert.match(c.reasons.join(' '), /can reach a protected path/, `${p} under ${c.template}`);
+  }
+  // At its limit, eng-docs@1 misses; documents work that also fits eng-app@1
+  // lands there, held to its review, and says why eng-docs@1 missed.
+  land('Docs one (FICTIONAL)', ['docs/engineering/one.md']);
+  land('Docs two (FICTIONAL)', ['docs/engineering/two.md']);
+  const third = land('Docs three (FICTIONAL)', ['docs/engineering/three.md']);
+  assert.equal(third.match.delegation.template, 'eng-app@1');
+  assert.equal(third.match.delegation.required_review, 'chatgpt');
+  assert.match(third.match.considered.find((c) => c.template === 'eng-docs@1').reasons.join(' '), /already has 2 open tasks \(limit 2\)/);
+
+  // Revoking eng-docs@1 leaves eng-app@1 admitting (and its tasks authorized).
+  I.revokePolicy(ws, OWNER, docs.policy_id, { reason: 'done (FICTIONAL)' }, o(3 * MIN));
+  const after = land('Docs after revoke (FICTIONAL)', ['docs/engineering/after.md'], o(4 * MIN));
+  assert.equal(after.status, 'admitted');
+  assert.deepEqual(after.match.considered.map((c) => c.template), ['eng-app@1']);
+  assert.equal(I.getTask(ws, READER, third.task_id, o(4 * MIN)).authorization.holds, true);
+
+  // Revoking eng-app@1 leaves eng-docs@1 admitting; application work waits.
+  const { ws: ws2 } = ws0(t, 'match-revoke-app');
+  I.activatePolicy(ws2, OWNER, { template: 'eng-docs@1' }, o());
+  const app2 = I.activatePolicy(ws2, OWNER, { template: 'eng-app@1', ...GOAL }, o()).policy;
+  I.revokePolicy(ws2, OWNER, app2.policy_id, {}, o(MIN));
+  const d2 = submitted(ws2, docsTask({ goal_id: 'desk-polish' }), o(2 * MIN));
+  assert.equal(d2.match.delegation.template, 'eng-docs@1');
+  assert.equal(d2.match.delegation.decided_by, 'only');
+  const a2 = submitted(ws2, docsTask({ title: 'App after revoke (FICTIONAL)', goal_id: 'desk-polish', scope: { paths: [APP_FILE] } }), o(2 * MIN));
+  assert.equal(a2.status, 'awaiting_authorization');
+  assert.match(a2.says, /eng-docs@1\): dashboard\/web\/src\/shell\/Fictional\.jsx is outside the delegated paths/);
+});
+
+test('prepare and capabilities say where a version would land and why, before submit, writing nothing', (t) => {
+  const { ws, root } = ws0(t, 'match-preview');
+  const p = prepared(ws, docsTask({ goal_id: 'desk-polish' }));
+  assert.equal(p.match.delegation, null);
+  assert.match(p.says, /Would wait for Eric to authorize this exact version on the desk: no delegation is active/);
+  I.activatePolicy(ws, OWNER, { template: 'eng-app@1', ...GOAL }, o());
+  const docs = I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o(MIN)).policy;
+  const before = tree(root);
+  const cap = I.capabilities(ws, CHAT, { task_id: p.task_id }, o(2 * MIN));
+  assert.equal(I.capabilities(ws, READER, { task_id: p.task_id, version: 1 }, o(2 * MIN)).preview.delegation.template, 'eng-docs@1');
+  assert.deepEqual(tree(root), before, 'reading the match writes nothing');
+  assert.match(cap.matching, /^cr-eng-match@1: .*narrowest active delegation it fits, never the first activated/);
+  assert.equal(cap.delegations.length, 2);
+  assert.deepEqual([cap.preview.task_id, cap.preview.version, cap.preview.current, cap.preview.status], [p.task_id, 1, true, 'prepared']);
+  assert.equal(cap.preview.delegation.policy_id, docs.policy_id);
+  assert.match(cap.preview.says, /^Would be admitted under eng-docs@1 \(pol-\d{8}-[0-9a-f]{6}\), first of the 2 active delegations it fits: its paths lie inside those of eng-app@1/);
+  assert.equal(codeOf(() => I.capabilities(ws, CHAT, { task_id: p.task_id, approved: true }, o())), 'BAD_INPUT');
+  assert.equal(codeOf(() => I.capabilities(ws, CHAT, { task_id: p.task_id, version: 9 }, o())), 'NOT_FOUND');
+  // Submit lands where the preview said, and the preview then names it.
+  const s = I.submitTask(ws, CHAT, { task_id: p.task_id, version: 1, content_sha256: p.content_sha256 }, o(2 * MIN));
+  assert.equal(s.match.delegation.policy_id, docs.policy_id);
+  assert.match(I.capabilities(ws, CHAT, { task_id: p.task_id }, o(2 * MIN)).preview.says, /^Admitted under eng-docs@1/);
+  // Application work previews eng-app@1 and the review it would be held to.
+  const p2 = prepared(ws, docsTask({ title: 'App preview (FICTIONAL)', goal_id: 'desk-polish', scope: { paths: ['dashboard/core/projects.js'] } }), o(3 * MIN));
+  assert.equal(p2.match.delegation.template, 'eng-app@1');
+  assert.match(p2.says, /Would be admitted under eng-app@1 .*Held to review chatgpt \(declared none; the delegation requires chatgpt\), release promote, at most 30 files\./);
+  // While engineering is paused the preview says a submit is refused.
+  I.setPaused(ws, OWNER, { paused: true }, o(3 * MIN));
+  assert.match(I.capabilities(ws, CHAT, { task_id: p2.task_id }, o(3 * MIN)).preview.says, /Engineering is paused on the desk: a submit is refused/);
+  I.setPaused(ws, OWNER, { paused: false }, o(3 * MIN));
+  // An explore note has no match.
+  assert.equal(prepared(ws, { title: 'A thought (FICTIONAL)', intent: 'explore' }).match, null);
+});
+
+test('the match rule orders delegations by their own keys, never by the order they are given in', () => {
+  const pol = (template, id, over = {}) => ({ ...P.TEMPLATES[template], policy_id: id, ...over });
+  const docs = pol('eng-docs@1', 'pol-20261025-bbbbbb');
+  const app = pol('eng-app@1', 'pol-20261025-aaaaaa');
+  for (const set of [[docs, app], [app, docs]]) assert.equal(P.choose(set).policy, docs);
+  const light = pol('eng-app@1', 'pol-20261025-cccccc', { required_review: 'claude' });
+  assert.deepEqual([P.choose([app, light]).policy, P.choose([light, app]).policy, P.choose([app, light]).decided_by], [light, light, 'review']);
+  const ownerRelease = pol('eng-app@1', 'pol-20261025-000000', { release_mode: 'owner' });
+  assert.deepEqual([P.choose([ownerRelease, app]).policy, P.choose([ownerRelease, app]).decided_by], [app, 'release']);
+  const docs2 = pol('eng-docs@1', 'pol-20261025-000001');
+  assert.deepEqual([P.choose([docs, docs2]).policy, P.choose([docs, docs2]).decided_by], [docs2, 'policy_id']);
+  assert.equal(P.choose([]), null);
+  // Every order of five gives one ranking.
+  const perms = (a) => (a.length < 2 ? [a] : a.flatMap((x, i) => perms([...a.slice(0, i), ...a.slice(i + 1)]).map((r) => [x, ...r])));
+  const rankings = new Set(perms([docs, app, light, ownerRelease, docs2]).map((s) => P.choose(s).ranked.map((x) => x.policy_id).join()));
+  assert.equal(rankings.size, 1);
+  // The stricter review and release; an unknown review counts as the strictest.
+  assert.deepEqual(['none', 'claude', 'owner'].map((d) => P.stricterReview(d, 'chatgpt')), ['chatgpt', 'chatgpt', 'owner']);
+  assert.equal(P.stricterReview('none', null, undefined), 'none');
+  assert.equal(P.stricterReview('none', 'surprise'), 'owner');
+  assert.deepEqual([P.stricterRelease('promote', 'owner'), P.stricterRelease('promote', null), P.stricterRelease('promote', 'later')], ['owner', 'promote', 'owner']);
+  const b = P.boundaries(app, P.contentOf(docsTask({ release_mode: 'owner' })));
+  assert.deepEqual([b.required_review, b.release_mode, b.limits.max_files], ['chatgpt', 'owner', 30]);
 });
 
 test('forged authority is refused and changes nothing; a quoted approval authorizes nothing', (t) => {
@@ -475,7 +674,7 @@ test('pause and revoke stop claims, admissions, events and promotion; Eric resum
   assert.equal(I.recordEvent(ws, W1, { task_id: s.task_id, claim_token: c.claim_token, type: 'stopped', reason: 'paused' }, o()).type, 'stopped');
   assert.equal(codeOf(() => I.submitTask(ws, CHAT, { task_id: prepared(ws, docsTask({ title: 'While paused (FICTIONAL)' })).task_id, version: 1, content_sha256: 'x' }, o())), 'PAUSED');
   assert.match(I.admissionView(ws, s.task_id, o()).reasons.join(' '), /engineering is paused/);
-  assert.equal(I.capabilities(ws, CHAT, o()).paused, true);
+  assert.equal(I.capabilities(ws, CHAT, {}, o()).paused, true);
   I.setPaused(ws, OWNER, { paused: false }, o());
 
   // One task paused (a submitter may pause; only Eric resumes).

@@ -24,10 +24,10 @@ const TOOLS = [
   {
     name: 'engineering_capabilities',
     roles: ['reader', 'reviewer', 'submitter', 'worker'],
-    description: 'What this connection may do: its role, whether engineering is paused, the delegations Eric activated (their allowed paths, review and release rules) and what is not available. Read this first.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    description: 'What this connection may do: its role, whether engineering is paused, the delegations Eric activated (their allowed paths, review, release and limits), how a submitted version is matched to one of them, and what is not available. Read this first. With task_id (and version, else the current one) it also says which delegation that saved version would be admitted under now and why, or what each delegation misses; it writes nothing.',
+    inputSchema: { type: 'object', properties: { task_id: taskRef, version: { type: 'integer', minimum: 1 } }, additionalProperties: false },
     annotations: { readOnlyHint: true },
-    run: (ws, who) => inbox.capabilities(ws, who),
+    run: (ws, who, a) => inbox.capabilities(ws, who, { task_id: a.task_id, version: a.version }),
   },
   {
     name: 'engineering_list_tasks',
@@ -69,7 +69,7 @@ const TOOLS = [
   {
     name: 'engineering_prepare_task',
     roles: ['submitter'],
-    description: 'Save a task as a draft version from Eric\'s direction: a title, the outcome, acceptance checks, the paths in scope, what is not in scope, the review it needs and how it is released. intent explore is a note only (never built), design is documents under docs/engineering/, implement is code. Nothing is queued: submit it after. Put Eric\'s own words in original_instruction (kept private on the desk, never in Git). Passing task_id saves a new version of that task; content cannot change once it holds a backlog number.',
+    description: 'Save a task as a draft version from Eric\'s direction: a title, the outcome, acceptance checks, the paths in scope, what is not in scope, the review it needs and how it is released. intent explore is a note only (never built), design is documents under docs/engineering/, implement is code. Nothing is queued: submit it after. The answer\'s match says which active delegation this version would be admitted under and the review, release and limits it would be held to, or what each delegation misses. Put Eric\'s own words in original_instruction (kept private on the desk, never in Git). Passing task_id saves a new version of that task; content cannot change once it holds a backlog number.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -99,7 +99,7 @@ const TOOLS = [
   {
     name: 'engineering_submit_task',
     roles: ['submitter'],
-    description: 'Submit the current version (its number and content_sha256, as prepare returned them). Inside an active delegation it is admitted for the builder; otherwise it waits for Eric to authorize that exact version on the desk. Submitting never authorizes anything.',
+    description: 'Submit the current version (its number and content_sha256, as prepare returned them). Inside an active delegation it is admitted for the builder under the narrowest one it fits (documents-only work under Engineering documents, anything touching application paths under application work), held to the stricter of its declared review and release and that delegation\'s; otherwise it waits for Eric to authorize that exact version on the desk. The answer\'s match names the delegation, or what each one missed. Submitting never authorizes anything.',
     inputSchema: { type: 'object', properties: { task_id: taskRef, version: { type: 'integer', minimum: 1 }, content_sha256: { type: 'string', pattern: '^[0-9a-f]{64}$' }, idempotency_key: idem }, required: ['task_id', 'version', 'content_sha256'], additionalProperties: false },
     annotations: { readOnlyHint: false, destructiveHint: false },
     run: (ws, who, a) => inbox.submitTask(ws, who, a),
@@ -203,7 +203,7 @@ const BY_NAME = Object.fromEntries(TOOLS.map((t) => [t.name, t]));
 const listed = (role) => TOOLS.filter((t) => t.roles.includes(role)).map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations }));
 
 const ROLE_GUIDE = {
-  submitter: 'You turn Eric\'s direction into engineering tasks: engineering_prepare_task (his own words in original_instruction), then engineering_submit_task with the version and content_sha256 it returned. Tell him plainly whether it was admitted inside a delegation or waits for his authorization on the desk; never say it is approved, built or merged unless a tool says so. You also review candidates and ask for corrections when he asks you to.',
+  submitter: 'You turn Eric\'s direction into engineering tasks: engineering_prepare_task (his own words in original_instruction), then engineering_submit_task with the version and content_sha256 it returned. Tell him plainly whether it was admitted inside a delegation (which one, and the review it is held to, as the answer says) or waits for his authorization on the desk; never say it is approved, built or merged unless a tool says so. You also review candidates and ask for corrections when he asks you to.',
   reviewer: 'You review a candidate when asked: engineering_get_evidence (goal, diff, tests, then the builder\'s notes), then engineering_save_review for that exact head_sha and merge_base_sha. Judge the diff and the test evidence against the approved acceptance checks, not the builder\'s summary.',
   worker: 'You build admitted engineering tasks: engineering_list_tasks, engineering_claim_task, then record every step with engineering_record_event and your claim_token. Record remote_action intent before a push and observed or failed after it; reconcile an unresolved intent from Git before pushing again. Stop at once when a call says STALE_CLAIM, PAUSED or HELD.',
   reader: 'You read engineering tasks, their evidence and what GitHub says about them. You cannot change anything.',
