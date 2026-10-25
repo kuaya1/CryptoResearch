@@ -1393,6 +1393,50 @@ function pilotCandidates(ws, { now = Date.now() } = {}) {
   return rows;
 }
 
+// Backlog item 30. Opt in (pilot: true) every verified, active project whose
+// Claude current eligible report is a cr-research-prompt@6 run with a grade of
+// `min` or more (a range by its low end), so qualifying candidates enter the
+// pilot queue as the surge finishes reports. Withheld or no grade, no report,
+// an older prompt, an archived or unverified project is skipped and named.
+// Projects already in the pilot are unchanged; nothing is ever opted out.
+// `dryRun` writes nothing.
+const AUTO_PILOT_MIN = 45;
+const AUTO_PILOT_PROMPT = 'cr-research-prompt@6';
+
+function autoPilotSync(ws, { min = null, dryRun = false } = {}) {
+  const floor = min === null || min === undefined ? AUTO_PILOT_MIN : min;
+  if (!isNum(floor) || floor < 0 || floor > 100) throw new OpError('INVALID', '--min is a number from 0 to 100.');
+  const projects = require('./projects');
+  const out = { min: floor, prompt_version: AUTO_PILOT_PROMPT, dry_run: dryRun === true, opted_in: [], unchanged: [], skipped: [] };
+  const todo = [];
+  for (const p of projects.listProjects(ws)) {
+    if (p.broken) continue;
+    const skip = (reason) => out.skipped.push({ project_id: p.project_id, name: p.name || p.project_id, reason });
+    if (p.status === 'archived') { skip('Archived.'); continue; }
+    const project = projects.getProject(ws, p.project_id);
+    if (!project.identity || project.identity.status !== 'verified') { skip('Identity not verified.'); continue; }
+    const pid = p.project_id;
+    const researcher = researcherOf(ws, pid);
+    if (!researcher) { skip('No eligible Claude report.'); continue; }
+    let version = null;
+    try {
+      const r = require('./compare').latestByProvider(require('./reports').loadReports(ws, pid)).claude;
+      version = (r && r.assessment && r.assessment.prompt_version) || null;
+    } catch (_) { /* left unknown */ }
+    if (version !== AUTO_PILOT_PROMPT) { skip(`Claude's current report was made under ${version || 'an unknown prompt'}, not ${AUTO_PILOT_PROMPT}.`); continue; }
+    const grade = gateGrade(researcher.grade);
+    if (grade === null) { skip(`Grade withheld or none (${(researcher.grade && researcher.grade.display) || 'no grade'}).`); continue; }
+    if (grade < floor) { skip(`Grade ${grade} is under ${floor}.`); continue; }
+    if (readProfile(ws, pid).pilot) { out.unchanged.push({ project_id: pid, name: project.name, grade, reason: 'Already in the pilot.' }); continue; }
+    todo.push({ pid, project, grade });
+  }
+  for (const { pid, project, grade } of todo) {
+    if (!dryRun) setPilot(ws, pid, true, { by: 'auto-pilot-sync' });
+    out.opted_in.push({ project_id: pid, name: project.name, grade, reason: dryRun ? 'Would be opted in.' : 'Opted in.' });
+  }
+  return out;
+}
+
 // Eric's filter for the batch gate: a grade under 40 (his choice), never
 // above the sizing's new-entry floor (above it the pre-gate would not close).
 const BATCH_GATE_BELOW = 40;
@@ -1546,6 +1590,7 @@ module.exports = {
   pilotQueue,
   pilotCandidates,
   batchGate,
+  autoPilotSync,
   quoteCandidates,
   pendingFor,
 };

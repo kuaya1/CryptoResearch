@@ -1101,3 +1101,132 @@ test('batch gate: --below may lower Eric\'s filter, never raise it past the new-
   assert.throws(() => T.batchGate(s.ws, { below: 56, dryRun: true }), (e) => e.code === 'INVALID');
   assert.throws(() => T.batchGate(s.ws, { below: -1, dryRun: true }), (e) => e.code === 'INVALID');
 });
+
+// ---------------------------------------------------------------------------
+// Auto-pilot sync (backlog item 30)
+
+// Claude's current report as a given prompt version and grade (the stored
+// fixture is @1 and 60.5), for the cases the fixtures do not hold.
+function stubClaudeReport(t, { version = 'cr-research-prompt@6', grade = { status: 'firm', value: 62, display: '62' } } = {}) {
+  const compare = require('../core/compare');
+  const rubrics = require('../core/rubrics');
+  const realLatest = compare.latestByProvider;
+  const realGrade = rubrics.gradeAssessment;
+  compare.latestByProvider = (...a) => {
+    const l = realLatest(...a);
+    return l.claude ? { ...l, claude: { ...l.claude, assessment: { ...l.claude.assessment, prompt_version: version } } } : l;
+  };
+  rubrics.gradeAssessment = () => grade;
+  t.after(() => { compare.latestByProvider = realLatest; rubrics.gradeAssessment = realGrade; });
+}
+
+test('auto-pilot sync: a verified @6 project graded 45+ is opted in; 44, a low end under 45, withheld, @5, no report, archived and unverified are skipped with words; a second run is unchanged; dry run writes nothing', (t) => {
+  const s = withReport(t);
+  stubClaudeReport(t);
+  const projects = require('../core/projects');
+  const bare = projects.addProject(s.ws, { name: 'Bare Example (FICTIONAL)', symbol: 'BARE', official_website: 'https://bare-fictional.test', coingecko_id: 'bare-example-fictional', assets: [{ chain: 'other-chain', contract_address: 'FICTIONAL-CONTRACT-BARE' }], evidence: [{ url: 'https://bare-fictional.test', note: 'fictional' }], sector_profile: 'payfi-credit@1' }).project_id;
+  const tree = hashTree(s.root);
+  const dry = T.autoPilotSync(s.ws, { dryRun: true });
+  assert.deepEqual(hashTree(s.root), tree, 'a dry run writes nothing');
+  assert.deepEqual(dry.opted_in.map((r) => r.project_id), [s.pid]);
+  assert.ok(dry.skipped.some((r) => r.project_id === bare && /No eligible Claude report/.test(r.reason)));
+  assert.equal(T.pilotQueue(s.ws).length, 0);
+  const run = T.autoPilotSync(s.ws);
+  assert.deepEqual(run.opted_in.map((r) => r.project_id), [s.pid]);
+  assert.equal(T.pilotQueue(s.ws).length, 1);
+  const again = T.autoPilotSync(s.ws);
+  assert.equal(again.opted_in.length, 0);
+  assert.deepEqual(again.unchanged.map((r) => r.project_id), [s.pid]);
+  // The floor is the default 45, adjustable.
+  assert.equal(T.autoPilotSync(s.ws, { dryRun: true }).min, 45);
+  assert.throws(() => T.autoPilotSync(s.ws, { min: 101 }), /--min/);
+});
+
+test('auto-pilot sync: below the floor, a range by its low end, withheld, an older prompt and an archived project are skipped', (t) => {
+  const check = (stub, setupFn) => {
+    const s = withReport(t);
+    stubClaudeReport(t, stub);
+    if (setupFn) setupFn(s);
+    const r = T.autoPilotSync(s.ws);
+    assert.equal(r.opted_in.length, 0);
+    assert.equal(T.pilotQueue(s.ws).length, 0, 'nothing opted in');
+    return r.skipped.find((x) => x.project_id === s.pid);
+  };
+  assert.match(check({ grade: { status: 'firm', value: 44, display: '44' } }).reason, /Grade 44 is under 45/);
+  assert.match(check({ grade: { status: 'range', low: 40, high: 60, display: '40–60' } }).reason, /Grade 40 is under 45/);
+  assert.match(check({ grade: { status: 'withheld', display: 'Withheld' } }).reason, /withheld/i);
+  assert.match(check({ version: 'cr-research-prompt@5' }).reason, /@5/);
+  assert.match(check({}, (s) => require('../core/projects').archiveProject(s.ws, s.pid)).reason, /Archived/);
+  // A range whose low end is 45 or more qualifies.
+  const q = withReport(t);
+  stubClaudeReport(t, { grade: { status: 'range', low: 46, high: 60, display: '46–60' } });
+  assert.equal(T.autoPilotSync(q.ws).opted_in.length, 1);
+});
+
+test('auto-pilot sync: never opts a project out', (t) => {
+  const s = withReport(t);
+  stubClaudeReport(t, { version: 'cr-research-prompt@5' });
+  T.setPilot(s.ws, s.pid, true);
+  const r = T.autoPilotSync(s.ws);
+  assert.equal(r.opted_in.length, 0);
+  assert.equal(T.pilotQueue(s.ws).length, 1, 'still in the pilot');
+});
+
+test('paper: the shadow gate lists a desk gate and a $0 ticket with what the price did since; an unknown price is said, never 0; nothing is written', (t) => {
+  const P = require('../core/paper');
+  const s = withReport(t);
+  gradeClosed(s.ws);
+  stubHeld(t, s.pid, false);
+  const gate = T.createTicket(s.ws, { project_id: s.pid });
+  assert.equal(gate.status, 'gate_closed');
+  const savedAt = Date.parse(gate.receipt.saved_at);
+  const bare = P.book(s.ws, { now: savedAt + 10 * HOURMS });
+  assert.equal(bare.shadow_gate.length, 1);
+  assert.equal(bare.shadow_gate[0].kind, 'desk_gate');
+  assert.equal(bare.shadow_gate[0].since.status, 'unknown', 'no hourly price: unknown, not 0');
+  assert.equal(bare.positions.length, 0);
+  bothPrices(s.ws, savedAt - HOURMS, 1.0, 100);
+  bothPrices(s.ws, savedAt + 9 * HOURMS, 1.5, 110);
+  const tree = hashTree(s.root);
+  const b = P.book(s.ws, { now: savedAt + 10 * HOURMS });
+  assert.deepEqual(hashTree(s.root), tree, 'reading writes nothing');
+  const since = b.shadow_gate[0].since;
+  assert.equal(since.status, 'measured');
+  assert.equal(since.change_pct, 50);
+  assert.equal(since.btc_change_pct, 10);
+  assert.equal(since.vs_btc_pct, 36.36);
+  assert.equal(b.shadow.length, 0, 'the older shadow list keeps only tickets that proposed');
+});
+
+test('paper model: positions split open, closed and voided; the shadow rows say the price since in words; the rose count is a count, not a rate', async () => {
+  const M = await import('../public/paper-model.js');
+  const book = {
+    counts: { open: 1, closed: 1, voided: 1 },
+    summary: { closed: 1, note: 'Too few to judge: 1 of 20 closed positions needed for a total, median or hit rate.' },
+    positions: [
+      { position_id: 'a', state: 'open', decided_at: '2026-10-01T00:00:00Z', return: { status: 'unrealized', return_pct: 5, btc_return_pct: null, btc_note: 'No BTC price on record at one of the two times.' } },
+      { position_id: 'b', state: 'closed', decided_at: '2026-10-02T00:00:00Z', return: { status: 'realized', return_pct: -3, btc_return_pct: 1, vs_btc_pct: -3.96 } },
+      { position_id: 'c', state: 'voided', decided_at: '2026-10-03T00:00:00Z', return: null },
+    ],
+    shadow_gate: [
+      { project_id: 'p', name: 'P', receipt_id: 'r1', saved_at: '2026-10-05T00:00:00Z', kind: 'desk_gate', line: 'Desk gate: no Prosecutor run', since: { status: 'measured', from_price_usd: 1, from_at: 'x', to_price_usd: 1.5, to_at: 'y', change_pct: 50, btc_change_pct: 10, vs_btc_pct: 36.36 } },
+      { project_id: 'q', name: 'Q', receipt_id: 'r2', saved_at: '2026-10-06T00:00:00Z', kind: 'zero_risk', line: 'Shadow: not taken', since: { status: 'unknown', why: 'No hourly price.' } },
+    ],
+  };
+  const parts = M.splitPositions(book);
+  assert.deepEqual([parts.open.length, parts.closed.length, parts.voided.length], [1, 1, 1]);
+  assert.equal(M.returnWords(parts.open[0]).text, '+5.00%');
+  assert.match(M.returnWords(parts.open[0]).title, /No BTC price/);
+  assert.equal(M.returnWords(parts.closed[0]).text, '−3.00%');
+  assert.equal(M.returnWords(parts.voided[0]).text, '—');
+  assert.match(M.summaryLine(book), /1 open · 1 closed · 1 voided · Too few to judge/);
+  assert.doesNotMatch(M.summaryLine(book), /median \+|hit rate \d/);
+  const rows = M.shadowRows(book);
+  assert.deepEqual(rows.map((r) => r.receipt_id), ['r2', 'r1']);
+  assert.equal(rows[0].change_text, '—');
+  assert.equal(rows[0].title, 'No hourly price.');
+  assert.equal(rows[1].change_text, '+50.00%');
+  assert.equal(rows[1].vs_btc_text, '+36.36%');
+  assert.deepEqual(M.shadowCounts(book), { total: 2, measured: 1, rose: 1, unknown: 1 });
+  assert.deepEqual(M.splitPositions(null), { open: [], closed: [], voided: [] });
+});

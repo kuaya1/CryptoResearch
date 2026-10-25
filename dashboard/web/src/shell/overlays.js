@@ -93,3 +93,23 @@ export function deskPrefs(patch) {
   const cur = readPrefs({ ui });
   ui.set('watchlist', prefsToSave({ ...cur, ...patch, filters: { ...cur.filters, ...(patch.filters || {}) } }));
 }
+
+// The Daily Brief drawer's opener (the top bar's and the rail's button); like
+// the command menu, a request made before its code has loaded waits for it.
+const briefListeners = new Set();
+let briefPending = false;
+export function onBrief(fn) {
+  briefListeners.add(fn);
+  if (briefPending) {
+    briefPending = false;
+    fn();
+  }
+  return () => briefListeners.delete(fn);
+}
+export function openBrief() {
+  if (!briefListeners.size) {
+    briefPending = true;
+    return;
+  }
+  for (const fn of [...briefListeners]) fn();
+}
