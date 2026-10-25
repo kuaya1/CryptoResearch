@@ -1501,3 +1501,122 @@ test('A06: a paper or archive step that failed after the decision is completed b
   assert.equal(projects.getProject(z.ws, z.pid).status, 'archived');
   assert.equal(notes.loadJournal(z.ws, z.pid).filter((e) => e.type === 'decision').length, 1);
 });
+
+// ---------------------------------------------------------------------------
+// tickets reconcile (backlog item 36, review A06)
+
+test('reconcile: a grant whose paper and journal steps failed is completed once; the second run is all unchanged; the decision line is untouched', (t) => {
+  const P = require('../core/paper');
+  const notes = require('../core/notes');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  const origOpen = P.openForDecision;
+  const origJ = notes.addJournal;
+  P.openForDecision = () => { throw new Error('disk full'); };
+  notes.addJournal = () => { throw new Error('disk full'); };
+  let dec;
+  try { dec = T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' }); } finally { P.openForDecision = origOpen; notes.addJournal = origJ; }
+  assert.equal(dec.result.paper.status, 'failed');
+  assert.equal(P.readRecords(s.ws).length, 0);
+  const decFile = s.ws.abs(`projects/${s.pid}/tickets/decisions.jsonl`);
+  const decBefore = fs.readFileSync(decFile, 'utf8');
+  const dry = T.reconcileEffects(s.ws, { dryRun: true });
+  assert.deepEqual(dry.completed.map((c) => c.step).sort(), ['journal', 'paper']);
+  assert.equal(P.readRecords(s.ws).length, 0, 'a dry run writes nothing');
+  assert.equal(notes.loadJournal(s.ws, s.pid).filter((e) => e.type === 'decision').length, 0);
+  const r1 = T.reconcileEffects(s.ws, { project: s.pid });
+  assert.deepEqual(r1.completed.map((c) => `${c.step}:${c.status}`).sort(), ['journal:saved', 'paper:saved']);
+  assert.equal(P.readRecords(s.ws).length, 1);
+  const j = notes.loadJournal(s.ws, s.pid).filter((e) => e.type === 'decision');
+  assert.equal(j.length, 1);
+  assert.match(j[0].text, new RegExp(dec.result.decision.decided_at));
+  const r2 = T.reconcileEffects(s.ws);
+  assert.equal(r2.completed.length, 0);
+  assert.equal(r2.already_complete.length, 2);
+  assert.equal(P.readRecords(s.ws).length, 1);
+  assert.equal(fs.readFileSync(decFile, 'utf8'), decBefore, 'decisions.jsonl never changes');
+});
+
+test('reconcile: an undone grant gets no paper position; a failed archive is named and left', (t) => {
+  const P = require('../core/paper');
+  const projects = require('../core/projects');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' });
+  T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'undo' });
+  const r = T.reconcileEffects(s.ws);
+  assert.equal(r.completed.length, 0);
+  assert.ok(!r.completed.some((c) => c.step === 'paper'));
+  // A pass whose archive step failed.
+  const s2 = withReport(t);
+  const tk = T.createTicket(s2.ws, { project_id: s2.pid, assistant: true }).ticket;
+  const zero = T.saveTicket(s2.ws, { project_id: s2.pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(s2.ws, s2.pid, tk.ticket_id)) });
+  const orig = projects.archiveProject;
+  projects.archiveProject = () => { throw new Error('locked'); };
+  try { T.decide(s2.ws, s2.pid, { receipt_id: zero.receipt_id, action: 'pass' }); } finally { projects.archiveProject = orig; }
+  const r2 = T.reconcileEffects(s2.ws);
+  assert.equal(r2.named.length, 1);
+  assert.equal(r2.named[0].step, 'archive');
+  assert.notEqual(projects.getProject(s2.ws, s2.pid).status, 'archived', 'reconcile never archives');
+});
+
+// ---------------------------------------------------------------------------
+// Older receipts sized from a job record: integrity-limited (backlog item 37)
+
+test('integrity: a normal receipt reads ok; a receipt whose figures differ from its frozen packet reads limited and cannot be approved or halved, but can be vetoed; a missing packet reads unverified; reading writes nothing', (t) => {
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  assert.equal(T.view(s.ws, s.pid).ticket.integrity.status, 'ok');
+  assert.equal(T.integrityOf(s.ws, saved.receipt).status, 'ok');
+  // An older receipt, as if sized from a job record with another exit cost.
+  const rel = `projects/${s.pid}/tickets/receipts/${saved.receipt_id}.json`;
+  const r = readJson(s.ws.abs(rel), null);
+  r.desk.exit_cost_500_usd_pct = 0.5;
+  atomicWrite(s.ws.abs(rel), jsonText(r));
+  const before = hashTree(s.root);
+  const v = T.view(s.ws, s.pid).ticket.integrity;
+  assert.equal(v.status, 'limited');
+  assert.deepEqual(v.fields.map((f) => f.field), ['exit_cost_500_usd_pct']);
+  assert.match(v.words, /cannot be approved or halved/);
+  assert.deepEqual(hashTree(s.root), before, 'reading writes nothing');
+  for (const action of ['approve', 'halve']) assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action }), (e) => e.code === 'INTEGRITY' && /exit_cost_500_usd_pct/.test(e.message), action);
+  assert.equal(T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'veto' }).result.status, 'saved');
+  // A packet that cannot be verified.
+  fs.appendFileSync(s.ws.abs(r.packet.path), ' ');
+  const u = T.view(s.ws, s.pid).ticket.integrity;
+  assert.equal(u.status, 'unverified');
+  assert.match(u.words, /veto, pass or watch/);
+});
+
+test('invalidation@2: a triggered price check under the coverage rule is "sampled" and says so; full coverage is not; the status stays triggered (backlog item 38)', (t) => {
+  const c = coverageSetup(t);
+  c.obs(0.9, c.t0 + 1 * H);
+  c.obs(0.69, c.t0 + 20 * H);
+  const thin = c.price(c.t0 + 24 * H);
+  assert.equal(thin.status, 'triggered');
+  assert.equal(thin.sampled, true);
+  assert.equal(thin.source, 'hourly observation');
+  assert.match(thin.words, /A sampled reading: 2 of 24 hours had one; this one is from /);
+  assert.match(thin.words, /hourly observation/);
+  const v = T.view(c.ws, c.pid, { now: c.t0 + 24 * H });
+  assert.equal(v.ticket.status, 'invalidated', 'the published rule decides');
+  assert.equal(v.ticket.invalidation.sampled, true);
+  assert.match(v.ticket.invalidation.words, /sampled reading/);
+  const f = coverageSetup(t);
+  for (let h = 0; h < 4; h++) f.obs(h === 3 ? 0.69 : 0.9, f.t0 + (h + 0.5) * H);
+  const full = f.price(f.t0 + 4.5 * H);
+  assert.equal(full.status, 'triggered');
+  assert.equal(full.sampled, false);
+  assert.equal(full.source, 'hourly observation');
+  assert.doesNotMatch(full.words, /sampled/);
+  assert.match(full.words, /\(hourly observation\)/);
+});
+
+test('invalidation@2: a breach read from latest.json names it', (t) => {
+  const c = coverageSetup(t);
+  freshPrice(c.ws, 'example-payfi-fictional', 0.69, 0);
+  const p = c.price(Date.now() + 60000);
+  assert.equal(p.status, 'triggered');
+  assert.equal(p.source, 'latest.json');
+  assert.match(p.words, /\(latest\.json\)/);
+});

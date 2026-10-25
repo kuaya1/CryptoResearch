@@ -1034,6 +1034,39 @@ function decisionFor(lines, rid) {
   return mine.filter((l) => l.action !== 'undo' && !undone.has(l.decision_id)).pop() || null;
 }
 
+// Was the receipt sized from what its verified frozen packet holds (review
+// A08, item 37)? The gate is recomputed from the packet under the receipt's own
+// sizing and proposal type and compared with the exit costs and the risk
+// before any admission hold. `ok`, `limited` (fields differ) or `unverified`
+// (the packet cannot be read as frozen). A desk-gate receipt has no
+// Prosecutor's sizing to check (null). Reads only.
+function integrityOf(ws, receipt) {
+  if (!receipt || receipt.kind === 'desk_gate' || !receipt.desk) return null;
+  let packet;
+  try {
+    if (!receipt.packet || !receipt.packet.path) throw new Error('The receipt names no frozen packet.');
+    packet = JSON.parse(verifiedFrozen(ws, receipt.packet.path, receipt.packet.sha256, 'The frozen ticket packet'));
+  } catch (err) {
+    return { status: 'unverified', words: `Cannot be checked: ${String(err && err.message || err).slice(0, 200)} It cannot be approved or halved; a veto, pass or watch is still allowed.` };
+  }
+  const d = receipt.desk;
+  const sizing = d.sizing || {};
+  const p = packet.researcher || {};
+  const g = gate({ researcher: { grade: p.grade === undefined ? null : p.grade }, held: packet.held, exits: packet.exits || [], market: packet.market || null, native: packet.native === undefined ? null : packet.native }, sizing, receipt.proposal && receipt.proposal.proposal_type);
+  const exitAt = (n) => (packet.exits || []).find((x) => x.size_usd === n) || null;
+  const e500 = exitAt(sizing.exit_size_usd);
+  const e2000 = exitAt(2000);
+  const savedRisk = d.admission && d.admission.held_risk ? d.admission.held_risk.risk_usd : d.suggested_risk_usd;
+  const num = (v) => (v === undefined ? null : v);
+  const fields = [
+    ['exit_cost_500_usd_pct', num(d.exit_cost_500_usd_pct), e500 ? e500.cost_pct : null],
+    ['exit_cost_2000_usd_pct', num(d.exit_cost_2000_usd_pct), e2000 ? e2000.cost_pct : null],
+    ['risk_before_admission_usd', num(savedRisk), g.suggested_risk_usd],
+  ].filter(([, a, z]) => JSON.stringify(a) !== JSON.stringify(z)).map(([k, a, z]) => ({ field: k, saved: a, packet: z }));
+  if (!fields.length) return { status: 'ok', fields: [], words: null };
+  return { status: 'limited', fields, words: `Sized from a job record that differs from its frozen packet (${fields.map((f) => `${f.field}: saved ${JSON.stringify(f.saved)}, packet ${JSON.stringify(f.packet)}`).join('; ')}). It cannot be approved or halved; a veto, pass or watch is still allowed. The receipt is unchanged.` };
+}
+
 // The rules versions on a receipt that are newer than this code knows, in
 // words; null when none. Same family only: cr-ticket-sizing@9 against @2.
 function newerRuleOf(receipt) {
@@ -1151,6 +1184,8 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
       if (inForce && (inForce.action === 'approve' || inForce.action === 'halve') && ['approve', 'halve', 'veto'].includes(action)) throw new OpError('CONFLICT', `Not recorded: the ${inForce.action} decision (${inForce.decision_id}, ${usd(inForce.pm_approved_risk_usd)}) is in force. Undo it first, then record the ${action}.`);
       const now = Date.now();
       if (action === 'approve' || action === 'halve') {
+        const integ = integrityOf(ws, r);
+        if (integ && integ.status !== 'ok') throw new OpError('INTEGRITY', `Not recorded: ${integ.words}`, { fields: (integ.fields || []).map((f) => f.field) });
         const block = grantBlock(ws, project(), r, now);
         if (block) throw new OpError(block.code, block.message, { changed: block.changed });
       }
@@ -1228,7 +1263,7 @@ function paperBook(ws, pid, rid, d, undone) {
 // receipt and the approved risk are stated in reasons; decisions.jsonl stays
 // the source of truth and a journal failure never loses or blocks a decision.
 // One entry per decision: an entry naming its decision_id is not written again.
-function journalDecision(ws, pid, d, undone) {
+function journalDecision(ws, pid, d, undone, { late = false } = {}) {
   try {
     const notes = require('./notes');
     const have = notes.loadJournal(ws, pid).find((e) => e.type === 'decision' && Array.isArray(e.reasons) && e.reasons.includes(`decision_id: ${d.decision_id}`));
@@ -1238,14 +1273,55 @@ function journalDecision(ws, pid, d, undone) {
     const reasons = [`pm_action: ${d.action}`, `receipt: ${d.receipt_id}`, `decision_id: ${d.decision_id}`];
     if (undo) reasons.push(`undoes: ${undone.decision_id}`);
     else if (isNum(d.pm_approved_risk_usd)) reasons.push(`approved_risk_usd: ${d.pm_approved_risk_usd}`);
-    const text = undo
+    const base = undo
       ? `PM undid ${shown.action} on ticket ${d.receipt_id}.`
       : `PM ${d.action} on ticket ${d.receipt_id}${isNum(d.pm_approved_risk_usd) ? `, approved risk ${usd(d.pm_approved_risk_usd)}` : ''}.${d.note ? ` ${d.note}` : ''}`;
+    const text = late ? `${base} Decided ${d.decided_at}; this entry was added later by tickets reconcile.` : base;
     const entry = require('./notes').addJournal(ws, pid, { type: 'decision', decision: d.action === 'watch' || d.action === 'trim' ? d.action : null, text, reasons });
     return { status: 'saved', entry_id: entry.entry_id };
   } catch (err) {
     return { status: 'failed', error: String(err && err.message || err).slice(0, 200) };
   }
+}
+
+// Completes what a recorded decision left undone (review A06): the paper
+// position of a grant in force, and the journal entry of any decision line.
+// It never archives or restores a project, never voids a position and never
+// touches decisions.jsonl; a pass whose archive step is not done is named.
+function reconcileEffects(ws, { project = null, dryRun = false } = {}) {
+  const projects = require('./projects');
+  const paper = require('./paper');
+  const out = { dry_run: dryRun === true, completed: [], already_complete: [], named: [] };
+  const pids = project ? [project] : projects.listProjects(ws).filter((p) => !p.broken).map((p) => p.project_id);
+  for (const pid of pids) {
+    const lines = readDecisions(ws, pid);
+    if (!lines.length) continue;
+    const rids = [...new Set(lines.map((l) => l.receipt_id))];
+    for (const d of lines) {
+      const undone = d.action === 'undo' ? lines.find((l) => l.decision_id === d.undoes) || null : null;
+      if (d.action === 'undo' && !undone) continue;
+      const have = require('./notes').loadJournal(ws, pid).some((e) => e.type === 'decision' && Array.isArray(e.reasons) && e.reasons.includes(`decision_id: ${d.decision_id}`));
+      if (have) out.already_complete.push({ project_id: pid, decision_id: d.decision_id, step: 'journal' });
+      else if (dryRun) out.completed.push({ project_id: pid, decision_id: d.decision_id, step: 'journal', status: 'would_add' });
+      else out.completed.push({ project_id: pid, decision_id: d.decision_id, step: 'journal', ...journalDecision(ws, pid, d, undone, { late: true }) });
+    }
+    for (const rid of rids) {
+      const inForce = decisionFor(lines, rid);
+      if (!inForce) continue;
+      if (inForce.action === 'approve' || inForce.action === 'halve') {
+        if (paper.readRecords(ws).some((l) => l.event === 'open' && l.decision_id === inForce.decision_id)) out.already_complete.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper' });
+        else if (dryRun) out.completed.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper', status: 'would_open' });
+        else out.completed.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper', ...paperBook(ws, pid, rid, inForce, null) });
+      }
+      if (inForce.action === 'pass' && inForce.archive === 'archived') {
+        let status = null;
+        try { status = projects.getProject(ws, pid).status; } catch (_) { status = null; }
+        if (status !== 'archived') out.named.push({ project_id: pid, decision_id: inForce.decision_id, step: 'archive', words: `The pass on ${rid} was to archive ${pid}, and it is not archived. Left as it is: archive it, or leave it, yourself.` });
+        else out.already_complete.push({ project_id: pid, decision_id: inForce.decision_id, step: 'archive' });
+      }
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -1312,13 +1388,13 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
           const t = Date.parse(pt.source_last_updated_at || pt.fetched_at);
           if (!Number.isFinite(t) || t < savedMs || t > now || !isNum(pt.price_usd)) continue;
           times.push(t);
-          if (!low || pt.price_usd < low.price_usd) low = { price_usd: pt.price_usd, at: iso(t) };
+          if (!low || pt.price_usd < low.price_usd) low = { price_usd: pt.price_usd, at: iso(t), source: 'hourly observation' };
         }
       }
       const latest = (market.readLatest(ws).assets || {})[cg];
       const lt = latest ? Date.parse(latest.source_last_updated_at || latest.fetched_at) : NaN;
       if (latest && isNum(latest.price_usd) && Number.isFinite(lt) && lt >= savedMs && lt <= now) times.push(lt);
-      if (latest && isNum(latest.price_usd) && Number.isFinite(lt) && lt >= savedMs && (!low || latest.price_usd < low.price_usd)) low = { price_usd: latest.price_usd, at: iso(lt) };
+      if (latest && isNum(latest.price_usd) && Number.isFinite(lt) && lt >= savedMs && (!low || latest.price_usd < low.price_usd)) low = { price_usd: latest.price_usd, at: iso(lt), source: 'latest.json' };
     }
     const cov = v1 ? null : coverageOf(times, savedMs, now);
     const triggered = low !== null && low.price_usd <= inv.price_usd;
@@ -1326,7 +1402,12 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
     const covWords = cov && cov.hours_elapsed >= 1 ? ` Coverage: ${cov.hours_with_reading} of ${cov.hours_elapsed} hours since the ticket had a reading${cov.gaps.length ? `; gaps over ${MAX_GAP_HOURS} h: ${cov.gaps.map((g) => `${g.from} to ${g.to}`).join('; ')}` : ''}.` : '';
     const base = low === null ? null : { price_usd: low.price_usd, at: low.at };
     if (low === null) checks.push({ kind: 'price', status: 'unknown', threshold_usd: inv.price_usd, ...(cov ? { coverage: cov } : {}), words: `No price recorded since the ticket.${covWords}` });
-    else if (triggered) checks.push({ kind: 'price', status: 'triggered', threshold_usd: inv.price_usd, lowest_usd: low.price_usd, at: low.at, ...(cov ? { coverage: cov } : {}), words: `Price reached $${low.price_usd} at ${low.at}, at or below the invalidation price $${inv.price_usd}.${covWords}` });
+    else if (triggered) {
+      // The published rule decides; the label only says how much was seen (item 38).
+      const sampled = Boolean(thin);
+      const sampledWords = sampled ? ` A sampled reading: ${cov.hours_with_reading} of ${cov.hours_elapsed} hours had one; this one is from ${low.at} (${low.source}).` : '';
+      checks.push({ kind: 'price', status: 'triggered', threshold_usd: inv.price_usd, lowest_usd: low.price_usd, at: low.at, source: low.source, sampled, ...(cov ? { coverage: cov } : {}), words: `Price reached $${low.price_usd} at ${low.at} (${low.source}), at or below the invalidation price $${inv.price_usd}.${sampledWords}${covWords}` });
+    }
     else if (thin) checks.push({ kind: 'price', status: 'unknown', threshold_usd: inv.price_usd, lowest_usd: base.price_usd, at: base.at, coverage: cov, words: `Not enough price readings to say the price held: ${cov.coverage_pct}% of the hours since the ticket have one, under your ${minCoveragePct(ws)}%. Lowest seen $${low.price_usd}, above $${inv.price_usd}.${covWords}` });
     else checks.push({ kind: 'price', status: 'holding', threshold_usd: inv.price_usd, lowest_usd: low.price_usd, at: low.at, ...(cov ? { coverage: cov } : {}), words: `Lowest price since the ticket $${low.price_usd}, above $${inv.price_usd}.${covWords}` });
   }
@@ -1340,7 +1421,7 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
     else checks.push({ kind: 'metric', status: m.total_30d_usd < inv.metric.below_30d_usd ? 'triggered' : 'holding', key: inv.metric.key, threshold_usd: inv.metric.below_30d_usd, value_usd: m.total_30d_usd, at: f.fetched_at, words: `30-day ${inv.metric.key} $${Math.round(m.total_30d_usd).toLocaleString('en-US')} ${m.total_30d_usd < inv.metric.below_30d_usd ? 'under' : 'not under'} $${inv.metric.below_30d_usd.toLocaleString('en-US')}.` });
   }
   const hit = checks.find((c) => c.status === 'triggered') || null;
-  const out = { version, invalidated: Boolean(hit), by: hit ? hit.kind : null, words: hit ? hit.words : null, fired: hit, checks };
+  const out = { version, invalidated: Boolean(hit), by: hit ? hit.kind : null, words: hit ? hit.words : null, fired: hit, ...(hit && hit.kind === 'price' ? { sampled: hit.sampled } : {}), checks };
   if (!v1) {
     const stale = basisStale(ws, project, receipt, now);
     if (stale) out.basis_stale = stale;
@@ -1410,6 +1491,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       exits_missing: d.exits_missing || [],
       trigger_breached_at_save: d.trigger_breached_at_save || null,
       admission: d.admission || null,
+      integrity: gateOnly ? null : integrityOf(ws, current),
       rule_note: (newerRuleOf(current) || {}).words || null,
       can_reopen: (() => {
         if (gateOnly || current !== receipts[receipts.length - 1] || open || (decision && decision.action === 'reopen')) return null;
@@ -1879,6 +1961,7 @@ module.exports = {
   digestText,
   DIGEST_FORMAT,
   newerRuleOf,
+  integrityOf,
   PROMPT_VERSION,
   FORMAT,
   SIZING_VERSION,
@@ -1908,6 +1991,7 @@ module.exports = {
   saveTicket,
   receiptText,
   decide,
+  reconcileEffects,
   invalidationOf,
   view,
   read,

@@ -181,6 +181,7 @@ export function PMDecisionCard({ p }) {
       </div>
       {t.non_consensus_thesis ? <p className="pm-thesis">{t.non_consensus_thesis}</p> : null}
       {t.trigger_breached_at_save ? <p className="pm-alert" title={t.trigger_breached_at_save.words}>Trigger already breached when saved</p> : null}
+      {t.integrity && t.integrity.status !== 'ok' && t.integrity.words ? <p className="pm-alert" data-key={`pm-integrity-${pid}`}>{t.integrity.words}</p> : null}
       {t.status === 'invalidated' && t.invalidation ? <p className="pm-alert">{t.invalidation.words}</p> : null}
       <div className="iv-rgrid pm-grid">
         <div className="iv-rc">
@@ -232,8 +233,8 @@ export function PMDecisionCard({ p }) {
           </p>
         ) : risk > 0 ? (
           <>
-            <button type="button" className="btn btn-sm btn-primary" data-key={`pm-approve-${pid}`} disabled={Boolean(busy) || t.status === 'invalidated'} title={`Grant ${usd(risk)} of risk`} onClick={() => decide('approve')}>{`Approve Risk (${usd(risk)})`}</button>
-            <button type="button" className="btn btn-sm" data-key={`pm-halve-${pid}`} disabled={Boolean(busy) || t.status === 'invalidated'} title="The starter tranche" onClick={() => decide('halve')}>{`Halve Size (${usd(Math.min(t.starter_risk_usd, risk))})`}</button>
+            <button type="button" className="btn btn-sm btn-primary" data-key={`pm-approve-${pid}`} disabled={Boolean(busy) || t.status === 'invalidated' || Boolean(t.integrity && t.integrity.status !== 'ok')} title={`Grant ${usd(risk)} of risk`} onClick={() => decide('approve')}>{`Approve Risk (${usd(risk)})`}</button>
+            <button type="button" className="btn btn-sm" data-key={`pm-halve-${pid}`} disabled={Boolean(busy) || t.status === 'invalidated' || Boolean(t.integrity && t.integrity.status !== 'ok')} title="The starter tranche" onClick={() => decide('halve')}>{`Halve Size (${usd(Math.min(t.starter_risk_usd, risk))})`}</button>
             <button type="button" className="btn btn-sm" data-key={`pm-veto-${pid}`} disabled={Boolean(busy)} onClick={() => decide('veto')}>Veto / Archive</button>
           </>
         ) : t.proposal_type === 'TRIM_EXIT' ? (
