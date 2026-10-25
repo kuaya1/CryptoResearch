@@ -262,4 +262,4 @@ function projectOutcomes(ws, pid, { now = Date.now() } = {}) {
   return { schema_version: 'cr.report-outcomes.v1', as_of: new Date(now).toISOString(), horizons_days: HORIZONS, min_comparable: MIN_COMPARABLE, meaning: MEANING, reports: measure(ws, [p], { now }) };
 }
 
-module.exports = { HORIZONS, MIN_COMPARABLE, deskOutcomes, projectOutcomes, measure, byModel, scanMonth };
+module.exports = { HORIZONS, MIN_COMPARABLE, deskOutcomes, projectOutcomes, measure, byModel, scanMonth, monthsBetween };

@@ -1,0 +1,66 @@
+{
+ "description": "Hourly readings, then a 12 h gap (hours 7-18) in which the price may have dipped; readings on both sides are above 0.70.",
+ "unit": "hours from the reference time",
+ "points": [
+  {
+   "h": 1,
+   "price": 0.85,
+   "btc": 100
+  },
+  {
+   "h": 2,
+   "price": 0.85,
+   "btc": 100
+  },
+  {
+   "h": 3,
+   "price": 0.85,
+   "btc": 100
+  },
+  {
+   "h": 4,
+   "price": 0.85,
+   "btc": 100
+  },
+  {
+   "h": 5,
+   "price": 0.85,
+   "btc": 100
+  },
+  {
+   "h": 6,
+   "price": 0.85,
+   "btc": 100
+  },
+  {
+   "h": 19,
+   "price": 0.85,
+   "btc": 100
+  },
+  {
+   "h": 20,
+   "price": 0.85,
+   "btc": 100
+  },
+  {
+   "h": 21,
+   "price": 0.85,
+   "btc": 100
+  },
+  {
+   "h": 22,
+   "price": 0.85,
+   "btc": 100
+  },
+  {
+   "h": 23,
+   "price": 0.85,
+   "btc": 100
+  },
+  {
+   "h": 24,
+   "price": 0.85,
+   "btc": 100
+  }
+ ]
+}

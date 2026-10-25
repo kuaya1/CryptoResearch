@@ -1,0 +1,31 @@
+{
+ "description": "Entry reading, a drift down, then the first reading at or below 0.70, then lower.",
+ "unit": "hours from the reference time",
+ "points": [
+  {
+   "h": -1,
+   "price": 1.0,
+   "btc": 100
+  },
+  {
+   "h": 1,
+   "price": 0.92,
+   "btc": 102
+  },
+  {
+   "h": 2,
+   "price": 0.8,
+   "btc": 104
+  },
+  {
+   "h": 3,
+   "price": 0.7,
+   "btc": 105
+  },
+  {
+   "h": 4,
+   "price": 0.55,
+   "btc": 106
+  }
+ ]
+}

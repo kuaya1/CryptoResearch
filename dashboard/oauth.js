@@ -271,7 +271,8 @@ function makeOAuth(ws, { origin, auth, log = () => {}, clock = () => Date.now() 
 <p class="small">After you approve, you go back to <strong>${esc(host)}</strong>.${local ? ' That is a program on this computer (Claude Code, Codex or Gemini CLI); approve only if you just started the connection yourself.' : ' Approve only if you just started this connection yourself.'}</p>
 ${msg}<input type="hidden" name="request" value="${esc(p.id)}">
 ${pick}<label class="field"><span class="field-label">Desk passphrase</span><input type="password" name="password" autocomplete="current-password" required autofocus></label>
-<div class="btn-row"><button class="btn primary" type="submit" name="decision" value="allow">Approve</button><button class="btn" type="submit" name="decision" value="deny" formnovalidate>Deny</button></div>
+<div class="btn-row"><button class="btn primary" type="submit" name="decision" value="allow">Approve</button><button class="btn" type="submit" name="decision" value="allow_readonly">Read only</button><button class="btn" type="submit" name="decision" value="deny" formnovalidate>Deny</button></div>
+<p class="small muted">Read only lists and answers the read tools only: it can look, never save, add, record or start anything.</p>
 <p id="sending" class="small" role="status" hidden>Sending your answer back to ${local ? 'the program' : esc(who)}. This can take a few seconds: click once and keep this window open.</p></form><script>${SUBMIT_ONCE_JS}</script>`);
   }
 
@@ -425,7 +426,8 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
       used.set(p.id, { decision, label, location, codeHash, exchanged: false, at: new Date(clock()).toISOString(), expires: clock() + PENDING_TTL_MS });
       return location;
     };
-    if (form.get('decision') !== 'allow') {
+    const readOnly = form.get('decision') === 'allow_readonly';
+    if (form.get('decision') !== 'allow' && !readOnly) {
       log(`OAuth: connection denied (${p.client_name})`);
       return sendTo(res, answered('denied', { location: locationOf(p.redirect_uri, { error: 'access_denied', state: p.state, iss: origin }) }));
     }
@@ -440,8 +442,8 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     }
     const code = newToken();
     const codeHash = hashOf(code);
-    codes.set(codeHash, { client_id: p.client_id, redirect_uri: p.redirect_uri, code_challenge: p.code_challenge, scope: p.scope, assistant, request: p.id, expires: clock() + CODE_TTL_MS });
-    log(`OAuth: connection approved (${p.client_name}; ${PROVIDER_LABELS[assistant]}); sent back to ${where([p.redirect_uri])}, waiting for its token request`);
+    codes.set(codeHash, { client_id: p.client_id, redirect_uri: p.redirect_uri, code_challenge: p.code_challenge, scope: p.scope, assistant, read_only: readOnly, request: p.id, expires: clock() + CODE_TTL_MS });
+    log(`OAuth: connection approved (${p.client_name}; ${PROVIDER_LABELS[assistant]}${readOnly ? '; read only' : ''}); sent back to ${where([p.redirect_uri])}, waiting for its token request`);
     return sendTo(res, answered('approved', { assistant, codeHash, location: locationOf(p.redirect_uri, { code, state: p.state, iss: origin }) }));
   }
 
@@ -488,11 +490,11 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
       if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) || b64url(crypto.createHash('sha256').update(verifier).digest()) !== c.code_challenge) return refuse(400, 'invalid_grant', `PKCE verification failed (${verifier ? 'wrong verifier' : 'no code_verifier'}).`);
       if (form.get('resource') && !resourceNames.has(form.get('resource'))) return refuse(400, 'invalid_target', `This server's resource is ${resource} (sent ${String(form.get('resource')).slice(0, 100)}).`);
       const grantId = `grant_${newToken(9)}`;
-      store.grants[grantId] = { client_id: clientId, client_name: store.clients[clientId].client_name, assistant: c.assistant, created_at: new Date(clock()).toISOString(), last_used_at: null, revoked_at: null };
+      store.grants[grantId] = { client_id: clientId, client_name: store.clients[clientId].client_name, assistant: c.assistant, read_only: Boolean(c.read_only), created_at: new Date(clock()).toISOString(), last_used_at: null, revoked_at: null };
       // The approval page, if submitted again, now says the connection is made.
       const done = c.request ? used.get(c.request) : null;
       if (done) Object.assign(done, { exchanged: true, location: null });
-      log(`OAuth: tokens issued for a new connection (${store.clients[clientId].client_name}; ${PROVIDER_LABELS[c.assistant]})`);
+      log(`OAuth: tokens issued for a new connection (${store.clients[clientId].client_name}; ${PROVIDER_LABELS[c.assistant]}${c.read_only ? '; read only' : ''})`);
       return json(res, 200, issue(grantId, clientId, c.scope));
     }
     if (grant === 'refresh_token') {
@@ -550,7 +552,7 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
     }
     // Connections made before ChatGPT and Gemini could connect were all Claude's.
     const assistant = PROVIDERS.includes(g.assistant) ? g.assistant : 'claude';
-    return { grant_id: rec.grant_id, client_id: rec.client_id, client_name: g.client_name, assistant, scope: rec.scope };
+    return { grant_id: rec.grant_id, client_id: rec.client_id, client_name: g.client_name, assistant, read_only: Boolean(g.read_only), scope: rec.scope };
   }
 
   // Why a request to /mcp has no usable token, for the log: never the token,
@@ -601,7 +603,7 @@ ${pick}<label class="field"><span class="field-label">Desk passphrase</span><inp
         .filter(([, g]) => !g.revoked_at)
         .map(([id, g]) => {
           const assistant = PROVIDERS.includes(g.assistant) ? g.assistant : 'claude';
-          return { grant_id: id, client_name: g.client_name, assistant, assistant_label: PROVIDER_LABELS[assistant], created_at: g.created_at, last_used_at: g.last_used_at };
+          return { grant_id: id, client_name: g.client_name, assistant, assistant_label: PROVIDER_LABELS[assistant], kind: g.read_only ? 'read_only' : 'full', created_at: g.created_at, last_used_at: g.last_used_at };
         })
         .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
     },

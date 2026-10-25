@@ -1,0 +1,56 @@
+{
+ "description": "One hourly reading wicks to 0.69 (invalidation 0.70) and the price recovers.",
+ "unit": "hours from the reference time",
+ "points": [
+  {
+   "h": 1,
+   "price": 0.9,
+   "btc": 100
+  },
+  {
+   "h": 2,
+   "price": 0.9,
+   "btc": 100
+  },
+  {
+   "h": 3,
+   "price": 0.9,
+   "btc": 100
+  },
+  {
+   "h": 4,
+   "price": 0.9,
+   "btc": 100
+  },
+  {
+   "h": 5,
+   "price": 0.69,
+   "btc": 100
+  },
+  {
+   "h": 6,
+   "price": 0.9,
+   "btc": 100
+  },
+  {
+   "h": 7,
+   "price": 0.9,
+   "btc": 100
+  },
+  {
+   "h": 8,
+   "price": 0.9,
+   "btc": 100
+  },
+  {
+   "h": 9,
+   "price": 0.9,
+   "btc": 100
+  },
+  {
+   "h": 10,
+   "price": 0.9,
+   "btc": 100
+  }
+ ]
+}

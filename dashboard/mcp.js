@@ -427,6 +427,13 @@ const TOOLS = [
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
+    name: 'daily_brief',
+    title: 'The daily brief (any model)',
+    description: 'Read-only; writes nothing and calls no model. One deterministic read of what needs Eric today (cr-daily-brief@1), each line with its #/ link: PM cards waiting with their age, tickets invalidated since a time, tickets on a stale or superseded basis, pilot projects missing an exit reading, held positions\' value and 24h change (unknown said), research waiting per model, projects where the models differ, and backup age and price freshness. A section it could not read says so, never "nothing". It gives the SHA-256 of its text.',
+    inputSchema: { type: 'object', properties: { since: { type: 'string', description: 'Optional ISO time: tickets invalidated since then. Without it, every invalidated ticket.' } }, additionalProperties: false },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
     name: 'pending_tickets',
     title: 'Open PM tickets waiting for the Prosecutor',
     description: 'Read-only. Tickets opened and not yet saved, oldest first (one you started first). With project, only that project. With include_prompt, the next one\'s frozen prompt byte for byte.',
@@ -456,12 +463,20 @@ const TOOLS = [
 
 // Who is calling: the model this connection belongs to, and how its records
 // are attributed. Claude keeps the names its records always had (cowork).
+// A "Read only" connection (Eric's grant for Duet, 2026-10-24) lists and
+// accepts only these tools, every one of them annotated read-only; a tool
+// added by a later item joins this list when it is read-only and merged.
+const READ_ONLY_TOOLS = ['desk_status', 'find_projects', 'get_report', 'compare_reports', 'portfolio_overview', 'list_accounts', 'pending_research', 'pending_forensics', 'pending_tickets', 'get_ticket', 'autonomous_pilot_queue', 'get_forensic_audit', 'daily_brief']
+  .filter((n) => TOOLS.some((t) => t.name === n && t.annotations && t.annotations.readOnlyHint));
+const READ_ONLY_LIST = TOOLS.filter((t) => READ_ONLY_TOOLS.includes(t.name));
+
 function contextFor(who) {
   const me = who && PROVIDERS.includes(who.assistant) ? who.assistant : 'claude';
   const label = PROVIDER_LABELS[me];
   return {
     me,
     label,
+    read_only: Boolean(who && who.read_only),
     client: who ? who.client_name || who.client_id || null : null,
     actor: me === 'claude' ? 'cowork' : `${me}-connector`,
     channel: me === 'claude' ? 'cowork connector' : `${me} connector`,
@@ -585,7 +600,7 @@ function assistantsView(ws, ctx) {
     const connected = conns ? mine.length > 0 : null;
     const first = jobs[0] || null;
     const says = [];
-    says.push(connected === null ? `${label}: connections are made on the online desk only` : connected ? `${label}: connected${lastUsed ? `, last used ${at16(lastUsed)}` : ''}` : `${label}: not connected`);
+    says.push(connected === null ? `${label}: connections are made on the online desk only` : connected ? `${label}: connected${lastUsed ? `, last used ${at16(lastUsed)}` : ''}${mine.some((c) => c.kind === 'read_only') ? `; ${mine.filter((c) => c.kind === 'read_only').length === mine.length ? 'read only' : `${mine.filter((c) => c.kind === 'read_only').length} of them read only`}` : ''}` : `${label}: not connected`);
     if (hold) says.push(`on hold since ${hold.since || 'an earlier date'} (Eric's decision): nothing new is assigned to it`);
     else if (m.status === 'automatic') says.push('automatic: its paid API researches its jobs in the background, within the limits');
     else says.push(`manual: ${p === 'claude' ? 'Claude in Cowork' : label} researches through its own connection when Eric asks; nothing is billed`);
@@ -609,6 +624,7 @@ function assistantsView(ws, ctx) {
     out[p] = {
       connected,
       connections: conns ? mine.length : null,
+      kinds: conns ? { full: mine.filter((c) => c.kind !== 'read_only').length, read_only: mine.filter((c) => c.kind === 'read_only').length } : null,
       last_used_at: lastUsed,
       route: m.status,
       on_hold: Boolean(hold),
@@ -1863,6 +1879,12 @@ const handlers = {
     return { status: out.ticket ? 'ok' : 'none', ...out, message: out.ticket ? `${out.ticket.status.replace(/_/g, ' ')}: ${out.ticket.proposal_type}${out.ticket.invalidation && out.ticket.invalidation.words ? `. ${out.ticket.invalidation.words}` : ''}` : 'No ticket has been saved for this project.' };
   },
 
+  daily_brief(ws, args) {
+    const since = typeof args.since === 'string' && args.since.trim() ? args.since.trim().slice(0, 40) : null;
+    const out = require('./core/brief-daily').brief(ws, { since });
+    return { status: 'ok', ...out, message: `${out.format}: ${out.sections.filter((x) => x.state === 'ok').length} of ${out.sections.length} sections read; SHA-256 ${out.text_sha256}. Nothing was written.` };
+  },
+
   pending_tickets(ws, args, ctx) {
     if (ctx.me !== 'claude') return { status: 'no_role', pending: [], next: null, message: `${ctx.label} has no ticket role.` };
     const T = ticketsCore();
@@ -2055,6 +2077,10 @@ function makeMcp(ws, { rebuild = () => {}, version = '1.0.0', log = () => {}, ki
     const mine = activity.models[ctx.me];
     mine.tool_calls += 1;
     mine.last_call = { name: fn ? name : 'unknown tool', at: new Date().toISOString() };
+    if (fn && ctx.read_only && !READ_ONLY_TOOLS.includes(name)) {
+      say(`MCP ${name}: refused, read-only connection (${by})${where}`);
+      return { content: [{ type: 'text', text: `${name} is not available: this connection was approved as Read only, so it can use only the read tools (${READ_ONLY_TOOLS.join(', ')}). Eric reconnects it with Approve in the desk's page to allow more. (READ_ONLY) (ref ${ref})` }], isError: true };
+    }
     if (!fn) {
       say(`MCP unknown tool ${String(name).slice(0, 60)} (${by})${where}`);
       return { content: [{ type: 'text', text: `Unknown tool ${String(name).slice(0, 60)}. (ref ${ref})` }], isError: true };
@@ -2100,9 +2126,13 @@ function makeMcp(ws, { rebuild = () => {}, version = '1.0.0', log = () => {}, ki
       case 'ping':
         return reply({});
       case 'tools/list':
-        activity.models[contextFor(who).me].tools_lists += 1;
-        say(`MCP tools/list (${TOOLS.length} tools; ${contextFor(who).label}) ref ${ref} conn ${connKey(who)}`);
-        return reply({ tools: TOOLS });
+      {
+        const ctx = contextFor(who);
+        const list = ctx.read_only ? READ_ONLY_LIST : TOOLS;
+        activity.models[ctx.me].tools_lists += 1;
+        say(`MCP tools/list (${list.length} tools; ${ctx.label}${ctx.read_only ? '; read only' : ''}) ref ${ref} conn ${connKey(who)}`);
+        return reply({ tools: list });
+      }
       case 'tools/call': {
         const p = msg.params || {};
         return reply(await call(String(p.name || ''), p.arguments || {}, who, ref));
@@ -2171,4 +2201,4 @@ handlers.start_research = function start_research(ws, args, ctx) {
 
 for (const t of TOOLS) if (handlers[t.name]) handlers[t.name].readOnly = Boolean(t.annotations && t.annotations.readOnlyHint);
 
-module.exports = { makeMcp, TOOLS, INSTRUCTIONS, instructionsFor, modelsAsked, redactLog, PROTOCOL_VERSIONS, WAITING_PHRASE };
+module.exports = { makeMcp, TOOLS, READ_ONLY_TOOLS, INSTRUCTIONS, instructionsFor, modelsAsked, redactLog, PROTOCOL_VERSIONS, WAITING_PHRASE };

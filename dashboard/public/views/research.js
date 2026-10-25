@@ -83,7 +83,41 @@ async function outcomesTab(ctx) {
     { label: 'Start', render: (r) => h('span', { class: 'small', title: r.note || (r.start.basis === 'run_packet' ? "When the research run's evidence packet was captured" : 'When the report was saved (it answers no run)') }, r.start.project ? `${fmtDate(r.start.at)}` : 'No price') },
     ...days.map((d) => ({ label: `${d}d vs BTC`, num: true, render: (r) => horizonCell(r.horizons.find((x) => x.days === d)) })),
   ], rows, { size: 50, label: 'Report outcomes', empty: 'No eligible reports yet.' }));
-  return h('div', null, models, list);
+  return h('div', null, models, list, await paperCard(ctx));
+}
+
+// The paper book (core/paper.js): PM-approved tickets as paper positions,
+// apart from the portfolio. No total or median before 20 have closed.
+async function paperCard(ctx) {
+  let b;
+  try {
+    b = await ctx.api.get('/api/paper');
+  } catch (_) {
+    return card('Paper', h('p', { class: 'muted' }, 'The paper book could not be read.'));
+  }
+  const ret = (x) => {
+    const r = x.return;
+    if (!r || r.status === 'unknown') return h('span', { class: 'faint', title: r ? r.why : null }, '—');
+    return h('span', { class: `num ${r.return_pct > 0 ? 'pos' : r.return_pct < 0 ? 'neg' : ''}`.trim(), title: `${r.status === 'realized' ? 'Realized' : 'Unrealized'}; ${r.btc_return_pct === null ? r.btc_note : `BTC ${pctText(r.btc_return_pct)}, against BTC ${pctText(r.vs_btc_pct)}`}` }, pctText(r.return_pct));
+  };
+  const stateWord = { open: 'Open', closed: 'Closed', voided: 'Voided' };
+  const rows = b.positions.slice().sort((a, c) => String(c.decided_at).localeCompare(String(a.decided_at)));
+  const summary = b.summary.note || `${b.summary.closed} closed · median ${pctText(b.summary.median_vs_btc_pct)} against BTC · ${b.summary.beat_btc} of ${b.summary.of} beat BTC`;
+  return card('Paper', h('div', null,
+    h('p', { class: 'small muted' }, `${b.counts.open} open · ${b.counts.closed} closed${b.counts.voided ? ` · ${b.counts.voided} voided` : ''} · ${summary}`),
+    pagedTable([
+      { label: 'Project', render: (x) => h('a', { href: `#/project/${encodeURIComponent(x.project_id)}/market` }, x.name || x.project_id) },
+      { label: 'Risk', num: true, render: (x) => h('span', { class: 'num' }, `$${Number(x.risk_usd).toLocaleString('en-US')}`) },
+      { label: 'Entry', render: (x) => x.entry.status === 'priced' ? h('span', { class: 'num', title: `Hourly reading ${fmtDate(x.entry.at)}; entry cost unknown` }, `$${x.entry.price_usd}`) : h('span', { class: 'faint', title: x.entry.reason }, 'No entry price') },
+      { label: 'State', render: (x) => h('span', { title: x.close ? x.close.words : x.reason || null }, stateWord[x.state] || x.state) },
+      { label: 'Return', num: true, render: ret },
+    ], rows, { size: 25, label: 'Paper positions', empty: 'No paper positions yet.' }),
+    b.shadow.length ? h('details', null, h('summary', null, `Shadow: not taken (${b.shadow.length})`), table([
+      { label: 'Project', render: (x) => h('a', { href: `#/project/${encodeURIComponent(x.project_id)}/forensics` }, x.name) },
+      { label: 'Ticket', render: (x) => h('span', { class: 'small' }, `${x.proposal_type} · ${fmtDate(x.saved_at)}`) },
+      { label: '', render: (x) => h('span', { class: 'faint' }, x.line) },
+    ], b.shadow, { empty: '' })) : null,
+  ), { note: b.meaning });
 }
 
 // A long list a page at a time: the desk's claims are never drawn all at

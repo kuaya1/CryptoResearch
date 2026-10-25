@@ -200,6 +200,7 @@ const EXPORT_INVENTORY = {
     'journal, conviction notes, review events, claim checks, disputes, research runs, prompt files with hashes',
     'forensic audits, receipts with their full text and SHA-256, recorded checkpoint outcomes, the monitoring opt-in, monitor observations and the reviews of evidence changes',
     'portfolio accounts, assets, transactions (including voided), limits, events, and the computed positions',
+    'the paper book (paper/positions.jsonl: opened and voided paper positions, apart from the portfolio)',
     'latest market observation per asset and the market status',
   ],
   omitted: [
@@ -258,6 +259,7 @@ function portableLocked(ws) {
         events: notes.loadEvents(ws, 'portfolio'),
         computed: data.pf,
       },
+      paper: { positions: require('./paper').readRecords(ws) },
       market_data: { latest: data.latest, status: market.readStatus(ws) },
       consistency,
     },
@@ -336,7 +338,7 @@ function csvTable(ws, name) {
 // (.cr/captures), so a restore collects a submitted request by its ID instead
 // of sending it again, and the ledger of one-time repairs.
 const CR_KEPT = ['.cr/captures', '.cr/repairs.json'];
-const PACKAGE_INCLUDE = ['workspace.json', 'config', 'templates', 'projects', 'portfolio', 'market-data', 'inbox', 'logs', ...CR_KEPT];
+const PACKAGE_INCLUDE = ['workspace.json', 'config', 'templates', 'projects', 'portfolio', 'paper', 'market-data', 'inbox', 'logs', ...CR_KEPT];
 const BACKUP_INCLUDE = [...PACKAGE_INCLUDE, 'README.md', 'COWORK-INSTRUCTIONS.md', 'WORKSPACE-MAP.md', 'CLAUDE.md', 'package.json', 'Open Dashboard.cmd', 'Open Demo Dashboard.cmd', 'dashboard'];
 
 // Links and junctions are never followed: they could point outside the folder

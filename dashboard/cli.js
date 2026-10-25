@@ -90,6 +90,7 @@ Forensics & Resilience (no paid model call; Claude investigates, ChatGPT may cha
   forensics case-verify --file FILE      checks a case package offline and replays its calculation (no network)
 
 PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you decide; no order is ever placed)
+  paper [--json]                         the paper book: PM-approved tickets as paper positions, apart from the portfolio (writes nothing)
   tickets candidates [--json]           who could go in the pilot: held first, then by grade, with today's gate (writes nothing)
   tickets queue [<id>]                   the autonomous pilot's next step per project (research, ticket, your review)
   tickets pilot <id> --on|--off          put a project in the autonomous pilot (your opt-in)
@@ -97,6 +98,7 @@ PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you deci
                                          open (or resume) the Prosecutor's ticket on Claude's current report
   tickets prompt <id> <ticket_id>        print the frozen Prosecutor prompt (cr-ticket-prompt@1)
   tickets import <id> <ticket_id> --text-file FILE [--revision-note TEXT]
+  brief daily [--json] [--since ISO]                     the daily brief (cr-daily-brief@1): what needs you today, each line with its #/ link, the SHA-256 of its text (writes nothing)
   tickets view <id> [--receipt tr_…] [--include-text]  the ticket in force (or that receipt): status, desk sizing, invalidation with every check, history (writes nothing)
   tickets decide <id> <receipt_id> --action approve|halve|veto|pass|watch|trim|reopen|undo [--note TEXT]
   tickets cancel <id> <ticket_id> [--reason TEXT]
@@ -303,7 +305,8 @@ async function run(argv) {
   if (cmd === 'test') {
     const { spawnSync } = require('child_process');
     const dir = path.join(__dirname, 'tests');
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.test.js')).map((f) => path.join(dir, f));
+    const sim = path.join(dir, 'sim');
+    const files = [dir, sim].filter((d) => fs.existsSync(d)).flatMap((d) => fs.readdirSync(d).filter((f) => f.endsWith('.test.js')).map((f) => path.join(d, f)));
     const r = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit' });
     process.exitCode = r.status;
     return { _silent: true };
@@ -837,6 +840,13 @@ async function run(argv) {
       }
       throw Object.assign(new Error('forensics view|start|prompt|import|challenge|cancel|monitor|run|correct|case|case-verify (see help)'), { code: 'USAGE' });
     }
+    case 'brief': {
+      if (sub !== 'daily') throw Object.assign(new Error('brief daily [--json] [--since ISO] (see help)'), { code: 'USAGE' });
+      const out = require('./core/brief-daily').brief(ws, { since: one(flags.since) || null });
+      // main strips --json before run(), so it is read from argv here.
+      return flags.json || process.argv.includes('--json') ? out : { _text: `${out.text}\n\nSHA-256 of this text: ${out.text_sha256}\n` };
+    }
+    case 'paper': return require('./core/paper').book(ws);
     case 'tickets': {
       const tk = require('./core/tickets');
       const pid = rest[0];
