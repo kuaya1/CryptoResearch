@@ -50,6 +50,18 @@ const PROTECTED = [
   { re: /^render\.ya?ml$/, why: 'deployment' },
   { re: /^(portfolio|paper|projects|config|secrets)\//, why: 'records, never committed' },
 ];
+// Lines of an unprotected file that mount a protected part (Eric's decision
+// on review finding 2, 2026-10-25): a branch that adds, changes or removes one
+// waits for him as a protected path does; the rest of the file still merges.
+const PROTECTED_LINES = [
+  { path: 'dashboard/server.js', re: /engineering/i, why: 'the mount of the engineering routes (dashboard/engineering/routes.js)' },
+];
+// Paths no delegation reaches (Eric's decision on review finding 6): an
+// engineering item a delegation admitted is held when its diff touches one;
+// only a version Eric authorized himself may.
+const DELEGATION_RESTRICTED = [
+  { re: /^dashboard\/core\//, prefix: 'dashboard/core/', why: 'core financial and investment logic, which no delegation changes' },
+];
 
 function run(cwd, cmd, args, { allowFail = false, env = {} } = {}) {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', env: { ...process.env, ...IDENTITY, ...env }, maxBuffer: 256 * 1024 * 1024 });
@@ -82,8 +94,16 @@ function scopeCheck(cwd, { base, head }) {
   const changed = git(cwd, ['diff', '--no-renames', '--name-status', `${base}...${head}`]).out.split('\n').filter(Boolean).map((l) => { const [st, ...p] = l.split('\t'); return { status: st[0], path: p.join('\t') }; });
   for (const c of changed) {
     const hit = PROTECTED.find((x) => x.re.test(c.path));
+    const lines = PROTECTED_LINES.find((x) => x.path === c.path);
     if (hit) reasons.push(`${c.path}: ${hit.why}`);
     else if (/^templates\//.test(c.path) && c.status !== 'A') reasons.push(`${c.path}: a published template is ${c.status === 'D' ? 'removed' : 'edited'} (publish a new version instead)`);
+    else if (lines) {
+      // Only the hunks' own lines (after the first @@), never the file header.
+      const d = git(cwd, ['diff', '--no-renames', '--no-color', '-U0', `${base}...${head}`, '--', c.path]).out.split('\n');
+      const body = d.slice(Math.max(0, d.findIndex((l) => l.startsWith('@@'))));
+      const touched = c.status === 'D' || body.some((l) => /^[+-]/.test(l) && lines.re.test(l));
+      if (touched) reasons.push(`${c.path}: ${lines.why}`);
+    }
   }
   const desk = git(cwd, ['show', `${base}:DESK_STATE.md`], { allowFail: true });
   const backlog = backlogItems(desk.status === 0 ? desk.out : '');
@@ -235,6 +255,59 @@ function insertEntry(text, entry) {
   return lines.join('\n');
 }
 
+// The shape of one admitted entry (blueprint §6): its unticked engineering
+// item line, then only its own detail lines, so nothing in it reads as
+// another item, a heading or another section. The task's text is quoted
+// (escaped) inside those lines by the desk.
+const ENTRY_ITEM_RE = /^- \[ \] \*\*\d+\. .*\*\(engineering task eng-\d{8}-[0-9a-f]{6} v\d+, sha256 [0-9a-f]{16}, [^)\n]*\)\*$/;
+const ENTRY_DETAIL_RE = /^ {2}- (?:Outcome|Acceptance|Scope|Not in scope): \S/;
+function entryProblems(entry) {
+  const text = String(entry);
+  const out = [];
+  if (!text.endsWith('\n') || text.endsWith('\n\n') || /\r/.test(text)) out.push('it is LF lines ending in one newline');
+  const lines = text.replace(/\n$/, '').split('\n');
+  if (!ENTRY_ITEM_RE.test(lines[0] || '')) out.push('its first line is not one unticked engineering item');
+  const bad = lines.slice(1).findIndex((l) => !ENTRY_DETAIL_RE.test(l));
+  if (bad >= 0) out.push(`its line ${bad + 2} is not one of the item's own detail lines (Outcome, Acceptance, Scope, Not in scope)`);
+  const items = backlogItems(text).size;
+  if (items !== 1) out.push(`it reads as ${items} backlog items`);
+  return out.length ? [`an admission adds one engineering item and its own detail lines only: ${out.join('; ')}`] : [];
+}
+
+// The desk's public reads say codes (no free text, finding 7 of the review of
+// PR #16); the workflow says them in words.
+const DESK_REASONS = {
+  paused: 'engineering is paused',
+  unsupported_schema: 'the task record is in a schema this desk does not read',
+  number_unbound: 'no number is bound',
+  not_authorized: 'the task is not authorized',
+  authorization_stale: 'the authorization is for another version than the current one',
+  delegation_missing: 'its delegation is missing',
+  delegation_revoked: 'its delegation was revoked',
+  delegation_expired: 'its delegation expired',
+  not_current_candidate: 'this head is not the task\'s current candidate',
+  admission_unconfirmed: 'its admission is not confirmed on main',
+  verification_missing: 'no passing verification with every acceptance check met is recorded for this head',
+  ci_failed: 'GitHub\'s check runs on this head failed, as the desk read them',
+  release_by_owner: 'this task is released by Eric (release mode owner)',
+};
+function deskReason(code) {
+  const [k, ...p] = String(code).split(':');
+  if (k === 'task_status' && p[0]) return `the task is ${p[0]}`;
+  if (k === 'review_not_passed' && p[0]) return `the required ${p[0]} review has not passed on this head (${p[1] || 'pending'})`;
+  return DESK_REASONS[k] || `desk code ${String(code).slice(0, 60)}`;
+}
+
+// The exact diff of a candidate on its base, as engineering-worker evidence
+// sends it and the desk hashes it: Git's own bytes, nothing trimmed.
+function candidateDiff(cwd, base, head) {
+  const opts = { cwd, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 };
+  const d = spawnSync('git', ['diff', '--binary', '--no-color', '--no-ext-diff', '--full-index', '--no-renames', base, head], opts);
+  const n = spawnSync('git', ['diff', '--no-renames', '--name-only', base, head], opts);
+  if (d.status !== 0 || n.status !== 0) return null;
+  return { diff: d.stdout, diff_sha256: sha256hex(d.stdout), files: n.stdout.split('\n').filter(Boolean) };
+}
+
 // The added text of an admission branch, read as data: it may change only
 // DESK_STATE.md, by exactly one entry inserted where insertEntry puts it.
 function admissionDiff(cwd, { base, head }) {
@@ -259,6 +332,7 @@ function admissionDiff(cwd, { base, head }) {
   const num = /^- \[ \] \*\*(\d+)\. /.exec(first);
   const mark = ENG_MARK_RE.exec(first);
   if (!num || !mark) reasons.push('the added block does not start with an unticked engineering item line');
+  if (entry) reasons.push(...entryProblems(entry));
   return { reasons, entry, number: num ? Number(num[1]) : null, task_id: mark ? mark[1] : null, version: mark ? Number(mark[2]) : null, sha256_prefix: mark ? mark[3] : null };
 }
 // File content exactly as stored (git show trims nothing when read raw).
@@ -303,7 +377,7 @@ async function admit(cwd, { branch, head, desk, remote = 'origin', fetchJson = d
   if (a.error || a.missing) return { ...out, status: 'refused', reasons: [a.error || `the desk has no admission for ${taskId}`] };
   const rec = a.json;
   const want = [];
-  if (rec.admissible !== true) want.push(...(rec.reasons || ['not admissible']).map((x) => `desk: ${x}`));
+  if (rec.admissible !== true) want.push(...(rec.reasons || ['not admissible']).map((x) => `desk: ${deskReason(x)}`));
   if (rec.task_id !== taskId) want.push('desk: another task');
   if (rec.number !== d.number) want.push(`desk: the bound number is ${rec.number}, not ${d.number}`);
   if (rec.version !== d.version) want.push(`desk: the current version is ${rec.version}, not ${d.version}`);
@@ -317,9 +391,21 @@ async function admit(cwd, { branch, head, desk, remote = 'origin', fetchJson = d
     const text = rawShow(cwd, base, 'DESK_STATE.md');
     if (text.includes(d.entry)) { out.status = 'already_on_main'; out.merge = base; break; }
     const items = backlogItems(text);
+    // One task holds one backlog number, whatever a worker recorded since.
+    const held = [...items].find(([, it]) => it.engineering && it.engineering.task_id === taskId);
+    if (held) return { ...out, status: 'refused', reasons: [`${taskId} is already on main as item ${held[0]} (task_on_main): one task holds one backlog number; the worker confirms item ${held[0]} from main instead`], task_on_main: held[0] };
     if (items.has(d.number)) return { ...out, status: 'refused', reasons: [`number ${d.number} is already on main's backlog (number_taken)`], number_taken: true };
     if (intakeNumbers(cwd, remote).has(d.number)) return { ...out, status: 'refused', reasons: [`number ${d.number} is on an open intake branch (number_taken)`], number_taken: true };
     const next = insertEntry(text, d.entry);
+    // Main's backlog after the change is the one before plus exactly this one
+    // engineering item, every other item as it was, and no section added.
+    const nextItems = backlogItems(next);
+    const kept = [...items].every(([n, it]) => nextItems.has(n) && JSON.stringify(nextItems.get(n)) === JSON.stringify(it));
+    const mine = nextItems.get(d.number);
+    const sections = (s) => (s.match(/^## /gm) || []).length;
+    if (!kept || nextItems.size !== items.size + 1 || !mine || !mine.engineering || mine.engineering.task_id !== taskId || mine.ticked || mine.eric || sections(next) !== sections(text) || next.length !== text.length + d.entry.length) {
+      return { ...out, status: 'refused', reasons: ['an admission adds one engineering item and its own detail lines only: main\'s backlog would change by more than this one item'] };
+    }
     git(cwd, ['checkout', '-q', '--detach', '-f', base]);
     fs.writeFileSync(require('path').join(cwd, 'DESK_STATE.md'), next);
     const added = [...next.matchAll(new RegExp(`^\\s*- \\[[ xX]\\] (\\*\\([^)]*\\)\\* )?\\*\\*${d.number}\\.`, 'gm'))].length;
@@ -342,7 +428,11 @@ async function admit(cwd, { branch, head, desk, remote = 'origin', fetchJson = d
 
 // For a branch whose commits name an engineering item: promoted alone, from
 // its own branch, only while the desk attests this exact head (verified,
-// reviewed as required, not paused, inside its approved paths).
+// reviewed as required, not paused, inside its approved paths). The desk has
+// no Git: the diff and files it attests are what the review read, and they
+// are recomputed here from Git on the reviewed base and must match byte for
+// byte. A review covers one head on one base: once main has moved past that
+// base, the candidate is rebuilt and reviewed again (blueprint §8).
 async function engineeringCheck(cwd, { base, head, branch, scope, desk, fetchJson = defaultFetchJson }) {
   const desk0 = git(cwd, ['show', `${base}:DESK_STATE.md`], { allowFail: true });
   const items = backlogItems(desk0.status === 0 ? desk0.out : '');
@@ -360,16 +450,28 @@ async function engineeringCheck(cwd, { base, head, branch, scope, desk, fetchJso
   else if (a.missing) reasons.push(`the desk has no record of head ${head.slice(0, 12)} for ${it.task_id}`);
   else {
     att = a.json;
-    if (att.promotable !== true) reasons.push(...(att.reasons || ['not promotable']).map((x) => `desk: ${x}`));
+    if (att.promotable !== true) reasons.push(...(att.reasons || ['not promotable']).map((x) => `desk: ${deskReason(x)}`));
     if (att.task_id !== it.task_id) reasons.push(`desk: the head belongs to ${att.task_id}, not ${it.task_id}`);
     if (att.number !== n) reasons.push(`desk: the task holds item ${att.number}, not ${n}`);
     if (att.version !== it.version) reasons.push(`desk: the task is at version ${att.version}, item ${n} names version ${it.version}`);
     const mb = git(cwd, ['merge-base', base, head], { allowFail: true }).out;
     if (mb !== att.merge_base_sha) reasons.push(`the merge base ${String(mb).slice(0, 12)} is not the one verified and reviewed (${String(att.merge_base_sha).slice(0, 12)}); the candidate needs rebuilding`);
+    const main = revParse(cwd, base);
+    if (att.required_review !== 'none' && main !== att.merge_base_sha) reasons.push(`main has moved since the review: the ${att.required_review} review is of head ${head.slice(0, 12)} on ${String(att.merge_base_sha).slice(0, 12)}, and main is ${String(main).slice(0, 12)}. A review covers one head on one base: rebuild the candidate on current main, verify it and have it reviewed again`);
+    const real = SHA_RE.test(String(att.merge_base_sha || '')) ? candidateDiff(cwd, att.merge_base_sha, head) : null;
+    if (!real) reasons.push('the diff of this head on its reviewed base could not be computed from Git');
+    else {
+      if (real.diff_sha256 !== att.diff_sha256) reasons.push(`the diff the review read is not the Git diff of this head on its base (SHA-256 ${String(att.diff_sha256).slice(0, 12)} on the desk, ${real.diff_sha256.slice(0, 12)} from Git)`);
+      const listed = Array.isArray(att.files) ? att.files : [];
+      for (const f of real.files) if (!listed.includes(f)) reasons.push(`${f} is changed but was not in the reviewed diff`);
+      for (const f of listed) if (!real.files.includes(f)) reasons.push(`${f} is in the reviewed diff but this head does not change it`);
+    }
     const allowed = Array.isArray(att.allowed_paths) ? att.allowed_paths : [];
     for (const f of scope.changed) if (!allowed.some((g) => globRe(g).test(f))) reasons.push(`${f} is outside the task's approved scope`);
+    // Whatever the task record says: a delegation never changes these.
+    if (att.delegation) for (const f of scope.changed) { const r = DELEGATION_RESTRICTED.find((x) => x.re.test(f)); if (r) reasons.push(`${f}: ${r.why}; this item was admitted by delegation ${att.delegation.policy_id} (${att.delegation.template}), so it waits for Eric`); }
   }
-  return { engineering: true, ok: reasons.length === 0, reasons, item: n, task_id: it.task_id, attestation: att ? { promotable: att.promotable, review_state: att.review_state, required_review: att.required_review } : null };
+  return { engineering: true, ok: reasons.length === 0, reasons, item: n, task_id: it.task_id, attestation: att ? { promotable: att.promotable, review_state: att.review_state, required_review: att.required_review, merge_base_sha: att.merge_base_sha, diff_sha256: att.diff_sha256 } : null };
 }
 
 // One plain summary per result; only a confirmed merge says merged.
@@ -451,4 +553,4 @@ async function main(argv, { fetchJson = defaultFetchJson } = {}) {
 
 if (require.main === module) main(process.argv.slice(2)).then((c) => { process.exitCode = c; }, (err) => { process.stderr.write(`${err && err.message || err}\n`); process.exitCode = 1; });
 
-module.exports = { PROTECTED, ENG_MARK_RE, backlogItems, scopeCheck, compose, promote, summaryOf, insertEntry, admissionDiff, admit, engineeringCheck, main };
+module.exports = { PROTECTED, PROTECTED_LINES, DELEGATION_RESTRICTED, ENG_MARK_RE, backlogItems, scopeCheck, compose, promote, summaryOf, insertEntry, entryProblems, deskReason, candidateDiff, admissionDiff, admit, engineeringCheck, main };

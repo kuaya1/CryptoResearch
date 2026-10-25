@@ -436,11 +436,10 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   // A research request from an assistant can queue paid API jobs (other
   // models): the runner picks them up at once instead of at its next tick.
   const mcp = hosted ? require('./mcp').makeMcp(ws, { version: require('./core/revision').revision().short || '1.0.0', rebuild: (areas) => rebuild(areas), log: (...a) => { if (!quiet) console.log(...a); }, kick: () => setTimeout(() => researchTick(), 300), connections: () => oauth.connections().filter((c) => c.audience !== 'engineering') }) : null;
-  // The engineering inbox's own connector at /mcp/engineering (Connected
-  // Engineering v1, 2026-10-25): its own OAuth resource, one role per
-  // connection, and none of the desk's research, ticket or portfolio tools.
-  const engInbox = require('./engineering/inbox');
-  const engMcp = hosted ? require('./engineering/tools').makeEngineeringMcp(ws, { version: require('./core/revision').revision().short || '1.0.0', log: (...a) => { if (!quiet) console.log(...a); }, github: require('./engineering/github').makeGithub() }) : null;
+  // The engineering inbox's routes (connector, public reads, Eric's
+  // decisions) live in the protected dashboard/engineering/routes.js; this
+  // file only mounts them.
+  const engineering = require('./engineering/routes').makeEngineeringRoutes(ws, { oauth, auth, origins: mcpOrigins, version: require('./core/revision').revision().short || '1.0.0', log: (...a) => { if (!quiet) console.log(...a); }, github: hosted ? require('./engineering/github').makeGithub() : null, HttpError, readCodes: READ_CODES });
   // The offsite package for this PC's daily pull (CR_BACKUP_KEY, read per request).
   const offsite = hosted ? require('./core/offsite').makeOffsiteRoute(ws, { env: process.env, log: (...a) => { if (!quiet) console.log(...a); } }) : null;
   const clients = new Set();
@@ -772,7 +771,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   const DAILY_JOBS = ['snapshot', 'reviews', 'backup', 'fundamentals', 'screening', 'forensics'];
   const dailyTimer = setInterval(() => jobs.runJobs(ws, DAILY_JOBS, { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 30 * 60000);
 
-  const api = makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTick, queueIdentify, clients, sockets, oauth, auth });
+  const api = makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTick, queueIdentify, clients, sockets, oauth, auth, engineering });
 
   server.on('request', async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -818,30 +817,9 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
           }
           return await mcp(req, res, who);
         }
-        if (url.pathname === '/mcp/engineering' || url.pathname === '/mcp/engineering/') {
-          const o = req.headers.origin;
-          if (o && !mcpOrigins.has(o)) {
-            if (!quiet) console.log(`MCP engineering request refused: Origin ${String(o).slice(0, 80)} is not allowed`);
-            throw new HttpError(403, 'Origin not allowed');
-          }
-          const grant = oauth.authenticate(req, { audience: 'engineering' });
-          if (!grant) {
-            if (!quiet) console.log(`MCP engineering sign-in needed: ${oauth.refusal(req, { audience: 'engineering' })}`);
-            return oauth.challenge(res, { invalid: Boolean(req.headers.authorization), audience: 'engineering' });
-          }
-          return await engMcp(req, res, grant);
-        }
+        if (await engineering.connector(req, res, url)) return;
       }
-      // What the engineering-admission and backlog-pr workflows check
-      // (backlog-promote.js): public and read-only, with no private content
-      // (task IDs, hashes, backlog numbers, paths and states only).
-      const engRead = /^\/engineering\/(?:admissions\/(eng-\d{8}-[0-9a-f]{6})|attestations\/([0-9a-f]{40}))$/.exec(url.pathname);
-      if (engRead) {
-        if (req.method !== 'GET') throw new HttpError(405, 'Method not allowed');
-        const v = engRead[1] ? engInbox.admissionView(ws, engRead[1]) : engInbox.attestationView(ws, engRead[2]);
-        res.writeHead(v ? 200 : 404, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-        return res.end(JSON.stringify(v || { error: 'Not found' }));
-      }
+      if (engineering.publicRead(req, res, url)) return;
       // Offsite backup (core/offsite.js): the PC pulls a complete package with
       // the desk's own backup key, never the sign-in, and can change nothing.
       if (offsite && url.pathname === '/api/offsite/package') return offsite(req, res);
@@ -978,7 +956,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   return { url: `${origin}/`, port: boundPort, token, server, shutdown, state, queueIdentify, researchTick };
 }
 
-function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTick = () => {}, queueIdentify, clients, sockets, oauth = null, auth = null }) {
+function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTick = () => {}, queueIdentify, clients, sockets, oauth = null, auth = null, engineering }) {
   const send = (res, status, body, type = 'application/json; charset=utf-8', extra = {}) => {
     res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', ...extra });
     res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
@@ -1409,51 +1387,8 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     return { status: 'saved', message: 'Disconnected. Claude can no longer use the desk through that connection.' };
   });
 
-  // Preferences > Developer > Engineering: Eric's own decisions on the
-  // engineering inbox (Connected Engineering v1). Activating a delegation and
-  // authorizing a task take his passphrase again on the online desk.
-  const engInbox = require('./engineering/inbox');
-  const OWNER = { kind: 'owner' };
-  const ENG_CONFLICT = new Set(['PAUSED', 'CLAIMED', 'STALE_VERSION', 'HASH_MISMATCH', 'WRONG_STATE', 'WRONG_CANDIDATE', 'NOT_EDITABLE', 'EDIT_AFTER_ADMISSION', 'CEILING', 'NOT_CLAIMABLE', 'HELD', 'UNSUPPORTED_SCHEMA']);
-  const eng = async (fn) => {
-    try {
-      return await fn();
-    } catch (err) {
-      if (err instanceof OpError && !err.status && !READ_CODES.has(err.code) && !['WORKSPACE_BUSY', 'WRITES_BLOCKED', 'IDEMPOTENCY_CONFLICT'].includes(err.code)) err.status = err.code === 'NOT_FOUND' ? 404 : ENG_CONFLICT.has(err.code) ? 409 : 400;
-      throw err;
-    }
-  };
-  const passphrase = async (req, body) => {
-    if (!auth) return;
-    const check = await auth.verifyPassphrase(req, String((body && body.password) || ''));
-    if (!check.ok) throw new HttpError(check.locked ? 429 : 403, check.locked ? 'Too many attempts. Wait a few minutes and try again.' : 'That passphrase is not right. Nothing was changed.');
-  };
-  const engTask = (s) => { if (!engInbox.TASK_ID_RE.test(s)) throw new HttpError(400, 'Not an engineering task ID'); return s; };
-  // The task's own state stays readable as task_status.
-  const saved = (r) => ({ ...r, ...(r && r.status ? { task_status: r.status } : {}), status: 'saved' });
-  route('GET', '/api/engineering', () => eng(() => ({
-    ...engInbox.ownerView(ws, OWNER),
-    mcp_url: oauth ? oauth.engineeringResource : null,
-    connections: oauth ? oauth.connections().filter((c) => c.audience === 'engineering') : [],
-  })));
-  route('POST', '/api/engineering/pause', (m, req, res, body) => eng(() => saved(engInbox.setPaused(ws, OWNER, { paused: Boolean(body.paused), reason: body.reason || null }))));
-  route('POST', '/api/engineering/policies', (m, req, res, body) => eng(async () => {
-    await passphrase(req, body);
-    return saved(engInbox.activatePolicy(ws, OWNER, { template: body.template, goal_id: body.goal_id || null, goal: body.goal || null, days: body.days || null }));
-  }));
-  route('POST', '/api/engineering/policies/(pol-\\d{8}-[0-9a-f]{6})/revoke', (m, req, res, body) => eng(() => saved(engInbox.revokePolicy(ws, OWNER, m[1], { reason: body.reason || null }))));
-  route('POST', '/api/engineering/tasks/([^/]+)/authorize', (m, req, res, body) => eng(async () => {
-    await passphrase(req, body);
-    return saved(engInbox.authorizeTask(ws, OWNER, engTask(m[1]), { version: Number(body.version), content_sha256: String(body.content_sha256 || '') }));
-  }));
-  route('POST', '/api/engineering/tasks/([^/]+)/pause', (m, req, res, body) => eng(() => saved(engInbox.pauseTask(ws, OWNER, engTask(m[1]), { reason: body.reason || null }))));
-  route('POST', '/api/engineering/tasks/([^/]+)/resume', (m) => eng(() => saved(engInbox.resumeTask(ws, OWNER, engTask(m[1])))));
-  route('POST', '/api/engineering/tasks/([^/]+)/cancel', (m, req, res, body) => eng(() => saved(engInbox.cancelTask(ws, OWNER, engTask(m[1]), { reason: body.reason || null }))));
-  route('POST', '/api/engineering/tasks/([^/]+)/reopen', (m) => eng(() => saved(engInbox.reopenTask(ws, OWNER, engTask(m[1])))));
-  route('POST', '/api/engineering/tasks/([^/]+)/review', (m, req, res, body) => eng(() => {
-    const { password, ...args } = body || {};
-    return saved(engInbox.saveReview(ws, OWNER, { ...args, task_id: engTask(m[1]) }));
-  }));
+  // Preferences > Developer > Engineering (dashboard/engineering/routes.js).
+  engineering.mount(route);
 
   route('POST', '/api/projects', (m, req, res, body) => once(body, () => {
     const r = projects.addProject(ws, { ...body, utterance: body.utterance || null });

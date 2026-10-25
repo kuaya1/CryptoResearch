@@ -52,6 +52,14 @@
 .prefs-field .input { height: 32px; }
 /* Preferences > Developer > Engineering */
 .eng-sub { font-size: var(--fs-sm); font-weight: 600; margin-top: 8px; }
+.eng-version { margin: 8px 0; }
+.eng-version > summary { cursor: pointer; font-weight: 600; }
+.eng-version[open] > summary { margin-bottom: 8px; }
+.eng-ol { margin: 0; padding-left: 20px; }
+.eng-paths { display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.eng-entry-wrap { margin-top: 12px; }
+.eng-entry-t { color: var(--text-3); margin-bottom: 4px; }
+.eng-entry { margin: 0; padding: 8px 12px; background: var(--surface-sunken); border-radius: var(--r-well); font-family: var(--mono); font-size: var(--fs-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 767.98px) {
   .prefs { width: 100%; border-left: 0; }
   .prefs-head { padding: 8px 8px 8px 16px; }

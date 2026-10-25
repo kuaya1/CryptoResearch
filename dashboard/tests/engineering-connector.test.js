@@ -209,7 +209,7 @@ test('Eric decides on the desk behind sign-in and his passphrase; the connector 
   assert.equal(view.status, 200, view.text);
   assert.equal(view.json.mcp_url, ENG);
   assert.equal(view.json.paused, false);
-  assert.deepEqual(view.json.templates.map((x) => x.template).sort(), ['eng-app@1', 'eng-docs@1']);
+  assert.deepEqual(view.json.templates.map((x) => x.template).sort(), ['eng-app@2', 'eng-docs@1'], 'eng-app@1 is retired: never offered');
   assert.deepEqual(view.json.connections.map((c) => c.role).sort(), ['submitter', 'worker']);
   assert.ok(view.json.connections.every((c) => c.audience === 'engineering'));
 
@@ -234,6 +234,9 @@ test('Eric decides on the desk behind sign-in and his passphrase; the connector 
 
   // Activating a delegation takes the passphrase too.
   assert.equal((await eric.post('/api/engineering/policies', { template: 'eng-docs@1' })).status, 403);
+  const retired = await eric.post('/api/engineering/policies', { template: 'eng-app@1', goal_id: 'desk-polish', goal: 'Polish the desk (FICTIONAL)', password: PASS });
+  assert.equal(retired.status, 400, 'eng-app@1 is retired: never activated again');
+  assert.match(retired.json.error, /eng-app@1 is retired on 2026-10-25 for eng-app@2/);
   const act = await eric.post('/api/engineering/policies', { template: 'eng-docs@1', days: 7, password: PASS });
   assert.equal(act.status, 200, act.text);
   const policyId = act.json.policy.policy_id;
@@ -278,4 +281,33 @@ test('Eric decides on the desk behind sign-in and his passphrase; the connector 
   const after = await eric.get('/api/engineering');
   assert.equal(after.json.tasks.length, 2);
   assert.equal(after.json.policies.find((x) => x.policy_id === policyId).active, false);
+});
+
+// Eric's decision on review finding 2 (2026-10-25): the routes live in the
+// protected dashboard/engineering/routes.js and dashboard/server.js only
+// mounts them, so a line there naming engineering is one of these.
+test('dashboard/server.js only mounts the engineering routes', () => {
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  for (const route of ['/api/engineering', '/mcp/engineering', '/engineering/admissions', '/engineering/attestations']) assert.ok(!server.includes(route), `server.js declares no ${route} route`);
+  for (const mod of ['inbox', 'tools', 'policy']) assert.ok(!server.includes(`require('./engineering/${mod}')`), `server.js reaches engineering/${mod} only through routes.js`);
+  const known = [
+    "const mcp = hosted ? require('./mcp').makeMcp(",
+    "// The engineering inbox's routes (connector, public reads, Eric's",
+    '// decisions) live in the protected dashboard/engineering/routes.js; this',
+    "const engineering = require('./engineering/routes').makeEngineeringRoutes(ws, {",
+    'const api = makeApi({',
+    'if (await engineering.connector(req, res, url)) return;',
+    'if (engineering.publicRead(req, res, url)) return;',
+    'function makeApi({',
+    '// Preferences > Developer > Engineering (dashboard/engineering/routes.js).',
+    'engineering.mount(route);',
+  ];
+  const lines = server.split('\n').map((l) => l.trim()).filter((l) => /engineering/i.test(l));
+  for (const l of lines) assert.ok(known.some((k) => l.startsWith(k)), `an unexpected engineering line in server.js: ${l.slice(0, 120)}`);
+  const R = require('../engineering/routes');
+  assert.ok(R.PUBLIC_READ_RE.test('/engineering/admissions/eng-20261025-0a0a0a'));
+  assert.ok(!R.PUBLIC_READ_RE.test('/engineering/tasks'));
+  // Without a connector (this PC) the module answers nothing it does not own.
+  const r = R.makeEngineeringRoutes(null, { HttpError: Error });
+  assert.equal(r.publicRead({ method: 'GET' }, null, new URL('http://x/api/engineering')), false);
 });

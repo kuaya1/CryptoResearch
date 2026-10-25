@@ -9,7 +9,7 @@
 // review and tests still decide.
 
 const crypto = require('crypto');
-const { PROTECTED } = require('../scripts/backlog-promote');
+const { PROTECTED, DELEGATION_RESTRICTED } = require('../scripts/backlog-promote');
 
 const REPO = 'kuaya1/CryptoResearch';
 const INTENTS = ['explore', 'design', 'implement'];
@@ -48,7 +48,38 @@ const TEMPLATES = {
     max_days: 30,
     requires_goal: true,
   },
+  // Eric, 2026-10-25 (review finding 6, "UI and tests only"): eng-app@1
+  // without dashboard/core/ or dashboard/cli.js. Core financial and
+  // investment logic goes through his own intake or his authorization.
+  'eng-app@2': {
+    template: 'eng-app@2',
+    title: 'Browser app, views and tests for one goal',
+    says: 'The browser app, its views, public scripts, tests and engineering documents for the goal Eric names, each candidate reviewed by ChatGPT before it merges. Nothing in dashboard/core/ (core financial and investment logic), no server routes and no protected path: those always wait for Eric.',
+    repo_full_name: REPO,
+    intents: ['design', 'implement'],
+    allowed_paths: ['dashboard/web/src/**', 'dashboard/public/**', 'dashboard/tests/**', 'docs/engineering/**'],
+    required_review: 'chatgpt',
+    release_mode: 'promote',
+    limits: { max_open_tasks: 3, max_admissions_per_day: 5, max_files: 30 },
+    max_days: 30,
+    requires_goal: true,
+  },
 };
+// Kept so their records stay readable, never offered for a new activation.
+const RETIRED = {
+  'eng-app@1': 'retired on 2026-10-25 for eng-app@2, which leaves out dashboard/core/ (Eric\'s decision on review finding 6)',
+};
+// Paths no delegation reaches, whatever its template says (Eric, 2026-10-25):
+// a version naming one waits for his authorization of that exact version,
+// and promotion holds a delegated branch whose diff touches one.
+const RESTRICTED = DELEGATION_RESTRICTED;
+// A glob reaches a restricted directory when the part before its first
+// wildcard could lead into it (dashboard/*/x.js and **/x.js both can).
+function restrictedWhy(glob) {
+  const lead = glob.includes('*') ? glob.slice(0, glob.indexOf('*')) : null;
+  const hit = RESTRICTED.find((x) => (lead === null ? x.re.test(glob) : x.prefix.startsWith(lead) || lead.startsWith(x.prefix)));
+  return hit ? hit.why : null;
+}
 
 const sha256 = (s) => crypto.createHash('sha256').update(typeof s === 'string' ? s : JSON.stringify(s)).digest('hex');
 
@@ -149,10 +180,26 @@ function contentOf(a) {
   };
 }
 
-// Problems that make a version unusable at all (said in words).
+// Each public field is one plain line (blueprint §6): no line break, no start
+// of a markdown block, and none of the backlog's own marks, so a field can
+// never become a backlog line of its own. Said by field, never echoed.
+// eslint-disable-next-line no-control-regex
+const LINE_BREAK_RE = /[\n\r\u000b\u000c\u0085\p{Zl}\p{Zp}]/u;
+const BLOCK_START_RE = /^(?:[-*+]\s|\d{1,9}[.)]\s|#{1,6}(?:\s|$)|>|\||```|~~~|\[[ xX]\]|<)/;
+const BACKLOG_MARK_RE = /\[[ xX]\]\s*(?:\*\([^)]*\)\*\s*)?\*\*\d+\.|\*\(\s*engineering task\b|\*\(\s*Eric\s*\)\*/i;
+function structureProblems(field, value) {
+  const out = [];
+  if (LINE_BREAK_RE.test(value)) out.push(`${field} holds a line break: each public field is one line`);
+  else if (BLOCK_START_RE.test(value)) out.push(`${field} starts like a markdown block (a list, heading, quote, table, fence or tag); start it with a word`);
+  if (BACKLOG_MARK_RE.test(value)) out.push(`${field} holds the backlog's own marks (an item's checkbox and number, an engineering mark or Eric's mark)`);
+  return out;
+}
+
+// Problems that make a version unusable at all (said in words, never quoting
+// what was sent).
 function validateContent(c) {
   const bad = [];
-  if (c.repo_full_name !== REPO) bad.push(`repository ${c.repo_full_name || '(none)'} is not one this desk builds (only ${REPO})`);
+  if (c.repo_full_name !== REPO) bad.push(`the repository is not one this desk builds (only ${REPO})`);
   if (!INTENTS.includes(c.intent)) bad.push(`intent must be one of ${INTENTS.join(', ')}`);
   if (!c.title) bad.push('a title is needed');
   if (c.title.length > LIMITS.title) bad.push(`the title is over ${LIMITS.title} characters`);
@@ -167,13 +214,16 @@ function validateContent(c) {
     if (v.some((x) => x.length > LIMITS.item)) bad.push(`an entry of ${k} is over ${LIMITS.item} characters`);
   }
   if (c.scope.paths.length > LIMITS.paths) bad.push(`scope.paths has more than ${LIMITS.paths} entries`);
-  for (const p of c.scope.paths) if (!PATH_RE.test(p)) bad.push(`scope path ${JSON.stringify(p.slice(0, 80))} is not a repository path`);
+  c.scope.paths.forEach((p, i) => { if (!PATH_RE.test(p)) bad.push(`scope path ${i + 1} is not a repository path`); });
   if (!REVIEWS.includes(c.required_review)) bad.push(`required_review must be one of ${REVIEWS.join(', ')}`);
   if (!RELEASE_MODES.includes(c.release_mode)) bad.push(`release_mode must be one of ${RELEASE_MODES.join(', ')}`);
-  for (const r of c.reviews_requested) if (!['claude', 'chatgpt', 'gemini'].includes(r)) bad.push(`reviews_requested may name claude, chatgpt or gemini, not ${r.slice(0, 20)}`);
+  c.reviews_requested.forEach((r, i) => { if (!['claude', 'chatgpt', 'gemini'].includes(r)) bad.push(`reviews_requested may name claude, chatgpt or gemini (entry ${i + 1} names another)`); });
   if (c.goal_id && !/^[a-z0-9][a-z0-9-]{1,78}$/.test(c.goal_id)) bad.push('goal_id is lower-case letters, digits and hyphens');
   if (c.parent_backlog_id !== null && !(Number.isInteger(c.parent_backlog_id) && c.parent_backlog_id > 0)) bad.push('parent_backlog_id is a backlog number');
-  for (const d of c.dependencies) if (!/^(eng-\d{8}-[0-9a-f]{6}|\d{1,5})$/.test(d)) bad.push(`dependency ${JSON.stringify(d.slice(0, 40))} is neither a task ID nor a backlog number`);
+  c.dependencies.forEach((d, i) => { if (!/^(eng-\d{8}-[0-9a-f]{6}|\d{1,5})$/.test(d)) bad.push(`dependency ${i + 1} is neither a task ID nor a backlog number`); });
+  bad.push(...structureProblems('the title', c.title), ...structureProblems('the outcome', c.outcome));
+  c.acceptance.forEach((a, i) => bad.push(...structureProblems(`acceptance ${i + 1}`, a)));
+  c.non_goals.forEach((n, i) => bad.push(...structureProblems(`non_goals ${i + 1}`, n)));
   const text = [c.title, c.outcome, ...c.acceptance, ...c.non_goals, ...c.scope.paths, c.goal_id || ''].join('\n');
   for (const why of screen(text)) bad.push(`the public part holds ${why}`);
   return [...new Set(bad)];
@@ -191,7 +241,9 @@ function fits(policy, c, { now, openUnderPolicy = 0, admittedLastDay = 0 } = {})
   const allowed = c.intent === 'design' ? DESIGN_PATHS.filter((d) => policy.allowed_paths.some((p) => within(d, p))) : policy.allowed_paths;
   for (const p of c.scope.paths) {
     const why = globTouchesProtected(p);
+    const core = restrictedWhy(p);
     if (why) r.push(`${p} can reach a protected path (${why})`);
+    else if (core) r.push(`${p} can reach dashboard/core/ (${core}); it waits for Eric`);
     else if (!allowed.some((g) => within(p, g))) r.push(`${p} is outside the delegated paths`);
   }
   // A lighter declared review or release is no miss: the delegation's own
@@ -258,23 +310,31 @@ function choose(fitting) {
   return { policy: p, ranked: ranked.map((x) => x.p), decided_by: by, why: `first of the ${ranked.length} active delegations it fits: ${why}` };
 }
 
+// Quoted task text in the entry (blueprint §6): line breaks and control
+// characters flattened to a space and markdown's inline marks escaped, so even
+// a version saved before the checks above stays inside its own line.
+// eslint-disable-next-line no-control-regex
+const flat = (s) => String(s).replace(/[\u0000-\u001f\u007f\u0085\p{Zl}\p{Zp}]+/gu, ' ').replace(/ {2,}/g, ' ').trim();
+const quoted = (s) => flat(s).replace(/[\\`*_[\]<>|~]/g, '\\$&');
+
 // The exact backlog entry an admission adds to DESK_STATE.md (LF endings,
-// trailing newline). Public: sanitized scope, acceptance and the binding.
+// trailing newline): one item line, then its own detail lines. Public:
+// sanitized scope, acceptance and the binding.
 function entryText({ number, task_id, version, content_sha256, policy_id, content }) {
   const auth = policy_id ? `delegation ${policy_id}` : 'authorized by Eric';
   const lines = [
-    `- [ ] **${number}. ${content.title}** *(engineering task ${task_id} v${version}, sha256 ${content_sha256.slice(0, 16)}, ${auth}; built only through the engineering lane)*`,
-    `  - Outcome: ${content.outcome}`,
-    ...content.acceptance.map((a) => `  - Acceptance: ${a}`),
-    `  - Scope: ${content.scope.paths.map((p) => `\`${p}\``).join(', ')}`,
+    `- [ ] **${number}. ${quoted(content.title)}** *(engineering task ${task_id} v${version}, sha256 ${content_sha256.slice(0, 16)}, ${auth}; built only through the engineering lane)*`,
+    `  - Outcome: ${quoted(content.outcome)}`,
+    ...content.acceptance.map((a) => `  - Acceptance: ${quoted(a)}`),
+    `  - Scope: ${content.scope.paths.map((p) => `\`${flat(p).replace(/`/g, '')}\``).join(', ')}`,
   ];
-  if (content.non_goals.length) lines.push(...content.non_goals.map((n) => `  - Not in scope: ${n}`));
+  if (content.non_goals.length) lines.push(...content.non_goals.map((n) => `  - Not in scope: ${quoted(n)}`));
   return `${lines.join('\n')}\n`;
 }
 const ENTRY_MARK_RE = /\*\(engineering task (eng-\d{8}-[0-9a-f]{6}) v(\d+), sha256 ([0-9a-f]{16})/;
 
 module.exports = {
-  REPO, INTENTS, REVIEWS, RELEASE_MODES, TEMPLATES, DESIGN_PATHS, MAX_ATTEMPTS, LEASE_MS, LIMITS,
+  REPO, INTENTS, REVIEWS, RELEASE_MODES, TEMPLATES, RETIRED, RESTRICTED, restrictedWhy, DESIGN_PATHS, MAX_ATTEMPTS, LEASE_MS, LIMITS,
   sha256, canonical, contentHash, globRe, matches, within, protectedWhy, globTouchesProtected, PROTECTED_SAMPLES,
   screen, contentOf, validateContent, fits, entryText, ENTRY_MARK_RE, PATH_RE,
   stricterReview, stricterRelease, boundaries, choose, MATCH_RULE, MATCH_KEYS,
