@@ -403,6 +403,7 @@ const TOOLS = [
         project_id: projectRef,
         owner_request: { type: 'string', description: 'Eric\'s request in his own words (or "autonomous pilot" when the pilot queue led here).' },
         refresh: { type: 'boolean', description: 'Eric asked for another ticket on the same report.' },
+        reopen: { type: 'boolean', description: 'The checked form of refresh: allowed only when the ticket in force is invalidated or was sized under an older rules version; otherwise refused. The old receipt is kept.' },
         restart: { type: 'boolean', description: 'Eric asked to start the open ticket over.' },
         force_prosecution: { type: 'boolean', description: 'Eric asked for a Prosecutor although the desk\'s gate is closed on the grade.' },
       },
@@ -1830,7 +1831,9 @@ const handlers = {
       ? (next.run_id ? `Call pending_research with project "${next.project_id}" (or start_research with Eric's words): it resumes run ${next.run_id}. Research it and save_report; then call autonomous_pilot_queue again.` : `Call start_research with project_id "${next.project_id}" and owner_request "autonomous pilot" (Claude only). Research it and save_report; then call autonomous_pilot_queue again.`)
       : next.step === 'gate_closed'
         ? `Call start_ticket with project_id "${next.project_id}" and owner_request "autonomous pilot": the desk's gate is closed (${(next.reasons || []).join(' ')}), so it saves its own receipt and no Prosecutor runs. Do not launch the Prosecutor; call autonomous_pilot_queue again.`
-        : `Call start_ticket with project_id "${next.project_id}" and owner_request "autonomous pilot", follow the Prosecutor prompt, then save_ticket.`) : null;
+        : next.refresh
+          ? `Eric re-opened the ticket. Call start_ticket with project_id "${next.project_id}", owner_request "autonomous pilot" and refresh: true, follow the Prosecutor prompt, then save_ticket. The old receipt is kept.`
+          : `Call start_ticket with project_id "${next.project_id}" and owner_request "autonomous pilot", follow the Prosecutor prompt, then save_ticket.`) : null;
     // A project named outright is read whether or not it is in the pilot;
     // the words say which (only projects with the pilot on count as in it).
     const inPilot = steps.filter((s) => s.pilot).length;
@@ -1846,7 +1849,7 @@ const handlers = {
     const id = pid(args);
     need(args, 'owner_request', 'owner_request (Eric\'s words)');
     const exit_quote = await T.prepareExitQuote(ws, id).catch(() => null);
-    const out = T.createTicket(ws, { exit_quote, project_id: id, channel: ctx.channel, utterance: args.owner_request, assistant: true, mode: 'cowork', refresh: args.refresh === true, restart: args.restart === true, force_prosecution: args.force_prosecution === true });
+    const out = T.createTicket(ws, { exit_quote, project_id: id, channel: ctx.channel, utterance: args.owner_request, assistant: true, mode: 'cowork', refresh: args.refresh === true, reopen: args.reopen === true, restart: args.restart === true, force_prosecution: args.force_prosecution === true });
     if (out.gate_closed) return { status: out.status, gate_closed: true, message: out.message, receipt_id: out.receipt_id, reasons: out.receipt && out.receipt.desk.gate.reasons, proposal_type: out.receipt && out.receipt.desk.proposal_type, link: `#/?p=${id}` };
     if (!out.ticket_id || !['created', 'resumed'].includes(out.status)) return { status: out.status, message: out.message, receipt_id: out.receipt_id || null };
     return { status: out.status, message: `${out.message} Follow the prompt below exactly, then save_ticket with ticket_id "${out.ticket_id}".`, run: ticketRunView(ws, id, out.ticket_id, { prompt: true }) };

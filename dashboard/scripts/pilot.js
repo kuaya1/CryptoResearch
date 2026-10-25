@@ -127,7 +127,7 @@ function runLocal(o) {
     }
     if (s.step === 'ticket') {
       if (o.dryRun) return say('    would run Agent 2 (the Prosecutor) with claude -p, then save the ticket.');
-      const t = cli(['tickets', 'start', o.project, '--assistant', '--mode', 'cli', '--utterance', 'autonomous pilot (npm run pilot)']);
+      const t = cli(['tickets', 'start', o.project, ...(s.refresh ? ['--reopen'] : []), '--assistant', '--mode', 'cli', '--utterance', 'autonomous pilot (npm run pilot)']);
       if (!t.ticket_id) throw new Error(t.message);
       const prompt = cli(['tickets', 'prompt', o.project, t.ticket_id], { text: true });
       say(`    Agent 2: claude -p on the frozen Prosecutor prompt ${t.ticket_id} (${prompt.length} characters)…`);
