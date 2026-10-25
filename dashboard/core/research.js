@@ -2625,6 +2625,7 @@ module.exports = {
   attemptCharge,
   budgetCheck,
   spendSoFar,
+  allCharges,
   evidencePacket,
   cancelJob,
   retryJob,

@@ -9,7 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { train, waiting, tick, counts } = require('../scripts/merge-train');
+const { train, waiting, tick, tickMain, untickedOnMain, counts } = require('../scripts/merge-train');
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' };
 const g = (cwd, ...args) => { const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: ENV }); assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`); return r.stdout.trim(); };
@@ -103,4 +103,49 @@ test('ticking and count parsing', () => {
   assert.deepEqual(tick(dir, [4, 5, 9]), [4]);
   fs.rmSync(dir, { recursive: true, force: true });
   assert.deepEqual(counts('# tests 797\n# pass 797\n# fail 0\n'), { tests: 797, pass: 797, fail: 0 });
+});
+
+// Item 35: ticking what main already carries, in a temporary git repo.
+test('tickMain ticks the items main carries by trailer, only their checkboxes, on its own branch', (t) => {
+  const { work } = fixture(t);
+  put(work, 'DESK_STATE.md', '## Autonomous Build Backlog\n- [ ] **1. One.** a\n- [ ] *(Eric)* **2. Two.** b [ ] keep\n- [ ] **3. Three.** c\n- [x] **4. Four.** d\n');
+  g(work, 'add', '-A'); g(work, 'commit', '-qm', 'state'); g(work, 'push', '-q', 'origin', 'main');
+  put(work, 'dashboard/core/a.js', 'line a1\n');
+  g(work, 'add', '-A'); g(work, 'commit', '-qm', 'merge of items\n\nBacklog-Item: 1\nBacklog-Item: 2\nBacklog-Item: 4\nBacklog-Item: 9'); g(work, 'push', '-q', 'origin', 'main');
+  assert.deepEqual(untickedOnMain(work), [1, 2], 'item 4 is already ticked, 9 has no line, 3 has no trailer');
+  const mainBefore = g(work, 'rev-parse', 'origin/main');
+  const r = tickMain(work, { date: '2026-10-26' });
+  assert.equal(r.branch, 'claude/tick-2026-10-26');
+  assert.deepEqual(r.ticked, [1, 2]);
+  assert.equal(r.pushed, false);
+  assert.equal(g(work, 'rev-parse', 'origin/main'), mainBefore, 'main is untouched');
+  assert.equal(g(work, 'show', 'HEAD:DESK_STATE.md'), '## Autonomous Build Backlog\n- [x] **1. One.** a\n- [x] *(Eric)* **2. Two.** b [ ] keep\n- [ ] **3. Three.** c\n- [x] **4. Four.** d');
+  assert.deepEqual(g(work, 'diff', '--name-only', 'origin/main', 'HEAD').split('\n'), ['DESK_STATE.md'], 'only the state file changes');
+  assert.match(g(work, 'log', '-1', '--format=%s'), /^train: tick items 1, 2$/);
+});
+
+test('tickMain with nothing to tick makes no branch and no commit; --push sends only the tick branch', (t) => {
+  const { work } = fixture(t);
+  const head = g(work, 'rev-parse', 'HEAD');
+  const none = tickMain(work, { date: '2026-10-26' });
+  assert.deepEqual([none.branch, none.ticked, none.message], [null, [], 'Nothing to tick.']);
+  assert.equal(g(work, 'rev-parse', 'HEAD'), head);
+  assert.equal(g(work, 'branch', '--list', 'claude/tick-*'), '');
+  put(work, 'dashboard/core/a.js', 'line a2\n');
+  g(work, 'add', '-A'); g(work, 'commit', '-qm', 'item\n\nBacklog-Item: 3'); g(work, 'push', '-q', 'origin', 'main');
+  const r = tickMain(work, { date: '2026-10-27', push: true });
+  assert.equal(r.pushed, true);
+  assert.deepEqual(r.ticked, [3]);
+  assert.match(g(work, 'ls-remote', '--heads', 'origin'), /refs\/heads\/claude\/tick-2026-10-27/);
+  g(work, 'fetch', '-q', 'origin');
+  assert.equal(g(work, 'diff', '--name-only', 'origin/main', 'origin/claude/tick-2026-10-27'), 'DESK_STATE.md');
+});
+
+test('tickMain refuses a dirty working tree and writes nothing', (t) => {
+  const { work } = fixture(t);
+  put(work, 'dashboard/core/a.js', 'line a3\n');
+  g(work, 'add', '-A'); g(work, 'commit', '-qm', 'item\n\nBacklog-Item: 1'); g(work, 'push', '-q', 'origin', 'main');
+  put(work, 'scratch.txt', 'x\n');
+  assert.throws(() => tickMain(work, { date: '2026-10-26' }), /not clean/);
+  assert.equal(g(work, 'branch', '--list', 'claude/tick-*'), '');
 });
