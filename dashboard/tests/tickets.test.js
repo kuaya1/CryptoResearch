@@ -1952,3 +1952,21 @@ test('run-cycle: the CLI answers the same receipt, and --limit must be a whole n
   assert.equal(r.dry_run, true);
   await assert.rejects(() => cli.run(['tickets', 'run-cycle', '--limit', 'x', '--workspace', s.ws.root]), /whole number/);
 });
+
+test('item 57: a holding metric floor carries its headroom over the floor, one decimal; a triggered one carries none', (t) => {
+  const s = withReport(t);
+  const f = require('../core/fundamentals');
+  const real = f.summary;
+  f.summary = () => ({ state: 'ok', fetched_at: '2026-10-25T00:00:00.000Z', metrics: { fees: { status: 'complete', total_30d_usd: 200000 } } });
+  t.after(() => { f.summary = real; });
+  const tk = openTicket(t, s);
+  const text = answer(tk, { proposal: { ...blockOf(answer(tk)).proposal, invalidation_trigger: { price_usd: 0.5, metric: { key: 'fees', below_30d_usd: 100000 }, statement: 'x' } } });
+  T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text });
+  const at = (total) => ({ state: 'ok', fetched_at: new Date(Date.now() + 3600000).toISOString(), metrics: { fees: { status: 'complete', total_30d_usd: total } } });
+  const holding = T.view(s.ws, s.pid, { fundamentals: at(123456) }).ticket.invalidation.checks.find((c) => c.kind === 'metric');
+  assert.equal(holding.status, 'holding');
+  assert.equal(holding.headroom_pct, 23.5);
+  const hit = T.view(s.ws, s.pid, { fundamentals: at(90000) }).ticket.invalidation.checks.find((c) => c.kind === 'metric');
+  assert.equal(hit.status, 'triggered');
+  assert.equal(hit.headroom_pct, undefined);
+});
