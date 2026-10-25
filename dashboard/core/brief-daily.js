@@ -76,10 +76,24 @@ function brief(ws, { since = null, now = Date.now() } = {}) {
     .filter((r) => r.ticket && r.ticket.unavailable)
     .map((r) => ({ text: `${r.name}: the ticket could not be read (${String(r.ticket.error || 'unknown error').replace(/\.$/, '')}), so whether it ${what} is unknown.`, link: link(r.project_id), unreadable: true }));
 
+  // A Prosecutor ticket's compact trade plan (item 50): the receipt's own
+  // numbers and the desk's reward:risk, "unknown" for each one absent.
+  const planOf = (t) => {
+    if (!t || t.desk_gate) return '';
+    const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? `$${v}` : 'unknown');
+    const ez = t.entry_zone;
+    const entry = ez && typeof ez.low_usd === 'number' && typeof ez.high_usd === 'number' ? `${n(ez.low_usd)}–${n(ez.high_usd)}` : 'unknown';
+    const geo = t.trade_plan_geometry;
+    const rr = geo && typeof geo.reward_risk_ratio === 'number' ? `${geo.reward_risk_ratio.toFixed(1)}x` : 'unknown';
+    const grade = t.researcher && (t.researcher.grade_display || (typeof t.researcher.grade === 'number' ? String(t.researcher.grade) : null));
+    const conv = t.prosecution && typeof t.prosecution.conviction_score === 'number' ? String(t.prosecution.conviction_score) : null;
+    return ` Entry ${entry}, target ${n(t.upside_target && t.upside_target.price_usd)}, invalidation ${n(t.invalidation_trigger && t.invalidation_trigger.price_usd)}, R:R ${rr}; Researcher ${grade || 'unknown'} vs Prosecutor ${conv || 'unknown'}.`;
+  };
+
   section('pm_cards', 'PM cards waiting for you', true, () => [...unreadableTickets('waits for you'), ...rows
     .filter((r) => ticketOf(r) && ticketOf(r).status === 'pending_pm_review')
     .sort((a, b) => String(ticketOf(a).saved_at).localeCompare(String(ticketOf(b).saved_at)))
-    .map((r) => ({ text: `${r.name}: ${String(ticketOf(r).proposal_type || 'ticket').replace(/_/g, ' ')}${ticketOf(r).desk_gate ? ' (desk gate)' : ''}, waiting ${age(ticketOf(r).saved_at, now)}.${r.report_delta && r.report_delta.status === 'ok' ? ` Claude's report: ${r.report_delta.line}.` : ''}`, link: link(r.project_id) }))]);
+    .map((r) => ({ text: `${r.name}: ${String(ticketOf(r).proposal_type || 'ticket').replace(/_/g, ' ')}${ticketOf(r).desk_gate ? ' (desk gate)' : ''}, waiting ${age(ticketOf(r).saved_at, now)}.${planOf(ticketOf(r))}${r.report_delta && r.report_delta.status === 'ok' ? ` Claude's report: ${r.report_delta.line}.` : ''}`, link: link(r.project_id) }))]);
 
   section('invalidated', sinceMs === null ? 'Tickets invalidated (no since given: all)' : `Tickets invalidated since ${new Date(sinceMs).toISOString()}`, true, () => [...unreadableTickets('is invalidated'), ...rows
     .filter((r) => {

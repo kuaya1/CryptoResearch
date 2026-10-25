@@ -114,3 +114,29 @@ test('describe: reads and writes nothing; a position with no stored price says s
   assert.equal(out[0].pnl.status, 'cost_unknown');
   assert.equal(JSON.stringify(pf.loadTransactions(ws)), before);
 });
+
+test('set cost words (item 45): the CLI answer names the original and the corrected date, and the same date says nothing changes', async (t) => {
+  const cli = require('../cli');
+  const a = setup(t);
+  const changed = await cli.run(['portfolio', 'set-cost', ASSET, '--account', 'wallet', '--avg-cost-usd', '1.5', '--acquired-at', '2026-09-18', '--workspace', a.ws.root]);
+  assert.equal(changed.status, 'cost_set');
+  assert.equal(changed.original_date, '2026-09-20');
+  assert.equal(changed.corrected_date, '2026-09-18');
+  assert.equal(changed.date_changed, true);
+  assert.match(changed.words, /2026-09-20/);
+  assert.match(changed.words, /held from 2026-09-18 instead of 2026-09-20/);
+
+  const b = setup(t);
+  const kept = await cli.run(['portfolio', 'set-cost', ASSET, '--account', 'wallet', '--avg-cost-usd', '1.5', '--workspace', b.ws.root]);
+  assert.equal(kept.date_changed, false);
+  assert.match(kept.words, /original date is kept/);
+  assert.match(kept.words, /do not change/);
+  const same = await cli.run(['portfolio', 'set-cost', ASSET, '--account', 'wallet', '--avg-cost-usd', '1.5', '--acquired-at', '2026-09-20', '--workspace', setup(t).ws.root]);
+  assert.equal(same.date_changed, false);
+});
+
+test('set cost words (item 45): the route adds the same words to the answer', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'server.js'), 'utf8');
+  const line = src.split('\n').find((l) => l.includes("'/api/portfolio/set-cost'"));
+  assert.match(line, /costDateWords\(portfolio\.loadTransactions\(ws\), r\)/);
+});

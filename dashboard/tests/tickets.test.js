@@ -506,7 +506,7 @@ test('settings: tickets.invalidation.min_coverage_pct is bounded by the server',
 
 // Floors high enough that the fixture's grade is under them, so the grade
 // alone rules out new risk. min_grade_any stays low: WATCH_ONLY, not HARD_PASS.
-function gradeClosed(ws, floors = { min_grade_new_entry: 99, min_grade_any: 5 }) {
+function gradeClosed(ws, floors = { min_grade_new_entry: 99, pregate_max_grade: 99, min_grade_any: 5 }) {
   ws.settings.tickets = { sizing: floors };
 }
 
@@ -527,7 +527,7 @@ test('pre-gate: a grade under the new-entry floor on an asset not held gets the 
   const r = out.receipt;
   assert.match(r.receipt_id, T.RECEIPT_RE);
   assert.equal(r.kind, 'desk_gate');
-  assert.equal(r.pregate_version, 'cr-ticket-pregate@1');
+  assert.equal(r.pregate_version, 'cr-ticket-pregate@2');
   assert.equal(r.prosecution, null);
   assert.equal(r.proposal, null);
   assert.equal(r.agent_disagreement, null);
@@ -541,9 +541,31 @@ test('pre-gate: a grade under the new-entry floor on an asset not held gets the 
   assert.throws(() => T.receiptText(s.ws, s.pid, r.receipt_id), (e) => e.code === 'INVALID', 'there is no model text');
   // Under min_grade_any it is a HARD_PASS.
   const s2 = withReport(t);
-  gradeClosed(s2.ws, { min_grade_new_entry: 99, min_grade_any: 98 });
+  gradeClosed(s2.ws, { min_grade_new_entry: 99, pregate_max_grade: 99, min_grade_any: 98 });
   stubHeld(t, s2.pid, false);
   assert.equal(T.createTicket(s2.ws, { project_id: s2.pid }).receipt.desk.proposal_type, 'HARD_PASS');
+});
+
+test('pre-gate @2 (item 48): pregate_max_grade defaults to 48, is bounded by the new-entry floor, and a near miss opens a Prosecutor ticket capped at $0', (t) => {
+  const { validateSettingsPatch } = require('../server');
+  assert.equal(T.sizingOf({ settings: {} }).pregate_max_grade, 48);
+  assert.equal(T.sizingOf({ settings: { tickets: { sizing: { min_grade_new_entry: 30 } } } }).pregate_max_grade, 30, 'never above the new-entry floor');
+  assert.equal(T.sizingOf({ settings: { tickets: { sizing: { pregate_max_grade: 20 } } } }).pregate_max_grade, 20);
+  assert.throws(() => validateSettingsPatch({ tickets: { sizing: { pregate_max_grade: 60, min_grade_new_entry: 55 } } }), (e) => e.code === 'INVALID');
+  assert.deepEqual(validateSettingsPatch({ tickets: { sizing: { pregate_max_grade: 48 } } }).tickets.sizing, { pregate_max_grade: 48 });
+  const sz = (o) => ({ ...T.sizingOf({ settings: {} }), ...o });
+  const rep = (grade) => ({ grade });
+  assert.equal(T.pregateReason(rep({ status: 'firm', value: 47 }), false, sz()) !== null, true, '47 is under 48: closed');
+  assert.equal(T.pregateReason(rep({ status: 'firm', value: 48 }), false, sz()), null, '48 opens a ticket');
+  assert.equal(T.pregateReason(rep({ status: 'firm', value: 54 }), false, sz()), null, 'a near miss opens a ticket');
+  assert.equal(T.pregateReason(rep({ status: 'range', low: 40, high: 58 }), false, sz()), null, 'a range reaching the floor opens a ticket');
+  assert.notEqual(T.pregateReason(rep({ status: 'range', low: 40, high: 50 }), false, sz()), null, 'a range under the floor and under 48 at its low end stays closed');
+  assert.notEqual(T.pregateReason(rep({ status: 'withheld' }), false, sz()), null, 'withheld stays closed');
+  assert.equal(T.pregateReason(rep({ status: 'firm', value: 47 }), true, sz()), null, 'a held project is never pre-gated');
+  // The gate itself still caps risk at $0 for a near miss.
+  const g = T.gate({ researcher: rep({ status: 'firm', value: 52 }), held: false, exits: [], native: null }, sz());
+  assert.equal(g.suggested_risk_usd, 0);
+  assert.equal(g.proposal_type, 'WATCH_ONLY');
 });
 
 test('pre-gate: the same report again is unchanged with the same receipt; a held project, a grade over the floor and force_prosecution open a normal ticket', (t) => {
@@ -1711,4 +1733,103 @@ test('shadow gate day 30 (item 41): a fixed 30-day result that does not follow t
   assert.equal(rows[0].day30_vs_btc_text, '+81.82%');
   assert.deepEqual(M.shadowCohortLines(b), [`${month}: 1 matured · 0 immature · 0 unevaluable`]);
   assert.equal(M.shadowRows({ shadow_gate: [{ saved_at: 'x', day30: { status: 'immature', why: 'w' } }] })[0].day30_text, 'Not yet');
+});
+
+// ---------------------------------------------------------------------------
+// Trade Plan geometry (item 49, cr-ticket-geometry@1)
+
+test('trade plan geometry: position, distances and reward:risk are arithmetic on the receipt and a fresh stored price, and missing numbers stay unknown', () => {
+  const NOW = Date.parse('2026-10-25T12:00:00Z');
+  const fresh = (price) => ({ price_usd: price, as_of: '2026-10-25T11:30:00Z' });
+  const plan = { entry_zone: { low_usd: 0.9, high_usd: 1.1 }, upside_target: { price_usd: 2 }, invalidation_trigger: { price_usd: 0.8 } };
+  const g = T.tradePlanGeometry(plan, fresh(1), { now: NOW });
+  assert.equal(g.version, 'cr-ticket-geometry@1');
+  assert.equal(g.position, 'in_zone');
+  assert.equal(g.to_upside_pct, 100);
+  assert.equal(g.to_stop_pct, -20);
+  assert.equal(g.reward_risk_ratio, 5, '(2 - 1) / (1 - 0.8)');
+  assert.equal(T.tradePlanGeometry(plan, fresh(1.21), { now: NOW }).position, 'above_zone');
+  assert.equal(T.tradePlanGeometry(plan, fresh(1.21), { now: NOW }).position_pct, 10);
+  const below = T.tradePlanGeometry(plan, fresh(0.85), { now: NOW });
+  assert.equal(below.position, 'below_zone');
+  assert.equal(below.position_pct, 5.88);
+  // No ratio when the price is outside the stop-to-target span.
+  assert.equal(T.tradePlanGeometry(plan, fresh(2.5), { now: NOW }).reward_risk_ratio, null);
+  assert.equal(T.tradePlanGeometry(plan, fresh(0.7), { now: NOW }).reward_risk_ratio, null);
+  // A stale, unknown-aged or missing price is not used.
+  const stale = T.tradePlanGeometry(plan, { price_usd: 1, as_of: '2026-10-25T08:00:00Z' }, { now: NOW });
+  assert.equal(stale.price.status, 'stale');
+  assert.equal(stale.position, 'unknown');
+  assert.equal(stale.reward_risk_ratio, null);
+  assert.equal(T.tradePlanGeometry(plan, { price_usd: 1 }, { now: NOW }).price.status, 'unknown');
+  const none = T.tradePlanGeometry(plan, { price_usd: null, note: 'No stored price' }, { now: NOW });
+  assert.equal(none.price.status, 'unknown');
+  assert.match(none.words, /unknown/);
+  // Missing plan numbers are never invented.
+  const partial = T.tradePlanGeometry({ entry_zone: null, upside_target: null, invalidation_trigger: { price_usd: 0.8 } }, fresh(1), { now: NOW });
+  assert.equal(partial.position, 'unknown');
+  assert.equal(partial.to_upside_pct, null);
+  assert.equal(partial.to_stop_pct, -20);
+  assert.equal(partial.reward_risk_ratio, null);
+  assert.match(partial.words, /reward:risk unknown/);
+});
+
+test('trade plan geometry: view() carries it on a saved Prosecutor ticket, unknown without a fresh price', (t) => {
+  const s = withReport(t);
+  const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
+  T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) });
+  const g = T.view(s.ws, s.pid).ticket.trade_plan_geometry;
+  assert.equal(g.version, 'cr-ticket-geometry@1');
+  assert.ok(['unknown', 'stale', 'fresh'].includes(g.price.status));
+  if (g.price.status !== 'fresh') {
+    assert.equal(g.position, 'unknown');
+    assert.equal(g.reward_risk_ratio, null);
+    assert.match(g.words, /unknown/);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// run-cycle (backlog item 51)
+
+test('run-cycle: auto-pilot-sync, batch-gate, quotes and the queue in one receipt with next steps for Agent 1 and Agent 2; a dry run writes nothing; a second run opts in nobody', async (t) => {
+  const s = withReport(t);
+  stubClaudeReport(t);
+  stubHeld(t, s.pid, false);
+  await assert.rejects(() => T.runCycle(s.ws, { limit: 0 }), (e) => e.code === 'INVALID');
+  const tree = hashTree(s.root);
+  const dry = await T.runCycle(s.ws, { dryRun: true });
+  assert.deepEqual(hashTree(s.root), tree, 'a dry run writes nothing');
+  assert.equal(dry.format, 'cr-run-cycle@1');
+  assert.equal(dry.dry_run, true);
+  assert.equal(dry.counts.opted_in, 1, 'would opt in the qualifying project');
+  assert.deepEqual(dry.errors, []);
+  assert.equal(dry.steps.pilot_queue.steps, 0, 'nothing is in the pilot yet in a dry run');
+
+  const run = await T.runCycle(s.ws, { limit: 5 });
+  assert.equal(run.limit, 5);
+  assert.deepEqual(run.errors, []);
+  assert.deepEqual(run.steps.auto_pilot_sync.opted_in.map((r) => r.project_id), [s.pid]);
+  assert.equal(run.counts.gates_made, 0, 'a grade over the filter of 40 is not batch-gated');
+  assert.equal(run.counts.quoted, 0, 'no chain is approved, so no quote is asked for');
+  assert.equal(run.steps.pilot_queue.steps, 1);
+  assert.equal(run.counts.agent1_research + run.counts.agent2_ticket + run.counts.waiting_for_eric + (run.counts.queue.gate_closed || 0) + (run.counts.queue.done || 0), 1);
+  const next = [...run.next.agent1_research, ...run.next.agent2_ticket, ...run.next.for_eric];
+  for (const n of next) assert.equal(n.project_id, s.pid);
+  assert.equal(T.pendingFor(s.ws).length, 0, 'no Prosecutor job is made by the cycle');
+
+  const again = await T.runCycle(s.ws);
+  assert.equal(again.counts.opted_in, 0);
+  assert.equal(again.steps.auto_pilot_sync.unchanged, 1);
+});
+
+test('run-cycle: the CLI answers the same receipt, and --limit must be a whole number', async (t) => {
+  const s = withReport(t);
+  stubClaudeReport(t);
+  stubHeld(t, s.pid, false);
+  const cli = require('../cli');
+  const r = await cli.run(['tickets', 'run-cycle', '--dry-run', '--limit', '3', '--workspace', s.ws.root]);
+  assert.equal(r.format, 'cr-run-cycle@1');
+  assert.equal(r.limit, 3);
+  assert.equal(r.dry_run, true);
+  await assert.rejects(() => cli.run(['tickets', 'run-cycle', '--limit', 'x', '--workspace', s.ws.root]), /whole number/);
 });

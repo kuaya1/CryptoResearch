@@ -46,7 +46,7 @@ const INVALIDATION_V1 = 'cr-ticket-invalidation@1';
 const RULE_KINDS = [
   { name: 'sizing', current: SIZING_VERSION, of: (r) => r.versions && r.versions.sizing },
   { name: 'invalidation', current: INVALIDATION_VERSION, of: (r) => (r.desk && r.desk.invalidation_version) || (r.versions && r.versions.invalidation) },
-  { name: 'pregate', current: 'cr-ticket-pregate@1', of: (r) => r.pregate_version || (r.versions && r.versions.pregate) },
+  { name: 'pregate', current: 'cr-ticket-pregate@2', of: (r) => r.pregate_version || (r.versions && r.versions.pregate) },
 ];
 const versionNumber = (v) => { const m = /@(\d+)$/.exec(String(v || '')); return m ? Number(m[1]) : null; };
 const MIN_COVERAGE_DEFAULT = 90;
@@ -54,7 +54,10 @@ const MAX_GAP_HOURS = 6;
 // The desk's pre-gate (Eric, 2026-10-24): when the grade alone rules out new
 // risk and he does not hold the asset, no Prosecutor runs; the desk saves its
 // own gate result as a receipt (kind desk_gate), with no proposal.
-const PREGATE_VERSION = 'cr-ticket-pregate@1';
+// @2 (item 48): the grade closes the gate only under `pregate_max_grade`
+// (default 48), so a near miss (48 up to the new-entry floor, or a range whose
+// high end reaches it) gets a Prosecutor; @1 receipts keep their own rule.
+const PREGATE_VERSION = 'cr-ticket-pregate@2';
 const PACKET_FORMAT = 'cr.ticket-packet.v1';
 const TICKET_RE = /^tk_\d{4}-\d{2}-\d{2}T\d{6}Z_[a-z2-9]{5}$/;
 const RECEIPT_RE = /^tr_\d{4}-\d{2}-\d{2}T\d{6}Z_[a-z2-9]{5}$/;
@@ -87,6 +90,7 @@ const SIZING_DEFAULTS = Object.freeze({
   exit_size_usd: 500,
   max_exit_cost_pct: 5,
   min_grade_new_entry: 55,
+  pregate_max_grade: 48,
   min_grade_any: 40,
   native_l1_min_market_cap_usd: 10e9,
 });
@@ -127,14 +131,16 @@ function sizingOf(ws) {
   const pos = (v, fb, max) => (isNum(v) && v > 0 && v <= max ? v : fb);
   const grade = (v, fb) => (isNum(v) && v >= 0 && v <= 100 ? v : fb);
   const standard = pos(s.standard_risk_usd, d.standard_risk_usd, 1e9);
+  const minNew = grade(s.min_grade_new_entry, d.min_grade_new_entry);
   return {
     version: SIZING_VERSION,
     standard_risk_usd: standard,
     starter_risk_usd: Math.min(pos(s.starter_risk_usd, d.starter_risk_usd, 1e9), standard),
     exit_size_usd: pos(s.exit_size_usd, d.exit_size_usd, 1e9),
     max_exit_cost_pct: pos(s.max_exit_cost_pct, d.max_exit_cost_pct, 100),
-    min_grade_new_entry: grade(s.min_grade_new_entry, d.min_grade_new_entry),
+    min_grade_new_entry: minNew,
     min_grade_any: grade(s.min_grade_any, d.min_grade_any),
+    pregate_max_grade: Math.min(grade(s.pregate_max_grade, d.pregate_max_grade), minNew),
     native_l1_min_market_cap_usd: pos(s.native_l1_min_market_cap_usd, d.native_l1_min_market_cap_usd, 1e15),
     note: SIZING_NOTE,
   };
@@ -417,13 +423,19 @@ function withheldOf(ws, pid, researcher) {
 
 const KIND_WORDS = { grade_low: 'the grade is under the floor', grade_withheld: 'the grade is withheld (a component was not scored), not a weak score' };
 
-// Does the grade alone rule out new risk for an asset Eric does not hold? Only
+// Does the grade alone rule out new risk for an asset Eric does not hold
+// (cr-ticket-pregate@2, pregate_max_grade)? Only
 // a known "not held" counts (an unreadable portfolio opens a normal ticket).
 // Returns the gate's grade reason, else null.
 function pregateReason(researcher, held, sizing) {
   if (held !== false) return null;
   const grade = gateGrade(researcher.grade);
   if (grade !== null && grade >= sizing.min_grade_new_entry) return null;
+  // cr-ticket-pregate@2: a near miss gets a Prosecutor. The gate stays closed
+  // only for a withheld or missing grade, or one under pregate_max_grade whose
+  // range (if any) does not reach the new-entry floor at its high end.
+  if (grade !== null && grade >= sizing.pregate_max_grade) return null;
+  if (grade !== null && isNum(researcher.grade.high) && researcher.grade.high >= sizing.min_grade_new_entry) return null;
   const g = gate({ researcher, held: false, exits: [], native: null }, sizing);
   return g.reasons[0] || null;
 }
@@ -1488,6 +1500,54 @@ function statusOf(decision, invalidation) {
 
 // receiptId: read that saved ticket as the one in force (an earlier receipt
 // shows `latest: false`); without it, the latest. Reading writes nothing.
+// Trade Plan geometry (item 49, `cr-ticket-geometry@1`): where the stored price
+// sits against the receipt's own entry zone, target and invalidation price.
+// Arithmetic only: a missing number is said unknown, never filled in, and a
+// price past the freshness limit (or of unknown age) is not used.
+function tradePlanGeometry(proposal, latest, { now = Date.now(), staleMinutes = 90 } = {}) {
+  const pr = proposal || {};
+  const ez = pr.entry_zone || null;
+  const up = pr.upside_target && isNum(pr.upside_target.price_usd) ? pr.upside_target.price_usd : null;
+  const stop = pr.invalidation_trigger && isNum(pr.invalidation_trigger.price_usd) ? pr.invalidation_trigger.price_usd : null;
+  const low = ez && isNum(ez.low_usd) ? ez.low_usd : null;
+  const high = ez && isNum(ez.high_usd) ? ez.high_usd : null;
+  const out = {
+    version: 'cr-ticket-geometry@1',
+    price: { status: 'unknown', price_usd: null, as_of: null, age_minutes: null, reason: null },
+    entry_zone: { low_usd: low, high_usd: high },
+    upside_target_usd: up,
+    stop_usd: stop,
+    position: 'unknown', position_pct: null,
+    to_upside_pct: null, to_stop_pct: null,
+    reward_risk_ratio: null,
+    words: null,
+  };
+  const at = latest && latest.as_of ? Date.parse(latest.as_of) : NaN;
+  const age = Number.isFinite(at) ? Math.max(0, Math.round((now - at) / 60000)) : null;
+  if (!latest || !isNum(latest.price_usd) || !(latest.price_usd > 0)) out.price.reason = 'No stored price.';
+  else if (age === null) out.price = { status: 'unknown', price_usd: latest.price_usd, as_of: latest.as_of || null, age_minutes: null, reason: 'The stored price is of unknown age: it is not used.' };
+  else if (age > staleMinutes) out.price = { status: 'stale', price_usd: latest.price_usd, as_of: latest.as_of, age_minutes: age, reason: `The stored price is ${age} min old, past your ${staleMinutes}-minute limit: it is not used.` };
+  else out.price = { status: 'fresh', price_usd: latest.price_usd, as_of: latest.as_of, age_minutes: age, reason: null };
+  const ref = out.price.status === 'fresh' ? out.price.price_usd : null;
+  if (ref !== null) {
+    if (low !== null && high !== null) {
+      if (ref < low) { out.position = 'below_zone'; out.position_pct = round(((low - ref) / ref) * 100, 2); }
+      else if (ref > high) { out.position = 'above_zone'; out.position_pct = round(((ref - high) / high) * 100, 2); }
+      else { out.position = 'in_zone'; out.position_pct = 0; }
+    }
+    if (up !== null) out.to_upside_pct = round(((up - ref) / ref) * 100, 2);
+    if (stop !== null) out.to_stop_pct = round(((stop - ref) / ref) * 100, 2);
+    if (up !== null && stop !== null && up > ref && ref > stop) out.reward_risk_ratio = round((up - ref) / (ref - stop), 2);
+  }
+  const bits = [];
+  if (out.position !== 'unknown') bits.push(out.position === 'in_zone' ? 'price in the entry zone' : `price ${out.position_pct}% ${out.position === 'above_zone' ? 'above' : 'below'} the entry zone`);
+  if (out.to_upside_pct !== null) bits.push(`${out.to_upside_pct}% to the target`);
+  if (out.to_stop_pct !== null) bits.push(`${out.to_stop_pct}% to the invalidation price`);
+  bits.push(out.reward_risk_ratio !== null ? `reward:risk ${out.reward_risk_ratio}:1` : 'reward:risk unknown');
+  out.words = ref === null ? (out.price.reason || 'No fresh price.') + ' Position, distances and reward:risk are unknown.' : `${bits.join('; ')}.`;
+  return out;
+}
+
 function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null } = {}) {
   const project = require('./projects').getProject(ws, pid);
   const receipts = listReceipts(ws, pid).filter((r) => !r.broken);
@@ -1521,6 +1581,11 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       entry_zone: pr.entry_zone || null,
       upside_target: pr.upside_target || null,
       invalidation_trigger: pr.invalidation_trigger || null,
+      trade_plan_geometry: gateOnly || !current.proposal ? null : (() => {
+        let latest = null;
+        try { latest = marketOf(ws, project); } catch (_) { latest = null; }
+        return tradePlanGeometry(current.proposal, latest, { now, staleMinutes: (ws.settings && ws.settings.freshness && ws.settings.freshness.price_stale_minutes) || 90 });
+      })(),
       exit_basis: d.exit_basis || 'measured',
       exit_cost_500_usd_pct: d.exit_cost_500_usd_pct ?? null,
       exit_cost_500_complete: d.exit_cost_500_complete ?? null,
@@ -1838,6 +1903,56 @@ async function quoteCandidates(ws, { limit = 15, dryRun = false, fetchImpl, cgGe
   }
   return out;
 }
+// `tickets run-cycle` (item 51): the Track 2 pipeline in one deterministic pass,
+// in this order: autoPilotSync, batchGate, quoteCandidates (up to `limit`),
+// pilotQueue. It answers one combined receipt with each step's counts and the
+// next steps for Agent 1 (research) and Agent 2 (ticket). A step that throws is
+// said in `errors` and the later steps still run. It calls no model, places no
+// order, and `dryRun` writes and sends nothing (the queue then shows the
+// records as they stand, before any opt-in the pass would make).
+const CYCLE_FORMAT = 'cr-run-cycle@1';
+
+async function runCycle(ws, { limit = 10, dryRun = false, now = Date.now(), fetchImpl, cgGetImpl, sleep } = {}) {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new OpError('INVALID', '--limit is a whole number from 1 to 200.');
+  const dry = dryRun === true;
+  const out = { format: CYCLE_FORMAT, ran_at: iso(now), dry_run: dry, limit, steps: {}, counts: {}, next: { agent1_research: [], agent2_ticket: [], for_eric: [] }, errors: [] };
+  const step = async (name, fn) => {
+    try {
+      return await fn();
+    } catch (err) {
+      out.errors.push({ step: name, code: err.code || null, message: err.message });
+      return null;
+    }
+  };
+  const sync = await step('auto_pilot_sync', () => autoPilotSync(ws, { dryRun: dry }));
+  out.steps.auto_pilot_sync = sync ? { min: sync.min, opted_in: sync.opted_in, unchanged: sync.unchanged.length, skipped: sync.skipped.length } : null;
+  const gates = await step('batch_gate', () => batchGate(ws, { dryRun: dry, now }));
+  out.steps.batch_gate = gates ? { below: gates.below, made: gates.made, unchanged: gates.unchanged.length, skipped: gates.skipped.length } : null;
+  const quotes = await step('quote_candidates', () => quoteCandidates(ws, { limit, dryRun: dry, fetchImpl, cgGetImpl, sleep, now }));
+  out.steps.quote_candidates = quotes ? { sizes: quotes.sizes, quoted: quotes.quoted, current: quotes.current.length, skipped: quotes.skipped.length, stopped: quotes.stopped } : null;
+  const queue = await step('pilot_queue', () => pilotQueue(ws, { now }));
+  out.steps.pilot_queue = queue ? { steps: queue.length } : null;
+  for (const q of queue || []) {
+    const row = { project_id: q.project_id, name: q.name || null, step: q.step, why: q.why };
+    if (q.step === 'research') out.next.agent1_research.push({ ...row, run_id: q.run_id || null });
+    else if (q.step === 'ticket') out.next.agent2_ticket.push({ ...row, ticket_id: q.ticket_id || null, report_id: q.report_id || null });
+    else if (q.step === 'pm_review') out.next.for_eric.push({ ...row, receipt_id: q.receipt_id || null });
+  }
+  const byStep = {};
+  for (const q of queue || []) byStep[q.step] = (byStep[q.step] || 0) + 1;
+  out.counts = {
+    opted_in: sync ? sync.opted_in.length : null,
+    gates_made: gates ? gates.made.length : null,
+    quoted: quotes ? quotes.quoted.length : null,
+    queue: byStep,
+    agent1_research: out.next.agent1_research.length,
+    agent2_ticket: out.next.agent2_ticket.length,
+    waiting_for_eric: out.next.for_eric.length,
+    errors: out.errors.length,
+  };
+  return out;
+}
+
 function pendingFor(ws) {
   const out = [];
   for (const p of require('./projects').listProjects(ws)) {
@@ -2013,6 +2128,8 @@ module.exports = {
   PROPOSALS,
   sizingOf,
   gate,
+  pregateReason,
+  tradePlanGeometry,
   gateGrade,
   skeleton,
   researcherOf,
@@ -2041,5 +2158,7 @@ module.exports = {
   batchGate,
   autoPilotSync,
   quoteCandidates,
+  runCycle,
+  CYCLE_FORMAT,
   pendingFor,
 };
