@@ -26,6 +26,44 @@ const STATUS_WORDS = {
   superseded: 'Superseded',
 };
 const ago = (iso) => (iso ? String(iso).slice(0, 16).replace('T', ' ') : '—');
+const INTENT_WORDS = { explore: 'A note only, never built', design: 'Documents under docs/engineering/', implement: 'Code' };
+const REVIEW_WORDS = {
+  none: 'None: it merges once the full suite passes on it',
+  claude: 'A Claude review of the exact head',
+  chatgpt: 'A ChatGPT review of the exact head',
+  owner: 'Your own review of the exact head',
+};
+const RELEASE_WORDS = { promote: 'backlog-pr merges it when every check holds', owner: 'Waits for you to merge it' };
+const CI_WORDS = { unconfirmed: 'CI not read yet', success: 'CI passed', failure: 'CI failed', pending: 'CI running', unknown: 'CI unreadable' };
+
+// The whole version Eric authorizes, and the exact line it adds to the
+// public backlog (N until a number is bound), drawn before the button.
+function VersionCard({ t }) {
+  const c = t.content;
+  const held = t.authorization && t.authorization.required_review && t.authorization.required_review !== c.required_review ? t.authorization.required_review : null;
+  return (
+    <>
+      <dl className="l2-kv eng-kv">
+        <div><dt>Kind</dt><dd>{INTENT_WORDS[c.intent] || c.intent}</dd></div>
+        <div><dt>Outcome</dt><dd>{c.outcome}</dd></div>
+        <div><dt>Acceptance</dt><dd><ol className="eng-ol">{c.acceptance.map((a, i) => <li key={i}>{a}</li>)}</ol></dd></div>
+        <div><dt>Paths</dt><dd className="eng-paths">{c.scope.paths.map((p) => <code key={p} className="wrap-anywhere">{p}</code>)}</dd></div>
+        <div><dt>Not in scope</dt><dd>{c.non_goals.length ? <ul className="eng-ol">{c.non_goals.map((g, i) => <li key={i}>{g}</li>)}</ul> : 'None stated'}</dd></div>
+        <div><dt>Review</dt><dd>{REVIEW_WORDS[c.required_review] || c.required_review}{held ? ` (its delegation holds it to ${REVIEW_WORDS[held] ? REVIEW_WORDS[held].toLowerCase() : held})` : ''}</dd></div>
+        <div><dt>Release</dt><dd>{RELEASE_WORDS[c.release_mode] || c.release_mode}</dd></div>
+        {c.goal_id ? <div><dt>Goal</dt><dd>{c.goal_id}</dd></div> : null}
+        {c.dependencies.length ? <div><dt>After</dt><dd>{c.dependencies.join(', ')}</dd></div> : null}
+        <div><dt>Content hash</dt><dd><code className="wrap-anywhere">{t.content_sha256}</code></dd></div>
+      </dl>
+      {t.public_entry ? (
+        <div className="eng-entry-wrap">
+          <div className="eng-entry-t" title="The public repository's DESK_STATE.md gains exactly these lines, and nothing else.">{t.public_entry.bound ? `Public entry, item ${t.public_entry.number}` : 'Public entry (N is the number bound at admission)'}</div>
+          <pre className="eng-entry" data-key={`eng-entry-${t.task_id}`}>{t.public_entry.text}</pre>
+        </div>
+      ) : null}
+    </>
+  );
+}
 
 export default function Engineering({ hosted }) {
   const [d, setD] = useState(null);
@@ -110,6 +148,13 @@ export default function Engineering({ hosted }) {
               <li key={t.task_id} title={t.next_action}>
                 <strong>{t.title}</strong> · {STATUS_WORDS[t.status] || t.status}{t.admission && t.admission.number ? ` · item ${t.admission.number}` : ''} · v{t.version} <code title={t.content_sha256}>{t.content_sha256.slice(0, 12)}</code>
                 {t.status_reason ? <div className="l2-note">{t.status_reason}</div> : null}
+                {t.verification ? <div className="l2-note" title="The worker's own test run; the desk reads GitHub's check runs on the same head separately.">Tests {t.verification.passed ?? '—'} of {t.verification.total ?? '—'} passed, reported by the worker · {CI_WORDS[t.verification.ci && t.verification.ci.state] || 'CI not read yet'}</div> : null}
+                {t.content ? (
+                  <details className="eng-version" open={t.status === 'awaiting_authorization'} data-key={`eng-version-${t.task_id}`}>
+                    <summary>Version {t.version}: {t.status === 'awaiting_authorization' ? 'what you are authorizing' : 'what it holds'}</summary>
+                    <VersionCard t={t} />
+                  </details>
+                ) : null}
                 <div className="l2-actions">
                   {t.status === 'awaiting_authorization' ? <button type="button" className="btn btn-primary btn-sm" disabled={busy === t.task_id || needPass} data-key={`eng-authorize-${t.task_id}`} onClick={() => decide(t.task_id, `/api/engineering/tasks/${t.task_id}/authorize`, { version: t.version, content_sha256: t.content_sha256, password: pass }, 'Authorized')}>Authorize version {t.version}</button> : null}
                   {!['paused', 'merged', 'cancelled', 'superseded'].includes(t.status) ? <button type="button" className="btn btn-sm" disabled={busy === t.task_id} data-key={`eng-pause-${t.task_id}`} onClick={() => decide(t.task_id, `/api/engineering/tasks/${t.task_id}/pause`, { reason: 'paused by Eric' }, 'Paused')}>Pause</button> : null}

@@ -29,7 +29,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
-const { insertEntry, backlogItems, ENG_MARK_RE } = require('./backlog-promote');
+const { insertEntry, backlogItems, candidateDiff, ENG_MARK_RE } = require('./backlog-promote');
 
 const STATE_FILE = 'DESK_STATE.md';
 const SHA_RE = /^[0-9a-f]{40}$/;
@@ -131,10 +131,10 @@ function evidence(cwd, { head, base = 'origin/main' }) {
   if (!SHA_RE.test(String(head || ''))) throw new Error('--head is a full commit SHA');
   const baseSha = git(cwd, ['rev-parse', `${base}^{commit}`]).out;
   const mb = git(cwd, ['merge-base', baseSha, head]).out;
-  const files = git(cwd, ['diff', '--no-renames', '--name-only', mb, head]).out.split('\n').filter(Boolean);
-  const diff = git(cwd, ['diff', '--binary', '--no-color', '--no-ext-diff', '--full-index', '--no-renames', mb, head]).out;
-  const text = diff.endsWith('\n') || !diff ? diff : `${diff}\n`;
-  return { head_sha: head, base_sha: baseSha, merge_base_sha: mb, files, diff: text, diff_sha256: sha256(text) };
+  // The same bytes the promotion workflow recomputes before it merges.
+  const d = candidateDiff(cwd, mb, head);
+  if (!d) throw new Error(`git diff ${mb.slice(0, 12)} ${head.slice(0, 12)} failed`);
+  return { head_sha: head, base_sha: baseSha, merge_base_sha: mb, files: d.files, diff: d.diff, diff_sha256: d.diff_sha256 };
 }
 
 function verify(cwd) {

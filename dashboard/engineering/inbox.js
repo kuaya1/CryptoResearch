@@ -33,7 +33,8 @@ const TASK_ID_RE = /^eng-\d{8}-[0-9a-f]{6}$/;
 const POLICY_ID_RE = /^pol-\d{8}-[0-9a-f]{6}$/;
 const SHA_RE = /^[0-9a-f]{40}$/;
 const TERMINAL = ['merged', 'cancelled', 'superseded'];
-const CLAIMABLE = ['admitted', 'queued', 'claimed', 'implementing', 'verifying', 'ready_for_promotion'];
+// review_pending: to rebuild a candidate whose base main has moved past.
+const CLAIMABLE = ['admitted', 'queued', 'claimed', 'implementing', 'verifying', 'review_pending', 'ready_for_promotion'];
 const VERIFY_COMMANDS = ['node dashboard/cli.js test'];
 const MAX_DIFF = 400 * 1024;
 const MAX_TAIL = 20 * 1024;
@@ -126,12 +127,12 @@ const restoredCopy = (ws) => exists(ws.abs('config/restored-copy.json'));
 // it; an expired one only stops new admissions).
 function authorizationHolds(ws, t, op) {
   const a = t.authorization;
-  if (!a) return { ok: false, why: 'not authorized' };
-  if (a.version !== t.current_version || a.content_sha256 !== t.versions[t.versions.length - 1].content_sha256) return { ok: false, why: `the authorization is for version ${a.version}, not the current version ${t.current_version}` };
+  if (!a) return { ok: false, code: 'not_authorized', why: 'not authorized' };
+  if (a.version !== t.current_version || a.content_sha256 !== t.versions[t.versions.length - 1].content_sha256) return { ok: false, code: 'authorization_stale', why: `the authorization is for version ${a.version}, not the current version ${t.current_version}` };
   if (a.kind === 'policy') {
     const p = op ? op.readJson(rel.policy(a.policy_id), null) : readRaw(ws, rel.policy(a.policy_id));
-    if (!p) return { ok: false, why: `delegation ${a.policy_id} is missing` };
-    if (p.revoked_at) return { ok: false, why: `delegation ${a.policy_id} was revoked ${p.revoked_at}` };
+    if (!p) return { ok: false, code: 'delegation_missing', why: `delegation ${a.policy_id} is missing` };
+    if (p.revoked_at) return { ok: false, code: 'delegation_revoked', why: `delegation ${a.policy_id} was revoked ${p.revoked_at}` };
   }
   return { ok: true };
 }
@@ -168,7 +169,7 @@ function nextAction(t, now) {
     case 'implementing': return 'Worker: record the candidate (head, base, diff) when it is committed.';
     case 'verifying': return 'Worker: run node dashboard/cli.js test on the candidate and record verification with every acceptance check.';
     case 'review_pending': return `Review by ${review.required}: engineering_get_evidence, then engineering_save_review for head ${t.candidate ? t.candidate.head_sha.slice(0, 12) : '?'} in an active conversation. Nothing reviews it unattended.`;
-    case 'ready_for_promotion': return t.release ? `Waiting for backlog-pr to merge claude/backlog-eng-${n}; the worker records merged from Git readback.` : `Worker: push the candidate head to claude/backlog-eng-${n}; backlog-pr promotes it when the desk's attestation holds.`;
+    case 'ready_for_promotion': return `${t.release ? `Waiting for backlog-pr to merge claude/backlog-eng-${n}; the worker records merged from Git readback.` : `Worker: push the candidate head to claude/backlog-eng-${n}; backlog-pr promotes it when the desk's attestation holds.`}${review.required !== 'none' ? ' If backlog-pr says main has moved since the review, claim it, rebuild on current main and record the new candidate (a rebuild, not a correction attempt); it is verified and reviewed again.' : ''}`;
     case 'merged': return 'Merged. Deployment is reported on its own.';
     case 'blocked': return `Blocked: ${t.status_reason || 'see events'}. Eric decides (Reopen on the desk, or a new task).`;
     case 'paused': return 'Paused: nothing is claimed, admitted or promoted until Eric resumes it on the desk.';
@@ -204,7 +205,7 @@ function view(ws, t, who, { now = Date.now() } = {}) {
     generation: t.generation,
     attempts: { count: t.attempts.count, max: t.attempts.max },
     candidate: t.candidate ? { head_sha: t.candidate.head_sha, base_sha: t.candidate.base_sha, merge_base_sha: t.candidate.merge_base_sha, branch: t.candidate.branch, files: t.candidate.files, diff_sha256: t.candidate.diff_sha256, attempt: t.candidate.attempt, recorded_at: t.candidate.recorded_at } : null,
-    verification: t.verification ? { head_sha: t.verification.head_sha, command: t.verification.command, exit_code: t.verification.exit_code, total: t.verification.total, passed: t.verification.passed, failed: t.verification.failed, ok: t.verification.ok, acceptance: t.verification.acceptance.map((a) => ({ index: a.index, met: a.met })), recorded_at: t.verification.recorded_at, reported_by: 'worker' } : null,
+    verification: t.verification ? { head_sha: t.verification.head_sha, command: t.verification.command, exit_code: t.verification.exit_code, total: t.verification.total, passed: t.verification.passed, failed: t.verification.failed, ok: t.verification.ok, acceptance: t.verification.acceptance.map((a) => ({ index: a.index, met: a.met })), recorded_at: t.verification.recorded_at, reported_by: 'worker', ci: ciOf(t.verification) } : null,
     review,
     corrections: (t.corrections || []).map((c) => ({ correction_id: c.correction_id, at: c.at, by: c.by, head_sha: c.head_sha, resolved_by_head: c.resolved_by_head || null })),
     dispatch_unknown: unknown,
@@ -214,12 +215,21 @@ function view(ws, t, who, { now = Date.now() } = {}) {
     updated_at: t.updated_at,
     events: listDir(ws.abs(`${ROOT}/tasks/${t.task_id}/events`), { dirs: false }).slice(-25).map((f) => { const e = readRaw(ws, `${ROOT}/tasks/${t.task_id}/events/${f}`); return e ? { seq: e.seq, type: e.type, at: e.at, by: e.by } : null; }).filter(Boolean),
   };
+  // The public backlog entry exactly as it is (or, before a number is bound,
+  // will be) added to main, so Eric sees it before he authorizes.
+  if (content) {
+    const bound = Boolean(t.admission && t.admission.entry);
+    const a = t.authorization;
+    out.public_entry = bound ? { text: t.admission.entry, bound, number: t.admission.number } : { text: P.entryText({ number: 'N', task_id: t.task_id, version: t.current_version, content_sha256: out.content_sha256, policy_id: a && a.kind === 'policy' && authorizationHolds(ws, t).ok ? a.policy_id : null, content }), bound, number: null };
+  }
   if (who && (who.kind === 'owner' || who.role === 'submitter') && ver && ver.instruction_ref) {
     const ins = readRaw(ws, rel.instruction(t.task_id, t.current_version));
     out.original_instruction = ins ? { text: ins.text, sha256: ins.sha256, private: true } : null;
   }
   return out;
 }
+// Test results stay the worker's own until the desk has read CI on that head.
+const ciOf = (ver) => (ver && ver.ci ? { state: ver.ci.state, runs: ver.ci.runs, complete: ver.ci.complete, source: ver.ci.source, read_at: ver.ci.read_at } : { state: 'unconfirmed', source: null, says: 'reported by the worker; the desk has not read GitHub\'s check runs on this head (engineering_record_event ci_checks)' });
 
 // --- the mutation frame ---------------------------------------------------------
 
@@ -572,6 +582,7 @@ const EVENT_FIELDS = {
   started: ['branch', 'base_sha'],
   candidate: ['branch', 'head_sha', 'base_sha', 'merge_base_sha', 'files', 'diff', 'notes'],
   verification: ['head_sha', 'command', 'exit_code', 'total', 'passed', 'failed', 'output_tail', 'output_sha256', 'acceptance'],
+  ci_checks: ['head_sha'],
   merged: ['main_sha', 'pr_number', 'pr_url'],
   blocked: ['reason'],
   stopped: ['reason'],
@@ -641,7 +652,8 @@ function recordEvent(ws, who, args = {}, opts = {}) {
         if (Number(args.number) !== t.admission.number) fail('BAD_INPUT', `${id} holds number ${t.admission.number}, not ${args.number}.`);
         const s = ctx.getState();
         if (s.bound_numbers[t.admission.number] === id) { delete s.bound_numbers[t.admission.number]; ctx.stateDirty = true; }
-        t.admission.history.push({ number: t.admission.number, released_at: iso(now), reason: String(args.reason || '').slice(0, 300) });
+        // Kept, so the entry is recognized if main holds it after all.
+        t.admission.history.push({ number: t.admission.number, released_at: iso(now), reason: String(args.reason || '').slice(0, 300), version: t.current_version, entry: t.admission.entry, entry_sha256: t.admission.entry_sha256 });
         t.admission = { ...t.admission, number: null, state: 'unbound', entry: null, entry_sha256: null };
         delete t.remote_actions.push_admission;
         ctx.emit('admission_released', { number: Number(args.number), reason: String(args.reason || '').slice(0, 300) }, by);
@@ -649,11 +661,25 @@ function recordEvent(ws, who, args = {}, opts = {}) {
       }
       case 'admission_confirmed': {
         if (t.status !== 'admitted' || !t.admission || !['bound', 'pushed'].includes(t.admission.state)) fail('WRONG_STATE', `${id} has no admission waiting for confirmation.`);
-        if (args.entry_sha256 !== t.admission.entry_sha256) fail('MISMATCH', 'The entry read back from main is not the bound entry. Nothing was confirmed; read main again.');
-        t.admission = { ...t.admission, state: 'confirmed', confirmed_main_sha: sha(args.main_sha, 'main_sha'), confirmed_at: iso(now) };
+        let held = t.admission;
+        if (args.entry_sha256 !== t.admission.entry_sha256) {
+          // Main holds an entry of this version released earlier (a refusal
+          // recorded after its admission landed): that number stays the
+          // task's, and the later binding is released. One task, one number.
+          const prior = [...(t.admission.history || [])].reverse().find((h) => h.entry_sha256 && h.entry_sha256 === args.entry_sha256 && h.version === t.current_version);
+          if (!prior) fail('MISMATCH', 'The entry read back from main is not the bound entry. Nothing was confirmed; read main again.');
+          const s = ctx.getState();
+          if (s.bound_numbers[t.admission.number] === id) delete s.bound_numbers[t.admission.number];
+          s.bound_numbers[prior.number] = id;
+          ctx.stateDirty = true;
+          t.admission.history.push({ number: t.admission.number, released_at: iso(now), reason: `main holds item ${prior.number} for this task`, version: t.current_version, entry: t.admission.entry, entry_sha256: t.admission.entry_sha256 });
+          held = { ...t.admission, number: prior.number, entry: prior.entry, entry_sha256: prior.entry_sha256 };
+          ctx.emit('admission_rebound', { number: prior.number, released: t.admission.number }, by);
+        }
+        t.admission = { ...held, state: 'confirmed', confirmed_main_sha: sha(args.main_sha, 'main_sha'), confirmed_at: iso(now) };
         delete t.remote_actions.push_admission;
-        setStatus(t, 'claimed', `item ${n} is on main`, now);
-        ctx.emit('admission_confirmed', { number: n, main_sha: args.main_sha }, by);
+        setStatus(t, 'claimed', `item ${t.admission.number} is on main`, now);
+        ctx.emit('admission_confirmed', { number: t.admission.number, main_sha: args.main_sha }, by);
         break;
       }
       case 'remote_action': {
@@ -691,7 +717,10 @@ function recordEvent(ws, who, args = {}, opts = {}) {
         break;
       }
       case 'candidate': {
-        if (!['implementing', 'claimed', 'queued', 'verifying'].includes(t.status)) fail('WRONG_STATE', `${id} is ${t.status}; ${nextAction(t, now)}`);
+        // From review_pending or ready_for_promotion it is a rebuild of a
+        // passing candidate (main moved past its base), not a correction.
+        if (!['implementing', 'claimed', 'queued', 'verifying', 'review_pending', 'ready_for_promotion'].includes(t.status)) fail('WRONG_STATE', `${id} is ${t.status}; ${nextAction(t, now)}`);
+        const rebuild = ['review_pending', 'ready_for_promotion'].includes(t.status) && Boolean(t.verification && t.verification.ok) && !t.corrections.some((x) => !x.resolved_by_head);
         if (args.branch !== `claude/candidate-eng-${n}`) fail('BAD_INPUT', `The candidate branch is claude/candidate-eng-${n}.`);
         const head = sha(args.head_sha, 'head_sha');
         const base = sha(args.base_sha, 'base_sha');
@@ -716,7 +745,7 @@ function recordEvent(ws, who, args = {}, opts = {}) {
           if (p && files.length > p.limits.max_files) problems.push(`${files.length} files is over the delegation's ${p.limits.max_files}`);
         }
         if (problems.length) fail('SCOPE', `Candidate refused: ${problems.join('; ')}. Nothing was recorded; change the branch to stay inside the approved scope.`);
-        if (t.attempts.count >= t.attempts.max) {
+        if (!rebuild && t.attempts.count >= t.attempts.max) {
           setStatus(t, 'blocked', `the correction ceiling of ${t.attempts.max} attempts is reached`, now);
           t.lease = null;
           ctx.emit('blocked', { reason: 'ceiling', attempts: t.attempts.count }, by);
@@ -725,17 +754,17 @@ function recordEvent(ws, who, args = {}, opts = {}) {
         }
         const dsha = P.sha256(diff);
         ctx.op.write(rel.artifact(id, dsha), diff);
-        t.attempts.count += 1;
+        if (!rebuild) t.attempts.count += 1;
         for (const c of t.corrections) if (!c.resolved_by_head) c.resolved_by_head = head;
-        t.candidate = { head_sha: head, base_sha: base, merge_base_sha: mb, branch: args.branch, files, diff_sha256: dsha, diff_bytes: Buffer.byteLength(diff), generation: lease.generation, attempt: t.attempts.count, recorded_at: iso(now) };
-        t.candidates.push({ head_sha: head, merge_base_sha: mb, diff_sha256: dsha, attempt: t.attempts.count, recorded_at: iso(now) });
+        t.candidate = { head_sha: head, base_sha: base, merge_base_sha: mb, branch: args.branch, files, diff_sha256: dsha, diff_bytes: Buffer.byteLength(diff), generation: lease.generation, attempt: t.attempts.count, rebuild, recorded_at: iso(now) };
+        t.candidates.push({ head_sha: head, merge_base_sha: mb, diff_sha256: dsha, attempt: t.attempts.count, rebuild, recorded_at: iso(now) });
         if (args.notes) ctx.op.write(rel.artifact(id, P.sha256(String(args.notes).slice(0, MAX_NOTE))), String(args.notes).slice(0, MAX_NOTE));
         t.candidate.notes_sha256 = args.notes ? P.sha256(String(args.notes).slice(0, MAX_NOTE)) : null;
         t.verification = null;
         t.release = null;
         delete t.remote_actions.push_release;
         setStatus(t, 'verifying', null, now);
-        ctx.emit('candidate', { head_sha: head, merge_base_sha: mb, diff_sha256: dsha, files: files.length, attempt: t.attempts.count }, by);
+        ctx.emit('candidate', { head_sha: head, merge_base_sha: mb, diff_sha256: dsha, files: files.length, attempt: t.attempts.count, rebuild }, by);
         break;
       }
       case 'verification': {
@@ -754,7 +783,9 @@ function recordEvent(ws, who, args = {}, opts = {}) {
         const [exitCode, total, passed, failed] = ints;
         const suiteOk = exitCode === 0 && failed === 0 && total > 0 && passed === total;
         const ok = suiteOk && results.every((x) => x.met);
-        t.verification = { head_sha: head, command: args.command, exit_code: exitCode, total, passed, failed, output_sha256: outSha, tail_sha256: tail ? P.sha256(tail) : null, acceptance: results, ok, recorded_at: iso(now) };
+        // The worker's own report: kept as such until the desk reads CI on
+        // this head (ci_checks); acceptance stays the worker's word.
+        t.verification = { head_sha: head, command: args.command, exit_code: exitCode, total, passed, failed, output_sha256: outSha, tail_sha256: tail ? P.sha256(tail) : null, acceptance: results, ok, reported_by: 'worker', ci: null, recorded_at: iso(now) };
         ctx.emit('verification', { head_sha: head, ok, exit_code: exitCode, total, passed, failed, acceptance_met: results.filter((x) => x.met).length, acceptance_total: results.length }, by);
         if (ok) {
           const rs = reviewState(t);
@@ -773,6 +804,19 @@ function recordEvent(ws, who, args = {}, opts = {}) {
           } else setStatus(t, 'implementing', `correct it: ${why} (attempt ${t.attempts.count} of ${t.attempts.max})`, now);
           t.attempts.last_failure_sha256 = outSha;
         }
+        break;
+      }
+      case 'ci_checks': {
+        // The desk's own read of GitHub's check runs on the verified head,
+        // made by the connector tool (opts.ci); nothing the worker sends
+        // counts as CI.
+        const head = sha(args.head_sha, 'head_sha');
+        if (!t.verification || t.verification.head_sha !== head) fail('WRONG_CANDIDATE', 'CI is recorded for the verified candidate only; record its verification first.');
+        const ci = opts.ci;
+        if (!ci || !['success', 'failure', 'pending', 'unknown'].includes(ci.state)) fail('UNAVAILABLE', 'The desk could not read GitHub\'s check runs here; the test results stay worker-reported.');
+        t.verification.ci = { state: ci.state, runs: (Array.isArray(ci.runs) ? ci.runs : []).slice(0, 30).map((x) => ({ name: String(x.name || '').slice(0, 80), status: x.status || null, conclusion: x.conclusion || null })), complete: ci.complete !== false, why: ci.why ? String(ci.why).slice(0, 120) : null, source: 'GitHub check runs on this head, read by the desk', read_at: iso(now) };
+        ctx.emit('ci_checks', { head_sha: head, state: ci.state }, by);
+        reply = { ci: t.verification.ci };
         break;
       }
       case 'merged': {
@@ -927,11 +971,14 @@ function getEvidence(ws, who, { task_id, head_sha = null, offset = 0, max_chars 
     const diff = fs.existsSync(ws.abs(rel.artifact(t.task_id, cand.diff_sha256))) ? fs.readFileSync(ws.abs(rel.artifact(t.task_id, cand.diff_sha256)), 'utf8') : null;
     const lim = Math.max(1000, Math.min(150000, Number(max_chars) || 100000));
     const off = Math.max(0, Number(offset) || 0);
-    out.diff = diff === null ? { missing: true } : { text: diff.slice(off, off + lim), offset: off, chars: diff.length, complete: off + lim >= diff.length, next_offset: off + lim < diff.length ? off + lim : null, sha256: P.sha256(diff), matches_record: P.sha256(diff) === cand.diff_sha256 };
+    // The desk has no Git: the text comes from the worker. A review of it
+    // counts only if it is byte for byte the Git diff of this head on this
+    // merge base, which the promotion workflow recomputes before it merges.
+    out.diff = diff === null ? { missing: true } : { text: diff.slice(off, off + lim), offset: off, chars: diff.length, complete: off + lim >= diff.length, next_offset: off + lim < diff.length ? off + lim : null, sha256: P.sha256(diff), stored_intact: P.sha256(diff) === cand.diff_sha256, from: 'worker', of: { head_sha: cand.head_sha, merge_base_sha: cand.merge_base_sha }, checked_at_promotion: `backlog-pr recomputes git diff --binary --no-color --no-ext-diff --full-index --no-renames ${cand.merge_base_sha} ${cand.head_sha} and its file list, and refuses unless they are exactly this text (SHA-256 ${cand.diff_sha256}) and these files; with a review required, main must also still be ${cand.merge_base_sha}` };
     const ver = t.verification && t.verification.head_sha === cand.head_sha ? t.verification : null;
     if (ver) {
       const tail = ver.tail_sha256 && fs.existsSync(ws.abs(rel.artifact(t.task_id, ver.tail_sha256))) ? fs.readFileSync(ws.abs(rel.artifact(t.task_id, ver.tail_sha256)), 'utf8') : null;
-      out.verification = { command: ver.command, exit_code: ver.exit_code, total: ver.total, passed: ver.passed, failed: ver.failed, ok: ver.ok, output_tail: tail, output_sha256: ver.output_sha256, acceptance: ver.acceptance.map((a) => ({ index: a.index, check: v.content.acceptance[a.index], met: a.met, evidence: a.evidence })), reported_by: 'the worker; the GitHub test run on the head is read back separately' };
+      out.verification = { command: ver.command, exit_code: ver.exit_code, total: ver.total, passed: ver.passed, failed: ver.failed, ok: ver.ok, output_tail: tail, output_sha256: ver.output_sha256, acceptance: ver.acceptance.map((a) => ({ index: a.index, check: v.content.acceptance[a.index], met: a.met, evidence: a.evidence })), reported_by: 'worker', acceptance_reported_by: 'worker', ci: ciOf(ver) };
     }
     out.reviews = (t.reviews || []).filter((r) => r.head_sha === cand.head_sha).map((r) => { const full = readRaw(ws, rel.review(t.task_id, r.review_id)) || {}; return { review_id: r.review_id, result: r.result, reviewer: r.reviewer, assigned: r.assigned, limited: r.limited, findings: full.findings || [], summary: full.summary || null, at: r.at }; });
     const notes = t.candidate && t.candidate.head_sha === cand.head_sha && t.candidate.notes_sha256 ? readTextSafe(ws, rel.artifact(t.task_id, t.candidate.notes_sha256)) : null;
@@ -950,18 +997,19 @@ function admissionView(ws, taskId, opts = {}) {
     if (!TASK_ID_RE.test(String(taskId || ''))) return null;
     const t = readRaw(ws, rel.task(taskId));
     if (!t) return null;
-    if (!supported(t, S.task)) return { schema_version: S.admission, task_id: taskId, admissible: false, reasons: ['unsupported record schema'] };
+    if (!supported(t, S.task)) return { schema_version: S.admission, task_id: taskId, admissible: false, reasons: ['unsupported_schema'] };
     const s = loadState(ws);
+    // Codes only: a status reason may hold a submitter's or worker's words.
     const reasons = [];
-    if (s.paused) reasons.push('engineering is paused');
-    if (t.status !== 'admitted') reasons.push(`the task is ${t.status}`);
+    if (s.paused) reasons.push('paused');
+    if (t.status !== 'admitted') reasons.push(`task_status:${t.status}`);
     const a = t.admission;
-    if (!a || !a.number || !['bound', 'pushed'].includes(a.state)) reasons.push('no number is bound');
+    if (!a || !a.number || !['bound', 'pushed'].includes(a.state)) reasons.push('number_unbound');
     const auth = authorizationHolds(ws, t);
-    if (!auth.ok) reasons.push(auth.why);
+    if (!auth.ok) reasons.push(auth.code);
     if (t.authorization && t.authorization.kind === 'policy') {
       const p = readRaw(ws, rel.policy(t.authorization.policy_id));
-      if (p && Date.parse(p.expires_at) <= now) reasons.push(`delegation ${p.policy_id} expired`);
+      if (p && Date.parse(p.expires_at) <= now) reasons.push('delegation_expired');
     }
     return { schema_version: S.admission, task_id: taskId, version: t.current_version, content_sha256: t.versions[t.versions.length - 1].content_sha256, number: a ? a.number : null, entry_sha256: a ? a.entry_sha256 : null, state: a ? a.state : null, authorization: t.authorization ? t.authorization.kind : null, admissible: reasons.length === 0, reasons, at: iso(now) };
   });
@@ -979,26 +1027,33 @@ function attestationView(ws, headSha, opts = {}) {
     if (!t) return null;
     const s = loadState(ws);
     const v = readRaw(ws, rel.version(t.task_id, t.current_version));
+    // Codes only (deskReason in backlog-promote.js says them in words): a
+    // status reason may hold a submitter's or worker's own words.
     const reasons = [];
     const c = t.candidate;
-    if (s.paused) reasons.push('engineering is paused');
-    if (!c || c.head_sha !== headSha) reasons.push(`this head is not the task's current candidate (${c ? c.head_sha.slice(0, 12) : 'none'})`);
-    if (t.status !== 'ready_for_promotion') reasons.push(`the task is ${t.status}${t.status_reason ? ` (${t.status_reason})` : ''}`);
+    if (s.paused) reasons.push('paused');
+    if (!c || c.head_sha !== headSha) reasons.push('not_current_candidate');
+    if (t.status !== 'ready_for_promotion') reasons.push(`task_status:${t.status}`);
     const auth = authorizationHolds(ws, t);
-    if (!auth.ok) reasons.push(auth.why);
-    if (!t.admission || t.admission.state !== 'confirmed') reasons.push('its admission is not confirmed on main');
+    if (!auth.ok) reasons.push(auth.code);
+    if (!t.admission || t.admission.state !== 'confirmed') reasons.push('admission_unconfirmed');
     const ver = t.verification;
-    if (!ver || ver.head_sha !== headSha || !ver.ok) reasons.push('no passing verification with every acceptance check met is recorded for this head');
+    if (!ver || ver.head_sha !== headSha || !ver.ok) reasons.push('verification_missing');
+    const ci = ver && ver.head_sha === headSha && ver.ci ? ver.ci.state : 'unconfirmed';
+    if (ci === 'failure') reasons.push('ci_failed');
     const content = v && supported(v, S.version) ? v.content : null;
     // The stricter of what the authorization recorded, the version's declared
     // rule and the delegation's own: no record can lower another.
     const a = t.authorization;
     const pol = a && a.kind === 'policy' ? readRaw(ws, rel.policy(a.policy_id)) : null;
     const rs = reviewState(t, P.stricterReview(requiredReview(t), content && content.required_review, pol && pol.required_review));
-    if (!rs.satisfied) reasons.push(`the required ${rs.required} review has not passed on this head (${rs.state})`);
+    if (!rs.satisfied) reasons.push(`review_not_passed:${rs.required}:${rs.state}`);
     const release = P.stricterRelease(content && content.release_mode, a && a.release_mode, pol && pol.release_mode);
-    if (release === 'owner') reasons.push('this task is released by Eric (release mode owner)');
-    return { schema_version: S.attestation, head_sha: headSha, task_id: t.task_id, version: t.current_version, content_sha256: t.versions[t.versions.length - 1].content_sha256, number: t.admission ? t.admission.number : null, merge_base_sha: c ? c.merge_base_sha : null, generation: c ? c.generation : null, allowed_paths: content ? content.scope.paths : [], delegation: a && a.kind === 'policy' ? { policy_id: a.policy_id, template: a.template } : null, required_review: rs.required, review_state: rs.state, release_mode: release, promotable: reasons.length === 0, reasons, at: iso(now) };
+    if (release === 'owner') reasons.push('release_by_owner');
+    // The diff and files the review read: the promotion workflow recomputes
+    // them from Git on merge_base_sha and refuses on any difference.
+    const own = c && c.head_sha === headSha ? c : null;
+    return { schema_version: S.attestation, head_sha: headSha, task_id: t.task_id, version: t.current_version, content_sha256: t.versions[t.versions.length - 1].content_sha256, number: t.admission ? t.admission.number : null, merge_base_sha: own ? own.merge_base_sha : null, diff_sha256: own ? own.diff_sha256 : null, files: own ? own.files : [], generation: c ? c.generation : null, allowed_paths: content ? content.scope.paths : [], delegation: a && a.kind === 'policy' ? { policy_id: a.policy_id, template: a.template } : null, required_review: rs.required, review_state: rs.state, release_mode: release, verification: { reported_by: 'worker', ci }, promotable: reasons.length === 0, reasons, at: iso(now) };
   });
 }
 

@@ -34,6 +34,7 @@ const sha = (s) => crypto.createHash('sha1').update(String(s)).digest('hex');
 const MAIN0 = sha('main-0');
 const MAIN1 = sha('main-1');
 const NL = String.fromCharCode(10);
+const LS = String.fromCharCode(0x2028);
 const diffFor = (file, body) => [`diff --git a/${file} b/${file}`, 'new file mode 100644', `--- /dev/null`, `+++ b/${file}`, '@@ -0,0 +1 @@', `+${body}`, ''].join(NL);
 
 function ws0(t, label) {
@@ -245,7 +246,8 @@ test('a declared review lighter than the delegation\'s is held to the delegation
   assert.equal(att.promotable, false);
   assert.equal(att.required_review, 'chatgpt');
   assert.deepEqual(att.delegation, { policy_id: app.policy_id, template: 'eng-app@1' });
-  assert.match(att.reasons.join(' '), /the required chatgpt review has not passed on this head/);
+  assert.ok(att.reasons.includes('review_not_passed:chatgpt:pending'), att.reasons.join(' '));
+  assert.match(BP.deskReason('review_not_passed:chatgpt:pending'), /the required chatgpt review has not passed on this head/);
   // A Gemini pass does not decide it.
   assert.equal(I.saveReview(ws, GEM, { task_id: s.task_id, head_sha: c.head, merge_base_sha: MAIN1, result: 'pass', read: { diff: true, tests: true } }, o()).counts_for_requirement, false);
   // A task record that lost its effective review cannot lower it: promotion
@@ -451,7 +453,7 @@ test('the public part is screened; the original instruction stays private on the
     [{ outcome: 'Read 0x1234567890abcdef1234 from the chain.' }, /a chain address or hash/],
     [{ outcome: 'Store the api key in the settings.' }, /a credential word/],
     [{ outcome: 'Call 703-555-0100 when it lands.' }, /a phone number/],
-    [{ repo_full_name: 'someone/elsewhere' }, /repository someone\/elsewhere is not one this desk builds/, 'names it'],
+    [{ repo_full_name: 'someone/elsewhere' }, /the repository is not one this desk builds \(only kuaya1\/CryptoResearch\)/],
   ];
   for (const [over, why, echo] of cases) {
     const e = (() => { try { I.prepareTask(ws, CHAT, docsTask(over), o()); } catch (x) { return x; } return null; })();
@@ -608,7 +610,8 @@ test('a review counts only for the exact candidate and the required reviewer; a 
   assert.equal(g.status, 'review_pending');
   const e = I.getEvidence(ws, GEM, { task_id: s.task_id }, o());
   assert.deepEqual(Object.keys(e).slice(0, 4), ['task_id', 'status', 'goal', 'candidate']);
-  assert.equal(e.diff.matches_record, true);
+  assert.equal(e.diff.stored_intact, true);
+  assert.equal(e.diff.from, 'worker', 'the desk holds the worker\'s upload; backlog-pr recomputes it from Git');
   assert.equal(e.verification.ok, true);
   assert.equal(e.builder_notes.read_after, 'the goal, diff and test evidence above');
   // ChatGPT asks for changes: back to the worker, attempt 2 of 3.
@@ -627,7 +630,7 @@ test('a review counts only for the exact candidate and the required reviewer; a 
   assert.equal(att.review_state, 'pass');
   const old = I.attestationView(ws, c1.head, o(2 * MIN));
   assert.equal(old.promotable, false);
-  assert.match(old.reasons.join(' '), /not the task's current candidate/);
+  assert.ok(old.reasons.includes('not_current_candidate'), old.reasons.join(' '));
   assert.equal(I.attestationView(ws, sha('never-recorded'), o()), null);
 });
 
@@ -676,7 +679,7 @@ test('pause and revoke stop claims, admissions, events and promotion; Eric resum
   assert.equal(codeOf(() => I.recordEvent(ws, W1, { task_id: s.task_id, claim_token: c.claim_token, type: 'heartbeat' }, o())), 'PAUSED');
   assert.equal(I.recordEvent(ws, W1, { task_id: s.task_id, claim_token: c.claim_token, type: 'stopped', reason: 'paused' }, o()).type, 'stopped');
   assert.equal(codeOf(() => I.submitTask(ws, CHAT, { task_id: prepared(ws, docsTask({ title: 'While paused (FICTIONAL)' })).task_id, version: 1, content_sha256: 'x' }, o())), 'PAUSED');
-  assert.match(I.admissionView(ws, s.task_id, o()).reasons.join(' '), /engineering is paused/);
+  assert.ok(I.admissionView(ws, s.task_id, o()).reasons.includes('paused'));
   assert.equal(I.capabilities(ws, CHAT, {}, o()).paused, true);
   I.setPaused(ws, OWNER, { paused: false }, o());
 
@@ -693,7 +696,7 @@ test('pause and revoke stop claims, admissions, events and promotion; Eric resum
   assert.equal(codeOf(() => I.claimTask(ws, W1, { task_id: s.task_id }, o(3 * MIN))), 'NOT_AUTHORIZED');
   const av = I.admissionView(ws, s.task_id, o(3 * MIN));
   assert.equal(av.admissible, false);
-  assert.match(av.reasons.join(' '), /was revoked/);
+  assert.ok(av.reasons.includes('delegation_revoked'), av.reasons.join(' '));
   assert.match(submitted(ws, docsTask({ title: 'After revoke (FICTIONAL)' }), o(3 * MIN)).says, /no delegation is active/);
 
   // Cancelling frees its bound number.
@@ -759,7 +762,7 @@ test('public text is one plain line per field: a line break or backlog structure
     { outcome: `A note.${NL}## Another section` },
     { outcome: 'A note.\r- [x] **2. Two.** reopened' },
     { title: `Lane${NL}note` },
-    { non_goals: ['one two'] },
+    { non_goals: [`one${LS}two`] },
     { non_goals: ['one\u0085two'] },
     { acceptance: ['- [ ] **9. An item of its own**'] },
     { acceptance: ['# A heading'] },
@@ -789,7 +792,7 @@ test('public text is one plain line per field: a line break or backlog structure
 test('the public entry is one item line and its own detail lines, whatever a stored version holds', () => {
   const DESK = '# Desk state (FICTIONAL)\n\n## Autonomous Build Backlog\n- [ ] **1. One.** a\n- [x] **2. Two.** b\n  - detail of two\n- [ ] *(Eric)* **3. Three.** c\n\n## After the backlog\nkept\n';
   // As if saved before these checks existed.
-  const content = { title: 'Lane note', outcome: `y${NL}## Section`, acceptance: [`ok${NL}- [ ] **2. Two again.**`, 'a *b* _c_ [d](e) <f> |g| \\h ~i~'], scope: { paths: ['docs/engineering/a.md'] }, non_goals: ['n - [ ] **8. Eight.**'] };
+  const content = { title: 'Lane note', outcome: `y${NL}## Section`, acceptance: [`ok${NL}- [ ] **2. Two again.**`, 'a *b* _c_ [d](e) <f> |g| \\h ~i~'], scope: { paths: ['docs/engineering/a.md'] }, non_goals: [`n${LS}- [ ] **8. Eight.**`] };
   const entry = P.entryText({ number: 4, task_id: 'eng-20261025-abcdef', version: 1, content_sha256: 'a'.repeat(64), policy_id: 'pol-20261025-000000', content });
   const lines = entry.replace(/\n$/, '').split('\n');
   assert.equal(lines.length, 6, entry);
