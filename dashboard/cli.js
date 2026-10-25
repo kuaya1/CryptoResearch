@@ -703,6 +703,7 @@ async function run(argv) {
     case 'portfolio': {
       if (sub === 'set-cost') {
         const r = portfolio.setCost(ws, { asset_id: need(rest[0], 'portfolio set-cost <asset> --account ID --avg-cost-usd X [--acquired-at DATE] [--tx-id ID] [--reason R]'), account_id: need(one(flags.account), '--account required'), avg_cost_usd: need(one(flags['avg-cost-usd']) !== undefined ? one(flags['avg-cost-usd']) : one(flags.avg_cost_usd), '--avg-cost-usd required'), acquired_at: one(flags['acquired-at']) || one(flags.acquired_at) || null, tx_id: one(flags['tx-id']) || one(flags.tx_id) || null, reason: one(flags.reason) || null });
+        Object.assign(r, require('./core/setcost-words').costDateWords(portfolio.loadTransactions(ws), r));
         return { ...r, ...(await afterWrite(ws)) };
       }
       const market = require('./core/market');
