@@ -114,6 +114,7 @@ const SIZING_FIELDS = [
   ['exit_size_usd', 'Exit size checked (USD)', 'The size whose measured exit cost the ticket checks.'],
   ['max_exit_cost_pct', 'Maximum exit cost (%)', 'Standard risk needs the exit cost at that size known in full and at most this.'],
   ['min_grade_new_entry', 'Minimum grade for a new entry', 'Under this, no new entry and no adding to a held position: 0 to 100.'],
+  ['pregate_max_grade', 'Highest grade closed without a Prosecutor', 'An unheld project graded under this (or withheld) is closed by the desk with no Prosecutor; from here up to the new-entry minimum it gets one, with risk capped at $0: 0 to 100, at most the new-entry minimum.'],
   ['min_grade_any', 'Minimum grade for any new risk', 'Under this, no new risk at all: 0 to 100, at most the new-entry minimum.'],
   ['native_l1_min_market_cap_usd', 'Native L1 market cap floor (USD)', 'A chain\'s own coin at or above this market cap passes the exit check without a DEX quote.'],
 ];

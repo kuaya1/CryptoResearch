@@ -95,6 +95,7 @@ PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you deci
   tickets candidates [--json]           who could go in the pilot: held first, then by grade, with today's gate (writes nothing)
   tickets auto-pilot-sync [--min 45] [--dry-run] [--json]   opt in verified projects whose current Claude report is cr-research-prompt@6 graded 45+ (never opts out)
   tickets digest [--days 7] [--json]    the week's pilot in numbers: @6 reports, Prosecutor tickets against desk gates, grade spreads, fired triggers, provider budget (writes nothing; an unreadable part is said, never zero)
+  tickets run-cycle [--limit 10] [--dry-run] [--json]   the Track 2 pipeline in one pass: auto-pilot-sync, batch-gate, exit quotes for candidates (up to --limit), then the pilot queue; one receipt with the counts and the next steps for Agent 1 and Agent 2 (no model, no order)
   tickets batch-gate [--below 40] [--dry-run] [--json]   desk gate receipts for every unheld, verified project graded under 40 (no exit quote, no Prosecutor, no model)
   tickets reconcile [<id>] [--dry-run] [--json]   complete a recorded decision's missing paper position or journal entry (never archives, voids or edits a decision)
   tickets queue [<id>]                   the autonomous pilot's next step per project (research, ticket, your review)
@@ -703,6 +704,7 @@ async function run(argv) {
     case 'portfolio': {
       if (sub === 'set-cost') {
         const r = portfolio.setCost(ws, { asset_id: need(rest[0], 'portfolio set-cost <asset> --account ID --avg-cost-usd X [--acquired-at DATE] [--tx-id ID] [--reason R]'), account_id: need(one(flags.account), '--account required'), avg_cost_usd: need(one(flags['avg-cost-usd']) !== undefined ? one(flags['avg-cost-usd']) : one(flags.avg_cost_usd), '--avg-cost-usd required'), acquired_at: one(flags['acquired-at']) || one(flags.acquired_at) || null, tx_id: one(flags['tx-id']) || one(flags.tx_id) || null, reason: one(flags.reason) || null });
+        Object.assign(r, require('./core/setcost-words').costDateWords(portfolio.loadTransactions(ws), r));
         return { ...r, ...(await afterWrite(ws)) };
       }
       const market = require('./core/market');
@@ -883,6 +885,12 @@ async function run(argv) {
         const min = one(flags.min);
         return tk.autoPilotSync(ws, { min: min === undefined || min === null || min === true ? null : Number(min), dryRun: Boolean(flags['dry-run'] || flags.dry_run) });
       }
+      if (sub === 'run-cycle') {
+        const lim = one(flags.limit);
+        const r = await tk.runCycle(ws, { limit: lim === undefined || lim === null || lim === true ? 10 : Number(lim), dryRun: Boolean(flags['dry-run'] || flags.dry_run) });
+        const wrote = !r.dry_run && (r.counts.opted_in || r.counts.gates_made || r.counts.quoted);
+        return wrote ? { ...r, ...(await afterWrite(ws, null)) } : r;
+      }
       if (sub === 'queue') return { steps: tk.pilotQueue(ws, { project: pid || null }), pending: tk.pendingFor(ws) };
       if (sub === 'start') {
         const exit_quote = await tk.prepareExitQuote(ws, need(pid, 'tickets start <project> [--refresh] [--restart]')).catch(() => null);
@@ -910,7 +918,7 @@ async function run(argv) {
         return { status: r.noop ? 'unchanged' : 'saved', pilot: !flags.off, verified: r.verified, ...(await afterWrite(ws, pid)) };
       }
       if (sub === 'cancel') return tk.cancelTicket(ws, need(pid, 'project'), need(tid, 'ticket_id'), one(flags.reason) || null);
-      throw Object.assign(new Error('tickets view|queue|reconcile|candidates|digest|batch-gate|auto-pilot-sync|start|prompt|import|decide|pilot|cancel (see help)'), { code: 'USAGE' });
+      throw Object.assign(new Error('tickets view|queue|reconcile|candidates|digest|batch-gate|auto-pilot-sync|run-cycle|start|prompt|import|decide|pilot|cancel (see help)'), { code: 'USAGE' });
     }
     case 'job': {
       const jobs = require('./core/jobs');

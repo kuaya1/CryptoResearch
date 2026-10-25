@@ -98,6 +98,25 @@ function PilotLine({ p, t, busy, setBusy }) {
   );
 }
 
+// Trade Plan strip (item 49, cr-ticket-geometry@1): where the stored price sits
+// against the receipt's entry zone, target and invalidation price. Numbers the
+// desk does not have read "unknown"; nothing is filled in.
+const ZONE_WORDS = { in_zone: 'In the entry zone', above_zone: 'above the zone', below_zone: 'below the zone' };
+function TradePlan({ pid, g }) {
+  if (!g) return null;
+  const pct = (v) => (typeof v === 'number' ? `${v > 0 ? '+' : ''}${v}%` : null);
+  const unknown = <span className="is-unknown">unknown</span>;
+  const zone = g.position === 'unknown' ? null : g.position === 'in_zone' ? ZONE_WORDS.in_zone : `${g.position_pct}% ${ZONE_WORDS[g.position]}`;
+  return (
+    <div className="pm-plan" data-key={`pm-plan-${pid}`} aria-label="Trade plan" title={g.words || undefined}>
+      <p className="pm-plan-cell"><span className="pm-dis-k">Price vs zone</span><span>{zone || unknown}</span></p>
+      <p className="pm-plan-cell"><span className="pm-dis-k">To target</span><span>{pct(g.to_upside_pct) || unknown}</span></p>
+      <p className="pm-plan-cell"><span className="pm-dis-k">To invalidation</span><span>{pct(g.to_stop_pct) || unknown}</span></p>
+      <p className="pm-plan-cell"><span className="pm-dis-k">Reward : risk</span><span>{typeof g.reward_risk_ratio === 'number' ? `${g.reward_risk_ratio} : 1` : unknown}</span></p>
+    </div>
+  );
+}
+
 export function PMDecisionCard({ p }) {
   const [busy, setBusy] = useState(null);
   const [why, setWhy] = useState(false);
@@ -233,6 +252,7 @@ export function PMDecisionCard({ p }) {
           <p className="iv-rc-s">5% limit</p>
         </div>
       </div>
+      <TradePlan pid={pid} g={t.trade_plan_geometry} />
       {(t.exits_missing || []).length ? (
         <p className="faint" data-key={`pm-missing-${pid}`}>
           {`No current exit reading at ${t.exits_missing.map((m) => `$${m.size_usd.toLocaleString("en-US")}`).join(' or ')}. `}

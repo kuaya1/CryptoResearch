@@ -20,6 +20,9 @@ function repo(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-drill-repo-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   g(dir, 'init', '-q', '-b', 'main');
+  // A machine-wide core.autocrlf=true (Windows) would check a.txt out as CRLF;
+  // the repo's own setting keeps the bytes as committed everywhere.
+  g(dir, 'config', 'core.autocrlf', 'false');
   fs.writeFileSync(path.join(dir, 'a.txt'), 'release 1\n');
   g(dir, 'add', '-A'); g(dir, 'commit', '-qm', 'release 1');
   g(dir, 'tag', 'prev');

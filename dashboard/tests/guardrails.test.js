@@ -23,7 +23,10 @@ const PORT = 47500 + Math.floor(Math.random() * 400);
 
 function get(port, token, path) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, method: 'GET', path, headers: { host: `127.0.0.1:${port}`, 'x-cr-token': token } }, (res) => {
+    // agent: false, one connection per request: a kept-alive socket the server
+    // closes as idle while the index build holds the event loop reads as
+    // ECONNRESET on the next request.
+    const req = http.request({ host: '127.0.0.1', port, method: 'GET', path, agent: false, headers: { host: `127.0.0.1:${port}`, 'x-cr-token': token } }, (res) => {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => {
