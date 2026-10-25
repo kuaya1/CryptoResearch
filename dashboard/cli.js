@@ -124,6 +124,7 @@ Portfolio (manual or CSV; never connects to exchanges)
          [--fee 1.5 --fee-asset usd] [--date 2026-09-15] [--transfer-id ID] [--btc-price 63000] [--settle-cash] [--tx-id ID]
   tx import <file.csv> [--account default-account] [--allow-identical]
   tx void <tx_id> --reason TEXT
+  portfolio set-cost <asset> --account ID --avg-cost-usd X [--acquired-at DATE] [--tx-id ID] [--reason TEXT]
   limits set [--cap 5000] [--max-position-pct 25] [--max-sector-pct 50]
   portfolio show
 
@@ -697,6 +698,10 @@ async function run(argv) {
       return { ...r, ...(await afterWrite(ws)) };
     }
     case 'portfolio': {
+      if (sub === 'set-cost') {
+        const r = portfolio.setCost(ws, { asset_id: need(rest[0], 'portfolio set-cost <asset> --account ID --avg-cost-usd X [--acquired-at DATE] [--tx-id ID] [--reason R]'), account_id: need(one(flags.account), '--account required'), avg_cost_usd: need(one(flags['avg-cost-usd']) !== undefined ? one(flags['avg-cost-usd']) : one(flags.avg_cost_usd), '--avg-cost-usd required'), acquired_at: one(flags['acquired-at']) || one(flags.acquired_at) || null, tx_id: one(flags['tx-id']) || one(flags.tx_id) || null, reason: one(flags.reason) || null });
+        return { ...r, ...(await afterWrite(ws)) };
+      }
       const market = require('./core/market');
       return portfolio.computePortfolio(ws, { market: market.readLatest(ws) });
     }

@@ -89,14 +89,22 @@ function brief(ws, { since = null, now = Date.now() } = {}) {
       .map((c) => ({ text: `${c.name || c.project_id}: no current exit reading at $${c.exit_reading.size_usd}.`, link: `#/project/${c.project_id}/forensics?tab=exits` }));
   });
 
-  section('held', 'Held positions', true, () => rows
-    .filter((r) => r.held && r.position)
-    .map((r) => {
-      const v = isNum(r.position.value_usd) ? usd(r.position.value_usd) : 'value unknown';
-      const m = r.market || {};
-      const c = isNum(m.change_24h_pct) ? `24h ${pct(m.change_24h_pct)}` : '24h change unknown';
-      return { text: `${r.name}: ${v}, ${c}${r.position.price_status && r.position.price_status !== 'fresh' && r.position.price_status !== 'ok' ? ` (price ${String(r.position.price_status).replace(/_/g, ' ')})` : ''}.`, link: '#/portfolio' };
-    }));
+  section('held', 'Held positions', true, () => {
+    // Unrealized result and the distance to the invalidation price come from
+    // the ledger and the ticket in force (core/position-brief.js).
+    const pf = require('./portfolio').computePortfolio(ws, { market: require('./market').readLatest(ws) });
+    const detail = new Map(require('./position-brief').describe(ws, pf, { now }).map((b) => [b.project_id, b]));
+    return rows
+      .filter((r) => r.held && r.position)
+      .map((r) => {
+        const v = isNum(r.position.value_usd) ? usd(r.position.value_usd) : 'value unknown';
+        const m = r.market || {};
+        const c = isNum(m.change_24h_pct) ? `24h ${pct(m.change_24h_pct)}` : '24h change unknown';
+        const d = detail.get(r.project_id);
+        const extra = d ? ` ${d.pnl.words} ${d.invalidation_distance.words}` : '';
+        return { text: `${r.name}: ${v}, ${c}${r.position.price_status && r.position.price_status !== 'fresh' && r.position.price_status !== 'ok' ? ` (price ${String(r.position.price_status).replace(/_/g, ' ')})` : ''}.${extra}`, link: '#/portfolio' };
+      });
+  });
 
   section('research_waiting', 'Research waiting per model', true, () => {
     const held = require('./research').heldProviders(ws);
