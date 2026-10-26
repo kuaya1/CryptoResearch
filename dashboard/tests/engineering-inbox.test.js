@@ -959,7 +959,7 @@ test('a refusal names the field, never the submitted text, and the connector log
 test('eng-app@3 covers the hosted views, public scripts, tests and docs; core logic and the browser app always wait for Eric', (t) => {
   const { ws } = ws0(t, 'core-boundary');
   for (const old of ['eng-app@1', 'eng-app@2']) assert.equal(codeOf(() => I.activatePolicy(ws, OWNER, { template: old, ...GOAL }, o())), 'RETIRED', old);
-  assert.deepEqual(I.ownerView(ws, OWNER, o()).templates.map((x) => x.template).sort(), ['eng-app@3', 'eng-docs@1']);
+  assert.deepEqual(I.ownerView(ws, OWNER, o()).templates.map((x) => x.template).sort(), ['eng-app@3', 'eng-app@4', 'eng-docs@1']);
   assert.ok(P.TEMPLATES['eng-app@1'].allowed_paths.includes('dashboard/core/**'), 'the published eng-app@1 is unchanged');
   assert.deepEqual(P.TEMPLATES['eng-app@2'].allowed_paths, ['dashboard/web/src/**', 'dashboard/public/**', 'dashboard/tests/**', 'docs/engineering/**'], 'the published eng-app@2 is unchanged');
   const app = I.activatePolicy(ws, OWNER, { template: 'eng-app@3', ...GOAL }, o()).policy;
@@ -1186,4 +1186,149 @@ test('N10: invisible and text-direction characters are refused in public text an
   const entry = P.entryText({ number: 4, task_id: 'eng-20261026-abcdef', version: 1, content_sha256: 'a'.repeat(64), policy_id: null, content });
   for (const ch of marks) assert.ok(!entry.includes(ch), ch.charCodeAt(0).toString(16));
   assert.deepEqual(BP.entryProblems(entry), []);
+});
+
+// Backlog item 65 (Eric, 2026-10-26): eng-app@4 and the owner's re-binding.
+const content65 = (paths, over = {}) => P.contentOf({ title: 'UI work (FICTIONAL)', intent: 'implement', outcome: 'A change to the browser app (FICTIONAL).', scope: { paths }, acceptance: ['It works (FICTIONAL)'], goal_id: 'desk-polish', ...over });
+const polOf = (template, id = 'pol-20261026-0a0a0a') => ({ ...P.TEMPLATES[template], policy_id: id, goal_id: 'desk-polish', expires_at: '2026-11-20T00:00:00.000Z', revoked_at: null });
+const UI_FILE = 'dashboard/web/src/views/Fictional.jsx';
+
+test('65: eng-app@4 is new, eng-app@3 is as it was, and only @4 lifts the app, the bundle and three stylesheets', () => {
+  assert.deepEqual(Object.keys(P.TEMPLATES).filter((k) => !P.RETIRED[k]).sort(), ['eng-app@3', 'eng-app@4', 'eng-docs@1']);
+  assert.deepEqual(P.TEMPLATES['eng-app@4'].allowed_paths, ['dashboard/web/src/**', 'dashboard/public/**', 'dashboard/tests/**', 'docs/engineering/**']);
+  assert.deepEqual(P.TEMPLATES['eng-app@3'].allowed_paths, ['dashboard/public/**', 'dashboard/tests/**', 'docs/engineering/**'], 'a published template is never edited');
+  const now = T0;
+  const app4 = polOf('eng-app@4');
+  const app3 = polOf('eng-app@3');
+  const lifted = [UI_FILE, 'dashboard/web/src/**', 'dashboard/public/app/index.html', 'dashboard/public/app/**', 'dashboard/public/tokens.css', 'dashboard/public/styles.css', 'dashboard/public/position.css'];
+  for (const p of lifted) {
+    assert.deepEqual(P.fits(app4, content65([p]), { now }), [], `${p} fits eng-app@4`);
+    assert.notDeepEqual(P.fits(app3, content65([p]), { now }), [], `${p} still waits for Eric under eng-app@3`);
+  }
+  // Not for any template: core, the rest of the browser app, favicon.svg,
+  // the whole of dashboard/web/ or dashboard/public/ as one glob, the guard tests.
+  const held = ['dashboard/core/projects.js', 'dashboard/web/vite.config.js', 'dashboard/web/scripts/check.mjs', 'dashboard/web/**', 'dashboard/public/favicon.svg', 'dashboard/public/**', 'dashboard/tests/**', 'dashboard/tests/guardrails.test.js', 'dashboard/tests/web-app.test.js', 'dashboard/tests/helpers.js', 'dashboard/tests/backlog-fictional.test.js', 'dashboard/tests/engineering-fictional.test.js'];
+  for (const p of held) assert.notDeepEqual(P.fits(app4, content65([p]), { now }), [], `${p} still waits for Eric under eng-app@4`);
+  // Protected paths stay protected whatever the template says.
+  for (const p of ['dashboard/engineering/inbox.js', 'dashboard/tests/engineering-guard.test.js', 'dashboard/web/package.json', 'DESK_STATE.md', 'package.json']) assert.match(P.fits(app4, content65([p]), { now }).join(' '), /protected path/, p);
+  // Ordinary UI source, generated assets and ordinary tests are scoped by name or directory.
+  for (const p of ['dashboard/tests/screening.test.js', 'dashboard/tests/ui-*.test.js', 'dashboard/public/watchlist-model.js', 'dashboard/public/views/*.js', 'docs/engineering/lane.md']) assert.deepEqual(P.fits(app4, content65([p]), { now }), [], `${p} fits eng-app@4`);
+  // The other half of the same rule, as the promotion check reads it.
+  assert.equal(BP.restrictedFor('dashboard/web/src/App.jsx', 'eng-app@4'), null);
+  assert.ok(BP.restrictedFor('dashboard/web/src/App.jsx', 'eng-app@3'));
+  assert.ok(BP.restrictedFor('dashboard/web/src/App.jsx'), 'no template: held');
+  assert.equal(BP.restrictedFor('Dashboard/Public/App/Assets/x.js', 'eng-app@4'), null, 'read as Windows reads it');
+  assert.ok(BP.restrictedFor('dashboard/public/favicon.svg', 'eng-app@4'));
+  assert.ok(BP.restrictedFor('dashboard/core/projects.js', 'eng-app@4'));
+  assert.ok(BP.restrictedFor('dashboard/web/package.json', 'eng-app@4'));
+  assert.ok(BP.restrictedFor('dashboard/tests/engineering-inbox.test.js', 'eng-app@4'));
+});
+
+test('65: under eng-app@4 a candidate may change the app source; under eng-app@3 the task waits for Eric', (t) => {
+  for (const [template, ok] of [['eng-app@4', true], ['eng-app@3', false]]) {
+    const { ws } = ws0(t, `cand-${template.slice(-1)}`);
+    I.activatePolicy(ws, OWNER, { template, ...GOAL }, o());
+    const s = submitted(ws, docsTask({ title: `UI work ${template} (FICTIONAL)`, goal_id: 'desk-polish', scope: { paths: [UI_FILE] } }));
+    assert.equal(s.status, ok ? 'admitted' : 'awaiting_authorization', template);
+    if (!ok) continue;
+    const m = onMain(ws, s.task_id);
+    const c = cand(ws, s.task_id, m.token, m.number, 'ui', { file: UI_FILE });
+    assert.equal(c.r.status, 'verifying');
+    // A file of the app outside src/ is outside the delegation, whatever the task says.
+    const other = submitted(ws, docsTask({ title: 'Build config (FICTIONAL)', goal_id: 'desk-polish', scope: { paths: ['dashboard/web/vite.config.js'] } }));
+    assert.equal(other.status, 'awaiting_authorization');
+  }
+});
+
+test('65: Eric alone re-binds an exact version; a binding that no longer stands is replaced, nothing historical is rewritten', (t) => {
+  const { ws } = ws0(t, 'rebind');
+  const pol3 = I.activatePolicy(ws, OWNER, { template: 'eng-app@3', ...GOAL }, o()).policy;
+  const s = submitted(ws, docsTask({ title: 'Admitted before (FICTIONAL)', goal_id: 'desk-polish', scope: { paths: [APP_FILE] } }), o(MIN));
+  assert.equal(s.status, 'admitted');
+  const m = onMain(ws, s.task_id, { now: o(MIN) });
+  const before = I.getTask(ws, READER, s.task_id, o(MIN));
+  const args = { version: 1, content_sha256: s.content_sha256 };
+  // No connection re-binds; the owner's own call does.
+  for (const who of [CHAT, CHAT_REV, W1, GEM, READER]) assert.equal(codeOf(() => I.rebindTask(ws, who, s.task_id, args, o(2 * MIN))), 'OWNER_ONLY');
+  // A binding that still holds stays unless Eric says to replace it.
+  assert.equal(codeOf(() => I.rebindTask(ws, OWNER, s.task_id, { ...args, merge_state: { state: 'no' } }, o(2 * MIN))), 'AUTHORIZATION_HOLDS');
+  // Its delegation is later found to come from a retired template.
+  const polFile = ws.abs(`engineering/policies/${pol3.policy_id}.json`);
+  atomicWrite(polFile, jsonText({ ...JSON.parse(fs.readFileSync(polFile, 'utf8')), template: 'eng-app@2' }));
+  assert.equal(I.getTask(ws, READER, s.task_id, o(2 * MIN)).authorization.holds, false);
+  // No delegation stands to take it, so nothing is bound.
+  assert.equal(codeOf(() => I.rebindTask(ws, OWNER, s.task_id, { ...args, merge_state: { state: 'no' } }, o(2 * MIN))), 'NO_FIT');
+  const app4 = I.activatePolicy(ws, OWNER, { template: 'eng-app@4', ...GOAL }, o(3 * MIN)).policy;
+  // An exact version and hash.
+  assert.equal(codeOf(() => I.rebindTask(ws, OWNER, s.task_id, { version: 2, content_sha256: s.content_sha256 }, o(4 * MIN))), 'STALE_VERSION');
+  assert.equal(codeOf(() => I.rebindTask(ws, OWNER, s.task_id, { version: 1, content_sha256: 'a'.repeat(64) }, o(4 * MIN))), 'STALE_VERSION');
+  const r = I.rebindTask(ws, OWNER, s.task_id, { ...args, reason: 'eng-app@2 was retired (FICTIONAL)', merge_state: { state: 'no' } }, o(5 * MIN));
+  assert.equal(r.rebound, true);
+  const after = I.getTask(ws, READER, s.task_id, o(5 * MIN));
+  assert.equal(after.authorization.holds, true);
+  assert.equal(after.authorization.policy_id, app4.policy_id);
+  assert.equal(after.authorization.template, 'eng-app@4');
+  // Content, hash and admission are as they were.
+  assert.equal(after.content_sha256, before.content_sha256);
+  assert.deepEqual(after.content, before.content);
+  assert.equal(after.admission.number, m.number);
+  assert.equal(after.admission.entry_sha256, before.admission.entry_sha256);
+  // The earlier authorization is kept, and an audit event says who did what.
+  const raw = JSON.parse(fs.readFileSync(ws.abs(`engineering/tasks/${s.task_id}/task.json`), 'utf8'));
+  assert.equal(raw.rebindings.length, 1);
+  assert.equal(raw.rebindings[0].from.policy_id, pol3.policy_id);
+  assert.equal(raw.rebindings[0].holds_before, 'delegation_retired');
+  const dir = ws.abs(`engineering/tasks/${s.task_id}/events`);
+  const ev = fs.readdirSync(dir).map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))).filter((e) => e.type === 'rebound');
+  assert.equal(ev.length, 1);
+  assert.deepEqual(ev[0].by, { kind: 'owner' });
+  assert.equal(ev[0].data.to.template, 'eng-app@4');
+  assert.equal(ev[0].data.content_sha256, s.content_sha256);
+});
+
+test('65: Eric\'s own authorization of a task stands unless he chooses to replace it', (t) => {
+  const { ws } = ws0(t, 'rebind-owner');
+  I.activatePolicy(ws, OWNER, { template: 'eng-app@4', ...GOAL }, o());
+  const p = prepared(ws, docsTask({ title: 'Eric authorized this (FICTIONAL)', goal_id: 'desk-polish', scope: { paths: ['scripts/fictional.sh'] } }));
+  I.submitTask(ws, CHAT, { task_id: p.task_id, version: 1, content_sha256: p.content_sha256 }, o());
+  I.authorizeTask(ws, OWNER, p.task_id, { version: 1, content_sha256: p.content_sha256 }, o());
+  const args = { version: 1, content_sha256: p.content_sha256, merge_state: { state: 'no' } };
+  assert.equal(codeOf(() => I.rebindTask(ws, OWNER, p.task_id, args, o(MIN))), 'AUTHORIZATION_HOLDS');
+  // Replacing it is possible only to a delegation the version fits; this one does not.
+  assert.equal(codeOf(() => I.rebindTask(ws, OWNER, p.task_id, { ...args, explicit: true }, o(MIN))), 'NO_FIT');
+  assert.equal(I.getTask(ws, READER, p.task_id, o(MIN)).authorization.kind, 'owner');
+});
+
+test('65: GitHub\'s merge state is read first; merged work is settled, never re-promoted or re-bound', (t) => {
+  const { ws } = ws0(t, 'rebind-merged');
+  I.activatePolicy(ws, OWNER, { template: 'eng-app@3', ...GOAL }, o());
+  const s = submitted(ws, docsTask({ title: 'Merged by hand (FICTIONAL)', goal_id: 'desk-polish', scope: { paths: [APP_FILE] } }));
+  const m = onMain(ws, s.task_id);
+  const c = cand(ws, s.task_id, m.token, m.number, 'v1', { file: APP_FILE });
+  verify(ws, s.task_id, m.token, c.head);
+  const args = { version: 1, content_sha256: s.content_sha256, explicit: true };
+  assert.equal(codeOf(() => I.rebindTask(ws, OWNER, s.task_id, args, o(MIN))), 'MERGE_STATE_UNREAD');
+  assert.equal(codeOf(() => I.rebindTask(ws, OWNER, s.task_id, { ...args, merge_state: { state: 'unknown', why: 'GitHub rate limit' } }, o(MIN))), 'MERGE_STATE_UNKNOWN');
+  assert.equal(I.getTask(ws, READER, s.task_id, o(MIN)).status, 'review_pending', 'nothing changed');
+  const r = I.rebindTask(ws, OWNER, s.task_id, { ...args, merge_state: { state: 'yes' } }, o(MIN));
+  assert.deepEqual([r.reconciled, r.rebound], [true, false]);
+  assert.equal(I.getTask(ws, READER, s.task_id, o(MIN)).status, 'merged');
+  assert.equal(JSON.parse(fs.readFileSync(ws.abs(`engineering/tasks/${s.task_id}/task.json`), 'utf8')).rebindings, undefined, 'no new binding');
+  // A merged task is not re-bound, and not promotable.
+  assert.equal(codeOf(() => I.rebindTask(ws, OWNER, s.task_id, { ...args, merge_state: { state: 'no' } }, o(2 * MIN))), 'NOT_REBINDABLE');
+  assert.equal(I.attestationView(ws, c.head, o(2 * MIN)).promotable, false);
+});
+
+test('65: under eng-app@4 a review by the connection that submitted the task does not decide it', (t) => {
+  const { ws } = ws0(t, 'rebind-review');
+  I.activatePolicy(ws, OWNER, { template: 'eng-app@4', ...GOAL }, o());
+  const s = submitted(ws, docsTask({ title: 'UI work (FICTIONAL)', goal_id: 'desk-polish', scope: { paths: [UI_FILE] } }));
+  const m = onMain(ws, s.task_id);
+  const c = cand(ws, s.task_id, m.token, m.number, 'ui', { file: UI_FILE });
+  verify(ws, s.task_id, m.token, c.head);
+  const read = { diff: true, tests: true, acceptance: true };
+  const own = I.saveReview(ws, CHAT, { task_id: s.task_id, head_sha: c.head, merge_base_sha: MAIN1, result: 'pass', read }, o(MIN));
+  assert.deepEqual([own.same_author, own.counts_for_requirement, own.status], [true, false, 'review_pending']);
+  const other = I.saveReview(ws, CHAT_REV, { task_id: s.task_id, head_sha: c.head, merge_base_sha: MAIN1, result: 'pass', read }, o(2 * MIN));
+  assert.deepEqual([other.same_author, other.counts_for_requirement], [false, true]);
 });

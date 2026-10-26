@@ -85,6 +85,28 @@ const TEMPLATES = {
     max_days: 30,
     requires_goal: true,
   },
+  // Eric, 2026-10-26 (backlog item 65): eng-app@3 plus the browser app's
+  // source, the committed bundle and the stylesheets served before sign-in,
+  // which he wants delegable for one goal at a time (the white-card task
+  // needs tokens.css). A published template is never edited, so this is a
+  // new one: only here do those rules lift (DELEGATION_RESTRICTED `lifted` in
+  // backlog-promote.js). dashboard/core/, the rest of dashboard/web/, the
+  // other files served before sign-in (favicon.svg) and the guard tests stay
+  // out of every delegation's reach; a scope names a directory (for example
+  // dashboard/web/src/**), never dashboard/web/** or dashboard/public/**.
+  'eng-app@4': {
+    template: 'eng-app@4',
+    title: 'Browser app, bundle, public assets and tests for one goal',
+    says: 'The browser app\'s source (dashboard/web/src/), its committed bundle, the public scripts and stylesheets, tests and engineering documents for the goal Eric names, each candidate reviewed by ChatGPT, from a connection other than the one that submitted it, before it merges. Never dashboard/core/, the rest of dashboard/web/, favicon.svg, the tests that guard the lane, the backlog, the guardrails or the browser\'s writes, server routes or a protected path: those always wait for Eric.',
+    repo_full_name: REPO,
+    intents: ['design', 'implement'],
+    allowed_paths: ['dashboard/web/src/**', 'dashboard/public/**', 'dashboard/tests/**', 'docs/engineering/**'],
+    required_review: 'chatgpt',
+    release_mode: 'promote',
+    limits: { max_open_tasks: 3, max_admissions_per_day: 5, max_files: 30 },
+    max_days: 30,
+    requires_goal: true,
+  },
 };
 // Kept so their records stay readable, never offered for a new activation,
 // and a delegation activated from one matches nothing (review N6).
@@ -98,12 +120,19 @@ const RETIRED = {
 const RESTRICTED = DELEGATION_RESTRICTED;
 // A glob reaches a restricted directory when the part before its first
 // wildcard could lead into it (dashboard/*/x.js and **/x.js both can).
-function restrictedHit(glob) {
+// A rule that lists the template in `lifted` does not hold a glob whose
+// fixed part lies wholly inside what that template may change (so
+// dashboard/web/src/** is open to eng-app@4 and dashboard/web/** is not).
+function restrictedHit(glob, template = null) {
   const lead = glob.includes('*') ? foldPath(glob.slice(0, glob.indexOf('*'))) : null;
-  return RESTRICTED.find((x) => (lead === null ? x.re.test(foldPath(glob)) : x.prefix.startsWith(lead) || lead.startsWith(x.prefix))) || null;
+  return RESTRICTED.find((x) => {
+    if (!(lead === null ? x.re.test(foldPath(glob)) : x.prefix.startsWith(lead) || lead.startsWith(x.prefix))) return false;
+    const lift = template && x.lifted && x.lifted[template];
+    return !(lift && lift.test(lead === null ? foldPath(glob) : lead));
+  }) || null;
 }
-function restrictedWhy(glob) {
-  const hit = restrictedHit(glob);
+function restrictedWhy(glob, template = null) {
+  const hit = restrictedHit(glob, template);
   return hit ? hit.why : null;
 }
 // Where a restricted rule reaches, in words: its folder, or "a restricted path".
@@ -275,7 +304,7 @@ function fits(policy, c, { now, openUnderPolicy = 0, admittedLastDay = 0 } = {})
   const allowed = c.intent === 'design' ? DESIGN_PATHS.filter((d) => policy.allowed_paths.some((p) => within(d, p))) : policy.allowed_paths;
   for (const p of c.scope.paths) {
     const why = globTouchesProtected(p);
-    const core = restrictedHit(p);
+    const core = restrictedHit(p, policy.template);
     if (why) r.push(`${p} can reach a protected path (${why})`);
     else if (core) r.push(`${p} can reach ${restrictedWhere(core)} (${core.why}); it waits for Eric`);
     else if (!allowed.some((g) => within(p, g))) r.push(`${p} is outside the delegated paths`);
