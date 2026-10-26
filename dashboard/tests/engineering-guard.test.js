@@ -95,6 +95,15 @@ test('nothing answers a request beside the front door on the hosted desk', async
     assert.equal(r.headers['cache-control'], 'no-store', p);
   }
   assert.equal((await req(d.port, { method: 'POST', path: `/engineering/attestations/${'0'.repeat(40)}` })).status, 405);
+  // The unattended reviewer's route is off while CR_ENG_REVIEWER_TOKEN is not set.
+  if (!process.env.CR_ENG_REVIEWER_TOKEN) for (const p of ['/engineering/reviewer/packet', '/engineering/reviewer/reviews']) assert.equal((await req(d.port, { method: 'POST', path: p })).status, 404, p);
+  // Grok Scout's one route (core/scout.js, 2026-10-26): the brief and its
+  // key check need the ingest key (this desk has none, so not set up), and
+  // any other /api/ingest/ path, the signed-in ping (item 66) and the
+  // scout's list included, waits for sign-in.
+  assert.equal((await req(d.port, { path: '/api/ingest/scout-brief' })).status, 404);
+  assert.equal((await req(d.port, { method: 'POST', path: '/api/ingest/scout-brief' })).status, 404);
+  for (const p of ['/api/ingest/ping', '/api/ingest/other', '/api/ingest/scout-brief/', '/api/scout']) assert.equal((await req(d.port, { path: p })).status, 401, p);
   // Everything else waits for the sign-in, except the files its page needs.
   assert.equal((await req(d.port, { path: '/api/engineering' })).status, 401);
   assert.equal((await req(d.port, { path: '/' })).status, 303);
@@ -210,6 +219,11 @@ test('the front door loads only protected modules and is protected itself', () =
   assert.ok(mods.length >= 5);
   for (const m of mods) assert.ok(protectedHit(m), `the front door loads ${m}, which must be protected`);
   for (const m of src.matchAll(/\brequire\s*\(\s*([^)]*)\)/g)) assert.match(m[1].trim(), /^['"][^'"]+['"]$/, 'every require in the front door names its module');
+  // The scout's ingest, served before sign-in, loads only protected modules
+  // all the way down.
+  const scout = requireWalk([path.join(DASH, 'core', 'scout.js')]);
+  assert.deepEqual(scout.computed, []);
+  for (const f of scout.files) assert.ok(protectedHit(f), `the scout ingest loads ${f}, which must be protected`);
   // dashboard/server.js never listens for a request itself.
   const server = fs.readFileSync(path.join(DASH, 'server.js'), 'utf8');
   assert.doesNotMatch(server, /\.(on|once|addListener|prependListener|prependOnceListener)\(\s*['"`](request|checkContinue|checkExpectation|upgrade|connect)['"`]/);
@@ -259,10 +273,15 @@ test('no delegation reaches the files served before sign-in, the bundle, the bro
   }
   for (const p of ['dashboard/public/views/brief.js', 'dashboard/public/ui.js', 'dashboard/tests/watchlist-model.test.js', 'docs/engineering/x.md']) assert.equal(P.restrictedHit(p), null, `${p} stays open to a delegation`);
   // The offered application template leaves them out, and its predecessors match nothing.
-  // Eric, 2026-10-26: eng-app@4 (backlog item 65) is offered once it lands,
-  // and main stays green until then; no other template is ever offered.
+  // Eric, 2026-10-26: eng-app@4 (backlog item 65) and eng-backend@1
+  // (audits/2026-10-26-backend-autonomy) are offered; no other template is.
   const offered = Object.keys(P.TEMPLATES).filter((k) => !P.RETIRED[k]).sort();
-  assert.ok([['eng-app@3', 'eng-docs@1'], ['eng-app@3', 'eng-app@4', 'eng-docs@1']].some((set) => set.join() === offered.join()), `offered templates: ${offered.join(', ')}`);
+  assert.deepEqual(offered, ['eng-app@3', 'eng-app@4', 'eng-backend@1', 'eng-docs@1'], `offered templates: ${offered.join(', ')}`);
   assert.ok(!P.TEMPLATES['eng-app@3'].allowed_paths.some((g) => g.startsWith('dashboard/web/') || g.startsWith('dashboard/core/')));
+  // eng-backend@1 reaches core and the server's routes, never the lane, the
+  // front door, the workflows, sign-in or the ledger and wallets.
+  for (const p of ['dashboard/engineering/inbox.js', 'dashboard/frontdoor.js', '.github/workflows/test.yml', 'server.js', 'dashboard/hosted.js', 'dashboard/oauth.js', 'dashboard/mcp.js', 'dashboard/core/portfolio.js', 'dashboard/core/wallets.js', 'dashboard/core/walletsync.js', 'dashboard/core/alchemy.js']) {
+    assert.ok(P.forbiddenHit(p, { template: 'eng-backend@1' }), `${p} is forbidden under eng-backend@1`);
+  }
   for (const old of ['eng-app@1', 'eng-app@2']) assert.match(P.fits({ template: old, policy_id: 'pol-20261026-0a0a0a' }, {}, { now: Date.now() })[0], /matches nothing/);
 });

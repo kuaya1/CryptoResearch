@@ -108,6 +108,7 @@ try {
     ['preferences data', '#/watchlist?prefs=data', "document.querySelector('.prefs .prefs-sec:not([aria-busy]) *')"],
     ['research', '#/research', "document.querySelector('.lg-research *')"],
     ['research evidence', '#/research?tab=evidence', "document.querySelector('.lg-research table')"],
+    ['research scout', '#/research?tab=scout', "document.querySelector('.lg-research select[aria-label=\"Lane\"]')"],
     ['portfolio attention', '#/portfolio?tab=attention', "document.querySelector('.lg-portfolio .page-head')"],
     ['review', '#/review', "document.querySelector('.rv-queue .rv-item')"],
     ['review upcoming', '#/review?seg=upcoming', "document.querySelector('.rv-up')"],

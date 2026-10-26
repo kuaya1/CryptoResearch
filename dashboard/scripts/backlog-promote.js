@@ -49,6 +49,12 @@ const PROTECTED = [
   // Review N1 (2026-10-26): everything a request meets before sign-in.
   { re: /^dashboard\/frontdoor\.js$/i, why: 'the front door (everything a request meets before sign-in)' },
   { re: /^dashboard\/core\/offsite\.js$/i, why: 'the offsite package, served before sign-in' },
+  // Grok Scout (Eric, 2026-10-26): its ingest is served before sign-in, and
+  // its sweep holds the xAI key and makes the paid call.
+  { re: /^dashboard\/core\/scout\.js$/i, why: 'the scout ingest, served before sign-in' },
+  { re: /^dashboard\/scripts\/grok-cron\.js$/i, why: 'the scout sweep (the xAI key and the paid call)' },
+  { re: /^dashboard\/tests\/scout-ingest\.test\.js$/i, why: 'the tests of the scout ingest and sweep' },
+  { re: /^templates\/scout\//i, why: 'the scout sweep\'s frozen prompt and its pin' },
   // Review N2: what the engineering gate is computed with, followed through
   // every require (tests/engineering-guard.test.js walks them).
   { re: /^dashboard\/core\/(ops|fsx|ids|workspace|forensic-defs|rubrics|scoring|netguard|revision)\.js$/i, why: 'what the engineering gate and the front door are computed with' },
@@ -57,7 +63,7 @@ const PROTECTED = [
   { re: /^dashboard\/core\/(portfolio|wallets|walletsync|alchemy)\.js$/i, why: 'financial records (the ledger and wallets)' },
   { re: /^(package(-lock)?\.json|dashboard\/web\/package(-lock)?\.json)$/i, why: 'dependencies and scripts' },
   { re: /^render\.ya?ml$/i, why: 'deployment' },
-  { re: /^(portfolio|paper|projects|config|secrets)\//i, why: 'records, never committed' },
+  { re: /^(portfolio|paper|projects|config|secrets|scout)\//i, why: 'records, never committed' },
   // Proposed with review N9 (2026-10-26), not yet Eric's decision, and
   // removable on its own: agents read these at any depth (Claude Code loads
   // a CLAUDE.md, CLAUDE.local.md or .claude/ in a subfolder it works in).
@@ -107,8 +113,13 @@ const PROTECTED_LINES = [
 // dashboard/web/, favicon.svg (an SVG served before sign-in can run script)
 // and none of the guard tests is lifted for any template (docs/engineering/
 // delegation-exclusions.md lists every rule).
+//
+// Eric, 2026-10-26 (audits/2026-10-26-backend-autonomy): dashboard/core/ is
+// lifted for eng-backend@1 alone, whose every pull request he merges himself.
+// Its PROTECTED files (the ledger, the wallets, what the gate is computed
+// with) stay out of every delegation's reach.
 const DELEGATION_RESTRICTED = [
-  { re: /^dashboard\/core\//i, prefix: 'dashboard/core/', why: 'core financial and investment logic, which no delegation changes' },
+  { re: /^dashboard\/core\//i, prefix: 'dashboard/core/', why: 'core financial and investment logic, which no delegation changes', lifted: { 'eng-backend@1': /^dashboard\/core\//i } },
   { re: /^dashboard\/web\//i, prefix: 'dashboard/web/', why: 'the browser app, which runs in Eric\'s signed-in session (each change ships a new bundle)', lifted: { 'eng-app@4': /^dashboard\/web\/src\//i } },
   { re: /^dashboard\/public\/app\//i, prefix: 'dashboard/public/app/', why: 'the committed browser bundle, which runs in Eric\'s signed-in session', lifted: { 'eng-app@4': /^dashboard\/public\/app\//i } },
   ...['tokens.css', 'styles.css', 'position.css', 'favicon.svg'].map((f) => ({ re: new RegExp(`^dashboard/public/${f.replace(/\./g, '\\.')}$`, 'i'), prefix: `dashboard/public/${f}`, why: 'a file served before sign-in', ...(f.endsWith('.css') ? { lifted: { 'eng-app@4': new RegExp(`^dashboard/public/${f.replace(/\./g, '\\.')}$`, 'i') } } : {}) })),
@@ -393,6 +404,7 @@ const DESK_REASONS = {
   verification_missing: 'no passing verification with every acceptance check met is recorded for this head',
   ci_failed: 'GitHub\'s check runs on this head failed, as the desk read them',
   release_by_owner: 'this task is released by Eric (release mode owner)',
+  owner_merges_unattended_review: 'an unattended review approved this head, so Eric merges it himself on GitHub',
 };
 function deskReason(code) {
   const [k, ...p] = String(code).split(':');
