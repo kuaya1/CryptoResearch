@@ -57,7 +57,7 @@ its checks without approval. This waits for the App; see cutover step 3.
 ## Apply (Eric)
 
 ```powershell
-gh api -X PUT repos/kuaya1/CryptoResearch/actions/permissions/workflow -f default_workflow_permissions=read -F can_approve_pull_request_reviews=false
+gh api -X PUT repos/kuaya1/CryptoResearch/actions/permissions/workflow -f default_workflow_permissions=read -F can_approve_pull_request_reviews=true
 gh api -X POST repos/kuaya1/CryptoResearch/rulesets --input .github/rulesets/agent-ledger.json
 gh api -X POST repos/kuaya1/CryptoResearch/rulesets --input .github/rulesets/automation-branches.json
 gh api -X POST repos/kuaya1/CryptoResearch/rulesets --input .github/rulesets/main-merge-requirements.json
@@ -70,6 +70,14 @@ Apply `main-merge-requirements.json` only once `agent-checks.yml` and
 its four checks. Every workflow already declares its own token permissions,
 so the read default changes none of them.
 
+`can_approve_pull_request_reviews` stays `true` for now. It is GitHub's one
+setting for "Allow GitHub Actions to create and approve pull requests", and
+`backlog-pr`, `backlog-intake` and `engineering-admission` still open their
+pull requests with the workflow token. Approval is not the boundary here
+(zero approvals are required, and the `update` rule stops every merge but
+Eric's). Set it to `false` once the old lane is retired and no workflow
+opens a pull request with the workflow token.
+
 ## Roll back (Eric)
 
 ```powershell
@@ -79,3 +87,6 @@ gh api -X PUT repos/kuaya1/CryptoResearch/rulesets/<id> -f enforcement=disabled
 
 Disabling keeps the ruleset for re-enabling (`-f enforcement=active`).
 Deleting it is `gh api -X DELETE repos/kuaya1/CryptoResearch/rulesets/<id>`.
+The workflow token's default goes back with
+`gh api -X PUT repos/kuaya1/CryptoResearch/actions/permissions/workflow -f default_workflow_permissions=write -F can_approve_pull_request_reviews=true`
+(the setting as it was on 2026-10-26).
