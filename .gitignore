@@ -69,6 +69,8 @@ node_modules/
 # Audits: only the reviewed reports below are tracked
 
 /audits/*/*
+!/audits/2026-10-26-grok-scout/README.md
+!/audits/2026-10-26-grok-scout/PLAN.md
 !/audits/2026-10-26-lane-resilience/README.md
 !/audits/2026-10-26-backend-autonomy/README.md
 !/audits/2026-10-26-engineering-convergence/README.md

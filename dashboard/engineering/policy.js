@@ -218,6 +218,7 @@ const PROTECTED_SAMPLES = [
   // reaches dashboard/core/: a glob such as dashboard/core/forensic-*.js is
   // refused at the match, not only at the candidate.
   'dashboard/core/ids.js', 'dashboard/core/forensic-defs.js', 'dashboard/core/rubrics.js', 'dashboard/core/scoring.js', 'dashboard/core/netguard.js', 'dashboard/core/revision.js',
+  'dashboard/core/scout.js', 'dashboard/scripts/grok-cron.js', 'dashboard/tests/scout-ingest.test.js', 'templates/scout/x.md', 'scout/x.json',
   'package.json', 'package-lock.json', 'dashboard/web/package.json', 'dashboard/web/package-lock.json', 'render.yaml', 'render.yml',
   'portfolio/x.json', 'paper/x.jsonl', 'projects/x/project.json', 'config/settings.json', 'secrets/x.json',
   'dashboard/engineering/inbox.js', 'dashboard/engineering/x.js', 'AGENTS.md', '.mcp.json',

@@ -284,6 +284,12 @@ async function doctor(ws, { writeProbe = false } = {}) {
     const ok = ws.hosted ? b.offsite.configured : b.independent_copy.verified && !b.independent_copy.overdue;
     add('Offsite backup', ok, `${b.summary}${!ws.hosted && b.offsite.configured && !b.independent_copy.verified ? ` Pull one now: node dashboard/cli.js offsite pull (saves to ${b.offsite.folder}).` : ''}`, ok ? 'ok' : 'warn');
   } catch (_) { /* offsite module optional */ }
+  // Grok Scout (core/scout.js): online only, a status and never a failure.
+  if (ws.hosted) {
+    try {
+      add('Scout', true, require('./scout').statusLine(ws), 'info');
+    } catch (_) { /* a status line only */ }
+  }
   try {
     const rs = require('./research').providerStatus(ws);
     add('Research providers', true, Object.entries(rs).map(([p, s]) => `${p}: ${s.mode}${s.reason ? ` (${s.reason})` : ''}`).join('; '), 'info');

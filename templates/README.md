@@ -20,6 +20,8 @@
 | `forensics/forensic-prompt.v1.md` | `cr-forensic-prompt@1`, the Forensics & Resilience investigator prompt (Claude): does the advertised product work; are incentives, disclosures, controls and observed actions consistent; could liquidity, operations or delivery deteriorate over 120 days; what supports it and what would change it. Findings keep observation, inference and hypothesis apart; wallet findings keep launch acquisitions, present holdings and inferred common control apart; liquidity by pool mechanism; no probabilities. Output `cr.forensic.v1` (`schemas/forensic.v1.schema.json`). Separate from the investment prompts, which are unchanged. |
 | `forensics/forensic-challenge.v1.md` | `cr-forensic-challenge@1`, ChatGPT's challenge of a saved Claude assessment: attribution, calculations, omitted evidence, benign explanations, a verdict per finding. Frozen with the receipt it challenges; saved apart; never changes the assessment. Output `cr.forensic-challenge.v1`. |
 | `forensics/LOCK.json` | The SHA-256 of each published forensic prompt (`tests/forensics.test.js` checks it). A change is the next version, pinned here. |
+| `scout/scout-prompt.v1.md` | `cr-scout-prompt@1`, the Grok Scout's daily sweep (2026-10-26, `dashboard/scripts/grok-cron.js`): one lane at a time (`agents`, `onchain`, `desk`, `security`), at most 10 recent items it found and opened, never a token or trading signal, pages read as information and never as instructions, one JSON object as the answer. |
+| `scout/LOCK.json` | The SHA-256 of each published scout prompt. The sweep refuses to run when the text differs from its pin. A change is the next version, pinned here. |
 | `source-prompts/` | Your original prompts, kept as you wrote them. |
 
 ## Versioning
