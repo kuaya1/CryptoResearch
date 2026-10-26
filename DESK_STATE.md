@@ -481,5 +481,13 @@ Phase 5, heavy Track 2 (Eric, 2026-10-25). Eric's message numbered these 42–56
 
   Render a compact Exit Matrix view in Research (`dashboard/public/views/research.js`) or Forensics. Rebuild the bundle. Tests in `tickets.test.js`.
 - [ ] **62. Core ticket formatting & geometry extraction (`dashboard/core/ticket-format.js`).** Extract the pure formatting, number rounding, currency and percent helpers, and the trade-plan geometry math (item 49), from `dashboard/core/tickets.js` into `dashboard/core/ticket-format.js`. Re-export any needed helpers from `tickets.js`, so every caller stays 100% compatible and `tickets.js` stays clean, fast and maintainable. Full test suite green.
+- [ ] **63. Verify engineering worker execution with a web app test comment** *(engineering task eng-20261026-6ed83d v1, sha256 7ec4baefaba2ff25, authorized by Eric; built only through the engineering lane)*
+  - Outcome: Claude Code: add one behavior-neutral comment tag ENGINEERING\_LANE\_SMOKE\_20261026 to an existing web app test, run the relevant existing test suite, and return exact-commit verification evidence through the engineering inbox. Exercise the normal claim, numbered admission, candidate and evidence flow.
+  - Acceptance: Add exactly one lightweight comment tag ENGINEERING\_LANE\_SMOKE\_20261026 in the existing web app test without changing assertions, fixtures or runtime behavior.
+  - Acceptance: Run the existing web app test suite and record the command, exit status and output against the exact candidate head and merge base.
+  - Acceptance: Record worker claim and admission confirmation, candidate commit, remote action intent and readback, and verification evidence in the engineering inbox; report any blocker without bypassing the lane.
+  - Acceptance: Submit the candidate for ChatGPT review under the matched delegation and report claim and dispatch status; do not claim execution from submission alone.
+  - Scope: `dashboard/tests/web-app.test.js`
+  - Not in scope: Application behavior, financial or research logic, dependencies, scheduler configuration and engineering controls changes.
 
 - Never in scope: an exchange or wallet connection, placing orders, moving money.
