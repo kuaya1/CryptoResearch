@@ -9,7 +9,7 @@
 // review and tests still decide.
 
 const crypto = require('crypto');
-const { PROTECTED, DELEGATION_RESTRICTED } = require('../scripts/backlog-promote');
+const { PROTECTED, DELEGATION_RESTRICTED, foldPath, protectedHit } = require('../scripts/backlog-promote');
 
 const REPO = 'kuaya1/CryptoResearch';
 const INTENTS = ['explore', 'design', 'implement'];
@@ -76,8 +76,8 @@ const RESTRICTED = DELEGATION_RESTRICTED;
 // A glob reaches a restricted directory when the part before its first
 // wildcard could lead into it (dashboard/*/x.js and **/x.js both can).
 function restrictedWhy(glob) {
-  const lead = glob.includes('*') ? glob.slice(0, glob.indexOf('*')) : null;
-  const hit = RESTRICTED.find((x) => (lead === null ? x.re.test(glob) : x.prefix.startsWith(lead) || lead.startsWith(x.prefix)));
+  const lead = glob.includes('*') ? foldPath(glob.slice(0, glob.indexOf('*'))) : null;
+  const hit = RESTRICTED.find((x) => (lead === null ? x.re.test(foldPath(glob)) : x.prefix.startsWith(lead) || lead.startsWith(x.prefix)));
   return hit ? hit.why : null;
 }
 
@@ -113,7 +113,8 @@ function within(taskGlob, policyGlob) {
   if (policyGlob.endsWith('/**')) return taskGlob.startsWith(policyGlob.slice(0, -2));
   return taskGlob === policyGlob;
 }
-const protectedWhy = (p) => { const hit = PROTECTED.find((x) => x.re.test(p)); return hit ? hit.why : null; };
+// Read as Eric's Windows PC reads the path (backlog-promote.js foldPath).
+const protectedWhy = (p) => { const hit = protectedHit(p); return hit ? hit.why : null; };
 // One concrete path for every PROTECTED rule (a test keeps the two in step):
 // a scope glob that matches any of them could reach a protected path.
 const PROTECTED_SAMPLES = [
@@ -123,11 +124,11 @@ const PROTECTED_SAMPLES = [
   'dashboard/core/portfolio.js', 'dashboard/core/wallets.js', 'dashboard/core/walletsync.js', 'dashboard/core/alchemy.js',
   'package.json', 'package-lock.json', 'dashboard/web/package.json', 'dashboard/web/package-lock.json', 'render.yaml', 'render.yml',
   'portfolio/x.json', 'paper/x.jsonl', 'projects/x/project.json', 'config/settings.json', 'secrets/x.json',
-  'dashboard/engineering/inbox.js', 'dashboard/engineering/x.js',
+  'dashboard/engineering/inbox.js', 'dashboard/engineering/x.js', 'AGENTS.md', '.mcp.json',
 ];
 function globTouchesProtected(glob) {
   if (!glob.includes('*')) return protectedWhy(glob);
-  const re = globRe(glob);
+  const re = new RegExp(globRe(glob).source, 'i');
   const hit = PROTECTED_SAMPLES.find((p) => re.test(p));
   return hit ? protectedWhy(hit) : null;
 }

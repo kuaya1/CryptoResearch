@@ -982,3 +982,29 @@ test('eng-app@2 covers the app, views, public scripts, tests and docs; dashboard
   assert.equal(prepared(ws2, docsTask({ title: 'Old delegation, UI (FICTIONAL)', goal_id: 'desk-polish', scope: { paths: [APP_FILE] } }), o(MIN)).match.delegation.template, 'eng-app@1');
 
 });
+
+// Review N9 (2026-10-26): a delegation reads paths as Eric's Windows PC does,
+// so a different letter case reaches the same protected or core file.
+test('N9: delegations read paths as Windows does: a different letter case still waits for Eric', (t) => {
+  const { ws } = ws0(t, 'case-fold');
+  I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o());
+  I.activatePolicy(ws, OWNER, { template: 'eng-app@2', ...GOAL }, o());
+  assert.equal(P.protectedWhy('claude.md'), 'agent instructions');
+  assert.equal(P.protectedWhy('.Claude/settings.json'), 'agent definitions and permissions');
+  assert.equal(P.protectedWhy('Desk_State.md.'), 'the backlog (a branch never edits it; Eric adds and ticks items)');
+  assert.ok(P.globTouchesProtected('.GitHub/**'));
+  assert.ok(P.restrictedWhy('Dashboard/Core/tickets.js'));
+  assert.ok(P.restrictedWhy('DASHBOARD/CORE/**'));
+  for (const paths of [['docs/engineering/CLAUDE.md'], ['dashboard/web/src/AGENTS.md'], ['Dashboard/Core/tickets.js']]) {
+    const m = prepared(ws, docsTask({ title: `Case ${paths[0].length} (FICTIONAL)`, goal_id: 'desk-polish', scope: { paths } }), o(MIN)).match;
+    assert.equal(m.delegation, null, paths[0]);
+  }
+  // A candidate that writes a protected file under another case is refused.
+  const s = submitted(ws, docsTask({ title: 'Docs (FICTIONAL)', scope: { paths: ['docs/engineering/**'] } }), o(MIN));
+  assert.equal(s.match.delegation.template, 'eng-docs@1');
+  const m = onMain(ws, s.task_id, { number: 75, now: o(2 * MIN) });
+  const file = 'docs/engineering/Claude.md';
+  const e = (() => { try { I.recordEvent(ws, W1, { task_id: s.task_id, claim_token: m.token, type: 'candidate', branch: 'claude/candidate-eng-75', head_sha: sha('case-head'), base_sha: MAIN1, merge_base_sha: MAIN1, files: [file], diff: diffFor(file, 'x') }, o(2 * MIN)); } catch (x) { return x; } return null; })();
+  assert.equal(e && e.code, 'SCOPE');
+  assert.match(e.message, /docs\/engineering\/Claude\.md is protected \(agent instructions or settings, which agents read at any depth\)/);
+});
