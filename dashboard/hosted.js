@@ -461,10 +461,12 @@ function serveSetupPage(port, problems) {
   return server;
 }
 
-async function main(env = process.env) {
-  const cfg = hostedConfig(env);
-  if (cfg.dataDir && process.platform === 'linux') {
-    const m = containingMount(cfg.dataDir);
+// platform and mountsText as hostedConfig takes them (tests give a mount
+// table, so the persistent-disk check reads the same on every machine).
+async function main(env = process.env, { platform = process.platform, mountsText = null } = {}) {
+  const cfg = hostedConfig(env, { platform, mountsText });
+  if (cfg.dataDir && platform === 'linux') {
+    const m = containingMount(cfg.dataDir, mountsText);
     console.log(`Data folder ${cfg.dataDir}: on mount ${m ? `${m.point} (${m.type})` : 'unknown (mount table unreadable)'}.`);
   }
   console.log(`Revision: ${require('./core/revision').revisionLine()}.`);

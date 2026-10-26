@@ -51,20 +51,25 @@ function req(port, { method = 'GET', path: p = '/', host = HOST } = {}) {
 }
 
 // The hosted environment of a FICTIONAL desk, its workspace prepared with
-// market data off.
+// market data off. The temp folder stands for the persistent disk: a mount of
+// its own in the table the config reads, written as the disk check reads
+// paths (POSIX), so the desk starts the same on Linux and on Windows
+// (hosted.test.js does the same).
 function hostedEnv(t, label, port) {
   const hosted = require('../hosted');
   const base = fs.mkdtempSync(path.join(os.tmpdir(), `cr-guard-${label}-`));
   t.after(() => fs.rmSync(base, { recursive: true, force: true, maxRetries: 5 }));
   const env = { CR_DATA_DIR: path.join(base, 'data'), CR_ACCESS_PASSWORD: PASS, PORT: String(port), RENDER_EXTERNAL_HOSTNAME: HOST };
-  const cfg = hosted.hostedConfig(env);
+  const opts = { platform: 'linux', mountsText: `/dev/vda / ext4 rw 0 0\n/dev/vdb ${path.posix.resolve(base.replace(/\\/g, '/'))} ext4 rw 0 0\n` };
+  const cfg = hosted.hostedConfig(env, opts);
+  assert.deepEqual(cfg.problems, [], 'the fictional desk is fully configured');
   const ws = hosted.prepareWorkspace(cfg);
   const file = path.join(ws.root, 'config', 'settings.json');
   const s = readJson(file);
   s.market_data = { ...(s.market_data || {}), enabled: false };
   fs.writeFileSync(file, JSON.stringify(s));
   ws.reloadSettings();
-  return { env, cfg, ws };
+  return { env, opts, cfg, ws };
 }
 
 // The real hosted server, bound to this PC only.
@@ -132,11 +137,13 @@ test('the online desk does not start when anything answers beside the front door
   const original = S.start;
   const quiet = { log: console.log, error: console.error };
   t.after(() => { S.start = original; console.log = quiet.log; console.error = quiet.error; });
-  const { env, ws } = hostedEnv(t, 'main', 1);
+  const { env, opts, ws } = hostedEnv(t, 'main', 1);
   // server.js's start, as hosted.main calls it, without binding a port: its
   // server has the real front door, and on the first run a handler of its own.
   let shutdowns = 0;
+  let starts = 0;
   const fake = (extra) => async () => {
+    starts += 1;
     const server = http.createServer();
     F.openFrontDoor(server, { ws, port: 1, quiet: true, state: { stats: { requests: {} } }, signedIn: () => {} });
     if (extra) server.prependListener('request', extra);
@@ -145,11 +152,14 @@ test('the online desk does not start when anything answers beside the front door
   console.log = () => {};
   console.error = () => {};
   S.start = fake((rq, res) => { if (String(rq.url).startsWith(['/eng', 'ineering'].join(''))) { res.writeHead(204); res.end(); } });
-  await assert.rejects(hosted.main(env), /The front door was bypassed: 1 other handler listens for 'request' beside the front door/);
+  await assert.rejects(hosted.main(env, opts), /The front door was bypassed: 1 other handler listens for 'request' beside the front door/);
+  assert.equal(starts, 1, 'the desk was started, not the setup page');
   assert.equal(shutdowns, 1, 'the bypassed server is shut down');
   S.start = fake(null);
-  const srv = await hosted.main(env);
-  assert.ok(srv && srv.server);
+  const srv = await hosted.main(env, opts);
+  assert.equal(starts, 2);
+  assert.ok(srv && srv.server, 'the desk itself answers');
+  assert.equal(srv.setup, undefined, 'no setup page was served');
   assert.equal(shutdowns, 1);
 });
 
