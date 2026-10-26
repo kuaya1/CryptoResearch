@@ -408,7 +408,7 @@ test('alerts only on severe structural changes between two good screens: mint, p
   assert.deepEqual([tax.from, tax.to], ['5%', '15%']);
 
   // The review queue shows them as a contract change, within alert_days.
-  const idx = buildIndex(ws);
+  const idx = buildIndex(ws, { now: later });
   const items = (idx.attention || []).filter((x) => x.kind === 'contract_change' && x.project_id === id);
   assert.equal(items.length, 1, JSON.stringify(idx.attention));
   assert.equal(items[0].severity, 'high');
@@ -416,7 +416,7 @@ test('alerts only on severe structural changes between two good screens: mint, p
   assert.match(items[0].detail, /sell tax rose to 15%/);
   const row = idx.projects.find((p) => p.project_id === id);
   assert.equal(row.screening.state, 'fresh');
-  assert.equal(projectDetail(ws, id).screening.alerts.length, 3);
+  assert.equal(screening.view(ws, project(ws, id), { now: later }).alerts.length, 3);
   // Past alert_days they leave the review queue but stay on file.
   assert.equal(screening.summary(ws, project(ws, id), later + 15 * DAY).alerts.length, 0);
   assert.equal(screening.readProjectDoc(ws, id).transitions.length, 3);
