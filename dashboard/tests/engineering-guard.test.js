@@ -259,7 +259,10 @@ test('no delegation reaches the files served before sign-in, the bundle, the bro
   }
   for (const p of ['dashboard/public/views/brief.js', 'dashboard/public/ui.js', 'dashboard/tests/watchlist-model.test.js', 'docs/engineering/x.md']) assert.equal(P.restrictedHit(p), null, `${p} stays open to a delegation`);
   // The offered application template leaves them out, and its predecessors match nothing.
-  assert.deepEqual(Object.keys(P.TEMPLATES).filter((k) => !P.RETIRED[k]).sort(), ['eng-app@3', 'eng-app@4', 'eng-docs@1']);
+  // Eric, 2026-10-26: eng-app@4 (backlog item 65) is offered once it lands,
+  // and main stays green until then; no other template is ever offered.
+  const offered = Object.keys(P.TEMPLATES).filter((k) => !P.RETIRED[k]).sort();
+  assert.ok([['eng-app@3', 'eng-docs@1'], ['eng-app@3', 'eng-app@4', 'eng-docs@1']].some((set) => set.join() === offered.join()), `offered templates: ${offered.join(', ')}`);
   assert.ok(!P.TEMPLATES['eng-app@3'].allowed_paths.some((g) => g.startsWith('dashboard/web/') || g.startsWith('dashboard/core/')));
   for (const old of ['eng-app@1', 'eng-app@2']) assert.match(P.fits({ template: old, policy_id: 'pol-20261026-0a0a0a' }, {}, { now: Date.now() })[0], /matches nothing/);
 });
