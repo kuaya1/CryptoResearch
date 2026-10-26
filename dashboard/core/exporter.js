@@ -338,7 +338,7 @@ function csvTable(ws, name) {
 // (.cr/captures), so a restore collects a submitted request by its ID instead
 // of sending it again, and the ledger of one-time repairs.
 const CR_KEPT = ['.cr/captures', '.cr/repairs.json'];
-const PACKAGE_INCLUDE = ['workspace.json', 'config', 'templates', 'projects', 'portfolio', 'paper', 'market-data', 'inbox', 'logs', 'engineering', ...CR_KEPT];
+const PACKAGE_INCLUDE = ['workspace.json', 'config', 'templates', 'projects', 'portfolio', 'paper', 'market-data', 'inbox', 'logs', 'engineering', 'scout', ...CR_KEPT];
 const BACKUP_INCLUDE = [...PACKAGE_INCLUDE, 'README.md', 'COWORK-INSTRUCTIONS.md', 'WORKSPACE-MAP.md', 'CLAUDE.md', 'package.json', 'Open Dashboard.cmd', 'Open Demo Dashboard.cmd', 'dashboard'];
 
 // Links and junctions are never followed: they could point outside the folder

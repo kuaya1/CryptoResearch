@@ -173,6 +173,7 @@ Data, jobs and maintenance
                                          verify the latest pulled copy (or FILE), restore it into a new
                                          folder, check records, originals and research state; no provider
                                          is asked for anything (the restored copy holds research)
+  scout list | scout status              Grok Scout's items and its last brief (read only)
   restored-copy status | restored-copy release --confirm
                                          a restored copy holds research until released here
                                          the backup key is CR_BACKUP_KEY on the desk and on this PC
@@ -1007,6 +1008,13 @@ async function run(argv) {
       if (sub === 'verify') return off.verifyFile(path.resolve(need(rest[0], 'offsite verify <file>')));
       if (sub === 'drill') return off.drill(ws, { file: rest[0] ? path.resolve(rest[0]) : null, to: one(flags.to) ? path.resolve(one(flags.to)) : null });
       throw Object.assign(new Error('offsite setup|pull|status|verify|drill'), { code: 'USAGE' });
+    }
+    case 'scout': {
+      // Grok Scout's list as the desk keeps it (core/scout.js); read only.
+      const S = require('./core/scout');
+      if (!sub || sub === 'list') return S.view(ws);
+      if (sub === 'status') return { status: S.statusLine(ws) };
+      throw Object.assign(new Error('scout list|status'), { code: 'USAGE' });
     }
     case 'explorer': {
       // The optional Research Explorer (core/explorer.js). Exports go one way,

@@ -445,6 +445,25 @@ function contractFor(symbol) {
     });
   }
 
+  // Two FICTIONAL scout briefs for Research > Scout: one item seen twice, a
+  // missing lane, an item with no repository. Saved through the real ingest.
+  {
+    const scout = require(`${ROOT}/core/scout.js`);
+    const day = (d) => new Date(Date.now() - d * 86400000).toISOString();
+    const it = (lane, title, path, over = {}) => ({ lane, title: `${title} (FICTIONAL)`, creator: 'Example Labs', url_primary: `https://example.com/${path}`, url_repo: `https://github.com/example/${path}`, summary: `FICTIONAL. A made-up ${lane} item for the dev desk.`, desk_leverage: 'FICTIONAL. Could shorten one step of the desk.', readiness: 'beta', ...over });
+    const use = (lanes) => Object.fromEntries(lanes.map((l) => [l, { input_tokens: 150000, cached_input_tokens: 100000, output_tokens: 8000, reasoning_tokens: 0, web_search_calls: 10, x_search_posts: 0 }]));
+    const send = (d, lanesRun, lanesMissing, items) => scout.ingest(ws, { schema_version: 'cr.scout-brief.v1', generated_at: day(d), prompt: 'cr-scout-prompt@1', model: 'grok-4.3', lanes_run: lanesRun, lanes_missing: lanesMissing, items, usage: use([...lanesRun, ...lanesMissing]) }, { now: Date.parse(day(d)) });
+    send(2, ['agents', 'onchain', 'desk', 'security'], [], [
+      it('agents', 'Parallel Test Runner', 'parallel-runner'),
+      it('onchain', 'Pool Depth Reader', 'pool-depth', { readiness: 'production' }),
+      it('desk', 'Paper Book Backtester', 'paper-backtest', { readiness: 'experimental' }),
+    ]);
+    send(1, ['agents', 'onchain', 'desk'], ['security'], [
+      it('agents', 'Parallel Test Runner', 'parallel-runner', { readiness: 'production' }),
+      it('desk', 'Sizing Notes', 'sizing-notes', { url_repo: '', readiness: 'research' }),
+    ]);
+  }
+
   // The archived one last, so its history stays.
   const vireo = EXTRA.find((x) => x.archived);
   projects.archiveProject(ws, pids[vireo.key], 'FICTIONAL: archived for the dev desk');

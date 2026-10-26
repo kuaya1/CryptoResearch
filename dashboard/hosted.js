@@ -490,6 +490,11 @@ async function main(env = process.env, { platform = process.platform, mountsText
   console.log(`Disk: ${require('./core/exporter').diskLine(ws.root, { statfs: cfg.statfs })}.`);
   console.log(`Memory: ${require('./core/doctor').memoryLine()}.`);
   try {
+    console.log(`Scout: ${require('./core/scout').statusLine(ws)}.`);
+  } catch (err) {
+    console.log(`Scout status could not be read: ${err.message}`);
+  }
+  try {
     for (const line of healthLines(ws)) console.log(line);
   } catch (err) {
     console.log(`Records check could not run: ${err.message}`);

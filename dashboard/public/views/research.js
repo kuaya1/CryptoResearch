@@ -3,7 +3,7 @@
 // limits are Preferences > Models & budget (DESIGN_AND_IA_BLUEPRINT.md §3.5).
 import {
   h, card, table, stateText, tagChip, gradeBadge, fmtNum, fmtDate, fmtAgo, select, field, input, button, action, callout,
-  tabStrip, safeSection, waitingInstruction, PROVIDERS, PROVIDER_LABELS, onHoldOf,
+  tabStrip, safeSection, waitingInstruction, PROVIDERS, PROVIDER_LABELS, onHoldOf, link, plural,
 } from '../ui.js';
 import { comparisonBlock } from './project.js';
 import { stepWord, exitCell, deltaText } from '../pilot-board-model.js';
@@ -14,12 +14,13 @@ const TABS = [
   ['compare', 'Model comparison'],
   ['evidence', 'Evidence'],
   ['outcomes', 'Outcomes'],
+  ['scout', 'Scout'],
 ];
 
 export async function renderResearch(ctx, route) {
   const tab = TABS.some(([t]) => t === route.query.get('tab')) ? route.query.get('tab') : 'runs';
   const strip = tabStrip(TABS.map(([t, label]) => ({ id: t, label, href: `#/research?tab=${t}` })), tab, { label: 'Research sections' });
-  const body = await safeSection(TABS.find(([t]) => t === tab)[1], () => ({ runs: runsTab, compare: compareTab, evidence: evidenceTab, outcomes: outcomesTab })[tab](ctx, route));
+  const body = await safeSection(TABS.find(([t]) => t === tab)[1], () => ({ runs: runsTab, compare: compareTab, evidence: evidenceTab, outcomes: outcomesTab, scout: scoutTab })[tab](ctx, route));
   return h('div', null,
     h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Research'))),
     strip,
@@ -233,6 +234,45 @@ async function paperCard(ctx) {
 
 // A long list a page at a time: the desk's claims are never drawn all at
 // once (they ran to hundreds of thousands of characters on one page).
+// The scout's list (core/scout.js view): what the morning sweep found, newest
+// first, each item once however often it was seen. The items are the sweep's
+// words, shown as text; a link only to an https address the desk accepted.
+const SCOUT_LANES = { agents: 'Agents', onchain: 'On-chain', desk: 'Desk tools', security: 'Security' };
+const scoutFilters = { lane: '', page: 0 };
+
+async function scoutTab(ctx) {
+  const v = await ctx.api.get('/api/scout');
+  const out = (text, href, attrs = {}) => (/^https:\/\//.test(href || '') ? link(text, href, { rel: 'noopener noreferrer', target: '_blank', ...attrs }) : null);
+  const last = v.last_brief;
+  const fact = (label, value, title = null) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '140px' }, title },
+    h('span', { class: 'small muted' }, label), h('strong', null, value));
+  const status = card('Scout', h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '24px' } },
+    fact('Ingest', v.ingest === 'ready' ? 'Ready' : 'Not set up', v.ingest === 'ready' ? 'The desk accepts briefs with its ingest key' : 'DESK_INGEST_KEY is not set on this desk'),
+    fact('Last brief', last ? fmtAgo(last.received_at) : 'None yet', last ? `${last.brief_id} · ${fmtDate(last.received_at)}` : null),
+    fact('Items', String(v.items.length), last ? `${plural(last.items, 'item')} in the last brief, ${last.items_new} new` : null),
+    fact('Lanes missing', last ? (last.lanes_missing.length ? last.lanes_missing.map((l) => SCOUT_LANES[l] || l).join(', ') : 'None') : '—'),
+    fact('Estimated cost', v.cost_usd_estimate_total === null ? '—' : `$${v.cost_usd_estimate_total.toFixed(2)}`,
+      `${plural(v.briefs, 'brief')}${v.briefs_without_cost ? `, ${v.briefs_without_cost} without usage` : ''}; estimated from reported usage at ${v.prices}, not a bill`)));
+  const laneSel = select([{ value: '', label: 'All lanes' }, ...v.lanes.map((l) => ({ value: l, label: SCOUT_LANES[l] || l }))], { 'aria-label': 'Lane', onchange: (e) => { scoutFilters.lane = e.target.value; scoutFilters.page = 0; draw(); } });
+  laneSel.value = scoutFilters.lane;
+  const holder = h('div');
+  const draw = () => {
+    const rows = v.items.filter((i) => !scoutFilters.lane || i.lane === scoutFilters.lane);
+    holder.replaceChildren(pagedTable([
+      { label: 'Item', render: (i) => h('div', null,
+        out(i.title, i.url_primary, { title: i.summary }) || h('strong', { title: i.summary }, i.title),
+        h('div', { class: 'small muted' }, i.creator || '—')) },
+      { label: 'For the desk', render: (i) => h('span', { class: 'small' }, i.desk_leverage) },
+      { label: 'Lane', render: (i) => h('span', { class: 'small' }, SCOUT_LANES[i.lane] || i.lane) },
+      { label: 'Readiness', render: (i) => h('span', { class: 'small' }, i.readiness.charAt(0).toUpperCase() + i.readiness.slice(1)) },
+      { label: 'Repository', render: (i) => out('Repository', i.url_repo, { class: 'small', title: i.url_repo }) || h('span', { class: 'faint' }, '—') },
+      { label: 'Last seen', render: (i) => h('span', { class: 'small', title: `First seen ${fmtDate(i.first_seen)} · ${plural(i.times_seen, 'time')}` }, fmtDate(i.last_seen)) },
+    ], rows, { size: 50, label: 'Scout items', empty: v.briefs ? 'Nothing in this lane yet.' : 'No brief yet.', st: scoutFilters }));
+  };
+  draw();
+  return h('div', null, status, card('Found by the scout', holder, { actions: [laneSel] }));
+}
+
 function pagedTable(cols, rows, { size = 50, empty = '', label = 'Rows', st = { page: 0 } } = {}) {
   const holder = h('div');
   const slug = label.toLowerCase().replace(/[^a-z]+/g, '-');

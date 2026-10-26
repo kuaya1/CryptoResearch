@@ -95,6 +95,14 @@ test('nothing answers a request beside the front door on the hosted desk', async
     assert.equal(r.headers['cache-control'], 'no-store', p);
   }
   assert.equal((await req(d.port, { method: 'POST', path: `/engineering/attestations/${'0'.repeat(40)}` })).status, 405);
+  // Grok Scout's two routes (core/scout.js, 2026-10-26): the ping answers
+  // without a key, the brief needs the ingest key (this desk has none), and
+  // any other /api/ingest/ path, like the scout's list, waits for sign-in.
+  const ping = await req(d.port, { path: '/api/ingest/ping' });
+  assert.equal(ping.status, 200);
+  assert.deepEqual(ping.json, { ok: true, ingest: 'not_set_up' });
+  assert.equal((await req(d.port, { method: 'POST', path: '/api/ingest/scout-brief' })).status, 404);
+  for (const p of ['/api/ingest/other', '/api/ingest/ping/', '/api/scout']) assert.equal((await req(d.port, { path: p })).status, 401, p);
   // Everything else waits for the sign-in, except the files its page needs.
   assert.equal((await req(d.port, { path: '/api/engineering' })).status, 401);
   assert.equal((await req(d.port, { path: '/' })).status, 303);
@@ -210,6 +218,11 @@ test('the front door loads only protected modules and is protected itself', () =
   assert.ok(mods.length >= 5);
   for (const m of mods) assert.ok(protectedHit(m), `the front door loads ${m}, which must be protected`);
   for (const m of src.matchAll(/\brequire\s*\(\s*([^)]*)\)/g)) assert.match(m[1].trim(), /^['"][^'"]+['"]$/, 'every require in the front door names its module');
+  // The scout's ingest, served before sign-in, loads only protected modules
+  // all the way down.
+  const scout = requireWalk([path.join(DASH, 'core', 'scout.js')]);
+  assert.deepEqual(scout.computed, []);
+  for (const f of scout.files) assert.ok(protectedHit(f), `the scout ingest loads ${f}, which must be protected`);
   // dashboard/server.js never listens for a request itself.
   const server = fs.readFileSync(path.join(DASH, 'server.js'), 'utf8');
   assert.doesNotMatch(server, /\.(on|once|addListener|prependListener|prependOnceListener)\(\s*['"`](request|checkContinue|checkExpectation|upgrade|connect)['"`]/);
