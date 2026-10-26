@@ -489,5 +489,11 @@ Phase 5, heavy Track 2 (Eric, 2026-10-25). Eric's message numbered these 42–56
   - Acceptance: Submit the candidate for ChatGPT review under the matched delegation and report claim and dispatch status; do not claim execution from submission alone.
   - Scope: `dashboard/tests/web-app.test.js`
   - Not in scope: Application behavior, financial or research logic, dependencies, scheduler configuration and engineering controls changes.
+- [ ] **64. Fix screening contract-change test clock fixture drift** *(engineering task eng-20261026-3e5961 v1, sha256 859383b17edd7f54, delegation pol-20261026-382d4a; built only through the engineering lane)*
+  - Outcome: Fix test clock fixture drift in screening.test.js near line 396: in the contract-change alert test, pass { now: later } to buildIndex(ws) and projectDetail so the fixture does not expire against the fourteen-day window relative to real time.
+  - Acceptance: Run the full test suite with node dashboard/cli.js test and record exit status zero with 1,017 of 1,017 tests passing, including command output and the exact candidate commit.
+  - Acceptance: Limit the change to the contract-change alert test in dashboard/tests/screening.test.js, using the existing later fixture clock consistently for buildIndex and projectDetail without weakening assertions.
+  - Scope: `dashboard/tests/screening.test.js`
+  - Not in scope: Production behavior, expiration policy, dependencies and other files.
 
 - Never in scope: an exchange or wallet connection, placing orders, moving money.
