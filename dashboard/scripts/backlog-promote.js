@@ -44,6 +44,11 @@ const PROTECTED = [
   { re: /^(CLAUDE|COWORK-INSTRUCTIONS)\.md$/i, why: 'agent instructions' },
   { re: /^DESK_STATE\.md$/i, why: 'the backlog (a branch never edits it; Eric adds and ticks items)' },
   { re: /^dashboard\/scripts\/(backlog-promote|backlog-intake|merge-train|engineering-worker)\.js$/i, why: 'promotion controls' },
+  // Exclusive merge authority (Eric, 2026-10-26): the boundary's checker and
+  // the agent lane's trusted scripts (build guard, verification, review and
+  // the paid-attempt ledger), with their tests.
+  { re: /^dashboard\/scripts\/(merge-boundary-check|agent-[a-z-]+)\.js$/i, why: 'the merge boundary and the agent lane\'s trusted scripts' },
+  { re: /^dashboard\/tests\/(merge-boundary|agent-[a-z-]+)\.test\.js$/i, why: 'the tests of the merge boundary and the agent lane' },
   { re: /^dashboard\/engineering\//i, why: 'engineering authorization (the inbox, delegations and their connector)' },
   { re: /^dashboard\/(oauth|mcp|mcp-wire|hosted)\.js$/i, why: 'authorization (sign-in and connector grants)' },
   // Review N1 (2026-10-26): everything a request meets before sign-in.
@@ -474,7 +479,11 @@ function intakeNumbers(cwd, remote) {
 // Adds a bound entry to main by compare-and-swap. The desk's admission record
 // decides; the branch only carries the entry. The entry is re-applied onto
 // main as it is (never a merge), so two admissions never conflict.
-async function admit(cwd, { branch, head, desk, remote = 'origin', fetchJson = defaultFetchJson, push = defaultPush, tries = 3 }) {
+// With propose (engineering-admission.yml since 2026-10-26: Eric alone updates
+// main), the re-applied commit replaces the builder's on its own branch by
+// compare-and-swap and the workflow opens the pull request Eric merges; main
+// is never written.
+async function admit(cwd, { branch, head, desk, remote = 'origin', fetchJson = defaultFetchJson, push = defaultPush, tries = 3, propose = false }) {
   const m = ADMISSION_BRANCH_RE.exec(String(branch));
   if (!m) throw new Error(`${branch} is not an admission branch`);
   if (!SHA_RE.test(String(head))) throw new Error('head must be a full commit SHA');
@@ -528,6 +537,12 @@ async function admit(cwd, { branch, head, desk, remote = 'origin', fetchJson = d
     git(cwd, ['add', 'DESK_STATE.md']);
     git(cwd, ['commit', '-q', '-m', `admission: backlog item ${d.number} for ${taskId} v${d.version}\n\nAdded by engineering-admission from the desk's bound entry; built only through the engineering lane.\n\nEngineering-Admission: ${taskId} v${d.version}\nEntry-SHA256: ${rec.entry_sha256}`]);
     const merge = revParse(cwd, 'HEAD');
+    if (propose) {
+      const p = git(cwd, ['push', '--porcelain', `--force-with-lease=refs/heads/${branch}:${head}`, remote, `${merge}:refs/heads/${branch}`], { allowFail: true });
+      const tip = remoteRef(cwd, remote, `refs/heads/${branch}`);
+      if (tip === merge) return { ...out, status: 'proposed', merge };
+      return { ...out, status: 'push_failed', branch_tip: tip, error: (p.err || p.out).slice(0, 300) };
+    }
     try { push(cwd, remote, merge, base); } catch (err) { out.error = String(err && err.message || err).slice(0, 300); }
     const after = remoteRef(cwd, remote, 'refs/heads/main');
     if (after === merge) { out.status = 'merged'; out.merge = merge; break; }
@@ -601,6 +616,7 @@ function summaryOf(kind, r) {
   if (kind === 'admission') {
     if (r.status === 'merged') return `### Admitted: backlog item ${r.number} for ${r.task_id} is on main as ${String(r.merge).slice(0, 7)}\n\nThe desk's bound entry, added by compare-and-swap. ${r.branch_deleted ? `Branch ${r.branch} deleted.` : `Branch ${r.branch} kept.`}`;
     if (r.status === 'already_on_main') return `Backlog item ${r.number} for ${r.task_id} was already on main; nothing added.`;
+    if (r.status === 'proposed') return `### Proposed: backlog item ${r.number} for ${r.task_id} on ${r.branch} as ${String(r.merge).slice(0, 7)}\n\nThe desk's bound entry, re-applied onto main ${String(r.base).slice(0, 7)}. Main is unchanged; Eric merges the pull request.`;
     return `### Not admitted (${r.status})\n\n${(r.reasons || []).map((x) => `- ${x}`).join('\n') || r.error || 'No reason was given.'}\n\nMain is unchanged. The builder reads this back and, for a taken number, binds the next one.`;
   }
   if (kind === 'engineering') return r.ok ? `Engineering item ${r.item} (${r.task_id}): the desk attests this head.` : `### ${r.item ? `Engineering item ${r.item} (${r.task_id})` : 'This engineering branch'} is not promoted\n\n${r.reasons.map((x) => `- ${x}`).join('\n')}`;
@@ -675,9 +691,9 @@ async function main(argv, { fetchJson = defaultFetchJson } = {}) {
     return r.status === 'merged' ? 0 : 1;
   }
   if (kind === 'admission') {
-    const r = await admit(cwd, { branch: flags.branch, head: flags.head, desk, fetchJson });
+    const r = await admit(cwd, { branch: flags.branch, head: flags.head, desk, fetchJson, propose: flags.propose === 'true' });
     emit(kind, r, { status: r.status, merge: r.merge, number: r.number });
-    return r.status === 'merged' || r.status === 'already_on_main' ? 0 : 1;
+    return ['merged', 'already_on_main', 'proposed'].includes(r.status) ? 0 : 1;
   }
   process.stderr.write('Usage: backlog-promote.js scope|compose|promote|admission --base <sha> --head <sha> [--branch b --tree t --repo o/r --number n --message m --desk https://…]\n');
   return 2;

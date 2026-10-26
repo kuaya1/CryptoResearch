@@ -1,35 +1,25 @@
 # Opens or updates the pull request for a backlog branch once its tests pass
-# (blueprint W2.2, DESK_STATE item 11), and promotes it into main only as a
-# tested composition (Eric, 2026-10-25: zero-click merge; reworked after the
-# review of 2026-10-25, audits/2026-10-25-codex-autonomy-review, A01/A02).
+# (blueprint W2.2, DESK_STATE item 11) and tests it composed onto main. It
+# never merges: Eric merges every pull request himself (exclusive merge
+# authority, 2026-10-26, audits/2026-10-26-engineering-simplification). The
+# promote and deploy jobs that pushed a tested composition to main (zero-click
+# merge, 2026-10-25) are removed; once the main-merge-authority ruleset is
+# active, no workflow token can update main at all.
 #
 #   pr       main's checkout only: reads the branch as data, opens or updates
 #            the PR, and checks the scope (dashboard/scripts/backlog-promote.js
-#            scope). A protected path or an item not on main's backlog waits
-#            for Eric: the PR stays open, nothing is merged.
+#            scope). A protected path or an item not on main's backlog is said
+#            in the summary; the PR stays open for Eric either way.
 #   compose  merges the tested head onto main as it is now and runs the full
 #            suite on that tree, with a read-only token and no secret. When
 #            the branch already contains main, the tree is the head the push
-#            run tested and the suite is not run twice.
-#   promote  runs no branch code: re-creates the merge, checks it is the tree
-#            that passed, and pushes it to main only while main is still the
-#            commit it was tested on. The result is read back from GitHub; the
-#            branch is deleted only after a confirmed merge, at the tested
-#            commit. Anything else fails the job with the reason.
-#            An engineering item (claude/backlog-eng-<n>, Connected
-#            Engineering v1) is promoted alone, and only while the desk's
-#            public attestation of that exact head holds (scope and promote
-#            both ask it; an unreadable desk is a refusal).
-#   deploy   reports separately whether the online desk serves the merge
-#            (repository variable DESK_HEALTH_URL, its /healthz); a merge is
-#            never called a deployment. Nothing is rolled back.
+#            run tested and the suite is not run twice. Its result is a
+#            report for Eric's merge, never a merge.
 #
-# Competing promotions are serialized by the compare-and-swap push: of two that
-# race, the second is refused because main moved, and is re-run (Re-run all
-# jobs) or trained, which tests it again on the new main. No concurrency group:
-# GitHub would cancel all but one pending run, and every test run triggers
-# this workflow. Uses only GITHUB_TOKEN. Needs Settings > Actions > General >
-# "Allow GitHub Actions to create and approve pull requests".
+# No concurrency group: GitHub would cancel all but one pending run, and every
+# test run triggers this workflow. Uses only GITHUB_TOKEN. A pull request this
+# token opens starts no checks by itself (GitHub holds its runs for approval);
+# Eric approves them on the pull request.
 name: backlog-pr
 
 on:
@@ -178,61 +168,6 @@ jobs:
           else
             echo "Clean build: does NOT match the committed bundle (or failed). This branch does not change the bundle, so it is reported, not a gate; look at it." >> "$GITHUB_STEP_SUMMARY"
           fi
-
-  promote:
-    needs: [pr, compose]
-    if: needs.compose.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
-      pull-requests: read
-    outputs:
-      merge: ${{ steps.promote.outputs.merge }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-      - name: Push the tested merge to main if main is unchanged
-        id: promote
+      - name: Eric merges
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BASE: ${{ needs.pr.outputs.base }}
-          BRANCH: ${{ github.event.workflow_run.head_branch }}
-          SHA: ${{ github.event.workflow_run.head_sha }}
-          TREE: ${{ needs.compose.outputs.tree }}
-          NUMBER: ${{ needs.pr.outputs.number }}
-          DESK_URL: ${{ vars.DESK_URL || 'https://cryptoresearch.onrender.com' }}
-        run: |
-          cp dashboard/scripts/backlog-promote.js "$RUNNER_TEMP/backlog-promote.js"
-          node "$RUNNER_TEMP/backlog-promote.js" promote --base "$BASE" --head "$SHA" --branch "$BRANCH" --tree "$TREE" --repo "$GITHUB_REPOSITORY" --number "$NUMBER" --message "Merge pull request #$NUMBER from $GITHUB_REPOSITORY_OWNER/$BRANCH"
-
-  deploy:
-    needs: promote
-    if: needs.promote.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions: {}
-    steps:
-      - name: Does the online desk serve the merge?
-        shell: bash
-        env:
-          URL: ${{ vars.DESK_HEALTH_URL }}
-          MERGE: ${{ needs.promote.outputs.merge }}
-        run: |
-          if [ -z "$URL" ]; then
-            echo "Deployment not checked: set the repository variable DESK_HEALTH_URL to the desk's /healthz address." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          for i in $(seq 1 40); do
-            rev=$(curl -fsS --max-time 10 "$URL" 2>/dev/null | sed -n 's/^revision \([0-9a-f]\{7,40\}\).*/\1/p' | head -n 1)
-            if [ -n "$rev" ] && [ "${MERGE#"$rev"}" != "$MERGE" ]; then
-              echo "Deployed: the desk serves ${MERGE:0:7}." >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-            sleep 20
-          done
-          echo "### Not deployed yet: after 13 minutes the desk serves ${rev:-an unknown revision}, not ${MERGE:0:7}. The merge stands; nothing was rolled back." >> "$GITHUB_STEP_SUMMARY"
-          exit 1
+        run: echo "Composed and tested. Nothing was merged; Eric merges the pull request himself." >> "$GITHUB_STEP_SUMMARY"
