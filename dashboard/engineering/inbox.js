@@ -498,6 +498,71 @@ function authorizeTask(ws, who, id, { version, content_sha256 } = {}, opts = {})
   return { task: view(ws, readRaw(ws, rel.task(id)), who, { now }), unchanged: Boolean(r.result && r.result.unchanged), verified: r.verified };
 }
 
+// Eric re-binds one exact task version to a delegation that stands now, or
+// records that its work is already on main (backlog item 65). Owner only; the
+// route takes his passphrase. Nothing historical is rewritten: the task's
+// content, versions, hash, admission (number, entry, branch) and its earlier
+// authorization stay as they are, the old authorization is kept in
+// `rebindings`, and an audit event says who did it and from what to what.
+//
+//   merge_state: what GitHub itself says about whether main holds the
+//   candidate's head ({ state: 'yes' | 'no' | 'unknown' }); it is read first
+//   (routes.js), and a state that was not read is refused, so a merged item is
+//   never promoted again. 'yes' settles the task as merged and binds nothing.
+//   explicit: needed to replace an authorization that still holds, Eric's own
+//   included (a task he authorized himself keeps that authorization unless he
+//   chooses otherwise).
+const REBINDABLE = ['admitted', 'queued', 'claimed', 'implementing', 'verifying', 'review_pending', 'ready_for_promotion', 'blocked', 'paused'];
+function rebindTask(ws, who, id, { version, content_sha256, policy_id = null, explicit = false, reason = null, merge_state = null } = {}, opts = {}) {
+  const now = nowOf(opts);
+  requireOwner(who);
+  if (policy_id !== null && !POLICY_ID_RE.test(String(policy_id))) fail('BAD_INPUT', 'Unknown delegation ID.');
+  const r = mutate(ws, { taskId: id, type: 'rebind', now }, (t, ctx) => {
+    const last = t.versions[t.versions.length - 1];
+    if (Number(version) !== t.current_version || content_sha256 !== last.content_sha256) fail('STALE_VERSION', `The page showed version ${version}; ${id} is now version ${t.current_version} (${last.content_sha256.slice(0, 12)}…). Nothing was changed.`);
+    if (TERMINAL.includes(t.status)) fail('NOT_REBINDABLE', `${id} is ${t.status}; it stays recorded as it is.`);
+    if (!REBINDABLE.includes(t.status)) fail('NOT_REBINDABLE', `${id} is ${t.status}: only a task that was authorized (admitted, in work, in review, ready or blocked) can be re-bound.`);
+    if (!t.authorization) fail('NOT_REBINDABLE', `${id} has no authorization to re-bind; authorize it on the desk.`);
+    // Reconcile with GitHub first: work already on main is settled, never
+    // re-promoted or re-bound.
+    if (t.candidate) {
+      if (!merge_state || !['yes', 'no', 'unknown'].includes(merge_state.state)) fail('MERGE_STATE_UNREAD', `GitHub's merge state of ${id} was not read. Nothing was changed.`);
+      if (merge_state.state === 'unknown') fail('MERGE_STATE_UNKNOWN', `GitHub could not say whether main holds ${id}'s candidate (${String(merge_state.why || 'no answer').slice(0, 120)}). Nothing was changed; try again.`);
+      if (merge_state.state === 'yes') {
+        t.merge = { main_sha: merge_state.main_sha && /^[0-9a-f]{40}$/.test(merge_state.main_sha) ? merge_state.main_sha : null, contains_head: t.candidate.head_sha, pr_number: null, pr_url: null, reconciled_by_owner: true, at: iso(now) };
+        t.lease = null;
+        setStatus(t, 'merged', 'main already holds the candidate (reconciled by Eric)', now);
+        ctx.emit('reconciled_merged', { head_sha: t.candidate.head_sha, source: 'GitHub compare' }, { kind: 'owner' });
+        return { reconciled: true, rebound: false };
+      }
+    }
+    const a = t.authorization;
+    const holds = authorizationHolds(ws, t, ctx.op);
+    if (holds.ok && !explicit) fail('AUTHORIZATION_HOLDS', `${id}'s ${a.kind === 'owner' ? 'authorization by Eric' : `binding to ${a.policy_id}`} still holds. To replace it anyway, choose that explicitly.`);
+    const v = loadVersion(ws, id, t.current_version, ctx.op);
+    const m = matchOf(ws, v.content, { now, exceptId: id, op: ctx.op });
+    const row = policy_id ? m.rows.find((x) => x.policy.policy_id === policy_id) : null;
+    if (policy_id && !row) fail('NOT_ACTIVE', `${policy_id} is not an active delegation.`);
+    if (row && row.reasons.length) fail('NO_FIT', `${id} is outside ${policy_id}: ${row.reasons.join('; ')}.`);
+    const pick = row ? { policy: row.policy, why: `chosen by Eric among the delegations it fits`, ranked: m.rows.filter((x) => !x.reasons.length).map((x) => x.policy), decided_by: 'owner' } : m.pick;
+    if (!pick) fail('NO_FIT', `${id} fits no active delegation: ${missedText(m)}.`);
+    const p = pick.policy;
+    const b = P.boundaries(p, v.content);
+    t.rebindings = [...(t.rebindings || []), { at: iso(now), version: t.current_version, content_sha256: last.content_sha256, reason: reason ? String(reason).slice(0, 300) : null, explicit: Boolean(explicit), from: a, holds_before: holds.ok ? 'yes' : holds.code }];
+    t.authorization = { kind: 'policy', policy_id: p.policy_id, template: p.template, version: t.current_version, content_sha256: last.content_sha256, at: iso(now), rule: P.MATCH_RULE, why: `re-bound by Eric: ${pick.why}`, fitting: pick.ranked.map((x) => x.policy_id), required_review: b.required_review, review_basis: b.review_basis, release_mode: b.release_mode, rebound: true };
+    ctx.emit('rebound', { version: t.current_version, content_sha256: last.content_sha256, from: { kind: a.kind, policy_id: a.policy_id || null, template: a.template || null }, to: { policy_id: p.policy_id, template: p.template }, explicit: Boolean(explicit), holds_before: holds.ok ? 'yes' : holds.code, reason: reason ? String(reason).slice(0, 300) : null }, { kind: 'owner' });
+    return { reconciled: false, rebound: true };
+  });
+  return { ...(r.result || {}), task: view(ws, readRaw(ws, rel.task(id)), who, { now }), verified: r.verified };
+}
+
+// The head of a task's current candidate (what GitHub is asked about before a
+// re-binding), or null when it has none.
+function candidateHeadOf(ws, id) {
+  const t = loadTask(ws, id);
+  return t.candidate ? t.candidate.head_sha : null;
+}
+
 function pauseTask(ws, who, id, { reason = null } = {}, opts = {}) {
   const now = nowOf(opts);
   if (!(who && who.kind === 'owner')) requireRole(who, 'submitter', 'engineering_pause_task');
@@ -777,7 +842,7 @@ function recordEvent(ws, who, args = {}, opts = {}) {
         if (t.authorization.kind === 'policy') {
           const p = ctx.op.readJson(rel.policy(t.authorization.policy_id), null);
           if (p && files.length > p.limits.max_files) problems.push(`${files.length} files is over the delegation's ${p.limits.max_files}`);
-          for (const f of files) { const hit = P.restrictedHit(f); if (hit) problems.push(`${f} is in ${P.restrictedWhere(hit)} (${hit.why})`); }
+          for (const f of files) { const hit = P.restrictedHit(f, p && p.template); if (hit) problems.push(`${f} is in ${P.restrictedWhere(hit)} (${hit.why})`); }
         }
         if (problems.length) fail('SCOPE', `Candidate refused: ${problems.join('; ')}. Nothing was recorded; change the branch to stay inside the approved scope.`);
         if (!rebuild && t.attempts.count >= t.attempts.max) {
@@ -1164,7 +1229,7 @@ function capabilities(ws, who, args = {}, opts = {}) {
 
 module.exports = {
   S, TASK_ID_RE, POLICY_ID_RE, FORGED, VERIFY_COMMANDS,
-  prepareTask, submitTask, activatePolicy, revokePolicy, setPaused, authorizeTask, pauseTask, resumeTask, cancelTask, reopenTask,
+  prepareTask, submitTask, activatePolicy, revokePolicy, setPaused, authorizeTask, rebindTask, candidateHeadOf, pauseTask, resumeTask, cancelTask, reopenTask,
   claimTask, recordEvent, saveReview, requestCorrection,
   getTask, listTasks, getEvidence, admissionView, attestationView, ownerView, capabilities, nextAction, reviewState,
 };

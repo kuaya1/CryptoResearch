@@ -285,3 +285,20 @@ test('N3: the scope gate holds a symbolic link or a submodule; removing one is n
   assert.deepEqual(scope(base2, [['120000', blob('somewhere-else'), 'docs/old-link']]).reasons, ['docs/old-link: a symbolic link (mode 120000), which a branch never adds without Eric']);
   assert.deepEqual(scope(base2, [], { remove: ['docs/old-link'] }).reasons, [], 'a link removed');
 });
+
+// Backlog item 65: the rules a delegation never reaches, and the one template
+// that lifts some of them.
+test('65: DELEGATION_RESTRICTED lifts only the app source, the bundle and three stylesheets, and only for eng-app@4', () => {
+  const lifts = P.DELEGATION_RESTRICTED.filter((x) => x.lifted);
+  assert.ok(lifts.length >= 5);
+  for (const x of lifts) assert.deepEqual(Object.keys(x.lifted), ['eng-app@4'], `${x.prefix} is lifted for eng-app@4 alone`);
+  assert.deepEqual(lifts.map((x) => x.prefix).sort(), ['dashboard/public/app/', 'dashboard/public/position.css', 'dashboard/public/styles.css', 'dashboard/public/tokens.css', 'dashboard/web/']);
+  for (const [p, tpl, held] of [
+    ['dashboard/web/src/App.jsx', 'eng-app@4', false], ['dashboard/web/src/App.jsx', 'eng-app@3', true], ['dashboard/web/src/App.jsx', undefined, true],
+    ['dashboard/web/index.html', 'eng-app@4', true], ['dashboard/web/scripts/check.mjs', 'eng-app@4', true],
+    ['dashboard/public/app/assets/index-1.js', 'eng-app@4', false], ['dashboard/public/tokens.css', 'eng-app@4', false], ['dashboard/public/tokens.css', 'eng-app@3', true],
+    ['dashboard/public/favicon.svg', 'eng-app@4', true], ['dashboard/core/wallets.js', 'eng-app@4', true],
+    ['dashboard/tests/guardrails.test.js', 'eng-app@4', true], ['dashboard/tests/backlog-promote.test.js', 'eng-app@4', true], ['dashboard/tests/web-app.test.js', 'eng-app@4', true],
+    ['dashboard/tests/screening.test.js', 'eng-app@4', false],
+  ]) assert.equal(Boolean(P.restrictedFor(p, tpl)), held, `${p} for ${tpl}`);
+});

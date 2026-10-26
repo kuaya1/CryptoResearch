@@ -209,7 +209,7 @@ test('Eric decides on the desk behind sign-in and his passphrase; the connector 
   assert.equal(view.status, 200, view.text);
   assert.equal(view.json.mcp_url, ENG);
   assert.equal(view.json.paused, false);
-  assert.deepEqual(view.json.templates.map((x) => x.template).sort(), ['eng-app@3', 'eng-docs@1'], 'eng-app@1 and eng-app@2 are retired: never offered');
+  assert.deepEqual(view.json.templates.map((x) => x.template).sort(), ['eng-app@3', 'eng-app@4', 'eng-docs@1'], 'eng-app@1 and eng-app@2 are retired: never offered');
   assert.deepEqual(view.json.connections.map((c) => c.role).sort(), ['submitter', 'worker']);
   assert.ok(view.json.connections.every((c) => c.audience === 'engineering'));
 
@@ -252,6 +252,18 @@ test('Eric decides on the desk behind sign-in and his passphrase; the connector 
   const p2 = await call(d, chat.access, 'engineering_prepare_task', docsTask({ title: 'Second note (FICTIONAL)' }));
   const s2 = await call(d, chat.access, 'engineering_submit_task', { task_id: p2.data.task_id, version: 1, content_sha256: p2.data.content_sha256 });
   assert.equal(s2.data.status, 'admitted', s2.text);
+
+  // Re-binding takes the passphrase too (backlog item 65), signed in only, and
+  // a binding that still holds is not replaced unless Eric says so.
+  assert.equal((await req(d.port, { method: 'POST', path: `/api/engineering/tasks/${p2.data.task_id}/rebind` })).status, 401, 'signed out');
+  const rebind = (body) => eric.post(`/api/engineering/tasks/${p2.data.task_id}/rebind`, { version: 1, content_sha256: p2.data.content_sha256, ...body });
+  assert.equal((await rebind({})).status, 403);
+  assert.equal((await rebind({ password: 'wrong-fictional' })).status, 403);
+  const holds = await rebind({ password: PASS });
+  assert.equal(holds.status, 409, holds.text);
+  assert.match(holds.json.error, /still holds/);
+  assert.equal((await rebind({ password: PASS, version: 2 })).status, 409, 'an exact version');
+  for (const who of [chat, worker]) assert.equal((await req(d.port, { method: 'POST', path: `/api/engineering/tasks/${p2.data.task_id}/rebind`, headers: { authorization: `Bearer ${who.access}`, 'content-type': 'application/json' }, body: JSON.stringify({ version: 1, content_sha256: p2.data.content_sha256, password: PASS }) })).status, 401, 'a connection never re-binds');
 
   // The worker binds a number; the public admission read shows the binding only.
   const c = await call(d, worker.access, 'engineering_claim_task', { task_id: p.data.task_id });

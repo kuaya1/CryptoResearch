@@ -12,7 +12,7 @@ const { OpError } = require('../core/ops');
 const inbox = require('./inbox');
 
 const OWNER = { kind: 'owner' };
-const ENG_CONFLICT = new Set(['PAUSED', 'CLAIMED', 'STALE_VERSION', 'HASH_MISMATCH', 'WRONG_STATE', 'WRONG_CANDIDATE', 'NOT_EDITABLE', 'EDIT_AFTER_ADMISSION', 'CEILING', 'NOT_CLAIMABLE', 'HELD', 'UNSUPPORTED_SCHEMA']);
+const ENG_CONFLICT = new Set(['PAUSED', 'CLAIMED', 'STALE_VERSION', 'HASH_MISMATCH', 'WRONG_STATE', 'WRONG_CANDIDATE', 'NOT_EDITABLE', 'EDIT_AFTER_ADMISSION', 'CEILING', 'NOT_CLAIMABLE', 'HELD', 'UNSUPPORTED_SCHEMA', 'NOT_REBINDABLE', 'AUTHORIZATION_HOLDS', 'MERGE_STATE_UNREAD', 'MERGE_STATE_UNKNOWN', 'NO_FIT', 'NOT_ACTIVE']);
 const PUBLIC_READ_RE = /^\/engineering\/(?:admissions\/(eng-\d{8}-[0-9a-f]{6})|attestations\/([0-9a-f]{40}))$/;
 
 // oauth and auth are null on this PC (no connector, no sign-in); HttpError
@@ -86,6 +86,21 @@ function makeEngineeringRoutes(ws, { oauth = null, auth = null, origins = new Se
     route('POST', '/api/engineering/tasks/([^/]+)/authorize', (m, req, res, body) => eng(async () => {
       await passphrase(req, body);
       return saved(inbox.authorizeTask(ws, OWNER, engTask(m[1]), { version: Number(body.version), content_sha256: String(body.content_sha256 || '') }));
+    }));
+    // Re-binding one exact task version (backlog item 65): Eric's passphrase,
+    // and GitHub's own answer on whether main already holds the candidate is
+    // read first, so merged work is settled and never promoted again.
+    route('POST', '/api/engineering/tasks/([^/]+)/rebind', (m, req, res, body) => eng(async () => {
+      await passphrase(req, body);
+      const id = engTask(m[1]);
+      const head = inbox.candidateHeadOf(ws, id);
+      let merge_state = null;
+      if (head) {
+        if (!github) throw new HttpError(503, 'GitHub cannot be read from here, so whether main holds this candidate is unknown. Nothing was changed.');
+        const c = await github.contains(head, 'main');
+        merge_state = { state: c.state, why: c.why || null, main_sha: null };
+      }
+      return saved(inbox.rebindTask(ws, OWNER, id, { version: Number(body.version), content_sha256: String(body.content_sha256 || ''), policy_id: body.policy_id || null, explicit: body.explicit === true, reason: body.reason || null, merge_state }));
     }));
     route('POST', '/api/engineering/tasks/([^/]+)/pause', (m, req, res, body) => eng(() => saved(inbox.pauseTask(ws, OWNER, engTask(m[1]), { reason: body.reason || null }))));
     route('POST', '/api/engineering/tasks/([^/]+)/resume', (m) => eng(() => saved(inbox.resumeTask(ws, OWNER, engTask(m[1])))));

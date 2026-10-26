@@ -97,13 +97,29 @@ const PROTECTED_LINES = [
 // bundle); the four files served before sign-in (dashboard/frontdoor.js
 // LOGIN_ASSETS); and the tests that guard the lane, the backlog, the
 // guardrails and the browser's writes, with the helpers they stand on.
+//
+// Eric, 2026-10-26 (backlog item 65, eng-app@4): a rule may carry `lifted`,
+// a map from a template to the paths that template alone may change in spite
+// of the rule; every other template, and every task Eric has not authorized
+// himself, is held by it as before. Only the browser app's source
+// (dashboard/web/src/), the committed bundle and three stylesheets are lifted,
+// and only for eng-app@4. Nothing under dashboard/core/, no other file of
+// dashboard/web/, favicon.svg (an SVG served before sign-in can run script)
+// and none of the guard tests is lifted for any template (docs/engineering/
+// delegation-exclusions.md lists every rule).
 const DELEGATION_RESTRICTED = [
   { re: /^dashboard\/core\//i, prefix: 'dashboard/core/', why: 'core financial and investment logic, which no delegation changes' },
-  { re: /^dashboard\/web\//i, prefix: 'dashboard/web/', why: 'the browser app, which runs in Eric\'s signed-in session (each change ships a new bundle)' },
-  { re: /^dashboard\/public\/app\//i, prefix: 'dashboard/public/app/', why: 'the committed browser bundle, which runs in Eric\'s signed-in session' },
-  ...['tokens.css', 'styles.css', 'position.css', 'favicon.svg'].map((f) => ({ re: new RegExp(`^dashboard/public/${f.replace(/\./g, '\\.')}$`, 'i'), prefix: `dashboard/public/${f}`, why: 'a file served before sign-in' })),
+  { re: /^dashboard\/web\//i, prefix: 'dashboard/web/', why: 'the browser app, which runs in Eric\'s signed-in session (each change ships a new bundle)', lifted: { 'eng-app@4': /^dashboard\/web\/src\//i } },
+  { re: /^dashboard\/public\/app\//i, prefix: 'dashboard/public/app/', why: 'the committed browser bundle, which runs in Eric\'s signed-in session', lifted: { 'eng-app@4': /^dashboard\/public\/app\//i } },
+  ...['tokens.css', 'styles.css', 'position.css', 'favicon.svg'].map((f) => ({ re: new RegExp(`^dashboard/public/${f.replace(/\./g, '\\.')}$`, 'i'), prefix: `dashboard/public/${f}`, why: 'a file served before sign-in', ...(f.endsWith('.css') ? { lifted: { 'eng-app@4': new RegExp(`^dashboard/public/${f.replace(/\./g, '\\.')}$`, 'i') } } : {}) })),
   ...['engineering-', 'backlog-', 'guardrails.test.js', 'web-app.test.js', 'helpers.js'].map((f) => ({ re: new RegExp(`^dashboard/tests/${f.replace(/\./g, '\\.')}${f.endsWith('-') ? '' : '$'}`, 'i'), prefix: `dashboard/tests/${f}`, why: 'a test that guards the engineering lane, the backlog, the guardrails or the browser\'s writes' })),
 ];
+// The rule that holds a path for a delegation of `template` (null: none, or
+// Eric's own authorization, which is never held by these rules).
+function restrictedFor(p, template) {
+  const f = foldPath(p);
+  return DELEGATION_RESTRICTED.find((x) => x.re.test(f) && !(template && x.lifted && x.lifted[template] && x.lifted[template].test(f))) || null;
+}
 // Git modes a branch never carries without Eric (review N3): a symbolic link
 // (120000) can point a served file anywhere on the host, and a submodule
 // (160000) pulls in code from elsewhere.
@@ -550,7 +566,7 @@ async function engineeringCheck(cwd, { base, head, branch, scope, desk, fetchJso
     const allowed = Array.isArray(att.allowed_paths) ? att.allowed_paths : [];
     for (const f of scope.changed) if (!allowed.some((g) => globRe(g).test(f))) reasons.push(`${f} is outside the task's approved scope`);
     // Whatever the task record says: a delegation never changes these.
-    if (att.delegation) for (const f of scope.changed) { const r = DELEGATION_RESTRICTED.find((x) => x.re.test(foldPath(f))); if (r) reasons.push(`${f}: ${r.why}; this item was admitted by delegation ${att.delegation.policy_id} (${att.delegation.template}), so it waits for Eric`); }
+    if (att.delegation) for (const f of scope.changed) { const r = restrictedFor(f, att.delegation.template); if (r) reasons.push(`${f}: ${r.why}; this item was admitted by delegation ${att.delegation.policy_id} (${att.delegation.template}), so it waits for Eric`); }
   }
   return { engineering: true, ok: reasons.length === 0, reasons, item: n, task_id: it.task_id, attestation: att ? { promotable: att.promotable, review_state: att.review_state, required_review: att.required_review, merge_base_sha: att.merge_base_sha, diff_sha256: att.diff_sha256 } : null };
 }
@@ -634,4 +650,4 @@ async function main(argv, { fetchJson = defaultFetchJson } = {}) {
 
 if (require.main === module) main(process.argv.slice(2)).then((c) => { process.exitCode = c; }, (err) => { process.stderr.write(`${err && err.message || err}\n`); process.exitCode = 1; });
 
-module.exports = { PROTECTED, PROTECTED_LINES, DELEGATION_RESTRICTED, foldPath, protectedHit, windowsProblem, ENG_MARK_RE, backlogItems, scopeCheck, compose, promote, summaryOf, insertEntry, entryProblems, deskReason, candidateDiff, admissionDiff, admit, engineeringCheck, main };
+module.exports = { PROTECTED, PROTECTED_LINES, DELEGATION_RESTRICTED, restrictedFor, foldPath, protectedHit, windowsProblem, ENG_MARK_RE, backlogItems, scopeCheck, compose, promote, summaryOf, insertEntry, entryProblems, deskReason, candidateDiff, admissionDiff, admit, engineeringCheck, main };
