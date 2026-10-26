@@ -198,3 +198,55 @@ test('A01: a conflict with main is said and lands nothing', (t) => {
   assert.deepEqual(c.files, ['dashboard/core/lib.txt']);
   assert.match(P.summaryOf('compose', c), /does not merge cleanly onto main/);
 });
+
+// Review N9 (2026-10-26): Eric's PC ignores letter case and drops a name's
+// trailing dots and spaces, and Git for Windows writes an 8.3 short name
+// through to the file it names. A branch is read the way that PC reads it.
+test('N9: the scope gate reads paths as Windows does: letter case, collisions, short names, odd names and nested agent files wait for Eric', (t) => {
+  const f = fixture(t);
+  const base = f.mainSha();
+  const blob = (text) => { const r = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: f.work, input: text, encoding: 'utf8', env: ENV }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  // Built in the index, as a branch made on Linux arrives: this PC would
+  // write claude.md over CLAUDE.md, and refuses some names outright.
+  let n = 0;
+  const scope = (entries, { remove = [], item = 1 } = {}) => {
+    g(f.work, 'checkout', '-q', '-f', '-B', `claude/backlog-n9-${n++}`, base);
+    for (const p of remove) g(f.work, 'rm', '-q', '--cached', p);
+    for (const [p, text] of entries) g(f.work, '-c', 'core.protectNTFS=false', 'update-index', '--add', '--cacheinfo', `100644,${blob(text)},${p}`);
+    g(f.work, 'commit', '-qm', `backlog: item ${item}\n\nBacklog-Item: ${item}`);
+    const head = g(f.work, 'rev-parse', 'HEAD');
+    g(f.work, 'checkout', '-q', '-f', base);
+    return P.scopeCheck(f.work, { base, head });
+  };
+  const held = (entries, re, opts) => {
+    const r = scope(entries, opts);
+    assert.equal(r.ok, false, `${entries.map((e) => e[0]).join(', ')} must be held`);
+    assert.ok(r.reasons.some((x) => re.test(x)), `${re}: ${r.reasons.join('; ')}`);
+    return r;
+  };
+  // The three from the review, each alone.
+  held([['claude.md', 'INJECTED (FICTIONAL)\n']], /^claude\.md: agent instructions$/);
+  held([['desk_state.md', '## Autonomous Build Backlog\n- [ ] **9. Nine.** x\n']], /^desk_state\.md: the backlog/);
+  held([['.Claude/settings.json', '{"hooks":{}}\n']], /^\.Claude\/settings\.json: agent definitions and permissions$/);
+  // A file and a folder that collide with tracked paths, unprotected as they are.
+  held([['dashboard/core/LIB.txt', 'x\n']], /^dashboard\/core\/LIB\.txt: dashboard\/core\/LIB\.txt and dashboard\/core\/lib\.txt differ only in letter case or a trailing dot or space, which makes them one file on Windows$/);
+  held([['Dashboard/core/new.txt', 'x\n']], /^Dashboard\/core\/new\.txt: Dashboard and dashboard differ only in letter case/);
+  // Short names and names Windows cannot hold.
+  held([['DESK_S~1.MD', 'INJECTED (FICTIONAL)\n']], /^DESK_S~1\.MD: an 8\.3 short name, which Windows can read as another file$/);
+  held([['dashboard/core/CALLER~1/c1.txt', 'x\n']], /an 8\.3 short name/);
+  held([['CLAUDE.md.', 'x\n']], /^CLAUDE\.md\.: agent instructions$/);
+  held([['dashboard/core/lib.txt ', 'x\n']], /^dashboard\/core\/lib\.txt : a name ending in a dot or a space, which Windows drops$/);
+  held([['dashboard/core/a:b.txt', 'x\n']], /a character Windows does not allow in a name/);
+  held([['dashboard/core/aux.txt', 'x\n']], /a reserved Windows device name/);
+  // A name Git would print quoted is read as it is.
+  held([['.claude/café.md', 'x\n']], /^\.claude\/café\.md: agent definitions and permissions$/);
+  // Agent instructions and settings at any depth (proposed with N9; removable).
+  for (const p of ['dashboard/web/CLAUDE.md', 'docs/engineering/claude.local.md', 'dashboard/AGENTS.md', 'dashboard/web/.claude/settings.json', '.mcp.json']) {
+    held([[p, 'x\n']], /agent instructions or settings, which agents read at any depth$/);
+  }
+  // Ordinary work still passes: a new file, and a rename that changes only case.
+  assert.deepEqual(scope([['dashboard/core/callers/c9.txt', 'old\n']]).reasons, []);
+  assert.deepEqual(scope([['dashboard/core/callers/C1.txt', 'old\n']], { remove: ['dashboard/core/callers/c1.txt'] }).reasons, []);
+  assert.equal(P.foldPath('.Claude/Settings.json.'), '.claude/settings.json');
+  assert.equal(P.protectedHit('Dashboard/Engineering/inbox.js').why, 'engineering authorization (the inbox, delegations and their connector)');
+});

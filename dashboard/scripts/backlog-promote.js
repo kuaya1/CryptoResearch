@@ -35,21 +35,45 @@ const BRANCH_RE = /^claude\/backlog-[A-Za-z0-9._/-]+$/;
 // Paths a backlog branch may not change without Eric: authorization, the
 // ledger, promotion and CI controls, the backlog itself, agent instructions,
 // dependencies and deployment. A published template may be added to, never
-// edited or removed.
+// edited or removed. Each rule is matched as Eric's Windows PC reads the path
+// (`foldPath`: letter case ignored, trailing dots and spaces dropped), so
+// claude.md is CLAUDE.md and .Claude/ is .claude/ (review N9, 2026-10-26).
 const PROTECTED = [
-  { re: /^\.github\//, why: 'CI and promotion workflows' },
-  { re: /^\.claude\//, why: 'agent definitions and permissions' },
-  { re: /^(CLAUDE|COWORK-INSTRUCTIONS)\.md$/, why: 'agent instructions' },
-  { re: /^DESK_STATE\.md$/, why: 'the backlog (a branch never edits it; Eric adds and ticks items)' },
-  { re: /^dashboard\/scripts\/(backlog-promote|backlog-intake|merge-train|engineering-worker)\.js$/, why: 'promotion controls' },
-  { re: /^dashboard\/engineering\//, why: 'engineering authorization (the inbox, delegations and their connector)' },
-  { re: /^dashboard\/(oauth|mcp|hosted)\.js$/, why: 'authorization (sign-in and connector grants)' },
-  { re: /^server\.js$/, why: 'the hosted entry point' },
-  { re: /^dashboard\/core\/(portfolio|wallets|walletsync|alchemy)\.js$/, why: 'financial records (the ledger and wallets)' },
-  { re: /^(package(-lock)?\.json|dashboard\/web\/package(-lock)?\.json)$/, why: 'dependencies and scripts' },
-  { re: /^render\.ya?ml$/, why: 'deployment' },
-  { re: /^(portfolio|paper|projects|config|secrets)\//, why: 'records, never committed' },
+  { re: /^\.github\//i, why: 'CI and promotion workflows' },
+  { re: /^\.claude\//i, why: 'agent definitions and permissions' },
+  { re: /^(CLAUDE|COWORK-INSTRUCTIONS)\.md$/i, why: 'agent instructions' },
+  { re: /^DESK_STATE\.md$/i, why: 'the backlog (a branch never edits it; Eric adds and ticks items)' },
+  { re: /^dashboard\/scripts\/(backlog-promote|backlog-intake|merge-train|engineering-worker)\.js$/i, why: 'promotion controls' },
+  { re: /^dashboard\/engineering\//i, why: 'engineering authorization (the inbox, delegations and their connector)' },
+  { re: /^dashboard\/(oauth|mcp|hosted)\.js$/i, why: 'authorization (sign-in and connector grants)' },
+  { re: /^server\.js$/i, why: 'the hosted entry point' },
+  { re: /^dashboard\/core\/(portfolio|wallets|walletsync|alchemy)\.js$/i, why: 'financial records (the ledger and wallets)' },
+  { re: /^(package(-lock)?\.json|dashboard\/web\/package(-lock)?\.json)$/i, why: 'dependencies and scripts' },
+  { re: /^render\.ya?ml$/i, why: 'deployment' },
+  { re: /^(portfolio|paper|projects|config|secrets)\//i, why: 'records, never committed' },
+  // Proposed with review N9 (2026-10-26), not yet Eric's decision, and
+  // removable on its own: agents read these at any depth (Claude Code loads
+  // a CLAUDE.md, CLAUDE.local.md or .claude/ in a subfolder it works in).
+  { re: /(^|\/)(claude|claude\.local|agents)\.md$|(^|\/)\.claude\/|(^|\/)\.mcp\.json$/i, why: 'agent instructions or settings, which agents read at any depth' },
 ];
+// How Eric's Windows PC reads a path: letter case is ignored and each name's
+// trailing dots and spaces are dropped. Two paths with the same form are one
+// file there, so protected rules and collisions are checked in this form.
+const foldPath = (p) => String(p).split('/').map((s) => s.replace(/[. ]+$/, '')).join('/').toLowerCase();
+const protectedHit = (p) => PROTECTED.find((x) => x.re.test(foldPath(p))) || null;
+// A name Windows reads as another file or cannot hold. Git for Windows
+// refuses a trailing dot or space and ':' when it checks out, but writes an
+// 8.3 short name through: DESK_S~1.MD replaced DESK_STATE.md on this PC
+// (2026-10-26). A branch carrying any of these waits for Eric.
+function windowsProblem(p) {
+  for (const s of String(p).split('/')) {
+    if (/~\d/.test(s)) return 'an 8.3 short name, which Windows can read as another file';
+    if (/[. ]$/.test(s)) return 'a name ending in a dot or a space, which Windows drops';
+    if (/[<>:"\\|?*\x00-\x1f]/.test(s)) return 'a character Windows does not allow in a name';
+    if (/^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(s)) return 'a reserved Windows device name';
+  }
+  return null;
+}
 // Lines of an unprotected file that mount a protected part (Eric's decision
 // on review finding 2, 2026-10-25): a branch that adds, changes or removes one
 // waits for him as a protected path does; the rest of the file still merges.
@@ -60,14 +84,14 @@ const PROTECTED_LINES = [
 // engineering item a delegation admitted is held when its diff touches one;
 // only a version Eric authorized himself may.
 const DELEGATION_RESTRICTED = [
-  { re: /^dashboard\/core\//, prefix: 'dashboard/core/', why: 'core financial and investment logic, which no delegation changes' },
+  { re: /^dashboard\/core\//i, prefix: 'dashboard/core/', why: 'core financial and investment logic, which no delegation changes' },
 ];
 
 function run(cwd, cmd, args, { allowFail = false, env = {} } = {}) {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', env: { ...process.env, ...IDENTITY, ...env }, maxBuffer: 256 * 1024 * 1024 });
   if (r.error) throw r.error;
   if (r.status !== 0 && !allowFail) throw new Error(`${cmd} ${args.join(' ')} failed: ${(r.stderr || r.stdout || '').trim().slice(0, 600)}`);
-  return { status: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
+  return { status: r.status, out: (r.stdout || '').trim(), raw: r.stdout || '', err: (r.stderr || '').trim() };
 }
 const git = (cwd, args, opts) => run(cwd, 'git', args, opts);
 const revParse = (cwd, ref) => { const r = git(cwd, ['rev-parse', '--verify', '-q', `${ref}^{commit}`], { allowFail: true }); return r.status === 0 ? r.out : null; };
@@ -91,12 +115,36 @@ function backlogItems(text) {
 // Whether the branch stays inside the authorized scope; reasons in words.
 function scopeCheck(cwd, { base, head }) {
   const reasons = [];
-  const changed = git(cwd, ['diff', '--no-renames', '--name-status', `${base}...${head}`]).out.split('\n').filter(Boolean).map((l) => { const [st, ...p] = l.split('\t'); return { status: st[0], path: p.join('\t') }; });
+  // NUL-separated, so a name Git would quote ("\303...") is read as it is.
+  const z = git(cwd, ['diff', '--no-renames', '--name-status', '-z', `${base}...${head}`]).raw.split('\0');
+  const changed = [];
+  for (let i = 0; i + 1 < z.length; i += 2) if (z[i]) changed.push({ status: z[i][0], path: z[i + 1] });
+  // Every name in the resulting tree (main's, less what the branch deletes,
+  // and the branch's) by its Windows form: two names with one form are one
+  // file on Eric's PC, and Git keeps only one of them.
+  const names = (rev) => git(cwd, ['ls-tree', '-r', '-z', '--name-only', rev]).raw.split('\0').filter(Boolean);
+  const deleted = new Set(changed.filter((c) => c.status === 'D').map((c) => c.path));
+  const forms = new Map();
+  for (const f of new Set([...names(base).filter((x) => !deleted.has(x)), ...names(head)])) {
+    const parts = f.split('/');
+    for (let i = 1; i <= parts.length; i++) {
+      const pre = parts.slice(0, i).join('/');
+      const k = foldPath(pre);
+      if (!forms.has(k)) forms.set(k, new Set());
+      forms.get(k).add(pre);
+    }
+  }
   for (const c of changed) {
-    const hit = PROTECTED.find((x) => x.re.test(c.path));
-    const lines = PROTECTED_LINES.find((x) => x.path === c.path);
+    const hit = protectedHit(c.path);
+    const lines = PROTECTED_LINES.find((x) => foldPath(x.path) === foldPath(c.path));
+    const win = windowsProblem(c.path);
+    const parts = c.path.split('/');
+    const clash = c.status === 'D' ? null : parts.map((_, i) => parts.slice(0, i + 1).join('/')).map((pre) => [pre, [...(forms.get(foldPath(pre)) || [])].find((x) => x !== pre)]).find(([, other]) => other);
     if (hit) reasons.push(`${c.path}: ${hit.why}`);
-    else if (/^templates\//.test(c.path) && c.status !== 'A') reasons.push(`${c.path}: a published template is ${c.status === 'D' ? 'removed' : 'edited'} (publish a new version instead)`);
+    if (win) reasons.push(`${c.path}: ${win}`);
+    if (clash) reasons.push(`${c.path}: ${clash[0]} and ${clash[1]} differ only in letter case or a trailing dot or space, which makes them one file on Windows`);
+    if (hit || win || clash) continue;
+    if (/^templates\//i.test(foldPath(c.path)) && c.status !== 'A') reasons.push(`${c.path}: a published template is ${c.status === 'D' ? 'removed' : 'edited'} (publish a new version instead)`);
     else if (lines) {
       // Only the hunks' own lines (after the first @@), never the file header.
       const d = git(cwd, ['diff', '--no-renames', '--no-color', '-U0', `${base}...${head}`, '--', c.path]).out.split('\n');
@@ -469,7 +517,7 @@ async function engineeringCheck(cwd, { base, head, branch, scope, desk, fetchJso
     const allowed = Array.isArray(att.allowed_paths) ? att.allowed_paths : [];
     for (const f of scope.changed) if (!allowed.some((g) => globRe(g).test(f))) reasons.push(`${f} is outside the task's approved scope`);
     // Whatever the task record says: a delegation never changes these.
-    if (att.delegation) for (const f of scope.changed) { const r = DELEGATION_RESTRICTED.find((x) => x.re.test(f)); if (r) reasons.push(`${f}: ${r.why}; this item was admitted by delegation ${att.delegation.policy_id} (${att.delegation.template}), so it waits for Eric`); }
+    if (att.delegation) for (const f of scope.changed) { const r = DELEGATION_RESTRICTED.find((x) => x.re.test(foldPath(f))); if (r) reasons.push(`${f}: ${r.why}; this item was admitted by delegation ${att.delegation.policy_id} (${att.delegation.template}), so it waits for Eric`); }
   }
   return { engineering: true, ok: reasons.length === 0, reasons, item: n, task_id: it.task_id, attestation: att ? { promotable: att.promotable, review_state: att.review_state, required_review: att.required_review, merge_base_sha: att.merge_base_sha, diff_sha256: att.diff_sha256 } : null };
 }
@@ -553,4 +601,4 @@ async function main(argv, { fetchJson = defaultFetchJson } = {}) {
 
 if (require.main === module) main(process.argv.slice(2)).then((c) => { process.exitCode = c; }, (err) => { process.stderr.write(`${err && err.message || err}\n`); process.exitCode = 1; });
 
-module.exports = { PROTECTED, PROTECTED_LINES, DELEGATION_RESTRICTED, ENG_MARK_RE, backlogItems, scopeCheck, compose, promote, summaryOf, insertEntry, entryProblems, deskReason, candidateDiff, admissionDiff, admit, engineeringCheck, main };
+module.exports = { PROTECTED, PROTECTED_LINES, DELEGATION_RESTRICTED, foldPath, protectedHit, windowsProblem, ENG_MARK_RE, backlogItems, scopeCheck, compose, promote, summaryOf, insertEntry, entryProblems, deskReason, candidateDiff, admissionDiff, admit, engineeringCheck, main };
