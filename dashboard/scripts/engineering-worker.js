@@ -49,10 +49,29 @@ const TASK_RE = /^eng-\d{8}-[0-9a-f]{6}$/;
 const REF_RE = /^refs\/heads\/claude\/(admission-eng-\d{8}-[0-9a-f]{6}|candidate-eng-\d+|backlog-eng-\d+)$/;
 const MAX_TAIL = 20 * 1024;
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
-const TRANSIENT_RE = /Could not resolve host|Connection (?:reset|refused|timed out)|Operation timed out|Failed to connect|early EOF|RPC failed|remote end hung up|returned error: 50[234]|HTTP\/?[\d.]* 50[234]|\b50[234] (?:Bad Gateway|Service Unavailable|Gateway Time-?out)/i;
+const TRANSIENT_RE = /Could not resolve host|Connection (?:reset|refused|timed out)|Operation timed out|Operation too slow|Failed to connect|early EOF|RPC failed|remote end hung up|returned error: 50[234]|HTTP\/?[\d.]* 50[234]|\b50[234] (?:Bad Gateway|Service Unavailable|Gateway Time-?out)|no answer within \d+ ms/i;
+// Every call to the remote has a deadline (2026-10-26, the Cortex audit: a
+// hung socket blocked the worker with none), and a call that misses it counts
+// as a passing failure, asked again after the waits below. Two layers: git
+// stops a transfer itself once it has moved under a byte a second for half
+// the deadline (http.lowSpeedLimit and lowSpeedTime; it exits cleanly, its
+// helpers with it), and the process is stopped at the deadline whatever it
+// is waiting for. On Windows that stop reaches git's launcher only, so the
+// first layer is the one that leaves nothing behind. CR_ENG_GIT_TIMEOUT_MS
+// overrides the 30 s, for tests.
+const remoteDeadline = () => {
+  const v = Number(process.env.CR_ENG_GIT_TIMEOUT_MS);
+  return Number.isFinite(v) && v > 0 ? v : 30000;
+};
 
-function git(cwd, args, { allowFail = false, input = undefined, env = undefined } = {}) {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, input, env: env ? { ...process.env, ...env } : process.env });
+function git(cwd, args, { allowFail = false, input = undefined, env = undefined, deadline = undefined } = {}) {
+  const argv = deadline ? ['-c', 'http.lowSpeedLimit=1', '-c', `http.lowSpeedTime=${Math.max(1, Math.floor(deadline / 2000))}`, ...args] : args;
+  const r = spawnSync('git', argv, { cwd, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, input, env: env ? { ...process.env, ...env } : process.env, timeout: deadline });
+  if (r.error && r.error.code === 'ETIMEDOUT') {
+    const err = `git ${args[0]}: no answer within ${deadline} ms; stopped`;
+    if (!allowFail) throw new Error(`git ${args.join(' ')} failed: ${err}`);
+    return { status: null, out: '', err, timed_out: true };
+  }
   if (r.error) throw r.error;
   if (r.status !== 0 && !allowFail) throw new Error(`git ${args.join(' ')} failed: ${(r.stderr || r.stdout || '').trim().slice(0, 400)}`);
   return { status: r.status, out: (r.stdout || '').replace(/\n$/, ''), err: (r.stderr || '').trim() };
@@ -66,7 +85,7 @@ const pause = (ms) => { if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayB
 function gitRemote(cwd, args, opts = {}) {
   const waits = retryDelays();
   for (let i = 0; ; i += 1) {
-    const r = git(cwd, args, { ...opts, allowFail: true });
+    const r = git(cwd, args, { ...opts, allowFail: true, deadline: remoteDeadline() });
     if (r.status === 0 || i >= waits.length || !TRANSIENT_RE.test(r.err)) {
       if (r.status !== 0 && !opts.allowFail) throw new Error(`git ${args.join(' ')} failed: ${(r.err || r.out).slice(0, 400)}`);
       return { ...r, attempts: i + 1 };
@@ -161,7 +180,7 @@ function push(cwd, { ref, sha, expect = undefined, remote = 'origin' }) {
   let attempts = 0;
   for (;;) {
     attempts += 1;
-    r = git(cwd, ['push', '--porcelain', lease, remote, `${target}:${ref}`], { allowFail: true });
+    r = git(cwd, ['push', '--porcelain', lease, remote, `${target}:${ref}`], { allowFail: true, deadline: remoteDeadline() });
     if (r.status === 0 || attempts > waits.length || !TRANSIENT_RE.test(r.err)) break;
     // A push whose answer was lost may have landed: read the ref back
     // before pushing again.
@@ -215,23 +234,60 @@ function bundle(cwd) {
   return { status: files.length ? 'rebuilt' : 'current', files, source_sha256: h.stdout, stamped_was: stamped };
 }
 
+// What git status shows changed or untracked here (ignored files aside), by
+// path; -z, so no path is quoted or misread.
+function dirtyPaths(cwd) {
+  const parts = git(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']).out.split('\0');
+  const out = [];
+  for (let i = 0; i < parts.length; i += 1) {
+    const p = parts[i];
+    if (p.length < 4) continue;
+    out.push(p.slice(3));
+    if (p[0] === 'R' || p[0] === 'C') i += 1;
+  }
+  return out;
+}
+const BUNDLE_DIR = 'dashboard/public/app/';
+
+// A sealed worktree (2026-10-26, the Cortex audit): a verification is of
+// one committed head and nothing else. Changed or untracked files stop it
+// before anything runs (dirty_worktree_detected), except the bundle's own
+// files, which the bundle step rebuilds and asks to have committed. HEAD and
+// its tree are read before the tests and again after: a head that moved or
+// a worktree the run changed is not a verification of that head.
 function verify(cwd) {
+  const headNow = () => git(cwd, ['rev-parse', 'HEAD']).out;
+  const stop = (status, says, extra = {}) => ({ head_sha: headNow(), command: 'node dashboard/cli.js test', status, ...extra, exit_code: null, total: null, passed: null, failed: null, ok: false, says });
+  const dirt = dirtyPaths(cwd).filter((p) => !p.startsWith(BUNDLE_DIR));
+  if (dirt.length) return stop('dirty_worktree_detected', `The worktree has ${dirt.length} uncommitted or untracked ${dirt.length === 1 ? 'file' : 'files'}: commit or remove them, then run verify again. Nothing was tested; a verification is always of a clean, committed head.`, { files: dirt.slice(0, 50) });
   const b = bundle(cwd);
   if (b.status === 'rebuilt' || b.status === 'build_failed') {
-    const head = git(cwd, ['rev-parse', 'HEAD']).out;
     const says = b.status === 'rebuilt'
       ? 'The bundle was stale and has been rebuilt: commit these files with the change, then run verify again. Nothing was tested; a verification is always of a committed head.'
       : `The bundle was stale and ${b.step} failed; nothing was tested.`;
-    return { head_sha: head, command: 'node dashboard/cli.js test', status: b.status === 'rebuilt' ? 'commit_bundle_first' : 'bundle_build_failed', bundle: b, exit_code: null, total: null, passed: null, failed: null, ok: false, says };
+    return stop(b.status === 'rebuilt' ? 'commit_bundle_first' : 'bundle_build_failed', says, { bundle: b });
   }
+  const left = dirtyPaths(cwd);
+  if (left.length) {
+    const outside = left.filter((p) => !p.startsWith(BUNDLE_DIR));
+    if (outside.length) return stop('dirty_worktree_detected', `The bundle step left ${outside.length} uncommitted or untracked ${outside.length === 1 ? 'file' : 'files'} outside the bundle; nothing was tested.`, { files: outside.slice(0, 50) });
+    return stop('commit_bundle_first', 'The bundle\'s files differ from the commit: commit them with the change, then run verify again. Nothing was tested; a verification is always of a committed head.', { bundle: { ...b, files: left } });
+  }
+  const head = headNow();
+  const tree = git(cwd, ['rev-parse', 'HEAD^{tree}']).out;
   const r = spawnSync(process.execPath, [path.join(cwd, 'dashboard', 'cli.js'), 'test'], { cwd, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
   const output = `${r.stdout || ''}${r.stderr || ''}`;
   const num = (label) => { const m = new RegExp(`^\\S*\\s*${label}\\s+(\\d+)\\s*$`, 'm').exec(output); return m ? Number(m[1]) : null; };
   const total = num('tests');
   const passed = num('pass');
   const failed = num('fail');
-  const head = git(cwd, ['rev-parse', 'HEAD']).out;
-  return { head_sha: head, command: 'node dashboard/cli.js test', bundle: b.status, exit_code: r.status, total, passed, failed, output_sha256: sha256(output), output_tail: output.slice(-MAX_TAIL), ok: r.status === 0 && failed === 0 && total !== null && passed === total };
+  const result = { head_sha: head, tree_sha: tree, worktree: 'clean', command: 'node dashboard/cli.js test', bundle: b.status, exit_code: r.status, total, passed, failed, output_sha256: sha256(output), output_tail: output.slice(-MAX_TAIL) };
+  const after = headNow();
+  const changed = dirtyPaths(cwd);
+  if (after !== head || changed.length) {
+    return { ...result, status: after !== head ? 'head_moved' : 'worktree_changed', head_after: after, files: changed.slice(0, 50), ok: false, says: after !== head ? `HEAD moved from ${head.slice(0, 12)} to ${after.slice(0, 12)} while the tests ran; this is no verification of either. Run verify again.` : `The tests left ${changed.length} changed or untracked ${changed.length === 1 ? 'file' : 'files'}; this is no verification of ${head.slice(0, 12)}. Restore them, then run verify again.` };
+  }
+  return { ...result, ok: r.status === 0 && failed === 0 && total !== null && passed === total };
 }
 
 function arg(argv, name, fallback = undefined) {

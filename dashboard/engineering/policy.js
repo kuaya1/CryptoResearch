@@ -114,6 +114,13 @@ const RETIRED = {
   'eng-app@1': 'retired on 2026-10-25 for eng-app@2, which leaves out dashboard/core/ (Eric\'s decision on review finding 6)',
   'eng-app@2': 'retired on 2026-10-26 for eng-app@3, which leaves out the browser app and its bundle, the files served before sign-in and the guard tests (review N3, N5)',
 };
+// Whether a delegation is one that can still admit anything: never one
+// activated from a retired template. Such a record stays readable and
+// matching explains why it fits nothing, but it is left out of every list of
+// active delegations, the connector's capabilities and Eric's page included
+// (2026-10-26, the Cortex audit: the live capabilities offered only
+// eng-app@2).
+const actionable = (policy) => Boolean(policy) && !RETIRED[policy.template];
 // Paths no delegation reaches, whatever its template says (Eric, 2026-10-25):
 // a version naming one waits for his authorization of that exact version,
 // and promotion holds a delegated branch whose diff touches one.
@@ -397,7 +404,7 @@ function entryText({ number, task_id, version, content_sha256, policy_id, conten
 const ENTRY_MARK_RE = /\*\(engineering task (eng-\d{8}-[0-9a-f]{6}) v(\d+), sha256 ([0-9a-f]{16})/;
 
 module.exports = {
-  REPO, INTENTS, REVIEWS, RELEASE_MODES, TEMPLATES, RETIRED, RESTRICTED, restrictedWhy, restrictedHit, restrictedWhere, DESIGN_PATHS, MAX_ATTEMPTS, MAX_REBUILDS, LEASE_MS, LIMITS,
+  REPO, INTENTS, REVIEWS, RELEASE_MODES, TEMPLATES, RETIRED, actionable, RESTRICTED, restrictedWhy, restrictedHit, restrictedWhere, DESIGN_PATHS, MAX_ATTEMPTS, MAX_REBUILDS, LEASE_MS, LIMITS,
   sha256, canonical, contentHash, globRe, matches, within, protectedWhy, globTouchesProtected, PROTECTED_SAMPLES,
   screen, contentOf, validateContent, fits, entryText, ENTRY_MARK_RE, PATH_RE,
   stricterReview, stricterRelease, boundaries, choose, MATCH_RULE, MATCH_KEYS,

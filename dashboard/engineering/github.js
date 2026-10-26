@@ -3,7 +3,8 @@
 // 2026-10-25): what GitHub itself says about an engineering item, read when
 // asked and never stored. The worker's own reports are kept apart from this;
 // a read that fails, is rate-limited or cannot be matched is "unknown", never
-// a pass. Reads only: the pull request for claude/backlog-eng-<n>, the check
+// a pass. Reads only: the pull request for claude/backlog-eng-<n> or
+// claude/candidate-eng-<n> (and whether it proves the item merged), the check
 // runs on a head, whether main contains the merge, whether the running desk
 // contains it (its own revision against GitHub's compare), and whether main
 // holds a task's admission at a commit (2026-10-26). The optional
@@ -136,14 +137,50 @@ function makeGithub({ repo = P.REPO, fetchImpl = globalThis.fetch, clock = () =>
     return { state, runs, complete: r.body.total_count === undefined || r.body.total_count <= runs.length };
   }
 
-  async function pullRequest(number) {
-    if (!Number.isInteger(number) || number < 1) return { state: 'unknown', why: 'no backlog number' };
+  // Every pull request from an item's branches: claude/backlog-eng-<n>, which
+  // backlog-pr promotes, and claude/candidate-eng-<n>, which Eric may merge
+  // himself (items 63 and 64, 2026-10-26). Merged first, then the newest.
+  // A branch GitHub could not be asked about makes the answer partial.
+  const BRANCHES = (n) => [`claude/backlog-eng-${n}`, `claude/candidate-eng-${n}`];
+  async function pullRequests(number) {
+    if (!Number.isInteger(number) || number < 1) return { state: 'unknown', why: 'no backlog number', prs: [] };
     const owner = repo.split('/')[0];
-    const r = await get(`/repos/${repo}/pulls?state=all&per_page=10&head=${encodeURIComponent(`${owner}:claude/backlog-eng-${number}`)}`);
-    if (r.status !== 200 || !Array.isArray(r.body)) return { state: 'unknown', why: why(r) };
-    if (!r.body.length) return { state: 'none' };
-    const pr = r.body.sort((a, b) => b.number - a.number)[0];
-    return { state: pr.merged_at ? 'merged' : pr.state, number: pr.number, url: pr.html_url, head_sha: pr.head && pr.head.sha, merge_commit_sha: pr.merged_at ? pr.merge_commit_sha : null, merged_at: pr.merged_at || null };
+    const prs = [];
+    const failed = [];
+    for (const branch of BRANCHES(number)) {
+      const r = await get(`/repos/${repo}/pulls?state=all&per_page=10&head=${encodeURIComponent(`${owner}:${branch}`)}`);
+      if (r.status !== 200 || !Array.isArray(r.body)) { failed.push(`${branch}: ${why(r)}`); continue; }
+      for (const pr of r.body) prs.push({ state: pr.merged_at ? 'merged' : pr.state, number: pr.number, url: pr.html_url, branch, head_sha: pr.head && pr.head.sha, merge_commit_sha: pr.merged_at ? pr.merge_commit_sha : null, merged_at: pr.merged_at || null });
+    }
+    prs.sort((a, b) => Number(b.state === 'merged') - Number(a.state === 'merged') || b.number - a.number);
+    return { state: failed.length === BRANCHES(number).length ? 'unknown' : failed.length ? 'partial' : prs.length ? 'found' : 'none', why: failed.length ? failed.join('; ') : null, prs };
+  }
+  async function pullRequest(number) {
+    const all = await pullRequests(number);
+    if (!all.prs.length) return all.state === 'none' ? { state: 'none', branches: BRANCHES(number) } : { state: 'unknown', why: all.why };
+    return { ...all.prs[0], others: all.prs.slice(1).map((p) => ({ number: p.number, state: p.state, branch: p.branch })), partial: all.state === 'partial' ? all.why : null };
+  }
+
+  // Whether GitHub proves an item merged (2026-10-26, convergence): a merged
+  // pull request from one of its branches whose head is a head the desk
+  // recorded (the candidate, or the release pushed from it), and main holding
+  // that head. A branch name alone proves nothing, and a squash merge (main
+  // without the head) is not proof. The merge commit is kept only when main
+  // holds it too. 'unknown' when GitHub could not answer; 'no' with why.
+  async function mergeProof({ number, heads = [] } = {}) {
+    const wanted = heads.filter((h) => SHA_RE.test(String(h || '')));
+    if (!wanted.length) return { state: 'no', why: 'no recorded head' };
+    const all = await pullRequests(number);
+    const pr = all.prs.find((p) => p.state === 'merged' && wanted.includes(p.head_sha));
+    if (!pr) {
+      if (all.state === 'unknown' || all.state === 'partial') return { state: 'unknown', why: all.why };
+      const other = all.prs.find((p) => p.state === 'merged');
+      return { state: 'no', why: other ? `PR #${other.number} merged ${String(other.head_sha || '').slice(0, 12)}, not the recorded head` : all.prs.length ? `no merged pull request (${all.prs.map((p) => `#${p.number} ${p.state}`).join(', ')})` : 'no pull request' };
+    }
+    const on = await contains(pr.head_sha, 'main');
+    if (on.state !== 'yes') return { state: on.state === 'no' ? 'no' : 'unknown', why: on.state === 'no' ? `main does not hold ${pr.head_sha.slice(0, 12)} (PR #${pr.number})` : on.why };
+    const mc = SHA_RE.test(String(pr.merge_commit_sha || '')) ? await contains(pr.merge_commit_sha, 'main') : { state: 'unknown' };
+    return { state: 'yes', number, pr_number: pr.number, pr_url: pr.url, branch: pr.branch, head_sha: pr.head_sha, main_sha: mc.state === 'yes' ? pr.merge_commit_sha : null, merged_at: pr.merged_at };
   }
 
   // Everything GitHub says about one task's item, in one answer.
@@ -167,7 +204,7 @@ function makeGithub({ repo = P.REPO, fetchImpl = globalThis.fetch, clock = () =>
     };
   }
 
-  return { readback, checks, contains, pullRequest, commit, fileAt, admissionAt, findAdmissionCommit };
+  return { readback, checks, contains, pullRequest, pullRequests, mergeProof, commit, fileAt, admissionAt, findAdmissionCommit };
 }
 
 module.exports = { makeGithub };

@@ -185,7 +185,7 @@ function nextAction(t, now) {
     case 'implementing': return 'Worker: record the candidate (head, base, diff) when it is committed.';
     case 'verifying': return 'Worker: run node dashboard/cli.js test on the candidate and record verification with every acceptance check.';
     case 'review_pending': return `Review by ${review.required}: engineering_get_evidence, then engineering_save_review for head ${t.candidate ? t.candidate.head_sha.slice(0, 12) : '?'} in an active conversation. Nothing reviews it unattended.`;
-    case 'ready_for_promotion': return `${t.release ? `Waiting for backlog-pr to merge claude/backlog-eng-${n}; the worker records merged from Git readback.` : `Worker: push the candidate head to claude/backlog-eng-${n}; backlog-pr promotes it when the desk's attestation holds.`}${review.required !== 'none' ? ' If backlog-pr says main has moved since the review, claim it, rebuild on current main and record the new candidate (a rebuild, not a correction attempt); it is verified and reviewed again.' : ''}`;
+    case 'ready_for_promotion': return `${t.release ? `Waiting for backlog-pr to merge claude/backlog-eng-${n}; the worker records merged from Git readback.` : `Worker: push the candidate head to claude/backlog-eng-${n}; backlog-pr promotes it when the desk's attestation holds.`}${review.required !== 'none' ? ' If backlog-pr says main has moved since the review, claim it, rebuild on current main and record the new candidate (a rebuild, not a correction attempt); it is verified and reviewed again.' : ''} The desk records it merged itself once GitHub shows a pull request from claude/backlog-eng-${n} or claude/candidate-eng-${n} merged with main holding the recorded head.`;
     case 'merged': return 'Merged. Deployment is reported on its own.';
     case 'blocked': return `Blocked: ${t.status_reason || 'see events'}. Eric decides (Reopen on the desk, or a new task).`;
     case 'paused': return 'Paused: nothing is claimed, admitted or promoted until Eric resumes it on the desk.';
@@ -564,6 +564,40 @@ function rebindTask(ws, who, id, { version, content_sha256, policy_id = null, ex
 function candidateHeadOf(ws, id) {
   const t = loadTask(ws, id);
   return t.candidate ? t.candidate.head_sha : null;
+}
+
+// Convergence with GitHub (2026-10-26, the Cortex audit): items 63 and 64
+// were merged from claude/candidate-eng-<n> and stayed ready_for_promotion.
+// What the desk's sweep (routes.js reconcileMerges) asks GitHub about: each
+// task ready for promotion with a backlog number and the heads it recorded.
+// Reads only.
+function mergeCandidates(ws) {
+  return taskIds(ws).map((id) => readRaw(ws, rel.task(id))).filter((t) => t && supported(t, S.task) && t.status === 'ready_for_promotion' && t.admission && Number.isInteger(t.admission.number) && t.candidate)
+    .map((t) => ({ task_id: t.task_id, number: t.admission.number, heads: [...new Set([t.candidate.head_sha, t.release && t.release.head_sha].filter((h) => SHA_RE.test(String(h || ''))))] }));
+}
+
+// Records a task merged from GitHub's own proof (github.js mergeProof): a
+// merged pull request from its branch whose head is the head the desk
+// recorded, and main holding it. It records a fact, never an approval: the
+// review and attestation stay as they were, and whether the release went
+// through backlog-pr is kept beside it. Anything short of proof writes
+// nothing; a task already merged answers unchanged.
+function reconcileMerged(ws, id, proof, opts = {}) {
+  const now = nowOf(opts);
+  const r = mutate(ws, { taskId: id, type: 'reconcile_merged', now }, (t, ctx) => {
+    if (t.status === 'merged') return { unchanged: true };
+    if (t.status !== 'ready_for_promotion') fail('WRONG_STATE', `${id} is ${t.status}; only a task ready for promotion is settled from GitHub.`);
+    if (!proof || proof.state !== 'yes') fail('NOT_ON_MAIN', `GitHub does not show ${id} merged (${String((proof && proof.why) || 'not read').slice(0, 160)}). Nothing was changed.`);
+    const heads = [t.candidate && t.candidate.head_sha, t.release && t.release.head_sha].filter(Boolean);
+    if (!t.admission || proof.number !== t.admission.number || !heads.includes(proof.head_sha)) fail('WRONG_CANDIDATE', `GitHub's merged head ${String(proof.head_sha || '').slice(0, 12)} is not ${id}'s recorded head. Nothing was changed.`);
+    const prNumber = Number.isInteger(proof.pr_number) && proof.pr_number > 0 ? proof.pr_number : null;
+    t.merge = { main_sha: SHA_RE.test(String(proof.main_sha || '')) ? proof.main_sha : null, contains_head: proof.head_sha, pr_number: prNumber, pr_url: /^https:\/\/github\.com\/kuaya1\/CryptoResearch\/pull\/\d+$/.test(String(proof.pr_url || '')) ? proof.pr_url : null, branch: /^claude\/(backlog|candidate)-eng-\d+$/.test(String(proof.branch || '')) ? proof.branch : null, observed_at: iso(now), by: 'desk GitHub readback', released_through_promotion: Boolean(t.release) };
+    t.lease = null;
+    setStatus(t, 'merged', `GitHub shows PR #${prNumber} merged and main holding ${proof.head_sha.slice(0, 12)}`, now);
+    ctx.emit('reconciled_merged', { head_sha: proof.head_sha, pr_number: prNumber, main_sha: t.merge.main_sha, branch: t.merge.branch, source: 'GitHub pull request and compare' }, { kind: 'desk' });
+    return { merged: true, pr_number: prNumber };
+  });
+  return { ...(r.result || {}), task_id: id, verified: r.verified };
 }
 
 function pauseTask(ws, who, id, { reason = null } = {}, opts = {}) {
@@ -1252,7 +1286,7 @@ function ownerView(ws, who, opts = {}) {
       paused: Boolean(s.paused),
       paused_reason: s.paused_reason || null,
       templates: Object.values(P.TEMPLATES).filter((x) => !P.RETIRED[x.template]).map((x) => ({ template: x.template, title: x.title, says: x.says, intents: x.intents, allowed_paths: x.allowed_paths, required_review: x.required_review, release_mode: x.release_mode, limits: x.limits, max_days: x.max_days, requires_goal: x.requires_goal })),
-      policies: policies(ws).map((p) => ({ ...p, active: policyActive(p, now) })),
+      policies: policies(ws).map((p) => ({ ...p, active: policyActive(p, now) && P.actionable(p), retired: P.RETIRED[p.template] || null })),
       tasks: list.map((t) => (supported(t, S.task) ? view(ws, t, who, { now }) : { task_id: t.task_id, unsupported: true, schema_version: t.schema_version })).sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || ''))),
     };
   });
@@ -1265,7 +1299,9 @@ function capabilities(ws, who, args = {}, opts = {}) {
   refuseUnknown(args, ['task_id', 'version']);
   const now = nowOf(opts);
   const s = loadState(ws);
-  const active = policies(ws).filter((p) => policyActive(p, now));
+  const inForce = policies(ws).filter((p) => policyActive(p, now));
+  const active = inForce.filter(P.actionable);
+  const retired = inForce.filter((p) => !P.actionable(p));
   const role = who.kind === 'owner' ? 'owner' : who.role;
   let preview;
   if (args.task_id) {
@@ -1284,6 +1320,7 @@ function capabilities(ws, who, args = {}, opts = {}) {
     paused: Boolean(s.paused),
     can: { read: true, review: can(who, 'reviewer'), submit: can(who, 'submitter'), work: can(who, 'worker') },
     delegations: active.map((p) => ({ policy_id: p.policy_id, template: p.template, title: p.title, intents: p.intents, allowed_paths: p.allowed_paths, required_review: p.required_review, release_mode: p.release_mode, limits: p.limits, goal_id: p.goal_id, expires_at: p.expires_at })),
+    ...(retired.length ? { retired_delegations: retired.map((p) => ({ policy_id: p.policy_id, template: p.template, says: `activated from ${p.template}, which is ${P.RETIRED[p.template]}; it admits nothing until Eric activates a current template` })) } : {}),
     matching: `${P.MATCH_RULE}: a submitted version is admitted under the narrowest active delegation it fits, never the first activated: (1) a delegation whose paths lie inside another's comes first, then (2) the lighter review it requires (${P.REVIEWS.join(' < ')}), (3) release by promotion before release by Eric, (4) fewer path rules, (5) the template name, (6) the delegation ID. It is held to the stricter of its declared review and release and the delegation's, and to the delegation's limits and max_files. Fitting none, it waits for Eric. Pass task_id to see where a saved version would land.`,
     ...(preview ? { preview } : {}),
     intents: { explore: 'a note only; never built', design: `documents only (${P.DESIGN_PATHS.join(', ')})`, implement: 'code inside the approved scope' },
@@ -1295,7 +1332,7 @@ function capabilities(ws, who, args = {}, opts = {}) {
 module.exports = {
   S, TASK_ID_RE, POLICY_ID_RE, FORGED, VERIFY_COMMANDS,
   prepareTask, submitTask, activatePolicy, revokePolicy, setPaused, authorizeTask, rebindTask, candidateHeadOf, pauseTask, resumeTask, cancelTask, reopenTask,
-  admissionCheckOf, recheckAdmission,
+  admissionCheckOf, recheckAdmission, mergeCandidates, reconcileMerged,
   claimTask, recordEvent, saveReview, requestCorrection,
   getTask, listTasks, getEvidence, admissionView, attestationView, ownerView, capabilities, nextAction, reviewState,
 };

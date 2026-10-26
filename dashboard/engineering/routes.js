@@ -131,7 +131,51 @@ function makeEngineeringRoutes(ws, { oauth = null, auth = null, origins = new Se
     }));
   }
 
-  return { connector, publicRead, mount };
+  // Convergence with GitHub (2026-10-26): every task ready for promotion is
+  // settled as merged once GitHub proves it (github.js mergeProof: a merged
+  // pull request from claude/backlog-eng-<n> or claude/candidate-eng-<n>
+  // whose head is the head the desk recorded, and main holding it). Run on
+  // the schedule below; asks GitHub nothing when no task waits, and one sweep
+  // at a time. A task GitHub cannot prove stays as it is.
+  let sweeping = false;
+  async function reconcileMerges({ now = undefined } = {}) {
+    if (!github || sweeping) return { checked: 0, merged: [], skipped: [] };
+    sweeping = true;
+    try {
+      const merged = [];
+      const skipped = [];
+      const due = inbox.mergeCandidates(ws);
+      for (const d of due) {
+        const proof = await github.mergeProof({ number: d.number, heads: d.heads });
+        if (proof.state !== 'yes') { skipped.push({ task_id: d.task_id, state: proof.state, why: proof.why || null }); continue; }
+        try {
+          const r = inbox.reconcileMerged(ws, d.task_id, proof, now === undefined ? {} : { now });
+          if (r.merged) merged.push({ task_id: d.task_id, number: d.number, pr_number: proof.pr_number });
+        } catch (err) {
+          if (!(err instanceof OpError)) throw err;
+          skipped.push({ task_id: d.task_id, state: err.code, why: String(err.message).slice(0, 200) });
+        }
+      }
+      if (merged.length) log(`Engineering: recorded merged from GitHub: ${merged.map((x) => `item ${x.number} (PR #${x.pr_number})`).join(', ')}`);
+      return { checked: due.length, merged, skipped };
+    } finally {
+      sweeping = false;
+    }
+  }
+
+  // The sweep's schedule on the online desk (frontdoor.js): 20 s after the
+  // start, then every 30 minutes, stopped when the server closes. Neither
+  // timer keeps the process alive.
+  function scheduleSweeps(server, { firstMs = 20000, everyMs = 30 * 60000 } = {}) {
+    const run = () => reconcileMerges().catch((err) => log(`Engineering merge sweep failed: ${String((err && err.message) || err).slice(0, 200)}`));
+    const first = setTimeout(run, firstMs);
+    const every = setInterval(run, everyMs);
+    for (const x of [first, every]) if (x.unref) x.unref();
+    server.once('close', () => { clearTimeout(first); clearInterval(every); });
+    return { first, every };
+  }
+
+  return { connector, publicRead, mount, reconcileMerges, scheduleSweeps };
 }
 
 module.exports = { makeEngineeringRoutes, PUBLIC_READ_RE };

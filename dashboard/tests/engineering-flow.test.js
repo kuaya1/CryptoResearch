@@ -807,3 +807,149 @@ test('verify rebuilds a stale bundle first and stops until the rebuild is commit
   t.after(() => fs.rmSync(none, { recursive: true, force: true }));
   assert.equal(W.bundle(none).status, 'no_bundle');
 });
+
+// --- convergence with GitHub (2026-10-26, the Cortex audit) ------------------------
+
+test('a merged pull request from either branch proves an item merged only when its head is the recorded one and main holds it', async () => {
+  const HEAD = 'a'.repeat(40);
+  const MERGE = 'b'.repeat(40);
+  const OTHER = 'c'.repeat(40);
+  const PR24 = { number: 24, html_url: 'https://github.com/kuaya1/CryptoResearch/pull/24', state: 'closed', merged_at: '2026-10-26T16:00:00Z', merge_commit_sha: MERGE, head: { sha: HEAD } };
+  const PR30 = { number: 30, html_url: 'https://github.com/kuaya1/CryptoResearch/pull/30', state: 'open', merged_at: null, merge_commit_sha: null, head: { sha: HEAD } };
+  // Each answer is made fresh per request; a branch maps to a function.
+  const fake = ({ backlog = () => reply(200, []), candidate = () => reply(200, []), head = 'ahead', merge = 'identical' } = {}) => {
+    const asked = [];
+    const gh = makeGithub({ sleep: async () => {}, fetchImpl: async (url) => {
+      const u = new URL(url);
+      asked.push(`${u.pathname}${u.search}`);
+      if (u.pathname.endsWith('/pulls')) {
+        const h = u.searchParams.get('head');
+        if (h === 'kuaya1:claude/backlog-eng-63') return backlog();
+        if (h === 'kuaya1:claude/candidate-eng-63') return candidate();
+        return reply(200, []);
+      }
+      if (u.pathname.endsWith(`/compare/${HEAD}...main`)) return reply(200, { status: head });
+      if (u.pathname.endsWith(`/compare/${MERGE}...main`)) return reply(200, { status: merge });
+      return reply(404, { message: 'Not Found' });
+    } });
+    return { gh, asked };
+  };
+  // Merged from claude/candidate-eng-63, as items 63 and 64 were; an open
+  // pull request on the backlog branch does not hide it.
+  const { gh, asked } = fake({ backlog: () => reply(200, [PR30]), candidate: () => reply(200, [PR24]) });
+  const yes = await gh.mergeProof({ number: 63, heads: [HEAD] });
+  assert.deepEqual(yes, { state: 'yes', number: 63, pr_number: 24, pr_url: PR24.html_url, branch: 'claude/candidate-eng-63', head_sha: HEAD, main_sha: MERGE, merged_at: PR24.merged_at });
+  assert.ok(asked.some((p) => p.includes(encodeURIComponent('kuaya1:claude/backlog-eng-63'))) && asked.some((p) => p.includes(encodeURIComponent('kuaya1:claude/candidate-eng-63'))), 'both branches are asked about');
+  const pr = await gh.pullRequest(63);
+  assert.deepEqual([pr.state, pr.number, pr.branch, pr.others], ['merged', 24, 'claude/candidate-eng-63', [{ number: 30, state: 'open', branch: 'claude/backlog-eng-63' }]]);
+  // The readback names it too.
+  assert.equal((await gh.readback({ number: 63, head_sha: HEAD })).pull_request.number, 24);
+  // A merged head that is not the one recorded proves nothing.
+  const other = await gh.mergeProof({ number: 63, heads: [OTHER] });
+  assert.equal(other.state, 'no');
+  assert.match(other.why, /PR #24 merged aaaaaaaaaaaa, not the recorded head/);
+  // A squash merge leaves main without the head: not proof.
+  const squash = await fake({ candidate: () => reply(200, [PR24]), head: 'diverged' }).gh.mergeProof({ number: 63, heads: [HEAD] });
+  assert.equal(squash.state, 'no');
+  assert.match(squash.why, /main does not hold aaaaaaaaaaaa \(PR #24\)/);
+  // The merge commit is kept only when main holds it.
+  assert.equal((await fake({ candidate: () => reply(200, [PR24]), merge: 'diverged' }).gh.mergeProof({ number: 63, heads: [HEAD] })).main_sha, null);
+  // One branch unreadable: its merged pull request may be the one, so unknown.
+  const half = await fake({ backlog: () => reply(503, { message: 'busy' }) }).gh.mergeProof({ number: 63, heads: [HEAD] });
+  assert.equal(half.state, 'unknown');
+  assert.match(half.why, /claude\/backlog-eng-63: GitHub answered 503/);
+  assert.equal((await fake({ backlog: () => reply(503, { message: 'busy' }) }).gh.pullRequest(63)).state, 'unknown');
+  // ...but a proof found on the other branch stands.
+  assert.equal((await fake({ backlog: () => reply(503, { message: 'busy' }), candidate: () => reply(200, [PR24]) }).gh.mergeProof({ number: 63, heads: [HEAD] })).state, 'yes');
+  // Nothing on either branch.
+  const none = fake();
+  assert.deepEqual(await none.gh.mergeProof({ number: 63, heads: [HEAD] }), { state: 'no', why: 'no pull request' });
+  assert.deepEqual(await none.gh.pullRequest(63), { state: 'none', branches: ['claude/backlog-eng-63', 'claude/candidate-eng-63'] });
+  // Without a recorded head GitHub is not asked.
+  const quiet = fake();
+  assert.equal((await quiet.gh.mergeProof({ number: 63, heads: [null] })).state, 'no');
+  assert.equal(quiet.asked.length, 0);
+});
+
+test('verify runs only in a sealed worktree and binds its receipt to the clean head it tested', (t) => {
+  const clean = bundleFixture(t);
+  const head = g(clean, 'rev-parse', 'HEAD');
+  const v0 = W.verify(clean);
+  assert.deepEqual([v0.ok, v0.head_sha, v0.tree_sha, v0.worktree], [true, head, g(clean, 'rev-parse', 'HEAD^{tree}'), 'clean']);
+  // An untracked or a changed file stops it before anything is built or run.
+  put(clean, 'notes.txt', 'left behind (FICTIONAL)\n');
+  const v1 = W.verify(clean);
+  assert.deepEqual([v1.status, v1.ok, v1.exit_code, v1.total, v1.files, v1.head_sha], ['dirty_worktree_detected', false, null, null, ['notes.txt'], head]);
+  assert.match(v1.says, /1 uncommitted or untracked file: commit or remove them/);
+  fs.rmSync(path.join(clean, 'notes.txt'));
+  put(clean, 'dashboard/cli.js', "console.log('# tests 1'); console.log('# pass 1'); console.log('# fail 0'); // edited\n");
+  assert.deepEqual(W.verify(clean).files, ['dashboard/cli.js']);
+  g(clean, 'checkout', '-q', '--', 'dashboard/cli.js');
+  // A stale bundle beside other dirt is not rebuilt: nothing runs at all.
+  const stale = bundleFixture(t, { stale: true });
+  put(stale, 'dashboard/web/src/b.txt', 'untracked (FICTIONAL)\n');
+  const before = fs.readFileSync(path.join(stale, 'dashboard/public/app/build.json'), 'utf8');
+  assert.equal(W.verify(stale).status, 'dirty_worktree_detected');
+  assert.equal(fs.readFileSync(path.join(stale, 'dashboard/public/app/build.json'), 'utf8'), before, 'the bundle was not built');
+  fs.rmSync(path.join(stale, 'dashboard/web/src/b.txt'));
+  // The bundle's own files are the bundle step's: rebuilt, then asked for
+  // again until they are committed, never tested uncommitted.
+  assert.equal(W.verify(stale).status, 'commit_bundle_first');
+  const again = W.verify(stale);
+  assert.deepEqual([again.status, again.ok, again.exit_code], ['commit_bundle_first', false, null]);
+  assert.deepEqual(again.bundle.files.sort(), ['dashboard/public/app/build.json', 'dashboard/public/app/index.js']);
+  g(stale, 'commit', '-qam', 'rebuild the bundle');
+  assert.equal(W.verify(stale).ok, true);
+  // Tests that leave a file behind, or move HEAD, verify nothing.
+  const leaves = bundleFixture(t);
+  put(leaves, 'dashboard/cli.js', "require('fs').writeFileSync(require('path').join(__dirname, 'left.txt'), 'x'); console.log('# tests 1'); console.log('# pass 1'); console.log('# fail 0');\n");
+  g(leaves, 'commit', '-qam', 'tests that write (FICTIONAL)');
+  const v2 = W.verify(leaves);
+  assert.deepEqual([v2.status, v2.ok, v2.files, v2.exit_code], ['worktree_changed', false, ['dashboard/left.txt'], 0]);
+  const moves = bundleFixture(t);
+  put(moves, 'dashboard/cli.js', `require('child_process').execSync('git commit -q --allow-empty -m moved', { cwd: require('path').join(__dirname, '..'), env: { ...process.env, ...${JSON.stringify(IDENT)} } }); console.log('# tests 1'); console.log('# pass 1'); console.log('# fail 0');\n`);
+  g(moves, 'commit', '-qam', 'tests that commit (FICTIONAL)');
+  const tested = g(moves, 'rev-parse', 'HEAD');
+  const v3 = W.verify(moves);
+  assert.deepEqual([v3.status, v3.ok, v3.head_sha], ['head_moved', false, tested]);
+  assert.notEqual(v3.head_after, tested);
+});
+
+// A git remote over HTTP that accepts each request and never answers, in its
+// own process, counting the requests.
+async function silentRemote(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-engsilent-'));
+  const count = path.join(root, 'count');
+  const code = `const fs=require('fs');let n=0;require('http').createServer(()=>{n+=1;fs.writeFileSync(${JSON.stringify(count)},String(n));}).listen(0,'127.0.0.1',function(){process.stdout.write(String(this.address().port)+'\\n');});`;
+  const child = require('child_process').spawn(process.execPath, ['-e', code], { stdio: ['ignore', 'pipe', 'inherit'] });
+  t.after(() => { child.kill(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 }); });
+  const port = await new Promise((resolve) => child.stdout.once('data', (d) => resolve(Number(String(d).trim()))));
+  return { url: `http://127.0.0.1:${port}/fictional.git`, asked: () => (fs.existsSync(count) ? Number(fs.readFileSync(count, 'utf8')) : 0) };
+}
+
+test('a remote that never answers is stopped at the deadline and asked again after the waits', async (t) => {
+  const f = fixture(t);
+  const keys = ['CR_ENG_RETRY_DELAYS_MS', 'CR_ENG_GIT_TIMEOUT_MS', 'GIT_TERMINAL_PROMPT'];
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  t.after(() => { for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } });
+  process.env.CR_ENG_RETRY_DELAYS_MS = '0,0';
+  process.env.CR_ENG_GIT_TIMEOUT_MS = '2000';
+  process.env.GIT_TERMINAL_PROMPT = '0';
+  // Either layer's words count as a passing failure.
+  assert.ok(W.TRANSIENT_RE.test('git ls-remote: no answer within 2000 ms; stopped'));
+  assert.ok(W.TRANSIENT_RE.test("fatal: unable to access 'https://github.com/x/y.git/': Operation too slow. Less than 1 bytes/sec transferred the last 15 seconds"));
+  const silent = await silentRemote(t);
+  const started = Date.now();
+  // git stops itself after a second without a byte (half the deadline).
+  assert.throws(() => W.remoteSha(f.work, { ref: 'refs/heads/claude/candidate-eng-7', remote: silent.url }), /Operation too slow/);
+  const took = Date.now() - started;
+  assert.equal(silent.asked(), 3, 'three tries, each stopped');
+  assert.ok(took >= 2500 && took < 20000, `took ${took} ms`);
+  // A push is held to the same deadline and read back before it is tried
+  // again; the read-back has the deadline too, so nothing hangs.
+  process.env.CR_ENG_RETRY_DELAYS_MS = '0';
+  const head = g(f.work, 'rev-parse', 'HEAD');
+  const was = silent.asked();
+  assert.throws(() => W.push(f.work, { ref: 'refs/heads/claude/candidate-eng-7', sha: head, expect: null, remote: silent.url }), /Operation too slow/);
+  assert.equal(silent.asked() - was, 6, 'two pushes, a two-try read-back between them, and the closing two-try read-back');
+});
