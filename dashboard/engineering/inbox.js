@@ -46,7 +46,15 @@ const FORGED = ['approved', 'approval', 'approved_by', 'authorization', 'authori
 const iso = (ms) => new Date(ms).toISOString();
 const ymd = (ms) => iso(ms).slice(0, 10).replace(/-/g, '');
 const rnd = (n) => crypto.randomBytes(n).toString('hex');
-const connKey = (who) => (who && who.grant_id ? P.sha256(String(who.grant_id)).slice(0, 8) : who && who.kind === 'owner' ? 'owner' : 'none');
+// The unattended reviewer (candidate-review.yml, 2026-10-26,
+// audits/2026-10-26-backend-autonomy): ChatGPT through the OpenAI API, called
+// by the workflow with the desk's reviewer token. It is its own identity,
+// never an OAuth connection, and it can do nothing but read a candidate's
+// review packet and save one review of it (reviewerPacket, saveAutomatedReview).
+const SERVICE = 'candidate-review@1';
+const SERVICE_CONN = `svc-${P.sha256(SERVICE).slice(0, 8)}`;
+const REVIEWER_SERVICE = Object.freeze({ kind: 'service', service: SERVICE, assistant: 'chatgpt', role: 'reviewer' });
+const connKey = (who) => (who && who.kind === 'service' ? SERVICE_CONN : who && who.grant_id ? P.sha256(String(who.grant_id)).slice(0, 8) : who && who.kind === 'owner' ? 'owner' : 'none');
 const fail = (code, message, details) => { throw new OpError(code, message, details); };
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const nowOf = (opts) => (opts && Number.isFinite(opts.now) ? opts.now : Date.now());
@@ -77,7 +85,10 @@ function requireRole(who, need, action) {
   const words = { reader: 'read the engineering inbox', reviewer: 'save a review', submitter: 'prepare, submit, correct or pause tasks', worker: 'claim tasks and record build events' }[need];
   fail('ROLE_REFUSED', `This connection's role is ${role}, so it cannot ${words} (${action}). Nothing was ${need === 'reader' ? 'read' : 'saved'}. Eric reconnects it with another role on the desk's consent page to allow more.`);
 }
-const byOf = (who) => (who && who.kind === 'owner' ? { kind: 'owner' } : { kind: 'connection', assistant: who.assistant || 'unknown', role: who.role, conn: connKey(who) });
+const byOf = (who) => (who && who.kind === 'owner' ? { kind: 'owner' } : who && who.kind === 'service' ? { kind: 'service', service: who.service, assistant: who.assistant, role: who.role, conn: SERVICE_CONN } : { kind: 'connection', assistant: who.assistant || 'unknown', role: who.role, conn: connKey(who) });
+function requireReviewerService(who) {
+  if (!(who && who.kind === 'service' && who.service === SERVICE)) fail('ROLE_REFUSED', 'Only the unattended reviewer, called with the desk\'s reviewer token, can do this. Nothing was read or saved.');
+}
 
 function refuseForged(args) {
   const hit = FORGED.filter((k) => args && Object.prototype.hasOwnProperty.call(args, k));
@@ -151,12 +162,36 @@ const requiredReview = (t) => P.stricterReview(t.required_review || 'none', t.au
 // that wrote none of the task's versions. same_author is recorded with each
 // review; one saved before it is judged by the task's creator.
 const docsOnly = (c) => Boolean(c && Array.isArray(c.files) && c.files.length && c.files.every((f) => P.matches(f, P.DESIGN_PATHS)));
+// Rule N4 for the code itself (2026-10-26, audits/2026-10-26-backend-autonomy):
+// a review by a connection that built a candidate of the task never decides
+// it, documents included, and neither does an unattended review by the
+// builder's own kind of assistant. same_builder is recorded with each review.
 function decides(t, r, need) {
   if (r.reviewer.kind === 'owner') return true;
   if (r.reviewer.kind !== need || r.limited) return false;
+  if (r.same_builder) return false;
   const own = r.same_author !== undefined ? r.same_author : Boolean(t.created_by && t.created_by.conn && t.created_by.conn === r.reviewer.conn);
   return docsOnly(t.candidate) || !own;
 }
+// Who built a task's candidates, as the desk recorded each one (recorded_by;
+// a candidate recorded before 2026-10-26 has none).
+const builtBy = (t) => [...(t.candidates || []).map((c) => c.recorded_by), t.candidate && t.candidate.recorded_by].filter((b) => b && b.conn);
+// The same, with the candidate events of the task for a candidate recorded
+// before recorded_by.
+function candidateBuilders(ws, t, op = null) {
+  const heads = new Set([...(t.candidates || []).map((c) => c.head_sha), t.candidate && t.candidate.head_sha].filter(Boolean));
+  const out = builtBy(t);
+  const dir = `${ROOT}/tasks/${t.task_id}/events`;
+  for (const f of listDir(ws.abs(dir), { dirs: false })) {
+    const e = op ? op.readJson(`${dir}/${f}`, null) : readRaw(ws, `${dir}/${f}`);
+    if (e && e.type === 'candidate' && e.by && e.by.conn && e.data && heads.has(e.data.head_sha)) out.push({ kind: e.by.kind, assistant: e.by.assistant || null, role: e.by.role || null, conn: e.by.conn });
+  }
+  return [...new Map(out.map((b) => [b.conn, b])).values()];
+}
+const sameBuilder = (t, reviewer, builders = builtBy(t)) => reviewer.kind !== 'owner' && builders.some((b) => b.conn === reviewer.conn || (reviewer.automated && b.assistant === reviewer.kind));
+// Whether Eric merges this task's pull request himself: released by him, or
+// approved by an unattended review (the sovereign merge boundary).
+const ownerMerges = (t, rs = reviewState(t)) => (t.authorization && t.authorization.release_mode === 'owner') || Boolean(rs.latest && rs.latest.reviewer && rs.latest.reviewer.automated);
 
 // The latest review per reviewer kind on the current candidate.
 function reviewState(t, need = requiredReview(t)) {
@@ -184,8 +219,9 @@ function nextAction(t, now) {
     case 'claimed': return `Worker: build item ${n} on claude/candidate-eng-${n} (record started).`;
     case 'implementing': return 'Worker: record the candidate (head, base, diff) when it is committed.';
     case 'verifying': return 'Worker: run node dashboard/cli.js test on the candidate and record verification with every acceptance check.';
-    case 'review_pending': return `Review by ${review.required}: engineering_get_evidence, then engineering_save_review for head ${t.candidate ? t.candidate.head_sha.slice(0, 12) : '?'} in an active conversation. Nothing reviews it unattended.`;
-    case 'ready_for_promotion': return `${t.release ? `Waiting for backlog-pr to merge claude/backlog-eng-${n}; the worker records merged from Git readback.` : `Worker: push the candidate head to claude/backlog-eng-${n}; backlog-pr promotes it when the desk's attestation holds.`}${review.required !== 'none' ? ' If backlog-pr says main has moved since the review, claim it, rebuild on current main and record the new candidate (a rebuild, not a correction attempt); it is verified and reviewed again.' : ''} The desk records it merged itself once GitHub shows a pull request from claude/backlog-eng-${n} or claude/candidate-eng-${n} merged with main holding the recorded head.`;
+    case 'review_pending': return `Review by ${review.required}: engineering_get_evidence, then engineering_save_review for head ${t.candidate ? t.candidate.head_sha.slice(0, 12) : '?'} in an active conversation.${review.required === 'chatgpt' ? ` Where Eric has turned on the candidate-review workflow, it reviews claude/candidate-eng-${n} unattended once GitHub's tests pass on that head (it opens the pull request when none is open); it never merges.` : ''}`;
+    case 'ready_for_promotion': if (ownerMerges(t, review)) return `Eric merges the pull request from claude/candidate-eng-${n} on GitHub himself (${t.authorization && t.authorization.release_mode === 'owner' ? 'release by Eric' : 'an unattended review approved it'}); no agent merges or promotes it. The desk records it merged from GitHub's proof, at start and every 30 minutes.`;
+      return `${t.release ? `Waiting for backlog-pr to merge claude/backlog-eng-${n}; the worker records merged from Git readback.` : `Worker: push the candidate head to claude/backlog-eng-${n}; backlog-pr promotes it when the desk's attestation holds.`}${review.required !== 'none' ? ' If backlog-pr says main has moved since the review, claim it, rebuild on current main and record the new candidate (a rebuild, not a correction attempt); it is verified and reviewed again.' : ''} The desk records it merged itself once GitHub shows a pull request from claude/backlog-eng-${n} or claude/candidate-eng-${n} merged with main holding the recorded head.`;
     case 'merged': return 'Merged. Deployment is reported on its own.';
     case 'blocked': return `Blocked: ${t.status_reason || 'see events'}. Eric decides (Reopen on the desk, or a new task).`;
     case 'paused': return 'Paused: nothing is claimed, admitted or promoted until Eric resumes it on the desk.';
@@ -443,7 +479,10 @@ function activatePolicy(ws, who, { template, goal_id = null, goal = null, days =
   const d = days === null || days === undefined || days === '' ? tpl.max_days : Number(days);
   if (!(Number.isInteger(d) && d >= 1 && d <= tpl.max_days)) fail('BAD_INPUT', `days is 1 to ${tpl.max_days}.`);
   const id = `pol-${ymd(now)}-${rnd(3)}`;
-  const rec = { schema_version: S.policy, policy_id: id, template, policy_version: 1, title: tpl.title, says: tpl.says, repo_full_name: tpl.repo_full_name, intents: tpl.intents, allowed_paths: tpl.allowed_paths, required_review: tpl.required_review, release_mode: tpl.release_mode, limits: tpl.limits, goal_id: goal_id || null, goal: goal ? String(goal).slice(0, 300) : null, activated_at: iso(now), activated_by: 'owner', expires_at: iso(now + d * 86400000), revoked_at: null, revoked_reason: null };
+  // A template's own rules beyond its paths (eng-backend@1) are copied in, so
+  // the record Eric activated says them; the template's apply either way.
+  const extra = { ...(tpl.forbidden_paths ? { forbidden_paths: tpl.forbidden_paths } : {}), ...(tpl.requires_tests ? { requires_tests: tpl.requires_tests } : {}) };
+  const rec = { schema_version: S.policy, policy_id: id, template, policy_version: 1, title: tpl.title, says: tpl.says, repo_full_name: tpl.repo_full_name, intents: tpl.intents, allowed_paths: tpl.allowed_paths, ...extra, required_review: tpl.required_review, release_mode: tpl.release_mode, limits: tpl.limits, goal_id: goal_id || null, goal: goal ? String(goal).slice(0, 300) : null, activated_at: iso(now), activated_by: 'owner', expires_at: iso(now + d * 86400000), revoked_at: null, revoked_reason: null };
   rec.activation_sha256 = P.contentHash(rec);
   const r = runOp(ws, { type: 'engineering_policy_activate', summary: `engineering delegation ${id} (${template})` }, (op) => { op.writeJson(rel.policy(id), rec, { mode: 'create' }); return rec; });
   return { policy: rec, verified: r.verified };
@@ -940,8 +979,16 @@ function recordEvent(ws, who, args = {}, opts = {}) {
         for (const l of linkModes(diff)) problems.push(`${l.file} is ${l.mode === '120000' ? 'a symbolic link' : 'a submodule'} (mode ${l.mode}), which a candidate never carries`);
         if (t.authorization.kind === 'policy') {
           const p = ctx.op.readJson(rel.policy(t.authorization.policy_id), null);
+          const pol = p || { template: t.authorization.template };
           if (p && files.length > p.limits.max_files) problems.push(`${files.length} files is over the delegation's ${p.limits.max_files}`);
           for (const f of files) { const hit = P.restrictedHit(f, p && p.template); if (hit) problems.push(`${f} is in ${P.restrictedWhere(hit)} (${hit.why})`); }
+          // eng-backend@1 (2026-10-26): its forbidden paths, a line that
+          // mounts a protected part (as promotion reads it) and a test.
+          const sections = P.diffSections(diff);
+          for (const f of files) { const g = P.forbiddenHit(f, pol); if (g) problems.push(`${f} is forbidden under ${pol.template} (${g})`); }
+          for (const f of files) { const why = P.protectedLineWhy(f, diff, sections); if (why) problems.push(`${f} changes ${why}, which waits for Eric`); }
+          const tests = P.rulesOf(pol).tests;
+          if (tests && !files.some((f) => P.matches(f, [tests]) && !(sections.get(f) || {}).deleted)) problems.push(`${pol.template} needs a test: the candidate adds or changes no ${tests} file`);
         }
         if (problems.length) fail('SCOPE', `Candidate refused: ${problems.join('; ')}. Nothing was recorded; change the branch to stay inside the approved scope.`);
         if (!rebuild && t.attempts.count >= t.attempts.max) {
@@ -966,8 +1013,9 @@ function recordEvent(ws, who, args = {}, opts = {}) {
         if (!rebuild) t.attempts.count += 1;
         else t.attempts.rebuilds = (t.attempts.rebuilds || 0) + 1;
         for (const c of t.corrections) if (!c.resolved_by_head) c.resolved_by_head = head;
-        t.candidate = { head_sha: head, base_sha: base, merge_base_sha: mb, branch: args.branch, files, diff_sha256: dsha, diff_bytes: Buffer.byteLength(diff), generation: lease.generation, attempt: t.attempts.count, rebuild, recorded_at: iso(now) };
-        t.candidates.push({ head_sha: head, merge_base_sha: mb, diff_sha256: dsha, attempt: t.attempts.count, rebuild, recorded_at: iso(now) });
+        // recorded_by: who built it, so its reviews are judged by it (N4).
+        t.candidate = { head_sha: head, base_sha: base, merge_base_sha: mb, branch: args.branch, files, diff_sha256: dsha, diff_bytes: Buffer.byteLength(diff), generation: lease.generation, attempt: t.attempts.count, rebuild, recorded_at: iso(now), recorded_by: by };
+        t.candidates.push({ head_sha: head, merge_base_sha: mb, diff_sha256: dsha, attempt: t.attempts.count, rebuild, recorded_at: iso(now), recorded_by: by });
         if (args.notes) ctx.op.write(rel.artifact(id, P.sha256(String(args.notes).slice(0, MAX_NOTE))), String(args.notes).slice(0, MAX_NOTE));
         t.candidate.notes_sha256 = args.notes ? P.sha256(String(args.notes).slice(0, MAX_NOTE)) : null;
         t.verification = null;
@@ -1074,40 +1122,216 @@ function saveReview(ws, who, args = {}, opts = {}) {
     if (!c) fail('NO_CANDIDATE', `${t.task_id} has no candidate to review yet (${t.status}).`);
     if (args.head_sha !== c.head_sha || args.merge_base_sha !== c.merge_base_sha) fail('WRONG_CANDIDATE', `The current candidate of ${t.task_id} is head ${c.head_sha} on merge base ${c.merge_base_sha}. A review is saved only for the exact candidate it read; read engineering_get_evidence again. Nothing was saved.`);
     if (TERMINAL.includes(t.status)) fail('WRONG_STATE', `${t.task_id} is ${t.status}.`);
-    const v = loadVersion(ws, t.task_id, t.current_version, ctx.op);
-    const fsha = P.sha256(P.canonical({ result, findings }));
-    const limited = !(read.diff && read.tests);
-    // The same review again is unchanged; a full read after a limited one is
-    // a new review, since only it can decide (review N4).
-    const dup = t.reviews.find((x) => x.head_sha === c.head_sha && x.reviewer.kind === reviewer.kind && x.reviewer.conn === reviewer.conn && x.findings_sha256 === fsha && Boolean(x.limited) === limited);
-    if (dup) { out = { review_id: dup.review_id, unchanged: true }; return out; }
-    const rid = `rev-${ymd(now)}-${rnd(3)}`;
-    const need = requiredReview(t);
-    const assigned = reviewer.kind === 'owner' || reviewer.kind === need || v.content.reviews_requested.includes(reviewer.kind);
-    // Whether this connection wrote the task (its creator or any version's).
-    const authors = new Set([t.created_by && t.created_by.conn, ...t.versions.map((x) => { const vv = loadVersion(ws, t.task_id, x.version, ctx.op); return vv && vv.created_by ? vv.created_by.conn : null; })].filter(Boolean));
-    const sameAuthor = reviewer.kind !== 'owner' && authors.has(reviewer.conn);
-    ctx.op.writeJson(rel.review(t.task_id, rid), { schema_version: S.review, review_id: rid, task_id: t.task_id, version: t.current_version, head_sha: c.head_sha, merge_base_sha: c.merge_base_sha, diff_sha256: c.diff_sha256, result, findings, method: args.method ? String(args.method).slice(0, 300) : null, read, limited, same_author: sameAuthor, summary: args.summary ? String(args.summary).slice(0, 2000) : null, reviewer, assigned, at: iso(now) }, { mode: 'create' });
-    const entry = { review_id: rid, head_sha: c.head_sha, merge_base_sha: c.merge_base_sha, result, reviewer, assigned, limited, same_author: sameAuthor, findings_sha256: fsha, at: iso(now) };
-    t.reviews.push(entry);
-    ctx.emit('review_saved', { review_id: rid, result, reviewer: reviewer.kind, head_sha: c.head_sha, assigned, limited, same_author: sameAuthor }, byOf(who));
-    const deciding = decides(t, entry, need);
-    if (deciding && result === 'changes_required' && ['review_pending', 'ready_for_promotion', 'verifying'].includes(t.status)) {
-      const cid = `cor-${ymd(now)}-${rnd(3)}`;
-      t.corrections.push({ correction_id: cid, at: iso(now), by: reviewer, head_sha: c.head_sha, review_id: rid, resolved_by_head: null });
-      t.release = null;
-      if (t.attempts.count >= t.attempts.max) { setStatus(t, 'blocked', `the review asked for changes at the correction ceiling of ${t.attempts.max} attempts`, now); ctx.emit('blocked', { reason: 'ceiling' }, byOf(who)); }
-      else setStatus(t, 'queued', `the ${reviewer.kind} review asked for changes (${findings.length} ${findings.length === 1 ? 'finding' : 'findings'})`, now);
-    } else if (deciding && result === 'pass' && t.status === 'review_pending' && t.verification && t.verification.ok && t.verification.head_sha === c.head_sha) {
-      setStatus(t, 'ready_for_promotion', null, now);
-    }
-    out = { review_id: rid, unchanged: false, counts_for_requirement: deciding, assigned, limited, same_author: sameAuthor };
+    out = recordReview(ws, t, ctx, byOf(who), { reviewer, result, findings, read, method: args.method, summary: args.summary });
     return out;
   });
   const t = readRaw(ws, rel.task(String(args.task_id)));
   const rs = reviewState(t);
-  const ownWords = out.same_author && rs.required !== 'none' && !docsOnly(t.candidate) ? '; it comes from the connection that wrote the task, and a change beyond documents is decided by another reviewer connection or by Eric' : '';
+  const ownWords = out.same_builder ? '; it comes from a connection that built the candidate, so it never decides (Rule N4)' : out.same_author && rs.required !== 'none' && !docsOnly(t.candidate) ? '; it comes from the connection that wrote the task, and a change beyond documents is decided by another reviewer connection or by Eric' : '';
   return { task_id: t.task_id, ...out, status: t.status, review: rs, verified: r.verified, says: out.unchanged ? 'The same review was already saved; nothing changed.' : `Saved review ${out.review_id} (${result}) of head ${t.candidate.head_sha.slice(0, 12)}${out.counts_for_requirement ? '' : `; it does not decide this task (the requirement is ${rs.required})`}${out.limited ? `; marked limited: it did not read both the diff and the test evidence${reviewer.kind === 'owner' ? '' : ', so it never decides'}` : ''}${ownWords}. ${nextAction(t, now)}` };
+}
+
+// One review of the current candidate, saved inside the caller's mutation:
+// the review file, the task's entry, its event and what a deciding review
+// moves. same_author (the reviewer wrote the task) and same_builder (it built
+// a candidate of it) are recorded with it; either keeps it from deciding.
+function recordReview(ws, t, ctx, by, { reviewer, result, findings, read, method = null, summary = null, automated = null }) {
+  const now = ctx.now;
+  const c = t.candidate;
+  const v = loadVersion(ws, t.task_id, t.current_version, ctx.op);
+  const fsha = P.sha256(P.canonical({ result, findings }));
+  const limited = !(read.diff && read.tests);
+  // The same review again is unchanged; a full read after a limited one is
+  // a new review, since only it can decide (review N4).
+  const dup = t.reviews.find((x) => x.head_sha === c.head_sha && x.reviewer.kind === reviewer.kind && x.reviewer.conn === reviewer.conn && x.findings_sha256 === fsha && Boolean(x.limited) === limited);
+  if (dup) return { review_id: dup.review_id, unchanged: true };
+  const rid = `rev-${ymd(now)}-${rnd(3)}`;
+  const need = requiredReview(t);
+  const assigned = reviewer.kind === 'owner' || reviewer.kind === need || v.content.reviews_requested.includes(reviewer.kind);
+  // Whether this connection wrote the task (its creator or any version's).
+  const authors = new Set([t.created_by && t.created_by.conn, ...t.versions.map((x) => { const vv = loadVersion(ws, t.task_id, x.version, ctx.op); return vv && vv.created_by ? vv.created_by.conn : null; })].filter(Boolean));
+  const sameAuthor = reviewer.kind !== 'owner' && authors.has(reviewer.conn);
+  const sameB = sameBuilder(t, reviewer, candidateBuilders(ws, t, ctx.op));
+  ctx.op.writeJson(rel.review(t.task_id, rid), { schema_version: S.review, review_id: rid, task_id: t.task_id, version: t.current_version, head_sha: c.head_sha, merge_base_sha: c.merge_base_sha, diff_sha256: c.diff_sha256, result, findings, method: method ? String(method).slice(0, 300) : null, read, limited, same_author: sameAuthor, same_builder: sameB, summary: summary ? String(summary).slice(0, 2000) : null, reviewer, assigned, ...(automated ? { automated } : {}), at: iso(now) }, { mode: 'create' });
+  const entry = { review_id: rid, head_sha: c.head_sha, merge_base_sha: c.merge_base_sha, result, reviewer, assigned, limited, same_author: sameAuthor, same_builder: sameB, findings_sha256: fsha, at: iso(now) };
+  t.reviews.push(entry);
+  ctx.emit('review_saved', { review_id: rid, result, reviewer: reviewer.kind, automated: Boolean(reviewer.automated), head_sha: c.head_sha, assigned, limited, same_author: sameAuthor, same_builder: sameB }, by);
+  const deciding = decides(t, entry, need);
+  if (deciding && result === 'changes_required' && ['review_pending', 'ready_for_promotion', 'verifying'].includes(t.status)) {
+    const cid = `cor-${ymd(now)}-${rnd(3)}`;
+    t.corrections.push({ correction_id: cid, at: iso(now), by: reviewer, head_sha: c.head_sha, review_id: rid, resolved_by_head: null });
+    t.release = null;
+    if (t.attempts.count >= t.attempts.max) { setStatus(t, 'blocked', `the review asked for changes at the correction ceiling of ${t.attempts.max} attempts`, now); ctx.emit('blocked', { reason: 'ceiling' }, by); }
+    else setStatus(t, 'queued', `the ${reviewer.automated ? 'unattended ' : ''}${reviewer.kind} review asked for changes (${findings.length} ${findings.length === 1 ? 'finding' : 'findings'})`, now);
+  } else if (deciding && result === 'pass' && t.status === 'review_pending' && t.verification && t.verification.ok && t.verification.head_sha === c.head_sha) {
+    // The sovereign merge boundary: a pass only makes the task ready; an
+    // unattended one is never promoted (attestationView), Eric merges it.
+    setStatus(t, 'ready_for_promotion', null, now);
+  }
+  return { review_id: rid, unchanged: false, counts_for_requirement: deciding, assigned, limited, same_author: sameAuthor, same_builder: sameB };
+}
+
+// --- the unattended reviewer (candidate-review.yml) ---------------------------------
+//
+// The workflow reads a candidate's packet, checks the branch on GitHub against
+// it (merge base, diff, files, check runs, commit authors), asks ChatGPT
+// through the OpenAI API and saves the answer here. The desk checks everything
+// again when the review is saved: the exact candidate, merge base and diff it
+// recorded, its own read of GitHub's check runs on the head, the worker's
+// passing verification, and that no builder of the task is the reviewer (Rule
+// N4). Codes only in its refusals, as in the public reads.
+
+// GitHub's check runs on the head as the desk read them (github.js checks):
+// every run but the review's own completed without failing, the suite (the
+// `test` run) among them.
+function ciCode(ci) {
+  if (!ci || !Array.isArray(ci.runs) || !['success', 'failure', 'pending'].includes(ci.state)) return 'ci_unknown';
+  const runs = ci.runs.filter((x) => !/review/i.test(String(x.name || '')));
+  if (!runs.length || runs.some((x) => x.status !== 'completed')) return 'ci_pending';
+  if (!runs.every((x) => ['success', 'neutral', 'skipped'].includes(x.conclusion))) return 'ci_failed';
+  if (!runs.some((x) => x.name === 'test' && x.conclusion === 'success')) return 'ci_pending';
+  if (ci.complete === false) return 'ci_unknown';
+  return null;
+}
+
+// At most this many unattended reviews a day (UTC), all tasks together: each
+// one is a paid OpenAI call.
+const AUTOMATED_REVIEWS_PER_DAY = 10;
+function automatedToday(ws, now, op = null) {
+  const day = iso(now).slice(0, 10);
+  let n = 0;
+  for (const id of taskIds(ws)) {
+    const x = op ? op.readJson(rel.task(id), null) : readRaw(ws, rel.task(id));
+    if (x && Array.isArray(x.reviews)) n += x.reviews.filter((r) => r.reviewer && r.reviewer.automated && String(r.at).slice(0, 10) === day).length;
+  }
+  return n;
+}
+
+// Why the unattended reviewer may not decide this task now, as codes.
+function automatedRefusals(ws, t, { ci, op = null, now = Date.now() }) {
+  const reasons = [];
+  if (restoredCopy(ws)) reasons.push('restored_copy');
+  if (loadState(ws, op).paused) reasons.push('paused');
+  if (automatedToday(ws, now, op) >= AUTOMATED_REVIEWS_PER_DAY) reasons.push('daily_review_cap');
+  if (t.status !== 'review_pending') reasons.push(`task_status:${t.status}`);
+  const auth = authorizationHolds(ws, t, op);
+  if (!auth.ok) reasons.push(auth.code);
+  const need = requiredReview(t);
+  if (need !== REVIEWER_SERVICE.assistant) reasons.push(`review_not_chatgpt:${need}`);
+  const c = t.candidate;
+  if (!c) reasons.push('no_candidate');
+  const ver = t.verification;
+  if (!c || !ver || ver.head_sha !== c.head_sha || !ver.ok) reasons.push('verification_missing');
+  const builders = candidateBuilders(ws, t, op);
+  if (!builders.length) reasons.push('builder_unknown');
+  // The reviewer's identity is not a builder's: neither this service nor any
+  // connection of the reviewer's own kind of assistant built a candidate.
+  if (builders.some((b) => b.conn === SERVICE_CONN || b.assistant === REVIEWER_SERVICE.assistant || b.kind === 'service')) reasons.push('self_review');
+  const code = ciCode(ci);
+  if (code) reasons.push(code);
+  return reasons;
+}
+
+function taskOfHead(ws, headSha, op = null) {
+  for (const id of taskIds(ws)) {
+    const x = op ? op.readJson(rel.task(id), null) : readRaw(ws, rel.task(id));
+    if (x && supported(x, S.task) && x.candidate && x.candidate.head_sha === headSha) return x;
+  }
+  return null;
+}
+
+// What the reviewer reads: the approved goal, the candidate the desk recorded
+// (head, merge base, files, the SHA-256 of its diff) and the worker's test
+// evidence. The diff itself is read from Git by the workflow and must hash to
+// diff_sha256. Never public: the route answers only with the reviewer token.
+function reviewerPacket(ws, who, { head_sha } = {}, opts = {}) {
+  requireReviewerService(who);
+  const now = nowOf(opts);
+  if (!SHA_RE.test(String(head_sha || ''))) fail('BAD_INPUT', 'head_sha is a full 40-character commit SHA.');
+  return readConsistent(ws, () => {
+    const t = taskOfHead(ws, head_sha);
+    if (!t) fail('NOT_FOUND', 'No engineering task has this head as its current candidate.');
+    const c = t.candidate;
+    const v = loadVersion(ws, t.task_id, t.current_version);
+    const a = t.authorization;
+    const pol = a && a.kind === 'policy' ? readRaw(ws, rel.policy(a.policy_id)) : null;
+    const reasons = automatedRefusals(ws, t, { ci: opts.ci, now });
+    const prior = (t.reviews || []).filter((x) => x.head_sha === c.head_sha && x.reviewer && x.reviewer.automated);
+    if (prior.length) reasons.push('already_reviewed');
+    const ver = t.verification && t.verification.head_sha === c.head_sha ? t.verification : null;
+    const tail = ver && ver.tail_sha256 ? readTextSafe(ws, rel.artifact(t.task_id, ver.tail_sha256)) : null;
+    return {
+      schema_version: 'cr.eng-review-packet.v1',
+      task_id: t.task_id,
+      number: t.admission ? t.admission.number : null,
+      status: t.status,
+      goal: { version: t.current_version, content_sha256: v.content_sha256, title: v.content.title, intent: v.content.intent || t.intent, outcome: v.content.outcome, scope: v.content.scope, acceptance: v.content.acceptance, non_goals: v.content.non_goals },
+      delegation: pol ? { template: pol.template, allowed_paths: pol.allowed_paths, forbidden_paths: P.rulesOf(pol).forbidden, requires_tests: P.rulesOf(pol).tests } : null,
+      required_review: requiredReview(t),
+      candidate: { head_sha: c.head_sha, base_sha: c.base_sha || null, merge_base_sha: c.merge_base_sha, branch: c.branch || null, files: c.files || [], diff_sha256: c.diff_sha256, attempt: c.attempt },
+      builders: candidateBuilders(ws, t).map((b) => ({ kind: b.kind, assistant: b.assistant || null })),
+      verification: ver ? { command: ver.command, exit_code: ver.exit_code, total: ver.total, passed: ver.passed, failed: ver.failed, ok: ver.ok, output_tail: tail ? tail.slice(-4000) : null, acceptance: ver.acceptance.map((x) => ({ check: v.content.acceptance[x.index], met: x.met, evidence: x.evidence })), reported_by: 'worker' } : null,
+      ci: opts.ci ? { state: opts.ci.state, runs: (opts.ci.runs || []).slice(0, 30) } : null,
+      reviewer: { service: SERVICE, assistant: REVIEWER_SERVICE.assistant, conn: SERVICE_CONN },
+      reviewable: reasons.length === 0,
+      reasons,
+      at: iso(now),
+    };
+  });
+}
+
+const AUTOMATED_FIELDS = ['task_id', 'head_sha', 'merge_base_sha', 'diff_sha256', 'result', 'findings', 'summary', 'model', 'run_url', 'prompt_sha256', 'response_id', 'idempotency_key'];
+
+// The unattended review, saved only for the exact candidate, merge base and
+// diff the desk recorded, while every check in automatedRefusals passes. It
+// read the diff and the test evidence (the workflow sends nothing else), so
+// it can decide; a pass only makes the task ready for Eric's merge.
+function saveAutomatedReview(ws, who, args = {}, opts = {}) {
+  requireReviewerService(who);
+  const now = nowOf(opts);
+  refuseForged(args);
+  refuseUnknown(args, AUTOMATED_FIELDS);
+  const result = String(args.result || '');
+  if (!['pass', 'changes_required', 'insufficient_evidence'].includes(result)) fail('BAD_INPUT', 'result is pass, changes_required or insufficient_evidence.');
+  const findings = (Array.isArray(args.findings) ? args.findings : []).slice(0, 50).map((f) => ({ severity: ['high', 'medium', 'low', 'note'].includes(String(f && f.severity)) ? f.severity : 'note', summary: String((f && f.summary) || '').slice(0, 600), path: f && f.path ? String(f.path).slice(0, 160) : null, line: f && Number.isInteger(Number(f.line)) ? Number(f.line) : null }));
+  if (result === 'changes_required' && !findings.length) fail('BAD_INPUT', 'changes_required needs at least one finding.');
+  if (result === 'pass' && findings.some((f) => f.severity === 'high')) fail('BAD_INPUT', 'A pass with a high finding is not a pass; send changes_required.');
+  for (const k of ['head_sha', 'merge_base_sha']) if (!SHA_RE.test(String(args[k] || ''))) fail('BAD_INPUT', `${k} is a full 40-character commit SHA.`);
+  if (!/^[0-9a-f]{64}$/.test(String(args.diff_sha256 || ''))) fail('BAD_INPUT', 'diff_sha256 is the SHA-256 of the diff the reviewer read.');
+  const model = String(args.model || '');
+  if (!/^[A-Za-z0-9._:-]{1,64}$/.test(model)) fail('BAD_INPUT', 'model names the OpenAI model that answered.');
+  const runUrl = /^https:\/\/github\.com\/kuaya1\/CryptoResearch\/actions\/runs\/\d+(\/attempts\/\d+)?$/.test(String(args.run_url || '')) ? String(args.run_url) : null;
+  const automated = { service: SERVICE, model, run_url: runUrl, prompt_sha256: /^[0-9a-f]{64}$/.test(String(args.prompt_sha256 || '')) ? String(args.prompt_sha256) : null, response_id: args.response_id ? String(args.response_id).slice(0, 120) : null, read: 'the goal, the Git diff of the head on its merge base and the test evidence' };
+  const reviewer = { kind: REVIEWER_SERVICE.assistant, role: 'reviewer', conn: SERVICE_CONN, automated: true, service: SERVICE, model };
+  const read = { diff: true, tests: true, acceptance: true, builder_notes: false };
+  const t0 = readConsistent(ws, () => taskOfHead(ws, String(args.head_sha)) || (TASK_ID_RE.test(String(args.task_id || '')) ? readRaw(ws, rel.task(String(args.task_id))) : null));
+  if (!t0) fail('NOT_FOUND', 'No engineering task has this head as its current candidate.');
+  if (args.task_id && args.task_id !== t0.task_id) fail('WRONG_CANDIDATE', `This head is the candidate of ${t0.task_id}, not ${String(args.task_id).slice(0, 40)}. Nothing was saved.`);
+  let out = {};
+  const r = mutate(ws, { taskId: t0.task_id, type: 'review_automated', now }, (t, ctx) => {
+    const c = t.candidate;
+    if (!c || c.head_sha !== args.head_sha) fail('WRONG_CANDIDATE', `${t.task_id}'s current candidate is ${c ? c.head_sha : 'none'}; a review is saved only for the exact candidate it read. Nothing was saved.`);
+    if (c.merge_base_sha !== args.merge_base_sha) fail('MERGE_BASE_MISMATCH', `The reviewer read the diff on merge base ${args.merge_base_sha}; the desk recorded ${c.merge_base_sha}. Nothing was saved.`);
+    if (c.diff_sha256 !== args.diff_sha256) fail('DIFF_MISMATCH', `The diff the reviewer read (SHA-256 ${args.diff_sha256}) is not the one the desk recorded (${c.diff_sha256}). Nothing was saved.`);
+    // The same answer delivered again is unchanged; any other second review
+    // of this head is refused (one paid review per head).
+    const fsha = P.sha256(P.canonical({ result, findings }));
+    const prior = t.reviews.filter((x) => x.head_sha === c.head_sha && x.reviewer && x.reviewer.automated);
+    const same = prior.find((x) => x.findings_sha256 === fsha);
+    if (same) { out = { review_id: same.review_id, unchanged: true }; return out; }
+    const reasons = automatedRefusals(ws, t, { ci: opts.ci, op: ctx.op, now });
+    if (prior.length) reasons.push('already_reviewed');
+    if (reasons.length) fail('REVIEW_REFUSED', `The unattended review of ${t.task_id} was not saved: ${reasons.join(', ')}.`, { reasons });
+    // The desk's own read of the check runs on this head, as ci_checks records it.
+    const ci = opts.ci;
+    t.verification.ci = { state: ci.state, runs: ci.runs.slice(0, 30).map((x) => ({ name: String(x.name || '').slice(0, 80), status: x.status || null, conclusion: x.conclusion || null })), complete: ci.complete !== false, why: null, source: 'GitHub check runs on this head, read by the desk', read_at: iso(now) };
+    ctx.emit('ci_checks', { head_sha: c.head_sha, state: ci.state }, byOf(who));
+    out = recordReview(ws, t, ctx, byOf(who), { reviewer, result, findings, read, method: 'unattended: candidate-review.yml through the OpenAI API', summary: args.summary, automated });
+    return out;
+  });
+  const t = readRaw(ws, rel.task(t0.task_id));
+  const rs = reviewState(t);
+  return { task_id: t.task_id, number: t.admission ? t.admission.number : null, ...out, status: t.status, review: { required: rs.required, state: rs.state, satisfied: rs.satisfied }, verified: r.verified, says: out.unchanged ? 'The same review was already saved; nothing changed.' : `Saved unattended review ${out.review_id} (${result}) of head ${t.candidate.head_sha.slice(0, 12)}${out.counts_for_requirement ? '' : `; it does not decide this task (the requirement is ${rs.required})`}. ${result === 'pass' && t.status === 'ready_for_promotion' ? 'Ready for Eric\'s merge on GitHub; no agent merges it.' : nextAction(t, now)}` };
 }
 
 function requestCorrection(ws, who, args = {}, opts = {}) {
@@ -1267,6 +1491,9 @@ function attestationView(ws, headSha, opts = {}) {
     if (!rs.satisfied) reasons.push(`review_not_passed:${rs.required}:${rs.state}`);
     const release = P.stricterRelease(content && content.release_mode, a && a.release_mode, pol && pol.release_mode);
     if (release === 'owner') reasons.push('release_by_owner');
+    // The sovereign merge boundary (2026-10-26): what an unattended review
+    // approved is never promoted by a workflow; Eric merges it himself.
+    if (rs.latest && rs.latest.reviewer && rs.latest.reviewer.automated) reasons.push('owner_merges_unattended_review');
     // The diff and files the review read: the promotion workflow recomputes
     // them from Git on merge_base_sha and refuses on any difference.
     const own = c && c.head_sha === headSha ? c : null;
@@ -1324,7 +1551,8 @@ function capabilities(ws, who, args = {}, opts = {}) {
     matching: `${P.MATCH_RULE}: a submitted version is admitted under the narrowest active delegation it fits, never the first activated: (1) a delegation whose paths lie inside another's comes first, then (2) the lighter review it requires (${P.REVIEWS.join(' < ')}), (3) release by promotion before release by Eric, (4) fewer path rules, (5) the template name, (6) the delegation ID. It is held to the stricter of its declared review and release and the delegation's, and to the delegation's limits and max_files. Fitting none, it waits for Eric. Pass task_id to see where a saved version would land.`,
     ...(preview ? { preview } : {}),
     intents: { explore: 'a note only; never built', design: `documents only (${P.DESIGN_PATHS.join(', ')})`, implement: 'code inside the approved scope' },
-    unavailable: ['an unattended ChatGPT review (ChatGPT reviews only in a conversation Eric opens)', 'a wake-up trigger (the builder runs hourly)', 'Gemini automation (an assigned review only when Eric asks)', 'merging, deploying or approving by any connection'],
+    unattended_review: 'Where Eric has turned on candidate-review.yml, ChatGPT reviews a candidate through the OpenAI API once GitHub\'s tests pass on its head, as its own reviewer identity (never a builder of the task); a pass only makes the task ready, and Eric merges its pull request himself.',
+    unavailable: ['merging into main after an unattended review (Eric merges it on GitHub)', 'a wake-up trigger (the builder runs hourly)', 'Gemini automation (an assigned review only when Eric asks)', 'merging, deploying or approving by any connection'],
     lifecycle: 'prepared → awaiting_authorization → admitted → queued → claimed → implementing → verifying → review_pending → ready_for_promotion → merged; also blocked, paused, cancelled, superseded. Deployment is read separately.',
   };
 }
@@ -1334,5 +1562,6 @@ module.exports = {
   prepareTask, submitTask, activatePolicy, revokePolicy, setPaused, authorizeTask, rebindTask, candidateHeadOf, pauseTask, resumeTask, cancelTask, reopenTask,
   admissionCheckOf, recheckAdmission, mergeCandidates, reconcileMerged,
   claimTask, recordEvent, saveReview, requestCorrection,
+  REVIEWER_SERVICE, SERVICE_CONN, AUTOMATED_REVIEWS_PER_DAY, reviewerPacket, saveAutomatedReview, ciCode,
   getTask, listTasks, getEvidence, admissionView, attestationView, ownerView, capabilities, nextAction, reviewState,
 };

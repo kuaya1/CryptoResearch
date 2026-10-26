@@ -2,22 +2,30 @@
 // The engineering inbox's HTTP routes (Connected Engineering v1, 2026-10-25;
 // moved out of dashboard/server.js on Eric's decision on review finding 2):
 // the /mcp/engineering connector, the public admission and attestation reads
-// the workflows check, and Eric's own /api/engineering decisions. They live
+// the workflows check, the unattended reviewer's token route (2026-10-26) and
+// Eric's own /api/engineering decisions. They live
 // under dashboard/engineering/, which backlog-promote.js PROTECTED holds for
 // Eric, so a branch that changes them never merges on its own;
 // dashboard/server.js only mounts them, and promotion holds a server.js
 // change that touches that mount.
 
+const crypto = require('crypto');
 const { OpError } = require('../core/ops');
 const inbox = require('./inbox');
 
 const OWNER = { kind: 'owner' };
-const ENG_CONFLICT = new Set(['PAUSED', 'CLAIMED', 'STALE_VERSION', 'HASH_MISMATCH', 'WRONG_STATE', 'WRONG_CANDIDATE', 'NOT_EDITABLE', 'EDIT_AFTER_ADMISSION', 'CEILING', 'NOT_CLAIMABLE', 'HELD', 'UNSUPPORTED_SCHEMA', 'NOT_REBINDABLE', 'AUTHORIZATION_HOLDS', 'MERGE_STATE_UNREAD', 'MERGE_STATE_UNKNOWN', 'NO_FIT', 'NOT_ACTIVE', 'GITHUB_UNKNOWN', 'NOT_ON_MAIN']);
+const ENG_CONFLICT = new Set(['PAUSED', 'CLAIMED', 'STALE_VERSION', 'HASH_MISMATCH', 'WRONG_STATE', 'WRONG_CANDIDATE', 'NOT_EDITABLE', 'EDIT_AFTER_ADMISSION', 'CEILING', 'NOT_CLAIMABLE', 'HELD', 'UNSUPPORTED_SCHEMA', 'NOT_REBINDABLE', 'AUTHORIZATION_HOLDS', 'MERGE_STATE_UNREAD', 'MERGE_STATE_UNKNOWN', 'NO_FIT', 'NOT_ACTIVE', 'GITHUB_UNKNOWN', 'NOT_ON_MAIN', 'REVIEW_REFUSED', 'MERGE_BASE_MISMATCH', 'DIFF_MISMATCH']);
 const PUBLIC_READ_RE = /^\/engineering\/(?:admissions\/(eng-\d{8}-[0-9a-f]{6})|attestations\/([0-9a-f]{40}))$/;
+// The unattended reviewer's two calls (candidate-review.yml, 2026-10-26).
+const REVIEWER_RE = /^\/engineering\/reviewer\/(packet|reviews)$/;
+const MAX_REVIEWER_BODY = 64 * 1024;
+const REVIEWER_TOKEN_MIN = 32;
+const digest = (s) => crypto.createHash('sha256').update(String(s)).digest();
 
 // oauth and auth are null on this PC (no connector, no sign-in); HttpError
 // and readCodes are the server's own, so errors read as every other route's.
-function makeEngineeringRoutes(ws, { oauth = null, auth = null, origins = new Set(), version = '1.0.0', log = () => {}, github = null, HttpError, readCodes = new Set() } = {}) {
+// env: where the reviewer token is read, per request (tests pass their own).
+function makeEngineeringRoutes(ws, { oauth = null, auth = null, origins = new Set(), version = '1.0.0', log = () => {}, github = null, HttpError, readCodes = new Set(), env = process.env } = {}) {
   const engMcp = oauth ? require('./tools').makeEngineeringMcp(ws, { version, log, github }) : null;
 
   // /mcp/engineering, with its own OAuth resource and one role per
@@ -50,6 +58,65 @@ function makeEngineeringRoutes(ws, { oauth = null, auth = null, origins = new Se
     res.writeHead(v ? 200 : 404, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify(v || { error: 'Not found' }));
     return true;
+  }
+
+  // The unattended reviewer (candidate-review.yml, 2026-10-26,
+  // audits/2026-10-26-backend-autonomy): off unless CR_ENG_REVIEWER_TOKEN
+  // (32 characters or more, in the environment only; never stored, logged or
+  // shown) is set, and then only a request bearing it reads a candidate's
+  // review packet or saves one review of it, as the reviewer service and
+  // nothing else. The desk reads GitHub's check runs on the head itself for
+  // both; nothing the workflow says about CI counts.
+  async function reviewer(req, res, url) {
+    const m = REVIEWER_RE.exec(url.pathname);
+    if (!m) return false;
+    const token = typeof env.CR_ENG_REVIEWER_TOKEN === 'string' && env.CR_ENG_REVIEWER_TOKEN.length >= REVIEWER_TOKEN_MIN ? env.CR_ENG_REVIEWER_TOKEN : null;
+    if (!token) throw new HttpError(404, 'Not found');
+    if (req.method !== 'POST') throw new HttpError(405, 'Method not allowed');
+    const sent = /^Bearer\s+(\S+)$/i.exec(String(req.headers.authorization || ''));
+    if (!sent || !crypto.timingSafeEqual(digest(sent[1]), digest(token))) {
+      log('Engineering reviewer request refused: no valid reviewer token');
+      throw new HttpError(401, 'The reviewer token is needed.');
+    }
+    const body = await readJsonBody(req);
+    const head = String(body.head_sha || '');
+    if (!/^[0-9a-f]{40}$/.test(head)) throw new HttpError(400, 'head_sha is a full 40-character commit SHA.');
+    if (m[1] === 'packet' && Object.keys(body).some((k) => k !== 'head_sha')) throw new HttpError(400, 'The packet is asked for by head_sha alone.');
+    const ci = github ? await github.checks(head) : null;
+    let out;
+    try {
+      out = m[1] === 'packet'
+        ? inbox.reviewerPacket(ws, inbox.REVIEWER_SERVICE, { head_sha: head }, { ci })
+        : inbox.saveAutomatedReview(ws, inbox.REVIEWER_SERVICE, body, { ci });
+    } catch (err) {
+      if (!(err instanceof OpError) || err.status || readCodes.has(err.code) || ['WORKSPACE_BUSY', 'WRITES_BLOCKED', 'IDEMPOTENCY_CONFLICT'].includes(err.code)) throw err;
+      const status = err.code === 'NOT_FOUND' ? 404 : ENG_CONFLICT.has(err.code) ? 409 : 400;
+      log(`Engineering reviewer: ${m[1]} ${head.slice(0, 12)} refused (${err.code})`);
+      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ error: err.message, code: err.code, reasons: err.details && Array.isArray(err.details.reasons) ? err.details.reasons : null, saved: false }));
+      return true;
+    }
+    log(`Engineering reviewer: ${m[1]} ${head.slice(0, 12)} ${m[1] === 'packet' ? (out.reviewable ? 'reviewable' : `not reviewable (${out.reasons.join(', ')})`) : `${out.unchanged ? 'unchanged' : 'saved'} ${out.review_id}`}`);
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(out));
+    return true;
+  }
+  // A JSON object of at most MAX_REVIEWER_BODY bytes; a larger body is read
+  // to its end and refused.
+  function readJsonBody(req) {
+    return new Promise((resolve, reject) => {
+      const chunks = [];
+      let size = 0;
+      req.on('data', (c) => { size += c.length; if (size <= MAX_REVIEWER_BODY) chunks.push(c); });
+      req.on('end', () => {
+        if (size > MAX_REVIEWER_BODY) return reject(new HttpError(413, 'The body is too large.'));
+        let v = null;
+        try { v = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch (_) { v = null; }
+        if (!v || typeof v !== 'object' || Array.isArray(v)) return reject(new HttpError(400, 'The body is a JSON object.'));
+        return resolve(v);
+      });
+      req.on('error', reject);
+    });
   }
 
   // Preferences > Developer > Engineering: Eric's own decisions, behind the
@@ -175,7 +242,7 @@ function makeEngineeringRoutes(ws, { oauth = null, auth = null, origins = new Se
     return { first, every };
   }
 
-  return { connector, publicRead, mount, reconcileMerges, scheduleSweeps };
+  return { connector, publicRead, reviewer, mount, reconcileMerges, scheduleSweeps };
 }
 
-module.exports = { makeEngineeringRoutes, PUBLIC_READ_RE };
+module.exports = { makeEngineeringRoutes, PUBLIC_READ_RE, REVIEWER_RE };

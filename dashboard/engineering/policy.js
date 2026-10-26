@@ -9,7 +9,7 @@
 // review and tests still decide.
 
 const crypto = require('crypto');
-const { PROTECTED, DELEGATION_RESTRICTED, foldPath, protectedHit } = require('../scripts/backlog-promote');
+const { PROTECTED, PROTECTED_LINES, DELEGATION_RESTRICTED, foldPath, protectedHit } = require('../scripts/backlog-promote');
 
 const REPO = 'kuaya1/CryptoResearch';
 const INTENTS = ['explore', 'design', 'implement'];
@@ -21,6 +21,9 @@ const MAX_ATTEMPTS = 3;
 // Rebuilds of a passing candidate on a newer main, counted apart (review N8).
 const MAX_REBUILDS = 3;
 const LEASE_MS = 20 * 60 * 1000;
+// The tests a template with `requires_tests` asks every candidate to add or
+// change (eng-backend@1).
+const TEST_FILES = 'dashboard/tests/**/*.test.js';
 
 // Versioned and immutable once published: a changed rule is a new template.
 const TEMPLATES = {
@@ -107,6 +110,30 @@ const TEMPLATES = {
     max_days: 30,
     requires_goal: true,
   },
+  // Eric, 2026-10-26 (audits/2026-10-26-backend-autonomy): backend work for
+  // one goal without his passphrase. Only here is dashboard/core/ lifted
+  // (DELEGATION_RESTRICTED `lifted` in backlog-promote.js); its protected
+  // files (the ledger, the wallets and what the gate is computed with) stay
+  // out of reach as for every template. `forbidden_paths` fail the match
+  // whatever else a scope says, every task names a test and every candidate
+  // changes one (`requires_tests`), and Eric merges each pull request
+  // himself (release owner): an unattended review moves a task to
+  // ready_for_promotion and no further.
+  'eng-backend@1': {
+    template: 'eng-backend@1',
+    title: 'Backend endpoints, core logic, data stores and integration tests for one goal',
+    says: 'The server\'s routes in dashboard/server.js, core logic and data stores in dashboard/core/ and their tests for the goal Eric names, each candidate adding or changing a test and reviewed by ChatGPT, from a connection other than the one that submitted or built it, before Eric merges it on GitHub. Never dashboard/engineering/, the front door, the workflows, the hosted entry point, sign-in, the ledger and wallets, the core files the gate is computed with, the tests that guard the lane or a protected path.',
+    repo_full_name: REPO,
+    intents: ['implement'],
+    allowed_paths: ['dashboard/server.js', 'dashboard/core/**', 'dashboard/tests/**'],
+    forbidden_paths: ['dashboard/engineering/**', 'dashboard/frontdoor.js', '.github/workflows/**', 'server.js', 'dashboard/hosted.js', 'dashboard/oauth.js', 'dashboard/mcp.js', 'dashboard/mcp-wire.js', 'dashboard/core/portfolio.js', 'dashboard/core/wallets.js', 'dashboard/core/walletsync.js', 'dashboard/core/alchemy.js'],
+    requires_tests: TEST_FILES,
+    required_review: 'chatgpt',
+    release_mode: 'owner',
+    limits: { max_open_tasks: 3, max_admissions_per_day: 5, max_files: 20 },
+    max_days: 30,
+    requires_goal: true,
+  },
 };
 // Kept so their records stay readable, never offered for a new activation,
 // and a delegation activated from one matches nothing (review N6).
@@ -187,6 +214,10 @@ const PROTECTED_SAMPLES = [
   'dashboard/oauth.js', 'dashboard/mcp.js', 'dashboard/mcp-wire.js', 'dashboard/hosted.js', 'server.js',
   'dashboard/core/portfolio.js', 'dashboard/core/wallets.js', 'dashboard/core/walletsync.js', 'dashboard/core/alchemy.js',
   'dashboard/frontdoor.js', 'dashboard/core/offsite.js', 'dashboard/core/ops.js', 'dashboard/core/fsx.js', 'dashboard/core/workspace.js', 'dashboard/tests/engineering-guard.test.js',
+  // Every core file the gate is computed with by name, now that eng-backend@1
+  // reaches dashboard/core/: a glob such as dashboard/core/forensic-*.js is
+  // refused at the match, not only at the candidate.
+  'dashboard/core/ids.js', 'dashboard/core/forensic-defs.js', 'dashboard/core/rubrics.js', 'dashboard/core/scoring.js', 'dashboard/core/netguard.js', 'dashboard/core/revision.js',
   'package.json', 'package-lock.json', 'dashboard/web/package.json', 'dashboard/web/package-lock.json', 'render.yaml', 'render.yml',
   'portfolio/x.json', 'paper/x.jsonl', 'projects/x/project.json', 'config/settings.json', 'secrets/x.json',
   'dashboard/engineering/inbox.js', 'dashboard/engineering/x.js', 'AGENTS.md', '.mcp.json',
@@ -196,6 +227,60 @@ function globTouchesProtected(glob) {
   const re = new RegExp(globRe(glob).source, 'i');
   const hit = PROTECTED_SAMPLES.find((p) => re.test(p));
   return hit ? protectedWhy(hit) : null;
+}
+
+// Whether a path or glob can name a path another path or glob names, read as
+// Eric's Windows PC reads them. Two globs meet when the fixed part of one
+// leads into the other's.
+function reaches(a, b) {
+  const x = foldPath(a);
+  const y = foldPath(b);
+  if (!x.includes('*') && !y.includes('*')) return x === y;
+  if (!x.includes('*')) return globRe(y).test(x);
+  if (!y.includes('*')) return globRe(x).test(y);
+  const lx = x.slice(0, x.indexOf('*'));
+  const ly = y.slice(0, y.indexOf('*'));
+  return lx.startsWith(ly) || ly.startsWith(lx);
+}
+// A template's own rules beyond its paths, from the delegation record and
+// from the published template alike, so a record can never drop one.
+function rulesOf(policy) {
+  const tpl = (policy && TEMPLATES[policy.template]) || {};
+  return {
+    forbidden: [...new Set([...(Array.isArray(policy && policy.forbidden_paths) ? policy.forbidden_paths : []), ...(tpl.forbidden_paths || [])])],
+    tests: (policy && policy.requires_tests) || tpl.requires_tests || null,
+  };
+}
+// The forbidden glob a path or scope glob can reach, or null.
+const forbiddenHit = (p, policy) => rulesOf(policy).forbidden.find((g) => reaches(p, g)) || null;
+// A scope entry that names a test file (or a glob of them) under dashboard/tests/.
+const namesTest = (p) => { const f = foldPath(p); return f.startsWith('dashboard/tests/') && (/\.test\.js$/.test(f) || f.endsWith('*')); };
+
+// Each file of a git diff (`git diff --binary --full-index`): its hunk lines
+// (after its first @@) and whether the diff deletes it.
+function diffSections(diff) {
+  const out = new Map();
+  let cur = null;
+  for (const line of String(diff).split('\n')) {
+    const h = /^diff --git a\/(\S+) b\/(\S+)$/.exec(line);
+    if (h) { cur = { file: h[2], deleted: false, hunks: false, lines: [] }; out.set(h[2], cur); continue; }
+    if (!cur) continue;
+    if (!cur.hunks) {
+      if (/^deleted file mode /.test(line)) cur.deleted = true;
+      if (line.startsWith('@@')) cur.hunks = true;
+      continue;
+    }
+    if (/^[+-]/.test(line)) cur.lines.push(line);
+  }
+  return out;
+}
+// Why a diff touches a line of `file` that mounts a protected part
+// (backlog-promote.js PROTECTED_LINES), or null. A deleted file touches them all.
+function protectedLineWhy(file, diff, sections = diffSections(diff)) {
+  const rule = PROTECTED_LINES.find((x) => foldPath(x.path) === foldPath(file));
+  const s = rule ? sections.get(file) : null;
+  if (!s) return null;
+  return s.deleted || s.lines.some((l) => rule.re.test(l)) ? rule.why : null;
 }
 
 // Private or sensitive content never reaches the public backlog. Matches are
@@ -310,12 +395,16 @@ function fits(policy, c, { now, openUnderPolicy = 0, admittedLastDay = 0 } = {})
   if (policy.goal_id && c.goal_id !== policy.goal_id) r.push(`the delegation covers goal ${policy.goal_id}${c.goal_id ? `, not ${c.goal_id}` : ''}`);
   const allowed = c.intent === 'design' ? DESIGN_PATHS.filter((d) => policy.allowed_paths.some((p) => within(d, p))) : policy.allowed_paths;
   for (const p of c.scope.paths) {
+    const banned = forbiddenHit(p, policy);
     const why = globTouchesProtected(p);
     const core = restrictedHit(p, policy.template);
+    if (banned) r.push(`${p} is forbidden under ${policy.template} (it can reach ${banned}); it waits for Eric`);
     if (why) r.push(`${p} can reach a protected path (${why})`);
     else if (core) r.push(`${p} can reach ${restrictedWhere(core)} (${core.why}); it waits for Eric`);
-    else if (!allowed.some((g) => within(p, g))) r.push(`${p} is outside the delegated paths`);
+    else if (!banned && !allowed.some((g) => within(p, g))) r.push(`${p} is outside the delegated paths`);
   }
+  // A template that asks for tests admits only a task that names one.
+  if (rulesOf(policy).tests && !c.scope.paths.some(namesTest)) r.push(`${policy.template} needs a test: name the dashboard/tests/ file the work adds or changes (a .test.js path) in scope.paths`);
   // A lighter declared review or release is no miss: the delegation's own
   // applies (boundaries below).
   if (openUnderPolicy >= policy.limits.max_open_tasks) r.push(`the delegation already has ${openUnderPolicy} open ${openUnderPolicy === 1 ? 'task' : 'tasks'} (limit ${policy.limits.max_open_tasks})`);
@@ -404,8 +493,8 @@ function entryText({ number, task_id, version, content_sha256, policy_id, conten
 const ENTRY_MARK_RE = /\*\(engineering task (eng-\d{8}-[0-9a-f]{6}) v(\d+), sha256 ([0-9a-f]{16})/;
 
 module.exports = {
-  REPO, INTENTS, REVIEWS, RELEASE_MODES, TEMPLATES, RETIRED, actionable, RESTRICTED, restrictedWhy, restrictedHit, restrictedWhere, DESIGN_PATHS, MAX_ATTEMPTS, MAX_REBUILDS, LEASE_MS, LIMITS,
-  sha256, canonical, contentHash, globRe, matches, within, protectedWhy, globTouchesProtected, PROTECTED_SAMPLES,
+  REPO, INTENTS, REVIEWS, RELEASE_MODES, TEMPLATES, RETIRED, actionable, RESTRICTED, restrictedWhy, restrictedHit, restrictedWhere, DESIGN_PATHS, MAX_ATTEMPTS, MAX_REBUILDS, LEASE_MS, LIMITS, TEST_FILES,
+  sha256, canonical, contentHash, globRe, matches, within, reaches, rulesOf, forbiddenHit, namesTest, diffSections, protectedLineWhy, protectedWhy, globTouchesProtected, PROTECTED_SAMPLES,
   screen, contentOf, validateContent, fits, entryText, ENTRY_MARK_RE, PATH_RE,
   stricterReview, stricterRelease, boundaries, choose, MATCH_RULE, MATCH_KEYS,
 };

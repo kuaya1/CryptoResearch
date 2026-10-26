@@ -26,16 +26,17 @@ that stay with Eric, so a version naming them waits for his authorization.
 `DELEGATION_RESTRICTED` (`dashboard/scripts/backlog-promote.js`) holds a path
 at the task, at the candidate and at promotion, whatever a task record says.
 A rule may carry `lifted`, a map from a template to the paths that template
-alone may change. Today only `eng-app@4` appears in it.
+alone may change. `eng-app@4` and, since 2026-10-26, `eng-backend@1` appear
+in it.
 
-| Rule | Held for every template | Lifted for `eng-app@4` |
-|---|---|---|
-| `dashboard/core/` | everything | nothing |
-| `dashboard/web/` | everything outside `src/` (`vite.config.js`, `scripts/`, `index.html`) | `dashboard/web/src/` |
-| `dashboard/public/app/` | the committed bundle, under `eng-app@3` and earlier | all of it |
-| `dashboard/public/tokens.css`, `styles.css`, `position.css` | served before sign-in, under `eng-app@3` and earlier | those three files |
-| `dashboard/public/favicon.svg` | served before sign-in; an SVG can run script | nothing |
-| `dashboard/tests/engineering-*`, `backlog-*`, `guardrails.test.js`, `web-app.test.js`, `helpers.js` | the tests that guard the lane, the backlog, the guardrails and the browser's writes | nothing |
+| Rule | Held for every other template | Lifted for `eng-app@4` | Lifted for `eng-backend@1` |
+|---|---|---|---|
+| `dashboard/core/` | everything | nothing | all of it, except its `PROTECTED` files |
+| `dashboard/web/` | everything outside `src/` (`vite.config.js`, `scripts/`, `index.html`) | `dashboard/web/src/` | nothing |
+| `dashboard/public/app/` | the committed bundle, under `eng-app@3` and earlier | all of it | nothing |
+| `dashboard/public/tokens.css`, `styles.css`, `position.css` | served before sign-in, under `eng-app@3` and earlier | those three files | nothing |
+| `dashboard/public/favicon.svg` | served before sign-in; an SVG can run script | nothing | nothing |
+| `dashboard/tests/engineering-*`, `backlog-*`, `guardrails.test.js`, `web-app.test.js`, `helpers.js` | the tests that guard the lane, the backlog, the guardrails and the browser's writes | nothing | nothing |
 
 `PROTECTED` paths (workflows, `dashboard/engineering/`, `dashboard/scripts/backlog-*`,
 `server.js`, `package.json`, the guard test and the rest) stay out of every
@@ -46,6 +47,71 @@ A bundle change is built from source (`npm run build` in `dashboard/web`), and
 `web-app.test.js` fails when `dashboard/public/app` is older than its source.
 A task that changes `dashboard/web/src/**` therefore also changes
 `dashboard/public/app/**`, which `eng-app@4` allows.
+
+## What `eng-backend@1` allows (2026-10-26)
+
+Eric's direction, 2026-10-26 (`audits/2026-10-26-backend-autonomy`). For the
+one goal Eric names, implement only. Each candidate is reviewed by ChatGPT,
+and Eric merges every pull request himself (release mode `owner`):
+
+- `dashboard/server.js` (the server's routes)
+- `dashboard/core/**` (core logic and data stores)
+- `dashboard/tests/**` (ordinary tests only)
+
+It never reaches the paths below. `forbidden_paths` refuses each one at the
+task, at the candidate and in the delegation record:
+
+- `dashboard/engineering/**`
+- `dashboard/frontdoor.js`
+- `.github/workflows/**`
+- the root `server.js` and `dashboard/hosted.js`
+- `dashboard/oauth.js`, `dashboard/mcp.js` and `dashboard/mcp-wire.js`
+- the ledger and wallets: `dashboard/core/portfolio.js`, `wallets.js`, `walletsync.js` and `alchemy.js`
+
+The core files the gate is computed with stay `PROTECTED`, as do the guard
+tests. A `dashboard/server.js` line that mounts the engineering routes or the
+front door is held at the candidate (`PROTECTED_LINES`), as it is at
+promotion.
+
+Every task names, in `scope.paths`, the `dashboard/tests/**/*.test.js` file it
+adds or changes. Every candidate adds or changes one (`requires_tests`).
+Before any paid call, the unattended reviewer also checks that a changed test
+requires a changed server or core module.
+
+A scope names core files one by one. `dashboard/core/**` as one glob reaches
+protected files, so a version naming it waits for Eric. There is no
+`data/**`: the folder does not exist, and records are never committed.
+
+## The unattended review (2026-10-26)
+
+`.github/workflows/candidate-review.yml` runs `dashboard/engineering/reviewer.js`
+from main. It starts once GitHub's `test` run passes on a push to
+`claude/candidate-eng-<n>`, or when a pull request from such a branch opens or
+is updated.
+
+1. The reviewer asks the desk for the candidate's packet
+   (`POST /engineering/reviewer/packet`, with the token in
+   `CR_ENG_REVIEWER_TOKEN`).
+2. It checks the branch in Git against the packet: the merge base, the exact
+   diff and its files, commit authors and trailers, and test coverage.
+3. It asks ChatGPT through the OpenAI API.
+4. It saves the answer (`POST /engineering/reviewer/reviews`).
+
+The desk checks all of it again before anything is saved. The review is saved
+as ChatGPT's (`reviewer.automated`, its own identity `candidate-review@1`,
+never an OAuth connection). It is refused:
+
+- when a builder of the task is a ChatGPT connection, or a commit names one
+  (Rule N4, `self_review`);
+- when GitHub's check runs on the head have not passed, as the desk reads
+  them;
+- after the first review of that head;
+- after 10 unattended reviews in one UTC day.
+
+A pass only makes the task `ready_for_promotion`. The attestation then says
+`owner_merges_unattended_review`, so backlog-pr never promotes it, and Eric
+merges the candidate's pull request himself. The 30-minute sweep records the
+merge from GitHub's proof.
 
 ## Activation
 
@@ -82,7 +148,12 @@ valid new binding.
 
 ## Review independence
 
-Unchanged: beyond documents, a review by the connection that wrote any
-version of the task does not decide it (`same_author`), and a review covers
-one head on one base, so a candidate that main has moved past is rebuilt on
-current main, verified and reviewed again.
+Two things are unchanged. Beyond documents, a review by the connection that
+wrote any version of the task does not decide it (`same_author`). And a review
+covers one head on one base: a candidate that main has moved past is rebuilt
+on current main, verified and reviewed again.
+
+Added on 2026-10-26: a review by a connection that built a candidate of the
+task never decides it, documents included (`same_builder`, Rule N4). Neither
+does an unattended review when the builder was the same kind of assistant as
+the reviewer.

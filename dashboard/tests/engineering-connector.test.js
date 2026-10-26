@@ -217,7 +217,7 @@ test('Eric decides on the desk behind sign-in and his passphrase; the connector 
   assert.equal(view.status, 200, view.text);
   assert.equal(view.json.mcp_url, ENG);
   assert.equal(view.json.paused, false);
-  assert.deepEqual(view.json.templates.map((x) => x.template).sort(), ['eng-app@3', 'eng-app@4', 'eng-docs@1'], 'eng-app@1 and eng-app@2 are retired: never offered');
+  assert.deepEqual(view.json.templates.map((x) => x.template).sort(), ['eng-app@3', 'eng-app@4', 'eng-backend@1', 'eng-docs@1'], 'eng-app@1 and eng-app@2 are retired: never offered');
   assert.deepEqual(view.json.connections.map((c) => c.role).sort(), ['submitter', 'worker']);
   assert.ok(view.json.connections.every((c) => c.audience === 'engineering'));
 
