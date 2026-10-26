@@ -259,7 +259,7 @@ test('no delegation reaches the files served before sign-in, the bundle, the bro
   }
   for (const p of ['dashboard/public/views/brief.js', 'dashboard/public/ui.js', 'dashboard/tests/watchlist-model.test.js', 'docs/engineering/x.md']) assert.equal(P.restrictedHit(p), null, `${p} stays open to a delegation`);
   // The offered application template leaves them out, and its predecessors match nothing.
-  assert.deepEqual(Object.keys(P.TEMPLATES).filter((k) => !P.RETIRED[k]).sort(), ['eng-app@3', 'eng-docs@1']);
+  assert.deepEqual(Object.keys(P.TEMPLATES).filter((k) => !P.RETIRED[k]).sort(), ['eng-app@3', 'eng-app@4', 'eng-docs@1']);
   assert.ok(!P.TEMPLATES['eng-app@3'].allowed_paths.some((g) => g.startsWith('dashboard/web/') || g.startsWith('dashboard/core/')));
   for (const old of ['eng-app@1', 'eng-app@2']) assert.match(P.fits({ template: old, policy_id: 'pol-20261026-0a0a0a' }, {}, { now: Date.now() })[0], /matches nothing/);
 });
