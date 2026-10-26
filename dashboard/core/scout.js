@@ -24,7 +24,6 @@ const BRIEFS = 'scout/briefs';
 const BRIEF_SCHEMA = 'cr.scout-brief.v1';
 const ITEMS_SCHEMA = 'cr.scout-items.v1';
 const RECORD_SCHEMA = 'cr.scout-brief-record.v1';
-const PING_PATH = '/api/ingest/ping';
 const BRIEF_PATH = '/api/ingest/scout-brief';
 // Eric's four lanes (2026-10-26); their scope is in the frozen prompt
 // (templates/scout/scout-prompt.v1.md).
@@ -396,10 +395,11 @@ function readBounded(req, max) {
   });
 }
 
-// The two routes the front door serves before sign-in, online only:
-// GET /api/ingest/ping (without a key: whether ingest is set up; with one:
-// whether it is accepted, costing nothing) and POST /api/ingest/scout-brief.
-// Never from a browser; ten refused keys in 15 minutes lock both.
+// The one path the front door serves before sign-in, online only:
+// /api/ingest/scout-brief. GET checks the key and today's count, costing
+// nothing; POST delivers the brief. Both need the ingest key, never from a
+// browser; ten refused keys in 15 minutes lock both. /api/ingest/ping is the
+// desk's signed-in ping (backlog item 66), not this route.
 function makeScoutRoute(ws, { env = process.env, log = () => {}, now = () => Date.now() } = {}) {
   const failures = [];
   const send = (req, res, status, body) => {
@@ -432,11 +432,9 @@ function makeScoutRoute(ws, { env = process.env, log = () => {}, now = () => Dat
   return async function handle(req, res, url) {
     if (req.headers.origin) return send(req, res, 403, { error: 'Not accepted from a browser.', code: 'REFUSED' });
     const key = deskKey(env);
-    if (url.pathname === PING_PATH) {
-      if (req.method !== 'GET' && req.method !== 'HEAD') return send(req, res, 405, { error: 'Method not allowed' });
-      if (!req.headers.authorization) return send(req, res, 200, { ok: true, ingest: key ? 'ready' : 'not_set_up' });
-      if (refused(req, res, key, 'ping')) return undefined;
-      return send(req, res, 200, { ok: true, ingest: 'ready', key: 'accepted', briefs_today: briefsToday(ws, now()), max_per_day: MAX_PER_DAY });
+    if (req.method === 'GET' || req.method === 'HEAD') {
+      if (refused(req, res, key, 'key check')) return undefined;
+      return send(req, res, 200, { ok: true, key: 'accepted', briefs_today: briefsToday(ws, now()), max_per_day: MAX_PER_DAY });
     }
     if (req.method !== 'POST') return send(req, res, 405, { error: 'Method not allowed' });
     if (refused(req, res, key, 'brief')) return undefined;
@@ -476,7 +474,6 @@ module.exports = {
   BRIEF_SCHEMA,
   ITEMS_REL,
   BRIEFS,
-  PING_PATH,
   BRIEF_PATH,
   checkBrief,
   itemProblems,

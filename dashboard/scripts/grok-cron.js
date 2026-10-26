@@ -8,7 +8,7 @@
 // (core/scout.js). Protected (backlog-promote.js PROTECTED): it holds the xAI
 // key and makes the paid call.
 //
-// Before any paid call it pings the desk with the ingest key; a desk that
+// Before any paid call it checks its ingest key with the desk; a desk that
 // refuses the key, is not set up or has taken its briefs for the day stops
 // the sweep with nothing spent. One attempt per lane, never retried; a lane
 // that fails is reported missing, with what it used. Only posting the brief
@@ -194,24 +194,24 @@ async function run({ env = process.env, fetch: fetchFn = globalThis.fetch, now =
     return { ok: false, status: 'not_set_up', missing };
   }
   const deskHeaders = { authorization: `Bearer ${ingestKey}` };
-  // The ping costs nothing: no paid call before the desk accepts the key.
+  // The key check costs nothing: no paid call before the desk accepts the key.
   let ping;
   try {
-    const r = await timed(fetchFn, `${origin}${S.PING_PATH}`, { method: 'GET', headers: deskHeaders }, DESK_TIMEOUT_MS);
+    const r = await timed(fetchFn, `${origin}${S.BRIEF_PATH}`, { method: 'GET', headers: deskHeaders }, DESK_TIMEOUT_MS);
     ping = { status: r.status, body: await jsonOf(r) };
   } catch (err) {
-    out(`The desk did not answer its ping (${err.name === 'AbortError' ? 'timed out' : 'network error'}). Nothing was sent to xAI.`);
+    out(`The desk did not answer the key check (${err.name === 'AbortError' ? 'timed out' : 'network error'}). Nothing was sent to xAI.`);
     return { ok: false, status: 'desk_unreachable' };
   }
   if (ping.status !== 200 || !ping.body || ping.body.key !== 'accepted') {
-    out(`The desk refused the ping (HTTP ${ping.status}${ping.body && ping.body.code ? `, ${ping.body.code}` : ''}). Nothing was sent to xAI.`);
+    out(`The desk refused the key check (HTTP ${ping.status}${ping.body && ping.body.code ? `, ${ping.body.code}` : ''}). Nothing was sent to xAI.`);
     return { ok: false, status: 'desk_refused', http: ping.status };
   }
   if (ping.body.briefs_today >= ping.body.max_per_day) {
     out(`The desk has taken its ${ping.body.max_per_day} briefs for today. Nothing was sent to xAI.`);
     return { ok: false, status: 'desk_full' };
   }
-  out(`Desk ping: key accepted (${ping.body.briefs_today} of ${ping.body.max_per_day} briefs today).`);
+  out(`Desk: key accepted (${ping.body.briefs_today} of ${ping.body.max_per_day} briefs today).`);
 
   const brief = { schema_version: S.BRIEF_SCHEMA, generated_at: new Date(now).toISOString(), prompt: PROMPT_ID, model: MODEL, lanes_run: [], lanes_missing: [], items: [], usage: {} };
   for (const { lane, body } of requests) {

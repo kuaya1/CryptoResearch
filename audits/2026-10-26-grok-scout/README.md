@@ -6,7 +6,7 @@ Eric's own authorized task, built as one PR he merges by hand on `claude/grok-sc
 
 - **The sweep, `dashboard/scripts/grok-cron.js`.**
   - It reads the frozen prompt `cr-scout-prompt@1` (`templates/scout/scout-prompt.v1.md`, pinned in `templates/scout/LOCK.json`) and refuses to run if the text differs from its pin.
-  - Before any paid call it pings the desk with its key, and stops with "Nothing was sent to xAI." when the desk is unreachable, refuses the key or has had six briefs today.
+  - Before any paid call it checks its key with the desk (`GET /api/ingest/scout-brief`), and stops with "Nothing was sent to xAI." when the desk is unreachable, refuses the key or has had six briefs today.
   - It then makes one xAI Responses call per lane (`web_search` only, `max_output_tokens` 8000, `store: false`), with no retry of a paid call. A lane that fails is recorded as missing, along with the usage xAI reported for it.
   - It posts one brief, retrying only on a network error or a 5xx answer.
   - It prints counts only: no item text, URL, key or desk address.
@@ -16,9 +16,10 @@ Eric's own authorized task, built as one PR he merges by hand on `claude/grok-sc
   - Scheduled runs happen only while the repository variable `SCOUT_ENABLED` is `true`.
   - The job uses `contents: read`, a checkout that keeps no credentials, one run at a time, a 15-minute limit and no npm install.
 - **The route, in the front door (`dashboard/frontdoor.js` → `core/scout.js` `makeScoutRoute`), on the online desk only.**
-  - `GET /api/ingest/ping` without a key says only whether ingest is set up. With a key it goes through the same key gate as the brief.
+  - One path, `/api/ingest/scout-brief`. `GET` with the key checks it and today's count, at no cost; `POST` delivers the brief.
+  - `/api/ingest/ping` is not part of this route. It stays the signed-in ping from backlog item 66 (PR #29, merged while this was built), behind the sign-in like every other route.
   - `POST /api/ingest/scout-brief` takes `Authorization: Bearer <DESK_INGEST_KEY>`, compared by SHA-256 in constant time. The key needs at least 32 characters; ten refused keys in 15 minutes lock the route for 15 minutes.
-  - While the desk has no key set, the ping says `not_set_up` and the brief route answers 404.
+  - While the desk has no key set, the route answers 404 "not set up".
   - Refused before the body is read: a browser Origin, anything but JSON, a body over 64 KB, and a seventh brief in one UTC day.
 - **The saved records, `core/scout.js` `ingest`.**
   - The brief is checked field by field, with every problem listed and nothing saved.

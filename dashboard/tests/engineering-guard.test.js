@@ -95,14 +95,13 @@ test('nothing answers a request beside the front door on the hosted desk', async
     assert.equal(r.headers['cache-control'], 'no-store', p);
   }
   assert.equal((await req(d.port, { method: 'POST', path: `/engineering/attestations/${'0'.repeat(40)}` })).status, 405);
-  // Grok Scout's two routes (core/scout.js, 2026-10-26): the ping answers
-  // without a key, the brief needs the ingest key (this desk has none), and
-  // any other /api/ingest/ path, like the scout's list, waits for sign-in.
-  const ping = await req(d.port, { path: '/api/ingest/ping' });
-  assert.equal(ping.status, 200);
-  assert.deepEqual(ping.json, { ok: true, ingest: 'not_set_up' });
+  // Grok Scout's one route (core/scout.js, 2026-10-26): the brief and its
+  // key check need the ingest key (this desk has none, so not set up), and
+  // any other /api/ingest/ path, the signed-in ping (item 66) and the
+  // scout's list included, waits for sign-in.
+  assert.equal((await req(d.port, { path: '/api/ingest/scout-brief' })).status, 404);
   assert.equal((await req(d.port, { method: 'POST', path: '/api/ingest/scout-brief' })).status, 404);
-  for (const p of ['/api/ingest/other', '/api/ingest/ping/', '/api/scout']) assert.equal((await req(d.port, { path: p })).status, 401, p);
+  for (const p of ['/api/ingest/ping', '/api/ingest/other', '/api/ingest/scout-brief/', '/api/scout']) assert.equal((await req(d.port, { path: p })).status, 401, p);
   // Everything else waits for the sign-in, except the files its page needs.
   assert.equal((await req(d.port, { path: '/api/engineering' })).status, 401);
   assert.equal((await req(d.port, { path: '/' })).status, 303);

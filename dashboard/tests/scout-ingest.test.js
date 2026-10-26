@@ -119,11 +119,11 @@ const scoutFiles = (ws) => (fs.existsSync(ws.abs('scout')) ? fs.readdirSync(ws.a
 test('scout ingest: only the ingest key, never a browser; not set up without a key of 32 characters', async (t) => {
   withEnv(t, { DESK_INGEST_KEY: undefined });
   const d = await desk(t, 'route');
-  // Not set up: the ping says so without a key; with one, and every brief, is 404.
-  let r = await req(d.port, { path: S.PING_PATH });
-  assert.equal(r.status, 200);
-  assert.deepEqual(r.json, { ok: true, ingest: 'not_set_up' });
-  r = await req(d.port, { path: S.PING_PATH, headers: bearer() });
+  // Not set up: the key check and every brief, with a key or without, are 404.
+  let r = await req(d.port, { path: S.BRIEF_PATH });
+  assert.equal(r.status, 404);
+  assert.equal(r.json.code, 'NOT_SET_UP');
+  r = await req(d.port, { path: S.BRIEF_PATH, headers: bearer() });
   assert.equal(r.status, 404);
   assert.equal(r.json.code, 'NOT_SET_UP');
   r = await req(d.port, { method: 'POST', path: S.BRIEF_PATH, headers: { ...bearer(), ...json }, body: brief() });
@@ -135,23 +135,22 @@ test('scout ingest: only the ingest key, never a browser; not set up without a k
   assert.match(r.json.error, /13 characters; it needs at least 32/);
 
   process.env.DESK_INGEST_KEY = KEY;
-  r = await req(d.port, { path: S.PING_PATH });
-  assert.deepEqual(r.json, { ok: true, ingest: 'ready' });
-  r = await req(d.port, { path: S.PING_PATH, headers: bearer('wrong-key-not-real-0123456789abcdefgh') });
+  // The key check: refused without the key or with a wrong one.
+  assert.equal((await req(d.port, { path: S.BRIEF_PATH })).status, 401);
+  r = await req(d.port, { path: S.BRIEF_PATH, headers: bearer('wrong-key-not-real-0123456789abcdefgh') });
   assert.equal(r.status, 401);
   assert.equal(r.json.code, 'REFUSED');
-  r = await req(d.port, { path: S.PING_PATH, headers: bearer() });
+  r = await req(d.port, { path: S.BRIEF_PATH, headers: bearer() });
   assert.equal(r.status, 200);
-  assert.deepEqual(r.json, { ok: true, ingest: 'ready', key: 'accepted', briefs_today: 0, max_per_day: 6 });
-  assert.equal((await req(d.port, { method: 'HEAD', path: S.PING_PATH })).status, 200);
+  assert.deepEqual(r.json, { ok: true, key: 'accepted', briefs_today: 0, max_per_day: 6 });
+  assert.equal((await req(d.port, { method: 'HEAD', path: S.BRIEF_PATH, headers: bearer() })).status, 200);
   // The brief: no key, a wrong key, a browser, the wrong method or type.
   assert.equal((await req(d.port, { method: 'POST', path: S.BRIEF_PATH, headers: json, body: brief() })).status, 401);
   assert.equal((await req(d.port, { method: 'POST', path: S.BRIEF_PATH, headers: { ...bearer('another-wrong-key-not-real-0123456789'), ...json }, body: brief() })).status, 401);
   r = await req(d.port, { method: 'POST', path: S.BRIEF_PATH, headers: { ...bearer(), ...json, origin: `https://${HOST}` }, body: brief() });
   assert.equal(r.status, 403, 'not from a browser, even the desk\'s own origin');
-  assert.equal((await req(d.port, { path: S.PING_PATH, headers: { origin: 'https://elsewhere.test' } })).status, 403);
-  assert.equal((await req(d.port, { path: S.BRIEF_PATH, headers: bearer() })).status, 405);
-  assert.equal((await req(d.port, { method: 'POST', path: S.PING_PATH, headers: bearer() })).status, 405);
+  assert.equal((await req(d.port, { path: S.BRIEF_PATH, headers: { ...bearer(), origin: 'https://elsewhere.test' } })).status, 403);
+  assert.equal((await req(d.port, { method: 'PUT', path: S.BRIEF_PATH, headers: bearer() })).status, 405);
   r = await req(d.port, { method: 'POST', path: S.BRIEF_PATH, headers: { ...bearer(), 'content-type': 'text/plain' }, body: brief() });
   assert.equal(r.status, 415);
   // Too large, by its declared length or as it streams; not JSON.
@@ -163,7 +162,9 @@ test('scout ingest: only the ingest key, never a browser; not set up without a k
   r = await req(d.port, { method: 'POST', path: S.BRIEF_PATH, headers: { ...bearer(), ...json }, body: '{ not json' });
   assert.equal(r.status, 400);
   assert.equal(r.json.saved, false);
-  // Any other /api/ingest/ path, and the scout's list, wait for the sign-in.
+  // Any other /api/ingest/ path, the signed-in ping (item 66) included, and
+  // the scout's list wait for the sign-in, whatever the ingest key.
+  assert.equal((await req(d.port, { path: '/api/ingest/ping', headers: bearer() })).status, 401);
   assert.equal((await req(d.port, { path: '/api/ingest/other', headers: bearer() })).status, 401);
   assert.equal((await req(d.port, { path: '/api/scout', headers: bearer() })).status, 401);
   assert.deepEqual(scoutFiles(d.ws), [], 'nothing was written by any refusal');
@@ -177,7 +178,7 @@ test('scout ingest: only the ingest key, never a browser; not set up without a k
   const again = await req(d.port, { method: 'POST', path: S.BRIEF_PATH, headers: { ...bearer(), ...json }, body: brief() });
   assert.equal(again.json.status, 'unchanged');
   assert.equal(again.json.brief_id, r.json.brief_id);
-  r = await req(d.port, { path: S.PING_PATH, headers: bearer() });
+  r = await req(d.port, { path: S.BRIEF_PATH, headers: bearer() });
   assert.equal(r.json.briefs_today, 1);
   // A refused brief says each problem, and saves nothing.
   r = await req(d.port, { method: 'POST', path: S.BRIEF_PATH, headers: { ...bearer(), ...json }, body: brief({ items: [item({ url_primary: 'http://example.com/x', readiness: 'soon' })] }) });
@@ -187,7 +188,7 @@ test('scout ingest: only the ingest key, never a browser; not set up without a k
   assert.equal(S.view(d.ws).briefs, 1);
 });
 
-test('scout ingest: ten refused keys in 15 minutes lock the ping and the brief, the right key included', async (t) => {
+test('scout ingest: ten refused keys in 15 minutes lock the key check and the brief, the right key included', async (t) => {
   let clock = T0;
   const w = temp(t, 'scout-lock');
   const env = { DESK_INGEST_KEY: KEY };
@@ -197,15 +198,15 @@ test('scout ingest: ten refused keys in 15 minutes lock the ping and the brief, 
     const reqLike = { method, headers, on() {}, pause() {} };
     route(reqLike, res, new URL(`https://${HOST}${p}`));
   });
-  for (let i = 0; i < 10; i += 1) assert.equal((await call('GET', S.PING_PATH, { authorization: 'Bearer nope-not-the-key-0123456789abcdefgh' })).status, 401);
-  let r = await call('GET', S.PING_PATH, { authorization: `Bearer ${KEY}` });
+  for (let i = 0; i < 10; i += 1) assert.equal((await call('GET', S.BRIEF_PATH, { authorization: 'Bearer nope-not-the-key-0123456789abcdefgh' })).status, 401);
+  let r = await call('GET', S.BRIEF_PATH, { authorization: `Bearer ${KEY}` });
   assert.equal(r.status, 429);
   assert.equal(JSON.parse(r.body).code, 'LOCKED');
   r = await call('POST', S.BRIEF_PATH, { authorization: `Bearer ${KEY}`, 'content-type': 'application/json' });
   assert.equal(r.status, 429);
   assert.equal(r.headers.Connection, 'close');
   clock += 16 * 60000;
-  assert.equal((await call('GET', S.PING_PATH, { authorization: `Bearer ${KEY}` })).status, 200, 'the lock ends after 15 minutes');
+  assert.equal((await call('GET', S.BRIEF_PATH, { authorization: `Bearer ${KEY}` })).status, 200, 'the lock ends after 15 minutes');
 });
 
 test('scout ingest: a brief is checked field by field; one bad field refuses it and nothing is saved', (t) => {
@@ -396,9 +397,9 @@ function fakes(t, { lanes = {}, ping = null, post = [], deskWs = null } = {}) {
       });
     }
     assert.equal(opts.headers.authorization, `Bearer ${KEY}`);
-    if (url === `${DESK}${S.PING_PATH}`) {
+    if (url === `${DESK}${S.BRIEF_PATH}` && opts.method === 'GET') {
       calls.ping += 1;
-      return ping || answer(200, { ok: true, ingest: 'ready', key: 'accepted', briefs_today: 0, max_per_day: 6 });
+      return ping || answer(200, { ok: true, key: 'accepted', briefs_today: 0, max_per_day: 6 });
     }
     if (url === `${DESK}${S.BRIEF_PATH}`) {
       calls.post += 1;
@@ -466,7 +467,7 @@ test('scout sweep: nothing goes to xAI unless the prompt matches its pin and the
   for (const [ping, status] of [
     [{ status: 401, json: async () => ({ code: 'REFUSED' }) }, 'desk_refused'],
     [{ status: 404, json: async () => ({ code: 'NOT_SET_UP' }) }, 'desk_refused'],
-    [{ status: 200, json: async () => ({ ok: true, ingest: 'ready', key: 'accepted', briefs_today: 6, max_per_day: 6 }) }, 'desk_full'],
+    [{ status: 200, json: async () => ({ ok: true, key: 'accepted', briefs_today: 6, max_per_day: 6 }) }, 'desk_full'],
   ]) {
     out = lines();
     x = fakes(t, { ping });
