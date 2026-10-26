@@ -154,7 +154,7 @@ const TOOLS = [
   {
     name: 'engineering_record_event',
     roles: ['worker'],
-    description: 'Record one step with your claim_token. type is heartbeat, note (text), admission_number (number, observed_max, observed_main_sha), admission_refused (number, reason), admission_confirmed (main_sha, entry_sha256), remote_action (action push_admission, push_candidate or push_release; phase intent before a push, observed or failed after it; ref, sha, observed_sha), started (branch, base_sha), candidate (branch, head_sha, base_sha, merge_base_sha, files, diff, notes), verification (head_sha, command, exit_code, total, passed, failed, output_tail, output_sha256, acceptance: [{index, met, evidence}]; kept as worker-reported), ci_checks (head_sha: the desk reads GitHub\'s check runs on that verified head itself; nothing you send counts as CI), merged (main_sha, pr_number, pr_url), blocked (reason) or stopped (reason). A stale claim, a pause or a check that fails is refused with the reason: stop and push nothing.',
+    description: 'Record one step with your claim_token. type is heartbeat, note (text), admission_number (number, observed_max, observed_main_sha), admission_refused (number, reason), admission_confirmed (main_sha as engineering-worker.js admission-status printed it, entry_sha256; the desk reads GitHub itself and records it only when main holds that entry at that commit), remote_action (action push_admission, push_candidate or push_release; phase intent before a push, observed or failed after it; ref, sha, observed_sha), started (branch, base_sha), candidate (branch, head_sha, base_sha, merge_base_sha, files, diff, notes), verification (head_sha, command, exit_code, total, passed, failed, output_tail, output_sha256, acceptance: [{index, met, evidence}]; kept as worker-reported), ci_checks (head_sha: the desk reads GitHub\'s check runs on that verified head itself; nothing you send counts as CI), merged (main_sha, pr_number, pr_url), blocked (reason) or stopped (reason). A stale claim, a pause or a check that fails is refused with the reason: stop and push nothing.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -165,7 +165,7 @@ const TOOLS = [
         number: { type: 'integer', minimum: 1 },
         observed_max: { type: 'integer', minimum: 0 },
         observed_main_sha: sha40,
-        main_sha: sha40,
+        main_sha: { type: 'string', pattern: '^[0-9a-f]{7,40}$', description: 'The commit as Git printed it. admission_confirmed takes a full SHA or a prefix of at least 7 characters (the desk resolves and proves it on GitHub); merged takes the full SHA.' },
         entry_sha256: { type: 'string' },
         action: { type: 'string', enum: ['push_admission', 'push_candidate', 'push_release'] },
         phase: { type: 'string', enum: ['intent', 'observed', 'failed'] },
@@ -198,9 +198,15 @@ const TOOLS = [
     annotations: { readOnlyHint: false, destructiveHint: false },
     run: async (ws, who, a, ctx) => {
       // CI is the desk's own read of GitHub, never a field the worker sends.
-      if (a.type !== 'ci_checks') return inbox.recordEvent(ws, who, a);
-      const ci = ctx.github ? await ctx.github.checks(a.head_sha) : null;
-      return inbox.recordEvent(ws, who, a, { ci });
+      if (a.type === 'ci_checks') {
+        const ci = ctx.github ? await ctx.github.checks(a.head_sha) : null;
+        return inbox.recordEvent(ws, who, a, { ci });
+      }
+      // So is the proof that main holds an admission at the commit named.
+      if (a.type === 'admission_confirmed' && ctx.github && /^[0-9a-f]{7,40}$/.test(String(a.main_sha || ''))) {
+        return inbox.recordEvent(ws, who, a, { admissionProof: await ctx.github.admissionAt(a.main_sha, String(a.task_id || '')) });
+      }
+      return inbox.recordEvent(ws, who, a);
     },
   },
 ];
@@ -210,7 +216,7 @@ const listed = (role) => TOOLS.filter((t) => t.roles.includes(role)).map(({ name
 const ROLE_GUIDE = {
   submitter: 'You turn Eric\'s direction into engineering tasks: engineering_prepare_task (his own words in original_instruction), then engineering_submit_task with the version and content_sha256 it returned. Tell him plainly whether it was admitted inside a delegation (which one, and the review it is held to, as the answer says) or waits for his authorization on the desk; never say it is approved, built or merged unless a tool says so. You also review candidates and ask for corrections when he asks you to.',
   reviewer: 'You review a candidate when asked: engineering_get_evidence (goal, diff, tests, then the builder\'s notes), then engineering_save_review for that exact head_sha and merge_base_sha. Judge the diff and the test evidence against the approved acceptance checks, not the builder\'s summary.',
-  worker: 'You build admitted engineering tasks: engineering_list_tasks, engineering_claim_task, then record every step with engineering_record_event and your claim_token. Record remote_action intent before a push and observed or failed after it; reconcile an unresolved intent from Git before pushing again. Your test results stay worker-reported until ci_checks has the desk read GitHub\'s check runs on that head. Stop at once when a call says STALE_CLAIM, PAUSED or HELD.',
+  worker: 'You build admitted engineering tasks: engineering_list_tasks, engineering_claim_task, then record every step with engineering_record_event and your claim_token. Record remote_action intent before a push and observed or failed after it; reconcile an unresolved intent from Git before pushing again. Your test results stay worker-reported until ci_checks has the desk read GitHub\'s check runs on that head. Every commit you send is one Git printed (engineering-worker.js prints full SHAs; resolve --rev names any revision): never complete or pad one. When the desk does not answer (a 502, 503 or 504, a refused or reset connection, a timeout), wait 1 s, 2 s, then 4 s and try again; after a write whose answer was lost, read the task back first and send the step again only if it is not recorded. Stop at once when a call says STALE_CLAIM, PAUSED or HELD.',
   reader: 'You read engineering tasks, their evidence and what GitHub says about them. You cannot change anything.',
 };
 function instructionsFor(who) {

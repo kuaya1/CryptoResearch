@@ -166,6 +166,14 @@ test('engineering is its own resource: one role per connection, tools by role, a
   for (const n of ['add_project', 'save_report', 'record_transaction', 'start_ticket']) assert.ok(!forRole('submitter').includes(n));
   // Nothing in the engineering tools decides for Eric.
   for (const n of ENG_TOOLS.map((x) => x.name)) assert.doesNotMatch(n, /authorize|activate|revoke|resume|cancel|reopen|merge|deploy/);
+  // 2026-10-26: a commit is sent as Git printed it, a prefix included (the
+  // desk resolves and proves it on GitHub), never padded; a name never.
+  const mainSha = new RegExp(ENG_TOOLS.find((x) => x.name === 'engineering_record_event').inputSchema.properties.main_sha.pattern);
+  for (const ok of ['7209471', '72094714f88c', '72094714f88c35fb3906dd3fbfc5fdc9d2290936']) assert.ok(mainSha.test(ok), ok);
+  for (const bad of ['720947', 'main', 'HEAD', '7209471G', `${'a'.repeat(40)}0`]) assert.ok(!mainSha.test(bad), bad);
+  const guide = require('../engineering/tools').instructionsFor({ assistant: 'claude', role: 'worker' });
+  assert.match(guide, /never complete or pad one/);
+  assert.match(guide, /wait 1 s, 2 s, then 4 s/);
 
   // Audiences never cross: a desk token is refused by engineering and the reverse.
   assert.equal((await rpc(d, '/mcp/engineering', deskConn.access, 'tools/list')).status, 401);

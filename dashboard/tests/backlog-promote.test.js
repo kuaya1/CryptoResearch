@@ -302,3 +302,28 @@ test('65: DELEGATION_RESTRICTED lifts only the app source, the bundle and three 
     ['dashboard/tests/screening.test.js', 'eng-app@4', false],
   ]) assert.equal(Boolean(P.restrictedFor(p, tpl)), held, `${p} for ${tpl}`);
 });
+
+// 2026-10-26: one reading of an engineering entry for the worker and the
+// desk's GitHub proof, and revisions resolved where git exists.
+test('engEntryOf reads one engineering item, its own detail lines and its number', () => {
+  const task = 'eng-20261026-9c21de';
+  const line = `- [ ] **65. Lane item (FICTIONAL).** text *(engineering task ${task} v1, sha256 0123456789abcdef)*`;
+  const text = ['## Autonomous Build Backlog', '- [ ] **1. One.** a', line, '  - detail one', '  - detail two', '- [ ] **66. Next.** b', '  - not this', ''].join('\n');
+  assert.deepEqual(P.engEntryOf(text, task), { entry: `${line}\n  - detail one\n  - detail two\n`, number: 65 });
+  assert.equal(P.engEntryOf(text, 'eng-20261026-aaaaaa'), null);
+  assert.equal(P.engEntryOf('', task), null);
+  assert.equal(P.engEntryOf(null, task), null);
+});
+
+test('promotion resolves --base and --head given as a short SHA, a branch or a tag, and leaves anything else to its checks', (t) => {
+  const f = fixture(t);
+  const head = f.branch('claude/backlog-item-1', { 'docs/a.md': 'a\n' });
+  g(f.work, 'tag', 'fictional-tag', head);
+  const main = f.mainSha();
+  for (const rev of [head, head.slice(0, 7), 'claude/backlog-item-1', 'fictional-tag']) assert.equal(P.resolveRevs(f.work, { head: rev }).head, head, rev);
+  assert.equal(P.resolveRevs(f.work, { base: 'origin/main' }).base, main);
+  // A name that resolves to nothing, or is not a plain revision, stays as given for the checks to refuse.
+  assert.equal(P.resolveRevs(f.work, { head: 'no-such-branch' }).head, 'no-such-branch');
+  assert.equal(P.resolveRevs(f.work, { head: '--all' }).head, '--all');
+  assert.deepEqual(P.resolveRevs(f.work, { branch: 'claude/backlog-item-1' }), { branch: 'claude/backlog-item-1' }, 'only --base and --head');
+});

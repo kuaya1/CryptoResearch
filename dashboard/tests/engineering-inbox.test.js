@@ -1332,3 +1332,183 @@ test('65: under eng-app@4 a review by the connection that submitted the task doe
   const other = I.saveReview(ws, CHAT_REV, { task_id: s.task_id, head_sha: c.head, merge_base_sha: MAIN1, result: 'pass', read }, o(2 * MIN));
   assert.deepEqual([other.same_author, other.counts_for_requirement], [false, true]);
 });
+
+// 2026-10-26: item 65's admission was confirmed with a commit that does not
+// exist (a short SHA padded to 40 characters). Where the desk can read GitHub
+// it now records only a commit GitHub shows on main holding the entry, and
+// Eric can have a confirmed admission checked and corrected from GitHub.
+function pushedAdmission(ws, id, { number = 63, w = W1, now = o() } = {}) {
+  const c = I.claimTask(ws, w, { task_id: id }, now);
+  const b = I.recordEvent(ws, w, { task_id: id, claim_token: c.claim_token, type: 'admission_number', number, observed_max: number - 1, observed_main_sha: MAIN0 }, now);
+  const head = sha(`admission-${id}`);
+  const ref = `refs/heads/claude/admission-${id}`;
+  I.recordEvent(ws, w, { task_id: id, claim_token: c.claim_token, type: 'remote_action', action: 'push_admission', phase: 'intent', ref, sha: head }, now);
+  I.recordEvent(ws, w, { task_id: id, claim_token: c.claim_token, type: 'remote_action', action: 'push_admission', phase: 'observed', ref, observed_sha: head }, now);
+  const c2 = I.claimTask(ws, w, { task_id: id }, now);
+  return { token: c2.claim_token, number, entry: b.entry, entry_sha256: b.entry_sha256 };
+}
+const proofOf = (main_sha, entry) => ({ state: 'yes', main_sha, entry, entry_sha256: P.sha256(entry) });
+const confirm = (ws, id, a, main_sha, opts = o()) => I.recordEvent(ws, W1, { task_id: id, claim_token: a.token, type: 'admission_confirmed', main_sha, entry_sha256: a.entry_sha256 }, opts);
+const eventTypes = (ws, id) => I.getTask(ws, OWNER, id, o(MIN)).events.map((e) => e.type);
+const taskText = (ws, id) => fs.readFileSync(ws.abs(`engineering/tasks/${id}/task.json`), 'utf8');
+const INVENTED = `${MAIN1.slice(0, 7)}a1b2c3d4e5f60718293a4b5c6d7e8f901`;
+
+test('an admission is confirmed only at a commit GitHub shows on main holding its entry', (t) => {
+  const { ws } = ws0(t, 'adm-proof');
+  I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o());
+  const s = submitted(ws);
+  const a = pushedAdmission(ws, s.task_id);
+  const before = taskText(ws, s.task_id);
+  // An invented commit: GitHub has no such commit on main. Nothing is written.
+  assert.equal(codeOf(() => confirm(ws, s.task_id, a, INVENTED, { ...o(), admissionProof: { state: 'no', why: 'GitHub has no commit with that SHA' } })), 'NOT_ON_MAIN');
+  // GitHub cannot be read: nothing is written and the worker tries again.
+  assert.equal(codeOf(() => confirm(ws, s.task_id, a, MAIN1, { ...o(), admissionProof: { state: 'unknown', why: 'GitHub answered 503' } })), 'GITHUB_UNKNOWN');
+  // Main at that commit holds another entry.
+  assert.equal(codeOf(() => confirm(ws, s.task_id, a, MAIN1, { ...o(), admissionProof: proofOf(MAIN1, `${a.entry} (another)`) })), 'MISMATCH');
+  assert.equal(taskText(ws, s.task_id), before, 'no refusal changed the task');
+  // A prefix GitHub resolves is recorded as the full commit, checked.
+  const r = confirm(ws, s.task_id, a, MAIN1.slice(0, 7), { ...o(), admissionProof: proofOf(MAIN1, a.entry) });
+  assert.deepEqual([r.number, r.main_sha, r.main_sha_verified], [63, MAIN1, true]);
+  const v = I.getTask(ws, OWNER, s.task_id, o()).admission;
+  assert.deepEqual([v.state, v.confirmed_main_sha, v.main_sha_verified, v.corrections], ['confirmed', MAIN1, true, []]);
+  // The same confirmation again, after an answer lost on the way back, changes nothing.
+  const again = confirm(ws, s.task_id, a, MAIN1.slice(0, 9), { ...o(MIN), admissionProof: proofOf(MAIN1, a.entry) });
+  assert.deepEqual([again.unchanged, again.main_sha], [true, MAIN1]);
+  assert.equal(eventTypes(ws, s.task_id).filter((x) => x === 'admission_confirmed').length, 1);
+  // A different commit for a confirmed admission, or one GitHub now says lacks it, is refused.
+  assert.equal(codeOf(() => confirm(ws, s.task_id, a, sha('elsewhere'), { ...o(MIN), admissionProof: proofOf(sha('elsewhere'), a.entry) })), 'WRONG_STATE');
+  assert.equal(codeOf(() => confirm(ws, s.task_id, a, MAIN1, { ...o(MIN), admissionProof: { state: 'no', why: 'not on main' } })), 'WRONG_STATE');
+});
+
+test('without a GitHub reader the shape is all that is checked, and the record says so', (t) => {
+  const { ws } = ws0(t, 'adm-noproof');
+  I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o());
+  const s = submitted(ws);
+  const a = pushedAdmission(ws, s.task_id);
+  assert.equal(codeOf(() => confirm(ws, s.task_id, a, MAIN1.slice(0, 7))), 'BAD_INPUT', 'a prefix needs GitHub to resolve it');
+  const r = confirm(ws, s.task_id, a, MAIN1);
+  assert.equal(r.main_sha_verified, false);
+  assert.equal(I.getTask(ws, OWNER, s.task_id, o()).admission.main_sha_verified, false);
+  assert.equal(confirm(ws, s.task_id, a, MAIN1, o(MIN)).unchanged, true);
+});
+
+test('Eric\'s re-check corrects a confirmed admission from GitHub and keeps what it replaced', (t) => {
+  const { ws } = ws0(t, 'adm-recheck');
+  I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o());
+  const s = submitted(ws);
+  const a = pushedAdmission(ws, s.task_id, { number: 65 });
+  // As item 65 was: confirmed with a commit that does not exist, before the desk checked.
+  confirm(ws, s.task_id, a, INVENTED);
+  const chk = I.admissionCheckOf(ws, s.task_id);
+  assert.deepEqual([chk.number, chk.version, chk.entry_sha256, chk.confirmed_main_sha], [65, 1, a.entry_sha256, INVENTED]);
+  assert.ok(chk.bound_at);
+  for (const who of [W1, CHAT, GEM, READER]) assert.equal(codeOf(() => I.recheckAdmission(ws, who, s.task_id, { recorded: proofOf(INVENTED, a.entry) }, o())), 'OWNER_ONLY');
+  const before = taskText(ws, s.task_id);
+  const missing = { state: 'no', why: 'GitHub has no commit with that SHA' };
+  // GitHub unreadable, for the recorded commit or for the search: nothing changes.
+  assert.equal(codeOf(() => I.recheckAdmission(ws, OWNER, s.task_id, { recorded: { state: 'unknown', why: 'GitHub answered 502' } }, o())), 'GITHUB_UNKNOWN');
+  assert.equal(codeOf(() => I.recheckAdmission(ws, OWNER, s.task_id, { recorded: missing, located: { state: 'unknown', why: 'timed out' } }, o())), 'GITHUB_UNKNOWN');
+  // Main's history holds no commit with this entry: nothing is guessed.
+  assert.equal(codeOf(() => I.recheckAdmission(ws, OWNER, s.task_id, { recorded: missing, located: { state: 'no', why: 'no admission commit for item 65 on main' } }, o())), 'NOT_ON_MAIN');
+  assert.equal(codeOf(() => I.recheckAdmission(ws, OWNER, s.task_id, { recorded: missing, located: proofOf(MAIN1, `${a.entry} (another)`) }, o())), 'NOT_ON_MAIN');
+  assert.equal(taskText(ws, s.task_id), before, 'no refusal changed the task');
+  const status = I.getTask(ws, OWNER, s.task_id, o()).status;
+  // The located commit holds the entry: corrected, the replaced value kept.
+  const r = I.recheckAdmission(ws, OWNER, s.task_id, { recorded: missing, located: proofOf(MAIN1, a.entry) }, o(MIN));
+  assert.deepEqual([r.corrected, r.from, r.main_sha], [true, INVENTED, MAIN1]);
+  assert.match(r.says, /Corrected item 65's admission commit from \w{12} to \w{12}/);
+  const v = r.task.admission;
+  assert.deepEqual([v.state, v.number, v.entry_sha256, v.confirmed_main_sha, v.main_sha_verified], ['confirmed', 65, a.entry_sha256, MAIN1, true]);
+  assert.deepEqual(v.corrections.map((c) => [c.from, c.to]), [[INVENTED, MAIN1]]);
+  assert.equal(r.task.status, status, 'the status is not touched');
+  const types = eventTypes(ws, s.task_id);
+  assert.equal(types.filter((x) => x === 'admission_confirmed').length, 1, 'the original confirmation stays');
+  assert.equal(types.filter((x) => x === 'admission_main_sha_corrected').length, 1);
+  // Checked again: the record now holds, so nothing changes.
+  const same = I.recheckAdmission(ws, OWNER, s.task_id, { recorded: proofOf(MAIN1, a.entry) }, o(2 * MIN));
+  assert.deepEqual([same.unchanged, same.corrected], [true, false]);
+  // The worker's claim still holds after the correction.
+  I.recordEvent(ws, W1, { task_id: s.task_id, claim_token: a.token, type: 'heartbeat' }, o(2 * MIN));
+});
+
+test('a confirmed admission that holds is marked checked once, without a correction', (t) => {
+  const { ws } = ws0(t, 'adm-holds');
+  I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o());
+  const s = submitted(ws);
+  const a = pushedAdmission(ws, s.task_id);
+  confirm(ws, s.task_id, a, MAIN1);
+  assert.equal(I.getTask(ws, OWNER, s.task_id, o()).admission.main_sha_verified, false);
+  const r = I.recheckAdmission(ws, OWNER, s.task_id, { recorded: proofOf(MAIN1, a.entry) }, o(MIN));
+  assert.equal(r.corrected, false);
+  assert.match(r.says, /as recorded\. Marked checked on GitHub/);
+  assert.equal(r.task.admission.main_sha_verified, true);
+  assert.deepEqual(r.task.admission.corrections, []);
+  assert.equal(I.recheckAdmission(ws, OWNER, s.task_id, { recorded: proofOf(MAIN1, a.entry) }, o(2 * MIN)).unchanged, true);
+  // A task with no confirmed admission has nothing to check.
+  const s2 = submitted(ws, docsTask({ title: 'Second lane note (FICTIONAL)' }));
+  assert.equal(codeOf(() => I.admissionCheckOf(ws, s2.task_id)), 'WRONG_STATE');
+  assert.equal(codeOf(() => I.recheckAdmission(ws, OWNER, s2.task_id, { recorded: proofOf(MAIN1, a.entry) }, o())), 'WRONG_STATE');
+});
+
+test('the connector asks GitHub for the admission commit itself before confirming', async (t) => {
+  const { ws } = ws0(t, 'adm-tool');
+  // The connector reads the clock itself, so the claim is made now.
+  const live = { now: Date.now() };
+  I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, live);
+  const s = submitted(ws, docsTask(), live);
+  const a = pushedAdmission(ws, s.task_id, { now: live });
+  const asked = [];
+  const github = { admissionAt: async (rev, task) => { asked.push([rev, task]); return rev === MAIN1.slice(0, 7) ? proofOf(MAIN1, a.entry) : { state: 'no', why: 'GitHub has no commit with that SHA' }; } };
+  const handle = makeEngineeringMcp(ws, { github });
+  const grant = { assistant: 'claude', role: 'worker', grant_id: W1.grant_id };
+  const bad = await callTool(handle, grant, 'engineering_record_event', { task_id: s.task_id, claim_token: a.token, type: 'admission_confirmed', main_sha: INVENTED, entry_sha256: a.entry_sha256 });
+  assert.equal(bad.isError, true);
+  assert.match(bad.content[0].text, /NOT_ON_MAIN/);
+  const ok = await callTool(handle, grant, 'engineering_record_event', { task_id: s.task_id, claim_token: a.token, type: 'admission_confirmed', main_sha: MAIN1.slice(0, 7), entry_sha256: a.entry_sha256 });
+  assert.ok(!ok.isError, ok.content && ok.content[0].text);
+  assert.deepEqual(asked, [[INVENTED, s.task_id], [MAIN1.slice(0, 7), s.task_id]]);
+  const v = I.getTask(ws, OWNER, s.task_id, live).admission;
+  assert.deepEqual([v.confirmed_main_sha, v.main_sha_verified], [MAIN1, true]);
+});
+
+test('Eric\'s Check admission on GitHub: the recorded commit first, main\'s history only when it does not hold', async (t) => {
+  const { ws } = ws0(t, 'adm-route');
+  I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o());
+  const s = submitted(ws);
+  const a = pushedAdmission(ws, s.task_id, { number: 65 });
+  confirm(ws, s.task_id, a, INVENTED);
+  class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
+  const mounted = (github) => {
+    const routes = new Map();
+    require('../engineering/routes').makeEngineeringRoutes(ws, { HttpError, github }).mount((method, pattern, fn) => routes.set(`${method} ${pattern}`, fn));
+    const fn = routes.get('POST /api/engineering/tasks/([^/]+)/admission/recheck');
+    assert.ok(fn, 'the route is mounted');
+    return (id) => fn([`/api/engineering/tasks/${id}/admission/recheck`, id], {}, {}, {});
+  };
+  const errOf = async (p) => { try { await p; } catch (e) { return e; } return null; };
+  // No GitHub reader (this PC): nothing can be checked.
+  assert.equal((await errOf(mounted(null)(s.task_id))).status, 503);
+  const asked = [];
+  const github = {
+    admissionAt: async (rev) => { asked.push(['at', rev]); return rev === MAIN1 ? proofOf(MAIN1, a.entry) : { state: 'no', why: 'GitHub has no commit with that SHA' }; },
+    findAdmissionCommit: async (q) => { asked.push(['find', q.number, q.task, q.version, Boolean(q.since)]); return { state: 'found', sha: MAIN1 }; },
+  };
+  const check = mounted(github);
+  assert.equal((await errOf(check('not-a-task'))).status, 400);
+  const r = await check(s.task_id);
+  assert.deepEqual([r.status, r.corrected, r.from, r.main_sha], ['saved', true, INVENTED, MAIN1]);
+  assert.deepEqual(asked, [['at', INVENTED], ['find', 65, s.task_id, 1, true], ['at', MAIN1]]);
+  // Now the record holds: GitHub is asked about it alone, and nothing changes.
+  asked.length = 0;
+  const again = await check(s.task_id);
+  assert.equal(again.unchanged, true);
+  assert.deepEqual(asked, [['at', MAIN1]]);
+  // GitHub unreadable is a conflict to retry, never a correction.
+  const blind = mounted({ admissionAt: async () => ({ state: 'unknown', why: 'GitHub answered 503' }), findAdmissionCommit: async () => ({ state: 'unknown', why: 'GitHub answered 503' }) });
+  const s2 = submitted(ws, docsTask({ title: 'Second lane note (FICTIONAL)' }));
+  const a2 = pushedAdmission(ws, s2.task_id, { number: 66 });
+  confirm(ws, s2.task_id, a2, INVENTED);
+  const e = await errOf(blind(s2.task_id));
+  assert.deepEqual([e.code, e.status], ['GITHUB_UNKNOWN', 409]);
+  assert.equal(I.getTask(ws, OWNER, s2.task_id, o()).admission.confirmed_main_sha, INVENTED);
+});
