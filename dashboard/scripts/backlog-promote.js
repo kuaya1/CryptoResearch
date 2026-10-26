@@ -113,8 +113,13 @@ const PROTECTED_LINES = [
 // dashboard/web/, favicon.svg (an SVG served before sign-in can run script)
 // and none of the guard tests is lifted for any template (docs/engineering/
 // delegation-exclusions.md lists every rule).
+//
+// Eric, 2026-10-26 (audits/2026-10-26-backend-autonomy): dashboard/core/ is
+// lifted for eng-backend@1 alone, whose every pull request he merges himself.
+// Its PROTECTED files (the ledger, the wallets, what the gate is computed
+// with) stay out of every delegation's reach.
 const DELEGATION_RESTRICTED = [
-  { re: /^dashboard\/core\//i, prefix: 'dashboard/core/', why: 'core financial and investment logic, which no delegation changes' },
+  { re: /^dashboard\/core\//i, prefix: 'dashboard/core/', why: 'core financial and investment logic, which no delegation changes', lifted: { 'eng-backend@1': /^dashboard\/core\//i } },
   { re: /^dashboard\/web\//i, prefix: 'dashboard/web/', why: 'the browser app, which runs in Eric\'s signed-in session (each change ships a new bundle)', lifted: { 'eng-app@4': /^dashboard\/web\/src\//i } },
   { re: /^dashboard\/public\/app\//i, prefix: 'dashboard/public/app/', why: 'the committed browser bundle, which runs in Eric\'s signed-in session', lifted: { 'eng-app@4': /^dashboard\/public\/app\//i } },
   ...['tokens.css', 'styles.css', 'position.css', 'favicon.svg'].map((f) => ({ re: new RegExp(`^dashboard/public/${f.replace(/\./g, '\\.')}$`, 'i'), prefix: `dashboard/public/${f}`, why: 'a file served before sign-in', ...(f.endsWith('.css') ? { lifted: { 'eng-app@4': new RegExp(`^dashboard/public/${f.replace(/\./g, '\\.')}$`, 'i') } } : {}) })),
@@ -399,6 +404,7 @@ const DESK_REASONS = {
   verification_missing: 'no passing verification with every acceptance check met is recorded for this head',
   ci_failed: 'GitHub\'s check runs on this head failed, as the desk read them',
   release_by_owner: 'this task is released by Eric (release mode owner)',
+  owner_merges_unattended_review: 'an unattended review approved this head, so Eric merges it himself on GitHub',
 };
 function deskReason(code) {
   const [k, ...p] = String(code).split(':');

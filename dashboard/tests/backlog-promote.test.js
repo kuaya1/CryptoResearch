@@ -288,16 +288,20 @@ test('N3: the scope gate holds a symbolic link or a submodule; removing one is n
 
 // Backlog item 65: the rules a delegation never reaches, and the one template
 // that lifts some of them.
-test('65: DELEGATION_RESTRICTED lifts only the app source, the bundle and three stylesheets, and only for eng-app@4', () => {
+// Eric, 2026-10-26 (audits/2026-10-26-backend-autonomy): dashboard/core/ is
+// lifted for eng-backend@1 alone.
+test('65: DELEGATION_RESTRICTED lifts only the app source, the bundle and three stylesheets for eng-app@4, and core for eng-backend@1', () => {
   const lifts = P.DELEGATION_RESTRICTED.filter((x) => x.lifted);
-  assert.ok(lifts.length >= 5);
-  for (const x of lifts) assert.deepEqual(Object.keys(x.lifted), ['eng-app@4'], `${x.prefix} is lifted for eng-app@4 alone`);
-  assert.deepEqual(lifts.map((x) => x.prefix).sort(), ['dashboard/public/app/', 'dashboard/public/position.css', 'dashboard/public/styles.css', 'dashboard/public/tokens.css', 'dashboard/web/']);
+  assert.ok(lifts.length >= 6);
+  for (const x of lifts) assert.deepEqual(Object.keys(x.lifted), x.prefix === 'dashboard/core/' ? ['eng-backend@1'] : ['eng-app@4'], `${x.prefix} is lifted for one template alone`);
+  assert.deepEqual(lifts.map((x) => x.prefix).sort(), ['dashboard/core/', 'dashboard/public/app/', 'dashboard/public/position.css', 'dashboard/public/styles.css', 'dashboard/public/tokens.css', 'dashboard/web/']);
   for (const [p, tpl, held] of [
     ['dashboard/web/src/App.jsx', 'eng-app@4', false], ['dashboard/web/src/App.jsx', 'eng-app@3', true], ['dashboard/web/src/App.jsx', undefined, true],
     ['dashboard/web/index.html', 'eng-app@4', true], ['dashboard/web/scripts/check.mjs', 'eng-app@4', true],
     ['dashboard/public/app/assets/index-1.js', 'eng-app@4', false], ['dashboard/public/tokens.css', 'eng-app@4', false], ['dashboard/public/tokens.css', 'eng-app@3', true],
     ['dashboard/public/favicon.svg', 'eng-app@4', true], ['dashboard/core/wallets.js', 'eng-app@4', true],
+    ['dashboard/core/projects.js', 'eng-backend@1', false], ['dashboard/core/projects.js', 'eng-app@4', true], ['dashboard/web/src/App.jsx', 'eng-backend@1', true],
+    ['dashboard/tests/engineering-inbox.test.js', 'eng-backend@1', true],
     ['dashboard/tests/guardrails.test.js', 'eng-app@4', true], ['dashboard/tests/backlog-promote.test.js', 'eng-app@4', true], ['dashboard/tests/web-app.test.js', 'eng-app@4', true],
     ['dashboard/tests/screening.test.js', 'eng-app@4', false],
   ]) assert.equal(Boolean(P.restrictedFor(p, tpl)), held, `${p} for ${tpl}`);

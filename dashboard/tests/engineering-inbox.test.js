@@ -959,7 +959,7 @@ test('a refusal names the field, never the submitted text, and the connector log
 test('eng-app@3 covers the hosted views, public scripts, tests and docs; core logic and the browser app always wait for Eric', (t) => {
   const { ws } = ws0(t, 'core-boundary');
   for (const old of ['eng-app@1', 'eng-app@2']) assert.equal(codeOf(() => I.activatePolicy(ws, OWNER, { template: old, ...GOAL }, o())), 'RETIRED', old);
-  assert.deepEqual(I.ownerView(ws, OWNER, o()).templates.map((x) => x.template).sort(), ['eng-app@3', 'eng-app@4', 'eng-docs@1']);
+  assert.deepEqual(I.ownerView(ws, OWNER, o()).templates.map((x) => x.template).sort(), ['eng-app@3', 'eng-app@4', 'eng-backend@1', 'eng-docs@1']);
   assert.ok(P.TEMPLATES['eng-app@1'].allowed_paths.includes('dashboard/core/**'), 'the published eng-app@1 is unchanged');
   assert.deepEqual(P.TEMPLATES['eng-app@2'].allowed_paths, ['dashboard/web/src/**', 'dashboard/public/**', 'dashboard/tests/**', 'docs/engineering/**'], 'the published eng-app@2 is unchanged');
   const app = I.activatePolicy(ws, OWNER, { template: 'eng-app@3', ...GOAL }, o()).policy;
@@ -1194,7 +1194,7 @@ const polOf = (template, id = 'pol-20261026-0a0a0a') => ({ ...P.TEMPLATES[templa
 const UI_FILE = 'dashboard/web/src/views/Fictional.jsx';
 
 test('65: eng-app@4 is new, eng-app@3 is as it was, and only @4 lifts the app, the bundle and three stylesheets', () => {
-  assert.deepEqual(Object.keys(P.TEMPLATES).filter((k) => !P.RETIRED[k]).sort(), ['eng-app@3', 'eng-app@4', 'eng-docs@1']);
+  assert.deepEqual(Object.keys(P.TEMPLATES).filter((k) => !P.RETIRED[k]).sort(), ['eng-app@3', 'eng-app@4', 'eng-backend@1', 'eng-docs@1']);
   assert.deepEqual(P.TEMPLATES['eng-app@4'].allowed_paths, ['dashboard/web/src/**', 'dashboard/public/**', 'dashboard/tests/**', 'docs/engineering/**']);
   assert.deepEqual(P.TEMPLATES['eng-app@3'].allowed_paths, ['dashboard/public/**', 'dashboard/tests/**', 'docs/engineering/**'], 'a published template is never edited');
   const now = T0;

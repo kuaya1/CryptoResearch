@@ -95,6 +95,8 @@ test('nothing answers a request beside the front door on the hosted desk', async
     assert.equal(r.headers['cache-control'], 'no-store', p);
   }
   assert.equal((await req(d.port, { method: 'POST', path: `/engineering/attestations/${'0'.repeat(40)}` })).status, 405);
+  // The unattended reviewer's route is off while CR_ENG_REVIEWER_TOKEN is not set.
+  if (!process.env.CR_ENG_REVIEWER_TOKEN) for (const p of ['/engineering/reviewer/packet', '/engineering/reviewer/reviews']) assert.equal((await req(d.port, { method: 'POST', path: p })).status, 404, p);
   // Grok Scout's one route (core/scout.js, 2026-10-26): the brief and its
   // key check need the ingest key (this desk has none, so not set up), and
   // any other /api/ingest/ path, the signed-in ping (item 66) and the
@@ -271,10 +273,15 @@ test('no delegation reaches the files served before sign-in, the bundle, the bro
   }
   for (const p of ['dashboard/public/views/brief.js', 'dashboard/public/ui.js', 'dashboard/tests/watchlist-model.test.js', 'docs/engineering/x.md']) assert.equal(P.restrictedHit(p), null, `${p} stays open to a delegation`);
   // The offered application template leaves them out, and its predecessors match nothing.
-  // Eric, 2026-10-26: eng-app@4 (backlog item 65) is offered once it lands,
-  // and main stays green until then; no other template is ever offered.
+  // Eric, 2026-10-26: eng-app@4 (backlog item 65) and eng-backend@1
+  // (audits/2026-10-26-backend-autonomy) are offered; no other template is.
   const offered = Object.keys(P.TEMPLATES).filter((k) => !P.RETIRED[k]).sort();
-  assert.ok([['eng-app@3', 'eng-docs@1'], ['eng-app@3', 'eng-app@4', 'eng-docs@1']].some((set) => set.join() === offered.join()), `offered templates: ${offered.join(', ')}`);
+  assert.deepEqual(offered, ['eng-app@3', 'eng-app@4', 'eng-backend@1', 'eng-docs@1'], `offered templates: ${offered.join(', ')}`);
   assert.ok(!P.TEMPLATES['eng-app@3'].allowed_paths.some((g) => g.startsWith('dashboard/web/') || g.startsWith('dashboard/core/')));
+  // eng-backend@1 reaches core and the server's routes, never the lane, the
+  // front door, the workflows, sign-in or the ledger and wallets.
+  for (const p of ['dashboard/engineering/inbox.js', 'dashboard/frontdoor.js', '.github/workflows/test.yml', 'server.js', 'dashboard/hosted.js', 'dashboard/oauth.js', 'dashboard/mcp.js', 'dashboard/core/portfolio.js', 'dashboard/core/wallets.js', 'dashboard/core/walletsync.js', 'dashboard/core/alchemy.js']) {
+    assert.ok(P.forbiddenHit(p, { template: 'eng-backend@1' }), `${p} is forbidden under eng-backend@1`);
+  }
   for (const old of ['eng-app@1', 'eng-app@2']) assert.match(P.fits({ template: old, policy_id: 'pol-20261026-0a0a0a' }, {}, { now: Date.now() })[0], /matches nothing/);
 });
