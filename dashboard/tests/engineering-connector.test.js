@@ -209,7 +209,7 @@ test('Eric decides on the desk behind sign-in and his passphrase; the connector 
   assert.equal(view.status, 200, view.text);
   assert.equal(view.json.mcp_url, ENG);
   assert.equal(view.json.paused, false);
-  assert.deepEqual(view.json.templates.map((x) => x.template).sort(), ['eng-app@2', 'eng-docs@1'], 'eng-app@1 is retired: never offered');
+  assert.deepEqual(view.json.templates.map((x) => x.template).sort(), ['eng-app@3', 'eng-docs@1'], 'eng-app@1 and eng-app@2 are retired: never offered');
   assert.deepEqual(view.json.connections.map((c) => c.role).sort(), ['submitter', 'worker']);
   assert.ok(view.json.connections.every((c) => c.audience === 'engineering'));
 
@@ -231,6 +231,15 @@ test('Eric decides on the desk behind sign-in and his passphrase; the connector 
   assert.equal(ok.status, 200, ok.text);
   assert.equal(ok.json.status, 'saved');
   assert.equal(ok.json.task.status, 'admitted');
+
+  // Eric's own review decides any requirement, so it takes the passphrase
+  // too (review N3): code in his signed-in page cannot save one.
+  const review = (body) => eric.post(`/api/engineering/tasks/${p.data.task_id}/review`, { head_sha: 'a'.repeat(40), merge_base_sha: 'a'.repeat(40), result: 'pass', read: { diff: true, tests: true }, ...body });
+  assert.equal((await review({})).status, 403);
+  assert.equal((await review({ password: 'wrong-fictional' })).status, 403);
+  const reviewed = await review({ password: PASS });
+  assert.equal(reviewed.status, 400, reviewed.text);
+  assert.match(reviewed.json.error, /has no candidate to review yet/, 'past the passphrase, the inbox answers');
 
   // Activating a delegation takes the passphrase too.
   assert.equal((await eric.post('/api/engineering/policies', { template: 'eng-docs@1' })).status, 403);
@@ -290,14 +299,14 @@ test('dashboard/server.js only mounts the engineering routes', () => {
   const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   for (const route of ['/api/engineering', '/mcp/engineering', '/engineering/admissions', '/engineering/attestations']) assert.ok(!server.includes(route), `server.js declares no ${route} route`);
   for (const mod of ['inbox', 'tools', 'policy']) assert.ok(!server.includes(`require('./engineering/${mod}')`), `server.js reaches engineering/${mod} only through routes.js`);
+  // Since review N1 (2026-10-26) the connector and the public reads are
+  // answered by the protected dashboard/frontdoor.js, which builds the
+  // engineering routes; server.js receives them from it and mounts Eric's.
+  for (const handled of ['engineering.connector(', 'engineering.publicRead(', "require('./engineering/routes')", 'makeEngineeringRoutes(']) assert.ok(!server.includes(handled), `server.js does not call ${handled}`);
   const known = [
-    "const mcp = hosted ? require('./mcp').makeMcp(",
-    "// The engineering inbox's routes (connector, public reads, Eric's",
-    '// decisions) live in the protected dashboard/engineering/routes.js; this',
-    "const engineering = require('./engineering/routes').makeEngineeringRoutes(ws, {",
+    '// sign-in and builds the sign-in, connector and engineering handlers this',
+    'const { origin, allowedOrigins, oauth, auth, engineering, serveStatic } = door;',
     'const api = makeApi({',
-    'if (await engineering.connector(req, res, url)) return;',
-    'if (engineering.publicRead(req, res, url)) return;',
     'function makeApi({',
     '// Preferences > Developer > Engineering (dashboard/engineering/routes.js).',
     'engineering.mount(route);',

@@ -155,15 +155,28 @@ jobs:
         if: steps.merge.outputs.contains_base != 'true'
         shell: bash
         run: node dashboard/cli.js test 2>&1 | tail -n 40
-      - name: Clean build of the browser app (reported, not a gate)
-        continue-on-error: true
+      # The guard test is protected and run here by name (review N1, N2), so a
+      # branch that changes how the suite is run still meets it.
+      - name: Run the protected guard test
+        if: steps.merge.outputs.contains_base != 'true'
         shell: bash
+        run: node --test dashboard/tests/engineering-guard.test.js 2>&1 | tail -n 40
+      # A gate for a branch that changes the committed bundle (review N3): the
+      # bundle must be exactly what its sources build. Reported otherwise.
+      - name: Clean build of the browser app
+        shell: bash
+        env:
+          BASE: ${{ needs.pr.outputs.base }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          if npm --prefix dashboard/web ci --no-audit --no-fund >/dev/null && npm --prefix dashboard/web run build >/dev/null && git diff --quiet -- dashboard/public/app; then
+          bundle=$(git diff --name-only "$BASE...$SHA" -- dashboard/public/app | head -n 1)
+          if npm --prefix dashboard/web ci --no-audit --no-fund >/dev/null && npm --prefix dashboard/web run build >/dev/null && git diff --quiet -- dashboard/public/app && [ -z "$(git status --porcelain -- dashboard/public/app)" ]; then
             echo "Clean build: matches the committed bundle." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "Clean build: does NOT match the committed bundle (or failed). Not a merge gate; look at it." >> "$GITHUB_STEP_SUMMARY"
+          elif [ -n "$bundle" ]; then
+            echo "### Clean build: does NOT match the committed bundle (or failed), and this branch changes the bundle. Not promoted." >> "$GITHUB_STEP_SUMMARY"
             exit 1
+          else
+            echo "Clean build: does NOT match the committed bundle (or failed). This branch does not change the bundle, so it is reported, not a gate; look at it." >> "$GITHUB_STEP_SUMMARY"
           fi
 
   promote:

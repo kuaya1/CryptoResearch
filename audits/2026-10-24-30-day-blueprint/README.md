@@ -1,6 +1,6 @@
 # 30-day blueprint: the builder, the Junior Trader and the chief of staff
 
-Window: 2026-10-25 (day 1) to 2026-11-23 (day 30). Written 2026-10-24 by Claude from the live system: the online desk (`a4d0c2e`, read through the connector), the routine `trig_01Hw89ZHE8kWp2rQe3Kw3D26` (config and its run of 20:36 UTC), the repository and a full local test run (764 of 764 pass).
+Window: 2026-10-25 (day 1) to 2026-11-23 (day 30). Written 2026-10-24 by Claude from the live system: the online desk (`a4d0c2e`, read through the connector), the builder routine (its config and its run of 20:36 UTC), the repository and a full local test run (764 of 764 pass).
 
 The backlog items this plan creates are items 7–20 in `DESK_STATE.md`. They are in this folder only, not committed. The routine builds them once they are on `main`.
 
@@ -270,7 +270,7 @@ Never in scope at any point: exchange or wallet connections, orders, swaps, sign
 
 ## Appendix A: the routine prompt edit (for Eric to apply)
 
-Replace steps 2–3 and 7 of `trig_01Hw89ZHE8kWp2rQe3Kw3D26` with:
+Replace steps 2–3 and 7 of the builder routine's prompt with:
 
 ```
 1. First, cheaply: `git fetch origin`; list `origin/claude/backlog-*` and `origin/claude/train-*`; read only the

@@ -45,7 +45,14 @@ const PROTECTED = [
   { re: /^DESK_STATE\.md$/i, why: 'the backlog (a branch never edits it; Eric adds and ticks items)' },
   { re: /^dashboard\/scripts\/(backlog-promote|backlog-intake|merge-train|engineering-worker)\.js$/i, why: 'promotion controls' },
   { re: /^dashboard\/engineering\//i, why: 'engineering authorization (the inbox, delegations and their connector)' },
-  { re: /^dashboard\/(oauth|mcp|hosted)\.js$/i, why: 'authorization (sign-in and connector grants)' },
+  { re: /^dashboard\/(oauth|mcp|mcp-wire|hosted)\.js$/i, why: 'authorization (sign-in and connector grants)' },
+  // Review N1 (2026-10-26): everything a request meets before sign-in.
+  { re: /^dashboard\/frontdoor\.js$/i, why: 'the front door (everything a request meets before sign-in)' },
+  { re: /^dashboard\/core\/offsite\.js$/i, why: 'the offsite package, served before sign-in' },
+  // Review N2: what the engineering gate is computed with, followed through
+  // every require (tests/engineering-guard.test.js walks them).
+  { re: /^dashboard\/core\/(ops|fsx|ids|workspace|forensic-defs|rubrics|scoring|netguard|revision)\.js$/i, why: 'what the engineering gate and the front door are computed with' },
+  { re: /^dashboard\/tests\/engineering-guard\.test\.js$/i, why: 'the guard test of the front door and the gate' },
   { re: /^server\.js$/i, why: 'the hosted entry point' },
   { re: /^dashboard\/core\/(portfolio|wallets|walletsync|alchemy)\.js$/i, why: 'financial records (the ledger and wallets)' },
   { re: /^(package(-lock)?\.json|dashboard\/web\/package(-lock)?\.json)$/i, why: 'dependencies and scripts' },
@@ -77,15 +84,30 @@ function windowsProblem(p) {
 // Lines of an unprotected file that mount a protected part (Eric's decision
 // on review finding 2, 2026-10-25): a branch that adds, changes or removes one
 // waits for him as a protected path does; the rest of the file still merges.
+// Since review N1 the line that opens the front door is one of them, and the
+// guard test fails when anything else answers a request beside it.
 const PROTECTED_LINES = [
-  { path: 'dashboard/server.js', re: /engineering/i, why: 'the mount of the engineering routes (dashboard/engineering/routes.js)' },
+  { path: 'dashboard/server.js', re: /engineering|frontdoor/i, why: 'the mount of the engineering routes or the front door (dashboard/engineering/routes.js, dashboard/frontdoor.js)' },
 ];
 // Paths no delegation reaches (Eric's decision on review finding 6): an
 // engineering item a delegation admitted is held when its diff touches one;
-// only a version Eric authorized himself may.
+// only a version Eric authorized himself may. Since review N3 and N5
+// (2026-10-26) also: the browser app's source and its committed bundle,
+// which run in Eric's signed-in session (every source change ships a new
+// bundle); the four files served before sign-in (dashboard/frontdoor.js
+// LOGIN_ASSETS); and the tests that guard the lane, the backlog, the
+// guardrails and the browser's writes, with the helpers they stand on.
 const DELEGATION_RESTRICTED = [
   { re: /^dashboard\/core\//i, prefix: 'dashboard/core/', why: 'core financial and investment logic, which no delegation changes' },
+  { re: /^dashboard\/web\//i, prefix: 'dashboard/web/', why: 'the browser app, which runs in Eric\'s signed-in session (each change ships a new bundle)' },
+  { re: /^dashboard\/public\/app\//i, prefix: 'dashboard/public/app/', why: 'the committed browser bundle, which runs in Eric\'s signed-in session' },
+  ...['tokens.css', 'styles.css', 'position.css', 'favicon.svg'].map((f) => ({ re: new RegExp(`^dashboard/public/${f.replace(/\./g, '\\.')}$`, 'i'), prefix: `dashboard/public/${f}`, why: 'a file served before sign-in' })),
+  ...['engineering-', 'backlog-', 'guardrails.test.js', 'web-app.test.js', 'helpers.js'].map((f) => ({ re: new RegExp(`^dashboard/tests/${f.replace(/\./g, '\\.')}${f.endsWith('-') ? '' : '$'}`, 'i'), prefix: `dashboard/tests/${f}`, why: 'a test that guards the engineering lane, the backlog, the guardrails or the browser\'s writes' })),
 ];
+// Git modes a branch never carries without Eric (review N3): a symbolic link
+// (120000) can point a served file anywhere on the host, and a submodule
+// (160000) pulls in code from elsewhere.
+const LINK_MODES = { 120000: 'a symbolic link', 160000: 'a submodule' };
 
 function run(cwd, cmd, args, { allowFail = false, env = {} } = {}) {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', env: { ...process.env, ...IDENTITY, ...env }, maxBuffer: 256 * 1024 * 1024 });
@@ -115,10 +137,11 @@ function backlogItems(text) {
 // Whether the branch stays inside the authorized scope; reasons in words.
 function scopeCheck(cwd, { base, head }) {
   const reasons = [];
-  // NUL-separated, so a name Git would quote ("\303...") is read as it is.
-  const z = git(cwd, ['diff', '--no-renames', '--name-status', '-z', `${base}...${head}`]).raw.split('\0');
+  // NUL-separated, so a name Git would quote ("\303...") is read as it is;
+  // raw, so each path's new mode is known (":old new sha sha status").
+  const z = git(cwd, ['diff', '--no-renames', '--raw', '-z', `${base}...${head}`]).raw.split('\0');
   const changed = [];
-  for (let i = 0; i + 1 < z.length; i += 2) if (z[i]) changed.push({ status: z[i][0], path: z[i + 1] });
+  for (let i = 0; i + 1 < z.length; i += 2) if (z[i]) { const meta = z[i].replace(/^:/, '').split(' '); changed.push({ status: meta[4][0], mode: meta[1], path: z[i + 1] }); }
   // Every name in the resulting tree (main's, less what the branch deletes,
   // and the branch's) by its Windows form: two names with one form are one
   // file on Eric's PC, and Git keeps only one of them.
@@ -140,10 +163,12 @@ function scopeCheck(cwd, { base, head }) {
     const win = windowsProblem(c.path);
     const parts = c.path.split('/');
     const clash = c.status === 'D' ? null : parts.map((_, i) => parts.slice(0, i + 1).join('/')).map((pre) => [pre, [...(forms.get(foldPath(pre)) || [])].find((x) => x !== pre)]).find(([, other]) => other);
+    const link = c.status === 'D' ? null : LINK_MODES[c.mode];
     if (hit) reasons.push(`${c.path}: ${hit.why}`);
     if (win) reasons.push(`${c.path}: ${win}`);
     if (clash) reasons.push(`${c.path}: ${clash[0]} and ${clash[1]} differ only in letter case or a trailing dot or space, which makes them one file on Windows`);
-    if (hit || win || clash) continue;
+    if (link) reasons.push(`${c.path}: ${link} (mode ${c.mode}), which a branch never adds without Eric`);
+    if (hit || win || clash || link) continue;
     if (/^templates\//i.test(foldPath(c.path)) && c.status !== 'A') reasons.push(`${c.path}: a published template is ${c.status === 'D' ? 'removed' : 'edited'} (publish a new version instead)`);
     else if (lines) {
       // Only the hunks' own lines (after the first @@), never the file header.
@@ -332,6 +357,7 @@ const DESK_REASONS = {
   authorization_stale: 'the authorization is for another version than the current one',
   delegation_missing: 'its delegation is missing',
   delegation_revoked: 'its delegation was revoked',
+  delegation_retired: 'its delegation was activated from a retired template',
   delegation_expired: 'its delegation expired',
   not_current_candidate: 'this head is not the task\'s current candidate',
   admission_unconfirmed: 'its admission is not confirmed on main',
@@ -485,7 +511,14 @@ async function engineeringCheck(cwd, { base, head, branch, scope, desk, fetchJso
   const desk0 = git(cwd, ['show', `${base}:DESK_STATE.md`], { allowFail: true });
   const items = backlogItems(desk0.status === 0 ? desk0.out : '');
   const eng = scope.items.filter((n) => items.get(n) && items.get(n).engineering);
-  if (!eng.length) return { engineering: false, ok: true, reasons: [] };
+  // An engineering branch carries exactly one engineering item and always
+  // meets the desk (review N7): an ordinary item goes on another
+  // claude/backlog- branch, never here, so it cannot skip the desk.
+  if (!eng.length) {
+    if (!/^claude\/backlog-eng-/i.test(String(branch || ''))) return { engineering: false, ok: true, reasons: [] };
+    const named = scope.items.length ? `${scope.items.length === 1 ? 'item' : 'items'} ${scope.items.join(', ')}, which ${scope.items.length === 1 ? 'is not an engineering item' : 'are not engineering items'}` : 'no item';
+    return { engineering: true, ok: false, reasons: [`${branch} is an engineering branch, which carries exactly one engineering item; it names ${named}. Ordinary items go on another claude/backlog- branch`], item: null, task_id: null, attestation: null };
+  }
   const n = eng[0];
   const it = items.get(n).engineering;
   const reasons = [];
@@ -529,7 +562,7 @@ function summaryOf(kind, r) {
     if (r.status === 'already_on_main') return `Backlog item ${r.number} for ${r.task_id} was already on main; nothing added.`;
     return `### Not admitted (${r.status})\n\n${(r.reasons || []).map((x) => `- ${x}`).join('\n') || r.error || 'No reason was given.'}\n\nMain is unchanged. The builder reads this back and, for a taken number, binds the next one.`;
   }
-  if (kind === 'engineering') return r.ok ? `Engineering item ${r.item} (${r.task_id}): the desk attests this head.` : `### Engineering item ${r.item} (${r.task_id}) is not promoted\n\n${r.reasons.map((x) => `- ${x}`).join('\n')}`;
+  if (kind === 'engineering') return r.ok ? `Engineering item ${r.item} (${r.task_id}): the desk attests this head.` : `### ${r.item ? `Engineering item ${r.item} (${r.task_id})` : 'This engineering branch'} is not promoted\n\n${r.reasons.map((x) => `- ${x}`).join('\n')}`;
   const short = (s) => (s ? String(s).slice(0, 7) : 'unknown');
   if (kind === 'scope') return r.ok ? `Scope: items ${r.items.join(', ') || 'none'}, ${r.commits} ${r.commits === 1 ? 'commit' : 'commits'}, no protected path.` : `### Needs Eric: not promoted\n\n${r.reasons.map((x) => `- ${x}`).join('\n')}\n\nThe PR stays open for his review.`;
   if (kind === 'compose') return r.status === 'composed' ? `Composed ${short(r.head)} onto main ${short(r.base)} (tree ${short(r.tree)}${r.contains_base ? ', the branch already contains main' : ''}).` : `### Not promoted: the branch does not merge cleanly onto main ${short(r.base)}\n\nConflicts: ${(r.files || []).join(', ') || 'unknown'}. Resolve it with \`npm run train\`.`;

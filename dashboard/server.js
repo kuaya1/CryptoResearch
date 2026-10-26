@@ -45,15 +45,11 @@ const exporter = require('./core/exporter');
 const requests = require('./core/requests');
 const research = require('./core/research');
 const intake = require('./core/intake');
+// What every request meets before sign-in (review N1): the protected front
+// door. This file hands it the signed-in handler and never sees a request
+// before it.
+const { openFrontDoor, HttpError, READ_CODES } = require('./frontdoor');
 
-const PUBLIC_DIR = path.join(__dirname, 'public');
-// The browser app: React components built by Vite (dashboard/web) into
-// public/app and committed, so neither this PC nor Render runs a build. Its
-// page is served at /; its hashed assets never change under one name.
-const APP_PAGE = '/app/index.html';
-const APP_ASSETS = '/app/assets/';
-// What the sign-in page itself needs before anyone is signed in.
-const LOGIN_ASSETS = new Set(['/tokens.css', '/styles.css', '/position.css', '/favicon.svg']);
 // A page that asked for anything in this long counts as open (hosted mode
 // refreshes prices at the foreground interval only while a page is open).
 const PAGE_OPEN_MS = 10 * 60000;
@@ -61,22 +57,7 @@ const PAGE_OPEN_MS = 10 * 60000;
 // (CR_BACKGROUND_CHECK_MS shortens it in tests).
 const BACKGROUND_CHECK_MS = 30000;
 const backgroundCheckMs = () => Math.max(100, Number(process.env.CR_BACKGROUND_CHECK_MS) || BACKGROUND_CHECK_MS);
-const STATIC_TYPES = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon',
-  '.png': 'image/png',
-};
 const WATCH_TOP = new Set(['projects', 'portfolio', 'paper', 'market-data', 'inbox', 'config', 'templates', 'logs']);
-// Beyond the desk's own origin, only the inspector's market views: the frames
-// of its technical chart (TradingView's widget, DexScreener's pool chart;
-// public/views/chart.js) and DexScreener's public API, which the browser asks
-// on demand for the DEX liquidity card (public/views/dex.js). No third-party
-// script runs in the page; each frame is isolated by its own origin and a
-// sandbox.
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.dexscreener.com; font-src 'self'; frame-src https://www.tradingview-widget.com https://dexscreener.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 const MAX_BODY = 30 * 1024 * 1024;
 // The Refresh button calls CoinGecko at most once a minute (POST /api/market/refresh).
 const MANUAL_REFRESH_MIN_MS = 60000;
@@ -85,14 +66,6 @@ const UI_STATE_REL = 'config/ui-state.json';
 // (the page retries); the CLI's own reads wait READ_WAIT_MS.
 const SERVER_READ_WAIT_MS = 250;
 const CHANGE_LOG_MAX = 200;
-const READ_CODES = new Set(['READ_BUSY', 'READ_INTERRUPTED', 'READ_UNSAFE']);
-
-class HttpError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
 
 function openBrowser(url) {
   try {
@@ -417,31 +390,12 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     }
   }
   if (!boundPort) throw new Error(`No free port between ${startPort} and ${startPort + 14}`);
-  const origin = hosted ? `https://${hosted.hosts[0]}` : `http://127.0.0.1:${boundPort}`;
-  const allowedHosts = hosted ? new Set(hosted.hosts.flatMap((h) => [h, `${h}:443`])) : new Set([`127.0.0.1:${boundPort}`, `localhost:${boundPort}`]);
-  const allowedOrigins = hosted ? new Set(hosted.hosts.map((h) => `https://${h}`)) : new Set([`http://127.0.0.1:${boundPort}`, `http://localhost:${boundPort}`]);
-  const auth = hosted ? require('./hosted').makeAuth(ws, hosted) : null;
   if (hosted) {
     // The only process on this disk (leases.js): what an earlier instance
     // held is free now, so research and prices resume at once after a deploy.
     const freed = require('./core/leases').releaseForeignLeases(ws);
     if (freed.length && !quiet) console.log(`Leases left by an earlier instance released: ${freed.join(', ')}.`);
   }
-  // The connector for the assistants (Claude in Cowork and claude.ai, ChatGPT,
-  // Gemini): OAuth sign-in that Eric approves with his passphrase, then the MCP
-  // endpoint at /mcp. Their servers call it without an Origin header; one that
-  // sends its own app's origin is accepted too (a bearer token is still needed).
-  const oauth = hosted ? require('./oauth').makeOAuth(ws, { origin, auth, log: (...a) => { if (!quiet) console.log(...a); } }) : null;
-  const mcpOrigins = new Set([...allowedOrigins, 'https://claude.ai', 'https://chatgpt.com', 'https://gemini.google.com']);
-  // A research request from an assistant can queue paid API jobs (other
-  // models): the runner picks them up at once instead of at its next tick.
-  const mcp = hosted ? require('./mcp').makeMcp(ws, { version: require('./core/revision').revision().short || '1.0.0', rebuild: (areas) => rebuild(areas), log: (...a) => { if (!quiet) console.log(...a); }, kick: () => setTimeout(() => researchTick(), 300), connections: () => oauth.connections().filter((c) => c.audience !== 'engineering') }) : null;
-  // The engineering inbox's routes (connector, public reads, Eric's
-  // decisions) live in the protected dashboard/engineering/routes.js; this
-  // file only mounts them.
-  const engineering = require('./engineering/routes').makeEngineeringRoutes(ws, { oauth, auth, origins: mcpOrigins, version: require('./core/revision').revision().short || '1.0.0', log: (...a) => { if (!quiet) console.log(...a); }, github: hosted ? require('./engineering/github').makeGithub() : null, HttpError, readCodes: READ_CODES });
-  // The offsite package for this PC's daily pull (CR_BACKUP_KEY, read per request).
-  const offsite = hosted ? require('./core/offsite').makeOffsiteRoute(ws, { env: process.env, log: (...a) => { if (!quiet) console.log(...a); } }) : null;
   const clients = new Set();
   const sockets = new Set();
   const state = {
@@ -771,90 +725,24 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   const DAILY_JOBS = ['snapshot', 'reviews', 'backup', 'fundamentals', 'screening', 'forensics'];
   const dailyTimer = setInterval(() => jobs.runJobs(ws, DAILY_JOBS, { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 30 * 60000);
 
+  // The front door (dashboard/frontdoor.js) answers everything before
+  // sign-in and builds the sign-in, connector and engineering handlers this
+  // file's signed-in pages use.
+  const door = openFrontDoor(server, { ws, hosted, port: boundPort, quiet, state, rebuild: (areas) => rebuild(areas), kick: () => setTimeout(() => researchTick(), 300), signedIn });
+  const { origin, allowedOrigins, oauth, auth, engineering, serveStatic } = door;
   const api = makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTick, queueIdentify, clients, sockets, oauth, auth, engineering });
 
-  server.on('request', async (req, res) => {
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    // Hosted: same-origin, because under no-referrer a browser sends
-    // "Origin: null" on a form post (sign-in, sign-out). No referrer ever
-    // goes to another site either way.
-    res.setHeader('Referrer-Policy', hosted ? 'same-origin' : 'no-referrer');
-    res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
-    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-    res.setHeader('Content-Security-Policy', CSP);
-    if (hosted) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
-    try {
-      // Render's health check: that the process answers, and which deployed
-      // revision it runs (a commit ID, nothing else), so a review can tell
-      // the running code from the repository without signing in.
-      if (hosted && req.url === '/healthz' && (req.method === 'GET' || req.method === 'HEAD')) {
-        const rev = require('./core/revision').revision();
-        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
-        return res.end(req.method === 'HEAD' ? undefined : `ok\nrevision ${rev.commit || 'unknown'}${rev.branch ? ` (${rev.branch})` : ''}\nstarted ${rev.started_at}\n`);
-      }
-      const hostHeader = String(req.headers.host || '').toLowerCase();
-      if (!allowedHosts.has(hostHeader)) throw new HttpError(403, 'Host not allowed');
-      const url = new URL(req.url, origin);
-      const bucket = url.pathname.startsWith('/api/') ? (['/api/version', '/api/index', '/api/events', '/api/session', '/api/health'].includes(url.pathname) ? url.pathname : '/api/(other)') : '(static)';
-      state.stats.requests[bucket] = (state.stats.requests[bucket] || 0) + 1;
-      if (oauth) {
-        // The connector has its own sign-in (OAuth) and never uses the
-        // dashboard's session cookie.
-        if (await oauth.handle(req, res, url)) return;
-        if (url.pathname === '/mcp' || url.pathname === '/mcp/') {
-          const o = req.headers.origin;
-          if (o && !mcpOrigins.has(o)) {
-            if (!quiet) console.log(`MCP request refused: Origin ${String(o).slice(0, 80)} is not allowed`);
-            throw new HttpError(403, 'Origin not allowed');
-          }
-          const who = oauth.authenticate(req);
-          if (!who) {
-            // Why, in words (no token is logged): a client signing in for the
-            // first time, or one whose access expired and should refresh.
-            if (!quiet) console.log(`MCP sign-in needed: ${oauth.refusal(req)}`);
-            return oauth.challenge(res, { invalid: Boolean(req.headers.authorization) });
-          }
-          return await mcp(req, res, who);
-        }
-        if (await engineering.connector(req, res, url)) return;
-      }
-      if (engineering.publicRead(req, res, url)) return;
-      // Offsite backup (core/offsite.js): the PC pulls a complete package with
-      // the desk's own backup key, never the sign-in, and can change nothing.
-      if (offsite && url.pathname === '/api/offsite/package') return offsite(req, res);
-      if (auth) {
-        // Sign-in comes before everything else in hosted mode.
-        if (await auth.handle(req, res, url)) return;
-        if (!auth.authorized(req)) {
-          if (LOGIN_ASSETS.has(url.pathname)) return serveStatic(req, res, url);
-          if (url.pathname.startsWith('/api/')) throw new HttpError(401, 'Signed out. Reload the page to sign in again.');
-          return auth.redirectToLogin(res);
-        }
-        state.lastPageSeen = Date.now();
-      }
-      if (url.pathname.startsWith('/api/')) {
-        const site = req.headers['sec-fetch-site'];
-        if (site && !['same-origin', 'none'].includes(site)) throw new HttpError(403, 'Cross-site request refused');
-        if (url.pathname === '/api/events') return sse(req, res);
-        return await api(req, res, url, { allowedOrigins });
-      }
-      return serveStatic(req, res, url);
-    } catch (err) {
-      // A read that met a save in progress, an interrupted save or an
-      // unverified commit is 503: nothing mixed is ever returned (V2-001).
-      const readErr = READ_CODES.has(err.code);
-      const status = err.status || (err.code === 'NOT_FOUND' ? 404 : ['INVALID', 'BAD_ID', 'BAD_PATH', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT', 'UNSAFE_PATH'].includes(err.code) ? 400 : ['WORKSPACE_BUSY', 'WRITES_BLOCKED', 'NEWER_REPORT', 'INTEGRITY', 'INVALIDATED', 'BASIS_CHANGED', 'CHANGED'].includes(err.code) ? 409 : readErr ? 503 : 500);
-      if (status >= 500 && !readErr) console.error(err);
-      const retryMs = readErr && err.code !== 'READ_UNSAFE' ? (err.details && err.details.retry_after_ms) || 1000 : null;
-      if (!res.headersSent) {
-        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...(retryMs ? { 'Retry-After': String(Math.max(1, Math.ceil(retryMs / 1000))) } : {}) });
-      }
-      // A review refused for a newer report names it (model, report, time saved).
-      const newer = err.code === 'NEWER_REPORT' && err.details && Array.isArray(err.details.newer) ? { newer: err.details.newer } : ['INVALIDATED', 'BASIS_CHANGED', 'CHANGED'].includes(err.code) && err.details && Array.isArray(err.details.changed) ? { changed: err.details.changed } : {};
-      res.end(JSON.stringify({ error: status >= 500 && !readErr ? `Server error: ${err.message}` : err.message, code: err.code || null, retry_after_ms: retryMs, saved: readErr && req.method === 'GET' ? false : ['INVALID', 'BAD_ID', 'BAD_PATH', 'NOT_FOUND', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'WORKSPACE_BUSY', 'WRITES_BLOCKED', 'NEWER_REPORT', 'INTEGRITY', 'INVALIDATED', 'BASIS_CHANGED', 'CHANGED', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT', 'UNSAFE_PATH', 'GENERATION_UNWRITABLE'].includes(err.code) || err.status ? false : 'unknown', ...newer }));
+  // A request the front door passed: signed in on the online desk, or on
+  // this PC anything it did not answer itself.
+  async function signedIn(req, res, url) {
+    if (url.pathname.startsWith('/api/')) {
+      const site = req.headers['sec-fetch-site'];
+      if (site && !['same-origin', 'none'].includes(site)) throw new HttpError(403, 'Cross-site request refused');
+      if (url.pathname === '/api/events') return sse(req, res);
+      return await api(req, res, url, { allowedOrigins });
     }
-  });
+    return serveStatic(req, res, url);
+  }
 
   function sse(req, res) {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
@@ -865,29 +753,6 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
       clearInterval(ping);
       clients.delete(res);
     });
-  }
-
-  function serveStatic(req, res, url) {
-    if (req.method !== 'GET' && req.method !== 'HEAD') throw new HttpError(405, 'Method not allowed');
-    let pathname;
-    try {
-      pathname = decodeURIComponent(url.pathname);
-    } catch (_) {
-      throw new HttpError(400, 'Bad path');
-    }
-    if (pathname === '/' || pathname === '/index.html') pathname = APP_PAGE;
-    if (pathname.includes('\0') || pathname.includes('\\') || pathname.split('/').some((s) => s === '..' || s === '.')) throw new HttpError(404, 'Not found');
-    const abs = path.resolve(PUBLIC_DIR, `.${pathname}`);
-    const back = path.relative(PUBLIC_DIR, abs);
-    if (!back || back.startsWith('..') || path.isAbsolute(back)) throw new HttpError(404, 'Not found');
-    const type = STATIC_TYPES[path.extname(abs).toLowerCase()];
-    const info = fileInfo(abs);
-    if (!type || !info || !info.isFile) throw new HttpError(404, 'Not found');
-    // A content-hashed asset never changes under its name; everything else is
-    // checked with the server on each use.
-    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': pathname.startsWith(APP_ASSETS) ? 'private, max-age=31536000, immutable' : 'no-cache' });
-    if (req.method === 'HEAD') return res.end();
-    fs.createReadStream(abs).pipe(res);
   }
 
   rebuild(['startup']);

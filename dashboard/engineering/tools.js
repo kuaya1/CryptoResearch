@@ -9,7 +9,7 @@
 // tool reads or changes research, tickets, the portfolio or wallets.
 
 const { OpError } = require('../core/ops');
-const { redactLog, PROTOCOL_VERSIONS } = require('../mcp');
+const { redactLog, PROTOCOL_VERSIONS } = require('../mcp-wire');
 const { PROVIDER_LABELS } = require('../core/workspace');
 const inbox = require('./inbox');
 const P = require('./policy');

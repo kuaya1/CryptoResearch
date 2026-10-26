@@ -493,7 +493,16 @@ async function main(env = process.env) {
     console.log(`Records check could not run: ${err.message}`);
   }
   const { start } = require('./server');
-  return start(ws, { hosted: { port: cfg.port, hosts: cfg.hosts, password: cfg.password } });
+  const srv = await start(ws, { hosted: { port: cfg.port, hosts: cfg.hosts, password: cfg.password } });
+  // Nothing answers a request beside the front door (dashboard/frontdoor.js,
+  // review N1): a desk whose server.js added a handler of its own does not
+  // start, so it never answers the public engineering reads.
+  const bypass = require('./frontdoor').audit(srv.server);
+  if (bypass.length) {
+    srv.shutdown();
+    throw new Error(`The front door was bypassed: ${bypass.join('; ')}.`);
+  }
+  return srv;
 }
 
 // One line for the start log: what the desk holds (counts and the newest
