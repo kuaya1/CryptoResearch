@@ -506,5 +506,15 @@ Phase 5, heavy Track 2 (Eric, 2026-10-25). Eric's message numbered these 42–56
   - Acceptance: Submit an exact-commit PR with changed policy behavior, tests and evidence. Do not activate or broaden any live delegation from this task or bypass existing authorization checks; await owner review and release.
   - Scope: `dashboard/engineering/policy.js`, `dashboard/engineering/inbox.js`, `dashboard/engineering/routes.js`, `dashboard/scripts/backlog-promote.js`, `dashboard/tests/engineering-inbox.test.js`, `dashboard/tests/engineering-flow.test.js`, `dashboard/tests/engineering-connector.test.js`, `dashboard/tests/backlog-promote.test.js`, `docs/engineering/**`
   - Not in scope: Reactivating retired templates, editing published policy records, changing financial rules, removing independent review, automatic authorization or live activation.
+- [ ] **66. Add Authenticated Health Ping Endpoint for Scout Ingestion Service** *(engineering task eng-20261026-1b9979 v2, sha256 c4174b42ac3aa176, authorized by Eric; built only through the engineering lane)*
+  - Outcome: Implement GET /api/ingest/ping inside server.js subject to normal frontdoor sign-in and session authentication. Valid authentication returns HTTP 200 with JSON status ok, service scout-ingest and an ISO timestamp; unauthenticated requests retain the frontdoor HTTP 401 response. Requested template is eng-app@4; use actual active delegation matching.
+  - Acceptance: Implement GET /api/ingest/ping as an authenticated route in dashboard/server.js using normal frontdoor sign-in and session authentication without bypassing or modifying dashboard/frontdoor.js.
+  - Acceptance: With valid authentication, return HTTP 200 and application/json with exactly status, service and timestamp keys, status equal to ok, service equal to scout-ingest, and timestamp a valid ISO date string.
+  - Acceptance: Without authentication, verify the real frontdoor rejects GET /api/ingest/ping with HTTP 401 Unauthorized.
+  - Acceptance: Add dashboard/tests/scout-ping.test.js exercising both unauthenticated HTTP 401 and authenticated HTTP 200 with the exact JSON schema and timestamp validity, using the existing hosted-server authentication test harness.
+  - Acceptance: Run node --test dashboard/tests/scout-ping.test.js and node dashboard/cli.js test; both exit zero. Record actual counts, commands, output, candidate head and merge base.
+  - Acceptance: Change only the two scoped files, keep the ping independent of database access, preserve other routes and authentication behavior, and submit the candidate with verification evidence for the required independent review.
+  - Scope: `dashboard/server.js`, `dashboard/tests/scout-ping.test.js`
+  - Not in scope: Unauthenticated ping access, frontdoor changes, new authentication mechanisms, Scout ingestion or persistence, dependency changes and files outside scope.
 
 - Never in scope: an exchange or wallet connection, placing orders, moving money.
