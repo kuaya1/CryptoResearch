@@ -1,0 +1,107 @@
+# The agent lane's model review (Eric, 2026-10-26;
+# audits/2026-10-26-engineering-simplification). It runs main's own code with
+# the OpenAI key and reads each candidate as data; it never checks out or runs
+# a candidate. The check it posts, agent-review, is required by the ruleset
+# main-merge-requirements. This job is named post-review, never agent-review:
+# a workflow_run job's own check lands on main's commit, not the head, so the
+# check is posted on the head through the Checks API.
+#
+#   workflow_run  after test or agent-checks completes on a pull request:
+#                 review that head once test, agent-guard and agent-verify
+#                 have passed (agent-review.js run). Each paid request is
+#                 reserved in the ledger first and sent once.
+#   schedule      every 30 minutes: open attempts are reconciled with OpenAI's
+#                 stored completions and settled (agent-review.js sweep), so a
+#                 lost runner never leaves an attempt uncounted or unposted.
+#   dispatch      Eric, from main: run (again) for one pull request, sweep,
+#                 preflight (a free handshake: the key reads the model, the
+#                 ledger reads), or eric-reviewed (a neutral agent-review for
+#                 a head he reviewed himself, only when he triggers it).
+#
+# Nothing here merges or approves anything. AGENT_REVIEW_ENABLED (a variable)
+# must be "true" for a paid request; reconciling and posting held verdicts
+# stay on.
+name: agent-review
+
+on:
+  workflow_run:
+    workflows: [test, agent-checks]
+    types: [completed]
+  schedule:
+    - cron: '17,47 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: run, sweep, preflight or eric-reviewed
+        type: choice
+        options: [run, sweep, preflight, eric-reviewed]
+        default: run
+      pr:
+        description: Pull request number (run, eric-reviewed)
+        type: string
+        required: false
+
+permissions: {}
+
+concurrency:
+  group: agent-review-${{ github.event.workflow_run.head_sha || inputs.pr || github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  post-review:
+    name: post-review
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request'
+        && github.event.workflow_run.head_repository.full_name == github.repository)
+      || github.event_name == 'schedule'
+      || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # the ledger branch only (rulesets automation-branches and agent-ledger)
+      checks: write
+      pull-requests: read
+      issues: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+      - name: Review
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_REVIEW_MODEL: ${{ vars.OPENAI_REVIEW_MODEL }}
+          AGENT_REVIEW_ENABLED: ${{ vars.AGENT_REVIEW_ENABLED }}
+          BUILDER_APP_SLUG: ${{ vars.BUILDER_APP_SLUG }}
+          EVENT: ${{ github.event_name }}
+          MODE: ${{ inputs.mode }}
+          PR_INPUT: ${{ inputs.pr }}
+          WR_PR: ${{ github.event.workflow_run.pull_requests[0].number }}
+          WR_HEAD: ${{ github.event.workflow_run.head_sha }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          OWNER: ${{ github.repository_owner }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          head_of() { gh pr view "$1" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid; }
+          case "$EVENT/$MODE" in
+            workflow_run/*)
+              if [ -n "$WR_PR" ]; then node dashboard/scripts/agent-review.js run --pr "$WR_PR" --head "$WR_HEAD"
+              else echo "No pull request on this run; nothing reviewed."; fi ;;
+            schedule/*|workflow_dispatch/sweep) node dashboard/scripts/agent-review.js sweep ;;
+            workflow_dispatch/preflight) node dashboard/scripts/agent-review.js preflight ;;
+            workflow_dispatch/run) node dashboard/scripts/agent-review.js run --pr "$PR_INPUT" --head "$(head_of "$PR_INPUT")" --repost true ;;
+            workflow_dispatch/eric-reviewed)
+              if [ "$TRIGGERING_ACTOR" != "$OWNER" ]; then echo "Only $OWNER marks a head as reviewed by him."; exit 1; fi
+              gh api -X POST "repos/${GITHUB_REPOSITORY}/check-runs" \
+                -f name=agent-review -f head_sha="$(head_of "$PR_INPUT")" -f status=completed -f conclusion=neutral -f details_url="$RUN_URL" \
+                -f "output[title]=Reviewed by Eric, not by a model" \
+                -f "output[summary]=$OWNER marked this head as reviewed himself (agent-review, eric-reviewed). No model was asked." > /dev/null
+              echo "Marked #$PR_INPUT as reviewed by $OWNER." ;;
+            *) echo "Nothing to do for $EVENT/$MODE." ;;
+          esac

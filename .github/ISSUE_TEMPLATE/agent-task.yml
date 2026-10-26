@@ -1,0 +1,57 @@
+name: Agent task
+description: One task for the agent lane. Nothing is built until Eric adds the agent:build label himself.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The agent lane builds this issue only after Eric adds the **agent:build** label, and only the version of the issue he labeled: an edit after that needs the label again. The build opens a pull request that Eric merges himself. Keep secrets, records and addresses out of it: this repository is public.
+  - type: dropdown
+    id: template
+    attributes:
+      label: Template
+      description: What the lane may change (.github/agent-policy.json and dashboard/engineering/policy.js).
+      options:
+        - eng-backend@1
+        - eng-docs@1
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: What is true when the task is done, in plain words.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance checks
+      description: One check per line that a test can show.
+    validations:
+      required: true
+  - type: textarea
+    id: negative
+    attributes:
+      label: Negative cases
+      description: What must be refused or handled, one per line. Each needs a test that fails without the change.
+    validations:
+      required: true
+  - type: textarea
+    id: tests
+    attributes:
+      label: Regression tests
+      description: The test files under dashboard/tests/ that show the outcome (added or changed by the build).
+    validations:
+      required: true
+  - type: textarea
+    id: paths
+    attributes:
+      label: Files to change
+      description: One repository path per line, tests included. The build may change nothing else.
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything else the builder should know.
