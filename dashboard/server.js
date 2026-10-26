@@ -897,6 +897,9 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
       changes: known ? state.changes.filter((c) => c.seq > since) : null,
     };
   });
+  // The Scout ingestion service's health ping (backlog item 66): signed in
+  // like every other route, answered from the clock alone (no records read).
+  route('GET', '/api/ingest/ping', () => ({ status: 'ok', service: 'scout-ingest', timestamp: new Date().toISOString() }));
   // Counts for checking that open pages stay within bounds (no records).
   route('GET', '/api/server-stats', () => ({ instance: state.instance, started_at: state.stats.started_at, sockets_open: sockets.size, sockets_total: state.stats.sockets_total, event_streams_open: clients.size, requests: state.stats.requests, seq: state.seq, rebuilds: state.rebuilds, read_status: state.read }));
   route('GET', '/api/projects/([^/]+)', (m) => {
