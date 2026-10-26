@@ -7,6 +7,7 @@
 // / with immutable hashed assets; and the app writes only from explicit
 // actions. Read from the files and a FICTIONAL test workspace.
 
+// ENGINEERING_LANE_SMOKE_20261026
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
