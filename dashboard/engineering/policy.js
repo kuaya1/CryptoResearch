@@ -222,6 +222,9 @@ const PROTECTED_SAMPLES = [
   'package.json', 'package-lock.json', 'dashboard/web/package.json', 'dashboard/web/package-lock.json', 'render.yaml', 'render.yml',
   'portfolio/x.json', 'paper/x.jsonl', 'projects/x/project.json', 'config/settings.json', 'secrets/x.json',
   'dashboard/engineering/inbox.js', 'dashboard/engineering/x.js', 'AGENTS.md', '.mcp.json',
+  // The worker daemon (2026-10-26), after the guard test, so a glob over
+  // dashboard/tests/ is still named by that one first.
+  'dashboard/scripts/engineering-daemon.js', 'dashboard/scripts/engineering-daemon-desk.js', 'dashboard/scripts/engineering-daemon-claude.js', 'dashboard/scripts/start-daemon.ps1', 'dashboard/scripts/service/x.service', 'dashboard/tests/worker-daemon.test.js',
 ];
 function globTouchesProtected(glob) {
   if (!glob.includes('*')) return protectedWhy(glob);

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The engineering worker daemon as a launchd agent (Eric, 2026-10-26,
+  audits/2026-10-26-worker-daemon). A template: replace REPO with the
+  checkout's path, HOME with your home folder and set PATH so node and claude
+  are found, then
+    cp com.cryptoresearch.engineering-daemon.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.cryptoresearch.engineering-daemon.plist
+  Sign in first with npm run worker:login (approve it as Claude, role Worker).
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cryptoresearch.engineering-daemon</string>
+  <key>WorkingDirectory</key>
+  <string>REPO</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>node</string>
+    <string>dashboard/scripts/engineering-daemon.js</string>
+    <string>run</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CR_DAEMON_HOME</key>
+    <string>HOME/.cryptoresearch/engineering-daemon</string>
+    <key>PATH</key>
+    <string>HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>300</integer>
+  <key>StandardOutPath</key>
+  <string>HOME/.cryptoresearch/engineering-daemon/console.log</string>
+  <key>StandardErrorPath</key>
+  <string>HOME/.cryptoresearch/engineering-daemon/console-error.log</string>
+</dict>
+</plist>

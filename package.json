@@ -11,7 +11,10 @@
     "ui:build": "npm --prefix dashboard/web run build",
     "pilot": "node dashboard/scripts/pilot.js",
     "train": "node dashboard/scripts/merge-train.js",
-    "scorecard": "node dashboard/scripts/blitz-scorecard.js"
+    "scorecard": "node dashboard/scripts/blitz-scorecard.js",
+    "worker:login": "node dashboard/scripts/engineering-daemon.js login",
+    "worker:daemon": "node dashboard/scripts/engineering-daemon.js run",
+    "worker:status": "node dashboard/scripts/engineering-daemon.js status"
   },
   "engines": {
     "node": "24.x"

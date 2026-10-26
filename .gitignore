@@ -74,6 +74,7 @@ node_modules/
 !/audits/2026-10-26-lane-resilience/README.md
 !/audits/2026-10-26-backend-autonomy/README.md
 !/audits/2026-10-26-engineering-convergence/README.md
+!/audits/2026-10-26-worker-daemon/README.md
 !/audits/2026-10-25-connected-engineering/README.md
 !/audits/2026-10-25-visual-proof/README.md
 !/audits/2026-10-25-visual-proof/PLAN.md

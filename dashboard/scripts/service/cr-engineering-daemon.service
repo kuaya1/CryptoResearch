@@ -1,0 +1,27 @@
+# The engineering worker daemon as a systemd user service (Eric, 2026-10-26,
+# audits/2026-10-26-worker-daemon). A template: replace REPO with the
+# checkout's path and set PATH so node and claude are found, then
+#   cp cr-engineering-daemon.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now cr-engineering-daemon
+# Sign in first with npm run worker:login (approve it as Claude, role Worker).
+# Exit status 3 means it needs you (no sign-in, or another daemon on this
+# home), so systemd does not restart it then.
+
+[Unit]
+Description=CryptoResearch engineering worker daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=REPO
+ExecStart=/usr/bin/env node dashboard/scripts/engineering-daemon.js run
+Environment=CR_DAEMON_HOME=%h/.cryptoresearch/engineering-daemon
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=60
+RestartPreventExitStatus=3
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

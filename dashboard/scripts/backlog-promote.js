@@ -44,6 +44,10 @@ const PROTECTED = [
   { re: /^(CLAUDE|COWORK-INSTRUCTIONS)\.md$/i, why: 'agent instructions' },
   { re: /^DESK_STATE\.md$/i, why: 'the backlog (a branch never edits it; Eric adds and ticks items)' },
   { re: /^dashboard\/scripts\/(backlog-promote|backlog-intake|merge-train|engineering-worker)\.js$/i, why: 'promotion controls' },
+  // The worker daemon (Eric, 2026-10-26, audits/2026-10-26-worker-daemon):
+  // it builds delegated tasks unattended, so no delegated task edits it, its
+  // service files or its test.
+  { re: /^dashboard\/scripts\/(engineering-daemon(-desk|-claude)?\.js|start-daemon\.ps1|service\/)|^dashboard\/tests\/worker-daemon\.test\.js$/i, why: 'the worker daemon (it builds delegated tasks unattended)' },
   { re: /^dashboard\/engineering\//i, why: 'engineering authorization (the inbox, delegations and their connector)' },
   { re: /^dashboard\/(oauth|mcp|mcp-wire|hosted)\.js$/i, why: 'authorization (sign-in and connector grants)' },
   // Review N1 (2026-10-26): everything a request meets before sign-in.
