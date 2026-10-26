@@ -3,148 +3,238 @@
    and the sign-in pages). Change colors, type, space and shape here, never in
    a component rule.
 
-   Warm ledger (Eric, 2026-10-17, DESIGN_AND_IA_BLUEPRINT.md §3.7, after
-   Ramp's product UI): hierarchy comes from a three-step warm-neutral ramp,
-   not from colour: the warm off-white canvas #fcfbfa under every page, white
-   panels #ffffff on it with a hairline #e9e5e2 and no shadow, and the sand
-   rail #f4f2f0 (also the hover and the quiet fills). Corners are almost
-   square: 4px on cards, panels, wells and fields, 6px on buttons; count
-   badges stay round. Ink #1a1919 for text, the current place, the one
-   primary action, links and focus; muted #4a4644 and faint #6b6765. Status
-   badges are tinted fills with coloured words, no border, 4px, 22px tall.
-   Green, red and amber stay earned: a rise or fall, a warning, a state, a
-   risky contract check; every meaning also has a word or a sign. Every
-   number is tabular. One type scale, 12 / 13 / 14 / 16 / 20 / 28 / 40
-   (--fs-xs … --fs-3xl); the older names are aliases of it. Dark is the same
-   ramp warm-shifted (#151413 / #1c1b1a / #242220), chosen per browser in
-   Preferences; light is the default and gets the primary design attention.
+   Platform look (Eric, 2026-10-26, after the OpenAI Developer Platform
+   blueprint, OPENAI_PLATFORM_DESIGN_SYSTEM.md): three tiers.
+   1. Primitives: a 25-step gray ramp that inverts for dark, hue ramps for
+      green, red, orange, yellow and blue (no purple: the desk draws none), and
+      a neutral alpha ladder built as color-mix(in oklab, --alpha-base N%,
+      transparent), so borders, dividers and hover fills are right on any
+      surface in either theme.
+   2. Semantic tokens: --color-text*, --color-surface*, --color-border*, the
+      solid primary and the intents (info, success, warning, caution, danger).
+   3. The desk's own names (--bg, --surface, --text, --t1..t5, the badges...),
+      mapped onto the semantic layer so every view follows without its own
+      rules.
+   The accent is neutral: black in light, near-white in dark; hue appears only
+   through an intent, and every meaning also has a word or a sign. Elevation
+   comes from strokes, not shadows: cards have no resting shadow. Dark is the
+   ramp inverted: the canvas darkest (#131313), panels lighter (#212121),
+   raised surfaces lightest (#303030). The system fonts stay (Segoe UI
+   Variable, SF; no web font, no Inter), at the blueprint's sizes and
+   tracking, and nothing readable is under 12.5px.
 
-   Apple HIG pass (Eric, 2026-10-18): a #f6f6f4 canvas, white cards at 12px
-   with a 6% hairline and a 3% shadow, 8px buttons; grouping by whitespace and
-   the #faf9f7 tint, never a box inside a card; bull, bear and risk cards are
-   neutral with an 8px status dot.
-
-   Text tones are at least 4.5:1 on every surface they sit on (white panel,
-   canvas, rail, wells, hover and selected fills), in both themes. Signal
-   tones (dots, bars, chart lines) are at least 3:1 on white and on the wells. */
+   Text tones are at least 4.5:1 on every surface they sit on, in both
+   themes; the blueprint's tertiary gray (#8f8f8f, about 3.2:1) is kept for
+   disabled text only. Signal tones (dots, bars, chart lines) are at least
+   3:1 on white and on the wells. */
 
 :root {
-  /* Surfaces: canvas -> white panel -> sand */
-  --bg: #f6f6f4;                  /* the canvas under every page (Apple HIG pass, 2026-10-18) */
-  --surface: #ffffff;             /* panels, cards, the inspector, the table */
-  --surface-raised: #ffffff;      /* menus, dialogs, toasts, drawers */
-  --surface-hover: #f6f5f3;       /* a row or control under the pointer */
-  --surface-selected: #efece9;    /* the open project's row, pressed (the ink edge says it too) */
-  --surface-sunken: #faf9f7;      /* wells inside a panel: a tint, never a box */
-  --surface-band: #faf9f7;        /* a panel's header band */
-  --surface-track: #f4f2f0;       /* a segmented control's housing */
-  --sidebar: #f4f2f0;             /* the sand rail */
-  --sidebar-hover: #ebe8e5;
-  --sidebar-active: #e9e5e2;      /* the current page: an inset sand box with ink words */
-  --on-sidebar-active: #1a1919;
-  --on-sidebar-active-2: #4a4644; /* its count: 7.4:1 on the box */
-  --tab-chosen: #ffffff;
+  /* ---- primitives: the gray ramp (light) ---- */
+  --gray-0: #ffffff; --gray-25: #fcfcfc; --gray-50: #f9f9f9; --gray-75: #f3f3f3; --gray-100: #ededed;
+  --gray-150: #dfdfdf; --gray-200: #cdcdcd; --gray-250: #b9b9b9; --gray-300: #afafaf; --gray-350: #9f9f9f;
+  --gray-400: #8f8f8f; --gray-450: #767676; --gray-500: #5d5d5d; --gray-550: #4f4f4f; --gray-600: #414141;
+  --gray-650: #393939; --gray-700: #303030; --gray-750: #282828; --gray-800: #212121; --gray-850: #1c1c1c;
+  --gray-900: #181818; --gray-925: #161616; --gray-950: #131313; --gray-975: #101010; --gray-1000: #0d0d0d;
+  --alpha-base: #0d0d0d;
+  /* ---- primitives: hue ramps (theme-invariant) ---- */
+  --green-25: #edfaf2; --green-50: #d9f4e4; --green-75: #b8ebcc; --green-100: #8cdfad; --green-200: #66d492; --green-300: #40c977;
+  --green-400: #04b84c; --green-500: #00a240; --green-600: #008635; --green-700: #00692a; --green-800: #004f1f;
+  --red-25: #fff0f0; --red-50: #ffd9d9; --red-75: #ffc6c5; --red-100: #ffa4a2; --red-200: #ff8583; --red-300: #ff6764;
+  --red-400: #fa423e; --red-500: #e02e2a; --red-600: #ba2623; --red-700: #911e1b; --red-800: #6e1615;
+  --orange-25: #fff5f0; --orange-50: #ffe7d9; --orange-75: #ffcfb4; --orange-100: #ffb790; --orange-200: #ff9e6c; --orange-300: #ff8549;
+  --orange-400: #fb6a22; --orange-500: #e25507; --orange-600: #b9480d; --orange-700: #923b0f; --orange-800: #6d2e0f;
+  --yellow-25: #fffbed; --yellow-50: #fff6d9; --yellow-75: #ffeeb8; --yellow-100: #ffe48c; --yellow-200: #ffdb66; --yellow-300: #ffd240;
+  --yellow-400: #ffc300; --yellow-500: #e0ac00; --yellow-600: #ba8e00; --yellow-700: #916f00; --yellow-800: #6e5400;
+  --blue-25: #f5faff; --blue-50: #e5f3ff; --blue-75: #cce6ff; --blue-100: #99ceff; --blue-200: #66b5ff; --blue-300: #339cff;
+  --blue-400: #0285ff; --blue-500: #0169cc; --blue-600: #004f99; --blue-700: #003f7a; --blue-800: #013566;
+  /* The hero's mesh (§2.9), the one decorative element: lime, butter, orchid. */
+  --mesh-lime: #dce9a4; --mesh-butter: #f8db8e; --mesh-orchid: #f0b5ed;
+  --mesh-opacity: 0.65;
+  --mesh-blend: normal;
+
+  /* ---- semantic: text ---- */
+  --color-text-emphasis: var(--gray-1000);
+  --color-text: var(--gray-750);
+  --color-text-heading: var(--gray-900);
+  --color-text-label: var(--gray-600);       /* metric labels: 10:1 on white */
+  --color-text-secondary: var(--gray-500);   /* descriptions, timestamps: 6.4:1 on white, 5.8:1 on the canvas */
+  --color-text-tertiary: var(--gray-500);    /* readable muted text keeps 4.5:1 (the blueprint's #8f8f8f does not) */
+  --color-text-disabled: var(--gray-400);
+  --color-text-inverse: var(--gray-0);
+  --color-link: var(--blue-500);             /* 5.4:1 on white */
+  --color-link-hover: var(--blue-800);
+  /* ---- semantic: surfaces ---- */
+  --color-surface-tertiary: var(--gray-75);  /* the canvas behind the sidebar */
+  --color-surface: var(--gray-0);            /* the main panel, cards */
+  --color-surface-secondary: var(--gray-50); /* wells */
+  --color-surface-elevated: var(--gray-0);   /* the drawer, menus, dialogs, popovers */
+  --color-surface-hover: var(--gray-50);
+  --color-surface-selected: var(--gray-100);
+  --color-bg-soft: var(--gray-100);          /* panel frames, the soft fill */
+  /* ---- semantic: lines (alpha, so they are right on any surface) ---- */
+  --alpha-0: transparent;
+  --alpha-01: color-mix(in oklab, var(--alpha-base) 1%, transparent);
+  --alpha-02: color-mix(in oklab, var(--alpha-base) 2%, transparent);
+  --alpha-04: color-mix(in oklab, var(--alpha-base) 4%, transparent);
+  --alpha-05: color-mix(in oklab, var(--alpha-base) 5%, transparent);
+  --alpha-06: color-mix(in oklab, var(--alpha-base) 6%, transparent);
+  --alpha-08: color-mix(in oklab, var(--alpha-base) 8%, transparent);
+  --alpha-10: color-mix(in oklab, var(--alpha-base) 10%, transparent);
+  --alpha-12: color-mix(in oklab, var(--alpha-base) 12%, transparent);
+  --alpha-15: color-mix(in oklab, var(--alpha-base) 15%, transparent);
+  --alpha-16: color-mix(in oklab, var(--alpha-base) 16%, transparent);
+  --alpha-20: color-mix(in oklab, var(--alpha-base) 20%, transparent);
+  --alpha-25: color-mix(in oklab, var(--alpha-base) 25%, transparent);
+  --alpha-30: color-mix(in oklab, var(--alpha-base) 30%, transparent);
+  --alpha-35: color-mix(in oklab, var(--alpha-base) 35%, transparent);
+  --alpha-40: color-mix(in oklab, var(--alpha-base) 40%, transparent);
+  --alpha-50: color-mix(in oklab, var(--alpha-base) 50%, transparent);
+  --alpha-60: color-mix(in oklab, var(--alpha-base) 60%, transparent);
+  --alpha-70: color-mix(in oklab, var(--alpha-base) 70%, transparent);
+  --color-border-subtle: var(--alpha-05);
+  --color-border: var(--alpha-10);
+  --color-border-strong: var(--alpha-15);
+  --color-border-card: var(--alpha-12);      /* a card's ::before stroke */
+  --color-border-outline: var(--alpha-16);   /* outline buttons, fields */
+  --color-border-outline-hover: var(--alpha-20);
+  --color-control-border: var(--gray-400);   /* a field's edge: 3.3:1 on white */
+  --card-hover: var(--alpha-02);
+  --card-press: var(--alpha-04);
+  /* ---- semantic: the neutral primary ---- */
+  --color-solid: var(--gray-900);
+  --color-solid-hover: var(--gray-700);
+  --color-solid-active: var(--gray-600);
+  --color-soft: var(--alpha-08);
+  --color-soft-hover: var(--alpha-12);
+  --color-soft-active: var(--alpha-16);
+  --color-ghost-hover: var(--alpha-08);
+  --color-ghost-active: var(--alpha-12);
+  --color-ring: var(--blue-500);
+  --color-ring-danger: var(--red-200);
+  --seg-track: var(--gray-100);
+  --seg-thumb: var(--gray-0);
+  --nav-pill: var(--alpha-08);
+  /* ---- semantic: intents (text for words, soft-text for words on a tint,
+     surface a tint, soft a stronger tint, solid a fill with white words) ---- */
+  --info-text: var(--blue-600); --info-soft-text: var(--blue-600); --info-surface: var(--blue-25); --info-soft: var(--blue-50); --info-solid: var(--blue-500);
+  --success-text: var(--green-700); --success-soft-text: var(--green-700); --success-surface: var(--green-25); --success-soft: var(--green-50); --success-solid: var(--green-600);
+  --warning-text: var(--orange-700); --warning-soft-text: var(--orange-700); --warning-surface: var(--orange-25); --warning-soft: var(--orange-50); --warning-solid: var(--orange-600);
+  --caution-text: var(--yellow-800); --caution-soft-text: var(--yellow-800); --caution-surface: var(--yellow-25); --caution-soft: var(--yellow-50); --caution-solid: var(--yellow-700);
+  --danger-text: var(--red-700); --danger-soft-text: var(--red-700); --danger-surface: var(--red-25); --danger-soft: var(--red-50); --danger-solid: var(--red-600); --danger-solid-hover: var(--red-700); --on-danger: #ffffff;
+  --on-solid-intent: #ffffff;
+  /* ---- backdrops ---- */
+  --backdrop: rgba(0, 0, 0, 0.3);
+  --backdrop-fade: rgba(242, 242, 242, 0.5);
+
+  /* ---- the desk's names, on the semantic layer ---- */
+  /* Surfaces: canvas -> white panel -> elevated */
+  --bg: var(--color-surface-tertiary);
+  --surface: var(--color-surface);
+  --surface-raised: var(--color-surface-elevated);
+  --surface-hover: var(--color-surface-hover);
+  --surface-selected: var(--color-surface-selected);
+  --surface-sunken: var(--color-surface-secondary);
+  --surface-band: var(--color-surface-secondary);
+  --surface-track: var(--seg-track);
+  --sidebar: var(--color-surface-tertiary);  /* the sidebar is the canvas */
+  --sidebar-hover: var(--alpha-04);
+  --sidebar-active: var(--nav-pill);         /* the current page: the pill on ::before */
+  --on-sidebar-active: var(--color-text);
+  --on-sidebar-active-2: var(--color-text-label);
+  --tab-chosen: var(--seg-thumb);
   --logo-plate: #ffffff;          /* behind a logo image: CoinGecko draws for a light ground */
   /* Text */
-  --text: #1a1919;
-  --text-2: #4a4644;              /* secondary prose: 9.3:1 on white */
-  --text-3: #6b6765;              /* labels, metadata: 5.4:1 on the canvas, 5.0:1 on the rail, 4.6:1 on the red tint */
-  --text-label: #6b6765;          /* micro-labels and the tab bar */
+  --text: var(--color-text);
+  --text-2: var(--color-text-label);         /* secondary prose */
+  --text-3: var(--color-text-tertiary);      /* labels, metadata */
+  --text-label: var(--color-text-tertiary);
   /* Lines */
-  --border: rgba(0, 0, 0, 0.06);  /* the panel's hairline, the quiet divider */
-  --separator: #f4f2f0;           /* grid lines and rules inside a panel */
-  --control-border: #8c8682;      /* field and checkbox edges: 3.6:1 on white */
-  --button-border: #d2cecb;       /* a secondary button's edge */
-  /* The accent: ink, held back for the current place, the primary action,
-     links and focus */
-  --accent: #1a1919;              /* fills; white text on it is 17:1 */
-  --accent-hover: #34302e;
-  --accent-text: #1a1919;         /* links: ink, told apart by their underline */
-  --accent-weak: #f4f2f0;
-  --accent-line: #d2cecb;
-  --link-line: #bdb8b4;           /* a link's underline */
-  --on-accent: #ffffff;
+  --border: var(--color-border);
+  --separator: var(--color-border-subtle);
+  --control-border: var(--color-control-border);
+  --button-border: var(--color-border-outline);
+  /* The accent: neutral, for the current place and the one primary action;
+     links are the blue link colour; focus is the blue ring */
+  --accent: var(--color-solid);
+  --accent-hover: var(--color-solid-hover);
+  --accent-text: var(--color-link);
+  --accent-weak: var(--alpha-04);
+  --accent-line: var(--alpha-16);
+  --link-line: color-mix(in oklab, var(--color-link) 40%, transparent);
+  --on-accent: var(--color-text-inverse);
   --primary: var(--accent);
   --primary-hover: var(--accent-hover);
   --on-primary: var(--on-accent);
-  --focus: #1a1919;
-  --focus-ring: 0 0 0 3px rgba(26, 25, 25, 0.16);
-  /* The one caution fill (the Developer section's "Demo data", the demo banner) */
-  --highlight: #fef3c7;
-  --highlight-weak: #fffbeb;
-  --on-highlight: #8a3f0a;
-  /* Working: blue, a state, never the accent */
-  --work: #2563eb;
-  --work-text: #1e40af;
-  --work-weak: #dbeafe;
+  --focus: var(--color-ring);
+  --focus-ring: 0 0 0 3px color-mix(in oklab, var(--color-ring) 25%, transparent);
+  /* The one caution fill: the Test or Demo workspace tag and notice */
+  --highlight: var(--caution-soft);
+  --highlight-weak: var(--caution-surface);
+  --on-highlight: var(--caution-text);
+  /* Working: the info blue, a state, never the accent */
+  --work: var(--blue-400);
+  --work-text: var(--info-text);
+  --work-weak: var(--info-surface);
   /* Earned color: signals for dots, bars and lines; the deeper step for words */
-  --pos-strong: #16a34a;
-  --neg-strong: #dc2626;
-  --warn-strong: #d97706;
-  --pos: #166534;
-  --pos-text: #166534;
-  --neg: #991b1b;
-  --warn: #92400e;
-  --pos-weak: #dcfce7;            /* status tints with coloured words */
-  --neg-weak: #fee2e2;
-  --warn-weak: #fffbeb;           /* amber-50: the amber signal keeps 3:1 on it */
-  --risk-bar: #dc2626;
-  /* Status dots (8px) on neutral cards: the one colour a bull or bear card,
-     a risk or a trigger carries; its words say the same */
-  --dot-neg: #e5484d;
-  --dot-pos: #30a46c;
-  --dot-warn: #d97706;
-  --fav-bar: #1a1919;
-  --bar-ink: #1a1919;             /* score and progress bars: ink, never a rainbow */
-  --track: #efece9;
-  --row-hover: #f6f5f3;
-  --row-focus: #efece9;           /* the keyboard's row */
-  --scrollbar: #d2cecb;
-  /* Grade bands (the rubric's letters), kept for the views that name them */
-  --band-a: #166534; --band-a-bg: #effaf3; --band-a-chip: #166534;
-  --band-b: #2f6747; --band-b-bg: #f0f7f3; --band-b-chip: #2f6747;
-  --band-c: #4a4644; --band-c-bg: #f4f2f0; --band-c-chip: #4a4644;
-  --band-d: #8a3f0a; --band-d-bg: #fff8eb; --band-d-chip: #8a3f0a;
-  --band-f: #9a3412; --band-f-bg: #fff4ed; --band-f-chip: #9a3412;
+  --pos-strong: var(--green-500);
+  --neg-strong: var(--red-500);
+  --warn-strong: var(--orange-500);
+  --pos: var(--success-text);
+  --pos-text: var(--success-text);
+  --neg: var(--danger-text);
+  --warn: var(--warning-text);
+  --pos-weak: var(--success-surface);
+  --neg-weak: var(--danger-surface);
+  --warn-weak: var(--warning-surface);
+  --risk-bar: var(--red-500);
+  --dot-neg: var(--red-500);
+  --dot-pos: var(--green-500);
+  --dot-warn: var(--orange-500);
+  --fav-bar: var(--color-text);
+  --bar-ink: var(--gray-900);     /* score and progress bars: ink, never a rainbow */
+  --track: var(--gray-100);
+  --row-hover: var(--color-surface-hover);
+  --row-focus: var(--color-surface-selected);
+  --scrollbar: var(--gray-250);
   /* The one 0–100 spectrum on the rubric's anchors: 1 below 40 (red), 2 to
-     59 (amber), 3 to 74 (gray), 4 to 89 (muted green), 5 from 90 (green). Ink
-     on its tint at least 5.5:1; fills at least 3:1 on white. Badges draw the
-     tint and the ink with no line (the -line tokens stay for bars and rules). */
-  --t1-ink: #991b1b; --t1-bg: #fef2f2; --t1-line: rgba(220, 38, 38, 0.22); --t1-fill: #e0383e; --t1-arc: #f8d3d3;
-  --t2-ink: #92400e; --t2-bg: #fffbeb; --t2-line: rgba(217, 119, 6, 0.28); --t2-fill: #df7f0e; --t2-arc: #f7dfb5;
-  --t3-ink: #4a4644; --t3-bg: #f4f2f0; --t3-line: rgba(26, 25, 25, 0.11); --t3-fill: #8c8682; --t3-arc: #e9e5e2;
-  --t4-ink: #166534; --t4-bg: #f0fdf4; --t4-line: rgba(47, 103, 71, 0.22); --t4-fill: #4f9a6b; --t4-arc: #cfe4d6;
-  --t5-ink: #14532d; --t5-bg: #dcfce7; --t5-line: rgba(22, 163, 74, 0.28); --t5-fill: #19a14f; --t5-arc: #bfe9cf;
+     59 (orange), 3 to 74 (gray), 4 to 89 (green), 5 from 90 (deep green).
+     Ink on its tint at least 5.5:1; fills at least 3:1 on white. */
+  --t1-ink: var(--red-700); --t1-bg: var(--red-25); --t1-line: rgba(250, 66, 62, 0.24); --t1-fill: var(--red-500); --t1-arc: var(--red-50);
+  --t2-ink: var(--orange-700); --t2-bg: var(--orange-25); --t2-line: rgba(251, 106, 34, 0.28); --t2-fill: var(--orange-500); --t2-arc: var(--orange-50);
+  --t3-ink: var(--gray-600); --t3-bg: var(--gray-75); --t3-line: var(--alpha-12); --t3-fill: var(--gray-400); --t3-arc: var(--gray-150);
+  --t4-ink: var(--green-700); --t4-bg: var(--green-25); --t4-line: rgba(0, 162, 64, 0.22); --t4-fill: var(--green-500); --t4-arc: var(--green-50);
+  --t5-ink: var(--green-800); --t5-bg: var(--green-50); --t5-line: rgba(0, 134, 53, 0.3); --t5-fill: var(--green-600); --t5-arc: var(--green-75);
+  /* Grade bands (the rubric's letters), on the same spectrum */
+  --band-a: var(--t5-ink); --band-a-bg: var(--t5-bg); --band-a-chip: var(--t5-ink);
+  --band-b: var(--t4-ink); --band-b-bg: var(--t4-bg); --band-b-chip: var(--t4-ink);
+  --band-c: var(--t3-ink); --band-c-bg: var(--t3-bg); --band-c-chip: var(--t3-ink);
+  --band-d: var(--t2-ink); --band-d-bg: var(--t2-bg); --band-d-chip: var(--t2-ink);
+  --band-f: var(--t1-ink); --band-f-bg: var(--t1-bg); --band-f-chip: var(--t1-ink);
   /* Badges, fields */
-  --badge-bg: #efece9;            /* a neutral badge's fill: visible on white, the canvas and the rail */
-  --pill-ink: #4a4644; --pill-warn-bg: #fffbeb; --pill-warn-ink: #92400e; --pill-warn-line: rgba(217, 119, 6, 0.32); --pill-warn-dash: rgba(217, 119, 6, 0.5);
-  --pill-bad-bg: #fee2e2; --pill-bad-ink: #991b1b; --pill-bad-line: rgba(220, 38, 38, 0.24); --pill-bad-dot: #dc2626;
+  --badge-bg: var(--gray-100);    /* a neutral badge: visible on white and the canvas */
+  --pill-ink: var(--color-text-label);
+  --pill-warn-bg: var(--warning-surface); --pill-warn-ink: var(--warning-text); --pill-warn-line: rgba(251, 106, 34, 0.32); --pill-warn-dash: rgba(251, 106, 34, 0.5);
+  --pill-bad-bg: var(--danger-surface); --pill-bad-ink: var(--danger-text); --pill-bad-line: rgba(250, 66, 62, 0.28); --pill-bad-dot: var(--red-500);
   /* Contract checks: a clear answer is a quiet neutral badge; a risk is a
-     red alert badge (the red's deeper step as words, so it reads at 6:1) */
-  --check-ok-bg: #f8f7f5; --check-ok-ink: #6b6765; --check-ok-line: #e9e5e2;
-  --check-risk-bg: #fef2f2; --check-risk-ink: #b91c1c; --check-risk-line: #fecaca;
-  --field-bg: #ffffff; --field-hover: #6b6765; --field-focus: #1a1919; --field-ring: rgba(26, 25, 25, 0.12);
-  --on-chip: #ffffff;
+     red alert badge */
+  --check-ok-bg: var(--color-surface-secondary); --check-ok-ink: var(--color-text-tertiary); --check-ok-line: var(--color-border-subtle);
+  --check-risk-bg: var(--danger-surface); --check-risk-ink: var(--danger-text); --check-risk-line: rgba(250, 66, 62, 0.3);
+  --field-bg: var(--color-surface); --field-hover: var(--gray-500); --field-focus: var(--gray-900); --field-ring: color-mix(in oklab, var(--color-ring) 22%, transparent);
+  --on-chip: var(--on-accent);
   --new-dot: var(--accent);
   /* Type: the system sans for reading and every number (tabular figures);
-     titles and the wordmark in the system's display cut (SF Pro Display,
-     Segoe UI Variable Display); monospace only for contract addresses, hashes
-     and exchange symbols. Body weight 400 (Ramp's 300 reads washed out at
-     13px in a system font). No web font and no Inter. */
+     titles in the system's display cut; monospace only for contract
+     addresses, hashes and exchange symbols. No web font and no Inter. */
   --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
   --font: var(--sans);
   --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
   --figures: tabular-nums lining-nums;
-  /* The one type scale (nothing under 12.5px anywhere, Eric, 2026-10-18):
-     12.5 metadata and captions; 13 column heads, badges and the body; 14
-     controls and card titles; 16 lead text; 20 section titles; 28 big
-     figures; 40 the project's name. The executive scale (the 2026-10-18
-     polish pass) adds the sizes the Desk, the rail, the inspector and Review
-     read at: 13.5 queue summaries and research badges, 14.5 trigger and
-     ledger text, 15 rows, navigation, tabs and the thesis, 22 the inspector's
-     headings and price, 26 KPI figures, 28 the Portfolio's figures, 32 page
-     titles and the inspector's grade. */
+  /* The one type scale (nothing under 12.5px anywhere, Eric, 2026-10-18).
+     The blueprint's scale: 12.5 captions and badges (its 12, raised to the
+     floor), 14/20 body, controls and labels, 16 card titles, 18/29 metric
+     figures, 20 section heads, 24 headings, 36 page titles. The executive
+     scale's names stay for the views that use them. */
   --fs-xs: 12.5px;
   --fs-sm: 13px;
   --fs-md: 14px;
@@ -152,16 +242,15 @@
   --fs-xl: 20px;
   --fs-2xl: 28px;
   --fs-3xl: 40px;
-  /* The older names, aliased onto the one scale so nothing breaks */
   --fs-caption: var(--fs-xs);
   --fs-small: var(--fs-xs);
   --fs-body: var(--fs-sm);
   --fs-h3: var(--fs-sm);
   --fs-h2: var(--fs-md);
-  --fs-h1: var(--fs-page);        /* the hosted views' page titles */
-  --fs-title: var(--fs-xl);       /* a page's section titles and the inspector's project name */
-  --fs-display: clamp(28px, 1.5vw + 18px, 40px);   /* page titles and the project's name: 40px from 1440, 28px on a phone */
-  --fs-read: 15px;                /* the report's reading view (68ch measure): prose only, never a control */
+  --fs-h1: var(--fs-page);
+  --fs-title: var(--fs-xl);
+  --fs-display: clamp(28px, 1.2vw + 18px, 36px);   /* page titles: the blueprint's heading-2xl, 36px wide, 28px on a phone */
+  --fs-read: 15px;
   --fs-ui-sm: 13.5px;
   --fs-body-lg: 14.5px;
   --fs-ui: 15px;
@@ -169,27 +258,52 @@
   --fs-kpi: 26px;
   --fs-kpi-lg: 28px;
   --fs-page: 32px;
-  --track-display: -0.02em;       /* 40/48 titles: -0.8px */
-  --track-title: -0.01em;
-  /* Space, shape, depth: almost square, hairlines instead of shadows */
-  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px; --s10: 40px;
-  --r-sm: 2px; --r-md: 4px; --r-lg: 8px; --r-xl: 10px;
-  --r-card: 12px; --r-panel: 12px; --r-well: 8px; --r-field: 4px; --r-control: 4px;
-  --r-button: 8px;                /* buttons */
-  --r-badge: 4px;                 /* status badges */
-  --r-pill: 999px;                /* count badges, toggles and dots only */
-  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.03);   /* a card's whisper of lift */
+  --fs-metric: 18px;              /* the KPI frame's figures, 18/29/600 */
+  --lh-metric: 29px;
+  --lh-body: 20px;
+  --track-display: -0.02em;       /* 32px and up */
+  --track-title: -0.01em;         /* 14–24px */
+  --tracking-tight: -0.02em;
+  --tracking-normal: -0.01em;
+  --tracking-wide: 0em;
+  /* Space, shape, depth */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px; --s10: 40px; --s12: 48px;
+  --radius-2xs: 2px; --radius-xs: 4px; --radius-sm: 6px; --radius-md: 8px; --radius-lg: 10px;
+  --radius-xl: 12px; --radius-2xl: 16px; --radius-3xl: 20px; --radius-4xl: 24px; --radius-full: 9999px;
+  --r-sm: var(--radius-2xs); --r-md: var(--radius-sm); --r-lg: var(--radius-md); --r-xl: var(--radius-lg);
+  --r-card: var(--radius-xl);     /* panels and the frames on the panel */
+  --r-tile: var(--radius-2xl);    /* content cards (the PM Decision Cards) */
+  --r-panel: var(--radius-xl);
+  --r-well: var(--radius-md);
+  --r-field: var(--radius-md);
+  --r-control: var(--radius-md);
+  --r-button: var(--radius-md);
+  --r-nav: var(--radius-lg);
+  --r-badge: var(--radius-xs);
+  --r-pill: var(--radius-full);
+  --shadow-a100: 0.08; --shadow-a200: 0.08; --shadow-a300: 0.1; --shadow-a400: 0.12;
+  --shadow-100: 0 1px 2px -1px rgb(0 0 0 / var(--shadow-a100));
+  --shadow-200: 0 2px 4px -1px rgb(0 0 0 / var(--shadow-a200));
+  --shadow-300: 0 4px 8px -2px rgb(0 0 0 / var(--shadow-a300));
+  --shadow-400: 0 8px 16px -4px rgb(0 0 0 / var(--shadow-a400));
+  --shadow-hairline: 0 0 0 0.5px rgba(0, 0, 0, 0.1);
+  --shadow-card: none;            /* cards have no resting shadow: strokes carry elevation */
   --shadow-panel: none;
   --shadow-lift: none;
-  --shadow-seg: 0 0 0 1px rgba(26, 25, 25, 0.10);   /* the chosen segment's edge */
-  --shadow-pop: 0 0 0 1px rgba(26, 25, 25, 0.06), 0 4px 8px rgba(26, 25, 25, 0.04), 0 12px 32px rgba(26, 25, 25, 0.10);
-  --shadow-drawer: -1px 0 0 rgba(26, 25, 25, 0.06), -4px 0 12px rgba(26, 25, 25, 0.04), -16px 0 40px rgba(26, 25, 25, 0.08);
-  --scrim: rgba(244, 242, 240, 0.8);   /* a warm frost, not a dark scrim */
+  --shadow-seg: 0 1px 4px -1px rgba(0, 0, 0, 0.2);   /* the segmented thumb */
+  --shadow-pop: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1), var(--shadow-hairline);
+  --shadow-drawer: -8px 0 16px 0 rgba(0, 0, 0, 0.07), -2px 0 6px 0 rgba(0, 0, 0, 0.05), 0 0 0 1px var(--color-border);
+  --scrim: var(--backdrop-fade);
   /* Sizes */
   --topbar-h: 48px;
-  --sidebar-w: 232px;             /* the rail, expanded */
-  --rail-w: 56px;                 /* the rail, collapsed to its icons */
-  --control-h: 32px;
+  --sidebar-w: 260px;             /* the sidebar, expanded */
+  --rail-w: 56px;                 /* the sidebar, collapsed to its icons */
+  --nav-h: 36px;
+  --switcher-h: 32px;
+  --control-size-sm: 28px;
+  --control-size-md: 32px;
+  --control-size-lg: 36px;
+  --control-h: var(--control-size-md);
   --touch: 44px;
   --row-h: 44px;
   --row-h-touch: 52px;
@@ -199,91 +313,124 @@
   --wl-row-h: 60px;               /* the Desk's rows on a desktop (52px on a phone) */
   --wl-head-h: 40px;
   --badge-w: 56px;
-  --badge-h: 22px;
-  --inspector-w: 620px;           /* 1280–1599px; 680px from 1600px (watchlist.css) */
-  --inspector-w-wide: 680px;
+  --badge-h: 20px;
+  --inspector-w: 520px;           /* docked from 1280px, a drawer below */
+  --inspector-w-wide: 520px;
   --badge-h-lg: 26px;             /* status and risk badges in the Desk's rows */
   --r-badge-lg: 6px;
+  --spark-h: 44px;
   /* Motion: short, and none when reduced motion is asked for */
-  --dur: 140ms;
-  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --dur: 150ms;
+  --dur-move: 300ms;
+  --ease: ease;
+  --cubic-enter: cubic-bezier(0.19, 1, 0.22, 1);
+  --cubic-exit: cubic-bezier(0.8, 0, 0.4, 1);
+  --cubic-move: cubic-bezier(0.65, 0, 0.35, 1);
+  --press-scale: 0.97;
+  --card-press-scale: 0.98;
   color-scheme: light;
 }
 
-/* Night: the same ramp warm-shifted (#151413 canvas, #1c1b1a panels, #242220
-   raised and hover), the same hairlines and earned color; the current place
-   and the primary action in warm white. */
+/* Night: the ramp inverted (the canvas darkest #131313, panels #212121,
+   raised surfaces #303030), --alpha-base white, the intents a step lighter
+   for words. Every derived token above follows. */
 :root[data-theme="dark"] {
-  --bg: #151413; --surface: #1c1b1a; --surface-raised: #242220; --surface-hover: #242220; --surface-selected: #2c2a28; --surface-sunken: #181716; --surface-band: #201f1d; --surface-track: #242220;
-  --sidebar: #1a1918; --sidebar-hover: #242220; --sidebar-active: #2c2a28; --on-sidebar-active: #f4f2f0; --on-sidebar-active-2: #bdb8b4; --tab-chosen: #2c2a28; --logo-plate: #e9e5e2;
-  --text: #f4f2f0; --text-2: #bdb8b4; --text-3: #9c9692; --text-label: #9c9692;
-  --border: rgba(255, 255, 255, 0.07); --separator: #252321; --control-border: #6e6a66; --button-border: #3a3734;
-  --accent: #f4f2f0; --accent-hover: #dcd8d4; --accent-text: #f4f2f0; --accent-weak: rgba(244, 242, 240, 0.07); --accent-line: rgba(244, 242, 240, 0.2); --link-line: rgba(244, 242, 240, 0.3); --on-accent: #1a1919;
-  --focus: #f4f2f0; --focus-ring: 0 0 0 3px rgba(244, 242, 240, 0.24);
-  --highlight: rgba(245, 158, 11, 0.16); --highlight-weak: rgba(245, 158, 11, 0.08); --on-highlight: #fbbf24;
-  --work: #60a5fa; --work-text: #93c5fd; --work-weak: rgba(59, 130, 246, 0.16);
-  --pos-strong: #22c55e; --neg-strong: #ef4444; --warn-strong: #f59e0b;
-  --pos: #4ade80; --pos-text: #4ade80; --neg: #f87171; --warn: #fbbf24;
-  --pos-weak: rgba(34, 197, 94, 0.12); --neg-weak: rgba(239, 68, 68, 0.12); --warn-weak: rgba(245, 158, 11, 0.12);
-  --dot-neg: #e5484d; --dot-pos: #30a46c; --dot-warn: #f59e0b; --risk-bar: #ef4444; --fav-bar: #bdb8b4; --bar-ink: #e9e5e2; --track: #2e2c2a; --row-hover: #242220; --row-focus: #2c2a28; --scrollbar: #3a3734;
-  --band-a: #4ade80; --band-a-bg: rgba(74, 222, 128, 0.11); --band-a-chip: #4ade80;
-  --band-b: #86c99b; --band-b-bg: rgba(134, 201, 155, 0.11); --band-b-chip: #86c99b;
-  --band-c: #c9c4c0; --band-c-bg: rgba(244, 242, 240, 0.06); --band-c-chip: #c9c4c0;
-  --band-d: #fbbf24; --band-d-bg: rgba(251, 191, 36, 0.11); --band-d-chip: #fbbf24;
-  --band-f: #fb923c; --band-f-bg: rgba(251, 146, 60, 0.12); --band-f-chip: #fb923c;
-  --on-chip: #1a1919;
-  --t1-ink: #f87171; --t1-bg: rgba(239, 68, 68, 0.13); --t1-line: rgba(239, 68, 68, 0.32); --t1-fill: #ef4444; --t1-arc: rgba(239, 68, 68, 0.3);
-  --t2-ink: #fbbf24; --t2-bg: rgba(245, 158, 11, 0.13); --t2-line: rgba(245, 158, 11, 0.32); --t2-fill: #f59e0b; --t2-arc: rgba(245, 158, 11, 0.3);
-  --t3-ink: #d6d1cd; --t3-bg: rgba(244, 242, 240, 0.07); --t3-line: rgba(244, 242, 240, 0.13); --t3-fill: #928c88; --t3-arc: rgba(244, 242, 240, 0.14);
-  --t4-ink: #8ccfa2; --t4-bg: rgba(134, 201, 155, 0.13); --t4-line: rgba(134, 201, 155, 0.3); --t4-fill: #6fb486; --t4-arc: rgba(134, 201, 155, 0.28);
-  --t5-ink: #4ade80; --t5-bg: rgba(34, 197, 94, 0.15); --t5-line: rgba(34, 197, 94, 0.34); --t5-fill: #22c55e; --t5-arc: rgba(34, 197, 94, 0.32);
-  --badge-bg: rgba(244, 242, 240, 0.08); --pill-ink: #d6d1cd; --pill-warn-bg: rgba(245, 158, 11, 0.13); --pill-warn-ink: #fbbf24; --pill-warn-line: rgba(245, 158, 11, 0.32); --pill-warn-dash: rgba(245, 158, 11, 0.5);
-  --pill-bad-bg: rgba(239, 68, 68, 0.13); --pill-bad-ink: #f87171; --pill-bad-line: rgba(239, 68, 68, 0.32); --pill-bad-dot: #ef4444;
-  --check-ok-bg: rgba(244, 242, 240, 0.04); --check-ok-ink: #a8a29e; --check-ok-line: #2e2c2a; --check-risk-bg: rgba(239, 68, 68, 0.13); --check-risk-ink: #fca5a5; --check-risk-line: rgba(248, 113, 113, 0.45);
-  --field-bg: #181716; --field-hover: #8c8682; --field-focus: #f4f2f0; --field-ring: rgba(244, 242, 240, 0.2);
-  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.24); --shadow-panel: none; --shadow-lift: none; --shadow-seg: 0 0 0 1px rgba(244, 242, 240, 0.10);
-  --shadow-pop: 0 0 0 1px rgba(244, 242, 240, 0.06), 0 12px 32px rgba(0, 0, 0, 0.5);
-  --shadow-drawer: -1px 0 0 rgba(244, 242, 240, 0.05), -16px 0 40px rgba(0, 0, 0, 0.5);
-  --scrim: rgba(10, 9, 9, 0.6);
+  --gray-0: #0d0d0d; --gray-25: #101010; --gray-50: #131313; --gray-75: #161616; --gray-100: #181818;
+  --gray-150: #1c1c1c; --gray-200: #212121; --gray-250: #282828; --gray-300: #303030; --gray-350: #393939;
+  --gray-400: #414141; --gray-450: #4f4f4f; --gray-500: #5d5d5d; --gray-550: #767676; --gray-600: #8f8f8f;
+  --gray-650: #9f9f9f; --gray-700: #afafaf; --gray-750: #b9b9b9; --gray-800: #cdcdcd; --gray-850: #dcdcdc;
+  --gray-900: #ededed; --gray-925: #f3f3f3; --gray-950: #f3f3f3; --gray-975: #f9f9f9; --gray-1000: #ffffff;
+  --alpha-base: #ffffff;
+  --mesh-opacity: 0.35; --mesh-blend: screen;
+  --color-text: var(--gray-850); --color-text-heading: var(--gray-900); --color-text-label: var(--gray-700);
+  --color-text-secondary: var(--gray-700); --color-text-tertiary: var(--gray-700); --color-text-disabled: var(--gray-500);
+  --color-link: var(--blue-200); --color-link-hover: var(--blue-100);
+  --color-surface-tertiary: var(--gray-50); --color-surface: var(--gray-200); --color-surface-secondary: var(--gray-100);
+  --color-surface-elevated: var(--gray-300); --color-surface-hover: var(--gray-250); --color-surface-selected: var(--gray-350); --color-bg-soft: var(--gray-300);
+  --color-border-subtle: var(--alpha-06); --color-border: var(--alpha-12); --color-border-strong: var(--alpha-20); --color-border-card: var(--alpha-12);
+  --color-border-outline: var(--alpha-25); --color-border-outline-hover: var(--alpha-30); --color-control-border: var(--gray-550);
+  --card-hover: var(--alpha-04); --card-press: var(--alpha-08);
+  --color-solid: var(--gray-950); --color-solid-hover: var(--gray-900); --color-solid-active: var(--gray-850);
+  --color-soft: var(--alpha-12); --color-soft-hover: var(--alpha-16); --color-soft-active: var(--alpha-20);
+  --color-ghost-hover: var(--alpha-12); --color-ghost-active: var(--alpha-16);
+  --color-ring: var(--blue-400);
+  --seg-track: var(--gray-0); --seg-thumb: var(--gray-300); --nav-pill: var(--alpha-12);
+  --info-text: var(--blue-200); --info-soft-text: var(--blue-200); --info-surface: rgba(2, 133, 255, 0.14); --info-soft: rgba(2, 133, 255, 0.22);
+  --success-text: var(--green-300); --success-soft-text: var(--green-300); --success-surface: rgba(4, 184, 76, 0.14); --success-soft: rgba(4, 184, 76, 0.22);
+  --warning-text: var(--orange-300); --warning-soft-text: var(--orange-300); --warning-surface: rgba(251, 106, 34, 0.14); --warning-soft: rgba(251, 106, 34, 0.22);
+  --caution-text: var(--yellow-400); --caution-soft-text: var(--yellow-400); --caution-surface: rgba(255, 195, 0, 0.12); --caution-soft: rgba(255, 195, 0, 0.18);
+  --danger-text: var(--red-100); --danger-soft-text: var(--red-100); --danger-surface: rgba(250, 66, 62, 0.14); --danger-soft: rgba(250, 66, 62, 0.22); --danger-solid: var(--red-500); --danger-solid-hover: var(--red-600);
+  --backdrop: rgba(0, 0, 0, 0.5); --backdrop-fade: rgba(0, 0, 0, 0.5);
+  --tab-chosen: #303030; --logo-plate: #dcdcdc;
+  --pos-strong: var(--green-400); --neg-strong: var(--red-400); --warn-strong: var(--orange-400);
+  --risk-bar: var(--red-400); --dot-neg: var(--red-400); --dot-pos: var(--green-400); --dot-warn: var(--orange-400);
+  --bar-ink: var(--gray-800); --track: var(--gray-400); --scrollbar: var(--gray-350);
+  --t1-ink: var(--red-100); --t1-bg: rgba(250, 66, 62, 0.14); --t1-line: rgba(250, 66, 62, 0.34); --t1-fill: var(--red-400); --t1-arc: rgba(250, 66, 62, 0.3);
+  --t2-ink: var(--orange-300); --t2-bg: rgba(251, 106, 34, 0.14); --t2-line: rgba(251, 106, 34, 0.34); --t2-fill: var(--orange-400); --t2-arc: rgba(251, 106, 34, 0.3);
+  --t3-ink: var(--gray-800); --t3-bg: rgba(255, 255, 255, 0.07); --t3-line: rgba(255, 255, 255, 0.13); --t3-fill: var(--gray-600); --t3-arc: rgba(255, 255, 255, 0.14);
+  --t4-ink: var(--green-200); --t4-bg: rgba(4, 184, 76, 0.12); --t4-line: rgba(4, 184, 76, 0.3); --t4-fill: var(--green-500); --t4-arc: rgba(4, 184, 76, 0.28);
+  --t5-ink: var(--green-300); --t5-bg: rgba(4, 184, 76, 0.18); --t5-line: rgba(4, 184, 76, 0.36); --t5-fill: var(--green-400); --t5-arc: rgba(4, 184, 76, 0.34);
+  --badge-bg: var(--gray-350);
+  --pill-warn-line: rgba(251, 106, 34, 0.34); --pill-warn-dash: rgba(251, 106, 34, 0.5); --pill-bad-line: rgba(250, 66, 62, 0.34); --pill-bad-dot: var(--red-400);
+  --check-ok-bg: rgba(255, 255, 255, 0.04); --check-risk-line: rgba(250, 66, 62, 0.45);
+  --field-bg: var(--gray-100); --field-hover: var(--gray-550); --field-focus: var(--gray-850);
+  --shadow-a100: 0.2; --shadow-a200: 0.2; --shadow-a300: 0.36; --shadow-a400: 0.3;
+  --shadow-hairline: 0 0 0 0.5px rgba(255, 255, 255, 0.12);
+  --shadow-seg: 0 1px 4px -1px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -4px rgba(0, 0, 0, 0.2), var(--shadow-hairline);
+  --shadow-drawer: -8px 0 16px 0 rgba(0, 0, 0, 0.35), -2px 0 6px 0 rgba(0, 0, 0, 0.2), inset 0 0 0 1px var(--color-border);
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
   :root[data-theme="system"] {
-    --bg: #151413; --surface: #1c1b1a; --surface-raised: #242220; --surface-hover: #242220; --surface-selected: #2c2a28; --surface-sunken: #181716; --surface-band: #201f1d; --surface-track: #242220;
-    --sidebar: #1a1918; --sidebar-hover: #242220; --sidebar-active: #2c2a28; --on-sidebar-active: #f4f2f0; --on-sidebar-active-2: #bdb8b4; --tab-chosen: #2c2a28; --logo-plate: #e9e5e2;
-    --text: #f4f2f0; --text-2: #bdb8b4; --text-3: #9c9692; --text-label: #9c9692;
-    --border: rgba(255, 255, 255, 0.07); --separator: #252321; --control-border: #6e6a66; --button-border: #3a3734;
-    --accent: #f4f2f0; --accent-hover: #dcd8d4; --accent-text: #f4f2f0; --accent-weak: rgba(244, 242, 240, 0.07); --accent-line: rgba(244, 242, 240, 0.2); --link-line: rgba(244, 242, 240, 0.3); --on-accent: #1a1919;
-    --focus: #f4f2f0; --focus-ring: 0 0 0 3px rgba(244, 242, 240, 0.24);
-    --highlight: rgba(245, 158, 11, 0.16); --highlight-weak: rgba(245, 158, 11, 0.08); --on-highlight: #fbbf24;
-    --work: #60a5fa; --work-text: #93c5fd; --work-weak: rgba(59, 130, 246, 0.16);
-    --pos-strong: #22c55e; --neg-strong: #ef4444; --warn-strong: #f59e0b;
-    --pos: #4ade80; --pos-text: #4ade80; --neg: #f87171; --warn: #fbbf24;
-    --pos-weak: rgba(34, 197, 94, 0.12); --neg-weak: rgba(239, 68, 68, 0.12); --warn-weak: rgba(245, 158, 11, 0.12);
-    --dot-neg: #e5484d; --dot-pos: #30a46c; --dot-warn: #f59e0b; --risk-bar: #ef4444; --fav-bar: #bdb8b4; --bar-ink: #e9e5e2; --track: #2e2c2a; --row-hover: #242220; --row-focus: #2c2a28; --scrollbar: #3a3734;
-    --band-a: #4ade80; --band-a-bg: rgba(74, 222, 128, 0.11); --band-a-chip: #4ade80;
-    --band-b: #86c99b; --band-b-bg: rgba(134, 201, 155, 0.11); --band-b-chip: #86c99b;
-    --band-c: #c9c4c0; --band-c-bg: rgba(244, 242, 240, 0.06); --band-c-chip: #c9c4c0;
-    --band-d: #fbbf24; --band-d-bg: rgba(251, 191, 36, 0.11); --band-d-chip: #fbbf24;
-    --band-f: #fb923c; --band-f-bg: rgba(251, 146, 60, 0.12); --band-f-chip: #fb923c;
-    --on-chip: #1a1919;
-    --t1-ink: #f87171; --t1-bg: rgba(239, 68, 68, 0.13); --t1-line: rgba(239, 68, 68, 0.32); --t1-fill: #ef4444; --t1-arc: rgba(239, 68, 68, 0.3);
-    --t2-ink: #fbbf24; --t2-bg: rgba(245, 158, 11, 0.13); --t2-line: rgba(245, 158, 11, 0.32); --t2-fill: #f59e0b; --t2-arc: rgba(245, 158, 11, 0.3);
-    --t3-ink: #d6d1cd; --t3-bg: rgba(244, 242, 240, 0.07); --t3-line: rgba(244, 242, 240, 0.13); --t3-fill: #928c88; --t3-arc: rgba(244, 242, 240, 0.14);
-    --t4-ink: #8ccfa2; --t4-bg: rgba(134, 201, 155, 0.13); --t4-line: rgba(134, 201, 155, 0.3); --t4-fill: #6fb486; --t4-arc: rgba(134, 201, 155, 0.28);
-    --t5-ink: #4ade80; --t5-bg: rgba(34, 197, 94, 0.15); --t5-line: rgba(34, 197, 94, 0.34); --t5-fill: #22c55e; --t5-arc: rgba(34, 197, 94, 0.32);
-    --badge-bg: rgba(244, 242, 240, 0.08); --pill-ink: #d6d1cd; --pill-warn-bg: rgba(245, 158, 11, 0.13); --pill-warn-ink: #fbbf24; --pill-warn-line: rgba(245, 158, 11, 0.32); --pill-warn-dash: rgba(245, 158, 11, 0.5);
-    --pill-bad-bg: rgba(239, 68, 68, 0.13); --pill-bad-ink: #f87171; --pill-bad-line: rgba(239, 68, 68, 0.32); --pill-bad-dot: #ef4444;
-    --check-ok-bg: rgba(244, 242, 240, 0.04); --check-ok-ink: #a8a29e; --check-ok-line: #2e2c2a; --check-risk-bg: rgba(239, 68, 68, 0.13); --check-risk-ink: #fca5a5; --check-risk-line: rgba(248, 113, 113, 0.45);
-    --field-bg: #181716; --field-hover: #8c8682; --field-focus: #f4f2f0; --field-ring: rgba(244, 242, 240, 0.2);
-    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.24); --shadow-panel: none; --shadow-lift: none; --shadow-seg: 0 0 0 1px rgba(244, 242, 240, 0.10);
-    --shadow-pop: 0 0 0 1px rgba(244, 242, 240, 0.06), 0 12px 32px rgba(0, 0, 0, 0.5);
-    --shadow-drawer: -1px 0 0 rgba(244, 242, 240, 0.05), -16px 0 40px rgba(0, 0, 0, 0.5);
-    --scrim: rgba(10, 9, 9, 0.6);
+    --gray-0: #0d0d0d; --gray-25: #101010; --gray-50: #131313; --gray-75: #161616; --gray-100: #181818;
+    --gray-150: #1c1c1c; --gray-200: #212121; --gray-250: #282828; --gray-300: #303030; --gray-350: #393939;
+    --gray-400: #414141; --gray-450: #4f4f4f; --gray-500: #5d5d5d; --gray-550: #767676; --gray-600: #8f8f8f;
+    --gray-650: #9f9f9f; --gray-700: #afafaf; --gray-750: #b9b9b9; --gray-800: #cdcdcd; --gray-850: #dcdcdc;
+    --gray-900: #ededed; --gray-925: #f3f3f3; --gray-950: #f3f3f3; --gray-975: #f9f9f9; --gray-1000: #ffffff;
+    --alpha-base: #ffffff;
+    --mesh-opacity: 0.35; --mesh-blend: screen;
+    --color-text: var(--gray-850); --color-text-heading: var(--gray-900); --color-text-label: var(--gray-700);
+    --color-text-secondary: var(--gray-700); --color-text-tertiary: var(--gray-700); --color-text-disabled: var(--gray-500);
+    --color-link: var(--blue-200); --color-link-hover: var(--blue-100);
+    --color-surface-tertiary: var(--gray-50); --color-surface: var(--gray-200); --color-surface-secondary: var(--gray-100);
+    --color-surface-elevated: var(--gray-300); --color-surface-hover: var(--gray-250); --color-surface-selected: var(--gray-350); --color-bg-soft: var(--gray-300);
+    --color-border-subtle: var(--alpha-06); --color-border: var(--alpha-12); --color-border-strong: var(--alpha-20); --color-border-card: var(--alpha-12);
+    --color-border-outline: var(--alpha-25); --color-border-outline-hover: var(--alpha-30); --color-control-border: var(--gray-550);
+    --card-hover: var(--alpha-04); --card-press: var(--alpha-08);
+    --color-solid: var(--gray-950); --color-solid-hover: var(--gray-900); --color-solid-active: var(--gray-850);
+    --color-soft: var(--alpha-12); --color-soft-hover: var(--alpha-16); --color-soft-active: var(--alpha-20);
+    --color-ghost-hover: var(--alpha-12); --color-ghost-active: var(--alpha-16);
+    --color-ring: var(--blue-400);
+    --seg-track: var(--gray-0); --seg-thumb: var(--gray-300); --nav-pill: var(--alpha-12);
+    --info-text: var(--blue-200); --info-soft-text: var(--blue-200); --info-surface: rgba(2, 133, 255, 0.14); --info-soft: rgba(2, 133, 255, 0.22);
+    --success-text: var(--green-300); --success-soft-text: var(--green-300); --success-surface: rgba(4, 184, 76, 0.14); --success-soft: rgba(4, 184, 76, 0.22);
+    --warning-text: var(--orange-300); --warning-soft-text: var(--orange-300); --warning-surface: rgba(251, 106, 34, 0.14); --warning-soft: rgba(251, 106, 34, 0.22);
+    --caution-text: var(--yellow-400); --caution-soft-text: var(--yellow-400); --caution-surface: rgba(255, 195, 0, 0.12); --caution-soft: rgba(255, 195, 0, 0.18);
+    --danger-text: var(--red-100); --danger-soft-text: var(--red-100); --danger-surface: rgba(250, 66, 62, 0.14); --danger-soft: rgba(250, 66, 62, 0.22); --danger-solid: var(--red-500); --danger-solid-hover: var(--red-600);
+    --backdrop: rgba(0, 0, 0, 0.5); --backdrop-fade: rgba(0, 0, 0, 0.5);
+    --tab-chosen: #303030; --logo-plate: #dcdcdc;
+    --pos-strong: var(--green-400); --neg-strong: var(--red-400); --warn-strong: var(--orange-400);
+    --risk-bar: var(--red-400); --dot-neg: var(--red-400); --dot-pos: var(--green-400); --dot-warn: var(--orange-400);
+    --bar-ink: var(--gray-800); --track: var(--gray-400); --scrollbar: var(--gray-350);
+    --t1-ink: var(--red-100); --t1-bg: rgba(250, 66, 62, 0.14); --t1-line: rgba(250, 66, 62, 0.34); --t1-fill: var(--red-400); --t1-arc: rgba(250, 66, 62, 0.3);
+    --t2-ink: var(--orange-300); --t2-bg: rgba(251, 106, 34, 0.14); --t2-line: rgba(251, 106, 34, 0.34); --t2-fill: var(--orange-400); --t2-arc: rgba(251, 106, 34, 0.3);
+    --t3-ink: var(--gray-800); --t3-bg: rgba(255, 255, 255, 0.07); --t3-line: rgba(255, 255, 255, 0.13); --t3-fill: var(--gray-600); --t3-arc: rgba(255, 255, 255, 0.14);
+    --t4-ink: var(--green-200); --t4-bg: rgba(4, 184, 76, 0.12); --t4-line: rgba(4, 184, 76, 0.3); --t4-fill: var(--green-500); --t4-arc: rgba(4, 184, 76, 0.28);
+    --t5-ink: var(--green-300); --t5-bg: rgba(4, 184, 76, 0.18); --t5-line: rgba(4, 184, 76, 0.36); --t5-fill: var(--green-400); --t5-arc: rgba(4, 184, 76, 0.34);
+    --badge-bg: var(--gray-350);
+    --pill-warn-line: rgba(251, 106, 34, 0.34); --pill-warn-dash: rgba(251, 106, 34, 0.5); --pill-bad-line: rgba(250, 66, 62, 0.34); --pill-bad-dot: var(--red-400);
+    --check-ok-bg: rgba(255, 255, 255, 0.04); --check-risk-line: rgba(250, 66, 62, 0.45);
+    --field-bg: var(--gray-100); --field-hover: var(--gray-550); --field-focus: var(--gray-850);
+    --shadow-a100: 0.2; --shadow-a200: 0.2; --shadow-a300: 0.36; --shadow-a400: 0.3;
+    --shadow-hairline: 0 0 0 0.5px rgba(255, 255, 255, 0.12);
+    --shadow-seg: 0 1px 4px -1px rgba(0, 0, 0, 0.5);
+    --shadow-pop: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -4px rgba(0, 0, 0, 0.2), var(--shadow-hairline);
+    --shadow-drawer: -8px 0 16px 0 rgba(0, 0, 0, 0.35), -2px 0 6px 0 rgba(0, 0, 0, 0.2), inset 0 0 0 1px var(--color-border);
     color-scheme: dark;
   }
 }
-@media (prefers-reduced-motion: reduce) { :root { --dur: 0ms; } }
+@media (prefers-reduced-motion: reduce) { :root { --dur: 0ms; --dur-move: 0ms; } }
 
 /* Icons as local SVG masks (no requests), drawn in currentColor; always next
    to words that carry the same meaning. */

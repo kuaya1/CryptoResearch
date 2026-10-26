@@ -13,7 +13,7 @@ import { ArrowDown, ArrowUp, ChevronRight } from 'lucide-react';
 import { PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, fmtPrice, fmtDate, fmtDateTime, freshnessText, onHoldOf } from '../../../../public/ui.js';
 import {
   COLUMNS, SORT_NAMES, mkt, marketStrings, noPriceReason, holdCell, sortDescription,
-  canonicalGrade, consensusOf, riskCell, exitCell, lastResearchCell, actionOf,
+  canonicalGrade, consensusOf, riskCell, exitCell, lastResearchCell, actionOf, rangeOf,
 } from '../../../../public/watchlist-model.js';
 import { Logo } from '../../components/Logo.jsx';
 import { Change, Spark, Unknown, UnknownFigure } from '../../components/figures.jsx';
@@ -27,7 +27,8 @@ export function badgeOpts(d, prov) {
   return { staleDays: d.index.settings.freshness.research_stale_days || 90, hosted: Boolean(d.session && d.session.hosted), onHold: Boolean(onHoldOf(d.index, prov)) };
 }
 
-function PriceCell({ p, stacked = false }) {
+function PriceCell({ p, stacked = false, range = '24h' }) {
+  const r = rangeOf(range);
   const reason = noPriceReason(p);
   if (reason) return <Unknown label="Price" reason={reason} />;
   const m = p.market;
@@ -35,7 +36,7 @@ function PriceCell({ p, stacked = false }) {
   return (
     <span className="price-cell" title={`Source: ${m.source || 'CoinGecko'}, as of ${fmtDateTime(m.as_of)}`}>
       <span className="price">{fmtPrice(m.price_usd)}</span>
-      {stacked ? <Change value={m.change_24h_pct} label="over 24 hours" className="price-chg" /> : null}
+      {stacked ? <Change value={m[r.field]} label={r.words} className="price-chg" /> : null}
       {m.status !== 'fresh' ? <span className="price-note">{String(f.text).split(' · ').map((part, i) => <span key={part} className="pn">{i ? ` · ${part}` : part}</span>)}</span> : null}
     </span>
   );
@@ -76,12 +77,12 @@ export function RiskBadge({ d, p }) {
   return <span className={`badge risk-badge ${cls}`} title={r.title}>{r.text}{r.more ? <span className="risk-more">{` +${r.more}`}</span> : null}<span className="sr-only">{r.signals && r.signals.length > 1 ? `. Also: ${r.signals.filter((s) => s.text !== r.text).map((s) => s.text).join(', ')}` : ''}</span></span>;
 }
 
-function Cell({ col, d, p, sources, onSector, onOpen }) {
+function Cell({ col, d, p, sources, onSector, onOpen, range }) {
   const m = mkt(p);
   const s = marketStrings(m) || {};
   switch (col) {
     case 'rank': return m && m.market_cap_rank ? <span className="rk" title={m.rank_source_label || 'CoinGecko market-cap rank'}>{m.market_cap_rank}</span> : <Unknown label="Rank" />;
-    case 'priceStack': return <PriceCell p={p} stacked />;
+    case 'priceStack': return <PriceCell p={p} stacked range={range} />;
     case 'price': return <PriceCell p={p} />;
     case 'spark': return <span className="spark-cell" title={m && typeof m.change_7d_pct === 'number' ? `7 days: ${s.change7d}` : undefined}><Spark values={m && m.sparkline_7d} change={m ? m.change_7d_pct : null} width={110} height={32} label={`${p.symbol || p.name} 7-day price${m && s.change7d ? `, ${s.change7d}` : ''}`} /></span>;
     case 'grade': return <GradeCell d={d} p={p} onOpen={onOpen} />;
@@ -169,7 +170,7 @@ function ActionCell({ d, p, onOpen, onAction, agenda = null }) {
   );
 }
 
-export function ProjectTable({ d, rows, columns, sort, onSort, selected, recent, onOpen, onSector, onAction, sources, density = 'comfortable', footer = null, agenda = null }) {
+export function ProjectTable({ d, rows, columns, sort, onSort, selected, recent, onOpen, onSector, onAction, sources, density = 'comfortable', footer = null, agenda = null, range = '24h' }) {
   const wrap = useRef(null);
   const [hidden, setHidden] = useState([]);
   const [wrapNotes, setWrapNotes] = useState(false);
@@ -234,7 +235,7 @@ export function ProjectTable({ d, rows, columns, sort, onSort, selected, recent,
                 {sort.key === 'name' ? (sort.dir === 'asc' ? <ArrowUp className="th-arrow" size={12} strokeWidth={2.2} aria-hidden="true" /> : <ArrowDown className="th-arrow" size={12} strokeWidth={2.2} aria-hidden="true" />) : null}
               </button>
             </th>
-            {rest.filter(shown).map((c) => <SortHead key={c} col={c} sort={sort} onSort={onSort} sources={sources} label={c === 'exit' ? exitLabel : null} />)}
+            {rest.filter(shown).map((c) => <SortHead key={c} col={c} sort={sort} onSort={onSort} sources={sources} label={c === 'exit' ? exitLabel : c === 'priceStack' ? `Price / ${rangeOf(range).label}` : null} />)}
             {showModels ? PROVIDERS.map((prov) => <ProviderHead key={prov} d={d} prov={prov} sort={sort} onSort={onSort} />) : null}
             <th scope="col" className="c-act"><span className="sr-only">Action</span></th>
           </tr>
@@ -278,7 +279,7 @@ export function ProjectTable({ d, rows, columns, sort, onSort, selected, recent,
                 </td>
                 {rest.filter(shown).map((c) => {
                   const col = COLUMNS.find((x) => x.id === c);
-                  return <td key={c} className={`c-${c}${col.num ? ' num' : ''}`}><Cell col={c} d={d} p={p} sources={sources} onSector={onSector} onOpen={onOpen} /></td>;
+                  return <td key={c} className={`c-${c}${col.num ? ' num' : ''}`}><Cell col={c} d={d} p={p} sources={sources} onSector={onSector} onOpen={onOpen} range={range} /></td>;
                 })}
                 {showModels ? PROVIDERS.map((prov) => <td key={prov} className={`c-prov c-prov-${prov}`}><ModelCell d={d} p={p} prov={prov} onOpen={onOpen} /></td>) : null}
                 <td className="c-act"><ActionCell d={d} p={p} onOpen={onOpen} onAction={onAction} agenda={agenda} /></td>

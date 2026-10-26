@@ -6,31 +6,48 @@
 .n-short { display: none; }
 @media (max-width: 419.98px) { .n-full { display: none; } .n-short { display: inline; } }
 
-/* ---- buttons ---- */
+/* ---- buttons (the platform look, Eric, 2026-10-26) ----
+   A variant sets its fill and its edge as custom properties. The button
+   carries its resting fill and edge; a hover or a press is drawn on ::before
+   (a press also scales that layer to .97), so nothing around the button
+   moves and the words always sit on a fill the contrast check can read.
+   Outline is the default; solid (.btn-primary) is the one primary action,
+   danger (.btn-danger) a destructive one, ghost has no edge. */
 .btn {
+  --btn-bg: transparent; --btn-bg-hover: var(--color-surface-hover); --btn-bg-active: var(--color-surface-selected);
+  --btn-line: var(--button-border); --btn-ink: var(--text);
+  position: relative; isolation: isolate;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: var(--control-h); padding: 0 14px;
-  border: 1px solid var(--button-border); border-radius: var(--r-button);
-  background: var(--surface); color: var(--text);
+  border: 0; border-radius: var(--r-button);
+  background: var(--btn-bg); box-shadow: inset 0 0 0 1px var(--btn-line); color: var(--btn-ink);
   font: inherit; font-size: var(--fs-sm); font-weight: 500; line-height: 1;
   white-space: nowrap; cursor: pointer; text-decoration: none;
-  box-shadow: var(--shadow-lift);
-  transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease), color var(--dur) var(--ease);
+  transition: color var(--dur) var(--ease);
 }
-.btn:hover { background: var(--surface-hover); text-decoration: none; }
-.btn:active { background: var(--surface-selected); }
+.btn::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit;
+  background: var(--btn-bg-hover); opacity: 0;
+  transition: opacity var(--dur) var(--ease), background-color var(--dur) var(--ease), transform var(--dur) var(--cubic-enter);
+}
+.btn:hover { text-decoration: none; }
+.btn:hover::before { opacity: 1; }
+.btn:active::before { opacity: 1; background: var(--btn-bg-active); transform: scale(var(--press-scale)); }
 .btn:disabled, .btn[aria-disabled="true"] { opacity: 0.55; cursor: default; }
-/* The one primary action: a black pill, white words (2026-10-10). */
-.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 500; box-shadow: var(--shadow-lift); }
-.btn-primary:hover, .btn-primary:active { background: var(--accent-hover); border-color: var(--accent-hover); }
-.btn-ghost { background: transparent; border-color: transparent; box-shadow: none; color: var(--text-2); }
-.btn-ghost:hover { background: var(--surface-hover); color: var(--text); }
+.btn:disabled::before, .btn[aria-disabled="true"]::before { opacity: 0; transform: none; }
+/* The one primary action: solid, inverse words. */
+.btn-primary { --btn-bg: var(--color-solid); --btn-bg-hover: var(--color-solid-hover); --btn-bg-active: var(--color-solid-active); --btn-line: transparent; --btn-ink: var(--on-accent); font-weight: 500; }
+/* A destructive action (Veto): solid danger, white words, said in its label. */
+.btn-danger { --btn-bg: var(--danger-solid); --btn-bg-hover: var(--danger-solid-hover); --btn-bg-active: var(--danger-solid-hover); --btn-line: transparent; --btn-ink: var(--on-danger); }
+.btn-ghost { --btn-line: transparent; --btn-ink: var(--text-2); }
+.btn-ghost:hover { color: var(--text); }
 .btn-sm { height: 28px; padding: 0 10px; font-size: var(--fs-xs); }
 .btn-icon { width: var(--control-h); padding: 0; }
 .btn-sm.btn-icon { width: 28px; }
 .btn-link { background: none; border: 0; box-shadow: none; padding: 0; height: auto; color: var(--accent-text); font-weight: 500; }
-.btn-link:hover { background: none; text-decoration: underline; text-underline-offset: 3px; }
-.btn[aria-pressed="true"] { background: var(--surface-selected); }
+.btn-link::before { display: none; }
+.btn-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.btn[aria-pressed="true"] { --btn-bg: var(--color-surface-selected); }
 @media (pointer: coarse) {
   .btn { height: 40px; }
   .btn-sm { height: 36px; }
@@ -64,14 +81,15 @@ kbd {
 
 select.input { padding-right: 28px; appearance: none; background-image: var(--i-chevron); background-repeat: no-repeat; background-position: right 8px center; background-size: 14px; }
 
-/* ---- a segmented choice ---- */
-.seg { display: inline-flex; align-items: center; padding: 2px; gap: 2px; background: var(--surface-track); border: 1px solid var(--border); border-radius: var(--r-button); }
+/* ---- a segmented choice: a soft track, the chosen segment a raised thumb ---- */
+.seg { display: inline-flex; align-items: center; padding: 2px; gap: 2px; background: var(--seg-track); border: 0; border-radius: var(--r-lg); }
 .seg button {
-  height: 26px; padding: 0 12px; border: 0; border-radius: var(--r-button);
+  height: 26px; padding: 0 12px; border: 0; border-radius: var(--r-md);
   background: transparent; color: var(--text-2); font-size: var(--fs-xs); font-weight: 500; cursor: pointer; white-space: nowrap;
+  transition: color var(--dur) var(--ease), background-color var(--dur) var(--cubic-enter);
 }
 .seg button:hover { color: var(--text); }
-.seg button[aria-pressed="true"], .seg button[aria-selected="true"] { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 0 0 1px var(--border), var(--shadow-lift); }
+.seg button[aria-pressed="true"], .seg button[aria-selected="true"] { background: var(--seg-thumb); color: var(--text); font-weight: 600; box-shadow: var(--shadow-seg); }
 @media (pointer: coarse) { .seg button { height: 34px; } }
 
 /* ---- menus (Radix dropdowns) ---- */
@@ -122,16 +140,17 @@ select.input { padding-right: 28px; appearance: none; background-image: var(--i-
    a dashed edge is kept only as the sign of an unknown state. ---- */
 .pill, .badge {
   display: inline-flex; align-items: center; gap: 5px;
-  height: var(--badge-h); padding: 0 8px; border-radius: var(--r-badge);
+  height: var(--badge-h); padding: 0 6px; border-radius: var(--r-badge);
   background: var(--badge-bg); color: var(--text-2);
   border: 0;
-  font-size: var(--fs-xs); font-weight: 500; white-space: nowrap;
+  font-size: var(--fs-xs); font-weight: 600; line-height: 1; white-space: nowrap;
 }
 .pill-warn, .badge.is-warn { background: var(--warn-weak); color: var(--warn); }
 .pill-bad, .badge.is-bad { background: var(--neg-weak); color: var(--neg); }
 .pill-ok, .badge.is-ok { background: var(--pos-weak); color: var(--pos); }
 .pill-work, .badge.is-work { background: var(--work-weak); color: var(--work-text); }
 .pill-accent, .badge.is-accent { background: var(--accent-weak); color: var(--accent-text); }
+.badge.is-info { background: var(--info-soft); color: var(--info-soft-text); }
 .badge.is-unknown { background: transparent; color: var(--text-2); border: 1px dashed var(--control-border); }
 /* A count: round, the only round badge. */
 .count-badge { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 6px; border-radius: var(--r-pill); background: var(--badge-bg); color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; }

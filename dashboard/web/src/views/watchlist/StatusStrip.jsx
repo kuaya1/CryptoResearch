@@ -9,8 +9,8 @@
 // prices button (RefreshButton).
 import { useEffect, useState } from 'react';
 import { RefreshCw, TriangleAlert, ArrowUpRight, ChevronDown } from 'lucide-react';
-import { fmtAgo, fmtAsOf, fmtChangePct, fmtMarketUsd, priceStatus, toast } from '../../../../public/ui.js';
-import { splitAttention, kindWord, countdownText, refreshToast, attentionHref, deskKpis } from '../../../../public/watchlist-model.js';
+import { fmtAgo, fmtAsOf, fmtChangePct, fmtMarketUsd, fmtPrice, priceStatus, toast, sparkPath } from '../../../../public/ui.js';
+import { splitAttention, kindWord, countdownText, refreshToast, attentionHref, deskKpis, btcSeries, riskBudget } from '../../../../public/watchlist-model.js';
 import { api, refresh, desk } from '../../lib/desk.js';
 import { navigate } from '../../lib/router.js';
 import { Dom } from '../../components/Dom.jsx';
@@ -82,6 +82,46 @@ export function RefreshButton({ d }) {
   );
 }
 
+// Bitcoin's stored 7-day series as a 44px line; no series, no line.
+function KpiSpark({ values, up }) {
+  const path = sparkPath(values, { width: 96, height: 44, pad: 4 });
+  if (!path) return null;
+  return (
+    <svg className={`kpi-spark ${up ? 'up' : 'down'}`} viewBox="0 0 96 44" width="96" height="44" aria-hidden="true" focusable="false">
+      <path d={path} />
+    </svg>
+  );
+}
+
+// The risk budget: recorded speculative cost against the cap in Portfolio's
+// limits, a 16px track with the cap's 2×10 mark; caution from 80%, over
+// above 100%, always in words. No cap set: the words only, no bar.
+function RiskBudget({ rb }) {
+  const fill = rb.pct === null ? 0 : Math.max(0, Math.min(100, rb.pct));
+  const usd = (n) => fmtPrice(n);
+  const title = rb.state === 'no_cap'
+    ? 'No speculative capital cap is set (Portfolio > Limits)'
+    : rb.state === 'unknown' ? 'The recorded cost of speculative positions is unknown'
+      : `${rb.atLeast ? 'At least ' : ''}${usd(rb.used)} recorded cost of speculative positions against a ${usd(rb.cap)} cap${rb.atLeast ? '; some units have unknown cost' : ''}`;
+  return (
+    <a className={`rb is-${rb.state}`} href="#/portfolio" data-key="kpi-risk" title={title}>
+      <span className="rb-k">Risk budget</span>
+      {rb.state === 'no_cap' || rb.state === 'unknown' ? (
+        <span className="rb-none">{rb.words}</span>
+      ) : (
+        <>
+          <span className="rb-fig">{`${usd(rb.used)} / ${usd(rb.cap)}`}</span>
+          <span className="rb-track" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(fill)} aria-valuetext={rb.words} aria-label="Risk budget used">
+            <span className="rb-fill" style={{ width: `${fill}%` }} />
+            <span className="rb-cap" aria-hidden="true" />
+          </span>
+          <span className="rb-words">{rb.words}</span>
+        </>
+      )}
+    </a>
+  );
+}
+
 function Cell({ id, label, children, onClick, title, sub = null, active = false, aria }) {
   const inner = (
     <>
@@ -99,7 +139,7 @@ function Cell({ id, label, children, onClick, title, sub = null, active = false,
   );
 }
 
-export function KpiStrip({ d, agenda = null, sources, filters, onView, onBeat }) {
+export function KpiStrip({ d, agenda = null, sources, filters, onView, onBeat, range = '24h' }) {
   const idx = d.index;
   const k = deskKpis(idx, agenda);
   const m = idx.freshness.market;
@@ -107,6 +147,11 @@ export function KpiStrip({ d, agenda = null, sources, filters, onView, onBeat })
   const [open, setOpen] = useState(view.strip === 'market' ? 'market' : null);
   const toggle = (id) => { const next = open === id ? null : id; view.strip = next; setOpen(next); };
   const demo = k.market && k.market.demo;
+  // Bitcoin's change in the chosen window where the snapshot holds it (7d
+  // and 30d; it has no 24h), its window always named.
+  const btc30 = range === '30d' && k.market && typeof k.market.change_30d === 'number';
+  const series = btcSeries(idx);
+  const rb = riskBudget(idx);
   return (
     <section className="kpi" aria-label="Market and what needs you">
       <div className="kpi-row">
@@ -122,7 +167,8 @@ export function KpiStrip({ d, agenda = null, sources, filters, onView, onBeat })
           {k.market ? (
             <>
               <span className="kpi-num">{`BTC $${Math.round(k.market.btc).toLocaleString('en-US')}`}</span>
-              <Chg n={k.market.change_7d} win="7d" label="over 7 days" />
+              {btc30 ? <Chg n={k.market.change_30d} win="30d" label="over 30 days" /> : <Chg n={k.market.change_7d} win="7d" label="over 7 days" />}
+              {series ? <KpiSpark values={series} up={(series[series.length - 1] || 0) >= (series[0] || 0)} /> : null}
               {k.market.dominance !== null ? <span className="kpi-sub2">{`Dom ${k.market.dominance.toFixed(1)}%`}</span> : null}
               {k.market.stale ? <span className="kpi-warn">stale</span> : null}
             </>
@@ -167,6 +213,7 @@ export function KpiStrip({ d, agenda = null, sources, filters, onView, onBeat })
           <span className="kpi-num">{k.waiting.jobs}</span><span className="kpi-unit">{k.waiting.jobs === 1 ? 'job' : 'jobs'}</span>
         </Cell>
       </div>
+      <RiskBudget rb={rb} />
       {open === 'market' ? (
         <div className="kpi-panel" role="region" aria-label="Market details">
           <Dom build={(L) => L.marketStrip(idx)} deps={[idx]} />

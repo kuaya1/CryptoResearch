@@ -2,8 +2,11 @@
 // 2026-10-17): the projects you follow as one ledger.
 //   header      eyebrow, title, ⋯ (archived projects, density, reset), Refresh
 //               prices, + Add project
+//   hero        the Daily Brief's readiness and two ways in (DeskHero.jsx)
+//   range       24h · 7d · 30d, the change shown under each price
 //   KPI strip   Market · Total cap · Beat BTC (30d) · Needs review · Research
 //               waiting, each a way in; what needs action always in view
+//   PM cards    tickets waiting for your decision (DecisionGrid.jsx)
 //   views       Watching · Needs review · Waiting on a model · Held · Not
 //               watching · All, each with its count
 //   filter bar  search (/), Filters, the active filters as removable
@@ -18,7 +21,7 @@ import { Search, ListFilter, Columns3, ArrowUpDown, Plus, X, Ellipsis, Rows3 } f
 import { announce, fmtPrice } from '../../../../public/ui.js';
 import {
   COLUMNS, SORT_NAMES, DEFAULT_FILTERS, DEFAULT_COLUMNS, COVERAGE, RET30, BEAT, VIEWS, prefs as readPrefs, prefsToSave, nextSort, sortRows, matches,
-  filterCount, sourcesOf, reviewKeyAllowed, inView, deskFooter,
+  filterCount, sourcesOf, reviewKeyAllowed, inView, deskFooter, deskKpis,
 } from '../../../../public/watchlist-model.js';
 import { useDesk, useMedia } from '../../lib/hooks.js';
 import { useAgendaRead } from '../../lib/agenda.js';
@@ -30,6 +33,9 @@ import { Boundary, ViewError, retryableLazy } from '../../components/Boundary.js
 import { legacyCtx } from '../../legacy/ctx.js';
 import { KpiStrip, ActionBand, RefreshButton } from './StatusStrip.jsx';
 import { ProjectTable } from './ProjectTable.jsx';
+import { DeskHero } from './DeskHero.jsx';
+import { RangeControl } from './RangeControl.jsx';
+import { DecisionGrid } from './DecisionGrid.jsx';
 import { view, openPanel, closePanel, isWide, markReviewed, restoreProject } from './state.js';
 import { onDesk } from '../../shell/overlays.js';
 // The inspector in its own boundary: if it cannot be drawn, it says so in
@@ -265,7 +271,7 @@ export default function Watchlist() {
 
   let body;
   if (rows.length) {
-    body = <ProjectTable d={d} rows={rows} columns={pf.columns} sort={pf.sort} onSort={setSort} selected={pid} recent={view.recent} onOpen={onOpen} onSector={onSector} onAction={onAction} sources={sources} density={pf.density} footer={footer} agenda={agenda} />;
+    body = <ProjectTable d={d} rows={rows} columns={pf.columns} sort={pf.sort} onSort={setSort} selected={pid} recent={view.recent} onOpen={onOpen} onSector={onSector} onAction={onAction} sources={sources} density={pf.density} footer={footer} agenda={agenda} range={pf.range} />;
   } else if (!live.length && !f.archived) {
     body = <div className="empty-state"><h2>Your Desk is empty</h2><p>Add a project to start, or ask for new research.</p><button type="button" className="btn btn-primary" data-key="empty-add" onClick={addProject}>Add project</button></div>;
   } else if (!q && !nFilters && !f.archived) {
@@ -307,8 +313,14 @@ export default function Watchlist() {
           </div>
         </header>
 
-        <KpiStrip d={d} agenda={agenda} sources={sources} filters={f} onView={setView} onBeat={() => setFilter('beat', f.beat === 'yes' ? 'any' : 'yes')} />
+        <DeskHero reviewCount={deskKpis(d.index, agenda).review.projects} />
+        <div className="desk-bar">
+          <h2 className="sec-h">Market</h2>
+          <RangeControl value={pf.range} onChange={(r) => { if (r !== pf.range) { save({ ...pf, range: r }); announce(`Changes over ${r}.`); } }} />
+        </div>
+        <KpiStrip d={d} agenda={agenda} sources={sources} filters={f} range={pf.range} onView={setView} onBeat={() => setFilter('beat', f.beat === 'yes' ? 'any' : 'yes')} />
         <ActionBand d={d} />
+        <DecisionGrid d={d} rows={live} />
 
         <nav className="views" aria-label="Views">
           {VIEWS.map(([v, text]) => (

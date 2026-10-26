@@ -53,3 +53,22 @@ export function briefView(brief) {
     why: null,
   };
 }
+
+// The Desk hero's readiness (Eric, 2026-10-26): three circles read from the
+// same brief, each a count with its word. A section the desk could not read
+// is "Unknown", one read in part "Partial", never a clear mark.
+const READINESS = [
+  ['research', 'research_waiting', 'Research', 'waiting', 'Nothing waiting'],
+  ['forensics', 'pilot_exits', 'Forensics', 'missing an exit', 'Exits read'],
+  ['tickets', 'pm_cards', 'Tickets', 'wait for you', 'None waiting'],
+];
+export function readiness(view) {
+  return READINESS.map(([key, id, title, some, none]) => {
+    const s = view && view.ok ? view.sections.find((x) => x.id === id) : null;
+    if (!s) return { key, title, state: 'unknown', n: null, words: 'Unknown' };
+    if (s.unreadable) return { key, title, state: 'unknown', n: null, words: 'Unknown', why: s.why };
+    if (s.partial) return { key, title, state: 'partial', n: null, words: 'Partial', why: s.count_words };
+    const n = s.empty ? 0 : (typeof s.count === 'number' && s.count > 0 ? s.count : s.lines.filter((l) => l.href).length);
+    return { key, title, state: n ? 'some' : 'clear', n, words: n ? `${n} ${some}` : none };
+  });
+}

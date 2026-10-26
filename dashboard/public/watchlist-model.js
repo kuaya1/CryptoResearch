@@ -80,11 +80,45 @@ export function prefs(ctx) {
   if (!VIEWS.some(([v]) => v === filters.owned)) filters.owned = DEFAULT_FILTERS.owned;
   if (!BEAT.some(([v]) => v === filters.beat)) filters.beat = 'any';
   const density = saved.density === 'compact' ? 'compact' : 'comfortable';
-  return { columns: cols, sort: saved.sort && SORT_NAMES[saved.sort.key] ? saved.sort : DEFAULT_SORT, filters, density };
+  const range = RANGES.some(([r]) => r === saved.range) ? saved.range : '24h';
+  return { columns: cols, sort: saved.sort && SORT_NAMES[saved.sort.key] ? saved.sort : DEFAULT_SORT, filters, density, range };
 }
 
 export function prefsToSave(p) {
-  return { v: PREFS_VERSION, columns: p.columns, sort: p.sort, filters: p.filters, density: p.density || 'comfortable' };
+  return { v: PREFS_VERSION, columns: p.columns, sort: p.sort, filters: p.filters, density: p.density || 'comfortable', range: RANGES.some(([r]) => r === p.range) ? p.range : '24h' };
+}
+
+// The Desk's change window (the range control, Eric, 2026-10-26): which
+// stored change the price column shows under the price. The 7D chart stays
+// seven days, the only series the desk holds.
+export const RANGES = [['24h', '24h', 'over 24 hours', 'change_24h_pct'], ['7d', '7d', 'over 7 days', 'change_7d_pct'], ['30d', '30d', 'over 30 days', 'change_30d_pct']];
+export function rangeOf(range) {
+  const r = RANGES.find(([k]) => k === range) || RANGES[0];
+  return { key: r[0], label: r[1], words: r[2], field: r[3] };
+}
+
+// Bitcoin's stored 7-day series, only when a project on the desk is bound to
+// CoinGecko's "bitcoin" and its price carries one; else null (no line drawn).
+export function btcSeries(index) {
+  const p = ((index && index.projects) || []).find((x) => x.market && x.market.coingecko_id === 'bitcoin' && Array.isArray(x.market.sparkline_7d) && x.market.sparkline_7d.length >= 2);
+  return p ? p.market.sparkline_7d : null;
+}
+
+// The risk budget: the recorded cost of speculative positions against the
+// speculative capital cap in Portfolio's limits. No cap, no bar; units of
+// unknown cost make the figure "at least". Caution from 80%, over above 100%.
+export function riskBudget(index) {
+  const pf = index && index.portfolio;
+  const cap = pf && pf.limits && typeof pf.limits.speculative_capital_cap_usd === 'number' && pf.limits.speculative_capital_cap_usd > 0 ? pf.limits.speculative_capital_cap_usd : null;
+  const used = pf && pf.totals && typeof pf.totals.speculative_cost_known_usd === 'number' ? pf.totals.speculative_cost_known_usd : null;
+  const atLeast = Boolean(pf && pf.totals && pf.totals.speculative_cost_has_unknown);
+  if (cap === null) return { state: 'no_cap', cap: null, used, pct: null, atLeast, words: 'Cap not set' };
+  if (used === null) return { state: 'unknown', cap, used: null, pct: null, atLeast, words: 'Cost unknown' };
+  const pct = (used / cap) * 100;
+  const state = pct > 100 ? 'over' : pct >= 80 ? 'near' : 'ok';
+  const shown = Math.round(pct);
+  const words = `${atLeast ? 'At least ' : ''}${shown}% of cap${state === 'over' ? ' · over' : state === 'near' ? ' · near' : ''}`;
+  return { state, cap, used, pct, atLeast, words };
 }
 
 // A new sort: the same key flips its direction; a new key starts ascending for
@@ -926,7 +960,7 @@ export function deskKpis(index, agenda = null) {
   const review = live.filter((p) => reviewReasons(p, index, agendaRowOf(agenda, p.project_id)).length);
   const jobs = live.flatMap((p) => waitingJobs(p, index).map((j) => ({ ...j, project_id: p.project_id })));
   return {
-    market: snap ? { btc: snap.bitcoin.price_usd, change_7d: snap.bitcoin.change_7d_pct ?? null, dominance: snap.dominance && typeof snap.dominance.btc_pct === 'number' ? snap.dominance.btc_pct : null, stale: mc.status === 'stale', demo: snap.provider === 'fictional-demo' } : null,
+    market: snap ? { btc: snap.bitcoin.price_usd, change_7d: snap.bitcoin.change_7d_pct ?? null, change_30d: snap.bitcoin.change_30d_pct ?? null, dominance: snap.dominance && typeof snap.dominance.btc_pct === 'number' ? snap.dominance.btc_pct : null, stale: mc.status === 'stale', demo: snap.provider === 'fictional-demo' } : null,
     total: snap && snap.total_market && typeof snap.total_market.market_cap_usd === 'number' ? { usd: snap.total_market.market_cap_usd, change_24h: snap.total_market.market_cap_change_24h_pct ?? null } : null,
     beat: b30 && typeof b30.beating_btc === 'number' ? { n: b30.beating_btc, of: b30.counted, share: typeof b30.share_pct === 'number' ? b30.share_pct : null, words: breadthWords(b30) } : null,
     review: { projects: review.length, ids: review.map((p) => p.project_id) },

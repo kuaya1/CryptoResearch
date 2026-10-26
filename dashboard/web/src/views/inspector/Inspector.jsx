@@ -28,6 +28,7 @@ import { loadLegacy } from '../../components/Dom.jsx';
 import { view, closePanel, markReviewed, restoreProject, archiveProject, setWatching } from '../watchlist/state.js';
 import { ModelPanel } from './ModelPanel.jsx';
 import { seenOf, STILL_LOADING } from '../../lib/review.js';
+import { FootSlot } from './footSlot.js';
 
 const enc = encodeURIComponent;
 const plain = (e) => e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
@@ -103,6 +104,7 @@ export default function Inspector({ pid, wide }) {
   const heading = useRef(null);
   const body = useRef(null);
   const swipe = useRef(null);
+  const [footSlot, setFootSlot] = useState(null);
   const [L, setL] = useState(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => { loadLegacy().then(setL, () => {}); }, []);
@@ -172,8 +174,11 @@ export default function Inspector({ pid, wide }) {
     if (dy > 80 && Date.now() - s.t < 800 && (!body.current || body.current.scrollTop <= 0)) closePanel();
   };
 
+  // A PM ticket waiting for you takes the footer's one solid button; Mark
+  // reviewed is then an outline beside it.
+  const ticketWaits = Boolean(p.ticket && !p.ticket.unavailable && !p.ticket.decision && ['pending_pm_review', 'reopened'].includes(p.ticket.status));
   return (
-    <>
+    <FootSlot.Provider value={footSlot}>
       {modal ? <div className="drawer-scrim" aria-hidden="true" onClick={closePanel} /> : null}
       <aside
         ref={root}
@@ -247,6 +252,7 @@ export default function Inspector({ pid, wide }) {
         </div>
 
         <footer className="insp-foot">
+          <div className="if-decide" ref={setFootSlot} />
           <p className="if-sum" title={p.next_review ? `Next review: ${fmtDate(p.next_review.date)}${p.next_review.overdue ? ' (overdue)' : ''}` : undefined}>
             {ch.item_count ? (
               <>
@@ -258,10 +264,10 @@ export default function Inspector({ pid, wide }) {
           </p>
           <div className="if-act">
             <a className="btn btn-sm" href={fullHref} data-key={`brief-${pid}`} aria-label={`Open full research: ${p.name}`} onClick={openFull}>Open full research<ArrowRight size={13} aria-hidden="true" /></a>
-            {needsReview(p) ? <button type="button" className="btn btn-sm btn-primary" data-key="panel-reviewed" aria-keyshortcuts="R" title={drawn.ready ? 'Mark reviewed (R marks it and moves to the next project to review)' : STILL_LOADING} aria-disabled={drawn.ready ? undefined : 'true'} disabled={busy || !drawn.ready} onClick={() => markReviewed(p, { onBusy: setBusy })}>{drawn.ready ? 'Mark reviewed' : STILL_LOADING}</button> : null}
+            {needsReview(p) ? <button type="button" className={`btn btn-sm${ticketWaits ? '' : ' btn-primary'}`} data-key="panel-reviewed" aria-keyshortcuts="R" title={drawn.ready ? 'Mark reviewed (R marks it and moves to the next project to review)' : STILL_LOADING} aria-disabled={drawn.ready ? undefined : 'true'} disabled={busy || !drawn.ready} onClick={() => markReviewed(p, { onBusy: setBusy })}>{drawn.ready ? 'Mark reviewed' : STILL_LOADING}</button> : null}
           </div>
         </footer>
       </aside>
-    </>
+    </FootSlot.Provider>
   );
 }

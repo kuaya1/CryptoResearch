@@ -6,7 +6,9 @@
 // Eric's sizing rules, the two agents' figures side by side (never averaged)
 // and the status, read with invalidation against prices and DefiLlama. A
 // decision records his choice; nothing here places an order.
-import { useState } from 'react';
+import { useContext, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { FootSlot } from './footSlot.js';
 import { toast, submissionId, fmtDateTime } from '../../../../public/ui.js';
 import { api, refresh } from '../../lib/desk.js';
 import { ruleNoteOf, deltaBadgeOf, widestCategoryLink } from '../../../../public/pm-card-model.js';
@@ -37,6 +39,14 @@ function gateKindWords(t) {
     return `The grade is withheld, not low: the report left a component unscored.${share}${left}`;
   }
   return 'Why the grade closed it: not recorded.';
+}
+
+// The decision buttons: in the inspector's sticky footer when there is one
+// (FootSlot), else in the card. Same buttons, same handlers either way.
+function Actions({ pid, children }) {
+  const slot = useContext(FootSlot);
+  const row = <div className={`pm-actions${slot ? ' is-foot' : ''}`} data-key={`pm-actions-${pid}`} role="group" aria-label="PM decision">{children}</div>;
+  return slot ? createPortal(row, slot) : row;
 }
 
 const DECIDED_WORDS = { veto: 'Vetoed', pass: 'Pass confirmed', watch: 'Kept on watch', trim: 'Trim acknowledged', reopen: 'Re-opened' };
@@ -248,7 +258,7 @@ export function PMDecisionCard({ p }) {
         <DeltaBadge pid={pid} delta={t.report_delta} />
         <RuleNote pid={pid} t={t} />
         {t.superseded_by_report ? <p className="faint pm-note">{`Claude has a newer report (${t.superseded_by_report}); this gate is on the earlier one.`}</p> : null}
-        <div className="pm-actions">
+        <Actions pid={pid}>
           {decided ? (
             <p className="pm-decided">
               <span>{DECIDED_WORDS[decided.action] || 'Decided'}{decided.action === 'pass' && decided.archive === 'archived' ? ' · archived' : ''}</span>
@@ -262,7 +272,7 @@ export function PMDecisionCard({ p }) {
               {t.latest && !t.superseded_by_report ? <button type="button" className="btn btn-sm" data-key={`pm-prosecute-${pid}`} disabled={Boolean(busy)} title="Your override: runs a Prosecutor although the desk's gate is closed" onClick={prosecuteAnyway}>Ask the Prosecutor anyway</button> : null}
             </>
           )}
-        </div>
+        </Actions>
         <PilotLine p={p} t={t} busy={busy} setBusy={setBusy} />
       </section>
     );
@@ -316,7 +326,7 @@ export function PMDecisionCard({ p }) {
       {t.agent_disagreement ? <Disagreement pid={pid} t={t} spread={p.spread} dis={dis} r={r} q={q} fatal={fatal} /> : null}
       <RuleNote pid={pid} t={t} />
       {t.superseded_by_report ? <p className="faint pm-note">{`Claude has a newer report (${t.superseded_by_report}); this ticket is on the earlier one.`}</p> : null}
-      <div className="pm-actions">
+      <Actions pid={pid}>
         {decided ? (
           <p className="pm-decided">
             <span>{DECIDED_WORDS[decided.action] || `Approved ${usd(t.pm_approved_risk_usd)}`}{decided.action === 'pass' && decided.archive === 'archived' ? ' · archived' : ''}</span>
@@ -328,7 +338,7 @@ export function PMDecisionCard({ p }) {
           <>
             <button type="button" className="btn btn-sm btn-primary" data-key={`pm-approve-${pid}`} disabled={Boolean(busy) || t.status === 'invalidated' || Boolean(t.integrity && t.integrity.status !== 'ok')} title={`Grant ${usd(risk)} of risk`} onClick={() => decide('approve')}>{`Approve Risk (${usd(risk)})`}</button>
             <button type="button" className="btn btn-sm" data-key={`pm-halve-${pid}`} disabled={Boolean(busy) || t.status === 'invalidated' || Boolean(t.integrity && t.integrity.status !== 'ok')} title="The starter tranche" onClick={() => decide('halve')}>{`Halve Size (${usd(Math.min(t.starter_risk_usd, risk))})`}</button>
-            <button type="button" className="btn btn-sm" data-key={`pm-veto-${pid}`} disabled={Boolean(busy)} onClick={() => decide('veto')}>Veto / Archive</button>
+            <button type="button" className="btn btn-sm btn-danger" data-key={`pm-veto-${pid}`} disabled={Boolean(busy)} onClick={() => decide('veto')}>Veto / Archive</button>
           </>
         ) : t.proposal_type === 'TRIM_EXIT' ? (
           <>
@@ -347,7 +357,7 @@ export function PMDecisionCard({ p }) {
           </>
         )}
         {t.can_reopen && !(decided && decided.action === 'reopen') ? <button type="button" className="btn btn-sm" data-key={`pm-reopen-${pid}`} disabled={Boolean(busy)} title={t.can_reopen.why} onClick={() => decide('reopen')}>Re-open ticket</button> : null}
-      </div>
+      </Actions>
       <PilotLine p={p} t={t} busy={busy} setBusy={setBusy} />
     </section>
   );

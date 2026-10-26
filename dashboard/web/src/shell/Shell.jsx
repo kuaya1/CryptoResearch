@@ -1,9 +1,12 @@
-// The desk's frame (DESIGN_AND_IA_BLUEPRINT.md §3.0; Eric, 2026-10-17): a
-// sand rail on the left, 208px with its words or 56px with its icons only
-// (your choice, kept in this browser; the icons only from 1023px down), with
-// the four daily places (Desk, Review, Portfolio, Research) and a count only
-// where it means "needs you" (Review, Portfolio); at its foot the command menu
-// (⌘K), Preferences (⌘,), the connection and Sign out (the online desk). On
+// The desk's frame (DESIGN_AND_IA_BLUEPRINT.md §3.0; the platform look,
+// Eric, 2026-10-26): a transparent sidebar on the canvas, 260px with its
+// words or 56px with its icons only (your choice, kept in this browser; the
+// icons only from 1023px down): the 32px workspace row and the collapse
+// toggle, the four daily places (Desk, Review, Portfolio, Research) as 36px
+// rows with the current one's pill, and a count only where it means "needs
+// you" (Review, caution; Portfolio, info); at its foot the command menu (⌘K),
+// the Daily Brief, Preferences (⌘,) and the workspace block with the
+// connection and Sign out (the online desk). On
 // a phone: a top bar (the wordmark, the Test or Demo tag, search, the
 // connection) and a tab bar (Desk, Review, Portfolio, More).
 import { useEffect, useRef, useState } from 'react';
@@ -26,7 +29,7 @@ function activeOf(route) {
   return route.name;
 }
 
-function NavItem({ s, active, count, compact = false, onClick }) {
+function NavItem({ s, active, count, compact = false, onClick, iconSize = 20 }) {
   const Icon = s.icon;
   const on = s.id === active;
   return (
@@ -39,9 +42,9 @@ function NavItem({ s, active, count, compact = false, onClick }) {
       data-key={`nav-${s.id}`}
       onClick={onClick}
     >
-      <Icon className="nav-ico" size={18} strokeWidth={1.75} aria-hidden="true" />
+      <Icon className="nav-ico" size={iconSize} strokeWidth={1.75} aria-hidden="true" />
       <span className="nav-label">{s.label}</span>
-      {count ? <span className="nav-count" aria-hidden="true" title={count.title}>{count.n}</span> : null}
+      {count ? <span className={`nav-count ${count.tone || 'is-info'}`} aria-hidden="true" title={count.title}>{count.n}</span> : null}
     </a>
   );
 }
@@ -89,11 +92,14 @@ export function Sidebar({ collapsed, onCollapse }) {
   return (
     <aside className={`sidebar${collapsed ? ' is-collapsed' : ''}`} aria-label="Desk">
       <div className="sb-brand">
-        <a className="brand" href="#/watchlist" data-key="nav-brand" title="CryptoResearch: the Desk">
+        <a className="brand sb-ws" href="#/watchlist" data-key="nav-brand" title="CryptoResearch: the Desk">
           <Mark className="brand-mark" />
           <span className="brand-word">CryptoResearch</span>
+          {kind ? <span className="ws-tag" title={`${kind} workspace: fictional data`}>{kind}</span> : null}
         </a>
-        {kind ? <span className="ws-tag" title={`${kind} workspace: fictional data`}>{kind}</span> : null}
+        <button type="button" className="btn btn-ghost btn-icon sb-collapse" data-key="nav-collapse" aria-label={collapsed ? 'Show the rail with its words' : 'Collapse the rail to its icons'} title={collapsed ? 'Expand' : 'Collapse'} onClick={onCollapse}>
+          {collapsed ? <PanelLeftOpen size={18} aria-hidden="true" /> : <PanelLeftClose size={18} aria-hidden="true" />}
+        </button>
       </div>
       {kind && !collapsed ? <p className="sb-demo">{`${ws.kind === 'demo' ? 'Fictional demo data' : 'Test workspace'}: not real research, prices or holdings`}</p> : null}
       <nav className="sb-nav" aria-label="Main">
@@ -101,25 +107,26 @@ export function Sidebar({ collapsed, onCollapse }) {
       </nav>
       <div className="sb-foot">
         <button type="button" className="nav-item sb-util" data-key="nav-command" aria-keyshortcuts={mac() ? 'Meta+K' : 'Control+K'} title={collapsed ? `Search and commands (${mac() ? '⌘K' : 'Ctrl K'})` : undefined} onClick={() => openCommand()}>
-          <Search className="nav-ico" size={18} strokeWidth={1.75} aria-hidden="true" />
+          <Search className="nav-ico" size={20} strokeWidth={1.75} aria-hidden="true" />
           <span className="nav-label">Search</span>
           <kbd className="nav-kbd" aria-hidden="true">{mac() ? '⌘K' : 'Ctrl K'}</kbd>
         </button>
         <button type="button" className="nav-item sb-util" data-key="nav-brief" title={collapsed ? 'Daily Brief' : undefined} onClick={() => openBrief()}>
-          <Newspaper className="nav-ico" size={18} strokeWidth={1.75} aria-hidden="true" />
+          <Newspaper className="nav-ico" size={20} strokeWidth={1.75} aria-hidden="true" />
           <span className="nav-label">Daily Brief</span>
         </button>
         <button type="button" className={`nav-item sb-util${prefsOpen ? ' is-on' : ''}`} data-key="nav-settings" aria-keyshortcuts={mac() ? 'Meta+Comma' : 'Control+Comma'} aria-expanded={prefsOpen} title={collapsed ? 'Preferences' : undefined} onClick={() => openPrefs('appearance')}>
-          <Settings className="nav-ico" size={18} strokeWidth={1.75} aria-hidden="true" />
+          <Settings className="nav-ico" size={20} strokeWidth={1.75} aria-hidden="true" />
           <span className="nav-label">Preferences</span>
         </button>
-        <div className="sb-status">
-          <LiveDot />
+        <div className="sb-status sb-org">
+          <span className="sb-avatar" aria-hidden="true">{((ws && ws.name) || 'CryptoResearch').trim().charAt(0).toUpperCase()}</span>
+          <span className="sb-org-text">
+            <span className="sb-org-name" title={ws && ws.name ? ws.name : undefined}>{(ws && ws.name) || 'CryptoResearch'}</span>
+            <LiveDot />
+          </span>
           {d.session && d.session.hosted ? <SignOut /> : null}
         </div>
-        <button type="button" className="btn btn-ghost btn-sm btn-icon sb-collapse" data-key="nav-collapse" aria-label={collapsed ? 'Show the rail with its words' : 'Collapse the rail to its icons'} title={collapsed ? 'Expand' : 'Collapse'} onClick={onCollapse}>
-          {collapsed ? <PanelLeftOpen size={16} aria-hidden="true" /> : <PanelLeftClose size={16} aria-hidden="true" />}
-        </button>
       </div>
     </aside>
   );

@@ -25,8 +25,9 @@ test('type floor: the smallest token is 12.5px, and every size token is at or ab
   const tokens = fs.readFileSync(path.join(DASH, 'public', 'tokens.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
   assert.match(tokens, /--fs-xs:\s*12\.5px;/);
   for (const m of tokens.matchAll(/--fs-[a-z0-9-]+:\s*([0-9.]+)px;/g)) assert.ok(Number(m[1]) >= FLOOR, `${m[0]} is under ${FLOOR}px`);
-  // The executive scale (2026-10-18).
-  for (const [k, v] of [['--fs-ui-sm', '13.5px'], ['--fs-body-lg', '14.5px'], ['--fs-ui', '15px'], ['--fs-head', '22px'], ['--fs-kpi', '26px'], ['--fs-kpi-lg', '28px'], ['--fs-page', '32px'], ['--sidebar-w', '232px'], ['--wl-row-h', '60px'], ['--inspector-w', '620px'], ['--inspector-w-wide', '680px'], ['--badge-h-lg', '26px']]) {
+  // The executive scale (2026-10-18), with the platform look's sizes (Eric,
+  // 2026-10-26): a 260px sidebar, a 520px inspector and 18px KPI figures.
+  for (const [k, v] of [['--fs-ui-sm', '13.5px'], ['--fs-body-lg', '14.5px'], ['--fs-ui', '15px'], ['--fs-head', '22px'], ['--fs-kpi', '26px'], ['--fs-kpi-lg', '28px'], ['--fs-page', '32px'], ['--fs-metric', '18px'], ['--sidebar-w', '260px'], ['--wl-row-h', '60px'], ['--inspector-w', '520px'], ['--inspector-w-wide', '520px'], ['--badge-h-lg', '26px']]) {
     assert.match(tokens, new RegExp(`${k}:\\s*${v.replace('.', '\\.')};`), `${k} is ${v}`);
   }
 });

@@ -35,6 +35,7 @@ export const desk = {
   projectGen: new Map(),   // project ID -> how often its cached record was dropped
   // The review agenda as last read (lib/agenda.js): { index, promise, last }.
   agenda: null,
+  brief: null,
   live: { mode: null, seq: null, instance: null, timer: null, ctrl: null, failures: 0, retryIn: null, saving: false, read: null, readCode: null, polls: 0 },
   // Why the last change happened: 'boot', 'live' (a change on the server),
   // 'refresh' (after a write here).
@@ -88,6 +89,7 @@ export function signedOut() {
   desk.index = null;
   desk.projects.clear();
   desk.agenda = null;
+  desk.brief = null;
   desk.token = null;
   desk.ui = {};
   emit('signed_out');
@@ -539,6 +541,7 @@ function listen() {
         desk.index = null;
         desk.projects.clear();
         desk.agenda = null;
+        desk.brief = null;
         desk.checking = false;
         emit('boot');
       });

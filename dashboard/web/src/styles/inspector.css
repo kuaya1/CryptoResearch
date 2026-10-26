@@ -1,40 +1,45 @@
-/* The project inspector, Level 1 (§3.2): docked beside the list from 1280px
-   (620px wide to 1599px, 680px from 1600px; the 2026-10-18 polish pass), a
-   drawer below, a full-screen sheet on a phone. The head and foot keep their
-   place; the body scrolls. */
+/* The project inspector, Level 1 (§3.2; the platform look, Eric,
+   2026-10-26): 520px on the elevated surface. From 1280px it docks beside
+   the list with no backdrop (the J/K peek keeps working); below, it is a
+   drawer with a 12px leading edge over a fading backdrop, and a full-screen
+   sheet on a phone. The head and foot keep their place; the body scrolls;
+   the foot carries the PM decision when a ticket waits. */
 
 .inspector {
   display: flex; flex-direction: column; min-width: 0;
-  background: var(--surface); color: var(--text);
+  background: var(--color-surface-elevated); color: var(--text);
 }
 .inspector.is-docked {
-  position: sticky; top: 0; z-index: 6;
-  height: 100vh; height: 100dvh;
-  border-left: 1px solid var(--border);
+  position: sticky; top: 8px; z-index: 6;
+  height: calc(100vh - 40px); height: calc(100dvh - 40px);
+
+  border-radius: var(--r-card);
+  box-shadow: 0 0 0 1px var(--color-border);
   overflow: hidden;
-  animation: insp-in 160ms var(--ease);
+  animation: insp-in var(--dur) var(--cubic-enter);
 }
 .inspector.is-modal {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 90;
   width: min(var(--inspector-w), 100%);
+  border-radius: var(--r-card) 0 0 var(--r-card);
   box-shadow: var(--shadow-drawer);
-  border-left: 1px solid var(--border);
-  animation: drawer-in 180ms var(--ease);
+  overflow: hidden;
+  animation: drawer-in var(--dur-move) var(--cubic-enter);
 }
-.drawer-scrim { position: fixed; inset: 0; z-index: 89; background: var(--scrim); animation: fade-in 160ms var(--ease); }
-@keyframes drawer-in { from { transform: translateX(24px); opacity: 0.6; } to { transform: none; opacity: 1; } }
+.drawer-scrim { position: fixed; inset: 0; z-index: 89; background: var(--backdrop-fade); -webkit-backdrop-filter: blur(1px); backdrop-filter: blur(1px); animation: fade-in var(--dur-move) var(--cubic-enter); }
+@keyframes drawer-in { from { transform: translateX(32px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes sheet-in { from { transform: translateY(24px); opacity: 0.6; } to { transform: none; opacity: 1; } }
 @keyframes insp-in { from { opacity: 0.4; } to { opacity: 1; } }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @media (max-width: 767.98px) {
-  .inspector.is-modal { left: 0; right: 0; width: auto; border-left: 0; animation: sheet-in 180ms var(--ease); }
+  .inspector.is-modal { left: 0; right: 0; width: auto; border-left: 0; border-radius: 0; animation: sheet-in var(--dur-move) var(--cubic-enter); }
   .drawer-scrim { display: none; }
 }
 html.has-drawer { overflow: hidden; }
 .insp-grip { display: block; width: 36px; height: 4px; margin: -6px auto 8px; border-radius: var(--r-pill); background: var(--border); }
 
 /* ---- head ---- */
-.insp-head { flex: none; padding: 16px 24px 14px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.insp-head { flex: none; padding: 16px 24px 14px; box-shadow: 0 1px 0 var(--color-border-subtle); background: var(--color-surface-elevated); position: relative; z-index: 1; }
 .ih-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 12px; align-items: start; }
 .ih-row h2 {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
@@ -455,9 +460,16 @@ html.has-drawer { overflow: hidden; }
 /* ---- foot ---- */
 .insp-foot {
   flex: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
-  padding: 14px 24px; border-top: 1px solid var(--border); background: var(--surface);
-  padding-bottom: max(14px, env(safe-area-inset-bottom));
+  padding: 12px 24px; background: var(--color-surface-elevated); box-shadow: 0 -1px 0 var(--color-border-subtle);
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
 }
+/* The PM decision, drawn here by the card (FootSlot): its own row over the
+   summary, the decisions first. Empty when no ticket is drawn. */
+.if-decide { flex: 1 1 100%; min-width: 0; }
+.if-decide:empty { display: none; }
+.pm-actions.is-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-bottom: 12px; box-shadow: 0 1px 0 var(--color-border-subtle); }
+.pm-actions.is-foot .btn { flex: 1 1 auto; }
+.pm-actions.is-foot .pm-decided { flex: 1 1 100%; }
 .if-sum { display: flex; align-items: center; gap: 6px; font-size: var(--fs-md); color: var(--text-2); min-width: 0; }
 .if-ok { display: inline-flex; align-items: center; gap: 5px; color: var(--pos); font-weight: 500; }
 .if-dot { color: var(--text-3); }

@@ -42,6 +42,60 @@ The short version:
 
 ## UI guidelines (dashboard/web and dashboard/public)
 
+- Platform look (Eric, 2026-10-26, after `OPENAI_PLATFORM_DESIGN_SYSTEM.md`; supersedes every surface, size and motion detail below where they conflict):
+  - **Tokens (`tokens.css`, still the one layer):**
+    - a 25-step gray ramp per theme;
+    - the `--alpha-base` ladder (`--alpha-02…70`) made with `color-mix(in oklab…)`;
+    - green, red, orange, yellow and blue ramps only, with no purple and no discovery intent;
+    - the intent matrix `--info|success|warning|caution|danger-{text,soft-text,surface,soft,solid}`;
+    - radii `--radius-2xs…full`;
+    - motion `--dur` 150ms, `--dur-move` 300ms, `--cubic-enter|exit|move`, press scale .97 (cards .98).
+    - The old names (`--bg`, `--surface`, `--text-2`, `--accent`, `--pos`, the tiers…) map onto the new layer, so the hosted views follow.
+  - **Dark theme:** canvas #131313, panel #212121, elevated #303030.
+  - **Unchanged:** system fonts, no Inter, the 12.5px floor, no explanatory copy, meaning never by colour alone, opening never writes.
+  - **Surfaces:**
+    - links and the focus ring are blue;
+    - elevation comes from strokes, not shadows;
+    - the body sits on the tertiary canvas;
+    - the main panel is a white inset card (12px corners, a hairline) with the page's work 48px from its edge on a desktop, 24px on a tablet and edge to edge on a phone;
+    - the window keeps the scroll, so Back, deep links and the scroll checks still work.
+  - **Rail:**
+    - 260px wide, or 56px of icons;
+    - a 32px workspace row with no switcher chevron, since there is one workspace;
+    - 36px places with 10px corners and 20px icons, the current one a pill on `::before`;
+    - counts are right-aligned 20px tints: Review caution, Portfolio info;
+    - at the foot, a block with the workspace's initial, its name over the connection, and Sign out.
+  - **Desk:**
+    - a Daily Brief hero (`DeskHero.jsx`):
+      - a CSS-only mesh in lime, butter and orchid, 0.65, and 0.35 with screen blending in dark;
+      - three 40px readiness circles from `GET /api/brief/daily` (Research waiting, Forensics exits, Tickets for you), where an unreadable section reads "Unknown";
+      - "Open Daily Brief" and "Review queue" with counts only.
+    - a 24h · 7d · 30d range control (`RangeControl.jsx`, a sliding thumb, saved in the Desk prefs as `range`) that picks the change under each price and its column label; the 7D chart stays seven days.
+    - the KPI strip in a 12px frame, alpha hairlines, figures 18/29/600 tabular (`--fs-metric`, `--lh-metric`), and Bitcoin's stored 7-day line (44px) only where a desk project holds it.
+    - a risk-budget row under it (`watchlist-model.js` `riskBudget`): recorded speculative cost against Portfolio's `speculative_capital_cap_usd`, a 16px track with a 2×10 cap mark, caution from 80% and danger above 100%, always in words, and "Cap not set" with no bar.
+    - PM decisions (`DecisionGrid.jsx`):
+      - `repeat(auto-fit, minmax(273px, 1fr))` 16px cards with a `::before` stroke, one per ticket waiting for you (pending or re-opened, undecided);
+      - each card has a 48px logo tile, the proposal as a badge in words, the thesis, the suggested risk and the grade (headline else Claude, never averaged);
+      - Open Inspector and Read Full Report show over the card on hover and focus, and under it on touch;
+      - the cards carry no decision buttons.
+  - **Inspector:**
+    - 520px on the elevated surface;
+    - docked from 1280px with no backdrop;
+    - below that, a drawer with a 12px leading edge over a fading, blurred backdrop;
+    - on a phone, a full sheet.
+    - The PM Decision Card draws its decision buttons into the sticky foot through a portal (`views/inspector/footSlot.js`), with the same handlers and `seen` guard: Approve solid, Halve and the others outline, Veto solid danger (`.btn-danger`).
+    - Mark reviewed is solid only when no ticket waits.
+  - **Buttons:**
+    - variants are custom properties, with the fill and edge on `::before`;
+    - hover and press change only the pseudo-layer, so nothing moves;
+    - badges are 20px at 12.5/600 with 4px corners;
+    - segmented controls are a soft track with a raised thumb.
+  - **Superseded:**
+    - the 232px rail;
+    - the 620/680px inspector;
+    - the 26px KPI figures;
+    - the Apple HIG canvas and its card shadows;
+    - 140ms motion.
 - Design and IA blueprint (Eric, 2026-10-17: `DESIGN_AND_IA_BLUEPRINT.md` "approved in full", D1–D5 locked; it supersedes any detail below that conflicts). Warm ledger tokens in `tokens.css` (canvas #fcfbfa, surface #fff, rail #f4f2f0, hover #f6f5f3, hairline #e9e5e2; dark #151413/#1c1b1a/#242220; type 12/13/14/16/20/28/40 under the `--fs-xs…3xl` names with the old names aliased; 4px cards, panels and fields, 6px buttons, no card shadows; borderless tinted 4px/22px badges). The rail (208px, or 56px icons by your choice, kept per browser): Desk, Review, Portfolio, Research, counts only on Review (projects needing review, D3) and Portfolio (records needing attention); at its foot Search (⌘K command menu: go to projects, pages and sections, do and toggle), Preferences (⌘, drawer at `?prefs=<section>`: Appearance, Screening, Models & budget, Rubrics, Data, System, Activity, Developer with the Explorer, D4) and Sign out. Level 0, the Desk: a five-cell KPI strip (Market, Total cap, Beat BTC 30d, Needs review, Research waiting; Total steps aside on a phone), the action band, view tabs with counts (Watching, Needs review, Waiting on a model, Held, Not watching, All; Archived in ⋯), Label | Value filter chips, seven default columns (Project, Price / 24h, 7D, Grade with the three-dot consensus glyph, Risk, Last research, the hover Action) with Exit @ $500 and the market figures in the Columns picker (D2); the grade is your pinned headline else Claude's current eligible report, never an average (D1, `watchlist-model.js` `canonicalGrade`); Risk is the highest-severity of forensic state, downside score, GoPlus flag, else "Not audited" (`riskCell`); a phone keeps four columns in view (Project, Price / 24h, Grade, Risk). Level 1, the inspector: six blocks (verdict with consensus, bull/bear triggers, risk and exit strip, thesis and watch, Needs you with at most three lines, your note), 560px docked to 1599px and 640px from 1600px, a full-screen sheet on a phone, its foot Open full research and Mark reviewed (R). Level 2, the project page: Brief, Evidence (paged, tag and source filters), Forensics (Assessment, Exits, Timeline, Receipts, with "Your screening preferences · Edit"), Market (DEX pools, DefiLlama daily charts, TradingView), Contract (identity evidence, every GoPlus check), Report, Record (run, prompt version and SHA-256, the exact prompt on request, history, revisions, exclusions, forensic receipts) and Notes; Compare is the model switcher's fourth segment (Claude, ChatGPT, Gemini, Compare); old addresses redirect (`project-routes.js`). Review (`#/review`, replacing Updates and Agenda, which redirect): the queue grouped as Changed since review, Review due, Waiting on you, Models differ, Imports to confirm (each project once, `review-model.js`), the chosen project at Level 1 with what changed since your review, the evidence for the change (new reports, what moved, the agenda's items with Snoozed or done and Reopen, differences, forensic changes, price), and a sticky bar (Prev and Next by K and J, Snooze and Done, Mark reviewed by ⌘↵ or Ctrl+Enter); Upcoming (the calendar, invalidators, alerts, Add a review) and Imports (import, inbox, Cowork requests) segments; one column of cards on a phone. Screening preferences are saved through `POST /api/settings` `forensics.preferences` (server.js `validateSettingsPatch`, the same bounds as `core/forensics.js` `prefsOf`; defaults are `forensic-defs.js` `PREFERENCE_DEFAULTS` only); new receipts freeze them. Portfolio has a Needs attention tab and counts on its tabs; Research pages the desk-wide claims (50 at a time) and links each model's route to Preferences > Models & budget. Executive scale (Eric, 2026-10-18 typography, scale and polish pass; supersedes the smaller sizes below):
 - **Floor:** nothing readable under 12.5px (`--fs-xs`; `tests/type-floor.test.js`).
 - **Tokens:** `--fs-ui-sm` 13.5, `--fs-body-lg` 14.5, `--fs-ui` 15, `--fs-head` 22, `--fs-kpi` 26, `--fs-kpi-lg` 28, `--fs-page` 32.

@@ -37,7 +37,7 @@ export function navCounts(index, agenda = null) {
   const pf = portfolioNeeds(index);
   const s = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   return {
-    review: k.review.projects ? { n: k.review.projects, title: `${s(k.review.projects, 'project needs', 'projects need')} your review` } : null,
-    portfolio: pf ? { n: pf, title: `${s(pf, 'record needs', 'records need')} attention` } : null,
+    review: k.review.projects ? { n: k.review.projects, tone: 'is-caution', title: `${s(k.review.projects, 'project needs', 'projects need')} your review` } : null,
+    portfolio: pf ? { n: pf, tone: 'is-info', title: `${s(pf, 'record needs', 'records need')} attention` } : null,
   };
 }
