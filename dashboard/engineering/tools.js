@@ -56,7 +56,7 @@ const TOOLS = [
   {
     name: 'engineering_github_status',
     roles: ['reader', 'reviewer', 'submitter', 'worker'],
-    description: 'What GitHub itself says about a task now: the pull request for its backlog branch, the check runs on the candidate head, whether main contains the merge, and whether the running desk contains it. Read now and never stored; "unknown" when GitHub cannot be read.',
+    description: 'What GitHub itself says about a task now: the pull request for its backlog or candidate branch (claude/backlog-eng-<n>, claude/candidate-eng-<n>), the check runs on the candidate head, whether main contains the merge, and whether the running desk contains it. Read now and never stored; "unknown" when GitHub cannot be read.',
     inputSchema: { type: 'object', properties: { task_id: taskRef }, required: ['task_id'], additionalProperties: false },
     annotations: { readOnlyHint: true },
     run: async (ws, who, a, ctx) => {

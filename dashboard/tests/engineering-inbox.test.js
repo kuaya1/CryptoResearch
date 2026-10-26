@@ -1512,3 +1512,109 @@ test('Eric\'s Check admission on GitHub: the recorded commit first, main\'s hist
   assert.deepEqual([e.code, e.status], ['GITHUB_UNKNOWN', 409]);
   assert.equal(I.getTask(ws, OWNER, s2.task_id, o()).admission.confirmed_main_sha, INVENTED);
 });
+
+// --- convergence with GitHub (2026-10-26, the Cortex audit) ------------------------
+// Items 63 and 64 were merged from claude/candidate-eng-<n> and stayed ready
+// for promotion. The desk now records a task merged itself once GitHub
+// proves it, and a delegation from a retired template is never listed as
+// active.
+
+test('the desk records a task merged from GitHub\'s proof alone; anything short of it writes nothing', async (t) => {
+  const { ws } = ws0(t, 'converge');
+  I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o());
+  const s = submitted(ws);
+  const m = onMain(ws, s.task_id, { number: 63 });
+  const c = cand(ws, s.task_id, m.token, m.number, 'v1');
+  assert.equal(verify(ws, s.task_id, m.token, c.head).status, 'ready_for_promotion');
+  const s2 = submitted(ws, docsTask({ title: 'Second lane note (FICTIONAL)' }));
+  const m2 = onMain(ws, s2.task_id, { number: 64 });
+  const c2 = cand(ws, s2.task_id, m2.token, m2.number, 'v2');
+  assert.equal(verify(ws, s2.task_id, m2.token, c2.head).status, 'ready_for_promotion');
+  const due = I.mergeCandidates(ws);
+  assert.deepEqual(due.find((d) => d.task_id === s.task_id), { task_id: s.task_id, number: 63, heads: [c.head] });
+  assert.equal(due.length, 2);
+  const MERGE = sha('merge-24');
+  const proof63 = { state: 'yes', number: 63, pr_number: 24, pr_url: 'https://github.com/kuaya1/CryptoResearch/pull/24', branch: 'claude/candidate-eng-63', head_sha: c.head, main_sha: MERGE, merged_at: '2026-10-26T16:00:00Z' };
+  const asked = [];
+  const logs = [];
+  const github = { mergeProof: async (q) => { asked.push(q.number); return q.number === 63 ? proof63 : { state: 'unknown', why: 'GitHub answered 503' }; } };
+  class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
+  const { makeEngineeringRoutes } = require('../engineering/routes');
+  const routes = makeEngineeringRoutes(ws, { HttpError, github, log: (l) => logs.push(l) });
+  const r = await routes.reconcileMerges({ now: T0 + MIN });
+  assert.deepEqual([r.checked, r.merged], [2, [{ task_id: s.task_id, number: 63, pr_number: 24 }]]);
+  assert.deepEqual(r.skipped, [{ task_id: s2.task_id, state: 'unknown', why: 'GitHub answered 503' }]);
+  assert.match(logs.join('\n'), /recorded merged from GitHub: item 63 \(PR #24\)/);
+  const v = I.getTask(ws, READER, s.task_id, o(MIN));
+  assert.equal(v.status, 'merged');
+  assert.deepEqual([v.merge.contains_head, v.merge.pr_number, v.merge.branch, v.merge.main_sha, v.merge.by, v.merge.released_through_promotion], [c.head, 24, 'claude/candidate-eng-63', MERGE, 'desk GitHub readback', false]);
+  assert.equal(v.lease, null);
+  const last = v.events[v.events.length - 1];
+  assert.deepEqual([last.type, last.by], ['reconciled_merged', { kind: 'desk' }]);
+  // Settled: never promoted again.
+  assert.equal(I.attestationView(ws, c.head, o(MIN)).promotable, false);
+  assert.equal(I.getTask(ws, READER, s2.task_id, o(MIN)).status, 'ready_for_promotion', 'unknown writes nothing');
+  // A merged task is not asked about again.
+  asked.length = 0;
+  await routes.reconcileMerges({ now: T0 + 2 * MIN });
+  assert.deepEqual(asked, [64]);
+  // Proof for another item, another head, or none at all is refused.
+  assert.equal(codeOf(() => I.reconcileMerged(ws, s2.task_id, proof63, o(2 * MIN))), 'WRONG_CANDIDATE', 'item 63\'s proof is not item 64\'s');
+  assert.equal(codeOf(() => I.reconcileMerged(ws, s2.task_id, { ...proof63, number: 64, head_sha: sha('elsewhere') }, o(2 * MIN))), 'WRONG_CANDIDATE');
+  assert.equal(codeOf(() => I.reconcileMerged(ws, s2.task_id, { state: 'no', why: 'no pull request' }, o(2 * MIN))), 'NOT_ON_MAIN');
+  assert.equal(codeOf(() => I.reconcileMerged(ws, s2.task_id, null, o(2 * MIN))), 'NOT_ON_MAIN');
+  assert.equal(I.getTask(ws, READER, s2.task_id, o(2 * MIN)).merge, null);
+  // The same proof again answers unchanged; a task not ready is not settled.
+  assert.equal(I.reconcileMerged(ws, s.task_id, proof63, o(3 * MIN)).unchanged, true);
+  I.cancelTask(ws, OWNER, s2.task_id, { reason: 'cancelled (FICTIONAL)' }, o(3 * MIN));
+  assert.equal(codeOf(() => I.reconcileMerged(ws, s2.task_id, { ...proof63, number: 64, head_sha: c2.head }, o(3 * MIN))), 'WRONG_STATE');
+  assert.deepEqual(I.mergeCandidates(ws), []);
+  // Where GitHub cannot be read (this PC) the sweep asks nothing.
+  assert.deepEqual(await makeEngineeringRoutes(ws, { HttpError, github: null }).reconcileMerges(), { checked: 0, merged: [], skipped: [] });
+});
+
+test('a delegation from a retired template is never listed as active, to a connection or to Eric', (t) => {
+  const { ws } = ws0(t, 'retired-list');
+  const docs = I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o()).policy;
+  const T = P.TEMPLATES['eng-app@2'];
+  const old = { schema_version: I.S.policy, policy_id: 'pol-20261024-0b0b0b', template: 'eng-app@2', policy_version: 1, title: T.title, says: T.says, repo_full_name: T.repo_full_name, intents: T.intents, allowed_paths: T.allowed_paths, required_review: T.required_review, release_mode: T.release_mode, limits: T.limits, goal_id: 'desk-polish', goal: 'Polish the desk (FICTIONAL)', activated_at: new Date(T0 - 86400000).toISOString(), activated_by: 'owner', expires_at: new Date(T0 + 20 * 86400000).toISOString(), revoked_at: null, revoked_reason: null };
+  old.activation_sha256 = P.contentHash(old);
+  atomicWrite(ws.abs(`engineering/policies/${old.policy_id}.json`), jsonText(old));
+  assert.equal(P.actionable(old), false);
+  assert.equal(P.actionable(docs), true);
+  const cap = I.capabilities(ws, READER, {}, o(MIN));
+  assert.deepEqual(cap.delegations.map((d) => d.template), ['eng-docs@1']);
+  assert.deepEqual(cap.retired_delegations.map((d) => [d.policy_id, d.template]), [[old.policy_id, 'eng-app@2']]);
+  assert.match(cap.retired_delegations[0].says, /which is retired on 2026-10-26 .*; it admits nothing/);
+  const listed = I.ownerView(ws, OWNER, o(MIN)).policies;
+  assert.deepEqual(listed.filter((p) => p.active).map((p) => p.template), ['eng-docs@1']);
+  assert.match(listed.find((p) => p.policy_id === old.policy_id).retired, /^retired on 2026-10-26/);
+  // Nothing else in force: no retired list at all.
+  const { ws: ws2 } = ws0(t, 'retired-none');
+  I.activatePolicy(ws2, OWNER, { template: 'eng-docs@1' }, o());
+  assert.equal(I.capabilities(ws2, READER, {}, o(MIN)).retired_delegations, undefined);
+});
+
+test('the merge sweep runs soon after the start and on its interval, and stops with the server', async (t) => {
+  const { ws } = ws0(t, 'converge-schedule');
+  I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o());
+  const s = submitted(ws);
+  const m = onMain(ws, s.task_id, { number: 63 });
+  const c = cand(ws, s.task_id, m.token, m.number, 'v1');
+  assert.equal(verify(ws, s.task_id, m.token, c.head).status, 'ready_for_promotion');
+  let asked = 0;
+  const github = { mergeProof: async () => { asked += 1; return { state: 'no', why: 'no pull request' }; } };
+  class HttpError extends Error {}
+  const routes = require('../engineering/routes').makeEngineeringRoutes(ws, { HttpError, github });
+  const server = new (require('events').EventEmitter)();
+  routes.scheduleSweeps(server, { firstMs: 5, everyMs: 25 });
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  await wait(120);
+  assert.ok(asked >= 2, `asked ${asked} times`);
+  server.emit('close');
+  await wait(30);
+  const stopped = asked;
+  await wait(80);
+  assert.equal(asked, stopped, 'nothing runs after the server closed');
+  assert.equal(I.getTask(ws, READER, s.task_id, o()).status, 'ready_for_promotion');
+});

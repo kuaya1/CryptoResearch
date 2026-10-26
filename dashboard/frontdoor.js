@@ -140,6 +140,9 @@ function openFrontDoor(server, { ws, hosted = null, port, quiet = false, state, 
   // The engineering inbox's routes (connector, public reads, Eric's
   // decisions), from the protected dashboard/engineering/routes.js.
   const engineering = require('./engineering/routes').makeEngineeringRoutes(ws, { oauth, auth, origins: mcpOrigins, version, log, github: hosted ? require('./engineering/github').makeGithub() : null, HttpError, readCodes: READ_CODES });
+  // On the online desk, tasks GitHub shows merged are recorded merged
+  // (routes.js reconcileMerges), until the server closes.
+  if (hosted) engineering.scheduleSweeps(server);
   // The offsite package for this PC's daily pull (CR_BACKUP_KEY, read per request).
   const offsite = hosted ? require('./core/offsite').makeOffsiteRoute(ws, { env: process.env, log }) : null;
 
