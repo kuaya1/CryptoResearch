@@ -220,7 +220,10 @@ async function review({ env = process.env, cwd = process.cwd(), fetchImpl = glob
   const messages = buildPrompt(packet, { diff: real.diff, coverage, mainMoved: mainSha !== c.merge_base_sha });
   const body = { model: env.OPENAI_REVIEW_MODEL, messages, response_format: { type: 'json_object' }, max_completion_tokens: MAX_COMPLETION_TOKENS };
   const promptSha = sha256(JSON.stringify(messages));
-  const ai = await postJson(fetchImpl, OPENAI_URL, body, { authorization: `Bearer ${env.OPENAI_API_KEY}` }, { timeoutMs: 300000, retries: [10000], ...opt });
+  // One paid request per run, never retried (2026-10-26): a timeout or a 5xx
+  // may have been accepted and billed, and the saved-review cap counts none
+  // of them. The agent lane's ledger (agent-review.js) replaces this route.
+  const ai = await postJson(fetchImpl, OPENAI_URL, body, { authorization: `Bearer ${env.OPENAI_API_KEY}` }, { timeoutMs: 300000, ...opt, retries: [] });
   if (ai.status !== 200 || !ai.json) return { status: 'model_failed', exit: 1, number, task_id: task, says: `The OpenAI API did not answer the review (${ai.error || `HTTP ${ai.status}`}${ai.json && ai.json.error && ai.json.error.code ? `, ${String(ai.json.error.code).slice(0, 60)}` : ''}); nothing saved.` };
   const choice = Array.isArray(ai.json.choices) && ai.json.choices[0];
   const verdict = normalizeVerdict(choice && choice.message && choice.message.content);

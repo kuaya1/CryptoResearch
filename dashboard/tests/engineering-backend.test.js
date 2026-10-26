@@ -517,3 +517,16 @@ test('reviewer.js asks no model when the branch is not what the desk recorded, i
   // Not a candidate branch.
   assert.equal((await R.review({ env: { ...envOf(r4, d4), BRANCH: 'claude/backlog-eng-70' }, cwd: r4.runner, fetchImpl: ai4.fetchImpl })).status, 'skipped');
 });
+
+test('reviewer.js sends the paid request once: a 503 or a timeout is not retried', async (t) => {
+  const r = repo(t, { files: { [CORE]: 'module.exports = 5;\n', [TEST]: "const m = require('../core/fictional-backend');\nrequire('node:assert').equal(m, 5);\n" } });
+  const desk = await deskFor(t, 'no-retry', r);
+  for (const fail of [() => new Response('{"error":{"code":"overloaded"}}', { status: 503 }), () => { throw new Error('The operation was aborted due to timeout'); }]) {
+    let paid = 0;
+    const fetchImpl = async (url, init) => { if (!String(url).startsWith('https://api.openai.com/')) return fetch(url, init); paid += 1; return fail(); };
+    const out = await R.review({ env: envOf(r, desk), cwd: r.runner, fetchImpl, gh: null, sleep: async () => {} });
+    assert.equal(out.status, 'model_failed', out.says);
+    assert.equal(paid, 1, 'one paid request per run');
+  }
+  assert.equal(I.getTask(desk.ws, CHAT, desk.id, o()).status, 'review_pending', 'nothing saved');
+});

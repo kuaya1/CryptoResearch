@@ -1573,6 +1573,40 @@ test('the desk records a task merged from GitHub\'s proof alone; anything short 
   assert.deepEqual(await makeEngineeringRoutes(ws, { HttpError, github: null }).reconcileMerges(), { checked: 0, merged: [], skipped: [] });
 });
 
+// Item 66 (PR #29) was merged by Eric while its task waited for its ChatGPT
+// review. The desk records the merge GitHub proves and keeps the review as
+// it was: nothing passes it.
+test('a task merged while its review was pending is settled from GitHub with its review left pending', async (t) => {
+  const { ws } = ws0(t, 'converge-pending');
+  I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o());
+  I.activatePolicy(ws, OWNER, { template: 'eng-app@3', ...GOAL }, o());
+  const s = submitted(ws, docsTask({ title: 'App work merged before review (FICTIONAL)', goal_id: 'desk-polish', scope: { paths: [APP_FILE] } }));
+  const m = onMain(ws, s.task_id, { number: 66 });
+  const c = cand(ws, s.task_id, m.token, m.number, 'v1', { file: APP_FILE });
+  assert.equal(verify(ws, s.task_id, m.token, c.head).status, 'review_pending');
+  const before = I.getTask(ws, READER, s.task_id, o());
+  assert.deepEqual(I.mergeCandidates(ws), [{ task_id: s.task_id, number: 66, heads: [c.head] }]);
+  const proof = { state: 'yes', number: 66, pr_number: 29, pr_url: 'https://github.com/kuaya1/CryptoResearch/pull/29', branch: 'claude/candidate-eng-66', head_sha: c.head, main_sha: sha('merge-29'), merged_at: '2026-10-26T18:00:00Z' };
+  class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
+  const { makeEngineeringRoutes } = require('../engineering/routes');
+  const r = await makeEngineeringRoutes(ws, { HttpError, github: { mergeProof: async () => proof }, log: () => {} }).reconcileMerges({ now: T0 + MIN });
+  assert.deepEqual(r.merged, [{ task_id: s.task_id, number: 66, pr_number: 29 }]);
+  const v = I.getTask(ws, READER, s.task_id, o(MIN));
+  assert.equal(v.status, 'merged');
+  assert.deepEqual([v.merge.pr_number, v.merge.contains_head, v.merge.status_at_merge], [29, c.head, 'review_pending']);
+  assert.deepEqual(v.merge.review_at_merge, { required: 'chatgpt', state: 'pending', satisfied: false });
+  assert.match(v.status_reason, /merged while its review was pending \(chatgpt required\), which stays as it was/);
+  // No review was invented: the review state is exactly as before.
+  assert.deepEqual(v.review, before.review);
+  assert.deepEqual([v.review.state, Boolean(v.review.satisfied), v.review.latest], ['pending', false, null]);
+  const dir = ws.abs(`engineering/tasks/${s.task_id}/events`);
+  const last = JSON.parse(fs.readFileSync(path.join(dir, fs.readdirSync(dir).sort().pop()), 'utf8'));
+  assert.equal(last.type, 'reconciled_merged');
+  assert.deepEqual([last.data.from, last.data.review_state, last.data.review_satisfied], ['review_pending', 'pending', false]);
+  assert.equal(I.attestationView(ws, c.head, o(MIN)).promotable, false);
+  assert.deepEqual(I.mergeCandidates(ws), []);
+});
+
 test('a delegation from a retired template is never listed as active, to a connection or to Eric', (t) => {
   const { ws } = ws0(t, 'retired-list');
   const docs = I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o()).policy;
