@@ -187,6 +187,7 @@ const PROTECTED_SAMPLES = [
   'dashboard/oauth.js', 'dashboard/mcp.js', 'dashboard/mcp-wire.js', 'dashboard/hosted.js', 'server.js',
   'dashboard/core/portfolio.js', 'dashboard/core/wallets.js', 'dashboard/core/walletsync.js', 'dashboard/core/alchemy.js',
   'dashboard/frontdoor.js', 'dashboard/core/offsite.js', 'dashboard/core/ops.js', 'dashboard/core/fsx.js', 'dashboard/core/workspace.js', 'dashboard/tests/engineering-guard.test.js',
+  'dashboard/core/scout.js', 'dashboard/scripts/grok-cron.js', 'dashboard/tests/scout-ingest.test.js', 'templates/scout/x.md', 'scout/x.json',
   'package.json', 'package-lock.json', 'dashboard/web/package.json', 'dashboard/web/package-lock.json', 'render.yaml', 'render.yml',
   'portfolio/x.json', 'paper/x.jsonl', 'projects/x/project.json', 'config/settings.json', 'secrets/x.json',
   'dashboard/engineering/inbox.js', 'dashboard/engineering/x.js', 'AGENTS.md', '.mcp.json',
