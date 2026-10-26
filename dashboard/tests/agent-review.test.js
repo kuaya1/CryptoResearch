@@ -79,7 +79,7 @@ const VERDICT = { result: 'pass', summary: 'FICTIONAL: the change does what the 
 // next mode: ok, timeout (accepted, then the answer is lost), 503 (refused
 // before acceptance), 429, cut (accepted, body cut).
 function world(fx, { modes = [], fallback = 'ok' } = {}) {
-  const w = { clock: T0, posts: 0, bodies: [], stored: [], checks: [], checkFail: 0, modelStatus: 200, required: { test: 'success', 'agent-guard': 'success', 'agent-verify': 'success' }, verdict: VERDICT, modes: [...modes] };
+  const w = { clock: T0, posts: 0, bodies: [], stored: [], checks: [], checkFail: 0, modelStatus: 200, listStatus: 200, required: { test: 'success', 'agent-guard': 'success', 'agent-verify': 'success' }, verdict: VERDICT, modes: [...modes] };
   w.fetch = async (url, opts = {}) => {
     const u = new URL(url);
     const method = opts.method || 'GET';
@@ -99,7 +99,7 @@ function world(fx, { modes = [], fallback = 'ok' } = {}) {
         if (mode === '429') return resp(429, { error: { code: 'rate_limit_exceeded' } });
         return resp(200, completion);
       }
-      if (method === 'GET' && u.pathname === '/v1/chat/completions') return resp(200, { object: 'list', data: w.stored.filter((c) => c.metadata.cr_attempt === u.searchParams.get('metadata[cr_attempt]')) });
+      if (method === 'GET' && u.pathname === '/v1/chat/completions') return w.listStatus !== 200 ? resp(w.listStatus, {}) : resp(200, { object: 'list', data: w.stored.filter((c) => !u.searchParams.has('metadata[cr_attempt]') || c.metadata.cr_attempt === u.searchParams.get('metadata[cr_attempt]')) });
       const one = /^\/v1\/chat\/completions\/(.+)$/.exec(u.pathname);
       if (method === 'GET' && one) { const c = w.stored.find((x) => x.id === decodeURIComponent(one[1])); return c ? resp(200, c) : resp(404, {}); }
       if (method === 'GET' && u.pathname.startsWith('/v1/models/')) return resp(w.modelStatus, { id: 'gpt-fictional' });
@@ -330,6 +330,14 @@ test('the handshake reads the model with the key at no charge and reads the ledg
   assert.equal(ok.ok, true);
   assert.match(ok.lines.join('\n'), /reads model gpt-fictional/);
   assert.match(ok.lines.join('\n'), /0 of 12 review attempts/);
+  assert.match(ok.lines.join('\n'), /lists stored completions/);
+  // A key that reads the model but cannot list stored completions could not
+  // reconcile an uncertain attempt: not ready.
+  w.listStatus = 403;
+  const blind = await AR.preflight({ env: ENV, cwd: fx.runner(), fetchImpl: w.fetch, now: () => w.clock, policy: POLICY });
+  assert.equal(blind.ok, false);
+  assert.match(blind.lines.join('\n'), /chat\/completions answered HTTP 403/);
+  w.listStatus = 200;
   w.modelStatus = 401;
   const bad = await AR.preflight({ env: ENV, cwd: fx.runner(), fetchImpl: w.fetch, now: () => w.clock, policy: POLICY });
   assert.equal(bad.ok, false);

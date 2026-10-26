@@ -338,17 +338,22 @@ async function sweep({ env = process.env, cwd = process.cwd(), remote = 'origin'
   return out;
 }
 
-// A free handshake: the key reads the model, the ledger reads, and what it
-// has used today. Replaces a constant "reviewer configured: true".
+// A free handshake: the key reads the model and lists stored completions
+// (what reconciliation needs), the ledger reads, and what it has used today.
+// Replaces a constant "reviewer configured: true".
 async function preflight({ env = process.env, cwd = process.cwd(), remote = 'origin', fetchImpl = globalThis.fetch, now = () => Date.now(), policy = G.loadPolicy() }) {
   const lines = [];
   let ok = true;
   const model = String(env.OPENAI_REVIEW_MODEL || '');
   if (!env.OPENAI_API_KEY || !MODEL_RE.test(model)) { ok = false; lines.push('OpenAI: OPENAI_API_KEY or OPENAI_REVIEW_MODEL is not set.'); } else {
+    const get = (url) => fetchImpl(url, { method: 'GET', headers: { authorization: `Bearer ${env.OPENAI_API_KEY}` }, redirect: 'error', signal: AbortSignal.timeout(30000) });
     try {
-      const res = await fetchImpl(`${OPENAI}/models/${encodeURIComponent(model)}`, { method: 'GET', headers: { authorization: `Bearer ${env.OPENAI_API_KEY}` }, redirect: 'error', signal: AbortSignal.timeout(30000) });
+      const res = await get(`${OPENAI}/models/${encodeURIComponent(model)}`);
       if (res.status === 200) lines.push(`OpenAI: the key reads model ${model} (GET /v1/models, no charge).`);
       else { ok = false; lines.push(`OpenAI: GET /v1/models/${model} answered HTTP ${res.status}.`); }
+      const list = await get(`${OPENAI}/chat/completions?limit=1`);
+      if (list.status === 200) lines.push('OpenAI: the key lists stored completions (GET /v1/chat/completions, no charge), so an uncertain attempt can be reconciled.');
+      else { ok = false; lines.push(`OpenAI: GET /v1/chat/completions answered HTTP ${list.status}; an uncertain attempt could not be reconciled (the key needs read access to chat completions).`); }
     } catch (err) { ok = false; lines.push(`OpenAI: unreachable (${oneLine(err && err.message, 120)}).`); }
   }
   const l = L.read(cwd, { remote });
