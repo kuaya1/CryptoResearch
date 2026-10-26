@@ -18,6 +18,8 @@ const RELEASE_MODES = ['promote', 'owner'];
 // Design work produces documents only.
 const DESIGN_PATHS = ['docs/engineering/**'];
 const MAX_ATTEMPTS = 3;
+// Rebuilds of a passing candidate on a newer main, counted apart (review N8).
+const MAX_REBUILDS = 3;
 const LEASE_MS = 20 * 60 * 1000;
 
 // Versioned and immutable once published: a changed rule is a new template.
@@ -64,10 +66,31 @@ const TEMPLATES = {
     max_days: 30,
     requires_goal: true,
   },
+  // Eric, 2026-10-26 (review N3, N5, N6): eng-app@2 without what runs in his
+  // signed-in session (the browser app's source, which ships a new bundle,
+  // and the bundle itself), the files served before sign-in and the tests
+  // that guard the lane, the backlog, the guardrails and the browser's
+  // writes. Those are in DELEGATION_RESTRICTED (backlog-promote.js), so no
+  // delegation reaches them at the task, at the candidate or at promotion.
+  'eng-app@3': {
+    template: 'eng-app@3',
+    title: 'Hosted views, public scripts and tests for one goal',
+    says: 'The hosted views and public scripts, tests and engineering documents for the goal Eric names, each candidate reviewed by ChatGPT before it merges, from a connection other than the one that submitted it. Never the browser app or its bundle, the files served before sign-in, the tests that guard the lane, dashboard/core/, server routes or a protected path: those always wait for Eric.',
+    repo_full_name: REPO,
+    intents: ['design', 'implement'],
+    allowed_paths: ['dashboard/public/**', 'dashboard/tests/**', 'docs/engineering/**'],
+    required_review: 'chatgpt',
+    release_mode: 'promote',
+    limits: { max_open_tasks: 3, max_admissions_per_day: 5, max_files: 30 },
+    max_days: 30,
+    requires_goal: true,
+  },
 };
-// Kept so their records stay readable, never offered for a new activation.
+// Kept so their records stay readable, never offered for a new activation,
+// and a delegation activated from one matches nothing (review N6).
 const RETIRED = {
   'eng-app@1': 'retired on 2026-10-25 for eng-app@2, which leaves out dashboard/core/ (Eric\'s decision on review finding 6)',
+  'eng-app@2': 'retired on 2026-10-26 for eng-app@3, which leaves out the browser app and its bundle, the files served before sign-in and the guard tests (review N3, N5)',
 };
 // Paths no delegation reaches, whatever its template says (Eric, 2026-10-25):
 // a version naming one waits for his authorization of that exact version,
@@ -75,11 +98,16 @@ const RETIRED = {
 const RESTRICTED = DELEGATION_RESTRICTED;
 // A glob reaches a restricted directory when the part before its first
 // wildcard could lead into it (dashboard/*/x.js and **/x.js both can).
-function restrictedWhy(glob) {
+function restrictedHit(glob) {
   const lead = glob.includes('*') ? foldPath(glob.slice(0, glob.indexOf('*'))) : null;
-  const hit = RESTRICTED.find((x) => (lead === null ? x.re.test(foldPath(glob)) : x.prefix.startsWith(lead) || lead.startsWith(x.prefix)));
+  return RESTRICTED.find((x) => (lead === null ? x.re.test(foldPath(glob)) : x.prefix.startsWith(lead) || lead.startsWith(x.prefix))) || null;
+}
+function restrictedWhy(glob) {
+  const hit = restrictedHit(glob);
   return hit ? hit.why : null;
 }
+// Where a restricted rule reaches, in words: its folder, or "a restricted path".
+const restrictedWhere = (x) => (x.prefix.endsWith('/') ? x.prefix : 'a restricted path');
 
 const sha256 = (s) => crypto.createHash('sha256').update(typeof s === 'string' ? s : JSON.stringify(s)).digest('hex');
 
@@ -120,8 +148,9 @@ const protectedWhy = (p) => { const hit = protectedHit(p); return hit ? hit.why 
 const PROTECTED_SAMPLES = [
   '.github/workflows/x.yml', '.claude/agents/x.md', 'CLAUDE.md', 'COWORK-INSTRUCTIONS.md', 'DESK_STATE.md',
   'dashboard/scripts/backlog-promote.js', 'dashboard/scripts/backlog-intake.js', 'dashboard/scripts/merge-train.js', 'dashboard/scripts/engineering-worker.js',
-  'dashboard/oauth.js', 'dashboard/mcp.js', 'dashboard/hosted.js', 'server.js',
+  'dashboard/oauth.js', 'dashboard/mcp.js', 'dashboard/mcp-wire.js', 'dashboard/hosted.js', 'server.js',
   'dashboard/core/portfolio.js', 'dashboard/core/wallets.js', 'dashboard/core/walletsync.js', 'dashboard/core/alchemy.js',
+  'dashboard/frontdoor.js', 'dashboard/core/offsite.js', 'dashboard/core/ops.js', 'dashboard/core/fsx.js', 'dashboard/core/workspace.js', 'dashboard/tests/engineering-guard.test.js',
   'package.json', 'package-lock.json', 'dashboard/web/package.json', 'dashboard/web/package-lock.json', 'render.yaml', 'render.yml',
   'portfolio/x.json', 'paper/x.jsonl', 'projects/x/project.json', 'config/settings.json', 'secrets/x.json',
   'dashboard/engineering/inbox.js', 'dashboard/engineering/x.js', 'AGENTS.md', '.mcp.json',
@@ -149,6 +178,9 @@ const SCREENS = [
   { re: /\b(?:password|passphrase|api[ _-]?key|secret[ _-]?key|seed phrase|private key)\b/i, why: 'a credential word' },
   // eslint-disable-next-line no-control-regex
   { re: /[\u0000-\u0008\u000b-\u001f\u007f\u2028\u2029]/, why: 'a control character' },
+  // Zero-width marks and bidirectional controls (review N10): text that
+  // displays in another order than it is stored ("Trojan Source").
+  { re: /[\u200b-\u200f\u202a-\u202e\u2066-\u2069]/, why: 'an invisible or text-direction character' },
 ];
 function screen(text) {
   const out = [];
@@ -234,6 +266,7 @@ function validateContent(c) {
 function fits(policy, c, { now, openUnderPolicy = 0, admittedLastDay = 0 } = {}) {
   const r = [];
   if (!policy) return ['no delegation is active'];
+  if (RETIRED[policy.template]) return [`delegation ${policy.policy_id} was activated from ${policy.template}, which is ${RETIRED[policy.template]}; it matches nothing`];
   if (policy.revoked_at) r.push(`delegation ${policy.policy_id} was revoked`);
   if (Date.parse(policy.expires_at) <= now) r.push(`delegation ${policy.policy_id} expired ${policy.expires_at}`);
   if (c.repo_full_name !== policy.repo_full_name) r.push('another repository');
@@ -242,9 +275,9 @@ function fits(policy, c, { now, openUnderPolicy = 0, admittedLastDay = 0 } = {})
   const allowed = c.intent === 'design' ? DESIGN_PATHS.filter((d) => policy.allowed_paths.some((p) => within(d, p))) : policy.allowed_paths;
   for (const p of c.scope.paths) {
     const why = globTouchesProtected(p);
-    const core = restrictedWhy(p);
+    const core = restrictedHit(p);
     if (why) r.push(`${p} can reach a protected path (${why})`);
-    else if (core) r.push(`${p} can reach dashboard/core/ (${core}); it waits for Eric`);
+    else if (core) r.push(`${p} can reach ${restrictedWhere(core)} (${core.why}); it waits for Eric`);
     else if (!allowed.some((g) => within(p, g))) r.push(`${p} is outside the delegated paths`);
   }
   // A lighter declared review or release is no miss: the delegation's own
@@ -315,7 +348,7 @@ function choose(fitting) {
 // characters flattened to a space and markdown's inline marks escaped, so even
 // a version saved before the checks above stays inside its own line.
 // eslint-disable-next-line no-control-regex
-const flat = (s) => String(s).replace(/[\u0000-\u001f\u007f\u0085\p{Zl}\p{Zp}]+/gu, ' ').replace(/ {2,}/g, ' ').trim();
+const flat = (s) => String(s).replace(/[\u0000-\u001f\u007f\u0085\u200b-\u200f\u202a-\u202e\u2066-\u2069\p{Zl}\p{Zp}]+/gu, ' ').replace(/ {2,}/g, ' ').trim();
 const quoted = (s) => flat(s).replace(/[\\`*_[\]<>|~]/g, '\\$&');
 
 // The exact backlog entry an admission adds to DESK_STATE.md (LF endings,
@@ -335,7 +368,7 @@ function entryText({ number, task_id, version, content_sha256, policy_id, conten
 const ENTRY_MARK_RE = /\*\(engineering task (eng-\d{8}-[0-9a-f]{6}) v(\d+), sha256 ([0-9a-f]{16})/;
 
 module.exports = {
-  REPO, INTENTS, REVIEWS, RELEASE_MODES, TEMPLATES, RETIRED, RESTRICTED, restrictedWhy, DESIGN_PATHS, MAX_ATTEMPTS, LEASE_MS, LIMITS,
+  REPO, INTENTS, REVIEWS, RELEASE_MODES, TEMPLATES, RETIRED, RESTRICTED, restrictedWhy, restrictedHit, restrictedWhere, DESIGN_PATHS, MAX_ATTEMPTS, MAX_REBUILDS, LEASE_MS, LIMITS,
   sha256, canonical, contentHash, globRe, matches, within, protectedWhy, globTouchesProtected, PROTECTED_SAMPLES,
   screen, contentOf, validateContent, fits, entryText, ENTRY_MARK_RE, PATH_RE,
   stricterReview, stricterRelease, boundaries, choose, MATCH_RULE, MATCH_KEYS,

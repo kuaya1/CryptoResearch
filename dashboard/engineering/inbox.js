@@ -133,6 +133,8 @@ function authorizationHolds(ws, t, op) {
     const p = op ? op.readJson(rel.policy(a.policy_id), null) : readRaw(ws, rel.policy(a.policy_id));
     if (!p) return { ok: false, code: 'delegation_missing', why: `delegation ${a.policy_id} is missing` };
     if (p.revoked_at) return { ok: false, code: 'delegation_revoked', why: `delegation ${a.policy_id} was revoked ${p.revoked_at}` };
+    // Review N6: a delegation from a retired template no longer stands.
+    if (P.RETIRED[p.template]) return { ok: false, code: 'delegation_retired', why: `delegation ${a.policy_id} was activated from ${p.template}, which is ${P.RETIRED[p.template]}` };
   }
   return { ok: true };
 }
@@ -142,11 +144,25 @@ function authorizationHolds(ws, t, op) {
 // stricter of the declared review and the delegation's).
 const requiredReview = (t) => P.stricterReview(t.required_review || 'none', t.authorization ? t.authorization.required_review : null);
 
+// Whether a review decides its task's requirement (review N4, 2026-10-26):
+// Eric's own always does. Any other only when it is of the required kind,
+// read both the diff and the test evidence (a limited review never decides),
+// and, unless the candidate changes documents only, comes from a connection
+// that wrote none of the task's versions. same_author is recorded with each
+// review; one saved before it is judged by the task's creator.
+const docsOnly = (c) => Boolean(c && Array.isArray(c.files) && c.files.length && c.files.every((f) => P.matches(f, P.DESIGN_PATHS)));
+function decides(t, r, need) {
+  if (r.reviewer.kind === 'owner') return true;
+  if (r.reviewer.kind !== need || r.limited) return false;
+  const own = r.same_author !== undefined ? r.same_author : Boolean(t.created_by && t.created_by.conn && t.created_by.conn === r.reviewer.conn);
+  return docsOnly(t.candidate) || !own;
+}
+
 // The latest review per reviewer kind on the current candidate.
 function reviewState(t, need = requiredReview(t)) {
   const cand = t.candidate;
   const onHead = cand ? (t.reviews || []).filter((r) => r.head_sha === cand.head_sha && r.merge_base_sha === cand.merge_base_sha) : [];
-  const counts = (r) => r.reviewer.kind === 'owner' || r.reviewer.kind === need;
+  const counts = (r) => decides(t, r, need);
   const deciding = onHead.filter(counts);
   const latest = deciding.length ? deciding[deciding.length - 1] : null;
   const state = need === 'none' ? 'not_required' : !cand ? 'pending' : latest ? latest.result : 'pending';
@@ -203,7 +219,7 @@ function view(ws, t, who, { now = Date.now() } = {}) {
     admission: t.admission ? { number: t.admission.number, state: t.admission.state, entry_sha256: t.admission.entry_sha256 || null, branch: t.admission.number ? `claude/admission-${t.task_id}` : null, confirmed_main_sha: t.admission.confirmed_main_sha || null } : null,
     lease,
     generation: t.generation,
-    attempts: { count: t.attempts.count, max: t.attempts.max },
+    attempts: { count: t.attempts.count, max: t.attempts.max, rebuilds: t.attempts.rebuilds || 0, rebuilds_max: t.attempts.rebuilds_max || P.MAX_REBUILDS },
     candidate: t.candidate ? { head_sha: t.candidate.head_sha, base_sha: t.candidate.base_sha, merge_base_sha: t.candidate.merge_base_sha, branch: t.candidate.branch, files: t.candidate.files, diff_sha256: t.candidate.diff_sha256, attempt: t.candidate.attempt, recorded_at: t.candidate.recorded_at } : null,
     verification: t.verification ? { head_sha: t.verification.head_sha, command: t.verification.command, exit_code: t.verification.exit_code, total: t.verification.total, passed: t.verification.passed, failed: t.verification.failed, ok: t.verification.ok, acceptance: t.verification.acceptance.map((a) => ({ index: a.index, met: a.met })), recorded_at: t.verification.recorded_at, reported_by: 'worker', ci: ciOf(t.verification) } : null,
     review,
@@ -537,6 +553,7 @@ function reopenTask(ws, who, id, opts = {}) {
   const r = mutate(ws, { taskId: id, type: 'reopen', now }, (t, ctx) => {
     if (t.status !== 'blocked') fail('NOT_BLOCKED', `${id} is ${t.status}, not blocked.`);
     t.attempts.max = t.attempts.count + P.MAX_ATTEMPTS;
+    t.attempts.rebuilds_max = (t.attempts.rebuilds || 0) + P.MAX_REBUILDS;
     t.attempts.last_failure_sha256 = null;
     setStatus(t, t.admission && t.admission.state === 'confirmed' ? 'queued' : 'admitted', 'reopened by Eric', now);
     ctx.emit('reopened', { attempts_max: t.attempts.max }, { kind: 'owner' });
@@ -596,6 +613,18 @@ const REMOTE_ACTIONS = { push_admission: (t) => `refs/heads/claude/admission-${t
 function diffFiles(diff) {
   const out = new Set();
   for (const m of String(diff).matchAll(/^diff --git a\/(\S+) b\/(\S+)$/gm)) { out.add(m[1]); out.add(m[2]); }
+  return out;
+}
+// Files the diff leaves as a symbolic link (120000) or a submodule (160000).
+function linkModes(diff) {
+  const out = [];
+  let file = null;
+  for (const line of String(diff).split('\n')) {
+    const h = /^diff --git a\/(\S+) b\/(\S+)$/.exec(line);
+    if (h) { file = h[2]; continue; }
+    const m = /^(?:new file mode|new mode|index [0-9a-f]+\.\.[0-9a-f]+) (120000|160000)$/.exec(line);
+    if (m && file) out.push({ file, mode: m[1] });
+  }
   return out;
 }
 
@@ -743,10 +772,12 @@ function recordEvent(ws, who, args = {}, opts = {}) {
           if (why) problems.push(`${f} is protected (${why})`);
           else if (!P.matches(f, content.scope.paths)) problems.push(`${f} is outside the task's scope (${content.scope.paths.join(', ')})`);
         }
+        // A symbolic link or a submodule is never a candidate's (review N3).
+        for (const l of linkModes(diff)) problems.push(`${l.file} is ${l.mode === '120000' ? 'a symbolic link' : 'a submodule'} (mode ${l.mode}), which a candidate never carries`);
         if (t.authorization.kind === 'policy') {
           const p = ctx.op.readJson(rel.policy(t.authorization.policy_id), null);
           if (p && files.length > p.limits.max_files) problems.push(`${files.length} files is over the delegation's ${p.limits.max_files}`);
-          for (const f of files) { const core = P.restrictedWhy(f); if (core) problems.push(`${f} is in dashboard/core/ (${core})`); }
+          for (const f of files) { const hit = P.restrictedHit(f); if (hit) problems.push(`${f} is in ${P.restrictedWhere(hit)} (${hit.why})`); }
         }
         if (problems.length) fail('SCOPE', `Candidate refused: ${problems.join('; ')}. Nothing was recorded; change the branch to stay inside the approved scope.`);
         if (!rebuild && t.attempts.count >= t.attempts.max) {
@@ -756,9 +787,20 @@ function recordEvent(ws, who, args = {}, opts = {}) {
           reply = { blocked: true };
           break;
         }
+        // Rebuilds have their own ceiling (review N8): each one needs a fresh
+        // verification and review, and the loop stops for Eric at the limit.
+        const rebuildsMax = t.attempts.rebuilds_max || P.MAX_REBUILDS;
+        if (rebuild && (t.attempts.rebuilds || 0) >= rebuildsMax) {
+          setStatus(t, 'blocked', `the rebuild ceiling of ${rebuildsMax} rebuilds is reached`, now);
+          t.lease = null;
+          ctx.emit('blocked', { reason: 'rebuild_ceiling', rebuilds: t.attempts.rebuilds || 0 }, by);
+          reply = { blocked: true };
+          break;
+        }
         const dsha = P.sha256(diff);
         ctx.op.write(rel.artifact(id, dsha), diff);
         if (!rebuild) t.attempts.count += 1;
+        else t.attempts.rebuilds = (t.attempts.rebuilds || 0) + 1;
         for (const c of t.corrections) if (!c.resolved_by_head) c.resolved_by_head = head;
         t.candidate = { head_sha: head, base_sha: base, merge_base_sha: mb, branch: args.branch, files, diff_sha256: dsha, diff_bytes: Buffer.byteLength(diff), generation: lease.generation, attempt: t.attempts.count, rebuild, recorded_at: iso(now) };
         t.candidates.push({ head_sha: head, merge_base_sha: mb, diff_sha256: dsha, attempt: t.attempts.count, rebuild, recorded_at: iso(now) });
@@ -870,16 +912,22 @@ function saveReview(ws, who, args = {}, opts = {}) {
     if (TERMINAL.includes(t.status)) fail('WRONG_STATE', `${t.task_id} is ${t.status}.`);
     const v = loadVersion(ws, t.task_id, t.current_version, ctx.op);
     const fsha = P.sha256(P.canonical({ result, findings }));
-    const dup = t.reviews.find((x) => x.head_sha === c.head_sha && x.reviewer.kind === reviewer.kind && x.reviewer.conn === reviewer.conn && x.findings_sha256 === fsha);
+    const limited = !(read.diff && read.tests);
+    // The same review again is unchanged; a full read after a limited one is
+    // a new review, since only it can decide (review N4).
+    const dup = t.reviews.find((x) => x.head_sha === c.head_sha && x.reviewer.kind === reviewer.kind && x.reviewer.conn === reviewer.conn && x.findings_sha256 === fsha && Boolean(x.limited) === limited);
     if (dup) { out = { review_id: dup.review_id, unchanged: true }; return out; }
     const rid = `rev-${ymd(now)}-${rnd(3)}`;
     const need = requiredReview(t);
     const assigned = reviewer.kind === 'owner' || reviewer.kind === need || v.content.reviews_requested.includes(reviewer.kind);
-    const limited = !(read.diff && read.tests);
-    ctx.op.writeJson(rel.review(t.task_id, rid), { schema_version: S.review, review_id: rid, task_id: t.task_id, version: t.current_version, head_sha: c.head_sha, merge_base_sha: c.merge_base_sha, diff_sha256: c.diff_sha256, result, findings, method: args.method ? String(args.method).slice(0, 300) : null, read, limited, summary: args.summary ? String(args.summary).slice(0, 2000) : null, reviewer, assigned, at: iso(now) }, { mode: 'create' });
-    t.reviews.push({ review_id: rid, head_sha: c.head_sha, merge_base_sha: c.merge_base_sha, result, reviewer, assigned, limited, findings_sha256: fsha, at: iso(now) });
-    ctx.emit('review_saved', { review_id: rid, result, reviewer: reviewer.kind, head_sha: c.head_sha, assigned, limited }, byOf(who));
-    const deciding = reviewer.kind === 'owner' || reviewer.kind === need;
+    // Whether this connection wrote the task (its creator or any version's).
+    const authors = new Set([t.created_by && t.created_by.conn, ...t.versions.map((x) => { const vv = loadVersion(ws, t.task_id, x.version, ctx.op); return vv && vv.created_by ? vv.created_by.conn : null; })].filter(Boolean));
+    const sameAuthor = reviewer.kind !== 'owner' && authors.has(reviewer.conn);
+    ctx.op.writeJson(rel.review(t.task_id, rid), { schema_version: S.review, review_id: rid, task_id: t.task_id, version: t.current_version, head_sha: c.head_sha, merge_base_sha: c.merge_base_sha, diff_sha256: c.diff_sha256, result, findings, method: args.method ? String(args.method).slice(0, 300) : null, read, limited, same_author: sameAuthor, summary: args.summary ? String(args.summary).slice(0, 2000) : null, reviewer, assigned, at: iso(now) }, { mode: 'create' });
+    const entry = { review_id: rid, head_sha: c.head_sha, merge_base_sha: c.merge_base_sha, result, reviewer, assigned, limited, same_author: sameAuthor, findings_sha256: fsha, at: iso(now) };
+    t.reviews.push(entry);
+    ctx.emit('review_saved', { review_id: rid, result, reviewer: reviewer.kind, head_sha: c.head_sha, assigned, limited, same_author: sameAuthor }, byOf(who));
+    const deciding = decides(t, entry, need);
     if (deciding && result === 'changes_required' && ['review_pending', 'ready_for_promotion', 'verifying'].includes(t.status)) {
       const cid = `cor-${ymd(now)}-${rnd(3)}`;
       t.corrections.push({ correction_id: cid, at: iso(now), by: reviewer, head_sha: c.head_sha, review_id: rid, resolved_by_head: null });
@@ -889,12 +937,13 @@ function saveReview(ws, who, args = {}, opts = {}) {
     } else if (deciding && result === 'pass' && t.status === 'review_pending' && t.verification && t.verification.ok && t.verification.head_sha === c.head_sha) {
       setStatus(t, 'ready_for_promotion', null, now);
     }
-    out = { review_id: rid, unchanged: false, counts_for_requirement: deciding, assigned, limited };
+    out = { review_id: rid, unchanged: false, counts_for_requirement: deciding, assigned, limited, same_author: sameAuthor };
     return out;
   });
   const t = readRaw(ws, rel.task(String(args.task_id)));
   const rs = reviewState(t);
-  return { task_id: t.task_id, ...out, status: t.status, review: rs, verified: r.verified, says: out.unchanged ? 'The same review was already saved; nothing changed.' : `Saved review ${out.review_id} (${result}) of head ${t.candidate.head_sha.slice(0, 12)}${out.counts_for_requirement ? '' : `; it does not decide this task (the requirement is ${rs.required})`}${out.limited ? '; marked limited: it did not read both the diff and the test evidence' : ''}. ${nextAction(t, now)}` };
+  const ownWords = out.same_author && rs.required !== 'none' && !docsOnly(t.candidate) ? '; it comes from the connection that wrote the task, and a change beyond documents is decided by another reviewer connection or by Eric' : '';
+  return { task_id: t.task_id, ...out, status: t.status, review: rs, verified: r.verified, says: out.unchanged ? 'The same review was already saved; nothing changed.' : `Saved review ${out.review_id} (${result}) of head ${t.candidate.head_sha.slice(0, 12)}${out.counts_for_requirement ? '' : `; it does not decide this task (the requirement is ${rs.required})`}${out.limited ? `; marked limited: it did not read both the diff and the test evidence${reviewer.kind === 'owner' ? '' : ', so it never decides'}` : ''}${ownWords}. ${nextAction(t, now)}` };
 }
 
 function requestCorrection(ws, who, args = {}, opts = {}) {

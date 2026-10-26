@@ -37,8 +37,9 @@ const projects = require('./core/projects');
 const research = require('./core/research');
 const portfolio = require('./core/portfolio');
 const market = require('./core/market');
+// The protocol versions and log redaction both connectors share (mcp-wire.js).
+const { PROTOCOL_VERSIONS, redactLog } = require('./mcp-wire');
 
-const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26'];
 const MAX_BODY = 4 * 1024 * 1024;
 const RECENT_REPORT_HOURS = 24;
 // An open run another model started is joined only while its dated context is fresh.
@@ -61,18 +62,10 @@ const CONNECT_WHERE = {
 
 // Diagnostic log lines say where a handoff got to, never what it carried:
 // no token, credential, address or report text. Addresses are shortened and
-// anything shaped like a token is replaced (redactLog). Each HTTP request
+// anything shaped like a token is replaced (redactLog, mcp-wire.js). Each HTTP request
 // gets a reference (ref), shown in an error the assistant receives too, and
 // each connection a short key (conn) derived from its grant, so one session's
 // calls can be followed in the log.
-function redactLog(s) {
-  return String(s)
-    .replace(/\b(Bearer|Basic)\s+\S+/gi, '$1 [redacted]')
-    .replace(/\b0x([0-9a-fA-F]{4})[0-9a-fA-F]{32}([0-9a-fA-F]{4})\b/g, '0x$1…$2')
-    .replace(/\b(bc1|tb1)[02-9ac-hj-np-z]{25,62}\b/gi, '$1…')
-    // Tokens and base58 addresses: long, with upper case, lower case and digits.
-    .replace(/[A-Za-z0-9_-]{32,}/g, (m) => (/[A-Z]/.test(m) && /[a-z]/.test(m) && /\d/.test(m) ? '[redacted]' : m));
-}
 const newRef = () => `m${require('crypto').randomBytes(5).toString('hex')}`;
 const connKey = (who) => (who && who.grant_id ? sha256(String(who.grant_id)).slice(0, 8) : 'none');
 

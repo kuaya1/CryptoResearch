@@ -250,3 +250,38 @@ test('N9: the scope gate reads paths as Windows does: letter case, collisions, s
   assert.equal(P.foldPath('.Claude/Settings.json.'), '.claude/settings.json');
   assert.equal(P.protectedHit('Dashboard/Engineering/inbox.js').why, 'engineering authorization (the inbox, delegations and their connector)');
 });
+
+// Review N3 (2026-10-26): a symbolic link can point a served file anywhere on
+// the host, and a submodule pulls in code from elsewhere. A branch that adds
+// either waits for Eric, whatever path it is at; removing one does not.
+test('N3: the scope gate holds a symbolic link or a submodule; removing one is not held', (t) => {
+  const f = fixture(t);
+  const blob = (text) => { const r = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: f.work, input: text, encoding: 'utf8', env: ENV }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  // Built in the index: Git records the mode, nothing is linked on disk.
+  let n = 0;
+  const scope = (base, entries, { remove = [] } = {}) => {
+    g(f.work, 'checkout', '-q', '-f', '-B', `claude/backlog-n3-${n++}`, base);
+    for (const p of remove) g(f.work, 'rm', '-q', '--cached', p);
+    for (const [mode, oid, p] of entries) g(f.work, 'update-index', '--add', '--cacheinfo', `${mode},${oid},${p}`);
+    g(f.work, 'commit', '-qm', 'backlog: item 1\n\nBacklog-Item: 1');
+    const head = g(f.work, 'rev-parse', 'HEAD');
+    g(f.work, 'checkout', '-q', '-f', base);
+    return P.scopeCheck(f.work, { base, head });
+  };
+  const base = f.mainSha();
+  const link = scope(base, [['120000', blob('fictional-target.txt'), 'dashboard/public/views/linked.css']]);
+  assert.equal(link.ok, false);
+  assert.deepEqual(link.reasons, ['dashboard/public/views/linked.css: a symbolic link (mode 120000), which a branch never adds without Eric']);
+  const sub = scope(base, [['160000', 'a'.repeat(40), 'vendor/tool']]);
+  assert.equal(sub.ok, false);
+  assert.deepEqual(sub.reasons, ['vendor/tool: a submodule (mode 160000), which a branch never adds without Eric']);
+  assert.deepEqual(scope(base, [['100644', blob('export default 1;\n'), 'dashboard/public/views/fine.js']]).reasons, [], 'a regular file');
+  // A link already on main: changing it is held, removing it is not.
+  g(f.work, 'checkout', '-q', '-f', '-B', 'main', base);
+  g(f.work, 'update-index', '--add', '--cacheinfo', `120000,${blob('elsewhere')},docs/old-link`);
+  g(f.work, 'commit', '-qm', 'a link on main (FICTIONAL)');
+  g(f.work, 'push', '-q', 'origin', 'main');
+  const base2 = f.mainSha();
+  assert.deepEqual(scope(base2, [['120000', blob('somewhere-else'), 'docs/old-link']]).reasons, ['docs/old-link: a symbolic link (mode 120000), which a branch never adds without Eric']);
+  assert.deepEqual(scope(base2, [], { remove: ['docs/old-link'] }).reasons, [], 'a link removed');
+});

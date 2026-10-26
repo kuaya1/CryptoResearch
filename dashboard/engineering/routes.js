@@ -91,7 +91,10 @@ function makeEngineeringRoutes(ws, { oauth = null, auth = null, origins = new Se
     route('POST', '/api/engineering/tasks/([^/]+)/resume', (m) => eng(() => saved(inbox.resumeTask(ws, OWNER, engTask(m[1])))));
     route('POST', '/api/engineering/tasks/([^/]+)/cancel', (m, req, res, body) => eng(() => saved(inbox.cancelTask(ws, OWNER, engTask(m[1]), { reason: body.reason || null }))));
     route('POST', '/api/engineering/tasks/([^/]+)/reopen', (m) => eng(() => saved(inbox.reopenTask(ws, OWNER, engTask(m[1])))));
-    route('POST', '/api/engineering/tasks/([^/]+)/review', (m, req, res, body) => eng(() => {
+    // Eric's own review decides any requirement, so it takes his passphrase
+    // too (review N3): code running in his signed-in page cannot pass it.
+    route('POST', '/api/engineering/tasks/([^/]+)/review', (m, req, res, body) => eng(async () => {
+      await passphrase(req, body);
       const { password, ...args } = body || {};
       return saved(inbox.saveReview(ws, OWNER, { ...args, task_id: engTask(m[1]) }));
     }));

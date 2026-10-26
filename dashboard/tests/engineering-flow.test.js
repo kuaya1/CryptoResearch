@@ -23,6 +23,9 @@ const T0 = Date.parse('2026-10-25T12:00:00Z');
 const o = (dt = 0) => ({ now: T0 + dt });
 const OWNER = { kind: 'owner' };
 const CHAT = { kind: 'connection', assistant: 'chatgpt', role: 'submitter', grant_id: 'grant-chat-fictional' };
+// A second ChatGPT connection that reviews: beyond documents, the connection
+// that wrote a task never decides its review (review N4, 2026-10-26).
+const CHAT_REV = { kind: 'connection', assistant: 'chatgpt', role: 'reviewer', grant_id: 'grant-chat-review-fictional' };
 const W1 = { kind: 'connection', assistant: 'claude', role: 'worker', grant_id: 'grant-worker-1' };
 const DESK_URL = 'https://desk.test';
 const IDENT = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' };
@@ -317,16 +320,25 @@ test('promotion asks the desk about this exact head: unknown, unverified, paused
   // A non-engineering branch is not asked about.
   const plain = await BP.engineeringCheck(f.work, { base, head, branch: 'claude/backlog-batch-x', scope: { ...scope, items: [1] }, desk: null, fetchJson: deskOf(ws) });
   assert.equal(plain.engineering, false);
+  // Review N7: an engineering branch carries exactly one engineering item; an
+  // ordinary item, or none, on one is held, whatever its letter case.
+  for (const [branch, items, named] of [[`claude/backlog-eng-${a.number}`, [1], 'item 1, which is not an engineering item'], ['Claude/Backlog-Eng-7', [1, 2], 'items 1, 2, which are not engineering items'], ['claude/backlog-eng-x', [], 'no item']]) {
+    const wrong = await BP.engineeringCheck(f.work, { base, head, branch, scope: { ...scope, items }, desk: DESK_URL, fetchJson: deskOf(ws) });
+    assert.equal(wrong.engineering, true, branch);
+    assert.equal(wrong.ok, false, branch);
+    assert.deepEqual(wrong.reasons, [`${branch} is an engineering branch, which carries exactly one engineering item; it names ${named}. Ordinary items go on another claude/backlog- branch`]);
+    assert.match(BP.summaryOf('engineering', { ...wrong, branch }), /engineering branch/i);
+  }
 });
 
 test('both delegations active: application work declared with no review is promoted only after the ChatGPT review its delegation requires', async (t) => {
   const f = fixture(t);
   const { ws, cleanup } = tempWorkspace('engflow-match'); t.after(cleanup);
-  I.activatePolicy(ws, OWNER, { template: 'eng-app@2', goal_id: 'desk-polish', goal: 'Polish the desk (FICTIONAL)' }, o());
+  I.activatePolicy(ws, OWNER, { template: 'eng-app@3', goal_id: 'desk-polish', goal: 'Polish the desk (FICTIONAL)' }, o());
   I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o(1));
-  const file = 'dashboard/web/src/shell/Fictional.jsx';
+  const file = 'dashboard/public/views/fictional.js';
   const p = I.prepareTask(ws, CHAT, { ...docsTask('Fictional panel (FICTIONAL)', file), goal_id: 'desk-polish', required_review: 'none' }, o());
-  assert.equal(p.match.delegation.template, 'eng-app@2');
+  assert.equal(p.match.delegation.template, 'eng-app@3');
   const s = I.submitTask(ws, CHAT, { task_id: p.task_id, version: 1, content_sha256: p.content_sha256 }, o());
   assert.equal(s.status, 'admitted', s.says);
   const id = p.task_id;
@@ -354,7 +366,12 @@ test('both delegations active: application work declared with no review is promo
   assert.equal(held.ok, false);
   assert.equal(held.attestation.required_review, 'chatgpt');
   assert.match(held.reasons.join(' '), /desk: the required chatgpt review has not passed on this head/);
-  I.saveReview(ws, CHAT, { task_id: id, head_sha: head, merge_base_sha: ev.merge_base_sha, result: 'pass', read: { diff: true, tests: true, acceptance: true } }, o());
+  // The submitting connection's own pass does not decide application work.
+  const own = I.saveReview(ws, CHAT, { task_id: id, head_sha: head, merge_base_sha: ev.merge_base_sha, result: 'pass', read: { diff: true, tests: true, acceptance: true } }, o());
+  assert.equal(own.counts_for_requirement, false);
+  assert.equal(own.same_author, true);
+  assert.equal((await check()).ok, false);
+  I.saveReview(ws, CHAT_REV, { task_id: id, head_sha: head, merge_base_sha: ev.merge_base_sha, result: 'pass', read: { diff: true, tests: true, acceptance: true } }, o());
   const ok = await check();
   assert.equal(ok.ok, true, ok.reasons.join('; '));
   assert.equal(ok.attestation.review_state, 'pass');
@@ -546,11 +563,11 @@ test('a review covers one head on one base: when main moves the candidate is reb
 test('a delegated branch whose diff touches dashboard/core/ is held at promotion, even when its declared paths did not name it', async (t) => {
   const f = fixture(t);
   const { ws, cleanup } = tempWorkspace('engflow-core'); t.after(cleanup);
-  const pol = I.activatePolicy(ws, OWNER, { template: 'eng-app@2', goal_id: 'desk-polish', goal: 'Polish the desk (FICTIONAL)' }, o()).policy;
-  const task = { title: 'Panel polish (FICTIONAL)', intent: 'implement', goal_id: 'desk-polish', outcome: 'The panel reads more clearly (FICTIONAL).', scope: { paths: ['dashboard/web/src/**'] }, acceptance: ['the panel names each state'] };
+  const pol = I.activatePolicy(ws, OWNER, { template: 'eng-app@3', goal_id: 'desk-polish', goal: 'Polish the desk (FICTIONAL)' }, o()).policy;
+  const task = { title: 'Panel polish (FICTIONAL)', intent: 'implement', goal_id: 'desk-polish', outcome: 'The panel reads more clearly (FICTIONAL).', scope: { paths: ['dashboard/public/views/**'] }, acceptance: ['the panel names each state'] };
   const { id, number, token } = await confirmed(f, ws, task);
-  const built = build(f, number, { 'dashboard/web/src/shell/Panel.jsx': 'export default 1;\n', 'dashboard/core/lib.txt': 'changed by the panel task\n' });
-  assert.deepEqual(built.ev.files, ['dashboard/core/lib.txt', 'dashboard/web/src/shell/Panel.jsx']);
+  const built = build(f, number, { 'dashboard/public/views/panel.js': 'export default 1;\n', 'dashboard/core/lib.txt': 'changed by the panel task\n' });
+  assert.deepEqual(built.ev.files, ['dashboard/core/lib.txt', 'dashboard/public/views/panel.js']);
   // The desk refuses the candidate outright.
   let refused = null;
   try { recordBuilt(ws, id, number, token, built); } catch (e) { refused = e; }
@@ -559,13 +576,13 @@ test('a delegated branch whose diff touches dashboard/core/ is held at promotion
   // And were a desk to answer "promotable" with a wide scope, promotion holds it.
   const base = f.mainSha();
   const real = BP.candidateDiff(f.work, base, built.head);
-  const forged = { task_id: id, number, version: 1, promotable: true, reasons: [], merge_base_sha: base, required_review: 'none', review_state: 'not_required', diff_sha256: real.diff_sha256, files: real.files, allowed_paths: ['dashboard/**'], delegation: { policy_id: pol.policy_id, template: 'eng-app@2' } };
+  const forged = { task_id: id, number, version: 1, promotable: true, reasons: [], merge_base_sha: base, required_review: 'none', review_state: 'not_required', diff_sha256: real.diff_sha256, files: real.files, allowed_paths: ['dashboard/**'], delegation: { policy_id: pol.policy_id, template: 'eng-app@3' } };
   const answer = (att) => async () => ({ status: 200, json: att });
   const scope = BP.scopeCheck(f.work, { base, head: built.head });
   assert.deepEqual(scope.reasons, [], 'dashboard/core/lib.txt is not itself a protected path');
   const held = await BP.engineeringCheck(f.work, { base, head: built.head, branch: `claude/backlog-eng-${number}`, scope, desk: DESK_URL, fetchJson: answer(forged) });
   assert.equal(held.ok, false);
-  assert.deepEqual(held.reasons, [`dashboard/core/lib.txt: core financial and investment logic, which no delegation changes; this item was admitted by delegation ${pol.policy_id} (eng-app@2), so it waits for Eric`]);
+  assert.deepEqual(held.reasons, [`dashboard/core/lib.txt: core financial and investment logic, which no delegation changes; this item was admitted by delegation ${pol.policy_id} (eng-app@3), so it waits for Eric`]);
   // The same diff under Eric's own authorization of that version passes.
   const owner = await BP.engineeringCheck(f.work, { base, head: built.head, branch: `claude/backlog-eng-${number}`, scope, desk: DESK_URL, fetchJson: answer({ ...forged, delegation: null }) });
   assert.equal(owner.ok, true, owner.reasons.join(' '));
@@ -576,7 +593,7 @@ test('a delegated branch whose diff touches dashboard/core/ is held at promotion
 // auto-merging, and only a change to a line naming engineering waits for Eric.
 test('promotion holds a branch that changes the engineering routes or their mount; other server changes still merge', (t) => {
   const f = fixture(t);
-  const SERVER = "const a = 1;\n// The engineering routes (dashboard/engineering/routes.js); this file only mounts them.\nconst engineering = require('./engineering/routes').makeEngineeringRoutes(ws, {});\nconst b = 2;\nengineering.mount(route);\n";
+  const SERVER = "const a = 1;\nconst { openFrontDoor } = require('./frontdoor');\n// The engineering routes (dashboard/engineering/routes.js); this file only mounts them.\nconst engineering = require('./engineering/routes').makeEngineeringRoutes(ws, {});\nconst b = 2;\nengineering.mount(route);\n";
   f.onMain('dashboard/server.js', SERVER, 'server (FICTIONAL)');
   f.onMain('dashboard/engineering/routes.js', 'module.exports = {};\n', 'routes (FICTIONAL)');
   const branch = (name, files) => {
@@ -586,11 +603,13 @@ test('promotion holds a branch that changes the engineering routes or their moun
     g(f.work, 'add', '-A'); g(f.work, 'commit', '-qm', `change (FICTIONAL)\n\nBacklog-Item: 1`);
     return BP.scopeCheck(f.work, { base: f.mainSha(), head: g(f.work, 'rev-parse', 'HEAD') });
   };
-  const MOUNT = 'dashboard/server.js: the mount of the engineering routes (dashboard/engineering/routes.js)';
+  const MOUNT = 'dashboard/server.js: the mount of the engineering routes or the front door (dashboard/engineering/routes.js, dashboard/frontdoor.js)';
   assert.deepEqual(branch('claude/backlog-batch-plain', { 'dashboard/server.js': SERVER.replace('const a = 1;', 'const a = 3;').replace('const b = 2;', 'const b = 4;') }).reasons, [], 'an ordinary server change');
   assert.deepEqual(branch('claude/backlog-batch-mount', { 'dashboard/server.js': SERVER.replace("'./engineering/routes'", "'./engineering/routes-other'") }).reasons, [MOUNT]);
   assert.deepEqual(branch('claude/backlog-batch-unmount', { 'dashboard/server.js': SERVER.replace('engineering.mount(route);\n', '') }).reasons, [MOUNT]);
   assert.deepEqual(branch('claude/backlog-batch-shadow', { 'dashboard/server.js': SERVER.replace('const b = 2;', "const b = 2;\nroute('POST', '/api/engineering/tasks/x/authorize', () => ({}));") }).reasons, [MOUNT], 'a new route under /api/engineering');
   assert.deepEqual(branch('claude/backlog-batch-rm', { 'dashboard/server.js': null }).reasons, [MOUNT]);
+  assert.deepEqual(branch('claude/backlog-batch-door', { 'dashboard/server.js': SERVER.replace("const { openFrontDoor } = require('./frontdoor');\n", '') }).reasons, [MOUNT], 'the front door no longer opened');
+  assert.deepEqual(branch('claude/backlog-batch-frontdoor', { 'dashboard/frontdoor.js': 'module.exports = {};\n' }).reasons, ['dashboard/frontdoor.js: the front door (everything a request meets before sign-in)']);
   assert.deepEqual(branch('claude/backlog-batch-routes', { 'dashboard/engineering/routes.js': 'module.exports = { open: true };\n' }).reasons, ['dashboard/engineering/routes.js: engineering authorization (the inbox, delegations and their connector)']);
 });
