@@ -2,7 +2,8 @@
 // 2026-10-25; audits/2026-10-25-connected-engineering): Eric's own decisions
 // on the engineering inbox. Pausing everything, activating or revoking a
 // delegation, and authorizing, pausing, resuming, cancelling or reopening one
-// task, each its own button. On the online desk activating a delegation and
+// task, or checking its admission commit on GitHub (2026-10-26), each its own
+// button. On the online desk activating a delegation and
 // authorizing a task take the passphrase again. Opening it reads
 // GET /api/engineering and writes nothing.
 import { useEffect, useState } from 'react';
@@ -149,6 +150,12 @@ export default function Engineering({ hosted }) {
                 <strong>{t.title}</strong> · {STATUS_WORDS[t.status] || t.status}{t.admission && t.admission.number ? ` · item ${t.admission.number}` : ''} · v{t.version} <code title={t.content_sha256}>{t.content_sha256.slice(0, 12)}</code>
                 {t.status_reason ? <div className="l2-note">{t.status_reason}</div> : null}
                 {t.verification ? <div className="l2-note" title="The worker's own test run; the desk reads GitHub's check runs on the same head separately.">Tests {t.verification.passed ?? '—'} of {t.verification.total ?? '—'} passed, reported by the worker · {CI_WORDS[t.verification.ci && t.verification.ci.state] || 'CI not read yet'}</div> : null}
+                {t.admission && t.admission.state === 'confirmed' && t.admission.confirmed_main_sha ? (
+                  <div className="l2-note" data-key={`eng-admission-${t.task_id}`} title={t.admission.main_sha_verified ? 'GitHub showed this item\'s entry on main at this commit.' : 'Recorded from the worker\'s report; the desk has not checked it on GitHub.'}>
+                    Admission commit <code title={t.admission.confirmed_main_sha}>{t.admission.confirmed_main_sha.slice(0, 12)}</code> · {t.admission.main_sha_verified ? 'checked on GitHub' : 'not checked on GitHub'}
+                    {t.admission.corrections && t.admission.corrections.length ? <> · corrected from <code title={t.admission.corrections[t.admission.corrections.length - 1].from || ''}>{String(t.admission.corrections[t.admission.corrections.length - 1].from || '—').slice(0, 12)}</code></> : null}
+                  </div>
+                ) : null}
                 {t.content ? (
                   <details className="eng-version" open={t.status === 'awaiting_authorization'} data-key={`eng-version-${t.task_id}`}>
                     <summary>Version {t.version}: {t.status === 'awaiting_authorization' ? 'what you are authorizing' : 'what it holds'}</summary>
@@ -159,6 +166,7 @@ export default function Engineering({ hosted }) {
                   {t.status === 'awaiting_authorization' ? <button type="button" className="btn btn-primary btn-sm" disabled={busy === t.task_id || needPass} data-key={`eng-authorize-${t.task_id}`} onClick={() => decide(t.task_id, `/api/engineering/tasks/${t.task_id}/authorize`, { version: t.version, content_sha256: t.content_sha256, password: pass }, 'Authorized')}>Authorize version {t.version}</button> : null}
                   {!['paused', 'merged', 'cancelled', 'superseded'].includes(t.status) ? <button type="button" className="btn btn-sm" disabled={busy === t.task_id} data-key={`eng-pause-${t.task_id}`} onClick={() => decide(t.task_id, `/api/engineering/tasks/${t.task_id}/pause`, { reason: 'paused by Eric' }, 'Paused')}>Pause</button> : null}
                   {t.status === 'paused' ? <button type="button" className="btn btn-sm" disabled={busy === t.task_id} data-key={`eng-resume-${t.task_id}`} onClick={() => decide(t.task_id, `/api/engineering/tasks/${t.task_id}/resume`, {}, 'Resumed')}>Resume</button> : null}
+                  {t.admission && t.admission.state === 'confirmed' && t.admission.main_sha_verified !== true ? <button type="button" className="btn btn-sm" disabled={busy === t.task_id} data-key={`eng-recheck-${t.task_id}`} title="Asks GitHub whether main holds this item's entry at the recorded commit, and corrects the record only to a commit GitHub shows holding it." onClick={() => decide(t.task_id, `/api/engineering/tasks/${t.task_id}/admission/recheck`, {}, 'Checked on GitHub')}>Check admission on GitHub</button> : null}
                   {t.status === 'blocked' ? <button type="button" className="btn btn-sm" disabled={busy === t.task_id} data-key={`eng-reopen-${t.task_id}`} onClick={() => decide(t.task_id, `/api/engineering/tasks/${t.task_id}/reopen`, {}, 'Reopened with three more attempts')}>Reopen</button> : null}
                   {!['merged', 'cancelled', 'superseded'].includes(t.status) ? <button type="button" className="btn btn-ghost btn-sm" disabled={busy === t.task_id} data-key={`eng-cancel-${t.task_id}`} onClick={() => { if (window.confirm(`Cancel ${t.title}? Its backlog number is released; nothing already merged changes.`)) decide(t.task_id, `/api/engineering/tasks/${t.task_id}/cancel`, { reason: 'cancelled by Eric' }, 'Cancelled'); }}>Cancel</button> : null}
                 </div>

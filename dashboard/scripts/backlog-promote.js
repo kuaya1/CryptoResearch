@@ -138,6 +138,19 @@ const revParse = (cwd, ref) => { const r = git(cwd, ['rev-parse', '--verify', '-
 // 2026-10-25): its line names the private task, its version and a hash prefix.
 const ENG_MARK_RE = /\*\(engineering task (eng-\d{8}-[0-9a-f]{6}) v(\d+), sha256 ([0-9a-f]{16})/;
 
+// One engineering item as a backlog text holds it: its line and its own
+// detail lines, byte for byte, and its number; null when the task is not
+// there. The worker's admission check and the desk's proof on GitHub read an
+// entry the same way (2026-10-26).
+function engEntryOf(text, taskId) {
+  const lines = String(text || '').split('\n');
+  const at = lines.findIndex((l) => { const m = ENG_MARK_RE.exec(l); return m && m[1] === taskId; });
+  if (at < 0) return null;
+  let end = at + 1;
+  while (end < lines.length && lines[end].startsWith('  ')) end += 1;
+  return { entry: `${lines.slice(at, end).join('\n')}\n`, number: Number((/^- \[[ x]\] \*\*(\d+)\./.exec(lines[at]) || [])[1]) };
+}
+
 // The items main's backlog holds: number -> { ticked, eric, engineering }.
 function backlogItems(text) {
   const out = new Map();
@@ -599,11 +612,21 @@ function emit(kind, result, flat) {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
+// --base and --head given as a short SHA, a branch or a tag name the commit
+// git rev-parse --verify resolves them to here (2026-10-26); one that names
+// nothing is left as given, and every check still takes full SHAs only (the
+// workflows pass them).
+function resolveRevs(cwd, flags) {
+  for (const k of ['base', 'head']) if (flags[k] && !SHA_RE.test(flags[k]) && /^[A-Za-z0-9][\w./-]*$/.test(flags[k])) flags[k] = revParse(cwd, flags[k]) || flags[k];
+  return flags;
+}
+
 async function main(argv, { fetchJson = defaultFetchJson } = {}) {
   const [kind, ...rest] = argv;
   const flags = {};
   for (let i = 0; i < rest.length; i += 2) flags[rest[i].replace(/^--/, '')] = rest[i + 1];
   const cwd = process.cwd();
+  resolveRevs(cwd, flags);
   const desk = flags.desk || process.env.DESK_URL || null;
   if (kind === 'scope') {
     const r = scopeCheck(cwd, { base: flags.base, head: flags.head });
@@ -650,4 +673,4 @@ async function main(argv, { fetchJson = defaultFetchJson } = {}) {
 
 if (require.main === module) main(process.argv.slice(2)).then((c) => { process.exitCode = c; }, (err) => { process.stderr.write(`${err && err.message || err}\n`); process.exitCode = 1; });
 
-module.exports = { PROTECTED, PROTECTED_LINES, DELEGATION_RESTRICTED, restrictedFor, foldPath, protectedHit, windowsProblem, ENG_MARK_RE, backlogItems, scopeCheck, compose, promote, summaryOf, insertEntry, entryProblems, deskReason, candidateDiff, admissionDiff, admit, engineeringCheck, main };
+module.exports = { PROTECTED, PROTECTED_LINES, DELEGATION_RESTRICTED, restrictedFor, foldPath, protectedHit, windowsProblem, ENG_MARK_RE, engEntryOf, backlogItems, resolveRevs, scopeCheck, compose, promote, summaryOf, insertEntry, entryProblems, deskReason, candidateDiff, admissionDiff, admit, engineeringCheck, main };

@@ -12,7 +12,7 @@ const { OpError } = require('../core/ops');
 const inbox = require('./inbox');
 
 const OWNER = { kind: 'owner' };
-const ENG_CONFLICT = new Set(['PAUSED', 'CLAIMED', 'STALE_VERSION', 'HASH_MISMATCH', 'WRONG_STATE', 'WRONG_CANDIDATE', 'NOT_EDITABLE', 'EDIT_AFTER_ADMISSION', 'CEILING', 'NOT_CLAIMABLE', 'HELD', 'UNSUPPORTED_SCHEMA', 'NOT_REBINDABLE', 'AUTHORIZATION_HOLDS', 'MERGE_STATE_UNREAD', 'MERGE_STATE_UNKNOWN', 'NO_FIT', 'NOT_ACTIVE']);
+const ENG_CONFLICT = new Set(['PAUSED', 'CLAIMED', 'STALE_VERSION', 'HASH_MISMATCH', 'WRONG_STATE', 'WRONG_CANDIDATE', 'NOT_EDITABLE', 'EDIT_AFTER_ADMISSION', 'CEILING', 'NOT_CLAIMABLE', 'HELD', 'UNSUPPORTED_SCHEMA', 'NOT_REBINDABLE', 'AUTHORIZATION_HOLDS', 'MERGE_STATE_UNREAD', 'MERGE_STATE_UNKNOWN', 'NO_FIT', 'NOT_ACTIVE', 'GITHUB_UNKNOWN', 'NOT_ON_MAIN']);
 const PUBLIC_READ_RE = /^\/engineering\/(?:admissions\/(eng-\d{8}-[0-9a-f]{6})|attestations\/([0-9a-f]{40}))$/;
 
 // oauth and auth are null on this PC (no connector, no sign-in); HttpError
@@ -106,6 +106,22 @@ function makeEngineeringRoutes(ws, { oauth = null, auth = null, origins = new Se
     route('POST', '/api/engineering/tasks/([^/]+)/resume', (m) => eng(() => saved(inbox.resumeTask(ws, OWNER, engTask(m[1])))));
     route('POST', '/api/engineering/tasks/([^/]+)/cancel', (m, req, res, body) => eng(() => saved(inbox.cancelTask(ws, OWNER, engTask(m[1]), { reason: body.reason || null }))));
     route('POST', '/api/engineering/tasks/([^/]+)/reopen', (m) => eng(() => saved(inbox.reopenTask(ws, OWNER, engTask(m[1])))));
+    // Check a confirmed admission against GitHub (2026-10-26): the commit on
+    // record first; only when GitHub shows it does not hold the entry is
+    // main's history asked for the commit that does. It writes only what
+    // GitHub proves, so it takes no passphrase.
+    route('POST', '/api/engineering/tasks/([^/]+)/admission/recheck', (m) => eng(async () => {
+      const id = engTask(m[1]);
+      const a = inbox.admissionCheckOf(ws, id);
+      if (!github) throw new HttpError(503, 'GitHub cannot be read from here, so the admission cannot be checked. Nothing was changed.');
+      const recorded = a.confirmed_main_sha ? await github.admissionAt(a.confirmed_main_sha, id) : { state: 'no', why: 'no commit recorded' };
+      let located = null;
+      if (recorded.state === 'no' || (recorded.state === 'yes' && (recorded.main_sha !== a.confirmed_main_sha || recorded.entry_sha256 !== a.entry_sha256))) {
+        const f = await github.findAdmissionCommit({ number: a.number, task: id, version: a.version, since: a.bound_at });
+        located = f.state === 'found' ? await github.admissionAt(f.sha, id) : { state: f.state === 'none' ? 'no' : 'unknown', why: f.why };
+      }
+      return saved(inbox.recheckAdmission(ws, OWNER, id, { recorded, located }));
+    }));
     // Eric's own review decides any requirement, so it takes his passphrase
     // too (review N3): code running in his signed-in page cannot pass it.
     route('POST', '/api/engineering/tasks/([^/]+)/review', (m, req, res, body) => eng(async () => {

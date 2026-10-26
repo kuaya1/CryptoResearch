@@ -161,7 +161,9 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   assert.deepEqual(posts('shell/Engineering.jsx'), ['path']);
   assert.doesNotMatch(eng.slice(0, eng.indexOf('const decide')), /api\.post/, 'opening Engineering never writes');
   const engPaths = [...eng.matchAll(/\bdecide\([^,]+, [`'](\/[^`']+)[`']/g)].map((m) => m[1]);
-  assert.equal(engPaths.length, 8);
+  // The ninth (2026-10-26): Check admission on GitHub, which writes only what GitHub proves.
+  assert.equal(engPaths.length, 9);
+  assert.ok(engPaths.includes('/api/engineering/tasks/${t.task_id}/admission/recheck'), engPaths.join(' '));
   for (const p of engPaths) assert.match(p, /^\/api\/engineering\//);
   for (const m of eng.matchAll(/\bdecide\(/g)) assert.match(eng.slice(Math.max(0, m.index - 160), m.index), /(onClick=\{\(\) =>|onSubmit=\{\(e\) =>)[^<]*$/, 'every Engineering decision is a click or a submit');
   const agenda = files.find(([n]) => n === 'views/agenda/Agenda.jsx')[1];

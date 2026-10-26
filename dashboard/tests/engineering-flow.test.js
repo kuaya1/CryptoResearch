@@ -378,7 +378,7 @@ test('both delegations active: application work declared with no review is promo
 });
 
 test('GitHub readback that cannot be read says unknown, never a pass; a token is never in the answer', async () => {
-  const fail = makeGithub({ fetchImpl: async () => { throw new Error('ENOTFOUND'); }, revision: () => ({ commit: 'c'.repeat(40) }), env: { CR_GITHUB_TOKEN: 'fictional-github-token' } });
+  const fail = makeGithub({ fetchImpl: async () => { throw new Error('ENOTFOUND'); }, revision: () => ({ commit: 'c'.repeat(40) }), env: { CR_GITHUB_TOKEN: 'fictional-github-token' }, sleep: async () => {} });
   const r = await fail.readback({ number: 5, head_sha: 'a'.repeat(40), merge_sha: 'b'.repeat(40) });
   assert.equal(r.pull_request.state, 'unknown');
   assert.equal(r.checks_on_head.state, 'unknown');
@@ -612,4 +612,198 @@ test('promotion holds a branch that changes the engineering routes or their moun
   assert.deepEqual(branch('claude/backlog-batch-door', { 'dashboard/server.js': SERVER.replace("const { openFrontDoor } = require('./frontdoor');\n", '') }).reasons, [MOUNT], 'the front door no longer opened');
   assert.deepEqual(branch('claude/backlog-batch-frontdoor', { 'dashboard/frontdoor.js': 'module.exports = {};\n' }).reasons, ['dashboard/frontdoor.js: the front door (everything a request meets before sign-in)']);
   assert.deepEqual(branch('claude/backlog-batch-routes', { 'dashboard/engineering/routes.js': 'module.exports = { open: true };\n' }).reasons, ['dashboard/engineering/routes.js: engineering authorization (the inbox, delegations and their connector)']);
+});
+
+// --- lane resilience (2026-10-26): commits proven on GitHub, retries, the bundle step ---
+
+const reply = (status, body) => new Response(body === undefined ? '' : JSON.stringify(body), { status });
+const b64 = (s) => Buffer.from(s, 'utf8').toString('base64');
+
+test('GitHub reads are asked again after a passing failure only, and an answer is never invented', async () => {
+  const waits = [];
+  let n = 0;
+  const flaky = makeGithub({ fetchImpl: async () => { n += 1; return n < 3 ? reply(n === 1 ? 502 : 503, { message: 'busy' }) : reply(200, { sha: 'a'.repeat(40) }); }, sleep: async (ms) => { waits.push(ms); } });
+  assert.deepEqual(await flaky.commit('aaaaaaa'), { state: 'found', sha: 'a'.repeat(40) });
+  assert.equal(n, 3);
+  assert.deepEqual(waits, [1000, 2000]);
+  // Down throughout: four tries, 1 s, 2 s and 4 s apart, then unknown.
+  waits.length = 0; n = 0;
+  const down = makeGithub({ fetchImpl: async () => { n += 1; const e = new Error('connect ECONNREFUSED'); e.code = 'ECONNREFUSED'; throw e; }, sleep: async (ms) => { waits.push(ms); } });
+  const d = await down.commit('bbbbbbb');
+  assert.deepEqual([d.state, d.why, n, waits], ['unknown', 'GitHub not reachable', 4, [1000, 2000, 4000]]);
+  // A rate limit, a 404 and a timeout are not asked again.
+  const hang = async (url, { signal }) => new Promise((_, rej) => signal.addEventListener('abort', () => { const e = new Error('aborted'); e.name = 'AbortError'; rej(e); }));
+  for (const [impl, state] of [[async () => reply(403, { message: 'rate limited' }), 'unknown'], [async () => reply(404, { message: 'Not Found' }), 'none'], [hang, 'unknown']]) {
+    n = 0;
+    const once = makeGithub({ fetchImpl: async (...a) => { n += 1; return impl(...a); }, timeoutMs: 20, sleep: async () => { throw new Error('no wait expected'); } });
+    assert.equal((await once.commit('ccccccc')).state, state);
+    assert.equal(n, 1);
+  }
+  // Only a SHA or a prefix of one is asked about; a branch name moves.
+  const none = makeGithub({ fetchImpl: async () => { throw new Error('not asked'); } });
+  assert.equal((await none.commit('main')).state, 'none');
+  assert.equal((await none.admissionAt('claude/admission-x', 'eng-20261026-9c21de')).state, 'no');
+});
+
+test('admissionAt proves a commit on main holds the entry; findAdmissionCommit finds it by the workflow title', async () => {
+  const TASK = 'eng-20261026-9c21de';
+  const FULL = '72094714f88c35fb3906dd3fbfc5fdc9d2290936';
+  const OTHER = 'd'.repeat(40);
+  const entry = `- [ ] **65. Lane item (FICTIONAL).** text *(engineering task ${TASK} v1, sha256 0123456789abcdef)*\n  - detail\n`;
+  const desk = `# Desk state (FICTIONAL)\n\n## Autonomous Build Backlog\n- [ ] **1. One.** a\n${entry}\n## After the backlog\nkept\n`;
+  const asked = [];
+  const routes = (url) => {
+    const u = new URL(url);
+    asked.push(`${u.pathname}${u.search}`);
+    if (u.pathname.endsWith('/commits/7209471') || u.pathname.endsWith(`/commits/${FULL}`)) return reply(200, { sha: FULL });
+    if (/\/commits\/7209471a/.test(u.pathname)) return reply(422, { message: 'No commit found for SHA' });
+    if (u.pathname.endsWith(`/commits/${OTHER}`)) return reply(200, { sha: OTHER });
+    if (u.pathname.endsWith(`/compare/${FULL}...main`)) return reply(200, { status: 'ahead' });
+    if (u.pathname.endsWith(`/compare/${OTHER}...main`)) return reply(200, { status: 'diverged' });
+    if (u.pathname.endsWith('/contents/DESK_STATE.md') && u.searchParams.get('ref') === FULL) return reply(200, { encoding: 'base64', content: b64(desk) });
+    if (u.pathname.endsWith('/commits') && u.searchParams.get('path') === 'DESK_STATE.md') return reply(200, [
+      { sha: 'e'.repeat(40), commit: { message: 'admission: backlog item 66 for eng-20261026-aaaaaa v1' } },
+      { sha: FULL, commit: { message: `admission: backlog item 65 for ${TASK} v1\n\nAdmission-Task: ${TASK}` } },
+    ]);
+    return reply(404, { message: 'Not Found' });
+  };
+  const gh = makeGithub({ fetchImpl: async (url) => routes(url), sleep: async () => {} });
+  const yes = await gh.admissionAt('7209471', TASK);
+  assert.deepEqual([yes.state, yes.main_sha, yes.entry, yes.entry_sha256, yes.number], ['yes', FULL, entry, sha256(entry), 65]);
+  // The padded SHA item 65 was confirmed with names no commit.
+  const padded = await gh.admissionAt('7209471a1b2c3d4e5f60718293a4b5c6d7e8f901', TASK);
+  assert.equal(padded.state, 'no');
+  assert.match(padded.why, /knows no commit 7209471a1b2c/);
+  // A commit that is not on main, and one whose DESK_STATE.md lacks the task.
+  assert.match((await gh.admissionAt(OTHER, TASK)).why, /is not on main/);
+  const lacks = await gh.admissionAt('7209471', 'eng-20261026-bbbbbb');
+  assert.deepEqual([lacks.state, lacks.main_sha], ['no', FULL]);
+  const found = await gh.findAdmissionCommit({ number: 65, task: TASK, version: 1, since: '2026-10-26T15:47:00.000Z' });
+  assert.deepEqual(found, { state: 'found', sha: FULL });
+  assert.ok(asked.some((p) => p.includes('since=2026-10-26T14%3A47%3A00.000Z')), 'an hour before the binding, for clock skew');
+  assert.equal((await gh.findAdmissionCommit({ number: 65, task: TASK, version: 2 })).state, 'none');
+  const blind = makeGithub({ fetchImpl: async () => reply(503, { message: 'busy' }), sleep: async () => {} });
+  assert.equal((await blind.findAdmissionCommit({ number: 65, task: TASK, version: 1 })).state, 'unknown');
+  assert.equal((await blind.admissionAt('7209471', TASK)).state, 'unknown');
+});
+
+test('the worker resolves any revision to the commit it names, and pushes and reads evidence by it', (t) => {
+  const f = fixture(t);
+  const main = f.mainSha();
+  g(f.work, 'checkout', '-q', '-B', 'claude/candidate-eng-7', 'origin/main');
+  put(f.work, 'docs/engineering/trial.md', 'note\n');
+  g(f.work, 'add', '-A'); g(f.work, 'commit', '-qm', 'docs: note');
+  const head = g(f.work, 'rev-parse', 'HEAD');
+  g(f.work, 'tag', 'fictional-tag');
+  for (const rev of [head, head.slice(0, 7), 'HEAD', 'claude/candidate-eng-7', 'fictional-tag']) assert.equal(W.resolveRev(f.work, rev), head, rev);
+  assert.equal(W.main(['resolve', '--rev', 'origin/main'], f.work).sha, main);
+  assert.throws(() => W.resolveRev(f.work, '7209471a1b2c3d4e5f60718293a4b5c6d7e8f901'), /names no commit here/);
+  assert.throws(() => W.resolveRev(f.work, '--all'), /is a revision/);
+  assert.throws(() => W.resolveRev(f.work, 'a b'), /is a revision/);
+  const ev = W.evidence(f.work, { head: head.slice(0, 8) });
+  assert.deepEqual([ev.head_sha, ev.base_sha, ev.files], [head, main, ['docs/engineering/trial.md']]);
+  const p = W.push(f.work, { ref: 'refs/heads/claude/candidate-eng-7', sha: head.slice(0, 7), expect: null });
+  assert.deepEqual([p.sha, p.landed, p.attempts], [head, true, 1]);
+  assert.throws(() => W.push(f.work, { ref: 'refs/heads/claude/candidate-eng-7', sha: 'f'.repeat(40) }), /names no commit here/);
+});
+
+// A git remote over HTTP that answers every request with one status, in its
+// own process (git runs synchronously here), counting what it was asked.
+async function statusRemote(t, status) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-engremote-'));
+  const count = path.join(root, 'count');
+  const code = `const fs=require('fs');let n=0;require('http').createServer((q,s)=>{n+=1;fs.writeFileSync(${JSON.stringify(count)},String(n));s.writeHead(${status});s.end('busy');}).listen(0,'127.0.0.1',function(){process.stdout.write(String(this.address().port)+'\\n');});`;
+  const child = require('child_process').spawn(process.execPath, ['-e', code], { stdio: ['ignore', 'pipe', 'inherit'] });
+  t.after(() => { child.kill(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 }); });
+  const port = await new Promise((resolve) => child.stdout.once('data', (d) => resolve(Number(String(d).trim()))));
+  return { url: `http://127.0.0.1:${port}/fictional.git`, asked: () => (fs.existsSync(count) ? Number(fs.readFileSync(count, 'utf8')) : 0) };
+}
+
+test('the worker asks the remote again after a passing failure only', async (t) => {
+  const f = fixture(t);
+  const saved = { delays: process.env.CR_ENG_RETRY_DELAYS_MS, prompt: process.env.GIT_TERMINAL_PROMPT };
+  process.env.CR_ENG_RETRY_DELAYS_MS = '0,0,0';
+  process.env.GIT_TERMINAL_PROMPT = '0';
+  t.after(() => { for (const [k, v] of [['CR_ENG_RETRY_DELAYS_MS', saved.delays], ['GIT_TERMINAL_PROMPT', saved.prompt]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
+  const passing = [
+    "fatal: unable to access 'https://github.com/x/y.git/': The requested URL returned error: 503",
+    "fatal: unable to access 'https://github.com/x/y.git/': Could not resolve host: github.com",
+    'error: RPC failed; HTTP 502 curl 22 The requested URL returned error: 502',
+    'fatal: early EOF',
+    'ssh: connect to host github.com port 22: Connection refused',
+    "fatal: unable to access 'https://github.com/x/y.git/': Failed to connect to github.com port 443",
+  ];
+  for (const s of passing) assert.ok(W.TRANSIENT_RE.test(s), s);
+  const lasting = ["fatal: repository 'https://github.com/x/y.git/' not found", 'remote: Permission to x/y.git denied', 'error: failed to push some refs (stale info)', 'fatal: Authentication failed'];
+  for (const s of lasting) assert.ok(!W.TRANSIENT_RE.test(s), s);
+  const busy = await statusRemote(t, 503);
+  assert.throws(() => W.remoteSha(f.work, { ref: 'refs/heads/claude/candidate-eng-7', remote: busy.url }), /returned error: 503/);
+  const first = busy.asked();
+  assert.ok(first >= 4 && first % 4 === 0, `asked ${first} times: four tries, each as git makes it`);
+  const gone = await statusRemote(t, 404);
+  assert.throws(() => W.remoteSha(f.work, { ref: 'refs/heads/claude/candidate-eng-7', remote: gone.url }));
+  assert.equal(gone.asked(), first / 4, 'a 404 is not asked again');
+  process.env.CR_ENG_RETRY_DELAYS_MS = '';
+  const once = await statusRemote(t, 503);
+  assert.throws(() => W.remoteSha(f.work, { ref: 'refs/heads/claude/candidate-eng-7', remote: once.url }));
+  assert.equal(once.asked(), first / 4, 'no delays, no retries');
+});
+
+// A fictional app: its source hash is the hash of src/a.txt, and its build
+// stamps that hash and writes one bundle file (or fails, when asked to).
+function bundleFixture(t, { stale = false, failing = false } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-engbundle-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 }));
+  g(root, 'init', '-q', '-b', 'main');
+  g(root, 'config', 'core.autocrlf', 'false');
+  put(root, 'dashboard/web/src/a.txt', 'one\n');
+  put(root, 'dashboard/web/scripts/source-hash.mjs', [
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "import crypto from 'node:crypto';",
+    "export function sourceHash(web) { return crypto.createHash('sha256').update(fs.readFileSync(path.join(web, 'src', 'a.txt'))).digest('hex'); }",
+    '',
+  ].join('\n'));
+  put(root, 'dashboard/web/build.js', failing ? "process.stderr.write('fictional build error\\n'); process.exit(1);\n" : [
+    "const fs = require('fs');",
+    "const path = require('path');",
+    "const crypto = require('crypto');",
+    "const app = path.join(__dirname, '..', 'public', 'app');",
+    "const h = crypto.createHash('sha256').update(fs.readFileSync(path.join(__dirname, 'src', 'a.txt'))).digest('hex');",
+    "fs.writeFileSync(path.join(app, 'index.js'), '// built from ' + h + '\\n');",
+    "fs.writeFileSync(path.join(app, 'build.json'), JSON.stringify({ source_sha256: h }, null, 2) + '\\n');",
+    '',
+  ].join('\n'));
+  put(root, 'dashboard/web/package.json', JSON.stringify({ name: 'fictional-web', private: true, scripts: { build: 'node build.js' } }, null, 2));
+  fs.mkdirSync(path.join(root, 'dashboard/web/node_modules'), { recursive: true });
+  put(root, 'dashboard/public/app/index.js', `// built from ${sha256('one\n')}\n`);
+  put(root, 'dashboard/public/app/build.json', `${JSON.stringify({ source_sha256: sha256('one\n') }, null, 2)}\n`);
+  put(root, 'dashboard/cli.js', "console.log('# tests 1'); console.log('# pass 1'); console.log('# fail 0');\n");
+  put(root, '.gitignore', 'node_modules/\n');
+  g(root, 'add', '-A'); g(root, 'commit', '-qm', 'base');
+  if (stale) { put(root, 'dashboard/web/src/a.txt', 'two\n'); g(root, 'commit', '-qam', 'change the app'); }
+  return root;
+}
+
+test('verify rebuilds a stale bundle first and stops until the rebuild is committed', (t) => {
+  const current = bundleFixture(t);
+  assert.equal(W.bundle(current).status, 'current');
+  const v0 = W.verify(current);
+  assert.deepEqual([v0.bundle, v0.ok, v0.total, v0.passed], ['current', true, 1, 1]);
+  const stale = bundleFixture(t, { stale: true });
+  const v1 = W.verify(stale);
+  assert.deepEqual([v1.status, v1.ok, v1.exit_code, v1.total], ['commit_bundle_first', false, null, null]);
+  assert.deepEqual(v1.bundle.files.sort(), ['dashboard/public/app/build.json', 'dashboard/public/app/index.js']);
+  assert.match(v1.says, /commit these files/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(stale, 'dashboard/public/app/build.json'), 'utf8')).source_sha256, sha256('two\n'));
+  g(stale, 'commit', '-qam', 'rebuild the bundle');
+  const v2 = W.verify(stale);
+  assert.deepEqual([v2.bundle, v2.ok], ['current', true]);
+  const broken = bundleFixture(t, { stale: true, failing: true });
+  const v3 = W.verify(broken);
+  assert.deepEqual([v3.status, v3.ok, v3.bundle.step], ['bundle_build_failed', false, 'npm run build']);
+  assert.match(v3.bundle.output_tail, /fictional build error/);
+  const none = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-engnobundle-'));
+  t.after(() => fs.rmSync(none, { recursive: true, force: true }));
+  assert.equal(W.bundle(none).status, 'no_bundle');
 });

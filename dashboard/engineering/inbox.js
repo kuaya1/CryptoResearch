@@ -216,7 +216,10 @@ function view(ws, t, who, { now = Date.now() } = {}) {
     content,
     executable: t.intent !== 'explore',
     authorization: t.authorization ? { kind: t.authorization.kind, version: t.authorization.version, policy_id: t.authorization.policy_id || null, template: t.authorization.template || null, rule: t.authorization.rule || null, why: t.authorization.why || null, required_review: requiredReview(t), review_basis: t.authorization.review_basis || null, release_mode: t.authorization.release_mode || null, at: t.authorization.at, holds: authorizationHolds(ws, t).ok } : null,
-    admission: t.admission ? { number: t.admission.number, state: t.admission.state, entry_sha256: t.admission.entry_sha256 || null, branch: t.admission.number ? `claude/admission-${t.task_id}` : null, confirmed_main_sha: t.admission.confirmed_main_sha || null } : null,
+    // main_sha_verified: true when GitHub showed the entry on main at that
+    // commit, false when it could not be read, null when recorded before the
+    // desk checked (2026-10-26).
+    admission: t.admission ? { number: t.admission.number, state: t.admission.state, entry_sha256: t.admission.entry_sha256 || null, branch: t.admission.number ? `claude/admission-${t.task_id}` : null, confirmed_main_sha: t.admission.confirmed_main_sha || null, main_sha_verified: typeof t.admission.main_sha_verified === 'boolean' ? t.admission.main_sha_verified : null, corrections: (t.admission.corrections || []).map((c) => ({ from: c.from, to: c.to, at: c.at })) } : null,
     lease,
     generation: t.generation,
     attempts: { count: t.attempts.count, max: t.attempts.max, rebuilds: t.attempts.rebuilds || 0, rebuilds_max: t.attempts.rebuilds_max || P.MAX_REBUILDS },
@@ -627,6 +630,50 @@ function reopenTask(ws, who, id, opts = {}) {
   return { task: view(ws, readRaw(ws, rel.task(id)), who, { now }), verified: r.verified };
 }
 
+// What GitHub is asked before Eric's re-check of a confirmed admission
+// (routes.js): the commit on record and how main's history names the commit
+// that landed it.
+function admissionCheckOf(ws, id) {
+  const t = loadTask(ws, id);
+  requireSupported(t);
+  if (!t.admission || t.admission.state !== 'confirmed') fail('WRONG_STATE', `${id} has no confirmed admission to check.`);
+  return { task_id: id, number: t.admission.number, version: t.current_version, bound_at: t.admission.bound_at || null, entry_sha256: t.admission.entry_sha256, confirmed_main_sha: t.admission.confirmed_main_sha || null };
+}
+
+// Eric's re-check of a confirmed admission against GitHub (2026-10-26: item
+// 65's record held a commit that does not exist). Owner only. The proofs are
+// GitHub's, read first by routes.js: `recorded` for the commit on record,
+// `located` for the commit main's history names for this admission when the
+// recorded one does not hold. A record that holds is marked checked; one that
+// does not is corrected to the located commit only when GitHub shows the same
+// bound entry there. Nothing unproven is written, and nothing else changes:
+// the number, entry, status, lease and the original admission_confirmed event
+// stay as they are, and the value replaced is kept in admission.corrections.
+function recheckAdmission(ws, who, id, { recorded = null, located = null } = {}, opts = {}) {
+  const now = nowOf(opts);
+  requireOwner(who);
+  const r = mutate(ws, { taskId: id, type: 'admission_recheck', now }, (t, ctx) => {
+    const a = t.admission;
+    if (!a || a.state !== 'confirmed') fail('WRONG_STATE', `${id} has no confirmed admission to check.`);
+    const holds = (p) => Boolean(p && p.state === 'yes' && typeof p.entry === 'string' && P.sha256(p.entry) === a.entry_sha256 && SHA_RE.test(String(p.main_sha || '')));
+    const was = String(a.confirmed_main_sha || '');
+    if (holds(recorded) && recorded.main_sha === was) {
+      if (a.main_sha_verified === true) return { unchanged: true, main_sha: was, corrected: false, says: `Item ${a.number} is on main at ${was.slice(0, 12)}, as recorded and already checked.` };
+      t.admission = { ...a, main_sha_verified: true, checked_at: iso(now) };
+      ctx.emit('admission_checked', { main_sha: was, source: 'GitHub' }, { kind: 'owner' });
+      return { main_sha: was, corrected: false, says: `Item ${a.number} is on main at ${was.slice(0, 12)}, as recorded. Marked checked on GitHub.` };
+    }
+    if (!recorded || recorded.state === 'unknown') fail('GITHUB_UNKNOWN', `GitHub could not say whether main holds item ${a.number} at the recorded ${was.slice(0, 12)} (${String((recorded && recorded.why) || 'not read').slice(0, 120)}). Nothing was changed; try again in a minute.`);
+    const wrong = recorded.state === 'yes' ? `${was.slice(0, 12)} holds another entry for this task` : String(recorded.why || 'not on main').slice(0, 160);
+    if (!located || located.state === 'unknown') fail('GITHUB_UNKNOWN', `The recorded ${was.slice(0, 12)} does not hold item ${a.number} (${wrong}), and GitHub could not be read for the commit that does (${String((located && located.why) || 'not read').slice(0, 120)}). Nothing was changed; try again in a minute.`);
+    if (!holds(located)) fail('NOT_ON_MAIN', `The recorded ${was.slice(0, 12)} does not hold item ${a.number} (${wrong}), and GitHub shows no commit on main holding its entry (${String(located.why || 'another entry').slice(0, 160)}). Nothing was changed.`);
+    t.admission = { ...a, confirmed_main_sha: located.main_sha, main_sha_verified: true, checked_at: iso(now), corrections: [...(a.corrections || []), { from: was || null, to: located.main_sha, at: iso(now), by: 'owner', why: wrong }] };
+    ctx.emit('admission_main_sha_corrected', { from: was || null, to: located.main_sha, why: wrong, source: 'GitHub' }, { kind: 'owner' });
+    return { main_sha: located.main_sha, corrected: true, from: was || null, says: `Corrected item ${a.number}'s admission commit from ${was.slice(0, 12) || '(none)'} to ${located.main_sha.slice(0, 12)}, which GitHub shows on main holding its entry. The earlier value stays in the task's history.` };
+  });
+  return { ...(r.result || {}), task: view(ws, readRaw(ws, rel.task(id)), who, { now }), verified: r.verified };
+}
+
 // --- worker: claim and events --------------------------------------------------------
 
 function claimTask(ws, who, { task_id } = {}, opts = {}) {
@@ -757,7 +804,21 @@ function recordEvent(ws, who, args = {}, opts = {}) {
         break;
       }
       case 'admission_confirmed': {
+        // The proof is the desk's own read of GitHub, made by the connector
+        // tool (opts.admissionProof): the commit named (a full SHA or a
+        // prefix) is on main and DESK_STATE.md there holds this entry. Item
+        // 65's confirmation (2026-10-26) recorded a commit that does not
+        // exist; nothing unproven is recorded where GitHub can be read.
+        const proof = opts.admissionProof || null;
+        const said = proof && proof.main_sha ? proof.main_sha : String(args.main_sha || '');
+        // The same confirmation again (a retry after a lost answer) changes
+        // nothing, unless GitHub now shows that commit does not hold it.
+        const was = t.admission && t.admission.state === 'confirmed' ? String(t.admission.confirmed_main_sha || '') : '';
+        if (was && args.entry_sha256 === t.admission.entry_sha256 && said.length >= 7 && was.startsWith(said) && !(proof && proof.state === 'no')) { reply = { number: t.admission.number, main_sha: was, unchanged: true }; break; }
         if (t.status !== 'admitted' || !t.admission || !['bound', 'pushed'].includes(t.admission.state)) fail('WRONG_STATE', `${id} has no admission waiting for confirmation.`);
+        if (proof && proof.state === 'unknown') fail('GITHUB_UNKNOWN', `GitHub could not say whether main holds this admission at ${String(args.main_sha || '').slice(0, 12)} (${String(proof.why || 'no answer').slice(0, 120)}). Nothing was confirmed; try again in a minute.`);
+        if (proof && proof.state !== 'yes') fail('NOT_ON_MAIN', `GitHub does not show this admission on main at ${String(args.main_sha || '').slice(0, 12)}: ${String(proof.why || 'not found').slice(0, 160)}. Nothing was confirmed. Take main_sha from engineering-worker.js admission-status, which prints the full commit it read.`);
+        if (proof && P.sha256(proof.entry) !== args.entry_sha256) fail('MISMATCH', 'The entry GitHub shows on main at that commit is not the entry you read back. Nothing was confirmed; read main again.');
         let held = t.admission;
         if (args.entry_sha256 !== t.admission.entry_sha256) {
           // Main holds an entry of this version released earlier (a refusal
@@ -773,10 +834,14 @@ function recordEvent(ws, who, args = {}, opts = {}) {
           held = { ...t.admission, number: prior.number, entry: prior.entry, entry_sha256: prior.entry_sha256 };
           ctx.emit('admission_rebound', { number: prior.number, released: t.admission.number }, by);
         }
-        t.admission = { ...held, state: 'confirmed', confirmed_main_sha: sha(args.main_sha, 'main_sha'), confirmed_at: iso(now) };
+        // Without a GitHub reader (this PC) the shape is all that is checked,
+        // and the record says so.
+        const mainSha = proof ? proof.main_sha : sha(args.main_sha, 'main_sha');
+        t.admission = { ...held, state: 'confirmed', confirmed_main_sha: mainSha, main_sha_verified: Boolean(proof), confirmed_at: iso(now) };
         delete t.remote_actions.push_admission;
         setStatus(t, 'claimed', `item ${t.admission.number} is on main`, now);
-        ctx.emit('admission_confirmed', { number: t.admission.number, main_sha: args.main_sha }, by);
+        ctx.emit('admission_confirmed', { number: t.admission.number, main_sha: mainSha, verified: Boolean(proof) }, by);
+        reply = { number: t.admission.number, main_sha: mainSha, main_sha_verified: Boolean(proof) };
         break;
       }
       case 'remote_action': {
@@ -1230,6 +1295,7 @@ function capabilities(ws, who, args = {}, opts = {}) {
 module.exports = {
   S, TASK_ID_RE, POLICY_ID_RE, FORGED, VERIFY_COMMANDS,
   prepareTask, submitTask, activatePolicy, revokePolicy, setPaused, authorizeTask, rebindTask, candidateHeadOf, pauseTask, resumeTask, cancelTask, reopenTask,
+  admissionCheckOf, recheckAdmission,
   claimTask, recordEvent, saveReview, requestCorrection,
   getTask, listTasks, getEvidence, admissionView, attestationView, ownerView, capabilities, nextAction, reviewState,
 };

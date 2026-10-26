@@ -16,20 +16,32 @@
 //       whether main holds the task's entry, byte for byte
 //   remote-sha --ref <refs/heads/...> [--remote origin]
 //       the remote ref's commit now (to reconcile an unconfirmed push)
-//   push --ref <refs/heads/...> --sha <sha> [--expect <sha>|--expect-absent] [--remote origin]
+//   push --ref <refs/heads/...> --sha <rev> [--expect <sha>|--expect-absent] [--remote origin]
 //       a compare-and-swap push, then the ref read back
-//   evidence --head <sha> [--base <ref>]
+//   evidence --head <rev> [--base <ref>]
 //       head, base, merge base, changed files and the exact diff
+//   resolve --rev <rev>
+//       the full commit SHA a revision names (a SHA or a prefix of one, a
+//       branch, a tag): what to send the desk, never a padded one
+//   bundle
+//       rebuilds the browser app's bundle when it is stale (below)
 //   verify
 //       runs node dashboard/cli.js test and reports totals, exit code,
-//       the output's SHA-256 and its last 20 KB
+//       the output's SHA-256 and its last 20 KB; a stale bundle is rebuilt
+//       first, and a rebuild that changes files stops it (commit, then verify)
+//
+// Calls to the remote are retried on a passing network failure only (a host
+// or connection failure, an early EOF, HTTP 502, 503 or 504), after 1 s, 2 s
+// and 4 s; anything else fails at once (2026-10-26). CR_ENG_RETRY_DELAYS_MS
+// (milliseconds, comma-separated; empty for none) replaces the delays.
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { pathToFileURL } = require('url');
 const { spawnSync } = require('child_process');
-const { insertEntry, backlogItems, candidateDiff, ENG_MARK_RE } = require('./backlog-promote');
+const { insertEntry, backlogItems, candidateDiff, ENG_MARK_RE, engEntryOf } = require('./backlog-promote');
 
 const STATE_FILE = 'DESK_STATE.md';
 const SHA_RE = /^[0-9a-f]{40}$/;
@@ -37,6 +49,7 @@ const TASK_RE = /^eng-\d{8}-[0-9a-f]{6}$/;
 const REF_RE = /^refs\/heads\/claude\/(admission-eng-\d{8}-[0-9a-f]{6}|candidate-eng-\d+|backlog-eng-\d+)$/;
 const MAX_TAIL = 20 * 1024;
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
+const TRANSIENT_RE = /Could not resolve host|Connection (?:reset|refused|timed out)|Operation timed out|Failed to connect|early EOF|RPC failed|remote end hung up|returned error: 50[234]|HTTP\/?[\d.]* 50[234]|\b50[234] (?:Bad Gateway|Service Unavailable|Gateway Time-?out)/i;
 
 function git(cwd, args, { allowFail = false, input = undefined, env = undefined } = {}) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, input, env: env ? { ...process.env, ...env } : process.env });
@@ -44,24 +57,50 @@ function git(cwd, args, { allowFail = false, input = undefined, env = undefined 
   if (r.status !== 0 && !allowFail) throw new Error(`git ${args.join(' ')} failed: ${(r.stderr || r.stdout || '').trim().slice(0, 400)}`);
   return { status: r.status, out: (r.stdout || '').replace(/\n$/, ''), err: (r.stderr || '').trim() };
 }
+const retryDelays = () => {
+  const v = process.env.CR_ENG_RETRY_DELAYS_MS;
+  return v === undefined ? [1000, 2000, 4000] : v.split(',').filter((x) => x.trim() !== '').map(Number).filter((x) => Number.isFinite(x) && x >= 0);
+};
+const pause = (ms) => { if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+// A git call to the remote, asked again after a passing network failure.
+function gitRemote(cwd, args, opts = {}) {
+  const waits = retryDelays();
+  for (let i = 0; ; i += 1) {
+    const r = git(cwd, args, { ...opts, allowFail: true });
+    if (r.status === 0 || i >= waits.length || !TRANSIENT_RE.test(r.err)) {
+      if (r.status !== 0 && !opts.allowFail) throw new Error(`git ${args.join(' ')} failed: ${(r.err || r.out).slice(0, 400)}`);
+      return { ...r, attempts: i + 1 };
+    }
+    pause(waits[i]);
+  }
+}
 const remoteRef = (cwd, remote, ref) => {
-  const line = git(cwd, ['ls-remote', remote, ref]).out.split('\n').find((l) => l.endsWith(`\t${ref}`));
+  const line = gitRemote(cwd, ['ls-remote', remote, ref]).out.split('\n').find((l) => l.endsWith(`\t${ref}`));
   return line ? line.split('\t')[0] : null;
 };
 const fetchMain = (cwd, remote) => {
-  git(cwd, ['fetch', '-q', remote, `+refs/heads/main:refs/remotes/${remote}/main`]);
+  gitRemote(cwd, ['fetch', '-q', remote, `+refs/heads/main:refs/remotes/${remote}/main`]);
   return git(cwd, ['rev-parse', `refs/remotes/${remote}/main`]).out;
 };
+// The full commit SHA a revision names here, by git rev-parse --verify; an
+// error when it names none.
+function resolveRev(cwd, rev, flag = '--rev') {
+  const s = String(rev || '');
+  if (!/^[A-Za-z0-9][\w./~^@{}-]*$/.test(s)) throw new Error(`${flag} is a revision (a SHA or a prefix of one, a branch or a tag)`);
+  const r = git(cwd, ['rev-parse', '--verify', '-q', `${s}^{commit}`], { allowFail: true });
+  if (r.status !== 0 || !SHA_RE.test(r.out)) throw new Error(`${flag} ${s.slice(0, 80)} names no commit here (git rev-parse --verify)`);
+  return r.out;
+}
 
 function numbers(cwd, { remote = 'origin' } = {}) {
   const mainSha = fetchMain(cwd, remote);
   const fromText = (text) => [...backlogItems(text).keys()];
   const main = fromText(git(cwd, ['show', `${mainSha}:${STATE_FILE}`]).out);
-  const branches = git(cwd, ['ls-remote', '--heads', remote, 'refs/heads/claude/intake-issue-*', 'refs/heads/claude/admission-*']).out.split('\n').filter(Boolean).map((l) => l.split('\t')[1]);
+  const branches = gitRemote(cwd, ['ls-remote', '--heads', remote, 'refs/heads/claude/intake-issue-*', 'refs/heads/claude/admission-*']).out.split('\n').filter(Boolean).map((l) => l.split('\t')[1]);
   const waiting = [];
   for (const ref of branches) {
     const local = `refs/remotes/${remote}/${ref.replace('refs/heads/', '')}`;
-    if (git(cwd, ['fetch', '-q', remote, `+${ref}:${local}`], { allowFail: true }).status !== 0) { waiting.push({ branch: ref.replace('refs/heads/', ''), unreadable: true, numbers: [] }); continue; }
+    if (gitRemote(cwd, ['fetch', '-q', remote, `+${ref}:${local}`], { allowFail: true }).status !== 0) { waiting.push({ branch: ref.replace('refs/heads/', ''), unreadable: true, numbers: [] }); continue; }
     const t = git(cwd, ['show', `${local}:${STATE_FILE}`], { allowFail: true });
     waiting.push({ branch: ref.replace('refs/heads/', ''), numbers: t.status === 0 ? fromText(t.out).filter((n) => !main.includes(n)) : [] });
   }
@@ -100,15 +139,10 @@ function admissionCommit(cwd, { task, entryFile, remote = 'origin' }) {
 function admissionStatus(cwd, { task, entrySha256, remote = 'origin' }) {
   if (!TASK_RE.test(String(task || ''))) throw new Error('--task is an engineering task ID');
   const mainSha = fetchMain(cwd, remote);
-  const text = git(cwd, ['show', `${mainSha}:${STATE_FILE}`]).out;
-  const lines = text.split('\n');
-  const at = lines.findIndex((l) => { const m = ENG_MARK_RE.exec(l); return m && m[1] === task; });
-  if (at < 0) return { confirmed: false, main_sha: mainSha, on_main: false, admission_branch: remoteRef(cwd, remote, `refs/heads/claude/admission-${task}`) };
-  let end = at + 1;
-  while (end < lines.length && lines[end].startsWith('  ')) end += 1;
-  const entry = `${lines.slice(at, end).join('\n')}\n`;
-  const n = Number((/^- \[[ x]\] \*\*(\d+)\./.exec(lines[at]) || [])[1]);
-  return { confirmed: !entrySha256 || sha256(entry) === entrySha256, main_sha: mainSha, on_main: true, number: n, entry_sha256: sha256(entry), matches_bound: entrySha256 ? sha256(entry) === entrySha256 : null };
+  const found = engEntryOf(git(cwd, ['show', `${mainSha}:${STATE_FILE}`]).out, task);
+  if (!found) return { confirmed: false, main_sha: mainSha, on_main: false, admission_branch: remoteRef(cwd, remote, `refs/heads/claude/admission-${task}`) };
+  const h = sha256(found.entry);
+  return { confirmed: !entrySha256 || h === entrySha256, main_sha: mainSha, on_main: true, number: found.number, entry_sha256: h, matches_bound: entrySha256 ? h === entrySha256 : null };
 }
 
 function checkRef(ref) { if (!REF_RE.test(String(ref || ''))) throw new Error('--ref is refs/heads/claude/admission-<task>, candidate-eng-<n> or backlog-eng-<n>'); }
@@ -120,15 +154,28 @@ function remoteSha(cwd, { ref, remote = 'origin' }) {
 
 function push(cwd, { ref, sha, expect = undefined, remote = 'origin' }) {
   checkRef(ref);
-  if (!SHA_RE.test(String(sha || ''))) throw new Error('--sha is a full commit SHA');
+  const target = resolveRev(cwd, sha, '--sha');
   const lease = expect === null ? `--force-with-lease=${ref}:` : expect ? `--force-with-lease=${ref}:${expect}` : `--force-with-lease=${ref}`;
-  const r = git(cwd, ['push', '--porcelain', lease, remote, `${sha}:${ref}`], { allowFail: true });
+  const waits = retryDelays();
+  let r;
+  let attempts = 0;
+  for (;;) {
+    attempts += 1;
+    r = git(cwd, ['push', '--porcelain', lease, remote, `${target}:${ref}`], { allowFail: true });
+    if (r.status === 0 || attempts > waits.length || !TRANSIENT_RE.test(r.err)) break;
+    // A push whose answer was lost may have landed: read the ref back
+    // before pushing again.
+    let seen = null;
+    try { seen = remoteRef(cwd, remote, ref); } catch (_) { seen = null; }
+    if (seen === target) { r = { status: 0, out: '', err: '' }; break; }
+    pause(waits[attempts - 1]);
+  }
   const observed = remoteRef(cwd, remote, ref);
-  return { ref, sha, pushed: r.status === 0, observed_sha: observed, landed: observed === sha, refusal: r.status === 0 ? null : (r.err || r.out).split('\n').slice(-3).join(' ').slice(0, 300) };
+  return { ref, sha: target, pushed: r.status === 0, observed_sha: observed, landed: observed === target, attempts, refusal: r.status === 0 ? null : (r.err || r.out).split('\n').slice(-3).join(' ').slice(0, 300) };
 }
 
-function evidence(cwd, { head, base = 'origin/main' }) {
-  if (!SHA_RE.test(String(head || ''))) throw new Error('--head is a full commit SHA');
+function evidence(cwd, { head: rev, base = 'origin/main' }) {
+  const head = resolveRev(cwd, rev, '--head');
   const baseSha = git(cwd, ['rev-parse', `${base}^{commit}`]).out;
   const mb = git(cwd, ['merge-base', baseSha, head]).out;
   // The same bytes the promotion workflow recomputes before it merges.
@@ -137,7 +184,46 @@ function evidence(cwd, { head, base = 'origin/main' }) {
   return { head_sha: head, base_sha: baseSha, merge_base_sha: mb, files: d.files, diff: d.diff, diff_sha256: d.diff_sha256 };
 }
 
+// The browser app's bundle (dashboard/public/app) is built from its sources
+// and committed with them; build.json holds the SHA-256 of what it was built
+// from (dashboard/web/scripts/source-hash.mjs, which the suite checks). When
+// that differs from the sources here, the bundle is rebuilt in dashboard/web
+// (npm ci first when it has no node_modules). The tracked files the rebuild
+// changed are listed, for the worker to commit with its change; the suite
+// itself never builds, so CI still fails on a stale committed bundle.
+function npm(cwd, command) {
+  const r = spawnSync(`npm ${command}`, { cwd, shell: true, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  return { ok: r.status === 0, tail: `${r.stdout || ''}${r.stderr || ''}`.slice(-4000) };
+}
+function bundle(cwd) {
+  const web = path.join(cwd, 'dashboard', 'web');
+  const stampFile = path.join(cwd, 'dashboard', 'public', 'app', 'build.json');
+  const hasher = path.join(web, 'scripts', 'source-hash.mjs');
+  if (!fs.existsSync(stampFile) || !fs.existsSync(hasher)) return { status: 'no_bundle' };
+  const stamped = JSON.parse(fs.readFileSync(stampFile, 'utf8')).source_sha256;
+  const code = `import { sourceHash } from ${JSON.stringify(pathToFileURL(hasher).href)}; process.stdout.write(sourceHash(${JSON.stringify(web)}));`;
+  const h = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8' });
+  if (h.status !== 0 || !/^[0-9a-f]{64}$/.test(h.stdout)) return { status: 'unreadable', says: `The bundle's source hash could not be computed: ${(h.stderr || '').trim().slice(0, 300)}` };
+  if (h.stdout === stamped) return { status: 'current', source_sha256: stamped };
+  if (!fs.existsSync(path.join(web, 'node_modules'))) {
+    const i = npm(web, 'ci');
+    if (!i.ok) return { status: 'build_failed', step: 'npm ci', output_tail: i.tail };
+  }
+  const b = npm(web, 'run build');
+  if (!b.ok) return { status: 'build_failed', step: 'npm run build', output_tail: b.tail };
+  const files = git(cwd, ['status', '--porcelain', '--untracked-files=all', '--', 'dashboard/public/app']).out.split('\n').filter(Boolean).map((l) => l.slice(3));
+  return { status: files.length ? 'rebuilt' : 'current', files, source_sha256: h.stdout, stamped_was: stamped };
+}
+
 function verify(cwd) {
+  const b = bundle(cwd);
+  if (b.status === 'rebuilt' || b.status === 'build_failed') {
+    const head = git(cwd, ['rev-parse', 'HEAD']).out;
+    const says = b.status === 'rebuilt'
+      ? 'The bundle was stale and has been rebuilt: commit these files with the change, then run verify again. Nothing was tested; a verification is always of a committed head.'
+      : `The bundle was stale and ${b.step} failed; nothing was tested.`;
+    return { head_sha: head, command: 'node dashboard/cli.js test', status: b.status === 'rebuilt' ? 'commit_bundle_first' : 'bundle_build_failed', bundle: b, exit_code: null, total: null, passed: null, failed: null, ok: false, says };
+  }
   const r = spawnSync(process.execPath, [path.join(cwd, 'dashboard', 'cli.js'), 'test'], { cwd, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
   const output = `${r.stdout || ''}${r.stderr || ''}`;
   const num = (label) => { const m = new RegExp(`^\\S*\\s*${label}\\s+(\\d+)\\s*$`, 'm').exec(output); return m ? Number(m[1]) : null; };
@@ -145,7 +231,7 @@ function verify(cwd) {
   const passed = num('pass');
   const failed = num('fail');
   const head = git(cwd, ['rev-parse', 'HEAD']).out;
-  return { head_sha: head, command: 'node dashboard/cli.js test', exit_code: r.status, total, passed, failed, output_sha256: sha256(output), output_tail: output.slice(-MAX_TAIL), ok: r.status === 0 && failed === 0 && total !== null && passed === total };
+  return { head_sha: head, command: 'node dashboard/cli.js test', bundle: b.status, exit_code: r.status, total, passed, failed, output_sha256: sha256(output), output_tail: output.slice(-MAX_TAIL), ok: r.status === 0 && failed === 0 && total !== null && passed === total };
 }
 
 function arg(argv, name, fallback = undefined) {
@@ -163,8 +249,10 @@ function main(argv, cwd = process.cwd()) {
     case 'remote-sha': return remoteSha(cwd, { ref: arg(argv, 'ref'), remote });
     case 'push': return push(cwd, { ref: arg(argv, 'ref'), sha: arg(argv, 'sha'), expect: argv.includes('--expect-absent') ? null : arg(argv, 'expect'), remote });
     case 'evidence': return evidence(cwd, { head: arg(argv, 'head'), base: arg(argv, 'base', `${remote}/main`) });
+    case 'resolve': return { rev: arg(argv, 'rev'), sha: resolveRev(cwd, arg(argv, 'rev')) };
+    case 'bundle': return bundle(cwd);
     case 'verify': return verify(cwd);
-    default: throw new Error('Commands: numbers, admission-commit, admission-status, remote-sha, push, evidence, verify.');
+    default: throw new Error('Commands: numbers, admission-commit, admission-status, remote-sha, push, evidence, resolve, bundle, verify.');
   }
 }
 
@@ -177,4 +265,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { numbers, admissionCommit, admissionStatus, remoteSha, push, evidence, verify, main };
+module.exports = { numbers, admissionCommit, admissionStatus, remoteSha, push, evidence, resolveRev, bundle, verify, main, TRANSIENT_RE };
