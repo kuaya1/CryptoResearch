@@ -198,8 +198,9 @@ function makeEngineeringRoutes(ws, { oauth = null, auth = null, origins = new Se
     }));
   }
 
-  // Convergence with GitHub (2026-10-26): every task ready for promotion is
-  // settled as merged once GitHub proves it (github.js mergeProof: a merged
+  // Convergence with GitHub (2026-10-26): every task ready for promotion, or
+  // still waiting for its review (its review stays as it was, and the merge
+  // record says so), is settled as merged once GitHub proves it (github.js mergeProof: a merged
   // pull request from claude/backlog-eng-<n> or claude/candidate-eng-<n>
   // whose head is the head the desk recorded, and main holding it). Run on
   // the schedule below; asks GitHub nothing when no task waits, and one sweep

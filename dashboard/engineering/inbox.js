@@ -608,32 +608,38 @@ function candidateHeadOf(ws, id) {
 // Convergence with GitHub (2026-10-26, the Cortex audit): items 63 and 64
 // were merged from claude/candidate-eng-<n> and stayed ready_for_promotion.
 // What the desk's sweep (routes.js reconcileMerges) asks GitHub about: each
-// task ready for promotion with a backlog number and the heads it recorded.
-// Reads only.
+// task ready for promotion, or still waiting for its review (Eric merged PR
+// #29 for item 66 while it was review_pending), with a backlog number and the
+// heads it recorded. Reads only.
+const SETTLED_FROM = ['ready_for_promotion', 'review_pending'];
 function mergeCandidates(ws) {
-  return taskIds(ws).map((id) => readRaw(ws, rel.task(id))).filter((t) => t && supported(t, S.task) && t.status === 'ready_for_promotion' && t.admission && Number.isInteger(t.admission.number) && t.candidate)
+  return taskIds(ws).map((id) => readRaw(ws, rel.task(id))).filter((t) => t && supported(t, S.task) && SETTLED_FROM.includes(t.status) && t.admission && Number.isInteger(t.admission.number) && t.candidate)
     .map((t) => ({ task_id: t.task_id, number: t.admission.number, heads: [...new Set([t.candidate.head_sha, t.release && t.release.head_sha].filter((h) => SHA_RE.test(String(h || ''))))] }));
 }
 
 // Records a task merged from GitHub's own proof (github.js mergeProof): a
 // merged pull request from its branch whose head is the head the desk
 // recorded, and main holding it. It records a fact, never an approval: the
-// review and attestation stay as they were, and whether the release went
-// through backlog-pr is kept beside it. Anything short of proof writes
-// nothing; a task already merged answers unchanged.
+// review and attestation stay as they were (a task merged while its review
+// was pending keeps that review pending, said in the merge record and its
+// event), and whether the release went through backlog-pr is kept beside
+// it. Anything short of proof writes nothing; a task already merged answers
+// unchanged.
 function reconcileMerged(ws, id, proof, opts = {}) {
   const now = nowOf(opts);
   const r = mutate(ws, { taskId: id, type: 'reconcile_merged', now }, (t, ctx) => {
     if (t.status === 'merged') return { unchanged: true };
-    if (t.status !== 'ready_for_promotion') fail('WRONG_STATE', `${id} is ${t.status}; only a task ready for promotion is settled from GitHub.`);
+    if (!SETTLED_FROM.includes(t.status)) fail('WRONG_STATE', `${id} is ${t.status}; only a task ready for promotion or waiting for its review is settled from GitHub.`);
     if (!proof || proof.state !== 'yes') fail('NOT_ON_MAIN', `GitHub does not show ${id} merged (${String((proof && proof.why) || 'not read').slice(0, 160)}). Nothing was changed.`);
     const heads = [t.candidate && t.candidate.head_sha, t.release && t.release.head_sha].filter(Boolean);
     if (!t.admission || proof.number !== t.admission.number || !heads.includes(proof.head_sha)) fail('WRONG_CANDIDATE', `GitHub's merged head ${String(proof.head_sha || '').slice(0, 12)} is not ${id}'s recorded head. Nothing was changed.`);
     const prNumber = Number.isInteger(proof.pr_number) && proof.pr_number > 0 ? proof.pr_number : null;
-    t.merge = { main_sha: SHA_RE.test(String(proof.main_sha || '')) ? proof.main_sha : null, contains_head: proof.head_sha, pr_number: prNumber, pr_url: /^https:\/\/github\.com\/kuaya1\/CryptoResearch\/pull\/\d+$/.test(String(proof.pr_url || '')) ? proof.pr_url : null, branch: /^claude\/(backlog|candidate)-eng-\d+$/.test(String(proof.branch || '')) ? proof.branch : null, observed_at: iso(now), by: 'desk GitHub readback', released_through_promotion: Boolean(t.release) };
+    const rs = reviewState(t);
+    const from = t.status;
+    t.merge = { main_sha: SHA_RE.test(String(proof.main_sha || '')) ? proof.main_sha : null, contains_head: proof.head_sha, pr_number: prNumber, pr_url: /^https:\/\/github\.com\/kuaya1\/CryptoResearch\/pull\/\d+$/.test(String(proof.pr_url || '')) ? proof.pr_url : null, branch: /^claude\/(backlog|candidate)-eng-\d+$/.test(String(proof.branch || '')) ? proof.branch : null, observed_at: iso(now), by: 'desk GitHub readback', released_through_promotion: Boolean(t.release), status_at_merge: from, review_at_merge: { required: rs.required, state: rs.state, satisfied: Boolean(rs.satisfied) } };
     t.lease = null;
-    setStatus(t, 'merged', `GitHub shows PR #${prNumber} merged and main holding ${proof.head_sha.slice(0, 12)}`, now);
-    ctx.emit('reconciled_merged', { head_sha: proof.head_sha, pr_number: prNumber, main_sha: t.merge.main_sha, branch: t.merge.branch, source: 'GitHub pull request and compare' }, { kind: 'desk' });
+    setStatus(t, 'merged', `GitHub shows PR #${prNumber} merged and main holding ${proof.head_sha.slice(0, 12)}${rs.satisfied ? '' : `; merged while its review was ${rs.state} (${rs.required} required), which stays as it was`}`, now);
+    ctx.emit('reconciled_merged', { head_sha: proof.head_sha, pr_number: prNumber, main_sha: t.merge.main_sha, branch: t.merge.branch, source: 'GitHub pull request and compare', from, review_state: rs.state, review_satisfied: Boolean(rs.satisfied) }, { kind: 'desk' });
     return { merged: true, pr_number: prNumber };
   });
   return { ...(r.result || {}), task_id: id, verified: r.verified };
