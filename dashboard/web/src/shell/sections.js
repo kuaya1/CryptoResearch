@@ -1,5 +1,5 @@
 import { needsCount } from '../../../public/portfolio-model.js';
-import { LayoutList, Inbox, Wallet, FlaskConical, LineChart } from 'lucide-react';
+import { LayoutList, Inbox, Wallet, FlaskConical, LineChart, GitBranch } from 'lucide-react';
 import { deskKpis } from '../../../public/watchlist-model.js';
 
 // The rail's four daily places (DESIGN_AND_IA_BLUEPRINT.md §3.0; Eric,
@@ -17,6 +17,9 @@ export const SECTIONS = [
   // desk's results, one click away. It is Research's Outcomes tab (report
   // returns against BTC and the paper positions), never Portfolio.
   { id: 'outcomes', label: 'Outcomes', icon: LineChart, href: '#/research?tab=outcomes' },
+  // The Pipeline cockpit (2026-10-27): where the self-building codebase
+  // stands (Track 1), read only.
+  { id: 'pipeline', label: 'Pipeline', icon: GitBranch },
 ];
 
 // Pages that are not on the rail keep their names for the window title.
