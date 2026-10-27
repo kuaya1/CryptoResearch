@@ -312,6 +312,15 @@ Pipeline review, 2026-10-27. What the trader's Paper Book must be before any eng
 - **High/low wick stops.** Stops and targets are checked against each hour's high and low, not its close. When one hour reaches both the stop and the take profit, the stop is taken: the worse outcome.
 - **Long only.** `OPEN_LONG` and `CLOSE_LONG`; no short, leverage or margin.
 - **Results.** Realized P&L net of fees and slippage, NAV by the hour, and drawdown from NAV's high-water mark (the measure invariant 3's ceilings use), set against BTC over the same times as the outcomes are.
+- **Red-team corrections (2026-10-27, PR #63, `audits/2026-10-27-red-team`).** Made before any record exists, under the same version names:
+  - Risk is summed. The 24-hour ceiling counts the planned loss already at the stops (`book.open_risk_usd`) beside the drawdown, and the grant counts what the thesis already holds at its stops (`book.thesis_risk_usd`); either unknown refuses.
+  - A limit more than `max_slippage_bps` through the book's price is refused (`through_market`).
+  - Fills stay inside the hour: a buy fills at the lower of its limit and the hour's open, a close or target at the higher.
+  - An order fills only from hours that start at or after it was sent, and an order whose life ends inside an hour expires before that hour can fill it.
+  - For a pair with an open position or a live order, only the next hour applies (`GAP`).
+  - Only an order recorded `SENT` goes to the venue. After a restart, a `RESERVED` or `SENT` order with no outcome is `UNKNOWN` and is reconciled from the venue's record, never cancelled blind. A venue record that does not read, or that holds the ID as another order, is `INTEGRITY`, and the order stays `UNKNOWN`.
+  - Any order state outside `RESOLVED` halts every intent.
+  - The book's price carries its time, held to the freshness limit.
 - **Protected.** `dashboard/core/paper.js`, `paper-trader.js`, `trade-risk.js`, `decimal.js` and their tests (`trade-risk`, `paper-trader` and `trader-boundary` under `dashboard/tests/`) are in `PROTECTED` (`dashboard/scripts/backlog-promote.js`). No builder or agent-lane candidate changes them. Eric changes them, or a task he marks for it in words.
 
 ### Junior Trader roadmap
