@@ -1,0 +1,43 @@
+name: Backlog task
+description: One task for the backlog builders. Nothing is built until Eric adds the agent:ready label himself.
+labels: ["agent:draft"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This issue is a draft until Eric adds the **agent:ready** label. His label authorizes this exact text as the next backlog item (backlog-queue.yml records its SHA-256 on the agent ledger); no merge to main is needed for that. Editing the text, taking the label off or closing the issue withdraws it, and a text labeled again gets a new number. The builders' pull requests still wait for Eric's merge, and the protected paths stay protected. Keep secrets, records and addresses out of it.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: What is true when the task is done, in plain words.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance checks
+      description: One check per line that a test can show.
+    validations:
+      required: true
+  - type: textarea
+    id: touches
+    attributes:
+      label: Touches
+      description: Optional. The files or folders (ending in /) the task changes, one per line or comma-separated; `web` is the browser app and its bundle. Empty, it is read as touching everything and is never built beside other work.
+    validations:
+      required: false
+  - type: textarea
+    id: after
+    attributes:
+      label: After
+      description: Optional. The backlog item numbers that must be built first.
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything else the builder should know.
+    validations:
+      required: false

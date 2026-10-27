@@ -18,6 +18,11 @@
 //   {"seq":2,"prev":"…","t":"outcome","id":"rv-…","state":"unknown","error":"timeout","at":"…"}
 //   {"seq":3,"prev":"…","t":"outcome","id":"rv-…","state":"response","response_id":"chatcmpl-…","verdict":{…},"mac":"…","via":"reconcile","at":"…"}
 //   {"seq":4,"prev":"…","t":"posted","id":"rv-…","conclusion":"success","at":"…"}
+//   {"seq":5,"prev":"…","t":"publishing","id":"bd-…","commit":"…","branch":"agent/issue-7","predecessor":"absent","at":"…"}
+//
+// A build's "publishing" line goes up in the same atomic push as its branch
+// (agent-guard.js publish): the ledger and the candidate move together or not
+// at all, so no reserve can record a build lost while it publishes.
 //
 // An attempt whose outcome is not recorded, or recorded as unknown, may have
 // been sent and paid for; it is reconciled with the provider before anything
@@ -33,9 +38,18 @@ const IDENTITY = { GIT_AUTHOR_NAME: 'github-actions[bot]', GIT_AUTHOR_EMAIL: '41
 // States after which an attempt is settled: it was paid for or definitely
 // not, and nothing about it is left to find out.
 const FINAL = new Set(['response', 'failed', 'lost']);
-// A build reserved with no outcome holds its issue for the build's timeout
-// and this grace (65 minutes at a 45-minute timeout); then it is lost.
+// A build reserved with no outcome is alive while GitHub says its run is
+// (pipeline review, 2026-10-27): a completed run frees its issue at once, a
+// running one holds it up to GitHub's six-hour limit for a hosted job. Only
+// when the run's status cannot be read does age decide: the build's timeout
+// and this grace (65 minutes at a 45-minute timeout).
 const BUILD_GRACE_MINUTES = 20;
+const HARD_MAX_MINUTES = 360;
+// "123/1" (GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT) as numbers, or null.
+function runIdOf(run) {
+  const m = /^(\d{1,20})\/(\d{1,6})$/.exec(String(run || ''));
+  return m ? { id: Number(m[1]), attempt: Number(m[2]) } : null;
+}
 
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 function canonical(v) {
@@ -106,9 +120,9 @@ function read(cwd, { remote = 'origin' } = {}) {
   return { tip, text: show.raw, entries: p.entries, last: p.last };
 }
 
-// One commit on `tip` adding `recs`, pushed without force. False when the
-// remote moved (or refused); the caller reads again and decides again.
-function append(cwd, { remote = 'origin', tip, text, entries, last, recs, message = 'ledger', beforePush = null }) {
+// One commit on `tip` adding `recs`, not pushed: append pushes it alone, and
+// publish pushes it atomically with a candidate branch.
+function stage(cwd, { tip, text, entries, last, recs, message = 'ledger' }) {
   let body = text;
   let prev = last;
   let seq = entries.length;
@@ -123,6 +137,13 @@ function append(cwd, { remote = 'origin', tip, text, entries, last, recs, messag
   const blob = git(cwd, ['hash-object', '-w', '--stdin'], { input: body }).out;
   const tree = git(cwd, ['mktree'], { input: `100644 blob ${blob}\t${FILE}\n` }).out;
   const commit = git(cwd, ['commit-tree', tree, ...(tip ? ['-p', tip] : []), '-m', message]).out;
+  return { commit, added };
+}
+
+// One commit on `tip` adding `recs`, pushed without force. False when the
+// remote moved (or refused); the caller reads again and decides again.
+function append(cwd, { remote = 'origin', tip, text, entries, last, recs, message = 'ledger', beforePush = null }) {
+  const { commit, added } = stage(cwd, { tip, text, entries, last, recs, message });
   if (beforePush) beforePush();
   const p = git(cwd, ['push', '-q', '--porcelain', remote, `${commit}:${REF}`]);
   if (p.status !== 0) return { ok: false, error: p.err.slice(0, 200) };
@@ -147,8 +168,8 @@ function transact(cwd, { remote = 'origin', decide, tries = 6, message, beforePu
 function attempts(entries) {
   const by = new Map();
   for (const e of entries) {
-    if (e.t === 'reserve') by.set(e.id, { id: e.id, reserve: e, outcomes: [], posted: [] });
-    else if (by.has(e.id)) (e.t === 'posted' ? by.get(e.id).posted : by.get(e.id).outcomes).push(e);
+    if (e.t === 'reserve') by.set(e.id, { id: e.id, reserve: e, outcomes: [], posted: [], publishing: [] });
+    else if (by.has(e.id)) (e.t === 'posted' ? by.get(e.id).posted : e.t === 'publishing' ? by.get(e.id).publishing : by.get(e.id).outcomes).push(e);
   }
   for (const a of by.values()) {
     const last = a.outcomes[a.outcomes.length - 1] || null;
@@ -205,25 +226,67 @@ const PAID = {
 };
 //
 // One paid attempt per issue at a time (Engineering v3, change 3), a build or
-// a revision: an attempt with no outcome is still running, or its runner was
-// lost. It holds the issue for `holdMs`; after that it is recorded lost in the
-// same append (its reservation still counts) and the issue is free. An
-// attempt whose outcome was recorded, even "unknown", has finished running.
-function decidePaid(kind, entries, { binding, bind, ceilings, now, usd, run, holdMs = 65 * 60000 }) {
+// a revision. An attempt with no outcome is settled from its run first
+// (pipeline review, 2026-10-27; `runs`: reserve.run -> the run attempt as
+// GitHub reports it, read by the caller so this stays pure):
+//   - the run completed: closed now, in the same append as the new
+//     reservation. Its outcome is "lost" (its reservation still counts),
+//     or, when its "publishing" line is in the ledger, "response": that
+//     push carried its branch, so it published whatever its record job did.
+//   - any other status (queued, waiting, in progress): it holds the issue, up to
+//     GitHub's six-hour limit for a hosted job (`hardMaxMs`).
+//   - GitHub gave no status: the age fallback, `holdMs` from the reservation.
+// An attempt whose outcome was recorded, even "unknown", has finished running.
+function settleOpen(a, { now, holdMs, hardMaxMs, runs }) {
+  const st = runs && runs.get(a.reserve.run);
+  const at = new Date(now).toISOString();
+  const pub = a.publishing[a.publishing.length - 1] || null;
+  const close = (why, via) => (pub
+    ? { t: 'outcome', id: a.id, state: 'response', job: 'unrecorded', publish: 'published', commit: pub.commit, via, note: why, at }
+    : { t: 'outcome', id: a.id, state: 'lost', via, error: why, at });
+  const mins = (ms) => Math.round(ms / 60000);
+  const age = now - Date.parse((st && (st.run_started_at || st.created_at)) || a.reserve.at);
+  if (st && st.status === 'completed') return { close: close(`its run ${a.reserve.run} completed (${st.conclusion || 'no conclusion'}) with no outcome recorded`, 'run-status') };
+  if (st) {
+    if (!(age >= hardMaxMs)) return { hold: `its run is ${st.status}${Number.isFinite(age) ? ` (${mins(age)} min)` : ''}` };
+    return { close: close(`its run ${a.reserve.run} was still ${st.status} ${mins(age)} min after it started, past GitHub's ${mins(hardMaxMs)}-minute limit for a hosted job`, 'run-status') };
+  }
+  if (!(age >= holdMs)) return { hold: `its run's status could not be read${Number.isFinite(age) ? ` and it is ${mins(age)} min old` : ''}, so it is held up to ${mins(holdMs)} min` };
+  return { close: close(`no outcome ${mins(age)} min after it was reserved, and its run's status could not be read`, 'age') };
+}
+
+// The runs of the paid attempts that hold `issue`, read from GitHub now:
+// reserve.run -> { status, conclusion, created_at, run_started_at }. A run
+// that cannot be read is left out, so its attempt falls back to its age.
+async function runStatuses(entries, { issue, readRun }) {
+  const out = new Map();
+  for (const a of attempts(entries)) {
+    if (!PAID[a.reserve.kind] || !a.reserve.bind || a.reserve.bind.issue !== issue || a.outcomes.length) continue;
+    const r = runIdOf(a.reserve.run);
+    if (!r) continue;
+    let st = null;
+    try { st = await readRun(r.id, r.attempt); } catch (_) { st = null; }
+    if (st && typeof st.status === 'string') out.set(a.reserve.run, { status: st.status, conclusion: st.conclusion || null, created_at: st.created_at || null, run_started_at: st.run_started_at || null });
+  }
+  return out;
+}
+
+function decidePaid(kind, entries, { binding, bind, ceilings, now, usd, run, holdMs = 65 * 60000, hardMaxMs = HARD_MAX_MINUTES * 60000, runs = null }) {
   const k = PAID[kind];
   if (!k) return { action: 'refuse', why: `${String(kind)} is not a paid kind the ledger reserves` };
   const paid = attempts(entries).filter((a) => PAID[a.reserve.kind]);
   const mine = paid.find((a) => a.reserve.run === run);
   if (mine) return { action: 'refuse', why: `run ${run} already holds ${mine.reserve.kind} reservation ${mine.id}`, attempt: mine };
-  const lost = [];
+  const closed = [];
   if (bind && Number.isInteger(bind.issue)) {
     for (const a of paid) {
       if (!a.reserve.bind || a.reserve.bind.issue !== bind.issue || a.outcomes.length) continue;
-      const age = now - Date.parse(a.reserve.at);
-      if (!(age >= holdMs)) return { action: 'refuse', why: `${PAID[a.reserve.kind].one} ${a.id} of issue #${bind.issue} (run ${a.reserve.run}) has no outcome yet${Number.isFinite(age) ? ` and is ${Math.round(age / 60000)} min old` : ''}; one build or revision per issue at a time, each held up to ${Math.round(holdMs / 60000)} min`, attempt: a };
-      lost.push({ t: 'outcome', id: a.id, state: 'lost', error: `no outcome ${Math.round(age / 60000)} min after it was reserved`, at: new Date(now).toISOString() });
+      const s = settleOpen(a, { now, holdMs, hardMaxMs, runs });
+      if (s.hold) return { action: 'refuse', why: `${PAID[a.reserve.kind].one} ${a.id} of issue #${bind.issue} (run ${a.reserve.run}) has no outcome yet: ${s.hold}; one build or revision per issue at a time`, attempt: a };
+      closed.push(s.close);
     }
   }
+  const lost = closed.filter((o) => o.state === 'lost');
   // A ceiling the policy does not set refuses: nothing is reserved on a default.
   const ceiling = ceilings && ceilings[k.ceiling];
   if (!Number.isInteger(ceiling) || ceiling < 0) return { action: 'refuse', why: `the policy sets no ${k.ceiling}; no ${k.one} is reserved` };
@@ -234,9 +297,9 @@ function decidePaid(kind, entries, { binding, bind, ceilings, now, usd, run, hol
   if (u.count >= ceilings.builds_per_day) return { action: 'refuse', why: `${u.count} paid builds today, revisions included (UTC ${day}; ceiling ${ceilings.builds_per_day})` };
   if (u.usd + usd > ceilings.build_usd_per_day) return { action: 'refuse', why: `this ${k.one} would reserve $${usd} on top of $${u.usd} today, builds and revisions (UTC ${day}; ceiling $${ceilings.build_usd_per_day})` };
   const id = newId(kind);
-  return { action: kind, id, lost: lost.map((x) => x.id), append: [...lost, { t: 'reserve', kind, id, binding, bind, day, usd, run, at: new Date(now).toISOString() }] };
+  return { action: kind, id, lost: lost.map((x) => x.id), published: closed.filter((o) => o.state === 'response').map((x) => x.id), closed, append: [...closed, { t: 'reserve', kind, id, binding, bind, day, usd, run, at: new Date(now).toISOString() }] };
 }
 const decideBuild = (entries, o) => decidePaid('build', entries, o);
 const decideRevise = (entries, o) => decidePaid('revise', entries, o);
 
-module.exports = { REF, FILE, ZERO, FINAL, BUILD_GRACE_MINUTES, sha256, canonical, bindingOf, dayOf, macKey, LEDGER_KEY_MIN, ledgerKey, macOf, macOk, parse, read, append, transact, attempts, usage, decideReview, PAID, decidePaid, decideBuild, decideRevise };
+module.exports = { REF, FILE, ZERO, FINAL, BUILD_GRACE_MINUTES, HARD_MAX_MINUTES, runIdOf, sha256, canonical, bindingOf, dayOf, macKey, LEDGER_KEY_MIN, ledgerKey, macOf, macOk, parse, read, stage, append, transact, attempts, usage, decideReview, PAID, settleOpen, runStatuses, decidePaid, decideBuild, decideRevise };

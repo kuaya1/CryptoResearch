@@ -11,8 +11,9 @@
 # version may join, re-applies the entry onto main as it is now (never a
 # merge), replaces the builder's commit on the same branch by compare-and-swap
 # and opens the pull request Eric merges. A paused or unreadable desk, a
-# revoked delegation, a number already on main or on an open intake branch,
-# or any other change in the branch is a refusal with the reason.
+# revoked delegation, a number already on main or given in the issue queue
+# (the agent ledger), or any other change in the branch is a refusal with the
+# reason.
 #
 # It proposes a backlog line only; nothing is built or merged by it. Uses only
 # GITHUB_TOKEN; its push starts no workflow, and GitHub holds the checks of a

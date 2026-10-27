@@ -139,21 +139,63 @@ test('builds of one task version count together whichever commit of main each st
   assert.equal(L.decideBuild(two, args({ ...bind('m3'), issue: 8 }, '3/1')).action, 'build', 'another issue');
 });
 
-test('builds: one per issue at a time; an open one is recorded lost after the hold, frees the issue and still counts', () => {
+test('builds: one per issue at a time; an open one is settled by its run\'s status first, by its age only when GitHub cannot say, and still counts', () => {
   const bind = (issue = 7) => ({ kind: 'build', issue, task_sha256: 'a'.repeat(64), base: 'm1', predecessor: 'absent' });
   const reserve = (id, run, b, at) => ({ t: 'reserve', kind: 'build', id, binding: L.bindingOf(b), bind: b, run, usd: 8, day: '2026-10-26', at });
-  const args = (b, run, now = NOW) => ({ binding: L.bindingOf(b), bind: b, ceilings: { ...CEIL, builds_per_day: 9, build_usd_per_day: 99 }, now, usd: 8, run });
+  const args = (b, run, now = NOW, runs = null) => ({ binding: L.bindingOf(b), bind: b, ceilings: { ...CEIL, builds_per_day: 9, build_usd_per_day: 99 }, now, usd: 8, run, runs });
   const open = [reserve('bd-1', '1/1', bind(), new Date(NOW - 64 * 60000).toISOString())];
-  assert.match(L.decideBuild(open, args(bind(), '2/1')).why, /build bd-1 of issue #7 \(run 1\/1\) has no outcome yet and is 64 min old; one build or revision per issue at a time, each held up to 65 min/);
+  const st = (status, conclusion = null, startedMinsAgo = 64) => new Map([['1/1', { status, conclusion, created_at: null, run_started_at: new Date(NOW - startedMinsAgo * 60000).toISOString() }]]);
+  // GitHub cannot say: the age decides, 65 minutes.
+  assert.match(L.decideBuild(open, args(bind(), '2/1')).why, /build bd-1 of issue #7 \(run 1\/1\) has no outcome yet: its run's status could not be read and it is 64 min old, so it is held up to 65 min; one build or revision per issue at a time/);
   assert.equal(L.decideBuild(open, args(bind(8), '2/1')).action, 'build', 'another issue is not held');
   assert.equal(L.decideBuild([...open, { t: 'outcome', id: 'bd-1', state: 'unknown' }], args(bind(), '2/1')).action, 'build', 'an outcome, even unknown, frees the issue');
-  assert.match(L.decideBuild([reserve('bd-1', '1/1', bind(), 'not a time')], args(bind(), '2/1')).why, /has no outcome yet; one build or revision per issue/, 'an unreadable time holds the issue');
+  assert.match(L.decideBuild([reserve('bd-1', '1/1', bind(), 'not a time')], args(bind(), '2/1')).why, /its run's status could not be read, so it is held up to 65 min/, 'an unreadable time and no status hold the issue');
   const later = L.decideBuild(open, args(bind(), '2/1', NOW + 60000));
   assert.equal(later.action, 'build');
   assert.deepEqual(later.lost, ['bd-1']);
-  assert.deepEqual(later.append.map((e) => [e.t, e.id, e.state]), [['outcome', 'bd-1', 'lost'], ['reserve', later.id, undefined]]);
-  assert.match(later.append[0].error, /no outcome 65 min after it was reserved/);
+  assert.deepEqual(later.append.map((e) => [e.t, e.id, e.state, e.via]), [['outcome', 'bd-1', 'lost', 'age'], ['reserve', later.id, undefined, undefined]]);
+  assert.match(later.append[0].error, /no outcome 65 min after it was reserved, and its run's status could not be read/);
   const after = [...open, ...later.append, { t: 'outcome', id: later.id, state: 'response' }];
   assert.match(L.decideBuild(after, args(bind(), '3/1', NOW + 120000)).why, /2 paid builds for this version/, 'the lost build still counts');
-  assert.equal(L.BUILD_GRACE_MINUTES, 20, 'a 45-minute build is held 65 minutes');
+  // GitHub says it is running: held past 65 minutes, up to GitHub's own six-hour limit.
+  assert.match(L.decideBuild(open, args(bind(), '2/1', NOW, st('in_progress', null, 90))).why, /has no outcome yet: its run is in_progress \(90 min\)/);
+  assert.match(L.decideBuild(open, args(bind(), '2/1', NOW, st('queued', null, 359))).why, /its run is queued \(359 min\)/);
+  const stuck = L.decideBuild(open, args(bind(), '2/1', NOW, st('in_progress', null, 360)));
+  assert.deepEqual([stuck.action, stuck.append[0].state, stuck.append[0].via], ['build', 'lost', 'run-status']);
+  assert.match(stuck.append[0].error, /its run 1\/1 was still in_progress 360 min after it started, past GitHub's 360-minute limit for a hosted job/);
+  // GitHub says it ended: settled at once, whatever its age.
+  const ended = L.decideBuild(open, args(bind(), '2/1', NOW - 63 * 60000, st('completed', 'failure', 1)));
+  assert.deepEqual([ended.action, ended.lost, ended.append[0].via], ['build', ['bd-1'], 'run-status']);
+  assert.match(ended.append[0].error, /its run 1\/1 completed \(failure\) with no outcome recorded/);
+  assert.deepEqual(ended.closed.map((o) => o.id), ['bd-1']);
+  assert.equal(L.BUILD_GRACE_MINUTES, 20, 'a 45-minute build is held 65 minutes when GitHub cannot say');
+  assert.equal(L.HARD_MAX_MINUTES, 360);
+});
+
+test('a build whose publishing line is in the ledger is never recorded lost: settled, it is recorded as published with its commit', () => {
+  const b = { kind: 'build', issue: 7, task_sha256: 'a'.repeat(64), base: 'm1', predecessor: 'absent' };
+  const entries = [
+    { t: 'reserve', kind: 'build', id: 'bd-1', binding: L.bindingOf(b), bind: b, run: '1/1', usd: 8, day: '2026-10-26', at: new Date(NOW - 90 * 60000).toISOString() },
+    { t: 'publishing', id: 'bd-1', commit: 'c'.repeat(40), branch: 'agent/issue-7', predecessor: 'absent', run: '1/1', at: new Date(NOW - 80 * 60000).toISOString() },
+  ];
+  const a = L.attempts(entries)[0];
+  assert.deepEqual([a.outcomes.length, a.publishing.length], [0, 1], 'a publishing line is not an outcome');
+  const d = L.decideBuild(entries, { binding: 'x', bind: { ...b, task_sha256: 'b'.repeat(64) }, ceilings: { ...CEIL, builds_per_day: 9, build_usd_per_day: 99 }, now: NOW, usd: 8, run: '2/1' });
+  assert.equal(d.action, 'build');
+  assert.deepEqual(d.lost, []);
+  assert.deepEqual(d.published, ['bd-1']);
+  assert.deepEqual([d.append[0].t, d.append[0].state, d.append[0].publish, d.append[0].commit, d.append[0].job], ['outcome', 'response', 'published', 'c'.repeat(40), 'unrecorded']);
+});
+
+test('run statuses are read only for open paid attempts on the issue; a run that cannot be read is left out', async () => {
+  const b = (issue) => ({ kind: 'build', issue, task_sha256: 'a'.repeat(64), base: 'm1', predecessor: 'absent' });
+  const r = (id, run, issue, kind = 'build') => ({ t: 'reserve', kind, id, binding: 'x', bind: b(issue), run, usd: 8, day: '2026-10-26' });
+  const entries = [r('bd-1', '11/1', 7), r('bd-2', '12/2', 7), r('bd-3', '13/1', 8), r('bd-4', '14/1', 7), { t: 'outcome', id: 'bd-4', state: 'response' }, r('bd-5', 'not-a-run', 7), r('rv-6', '16/1', 7, 'review')];
+  const asked = [];
+  const runs = await L.runStatuses(entries, { issue: 7, readRun: async (id, attempt) => { asked.push(`${id}/${attempt}`); if (id === 12) throw new Error('FICTIONAL network'); return { status: 'in_progress', conclusion: null, created_at: 'x', run_started_at: 'y', html_url: 'ignored' }; } });
+  assert.deepEqual(asked, ['11/1', '12/2']);
+  assert.deepEqual([...runs.entries()], [['11/1', { status: 'in_progress', conclusion: null, created_at: 'x', run_started_at: 'y' }]]);
+  assert.deepEqual(L.runIdOf('40/2'), { id: 40, attempt: 2 });
+  assert.equal(L.runIdOf('40'), null);
+  assert.equal(L.runIdOf('rv/1'), null);
 });

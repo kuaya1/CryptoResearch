@@ -10,7 +10,7 @@ only files.
 | `main-merge-authority.json` | Nobody may update `main` (the `update` rule). | Repository admin role, **pull request only**. That is Eric, merging a pull request. |
 | `main-merge-requirements.json` | Every change to `main` comes through a pull request. Only merge commits are allowed. The head must be up to date with `main` (strict). `test`, `agent-guard`, `agent-verify` and `agent-review` must pass, each from GitHub Actions (app 15368). No force push and no deletion. Zero approvals required. | None, not even Eric. |
 | `agent-ledger.json` | The paid-attempt ledger branch can be appended to, but never rewritten or deleted. | None |
-| `automation-branches.json` | No identity other than the admin role may create, update or delete any branch outside `agent/**`, `agent-ledger`, `visual-proof`, `claude/intake-issue-*` and `claude/admission-*`. | Repository admin role, always |
+| `automation-branches.json` | No identity other than the admin role may create, update or delete any branch outside `agent/**`, `agent-ledger`, `visual-proof`, `claude/admission-*`, `claude/backlog-*` and `claude/claims/**`. | Repository admin role, always |
 
 Why approval is not the boundary: an automation token can approve a pull
 request whenever Actions is allowed to approve, and Eric can merge an
@@ -34,6 +34,26 @@ Conditions:
 - **The builder App never gets the Administration or Workflows permission.**
   Workflows matters because, without it, the App cannot push changes to
   `.github/workflows/`.
+
+## Who pushes what (GitHub's activity log, 2026-10-27)
+
+`gh api repos/kuaya1/CryptoResearch/activity` names the actor of every ref
+update:
+
+| Refs | Actor | Credential |
+|---|---|---|
+| `agent/issue-<n>` (the agent lane's candidates) | `kuaya1-cr-builder[bot]` | the builder App's installation token, minted from `BUILDER_APP_KEY` in `agent-build.yml` publish |
+| `agent-ledger` | `github-actions[bot]` | the workflow token of `agent-build.yml` reserve and record, and `agent-review.yml` |
+| `claude/claims/item-<n>`, `claude/backlog-*` (the backlog builders, cloud routines A and B) | `kuaya1` (User) | Eric's own account, through the routines' GitHub connection |
+
+The agent lane pushes candidates only with the App token (pinned by
+`dashboard/tests/agent-workflows.test.js`). The backlog builders do not: every
+claim and branch push since the first claim (2026-10-27 03:59 UTC) is Eric's
+account, which holds the admin bypass of every ruleset here, `main` included.
+In that lane "only Eric merges" rests on the routines' instructions, not on
+access. The `claude/backlog-*` and `claude/claims/**` excludes let a non-admin
+identity do the same pushes; moving the routines onto one (or retiring them
+for the issue queue) is Eric's change, outside this repository.
 
 ## Evidence (probe repository, 2026-10-26)
 
@@ -76,8 +96,8 @@ so the read default changes none of them.
 
 `can_approve_pull_request_reviews` stays `true` for now. It is GitHub's one
 setting for "Allow GitHub Actions to create and approve pull requests", and
-`backlog-pr`, `backlog-intake` and `engineering-admission` still open their
-pull requests with the workflow token. Approval is not the boundary here
+`backlog-pr` and `engineering-admission` still open their pull requests
+with the workflow token (the issue queue, `backlog-queue`, opens none). Approval is not the boundary here
 (zero approvals are required, and the `update` rule stops every merge but
 Eric's). Set it to `false` once the old lane is retired and no workflow
 opens a pull request with the workflow token.

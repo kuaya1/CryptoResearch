@@ -993,13 +993,15 @@ test('eng-app@3 covers the hosted views, public scripts, tests and docs; core lo
     assert.match(m.considered.find((c) => c.template === 'eng-app@3').reasons.join(' '), re, paths.join(', '));
   }
   // Core logic, by name or by glob, alone or beside UI work: no delegation.
-  for (const paths of [['dashboard/core/tickets.js'], ['dashboard/core/screening.js'], ['dashboard/core/research/*.js'], ['dashboard/*/paper.js'], ['dashboard/co*/sizing.js'], ['dashboard/public/views/fictional.js', 'dashboard/core/research.js']]) {
+  for (const paths of [['dashboard/core/tickets.js'], ['dashboard/core/screening.js'], ['dashboard/core/research/*.js'], ['dashboard/*/tickets.js'], ['dashboard/co*/sizing.js'], ['dashboard/public/views/fictional.js', 'dashboard/core/research.js']]) {
     const m = lands(paths);
     assert.equal(m.delegation, null, paths.join(', '));
     assert.match(m.considered.find((c) => c.template === 'eng-app@3').reasons.join(' '), /can reach dashboard\/core\/ \(core financial and investment logic, which no delegation changes\); it waits for Eric/, paths.join(', '));
   }
   // What the gate is computed with is protected outright (review N2).
   for (const p of ['dashboard/core/scoring.js', 'dashboard/core/ops.js', 'dashboard/core/workspace.js']) assert.match(lands([p]).considered[0].reasons.join(' '), /can reach a protected path \(what the engineering gate and the front door are computed with\)/, p);
+  // The trader's Paper Book is protected outright (pipeline review, 2026-10-27).
+  assert.match(lands(['dashboard/*/paper.js']).considered[0].reasons.join(' '), /can reach a protected path \(the trader's Paper Book and pre-trade risk engine\)/);
   // A glob that can also reach the ledger says so first; it waits either way.
   assert.match(lands(['dashboard/core/*.js']).considered[0].reasons.join(' '), /can reach a protected path \(financial records/);
   assert.match(P.restrictedWhy('dashboard/web/src/**'), /the browser app/);

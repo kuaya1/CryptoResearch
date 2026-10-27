@@ -210,7 +210,7 @@ const protectedWhy = (p) => { const hit = protectedHit(p); return hit ? hit.why 
 // a scope glob that matches any of them could reach a protected path.
 const PROTECTED_SAMPLES = [
   '.github/workflows/x.yml', '.claude/agents/x.md', 'CLAUDE.md', 'COWORK-INSTRUCTIONS.md', 'DESK_STATE.md',
-  'dashboard/scripts/backlog-promote.js', 'dashboard/scripts/backlog-intake.js', 'dashboard/scripts/merge-train.js', 'dashboard/scripts/engineering-worker.js',
+  'dashboard/scripts/backlog-promote.js', 'dashboard/scripts/backlog-queue.js', 'dashboard/scripts/merge-train.js', 'dashboard/scripts/engineering-worker.js',
   'dashboard/oauth.js', 'dashboard/mcp.js', 'dashboard/mcp-wire.js', 'dashboard/hosted.js', 'server.js',
   'dashboard/core/portfolio.js', 'dashboard/core/wallets.js', 'dashboard/core/walletsync.js', 'dashboard/core/alchemy.js',
   'dashboard/frontdoor.js', 'dashboard/core/offsite.js', 'dashboard/core/ops.js', 'dashboard/core/fsx.js', 'dashboard/core/workspace.js', 'dashboard/tests/engineering-guard.test.js',
@@ -225,6 +225,8 @@ const PROTECTED_SAMPLES = [
   // Exclusive merge authority (2026-10-26): the boundary's checker and the
   // agent lane's trusted scripts and tests.
   'dashboard/scripts/merge-boundary-check.js', 'dashboard/scripts/agent-review.js', 'dashboard/tests/merge-boundary.test.js', 'dashboard/tests/agent-ledger.test.js',
+  // Pipeline review (2026-10-27): the trader's Paper Book and risk engine.
+  'dashboard/core/paper.js', 'dashboard/core/trade-risk.js', 'dashboard/tests/trade-risk.test.js', 'dashboard/tests/paper-trader.test.js', 'dashboard/tests/trader-boundary.test.js',
 ];
 function globTouchesProtected(glob) {
   if (!glob.includes('*')) return protectedWhy(glob);

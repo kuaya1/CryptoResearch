@@ -9,7 +9,8 @@
 //             GitHub (still open, still labeled, the same text the event
 //             carries), and one paid build is reserved in the ledger for this
 //             run before anything is sent, with the head the issue's branch
-//             holds then (or "absent"); one build per issue at a time
+//             holds then (or "absent"); one build per issue at a time, an
+//             earlier one settled from its run's status on GitHub first
 //   prompt    the builder's task text, from the issue as Eric labeled it
 //   apply     the build artifact's patch, applied to main in a scratch index:
 //             the resulting tree is what is checked and what is committed;
@@ -17,8 +18,9 @@
 //             (agent-secrets.js) is refused, naming where, never the value
 //   publish   that tree as one commit by the builder App, with the task's
 //             trailers, pushed to agent/issue-<n> by lease on the head the
-//             reservation recorded; a branch that moved since is "stale":
-//             recorded so and never retried
+//             reservation recorded, in one atomic push with its "publishing"
+//             line on the ledger (by lease on the tip read); a branch that
+//             moved since is "stale": recorded so and never retried
 //   record    the build attempt's outcome in the ledger (a revision's too)
 //   pr        the agent-guard check on a pull request: an agent candidate's
 //             commits, its task (still labeled, unchanged since the build)
@@ -243,6 +245,9 @@ function applyPatch({ cwd, base, patchFile, maxBytes }) {
   }
 }
 
+// The open attempts a reserve closed before its own, in words.
+const settledWords = (closed) => (closed && closed.length ? ` Settled first: ${closed.map((o) => `${o.id} ${o.state === 'lost' ? 'recorded lost' : 'recorded as published'} (${oneLine(o.error || o.note, 160)})`).join('; ')}.` : '');
+
 const botIdentity = (name, email) => ({ GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email });
 function commitMessage(task, { run, policy, revision = null }) {
   return [
@@ -258,24 +263,77 @@ function commitMessage(task, { run, policy, revision = null }) {
     `Generated-By: Claude Code ${policy.build.claude_code} (${policy.build.model})`,
   ].join('\n');
 }
-// One commit of `tree` on `base` by the builder App, pushed to its branch by
-// lease on `predecessor`, the head the ledger recorded when this build was
-// reserved ("absent": no branch then), never on what the branch holds when
-// the build ends (Engineering v3, change 3). A branch that moved in between
-// is another build's or Eric's: this build is stale, and is not retried.
-function publish({ cwd, base, tree, task, run, botName, botEmail, branch, predecessor, revision = null, remote = 'origin', policy = loadPolicy() }) {
-  if (predecessor !== 'absent' && !SHA_RE.test(String(predecessor || ''))) return { error: `no recorded head of ${branch} to lease on (${oneLine(predecessor, 60) || 'none'}); nothing is pushed` };
-  const expected = predecessor === 'absent' ? '' : predecessor;
-  const c = git(cwd, ['commit-tree', tree, '-p', base, '-m', commitMessage(task, { run, policy, revision })], { env: botIdentity(botName, botEmail) });
-  if (c.status !== 0 || !SHA_RE.test(c.out)) return { error: `the commit could not be made: ${c.err.slice(0, 200)}` };
-  const ref = `refs/heads/${branch}`;
-  const p = git(cwd, ['push', '--porcelain', `--force-with-lease=${ref}:${expected}`, remote, `${c.out}:${ref}`]);
-  const ls = git(cwd, ['ls-remote', remote, ref]);
-  const after = ls.out.split(/\s+/)[0] || '';
-  if (ls.status === 0 && after === c.out) return { commit: c.out, branch, replaced: expected || null };
-  if (ls.status === 0 && after !== expected) return { stale: true, commit: c.out, error: `${branch} moved after this build was reserved: it was ${expected ? expected.slice(0, 12) : 'absent'} and is now ${after ? after.slice(0, 12) : 'absent'}; this build is not published and is not retried` };
-  return { error: `the push to ${branch} failed and the branch reads ${ls.status === 0 ? after.slice(0, 12) || 'absent' : 'unknown'} (${p.err.slice(0, 200)})`, commit: c.out };
+// What a reservation in the ledger lets publish do for this task, or why not.
+function reservationFor(l, { reservation, task, base }) {
+  const res = L.attempts(l.entries).find((a) => a.id === reservation);
+  const bind = res && res.reserve.bind;
+  const why = !res ? `reservation ${oneLine(reservation, 40) || '(none)'} is not in the ledger` : !L.PAID[res.reserve.kind] ? `reservation ${res.id} is not a build or a revision` : !bind || bind.issue !== task.number || bind.task_sha256 !== task.body_sha256 || bind.base !== base ? `reservation ${res.id} is not a build of this version of #${task.number} on ${String(base).slice(0, 12)}` : null;
+  return why ? { why } : { res, bind };
 }
+
+// One commit of `tree` on `base` by the builder App, published by one atomic
+// push that moves two refs or neither (pipeline review, 2026-10-27):
+//   - its branch, by lease on the head the ledger recorded when this build
+//     was reserved ("absent": no branch then), never on what the branch holds
+//     when the build ends (Engineering v3, change 3);
+//   - agent-ledger, by lease on the tip just read, with this attempt's
+//     "publishing" line.
+// A reserve that lands between the read and the push moves the ledger, so
+// the whole push is refused; the ledger is read again and the decision made
+// again, and a build recorded lost meanwhile is stale. A branch that moved is
+// another build's or Eric's: this build is stale, and is not retried.
+function publish({ cwd, base, tree, task, run, botName, botEmail, branch, reservation, remote = 'origin', policy = loadPolicy(), tries = 4, beforePush = null }) {
+  const ref = `refs/heads/${branch}`;
+  let commit = null;
+  let revision = null;
+  for (let i = 0; i < tries; i += 1) {
+    const l = L.read(cwd, { remote });
+    if (l.error) return { error: l.error };
+    const r = reservationFor(l, { reservation, task, base });
+    if (r.why) return { error: r.why };
+    const { res, bind } = r;
+    // Recorded lost: the issue was freed for a later build, so this one stays out.
+    const gone = res.outcomes.find((o) => o.state === 'lost');
+    if (gone) return { stale: true, error: `build ${res.id} was recorded lost (${oneLine(gone.error, 160)}) and the issue went to a later build; this build is not published and is not retried` };
+    if (res.outcomes.length) return { stale: true, error: `build ${res.id} already has an outcome (${oneLine(res.outcomes[res.outcomes.length - 1].state, 20)}); this build is not published again` };
+    const predecessor = bind.predecessor;
+    if (predecessor !== 'absent' && !SHA_RE.test(String(predecessor || ''))) return { error: `no recorded head of ${branch} to lease on (${oneLine(predecessor, 60) || 'none'}); nothing is pushed` };
+    const expected = predecessor === 'absent' ? '' : predecessor;
+    const heads = () => {
+      const ls = git(cwd, ['ls-remote', remote, ref, L.REF]);
+      const at = (name) => ((ls.out.split('\n').find((x) => x.endsWith(`\t${name}`)) || '').split('\t')[0] || '');
+      return ls.status === 0 ? { branch: at(ref), ledger: at(L.REF) } : null;
+    };
+    // Its publishing line is in the ledger already (a re-run of this job):
+    // published when the branch still holds that commit.
+    const held = res.publishing[res.publishing.length - 1];
+    if (held) {
+      const h = heads();
+      if (h && h.branch === held.commit) return { commit: held.commit, branch, replaced: expected || null, revision: revisionOf(res, bind), again: true };
+      return { stale: true, error: `build ${res.id} was published as ${String(held.commit).slice(0, 12)} and ${branch} reads ${h ? h.branch.slice(0, 12) || 'absent' : 'unknown'} now; this build is not published again` };
+    }
+    if (!commit) {
+      revision = revisionOf(res, bind);
+      const c = git(cwd, ['commit-tree', tree, '-p', base, '-m', commitMessage(task, { run, policy, revision })], { env: botIdentity(botName, botEmail) });
+      if (c.status !== 0 || !SHA_RE.test(c.out)) return { error: `the commit could not be made: ${c.err.slice(0, 200)}` };
+      commit = c.out;
+    }
+    const line = L.stage(cwd, { ...l, recs: [{ t: 'publishing', id: res.id, commit, branch, predecessor, run, at: new Date().toISOString() }], message: `publishing ${res.id}` });
+    if (beforePush) beforePush(i);
+    const p = git(cwd, ['push', '--atomic', '--porcelain', `--force-with-lease=${ref}:${expected}`, `--force-with-lease=${L.REF}:${l.tip}`, remote, `${commit}:${ref}`, `${line.commit}:${L.REF}`]);
+    const h = heads();
+    // The branch holds this commit only through this push, which carried
+    // the publishing line with it (the ledger may have moved on since).
+    if (h && h.branch === commit) return { commit, branch, replaced: expected || null, revision };
+    if (h && h.branch !== expected) return { stale: true, commit, error: `${branch} moved after this build was reserved: it was ${expected ? expected.slice(0, 12) : 'absent'} and is now ${h.branch ? h.branch.slice(0, 12) : 'absent'}; this build is not published and is not retried` };
+    // Only the ledger moved (another reserve, review or record): neither ref
+    // was written, so read it again and decide again.
+    if (h && h.ledger !== l.tip) continue;
+    return { error: `the push to ${branch} and the ledger failed and ${branch} reads ${h ? h.branch.slice(0, 12) || 'absent' : 'unknown'} (${p.err.slice(0, 200)})`, commit };
+  }
+  return { error: `the ledger kept moving while ${branch} was being published; nothing was pushed`, commit };
+}
+const revisionOf = (res, bind) => (res.reserve.kind === 'revise' ? { id: res.id, predecessor: bind.predecessor, comments: Array.isArray(bind.comments) ? bind.comments : [], feedback_sha256: bind.feedback_sha256 } : null);
 
 // The commits of a pull request on its merge base.
 function commitsOf(cwd, base, head) {
@@ -418,6 +476,9 @@ function githubApi({ token, repo, fetchImpl = globalThis.fetch }) {
   };
   return {
     issue: async (n) => { const r = await call('GET', `/repos/${repo}/issues/${n}`); return r.status === 200 ? r.json : null; },
+    // One attempt of a workflow run, as GitHub reports it now (its status,
+    // conclusion and times), or null.
+    runAttempt: async (id, attempt) => { if (!Number.isSafeInteger(id) || !Number.isSafeInteger(attempt)) return null; const r = await call('GET', `/repos/${repo}/actions/runs/${id}/attempts/${attempt}`); return r.status === 200 ? r.json : null; },
     pull: async (n) => { const r = await call('GET', `/repos/${repo}/pulls/${n}`); return r.status === 200 ? r.json : null; },
     pullsForSha: async (sha) => { const r = await call('GET', `/repos/${repo}/commits/${sha}/pulls`); return r.status === 200 && Array.isArray(r.json) ? r.json : []; },
     createCheck: async (o) => { const r = await call('POST', `/repos/${repo}/check-runs`, o); return { ok: r.status === 201, status: r.status, id: r.json && r.json.id }; },
@@ -454,8 +515,8 @@ async function main(argv, { now = () => Date.now(), cwd = process.cwd(), env = p
     const reasons = authorize(ev, { policy });
     const task = ev.issue ? taskOf(ev.issue, { policy }) : null;
     if (task) reasons.push(...task.problems);
+    const gh = githubApi({ token: env.GH_TOKEN, repo: env.GITHUB_REPOSITORY, fetchImpl });
     if (!reasons.length) {
-      const gh = githubApi({ token: env.GH_TOKEN, repo: env.GITHUB_REPOSITORY, fetchImpl });
       let live = null;
       try { live = await gh.issue(task.number); } catch (_) { live = null; }
       reasons.push(...liveCheck(task, live, { policy }));
@@ -472,9 +533,15 @@ async function main(argv, { now = () => Date.now(), cwd = process.cwd(), env = p
     const bind = buildBinding(task, base, predecessor);
     const run = `${env.GITHUB_RUN_ID}/${env.GITHUB_RUN_ATTEMPT}`;
     const holdMs = (policy.build.timeout_minutes + L.BUILD_GRACE_MINUTES) * 60000;
-    const d = L.transact(cwd, { decide: (entries) => L.decideBuild(entries, { binding: L.bindingOf(bind), bind, ceilings: policy.ceilings, now: now(), usd: policy.build.max_budget_usd, run, holdMs }), message: `build reserve #${task.number}` });
+    // GitHub's word on the runs of the attempts holding this issue, read
+    // before deciding (pipeline review, 2026-10-27); age decides only for a
+    // run it cannot report.
+    const l0 = L.read(cwd);
+    if (l0.error) { refused([l0.error]); return 0; }
+    const runs = await L.runStatuses(l0.entries, { issue: task.number, readRun: gh.runAttempt });
+    const d = L.transact(cwd, { decide: (entries) => L.decideBuild(entries, { binding: L.bindingOf(bind), bind, ceilings: policy.ceilings, now: now(), usd: policy.build.max_budget_usd, run, holdMs, runs }), message: `build reserve #${task.number}` });
     if (d.error || d.action !== 'build') { refused([d.error || d.why]); return 0; }
-    out({ ok: true, kind: 'build', reservation: d.id, attempt: env.GITHUB_RUN_ATTEMPT, number: task.number, issue: task.number, notify: task.number, title: task.title, template: task.template, task_sha256: task.body_sha256, predecessor, base, checkout: base }, `Build of #${task.number} (${task.template}) reserved as ${d.id}: at most $${policy.build.max_budget_usd}, on ${branch} at ${predecessor === 'absent' ? 'no branch yet' : predecessor.slice(0, 12)}.${d.lost && d.lost.length ? ` Recorded as lost first (no outcome after ${Math.round(holdMs / 60000)} min): ${d.lost.join(', ')}.` : ''}`);
+    out({ ok: true, kind: 'build', reservation: d.id, attempt: env.GITHUB_RUN_ATTEMPT, number: task.number, issue: task.number, notify: task.number, title: task.title, template: task.template, task_sha256: task.body_sha256, predecessor, base, checkout: base }, `Build of #${task.number} (${task.template}) reserved as ${d.id}: at most $${policy.build.max_budget_usd}, on ${branch} at ${predecessor === 'absent' ? 'no branch yet' : predecessor.slice(0, 12)}.${settledWords(d.closed)}`);
     return 0;
   }
   if (cmd === 'prompt') {
@@ -495,21 +562,17 @@ async function main(argv, { now = () => Date.now(), cwd = process.cwd(), env = p
   }
   if (cmd === 'publish') {
     const task = taskOf(issueOfFlags(flags), { policy });
-    // The head to lease on is the one the ledger recorded at reserve.
-    const l = L.read(cwd);
-    const res = l.error ? null : L.attempts(l.entries).find((a) => a.id === flags.reservation);
-    const bind = res && res.reserve.bind;
-    const why = l.error || (!res ? `reservation ${oneLine(flags.reservation, 40) || '(none)'} is not in the ledger` : !L.PAID[res.reserve.kind] ? `reservation ${res.id} is not a build or a revision` : !bind || bind.issue !== task.number || bind.task_sha256 !== task.body_sha256 || bind.base !== flags.base ? `reservation ${res.id} is not a build of this version of #${task.number} on ${String(flags.base).slice(0, 12)}` : null);
-    if (why) { out({ ok: false, state: 'failed' }, `### Not published\n\n- ${why}`); return 1; }
-    // Recorded lost: the issue was freed for a later build, so this one stays out.
-    const gone = res.outcomes.find((o) => o.state === 'lost');
-    if (gone) { const note = `build ${res.id} was recorded lost (${oneLine(gone.error, 120)}) and the issue went to a later build; this build is not published and is not retried`; out({ ok: false, state: 'stale', note }, `### Not published: stale\n\n- ${note}`); return 0; }
-    const revision = res.reserve.kind === 'revise' ? { id: res.id, predecessor: bind.predecessor, comments: Array.isArray(bind.comments) ? bind.comments : [], feedback_sha256: bind.feedback_sha256 } : null;
-    const p = publish({ cwd, base: flags.base, tree: flags.tree, task, run: flags.run, botName: flags['bot-name'], botEmail: flags['bot-email'], branch: `${policy.branch_prefix}${task.number}`, predecessor: bind.predecessor, revision, policy });
-    if (p.stale) { out({ ok: false, state: 'stale', note: p.error }, `### Not published: stale\n\n- ${p.error}`); return 0; }
-    if (p.error) { out({ ok: false, state: 'failed' }, `### Not published\n\n- ${p.error}`); return 1; }
-    out({ ok: true, state: 'published', commit: p.commit, branch: p.branch }, `Published ${p.commit.slice(0, 12)} to ${p.branch}${p.replaced ? ` (replacing ${p.replaced.slice(0, 12)})` : ''}.`);
-    fs.writeFileSync(flags['body-out'], prBody(task, { build: flags.build && fs.existsSync(flags.build) ? JSON.parse(fs.readFileSync(flags.build, 'utf8')) : {}, commit: p.commit, runUrl: flags['run-url'], revision }));
+    // The head to lease on, and the ledger tip the push fences, are read from
+    // the ledger inside publish.
+    const p = publish({ cwd, base: flags.base, tree: flags.tree, task, run: flags.run, botName: flags['bot-name'], botEmail: flags['bot-email'], branch: `${policy.branch_prefix}${task.number}`, reservation: flags.reservation, policy });
+    if (p.stale) { out({ ok: false, state: 'stale', note: p.error }, `### Not published: stale
+
+- ${p.error}`); return 0; }
+    if (p.error) { out({ ok: false, state: 'failed' }, `### Not published
+
+- ${p.error}`); return 1; }
+    out({ ok: true, state: 'published', commit: p.commit, branch: p.branch }, `Published ${p.commit.slice(0, 12)} to ${p.branch}${p.replaced ? ` (replacing ${p.replaced.slice(0, 12)})` : ''}, with its publishing line in the ledger in the same push.`);
+    fs.writeFileSync(flags['body-out'], prBody(task, { build: flags.build && fs.existsSync(flags.build) ? JSON.parse(fs.readFileSync(flags.build, 'utf8')) : {}, commit: p.commit, runUrl: flags['run-url'], revision: p.revision }));
     return 0;
   }
   if (cmd === 'record') {
@@ -537,4 +600,4 @@ async function main(argv, { now = () => Date.now(), cwd = process.cwd(), env = p
 
 if (require.main === module) main(process.argv.slice(2)).then((c) => { process.exitCode = c; }, (err) => { process.stderr.write(`agent-guard: ${String((err && err.message) || err).slice(0, 400)}\n`); process.exitCode = 1; });
 
-module.exports = { FIELDS, SHA_RE, NO_TESTS_NAMED, loadPolicy, oneLine, parseIssueForm, taskOf, authorize, liveCheck, buildBinding, changesOf, checkChange, applyPatch, commitMessage, publish, commitsOf, botEmailOf, isAgentPr, trailersOf, pureMerge, prCheck, scopeWords, builderPrompt, prBody, githubApi, main };
+module.exports = { FIELDS, SHA_RE, NO_TESTS_NAMED, loadPolicy, oneLine, parseIssueForm, taskOf, authorize, liveCheck, buildBinding, changesOf, checkChange, applyPatch, commitMessage, reservationFor, publish, settledWords, commitsOf, botEmailOf, isAgentPr, trailersOf, pureMerge, prCheck, scopeWords, builderPrompt, prBody, githubApi, main };

@@ -24,7 +24,10 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..', '..');
 const FORMAT = 'cr-pipeline@1';
-const HOLD_MS = 65 * 60 * 1000; // a paid attempt with no outcome holds its issue this long (agent-ledger.js)
+// A paid attempt with no outcome counts as in flight this long: the ledger's
+// own fallback when its run's status cannot be read (agent-ledger.js
+// settleOpen). This page asks GitHub nothing, so it never reads that status.
+const HOLD_MS = 65 * 60 * 1000;
 const PACE_DAYS = 7;
 
 // The paths an item names: backticked text that reads as a path. Its
