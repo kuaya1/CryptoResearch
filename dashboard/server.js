@@ -1218,6 +1218,9 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   // Grok Scout's list (core/scout.js): read only; the sweep's own route is
   // the front door's.
   route('GET', '/api/scout', () => coherent(() => require('./core/scout').view(ws)));
+  // The Pipeline cockpit (core/pipeline.js): the backlog, what is in flight
+  // and today's builds, read only from this copy; nothing fetched or stored.
+  route('GET', '/api/pipeline', () => require('./core/pipeline').read(ws));
   // The daily brief (core/brief-daily.js): read only, nothing stored.
   route('GET', '/api/brief/daily', (m, req, res, body, url) => coherent(() => require('./core/brief-daily').brief(ws, { since: url.searchParams.get('since') || null })));
   route('GET', '/api/projects/([^/]+)/outcomes', (m) => coherent(() => require('./core/report-outcomes').projectOutcomes(ws, pid(m[1]))));
