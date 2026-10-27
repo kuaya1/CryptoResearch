@@ -204,6 +204,7 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   // The Trade Plan strip (item 49) reads the view's geometry and says unknown, never a made-up number.
   assert.match(pm, /trade_plan_geometry/);
   assert.match(pm, /Reward : risk/);
+  assert.match(pm, /plan_reward_risk_ratio/);
   // The four-test matrix (item 52): pills with pass, fail or unknown; a missing test is unknown.
   assert.match(pm, /near_invalidation/);
   assert.match(pm, /Disagreement/);
@@ -315,4 +316,35 @@ test('no purple or indigo anywhere the desk draws: sources, the sign-in pages, t
     }
   }
   assert.deepEqual(found, [], 'purple or indigo colours');
+});
+
+test('Portfolio Set cost (item 69): the form posts only to the existing set-cost route and shows a refusal in the route\'s words', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'portfolio.js'), 'utf8');
+  const form = src.slice(src.indexOf('function openSetCostDialog'), src.indexOf('// Accept the wallet-import notes'));
+  assert.deepEqual([...form.matchAll(/api\.post\('([^']+)'/g)].map((m) => m[1]), ['/api/portfolio/set-cost']);
+  assert.match(form, /setCostBody\(t, \{ cost: cost\.value/);
+  assert.match(form, /Cost not set: \$\{err\.message\}/);
+  assert.match(form, /out\.words/);
+  assert.doesNotMatch(form, /value: .*price/i, 'the cost is never prefilled from a price');
+});
+
+test('Pilot Queue desk gates (item 70): the buttons dry-run first, then post with the receipt IDs shown', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'research.js'), 'utf8');
+  const bar = src.slice(src.indexOf('function deskGateBar'));
+  assert.deepEqual([...new Set([...bar.matchAll(/api\.post\('([^']+)'/g)].map((m) => m[1]))], ['/api/tickets/desk-gates/decide']);
+  assert.match(bar, /dry_run: true/);
+  assert.match(bar, /expect: shown\.map\(\(d\) => d\.receipt_id\)/);
+  assert.match(bar, /`\$\{verb\} all \$\{gates\.length\}`/);
+  assert.match(bar, /'Watch', 'watch'/);
+  assert.match(bar, /'Pass', 'pass'/);
+});
+
+test('Pilot Queue cycle (item 71): the button dry-runs first and posts with the counts shown', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'research.js'), 'utf8');
+  const part = src.slice(src.indexOf('function runCycleButton'), src.indexOf('// Decide the desk'));
+  assert.deepEqual([...new Set([...part.matchAll(/api\.post\('([^']+)'/g)].map((m) => m[1]))], ['/api/tickets/run-cycle']);
+  assert.match(part, /dry_run: true/);
+  assert.match(part, /expect: \{ opted_in: c\.opted_in \?\? 0, gates_made: c\.gates_made \?\? 0, quoted: c\.quoted \?\? 0 \}/);
+  assert.match(part, /Run pilot cycle/);
+  assert.match(part, /Agent 1 \(research\)/);
 });

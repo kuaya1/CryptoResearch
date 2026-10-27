@@ -339,3 +339,11 @@ test('Cowork request queue: a long-term research request needs its reason; with 
   const def = JSON.parse(fs.readFileSync(path.join(root, 'logs', 'requests', 'req_pc_default.result.json'), 'utf8'));
   assert.ok(['done', 'unchanged'].includes(def.status), JSON.stringify(def));
 });
+
+test('item 69: the unknown-cost sentence names the Set cost control as it is drawn', () => {
+  const PB = require('../core/position-brief');
+  const b = PB.pnlOf({ cost_basis_status: 'unknown', quantity: '2', value_usd: 10 });
+  assert.equal(b.status, 'cost_unknown');
+  assert.match(b.words, /Use Set cost on the row in Portfolio > Needs attention/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'portfolio.js'), 'utf8'), /'Set cost'/);
+});

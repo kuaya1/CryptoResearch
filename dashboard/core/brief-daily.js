@@ -63,9 +63,9 @@ function brief(ws, { since = null, now = Date.now() } = {}) {
     if (state === 'ok' && !lines.length) lines = [{ text: 'None right now.', link: null }];
     sections.push({
       id, title, state, error,
-      count: state === 'ok' ? lines.filter((l) => l.link || l.text !== 'None right now.').length : null,
+      count: state === 'ok' ? lines.filter((l) => l.link || l.text !== 'None right now.').reduce((n, l) => n + (typeof l.n === 'number' ? l.n : 1), 0) : null,
       ...(state === 'partial' ? { count_read: read.length, unreadable_count: failed.length } : {}),
-      lines: lines.map(({ unreadable, ...l }) => (unreadable ? { ...l, unreadable: true } : l)),
+      lines: lines.map(({ unreadable, n, ...l }) => (unreadable ? { ...l, unreadable: true } : l)),
     });
   };
 
@@ -84,16 +84,27 @@ function brief(ws, { since = null, now = Date.now() } = {}) {
     const ez = t.entry_zone;
     const entry = ez && typeof ez.low_usd === 'number' && typeof ez.high_usd === 'number' ? `${n(ez.low_usd)}–${n(ez.high_usd)}` : 'unknown';
     const geo = t.trade_plan_geometry;
-    const rr = geo && typeof geo.reward_risk_ratio === 'number' ? `${geo.reward_risk_ratio.toFixed(1)}x` : 'unknown';
+    const x = (v) => (typeof v === 'number' ? `${v.toFixed(1)}x` : 'unknown');
+    const rr = `${x(geo && geo.plan_reward_risk_ratio)} at plan, ${x(geo && geo.reward_risk_ratio)} now`;
     const grade = t.researcher && (t.researcher.grade_display || (typeof t.researcher.grade === 'number' ? String(t.researcher.grade) : null));
     const conv = t.prosecution && typeof t.prosecution.conviction_score === 'number' ? String(t.prosecution.conviction_score) : null;
     return ` Entry ${entry}, target ${n(t.upside_target && t.upside_target.price_usd)}, invalidation ${n(t.invalidation_trigger && t.invalidation_trigger.price_usd)}, R:R ${rr}; Researcher ${grade || 'unknown'} vs Prosecutor ${conv || 'unknown'}.`;
   };
 
-  section('pm_cards', 'PM cards waiting for you', true, () => [...unreadableTickets('waits for you'), ...rows
-    .filter((r) => ticketOf(r) && ticketOf(r).status === 'pending_pm_review')
-    .sort((a, b) => String(ticketOf(a).saved_at).localeCompare(String(ticketOf(b).saved_at)))
-    .map((r) => ({ text: `${r.name}: ${String(ticketOf(r).proposal_type || 'ticket').replace(/_/g, ' ')}${ticketOf(r).desk_gate ? ' (desk gate)' : ''}, waiting ${age(ticketOf(r).saved_at, now)}.${planOf(ticketOf(r))}${r.report_delta && r.report_delta.status === 'ok' ? ` Claude's report: ${r.report_delta.line}.` : ''}`, link: link(r.project_id) }))]);
+  // Order (item 67): risk-reducing tickets first, then those near their
+  // invalidation price, then the rest, oldest first; desk gates close the
+  // section as one line.
+  const cardRank = (t) => (t.proposal_type === 'TRIM_EXIT' ? 0 : t.near_invalidation ? 1 : 2);
+  section('pm_cards', 'PM cards waiting for you', true, () => {
+    const waiting = rows.filter((r) => ticketOf(r) && ticketOf(r).status === 'pending_pm_review');
+    const cards = waiting.filter((r) => !ticketOf(r).desk_gate)
+      .sort((a, b) => cardRank(ticketOf(a)) - cardRank(ticketOf(b)) || String(ticketOf(a).saved_at).localeCompare(String(ticketOf(b).saved_at)))
+      .map((r) => ({ text: `${r.name}: ${String(ticketOf(r).proposal_type || 'ticket').replace(/_/g, ' ')}, waiting ${age(ticketOf(r).saved_at, now)}.${planOf(ticketOf(r))}${r.report_delta && r.report_delta.status === 'ok' ? ` Claude's report: ${r.report_delta.line}.` : ''}`, link: link(r.project_id) }));
+    const gates = waiting.filter((r) => ticketOf(r).desk_gate)
+      .sort((a, b) => String(ticketOf(a).saved_at).localeCompare(String(ticketOf(b).saved_at)));
+    const gateLine = gates.length ? [{ text: `${gates.length} desk ${gates.length === 1 ? 'gate' : 'gates'} waiting: ${gates.map((r) => r.name).join(', ')}.`, link: '#/research?tab=runs', n: gates.length }] : [];
+    return [...unreadableTickets('waits for you'), ...cards, ...gateLine];
+  });
 
   section('invalidated', sinceMs === null ? 'Tickets invalidated (no since given: all)' : `Tickets invalidated since ${new Date(sinceMs).toISOString()}`, true, () => [...unreadableTickets('is invalidated'), ...rows
     .filter((r) => {
@@ -134,7 +145,9 @@ function brief(ws, { since = null, now = Date.now() } = {}) {
 
   section('pilot_exits', 'Pilot projects missing an exit reading', false, () => {
     const T = require('./tickets');
-    return T.pilotCandidates(ws, { now })
+    const cands = T.pilotCandidates(ws, { now });
+    if (!cands.some((c) => c.in_pilot)) return [{ text: 'No project is in the pilot, so no exit reading is expected.', link: null, n: 0 }];
+    return cands
       .filter((c) => c.in_pilot && c.exit_reading && c.exit_reading.present === false)
       .map((c) => ({ text: `${c.name || c.project_id}: no current exit reading at $${c.exit_reading.size_usd}.`, link: `#/project/${c.project_id}/forensics?tab=exits` }));
   });

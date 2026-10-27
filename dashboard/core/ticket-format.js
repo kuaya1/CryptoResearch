@@ -7,7 +7,9 @@ const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const round = (x, d = 4) => (isNum(x) ? Math.round(x * 10 ** d) / 10 ** d : null);
 const usd = (n) => `$${Number(n).toLocaleString('en-US')}`;
 
-// Item 53: the invalidation proximity radar. A non-invalidated Prosecutor
+// Item 53: the invalidation proximity radar (`cr-near-invalidation@1` measured
+// the gap from the stop; item 68's `@2` measures the fall from the price, as the
+// card's `to_stop_pct` and the held-position line do). A non-invalidated Prosecutor
 // ticket still in play (not vetoed or passed) whose fresh stored price sits
 // within NEAR_INVALIDATION_PCT above its invalidation price. Arithmetic on the
 // geometry's own fresh price; a stale or missing price says nothing.
@@ -17,12 +19,12 @@ function nearInvalidation(status, geometry) {
   const price = geometry.price && geometry.price.status === 'fresh' ? geometry.price.price_usd : null;
   const stop = geometry.stop_usd;
   if (!isNum(price) || !isNum(stop) || !(stop > 0) || !(price > stop)) return null;
-  const distance = round(((price - stop) / stop) * 100, 2);
+  const distance = round(((price - stop) / price) * 100, 2);
   if (distance > NEAR_INVALIDATION_PCT) return null;
-  return { distance_pct: distance, price_usd: price, threshold_usd: stop, words: `Near invalidation: the price $${price} is ${distance}% above the invalidation price $${stop} (within ${NEAR_INVALIDATION_PCT}%).` };
+  return { version: 'cr-near-invalidation@2', distance_pct: distance, price_usd: price, threshold_usd: stop, words: `Near invalidation: a ${distance}% fall reaches the invalidation price $${stop} (price $${price}; within ${NEAR_INVALIDATION_PCT}%).` };
 }
 
-// Trade Plan geometry (item 49, `cr-ticket-geometry@1`): where the stored price
+// Trade Plan geometry (item 49; item 68's `cr-ticket-geometry@2` adds the plan's own reward:risk): where the stored price
 // sits against the receipt's own entry zone, target and invalidation price.
 // Arithmetic only: a missing number is said unknown, never filled in, and a
 // price past the freshness limit (or of unknown age) is not used.
@@ -34,7 +36,7 @@ function tradePlanGeometry(proposal, latest, { now = Date.now(), staleMinutes = 
   const low = ez && isNum(ez.low_usd) ? ez.low_usd : null;
   const high = ez && isNum(ez.high_usd) ? ez.high_usd : null;
   const out = {
-    version: 'cr-ticket-geometry@1',
+    version: 'cr-ticket-geometry@2',
     price: { status: 'unknown', price_usd: null, as_of: null, age_minutes: null, reason: null },
     entry_zone: { low_usd: low, high_usd: high },
     upside_target_usd: up,
@@ -42,6 +44,7 @@ function tradePlanGeometry(proposal, latest, { now = Date.now(), staleMinutes = 
     position: 'unknown', position_pct: null,
     to_upside_pct: null, to_stop_pct: null,
     reward_risk_ratio: null,
+    plan_reward_risk_ratio: null,
     words: null,
   };
   const at = latest && latest.as_of ? Date.parse(latest.as_of) : NaN;
@@ -50,6 +53,11 @@ function tradePlanGeometry(proposal, latest, { now = Date.now(), staleMinutes = 
   else if (age === null) out.price = { status: 'unknown', price_usd: latest.price_usd, as_of: latest.as_of || null, age_minutes: null, reason: 'The stored price is of unknown age: it is not used.' };
   else if (age > staleMinutes) out.price = { status: 'stale', price_usd: latest.price_usd, as_of: latest.as_of, age_minutes: age, reason: `The stored price is ${age} min old, past your ${staleMinutes}-minute limit: it is not used.` };
   else out.price = { status: 'fresh', price_usd: latest.price_usd, as_of: latest.as_of, age_minutes: age, reason: null };
+  // From the entry zone's midpoint: known without a fresh price.
+  if (low !== null && high !== null && up !== null && stop !== null) {
+    const mid = (low + high) / 2;
+    if (up > mid && mid > stop) out.plan_reward_risk_ratio = round((up - mid) / (mid - stop), 2);
+  }
   const ref = out.price.status === 'fresh' ? out.price.price_usd : null;
   if (ref !== null) {
     if (low !== null && high !== null) {
@@ -65,8 +73,11 @@ function tradePlanGeometry(proposal, latest, { now = Date.now(), staleMinutes = 
   if (out.position !== 'unknown') bits.push(out.position === 'in_zone' ? 'price in the entry zone' : `price ${out.position_pct}% ${out.position === 'above_zone' ? 'above' : 'below'} the entry zone`);
   if (out.to_upside_pct !== null) bits.push(`${out.to_upside_pct}% to the target`);
   if (out.to_stop_pct !== null) bits.push(`${out.to_stop_pct}% to the invalidation price`);
-  bits.push(out.reward_risk_ratio !== null ? `reward:risk ${out.reward_risk_ratio}:1` : 'reward:risk unknown');
-  out.words = ref === null ? (out.price.reason || 'No fresh price.') + ' Position, distances and reward:risk are unknown.' : `${bits.join('; ')}.`;
+  const atPlan = out.plan_reward_risk_ratio !== null ? `${out.plan_reward_risk_ratio}:1 at plan` : 'unknown at plan';
+  bits.push(`reward:risk ${atPlan}, ${out.reward_risk_ratio !== null ? `${out.reward_risk_ratio}:1` : 'unknown'} now`);
+  out.words = ref === null
+    ? `${out.price.reason || 'No fresh price.'} Position, distances and reward:risk now are unknown; reward:risk ${atPlan}.`
+    : `${bits.join('; ')}.`;
   return out;
 }
 

@@ -1806,18 +1806,20 @@ test('shadow gate day 30 (item 41): a fixed 30-day result that does not follow t
 });
 
 // ---------------------------------------------------------------------------
-// Trade Plan geometry (item 49, cr-ticket-geometry@1)
+// Trade Plan geometry (item 49; cr-ticket-geometry@2, item 68)
 
 test('trade plan geometry: position, distances and reward:risk are arithmetic on the receipt and a fresh stored price, and missing numbers stay unknown', () => {
   const NOW = Date.parse('2026-10-25T12:00:00Z');
   const fresh = (price) => ({ price_usd: price, as_of: '2026-10-25T11:30:00Z' });
   const plan = { entry_zone: { low_usd: 0.9, high_usd: 1.1 }, upside_target: { price_usd: 2 }, invalidation_trigger: { price_usd: 0.8 } };
   const g = T.tradePlanGeometry(plan, fresh(1), { now: NOW });
-  assert.equal(g.version, 'cr-ticket-geometry@1');
+  assert.equal(g.version, 'cr-ticket-geometry@2');
   assert.equal(g.position, 'in_zone');
   assert.equal(g.to_upside_pct, 100);
   assert.equal(g.to_stop_pct, -20);
   assert.equal(g.reward_risk_ratio, 5, '(2 - 1) / (1 - 0.8)');
+  assert.equal(g.plan_reward_risk_ratio, 5, 'the zone midpoint is 1: (2 - 1) / (1 - 0.8)');
+  assert.match(g.words, /reward:risk 5:1 at plan, 5:1 now/);
   assert.equal(T.tradePlanGeometry(plan, fresh(1.21), { now: NOW }).position, 'above_zone');
   assert.equal(T.tradePlanGeometry(plan, fresh(1.21), { now: NOW }).position_pct, 10);
   const below = T.tradePlanGeometry(plan, fresh(0.85), { now: NOW });
@@ -1831,6 +1833,12 @@ test('trade plan geometry: position, distances and reward:risk are arithmetic on
   assert.equal(stale.price.status, 'stale');
   assert.equal(stale.position, 'unknown');
   assert.equal(stale.reward_risk_ratio, null);
+  assert.equal(stale.plan_reward_risk_ratio, 5, 'the plan ratio needs no fresh price');
+  assert.match(stale.words, /reward:risk 5:1 at plan/);
+  // The plan ratio needs a zone, a target above its midpoint and a stop below it.
+  const lowTarget = { ...plan, upside_target: { price_usd: 0.95 } };
+  assert.equal(T.tradePlanGeometry(lowTarget, fresh(1), { now: NOW }).plan_reward_risk_ratio, null);
+  assert.equal(T.tradePlanGeometry({ ...plan, entry_zone: null }, fresh(1), { now: NOW }).plan_reward_risk_ratio, null);
   assert.equal(T.tradePlanGeometry(plan, { price_usd: 1 }, { now: NOW }).price.status, 'unknown');
   const none = T.tradePlanGeometry(plan, { price_usd: null, note: 'No stored price' }, { now: NOW });
   assert.equal(none.price.status, 'unknown');
@@ -1841,7 +1849,7 @@ test('trade plan geometry: position, distances and reward:risk are arithmetic on
   assert.equal(partial.to_upside_pct, null);
   assert.equal(partial.to_stop_pct, -20);
   assert.equal(partial.reward_risk_ratio, null);
-  assert.match(partial.words, /reward:risk unknown/);
+  assert.match(partial.words, /reward:risk unknown at plan, unknown now/);
 });
 
 test('trade plan geometry: view() carries it on a saved Prosecutor ticket, unknown without a fresh price', (t) => {
@@ -1849,7 +1857,7 @@ test('trade plan geometry: view() carries it on a saved Prosecutor ticket, unkno
   const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
   T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) });
   const g = T.view(s.ws, s.pid).ticket.trade_plan_geometry;
-  assert.equal(g.version, 'cr-ticket-geometry@1');
+  assert.equal(g.version, 'cr-ticket-geometry@2');
   assert.ok(['unknown', 'stale', 'fresh'].includes(g.price.status));
   if (g.price.status !== 'fresh') {
     assert.equal(g.position, 'unknown');
@@ -1870,11 +1878,14 @@ test('view() carries the four tests and the strongest bull rebuttal for the card
 test('near invalidation (item 53): within 10% above the stop only, never on a stale or missing price, an invalidated or vetoed ticket', () => {
   const geo = (price, status = 'fresh', stop = 0.7) => ({ price: { status, price_usd: price }, stop_usd: stop });
   const n = T.nearInvalidation('pending_pm_review', geo(0.75));
-  assert.equal(n.distance_pct, 7.14);
+  assert.equal(n.version, 'cr-near-invalidation@2');
+  assert.equal(n.distance_pct, 6.67);
   assert.equal(n.threshold_usd, 0.7);
   assert.equal(n.price_usd, 0.75);
-  assert.match(n.words, /7\.14% above/);
-  assert.equal(T.nearInvalidation('pending_pm_review', geo(0.77)).distance_pct, 10);
+  assert.match(n.words, /a 6\.67% fall reaches the invalidation price \$0\.7/);
+  assert.equal(T.nearInvalidation('pending_pm_review', geo(0.77)).distance_pct, 9.09);
+  // 10.5% above the stop is a 9.50% fall: near under the fall reading.
+  assert.equal(T.nearInvalidation('pending_pm_review', geo(0.7735)).distance_pct, 9.5);
   assert.equal(T.nearInvalidation('pending_pm_review', geo(0.78)), null);
   assert.equal(T.nearInvalidation('pending_pm_review', geo(0.75, 'stale')), null);
   assert.equal(T.nearInvalidation('pending_pm_review', geo(0.69)), null, 'at or below the stop is the invalidation rule, not this one');
@@ -2069,4 +2080,183 @@ test('item 61: the matrix lists only verified, active projects, one row each, be
   const rows = T.exitMatrix(s.ws).rows;
   assert.deepEqual(rows.map((r) => r.project_id), [s.pid], 'an unverified project is not listed');
   assert.equal(rows[0].chain, pr.getProject(s.ws, s.pid).identity.assets[0].chain);
+});
+
+// ---------------------------------------------------------------------------
+// Decide desk gates together (backlog item 70)
+
+function gated(t, held = false) {
+  const s = withReport(t);
+  gradeClosed(s.ws);
+  stubHeld(t, s.pid, held);
+  const made = T.batchGate(s.ws, { below: 90 }).made[0];
+  return { ...s, receipt_id: made.receipt_id };
+}
+
+test('desk gates together (item 70): a dry run writes nothing and names who a pass would archive; approve and halve are refused', (t) => {
+  const s = gated(t);
+  const tree = hashTree(s.root);
+  const dry = T.decideDeskGates(s.ws, { action: 'pass', dryRun: true });
+  assert.deepEqual(hashTree(s.root), tree, 'a dry run writes nothing');
+  assert.deepEqual(dry.decided.map((d) => d.receipt_id), [s.receipt_id]);
+  assert.equal(dry.decided[0].would_archive, true);
+  assert.equal(T.decideDeskGates(s.ws, { action: 'watch', dryRun: true }).decided[0].would_archive, false);
+  for (const action of ['approve', 'halve']) assert.throws(() => T.decideDeskGates(s.ws, { action }), (e) => e.code === 'REFUSED', action);
+  assert.throws(() => T.decideDeskGates(s.ws, { action: 'veto' }), (e) => e.code === 'INVALID');
+  assert.deepEqual(hashTree(s.root), tree, 'a refusal writes nothing');
+});
+
+test('desk gates together (item 70): pass archives an unheld project, journals it in the project\'s own journal, and a replay of the same request decides nothing twice', (t) => {
+  const s = gated(t);
+  const out = T.decideDeskGates(s.ws, { action: 'pass', request_id: 'req-gates-0001', by: 'test' });
+  assert.equal(out.failed, null);
+  assert.equal(out.decided.length, 1);
+  assert.equal(out.decided[0].archived, true);
+  assert.equal(require('../core/projects').getProject(s.ws, s.pid).status, 'archived');
+  const journal = require('../core/notes').loadJournal(s.ws, s.pid).filter((e) => e.type === 'decision');
+  assert.equal(journal.length, 1);
+  assert.match(journal[0].text, new RegExp(`PM pass on ticket ${s.receipt_id}`));
+  assert.equal(T.waitingDeskGates(s.ws).length, 0);
+  const again = T.decideDeskGates(s.ws, { action: 'pass', request_id: 'req-gates-0001' });
+  assert.equal(again.decided.length, 0);
+  assert.equal(require('../core/notes').loadJournal(s.ws, s.pid).filter((e) => e.type === 'decision').length, 1);
+  // Undo is the card's own: it restores the project.
+  const undo = T.decide(s.ws, s.pid, { receipt_id: s.receipt_id, action: 'undo' });
+  assert.equal(undo.result.project_restored, true);
+});
+
+test('desk gates together (item 70): a held project is never archived by a pass; watch keeps everything', (t) => {
+  const s = gated(t);
+  const portfolio = require('../core/portfolio');
+  const real = portfolio.computePortfolio;
+  portfolio.computePortfolio = (...a) => ({ ...real(...a), positions: [{ project_id: s.pid, closed: false }] });
+  t.after(() => { portfolio.computePortfolio = real; });
+  const dry = T.decideDeskGates(s.ws, { action: 'pass', dryRun: true });
+  assert.equal(dry.decided[0].held, true);
+  assert.equal(dry.decided[0].would_archive, false);
+  const out = T.decideDeskGates(s.ws, { action: 'pass' });
+  assert.equal(out.decided[0].archived, false);
+  assert.notEqual(require('../core/projects').getProject(s.ws, s.pid).status, 'archived');
+});
+
+test('desk gates together (item 70): receipt_ids limits the set and names the ones not waiting; a watch leaves the project active', (t) => {
+  const s = gated(t);
+  const out = T.decideDeskGates(s.ws, { action: 'watch', receipt_ids: ['tr_2026-01-01T000000Z_nopexy'] });
+  assert.equal(out.decided.length, 0);
+  assert.equal(out.skipped.length, 1);
+  assert.equal(T.waitingDeskGates(s.ws).length, 1);
+  const done = T.decideDeskGates(s.ws, { action: 'watch', receipt_ids: [s.receipt_id] });
+  assert.equal(done.decided.length, 1);
+  assert.notEqual(require('../core/projects').getProject(s.ws, s.pid).status, 'archived');
+  assert.equal(T.waitingDeskGates(s.ws).length, 0);
+});
+
+test('desk gates together (item 70): the route reads GET, dry-runs, and is a 409 when more gates wait than were shown, with nothing written', async (t) => {
+  const s = gated(t);
+  const http = require('http');
+  const { start } = require('../server');
+  const today = require('../core/dates').ymdInTz(new Date());
+  const { atomicWrite, jsonText, readJson } = require('../core/fsx');
+  atomicWrite(s.ws.abs('logs/jobs-state.json'), jsonText({ schema_version: 'cr.jobs-state.v1', jobs: { snapshot: { last_success_day: today }, reviews: { last_success_day: today }, backup: { last_success_day: today } }, runner: {} }));
+  const srv = await start(s.ws, { port: 47900 + Math.floor(Math.random() * 90), quiet: true });
+  t.after(() => { try { srv.shutdown(); } catch (_) { /* stopped */ } });
+  for (let i = 0; i < 150; i++) {
+    const st = readJson(s.ws.abs('logs/jobs-state.json'), { jobs: {} });
+    if (st.jobs && st.jobs.inbox && st.jobs.inbox.last_run_at) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  const call = (method, p, token, body) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: srv.port, method, path: p, headers: { host: `127.0.0.1:${srv.port}`, 'x-cr-token': token, 'content-type': 'application/json', origin: `http://127.0.0.1:${srv.port}` } }, (res) => {
+      const c = [];
+      res.on('data', (d) => c.push(d));
+      res.on('end', () => resolve({ status: res.statusCode, json: (() => { try { return JSON.parse(Buffer.concat(c).toString()); } catch (_) { return null; } })() }));
+    });
+    req.on('error', reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+  const token = await new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port: srv.port, path: '/api/session', headers: { host: `127.0.0.1:${srv.port}` } }, (res) => { const c = []; res.on('data', (d) => c.push(d)); res.on('end', () => resolve(JSON.parse(Buffer.concat(c).toString()).token)); }).on('error', reject));
+  const list = await call('GET', '/api/tickets/desk-gates', token);
+  assert.deepEqual(list.json.waiting.map((w) => w.receipt_id), [s.receipt_id]);
+  const dry = await call('POST', '/api/tickets/desk-gates/decide', token, { action: 'pass', dry_run: true, expect: [s.receipt_id] });
+  assert.equal(dry.status, 200);
+  assert.equal(dry.json.decided[0].would_archive, true);
+  const tooFew = await call('POST', '/api/tickets/desk-gates/decide', token, { action: 'pass', expect: ['tr_2026-01-01T000000Z_nopexy'] });
+  assert.equal(tooFew.status, 409);
+  assert.equal(T.waitingDeskGates(s.ws).length, 1, 'nothing was decided');
+  const refused = await call('POST', '/api/tickets/desk-gates/decide', token, { action: 'approve', expect: [s.receipt_id] });
+  assert.ok(refused.status >= 400 && refused.status < 500);
+  const ok = await call('POST', '/api/tickets/desk-gates/decide', token, { action: 'watch', expect: [s.receipt_id], request_id: 'req-route-0001' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.json.decided.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// The pilot cycle from the desk (backlog item 71)
+
+test('pilot cycle route (item 71): a dry run writes nothing and sends nothing; expect exceeded is a 409; a run answers runCycle\'s receipt', async (t) => {
+  const s = withReport(t);
+  stubClaudeReport(t);
+  stubHeld(t, s.pid, false);
+  const http = require('http');
+  const { start } = require('../server');
+  const today = require('../core/dates').ymdInTz(new Date());
+  const { atomicWrite, jsonText, readJson } = require('../core/fsx');
+  atomicWrite(s.ws.abs('logs/jobs-state.json'), jsonText({ schema_version: 'cr.jobs-state.v1', jobs: { snapshot: { last_success_day: today }, reviews: { last_success_day: today }, backup: { last_success_day: today } }, runner: {} }));
+  const srv = await start(s.ws, { port: 47900 + Math.floor(Math.random() * 90), quiet: true });
+  t.after(() => { try { srv.shutdown(); } catch (_) { /* stopped */ } });
+  for (let i = 0; i < 150; i++) {
+    const st = readJson(s.ws.abs('logs/jobs-state.json'), { jobs: {} });
+    if (st.jobs && st.jobs.inbox && st.jobs.inbox.last_run_at) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  const call = (method, p, token, body) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: srv.port, method, path: p, headers: { host: `127.0.0.1:${srv.port}`, 'x-cr-token': token, 'content-type': 'application/json', origin: `http://127.0.0.1:${srv.port}` } }, (res) => {
+      const c = [];
+      res.on('data', (d) => c.push(d));
+      res.on('end', () => resolve({ status: res.statusCode, json: (() => { try { return JSON.parse(Buffer.concat(c).toString()); } catch (_) { return null; } })() }));
+    });
+    req.on('error', reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+  const token = await new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port: srv.port, path: '/api/session', headers: { host: `127.0.0.1:${srv.port}` } }, (res) => { const c = []; res.on('data', (d) => c.push(d)); res.on('end', () => resolve(JSON.parse(Buffer.concat(c).toString()).token)); }).on('error', reject));
+  const pilotBefore = T.view(s.ws, s.pid).pilot;
+  const dry = await call('POST', '/api/tickets/run-cycle', token, { dry_run: true });
+  assert.equal(dry.status, 200);
+  assert.equal(dry.json.dry_run, true);
+  assert.equal(dry.json.counts.opted_in, 1);
+  assert.equal(T.view(s.ws, s.pid).pilot, pilotBefore, 'a dry run opts nobody in');
+  assert.equal((await call('POST', '/api/tickets/run-cycle', token, { dry_run: true, limit: 0 })).status, 400);
+  const over = await call('POST', '/api/tickets/run-cycle', token, { expect: { opted_in: 0, gates_made: 0, quoted: 0 } });
+  assert.equal(over.status, 409);
+  assert.equal(T.view(s.ws, s.pid).pilot, pilotBefore, 'nothing was done');
+  const ran = await call('POST', '/api/tickets/run-cycle', token, { expect: { opted_in: 1, gates_made: 0, quoted: 0 } });
+  assert.equal(ran.status, 200);
+  assert.equal(ran.json.format, 'cr-run-cycle@1');
+  assert.equal(ran.json.dry_run, false);
+  assert.equal(ran.json.counts.opted_in, 1);
+  assert.equal(T.pendingFor(s.ws).length, 0, 'no Prosecutor job, no research');
+});
+
+test('pilot cycle (item 71): a dry run asks no provider, and a restored copy asks no quote', async (t) => {
+  const s = withReport(t);
+  stubClaudeReport(t);
+  stubHeld(t, s.pid, false);
+  const boom = () => { throw new Error('a provider was asked'); };
+  const dry = await T.runCycle(s.ws, { dryRun: true, fetchImpl: boom, cgGetImpl: boom });
+  assert.deepEqual(dry.errors, []);
+  const run = await T.runCycle(s.ws, { fetchImpl: boom, cgGetImpl: boom });
+  assert.deepEqual(run.errors, []);
+  assert.equal(run.counts.quoted, 0);
+  // A restored copy: the quote path refuses before any request.
+  const research = require('../core/research');
+  const real = research.restoredHold;
+  research.restoredHold = () => ({ held: true });
+  t.after(() => { research.restoredHold = real; });
+  const FM = require('../core/forensic-monitor');
+  const q = await FM.quoteSizeUsd(s.ws, s.pid, { size_usd: 500, fetchImpl: boom, cgGetImpl: boom }).catch((e) => ({ status: 'refused', reason: e.message }));
+  assert.match(String(q.status || q.reason), /refused|held|restored/i);
+  const out = await T.runCycle(s.ws, { fetchImpl: boom, cgGetImpl: boom });
+  assert.equal(out.counts.quoted, 0);
 });
