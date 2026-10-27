@@ -24,7 +24,6 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..', '..');
 const FORMAT = 'cr-pipeline@1';
-const HOLD_MS = 65 * 60 * 1000; // a paid attempt with no outcome holds its issue this long (agent-ledger.js)
 const PACE_DAYS = 7;
 
 // The paths an item names: backticked text that reads as a path. Its
@@ -99,8 +98,9 @@ function ledgerOf(root, now) {
   const day = now.toISOString().slice(0, 10);
   const paid = L.attempts(p.entries).filter((a) => L.PAID[a.reserve.kind]);
   const used = paid.filter((a) => a.reserve.day === day).length;
-  const open = paid.filter((a) => !a.outcomes.length && now.getTime() - Date.parse(a.reserve.at) < HOLD_MS);
-  return { known: true, limit, used, day, building: open.filter((a) => a.reserve.kind === 'build').length, revising: open.filter((a) => a.reserve.kind === 'revise').length };
+  // Running: no outcome yet and inside the ledger's 60-minute lease (past it, orphaned).
+  const open = paid.filter((a) => !a.outcomes.length && !L.orphaned(a, now.getTime()));
+  return { known: true, limit, used, day, building: open.filter((a) => a.reserve.kind === 'build' || a.reserve.kind === 'remediate').length, revising: open.filter((a) => a.reserve.kind === 'revise').length };
 }
 
 function paceOf(root) {
