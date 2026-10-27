@@ -119,7 +119,17 @@ function runTests(tree, files, { coverageDir = null } = {}) {
   const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap', ...files], { cwd: tree, env, encoding: 'utf8', timeout: RUN_MS, maxBuffer: 64 * 1024 * 1024 });
   const output = `${r.stdout || ''}${r.stderr || ''}`;
   const count = (k) => { const m = new RegExp(`^# ${k} (\\d+)$`, 'm').exec(output); return m ? Number(m[1]) : null; };
-  return { ok: r.status === 0, code: r.status, signal: r.signal, tests: count('tests'), passed: count('pass'), failed: count('fail'), tail: output.split('\n').slice(-40).join('\n') };
+  // The failing tests by name (TAP "not ok n - name"), the file lines left
+  // out: they go into the reasons, so a /revise carries which test failed,
+  // not only that one did. Names are data (agent-log.js flattens them).
+  const failing = [...new Set([...output.matchAll(/^\s*not ok \d+ - (.+)$/gm)].map((m) => m[1].trim()).filter((n) => !/\.test\.js$/.test(n)))];
+  return { ok: r.status === 0, code: r.status, signal: r.signal, tests: count('tests'), passed: count('pass'), failed: count('fail'), failing, tail: output.split('\n').slice(-40).join('\n') };
+}
+// The failing tests as one reason, at most five names of 80 characters.
+function failingReason(failing) {
+  if (!failing || !failing.length) return [];
+  const shown = failing.slice(0, 5).map((n) => n.slice(0, 80));
+  return [`failing: ${shown.join('; ')}${failing.length > 5 ? ` (and ${failing.length - 5} more)` : ''}`];
 }
 
 // For one source file: per character, the execution count of the innermost
@@ -187,7 +197,7 @@ function verify({ tree, base, rev = 'HEAD', task, policy }) {
   const covDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cov-'));
   try {
     const run = runTests(tree, tests, { coverageDir: covDir });
-    if (!run.ok) return { ok: false, reasons: [`the named tests fail on the merge tree (exit ${run.code}${run.signal ? `, ${run.signal}` : ''}; ${run.failed ?? '?'} of ${run.tests ?? '?'} failed)`], notes, tests, implFiles, tail: run.tail };
+    if (!run.ok) return { ok: false, reasons: [`the named tests fail on the merge tree (exit ${run.code}${run.signal ? `, ${run.signal}` : ''}; ${run.failed ?? '?'} of ${run.tests ?? '?'} failed)`, ...failingReason(run.failing)], notes, tests, implFiles, tail: run.tail };
     notes.push(`The named tests pass on the merge tree: ${run.passed ?? '?'} of ${run.tests ?? '?'} (${tests.join(', ')}).`);
     for (const f of implFiles) {
       const abs = path.resolve(tree, f);
@@ -244,4 +254,4 @@ function main(argv) {
 
 if (require.main === module) { try { process.exitCode = main(process.argv.slice(2)); } catch (err) { process.stderr.write(`agent-verify: ${String((err && err.message) || err).slice(0, 400)}\n`); process.exitCode = 1; } }
 
-module.exports = { changesOf, changedLines, isCode, stripComments, assertionArgs, meaningful, lintTest, runTests, coverageOf, lineRuns, verify, main };
+module.exports = { changesOf, changedLines, isCode, stripComments, assertionArgs, meaningful, lintTest, runTests, failingReason, coverageOf, lineRuns, verify, main };

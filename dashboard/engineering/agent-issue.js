@@ -3,9 +3,11 @@
 // engineering_prepare_task also returns the issue body, the problems main's
 // own agent-guard taskOf finds in it, and a link that opens the Agent task
 // form prefilled. The link carries no label: only Eric's own agent:build
-// label on the version he submits authorizes a build. "Files to change" is
-// the only path authority; anything else goes in Notes, which no check reads
-// for permission. Nothing is sent anywhere: Eric opens the link himself.
+// label on the version he submits authorizes a build. "Files to change" and
+// "Regression tests" are hints (cr.agent-task.v2): named, they narrow the
+// build; empty, the template's own paths are the scope and the build names
+// its tests. Anything else goes in Notes, which no check reads for
+// permission. Nothing is sent anywhere: Eric opens the link himself.
 
 const G = require('../scripts/agent-guard');
 const P = require('./policy');
@@ -49,10 +51,9 @@ function agentIssue(args = {}, { policy = G.loadPolicy() } = {}) {
   const problems = [...task.problems];
   for (const k of ['template', 'outcome', 'acceptance', 'negative', 'notes']) if (task[k] !== fields[k]) problems.push(`"${G.FIELDS[k]}" does not read back as given: a line in a field starts a section of its own`);
   if (JSON.stringify(task.paths) !== JSON.stringify(paths)) problems.push(`"${G.FIELDS.paths}" does not read back as given: one repository path per line, with no spaces`);
-  for (const t of tests) {
-    if (!task.tests.includes(t)) problems.push(`${t} is not a test file under dashboard/tests/ (dashboard/tests/<name>.test.js)`);
-    else if (!paths.some((p) => P.within(t, p))) problems.push(`the regression test ${t} is not under "${G.FIELDS.paths}", so the build could not change it`);
-  }
+  // A test file under dashboard/tests/ is inside the build's scope named or
+  // not (agent-guard.js checkChange), so it need not be under the paths.
+  for (const t of tests) if (!task.tests.includes(t)) problems.push(`${t} is not a test file under dashboard/tests/ (dashboard/tests/<name>.test.js)`);
   for (const w of P.screen(body).filter((x) => !/web address/.test(x))) problems.push(`the body holds ${w}; keep it out of the public repository`);
 
   const params = { template: FORM, title: c.title };

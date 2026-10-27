@@ -83,9 +83,40 @@ test('the issue\'s task stays inside its template: protected, forbidden and guar
   assert.match(bad({ 'Files to change': '- .github/workflows/x.yml' }), /outside eng-backend@1/);
   assert.match(bad({ 'Files to change': '- dashboard/core/portfolio.js' }), /never changes|protected path/);
   assert.match(bad({ 'Files to change': '- dashboard/core/**' }), /can reach a protected path/);
-  assert.match(bad({ 'Regression tests': 'none' }), /names no test file/);
   assert.match(bad({ 'Regression tests': 'dashboard/tests/engineering-guard.test.js' }), /guarded test/);
   assert.match(bad({ 'Negative cases': '_No response_' }), /"Negative cases" is empty/);
+  assert.match(bad({ Outcome: '_No response_' }), /"Outcome" is empty/);
+  // Files and tests are hints (cr.agent-task.v2): none named is no problem.
+  const open = G.taskOf(issueOf({ 'Regression tests': 'none', 'Files to change': '_No response_' }), { policy: POLICY });
+  assert.deepEqual(open.problems, []);
+  assert.deepEqual(open.paths, []);
+  assert.deepEqual(open.tests, []);
+});
+
+test('a task that names no files or tests is scoped by its template: any file inside it, never a protected or forbidden one, and still a test', (t) => {
+  const r = repo(t);
+  const open = G.taskOf(issueOf({ 'Files to change': '_No response_', 'Regression tests': '_No response_' }), { policy: POLICY });
+  assert.deepEqual(open.problems, []);
+  const prompt = G.builderPrompt(open);
+  assert.match(prompt, /Files you may change: any file under dashboard\/server\.js, dashboard\/core\/\*\*, dashboard\/tests\/\*\*; never dashboard\/engineering\/\*\*, [^\n]*and never a protected path; at most 20 files, only what the outcome needs/);
+  assert.match(prompt, /Regression tests to add or change: none named: add or change at least one test file under dashboard\/tests\//);
+  assert.match(prompt, /Work only in the files the task lets you change/);
+  const reasonsFor = (task, files) => { const a = G.applyPatch({ cwd: r.work, base: r.base, patchFile: r.patch(files), maxBytes: 600000 }); return a.error ? [a.error] : G.checkChange({ cwd: r.work, base: r.base, rev: a.tree, task }).reasons; };
+  assert.deepEqual(reasonsFor(open, GOOD), []);
+  assert.deepEqual(reasonsFor(open, { ...GOOD, 'dashboard/core/other.js': 'module.exports = 1;\n' }), [], 'inside the template, no paths named: allowed');
+  assert.match(reasonsFor(open, { ...GOOD, 'dashboard/core/portfolio.js': 'module.exports = 1;\n' }).join('\n'), /protected; Eric's own change/);
+  assert.match(reasonsFor(open, { ...GOOD, 'dashboard/engineering/x.js': 'module.exports = 1;\n' }).join('\n'), /outside eng-backend@1|forbidden for eng-backend@1/);
+  assert.match(reasonsFor(open, { ...GOOD, '.github/workflows/x.yml': 'on: push\n' }).join('\n'), /protected; Eric's own change/);
+  assert.match(reasonsFor(open, { 'dashboard/core/widget.js': GOOD['dashboard/core/widget.js'] }).join('\n'), /needs every candidate to add or change a test/);
+  // Named paths narrow the scope; a test file the template requires is inside it unnamed.
+  const narrow = G.taskOf(issueOf({ 'Files to change': '- dashboard/core/widget.js', 'Regression tests': '_No response_' }), { policy: POLICY });
+  assert.deepEqual(narrow.problems, []);
+  assert.match(G.builderPrompt(narrow), /Files you may change: dashboard\/core\/widget\.js\n/);
+  assert.deepEqual(reasonsFor(narrow, GOOD), []);
+  assert.match(reasonsFor(narrow, { ...GOOD, 'dashboard/core/other.js': 'module.exports = 1;\n' }).join('\n'), /other\.js is not among the task's files to change/);
+  // The named task keeps its words.
+  const named = G.taskOf(issueOf(), { policy: POLICY });
+  assert.match(G.builderPrompt(named), /Regression tests to add or change: dashboard\/tests\/widget\.test\.js\nFiles you may change: dashboard\/core\/widget\.js, dashboard\/tests\/widget\.test\.js\n/);
 });
 
 test('the build\'s patch is applied to main as data and checked again as a tree', (t) => {

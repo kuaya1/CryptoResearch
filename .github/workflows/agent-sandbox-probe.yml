@@ -59,7 +59,9 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
+          TMPDIR: ${{ github.workspace }}/.cr/tmp
         run: |
+          mkdir -p "$TMPDIR"
           model=$(node -p "require('./.github/agent-policy.json').build.model")
           "$RUNNER_TEMP/claude/node_modules/.bin/claude" -p --model "$model" --max-budget-usd 0.5 \
             --settings "$RUNNER_TEMP/guard/claude-settings.json" --setting-sources user \
