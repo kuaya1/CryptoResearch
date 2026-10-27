@@ -1,0 +1,111 @@
+# The agent lane's checks on every pull request to main (Eric, 2026-10-26;
+# audits/2026-10-26-engineering-simplification). Required by the ruleset
+# main-merge-requirements beside test and agent-review.
+#
+#   agent-guard   main's guard reads the candidate as data: its commits are
+#                 the builder App's with one task's trailers, the task is still
+#                 labeled and unchanged since the build, and the change stays
+#                 inside it. An owner change passes and gets its agent-review
+#                 check here, neutral: no model reviews Eric's own work.
+#   agent-verify  main's verifier runs the named tests on the proposed merge
+#                 tree (agent-verify.js): they pass, every changed line of code
+#                 runs under them, and each implementation file put back as
+#                 main has it makes one fail. It runs the candidate's code, so
+#                 this job holds no write permission and no secret.
+#
+# Neither job is ever skipped: a skipped required check would count as passed.
+name: agent-checks
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+concurrency:
+  group: agent-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  agent-guard:
+    name: agent-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      checks: write # only the neutral agent-review of an owner change
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+      - id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILDER_APP_SLUG: ${{ vars.BUILDER_APP_SLUG }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          git fetch -q --no-tags origin "+refs/pull/${PR}/head:refs/remotes/pr/head"
+          node dashboard/scripts/agent-guard.js pr --base "$BASE" --head "$HEAD" --branch "$BRANCH" --author "$AUTHOR"
+      - name: An owner change needs no model review
+        if: steps.guard.outputs.agent == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/check-runs" \
+            -f name=agent-review -f head_sha="$HEAD" -f status=completed -f conclusion=neutral -f details_url="$RUN_URL" \
+            -f "output[title]=Owner change: no model review" \
+            -f "output[summary]=Not an agent candidate (no agent/ branch, builder author or builder commit). Eric's merge is the review." > /dev/null
+
+  agent-verify:
+    name: agent-verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+      - name: The task, read before any candidate code runs
+        working-directory: trusted
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILDER_APP_SLUG: ${{ vars.BUILDER_APP_SLUG }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          git fetch -q --no-tags origin "+refs/pull/${PR}/head:refs/remotes/pr/head"
+          node dashboard/scripts/agent-guard.js task-of --base "$BASE" --head "$HEAD" --branch "$BRANCH" --author "$AUTHOR" --out "$RUNNER_TEMP/task.json"
+      - name: The proposed merge tree, fresh
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: candidate
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify on the merge tree
+        run: node trusted/dashboard/scripts/agent-verify.js --tree candidate --task "$RUNNER_TEMP/task.json"

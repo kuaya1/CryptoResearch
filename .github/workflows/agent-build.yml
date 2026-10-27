@@ -1,0 +1,195 @@
+# The agent lane's builder (Eric, 2026-10-26;
+# audits/2026-10-26-engineering-simplification). Eric opens an issue with the
+# agent task form and adds the agent:build label himself; that label is the
+# authorization, for that version of the issue only.
+#
+#   reserve  main's guard checks that the label is Eric's own and the task
+#            stays inside its template, then reserves one paid build for this
+#            run in the ledger (branch agent-ledger) before anything is sent.
+#   build    Claude Code (pinned by lockfile) in a fresh checkout of main with
+#            no repository write credential, no reviewer token, no OpenAI key
+#            and no App key; its working tree's diff is the only output.
+#   publish  main's guard applies that diff to main as data and checks it
+#            against the task again; the builder App commits it, pushes
+#            agent/issue-<n> and opens the pull request. The App pushes only
+#            agent/ branches and cannot merge, approve or change a workflow
+#            (.github/rulesets).
+#   record   the build's outcome in the ledger.
+#
+# Nothing here merges or approves anything: Eric merges each pull request.
+# A re-run of failed jobs builds nothing (the reservation belongs to the
+# run attempt that made it); re-run the whole workflow, which reserves again
+# within the ceilings in .github/agent-policy.json.
+name: agent-build
+
+on:
+  issues:
+    types: [labeled]
+
+permissions: {}
+
+concurrency:
+  group: agent-build-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  reserve:
+    if: github.event.label.name == 'agent:build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # the ledger branch only (rulesets automation-branches and agent-ledger)
+    outputs:
+      ok: ${{ steps.reserve.outputs.ok }}
+      reservation: ${{ steps.reserve.outputs.reservation }}
+      attempt: ${{ steps.reserve.outputs.attempt }}
+      base: ${{ steps.base.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+      - id: base
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - id: reserve
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
+        run: node dashboard/scripts/agent-guard.js reserve --base "$BASE"
+
+  build:
+    needs: reserve
+    if: needs.reserve.outputs.ok == 'true' && needs.reserve.outputs.attempt == github.run_attempt
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.reserve.outputs.base }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+      - name: Install Claude Code (pinned by lockfile, outside the checkout)
+        run: |
+          mkdir -p "$RUNNER_TEMP/claude" "$RUNNER_TEMP/out"
+          cp .github/agent/package.json .github/agent/package-lock.json "$RUNNER_TEMP/claude/"
+          npm ci --prefix "$RUNNER_TEMP/claude" --no-audit --no-fund
+      - name: The task, from the issue as Eric labeled it
+        run: node dashboard/scripts/agent-guard.js prompt --out "$RUNNER_TEMP/task.md"
+      - name: Build
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          model=$(node -p "require('./.github/agent-policy.json').build.model")
+          budget=$(node -p "require('./.github/agent-policy.json').build.max_budget_usd")
+          "$RUNNER_TEMP/claude/node_modules/.bin/claude" -p --model "$model" --max-budget-usd "$budget" \
+            --output-format json --permission-mode dontAsk --strict-mcp-config --no-session-persistence \
+            --append-system-prompt-file .github/agent/builder-rules.md \
+            --disallowedTools WebFetch WebSearch \
+            --allowedTools Read Edit Write Glob Grep "Bash(node:*)" "Bash(git diff:*)" "Bash(git status:*)" \
+            < "$RUNNER_TEMP/task.md" > "$RUNNER_TEMP/out/result.json"
+      - name: The change, as data
+        run: |
+          git add -A
+          git diff --cached --binary --full-index HEAD > "$RUNNER_TEMP/out/patch.diff"
+          git diff --cached --stat HEAD
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: agent-build
+          path: ${{ runner.temp }}/out/
+          retention-days: 7
+          if-no-files-found: warn
+
+  publish:
+    needs: [reserve, build]
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.reserve.outputs.base }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: agent-build
+          path: ${{ runner.temp }}/build
+      - id: apply
+        env:
+          BASE: ${{ needs.reserve.outputs.base }}
+        run: node dashboard/scripts/agent-guard.js apply --base "$BASE" --patch "$RUNNER_TEMP/build/patch.diff"
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.BUILDER_APP_ID }}
+          private-key: ${{ secrets.BUILDER_APP_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - id: bot
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          SLUG: ${{ steps.app.outputs.app-slug }}
+        run: |
+          id=$(gh api "/users/${SLUG}%5Bbot%5D" --jq .id)
+          echo "name=${SLUG}[bot]" >> "$GITHUB_OUTPUT"
+          echo "email=${id}+${SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
+      - id: publish
+        env:
+          TOKEN: ${{ steps.app.outputs.token }}
+          BASE: ${{ needs.reserve.outputs.base }}
+          TREE: ${{ steps.apply.outputs.tree }}
+          BOT_NAME: ${{ steps.bot.outputs.name }}
+          BOT_EMAIL: ${{ steps.bot.outputs.email }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          node dashboard/scripts/agent-guard.js publish --base "$BASE" --tree "$TREE" --run "${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}" \
+            --bot-name "$BOT_NAME" --bot-email "$BOT_EMAIL" --build "$RUNNER_TEMP/build/result.json" \
+            --body-out "$RUNNER_TEMP/body.md" --run-url "$RUN_URL"
+      - name: The pull request (opened by the App, so its checks run)
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          BRANCH: ${{ steps.publish.outputs.branch }}
+          TITLE: ${{ github.event.issue.title }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base main --title "agent: ${TITLE} (#${NUMBER})" --body-file "$RUNNER_TEMP/body.md"
+          fi
+
+  record:
+    needs: [reserve, build, publish]
+    if: always() && needs.reserve.outputs.ok == 'true' && needs.reserve.outputs.attempt == github.run_attempt
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # the ledger branch only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          name: agent-build
+          path: ${{ runner.temp }}/build
+      - env:
+          RESERVATION: ${{ needs.reserve.outputs.reservation }}
+          OUTCOME: ${{ needs.build.result }}
+        run: node dashboard/scripts/agent-guard.js record --id "$RESERVATION" --outcome "$OUTCOME" --build "$RUNNER_TEMP/build/result.json"
