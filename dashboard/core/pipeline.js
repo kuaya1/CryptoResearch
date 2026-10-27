@@ -24,10 +24,6 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..', '..');
 const FORMAT = 'cr-pipeline@1';
-// A paid attempt with no outcome counts as in flight this long: the ledger's
-// own fallback when its run's status cannot be read (agent-ledger.js
-// settleOpen). This page asks GitHub nothing, so it never reads that status.
-const HOLD_MS = 65 * 60 * 1000;
 const PACE_DAYS = 7;
 
 // The paths an item names: backticked text that reads as a path. Its
@@ -102,8 +98,11 @@ function ledgerOf(root, now) {
   const day = now.toISOString().slice(0, 10);
   const paid = L.attempts(p.entries).filter((a) => L.PAID[a.reserve.kind]);
   const used = paid.filter((a) => a.reserve.day === day).length;
-  const open = paid.filter((a) => !a.outcomes.length && now.getTime() - Date.parse(a.reserve.at) < HOLD_MS);
-  return { known: true, limit, used, day, building: open.filter((a) => a.reserve.kind === 'build').length, revising: open.filter((a) => a.reserve.kind === 'revise').length };
+  // In flight: no outcome yet. This page asks GitHub nothing, so an attempt
+  // whose run ended unrecorded stays in flight here until a reserve or the PM
+  // records it (agent-ledger.js settleOpen); no clock settles one.
+  const open = paid.filter((a) => !a.outcomes.length);
+  return { known: true, limit, used, day, building: open.filter((a) => a.reserve.kind === 'build' || a.reserve.kind === 'remediate').length, revising: open.filter((a) => a.reserve.kind === 'revise').length };
 }
 
 function paceOf(root) {

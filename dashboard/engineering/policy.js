@@ -225,8 +225,9 @@ const PROTECTED_SAMPLES = [
   // Exclusive merge authority (2026-10-26): the boundary's checker and the
   // agent lane's trusted scripts and tests.
   'dashboard/scripts/merge-boundary-check.js', 'dashboard/scripts/agent-review.js', 'dashboard/tests/merge-boundary.test.js', 'dashboard/tests/agent-ledger.test.js',
-  // Pipeline review (2026-10-27): the trader's Paper Book and risk engine.
-  'dashboard/core/paper.js', 'dashboard/core/trade-risk.js', 'dashboard/tests/trade-risk.test.js', 'dashboard/tests/paper-trader.test.js', 'dashboard/tests/trader-boundary.test.js',
+  // The trader's risk boundary (architecture recovery, PR D).
+  'dashboard/core/trade-risk.js', 'dashboard/core/paper.js', 'dashboard/core/paper-trader.js', 'dashboard/core/decimal.js',
+  'dashboard/tests/trade-risk.test.js', 'dashboard/tests/paper-trader.test.js', 'dashboard/tests/trader-boundary.test.js',
 ];
 function globTouchesProtected(glob) {
   if (!glob.includes('*')) return protectedWhy(glob);

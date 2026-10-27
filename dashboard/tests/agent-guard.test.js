@@ -93,7 +93,12 @@ test('the issue\'s task stays inside its template: protected, forbidden and guar
   assert.deepEqual(ok.tests, ['dashboard/tests/widget.test.js']);
   assert.deepEqual(ok.implementation, ['dashboard/server.js', 'dashboard/core/**']);
   const bad = (fields) => G.taskOf(issueOf(fields), { policy: POLICY }).problems.join('\n');
-  assert.match(bad({ Template: 'eng-app@4' }), /not one the agent lane builds/);
+  assert.match(bad({ Template: 'eng-app@2' }), /not one the agent lane builds/);
+  assert.match(bad({ Template: 'eng-docs@9' }), /not one the agent lane builds/);
+  // eng-app@4 is a lane template since cr-agent-policy@3 (Eric, 2026-10-27):
+  // UI work only, so the core stays out of its reach.
+  assert.doesNotMatch(bad({ Template: 'eng-app@4' }), /not one the agent lane builds/);
+  assert.match(bad({ Template: 'eng-app@4' }), /dashboard\/core\/widget\.js is outside eng-app@4/);
   assert.match(bad({ 'Files to change': '- .github/workflows/x.yml' }), /outside eng-backend@1/);
   assert.match(bad({ 'Files to change': '- dashboard/core/portfolio.js' }), /never changes|protected path/);
   assert.match(bad({ 'Files to change': '- dashboard/core/**' }), /can reach a protected path/);
@@ -273,8 +278,9 @@ function reserver(t, r) {
     const fetchImpl = async (url, o) => {
       asked.push(url);
       assert.equal(o.headers.authorization, 'Bearer FICTIONAL-token');
-      const m = /^https:\/\/api\.github\.com\/repos\/kuaya1\/CryptoResearch\/actions\/runs\/(\d+)\/attempts\/(\d+)$/.exec(url);
-      if (m) { const st = runs[`${m[1]}/${m[2]}`]; return { status: st ? 200 : 404, text: async () => JSON.stringify(st || { message: 'Not Found' }) }; }
+      // A run as GitHub holds it, by run ID; one not in `runs` is answered 404.
+      const m = /^https:\/\/api\.github\.com\/repos\/kuaya1\/CryptoResearch\/actions\/runs\/(\d+)$/.exec(url);
+      if (m) { const st = runs[m[1]]; return { status: st ? 200 : 404, text: async () => JSON.stringify(st || { message: 'Not Found' }) }; }
       assert.equal(url, 'https://api.github.com/repos/kuaya1/CryptoResearch/issues/7');
       assert.equal(o.headers.authorization, 'Bearer FICTIONAL-token');
       return { status: live ? 200 : 404, text: async () => JSON.stringify(live || { message: 'Not Found' }) };
@@ -329,57 +335,69 @@ test('an unchanged rerun is reserved and counts toward the two builds of that ve
   assert.deepEqual(reserves.map((x) => [x.run, x.bind.issue, x.bind.task_sha256]), [['20/1', 7, first.flat.task_sha256], ['20/2', 7, first.flat.task_sha256]]);
 });
 
-test('one build per issue at a time: GitHub\'s run status decides first, age only when it cannot say; a lost build still counts', async (t) => {
+test('one build per issue at a time: GitHub\'s run status alone decides; a run it cannot be asked about holds as reconcile required, however old; an orphan consumes no attempt', async (t) => {
   const r = repo(t);
   const reserve = reserver(t, r);
   const issue = issueOf();
   const first = await reserve({ live: issue, run: '30/1' });
   assert.equal(first.flat.ok, 'true');
   assert.equal(first.flat.predecessor, 'absent');
-  const running = { status: 'in_progress', conclusion: null, created_at: '2026-10-26T11:59:30Z', run_started_at: '2026-10-26T12:00:00Z' };
-  // Still running past the 65 minutes: GitHub's word holds the issue.
-  const held = await reserve({ live: issue, run: '31/1', at: '2026-10-26T13:30:00Z', runs: { '30/1': running } });
+  const running = { status: 'in_progress', conclusion: null };
+  // Still running ten hours on: GitHub's word holds the issue.
+  const held = await reserve({ live: issue, run: '31/1', at: '2026-10-26T22:00:00Z', runs: { 30: running, 31: running } });
   assert.equal(held.flat.ok, 'false');
-  assert.match(held.said, new RegExp(`build ${first.flat.reservation} of issue #7 \\(run 30/1\\) has no outcome yet: its run is in_progress \\(90 min\\); one build or revision per issue at a time`));
-  assert.ok(held.asked.includes('https://api.github.com/repos/kuaya1/CryptoResearch/actions/runs/30/attempts/1'), 'the run attempt itself was read');
-  // Running past GitHub's six-hour limit for a hosted job: closed as lost.
-  const stuck = await reserve({ live: issue, run: '31/2', at: '2026-10-26T18:00:00Z', runs: { '30/1': running } });
-  assert.equal(stuck.flat.ok, 'true');
-  assert.match(stuck.said, new RegExp(`Settled first: ${first.flat.reservation} recorded lost \\(its run 30/1 was still in_progress 360 min after it started, past GitHub's 360-minute limit for a hosted job\\)`));
-  assert.equal(await record(r, stuck.flat.reservation, 'failure'), 0);
-  assert.equal(L.read(r.work).entries.filter((e) => e.t === 'reserve').length, 2, 'the lost build still counts');
-  assert.match((await reserve({ live: issue, run: '33/1', at: '2026-10-26T18:10:00Z' })).said, /2 paid builds for this version of the task already/);
+  assert.match(held.said, new RegExp(`build ${first.flat.reservation} of issue #7 \\(run 30/1\\) has no outcome yet: its run 30/1 is in_progress; one build, revision or remediation per task at a time`));
+  assert.ok(held.asked.includes('https://api.github.com/repos/kuaya1/CryptoResearch/actions/runs/30'), 'the run itself was read');
+  assert.equal(L.read(r.work).entries.length, 1, 'nothing reserved, nothing spent');
+  // GitHub cannot be asked (it answers 404 for the run asking too): held as
+  // reconcile required, a day later still. No clock frees it.
+  const blind = await reserve({ live: issue, run: '32/1', at: '2026-10-27T12:00:00Z' });
+  assert.equal(blind.flat.ok, 'false');
+  assert.match(blind.said, /whether its run 30\/1 is still running could not be read from GitHub \(reconcile required: nothing new starts until GitHub answers; cancel the run to free the task\)/);
+  assert.equal(L.read(r.work).entries.length, 1);
+  // Eric cancels the run: GitHub says it completed, and the next reserve
+  // records it orphaned in its own append.
+  const later = await reserve({ live: issue, run: '33/1', at: '2026-10-27T12:05:00Z', runs: { 30: { status: 'completed', conclusion: 'cancelled' }, 33: running } });
+  assert.equal(later.flat.ok, 'true');
+  assert.match(later.said, new RegExp(`Settled first: ${first.flat.reservation} recorded orphaned \\(its run 30/1 completed \\(cancelled\\) with no outcome recorded\\)`));
+  assert.deepEqual(L.read(r.work).entries.map((e) => [e.t, e.id, e.state]), [['reserve', first.flat.reservation, undefined], ['outcome', first.flat.reservation, 'orphaned'], ['reserve', later.flat.reservation, undefined]]);
+  // The orphaned build consumes none of the version's two: one more may run,
+  // and only then is the version used up.
+  assert.equal(await record(r, later.flat.reservation, 'failure'), 0);
+  const third = await reserve({ live: issue, run: '34/1', at: '2026-10-27T12:10:00Z' });
+  assert.equal(third.flat.ok, 'true');
+  assert.equal(await record(r, third.flat.reservation, 'failure'), 0);
+  assert.match((await reserve({ live: issue, run: '35/1', at: '2026-10-27T12:20:00Z' })).said, /2 paid builds for this version of the task already/);
 });
 
-test('a run that ended without an outcome frees its issue at once; with its publishing line it is recorded published, never lost; unreadable, the 65-minute age decides', async (t) => {
+test('a run that ended without an outcome frees its issue at once; with its publishing line it is recorded published, never orphaned; a run GitHub says does not exist is orphaned', async (t) => {
   const r = repo(t);
   const reserve = reserver(t, r);
   const issue = issueOf();
   const v2 = issueOf({ Outcome: 'FICTIONAL: the widget size helper ignores tabs too.' });
   const a = await reserve({ live: issue, run: '40/1' });
-  // The run failed in minute 2 and its record job never ran: no 63-minute wait.
-  const done = await reserve({ live: issue, run: '41/1', at: '2026-10-26T12:03:00Z', runs: { '40/1': { status: 'completed', conclusion: 'failure', created_at: '2026-10-26T12:00:00Z' } } });
+  // The run failed in minute 2 and its record job never ran: freed at once.
+  const done = await reserve({ live: issue, run: '41/1', at: '2026-10-26T12:03:00Z', runs: { 40: { status: 'completed', conclusion: 'failure' } } });
   assert.equal(done.flat.ok, 'true');
-  assert.match(done.said, new RegExp(`Settled first: ${a.flat.reservation} recorded lost \\(its run 40/1 completed \\(failure\\) with no outcome recorded\\)`));
-  const lost = L.read(r.work).entries.find((e) => e.t === 'outcome' && e.id === a.flat.reservation);
-  assert.deepEqual([lost.state, lost.via], ['lost', 'run-status']);
+  assert.match(done.said, new RegExp(`Settled first: ${a.flat.reservation} recorded orphaned \\(its run 40/1 completed \\(failure\\) with no outcome recorded\\)`));
+  const orphan = L.read(r.work).entries.find((e) => e.t === 'outcome' && e.id === a.flat.reservation);
+  assert.deepEqual([orphan.state, orphan.via], ['orphaned', 'run-status']);
   // That build published (its line went up with its branch) and then its
   // record job failed: it is recorded as published.
   const { tree } = G.applyPatch({ cwd: r.work, base: r.base, patchFile: r.patch(GOOD), maxBytes: 600000 });
   const p = G.publish({ cwd: r.work, base: r.base, tree, task: G.taskOf(issue, { policy: POLICY }), run: '41/1', botName: BOT.name, botEmail: BOT.email, branch: 'agent/issue-7', reservation: done.flat.reservation, policy: POLICY });
   assert.equal(p.error, undefined);
-  const next = await reserve({ live: v2, issue: v2, run: '42/1', at: '2026-10-26T12:50:00Z', runs: { '41/1': { status: 'completed', conclusion: 'cancelled', created_at: '2026-10-26T12:03:00Z' } } });
+  const next = await reserve({ live: v2, issue: v2, run: '42/1', at: '2026-10-26T12:50:00Z', runs: { 41: { status: 'completed', conclusion: 'cancelled' } } });
   assert.equal(next.flat.ok, 'true');
   assert.equal(next.flat.predecessor, p.commit);
   assert.match(next.said, new RegExp(`${done.flat.reservation} recorded as published`));
   const settled = L.read(r.work).entries.find((e) => e.t === 'outcome' && e.id === done.flat.reservation);
   assert.deepEqual([settled.state, settled.publish, settled.commit], ['response', 'published', p.commit]);
-  // GitHub cannot say (404): the age decides, 64 minutes held and 65 free.
-  const young = await reserve({ live: v2, issue: v2, run: '43/1', at: '2026-10-26T13:54:00Z' });
-  assert.match(young.said, new RegExp(`build ${next.flat.reservation} of issue #7 \\(run 42/1\\) has no outcome yet: its run's status could not be read and it is 64 min old, so it is held up to 65 min`));
-  const old = await reserve({ live: v2, issue: v2, run: '44/1', at: '2026-10-26T13:55:00Z' });
-  assert.equal(old.flat.ok, 'true');
-  assert.match(old.said, /recorded lost \(no outcome 65 min after it was reserved, and its run's status could not be read\)/);
+  // GitHub answers 404 for run 42 while it answers for the run asking (43):
+  // the run does not exist, so it can publish nothing and is orphaned.
+  const gone = await reserve({ live: v2, issue: v2, run: '43/1', at: '2026-10-26T12:55:00Z', runs: { 43: { status: 'in_progress' } } });
+  assert.equal(gone.flat.ok, 'true');
+  assert.match(gone.said, new RegExp(`${next.flat.reservation} recorded orphaned \\(its run 42/1 does not exist on GitHub and no outcome was recorded\\)`));
 });
 
 test('publish leases on the head its reservation recorded: a branch made, moved or handed to a later build since is stale, never overwritten', async (t) => {
@@ -421,14 +439,15 @@ test('publish leases on the head its reservation recorded: a branch made, moved 
   assert.equal(wrong.code, 1);
   assert.match(fs.readFileSync(outFile, 'utf8'), /state=failed/);
   assert.equal((await publish('bd-0000000000000000', '52/1')).code, 1);
-  // A build recorded lost while it still ran is stale even when its lease would hold.
+  // A build recorded orphaned (GitHub said its run ended) that publishes after
+  // all, as a later re-run of its job would, is stale even when its lease would hold.
   const c = await reserve({ live: edited, issue: edited, run: '60/1' });
-  const d = await reserve({ live: edited, issue: edited, run: '61/1', at: '2026-10-26T13:10:00Z' });
+  const d = await reserve({ live: edited, issue: edited, run: '61/1', at: '2026-10-26T13:10:00Z', runs: { 60: { status: 'completed', conclusion: 'failure' } } });
   assert.equal(c.flat.predecessor, ok.flat.commit);
   assert.equal(d.flat.predecessor, ok.flat.commit);
   const gone = await publish(c.flat.reservation, '60/1', edited);
   assert.equal(gone.flat.state, 'stale');
-  assert.match(gone.flat.note, /was recorded lost \(no outcome 70 min after it was reserved, and its run's status could not be read\) and the issue went to a later build/);
+  assert.match(gone.flat.note, /was recorded orphaned \(its run 60\/1 completed \(failure\) with no outcome recorded\) and the task went to a later build/);
   assert.equal(head(), ok.flat.commit);
   assert.equal((await publish(d.flat.reservation, '61/1', edited)).flat.state, 'published');
 });

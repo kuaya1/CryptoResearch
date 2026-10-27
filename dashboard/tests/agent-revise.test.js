@@ -62,7 +62,7 @@ function fakeGitHub(state) {
     if ((m = /^\/issues\/(\d+)\/comments$/.exec(p))) return Number(m[1]) === state.pr.number ? ok(page === 1 ? state.comments : []) : none;
     if ((m = /^\/pulls\/(\d+)$/.exec(p))) return Number(m[1]) === state.pr.number ? ok(state.pr) : none;
     if ((m = /^\/issues\/(\d+)$/.exec(p))) return Number(m[1]) === 7 && state.issue ? ok(state.issue) : none;
-    if ((m = /^\/actions\/runs\/(\d+)\/attempts\/(\d+)$/.exec(p))) { const st = state.runs[`${m[1]}/${m[2]}`]; return st ? ok(st) : none; }
+    if ((m = /^\/actions\/runs\/(\d+)$/.exec(p))) { const st = state.runs[m[1]]; return st ? ok(st) : none; }
     if ((m = /^\/commits\/([0-9a-f]{40})\/check-runs$/.exec(p))) {
       if (state.onChecks) state.onChecks();
       const name = u.searchParams.get('check_name');
@@ -282,14 +282,17 @@ test('one revision at a time and two per task version: a /revise during a run is
   assert.equal(r1.flat.ok, 'true', r1.said);
   // Eric posts again while it runs: refused at reserve, nothing spent, said on the pull request.
   w.state.comments = [c1, c2];
+  w.state.runs['80'] = { status: 'in_progress', conclusion: null };
   const r2 = await revise({ c: c2, run: '81/1', at: '2026-10-26T12:11:00Z' });
   assert.equal(r2.flat.ok, 'false');
-  assert.match(r2.flat.note, new RegExp(`revision ${r1.flat.reservation} of issue #7 \\(run 80/1\\) has no outcome yet: its run's status could not be read and it is 1 min old, so it is held up to 65 min; one build or revision per issue at a time`));
-  assert.ok(r2.asked.includes(`/repos/${REPO}/actions/runs/80/attempts/1`), 'its run was asked first');
+  assert.match(r2.flat.note, new RegExp(`revision ${r1.flat.reservation} of issue #7 \\(run 80/1\\) has no outcome yet: its run 80/1 is in_progress; one build, revision or remediation per task at a time`));
+  assert.ok(r2.asked.includes(`/repos/${REPO}/actions/runs/80`), 'its run was asked first');
   assert.equal(reserves(w).length, 1);
-  // A label build of the same issue waits the same way.
-  const build = L.decideBuild(L.read(w.work).entries, { binding: 'x', bind: { kind: 'build', issue: 7, task_sha256: w.task.body_sha256 }, ceilings: POLICY.ceilings, now: Date.parse('2026-10-26T12:12:00Z'), usd: 8, run: '82/1', holdMs: 65 * 60000 });
+  // A label build of the same issue waits the same way, and with its run
+  // unread it waits as reconcile required, however old the attempt is.
+  const build = L.decideBuild(L.read(w.work).entries, { binding: 'x', bind: { kind: 'build', issue: 7, task_sha256: w.task.body_sha256 }, ceilings: POLICY.ceilings, now: Date.parse('2026-10-27T12:12:00Z'), usd: 8, run: '82/1' });
   assert.equal(build.action, 'refuse');
+  assert.equal(build.reconcile, true);
   assert.equal(await record(w, r1.flat.reservation, 'published'), 0);
   // The next /revise reads every comment not acted on yet: the waiting one and its own.
   w.state.comments = [c1, c2, c3];
@@ -401,7 +404,11 @@ test('without the ledger key no review verdict is read, and without a revision c
   const v1 = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'agent-policy@1.json'), 'utf8'));
   assert.equal(v1.version, 'cr-agent-policy@1');
   assert.equal(v1.ceilings.revisions_per_task_version, undefined);
-  assert.equal(POLICY.version, 'cr-agent-policy@2');
+  // @2 is kept frozen beside @3 (audits/2026-10-27-pm-builder), with the same revision ceiling.
+  const v2 = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'agent-policy@2.json'), 'utf8'));
+  assert.equal(v2.version, 'cr-agent-policy@2');
+  assert.equal(v2.ceilings.revisions_per_task_version, 2);
+  assert.equal(POLICY.version, 'cr-agent-policy@3');
   assert.equal(POLICY.ceilings.revisions_per_task_version, 2);
   w.state.comments.push(comment(151, '/revise FICTIONAL: and again'));
   await record(w, reserves(w)[0].id, 'published');

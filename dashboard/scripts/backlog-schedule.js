@@ -4,6 +4,12 @@
 // "up to 10 eligible backlog items per hour across all builders combined",
 // until 2026-10-27 23:00 New York, then the limits before it).
 //
+// Deprecated (Eric, 2026-10-27; audits/2026-10-27-pm-builder): the agent
+// lane's PM (agent-pm.js, agent-builder-lane.yml) is the only builder on a
+// schedule. This scheduler stays for the record and for a run by hand; the
+// cloud routines that called it hourly are paused, and no workflow runs it on
+// a schedule (tests/agent-workflows.test.js).
+//
 //   node dashboard/scripts/backlog-schedule.js plan      --builder a [--json]
 //   node dashboard/scripts/backlog-schedule.js claim     --builder a --run <id> [--json]
 //   node dashboard/scripts/backlog-schedule.js heartbeat --run <id>

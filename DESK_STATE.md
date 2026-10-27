@@ -24,6 +24,96 @@ An item that serves none of these is not added, or waits behind the ones that do
 - unknown is never 0;
 - nothing places an order, connects a wallet or exchange, or moves money.
 
+## System Architecture & Conventions
+
+Eric, 2026-10-27 (`audits/2026-10-27-pm-builder/README.md`).
+
+**Topology:**
+
+- **The desk** runs on Render from `main` (`server.js` → `dashboard/hosted.js`). Its records live on Render's disk and never in Git.
+- **The agent lane** builds the Active Backlog below, one task at a time:
+  1. The PM, `agent-builder-lane.yml` running `dashboard/scripts/agent-pm.js`, picks the first `[TODO]`.
+  2. `agent-build.yml` reserves the build in the ledger, then Claude Code builds it in the sandbox with read-only contents and only the Anthropic key.
+  3. The guard re-checks the diff, and the builder App publishes `agent/task-<n>` and opens the pull request.
+  4. `test`, `agent-guard`, `agent-verify` and `agent-review` (ChatGPT) run on it.
+  5. On a pass, the PM posts "PM Site Inspection: PASSED". On a failure, the PM's diagnosis (ChatGPT) and Claude's fix, at most 3 per task version, then `[BLOCKED: Needs Human Architect]`.
+  6. Eric merges.
+- **The cloud routines** build the numbered Autonomous Build Backlog further down; that list is theirs. Deprecated (Eric, 2026-10-27): once the lane is on, `agent-builder-lane.yml` is the only builder on a schedule. The routines (builder A hourly at :55, builder B for the burst) live in claude.ai, outside this repository, and are paused there by Eric; their list stays as history. No workflow here runs `backlog-schedule.js` on a schedule (`dashboard/tests/agent-workflows.test.js`).
+
+**Authority:**
+
+- Only Eric updates `main`, by merging a pull request. A task block on `main` is his authorization for its build and its automatic fixes, as his `agent:build` label is for an issue.
+- The lane writes a task's status only on its candidate branch:
+  - `[IN_PROGRESS: PR #n]` when its pull request opens;
+  - `[BLOCKED: Needs Human Architect]` at a block;
+  - `[DONE]` for a task whose `[IN_PROGRESS]` line reached `main` by its merge.
+- A candidate never adds, edits or reorders a task.
+- Nothing in the lane merges, approves or writes `main`.
+
+**Component contracts:**
+
+- `eng-backend@1` is core logic and server routes: `dashboard/core/**`, `dashboard/server.js`, tests.
+- `eng-app@4` is the browser app and its pure models: `dashboard/web/src/**`, `dashboard/public/**`, tests. It never adds a server route. The lane rebuilds the committed bundle from the source with `main`'s build files, and `agent-verify` checks it.
+
+**Testing:**
+
+- `node dashboard/cli.js test` runs the whole suite on temporary fictional workspaces.
+- Every candidate adds or changes a test of its outcome.
+- The server needs no npm packages.
+- Unknown is said in words, never 0 or "none".
+
+## Active Backlog
+
+The agent lane's queue, built strictly in order. Each block's Status is one of `[TODO]`, `[IN_PROGRESS: PR #<n>]`, `[DONE]` or `[BLOCKED: <reason>]`. Template is `eng-backend@1` or `eng-app@4`. Outcome, Acceptance checks and Negative cases are the task; Files to change and Regression tests are hints. Editing a task's fields makes a new version: the lane builds it fresh, with its own budget.
+
+### TASK-001 · Paper Book cell on the stored book
+- **Status:** [TODO]
+- **Template:** eng-backend@1
+- **Outcome:** The Desk reads the Paper Book's numbers from the stored paper book through one read-only route. `dashboard/core/paper-book.js` gains `paperBookCell(book)`, a pure function over what `require('./paper').book(ws)` returns (`cr.paper-book.v1`), and `dashboard/server.js` serves it at `GET /api/paper/cell` from `paper.book(ws)` inside `coherent`. `computePaperBookSummary` stays as it is.
+- **Acceptance checks:**
+  - `paperBookCell` returns `format` "cr-paper-cell@1", `as_of` from the book, `open_positions`, `open_risk_usd` (the sum of `risk_usd` over positions whose `state` is "open"), `closed`, `measured_closed` and `min_closed` (paper.js `MIN_CLOSED`).
+  - Below `MIN_CLOSED` measured closes it returns `result: { status: "too_few", words }`, the words being the book's own `summary.note`, and no median, hit count or total anywhere in its answer.
+  - At or above it, `result: { status: "measured", median_vs_btc_pct, beat_btc, of }`, copied from the book's `summary` and never recomputed.
+  - `GET /api/paper/cell` answers 200 with that shape on a temporary fictional workspace with no paper records (`open_positions` 0, `result.status` "too_few") and writes nothing.
+  - `dashboard/tests/paper-book.test.js` covers a fictional book with two open positions (risk 100 and 50.25), one closed and one voided; a book with 20 measured closes; an empty book; and a book without `summary`.
+- **Negative cases:**
+  - Never a median, hit rate or total below `MIN_CLOSED`, and never 0 in place of one: the words say too few.
+  - An unknown is never $0. A missing book, or one without `summary`, gives `result: { status: "unknown", words }`. An open position without a numeric `risk_usd` makes `open_risk_usd` null, and `unpriced_open` counts it.
+  - It never reads or changes the portfolio, the ledger, wallets or any record, and requires no outside package. The existing `computePaperBookSummary` tests pass unchanged.
+- **Files to change:**
+  - dashboard/core/paper-book.js
+  - dashboard/server.js
+  - dashboard/tests/paper-book.test.js
+- **Regression tests:**
+  - dashboard/tests/paper-book.test.js
+
+### TASK-002 · Paper Book cell in the Desk status strip
+- **Status:** [TODO]
+- **Template:** eng-app@4
+- **Outcome:** The Desk's KPI strip gains a Paper Book cell, drawn from `GET /api/paper/cell` (TASK-001):
+  - the open paper positions and their open paper risk;
+  - the 30-day result against BTC only once the book has enough closed positions, otherwise its words for too few.
+
+  The words come from a pure `paperCellWords(cell)` in `dashboard/public/watchlist-model.js`. `dashboard/web/src/views/watchlist/StatusStrip.jsx` draws them and opens `#/research?tab=outcomes` on click. The committed bundle is rebuilt by the lane.
+- **Acceptance checks:**
+  - `paperCellWords` turns a `cr-paper-cell@1` answer into a label "Paper book", a figure, and an accessible name that says the cell in full.
+    - The figure for open positions is "2 open · $150.25 at risk".
+    - For a measured result it is "+3.10% vs BTC (12 of 20 beat)", with the sign and two decimals.
+    - For too few, it is the answer's own words.
+  - The cell is one more cell in the strip's panel, with the same hairline. On a phone it steps aside as Total does, and its accessible name keeps it.
+  - It is read once when the Desk opens; a failed read reads "Paper book unknown" with the reason in its tooltip.
+  - `dashboard/tests/paper-cell-words.test.js` covers each case, plus an answer with `open_risk_usd` null and one with `result.status` "unknown".
+- **Negative cases:**
+  - Never "$0" or "0%" for an unknown or a too-few result: the words say it.
+  - No text under 12.5px. Meaning is never colour alone: a rise or fall also has its sign.
+  - Opening the Desk writes nothing and asks no paid provider. Paper figures never enter Portfolio.
+- **Files to change:**
+  - dashboard/public/watchlist-model.js
+  - dashboard/web/src/views/watchlist/StatusStrip.jsx
+  - dashboard/tests/paper-cell-words.test.js
+- **Regression tests:**
+  - dashboard/tests/paper-cell-words.test.js
+
 ## What it does
 
 It closes the loop on one asset at a time:
@@ -157,16 +247,16 @@ Live tickets (2026-10-24), both $0 and waiting for Eric: OLAS `tr_2026-10-24T175
 
 ### Junior Trader Desk Invariants (Future-Proofing Contract)
 
-Eric, 2026-10-27. The contract for the autonomous trader still to be built, so the sandbox, the ledger (`dashboard/scripts/agent-ledger.js`) and the desk's deterministic gates carry unattended trading without rework. None of it is implemented yet. The North Star invariants above stay in force: today nothing places an order, connects a wallet or exchange, or moves money.
+Eric, 2026-10-27. The contract for the autonomous trader still to be built, so the sandbox, the ledger (`dashboard/scripts/agent-ledger.js`) and the desk's deterministic gates carry unattended trading without rework. The pre-trade risk engine (`dashboard/core/trade-risk.js`, `cr-trade-risk@1`, PR #58) and the trader's Paper Book (`dashboard/core/paper-trader.js`, `cr-paper@2`, PR #59) are built as library code; no route, CLI, connector tool, UI or agent calls them, and nothing routes anywhere. The North Star invariants above stay in force: today nothing places an order, connects a wallet or exchange, or moves money.
 
 1. **Separation of proposal and execution.** The LLM agent is an analyst only. It never holds execution API keys and never signs a transaction. It emits a typed `TradeIntent` (below). An out-of-band deterministic engine intercepts, validates and routes it; while invariant 5 holds, it routes only to the Paper Book.
 2. **Stateless shift work.** The trader runs in discrete, stateless evaluation cycles during the target market's liquidity windows. Each tick re-derives its state from disk only (`DESK_STATE.md`, open position records, fill journals) and exits. No long-lived chat memory.
-3. **Immutable risk boundary.** The risk limits are hard-coded in the engine, outside the model's context window: at most 2% of the Paper Book's NAV (`cr-paper@2`, below) at risk per trade; a stop-loss on every trade, no nearer the entry than the minimum stop distance; an asset allowlist; and a hard ceiling on drawdown of 4% of NAV in any rolling 24 hours (Eric, 2026-10-27). The agent cannot alter, soften or bypass them. The engine (`dashboard/core/trade-risk.js`) and the Paper Book (`dashboard/core/paper.js`) are protected files.
-4. **Reconciliation and nonce guard.** The engine inherits the ledger's pattern: a hash-chained, append-only record written by compare-and-swap; every action reserved before it is sent; each recorded verdict signed with an HMAC-SHA256 MAC under a key the agent never holds (`AGENT_LEDGER_KEY` in the build lane). An order is not a build: it never times out to `lost` (pipeline review, 2026-10-27; a build's 65-minute fallback in `agent-ledger.js` is for builds only).
+3. **Immutable risk boundary.** The risk limits are hard-coded in the engine, outside the model's context window: at most 2% of the Paper Book's NAV (`cr-paper@2`, below) at risk per trade; a stop-loss on every trade, no nearer the entry than the minimum stop distance; an asset allowlist; and a hard ceiling on drawdown of 4% of NAV in any rolling 24 hours (Eric, 2026-10-27). The agent cannot alter, soften or bypass them. The engine (`dashboard/core/trade-risk.js`), both Paper Books (`dashboard/core/paper.js`, `paper-trader.js`) and the exact arithmetic they compute with (`dashboard/core/decimal.js`) are protected files.
+4. **Reconciliation and nonce guard.** The engine inherits the ledger's pattern: a hash-chained, append-only record written by compare-and-swap; every action reserved before it is sent; each recorded verdict signed with an HMAC-SHA256 MAC under a key the agent never holds (`AGENT_LEDGER_KEY` in the build lane). An order never times out to `lost` (pipeline review, 2026-10-27), and since the red-team review the same day no clock settles a build either (`agent-ledger.js` `settleOpen`).
    - **States.** `INTENT` → `RESERVED` (the `intent_id` and the `client_order_id` derived from it, recorded before anything is sent) → `SENT` → `ACKED`, `REJECTED` or `UNKNOWN`; then `ACKED` → `PARTIAL` → `FILLED`, `CANCELLED` or `EXPIRED`.
    - **Unknown stays unknown.** A timeout, a dropped broker WebSocket or an answer that does not read makes the order `UNKNOWN`. It stays `UNKNOWN` until the engine has asked the venue for that `client_order_id` and recorded the venue's answer. It becomes `NOT_FOUND` only when the venue says so after the venue's own duplicate-order window has passed, never on the engine's clock alone.
-   - **No new action while unknown.** While any order is `UNKNOWN`, the engine opens no new intent. It never resends an order under a new `client_order_id`: a resend carries the same one, so the venue refuses a duplicate.
-5. **Sovereign capital governance.** The agent trades only on the simulated Paper Book (`cr-paper@2`, below; until it is built, nothing routes anywhere). The PM Paper Book (`cr-paper@1`, `paper/positions.jsonl`; item 18) keeps measuring Eric's ticket decisions apart from it. Promoting any strategy to live execution needs Eric's own explicit, authenticated commit or signature on `main`.
+   - **No new action while unresolved.** While any order is `RESERVED`, `SENT` or `UNKNOWN` (one that may be live with no answer on record), the engine opens no new intent. It never resends an order under a new `client_order_id`: a resend carries the same one, so the venue refuses a duplicate.
+5. **Sovereign capital governance.** The agent trades only on the simulated Paper Book (`cr-paper@2`, below; nothing routes to it yet). The PM Paper Book (`cr-paper@1`, `paper/positions.jsonl`; item 18) keeps measuring Eric's ticket decisions apart from it. Promoting any strategy to live execution needs Eric's own explicit, authenticated commit or signature on `main`.
 
 ### `TradeIntent` schema (`cr.trade-intent.v2`)
 
@@ -209,11 +299,11 @@ What the engine holds it to:
 - **Fresh price.** Refused when `reference_at` is older than `freshness.price_stale_minutes` at evaluation, or when the engine's own current price is further from `reference_price` than `max_slippage_bps`.
 - **Bounded life.** `valid_until` is read as the earlier of itself and `created_at` plus the engine's maximum validity; an intent already past it is refused.
 - **Evidence is for the record.** The engine stores `evidence` with the intent for the audit trail and reads none of it for a decision.
-- When it is built, the schema is published as its own file under `templates/schemas/` and never edited after; a change is `cr.trade-intent.v3`.
+- The schema is published as `templates/schemas/trade-intent.v2.schema.json` (PR #58) and never edited after; a change is `cr.trade-intent.v3`.
 
-### Paper Book `cr-paper@2` (blueprint, not built)
+### Paper Book `cr-paper@2`
 
-Pipeline review, 2026-10-27. What the trader's Paper Book must be before any engine routes an intent to it. It is built in `dashboard/core/paper.js` beside `cr-paper@1`, which keeps measuring the PM's ticket decisions exactly as it does. `cr-paper@2` has its own append-only records under `paper/` and never rewrites `paper/positions.jsonl`.
+Pipeline review, 2026-10-27. What the trader's Paper Book must be before any engine routes an intent to it. Built in `dashboard/core/paper-trader.js` (PR #59) beside `cr-paper@1` (`dashboard/core/paper.js`, unchanged), which keeps measuring the PM's ticket decisions exactly as it does. `cr-paper@2` has its own hash-chained, append-only records under `paper/trader/` and never touches `paper/positions.jsonl`.
 
 - **Cash NAV.** The book starts from a cash balance Eric sets; unset, it holds nothing and the engine refuses every intent. NAV is cash plus each open quantity × its latest hourly price. A position without a fresh price makes NAV unknown, never valued at 0 or at its entry.
 - **Discrete sizing.** The quantity is `floor_to_lot(risk_ceiling / (entry − stop))` at the venue's lot size and minimum notional; below the minimum there is no order. Cash is debited at each fill and credited at each exit, and never goes negative.
@@ -222,14 +312,14 @@ Pipeline review, 2026-10-27. What the trader's Paper Book must be before any eng
 - **High/low wick stops.** Stops and targets are checked against each hour's high and low, not its close. When one hour reaches both the stop and the take profit, the stop is taken: the worse outcome.
 - **Long only.** `OPEN_LONG` and `CLOSE_LONG`; no short, leverage or margin.
 - **Results.** Realized P&L net of fees and slippage, NAV by the hour, and drawdown from NAV's high-water mark (the measure invariant 3's ceilings use), set against BTC over the same times as the outcomes are.
-- **Protected.** `dashboard/core/paper.js`, the future `dashboard/core/trade-risk.js` and their tests (`trade-risk`, `paper-trader` and `trader-boundary` under `dashboard/tests/`) are in `PROTECTED` (`dashboard/scripts/backlog-promote.js`). No builder or agent-lane candidate changes them. Eric changes them, or a task he marks for it in words.
+- **Protected.** `dashboard/core/paper.js`, `paper-trader.js`, `trade-risk.js`, `decimal.js` and their tests (`trade-risk`, `paper-trader` and `trader-boundary` under `dashboard/tests/`) are in `PROTECTED` (`dashboard/scripts/backlog-promote.js`). No builder or agent-lane candidate changes them. Eric changes them, or a task he marks for it in words.
 
 ### Junior Trader roadmap
 
-Eric, 2026-10-27; corrected by the pipeline review the same day. Both steps change protected files, so both backlog items are *(Eric)*: no builder takes them. Eric's merge releases each.
+Eric, 2026-10-27; corrected by the pipeline review the same day. Both steps change protected files, so both backlog items were *(Eric)*: no builder took them. Both are built and merged by Eric (PRs #58 and #59).
 
-1. **Pre-trade risk engine** (item 73). `validateTradeIntent` in `dashboard/core/trade-risk.js`: a pure check of every `cr.trade-intent.v2` against invariant 3's limits and the rules above.
-2. **Paper Book `cr-paper@2`** (item 74). The blueprint above, in `dashboard/core/paper.js`. It replaces the earlier `paper-fills.js` harness (`cr-paper-fill@1`), which was never built.
+1. **Pre-trade risk engine** (item 73, built, PR #58). `validateTradeIntent` in `dashboard/core/trade-risk.js`: a pure check of every `cr.trade-intent.v2` against invariant 3's limits and the rules above.
+2. **Paper Book `cr-paper@2`** (item 74, built, PR #59). The blueprint above, in `dashboard/core/paper-trader.js`. It replaces the earlier `paper-fills.js` harness (`cr-paper-fill@1`), which was never built.
 
 | Limit | Value |
 |---|---|
@@ -246,6 +336,8 @@ Open (Eric):
 - An intent names no ticket, so the engine cannot yet hold `risk_ceiling_usd` to the gate's suggested risk or a PM decision (above) until an intent carries its ticket.
 
 ## Autonomous Build Backlog
+
+> Deprecated (Eric, 2026-10-27): the Active Backlog above, under the PM, is the autonomous queue. This list and `backlog-schedule.js` stay for the record and for a hand-run audit; the cloud routines that read it are being paused.
 
 **Each builder run takes the items `dashboard/scripts/backlog-schedule.js` claims for it (up to five, three after the surge), implements and tests them one after another on one branch, and pushes that branch; `backlog-pr` opens its PR and Eric merges it.**
 
@@ -681,7 +773,7 @@ Not executable: Eric's decisions and protected work (`audits/2026-10-27-next-pha
 
 Phase 7, the Junior Trader engine (Eric, 2026-10-27; the roadmap, schema, Paper Book blueprint and limits under System Architecture & Conventions). Library code and its tests only: no route, CLI, connector tool or UI calls it yet, no model is called, and nothing places an order, connects a wallet or exchange, or moves money. Both items change protected files (pipeline review, 2026-10-27), so both are *(Eric)*: no builder takes them, and each is built only when Eric says so and released only by his merge. Each runs the whole suite.
 
-- [ ] *(Eric)* **73. Deterministic pre-trade risk engine (`eng-backend@1`; protected).** A pure function `validateTradeIntent(intent, book, rules)` in a new `dashboard/core/trade-risk.js` (`cr-trade-risk@1`). It reads no file, clock or network; the time comes in `book.now`.
+- [x] *(Eric)* **73. Deterministic pre-trade risk engine (`eng-backend@1`; protected).** A pure function `validateTradeIntent(intent, book, rules)` in a new `dashboard/core/trade-risk.js` (`cr-trade-risk@1`). It reads no file, clock or network; the time comes in `book.now`.
   - It returns `{ ok, version, refusals: [{ field, rule, words }] }` with every failed check listed, never only the first; `ok` only with none. Nothing is trimmed or adjusted: an intent passes as written or is refused.
   - Shape: `version` is `cr.trade-intent.v2`; `intent_id` present; `side` `OPEN_LONG` or `CLOSE_LONG`, with `position_id` exactly when it is `CLOSE_LONG` and naming an open position of `book`; `order_type` LIMIT or POST_ONLY; every price and amount a plain decimal string, compared exactly and never through a float; `created_at`, `reference_at` and `valid_until` ISO-8601 UTC; `max_slippage_bps` an integer at most 20; `thesis_id`, `pair` and the three `evidence` fields present (evidence is never read for the decision).
   - Order of prices: stop below entry below take profit for `OPEN_LONG`.
@@ -696,9 +788,11 @@ Phase 7, the Junior Trader engine (Eric, 2026-10-27; the roadmap, schema, Paper 
   - The limits are constants in the module (`RISK_PER_TRADE_MAX` 0.02, `DAILY_DRAWDOWN_MAX` 0.04, `SLIPPAGE_BPS_MAX` 20). `rules` may tighten them; a looser value is refused as a rule error, never applied.
   - Computing `book` from the Paper Book is item 74, not this one.
   - Tests in `dashboard/tests/trade-risk.test.js`: a passing `OPEN_LONG` and `CLOSE_LONG`; each rule refused on its own with its field named; several failures listed together; risk at exactly 2% passes and a cent over is refused; drawdown at exactly 4% passes and over it is refused; a stop one tick inside the floor is refused; a float or exponent where a decimal string belongs is refused; an unknown NAV, drawdown, price or ATR refuses; an `UNKNOWN` order refuses every intent; a looser `rules` is refused; the inputs are unchanged after the call.
+  - Built by PR #58 (`529f08b`, merged by Eric 2026-10-27); what it adds beyond this text is in the module's header (risk held to the desk's grant, costs in the size, future stamps refused, `RESERVED` and `SENT` halt too).
   - **Schedule:** touches dashboard/core/trade-risk.js, dashboard/tests/trade-risk.test.js
-- [ ] *(Eric)* **74. Paper Book `cr-paper@2` (`eng-backend@1`; protected).** In `dashboard/core/paper.js`, beside `cr-paper@1`, as the blueprint under System Architecture & Conventions says: cash NAV, discrete sizing, fills through the price with partial fills, maker and taker fees, stop slippage, hourly high/low stops (the stop first when one hour reaches both) and long only. It replaces the earlier `paper-fills.js` harness (`cr-paper-fill@1`), which was never built.
+- [x] *(Eric)* **74. Paper Book `cr-paper@2` (`eng-backend@1`; protected).** In `dashboard/core/paper.js`, beside `cr-paper@1`, as the blueprint under System Architecture & Conventions says: cash NAV, discrete sizing, fills through the price with partial fills, maker and taker fees, stop slippage, hourly high/low stops (the stop first when one hour reaches both) and long only. It replaces the earlier `paper-fills.js` harness (`cr-paper-fill@1`), which was never built.
   - Its own append-only records under `paper/`, written through `runOp` as `paper.js` writes; the same `intent_id` again is `unchanged`. They never enter `paper/positions.jsonl`, the PM Paper Book's counts or Portfolio, and `cr-paper@1` reads the same before and after.
   - The book it hands item 73 (`book`: NAV, 24-hour drawdown, price, ATR, lot, exit size, open positions and orders by state), each unknown said in words, never 0.
   - Tests in `dashboard/tests/paper-trader.test.js` (temporary workspaces): a fill only when the low trades through; a partial fill over the volume share; maker and taker fees; an unknown fee refuses; a stop with slippage and a gap through it; one hour reaching both stop and target takes the stop; NAV unknown without a fresh price; cash never negative; the same intent twice is `unchanged`; `paper.book` (`cr-paper@1`) unchanged.
+  - Built by PR #59 (`e7d580a`, merged by Eric 2026-10-27) in a new `dashboard/core/paper-trader.js`, so `paper.js` (`cr-paper@1`) is not edited.
   - **Schedule:** after 73; touches dashboard/core/paper.js, dashboard/tests/paper-trader.test.js

@@ -1,10 +1,13 @@
 {
-  "version": "cr-agent-policy@2",
+  "version": "cr-agent-policy@3",
   "label": "agent:build",
   "branch_prefix": "agent/issue-",
+  "task_branch_prefix": "agent/task-",
+  "backlog": "DESK_STATE.md",
   "templates": {
     "eng-backend@1": { "implementation": ["dashboard/server.js", "dashboard/core/**"] },
-    "eng-docs@1": { "implementation": [] }
+    "eng-docs@1": { "implementation": [] },
+    "eng-app@4": { "implementation": ["dashboard/public/*.js"], "requires_tests": "dashboard/tests/**/*.test.js", "max_patch_bytes": 8000000 }
   },
   "build": {
     "claude_code": "2.1.304",
@@ -14,11 +17,16 @@
     "max_patch_bytes": 600000
   },
   "review": {
-    "prompt": "cr-agent-review@1",
+    "prompt": "cr-agent-review@2",
     "max_completion_tokens": 16000,
     "max_diff_chars": 200000,
     "request_timeout_ms": 300000,
     "unknown_grace_minutes": 20
+  },
+  "pm": {
+    "prompt": "cr-agent-diagnose@1",
+    "max_completion_tokens": 6000,
+    "max_evidence_chars": 40000
   },
   "ceilings": {
     "review_attempts_per_binding": 2,
@@ -26,6 +34,9 @@
     "review_tokens_per_day": 1500000,
     "builds_per_task_version": 2,
     "revisions_per_task_version": 2,
+    "remediations_per_task_version": 3,
+    "diagnoses_per_task_version": 3,
+    "diagnoses_per_day": 9,
     "builds_per_day": 6,
     "build_usd_per_day": 40
   }
