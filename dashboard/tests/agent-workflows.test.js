@@ -215,6 +215,31 @@ test('no workflow caches anything (a cache is shared across runs and branches)',
   }
 });
 
+// The repository went private on GitHub Pro (2026-10-27): a checkout made
+// with persist-credentials: false leaves git no way in, and the agent checks'
+// first fetch failed "could not read Username" on every pull request.
+test('the repository is private: every git fetch from a checkout without credentials carries its job\'s token as a header, never in the git config', () => {
+  const dir = path.join(ROOT, '.github', 'workflows');
+  const AUTH = 'git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf \'x-access-token:%s\' "$GH_TOKEN" | base64 -w0)" ';
+  let seen = 0;
+  for (const f of fs.readdirSync(dir).filter((x) => /\.ya?ml$/.test(x))) {
+    const text = fs.readFileSync(path.join(dir, f), 'utf8');
+    for (const [id, job] of Object.entries(jobs(text))) {
+      if (!/persist-credentials: false/.test(job) || /x-access-token:\$\{TOKEN\}@/.test(job)) continue;
+      for (const step of job.split(/\n {6}- /)) {
+        const lines = step.split('\n').filter((l) => /\bgit\b.*\b(fetch|ls-remote|push|pull)\b/.test(l) && !/^\s*#/.test(l));
+        for (const l of lines) {
+          seen += 1;
+          assert.ok(l.trim().startsWith(AUTH), `${f} ${id}: ${l.trim()}`);
+          assert.match(step, /\n\s+GH_TOKEN: \$\{\{ github\.token \}\}\n/, `${f} ${id}: the step holds the job's own token`);
+        }
+      }
+      assert.doesNotMatch(job, /git config[^\n]*extraheader|git remote set-url[^\n]*GH_TOKEN/, `${f} ${id}: the token is never written to the git config`);
+    }
+  }
+  assert.equal(seen, 4, 'agent-guard, agent-verify, and backlog-pr\'s pr and compose jobs');
+});
+
 test('the jobs that run a candidate hold no write permission and no secret, and are never skipped', () => {
   const text = FILES[1][1];
   const j = jobs(text);
