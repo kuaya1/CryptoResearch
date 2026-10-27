@@ -347,3 +347,36 @@ test('item 69: the unknown-cost sentence names the Set cost control as it is dra
   assert.match(b.words, /Use Set cost on the row in Portfolio > Needs attention/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'portfolio.js'), 'utf8'), /'Set cost'/);
 });
+
+test('position-brief checkpoints (item 72): day 61 names day 90 next; past the end; no horizon in words; research due with its age', (t) => {
+  const pb = require('../core/position-brief');
+  const start = Date.parse('2026-01-01T12:00:00Z');
+  const DAY = 86400000;
+  const end = '2026-05-01';
+  const at = (n) => start + n * DAY; // day n+1
+  const c61 = pb.checkpoints({ decided_at: new Date(start).toISOString(), horizon_end: end }, { now: at(60) });
+  assert.equal(c61.status, 'in_horizon');
+  assert.equal(c61.day, 61);
+  assert.equal(c61.next_mark, 90);
+  const c30 = pb.checkpoints({ decided_at: new Date(start).toISOString(), horizon_end: end }, { now: at(29) });
+  assert.equal(c30.day, 30);
+  assert.equal(c30.next_mark, 60);
+  const late = pb.checkpoints({ decided_at: new Date(start).toISOString(), horizon_end: end }, { now: Date.parse('2026-05-10T00:00:00Z') });
+  assert.equal(late.status, 'past_end');
+  assert.match(late.words, /the horizon ended on 2026-05-01/);
+  const none = pb.checkpoints({ decided_at: new Date(start).toISOString(), horizon_end: null, horizon_missing: 'No run.' }, { now: at(10) });
+  assert.equal(none.status, 'horizon_missing');
+  assert.equal(none.horizon_end, undefined);
+  assert.match(none.words, /no default length/);
+  assert.equal(pb.checkpoints({ decided_at: 'x', horizon_end: end }).status, 'no_decision');
+
+  const w = tempWorkspace('horizon-due');
+  t.after(w.cleanup);
+  const pid = addFixtureProject(w.ws).project_id;
+  assert.equal(pb.researchDue(w.ws, pid).status, 'no_report');
+  dropFixture(w.ws, 'claude', 'example-payfi-fictional__claude.md');
+  inbox.scanInbox(w.ws, { force: true });
+  const r0 = pb.researchDue(w.ws, pid, { now: Date.now() + 200 * DAY });
+  assert.equal(r0.status, 'due');
+  assert.match(r0.words, /^research due, \d+ days old$/);
+});
