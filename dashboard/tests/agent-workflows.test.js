@@ -96,6 +96,23 @@ test('the builder runs in Claude Code\'s sandbox: the key unset for commands, np
   assert.match(jobs(FILES[0][1]).publish, /agent-guard\.js apply --base "\$BASE" --patch "\$RUNNER_TEMP\/build\/patch\.diff" --build "\$RUNNER_TEMP\/build\/result\.json"/);
 });
 
+test('publish leases on the head reserve recorded; a stale build opens no pull request, is recorded so and said on the issue', () => {
+  const j = jobs(FILES[0][1]);
+  assert.match(j.reserve, /predecessor: \$\{\{ steps\.reserve\.outputs\.predecessor \}\}/);
+  assert.match(j.publish, /outputs:\n\s+state: \$\{\{ steps\.publish\.outputs\.state \}\}\n\s+note: \$\{\{ steps\.publish\.outputs\.note \}\}/);
+  assert.match(j.publish, /RESERVATION: \$\{\{ needs\.reserve\.outputs\.reservation \}\}/);
+  assert.match(j.publish, /agent-guard\.js publish --base "\$BASE" --tree "\$TREE" --reservation "\$RESERVATION" /);
+  const pr = j.publish.slice(j.publish.indexOf('- name: The pull request'));
+  assert.match(pr, /^- name: [^\n]+\n\s+if: steps\.publish\.outputs\.ok == 'true'\n/, 'no pull request for a stale build');
+  assert.match(j.record, /permissions:\n\s+contents: write[^\n]*\n\s+issues: write[^\n]*\n\s+steps:/);
+  assert.match(j.record, /--publish "\$PUBLISH"/);
+  const said = j.record.slice(j.record.indexOf('- name: A stale build is said on the issue'));
+  assert.match(said, /if: needs\.publish\.outputs\.state == 'stale'\n/);
+  assert.match(said, /NOTE: \$\{\{ needs\.publish\.outputs\.note \}\}\n/);
+  assert.doesNotMatch(said.slice(said.indexOf('run: |')), /\$\{\{/, 'the note reaches the shell as data, never as text of the script');
+  assert.deepEqual(secretsIn(j.record), []);
+});
+
 test('the sandbox probe is Eric\'s own run from main, under the build\'s settings, at most $0.50, and its check fails unless everything holds', () => {
   const text = read('.github/workflows/agent-sandbox-probe.yml');
   assert.match(text, /^on:\n {2}workflow_dispatch:\n\npermissions: \{\}$/m, 'dispatch only');

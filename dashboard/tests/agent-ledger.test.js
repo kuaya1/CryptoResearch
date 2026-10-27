@@ -132,8 +132,28 @@ test('builds of one task version count together whichever commit of main each st
   const bind = (base, task = 'a'.repeat(64)) => ({ kind: 'build', issue: 7, task_sha256: task, base });
   const reserve = (id, run, b) => ({ t: 'reserve', kind: 'build', id, binding: L.bindingOf(b), bind: b, run, usd: 8, day: '2026-10-26' });
   const args = (b, run) => ({ binding: L.bindingOf(b), bind: b, ceilings: { ...CEIL, builds_per_day: 9, build_usd_per_day: 99 }, now: NOW, usd: 8, run });
-  const two = [reserve('bd-1', '1/1', bind('m1')), reserve('bd-2', '2/1', bind('m2'))];
+  const done = (id, state) => ({ t: 'outcome', id, state });
+  const two = [reserve('bd-1', '1/1', bind('m1')), done('bd-1', 'failed'), reserve('bd-2', '2/1', bind('m2')), done('bd-2', 'response')];
   assert.match(L.decideBuild(two, args(bind('m3'), '3/1')).why, /2 paid builds for this version/);
   assert.equal(L.decideBuild(two, args(bind('m3', 'b'.repeat(64)), '3/1')).action, 'build', 'an edited task is another version');
   assert.equal(L.decideBuild(two, args({ ...bind('m3'), issue: 8 }, '3/1')).action, 'build', 'another issue');
+});
+
+test('builds: one per issue at a time; an open one is recorded lost after the hold, frees the issue and still counts', () => {
+  const bind = (issue = 7) => ({ kind: 'build', issue, task_sha256: 'a'.repeat(64), base: 'm1', predecessor: 'absent' });
+  const reserve = (id, run, b, at) => ({ t: 'reserve', kind: 'build', id, binding: L.bindingOf(b), bind: b, run, usd: 8, day: '2026-10-26', at });
+  const args = (b, run, now = NOW) => ({ binding: L.bindingOf(b), bind: b, ceilings: { ...CEIL, builds_per_day: 9, build_usd_per_day: 99 }, now, usd: 8, run });
+  const open = [reserve('bd-1', '1/1', bind(), new Date(NOW - 64 * 60000).toISOString())];
+  assert.match(L.decideBuild(open, args(bind(), '2/1')).why, /build bd-1 of issue #7 \(run 1\/1\) has no outcome yet and is 64 min old; one build per issue at a time, each held up to 65 min/);
+  assert.equal(L.decideBuild(open, args(bind(8), '2/1')).action, 'build', 'another issue is not held');
+  assert.equal(L.decideBuild([...open, { t: 'outcome', id: 'bd-1', state: 'unknown' }], args(bind(), '2/1')).action, 'build', 'an outcome, even unknown, frees the issue');
+  assert.match(L.decideBuild([reserve('bd-1', '1/1', bind(), 'not a time')], args(bind(), '2/1')).why, /has no outcome yet; one build per issue/, 'an unreadable time holds the issue');
+  const later = L.decideBuild(open, args(bind(), '2/1', NOW + 60000));
+  assert.equal(later.action, 'build');
+  assert.deepEqual(later.lost, ['bd-1']);
+  assert.deepEqual(later.append.map((e) => [e.t, e.id, e.state]), [['outcome', 'bd-1', 'lost'], ['reserve', later.id, undefined]]);
+  assert.match(later.append[0].error, /no outcome 65 min after it was reserved/);
+  const after = [...open, ...later.append, { t: 'outcome', id: later.id, state: 'response' }];
+  assert.match(L.decideBuild(after, args(bind(), '3/1', NOW + 120000)).why, /2 paid builds for this version/, 'the lost build still counts');
+  assert.equal(L.BUILD_GRACE_MINUTES, 20, 'a 45-minute build is held 65 minutes');
 });
