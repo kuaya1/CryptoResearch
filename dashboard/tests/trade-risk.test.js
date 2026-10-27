@@ -32,7 +32,12 @@ const book = () => ({
   now: NOW,
   nav_usd: '10000',
   drawdown_24h_usd: '0',
+  // The planned loss at the stops already open, book-wide and under this
+  // thesis (red team P0-1), and the price's own time (P2-9).
+  open_risk_usd: '0',
+  thesis_risk_usd: '0',
   price: '100.1',
+  price_at: '2026-10-27T11:59:00Z',
   atr_14h: '2',
   lot: '0.001',
   min_notional_usd: '10',
@@ -224,6 +229,74 @@ test('missing inputs refuse in words; the inputs are unchanged after the call', 
   assert.equal(validateTradeIntent(...args).ok, true);
   assert.equal(validateTradeIntent({ ...args[0], side: 'CLOSE_LONG', position_id: 'pos-1' }, args[1], args[2]).ok, true);
   assert.equal(JSON.stringify(args), before);
+});
+
+// --- Red team, 2026-10-27 (trader audit): each test failed on 6b1e876.
+
+test('red team P0-1: open risk counts against the 24-hour ceiling, and a thesis\'s open risk against its grant', () => {
+  // 4% of 10000 is 400: 300 already at the stops plus this 100 is exactly the ceiling.
+  assert.deepEqual(run({ book: { open_risk_usd: '300' } }).refusals, []);
+  assert.deepEqual(pairs(run({ book: { open_risk_usd: '300.01' } })), [['risk_ceiling_usd', 'drawdown']]);
+  assert.deepEqual(pairs(run({ book: { drawdown_24h_usd: '150', open_risk_usd: '150.01' } })), [['risk_ceiling_usd', 'drawdown']]);
+  // The thesis already holds 150 of its 250 grant: 100 more is exactly the grant, a cent more passes both caps.
+  assert.deepEqual(run({ book: { thesis_risk_usd: '150' } }).refusals, []);
+  assert.deepEqual(pairs(run({ book: { thesis_risk_usd: '150.01' } })), [['risk_ceiling_usd', 'gate_cap'], ['risk_ceiling_usd', 'pm_cap']]);
+  // Unknown is never 0.
+  assert.deepEqual(pairs(run({ book: { open_risk_usd: undefined } })), [['book.open_risk_usd', 'unknown']]);
+  assert.deepEqual(pairs(run({ book: { thesis_risk_usd: undefined } })), [['book.thesis_risk_usd', 'unknown']]);
+  // A close only reduces risk: it reads neither.
+  assert.deepEqual(run({ intent: { side: 'CLOSE_LONG', position_id: 'pos-1', entry_price: '100.1' }, book: { open_risk_usd: undefined, thesis_risk_usd: undefined } }).refusals, []);
+});
+
+test('red team P0-2: a limit through the market by more than max_slippage_bps is refused, for a buy and for a close', () => {
+  // 20 bps above 100.1 is 100.3002.
+  assert.deepEqual(run({ intent: { entry_price: '100.3002' } }).refusals, []);
+  assert.deepEqual(pairs(run({ intent: { entry_price: '100.3003' } })), [['entry_price', 'through_market']]);
+  // A resting buy below the market is not through it.
+  assert.deepEqual(run({ intent: { entry_price: '99.5', stop_loss_price: '94.5' } }).refusals, []);
+  // A close's sell limit: 20 bps below 110 is 109.78.
+  const close = { side: 'CLOSE_LONG', position_id: 'pos-1', reference_price: '110' };
+  assert.deepEqual(run({ intent: { ...close, entry_price: '109.78' }, book: { price: '110' } }).refusals, []);
+  assert.deepEqual(pairs(run({ intent: { ...close, entry_price: '109.7799' }, book: { price: '110' } })), [['entry_price', 'through_market']]);
+  assert.deepEqual(pairs(run({ intent: { ...close, entry_price: '1' }, book: { price: '110' } })), [['entry_price', 'through_market']]);
+  assert.ok(pairs(run({ intent: { entry_price: '1000', stop_loss_price: '950', take_profit_price: '1100' } })).some((p) => p[1] === 'through_market'));
+});
+
+test('red team P2-9: the book\'s price carries its time, and the freshness limit applies to it', () => {
+  assert.deepEqual(run({ book: { price_at: '2026-10-27T11:45:00Z' } }).refusals, [], 'exactly 15 minutes old');
+  assert.deepEqual(pairs(run({ book: { price_at: '2026-10-27T11:44:59Z' } })), [['book.price_at', 'stale_price']]);
+  assert.deepEqual(pairs(run({ book: { price_at: '2026-10-27T12:00:01Z' } })), [['book.price_at', 'future_time']]);
+  assert.deepEqual(pairs(run({ book: { price_at: undefined } })), [['book.price_at', 'unknown']]);
+});
+
+test('red team P2-10: an order in a state the engine does not know halts every intent', () => {
+  for (const o of [{ client_order_id: 'x' }, { client_order_id: 'x', state: 'unknown' }, { client_order_id: 'x', state: 'PENDING_CANCEL' }, { client_order_id: 'x', state: 'acked' }]) {
+    assert.deepEqual(pairs(run({ book: { orders: [o] } })), [['book.orders', 'halt_unresolved']], JSON.stringify(o));
+  }
+});
+
+test('red team P2-11: the engine reads the intent\'s own fields only; inherited ones never pass', () => {
+  const own = intent();
+  delete own.stop_loss_price;
+  delete own.take_profit_price;
+  const inherited = Object.assign(Object.create({ stop_loss_price: '95', take_profit_price: '115' }), own);
+  assert.deepEqual(pairs(validateTradeIntent(inherited, book(), rules())), [['stop_loss_price', 'decimal'], ['take_profit_price', 'decimal']]);
+});
+
+test('red team P2-13: the engine\'s exports are frozen, so nothing in the process can swap it', () => {
+  const risk = require('../core/trade-risk');
+  for (const o of [risk, risk.exact, risk.INTENT_FIELDS, risk.RULE_FIELDS]) assert.ok(Object.isFrozen(o));
+  assert.equal(Reflect.set(risk, 'validateTradeIntent', () => ({ ok: true, refusals: [] })), false);
+  assert.equal(Reflect.set(risk, 'RISK_PER_TRADE_MAX', '1'), false);
+  assert.equal(risk.validateTradeIntent, validateTradeIntent);
+});
+
+test('red team P3: an impossible date is refused, never rolled over', () => {
+  for (const s of ['2026-02-30T00:00:00Z', '2026-02-29T00:00:00Z', '2026-04-31T00:00:00Z', '2026-13-01T00:00:00Z', '2026-00-10T00:00:00Z', '2026-10-27T24:00:00Z', '2026-10-27T11:60:00Z', '2026-10-27T11:58:60Z']) {
+    assert.deepEqual(pairs(run({ intent: { created_at: s } })), [['created_at', 'timestamp']], s);
+  }
+  // A real leap day reads (and its life ended long ago).
+  assert.deepEqual(pairs(run({ intent: { created_at: '2024-02-29T00:00:00Z' } })), [['valid_until', 'expired']]);
 });
 
 test('the engine is pure: it requires only the decimal module and reads no clock, file, network or environment', () => {

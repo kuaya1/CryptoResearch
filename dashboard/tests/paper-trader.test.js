@@ -13,11 +13,18 @@ const paper = require('../core/paper');
 const H = 3600000;
 const M = 60000;
 const T0 = Date.parse('2026-10-27T00:00:00Z');
-const NOW = T0 + 15 * H + 5 * M; // fifteen closed hours behind it
+// Fifteen closed hours behind it. Orders are sent at the top of hour 15: an
+// order fills only from hours that start at or after it was sent (red team
+// P1-7), so one sent at 15:05 would first fill from hour 16. And an order
+// expires in the hour its life ends (P2-14), so the fixture's orders live 175
+// minutes under a 180-minute longest validity (they were 115 and 120): an
+// order sent at 15:00 can still fill in hours 15 and 16 and expires in hour
+// 17, and a close sent at 16:01 can fill in hour 17.
+const NOW = T0 + 15 * H;
 const at = (ms) => new Date(ms).toISOString();
 const ID = (c) => `01JBXQ5R7Z8Y9W0V1T2S3R4Q5${c}`;
 const VENUE = { lot: '0.001', min_notional_usd: '10', maker_rate: '0.001', taker_rate: '0.002' };
-const RULES = { stop_min_pct: '0.01', stop_min_atr: '1', notional_max_pct: '0.25', price_stale_minutes: 15, max_validity_minutes: 120, allowlist: ['FICT/USDC'] };
+const RULES = { stop_min_pct: '0.01', stop_min_atr: '1', notional_max_pct: '0.25', price_stale_minutes: 15, max_validity_minutes: 180, allowlist: ['FICT/USDC'] };
 const GRANT = { thesis_id: 'THESIS-FICT-001', suggested_risk_usd: '250', pm_approved_risk_usd: '250' };
 const ctx = (now = NOW, over = {}) => ({ now: at(now), rules: RULES, venue: VENUE, exit_max_usd: '5000', grant: GRANT, ...over });
 const bar = (i, over = {}) => ({ pair: 'FICT/USDC', hour: at(T0 + i * H), open: '100', high: '101', low: '99.5', close: '100', volume: '1000000', ...over });
@@ -25,7 +32,7 @@ const hour = (ws, i, over = {}, now = T0 + (i + 1) * H) => PT.applyBar(ws, bar(i
 const intent = (c, over = {}, now = NOW) => ({
   version: 'cr.trade-intent.v2', intent_id: ID(c), thesis_id: 'THESIS-FICT-001', pair: 'FICT/USDC', side: 'OPEN_LONG', order_type: 'LIMIT',
   created_at: at(now - 2 * M), reference_price: '100', reference_at: at(now - 3 * M), entry_price: '100', stop_loss_price: '95', take_profit_price: '115',
-  risk_ceiling_usd: '100', max_slippage_bps: 20, valid_until: at(now + 115 * M),
+  risk_ceiling_usd: '100', max_slippage_bps: 20, valid_until: at(now + 175 * M),
   evidence: { catalyst: 'Fictional catalyst', metrics_evaluated: ['fictional metric'], negative_invalidation: 'Fictional invalidation' },
   ...over,
 });
@@ -187,13 +194,18 @@ test('NAV is unknown without a fresh price, never 0 or the entry; an intent is t
 
 test('cash never goes negative: orders commit their cash and fee, and one that does not fit is refused', (t) => {
   const ws = setup(t);
-  const states = ['A', 'B', 'C', 'D', 'E', 'F'].map((c) => PT.submitIntent(ws, intent(c), ctx()));
+  // Five orders of 50 at a 2% stop under a 400 grant: 250 open at the stops,
+  // inside the grant and the 24-hour ceiling, so cash is what refuses the sixth.
+  // (Before red team P0-1 this test placed five orders of 100 under the 250
+  // grant, 500 at the stops: the defect P0-1 fixes.)
+  const grant = { ...GRANT, suggested_risk_usd: '400', pm_approved_risk_usd: '400' };
+  const states = ['A', 'B', 'C', 'D', 'E', 'F'].map((c) => PT.submitIntent(ws, intent(c, { stop_loss_price: '98', risk_ceiling_usd: '50' }), ctx(NOW, { grant })));
   assert.deepEqual(states.map((s) => s.state || s.status), ['ACKED', 'ACKED', 'ACKED', 'ACKED', 'ACKED', 'refused']);
   assert.deepEqual(states[5].refusals.map((x) => [x.field, x.rule]), [['book.cash_usd', 'cash']]);
-  assert.equal(PT.book(ws, 'FICT/USDC', ctx()).available_cash_usd, '1096.729');
+  assert.equal(PT.book(ws, 'FICT/USDC', ctx()).available_cash_usd, '513.565');
   hour(ws, 15, { low: '99' });
   const r = res(ws, T0 + 16 * H + M);
-  assert.equal(r.cash_usd, '1096.729');
+  assert.equal(r.cash_usd, '513.565');
   assert.ok(D(r.cash_usd) >= 0);
   assert.equal(r.open_positions.length, 5);
 });
@@ -221,27 +233,40 @@ test('the same intent twice is unchanged; a different body under its ID is refus
   assert.equal(venueLines(ws), 1);
 });
 
-test('crash and restart: reserved but never sent is cancelled, not sent late; sent with no answer is UNKNOWN and halts every intent', (t) => {
+// Red team P1-3 changed the first half of this test. It used to assert that
+// recover() cancels a RESERVED order ("not sent late") without asking the
+// venue; a second process may have sent it in the meantime (the race in the
+// P1-3 test below), so a reservation with no outcome is now UNKNOWN and
+// reconciled like a send with no answer, never cancelled blind.
+test('crash and restart: reserved or sent with no outcome is UNKNOWN, halts every intent and is reconciled, never cancelled blind or sent late', (t) => {
   const ws = setup(t);
   const a = PT.reserveIntent(ws, intent('A'), ctx());
   assert.equal(a.status, 'reserved');
   // While it is RESERVED, a new intent is refused.
   assert.deepEqual(PT.submitIntent(ws, intent('B'), ctx()).refusals.map((x) => x.rule), ['halt_unresolved']);
   let rec = PT.recover(ws, { now: at(NOW + M) });
-  assert.deepEqual(rec.orders.map((o) => o.state), ['CANCELLED']);
-  assert.equal(venueLines(ws), 0);
-  assert.equal(PT.submitIntent(ws, intent('A'), ctx(NOW + M)).state, 'CANCELLED', 'the same intent is never sent again');
-  assert.equal(PT.book(ws, 'FICT/USDC', ctx(NOW + M)).available_cash_usd, '10000');
-
-  const c = PT.reserveIntent(ws, intent('C', {}, NOW + 2 * M), ctx(NOW + 2 * M));
-  PT.markSent(ws, c.client_order_id, { now: at(NOW + 2 * M) });
-  rec = PT.recover(ws, { now: at(NOW + 3 * M) });
   assert.deepEqual(rec.orders.map((o) => o.state), ['UNKNOWN']);
-  assert.equal(PT.recover(ws, { now: at(NOW + 3 * M) }).status, 'unchanged');
-  const blocked = PT.submitIntent(ws, intent('D', {}, NOW + 4 * M), ctx(NOW + 4 * M));
+  assert.equal(venueLines(ws), 0);
+  // Its cash stays committed while the venue's answer is unknown.
+  assert.equal(PT.book(ws, 'FICT/USDC', ctx(NOW + M)).available_cash_usd, '8219.3458');
+  assert.deepEqual(PT.submitIntent(ws, intent('G', {}, NOW + 2 * M), ctx(NOW + 2 * M)).refusals.map((x) => x.rule), ['halt_unresolved']);
+  // The venue never got it; after its duplicate window, NOT_FOUND.
+  assert.equal(PT.reconcile(ws, a.client_order_id, { now: at(NOW + 60 * M) }).state, 'NOT_FOUND');
+  assert.equal(PT.submitIntent(ws, intent('A'), ctx(NOW + 60 * M)).state, 'NOT_FOUND', 'the same intent is never sent again');
+  assert.equal(venueLines(ws), 0);
+  assert.equal(PT.book(ws, 'FICT/USDC', ctx(NOW + 60 * M)).available_cash_usd, '10000');
+
+  hour(ws, 15);
+  const t1 = T0 + 16 * H;
+  const c = PT.reserveIntent(ws, intent('C', {}, t1 + M), ctx(t1 + M));
+  PT.markSent(ws, c.client_order_id, { now: at(t1 + M) });
+  rec = PT.recover(ws, { now: at(t1 + 2 * M) });
+  assert.deepEqual(rec.orders.map((o) => o.state), ['UNKNOWN']);
+  assert.equal(PT.recover(ws, { now: at(t1 + 2 * M) }).status, 'unchanged');
+  const blocked = PT.submitIntent(ws, intent('D', {}, t1 + 3 * M), ctx(t1 + 3 * M));
   assert.deepEqual(blocked.refusals.map((x) => [x.field, x.rule]), [['book.orders', 'halt_unresolved']]);
   // UNKNOWN never times out: hours pass, it does not fill, expire or turn into NOT_FOUND on the clock.
-  for (let i = 15; i < 25; i++) hour(ws, i, { low: '98' });
+  for (let i = 16; i < 25; i++) hour(ws, i, { low: '98' });
   assert.equal(res(ws, T0 + 25 * H + M).orders.find((o) => o.client_order_id === c.client_order_id).state, 'UNKNOWN');
   // The venue never got it (the crash came before the send); after its duplicate window, NOT_FOUND.
   const nf = PT.reconcile(ws, c.client_order_id, { now: at(T0 + 25 * H + 2 * M) });
@@ -394,4 +419,230 @@ test('cr-paper@1 reads the same before and after; nothing enters paper/positions
   assert.equal(JSON.stringify(paper.book(ws, { now })), before);
   assert.equal(fs.existsSync(ws.abs(paper.REL)), false);
   assert.ok(fs.existsSync(ws.abs(PT.JOURNAL)));
+});
+
+// --- Red team, 2026-10-27 (trader audit): each test failed on 6b1e876.
+
+const events = (ws) => fs.readFileSync(ws.abs(PT.JOURNAL), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+
+test('red team P0-1: open risk is summed; a thesis never holds more than its grant, nor the book more than the 24-hour ceiling at its stops', (t) => {
+  // The grant is 250: two orders of 100 hold 199.99572255 at their stops; a third would pass it.
+  const ws = setup(t);
+  const s = ['A', 'B', 'C'].map((c) => PT.submitIntent(ws, intent(c), ctx()));
+  assert.deepEqual(s.map((x) => x.state || x.status), ['ACKED', 'ACKED', 'refused']);
+  assert.deepEqual(s[2].refusals.map((x) => [x.field, x.rule]), [['risk_ceiling_usd', 'gate_cap'], ['risk_ceiling_usd', 'pm_cap']]);
+  const b = PT.book(ws, 'FICT/USDC', ctx());
+  assert.deepEqual([b.open_risk_usd, b.thesis_risk_usd], ['199.99572255', '199.99572255']);
+  // A grant of 1000: four orders hold 399.9914451 at their stops; a fifth would pass 4% of NAV (400).
+  const ws2 = setup(t);
+  const grant = { ...GRANT, suggested_risk_usd: '1000', pm_approved_risk_usd: '1000' };
+  const r = ['A', 'B', 'C', 'D', 'E'].map((c) => PT.submitIntent(ws2, intent(c), ctx(NOW, { grant })));
+  assert.deepEqual(r.map((x) => x.state || x.status), ['ACKED', 'ACKED', 'ACKED', 'ACKED', 'refused']);
+  assert.deepEqual(r[4].refusals.map((x) => [x.field, x.rule]), [['risk_ceiling_usd', 'drawdown']]);
+  // One ordinary hour (no gap) stops all four: the 24-hour drawdown stays within the ceiling.
+  hour(ws2, 15, { low: '99' });
+  hour(ws2, 16, { open: '96', high: '96', low: '94.9', close: '95' });
+  const after = PT.book(ws2, 'FICT/USDC', ctx(T0 + 17 * H + M, { grant }));
+  assert.equal(after.drawdown_24h_usd, '399.9914451');
+  assert.equal(after.open_risk_usd, '0');
+});
+
+test('red team P0-2: fills and exits stay inside the hour; a limit through the market is refused', (t) => {
+  // A buy fills at the open when the hour opens below its limit.
+  const ws = setup(t);
+  PT.submitIntent(ws, intent('A'), ctx());
+  const f = hour(ws, 15, { open: '99.8', high: '100.1', low: '99.6', close: '99.9' }).events.find((x) => x.type === 'fill');
+  assert.deepEqual([f.price, f.quantity], ['99.8', '17.771']);
+  assert.equal(res(ws, T0 + 16 * H + M).open_positions[0].notional_usd, '1773.5458');
+  // A close (sent at 16:01, so it first fills from hour 17) fills at the open when the hour opens above its limit.
+  const now = T0 + 16 * H + M;
+  const c = PT.submitIntent(ws, intent('B', { side: 'CLOSE_LONG', position_id: `pos-${ID('A')}`, entry_price: '100', reference_price: '99.9' }, now), ctx(now));
+  assert.equal(c.state, 'ACKED');
+  hour(ws, 16, { open: '99.9', high: '99.95', low: '99.5', close: '99.9' });
+  const ex = hour(ws, 17, { open: '101', high: '101.5', low: '100.8', close: '101.2' }).events.find((x) => x.type === 'exit');
+  assert.deepEqual([ex.reason, ex.price, ex.quantity], ['close', '101', '17.771']);
+  // A target the hour opened above is taken at the open, never below the hour's low.
+  const ws3 = setup(t);
+  PT.submitIntent(ws3, intent('A'), ctx());
+  hour(ws3, 15, { low: '99' });
+  const tp = hour(ws3, 16, { open: '116', high: '117', low: '115.5', close: '116' }).events.find((x) => x.type === 'exit');
+  assert.deepEqual([tp.reason, tp.price], ['take_profit', '116']);
+  // A sell limit of 1 or a buy limit of 1000 against a market at 100 is refused.
+  const ws2 = setup(t);
+  PT.submitIntent(ws2, intent('A'), ctx());
+  hour(ws2, 15, { low: '99' });
+  const dump = PT.submitIntent(ws2, intent('B', { side: 'CLOSE_LONG', position_id: `pos-${ID('A')}`, entry_price: '1', stop_loss_price: '0.5', take_profit_price: '2' }, now), ctx(now));
+  assert.deepEqual(dump.refusals && dump.refusals.map((x) => [x.field, x.rule]), [['entry_price', 'through_market']]);
+  const chase = PT.submitIntent(ws2, intent('C', { entry_price: '1000', stop_loss_price: '950', take_profit_price: '1100' }, now), ctx(now));
+  assert.ok(chase.refusals && chase.refusals.some((x) => x.rule === 'through_market'));
+});
+
+test('red team P1-3: an order goes to the venue only from SENT; a recover() racing a submit leaves it UNKNOWN, never live and untracked', (t) => {
+  const ws = setup(t);
+  const a = PT.reserveIntent(ws, intent('A'), ctx());
+  assert.throws(() => PT.venueSend(ws, a.client_order_id, { now: at(NOW) }), (e) => e.code === 'STATE');
+  assert.equal(venueLines(ws), 0);
+  // The race, made deterministic: a second process's recover() lands between
+  // the reservation and markSent (ops.runOp is wrapped before a fresh copy of
+  // the Paper Book module loads it).
+  const ops = require('../core/ops');
+  const real = ops.runOp;
+  const key = require.resolve('../core/paper-trader');
+  let armed = true;
+  let PT2 = null;
+  ops.runOp = function wrapped(w, meta) {
+    if (armed && / sent$/.test(meta.summary)) { armed = false; PT2.recover(w, { now: at(NOW) }); }
+    return real.apply(this, arguments);
+  };
+  delete require.cache[key];
+  try {
+    PT2 = require('../core/paper-trader');
+    const ws2 = setup(t);
+    const r = PT2.submitIntent(ws2, intent('B'), ctx());
+    assert.equal(armed, false, 'the second process ran');
+    assert.equal(r.state, 'UNKNOWN');
+    assert.equal(venueLines(ws2), 0, 'nothing reached the venue');
+    assert.deepEqual(PT2.submitIntent(ws2, intent('C'), ctx()).refusals.map((x) => x.rule), ['halt_unresolved']);
+  } finally {
+    ops.runOp = real;
+    delete require.cache[key];
+  }
+});
+
+test('red team P1-4: a venue answer that does not read is an INTEGRITY error; the order stays UNKNOWN, never NOT_FOUND', (t) => {
+  const spoilers = [(p) => fs.writeFileSync(p, fs.readFileSync(p, 'utf8').slice(0, 40)), (p) => fs.rmSync(p)];
+  for (const spoil of spoilers) {
+    const ws = setup(t);
+    const a = PT.reserveIntent(ws, intent('A'), ctx());
+    PT.markSent(ws, a.client_order_id, { now: at(NOW) });
+    assert.equal(PT.venueSend(ws, a.client_order_id, { now: at(NOW) }).answer, 'accepted');
+    spoil(ws.abs(PT.VENUE));
+    PT.recover(ws, { now: at(NOW + M) });
+    assert.throws(() => PT.reconcile(ws, a.client_order_id, { now: at(NOW + 61 * M) }), (e) => e.code === 'INTEGRITY');
+    assert.equal(res(ws, NOW + 61 * M).orders[0].state, 'UNKNOWN');
+    assert.ok(PT.submitIntent(ws, intent('B', {}, NOW + 62 * M), ctx(NOW + 62 * M)).refusals.some((x) => x.rule === 'halt_unresolved'));
+  }
+});
+
+test('red team P1-5: the venue refuses a client order ID it holds with a different body; the order stays UNKNOWN', (t) => {
+  const ws = setup(t);
+  const a = PT.reserveIntent(ws, intent('A'), ctx());
+  PT.markSent(ws, a.client_order_id, { now: at(NOW) });
+  PT.venueSend(ws, a.client_order_id, { now: at(NOW) });
+  // The journal loses its last two lines (a rollback); intent A's ID then takes another body.
+  const p = ws.abs(PT.JOURNAL);
+  const kept = fs.readFileSync(p, 'utf8').trim().split('\n').slice(0, -2);
+  fs.writeFileSync(p, `${kept.join('\n')}\n`);
+  const again = PT.submitIntent(ws, intent('A', { risk_ceiling_usd: '50' }), ctx(NOW + M));
+  assert.equal(again.state, 'UNKNOWN');
+  assert.equal(venueLines(ws), 1);
+  assert.throws(() => PT.reconcile(ws, again.client_order_id, { now: at(NOW + 2 * M) }), (e) => e.code === 'INTEGRITY');
+  assert.throws(() => PT.venueSend(ws, again.client_order_id, { now: at(NOW + 2 * M) }), (e) => e.code === 'CONFLICT');
+});
+
+test('known gap: a journal that lost its last lines is not yet detected', { todo: 'the journal head is not anchored; a MAC under a key the agent never holds (invariant 4) is Eric\'s decision' }, (t) => {
+  const ws = setup(t);
+  const a = PT.reserveIntent(ws, intent('A'), ctx());
+  PT.markSent(ws, a.client_order_id, { now: at(NOW) });
+  const p = ws.abs(PT.JOURNAL);
+  const kept = fs.readFileSync(p, 'utf8').trim().split('\n').slice(0, -2);
+  fs.writeFileSync(p, `${kept.join('\n')}\n`);
+  assert.throws(() => PT.results(ws, { now: at(NOW + M) }), (e) => e.code === 'INTEGRITY');
+});
+
+test('red team P1-6: inside a queued request each journal write keeps its own identity; none is collapsed into the first', (t) => {
+  const ws = setup(t);
+  ws._idem = { requestId: 'req_fictional_1', payloadHash: 'fictional' };
+  let r;
+  try {
+    r = PT.submitIntent(ws, intent('A'), ctx());
+    hour(ws, 15, { low: '99' });
+    hour(ws, 16);
+  } finally {
+    ws._idem = null;
+  }
+  assert.equal(r.state, 'ACKED');
+  assert.deepEqual(events(ws).slice(-8).map((e) => e.type), ['reserved', 'sent', 'answer', 'bar', 'fill', 'mark', 'bar', 'mark']);
+  assert.deepEqual(res(ws, T0 + 17 * H + M).nav_by_hour.slice(-2).map((m) => m.hour_end), [at(T0 + 16 * H), at(T0 + 17 * H)]);
+});
+
+test('red team P1-7: an order fills only from hours that start at or after it was sent', (t) => {
+  const ws = setup(t);
+  const rules = { ...RULES, price_stale_minutes: 120 };
+  const now = T0 + 16 * H + 5 * M;
+  assert.equal(PT.submitIntent(ws, intent('A', {}, now), ctx(now, { rules })).state, 'ACKED');
+  // Hour 15 ended before the order existed; hour 16 began before it was sent.
+  assert.deepEqual(PT.applyBar(ws, bar(15, { low: '99', high: '103.5', close: '103' }), { now: at(now + M) }).events.map((e) => e.type), ['bar', 'mark']);
+  assert.deepEqual(hour(ws, 16, { low: '99' }).events.map((e) => e.type), ['bar', 'mark']);
+  assert.deepEqual(hour(ws, 17, { low: '99' }).events.map((e) => e.type), ['bar', 'fill', 'mark']);
+});
+
+test('red team P2-8: for a pair with exposure, an hour that is not the next one is refused', (t) => {
+  const ws = setup(t);
+  PT.submitIntent(ws, intent('A'), ctx());
+  hour(ws, 15, { low: '99' });
+  assert.throws(() => hour(ws, 20), (e) => e.code === 'GAP');
+  assert.equal(hour(ws, 16).status, 'saved');
+});
+
+test('red team P2-9: the book carries its price\'s time, and the freshness limit applies to it', (t) => {
+  const ws = setup(t);
+  const now = T0 + 16 * H + 59 * M;
+  const b = PT.book(ws, 'FICT/USDC', ctx(now));
+  assert.equal(b.price_at, at(T0 + 15 * H));
+  const r = PT.submitIntent(ws, intent('A', {}, now), ctx(now));
+  assert.equal(r.status, 'refused');
+  assert.deepEqual(r.refusals.map((x) => [x.field, x.rule]), [['book.price_at', 'stale_price']]);
+});
+
+test('red team P2-11: an intent is validated, hashed and recorded as its own fields; inherited ones neither pass nor wedge the book', (t) => {
+  const ws = setup(t);
+  const own = intent('A');
+  delete own.stop_loss_price;
+  delete own.take_profit_price;
+  const inherited = Object.assign(Object.create({ stop_loss_price: '95', take_profit_price: '115' }), own);
+  const r = PT.submitIntent(ws, inherited, ctx());
+  assert.equal(r.status, 'refused');
+  assert.deepEqual(r.refusals.map((x) => [x.field, x.rule]), [['stop_loss_price', 'decimal'], ['take_profit_price', 'decimal']]);
+  assert.equal(hour(ws, 15, { low: '99' }).status, 'saved');
+  assert.equal(hour(ws, 16, { low: '90' }).status, 'saved');
+});
+
+test('red team P2-12: a close while its opener is still live is refused; a close never sells more than its order', (t) => {
+  const ws = setup(t);
+  const a = PT.submitIntent(ws, intent('A'), ctx());
+  hour(ws, 15, { low: '99', volume: '50' }); // 5 of 17.771 filled; the opener stays live
+  const now = T0 + 16 * H + M;
+  const close = (c) => intent(c, { side: 'CLOSE_LONG', position_id: `pos-${ID('A')}`, entry_price: '102', reference_price: '100' }, now);
+  const r = PT.submitIntent(ws, close('B'), ctx(now));
+  assert.equal(r.status, 'refused');
+  assert.deepEqual(r.refusals.map((x) => [x.field, x.rule]), [['position_id', 'opener_live']]);
+  // Cancel what is left of the opener; the close then sells exactly the position.
+  PT.cancelOrder(ws, a.client_order_id, { now: at(now) });
+  const c = PT.submitIntent(ws, close('C'), ctx(now));
+  assert.deepEqual([c.state, c.sizing.quantity], ['ACKED', '5']);
+  hour(ws, 16, { low: '99' });
+  const ex = hour(ws, 17, { high: '103', open: '100', close: '102.5' }).events.find((x) => x.type === 'exit');
+  assert.deepEqual([ex.reason, ex.quantity, ex.price], ['close', '5', '102']);
+});
+
+test('red team P2-13: the Paper Book took the risk engine at load; swapping the engine\'s export changes nothing', (t) => {
+  const risk = require('../core/trade-risk');
+  const original = risk.validateTradeIntent;
+  const swapped = Reflect.set(risk, 'validateTradeIntent', () => ({ ok: true, version: 'fake', refusals: [], sizing: { quantity: '50', notional_usd: '5000', loss_at_stop_usd: '0', per_unit_loss_usd: '0' } }));
+  try {
+    assert.equal(swapped, false);
+    const ws = setup(t);
+    const r = PT.submitIntent(ws, intent('A', { risk_ceiling_usd: '9999', pair: 'NOT-ALLOWED/USDC' }), ctx());
+    assert.equal(r.status, 'refused');
+  } finally {
+    if (swapped) Reflect.set(risk, 'validateTradeIntent', original);
+  }
+});
+
+test('red team P2-14: an order whose life ends inside an hour expires before that hour can fill it', (t) => {
+  const ws = setup(t);
+  assert.equal(PT.submitIntent(ws, intent('A', { valid_until: at(T0 + 16 * H + M) }), ctx()).state, 'ACKED');
+  hour(ws, 15, { low: '100.2', open: '100.5', close: '100.5', high: '101' });
+  assert.deepEqual(hour(ws, 16, { low: '99' }).events.map((e) => e.type), ['bar', 'expired', 'mark']);
 });
