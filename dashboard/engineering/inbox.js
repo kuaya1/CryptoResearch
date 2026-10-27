@@ -852,7 +852,7 @@ function recordEvent(ws, who, args = {}, opts = {}) {
         if (t.status !== 'admitted') fail('WRONG_STATE', `${id} is ${t.status}; a number is bound only to an admitted task.`);
         const num = Number(args.number);
         const max = Number(args.observed_max);
-        if (!Number.isInteger(num) || !Number.isInteger(max) || max < 0 || num <= max) fail('BAD_INPUT', 'number must be an integer above observed_max (the highest item number on main and on open intake and admission branches).');
+        if (!Number.isInteger(num) || !Number.isInteger(max) || max < 0 || num <= max) fail('BAD_INPUT', 'number must be an integer above observed_max (the highest item number on main, in the issue queue and on open admission branches).');
         if (num > max + 5) fail('BAD_INPUT', `number ${num} skips more than four numbers past ${max}; use the next free one.`);
         sha(args.observed_main_sha, 'observed_main_sha');
         if (t.admission.state !== 'unbound') {

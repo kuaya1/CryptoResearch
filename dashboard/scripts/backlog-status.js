@@ -5,8 +5,9 @@
 //
 //   node dashboard/scripts/backlog-status.js [--json]
 //
-// Reads git (after `git fetch origin --prune`, which the caller runs) and
-// DESK_STATE.md on origin/main only; writes nothing. It gives the waiting items
+// Reads git (after `git fetch origin --prune`, which the caller runs),
+// DESK_STATE.md on origin/main and the issue queue on origin/agent-ledger
+// (backlog-queue.js) only; writes nothing. It gives the waiting items
 // (Backlog-Item trailers on origin/claude/backlog-* branches not merged into
 // origin/main, each counted once), the cap and batch size in force, the
 // headroom (how many items may start now: the cap less what waits, at most one
@@ -106,9 +107,30 @@ function baseOf(cwd, branches) {
   return tips.length ? ref(tips[0]) : 'origin/main';
 }
 
+// Main's backlog followed by the issue queue's authorized items
+// (backlog-queue.js, from the agent ledger's local ref as the fetch left it):
+// { backlog, queue_problems }. A queue item whose number main also holds is
+// left out and said; an unreadable ledger leaves the whole queue out, said,
+// and main's backlog stands.
+function withQueue(cwd, backlog) {
+  const q = require('./backlog-queue').readLocal(cwd);
+  if (q.error) return { backlog, queue_problems: [`the issue queue was not read: ${q.error}`] };
+  const onMain = new Set(backlog.map((it) => it.n));
+  const problems = [...q.problems];
+  const twice = new Set(q.items.map((it) => it.item).filter((n, i, all) => all.indexOf(n) !== i));
+  const items = [];
+  for (const it of q.items) {
+    if (it.state !== 'authorized' || twice.has(it.item)) continue;
+    if (onMain.has(it.item)) { problems.push(`item ${it.item} is both on main's backlog and in the issue queue (issue #${it.issue}); neither is read as the other`); continue; }
+    const touches = it.schedule.touches.includes('*') ? ['*'] : scheduleOf(`touches ${it.schedule.touches.join(', ')}`).touches;
+    items.push({ n: it.item, checked: false, eric: false, text: it.title, engineering: null, schedule: { after: it.schedule.after, touches }, issue: it.issue });
+  }
+  return { backlog: [...backlog, ...items], queue_problems: problems };
+}
+
 // What git says now: the waiting branches and their items, the items merged
-// on main, main's backlog and the base a batch builds on (with the items
-// already on it).
+// on main, main's backlog with the issue queue's items, and the base a batch
+// builds on (with the items already on it).
 function gather(cwd = ROOT) {
   // Engineering candidates waiting for review are work in progress too.
   const mergedSet = new Set(git(cwd, ['branch', '-r', '--merged', 'origin/main', '--list', 'origin/claude/backlog-*', 'origin/claude/candidate-eng-*']).out.split('\n').map((s) => s.trim()).filter(Boolean));
@@ -123,15 +145,15 @@ function gather(cwd = ROOT) {
     items: [...new Set(trailers(git(cwd, ['log', `origin/main..${ref}`, '--format=%B']).out))].filter((n) => !onMain.has(n)).sort((a, b) => a - b),
   })).filter((b) => b.items.length);
   const waitingItems = [...new Set(branches.flatMap((b) => b.items))].sort((a, b) => a - b);
-  const backlog = parseBacklog(git(cwd, ['show', `origin/main:${STATE_FILE}`]).out);
+  const { backlog, queue_problems } = withQueue(cwd, parseBacklog(git(cwd, ['show', `origin/main:${STATE_FILE}`]).out));
   // An engineering branch is never a base: a batch never waits on its review.
   const base = baseOf(cwd, branches.filter((b) => /^claude\/backlog-(?!eng-)/.test(b.branch)));
   const baseItems = new Set(base === 'origin/main' ? [] : trailers(git(cwd, ['log', `origin/main..${base}`, '--format=%B']).out));
-  return { branches, waitingItems, onMain, backlog, base, baseItems };
+  return { branches, waitingItems, onMain, backlog, base, baseItems, queue_problems };
 }
 
 function status(cwd = ROOT, { now = new Date() } = {}) {
-  const { branches, waitingItems, onMain, backlog, base } = gather(cwd);
+  const { branches, waitingItems, onMain, backlog, base, queue_problems } = gather(cwd);
   const lim = limitsAt(now);
   const headroom = Math.max(0, Math.min(lim.batch, lim.cap - waitingItems.length));
   const taken = (it) => it.checked || onMain.has(it.n) || waitingItems.includes(it.n);
@@ -150,10 +172,11 @@ function status(cwd = ROOT, { now = new Date() } = {}) {
     waiting_count: waitingItems.length,
     at_cap: waitingItems.length >= lim.cap,
     headroom,
-    next: buildable.slice(0, headroom).map((it) => ({ item: it.n, text: it.text })),
+    next: buildable.slice(0, headroom).map((it) => ({ item: it.n, text: it.text, ...(it.issue ? { issue: it.issue } : {}) })),
     buildable_after: buildable.slice(headroom, headroom + 3).map((it) => it.n),
     base,
     engineering,
+    queue_problems,
   };
 }
 
@@ -163,8 +186,9 @@ function words(s) {
     s.waiting_count ? `Waiting for merge: ${s.waiting_count} (${s.waiting.map((w) => `${w.item}`).join(', ')}).` : 'Nothing waiting for merge.',
     s.at_cap ? `WIP cap: ${s.waiting_count} items waiting for merge. Build nothing.` : `Headroom: ${s.headroom}.`,
   ];
-  if (!s.at_cap) lines.push(s.next.length ? `Next: ${s.next.map((x) => `${x.item}`).join(', ')}.` : 'Backlog empty or all items waiting for merge.');
+  if (!s.at_cap) lines.push(s.next.length ? `Next: ${s.next.map((x) => `${x.item}${x.issue ? ` (issue #${x.issue})` : ''}`).join(', ')}.` : 'Backlog empty or all items waiting for merge.');
   lines.push(`Base: ${s.base}.`);
+  for (const p of s.queue_problems || []) lines.push(`Queue: ${p}.`);
   return lines.join('\n');
 }
 
@@ -175,4 +199,4 @@ if (require.main === module) {
   } catch (e) { process.stderr.write(`${e.message}\n`); process.exit(1); }
 }
 
-module.exports = { status, gather, words, parseBacklog, scheduleOf, limitsAt, git, trailers, CAPACITY, SURGE_ENDS, ENGINEERING_RE, WEB };
+module.exports = { status, gather, withQueue, words, parseBacklog, scheduleOf, limitsAt, git, trailers, CAPACITY, SURGE_ENDS, ENGINEERING_RE, WEB };

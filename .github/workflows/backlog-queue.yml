@@ -1,0 +1,56 @@
+# The backlog's issue queue (pipeline review, 2026-10-27;
+# audits/2026-10-27-pipeline-review; dashboard/scripts/backlog-queue.js). It
+# replaces backlog-intake.yml: a task Eric labels agent:ready is authorized
+# for the builders without a merge to main.
+#
+#   labeled agent:ready   only the repository owner's own label counts. The
+#                         issue is read again (still open, still labeled, the
+#                         text the event carries), numbered after main's
+#                         backlog, open admission branches and every number
+#                         the queue gave, and an "authorize" record (the text
+#                         and its SHA-256) goes on the agent ledger. Someone
+#                         else's label is taken off and nothing is recorded.
+#   edited, unlabeled     a changed text, the label taken off or the issue
+#   agent:ready, closed   closed appends a "withdraw" record: no builder takes
+#                         that number again; a text labeled again gets a new
+#                         one.
+#
+# It builds nothing and merges nothing: the builders read the queue beside
+# main's backlog, and every pull request waits for Eric's merge. It runs main's
+# own script; the issue text is data, passed in the event file, never into a
+# script. Uses only GITHUB_TOKEN: its label changes and ledger push start no
+# workflow. One run at a time, so two labels never take one number.
+name: backlog-queue
+
+on:
+  issues:
+    types: [labeled, unlabeled, edited, closed]
+
+permissions: {}
+
+concurrency:
+  group: backlog-queue
+  cancel-in-progress: false
+
+jobs:
+  queue:
+    if: >-
+      !github.event.issue.pull_request && (
+      ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name == 'agent:ready') ||
+      ((github.event.action == 'edited' || github.event.action == 'closed') && contains(github.event.issue.labels.*.name, 'agent:ready')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # the ledger branch only (rulesets automation-branches and agent-ledger)
+      issues: write # reads the issue again, says what was done, moves agent:ready and agent:draft
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: node dashboard/scripts/backlog-queue.js event

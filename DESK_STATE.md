@@ -247,30 +247,38 @@ Live tickets (2026-10-24), both $0 and waiting for Eric: OLAS `tr_2026-10-24T175
 
 ### Junior Trader Desk Invariants (Future-Proofing Contract)
 
-Eric, 2026-10-27. The contract for the autonomous trader still to be built, so the sandbox, the ledger (`dashboard/scripts/agent-ledger.js`) and the desk's deterministic gates carry unattended trading without rework. None of it is implemented yet. The North Star invariants above stay in force: today nothing places an order, connects a wallet or exchange, or moves money.
+Eric, 2026-10-27. The contract for the autonomous trader still to be built, so the sandbox, the ledger (`dashboard/scripts/agent-ledger.js`) and the desk's deterministic gates carry unattended trading without rework. The pre-trade risk engine (`dashboard/core/trade-risk.js`, `cr-trade-risk@1`, PR #58) and the trader's Paper Book (`dashboard/core/paper-trader.js`, `cr-paper@2`, PR #59) are built as library code; no route, CLI, connector tool, UI or agent calls them, and nothing routes anywhere. The North Star invariants above stay in force: today nothing places an order, connects a wallet or exchange, or moves money.
 
 1. **Separation of proposal and execution.** The LLM agent is an analyst only. It never holds execution API keys and never signs a transaction. It emits a typed `TradeIntent` (below). An out-of-band deterministic engine intercepts, validates and routes it; while invariant 5 holds, it routes only to the Paper Book.
 2. **Stateless shift work.** The trader runs in discrete, stateless evaluation cycles during the target market's liquidity windows. Each tick re-derives its state from disk only (`DESK_STATE.md`, open position records, fill journals) and exits. No long-lived chat memory.
-3. **Immutable risk boundary.** The risk limits are hard-coded in the engine, outside the model's context window: at most 2% of the Paper Book balance (`cr-paper@1`) at risk per trade; a stop-loss on every trade; an asset allowlist; and a hard ceiling on drawdown of 4% of the Paper Book's value in any rolling 24 hours (Eric, 2026-10-27). The agent cannot alter, soften or bypass them.
-4. **Reconciliation and nonce guard.** The engine inherits the ledger's pattern: a hash-chained, append-only record written by compare-and-swap; every action reserved before it is sent; a reservation with no outcome holds its slot for the timeout plus a grace (65 minutes at the builder's 45-minute timeout), then is recorded `lost`; each recorded verdict signed with an HMAC-SHA256 MAC under a key the agent never holds (`AGENT_LEDGER_KEY` in the build lane). When an order placement times out or a broker WebSocket drops, the engine holds the lease pending and reconciles fills before it permits any further action. It never blind-resubmits.
-5. **Sovereign capital governance.** The agent trades only on the simulated Paper Book (`cr-paper@1`, `dashboard/core/paper.js`, `paper/positions.jsonl`; item 18). Promoting any strategy to live execution needs Eric's own explicit, authenticated commit or signature on `main`.
+3. **Immutable risk boundary.** The risk limits are hard-coded in the engine, outside the model's context window: at most 2% of the Paper Book's NAV (`cr-paper@2`, below) at risk per trade; a stop-loss on every trade, no nearer the entry than the minimum stop distance; an asset allowlist; and a hard ceiling on drawdown of 4% of NAV in any rolling 24 hours (Eric, 2026-10-27). The agent cannot alter, soften or bypass them. The engine (`dashboard/core/trade-risk.js`), both Paper Books (`dashboard/core/paper.js`, `paper-trader.js`) and the exact arithmetic they compute with (`dashboard/core/decimal.js`) are protected files.
+4. **Reconciliation and nonce guard.** The engine inherits the ledger's pattern: a hash-chained, append-only record written by compare-and-swap; every action reserved before it is sent; each recorded verdict signed with an HMAC-SHA256 MAC under a key the agent never holds (`AGENT_LEDGER_KEY` in the build lane). An order never times out to `lost` (pipeline review, 2026-10-27), and since the red-team review the same day no clock settles a build either (`agent-ledger.js` `settleOpen`).
+   - **States.** `INTENT` → `RESERVED` (the `intent_id` and the `client_order_id` derived from it, recorded before anything is sent) → `SENT` → `ACKED`, `REJECTED` or `UNKNOWN`; then `ACKED` → `PARTIAL` → `FILLED`, `CANCELLED` or `EXPIRED`.
+   - **Unknown stays unknown.** A timeout, a dropped broker WebSocket or an answer that does not read makes the order `UNKNOWN`. It stays `UNKNOWN` until the engine has asked the venue for that `client_order_id` and recorded the venue's answer. It becomes `NOT_FOUND` only when the venue says so after the venue's own duplicate-order window has passed, never on the engine's clock alone.
+   - **No new action while unresolved.** While any order is `RESERVED`, `SENT` or `UNKNOWN` (one that may be live with no answer on record), the engine opens no new intent. It never resends an order under a new `client_order_id`: a resend carries the same one, so the venue refuses a duplicate.
+5. **Sovereign capital governance.** The agent trades only on the simulated Paper Book (`cr-paper@2`, below; nothing routes to it yet). The PM Paper Book (`cr-paper@1`, `paper/positions.jsonl`; item 18) keeps measuring Eric's ticket decisions apart from it. Promoting any strategy to live execution needs Eric's own explicit, authenticated commit or signature on `main`.
 
-### `TradeIntent` schema (`cr.trade-intent.v1`)
+### `TradeIntent` schema (`cr.trade-intent.v2`)
 
-Every trade proposal from the agent is one JSON object of this shape:
+Every trade proposal from the agent is one JSON object of this shape (pipeline review, 2026-10-27). The first draft, `cr.trade-intent.v1` (2026-10-27), was never published or built, and no engine accepts it.
 
 ```json
 {
-  "version": "cr.trade-intent.v1",
+  "version": "cr.trade-intent.v2",
+  "intent_id": "string, a ULID, one per intent",
   "thesis_id": "string (e.g. THESIS-BTC-001)",
-  "pair": "string (e.g. BTC/USDC)",
-  "action": "BUY | SELL",
+  "pair": "string (e.g. BTC/USDC), exactly as the allowlist names it",
+  "side": "OPEN_LONG | CLOSE_LONG",
+  "position_id": "string, only for CLOSE_LONG: the open position it closes",
   "order_type": "LIMIT | POST_ONLY",
-  "target_price": "number",
-  "allocated_risk_usd": "number",
-  "max_slippage_bps": "number (default: <= 20)",
-  "stop_loss_price": "number",
-  "take_profit_price": "number",
+  "created_at": "ISO-8601 UTC timestamp",
+  "reference_price": "decimal string: the price the intent was written against",
+  "reference_at": "ISO-8601 UTC timestamp of that price",
+  "entry_price": "decimal string: the limit price",
+  "stop_loss_price": "decimal string",
+  "take_profit_price": "decimal string",
+  "risk_ceiling_usd": "decimal string: the most the trade may lose at its stop",
+  "max_slippage_bps": "integer, at most 20",
   "valid_until": "ISO-8601 UTC timestamp",
   "evidence": {
     "catalyst": "string",
@@ -280,28 +288,52 @@ Every trade proposal from the agent is one JSON object of this shape:
 }
 ```
 
-Where it meets today's desk:
+What the engine holds it to:
 
-- The desk's gate sizes every ticket and a model never chooses an amount (North Star). So `allocated_risk_usd` is checked, never adopted: the engine refuses an intent above the gate's suggested risk, Eric's PM decision (`pm_approved_risk_usd`) or the 2% limit.
-- When it is built, the schema is published as its own file under `templates/schemas/` and never edited after; a change is `cr.trade-intent.v2`.
+- **One intent, one order.** `intent_id` is the engine's idempotency key: the same `intent_id` again is the same intent, never a second order. The engine derives the `client_order_id` from it (invariant 4). The agent never sets one.
+- **Decimal strings.** Every price and amount is a plain decimal string (`^\d+(\.\d+)?$`: no sign, exponent, NaN or Infinity), read exactly and never through a binary float. Sizes are computed in exact decimals at the venue's tick and lot.
+- **Explicit side, long only.** `OPEN_LONG` needs `stop_loss_price` < `entry_price` < `take_profit_price`. `CLOSE_LONG` names an open `position_id` of the Paper Book and closes no more than it holds. Nothing opens a short; there is no BUY or SELL to misread.
+- **Minimum stop distance.** `entry_price − stop_loss_price` is at least the larger of `STOP_MIN_PCT` × entry and `STOP_MIN_ATR` × the pair's 14-hour ATR. A stop one tick from the entry would turn a small risk ceiling into a huge position. Eric sets both figures. Until he does, or while the ATR is unknown, every intent is refused (unknown is never 0).
+- **Size and notional cap.** The quantity is `floor_to_lot(risk_ceiling_usd / (entry − stop))`, never rounded up; zero is a refusal. Its notional (quantity × entry) is at most the smaller of `NOTIONAL_MAX_PCT` × NAV and the largest size the desk's exit measurement (Forensics > Exits) shows can be sold within the slippage limit. Eric sets `NOTIONAL_MAX_PCT`; unset refuses.
+- **Risk is checked, never adopted.** The desk's gate sizes every ticket and a model never chooses an amount (North Star). The engine refuses `risk_ceiling_usd` above 2% of NAV, above the gate's suggested risk, or above Eric's PM decision (`pm_approved_risk_usd`).
+- **Fresh price.** Refused when `reference_at` is older than `freshness.price_stale_minutes` at evaluation, or when the engine's own current price is further from `reference_price` than `max_slippage_bps`.
+- **Bounded life.** `valid_until` is read as the earlier of itself and `created_at` plus the engine's maximum validity; an intent already past it is refused.
+- **Evidence is for the record.** The engine stores `evidence` with the intent for the audit trail and reads none of it for a decision.
+- The schema is published as `templates/schemas/trade-intent.v2.schema.json` (PR #58) and never edited after; a change is `cr.trade-intent.v3`.
+
+### Paper Book `cr-paper@2`
+
+Pipeline review, 2026-10-27. What the trader's Paper Book must be before any engine routes an intent to it. Built in `dashboard/core/paper-trader.js` (PR #59) beside `cr-paper@1` (`dashboard/core/paper.js`, unchanged), which keeps measuring the PM's ticket decisions exactly as it does. `cr-paper@2` has its own hash-chained, append-only records under `paper/trader/` and never touches `paper/positions.jsonl`.
+
+- **Cash NAV.** The book starts from a cash balance Eric sets; unset, it holds nothing and the engine refuses every intent. NAV is cash plus each open quantity × its latest hourly price. A position without a fresh price makes NAV unknown, never valued at 0 or at its entry.
+- **Discrete sizing.** The quantity is `floor_to_lot(risk_ceiling / (entry − stop))` at the venue's lot size and minimum notional; below the minimum there is no order. Cash is debited at each fill and credited at each exit, and never goes negative.
+- **Fills through the price.** A limit buy fills only when an hour's low trades below its price, never at a touch. One hour fills at most `FILL_SHARE_MAX` of that hour's volume; the rest is a partial fill that stays open until it fills, is cancelled or expires.
+- **Fees and slippage.** POST_ONLY pays the maker fee and everything else the taker fee, at the venue's published schedule; an unknown fee refuses the fill, never 0. A stop exit pays `STOP_SLIPPAGE_BPS` below the stop, or fills at the hour's open when the price gapped through it.
+- **High/low wick stops.** Stops and targets are checked against each hour's high and low, not its close. When one hour reaches both the stop and the take profit, the stop is taken: the worse outcome.
+- **Long only.** `OPEN_LONG` and `CLOSE_LONG`; no short, leverage or margin.
+- **Results.** Realized P&L net of fees and slippage, NAV by the hour, and drawdown from NAV's high-water mark (the measure invariant 3's ceilings use), set against BTC over the same times as the outcomes are.
+- **Protected.** `dashboard/core/paper.js`, `paper-trader.js`, `trade-risk.js`, `decimal.js` and their tests (`trade-risk`, `paper-trader` and `trader-boundary` under `dashboard/tests/`) are in `PROTECTED` (`dashboard/scripts/backlog-promote.js`). No builder or agent-lane candidate changes them. Eric changes them, or a task he marks for it in words.
 
 ### Junior Trader roadmap
 
-Eric, 2026-10-27. Built in this order through the backlog (Phase 7, at its end); Eric's merge releases each.
+Eric, 2026-10-27; corrected by the pipeline review the same day. Both steps change protected files, so both backlog items were *(Eric)*: no builder took them. Both are built and merged by Eric (PRs #58 and #59).
 
-1. **Pre-trade risk engine** (TASK-004, item 73). `validateTradeIntent` in `dashboard/core/trade-risk.js`: a pure check of every intent against the limits of invariant 3.
-2. **Paper trade execution harness** (TASK-005, item 74). Simulated fills for intents the engine passed, with spread and slippage charged against the trader, recorded apart from the PM Paper Book.
+1. **Pre-trade risk engine** (item 73, built, PR #58). `validateTradeIntent` in `dashboard/core/trade-risk.js`: a pure check of every `cr.trade-intent.v2` against invariant 3's limits and the rules above.
+2. **Paper Book `cr-paper@2`** (item 74, built, PR #59). The blueprint above, in `dashboard/core/paper-trader.js`. It replaces the earlier `paper-fills.js` harness (`cr-paper-fill@1`), which was never built.
 
 | Limit | Value |
 |---|---|
-| Risk per trade | at most 2% of the Paper Book balance (`cr-paper@1`) |
-| Drawdown | at most 4% of the Paper Book's value in any rolling 24 hours, a hard ceiling |
+| Risk per trade | at most 2% of NAV (`cr-paper@2`) |
+| Drawdown | at most 4% of NAV in any rolling 24 hours, a hard ceiling |
+| Minimum stop distance | the larger of `STOP_MIN_PCT` × entry and `STOP_MIN_ATR` × the 14-hour ATR: not set (Eric) |
+| Notional cap | the smaller of `NOTIONAL_MAX_PCT` × NAV and the exit measurement's size: not set (Eric) |
 
 Open (Eric):
 
-- `cr-paper@1` holds no balance: each position is the risk of one PM decision, with no starting capital. Until Eric sets the Paper Book's starting balance, both limits measure against an unknown and the engine refuses every intent (unknown is never 0).
+- The Paper Book's starting cash. Until he sets it, NAV is unknown and the engine refuses every intent (unknown is never 0).
 - The asset allowlist has no pairs yet; an empty allowlist refuses every intent.
-- An intent names no ticket, so the engine cannot yet hold `allocated_risk_usd` to the gate's suggested risk or a PM decision (above). Items 73 and 74 check invariant 3's limits only.
+- `STOP_MIN_PCT`, `STOP_MIN_ATR`, `NOTIONAL_MAX_PCT`, `FILL_SHARE_MAX`, `STOP_SLIPPAGE_BPS`, the maximum validity and the venue whose fee schedule and lot sizes the book uses.
+- An intent names no ticket, so the engine cannot yet hold `risk_ceiling_usd` to the gate's suggested risk or a PM decision (above) until an intent carries its ticket.
 
 ## Autonomous Build Backlog
 
@@ -320,19 +352,20 @@ From 2026-10-27 (Eric's burst; `audits/2026-10-27-next-phase/BUILDERS.md`) the s
 - **Claims.** A run claims its items first (`backlog-schedule.js claim`): a branch `claude/claims/item-<n>` per item, created or replaced only by compare-and-swap, so two builders never hold one item. A claim's lease is 90 minutes, renewed after each built item (`heartbeat`); a run that dies loses its items when the lease ends and the next run takes them again. A failed item (`fail`) waits 30 minutes; two failures, three lost runs, or a branch gone without its commit block the item until Eric looks. `release` gives an item back untouched. Claims are records, never work: `test.yml` ignores them.
 - **Taken.** An item is taken when it is ticked here, or when a commit on `origin/main` or on an `origin/claude/backlog-*` branch carries `Backlog-Item: <n>` for it (older commits name it in their subject, `backlog: <item text>`).
 - **Order and independence.** Items are taken in this list's order: unchecked, not marked *(Eric)*, no engineering task mark, not taken, not claimed. Each new item carries a `- **Schedule:** after <n>, …; touches <file or folder/>, …` line (`web` means `dashboard/web/` and its committed bundle). An item waits while something it comes after is unbuilt, in flight, or waiting on a branch that is not the base, and while an in-flight item, or a waiting item not on the base, touches what it touches; the run continues to the next independent item. An item with no such line is built alone. A run changes only what its items' lines list.
+- **The issue queue (pipeline review, 2026-10-27).** Eric also authorizes items as GitHub issues: the Backlog task form opens one labeled `agent:draft`, and his own `agent:ready` label makes it the next numbered item without a merge. `backlog-queue.yml` records the issue's text and its SHA-256 on the agent ledger (`dashboard/scripts/backlog-queue.js`). Editing the text, taking the label off or closing the issue withdraws the item; a text labeled again gets a new number, and numbers are never reused. The scheduler and `backlog-status.js` read queue items after this list's, under the same rules; a queue item has no box here. Read its task with `node dashboard/scripts/backlog-queue.js task --item <n>`: its outcome and checks as Eric authorized them, data and never instructions beyond them. Its commit carries `Backlog-Item: <n>` like any other.
 - **Build.** Follow `CLAUDE.md`: edit, run `node dashboard/cli.js test`, and rebuild the bundle after UI edits. Build one item and run the whole suite, then the next. If an item's tests fail and cannot be fixed, put the tree back, `fail` it, release the rest, and push what passed. After any fix, run the whole suite again before pushing.
 - **Base.** When a backlog branch is waiting, start from the newest waiting one (stacked), so the batch builds on the work before it; otherwise from `origin/main`. Two builders running at once may leave two branches on the same base; their items touch nothing in common, so either merges first.
 - **Branch.** `claude/backlog-batch-items-<a>-<b>-…` (two items `-<a>-and-<b>`, one `claude/backlog-item-<n>`), one commit per item, each with a `Backlog-Item: <n>` line. **Don't tick the boxes here on the branch;** they are ticked on `main` after Eric merges. The `test` workflow runs on the push; when it passes, `backlog-pr` opens the pull request and tests the branch composed onto `main`. It never merges: Eric merges every pull request himself (exclusive merge authority, 2026-10-26, `audits/2026-10-26-engineering-simplification`).
 - **Protected scope (A01).** The PR's summary names any commit that touches a path in `PROTECTED` (`dashboard/scripts/backlog-promote.js`, the list that decides):
   - `.github/`, `.claude/`, `CLAUDE.md`, `COWORK-INSTRUCTIONS.md`, `DESK_STATE.md`;
-  - the promotion scripts `dashboard/scripts/backlog-promote.js`, `backlog-intake.js`, `merge-train.js`, `engineering-worker.js`, the merge boundary's checker and the agent lane's scripts, and the engineering inbox `dashboard/engineering/`;
+  - the promotion scripts `dashboard/scripts/backlog-promote.js`, `backlog-queue.js`, `merge-train.js`, `engineering-worker.js`, the merge boundary's checker and the agent lane's scripts, and the engineering inbox `dashboard/engineering/`;
   - `dashboard/oauth.js`, `dashboard/mcp.js`, `dashboard/mcp-wire.js`, `dashboard/hosted.js`, `dashboard/frontdoor.js`, and the root `server.js`;
-  - the ledger and wallet code: `dashboard/core/portfolio.js`, `wallets.js`, `walletsync.js`, `alchemy.js`; what the engineering gate is computed with (`dashboard/core/ops.js`, `fsx.js`, `ids.js`, `workspace.js`, `forensic-defs.js`, `rubrics.js`, `scoring.js`, `netguard.js`, `revision.js`); the scout's ingest and sweep;
+  - the ledger and wallet code: `dashboard/core/portfolio.js`, `wallets.js`, `walletsync.js`, `alchemy.js`; the trader's Paper Book and risk engine, `dashboard/core/paper.js` and `trade-risk.js`, with their tests `dashboard/tests/trade-risk.test.js`, `paper-trader.test.js` and `trader-boundary.test.js` (pipeline review, 2026-10-27); what the engineering gate is computed with (`dashboard/core/ops.js`, `fsx.js`, `ids.js`, `workspace.js`, `forensic-defs.js`, `rubrics.js`, `scoring.js`, `netguard.js`, `revision.js`); the scout's ingest and sweep;
   - `package.json` and `package-lock.json`, at the root and in `dashboard/web`; `render.yaml`;
   - the record folders (`portfolio/`, `paper/`, `projects/`, `config/`, `secrets/`, `scout/`);
   - an edit to, or removal of, an existing file under `templates/` (adding a new version is allowed).
 
-  `dashboard/server.js`, `dashboard/cli.js` and `dashboard/core/paper.js` are not protected. Backlog items stay out of protected paths unless their line says Eric asked for it.
+  `dashboard/server.js` and `dashboard/cli.js` are not protected. Backlog items stay out of protected paths unless their line says Eric asked for it.
 - **Engineering items (Connected Engineering v1, Eric 2026-10-25; `audits/2026-10-25-connected-engineering`).** An item whose line carries `*(engineering task eng-… v…, sha256 …)*` was admitted from the desk's engineering inbox. It is never in a batch: skip it (`backlog-status.js` leaves it out of `next` and lists it under `engineering`). It is built alone, only through the engineering lane: claimed on the desk's engineering connector, built on `claude/candidate-eng-<n>`, released to `claude/backlog-eng-<n>`. Its candidates pushed in the last hour count toward the hour's budget.
 - **Never** push to `main` or force-push. Items marked *(Eric)* need his decision first: ask, don't build.
 - **Order.** Track 2 first (the North Star at the top of this page). Each phase below says its own order; the list's order is the build order.
@@ -732,31 +765,34 @@ Not executable: Eric's decisions and protected work (`audits/2026-10-27-next-pha
 - *(Eric)* Connector tools for the cycle and `desk_status` counts (`mcp.js` is protected).
 - *(Eric)* Sending the brief or thesis-break alerts to him (a messaging channel he chooses).
 - *(Eric)* Wallet sync's Alchemy 403 (the key in Render's environment).
-- *(Eric)* Before applying `.github/rulesets/automation-branches.json`, add `refs/heads/claude/backlog-*` and `refs/heads/claude/claims/**` to its `exclude`, or both builders stop.
+- *(Eric)* Apply `.github/rulesets/automation-branches.json` again once the pipeline review's PR is merged: its `exclude` now lists `refs/heads/claude/backlog-*` and `refs/heads/claude/claims/**`, so the builders keep pushing.
 - *(Eric)* A rollback drill record (`node dashboard/scripts/rollback-drill.js --from <ref> --record <audit-dir>`) for the scorecard.
 - *(Eric)* Delete builder B after the burst (it stops itself; its cron next matches on 2027-10-27).
 
 - Never in scope: an exchange or wallet connection, placing orders, moving money.
 
-Phase 7, the Junior Trader engine (Eric, 2026-10-27; the roadmap and limits under System Architecture & Conventions). Library code and its tests only: no route, CLI, connector tool or UI calls it yet, no model is called, and nothing places an order, connects a wallet or exchange, or moves money. Each item stays out of `PROTECTED`, runs the whole suite and is released only by Eric's merge.
+Phase 7, the Junior Trader engine (Eric, 2026-10-27; the roadmap, schema, Paper Book blueprint and limits under System Architecture & Conventions). Library code and its tests only: no route, CLI, connector tool or UI calls it yet, no model is called, and nothing places an order, connects a wallet or exchange, or moves money. Both items change protected files (pipeline review, 2026-10-27), so both are *(Eric)*: no builder takes them, and each is built only when Eric says so and released only by his merge. Each runs the whole suite.
 
-- [ ] **73. Deterministic pre-trade risk engine (TASK-004, `eng-backend@1`).** A pure function `validateTradeIntent(intent, portfolioState, riskRules)` in a new `dashboard/core/trade-risk.js` (`cr-trade-risk@1`). It reads no file, clock or network; the time comes in `portfolioState.now`.
+- [x] *(Eric)* **73. Deterministic pre-trade risk engine (`eng-backend@1`; protected).** A pure function `validateTradeIntent(intent, book, rules)` in a new `dashboard/core/trade-risk.js` (`cr-trade-risk@1`). It reads no file, clock or network; the time comes in `book.now`.
   - It returns `{ ok, version, refusals: [{ field, rule, words }] }` with every failed check listed, never only the first; `ok` only with none. Nothing is trimmed or adjusted: an intent passes as written or is refused.
-  - Shape: `version` is `cr.trade-intent.v1`; `action` BUY or SELL; `order_type` LIMIT or POST_ONLY; every price and `allocated_risk_usd` a finite number above 0; `valid_until` an ISO-8601 UTC time after `now`; `thesis_id`, `pair` and the three `evidence` fields present; `max_slippage_bps` at most 20.
-  - Risk cap: `allocated_risk_usd` at most 2% of `portfolioState.paper_balance_usd`.
-  - Drawdown: refused when `portfolioState.drawdown_24h_usd` plus `allocated_risk_usd` is above 4% of `portfolioState.paper_value_usd`, the hard ceiling for the rolling 24 hours.
-  - Stop-loss: present and on the losing side of the entry (below `target_price` for BUY, above it for SELL); `take_profit_price` on the other side.
-  - Allowlist: `pair` must be in `riskRules.allowlist`, compared exactly. An empty or missing allowlist refuses every pair.
-  - Unknown is never 0: a missing or non-numeric balance, value or 24-hour drawdown refuses the intent, with words saying which.
-  - The limits are constants in the module (`RISK_PER_TRADE_MAX` 0.02, `DAILY_DRAWDOWN_MAX` 0.04, `SLIPPAGE_BPS_MAX` 20). `riskRules` may tighten them; a looser value is refused as a rule error, never applied.
-  - Computing `portfolioState` from the Paper Book is not in this item.
-  - Tests in `dashboard/tests/trade-risk.test.js`: a passing BUY and SELL; each rule refused on its own with its field named; several failures listed together; risk at exactly 2% passes and a cent over is refused; drawdown at exactly 4% passes and over it is refused; an unknown balance, value or drawdown refuses; a looser `riskRules` is refused; the inputs are unchanged after the call.
+  - Shape: `version` is `cr.trade-intent.v2`; `intent_id` present; `side` `OPEN_LONG` or `CLOSE_LONG`, with `position_id` exactly when it is `CLOSE_LONG` and naming an open position of `book`; `order_type` LIMIT or POST_ONLY; every price and amount a plain decimal string, compared exactly and never through a float; `created_at`, `reference_at` and `valid_until` ISO-8601 UTC; `max_slippage_bps` an integer at most 20; `thesis_id`, `pair` and the three `evidence` fields present (evidence is never read for the decision).
+  - Order of prices: stop below entry below take profit for `OPEN_LONG`.
+  - Minimum stop distance: `entry − stop` at least the larger of `rules.stop_min_pct` × entry and `rules.stop_min_atr` × `book.atr_14h`. An unset figure or an unknown ATR refuses.
+  - Size: quantity `floor_to_lot(risk_ceiling_usd / (entry − stop))` at `book.lot`; zero refuses. Notional at most the smaller of `rules.notional_max_pct` × NAV and `book.exit_max_usd`.
+  - Risk cap: `risk_ceiling_usd` at most 2% of `book.nav_usd`.
+  - Drawdown: refused when `book.drawdown_24h_usd` plus `risk_ceiling_usd` is above 4% of `book.nav_usd`, the hard ceiling for the rolling 24 hours.
+  - Freshness: `reference_at` no older than `rules.price_stale_minutes` before `now`; `book.price` within `max_slippage_bps` of `reference_price`; `valid_until`, clipped to `created_at` plus `rules.max_validity_minutes`, after `now`.
+  - Allowlist: `pair` must be in `rules.allowlist`, compared exactly. An empty or missing allowlist refuses every pair.
+  - Halt: any order of `book` in state `UNKNOWN` refuses every new intent (invariant 4).
+  - Unknown is never 0: a missing or unreadable NAV, drawdown, price, ATR or lot refuses the intent, with words saying which.
+  - The limits are constants in the module (`RISK_PER_TRADE_MAX` 0.02, `DAILY_DRAWDOWN_MAX` 0.04, `SLIPPAGE_BPS_MAX` 20). `rules` may tighten them; a looser value is refused as a rule error, never applied.
+  - Computing `book` from the Paper Book is item 74, not this one.
+  - Tests in `dashboard/tests/trade-risk.test.js`: a passing `OPEN_LONG` and `CLOSE_LONG`; each rule refused on its own with its field named; several failures listed together; risk at exactly 2% passes and a cent over is refused; drawdown at exactly 4% passes and over it is refused; a stop one tick inside the floor is refused; a float or exponent where a decimal string belongs is refused; an unknown NAV, drawdown, price or ATR refuses; an `UNKNOWN` order refuses every intent; a looser `rules` is refused; the inputs are unchanged after the call.
+  - Built by PR #58 (`529f08b`, merged by Eric 2026-10-27); what it adds beyond this text is in the module's header (risk held to the desk's grant, costs in the size, future stamps refused, `RESERVED` and `SENT` halt too).
   - **Schedule:** touches dashboard/core/trade-risk.js, dashboard/tests/trade-risk.test.js
-- [ ] **74. Paper trade execution harness (TASK-005, `eng-backend@1`).** In a new `dashboard/core/paper-fills.js` (`cr-paper-fill@1`), beside `paper.js`:
-  - `simulateFill(intent, validation, quote)`, pure. Only an intent whose `validateTradeIntent` result is `ok` gets a fill; anything else is `not_filled` with its refusals. `quote` is `{ bid, ask, at, slippage_bps }`, given by the caller.
-  - The fill is charged against the trader: a BUY at the ask plus `slippage_bps`, a SELL at the bid less it. A LIMIT fills only when that price is at or better than `target_price`; a POST_ONLY that would cross the spread is not filled; slippage above the intent's `max_slippage_bps` is not filled; a quote at or after `valid_until` is `expired`.
-  - Quantity is `allocated_risk_usd / |fill price − stop_loss_price|`; a stop at the fill price is not filled. The fill states its spread and slippage cost in USD; fees are unknown and said so, never 0.
-  - A missing bid, ask or slippage is `not_filled`, said in words, never a fill at a guessed price.
-  - `recordFill(ws, fill)` appends a filled result to its own create-only `paper/fills.jsonl` through `runOp`, as `paper.js` appends; the same intent again (by its SHA-256) is `unchanged`. Fills never enter `paper/positions.jsonl`, the PM Paper Book's counts or Portfolio. `paper.js` is read, not edited.
-  - Tests in `dashboard/tests/paper-fills.test.js` (temporary workspaces): BUY and SELL fill prices with spread and slippage; a LIMIT not reached; a POST_ONLY that crosses; slippage over the cap; expired; a refused validation never fills; unknown quote fields; quantity from the stop distance; the same intent recorded twice is `unchanged`; `paper.book` reads the same before and after a fill.
-  - **Schedule:** after 73; touches dashboard/core/paper-fills.js, dashboard/tests/paper-fills.test.js
+- [x] *(Eric)* **74. Paper Book `cr-paper@2` (`eng-backend@1`; protected).** In `dashboard/core/paper.js`, beside `cr-paper@1`, as the blueprint under System Architecture & Conventions says: cash NAV, discrete sizing, fills through the price with partial fills, maker and taker fees, stop slippage, hourly high/low stops (the stop first when one hour reaches both) and long only. It replaces the earlier `paper-fills.js` harness (`cr-paper-fill@1`), which was never built.
+  - Its own append-only records under `paper/`, written through `runOp` as `paper.js` writes; the same `intent_id` again is `unchanged`. They never enter `paper/positions.jsonl`, the PM Paper Book's counts or Portfolio, and `cr-paper@1` reads the same before and after.
+  - The book it hands item 73 (`book`: NAV, 24-hour drawdown, price, ATR, lot, exit size, open positions and orders by state), each unknown said in words, never 0.
+  - Tests in `dashboard/tests/paper-trader.test.js` (temporary workspaces): a fill only when the low trades through; a partial fill over the volume share; maker and taker fees; an unknown fee refuses; a stop with slippage and a gap through it; one hour reaching both stop and target takes the stop; NAV unknown without a fresh price; cash never negative; the same intent twice is `unchanged`; `paper.book` (`cr-paper@1`) unchanged.
+  - Built by PR #59 (`e7d580a`, merged by Eric 2026-10-27) in a new `dashboard/core/paper-trader.js`, so `paper.js` (`cr-paper@1`) is not edited.
+  - **Schedule:** after 73; touches dashboard/core/paper.js, dashboard/tests/paper-trader.test.js
