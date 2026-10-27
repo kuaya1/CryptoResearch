@@ -171,8 +171,9 @@ test('the reviewer runs main\'s code with the OpenAI key, never checks out a can
   const j = jobs(text);
   assert.deepEqual(Object.keys(j), ['post-review']);
   assert.match(j['post-review'], /name: post-review\n/);
-  assert.deepEqual(secretsIn(text), ['secrets.OPENAI_API_KEY']);
-  for (const [f, t] of FILES.slice(0, 2)) assert.doesNotMatch(t, /OPENAI/, f);
+  assert.deepEqual(secretsIn(text), ['secrets.AGENT_LEDGER_KEY', 'secrets.OPENAI_API_KEY']);
+  for (const [f, t] of FILES.slice(0, 2)) assert.doesNotMatch(t, /OPENAI|AGENT_LEDGER_KEY/, f);
+  assert.doesNotMatch(read('.github/workflows/agent-sandbox-probe.yml'), /AGENT_LEDGER_KEY/);
   assert.match(j['post-review'], /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
   assert.doesNotMatch(text, /ref: \$\{\{ github\.event\.(workflow_run\.head|pull_request\.head)/);
   assert.match(text, /workflows: \[test, agent-checks\]/);

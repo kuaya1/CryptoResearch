@@ -51,6 +51,16 @@ const newId = (kind) => `${kind === 'build' ? 'bd' : 'rv'}-${crypto.randomBytes(
 // derived from the provider's API key: a line written by anyone without it
 // is never taken as a review.
 const macKey = (secret) => (secret ? crypto.createHmac('sha256', 'cr-agent-ledger@1').update(String(secret)).digest() : null);
+// The ledger's own key (Engineering v3, change 4): AGENT_LEDGER_KEY, a
+// repository secret of at least 32 characters, held only by the jobs that
+// record or read verdicts. It used to be derived from the OpenAI key, so the
+// holder of that key could sign a verdict, and rotating it orphaned every
+// verdict held. Missing or short: null, and nothing is posted from the ledger.
+const LEDGER_KEY_MIN = 32;
+const ledgerKey = (env = process.env) => {
+  const s = String((env && env.AGENT_LEDGER_KEY) || '');
+  return s.length >= LEDGER_KEY_MIN ? macKey(s) : null;
+};
 const macOf = (key, r) => crypto.createHmac('sha256', key).update(canonical({ binding: r.binding, id: r.id, verdict: r.verdict, response_id: r.response_id || null })).digest('hex');
 function macOk(key, r) {
   if (!key || typeof r.mac !== 'string' || !/^[0-9a-f]{64}$/.test(r.mac)) return false;
@@ -213,4 +223,4 @@ function decideBuild(entries, { binding, bind, ceilings, now, usd, run, holdMs =
   return { action: 'build', id, lost: lost.map((x) => x.id), append: [...lost, { t: 'reserve', kind: 'build', id, binding, bind, day, usd, run, at: new Date(now).toISOString() }] };
 }
 
-module.exports = { REF, FILE, ZERO, FINAL, BUILD_GRACE_MINUTES, sha256, canonical, bindingOf, dayOf, macKey, macOf, macOk, parse, read, append, transact, attempts, usage, decideReview, decideBuild };
+module.exports = { REF, FILE, ZERO, FINAL, BUILD_GRACE_MINUTES, sha256, canonical, bindingOf, dayOf, macKey, LEDGER_KEY_MIN, ledgerKey, macOf, macOk, parse, read, append, transact, attempts, usage, decideReview, decideBuild };
