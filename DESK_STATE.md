@@ -1,6 +1,6 @@
 # Desk state: the Junior Trader pipeline (Phase 1)
 
-Last updated 2026-10-25. This page covers the PM trade ticket pipeline. The rest of the desk is described in `CLAUDE.md` and `COWORK-INSTRUCTIONS.md`.
+Last updated 2026-10-27. This page covers the PM trade ticket pipeline and the contract for the trader to come. The rest of the desk is described in `CLAUDE.md` and `COWORK-INSTRUCTIONS.md`.
 
 ## North Star: Track 1 serves Track 2 (Eric, 2026-10-25)
 
@@ -152,6 +152,48 @@ Live tickets (2026-10-24), both $0 and waiting for Eric: OLAS `tr_2026-10-24T175
 - `dashboard/tests/tickets.test.js` covers the sizing gate, the prompt pin, freezing and integrity, field-by-field refusal, $0 caps, side-by-side agents, decisions and undo, invalidation on read (writes nothing), the pilot queue and connector roles.
 - `dashboard/tests/review-queue.test.js` covers the under-40 filter and the pending-ticket reason.
 - Run everything with `node dashboard/cli.js test`. After any UI edit, rebuild the bundle with `npm run ui:build`.
+
+## System Architecture & Conventions
+
+### Junior Trader Desk Invariants (Future-Proofing Contract)
+
+Eric, 2026-10-27. The contract for the autonomous trader still to be built, so the sandbox, the ledger (`dashboard/scripts/agent-ledger.js`) and the desk's deterministic gates carry unattended trading without rework. None of it is implemented yet. The North Star invariants above stay in force: today nothing places an order, connects a wallet or exchange, or moves money.
+
+1. **Separation of proposal and execution.** The LLM agent is an analyst only. It never holds execution API keys and never signs a transaction. It emits a typed `TradeIntent` (below). An out-of-band deterministic engine intercepts, validates and routes it; while invariant 5 holds, it routes only to the Paper Book.
+2. **Stateless shift work.** The trader runs in discrete, stateless evaluation cycles during the target market's liquidity windows. Each tick re-derives its state from disk only (`DESK_STATE.md`, open position records, fill journals) and exits. No long-lived chat memory.
+3. **Immutable risk boundary.** The risk limits are hard-coded in the engine, outside the model's context window: at most 2% of the portfolio at risk per trade, a stop-loss on every trade, an asset allowlist, and a maximum daily drawdown (figure not set yet). The agent cannot alter, soften or bypass them.
+4. **Reconciliation and nonce guard.** The engine inherits the ledger's pattern: a hash-chained, append-only record written by compare-and-swap; every action reserved before it is sent; a reservation with no outcome holds its slot for the timeout plus a grace (65 minutes at the builder's 45-minute timeout), then is recorded `lost`; each recorded verdict signed with an HMAC-SHA256 MAC under a key the agent never holds (`AGENT_LEDGER_KEY` in the build lane). When an order placement times out or a broker WebSocket drops, the engine holds the lease pending and reconciles fills before it permits any further action. It never blind-resubmits.
+5. **Sovereign capital governance.** The agent trades only on the simulated Paper Book (`cr-paper@1`, `dashboard/core/paper.js`, `paper/positions.jsonl`; item 18). Promoting any strategy to live execution needs Eric's own explicit, authenticated commit or signature on `main`.
+
+### `TradeIntent` schema (`cr.trade-intent.v1`)
+
+Every trade proposal from the agent is one JSON object of this shape:
+
+```json
+{
+  "version": "cr.trade-intent.v1",
+  "thesis_id": "string (e.g. THESIS-BTC-001)",
+  "pair": "string (e.g. BTC/USDC)",
+  "action": "BUY | SELL",
+  "order_type": "LIMIT | POST_ONLY",
+  "target_price": "number",
+  "allocated_risk_usd": "number",
+  "max_slippage_bps": "number (default: <= 20)",
+  "stop_loss_price": "number",
+  "take_profit_price": "number",
+  "valid_until": "ISO-8601 UTC timestamp",
+  "evidence": {
+    "catalyst": "string",
+    "metrics_evaluated": ["string"],
+    "negative_invalidation": "string"
+  }
+}
+```
+
+Where it meets today's desk:
+
+- The desk's gate sizes every ticket and a model never chooses an amount (North Star). So `allocated_risk_usd` is checked, never adopted: the engine refuses an intent above the gate's suggested risk, Eric's PM decision (`pm_approved_risk_usd`) or the 2% limit.
+- When it is built, the schema is published as its own file under `templates/schemas/` and never edited after; a change is `cr.trade-intent.v2`.
 
 ## Autonomous Build Backlog
 
