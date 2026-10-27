@@ -5,8 +5,10 @@
 //
 //   reserve   an issue labeled agent:build by Eric (the event's sender is the
 //             repository owner, a user): the task in the issue form is read
-//             and checked against its template, and one paid build is
-//             reserved in the ledger for this run before anything is sent
+//             and checked against its template, the issue is read again from
+//             GitHub (still open, still labeled, the same text the event
+//             carries), and one paid build is reserved in the ledger for this
+//             run before anything is sent
 //   prompt    the builder's task text, from the issue as Eric labeled it
 //   apply     the build artifact's patch, applied to main in a scratch index:
 //             the resulting tree is what is checked and what is committed;
@@ -123,6 +125,20 @@ function authorize(event, { policy = loadPolicy() } = {}) {
   else if (event.issue.state !== 'open') reasons.push('the issue is closed');
   return reasons;
 }
+// The issue as GitHub holds it now, against the version the event carries:
+// a rerun of an old event after an edit, a removed label or a closed issue
+// builds nothing (Engineering v3, change 2).
+function liveCheck(task, live, { policy = loadPolicy() } = {}) {
+  if (!live) return [`issue #${task.number} could not be read from GitHub now; nothing is built`];
+  const reasons = [];
+  if (live.pull_request) reasons.push(`#${task.number} is now a pull request, not an issue`);
+  if (live.state !== 'open') reasons.push(`issue #${task.number} is closed now`);
+  if (!(live.labels || []).some((l) => (l.name || l) === policy.label)) reasons.push(`issue #${task.number} no longer has the ${policy.label} label`);
+  const now = sha256(String(live.body || ''));
+  if (now !== task.body_sha256) reasons.push(`issue #${task.number} was edited after the label was added: the event carries version ${task.body_sha256.slice(0, 12)}, the issue now reads ${now.slice(0, 12)}; add the label again to build the new version`);
+  return reasons;
+}
+
 const buildBinding = (task, base) => ({ kind: 'build', issue: task.number, task_sha256: task.body_sha256, base });
 
 // Every changed path between `base` and `rev` (a commit or a tree), with modes.
@@ -364,7 +380,7 @@ function out(flat, text) {
 }
 const eventOf = (flags) => JSON.parse(fs.readFileSync(flags.event || process.env.GITHUB_EVENT_PATH, 'utf8'));
 
-async function main(argv, { now = () => Date.now(), cwd = process.cwd() } = {}) {
+async function main(argv, { now = () => Date.now(), cwd = process.cwd(), env = process.env, fetchImpl = globalThis.fetch } = {}) {
   const [cmd, ...rest] = argv;
   const flags = {};
   for (let i = 0; i < rest.length; i += 2) flags[rest[i].replace(/^--/, '')] = rest[i + 1];
@@ -374,13 +390,19 @@ async function main(argv, { now = () => Date.now(), cwd = process.cwd() } = {}) 
     const reasons = authorize(ev, { policy });
     const task = ev.issue ? taskOf(ev.issue, { policy }) : null;
     if (task) reasons.push(...task.problems);
+    if (!reasons.length) {
+      const gh = githubApi({ token: env.GH_TOKEN, repo: env.GITHUB_REPOSITORY, fetchImpl });
+      let live = null;
+      try { live = await gh.issue(task.number); } catch (_) { live = null; }
+      reasons.push(...liveCheck(task, live, { policy }));
+    }
     if (reasons.length) { out({ ok: false }, `### Not built\n\n${reasons.map((r) => `- ${r}`).join('\n')}`); return 0; }
     const base = flags.base;
     const bind = buildBinding(task, base);
-    const run = `${process.env.GITHUB_RUN_ID}/${process.env.GITHUB_RUN_ATTEMPT}`;
+    const run = `${env.GITHUB_RUN_ID}/${env.GITHUB_RUN_ATTEMPT}`;
     const d = L.transact(cwd, { decide: (entries) => L.decideBuild(entries, { binding: L.bindingOf(bind), bind, ceilings: policy.ceilings, now: now(), usd: policy.build.max_budget_usd, run }), message: `build reserve #${task.number}` });
     if (d.error || d.action !== 'build') { out({ ok: false }, `### Not built\n\n- ${d.error || d.why}`); return 0; }
-    out({ ok: true, reservation: d.id, attempt: process.env.GITHUB_RUN_ATTEMPT, number: task.number, template: task.template, task_sha256: task.body_sha256 }, `Build of #${task.number} (${task.template}) reserved as ${d.id}: at most $${policy.build.max_budget_usd}.`);
+    out({ ok: true, reservation: d.id, attempt: env.GITHUB_RUN_ATTEMPT, number: task.number, template: task.template, task_sha256: task.body_sha256 }, `Build of #${task.number} (${task.template}) reserved as ${d.id}: at most $${policy.build.max_budget_usd}.`);
     return 0;
   }
   if (cmd === 'prompt') {
@@ -432,4 +454,4 @@ async function main(argv, { now = () => Date.now(), cwd = process.cwd() } = {}) 
 
 if (require.main === module) main(process.argv.slice(2)).then((c) => { process.exitCode = c; }, (err) => { process.stderr.write(`agent-guard: ${String((err && err.message) || err).slice(0, 400)}\n`); process.exitCode = 1; });
 
-module.exports = { FIELDS, loadPolicy, parseIssueForm, taskOf, authorize, buildBinding, changesOf, checkChange, applyPatch, commitMessage, publish, commitsOf, isAgentPr, trailersOf, pureMerge, prCheck, builderPrompt, prBody, githubApi, main };
+module.exports = { FIELDS, loadPolicy, parseIssueForm, taskOf, authorize, liveCheck, buildBinding, changesOf, checkChange, applyPatch, commitMessage, publish, commitsOf, isAgentPr, trailersOf, pureMerge, prCheck, builderPrompt, prBody, githubApi, main };

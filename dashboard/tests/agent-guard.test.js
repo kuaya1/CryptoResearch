@@ -14,6 +14,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const G = require('../scripts/agent-guard');
+const L = require('../scripts/agent-ledger');
 
 const POLICY = G.loadPolicy();
 const BOT = { name: 'cr-builder[bot]', email: '1+cr-builder[bot]@users.noreply.github.com' };
@@ -191,4 +192,72 @@ test('a patch or a builder report that holds a key-shaped string is refused, nam
   fs.writeFileSync(outFile, '');
   assert.equal(await G.main(['apply', '--event', event, '--base', r.base, '--patch', patch, '--build', report], { cwd: r.work }), 0);
   assert.match(fs.readFileSync(outFile, 'utf8'), /^ok=true\ntree=[0-9a-f]{40}\n$/);
+});
+
+// The reserve command against a FICTIONAL GitHub (the issue as the fake holds
+// it now) and the ledger on the local bare remote.
+function reserver(t, r) {
+  const outFile = path.join(r.dir, 'gh-output-reserve');
+  const before = { out: process.env.GITHUB_OUTPUT, sum: process.env.GITHUB_STEP_SUMMARY };
+  process.env.GITHUB_OUTPUT = outFile;
+  delete process.env.GITHUB_STEP_SUMMARY;
+  t.after(() => { if (before.out === undefined) delete process.env.GITHUB_OUTPUT; else process.env.GITHUB_OUTPUT = before.out; if (before.sum !== undefined) process.env.GITHUB_STEP_SUMMARY = before.sum; });
+  const said = [];
+  t.mock.method(process.stdout, 'write', (s) => { said.push(String(s)); return true; });
+  const event = path.join(r.dir, 'event-labeled.json');
+  fs.writeFileSync(event, JSON.stringify({ action: 'labeled', label: { name: 'agent:build' }, repository: { owner: { login: 'kuaya1' } }, sender: { login: 'kuaya1', type: 'User' }, issue: issueOf() }));
+  const asked = [];
+  return async ({ live, run, base = r.base }) => {
+    fs.writeFileSync(outFile, '');
+    said.length = 0;
+    const fetchImpl = async (url, o) => {
+      asked.push(url);
+      assert.equal(url, 'https://api.github.com/repos/kuaya1/CryptoResearch/issues/7');
+      assert.equal(o.headers.authorization, 'Bearer FICTIONAL-token');
+      return { status: live ? 200 : 404, text: async () => JSON.stringify(live || { message: 'Not Found' }) };
+    };
+    const [id, attempt] = run.split('/');
+    const code = await G.main(['reserve', '--event', event, '--base', base], { cwd: r.work, fetchImpl, env: { GH_TOKEN: 'FICTIONAL-token', GITHUB_REPOSITORY: 'kuaya1/CryptoResearch', GITHUB_RUN_ID: id, GITHUB_RUN_ATTEMPT: attempt }, now: () => Date.parse('2026-10-26T12:00:00Z') });
+    const flat = Object.fromEntries(fs.readFileSync(outFile, 'utf8').split('\n').filter(Boolean).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+    return { code, flat, said: said.join(''), asked };
+  };
+}
+
+test('reserve reads the issue again: an edit, a removed label or a closed issue since the event builds nothing', async (t) => {
+  const r = repo(t);
+  const reserve = reserver(t, r);
+  const issue = issueOf();
+  const version = G.taskOf(issue, { policy: POLICY }).body_sha256;
+  const edited = { ...issue, body: `${issue.body}\n\nFICTIONAL edit after the label` };
+  const e = await reserve({ live: edited, run: '10/1' });
+  assert.equal(e.code, 0);
+  assert.equal(e.flat.ok, 'false');
+  assert.match(e.said, new RegExp(`event carries version ${version.slice(0, 12)}, the issue now reads ${G.taskOf(edited, { policy: POLICY }).body_sha256.slice(0, 12)}`));
+  assert.match((await reserve({ live: { ...issue, labels: [] }, run: '11/1' })).said, /issue #7 no longer has the agent:build label/);
+  assert.match((await reserve({ live: { ...issue, state: 'closed' }, run: '12/1' })).said, /issue #7 is closed now/);
+  assert.match((await reserve({ live: null, run: '13/1' })).said, /issue #7 could not be read from GitHub now; nothing is built/);
+  assert.equal(L.read(r.work).entries.length, 0, 'nothing reserved, nothing spent');
+});
+
+test('an unchanged rerun is reserved and counts toward the two builds of that version, whichever main it starts from', async (t) => {
+  const r = repo(t);
+  const reserve = reserver(t, r);
+  const issue = issueOf();
+  const first = await reserve({ live: issue, run: '20/1' });
+  assert.equal(first.flat.ok, 'true');
+  assert.match(first.flat.reservation, /^bd-[0-9a-f]{16}$/);
+  assert.equal(first.asked.length, 1, 'the issue was read from GitHub');
+  // GitHub's "Re-run all jobs": the same event, a new attempt.
+  const rerun = await reserve({ live: issue, run: '20/2' });
+  assert.equal(rerun.flat.ok, 'true');
+  assert.notEqual(rerun.flat.reservation, first.flat.reservation);
+  // Main moves; the third build of the same version is still refused.
+  fs.writeFileSync(path.join(r.work, 'README.md'), 'main moved\n');
+  git(r.work, ['add', 'README.md']);
+  git(r.work, ['commit', '-q', '-m', 'main moves']);
+  const third = await reserve({ live: issue, run: '21/1', base: git(r.work, ['rev-parse', 'HEAD']) });
+  assert.equal(third.flat.ok, 'false');
+  assert.match(third.said, /2 paid builds for this version of the task already \(ceiling 2\)/);
+  const reserves = L.read(r.work).entries.filter((x) => x.t === 'reserve');
+  assert.deepEqual(reserves.map((x) => [x.run, x.bind.issue, x.bind.task_sha256]), [['20/1', 7, first.flat.task_sha256], ['20/2', 7, first.flat.task_sha256]]);
 });

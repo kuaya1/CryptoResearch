@@ -4,8 +4,10 @@
 # authorization, for that version of the issue only.
 #
 #   reserve  main's guard checks that the label is Eric's own and the task
-#            stays inside its template, then reserves one paid build for this
-#            run in the ledger (branch agent-ledger) before anything is sent.
+#            stays inside its template, reads the issue again (still open,
+#            still labeled, unchanged since the event), then reserves one paid
+#            build for this run in the ledger (branch agent-ledger) before
+#            anything is sent.
 #   build    Claude Code (pinned by lockfile) in a fresh checkout of main with
 #            no repository write credential, no reviewer token, no OpenAI key
 #            and no App key; its commands run in Claude Code's sandbox
@@ -42,6 +44,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: write # the ledger branch only (rulesets automation-branches and agent-ledger)
+      issues: read # the issue as GitHub holds it now, not as the event carried it
     outputs:
       ok: ${{ steps.reserve.outputs.ok }}
       reservation: ${{ steps.reserve.outputs.reservation }}
@@ -59,6 +62,7 @@ jobs:
       - id: reserve
         env:
           BASE: ${{ steps.base.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
         run: node dashboard/scripts/agent-guard.js reserve --base "$BASE"
 
   build:

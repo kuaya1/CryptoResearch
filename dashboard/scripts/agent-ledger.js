@@ -177,11 +177,15 @@ function decideReview(entries, { binding, bind, ceilings, now, key, tokens, run 
 
 // What a build run may do for one task version, from the ledger alone. A
 // run (id and attempt) reserves once; a rerun of a job inside it reserves
-// nothing and builds nothing.
+// nothing and builds nothing. Builds of one version (issue and task hash)
+// count together whichever commit of main they started from (Engineering v3:
+// a moved main used to start the count again).
+const sameVersion = (r, { binding, bind }) => r.binding === binding || Boolean(bind && bind.task_sha256 && r.bind && r.bind.issue === bind.issue && r.bind.task_sha256 === bind.task_sha256);
 function decideBuild(entries, { binding, bind, ceilings, now, usd, run }) {
-  const atts = attempts(entries).filter((a) => a.reserve.kind === 'build' && a.reserve.binding === binding);
-  const mine = atts.find((a) => a.reserve.run === run);
+  const builds = attempts(entries).filter((a) => a.reserve.kind === 'build');
+  const mine = builds.find((a) => a.reserve.run === run);
   if (mine) return { action: 'refuse', why: `run ${run} already holds build reservation ${mine.id}`, attempt: mine };
+  const atts = builds.filter((a) => sameVersion(a.reserve, { binding, bind }));
   if (atts.length >= ceilings.builds_per_task_version) return { action: 'refuse', why: `${atts.length} paid ${atts.length === 1 ? 'build' : 'builds'} for this version of the task already (ceiling ${ceilings.builds_per_task_version}); edit the task or build it yourself` };
   const day = dayOf(now);
   const u = usage(entries, { kind: 'build', day });
