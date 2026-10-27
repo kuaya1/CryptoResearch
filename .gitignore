@@ -69,6 +69,7 @@ node_modules/
 # Audits: only the reviewed reports below are tracked
 
 /audits/*/*
+!/audits/2026-10-27-red-team/README.md
 !/audits/2026-10-27-architecture-recovery/README.md
 !/audits/2026-10-27-architecture-recovery/gate0-evidence.md
 !/audits/2026-10-27-pm-builder/README.md
