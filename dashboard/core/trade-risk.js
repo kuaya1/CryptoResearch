@@ -259,4 +259,7 @@ function result(refusals, sizing) {
   return { ok: refusals.length === 0, version: VERSION, refusals, sizing };
 }
 
-module.exports = { validateTradeIntent, VERSION, INTENT_VERSION, INTENT_FIELDS, RULE_FIELDS, RISK_PER_TRADE_MAX, DAILY_DRAWDOWN_MAX, SLIPPAGE_BPS_MAX, UNRESOLVED };
+// The exact reading and rounding the Paper Book (core/paper-trader.js) shares.
+const exact = { dec, str, mulFloor, mulCeil, isoMs };
+
+module.exports = { validateTradeIntent, VERSION, INTENT_VERSION, INTENT_FIELDS, RULE_FIELDS, RISK_PER_TRADE_MAX, DAILY_DRAWDOWN_MAX, SLIPPAGE_BPS_MAX, UNRESOLVED, exact };
