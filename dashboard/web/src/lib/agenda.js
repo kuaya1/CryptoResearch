@@ -34,6 +34,8 @@ export function useAgendaRead() {
     promise.then((out) => { if (live && desk.agenda && desk.agenda.promise === promise) setSt(out); });
     return () => { live = false; };
   }, [index, attempt]);
-  if (!index || desk.signedOut) return { ...EMPTY, retry: () => {} };
-  return { ...st, retry: () => { if (desk.agenda) desk.agenda.promise = null; setAttempt((x) => x + 1); } };
+  if (!index || desk.signedOut) return { ...EMPTY, settled: false, retry: () => {} };
+  // settled: the agenda has answered once (or failed), so the review count
+  // will not change on its arrival (L4: no 6 then 7 on the rail).
+  return { ...st, settled: Boolean(st.a || st.error), retry: () => { if (desk.agenda) desk.agenda.promise = null; setAttempt((x) => x + 1); } };
 }

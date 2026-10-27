@@ -10,6 +10,7 @@ import { useRef, useState } from 'react';
 import { fmtDate, toast } from '../../../../public/ui.js';
 import { api, refresh } from '../../lib/desk.js';
 import { useAgendaRead } from '../../lib/agenda.js';
+import { plainIds } from '../../../../public/review-model.js';
 import '../../styles/agenda.css';
 
 const enc = encodeURIComponent;
@@ -116,14 +117,18 @@ export function Act({ pid, item }) {
 
 export function Item({ pid, item, primary = false, acts = true }) {
   const s = item.support || {};
+  // Record IDs read as dates on screen; the sentence with its IDs is the
+  // tooltip (L6).
+  const why = plainIds(item.why);
+  const title = plainIds(item.title);
   return (
     <div className={`ag-item${primary ? ' is-primary' : ''}${item.due ? ' is-due' : ''}`}>
       <p className="ag-item-top">
-        {primary ? <a className="ag-title" href={item.href} data-key={`ag-open-${item.item_id}`}>{item.title}</a> : <a href={item.href}>{item.title}</a>}
+        {primary ? <a className="ag-title" href={item.href} data-key={`ag-open-${item.item_id}`} title={title.ids.length ? item.title : undefined}>{title.text}</a> : <a href={item.href} title={title.ids.length ? item.title : undefined}>{title.text}</a>}
         <span className={`ag-when${item.due ? ' is-due' : ''}`}>{item.when}</span>
         <span className={`ag-basis is-${item.basis}`} title={item.basis === 'conditional' ? 'A conditional threshold estimate frozen at a receipt\'s origin: not a forecast.' : item.basis === 'owner' ? 'A date you set.' : 'A date or state a stored record gives.'}>{item.basis_words}</span>
       </p>
-      <p className="ag-why">{item.why}</p>
+      <p className="ag-why" title={why.ids.length ? `${item.why}` : undefined}>{why.text}</p>
       <p className="ag-src faint" title={(SUPPORT[s.kind] || (() => ''))(s) || undefined}>{(SUPPORT_WORDS[s.kind] || (() => ''))(s)}{item.snoozed ? ` · snoozed until ${fmtDate(item.snoozed.until)}` : ''}{item.completed ? ` · done ${fmtDate(item.completed.at)}` : ''}</p>
       {acts ? <Act pid={pid} item={item} /> : null}
     </div>

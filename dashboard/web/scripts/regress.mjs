@@ -531,6 +531,98 @@ try {
   }
 
   // ---------------------------------------------------------------------------------------
+  // L3 (2026-10-26): a desk too busy to answer (its reads or its code held
+  // unanswered by the proxy) never leaves a drawer reading forever or a page
+  // blank: each says it is loading at once, then says it in words with Try
+  // again within its bound (12 s), and recovers once the desk answers.
+  if (want('L3')) {
+    const BOUND = 14000;
+    const alertWith = (scope) => `(() => { const a = document.querySelector(${JSON.stringify(scope)}); return a && [...a.querySelectorAll('button')].some((x) => /try again/i.test(x.textContent)) ? a.textContent.trim().slice(0, 200) : null; })()`;
+    const clickRetry = (scope) => `(() => { const a = document.querySelector(${JSON.stringify(scope)}); const bt = a && [...a.querySelectorAll('button')].find((x) => /try again/i.test(x.textContent)); if (bt) bt.click(); return Boolean(bt); })()`;
+    // The Daily Brief with /api/brief/daily held.
+    {
+      proxy.reset();
+      const tab = await openTab(1440);
+      await go(tab, '#/watchlist', "document.querySelector('.wl-table tbody tr')");
+      proxy.set({ hang: ['/api/brief/daily'] });
+      const t0 = Date.now();
+      await tab.evalJs("document.querySelector('[data-key=\"nav-brief\"]').click(); true");
+      const reading = await waitFor(tab, "/Reading the brief/.test((document.querySelector('.dbrief') || {}).textContent || '')", 3000);
+      const said = await waitFor(tab, alertWith('.dbrief [role="alert"]'), BOUND);
+      const st = { reading: reading !== null, alert: said, seconds: Math.round((Date.now() - t0) / 100) / 10 };
+      evidence.l3_brief = st;
+      record('L3', 'a held Daily Brief read is said with Try again within its bound, never an endless "Reading the brief…"', st.reading && Boolean(said) && Date.now() - t0 < BOUND + 1000, st);
+      proxy.set({ hang: [] });
+      await tab.evalJs(clickRetry('.dbrief [role="alert"]'));
+      record('L3', 'and Try again reads the brief once the desk answers', (await waitFor(tab, "document.querySelector('.dbrief .dbrief-sec')", 8000)) !== null);
+      if (SHOTS) await tab.shot(path.join(SHOTS, 'l3-brief.png'));
+      await tab.close();
+    }
+    // Research with the ticket reads held: loading at once, then said.
+    {
+      proxy.reset();
+      const tab = await openTab(1440);
+      await go(tab, '#/watchlist', "document.querySelector('.wl-table tbody tr')");
+      proxy.set({ hang: ['/api/tickets/'] });
+      const t0 = Date.now();
+      await tab.evalJs("location.hash = '#/research'; true");
+      const loading = await waitFor(tab, "document.querySelector('.lg-research [data-key=\"view-loading\"]')", 3000);
+      const said = await waitFor(tab, alertWith('.lg-research [role="alert"]'), BOUND);
+      const st = { loading: loading !== null, alert: said, seconds: Math.round((Date.now() - t0) / 100) / 10, nav: await tab.evalJs("Boolean(document.querySelector('.sidebar a[href=\"#/watchlist\"]'))") };
+      evidence.l3_research = st;
+      record('L3', '#/research with its reads held says Loading at once, then the delay with Try again: never a blank page', st.loading && Boolean(said) && st.nav, st);
+      if (SHOTS) await tab.shot(path.join(SHOTS, 'l3-research-wait.png'));
+      proxy.set({ hang: [] });
+      await tab.evalJs(clickRetry('.lg-research [role="alert"]'));
+      record('L3', 'and Try again draws Research once the desk answers', (await waitFor(tab, "document.querySelector('.lg-research .page-head')", 10000)) !== null);
+      await tab.close();
+    }
+    // Outcomes from the rail: the Paper Book is drawn.
+    {
+      proxy.reset();
+      const tab = await openTab(1440);
+      await go(tab, '#/watchlist', "document.querySelector('.wl-table tbody tr')");
+      await tab.evalJs("document.querySelector('.sidebar [data-key=\"nav-outcomes\"]').click(); true");
+      const ok = await waitFor(tab, "/Paper Book/.test((document.querySelector('.lg-research') || {}).textContent || '')", 10000);
+      const st = { hash: await tab.evalJs('location.hash'), current: await tab.evalJs("(document.querySelector('.sidebar [aria-current=\"page\"]') || {}).dataset?.key || null") };
+      evidence.l7_outcomes = st;
+      record('L7', 'Outcomes on the rail opens Research > Outcomes with the Paper Book, marked as the current place', ok !== null && /tab=outcomes/.test(st.hash) && st.current === 'nav-outcomes', st);
+      if (SHOTS) await tab.shot(path.join(SHOTS, 'l7-outcomes.png'), { full: true });
+      await tab.close();
+    }
+    if (!DEV) {
+      // Preferences with its code held: the drawer and "Loading" at once,
+      // then the delay with Try again.
+      proxy.reset();
+      const tab = await openTab(1440);
+      await tab.send('Network.setCacheDisabled', { cacheDisabled: true });
+      await go(tab, '#/watchlist', "document.querySelector('.wl-table tbody tr')");
+      proxy.set({ hang: ['/app/assets/Preferences-'] });
+      const t0 = Date.now();
+      await tab.evalJs("document.querySelector('.sidebar [data-key=\"nav-settings\"]').click(); true");
+      const loading = await waitFor(tab, "/Loading Preferences/.test((document.querySelector('aside.prefs.is-loading') || {}).textContent || '')", 3000);
+      const said = await waitFor(tab, alertWith('aside.prefs [role="alert"]'), BOUND);
+      const st = { loading: loading !== null, alert: said, seconds: Math.round((Date.now() - t0) / 100) / 10 };
+      evidence.l3_prefs = st;
+      record('L3', 'Preferences whose code is held shows its drawer and Loading at once, then Try again within its bound', st.loading && Boolean(said), st);
+      if (SHOTS) await tab.shot(path.join(SHOTS, 'l3-prefs-wait.png'));
+      proxy.set({ hang: [] });
+      await tab.evalJs(clickRetry('aside.prefs [role="alert"]'));
+      record('L3', 'and Try again paints Appearance', (await waitFor(tab, "document.querySelector('dialog.prefs [data-key=\"theme-light\"]')", 10000)) !== null);
+      await tab.close();
+      // Appearance no longer waits for the hosted views' code.
+      proxy.set({ hang: ['/app/assets/parts-'] });
+      const t2 = await openTab(1440);
+      await t2.send('Network.setCacheDisabled', { cacheDisabled: true });
+      await go(t2, '#/watchlist?prefs=appearance', "document.querySelector('dialog.prefs')");
+      const painted = await waitFor(t2, "document.querySelector('dialog.prefs [data-key=\"theme-dark\"]')", 4000);
+      record('L3', 'Appearance paints while the code of the hosted views is still downloading', painted !== null);
+      await t2.close();
+      proxy.reset();
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------
   if (want('F7') || want('F5')) {
     proxy.reset();
     const riskSel = "document.querySelector('.inspector [data-part=\"keypoints\"]') || document.querySelector('.inspector .tl-risk')";

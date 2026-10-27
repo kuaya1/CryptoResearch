@@ -54,7 +54,7 @@ export function DeskHero({ reviewCount }) {
             <span className="mini-ico" aria-hidden="true"><Inbox size={18} strokeWidth={1.8} /></span>
             <span className="mini-text">
               <span className="mini-t">Review queue</span>
-              <span className="mini-s">{`${reviewCount} ${reviewCount === 1 ? 'project' : 'projects'}`}</span>
+              <span className="mini-s">{reviewCount === null ? 'Counting…' : `${reviewCount} ${reviewCount === 1 ? 'project' : 'projects'}`}</span>
             </span>
             <ArrowRight className="mini-go" size={16} aria-hidden="true" />
           </button>

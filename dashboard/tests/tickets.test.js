@@ -970,6 +970,25 @@ test('paper: a granting decision opens a position at the hourly price at or befo
   assert.equal(early.positions[0].return.status, 'unrealized');
 });
 
+// L7 (2026-10-26): the Paper Book has its own place in the rail, and its
+// positions never reach Portfolio's positions or totals.
+test('paper (L7): an open paper position adds nothing to Portfolio: no position, no priced value, no realized result, no transaction', (t) => {
+  const P = require('../core/paper');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  const now0 = Date.now();
+  bothPrices(s.ws, now0 - 2 * HOURMS, 1.0, 100);
+  const dec = T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' });
+  assert.equal(dec.result.paper.status, 'saved');
+  assert.equal(P.book(s.ws, { now: now0 }).positions.length, 1, 'the paper position exists');
+  const pf = require('../core/portfolio').computePortfolio(s.ws, { now: now0 });
+  assert.deepEqual(pf.positions, [], 'Portfolio holds no paper position');
+  assert.equal(pf.totals.value_priced_usd, null, 'no priced value from paper');
+  assert.equal(pf.totals.realized_known_usd, 0);
+  assert.equal(pf.totals.open_count, 0);
+  assert.equal(pf.totals.speculative_cost_known_usd, 0, 'paper risk is not recorded cost');
+});
+
 test('paper (item 55): MFE and MAE are the best and worst hourly price against the entry up to the close; unknown, never 0, without a priced entry or readings', async (t) => {
   const P = require('../core/paper');
   const s = withReport(t);

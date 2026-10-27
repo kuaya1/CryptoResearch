@@ -51,3 +51,23 @@ export function widestCategoryLink(spread) {
   const name = a.category.id.replace(/_/g, ' ');
   return { href: a.link, text: `Widest category: ${name}`, title: `Claude ${a.category.claude} and ${a.other} ${a.category.other} (${a.category.gap} points apart); opens Compare` };
 }
+
+// The suggested risk in words (L2, 2026-10-26): a figure, "$0" with why the
+// desk sized it so (held by the admission check, capped by the gate, or a
+// proposal that takes no new risk), or "—" when the ticket gives none. Never
+// "None": a sized $0 and a missing value are different facts.
+// { text, why (a few words or null), title (the full reason) }.
+const TAKES_RISK = new Set(['ACCUMULATE', 'LIMIT_TRAP']);
+const usd0 = (n) => `$${n.toLocaleString('en-US', { maximumFractionDigits: n < 100 ? 2 : 0 })}`;
+export function riskWords(ticket) {
+  const t = ticket || {};
+  const n = t.suggested_risk_usd;
+  if (!isNum(n) || n < 0) return { text: '—', why: null, title: 'This ticket gives no suggested risk.' };
+  if (n > 0) return { text: usd0(n), why: null, title: `The desk's sizing gate suggests ${usd0(n)} of risk.` };
+  const held = t.admission && t.admission.held_risk;
+  if (held) return { text: '$0', why: 'Held', title: `Held at $0 by the admission check${isNum(held.risk_usd) ? ` (sized ${usd0(held.risk_usd)} before it)` : ''}: ${held.reason || 'no reason recorded'}.` };
+  const capped = t.capped;
+  const reason = (capped && capped.reason) || (Array.isArray(t.gate_reasons) && t.gate_reasons[0]) || null;
+  if (capped || TAKES_RISK.has(t.proposal_type)) return { text: '$0', why: 'Capped', title: `Capped at $0 by the desk's gate: ${reason || 'no reason recorded'}.` };
+  return { text: '$0', why: 'No new risk', title: `This proposal takes no new risk${reason ? `: ${reason}` : '.'}` };
+}

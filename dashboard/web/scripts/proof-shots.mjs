@@ -7,7 +7,8 @@
 //   inspector  #/watchlist?p=<relay>: the Key metrics strip (cells, one row,
 //              any label or figure wrapped, notes under a figure wrapped);
 //   review     #/review?p=<relay>: the three panes drawn, and raw record IDs
-//              or hashes in their visible text (tooltips are not visible);
+//              or hashes in their visible text (tooltips are not visible;
+//              any visible one fails the proof, L6);
 //   portfolio  #/portfolio: the Needs attention count on the rail.
 // Every page also records its errors and any request that is not a GET
 // (there must be none). Never the live desk and never real records.
@@ -119,7 +120,9 @@ try {
     const measures = ready ? await tab.evalJs(MEASURE[s.name]) : null;
     await tab.shot(path.join(out, `${s.name}.png`));
     const entry = { name: s.name, label: s.label, route: s.route, file: `${s.name}.png`, ready: Boolean(ready), measures: measures && !measures.error ? measures : null, errors: [...tab.errors].slice(0, 10), writes: [...tab.writes].slice(0, 10) };
-    if (!entry.ready || !entry.measures || entry.errors.length || entry.writes.length) failed++;
+    // Raw record IDs on Review's screen fail the proof (L6, 2026-10-26).
+    entry.clean = Boolean(entry.ready && entry.measures && !entry.errors.length && !entry.writes.length && !(entry.measures && entry.measures.raw_ids_visible));
+    if (!entry.clean) failed++;
     proof.shots.push(entry);
     await tab.close();
   }
@@ -133,6 +136,6 @@ try {
   }
 }
 fs.writeFileSync(path.join(out, 'proof.json'), `${JSON.stringify(proof, null, 1)}\n`);
-for (const s of proof.shots) console.log(`${s.ready && s.measures && !s.errors.length && !s.writes.length ? 'ok  ' : 'FAIL'} ${s.name} ${JSON.stringify(s.measures)}${s.errors.length ? ` errors: ${s.errors.join(' | ')}` : ''}${s.writes.length ? ` writes: ${s.writes.join(', ')}` : ''}`);
+for (const s of proof.shots) console.log(`${s.clean ? 'ok  ' : 'FAIL'} ${s.name} ${JSON.stringify(s.measures)}${s.errors.length ? ` errors: ${s.errors.join(' | ')}` : ''}${s.writes.length ? ` writes: ${s.writes.join(', ')}` : ''}`);
 console.log(`\n${proof.shots.length - failed} of ${proof.shots.length} views captured cleanly into ${out}.`);
 process.exit(failed ? 1 : 0);

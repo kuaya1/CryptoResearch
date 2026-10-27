@@ -48,7 +48,7 @@ function Moved({ mv, who }) {
   return (
     <dl className="ci-moved">
       {mv.grade.changed ? <Then label="Grade" then={mv.grade.then} now={mv.grade.now} /> : <div className="ci-mv"><dt>Grade</dt><dd>{`${mv.grade.now} (unchanged)`}</dd></div>}
-      {mv.verdict.changed ? <Then label="Verdict" then={mv.verdict.then || 'None'} now={mv.verdict.now || 'None'} /> : null}
+      {mv.verdict.changed ? <Then label="Verdict" then={mv.verdict.then || 'No verdict'} now={mv.verdict.now || 'No verdict'} /> : null}
       {mv.risk.changed ? <Then label="Strongest sourced risk" then={risk(mv.risk.then)} now={risk(mv.risk.now)} /> : null}
       {mv.confirm.changed ? <Then label="Would confirm" then={mv.confirm.then || none} now={mv.confirm.now || none} /> : null}
       {mv.break.changed ? <Then label="Would break it" then={mv.break.then || none} now={mv.break.now || none} /> : null}
@@ -73,8 +73,8 @@ function RepLink({ s, pid, prov, label }) {
 // One model as a card: its name, the grade then and now, its verdict now,
 // and the two reports by their dates.
 function Row({ r, pid }) {
-  const from = r.then ? r.then.grade_words : 'None';
-  const to = r.now ? r.now.grade_words : 'None';
+  const from = r.then ? r.then.grade_words : 'No report then';
+  const to = r.now ? r.now.grade_words : 'No eligible report';
   return (
     <li className="ci-row ci-card" data-key={`ci-row-${r.provider}`} data-same={r.same ? 'true' : 'false'}>
       <p className="ci-model">

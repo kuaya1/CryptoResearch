@@ -175,7 +175,7 @@ function Triggers({ p, cr, wait }) {
         <dd>
           {risk ? (
             <>
-              <p className="ik-t clamp-2" data-part="risk-text" title={risk.text}>{risk.text}</p>
+              <p className="ik-t" data-part="risk-text">{risk.text}</p>
               <p className="tl-cite">
                 {risk.tags.map((tg) => <span key={tg} className={`etag t-${tg.toLowerCase()}`} title={TAG_TITLES[tg]}>{TAG_WORDS[tg]}</span>)}
                 {srcUrl ? <a href={srcUrl} target="_blank" rel="noopener noreferrer nofollow" data-key={`th-risk-src-${pid}`}>{srcName}<ArrowUpRight size={12} aria-hidden="true" /></a> : src ? <span>{srcName}</span> : <span className="faint">No source cited</span>}
@@ -187,14 +187,14 @@ function Triggers({ p, cr, wait }) {
       <div className="ik ik-confirm">
         <dt>Bull · would confirm</dt>
         <dd>
-          {confirm.length ? <p className="ik-t clamp-2" title={confirm[0]}>{confirm[0]}</p> : nr}
+          {confirm.length ? <p className="ik-t">{confirm[0]}</p> : nr}
           {more && confirm.length > 1 ? <ul className="ik-more">{confirm.slice(1).map((x) => <li key={x}>{x}</li>)}</ul> : null}
         </dd>
       </div>
       <div className="ik ik-break">
         <dt>Would break it</dt>
         <dd>
-          {breaks.length ? <p className="ik-t clamp-1" title={breaks[0]}>{breaks[0]}</p> : nr}
+          {breaks.length ? <p className="ik-t">{breaks[0]}</p> : nr}
           {more && breaks.length > 1 ? <ul className="ik-more">{breaks.slice(1).map((x) => <li key={x}>{x}</li>)}</ul> : null}
         </dd>
       </div>

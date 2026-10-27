@@ -12,6 +12,9 @@ import { h } from '../../../public/ui.js';
 import { isChunkError } from '../components/Boundary.jsx';
 import { Slots, findSlots } from './slots.jsx';
 
+export const VIEW_WAIT_MS = 12000;
+const TITLES = { research: 'Research', portfolio: 'Portfolio', settings: 'Preferences', new: 'New research', explorer: 'the Explorer' };
+
 function captureState(root) {
   const details = {};
   for (const d of root.querySelectorAll('details[data-key]')) details[d.dataset.key] = d.open;
@@ -66,20 +69,36 @@ export default function LegacyView({ load, name }) {
     legacyState.focusClaimed = false;
     legacyState.dirty = false;
     setStale(false);
-    let node;
-    try {
-      const view = await load();
-      node = await view(legacyCtx, nav.route);
-    } catch (err) {
-      console.error(err);
+    const failure = (title, why) => {
       // Said in place with Try again (draws it once more, never a write);
       // the shell around it keeps working (review 2026-10-08, F3).
       const again = h('button', { type: 'button', class: 'btn btn-sm btn-primary', dataset: { key: 'view-retry' } }, 'Try again');
       again.addEventListener('click', () => draw('nav'));
       const reload = h('button', { type: 'button', class: 'btn btn-sm', dataset: { key: 'view-reload' } }, 'Reload the page');
       reload.addEventListener('click', () => location.reload());
+      return h('div', { class: 'view-error', role: 'alert' }, h('p', { class: 've-title' }, title), h('p', { class: 've-why' }, why), h('p', { class: 'faint' }, 'Your records are unchanged; nothing was saved or sent.'), h('div', { class: 've-actions' }, again, reload));
+    };
+    // A page never sits blank (L3, 2026-10-26): a first drawing says it is
+    // loading at once, and a desk too busy to answer within VIEW_WAIT_MS is
+    // said with Try again. An answer that arrives later is still drawn.
+    let slow = null;
+    if (!snapshot) {
+      root.replaceChildren(h('p', { class: 'view-loading', role: 'status', dataset: { key: 'view-loading' } }, `Loading ${(name === 'research' && nav.route && nav.route.query.get('tab') === 'outcomes') ? 'Outcomes' : TITLES[name] || 'this page'}…`));
+      slow = setTimeout(() => {
+        if (mine !== seq.current || !host.current) return;
+        root.replaceChildren(failure('This page is taking too long', `The desk has not answered within ${Math.round(VIEW_WAIT_MS / 1000)} seconds. It may be busy with research; the page appears here if the answer arrives.`));
+      }, VIEW_WAIT_MS);
+    }
+    let node;
+    try {
+      const view = await load();
+      node = await view(legacyCtx, nav.route);
+    } catch (err) {
+      console.error(err);
       const why = isChunkError(err) ? 'Part of the desk could not be downloaded: the connection dropped, or the desk was updated since this page was opened (Reload gets the new version).' : `Something went wrong while drawing it: ${err.message}.`;
-      node = h('div', { class: 'view-error', role: 'alert' }, h('p', { class: 've-title' }, 'This page could not be shown'), h('p', { class: 've-why' }, why), h('p', { class: 'faint' }, 'Your records are unchanged; nothing was saved or sent.'), h('div', { class: 've-actions' }, again, reload));
+      node = failure('This page could not be shown', why);
+    } finally {
+      clearTimeout(slow);
     }
     if (mine !== seq.current || !host.current) return;
     if (root.firstChild !== node || root.childNodes.length !== 1) root.replaceChildren(node);

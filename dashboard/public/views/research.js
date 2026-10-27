@@ -41,14 +41,16 @@ async function runsTab(ctx) {
   const jobs = h('div', null,
     card('Latest research per project', h('div', { class: 'rs-latest' }, table([
       { label: 'Project', render: (p) => h('a', { href: `#/project/${encodeURIComponent(p.project_id)}/evidence?open=runs` }, p.name) },
-      { label: 'Latest run', render: (p) => (p.research && p.research.latest_run ? h('div', null, stateText(sentence(p.research.latest_run.status), p.research.latest_run.status === 'completed' ? 'ok' : p.research.latest_run.status === 'failed' ? 'bad' : 'wait'), h('div', { class: 'small muted' }, `${fmtAgo(p.research.latest_run.created_at)} · ${p.research.latest_run.horizon ? p.research.latest_run.horizon.text : ''}`)) : h('span', { class: 'faint small' }, 'None')) },
+      { label: 'Latest run', render: (p) => (p.research && p.research.latest_run ? h('div', null, stateText(sentence(p.research.latest_run.status), p.research.latest_run.status === 'completed' ? 'ok' : p.research.latest_run.status === 'failed' ? 'bad' : 'wait'), h('div', { class: 'small muted' }, `${fmtAgo(p.research.latest_run.created_at)} · ${p.research.latest_run.horizon ? p.research.latest_run.horizon.text : ''}`)) : h('span', { class: 'faint small' }, 'No run yet')) },
       { label: 'Models', render: (p) => h('div', { class: 'grades' }, PROVIDERS.map((prov) => gradeBadge(prov, p.providers && p.providers[prov], p.research && p.research.providers && p.research.providers[prov], { staleDays, hosted, onHold: Boolean(onHoldOf(ctx.state.index, prov)) }))) },
       { label: 'Reports', num: true, render: (p) => String(p.report_count || 0) },
     ], projects, { empty: 'No projects yet.' })), {
       note: `Each model's job is independent: a failure in one never erases another's result. Price refreshes never start research. ${routes}. Spend this month: $${(r.spend && r.spend.monthly) || 0} · today: $${(r.spend && r.spend.daily) || 0} · budget per run ${money(r.budget && r.budget.per_run_usd)}, day ${money(r.budget && r.budget.daily_usd)}, month ${money(r.budget && r.budget.monthly_usd)} · unattended runs ${r.unattended_enabled ? 'on' : 'off'}`,
       actions: [runNow, h('a', { class: 'btn small', href: ctx.hrefWith ? ctx.hrefWith({ prefs: 'models' }) : '#/settings?tab=research', dataset: { key: 'research-routes' } }, hosted ? 'Routes, API keys and limits' : 'Routes and API access')],
     }));
-  return h('div', null, jobs, await pilotBoard(ctx), await exitMatrix(ctx));
+  // The two reads go together, so a busy desk costs one wait, not two (L3).
+  const [pilot, exits] = await Promise.all([pilotBoard(ctx), exitMatrix(ctx)]);
+  return h('div', null, jobs, pilot, exits);
 }
 
 // The Track 2 pilot queue (item 54, GET /api/tickets/candidates): each
@@ -128,7 +130,16 @@ function h_(text, cls = '', title = null) {
   return h('span', { class: `num ${cls}`.trim(), title }, text);
 }
 async function outcomesTab(ctx) {
-  const o = await ctx.api.get('/api/research/outcomes');
+  // The digest, the paper book and the outcomes are read together (L3), and
+  // the paper book stays readable when the outcomes cannot be read (L7).
+  const digest = digestBar(ctx);
+  const paper = paperCard(ctx);
+  let o;
+  try {
+    o = await ctx.api.get('/api/research/outcomes');
+  } catch (err) {
+    return h('div', null, await digest, await paper, card('After each report', h('p', { class: 'muted' }, `The report outcomes could not be read: ${err.message}`)));
+  }
   const days = o.horizons_days || [30, 60, 90, 120];
   const models = card('By model', table([
     { label: 'Model', render: (m) => h('strong', null, PROVIDER_LABELS[m.provider]) },
@@ -149,7 +160,7 @@ async function outcomesTab(ctx) {
     { label: 'Start', render: (r) => h('span', { class: 'small', title: r.note || (r.start.basis === 'run_packet' ? "When the research run's evidence packet was captured" : 'When the report was saved (it answers no run)') }, r.start.project ? `${fmtDate(r.start.at)}` : 'No price') },
     ...days.map((d) => ({ label: `${d}d vs BTC`, num: true, render: (r) => horizonCell(r.horizons.find((x) => x.days === d)) })),
   ], rows, { size: 50, label: 'Report outcomes', empty: 'No eligible reports yet.' }));
-  return h('div', null, await digestBar(ctx), models, list, await paperCard(ctx));
+  return h('div', null, await digest, await paper, models, list);
 }
 
 // The seven-day desk telemetry (tickets.digest): @6 reports completed,
@@ -180,7 +191,7 @@ async function paperCard(ctx) {
   try {
     b = await ctx.api.get('/api/paper');
   } catch (_) {
-    return card('Paper', h('p', { class: 'muted' }, 'The paper book could not be read.'));
+    return card('Paper Book', h('p', { class: 'muted' }, 'The paper book could not be read.'));
   }
   const ret = (x) => {
     const r = returnWords(x);
@@ -226,7 +237,7 @@ async function paperCard(ctx) {
     toggle.setAttribute('aria-pressed', String(on));
     body.replaceChildren(on ? shadow : positions);
   };
-  return card('Paper', h('div', null,
+  return card('Paper Book', h('div', null,
     h('p', { class: 'small muted' }, summaryLine(b)),
     body,
   ), { note: b.meaning, actions: [toggle] });
@@ -250,7 +261,7 @@ async function scoutTab(ctx) {
     fact('Ingest', v.ingest === 'ready' ? 'Ready' : 'Not set up', v.ingest === 'ready' ? 'The desk accepts briefs with its ingest key' : 'DESK_INGEST_KEY is not set on this desk'),
     fact('Last brief', last ? fmtAgo(last.received_at) : 'None yet', last ? `${last.brief_id} · ${fmtDate(last.received_at)}` : null),
     fact('Items', String(v.items.length), last ? `${plural(last.items, 'item')} in the last brief, ${last.items_new} new` : null),
-    fact('Lanes missing', last ? (last.lanes_missing.length ? last.lanes_missing.map((l) => SCOUT_LANES[l] || l).join(', ') : 'None') : '—'),
+    fact('Lanes missing', last ? (last.lanes_missing.length ? last.lanes_missing.map((l) => SCOUT_LANES[l] || l).join(', ') : 'No lane missing') : '—'),
     fact('Estimated cost', v.cost_usd_estimate_total === null ? '—' : `$${v.cost_usd_estimate_total.toFixed(2)}`,
       `${plural(v.briefs, 'brief')}${v.briefs_without_cost ? `, ${v.briefs_without_cost} without usage` : ''}; estimated from reported usage at ${v.prices}, not a bill`)));
   const laneSel = select([{ value: '', label: 'All lanes' }, ...v.lanes.map((l) => ({ value: l, label: SCOUT_LANES[l] || l }))], { 'aria-label': 'Lane', onchange: (e) => { scoutFilters.lane = e.target.value; scoutFilters.page = 0; draw(); } });
@@ -360,7 +371,7 @@ async function compareTab(ctx, route) {
     card('Projects', table([
       { label: 'Project', render: (r) => h('div', null, h('a', { href: `#/research?tab=compare&project=${encodeURIComponent(r.p.project_id)}${category ? `&category=${encodeURIComponent(category)}` : ''}` }, r.p.name), h('div', { class: 'small muted' }, `${r.reports} model${r.reports === 1 ? '' : 's'} with reports`)) },
       { label: 'Comparable', render: (r) => (r.p.comparison.comparable_providers.length >= 2 ? r.p.comparison.comparable_providers.map((x) => PROVIDER_LABELS[x]).join(', ') : h('span', { class: 'muted', title: r.p.comparison.reasons.join('\n') || 'Fewer than two comparable reports' }, 'Not comparable')) },
-      { label: category ? 'Spread' : 'Flagged items', wrap: true, render: (r) => (r.matching.length ? h('div', { class: 'chips' }, r.matching.map((m) => h('span', { class: 'chip' }, `${m.label} (${m.section}) ${m.spread === null || m.spread === undefined ? 'n/a' : m.spread}`, m.spread_flag ? h('span', { class: 'sr-only' }, ', above the threshold') : null))) : h('span', { class: 'faint small' }, 'none')) },
+      { label: category ? 'Spread' : 'Flagged items', wrap: true, render: (r) => (r.matching.length ? h('div', { class: 'chips' }, r.matching.map((m) => h('span', { class: 'chip' }, `${m.label} (${m.section}) ${m.spread === null || m.spread === undefined ? 'n/a' : m.spread}`, m.spread_flag ? h('span', { class: 'sr-only' }, ', above the threshold') : null))) : h('span', { class: 'faint small' }, 'Nothing flagged')) },
       { label: 'Not compared', wrap: true, render: (r) => (r.p.comparison.reasons.length ? h('span', { class: 'small muted' }, r.p.comparison.reasons.join('; ')) : null) },
     ], visible, { empty: category ? 'No comparable reports have a value for that item yet.' : 'No projects with reports yet.' })),
     detail);

@@ -60,7 +60,7 @@ export function briefView(brief) {
 const READINESS = [
   ['research', 'research_waiting', 'Research', 'waiting', 'Nothing waiting'],
   ['forensics', 'pilot_exits', 'Forensics', 'missing an exit', 'Exits read'],
-  ['tickets', 'pm_cards', 'Tickets', 'wait for you', 'None waiting'],
+  ['tickets', 'pm_cards', 'Tickets', 'wait for you', 'No ticket waiting'],
 ];
 export function readiness(view) {
   return READINESS.map(([key, id, title, some, none]) => {

@@ -26,3 +26,19 @@ export function needsCount(index) {
   const wallet = (index.attention || []).filter((a) => a.kind === 'wallet_decision').length;
   return open.length - notes + (notes ? 1 : 0) + (pf.quarantine || []).length + wallet;
 }
+
+// A realized result where nothing was sold is not a $0.00 result (L2,
+// 2026-10-26): the assets with an active sale in the ledger, and the words
+// for a position's realized cell. `sold` null means the ledger was not read,
+// and the figure is said as saved.
+export function soldAssets(transactions) {
+  return new Set((transactions || []).filter((t) => t && t.type === 'sell' && !t.voided).map((t) => t.asset_id));
+}
+
+export function realizedWords(p, sold, fmtUsd) {
+  const v = p ? p.realized_known_usd : null;
+  const unknownUnits = Boolean(p && p.realized_unknown_quantity);
+  if (sold && p && !sold.has(p.asset_id) && !unknownUnits) return { text: 'No sales', tone: 'none', title: 'No sale of this asset is recorded, so there is no realized result.' };
+  if (v === null || v === undefined) return { text: 'Unknown', tone: 'unknown', title: 'The realized result could not be worked out.' };
+  return { text: fmtUsd(v), tone: v > 0 ? 'pos' : v < 0 ? 'neg' : '', title: null };
+}

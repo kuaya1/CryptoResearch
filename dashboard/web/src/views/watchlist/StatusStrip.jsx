@@ -107,7 +107,12 @@ function RiskBudget({ rb }) {
     <a className={`rb is-${rb.state}`} href="#/portfolio" data-key="kpi-risk" title={title}>
       <span className="rb-k">Risk budget</span>
       {rb.state === 'no_cap' || rb.state === 'unknown' ? (
-        <span className="rb-none">{rb.words}</span>
+        <span className="rb-none">
+          {rb.words}
+          {/* An empty budget says where to set it (L4): Portfolio's Capital
+              limits form; nothing is saved from here. */}
+          {rb.state === 'no_cap' ? <a className="rb-set" href="#/portfolio?tab=record" data-key="rb-set-cap">Set cap</a> : null}
+        </span>
       ) : (
         <>
           <span className="rb-fig">{`${usd(rb.used)} / ${usd(rb.cap)}`}</span>
@@ -139,7 +144,7 @@ function Cell({ id, label, children, onClick, title, sub = null, active = false,
   );
 }
 
-export function KpiStrip({ d, agenda = null, sources, filters, onView, onBeat, range = '24h' }) {
+export function KpiStrip({ d, agenda = null, settled = true, sources, filters, onView, onBeat, range = '24h' }) {
   const idx = d.index;
   const k = deskKpis(idx, agenda);
   const m = idx.freshness.market;
@@ -198,9 +203,9 @@ export function KpiStrip({ d, agenda = null, sources, filters, onView, onBeat, r
           label="Needs review"
           onClick={() => navigate('#/review')}
           title="Projects with changes since your review, a review of yours due, or research waiting for you. One project counts once."
-          aria={`${k.review.projects} project${k.review.projects === 1 ? '' : 's'} need your review. Open Review`}
+          aria={settled ? `${k.review.projects} project${k.review.projects === 1 ? '' : 's'} need your review. Open Review` : 'Counting the projects that need your review. Open Review'}
         >
-          <span className="kpi-num">{k.review.projects}</span><span className="kpi-unit">{k.review.projects === 1 ? 'project' : 'projects'}</span>
+          {settled ? <><span className="kpi-num">{k.review.projects}</span><span className="kpi-unit">{k.review.projects === 1 ? 'project' : 'projects'}</span></> : <span className="kpi-num faint">…</span>}
         </Cell>
         <Cell
           id="waiting"

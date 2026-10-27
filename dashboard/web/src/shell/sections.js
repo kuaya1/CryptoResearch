@@ -1,5 +1,5 @@
 import { needsCount } from '../../../public/portfolio-model.js';
-import { LayoutList, Inbox, Wallet, FlaskConical } from 'lucide-react';
+import { LayoutList, Inbox, Wallet, FlaskConical, LineChart } from 'lucide-react';
 import { deskKpis } from '../../../public/watchlist-model.js';
 
 // The rail's four daily places (DESIGN_AND_IA_BLUEPRINT.md §3.0; Eric,
@@ -13,6 +13,10 @@ export const SECTIONS = [
   { id: 'review', label: 'Review', icon: Inbox },
   { id: 'portfolio', label: 'Portfolio', icon: Wallet },
   { id: 'research', label: 'Research', icon: FlaskConical },
+  // Outcomes and the Paper Book (L7, 2026-10-26): what Eric reads of the
+  // desk's results, one click away. It is Research's Outcomes tab (report
+  // returns against BTC and the paper positions), never Portfolio.
+  { id: 'outcomes', label: 'Outcomes', icon: LineChart, href: '#/research?tab=outcomes' },
 ];
 
 // Pages that are not on the rail keep their names for the window title.
@@ -31,13 +35,19 @@ export function portfolioNeeds(index) {
 // A count beside a place only where it means "needs you" (§3.0): Review, the
 // projects that need a review (D3: one project counts once); Portfolio, the
 // records that need attention.
-export function navCounts(index, agenda = null) {
+//
+// The Review count is the queue Review draws (review-model.js reviewQueue,
+// the same rule as deskKpis().review, tested in review-queue.test.js), read
+// with the agenda. Until the agenda has answered, the count is "…" so it
+// never shows one number and then another (L4, 2026-10-26).
+export function navCounts(index, agenda = null, { settled = true } = {}) {
   if (!index) return {};
   const k = deskKpis(index, agenda);
   const pf = portfolioNeeds(index);
   const s = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   return {
-    review: k.review.projects ? { n: k.review.projects, tone: 'is-caution', title: `${s(k.review.projects, 'project needs', 'projects need')} your review` } : null,
+    review: !settled ? { n: '…', tone: 'is-caution', title: 'Counting the projects that need your review' }
+      : k.review.projects ? { n: k.review.projects, tone: 'is-caution', title: `${s(k.review.projects, 'project needs', 'projects need')} your review` } : null,
     portfolio: pf ? { n: pf, tone: 'is-info', title: `${s(pf, 'record needs', 'records need')} attention` } : null,
   };
 }

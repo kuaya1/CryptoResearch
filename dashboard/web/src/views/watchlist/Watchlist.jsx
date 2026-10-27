@@ -48,7 +48,7 @@ export default function Watchlist() {
   const d = useDesk();
   // The agenda's due items count toward Needs review, as on the rail and the
   // Review page (D3: one project counts once).
-  const { a: agenda } = useAgendaRead();
+  const { a: agenda, settled } = useAgendaRead();
   const route = nav.route;
   const pid = route.query.get('p');
   const wide = useMedia('(min-width: 1280px)');
@@ -313,12 +313,12 @@ export default function Watchlist() {
           </div>
         </header>
 
-        <DeskHero reviewCount={deskKpis(d.index, agenda).review.projects} />
+        <DeskHero reviewCount={settled ? deskKpis(d.index, agenda).review.projects : null} />
         <div className="desk-bar">
           <h2 className="sec-h">Market</h2>
           <RangeControl value={pf.range} onChange={(r) => { if (r !== pf.range) { save({ ...pf, range: r }); announce(`Changes over ${r}.`); } }} />
         </div>
-        <KpiStrip d={d} agenda={agenda} sources={sources} filters={f} range={pf.range} onView={setView} onBeat={() => setFilter('beat', f.beat === 'yes' ? 'any' : 'yes')} />
+        <KpiStrip d={d} agenda={agenda} settled={settled} sources={sources} filters={f} range={pf.range} onView={setView} onBeat={() => setFilter('beat', f.beat === 'yes' ? 'any' : 'yes')} />
         <ActionBand d={d} />
         <DecisionGrid d={d} rows={live} />
 

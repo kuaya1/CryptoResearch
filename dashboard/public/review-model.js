@@ -72,3 +72,21 @@ export function upcomingOf(index) {
     alerts: items.filter((c) => c.type === 'alert'),
   };
 }
+
+// Record IDs in words (L6, 2026-10-26): the agenda's sentences name reports
+// (2026-10-26_claude_2472be7f), receipts and runs (fr_2026-10-27T022608Z_…)
+// by ID; Review shows each as its date ("Claude's report of Oct 26",
+// "receipt of Oct 27") and keeps the exact IDs for the tooltip. A long hash
+// keeps its first eight characters. { text, ids }.
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const day = (y, m, d) => `${MON[Number(m) - 1]} ${Number(d)}`;
+const ID_RE = /\b(\d{4})-(\d{2})-(\d{2})_(?:claude|chatgpt|gemini)_[0-9a-f]{8}\b|\b[a-z]{1,8}_(\d{4})-(\d{2})-(\d{2})T\d{6}Z(?:_[a-z0-9-]{2,24})?\b|\b([0-9a-f]{8})[0-9a-f]{32,56}\b/g;
+export function plainIds(text) {
+  const ids = [];
+  const out = String(text == null ? '' : text).replace(ID_RE, (m, y, mo, d, y2, mo2, d2, hex) => {
+    ids.push(m);
+    if (hex) return `${hex}…`;
+    return `of ${y ? day(y, mo, d) : day(y2, mo2, d2)}`;
+  });
+  return { text: out, ids };
+}

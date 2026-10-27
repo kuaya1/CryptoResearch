@@ -84,3 +84,5 @@ abbr[title] { text-decoration: none; cursor: help; }
 .inspector.is-error { display: flex; flex-direction: column; }
 .insp-error { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .boot-error h1 { font-family: var(--font-display); font-weight: 700; font-size: var(--fs-2xl); letter-spacing: var(--track-title); margin-bottom: 12px; }
+/* A hosted page while it is read (L3, 2026-10-26): said at once, never blank. */
+.view-loading { margin: 24px; color: var(--text-2); }

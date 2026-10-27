@@ -70,6 +70,8 @@
 }
 /* While the drawer's code loads, or when it could not be drawn. */
 aside.prefs { position: fixed; inset: 0 0 0 auto; z-index: 200; display: flex; align-items: flex-start; padding: 16px; }
+aside.prefs.is-loading { padding: 0; align-items: stretch; }
+aside.prefs.is-loading .prefs-in { width: 100%; }
 
 /* ---- The Daily Brief: a drawer at the right, read-only ---- */
 .dbrief {
