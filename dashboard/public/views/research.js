@@ -65,6 +65,8 @@ async function pilotBoard(ctx) {
     return card('Track 2 Pilot Queue', h('p', { class: 'muted' }, 'The pilot queue could not be read.'));
   }
   const rows = b.rows || [];
+  const cycleOut = h('div', { role: 'status', class: 'pilot-cycle' });
+  const cycleButton = runCycleButton(ctx, cycleOut);
   let gates = [];
   try { gates = (await ctx.api.get('/api/tickets/desk-gates')).waiting || []; } catch (_) { gates = []; }
   return card(`Track 2 Pilot Queue (${rows.length})`, [pagedTable([
@@ -80,7 +82,50 @@ async function pilotBoard(ctx) {
       btn.onclick = action(btn, async () => { await ctx.api.post(`/api/projects/${encodeURIComponent(r.project_id)}/tickets/pilot`, { on: !r.in_pilot }); await ctx.refresh(); return true; }, r.in_pilot ? 'Pilot off for this project' : 'Pilot on for this project');
       return btn;
     } },
-  ], rows, { size: 25, label: 'Pilot candidates', empty: 'No verified, active projects yet.' }), deskGateBar(ctx, gates)], { note: 'Verified, active projects: held first, then by grade. Reading this writes nothing.' });
+  ], rows, { size: 25, label: 'Pilot candidates', empty: 'No verified, active projects yet.' }), deskGateBar(ctx, gates), cycleOut], { note: 'Verified, active projects: held first, then by grade. Reading this writes nothing.', actions: [cycleButton] });
+}
+
+// Run the pilot cycle from the desk (item 71, POST /api/tickets/run-cycle):
+// the dry run's counts and names first (a read, nothing sent), then the run
+// with `expect` (the counts shown), then the receipt's counts and the next
+// steps for Agent 1, Agent 2 and Eric. It starts no research and calls no model.
+const names = (list) => (list || []).map((x) => x.name || x.project_id);
+function cycleLines(r) {
+  const s = r.steps || {};
+  return [
+    ['Enter the pilot', names(s.auto_pilot_sync && s.auto_pilot_sync.opted_in)],
+    ['Desk gates made', names(s.batch_gate && s.batch_gate.made)],
+    ['Exit quotes asked', names(s.quote_candidates && s.quote_candidates.quoted)],
+  ];
+}
+function runCycleButton(ctx, out) {
+  const btn = button('Run pilot cycle', null, { kind: 'small' });
+  btn.dataset.key = 'pilot-cycle';
+  btn.onclick = action(btn, async () => {
+    const plan = await ctx.api.post('/api/tickets/run-cycle', { dry_run: true });
+    const c = plan.counts || {};
+    const confirm = button('Run the cycle', null, { kind: 'primary', key: 'pilot-cycle-confirm' });
+    confirm.onclick = action(confirm, async () => {
+      const done = await ctx.api.post('/api/tickets/run-cycle', { expect: { opted_in: c.opted_in ?? 0, gates_made: c.gates_made ?? 0, quoted: c.quoted ?? 0 } });
+      const n = done.next || {};
+      const dc = done.counts || {};
+      out.replaceChildren(
+        h('p', null, `Entered the pilot: ${dc.opted_in ?? 'unknown'} · desk gates made: ${dc.gates_made ?? 'unknown'} · exit quotes: ${dc.quoted ?? 'unknown'}${dc.errors ? ` · ${plural(dc.errors, 'step')} could not run` : ''}.`),
+        h('ul', null,
+          h('li', null, `Agent 1 (research): ${names(n.agent1_research).join(', ') || 'none'}`),
+          h('li', null, `Agent 2 (ticket): ${names(n.agent2_ticket).join(', ') || 'none'}`),
+          h('li', null, `For you: ${names(n.for_eric).join(', ') || 'none'}`)),
+        (done.errors || []).length ? callout((done.errors || []).map((e) => `${e.step}: ${e.message}`).join(' '), 'bad') : null);
+      await ctx.refresh();
+      return done;
+    }, null);
+    out.replaceChildren(
+      h('p', null, 'The cycle would do this now. No research starts and no model is called.'),
+      h('ul', null, cycleLines(plan).map(([label, list]) => h('li', null, `${label} (${list.length}): ${list.join(', ') || 'none'}`))),
+      confirm);
+    return undefined;
+  }, null);
+  return btn;
 }
 
 // Decide the desk's $0 gates together (item 70, POST

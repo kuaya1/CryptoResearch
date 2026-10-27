@@ -1085,6 +1085,23 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     if (b.dry_run === true) return plan;
     return after(tickets.decideDeskGates(ws, { action: b.action, receipt_ids: Array.isArray(b.receipt_ids) ? b.receipt_ids : Array.isArray(b.expect) ? b.expect : null, request_id: b.request_id, note: typeof b.note === 'string' ? b.note : null, by: 'dashboard' }));
   });
+  // The pilot cycle from the desk (tickets.js runCycle, item 71): `dry_run` is
+  // a read that sends nothing; `expect` is the counts shown ({ opted_in,
+  // gates_made, quoted }), and a run that would do more than that is a 409
+  // with nothing done. Exit quotes go through the existing adapter, budget,
+  // gates and the restored copy's hold; no research, no ticket text, no model.
+  route('POST', '/api/tickets/run-cycle', async (m, req, res, body) => {
+    const b = body || {};
+    const limit = b.limit === undefined || b.limit === null ? 10 : b.limit;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new HttpError(400, 'limit is a whole number from 1 to 200.');
+    const plan = await tickets.runCycle(ws, { limit, dryRun: true });
+    if (b.expect && typeof b.expect === 'object') {
+      const over = ['opted_in', 'gates_made', 'quoted'].filter((k) => Number.isInteger(b.expect[k]) && typeof plan.counts[k] === 'number' && plan.counts[k] > b.expect[k]);
+      if (over.length) throw new HttpError(409, `The cycle would do more than was shown (${over.map((k) => `${k.replace(/_/g, ' ')} ${plan.counts[k]}, not ${b.expect[k]}`).join('; ')}). Nothing was done; look again and run it.`);
+    }
+    if (b.dry_run === true) return plan;
+    return after(await tickets.runCycle(ws, { limit }));
+  });
   // Auto-pilot sync (tickets.js autoPilotSync): same `dry_run` and `expect`
   // rules as the batch gate.
   route('POST', '/api/tickets/auto-pilot-sync', (m, req, res, body) => {

@@ -338,3 +338,13 @@ test('Pilot Queue desk gates (item 70): the buttons dry-run first, then post wit
   assert.match(bar, /'Watch', 'watch'/);
   assert.match(bar, /'Pass', 'pass'/);
 });
+
+test('Pilot Queue cycle (item 71): the button dry-runs first and posts with the counts shown', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'research.js'), 'utf8');
+  const part = src.slice(src.indexOf('function runCycleButton'), src.indexOf('// Decide the desk'));
+  assert.deepEqual([...new Set([...part.matchAll(/api\.post\('([^']+)'/g)].map((m) => m[1]))], ['/api/tickets/run-cycle']);
+  assert.match(part, /dry_run: true/);
+  assert.match(part, /expect: \{ opted_in: c\.opted_in \?\? 0, gates_made: c\.gates_made \?\? 0, quoted: c\.quoted \?\? 0 \}/);
+  assert.match(part, /Run pilot cycle/);
+  assert.match(part, /Agent 1 \(research\)/);
+});

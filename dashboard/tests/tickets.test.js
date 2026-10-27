@@ -2190,3 +2190,73 @@ test('desk gates together (item 70): the route reads GET, dry-runs, and is a 409
   assert.equal(ok.status, 200);
   assert.equal(ok.json.decided.length, 1);
 });
+
+// ---------------------------------------------------------------------------
+// The pilot cycle from the desk (backlog item 71)
+
+test('pilot cycle route (item 71): a dry run writes nothing and sends nothing; expect exceeded is a 409; a run answers runCycle\'s receipt', async (t) => {
+  const s = withReport(t);
+  stubClaudeReport(t);
+  stubHeld(t, s.pid, false);
+  const http = require('http');
+  const { start } = require('../server');
+  const today = require('../core/dates').ymdInTz(new Date());
+  const { atomicWrite, jsonText, readJson } = require('../core/fsx');
+  atomicWrite(s.ws.abs('logs/jobs-state.json'), jsonText({ schema_version: 'cr.jobs-state.v1', jobs: { snapshot: { last_success_day: today }, reviews: { last_success_day: today }, backup: { last_success_day: today } }, runner: {} }));
+  const srv = await start(s.ws, { port: 47900 + Math.floor(Math.random() * 90), quiet: true });
+  t.after(() => { try { srv.shutdown(); } catch (_) { /* stopped */ } });
+  for (let i = 0; i < 150; i++) {
+    const st = readJson(s.ws.abs('logs/jobs-state.json'), { jobs: {} });
+    if (st.jobs && st.jobs.inbox && st.jobs.inbox.last_run_at) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  const call = (method, p, token, body) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: srv.port, method, path: p, headers: { host: `127.0.0.1:${srv.port}`, 'x-cr-token': token, 'content-type': 'application/json', origin: `http://127.0.0.1:${srv.port}` } }, (res) => {
+      const c = [];
+      res.on('data', (d) => c.push(d));
+      res.on('end', () => resolve({ status: res.statusCode, json: (() => { try { return JSON.parse(Buffer.concat(c).toString()); } catch (_) { return null; } })() }));
+    });
+    req.on('error', reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+  const token = await new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port: srv.port, path: '/api/session', headers: { host: `127.0.0.1:${srv.port}` } }, (res) => { const c = []; res.on('data', (d) => c.push(d)); res.on('end', () => resolve(JSON.parse(Buffer.concat(c).toString()).token)); }).on('error', reject));
+  const pilotBefore = T.view(s.ws, s.pid).pilot;
+  const dry = await call('POST', '/api/tickets/run-cycle', token, { dry_run: true });
+  assert.equal(dry.status, 200);
+  assert.equal(dry.json.dry_run, true);
+  assert.equal(dry.json.counts.opted_in, 1);
+  assert.equal(T.view(s.ws, s.pid).pilot, pilotBefore, 'a dry run opts nobody in');
+  assert.equal((await call('POST', '/api/tickets/run-cycle', token, { dry_run: true, limit: 0 })).status, 400);
+  const over = await call('POST', '/api/tickets/run-cycle', token, { expect: { opted_in: 0, gates_made: 0, quoted: 0 } });
+  assert.equal(over.status, 409);
+  assert.equal(T.view(s.ws, s.pid).pilot, pilotBefore, 'nothing was done');
+  const ran = await call('POST', '/api/tickets/run-cycle', token, { expect: { opted_in: 1, gates_made: 0, quoted: 0 } });
+  assert.equal(ran.status, 200);
+  assert.equal(ran.json.format, 'cr-run-cycle@1');
+  assert.equal(ran.json.dry_run, false);
+  assert.equal(ran.json.counts.opted_in, 1);
+  assert.equal(T.pendingFor(s.ws).length, 0, 'no Prosecutor job, no research');
+});
+
+test('pilot cycle (item 71): a dry run asks no provider, and a restored copy asks no quote', async (t) => {
+  const s = withReport(t);
+  stubClaudeReport(t);
+  stubHeld(t, s.pid, false);
+  const boom = () => { throw new Error('a provider was asked'); };
+  const dry = await T.runCycle(s.ws, { dryRun: true, fetchImpl: boom, cgGetImpl: boom });
+  assert.deepEqual(dry.errors, []);
+  const run = await T.runCycle(s.ws, { fetchImpl: boom, cgGetImpl: boom });
+  assert.deepEqual(run.errors, []);
+  assert.equal(run.counts.quoted, 0);
+  // A restored copy: the quote path refuses before any request.
+  const research = require('../core/research');
+  const real = research.restoredHold;
+  research.restoredHold = () => ({ held: true });
+  t.after(() => { research.restoredHold = real; });
+  const FM = require('../core/forensic-monitor');
+  const q = await FM.quoteSizeUsd(s.ws, s.pid, { size_usd: 500, fetchImpl: boom, cgGetImpl: boom }).catch((e) => ({ status: 'refused', reason: e.message }));
+  assert.match(String(q.status || q.reason), /refused|held|restored/i);
+  const out = await T.runCycle(s.ws, { fetchImpl: boom, cgGetImpl: boom });
+  assert.equal(out.counts.quoted, 0);
+});
