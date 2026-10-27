@@ -243,7 +243,7 @@ function main(argv) {
   // the rest, the test output's tail included, is data in the log.
   const summary = (text, reasons = null) => { if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${text}\n\n`); LOG.write(text, reasons ? { title: 'agent-verify', reasons } : {}); };
   const task = JSON.parse(fs.readFileSync(flags.task, 'utf8'));
-  if (task.agent === false) { summary('Owner change: not an agent candidate, so the behavioral contract does not apply. The required tests still do.'); return 0; }
+  if (task.agent === false) { summary('Not an agent candidate, so the behavioral contract does not apply. The required tests still do.'); return 0; }
   if (!task.agent || !task.ok) { summary('### Not verified\n\n- agent-guard does not hold for this candidate; see its check.', ['agent-guard does not hold for this candidate; see its check']); return 1; }
   const policy = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'agent-policy.json'), 'utf8'));
   const base = git(tree, ['rev-parse', '--verify', `${flags.rev || 'HEAD'}^1`]).out;

@@ -23,8 +23,10 @@
 //
 // Conclusions on the agent-review check: pass is success, changes_required
 // failure; anything that needs Eric (insufficient evidence, a ceiling, an
-// unreadable answer, a lost attempt, the review off) is action_required. An
-// owner change is neutral, posted by agent-checks.yml.
+// unreadable answer, a lost attempt, the review off) is action_required. A
+// change that is not an agent candidate is never reviewed by a model:
+// agent-checks.yml posts its check, neutral for Eric's own change and
+// action_required for any other until his eric-reviewed dispatch.
 
 const crypto = require('crypto');
 const fs = require('fs');
@@ -266,7 +268,7 @@ async function reviewHead({ pr, head, env = process.env, cwd = process.cwd(), re
 
   // 2. The agent checks, free, before anything is paid for.
   const g = await G.prCheck({ cwd, base: `refs/remotes/${remote}/${p.base.ref}`, head, branch: p.head.ref, author: p.user && p.user.login, botLogin, issueOf: gh.issue, pr, policy });
-  if (g.agent === false) return say('owner', 'Owner change: agent-checks posts its review check; no model review.');
+  if (g.agent === false) return say('owner', 'Not an agent candidate: agent-checks posts its review check; no model review.');
   if (!g.ok) { await post(checkBody({ head, conclusion: 'failure', title: 'Not reviewed: the agent candidate does not hold', summary: g.reasons.map((r) => `- ${r}`).join('\n'), runUrl })); return say('refused', `Not reviewed: ${g.reasons.join('; ')}`, { posted: true }); }
   // A backlog task the PM stopped on reads [BLOCKED: …] at its head: it
   // waits for Eric, and no paid review is asked for it.

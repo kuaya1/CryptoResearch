@@ -124,6 +124,41 @@ test('a task that names no files or tests is scoped by its template: any file in
   assert.match(G.builderPrompt(named), /Regression tests to add or change: dashboard\/tests\/widget\.test\.js\nFiles you may change: dashboard\/core\/widget\.js, dashboard\/tests\/widget\.test\.js\n/);
 });
 
+// A tree made with Git's own commands, so a name that is one file with
+// another on Windows can be built on any filesystem: main's files, less
+// `drop`, plus `add`.
+function treeOf(cwd, base, add, drop = []) {
+  const env = { ...process.env, GIT_INDEX_FILE: path.join(cwd, '.git', `index-${Math.random().toString(16).slice(2)}`) };
+  const run = (args, input) => {
+    const r = spawnSync('git', args, { cwd, encoding: 'utf8', env, input });
+    assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+    return String(r.stdout).trim();
+  };
+  run(['read-tree', base]);
+  for (const p of drop) run(['update-index', '--force-remove', '--', p]);
+  for (const [p, text] of Object.entries(add)) run(['update-index', '--add', '--cacheinfo', `100644,${run(['hash-object', '-w', '--stdin'], text)},${p}`]);
+  const tree = run(['write-tree']);
+  fs.rmSync(env.GIT_INDEX_FILE, { force: true });
+  return tree;
+}
+
+test('a changed name that is one file or folder on Windows with a name already in the tree is refused, as backlog promotion refuses it (red-team review, 2026-10-27)', (t) => {
+  const r = repo(t);
+  const task = G.taskOf(issueOf({ 'Files to change': '_No response_', 'Regression tests': '_No response_' }), { policy: POLICY });
+  const reasons = (add, drop) => G.checkChange({ cwd: r.work, base: r.base, rev: treeOf(r.work, r.base, add, drop), task }).reasons.join('\n');
+  const test = { 'dashboard/tests/widget.test.js': GOOD['dashboard/tests/widget.test.js'] };
+  assert.equal(reasons({ ...GOOD }), '', 'the good change holds');
+  // A new file beside main's unchanged widget.js: on Eric's PC Git writes
+  // one of the two, so the new one can stand in for the module CI tested.
+  assert.match(reasons({ ...test, 'dashboard/core/Widget.js': 'module.exports = { size: () => 0 };\n' }), /dashboard\/core\/Widget\.js and dashboard\/core\/widget\.js are one file on Windows/);
+  // A folder that differs only in letter case is one folder there.
+  assert.match(reasons({ ...test, 'dashboard/Core/extra.js': 'module.exports = 1;\n' }), /dashboard\/Core and dashboard\/core are one folder on Windows/);
+  // Two changed names still clash with each other.
+  assert.match(reasons({ ...test, 'dashboard/core/a.js': '1;\n', 'dashboard/core/A.js': '2;\n' }), /dashboard\/core\/A\.js and dashboard\/core\/a\.js are one file on Windows|dashboard\/core\/a\.js and dashboard\/core\/A\.js are one file on Windows/);
+  // A rename in letter case alone leaves one name: no clash.
+  assert.doesNotMatch(reasons({ ...test, 'dashboard/core/Widget.js': GOOD['dashboard/core/widget.js'] }, ['dashboard/core/widget.js']), /on Windows/);
+});
+
 test('the build\'s patch is applied to main as data and checked again as a tree', (t) => {
   const r = repo(t);
   const task = G.taskOf(issueOf(), { policy: POLICY });
@@ -205,6 +240,37 @@ test('an owner change is not an agent candidate; any builder trace makes it one'
     assert.equal(r2.agent, true);
     assert.equal(r2.ok, false);
   }
+});
+
+test('only Eric\'s own change gets the owner pass: another opener, an automation branch or an assistant\'s or bot\'s commit waits for Eric\'s review of its exact head (red-team review, 2026-10-27)', async (t) => {
+  const r = repo(t);
+  fs.writeFileSync(path.join(r.work, 'dashboard/core/widget.js'), 'module.exports = { size: (s) => s.length + 0 };\n');
+  git(r.work, ['commit', '-q', '-am', 'Eric\'s change']);
+  const eric = git(r.work, ['rev-parse', 'HEAD']);
+  const check = (o) => G.prCheck({ cwd: r.work, base: r.base, head: eric, branch: 'eric/widget', author: 'kuaya1', owner: 'kuaya1', botLogin: 'cr-builder[bot]', issueOf: async () => null, policy: POLICY, ...o });
+  const own = await check({});
+  assert.deepEqual([own.agent, own.ok, own.owner, own.why], [false, true, true, []]);
+  assert.match(own.says, /^Owner change:/);
+  // #55: opened by the workflow's bot, on a backlog branch, with Claude's commits.
+  const bot = await check({ author: 'github-actions[bot]' });
+  assert.deepEqual([bot.agent, bot.ok, bot.owner], [false, true, false]);
+  assert.match(bot.why.join('\n'), /opened by github-actions\[bot\], not by the repository's owner kuaya1/);
+  assert.match(bot.says, /not Eric's own change[^\n]*no model reviews it[^\n]*waits for Eric's eric-reviewed dispatch for this exact head/);
+  for (const branch of ['claude/backlog-item-9', 'claude/candidate-eng-70', 'claude/admission-71', 'claude/claims/item-9']) {
+    const b = await check({ branch });
+    assert.equal(b.owner, false, branch);
+    assert.match(b.why.join('\n'), /is an automation branch/, branch);
+  }
+  assert.equal((await check({ owner: null })).owner, false, 'no owner known: never an owner change');
+  assert.equal((await check({ author: 'KUAYA1' })).owner, true, 'GitHub logins ignore letter case');
+  fs.writeFileSync(path.join(r.work, 'dashboard/core/widget.js'), 'module.exports = { size: (s) => s.length + 1 };\n');
+  git(r.work, ['commit', '-q', '-am', 'a routine\'s change'], { name: 'Claude', email: 'noreply@anthropic.com' });
+  const claude = await check({ head: git(r.work, ['rev-parse', 'HEAD']) });
+  assert.equal(claude.owner, false);
+  assert.match(claude.why.join('\n'), /commit [0-9a-f]{12} by Claude <noreply@anthropic\.com>/);
+  fs.writeFileSync(path.join(r.work, 'dashboard/core/widget.js'), 'module.exports = { size: (s) => s.length + 2 };\n');
+  git(r.work, ['commit', '-q', '-am', 'a bot\'s change'], { name: 'github-actions[bot]', email: '41898282+github-actions[bot]@users.noreply.github.com' });
+  assert.equal((await check({ head: git(r.work, ['rev-parse', 'HEAD']) })).owner, false);
 });
 
 test('a patch or a builder report that holds a key-shaped string is refused, naming the file and line, never the value', async (t) => {
