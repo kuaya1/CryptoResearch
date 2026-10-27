@@ -66,6 +66,12 @@ const PROTECTED = [
   { re: /^dashboard\/tests\/engineering-guard\.test\.js$/i, why: 'the guard test of the front door and the gate' },
   { re: /^server\.js$/i, why: 'the hosted entry point' },
   { re: /^dashboard\/core\/(portfolio|wallets|walletsync|alchemy)\.js$/i, why: 'financial records (the ledger and wallets)' },
+  // The trader's risk boundary (Junior Trader invariant 3, Eric 2026-10-27;
+  // architecture recovery, PR D): the pre-trade risk engine, both Paper Books
+  // and the exact arithmetic they compute with, and their tests. No builder
+  // or agent-lane candidate changes them.
+  { re: /^dashboard\/core\/(trade-risk|paper|paper-trader|decimal)\.js$/i, why: 'the trader\'s risk boundary and the Paper Books, with the arithmetic they compute with' },
+  { re: /^dashboard\/tests\/(trade-risk|paper-trader|trader-boundary)\.test\.js$/i, why: 'the tests of the trader\'s risk boundary and its Paper Book' },
   { re: /^(package(-lock)?\.json|dashboard\/web\/package(-lock)?\.json)$/i, why: 'dependencies and scripts' },
   { re: /^render\.ya?ml$/i, why: 'deployment' },
   { re: /^(portfolio|paper|projects|config|secrets|scout)\//i, why: 'records, never committed' },
