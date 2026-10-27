@@ -24,7 +24,7 @@ const LEGACY = {
   calendar: '#/review?seg=upcoming',
 };
 const LEGACY_IMPORT_TABS = { reports: '#/review?seg=imports', inbox: '#/review?seg=imports&imp=inbox', portfolio: '#/portfolio?tab=record', settings: '#/watchlist?prefs=data', data: '#/watchlist?prefs=data', privacy: '#/watchlist?prefs=system' };
-export const ROUTE_NAMES = ['new', 'watchlist', 'project', 'portfolio', 'research', 'review', 'settings', 'explorer'];
+export const ROUTE_NAMES = ['new', 'watchlist', 'project', 'portfolio', 'research', 'review', 'settings', 'explorer', 'pipeline'];
 // Settings moved into the Preferences drawer (§3.6): its former tabs, by the
 // section that holds them now.
 const SETTINGS_TABS = { research: 'models', general: 'data', rubrics: 'rubrics', data: 'data', system: 'system', activity: 'activity', appearance: 'appearance', screening: 'screening', forensics: 'screening', developer: 'developer', explorer: 'developer' };

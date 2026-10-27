@@ -11,6 +11,7 @@ import Watchlist from './views/watchlist/Watchlist.jsx';
 
 const ProjectPage = retryableLazy(() => import('./views/project/ProjectPage.jsx'));
 const Review = retryableLazy(() => import('./views/review/Review.jsx'));
+const PipelineCockpit = retryableLazy(() => import('./views/system/PipelineCockpit.jsx'));
 const CommandMenu = retryableLazy(() => import('./shell/CommandMenu.jsx'));
 const DailyBrief = retryableLazy(() => import('./shell/DailyBrief.jsx'));
 const Preferences = retryableLazy(() => import('./shell/Preferences.jsx'));
@@ -45,7 +46,9 @@ function RouteView() {
       ? <Suspense fallback={<Loading />}><ProjectPage key={route.args[0]} /></Suspense>
       : route.name === 'review'
         ? <Suspense fallback={<Loading />}><Review /></Suspense>
-        : (
+        : route.name === 'pipeline'
+          ? <Suspense fallback={<Loading />}><PipelineCockpit /></Suspense>
+          : (
         <Suspense fallback={<Loading />}>
           <LegacyView key={route.name} name={route.name} load={() => legacy().then((m) => m.LEGACY_VIEWS[route.name]())} />
         </Suspense>
@@ -53,7 +56,7 @@ function RouteView() {
   return (
     <Boundary
       resetKey={key}
-      onRetry={() => { ProjectPage.retry(); Review.retry(); LegacyView.retry(); }}
+      onRetry={() => { ProjectPage.retry(); Review.retry(); PipelineCockpit.retry(); LegacyView.retry(); }}
       fallback={(error, retry) => <ViewError error={error} retry={retry} what={route.name === 'project' ? 'This project' : 'This page'}><a className="btn btn-sm btn-ghost" href="#/watchlist">Desk</a></ViewError>}
     >
       {view}

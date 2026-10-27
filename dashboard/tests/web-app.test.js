@@ -348,3 +348,22 @@ test('Pilot Queue cycle (item 71): the button dry-runs first and posts with the 
   assert.match(part, /Run pilot cycle/);
   assert.match(part, /Agent 1 \(research\)/);
 });
+
+test('the Pipeline cockpit: routed at #/pipeline, on the rail, read only, tabular figures, nothing under 12.5px', () => {
+  const view = read('web', 'src', 'views', 'system', 'PipelineCockpit.jsx');
+  const css = read('web', 'src', 'styles', 'pipeline.css');
+  assert.match(read('web', 'src', 'lib', 'router.js'), /ROUTE_NAMES = \[[^\]]*'pipeline'/);
+  assert.match(read('web', 'src', 'App.jsx'), /route\.name === 'pipeline'[\s\S]*<PipelineCockpit \/>/);
+  assert.match(read('web', 'src', 'shell', 'sections.js'), /id: 'pipeline', label: 'Pipeline'/);
+  assert.match(read('web', 'src', 'shell', 'CommandMenu.jsx'), /'#\/pipeline', 'Pipeline'/);
+  assert.match(view, /api\.get\('\/api\/pipeline'/);
+  assert.doesNotMatch(view, /api\.post|fetch\(/, 'opening it writes nothing');
+  assert.match(view, /from '\.\.\/\.\.\/\.\.\/\.\.\/public\/pipeline-progress\.js'/, 'the rules are the shared model');
+  assert.match(css, /^\.pl \{[^}]*font-variant-numeric: tabular-nums/m);
+  for (const m of css.matchAll(/font-size:\s*(\d+(?:\.\d+)?)px/g)) assert.ok(Number(m[1]) >= 12.5, `font-size ${m[1]}px`);
+  assert.match(css, /prefers-reduced-motion: reduce/);
+  assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b/i, 'tokens only');
+  // States in words, never colour alone: the active stage and the revision loop each carry their word.
+  assert.match(view, /className="pl-state">\{node\.words\}/);
+  assert.match(view, /<RotateCcw[^>]*\/>Revising/);
+});
