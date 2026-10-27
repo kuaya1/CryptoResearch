@@ -55,6 +55,81 @@ test('the build job holds only the Anthropic key and reads the repository; the A
   assert.match(FILES[0][1], /^permissions: \{\}$/m);
 });
 
+test('the builder runs in Claude Code\'s sandbox: the key unset for commands, npm only, no hooks, no unsandboxed retry', () => {
+  const s = JSON.parse(read('.github/agent/claude-settings.json'));
+  assert.equal(s.disableAllHooks, true);
+  assert.equal(s.sandbox.enabled, true);
+  assert.equal(s.sandbox.failIfUnavailable, true);
+  assert.equal(s.sandbox.allowUnsandboxedCommands, false);
+  assert.equal(s.sandbox.autoAllowBashIfSandboxed, false, 'the allowed tools, not the sandbox, decide which commands run');
+  assert.deepEqual(s.sandbox.network, { allowedDomains: ['registry.npmjs.org'], strictAllowlist: true });
+  assert.deepEqual(s.sandbox.credentials.envVars, [{ name: 'ANTHROPIC_API_KEY', mode: 'deny' }]);
+  assert.equal(s.permissions.blockReadsOutsideWorkingDirectories, true);
+  assert.equal(s.permissions.disableBypassPermissionsMode, 'disable');
+  for (const d of ['WebFetch', 'WebSearch', 'Read(//proc/**)', 'Read(//sys/**)', 'Edit(./.claude/**)', 'Write(./.claude/**)', 'Edit(./.git/**)', 'Write(./.git/**)']) assert.ok(s.permissions.deny.includes(d), d);
+  assert.equal(s.permissions.allow, undefined);
+
+  const b = jobs(FILES[0][1]).build;
+  const at = (needle) => { const i = b.indexOf(needle); assert.ok(i >= 0, needle); return i; };
+  // The copies are taken before the builder starts, and used after it.
+  const copy = at('cp .github/agent/claude-settings.json dashboard/scripts/agent-secrets.js "$RUNNER_TEMP/guard/"');
+  assert.ok(copy < at('cp -R .git "$RUNNER_TEMP/guard/base.git"'));
+  const sandbox = at('bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all');
+  assert.match(b, /kernel\.apparmor_restrict_unprivileged_userns=0/);
+  const build = at('- name: Build (sandboxed)');
+  assert.ok(copy < build && sandbox < build && at('agent-guard.js prompt') < build);
+  assert.match(b, /--settings "\$RUNNER_TEMP\/guard\/claude-settings\.json" --setting-sources user /);
+  assert.equal((b.match(/secrets\.ANTHROPIC_API_KEY/g) || []).length, 1);
+  assert.ok(at('secrets.ANTHROPIC_API_KEY') > build && at('secrets.ANTHROPIC_API_KEY') < at('- name: The change, as data'));
+  assert.match(b, /--allowedTools Read Glob Grep "Edit\(\.\/\*\*\)" "Write\(\.\/\*\*\)" /, 'file tools only inside the checkout');
+  // The change is read with the .git copy, never the one the builder could write.
+  const change = b.slice(at('- name: The change, as data'), at('- name: No key-shaped string'));
+  assert.match(change, /GIT_DIR: \$\{\{ runner\.temp \}\}\/guard\/base\.git\n/);
+  assert.equal((change.match(/git -c core\.hooksPath=\/dev\/null -c core\.fsmonitor=false /g) || []).length, 3);
+  // Scanned before anything is uploaded, by the copy.
+  const scan = at('node "$RUNNER_TEMP/guard/agent-secrets.js" --dir "$RUNNER_TEMP/out"');
+  assert.ok(scan < at('actions/upload-artifact@'));
+  assert.match(b.slice(at('- name: No key-shaped string'), scan), /if: always\(\)/);
+  assert.match(jobs(FILES[0][1]).publish, /agent-guard\.js apply --base "\$BASE" --patch "\$RUNNER_TEMP\/build\/patch\.diff" --build "\$RUNNER_TEMP\/build\/result\.json"/);
+});
+
+test('the sandbox probe is Eric\'s own run from main, under the build\'s settings, at most $0.50, and its check fails unless everything holds', () => {
+  const text = read('.github/workflows/agent-sandbox-probe.yml');
+  assert.match(text, /^on:\n {2}workflow_dispatch:\n\npermissions: \{\}$/m, 'dispatch only');
+  for (const u of text.match(/uses:\s*\S+/g)) assert.match(u, /@[0-9a-f]{40}$/, u);
+  const j = jobs(text);
+  assert.deepEqual(Object.keys(j), ['probe']);
+  assert.match(j.probe, /if: github\.ref == 'refs\/heads\/main' && github\.triggering_actor == github\.repository_owner\n/);
+  assert.match(j.probe, /permissions:\n\s+contents: read\n\s+steps:/);
+  assert.deepEqual(secretsIn(text), ['secrets.ANTHROPIC_API_KEY']);
+  assert.match(j.probe, /--max-budget-usd 0\.5 \\\n\s+--settings "\$RUNNER_TEMP\/guard\/claude-settings\.json" --setting-sources user /);
+  assert.ok(j.probe.indexOf('cp .github/agent/claude-settings.json .github/agent/sandbox-probe.js "$RUNNER_TEMP/guard/"') < j.probe.indexOf('- name: Probe'));
+  assert.match(j.probe, /node "\$RUNNER_TEMP\/guard\/sandbox-probe\.js" --check probe\/report\.json/);
+  assert.doesNotMatch(text, /upload-artifact|contents: write|git push/);
+
+  const probe = require(path.join(ROOT, '.github', 'agent', 'sandbox-probe.js'));
+  const held = { anthropic_key_visible: false, canary_visible: false, npm_registry: 'HTTP 200', other_host: 'blocked (ECONNREFUSED)', anthropic_api: 'blocked (ECONNREFUSED)', proc_self_environ: 'readable, no canary', proc_parent_environ: 'unreadable (ENOENT)', proc_scan: { pids: 3, with_canary: 0 }, write_home: 'refused (EROFS)', write_runner_temp: 'refused (EROFS)', write_checkout: 'written' };
+  const canary = 'c'.repeat(48);
+  const fails = (r, o = {}) => probe.verdict(r, { resultText: 'The read was refused.', canary, ...o }).filter(([, ok]) => !ok).map(([n]) => n);
+  assert.deepEqual(fails(held), []);
+  assert.deepEqual(fails(null), ['report'], 'no report shows nothing either way');
+  assert.deepEqual(fails({ ...held, anthropic_key_visible: true }), ['ANTHROPIC_API_KEY unset for commands']);
+  assert.deepEqual(fails({ ...held, other_host: 'HTTP 200' }), ['any other host blocked']);
+  assert.deepEqual(fails({ ...held, proc_scan: { pids: 9, with_canary: 1 } }), ['no visible process environment holds the canary']);
+  assert.deepEqual(fails({ ...held, write_runner_temp: 'written' }), ['no write to the runner\'s temp (where the guard\'s copies are)']);
+  assert.deepEqual(fails(held, { resultText: `it says ${canary}` }), ['the builder\'s answer does not carry the canary']);
+  assert.deepEqual(fails(held, { canary: '' }), ['the builder\'s answer does not carry the canary'], 'a check without the canary proves nothing');
+});
+
+test('no workflow caches anything (a cache is shared across runs and branches)', () => {
+  const dir = path.join(ROOT, '.github', 'workflows');
+  for (const f of fs.readdirSync(dir).filter((x) => /\.ya?ml$/.test(x))) {
+    const text = fs.readFileSync(path.join(dir, f), 'utf8');
+    assert.doesNotMatch(text, /^\s*cache(-dependency-path)?:/m, f);
+    assert.doesNotMatch(text, /uses:\s*actions\/cache[@/]/, f);
+  }
+});
+
 test('the jobs that run a candidate hold no write permission and no secret, and are never skipped', () => {
   const text = FILES[1][1];
   const j = jobs(text);

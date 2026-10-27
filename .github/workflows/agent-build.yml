@@ -8,7 +8,10 @@
 #            run in the ledger (branch agent-ledger) before anything is sent.
 #   build    Claude Code (pinned by lockfile) in a fresh checkout of main with
 #            no repository write credential, no reviewer token, no OpenAI key
-#            and no App key; its working tree's diff is the only output.
+#            and no App key; its commands run in Claude Code's sandbox
+#            (.github/agent/claude-settings.json) with the Anthropic key unset
+#            and no network but the npm registry. Its working tree's diff is
+#            the only output, scanned for key-shaped strings before upload.
 #   publish  main's guard applies that diff to main as data and checks it
 #            against the task again; the builder App commits it, pushes
 #            agent/issue-<n> and opens the pull request. The App pushes only
@@ -73,30 +76,63 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.21.0
+      # Everything the steps after the builder rely on is copied out of the
+      # checkout before it starts: the sandbox settings, the key scan and the
+      # repository's .git (the builder can write its working tree, .git
+      # included, and the change is then read with this copy).
+      - name: The guard's own copies, taken before the builder starts
+        run: |
+          mkdir -p "$RUNNER_TEMP/guard" "$RUNNER_TEMP/claude" "$RUNNER_TEMP/out"
+          cp .github/agent/claude-settings.json dashboard/scripts/agent-secrets.js "$RUNNER_TEMP/guard/"
+          cp -R .git "$RUNNER_TEMP/guard/base.git"
       - name: Install Claude Code (pinned by lockfile, outside the checkout)
         run: |
-          mkdir -p "$RUNNER_TEMP/claude" "$RUNNER_TEMP/out"
           cp .github/agent/package.json .github/agent/package-lock.json "$RUNNER_TEMP/claude/"
           npm ci --prefix "$RUNNER_TEMP/claude" --no-audit --no-fund
+      # The sandbox needs bubblewrap, socat and unprivileged user namespaces;
+      # Ubuntu 24.04 restricts those through AppArmor (runner-images#10443).
+      # A sandbox that cannot start fails this step, before anything is paid.
+      - name: The sandbox can start, or nothing is built
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends bubblewrap socat
+          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = "1" ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all --die-with-parent true
+          echo "User namespaces work; the builder's commands run in the sandbox."
       - name: The task, from the issue as Eric labeled it
         run: node dashboard/scripts/agent-guard.js prompt --out "$RUNNER_TEMP/task.md"
-      - name: Build
+      # .github/agent/claude-settings.json (the copy): commands run in the
+      # sandbox with ANTHROPIC_API_KEY unset, network only to the npm registry,
+      # file tools only inside the checkout, no hooks, no unsandboxed retry.
+      # Only the user source is read besides it, so the checkout's own
+      # .claude/ settings never apply.
+      - name: Build (sandboxed)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
         run: |
           model=$(node -p "require('./.github/agent-policy.json').build.model")
           budget=$(node -p "require('./.github/agent-policy.json').build.max_budget_usd")
           "$RUNNER_TEMP/claude/node_modules/.bin/claude" -p --model "$model" --max-budget-usd "$budget" \
+            --settings "$RUNNER_TEMP/guard/claude-settings.json" --setting-sources user \
             --output-format json --permission-mode dontAsk --strict-mcp-config --no-session-persistence \
             --append-system-prompt-file .github/agent/builder-rules.md \
             --disallowedTools WebFetch WebSearch \
-            --allowedTools Read Edit Write Glob Grep "Bash(node:*)" "Bash(git diff:*)" "Bash(git status:*)" \
+            --allowedTools Read Glob Grep "Edit(./**)" "Write(./**)" "Bash(node:*)" "Bash(git diff:*)" "Bash(git status:*)" \
             < "$RUNNER_TEMP/task.md" > "$RUNNER_TEMP/out/result.json"
-      - name: The change, as data
+      - name: The change, as data (read with the .git copied before the build)
+        env:
+          GIT_DIR: ${{ runner.temp }}/guard/base.git
+          GIT_WORK_TREE: ${{ github.workspace }}
         run: |
-          git add -A
-          git diff --cached --binary --full-index HEAD > "$RUNNER_TEMP/out/patch.diff"
-          git diff --cached --stat HEAD
+          git -c core.hooksPath=/dev/null -c core.fsmonitor=false add -A
+          git -c core.hooksPath=/dev/null -c core.fsmonitor=false diff --cached --binary --full-index HEAD > "$RUNNER_TEMP/out/patch.diff"
+          git -c core.hooksPath=/dev/null -c core.fsmonitor=false diff --cached --stat HEAD
+      - name: No key-shaped string leaves the runner
+        if: always()
+        run: node "$RUNNER_TEMP/guard/agent-secrets.js" --dir "$RUNNER_TEMP/out"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -127,7 +163,7 @@ jobs:
       - id: apply
         env:
           BASE: ${{ needs.reserve.outputs.base }}
-        run: node dashboard/scripts/agent-guard.js apply --base "$BASE" --patch "$RUNNER_TEMP/build/patch.diff"
+        run: node dashboard/scripts/agent-guard.js apply --base "$BASE" --patch "$RUNNER_TEMP/build/patch.diff" --build "$RUNNER_TEMP/build/result.json"
       - id: app
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:

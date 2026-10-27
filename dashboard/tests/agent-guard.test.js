@@ -161,3 +161,34 @@ test('an owner change is not an agent candidate; any builder trace makes it one'
     assert.equal(r2.ok, false);
   }
 });
+
+test('a patch or a builder report that holds a key-shaped string is refused, naming the file and line, never the value', async (t) => {
+  const r = repo(t);
+  // FICTIONAL, assembled at run time so this file holds no key.
+  const key = ['sk', 'ant', `api03-${'Q7x'.repeat(30)}`].join('-');
+  const leaky = { ...GOOD, 'dashboard/core/widget.js': `module.exports = { size: (s) => s.trim().length };\nconst k = '${key}';\n` };
+  const a = G.applyPatch({ cwd: r.work, base: r.base, patchFile: r.patch(leaky), maxBytes: 600000 });
+  assert.match(a.error, /key-shaped string at dashboard\/core\/widget\.js:2 \(an Anthropic key\)/);
+  assert.ok(!a.error.includes(key));
+  assert.equal(a.tree, undefined, 'no tree is made');
+  // The apply command reads the builder's report too.
+  const outFile = path.join(r.dir, 'gh-output');
+  const event = path.join(r.dir, 'event.json');
+  fs.writeFileSync(event, JSON.stringify({ issue: issueOf() }));
+  const report = path.join(r.dir, 'result.json');
+  fs.writeFileSync(report, JSON.stringify({ result: `Done. The key was ${key}.` }));
+  const before = { out: process.env.GITHUB_OUTPUT, sum: process.env.GITHUB_STEP_SUMMARY };
+  process.env.GITHUB_OUTPUT = outFile;
+  delete process.env.GITHUB_STEP_SUMMARY;
+  t.after(() => { if (before.out === undefined) delete process.env.GITHUB_OUTPUT; else process.env.GITHUB_OUTPUT = before.out; if (before.sum !== undefined) process.env.GITHUB_STEP_SUMMARY = before.sum; });
+  const said = [];
+  t.mock.method(process.stdout, 'write', (s) => { said.push(String(s)); return true; });
+  const patch = r.patch(GOOD);
+  assert.equal(await G.main(['apply', '--event', event, '--base', r.base, '--patch', patch, '--build', report], { cwd: r.work }), 1);
+  assert.match(said.join(''), /report holds a key-shaped string at result\.json:1 \(an Anthropic key\)/);
+  assert.ok(!said.join('').includes(key) && !fs.readFileSync(outFile, 'utf8').includes(key));
+  fs.writeFileSync(report, JSON.stringify({ result: 'Done.', total_cost_usd: 1.5 }));
+  fs.writeFileSync(outFile, '');
+  assert.equal(await G.main(['apply', '--event', event, '--base', r.base, '--patch', patch, '--build', report], { cwd: r.work }), 0);
+  assert.match(fs.readFileSync(outFile, 'utf8'), /^ok=true\ntree=[0-9a-f]{40}\n$/);
+});

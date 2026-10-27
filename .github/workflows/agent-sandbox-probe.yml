@@ -1,0 +1,72 @@
+# The live probe of the builder's sandbox (Engineering v3, owner step 6;
+# audits/2026-10-26-engineering-v3). Eric runs it by hand from main (Actions,
+# agent-sandbox-probe, Run workflow); nothing else starts it. It runs the same
+# pinned Claude Code with the same settings as agent-build.yml's build job,
+# plus a canary variable only this run knows, also denied to commands, and
+# asks Claude to run .github/agent/sandbox-probe.js inside the sandbox and to
+# try reading /proc/self/environ. A check from a copy taken before Claude
+# started says whether the sandbox holds. It costs at most $0.50 of Anthropic
+# credit (--max-budget-usd 0.5), builds nothing, writes nothing to the
+# repository and uploads nothing.
+name: agent-sandbox-probe
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: agent-sandbox-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    if: github.ref == 'refs/heads/main' && github.triggering_actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+      - name: The guard's own copies, taken before Claude starts
+        run: |
+          mkdir -p "$RUNNER_TEMP/guard" "$RUNNER_TEMP/claude"
+          cp .github/agent/claude-settings.json .github/agent/sandbox-probe.js "$RUNNER_TEMP/guard/"
+      - name: Install Claude Code (pinned by lockfile, outside the checkout)
+        run: |
+          cp .github/agent/package.json .github/agent/package-lock.json "$RUNNER_TEMP/claude/"
+          npm ci --prefix "$RUNNER_TEMP/claude" --no-audit --no-fund
+      - name: The sandbox can start, or nothing is run
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends bubblewrap socat
+          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = "1" ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all --die-with-parent true
+      - name: A canary only this run knows, denied to commands like the key
+        run: |
+          canary=$(openssl rand -hex 24)
+          echo "::add-mask::$canary"
+          echo "CR_CANARY_SECRET=$canary" >> "$GITHUB_ENV"
+          node -e 'const f=process.argv[1];const s=JSON.parse(require("fs").readFileSync(f,"utf8"));s.sandbox.credentials.envVars.push({name:"CR_CANARY_SECRET",mode:"deny"});require("fs").writeFileSync(f,JSON.stringify(s,null,2))' "$RUNNER_TEMP/guard/claude-settings.json"
+      - name: Probe (sandboxed, at most $0.50)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
+        run: |
+          model=$(node -p "require('./.github/agent-policy.json').build.model")
+          "$RUNNER_TEMP/claude/node_modules/.bin/claude" -p --model "$model" --max-budget-usd 0.5 \
+            --settings "$RUNNER_TEMP/guard/claude-settings.json" --setting-sources user \
+            --output-format json --permission-mode dontAsk --strict-mcp-config --no-session-persistence \
+            --disallowedTools WebFetch WebSearch \
+            --allowedTools Read Glob Grep "Edit(./**)" "Write(./**)" "Bash(node:*)" "Bash(git diff:*)" "Bash(git status:*)" \
+            < .github/agent/sandbox-probe.md > "$RUNNER_TEMP/probe-result.json" || echo "Claude Code exited with $?."
+      - name: Does the sandbox hold?
+        if: always()
+        run: node "$RUNNER_TEMP/guard/sandbox-probe.js" --check probe/report.json --result "$RUNNER_TEMP/probe-result.json"
