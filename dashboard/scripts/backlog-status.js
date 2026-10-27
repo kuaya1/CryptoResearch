@@ -113,12 +113,16 @@ function gather(cwd = ROOT) {
   // Engineering candidates waiting for review are work in progress too.
   const mergedSet = new Set(git(cwd, ['branch', '-r', '--merged', 'origin/main', '--list', 'origin/claude/backlog-*', 'origin/claude/candidate-eng-*']).out.split('\n').map((s) => s.trim()).filter(Boolean));
   const all = git(cwd, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/remotes/origin/claude/backlog-*', 'refs/remotes/origin/claude/candidate-eng-*']).out.split('\n').map((s) => s.trim()).filter(Boolean);
+  const onMain = new Set(trailers(git(cwd, ['log', 'origin/main', '--format=%B']).out));
+  // An item whose trailer is on main waits for nothing, though its branch's
+  // commits are not: a squash merge (#45, #46 on 2026-10-27) puts the items on
+  // main as one new commit, so the branch, and any branch built on it, still
+  // carries them. A branch left with no item of its own is not waiting.
   const branches = all.filter((b) => !mergedSet.has(b)).map((ref) => ({
     branch: ref.replace(/^origin\//, ''),
-    items: [...new Set(trailers(git(cwd, ['log', `origin/main..${ref}`, '--format=%B']).out))].sort((a, b) => a - b),
-  }));
+    items: [...new Set(trailers(git(cwd, ['log', `origin/main..${ref}`, '--format=%B']).out))].filter((n) => !onMain.has(n)).sort((a, b) => a - b),
+  })).filter((b) => b.items.length);
   const waitingItems = [...new Set(branches.flatMap((b) => b.items))].sort((a, b) => a - b);
-  const onMain = new Set(trailers(git(cwd, ['log', 'origin/main', '--format=%B']).out));
   const backlog = parseBacklog(git(cwd, ['show', `origin/main:${STATE_FILE}`]).out);
   // An engineering branch is never a base: a batch never waits on its review.
   const base = baseOf(cwd, branches.filter((b) => /^claude\/backlog-(?!eng-)/.test(b.branch)));
