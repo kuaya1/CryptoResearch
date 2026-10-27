@@ -210,7 +210,7 @@ const protectedWhy = (p) => { const hit = protectedHit(p); return hit ? hit.why 
 // a scope glob that matches any of them could reach a protected path.
 const PROTECTED_SAMPLES = [
   '.github/workflows/x.yml', '.claude/agents/x.md', 'CLAUDE.md', 'COWORK-INSTRUCTIONS.md', 'DESK_STATE.md',
-  'dashboard/scripts/backlog-promote.js', 'dashboard/scripts/backlog-intake.js', 'dashboard/scripts/merge-train.js', 'dashboard/scripts/engineering-worker.js',
+  'dashboard/scripts/backlog-promote.js', 'dashboard/scripts/backlog-queue.js', 'dashboard/scripts/merge-train.js', 'dashboard/scripts/engineering-worker.js',
   'dashboard/oauth.js', 'dashboard/mcp.js', 'dashboard/mcp-wire.js', 'dashboard/hosted.js', 'server.js',
   'dashboard/core/portfolio.js', 'dashboard/core/wallets.js', 'dashboard/core/walletsync.js', 'dashboard/core/alchemy.js',
   'dashboard/frontdoor.js', 'dashboard/core/offsite.js', 'dashboard/core/ops.js', 'dashboard/core/fsx.js', 'dashboard/core/workspace.js', 'dashboard/tests/engineering-guard.test.js',

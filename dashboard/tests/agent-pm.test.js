@@ -1,8 +1,9 @@
 'use strict';
 // The PM builder (Eric, 2026-10-27; audits/2026-10-27-pm-builder): the Active
 // Backlog's blocks and statuses (agent-backlog.js), the PM's one action per
-// state (agent-pm.js decide), the 60-minute lease and the orphan release
-// (hardening rule 1), the corrective prompt, the block after three
+// state (agent-pm.js decide), the hold on an attempt with no outcome until
+// GitHub says its run ended and the orphan release (hardening rule 1, no
+// clock: red-team review 2026-10-27), the corrective prompt, the block after three
 // remediations, and the briefing (agent-status.js). Fictional tasks, a
 // temporary git remote, a fake GitHub and no OpenAI: nothing is sent.
 
@@ -117,7 +118,7 @@ test('the lock: an open agent/ candidate, a running agent-build or an attempt in
   assert.equal(go.version, v1());
   const running = PM.decide(state(TWO, { runs: [{ id: 77, status: 'in_progress' }] }), { policy: POLICY, now: T0 });
   assert.deepEqual([running.action, running.why], ['wait', 'Build in flight (agent-build run 77 is in_progress); skipping run']);
-  const open = PM.decide(state(TWO, { entries: [reserve('build', 'bd-1', T0 - 30 * MIN)] }), { policy: POLICY, now: T0 });
+  const open = PM.decide(state(TWO, { entries: [reserve('build', 'bd-1', T0 - 30 * MIN, { run: '76/1' })], ledgerRuns: new Map([['76/1', { status: 'in_progress', conclusion: null }]]) }), { policy: POLICY, now: T0 });
   assert.deepEqual([open.action, open.why], ['wait', 'Build in flight (bd-1 of TASK-001 has no outcome yet); skipping run']);
   const issue = PM.decide(state(TWO, { candidates: [{ ...candidate(null), task: null, branch: 'agent/issue-7' }] }), { policy: POLICY, now: T0 });
   assert.equal(issue.action, 'wait');
@@ -175,25 +176,35 @@ test('a build that published nothing is diagnosed and remediated from its own re
   assert.equal(PM.decide(state(TWO, { entries: published }), { policy: POLICY, now: T0 }).action, 'stop', 'a candidate it published and no pull request open: Eric decides');
 });
 
-test('the 60-minute lease: an attempt with no outcome holds the lane 60 minutes, then is orphaned, frees it, and consumes no attempt', () => {
-  assert.equal(L.LEASE_TTL_MS, 3600000);
-  const open = [reserve('build', 'bd-1', T0)];
-  const at = (now, entries = open) => PM.decide(state(TWO, { entries }), { policy: POLICY, now });
-  assert.match(at(T0 + 59 * MIN).why, /^Build in flight \(bd-1 of TASK-001 has no outcome yet\)/);
-  assert.match(at(T0 + 60 * MIN).why, /^Build in flight/, 'exactly 60 minutes still holds: it expires after');
-  const free = at(T0 + 61 * MIN);
+test('no clock: an attempt with no outcome holds the lane until GitHub says its run ended; then it is orphaned, frees the lane and consumes no attempt', () => {
+  assert.equal(L.LEASE_TTL_MS, undefined, 'no lease clock is exported');
+  const open = [reserve('build', 'bd-1', T0, { run: '11/1' })];
+  const st = (run, status, conclusion = null) => new Map([[run, { status, conclusion }]]);
+  const at = (now, ledgerRuns = new Map(), entries = open) => PM.decide(state(TWO, { entries, ledgerRuns }), { policy: POLICY, now });
+  // GitHub not read: held however old, reconcile required.
+  const blind = at(T0 + 30 * 86400000);
+  assert.equal(blind.action, 'wait');
+  assert.match(blind.why, /^Build in flight \(bd-1 of TASK-001 has no outcome yet; reconcile required: whether run 11\/1 is still running could not be read from GitHub\); skipping run$/);
+  // GitHub says it is running: held however long.
+  assert.match(at(T0 + 600 * MIN, st('11/1', 'in_progress')).why, /^Build in flight \(bd-1 of TASK-001 has no outcome yet\); skipping run$/);
+  // GitHub says it ended: freed at once, whatever its age.
+  const free = at(T0 + 2 * MIN, st('11/1', 'completed', 'failure'));
   assert.equal(free.action, 'build', 'the queue is unlocked');
-  assert.match(free.why, /\(bd-1 orphaned, no outcome within 60 min; no attempt consumed\)/);
+  assert.match(free.why, /\(bd-1 orphaned: their runs ended with no outcome; no attempt consumed\)/);
+  assert.equal(at(T0 + 2 * MIN, st('11/1', 'missing')).action, 'build', 'a run GitHub says does not exist published nothing');
   // A failed remediation counts; an orphaned one does not: two that failed
   // and one orphaned leave the third round, never the block.
   const failed = { ...ALL(), test: 'failure' };
-  const cand = (entries, now) => PM.decide(state(TWO, { entries, candidates: [candidate(failed)], pr: candidate(failed) }), { policy: POLICY, now });
-  const rem = (n, st) => [reserve('remediate', `rm-${n}`, T0 - (200 - n) * MIN), ...(st ? [outcome(`rm-${n}`, st, { job: 'failure' })] : [])];
+  const cand = (entries, now, ledgerRuns = new Map()) => PM.decide(state(TWO, { entries, ledgerRuns, candidates: [candidate(failed)], pr: candidate(failed) }), { policy: POLICY, now });
+  const rem = (n, st) => [reserve('remediate', `rm-${n}`, T0 - (200 - n) * MIN, { run: `2${n}/1` }), ...(st ? [outcome(`rm-${n}`, st, { job: 'failure' })] : [])];
   const twoFailedOneLost = [...rem(1, 'unknown'), ...rem(2, 'unknown'), ...rem(3, 'orphaned'), ...diagnosis('dg-3', HEAD, 3)];
   const d = cand(twoFailedOneLost, T0);
   assert.deepEqual([d.action, d.round], ['remediate', 3], 'the orphan consumed nothing');
-  // Recorded or not: one with no outcome past the lease counts the same.
-  assert.deepEqual([cand([...rem(1, 'unknown'), ...rem(2, 'unknown'), ...rem(3, null), ...diagnosis('dg-3', HEAD, 3)], T0).round], [3]);
+  // Recorded or not: one with no outcome whose run ended counts the same;
+  // one whose run GitHub could not be asked about holds the lane.
+  const unrecorded = [...rem(1, 'unknown'), ...rem(2, 'unknown'), ...rem(3, null), ...diagnosis('dg-3', HEAD, 3)];
+  assert.deepEqual([cand(unrecorded, T0, st('23/1', 'completed', 'cancelled')).round], [3]);
+  assert.match(cand(unrecorded, T0 + 30 * 86400000).why, /^Build in flight \(rm-3 of TASK-001 has no outcome yet; reconcile required/);
   // An attempt recorded 'lost' before 2026-10-27 is an orphan too.
   assert.equal(cand([...rem(1, 'unknown'), ...rem(2, 'unknown'), ...rem(3, 'lost'), ...diagnosis('dg-3', HEAD, 3)], T0).round, 3);
   // A real outcome that arrives after it (the runner came back) counts again.
@@ -225,53 +236,61 @@ function lane(t) {
   git(work, ['add', 'DESK_STATE.md']);
   git(work, ['commit', '-q', '-m', 'FICTIONAL main']);
   const dispatched = [];
-  const runs = [{ id: 7, status: 'completed' }];
+  const runs = [];
+  const status = {}; // GitHub's answer for one run, by run ID
   const gh = {
     pulls: async () => [],
     workflowRuns: async () => runs,
+    run: async (id) => status[id] || null,
     dispatch: async (file, ref, inputs) => { dispatched.push({ file, ref, inputs }); return { ok: true, status: 204 }; },
     postComment: async () => { throw new Error('no comment expected'); },
   };
   const ctx = (now, more = {}) => ({ gh, cwd: work, remote: 'origin', env: { GITHUB_REPOSITORY: REPO, AGENT_PM_ENABLED: 'true' }, policy: POLICY, now: () => now, fetchImpl: async () => { throw new Error('no network'); }, ...more });
-  return { work, gh, runs, dispatched, ctx };
+  return { work, gh, runs, status, dispatched, ctx };
 }
 
-test('run(): past the lease the PM records the attempt orphaned with its audit line, unlocks the queue and dispatches the next build', async (t) => {
+test('run(): GitHub\'s word on the attempt\'s run, never a clock: held while unread or running; once it ended, recorded orphaned with its audit line, the queue unlocked and the next build dispatched', async (t) => {
   const l = lane(t);
   assert.ok(L.transact(l.work, { decide: () => ({ append: [reserve('build', 'bd-1', T0, { run: '7/1' })] }) }).committed);
   const lines = () => L.read(l.work).entries.map((e) => [e.t, e.id, e.state, e.note]);
-  // Inside the lease: in flight, nothing written, nothing dispatched.
-  const held = await PM.run(l.ctx(T0 + 59 * MIN));
+  // GitHub cannot be asked, a month on: held, reconcile required; nothing written, nothing dispatched.
+  const blind = await PM.run(l.ctx(T0 + 30 * 86400000));
+  assert.equal(blind.decision.action, 'wait');
+  assert.match(blind.says, /^Build in flight \(bd-1 of TASK-001 has no outcome yet; reconcile required: whether run 7\/1 is still running could not be read from GitHub\); skipping run$/);
+  // Its run still in progress ten hours on: held.
+  l.status[7] = { status: 'in_progress', conclusion: null };
+  const held = await PM.run(l.ctx(T0 + 600 * MIN));
   assert.equal(held.decision.action, 'wait');
   assert.match(held.says, /^Build in flight \(bd-1 of TASK-001 has no outcome yet\); skipping run$/);
   assert.equal(L.read(l.work).entries.length, 1);
-  // Past it, but a dry run, or the PM off: said, never written.
-  const dry = await PM.run(l.ctx(T0 + 61 * MIN, { dryRun: true }));
+  // GitHub says it ended, but a dry run, or the PM off: said, never written.
+  l.status[7] = { status: 'completed', conclusion: 'failure' };
+  const dry = await PM.run(l.ctx(T0 + 2 * MIN, { dryRun: true }));
   assert.equal(dry.orphans.recorded, false);
-  assert.match(dry.says, /^Would record: Orphaned attempt expired after 60m; unlocking queue: bd-1 \(no outcome 61 min after it was reserved\)\./);
+  assert.match(dry.says, /^Would record: Orphaned attempt: its run ended with no outcome recorded; unlocking queue: bd-1 \(its run 7\/1 completed \(failure\) with no outcome recorded\)\./);
   assert.equal(dry.decision.action, 'build');
   assert.equal(dry.done, 'nothing (dry run)');
-  const off = await PM.run(l.ctx(T0 + 61 * MIN, { env: { GITHUB_REPOSITORY: REPO } }));
+  const off = await PM.run(l.ctx(T0 + 2 * MIN, { env: { GITHUB_REPOSITORY: REPO } }));
   assert.equal(off.done, 'off');
-  assert.match(off.says, /^Would record: Orphaned attempt expired after 60m; unlocking queue: bd-1/);
+  assert.match(off.says, /^Would record: Orphaned attempt: its run ended with no outcome recorded; unlocking queue: bd-1/);
   assert.equal(L.read(l.work).entries.length, 1);
   assert.deepEqual(l.dispatched, []);
   // A live agent-build run may still record its own outcome: not orphaned yet.
   l.runs.push({ id: 8, status: 'in_progress' });
-  const live = await PM.run(l.ctx(T0 + 61 * MIN));
+  const live = await PM.run(l.ctx(T0 + 2 * MIN));
   assert.equal(live.orphans.recorded, false);
   assert.match(live.says, /not recorded while agent-build run 8 is running/);
   assert.equal(live.decision.action, 'wait');
   assert.equal(L.read(l.work).entries.length, 1);
   l.runs.pop();
   // On: recorded with the audit line, then the queue moves on.
-  const on = await PM.run(l.ctx(T0 + 61 * MIN));
+  const on = await PM.run(l.ctx(T0 + 2 * MIN));
   assert.equal(on.orphans.recorded, true);
-  assert.deepEqual(lines(), [['reserve', 'bd-1', undefined, undefined], ['outcome', 'bd-1', 'orphaned', 'Orphaned attempt expired after 60m; unlocking queue']]);
-  assert.match(on.says, /^Orphaned attempt expired after 60m; unlocking queue: bd-1 \(no outcome 61 min after it was reserved\)\. Dispatched the build of TASK-001: TASK-001 is the first \[TODO\] and has not been built at this version \(bd-1 orphaned, no outcome within 60 min; no attempt consumed\)\.$/);
+  assert.deepEqual(lines(), [['reserve', 'bd-1', undefined, undefined], ['outcome', 'bd-1', 'orphaned', L.ORPHAN_NOTE]]);
+  assert.match(on.says, /^Orphaned attempt: its run ended with no outcome recorded; unlocking queue: bd-1 \(its run 7\/1 completed \(failure\) with no outcome recorded\)\. Dispatched the build of TASK-001: TASK-001 is the first \[TODO\] and has not been built at this version \(bd-1 orphaned: their runs ended with no outcome; no attempt consumed\)\.$/);
   assert.deepEqual(l.dispatched, [{ file: 'agent-build.yml', ref: 'main', inputs: { mode: 'task', task: 'TASK-001', pr: '' } }]);
   // Once recorded, never again.
-  const again = await PM.run(l.ctx(T0 + 62 * MIN));
+  const again = await PM.run(l.ctx(T0 + 3 * MIN));
   assert.deepEqual(again.orphans.lines, []);
   assert.equal(L.read(l.work).entries.length, 2);
 });

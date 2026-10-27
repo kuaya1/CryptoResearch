@@ -33,14 +33,18 @@
 #            network. The working tree's diff against the base is the only
 #            output, scanned for key-shaped strings before upload.
 #   publish  main's guard applies that diff to the base as data and checks it
-#            against the task again; the builder App commits it, pushes
-#            agent/issue-<n> by lease on the head the reservation recorded,
-#            and opens (or updates) the pull request; a backlog task's row then
-#            reads [IN_PROGRESS: PR #<n>] on its branch. A branch that moved
-#            since (another build, or Eric) makes this one "stale": not
-#            pushed, not retried, recorded so and said on the issue or pull
-#            request. The App pushes only agent/ branches and cannot merge,
-#            approve or change a workflow (.github/rulesets).
+#            against the task again; the builder App commits it and pushes
+#            agent/issue-<n> and the ledger's "publishing" line in one
+#            atomic push (pipeline review, 2026-10-27): the branch by lease
+#            on the head the reservation recorded, the ledger by lease on the
+#            tip just read, so both move or neither does. It then opens (or
+#            updates) the pull request; a backlog task's row then reads
+#            [IN_PROGRESS: PR #<n>] on its branch. A branch that moved since
+#            (another build, or Eric), or a build recorded orphaned
+#            meanwhile, makes this one "stale": not pushed, not retried,
+#            recorded so and said on the issue or pull request. The App
+#            pushes only agent/ branches and the ledger's fast-forward and
+#            cannot merge, approve or change a workflow (.github/rulesets).
 #   record   the outcome in the ledger, with what publish did.
 #   refused  a build or a /revise of Eric's that reserved nothing says why on
 #            the issue or the pull request (nothing was spent).

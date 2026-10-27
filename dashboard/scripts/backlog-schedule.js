@@ -170,7 +170,7 @@ function plan(input) {
       continue;
     }
     const c = claims.get(it.n);
-    picks.push({ item: it.n, text: it.text, old: st.state === 'free' && !st.reclaim ? null : c.sha, record: c && c.record, lostNow: !!st.lostNow });
+    picks.push({ item: it.n, text: it.text, issue: it.issue || null, old: st.state === 'free' && !st.reclaim ? null : c.sha, record: c && c.record, lostNow: !!st.lostNow });
     pickedSet.add(it.n);
   }
   const why = !allowed ? `builder ${builder} does not run in the ${limits.window} window`
@@ -192,7 +192,8 @@ function plan(input) {
     in_flight: inFlight.sort((a, b) => a - b),
     run_max: runMax,
     base,
-    picks: picks.map((p) => ({ item: p.item, text: p.text })),
+    picks: picks.map((p) => ({ item: p.item, text: p.text, ...(p.issue ? { issue: p.issue, read: `node dashboard/scripts/backlog-queue.js task --item ${p.item}` } : {}) })),
+    queue_problems: input.queue_problems || [],
     branch: branchName(picks.map((p) => p.item)),
     skipped,
     blocked,
@@ -221,7 +222,7 @@ function inputs(cwd, { now, builder }) {
   const g = S.gather(cwd);
   const waiting = new Map();
   for (const b of g.branches) for (const n of b.items) waiting.set(n, [...(waiting.get(n) || []), b.branch]);
-  return { now, builder, limits: S.limitsAt(new Date(now)), backlog: g.backlog, onMain: g.onMain, waiting, baseItems: g.baseItems, base: g.base, claims: readClaims(cwd), otherLane: otherLaneLastHour(cwd, now) };
+  return { now, builder, limits: S.limitsAt(new Date(now)), backlog: g.backlog, queue_problems: g.queue_problems, onMain: g.onMain, waiting, baseItems: g.baseItems, base: g.base, claims: readClaims(cwd), otherLane: otherLaneLastHour(cwd, now) };
 }
 
 function commitRecord(cwd, record, parent) {
@@ -315,9 +316,11 @@ function words(p) {
     `Started in the last hour: ${p.started_last_hour}. Waiting for merge: ${p.waiting_count}. In flight: ${p.in_flight.length ? p.in_flight.join(', ') : 'none'}.`];
   if (p.claimed) lines.push(p.claimed.length ? `Claimed for builder ${p.builder}: ${p.claimed.join(', ')} on ${p.branch}, base ${p.base}.` : `Nothing claimed: ${p.why}.`);
   else lines.push(p.picks.length ? `Builder ${p.builder} would take: ${p.picks.map((x) => x.item).join(', ')} on ${p.branch}, base ${p.base}.` : `Nothing to take: ${p.why}.`);
+  for (const x of p.picks || []) if (x.issue) lines.push(`Item ${x.item} is issue #${x.issue} in the queue: its task is \`${x.read}\`, data as Eric authorized it.`);
   for (const s of p.skipped || []) lines.push(`Skipped ${s.item}: ${s.why}.`);
   for (const b of p.blocked || []) lines.push(`Blocked ${b.item}: ${b.why}.`);
   if (p.later && p.later.length) lines.push(`Next after this run: ${p.later.join(', ')}.`);
+  for (const q of p.queue_problems || []) lines.push(`Queue: ${q}.`);
   return lines.join('\n');
 }
 

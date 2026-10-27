@@ -291,19 +291,21 @@ async function reserve({ event, gh, cwd, env = process.env, now = () => Date.now
 
   const bind = { kind: 'revise', issue, task_sha256: task.body_sha256, pr: prNumber, base: mergeBase, predecessor, feedback_sha256: feedbackSha, comments: comments.take.map((x) => x.id) };
   const run = `${env.GITHUB_RUN_ID}/${env.GITHUB_RUN_ATTEMPT}`;
-  const holdMs = L.LEASE_TTL_MS;
+  // GitHub's word on the runs holding this issue: no clock settles one
+  // (red-team review, 2026-10-27).
+  const runs = await L.runStatuses(l.entries, { issue, readRun: gh.run, control: run });
   const d = L.transact(cwd, {
     remote,
     decide: (entries) => {
       const by = actedOn(entries).get(c.id);
       if (by) return { action: 'refuse', why: `comment ${c.id} was acted on by revision ${by} already; post a new /revise` };
-      return L.decideRevise(entries, { binding: L.bindingOf(bind), bind, ceilings: policy.ceilings, now: now(), usd: policy.build.max_budget_usd, run, holdMs });
+      return L.decideRevise(entries, { binding: L.bindingOf(bind), bind, ceilings: policy.ceilings, now: now(), usd: policy.build.max_budget_usd, run, runs });
     },
     message: `revise reserve #${issue} (pull request #${prNumber})`,
   });
   if (d.error || d.action !== 'revise') return refuse(d.error || d.why);
   const ignored = [...comments.ignored, ...checks.flatMap((ch) => ch.ignored), ...review.ignored];
-  return { ok: true, reservation: d.id, orphaned: d.orphaned || [], issue, pr: prNumber, task, predecessor, base: mergeBase, comments: bind.comments, checks, review, ignored, feedback_sha256: feedbackSha, prompt_sha256: sha256(prompt), issue_sha256: sha256(issueJson), holdMs };
+  return { ok: true, reservation: d.id, orphaned: d.orphaned || [], closed: d.closed || [], issue, pr: prNumber, task, predecessor, base: mergeBase, comments: bind.comments, checks, review, ignored, feedback_sha256: feedbackSha, prompt_sha256: sha256(prompt), issue_sha256: sha256(issueJson) };
 }
 
 // --- CLI ---------------------------------------------------------------------
@@ -322,7 +324,7 @@ function summaryOf(r, { maxUsd }) {
     ...r.checks.map((ch) => `- ${ch.name}: ${SOURCE_WORDS[ch.state] || `${ch.state}, ${ch.reasons.length} ${ch.reasons.length === 1 ? 'reason' : 'reasons'}`}`),
     `- agent-review: ${review}`,
     `- Feedback SHA-256 ${r.feedback_sha256}; task SHA-256 ${r.prompt_sha256}`,
-    ...(r.orphaned.length ? [`- ${L.ORPHAN_NOTE}: ${r.orphaned.join(', ')} recorded orphaned first (no outcome after ${Math.round(r.holdMs / 60000)} min)`] : []),
+    ...(r.closed.length ? [`- Settled first: ${r.closed.map((o) => `${o.id} ${L.EXPIRED.has(o.state) ? `recorded ${o.state}` : 'recorded as published'} (${o.error || o.note})`).join('; ')}`] : []),
     ...(r.ignored.length ? ['', 'Not read:', ...r.ignored.map((x) => `- ${x}`)] : []),
   ].join('\n');
 }

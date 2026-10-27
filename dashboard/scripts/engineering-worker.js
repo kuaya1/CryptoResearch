@@ -8,7 +8,7 @@
 // never decides what the desk decides (authorization, numbers bound, review).
 //
 //   numbers [--remote origin]
-//       the highest backlog number on main and on open intake and admission
+//       the highest backlog number on main, in the issue queue and on open admission
 //       branches, and the next free one
 //   admission-commit --task <id> --entry-file <file> [--remote origin]
 //       a local commit on top of main that adds the bound entry (no push)
@@ -41,7 +41,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { pathToFileURL } = require('url');
 const { spawnSync } = require('child_process');
-const { insertEntry, backlogItems, candidateDiff, ENG_MARK_RE, engEntryOf } = require('./backlog-promote');
+const { insertEntry, backlogItems, candidateDiff, ENG_MARK_RE, engEntryOf, queueNumbers } = require('./backlog-promote');
 
 const STATE_FILE = 'DESK_STATE.md';
 const SHA_RE = /^[0-9a-f]{40}$/;
@@ -115,7 +115,7 @@ function numbers(cwd, { remote = 'origin' } = {}) {
   const mainSha = fetchMain(cwd, remote);
   const fromText = (text) => [...backlogItems(text).keys()];
   const main = fromText(git(cwd, ['show', `${mainSha}:${STATE_FILE}`]).out);
-  const branches = gitRemote(cwd, ['ls-remote', '--heads', remote, 'refs/heads/claude/intake-issue-*', 'refs/heads/claude/admission-*']).out.split('\n').filter(Boolean).map((l) => l.split('\t')[1]);
+  const branches = gitRemote(cwd, ['ls-remote', '--heads', remote, 'refs/heads/claude/admission-*']).out.split('\n').filter(Boolean).map((l) => l.split('\t')[1]);
   const waiting = [];
   for (const ref of branches) {
     const local = `refs/remotes/${remote}/${ref.replace('refs/heads/', '')}`;
@@ -123,7 +123,10 @@ function numbers(cwd, { remote = 'origin' } = {}) {
     const t = git(cwd, ['show', `${local}:${STATE_FILE}`], { allowFail: true });
     waiting.push({ branch: ref.replace('refs/heads/', ''), numbers: t.status === 0 ? fromText(t.out).filter((n) => !main.includes(n)) : [] });
   }
-  const all = [...main, ...waiting.flatMap((w) => w.numbers)];
+  // Every number the issue queue gave (backlog-queue.js), withdrawn ones too.
+  const queue = queueNumbers(cwd, remote);
+  waiting.push(queue === null ? { branch: 'agent-ledger (the issue queue)', unreadable: true, numbers: [] } : { branch: 'agent-ledger (the issue queue)', numbers: [...queue].filter((n) => !main.includes(n)).sort((a, b) => a - b) });
+  const all =[...main, ...waiting.flatMap((w) => w.numbers)];
   const max = Math.max(0, ...all);
   return { main_sha: mainSha, observed_max: max, next: max + 1, main_max: Math.max(0, ...main), waiting, complete: !waiting.some((w) => w.unreadable) };
 }

@@ -57,6 +57,11 @@ test('the files: only the admin role updates main, through a pull request; the r
   assert.deepEqual(ledger.bypass_actors, []);
   const confine = byName('automation-branches');
   assert.ok(confine.conditions.ref_name.exclude.includes('refs/heads/agent/**'));
+  // The backlog builders push their branches and claims (pipeline review,
+  // 2026-10-27): without these a non-admin identity cannot, so a running
+  // builder would be holding the admin bypass.
+  for (const ref of ['refs/heads/claude/backlog-*', 'refs/heads/claude/claims/**']) assert.ok(confine.conditions.ref_name.exclude.includes(ref), `${ref} is excluded`);
+  assert.ok(!confine.conditions.ref_name.exclude.some((r) => /intake-issue/.test(r)), 'nothing creates intake branches since the issue queue');
   assert.deepEqual(confine.bypass_actors, [{ actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'always' }]);
 });
 

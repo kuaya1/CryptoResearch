@@ -18,7 +18,12 @@
 //   {"seq":2,"prev":"…","t":"outcome","id":"rv-…","state":"unknown","error":"timeout","at":"…"}
 //   {"seq":3,"prev":"…","t":"outcome","id":"rv-…","state":"response","response_id":"chatcmpl-…","verdict":{…},"mac":"…","via":"reconcile","at":"…"}
 //   {"seq":4,"prev":"…","t":"posted","id":"rv-…","conclusion":"success","at":"…"}
-//   {"seq":5,"prev":"…","t":"blocked","issue":"TASK-001","task_sha256":"…","why":"…","at":"…"}
+//   {"seq":5,"prev":"…","t":"publishing","id":"bd-…","commit":"…","branch":"agent/issue-7","predecessor":"absent","at":"…"}
+//   {"seq":6,"prev":"…","t":"blocked","issue":"TASK-001","task_sha256":"…","why":"…","at":"…"}
+//
+// A build's "publishing" line goes up in the same atomic push as its branch
+// (agent-guard.js publish): the ledger and the candidate move together or not
+// at all, so no reserve can record a build orphaned while it publishes.
 //
 // An attempt whose outcome is not recorded, or recorded as unknown, may have
 // been sent and paid for; it is reconciled with the provider before anything
@@ -34,19 +39,28 @@ const IDENTITY = { GIT_AUTHOR_NAME: 'github-actions[bot]', GIT_AUTHOR_EMAIL: '41
 // States after which an attempt is settled: it was paid for or definitely
 // not, and nothing about it is left to find out.
 const FINAL = new Set(['response', 'failed', 'lost', 'orphaned']);
-// A paid attempt (build, revision, remediation) with no outcome holds its
-// task for this lease (Eric, 2026-10-27: 60 minutes; it was the build's
-// timeout and 20 minutes' grace, 65). After it the attempt is orphaned: a
-// cancelled or lost runner, an OOM, a dropped record. It is recorded so, with
-// ORPHAN_NOTE, the task is free, and it consumes none of the task version's
-// ceilings: only an attempt that ran to an outcome does. Today's count and
-// dollars still count it, so a runner that keeps dying is still bounded.
-const LEASE_TTL_MINUTES = 60;
-const LEASE_TTL_MS = LEASE_TTL_MINUTES * 60000;
-const ORPHAN_NOTE = `Orphaned attempt expired after ${LEASE_TTL_MINUTES}m; unlocking queue`;
 // The outcome states of an attempt given up without one of its own: 'lost'
 // (as recorded before 2026-10-27) and 'orphaned'.
 const EXPIRED = new Set(['lost', 'orphaned']);
+// A paid attempt (build, revision, remediation) with no outcome holds its
+// task until GitHub says its run has ended (red-team review, 2026-10-27,
+// audits/2026-10-27-red-team; it replaces the same day's 60-minute lease and
+// the 65-minute fallback before it). No clock frees a task: a run still
+// queued or in progress holds it, and a run GitHub cannot be asked about is
+// unknown remote execution, held as reconcile required until GitHub answers.
+// A run that completed (any conclusion, a cancel included), or that GitHub
+// says does not exist while it answers for the run asking, can publish
+// nothing more; its attempt is recorded orphaned with ORPHAN_NOTE (or
+// "response" when its publishing line is in the ledger). An orphaned attempt
+// consumes none of the task version's ceilings (Eric, 2026-10-27); today's
+// count and dollars still count it, so a runner that keeps dying is still
+// bounded. To free a task a stuck run holds, cancel that run.
+const ORPHAN_NOTE = 'Orphaned attempt: its run ended with no outcome recorded; unlocking queue';
+// "123/1" (GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT) as numbers, or null.
+function runIdOf(run) {
+  const m = /^(\d{1,20})\/(\d{1,6})$/.exec(String(run || ''));
+  return m ? { id: Number(m[1]), attempt: Number(m[2]) } : null;
+}
 
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 function canonical(v) {
@@ -122,9 +136,9 @@ function read(cwd, { remote = 'origin' } = {}) {
   return { tip, text: show.raw, entries: p.entries, last: p.last };
 }
 
-// One commit on `tip` adding `recs`, pushed without force. False when the
-// remote moved (or refused); the caller reads again and decides again.
-function append(cwd, { remote = 'origin', tip, text, entries, last, recs, message = 'ledger', beforePush = null }) {
+// One commit on `tip` adding `recs`, not pushed: append pushes it alone, and
+// publish pushes it atomically with a candidate branch.
+function stage(cwd, { tip, text, entries, last, recs, message = 'ledger' }) {
   let body = text;
   let prev = last;
   let seq = entries.length;
@@ -139,6 +153,13 @@ function append(cwd, { remote = 'origin', tip, text, entries, last, recs, messag
   const blob = git(cwd, ['hash-object', '-w', '--stdin'], { input: body }).out;
   const tree = git(cwd, ['mktree'], { input: `100644 blob ${blob}\t${FILE}\n` }).out;
   const commit = git(cwd, ['commit-tree', tree, ...(tip ? ['-p', tip] : []), '-m', message]).out;
+  return { commit, added };
+}
+
+// One commit on `tip` adding `recs`, pushed without force. False when the
+// remote moved (or refused); the caller reads again and decides again.
+function append(cwd, { remote = 'origin', tip, text, entries, last, recs, message = 'ledger', beforePush = null }) {
+  const { commit, added } = stage(cwd, { tip, text, entries, last, recs, message });
   if (beforePush) beforePush();
   const p = git(cwd, ['push', '-q', '--porcelain', remote, `${commit}:${REF}`]);
   if (p.status !== 0) return { ok: false, error: p.err.slice(0, 200) };
@@ -163,8 +184,8 @@ function transact(cwd, { remote = 'origin', decide, tries = 6, message, beforePu
 function attempts(entries) {
   const by = new Map();
   for (const e of entries) {
-    if (e.t === 'reserve') by.set(e.id, { id: e.id, reserve: e, outcomes: [], posted: [] });
-    else if (by.has(e.id)) (e.t === 'posted' ? by.get(e.id).posted : by.get(e.id).outcomes).push(e);
+    if (e.t === 'reserve') by.set(e.id, { id: e.id, reserve: e, outcomes: [], posted: [], publishing: [] });
+    else if (by.has(e.id)) (e.t === 'posted' ? by.get(e.id).posted : e.t === 'publishing' ? by.get(e.id).publishing : by.get(e.id).outcomes).push(e);
   }
   for (const a of by.values()) {
     const last = a.outcomes[a.outcomes.length - 1] || null;
@@ -175,19 +196,81 @@ function attempts(entries) {
   return [...by.values()];
 }
 
-// Whether a paid attempt is orphaned: given up with no outcome of its own,
-// recorded so, or with none at all `now` more than the lease after it was
-// reserved. A real outcome that arrives later (the runner came back) makes
-// it count again.
-function orphaned(a, now = null) {
-  if (a.outcomes.length) return a.outcomes.every((o) => EXPIRED.has(o.state));
-  return now !== null && now - Date.parse(a.reserve.at) > LEASE_TTL_MS;
+// What is known of an open attempt's run (`runs`: reserve.run -> { status,
+// conclusion } as GitHub reported it now, read by the caller so this stays
+// pure): ended (completed, or missing), running (any other status) or
+// unknown (not read, or not readable).
+function runOf(a, runs) {
+  const st = runs && runs.get(a.reserve.run);
+  if (!st || typeof st.status !== 'string') return { state: 'unknown' };
+  if (st.status === 'completed' || st.status === 'missing') return { state: 'ended', st };
+  return { state: 'running', st };
 }
-const orphanOutcome = (a, now) => ({ t: 'outcome', id: a.id, state: 'orphaned', note: ORPHAN_NOTE, error: `no outcome ${Math.round((now - Date.parse(a.reserve.at)) / 60000)} min after it was reserved`, at: new Date(now).toISOString() });
-// The paid attempts past the lease with no outcome at `now`, as outcome lines
-// to append (agent-pm.js records them before it decides; a reserve, in the
-// same append as its own reservation).
-const orphanLines = (entries, now) => attempts(entries).filter((a) => PAID[a.reserve.kind] && !a.outcomes.length && orphaned(a, now)).map((a) => orphanOutcome(a, now));
+
+// An attempt with no outcome settled from its run (`runs`, above):
+//   - its run ended: closed now, in the same append as whatever follows.
+//     The outcome is "orphaned", or "response" when its "publishing" line is
+//     in the ledger: that push carried its branch, so it published.
+//   - its run is queued, waiting or in progress: held.
+//   - its run's status is unknown: held as reconcile required. Time never
+//     settles it.
+// An attempt whose outcome was recorded, even "unknown", has finished running.
+function settleOpen(a, { now, runs }) {
+  const r = runOf(a, runs);
+  if (r.state === 'running') return { hold: `its run ${a.reserve.run} is ${r.st.status}` };
+  if (r.state === 'unknown') return { hold: `whether its run ${a.reserve.run} is still running could not be read from GitHub (reconcile required: nothing new starts until GitHub answers; cancel the run to free the task)`, reconcile: true };
+  const at = new Date(now).toISOString();
+  const why = r.st.status === 'missing' ? `its run ${a.reserve.run} does not exist on GitHub and no outcome was recorded` : `its run ${a.reserve.run} completed (${r.st.conclusion || 'no conclusion'}) with no outcome recorded`;
+  const pub = a.publishing[a.publishing.length - 1] || null;
+  return { close: pub
+    ? { t: 'outcome', id: a.id, state: 'response', job: 'unrecorded', publish: 'published', commit: pub.commit, via: 'run-status', note: why, at }
+    : { t: 'outcome', id: a.id, state: 'orphaned', via: 'run-status', note: ORPHAN_NOTE, error: why, at } };
+}
+
+// Whether a paid attempt is orphaned: given up with no outcome of its own,
+// recorded so, or with none at all and its run ended without publishing
+// (`runs`). Never by age. A real outcome that arrives later (the runner came
+// back) makes it count again.
+function orphaned(a, runs = null) {
+  if (a.outcomes.length) return a.outcomes.every((o) => EXPIRED.has(o.state));
+  return runOf(a, runs).state === 'ended' && !a.publishing.length;
+}
+// The paid attempts with no outcome whose runs ended, as the outcome lines to
+// append (agent-pm.js records them before it decides; a reserve, in the same
+// append as its own reservation).
+const orphanLines = (entries, now, runs) => attempts(entries).filter((a) => PAID[a.reserve.kind] && !a.outcomes.length).map((a) => settleOpen(a, { now, runs }).close).filter(Boolean);
+
+// The runs of the open paid attempts (of `issue` when given), read from
+// GitHub now: reserve.run -> { status, conclusion }. `readRun(id)` answers
+// the run as GitHub holds it (its latest attempt: a re-run can still carry a
+// reservation made by an earlier one), { missing: true } on a 404, or null
+// when it cannot be read. A 404 counts only when `control` (the run asking)
+// reads: a token without access is answered 404 too. A run not read is left
+// out, so its attempt stays unknown.
+async function runStatuses(entries, { issue, readRun, control = null }) {
+  const out = new Map();
+  let controlOk = null;
+  for (const a of attempts(entries)) {
+    if (!PAID[a.reserve.kind] || a.outcomes.length) continue;
+    if (issue !== undefined && (!a.reserve.bind || a.reserve.bind.issue !== issue)) continue;
+    const r = runIdOf(a.reserve.run);
+    if (!r) continue;
+    let st = null;
+    try { st = await readRun(r.id); } catch (_) { st = null; }
+    if (st && st.missing) {
+      if (controlOk === null) {
+        const c = runIdOf(control);
+        let cs = null;
+        try { cs = c ? await readRun(c.id) : null; } catch (_) { cs = null; }
+        controlOk = Boolean(cs && typeof cs.status === 'string');
+      }
+      if (controlOk) out.set(a.reserve.run, { status: 'missing', conclusion: null });
+      continue;
+    }
+    if (st && typeof st.status === 'string') out.set(a.reserve.run, { status: st.status, conclusion: st.conclusion || null });
+  }
+  return out;
+}
 
 function usage(entries, { kind, day }) {
   const rs = entries.filter((e) => e.t === 'reserve' && e.kind === kind && e.day === day);
@@ -239,39 +322,37 @@ const PAID = {
 };
 //
 // One paid attempt per task at a time (Engineering v3, change 3), a build, a
-// revision or a remediation: an attempt with no outcome is still running, or
-// its runner was lost. It holds the task for the lease (LEASE_TTL_MINUTES);
-// after that it is recorded orphaned in the same append and the task is free.
-// An orphaned attempt consumes none of the version's ceilings (Eric,
-// 2026-10-27; it used to count); today's count and dollars still count it.
-// An attempt whose outcome was recorded, even "unknown", has finished running.
-function decidePaid(kind, entries, { binding, bind, ceilings, now, usd, run, holdMs = LEASE_TTL_MS }) {
+// revision or a remediation. An attempt of the task with no outcome is
+// settled from its run first (settleOpen, `runs` from runStatuses): ended, it
+// is recorded in the same append as the new reservation; otherwise it holds
+// the task, as reconcile required when its run could not be read.
+function decidePaid(kind, entries, { binding, bind, ceilings, now, usd, run, runs = null }) {
   const k = PAID[kind];
   if (!k) return { action: 'refuse', why: `${String(kind)} is not a paid kind the ledger reserves` };
   const paid = attempts(entries).filter((a) => PAID[a.reserve.kind]);
   const mine = paid.find((a) => a.reserve.run === run);
   if (mine) return { action: 'refuse', why: `run ${run} already holds ${mine.reserve.kind} reservation ${mine.id}`, attempt: mine };
-  const expiring = [];
+  const closed = [];
   if (bind && isTaskRef(bind.issue)) {
     for (const a of paid) {
       if (!a.reserve.bind || a.reserve.bind.issue !== bind.issue || a.outcomes.length) continue;
-      const age = now - Date.parse(a.reserve.at);
-      if (!(age > holdMs)) return { action: 'refuse', why: `${PAID[a.reserve.kind].one} ${a.id} of ${refOf(bind.issue)} (run ${a.reserve.run}) has no outcome yet${Number.isFinite(age) ? ` and is ${Math.round(age / 60000)} min old` : ''}; one build, revision or remediation per task at a time, each held up to ${Math.round(holdMs / 60000)} min`, attempt: a };
-      expiring.push(orphanOutcome(a, now));
+      const s = settleOpen(a, { now, runs });
+      if (s.hold) return { action: 'refuse', reconcile: Boolean(s.reconcile), why: `${PAID[a.reserve.kind].one} ${a.id} of ${refOf(bind.issue)} (run ${a.reserve.run}) has no outcome yet: ${s.hold}; one build, revision or remediation per task at a time`, attempt: a };
+      closed.push(s.close);
     }
   }
-  const gone = new Set(expiring.map((x) => x.id));
+  const gone = new Set(closed.filter((o) => o.state === 'orphaned').map((o) => o.id));
   // A ceiling the policy does not set refuses: nothing is reserved on a default.
   const ceiling = ceilings && ceilings[k.ceiling];
   if (!Number.isInteger(ceiling) || ceiling < 0) return { action: 'refuse', why: `the policy sets no ${k.ceiling}; no ${k.one} is reserved` };
-  const atts = paid.filter((a) => a.reserve.kind === kind && sameVersion(a.reserve, { binding, bind }) && !gone.has(a.id) && !orphaned(a, now));
+  const atts = paid.filter((a) => a.reserve.kind === kind && sameVersion(a.reserve, { binding, bind }) && !gone.has(a.id) && !orphaned(a, runs));
   if (atts.length >= ceiling) return { action: 'refuse', why: `${atts.length} paid ${atts.length === 1 ? k.one : k.many} for this version of the task already (ceiling ${ceiling}); ${k.instead}` };
   const day = dayOf(now);
   const u = Object.keys(PAID).map((x) => usage(entries, { kind: x, day })).reduce((s, x) => ({ count: s.count + x.count, usd: s.usd + x.usd }), { count: 0, usd: 0 });
   if (u.count >= ceilings.builds_per_day) return { action: 'refuse', why: `${u.count} paid builds today, revisions and remediations included (UTC ${day}; ceiling ${ceilings.builds_per_day})` };
   if (u.usd + usd > ceilings.build_usd_per_day) return { action: 'refuse', why: `this ${k.one} would reserve $${usd} on top of $${u.usd} today, builds, revisions and remediations (UTC ${day}; ceiling $${ceilings.build_usd_per_day})` };
   const id = newId(kind);
-  return { action: kind, id, orphaned: [...gone], append: [...expiring, { t: 'reserve', kind, id, binding, bind, day, usd, run, at: new Date(now).toISOString() }] };
+  return { action: kind, id, orphaned: [...gone], published: closed.filter((o) => o.state === 'response').map((x) => x.id), closed, append: [...closed, { t: 'reserve', kind, id, binding, bind, day, usd, run, at: new Date(now).toISOString() }] };
 }
 const decideBuild = (entries, o) => decidePaid('build', entries, o);
 const decideRevise = (entries, o) => decidePaid('revise', entries, o);
@@ -317,4 +398,4 @@ function decideDiagnose(entries, { binding, bind, ceilings, now, key, tokens, ru
 // starts clean. Any such line stops work, signed or not: it can only stop.
 const blockedOf = (entries, { issue, task_sha256 }) => [...entries].reverse().find((e) => e.t === 'blocked' && e.issue === issue && e.task_sha256 === task_sha256) || null;
 
-module.exports = { REF, FILE, ZERO, FINAL, LEASE_TTL_MINUTES, LEASE_TTL_MS, ORPHAN_NOTE, EXPIRED, orphaned, orphanOutcome, orphanLines, TASK_ID_RE, isTaskRef, refOf, sha256, canonical, bindingOf, dayOf, macKey, LEDGER_KEY_MIN, ledgerKey, macOf, macOk, parse, read, append, transact, attempts, usage, decideReview, PAID, decidePaid, decideBuild, decideRevise, decideRemediate, decideDiagnose, blockedOf };
+module.exports = { REF, FILE, ZERO, FINAL, ORPHAN_NOTE, EXPIRED, runIdOf, runOf, settleOpen, orphaned, orphanLines, runStatuses, TASK_ID_RE, isTaskRef, refOf, sha256, canonical, bindingOf, dayOf, macKey, LEDGER_KEY_MIN, ledgerKey, macOf, macOk, parse, read, stage, append, transact, attempts, usage, decideReview, PAID, decidePaid, decideBuild, decideRevise, decideRemediate, decideDiagnose, blockedOf };

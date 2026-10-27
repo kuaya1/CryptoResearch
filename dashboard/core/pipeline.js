@@ -98,8 +98,10 @@ function ledgerOf(root, now) {
   const day = now.toISOString().slice(0, 10);
   const paid = L.attempts(p.entries).filter((a) => L.PAID[a.reserve.kind]);
   const used = paid.filter((a) => a.reserve.day === day).length;
-  // Running: no outcome yet and inside the ledger's 60-minute lease (past it, orphaned).
-  const open = paid.filter((a) => !a.outcomes.length && !L.orphaned(a, now.getTime()));
+  // In flight: no outcome yet. This page asks GitHub nothing, so an attempt
+  // whose run ended unrecorded stays in flight here until a reserve or the PM
+  // records it (agent-ledger.js settleOpen); no clock settles one.
+  const open = paid.filter((a) => !a.outcomes.length);
   return { known: true, limit, used, day, building: open.filter((a) => a.reserve.kind === 'build' || a.reserve.kind === 'remediate').length, revising: open.filter((a) => a.reserve.kind === 'revise').length };
 }
 

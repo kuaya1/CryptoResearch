@@ -62,6 +62,7 @@ function fakeGitHub(state) {
     if ((m = /^\/issues\/(\d+)\/comments$/.exec(p))) return Number(m[1]) === state.pr.number ? ok(page === 1 ? state.comments : []) : none;
     if ((m = /^\/pulls\/(\d+)$/.exec(p))) return Number(m[1]) === state.pr.number ? ok(state.pr) : none;
     if ((m = /^\/issues\/(\d+)$/.exec(p))) return Number(m[1]) === 7 && state.issue ? ok(state.issue) : none;
+    if ((m = /^\/actions\/runs\/(\d+)$/.exec(p))) { const st = state.runs[m[1]]; return st ? ok(st) : none; }
     if ((m = /^\/commits\/([0-9a-f]{40})\/check-runs$/.exec(p))) {
       if (state.onChecks) state.onChecks();
       const name = u.searchParams.get('check_name');
@@ -107,9 +108,14 @@ function world(t) {
   };
   const task = G.taskOf(issueOf(), { policy: POLICY });
   const { tree } = G.applyPatch({ cwd: work, base, patchFile: patch(GOOD), maxBytes: 600000 });
-  const h0 = G.publish({ cwd: work, base, tree, task, run: '40/1', botName: BOT.name, botEmail: BOT.email, branch: 'agent/issue-7', predecessor: 'absent', policy: POLICY }).commit;
+  // Reserved, published with its ledger line, and recorded, as the lane does.
+  const bind = G.buildBinding(task, base, 'absent');
+  const id = 'bd-00000000000000a0';
+  assert.ok(L.transact(work, { decide: () => ({ append: [{ t: 'reserve', kind: 'build', id, binding: L.bindingOf(bind), bind, day: '2026-10-26', usd: 8, run: '40/1', at: '2026-10-26T11:00:00Z' }] }) }).committed);
+  const h0 = G.publish({ cwd: work, base, tree, task, run: '40/1', botName: BOT.name, botEmail: BOT.email, branch: 'agent/issue-7', reservation: id, policy: POLICY }).commit;
   assert.match(h0, /^[0-9a-f]{40}$/);
-  const state = { comments: [], live: {}, issue: issueOf(), checks: {}, suites: {}, annotations: {}, onChecks: null, pr: { number: 12, state: 'open', base: { ref: 'main' }, head: { ref: 'agent/issue-7', sha: h0, repo: { full_name: REPO } } } };
+  assert.ok(L.transact(work, { decide: () => ({ append: [{ t: 'outcome', id, state: 'response', job: 'success', publish: 'published', at: '2026-10-26T11:40:00Z' }] }) }).committed);
+  const state = { comments: [], live: {}, runs: {}, issue: issueOf(), checks: {}, suites: {}, annotations: {}, onChecks: null, pr: { number: 12, state: 'open', base: { ref: 'main' }, head: { ref: 'agent/issue-7', sha: h0, repo: { full_name: REPO } } } };
   const head = () => git(work, ['ls-remote', 'origin', 'refs/heads/agent/issue-7']).split(/\s+/)[0] || 'absent';
   return { dir, remote, work, base, h0, task, patch, state, gh: fakeGitHub(state), head };
 }
@@ -276,13 +282,17 @@ test('one revision at a time and two per task version: a /revise during a run is
   assert.equal(r1.flat.ok, 'true', r1.said);
   // Eric posts again while it runs: refused at reserve, nothing spent, said on the pull request.
   w.state.comments = [c1, c2];
+  w.state.runs['80'] = { status: 'in_progress', conclusion: null };
   const r2 = await revise({ c: c2, run: '81/1', at: '2026-10-26T12:11:00Z' });
   assert.equal(r2.flat.ok, 'false');
-  assert.match(r2.flat.note, new RegExp(`revision ${r1.flat.reservation} of issue #7 \\(run 80/1\\) has no outcome yet and is 1 min old; one build, revision or remediation per task at a time, each held up to 60 min`));
+  assert.match(r2.flat.note, new RegExp(`revision ${r1.flat.reservation} of issue #7 \\(run 80/1\\) has no outcome yet: its run 80/1 is in_progress; one build, revision or remediation per task at a time`));
+  assert.ok(r2.asked.includes(`/repos/${REPO}/actions/runs/80`), 'its run was asked first');
   assert.equal(reserves(w).length, 1);
-  // A label build of the same issue waits the same way.
-  const build = L.decideBuild(L.read(w.work).entries, { binding: 'x', bind: { kind: 'build', issue: 7, task_sha256: w.task.body_sha256 }, ceilings: POLICY.ceilings, now: Date.parse('2026-10-26T12:12:00Z'), usd: 8, run: '82/1', holdMs: 65 * 60000 });
+  // A label build of the same issue waits the same way, and with its run
+  // unread it waits as reconcile required, however old the attempt is.
+  const build = L.decideBuild(L.read(w.work).entries, { binding: 'x', bind: { kind: 'build', issue: 7, task_sha256: w.task.body_sha256 }, ceilings: POLICY.ceilings, now: Date.parse('2026-10-27T12:12:00Z'), usd: 8, run: '82/1' });
   assert.equal(build.action, 'refuse');
+  assert.equal(build.reconcile, true);
   assert.equal(await record(w, r1.flat.reservation, 'published'), 0);
   // The next /revise reads every comment not acted on yet: the waiting one and its own.
   w.state.comments = [c1, c2, c3];

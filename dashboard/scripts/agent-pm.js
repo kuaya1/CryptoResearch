@@ -101,9 +101,10 @@ function checkStates(runs) {
 // The paid attempts (builds and remediations) of one task version, oldest first.
 const paidOf = (entries, id, version) => L.attempts(entries).filter((a) => L.PAID[a.reserve.kind] && a.reserve.bind && a.reserve.bind.issue === id && a.reserve.bind.task_sha256 === version);
 // Those that consumed an attempt: an orphaned one (no outcome of its own,
-// recorded so or past the lease at `now`) was a runner's failure, not the
-// task's, and counts against nothing of this version (Eric, 2026-10-27).
-const countedOf = (entries, id, version, now) => paidOf(entries, id, version).filter((a) => !L.orphaned(a, now));
+// recorded so, or its run ended with none: `runs`, L.runStatuses) was a
+// runner's failure, not the task's, and counts against nothing of this
+// version (Eric, 2026-10-27). No clock makes one orphaned.
+const countedOf = (entries, id, version, runs) => paidOf(entries, id, version).filter((a) => !L.orphaned(a, runs));
 // The answered diagnosis of `subject` for remediation `round`, if any (its
 // MAC is checked where it is used).
 const diagnosisOf = (entries, { id, version, subject, round }) => [...L.attempts(entries)].reverse().find((a) => {
@@ -115,7 +116,7 @@ const diagnosisOf = (entries, { id, version, subject, round }) => [...L.attempts
 // and nothing is dispatched on a partial reading.
 async function gather({ gh, cwd, remote = 'origin', env = process.env, policy, rev = 'HEAD' }) {
   const repo = env.GITHUB_REPOSITORY;
-  const s = { repo, rev, main: null, backlog: null, entries: null, candidates: [], runs: null, pr: null, errors: [] };
+  const s = { repo, rev, main: null, backlog: null, entries: null, ledgerRuns: new Map(), candidates: [], runs: null, pr: null, errors: [] };
   const m = git(cwd, ['rev-parse', '--verify', '-q', `${rev}^{commit}`]);
   s.main = G.SHA_RE.test(m.out) ? m.out : null;
   const text = s.main ? G.textAt(cwd, s.main, B.FILE) : null;
@@ -124,6 +125,9 @@ async function gather({ gh, cwd, remote = 'origin', env = process.env, policy, r
   const l = L.read(cwd, { remote });
   if (l.error) s.errors.push(`the ledger (${l.error})`);
   else s.entries = l.entries;
+  // GitHub's word on the run of every paid attempt with no outcome (one not
+  // read stays unknown, and holds its task).
+  if (s.entries) s.ledgerRuns = await L.runStatuses(s.entries, { readRun: gh.run, control: `${env.GITHUB_RUN_ID}/${env.GITHUB_RUN_ATTEMPT}` });
   let pulls = null;
   try { pulls = await gh.pulls('open'); } catch (_) { pulls = null; }
   if (!pulls) s.errors.push('the open pull requests');
@@ -151,30 +155,33 @@ async function gather({ gh, cwd, remote = 'origin', env = process.env, policy, r
 
 // Whether the ledger would refuse a paid kind for this task version now (a
 // ceiling, today's count or dollars): its words, or null.
-function precheck(kind, entries, { id, version, policy, now }) {
-  const d = L.decidePaid(kind, entries, { binding: 'pm-precheck', bind: { issue: id, task_sha256: version }, ceilings: policy.ceilings, now, usd: policy.build.max_budget_usd, run: 'pm-precheck' });
+function precheck(kind, entries, { id, version, policy, now, runs = null }) {
+  const d = L.decidePaid(kind, entries, { binding: 'pm-precheck', bind: { issue: id, task_sha256: version }, ceilings: policy.ceilings, now, usd: policy.build.max_budget_usd, run: 'pm-precheck', runs });
   return d.action === 'refuse' ? d.why : null;
 }
 // A build or remediation still running: an agent-build run not completed,
-// or a paid attempt with no outcome inside the 60-minute lease (one past it
-// is orphaned: recorded so by the PM's next run or the next reserve).
+// or a paid attempt with no outcome whose run has not been read to have
+// ended (one that ended is orphaned: recorded so by the PM's next run or the
+// next reserve; one GitHub could not be asked about is held, reconcile
+// required).
 function inFlight(s, { policy, now }) {
   const running = (s.runs || []).filter((r) => r && r.status !== 'completed');
   if (running.length) return `agent-build run ${running.map((r) => r.id).join(', ')} is ${oneLine(running[0].status, 20)}`;
-  const open = L.attempts(s.entries).filter((a) => L.PAID[a.reserve.kind] && !a.outcomes.length && !L.orphaned(a, now));
-  if (open.length) return `${open.map((a) => `${a.id} of ${L.refOf(a.reserve.bind && a.reserve.bind.issue)}`).join(', ')} has no outcome yet`;
-  return null;
+  const open = L.attempts(s.entries).filter((a) => L.PAID[a.reserve.kind] && !a.outcomes.length && !L.orphaned(a, s.ledgerRuns));
+  if (!open.length) return null;
+  const blind = open.filter((a) => L.runOf(a, s.ledgerRuns).state === 'unknown');
+  return `${open.map((a) => `${a.id} of ${L.refOf(a.reserve.bind && a.reserve.bind.issue)}`).join(', ')} has no outcome yet${blind.length ? `; reconcile required: whether run ${blind.map((a) => a.reserve.run).join(', ')} is still running could not be read from GitHub` : ''}`;
 }
 // A failed attempt (a head, or attempt:<id> for a build that published
 // nothing): its diagnosis, its remediation, or the block.
 function failing(s, { id, version, pr, subject, policy, now, says }) {
   const ceiling = policy.ceilings.remediations_per_task_version;
-  const done = countedOf(s.entries, id, version, now).filter((a) => a.reserve.kind === 'remediate').length;
+  const done = countedOf(s.entries, id, version, s.ledgerRuns).filter((a) => a.reserve.kind === 'remediate').length;
   if (done >= ceiling) return { action: 'block', task: id, version, pr, subject, why: `${says}, after ${done} ${done === 1 ? 'remediation' : 'remediations'} of ${id} at this version (ceiling ${ceiling}): it needs a human architect` };
   const round = done + 1;
   const d = diagnosisOf(s.entries, { id, version, subject, round });
   if (!d) return { action: 'diagnose', task: id, version, pr, subject, round, why: `${says}; diagnose it for remediation ${round} of ${ceiling}` };
-  const pre = precheck('remediate', s.entries, { id, version, policy, now });
+  const pre = precheck('remediate', s.entries, { id, version, policy, now, runs: s.ledgerRuns });
   if (pre) return { action: 'wait', task: id, pr, why: `${says}; remediation ${round} waits: ${pre}` };
   return { action: 'remediate', task: id, version, pr, subject, round, diagnosis: d.id, why: `${says}; remediation ${round} of ${ceiling} from diagnosis ${d.id}` };
 }
@@ -224,12 +231,12 @@ function decide(s, { policy, now = Date.now() }) {
   if (task.problems.length) return { action: 'stop', task: t.id, why: `${t.id} is the next task and cannot be built: ${task.problems.join('; ')}. The lane builds in order, so later tasks wait for Eric's edit` };
   const blocked = L.blockedOf(s.entries, { issue: t.id, task_sha256: t.version });
   if (blocked) return { action: 'stop', task: t.id, blocked: true, why: `${t.id} is blocked at this version (${B.PM_BLOCK}, ${oneLine(blocked.at, 30)}); Eric edits the task, which makes a new version, or marks it` };
-  const paid = countedOf(s.entries, t.id, t.version, now);
+  const paid = countedOf(s.entries, t.id, t.version, s.ledgerRuns);
   if (!paid.length) {
-    const gone = paidOf(s.entries, t.id, t.version).filter((a) => L.orphaned(a, now));
-    const pre = precheck('build', s.entries, { id: t.id, version: t.version, policy, now });
+    const gone = paidOf(s.entries, t.id, t.version).filter((a) => L.orphaned(a, s.ledgerRuns));
+    const pre = precheck('build', s.entries, { id: t.id, version: t.version, policy, now, runs: s.ledgerRuns });
     if (pre) return { action: 'wait', task: t.id, why: `${t.id} waits: ${pre}` };
-    return { action: 'build', task: t.id, version: t.version, why: `${t.id} is the first [TODO] and has not been built at this version${gone.length ? ` (${gone.map((a) => a.id).join(', ')} orphaned, no outcome within ${L.LEASE_TTL_MINUTES} min; no attempt consumed)` : ''}` };
+    return { action: 'build', task: t.id, version: t.version, why: `${t.id} is the first [TODO] and has not been built at this version${gone.length ? ` (${gone.map((a) => a.id).join(', ')} orphaned: their runs ended with no outcome; no attempt consumed)` : ''}` };
   }
   const last = paid[paid.length - 1];
   const out = last.outcomes[last.outcomes.length - 1] || {};
@@ -488,23 +495,24 @@ async function blockAct(d, ctx, s) {
   return { done: 'blocked', says: `${d.task} is blocked (${B.PM_BLOCK}) in the ledger${c.ok ? `; said on #${d.pr}` : `; the comment on #${d.pr} failed (HTTP ${c.status})`}. The status job sets [BLOCKED: ${B.PM_BLOCK}] on its branch.`, block: { task: d.task, pr: d.pr, head: s.pr && s.pr.head } };
 }
 
-// Paid attempts past the 60-minute lease with no outcome (a cancelled runner,
-// an OOM, a dropped record), recorded orphaned with ORPHAN_NOTE before the
-// run decides, so the queue is not held by a runner that is gone. Only when
-// the agent-build runs were read and none is running (a live run may still
-// record its own outcome); decide treats them as orphaned either way. Each
-// line is decided again on the ledger as written (still no outcome, still
-// past the lease). Returns the audit lines and what was recorded.
+// Paid attempts with no outcome whose runs GitHub says ended (a cancelled
+// runner, an OOM, a dropped record), recorded orphaned with ORPHAN_NOTE (or
+// as published, when their publishing line is in the ledger) before the run
+// decides, so the queue is not held by a runner that is gone. Only when the
+// agent-build runs were read and none is running (a live run may still record
+// its own outcome); decide treats them as settled either way. Each line is
+// decided again on the ledger as written (still no outcome). No clock makes
+// one. Returns the audit lines and what was recorded.
 function recordOrphans(s, ctx) {
   const { cwd, remote = 'origin', now } = ctx;
-  const due = s.entries ? L.orphanLines(s.entries, now()) : [];
+  const due = s.entries ? L.orphanLines(s.entries, now(), s.ledgerRuns) : [];
   if (!due.length) return { lines: [], recorded: false, says: '' };
-  const words = (o) => `${L.ORPHAN_NOTE}: ${o.id} (${o.error})`;
+  const words = (o) => `${o.state === 'orphaned' ? L.ORPHAN_NOTE : 'Published, its outcome unrecorded'}: ${o.id} (${o.error || o.note})`;
   const live = s.runs ? s.runs.filter((r) => r && r.status !== 'completed') : null;
   if (!live || live.length) return { lines: due, recorded: false, says: `${due.map(words).join('; ')} — not recorded while ${live ? `agent-build run ${live.map((r) => r.id).join(', ')} is running` : `the runs of ${BUILD_WORKFLOW} are unread`}.` };
   if (ctx.dryRun || ctx.env.AGENT_PM_ENABLED !== 'true') return { lines: due, recorded: false, says: `Would record: ${due.map(words).join('; ')}.` };
   const ids = new Set(due.map((o) => o.id));
-  const w = L.transact(cwd, { remote, decide: (entries) => ({ append: L.orphanLines(entries, now()).filter((o) => ids.has(o.id)) }), message: `orphaned ${[...ids].join(' ')}` });
+  const w = L.transact(cwd, { remote, decide: (entries) => ({ append: L.orphanLines(entries, now(), s.ledgerRuns).filter((o) => ids.has(o.id)) }), message: `orphaned ${[...ids].join(' ')}` });
   if (w.error) return { lines: due, recorded: false, error: w.error, says: `The orphaned ${due.length === 1 ? 'attempt' : 'attempts'} could not be recorded (${w.error}).` };
   const lines = w.committed ? w.append : [];
   s.entries = w.committed ? [...s.entries, ...lines] : w.entries || s.entries;
@@ -540,7 +548,7 @@ async function run(ctx) {
     const g = await diagnoseAct(d, ctx, s);
     if (g.block) return blockAct({ ...d, action: 'block', why: `${d.why}; ${g.block}` }, ctx, s);
     if (!g.diagnosis) return g;
-    const pre = precheck('remediate', (L.read(ctx.cwd, { remote: ctx.remote }).entries) || s.entries, { id: d.task, version: d.version, policy, now: now() });
+    const pre = precheck('remediate', (L.read(ctx.cwd, { remote: ctx.remote }).entries) || s.entries, { id: d.task, version: d.version, policy, now: now(), runs: s.ledgerRuns });
     if (pre) return { done: 'diagnosed', says: `Diagnosis ${g.attempt}: ${g.diagnosis.error}. Remediation ${d.round} waits: ${pre}` };
     const r = await dispatch({ mode: 'remediate', task: d.task, pr: d.pr ? String(d.pr) : '' }, `Diagnosis ${g.attempt}: ${g.diagnosis.error}. Dispatched remediation ${d.round} of ${d.task}.`);
     return { ...r, diagnosis: g.attempt };
@@ -572,9 +580,11 @@ async function reserve({ mode, id, prNumber = null, gh, cwd, remote = 'origin', 
   if (!pulls) return refuse('the open pull requests could not be read');
   const open = pulls.map((p) => candidateOf(p, { repo, policy })).filter(Boolean);
   const branch = B.branchOf(id, policy.task_branch_prefix);
-  const paid = countedOf(l.entries, id, t.version, now());
   const run = `${env.GITHUB_RUN_ID}/${env.GITHUB_RUN_ATTEMPT}`;
-  const holdMs = L.LEASE_TTL_MS;
+  // GitHub's word on the runs holding this task: no clock settles one
+  // (red-team review, 2026-10-27).
+  const runs = await L.runStatuses(l.entries, { issue: id, readRun: gh.run, control: run });
+  const paid = countedOf(l.entries, id, t.version, runs);
   const issueJson = JSON.stringify(B.toIssue(t));
   fs.mkdirSync(outDir, { recursive: true });
   fs.writeFileSync(path.join(outDir, 'issue.json'), issueJson);
@@ -590,9 +600,9 @@ async function reserve({ mode, id, prNumber = null, gh, cwd, remote = 'origin', 
     const prompt = G.builderPrompt(task);
     fs.writeFileSync(path.join(outDir, 'task.md'), prompt);
     const bind = G.buildBinding(task, base, predecessor);
-    const d = L.transact(cwd, { remote, decide: (entries) => L.decideBuild(entries, { binding: L.bindingOf(bind), bind, ceilings: policy.ceilings, now: now(), usd: policy.build.max_budget_usd, run, holdMs }), message: `build reserve ${id}` });
+    const d = L.transact(cwd, { remote, decide: (entries) => L.decideBuild(entries, { binding: L.bindingOf(bind), bind, ceilings: policy.ceilings, now: now(), usd: policy.build.max_budget_usd, run, runs }), message: `build reserve ${id}` });
     if (d.error || d.action !== 'build') return refuse(d.error || d.why);
-    return done(d, { kind: 'build', predecessor, base, checkout: base, pr: null, prompt_sha256: sha256(prompt), holdMs });
+    return done(d, { kind: 'build', predecessor, base, checkout: base, pr: null, prompt_sha256: sha256(prompt) });
   }
 
   // remediate
@@ -656,9 +666,9 @@ async function reserve({ mode, id, prNumber = null, gh, cwd, remote = 'origin', 
   fs.writeFileSync(path.join(outDir, 'feedback.md'), feedback);
   if (prNumber && headOf(cwd, remote, branch) !== predecessor) return refuse(`${branch} moved while the evidence was read; the PM asks again`);
   const bind = { kind: 'remediate', issue: id, task_sha256: t.version, pr: prNumber, base: bindBase, predecessor, subject, round, diagnosis: diag.id, feedback_sha256: sha256(feedback) };
-  const d = L.transact(cwd, { remote, decide: (entries) => L.decideRemediate(entries, { binding: L.bindingOf(bind), bind, ceilings: policy.ceilings, now: now(), usd: policy.build.max_budget_usd, run, holdMs }), message: `remediate reserve ${id} round ${round}` });
+  const d = L.transact(cwd, { remote, decide: (entries) => L.decideRemediate(entries, { binding: L.bindingOf(bind), bind, ceilings: policy.ceilings, now: now(), usd: policy.build.max_budget_usd, run, runs }), message: `remediate reserve ${id} round ${round}` });
   if (d.error || d.action !== 'remediate') return refuse(d.error || d.why);
-  return done(d, { kind: 'remediate', predecessor, base: bindBase, checkout, pr: prNumber, round, diagnosis: diag.id, prompt_sha256: sha256(prompt), feedback_sha256: bind.feedback_sha256, holdMs });
+  return done(d, { kind: 'remediate', predecessor, base: bindBase, checkout, pr: prNumber, round, diagnosis: diag.id, prompt_sha256: sha256(prompt), feedback_sha256: bind.feedback_sha256 });
 }
 
 // --- Words -------------------------------------------------------------------
@@ -675,7 +685,7 @@ function inspectText(r, { policy }) {
     `- agent-build runs not completed: ${s.runs ? (s.runs.filter((x) => x.status !== 'completed').map((x) => x.id).join(', ') || 'none') : 'unknown (not read)'}`,
   ];
   const o = r.orphans;
-  if (o && o.lines.length) lines.push(`- Orphaned, no outcome within ${L.LEASE_TTL_MINUTES} min (${o.recorded ? 'recorded now' : 'not recorded by this run'}): ${o.lines.map((x) => x.id).join(', ')}; none of them consumes an attempt`);
+  if (o && o.lines.length) lines.push(`- Settled, their runs ended with no outcome (${o.recorded ? 'recorded now' : 'not recorded by this run'}): ${o.lines.map((x) => `${x.id} ${x.state}`).join(', ')}; an orphaned one consumes no attempt`);
   if (s.pr && s.pr.checks) lines.push(`- #${s.pr.number} at ${short(s.pr.head)}: ${REQUIRED.map((n) => `${n} ${s.pr.checks[n]}`).join(', ')}`);
   lines.push('', `Action: ${d.action}${d.task ? ` ${d.task}` : ''}${d.pr ? ` (#${d.pr})` : ''}`, `Why: ${d.why}.`);
   const row = d.task && tasks.find((t) => t.id === d.task);
