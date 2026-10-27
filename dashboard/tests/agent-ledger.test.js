@@ -144,10 +144,10 @@ test('builds: one per issue at a time; an open one is recorded lost after the ho
   const reserve = (id, run, b, at) => ({ t: 'reserve', kind: 'build', id, binding: L.bindingOf(b), bind: b, run, usd: 8, day: '2026-10-26', at });
   const args = (b, run, now = NOW) => ({ binding: L.bindingOf(b), bind: b, ceilings: { ...CEIL, builds_per_day: 9, build_usd_per_day: 99 }, now, usd: 8, run });
   const open = [reserve('bd-1', '1/1', bind(), new Date(NOW - 64 * 60000).toISOString())];
-  assert.match(L.decideBuild(open, args(bind(), '2/1')).why, /build bd-1 of issue #7 \(run 1\/1\) has no outcome yet and is 64 min old; one build per issue at a time, each held up to 65 min/);
+  assert.match(L.decideBuild(open, args(bind(), '2/1')).why, /build bd-1 of issue #7 \(run 1\/1\) has no outcome yet and is 64 min old; one build or revision per issue at a time, each held up to 65 min/);
   assert.equal(L.decideBuild(open, args(bind(8), '2/1')).action, 'build', 'another issue is not held');
   assert.equal(L.decideBuild([...open, { t: 'outcome', id: 'bd-1', state: 'unknown' }], args(bind(), '2/1')).action, 'build', 'an outcome, even unknown, frees the issue');
-  assert.match(L.decideBuild([reserve('bd-1', '1/1', bind(), 'not a time')], args(bind(), '2/1')).why, /has no outcome yet; one build per issue/, 'an unreadable time holds the issue');
+  assert.match(L.decideBuild([reserve('bd-1', '1/1', bind(), 'not a time')], args(bind(), '2/1')).why, /has no outcome yet; one build or revision per issue/, 'an unreadable time holds the issue');
   const later = L.decideBuild(open, args(bind(), '2/1', NOW + 60000));
   assert.equal(later.action, 'build');
   assert.deepEqual(later.lost, ['bd-1']);

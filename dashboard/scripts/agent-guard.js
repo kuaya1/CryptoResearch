@@ -19,11 +19,15 @@
 //             trailers, pushed to agent/issue-<n> by lease on the head the
 //             reservation recorded; a branch that moved since is "stale":
 //             recorded so and never retried
-//   record    the build attempt's outcome in the ledger
+//   record    the build attempt's outcome in the ledger (a revision's too)
 //   pr        the agent-guard check on a pull request: an agent candidate's
 //             commits, its task (still labeled, unchanged since the build)
 //             and its change against the template; an owner change passes
 //   task-of   the task an agent candidate builds, for agent-verify
+//
+// A revision (/revise, agent-revise.js) is reserved there and applied,
+// published and recorded here like a build, from the issue as its reserve
+// read it (--issue) on the candidate's merge base.
 //
 // The checks are defense in depth: the tests, the behavioral verification,
 // the model review and Eric's merge still decide.
@@ -36,6 +40,7 @@ const { spawnSync } = require('child_process');
 const P = require('../engineering/policy');
 const BP = require('./backlog-promote');
 const L = require('./agent-ledger');
+const LOG = require('./agent-log');
 const S = require('./agent-secrets');
 
 const POLICY_FILE = path.join(__dirname, '..', '..', '.github', 'agent-policy.json');
@@ -228,11 +233,12 @@ function applyPatch({ cwd, base, patchFile, maxBytes }) {
 }
 
 const botIdentity = (name, email) => ({ GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email });
-function commitMessage(task, { run, policy }) {
+function commitMessage(task, { run, policy, revision = null }) {
   return [
     `agent: ${task.title} (#${task.number})`,
     '',
     `Built by the agent lane from issue #${task.number} (${task.template}). Eric merges it; no agent merges or approves.`,
+    ...(revision ? ['', `Revised from ${revision.predecessor} at Eric's /revise (${revision.comments.length === 1 ? 'comment' : 'comments'} ${revision.comments.join(', ')}; feedback SHA-256 ${revision.feedback_sha256}).`] : []),
     '',
     `Agent-Task: #${task.number}`,
     `Agent-Task-SHA256: ${task.body_sha256}`,
@@ -246,10 +252,10 @@ function commitMessage(task, { run, policy }) {
 // reserved ("absent": no branch then), never on what the branch holds when
 // the build ends (Engineering v3, change 3). A branch that moved in between
 // is another build's or Eric's: this build is stale, and is not retried.
-function publish({ cwd, base, tree, task, run, botName, botEmail, branch, predecessor, remote = 'origin', policy = loadPolicy() }) {
+function publish({ cwd, base, tree, task, run, botName, botEmail, branch, predecessor, revision = null, remote = 'origin', policy = loadPolicy() }) {
   if (predecessor !== 'absent' && !SHA_RE.test(String(predecessor || ''))) return { error: `no recorded head of ${branch} to lease on (${oneLine(predecessor, 60) || 'none'}); nothing is pushed` };
   const expected = predecessor === 'absent' ? '' : predecessor;
-  const c = git(cwd, ['commit-tree', tree, '-p', base, '-m', commitMessage(task, { run, policy })], { env: botIdentity(botName, botEmail) });
+  const c = git(cwd, ['commit-tree', tree, '-p', base, '-m', commitMessage(task, { run, policy, revision })], { env: botIdentity(botName, botEmail) });
   if (c.status !== 0 || !SHA_RE.test(c.out)) return { error: `the commit could not be made: ${c.err.slice(0, 200)}` };
   const ref = `refs/heads/${branch}`;
   const p = git(cwd, ['push', '--porcelain', `--force-with-lease=${ref}:${expected}`, remote, `${c.out}:${ref}`]);
@@ -346,11 +352,12 @@ function builderPrompt(task) {
   ].join('\n');
 }
 
-function prBody(task, { build = {}, commit, runUrl }) {
+function prBody(task, { build = {}, commit, runUrl, revision = null }) {
   const fence = (s) => String(s || '').replace(/```/g, "'''").slice(0, 3000);
   return [
     `Agent build of #${task.number} (${task.template}), commit \`${commit}\`${runUrl ? ` ([the build run](${runUrl}))` : ''}.`,
     '',
+    ...(revision ? [`Revision \`${revision.id}\` of \`${revision.predecessor}\`, at Eric's /revise (${revision.comments.length === 1 ? 'comment' : 'comments'} ${revision.comments.join(', ')}; feedback SHA-256 \`${revision.feedback_sha256}\`).`, ''] : []),
     `**Outcome:** ${oneLine(task.outcome, 600)}`,
     '',
     `Required before Eric merges: \`test\`, \`agent-guard\`, \`agent-verify\` and \`agent-review\`. No agent merges or approves this pull request.`,
@@ -375,21 +382,44 @@ function githubApi({ token, repo, fetchImpl = globalThis.fetch }) {
     try { json = JSON.parse(text); } catch (_) { json = null; }
     return { status: res.status, json };
   };
+  const pages = async (p, key = null, max = 10) => {
+    const all = [];
+    for (let page = 1; page <= max; page += 1) {
+      const r = await call('GET', `${p}${p.includes('?') ? '&' : '?'}per_page=100&page=${page}`);
+      const list = r.status === 200 ? (key ? r.json && r.json[key] : r.json) : null;
+      if (!Array.isArray(list)) return null;
+      all.push(...list);
+      if (list.length < 100) return all;
+    }
+    return null;
+  };
   return {
     issue: async (n) => { const r = await call('GET', `/repos/${repo}/issues/${n}`); return r.status === 200 ? r.json : null; },
     pull: async (n) => { const r = await call('GET', `/repos/${repo}/pulls/${n}`); return r.status === 200 ? r.json : null; },
     pullsForSha: async (sha) => { const r = await call('GET', `/repos/${repo}/commits/${sha}/pulls`); return r.status === 200 && Array.isArray(r.json) ? r.json : []; },
     createCheck: async (o) => { const r = await call('POST', `/repos/${repo}/check-runs`, o); return { ok: r.status === 201, status: r.status, id: r.json && r.json.id }; },
+    // For /revise (agent-revise.js). A list read in part is null, never a
+    // shorter list.
+    comment: async (id) => { if (!Number.isSafeInteger(id)) return null; const r = await call('GET', `/repos/${repo}/issues/comments/${id}`); return r.status === 200 ? r.json : null; },
+    comments: (n) => pages(`/repos/${repo}/issues/${Number(n)}/comments`),
+    checkRuns: (sha, name) => (SHA_RE.test(String(sha)) ? pages(`/repos/${repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(name)}&filter=all`, 'check_runs') : null),
+    runsForSuite: (id) => (Number.isSafeInteger(id) ? pages(`/repos/${repo}/actions/runs?check_suite_id=${id}`, 'workflow_runs') : null),
+    annotations: (id) => (Number.isSafeInteger(id) ? pages(`/repos/${repo}/check-runs/${id}/annotations`) : null),
   };
 }
 
 // --- CLI ---------------------------------------------------------------------
-function out(flat, text) {
+// `errors` (a check's title and reasons) become the step's error
+// annotations; the text is data in the log (agent-log.js).
+function out(flat, text, errors = null) {
   if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, Object.entries(flat).map(([k, v]) => `${k}=${String(v === null || v === undefined ? '' : v).replace(/[\r\n]+/g, ' ')}\n`).join(''));
   if (text && process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${text}\n\n`);
-  if (text) process.stdout.write(`${text}\n`);
+  LOG.write(text, errors || {});
 }
 const eventOf = (flags) => JSON.parse(fs.readFileSync(flags.event || process.env.GITHUB_EVENT_PATH, 'utf8'));
+// The task's issue: the event's, or for a revision the one its reserve read
+// (--issue; the event there is a comment on the pull request).
+const issueOfFlags = (flags) => (flags.issue ? JSON.parse(fs.readFileSync(flags.issue, 'utf8')) : eventOf(flags).issue);
 
 async function main(argv, { now = () => Date.now(), cwd = process.cwd(), env = process.env, fetchImpl = globalThis.fetch } = {}) {
   const [cmd, ...rest] = argv;
@@ -418,7 +448,7 @@ async function main(argv, { now = () => Date.now(), cwd = process.cwd(), env = p
     const holdMs = (policy.build.timeout_minutes + L.BUILD_GRACE_MINUTES) * 60000;
     const d = L.transact(cwd, { decide: (entries) => L.decideBuild(entries, { binding: L.bindingOf(bind), bind, ceilings: policy.ceilings, now: now(), usd: policy.build.max_budget_usd, run, holdMs }), message: `build reserve #${task.number}` });
     if (d.error || d.action !== 'build') { out({ ok: false }, `### Not built\n\n- ${d.error || d.why}`); return 0; }
-    out({ ok: true, reservation: d.id, attempt: env.GITHUB_RUN_ATTEMPT, number: task.number, template: task.template, task_sha256: task.body_sha256, predecessor }, `Build of #${task.number} (${task.template}) reserved as ${d.id}: at most $${policy.build.max_budget_usd}, on ${branch} at ${predecessor === 'absent' ? 'no branch yet' : predecessor.slice(0, 12)}.${d.lost && d.lost.length ? ` Recorded as lost first (no outcome after ${Math.round(holdMs / 60000)} min): ${d.lost.join(', ')}.` : ''}`);
+    out({ ok: true, kind: 'build', reservation: d.id, attempt: env.GITHUB_RUN_ATTEMPT, number: task.number, issue: task.number, notify: task.number, title: task.title, template: task.template, task_sha256: task.body_sha256, predecessor, base, checkout: base }, `Build of #${task.number} (${task.template}) reserved as ${d.id}: at most $${policy.build.max_budget_usd}, on ${branch} at ${predecessor === 'absent' ? 'no branch yet' : predecessor.slice(0, 12)}.${d.lost && d.lost.length ? ` Recorded as lost first (no outcome after ${Math.round(holdMs / 60000)} min): ${d.lost.join(', ')}.` : ''}`);
     return 0;
   }
   if (cmd === 'prompt') {
@@ -427,32 +457,33 @@ async function main(argv, { now = () => Date.now(), cwd = process.cwd(), env = p
     return 0;
   }
   if (cmd === 'apply') {
-    const task = taskOf(eventOf(flags).issue, { policy });
+    const task = taskOf(issueOfFlags(flags), { policy });
     const report = flags.build && fs.existsSync(flags.build) ? S.secretHits(fs.readFileSync(flags.build, 'utf8')) : [];
     if (report.length) { out({ ok: false }, `### Not published\n\n- the builder's report holds a key-shaped string at ${report.map((h) => S.describe({ path: path.basename(flags.build), ...h })).join(', ')}; the value is not shown`); return 1; }
     const a = applyPatch({ cwd, base: flags.base, patchFile: flags.patch, maxBytes: policy.build.max_patch_bytes });
     if (a.error) { out({ ok: false }, `### Not published\n\n- ${a.error}`); return 1; }
     const ch = checkChange({ cwd, base: flags.base, rev: a.tree, task });
     if (!ch.ok) { out({ ok: false }, `### Not published: the build's change is outside its task\n\n${ch.reasons.map((r) => `- ${r}`).join('\n')}`); return 1; }
-    out({ ok: true, tree: a.tree }, `The build's change applies to main and stays inside #${task.number} (${ch.files.length} ${ch.files.length === 1 ? 'file' : 'files'}).`);
+    out({ ok: true, tree: a.tree }, `The build's change applies to ${String(flags.base).slice(0, 12)} and stays inside #${task.number} (${ch.files.length} ${ch.files.length === 1 ? 'file' : 'files'}).`);
     return 0;
   }
   if (cmd === 'publish') {
-    const task = taskOf(eventOf(flags).issue, { policy });
+    const task = taskOf(issueOfFlags(flags), { policy });
     // The head to lease on is the one the ledger recorded at reserve.
     const l = L.read(cwd);
     const res = l.error ? null : L.attempts(l.entries).find((a) => a.id === flags.reservation);
     const bind = res && res.reserve.bind;
-    const why = l.error || (!res ? `reservation ${oneLine(flags.reservation, 40) || '(none)'} is not in the ledger` : !bind || bind.issue !== task.number || bind.task_sha256 !== task.body_sha256 || bind.base !== flags.base ? `reservation ${res.id} is not a build of this version of #${task.number} on ${String(flags.base).slice(0, 12)}` : null);
+    const why = l.error || (!res ? `reservation ${oneLine(flags.reservation, 40) || '(none)'} is not in the ledger` : !L.PAID[res.reserve.kind] ? `reservation ${res.id} is not a build or a revision` : !bind || bind.issue !== task.number || bind.task_sha256 !== task.body_sha256 || bind.base !== flags.base ? `reservation ${res.id} is not a build of this version of #${task.number} on ${String(flags.base).slice(0, 12)}` : null);
     if (why) { out({ ok: false, state: 'failed' }, `### Not published\n\n- ${why}`); return 1; }
     // Recorded lost: the issue was freed for a later build, so this one stays out.
     const gone = res.outcomes.find((o) => o.state === 'lost');
     if (gone) { const note = `build ${res.id} was recorded lost (${oneLine(gone.error, 120)}) and the issue went to a later build; this build is not published and is not retried`; out({ ok: false, state: 'stale', note }, `### Not published: stale\n\n- ${note}`); return 0; }
-    const p = publish({ cwd, base: flags.base, tree: flags.tree, task, run: flags.run, botName: flags['bot-name'], botEmail: flags['bot-email'], branch: `${policy.branch_prefix}${task.number}`, predecessor: bind.predecessor, policy });
+    const revision = res.reserve.kind === 'revise' ? { id: res.id, predecessor: bind.predecessor, comments: Array.isArray(bind.comments) ? bind.comments : [], feedback_sha256: bind.feedback_sha256 } : null;
+    const p = publish({ cwd, base: flags.base, tree: flags.tree, task, run: flags.run, botName: flags['bot-name'], botEmail: flags['bot-email'], branch: `${policy.branch_prefix}${task.number}`, predecessor: bind.predecessor, revision, policy });
     if (p.stale) { out({ ok: false, state: 'stale', note: p.error }, `### Not published: stale\n\n- ${p.error}`); return 0; }
     if (p.error) { out({ ok: false, state: 'failed' }, `### Not published\n\n- ${p.error}`); return 1; }
     out({ ok: true, state: 'published', commit: p.commit, branch: p.branch }, `Published ${p.commit.slice(0, 12)} to ${p.branch}${p.replaced ? ` (replacing ${p.replaced.slice(0, 12)})` : ''}.`);
-    fs.writeFileSync(flags['body-out'], prBody(task, { build: flags.build && fs.existsSync(flags.build) ? JSON.parse(fs.readFileSync(flags.build, 'utf8')) : {}, commit: p.commit, runUrl: flags['run-url'] }));
+    fs.writeFileSync(flags['body-out'], prBody(task, { build: flags.build && fs.existsSync(flags.build) ? JSON.parse(fs.readFileSync(flags.build, 'utf8')) : {}, commit: p.commit, runUrl: flags['run-url'], revision }));
     return 0;
   }
   if (cmd === 'record') {
@@ -471,7 +502,7 @@ async function main(argv, { now = () => Date.now(), cwd = process.cwd(), env = p
       fs.writeFileSync(flags.out, JSON.stringify(r.agent ? { agent: true, ok: r.ok, template: r.task && r.task.template, tests: r.task ? r.task.tests : [], implementation: r.task ? r.task.implementation : [], merge_base: r.merge_base } : { agent: r.agent }, null, 2));
       return 0;
     }
-    out({ agent: r.agent, ok: r.ok }, r.agent === false ? r.says : r.ok ? `Agent candidate for #${r.trailers.issue} (${r.task.template}): its commits, its task and its change hold.` : `### Agent candidate refused\n\n${r.reasons.map((x) => `- ${x}`).join('\n')}`);
+    out({ agent: r.agent, ok: r.ok }, r.agent === false ? r.says : r.ok ? `Agent candidate for #${r.trailers.issue} (${r.task.template}): its commits, its task and its change hold.` : `### Agent candidate refused\n\n${r.reasons.map((x) => `- ${x}`).join('\n')}`, r.ok ? null : { title: 'agent-guard', reasons: r.reasons });
     return r.ok ? 0 : 1;
   }
   process.stderr.write('Usage: agent-guard.js reserve|prompt|apply|publish|record|pr|task-of …\n');
@@ -480,4 +511,4 @@ async function main(argv, { now = () => Date.now(), cwd = process.cwd(), env = p
 
 if (require.main === module) main(process.argv.slice(2)).then((c) => { process.exitCode = c; }, (err) => { process.stderr.write(`agent-guard: ${String((err && err.message) || err).slice(0, 400)}\n`); process.exitCode = 1; });
 
-module.exports = { FIELDS, loadPolicy, parseIssueForm, taskOf, authorize, liveCheck, buildBinding, changesOf, checkChange, applyPatch, commitMessage, publish, commitsOf, isAgentPr, trailersOf, pureMerge, prCheck, builderPrompt, prBody, githubApi, main };
+module.exports = { FIELDS, SHA_RE, loadPolicy, oneLine, parseIssueForm, taskOf, authorize, liveCheck, buildBinding, changesOf, checkChange, applyPatch, commitMessage, publish, commitsOf, botEmailOf, isAgentPr, trailersOf, pureMerge, prCheck, builderPrompt, prBody, githubApi, main };

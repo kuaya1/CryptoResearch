@@ -45,7 +45,8 @@ function canonical(v) {
 }
 const bindingOf = (fields) => sha256(canonical(fields));
 const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10);
-const newId = (kind) => `${kind === 'build' ? 'bd' : 'rv'}-${crypto.randomBytes(8).toString('hex')}`;
+const ID_PREFIX = { build: 'bd', revise: 'rs' };
+const newId = (kind) => `${ID_PREFIX[kind] || 'rv'}-${crypto.randomBytes(8).toString('hex')}`;
 
 // A verdict kept in the ledger is reused only with its MAC, made with a key
 // derived from the provider's API key: a line written by anyone without it
@@ -188,39 +189,54 @@ function decideReview(entries, { binding, bind, ceilings, now, key, tokens, run 
   return { action: 'send', id, append: [{ t: 'reserve', kind: 'review', id, binding, bind, day, tokens, run, at: new Date(now).toISOString() }] };
 }
 
-// What a build run may do for one task version, from the ledger alone. A
-// run (id and attempt) reserves once; a rerun of a job inside it reserves
-// nothing and builds nothing. Builds of one version (issue and task hash)
-// count together whichever commit of main they started from (Engineering v3:
-// a moved main used to start the count again).
+// What a build or revision run may do for one task version, from the ledger
+// alone. A run (id and attempt) reserves once; a rerun of a job inside it
+// reserves nothing and builds nothing. Attempts of one version (issue and
+// task hash) count together whichever commit of main they started from
+// (Engineering v3: a moved main used to start the count again).
 const sameVersion = (r, { binding, bind }) => r.binding === binding || Boolean(bind && bind.task_sha256 && r.bind && r.bind.issue === bind.issue && r.bind.task_sha256 === bind.task_sha256);
+// The two paid kinds that run Claude (Engineering v3, change 5: a revision is
+// a build from the candidate's head with Eric's authenticated feedback). Each
+// has its own ceiling per task version; they share the issue, the daily
+// count and the daily dollars.
+const PAID = {
+  build: { ceiling: 'builds_per_task_version', one: 'build', many: 'builds', instead: 'edit the task or build it yourself' },
+  revise: { ceiling: 'revisions_per_task_version', one: 'revision', many: 'revisions', instead: 'edit the task and label it again, or revise it yourself' },
+};
 //
-// One build per issue at a time (Engineering v3, change 3): an attempt with
-// no outcome is still running, or its runner was lost. It holds the issue for
-// `holdMs`; after that it is recorded lost in the same append (its
-// reservation still counts) and the issue is free. An attempt whose outcome
-// was recorded, even "unknown", has finished running.
-function decideBuild(entries, { binding, bind, ceilings, now, usd, run, holdMs = 65 * 60000 }) {
-  const builds = attempts(entries).filter((a) => a.reserve.kind === 'build');
-  const mine = builds.find((a) => a.reserve.run === run);
-  if (mine) return { action: 'refuse', why: `run ${run} already holds build reservation ${mine.id}`, attempt: mine };
+// One paid attempt per issue at a time (Engineering v3, change 3), a build or
+// a revision: an attempt with no outcome is still running, or its runner was
+// lost. It holds the issue for `holdMs`; after that it is recorded lost in the
+// same append (its reservation still counts) and the issue is free. An
+// attempt whose outcome was recorded, even "unknown", has finished running.
+function decidePaid(kind, entries, { binding, bind, ceilings, now, usd, run, holdMs = 65 * 60000 }) {
+  const k = PAID[kind];
+  if (!k) return { action: 'refuse', why: `${String(kind)} is not a paid kind the ledger reserves` };
+  const paid = attempts(entries).filter((a) => PAID[a.reserve.kind]);
+  const mine = paid.find((a) => a.reserve.run === run);
+  if (mine) return { action: 'refuse', why: `run ${run} already holds ${mine.reserve.kind} reservation ${mine.id}`, attempt: mine };
   const lost = [];
   if (bind && Number.isInteger(bind.issue)) {
-    for (const a of builds) {
+    for (const a of paid) {
       if (!a.reserve.bind || a.reserve.bind.issue !== bind.issue || a.outcomes.length) continue;
       const age = now - Date.parse(a.reserve.at);
-      if (!(age >= holdMs)) return { action: 'refuse', why: `build ${a.id} of issue #${bind.issue} (run ${a.reserve.run}) has no outcome yet${Number.isFinite(age) ? ` and is ${Math.round(age / 60000)} min old` : ''}; one build per issue at a time, each held up to ${Math.round(holdMs / 60000)} min`, attempt: a };
+      if (!(age >= holdMs)) return { action: 'refuse', why: `${PAID[a.reserve.kind].one} ${a.id} of issue #${bind.issue} (run ${a.reserve.run}) has no outcome yet${Number.isFinite(age) ? ` and is ${Math.round(age / 60000)} min old` : ''}; one build or revision per issue at a time, each held up to ${Math.round(holdMs / 60000)} min`, attempt: a };
       lost.push({ t: 'outcome', id: a.id, state: 'lost', error: `no outcome ${Math.round(age / 60000)} min after it was reserved`, at: new Date(now).toISOString() });
     }
   }
-  const atts = builds.filter((a) => sameVersion(a.reserve, { binding, bind }));
-  if (atts.length >= ceilings.builds_per_task_version) return { action: 'refuse', why: `${atts.length} paid ${atts.length === 1 ? 'build' : 'builds'} for this version of the task already (ceiling ${ceilings.builds_per_task_version}); edit the task or build it yourself` };
+  // A ceiling the policy does not set refuses: nothing is reserved on a default.
+  const ceiling = ceilings && ceilings[k.ceiling];
+  if (!Number.isInteger(ceiling) || ceiling < 0) return { action: 'refuse', why: `the policy sets no ${k.ceiling}; no ${k.one} is reserved` };
+  const atts = paid.filter((a) => a.reserve.kind === kind && sameVersion(a.reserve, { binding, bind }));
+  if (atts.length >= ceiling) return { action: 'refuse', why: `${atts.length} paid ${atts.length === 1 ? k.one : k.many} for this version of the task already (ceiling ${ceiling}); ${k.instead}` };
   const day = dayOf(now);
-  const u = usage(entries, { kind: 'build', day });
-  if (u.count >= ceilings.builds_per_day) return { action: 'refuse', why: `${u.count} paid builds today (UTC ${day}; ceiling ${ceilings.builds_per_day})` };
-  if (u.usd + usd > ceilings.build_usd_per_day) return { action: 'refuse', why: `this build would reserve $${usd} on top of $${u.usd} today (UTC ${day}; ceiling $${ceilings.build_usd_per_day})` };
-  const id = newId('build');
-  return { action: 'build', id, lost: lost.map((x) => x.id), append: [...lost, { t: 'reserve', kind: 'build', id, binding, bind, day, usd, run, at: new Date(now).toISOString() }] };
+  const u = Object.keys(PAID).map((x) => usage(entries, { kind: x, day })).reduce((s, x) => ({ count: s.count + x.count, usd: s.usd + x.usd }), { count: 0, usd: 0 });
+  if (u.count >= ceilings.builds_per_day) return { action: 'refuse', why: `${u.count} paid builds today, revisions included (UTC ${day}; ceiling ${ceilings.builds_per_day})` };
+  if (u.usd + usd > ceilings.build_usd_per_day) return { action: 'refuse', why: `this ${k.one} would reserve $${usd} on top of $${u.usd} today, builds and revisions (UTC ${day}; ceiling $${ceilings.build_usd_per_day})` };
+  const id = newId(kind);
+  return { action: kind, id, lost: lost.map((x) => x.id), append: [...lost, { t: 'reserve', kind, id, binding, bind, day, usd, run, at: new Date(now).toISOString() }] };
 }
+const decideBuild = (entries, o) => decidePaid('build', entries, o);
+const decideRevise = (entries, o) => decidePaid('revise', entries, o);
 
-module.exports = { REF, FILE, ZERO, FINAL, BUILD_GRACE_MINUTES, sha256, canonical, bindingOf, dayOf, macKey, LEDGER_KEY_MIN, ledgerKey, macOf, macOk, parse, read, append, transact, attempts, usage, decideReview, decideBuild };
+module.exports = { REF, FILE, ZERO, FINAL, BUILD_GRACE_MINUTES, sha256, canonical, bindingOf, dayOf, macKey, LEDGER_KEY_MIN, ledgerKey, macOf, macOk, parse, read, append, transact, attempts, usage, decideReview, PAID, decidePaid, decideBuild, decideRevise };
