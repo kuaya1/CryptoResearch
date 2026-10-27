@@ -180,7 +180,7 @@ function PilotLine({ p, t, busy, setBusy }) {
   );
 }
 
-// Trade Plan strip (item 49, cr-ticket-geometry@1): where the stored price sits
+// Trade Plan strip (item 49, cr-ticket-geometry@2): where the stored price sits
 // against the receipt's entry zone, target and invalidation price. Numbers the
 // desk does not have read "unknown"; nothing is filled in.
 const ZONE_WORDS = { in_zone: 'In the entry zone', above_zone: 'above the zone', below_zone: 'below the zone' };
@@ -194,7 +194,7 @@ function TradePlan({ pid, g }) {
       <p className="pm-plan-cell"><span className="pm-dis-k">Price vs zone</span><span>{zone || unknown}</span></p>
       <p className="pm-plan-cell"><span className="pm-dis-k">To target</span><span>{pct(g.to_upside_pct) || unknown}</span></p>
       <p className="pm-plan-cell"><span className="pm-dis-k">To invalidation</span><span>{pct(g.to_stop_pct) || unknown}</span></p>
-      <p className="pm-plan-cell"><span className="pm-dis-k">Reward : risk</span><span>{typeof g.reward_risk_ratio === 'number' ? `${g.reward_risk_ratio} : 1` : unknown}</span></p>
+      <p className="pm-plan-cell"><span className="pm-dis-k">Reward : risk</span><span>{typeof g.plan_reward_risk_ratio === 'number' ? `${g.plan_reward_risk_ratio} : 1 at plan` : <>{unknown} at plan</>}{', '}{typeof g.reward_risk_ratio === 'number' ? `${g.reward_risk_ratio} : 1 now` : <>{unknown} now</>}</span></p>
     </div>
   );
 }
@@ -340,7 +340,7 @@ export function PMDecisionCard({ p }) {
       {t.non_consensus_thesis ? <p className="pm-thesis">{t.non_consensus_thesis}</p> : null}
       {t.trigger_breached_at_save ? <p className="pm-alert" title={t.trigger_breached_at_save.words}>Trigger already breached when saved</p> : null}
       {t.integrity && t.integrity.status !== 'ok' && t.integrity.words ? <p className="pm-alert" data-key={`pm-integrity-${pid}`}>{t.integrity.words}</p> : null}
-      {t.near_invalidation ? <p className="pm-alert" data-key={`pm-near-${pid}`} title={t.near_invalidation.words}>{`Near invalidation: ${t.near_invalidation.distance_pct}% above ${usd(t.near_invalidation.threshold_usd)}`}</p> : null}
+      {t.near_invalidation ? <p className="pm-alert" data-key={`pm-near-${pid}`} title={t.near_invalidation.words}>{`Near invalidation: a ${t.near_invalidation.distance_pct}% fall reaches ${usd(t.near_invalidation.threshold_usd)}`}</p> : null}
       {(t.invalidation && t.invalidation.checks || []).filter((c) => c.kind === 'metric' && c.status === 'holding' && typeof c.headroom_pct === 'number').map((c) => <p key={`pm-headroom-${c.key}`} className="pm-alert" data-key={`pm-headroom-${pid}`} title={c.words}>{`${c.key} floor headroom: ${c.headroom_pct}% above ${usd(c.threshold_usd)}`}</p>)}
       {t.status === 'invalidated' && t.invalidation ? <p className="pm-alert">{t.invalidation.words}</p> : null}
       <div className="iv-rgrid pm-grid">

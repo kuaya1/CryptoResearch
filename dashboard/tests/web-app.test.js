@@ -204,6 +204,7 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   // The Trade Plan strip (item 49) reads the view's geometry and says unknown, never a made-up number.
   assert.match(pm, /trade_plan_geometry/);
   assert.match(pm, /Reward : risk/);
+  assert.match(pm, /plan_reward_risk_ratio/);
   // The four-test matrix (item 52): pills with pass, fail or unknown; a missing test is unknown.
   assert.match(pm, /near_invalidation/);
   assert.match(pm, /Disagreement/);

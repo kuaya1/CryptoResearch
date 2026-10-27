@@ -84,7 +84,8 @@ function brief(ws, { since = null, now = Date.now() } = {}) {
     const ez = t.entry_zone;
     const entry = ez && typeof ez.low_usd === 'number' && typeof ez.high_usd === 'number' ? `${n(ez.low_usd)}–${n(ez.high_usd)}` : 'unknown';
     const geo = t.trade_plan_geometry;
-    const rr = geo && typeof geo.reward_risk_ratio === 'number' ? `${geo.reward_risk_ratio.toFixed(1)}x` : 'unknown';
+    const x = (v) => (typeof v === 'number' ? `${v.toFixed(1)}x` : 'unknown');
+    const rr = `${x(geo && geo.plan_reward_risk_ratio)} at plan, ${x(geo && geo.reward_risk_ratio)} now`;
     const grade = t.researcher && (t.researcher.grade_display || (typeof t.researcher.grade === 'number' ? String(t.researcher.grade) : null));
     const conv = t.prosecution && typeof t.prosecution.conviction_score === 'number' ? String(t.prosecution.conviction_score) : null;
     return ` Entry ${entry}, target ${n(t.upside_target && t.upside_target.price_usd)}, invalidation ${n(t.invalidation_trigger && t.invalidation_trigger.price_usd)}, R:R ${rr}; Researcher ${grade || 'unknown'} vs Prosecutor ${conv || 'unknown'}.`;

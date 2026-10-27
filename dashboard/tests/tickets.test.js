@@ -1806,18 +1806,20 @@ test('shadow gate day 30 (item 41): a fixed 30-day result that does not follow t
 });
 
 // ---------------------------------------------------------------------------
-// Trade Plan geometry (item 49, cr-ticket-geometry@1)
+// Trade Plan geometry (item 49; cr-ticket-geometry@2, item 68)
 
 test('trade plan geometry: position, distances and reward:risk are arithmetic on the receipt and a fresh stored price, and missing numbers stay unknown', () => {
   const NOW = Date.parse('2026-10-25T12:00:00Z');
   const fresh = (price) => ({ price_usd: price, as_of: '2026-10-25T11:30:00Z' });
   const plan = { entry_zone: { low_usd: 0.9, high_usd: 1.1 }, upside_target: { price_usd: 2 }, invalidation_trigger: { price_usd: 0.8 } };
   const g = T.tradePlanGeometry(plan, fresh(1), { now: NOW });
-  assert.equal(g.version, 'cr-ticket-geometry@1');
+  assert.equal(g.version, 'cr-ticket-geometry@2');
   assert.equal(g.position, 'in_zone');
   assert.equal(g.to_upside_pct, 100);
   assert.equal(g.to_stop_pct, -20);
   assert.equal(g.reward_risk_ratio, 5, '(2 - 1) / (1 - 0.8)');
+  assert.equal(g.plan_reward_risk_ratio, 5, 'the zone midpoint is 1: (2 - 1) / (1 - 0.8)');
+  assert.match(g.words, /reward:risk 5:1 at plan, 5:1 now/);
   assert.equal(T.tradePlanGeometry(plan, fresh(1.21), { now: NOW }).position, 'above_zone');
   assert.equal(T.tradePlanGeometry(plan, fresh(1.21), { now: NOW }).position_pct, 10);
   const below = T.tradePlanGeometry(plan, fresh(0.85), { now: NOW });
@@ -1831,6 +1833,12 @@ test('trade plan geometry: position, distances and reward:risk are arithmetic on
   assert.equal(stale.price.status, 'stale');
   assert.equal(stale.position, 'unknown');
   assert.equal(stale.reward_risk_ratio, null);
+  assert.equal(stale.plan_reward_risk_ratio, 5, 'the plan ratio needs no fresh price');
+  assert.match(stale.words, /reward:risk 5:1 at plan/);
+  // The plan ratio needs a zone, a target above its midpoint and a stop below it.
+  const lowTarget = { ...plan, upside_target: { price_usd: 0.95 } };
+  assert.equal(T.tradePlanGeometry(lowTarget, fresh(1), { now: NOW }).plan_reward_risk_ratio, null);
+  assert.equal(T.tradePlanGeometry({ ...plan, entry_zone: null }, fresh(1), { now: NOW }).plan_reward_risk_ratio, null);
   assert.equal(T.tradePlanGeometry(plan, { price_usd: 1 }, { now: NOW }).price.status, 'unknown');
   const none = T.tradePlanGeometry(plan, { price_usd: null, note: 'No stored price' }, { now: NOW });
   assert.equal(none.price.status, 'unknown');
@@ -1841,7 +1849,7 @@ test('trade plan geometry: position, distances and reward:risk are arithmetic on
   assert.equal(partial.to_upside_pct, null);
   assert.equal(partial.to_stop_pct, -20);
   assert.equal(partial.reward_risk_ratio, null);
-  assert.match(partial.words, /reward:risk unknown/);
+  assert.match(partial.words, /reward:risk unknown at plan, unknown now/);
 });
 
 test('trade plan geometry: view() carries it on a saved Prosecutor ticket, unknown without a fresh price', (t) => {
@@ -1849,7 +1857,7 @@ test('trade plan geometry: view() carries it on a saved Prosecutor ticket, unkno
   const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
   T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) });
   const g = T.view(s.ws, s.pid).ticket.trade_plan_geometry;
-  assert.equal(g.version, 'cr-ticket-geometry@1');
+  assert.equal(g.version, 'cr-ticket-geometry@2');
   assert.ok(['unknown', 'stale', 'fresh'].includes(g.price.status));
   if (g.price.status !== 'fresh') {
     assert.equal(g.position, 'unknown');
@@ -1870,11 +1878,14 @@ test('view() carries the four tests and the strongest bull rebuttal for the card
 test('near invalidation (item 53): within 10% above the stop only, never on a stale or missing price, an invalidated or vetoed ticket', () => {
   const geo = (price, status = 'fresh', stop = 0.7) => ({ price: { status, price_usd: price }, stop_usd: stop });
   const n = T.nearInvalidation('pending_pm_review', geo(0.75));
-  assert.equal(n.distance_pct, 7.14);
+  assert.equal(n.version, 'cr-near-invalidation@2');
+  assert.equal(n.distance_pct, 6.67);
   assert.equal(n.threshold_usd, 0.7);
   assert.equal(n.price_usd, 0.75);
-  assert.match(n.words, /7\.14% above/);
-  assert.equal(T.nearInvalidation('pending_pm_review', geo(0.77)).distance_pct, 10);
+  assert.match(n.words, /a 6\.67% fall reaches the invalidation price \$0\.7/);
+  assert.equal(T.nearInvalidation('pending_pm_review', geo(0.77)).distance_pct, 9.09);
+  // 10.5% above the stop is a 9.50% fall: near under the fall reading.
+  assert.equal(T.nearInvalidation('pending_pm_review', geo(0.7735)).distance_pct, 9.5);
   assert.equal(T.nearInvalidation('pending_pm_review', geo(0.78)), null);
   assert.equal(T.nearInvalidation('pending_pm_review', geo(0.75, 'stale')), null);
   assert.equal(T.nearInvalidation('pending_pm_review', geo(0.69)), null, 'at or below the stop is the invalidation rule, not this one');

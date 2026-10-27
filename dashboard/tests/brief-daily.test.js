@@ -62,10 +62,10 @@ test('daily brief (item 50): a waiting Prosecutor ticket carries its compact tra
   const saved = savedTicket(t, s);
   const out = B.brief(s.ws, { now: Date.parse(saved.receipt.saved_at) + 20 * 60000 });
   const line = byId(out, 'pm_cards').lines[0].text;
-  assert.match(line, /Entry \$0\.8–\$0\.9, target \$1\.4, invalidation \$0\.7, R:R 3\.7x; Researcher .+ vs Prosecutor 38\./);
+  assert.match(line, /Entry \$0\.8–\$0\.9, target \$1\.4, invalidation \$0\.7, R:R \d\.\dx at plan, 3\.7x now; Researcher .+ vs Prosecutor 38\./);
   // The same card hours later: the stored price is past the freshness limit, so the ratio is unknown, not stale arithmetic.
   const late = byId(B.brief(s.ws, { now: Date.parse(saved.receipt.saved_at) + 5 * 3600000 }), 'pm_cards').lines[0].text;
-  assert.match(late, /R:R unknown;/);
+  assert.match(late, /R:R \d\.\dx at plan, unknown now;/);
 });
 
 test('daily brief (item 50): each plan number the receipt lacks reads unknown', (t) => {
@@ -73,7 +73,7 @@ test('daily brief (item 50): each plan number the receipt lacks reads unknown', 
   const saved = savedTicket(t, s, (txt) => txt.replace(/"upside_target": \{[^}]*\}/, '"upside_target": null'));
   const out = B.brief(s.ws, { now: Date.parse(saved.receipt.saved_at) + 3600000 });
   const line = byId(out, 'pm_cards').lines[0].text;
-  assert.match(line, /target unknown, invalidation \$0\.7, R:R unknown; Researcher/);
+  assert.match(line, /target unknown, invalidation \$0\.7, R:R unknown at plan, unknown now; Researcher/);
   assert.doesNotMatch(line, /undefined|NaN|null/);
 });
 
@@ -301,7 +301,7 @@ test('daily brief (item 53): a ticket whose fresh price is within 10% above its 
   const sec = byId(B.brief(s.ws, { now: Date.now() }), 'near_invalidation');
   assert.equal(sec.state, 'ok');
   assert.equal(sec.count, 1);
-  assert.match(sec.lines[0].text, /Near invalidation: the price \$0\.75 is 7\.14% above the invalidation price \$0\.7/);
+  assert.match(sec.lines[0].text, /Near invalidation: a 6\.67% fall reaches the invalidation price \$0\.7 \(price \$0\.75/);
   assert.match(sec.lines[0].link, /^#\/\?p=/);
   assert.ok(at > 0);
 });
