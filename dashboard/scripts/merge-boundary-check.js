@@ -7,11 +7,17 @@
 //
 //   node dashboard/scripts/merge-boundary-check.js [--repo kuaya1/CryptoResearch]
 //
-// It holds when every file's ruleset is active and identical, main's update
-// rule is bypassed by the repository admin role only and only through a pull
-// request, the merge requirements have no bypass, the repository is public
-// (GitHub Free enforces rulesets on public repositories only), Eric is the
-// only admin, and workflow tokens default to read.
+// It holds when GitHub answers the rulesets read with HTTP 200, every file's
+// ruleset is active and identical, main's update rule is bypassed by the
+// repository admin role only and only through a pull request, the merge
+// requirements have no bypass, GitHub reports the rules applied to main, Eric
+// is the only admin, and workflow tokens default to read. A public repository
+// is enforced on every plan. A private one only on GitHub Pro or above:
+// GitHub Free answers its rulesets read with HTTP 403 ("Upgrade to GitHub Pro
+// or make this repository public"), so private holds only on that HTTP 200
+// (Eric moved kuaya1 to GitHub Pro on 2026-10-27; the gh login has no `user`
+// scope, so the plan itself is not readable, and the 200 is the evidence). A
+// visibility that could not be read never holds.
 
 const fs = require('fs');
 const path = require('path');
@@ -54,11 +60,19 @@ function shapeOf(r) {
   };
 }
 
+// GitHub's own words, on one line and short, for a refusal it gave.
+const said = (m) => String(m || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+
 function check({ files, live }) {
   const problems = [];
   const notes = [];
-  const byName = new Map((live.rulesets || []).map((r) => [r.name, r]));
-  for (const want of files) {
+  const read = live.rulesets_read || {};
+  const readOk = read.http === 200;
+  // Without that answer there is nothing to compare: say why once, rather
+  // than each file "not on the repository".
+  if (!readOk) problems.push(`GitHub answered the rulesets read with ${read.http ? `HTTP ${read.http}` : 'no HTTP status'}${read.message ? ` ("${said(read.message)}")` : ''}: the live rulesets could not be compared with the files`);
+  const byName = new Map((readOk ? live.rulesets || [] : []).map((r) => [r.name, r]));
+  for (const want of readOk ? files : []) {
     const got = byName.get(want.name);
     if (!got) { problems.push(`ruleset ${want.name} is not on the repository`); continue; }
     const a = shapeOf(want);
@@ -77,7 +91,11 @@ function check({ files, live }) {
     if (files.some((f) => f.name === r.name) || r.enforcement !== 'active') continue;
     if ((r.bypass_actors || []).length) notes.push(`another active ruleset, ${r.name}, has bypass actors ${r.bypass_actors.map(bypassKey).join(', ')}`);
   }
-  if (live.repo.visibility !== 'public' && !live.repo.plan_supports_private_rulesets) problems.push(`the repository is ${live.repo.visibility}: GitHub Free enforces rulesets on public repositories only, so the boundary would not hold`);
+  const visibility = live.repo && live.repo.visibility;
+  if (visibility === 'private' || visibility === 'internal') {
+    if (readOk) notes.push(`the repository is ${visibility}: GitHub answered the rulesets read with HTTP 200, so the account's plan (GitHub Pro or above) enforces them; on GitHub Free it would answer 403 and this check would fail`);
+    else problems.push(`the repository is ${visibility}: GitHub Free enforces rulesets on public repositories only, and a private repository holds the boundary only on GitHub Pro or above, shown by GitHub answering the rulesets read with HTTP 200`);
+  } else if (visibility !== 'public') problems.push(`the repository's visibility could not be read (${JSON.stringify(visibility === undefined ? null : visibility)}): whether GitHub enforces the rulesets is not known`);
   const admins = (live.collaborators || []).filter((c) => c.permissions && c.permissions.admin).map((c) => c.login);
   const others = admins.filter((l) => l !== live.repo.owner);
   if (others.length) problems.push(`other admins can merge into main through the admin bypass: ${others.join(', ')}`);
@@ -89,13 +107,29 @@ function check({ files, live }) {
   return { ok: problems.length === 0, problems, notes, admins };
 }
 
+// One read with GitHub's HTTP status (gh api --include prints the status line,
+// the headers, a blank line and the body, on success and on a refusal alike).
+function readWithStatus(gh, apiPath) {
+  const out = String(gh(['api', '--include', apiPath]).out || '');
+  const m = /^HTTP\/[\d.]+ (\d{3})/.exec(out);
+  const at = out.search(/\r?\n\r?\n/);
+  let body = null;
+  if (at >= 0) { try { body = JSON.parse(out.slice(at)); } catch (_) { body = null; } }
+  return { http: m ? Number(m[1]) : null, body };
+}
+
 function readLive(gh, repo) {
   const j = (args, fallback) => { const r = gh(args); if (r.status !== 0) return fallback; try { return JSON.parse(r.out); } catch (_) { return fallback; } };
   const meta = j(['api', `repos/${repo}`], {});
-  const list = j(['api', `repos/${repo}/rulesets`], []);
+  const listed = readWithStatus(gh, `repos/${repo}/rulesets`);
+  const listOk = listed.http === 200 && Array.isArray(listed.body);
+  const refusal = listed.body && !Array.isArray(listed.body) && typeof listed.body.message === 'string' ? listed.body.message : null;
   return {
-    repo: { visibility: meta.visibility || (meta.private ? 'private' : 'public'), owner: meta.owner && meta.owner.login },
-    rulesets: list.map((r) => j(['api', `repos/${repo}/rulesets/${r.id}`], r)),
+    // Never public by default: a repository read that failed has no visibility.
+    repo: { visibility: meta.visibility || (typeof meta.private === 'boolean' ? (meta.private ? 'private' : 'public') : null), owner: meta.owner && meta.owner.login },
+    // A 200 whose body is not a list is not a reading.
+    rulesets_read: { http: listOk ? 200 : listed.http === 200 ? null : listed.http, message: refusal },
+    rulesets: (listOk ? listed.body : []).map((r) => j(['api', `repos/${repo}/rulesets/${r.id}`], r)),
     collaborators: j(['api', `repos/${repo}/collaborators?affiliation=all&per_page=100`], []),
     workflow: j(['api', `repos/${repo}/actions/permissions/workflow`], null),
     classic_protection: gh(['api', `repos/${repo}/branches/${meta.default_branch || 'main'}/protection`]).status === 0,
@@ -117,4 +151,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { OWNER_BYPASS, loadFiles, shapeOf, paramsMatch, check, readLive };
+module.exports = { OWNER_BYPASS, loadFiles, shapeOf, paramsMatch, check, readWithStatus, readLive };

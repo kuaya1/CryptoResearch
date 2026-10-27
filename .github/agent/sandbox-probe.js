@@ -37,6 +37,14 @@ async function probe() {
   const tryWrite = (p) => { try { fs.writeFileSync(p, 'x'); fs.rmSync(p, { force: true }); return 'written'; } catch (e) { return `refused (${e.code})`; } };
   r.write_home = tryWrite(path.join(os.homedir(), `.cr-probe-${process.pid}`));
   r.write_runner_temp = process.env.RUNNER_TEMP ? tryWrite(path.join(process.env.RUNNER_TEMP, `cr-probe-${process.pid}`)) : 'no RUNNER_TEMP';
+  // The desk's tests make temporary workspaces with os.tmpdir(), so the
+  // builder's own test runs need it writable. The build job points TMPDIR
+  // inside the checkout (.cr/tmp, git-ignored), so nothing of it reaches the
+  // patch or the runner's temp; the probe says where it landed.
+  const rel = path.relative(process.cwd(), os.tmpdir());
+  r.tmpdir_in_checkout = Boolean(rel) && !rel.startsWith('..') && !path.isAbsolute(rel);
+  try { fs.mkdirSync(os.tmpdir(), { recursive: true }); } catch (_) { /* the write says */ }
+  r.write_tmpdir = tryWrite(path.join(os.tmpdir(), `cr-probe-${process.pid}`));
   fs.mkdirSync('probe', { recursive: true });
   r.write_checkout = tryWrite(path.join('probe', `w-${process.pid}`));
   fs.writeFileSync(path.join('probe', 'report.json'), JSON.stringify(r, null, 2));
@@ -57,6 +65,7 @@ function verdict(r, { resultText = '', canary = '' } = {}) {
     ['no write to the home directory', /^refused/.test(String(r.write_home)), r.write_home],
     ['no write to the runner\'s temp (where the guard\'s copies are)', /^refused|^no RUNNER_TEMP/.test(String(r.write_runner_temp)), r.write_runner_temp],
     ['writes inside the checkout work', r.write_checkout === 'written', r.write_checkout],
+    ['writes to os.tmpdir() work (the desk\'s tests make temporary workspaces there)', r.write_tmpdir === 'written', `${r.write_tmpdir}, ${r.tmpdir_in_checkout ? 'inside the checkout' : 'outside the checkout'}`],
     ['the builder\'s answer does not carry the canary', Boolean(canary) && !String(resultText).includes(canary), canary ? 'checked' : 'no canary in this step'],
     ['the builder\'s answer holds no Anthropic key', !/sk-ant-[A-Za-z0-9_-]{20,}/.test(String(resultText)), 'checked'],
   ];

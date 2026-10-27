@@ -144,9 +144,13 @@ test('/revise: only Eric\'s own new comment on a pull request reserves, the revi
   assert.match(j.publish, /agent-guard\.js apply --base "\$BASE" [^\n]+ --issue "\$ISSUE"\n/);
   assert.match(j.publish, /TITLE: \$\{\{ needs\.reserve\.outputs\.title \}\}\n\s+NUMBER: \$\{\{ needs\.reserve\.outputs\.issue \}\}\n/);
   assert.doesNotMatch(text, /github\.event\.issue\.title/, 'the title comes from the issue reserve read, never the event (a comment\'s event is the pull request)');
-  // A refusal of Eric's /revise is said on the pull request: no checkout, no secret, the note as data.
+  // A refusal of Eric's /revise is said on the pull request, a build that did
+  // not start on the issue: no checkout, no secret, the note as data.
   assert.match(j.refused, /if: needs\.reserve\.outputs\.note != ''\n/);
-  assert.match(j.refused, /permissions:\n\s+pull-requests: write[^\n]*\n\s+steps:/);
+  assert.match(j.refused, /permissions:\n\s+issues: write[^\n]*\n\s+pull-requests: write[^\n]*\n\s+steps:/);
+  assert.match(j.refused, /KIND: \$\{\{ needs\.reserve\.outputs\.kind \}\}\n/);
+  assert.match(j.refused, /if \[ "\$KIND" = revise \]; then\n\s+printf 'Revision not started for comment %s: %s/);
+  assert.match(j.refused, /else\n\s+printf 'Build not started: %s/);
   assert.deepEqual(secretsIn(j.refused), []);
   assert.doesNotMatch(j.refused, /actions\/checkout/);
   assert.match(j.refused, /NOTE: \$\{\{ needs\.reserve\.outputs\.note \}\}\n/);
@@ -166,9 +170,13 @@ test('the sandbox probe is Eric\'s own run from main, under the build\'s setting
   assert.ok(j.probe.indexOf('cp .github/agent/claude-settings.json .github/agent/sandbox-probe.js "$RUNNER_TEMP/guard/"') < j.probe.indexOf('- name: Probe'));
   assert.match(j.probe, /node "\$RUNNER_TEMP\/guard\/sandbox-probe\.js" --check probe\/report\.json/);
   assert.doesNotMatch(text, /upload-artifact|contents: write|git push/);
+  // The probe runs under the build's TMPDIR, inside the checkout and git-ignored.
+  assert.match(j.probe, /TMPDIR: \$\{\{ github\.workspace \}\}\/\.cr\/tmp\n/);
+  assert.match(jobs(FILES[0][1]).build, /TMPDIR: \$\{\{ github\.workspace \}\}\/\.cr\/tmp\n\s+run: \|\n\s+mkdir -p "\$TMPDIR"\n/, 'the builder\'s temp files stay inside the checkout');
+  assert.match(read('.gitignore'), /^\.cr\/$/m, '.cr/ is git-ignored, so nothing under TMPDIR reaches the patch');
 
   const probe = require(path.join(ROOT, '.github', 'agent', 'sandbox-probe.js'));
-  const held = { anthropic_key_visible: false, canary_visible: false, npm_registry: 'HTTP 200', other_host: 'blocked (ECONNREFUSED)', anthropic_api: 'blocked (ECONNREFUSED)', proc_self_environ: 'readable, no canary', proc_parent_environ: 'unreadable (ENOENT)', proc_scan: { pids: 3, with_canary: 0 }, write_home: 'refused (EROFS)', write_runner_temp: 'refused (EROFS)', write_checkout: 'written' };
+  const held = { anthropic_key_visible: false, canary_visible: false, npm_registry: 'HTTP 200', other_host: 'blocked (ECONNREFUSED)', anthropic_api: 'blocked (ECONNREFUSED)', proc_self_environ: 'readable, no canary', proc_parent_environ: 'unreadable (ENOENT)', proc_scan: { pids: 3, with_canary: 0 }, write_home: 'refused (EROFS)', write_runner_temp: 'refused (EROFS)', write_checkout: 'written', write_tmpdir: 'written', tmpdir_in_checkout: true };
   const canary = 'c'.repeat(48);
   const fails = (r, o = {}) => probe.verdict(r, { resultText: 'The read was refused.', canary, ...o }).filter(([, ok]) => !ok).map(([n]) => n);
   assert.deepEqual(fails(held), []);
@@ -177,6 +185,7 @@ test('the sandbox probe is Eric\'s own run from main, under the build\'s setting
   assert.deepEqual(fails({ ...held, other_host: 'HTTP 200' }), ['any other host blocked']);
   assert.deepEqual(fails({ ...held, proc_scan: { pids: 9, with_canary: 1 } }), ['no visible process environment holds the canary']);
   assert.deepEqual(fails({ ...held, write_runner_temp: 'written' }), ['no write to the runner\'s temp (where the guard\'s copies are)']);
+  assert.deepEqual(fails({ ...held, write_tmpdir: 'refused (EROFS)' }), ['writes to os.tmpdir() work (the desk\'s tests make temporary workspaces there)']);
   assert.deepEqual(fails(held, { resultText: `it says ${canary}` }), ['the builder\'s answer does not carry the canary']);
   assert.deepEqual(fails(held, { canary: '' }), ['the builder\'s answer does not carry the canary'], 'a check without the canary proves nothing');
 });

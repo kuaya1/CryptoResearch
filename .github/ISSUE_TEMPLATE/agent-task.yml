@@ -4,7 +4,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        The agent lane builds this issue only after Eric adds the **agent:build** label, and only the version of the issue he labeled: an edit after that needs the label again. The build opens a pull request that Eric merges himself. Keep secrets, records and addresses out of it: this repository is public.
+        The agent lane builds this issue only after Eric adds the **agent:build** label, and only the version of the issue he labeled: an edit after that needs the label again. The build opens a pull request that Eric merges himself. The outcome, the acceptance checks and the negative cases are the task; the files and tests are optional hints that narrow the build (empty, the template's own directories are the scope). Keep secrets, records and addresses out of it: this repository is public.
   - type: dropdown
     id: lane_template
     attributes:
@@ -40,16 +40,16 @@ body:
     id: tests
     attributes:
       label: Regression tests
-      description: The test files under dashboard/tests/ that show the outcome (added or changed by the build).
+      description: Optional. The test files under dashboard/tests/ that show the outcome (added or changed by the build). Empty, the build names them; every build still adds or changes a test.
     validations:
-      required: true
+      required: false
   - type: textarea
     id: paths
     attributes:
       label: Files to change
-      description: One repository path per line, tests included. The build may change nothing else.
+      description: Optional. One repository path per line to narrow the build. Empty, the build may change any file inside the template's own directories, never a protected or forbidden one.
     validations:
-      required: true
+      required: false
   - type: textarea
     id: notes
     attributes:

@@ -32,8 +32,8 @@
 #            request. The App pushes only agent/ branches and cannot merge,
 #            approve or change a workflow (.github/rulesets).
 #   record   the outcome in the ledger, with what publish did.
-#   refused  a /revise of Eric's that reserved nothing says why on the pull
-#            request.
+#   refused  a build or a /revise of Eric's that reserved nothing says why on
+#            the issue or the pull request (nothing was spent).
 #
 # Nothing here merges or approves anything: Eric merges each pull request.
 # A re-run of failed jobs builds nothing (the reservation belongs to the
@@ -122,16 +122,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      issues: write # says on the issue why a build did not start
       pull-requests: write # says on the pull request why /revise did nothing
     steps:
       - env:
           GH_TOKEN: ${{ github.token }}
+          KIND: ${{ needs.reserve.outputs.kind }}
           NUMBER: ${{ github.event.issue.number }}
           COMMENT: ${{ github.event.comment.id }}
           NOTE: ${{ needs.reserve.outputs.note }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          printf 'Revision not started for comment %s: %s\n\nNothing was reserved or spent. Run: %s\n' "$COMMENT" "$NOTE" "$RUN_URL" > "$RUNNER_TEMP/refused.md"
+          if [ "$KIND" = revise ]; then
+            printf 'Revision not started for comment %s: %s\n\nNothing was reserved or spent. Run: %s\n' "$COMMENT" "$NOTE" "$RUN_URL" > "$RUNNER_TEMP/refused.md"
+          else
+            printf 'Build not started: %s\n\nNothing was reserved or spent. Fix the task and add the agent:build label again. Run: %s\n' "$NOTE" "$RUN_URL" > "$RUNNER_TEMP/refused.md"
+          fi
           gh issue comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/refused.md"
 
   build:
@@ -206,11 +212,16 @@ jobs:
       # registry, file tools only inside the checkout, no hooks, no
       # unsandboxed retry. Only the user source is read besides it, so the
       # checkout's own .claude/ settings never apply.
+      # TMPDIR points inside the checkout (.cr/ is git-ignored): the desk's
+      # tests make temporary workspaces with os.tmpdir(), the sandbox writes
+      # only inside the checkout, and nothing of them reaches the patch.
       - name: Build (sandboxed)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
+          TMPDIR: ${{ github.workspace }}/.cr/tmp
         run: |
+          mkdir -p "$TMPDIR"
           model=$(node -p "require(process.env.RUNNER_TEMP + '/guard/agent-policy.json').build.model")
           budget=$(node -p "require(process.env.RUNNER_TEMP + '/guard/agent-policy.json').build.max_budget_usd")
           "$RUNNER_TEMP/claude/node_modules/.bin/claude" -p --model "$model" --max-budget-usd "$budget" \

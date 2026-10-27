@@ -82,7 +82,14 @@ function taskOf(issue, { policy = loadPolicy() } = {}) {
   const template = oneLine(f[FIELDS.template], 40);
   const tpl = P.TEMPLATES[template];
   if (!tpl || P.RETIRED[template] || !policy.templates[template]) problems.push(`the template "${template || 'none'}" is not one the agent lane builds (${Object.keys(policy.templates).join(', ')})`);
-  for (const k of ['outcome', 'acceptance', 'negative', 'tests', 'paths']) if (!String(f[FIELDS[k]] || '').trim()) problems.push(`"${FIELDS[k]}" is empty`);
+  // The outcome, the acceptance checks and the negative cases are the task:
+  // the verifier and the review judge the change against them. Files to
+  // change and Regression tests are hints (cr.agent-task.v2, 2026-10-27):
+  // named, they narrow the build; empty, the template's own paths are the
+  // scope and the build names its tests. Every candidate still adds or
+  // changes a test (checkChange, requires_tests), and the guard, the
+  // verifier, the review and Eric's merge are unchanged.
+  for (const k of ['outcome', 'acceptance', 'negative']) if (!String(f[FIELDS[k]] || '').trim()) problems.push(`"${FIELDS[k]}" is empty`);
   const paths = listOf(f[FIELDS.paths]).map((l) => l.split(/\s+/)[0]);
   const tests = [...new Set(String(f[FIELDS.tests] || '').match(TEST_PATH_RE) || [])];
   if (tpl) {
@@ -98,7 +105,6 @@ function taskOf(issue, { policy = loadPolicy() } = {}) {
       if (r) problems.push(`${p} reaches ${r}, which ${template} does not reach`);
     }
     const testGlob = tpl.requires_tests || P.TEST_FILES;
-    if (tpl.requires_tests && !tests.length) problems.push(`"${FIELDS.tests}" names no test file under dashboard/tests/ (${template} needs one)`);
     for (const t of tests) {
       if (!P.globRe(testGlob).test(t)) problems.push(`${t} is not a test file ${template} runs (${testGlob})`);
       if (BP.protectedHit(t) || BP.restrictedFor(t, template)) problems.push(`${t} is a guarded test the lane never changes; name a test of the outcome`);
@@ -197,7 +203,12 @@ function checkChange({ cwd, base, rev, task }) {
     if (!P.matches(p, tpl.allowed_paths)) reasons.push(`${p} is outside ${task.template}`);
     const fb = (tpl.forbidden_paths || []).find((g) => P.globRe(g).test(p));
     if (fb) reasons.push(`${p} is forbidden for ${task.template} (${fb})`);
-    if (!task.paths.some((g) => P.globRe(g).test(p)) && !task.tests.includes(p)) reasons.push(`${p} is not among the task's files to change`);
+    // The task's paths narrow the template; a task that names none leaves
+    // the template's own paths as the scope. A test file the template
+    // requires (dashboard/tests/*.test.js, less the guarded ones refused
+    // above) is inside the scope named or not.
+    const testFile = Boolean(tpl.requires_tests) && P.globRe(tpl.requires_tests).test(p);
+    if (task.paths.length && !task.paths.some((g) => P.globRe(g).test(p)) && !task.tests.includes(p) && !testFile) reasons.push(`${p} is not among the task's files to change`);
   }
   const diff = git(cwd, ['diff', '--binary', '--full-index', '--no-renames', base, rev]).raw;
   const sections = P.diffSections(diff);
@@ -330,11 +341,23 @@ async function prCheck({ cwd, base, head, branch, author, botLogin, issueOf, pol
   return { agent: true, ok: reasons.length === 0, reasons: [...new Set(reasons)], trailers, task, merge_base: mb, files: ch.files };
 }
 
+// What the builder may change, in words: the task's paths, or, when it names
+// none, the template's own paths less what it forbids (a protected path is
+// never inside either).
+function scopeWords(task) {
+  const tpl = P.TEMPLATES[task.template];
+  if (task.paths.length) return task.paths.join(', ');
+  if (!tpl) return 'none';
+  const forbidden = tpl.forbidden_paths && tpl.forbidden_paths.length ? `; never ${tpl.forbidden_paths.join(', ')}` : '';
+  return `any file under ${tpl.allowed_paths.join(', ')}${forbidden}, and never a protected path; at most ${tpl.limits.max_files} files, only what the outcome needs`;
+}
+const NO_TESTS_NAMED = 'none named: add or change at least one test file under dashboard/tests/ (<name>.test.js) that shows the outcome and each negative case';
+
 // The builder's task text. The issue is Eric's; it is still marked as task
 // data, and the standing rules come from builder-rules.md.
 function builderPrompt(task) {
   return [
-    `Build issue #${task.number} of kuaya1/CryptoResearch in this checkout (template ${task.template}). Work only in the files the task names; when the change is done, stop. Do not commit, push or open anything: the lane commits your working tree after you finish.`,
+    `Build issue #${task.number} of kuaya1/CryptoResearch in this checkout (template ${task.template}). Work only in the files the task lets you change; when the change is done, stop. Do not commit, push or open anything: the lane commits your working tree after you finish.`,
     '',
     '<task>',
     `Title: ${task.title}`,
@@ -345,8 +368,8 @@ function builderPrompt(task) {
     '',
     `Negative cases (each one needs a test that fails when it is not handled):\n${task.negative}`,
     '',
-    `Regression tests to add or change: ${task.tests.join(', ') || 'none named'}`,
-    `Files you may change: ${task.paths.join(', ')}`,
+    `Regression tests to add or change: ${task.tests.join(', ') || NO_TESTS_NAMED}`,
+    `Files you may change: ${scopeWords(task)}`,
     ...(task.notes ? ['', `Notes:\n${task.notes}`] : []),
     '</task>',
   ].join('\n');
@@ -437,17 +460,20 @@ async function main(argv, { now = () => Date.now(), cwd = process.cwd(), env = p
       try { live = await gh.issue(task.number); } catch (_) { live = null; }
       reasons.push(...liveCheck(task, live, { policy }));
     }
-    if (reasons.length) { out({ ok: false }, `### Not built\n\n${reasons.map((r) => `- ${r}`).join('\n')}`); return 0; }
+    // A build that does not start is said on the issue by the refused job
+    // (the note, as data), so Eric reads why where he added the label.
+    const refused = (why) => out({ ok: false, kind: 'build', note: oneLine(why.join('; '), 1500) }, `### Not built\n\n${why.map((r) => `- ${r}`).join('\n')}`);
+    if (reasons.length) { refused(reasons); return 0; }
     const base = flags.base;
     const branch = `${policy.branch_prefix}${task.number}`;
     const head = git(cwd, ['ls-remote', 'origin', `refs/heads/${branch}`]);
-    if (head.status !== 0) { out({ ok: false }, `### Not built\n\n- the head of ${branch} could not be read (${oneLine(head.err, 160)}); nothing is reserved`); return 0; }
+    if (head.status !== 0) { refused([`the head of ${branch} could not be read (${oneLine(head.err, 160)}); nothing is reserved`]); return 0; }
     const predecessor = head.out.split(/\s+/)[0] || 'absent';
     const bind = buildBinding(task, base, predecessor);
     const run = `${env.GITHUB_RUN_ID}/${env.GITHUB_RUN_ATTEMPT}`;
     const holdMs = (policy.build.timeout_minutes + L.BUILD_GRACE_MINUTES) * 60000;
     const d = L.transact(cwd, { decide: (entries) => L.decideBuild(entries, { binding: L.bindingOf(bind), bind, ceilings: policy.ceilings, now: now(), usd: policy.build.max_budget_usd, run, holdMs }), message: `build reserve #${task.number}` });
-    if (d.error || d.action !== 'build') { out({ ok: false }, `### Not built\n\n- ${d.error || d.why}`); return 0; }
+    if (d.error || d.action !== 'build') { refused([d.error || d.why]); return 0; }
     out({ ok: true, kind: 'build', reservation: d.id, attempt: env.GITHUB_RUN_ATTEMPT, number: task.number, issue: task.number, notify: task.number, title: task.title, template: task.template, task_sha256: task.body_sha256, predecessor, base, checkout: base }, `Build of #${task.number} (${task.template}) reserved as ${d.id}: at most $${policy.build.max_budget_usd}, on ${branch} at ${predecessor === 'absent' ? 'no branch yet' : predecessor.slice(0, 12)}.${d.lost && d.lost.length ? ` Recorded as lost first (no outcome after ${Math.round(holdMs / 60000)} min): ${d.lost.join(', ')}.` : ''}`);
     return 0;
   }
@@ -511,4 +537,4 @@ async function main(argv, { now = () => Date.now(), cwd = process.cwd(), env = p
 
 if (require.main === module) main(process.argv.slice(2)).then((c) => { process.exitCode = c; }, (err) => { process.stderr.write(`agent-guard: ${String((err && err.message) || err).slice(0, 400)}\n`); process.exitCode = 1; });
 
-module.exports = { FIELDS, SHA_RE, loadPolicy, oneLine, parseIssueForm, taskOf, authorize, liveCheck, buildBinding, changesOf, checkChange, applyPatch, commitMessage, publish, commitsOf, botEmailOf, isAgentPr, trailersOf, pureMerge, prCheck, builderPrompt, prBody, githubApi, main };
+module.exports = { FIELDS, SHA_RE, NO_TESTS_NAMED, loadPolicy, oneLine, parseIssueForm, taskOf, authorize, liveCheck, buildBinding, changesOf, checkChange, applyPatch, commitMessage, publish, commitsOf, botEmailOf, isAgentPr, trailersOf, pureMerge, prCheck, scopeWords, builderPrompt, prBody, githubApi, main };

@@ -69,6 +69,7 @@ node_modules/
 # Audits: only the reviewed reports below are tracked
 
 /audits/*/*
+!/audits/2026-10-27-agent-lane-redteam/README.md
 !/audits/2026-10-27-next-phase/README.md
 !/audits/2026-10-26-engineering-simplification/README.md
 !/audits/2026-10-26-engineering-v3/README.md
