@@ -5,8 +5,13 @@
 #   agent-guard   main's guard reads the candidate as data: its commits are
 #                 the builder App's with one task's trailers, the task is still
 #                 labeled and unchanged since the build, and the change stays
-#                 inside it. An owner change passes and gets its agent-review
-#                 check here, neutral: no model reviews Eric's own work.
+#                 inside it. An owner change (opened by Eric, on no
+#                 automation branch, no assistant's or bot's commit) passes
+#                 and gets its agent-review check here, neutral: no model
+#                 reviews Eric's own work. Any other change that is not an
+#                 agent candidate gets it as action_required: no model
+#                 reviews it either, and only Eric's eric-reviewed dispatch
+#                 for that exact head clears it (agent-review.yml).
 #   agent-verify  main's verifier runs the named tests on the proposed merge
 #                 tree (agent-verify.js): they pass, every changed line of code
 #                 runs under them, and each implementation file put back as
@@ -64,7 +69,7 @@ jobs:
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" fetch -q --no-tags origin "+refs/pull/${PR}/head:refs/remotes/pr/head"
           node dashboard/scripts/agent-guard.js pr --base "$BASE" --head "$HEAD" --branch "$BRANCH" --author "$AUTHOR" --pr "$PR"
       - name: An owner change needs no model review
-        if: steps.guard.outputs.agent == 'false'
+        if: steps.guard.outputs.agent == 'false' && steps.guard.outputs.owner == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD: ${{ github.event.pull_request.head.sha }}
@@ -73,7 +78,23 @@ jobs:
           gh api -X POST "repos/${GITHUB_REPOSITORY}/check-runs" \
             -f name=agent-review -f head_sha="$HEAD" -f status=completed -f conclusion=neutral -f details_url="$RUN_URL" \
             -f "output[title]=Owner change: no model review" \
-            -f "output[summary]=Not an agent candidate (no agent/ branch, builder author or builder commit). Eric's merge is the review." > /dev/null
+            -f "output[summary]=Not an agent candidate, opened by the repository's owner, on no automation branch, with no assistant's or bot's commit. Eric's merge is the review." > /dev/null
+      # Anything else that is not an agent candidate (another opener, an
+      # automation branch, an assistant's or a bot's commit) waits: only
+      # Eric's eric-reviewed dispatch for this exact head clears it
+      # (agent-review.yml; red-team review, 2026-10-27).
+      - name: Any other change waits for a review of its head
+        if: steps.guard.outputs.agent == 'false' && steps.guard.outputs.owner != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          WHY: ${{ steps.guard.outputs.why }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/check-runs" \
+            -f name=agent-review -f head_sha="$HEAD" -f status=completed -f conclusion=action_required -f details_url="$RUN_URL" \
+            -f "output[title]=Not Eric's own change: review this head" \
+            -f "output[summary]=Not an agent candidate, and not Eric's own change: ${WHY}. No model reviews it; Eric's eric-reviewed dispatch for this exact head clears it." > /dev/null
 
   agent-verify:
     name: agent-verify

@@ -4,7 +4,7 @@
 // commit, each credential only in the job that needs it, the jobs that run a
 // candidate's code holding no write permission and no secret, the reviewer
 // never checking out a candidate, and the required checks the ruleset names
-// all produced. Read as text; nothing runs.
+// all produced. Read as text; only eric-reviewed's shell runs, with a fake gh.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -342,6 +342,65 @@ test('the checks the ruleset requires are the ones these workflows produce', () 
   assert.match(read('.github/workflows/test.yml'), /^jobs:\n {2}test:\n/m);
   assert.match(FILES[1][1], /-f name=agent-review /, 'agent-checks posts the owner change\'s agent-review');
   assert.deepEqual(AR.REQUIRED, ['test', 'agent-guard', 'agent-verify']);
+});
+
+test('agent-checks gives the neutral agent-review only to Eric\'s own change; any other change that is not a candidate waits as action_required (red-team review, 2026-10-27)', () => {
+  const j = jobs(FILES[1][1])['agent-guard'];
+  const steps = j.split(/\n {6}- /);
+  const owner = steps.find((s) => s.startsWith('name: An owner change needs no model review'));
+  const other = steps.find((s) => s.startsWith('name: Any other change waits for a review of its head'));
+  assert.ok(owner && other);
+  assert.match(owner, /if: steps\.guard\.outputs\.agent == 'false' && steps\.guard\.outputs\.owner == 'true'\n/);
+  assert.match(owner, /-f conclusion=neutral /);
+  assert.match(other, /if: steps\.guard\.outputs\.agent == 'false' && steps\.guard\.outputs\.owner != 'true'\n/);
+  assert.match(other, /-f conclusion=action_required /);
+  // The guard's words reach the shell as data, never inline.
+  assert.match(other, /WHY: \$\{\{ steps\.guard\.outputs\.why \}\}\n/);
+  assert.doesNotMatch(other.slice(other.indexOf('run: |')), /\$\{\{/);
+});
+
+// The post-review step's shell, as agent-review.yml holds it, run by bash with
+// a fake gh on PATH: only the eric-reviewed branch, nothing sent anywhere.
+const GIT_BASH = 'C:\\Program Files\\Git\\bin\\bash.exe';
+const BASH = process.platform === 'win32' ? (fs.existsSync(GIT_BASH) ? GIT_BASH : null) : 'bash';
+test('eric-reviewed marks only the head Eric names, and only while the pull request is still at it (red-team review, 2026-10-27)', { skip: !BASH && 'no bash here; CI runs it' }, (t) => {
+  const os = require('os');
+  const { spawnSync } = require('child_process');
+  const text = FILES[2][1];
+  assert.match(text, /\n {6}head:\n {8}description: The head commit you reviewed[^\n]*\n {8}type: string\n/);
+  const from = text.indexOf('          set -euo pipefail\n');
+  const to = text.indexOf('          esac\n', from) + '          esac\n'.length;
+  assert.ok(from > 0 && to > from);
+  const shell = text.slice(from, to).split('\n').map((l) => l.slice(10)).join('\n');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-eric-reviewed-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'step.sh'), shell);
+  fs.mkdirSync(path.join(dir, 'bin'));
+  fs.writeFileSync(path.join(dir, 'bin', 'gh'), '#!/bin/sh\nif [ "$1" = pr ] && [ "$2" = view ]; then printf \'%s\\n\' "$FAKE_LIVE_HEAD"; exit 0; fi\nif [ "$1" = api ]; then printf \'%s\\n\' "$*" >> "$FAKE_LOG"; exit 0; fi\nexit 9\n', { mode: 0o755 });
+  const READ = 'a'.repeat(40);
+  const log = path.join(dir, 'gh.log');
+  const run = (o) => {
+    fs.rmSync(log, { force: true });
+    const r = spawnSync(BASH, [path.join(dir, 'step.sh')], { encoding: 'utf8', env: { ...process.env, PATH: `${path.join(dir, 'bin')}${path.delimiter}${process.env.PATH}`, EVENT: 'workflow_dispatch', MODE: 'eric-reviewed', PR_INPUT: '5', HEAD_INPUT: READ, TRIGGERING_ACTOR: 'kuaya1', OWNER: 'kuaya1', RUN_URL: 'https://example.invalid/run', GITHUB_REPOSITORY: 'kuaya1/FICTIONAL', FAKE_LIVE_HEAD: READ, FAKE_LOG: log, ...o } });
+    return { status: r.status, out: `${r.stdout}${r.stderr}`, posted: fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '' };
+  };
+  const ok = run({});
+  assert.equal(ok.status, 0, ok.out);
+  assert.match(ok.posted, new RegExp(`-f head_sha=${READ} -f status=completed -f conclusion=neutral `));
+  // Pushed to between Eric's reading and the dispatch: nothing marked.
+  const moved = run({ FAKE_LIVE_HEAD: 'b'.repeat(40) });
+  assert.equal(moved.status, 1);
+  assert.match(moved.out, /#5 is at b{40} now, not the head you reviewed \(a{40}\); nothing marked/);
+  assert.equal(moved.posted, '');
+  for (const HEAD_INPUT of ['', 'a'.repeat(12), 'A'.repeat(40), `${READ}\n`]) {
+    const bad = run({ HEAD_INPUT });
+    assert.equal(bad.status, 1, JSON.stringify(HEAD_INPUT));
+    assert.match(bad.out, /Name the full head commit you reviewed/);
+    assert.equal(bad.posted, '');
+  }
+  const someone = run({ TRIGGERING_ACTOR: 'someone-else' });
+  assert.equal(someone.status, 1);
+  assert.equal(someone.posted, '');
 });
 
 test('the agent policy names only live templates, and its implementation globs stay inside them', () => {
