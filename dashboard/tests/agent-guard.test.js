@@ -438,6 +438,13 @@ test('publish leases on the head its reservation recorded: a branch made, moved 
 // between publish's read and its push is never overtaken.
 test('publish is one atomic push of the branch and its ledger line: a ledger that moved is read again, a build recorded lost meanwhile is stale, and nothing goes up by halves', (t) => {
   const r = repo(t);
+  // Every commit made in one second (CI on Linux, 2026-10-27: PR #56's first
+  // run): a later build of the same tree, base and message is the very
+  // commit the branch already holds, so "the branch holds my commit" is no
+  // proof that this push landed. Pinned here so the case runs on every PC.
+  const dates = { GIT_AUTHOR_DATE: process.env.GIT_AUTHOR_DATE, GIT_COMMITTER_DATE: process.env.GIT_COMMITTER_DATE };
+  process.env.GIT_AUTHOR_DATE = process.env.GIT_COMMITTER_DATE = '2026-10-26T12:00:00Z';
+  t.after(() => { for (const [k, v] of Object.entries(dates)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
   const task = G.taskOf(issueOf(), { policy: POLICY });
   const { tree } = G.applyPatch({ cwd: r.work, base: r.base, patchFile: r.patch(GOOD), maxBytes: 600000 });
   const pub = (reservation, beforePush = null) => G.publish({ cwd: r.work, base: r.base, tree, task, run: '90/1', botName: BOT.name, botEmail: BOT.email, branch: 'agent/issue-7', reservation, policy: POLICY, beforePush });

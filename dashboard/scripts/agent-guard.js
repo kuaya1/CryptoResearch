@@ -322,9 +322,17 @@ function publish({ cwd, base, tree, task, run, botName, botEmail, branch, reserv
     if (beforePush) beforePush(i);
     const p = git(cwd, ['push', '--atomic', '--porcelain', `--force-with-lease=${ref}:${expected}`, `--force-with-lease=${L.REF}:${l.tip}`, remote, `${commit}:${ref}`, `${line.commit}:${L.REF}`]);
     const h = heads();
-    // The branch holds this commit only through this push, which carried
-    // the publishing line with it (the ledger may have moved on since).
-    if (h && h.branch === commit) return { commit, branch, replaced: expected || null, revision };
+    // Published only on the ledger's word: this attempt's publishing line for
+    // this commit, which went up with the branch in the one atomic push (the
+    // ledger may have moved on since). The branch holding the commit is not
+    // enough: a later build of the same tree, base and message made in the
+    // same second is the very commit the branch already holds (CI, PR #56).
+    if (h && h.branch === commit) {
+      const after = L.read(cwd, { remote });
+      if (after.error) return { error: `${branch} holds ${commit.slice(0, 12)}, but the ledger could not be read to confirm this push carried it (${oneLine(after.error, 160)}); nothing is retried until the ledger reads`, commit, uncertain: true };
+      const mine = L.attempts(after.entries).find((a) => a.id === res.id);
+      if (mine && mine.publishing.some((x) => x.commit === commit)) return { commit, branch, replaced: expected || null, revision };
+    }
     if (h && h.branch !== expected) return { stale: true, commit, error: `${branch} moved after this build was reserved: it was ${expected ? expected.slice(0, 12) : 'absent'} and is now ${h.branch ? h.branch.slice(0, 12) : 'absent'}; this build is not published and is not retried` };
     // Only the ledger moved (another reserve, review or record): neither ref
     // was written, so read it again and decide again.
@@ -568,7 +576,7 @@ async function main(argv, { now = () => Date.now(), cwd = process.cwd(), env = p
     if (p.stale) { out({ ok: false, state: 'stale', note: p.error }, `### Not published: stale
 
 - ${p.error}`); return 0; }
-    if (p.error) { out({ ok: false, state: 'failed' }, `### Not published
+    if (p.error) { out({ ok: false, state: p.uncertain ? 'uncertain' : 'failed' }, `### ${p.uncertain ? 'Publish not confirmed' : 'Not published'}
 
 - ${p.error}`); return 1; }
     out({ ok: true, state: 'published', commit: p.commit, branch: p.branch }, `Published ${p.commit.slice(0, 12)} to ${p.branch}${p.replaced ? ` (replacing ${p.replaced.slice(0, 12)})` : ''}, with its publishing line in the ledger in the same push.`);
