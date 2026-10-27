@@ -222,6 +222,9 @@ const PROTECTED_SAMPLES = [
   'package.json', 'package-lock.json', 'dashboard/web/package.json', 'dashboard/web/package-lock.json', 'render.yaml', 'render.yml',
   'portfolio/x.json', 'paper/x.jsonl', 'projects/x/project.json', 'config/settings.json', 'secrets/x.json',
   'dashboard/engineering/inbox.js', 'dashboard/engineering/x.js', 'AGENTS.md', '.mcp.json',
+  // Exclusive merge authority (2026-10-26): the boundary's checker and the
+  // agent lane's trusted scripts and tests.
+  'dashboard/scripts/merge-boundary-check.js', 'dashboard/scripts/agent-review.js', 'dashboard/tests/merge-boundary.test.js', 'dashboard/tests/agent-ledger.test.js',
 ];
 function globTouchesProtected(glob) {
   if (!glob.includes('*')) return protectedWhy(glob);

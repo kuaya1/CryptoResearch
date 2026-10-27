@@ -1,0 +1,25 @@
+{
+  "name": "automation-branches",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": ["~ALL"],
+      "exclude": [
+        "refs/heads/agent/**",
+        "refs/heads/agent-ledger",
+        "refs/heads/visual-proof",
+        "refs/heads/claude/intake-issue-*",
+        "refs/heads/claude/admission-*"
+      ]
+    }
+  },
+  "rules": [
+    { "type": "creation" },
+    { "type": "update", "parameters": { "update_allows_fetch_and_merge": false } },
+    { "type": "deletion" }
+  ],
+  "bypass_actors": [
+    { "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }
+  ]
+}

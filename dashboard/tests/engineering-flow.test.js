@@ -136,6 +136,33 @@ test('admission: the worker numbers from Git, the desk binds, the workflow adds 
   assert.ok(BP.backlogItems(main).get(5).engineering);
 });
 
+// Eric alone updates main (2026-10-26, audits/2026-10-26-engineering-simplification):
+// the workflow proposes, never pushes main.
+test('admission with propose re-applies the bound entry on its own branch and leaves main untouched', async (t) => {
+  const f = fixture(t);
+  const { ws, cleanup } = tempWorkspace('engflow-propose'); t.after(cleanup);
+  I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o());
+  const id = admitted(ws, 'Proposed note (FICTIONAL)');
+  const c = I.claimTask(ws, W1, { task_id: id }, o());
+  const a = bindAndPush(f, ws, id, { token: c.claim_token });
+  // Main moves after the builder's commit: the proposal is re-applied on the new main.
+  const before = f.onMain('dashboard/core/lib.txt', 'lib 2\n', 'Eric moves main');
+  const branch = `claude/admission-${id}`;
+  const r = await BP.admit(f.runner(), { branch, head: a.head, desk: DESK_URL, fetchJson: deskOf(ws), propose: true });
+  assert.equal(r.status, 'proposed', JSON.stringify(r));
+  assert.equal(f.mainSha(), before, 'main is not written');
+  const tip = g(f.work, 'ls-remote', 'origin', `refs/heads/${branch}`).split(/\s+/)[0];
+  assert.equal(tip, r.merge, 'the branch holds the re-applied commit');
+  g(f.work, 'fetch', '-q', 'origin');
+  assert.equal(g(f.work, 'rev-parse', `${tip}^`), before, 'one commit on top of main as it is now');
+  assert.deepEqual(g(f.work, 'diff', '--name-only', before, tip).split('\n'), ['DESK_STATE.md']);
+  assert.equal(f.show(tip, 'DESK_STATE.md').split(a.entry.trim()).length, 2, 'the entry once');
+  assert.match(BP.summaryOf('admission', r), /Main is unchanged; Eric merges/);
+  // A second run on the old head finds the branch moved and writes nothing.
+  assert.equal((await BP.admit(f.runner(), { branch, head: a.head, desk: DESK_URL, fetchJson: deskOf(ws), propose: true })).status, 'head_moved');
+  assert.equal(f.mainSha(), before);
+});
+
 test('admission refuses what the desk did not bind: an unreadable desk, another entry, an extra file, a taken number', async (t) => {
   const f = fixture(t);
   const { ws, cleanup } = tempWorkspace('engflow-refuse'); t.after(cleanup);
