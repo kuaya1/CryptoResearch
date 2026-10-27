@@ -12,6 +12,9 @@
 // completions (store: true, metadata cr_attempt) before anything is sent
 // again. A verdict is posted only once the ledger holds it, so a failed save
 // is recovered from the stored completion, and a failed post from the ledger.
+// Each verdict line is signed with AGENT_LEDGER_KEY (agent-ledger.js
+// ledgerKey), never with a key derived from the OpenAI key; without it
+// nothing is read, reserved or posted.
 //
 //   run       one pull request head (workflow_run, or Eric's dispatch)
 //   sweep     every open attempt (schedule): reconcile, record, post
@@ -39,6 +42,7 @@ const MODEL_RE = /^[A-Za-z0-9._:-]{1,64}$/;
 // reviewer's own kind of assistant.
 const REVIEWER_KIN_RE = /\b(openai|chatgpt|codex)\b|\bgpt-?\d/i;
 const TRAILER_RE = /^(co-authored-by|signed-off-by|authored-by|generated-by|reviewed-by):\s*(.+)$/gim;
+const NO_LEDGER_KEY = `AGENT_LEDGER_KEY (a repository secret, Eric's, at least 32 characters) is not set; nothing was read, reserved or posted.`;
 // Statuses after which OpenAI may have accepted the request.
 const MAYBE_SENT = new Set([408, 409, 500, 502, 503, 504]);
 
@@ -216,6 +220,9 @@ async function reviewHead({ pr, head, env = process.env, cwd = process.cwd(), re
   const say = (status, says, extra = {}) => ({ status, says, pr, head, ...extra });
   const post = async (o) => { const r = await gh.post(o); if (!r.ok) throw new Error(`the ${CHECK} check could not be posted (HTTP ${r.status})`); return true; };
   const needsEric = (title, summary) => post(checkBody({ head, conclusion: 'action_required', title, summary: `${summary}\n\nNothing was merged or approved. Eric can re-run this review (Actions, agent-review, Run workflow) or review the change himself.`, runUrl }));
+  // 0. The ledger's key: without it no verdict can be signed or checked.
+  const key = L.ledgerKey(env);
+  if (!key) return say('not_configured', NO_LEDGER_KEY);
 
   // 1. The pull request as GitHub holds it now.
   const p = await gh.pull(pr);
@@ -253,8 +260,7 @@ async function reviewHead({ pr, head, env = process.env, cwd = process.cwd(), re
   const config = reviewConfig(env, policy);
   const bind = bindingFields({ repo, pr, head, mergeBase, diffSha: real.diff_sha256, task: g.task, config });
   const binding = L.bindingOf(bind);
-  const key = L.macKey(env.OPENAI_API_KEY);
-  if (!key || !MODEL_RE.test(config.model)) { await needsEric('Not reviewed: the reviewer is not configured', 'OPENAI_API_KEY (secret) and OPENAI_REVIEW_MODEL (variable) are Eric\'s to set.'); return say('not_configured', 'not configured', { posted: true }); }
+  if (!env.OPENAI_API_KEY || !MODEL_RE.test(config.model)) { await needsEric('Not reviewed: the reviewer is not configured', 'OPENAI_API_KEY (secret) and OPENAI_REVIEW_MODEL (variable) are Eric\'s to set.'); return say('not_configured', 'not configured', { posted: true }); }
   const messages = buildPrompt({ task: g.task, head, mergeBase, files: real.files, diff: real.diff });
   const tokens = Math.ceil(JSON.stringify(messages).length / 3) + policy.review.max_completion_tokens;
   const run = env.GITHUB_RUN_ID ? `${env.GITHUB_RUN_ID}/${env.GITHUB_RUN_ATTEMPT || 1}` : 'local';
@@ -314,6 +320,8 @@ async function reviewHead({ pr, head, env = process.env, cwd = process.cwd(), re
 // again through reviewHead when its head is still its pull request's, else
 // only reconciled so the count is right.
 async function sweep({ env = process.env, cwd = process.cwd(), remote = 'origin', fetchImpl = globalThis.fetch, now = () => Date.now(), policy = G.loadPolicy(), runUrl = null }) {
+  const key = L.ledgerKey(env);
+  if (!key) return [{ status: 'not_configured', says: NO_LEDGER_KEY }];
   const l = L.read(cwd, { remote });
   if (l.error) return [{ status: 'ledger', says: l.error }];
   const gh = github({ token: env.GITHUB_TOKEN, repo: env.GITHUB_REPOSITORY, fetchImpl });
@@ -330,7 +338,7 @@ async function sweep({ env = process.env, cwd = process.cwd(), remote = 'origin'
     const found = await findStored({ fetchImpl, env, id: a.id });
     const age = now() - Date.parse(a.reserve.at);
     let rec = null;
-    if (found.found) rec = { ...responseOf(found.completion, { id: a.id, binding: a.reserve.binding, key: L.macKey(env.OPENAI_API_KEY), via: 'reconcile' }) };
+    if (found.found) rec = { ...responseOf(found.completion, { id: a.id, binding: a.reserve.binding, key, via: 'reconcile' }) };
     else if (!found.error && age >= policy.review.unknown_grace_minutes * 60000) rec = { t: 'outcome', id: a.id, state: 'lost', error: `not found at OpenAI after ${Math.round(age / 60000)} min` };
     if (rec) L.transact(cwd, { remote, decide: () => ({ append: [{ ...rec, at: new Date(now()).toISOString() }] }), message: `review settled ${a.id}` });
     out.push({ status: rec ? 'settled' : 'uncertain', pr, head, says: `#${pr} moved on from ${head.slice(0, 12)}; attempt ${a.id} ${rec ? `recorded as ${rec.state}` : `still open (${found.error || 'young'})`}.` });
@@ -356,6 +364,8 @@ async function preflight({ env = process.env, cwd = process.cwd(), remote = 'ori
       else { ok = false; lines.push(`OpenAI: GET /v1/chat/completions answered HTTP ${list.status}; an uncertain attempt could not be reconciled (the key needs read access to chat completions).`); }
     } catch (err) { ok = false; lines.push(`OpenAI: unreachable (${oneLine(err && err.message, 120)}).`); }
   }
+  if (L.ledgerKey(env)) lines.push(`Ledger key: AGENT_LEDGER_KEY is set (at least ${L.LEDGER_KEY_MIN} characters); verdicts are signed with it.`);
+  else { ok = false; lines.push(`Ledger key: ${NO_LEDGER_KEY}`); }
   const l = L.read(cwd, { remote });
   if (l.error) { ok = false; lines.push(`Ledger: ${l.error}`); } else {
     const day = L.dayOf(now());

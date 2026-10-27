@@ -1,20 +1,39 @@
 # The agent lane's builder (Eric, 2026-10-26;
 # audits/2026-10-26-engineering-simplification). Eric opens an issue with the
 # agent task form and adds the agent:build label himself; that label is the
-# authorization, for that version of the issue only.
+# authorization, for that version of the issue only. On an agent candidate's
+# pull request, his own /revise comment authorizes one revision of it at the
+# head its branch holds then (Engineering v3, change 5).
 #
 #   reserve  main's guard checks that the label is Eric's own and the task
-#            stays inside its template, then reserves one paid build for this
-#            run in the ledger (branch agent-ledger) before anything is sent.
-#   build    Claude Code (pinned by lockfile) in a fresh checkout of main with
-#            no repository write credential, no reviewer token, no OpenAI key
-#            and no App key; its working tree's diff is the only output.
-#   publish  main's guard applies that diff to main as data and checks it
+#            stays inside its template, reads the issue again (still open,
+#            still labeled, unchanged since the event), then reserves one paid
+#            build for this run in the ledger (branch agent-ledger) before
+#            anything is sent, with the head agent/issue-<n> holds now (or
+#            "absent"). For /revise, agent-revise.js checks the comment, the
+#            pull request, its head and its commits, reads the feedback from
+#            its three authenticated sources and reserves one paid revision
+#            bound to them. One build or revision per issue at a time: another
+#            with no outcome holds the issue for 65 minutes, then is lost.
+#   build    Claude Code (pinned by lockfile) in a fresh checkout with no
+#            repository write credential, no reviewer token, no OpenAI key, no
+#            ledger key and no App key, from main's commit for a build or the
+#            candidate's head for a revision; its commands run in Claude
+#            Code's sandbox (main's .github/agent/claude-settings.json) with
+#            the Anthropic key unset and no network but the npm registry. Its
+#            working tree's diff against the base is the only output, scanned
+#            for key-shaped strings before upload.
+#   publish  main's guard applies that diff to the base as data and checks it
 #            against the task again; the builder App commits it, pushes
-#            agent/issue-<n> and opens the pull request. The App pushes only
-#            agent/ branches and cannot merge, approve or change a workflow
-#            (.github/rulesets).
-#   record   the build's outcome in the ledger.
+#            agent/issue-<n> by lease on the head the reservation recorded,
+#            and opens (or updates) the pull request. A branch that moved
+#            since (another build, or Eric) makes this one "stale": not
+#            pushed, not retried, recorded so and said on the issue or pull
+#            request. The App pushes only agent/ branches and cannot merge,
+#            approve or change a workflow (.github/rulesets).
+#   record   the outcome in the ledger, with what publish did.
+#   refused  a /revise of Eric's that reserved nothing says why on the pull
+#            request.
 #
 # Nothing here merges or approves anything: Eric merges each pull request.
 # A re-run of failed jobs builds nothing (the reservation belongs to the
@@ -25,38 +44,95 @@ name: agent-build
 on:
   issues:
     types: [labeled]
+  issue_comment:
+    types: [created]
 
 permissions: {}
 
+# One group per issue for a label and one per comment for /revise, so a
+# comment never cancels or waits behind another run; the ledger keeps one
+# build or revision per issue at a time.
 concurrency:
-  group: agent-build-${{ github.event.issue.number }}
+  group: agent-build-${{ github.event_name == 'issue_comment' && format('comment-{0}', github.event.comment.id) || github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
   reserve:
-    if: github.event.label.name == 'agent:build'
+    if: >-
+      (github.event_name == 'issues' && github.event.label.name == 'agent:build') ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/revise') && github.event.comment.user.login == github.repository_owner)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: write # the ledger branch only (rulesets automation-branches and agent-ledger)
+      issues: read # the issue, and a /revise comment, as GitHub holds them now
+      pull-requests: read # /revise: the pull request and its head
+      checks: read # /revise: agent-guard and agent-verify at that head
+      actions: read # /revise: the workflow run each of those checks belongs to
     outputs:
       ok: ${{ steps.reserve.outputs.ok }}
+      kind: ${{ steps.reserve.outputs.kind }}
       reservation: ${{ steps.reserve.outputs.reservation }}
       attempt: ${{ steps.reserve.outputs.attempt }}
-      base: ${{ steps.base.outputs.sha }}
+      predecessor: ${{ steps.reserve.outputs.predecessor }}
+      base: ${{ steps.reserve.outputs.base }}
+      checkout: ${{ steps.reserve.outputs.checkout }}
+      issue: ${{ steps.reserve.outputs.issue }}
+      notify: ${{ steps.reserve.outputs.notify }}
+      title: ${{ steps.reserve.outputs.title }}
+      prompt_sha256: ${{ steps.reserve.outputs.prompt_sha256 }}
+      issue_sha256: ${{ steps.reserve.outputs.issue_sha256 }}
+      note: ${{ steps.reserve.outputs.note }}
+      main: ${{ steps.main.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.21.0
-      - id: base
+      - id: main
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - id: reserve
         env:
-          BASE: ${{ steps.base.outputs.sha }}
-        run: node dashboard/scripts/agent-guard.js reserve --base "$BASE"
+          MAIN: ${{ steps.main.outputs.sha }}
+          EVENT: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          BUILDER_APP_SLUG: ${{ vars.BUILDER_APP_SLUG }}
+          AGENT_LEDGER_KEY: ${{ secrets.AGENT_LEDGER_KEY }}
+        run: |
+          if [ "$EVENT" = issue_comment ]; then
+            node dashboard/scripts/agent-revise.js reserve --base "$MAIN" --out "$RUNNER_TEMP/revise"
+          else
+            node dashboard/scripts/agent-guard.js reserve --base "$MAIN"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.reserve.outputs.ok == 'true' && steps.reserve.outputs.kind == 'revise'
+        with:
+          name: agent-revise
+          path: ${{ runner.temp }}/revise/
+          retention-days: 7
+          if-no-files-found: error
+
+  refused:
+    needs: reserve
+    if: needs.reserve.outputs.note != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write # says on the pull request why /revise did nothing
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number }}
+          COMMENT: ${{ github.event.comment.id }}
+          NOTE: ${{ needs.reserve.outputs.note }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf 'Revision not started for comment %s: %s\n\nNothing was reserved or spent. Run: %s\n' "$COMMENT" "$NOTE" "$RUN_URL" > "$RUNNER_TEMP/refused.md"
+          gh issue comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/refused.md"
 
   build:
     needs: reserve
@@ -68,35 +144,94 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.reserve.outputs.base }}
+          ref: ${{ needs.reserve.outputs.main }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.21.0
-      - name: Install Claude Code (pinned by lockfile, outside the checkout)
+      # Everything the steps after the builder rely on is copied out of main's
+      # checkout before anything else: the sandbox settings, the builder's
+      # rules, the policy, the key scan and Claude Code's lockfile. A revision
+      # then starts the builder on the candidate's tree, and nothing of it is
+      # read as an instruction to these steps.
+      - name: The guard's own copies, taken from main first
         run: |
-          mkdir -p "$RUNNER_TEMP/claude" "$RUNNER_TEMP/out"
+          mkdir -p "$RUNNER_TEMP/guard" "$RUNNER_TEMP/claude" "$RUNNER_TEMP/out"
+          cp .github/agent/claude-settings.json .github/agent/builder-rules.md .github/agent-policy.json dashboard/scripts/agent-secrets.js "$RUNNER_TEMP/guard/"
           cp .github/agent/package.json .github/agent/package-lock.json "$RUNNER_TEMP/claude/"
-          npm ci --prefix "$RUNNER_TEMP/claude" --no-audit --no-fund
+      - name: Install Claude Code (pinned by lockfile, outside the checkout)
+        run: npm ci --prefix "$RUNNER_TEMP/claude" --no-audit --no-fund
+      # The sandbox needs bubblewrap, socat and unprivileged user namespaces;
+      # Ubuntu 24.04 restricts those through AppArmor (runner-images#10443).
+      # A sandbox that cannot start fails this step, before anything is paid.
+      - name: The sandbox can start, or nothing is built
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends bubblewrap socat
+          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = "1" ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all --die-with-parent true
+          echo "User namespaces work; the builder's commands run in the sandbox."
       - name: The task, from the issue as Eric labeled it
+        if: needs.reserve.outputs.kind == 'build'
         run: node dashboard/scripts/agent-guard.js prompt --out "$RUNNER_TEMP/task.md"
-      - name: Build
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.reserve.outputs.kind == 'revise'
+        with:
+          name: agent-revise
+          path: ${{ runner.temp }}/revise
+      - name: The revision's task, as reserve wrote it (its SHA-256 checked)
+        if: needs.reserve.outputs.kind == 'revise'
+        env:
+          PROMPT_SHA256: ${{ needs.reserve.outputs.prompt_sha256 }}
+        run: |
+          echo "${PROMPT_SHA256}  ${RUNNER_TEMP}/revise/task.md" | sha256sum -c --quiet
+          cp "$RUNNER_TEMP/revise/task.md" "$RUNNER_TEMP/task.md"
+      # A build starts from main's commit, a revision from the candidate's
+      # head reserve recorded (on its merge base with main). The .git copy
+      # the change is read with is taken here, before the builder starts.
+      - name: The tree the builder starts from
+        env:
+          BASE: ${{ needs.reserve.outputs.base }}
+          CHECKOUT: ${{ needs.reserve.outputs.checkout }}
+        run: |
+          git -c core.hooksPath=/dev/null checkout -q --detach "$CHECKOUT"
+          test "$(git rev-parse HEAD)" = "$CHECKOUT"
+          git merge-base --is-ancestor "$BASE" HEAD
+          cp -R .git "$RUNNER_TEMP/guard/base.git"
+      # $RUNNER_TEMP/guard/claude-settings.json (main's copy): commands run in
+      # the sandbox with ANTHROPIC_API_KEY unset, network only to the npm
+      # registry, file tools only inside the checkout, no hooks, no
+      # unsandboxed retry. Only the user source is read besides it, so the
+      # checkout's own .claude/ settings never apply.
+      - name: Build (sandboxed)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
         run: |
-          model=$(node -p "require('./.github/agent-policy.json').build.model")
-          budget=$(node -p "require('./.github/agent-policy.json').build.max_budget_usd")
+          model=$(node -p "require(process.env.RUNNER_TEMP + '/guard/agent-policy.json').build.model")
+          budget=$(node -p "require(process.env.RUNNER_TEMP + '/guard/agent-policy.json').build.max_budget_usd")
           "$RUNNER_TEMP/claude/node_modules/.bin/claude" -p --model "$model" --max-budget-usd "$budget" \
+            --settings "$RUNNER_TEMP/guard/claude-settings.json" --setting-sources user \
             --output-format json --permission-mode dontAsk --strict-mcp-config --no-session-persistence \
-            --append-system-prompt-file .github/agent/builder-rules.md \
+            --append-system-prompt-file "$RUNNER_TEMP/guard/builder-rules.md" \
             --disallowedTools WebFetch WebSearch \
-            --allowedTools Read Edit Write Glob Grep "Bash(node:*)" "Bash(git diff:*)" "Bash(git status:*)" \
+            --allowedTools Read Glob Grep "Edit(./**)" "Write(./**)" "Bash(node:*)" "Bash(git diff:*)" "Bash(git status:*)" \
             < "$RUNNER_TEMP/task.md" > "$RUNNER_TEMP/out/result.json"
-      - name: The change, as data
+      - name: The change, as data (read with the .git copied before the build)
+        env:
+          GIT_DIR: ${{ runner.temp }}/guard/base.git
+          GIT_WORK_TREE: ${{ github.workspace }}
+          BASE: ${{ needs.reserve.outputs.base }}
         run: |
-          git add -A
-          git diff --cached --binary --full-index HEAD > "$RUNNER_TEMP/out/patch.diff"
-          git diff --cached --stat HEAD
+          git -c core.hooksPath=/dev/null -c core.fsmonitor=false add -A
+          git -c core.hooksPath=/dev/null -c core.fsmonitor=false diff --cached --binary --full-index "$BASE" > "$RUNNER_TEMP/out/patch.diff"
+          git -c core.hooksPath=/dev/null -c core.fsmonitor=false diff --cached --stat "$BASE"
+      - name: No key-shaped string leaves the runner
+        if: always()
+        run: node "$RUNNER_TEMP/guard/agent-secrets.js" --dir "$RUNNER_TEMP/out"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -112,10 +247,14 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+    outputs:
+      state: ${{ steps.publish.outputs.state }}
+      note: ${{ steps.publish.outputs.note }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.reserve.outputs.base }}
+          ref: ${{ needs.reserve.outputs.main }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -124,10 +263,29 @@ jobs:
         with:
           name: agent-build
           path: ${{ runner.temp }}/build
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.reserve.outputs.kind == 'revise'
+        with:
+          name: agent-revise
+          path: ${{ runner.temp }}/revise
+      # A revision's task is the issue as its reserve read it (the event is a
+      # comment on the pull request); a build's is the event's own.
+      - id: issue
+        env:
+          KIND: ${{ needs.reserve.outputs.kind }}
+          ISSUE_SHA256: ${{ needs.reserve.outputs.issue_sha256 }}
+        run: |
+          if [ "$KIND" = revise ]; then
+            echo "${ISSUE_SHA256}  ${RUNNER_TEMP}/revise/issue.json" | sha256sum -c --quiet
+            echo "file=$RUNNER_TEMP/revise/issue.json" >> "$GITHUB_OUTPUT"
+          else
+            echo "file=" >> "$GITHUB_OUTPUT"
+          fi
       - id: apply
         env:
           BASE: ${{ needs.reserve.outputs.base }}
-        run: node dashboard/scripts/agent-guard.js apply --base "$BASE" --patch "$RUNNER_TEMP/build/patch.diff"
+          ISSUE: ${{ steps.issue.outputs.file }}
+        run: node dashboard/scripts/agent-guard.js apply --base "$BASE" --patch "$RUNNER_TEMP/build/patch.diff" --build "$RUNNER_TEMP/build/result.json" --issue "$ISSUE"
       - id: app
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -147,21 +305,24 @@ jobs:
         env:
           TOKEN: ${{ steps.app.outputs.token }}
           BASE: ${{ needs.reserve.outputs.base }}
+          RESERVATION: ${{ needs.reserve.outputs.reservation }}
           TREE: ${{ steps.apply.outputs.tree }}
+          ISSUE: ${{ steps.issue.outputs.file }}
           BOT_NAME: ${{ steps.bot.outputs.name }}
           BOT_EMAIL: ${{ steps.bot.outputs.email }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          node dashboard/scripts/agent-guard.js publish --base "$BASE" --tree "$TREE" --run "${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}" \
-            --bot-name "$BOT_NAME" --bot-email "$BOT_EMAIL" --build "$RUNNER_TEMP/build/result.json" \
+          node dashboard/scripts/agent-guard.js publish --base "$BASE" --tree "$TREE" --reservation "$RESERVATION" --run "${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}" \
+            --issue "$ISSUE" --bot-name "$BOT_NAME" --bot-email "$BOT_EMAIL" --build "$RUNNER_TEMP/build/result.json" \
             --body-out "$RUNNER_TEMP/body.md" --run-url "$RUN_URL"
       - name: The pull request (opened by the App, so its checks run)
+        if: steps.publish.outputs.ok == 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           BRANCH: ${{ steps.publish.outputs.branch }}
-          TITLE: ${{ github.event.issue.title }}
-          NUMBER: ${{ github.event.issue.number }}
+          TITLE: ${{ needs.reserve.outputs.title }}
+          NUMBER: ${{ needs.reserve.outputs.issue }}
         run: |
           existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
@@ -177,6 +338,8 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: write # the ledger branch only
+      issues: write # says on the issue when its build was not published (stale)
+      pull-requests: write # says on the pull request when its revision was not published
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -192,4 +355,16 @@ jobs:
       - env:
           RESERVATION: ${{ needs.reserve.outputs.reservation }}
           OUTCOME: ${{ needs.build.result }}
-        run: node dashboard/scripts/agent-guard.js record --id "$RESERVATION" --outcome "$OUTCOME" --build "$RUNNER_TEMP/build/result.json"
+          PUBLISH: ${{ needs.publish.outputs.state || needs.publish.result }}
+        run: node dashboard/scripts/agent-guard.js record --id "$RESERVATION" --outcome "$OUTCOME" --publish "$PUBLISH" --build "$RUNNER_TEMP/build/result.json"
+      - name: A stale build or revision is said where it was asked for (nothing was pushed)
+        if: needs.publish.outputs.state == 'stale'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ needs.reserve.outputs.notify }}
+          RESERVATION: ${{ needs.reserve.outputs.reservation }}
+          NOTE: ${{ needs.publish.outputs.note }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf '%s was not published: %s\n\nRun: %s\n' "$RESERVATION" "$NOTE" "$RUN_URL" > "$RUNNER_TEMP/stale.md"
+          gh issue comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/stale.md"

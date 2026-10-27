@@ -70,6 +70,7 @@ node_modules/
 
 /audits/*/*
 !/audits/2026-10-26-engineering-simplification/README.md
+!/audits/2026-10-26-engineering-v3/README.md
 !/audits/2026-10-26-grok-scout/README.md
 !/audits/2026-10-26-grok-scout/PLAN.md
 !/audits/2026-10-26-lane-resilience/README.md

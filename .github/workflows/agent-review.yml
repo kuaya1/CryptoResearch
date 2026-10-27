@@ -20,7 +20,9 @@
 #
 # Nothing here merges or approves anything. AGENT_REVIEW_ENABLED (a variable)
 # must be "true" for a paid request; reconciling and posting held verdicts
-# stay on.
+# stay on. Verdicts in the ledger are signed with AGENT_LEDGER_KEY (a secret
+# of at least 32 characters, held by no build job); without it nothing is
+# read, reserved or posted.
 name: agent-review
 
 on:
@@ -75,6 +77,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AGENT_LEDGER_KEY: ${{ secrets.AGENT_LEDGER_KEY }}
           OPENAI_REVIEW_MODEL: ${{ vars.OPENAI_REVIEW_MODEL }}
           AGENT_REVIEW_ENABLED: ${{ vars.AGENT_REVIEW_ENABLED }}
           BUILDER_APP_SLUG: ${{ vars.BUILDER_APP_SLUG }}
