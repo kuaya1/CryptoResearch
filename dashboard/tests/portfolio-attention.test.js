@@ -78,3 +78,20 @@ test('accept as unknown: the notes shown leave Needs attention; nothing in the l
   assert.equal(lines[0].kind, 'accepted_unknown');
   assert.match(lines[0].meaning, /nothing was priced, estimated or recorded in the ledger/);
 });
+
+test('set cost (item 69): only a row of unknown purchase cost offers it, and the body is exactly what was typed', async () => {
+  const viewUrl = pathToFileURL(path.join(tmp, 'views', 'portfolio.js')).href;
+  await model;
+  const view = await import(viewUrl);
+  const rows = view.attentionRows([
+    { kind: 'unknown_basis', tx_id: 'tx_a_1', asset_id: 'x', message: 'tx_a_1: purchase price unknown, so cost basis is unknown.' },
+    { kind: 'unknown_proceeds', tx_id: 'tx_b_2', asset_id: 'x', message: 'tx_b_2: sale price unknown.' },
+    { kind: 'external_deposit', tx_id: 'tx_c_3', asset_id: 'x', account_id: 'w1', message: 'tx_c_3: deposit; cost basis unknown.' },
+    { kind: 'transfer_quarantined', tx_id: 'tx_d_4', asset_id: 'x', message: 'tx_d_4: cannot be matched.' },
+    { kind: 'unknown_basis', asset_id: 'x', message: 'no record ID.' },
+  ]);
+  assert.deepEqual(rows.filter((r) => r.set_cost).map((r) => r.tx_id), ['tx_a_1']);
+  const t = { tx_id: 'tx_a_1', asset_id: 'x', account_id: 'wallet-a' };
+  assert.deepEqual(view.setCostBody(t, { cost: ' 0.8125 ', date: '', reason: '' }), { asset_id: 'x', account_id: 'wallet-a', tx_id: 'tx_a_1', avg_cost_usd: '0.8125' });
+  assert.deepEqual(view.setCostBody(t, { cost: '2', date: '2026-09-30', reason: ' statement ' }), { asset_id: 'x', account_id: 'wallet-a', tx_id: 'tx_a_1', avg_cost_usd: '2', acquired_at: '2026-09-30', reason: 'statement' });
+});

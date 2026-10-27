@@ -12,7 +12,7 @@ const NOT_IN_FORCE = new Set(['pass', 'veto']);
 
 function pnlOf(p) {
   if (p.cost_basis_status === 'unknown' || p.cost_basis_known_usd === null || p.cost_basis_known_usd === undefined) {
-    return { status: 'cost_unknown', unrealized_usd: null, words: 'Cost unknown: no result. Set the cost in Portfolio > Needs attention (portfolio set-cost).' };
+    return { status: 'cost_unknown', unrealized_usd: null, words: 'Cost unknown: no result. Use Set cost on the row in Portfolio > Needs attention (or `portfolio set-cost`).' };
   }
   if (!isNum(p.unrealized_known_usd)) return { status: 'price_unavailable', unrealized_usd: null, words: 'No stored price, so no result.' };
   const partial = p.cost_basis_status === 'partial';

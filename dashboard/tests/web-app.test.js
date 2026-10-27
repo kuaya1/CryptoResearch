@@ -317,3 +317,13 @@ test('no purple or indigo anywhere the desk draws: sources, the sign-in pages, t
   }
   assert.deepEqual(found, [], 'purple or indigo colours');
 });
+
+test('Portfolio Set cost (item 69): the form posts only to the existing set-cost route and shows a refusal in the route\'s words', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'portfolio.js'), 'utf8');
+  const form = src.slice(src.indexOf('function openSetCostDialog'), src.indexOf('// Accept the wallet-import notes'));
+  assert.deepEqual([...form.matchAll(/api\.post\('([^']+)'/g)].map((m) => m[1]), ['/api/portfolio/set-cost']);
+  assert.match(form, /setCostBody\(t, \{ cost: cost\.value/);
+  assert.match(form, /Cost not set: \$\{err\.message\}/);
+  assert.match(form, /out\.words/);
+  assert.doesNotMatch(form, /value: .*price/i, 'the cost is never prefilled from a price');
+});

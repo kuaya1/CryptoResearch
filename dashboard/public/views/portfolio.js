@@ -121,7 +121,7 @@ export function attentionRows(warnings, { symbols = new Map(), accounts = new Ma
     const [what, detail, tone, act] = words ? words(w, amt) : [String(w.message || w.kind).replace(/^tx_\S+:\s*/, ''), null, 'info', w.tx_id ? 'correct' : null];
     // The amount is already in the words for the kinds that name one.
     const amount = w.quantity === undefined && amt.text && w.asset_id !== 'usd' ? amt : null;
-    return { key: `${w.kind}:${w.tx_id || i}:${w.asset_id || ''}`, kind: w.kind, tone, what, detail, amount, exact, date: w.date || null, tx_id: w.tx_id || null, tx_hash: w.tx_hash || null, network: w.network || null, account: acct(w.account_id), action: act, message: w.message || '', tip: readable(w) };
+    return { key: `${w.kind}:${w.tx_id || i}:${w.asset_id || ''}`, kind: w.kind, tone, what, detail, amount, exact, date: w.date || null, tx_id: w.tx_id || null, tx_hash: w.tx_hash || null, network: w.network || null, account: acct(w.account_id), action: act, set_cost: w.kind === 'unknown_basis' && Boolean(w.tx_id), message: w.message || '', tip: readable(w) };
   });
   rows.sort((a, b) => TONE_ORDER[a.tone] - TONE_ORDER[b.tone] || String(b.date || '').localeCompare(String(a.date || '')));
   if (wallet.length) {
@@ -175,6 +175,23 @@ function attentionAction(ctx, r) {
     return h('div', { class: 'actions' }, accept, open);
   }
   if (r.action !== 'correct' || !r.tx_id) return null;
+  if (r.set_cost) {
+    const set = button('Set cost', null, { kind: 'small', key: `au-setcost-${r.key}` });
+    set.setAttribute('aria-label', `Set the cost of transaction ${r.tx_id}`);
+    set.title = 'Your own average cost per unit in USD; the desk never estimates one. The entry is corrected the standard way: the original is voided and kept.';
+    set.onclick = action(set, async () => {
+      const ledger = await ctx.api.get('/api/portfolio/ledger');
+      const t = ledger.transactions.find((x) => x.tx_id === r.tx_id && !x.voided);
+      if (!t) throw new Error('That entry is no longer active; see Transactions.');
+      openSetCostDialog(ctx, t);
+      return undefined;
+    });
+    return h('div', { class: 'actions' }, set, correctButton(ctx, r));
+  }
+  return correctButton(ctx, r);
+}
+
+function correctButton(ctx, r) {
   const b = button('Correct', null, { kind: 'small', key: `au-fix-${r.key}` });
   b.setAttribute('aria-label', `Correct transaction ${r.tx_id}`);
   b.onclick = action(b, async () => {
@@ -185,6 +202,50 @@ function attentionAction(ctx, r) {
     return undefined;
   });
   return b;
+}
+
+// Exactly what Eric typed, for POST /api/portfolio/set-cost (core/portfolio.js
+// setCost): nothing prefilled, nothing estimated; an empty date is omitted so
+// the entry keeps its own.
+export function setCostBody(t, { cost, date, reason }) {
+  const body = { asset_id: t.asset_id, account_id: t.account_id, tx_id: t.tx_id, avg_cost_usd: String(cost).trim() };
+  if (String(date || '').trim()) body.acquired_at = String(date).trim();
+  if (String(reason || '').trim()) body.reason = String(reason).trim();
+  return body;
+}
+
+// Set cost: the form for a position of unknown cost. The average cost starts
+// empty (never from a price); the route's own words about the date and any
+// refusal are shown as the route gives them.
+function openSetCostDialog(ctx, t) {
+  const cost = input({ name: 'setcost-cost', inputmode: 'decimal', placeholder: 'USD per unit' });
+  const date = h('input', { type: 'date', name: 'setcost-date' });
+  const reason = input({ name: 'setcost-reason', placeholder: 'Optional, e.g. from my exchange statement' });
+  const save = button('Set cost', null, { kind: 'primary', type: 'submit' });
+  const errorBox = h('div', { role: 'alert' });
+  const resultBox = h('div', { role: 'status' });
+  let dlg = null;
+  const form = h('form', { class: 'form-grid' },
+    field('Average cost per unit (USD)', cost, 'Your own figure; the desk never estimates one'), field('Acquired on', date, 'Optional; blank keeps the entry\'s date'), field('Reason', reason, 'Kept with both entries'),
+    h('div', { class: 'field wide' }, errorBox, resultBox, save));
+  form.onsubmit = action(save, async () => {
+    errorBox.replaceChildren();
+    if (!cost.value.trim()) {
+      fieldError(cost, 'Type your average cost per unit.');
+      return undefined;
+    }
+    try {
+      const out = await ctx.api.post('/api/portfolio/set-cost', setCostBody(t, { cost: cost.value, date: date.value, reason: reason.value }));
+      resultBox.replaceChildren(callout(out.words || 'Cost set.', 'info'));
+      await ctx.refresh();
+      return out;
+    } catch (err) {
+      errorBox.replaceChildren(callout(`Cost not set: ${err.message}`, 'bad'));
+      return undefined;
+    }
+  }, () => 'Cost set. The old entry stays, marked voided.');
+  dlg = openDialog(`Set the cost of ${t.asset_id}`, form);
+  return dlg;
 }
 
 // Accept the wallet-import notes as unknown (core/portfolio.js acceptUnknown):
