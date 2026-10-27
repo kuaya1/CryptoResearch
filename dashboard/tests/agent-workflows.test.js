@@ -51,6 +51,9 @@ test('the build job holds only the Anthropic key and reads the repository; the A
   assert.match(j.publish, /permission-contents: write\n\s+permission-pull-requests: write\n/);
   assert.doesNotMatch(j.publish, /permission-(workflows|administration|actions|checks)/);
   assert.deepEqual(secretsIn(j.reserve), []);
+  // Reserve reads the issue as GitHub holds it now (Engineering v3, change 2).
+  assert.match(j.reserve, /permissions:\n\s+contents: write[^\n]*\n\s+issues: read[^\n]*\n\s+outputs:/);
+  assert.match(j.reserve, /GH_TOKEN: \$\{\{ github\.token \}\}\n\s+run: node dashboard\/scripts\/agent-guard\.js reserve/);
   assert.deepEqual(secretsIn(j.record), []);
   assert.match(FILES[0][1], /^permissions: \{\}$/m);
 });

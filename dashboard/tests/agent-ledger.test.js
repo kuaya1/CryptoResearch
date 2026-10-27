@@ -127,3 +127,13 @@ test('builds: one reservation per run, per task version and per day, dollars inc
   assert.match(L.decideBuild([reserve('bd-1', '9/1', 'o1'), reserve('bd-2', '10/1', 'o2')], { ...base, run: '11/1' }).why, /2 paid builds today/);
   assert.match(L.decideBuild([reserve('bd-1', '9/1', 'o1', 15)], { ...base, run: '11/1' }).why, /would reserve \$8 on top of \$15/);
 });
+
+test('builds of one task version count together whichever commit of main each started from', () => {
+  const bind = (base, task = 'a'.repeat(64)) => ({ kind: 'build', issue: 7, task_sha256: task, base });
+  const reserve = (id, run, b) => ({ t: 'reserve', kind: 'build', id, binding: L.bindingOf(b), bind: b, run, usd: 8, day: '2026-10-26' });
+  const args = (b, run) => ({ binding: L.bindingOf(b), bind: b, ceilings: { ...CEIL, builds_per_day: 9, build_usd_per_day: 99 }, now: NOW, usd: 8, run });
+  const two = [reserve('bd-1', '1/1', bind('m1')), reserve('bd-2', '2/1', bind('m2'))];
+  assert.match(L.decideBuild(two, args(bind('m3'), '3/1')).why, /2 paid builds for this version/);
+  assert.equal(L.decideBuild(two, args(bind('m3', 'b'.repeat(64)), '3/1')).action, 'build', 'an edited task is another version');
+  assert.equal(L.decideBuild(two, args({ ...bind('m3'), issue: 8 }, '3/1')).action, 'build', 'another issue');
+});
