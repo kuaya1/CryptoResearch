@@ -213,23 +213,33 @@ test('an atomic claim of several items lands whole or not at all', (t) => {
   assert.match(B.words(second), /Nothing claimed/);
 });
 
-test('restart recovery: a run that dies loses its items when the lease ends; its late word is refused; the third loss blocks the item', (t) => {
+// A lease that ended with no word used to free its items for the next run, so
+// a run still building past it pushed its branch beside a second builder's.
+// No clock frees one now (red-team review, 2026-10-27).
+test('restart recovery: a lease that ends with no word holds its items, reconcile required, never reclaimed by the clock; the run\'s own word or Eric\'s release settles them', (t) => {
   const { a, b } = fixture(t);
   B.claim(a, { builder: 'a', run: 'a-1', now: T0 });
-  assert.deepEqual(B.claim(b, { builder: 'b', run: 'b-1', now: T0 + 89 * MIN }).claimed, []);
-  const r2 = B.claim(b, { builder: 'b', run: 'b-1', now: T0 + 91 * MIN });
-  assert.deepEqual(r2.claimed, [10, 11, 12, 13, 14]);
+  for (const at of [T0 + 91 * MIN, T0 + 30 * 24 * 60 * MIN]) {
+    const r = B.claim(b, { builder: 'b', run: 'b-1', now: at });
+    assert.deepEqual(r.claimed, [], 'no clock frees a claim, a minute or a month on');
+    assert.deepEqual(r.in_flight, [10, 11, 12, 13, 14], 'its items stay in flight: the cap and their files hold');
+    assert.deepEqual(r.reconcile.map((x) => x.item), [10, 11, 12, 13, 14]);
+    assert.match(r.reconcile[0].why, /^reconcile required: run a-1's lease ended 2026-10-27T13:30:00\.000Z with no word, and whether it is still building cannot be read; it holds until that run speaks again or Eric releases it \(`backlog-schedule\.js release --run a-1 --item 10`\)$/);
+    assert.match(B.words(r), /^Held 10: reconcile required/m);
+  }
+  assert.deepEqual([...remoteClaims(a).values()].map((c) => [c.record.run, c.record.state]), Array(5).fill(['a-1', 'building']), 'nothing was written');
+  // The run was alive after all: its word still counts, and its heartbeat
+  // makes the lease current again.
+  assert.deepEqual(B.heartbeat(a, { run: 'a-1', now: T0 + 200 * MIN }).held, [10, 11, 12, 13, 14]);
+  assert.deepEqual(planAt(b, T0 + 201 * MIN, 'b').reconcile, []);
+  // Eric releases what a run will never finish; only then is it taken, and
+  // the old run's late word is refused.
+  for (const n of [10, 11, 12, 13, 14]) B.release(a, { run: 'a-1', item: n, now: T0 + 400 * MIN });
+  assert.deepEqual(B.claim(b, { builder: 'b', run: 'b-1', now: T0 + 401 * MIN }).claimed, [10, 11, 12, 13, 14]);
   const c10 = remoteClaims(a).get(10).record;
-  assert.equal(c10.lost, 1);
-  assert.deepEqual(c10.previous, { run: 'a-1', state: 'building', reason: null });
-  assert.throws(() => B.done(a, { run: 'a-1', item: 10, branch: 'x', now: T0 + 92 * MIN }), /claimed by run b-1, not a-1/);
-  assert.deepEqual(B.heartbeat(a, { run: 'a-1', now: T0 + 92 * MIN }).held, [], 'the dead run holds nothing, so it pushes nothing');
-  const r3 = B.claim(a, { builder: 'a', run: 'a-2', now: T0 + 182 * MIN });
-  assert.ok(r3.claimed.includes(10));
-  assert.equal(remoteClaims(a).get(10).record.lost, 2);
-  const r4 = planAt(a, T0 + 273 * MIN, 'a');
-  assert.deepEqual(r4.blocked.map((x) => x.item).slice(0, 1), [10]);
-  assert.match(r4.blocked[0].why, /lost 3 times/);
+  assert.deepEqual([c10.run, c10.lost, c10.previous], ['b-1', 0, { run: 'a-1', state: 'released', reason: null }]);
+  assert.throws(() => B.done(a, { run: 'a-1', item: 10, branch: 'x', now: T0 + 402 * MIN }), /claimed by run b-1, not a-1/);
+  assert.deepEqual(B.heartbeat(a, { run: 'a-1', now: T0 + 402 * MIN }).held, [], 'the released run holds nothing, so it pushes nothing');
 });
 
 test('a heartbeat keeps a long run\'s items; a release frees an item at once and is not counted in the hour', (t) => {
@@ -253,6 +263,9 @@ test('failures: a failed item waits 30 minutes, then is tried again; a second fa
   assert.ok(!soon.picks.some((x) => x.item === 10));
   const again = B.claim(b, { builder: 'b', run: 'b-1', now: T0 + 33 * MIN });
   assert.equal(again.claimed[0], 10);
+  // b-1 gives back what it will not build: a lease that lapses would hold
+  // them in flight (reconcile required), never free them.
+  for (const n of again.claimed.filter((x) => x !== 10)) B.release(b, { run: 'b-1', item: n, now: T0 + 34 * MIN });
   assert.equal(remoteClaims(b).get(10).record.failures, 1);
   B.fail(b, { run: 'b-1', item: 10, reason: 'suite red again', now: T0 + 40 * MIN });
   const after = planAt(a, T0 + 200 * MIN, 'a');

@@ -33,22 +33,27 @@
 #            network. The working tree's diff against the base is the only
 #            output, scanned for key-shaped strings before upload.
 #   publish  main's guard applies that diff to the base as data and checks it
-#            against the task again; the builder App commits it, pushes
-#            agent/issue-<n> by lease on the head the reservation recorded,
-#            and opens (or updates) the pull request; a backlog task's row then
-#            reads [IN_PROGRESS: PR #<n>] on its branch. A branch that moved
-#            since (another build, or Eric) makes this one "stale": not
-#            pushed, not retried, recorded so and said on the issue or pull
-#            request. The App pushes only agent/ branches and cannot merge,
-#            approve or change a workflow (.github/rulesets).
+#            against the task again; the builder App commits it and pushes
+#            agent/issue-<n> and the ledger's "publishing" line in one
+#            atomic push (pipeline review, 2026-10-27): the branch by lease
+#            on the head the reservation recorded, the ledger by lease on the
+#            tip just read, so both move or neither does. It then opens (or
+#            updates) the pull request; a backlog task's row then reads
+#            [IN_PROGRESS: PR #<n>] on its branch. A branch that moved since
+#            (another build, or Eric), or a build recorded orphaned
+#            meanwhile, makes this one "stale": not pushed, not retried,
+#            recorded so and said on the issue or pull request. The App
+#            pushes only agent/ branches and the ledger's fast-forward and
+#            cannot merge, approve or change a workflow (.github/rulesets).
 #   record   the outcome in the ledger, with what publish did.
 #   refused  a build or a /revise of Eric's that reserved nothing says why on
 #            the issue or the pull request (nothing was spent).
 #
 # Nothing here merges or approves anything: Eric merges each pull request.
-# A re-run of failed jobs builds nothing (the reservation belongs to the
-# run attempt that made it); re-run the whole workflow, which reserves again
-# within the ceilings in .github/agent-policy.json.
+# A re-run of failed jobs builds, publishes and records nothing (the
+# reservation belongs to the run attempt that made it); re-run the whole
+# workflow, which reserves again within the ceilings in
+# .github/agent-policy.json.
 name: agent-build
 
 on:
@@ -306,9 +311,12 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  # Only in the run attempt that reserved, as build and record: a re-run of
+  # failed jobs keeps build's earlier success, and would otherwise push in
+  # an attempt whose record job never runs (red-team review, 2026-10-27).
   publish:
     needs: [reserve, build]
-    if: needs.build.result == 'success'
+    if: needs.build.result == 'success' && needs.reserve.outputs.attempt == github.run_attempt
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

@@ -47,6 +47,11 @@ test('the build job holds only the Anthropic key and reads the repository; the A
   assert.match(j.build, /permissions:\n\s+contents: read\n/);
   assert.match(j.build, /persist-credentials: false/);
   assert.match(j.build, /needs\.reserve\.outputs\.attempt == github\.run_attempt/, 'a re-run of failed jobs builds nothing');
+  // ...and publishes nothing: build's success from the attempt that reserved
+  // carries over to a re-run, whose record job is skipped (red-team review,
+  // 2026-10-27).
+  assert.match(j.publish, /\n\s+if: needs\.build\.result == 'success' && needs\.reserve\.outputs\.attempt == github\.run_attempt\n/, 'a re-run of failed jobs publishes nothing');
+  assert.match(j.record, /\n\s+if: always\(\) && needs\.reserve\.outputs\.ok == 'true' && needs\.reserve\.outputs\.attempt == github\.run_attempt\n/, 'a re-run of failed jobs records nothing');
   assert.deepEqual(secretsIn(j.publish), ['secrets.BUILDER_APP_KEY']);
   assert.match(j.publish, /permission-contents: write\n\s+permission-pull-requests: write\n/);
   assert.doesNotMatch(j.publish, /permission-(workflows|administration|actions|checks)/);
@@ -131,6 +136,57 @@ test('publish leases on the head reserve recorded; a stale build opens no pull r
   assert.match(said, /NOTE: \$\{\{ needs\.publish\.outputs\.note \}\}\n/);
   assert.doesNotMatch(said.slice(said.indexOf('run: |')), /\$\{\{/, 'the note reaches the shell as data, never as text of the script');
   assert.deepEqual(secretsIn(j.record), []);
+});
+
+// Pipeline review, 2026-10-27, step 1: a builder pushes with the builder
+// App's token, never a personal or admin credential. Every GitHub credential a
+// workflow holds is its own job token or the App's, and every secret is one
+// of these, so a personal access token added later fails here.
+test('builders push only with the builder App\'s token; no workflow holds a personal access token', () => {
+  const dir = path.join(ROOT, '.github', 'workflows');
+  const KNOWN = ['AGENT_LEDGER_KEY', 'ANTHROPIC_API_KEY', 'BUILDER_APP_KEY', 'CR_ENG_REVIEWER_TOKEN', 'DESK_INGEST_KEY', 'DESK_INGEST_URL', 'OPENAI_API_KEY', 'XAI_API_KEY'];
+  for (const f of fs.readdirSync(dir).filter((x) => /\.ya?ml$/.test(x))) {
+    const text = fs.readFileSync(path.join(dir, f), 'utf8');
+    for (const s of secretsIn(text)) assert.ok(KNOWN.includes(s.slice('secrets.'.length)), `${f}: ${s} is not a known secret`);
+    for (const m of text.matchAll(/^\s+(GH_TOKEN|TOKEN|GITHUB_TOKEN): (.+)$/gm)) assert.match(m[2], /^\$\{\{ (github\.token|steps\.app\.outputs\.token) \}\}$/, `${f}: ${m[1]} is ${m[2]}`);
+    assert.doesNotMatch(text, /token: \$\{\{ secrets\./, `${f}: a checkout with a secret token`);
+  }
+  const j = jobs(FILES[0][1]);
+  // The candidate branch and the ledger line that fences it go up in one
+  // push, with the App's token set on the remote first.
+  const pub = j.publish.slice(j.publish.indexOf('- id: publish'));
+  assert.match(pub, /TOKEN: \$\{\{ steps\.app\.outputs\.token \}\}/);
+  assert.ok(pub.indexOf('git remote set-url origin "https://x-access-token:${TOKEN}@github.com/') < pub.indexOf('agent-guard.js publish'), 'the remote carries the App token before publish pushes');
+  assert.match(j.publish, /persist-credentials: false/);
+  const pr = j.publish.slice(j.publish.indexOf('- name: The pull request'));
+  assert.match(pr, /GH_TOKEN: \$\{\{ steps\.app\.outputs\.token \}\}/, 'the App opens the pull request, so its checks run');
+  for (const id of ['reserve', 'build', 'record', 'refused']) assert.doesNotMatch(j[id], /agent-guard\.js publish|gh pr create/, id);
+});
+
+// Pipeline review, 2026-10-27, step 3: the issue queue authorizes a backlog
+// task without a merge to main. Its workflow runs main's own script on the
+// label, the edit and the close, holds no secret, writes only the ledger and
+// the issue, and one run at a time numbers the queue.
+test('the issue queue runs main\'s script on Eric\'s label, edit and close only, with no secret and one run at a time', () => {
+  const text = read('.github/workflows/backlog-queue.yml');
+  assert.match(text, /^on:\n {2}issues:\n {4}types: \[labeled, unlabeled, edited, closed\]\n\npermissions: \{\}\n/m);
+  assert.match(text, /concurrency:\n {2}group: backlog-queue\n {2}cancel-in-progress: false\n/);
+  const j = jobs(text);
+  assert.deepEqual(Object.keys(j), ['queue']);
+  assert.match(j.queue, /github\.event\.label\.name == 'agent:ready'/);
+  assert.match(j.queue, /contains\(github\.event\.issue\.labels\.\*\.name, 'agent:ready'\)/);
+  assert.match(j.queue, /!github\.event\.issue\.pull_request/);
+  assert.match(j.queue, /permissions:\n\s+contents: write[^\n]*\n\s+issues: write[^\n]*\n\s+steps:/);
+  assert.match(j.queue, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/, 'main\'s code, never a branch the issue names');
+  for (const m of j.queue.matchAll(/uses: ([^\s]+)/g)) assert.match(m[1], /@[0-9a-f]{40}$/, m[1]);
+  assert.deepEqual(secretsIn(text), []);
+  const run = j.queue.slice(j.queue.lastIndexOf('run:'));
+  assert.equal(run.trim(), 'run: node dashboard/scripts/backlog-queue.js event');
+  assert.doesNotMatch(text, /github\.event\.issue\.(title|body)/, 'the issue text reaches the script only through the event file');
+  const form = read('.github/ISSUE_TEMPLATE/backlog-task.yml');
+  assert.match(form, /^labels: \["agent:draft"\]$/m, 'a new task is a draft');
+  assert.doesNotMatch(form.match(/^labels: .*$/m)[0], /agent:ready/, 'only Eric adds the label that authorizes');
+  for (const id of ['outcome', 'acceptance', 'touches', 'after', 'notes']) assert.match(form, new RegExp(`\\n {4}id: ${id}\\n`), id);
 });
 
 test('/revise: only Eric\'s own new comment on a pull request reserves, the revision\'s files are checked by hash, and a refusal is said as data', () => {

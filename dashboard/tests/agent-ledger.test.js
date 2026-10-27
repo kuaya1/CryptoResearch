@@ -139,26 +139,41 @@ test('builds of one task version count together whichever commit of main each st
   assert.equal(L.decideBuild(two, args({ ...bind('m3'), issue: 8 }, '3/1')).action, 'build', 'another issue');
 });
 
-test('builds: one per issue at a time; an open one is recorded orphaned after 60 minutes, frees the issue and consumes no attempt', () => {
+test('builds: one per task at a time; an open one is settled only by its run\'s status, never by its age; an orphan frees the task and consumes no attempt', () => {
   const bind = (issue = 7) => ({ kind: 'build', issue, task_sha256: 'a'.repeat(64), base: 'm1', predecessor: 'absent' });
   const reserve = (id, run, b, at) => ({ t: 'reserve', kind: 'build', id, binding: L.bindingOf(b), bind: b, run, usd: 8, day: '2026-10-26', at });
-  const args = (b, run, now = NOW) => ({ binding: L.bindingOf(b), bind: b, ceilings: { ...CEIL, builds_per_day: 9, build_usd_per_day: 99 }, now, usd: 8, run });
-  const open = [reserve('bd-1', '1/1', bind(), new Date(NOW - 60 * 60000).toISOString())];
-  assert.match(L.decideBuild(open, args(bind(), '2/1')).why, /build bd-1 of issue #7 \(run 1\/1\) has no outcome yet and is 60 min old; one build, revision or remediation per task at a time, each held up to 60 min/, 'exactly 60 minutes still holds');
+  const args = (b, run, now = NOW, runs = null) => ({ binding: L.bindingOf(b), bind: b, ceilings: { ...CEIL, builds_per_day: 9, build_usd_per_day: 99 }, now, usd: 8, run, runs });
+  const st = (status, conclusion = null) => new Map([['1/1', { status, conclusion }]]);
+  // Reserved ten hours ago: its age decides nothing.
+  const open = [reserve('bd-1', '1/1', bind(), new Date(NOW - 600 * 60000).toISOString())];
+  // GitHub cannot say: held as reconcile required, however old it is (red-team review, 2026-10-27).
+  const unknown = L.decideBuild(open, args(bind(), '2/1', NOW + 30 * 86400000));
+  assert.equal(unknown.action, 'refuse');
+  assert.equal(unknown.reconcile, true);
+  assert.match(unknown.why, /build bd-1 of issue #7 \(run 1\/1\) has no outcome yet: whether its run 1\/1 is still running could not be read from GitHub \(reconcile required: nothing new starts until GitHub answers; cancel the run to free the task\); one build, revision or remediation per task at a time/);
+  assert.match(L.decideBuild([reserve('bd-1', '1/1', bind(), 'not a time')], args(bind(), '2/1')).why, /reconcile required/, 'an unreadable time is held the same way');
   assert.equal(L.decideBuild(open, args(bind(8), '2/1')).action, 'build', 'another issue is not held');
   assert.equal(L.decideBuild([...open, { t: 'outcome', id: 'bd-1', state: 'unknown' }], args(bind(), '2/1')).action, 'build', 'an outcome, even unknown, frees the issue');
-  assert.match(L.decideBuild([reserve('bd-1', '1/1', bind(), 'not a time')], args(bind(), '2/1')).why, /has no outcome yet; one build, revision or remediation per task/, 'an unreadable time holds the issue');
-  const later = L.decideBuild(open, args(bind(), '2/1', NOW + 60000));
-  assert.equal(later.action, 'build');
-  assert.deepEqual(later.orphaned, ['bd-1']);
-  assert.deepEqual(later.append.map((e) => [e.t, e.id, e.state]), [['outcome', 'bd-1', 'orphaned'], ['reserve', later.id, undefined]]);
-  assert.match(later.append[0].error, /no outcome 61 min after it was reserved/);
-  assert.equal(later.append[0].note, 'Orphaned attempt expired after 60m; unlocking queue');
-  assert.equal(L.ORPHAN_NOTE, later.append[0].note);
-  assert.equal(L.LEASE_TTL_MINUTES, 60);
-  assert.equal(L.LEASE_TTL_MS, 3600000);
+  // GitHub says it is queued or running: held, however long.
+  assert.match(L.decideBuild(open, args(bind(), '2/1', NOW, st('in_progress'))).why, /has no outcome yet: its run 1\/1 is in_progress;/);
+  assert.match(L.decideBuild(open, args(bind(), '2/1', NOW + 30 * 86400000, st('queued'))).why, /its run 1\/1 is queued;/);
+  assert.equal(L.decideBuild(open, args(bind(), '2/1', NOW, st('in_progress'))).reconcile, false);
+  // GitHub says it ended: settled at once, whatever its age.
+  const ended = L.decideBuild(open, args(bind(), '2/1', NOW - 599 * 60000, st('completed', 'failure')));
+  assert.equal(ended.action, 'build');
+  assert.deepEqual(ended.orphaned, ['bd-1']);
+  assert.deepEqual(ended.append.map((e) => [e.t, e.id, e.state, e.via]), [['outcome', 'bd-1', 'orphaned', 'run-status'], ['reserve', ended.id, undefined, undefined]]);
+  assert.match(ended.append[0].error, /its run 1\/1 completed \(failure\) with no outcome recorded/);
+  assert.equal(ended.append[0].note, L.ORPHAN_NOTE);
+  assert.equal(L.ORPHAN_NOTE, 'Orphaned attempt: its run ended with no outcome recorded; unlocking queue');
+  const cancelled = L.decideBuild(open, args(bind(), '2/1', NOW, st('completed', 'cancelled')));
+  assert.match(cancelled.append[0].error, /completed \(cancelled\)/, 'cancelling the run is how a stuck one is freed');
+  const missing = L.decideBuild(open, args(bind(), '2/1', NOW, new Map([['1/1', { status: 'missing' }]])));
+  assert.deepEqual([missing.action, missing.append[0].state], ['build', 'orphaned']);
+  assert.match(missing.append[0].error, /its run 1\/1 does not exist on GitHub and no outcome was recorded/);
+  assert.equal(L.LEASE_TTL_MINUTES, undefined, 'no lease clock is exported');
   // The orphan consumes none of the version's two builds: a second may run.
-  const after = [...open, ...later.append, { t: 'outcome', id: later.id, state: 'response' }];
+  const after = [...open, ...ended.append, { t: 'outcome', id: ended.id, state: 'response' }];
   assert.equal(L.decideBuild(after, args(bind(), '3/1', NOW + 120000)).action, 'build', 'the orphaned build does not count');
   const third = [...after, reserve('bd-3', '3/1', bind(), new Date(NOW + 120000).toISOString()), { t: 'outcome', id: 'bd-3', state: 'failed' }];
   assert.match(L.decideBuild(third, args(bind(), '4/1', NOW + 180000)).why, /2 paid builds for this version/, 'two that ran to an outcome use the version up');
@@ -167,13 +182,59 @@ test('builds: one per issue at a time; an open one is recorded orphaned after 60
   assert.match(L.decideBuild(after, daily).why, /2 paid builds today/);
   // One recorded before 2026-10-27 as 'lost' is the same; a real outcome that
   // arrives later (the runner came back) makes it count again.
-  assert.equal(L.orphaned({ outcomes: [{ state: 'lost' }] }), true);
-  assert.equal(L.orphaned({ outcomes: [{ state: 'orphaned' }, { state: 'response' }] }), false);
+  assert.equal(L.orphaned({ outcomes: [{ state: 'lost' }], publishing: [] }), true);
+  assert.equal(L.orphaned({ outcomes: [{ state: 'orphaned' }, { state: 'response' }], publishing: [] }), false);
   const late = [...after, { t: 'outcome', id: 'bd-1', state: 'response' }];
   assert.match(L.decideBuild(late, args(bind(), '3/1', NOW + 120000)).why, /2 paid builds for this version/, 'the runner came back: it counts');
-  // orphanLines: only paid attempts with no outcome, only past the lease.
-  assert.deepEqual(L.orphanLines(open, NOW), [], '60 minutes is not past the lease');
-  assert.deepEqual(L.orphanLines(open, NOW + 1).map((e) => [e.id, e.state, e.note]), [['bd-1', 'orphaned', L.ORPHAN_NOTE]]);
-  assert.deepEqual(L.orphanLines([...open, { t: 'outcome', id: 'bd-1', state: 'unknown' }], NOW + 60000), [], 'an outcome, even unknown, is not an orphan');
-  assert.deepEqual(L.orphanLines([{ t: 'reserve', kind: 'review', id: 'rv-1', at: new Date(NOW - 99 * 60000).toISOString() }], NOW), [], 'a review is reconciled, never orphaned');
+  // An open attempt is orphaned only on its run's word, never on a clock.
+  const [a] = L.attempts(open);
+  assert.equal(L.orphaned(a, null), false);
+  assert.equal(L.orphaned(a, st('in_progress')), false);
+  assert.equal(L.orphaned(a, st('completed', 'success')), true);
+  // orphanLines: only paid attempts with no outcome, only when their run ended.
+  assert.deepEqual(L.orphanLines(open, NOW + 30 * 86400000, null), [], 'no clock makes an orphan');
+  assert.deepEqual(L.orphanLines(open, NOW, st('in_progress')), []);
+  assert.deepEqual(L.orphanLines(open, NOW, st('completed', 'failure')).map((e) => [e.id, e.state, e.note]), [['bd-1', 'orphaned', L.ORPHAN_NOTE]]);
+  assert.deepEqual(L.orphanLines([...open, { t: 'outcome', id: 'bd-1', state: 'unknown' }], NOW, st('completed')), [], 'an outcome, even unknown, is not an orphan');
+  assert.deepEqual(L.orphanLines([{ t: 'reserve', kind: 'review', id: 'rv-1', run: '1/1', at: new Date(NOW - 99 * 60000).toISOString() }], NOW, st('completed')), [], 'a review is reconciled, never orphaned');
+});
+
+test('a build whose publishing line is in the ledger is never orphaned: its run ended, it is recorded as published with its commit', () => {
+  const b = { kind: 'build', issue: 7, task_sha256: 'a'.repeat(64), base: 'm1', predecessor: 'absent' };
+  const entries = [
+    { t: 'reserve', kind: 'build', id: 'bd-1', binding: L.bindingOf(b), bind: b, run: '1/1', usd: 8, day: '2026-10-26', at: new Date(NOW - 90 * 60000).toISOString() },
+    { t: 'publishing', id: 'bd-1', commit: 'c'.repeat(40), branch: 'agent/issue-7', predecessor: 'absent', run: '1/1', at: new Date(NOW - 80 * 60000).toISOString() },
+  ];
+  const a = L.attempts(entries)[0];
+  assert.deepEqual([a.outcomes.length, a.publishing.length], [0, 1], 'a publishing line is not an outcome');
+  const runs = new Map([['1/1', { status: 'completed', conclusion: 'failure' }]]);
+  assert.equal(L.orphaned(a, runs), false);
+  const d = L.decideBuild(entries, { binding: 'x', bind: { ...b, task_sha256: 'b'.repeat(64) }, ceilings: { ...CEIL, builds_per_day: 9, build_usd_per_day: 99 }, now: NOW, usd: 8, run: '2/1', runs });
+  assert.equal(d.action, 'build');
+  assert.deepEqual(d.orphaned, []);
+  assert.deepEqual(d.published, ['bd-1']);
+  assert.deepEqual([d.append[0].t, d.append[0].state, d.append[0].publish, d.append[0].commit, d.append[0].job], ['outcome', 'response', 'published', 'c'.repeat(40), 'unrecorded']);
+  // Its run not read: held, publishing line or not.
+  assert.equal(L.decideBuild(entries, { binding: 'x', bind: { ...b, task_sha256: 'b'.repeat(64) }, ceilings: { ...CEIL, builds_per_day: 9, build_usd_per_day: 99 }, now: NOW, usd: 8, run: '2/1' }).reconcile, true);
+});
+
+test('run statuses: read for open paid attempts (of the task when named); a run not read is left out; a 404 counts as missing only when the run asking reads', async () => {
+  const b = (issue) => ({ kind: 'build', issue, task_sha256: 'a'.repeat(64), base: 'm1', predecessor: 'absent' });
+  const r = (id, run, issue, kind = 'build') => ({ t: 'reserve', kind, id, binding: 'x', bind: b(issue), run, usd: 8, day: '2026-10-26' });
+  const entries = [r('bd-1', '11/1', 7), r('bd-2', '12/2', 7), r('bd-3', '13/1', 8), r('bd-4', '14/1', 7), { t: 'outcome', id: 'bd-4', state: 'response' }, r('bd-5', 'not-a-run', 7), r('rv-6', '16/1', 7, 'review'), r('bd-7', '17/1', 'TASK-001')];
+  const asked = [];
+  const runs = await L.runStatuses(entries, { issue: 7, readRun: async (id) => { asked.push(id); if (id === 12) throw new Error('FICTIONAL network'); return { status: 'in_progress', conclusion: null, html_url: 'ignored' }; } });
+  assert.deepEqual(asked, [11, 12]);
+  assert.deepEqual([...runs.entries()], [['11/1', { status: 'in_progress', conclusion: null }]]);
+  // Every open paid attempt when no task is named (the PM).
+  const all = await L.runStatuses(entries, { readRun: async (id) => ({ status: 'completed', conclusion: id === 13 ? 'success' : 'failure' }) });
+  assert.deepEqual([...all.keys()], ['11/1', '12/2', '13/1', '17/1']);
+  // A 404 is missing only when the run asking reads (a token without access is answered 404 too).
+  const gone = (control) => L.runStatuses([r('bd-1', '11/1', 7)], { issue: 7, control, readRun: async (id) => (id === 99 ? { status: 'in_progress' } : { missing: true }) });
+  assert.deepEqual([...(await gone('99/1')).entries()], [['11/1', { status: 'missing', conclusion: null }]]);
+  assert.deepEqual([...(await gone('98/1')).entries()], [], 'the control is answered 404 too: nothing is known');
+  assert.deepEqual([...(await gone(null)).entries()], [], 'no control: nothing is known');
+  assert.deepEqual(L.runIdOf('40/2'), { id: 40, attempt: 2 });
+  assert.equal(L.runIdOf('40'), null);
+  assert.equal(L.runIdOf('rv/1'), null);
 });

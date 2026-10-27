@@ -23,7 +23,9 @@
 // Each subcommand prints its JSON result, adds key=value lines to
 // $GITHUB_OUTPUT and its words to $GITHUB_STEP_SUMMARY when those are set.
 // A Backlog-Item trailer is the builder's claim, metadata only: the approval
-// is the item on main's backlog, which only Eric edits.
+// is the item on main's backlog, which only Eric edits, or an item of the
+// issue queue Eric authorized with his agent:ready label (backlog-queue.js,
+// pipeline review 2026-10-27), read from the agent ledger.
 
 const fs = require('fs');
 const { spawnSync } = require('child_process');
@@ -43,7 +45,7 @@ const PROTECTED = [
   { re: /^\.claude\//i, why: 'agent definitions and permissions' },
   { re: /^(CLAUDE|COWORK-INSTRUCTIONS)\.md$/i, why: 'agent instructions' },
   { re: /^DESK_STATE\.md$/i, why: 'the backlog (a branch never edits it; Eric adds and ticks items)' },
-  { re: /^dashboard\/scripts\/(backlog-promote|backlog-intake|merge-train|engineering-worker)\.js$/i, why: 'promotion controls' },
+  { re: /^dashboard\/scripts\/(backlog-promote|backlog-queue|merge-train|engineering-worker)\.js$/i, why: 'promotion controls' },
   // Exclusive merge authority (Eric, 2026-10-26): the boundary's checker and
   // the agent lane's trusted scripts (build guard, verification, review and
   // the paid-attempt ledger), with their tests.
@@ -231,6 +233,7 @@ function scopeCheck(cwd, { base, head }) {
   }
   const desk = git(cwd, ['show', `${base}:DESK_STATE.md`], { allowFail: true });
   const backlog = backlogItems(desk.status === 0 ? desk.out : '');
+  const queue = queueAt(cwd);
   const commits = git(cwd, ['rev-list', '--no-merges', '--reverse', `${base}..${head}`]).out.split('\n').filter(Boolean);
   const items = new Set();
   for (const c of commits) {
@@ -240,13 +243,25 @@ function scopeCheck(cwd, { base, head }) {
     for (const n of named) {
       items.add(n);
       const it = backlog.get(n);
-      if (!it) reasons.push(`commit ${c.slice(0, 7)}: item ${n} is not on main's backlog`);
+      const q = queue.error ? [] : queue.items.filter((x) => x.item === n);
+      if (it && q.length) reasons.push(`commit ${c.slice(0, 7)}: item ${n} is both on main's backlog and in the issue queue (issue #${q[0].issue}); Eric decides`);
+      else if (!it && q.length > 1) reasons.push(`commit ${c.slice(0, 7)}: item ${n} was given twice in the issue queue; Eric decides`);
+      else if (!it && q.length) { if (q[0].state !== 'authorized') reasons.push(`commit ${c.slice(0, 7)}: item ${n} (issue #${q[0].issue}) was withdrawn from the queue (${q[0].withdrawn.reason})`); }
+      else if (!it) reasons.push(`commit ${c.slice(0, 7)}: item ${n} is not on main's backlog${queue.error ? `, and the issue queue could not be read (${queue.error})` : ' or in the issue queue'}`);
       else if (it.eric) reasons.push(`commit ${c.slice(0, 7)}: item ${n} is marked (Eric) and needs his decision`);
       else if (it.ticked) reasons.push(`commit ${c.slice(0, 7)}: item ${n} is already ticked on main`);
     }
   }
   if (!commits.length) reasons.push('the branch has no commit that main does not already have');
   return { ok: reasons.length === 0, reasons: [...new Set(reasons)], items: [...items].sort((a, b) => a - b), commits: commits.length, changed: changed.map((c) => c.path) };
+}
+
+// The issue queue (backlog-queue.js) from the ledger's local ref, as the
+// checkout's fetch left it. Read through that script, so only where this file
+// runs in place (backlog-pr.yml's scope step); a copy run alone says the
+// queue could not be read, and an item only the queue holds waits for Eric.
+function queueAt(cwd) {
+  try { return require('./backlog-queue').readLocal(cwd); } catch (err) { return { error: `the queue reader is not beside this script (${String(err && err.message || err).slice(0, 120)})` }; }
 }
 
 // Merge `head` onto `base` in a detached checkout; the tree is what is tested.
@@ -468,16 +483,26 @@ function rawShow(cwd, rev, file) {
   return r.stdout;
 }
 
-// Numbers an open intake branch adds (Eric's ready-label flow), so an
-// admission never takes one of them.
-function intakeNumbers(cwd, remote) {
-  const refs = git(cwd, ['ls-remote', remote, 'refs/heads/claude/intake-issue-*'], { allowFail: true }).out.split('\n').filter(Boolean).map((l) => l.split(/\s+/)[1]);
+// Numbers the issue queue has given (backlog-queue.js; withdrawn ones too,
+// as a number is never given again), from the agent ledger as the remote
+// holds it now, so an admission never takes one of them. Read here line by
+// line, since this file also runs alone from a copy: every authorize record's
+// number counts, whether or not the rest of the chain reads. Null when the
+// ledger cannot be read.
+function queueNumbers(cwd, remote) {
+  const ls = git(cwd, ['ls-remote', remote, 'refs/heads/agent-ledger'], { allowFail: true });
+  if (ls.status !== 0) return null;
+  if (!ls.out) return new Set();
+  const local = `refs/remotes/${remote}/agent-ledger`;
+  if (git(cwd, ['fetch', '-q', '--no-tags', remote, `+refs/heads/agent-ledger:${local}`], { allowFail: true }).status !== 0) return null;
+  const t = git(cwd, ['show', `${local}:ledger.jsonl`], { allowFail: true });
+  if (t.status !== 0) return null;
   const nums = new Set();
-  for (const ref of refs) {
-    const local = `refs/remotes/${remote}/${ref.replace('refs/heads/', '')}`;
-    if (git(cwd, ['fetch', '-q', remote, `+${ref}:${local}`], { allowFail: true }).status !== 0) continue;
-    const t = git(cwd, ['show', `${local}:DESK_STATE.md`], { allowFail: true });
-    if (t.status === 0) for (const n of backlogItems(t.out).keys()) nums.add(n);
+  for (const line of t.raw.split('\n')) {
+    if (!line) continue;
+    let e = null;
+    try { e = JSON.parse(line); } catch (_) { return null; }
+    if (e && e.t === 'authorize' && Number.isSafeInteger(e.item)) nums.add(e.item);
   }
   return nums;
 }
@@ -525,7 +550,9 @@ async function admit(cwd, { branch, head, desk, remote = 'origin', fetchJson = d
     const held = [...items].find(([, it]) => it.engineering && it.engineering.task_id === taskId);
     if (held) return { ...out, status: 'refused', reasons: [`${taskId} is already on main as item ${held[0]} (task_on_main): one task holds one backlog number; the worker confirms item ${held[0]} from main instead`], task_on_main: held[0] };
     if (items.has(d.number)) return { ...out, status: 'refused', reasons: [`number ${d.number} is already on main's backlog (number_taken)`], number_taken: true };
-    if (intakeNumbers(cwd, remote).has(d.number)) return { ...out, status: 'refused', reasons: [`number ${d.number} is on an open intake branch (number_taken)`], number_taken: true };
+    const queued = queueNumbers(cwd, remote);
+    if (!queued) return { ...out, status: 'refused', reasons: ['the issue queue on the agent ledger could not be read, so the number is not checked against it'] };
+    if (queued.has(d.number)) return { ...out, status: 'refused', reasons: [`number ${d.number} was given in the issue queue (number_taken)`], number_taken: true };
     const next = insertEntry(text, d.entry);
     // Main's backlog after the change is the one before plus exactly this one
     // engineering item, every other item as it was, and no section added.
@@ -707,4 +734,4 @@ async function main(argv, { fetchJson = defaultFetchJson } = {}) {
 
 if (require.main === module) main(process.argv.slice(2)).then((c) => { process.exitCode = c; }, (err) => { process.stderr.write(`${err && err.message || err}\n`); process.exitCode = 1; });
 
-module.exports = { PROTECTED, PROTECTED_LINES, DELEGATION_RESTRICTED, restrictedFor, foldPath, protectedHit, windowsProblem, ENG_MARK_RE, engEntryOf, backlogItems, resolveRevs, scopeCheck, compose, promote, summaryOf, insertEntry, entryProblems, deskReason, candidateDiff, admissionDiff, admit, engineeringCheck, main };
+module.exports = { queueNumbers, PROTECTED, PROTECTED_LINES, DELEGATION_RESTRICTED, restrictedFor, foldPath, protectedHit, windowsProblem, ENG_MARK_RE, engEntryOf, backlogItems, resolveRevs, scopeCheck, compose, promote, summaryOf, insertEntry, entryProblems, deskReason, candidateDiff, admissionDiff, admit, engineeringCheck, main };

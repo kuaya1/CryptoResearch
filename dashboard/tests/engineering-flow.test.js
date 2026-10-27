@@ -17,6 +17,7 @@ const { tempWorkspace } = require('./helpers');
 const I = require('../engineering/inbox');
 const W = require('../scripts/engineering-worker');
 const BP = require('../scripts/backlog-promote');
+const L = require('../scripts/agent-ledger');
 const { makeGithub } = require('../engineering/github');
 
 const T0 = Date.parse('2026-10-25T12:00:00Z');
@@ -96,14 +97,14 @@ test('admission: the worker numbers from Git, the desk binds, the workflow adds 
   const f = fixture(t);
   const { ws, cleanup } = tempWorkspace('engflow-admit'); t.after(cleanup);
   I.activatePolicy(ws, OWNER, { template: 'eng-docs@1' }, o());
-  // Eric's own intake branch holds item 4 (not merged yet).
-  g(f.work, 'checkout', '-q', '-B', 'claude/intake-issue-9', 'origin/main');
-  put(f.work, 'DESK_STATE.md', DESK.replace('\n\n## After', '\n- [ ] **4. Four (intake).** d\n\n## After'));
-  g(f.work, 'commit', '-qam', 'intake: item 4'); g(f.work, 'push', '-q', 'origin', 'claude/intake-issue-9');
+  // Eric's own issue in the queue holds item 4 (backlog-queue.js; never on main).
+  const body = '### Outcome\n\nFour (FICTIONAL).\n\n### Acceptance checks\n\n- four';
+  assert.ok(L.transact(f.work, { decide: () => ({ append: [{ t: 'authorize', id: 'aq-0000000000000009', issue: 9, item: 4, version: L.sha256(body), title: 'Four', body, schedule: { after: [], touches: ['*'] }, by: 'kuaya1', at: '2026-10-25T11:00:00Z' }] }) }).committed);
   const nums = W.numbers(f.work);
   assert.equal(nums.main_max, 3);
-  assert.equal(nums.observed_max, 4, 'an open intake branch holds its number');
+  assert.equal(nums.observed_max, 4, 'a number the issue queue gave is held');
   assert.equal(nums.next, 5);
+  assert.equal(nums.complete, true);
 
   const id = admitted(ws, 'Lane note (FICTIONAL)');
   const c = I.claimTask(ws, W1, { task_id: id }, o());
@@ -210,7 +211,7 @@ test('admission refuses what the desk did not bind: an unreadable desk, another 
   assert.match(r3.reasons.join(' '), /desk: engineering is paused/);
   I.setPaused(ws, OWNER, { paused: false }, o());
 
-  // Eric merged an intake item with the same number meanwhile: number_taken;
+  // Eric merged an item of his own with the same number meanwhile: number_taken;
   // the worker releases it, binds the next one and pushes again (lease on the
   // old branch tip).
   f.onMain('DESK_STATE.md', f.show(f.mainSha(), 'DESK_STATE.md').replace('\n\n## After', '\n- [ ] **4. Four (intake).** d\n\n## After'), 'intake: item 4');
