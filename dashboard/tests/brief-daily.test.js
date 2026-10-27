@@ -201,7 +201,7 @@ test('daily brief: the text is deterministic, its SHA-256 is of that text, and a
   assert.equal(a.text, b.text);
   assert.equal(a.text_sha256, sha256(a.text));
   assert.equal(a.text_sha256, b.text_sha256);
-  for (const sec of a.sections) for (const l of sec.lines) assert.ok(l.link || sec.state === 'unreadable' || l.text === 'None right now.', `${sec.id}: ${l.text} has a link`);
+  for (const sec of a.sections) for (const l of sec.lines) assert.ok(l.link || sec.state === 'unreadable' || l.text === 'None right now.' || l.text.startsWith('No project is in the pilot'), `${sec.id}: ${l.text} has a link`);
   // The connector tool: read-only, for every model.
   const { makeMcp, TOOLS } = require('../mcp');
   assert.equal(TOOLS.find((x) => x.name === 'daily_brief').annotations.readOnlyHint, true);
@@ -304,4 +304,56 @@ test('daily brief (item 53): a ticket whose fresh price is within 10% above its 
   assert.match(sec.lines[0].text, /Near invalidation: the price \$0\.75 is 7\.14% above the invalidation price \$0\.7/);
   assert.match(sec.lines[0].link, /^#\/\?p=/);
   assert.ok(at > 0);
+});
+
+test('daily brief (item 67): PM cards order trims, near-invalidation, then oldest; desk gates are one line; the count is the cards waiting', (t) => {
+  const s = setup(t);
+  const indexer = require('../core/indexer');
+  const real = indexer.buildIndex;
+  const row = (id, ticket) => ({ project_id: id, name: id, ticket: { status: 'pending_pm_review', proposal_type: 'ACCUMULATE', ...ticket } });
+  const rows = [
+    row('ord-late', { saved_at: '2026-10-02T00:00:00Z' }),
+    row('gate-a', { desk_gate: true, proposal_type: 'HARD_PASS', saved_at: '2026-09-01T00:00:00Z' }),
+    row('near', { near_invalidation: { words: 'x' }, saved_at: '2026-10-03T00:00:00Z' }),
+    row('gate-b', { desk_gate: true, proposal_type: 'HARD_PASS', saved_at: '2026-09-02T00:00:00Z' }),
+    row('ord-early', { saved_at: '2026-10-01T00:00:00Z' }),
+    row('trim', { proposal_type: 'TRIM_EXIT', saved_at: '2026-10-04T00:00:00Z' }),
+    row('gate-c', { desk_gate: true, proposal_type: 'HARD_PASS', saved_at: '2026-09-03T00:00:00Z' }),
+  ];
+  indexer.buildIndex = (...a) => ({ ...real(...a), projects: rows });
+  t.after(() => { indexer.buildIndex = real; });
+  const sec = byId(B.brief(s.ws, { now: Date.parse('2026-10-05T00:00:00Z') }), 'pm_cards');
+  assert.equal(sec.state, 'ok');
+  assert.deepEqual(sec.lines.slice(0, 4).map((l) => l.text.split(':')[0]), ['trim', 'near', 'ord-early', 'ord-late']);
+  assert.equal(sec.lines[4].text, '3 desk gates waiting: gate-a, gate-b, gate-c.');
+  assert.equal(sec.lines[4].link, '#/research?tab=runs');
+  assert.equal(sec.lines.length, 5);
+  assert.equal(sec.count, 7);
+  assert.ok(!('n' in sec.lines[4]));
+  // an unreadable ticket still makes the section partial
+  rows.push({ project_id: 'bad', name: 'bad', ticket: { unavailable: true, error: 'x' } });
+  const part = byId(B.brief(s.ws, { now: Date.parse('2026-10-05T00:00:00Z') }), 'pm_cards');
+  assert.equal(part.state, 'partial');
+  assert.equal(part.count, null);
+});
+
+test('daily brief (item 67): with no project in the pilot the exit section says nothing is expected, with a count of 0', (t) => {
+  const s = setup(t);
+  const none = byId(B.brief(s.ws, { now: Date.now() }), 'pilot_exits');
+  assert.equal(none.state, 'ok');
+  assert.equal(none.count, 0);
+  assert.equal(none.lines.length, 1);
+  assert.equal(none.lines[0].text, 'No project is in the pilot, so no exit reading is expected.');
+  assert.equal(none.lines[0].link, null);
+  // pilot projects that all have their reading: "None right now."
+  const tk = require('../core/tickets');
+  const real = tk.pilotCandidates;
+  tk.pilotCandidates = () => [{ project_id: 'p', in_pilot: true, exit_reading: { present: true } }];
+  const ok = byId(B.brief(s.ws, { now: Date.now() }), 'pilot_exits');
+  assert.equal(ok.lines[0].text, 'None right now.');
+  tk.pilotCandidates = () => [{ project_id: 'p', name: 'P', in_pilot: true, exit_reading: { present: false, size_usd: 500 } }];
+  const miss = byId(B.brief(s.ws, { now: Date.now() }), 'pilot_exits');
+  tk.pilotCandidates = real;
+  assert.equal(miss.count, 1);
+  assert.match(miss.lines[0].text, /^P: no current exit reading at \$500\./);
 });
