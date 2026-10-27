@@ -224,6 +224,15 @@ test('Eric decides on the desk behind sign-in and his passphrase; the connector 
   // No delegation yet: a submitted task waits for Eric.
   const p = await call(d, chat.access, 'engineering_prepare_task', { ...docsTask(), original_instruction: 'Eric: write the trial note; mention eric@example.com only to me (FICTIONAL).' });
   assert.notEqual(p.isError, true, p.text);
+  // The same task as an Agent task issue (Engineering v3, change 6): the
+  // private instruction never reaches it, and its tests are the issue's
+  // alone, so the draft and its hash are unchanged.
+  assert.equal(p.data.agent_issue.template, 'eng-backend@1');
+  assert.doesNotMatch(JSON.stringify(p.data.agent_issue), /eric@example\.com|write the trial note/);
+  const withTests = await call(d, chat.access, 'engineering_prepare_task', { ...docsTask(), task_id: p.data.task_id, tests: ['dashboard/tests/trial.test.js'] });
+  assert.notEqual(withTests.isError, true, withTests.text);
+  assert.deepEqual([withTests.data.unchanged, withTests.data.version, withTests.data.content_sha256], [true, 1, p.data.content_sha256]);
+  assert.match(withTests.data.agent_issue.body, /### Regression tests\n\n- dashboard\/tests\/trial\.test\.js\n/);
   const s = await call(d, chat.access, 'engineering_submit_task', { task_id: p.data.task_id, version: p.data.version, content_sha256: p.data.content_sha256 });
   assert.equal(s.data.status, 'awaiting_authorization');
   const claimEarly = await call(d, worker.access, 'engineering_claim_task', { task_id: p.data.task_id });

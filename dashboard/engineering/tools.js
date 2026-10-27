@@ -13,6 +13,7 @@ const { redactLog, PROTOCOL_VERSIONS } = require('../mcp-wire');
 const { PROVIDER_LABELS } = require('../core/workspace');
 const inbox = require('./inbox');
 const P = require('./policy');
+const { agentIssue } = require('./agent-issue');
 
 const MAX_BODY = 2 * 1024 * 1024;
 const sha40 = { type: 'string', pattern: '^[0-9a-f]{40}$' };
@@ -69,7 +70,7 @@ const TOOLS = [
   {
     name: 'engineering_prepare_task',
     roles: ['submitter'],
-    description: 'Save a task as a draft version from Eric\'s direction: a title, the outcome, acceptance checks, the paths in scope, what is not in scope, the review it needs and how it is released. intent explore is a note only (never built), design is documents under docs/engineering/, implement is code. Nothing is queued: submit it after. The answer\'s match says which active delegation this version would be admitted under and the review, release and limits it would be held to, or what each delegation misses. Put Eric\'s own words in original_instruction (kept private on the desk, never in Git). Passing task_id saves a new version of that task; content cannot change once it holds a backlog number.',
+    description: 'Save a task as a draft version from Eric\'s direction: a title, the outcome, acceptance checks, the paths in scope, what is not in scope, the review it needs and how it is released. intent explore is a note only (never built), design is documents under docs/engineering/, implement is code. Nothing is queued: submit it after. The answer\'s match says which active delegation this version would be admitted under and the review, release and limits it would be held to, or what each delegation misses. Put Eric\'s own words in original_instruction (kept private on the desk, never in Git). Passing task_id saves a new version of that task; content cannot change once it holds a backlog number. The answer\'s agent_issue is the same task as an Agent task issue for the agent lane (implement is eng-backend@1, design eng-docs@1, explore none): its body, the problems the lane\'s own check finds in it, and a link that opens the form prefilled, with no label. Give it to Eric: he opens the link, submits the issue and adds agent:build himself. tests (the Regression tests) is for that issue only and is not saved in the draft.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -78,7 +79,7 @@ const TOOLS = [
         intent: { type: 'string', enum: P.INTENTS },
         outcome: { type: 'string', maxLength: P.LIMITS.outcome },
         scope: { type: 'object', properties: { paths: strList('Repository paths or globs (* and **) the change may touch.', P.LIMITS.paths) }, required: ['paths'], additionalProperties: false },
-        non_goals: strList('What is not in scope.'),
+        non_goals: strList('What is not in scope; in the Agent task issue, its Negative cases.'),
         acceptance: strList('Checks that decide whether it is done; each must be met and evidenced.'),
         dependencies: strList('Task IDs that must be merged first.'),
         required_review: { type: 'string', enum: P.REVIEWS },
@@ -88,13 +89,22 @@ const TOOLS = [
         parent_backlog_id: { type: 'integer', minimum: 1 },
         repo_full_name: { type: 'string', enum: [P.REPO] },
         original_instruction: { type: 'string', maxLength: P.LIMITS.instruction },
+        tests: strList('The Agent task issue\'s Regression tests: test files under dashboard/tests/ (<name>.test.js) that show the outcome, each also under scope.paths. Not saved in the draft.'),
         idempotency_key: idem,
       },
       required: ['title', 'intent', 'outcome', 'scope', 'acceptance'],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false },
-    run: (ws, who, a) => inbox.prepareTask(ws, who, a),
+    // tests is the issue's alone: the draft, and so its content hash, is as before.
+    run: (ws, who, a) => {
+      const draft = { ...a };
+      delete draft.tests;
+      const r = inbox.prepareTask(ws, who, draft);
+      let issue;
+      try { issue = agentIssue(a); } catch (err) { issue = { ok: false, refused: `the Agent task issue could not be prepared on this desk (${String((err && err.message) || err).split('\n')[0].slice(0, 200)})` }; }
+      return { ...r, agent_issue: issue };
+    },
   },
   {
     name: 'engineering_submit_task',

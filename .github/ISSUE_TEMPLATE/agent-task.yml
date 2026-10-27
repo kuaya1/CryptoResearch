@@ -6,7 +6,7 @@ body:
       value: |
         The agent lane builds this issue only after Eric adds the **agent:build** label, and only the version of the issue he labeled: an edit after that needs the label again. The build opens a pull request that Eric merges himself. Keep secrets, records and addresses out of it: this repository is public.
   - type: dropdown
-    id: template
+    id: lane_template
     attributes:
       label: Template
       description: What the lane may change (.github/agent-policy.json and dashboard/engineering/policy.js).
