@@ -50,9 +50,10 @@
 #            the issue or the pull request (nothing was spent).
 #
 # Nothing here merges or approves anything: Eric merges each pull request.
-# A re-run of failed jobs builds nothing (the reservation belongs to the
-# run attempt that made it); re-run the whole workflow, which reserves again
-# within the ceilings in .github/agent-policy.json.
+# A re-run of failed jobs builds, publishes and records nothing (the
+# reservation belongs to the run attempt that made it); re-run the whole
+# workflow, which reserves again within the ceilings in
+# .github/agent-policy.json.
 name: agent-build
 
 on:
@@ -310,9 +311,12 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  # Only in the run attempt that reserved, as build and record: a re-run of
+  # failed jobs keeps build's earlier success, and would otherwise push in
+  # an attempt whose record job never runs (red-team review, 2026-10-27).
   publish:
     needs: [reserve, build]
-    if: needs.build.result == 'success'
+    if: needs.build.result == 'success' && needs.reserve.outputs.attempt == github.run_attempt
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
