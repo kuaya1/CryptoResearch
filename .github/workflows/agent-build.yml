@@ -3,7 +3,11 @@
 # agent task form and adds the agent:build label himself; that label is the
 # authorization, for that version of the issue only. On an agent candidate's
 # pull request, his own /revise comment authorizes one revision of it at the
-# head its branch holds then (Engineering v3, change 5).
+# head its branch holds then (Engineering v3, change 5). The lane's PM
+# (agent-pm.js, agent-builder-lane.yml) dispatches it for a backlog task of
+# DESK_STATE.md (audits/2026-10-27-pm-builder): mode task builds the first
+# [TODO] on main, mode remediate rebuilds a failed attempt from the PM's
+# diagnosis; the inputs are hints, and reserve checks everything again.
 #
 #   reserve  main's guard checks that the label is Eric's own and the task
 #            stays inside its template, reads the issue again (still open,
@@ -13,20 +17,26 @@
 #            "absent"). For /revise, agent-revise.js checks the comment, the
 #            pull request, its head and its commits, reads the feedback from
 #            its three authenticated sources and reserves one paid revision
-#            bound to them. One build or revision per issue at a time: another
-#            with no outcome holds the issue for 65 minutes, then is lost.
+#            bound to them. For a dispatch, agent-pm.js checks the task's row
+#            on main, the lock and the PM's diagnosis (a remediation) and
+#            reserves the build or remediation. One build, revision or
+#            remediation per task at a time: another with no outcome holds the
+#            task for 65 minutes, then is lost.
 #   build    Claude Code (pinned by lockfile) in a fresh checkout with no
 #            repository write credential, no reviewer token, no OpenAI key, no
 #            ledger key and no App key, from main's commit for a build or the
 #            candidate's head for a revision; its commands run in Claude
 #            Code's sandbox (main's .github/agent/claude-settings.json) with
-#            the Anthropic key unset and no network but the npm registry. Its
-#            working tree's diff against the base is the only output, scanned
-#            for key-shaped strings before upload.
+#            the Anthropic key unset and no network but the npm registry. For
+#            eng-app@4 the lane then builds the browser bundle from the
+#            builder's source with main's build files, in the sandbox with no
+#            network. The working tree's diff against the base is the only
+#            output, scanned for key-shaped strings before upload.
 #   publish  main's guard applies that diff to the base as data and checks it
 #            against the task again; the builder App commits it, pushes
 #            agent/issue-<n> by lease on the head the reservation recorded,
-#            and opens (or updates) the pull request. A branch that moved
+#            and opens (or updates) the pull request; a backlog task's row then
+#            reads [IN_PROGRESS: PR #<n>] on its branch. A branch that moved
 #            since (another build, or Eric) makes this one "stale": not
 #            pushed, not retried, recorded so and said on the issue or pull
 #            request. The App pushes only agent/ branches and cannot merge,
@@ -46,14 +56,29 @@ on:
     types: [labeled]
   issue_comment:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: task (build the first [TODO]) or remediate (from the PM's diagnosis)
+        required: true
+        type: choice
+        options: [task, remediate]
+      task:
+        description: The backlog task, TASK-001
+        required: true
+        type: string
+      pr:
+        description: Its open pull request, for a remediation of one
+        required: false
+        type: string
 
 permissions: {}
 
-# One group per issue for a label and one per comment for /revise, so a
-# comment never cancels or waits behind another run; the ledger keeps one
-# build or revision per issue at a time.
+# One group per issue for a label, one per comment for /revise and one for
+# the PM's dispatches, so a comment never cancels or waits behind another
+# run; the ledger keeps one build, revision or remediation per task at a time.
 concurrency:
-  group: agent-build-${{ github.event_name == 'issue_comment' && format('comment-{0}', github.event.comment.id) || github.event.issue.number }}
+  group: agent-build-${{ github.event_name == 'workflow_dispatch' && 'backlog' || github.event_name == 'issue_comment' && format('comment-{0}', github.event.comment.id) || github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
@@ -61,15 +86,16 @@ jobs:
     if: >-
       (github.event_name == 'issues' && github.event.label.name == 'agent:build') ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
-      startsWith(github.event.comment.body, '/revise') && github.event.comment.user.login == github.repository_owner)
+      startsWith(github.event.comment.body, '/revise') && github.event.comment.user.login == github.repository_owner) ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: write # the ledger branch only (rulesets automation-branches and agent-ledger)
       issues: read # the issue, and a /revise comment, as GitHub holds them now
-      pull-requests: read # /revise: the pull request and its head
-      checks: read # /revise: agent-guard and agent-verify at that head
-      actions: read # /revise: the workflow run each of those checks belongs to
+      pull-requests: read # /revise and a remediation: the pull request and its head
+      checks: read # /revise and a remediation: the checks at that head
+      actions: read # the workflow run each of those checks belongs to, and a failed build's jobs
     outputs:
       ok: ${{ steps.reserve.outputs.ok }}
       kind: ${{ steps.reserve.outputs.kind }}
@@ -81,6 +107,10 @@ jobs:
       issue: ${{ steps.reserve.outputs.issue }}
       notify: ${{ steps.reserve.outputs.notify }}
       title: ${{ steps.reserve.outputs.title }}
+      pr_title: ${{ steps.reserve.outputs.pr_title }}
+      template: ${{ steps.reserve.outputs.template }}
+      backlog: ${{ steps.reserve.outputs.backlog }}
+      pr: ${{ steps.reserve.outputs.pr }}
       prompt_sha256: ${{ steps.reserve.outputs.prompt_sha256 }}
       issue_sha256: ${{ steps.reserve.outputs.issue_sha256 }}
       note: ${{ steps.reserve.outputs.note }}
@@ -102,23 +132,30 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BUILDER_APP_SLUG: ${{ vars.BUILDER_APP_SLUG }}
           AGENT_LEDGER_KEY: ${{ secrets.AGENT_LEDGER_KEY }}
+          MODE: ${{ inputs.mode }}
+          TASK: ${{ inputs.task }}
+          PR: ${{ inputs.pr }}
         run: |
           if [ "$EVENT" = issue_comment ]; then
-            node dashboard/scripts/agent-revise.js reserve --base "$MAIN" --out "$RUNNER_TEMP/revise"
+            node dashboard/scripts/agent-revise.js reserve --base "$MAIN" --out "$RUNNER_TEMP/reserved"
+          elif [ "$EVENT" = workflow_dispatch ]; then
+            node dashboard/scripts/agent-pm.js reserve --mode "$MODE" --task "$TASK" --pr "$PR" --base "$MAIN" --out "$RUNNER_TEMP/reserved"
           else
             node dashboard/scripts/agent-guard.js reserve --base "$MAIN"
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: steps.reserve.outputs.ok == 'true' && steps.reserve.outputs.kind == 'revise'
+        if: steps.reserve.outputs.ok == 'true' && github.event_name != 'issues'
         with:
-          name: agent-revise
-          path: ${{ runner.temp }}/revise/
+          name: agent-reserve
+          path: ${{ runner.temp }}/reserved/
           retention-days: 7
           if-no-files-found: error
 
+  # A dispatch has no issue to answer: its refusal is the reserve job's
+  # summary, and the PM reads the state again on its next run.
   refused:
     needs: reserve
-    if: needs.reserve.outputs.note != ''
+    if: needs.reserve.outputs.note != '' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -181,22 +218,23 @@ jobs:
           bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all --die-with-parent true
           echo "User namespaces work; the builder's commands run in the sandbox."
       - name: The task, from the issue as Eric labeled it
-        if: needs.reserve.outputs.kind == 'build'
+        if: github.event_name == 'issues'
         run: node dashboard/scripts/agent-guard.js prompt --out "$RUNNER_TEMP/task.md"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: needs.reserve.outputs.kind == 'revise'
+        if: github.event_name != 'issues'
         with:
-          name: agent-revise
-          path: ${{ runner.temp }}/revise
-      - name: The revision's task, as reserve wrote it (its SHA-256 checked)
-        if: needs.reserve.outputs.kind == 'revise'
+          name: agent-reserve
+          path: ${{ runner.temp }}/reserved
+      - name: The task, as reserve wrote it (its SHA-256 checked)
+        if: github.event_name != 'issues'
         env:
           PROMPT_SHA256: ${{ needs.reserve.outputs.prompt_sha256 }}
         run: |
-          echo "${PROMPT_SHA256}  ${RUNNER_TEMP}/revise/task.md" | sha256sum -c --quiet
-          cp "$RUNNER_TEMP/revise/task.md" "$RUNNER_TEMP/task.md"
-      # A build starts from main's commit, a revision from the candidate's
-      # head reserve recorded (on its merge base with main). The .git copy
+          echo "${PROMPT_SHA256}  ${RUNNER_TEMP}/reserved/task.md" | sha256sum -c --quiet
+          cp "$RUNNER_TEMP/reserved/task.md" "$RUNNER_TEMP/task.md"
+      # A build starts from main's commit, a revision or a remediation of a
+      # pull request from the candidate's head reserve recorded (on its merge
+      # base with main). The .git copy
       # the change is read with is taken here, before the builder starts.
       - name: The tree the builder starts from
         env:
@@ -231,6 +269,23 @@ jobs:
             --disallowedTools WebFetch WebSearch \
             --allowedTools Read Glob Grep "Edit(./**)" "Write(./**)" "Bash(node:*)" "Bash(git diff:*)" "Bash(git status:*)" \
             < "$RUNNER_TEMP/task.md" > "$RUNNER_TEMP/out/result.json"
+      # eng-app@4: the builder cannot run npm, so the lane builds the browser
+      # bundle from its source: main's build files and lockfile put back
+      # first, the install without scripts, then the build in the sandbox with
+      # no network and only the checkout writable. agent-verify rebuilds it
+      # and compares.
+      - name: The browser bundle, built from the builder's source (eng-app@4)
+        if: needs.reserve.outputs.template == 'eng-app@4'
+        env:
+          GIT_DIR: ${{ runner.temp }}/guard/base.git
+          GIT_WORK_TREE: ${{ github.workspace }}
+          BASE: ${{ needs.reserve.outputs.base }}
+        run: |
+          git -c core.hooksPath=/dev/null checkout "$BASE" -- dashboard/web/package.json dashboard/web/package-lock.json dashboard/web/vite.config.js dashboard/web/index.html dashboard/web/scope-legacy.js dashboard/web/scripts
+          npm ci --prefix dashboard/web --no-audit --no-fund --ignore-scripts
+          bwrap --ro-bind / / --bind "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" --tmpfs /tmp --dev /dev --proc /proc \
+            --unshare-all --die-with-parent --chdir "$GITHUB_WORKSPACE/dashboard/web" --setenv HOME /tmp \
+            npm run build
       - name: The change, as data (read with the .git copied before the build)
         env:
           GIT_DIR: ${{ runner.temp }}/guard/base.git
@@ -260,7 +315,7 @@ jobs:
       contents: read
     outputs:
       state: ${{ steps.publish.outputs.state }}
-      note: ${{ steps.publish.outputs.note }}
+      note: ${{ steps.publish.outputs.note || steps.apply.outputs.note }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -275,20 +330,21 @@ jobs:
           name: agent-build
           path: ${{ runner.temp }}/build
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: needs.reserve.outputs.kind == 'revise'
+        if: github.event_name != 'issues'
         with:
-          name: agent-revise
-          path: ${{ runner.temp }}/revise
+          name: agent-reserve
+          path: ${{ runner.temp }}/reserved
       # A revision's task is the issue as its reserve read it (the event is a
-      # comment on the pull request); a build's is the event's own.
+      # comment on the pull request), a backlog task's its block on main as
+      # reserve read it; a build's is the event's own.
       - id: issue
         env:
-          KIND: ${{ needs.reserve.outputs.kind }}
+          EVENT: ${{ github.event_name }}
           ISSUE_SHA256: ${{ needs.reserve.outputs.issue_sha256 }}
         run: |
-          if [ "$KIND" = revise ]; then
-            echo "${ISSUE_SHA256}  ${RUNNER_TEMP}/revise/issue.json" | sha256sum -c --quiet
-            echo "file=$RUNNER_TEMP/revise/issue.json" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT" != issues ]; then
+            echo "${ISSUE_SHA256}  ${RUNNER_TEMP}/reserved/issue.json" | sha256sum -c --quiet
+            echo "file=$RUNNER_TEMP/reserved/issue.json" >> "$GITHUB_OUTPUT"
           else
             echo "file=" >> "$GITHUB_OUTPUT"
           fi
@@ -296,7 +352,8 @@ jobs:
         env:
           BASE: ${{ needs.reserve.outputs.base }}
           ISSUE: ${{ steps.issue.outputs.file }}
-        run: node dashboard/scripts/agent-guard.js apply --base "$BASE" --patch "$RUNNER_TEMP/build/patch.diff" --build "$RUNNER_TEMP/build/result.json" --issue "$ISSUE"
+          PR: ${{ needs.reserve.outputs.pr }}
+        run: node dashboard/scripts/agent-guard.js apply --base "$BASE" --patch "$RUNNER_TEMP/build/patch.diff" --build "$RUNNER_TEMP/build/result.json" --issue "$ISSUE" --pr "$PR"
       - id: app
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -328,19 +385,32 @@ jobs:
             --issue "$ISSUE" --bot-name "$BOT_NAME" --bot-email "$BOT_EMAIL" --build "$RUNNER_TEMP/build/result.json" \
             --body-out "$RUNNER_TEMP/body.md" --run-url "$RUN_URL"
       - name: The pull request (opened by the App, so its checks run)
+        id: pr
         if: steps.publish.outputs.ok == 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           BRANCH: ${{ steps.publish.outputs.branch }}
-          TITLE: ${{ needs.reserve.outputs.title }}
-          NUMBER: ${{ needs.reserve.outputs.issue }}
+          TITLE: ${{ needs.reserve.outputs.pr_title }}
         run: |
           existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
             gh pr edit "$existing" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
           else
-            gh pr create --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base main --title "agent: ${TITLE} (#${NUMBER})" --body-file "$RUNNER_TEMP/body.md"
+            gh pr create --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base main --title "$TITLE" --body-file "$RUNNER_TEMP/body.md"
           fi
+          echo "number=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')" >> "$GITHUB_OUTPUT"
+      # A backlog task's row on its branch names its pull request: one more
+      # commit by the App, by lease on the commit just published, and the
+      # only change to DESK_STATE.md agent-guard lets a candidate carry.
+      - name: The backlog task's status on its branch ([IN_PROGRESS] for this pull request)
+        if: steps.publish.outputs.ok == 'true' && needs.reserve.outputs.backlog == 'true' && steps.pr.outputs.number != ''
+        env:
+          ISSUE: ${{ steps.issue.outputs.file }}
+          NUMBER: ${{ steps.pr.outputs.number }}
+          COMMIT: ${{ steps.publish.outputs.commit }}
+          BOT_NAME: ${{ steps.bot.outputs.name }}
+          BOT_EMAIL: ${{ steps.bot.outputs.email }}
+        run: node dashboard/scripts/agent-guard.js status --issue "$ISSUE" --pr "$NUMBER" --to in_progress --head "$COMMIT" --bot-name "$BOT_NAME" --bot-email "$BOT_EMAIL"
 
   record:
     needs: [reserve, build, publish]
@@ -367,9 +437,10 @@ jobs:
           RESERVATION: ${{ needs.reserve.outputs.reservation }}
           OUTCOME: ${{ needs.build.result }}
           PUBLISH: ${{ needs.publish.outputs.state || needs.publish.result }}
-        run: node dashboard/scripts/agent-guard.js record --id "$RESERVATION" --outcome "$OUTCOME" --publish "$PUBLISH" --build "$RUNNER_TEMP/build/result.json"
+          NOTE: ${{ needs.publish.outputs.note }}
+        run: node dashboard/scripts/agent-guard.js record --id "$RESERVATION" --outcome "$OUTCOME" --publish "$PUBLISH" --note "$NOTE" --build "$RUNNER_TEMP/build/result.json"
       - name: A stale build or revision is said where it was asked for (nothing was pushed)
-        if: needs.publish.outputs.state == 'stale'
+        if: needs.publish.outputs.state == 'stale' && needs.reserve.outputs.notify != ''
         env:
           GH_TOKEN: ${{ github.token }}
           NUMBER: ${{ needs.reserve.outputs.notify }}

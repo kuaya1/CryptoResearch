@@ -1,0 +1,117 @@
+# The lane's project manager, the "General Contractor" (Eric, 2026-10-27;
+# audits/2026-10-27-pm-builder). It reads DESK_STATE.md's Active Backlog on
+# main, the open agent candidates, their required checks, the agent-build
+# runs and the ledger, and takes at most one action per run
+# (dashboard/scripts/agent-pm.js):
+#
+#   build      dispatch agent-build.yml for the first [TODO] (mode task)
+#   signoff    "PM Site Inspection: PASSED" on a candidate whose test,
+#              agent-guard, agent-verify and agent-review passed, once per head
+#   diagnose   one OpenAI request (cr-agent-diagnose@1), reserved in the ledger
+#              before it is sent, then dispatch agent-build.yml (mode
+#              remediate): Claude fixes the candidate from the diagnosis, up to
+#              3 times per task version
+#   block      after that: a ledger line, a comment, and [BLOCKED: Needs Human
+#              Architect] on the candidate's branch by the builder App; the
+#              lane waits for Eric
+#
+# It runs main's own code only and never checks out a candidate. Nothing here
+# merges or approves anything, and nothing writes main: Eric merges each pull
+# request. The PM acts only while the repository variable AGENT_PM_ENABLED is
+# "true" (Eric's); otherwise each run only says what it would do.
+name: agent-builder-lane
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: [test, agent-checks, agent-review]
+    types: [completed]
+
+permissions: {}
+
+# One PM at a time; a run waits for the one before it.
+concurrency:
+  group: agent-pm
+  cancel-in-progress: false
+
+jobs:
+  pm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # the ledger branch only (rulesets automation-branches and agent-ledger)
+      actions: write # dispatches agent-build.yml; reads its runs, their jobs and the check runs' workflow runs
+      pull-requests: write # the sign-off and the block, as comments on the candidate
+      checks: read # the required checks at the candidate's head
+    outputs:
+      block_task: ${{ steps.pm.outputs.block_task }}
+      block_pr: ${{ steps.pm.outputs.block_pr }}
+      block_head: ${{ steps.pm.outputs.block_head }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+      - id: pm
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AGENT_LEDGER_KEY: ${{ secrets.AGENT_LEDGER_KEY }}
+          OPENAI_PM_MODEL: ${{ vars.OPENAI_PM_MODEL }}
+          OPENAI_REVIEW_MODEL: ${{ vars.OPENAI_REVIEW_MODEL }}
+          AGENT_PM_ENABLED: ${{ vars.AGENT_PM_ENABLED }}
+        run: node dashboard/scripts/agent-pm.js run
+
+  # A block also reads on the candidate's branch: one status commit by the
+  # builder App ([BLOCKED: Needs Human Architect]), by lease on the head the
+  # PM read. agent-review skips a head that reads blocked, so nothing more is
+  # paid for it.
+  status:
+    needs: pm
+    if: needs.pm.outputs.block_head != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.BUILDER_APP_ID }}
+          private-key: ${{ secrets.BUILDER_APP_KEY }}
+          permission-contents: write
+      - id: bot
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          SLUG: ${{ steps.app.outputs.app-slug }}
+        run: |
+          id=$(gh api "/users/${SLUG}%5Bbot%5D" --jq .id)
+          echo "name=${SLUG}[bot]" >> "$GITHUB_OUTPUT"
+          echo "email=${id}+${SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
+      - env:
+          TOKEN: ${{ steps.app.outputs.token }}
+          TASK: ${{ needs.pm.outputs.block_task }}
+          HEAD: ${{ needs.pm.outputs.block_head }}
+          BOT_NAME: ${{ steps.bot.outputs.name }}
+          BOT_EMAIL: ${{ steps.bot.outputs.email }}
+        run: |
+          git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          branch="agent/task-${TASK#TASK-}"
+          git fetch -q --no-tags origin "+refs/heads/${branch}:refs/remotes/origin/${branch}"
+          node dashboard/scripts/agent-pm.js task-json --task "$TASK" --out "$RUNNER_TEMP/issue.json"
+          node dashboard/scripts/agent-guard.js status --issue "$RUNNER_TEMP/issue.json" --to blocked --head "$HEAD" --bot-name "$BOT_NAME" --bot-email "$BOT_EMAIL"

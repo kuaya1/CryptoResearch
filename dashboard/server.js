@@ -1220,6 +1220,10 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   route('GET', '/api/scout', () => coherent(() => require('./core/scout').view(ws)));
   // The daily brief (core/brief-daily.js): read only, nothing stored.
   route('GET', '/api/brief/daily', (m, req, res, body, url) => coherent(() => require('./core/brief-daily').brief(ws, { since: url.searchParams.get('since') || null })));
+  // The agent lane's briefing (scripts/agent-status.js): GitHub read on
+  // request with CR_GITHUB_TOKEN, no records read and nothing stored; a
+  // source it cannot read is "unknown".
+  route('GET', '/api/system/briefing', () => require('./scripts/agent-status').deskBriefing());
   route('GET', '/api/projects/([^/]+)/outcomes', (m) => coherent(() => require('./core/report-outcomes').projectOutcomes(ws, pid(m[1]))));
   // `expect` is the count the button showed: more waiting than that is a 409,
   // so a click never sends jobs Eric did not see.

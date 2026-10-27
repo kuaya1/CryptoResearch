@@ -278,7 +278,7 @@ test('one revision at a time and two per task version: a /revise during a run is
   w.state.comments = [c1, c2];
   const r2 = await revise({ c: c2, run: '81/1', at: '2026-10-26T12:11:00Z' });
   assert.equal(r2.flat.ok, 'false');
-  assert.match(r2.flat.note, new RegExp(`revision ${r1.flat.reservation} of issue #7 \\(run 80/1\\) has no outcome yet and is 1 min old; one build or revision per issue at a time, each held up to 65 min`));
+  assert.match(r2.flat.note, new RegExp(`revision ${r1.flat.reservation} of issue #7 \\(run 80/1\\) has no outcome yet and is 1 min old; one build, revision or remediation per task at a time, each held up to 60 min`));
   assert.equal(reserves(w).length, 1);
   // A label build of the same issue waits the same way.
   const build = L.decideBuild(L.read(w.work).entries, { binding: 'x', bind: { kind: 'build', issue: 7, task_sha256: w.task.body_sha256 }, ceilings: POLICY.ceilings, now: Date.parse('2026-10-26T12:12:00Z'), usd: 8, run: '82/1', holdMs: 65 * 60000 });
@@ -394,7 +394,11 @@ test('without the ledger key no review verdict is read, and without a revision c
   const v1 = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'agent-policy@1.json'), 'utf8'));
   assert.equal(v1.version, 'cr-agent-policy@1');
   assert.equal(v1.ceilings.revisions_per_task_version, undefined);
-  assert.equal(POLICY.version, 'cr-agent-policy@2');
+  // @2 is kept frozen beside @3 (audits/2026-10-27-pm-builder), with the same revision ceiling.
+  const v2 = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'agent-policy@2.json'), 'utf8'));
+  assert.equal(v2.version, 'cr-agent-policy@2');
+  assert.equal(v2.ceilings.revisions_per_task_version, 2);
+  assert.equal(POLICY.version, 'cr-agent-policy@3');
   assert.equal(POLICY.ceilings.revisions_per_task_version, 2);
   w.state.comments.push(comment(151, '/revise FICTIONAL: and again'));
   await record(w, reserves(w)[0].id, 'published');
