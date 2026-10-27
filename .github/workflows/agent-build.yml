@@ -7,7 +7,9 @@
 #            stays inside its template, reads the issue again (still open,
 #            still labeled, unchanged since the event), then reserves one paid
 #            build for this run in the ledger (branch agent-ledger) before
-#            anything is sent.
+#            anything is sent, with the head agent/issue-<n> holds now (or
+#            "absent"). One build per issue at a time: another with no
+#            outcome holds the issue for 65 minutes, then is recorded lost.
 #   build    Claude Code (pinned by lockfile) in a fresh checkout of main with
 #            no repository write credential, no reviewer token, no OpenAI key
 #            and no App key; its commands run in Claude Code's sandbox
@@ -16,10 +18,13 @@
 #            the only output, scanned for key-shaped strings before upload.
 #   publish  main's guard applies that diff to main as data and checks it
 #            against the task again; the builder App commits it, pushes
-#            agent/issue-<n> and opens the pull request. The App pushes only
+#            agent/issue-<n> by lease on the head the reservation recorded,
+#            and opens the pull request. A branch that moved since (another
+#            build, or Eric) makes this build "stale": not pushed, not
+#            retried, recorded so and said on the issue. The App pushes only
 #            agent/ branches and cannot merge, approve or change a workflow
 #            (.github/rulesets).
-#   record   the build's outcome in the ledger.
+#   record   the build's outcome in the ledger, with what publish did.
 #
 # Nothing here merges or approves anything: Eric merges each pull request.
 # A re-run of failed jobs builds nothing (the reservation belongs to the
@@ -49,6 +54,7 @@ jobs:
       ok: ${{ steps.reserve.outputs.ok }}
       reservation: ${{ steps.reserve.outputs.reservation }}
       attempt: ${{ steps.reserve.outputs.attempt }}
+      predecessor: ${{ steps.reserve.outputs.predecessor }}
       base: ${{ steps.base.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -152,6 +158,9 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+    outputs:
+      state: ${{ steps.publish.outputs.state }}
+      note: ${{ steps.publish.outputs.note }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -187,16 +196,18 @@ jobs:
         env:
           TOKEN: ${{ steps.app.outputs.token }}
           BASE: ${{ needs.reserve.outputs.base }}
+          RESERVATION: ${{ needs.reserve.outputs.reservation }}
           TREE: ${{ steps.apply.outputs.tree }}
           BOT_NAME: ${{ steps.bot.outputs.name }}
           BOT_EMAIL: ${{ steps.bot.outputs.email }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          node dashboard/scripts/agent-guard.js publish --base "$BASE" --tree "$TREE" --run "${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}" \
+          node dashboard/scripts/agent-guard.js publish --base "$BASE" --tree "$TREE" --reservation "$RESERVATION" --run "${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}" \
             --bot-name "$BOT_NAME" --bot-email "$BOT_EMAIL" --build "$RUNNER_TEMP/build/result.json" \
             --body-out "$RUNNER_TEMP/body.md" --run-url "$RUN_URL"
       - name: The pull request (opened by the App, so its checks run)
+        if: steps.publish.outputs.ok == 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           BRANCH: ${{ steps.publish.outputs.branch }}
@@ -217,6 +228,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: write # the ledger branch only
+      issues: write # says on the issue when its build was not published (stale)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -232,4 +244,16 @@ jobs:
       - env:
           RESERVATION: ${{ needs.reserve.outputs.reservation }}
           OUTCOME: ${{ needs.build.result }}
-        run: node dashboard/scripts/agent-guard.js record --id "$RESERVATION" --outcome "$OUTCOME" --build "$RUNNER_TEMP/build/result.json"
+          PUBLISH: ${{ needs.publish.outputs.state || needs.publish.result }}
+        run: node dashboard/scripts/agent-guard.js record --id "$RESERVATION" --outcome "$OUTCOME" --publish "$PUBLISH" --build "$RUNNER_TEMP/build/result.json"
+      - name: A stale build is said on the issue (nothing was pushed)
+        if: needs.publish.outputs.state == 'stale'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number }}
+          RESERVATION: ${{ needs.reserve.outputs.reservation }}
+          NOTE: ${{ needs.publish.outputs.note }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf 'Build %s was not published: %s\n\nRun: %s\n' "$RESERVATION" "$NOTE" "$RUN_URL" > "$RUNNER_TEMP/stale.md"
+          gh issue comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/stale.md"

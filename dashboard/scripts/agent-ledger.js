@@ -33,6 +33,9 @@ const IDENTITY = { GIT_AUTHOR_NAME: 'github-actions[bot]', GIT_AUTHOR_EMAIL: '41
 // States after which an attempt is settled: it was paid for or definitely
 // not, and nothing about it is left to find out.
 const FINAL = new Set(['response', 'failed', 'lost']);
+// A build reserved with no outcome holds its issue for the build's timeout
+// and this grace (65 minutes at a 45-minute timeout); then it is lost.
+const BUILD_GRACE_MINUTES = 20;
 
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 function canonical(v) {
@@ -181,10 +184,25 @@ function decideReview(entries, { binding, bind, ceilings, now, key, tokens, run 
 // count together whichever commit of main they started from (Engineering v3:
 // a moved main used to start the count again).
 const sameVersion = (r, { binding, bind }) => r.binding === binding || Boolean(bind && bind.task_sha256 && r.bind && r.bind.issue === bind.issue && r.bind.task_sha256 === bind.task_sha256);
-function decideBuild(entries, { binding, bind, ceilings, now, usd, run }) {
+//
+// One build per issue at a time (Engineering v3, change 3): an attempt with
+// no outcome is still running, or its runner was lost. It holds the issue for
+// `holdMs`; after that it is recorded lost in the same append (its
+// reservation still counts) and the issue is free. An attempt whose outcome
+// was recorded, even "unknown", has finished running.
+function decideBuild(entries, { binding, bind, ceilings, now, usd, run, holdMs = 65 * 60000 }) {
   const builds = attempts(entries).filter((a) => a.reserve.kind === 'build');
   const mine = builds.find((a) => a.reserve.run === run);
   if (mine) return { action: 'refuse', why: `run ${run} already holds build reservation ${mine.id}`, attempt: mine };
+  const lost = [];
+  if (bind && Number.isInteger(bind.issue)) {
+    for (const a of builds) {
+      if (!a.reserve.bind || a.reserve.bind.issue !== bind.issue || a.outcomes.length) continue;
+      const age = now - Date.parse(a.reserve.at);
+      if (!(age >= holdMs)) return { action: 'refuse', why: `build ${a.id} of issue #${bind.issue} (run ${a.reserve.run}) has no outcome yet${Number.isFinite(age) ? ` and is ${Math.round(age / 60000)} min old` : ''}; one build per issue at a time, each held up to ${Math.round(holdMs / 60000)} min`, attempt: a };
+      lost.push({ t: 'outcome', id: a.id, state: 'lost', error: `no outcome ${Math.round(age / 60000)} min after it was reserved`, at: new Date(now).toISOString() });
+    }
+  }
   const atts = builds.filter((a) => sameVersion(a.reserve, { binding, bind }));
   if (atts.length >= ceilings.builds_per_task_version) return { action: 'refuse', why: `${atts.length} paid ${atts.length === 1 ? 'build' : 'builds'} for this version of the task already (ceiling ${ceilings.builds_per_task_version}); edit the task or build it yourself` };
   const day = dayOf(now);
@@ -192,7 +210,7 @@ function decideBuild(entries, { binding, bind, ceilings, now, usd, run }) {
   if (u.count >= ceilings.builds_per_day) return { action: 'refuse', why: `${u.count} paid builds today (UTC ${day}; ceiling ${ceilings.builds_per_day})` };
   if (u.usd + usd > ceilings.build_usd_per_day) return { action: 'refuse', why: `this build would reserve $${usd} on top of $${u.usd} today (UTC ${day}; ceiling $${ceilings.build_usd_per_day})` };
   const id = newId('build');
-  return { action: 'build', id, append: [{ t: 'reserve', kind: 'build', id, binding, bind, day, usd, run, at: new Date(now).toISOString() }] };
+  return { action: 'build', id, lost: lost.map((x) => x.id), append: [...lost, { t: 'reserve', kind: 'build', id, binding, bind, day, usd, run, at: new Date(now).toISOString() }] };
 }
 
-module.exports = { REF, FILE, ZERO, FINAL, sha256, canonical, bindingOf, dayOf, macKey, macOf, macOk, parse, read, append, transact, attempts, usage, decideReview, decideBuild };
+module.exports = { REF, FILE, ZERO, FINAL, BUILD_GRACE_MINUTES, sha256, canonical, bindingOf, dayOf, macKey, macOf, macOk, parse, read, append, transact, attempts, usage, decideReview, decideBuild };
