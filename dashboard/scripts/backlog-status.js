@@ -10,19 +10,32 @@
 // (Backlog-Item trailers on origin/claude/backlog-* branches not merged into
 // origin/main, each counted once), the cap and batch size in force, the
 // headroom (how many items may start now: the cap less what waits, at most one
-// batch), the next buildable items and the base to build on.
+// batch), the next buildable items and the base to build on. The builders'
+// claims, the hourly budget and the order of independent work are
+// backlog-schedule.js's, which reads what this file gathers.
 
 const path = require('path');
 const { spawnSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..', '..');
 const STATE_FILE = 'DESK_STATE.md';
-// Eric's surge rule as DESK_STATE.md and the routine state it (2026-10-25:
-// five items and a cap of 15 until 2026-10-28 23:00 New York time, then three
-// and six); item 42 was written with 9/3, then 4/2 from 2026-10-27.
-const SURGE_ENDS = '2026-10-29T03:00:00Z'; // 2026-10-28 23:00 New York time
-const SURGE = { cap: 15, batch: 5 };
-const AFTER = { cap: 6, batch: 3 };
+// The builders' capacity by time, `cr-backlog-capacity@1`: each window holds
+// until its `until` (UTC), the last one with no end. `per_run` is the batch one
+// builder run takes, `per_hour` the items all builders together may start in
+// any 60 minutes, `cap` the items waiting for merge or in flight.
+//   - surge (Eric, 2026-10-25): builder a, five a run, a cap of 15, until
+//     2026-10-28 23:00 New York; item 42 was written with 9/3, then 4/2.
+//   - burst (Eric, 2026-10-27): up to ten items an hour across all builders
+//     until 2026-10-27 23:00 New York, then the surge's limits again. Builders
+//     a (:55) and b (:25), five a run each, a cap of 20.
+//   - standard: three a run, a cap of 6.
+const CAPACITY = [
+  { name: 'surge', until: '2026-10-27T03:00:00Z', builders: ['a'], per_run: 5, per_hour: 5, cap: 15 },
+  { name: 'burst', until: '2026-10-28T03:00:00Z', builders: ['a', 'b'], per_run: 5, per_hour: 10, cap: 20 },
+  { name: 'surge', until: '2026-10-29T03:00:00Z', builders: ['a'], per_run: 5, per_hour: 5, cap: 15 },
+  { name: 'standard', until: null, builders: ['a'], per_run: 3, per_hour: 3, cap: 6 },
+];
+const SURGE_ENDS = '2026-10-29T03:00:00Z'; // the last raised window ends: 2026-10-28 23:00 New York time
 // An item the engineering inbox admitted (Connected Engineering v1): built
 // alone, only through the engineering lane, never in a batch.
 const ENGINEERING_RE = /\*\(engineering task (eng-\d{8}-[0-9a-f]{6}) v(\d+), sha256 ([0-9a-f]{16})/;
@@ -34,18 +47,52 @@ function git(cwd, args, { allowFail = false } = {}) {
   return { status: r.status, out: (r.stdout || '').trim() };
 }
 
-const limitsAt = (now) => (now.getTime() < Date.parse(SURGE_ENDS) ? { ...SURGE, surge: true } : { ...AFTER, surge: false });
+function limitsAt(now) {
+  const w = CAPACITY.find((x) => x.until === null || now.getTime() < Date.parse(x.until));
+  return { cap: w.cap, batch: w.per_run, per_hour: w.per_hour, builders: w.builders, window: w.name, window_ends: w.until, surge: w.name !== 'standard' };
+}
 const trailers = (body) => [...body.matchAll(/^Backlog-Item:\s*(\d+)\s*$/gm)].map((m) => Number(m[1]));
 
-// The backlog's checkbox lines: { n, checked, eric, text }.
+// An item's `- **Schedule:** after 67, 68; touches dashboard/core/tickets.js, web`
+// sub-bullet: what must be built before it, and the files or folders (ending
+// in /) it changes, so two builders never change the same one at once. `web`
+// is the app's source and its committed bundle. An item with no such line is
+// read as touching everything, so it is never built beside other work.
+const WEB = ['dashboard/web/', 'dashboard/public/app/'];
+function scheduleOf(text) {
+  const after = [];
+  const touches = new Set();
+  for (const part of String(text).split(';')) {
+    const m = /^\s*(after|touches)\s+(.*)$/i.exec(part.trim());
+    if (!m) continue;
+    for (const raw of m[2].split(',')) {
+      const v = raw.replace(/[`*]/g, '').trim().replace(/\.$/, '');
+      if (!v || /^none$/i.test(v)) continue;
+      if (m[1].toLowerCase() === 'after') { if (/^\d+$/.test(v)) after.push(Number(v)); continue; }
+      const key = v.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+      if (key === 'web' || WEB.some((w) => key.startsWith(w))) WEB.forEach((w) => touches.add(w));
+      if (key !== 'web') touches.add(key);
+    }
+  }
+  return { after: [...new Set(after)], touches: [...touches] };
+}
+
+// The backlog's checkbox lines: { n, checked, eric, text, engineering, schedule }.
 function parseBacklog(state) {
   const section = (/^## Autonomous Build Backlog[^\n]*\n([\s\S]*?)(?=^## |(?![\s\S]))/m.exec(state) || [])[1] || '';
   const items = [];
+  let current = null;
   for (const line of section.split('\n')) {
     const m = /^\s*- \[([ xX])\] (\*\([^)]*\)\* )?\*\*(\d+)\.\s*([^*]*)/.exec(line);
-    if (!m) continue;
+    if (!m) {
+      const sch = /^\s+- \*\*Schedule:\*\*\s*(.*)$/.exec(line);
+      if (current && sch && !current.schedule) current.schedule = scheduleOf(sch[1]);
+      else if (/^\S/.test(line)) current = null; // a paragraph or another list ends the item
+      continue;
+    }
     const eng = ENGINEERING_RE.exec(line);
-    items.push({ n: Number(m[3]), checked: m[1] !== ' ', eric: !!m[2] && /Eric/i.test(m[2]), text: m[4].trim(), engineering: eng ? { task_id: eng[1], version: Number(eng[2]), sha256_prefix: eng[3] } : null });
+    current = { n: Number(m[3]), checked: m[1] !== ' ', eric: !!m[2] && /Eric/i.test(m[2]), text: m[4].trim(), engineering: eng ? { task_id: eng[1], version: Number(eng[2]), sha256_prefix: eng[3] } : null, schedule: null };
+    items.push(current);
   }
   return items;
 }
@@ -59,7 +106,10 @@ function baseOf(cwd, branches) {
   return tips.length ? ref(tips[0]) : 'origin/main';
 }
 
-function status(cwd = ROOT, { now = new Date() } = {}) {
+// What git says now: the waiting branches and their items, the items merged
+// on main, main's backlog and the base a batch builds on (with the items
+// already on it).
+function gather(cwd = ROOT) {
   // Engineering candidates waiting for review are work in progress too.
   const mergedSet = new Set(git(cwd, ['branch', '-r', '--merged', 'origin/main', '--list', 'origin/claude/backlog-*', 'origin/claude/candidate-eng-*']).out.split('\n').map((s) => s.trim()).filter(Boolean));
   const all = git(cwd, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/remotes/origin/claude/backlog-*', 'refs/remotes/origin/claude/candidate-eng-*']).out.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -69,9 +119,15 @@ function status(cwd = ROOT, { now = new Date() } = {}) {
   }));
   const waitingItems = [...new Set(branches.flatMap((b) => b.items))].sort((a, b) => a - b);
   const onMain = new Set(trailers(git(cwd, ['log', 'origin/main', '--format=%B']).out));
-  const stateRead = git(cwd, ['show', `origin/main:${STATE_FILE}`]).out;
-  const backlog = parseBacklog(stateRead);
+  const backlog = parseBacklog(git(cwd, ['show', `origin/main:${STATE_FILE}`]).out);
+  // An engineering branch is never a base: a batch never waits on its review.
+  const base = baseOf(cwd, branches.filter((b) => /^claude\/backlog-(?!eng-)/.test(b.branch)));
+  const baseItems = new Set(base === 'origin/main' ? [] : trailers(git(cwd, ['log', `origin/main..${base}`, '--format=%B']).out));
+  return { branches, waitingItems, onMain, backlog, base, baseItems };
+}
 
+function status(cwd = ROOT, { now = new Date() } = {}) {
+  const { branches, waitingItems, onMain, backlog, base } = gather(cwd);
   const lim = limitsAt(now);
   const headroom = Math.max(0, Math.min(lim.batch, lim.cap - waitingItems.length));
   const taken = (it) => it.checked || onMain.has(it.n) || waitingItems.includes(it.n);
@@ -81,6 +137,9 @@ function status(cwd = ROOT, { now = new Date() } = {}) {
     at: now.toISOString(),
     cap: lim.cap,
     batch: lim.batch,
+    per_hour: lim.per_hour,
+    window: lim.window,
+    window_ends: lim.window_ends,
     surge: lim.surge,
     surge_ends: SURGE_ENDS,
     waiting: waitingItems.map((n) => ({ item: n, branches: branches.filter((b) => b.items.includes(n)).map((b) => b.branch) })),
@@ -89,15 +148,14 @@ function status(cwd = ROOT, { now = new Date() } = {}) {
     headroom,
     next: buildable.slice(0, headroom).map((it) => ({ item: it.n, text: it.text })),
     buildable_after: buildable.slice(headroom, headroom + 3).map((it) => it.n),
-    // An engineering branch is never a base: a batch never waits on its review.
-    base: baseOf(cwd, branches.filter((b) => /^claude\/backlog-(?!eng-)/.test(b.branch))),
+    base,
     engineering,
   };
 }
 
 function words(s) {
   const lines = [
-    `Cap ${s.cap}, batch ${s.batch}${s.surge ? ` (surge until ${s.surge_ends})` : ''}.`,
+    `Cap ${s.cap}, batch ${s.batch}, ${s.per_hour} an hour (${s.window}${s.window_ends ? ` until ${s.window_ends}` : ''}).`,
     s.waiting_count ? `Waiting for merge: ${s.waiting_count} (${s.waiting.map((w) => `${w.item}`).join(', ')}).` : 'Nothing waiting for merge.',
     s.at_cap ? `WIP cap: ${s.waiting_count} items waiting for merge. Build nothing.` : `Headroom: ${s.headroom}.`,
   ];
@@ -113,4 +171,4 @@ if (require.main === module) {
   } catch (e) { process.stderr.write(`${e.message}\n`); process.exit(1); }
 }
 
-module.exports = { status, words, parseBacklog, limitsAt, SURGE_ENDS, ENGINEERING_RE };
+module.exports = { status, gather, words, parseBacklog, scheduleOf, limitsAt, git, trailers, CAPACITY, SURGE_ENDS, ENGINEERING_RE, WEB };
