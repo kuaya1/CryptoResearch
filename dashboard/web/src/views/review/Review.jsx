@@ -173,7 +173,8 @@ function Evidence({ d, p, detail, agendaRow }) {
           <ul className="rv-list">
             {ch.provider_changes.map((c) => (
               <li key={c.provider}>
-                <p className="rv-li-t"><strong>{PROVIDER_LABELS[c.provider]}</strong>{` · grade ${c.grade_from || 'none'} → ${c.grade_to || 'none'}`}</p>
+                {/* A side with no grade on file reads "—" with why (L2), never "none". */}
+                <p className="rv-li-t" title={!c.grade_from || !c.grade_to ? `${!c.grade_from ? 'No grade on file at your last review' : ''}${!c.grade_from && !c.grade_to ? '; ' : ''}${!c.grade_to ? 'no grade on file now' : ''}` : undefined}><strong>{PROVIDER_LABELS[c.provider]}</strong>{` · grade ${c.grade_from || '—'} → ${c.grade_to || '—'}`}</p>
                 {c.verdict_from !== c.verdict_to ? <p className="rv-li-m">{`Verdict ${VERDICT(c.verdict_from)} → ${VERDICT(c.verdict_to)}`}</p> : null}
                 {c.diff && c.diff.changes && c.diff.changes.length ? <p className="rv-li-m faint">{c.diff.changes.slice(0, 5).map((x) => `${words(x.id)} ${fmtScore(x.from)} → ${fmtScore(x.to)}`).join(' · ')}{c.diff.changes.length > 5 ? ` · +${c.diff.changes.length - 5}` : ''}</p> : null}
               </li>

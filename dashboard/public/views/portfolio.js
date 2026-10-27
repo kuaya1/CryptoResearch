@@ -5,7 +5,7 @@ import {
   button, action, tabStrip, safeSection, submissionId, openDialog, fmtAmount, shortId, copyButton, details, plural,
 } from '../ui.js';
 import { walletHoldingsCard, walletsTab } from './wallets.js';
-import { needsCount as countNeeds, openWarnings, isWalletNote, warningKey } from '../portfolio-model.js';
+import { needsCount as countNeeds, openWarnings, isWalletNote, warningKey, soldAssets, realizedWords } from '../portfolio-model.js';
 
 const TX_TYPES = ['buy', 'sell', 'transfer_out', 'transfer_in', 'income', 'fee', 'deposit_cash', 'withdraw_cash'];
 
@@ -255,14 +255,14 @@ export async function renderPortfolio(ctx, route) {
 // A position's facts as the wide table's columns say them, in words, for the
 // phone ledger's Details fold (price with its reason, allocation, results,
 // fees, the BTC comparison, the split across accounts). Unknown stays a word.
-function positionFacts(p, { why, denominator, accountName }) {
+function positionFacts(p, { why, denominator, accountName, sold = null }) {
   const money = (v) => (v === null || v === undefined ? { v: 'unknown' } : { v: fmtUsd(v), tone: v > 0 ? 'pos' : v < 0 ? 'neg' : null });
   const facts = [];
   facts.push({ k: 'Price', v: p.price.usd === null ? `No price${why ? ` · ${why}` : ''}` : `${fmtUsd(p.price.usd)}${why ? ` · ${why}` : ''}`, tone: p.price.usd === null || why ? 'warn' : null });
   facts.push({ k: 'Allocation', v: p.allocation_pct === null ? 'Unpriced' : `${fmtPct(p.allocation_pct)} of ${denominator}` });
   facts.push({ k: 'Unrealized (known lots)', ...money(p.unrealized_known_usd) });
-  const realized = money(p.realized_known_usd);
-  facts.push({ k: 'Realized', ...realized, v: `${realized.v}${p.realized_unknown_quantity ? ` + ${fmtAmount(p.realized_unknown_quantity)} units with unknown cost` : ''}` });
+  const realized = realizedWords(p, sold, fmtUsd);
+  facts.push({ k: 'Realized', tone: ['pos', 'neg'].includes(realized.tone) ? realized.tone : null, v: `${realized.text}${p.realized_unknown_quantity ? ` + ${fmtAmount(p.realized_unknown_quantity)} units with unknown cost` : ''}` });
   facts.push({ k: 'Fees', v: fmtUsd((p.fees_usd || 0) + (p.fees_crypto_cost_usd || 0)) });
   const b = p.btc_relative;
   if (!b || b.status === 'not_applicable') facts.push({ k: 'vs BTC', v: 'Not applicable' });
@@ -280,6 +280,12 @@ function positionFacts(p, { why, denominator, accountName }) {
 function pnl(v) {
   if (v === null || v === undefined) return h('span', { class: 'unknown' }, 'unknown');
   return h('span', { class: v > 0 ? 'pos' : v < 0 ? 'neg' : '' }, fmtUsd(v));
+}
+
+// The realized cell: "No sales" where the ledger records none (L2).
+function realizedCell(p, sold) {
+  const r = realizedWords(p, sold, fmtUsd);
+  return h('span', { class: `nowrap ${r.tone === 'none' ? 'muted' : r.tone === 'unknown' ? 'unknown' : r.tone}`, title: r.title || undefined }, r.text);
 }
 
 function basisCell(p) {
@@ -306,12 +312,16 @@ async function positionsTab(ctx) {
   const pf = idx.portfolio;
   // Tracked wallets first (what the chain shows); the ledger follows. A
   // failure to read them never hides the ledger.
+  // The ledger's sales, read beside them, say where nothing was sold (L2);
+  // unread, each realized figure is said as saved.
+  const salesRead = ctx.api.get('/api/portfolio/ledger').then((l) => soldAssets(l && l.transactions), () => null);
   let walletCard = null;
   try {
     walletCard = walletHoldingsCard(ctx, await ctx.api.get('/api/wallets'));
   } catch (err) {
     walletCard = callout(`Wallet balances could not be shown: ${err.message}. The ledger below is unaffected.`, 'warn');
   }
+  const sold = await salesRead;
   const t = pf.totals;
   const names = new Map((pf.accounts || []).map((a) => [a.account_id, a.name || a.account_id]));
   const accountName = (id) => names.get(id) || id;
@@ -329,7 +339,7 @@ async function positionsTab(ctx) {
     { label: h('span', { title: `Share of ${denominator}` }, 'Allocation', h('span', { class: 'th-sub' }, `of ${denominator}`)), num: true, render: (p) => (p.allocation_pct === null ? h('span', { class: 'unknown' }, 'Unpriced') : fmtPct(p.allocation_pct)) },
     { label: 'Cost basis', render: basisCell },
     { label: 'Unrealized (known lots)', num: true, render: (p) => pnl(p.unrealized_known_usd) },
-    { label: 'Realized', num: true, render: (p) => h('div', null, pnl(p.realized_known_usd), p.realized_unknown_quantity ? h('span', { class: 'note-line' }, `+ ${fmtAmount(p.realized_unknown_quantity)} units with unknown cost`) : null) },
+    { label: 'Realized', num: true, render: (p) => h('div', null, realizedCell(p, sold), p.realized_unknown_quantity ? h('span', { class: 'note-line' }, `+ ${fmtAmount(p.realized_unknown_quantity)} units with unknown cost`) : null) },
     { label: 'Fees', num: true, render: (p) => fmtUsd((p.fees_usd || 0) + (p.fees_crypto_cost_usd || 0)) },
     { label: 'vs BTC (capital comparison)', render: btcCell },
   ], open, { empty: 'No open positions.' });
@@ -374,7 +384,7 @@ async function positionsTab(ctx) {
         value: p.value_usd === null ? 'Value unknown' : fmtUsd(p.value_usd),
         valueKnown: p.value_usd !== null,
         valueTitle: p.value_usd === null ? 'No usable price; the value is unknown, not zero' : p.allocation_pct === null ? null : `${fmtPct(p.allocation_pct)} of ${denominator}`,
-        facts: positionFacts(p, { why, denominator, accountName }),
+        facts: positionFacts(p, { why, denominator, accountName, sold }),
       };
     }),
   };
@@ -393,9 +403,11 @@ async function positionsTab(ctx) {
       h('p', { class: `summary-head is-${tone}`, title: stateNote, dataset: { key: 'pf-state' } }, h('span', { class: 'state-dot', 'aria-hidden': 'true' }), stateLabel),
       summaryItem('Priced value', fmtUsd(t.value_priced_usd), `${t.priced_count} of ${plural(t.open_count, 'open position')} priced${t.unpriced_count ? ` · unpriced: ${t.unpriced_assets.join(', ')}` : ''}`),
       summaryItem('Cash & stablecoins', t.cash_stable_pct === null ? '—' : fmtPct(t.cash_stable_pct), `${fmtUsd(t.cash_stable_usd)} · share of ${denominator}`),
-      summaryItem('Realized (known)', fmtUsd(t.realized_known_usd), t.realized_unknown_positions ? `${plural(t.realized_unknown_positions, 'position')} with unknown basis` : 'all sales have known basis'),
+      sold && sold.size === 0 && !t.realized_unknown_positions
+        ? summaryItem('Realized (known)', 'No sales', 'no sale is recorded')
+        : summaryItem('Realized (known)', fmtUsd(t.realized_known_usd), t.realized_unknown_positions ? `${plural(t.realized_unknown_positions, 'position')} with unknown basis` : 'all sales have known basis'),
       summaryItem('Fees paid', fmtUsd(t.fees_usd), t.fees_crypto_cost_usd ? `includes ${fmtUsd(t.fees_crypto_cost_usd)} paid in crypto (at cost)` : 'USD and in-kind, at cost'),
-      summaryItem('Stale prices', String(t.stale_count || 0), t.stale_count ? t.stale_assets.join(', ') : 'none')) : null,
+      summaryItem('Stale prices', String(t.stale_count || 0), t.stale_count ? t.stale_assets.join(', ') : 'every price is fresh')) : null,
     card('Recorded positions', [h('div', { class: 'pos-table' }, positions), ledger], {
       note: open.length ? `From the ledger (your entries and recorded wallet activity). Allocation denominator: ${denominator}. Unpriced positions are excluded from it and listed as unpriced. Research grades stay on the watchlist; select an asset to see them.` : null,
       actions: [link('Record transactions', '#/portfolio?tab=record')],
@@ -418,7 +430,7 @@ async function positionsTab(ctx) {
       ], { actions: [link('Edit limits', '#/portfolio?tab=record')] })),
     closed.length ? card('Closed positions', table([
       { label: 'Asset', render: (p) => p.symbol || p.asset_id },
-      { label: 'Realized (known)', num: true, render: (p) => pnl(p.realized_known_usd) },
+      { label: 'Realized (known)', num: true, render: (p) => realizedCell(p, sold) },
       { label: 'Unknown units', num: true, render: (p) => (p.realized_unknown_quantity ? fmtAmount(p.realized_unknown_quantity) : '—') },
       { label: 'Fees', num: true, render: (p) => fmtUsd((p.fees_usd || 0) + (p.fees_crypto_cost_usd || 0)) },
     ], closed), { note: 'Kept with their realized results and fees.' }) : null,

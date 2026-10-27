@@ -44,7 +44,9 @@ test('daily brief view: sections keep their deep links and the hash; an unreadab
 
 test('daily brief drawer: reads /api/brief/daily and posts only the explicit Reconcile desk button (item 60)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'shell', 'DailyBrief.jsx'), 'utf8');
-  assert.match(src, /api\.get\('\/api\/brief\/daily'\)/);
+  // Bounded (L3, 2026-10-26): a busy desk is said with Try again.
+  assert.match(src, /api\.get\('\/api\/brief\/daily', \{ timeoutMs: BRIEF_WAIT_MS \}\)/);
+  assert.match(src, /data-key="brief-retry"/);
   assert.doesNotMatch(src, /fetch\(|method:\s*'(POST|PUT|DELETE)'/);
   assert.deepEqual([...src.matchAll(/api\.post\(([^,)]+)/g)].map((m) => m[1]), ["'/api/tickets/reconcile'"], 'the one post is the repair, from a button');
   assert.match(src, /onClick=\{reconcile\}/);

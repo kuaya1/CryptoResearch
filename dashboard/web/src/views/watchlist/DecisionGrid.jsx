@@ -10,6 +10,7 @@
 // guard live in the inspector only.
 import { ArrowRight, PanelRight } from 'lucide-react';
 import { canonicalGrade } from '../../../../public/watchlist-model.js';
+import { riskWords } from '../../../../public/pm-card-model.js';
 import { Logo } from '../../components/Logo.jsx';
 import { navigate } from '../../lib/router.js';
 import { openPanel } from './state.js';
@@ -17,7 +18,6 @@ import { openPanel } from './state.js';
 const enc = encodeURIComponent;
 const TYPE_WORDS = { ACCUMULATE: 'Accumulate', LIMIT_TRAP: 'Limit trap', TRIM_EXIT: 'Trim / exit', WATCH_ONLY: 'Watch only', HARD_PASS: 'Hard pass' };
 const TYPE_TONE = { ACCUMULATE: 'is-ok', LIMIT_TRAP: 'is-info', TRIM_EXIT: 'is-warn', WATCH_ONLY: '', HARD_PASS: 'is-bad' };
-const usd = (n) => `$${n.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
 export function waitingTickets(rows) {
   return rows.filter((p) => p.status !== 'archived' && p.ticket && !p.ticket.unavailable && !p.ticket.decision && ['pending_pm_review', 'reopened'].includes(p.ticket.status));
@@ -42,7 +42,7 @@ function DecisionTile({ d, p }) {
   const g = canonicalGrade(p, d.index);
   const src = g.source === 'headline' ? 'Your headline' : 'Claude';
   const type = TYPE_WORDS[t.proposal_type] || String(t.proposal_type || 'Ticket').replace(/_/g, ' ');
-  const risk = typeof t.suggested_risk_usd === 'number' && t.suggested_risk_usd > 0 ? t.suggested_risk_usd : 0;
+  const risk = riskWords(t);
   const pid = p.project_id;
   const report = `#/project/${enc(pid)}/report`;
   return (
@@ -55,15 +55,17 @@ function DecisionTile({ d, p }) {
         </span>
         <span className={`badge ${TYPE_TONE[t.proposal_type] || ''}`}>{type}</span>
       </div>
-      {t.non_consensus_thesis ? <p className="dcard-thesis">{t.non_consensus_thesis}</p> : null}
+      {/* Two lines on every card (L4); the whole sentence stays in the page
+          for screen readers and shows in full as its tooltip. */}
+      {t.non_consensus_thesis ? <p className="dcard-thesis" title={t.non_consensus_thesis}>{t.non_consensus_thesis}</p> : <p className="dcard-thesis is-none">No thesis on the ticket</p>}
       <div className="dcard-figs">
         <span className="dcard-fig">
           <span className="dcard-k">Suggested risk</span>
-          <span className="dcard-v">{risk ? usd(risk) : 'None'}</span>
+          <span className="dcard-v" title={risk.title}>{risk.text}{risk.why ? <span className="dcard-why">{` · ${risk.why}`}</span> : null}</span>
         </span>
         <span className="dcard-fig">
           <span className="dcard-k">{`${src} grade`}</span>
-          <span className="dcard-v">{g.kind === 'grade' || g.kind === 'range' ? g.value : g.kind === 'withheld' ? 'Withheld' : '—'}</span>
+          <span className="dcard-v" title={g.kind === 'grade' || g.kind === 'range' || g.kind === 'withheld' ? undefined : 'No eligible grade on file'}>{g.kind === 'grade' || g.kind === 'range' ? g.value : g.kind === 'withheld' ? 'Withheld' : '—'}</span>
         </span>
         {t.status === 'reopened' ? <span className="badge is-warn dcard-st">Re-opened</span> : null}
       </div>

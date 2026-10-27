@@ -105,6 +105,7 @@ export default function Inspector({ pid, wide }) {
   const body = useRef(null);
   const swipe = useRef(null);
   const [footSlot, setFootSlot] = useState(null);
+  const [claimed, setClaimed] = useState(false);
   const [L, setL] = useState(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => { loadLegacy().then(setL, () => {}); }, []);
@@ -174,11 +175,21 @@ export default function Inspector({ pid, wide }) {
     if (dy > 80 && Date.now() - s.t < 800 && (!body.current || body.current.scrollTop <= 0)) closePanel();
   };
 
-  // A PM ticket waiting for you takes the footer's one solid button; Mark
-  // reviewed is then an outline beside it.
+  // A PM ticket waiting for you takes the footer's one solid button.
   const ticketWaits = Boolean(p.ticket && !p.ticket.unavailable && !p.ticket.decision && ['pending_pm_review', 'reopened'].includes(p.ticket.status));
+  // One primary action in the foot (L5, 2026-10-26): while a ticket waits,
+  // its decision is the primary and these two join the card's More menu
+  // (the same elements and handlers), so the foot never holds a row of
+  // competing buttons. Otherwise they stay here, Mark reviewed the primary.
+  const secondary = (
+    <>
+      <a className="btn btn-sm" href={fullHref} data-key={`brief-${pid}`} aria-label={`Open full research: ${p.name}`} onClick={openFull}>Open full research<ArrowRight size={13} aria-hidden="true" /></a>
+      {needsReview(p) ? <button type="button" className={`btn btn-sm${ticketWaits ? '' : ' btn-primary'}`} data-key="panel-reviewed" aria-keyshortcuts="R" title={drawn.ready ? 'Mark reviewed (R marks it and moves to the next project to review)' : STILL_LOADING} aria-disabled={drawn.ready ? undefined : 'true'} disabled={busy || !drawn.ready} onClick={() => markReviewed(p, { onBusy: setBusy })}>{drawn.ready ? 'Mark reviewed' : STILL_LOADING}</button> : null}
+    </>
+  );
+  const slot = footSlot ? { el: footSlot, extras: ticketWaits ? secondary : null, claim: setClaimed } : null;
   return (
-    <FootSlot.Provider value={footSlot}>
+    <FootSlot.Provider value={slot}>
       {modal ? <div className="drawer-scrim" aria-hidden="true" onClick={closePanel} /> : null}
       <aside
         ref={root}
@@ -262,10 +273,7 @@ export default function Inspector({ pid, wide }) {
               </>
             ) : <span className="if-ok"><Check size={14} aria-hidden="true" />Reviewed</span>}
           </p>
-          <div className="if-act">
-            <a className="btn btn-sm" href={fullHref} data-key={`brief-${pid}`} aria-label={`Open full research: ${p.name}`} onClick={openFull}>Open full research<ArrowRight size={13} aria-hidden="true" /></a>
-            {needsReview(p) ? <button type="button" className={`btn btn-sm${ticketWaits ? '' : ' btn-primary'}`} data-key="panel-reviewed" aria-keyshortcuts="R" title={drawn.ready ? 'Mark reviewed (R marks it and moves to the next project to review)' : STILL_LOADING} aria-disabled={drawn.ready ? undefined : 'true'} disabled={busy || !drawn.ready} onClick={() => markReviewed(p, { onBusy: setBusy })}>{drawn.ready ? 'Mark reviewed' : STILL_LOADING}</button> : null}
-          </div>
+          {claimed && ticketWaits ? null : <div className="if-act">{secondary}</div>}
         </footer>
       </aside>
     </FootSlot.Provider>

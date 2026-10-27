@@ -10,6 +10,10 @@ import { briefView } from '../../../public/daily-brief-model.js';
 import { onBrief } from './overlays.js';
 import '../styles/overlays.css';
 
+// The brief is read within this bound (L3, 2026-10-26): a desk too busy to
+// answer is said with Try again, never an endless "Reading the brief…".
+export const BRIEF_WAIT_MS = 12000;
+
 export default function DailyBrief() {
   const dlg = useRef(null);
   const opener = useRef(null);
@@ -28,7 +32,7 @@ export default function DailyBrief() {
     if (!open) return undefined;
     let live = true;
     setState({ loading: true, error: null, view: null });
-    api.get('/api/brief/daily').then(
+    api.get('/api/brief/daily', { timeoutMs: BRIEF_WAIT_MS }).then(
       (b) => { if (live) setState({ loading: false, error: null, view: briefView(b) }); },
       (e) => { if (live) setState({ loading: false, error: (e && e.message) || 'The daily brief could not be read.', view: null }); },
     );
@@ -36,7 +40,14 @@ export default function DailyBrief() {
   }, [open, tick]);
   // A route change (a deep link, Back) closes it.
   const routeKey = nav.route ? `${nav.route.name}/${nav.route.args.join('/')}${nav.route.query ? nav.route.query.toString() : ''}` : '';
-  useEffect(() => { setOpen(false); }, [routeKey]);
+  // Only a change: on mount it would close a drawer asked for while its code
+  // was still downloading (L3, 2026-10-26).
+  const lastRoute = useRef(routeKey);
+  useEffect(() => {
+    if (lastRoute.current === routeKey) return;
+    lastRoute.current = routeKey;
+    setOpen(false);
+  }, [routeKey]);
   const v = state.view;
   // Item 60: complete what a recorded decision left undone (a paper position
   // or a journal entry), desk-wide. Idempotent; it never archives.
@@ -66,7 +77,12 @@ export default function DailyBrief() {
           </div>
           <div className="dbrief-body" aria-busy={state.loading}>
             {state.loading ? <p role="status" className="dbrief-none">Reading the brief…</p> : null}
-            {state.error ? <p role="alert" className="dbrief-bad">{state.error}</p> : null}
+            {state.error ? (
+              <div role="alert" className="dbrief-err">
+                <p className="dbrief-bad">{state.error}</p>
+                <p><button type="button" className="btn btn-sm btn-primary" data-key="brief-retry" onClick={() => setTick((n) => n + 1)}>Try again</button></p>
+              </div>
+            ) : null}
             {v && !v.ok ? <p role="alert" className="dbrief-bad">{v.why}</p> : null}
             {v && v.ok ? (
               <>

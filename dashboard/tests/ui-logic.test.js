@@ -487,7 +487,7 @@ test('the KPI strip (DESIGN_AND_IA_BLUEPRINT.md §3.1): five figures in one pane
   // Each cell's accessible name says it in full; what needs action is named
   // in words, each item with its kind, and none is out of reach.
   const strip = web('views', 'watchlist', 'StatusStrip.jsx');
-  assert.match(strip, /aria=\{`\$\{k\.review\.projects\} project\$\{k\.review\.projects === 1 \? '' : 's'\} need your review\. Open Review`\}/);
+  assert.match(strip, /aria=\{settled \? `\$\{k\.review\.projects\} project\$\{k\.review\.projects === 1 \? '' : 's'\} need your review\. Open Review` : 'Counting the projects that need your review\. Open Review'\}/);
   assert.match(strip, /<strong>\{kindWord\(a\)\}<\/strong>/);
   assert.match(strip, /\(all \? critical : critical\.slice\(0, 4\)\)/, 'the rest open in place');
   // The inspector's name wraps up to three lines, never cut short.

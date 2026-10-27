@@ -10,12 +10,19 @@ export const isChunkError = (err) => /dynamically imported module|Importing a mo
 // A dynamic import that can be asked again. Browsers keep a failed module
 // fetch for the page's life, so after a failure the next attempt asks for
 // the same file under a fresh query (a new request, the same code).
+export const CHUNK_WAIT_MS = 12000;
 export function retryingImport(load) {
   let failed = null;
   let n = 0;
   return () => {
     const go = failed ? import(/* @vite-ignore */ `${failed}?retry=${Date.now().toString(36)}${(n += 1)}`) : load();
-    return go.catch((err) => {
+    // A download the desk is too busy to serve is a failed download after
+    // CHUNK_WAIT_MS (L3, 2026-10-26), so a boundary says it with Try again
+    // instead of a drawer or page that stays empty. Asking again reuses the
+    // browser's own request if it is still under way.
+    let timer = null;
+    const late = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`Loading a dynamically imported module took more than ${Math.round(CHUNK_WAIT_MS / 1000)} seconds`)), CHUNK_WAIT_MS); });
+    return Promise.race([go, late]).finally(() => clearTimeout(timer)).catch((err) => {
       const m = String((err && err.message) || '').match(/(https?:\/\/[^\s'"]+?\.(?:js|jsx|mjs))(?:\?[^\s'"]*)?/);
       if (m) failed = m[1];
       throw err;

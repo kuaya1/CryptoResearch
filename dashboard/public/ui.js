@@ -16,7 +16,7 @@ const MINUS = '−';
 // researchState() fills in the model's name and, on the online desk, the
 // sentence to say to its assistant.
 export const RESEARCH_STATE = {
-  none: { short: 'None', long: 'No research yet', tone: '' },
+  none: { short: 'No research', long: 'No research yet', tone: '' },
   queued: { short: 'Queued', long: 'Queued: it starts shortly; not saved yet', tone: 'wait' },
   // Queued for its API, but the day's or month's research limit is used up:
   // asked again when it resets; nothing was sent or billed.

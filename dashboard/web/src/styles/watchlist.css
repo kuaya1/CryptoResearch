@@ -109,7 +109,8 @@
 .rb:hover::before { opacity: 1; }
 .rb-k { font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); white-space: nowrap; }
 .rb-fig { font-size: var(--fs-md); font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.rb-none { grid-column: 2 / -1; font-size: var(--fs-sm); color: var(--text-2); }
+.rb-none { grid-column: 2 / -1; display: flex; align-items: baseline; gap: 12px; font-size: var(--fs-sm); color: var(--text-2); }
+.rb-set { font-weight: 500; }
 .rb-track { position: relative; height: 16px; border-radius: var(--radius-full); background: var(--color-bg-soft); }
 .rb-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: inherit; background: var(--color-solid); transition: width var(--dur-move) var(--cubic-move); }
 .rb.is-near .rb-fill { background: var(--caution-solid); }
@@ -131,7 +132,7 @@
 /* ---- PM decisions: a grid of 16px cards, elevation from a stroke ---- */
 .dgrid-wrap { margin: 24px 24px 0; }
 .dgrid-wrap .sec-h { margin-bottom: 10px; }
-.dgrid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(273px, 1fr)); gap: 16px; }
+.dgrid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(273px, 1fr)); grid-auto-rows: 1fr; gap: 16px; }
 .dgrid-none { font-size: var(--fs-md); color: var(--text-2); }
 .dcard { position: relative; isolation: isolate; display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 16px; border-radius: var(--r-tile); background: var(--color-surface); }
 .dcard::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--color-border); pointer-events: none; transition: box-shadow var(--dur) var(--ease); }
@@ -141,7 +142,9 @@
 .dcard-id { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
 .dcard-sym { font-size: var(--fs-md); font-weight: 600; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dcard-name { font-size: var(--fs-sm); line-height: 18px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dcard-thesis { font-size: var(--fs-md); line-height: 20px; color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.dcard-thesis { font-size: var(--fs-md); line-height: 20px; min-height: 40px; color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.dcard-thesis.is-none { color: var(--text-3); }
+.dcard-why { font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); }
 .dcard-figs { display: flex; align-items: flex-end; gap: 24px; margin-top: auto; }
 .dcard-fig { display: flex; flex-direction: column; min-width: 0; }
 .dcard-k { font-size: var(--fs-xs); line-height: 18px; color: var(--text-2); white-space: nowrap; }

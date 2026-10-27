@@ -13,7 +13,7 @@ function read(index) {
   const s = desk.brief;
   if (s && s.index === index && s.promise) return s.promise;
   const last = s ? s.last : EMPTY;
-  const promise = api.get('/api/brief/daily').then(
+  const promise = api.get('/api/brief/daily', { timeoutMs: 12000 }).then(
     (b) => ({ view: briefView(b), error: null }),
     (error) => ({ view: last.view, error }),
   );

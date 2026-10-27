@@ -102,11 +102,12 @@ try {
     ['withheld', `#/project/${P.withheld}/brief`, "document.querySelector('.ov-verdict')"],
     ['none', `#/project/${P.none}/brief`, "document.querySelector('.pp')"],
     ['portfolio', '#/portfolio', "document.querySelector('.lg-portfolio .page-head')"],
-    ['preferences', '#/watchlist?prefs=appearance', "document.querySelector('.prefs .prefs-sec:not([aria-busy])')"],
+    ['preferences', '#/watchlist?prefs=appearance', "document.querySelector('.prefs [data-key=\"theme-light\"]')"],
     ['preferences screening', '#/watchlist?prefs=screening', "document.querySelector('[data-key=\"prefs-screening-form\"]')"],
     ['preferences models', '#/watchlist?prefs=models', "document.querySelector('.prefs .prefs-sec:not([aria-busy]) *')"],
     ['preferences data', '#/watchlist?prefs=data', "document.querySelector('.prefs .prefs-sec:not([aria-busy]) *')"],
-    ['research', '#/research', "document.querySelector('.lg-research *')"],
+    ['research', '#/research', "document.querySelector('.lg-research .page-head')"],
+    ['outcomes', '#/research?tab=outcomes', "document.querySelector('.lg-research .page-head')"],
     ['research evidence', '#/research?tab=evidence', "document.querySelector('.lg-research table')"],
     ['research scout', '#/research?tab=scout', "document.querySelector('.lg-research select[aria-label=\"Lane\"]')"],
     ['portfolio attention', '#/portfolio?tab=attention', "document.querySelector('.lg-portfolio .page-head')"],
@@ -184,7 +185,9 @@ try {
     // R: one write, Undo puts it back.
     const target = (index.projects.find((p) => p.project_id === P.relay) || {}).project_id;
     await go(tab, `#/watchlist?p=${target}`, "document.querySelector('.inspector')");
-    await sleep(400);
+    // The button reads "Still loading" until the project record arrives; wait
+    // for its label (bounded) rather than a fixed 400 ms.
+    await tab.evalJs(`__wait(() => [...document.querySelectorAll('.inspector button')].some((x) => /Mark reviewed/.test(x.textContent)), 6000)`).catch(() => null);
     const reviewable = await tab.evalJs("Boolean([...document.querySelectorAll('.inspector button')].find((x) => /Mark reviewed/.test(x.textContent)))");
     if (reviewable) {
       await tab.evalJs(`document.querySelector('[data-key="pname-${target}"]').focus(); true`);
@@ -346,6 +349,75 @@ try {
       if (low && low.length) fail(`${theme} ${name}: text below contrast`, low.slice(0, 4));
     }
     await ph.close();
+  }
+
+  // ---- L1 (2026-10-26): the type floor as drawn ------------------------------------------
+  // Every visible text's rendered size, after transforms and SVG scaling, is
+  // at least 12.5px on the pages Eric reads (the stylesheet test reads the
+  // source; this reads what the browser draws). Fails with selector → px.
+  const TYPE_FLOOR = `(() => {
+    const FLOOR = 12.5;
+    const seen = new Map();
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+      if (!t.textContent.trim()) continue;
+      const el = t.parentElement; if (!el || el.closest('[aria-hidden=true], [hidden], .sr-only, .visually-hidden, option, script, style, noscript')) continue;
+      const cs = getComputedStyle(el); if (cs.visibility === 'hidden' || cs.display === 'none' || Number(cs.opacity) < 0.1) continue;
+      const r = el.getBoundingClientRect(); if (r.width < 1 || r.height < 1 || r.bottom < 0 || r.top > innerHeight * 3) continue;
+      let px = parseFloat(cs.fontSize);
+      const svg = el.closest('svg');
+      if (svg && svg.getScreenCTM && el instanceof SVGElement) { const m = svg.getScreenCTM(); if (m) px *= Math.sqrt(m.a * m.a + m.b * m.b); }
+      else {
+        // A real transform or zoom on the way up scales the text; layout
+        // rounding (offsetWidth is whole pixels) is not a scale.
+        let scaled = false;
+        for (let n = el; n && n !== document.documentElement; n = n.parentElement) { const ns = getComputedStyle(n); if ((ns.transform && ns.transform !== 'none') || (ns.scale && ns.scale !== 'none') || (ns.zoom && ns.zoom !== '1' && ns.zoom !== 'normal')) { scaled = true; break; } }
+        if (scaled && el.offsetWidth > 0) { const sc = r.width / el.offsetWidth; if (sc > 0 && sc < 0.98) px *= sc; }
+      }
+      if (px + 0.01 < FLOOR) {
+        const path = []; for (let n = el; n && n !== document.body && path.length < 3; n = n.parentElement) path.unshift(n.tagName.toLowerCase() + (n.classList.length ? '.' + [...n.classList].slice(0, 2).join('.') : ''));
+        const key = path.join(' > ');
+        if (!seen.has(key)) seen.set(key, { sel: key, px: Math.round(px * 100) / 100, text: t.textContent.trim().slice(0, 30) });
+      }
+    }
+    return [...seen.values()];
+  })()`;
+  report.type_floor = {};
+  for (const [w, h] of [[1440, 900], [390, 844]]) {
+    const tab = await tabFor(w, { height: h });
+    const ember = (index.projects.find((p) => /Ember/.test(p.name)) || {}).project_id;
+    for (const [name, url, ready] of [pg('watchlist'), pg('inspector'), ['ticket inspector', `#/watchlist?p=${ember || P.relay}`, "document.querySelector('.inspector .mpanel')"], pg('review'), pg('portfolio'), pg('research'), pg('outcomes'), pg('preferences'), pg('overview')]) {
+      await go(tab, url, ready);
+      await sleep(600);
+      const small = await tab.evalJs(TYPE_FLOOR);
+      report.type_floor[`${w} ${name}`] = small;
+      if (small && small.length) fail(`${w}px ${name}: text drawn under 12.5px`, small.slice(0, 6));
+    }
+    // The Daily Brief drawer.
+    await go(tab, '#/watchlist', "document.querySelector('.wl-table tbody tr, .wl-cards *')");
+    await tab.evalJs("document.querySelector('[data-key=\"nav-brief\"], [data-key=\"top-brief\"]').click(); true");
+    await tab.evalJs("__wait(() => document.querySelector('.dbrief .dbrief-sec'), 8000)");
+    const small = await tab.evalJs(TYPE_FLOOR);
+    report.type_floor[`${w} brief`] = small;
+    if (small && small.length) fail(`${w}px Daily Brief: text drawn under 12.5px`, small.slice(0, 6));
+    await tab.close();
+  }
+
+  // ---- L6 (2026-10-26): no raw record IDs in Review's visible text ------------------------
+  // Reports (2026-10-01_claude_56562da0), receipts and runs (fr_2026-…T…Z_…)
+  // and long hashes belong in tooltips, never in the words on screen.
+  {
+    const RAW_ID = String.raw`\b\d{4}-\d{2}-\d{2}_(?:claude|chatgpt|gemini)_[0-9a-f]{8}\b|\b[a-z]{1,8}_\d{4}-\d{2}-\d{2}T\d{6}Z(?:_[a-z0-9-]{2,24})?\b|\b[0-9a-f]{40,64}\b`;
+    const tab = await tabFor(1440);
+    report.raw_ids = {};
+    for (const [name, url, ready] of [pg('review'), ['review project', `#/review?p=${P.relay}`, "document.querySelector('.rv-queue .rv-item')"], pg('review upcoming')]) {
+      await go(tab, url, ready);
+      await sleep(800);
+      const found = await tab.evalJs(`(() => { const re = new RegExp(${JSON.stringify(RAW_ID)}, 'g'); const out = []; const w = document.createTreeWalker(document.querySelector('main'), NodeFilter.SHOW_TEXT); for (let n = w.nextNode(); n; n = w.nextNode()) { const el = n.parentElement; if (!el || !el.getClientRects().length || el.closest('.sr-only')) continue; for (const m of n.nodeValue.match(re) || []) out.push(m); } return [...new Set(out)]; })()`);
+      report.raw_ids[name] = found;
+      if (found.length) fail(`${name}: raw record IDs in the visible text`, found.slice(0, 5));
+    }
+    await tab.close();
   }
 
   // ---- Forensics: the entry flow, keyboard and focus, phones, contrast ----------------

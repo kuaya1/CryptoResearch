@@ -26,6 +26,7 @@ function activeOf(route) {
   if (!route) return 'watchlist';
   if (route.name === 'project') return 'watchlist';
   if (route.name === 'updates' || route.name === 'agenda') return 'review';
+  if (route.name === 'research' && route.query && route.query.get('tab') === 'outcomes') return 'outcomes';
   return route.name;
 }
 
@@ -34,7 +35,7 @@ function NavItem({ s, active, count, compact = false, onClick, iconSize = 20 }) 
   const on = s.id === active;
   return (
     <a
-      href={`#/${s.id}`}
+      href={s.href || `#/${s.id}`}
       className={`nav-item${on ? ' is-active' : ''}`}
       aria-current={on ? 'page' : undefined}
       aria-label={`${s.label}${count ? `, ${count.title}` : ''}`}
@@ -83,8 +84,8 @@ export function railCollapsed() {
 export function Sidebar({ collapsed, onCollapse }) {
   const d = useDesk();
   const active = activeOf(nav.route);
-  const { a: agenda } = useAgendaRead();
-  const counts = navCounts(d.index, agenda);
+  const { a: agenda, settled } = useAgendaRead();
+  const counts = navCounts(d.index, agenda, { settled });
   const list = visibleSections(d, active);
   const ws = d.session && d.session.workspace;
   const kind = ws && ws.kind !== 'real' ? (ws.kind === 'demo' ? 'Demo' : 'Test') : null;
@@ -135,14 +136,15 @@ export function Sidebar({ collapsed, onCollapse }) {
 // A phone: the main places in a tab bar, the rest under More.
 const MORE = [
   { id: 'research', label: 'Research', icon: FlaskConical },
+  SECTIONS.find((s) => s.id === 'outcomes'),
   { id: 'new', label: 'New research', icon: SquarePen },
 ];
 export function TabBar() {
   const d = useDesk();
   const [open, setOpen] = useState(false);
   const active = activeOf(nav.route);
-  const { a: agenda } = useAgendaRead();
-  const counts = navCounts(d.index, agenda);
+  const { a: agenda, settled } = useAgendaRead();
+  const counts = navCounts(d.index, agenda, { settled });
   const primary = ['watchlist', 'review', 'portfolio'];
   const moreActive = MORE.some((s) => s.id === active);
   const sheet = useRef(null);

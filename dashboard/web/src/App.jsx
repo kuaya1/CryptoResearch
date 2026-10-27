@@ -143,6 +143,23 @@ function StartError({ error }) {
   );
 }
 
+// While the Preferences drawer's code downloads (L3, 2026-10-26): the
+// drawer, its title and a loading line at once, never an empty white panel;
+// a download past CHUNK_WAIT_MS is said by the boundary with Try again.
+function PrefsLoading() {
+  return (
+    <aside className="prefs is-open is-loading" aria-label="Preferences">
+      <div className="prefs-in">
+        <header className="prefs-head">
+          <h2 className="prefs-h">Preferences</h2>
+          <button type="button" className="btn btn-sm btn-ghost" data-key="prefs-close" onClick={closePrefs}>Close</button>
+        </header>
+        <p className="view-loading" role="status" data-key="prefs-loading">Loading Preferences…</p>
+      </div>
+    </aside>
+  );
+}
+
 export default function App() {
   const d = useDesk();
   const phone = useMedia('(max-width: 767.98px)');
@@ -180,8 +197,8 @@ export default function App() {
         </main>
       </div>
       {phone ? <TabBar /> : null}
-      <Boundary resetKey={prefs || 'none'} fallback={(error, retry) => <aside className="prefs is-open is-error" aria-label="Preferences"><ViewError error={error} retry={retry} what="Preferences" compact><button type="button" className="btn btn-sm btn-ghost" onClick={closePrefs}>Close</button></ViewError></aside>}>
-        {prefs ? <Suspense fallback={<aside className="prefs is-open is-loading" role="status"><span className="sr-only">Loading Preferences…</span></aside>}><Preferences section={prefs} /></Suspense> : null}
+      <Boundary resetKey={prefs || 'none'} onRetry={() => Preferences.retry()} fallback={(error, retry) => <aside className="prefs is-open is-error" aria-label="Preferences"><ViewError error={error} retry={retry} what="Preferences" compact><button type="button" className="btn btn-sm btn-ghost" onClick={closePrefs}>Close</button></ViewError></aside>}>
+        {prefs ? <Suspense fallback={<PrefsLoading />}><Preferences section={prefs} /></Suspense> : null}
       </Boundary>
       <Boundary resetKey="cmdk" fallback={() => null}>
         <Suspense fallback={null}><CommandMenu /></Suspense>

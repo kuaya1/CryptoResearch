@@ -92,6 +92,14 @@ The short version:
     - hover and press change only the pseudo-layer, so nothing moves;
     - badges are 20px at 12.5/600 with 4px corners;
     - segmented controls are a soft track with a raised thumb.
+  - **Craft fixes (Eric's brief L1–L7, 2026-10-26):**
+    - nothing waits without words: a hosted page says "Loading <page>…" at once and, after 12 s (`LegacyView.jsx` `VIEW_WAIT_MS`), "This page is taking too long" with Try again; a chunk that has not arrived in 12 s is a failed download (`Boundary.jsx` `CHUNK_WAIT_MS`); the Daily Brief's read is bounded at 12 s with Try again; Preferences > Appearance is React and paints without the hosted views; `regress.mjs --only L3` demonstrates each through the fault proxy's `hang`;
+    - unknown is never "None" and never a false $0: suggested risk reads `pm-card-model.js` `riskWords` ($0 with Held, Capped or No new risk, "—" when missing), Portfolio's realized reads "No sales" where the ledger records none (`portfolio-model.js` `realizedWords`);
+    - the type floor is measured, not only declared: `check.mjs` fails on any rendered text under 12.5px on the Desk, inspector, Review, Portfolio, Research, Outcomes, Preferences and the Brief, at 1440 and 390;
+    - Review prints no raw report ID or hash (`review-model.js` `plainIds`; `check.mjs` and `proof-shots.mjs` fail if one shows);
+    - the Desk's review count is one rule (`reviewQueue`), shown as "…" until the agenda is read; Cap not set offers Set cap;
+    - the inspector foot has one primary action: while a ticket waits, its decision, with the other decisions, Open full research and Mark reviewed under More (the same elements, drawn all the time); its risk cells and market figures go two by two by the inspector's own width (`container: insp`); Bull and Bear are never clamped;
+    - Outcomes (`#/research?tab=outcomes`, the report outcomes and the Paper Book) is a place in the rail and in More on a phone; paper positions never enter Portfolio.
   - **Superseded:**
     - the 232px rail;
     - the 620/680px inspector;

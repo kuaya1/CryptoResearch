@@ -6,7 +6,8 @@
 // Eric's sizing rules, the two agents' figures side by side (never averaged)
 // and the status, read with invalidation against prices and DefiLlama. A
 // decision records his choice; nothing here places an order.
-import { useContext, useState } from 'react';
+import { Children, Fragment, cloneElement, isValidElement, useContext, useEffect, useRef, useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { FootSlot } from './footSlot.js';
 import { toast, submissionId, fmtDateTime } from '../../../../public/ui.js';
@@ -41,12 +42,59 @@ function gateKindWords(t) {
   return 'Why the grade closed it: not recorded.';
 }
 
+// The buttons as one flat list (a fragment's buttons are its children).
+function flat(children) {
+  const out = [];
+  Children.forEach(children, (c) => {
+    if (!isValidElement(c)) return;
+    if (c.type === Fragment) out.push(...flat(c.props.children));
+    else out.push(c);
+  });
+  return out;
+}
+
 // The decision buttons: in the inspector's sticky footer when there is one
-// (FootSlot), else in the card. Same buttons, same handlers either way.
+// (FootSlot), else in the card. Same buttons, same handlers either way. In
+// the foot (L5, 2026-10-26) the card's solid decision is the one primary
+// action and every other decision, with the inspector's Open full research
+// and Mark reviewed, sits under More: drawn all the time, shown on demand,
+// so no button is removed and none is cut off at 520px.
 function Actions({ pid, children }) {
   const slot = useContext(FootSlot);
-  const row = <div className={`pm-actions${slot ? ' is-foot' : ''}`} data-key={`pm-actions-${pid}`} role="group" aria-label="PM decision">{children}</div>;
-  return slot ? createPortal(row, slot) : row;
+  const [open, setOpen] = useState(false);
+  const box = useRef(null);
+  const items = slot ? flat(children) : [];
+  const lead = items.find((c) => String(c.props.className || '').split(/\s+/).includes('btn-primary'));
+  const claim = slot && slot.claim;
+  useEffect(() => {
+    if (!claim || !lead) return undefined;
+    claim(true);
+    return () => claim(false);
+  }, [claim, Boolean(lead)]);
+  useEffect(() => {
+    if (!open) return undefined;
+    const away = (e) => { if (box.current && !box.current.contains(e.target)) setOpen(false); };
+    const esc = (e) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); const b = box.current && box.current.querySelector('.pm-more-btn'); if (b) b.focus(); } };
+    document.addEventListener('pointerdown', away);
+    document.addEventListener('keydown', esc, true);
+    return () => { document.removeEventListener('pointerdown', away); document.removeEventListener('keydown', esc, true); };
+  }, [open]);
+  if (!slot) return <div className="pm-actions" data-key={`pm-actions-${pid}`} role="group" aria-label="PM decision">{children}</div>;
+  if (!lead) return createPortal(<div className="pm-actions is-foot" data-key={`pm-actions-${pid}`} role="group" aria-label="PM decision">{children}</div>, slot.el);
+  const rest = [...items.filter((c) => c !== lead), ...flat(slot.extras)].map((c, i) => cloneElement(c, { key: c.key || `m${i}` }));
+  const menuId = `pm-more-${pid}`;
+  return createPortal(
+    <div className="pm-actions is-foot has-more" data-key={`pm-actions-${pid}`} role="group" aria-label="PM decision" ref={box}>
+      {lead}
+      {rest.length ? (
+        <>
+          <button type="button" className="btn btn-sm pm-more-btn" data-key={`pm-more-btn-${pid}`} aria-expanded={open} aria-controls={menuId} onClick={() => setOpen((o) => !o)}>More<ChevronDown size={14} aria-hidden="true" /></button>
+          <div className="pm-more" id={menuId} role="group" aria-label="More actions" hidden={!open} onClick={(e) => { if (e.target.closest('button, a')) setOpen(false); }}>{rest}</div>
+        </>
+      ) : null}
+    </div>,
+    slot.el,
+  );
 }
 
 const DECIDED_WORDS = { veto: 'Vetoed', pass: 'Pass confirmed', watch: 'Kept on watch', trim: 'Trim acknowledged', reopen: 'Re-opened' };
@@ -298,7 +346,7 @@ export function PMDecisionCard({ p }) {
       <div className="iv-rgrid pm-grid">
         <div className="iv-rc">
           <p className="iv-rc-k">Entry zone</p>
-          <p className="iv-rc-v">{t.entry_zone ? `${usd(t.entry_zone.low_usd)}–${usd(t.entry_zone.high_usd)}` : <span className="is-unknown">None</span>}</p>
+          <p className="iv-rc-v">{t.entry_zone ? `${usd(t.entry_zone.low_usd)}–${usd(t.entry_zone.high_usd)}` : <span className="is-unknown" title="The ticket gives no entry zone">Not given</span>}</p>
         </div>
         <div className="iv-rc">
           <p className="iv-rc-k">Invalidation</p>
@@ -307,7 +355,7 @@ export function PMDecisionCard({ p }) {
         </div>
         <div className="iv-rc">
           <p className="iv-rc-k">Target</p>
-          <p className="iv-rc-v" title={t.upside_target ? t.upside_target.basis || undefined : undefined}>{t.upside_target ? usd(t.upside_target.price_usd) : <span className="is-unknown">None</span>}</p>
+          <p className="iv-rc-v" title={t.upside_target ? t.upside_target.basis || undefined : undefined}>{t.upside_target ? usd(t.upside_target.price_usd) : <span className="is-unknown" title="The ticket gives no upside target">Not given</span>}</p>
         </div>
         <div className="iv-rc">
           <p className="iv-rc-k">Exit @ $500</p>

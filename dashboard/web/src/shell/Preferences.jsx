@@ -10,7 +10,7 @@
 // nothing; each save is its own button.
 import { useEffect, useRef, useState } from 'react';
 import { X, ExternalLink } from 'lucide-react';
-import { toast } from '../../../public/ui.js';
+import { toast, store } from '../../../public/ui.js';
 import { useDesk, useMedia } from '../lib/hooks.js';
 import { api, refresh } from '../lib/desk.js';
 import { legacyCtx } from '../legacy/ctx.js';
@@ -206,6 +206,34 @@ function DeskDefaults() {
   );
 }
 
+// ---- Appearance: the theme, drawn here so it paints with the drawer -------------------------
+// Same choice and storage as views/settings.js appearanceCard; it no longer
+// waits for the hosted views' code to download (L3, 2026-10-26).
+
+const THEMES = [['light', 'Light'], ['dark', 'Dark'], ['system', 'Match this device']];
+
+function Appearance() {
+  const [theme, setTheme] = useState(() => (THEMES.some(([v]) => v === store.get('theme')) ? store.get('theme') : 'light'));
+  const pick = (v, label) => {
+    store.set('theme', v === 'light' ? null : v);
+    if (v === 'light') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', v);
+    setTheme(v);
+    toast(`Theme: ${label}. Saved in this browser only.`);
+  };
+  return (
+    <section className="l2-panel" aria-labelledby="prefs-appearance-h">
+      <header className="l2-panel-head"><h3 className="l2-panel-t" id="prefs-appearance-h" title="Saved in this browser only. Light is the default.">Appearance</h3></header>
+      <div className="l2-panel-body">
+        <fieldset className="seg" data-nodirty="1">
+          <legend className="sr-only">Color theme</legend>
+          {THEMES.map(([v, label]) => <button key={v} type="button" aria-pressed={v === theme} data-key={`theme-${v}`} onClick={() => pick(v, label)}>{label}</button>)}
+        </fieldset>
+      </div>
+    </section>
+  );
+}
+
 // ---- Developer: the Explorer (D4) and the running code ----------------------------------------
 
 function Developer({ d }) {
@@ -293,6 +321,7 @@ export default function Preferences() {
             <h3 className="prefs-title" id="prefs-title" tabIndex={-1}>{label}</h3>
             {section === 'screening' ? <><Screening d={d} /><TicketSizing d={d} /></>
               : section === 'developer' ? <Developer d={d} />
+                : section === 'appearance' ? <Appearance />
                 : <Dom key={section} build={(L) => L.prefsSection(legacyCtx, section)} deps={[section, settingsKey]} />}
             {section === 'appearance' ? <DeskDefaults /> : null}
           </div>

@@ -150,6 +150,20 @@ html.has-drawer { overflow: hidden; }
   .iv-rc:nth-child(even) { padding-right: 0; }
   .iv-rc:nth-child(n+3) { padding-top: 14px; border-top: 1px solid var(--border); }
 }
+/* The inspector is 520px wide beside a 1440px list, narrower than any
+   viewport rule expects (L5, 2026-10-26): its own width decides, so the
+   four risk cells and the four market figures go two by two and Start
+   audit is never cut off. */
+.inspector { container: insp / inline-size; }
+@container insp (max-width: 600px) {
+  .iv-rgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 14px; }
+  .iv-rc:nth-child(odd) { padding-left: 0; border-left: 0; }
+  .iv-rc:nth-child(even) { padding-right: 0; }
+  .iv-rc:nth-child(n+3) { padding-top: 14px; border-top: 1px solid var(--border); }
+  .mribbon { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mribbon-cell:nth-child(3) { border-left: 0; }
+  .mribbon-cell:nth-child(n+3) { border-top: 1px solid var(--border); }
+}
 /* 4. thesis and watch */
 .iv-thesis { margin: 0; gap: 8px; }
 .iv-thesis .take-text { font-size: var(--fs-ui); line-height: 1.6; }
@@ -470,6 +484,19 @@ html.has-drawer { overflow: hidden; }
 .pm-actions.is-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-bottom: 12px; box-shadow: 0 1px 0 var(--color-border-subtle); }
 .pm-actions.is-foot .btn { flex: 1 1 auto; }
 .pm-actions.is-foot .pm-decided { flex: 1 1 100%; }
+/* One primary decision and More (L5): the other decisions and the
+   inspector's own actions open over the foot, each a full-width row. */
+.pm-actions.has-more { position: relative; flex-wrap: nowrap; }
+.pm-actions.has-more > .btn { flex: 1 1 auto; }
+.pm-actions.has-more > .pm-more-btn { flex: none; gap: 4px; }
+.pm-more {
+  position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 5;
+  display: flex; flex-direction: column; gap: 4px; min-width: 240px; max-width: 100%;
+  padding: 6px; border-radius: var(--r-lg);
+  background: var(--surface-raised); box-shadow: var(--shadow-pop);
+}
+.pm-more[hidden] { display: none; }
+.pm-more > .btn { justify-content: flex-start; width: 100%; }
 .if-sum { display: flex; align-items: center; gap: 6px; font-size: var(--fs-md); color: var(--text-2); min-width: 0; }
 .if-ok { display: inline-flex; align-items: center; gap: 5px; color: var(--pos); font-weight: 500; }
 .if-dot { color: var(--text-3); }

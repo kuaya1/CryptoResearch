@@ -7,8 +7,9 @@
 // mixed render is detectable). For the review check-in: a POST forwarded to
 // the desk whose answer is then dropped (the desk wrote, the page never
 // hears), a POST refused with 503 (never forwarded), and the live change
-// notice held back so a report saved meanwhile is not redrawn. POST bodies
-// are kept in the log for the checks.
+// notice held back so a report saved meanwhile is not redrawn. A path can be
+// held unanswered (a busy desk, L3). POST bodies are kept in the log for the
+// checks.
 import http from 'node:http';
 
 export const NEW_REPORT_ID = 'fictional-new-revision';
@@ -27,6 +28,9 @@ export async function startFaultProxy({ target, port = 0, project = null, provid
     projectDelay: 0, indexDelay: 0, projectFail: false, indexFail: false,
     blockChunk: '', bump: 0, snapshot: 'original', signedOut: false,
     dropPost: '', failPost: '', holdVersion: null,
+    // L3 (2026-10-26): requests whose path contains one of these are held
+    // unanswered, as a desk too busy to answer, until the check clears it.
+    hang: [],
   };
   const log = [];
   const sockets = new Set();
@@ -36,6 +40,11 @@ export async function startFaultProxy({ target, port = 0, project = null, provid
     const entry = { method: req.method, path: p, at: Date.now() };
     log.push(entry);
     if (p === '/login') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end('<!doctype html><title>Sign in</title><h1>FICTIONAL sign-in page</h1>'); }
+    if (cfg.hang.some((x) => p.includes(x))) {
+      entry.held = true;
+      while (cfg.hang.some((x) => p.includes(x)) && !req.socket.destroyed) await new Promise((r) => setTimeout(r, 50));
+      if (req.socket.destroyed) return undefined;
+    }
     if (cfg.blockChunk && p.startsWith('/app/assets/') && p.includes(cfg.blockChunk)) { entry.status = 404; return json(res, 404, { error: 'FICTIONAL retired chunk' }); }
     if (cfg.signedOut && p.startsWith('/api/')) { entry.status = 401; return json(res, 401, { error: 'FICTIONAL session expired' }); }
     if (p === '/api/session') {
@@ -127,7 +136,7 @@ export async function startFaultProxy({ target, port = 0, project = null, provid
     cfg,
     log,
     set(next) { Object.assign(cfg, next); },
-    reset() { Object.assign(cfg, { session: 'normal', projectDelay: 0, indexDelay: 0, projectFail: false, indexFail: false, blockChunk: '', bump: 0, snapshot: 'original', signedOut: false, dropPost: '', failPost: '', holdVersion: null }); },
+    reset() { Object.assign(cfg, { session: 'normal', projectDelay: 0, indexDelay: 0, projectFail: false, indexFail: false, blockChunk: '', bump: 0, snapshot: 'original', signedOut: false, dropPost: '', failPost: '', holdVersion: null, hang: [] }); },
     async close() {
       for (const s of sockets) s.destroy();
       await new Promise((r) => server.close(r));
