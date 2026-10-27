@@ -2,12 +2,14 @@
 # every push to a claude/ branch, to main (after a merge: main as it landed),
 # and on every pull request to main. A merge pushed by backlog-pr.yml with the
 # workflow token starts no run here; that tree was tested before it landed.
-# The tests use fictional workspaces only; no secret is read.
+# The tests use fictional workspaces only; no secret is read. A builder's claim
+# (claude/claims/item-<n>, dashboard/scripts/backlog-schedule.js) is a commit
+# with an empty tree and nothing to test, so it starts no run.
 name: test
 
 on:
   push:
-    branches: ['claude/**', 'main']
+    branches: ['claude/**', '!claude/claims/**', 'main']
   pull_request:
     branches: [main]
 
