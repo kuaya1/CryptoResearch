@@ -18,47 +18,64 @@
 //       every read and write (INTEGRITY).
 //   paper/trader/venue.jsonl    the simulated venue's own record of what it
 //       accepted or rejected, by client order ID: what a reconciliation asks.
+//       It is created with the first reservation; once the book holds an
+//       order, a missing file or a line that does not read is INTEGRITY, and
+//       no order is resolved from it.
 //
 // One intent, one order: the client order ID is derived from intent_id; the
-// same intent again is `unchanged`, a different body under its ID refused.
-// Orders move RESERVED -> SENT -> ACKED | REJECTED | UNKNOWN, then ACKED ->
-// PARTIAL -> FILLED | CANCELLED | EXPIRED (invariant 4). After a crash,
-// `recover` cancels an order reserved but never sent (nothing went out, and a
-// stale intent is not sent late) and makes one sent with no answer UNKNOWN;
-// an answer that does not read is UNKNOWN too. UNKNOWN never times out: only
-// `reconcile`, asking the venue for that client order ID, resolves it, to the
-// venue's answer when it has one, to NOT_FOUND only when it has none and its
-// duplicate-order window has passed. Nothing is resent under a new ID, and
-// while an order is unresolved the risk engine refuses every new intent.
+// same intent again is `unchanged`, a different body under its ID refused,
+// and the venue refuses a client order ID it already holds with another
+// body. Orders move RESERVED -> SENT -> ACKED | REJECTED | UNKNOWN, then ACKED
+// -> PARTIAL -> FILLED | CANCELLED | EXPIRED (invariant 4). Only an order
+// recorded as SENT, read under the workspace lock, goes to the venue. After a
+// crash, `recover` makes an order reserved or sent with no outcome on record
+// UNKNOWN (another process may have sent it: it is never cancelled blind and
+// never sent late) and asks the venue for every UNKNOWN order. UNKNOWN never
+// times out: only a reconciliation, asking the venue for that client order
+// ID, resolves it, to the venue's answer when it has one, to NOT_FOUND only
+// when it has none and its duplicate-order window has passed. Nothing is
+// resent under a new ID, and while an order is unresolved the risk engine
+// refuses every new intent.
 //
 // The simulation (the cr-paper@2 blueprint):
 //   - cash NAV: the book starts from the cash Eric funds it with (unfunded,
 //     NAV is unknown and every intent is refused); NAV is cash plus each open
 //     quantity at its pair's latest hourly close no older than
 //     NAV_PRICE_FRESH_MINUTES, else unknown, never valued at 0 or at entry;
-//   - sizes from cr-trade-risk@1 (floored to the lot, every cost in); an
-//     order's cash and fee are committed when it is reserved, so cash never
-//     goes negative;
-//   - a limit buy fills at its limit only when an hour's low trades below it,
-//     at most FILL_SHARE_MAX of the hour's volume; the rest stays open as a
-//     partial fill until it fills, is cancelled or expires;
+//   - sizes from cr-trade-risk@1 (floored to the lot, every cost in), with
+//     the planned loss already at the stops counted against the 24-hour
+//     ceiling and the thesis's grant; an order's cash and fee are committed
+//     at its limit when it is reserved, so cash never goes negative;
+//   - an order fills only from hours that start at or after it was sent; a
+//     limit buy fills only when an hour's low trades below its limit, at the
+//     limit or at the hour's open when that is lower, at most FILL_SHARE_MAX
+//     of the hour's volume; the rest stays open as a partial fill until it
+//     fills, is cancelled or expires. An order whose life ends before an
+//     hour's end expires before that hour can fill it;
 //   - fees from the venue's schedule frozen with the order: POST_ONLY pays
 //     the maker fee, everything else the taker fee, exits the taker fee; an
 //     unknown fee refuses; the venue rejects a POST_ONLY that would cross;
 //   - stops and targets against each hour's high and low: a stop fills
 //     STOP_SLIPPAGE_BPS below the stop, or at the open when the hour opened
-//     through it, never better; when one hour reaches both, the stop is taken;
-//     an hour that fills a buy checks its stop, never its target (the order
-//     of events within the hour is unknown, so the worse outcome);
-//   - exits and closes fill whole (a stated simplification); long only.
+//     through it, never better; a target or a close at its price, or at the
+//     open when the hour opened above it, so no fill is outside the hour's
+//     range; when one hour reaches both, the stop is taken; an hour that
+//     fills a buy checks its stop, never its target (the order of events
+//     within the hour is unknown, so the worse outcome);
+//   - for a pair with exposure, hours apply one after another with none
+//     missing, so no stop, target or fill is skipped;
+//   - exits and closes fill whole (a stated simplification); a close is
+//     refused while the buy that opened its position is still live, and
+//     never sells more than its order; long only.
 // Fees and losses round against the trader; sizes never round up.
 
 const fs = require('fs');
 const { runOp, OpError } = require('./ops');
 const { sha256 } = require('./fsx');
-const risk = require('./trade-risk');
+// Taken once, at load (red team P2-13): the engine's exports are frozen, and
+// nothing that changes them later reaches this book.
+const { validateTradeIntent, exact: { dec, str, mulFloor, mulCeil, isoMs, own } } = require('./trade-risk');
 
-const { dec, str, mulFloor, mulCeil } = risk.exact;
 const VERSION = 'cr-paper@2';
 const JOURNAL = 'paper/trader/journal.jsonl';
 const VENUE = 'paper/trader/venue.jsonl';
@@ -69,18 +86,23 @@ const NAV_PRICE_FRESH_MINUTES = 120;
 const HOUR = 3600000;
 const MIN = 60000;
 const BPS = 10000n;
-const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+const ONE = 10n ** 18n;
 // Orders that still hold their committed cash: they may yet fill.
 const LIVE = ['RESERVED', 'SENT', 'ACKED', 'PARTIAL', 'UNKNOWN'];
 const BAR_FIELDS = ['open', 'high', 'low', 'close', 'volume'];
+// What the venue holds for a client order ID: one ID is one order.
+const BODY_FIELDS = ['pair', 'side', 'order_type', 'limit', 'quantity'];
 
 function msOf(s, what = 'now') {
-  if (typeof s !== 'string' || !ISO_RE.test(s) || !Number.isFinite(Date.parse(s))) throw new OpError('INVALID', `${what} is not an ISO-8601 UTC time.`);
-  return Date.parse(s);
+  const v = isoMs(s);
+  if (v === null) throw new OpError('INVALID', `${what} is not an ISO-8601 UTC time.`);
+  return Number(v);
 }
 const iso = (ms) => new Date(ms).toISOString();
 const orNull = (v) => (v === null ? null : str(v));
 const commitOf = (q, price, rate) => { const n = mulCeil(q, price); return n + mulCeil(n, rate); };
+const lower = (a, b) => (a < b ? a : b);
+const higher = (a, b) => (a > b ? a : b);
 // Keys sorted, so the same intent hashes the same however its keys were ordered.
 function canonical(v) {
   if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
@@ -105,7 +127,19 @@ function parseJournal(text) {
 function readText(ws, rel) {
   try { return fs.readFileSync(ws.abs(rel), 'utf8'); } catch (_) { return ''; }
 }
-const venueRecords = (text) => lines(text).map((l) => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
+// The venue's records, every line of them: a line that does not read is
+// INTEGRITY, never skipped, so a lost answer is never read as no answer.
+function venueRecords(text) {
+  if (text === null) throw new OpError('INTEGRITY', `${VENUE} is missing though the book holds orders, so the venue's answers are unknown. No order is sent or resolved from it until it is repaired.`);
+  return lines(text).map((l, i) => {
+    let r = null;
+    try { r = JSON.parse(l); } catch (_) { /* refused below */ }
+    if (!r || typeof r !== 'object' || typeof r.client_order_id !== 'string') throw new OpError('INTEGRITY', `${VENUE} record ${i + 1} does not read, so the venue's answers are unknown. No order is sent or resolved from it until it is repaired.`);
+    return r;
+  });
+}
+const bodyOf = (o) => ({ pair: o.pair, side: o.side, order_type: o.order_type, limit: str(o.limit), quantity: str(o.quantity) });
+const sameBody = (rec, o) => { const b = bodyOf(o); return BODY_FIELDS.every((k) => rec[k] === b[k]); };
 
 // --- The state, replayed from the journal.
 
@@ -127,18 +161,22 @@ function applyEvent(st, e) {
     case 'reserved': {
       const i = e.intent;
       st.orders.set(e.client_order_id, {
-        client_order_id: e.client_order_id, intent_id: e.intent_id, side: i.side, pair: i.pair, order_type: i.order_type, position_id: e.position_id,
+        client_order_id: e.client_order_id, intent_id: e.intent_id, thesis_id: i.thesis_id, side: i.side, pair: i.pair, order_type: i.order_type, position_id: e.position_id,
         limit: dec(i.entry_price), stop: dec(i.stop_loss_price), take_profit: dec(i.take_profit_price), quantity: dec(e.quantity), filled: 0n,
         per_unit_loss: dec(e.per_unit_loss_usd), fee_rate: dec(e.venue.fee_rate), venue: e.venue, valid_until: Date.parse(e.valid_until_effective),
-        state: 'RESERVED', reserved_at: e.at, sent_at: null, words: null,
+        state: 'RESERVED', reserved_at: e.at, sent_at: null, live_from: null, words: null,
       });
       st.intents.set(e.intent_id, { intent_sha256: e.intent_sha256, refusals: null });
       break;
     }
-    case 'sent': o.state = 'SENT'; o.sent_at = e.at; break;
+    // An order fills only from hours that start at or after it was sent.
+    case 'sent': o.state = 'SENT'; o.sent_at = e.at; o.live_from = Date.parse(e.at); break;
     case 'answer': o.state = e.answer === 'accepted' ? 'ACKED' : 'REJECTED'; o.words = e.words; break;
     case 'unknown': o.state = 'UNKNOWN'; o.words = e.words; break;
-    case 'reconciled': o.state = e.state; o.words = e.words; break;
+    case 'reconciled':
+      o.state = e.state; o.words = e.words;
+      if (e.state === 'ACKED' && o.live_from === null) o.live_from = Date.parse(e.venue_at || e.at);
+      break;
     case 'cancelled': o.state = 'CANCELLED'; o.words = e.words; break;
     case 'expired': o.state = 'EXPIRED'; o.words = e.words; break;
     case 'bar': {
@@ -157,8 +195,8 @@ function applyEvent(st, e) {
       o.state = o.filled === o.quantity ? 'FILLED' : 'PARTIAL';
       st.cash -= cost;
       st.fees += dec(e.fee_usd);
-      const p = st.positions.get(e.position_id) || { position_id: e.position_id, intent_id: o.intent_id, pair: o.pair, entry_price: o.limit, stop: o.stop, take_profit: o.take_profit, per_unit_loss: o.per_unit_loss, exit_fee_rate: dec(o.venue.taker_rate), quantity: 0n, cost: 0n, realized: 0n, exits: [], opened_at: e.at };
-      p.quantity += q; p.cost += cost; p.state = 'open';
+      const p = st.positions.get(e.position_id) || { position_id: e.position_id, intent_id: o.intent_id, thesis_id: o.thesis_id, pair: o.pair, stop: o.stop, take_profit: o.take_profit, per_unit_loss: o.per_unit_loss, exit_fee_rate: dec(o.venue.taker_rate), quantity: 0n, notional: 0n, cost: 0n, realized: 0n, exits: [], opened_at: e.at };
+      p.quantity += q; p.notional += dec(e.notional_usd); p.cost += cost; p.state = 'open';
       st.positions.set(e.position_id, p);
       break;
     }
@@ -171,7 +209,7 @@ function applyEvent(st, e) {
       st.realized += pnl;
       p.realized += pnl;
       p.exits.push({ hour: e.hour, reason: e.reason, quantity: e.quantity, price: e.price, realized_pnl_usd: str(pnl) });
-      p.quantity = 0n; p.cost = 0n; p.state = 'closed'; p.closed_at = e.at;
+      p.quantity = 0n; p.notional = 0n; p.cost = 0n; p.state = 'closed'; p.closed_at = e.at;
       if (o) { o.filled = o.quantity; o.state = 'FILLED'; }
       break;
     }
@@ -183,16 +221,37 @@ function applyEvent(st, e) {
 
 const committed = (st) => [...st.orders.values()].filter((o) => o.side === 'OPEN_LONG' && LIVE.includes(o.state)).reduce((s, o) => s + commitOf(o.quantity - o.filled, o.limit, o.fee_rate), 0n);
 
-// A pair's latest close from an hour ended by t and within the freshness
-// window, else null.
-function freshClose(st, pair, t) {
+// The planned loss at the stops of what is open, every cost in: each open
+// position, and the unfilled part of each live buy; for one thesis, or the
+// whole book. Unknown when any of them is.
+function openRisk(st, thesis = null) {
+  let sum = 0n;
+  for (const p of st.positions.values()) {
+    if (p.state !== 'open' || (thesis !== null && p.thesis_id !== thesis)) continue;
+    if (p.per_unit_loss === null) return null;
+    sum += mulCeil(p.quantity, p.per_unit_loss);
+  }
+  for (const o of st.orders.values()) {
+    if (o.side !== 'OPEN_LONG' || !LIVE.includes(o.state) || (thesis !== null && o.thesis_id !== thesis)) continue;
+    if (o.per_unit_loss === null) return null;
+    sum += mulCeil(o.quantity - o.filled, o.per_unit_loss);
+  }
+  return sum;
+}
+
+// A pair's latest hour ended by t and within the freshness window, else null.
+function freshBar(st, pair, t) {
   const list = st.bars.get(pair) || [];
   for (let i = list.length - 1; i >= 0; i--) {
     const end = list[i].t + HOUR;
     if (end > t) continue;
-    return t - end <= NAV_PRICE_FRESH_MINUTES * MIN ? list[i].close : null;
+    return t - end <= NAV_PRICE_FRESH_MINUTES * MIN ? list[i] : null;
   }
   return null;
+}
+function freshClose(st, pair, t) {
+  const b = freshBar(st, pair, t);
+  return b === null ? null : b.close;
 }
 
 function navAt(st, t) {
@@ -238,16 +297,22 @@ function atr14(st, pair, t) {
 }
 
 // The book cr-trade-risk@1 reads, for one pair, with each unknown in words.
+// The thesis whose open risk it carries is the grant's.
 function bookFor(st, pair, ctx) {
   const t = msOf(ctx.now);
   const v = ctx.venue && typeof ctx.venue === 'object' ? ctx.venue : {};
+  const thesis = ctx.grant && typeof ctx.grant === 'object' && typeof ctx.grant.thesis_id === 'string' ? ctx.grant.thesis_id : null;
+  const fresh = freshBar(st, pair, t);
   const book = {
     now: ctx.now,
     nav_usd: orNull(navAt(st, t)),
     cash_usd: st.funded === null ? null : str(st.cash),
     available_cash_usd: st.funded === null ? null : str(st.cash - committed(st)),
     drawdown_24h_usd: orNull(drawdown24(st, t)),
-    price: orNull(freshClose(st, pair, t)),
+    open_risk_usd: orNull(openRisk(st)),
+    thesis_risk_usd: thesis === null ? null : orNull(openRisk(st, thesis)),
+    price: fresh === null ? null : str(fresh.close),
+    price_at: fresh === null ? null : iso(fresh.t + HOUR),
     atr_14h: orNull(atr14(st, pair, t)),
     lot: v.lot,
     min_notional_usd: v.min_notional_usd,
@@ -258,22 +323,35 @@ function bookFor(st, pair, ctx) {
     positions: [...st.positions.values()].filter((p) => p.state === 'open').map((p) => ({ position_id: p.position_id, pair: p.pair, state: 'open', quantity: str(p.quantity) })),
     orders: [...st.orders.values()].map((o) => ({ client_order_id: o.client_order_id, state: o.state })),
   };
-  const fresh = `${NAV_PRICE_FRESH_MINUTES} minutes`;
+  const fr = `${NAV_PRICE_FRESH_MINUTES} minutes`;
   book.unknown = [
     st.funded === null && 'The book is not funded, so its NAV is unknown.',
-    st.funded !== null && book.nav_usd === null && `An open position has no hourly price within ${fresh}, so NAV is unknown.`,
+    st.funded !== null && book.nav_usd === null && `An open position has no hourly price within ${fr}, so NAV is unknown.`,
     book.nav_usd !== null && book.drawdown_24h_usd === null && `An hour of the last 24 has no NAV, so the 24-hour drawdown is unknown.`,
-    book.price === null && `${pair} has no hourly price within ${fresh}.`,
-    book.atr_14h === null && `${pair} has no 15 consecutive hours ending within ${fresh}, so its 14-hour ATR is unknown.`,
+    book.open_risk_usd === null && 'An open position or live order has no planned loss at its stop, so the risk already open is unknown.',
+    thesis !== null && book.open_risk_usd !== null && book.thesis_risk_usd === null && 'The risk this thesis already holds at its stops is unknown.',
+    book.price === null && `${pair} has no hourly price within ${fr}.`,
+    book.atr_14h === null && `${pair} has no 15 consecutive hours ending within ${fr}, so its 14-hour ATR is unknown.`,
   ].filter(Boolean);
   return book;
 }
 
 // --- Writes: one journal operation each, under the workspace lock.
 
-function journal(ws, summary, now, build) {
+// Each operation's own identity (red team P1-6). Inside a queued request,
+// runOp keys an operation by the request ID and its type, so one type for
+// every write made every later write of the request a replay of the first.
+// The type names the step, its subject, the time and the journal's head as
+// it stood, so only a true replay of the same write matches.
+function opType(ws, step, subject, now) {
+  const ls = lines(readText(ws, JOURNAL));
+  const head = ls.length ? sha256(ls[ls.length - 1]) : 'empty';
+  return `paper_trader.${step}.${sha256(`${step}|${subject}|${now}|${head}`).slice(0, 16)}`;
+}
+
+function journal(ws, step, subject, summary, now, build) {
   const t = msOf(now);
-  return runOp(ws, { type: 'paper_trader', summary }, (op) => {
+  return runOp(ws, { type: opType(ws, step, subject, now), summary }, (op) => {
     const text = op.readText(JOURNAL, '');
     const parsed = parseJournal(text);
     let head = parsed.head;
@@ -306,7 +384,7 @@ const stateOf = (o) => ({ client_order_id: o.client_order_id, state: o.state, fi
 function fund(ws, { cash_usd, now } = {}) {
   const cash = dec(cash_usd);
   if (cash === null || cash === 0n) throw new OpError('INVALID', 'The starting cash is not a plain decimal string above 0.');
-  return journal(ws, 'Fund the trader\'s Paper Book', now, ({ st, append }) => {
+  return journal(ws, 'fund', str(cash), 'Fund the trader\'s Paper Book', now, ({ st, append }) => {
     if (st.funded !== null) {
       if (st.funded === cash) return { status: 'unchanged', cash_usd: str(cash) };
       throw new OpError('CONFLICT', `The book was funded with ${str(st.funded)}; a different amount is never applied over it.`);
@@ -317,41 +395,55 @@ function fund(ws, { cash_usd, now } = {}) {
 }
 
 // Validates the intent against the book and reserves its order (RESERVED is
-// recorded before anything is sent), or records the refusal.
+// recorded before anything is sent), or records the refusal. What is checked,
+// hashed and recorded is one copy of the intent's own data properties, read
+// once (red team P2-11).
 //   ctx: { now, rules, venue: { lot, min_notional_usd, maker_rate, taker_rate },
 //          exit_max_usd, grant }
 function reserveIntent(ws, intent, ctx = {}) {
-  const id = intent && typeof intent === 'object' && typeof intent.intent_id === 'string' && intent.intent_id ? intent.intent_id : null;
-  const digest = sha256(canonical(intent));
-  return journal(ws, `Trader intent ${id || '(no ID)'}`, ctx.now, ({ st, append }) => {
+  const snap = own(intent);
+  const it = snap && typeof snap === 'object' && !Array.isArray(snap) ? snap : null;
+  const id = it && typeof it.intent_id === 'string' && it.intent_id ? it.intent_id : null;
+  const digest = sha256(canonical(snap));
+  return journal(ws, 'reserve', digest, `Trader intent ${id || '(no ID)'}`, ctx.now, ({ st, append, op }) => {
     const prior = id ? st.intents.get(id) : null;
     if (prior) {
       if (prior.intent_sha256 !== digest) throw new OpError('CONFLICT', `Intent ${id} is on record with a different body: one intent_id is one intent. Nothing new was written.`);
       const o = [...st.orders.values()].find((x) => x.intent_id === id);
       return o ? { status: 'unchanged', intent_id: id, ...stateOf(o) } : { status: 'unchanged', intent_id: id, state: 'REFUSED', refusals: prior.refusals };
     }
-    const book = bookFor(st, intent && intent.pair, ctx);
-    const v = risk.validateTradeIntent(intent, book, ctx.rules);
+    const book = bookFor(st, it && it.pair, ctx);
+    const v = validateTradeIntent(snap, book, ctx.rules);
     const refusals = [...v.refusals];
     const venue = ctx.venue && typeof ctx.venue === 'object' ? ctx.venue : {};
-    const feeRate = intent && intent.order_type === 'POST_ONLY' ? venue.maker_rate : venue.taker_rate;
+    const feeRate = it && it.order_type === 'POST_ONLY' ? venue.maker_rate : venue.taker_rate;
     if (v.ok && (dec(feeRate) === null || dec(venue.taker_rate) === null || dec(venue.lot) === null)) refusals.push({ field: 'book.fees', rule: 'unknown', words: 'The venue\'s fee or lot is unknown, so the order cannot be costed (never read as 0).' });
-    else if (v.ok && intent.side === 'OPEN_LONG') {
-      const need = commitOf(dec(v.sizing.quantity), dec(intent.entry_price), dec(feeRate));
+    else if (v.ok && it.side === 'OPEN_LONG') {
+      const need = commitOf(dec(v.sizing.quantity), dec(it.entry_price), dec(feeRate));
       if (dec(book.available_cash_usd) < need) refusals.push({ field: 'book.cash_usd', rule: 'cash', words: `The order needs ${str(need)} with its fee; ${book.available_cash_usd} is free.` });
-    } else if (v.ok && [...st.orders.values()].some((o) => o.side === 'CLOSE_LONG' && o.position_id === intent.position_id && LIVE.includes(o.state))) {
-      refusals.push({ field: 'position_id', rule: 'position', words: 'A close order for this position is already live.' });
+    } else if (v.ok && it.side === 'CLOSE_LONG') {
+      const p = st.positions.get(it.position_id);
+      const opener = p ? st.orders.get(`cr2-${p.intent_id}`) : null;
+      if ([...st.orders.values()].some((o) => o.side === 'CLOSE_LONG' && o.position_id === it.position_id && LIVE.includes(o.state))) {
+        refusals.push({ field: 'position_id', rule: 'position', words: 'A close order for this position is already live.' });
+      } else if (opener && LIVE.includes(opener.state)) {
+        // The position could still grow after the close is sized (red team P2-12).
+        refusals.push({ field: 'position_id', rule: 'opener_live', words: `The buy that opened this position (${opener.client_order_id}) is still ${opener.state}; cancel it or let it finish before closing.` });
+      }
     }
     if (!id) return { status: 'refused', intent_id: null, refusals };
     if (refusals.length) {
       append('refused', { intent_id: id, intent_sha256: digest, refusals });
       return { status: 'refused', intent_id: id, refusals };
     }
-    const until = Math.min(Date.parse(intent.valid_until), Date.parse(intent.created_at) + ctx.rules.max_validity_minutes * MIN);
+    const until = Math.min(Date.parse(it.valid_until), Date.parse(it.created_at) + ctx.rules.max_validity_minutes * MIN);
     const coid = `cr2-${id}`;
+    // The venue's record starts with the book's first order, so from then on
+    // a missing record is a lost one, never an empty one.
+    if (st.orders.size === 0 && op.readText(VENUE, null) === null) op.write(VENUE, '');
     append('reserved', {
-      intent_id: id, intent_sha256: digest, intent, client_order_id: coid,
-      position_id: intent.side === 'CLOSE_LONG' ? intent.position_id : `pos-${id}`,
+      intent_id: id, intent_sha256: digest, intent: snap, client_order_id: coid,
+      position_id: it.side === 'CLOSE_LONG' ? it.position_id : `pos-${id}`,
       quantity: v.sizing.quantity, notional_usd: v.sizing.notional_usd || null, loss_at_stop_usd: v.sizing.loss_at_stop_usd || null, per_unit_loss_usd: v.sizing.per_unit_loss_usd || null,
       valid_until_effective: iso(until),
       venue: { lot: venue.lot, min_notional_usd: venue.min_notional_usd, maker_rate: venue.maker_rate, taker_rate: venue.taker_rate, fee_rate: feeRate, stop_slippage_bps: STOP_SLIPPAGE_BPS },
@@ -362,7 +454,7 @@ function reserveIntent(ws, intent, ctx = {}) {
 
 // SENT is recorded before the order goes to the venue.
 function markSent(ws, coid, { now } = {}) {
-  return journal(ws, `Trader order ${coid} sent`, now, ({ st, append }) => {
+  return journal(ws, 'sent', coid, `Trader order ${coid} sent`, now, ({ st, append }) => {
     const o = orderOf(st, coid);
     if (o.state !== 'RESERVED') return { status: 'unchanged', ...stateOf(o) };
     append('sent', { client_order_id: coid });
@@ -371,16 +463,22 @@ function markSent(ws, coid, { now } = {}) {
 }
 
 // The simulated venue: it takes an order once by its client order ID (the
-// same ID again is a duplicate, never a second order) and rejects a POST_ONLY
-// that would cross its current price. Its record is what reconcile asks.
+// same ID with the same order again is a duplicate, never a second order;
+// with another order, refused) and rejects a POST_ONLY that would cross its
+// current price. It reads the book under the lock and takes only an order
+// recorded as SENT (red team P1-3). Its record is what reconcile asks.
 function venueSend(ws, coid, { now } = {}) {
   const t = msOf(now);
-  const st = replay(parseJournal(readText(ws, JOURNAL)).events);
-  const o = orderOf(st, coid);
-  return runOp(ws, { type: 'paper_trader_venue', summary: `Simulated venue: ${coid}` }, (op) => {
-    const text = op.readText(VENUE, '');
+  return runOp(ws, { type: `paper_trader_venue.${opType(ws, 'venue', coid, now).split('.').pop()}`, summary: `Simulated venue: ${coid}` }, (op) => {
+    const st = replay(parseJournal(op.readText(JOURNAL, '')).events);
+    const o = orderOf(st, coid);
+    const text = op.readText(VENUE, null);
     const prior = venueRecords(text).find((r) => r.client_order_id === coid);
-    if (prior) return { answer: prior.answer, duplicate: true, client_order_id: coid, words: 'The venue already has this client order ID; nothing new was placed.' };
+    if (prior) {
+      if (!sameBody(prior, o)) throw new OpError('CONFLICT', `The venue already holds ${coid} as a different order; one client order ID is one order, and nothing new was placed.`);
+      return { answer: prior.answer, duplicate: true, client_order_id: coid, words: 'The venue already has this client order ID; nothing new was placed.' };
+    }
+    if (o.state !== 'SENT') throw new OpError('STATE', `Order ${coid} is ${o.state}; only an order recorded as SENT goes to the venue.`);
     const price = freshClose(st, o.pair, t);
     let answer = 'accepted';
     let words = null;
@@ -388,7 +486,7 @@ function venueSend(ws, coid, { now } = {}) {
       answer = 'rejected';
       words = price === null ? 'The venue has no current price to place a post-only order against.' : 'A post-only order at this price would take liquidity.';
     }
-    const rec = { client_order_id: coid, pair: o.pair, side: o.side, order_type: o.order_type, limit: str(o.limit), quantity: str(o.quantity), answer, words, at: iso(t) };
+    const rec = { client_order_id: coid, ...bodyOf(o), answer, words, at: iso(t) };
     op.write(VENUE, `${text}${text && !text.endsWith('\n') ? '\n' : ''}${JSON.stringify(rec)}\n`);
     return { answer, duplicate: false, client_order_id: coid, words };
   }).result;
@@ -396,7 +494,7 @@ function venueSend(ws, coid, { now } = {}) {
 
 // The venue's answer to a SENT order; one that does not read is UNKNOWN.
 function recordAnswer(ws, coid, reply, { now } = {}) {
-  return journal(ws, `Trader order ${coid} answered`, now, ({ st, append }) => {
+  return journal(ws, 'answer', coid, `Trader order ${coid} answered`, now, ({ st, append }) => {
     const o = orderOf(st, coid);
     if (o.state !== 'SENT') return { status: 'unchanged', ...stateOf(o) };
     const a = reply && reply.answer;
@@ -407,51 +505,78 @@ function recordAnswer(ws, coid, reply, { now } = {}) {
 }
 
 // Reserve, mark sent, send, record the answer. A send that fails leaves the
-// order UNKNOWN, never resent.
+// order UNKNOWN, never resent; an order this call did not mark SENT is never
+// sent by it (red team P1-3).
 function submitIntent(ws, intent, ctx = {}) {
   const r = reserveIntent(ws, intent, ctx);
   if (r.status !== 'reserved') return r;
-  markSent(ws, r.client_order_id, ctx);
+  const s = markSent(ws, r.client_order_id, ctx);
+  if (s.status !== 'saved') return { ...s, status: 'not_sent', intent_id: r.intent_id, sizing: r.sizing, words: `The order was not marked SENT by this call (it is ${s.state}); nothing went to the venue.` };
   let reply;
   try { reply = venueSend(ws, r.client_order_id, ctx); } catch (_) { reply = null; }
   const a = recordAnswer(ws, r.client_order_id, reply, ctx);
   return { status: 'saved', intent_id: r.intent_id, sizing: r.sizing, ...a, words: (reply && reply.words) || a.words };
 }
 
-// After a restart: an order reserved but never sent is cancelled (it is not
-// sent late); one sent with no answer becomes UNKNOWN.
+// Asks the venue's record for one UNKNOWN order inside a journal operation.
+// A record that does not read, or that holds this ID as another order, is
+// INTEGRITY: the order stays UNKNOWN, never NOT_FOUND (red team P1-4, P1-5).
+function reconcileStep({ append, op, t }, o) {
+  const coid = o.client_order_id;
+  const rec = venueRecords(op.readText(VENUE, null)).find((r) => r.client_order_id === coid);
+  if (rec) {
+    if (!sameBody(rec, o)) throw new OpError('INTEGRITY', `The venue holds ${coid} as a different order than the book's; it stays UNKNOWN until this is resolved.`);
+    if (rec.answer !== 'accepted' && rec.answer !== 'rejected') throw new OpError('INTEGRITY', `The venue's answer for ${coid} does not read; it stays UNKNOWN until this is resolved.`);
+    append('reconciled', { client_order_id: coid, state: rec.answer === 'accepted' ? 'ACKED' : 'REJECTED', venue_answer: rec.answer, venue_at: rec.at, words: `The venue has this order (${rec.answer} at ${rec.at}); it fills only from later hours.` });
+    return { status: 'saved', ...stateOf(o) };
+  }
+  const closes = Date.parse(o.sent_at || o.reserved_at) + VENUE_DUPLICATE_WINDOW_MINUTES * MIN;
+  if (t < closes) return { status: 'unchanged', ...stateOf(o), words: `The venue has no record of it, but its duplicate-order window is open until ${iso(closes)}; the order stays UNKNOWN.` };
+  append('reconciled', { client_order_id: coid, state: 'NOT_FOUND', venue_answer: 'not_found', words: `The venue has no order with this ID, and its duplicate-order window closed at ${iso(closes)}.` });
+  return { status: 'saved', ...stateOf(o) };
+}
+
+// After a restart: an order reserved or sent with no outcome on record
+// becomes UNKNOWN (another process may have sent it, so it is never cancelled
+// blind and never sent late), and the venue is asked for every UNKNOWN order.
+// A venue record that does not read is said in words; those orders stay
+// UNKNOWN.
 function recover(ws, { now } = {}) {
-  return journal(ws, 'Trader Paper Book restart', now, ({ st, append }) => {
-    const changed = [];
+  return journal(ws, 'recover', '', 'Trader Paper Book restart', now, (ctx) => {
+    const { st, append } = ctx;
+    const changed = new Map();
     for (const o of st.orders.values()) {
-      if (o.state === 'RESERVED') append('cancelled', { client_order_id: o.client_order_id, words: 'Reserved but never sent before a restart; it is not sent late.' });
-      else if (o.state === 'SENT') append('unknown', { client_order_id: o.client_order_id, words: 'Sent with no answer on record before a restart; it stays UNKNOWN until the venue is asked for it.' });
-      else continue;
-      changed.push(stateOf(o));
+      if (o.state !== 'RESERVED' && o.state !== 'SENT') continue;
+      append('unknown', { client_order_id: o.client_order_id, words: o.state === 'RESERVED' ? 'Reserved with no outcome on record before a restart; it may have been sent, so it stays UNKNOWN until the venue is asked for it.' : 'Sent with no answer on record before a restart; it stays UNKNOWN until the venue is asked for it.' });
+      changed.set(o.client_order_id, o);
     }
-    return { status: changed.length ? 'saved' : 'unchanged', orders: changed };
+    const problems = [];
+    for (const o of st.orders.values()) {
+      if (o.state !== 'UNKNOWN') continue;
+      try {
+        if (reconcileStep(ctx, o).status === 'saved') changed.set(o.client_order_id, o);
+      } catch (err) {
+        if (err.code !== 'INTEGRITY') throw err;
+        problems.push(`${o.client_order_id}: ${err.message}`);
+      }
+    }
+    const out = { status: changed.size ? 'saved' : 'unchanged', orders: [...changed.values()].map(stateOf) };
+    if (problems.length) out.words = problems.join(' ');
+    return out;
   });
 }
 
 // Asks the venue for an UNKNOWN order by its client order ID.
 function reconcile(ws, coid, { now } = {}) {
-  return journal(ws, `Trader order ${coid} reconciled`, now, ({ st, append, op, t }) => {
-    const o = orderOf(st, coid);
+  return journal(ws, 'reconcile', coid, `Trader order ${coid} reconciled`, now, (ctx) => {
+    const o = orderOf(ctx.st, coid);
     if (o.state !== 'UNKNOWN') return { status: 'unchanged', ...stateOf(o) };
-    const rec = venueRecords(op.readText(VENUE, '')).find((r) => r.client_order_id === coid);
-    if (rec) {
-      append('reconciled', { client_order_id: coid, state: rec.answer === 'accepted' ? 'ACKED' : 'REJECTED', venue_answer: rec.answer, words: `The venue has this order (${rec.answer} at ${rec.at}); it fills only from later hours.` });
-      return { status: 'saved', ...stateOf(o) };
-    }
-    const closes = Date.parse(o.sent_at || o.reserved_at) + VENUE_DUPLICATE_WINDOW_MINUTES * MIN;
-    if (t < closes) return { status: 'unchanged', ...stateOf(o), words: `The venue has no record of it, but its duplicate-order window is open until ${iso(closes)}; the order stays UNKNOWN.` };
-    append('reconciled', { client_order_id: coid, state: 'NOT_FOUND', venue_answer: 'not_found', words: `The venue has no order with this ID, and its duplicate-order window closed at ${iso(closes)}.` });
-    return { status: 'saved', ...stateOf(o) };
+    return reconcileStep(ctx, o);
   });
 }
 
 function cancelOrder(ws, coid, { now } = {}) {
-  return journal(ws, `Trader order ${coid} cancelled`, now, ({ st, append }) => {
+  return journal(ws, 'cancel', coid, `Trader order ${coid} cancelled`, now, ({ st, append }) => {
     const o = orderOf(st, coid);
     if (o.state === 'CANCELLED') return { status: 'unchanged', ...stateOf(o) };
     if (o.state !== 'ACKED' && o.state !== 'PARTIAL') throw new OpError('STATE', `Order ${coid} is ${o.state}; only an order the venue acknowledged can be cancelled${o.state === 'UNKNOWN' ? ' (an UNKNOWN order is reconciled first)' : ''}.`);
@@ -478,10 +603,11 @@ function readBar(bar) {
 // One closed hour of a pair: expiries, then the stops and targets of what was
 // held at its open, then close orders, then buys (and the stop of what they
 // filled), then NAV at the hour's end. The same hour again is unchanged;
-// different prices for a recorded hour, or an hour before the last, refused.
+// different prices for a recorded hour, or an hour before the last, refused;
+// for a pair with exposure, an hour that is not the next one is refused (GAP).
 function applyBar(ws, bar, { now } = {}) {
   const b = readBar(bar);
-  return journal(ws, `Trader hour ${b.pair} ${iso(b.t)}`, now, ({ st, append, t }) => {
+  return journal(ws, 'hour', b.key, `Trader hour ${b.pair} ${iso(b.t)}`, now, ({ st, append, t }) => {
     if (b.t + HOUR > t) throw new OpError('INVALID', 'That hour has not closed yet.');
     const list = st.bars.get(b.pair) || [];
     const same = list.find((x) => x.t === b.t);
@@ -489,12 +615,18 @@ function applyBar(ws, bar, { now } = {}) {
       if (same.key === b.key) return { status: 'unchanged', events: [] };
       throw new OpError('CONFLICT', `${b.pair} ${iso(b.t)} is on record with different prices; a recorded hour is never replaced.`);
     }
-    if (list.length && b.t < list[list.length - 1].t) throw new OpError('ORDER', `${b.pair}'s hours apply in order; ${iso(list[list.length - 1].t)} is already on record.`);
+    const last = list.length ? list[list.length - 1].t : null;
+    if (last !== null && b.t < last) throw new OpError('ORDER', `${b.pair}'s hours apply in order; ${iso(last)} is already on record.`);
+    const exposed = [...st.positions.values()].some((p) => p.pair === b.pair && p.state === 'open') || [...st.orders.values()].some((o) => o.pair === b.pair && LIVE.includes(o.state));
+    if (exposed && last !== null && b.t !== last + HOUR) throw new OpError('GAP', `${b.pair} has an open position or a live order and its last hour on record is ${iso(last)}; the next hour applied is ${iso(last + HOUR)}, so no stop, target or fill is skipped.`);
     const hour = iso(b.t);
+    const end = b.t + HOUR;
     const events = [];
     const add = (type, data) => events.push(append(type, data));
     add('bar', { pair: b.pair, hour, ...Object.fromEntries(BAR_FIELDS.map((f) => [f, str(b[f])])) });
     const orders = () => [...st.orders.values()].filter((o) => o.pair === b.pair);
+    // An order fills only from an hour that starts at or after it was sent.
+    const live = (o) => o.live_from !== null && b.t >= o.live_from;
     const stopFill = (p) => (p.stop * (BPS - BigInt(STOP_SLIPPAGE_BPS))) / BPS;
     const exit = (p, price, reason, o = null) => {
       const proceeds = mulFloor(p.quantity, price);
@@ -504,36 +636,42 @@ function applyBar(ws, bar, { now } = {}) {
       const opener = st.orders.get(`cr2-${p.intent_id}`);
       if (opener && (opener.state === 'ACKED' || opener.state === 'PARTIAL')) add('cancelled', { client_order_id: opener.client_order_id, words: `Its position closed (${reason}).` });
     };
+    // An order whose life ends before this hour's end expires first: the hour
+    // cannot tell whether it traded before or after (red team P2-14).
     for (const o of orders()) {
-      if ((o.state === 'ACKED' || o.state === 'PARTIAL') && o.valid_until <= b.t) add('expired', { client_order_id: o.client_order_id, hour, words: `Its life ended at ${iso(o.valid_until)}.` });
+      if ((o.state === 'ACKED' || o.state === 'PARTIAL') && o.valid_until < end) add('expired', { client_order_id: o.client_order_id, hour, words: `Its life ended at ${iso(o.valid_until)}, before ${iso(end)}.` });
     }
     for (const p of [...st.positions.values()].filter((x) => x.pair === b.pair && x.state === 'open')) {
-      if (b.open <= p.stop) exit(p, b.open < stopFill(p) ? b.open : stopFill(p), 'stop_gap');
+      if (b.open <= p.stop) exit(p, lower(b.open, stopFill(p)), 'stop_gap');
       else if (b.low <= p.stop) exit(p, stopFill(p), 'stop');
-      else if (b.high > p.take_profit) exit(p, p.take_profit, 'take_profit');
+      else if (b.high > p.take_profit) exit(p, higher(b.open, p.take_profit), 'take_profit');
     }
     for (const o of orders()) {
       if (o.side !== 'CLOSE_LONG' || o.state !== 'ACKED') continue;
       const p = st.positions.get(o.position_id);
       if (!p || p.state !== 'open') add('cancelled', { client_order_id: o.client_order_id, words: 'Its position closed first.' });
-      else if (b.high > o.limit) exit(p, o.limit, 'close', o);
+      else if (p.quantity > o.quantity) add('cancelled', { client_order_id: o.client_order_id, words: `Its position (${str(p.quantity)}) is larger than the order (${str(o.quantity)}); a close never sells more than its order.` });
+      else if (live(o) && b.high > o.limit) exit(p, higher(b.open, o.limit), 'close', o);
     }
     const share = dec(FILL_SHARE_MAX);
     for (const o of orders()) {
-      if (o.side !== 'OPEN_LONG' || (o.state !== 'ACKED' && o.state !== 'PARTIAL') || !(b.low < o.limit)) continue;
+      if (o.side !== 'OPEN_LONG' || (o.state !== 'ACKED' && o.state !== 'PARTIAL') || !live(o) || !(b.low < o.limit)) continue;
       const lot = dec(o.venue.lot);
       const cap = (mulFloor(b.volume, share) / lot) * lot;
       const left = o.quantity - o.filled;
       const q = left < cap ? left : cap;
       if (q === 0n) continue;
-      const notional = mulCeil(q, o.limit);
+      // At the limit, or at the open when the hour opened below it: never
+      // outside the hour's range (red team P0-2).
+      const price = lower(b.open, o.limit);
+      const notional = mulCeil(q, price);
       const fee = mulCeil(notional, o.fee_rate);
       if (st.cash < notional + fee) continue;
-      add('fill', { client_order_id: o.client_order_id, position_id: o.position_id, hour, quantity: str(q), price: str(o.limit), notional_usd: str(notional), fee_usd: str(fee), fee_kind: o.order_type === 'POST_ONLY' ? 'maker' : 'taker' });
+      add('fill', { client_order_id: o.client_order_id, position_id: o.position_id, hour, quantity: str(q), price: str(price), notional_usd: str(notional), fee_usd: str(fee), fee_kind: o.order_type === 'POST_ONLY' ? 'maker' : 'taker' });
       const p = st.positions.get(o.position_id);
-      if (b.low <= p.stop) exit(p, stopFill(p), 'stop');
+      if (b.low <= p.stop) exit(p, lower(price, stopFill(p)), price <= p.stop ? 'stop_gap' : 'stop');
     }
-    add('mark', { hour_end: iso(b.t + HOUR), nav_usd: orNull(navAt(st, b.t + HOUR)) });
+    add('mark', { hour_end: iso(end), nav_usd: orNull(navAt(st, end)) });
     return { status: 'saved', events: events.map((e) => ({ type: e.type, client_order_id: e.client_order_id, position_id: e.position_id, reason: e.reason, quantity: e.quantity, price: e.price })) };
   });
 }
@@ -560,8 +698,9 @@ function results(ws, { now, btc } = {}) {
     const value = c === null ? null : mulFloor(p.quantity, c);
     if (value === null) { unrealized = null; unknown.push(`${p.pair} has no hourly price within ${NAV_PRICE_FRESH_MINUTES} minutes: ${p.position_id}'s value is unknown.`); } else if (unrealized !== null) unrealized += value - p.cost;
     return {
-      position_id: p.position_id, pair: p.pair, quantity: str(p.quantity), entry_price: str(p.entry_price), stop_loss_price: str(p.stop), take_profit_price: str(p.take_profit),
-      notional_usd: str(mulCeil(p.quantity, p.entry_price)), cost_usd: str(p.cost), planned_loss_at_stop_usd: p.per_unit_loss === null ? null : str(mulCeil(p.quantity, p.per_unit_loss)),
+      // The entry is the average of the fills, floored at 18 places.
+      position_id: p.position_id, pair: p.pair, quantity: str(p.quantity), entry_price: str((p.notional * ONE) / p.quantity), stop_loss_price: str(p.stop), take_profit_price: str(p.take_profit),
+      notional_usd: str(p.notional), cost_usd: str(p.cost), planned_loss_at_stop_usd: p.per_unit_loss === null ? null : str(mulCeil(p.quantity, p.per_unit_loss)),
       price: orNull(c), value_usd: orNull(value), unrealized_pnl_usd: value === null ? null : str(value - p.cost),
     };
   });
@@ -577,7 +716,6 @@ function results(ws, { now, btc } = {}) {
   const start = btc && dec(btc.start_price);
   const end = btc && dec(btc.end_price);
   if (nav !== null && start && end) {
-    const ONE = 10n ** 18n;
     vsBtc = { book_return: str((nav * ONE) / st.funded - ONE), btc_return: str((end * ONE) / start - ONE), relative: str((nav * start * ONE) / (st.funded * end) - ONE) };
   } else unknown.push('No BTC price at the funding and now was given, or NAV is unknown, so the book is not set against BTC.');
   return {

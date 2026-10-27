@@ -29,6 +29,24 @@
 //   - a CLOSE_LONG takes none of the opening checks (risk, drawdown, stop
 //     distance, size): a close only reduces risk. It closes the whole open
 //     quantity of its position.
+//
+// From the red team of 2026-10-27 (no record was ever written under this
+// version before these corrections):
+//   - the 24-hour ceiling counts the planned loss already at the stops
+//     (book.open_risk_usd: open positions and the unfilled part of live buys)
+//     beside the drawdown, and the grant counts what the thesis already holds
+//     at its stops (book.thesis_risk_usd); either unknown refuses (P0-1);
+//   - a limit through the market by more than max_slippage_bps from the
+//     book's price is refused, a buy above it and a sell below it (P0-2);
+//   - the book's price carries its time (book.price_at), held to the same
+//     freshness limit as the reference (P2-9);
+//   - an order halts every intent unless its state is one of RESOLVED, so a
+//     state the engine does not know halts too (P2-10);
+//   - the intent is read from a copy of its own data properties, once, so an
+//     inherited or computed field neither passes nor changes between reads
+//     (P2-11);
+//   - the exports are frozen (P2-13);
+//   - an impossible calendar date or time is refused, never rolled over (P3).
 
 const { ONE } = require('./decimal');
 
@@ -39,18 +57,21 @@ const DAILY_DRAWDOWN_MAX = '0.04';
 const SLIPPAGE_BPS_MAX = 20;
 // Orders that may be live with no answer on record: none of them lets a new
 // intent through (invariant 4).
-const UNRESOLVED = ['RESERVED', 'SENT', 'UNKNOWN'];
+const UNRESOLVED = Object.freeze(['RESERVED', 'SENT', 'UNKNOWN']);
+// The only states that let a new intent through: the venue's answer is on
+// record. Any other state, known or not, halts.
+const RESOLVED = Object.freeze(['ACKED', 'PARTIAL', 'FILLED', 'CANCELLED', 'EXPIRED', 'REJECTED', 'NOT_FOUND']);
 const SIDES = ['OPEN_LONG', 'CLOSE_LONG'];
 const ORDER_TYPES = ['LIMIT', 'POST_ONLY'];
 
 const DEC_RE = /^\d+(\.\d{1,18})?$/;
-const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+const ISO_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,3})?Z$/;
 const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const MINUTE = 60000n;
 const BPS = 10000n;
 
-const INTENT_FIELDS = ['version', 'intent_id', 'thesis_id', 'pair', 'side', 'position_id', 'order_type', 'created_at', 'reference_price', 'reference_at', 'entry_price', 'stop_loss_price', 'take_profit_price', 'risk_ceiling_usd', 'max_slippage_bps', 'valid_until', 'evidence'];
-const RULE_FIELDS = ['stop_min_pct', 'stop_min_atr', 'notional_max_pct', 'price_stale_minutes', 'max_validity_minutes', 'allowlist', 'risk_per_trade_max', 'daily_drawdown_max', 'slippage_bps_max'];
+const INTENT_FIELDS = Object.freeze(['version', 'intent_id', 'thesis_id', 'pair', 'side', 'position_id', 'order_type', 'created_at', 'reference_price', 'reference_at', 'entry_price', 'stop_loss_price', 'take_profit_price', 'risk_ceiling_usd', 'max_slippage_bps', 'valid_until', 'evidence']);
+const RULE_FIELDS = Object.freeze(['stop_min_pct', 'stop_min_atr', 'notional_max_pct', 'price_stale_minutes', 'max_validity_minutes', 'allowlist', 'risk_per_trade_max', 'daily_drawdown_max', 'slippage_bps_max']);
 
 // A plain decimal string (no sign, exponent, NaN or Infinity; at most 18
 // places) as a BigInt scaled by ONE, else null. Never through a float.
@@ -69,14 +90,41 @@ const str = (v) => {
 // neither rounding ever favours more risk.
 const mulFloor = (a, b) => (a * b) / ONE;
 const mulCeil = (a, b) => (a * b + ONE - 1n) / ONE;
-const isoMs = (s) => (typeof s === 'string' && ISO_RE.test(s) && Number.isFinite(Date.parse(s)) ? BigInt(Date.parse(s)) : null);
+// An ISO-8601 UTC time as milliseconds, else null. The calendar is checked
+// first: 2026-02-30 or 24:00 is refused, never rolled over into another day.
+function isoMs(s) {
+  const m = typeof s === 'string' ? ISO_RE.exec(s) : null;
+  if (!m) return null;
+  const [y, mo, d, h, mi, se] = m.slice(1, 7).map(Number);
+  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (mo < 1 || mo > 12 || d < 1 || d > days[mo - 1] || h > 23 || mi > 59 || se > 59) return null;
+  const ms = Date.parse(s);
+  return Number.isFinite(ms) ? BigInt(ms) : null;
+}
+// A copy of a value's own data properties, read once: nothing inherited,
+// nothing computed by a getter, nothing that can change after it was checked.
+// The same copy is what is checked, hashed and recorded.
+function own(v, depth = 0) {
+  if (v === null || typeof v !== 'object') return v;
+  if (depth > 16) return undefined;
+  const data = (x, k) => {
+    const p = Object.getOwnPropertyDescriptor(x, k);
+    return p && 'value' in p ? own(p.value, depth + 1) : undefined;
+  };
+  if (Array.isArray(v)) return Array.from({ length: v.length }, (_, i) => data(v, String(i)));
+  const out = {};
+  for (const k of Object.keys(v)) Object.defineProperty(out, k, { value: data(v, k), enumerable: true, writable: true, configurable: true });
+  return out;
+}
 const posInt = (n) => Number.isSafeInteger(n) && n > 0;
 const text = (s) => typeof s === 'string' && s.trim() !== '';
 
 function validateTradeIntent(intent, book, rules) {
   const refusals = [];
   const refuse = (field, rule, words) => refusals.push({ field, rule, words });
-  const it = intent && typeof intent === 'object' && !Array.isArray(intent) ? intent : null;
+  const copy = own(intent);
+  const it = copy && typeof copy === 'object' && !Array.isArray(copy) ? copy : null;
   const bk = book && typeof book === 'object' && !Array.isArray(book) ? book : null;
   const rl = rules && typeof rules === 'object' && !Array.isArray(rules) ? rules : null;
   if (!it) refuse('intent', 'shape', 'The intent is not an object.');
@@ -149,15 +197,22 @@ function validateTradeIntent(intent, book, rules) {
     return v;
   };
   const price = bookDec('price', 'The current price');
+  const priceAt = isoMs(bk.price_at);
+  if (priceAt === null) refuse('book.price_at', 'unknown', 'The time of the current price is unknown, so its freshness cannot be checked (never read as now).');
 
-  // --- Halt: an order that may be live and unresolved stops every new intent.
+  // --- Halt: an order that may be live and unresolved stops every new intent;
+  // so does one whose state is not one the engine knows to be resolved.
   if (!Array.isArray(bk.orders)) refuse('book.orders', 'unknown', 'The book\'s orders are unknown, so an unresolved order cannot be ruled out.');
   else {
-    const open = bk.orders.filter((o) => !o || typeof o !== 'object' || UNRESOLVED.includes(o.state));
-    if (open.length) refuse('book.orders', 'halt_unresolved', `${open.length} order${open.length === 1 ? ' is' : 's are'} unresolved (${[...new Set(open.map((o) => (o && o.state) || 'unreadable'))].join(', ')}): no new intent until the venue's answer is on record.`);
+    const open = bk.orders.filter((o) => !o || typeof o !== 'object' || !RESOLVED.includes(o.state));
+    if (open.length) refuse('book.orders', 'halt_unresolved', `${open.length} order${open.length === 1 ? ' is' : 's are'} unresolved (${[...new Set(open.map((o) => (o && typeof o.state === 'string' && o.state) || 'unreadable'))].join(', ')}): no new intent until the venue's answer is on record.`);
   }
 
-  // --- Time: no future stamps, a fresh reference, a life still running.
+  // --- Time: no future stamps, a fresh reference and price, a life still running.
+  if (now !== null && priceAt !== null) {
+    if (priceAt > now) refuse('book.price_at', 'future_time', 'The current price is stamped later than now.');
+    else if (staleMin !== null && now - priceAt > staleMin * MINUTE) refuse('book.price_at', 'stale_price', `The current price is older than ${staleMin} minutes.`);
+  }
   if (now !== null) {
     if (t.created_at !== null && t.created_at > now) refuse('created_at', 'future_time', 'created_at is later than now.');
     if (t.reference_at !== null && t.reference_at > now) refuse('reference_at', 'future_time', 'reference_at is later than now.');
@@ -170,6 +225,14 @@ function validateTradeIntent(intent, book, rules) {
   if (price !== null && d.reference_price !== null && Number.isSafeInteger(it.max_slippage_bps)) {
     const gap = price > d.reference_price ? price - d.reference_price : d.reference_price - price;
     if (gap * BPS > BigInt(it.max_slippage_bps) * d.reference_price) refuse('reference_price', 'slippage', `The current price ${str(price)} is more than ${it.max_slippage_bps} bps from the reference price.`);
+  }
+  // A limit through the market: a buy above the price or a sell below it by
+  // more than max_slippage_bps would fill at once at a price the slippage
+  // limit does not allow. A limit resting on the far side is not through it.
+  if (price !== null && d.entry_price !== null && Number.isSafeInteger(it.max_slippage_bps) && it.max_slippage_bps >= 0) {
+    const slip = BigInt(it.max_slippage_bps) * price;
+    if (side === 'OPEN_LONG' && (d.entry_price - price) * BPS > slip) refuse('entry_price', 'through_market', `The buy limit ${str(d.entry_price)} is more than ${it.max_slippage_bps} bps above the current price ${str(price)}.`);
+    if (side === 'CLOSE_LONG' && (price - d.entry_price) * BPS > slip) refuse('entry_price', 'through_market', `The sell limit ${str(d.entry_price)} is more than ${it.max_slippage_bps} bps below the current price ${str(price)}.`);
   }
 
   if (side === 'CLOSE_LONG') {
@@ -197,6 +260,7 @@ function validateTradeIntent(intent, book, rules) {
 
   const nav = bookDec('nav_usd', 'The NAV');
   const dd = bookDec('drawdown_24h_usd', 'The 24-hour drawdown');
+  const openRisk = bookDec('open_risk_usd', 'The planned loss at the stops already open (positions and live buys)');
   const atr = bookDec('atr_14h', 'The 14-hour ATR');
   const lot = bookDec('lot', 'The lot size');
   const minNotional = bookDec('min_notional_usd', 'The venue\'s minimum notional');
@@ -214,18 +278,24 @@ function validateTradeIntent(intent, book, rules) {
 
   if (risk !== null && nav !== null) {
     if (risk > mulFloor(nav, riskMax)) refuse('risk_ceiling_usd', 'risk_cap', `${str(risk)} is above ${str(riskMax * 100n)}% of NAV (${str(mulFloor(nav, riskMax))}).`);
-    if (dd !== null && dd + risk > mulFloor(nav, ddMax)) refuse('risk_ceiling_usd', 'drawdown', `The 24-hour drawdown ${str(dd)} plus this risk is above ${str(ddMax * 100n)}% of NAV (${str(mulFloor(nav, ddMax))}), the hard ceiling.`);
+    // What is already at the stops can still be lost within the 24 hours.
+    if (dd !== null && openRisk !== null && dd + openRisk + risk > mulFloor(nav, ddMax)) refuse('risk_ceiling_usd', 'drawdown', `The 24-hour drawdown ${str(dd)}, the ${str(openRisk)} already at the stops and this risk come to more than ${str(ddMax * 100n)}% of NAV (${str(mulFloor(nav, ddMax))}), the hard ceiling.`);
   }
   // The desk's grant: the gate sizes, Eric decides, the model never chooses.
+  // It bounds the thesis, not each intent: what the thesis already holds at
+  // its stops counts against it.
   const g = bk.grant && typeof bk.grant === 'object' ? bk.grant : null;
   if (!g || g.thesis_id !== it.thesis_id) refuse('book.grant', 'unknown', 'No grant from the desk\'s gate and Eric\'s decision is on record for this thesis, so no risk is allowed.');
   else if (risk !== null) {
+    const used = dec(bk.thesis_risk_usd);
     const suggested = dec(g.suggested_risk_usd);
     const approved = dec(g.pm_approved_risk_usd);
+    if (used === null) refuse('book.thesis_risk_usd', 'unknown', 'The planned loss at the stops this thesis already holds is unknown, so its grant cannot be checked (never read as 0).');
+    const held = used === null ? '' : ` with the ${str(used)} the thesis already holds at its stops`;
     if (suggested === null) refuse('book.grant.suggested_risk_usd', 'unknown', 'The gate\'s suggested risk is unknown.');
-    else if (risk > suggested) refuse('risk_ceiling_usd', 'gate_cap', `${str(risk)} is above the gate's suggested risk ${str(suggested)}.`);
+    else if (used !== null && used + risk > suggested) refuse('risk_ceiling_usd', 'gate_cap', `${str(risk)}${held} is above the gate's suggested risk ${str(suggested)}.`);
     if (approved === null) refuse('book.grant.pm_approved_risk_usd', 'unknown', 'Eric\'s approved risk is unknown.');
-    else if (risk > approved) refuse('risk_ceiling_usd', 'pm_cap', `${str(risk)} is above Eric's approved risk ${str(approved)}.`);
+    else if (used !== null && used + risk > approved) refuse('risk_ceiling_usd', 'pm_cap', `${str(risk)}${held} is above Eric's approved risk ${str(approved)}.`);
   }
 
   let sizing = null;
@@ -260,6 +330,7 @@ function result(refusals, sizing) {
 }
 
 // The exact reading and rounding the Paper Book (core/paper-trader.js) shares.
-const exact = { dec, str, mulFloor, mulCeil, isoMs };
+const exact = Object.freeze({ dec, str, mulFloor, mulCeil, isoMs, own });
 
-module.exports = { validateTradeIntent, VERSION, INTENT_VERSION, INTENT_FIELDS, RULE_FIELDS, RISK_PER_TRADE_MAX, DAILY_DRAWDOWN_MAX, SLIPPAGE_BPS_MAX, UNRESOLVED, exact };
+// Frozen: nothing else in the process can swap the engine or loosen a limit.
+module.exports = Object.freeze({ validateTradeIntent, VERSION, INTENT_VERSION, INTENT_FIELDS, RULE_FIELDS, RISK_PER_TRADE_MAX, DAILY_DRAWDOWN_MAX, SLIPPAGE_BPS_MAX, UNRESOLVED, RESOLVED, exact });
