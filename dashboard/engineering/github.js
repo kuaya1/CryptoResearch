@@ -7,7 +7,8 @@
 // claude/candidate-eng-<n> (and whether it proves the item merged), the check
 // runs on a head, whether main contains the merge, whether the running desk
 // contains it (its own revision against GitHub's compare), and whether main
-// holds a task's admission at a commit (2026-10-26). The optional
+// holds a task's admission at a commit (2026-10-26), and the agent lane's
+// state for its briefing (repoRead, 2026-10-27). The optional
 // token (CR_GITHUB_TOKEN, in the environment only) raises the rate limit; it
 // is never stored, logged or shown.
 
@@ -204,7 +205,16 @@ function makeGithub({ repo = P.REPO, fetchImpl = globalThis.fetch, clock = () =>
     };
   }
 
-  return { readback, checks, contains, pullRequest, pullRequests, mergeProof, commit, fileAt, admissionAt, findAdmissionCommit };
+  // One read of this repository's API, for the agent lane's briefing
+  // (scripts/agent-status.js, 2026-10-27): { ok, body }, or { ok: false,
+  // status, why }. Nothing outside /repos/<this repository>/ is asked.
+  async function repoRead(p) {
+    if (!String(p).startsWith(`/repos/${repo}/`)) return { ok: false, status: 0, why: 'not this repository' };
+    const r = await get(p);
+    return r.status === 200 ? { ok: true, body: r.body } : { ok: false, status: r.status, why: why(r) };
+  }
+
+  return { readback, checks, contains, pullRequest, pullRequests, mergeProof, commit, fileAt, admissionAt, findAdmissionCommit, repoRead };
 }
 
 module.exports = { makeGithub };

@@ -24,6 +24,96 @@ An item that serves none of these is not added, or waits behind the ones that do
 - unknown is never 0;
 - nothing places an order, connects a wallet or exchange, or moves money.
 
+## System Architecture & Conventions
+
+Eric, 2026-10-27 (`audits/2026-10-27-pm-builder/README.md`).
+
+**Topology:**
+
+- **The desk** runs on Render from `main` (`server.js` → `dashboard/hosted.js`). Its records live on Render's disk and never in Git.
+- **The agent lane** builds the Active Backlog below, one task at a time:
+  1. The PM, `agent-builder-lane.yml` running `dashboard/scripts/agent-pm.js`, picks the first `[TODO]`.
+  2. `agent-build.yml` reserves the build in the ledger, then Claude Code builds it in the sandbox with read-only contents and only the Anthropic key.
+  3. The guard re-checks the diff, and the builder App publishes `agent/task-<n>` and opens the pull request.
+  4. `test`, `agent-guard`, `agent-verify` and `agent-review` (ChatGPT) run on it.
+  5. On a pass, the PM posts "PM Site Inspection: PASSED". On a failure, the PM's diagnosis (ChatGPT) and Claude's fix, at most 3 per task version, then `[BLOCKED: Needs Human Architect]`.
+  6. Eric merges.
+- **The cloud routines** build the numbered Autonomous Build Backlog further down; that list is theirs. Deprecated (Eric, 2026-10-27): once the lane is on, `agent-builder-lane.yml` is the only builder on a schedule. The routines (builder A hourly at :55, builder B for the burst) live in claude.ai, outside this repository, and are paused there by Eric; their list stays as history. No workflow here runs `backlog-schedule.js` on a schedule (`dashboard/tests/agent-workflows.test.js`).
+
+**Authority:**
+
+- Only Eric updates `main`, by merging a pull request. A task block on `main` is his authorization for its build and its automatic fixes, as his `agent:build` label is for an issue.
+- The lane writes a task's status only on its candidate branch:
+  - `[IN_PROGRESS: PR #n]` when its pull request opens;
+  - `[BLOCKED: Needs Human Architect]` at a block;
+  - `[DONE]` for a task whose `[IN_PROGRESS]` line reached `main` by its merge.
+- A candidate never adds, edits or reorders a task.
+- Nothing in the lane merges, approves or writes `main`.
+
+**Component contracts:**
+
+- `eng-backend@1` is core logic and server routes: `dashboard/core/**`, `dashboard/server.js`, tests.
+- `eng-app@4` is the browser app and its pure models: `dashboard/web/src/**`, `dashboard/public/**`, tests. It never adds a server route. The lane rebuilds the committed bundle from the source with `main`'s build files, and `agent-verify` checks it.
+
+**Testing:**
+
+- `node dashboard/cli.js test` runs the whole suite on temporary fictional workspaces.
+- Every candidate adds or changes a test of its outcome.
+- The server needs no npm packages.
+- Unknown is said in words, never 0 or "none".
+
+## Active Backlog
+
+The agent lane's queue, built strictly in order. Each block's Status is one of `[TODO]`, `[IN_PROGRESS: PR #<n>]`, `[DONE]` or `[BLOCKED: <reason>]`. Template is `eng-backend@1` or `eng-app@4`. Outcome, Acceptance checks and Negative cases are the task; Files to change and Regression tests are hints. Editing a task's fields makes a new version: the lane builds it fresh, with its own budget.
+
+### TASK-001 · Paper Book cell on the stored book
+- **Status:** [TODO]
+- **Template:** eng-backend@1
+- **Outcome:** The Desk reads the Paper Book's numbers from the stored paper book through one read-only route. `dashboard/core/paper-book.js` gains `paperBookCell(book)`, a pure function over what `require('./paper').book(ws)` returns (`cr.paper-book.v1`), and `dashboard/server.js` serves it at `GET /api/paper/cell` from `paper.book(ws)` inside `coherent`. `computePaperBookSummary` stays as it is.
+- **Acceptance checks:**
+  - `paperBookCell` returns `format` "cr-paper-cell@1", `as_of` from the book, `open_positions`, `open_risk_usd` (the sum of `risk_usd` over positions whose `state` is "open"), `closed`, `measured_closed` and `min_closed` (paper.js `MIN_CLOSED`).
+  - Below `MIN_CLOSED` measured closes it returns `result: { status: "too_few", words }`, the words being the book's own `summary.note`, and no median, hit count or total anywhere in its answer.
+  - At or above it, `result: { status: "measured", median_vs_btc_pct, beat_btc, of }`, copied from the book's `summary` and never recomputed.
+  - `GET /api/paper/cell` answers 200 with that shape on a temporary fictional workspace with no paper records (`open_positions` 0, `result.status` "too_few") and writes nothing.
+  - `dashboard/tests/paper-book.test.js` covers a fictional book with two open positions (risk 100 and 50.25), one closed and one voided; a book with 20 measured closes; an empty book; and a book without `summary`.
+- **Negative cases:**
+  - Never a median, hit rate or total below `MIN_CLOSED`, and never 0 in place of one: the words say too few.
+  - An unknown is never $0. A missing book, or one without `summary`, gives `result: { status: "unknown", words }`. An open position without a numeric `risk_usd` makes `open_risk_usd` null, and `unpriced_open` counts it.
+  - It never reads or changes the portfolio, the ledger, wallets or any record, and requires no outside package. The existing `computePaperBookSummary` tests pass unchanged.
+- **Files to change:**
+  - dashboard/core/paper-book.js
+  - dashboard/server.js
+  - dashboard/tests/paper-book.test.js
+- **Regression tests:**
+  - dashboard/tests/paper-book.test.js
+
+### TASK-002 · Paper Book cell in the Desk status strip
+- **Status:** [TODO]
+- **Template:** eng-app@4
+- **Outcome:** The Desk's KPI strip gains a Paper Book cell, drawn from `GET /api/paper/cell` (TASK-001):
+  - the open paper positions and their open paper risk;
+  - the 30-day result against BTC only once the book has enough closed positions, otherwise its words for too few.
+
+  The words come from a pure `paperCellWords(cell)` in `dashboard/public/watchlist-model.js`. `dashboard/web/src/views/watchlist/StatusStrip.jsx` draws them and opens `#/research?tab=outcomes` on click. The committed bundle is rebuilt by the lane.
+- **Acceptance checks:**
+  - `paperCellWords` turns a `cr-paper-cell@1` answer into a label "Paper book", a figure, and an accessible name that says the cell in full.
+    - The figure for open positions is "2 open · $150.25 at risk".
+    - For a measured result it is "+3.10% vs BTC (12 of 20 beat)", with the sign and two decimals.
+    - For too few, it is the answer's own words.
+  - The cell is one more cell in the strip's panel, with the same hairline. On a phone it steps aside as Total does, and its accessible name keeps it.
+  - It is read once when the Desk opens; a failed read reads "Paper book unknown" with the reason in its tooltip.
+  - `dashboard/tests/paper-cell-words.test.js` covers each case, plus an answer with `open_risk_usd` null and one with `result.status` "unknown".
+- **Negative cases:**
+  - Never "$0" or "0%" for an unknown or a too-few result: the words say it.
+  - No text under 12.5px. Meaning is never colour alone: a rise or fall also has its sign.
+  - Opening the Desk writes nothing and asks no paid provider. Paper figures never enter Portfolio.
+- **Files to change:**
+  - dashboard/public/watchlist-model.js
+  - dashboard/web/src/views/watchlist/StatusStrip.jsx
+  - dashboard/tests/paper-cell-words.test.js
+- **Regression tests:**
+  - dashboard/tests/paper-cell-words.test.js
+
 ## What it does
 
 It closes the loop on one asset at a time:
@@ -214,6 +304,8 @@ Open (Eric):
 - An intent names no ticket, so the engine cannot yet hold `allocated_risk_usd` to the gate's suggested risk or a PM decision (above). Items 73 and 74 check invariant 3's limits only.
 
 ## Autonomous Build Backlog
+
+> Deprecated (Eric, 2026-10-27): the Active Backlog above, under the PM, is the autonomous queue. This list and `backlog-schedule.js` stay for the record and for a hand-run audit; the cloud routines that read it are being paused.
 
 **Each builder run takes the items `dashboard/scripts/backlog-schedule.js` claims for it (up to five, three after the surge), implements and tests them one after another on one branch, and pushes that branch; `backlog-pr` opens its PR and Eric merges it.**
 

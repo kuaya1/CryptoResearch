@@ -56,7 +56,11 @@ test('the build job holds only the Anthropic key and reads the repository; the A
   // and for /revise the pull request, its checks and their workflow runs.
   assert.match(j.reserve, /permissions:\n\s+contents: write[^\n]*\n\s+issues: read[^\n]*\n\s+pull-requests: read[^\n]*\n\s+checks: read[^\n]*\n\s+actions: read[^\n]*\n\s+outputs:/);
   assert.match(j.reserve, /GH_TOKEN: \$\{\{ github\.token \}\}\n/);
-  assert.match(j.reserve, /if \[ "\$EVENT" = issue_comment \]; then\n\s+node dashboard\/scripts\/agent-revise\.js reserve --base "\$MAIN" --out "\$RUNNER_TEMP\/revise"\n\s+else\n\s+node dashboard\/scripts\/agent-guard\.js reserve --base "\$MAIN"\n/);
+  assert.match(j.reserve, /if \[ "\$EVENT" = issue_comment \]; then\n\s+node dashboard\/scripts\/agent-revise\.js reserve --base "\$MAIN" --out "\$RUNNER_TEMP\/reserved"\n\s+elif \[ "\$EVENT" = workflow_dispatch \]; then\n\s+node dashboard\/scripts\/agent-pm\.js reserve --mode "\$MODE" --task "\$TASK" --pr "\$PR" --base "\$MAIN" --out "\$RUNNER_TEMP\/reserved"\n\s+else\n\s+node dashboard\/scripts\/agent-guard\.js reserve --base "\$MAIN"\n/);
+  // The PM's dispatch inputs reach the shell as data, and only from main.
+  assert.match(j.reserve, /MODE: \$\{\{ inputs\.mode \}\}\n\s+TASK: \$\{\{ inputs\.task \}\}\n\s+PR: \$\{\{ inputs\.pr \}\}\n/);
+  assert.doesNotMatch(j.reserve.slice(j.reserve.indexOf('run: |')), /\$\{\{ inputs\./);
+  assert.match(j.reserve, /\(github\.event_name == 'workflow_dispatch' && github\.ref == 'refs\/heads\/main'\)/);
   for (const id of ['build', 'publish', 'record', 'refused']) assert.doesNotMatch(j[id], /AGENT_LEDGER_KEY|OPENAI/, id);
   assert.deepEqual(secretsIn(j.record), []);
   assert.match(FILES[0][1], /^permissions: \{\}$/m);
@@ -112,15 +116,17 @@ test('the builder runs in Claude Code\'s sandbox: the key unset for commands, np
 test('publish leases on the head reserve recorded; a stale build opens no pull request, is recorded so and said on the issue', () => {
   const j = jobs(FILES[0][1]);
   assert.match(j.reserve, /predecessor: \$\{\{ steps\.reserve\.outputs\.predecessor \}\}/);
-  assert.match(j.publish, /outputs:\n\s+state: \$\{\{ steps\.publish\.outputs\.state \}\}\n\s+note: \$\{\{ steps\.publish\.outputs\.note \}\}/);
+  assert.match(j.publish, /outputs:\n\s+state: \$\{\{ steps\.publish\.outputs\.state \}\}\n\s+note: \$\{\{ steps\.publish\.outputs\.note \|\| steps\.apply\.outputs\.note \}\}/);
   assert.match(j.publish, /RESERVATION: \$\{\{ needs\.reserve\.outputs\.reservation \}\}/);
   assert.match(j.publish, /agent-guard\.js publish --base "\$BASE" --tree "\$TREE" --reservation "\$RESERVATION" /);
   const pr = j.publish.slice(j.publish.indexOf('- name: The pull request'));
-  assert.match(pr, /^- name: [^\n]+\n\s+if: steps\.publish\.outputs\.ok == 'true'\n/, 'no pull request for a stale build');
+  assert.match(pr, /^- name: [^\n]+\n\s+id: pr\n\s+if: steps\.publish\.outputs\.ok == 'true'\n/, 'no pull request for a stale build');
   assert.match(j.record, /permissions:\n\s+contents: write[^\n]*\n\s+issues: write[^\n]*\n\s+pull-requests: write[^\n]*\n\s+steps:/);
   assert.match(j.record, /--publish "\$PUBLISH"/);
   const said = j.record.slice(j.record.indexOf('- name: A stale build or revision is said where it was asked for'));
-  assert.match(said, /if: needs\.publish\.outputs\.state == 'stale'\n/);
+  // A backlog task's first build has no issue or pull request to tell; the
+  // PM reads the stale outcome from the ledger and stops for Eric.
+  assert.match(said, /if: needs\.publish\.outputs\.state == 'stale' && needs\.reserve\.outputs\.notify != ''\n/);
   assert.match(said, /NUMBER: \$\{\{ needs\.reserve\.outputs\.notify \}\}\n/);
   assert.match(said, /NOTE: \$\{\{ needs\.publish\.outputs\.note \}\}\n/);
   assert.doesNotMatch(said.slice(said.indexOf('run: |')), /\$\{\{/, 'the note reaches the shell as data, never as text of the script');
@@ -131,22 +137,24 @@ test('/revise: only Eric\'s own new comment on a pull request reserves, the revi
   const text = FILES[0][1];
   const j = jobs(text);
   assert.match(text, /^on:\n {2}issues:\n {4}types: \[labeled\]\n {2}issue_comment:\n {4}types: \[created\]\n/m, 'a new comment only, never an edit');
-  assert.match(text, /group: agent-build-\$\{\{ github\.event_name == 'issue_comment' && format\('comment-\{0\}', github\.event\.comment\.id\) \|\| github\.event\.issue\.number \}\}\n {2}cancel-in-progress: false\n/, 'a comment never cancels a running build');
+  assert.match(text, /group: agent-build-\$\{\{ github\.event_name == 'workflow_dispatch' && 'backlog' \|\| github\.event_name == 'issue_comment' && format\('comment-\{0\}', github\.event\.comment\.id\) \|\| github\.event\.issue\.number \}\}\n {2}cancel-in-progress: false\n/, 'a comment never cancels a running build');
   const cond = j.reserve.slice(j.reserve.indexOf('if:'), j.reserve.indexOf('runs-on:'));
   assert.match(cond, /github\.event_name == 'issue_comment' && github\.event\.issue\.pull_request &&/);
   assert.match(cond, /startsWith\(github\.event\.comment\.body, '\/revise'\) && github\.event\.comment\.user\.login == github\.repository_owner/);
   // The revision's task and issue travel as an artifact, used only at the hash reserve recorded.
-  assert.match(j.reserve, /if: steps\.reserve\.outputs\.ok == 'true' && steps\.reserve\.outputs\.kind == 'revise'\n\s+with:\n\s+name: agent-revise\n/);
+  assert.match(j.reserve, /if: steps\.reserve\.outputs\.ok == 'true' && github\.event_name != 'issues'\n\s+with:\n\s+name: agent-reserve\n/);
   const b = j.build;
-  assert.ok(b.indexOf('echo "${PROMPT_SHA256}  ${RUNNER_TEMP}/revise/task.md" | sha256sum -c --quiet') < b.indexOf('- name: Build (sandboxed)'));
-  assert.match(b, /- name: The task, from the issue as Eric labeled it\n\s+if: needs\.reserve\.outputs\.kind == 'build'\n/);
-  assert.match(j.publish, /echo "\$\{ISSUE_SHA256\}  \$\{RUNNER_TEMP\}\/revise\/issue\.json" \| sha256sum -c --quiet/);
-  assert.match(j.publish, /agent-guard\.js apply --base "\$BASE" [^\n]+ --issue "\$ISSUE"\n/);
-  assert.match(j.publish, /TITLE: \$\{\{ needs\.reserve\.outputs\.title \}\}\n\s+NUMBER: \$\{\{ needs\.reserve\.outputs\.issue \}\}\n/);
+  assert.ok(b.indexOf('echo "${PROMPT_SHA256}  ${RUNNER_TEMP}/reserved/task.md" | sha256sum -c --quiet') < b.indexOf('- name: Build (sandboxed)'));
+  assert.match(b, /- name: The task, from the issue as Eric labeled it\n\s+if: github\.event_name == 'issues'\n/);
+  assert.match(j.publish, /echo "\$\{ISSUE_SHA256\}  \$\{RUNNER_TEMP\}\/reserved\/issue\.json" \| sha256sum -c --quiet/);
+  assert.match(j.publish, /agent-guard\.js apply --base "\$BASE" [^\n]+ --issue "\$ISSUE" --pr "\$PR"\n/);
+  // The title is the one reserve composed from the task it read.
+  assert.match(j.publish, /TITLE: \$\{\{ needs\.reserve\.outputs\.pr_title \}\}\n/);
+  assert.match(j.publish, /--title "\$TITLE"/);
   assert.doesNotMatch(text, /github\.event\.issue\.title/, 'the title comes from the issue reserve read, never the event (a comment\'s event is the pull request)');
   // A refusal of Eric's /revise is said on the pull request, a build that did
   // not start on the issue: no checkout, no secret, the note as data.
-  assert.match(j.refused, /if: needs\.reserve\.outputs\.note != ''\n/);
+  assert.match(j.refused, /if: needs\.reserve\.outputs\.note != '' && github\.event_name != 'workflow_dispatch'\n/, 'a dispatch has no issue to answer');
   assert.match(j.refused, /permissions:\n\s+issues: write[^\n]*\n\s+pull-requests: write[^\n]*\n\s+steps:/);
   assert.match(j.refused, /KIND: \$\{\{ needs\.reserve\.outputs\.kind \}\}\n/);
   assert.match(j.refused, /if \[ "\$KIND" = revise \]; then\n\s+printf 'Revision not started for comment %s: %s/);
@@ -288,4 +296,117 @@ test('the agent policy names only live templates, and its implementation globs s
   }
   assert.ok(policy.ceilings.review_attempts_per_binding >= 1 && policy.ceilings.review_attempts_per_binding <= 3);
   assert.ok(policy.build.max_budget_usd <= policy.ceilings.build_usd_per_day);
+});
+
+// The PM builder (Eric, 2026-10-27; audits/2026-10-27-pm-builder).
+test('the PM runs main\'s code only, one run at a time, with the OpenAI and ledger keys; the App key only sets a block on the branch', () => {
+  const text = read('.github/workflows/agent-builder-lane.yml');
+  for (const u of text.match(/uses:\s*\S+/g)) assert.match(u, /@[0-9a-f]{40}$/, u);
+  assert.match(text, /^on:\n {2}schedule:\n {4}- cron: '0 \*\/6 \* \* \*'\n {2}workflow_dispatch:\n {2}push:\n {4}branches: \[main\]\n {2}workflow_run:\n {4}workflows: \[test, agent-checks, agent-review\]\n {4}types: \[completed\]\n/m);
+  assert.match(text, /^permissions: \{\}$/m);
+  assert.match(text, /concurrency:\n {2}group: agent-pm\n {2}cancel-in-progress: false\n/);
+  const j = jobs(text);
+  assert.deepEqual(Object.keys(j), ['pm', 'status']);
+  assert.deepEqual(secretsIn(j.pm), ['secrets.AGENT_LEDGER_KEY', 'secrets.OPENAI_API_KEY']);
+  assert.match(j.pm, /permissions:\n\s+contents: write[^\n]*\n\s+actions: write[^\n]*\n\s+pull-requests: write[^\n]*\n\s+checks: read[^\n]*\n\s+outputs:/);
+  assert.match(j.pm, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}\n/);
+  assert.doesNotMatch(text, /ref: \$\{\{ github\.event\.(workflow_run\.head|pull_request\.head)/, 'never a candidate\'s code');
+  assert.match(j.pm, /AGENT_PM_ENABLED: \$\{\{ vars\.AGENT_PM_ENABLED \}\}\n/);
+  assert.match(j.pm, /run: node dashboard\/scripts\/agent-pm\.js run\n/);
+  assert.match(j.status, /if: needs\.pm\.outputs\.block_head != ''\n/);
+  assert.match(j.status, /permissions:\n\s+contents: read\n/);
+  assert.match(j.status, /persist-credentials: false/);
+  assert.deepEqual(secretsIn(j.status), ['secrets.BUILDER_APP_KEY']);
+  assert.match(j.status, /permission-contents: write\n/);
+  assert.doesNotMatch(j.status, /permission-(pull-requests|workflows|administration|actions|checks)/);
+  assert.match(j.status, /agent-guard\.js status --issue "\$RUNNER_TEMP\/issue\.json" --to blocked --head "\$HEAD"/);
+  for (const id of Object.keys(j)) assert.doesNotMatch(j[id].slice(j[id].indexOf('steps:')).split('run: ').slice(1).join('\n').split('\n').filter((l) => !/^\s+[A-Z_]+: \$\{\{/.test(l)).join('\n'), /\$\{\{ needs\.|\$\{\{ inputs\./, `${id}: outputs reach the shell as data`);
+  assert.doesNotMatch(text, /gh pr (merge|review)|\/merge\b|auto-?merge|--approve/i, 'nothing here merges or approves');
+  assert.doesNotMatch(read('.github/workflows/agent-build.yml'), /OPENAI/);
+});
+
+test('an eng-app@4 bundle is built by the lane in a sandbox with no network, and agent-verify requires it to be its source\'s build', () => {
+  const b = jobs(FILES[0][1]).build;
+  const step = b.slice(b.indexOf('- name: The browser bundle, built from the builder\'s source (eng-app@4)'), b.indexOf('- name: The change, as data'));
+  assert.ok(b.indexOf('- name: Build (sandboxed)') < b.indexOf('- name: The browser bundle, built from'));
+  assert.match(step, /if: needs\.reserve\.outputs\.template == 'eng-app@4'\n/);
+  assert.match(step, /checkout "\$BASE" -- dashboard\/web\/package\.json dashboard\/web\/package-lock\.json dashboard\/web\/vite\.config\.js/, 'main\'s build files and lockfile');
+  assert.match(step, /npm ci --prefix dashboard\/web --no-audit --no-fund --ignore-scripts\n/);
+  assert.match(step, /bwrap --ro-bind \/ \/ --bind "\$GITHUB_WORKSPACE" "\$GITHUB_WORKSPACE" --tmpfs \/tmp --dev \/dev --proc \/proc \\\n\s+--unshare-all --die-with-parent /);
+  assert.deepEqual(secretsIn(step), []);
+  const v = jobs(FILES[1][1])['agent-verify'];
+  const check = v.slice(v.indexOf('- name: The browser bundle is its source\'s build (eng-app@4)'));
+  assert.ok(v.indexOf('- name: Verify on the merge tree') < v.indexOf('- name: The browser bundle is its source\'s build'));
+  assert.match(check, /if: steps\.task\.outputs\.template == 'eng-app@4'\n/);
+  assert.match(check, /cp "trusted\/dashboard\/web\/\$f" "candidate\/dashboard\/web\/\$f"/, 'main\'s build files, never the candidate\'s');
+  assert.match(check, /git -C candidate status --porcelain -- dashboard\/public\/app/);
+  assert.match(check, /::error title=agent-verify::/);
+});
+
+// GitHub starts no workflow for an event the default GITHUB_TOKEN makes, save
+// workflow_dispatch and repository_dispatch (Eric, 2026-10-27, hardening rule
+// 2). Every push and pull request the builder makes is the App's, so test,
+// agent-checks, agent-review and the rulesets run on them: the job's checkout
+// keeps no credential (git would send that header first and push as
+// github.token), and the remote is the App's before anything is pushed.
+// github.token writes only the ledger branch, which starts nothing, comments,
+// and the PM's dispatch of agent-build.yml.
+test('the builder pushes and opens pull requests with its App token only; github.token writes the ledger, comments and dispatches', () => {
+  const stepsOf = (job) => job.split(/^ {6}- /m).slice(1);
+  const lane = read('.github/workflows/agent-builder-lane.yml');
+  for (const [f, job] of [['agent-build.yml publish', jobs(FILES[0][1]).publish], ['agent-builder-lane.yml status', jobs(lane).status]]) {
+    const steps = stepsOf(job);
+    const checkouts = steps.filter((s) => /actions\/checkout@/.test(s));
+    assert.ok(checkouts.length, f);
+    for (const s of checkouts) assert.match(s, /persist-credentials: false/, `${f}: git keeps no job token to fall back on`);
+    assert.doesNotMatch(job, /github\.token|secrets\.GITHUB_TOKEN/, `${f}: never the default token`);
+    assert.match(job, /private-key: \$\{\{ secrets\.BUILDER_APP_KEY \}\}/, f);
+    const remote = steps.findIndex((s) => /git remote set-url origin/.test(s));
+    assert.ok(remote >= 0, f);
+    assert.match(steps[remote], /TOKEN: \$\{\{ steps\.app\.outputs\.token \}\}\n/, f);
+    assert.match(steps[remote], /git remote set-url origin "https:\/\/x-access-token:\$\{TOKEN\}@github\.com\/\$\{GITHUB_REPOSITORY\}\.git"/, f);
+    for (const re of [/agent-guard\.js publish/, /gh pr create/, /agent-guard\.js status/]) {
+      const i = steps.findIndex((s) => re.test(s));
+      if (i >= 0) assert.ok(i >= remote, `${f}: ${re} runs after the remote is the App's`);
+    }
+    for (const s of steps.filter((x) => /\bgh (pr|api)\b/.test(x))) assert.match(s, /GH_TOKEN: \$\{\{ steps\.app\.outputs\.token \}\}\n/, `${f}: gh as the App`);
+  }
+  assert.match(jobs(FILES[0][1]).publish, /gh pr create --repo "\$GITHUB_REPOSITORY" --head "\$BRANCH" --base main/);
+  // What github.token pushes is the ledger branch, which no workflow listens to.
+  assert.match(read('dashboard/scripts/agent-ledger.js'), /^const REF = 'refs\/heads\/agent-ledger';$/m);
+  const dir = path.join(ROOT, '.github/workflows');
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.yml'))) {
+    const t = fs.readFileSync(path.join(dir, f), 'utf8');
+    const on = t.slice(t.search(/^on:/m)).split(/\n(?=[a-z])/)[0];
+    assert.doesNotMatch(on, /agent-ledger/, `${f} starts on nothing the ledger push makes`);
+    for (const [id, job] of Object.entries(jobs(t))) {
+      if (!/github\.token/.test(job)) continue;
+      assert.doesNotMatch(job, /gh pr create|git push [^\n]*(agent\/|main)|x-access-token:\$\{\{ github\.token/, `${f} ${id}: github.token opens no pull request and pushes no candidate`);
+    }
+  }
+  // The PM's one github.token event that starts a workflow: the dispatch.
+  const pm = read('dashboard/scripts/agent-pm.js');
+  assert.match(pm, /gh\.dispatch\(BUILD_WORKFLOW, 'main', inputs\)/);
+  assert.match(pm, /^const BUILD_WORKFLOW = 'agent-build\.yml';$/m);
+});
+
+// Only the PM builds on a schedule (Eric, 2026-10-27, hardening rule 3). The
+// other scheduled workflows build nothing: agent-review's sweep reviews, the
+// Grok Scout reads the web. The old hourly builders (backlog-schedule.js) are
+// Claude Code cloud routines in claude.ai, outside this repository.
+test('only agent-builder-lane builds on a schedule; no workflow runs the old backlog scheduler', () => {
+  const dir = path.join(ROOT, '.github/workflows');
+  const all = fs.readdirSync(dir).filter((x) => x.endsWith('.yml')).sort().map((f) => [f, fs.readFileSync(path.join(dir, f), 'utf8')]);
+  const onOf = (t) => t.slice(t.search(/^on:/m)).split(/\n(?=[a-z])/)[0];
+  const scheduled = all.filter(([, t]) => /^ {2}schedule:/m.test(onOf(t))).map(([f]) => f);
+  assert.deepEqual(scheduled, ['agent-builder-lane.yml', 'agent-review.yml', 'scout-cron.yml']);
+  for (const [f, t] of all) {
+    const code = t.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    assert.doesNotMatch(code, /backlog-schedule\.js/, `${f} never runs the old scheduler (a comment may name it)`);
+  }
+  for (const f of ['agent-review.yml', 'scout-cron.yml']) {
+    const t = all.find(([x]) => x === f)[1];
+    assert.doesNotMatch(t, /agent-build\.yml|agent-pm\.js|claude-code|anthropic|dispatches|gh workflow run/i, `${f} builds and dispatches nothing`);
+  }
+  assert.match(read('dashboard/scripts/backlog-schedule.js'), /Deprecated \(Eric, 2026-10-27/);
 });
