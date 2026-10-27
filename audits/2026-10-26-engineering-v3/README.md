@@ -53,7 +53,13 @@ configuration only), **code** (a code change in the PR named), **retire**,
 | One open build per issue; a lost runner holds it 65 minutes, then `lost` | Concurrency group only | **code, PR 3**: `decideBuild` refuses while the issue has an attempt with no outcome younger than timeout + 20 min; an older one is recorded `lost` | `agent-ledger.test.js` |
 | A rejected lease is recorded `stale` and commented, never retried | Fails the job | **code, PR 3** | bare-remote tests |
 | Separate `AGENT_LEDGER_KEY` for verdict MACs, never in the build job; fail closed | MAC key derived from `OPENAI_API_KEY` | **code, PR 4**; **config**: Eric creates the secret (step 4) | `agent-review.test.js`, workflow test |
-| `/revise` with authenticated feedback, `revisions_per_task_version: 2` in `cr-agent-policy@2` | None | **code, PR 5** | `agent-revise.test.js` |
+| `/revise` with authenticated feedback, `revisions_per_task_version: 2` in `cr-agent-policy@2` | None | **code, PR 5**: `agent-revise.js` reserve on `issue_comment` `created`; policy `@2` (`@1` kept frozen beside it); `decidePaid` serves builds and revisions (per-issue exclusion, per-version and daily ceilings across both) | `agent-revise.test.js`, `agent-ledger.test.js` |
+| Eric's `/revise`: `created` only, owner, `User`, `OWNER`; edits ignored | None | **code, PR 5**: the workflow's `if` on the event, then the comment read again through the API (same text, never edited, owner) | `agent-revise.test.js`, `agent-workflows.test.js` |
+| agent-guard and agent-verify feedback: app 15368, its suite's workflow run is this repository's `agent-checks.yml`, `head_sha` the predecessor | None; their reasons were only in the step summary | **code, PR 5**: check runs and workflow runs read through the API; the reasons are the run's `failure` annotations titled with the check's name, written by `agent-log.js` | `agent-revise.test.js` (round trip) |
+| agent-review feedback: the ledger's verdict for that head with a valid MAC | Verdicts MAC'd since PR 4 | **code, PR 5**: the binding recomputed from the record's fields; a bad MAC or a binding for other fields is ignored and said | `agent-revise.test.js` |
+| Feedback hashed into `feedback_sha256`, bound with the task SHA-256 and predecessor head; a mismatch refuses | None | **code, PR 5**: the head read before and after the feedback; publish leases on the predecessor | `agent-revise.test.js` (H0/H1, stale) |
+| Structured reasons only, capped at 8,000 characters, quoted as data | None | **code, PR 5**: `<reviewer-notes>` after the task, tags inside neutralized | `agent-revise.test.js` |
+| A third revision refused; a `/revise` during a run refused with nothing spent; the next one gathers every comment not acted on | None | **code, PR 5** | `agent-revise.test.js` |
 | ChatGPT's `engineering_prepare_task` returns an Agent-task issue body, its problems and a prefilled link | Saves a desk draft only | **code, PR 6** | `agent-issue.test.js` |
 | Builder App: Contents and Pull requests read/write, Metadata read; never Administration or Workflows | App exists (`BUILDER_APP_ID`, `BUILDER_APP_KEY` set) | **config**: permissions not readable without the App's key; Eric confirms (step 4) and runs the App probe (step 5) | probe repository |
 | Outside contributors need approval to run workflows | Unknown | **config** (step 8) | repository settings |
@@ -82,6 +88,32 @@ not mistaken for v3:
    mechanism. It is dispatch-only, Eric's own run from `main`, under the
    build's exact settings plus a canary only that run knows, at most $0.50,
    and writes and uploads nothing.
+6. A reservation recorded `lost` is never published, even if its runner
+   comes back (PR 3).
+7. `AGENT_LEDGER_KEY` is given to reserve (it reads verdicts for `/revise`)
+   and to the review workflow, never to build, publish or record (PR 4, 5).
+8. Review feedback for `/revise` comes from the MAC'd ledger verdict only,
+   not from the `agent-review` check run: that run is posted through the API
+   and is not tied to a workflow run that could be authenticated (PR 5).
+9. agent-guard and agent-verify print everything except their reasons with
+   workflow commands stopped (`::stop-commands::` with a random token), so a
+   file name, a commit message or test output cannot forge an annotation
+   (PR 5).
+10. The build job copies main's `builder-rules.md`, `agent-policy.json` and
+    Claude Code's lockfile before switching to the candidate, and reads
+    nothing from the checkout's `.github/` after the switch (PR 5).
+11. A refused `/revise` of Eric's is said on the pull request by a job with
+    no checkout and no secret; a comment by anyone else gets no answer (PR 5).
+12. Comments are gathered up to the triggering one, oldest first, and a
+    comment counts as acted on only when its revision was published; a check
+    still running refuses the revision instead of reading half a result
+    (PR 5).
+
+**Residual risk (PR 5).** `agent-verify` runs the candidate's tests, which
+can write to the job's own output (for example through `/proc/<pid>/fd/1`)
+and so add annotations to the `agent-verify` check run. That is no new
+power: the builder already writes the candidate the next revision reads,
+and the notes stay data under the task's file scope and the guard.
 
 ## Order and stacking
 

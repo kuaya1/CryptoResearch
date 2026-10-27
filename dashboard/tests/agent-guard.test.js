@@ -284,7 +284,7 @@ test('one build per issue at a time: an open build holds the issue for 65 minute
   assert.equal(first.flat.predecessor, 'absent');
   const held = await reserve({ live: issue, run: '31/1', at: '2026-10-26T13:04:00Z' });
   assert.equal(held.flat.ok, 'false');
-  assert.match(held.said, new RegExp(`build ${first.flat.reservation} of issue #7 \\(run 30/1\\) has no outcome yet and is 64 min old; one build per issue at a time, each held up to 65 min`));
+  assert.match(held.said, new RegExp(`build ${first.flat.reservation} of issue #7 \\(run 30/1\\) has no outcome yet and is 64 min old; one build or revision per issue at a time, each held up to 65 min`));
   assert.equal(L.read(r.work).entries.length, 1, 'nothing reserved, nothing spent');
   const later = await reserve({ live: issue, run: '32/1', at: '2026-10-26T13:05:00Z' });
   assert.equal(later.flat.ok, 'true');
