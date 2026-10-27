@@ -182,6 +182,8 @@ Merged into `main` (2026-10-24): items 1–6, through one train branch (`claude/
 
 Merged into `main` (2026-10-25) by `backlog-pr.yml`, three items per PR: 30–32 (PR #9), 33–35 (PR #10, then merged with the autonomy review fixes as `5001595`), 36–38 (PR #11) and 39–41 (PR #12); then five per PR, 42–44 (PR #14) and 45 with 48–51 (PR #15). The workflow deleted each branch, and the boxes were ticked here on `main`.
 
+Merged into `main` (2026-10-25) by Eric: 52–56 (PR #17), 57–61 (PR #19) and 62 (PR #21); ticked here on 2026-10-27. The engineering items 63–66 are on `main` too and are left to the engineering lane.
+
 - [x] Phase 1 tickets, connector tools, PM Decision Card, under-40 filter (f715a3e, live 2026-10-24)
 - [x] Sub-agents `forensic-researcher`, `junior-trader-prosecutor` and `/pilot-run`
 - [x] PM Decision Card polish, drawer nag, pilot on/off wording (954f87d)
@@ -392,10 +394,11 @@ Phase 4 (Eric, 2026-10-25): the open recommendations of `audits/2026-10-25-codex
   - When the dates differ, the answer says the units count as held from the new date instead of the old one, so holdings and results between the two dates change (review, stress test 5). With no `--acquired-at`, it says the original date is kept.
   - Words only: no change to `core/portfolio.js`, a protected path.
   - Tests: the CLI's output and the route's answer name both dates; the same date says nothing changes.
-- [ ] **46. Promotion follow-ups. This touches protected paths (`dashboard/scripts/backlog-promote.js`, `.github/workflows/backlog-pr.yml`), so its PR waits for Eric.**
+- [ ] *(Eric)* **46. Promotion follow-ups. This touches protected paths (`dashboard/scripts/backlog-promote.js`, `.github/workflows/backlog-pr.yml`), so its PR waits for Eric.**
   - After a confirmed merge, the promote job ticks the merged items' boxes on `main` (merge-train.js `untickedOnMain` and `tick`, with `tickMain`'s checkbox-only check) in a second compare-and-swap push. This is item 35's post-merge step, which the 2026-10-25 rewrite left out. Nothing to tick pushes nothing.
   - When `main` moved during a promotion (`base_moved`), the job asks for one re-run of the workflow for the same head (`actions: write`), at most once per head, and says so in the summary.
   - Tests in `backlog-promote.test.js`: ticks after a merge with nothing else changed; nothing to tick pushes nothing; a moved main asks for one re-run, and a second refusal asks for none.
+  - *(2026-10-27, held for Eric)* Since PR #33 `backlog-pr` never merges, so neither step has a merge to follow: Eric closes or rewrites this item. Ticks after his merges are by hand (52–62 were ticked that way); the builders read `Backlog-Item` trailers on `main`, so an unticked box no longer holds them up.
 - [ ] *(Eric)* **47. Native L1 exemption needs a fresh market cap, `cr-ticket-sizing@3`.** `nativeL1Liquid` reads the stored market cap without its age (review, stress test 3).
   - Under @3, the exemption holds only when the packet's market cap is no older than `freshness.price_stale_minutes`. Otherwise the exit check reads "native L1 exemption unavailable: market cap from <time>".
   - Tickets frozen under @2 and @1 keep their rules.
@@ -423,13 +426,13 @@ Phase 5, heavy Track 2 (Eric, 2026-10-25). Eric's message numbered these 42–56
   - Run, in order and deterministically: (1) `autoPilotSync`, (2) `batchGate`, (3) `quoteCandidates` (up to `limit`), (4) `pilotQueue`.
   - Return one combined JSON receipt with the counts and the next steps for Agent 1 and Agent 2.
   - Do not touch `mcp.js` or any protected file. Tests in `tickets.test.js`.
-- [ ] **52. UI: Interactive 4-Test Prosecution Matrix on `PMDecisionCard.jsx`.** In `PMDecisionCard.jsx` (and `inspector.css`), render the Prosecutor's four tests (`mercenary_emissions`, `tax_revenue`, `exit_slippage`, `unverified_claims`) as interactive status pills (`pass`, `fail`, `unknown`). Each expands to show the test's `finding` and its linked `source_ids`, plus `strongest_bull_rebuttal`. Rebuild the bundle. Tests in `web-app.test.js`.
-- [ ] **53. Invalidation proximity radar (`within 10%` warning).** In `dashboard/core/tickets.js` (`invalidationOf` / `view`) and `dashboard/core/brief-daily.js`:
+- [x] **52. UI: Interactive 4-Test Prosecution Matrix on `PMDecisionCard.jsx`.** In `PMDecisionCard.jsx` (and `inspector.css`), render the Prosecutor's four tests (`mercenary_emissions`, `tax_revenue`, `exit_slippage`, `unverified_claims`) as interactive status pills (`pass`, `fail`, `unknown`). Each expands to show the test's `finding` and its linked `source_ids`, plus `strongest_bull_rebuttal`. Rebuild the bundle. Tests in `web-app.test.js`.
+- [x] **53. Invalidation proximity radar (`within 10%` warning).** In `dashboard/core/tickets.js` (`invalidationOf` / `view`) and `dashboard/core/brief-daily.js`:
   - It applies to a non-invalidated ticket with an active price trigger whose fresh stored price is within `10%` above `invalidation_trigger.price_usd` (`(price - stop) / stop <= 0.10`).
   - Attach `near_invalidation: { distance_pct, price_usd, threshold_usd, words }`.
   - Surface a `"Near invalidation"` section in `brief-daily.js` and a warning badge on `PMDecisionCard.jsx`.
   - Rebuild the bundle. Tests in `tickets.test.js` and `brief-daily.test.js`.
-- [ ] **54. UI: Track 2 Pilot Queue & Candidate Board in Research.** In `dashboard/public/views/research.js` (and its model in `dashboard/public/`), add a `"Track 2 Pilot Queue"` section of `pilotCandidates` rows. There is no read route for the rows yet, so add `GET /api/tickets/candidates` in `dashboard/server.js`; it writes nothing. Each row shows:
+- [x] **54. UI: Track 2 Pilot Queue & Candidate Board in Research.** In `dashboard/public/views/research.js` (and its model in `dashboard/public/`), add a `"Track 2 Pilot Queue"` section of `pilotCandidates` rows. There is no read route for the rows yet, so add `GET /api/tickets/candidates` in `dashboard/server.js`; it writes nothing. Each row shows:
   - the grade;
   - the `@5 -> @6` report delta;
   - `$500` / `$2,000` exit-quote readiness;
@@ -437,26 +440,26 @@ Phase 5, heavy Track 2 (Eric, 2026-10-25). Eric's message numbered these 42–56
   - a Pilot opt-in/out toggle button that calls `POST /api/projects/<id>/tickets/pilot`.
 
   Rebuild the bundle. Tests in `web-app.test.js`.
-- [ ] **55. Paper Book MFE / MAE excursion analytics in `paper.js` and Research.** In `dashboard/core/paper.js` (`readPosition`) and the Outcomes Paper UI (`dashboard/public/views/research.js` / `paper-model.js`):
+- [x] **55. Paper Book MFE / MAE excursion analytics in `paper.js` and Research.** In `dashboard/core/paper.js` (`readPosition`) and the Outcomes Paper UI (`dashboard/public/views/research.js` / `paper-model.js`):
   - From the stored hourly price series between `entry.at` and `close.at` (or now), compute `max_favorable_pct` (the highest hourly price against entry) and `max_adverse_pct` (the lowest hourly price against entry).
   - Compute them only when the entry is priced and the series covers the period; `unknown` when no readings exist.
   - Render MFE / MAE columns in the Paper Book table.
   - Rebuild the bundle. Tests in `tickets.test.js`.
-- [ ] **56. UI: Side-by-Side Researcher vs. Prosecutor Disagreement Card on `PMDecisionCard.jsx`.** In `PMDecisionCard.jsx`, when `agent_disagreement` is present, render a structured comparison block:
+- [x] **56. UI: Side-by-Side Researcher vs. Prosecutor Disagreement Card on `PMDecisionCard.jsx`.** In `PMDecisionCard.jsx`, when `agent_disagreement` is present, render a structured comparison block:
   - Agent 1's grade and verdict beside Agent 2's conviction and verdict;
   - `spread_points` and `agent_disagreement_note`;
   - when the project has `spread` alerts, a deep link to the widest diverging rubric category in Compare.
 
   Rebuild the bundle. Tests in `web-app.test.js`.
-- [ ] **57. Fundamental metric floor headroom in `invalidationOf` and `PMDecisionCard.jsx`.** In `dashboard/core/tickets.js` (`invalidationOf`), when `inv.metric` is bound and has a complete 30-day total after the ticket (`status: 'holding'`), include `headroom_pct` = `round(((total_30d_usd - below_30d_usd) / below_30d_usd) * 100, 1)`. Show it on `PMDecisionCard.jsx` and in `invalidation.checks`. Rebuild the bundle. Tests in `tickets.test.js`.
-- [ ] **58. UI: 7-Day Track 2 Telemetry Digest Card in `Research > Outcomes`.** Expose `tickets.digest(ws, { days: 7 })` (from item 34) on `GET /api/tickets/digest` in `dashboard/server.js`. In `Research > Outcomes` (`dashboard/public/views/research.js`), render a `"7-Day Desk Telemetry"` summary bar showing:
+- [x] **57. Fundamental metric floor headroom in `invalidationOf` and `PMDecisionCard.jsx`.** In `dashboard/core/tickets.js` (`invalidationOf`), when `inv.metric` is bound and has a complete 30-day total after the ticket (`status: 'holding'`), include `headroom_pct` = `round(((total_30d_usd - below_30d_usd) / below_30d_usd) * 100, 1)`. Show it on `PMDecisionCard.jsx` and in `invalidation.checks`. Rebuild the bundle. Tests in `tickets.test.js`.
+- [x] **58. UI: 7-Day Track 2 Telemetry Digest Card in `Research > Outcomes`.** Expose `tickets.digest(ws, { days: 7 })` (from item 34) on `GET /api/tickets/digest` in `dashboard/server.js`. In `Research > Outcomes` (`dashboard/public/views/research.js`), render a `"7-Day Desk Telemetry"` summary bar showing:
   - `@6` reports completed;
   - Prosecutor tickets against `desk_gate` passes;
   - invalidations fired;
   - the `ticket_repairs` count.
 
   Rebuild the bundle. Tests in `tickets.test.js` and `web-app.test.js`.
-- [ ] **59. 20-case adversarial simulation suite (`tests/sim/`).** Expand `dashboard/tests/sim/*.test.js` from 10 to 20 deterministic simulation cases. The new cases cover:
+- [x] **59. 20-case adversarial simulation suite (`tests/sim/`).** Expand `dashboard/tests/sim/*.test.js` from 10 to 20 deterministic simulation cases. The new cases cover:
   - a stale price (over 90 minutes) capped at $0 on save (A03);
   - a price drop that lands before the save's lock (A03);
   - a 409 on Approve after invalidation (A04);
@@ -467,20 +470,20 @@ Phase 5, heavy Track 2 (Eric, 2026-10-25). Eric's message numbered these 42–56
   - the `shadow_gate` fixed day-30 cohort against a moving price;
   - MFE/MAE across a price wick (item 55);
   - a corrupt receipt surfaced in `daily_brief` `ticket_repairs` (A07).
-- [ ] **60. One-click `tickets reconcile` repair command and API route.** In `dashboard/core/tickets.js` (`reconcileDesk(ws)`), `dashboard/server.js` (`POST /api/tickets/reconcile`) and `dashboard/cli.js` (`tickets reconcile [--json]`):
+- [x] **60. One-click `tickets reconcile` repair command and API route.** In `dashboard/core/tickets.js` (`reconcileDesk(ws)`), `dashboard/server.js` (`POST /api/tickets/reconcile`) and `dashboard/cli.js` (`tickets reconcile [--json]`):
   - Scan every project for decisions whose post-commit side effects (`paper`, `journal` or `archive`) are missing or incomplete.
   - Repair them idempotently from the existing decision records, and return a deterministic repair report.
   - Add a `"Reconcile desk"` button in `DailyBrief.jsx` when `ticket_repairs` is non-empty.
   - Item 36 already built `reconcileEffects` and the CLI `tickets reconcile`. Build on them, and keep item 36's rule for a failed archive: name it, never archive, because Eric may have restored the project since. The archive repair waits for Eric's word.
   - Rebuild the bundle. Tests in `tickets.test.js`.
-- [ ] **61. Watchlist Exit-Liquidity Matrix (`tickets exit-matrix` & Forensics UI).** In `dashboard/core/tickets.js` (`exitMatrix(ws)`), `dashboard/server.js` (`GET /api/tickets/exit-matrix`) and `dashboard/cli.js` (`tickets exit-matrix [--json]`), return a deterministic table of every verified active project, sorted by grade, with:
+- [x] **61. Watchlist Exit-Liquidity Matrix (`tickets exit-matrix` & Forensics UI).** In `dashboard/core/tickets.js` (`exitMatrix(ws)`), `dashboard/server.js` (`GET /api/tickets/exit-matrix`) and `dashboard/cli.js` (`tickets exit-matrix [--json]`), return a deterministic table of every verified active project, sorted by grade, with:
   - its `$500` and `$2,000` exit cost %;
   - completeness and the missing cost components;
   - the chain and the quote's age;
   - its `native_l1_liquid` status.
 
   Render a compact Exit Matrix view in Research (`dashboard/public/views/research.js`) or Forensics. Rebuild the bundle. Tests in `tickets.test.js`.
-- [ ] **62. Core ticket formatting & geometry extraction (`dashboard/core/ticket-format.js`).** Extract the pure formatting, number rounding, currency and percent helpers, and the trade-plan geometry math (item 49), from `dashboard/core/tickets.js` into `dashboard/core/ticket-format.js`. Re-export any needed helpers from `tickets.js`, so every caller stays 100% compatible and `tickets.js` stays clean, fast and maintainable. Full test suite green.
+- [x] **62. Core ticket formatting & geometry extraction (`dashboard/core/ticket-format.js`).** Extract the pure formatting, number rounding, currency and percent helpers, and the trade-plan geometry math (item 49), from `dashboard/core/tickets.js` into `dashboard/core/ticket-format.js`. Re-export any needed helpers from `tickets.js`, so every caller stays 100% compatible and `tickets.js` stays clean, fast and maintainable. Full test suite green.
 - [ ] **63. Verify engineering worker execution with a web app test comment** *(engineering task eng-20261026-6ed83d v1, sha256 7ec4baefaba2ff25, authorized by Eric; built only through the engineering lane)*
   - Outcome: Claude Code: add one behavior-neutral comment tag ENGINEERING\_LANE\_SMOKE\_20261026 to an existing web app test, run the relevant existing test suite, and return exact-commit verification evidence through the engineering inbox. Exercise the normal claim, numbered admission, candidate and evidence flow.
   - Acceptance: Add exactly one lightweight comment tag ENGINEERING\_LANE\_SMOKE\_20261026 in the existing web app test without changing assertions, fixtures or runtime behavior.
@@ -516,5 +519,62 @@ Phase 5, heavy Track 2 (Eric, 2026-10-25). Eric's message numbered these 42–56
   - Acceptance: Change only the two scoped files, keep the ping independent of database access, preserve other routes and authentication behavior, and submit the candidate with verification evidence for the required independent review.
   - Scope: `dashboard/server.js`, `dashboard/tests/scout-ping.test.js`
   - Not in scope: Unauthenticated ping access, frontdoor changes, new authentication mechanisms, Scout ingestion or persistence, dependency changes and files outside scope.
+
+
+Phase 6, the next phase (Eric's architect request, 2026-10-27; blueprint `audits/2026-10-27-next-phase/README.md`). Repairs first (67–69: the desk says one true thing), then Track 2 improvements (70–72). Each item's `- **Schedule:**` line names what it waits for (`after`) and the only files and folders it may change (`touches`; `web` is `dashboard/web/` with its committed bundle); the scheduler builds items that share nothing side by side and the rest one after another. Every item stays out of `PROTECTED`, runs the whole suite, rebuilds the bundle after a web edit, and is released only by Eric's merge; recovery is reverting that merge. No item stores a new kind of record, starts research, calls a model, or writes except through an existing guarded route on Eric's click. Research, paper positions and real holdings stay apart in every line they produce.
+
+- [ ] **67. The Daily Brief says what is true, urgent first.** In `dashboard/core/brief-daily.js`:
+  - `pilot_exits`: when no active project is in the pilot, the section is one line, "No project is in the pilot, so no exit reading is expected.", with no link and a count of 0. "None right now." stays for pilot projects that all have their reading.
+  - `pm_cards`: risk-reducing tickets first (`proposal_type` `TRIM_EXIT`, which the gate allows only on a held position), then tickets carrying `near_invalidation`, then the rest by waiting time, oldest first. The desk-gate cards (`desk_gate`) follow as one line, "n desk gates waiting: <names>.", linking to `#/research?tab=runs` (the Track 2 Pilot Queue). The section's count stays the number of cards waiting, the desk-gate line counting n.
+  - Unchanged: an unreadable ticket still makes a section partial (A07); the brief's format, section IDs and line shape; `DailyBrief.jsx`.
+  - Tests in `dashboard/tests/brief-daily.test.js`: no pilot project; pilot projects all with readings; one without; a fixture with a trim, a near-invalidation ticket, two ordinary tickets and three desk gates, in the stated order, with the desk-gate line's names and the count 6; an unreadable ticket keeps the section partial.
+  - **Schedule:** touches dashboard/core/brief-daily.js, dashboard/tests/brief-daily.test.js
+- [ ] **68. One trade-plan geometry, `cr-ticket-geometry@2`.** Today the near-invalidation radar measures `(price − stop) / stop` while the card's `to_stop_pct` and the held-position line (`position-brief.js`) measure from the price, so one ticket reads 2.60% and 2.54% on the same screen.
+  - In `dashboard/core/ticket-format.js`: `nearInvalidation` reads the fall from the fresh price to the stop, `(price − stop) / price`, within `NEAR_INVALIDATION_PCT` (10), and carries `version: 'cr-near-invalidation@2'` (item 53's stop-based reading is `@1`, named in the comment). Its words: "a 7.31% fall reaches the invalidation price $x".
+  - `tradePlanGeometry` becomes `cr-ticket-geometry@2`: it adds `plan_reward_risk_ratio = (up − mid) / (mid − stop)` from the entry zone's midpoint when `up > mid > stop`, known without a fresh price; `reward_risk_ratio` stays the one from the fresh price; `words` give both ("reward:risk 2.1:1 at plan, 1.4:1 now", or why "now" is unknown).
+  - In `dashboard/core/brief-daily.js` `planOf`: "R:R 2.1x at plan, 1.4x now" (each "unknown" when absent). On `PMDecisionCard.jsx`'s Trade Plan strip: both, plan first.
+  - Nothing stored changes: both are computed on read. `position-brief.js` already measures from the price and is not edited.
+  - Tests: in `ticket-format.test.js`, the radar, `to_stop_pct` and `position-brief`'s distance agree to the cent on shared fixtures; a price 10.5% above the stop by the old reading (a 9.50% fall) is now near; plan R:R null unless `up > mid > stop`, and known with a stale price. Item 53's expectations in `tickets.test.js` and `brief-daily.test.js` move to the new reading; `web-app.test.js` for the strip. Rebuild the bundle.
+  - **Schedule:** touches dashboard/core/ticket-format.js, dashboard/core/brief-daily.js, web, dashboard/tests/ticket-format.test.js, dashboard/tests/tickets.test.js, dashboard/tests/brief-daily.test.js, dashboard/tests/web-app.test.js
+- [ ] **69. Set the cost where the desk asks for it.** A held position of unknown cost has no result, and `position-brief.js` sends Eric to "Portfolio > Needs attention (portfolio set-cost)", where no form exists; the route `POST /api/portfolio/set-cost` and the CLI do (item 45).
+  - In `dashboard/public/views/portfolio.js` (`attentionRows` and its actions): a row for a position of unknown cost offers "Set cost", a small form with the average cost in USD (empty, never prefilled from a price), an optional acquired date and a reason. It posts exactly what was typed to the existing route, shows the route's own words about the date (`setcost-words.js`), and shows a refusal in the route's words. No other row gets the action.
+  - `position-brief.js` `pnlOf`'s sentence names the control as it is drawn.
+  - Not touched: `dashboard/core/portfolio.js` (protected), the route, the ledger's rules.
+  - Tests: `portfolio-attention.test.js` (the action on unknown-cost rows only), `position.test.js` (the sentence), `web-app.test.js` (the form posts the typed body; a refusal is shown). Rebuild the bundle.
+  - **Schedule:** touches dashboard/public/views/portfolio.js, dashboard/core/position-brief.js, web, dashboard/tests/portfolio-attention.test.js, dashboard/tests/position.test.js, dashboard/tests/web-app.test.js
+- [ ] **70. Decide desk gates together.** Twelve $0 desk-gate cards each take their own Pass or Watch today.
+  - In `dashboard/core/tickets.js`: `decideDeskGates(ws, { action, receipt_ids, request_id, note, dryRun })`, `action` `pass` or `watch` only. It takes desk-gate receipts still waiting for Eric on the latest report and calls the existing `decide` once per receipt, with that card's own `seen`, journal line and Undo: no new decision kind. A dry run lists each project, and for Pass which unheld projects it would archive (a held one never archives). A failure part-way leaves the decisions before it standing and names the rest; the same `request_id` completes them.
+  - Route `POST /api/tickets/desk-gates/decide` in `dashboard/server.js` with `dry_run` and `expect` (the receipt IDs shown): a different set is 409 with nothing written, as the batch gate does. CLI `tickets decide-gates --action pass|watch [--dry-run] [--json]` in `dashboard/cli.js`.
+  - In the Track 2 Pilot Queue (`dashboard/public/views/research.js`): "Watch all n" and "Pass all n" when desk gates wait; each shows the dry run's names first, then posts with `expect`, then each project's result.
+  - Tests: `tickets.test.js` (dry run writes nothing; a changed set is 409; held projects never archive; each decision in its project's journal; replay completes a partial run; approve and halve are refused); `web-app.test.js` for the buttons. Rebuild the bundle.
+  - **Schedule:** touches dashboard/core/tickets.js, dashboard/server.js, dashboard/cli.js, dashboard/public/views/research.js, web, dashboard/tests/tickets.test.js, dashboard/tests/web-app.test.js
+- [ ] **71. Run the pilot cycle from the desk.** `tickets run-cycle` (item 51) runs only from the CLI on this PC; the online desk on Eric's phone cannot run it.
+  - Route `POST /api/tickets/run-cycle` in `dashboard/server.js`: `tickets.runCycle` with `dry_run`, `limit` (1–200, default 10) and `expect` (`{ opted_in, gates_made, quoted }`, the counts shown). A run that would do more than `expect` is 409 with nothing done, as batch-gate and auto-pilot-sync answer. The answer is `runCycle`'s receipt, unchanged.
+  - Exit quotes go through the existing adapter, budget, gates and the restored copy's hold, unchanged. The route starts no research, writes no ticket text and calls no model.
+  - In the Track 2 Pilot Queue (`dashboard/public/views/research.js`): "Run pilot cycle", which shows the dry run's counts and names, then runs with `expect` and shows the receipt's counts and next steps for Agent 1, Agent 2 and Eric.
+  - Tests: `server.test.js` or `tickets.test.js` (a dry run writes nothing and asks no provider, through a stub `fetchImpl` that fails the test if called; `expect` exceeded is 409; a restored copy asks no quote); `web-app.test.js` for the button. Rebuild the bundle.
+  - **Schedule:** touches dashboard/server.js, dashboard/public/views/research.js, web, dashboard/tests/server.test.js, dashboard/tests/tickets.test.js, dashboard/tests/web-app.test.js
+- [ ] **72. Horizon checkpoints in the Daily Brief.** Positions are held three to four months; nothing says where each stands in that time or when its research is due.
+  - In `dashboard/core/brief-daily.js`, a section `horizons` ("Horizons") after `held`, with two kinds of line that never mix, each labeled:
+    - "Held": each open ledger position with a ticket in force (`position-brief.js`): day n of the ticket's horizon from the decision date, the next 30/60/90/120-day mark, the horizon's end, and the age of Claude's current report against `freshness.report_stale_days` ("research due, n days old").
+    - "Paper": each open paper position (`paper.js` `book`): the same timing from its own horizon.
+  - An unknown horizon is said in words (`horizon_missing`), never given a default length; past the end it says so. Read-only; nothing stored.
+  - Add to `dashboard/core/position-brief.js` only what the held line needs (the ticket's horizon and decision date).
+  - Tests in `brief-daily.test.js` and `position.test.js`: held and paper lines labeled and separate; day 61 names day 90 next; past the end; research due with its age; no horizon in words; an unreadable record makes the section partial.
+  - **Schedule:** after 67; touches dashboard/core/brief-daily.js, dashboard/core/position-brief.js, dashboard/tests/brief-daily.test.js, dashboard/tests/position.test.js
+
+Not executable: Eric's decisions and protected work (`audits/2026-10-27-next-phase/README.md` §2C and §4). No builder takes these; each needs Eric's word first.
+
+- *(Eric)* Merge the blueprint PR, then the scheduler PR (`claude/builder-burst`); the burst's capacity starts with the second merge and ends at 2026-10-27 23:00 ET either way.
+- *(Eric)* The research cadence after `cr-at6-surge` ends (2026-10-27 23:00 ET). This phase starts no research.
+- *(Eric)* Item 47 (`cr-ticket-sizing@3`) and binding OLAS's DefiLlama entity.
+- *(Eric)* Solana exits read "at least" because the transfer tax is unknown; a new liquidity rule version is his.
+- *(Eric)* Gemini's hold: `CLAUDE.md` says on hold, the online desk's settings say not.
+- *(Eric)* Connector tools for the cycle and `desk_status` counts (`mcp.js` is protected).
+- *(Eric)* Sending the brief or thesis-break alerts to him (a messaging channel he chooses).
+- *(Eric)* Wallet sync's Alchemy 403 (the key in Render's environment).
+- *(Eric)* Before applying `.github/rulesets/automation-branches.json`, add `refs/heads/claude/backlog-*` and `refs/heads/claude/claims/**` to its `exclude`, or both builders stop.
+- *(Eric)* A rollback drill record (`node dashboard/scripts/rollback-drill.js --from <ref> --record <audit-dir>`) for the scorecard.
+- *(Eric)* Delete builder B after the burst (it stops itself; its cron next matches on 2027-10-27).
 
 - Never in scope: an exchange or wallet connection, placing orders, moving money.
