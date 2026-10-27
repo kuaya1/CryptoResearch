@@ -103,11 +103,11 @@ one pull request per branch and never merges. Eric still merges each one.
 
 | Step | Who | State |
 |---|---|---|
-| Routine A's prompt replaced with `routine-a.txt` (same cron `55 * * * *`, model, tools, environment, repository) | this session | see the hand-back for the result |
-| Routine B created from `routine-b.txt`, cron `CRON_TZ=America/New_York 25 0-22 27 10 *` (00:25–22:25 New York on Oct 27) | this session | see the hand-back |
-| Merge the blueprint PR (`claude/next-phase-blueprint`: Phase 6 items with `Schedule:` lines, 46 retired, 52–66 ticked) | **Eric** | waiting |
+| Routine A's prompt replaced with `routine-a.txt` (same cron `55 * * * *`, model, tools, environment, repository) | this session | **Done** 2026-10-27 03:51 UTC: `trig_01Hw89ZHE8kWp2rQe3Kw3D26`, prompt SHA-256 `6b4cb1b6…547a`, no connectors, as before |
+| Routine B created from `routine-b.txt`, cron `CRON_TZ=America/New_York 25 0-22 27 10 *` (00:25–22:25 New York on Oct 27) | this session | **Done** 03:52 UTC: `trig_01Adw24sNdYAtXTTyu13PqrW`, first run 04:25 UTC, prompt SHA-256 `1d7b9a38…e562`. The create call attached every claude.ai connector of the account by default; they were removed at once (`clear_mcp_connections`), so B has none, like A |
+| Merge the blueprint PR (`claude/next-phase-blueprint`: Phase 6 items 67–72 with `Schedule:` lines, 46 held for Eric, 52–62 ticked) | **Eric** | waiting |
 | Merge the scheduler PR (`claude/builder-burst`) | **Eric** | waiting |
-| Delete routine B after 2026-10-27 23:00 ET | **Eric** (optional) | B stops itself: its prompt reports "burst over" from 2026-10-28T03:00Z, and the scheduler gives builder b nothing outside the burst. Its cron would next match on 2027-10-27. |
+| Delete routine B after 2026-10-27 23:00 ET at claude.ai/code/routines (the API cannot delete a routine) | **Eric** (optional) | B stops itself: its prompt reports "burst over" from 2026-10-28T03:00Z, and the scheduler gives builder b nothing outside the burst. Its cron would next match on 2027-10-27. |
 
 Until the scheduler PR is merged, routine A follows its `LEGACY` section (the
 rule before this change: five a run, cap 15) and routine B reports "scheduler
@@ -162,7 +162,7 @@ on this branch are in the pull request.
 1. Routine A: update its prompt back to `routine-a-before.txt` (RemoteTrigger
    `update`, or the routine's page on claude.ai). The legacy section of the new
    prompt already behaves the same while the scheduler is not on main.
-2. Routine B: delete it (or disable it).
+2. Routine B: disable it (RemoteTrigger `update` with `enabled: false`) or delete it at claude.ai/code/routines.
 3. Code: revert the scheduler PR's merge commit; `backlog-status.js` keeps
    working without it.
 4. Claims: `git push origin --delete claude/claims/item-<n>` for each, after
