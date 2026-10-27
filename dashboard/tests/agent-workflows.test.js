@@ -47,6 +47,11 @@ test('the build job holds only the Anthropic key and reads the repository; the A
   assert.match(j.build, /permissions:\n\s+contents: read\n/);
   assert.match(j.build, /persist-credentials: false/);
   assert.match(j.build, /needs\.reserve\.outputs\.attempt == github\.run_attempt/, 'a re-run of failed jobs builds nothing');
+  // ...and publishes nothing: build's success from the attempt that reserved
+  // carries over to a re-run, whose record job is skipped (red-team review,
+  // 2026-10-27).
+  assert.match(j.publish, /\n\s+if: needs\.build\.result == 'success' && needs\.reserve\.outputs\.attempt == github\.run_attempt\n/, 'a re-run of failed jobs publishes nothing');
+  assert.match(j.record, /\n\s+if: always\(\) && needs\.reserve\.outputs\.ok == 'true' && needs\.reserve\.outputs\.attempt == github\.run_attempt\n/, 'a re-run of failed jobs records nothing');
   assert.deepEqual(secretsIn(j.publish), ['secrets.BUILDER_APP_KEY']);
   assert.match(j.publish, /permission-contents: write\n\s+permission-pull-requests: write\n/);
   assert.doesNotMatch(j.publish, /permission-(workflows|administration|actions|checks)/);

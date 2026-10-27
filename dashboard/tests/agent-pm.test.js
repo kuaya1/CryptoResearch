@@ -249,6 +249,28 @@ function lane(t) {
   return { work, gh, runs, status, dispatched, ctx };
 }
 
+test('a push that landed while its job saw an error published: the ledger\'s publishing line decides, never the job\'s word, and nothing is diagnosed or remediated for it (red-team review, 2026-10-27)', async (t) => {
+  const commit = 'd'.repeat(40);
+  const line = { t: 'publishing', id: 'bd-1', commit, branch: 'agent/task-001', predecessor: 'absent', run: '7/1', at: new Date(T0 - 80 * MIN).toISOString() };
+  const landed = (publish) => [reserve('build', 'bd-1', T0 - 90 * MIN, { run: '7/1' }), line, outcome('bd-1', 'response', { job: 'success', publish })];
+  for (const publish of ['failed', 'uncertain']) {
+    const d = PM.decide(state(TWO, { entries: landed(publish) }), { policy: POLICY, now: T0 });
+    assert.equal(d.action, 'stop', `publish ${publish}: Eric decides, nothing is diagnosed`);
+    assert.match(d.why, new RegExp(`^bd-1 published TASK-001's candidate \\(its job said publish ${publish}; the ledger holds its publishing line for d{12}\\) and no pull request of it is open now`));
+  }
+  // No publishing line: the push did not land (the branch and its line move
+  // together or neither does), so the job's word stands.
+  const none = PM.decide(state(TWO, { entries: [reserve('build', 'bd-1', T0 - 90 * MIN, { run: '7/1' }), outcome('bd-1', 'response', { job: 'success', publish: 'uncertain' })] }), { policy: POLICY, now: T0 });
+  assert.deepEqual([none.action, none.subject], ['diagnose', 'attempt:bd-1']);
+  // The remediation's reserve reads the same rule from the ledger itself.
+  const l = lane(t);
+  assert.ok(L.transact(l.work, { decide: () => ({ append: landed('failed') }) }).committed);
+  const r = await PM.reserve({ mode: 'remediate', id: 'TASK-001', gh: l.gh, cwd: l.work, remote: 'origin', env: { GITHUB_REPOSITORY: REPO, GITHUB_RUN_ID: '9', GITHUB_RUN_ATTEMPT: '1' }, policy: POLICY, now: () => T0, base: git(l.work, ['rev-parse', 'HEAD']), outDir: path.join(l.work, '..', 'out') });
+  assert.equal(r.ok, false);
+  assert.match(r.reasons.join('; '), /^bd-1 of TASK-001 was published \(its job said publish failed; the ledger holds its publishing line for d{12}\); there is nothing to remediate without its pull request$/);
+  assert.equal(L.read(l.work).entries.length, 3, 'nothing reserved');
+});
+
 test('run(): GitHub\'s word on the attempt\'s run, never a clock: held while unread or running; once it ended, recorded orphaned with its audit line, the queue unlocked and the next build dispatched', async (t) => {
   const l = lane(t);
   assert.ok(L.transact(l.work, { decide: () => ({ append: [reserve('build', 'bd-1', T0, { run: '7/1' })] }) }).committed);

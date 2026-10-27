@@ -105,6 +105,16 @@ const paidOf = (entries, id, version) => L.attempts(entries).filter((a) => L.PAI
 // runner's failure, not the task's, and counts against nothing of this
 // version (Eric, 2026-10-27). No clock makes one orphaned.
 const countedOf = (entries, id, version, runs) => paidOf(entries, id, version).filter((a) => !L.orphaned(a, runs));
+// What an attempt's publish did, on the ledger's word first: its publishing
+// line went up with the branch in one atomic push, so a push that landed
+// while the job saw an error (publish "failed" or "uncertain") published all
+// the same, and is never diagnosed or remediated as a build that published
+// nothing (red-team review, 2026-10-27).
+const publishOf = (a, out) => {
+  const line = a.publishing[a.publishing.length - 1];
+  if (!line) return { state: out && out.publish, words: '' };
+  return { state: 'published', commit: line.commit, words: out && out.publish && out.publish !== 'published' ? ` (its job said publish ${oneLine(out.publish, 20)}; the ledger holds its publishing line for ${short(line.commit)})` : '' };
+};
 // The answered diagnosis of `subject` for remediation `round`, if any (its
 // MAC is checked where it is used).
 const diagnosisOf = (entries, { id, version, subject, round }) => [...L.attempts(entries)].reverse().find((a) => {
@@ -240,8 +250,9 @@ function decide(s, { policy, now = Date.now() }) {
   }
   const last = paid[paid.length - 1];
   const out = last.outcomes[last.outcomes.length - 1] || {};
-  if (out.publish === 'published') return { action: 'stop', task: t.id, why: `${last.id} published ${t.id}'s candidate and no pull request of it is open now; Eric decides (reopen it, edit the task for a new version, or mark it)` };
-  if (out.publish === 'stale') return { action: 'stop', task: t.id, why: `${last.id} of ${t.id} was stale (its branch moved after it was reserved); Eric looks at ${B.branchOf(t.id, policy.task_branch_prefix)}` };
+  const pub = publishOf(last, out);
+  if (pub.state === 'published') return { action: 'stop', task: t.id, why: `${last.id} published ${t.id}'s candidate${pub.words} and no pull request of it is open now; Eric decides (reopen it, edit the task for a new version, or mark it)` };
+  if (pub.state === 'stale') return { action: 'stop', task: t.id, why: `${last.id} of ${t.id} was stale (its branch moved after it was reserved); Eric looks at ${B.branchOf(t.id, policy.task_branch_prefix)}` };
   return failing(s, { id: t.id, version: t.version, pr: null, subject: `attempt:${last.id}`, policy, now, says: `${last.reserve.kind} ${last.id} of ${t.id} published nothing (job ${oneLine(out.job || out.state, 20)}${out.publish ? `, publish ${oneLine(out.publish, 20)}` : ''})` });
 }
 
@@ -646,7 +657,8 @@ async function reserve({ mode, id, prNumber = null, gh, cwd, remote = 'origin', 
     const last = paid[paid.length - 1];
     const out = last && last.outcomes[last.outcomes.length - 1];
     if (!last || !out) return refuse(`${id} has no finished attempt at this version to remediate`);
-    if (out.publish === 'published' || out.publish === 'stale') return refuse(`${last.id} of ${id} was ${out.publish}; there is nothing to remediate without its pull request`);
+    const pub = publishOf(last, out);
+    if (pub.state === 'published' || pub.state === 'stale') return refuse(`${last.id} of ${id} was ${pub.state}${pub.words}; there is nothing to remediate without its pull request`);
     subject = `attempt:${last.id}`;
     predecessor = headOf(cwd, remote, branch);
     if (!predecessor) return refuse(`the head of ${branch} could not be read; nothing is reserved`);
@@ -747,4 +759,4 @@ async function main(argv, { now = () => Date.now(), cwd = process.cwd(), env = p
 
 if (require.main === module) main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (err) => { process.stderr.write(`agent-pm: ${String((err && err.message) || err).slice(0, 400)}\n`); process.exitCode = 1; });
 
-module.exports = { BUILD_WORKFLOW, TEST_WORKFLOW, REQUIRED, signoffMark, candidateOf, checkStates, paidOf, diagnosisOf, gather, precheck, inFlight, decide, normalizeDiagnosis, diagnoseMessages, correctivePrompt, remediatePrompt, failingLines, evidenceOf, signoffBody, blockBody, diagnoseAct, run, reserve, inspectText, main };
+module.exports = { BUILD_WORKFLOW, TEST_WORKFLOW, REQUIRED, signoffMark, candidateOf, checkStates, paidOf, publishOf, diagnosisOf, gather, precheck, inFlight, decide, normalizeDiagnosis, diagnoseMessages, correctivePrompt, remediatePrompt, failingLines, evidenceOf, signoffBody, blockBody, diagnoseAct, run, reserve, inspectText, main };
