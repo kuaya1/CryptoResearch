@@ -161,7 +161,7 @@ Eric, 2026-10-27. The contract for the autonomous trader still to be built, so t
 
 1. **Separation of proposal and execution.** The LLM agent is an analyst only. It never holds execution API keys and never signs a transaction. It emits a typed `TradeIntent` (below). An out-of-band deterministic engine intercepts, validates and routes it; while invariant 5 holds, it routes only to the Paper Book.
 2. **Stateless shift work.** The trader runs in discrete, stateless evaluation cycles during the target market's liquidity windows. Each tick re-derives its state from disk only (`DESK_STATE.md`, open position records, fill journals) and exits. No long-lived chat memory.
-3. **Immutable risk boundary.** The risk limits are hard-coded in the engine, outside the model's context window: at most 2% of the portfolio at risk per trade, a stop-loss on every trade, an asset allowlist, and a maximum daily drawdown (figure not set yet). The agent cannot alter, soften or bypass them.
+3. **Immutable risk boundary.** The risk limits are hard-coded in the engine, outside the model's context window: at most 2% of the Paper Book balance (`cr-paper@1`) at risk per trade; a stop-loss on every trade; an asset allowlist; and a hard ceiling on drawdown of 4% of the Paper Book's value in any rolling 24 hours (Eric, 2026-10-27). The agent cannot alter, soften or bypass them.
 4. **Reconciliation and nonce guard.** The engine inherits the ledger's pattern: a hash-chained, append-only record written by compare-and-swap; every action reserved before it is sent; a reservation with no outcome holds its slot for the timeout plus a grace (65 minutes at the builder's 45-minute timeout), then is recorded `lost`; each recorded verdict signed with an HMAC-SHA256 MAC under a key the agent never holds (`AGENT_LEDGER_KEY` in the build lane). When an order placement times out or a broker WebSocket drops, the engine holds the lease pending and reconciles fills before it permits any further action. It never blind-resubmits.
 5. **Sovereign capital governance.** The agent trades only on the simulated Paper Book (`cr-paper@1`, `dashboard/core/paper.js`, `paper/positions.jsonl`; item 18). Promoting any strategy to live execution needs Eric's own explicit, authenticated commit or signature on `main`.
 
@@ -194,6 +194,24 @@ Where it meets today's desk:
 
 - The desk's gate sizes every ticket and a model never chooses an amount (North Star). So `allocated_risk_usd` is checked, never adopted: the engine refuses an intent above the gate's suggested risk, Eric's PM decision (`pm_approved_risk_usd`) or the 2% limit.
 - When it is built, the schema is published as its own file under `templates/schemas/` and never edited after; a change is `cr.trade-intent.v2`.
+
+### Junior Trader roadmap
+
+Eric, 2026-10-27. Built in this order through the backlog (Phase 7, at its end); Eric's merge releases each.
+
+1. **Pre-trade risk engine** (TASK-004, item 73). `validateTradeIntent` in `dashboard/core/trade-risk.js`: a pure check of every intent against the limits of invariant 3.
+2. **Paper trade execution harness** (TASK-005, item 74). Simulated fills for intents the engine passed, with spread and slippage charged against the trader, recorded apart from the PM Paper Book.
+
+| Limit | Value |
+|---|---|
+| Risk per trade | at most 2% of the Paper Book balance (`cr-paper@1`) |
+| Drawdown | at most 4% of the Paper Book's value in any rolling 24 hours, a hard ceiling |
+
+Open (Eric):
+
+- `cr-paper@1` holds no balance: each position is the risk of one PM decision, with no starting capital. Until Eric sets the Paper Book's starting balance, both limits measure against an unknown and the engine refuses every intent (unknown is never 0).
+- The asset allowlist has no pairs yet; an empty allowlist refuses every intent.
+- An intent names no ticket, so the engine cannot yet hold `allocated_risk_usd` to the gate's suggested risk or a PM decision (above). Items 73 and 74 check invariant 3's limits only.
 
 ## Autonomous Build Backlog
 
@@ -627,3 +645,26 @@ Not executable: Eric's decisions and protected work (`audits/2026-10-27-next-pha
 - *(Eric)* Delete builder B after the burst (it stops itself; its cron next matches on 2027-10-27).
 
 - Never in scope: an exchange or wallet connection, placing orders, moving money.
+
+Phase 7, the Junior Trader engine (Eric, 2026-10-27; the roadmap and limits under System Architecture & Conventions). Library code and its tests only: no route, CLI, connector tool or UI calls it yet, no model is called, and nothing places an order, connects a wallet or exchange, or moves money. Each item stays out of `PROTECTED`, runs the whole suite and is released only by Eric's merge.
+
+- [ ] **73. Deterministic pre-trade risk engine (TASK-004, `eng-backend@1`).** A pure function `validateTradeIntent(intent, portfolioState, riskRules)` in a new `dashboard/core/trade-risk.js` (`cr-trade-risk@1`). It reads no file, clock or network; the time comes in `portfolioState.now`.
+  - It returns `{ ok, version, refusals: [{ field, rule, words }] }` with every failed check listed, never only the first; `ok` only with none. Nothing is trimmed or adjusted: an intent passes as written or is refused.
+  - Shape: `version` is `cr.trade-intent.v1`; `action` BUY or SELL; `order_type` LIMIT or POST_ONLY; every price and `allocated_risk_usd` a finite number above 0; `valid_until` an ISO-8601 UTC time after `now`; `thesis_id`, `pair` and the three `evidence` fields present; `max_slippage_bps` at most 20.
+  - Risk cap: `allocated_risk_usd` at most 2% of `portfolioState.paper_balance_usd`.
+  - Drawdown: refused when `portfolioState.drawdown_24h_usd` plus `allocated_risk_usd` is above 4% of `portfolioState.paper_value_usd`, the hard ceiling for the rolling 24 hours.
+  - Stop-loss: present and on the losing side of the entry (below `target_price` for BUY, above it for SELL); `take_profit_price` on the other side.
+  - Allowlist: `pair` must be in `riskRules.allowlist`, compared exactly. An empty or missing allowlist refuses every pair.
+  - Unknown is never 0: a missing or non-numeric balance, value or 24-hour drawdown refuses the intent, with words saying which.
+  - The limits are constants in the module (`RISK_PER_TRADE_MAX` 0.02, `DAILY_DRAWDOWN_MAX` 0.04, `SLIPPAGE_BPS_MAX` 20). `riskRules` may tighten them; a looser value is refused as a rule error, never applied.
+  - Computing `portfolioState` from the Paper Book is not in this item.
+  - Tests in `dashboard/tests/trade-risk.test.js`: a passing BUY and SELL; each rule refused on its own with its field named; several failures listed together; risk at exactly 2% passes and a cent over is refused; drawdown at exactly 4% passes and over it is refused; an unknown balance, value or drawdown refuses; a looser `riskRules` is refused; the inputs are unchanged after the call.
+  - **Schedule:** touches dashboard/core/trade-risk.js, dashboard/tests/trade-risk.test.js
+- [ ] **74. Paper trade execution harness (TASK-005, `eng-backend@1`).** In a new `dashboard/core/paper-fills.js` (`cr-paper-fill@1`), beside `paper.js`:
+  - `simulateFill(intent, validation, quote)`, pure. Only an intent whose `validateTradeIntent` result is `ok` gets a fill; anything else is `not_filled` with its refusals. `quote` is `{ bid, ask, at, slippage_bps }`, given by the caller.
+  - The fill is charged against the trader: a BUY at the ask plus `slippage_bps`, a SELL at the bid less it. A LIMIT fills only when that price is at or better than `target_price`; a POST_ONLY that would cross the spread is not filled; slippage above the intent's `max_slippage_bps` is not filled; a quote at or after `valid_until` is `expired`.
+  - Quantity is `allocated_risk_usd / |fill price − stop_loss_price|`; a stop at the fill price is not filled. The fill states its spread and slippage cost in USD; fees are unknown and said so, never 0.
+  - A missing bid, ask or slippage is `not_filled`, said in words, never a fill at a guessed price.
+  - `recordFill(ws, fill)` appends a filled result to its own create-only `paper/fills.jsonl` through `runOp`, as `paper.js` appends; the same intent again (by its SHA-256) is `unchanged`. Fills never enter `paper/positions.jsonl`, the PM Paper Book's counts or Portfolio. `paper.js` is read, not edited.
+  - Tests in `dashboard/tests/paper-fills.test.js` (temporary workspaces): BUY and SELL fill prices with spread and slippage; a LIMIT not reached; a POST_ONLY that crosses; slippage over the cap; expired; a refused validation never fills; unknown quote fields; quantity from the stop distance; the same intent recorded twice is `unchanged`; `paper.book` reads the same before and after a fill.
+  - **Schedule:** after 73; touches dashboard/core/paper-fills.js, dashboard/tests/paper-fills.test.js
