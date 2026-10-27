@@ -134,6 +134,9 @@ test('failing tests, a deleted test and a change with no test are refused', (t) 
   const failing = run(mergeTree(t, { 'dashboard/core/widget.js': WIDGET_BEFORE }, { 'dashboard/core/widget.js': WIDGET_AFTER, 'dashboard/tests/widget.test.js': WIDGET_TEST.replace("size(' ab '), 2", "size(' ab '), 4") }));
   assert.equal(failing.ok, false);
   assert.match(failing.reasons[0], /the named tests fail on the merge tree \(exit 1; 1 of 2 failed\)/);
+  assert.deepEqual(failing.reasons.slice(1), ['failing: surrounding spaces do not count'], 'the failing test is named, the file line left out');
+  assert.deepEqual(V.failingReason([]), []);
+  assert.deepEqual(V.failingReason(['a', 'b', 'c', 'd', 'e', 'f', 'g']), ['failing: a; b; c; d; e (and 2 more)']);
   const deleted = run(mergeTree(t, { 'dashboard/core/widget.js': WIDGET_BEFORE, 'dashboard/tests/old.test.js': lines("require('node:assert').ok(require('../core/widget'));") }, { 'dashboard/core/widget.js': WIDGET_AFTER, 'dashboard/tests/old.test.js': null, 'dashboard/tests/widget.test.js': WIDGET_TEST }));
   assert.match(deleted.reasons.join('\n'), /old\.test\.js is deleted/);
   const untested = run(mergeTree(t, { 'dashboard/core/widget.js': WIDGET_BEFORE }, { 'dashboard/core/widget.js': WIDGET_AFTER }));

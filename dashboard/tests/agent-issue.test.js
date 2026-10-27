@@ -67,13 +67,14 @@ test('design is eng-docs@1, explore and anything else is refused', () => {
   assert.match(A.agentIssue({ ...backend(), intent: 'deploy' }, { policy: POLICY }).refused, /an Agent task is implement \(eng-backend@1\) or design \(eng-docs@1\)/);
 });
 
-test('a missing or misplaced test, an empty negative case and a path outside the template are the lane\'s own problems', () => {
+test('tests are hints: none named is no problem and one outside the paths is the build\'s to change; a misplaced test, an empty negative case and a path outside the template are the lane\'s own problems', () => {
   const none = A.agentIssue(backend({ tests: [] }), { policy: POLICY });
-  assert.equal(none.ok, false);
-  assert.ok(none.problems.includes('"Regression tests" is empty'));
-  assert.ok(none.problems.includes('"Regression tests" names no test file under dashboard/tests/ (eng-backend@1 needs one)'));
+  assert.equal(none.ok, true, none.problems.join('; '));
+  assert.match(none.body, /### Regression tests\n\n_No response_\n/);
+  assert.deepEqual(G.taskOf({ number: 7, title: none.title, body: none.body }, { policy: POLICY }).tests, []);
   const outside = A.agentIssue(backend({ tests: ['dashboard/tests/other.test.js'] }), { policy: POLICY });
-  assert.deepEqual(outside.problems, ['the regression test dashboard/tests/other.test.js is not under "Files to change", so the build could not change it']);
+  assert.deepEqual(outside.problems, []);
+  assert.equal(outside.ok, true);
   const notTest = A.agentIssue(backend({ tests: ['dashboard/core/widget.js'] }), { policy: POLICY });
   assert.ok(notTest.problems.includes('dashboard/core/widget.js is not a test file under dashboard/tests/ (dashboard/tests/<name>.test.js)'));
   assert.ok(A.agentIssue(backend({ non_goals: [] }), { policy: POLICY }).problems.includes('"Negative cases" is empty'));

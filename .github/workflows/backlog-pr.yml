@@ -78,7 +78,9 @@ jobs:
             echo "go=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git fetch -q origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+          # The repository is private: the fetch carries the job's token as a
+          # header, never written to the git config.
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" fetch -q origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
           base=$(git rev-parse origin/main)
           commits=$(git log --format='- `%h` %s' "$base..$SHA")
           counts="No test counts were found for this run."
@@ -129,12 +131,16 @@ jobs:
         id: merge
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           BASE: ${{ needs.pr.outputs.base }}
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           SHA: ${{ github.event.workflow_run.head_sha }}
           NUMBER: ${{ needs.pr.outputs.number }}
         run: |
-          git fetch -q origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+          # The repository is private: the fetch carries this job's read-only
+          # token as a header, never written to the git config, and no later
+          # step (where branch code runs) has it.
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" fetch -q origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
           cp dashboard/scripts/backlog-promote.js "$RUNNER_TEMP/backlog-promote.js"
           node "$RUNNER_TEMP/backlog-promote.js" compose --base "$BASE" --head "$SHA" --message "Merge pull request #$NUMBER from $GITHUB_REPOSITORY_OWNER/$BRANCH"
       - uses: actions/setup-node@v4

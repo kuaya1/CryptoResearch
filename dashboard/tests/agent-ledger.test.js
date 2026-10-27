@@ -139,21 +139,41 @@ test('builds of one task version count together whichever commit of main each st
   assert.equal(L.decideBuild(two, args({ ...bind('m3'), issue: 8 }, '3/1')).action, 'build', 'another issue');
 });
 
-test('builds: one per issue at a time; an open one is recorded lost after the hold, frees the issue and still counts', () => {
+test('builds: one per issue at a time; an open one is recorded orphaned after 60 minutes, frees the issue and consumes no attempt', () => {
   const bind = (issue = 7) => ({ kind: 'build', issue, task_sha256: 'a'.repeat(64), base: 'm1', predecessor: 'absent' });
   const reserve = (id, run, b, at) => ({ t: 'reserve', kind: 'build', id, binding: L.bindingOf(b), bind: b, run, usd: 8, day: '2026-10-26', at });
   const args = (b, run, now = NOW) => ({ binding: L.bindingOf(b), bind: b, ceilings: { ...CEIL, builds_per_day: 9, build_usd_per_day: 99 }, now, usd: 8, run });
-  const open = [reserve('bd-1', '1/1', bind(), new Date(NOW - 64 * 60000).toISOString())];
-  assert.match(L.decideBuild(open, args(bind(), '2/1')).why, /build bd-1 of issue #7 \(run 1\/1\) has no outcome yet and is 64 min old; one build or revision per issue at a time, each held up to 65 min/);
+  const open = [reserve('bd-1', '1/1', bind(), new Date(NOW - 60 * 60000).toISOString())];
+  assert.match(L.decideBuild(open, args(bind(), '2/1')).why, /build bd-1 of issue #7 \(run 1\/1\) has no outcome yet and is 60 min old; one build, revision or remediation per task at a time, each held up to 60 min/, 'exactly 60 minutes still holds');
   assert.equal(L.decideBuild(open, args(bind(8), '2/1')).action, 'build', 'another issue is not held');
   assert.equal(L.decideBuild([...open, { t: 'outcome', id: 'bd-1', state: 'unknown' }], args(bind(), '2/1')).action, 'build', 'an outcome, even unknown, frees the issue');
-  assert.match(L.decideBuild([reserve('bd-1', '1/1', bind(), 'not a time')], args(bind(), '2/1')).why, /has no outcome yet; one build or revision per issue/, 'an unreadable time holds the issue');
+  assert.match(L.decideBuild([reserve('bd-1', '1/1', bind(), 'not a time')], args(bind(), '2/1')).why, /has no outcome yet; one build, revision or remediation per task/, 'an unreadable time holds the issue');
   const later = L.decideBuild(open, args(bind(), '2/1', NOW + 60000));
   assert.equal(later.action, 'build');
-  assert.deepEqual(later.lost, ['bd-1']);
-  assert.deepEqual(later.append.map((e) => [e.t, e.id, e.state]), [['outcome', 'bd-1', 'lost'], ['reserve', later.id, undefined]]);
-  assert.match(later.append[0].error, /no outcome 65 min after it was reserved/);
+  assert.deepEqual(later.orphaned, ['bd-1']);
+  assert.deepEqual(later.append.map((e) => [e.t, e.id, e.state]), [['outcome', 'bd-1', 'orphaned'], ['reserve', later.id, undefined]]);
+  assert.match(later.append[0].error, /no outcome 61 min after it was reserved/);
+  assert.equal(later.append[0].note, 'Orphaned attempt expired after 60m; unlocking queue');
+  assert.equal(L.ORPHAN_NOTE, later.append[0].note);
+  assert.equal(L.LEASE_TTL_MINUTES, 60);
+  assert.equal(L.LEASE_TTL_MS, 3600000);
+  // The orphan consumes none of the version's two builds: a second may run.
   const after = [...open, ...later.append, { t: 'outcome', id: later.id, state: 'response' }];
-  assert.match(L.decideBuild(after, args(bind(), '3/1', NOW + 120000)).why, /2 paid builds for this version/, 'the lost build still counts');
-  assert.equal(L.BUILD_GRACE_MINUTES, 20, 'a 45-minute build is held 65 minutes');
+  assert.equal(L.decideBuild(after, args(bind(), '3/1', NOW + 120000)).action, 'build', 'the orphaned build does not count');
+  const third = [...after, reserve('bd-3', '3/1', bind(), new Date(NOW + 120000).toISOString()), { t: 'outcome', id: 'bd-3', state: 'failed' }];
+  assert.match(L.decideBuild(third, args(bind(), '4/1', NOW + 180000)).why, /2 paid builds for this version/, 'two that ran to an outcome use the version up');
+  // Today's count and dollars still count it: a runner that keeps dying is bounded.
+  const daily = { ...args(bind(), '3/1', NOW + 120000), ceilings: { ...CEIL, builds_per_day: 2, build_usd_per_day: 99 } };
+  assert.match(L.decideBuild(after, daily).why, /2 paid builds today/);
+  // One recorded before 2026-10-27 as 'lost' is the same; a real outcome that
+  // arrives later (the runner came back) makes it count again.
+  assert.equal(L.orphaned({ outcomes: [{ state: 'lost' }] }), true);
+  assert.equal(L.orphaned({ outcomes: [{ state: 'orphaned' }, { state: 'response' }] }), false);
+  const late = [...after, { t: 'outcome', id: 'bd-1', state: 'response' }];
+  assert.match(L.decideBuild(late, args(bind(), '3/1', NOW + 120000)).why, /2 paid builds for this version/, 'the runner came back: it counts');
+  // orphanLines: only paid attempts with no outcome, only past the lease.
+  assert.deepEqual(L.orphanLines(open, NOW), [], '60 minutes is not past the lease');
+  assert.deepEqual(L.orphanLines(open, NOW + 1).map((e) => [e.id, e.state, e.note]), [['bd-1', 'orphaned', L.ORPHAN_NOTE]]);
+  assert.deepEqual(L.orphanLines([...open, { t: 'outcome', id: 'bd-1', state: 'unknown' }], NOW + 60000), [], 'an outcome, even unknown, is not an orphan');
+  assert.deepEqual(L.orphanLines([{ t: 'reserve', kind: 'review', id: 'rv-1', at: new Date(NOW - 99 * 60000).toISOString() }], NOW), [], 'a review is reconciled, never orphaned');
 });

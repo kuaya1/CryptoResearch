@@ -97,8 +97,9 @@ function gatherComments(list, { owner, upTo, acted = new Map() }) {
 // The latest agent-guard or agent-verify check run at `head` that GitHub
 // Actions made from agent-checks.yml of this repository at that head, with
 // its reasons (error annotations titled with the check's name). Any other
-// check run of that name is said and not read.
-async function checkFeedback(gh, { repo, head, name }) {
+// check run of that name is said and not read. The PM (agent-pm.js) reads
+// `test` the same way, from test.yml.
+async function checkFeedback(gh, { repo, head, name, workflow = CHECKS_WORKFLOW }) {
   const runs = await gh.checkRuns(head, name);
   if (!runs) return { name, state: 'unreadable', reasons: [], ignored: [] };
   const ignored = [];
@@ -107,10 +108,10 @@ async function checkFeedback(gh, { repo, head, name }) {
     const app = cr.app || {};
     if (app.id !== ACTIONS_APP_ID) { ignored.push(`${name} check run ${cr.id} is from ${oneLine(app.slug || app.name, 60) || 'an unknown app'} (app ${Number.isInteger(app.id) ? app.id : 'unknown'}), not GitHub Actions`); continue; }
     const wr = await gh.runsForSuite(cr.check_suite && cr.check_suite.id);
-    const from = (wr || []).find((w) => w && w.path === CHECKS_WORKFLOW && w.repository && w.repository.full_name === repo && w.head_sha === head);
+    const from = (wr || []).find((w) => w && w.path === workflow && w.repository && w.repository.full_name === repo && w.head_sha === head);
     if (!from) {
       const said = (wr || []).map((w) => `${oneLine(w && w.path, 80) || 'no path'} of ${oneLine(w && w.repository && w.repository.full_name, 80) || 'unknown'}`).join(', ');
-      ignored.push(`${name} check run ${cr.id} is not from ${CHECKS_WORKFLOW} of ${repo} at this head (its workflow run: ${said || 'none found'})`);
+      ignored.push(`${name} check run ${cr.id} is not from ${workflow} of ${repo} at this head (its workflow run: ${said || 'none found'})`);
       continue;
     }
     if (cr.status !== 'completed') return { name, state: 'running', reasons: [], ignored, id: cr.id };
@@ -290,7 +291,7 @@ async function reserve({ event, gh, cwd, env = process.env, now = () => Date.now
 
   const bind = { kind: 'revise', issue, task_sha256: task.body_sha256, pr: prNumber, base: mergeBase, predecessor, feedback_sha256: feedbackSha, comments: comments.take.map((x) => x.id) };
   const run = `${env.GITHUB_RUN_ID}/${env.GITHUB_RUN_ATTEMPT}`;
-  const holdMs = (policy.build.timeout_minutes + L.BUILD_GRACE_MINUTES) * 60000;
+  const holdMs = L.LEASE_TTL_MS;
   const d = L.transact(cwd, {
     remote,
     decide: (entries) => {
@@ -302,7 +303,7 @@ async function reserve({ event, gh, cwd, env = process.env, now = () => Date.now
   });
   if (d.error || d.action !== 'revise') return refuse(d.error || d.why);
   const ignored = [...comments.ignored, ...checks.flatMap((ch) => ch.ignored), ...review.ignored];
-  return { ok: true, reservation: d.id, lost: d.lost || [], issue, pr: prNumber, task, predecessor, base: mergeBase, comments: bind.comments, checks, review, ignored, feedback_sha256: feedbackSha, prompt_sha256: sha256(prompt), issue_sha256: sha256(issueJson), holdMs };
+  return { ok: true, reservation: d.id, orphaned: d.orphaned || [], issue, pr: prNumber, task, predecessor, base: mergeBase, comments: bind.comments, checks, review, ignored, feedback_sha256: feedbackSha, prompt_sha256: sha256(prompt), issue_sha256: sha256(issueJson), holdMs };
 }
 
 // --- CLI ---------------------------------------------------------------------
@@ -321,7 +322,7 @@ function summaryOf(r, { maxUsd }) {
     ...r.checks.map((ch) => `- ${ch.name}: ${SOURCE_WORDS[ch.state] || `${ch.state}, ${ch.reasons.length} ${ch.reasons.length === 1 ? 'reason' : 'reasons'}`}`),
     `- agent-review: ${review}`,
     `- Feedback SHA-256 ${r.feedback_sha256}; task SHA-256 ${r.prompt_sha256}`,
-    ...(r.lost.length ? [`- Recorded as lost first (no outcome after ${Math.round(r.holdMs / 60000)} min): ${r.lost.join(', ')}`] : []),
+    ...(r.orphaned.length ? [`- ${L.ORPHAN_NOTE}: ${r.orphaned.join(', ')} recorded orphaned first (no outcome after ${Math.round(r.holdMs / 60000)} min)`] : []),
     ...(r.ignored.length ? ['', 'Not read:', ...r.ignored.map((x) => `- ${x}`)] : []),
   ].join('\n');
 }
@@ -339,7 +340,7 @@ async function main(argv, { now = () => Date.now(), cwd = process.cwd(), env = p
     out({ ok: false, kind: 'revise', note: r.silent ? '' : oneLine(r.reasons.join('; '), 1500) }, `### Not revised\n\n${r.reasons.map((x) => `- ${x}`).join('\n')}`);
     return 0;
   }
-  out({ ok: true, kind: 'revise', reservation: r.reservation, attempt: env.GITHUB_RUN_ATTEMPT, issue: r.issue, notify: r.pr, pr: r.pr, title: r.task.title, template: r.task.template, task_sha256: r.task.body_sha256, predecessor: r.predecessor, base: r.base, checkout: r.predecessor, prompt_sha256: r.prompt_sha256, issue_sha256: r.issue_sha256, feedback_sha256: r.feedback_sha256 }, summaryOf(r, { maxUsd: policy.build.max_budget_usd }));
+  out({ ok: true, kind: 'revise', reservation: r.reservation, attempt: env.GITHUB_RUN_ATTEMPT, issue: r.issue, notify: r.pr, pr: r.pr, title: r.task.title, pr_title: `agent: ${r.task.title} (#${r.issue})`, template: r.task.template, task_sha256: r.task.body_sha256, predecessor: r.predecessor, base: r.base, checkout: r.predecessor, prompt_sha256: r.prompt_sha256, issue_sha256: r.issue_sha256, feedback_sha256: r.feedback_sha256 }, summaryOf(r, { maxUsd: policy.build.max_budget_usd }));
   return 0;
 }
 

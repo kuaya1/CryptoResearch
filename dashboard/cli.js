@@ -175,6 +175,7 @@ Data, jobs and maintenance
                                          folder, check records, originals and research state; no provider
                                          is asked for anything (the restored copy holds research)
   scout list | scout status              Grok Scout's items and its last brief (read only)
+  system briefing [--json]               the agent lane now: status, merged today, the open candidate, next task (GitHub, read only)
   restored-copy status | restored-copy release --confirm
                                          a restored copy holds research until released here
                                          the backup key is CR_BACKUP_KEY on the desk and on this PC
@@ -329,6 +330,15 @@ async function run(argv) {
     const file = path.resolve(need(sub, 'restore-package <file> --to <empty folder>'));
     const dest = need(one(flags.to), '--to <empty folder> required');
     return require('./core/exporter').restorePackage(JSON.parse(fs.readFileSync(file, 'utf8')), path.resolve(dest));
+  }
+  // The agent lane's briefing (scripts/agent-status.js): GitHub only, read
+  // with CR_GITHUB_TOKEN (else GH_TOKEN); no workspace and nothing stored.
+  if (cmd === 'system') {
+    if (sub !== 'briefing') throw Object.assign(new Error('system briefing'), { code: 'USAGE' });
+    const S = require('./scripts/agent-status');
+    const token = process.env.CR_GITHUB_TOKEN || process.env.GH_TOKEN || '';
+    const b = await S.deskBriefing({ github: require('./engineering/github').makeGithub({ env: { CR_GITHUB_TOKEN: token } }) });
+    return flags.json || process.argv.includes('--json') ? b : { _text: `${S.briefingText(b)}\n` };
   }
   if (cmd === 'serve') {
     const ws = openWorkspace({ root, actor: 'dashboard' });

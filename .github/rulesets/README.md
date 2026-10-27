@@ -20,10 +20,14 @@ it.
 
 Conditions:
 
-- **The repository stays public.** On GitHub Free a private repository gets
-  HTTP 403 "Upgrade to GitHub Pro or make this repository public" from the
-  rulesets API. Making the repository private would remove the boundary unless
-  the account moves to Pro.
+- **Public, or private on GitHub Pro.** On GitHub Free a private repository
+  gets HTTP 403 "Upgrade to GitHub Pro or make this repository public" from
+  the rulesets API, and the rulesets are not enforced. Eric moved `kuaya1` to
+  GitHub Pro on 2026-10-27, and the repository goes private
+  (`audits/2026-10-27-agent-lane-redteam` §6). `merge-boundary-check.js`
+  passes a private repository only when GitHub answers its rulesets read
+  with HTTP 200 and reports the rules applied to `main`. A lapse to Free
+  makes the check fail again.
 - **Eric stays the only admin.** Any other admin, or any token holding Eric's
   admin access, can merge. That includes local agent sessions using his `gh`
   login.

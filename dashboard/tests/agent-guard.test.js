@@ -79,13 +79,49 @@ test('the issue\'s task stays inside its template: protected, forbidden and guar
   assert.deepEqual(ok.tests, ['dashboard/tests/widget.test.js']);
   assert.deepEqual(ok.implementation, ['dashboard/server.js', 'dashboard/core/**']);
   const bad = (fields) => G.taskOf(issueOf(fields), { policy: POLICY }).problems.join('\n');
-  assert.match(bad({ Template: 'eng-app@4' }), /not one the agent lane builds/);
+  assert.match(bad({ Template: 'eng-app@2' }), /not one the agent lane builds/);
+  assert.match(bad({ Template: 'eng-docs@9' }), /not one the agent lane builds/);
+  // eng-app@4 is a lane template since cr-agent-policy@3 (Eric, 2026-10-27):
+  // UI work only, so the core stays out of its reach.
+  assert.doesNotMatch(bad({ Template: 'eng-app@4' }), /not one the agent lane builds/);
+  assert.match(bad({ Template: 'eng-app@4' }), /dashboard\/core\/widget\.js is outside eng-app@4/);
   assert.match(bad({ 'Files to change': '- .github/workflows/x.yml' }), /outside eng-backend@1/);
   assert.match(bad({ 'Files to change': '- dashboard/core/portfolio.js' }), /never changes|protected path/);
   assert.match(bad({ 'Files to change': '- dashboard/core/**' }), /can reach a protected path/);
-  assert.match(bad({ 'Regression tests': 'none' }), /names no test file/);
   assert.match(bad({ 'Regression tests': 'dashboard/tests/engineering-guard.test.js' }), /guarded test/);
   assert.match(bad({ 'Negative cases': '_No response_' }), /"Negative cases" is empty/);
+  assert.match(bad({ Outcome: '_No response_' }), /"Outcome" is empty/);
+  // Files and tests are hints (cr.agent-task.v2): none named is no problem.
+  const open = G.taskOf(issueOf({ 'Regression tests': 'none', 'Files to change': '_No response_' }), { policy: POLICY });
+  assert.deepEqual(open.problems, []);
+  assert.deepEqual(open.paths, []);
+  assert.deepEqual(open.tests, []);
+});
+
+test('a task that names no files or tests is scoped by its template: any file inside it, never a protected or forbidden one, and still a test', (t) => {
+  const r = repo(t);
+  const open = G.taskOf(issueOf({ 'Files to change': '_No response_', 'Regression tests': '_No response_' }), { policy: POLICY });
+  assert.deepEqual(open.problems, []);
+  const prompt = G.builderPrompt(open);
+  assert.match(prompt, /Files you may change: any file under dashboard\/server\.js, dashboard\/core\/\*\*, dashboard\/tests\/\*\*; never dashboard\/engineering\/\*\*, [^\n]*and never a protected path; at most 20 files, only what the outcome needs/);
+  assert.match(prompt, /Regression tests to add or change: none named: add or change at least one test file under dashboard\/tests\//);
+  assert.match(prompt, /Work only in the files the task lets you change/);
+  const reasonsFor = (task, files) => { const a = G.applyPatch({ cwd: r.work, base: r.base, patchFile: r.patch(files), maxBytes: 600000 }); return a.error ? [a.error] : G.checkChange({ cwd: r.work, base: r.base, rev: a.tree, task }).reasons; };
+  assert.deepEqual(reasonsFor(open, GOOD), []);
+  assert.deepEqual(reasonsFor(open, { ...GOOD, 'dashboard/core/other.js': 'module.exports = 1;\n' }), [], 'inside the template, no paths named: allowed');
+  assert.match(reasonsFor(open, { ...GOOD, 'dashboard/core/portfolio.js': 'module.exports = 1;\n' }).join('\n'), /protected; Eric's own change/);
+  assert.match(reasonsFor(open, { ...GOOD, 'dashboard/engineering/x.js': 'module.exports = 1;\n' }).join('\n'), /outside eng-backend@1|forbidden for eng-backend@1/);
+  assert.match(reasonsFor(open, { ...GOOD, '.github/workflows/x.yml': 'on: push\n' }).join('\n'), /protected; Eric's own change/);
+  assert.match(reasonsFor(open, { 'dashboard/core/widget.js': GOOD['dashboard/core/widget.js'] }).join('\n'), /needs every candidate to add or change a test/);
+  // Named paths narrow the scope; a test file the template requires is inside it unnamed.
+  const narrow = G.taskOf(issueOf({ 'Files to change': '- dashboard/core/widget.js', 'Regression tests': '_No response_' }), { policy: POLICY });
+  assert.deepEqual(narrow.problems, []);
+  assert.match(G.builderPrompt(narrow), /Files you may change: dashboard\/core\/widget\.js\n/);
+  assert.deepEqual(reasonsFor(narrow, GOOD), []);
+  assert.match(reasonsFor(narrow, { ...GOOD, 'dashboard/core/other.js': 'module.exports = 1;\n' }).join('\n'), /other\.js is not among the task's files to change/);
+  // The named task keeps its words.
+  const named = G.taskOf(issueOf(), { policy: POLICY });
+  assert.match(G.builderPrompt(named), /Regression tests to add or change: dashboard\/tests\/widget\.test\.js\nFiles you may change: dashboard\/core\/widget\.js, dashboard\/tests\/widget\.test\.js\n/);
 });
 
 test('the build\'s patch is applied to main as data and checked again as a tree', (t) => {
@@ -275,24 +311,28 @@ test('an unchanged rerun is reserved and counts toward the two builds of that ve
   assert.deepEqual(reserves.map((x) => [x.run, x.bind.issue, x.bind.task_sha256]), [['20/1', 7, first.flat.task_sha256], ['20/2', 7, first.flat.task_sha256]]);
 });
 
-test('one build per issue at a time: an open build holds the issue for 65 minutes, then is recorded lost and still counts', async (t) => {
+test('one build per issue at a time: an open build holds the issue for 60 minutes, then is recorded orphaned and consumes no attempt', async (t) => {
   const r = repo(t);
   const reserve = reserver(t, r);
   const issue = issueOf();
   const first = await reserve({ live: issue, run: '30/1' });
   assert.equal(first.flat.ok, 'true');
   assert.equal(first.flat.predecessor, 'absent');
-  const held = await reserve({ live: issue, run: '31/1', at: '2026-10-26T13:04:00Z' });
+  const held = await reserve({ live: issue, run: '31/1', at: '2026-10-26T13:00:00Z' });
   assert.equal(held.flat.ok, 'false');
-  assert.match(held.said, new RegExp(`build ${first.flat.reservation} of issue #7 \\(run 30/1\\) has no outcome yet and is 64 min old; one build or revision per issue at a time, each held up to 65 min`));
+  assert.match(held.said, new RegExp(`build ${first.flat.reservation} of issue #7 \\(run 30/1\\) has no outcome yet and is 60 min old; one build, revision or remediation per task at a time, each held up to 60 min`));
   assert.equal(L.read(r.work).entries.length, 1, 'nothing reserved, nothing spent');
   const later = await reserve({ live: issue, run: '32/1', at: '2026-10-26T13:05:00Z' });
   assert.equal(later.flat.ok, 'true');
-  assert.match(later.said, new RegExp(`Recorded as lost first \\(no outcome after 65 min\\): ${first.flat.reservation}`));
-  assert.deepEqual(L.read(r.work).entries.map((e) => [e.t, e.id, e.state]), [['reserve', first.flat.reservation, undefined], ['outcome', first.flat.reservation, 'lost'], ['reserve', later.flat.reservation, undefined]]);
-  // The lost build's reservation still counts toward the version's two.
-  assert.equal(await record(r, later.flat.reservation, 'success', 'published'), 0);
-  assert.match((await reserve({ live: issue, run: '33/1', at: '2026-10-26T13:10:00Z' })).said, /2 paid builds for this version of the task already/);
+  assert.match(later.said, new RegExp(`Orphaned attempt expired after 60m; unlocking queue: ${first.flat.reservation} recorded orphaned first \\(no outcome after 60 min\\)`));
+  assert.deepEqual(L.read(r.work).entries.map((e) => [e.t, e.id, e.state]), [['reserve', first.flat.reservation, undefined], ['outcome', first.flat.reservation, 'orphaned'], ['reserve', later.flat.reservation, undefined]]);
+  // The orphaned build consumes none of the version's two: one more may run,
+  // and only then is the version used up.
+  assert.equal(await record(r, later.flat.reservation, 'failure'), 0);
+  const third = await reserve({ live: issue, run: '33/1', at: '2026-10-26T13:10:00Z' });
+  assert.equal(third.flat.ok, 'true');
+  assert.equal(await record(r, third.flat.reservation, 'failure'), 0);
+  assert.match((await reserve({ live: issue, run: '34/1', at: '2026-10-26T13:20:00Z' })).said, /2 paid builds for this version of the task already/);
 });
 
 test('publish leases on the head its reservation recorded: a branch made, moved or handed to a later build since is stale, never overwritten', async (t) => {
@@ -333,14 +373,14 @@ test('publish leases on the head its reservation recorded: a branch made, moved 
   assert.equal(wrong.code, 1);
   assert.match(fs.readFileSync(outFile, 'utf8'), /state=failed/);
   assert.equal((await publish('bd-0000000000000000', '52/1')).code, 1);
-  // A build recorded lost while it still ran is stale even when its lease would hold.
+  // A build recorded orphaned while it still ran is stale even when its lease would hold.
   const c = await reserve({ live: edited, issue: edited, run: '60/1' });
   const d = await reserve({ live: edited, issue: edited, run: '61/1', at: '2026-10-26T13:10:00Z' });
   assert.equal(c.flat.predecessor, ok.flat.commit);
   assert.equal(d.flat.predecessor, ok.flat.commit);
   const gone = await publish(c.flat.reservation, '60/1', edited);
   assert.equal(gone.flat.state, 'stale');
-  assert.match(gone.flat.note, /was recorded lost \(no outcome 70 min after it was reserved\) and the issue went to a later build/);
+  assert.match(gone.flat.note, /was recorded orphaned \(no outcome 70 min after it was reserved\) and the task went to a later build/);
   assert.equal(head(), ok.flat.commit);
   assert.equal((await publish(d.flat.reservation, '61/1', edited)).flat.state, 'published');
 });
