@@ -19,7 +19,7 @@ const AR = require('../scripts/agent-review');
 
 const POLICY = G.loadPolicy();
 const REPO = 'kuaya1/CryptoResearch';
-const ENV = { GITHUB_REPOSITORY: REPO, GITHUB_TOKEN: 'ghs_FICTIONAL', OPENAI_API_KEY: 'sk-FICTIONAL', OPENAI_REVIEW_MODEL: 'gpt-fictional', AGENT_REVIEW_ENABLED: 'true', BUILDER_APP_SLUG: 'cr-builder', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1' };
+const ENV = { GITHUB_REPOSITORY: REPO, GITHUB_TOKEN: 'ghs_FICTIONAL', OPENAI_API_KEY: 'sk-FICTIONAL', OPENAI_REVIEW_MODEL: 'gpt-fictional', AGENT_LEDGER_KEY: `FICTIONAL-ledger-key-${'k'.repeat(24)}`, AGENT_REVIEW_ENABLED: 'true', BUILDER_APP_SLUG: 'cr-builder', GITHUB_RUN_ID: '1', GITHUB_RUN_ATTEMPT: '1' };
 const T0 = Date.parse('2026-10-26T12:00:00Z');
 const BOT = { name: 'cr-builder[bot]', email: '1+cr-builder[bot]@users.noreply.github.com' };
 const ERIC = { name: 'Eric FICTIONAL', email: 'eric@example.invalid' };
@@ -299,6 +299,45 @@ test('a verdict line written without the key is never posted', async (t) => {
   assert.equal(after.status, 'refused');
   assert.match(lastCheck(w).output.summary, /fails its check/);
   assert.equal(w.posts, 0);
+});
+
+test('verdicts are signed with the ledger\'s own key: without it nothing is read or posted, under another key a held verdict is refused, and a new OpenAI key changes nothing', async (t) => {
+  const fx = fixture(t);
+  const w = world(fx);
+  const reads = [];
+  const fetch = w.fetch;
+  w.fetch = (url, o) => { reads.push(url); return fetch(url, o); };
+  for (const k of ['', 'x'.repeat(31)]) {
+    const r = await review(fx, w, { env: { AGENT_LEDGER_KEY: k } });
+    assert.equal(r.status, 'not_configured');
+    assert.match(r.says, /AGENT_LEDGER_KEY \(a repository secret, Eric's, at least 32 characters\) is not set; nothing was read, reserved or posted/);
+    assert.deepEqual((await AR.sweep({ env: { ...ENV, AGENT_LEDGER_KEY: k }, cwd: fx.runner(), fetchImpl: w.fetch, now: () => w.clock, policy: POLICY }))[0].status, 'not_configured');
+    const pf = await AR.preflight({ env: { ...ENV, AGENT_LEDGER_KEY: k }, cwd: fx.runner(), fetchImpl: w.fetch, now: () => w.clock, policy: POLICY });
+    assert.equal(pf.ok, false);
+    assert.ok(pf.lines.some((x) => /^Ledger key: AGENT_LEDGER_KEY \(a repository secret/.test(x)), pf.lines.join('\n'));
+  }
+  assert.equal(reads.filter((u) => !u.includes('/v1/models/') && !u.includes('/v1/chat/completions?limit=1')).length, 0, 'no pull request read, nothing sent, no check posted');
+  assert.equal(w.checks.length, 0);
+  assert.deepEqual(ledger(fx), []);
+  // A pass under key A.
+  assert.equal((await review(fx, w)).status, 'posted');
+  assert.equal(w.posts, 1);
+  // The OpenAI key is rotated: the held verdict still checks and is reposted, nothing sent.
+  const rotated = await review(fx, w, { env: { OPENAI_API_KEY: 'sk-FICTIONAL-rotated' }, hooks: { repost: true } });
+  assert.equal(rotated.status, 'posted');
+  assert.equal(lastCheck(w).conclusion, 'success');
+  assert.equal(w.posts, 1);
+  // Under another ledger key the same line fails its check: refused, never posted as a verdict, nothing sent.
+  const other = await review(fx, w, { env: { AGENT_LEDGER_KEY: `FICTIONAL-other-ledger-key-${'q'.repeat(20)}` }, hooks: { repost: true } });
+  assert.equal(other.status, 'refused');
+  assert.equal(lastCheck(w).conclusion, 'action_required');
+  assert.match(lastCheck(w).output.summary, /fails its check/);
+  assert.equal(w.posts, 1);
+  // The key is its own: the MAC under the ledger key is not the one under the OpenAI key.
+  const held = ledger(fx);
+  const line = { ...held.find((e) => e.state === 'response'), binding: held.find((e) => e.t === 'reserve').binding };
+  assert.ok(L.macOk(L.ledgerKey(ENV), line));
+  assert.equal(L.macOk(L.macKey(ENV.OPENAI_API_KEY), line), false);
 });
 
 test('an owner change is left to agent-checks; nothing reserved or sent', async (t) => {
