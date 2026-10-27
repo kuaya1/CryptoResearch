@@ -169,6 +169,32 @@ function brief(ws, { since = null, now = Date.now() } = {}) {
       });
   });
 
+  // Held and paper lines never mix: each says which it is. An unreadable
+  // record makes the section partial (core/position-brief.js checkpoints).
+  section('horizons', 'Horizons', true, () => {
+    const pb = require('./position-brief');
+    const out = [];
+    const pf = require('./portfolio').computePortfolio(ws, { market: require('./market').readLatest(ws) });
+    const names = new Map(rows.map((r) => [r.project_id, r.name]));
+    for (const p of pf.positions.filter((x) => !x.closed && x.asset_id !== 'usd')) {
+      const nm = names.get(p.project_id) || p.asset_id;
+      try {
+        const h = pb.heldHorizon(ws, p, { now });
+        const due = h.research ? `; ${h.research.words}` : '';
+        out.push({ text: `Held: ${nm}: ${h.words}${due}`, link: p.project_id ? link(p.project_id) : '#/portfolio' });
+      } catch (err) {
+        out.push({ text: `Held: ${nm}: could not be read (${err.message}).`, link: '#/portfolio', unreadable: true });
+      }
+    }
+    let book;
+    try { book = require('./paper').book(ws, { now }); } catch (err) { out.push({ text: `Paper: the book could not be read (${err.message}).`, link: '#/research?tab=outcomes', unreadable: true }); }
+    for (const q of (book ? book.positions : []).filter((x) => x.state === 'open')) {
+      const h = pb.checkpoints(q, { now });
+      out.push({ text: `Paper: ${q.name || q.project_id}: ${h.words}`, link: `#/project/${q.project_id}/brief` });
+    }
+    return out;
+  });
+
   section('research_waiting', 'Research waiting per model', true, () => {
     const held = require('./research').heldProviders(ws);
     const per = new Map();

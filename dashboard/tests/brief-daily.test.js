@@ -95,7 +95,7 @@ test('daily brief: a PM card waiting is listed with its age and link; held, mode
   const differ = byId(out, 'models_differ');
   assert.equal(differ.state, 'ok');
   assert.ok(differ.lines.every((l) => /^#\/project\/.+\/compare$/.test(l.link) || l.link === null));
-  assert.equal(out.sections.map((x) => x.id).join(), 'pm_cards,invalidated,near_invalidation,stale_basis,ticket_repairs,pilot_exits,held,research_waiting,models_differ,spread,freshness');
+  assert.equal(out.sections.map((x) => x.id).join(), 'pm_cards,invalidated,near_invalidation,stale_basis,ticket_repairs,pilot_exits,held,horizons,research_waiting,models_differ,spread,freshness');
 });
 
 test('daily brief: a ticket invalidated since a time is listed with the reading that fired; one before it is not; no since lists every one', (t) => {
@@ -146,7 +146,7 @@ test('daily brief: a section it cannot read says so, never nothing; the others s
   indexer.buildIndex = () => { throw new Error('records unreadable (FICTIONAL)'); };
   t.after(() => { indexer.buildIndex = realIndex; });
   const down = B.brief(s.ws, { now: Date.now() });
-  for (const id of ['pm_cards', 'invalidated', 'near_invalidation', 'stale_basis', 'held', 'research_waiting', 'models_differ']) {
+  for (const id of ['pm_cards', 'invalidated', 'near_invalidation', 'stale_basis', 'held', 'horizons', 'research_waiting', 'models_differ']) {
     assert.equal(byId(down, id).state, 'unreadable', id);
     assert.match(byId(down, id).lines[0].text, /index could not be built/);
   }
@@ -356,4 +356,41 @@ test('daily brief (item 67): with no project in the pilot the exit section says 
   tk.pilotCandidates = real;
   assert.equal(miss.count, 1);
   assert.match(miss.lines[0].text, /^P: no current exit reading at \$500\./);
+});
+
+test('daily brief (item 72): Horizons keeps Held and Paper lines apart, each labeled, and says an unknown horizon in words', (t) => {
+  const s = setup(t);
+  const saved = savedTicket(t, s);
+  const d = T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' }).result.decision;
+  const now = Date.parse(d.decided_at) + 61 * 86400000;
+  const paper = require('../core/paper');
+  const realBook = paper.book;
+  paper.book = () => ({ positions: [
+    { state: 'open', project_id: s.pid, name: 'Paper One (FICTIONAL)', decided_at: new Date(now - 60 * 86400000).toISOString(), horizon_end: new Date(now + 20 * 86400000).toISOString() },
+    { state: 'open', project_id: s.pid, name: 'Paper Two (FICTIONAL)', decided_at: new Date(now - 5 * 86400000).toISOString(), horizon_end: null, horizon_missing: 'No horizon on record.' },
+    { state: 'closed', project_id: s.pid, name: 'Paper Closed', decided_at: new Date(now - 5 * 86400000).toISOString() },
+  ] });
+  t.after(() => { paper.book = realBook; });
+  const h = byId(B.brief(s.ws, { now }), 'horizons');
+  assert.equal(h.state, 'ok');
+  const held = h.lines.filter((l) => l.text.startsWith('Held: '));
+  const pap = h.lines.filter((l) => l.text.startsWith('Paper: '));
+  assert.equal(held.length, 1);
+  assert.match(held[0].text, /Day 62/);
+  assert.equal(pap.length, 2, 'only open paper positions');
+  assert.match(pap[0].text, /Paper One \(FICTIONAL\): Day 61; next mark day 90; the horizon ends \d{4}-\d{2}-\d{2} \(20 days left\)/);
+  assert.match(pap[1].text, /Day 6; No horizon on record\. \(no default length is used\)|Day 6; No horizon on record/);
+  assert.equal(h.lines.length, 3);
+});
+
+test('daily brief (item 72): an unreadable paper book makes Horizons partial, never complete', (t) => {
+  const s = setup(t);
+  const paper = require('../core/paper');
+  const realBook = paper.book;
+  paper.book = () => { throw new Error('paper book unreadable (FICTIONAL)'); };
+  t.after(() => { paper.book = realBook; });
+  const h = byId(B.brief(s.ws, { now: Date.now() }), 'horizons');
+  assert.equal(h.state, 'partial');
+  assert.equal(h.count, null);
+  assert.match(h.lines[0].text, /^Paper: the book could not be read/);
 });
