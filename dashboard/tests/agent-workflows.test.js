@@ -176,13 +176,29 @@ test('the sandbox probe is Eric\'s own run from main, under the build\'s setting
   assert.match(read('.gitignore'), /^\.cr\/$/m, '.cr/ is git-ignored, so nothing under TMPDIR reaches the patch');
 
   const probe = require(path.join(ROOT, '.github', 'agent', 'sandbox-probe.js'));
-  const held = { anthropic_key_visible: false, canary_visible: false, npm_registry: 'HTTP 200', other_host: 'blocked (ECONNREFUSED)', anthropic_api: 'blocked (ECONNREFUSED)', proc_self_environ: 'readable, no canary', proc_parent_environ: 'unreadable (ENOENT)', proc_scan: { pids: 3, with_canary: 0 }, write_home: 'refused (EROFS)', write_runner_temp: 'refused (EROFS)', write_checkout: 'written', write_tmpdir: 'written', tmpdir_in_checkout: true };
+  // A write inside the sandbox that never reaches the runner's disk holds.
+  const held = { anthropic_key_visible: false, canary_visible: false, proxy_set: true, npm_registry: 'HTTP 200 through the proxy', other_host: 'refused by the proxy (HTTP 403)', other_host_direct: 'blocked (EAI_AGAIN)', anthropic_api: 'refused by the proxy (HTTP 403)', anthropic_api_direct: 'blocked (EAI_AGAIN)', proc_self_environ: 'readable, no canary', proc_parent_environ: 'unreadable (ENOENT)', proc_scan: { pids: 3, with_canary: 0 }, write_home: 'written', write_runner_temp: 'refused (EROFS)', write_checkout: 'written', write_tmpdir: 'written', tmpdir_in_checkout: true };
   const canary = 'c'.repeat(48);
-  const fails = (r, o = {}) => probe.verdict(r, { resultText: 'The read was refused.', canary, ...o }).filter(([, ok]) => !ok).map(([n]) => n);
+  const fails = (r, o = {}) => probe.verdict(r, { resultText: 'The read was refused.', canary, host: { on_disk: false }, ...o }).filter(([, ok]) => !ok).map(([n]) => n);
+  const NPM = 'the npm registry reachable through the sandbox\'s proxy';
+  const OTHER = 'any other host refused by the proxy, and unreachable directly';
+  const API = 'the Anthropic API refused by the proxy for commands, and unreachable directly';
+  const HOME = 'no write reaches the runner\'s home directory';
   assert.deepEqual(fails(held), []);
+  assert.equal(probe.verdict(held, { canary }).length, 12);
   assert.deepEqual(fails(null), ['report'], 'no report shows nothing either way');
   assert.deepEqual(fails({ ...held, anthropic_key_visible: true }), ['ANTHROPIC_API_KEY unset for commands']);
-  assert.deepEqual(fails({ ...held, other_host: 'HTTP 200' }), ['any other host blocked']);
+  // The 2026-10-27 run on main: a fetch that ignores the proxy fails at DNS
+  // for every host, so "blocked" proved nothing and the registry looked down.
+  assert.deepEqual(fails({ ...held, proxy_set: true, npm_registry: 'blocked (EAI_AGAIN)', other_host: 'blocked (EAI_AGAIN)', anthropic_api: 'blocked (EAI_AGAIN)' }), [NPM, OTHER, API]);
+  assert.deepEqual(fails({ ...held, npm_registry: 'no proxy in the environment', other_host: 'no proxy in the environment', anthropic_api: 'no proxy in the environment' }), [NPM, OTHER, API], 'without the proxy nothing is shown either way');
+  assert.deepEqual(fails({ ...held, other_host: 'HTTP 200 through the proxy' }), [OTHER]);
+  assert.deepEqual(fails({ ...held, other_host_direct: 'HTTP 200' }), [OTHER], 'a way around the proxy is not blocked');
+  assert.deepEqual(fails({ ...held, anthropic_api: 'no answer from the proxy (timeout)' }), [API], 'silence is not a refusal');
+  assert.deepEqual(fails({ ...held, npm_registry: 'tunnel opened, then ERR_TLS_CERT_ALTNAME_INVALID' }), [NPM]);
+  assert.deepEqual(fails(held, { host: { on_disk: true, this_run: true } }), [HOME]);
+  assert.deepEqual(fails({ ...held, write_home: 'refused (EROFS)' }, { host: { on_disk: true, this_run: false } }), [HOME], 'any marker on the runner\'s disk fails');
+  assert.deepEqual(fails(held, { host: null }), [HOME], 'a home write not looked for on the runner proves nothing');
   assert.deepEqual(fails({ ...held, proc_scan: { pids: 9, with_canary: 1 } }), ['no visible process environment holds the canary']);
   assert.deepEqual(fails({ ...held, write_runner_temp: 'written' }), ['no write to the runner\'s temp (where the guard\'s copies are)']);
   assert.deepEqual(fails({ ...held, write_tmpdir: 'refused (EROFS)' }), ['writes to os.tmpdir() work (the desk\'s tests make temporary workspaces there)']);
@@ -197,6 +213,31 @@ test('no workflow caches anything (a cache is shared across runs and branches)',
     assert.doesNotMatch(text, /^\s*cache(-dependency-path)?:/m, f);
     assert.doesNotMatch(text, /uses:\s*actions\/cache[@/]/, f);
   }
+});
+
+// The repository went private on GitHub Pro (2026-10-27): a checkout made
+// with persist-credentials: false leaves git no way in, and the agent checks'
+// first fetch failed "could not read Username" on every pull request.
+test('the repository is private: every git fetch from a checkout without credentials carries its job\'s token as a header, never in the git config', () => {
+  const dir = path.join(ROOT, '.github', 'workflows');
+  const AUTH = 'git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf \'x-access-token:%s\' "$GH_TOKEN" | base64 -w0)" ';
+  let seen = 0;
+  for (const f of fs.readdirSync(dir).filter((x) => /\.ya?ml$/.test(x))) {
+    const text = fs.readFileSync(path.join(dir, f), 'utf8');
+    for (const [id, job] of Object.entries(jobs(text))) {
+      if (!/persist-credentials: false/.test(job) || /x-access-token:\$\{TOKEN\}@/.test(job)) continue;
+      for (const step of job.split(/\n {6}- /)) {
+        const lines = step.split('\n').filter((l) => /\bgit\b.*\b(fetch|ls-remote|push|pull)\b/.test(l) && !/^\s*#/.test(l));
+        for (const l of lines) {
+          seen += 1;
+          assert.ok(l.trim().startsWith(AUTH), `${f} ${id}: ${l.trim()}`);
+          assert.match(step, /\n\s+GH_TOKEN: \$\{\{ github\.token \}\}\n/, `${f} ${id}: the step holds the job's own token`);
+        }
+      }
+      assert.doesNotMatch(job, /git config[^\n]*extraheader|git remote set-url[^\n]*GH_TOKEN/, `${f} ${id}: the token is never written to the git config`);
+    }
+  }
+  assert.equal(seen, 4, 'agent-guard, agent-verify, and backlog-pr\'s pr and compose jobs');
 });
 
 test('the jobs that run a candidate hold no write permission and no secret, and are never skipped', () => {
