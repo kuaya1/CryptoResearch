@@ -34,11 +34,14 @@
 // (`after`), or that changes a file or folder an in-flight item, or a waiting
 // item not on the base, changes (`touches`).
 //
-// A run that dies holds its items only until its lease ends (90 minutes from
-// the claim or the last heartbeat); the next plan reclaims them as a lost
-// attempt. A failed item waits 30 minutes before another try. Two failures,
-// three lost runs, or a branch that is gone without its commit, block the
-// item for Eric.
+// A lease (90 minutes from the claim or the last heartbeat) that ends with no
+// word from its run is no proof the run stopped: a cloud routine's run has no
+// status GitHub can answer, and one still building would push its branch
+// beside a second builder's. So the item holds, reconcile required, still in
+// flight, until its run speaks again (heartbeat, done, fail, release) or Eric
+// releases it; no clock frees it (red-team review, 2026-10-27). A failed item
+// waits 30 minutes before another try. Two failures, or a branch that is gone
+// without its commit, block the item for Eric.
 
 const path = require('path');
 const { spawnSync } = require('child_process');
@@ -52,7 +55,6 @@ const LEASE_MS = 90 * 60 * 1000;
 const RETRY_MS = 30 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const MAX_FAILURES = 2;
-const MAX_LOST = 3;
 const CLAIM_TRIES = 3;
 const IDENTITY = { GIT_AUTHOR_NAME: 'backlog-scheduler', GIT_AUTHOR_EMAIL: 'backlog-scheduler@users.noreply.github.com', GIT_COMMITTER_NAME: 'backlog-scheduler', GIT_COMMITTER_EMAIL: 'backlog-scheduler@users.noreply.github.com' };
 
@@ -88,17 +90,17 @@ function readClaims(cwd) {
 // Where one item's claim stands at `now`.
 //   free       no claim, or released: anyone may claim it
 //   active     building under a lease that has not ended
-//   lost       building, the lease ended with no word: reclaimable, a lost try
+//   reconcile  building, the lease ended with no word: held and in flight,
+//              never reclaimed by the clock; its run or Eric settles it
 //   retry      failed, its retry time not reached
 //   reclaim    failed, its retry time passed
 //   built      its branch was pushed (its commit makes it taken)
-//   blocked    failed twice, lost three times, unreadable, or built and gone
+//   blocked    failed twice, unreadable, or built and gone
 function claimState(claim, now, taken) {
   if (!claim) return { state: 'free' };
   const r = claim.record;
   if (!r) return { state: 'blocked', why: 'its claim does not read as a claim' };
   const failures = r.failures || 0;
-  const lost = r.lost || 0;
   if (r.state === 'blocked') return { state: 'blocked', why: r.reason || 'blocked' };
   if (r.state === 'released') return { state: 'free', reclaim: true };
   if (r.state === 'built') return taken ? { state: 'built' } : { state: 'blocked', why: `built on ${r.branch || 'a branch'} but no commit for it is on any branch now: Eric decides` };
@@ -108,8 +110,7 @@ function claimState(claim, now, taken) {
   }
   if (r.state === 'building') {
     if (now < Date.parse(r.lease_until)) return { state: 'active' };
-    if (lost + 1 >= MAX_LOST) return { state: 'blocked', why: `its run was lost ${lost + 1} times (lease ended ${r.lease_until})` };
-    return { state: 'lost', reclaim: true, lostNow: true };
+    return { state: 'reconcile', why: `reconcile required: run ${r.run}'s lease ended ${r.lease_until} with no word, and whether it is still building cannot be read; it holds until that run speaks again or Eric releases it (\`backlog-schedule.js release --run ${r.run} --item ${r.item}\`)` };
   }
   return { state: 'blocked', why: `unknown claim state ${r.state}` };
 }
@@ -130,7 +131,10 @@ function plan(input) {
   const states = new Map();
   for (const it of backlog) states.set(it.n, claimState(claims.get(it.n), now, taken(it.n)));
   // A claim for an item no longer on the backlog still counts toward the hour.
-  const inFlight = [...claims.keys()].filter((n) => !taken(n) && (states.get(n) || claimState(claims.get(n), now, false)).state === 'active');
+  const stateOf = (n) => states.get(n) || claimState(claims.get(n), now, false);
+  // An item whose run may still be building is in flight, lease or not.
+  const inFlight = [...claims.keys()].filter((n) => !taken(n) && ['active', 'reconcile'].includes(stateOf(n).state));
+  const reconcile = inFlight.filter((n) => stateOf(n).state === 'reconcile').sort((a, b) => a - b).map((n) => ({ item: n, why: stateOf(n).why }));
   const started = [...claims.values()].filter((c) => c.record && ['building', 'built', 'failed', 'blocked'].includes(c.record.state) && now - Date.parse(c.record.claimed_at) < HOUR_MS).length + otherLane;
   const allowed = limits.builders.includes(builder);
   const budget = Math.max(0, limits.per_hour - started);
@@ -150,7 +154,7 @@ function plan(input) {
     if (it.checked || it.eric || it.engineering || taken(it.n)) continue;
     const st = states.get(it.n);
     if (st.state === 'blocked') { blocked.push({ item: it.n, why: st.why }); continue; }
-    if (st.state === 'active') continue; // listed under in_flight
+    if (st.state === 'active' || st.state === 'reconcile') continue; // listed under in_flight (and reconcile)
     if (st.state === 'retry') { skipped.push({ item: it.n, why: st.why }); continue; }
     if (picks.length >= runMax) { later.push(it.n); continue; }
     const after = it.schedule ? it.schedule.after : [];
@@ -170,7 +174,7 @@ function plan(input) {
       continue;
     }
     const c = claims.get(it.n);
-    picks.push({ item: it.n, text: it.text, issue: it.issue || null, old: st.state === 'free' && !st.reclaim ? null : c.sha, record: c && c.record, lostNow: !!st.lostNow });
+    picks.push({ item: it.n, text: it.text, issue: it.issue || null, old: st.state === 'free' && !st.reclaim ? null : c.sha, record: c && c.record });
     pickedSet.add(it.n);
   }
   const why = !allowed ? `builder ${builder} does not run in the ${limits.window} window`
@@ -190,6 +194,7 @@ function plan(input) {
     started_last_hour: started,
     waiting_count: waiting.size,
     in_flight: inFlight.sort((a, b) => a - b),
+    reconcile,
     run_max: runMax,
     base,
     picks: picks.map((p) => ({ item: p.item, text: p.text, ...(p.issue ? { issue: p.issue, read: `node dashboard/scripts/backlog-queue.js task --item ${p.item}` } : {}) })),
@@ -263,7 +268,7 @@ function claim(cwd = ROOT, { builder, run, now = Date.now(), tries = CLAIM_TRIES
       const record = {
         schema: SCHEMA, item: pick.item, builder, run, state: 'building', window: p.window,
         claimed_at: iso(now), lease_until: iso(now + LEASE_MS), base: p.base, branch: p.branch,
-        failures: prev.failures || 0, lost: (prev.lost || 0) + (pick.lostNow ? 1 : 0),
+        failures: prev.failures || 0, lost: prev.lost || 0,
         previous: pick.record ? { run: prev.run, state: prev.state, reason: prev.reason || null } : null,
       };
       return { item: pick.item, sha: commitRecord(cwd, record, pick.old), old: pick.old };
@@ -292,7 +297,7 @@ function update(cwd, { run, item, now = Date.now(), change }) {
 }
 
 // Extends this run's leases and says which items it still holds; an item
-// missing from `held` was taken over after its lease ended.
+// missing from `held` was released (by its run or Eric) and taken by another.
 const heartbeat = (cwd, { run, now = Date.now() }) => {
   fetch(cwd);
   const mine = [...readClaims(cwd).entries()].filter(([, c]) => c.record && c.record.run === run && c.record.state === 'building').map(([n]) => n);
@@ -318,6 +323,7 @@ function words(p) {
   else lines.push(p.picks.length ? `Builder ${p.builder} would take: ${p.picks.map((x) => x.item).join(', ')} on ${p.branch}, base ${p.base}.` : `Nothing to take: ${p.why}.`);
   for (const x of p.picks || []) if (x.issue) lines.push(`Item ${x.item} is issue #${x.issue} in the queue: its task is \`${x.read}\`, data as Eric authorized it.`);
   for (const s of p.skipped || []) lines.push(`Skipped ${s.item}: ${s.why}.`);
+  for (const r of p.reconcile || []) lines.push(`Held ${r.item}: ${r.why}.`);
   for (const b of p.blocked || []) lines.push(`Blocked ${b.item}: ${b.why}.`);
   if (p.later && p.later.length) lines.push(`Next after this run: ${p.later.join(', ')}.`);
   for (const q of p.queue_problems || []) lines.push(`Queue: ${q}.`);
@@ -358,4 +364,4 @@ if (require.main === module) {
   try { main(); } catch (e) { process.stderr.write(`${e.message}\n`); process.exit(1); }
 }
 
-module.exports = { plan, claim, heartbeat, done, fail, release, readClaims, claimState, inputs, branchName, pushClaims, words, main, SCHEMA, PLAN_SCHEMA, CLAIM_PREFIX, LEASE_MS, RETRY_MS, MAX_FAILURES, MAX_LOST };
+module.exports = { plan, claim, heartbeat, done, fail, release, readClaims, claimState, inputs, branchName, pushClaims, words, main, SCHEMA, PLAN_SCHEMA, CLAIM_PREFIX, LEASE_MS, RETRY_MS, MAX_FAILURES };
