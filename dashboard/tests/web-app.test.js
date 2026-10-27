@@ -327,3 +327,14 @@ test('Portfolio Set cost (item 69): the form posts only to the existing set-cost
   assert.match(form, /out\.words/);
   assert.doesNotMatch(form, /value: .*price/i, 'the cost is never prefilled from a price');
 });
+
+test('Pilot Queue desk gates (item 70): the buttons dry-run first, then post with the receipt IDs shown', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'research.js'), 'utf8');
+  const bar = src.slice(src.indexOf('function deskGateBar'));
+  assert.deepEqual([...new Set([...bar.matchAll(/api\.post\('([^']+)'/g)].map((m) => m[1]))], ['/api/tickets/desk-gates/decide']);
+  assert.match(bar, /dry_run: true/);
+  assert.match(bar, /expect: shown\.map\(\(d\) => d\.receipt_id\)/);
+  assert.match(bar, /`\$\{verb\} all \$\{gates\.length\}`/);
+  assert.match(bar, /'Watch', 'watch'/);
+  assert.match(bar, /'Pass', 'pass'/);
+});

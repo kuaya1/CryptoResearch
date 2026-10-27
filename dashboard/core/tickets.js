@@ -1900,6 +1900,62 @@ function batchGate(ws, { below = null, dryRun = false, now = Date.now() } = {}) 
   return out;
 }
 
+// Desk-gate cards waiting for Eric (item 70): the latest receipt of an active
+// project is the desk's gate (no Prosecutor ran), still undecided and on
+// Claude's current report. Read-only.
+function waitingDeskGates(ws, { now = Date.now() } = {}) {
+  const projects = require('./projects');
+  const out = [];
+  for (const p of projects.listProjects(ws)) {
+    if (p.broken || p.status === 'archived') continue;
+    let t = null;
+    try { t = view(ws, p.project_id, { now }).ticket; } catch (_) { continue; }
+    if (!t || !t.desk_gate || !t.latest || t.status !== 'pending_pm_review' || t.superseded_by_report) continue;
+    out.push({ project_id: p.project_id, name: p.name || p.project_id, receipt_id: t.receipt_id, saved_at: t.saved_at, report_id: t.researcher_report_id });
+  }
+  return out.sort((a, b) => String(a.saved_at).localeCompare(String(b.saved_at)) || a.project_id.localeCompare(b.project_id));
+}
+
+// Decide desk gates together (item 70): `pass` or `watch` only, each through
+// the existing `decide` with its own journal line, effects and Undo; no new
+// decision kind. `receipt_ids` limits the set (default: every one waiting). A
+// dry run writes nothing and says which unheld projects a pass would archive
+// (a held one never archives). A failure part-way leaves the decisions before
+// it standing and names the rest; the same `request_id` completes them, each
+// receipt deriving its own request ID.
+function decideDeskGates(ws, { action, receipt_ids: receiptIds = null, request_id: requestId = null, note = null, dryRun = false, by = null, now = Date.now() } = {}) {
+  if (action === 'approve' || action === 'halve') throw new OpError('REFUSED', `A desk gate suggests no risk: ${action} does not apply. Pass or watch.`);
+  if (action !== 'pass' && action !== 'watch') throw new OpError('INVALID', 'Decide the desk gates with pass or watch.');
+  let waiting = waitingDeskGates(ws, { now });
+  const out = { action, dry_run: dryRun === true, decided: [], skipped: [], failed: null, remaining: [] };
+  if (Array.isArray(receiptIds)) {
+    const want = new Set(receiptIds.map(String));
+    for (const id of want) if (!waiting.some((w) => w.receipt_id === id)) out.skipped.push({ receipt_id: id, reason: 'Not a desk gate waiting for you on Claude\'s current report.' });
+    waiting = waiting.filter((w) => want.has(w.receipt_id));
+  }
+  const reqId = typeof requestId === 'string' && /^[A-Za-z0-9_-]{8,80}$/.test(requestId) ? requestId : null;
+  if (dryRun) {
+    out.decided = waiting.map((w) => {
+      const held = action === 'pass' ? heldOf(ws, w.project_id, now) : null;
+      return { ...w, held, would_archive: action === 'pass' && held !== true, decision: null };
+    });
+    return out;
+  }
+  for (let i = 0; i < waiting.length; i += 1) {
+    const w = waiting[i];
+    try {
+      const r = decide(ws, w.project_id, { receipt_id: w.receipt_id, action, note, by, request_id: reqId ? `dg_${sha256(`${reqId}:${w.receipt_id}`).slice(0, 24)}` : null });
+      const res = r.result || {};
+      out.decided.push({ ...w, status: res.status || null, decision_id: res.decision ? res.decision.decision_id : null, archived: res.project_archived === true, effects: { archive: res.archive || null, journal: res.journal || null } });
+    } catch (e) {
+      out.failed = { ...w, error: e.message, code: e.code || null };
+      out.remaining = waiting.slice(i + 1).map((x) => ({ project_id: x.project_id, name: x.name, receipt_id: x.receipt_id }));
+      break;
+    }
+  }
+  return out;
+}
+
 // Exit quotes for pilot candidates (backlog item 25). Each candidate graded
 // QUOTE_MIN_GRADE or over with no current reading at the sizing's exit sizes
 // ($500 and $2,000) is quoted at both through prepareExitQuote's path
@@ -2193,6 +2249,8 @@ module.exports = {
   pregateReason,
   tradePlanGeometry,
   nearInvalidation,
+  waitingDeskGates,
+  decideDeskGates,
   gateGrade,
   skeleton,
   researcherOf,

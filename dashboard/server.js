@@ -1070,6 +1070,21 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     if (body && body.dry_run === true) return plan;
     return after(tickets.batchGate(ws, { below }));
   });
+  // Decide desk gates together (tickets.js decideDeskGates, item 70): `dry_run`
+  // is a read; `expect` is the receipt IDs shown, and a waiting gate that is
+  // not among them is a 409 with nothing written. GET lists those waiting.
+  route('GET', '/api/tickets/desk-gates', () => ({ waiting: tickets.waitingDeskGates(ws) }));
+  route('POST', '/api/tickets/desk-gates/decide', (m, req, res, body) => {
+    const b = body || {};
+    const plan = tickets.decideDeskGates(ws, { action: b.action, receipt_ids: Array.isArray(b.receipt_ids) ? b.receipt_ids : null, dryRun: true });
+    if (Array.isArray(b.expect)) {
+      const shown = new Set(b.expect.map(String));
+      const extra = plan.decided.filter((d) => !shown.has(d.receipt_id));
+      if (extra.length) throw new HttpError(409, `${extra.length} more desk ${extra.length === 1 ? 'gate waits' : 'gates wait'} than the ${shown.size} shown (${extra.map((d) => d.name).join(', ')}). Nothing was decided; look again and decide.`);
+    }
+    if (b.dry_run === true) return plan;
+    return after(tickets.decideDeskGates(ws, { action: b.action, receipt_ids: Array.isArray(b.receipt_ids) ? b.receipt_ids : Array.isArray(b.expect) ? b.expect : null, request_id: b.request_id, note: typeof b.note === 'string' ? b.note : null, by: 'dashboard' }));
+  });
   // Auto-pilot sync (tickets.js autoPilotSync): same `dry_run` and `expect`
   // rules as the batch gate.
   route('POST', '/api/tickets/auto-pilot-sync', (m, req, res, body) => {

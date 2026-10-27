@@ -3,7 +3,7 @@
 // limits are Preferences > Models & budget (DESIGN_AND_IA_BLUEPRINT.md §3.5).
 import {
   h, card, table, stateText, tagChip, gradeBadge, fmtNum, fmtDate, fmtAgo, select, field, input, button, action, callout,
-  tabStrip, safeSection, waitingInstruction, PROVIDERS, PROVIDER_LABELS, onHoldOf, link, plural,
+  tabStrip, safeSection, waitingInstruction, PROVIDERS, PROVIDER_LABELS, onHoldOf, link, plural, submissionId,
 } from '../ui.js';
 import { comparisonBlock } from './project.js';
 import { stepWord, exitCell, deltaText } from '../pilot-board-model.js';
@@ -65,7 +65,9 @@ async function pilotBoard(ctx) {
     return card('Track 2 Pilot Queue', h('p', { class: 'muted' }, 'The pilot queue could not be read.'));
   }
   const rows = b.rows || [];
-  return card(`Track 2 Pilot Queue (${rows.length})`, pagedTable([
+  let gates = [];
+  try { gates = (await ctx.api.get('/api/tickets/desk-gates')).waiting || []; } catch (_) { gates = []; }
+  return card(`Track 2 Pilot Queue (${rows.length})`, [pagedTable([
     { label: 'Project', render: (r) => h('a', { href: `#/project/${encodeURIComponent(r.project_id)}/forensics` }, r.name) },
     { label: 'Grade', num: true, render: (r) => h('span', { class: 'num' }, r.grade_display || '—') },
     { label: '@5 → @6', render: (r) => { const d = deltaText(r.report_delta); return h('span', { class: 'small', title: d.title }, d.text); } },
@@ -78,7 +80,42 @@ async function pilotBoard(ctx) {
       btn.onclick = action(btn, async () => { await ctx.api.post(`/api/projects/${encodeURIComponent(r.project_id)}/tickets/pilot`, { on: !r.in_pilot }); await ctx.refresh(); return true; }, r.in_pilot ? 'Pilot off for this project' : 'Pilot on for this project');
       return btn;
     } },
-  ], rows, { size: 25, label: 'Pilot candidates', empty: 'No verified, active projects yet.' }), { note: 'Verified, active projects: held first, then by grade. Reading this writes nothing.' });
+  ], rows, { size: 25, label: 'Pilot candidates', empty: 'No verified, active projects yet.' }), deskGateBar(ctx, gates)], { note: 'Verified, active projects: held first, then by grade. Reading this writes nothing.' });
+}
+
+// Decide the desk's $0 gates together (item 70, POST
+// /api/tickets/desk-gates/decide): each button shows the dry run's names
+// first (a read), then posts with `expect` (the receipt IDs shown), then says
+// each project's result. Every decision is the card's own: journal, Undo.
+function deskGateBar(ctx, gates) {
+  if (!gates.length) return null;
+  const out = h('div', { role: 'status' });
+  const start = (verb, act) => {
+    const b = button(`${verb} all ${gates.length}`, null, { kind: 'small' });
+    b.dataset.key = `desk-gates-${act}`;
+    b.onclick = action(b, async () => {
+      const plan = await ctx.api.post('/api/tickets/desk-gates/decide', { action: act, dry_run: true, expect: gates.map((g) => g.receipt_id) });
+      const shown = plan.decided || [];
+      const confirm = button(`${verb} ${shown.length} desk ${shown.length === 1 ? 'gate' : 'gates'}`, null, { kind: 'primary', key: `desk-gates-${act}-confirm` });
+      const sid = submissionId();
+      confirm.onclick = action(confirm, async () => {
+        const done = await ctx.api.post('/api/tickets/desk-gates/decide', { action: act, expect: shown.map((d) => d.receipt_id), request_id: sid });
+        out.replaceChildren(
+          h('p', null, `${plural(done.decided.length, 'desk gate')} ${act === 'pass' ? 'passed' : 'kept on watch'}.`),
+          h('ul', null, done.decided.map((d) => h('li', null, `${d.name}: ${d.status === 'saved' ? 'decided' : d.status}${act === 'pass' ? (d.archived ? ', archived' : ', not archived') : ''}`))),
+          done.failed ? callout(`Stopped at ${done.failed.name}: ${done.failed.error}. Not yet decided: ${done.remaining.map((x) => x.name).join(', ') || 'none'}. Run it again to complete them.`, 'bad') : null);
+        await ctx.refresh();
+        return done;
+      }, null);
+      out.replaceChildren(
+        h('p', null, `${verb} ${plural(shown.length, 'desk gate')}? Each is its own decision, with Undo.`),
+        h('ul', null, shown.map((d) => h('li', null, act === 'pass' ? `${d.name}: ${d.would_archive ? 'would be archived' : d.held === true ? 'held, stays watched' : 'not archived'}` : d.name))),
+        confirm);
+      return undefined;
+    }, null);
+    return b;
+  };
+  return h('div', { class: 'desk-gates' }, h('div', { class: 'actions' }, start('Watch', 'watch'), start('Pass', 'pass')), out);
 }
 
 // The exit-liquidity matrix (item 61, GET /api/tickets/exit-matrix): every

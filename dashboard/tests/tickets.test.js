@@ -2081,3 +2081,112 @@ test('item 61: the matrix lists only verified, active projects, one row each, be
   assert.deepEqual(rows.map((r) => r.project_id), [s.pid], 'an unverified project is not listed');
   assert.equal(rows[0].chain, pr.getProject(s.ws, s.pid).identity.assets[0].chain);
 });
+
+// ---------------------------------------------------------------------------
+// Decide desk gates together (backlog item 70)
+
+function gated(t, held = false) {
+  const s = withReport(t);
+  gradeClosed(s.ws);
+  stubHeld(t, s.pid, held);
+  const made = T.batchGate(s.ws, { below: 90 }).made[0];
+  return { ...s, receipt_id: made.receipt_id };
+}
+
+test('desk gates together (item 70): a dry run writes nothing and names who a pass would archive; approve and halve are refused', (t) => {
+  const s = gated(t);
+  const tree = hashTree(s.root);
+  const dry = T.decideDeskGates(s.ws, { action: 'pass', dryRun: true });
+  assert.deepEqual(hashTree(s.root), tree, 'a dry run writes nothing');
+  assert.deepEqual(dry.decided.map((d) => d.receipt_id), [s.receipt_id]);
+  assert.equal(dry.decided[0].would_archive, true);
+  assert.equal(T.decideDeskGates(s.ws, { action: 'watch', dryRun: true }).decided[0].would_archive, false);
+  for (const action of ['approve', 'halve']) assert.throws(() => T.decideDeskGates(s.ws, { action }), (e) => e.code === 'REFUSED', action);
+  assert.throws(() => T.decideDeskGates(s.ws, { action: 'veto' }), (e) => e.code === 'INVALID');
+  assert.deepEqual(hashTree(s.root), tree, 'a refusal writes nothing');
+});
+
+test('desk gates together (item 70): pass archives an unheld project, journals it in the project\'s own journal, and a replay of the same request decides nothing twice', (t) => {
+  const s = gated(t);
+  const out = T.decideDeskGates(s.ws, { action: 'pass', request_id: 'req-gates-0001', by: 'test' });
+  assert.equal(out.failed, null);
+  assert.equal(out.decided.length, 1);
+  assert.equal(out.decided[0].archived, true);
+  assert.equal(require('../core/projects').getProject(s.ws, s.pid).status, 'archived');
+  const journal = require('../core/notes').loadJournal(s.ws, s.pid).filter((e) => e.type === 'decision');
+  assert.equal(journal.length, 1);
+  assert.match(journal[0].text, new RegExp(`PM pass on ticket ${s.receipt_id}`));
+  assert.equal(T.waitingDeskGates(s.ws).length, 0);
+  const again = T.decideDeskGates(s.ws, { action: 'pass', request_id: 'req-gates-0001' });
+  assert.equal(again.decided.length, 0);
+  assert.equal(require('../core/notes').loadJournal(s.ws, s.pid).filter((e) => e.type === 'decision').length, 1);
+  // Undo is the card's own: it restores the project.
+  const undo = T.decide(s.ws, s.pid, { receipt_id: s.receipt_id, action: 'undo' });
+  assert.equal(undo.result.project_restored, true);
+});
+
+test('desk gates together (item 70): a held project is never archived by a pass; watch keeps everything', (t) => {
+  const s = gated(t);
+  const portfolio = require('../core/portfolio');
+  const real = portfolio.computePortfolio;
+  portfolio.computePortfolio = (...a) => ({ ...real(...a), positions: [{ project_id: s.pid, closed: false }] });
+  t.after(() => { portfolio.computePortfolio = real; });
+  const dry = T.decideDeskGates(s.ws, { action: 'pass', dryRun: true });
+  assert.equal(dry.decided[0].held, true);
+  assert.equal(dry.decided[0].would_archive, false);
+  const out = T.decideDeskGates(s.ws, { action: 'pass' });
+  assert.equal(out.decided[0].archived, false);
+  assert.notEqual(require('../core/projects').getProject(s.ws, s.pid).status, 'archived');
+});
+
+test('desk gates together (item 70): receipt_ids limits the set and names the ones not waiting; a watch leaves the project active', (t) => {
+  const s = gated(t);
+  const out = T.decideDeskGates(s.ws, { action: 'watch', receipt_ids: ['tr_2026-01-01T000000Z_nopexy'] });
+  assert.equal(out.decided.length, 0);
+  assert.equal(out.skipped.length, 1);
+  assert.equal(T.waitingDeskGates(s.ws).length, 1);
+  const done = T.decideDeskGates(s.ws, { action: 'watch', receipt_ids: [s.receipt_id] });
+  assert.equal(done.decided.length, 1);
+  assert.notEqual(require('../core/projects').getProject(s.ws, s.pid).status, 'archived');
+  assert.equal(T.waitingDeskGates(s.ws).length, 0);
+});
+
+test('desk gates together (item 70): the route reads GET, dry-runs, and is a 409 when more gates wait than were shown, with nothing written', async (t) => {
+  const s = gated(t);
+  const http = require('http');
+  const { start } = require('../server');
+  const today = require('../core/dates').ymdInTz(new Date());
+  const { atomicWrite, jsonText, readJson } = require('../core/fsx');
+  atomicWrite(s.ws.abs('logs/jobs-state.json'), jsonText({ schema_version: 'cr.jobs-state.v1', jobs: { snapshot: { last_success_day: today }, reviews: { last_success_day: today }, backup: { last_success_day: today } }, runner: {} }));
+  const srv = await start(s.ws, { port: 47900 + Math.floor(Math.random() * 90), quiet: true });
+  t.after(() => { try { srv.shutdown(); } catch (_) { /* stopped */ } });
+  for (let i = 0; i < 150; i++) {
+    const st = readJson(s.ws.abs('logs/jobs-state.json'), { jobs: {} });
+    if (st.jobs && st.jobs.inbox && st.jobs.inbox.last_run_at) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  const call = (method, p, token, body) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: srv.port, method, path: p, headers: { host: `127.0.0.1:${srv.port}`, 'x-cr-token': token, 'content-type': 'application/json', origin: `http://127.0.0.1:${srv.port}` } }, (res) => {
+      const c = [];
+      res.on('data', (d) => c.push(d));
+      res.on('end', () => resolve({ status: res.statusCode, json: (() => { try { return JSON.parse(Buffer.concat(c).toString()); } catch (_) { return null; } })() }));
+    });
+    req.on('error', reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+  const token = await new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port: srv.port, path: '/api/session', headers: { host: `127.0.0.1:${srv.port}` } }, (res) => { const c = []; res.on('data', (d) => c.push(d)); res.on('end', () => resolve(JSON.parse(Buffer.concat(c).toString()).token)); }).on('error', reject));
+  const list = await call('GET', '/api/tickets/desk-gates', token);
+  assert.deepEqual(list.json.waiting.map((w) => w.receipt_id), [s.receipt_id]);
+  const dry = await call('POST', '/api/tickets/desk-gates/decide', token, { action: 'pass', dry_run: true, expect: [s.receipt_id] });
+  assert.equal(dry.status, 200);
+  assert.equal(dry.json.decided[0].would_archive, true);
+  const tooFew = await call('POST', '/api/tickets/desk-gates/decide', token, { action: 'pass', expect: ['tr_2026-01-01T000000Z_nopexy'] });
+  assert.equal(tooFew.status, 409);
+  assert.equal(T.waitingDeskGates(s.ws).length, 1, 'nothing was decided');
+  const refused = await call('POST', '/api/tickets/desk-gates/decide', token, { action: 'approve', expect: [s.receipt_id] });
+  assert.ok(refused.status >= 400 && refused.status < 500);
+  const ok = await call('POST', '/api/tickets/desk-gates/decide', token, { action: 'watch', expect: [s.receipt_id], request_id: 'req-route-0001' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.json.decided.length, 1);
+});
