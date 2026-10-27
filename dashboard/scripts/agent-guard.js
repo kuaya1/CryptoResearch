@@ -9,7 +9,9 @@
 //             reserved in the ledger for this run before anything is sent
 //   prompt    the builder's task text, from the issue as Eric labeled it
 //   apply     the build artifact's patch, applied to main in a scratch index:
-//             the resulting tree is what is checked and what is committed
+//             the resulting tree is what is checked and what is committed;
+//             a patch or a builder's report that holds a key-shaped string
+//             (agent-secrets.js) is refused, naming where, never the value
 //   publish   that tree as one commit by the builder App, with the task's
 //             trailers, pushed to agent/issue-<n>
 //   record    the build attempt's outcome in the ledger
@@ -29,6 +31,7 @@ const { spawnSync } = require('child_process');
 const P = require('../engineering/policy');
 const BP = require('./backlog-promote');
 const L = require('./agent-ledger');
+const S = require('./agent-secrets');
 
 const POLICY_FILE = path.join(__dirname, '..', '..', '.github', 'agent-policy.json');
 const loadPolicy = (file = POLICY_FILE) => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -185,6 +188,8 @@ function applyPatch({ cwd, base, patchFile, maxBytes }) {
   if (buf.length > maxBytes) return { error: `the patch is ${buf.length} bytes, over ${maxBytes}` };
   const text = buf.toString('utf8');
   if (/^GIT binary patch$/m.test(text) || /^Binary files .* differ$/m.test(text)) return { error: 'the patch carries a binary change' };
+  const keys = S.patchHits(text);
+  if (keys.length) return { error: `the patch holds a key-shaped string at ${keys.map(S.describe).join(', ')}; nothing is published, and the value is not shown` };
   const index = path.join(os.tmpdir(), `agent-index-${crypto.randomBytes(6).toString('hex')}`);
   const env = { GIT_INDEX_FILE: index };
   try {
@@ -359,11 +364,10 @@ function out(flat, text) {
 }
 const eventOf = (flags) => JSON.parse(fs.readFileSync(flags.event || process.env.GITHUB_EVENT_PATH, 'utf8'));
 
-async function main(argv, { now = () => Date.now() } = {}) {
+async function main(argv, { now = () => Date.now(), cwd = process.cwd() } = {}) {
   const [cmd, ...rest] = argv;
   const flags = {};
   for (let i = 0; i < rest.length; i += 2) flags[rest[i].replace(/^--/, '')] = rest[i + 1];
-  const cwd = process.cwd();
   const policy = loadPolicy();
   if (cmd === 'reserve') {
     const ev = eventOf(flags);
@@ -386,6 +390,8 @@ async function main(argv, { now = () => Date.now() } = {}) {
   }
   if (cmd === 'apply') {
     const task = taskOf(eventOf(flags).issue, { policy });
+    const report = flags.build && fs.existsSync(flags.build) ? S.secretHits(fs.readFileSync(flags.build, 'utf8')) : [];
+    if (report.length) { out({ ok: false }, `### Not published\n\n- the builder's report holds a key-shaped string at ${report.map((h) => S.describe({ path: path.basename(flags.build), ...h })).join(', ')}; the value is not shown`); return 1; }
     const a = applyPatch({ cwd, base: flags.base, patchFile: flags.patch, maxBytes: policy.build.max_patch_bytes });
     if (a.error) { out({ ok: false }, `### Not published\n\n- ${a.error}`); return 1; }
     const ch = checkChange({ cwd, base: flags.base, rev: a.tree, task });
