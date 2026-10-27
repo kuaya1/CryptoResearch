@@ -127,6 +127,26 @@ test('a merged branch is not waiting, and an item on main by trailer is taken th
   assert.equal(s.base, 'origin/main');
 });
 
+// 2026-10-27: #45 and #46 were squash-merged, so items 67-72 were on main by
+// trailer while their branches, and the batch built on them, still counted
+// them as waiting (8 of a cap that falls to 6 on 2026-10-29).
+test('a squash-merged item is not waiting, on its own branch or on one built on it', (t) => {
+  const { work, branch, fetch } = fixture(t);
+  branch('claude/backlog-batch-items-3-and-4', [3, 4]);
+  branch('claude/backlog-batch-items-5-and-6', [5, 6], 'claude/backlog-batch-items-3-and-4');
+  g(work, 'merge', '-q', '--squash', 'claude/backlog-batch-items-3-and-4');
+  g(work, 'commit', '-qm', 'Backlog: batch-items-3-and-4 (#45)\n\nBacklog-Item: 3\nBacklog-Item: 4');
+  g(work, 'push', '-q', 'origin', 'main');
+  fetch();
+  const s = status(work, { now: AFTER });
+  assert.deepEqual(s.waiting.map((w) => [w.item, w.branches]), [[5, ['claude/backlog-batch-items-5-and-6']], [6, ['claude/backlog-batch-items-5-and-6']]]);
+  assert.equal(s.waiting_count, 2);
+  assert.equal(s.at_cap, false);
+  assert.equal(s.headroom, 3, 'cap 6 less 2 waiting, at most one batch of 3');
+  assert.deepEqual(s.next.map((x) => x.item), [7, 8, 9]);
+  assert.equal(s.base, 'origin/claude/backlog-batch-items-5-and-6');
+});
+
 test('nothing buildable says so', (t) => {
   const { work } = fixture(t, 2);
   const s = status(work, { now: SURGE });
