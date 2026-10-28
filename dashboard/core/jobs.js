@@ -10,6 +10,8 @@
 //   forensics opt-in product checks, repository reads and aggregator exit quotes (quotes only), and
 //             checkpoint outcomes that came due (forensic-monitor.js, exitquotes.js); only for projects
 //             whose monitoring Eric turned on and chains he approved; never a model call
+//   trader    the Paper Book's closed hourly pool candles from GeckoTerminal, then the desk adapter's
+//             step (trader-candles.js, slot 12b); only once Eric funds the book and a pair needs hours
 //   research  run queued research jobs (explicit requests or configured schedules only)
 //   snapshot  daily portfolio snapshot                   once per day (America/New_York)
 //   reviews   daily review findings                      once per day
@@ -28,7 +30,7 @@ const { ymdInTz } = require('./dates');
 const JOB_STATE_REL = 'logs/jobs-state.json';
 const JOB_LOG_REL = 'logs/jobs.jsonl';
 const FINDINGS_REL = 'logs/review-findings.json';
-const JOB_NAMES = ['requests', 'inbox', 'market', 'fundamentals', 'screening', 'wallets', 'forensics', 'research', 'snapshot', 'reviews', 'backup', 'offsite'];
+const JOB_NAMES = ['requests', 'inbox', 'market', 'fundamentals', 'screening', 'wallets', 'forensics', 'trader', 'research', 'snapshot', 'reviews', 'backup', 'offsite'];
 const DAILY = new Set(['snapshot', 'reviews', 'backup', 'offsite']);
 const OK_STATUSES = new Set(['ok', 'noop', 'attention', 'skipped', 'partial', 'busy', 'backoff', 'budget_paused', 'not_due']);
 
@@ -85,6 +87,14 @@ function isDue(ws, name, state, now = Date.now(), opts = {}) {
       // GitHub's rate limit or a failure backoff runs.
       try {
         return require('./forensic-monitor').isDue(ws, now);
+      } catch (_) {
+        return false;
+      }
+    case 'trader':
+      // Closed until the book is funded and a pair is behind, in a restored
+      // copy, and while GeckoTerminal's 429 or a failure backoff runs.
+      try {
+        return require('./trader-candles').isDue(ws, now);
       } catch (_) {
         return false;
       }
@@ -185,6 +195,11 @@ async function runJobBody(ws, name, trigger) {
       // Its own lease, gate, backoff and budget are inside refresh().
       const r = await require('./forensic-monitor').refresh(ws, { trigger });
       return { status: r.status === 'held' ? 'skipped' : r.status, summary: r.message, error: r.status === 'failed' ? r.message : null };
+    }
+    case 'trader': {
+      // Its own lease, gate, backoff and request budget are inside refresh().
+      const r = await require('./trader-candles').refresh(ws, { trigger });
+      return { status: r.status === 'held' ? 'skipped' : r.status, summary: r.message, error: null };
     }
     case 'research': {
       const r = await require('./research').runDueJobs(ws, { trigger });

@@ -144,12 +144,13 @@ test('12a end to end: Approve waits for the book, is refused by the exit cap, Ha
   // 2. Eric sets his rules, the funding and the fee; sixteen closed hours
   // arrive. The book is funded first, so every hour has a NAV.
   settle(ws);
-  assert.deepEqual(TD.wanted(ws), [{ pair: PAIR, project_id: pid, why: 'waiting' }]);
+  assert.deepEqual(TD.wanted(ws), [{ pair: PAIR, project_id: pid, why: 'waiting', last_hour: null }]);
   const now0 = Date.now();
   const top = Math.floor(now0 / H) * H;
   const applied = TD.applyHours(ws, Array.from({ length: 16 }, (_, i) => bar(top - (16 - i) * H)), { now: iso(now0) });
   assert.deepEqual(applied.map((x) => x.status), Array(16).fill('saved'));
   assert.equal(PT.results(ws, { now: iso(now0) }).funded_usd, '25000');
+  assert.equal(TD.wanted(ws, { now: iso(now0) })[0].last_hour, iso(top - H), 'the last hour the book holds, so the hourly read asks for what comes after');
 
   // 3. The next step asks the book once. $500 at a stop of $0.70 buys
   // 3,197.025 XMPL ($2,717.47) at $0.85, over the $2,000 the exits showed

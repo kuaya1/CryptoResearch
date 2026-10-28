@@ -732,8 +732,10 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   // So does the forensic monitor (approved exit quotes, product checks and
   // repository reads when due, and the day's checkpoint resolutions): on the
   // online desk nothing else runs it, and on the PC its lease keeps it from
-  // overlapping the hourly task.
-  const DAILY_JOBS = ['snapshot', 'reviews', 'backup', 'fundamentals', 'screening', 'forensics'];
+  // overlapping the hourly task. So does the Paper Book's hourly read (slot
+  // 12b, trader-candles.js): closed hours for the pairs it needs, then the
+  // desk adapter's step, only once Eric has funded the book.
+  const DAILY_JOBS = ['snapshot', 'reviews', 'backup', 'fundamentals', 'screening', 'forensics', 'trader'];
   const dailyTimer = setInterval(() => jobs.runJobs(ws, DAILY_JOBS, { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 30 * 60000);
 
   // The front door (dashboard/frontdoor.js) answers everything before

@@ -342,15 +342,17 @@ function requests(ws, { now, project = null } = {}) {
 }
 
 // What the book needs hours for: each pair a request is waiting on, and each
-// pair with an open position or a live order; none while Eric has set no
-// funding. Reads only; 12b's hourly read fetches these and hands them to
-// applyHours.
+// pair with an open position or a live order, with the last hour the book
+// holds for it (null for none); none while Eric has set no funding. Reads
+// only; the hourly read (core/trader-candles.js, slot 12b) fetches the hours
+// after the last and hands them to applyHours.
 function wanted(ws, { now } = {}) {
   const ctx = contextOf(ws, now, null);
   if (!ctx.s.book.cash_usd) return [];
   const snap = snapshotOf(ws, ctx.now);
+  const last = new Map(PT.hours(ws).map((h) => [h.pair, h.last_hour]));
   const out = new Map();
-  const add = (pair, pid, why) => { if (pair && !out.has(pair)) out.set(pair, { pair, project_id: pid, why }); };
+  const add = (pair, pid, why) => { if (pair && !out.has(pair)) out.set(pair, { pair, project_id: pid, why, last_hour: last.get(pair) || null }); };
   for (const g of ctx.grants) {
     const a = assess(ws, ctx, g, snap);
     if (['waiting', 'ready', 'order', 'open', 'closing'].includes(a.phase)) add(a.pair, a.project_id, a.phase);
