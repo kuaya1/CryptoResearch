@@ -1276,6 +1276,10 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
       archive: action === 'pass' && line.archive === 'archived' ? 'archive' : action === 'undo' && inForce.archive === 'archived' ? 'restore' : null,
       paper: grants(line) ? 'open' : action === 'undo' && grants(inForce) ? 'void' : null,
       journal: 'entry',
+      // The trader's Paper Book (cr-paper@2, slot 12a): a grant asks for its
+      // order, an undo of one for what has not filled cancelled and what has
+      // closed (core/trader-desk.js; only decisions stating this ask it).
+      trader: grants(line) ? 'open' : action === 'undo' && grants(inForce) ? 'close' : null,
     };
     const full = { schema_version: 'cr.ticket-decision.v1', decision_id: `td_${sha256(`${pid}:${rid}:${action}:${at}:${lines.length}`).slice(0, 14)}`, project_id: pid, receipt_id: rid, ticket_id: r.ticket_id, ...line, note: text, decided_at: at, decided_by: by || ws.actor || null, request_id: reqId, meaning: 'Eric\'s PM decision on the ticket: it records his choice and places no order.' };
     op.write(rel, `${cur}${cur && !cur.endsWith('\n') ? '\n' : ''}${JSON.stringify(full)}\n`);
@@ -1305,7 +1309,26 @@ function effectsOf(ws, pid, rid, d, undone) {
   }
   out.journal = journalDecision(ws, pid, d, undone);
   out.paper = paperBook(ws, pid, rid, d, undone);
+  out.trader = traderBook(ws, pid, d);
   return out;
+}
+
+// The decision's order in the trader's Paper Book (cr-paper@2): the desk's
+// adapter takes one step for this project at once (core/trader-desk.js).
+// Until the book can answer (funded, Eric's rules and fee set, recent hours
+// for the pair) the request waits, said in words, and the adapter's later
+// steps complete it. Simulated only: it places no order at any venue.
+function traderBook(ws, pid, d) {
+  if (!d.effects || !d.effects.trader) return null;
+  try {
+    const r = require('./trader-desk').step(ws, { project: pid });
+    const id = d.action === 'undo' ? d.undoes : d.decision_id;
+    const mine = r.requests.find((x) => x.decision_id === id);
+    const problems = r.problems.filter((x) => !x.decision_id || x.decision_id === id);
+    return { status: mine ? mine.phase : 'skipped', words: mine ? mine.words : null, ...(problems.length ? { problems } : {}) };
+  } catch (err) {
+    return { status: 'failed', error: String(err && err.message || err).slice(0, 200) };
+  }
 }
 
 // A decision that grants risk opens a paper position (core/paper.js, kept

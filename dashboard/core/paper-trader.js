@@ -6,8 +6,10 @@
 // never touches a real venue, an account or money. It lives beside the PM Paper Book
 // (cr-paper@1, core/paper.js), which keeps measuring Eric's ticket decisions
 // exactly as before: paper.js is not edited, and nothing here enters
-// paper/positions.jsonl, its counts or Portfolio. No route, CLI, connector
-// tool or UI calls it yet.
+// paper/positions.jsonl, its counts or Portfolio. Its one caller is the
+// desk's adapter, core/trader-desk.js (blueprint slot 12a, Eric 2026-10-28),
+// which turns Eric's Approve, Halve and Undo into intents; no route, CLI,
+// connector tool or UI calls it directly.
 //
 // Records, append-only, written through runOp and re-derived from disk on
 // every call (no state is kept in memory between calls):
@@ -919,7 +921,9 @@ function applyBar(ws, bar, { now } = {}) {
 
 // The book handed to cr-trade-risk@2 for an intent in `pair`. ctx.ticket
 // names the intent's project_id, receipt_id and decision_id; its grant is
-// read from Eric's stored decision as a reservation reads it.
+// read from Eric's stored decision as a reservation reads it. Beside the
+// book, the reasons there is no grant or no exit cap (grant_why, exit_why),
+// so a caller can tell them from what is only not yet known (slot 12a).
 function book(ws, pair, ctx = {}) {
   noCallerGrant(ctx);
   const tk = ctx.ticket && typeof ctx.ticket === 'object' ? ctx.ticket : null;
@@ -927,7 +931,21 @@ function book(ws, pair, ctx = {}) {
   const ticket = tk
     ? { thesis: typeof tk.receipt_id === 'string' ? tk.receipt_id : null, ...grantOf(rd, tk), ...exitCapOf(rd, tk, msOf(ctx.now)) }
     : { thesis: null, grant: null, why: null, exit_max_usd: null, exit: null, exit_why: null };
-  return bookFor(replay(loadWs(ws).parsed.events), pair, ctx, ticket);
+  return { ...bookFor(replay(loadWs(ws).parsed.events), pair, ctx, ticket), grant_why: ticket.why, exit_why: ticket.exit_why };
+}
+
+// Every intent on record (slot 12a): refused with its reasons, or its
+// order's state with the side, pair, thesis and position it belongs to. So
+// the desk's adapter knows what it already asked, by intent_id, and never
+// asks twice.
+function intents(ws) {
+  const st = replay(loadWs(ws).parsed.events);
+  return [...st.intents.entries()].map(([id, i]) => {
+    const o = st.orders.get(`cr2-${id}`);
+    return o
+      ? { intent_id: id, side: o.side, pair: o.pair, thesis_id: o.thesis_id, position_id: o.position_id, ...stateOf(o), refusals: null }
+      : { intent_id: id, side: null, pair: null, thesis_id: null, position_id: null, client_order_id: null, state: 'REFUSED', filled: null, quantity: null, words: null, refusals: i.refusals };
+  });
 }
 
 // The book's results now. NAV, cash, each position's quantity, notional,
@@ -988,5 +1006,5 @@ function results(ws, { now, btc } = {}) {
 module.exports = {
   VERSION, JOURNAL, VENUE, HEAD, FILL_SHARE_MAX, STOP_SLIPPAGE_BPS, VENUE_DUPLICATE_WINDOW_MINUTES, NAV_PRICE_FRESH_MINUTES, DECISION_VERSION,
   RECEIPT_RE, EXIT_FRESH_HOURS,
-  decisionInForce, fund, submitIntent, reserveIntent, markSent, venueSend, recordAnswer, recover, reconcile, cancelOrder, applyBar, book, results,
+  decisionInForce, fund, submitIntent, reserveIntent, markSent, venueSend, recordAnswer, recover, reconcile, cancelOrder, applyBar, book, intents, results,
 };

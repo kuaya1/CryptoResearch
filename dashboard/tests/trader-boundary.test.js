@@ -3,10 +3,12 @@
 // pipeline review and the architecture recovery's PR D, 2026-10-27): the risk
 // engine, the Paper Books, the arithmetic they compute with, their tests and
 // the frozen intent schemas are protected, on the one list below; nothing
-// outside them and their tests calls the trader yet (no route, CLI,
-// connector tool or UI); no trader module reaches a network, a process or a
-// secret; the frozen cr.trade-intent.v3 schema and the engine read the same
-// fields, and v2 stays as published; the trader's in-force rule for Eric's
+// outside them and their tests calls the trader but the desk's one adapter,
+// core/trader-desk.js (blueprint slot 12a: no route, CLI, connector tool or
+// UI calls it directly); no trader module, nor the adapter, reaches a
+// network, a process or a secret; the frozen cr.trade-intent.v3 schema and
+// the engine read the same fields, and v2 stays as published; the trader's
+// in-force rule for Eric's
 // decisions is the desk's; and the contract in DESK_STATE.md says an order
 // never times out to lost. This file is on the list too.
 
@@ -113,8 +115,11 @@ test('cr-paper@2: cash NAV, discrete sizing, fees and slippage, high/low stops w
 });
 
 const TRADER = ['dashboard/core/trade-risk.js', 'dashboard/core/paper-trader.js'];
-// The modules that may call the trader: none yet but the trader itself.
-const CALLERS = new Set([...TRADER]);
+// The modules that may call the trader: the trader itself and the desk's one
+// adapter (slot 12a, Eric 2026-10-28), which turns his decisions into intents.
+const ADAPTER = 'dashboard/core/trader-desk.js';
+const CALLERS = new Set([...TRADER, ADAPTER]);
+const ADAPTER_REQUIRES = new Set(['./paper-trader', './trade-risk', './trader-rules', './ops', './fsx', './tickets', './projects', './research', 'fs']);
 const ALLOWED_REQUIRES = new Set(['./decimal', './trade-risk', './ops', './fsx', './ids', 'fs', 'path', 'crypto']);
 
 function files(dir, out = []) {
@@ -131,7 +136,7 @@ test('the trader modules and the schemas the engine reads are on the protected l
   for (const p of [...TRADER, 'templates/schemas/trade-intent.v2.schema.json', `templates/schemas/trade-intent.${risk.INTENT_VERSION.split('.').pop()}.schema.json`]) assert.ok(isProtected(p), `${p} is protected`);
 });
 
-test('nothing outside the trader and its tests calls it yet', () => {
+test('nothing outside the trader, its one adapter and their tests calls it', () => {
   const hits = [];
   for (const rel of files('dashboard')) {
     if (CALLERS.has(rel) || rel.startsWith('dashboard/tests/')) continue;
@@ -139,6 +144,15 @@ test('nothing outside the trader and its tests calls it yet', () => {
     if (/(require\(|from|import\()\s*['"][^'"]*(trade-risk|paper-trader)(\.js)?['"]/.test(src)) hits.push(rel);
   }
   assert.deepEqual(hits, []);
+  // The adapter is the caller, and the desk reaches the trader only through it.
+  assert.match(read(ADAPTER), /require\('\.\/paper-trader'\)/);
+  assert.match(read('dashboard/core/tickets.js'), /require\('\.\/trader-desk'\)\.step\(/);
+});
+
+test('slot 12a: the adapter reaches no network, process or secret, and requires only the desk modules it reads', () => {
+  const src = read(ADAPTER);
+  for (const m of src.matchAll(/require\(\s*'([^']+)'\s*\)/g)) assert.ok(ADAPTER_REQUIRES.has(m[1]), `${ADAPTER} requires ${m[1]}`);
+  for (const re of [/process\.env/, /\bfetch\(/, /secrets/i, /api[_-]?key/i, /wallet/i, /https?:\/\//]) assert.doesNotMatch(src, re, `${ADAPTER} ${re}`);
 });
 
 test('no trader module reaches a network, a process, the environment or a secret', () => {

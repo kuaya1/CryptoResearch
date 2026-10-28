@@ -2,8 +2,10 @@
 // D12 (audits/2026-10-27-de-escalation): one paper trade through the trader's
 // Paper Book, cr-paper@2, from funding to the stop, asserted to the cent.
 // A temporary workspace and a fictional pair, project, ticket and decision
-// only: nothing here is a market, an account, a venue or an order, and
-// nothing in the desk calls the trader (trader-boundary.test.js).
+// only: nothing here is a market, an account, a venue or an order. The book
+// is driven directly here; in the desk only its adapter, core/trader-desk.js,
+// calls it (trader-boundary.test.js; trader-desk.test.js drives it from
+// Eric's decisions).
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
