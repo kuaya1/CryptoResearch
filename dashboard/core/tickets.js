@@ -38,7 +38,10 @@ const FORMAT = 'cr.ticket.v1';
 // @2 (Eric, 2026-10-24): a native L1 coin of at least $10B market cap passes
 // the exit check without a DEX quote (exit_basis native_l1_liquid). A ticket
 // keeps the version it froze: @1 tickets are read without the exemption.
-const SIZING_VERSION = 'cr-ticket-sizing@2';
+// @3 (Eric, 2026-10-28): the exit at a size is the cheapest current reading
+// whose cost is known in full, else the cheapest reading; a cheaper lower bound
+// no longer hides a complete reading. Frozen tickets keep their exits.
+const SIZING_VERSION = 'cr-ticket-sizing@3';
 const INVALIDATION_VERSION = 'cr-ticket-invalidation@2';
 const INVALIDATION_V1 = 'cr-ticket-invalidation@1';
 // Rollback safety (2026-10-25): a receipt made under a newer rules version than
@@ -250,8 +253,9 @@ function gateGrade(grade) {
 }
 
 // The exit cost at a size from the desk's own quote readings (the Forensics
-// tab's view): the best current reading, or why there is none. A lower bound
-// (a cost not known in full) is kept as "at least".
+// tab's view): the cheapest current reading whose cost is known in full, else
+// the cheapest current reading (@3), or why there is none. A lower bound (a
+// cost not known in full) is kept as "at least".
 function exitsOf(ws, pid, sizes, now) {
   let v = null;
   try {
@@ -262,7 +266,7 @@ function exitsOf(ws, pid, sizes, now) {
   const rows = (v && v.liquidity && v.liquidity.exits) || [];
   return sizes.map((s) => {
     const row = rows.find((x) => x.size_usd === s);
-    const b = row ? row.best : null;
+    const b = row ? row.best_complete || row.best : null;
     const cost = b && isNum(b.cost_pct) ? round(b.cost_pct, 3) : null;
     return {
       size_usd: s,
@@ -272,7 +276,7 @@ function exitsOf(ws, pid, sizes, now) {
       missing_costs: b ? b.missing_costs || [] : [],
       method: b ? b.method || null : null,
       route_scope: b ? b.route_scope || null : null,
-      as_of: (row && row.as_of) || (b && b.retrieved_at) || null,
+      as_of: (b && b.retrieved_at) || (row && row.as_of) || null,
       note: row ? row.note || null : `No exit reading at ${usd(s)}: approve exit quotes for this project (Forensics > Exits, or Quote exits for every project).`,
     };
   });
@@ -334,7 +338,7 @@ function fundamentalsOf(ws, project, now) {
 }
 
 // ---------------------------------------------------------------------------
-// The sizing gate (cr-ticket-sizing@1, @2): deterministic, from the frozen
+// The sizing gate (cr-ticket-sizing@1, @2, @3): deterministic, from the frozen
 // basis and the sizing the ticket froze.
 
 // A native L1 coin (the identity says so; never inferred) whose stored market
@@ -620,7 +624,7 @@ function createTicket(ws, args = {}) {
     sizing,
     native: null,
     notes: [
-      'exits: the desk\'s own exit-quote readings (aggregator quotes or constant-product reserves) as the Forensics tab reads them; a cost not known in full is a lower bound.',
+      'exits: the desk\'s own exit-quote readings (aggregator quotes or constant-product reserves) as the Forensics tab reads them, at each size the cheapest current reading whose cost is known in full, else the cheapest; a cost not known in full is a lower bound.',
       'held: whether Eric records an open position in this token (Portfolio); never its size.',
     ],
   };

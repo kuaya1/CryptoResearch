@@ -342,7 +342,9 @@ function costWords(e) {
 // The exit estimates of a set of readings at each size (liquidity@2): every
 // reading, the current reading of each route scope (its latest answer, kept
 // apart when older than the freshness window), and the best current route.
-// An older answer of the same scope is history, whatever it cost.
+// An older answer of the same scope is history, whatever it cost. The best
+// complete route is the cheapest current one whose cost is known in full, so a
+// cheaper lower bound never hides it (the ticket gate's, cr-ticket-sizing@3).
 function exitTable(observations, sizes, { marketPriceUsd = null, taxOf = null, now = Date.now(), freshnessHours = D.EVENTS.liquidity_impairment.freshness_hours } = {}) {
   const obs = Array.isArray(observations) ? observations : [];
   const fresh = freshnessHours * HOUR;
@@ -359,6 +361,7 @@ function exitTable(observations, sizes, { marketPriceUsd = null, taxOf = null, n
     const estimated = live.filter((r) => r.status === 'estimated').sort((a, b) => a.cost_pct - b.cost_pct);
     const noRoute = live.filter((r) => r.status === 'no_route');
     const status = estimated.length ? 'estimated' : noRoute.length ? 'no_route' : current.length ? 'stale' : 'no_supported_estimate';
+    const complete = estimated.find((r) => r.cost_complete === true) || null;
     const strip = ({ t, ...r }) => r;
     return {
       size_usd: size,
@@ -366,6 +369,7 @@ function exitTable(observations, sizes, { marketPriceUsd = null, taxOf = null, n
       routes: current.map(strip),
       best: estimated[0] ? strip(estimated[0]) : null,
       best_words: estimated[0] ? costWords(estimated[0]) : null,
+      best_complete: complete ? strip(complete) : null,
       as_of: estimated[0] ? estimated[0].retrieved_at : live.length ? live.map((r) => r.retrieved_at).sort().pop() : null,
       earlier: speaking.length - current.length,
       status,

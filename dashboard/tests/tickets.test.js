@@ -281,9 +281,9 @@ test('the pilot queue names whether a project named outright is in the pilot', a
   assert.match(await ask(), /pilot on/);
 });
 
-test('native L1 exemption (cr-ticket-sizing@2): the chain\'s own coin at $10B+ passes the exit check without a DEX quote; a smaller coin, a token, or a ticket frozen under @1 does not', (t) => {
+test('native L1 exemption (cr-ticket-sizing@2 and later): the chain\'s own coin at $10B+ passes the exit check without a DEX quote; a smaller coin, a token, or a ticket frozen under @1 does not', (t) => {
   const s = T.sizingOf({ settings: {} });
-  assert.equal(s.version, 'cr-ticket-sizing@2');
+  assert.equal(s.version, 'cr-ticket-sizing@3');
   assert.equal(s.native_l1_min_market_cap_usd, 10e9);
   const basis = (native, cap) => ({ researcher: { grade: { status: 'firm', value: 60 } }, held: true, exits: [], native: { native_chain: native, market_cap_usd: cap } });
   const eth = T.gate(basis(true, 280e9), s, 'ACCUMULATE');
@@ -306,7 +306,7 @@ test('a new ticket freezes whether the coin is native and its market cap, and th
   const s = withReport(t);
   const tk = T.createTicket(s.ws, { project_id: s.pid }).ticket;
   assert.deepEqual(tk.basis.native, { native_chain: false, market_cap_usd: null });
-  assert.equal(tk.sizing.version, 'cr-ticket-sizing@2');
+  assert.equal(tk.sizing.version, 'cr-ticket-sizing@3');
   assert.match(T.promptFor(s.ws, tk).text, /native L1 coin/);
 });
 
@@ -2259,4 +2259,71 @@ test('pilot cycle (item 71): a dry run asks no provider, and a restored copy ask
   assert.match(String(q.status || q.reason), /refused|held|restored/i);
   const out = await T.runCycle(s.ws, { fetchImpl: boom, cgGetImpl: boom });
   assert.equal(out.counts.quoted, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Complete readings first (cr-ticket-sizing@3, D1): a cheaper lower bound at a
+// size never hides a current reading whose cost is known in full.
+
+// Current readings at $500 through the real exitTable, from two route scopes:
+// an aggregator quote with its network fee and a 0% tax (complete), and one
+// without its network fee (a lower bound). Fictional; nothing is fetched.
+function exitReadings({ completeCost = null, lowerCost = null }) {
+  const M = require('../core/forensic-model');
+  const at = new Date().toISOString();
+  const quote = (provider, chain, cost, gas) => ({ source: 'monitor', provider, chain_id: chain, contract_address: '0xfictional', kind: 'executable_quote', route_scope: 'aggregator', retrieved_at: at, quote: { sell_usd: 500, received_usd: 500 * (1 - cost / 100), ...(gas === undefined ? {} : { gas_usd: gas }) } });
+  const obs = [];
+  if (completeCost !== null) obs.push(quote('kyberswap', 'base', completeCost, 0));
+  if (lowerCost !== null) obs.push(quote('jupiter', 'solana', lowerCost));
+  return M.exitTable(obs, [500, 2000], { taxOf: () => ({ pct: 0, source: 'GoPlus (FICTIONAL)', checked_at: at }) });
+}
+
+// A ticket opened while the Forensics view hands it that table, then saved
+// with a fresh price above the answer's trigger.
+function savedOn(t, s, table) {
+  stubHeld(t, s.pid, false);
+  const F = require('../core/forensics');
+  const real = F.view;
+  F.view = () => ({ liquidity: { exits: table } });
+  let tk;
+  try { tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket; } finally { F.view = real; }
+  freshPrice(s.ws, CG, 0.85);
+  const frozen = JSON.parse(fs.readFileSync(s.ws.abs(tk.packet.path), 'utf8'));
+  return { tk, frozen, saved: T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) }) };
+}
+
+test('cr-ticket-sizing@3: a complete 4% exit beside a cheaper 3% lower bound is the reading the gate takes, and it passes at $500; the Forensics tab\'s best stays the cheaper one', (t) => {
+  const s = withReport(t);
+  const table = exitReadings({ completeCost: 4, lowerCost: 3 });
+  const at500 = table.find((r) => r.size_usd === 500);
+  assert.deepEqual([at500.best.cost_pct, at500.best.cost_complete], [3, false], 'the Forensics tab still shows the cheapest reading');
+  assert.deepEqual([at500.best_complete.cost_pct, at500.best_complete.cost_complete], [4, true]);
+  const { tk, frozen, saved } = savedOn(t, s, table);
+  assert.equal(tk.sizing.version, 'cr-ticket-sizing@3');
+  const e = frozen.exits.find((x) => x.size_usd === 500);
+  assert.deepEqual([e.cost_pct, e.cost_complete, e.as_of], [4, true, at500.best_complete.retrieved_at], 'the packet freezes the complete reading and its time');
+  assert.equal(saved.receipt.desk.suggested_risk_usd, 500);
+  assert.equal(saved.receipt.desk.proposal_type, 'ACCUMULATE');
+  assert.deepEqual([saved.receipt.desk.exit_cost_500_usd_pct, saved.receipt.desk.exit_cost_500_complete], [4, true]);
+});
+
+test('cr-ticket-sizing@3: a complete exit over 5% is the one the gate reads, so a cheaper lower bound under 5% beside it does not pass', (t) => {
+  const s = withReport(t);
+  const { saved } = savedOn(t, s, exitReadings({ completeCost: 6, lowerCost: 3 }));
+  assert.equal(saved.receipt.desk.suggested_risk_usd, 0);
+  assert.equal(saved.receipt.desk.proposal_type, 'WATCH_ONLY');
+  assert.deepEqual([saved.receipt.desk.exit_cost_500_usd_pct, saved.receipt.desk.exit_cost_500_complete], [6, true]);
+  assert.match(saved.receipt.desk.gate.reasons.join(' '), /Exit cost at \$500 is 6%, over 5%/);
+});
+
+test('cr-ticket-sizing@3: with lower bounds only, the cheapest is read and still proves nothing, as before', (t) => {
+  const s = withReport(t);
+  const table = exitReadings({ lowerCost: 3 });
+  const at500 = table.find((r) => r.size_usd === 500);
+  assert.equal(at500.best_complete, null);
+  assert.equal(at500.best.cost_complete, false);
+  const { saved } = savedOn(t, s, table);
+  assert.equal(saved.receipt.desk.suggested_risk_usd, 0);
+  assert.deepEqual([saved.receipt.desk.exit_cost_500_usd_pct, saved.receipt.desk.exit_cost_500_complete], [3, false]);
+  assert.match(saved.receipt.desk.gate.reasons.join(' '), /at least 3% \(network fee unknown\): a lower bound does not prove it/);
 });
