@@ -326,6 +326,11 @@ function validateSettingsPatch(patch, ws = null) {
     if (o.pregate_max_grade !== undefined && o.min_grade_new_entry !== undefined && o.pregate_max_grade > o.min_grade_new_entry) throw new OpError('INVALID', 'The highest grade closed without a Prosecutor cannot be above the minimum for a new entry');
     out.tickets = { sizing: o };
   }
+  if (patch.trader && patch.trader.rules !== undefined) {
+    // Eric's trader rules (Preferences > Screening; core/trader-rules.js
+    // rulesOf reads them with the same bounds). Null unsets one.
+    out.trader = { rules: require('./core/trader-rules').validatePatch(patch.trader.rules) };
+  }
   if (patch.alerts && patch.alerts.spread) {
     // Eric's spread-alert thresholds (core/spread.js thresholds reads them
     // with the same bounds): the grade gap between Claude and another model,
