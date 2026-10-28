@@ -1,7 +1,7 @@
 'use strict';
-// The pre-trade risk engine, cr-trade-risk@1 (core/trade-risk.js; backlog
-// item 73). Fictional pair, book and rules only: nothing here is a market,
-// an account or an order.
+// The pre-trade risk engine, cr-trade-risk@2 (core/trade-risk.js; backlog
+// item 73, D8). Fictional pair, book, rules, ticket and decision only:
+// nothing here is a market, an account or an order.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -10,10 +10,13 @@ const path = require('path');
 const { validateTradeIntent, VERSION } = require('../core/trade-risk');
 
 const NOW = '2026-10-27T12:00:00Z';
+const TICKET = { project_id: 'fict-project', receipt_id: 'tr_2026-10-27T000000Z_fict2', decision_id: 'td_fict0000000001' };
+const GRANT = { thesis_id: TICKET.receipt_id, ...TICKET, suggested_risk_usd: '250', pm_approved_risk_usd: '250' };
 const intent = () => ({
-  version: 'cr.trade-intent.v2',
+  version: 'cr.trade-intent.v3',
   intent_id: '01JBXQ5R7Z8Y9W0V1T2S3R4Q5P',
-  thesis_id: 'THESIS-FICT-001',
+  thesis_id: TICKET.receipt_id,
+  ...TICKET,
   pair: 'FICT/USDC',
   side: 'OPEN_LONG',
   order_type: 'LIMIT',
@@ -44,7 +47,7 @@ const book = () => ({
   exit_max_usd: '5000',
   fees: { maker_rate: '0.001', taker_rate: '0.002' },
   stop_slippage_bps: 10,
-  grant: { thesis_id: 'THESIS-FICT-001', suggested_risk_usd: '250', pm_approved_risk_usd: '250' },
+  grant: { ...GRANT },
   positions: [{ position_id: 'pos-1', pair: 'FICT/USDC', state: 'open', quantity: '18.232' }],
   orders: [{ client_order_id: 'cr-old', state: 'FILLED' }],
 });
@@ -88,11 +91,12 @@ test('a passing CLOSE_LONG closes the whole open quantity and takes none of the 
 test('each rule refused on its own, with its field named', () => {
   const cases = [
     [{ intent: { version: 'cr.trade-intent.v1' } }, ['version', 'shape']],
+    [{ intent: { version: 'cr.trade-intent.v2' } }, ['version', 'shape']],
     [{ intent: { intent_id: 'not-a-ulid' } }, ['intent_id', 'shape']],
     [{ intent: { client_order_id: 'cr-1' } }, ['client_order_id', 'shape']],
     [{ intent: { side: 'BUY' } }, ['side', 'shape']],
     [{ intent: { order_type: 'MARKET' } }, ['order_type', 'shape']],
-    [{ intent: { thesis_id: '' }, book: { grant: { thesis_id: '', suggested_risk_usd: '250', pm_approved_risk_usd: '250' } } }, ['thesis_id', 'shape']],
+    [{ intent: { thesis_id: '' }, book: { grant: { ...GRANT, thesis_id: '' } } }, ['thesis_id', 'shape']],
     [{ intent: { evidence: { catalyst: 'x', metrics_evaluated: [], negative_invalidation: 'y' } } }, ['evidence', 'shape']],
     [{ intent: { created_at: '2026-10-27 11:58' } }, ['created_at', 'timestamp']],
     [{ intent: { created_at: '2026-10-27T12:00:01Z' } }, ['created_at', 'future_time']],
@@ -114,9 +118,9 @@ test('each rule refused on its own, with its field named', () => {
     [{ rules: { notional_max_pct: '0.1' } }, ['risk_ceiling_usd', 'notional_cap']],
     [{ book: { exit_max_usd: '1000' } }, ['risk_ceiling_usd', 'exit_cap']],
     [{ book: { grant: undefined } }, ['book.grant', 'unknown']],
-    [{ book: { grant: { thesis_id: 'THESIS-OTHER', suggested_risk_usd: '250', pm_approved_risk_usd: '250' } } }, ['book.grant', 'unknown']],
-    [{ book: { grant: { thesis_id: 'THESIS-FICT-001', suggested_risk_usd: '99.99', pm_approved_risk_usd: '250' } } }, ['risk_ceiling_usd', 'gate_cap']],
-    [{ book: { grant: { thesis_id: 'THESIS-FICT-001', suggested_risk_usd: '250', pm_approved_risk_usd: '99.99' } } }, ['risk_ceiling_usd', 'pm_cap']],
+    [{ book: { grant: { ...GRANT, thesis_id: 'THESIS-OTHER' } } }, ['book.grant', 'unknown']],
+    [{ book: { grant: { ...GRANT, suggested_risk_usd: '99.99' } } }, ['risk_ceiling_usd', 'gate_cap']],
+    [{ book: { grant: { ...GRANT, pm_approved_risk_usd: '99.99' } } }, ['risk_ceiling_usd', 'pm_cap']],
     [{ rules: { allowlist: [] } }, ['rules.allowlist', 'rule_unset']],
     [{ rules: { allowlist: undefined } }, ['rules.allowlist', 'rule_unset']],
     [{ rules: { stop_min_pct: undefined } }, ['rules.stop_min_pct', 'rule_unset']],
@@ -126,6 +130,26 @@ test('each rule refused on its own, with its field named', () => {
     [{ rules: { max_validity_minutes: 0 } }, ['rules.max_validity_minutes', 'rule_unset']],
   ];
   for (const [patch, expected] of cases) assert.deepEqual(pairs(run(patch)), [expected], JSON.stringify(patch));
+});
+
+test('D8: a v3 intent names its ticket, its thesis is the receipt, and the grant must be the decision it names', () => {
+  // The thesis is the ticket: another thesis ID is refused, and no grant is its.
+  assert.deepEqual(pairs(run({ intent: { thesis_id: 'THESIS-FICT-001' } })), [['thesis_id', 'shape'], ['book.grant', 'unknown']]);
+  for (const f of ['project_id', 'receipt_id', 'decision_id']) {
+    const missing = pairs(run({ intent: { [f]: undefined } }));
+    assert.ok(missing.some((p) => p[0] === f && p[1] === 'shape'), f);
+    assert.ok(missing.some((p) => p[0] === 'book.grant' && p[1] === 'unknown'), `${f}: no grant without it`);
+  }
+  // A grant of another decision, receipt or project is no grant for this intent.
+  for (const g of [{ decision_id: 'td_fict0000000002' }, { project_id: 'other-project' }, { receipt_id: 'tr_2026-10-27T000000Z_fict3' }, { decision_id: undefined }]) {
+    const grant = { ...GRANT, ...g };
+    for (const k of Object.keys(grant)) if (grant[k] === undefined) delete grant[k];
+    assert.deepEqual(pairs(run({ book: { grant } })), [['book.grant', 'unknown']], JSON.stringify(g));
+  }
+  // A close reads no grant; it still names its ticket.
+  const close = { side: 'CLOSE_LONG', position_id: 'pos-1', entry_price: '100.1' };
+  assert.deepEqual(run({ intent: close, book: { grant: undefined } }).refusals, []);
+  assert.deepEqual(pairs(run({ intent: { ...close, decision_id: undefined }, book: { grant: undefined } })), [['decision_id', 'shape']]);
 });
 
 test('several failures are listed together, never only the first', () => {

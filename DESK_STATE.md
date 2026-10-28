@@ -247,7 +247,7 @@ Live tickets (2026-10-24), both $0 and waiting for Eric: OLAS `tr_2026-10-24T175
 
 ### Junior Trader Desk Invariants (Future-Proofing Contract)
 
-Eric, 2026-10-27. The contract for the autonomous trader still to be built, so the sandbox, the ledger (`dashboard/scripts/agent-ledger.js`) and the desk's deterministic gates carry unattended trading without rework. The pre-trade risk engine (`dashboard/core/trade-risk.js`, `cr-trade-risk@1`, PR #58) and the trader's Paper Book (`dashboard/core/paper-trader.js`, `cr-paper@2`, PR #59) are built as library code; no route, CLI, connector tool, UI or agent calls them, and nothing routes anywhere. The North Star invariants above stay in force: today nothing places an order, connects a wallet or exchange, or moves money.
+Eric, 2026-10-27. The contract for the autonomous trader still to be built, so the sandbox, the ledger (`dashboard/scripts/agent-ledger.js`) and the desk's deterministic gates carry unattended trading without rework. The pre-trade risk engine (`dashboard/core/trade-risk.js`, `cr-trade-risk@1`, PR #58; `cr-trade-risk@2` since D8, 2026-10-28) and the trader's Paper Book (`dashboard/core/paper-trader.js`, `cr-paper@2`, PR #59) are built as library code; no route, CLI, connector tool, UI or agent calls them, and nothing routes anywhere. The North Star invariants above stay in force: today nothing places an order, connects a wallet or exchange, or moves money.
 
 1. **Separation of proposal and execution.** The LLM agent is an analyst only. It never holds execution API keys and never signs a transaction. It emits a typed `TradeIntent` (below). An out-of-band deterministic engine intercepts, validates and routes it; while invariant 5 holds, it routes only to the Paper Book.
 2. **Stateless shift work.** The trader runs in discrete, stateless evaluation cycles during the target market's liquidity windows. Each tick re-derives its state from disk only (`DESK_STATE.md`, open position records, fill journals) and exits. No long-lived chat memory.
@@ -301,6 +301,35 @@ What the engine holds it to:
 - **Evidence is for the record.** The engine stores `evidence` with the intent for the audit trail and reads none of it for a decision.
 - The schema is published as `templates/schemas/trade-intent.v2.schema.json` (PR #58) and never edited after; a change is `cr.trade-intent.v3`.
 
+### `TradeIntent` schema (`cr.trade-intent.v3`)
+
+Eric, 2026-10-28 (D8, T-P2-15 in `audits/2026-10-27-de-escalation`). The engine (`cr-trade-risk@2`) accepts only this version. It is v2 with the ticket the intent acts on:
+
+```json
+{
+  "version": "cr.trade-intent.v3",
+  "thesis_id": "string, equal to receipt_id",
+  "project_id": "string, the desk project",
+  "receipt_id": "string, the ticket receipt (tr_…)",
+  "decision_id": "string, Eric's PM decision on it (td_…)"
+}
+```
+
+Every other field is v2's, as above.
+
+- **The grant is Eric's stored decision.** The Paper Book reads the decision from the desk's own record of them, `projects/<project_id>/tickets/decisions.jsonl`, under the same lock as the reservation.
+- **It is a grant only while it is the decision in force.** `decision_id` must be the decision in force for `receipt_id`, by the desk's rule (`core/tickets.js` `decisionFor`, the last line no undo takes back; `trader-boundary` checks the two agree). It must be an approve or a halve above $0. The grant is then exactly its `pm_approved_risk_usd` and `suggested_risk_usd`, and the engine holds the thesis to both.
+- **Refused:**
+  - a grant from the caller (`ctx.grant`: nothing is read or written);
+  - a veto, pass or watch;
+  - an undone or replaced decision;
+  - a decision of another project or another decision schema;
+  - a missing or unreadable record, or a line in it that does not read (the desk skips such a line; the trader refuses, since an undo it held could leave a grant standing);
+  - a `project_id` that is not one;
+  - a v2 intent.
+- **A close reads no grant.** A `CLOSE_LONG` only reduces risk, so a position still closes after Eric takes the grant back.
+- The schema is published as `templates/schemas/trade-intent.v3.schema.json` and never edited after; v2's file stays as published; a change is `cr.trade-intent.v4`.
+
 ### Paper Book `cr-paper@2`
 
 Pipeline review, 2026-10-27. What the trader's Paper Book must be before any engine routes an intent to it. Built in `dashboard/core/paper-trader.js` (PR #59) beside `cr-paper@1` (`dashboard/core/paper.js`, unchanged), which keeps measuring the PM's ticket decisions exactly as it does. `cr-paper@2` has its own hash-chained, append-only records under `paper/trader/` and never touches `paper/positions.jsonl`.
@@ -350,7 +379,6 @@ Open (Eric):
 - The asset allowlist has no pairs yet; an empty allowlist refuses every intent.
 - The values of `STOP_MIN_PCT`, `STOP_MIN_ATR`, `NOTIONAL_MAX_PCT`, the maximum validity and the allowlist. Their home is settings `trader.rules`, entered in Preferences > Screening and checked by the server (`dashboard/core/trader-rules.js`, `cr-trader-rules@1`, D10). All are unset. The price freshness is `freshness.price_stale_minutes`.
 - The venue whose fee schedule and lot sizes the book uses. `FILL_SHARE_MAX` (0.1) and `STOP_SLIPPAGE_BPS` (25) are the Paper Book's constants.
-- An intent names no ticket, so the engine cannot yet hold `risk_ceiling_usd` to the gate's suggested risk or a PM decision (above) until an intent carries its ticket.
 
 ## Autonomous Build Backlog
 

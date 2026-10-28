@@ -2292,6 +2292,7 @@ module.exports = {
   listTickets,
   listReceipts,
   readDecisions,
+  decisionFor,
   readDraft,
   promptFor,
   createTicket,

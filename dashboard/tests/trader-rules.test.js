@@ -13,8 +13,9 @@ const { readJson, atomicWrite, jsonText } = require('../core/fsx');
 const TR = require('../core/trader-rules');
 const { validateTradeIntent } = require('../core/trade-risk');
 
+const TICKET = { project_id: 'fict-project', receipt_id: 'tr_2026-10-27T000000Z_fict2', decision_id: 'td_fict0000000001' };
 const intent = {
-  version: 'cr.trade-intent.v2', intent_id: '01JBXQ5R7Z8Y9W0V1T2S3R4Q5P', thesis_id: 'THESIS-FICT-001', pair: 'FICT/USDC', side: 'OPEN_LONG', order_type: 'LIMIT',
+  version: 'cr.trade-intent.v3', intent_id: '01JBXQ5R7Z8Y9W0V1T2S3R4Q5P', thesis_id: TICKET.receipt_id, ...TICKET, pair: 'FICT/USDC', side: 'OPEN_LONG', order_type: 'LIMIT',
   created_at: '2026-10-27T11:58:00Z', reference_price: '100', reference_at: '2026-10-27T11:57:00Z', entry_price: '100', stop_loss_price: '95', take_profit_price: '115',
   risk_ceiling_usd: '100', max_slippage_bps: 20, valid_until: '2026-10-27T13:00:00Z',
   evidence: { catalyst: 'Fictional catalyst', metrics_evaluated: ['fictional metric'], negative_invalidation: 'Fictional invalidation' },
@@ -22,7 +23,7 @@ const intent = {
 const book = {
   now: '2026-10-27T12:00:00Z', nav_usd: '10000', drawdown_24h_usd: '0', open_risk_usd: '0', thesis_risk_usd: '0', price: '100.1', price_at: '2026-10-27T11:59:00Z',
   atr_14h: '2', lot: '0.001', min_notional_usd: '10', exit_max_usd: '5000', fees: { maker_rate: '0.001', taker_rate: '0.002' }, stop_slippage_bps: 25,
-  grant: { thesis_id: 'THESIS-FICT-001', suggested_risk_usd: '250', pm_approved_risk_usd: '250' }, positions: [], orders: [],
+  grant: { thesis_id: TICKET.receipt_id, ...TICKET, suggested_risk_usd: '250', pm_approved_risk_usd: '250' }, positions: [], orders: [],
 };
 
 function setup(t) {

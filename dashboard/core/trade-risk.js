@@ -1,10 +1,12 @@
 'use strict';
-// The pre-trade risk engine, cr-trade-risk@1 (backlog item 73; Junior Trader
-// Desk invariants 3 and 4, Eric 2026-10-27; the architecture recovery's PR D).
+// The pre-trade risk engine, cr-trade-risk@2 (backlog item 73 as
+// cr-trade-risk@1; Junior Trader Desk invariants 3 and 4, Eric 2026-10-27; the
+// architecture recovery's PR D; the grant from the stored decision, D8,
+// 2026-10-28).
 //
 //   validateTradeIntent(intent, book, rules) -> { ok, version, refusals, sizing }
 //
-// A pure check of one cr.trade-intent.v2 against the hard limits. It reads no
+// A pure check of one cr.trade-intent.v3 against the hard limits. It reads no
 // file, clock or network (the time is book.now) and changes none of its
 // inputs. Every failed check is listed as { field, rule, words }, never only
 // the first; ok only with none. Nothing is trimmed or adjusted: an intent
@@ -47,11 +49,19 @@
 //     (P2-11);
 //   - the exports are frozen (P2-13);
 //   - an impossible calendar date or time is refused, never rolled over (P3).
+//
+// cr-trade-risk@2 (D8, Eric 2026-10-28) reads cr.trade-intent.v3, which names
+// its ticket: the desk project, the ticket receipt and Eric's PM decision,
+// and whose thesis is that receipt (thesis_id equals receipt_id). The book's
+// grant must be that decision's, its project, receipt and decision IDs the
+// intent's, or no risk is allowed. The Paper Book reads the grant from the
+// stored decision, never from its caller. A cr.trade-intent.v2 is refused;
+// its schema file stays as published.
 
 const { ONE } = require('./decimal');
 
-const VERSION = 'cr-trade-risk@1';
-const INTENT_VERSION = 'cr.trade-intent.v2';
+const VERSION = 'cr-trade-risk@2';
+const INTENT_VERSION = 'cr.trade-intent.v3';
 const RISK_PER_TRADE_MAX = '0.02';
 const DAILY_DRAWDOWN_MAX = '0.04';
 const SLIPPAGE_BPS_MAX = 20;
@@ -70,7 +80,9 @@ const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const MINUTE = 60000n;
 const BPS = 10000n;
 
-const INTENT_FIELDS = Object.freeze(['version', 'intent_id', 'thesis_id', 'pair', 'side', 'position_id', 'order_type', 'created_at', 'reference_price', 'reference_at', 'entry_price', 'stop_loss_price', 'take_profit_price', 'risk_ceiling_usd', 'max_slippage_bps', 'valid_until', 'evidence']);
+// The ticket an intent names, whose grant it must have (cr.trade-intent.v3).
+const TICKET_FIELDS = Object.freeze(['project_id', 'receipt_id', 'decision_id']);
+const INTENT_FIELDS = Object.freeze(['version', 'intent_id', 'thesis_id', ...TICKET_FIELDS, 'pair', 'side', 'position_id', 'order_type', 'created_at', 'reference_price', 'reference_at', 'entry_price', 'stop_loss_price', 'take_profit_price', 'risk_ceiling_usd', 'max_slippage_bps', 'valid_until', 'evidence']);
 const RULE_FIELDS = Object.freeze(['stop_min_pct', 'stop_min_atr', 'notional_max_pct', 'price_stale_minutes', 'max_validity_minutes', 'allowlist', 'risk_per_trade_max', 'daily_drawdown_max', 'slippage_bps_max']);
 
 // A plain decimal string (no sign, exponent, NaN or Infinity; at most 18
@@ -166,6 +178,10 @@ function validateTradeIntent(intent, book, rules) {
   if (it.version !== INTENT_VERSION) refuse('version', 'shape', `The version is not ${INTENT_VERSION}.`);
   if (typeof it.intent_id !== 'string' || !ULID_RE.test(it.intent_id)) refuse('intent_id', 'shape', 'The intent ID is missing or not a ULID.');
   if (!text(it.thesis_id)) refuse('thesis_id', 'shape', 'The thesis ID is missing.');
+  else if (text(it.receipt_id) && it.thesis_id !== it.receipt_id) refuse('thesis_id', 'shape', 'The thesis ID is not the ticket receipt the intent names: the thesis is the ticket.');
+  if (!text(it.project_id)) refuse('project_id', 'shape', 'The desk project is not named.');
+  if (!text(it.receipt_id)) refuse('receipt_id', 'shape', 'The ticket receipt is not named.');
+  if (!text(it.decision_id)) refuse('decision_id', 'shape', 'Eric\'s PM decision is not named.');
   if (!text(it.pair)) refuse('pair', 'shape', 'The pair is missing.');
   const side = SIDES.includes(it.side) ? it.side : null;
   if (!side) refuse('side', 'shape', 'The side is not OPEN_LONG or CLOSE_LONG.');
@@ -282,10 +298,10 @@ function validateTradeIntent(intent, book, rules) {
     if (dd !== null && openRisk !== null && dd + openRisk + risk > mulFloor(nav, ddMax)) refuse('risk_ceiling_usd', 'drawdown', `The 24-hour drawdown ${str(dd)}, the ${str(openRisk)} already at the stops and this risk come to more than ${str(ddMax * 100n)}% of NAV (${str(mulFloor(nav, ddMax))}), the hard ceiling.`);
   }
   // The desk's grant: the gate sizes, Eric decides, the model never chooses.
-  // It bounds the thesis, not each intent: what the thesis already holds at
-  // its stops counts against it.
+  // It is the decision the intent names, and it bounds the thesis, not each
+  // intent: what the thesis already holds at its stops counts against it.
   const g = bk.grant && typeof bk.grant === 'object' ? bk.grant : null;
-  if (!g || g.thesis_id !== it.thesis_id) refuse('book.grant', 'unknown', 'No grant from the desk\'s gate and Eric\'s decision is on record for this thesis, so no risk is allowed.');
+  if (!g || g.thesis_id !== it.thesis_id || !TICKET_FIELDS.every((f) => text(it[f]) && g[f] === it[f])) refuse('book.grant', 'unknown', 'No grant from the desk\'s gate and the decision of Eric\'s this intent names is on record, so no risk is allowed.');
   else if (risk !== null) {
     const used = dec(bk.thesis_risk_usd);
     const suggested = dec(g.suggested_risk_usd);
@@ -333,4 +349,4 @@ function result(refusals, sizing) {
 const exact = Object.freeze({ dec, str, mulFloor, mulCeil, isoMs, own });
 
 // Frozen: nothing else in the process can swap the engine or loosen a limit.
-module.exports = Object.freeze({ validateTradeIntent, VERSION, INTENT_VERSION, INTENT_FIELDS, RULE_FIELDS, RISK_PER_TRADE_MAX, DAILY_DRAWDOWN_MAX, SLIPPAGE_BPS_MAX, UNRESOLVED, RESOLVED, exact });
+module.exports = Object.freeze({ validateTradeIntent, VERSION, INTENT_VERSION, INTENT_FIELDS, TICKET_FIELDS, RULE_FIELDS, RISK_PER_TRADE_MAX, DAILY_DRAWDOWN_MAX, SLIPPAGE_BPS_MAX, UNRESOLVED, RESOLVED, exact });

@@ -55,7 +55,7 @@
 //     NAV is unknown and every intent is refused); NAV is cash plus each open
 //     quantity at its pair's latest hourly close no older than
 //     NAV_PRICE_FRESH_MINUTES, else unknown, never valued at 0 or at entry;
-//   - sizes from cr-trade-risk@1 (floored to the lot, every cost in), with
+//   - sizes from cr-trade-risk@2 (floored to the lot, every cost in), with
 //     the planned loss already at the stops counted against the 24-hour
 //     ceiling and the thesis's grant; an order's cash and fee are committed
 //     at its limit when it is reserved, so cash never goes negative;
@@ -81,10 +81,23 @@
 //     refused while the buy that opened its position is still live, and
 //     never sells more than its order; long only.
 // Fees and losses round against the trader; sizes never round up.
+//
+// The grant (D8, Eric 2026-10-28). A cr.trade-intent.v3 names its ticket: the
+// desk project, the ticket receipt (its thesis) and Eric's PM decision. The
+// book reads that decision from the desk's own record of them,
+// projects/<project_id>/tickets/decisions.jsonl, under the same lock as the
+// reservation, and never takes a grant from its caller (a ctx.grant is
+// refused, nothing written). The decision is a grant only while it is the one
+// in force for its receipt (the desk's rule, core/tickets.js decisionFor) and
+// an approve or a halve above $0; the grant is then exactly its
+// pm_approved_risk_usd and suggested_risk_usd. A veto, pass or watch, an
+// undone or replaced decision, a missing record or a line that does not read
+// is no grant, with its reason. A close reads none: it only reduces risk.
 
 const fs = require('fs');
 const { runOp, readConsistent, OpError } = require('./ops');
 const { sha256 } = require('./fsx');
+const { isProjectId } = require('./ids');
 // Taken once, at load (red team P2-13): the engine's exports are frozen, and
 // nothing that changes them later reaches this book.
 const { validateTradeIntent, exact: { dec, str, mulFloor, mulCeil, isoMs, own } } = require('./trade-risk');
@@ -106,6 +119,10 @@ const LIVE = ['RESERVED', 'SENT', 'ACKED', 'PARTIAL', 'UNKNOWN'];
 const BAR_FIELDS = ['open', 'high', 'low', 'close', 'volume'];
 // What the venue holds for a client order ID: one ID is one order.
 const BODY_FIELDS = ['pair', 'side', 'order_type', 'limit', 'quantity'];
+// Eric's PM decisions as the desk records them (core/tickets.js decide).
+const DECISION_VERSION = 'cr.ticket-decision.v1';
+const GRANTS = ['approve', 'halve'];
+const decisionsOf = (pid) => `projects/${pid}/tickets/decisions.jsonl`;
 
 function msOf(s, what = 'now') {
   const v = isoMs(s);
@@ -206,6 +223,69 @@ function venueRecords(text) {
 }
 const bodyOf = (o) => ({ pair: o.pair, side: o.side, order_type: o.order_type, limit: str(o.limit), quantity: str(o.quantity) });
 const sameBody = (rec, o) => { const b = bodyOf(o); return BODY_FIELDS.every((k) => rec[k] === b[k]); };
+
+// --- The grant, from Eric's stored decision (D8).
+
+// The decision in force for a receipt: the last of its lines that no undo
+// takes back. The desk's own rule (core/tickets.js decisionFor), kept here
+// because the trader requires nothing of the desk; trader-boundary checks
+// that the two agree.
+function decisionInForce(ls, rid) {
+  const mine = ls.filter((l) => l.receipt_id === rid);
+  const undone = new Set(mine.filter((l) => l.action === 'undo').map((l) => l.undoes));
+  return mine.filter((l) => l.action !== 'undo' && !undone.has(l.decision_id)).pop() || null;
+}
+// A stored amount (the desk writes numbers) as its exact decimal text, else null.
+const amountOf = (n) => (typeof n === 'number' && dec(String(n)) !== null ? String(n) : null);
+
+// The grant of the decision an intent names, read with `read` (a file's text,
+// or null when it is missing): { grant, why }, the grant null with its reason
+// whenever it is not one.
+function grantOf(read, ids) {
+  const { project_id: pid, receipt_id: rid, decision_id: did } = ids && typeof ids === 'object' ? ids : {};
+  const none = (why) => ({ grant: null, why });
+  if (!isProjectId(pid)) return none('The intent names no desk project, so no decision of Eric\'s can be read for it.');
+  if (typeof rid !== 'string' || !rid || typeof did !== 'string' || !did) return none('The intent names no ticket receipt or no decision, so no decision of Eric\'s can be read for it.');
+  const rel = decisionsOf(pid);
+  let text;
+  try { text = read(rel); } catch (_) { return none(`${rel} could not be read, so the decision in force is unknown.`); }
+  if (text === null) return none(`No decision of Eric's is on record for ${pid}.`);
+  const ls = [];
+  for (const [i, l] of lines(text).entries()) {
+    let d = null;
+    try { d = JSON.parse(l); } catch (_) { /* refused below */ }
+    // The desk skips such a line; here it refuses, since an undo it held
+    // could leave a grant standing.
+    if (!d || typeof d !== 'object' || Array.isArray(d)) return none(`${rel} line ${i + 1} does not read, so the decision in force is unknown.`);
+    ls.push(d);
+  }
+  const named = ls.find((l) => l.receipt_id === rid && l.decision_id === did && l.action !== 'undo');
+  if (!named) return none(`Decision ${did} is not on record for ticket ${rid}.`);
+  const now = decisionInForce(ls, rid);
+  if (!now || now.decision_id !== did) {
+    const undone = ls.some((l) => l.receipt_id === rid && l.action === 'undo' && l.undoes === did);
+    return none(`Decision ${did} is not in force for ticket ${rid}: ${undone ? 'it was undone' : `${now.action} ${now.decision_id} replaced it`}.`);
+  }
+  if (now.schema_version !== DECISION_VERSION || now.project_id !== pid) return none(`Decision ${did} is not a ${DECISION_VERSION} decision on ${pid}.`);
+  if (!GRANTS.includes(now.action)) return none(`Decision ${did} is a ${now.action}: only an approve or a halve grants risk.`);
+  const approved = amountOf(now.pm_approved_risk_usd);
+  const suggested = amountOf(now.suggested_risk_usd);
+  if (approved === null || suggested === null) return none(`Decision ${did} does not state its approved and suggested risk as amounts.`);
+  if (dec(approved) === 0n) return none(`Decision ${did} approves $0, so no risk is allowed.`);
+  return { grant: { thesis_id: rid, project_id: pid, receipt_id: rid, decision_id: did, action: now.action, suggested_risk_usd: suggested, pm_approved_risk_usd: approved }, why: null };
+}
+
+// What an intent's ticket gives the book: its thesis, and for an OPEN_LONG
+// the grant. A close reads no grant: it only reduces risk.
+function ticketOf(read, it) {
+  const thesis = it && typeof it.thesis_id === 'string' ? it.thesis_id : null;
+  if (!it || it.side !== 'OPEN_LONG') return { thesis, grant: null, why: null };
+  return { thesis, ...grantOf(read, it) };
+}
+
+function noCallerGrant(ctx) {
+  if (ctx && ctx.grant !== undefined) throw new OpError('INVALID', 'A grant is never taken from the caller: the Paper Book reads it from Eric\'s stored PM decision (cr-trade-risk@2). Nothing was read or written.');
+}
 
 // --- The state, replayed from the journal.
 
@@ -362,12 +442,13 @@ function atr14(st, pair, t) {
   return (sum + 13n) / 14n;
 }
 
-// The book cr-trade-risk@1 reads, for one pair, with each unknown in words.
-// The thesis whose open risk it carries is the grant's.
-function bookFor(st, pair, ctx) {
+// The book cr-trade-risk@2 reads, for one pair, with each unknown in words.
+// The thesis whose open risk it carries, and its grant, are the ticket's
+// (ticketOf), never the caller's.
+function bookFor(st, pair, ctx, ticket) {
   const t = msOf(ctx.now);
   const v = ctx.venue && typeof ctx.venue === 'object' ? ctx.venue : {};
-  const thesis = ctx.grant && typeof ctx.grant === 'object' && typeof ctx.grant.thesis_id === 'string' ? ctx.grant.thesis_id : null;
+  const thesis = ticket.thesis;
   const fresh = freshBar(st, pair, t);
   const book = {
     now: ctx.now,
@@ -385,7 +466,7 @@ function bookFor(st, pair, ctx) {
     fees: { maker_rate: v.maker_rate, taker_rate: v.taker_rate },
     stop_slippage_bps: STOP_SLIPPAGE_BPS,
     exit_max_usd: ctx.exit_max_usd,
-    grant: ctx.grant,
+    grant: ticket.grant,
     positions: [...st.positions.values()].filter((p) => p.state === 'open').map((p) => ({ position_id: p.position_id, pair: p.pair, state: 'open', quantity: str(p.quantity) })),
     orders: [...st.orders.values()].map((o) => ({ client_order_id: o.client_order_id, state: o.state })),
   };
@@ -398,6 +479,7 @@ function bookFor(st, pair, ctx) {
     thesis !== null && book.open_risk_usd !== null && book.thesis_risk_usd === null && 'The risk this thesis already holds at its stops is unknown.',
     book.price === null && `${pair} has no hourly price within ${fr}.`,
     book.atr_14h === null && `${pair} has no 15 consecutive hours ending within ${fr}, so its 14-hour ATR is unknown.`,
+    ticket.why,
   ].filter(Boolean);
   return book;
 }
@@ -466,10 +548,12 @@ function fund(ws, { cash_usd, now } = {}) {
 // Validates the intent against the book and reserves its order (RESERVED is
 // recorded before anything is sent), or records the refusal. What is checked,
 // hashed and recorded is one copy of the intent's own data properties, read
-// once (red team P2-11).
+// once (red team P2-11). The grant is read from Eric's stored decision inside
+// the same operation, never taken from ctx.
 //   ctx: { now, rules, venue: { lot, min_notional_usd, maker_rate, taker_rate },
-//          exit_max_usd, grant }
+//          exit_max_usd }
 function reserveIntent(ws, intent, ctx = {}) {
+  noCallerGrant(ctx);
   const snap = own(intent);
   const it = snap && typeof snap === 'object' && !Array.isArray(snap) ? snap : null;
   const id = it && typeof it.intent_id === 'string' && it.intent_id ? it.intent_id : null;
@@ -481,9 +565,11 @@ function reserveIntent(ws, intent, ctx = {}) {
       const o = [...st.orders.values()].find((x) => x.intent_id === id);
       return o ? { status: 'unchanged', intent_id: id, ...stateOf(o) } : { status: 'unchanged', intent_id: id, state: 'REFUSED', refusals: prior.refusals };
     }
-    const book = bookFor(st, it && it.pair, ctx);
+    const ticket = ticketOf((rel) => op.readText(rel, null), it);
+    const book = bookFor(st, it && it.pair, ctx, ticket);
     const v = validateTradeIntent(snap, book, ctx.rules);
     const refusals = [...v.refusals];
+    if (ticket.why) refusals.push({ field: 'decision_id', rule: 'grant', words: ticket.why });
     const venue = ctx.venue && typeof ctx.venue === 'object' ? ctx.venue : {};
     const feeRate = it && it.order_type === 'POST_ONLY' ? venue.maker_rate : venue.taker_rate;
     if (v.ok && (dec(feeRate) === null || dec(venue.taker_rate) === null || dec(venue.lot) === null)) refusals.push({ field: 'book.fees', rule: 'unknown', words: 'The venue\'s fee or lot is unknown, so the order cannot be costed (never read as 0).' });
@@ -515,6 +601,8 @@ function reserveIntent(ws, intent, ctx = {}) {
       position_id: it.side === 'CLOSE_LONG' ? it.position_id : `pos-${id}`,
       quantity: v.sizing.quantity, notional_usd: v.sizing.notional_usd || null, loss_at_stop_usd: v.sizing.loss_at_stop_usd || null, per_unit_loss_usd: v.sizing.per_unit_loss_usd || null,
       valid_until_effective: iso(until),
+      // The decision that granted it, as read under this lock (null for a close).
+      grant: ticket.grant,
       venue: { lot: venue.lot, min_notional_usd: venue.min_notional_usd, maker_rate: venue.maker_rate, taker_rate: venue.taker_rate, fee_rate: feeRate, stop_slippage_bps: STOP_SLIPPAGE_BPS },
     });
     return { status: 'reserved', intent_id: id, client_order_id: coid, sizing: v.sizing };
@@ -747,9 +835,14 @@ function applyBar(ws, bar, { now } = {}) {
 
 // --- Reads: they write nothing.
 
-// The book handed to cr-trade-risk@1 for an intent in `pair`.
+// The book handed to cr-trade-risk@2 for an intent in `pair`. ctx.ticket
+// names the intent's project_id, receipt_id and decision_id; its grant is
+// read from Eric's stored decision as a reservation reads it.
 function book(ws, pair, ctx = {}) {
-  return bookFor(replay(loadWs(ws).parsed.events), pair, ctx);
+  noCallerGrant(ctx);
+  const tk = ctx.ticket && typeof ctx.ticket === 'object' ? ctx.ticket : null;
+  const ticket = tk ? { thesis: typeof tk.receipt_id === 'string' ? tk.receipt_id : null, ...grantOf((rel) => readText(ws, rel, null), tk) } : { thesis: null, grant: null, why: null };
+  return bookFor(replay(loadWs(ws).parsed.events), pair, ctx, ticket);
 }
 
 // The book's results now. NAV, cash, each position's quantity, notional,
@@ -808,6 +901,6 @@ function results(ws, { now, btc } = {}) {
 }
 
 module.exports = {
-  VERSION, JOURNAL, VENUE, HEAD, FILL_SHARE_MAX, STOP_SLIPPAGE_BPS, VENUE_DUPLICATE_WINDOW_MINUTES, NAV_PRICE_FRESH_MINUTES,
-  fund, submitIntent, reserveIntent, markSent, venueSend, recordAnswer, recover, reconcile, cancelOrder, applyBar, book, results,
+  VERSION, JOURNAL, VENUE, HEAD, FILL_SHARE_MAX, STOP_SLIPPAGE_BPS, VENUE_DUPLICATE_WINDOW_MINUTES, NAV_PRICE_FRESH_MINUTES, DECISION_VERSION,
+  decisionInForce, fund, submitIntent, reserveIntent, markSent, venueSend, recordAnswer, recover, reconcile, cancelOrder, applyBar, book, results,
 };
