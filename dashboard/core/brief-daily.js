@@ -145,7 +145,8 @@ function brief(ws, { since = null, now = Date.now() } = {}) {
 
   section('pilot_exits', 'Pilot projects missing an exit reading', false, () => {
     const T = require('./tickets');
-    const cands = T.pilotCandidates(ws, { now });
+    // Only the pilot's rows are read here: a project not opted in is never scanned.
+    const cands = T.pilotCandidates(ws, { now, pilotOnly: true });
     if (!cands.some((c) => c.in_pilot)) return [{ text: 'No project is in the pilot, so no exit reading is expected.', link: null, n: 0 }];
     return cands
       .filter((c) => c.in_pilot && c.exit_reading && c.exit_reading.present === false)

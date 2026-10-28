@@ -289,14 +289,23 @@ function exitsMissing(exits, pid) {
   }));
 }
 
-function heldOf(ws, pid, now) {
+// Who Eric holds, from one read of the portfolio: the project IDs with an open
+// position, or null when the holdings could not be read ("not held" is then
+// unknown). A call that goes over many projects reads it once and hands it to
+// heldOf instead of reading the ledger again for each one.
+function heldSetOf(ws, now) {
   try {
     const market = require('./market').readLatest(ws);
     const pf = require('./portfolio').computePortfolio(ws, { market, now });
-    return pf.positions.some((p) => !p.closed && p.project_id === pid);
+    return new Set(pf.positions.filter((p) => !p.closed).map((p) => p.project_id));
   } catch (_) {
     return null;
   }
+}
+
+function heldOf(ws, pid, now, heldSet = undefined) {
+  const set = heldSet === undefined ? heldSetOf(ws, now) : heldSet;
+  return set === null ? null : set.has(pid);
 }
 
 function marketOf(ws, project) {
@@ -1642,7 +1651,7 @@ function setPilot(ws, pid, on, { by = null } = {}) {
 
 // What the chain needs next on one project: Agent 1 (Claude research), then
 // Agent 2 (the Prosecutor's ticket), then Eric. Read-only.
-function nextStep(ws, pid, { now = Date.now() } = {}) {
+function nextStep(ws, pid, { now = Date.now(), heldSet = undefined } = {}) {
   const research = require('./research');
   const project = require('./projects').getProject(ws, pid);
   const base = { project_id: pid, name: project.name, pilot: Boolean(readProfile(ws, pid).pilot) };
@@ -1660,7 +1669,7 @@ function nextStep(ws, pid, { now = Date.now() } = {}) {
   const v = view(ws, pid, { now });
   if (v.ticket && v.ticket.status === 'reopened' && v.ticket.researcher_report_id === r.report_id) return { ...base, step: 'ticket', ticket_id: null, report_id: r.report_id, refresh: true, reopen: true, why: `Eric re-opened ticket ${v.ticket.receipt_id}: open a new one on Claude's current report ${r.report_id} (start_ticket with refresh: true). The old receipt is kept.` };
   if (!v.ticket || v.ticket.researcher_report_id !== r.report_id) {
-    const why = pregateReason(r, heldOf(ws, pid, now), sizingOf(ws));
+    const why = pregateReason(r, heldOf(ws, pid, now, heldSet), sizingOf(ws));
     const kind = gradeReasonKind(r.grade);
     if (why) return { ...base, step: 'gate_closed', ticket_id: null, report_id: r.report_id, reasons: [why], reason_kind: kind, why: `The desk's gate is closed on Claude's current report ${r.report_id}${kind ? ` (${KIND_WORDS[kind]})` : ''}: ${why} No Prosecutor runs; call start_ticket (tickets start) to save the desk's receipt.` };
   }
@@ -1681,16 +1690,23 @@ function pilotQueue(ws, { project = null, now = Date.now() } = {}) {
 // the gate's result today with no proposal, whether an exit reading exists at
 // the sizing's exit size, the report's age and prompt version, and whether the
 // project is already in the pilot. Writes nothing and opts nothing in.
-function pilotCandidates(ws, { now = Date.now() } = {}) {
+// The portfolio is read once per call (at the first project that needs it, or
+// handed in as `heldSet`), not once per project. `pilotOnly` leaves out every
+// project not opted in, reading only its profile.json, for a caller that wants
+// the pilot's rows alone; the rows it returns are the same ones.
+function pilotCandidates(ws, { now = Date.now(), heldSet = undefined, pilotOnly = false } = {}) {
   const sizing = sizingOf(ws);
   const rows = [];
+  let holdings = heldSet;
   for (const p of require('./projects').listProjects(ws)) {
     if (p.broken || p.status === 'archived') continue;
+    if (pilotOnly && !readProfile(ws, p.project_id).pilot) continue;
     const project = require('./projects').getProject(ws, p.project_id);
     if (!project.identity || project.identity.status !== 'verified') continue;
     const pid = p.project_id;
     const researcher = researcherOf(ws, pid);
-    const held = heldOf(ws, pid, now) === true;
+    if (holdings === undefined) holdings = heldSetOf(ws, now);
+    const held = heldOf(ws, pid, now, holdings) === true;
     const exits = exitsOf(ws, pid, [sizing.exit_size_usd], now);
     const market = marketOf(ws, project);
     const basis = {
@@ -1738,9 +1754,10 @@ function pilotCandidates(ws, { now = Date.now() } = {}) {
 function candidateBoard(ws, { now = Date.now() } = {}) {
   const sizing = sizingOf(ws);
   const sizes = [...new Set([sizing.exit_size_usd, 2000])].sort((a, b) => a - b);
-  return pilotCandidates(ws, { now }).map((c) => {
+  const heldSet = heldSetOf(ws, now);
+  return pilotCandidates(ws, { now, heldSet }).map((c) => {
     let step = { step: 'unknown', why: 'The next step could not be read.' };
-    try { step = nextStep(ws, c.project_id, { now }); } catch (err) { step = { step: 'unknown', why: `The next step could not be read: ${err.message}` }; }
+    try { step = nextStep(ws, c.project_id, { now, heldSet }); } catch (err) { step = { step: 'unknown', why: `The next step could not be read: ${err.message}` }; }
     let delta = null;
     try { delta = require('./report-delta').reportDelta(ws, require('./reports').loadReports(ws, c.project_id)); } catch (_) { delta = null; }
     const native = c.gate && c.gate.exit_basis === 'native_l1_liquid';
