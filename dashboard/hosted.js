@@ -503,7 +503,7 @@ async function main(env = process.env, { platform = process.platform, mountsText
   const srv = await start(ws, { hosted: { port: cfg.port, hosts: cfg.hosts, password: cfg.password } });
   // Nothing answers a request beside the front door (dashboard/frontdoor.js,
   // review N1): a desk whose server.js added a handler of its own does not
-  // start, so it never answers the public engineering reads.
+  // start, so it never answers a request before sign-in.
   const bypass = require('./frontdoor').audit(srv.server);
   if (bypass.length) {
     srv.shutdown();

@@ -733,11 +733,11 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   const dailyTimer = setInterval(() => jobs.runJobs(ws, DAILY_JOBS, { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 30 * 60000);
 
   // The front door (dashboard/frontdoor.js) answers everything before
-  // sign-in and builds the sign-in, connector and engineering handlers this
-  // file's signed-in pages use.
+  // sign-in and builds the sign-in and connector handlers this file's
+  // signed-in pages use.
   const door = openFrontDoor(server, { ws, hosted, port: boundPort, quiet, state, rebuild: (areas) => rebuild(areas), kick: () => setTimeout(() => researchTick(), 300), signedIn });
-  const { origin, allowedOrigins, oauth, auth, engineering, serveStatic } = door;
-  const api = makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTick, queueIdentify, clients, sockets, oauth, auth, engineering });
+  const { origin, allowedOrigins, oauth, auth, serveStatic } = door;
+  const api = makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTick, queueIdentify, clients, sockets, oauth, auth });
 
   // A request the front door passed: signed in on the online desk, or on
   // this PC anything it did not answer itself.
@@ -828,7 +828,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   return { url: `${origin}/`, port: boundPort, token, server, shutdown, state, queueIdentify, researchTick };
 }
 
-function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTick = () => {}, queueIdentify, clients, sockets, oauth = null, auth = null, engineering }) {
+function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTick = () => {}, queueIdentify, clients, sockets, oauth = null, auth = null }) {
   const send = (res, status, body, type = 'application/json; charset=utf-8', extra = {}) => {
     res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', ...extra });
     res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
@@ -1225,15 +1225,8 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   // Grok Scout's list (core/scout.js): read only; the sweep's own route is
   // the front door's.
   route('GET', '/api/scout', () => coherent(() => require('./core/scout').view(ws)));
-  // The Pipeline cockpit (core/pipeline.js): the backlog, what is in flight
-  // and today's builds, read only from this copy; nothing fetched or stored.
-  route('GET', '/api/pipeline', () => require('./core/pipeline').read(ws));
   // The daily brief (core/brief-daily.js): read only, nothing stored.
   route('GET', '/api/brief/daily', (m, req, res, body, url) => coherent(() => require('./core/brief-daily').brief(ws, { since: url.searchParams.get('since') || null })));
-  // The agent lane's briefing (scripts/agent-status.js): GitHub read on
-  // request with CR_GITHUB_TOKEN, no records read and nothing stored; a
-  // source it cannot read is "unknown".
-  route('GET', '/api/system/briefing', () => require('./scripts/agent-status').deskBriefing());
   route('GET', '/api/projects/([^/]+)/outcomes', (m) => coherent(() => require('./core/report-outcomes').projectOutcomes(ws, pid(m[1]))));
   // `expect` is the count the button showed: more waiting than that is a 409,
   // so a click never sends jobs Eric did not see.
@@ -1303,9 +1296,6 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     if (!oauth || !oauth.revoke(m[1])) throw new HttpError(404, 'No such connection');
     return { status: 'saved', message: 'Disconnected. Claude can no longer use the desk through that connection.' };
   });
-
-  // Preferences > Developer > Engineering (dashboard/engineering/routes.js).
-  engineering.mount(route);
 
   route('POST', '/api/projects', (m, req, res, body) => once(body, () => {
     const r = projects.addProject(ws, { ...body, utterance: body.utterance || null });

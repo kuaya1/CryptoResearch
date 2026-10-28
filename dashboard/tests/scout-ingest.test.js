@@ -1,8 +1,7 @@
 'use strict';
 // Grok Scout (Eric, 2026-10-26; audits/2026-10-26-grok-scout): the ingest the
 // front door serves before sign-in (core/scout.js) and the daily sweep
-// (scripts/grok-cron.js). This file is protected (backlog-promote.js
-// PROTECTED). FICTIONAL temporary desks; xAI and the desk are fakes where the
+// (scripts/grok-cron.js). FICTIONAL temporary desks; xAI and the desk are fakes where the
 // sweep is tested; no network beyond this PC's loopback.
 
 const test = require('node:test');

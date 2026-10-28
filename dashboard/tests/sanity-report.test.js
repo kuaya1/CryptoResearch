@@ -58,7 +58,7 @@ function proofDir(t, overrides = {}) {
 }
 
 // main, then a backlog branch with two items, left unmerged (pr) or merged
-// with a merge commit as backlog-promote.js does (morning).
+// with a merge commit (morning).
 function repo(t, { merge = false } = {}) {
   const work = tmp(t, 'cr-sanity-repo-');
   g(work, 'init', '-q', '-b', 'main');

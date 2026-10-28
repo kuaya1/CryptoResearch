@@ -137,7 +137,6 @@ export function Sidebar({ collapsed, onCollapse }) {
 const MORE = [
   { id: 'research', label: 'Research', icon: FlaskConical },
   SECTIONS.find((s) => s.id === 'outcomes'),
-  SECTIONS.find((s) => s.id === 'pipeline'),
   { id: 'new', label: 'New research', icon: SquarePen },
 ];
 export function TabBar() {
