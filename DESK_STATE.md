@@ -321,6 +321,13 @@ Pipeline review, 2026-10-27. What the trader's Paper Book must be before any eng
   - Only an order recorded `SENT` goes to the venue. After a restart, a `RESERVED` or `SENT` order with no outcome is `UNKNOWN` and is reconciled from the venue's record, never cancelled blind. A venue record that does not read, or that holds the ID as another order, is `INTEGRITY`, and the order stays `UNKNOWN`.
   - Any order state outside `RESOLVED` halts every intent.
   - The book's price carries its time, held to the freshness limit.
+- **Journal head (D7, Eric 2026-10-28; `audits/2026-10-27-de-escalation` §3.3).** Made before any record exists, under the same version name:
+  - `paper/trader/journal.head.json` holds the number and SHA-256 of the journal's last line. It is written after the journal, in the same commit.
+  - The journal is refused (`INTEGRITY`, nothing read or written) when it is shorter than its head, when the line the head names does not hash to it, or when it has lines and no head.
+  - A journal longer than its head, the chain intact, is read, and the head moves forward with the next write.
+  - Only a missing file reads as empty. Any other read error stops, so an unreadable journal is never a fresh book.
+  - Every `client_order_id` the venue holds must be one the journal reserved and sent. A venue order the journal does not know is `INTEGRITY`.
+  - No key is held (Eric's choice). The head catches a crash, a full disk, a one-file restore or a hand edit. It does not stop someone who rewrites the files consistently.
 - **Protected.** `dashboard/core/paper.js`, `paper-trader.js`, `trade-risk.js`, `decimal.js` and their tests (`trade-risk`, `paper-trader` and `trader-boundary` under `dashboard/tests/`) are in `PROTECTED` (`dashboard/scripts/backlog-promote.js`). No builder or agent-lane candidate changes them. Eric changes them, or a task he marks for it in words.
 
 ### Junior Trader roadmap
