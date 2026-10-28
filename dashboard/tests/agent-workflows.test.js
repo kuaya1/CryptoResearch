@@ -355,7 +355,7 @@ test('nothing in a commit is a review: agent-checks has no owner pass, and the g
 
 // The post-review step's shell, as agent-review.yml holds it, run by bash with
 // a fake gh and a fake node on PATH: which command each event runs.
-const GIT_BASH = 'C:\Program Files\Git\bin\bash.exe';
+const GIT_BASH = 'C:\\Program Files\\Git\\bin\\bash.exe';
 const BASH = process.platform === 'win32' ? (fs.existsSync(GIT_BASH) ? GIT_BASH : null) : 'bash';
 test('Eric\'s /reviewed comment starts main\'s review of the live head; the eric-reviewed dispatch is gone (hardening, 2026-10-27)', { skip: !BASH && 'no bash here; CI runs it' }, (t) => {
   const os = require('os');
