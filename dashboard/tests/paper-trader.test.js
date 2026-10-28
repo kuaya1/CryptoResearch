@@ -40,7 +40,22 @@ function writeDecisions(ws, ls) {
   fs.mkdirSync(ws.abs(`projects/${PID}/tickets`), { recursive: true });
   fs.writeFileSync(ws.abs(DECISIONS), ls.map((l) => (typeof l === 'string' ? l : JSON.stringify(l))).join('\n') + '\n');
 }
-const ctx = (now = NOW, over = {}) => ({ now: at(now), rules: RULES, venue: VENUE, exit_max_usd: '5000', ticket: TICKET, ...over });
+// The ticket's frozen exit readings (D11): its receipt and the packet the
+// receipt's SHA-256 names. The cap is read from them, never from ctx.
+const TID = 'tk_2026-10-27T000000Z_fict2';
+const RECEIPT = `projects/${PID}/tickets/receipts/${RID}.json`;
+const PACKET = `projects/${PID}/tickets/${TID}/packet.json`;
+const exitRow = (size, cost, over = {}) => ({ size_usd: size, status: 'measured', cost_pct: cost, cost_complete: true, missing_costs: [], method: 'executable_quote', route_scope: 'aggregator', as_of: at(T0), note: null, ...over });
+const EXITS = [exitRow(500, 0.4), exitRow(5000, 1.2), exitRow(20000, 7.5)];
+function writeExits(ws, exits = EXITS, { limit = 5, receipt = {}, packetText = null } = {}) {
+  const text = packetText === null ? JSON.stringify({ project_id: PID, exits }, null, 2) + '\n' : packetText;
+  fs.mkdirSync(ws.abs(`projects/${PID}/tickets/${TID}`), { recursive: true });
+  fs.mkdirSync(ws.abs(`projects/${PID}/tickets/receipts`), { recursive: true });
+  fs.writeFileSync(ws.abs(PACKET), text);
+  const rc = { schema_version: 'cr.ticket-receipt.v1', receipt_id: RID, project_id: PID, ticket_id: TID, packet: { path: PACKET, sha256: sha256(text), captured_at: at(T0) }, desk: { sizing: { max_exit_cost_pct: limit } }, ...receipt };
+  fs.writeFileSync(ws.abs(RECEIPT), JSON.stringify(rc, null, 2) + '\n');
+}
+const ctx = (now = NOW, over = {}) => ({ now: at(now), rules: RULES, venue: VENUE, ticket: TICKET, ...over });
 const bar = (i, over = {}) => ({ pair: 'FICT/USDC', hour: at(T0 + i * H), open: '100', high: '101', low: '99.5', close: '100', volume: '1000000', ...over });
 const hour = (ws, i, over = {}, now = T0 + (i + 1) * H) => PT.applyBar(ws, bar(i, over), { now: at(now) });
 const intent = (c, over = {}, now = NOW) => ({
@@ -51,12 +66,14 @@ const intent = (c, over = {}, now = NOW) => ({
   ...over,
 });
 
-// Funded, fifteen hours on record, and Eric's approve of `grant` on the ticket.
+// Funded, fifteen hours on record, Eric's approve of `grant` on the ticket,
+// and its exit readings (a $5,000 cap under a 5% limit).
 function setup(t, { cash = '10000', grant = 250 } = {}) {
   const tw = tempWorkspace('ptrader');
   t.after(tw.cleanup);
   const ws = tw.ws;
   writeDecisions(ws, [decision({ pm_approved_risk_usd: grant, suggested_risk_usd: grant })]);
+  writeExits(ws);
   assert.equal(PT.fund(ws, { cash_usd: cash, now: at(T0) }).status, 'saved');
   for (let i = 0; i < 15; i++) hour(ws, i);
   return ws;
@@ -829,6 +846,104 @@ test('D8: a close reads no grant, so a position still closes after Eric takes th
   writeDecisions(ws, [decision(), undo(DID), decision({ decision_id: DID2, action: 'veto', pm_approved_risk_usd: 0 })]);
   const now = T0 + 16 * H + M;
   assert.equal(PT.submitIntent(ws, intent('B', {}, now), ctx(now)).status, 'refused');
+  const close = intent('C', { side: 'CLOSE_LONG', position_id: `pos-${ID('A')}`, entry_price: '100.5', reference_price: '100' }, now);
+  assert.equal(PT.submitIntent(ws, close, ctx(now)).state, 'ACKED');
+});
+
+const exitWords = (r) => r.refusals.find((x) => x.rule === 'exit').words;
+
+test('D11: the cap is the largest fresh size whose full cost is within the receipt\'s frozen limit', (t) => {
+  const ws = setup(t);
+  // The audit's ladder: $100 at 1.2%, $500 at 3.8%, $2,000 at 7.5%, under a 5% limit.
+  writeExits(ws, [exitRow(100, 1.2), exitRow(500, 3.8), exitRow(2000, 7.5)]);
+  const sha = sha256(fs.readFileSync(ws.abs(PACKET), 'utf8'));
+  const b = PT.book(ws, 'FICT/USDC', ctx());
+  assert.equal(b.exit_max_usd, '500');
+  assert.deepEqual(b.exit, { receipt_id: RID, packet_sha256: sha, limit_pct: '5', fresh_hours: 72, size_usd: '500', cost_pct: '3.8', as_of: at(T0) });
+  assert.deepEqual(b.unknown, []);
+  // $100 of risk is a notional of 1777.1, more than $500 can be sold for within 5%.
+  assert.deepEqual(fieldRules(PT.submitIntent(ws, intent('A'), ctx())), [['risk_ceiling_usd', 'exit_cap']]);
+  // $25 is 4.442 units, a notional of 444.2.
+  const r = PT.submitIntent(ws, intent('B', { risk_ceiling_usd: '25' }), ctx());
+  assert.equal(r.state, 'ACKED');
+  assert.equal(r.sizing.notional_usd, '444.2');
+  // The reservation records the reading that set the cap, read under its lock.
+  assert.deepEqual(events(ws).find((e) => e.type === 'reserved').exit, b.exit);
+  // A reading exactly 72 hours old still counts; one a millisecond older does not.
+  writeExits(ws, [exitRow(500, 3.8, { as_of: at(NOW - 72 * H) })]);
+  assert.equal(PT.book(ws, 'FICT/USDC', ctx()).exit_max_usd, '500');
+  writeExits(ws, [exitRow(500, 3.8, { as_of: at(NOW - 72 * H - 1) })]);
+  assert.equal(PT.book(ws, 'FICT/USDC', ctx()).exit_max_usd, null);
+});
+
+test('D11: an exit cap from the caller is refused, nothing written', (t) => {
+  const ws = setup(t);
+  const before = journalText(ws);
+  for (const v of ['1000000', null, '0']) {
+    assert.throws(() => PT.submitIntent(ws, intent('A'), ctx(NOW, { exit_max_usd: v })), (e) => e.code === 'INVALID' && /exit cap is never taken from the caller/.test(e.message));
+    assert.throws(() => PT.reserveIntent(ws, intent('A'), ctx(NOW, { exit_max_usd: v })), (e) => e.code === 'INVALID');
+    assert.throws(() => PT.book(ws, 'FICT/USDC', ctx(NOW, { exit_max_usd: v })), (e) => e.code === 'INVALID');
+  }
+  assert.equal(journalText(ws), before);
+});
+
+test('D11: a stale, undated, future, incomplete, over-limit or missing reading gives no cap, in words', (t) => {
+  const cases = [
+    [[exitRow(5000, 1.2, { as_of: at(NOW - 73 * H) })], /\$5,000 is 1\.2%, but its reading is older than 72 hours/],
+    [[exitRow(5000, 1.2, { as_of: null })], /\$5,000 is 1\.2%, but its reading is undated/],
+    [[exitRow(5000, 1.2, { as_of: at(NOW + H) })], /its reading is dated after now/],
+    [[exitRow(5000, 1.2, { cost_complete: false, missing_costs: ['transfer_tax'] })], /\$5,000 is at least 1\.2% \(a cost not known in full\)/],
+    [[exitRow(5000, 6)], /\$5,000 is 6%, over 5%/],
+    [[exitRow(5000, null, { status: 'unknown' })], /\$5,000 has no reading/],
+    [[], /No exit reading of ticket tr_2026-10-27T000000Z_fict2 shows a size within 5%\.$/],
+  ];
+  for (const [exits, words] of cases) {
+    const ws = setup(t);
+    writeExits(ws, exits);
+    const r = PT.submitIntent(ws, intent('A'), ctx());
+    assert.equal(r.status, 'refused', String(words));
+    assert.deepEqual(fieldRules(r), [['book.exit_max_usd', 'unknown'], ['receipt_id', 'exit']], String(words));
+    assert.match(exitWords(r), words);
+    const b = PT.book(ws, 'FICT/USDC', ctx());
+    assert.deepEqual([b.exit_max_usd, b.exit], [null, null]);
+    assert.match(b.unknown.join(' '), words);
+    assert.equal(venueLines(ws), 0);
+  }
+});
+
+test('D11: an altered packet, a missing or foreign receipt, a packet outside the ticket or no limit gives no cap', (t) => {
+  const cases = [
+    [(ws) => fs.appendFileSync(ws.abs(PACKET), ' '), /does not match the SHA-256 its receipt froze/],
+    [(ws) => fs.rmSync(ws.abs(PACKET)), /The packet of ticket .* is not on record/],
+    [(ws) => writeExits(ws, EXITS, { packetText: 'not json' }), /The packet of ticket .* does not read/],
+    [(ws) => fs.rmSync(ws.abs(RECEIPT)), /Ticket receipt tr_2026-10-27T000000Z_fict2 is not on record/],
+    [(ws) => writeExits(ws, EXITS, { receipt: { project_id: 'other-project' } }), /is not a cr\.ticket-receipt\.v1 receipt on fict-project/],
+    [(ws) => writeExits(ws, EXITS, { receipt: { schema_version: 'cr.ticket-receipt.v2' } }), /is not a cr\.ticket-receipt\.v1 receipt/],
+    [(ws) => writeExits(ws, EXITS, { receipt: { packet: { path: 'config/settings.json', sha256: 'f'.repeat(64) } } }), /names no packet inside fict-project's tickets/],
+    [(ws) => writeExits(ws, EXITS, { receipt: { packet: { path: `projects/${PID}/tickets/../../other/packet.json`, sha256: 'f'.repeat(64) } } }), /names no packet inside/],
+    [(ws) => writeExits(ws, EXITS, { limit: null }), /states no exit-cost limit/],
+    [(ws) => writeExits(ws, EXITS, { limit: '5' }), /states no exit-cost limit/],
+  ];
+  for (const [change, words] of cases) {
+    const ws = setup(t);
+    change(ws);
+    const r = PT.submitIntent(ws, intent('A'), ctx());
+    assert.equal(r.status, 'refused', String(words));
+    assert.match(exitWords(r), words);
+    assert.equal(PT.book(ws, 'FICT/USDC', ctx()).exit_max_usd, null);
+  }
+  // A receipt ID that is not one names no file.
+  const ws = setup(t);
+  assert.match(exitWords(PT.submitIntent(ws, intent('B', { receipt_id: '../receipts/x' }), ctx())), /names no ticket receipt/);
+});
+
+test('D11: a close reads no exit cap, so a position still closes after its readings go stale', (t) => {
+  const ws = setup(t);
+  assert.equal(PT.submitIntent(ws, intent('A'), ctx()).state, 'ACKED');
+  hour(ws, 15, { low: '99' });
+  fs.rmSync(ws.abs(RECEIPT));
+  const now = T0 + 16 * H + M;
+  assert.match(exitWords(PT.submitIntent(ws, intent('B', {}, now), ctx(now))), /is not on record/);
   const close = intent('C', { side: 'CLOSE_LONG', position_id: `pos-${ID('A')}`, entry_price: '100.5', reference_price: '100' }, now);
   assert.equal(PT.submitIntent(ws, close, ctx(now)).state, 'ACKED');
 });

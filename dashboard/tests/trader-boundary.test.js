@@ -199,3 +199,22 @@ test('D8: the trader reads Eric\'s grant from his stored decision, by the desk\'
   assert.match(src, /projects\/\$\{pid\}\/tickets\/decisions\.jsonl/);
   assert.doesNotMatch(src, /grant: ctx\.grant/, 'the book never carries a caller\'s grant');
 });
+
+test('D11: the trader reads the exit cap from the ticket receipts the desk saves, under the desk\'s exit freshness', () => {
+  const T = require('../core/tickets');
+  const defs = require('../core/forensic-defs');
+  assert.equal(PT.RECEIPT_RE.source, T.RECEIPT_RE.source);
+  assert.equal(PT.RECEIPT_RE.flags, T.RECEIPT_RE.flags);
+  assert.equal(PT.EXIT_FRESH_HOURS, defs.EVENTS.liquidity_impairment.freshness_hours);
+  // The desk writes the receipts, packets and sizing the trader reads.
+  const desk = read('dashboard/core/tickets.js');
+  assert.match(desk, /return `projects\/\$\{pid\}\/tickets`;/);
+  assert.match(desk, /return `\$\{dirOf\(pid\)\}\/receipts\/\$\{rid\}\.\$\{ext\}`;/);
+  assert.match(desk, /schema_version: 'cr\.ticket-receipt\.v1'/);
+  assert.match(desk, /max_exit_cost_pct: screening\.exit_cost_limit_pct/);
+  assert.match(desk, /exits: exitsOf\(ws, pid, sizes, now\)/);
+  const src = read('dashboard/core/paper-trader.js');
+  assert.match(src, /const RECEIPT_VERSION = 'cr\.ticket-receipt\.v1';/);
+  assert.match(src, /projects\/\$\{pid\}\/tickets\/receipts\/\$\{rid\}\.json/);
+  assert.doesNotMatch(src, /exit_max_usd: ctx\.exit_max_usd/, 'the book never carries a caller\'s exit cap');
+});
