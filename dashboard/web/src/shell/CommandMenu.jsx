@@ -34,7 +34,6 @@ const PAGES = [
   ['#/review?seg=imports', 'Review · Imports', 'import inbox requests cowork paste report'],
   ['#/portfolio', 'Portfolio', 'holdings wallets ledger positions transactions'],
   ['#/research', 'Research', 'runs jobs evidence sources'],
-  ['#/pipeline', 'Pipeline', 'backlog builds builder progress topology pace engineering'],
   ['#/new', 'New research', 'add link screenshot ticker'],
   ['#/explorer', 'Explorer', 'developer supabase demo'],
 ];

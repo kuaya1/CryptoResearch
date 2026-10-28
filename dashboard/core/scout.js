@@ -3,7 +3,7 @@
 // by Grok (dashboard/scripts/grok-cron.js, run by .github/workflows/
 // scout-cron.yml) of tools, repositories and write-ups in four fixed lanes,
 // delivered to the online desk and kept on its own disk under scout/. No
-// Supabase. Protected (backlog-promote.js PROTECTED): the front door serves
+// Supabase. The front door serves
 // its two routes before sign-in, with the desk's own ingest key
 // (DESK_INGEST_KEY, read from the environment on every request).
 //
