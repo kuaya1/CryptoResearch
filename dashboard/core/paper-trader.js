@@ -93,6 +93,17 @@
 // pm_approved_risk_usd and suggested_risk_usd. A veto, pass or watch, an
 // undone or replaced decision, a missing record or a line that does not read
 // is no grant, with its reason. A close reads none: it only reduces risk.
+//
+// The exit cap (D11, Eric 2026-10-28). The largest position the book may open
+// is read from the same ticket's frozen exit readings, never from its caller
+// (a ctx.exit_max_usd is refused, nothing written): the receipt the intent
+// names, its packet checked against the SHA-256 the receipt froze, and the
+// exit cost limit the receipt's sizing froze. The cap is the largest size
+// whose reading is complete (every cost known), at or under that limit, and
+// no older than the desk's exit freshness window (72 hours) at the intent's
+// time. A missing or altered receipt or packet, or no size that passes, is no
+// cap, with its reason in words, and the intent is refused. A close reads
+// none.
 
 const fs = require('fs');
 const { runOp, readConsistent, OpError } = require('./ops');
@@ -123,6 +134,14 @@ const BODY_FIELDS = ['pair', 'side', 'order_type', 'limit', 'quantity'];
 const DECISION_VERSION = 'cr.ticket-decision.v1';
 const GRANTS = ['approve', 'halve'];
 const decisionsOf = (pid) => `projects/${pid}/tickets/decisions.jsonl`;
+// The ticket receipts the desk saves (core/tickets.js RECEIPT_RE, receiptRel)
+// and how long an exit reading stays current: the desk's own exit freshness
+// window (forensic-defs.js liquidity_impairment freshness_hours). The
+// trader-boundary test checks both agree with the desk.
+const RECEIPT_VERSION = 'cr.ticket-receipt.v1';
+const RECEIPT_RE = /^tr_\d{4}-\d{2}-\d{2}T\d{6}Z_[a-z2-9]{5}$/;
+const receiptOf = (pid, rid) => `projects/${pid}/tickets/receipts/${rid}.json`;
+const EXIT_FRESH_HOURS = 72;
 
 function msOf(s, what = 'now') {
   const v = isoMs(s);
@@ -275,16 +294,73 @@ function grantOf(read, ids) {
   return { grant: { thesis_id: rid, project_id: pid, receipt_id: rid, decision_id: did, action: now.action, suggested_risk_usd: suggested, pm_approved_risk_usd: approved }, why: null };
 }
 
-// What an intent's ticket gives the book: its thesis, and for an OPEN_LONG
-// the grant. A close reads no grant: it only reduces risk.
-function ticketOf(read, it) {
-  const thesis = it && typeof it.thesis_id === 'string' ? it.thesis_id : null;
-  if (!it || it.side !== 'OPEN_LONG') return { thesis, grant: null, why: null };
-  return { thesis, ...grantOf(read, it) };
+// --- The exit cap, from the ticket's frozen exit readings (D11).
+
+const usdWords = (s) => `$${Number(s).toLocaleString('en-US')}`;
+
+// The exit cap of the ticket an intent names, read with `read` at `nowMs`:
+// { exit_max_usd, exit, exit_why }. The receipt's frozen packet (its SHA-256
+// checked) holds the desk's exit readings at each ladder size, the ones Eric
+// saw on the PM card, and the receipt holds the exit-cost limit his sizing
+// froze. A reading counts when its cost is known in full, is within the
+// limit and is no older than EXIT_FRESH_HOURS; the cap is the largest size
+// such a reading shows. Anything else is no cap, with its reason, and the
+// engine refuses an opening without one.
+function exitCapOf(read, ids, nowMs) {
+  const { project_id: pid, receipt_id: rid } = ids && typeof ids === 'object' ? ids : {};
+  const none = (why) => ({ exit_max_usd: null, exit: null, exit_why: why });
+  if (!isProjectId(pid) || typeof rid !== 'string' || !RECEIPT_RE.test(rid)) return none('The intent names no ticket receipt, so the desk\'s exit readings for it are unknown.');
+  const parsed = (rel, what) => {
+    let text;
+    try { text = read(rel); } catch (_) { return { why: `${what} could not be read, so the exit readings are unknown.` }; }
+    if (text === null) return { why: `${what} is not on record, so the exit readings are unknown.` };
+    try { return { text, json: JSON.parse(text) }; } catch (_) { return { why: `${what} does not read, so the exit readings are unknown.` }; }
+  };
+  const r = parsed(receiptOf(pid, rid), `Ticket receipt ${rid}`);
+  if (r.why) return none(r.why);
+  const rc = r.json;
+  if (!rc || rc.schema_version !== RECEIPT_VERSION || rc.receipt_id !== rid || rc.project_id !== pid) return none(`Ticket receipt ${rid} is not a ${RECEIPT_VERSION} receipt on ${pid}.`);
+  const pk = rc.packet && typeof rc.packet === 'object' ? rc.packet : {};
+  const where = typeof pk.path === 'string' ? pk.path : '';
+  if (!where.startsWith(`projects/${pid}/tickets/`) || where.split('/').some((s) => s === '' || s === '.' || s === '..') || where.includes('\\')) return none(`Ticket receipt ${rid} names no packet inside ${pid}'s tickets, so its exit readings are unknown.`);
+  const p = parsed(where, `The packet of ticket ${rid}`);
+  if (p.why) return none(p.why);
+  if (typeof pk.sha256 !== 'string' || sha256(p.text) !== pk.sha256) return none(`The packet of ticket ${rid} does not match the SHA-256 its receipt froze, so its exit readings are not used.`);
+  const limit = amountOf(rc.desk && rc.desk.sizing && rc.desk.sizing.max_exit_cost_pct);
+  if (limit === null || dec(limit) <= 0n) return none(`Ticket receipt ${rid} states no exit-cost limit, so no exit size can be shown within it.`);
+  const rows = Array.isArray(p.json && p.json.exits) ? p.json.exits : [];
+  const fresh = `${EXIT_FRESH_HOURS} hours`;
+  let best = null;
+  const why = [];
+  for (const x of rows) {
+    const size = amountOf(x && x.size_usd);
+    if (size === null || dec(size) <= 0n) continue;
+    const cost = amountOf(x.cost_pct);
+    const at = typeof x.as_of === 'string' ? isoMs(x.as_of) : null;
+    const age = at === null ? null : nowMs - Number(at);
+    if (cost === null) why.push(`${usdWords(size)} has no reading`);
+    else if (x.cost_complete !== true) why.push(`${usdWords(size)} is at least ${cost}% (a cost not known in full)`);
+    else if (dec(cost) > dec(limit)) why.push(`${usdWords(size)} is ${cost}%, over ${limit}%`);
+    else if (age === null || age < 0 || age > EXIT_FRESH_HOURS * HOUR) why.push(`${usdWords(size)} is ${cost}%, but its reading is ${age === null ? 'undated' : age < 0 ? 'dated after now' : `older than ${fresh}`}`);
+    else if (best === null || dec(size) > dec(best.size_usd)) best = { size_usd: size, cost_pct: cost, as_of: x.as_of };
+  }
+  if (best === null) return none(`No exit reading of ticket ${rid} shows a size within ${limit}%${why.length ? `: ${why.join('; ')}` : ''}.`);
+  return { exit_max_usd: best.size_usd, exit: { receipt_id: rid, packet_sha256: pk.sha256, limit_pct: limit, fresh_hours: EXIT_FRESH_HOURS, ...best }, exit_why: null };
 }
 
+// What an intent's ticket gives the book at `nowMs`: its thesis, and for an
+// OPEN_LONG the grant and the exit cap. A close reads neither: it only
+// reduces risk.
+function ticketOf(read, it, nowMs) {
+  const thesis = it && typeof it.thesis_id === 'string' ? it.thesis_id : null;
+  if (!it || it.side !== 'OPEN_LONG') return { thesis, grant: null, why: null, exit_max_usd: null, exit: null, exit_why: null };
+  return { thesis, ...grantOf(read, it), ...exitCapOf(read, it, nowMs) };
+}
+
+// The grant and the exit cap are the desk's records', never the caller's.
 function noCallerGrant(ctx) {
   if (ctx && ctx.grant !== undefined) throw new OpError('INVALID', 'A grant is never taken from the caller: the Paper Book reads it from Eric\'s stored PM decision (cr-trade-risk@2). Nothing was read or written.');
+  if (ctx && ctx.exit_max_usd !== undefined) throw new OpError('INVALID', 'An exit cap is never taken from the caller: the Paper Book reads it from the ticket\'s frozen exit readings (D11). Nothing was read or written.');
 }
 
 // --- The state, replayed from the journal.
@@ -465,7 +541,8 @@ function bookFor(st, pair, ctx, ticket) {
     min_notional_usd: v.min_notional_usd,
     fees: { maker_rate: v.maker_rate, taker_rate: v.taker_rate },
     stop_slippage_bps: STOP_SLIPPAGE_BPS,
-    exit_max_usd: ctx.exit_max_usd,
+    exit_max_usd: ticket.exit_max_usd,
+    exit: ticket.exit,
     grant: ticket.grant,
     positions: [...st.positions.values()].filter((p) => p.state === 'open').map((p) => ({ position_id: p.position_id, pair: p.pair, state: 'open', quantity: str(p.quantity) })),
     orders: [...st.orders.values()].map((o) => ({ client_order_id: o.client_order_id, state: o.state })),
@@ -480,6 +557,7 @@ function bookFor(st, pair, ctx, ticket) {
     book.price === null && `${pair} has no hourly price within ${fr}.`,
     book.atr_14h === null && `${pair} has no 15 consecutive hours ending within ${fr}, so its 14-hour ATR is unknown.`,
     ticket.why,
+    ticket.exit_why,
   ].filter(Boolean);
   return book;
 }
@@ -548,10 +626,10 @@ function fund(ws, { cash_usd, now } = {}) {
 // Validates the intent against the book and reserves its order (RESERVED is
 // recorded before anything is sent), or records the refusal. What is checked,
 // hashed and recorded is one copy of the intent's own data properties, read
-// once (red team P2-11). The grant is read from Eric's stored decision inside
-// the same operation, never taken from ctx.
-//   ctx: { now, rules, venue: { lot, min_notional_usd, maker_rate, taker_rate },
-//          exit_max_usd }
+// once (red team P2-11). The grant is read from Eric's stored decision, and
+// the exit cap from the ticket's frozen exit readings, inside the same
+// operation, never taken from ctx.
+//   ctx: { now, rules, venue: { lot, min_notional_usd, maker_rate, taker_rate } }
 function reserveIntent(ws, intent, ctx = {}) {
   noCallerGrant(ctx);
   const snap = own(intent);
@@ -565,11 +643,12 @@ function reserveIntent(ws, intent, ctx = {}) {
       const o = [...st.orders.values()].find((x) => x.intent_id === id);
       return o ? { status: 'unchanged', intent_id: id, ...stateOf(o) } : { status: 'unchanged', intent_id: id, state: 'REFUSED', refusals: prior.refusals };
     }
-    const ticket = ticketOf((rel) => op.readText(rel, null), it);
+    const ticket = ticketOf((rel) => op.readText(rel, null), it, msOf(ctx.now));
     const book = bookFor(st, it && it.pair, ctx, ticket);
     const v = validateTradeIntent(snap, book, ctx.rules);
     const refusals = [...v.refusals];
     if (ticket.why) refusals.push({ field: 'decision_id', rule: 'grant', words: ticket.why });
+    if (ticket.exit_why) refusals.push({ field: 'receipt_id', rule: 'exit', words: ticket.exit_why });
     const venue = ctx.venue && typeof ctx.venue === 'object' ? ctx.venue : {};
     const feeRate = it && it.order_type === 'POST_ONLY' ? venue.maker_rate : venue.taker_rate;
     if (v.ok && (dec(feeRate) === null || dec(venue.taker_rate) === null || dec(venue.lot) === null)) refusals.push({ field: 'book.fees', rule: 'unknown', words: 'The venue\'s fee or lot is unknown, so the order cannot be costed (never read as 0).' });
@@ -603,6 +682,9 @@ function reserveIntent(ws, intent, ctx = {}) {
       valid_until_effective: iso(until),
       // The decision that granted it, as read under this lock (null for a close).
       grant: ticket.grant,
+      // The frozen exit reading that set the cap, as read under this lock
+      // (null for a close).
+      exit: ticket.exit,
       venue: { lot: venue.lot, min_notional_usd: venue.min_notional_usd, maker_rate: venue.maker_rate, taker_rate: venue.taker_rate, fee_rate: feeRate, stop_slippage_bps: STOP_SLIPPAGE_BPS },
     });
     return { status: 'reserved', intent_id: id, client_order_id: coid, sizing: v.sizing };
@@ -841,7 +923,10 @@ function applyBar(ws, bar, { now } = {}) {
 function book(ws, pair, ctx = {}) {
   noCallerGrant(ctx);
   const tk = ctx.ticket && typeof ctx.ticket === 'object' ? ctx.ticket : null;
-  const ticket = tk ? { thesis: typeof tk.receipt_id === 'string' ? tk.receipt_id : null, ...grantOf((rel) => readText(ws, rel, null), tk) } : { thesis: null, grant: null, why: null };
+  const rd = (rel) => readText(ws, rel, null);
+  const ticket = tk
+    ? { thesis: typeof tk.receipt_id === 'string' ? tk.receipt_id : null, ...grantOf(rd, tk), ...exitCapOf(rd, tk, msOf(ctx.now)) }
+    : { thesis: null, grant: null, why: null, exit_max_usd: null, exit: null, exit_why: null };
   return bookFor(replay(loadWs(ws).parsed.events), pair, ctx, ticket);
 }
 
@@ -902,5 +987,6 @@ function results(ws, { now, btc } = {}) {
 
 module.exports = {
   VERSION, JOURNAL, VENUE, HEAD, FILL_SHARE_MAX, STOP_SLIPPAGE_BPS, VENUE_DUPLICATE_WINDOW_MINUTES, NAV_PRICE_FRESH_MINUTES, DECISION_VERSION,
+  RECEIPT_RE, EXIT_FRESH_HOURS,
   decisionInForce, fund, submitIntent, reserveIntent, markSent, venueSend, recordAnswer, recover, reconcile, cancelOrder, applyBar, book, results,
 };

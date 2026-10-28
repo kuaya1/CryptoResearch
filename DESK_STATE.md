@@ -204,7 +204,7 @@ What the engine holds it to:
 - **Decimal strings.** Every price and amount is a plain decimal string (`^\d+(\.\d+)?$`: no sign, exponent, NaN or Infinity), read exactly and never through a binary float. Sizes are computed in exact decimals at the venue's tick and lot.
 - **Explicit side, long only.** `OPEN_LONG` needs `stop_loss_price` < `entry_price` < `take_profit_price`. `CLOSE_LONG` names an open `position_id` of the Paper Book and closes no more than it holds. Nothing opens a short; there is no BUY or SELL to misread.
 - **Minimum stop distance.** `entry_price − stop_loss_price` is at least the larger of `STOP_MIN_PCT` × entry and `STOP_MIN_ATR` × the pair's 14-hour ATR. A stop one tick from the entry would turn a small risk ceiling into a huge position. Eric sets both figures in Preferences > Screening (settings `trader.rules`, D10). Until he does, or while the ATR is unknown, every intent is refused (unknown is never 0).
-- **Size and notional cap.** The quantity is `floor_to_lot(risk_ceiling_usd / per_unit_loss)`, never rounded up; zero is a refusal. `per_unit_loss = entry − stop_fill + fee(entry) + fee(stop_fill)`, where `stop_fill = stop × (1 − STOP_SLIPPAGE_BPS / 10,000)`, the entry pays the maker rate for `POST_ONLY` and the taker rate otherwise, and the exit pays the taker rate, each fee rounded up (`trade-risk.js`). So the loss at the stop, every cost in, is within the risk ceiling. Its notional (quantity × entry) is at most the smaller of `NOTIONAL_MAX_PCT` × NAV and the largest size the desk's exit measurement (Forensics > Exits) shows can be sold within the slippage limit. Eric sets `NOTIONAL_MAX_PCT` in Preferences > Screening; unset refuses.
+- **Size and notional cap.** The quantity is `floor_to_lot(risk_ceiling_usd / per_unit_loss)`, never rounded up; zero is a refusal. `per_unit_loss = entry − stop_fill + fee(entry) + fee(stop_fill)`, where `stop_fill = stop × (1 − STOP_SLIPPAGE_BPS / 10,000)`, the entry pays the maker rate for `POST_ONLY` and the taker rate otherwise, and the exit pays the taker rate, each fee rounded up (`trade-risk.js`). So the loss at the stop, every cost in, is within the risk ceiling. Its notional (quantity × entry) is at most the smaller of `NOTIONAL_MAX_PCT` × NAV and the largest size the desk's exit measurement (Forensics > Exits) shows can be sold within the slippage limit (since D11, the ticket's frozen exit readings, under `cr.trade-intent.v3` below). Eric sets `NOTIONAL_MAX_PCT` in Preferences > Screening; unset refuses.
 - **Risk is checked, never adopted.** The desk's gate sizes every ticket and a model never chooses an amount (North Star). The engine refuses `risk_ceiling_usd` above 2% of NAV, above the gate's suggested risk, or above Eric's PM decision (`pm_approved_risk_usd`).
 - **Fresh price.** Refused when `reference_at` is older than `freshness.price_stale_minutes` at evaluation, or when the engine's own current price is further from `reference_price` than `max_slippage_bps`.
 - **Bounded life.** `valid_until` is read as the earlier of itself and `created_at` plus the engine's maximum validity; an intent already past it is refused.
@@ -238,6 +238,18 @@ Every other field is v2's, as above.
   - a `project_id` that is not one;
   - a v2 intent.
 - **A close reads no grant.** A `CLOSE_LONG` only reduces risk, so a position still closes after Eric takes the grant back.
+- **The exit cap is the ticket's frozen exit readings (D11, Eric 2026-10-28).** The Paper Book reads `book.exit_max_usd` under the same lock, from the same ticket, and loads no desk module:
+  - the receipt `projects/<project_id>/tickets/receipts/<receipt_id>.json` (a `cr.ticket-receipt.v1` of that project);
+  - the packet it names inside the project's tickets, checked against the SHA-256 the receipt froze;
+  - the exit-cost limit the receipt's sizing froze (`desk.sizing.max_exit_cost_pct`).
+- **The cap is the largest size that passes.** A reading passes when its cost is known in full, is at or under the limit, and is no older than the desk's exit freshness window (72 hours, `forensic-defs.js` `liquidity_impairment`; `trader-boundary` checks the two agree) at the intent's time. The reading that set the cap is recorded on the reservation (`exit`).
+- **Refused, with the reason in words** (nothing reserved):
+  - an exit cap from the caller (`ctx.exit_max_usd`: nothing is read or written);
+  - a missing, foreign or unreadable receipt;
+  - a packet outside the ticket, missing, altered or unreadable;
+  - no frozen limit;
+  - no size whose reading passes. Each size says why: no reading, a lower bound, over the limit, undated, dated after now, or older than 72 hours.
+- **A close reads no exit cap.** A position still closes after its readings go stale.
 - The schema is published as `templates/schemas/trade-intent.v3.schema.json` and never edited after; v2's file stays as published; a change is `cr.trade-intent.v4`.
 
 ### Paper Book `cr-paper@2`
