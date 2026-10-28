@@ -26,8 +26,9 @@
 // (the provider is set by the channel the answer comes back through), and its
 // SHA-256 is recorded.
 
-const path = require('path');
 const { readText, sha256, listDir, fileInfo } = require('./fsx');
+// Published templates come from the code, checked against their pins (D5).
+const { lockedText } = require('./template-lock');
 const { SKELETON_SENTINEL } = require('./reports');
 const { PROVIDERS } = require('./workspace');
 const { ymdInTz } = require('./dates');
@@ -306,7 +307,7 @@ function componentList(grading, { repeatNote = true } = {}) {
 
 // Original appendix (v1), kept for reproducing older prompts.
 function buildAppendix(ws, profile, { provider = null, projectId = null, project = null, horizon = DEFAULT_HORIZON } = {}) {
-  const template = readText(path.join(ws.root, 'templates', 'grading-appendix.v1.md'));
+  const template = lockedText('research', 'grading-appendix.v1.md');
   const skeleton = buildSkeleton(ws, profile, { provider, projectId, project, horizon, promptVersion: PROMPT_VERSION_V1 });
   return fill(template, {
     PROVIDER_VALUE: provider
@@ -323,7 +324,7 @@ function buildAppendix(ws, profile, { provider = null, projectId = null, project
 
 function buildAppendixV2(ws, profile, { provider = null, projectId = null, project = null, horizon = DEFAULT_HORIZON, rubricRef = null, runId = null } = {}) {
   const grading = gradingFor(ws, rubricRef);
-  const template = readText(path.join(ws.root, 'templates', 'grading-appendix.v2.md'));
+  const template = lockedText('research', 'grading-appendix.v2.md');
   const skeleton = buildSkeleton(ws, profile, { provider, projectId, project, horizon, rubricRef: grading.rubric_ref, runId, promptVersion: PROMPT_VERSION });
   return fill(template, {
     PROVIDER_VALUE: provider ? `"${provider}"` : '`null` (set by the channel your answer comes back through; do not guess)',
@@ -386,7 +387,7 @@ function categoryCount(profile) {
 function buildAppendixV3(ws, profile, { provider = null, projectId = null, project = null, horizon, rubricRef = null, runId = null, version = PROMPT_VERSION_V3 } = {}) {
   const grading = gradingFor(ws, rubricRef);
   const { RECIPE_ID } = require('./position');
-  const template = readText(path.join(ws.root, 'templates', (POSITION_FILES[version] || POSITION_FILES[PROMPT_VERSION_V3]).appendix));
+  const template = lockedText('research', (POSITION_FILES[version] || POSITION_FILES[PROMPT_VERSION_V3]).appendix);
   const skeleton = buildSkeleton(ws, profile, { provider, projectId, project, horizon: horizon.text, rubricRef: grading.rubric_ref, runId, promptVersion: version, positionHorizon: horizon });
   return fill(template, {
     PROVIDER_VALUE: provider ? `"${provider}"` : '`null` (set by the channel your answer comes back through; do not guess)',
@@ -519,7 +520,7 @@ function buildProjectPrompt(ws, project, provider, { horizon = null } = {}) {
     h = pos.resolveRunHorizon(ws, {});
   }
   const version = promptVersionFor(h, profile);
-  const template = readText(path.join(ws.root, 'templates', positionTemplate(version)));
+  const template = lockedText('research', positionTemplate(version));
   return fill(template, promptValuesV3(ws, project, profile, { horizon: h, rubricRef: ws.rubrics.activeRef, runId: null, packet: null, provider, version }));
 }
 
@@ -534,10 +535,10 @@ function buildRunPrompt(ws, project, { runId, horizon, rubricRef, packet, ownerI
   const v = version || promptVersionFor(horizon, profile);
   if (isV5Family(v) && !writtenForV5(profile)) throw new Error(`${v} needs a scoring profile written for it (one written for ${PROMPT_VERSION_V5}); ${profile.profile_ref} is not.`);
   if (isPositionPrompt(v)) {
-    const template = readText(path.join(ws.root, 'templates', positionTemplate(v)));
+    const template = lockedText('research', positionTemplate(v));
     return fill(template, promptValuesV3(ws, project, profile, { horizon, rubricRef, runId, packet, provider: null, ownerInstructions, version: v }));
   }
-  const template = readText(path.join(ws.root, 'templates', 'research-prompt.v2.md'));
+  const template = lockedText('research', 'research-prompt.v2.md');
   return fill(template, promptValues(ws, project, profile, { horizon, rubricRef, runId, packet, provider: null }));
 }
 

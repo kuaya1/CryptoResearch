@@ -474,15 +474,10 @@ function skeleton({ aid, pid, provider, role, receipt = null }) {
   };
 }
 
+// The code's own published template, only when it matches its pin
+// (template-lock.js); a workspace copy is never read (D5).
 function templateText(ws, name) {
-  const local = ws.abs(`templates/forensics/${name}`);
-  const shipped = require('path').join(__dirname, '..', '..', 'templates', 'forensics', name);
-  for (const p of [local, shipped]) {
-    try {
-      return fs.readFileSync(p, 'utf8');
-    } catch (_) { /* next */ }
-  }
-  throw new OpError('NOT_FOUND', `The forensic template ${name} is missing.`);
+  return require('./template-lock').lockedText('forensics', name);
 }
 
 function fill(tpl, vars) {
@@ -677,6 +672,7 @@ function requestChallenge(ws, pid, aid) {
   // The challenger gets the same captured evidence the recorded pin names.
   const packetText = latest ? verifiedFrozen(ws, a0.evidence_packet.path, a0.evidence_packet.sha256, 'The frozen evidence packet') : '';
   const at = new Date().toISOString();
+  if (latest) templateText(ws, 'forensic-challenge.v1.md');
   return updateAudit(ws, pid, aid, (a, op) => {
     const j = a.jobs.challenge;
     if (j && (OPEN.has(j.state) || j.state === 'blocked')) return { noop: true, state: j.state };
@@ -974,6 +970,9 @@ function saveReport(ws, { project_id: pid, audit_id: aid, provider, text, revisi
   } else {
     receipt = { ...base, as_of: asOfIso, challenges_receipt_id: job.challenges_receipt_id, assessment_sha256: job.assessment_sha256, challenge: content };
   }
+  // A challenge the save may freeze reads its template first, so a changed one
+  // refuses with nothing written (D5).
+  if (role === 'investigator' && audit.jobs.challenge) templateText(ws, 'forensic-challenge.v1.md');
   const out = runOp(ws, { type: 'forensic_receipt', summary: `${label(provider)} forensic ${receipt.kind} for ${pid}` }, (op) => {
     // Under the lock: the same text may have landed meanwhile.
     const again = priorOf().find((r) => r.text && r.text.normalized_sha256 === textHash);
