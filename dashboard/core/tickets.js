@@ -28,7 +28,6 @@
 // money or calls a model or a paid provider.
 
 const fs = require('fs');
-const path = require('path');
 const { runOp, OpError } = require('./ops');
 const { readJson, listDir, sha256, jsonText } = require('./fsx');
 const { compactTs, randomId, isProjectId } = require('./ids');
@@ -454,15 +453,10 @@ function pregateReason(researcher, held, sizing) {
 // ---------------------------------------------------------------------------
 // Prompt
 
+// The code's own published template, only when it matches its pin
+// (template-lock.js); a workspace copy is never read (D5).
 function templateText(ws, name) {
-  const local = ws.abs(`templates/tickets/${name}`);
-  const shipped = path.join(__dirname, '..', '..', 'templates', 'tickets', name);
-  for (const p of [local, shipped]) {
-    try {
-      return fs.readFileSync(p, 'utf8');
-    } catch (_) { /* next */ }
-  }
-  throw new OpError('NOT_FOUND', `The ticket template ${name} is missing.`);
+  return require('./template-lock').lockedText('tickets', name);
 }
 
 function skeleton(ticket) {
