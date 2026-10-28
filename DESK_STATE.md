@@ -279,6 +279,10 @@ Pipeline review, 2026-10-27. What the trader's Paper Book must be before any eng
   - Only a missing file reads as empty. Any other read error stops, so an unreadable journal is never a fresh book.
   - Every `client_order_id` the venue holds must be one the journal reserved and sent. A venue order the journal does not know is `INTEGRITY`.
   - No key is held (Eric's choice). The head catches a crash, a full disk, a one-file restore or a hand edit. It does not stop someone who rewrites the files consistently.
+- **Portfolio time (F1 of the Codex audit, 2026-10-28; `audits/2026-10-28-codex-audit-response`).** Made before any record exists, under the same version name:
+  - NAV at each hour's end, from the first at or after the funding, is derived from the journal on every read and never written (`paper-trader.js` `navSeries`). It is the cash after the fills and exits of every hour ended by then, plus each quantity then held at its pair's close for that hour, within the 120-minute freshness, else unknown.
+  - The 24-hour drawdown and the largest drawdown read that series. The order in which the pairs' hours arrive never changes them. An hour read before the funding (the first backfill, a new pair's history) is never in them, and an hour that arrives late corrects the hours after it.
+  - A `mark` line an earlier build wrote is read and not used.
 - **End-to-end demonstration (D12, 2026-10-28).** `dashboard/tests/paper-trader-e2e.test.js` runs one fictional trade through the book, every figure asserted to the cent. The steps are:
   - fund $10,000;
   - a v3 intent on a stored $500 approval, held to 2% of NAV ($200);
