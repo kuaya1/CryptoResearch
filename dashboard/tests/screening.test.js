@@ -164,6 +164,22 @@ test('normalization: "1" is present, "0" absent, anything else unknown; taxes ar
   for (const v of [n, s, screening.normalizeEvm(CLEAN)]) assert.ok(!stringsOf(v).some((x) => /\bsafe\b/i.test(x)), 'no "safe" anywhere');
 });
 
+test('a Solana transfer fee is read as GoPlus documents it (liquidity@4, D2): an empty object is none, the rate an object, every scheduled rate kept', () => {
+  const fee = (transfer_fee) => screening.normalizeSolana(transfer_fee === undefined ? {} : { transfer_fee }).taxes;
+  // A classic SPL token (GoPlus answered {} for USDC, 2026-10-28): no fee configured.
+  assert.deepEqual(fee({}), { buy_pct: null, sell_pct: null, transfer_fee_pct: 0, transfer_fee_scheduled_max_pct: 0 });
+  // A Token-2022 mint with its fee at 0 now and scheduled (PYUSD's shape).
+  assert.deepEqual([fee({ current_fee_rate: { fee_rate: '0', maximum_fee: '0' }, scheduled_fee_rate: [{ epoch: '605', fee_rate: '0', maximum_fee: '0' }] }).transfer_fee_pct, fee({ current_fee_rate: { fee_rate: '0' }, scheduled_fee_rate: [{ epoch: '605', fee_rate: '0' }] }).transfer_fee_scheduled_max_pct], [0, 0]);
+  const rising = fee({ current_fee_rate: { fee_rate: '0.01', maximum_fee: '5000' }, scheduled_fee_rate: [{ epoch: '700', fee_rate: '0.03' }, { epoch: '650', fee_rate: '0.02' }] });
+  assert.deepEqual([rising.transfer_fee_pct, rising.transfer_fee_scheduled_max_pct], [1, 3], 'the rate now, and the highest scheduled one');
+  // Not stated, or not readable: unknown, never 0.
+  assert.deepEqual([fee(undefined).transfer_fee_pct, fee(undefined).transfer_fee_scheduled_max_pct], [null, null]);
+  assert.deepEqual([fee(null).transfer_fee_pct, fee([]).transfer_fee_pct], [null, null]);
+  assert.equal(fee({ scheduled_fee_rate: [] }).transfer_fee_pct, null, 'an object without the rate now is not "none"');
+  assert.equal(fee({ current_fee_rate: { fee_rate: 'x' } }).transfer_fee_pct, null);
+  assert.equal(fee({ current_fee_rate: { fee_rate: '0' }, scheduled_fee_rate: [{ epoch: '1' }] }).transfer_fee_scheduled_max_pct, null, 'one unreadable scheduled rate makes the schedule unknown');
+});
+
 // ---------------------------------------------------------------------------
 // Screening runs
 

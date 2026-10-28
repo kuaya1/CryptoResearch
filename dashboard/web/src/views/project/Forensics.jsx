@@ -825,10 +825,11 @@ function Method({ v }) {
         <li>{`Exit sizes ${p.exit_sizes_usd.map((s) => `$${s.toLocaleString('en-US')}`).join(', ')}; position $${p.exit_position_usd}; exit-cost limit ${p.exit_cost_limit_pct}%`}</li>
         <li>{`Delivery window ${p.delivery_window_days} days; volume review level ${p.volume_review_fraction} of the 30-day median before the origin`}</li>
         <li>{`Reported-liquidity review level: ${p.reported_liquidity_review_usd === null ? 'not set' : usd(p.reported_liquidity_review_usd)}; volume-to-liquidity review ratio: ${p.volume_to_liquidity_review_ratio === null ? 'not set' : p.volume_to_liquidity_review_ratio} (a review trigger, never a wash-trading test)`}</li>
+        <li>{`Solana network fee ceiling: ${typeof p.solana_network_fee_ceiling_usd === 'number' ? `$${p.solana_network_fee_ceiling_usd.toFixed(2)}` : 'not set'}`}</li>
       </ul>
       <h4 className="fx-h4">{`Liquidity (${d.liquidity.version})`}</h4>
       <ul className="fx-list">{Object.entries(d.liquidity.mechanisms).map(([k, w]) => <li key={k}><b>{words(k)}:</b>{` ${w}`}</li>)}</ul>
-      <p className="faint">{[d.liquidity.scope, d.liquidity.completeness, d.liquidity.one_way, d.liquidity.note].filter(Boolean).join(' ')}</p>
+      <p className="faint">{[d.liquidity.scope, d.liquidity.completeness, d.liquidity.solana_tax, d.liquidity.network_fee_ceiling, d.liquidity.one_way, d.liquidity.note].filter(Boolean).join(' ')}</p>
       <h4 className="fx-h4">{`Scenarios (${d.scenarios.version})`}</h4>
       <ul className="fx-list">{Object.entries(d.scenarios.kinds).map(([k, w]) => <li key={k}><b>{SCEN_WORDS[k]}:</b>{` ${w}`}</li>)}</ul>
       <p className="faint">{`At least ${d.scenarios.min_points} daily readings over ${d.scenarios.min_span_days} days, ${d.scenarios.min_weekly_changes} weekly changes, the latest within ${d.scenarios.freshness_hours} h; otherwise "Insufficient history to estimate". ${d.scenarios.zero ? `${d.scenarios.zero} ` : ''}${d.scenarios.invalidation}`}</p>

@@ -298,6 +298,7 @@ function validateSettingsPatch(patch, ws = null) {
     if (p.volume_review_fraction !== undefined) o.volume_review_fraction = above(p.volume_review_fraction, 1, 'Volume review fraction');
     if (p.reported_liquidity_review_usd !== undefined) o.reported_liquidity_review_usd = optional(p.reported_liquidity_review_usd, 1e12, 'Reported liquidity review level (USD)');
     if (p.volume_to_liquidity_review_ratio !== undefined) o.volume_to_liquidity_review_ratio = optional(p.volume_to_liquidity_review_ratio, 1e6, 'Volume to liquidity review ratio');
+    if (p.solana_network_fee_ceiling_usd !== undefined) o.solana_network_fee_ceiling_usd = optional(p.solana_network_fee_ceiling_usd, 100, 'Solana network fee ceiling (USD)');
     out.forensics = { preferences: o };
   }
   if (patch.tickets && patch.tickets.sizing) {

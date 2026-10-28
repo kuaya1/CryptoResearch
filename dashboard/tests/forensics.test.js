@@ -923,8 +923,12 @@ test('exit quotes are approved per chain by an explicit choice; the tab reads th
   assert.equal(F.readProfile(ws, pid).targets.exit_quotes.length, 0);
 });
 
+// liquidity@4: no Solana network fee ceiling set, so a Jupiter quote reads as
+// it did before the ceiling existed.
+const NO_CEILING = { forensics: { preferences: { solana_network_fee_ceiling_usd: null } } };
+
 test('the monitor quotes each approved chain at each size, at fixed origins; each answer is a dated aggregator observation', async (t) => {
-  const { ws, pid, cleanup } = quoteSetup('fo-xq-run');
+  const { ws, pid, cleanup } = quoteSetup('fo-xq-run', NO_CEILING);
   t.after(cleanup);
   const v0 = F.view(ws, pid);
   F.setMonitoring(ws, pid, { approve_quotes: [keyOf(v0, 'solana'), keyOf(v0, 'base')], enabled: true });
@@ -996,6 +1000,102 @@ test('the monitor quotes each approved chain at each size, at fixed origins; eac
   const stale = F.readObservations(ws, pid, { to: now + 31 * H }).filter((o) => o.status === 'not_quoted');
   assert.equal(stale.length, 2);
   assert.match(stale[0].error, /No CoinGecko price stored in the last 6 hours/);
+});
+
+// A fictional GoPlus screen of the project's Solana mint only, as the
+// liquidity@4 normalizer records it: the transfer fee now and its highest
+// scheduled rate, the transfer hook and whether the token is transferable.
+function storeSolanaScreen(ws, pid, atMs, { feePct = 0, scheduledPct = 0, hook = 'absent', nonTransferable = 'absent' } = {}) {
+  const S = require('../core/screening');
+  const project = require('../core/projects').getProject(ws, pid);
+  const contracts = S.contractsOf(project.identity);
+  const when = at(atMs);
+  const snapshot = { fetched_at: when, contracts: contracts.filter((c) => c.screenable && c.family === 'solana').map((c) => ({ chain: c.chain, chain_id: c.chain_id, label: c.label, family: c.family, address: c.address, status: 'ok', partial: false, checked_at: when, checks: { transfer_hook: hook, non_transferable: nonTransferable }, taxes: { buy_pct: null, sell_pct: null, transfer_fee_pct: feePct, transfer_fee_scheduled_max_pct: scheduledPct }, owner: null, source: null, severe: [], watch: [], unknown: [], notes: [] })) };
+  fs.mkdirSync(path.join(ws.root, 'market-data', 'screening'), { recursive: true });
+  atomicWrite(path.join(ws.root, 'market-data', 'screening', `${pid}.json`), jsonText({ schema_version: 'cr.screening-project.v1', project_id: pid, contracts_key: S.contractsKey(contracts), snapshot, last_attempt: { at: when, outcome: 'ok' }, transitions: [] }));
+}
+
+async function solanaQuoted(t, label, settings) {
+  const x = quoteSetup(label, settings);
+  t.after(x.cleanup);
+  F.setMonitoring(x.ws, x.pid, { approve_quotes: [keyOf(F.view(x.ws, x.pid), 'solana')], enabled: true });
+  const now = Date.now();
+  storePrice(x.ws, now - 30 * 60000);
+  const r = await monitor.refresh(x.ws, { now, fetchImpl: quoteFetch({}), sleep: noSleep });
+  assert.equal(r.status, 'ok', r.message);
+  const row = (ws) => F.view(ws, x.pid, { now: now + 60000 }).liquidity.exits.find((e) => e.size_usd === 500).best;
+  return { ...x, now, row };
+}
+
+test('liquidity@4 (D2, D3): a Solana token with no transfer fee and no hook has a 0% tax, and your $1.00 ceiling makes Jupiter\'s cost complete', async (t) => {
+  const { ws, pid, now, row } = await solanaQuoted(t, 'fo-sol-ceiling');
+  assert.equal(F.prefsOf(ws).solana_network_fee_ceiling_usd, 1, 'Eric\'s $1.00 is the default');
+  storeSolanaScreen(ws, pid, now);
+  const b = row(ws);
+  assert.equal(b.venue, 'Jupiter');
+  assert.equal(b.version, D.LIQUIDITY_VERSION_4);
+  assert.ok(Math.abs(b.cost_pct - 2.2) < 0.01, `2% lost plus $1.00 of $500 is 2.2%, got ${b.cost_pct}`);
+  assert.equal(b.cost_complete, true);
+  assert.deepEqual(b.missing_costs, []);
+  assert.equal(b.network_fee_ceiling_usd, 1);
+  assert.ok(b.included_costs.includes('network fee at most $1.00 (your ceiling)'));
+  assert.ok(b.included_costs.some((c) => /^no token transfer tax \(GoPlus contract screen of \d{4}-\d{2}-\d{2} \(Solana transfer fee, no transfer hook\)\)$/.test(c)));
+  assert.ok(b.limitations.some((l) => /your ceiling of \$1\.00, added in full, not a measured fee/.test(l)));
+  const v = F.view(ws, pid, { now: now + 60000 });
+  assert.equal(v.states.liquidity.state, 'within', 'a complete Solana cost within the limit');
+  assert.equal(v.method.version, 'cr-forensic-method@4');
+  assert.equal(v.definitions.liquidity.version, D.LIQUIDITY_VERSION_4);
+  const gate = v.liquidity.exits.find((e) => e.size_usd === 500).best_complete;
+  assert.equal(gate && gate.venue, 'Jupiter', 'the ticket gate\'s complete reading (tickets.js exitsOf, cr-ticket-sizing@3)');
+  assert.equal(gate.cost_complete, true);
+  // Anything that leaves the tax unknown, or a positive fee, is a lower bound.
+  for (const [screen, missing] of [
+    [{ hook: 'present' }, /^token transfer tax$/],
+    [{ nonTransferable: 'unknown' }, /^token transfer tax$/],
+    [{ feePct: null }, /^token transfer tax$/],
+    [{ scheduledPct: null }, /^token transfer tax$/],
+    [{ scheduledPct: 1 }, /^the effect of its 1% transfer tax/],
+    [{ feePct: 0.5 }, /^the effect of its 0\.5% transfer tax/],
+  ]) {
+    storeSolanaScreen(ws, pid, now, screen);
+    const lb = row(ws);
+    assert.equal(lb.cost_complete, false, JSON.stringify(screen));
+    assert.match(lb.missing_costs.join(' and '), missing, JSON.stringify(screen));
+    assert.ok(lb.included_costs.includes('network fee at most $1.00 (your ceiling)'), 'the ceiling still counts');
+  }
+  // A screen more than 7 days from the reading states no tax.
+  storeSolanaScreen(ws, pid, now - 8 * 24 * H);
+  assert.equal(row(ws).cost_complete, false);
+});
+
+test('liquidity@4: with no Solana ceiling set, Jupiter\'s cost stays "at least", the 0% tax notwithstanding', async (t) => {
+  const { ws, pid, now, row } = await solanaQuoted(t, 'fo-sol-noceiling', NO_CEILING);
+  assert.equal(F.prefsOf(ws).solana_network_fee_ceiling_usd, null);
+  storeSolanaScreen(ws, pid, now);
+  const b = row(ws);
+  assert.ok(Math.abs(b.cost_pct - 2) < 0.01);
+  assert.equal(b.cost_complete, false);
+  assert.deepEqual(b.missing_costs, ['network fee']);
+  assert.equal(b.network_fee_ceiling_usd, undefined);
+  assert.equal(F.view(ws, pid, { now: now + 60000 }).states.liquidity.state, 'unknown', 'a lower bound within the limit is not a pass');
+});
+
+test('liquidity@4: the ceiling applies only to a Solana quote that states no network fee, under preferences that hold it', () => {
+  const sol = { kind: 'executable_quote', chain_id: 'solana', route_scope: 'aggregator', retrieved_at: at(Date.now()), quote: { sell_usd: 500, received_usd: 490 } };
+  const prefs = { solana_network_fee_ceiling_usd: 1 };
+  assert.deepEqual(F.feeCeilingOf(prefs, sol), { usd: 1, source: 'your ceiling' });
+  assert.equal(F.feeCeilingOf({}, sol), null, 'a receipt frozen before the ceiling existed has none');
+  assert.equal(F.feeCeilingOf({ solana_network_fee_ceiling_usd: null }, sol), null);
+  assert.equal(F.feeCeilingOf(prefs, { ...sol, chain_id: '8453' }), null, 'not another chain');
+  assert.equal(F.feeCeilingOf(prefs, { ...sol, kind: 'pool_reserves' }), null, 'not a reserve calculation');
+  const tax = { pct: 0, source: 'GoPlus (FICTIONAL)' };
+  const ceiling = F.feeCeilingOf(prefs, sol);
+  assert.equal(M.exitEstimate(sol, 500, { tax, feeCeiling: ceiling }).cost_pct, 2.2);
+  const stated = M.exitEstimate({ ...sol, quote: { ...sol.quote, gas_usd: 0.01 } }, 500, { tax, feeCeiling: ceiling });
+  assert.equal(stated.cost_pct, 2.002, 'a stated fee is used, never the ceiling');
+  assert.equal(stated.network_fee_ceiling_usd, undefined);
+  const inside = M.exitEstimate({ ...sol, quote: { ...sol.quote, gas_included: true } }, 500, { tax, feeCeiling: ceiling });
+  assert.equal(inside.cost_pct, 2, 'a fee inside the quote is not added again');
 });
 
 test('the liquidity outcome resolves from the monitor\'s quotes: an episode, its recovery and checkpoint outcomes', async (t) => {

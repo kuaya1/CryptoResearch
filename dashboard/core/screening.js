@@ -187,11 +187,22 @@ function normalizeSolana(raw) {
   const checks = Object.fromEntries(SOL_CHECKS.map(([key, field]) => [key, tri(status(r[field]))]));
   checks.non_transferable = tri(r.non_transferable !== undefined ? r.non_transferable : r.none_transferable);
   checks.transfer_hook = Array.isArray(r.transfer_hook) ? (r.transfer_hook.length ? 'present' : 'absent') : 'unknown';
-  const fee = r.transfer_fee && typeof r.transfer_fee === 'object' ? r.transfer_fee : null;
-  const rate = fee && fee.current_fee_rate !== undefined ? Number(fee.current_fee_rate) : NaN;
+  // transfer_fee as GoPlus documents it: { current_fee_rate: { fee_rate },
+  // scheduled_fee_rate: [{ epoch, fee_rate }] }, a ratio ("0.02" is 2%); an
+  // empty object is no transfer fee configured (a classic SPL token), so 0%.
+  // A bare current_fee_rate string is read too. Anything else is unknown.
+  const fee = r.transfer_fee && typeof r.transfer_fee === 'object' && !Array.isArray(r.transfer_fee) ? r.transfer_fee : null;
+  const rateOf = (v) => {
+    const x = v && typeof v === 'object' ? v.fee_rate : v;
+    const n = x === null || x === undefined || x === '' ? NaN : Number(x);
+    return Number.isFinite(n) && n >= 0 ? round2(n * 100) : null;
+  };
+  const current = !fee ? null : fee.current_fee_rate === undefined ? (Object.keys(fee).length ? null : 0) : rateOf(fee.current_fee_rate);
+  const sched = fee && Array.isArray(fee.scheduled_fee_rate) ? fee.scheduled_fee_rate.map(rateOf) : fee && fee.scheduled_fee_rate === undefined ? [] : null;
+  const scheduledMax = current === null || !sched || sched.includes(null) ? null : Math.max(0, ...sched);
   return {
     checks,
-    taxes: { buy_pct: null, sell_pct: null, transfer_fee_pct: Number.isFinite(rate) ? round2(rate * 100) : null },
+    taxes: { buy_pct: null, sell_pct: null, transfer_fee_pct: current, transfer_fee_scheduled_max_pct: scheduledMax },
     owner: { state: 'unknown', address: null },
     source: 'unknown',
     facts: { trusted_token: r.trusted_token === 1 || r.trusted_token === '1' ? 'present' : r.trusted_token === 0 || r.trusted_token === '0' ? 'absent' : 'unknown', default_account_state: cleanText(String(r.default_account_state ?? ''), 4) },
