@@ -144,7 +144,7 @@ test('publish leases on the head reserve recorded; a stale build opens no pull r
 // of these, so a personal access token added later fails here.
 test('builders push only with the builder App\'s token; no workflow holds a personal access token', () => {
   const dir = path.join(ROOT, '.github', 'workflows');
-  const KNOWN = ['AGENT_LEDGER_KEY', 'ANTHROPIC_API_KEY', 'BUILDER_APP_KEY', 'CR_ENG_REVIEWER_TOKEN', 'DESK_INGEST_KEY', 'DESK_INGEST_URL', 'OPENAI_API_KEY', 'XAI_API_KEY'];
+  const KNOWN = ['AGENT_LEDGER_KEY', 'ANTHROPIC_API_KEY', 'BUILDER_APP_KEY', 'CR_ENG_REVIEWER_TOKEN', 'DESK_INGEST_KEY', 'DESK_INGEST_URL', 'GATE_APP_KEY', 'OPENAI_API_KEY', 'XAI_API_KEY'];
   for (const f of fs.readdirSync(dir).filter((x) => /\.ya?ml$/.test(x))) {
     const text = fs.readFileSync(path.join(dir, f), 'utf8');
     for (const s of secretsIn(text)) assert.ok(KNOWN.includes(s.slice('secrets.'.length)), `${f}: ${s} is not a known secret`);
@@ -504,12 +504,12 @@ test('only agent-builder-lane builds on a schedule; no workflow runs the old bac
   const all = fs.readdirSync(dir).filter((x) => x.endsWith('.yml')).sort().map((f) => [f, fs.readFileSync(path.join(dir, f), 'utf8')]);
   const onOf = (t) => t.slice(t.search(/^on:/m)).split(/\n(?=[a-z])/)[0];
   const scheduled = all.filter(([, t]) => /^ {2}schedule:/m.test(onOf(t))).map(([f]) => f);
-  assert.deepEqual(scheduled, ['agent-builder-lane.yml', 'agent-review.yml', 'scout-cron.yml']);
+  assert.deepEqual(scheduled, ['agent-builder-lane.yml', 'agent-review.yml', 'release-gate.yml', 'scout-cron.yml']);
   for (const [f, t] of all) {
     const code = t.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     assert.doesNotMatch(code, /backlog-schedule\.js/, `${f} never runs the old scheduler (a comment may name it)`);
   }
-  for (const f of ['agent-review.yml', 'scout-cron.yml']) {
+  for (const f of ['agent-review.yml', 'release-gate.yml', 'scout-cron.yml']) {
     const t = all.find(([x]) => x === f)[1];
     assert.doesNotMatch(t, /agent-build\.yml|agent-pm\.js|claude-code|anthropic|dispatches|gh workflow run/i, `${f} builds and dispatches nothing`);
   }

@@ -1,0 +1,102 @@
+# The release gate (hardening P1, 2026-10-27;
+# audits/2026-10-27-final-hardening). The four checks main-merge-requirements
+# requires are pinned to GitHub Actions, and a pull request's own workflow
+# files post as GitHub Actions too (F2). This job posts release-gate with its
+# own GitHub App, whose key is a secret of the release-gate environment, which
+# only main may use (its deployment branches); the ruleset requires
+# release-gate by that App's ID. It runs main's code only and reads the
+# required jobs by main's workflow files, Eric's receipts and the ledger's
+# signed verdicts (dashboard/scripts/agent-gate.js); no check counts by name.
+#
+#   workflow_run   after test, agent-checks or agent-review: the pull request
+#                  of that run, or every open one after agent-review
+#   issue_comment  Eric's "/reviewed <head>" on a pull request
+#   schedule       every 30 minutes, after agent-review's sweep: approvals and
+#                  anything missed
+#   dispatch       Eric, from main: one pull request, or all
+#
+# Off until RELEASE_GATE_ENABLED (a variable) is "true": with it off the job
+# is skipped and nothing is posted. Turning it on, creating the App and the
+# environment, and requiring release-gate in the ruleset are Eric's.
+name: release-gate
+
+on:
+  workflow_run:
+    workflows: [test, agent-checks, agent-review]
+    types: [completed]
+  issue_comment:
+    types: [created]
+  schedule:
+    - cron: '23,53 * * * *'
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number (empty for every open pull request)
+        type: string
+        required: false
+
+permissions: {}
+
+concurrency:
+  group: release-gate-${{ github.event.workflow_run.head_sha || inputs.pr || github.event.issue.number || github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: gate
+    if: >-
+      vars.RELEASE_GATE_ENABLED == 'true' && (
+        (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.full_name == github.repository)
+        || github.event_name == 'schedule'
+        || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+        || (github.event_name == 'issue_comment' && github.event.issue.pull_request
+          && startsWith(github.event.comment.body, '/reviewed') && github.event.comment.user.login == github.repository_owner))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release-gate
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      pull-requests: read
+      issues: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+      # The gate App's token can write checks and nothing else.
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.GATE_APP_ID }}
+          private-key: ${{ secrets.GATE_APP_KEY }}
+          permission-checks: write
+      - name: Gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GATE_TOKEN: ${{ steps.app.outputs.token }}
+          GATE_APP_ID: ${{ vars.GATE_APP_ID }}
+          AGENT_LEDGER_KEY: ${{ secrets.AGENT_LEDGER_KEY }}
+          EVENT: ${{ github.event_name }}
+          WR_EVENT: ${{ github.event.workflow_run.event }}
+          WR_PR: ${{ github.event.workflow_run.pull_requests[0].number }}
+          WR_HEAD: ${{ github.event.workflow_run.head_sha }}
+          COMMENT_PR: ${{ github.event.issue.number }}
+          PR_INPUT: ${{ inputs.pr }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            workflow_run)
+              if [ "$WR_EVENT" = pull_request ] && [ -n "$WR_PR" ]; then node dashboard/scripts/agent-gate.js run --pr "$WR_PR" --head "$WR_HEAD"
+              else node dashboard/scripts/agent-gate.js sweep; fi ;;
+            issue_comment) node dashboard/scripts/agent-gate.js run --pr "$COMMENT_PR" ;;
+            workflow_dispatch)
+              if [ -n "$PR_INPUT" ]; then node dashboard/scripts/agent-gate.js run --pr "$PR_INPUT"
+              else node dashboard/scripts/agent-gate.js sweep; fi ;;
+            schedule) node dashboard/scripts/agent-gate.js sweep ;;
+            *) echo "Nothing to do for $EVENT." ;;
+          esac
