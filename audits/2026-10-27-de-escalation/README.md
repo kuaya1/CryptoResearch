@@ -134,8 +134,8 @@ Every step is Eric's: GitHub configuration, credentials, and his scheduled work.
 | Step | State |
 |---|---|
 | 0 | Done. Copies in `Documents\cr-github-config-2026-10-27\`, with `deleted-branches.bundle` (the 62 heads, verified). |
-| 1 | **Half done.** `automation-branches` (25967715) is deleted. The PUT to `main-merge-requirements` (25967716) has not landed: it still requires four checks (last changed 2026-10-28T01:10Z). |
-| 2 | Nine workflows disabled. `test`, `agent-checks` and `agent-review` stay active until step 1, because the last two still post required checks. |
+| 1 | Done. Eric deleted `automation-branches` (25967715). Claude applied the PUT at his word: `main-merge-requirements` (25967716) requires `test` alone, from app 15368, with no bypass (2026-10-28T03:49Z). |
+| 2 | Done. Eleven workflows disabled; only `test` is active. |
 | 3 | **Eric's, open.** |
 | 4 | The local task `cr-at6-surge` is deleted. Routines A and B in claude.ai are Eric's. |
 | 5 | Done. #49 and #67 closed, `agent:build` deleted, `delete_branch_on_merge` on, 62 remote branches deleted (left: `main`, `agent-ledger`, `visual-proof`). The worktrees stay: most belong to Claude app sessions; the app removes them after 30 idle days. |
