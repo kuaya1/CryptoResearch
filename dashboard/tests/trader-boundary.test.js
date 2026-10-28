@@ -5,9 +5,10 @@
 // by name and by any glob that reaches them; nothing outside them and their
 // tests calls the trader yet (no route, CLI, connector tool or UI); no trader
 // module reaches a network, a process or a secret; the frozen
-// cr.trade-intent.v2 schema and the engine read the same fields; and the
-// contract in DESK_STATE.md says an order never times out to lost. This file
-// is protected too, so a candidate cannot loosen it.
+// cr.trade-intent.v3 schema and the engine read the same fields, and v2 stays
+// as published; the trader's in-force rule for Eric's decisions is the
+// desk's; and the contract in DESK_STATE.md says an order never times out to
+// lost. This file is protected too, so a candidate cannot loosen it.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -17,6 +18,7 @@ const BP = require('../scripts/backlog-promote');
 const P = require('../engineering/policy');
 const { parseBacklog } = require('../scripts/backlog-status');
 const { validate } = require('../core/schema');
+const { sha256 } = require('../core/fsx');
 const risk = require('../core/trade-risk');
 const { protectedHit } = BP;
 
@@ -113,7 +115,7 @@ function files(dir, out = []) {
 }
 
 test('the risk engine, both Paper Books, their arithmetic and their tests are protected', () => {
-  for (const p of [...TRADER, 'dashboard/core/paper.js', 'dashboard/core/decimal.js', 'dashboard/tests/trade-risk.test.js', 'dashboard/tests/paper-trader.test.js', 'dashboard/tests/trader-boundary.test.js', 'templates/schemas/trade-intent.v2.schema.json']) {
+  for (const p of [...TRADER, 'dashboard/core/paper.js', 'dashboard/core/decimal.js', 'dashboard/tests/trade-risk.test.js', 'dashboard/tests/paper-trader.test.js', 'dashboard/tests/trader-boundary.test.js', 'templates/schemas/trade-intent.v2.schema.json', 'templates/schemas/trade-intent.v3.schema.json']) {
     assert.ok(protectedHit(p) || /^templates\/schemas\//.test(p), `${p} is protected`);
   }
   for (const p of ['dashboard/core/trade-risk.js', 'Dashboard/Core/Paper.JS', 'dashboard/core/decimal.js']) assert.ok(protectedHit(p), p);
@@ -140,19 +142,43 @@ test('no trader module reaches a network, a process, the environment or a secret
   }
 });
 
-test('the frozen cr.trade-intent.v2 schema and the engine read the same fields and the same decimals', () => {
-  const schema = JSON.parse(fs.readFileSync(path.join(ROOT, 'templates', 'schemas', 'trade-intent.v2.schema.json'), 'utf8'));
+const schemaText = (v) => fs.readFileSync(path.join(ROOT, 'templates', 'schemas', `trade-intent.${v}.schema.json`), 'utf8').replace(/\r\n/g, '\n');
+
+test('the frozen cr.trade-intent.v3 schema and the engine read the same fields and the same decimals; v2 stays as published', () => {
+  const schema = JSON.parse(schemaText('v3'));
   assert.equal(schema.$id, risk.INTENT_VERSION);
+  assert.equal(risk.VERSION, 'cr-trade-risk@2');
   assert.deepEqual(Object.keys(schema.properties).sort(), [...risk.INTENT_FIELDS].sort());
   assert.deepEqual([...schema.required].sort(), risk.INTENT_FIELDS.filter((f) => f !== 'position_id').sort());
+  for (const f of ['project_id', 'receipt_id', 'decision_id']) assert.ok(risk.TICKET_FIELDS.includes(f) && schema.required.includes(f), f);
   const intent = {
-    version: 'cr.trade-intent.v2', intent_id: '01JBXQ5R7Z8Y9W0V1T2S3R4Q5P', thesis_id: 'THESIS-FICT-001', pair: 'FICT/USDC', side: 'OPEN_LONG', order_type: 'LIMIT',
+    version: 'cr.trade-intent.v3', intent_id: '01JBXQ5R7Z8Y9W0V1T2S3R4Q5P', thesis_id: 'tr_2026-10-27T000000Z_fict2', project_id: 'fict-project', receipt_id: 'tr_2026-10-27T000000Z_fict2', decision_id: 'td_fict0000000001',
+    pair: 'FICT/USDC', side: 'OPEN_LONG', order_type: 'LIMIT',
     created_at: '2026-10-27T11:58:00Z', reference_price: '100', reference_at: '2026-10-27T11:57:00Z', entry_price: '100', stop_loss_price: '95', take_profit_price: '115',
     risk_ceiling_usd: '100', max_slippage_bps: 20, valid_until: '2026-10-27T13:00:00Z', evidence: { catalyst: 'c', metrics_evaluated: ['m'], negative_invalidation: 'n' },
   };
   assert.deepEqual(validate(schema, intent).errors, []);
   assert.deepEqual(validate(schema, { ...intent, side: 'CLOSE_LONG', position_id: 'pos-1' }).errors, []);
-  for (const bad of [{ position_id: 'pos-1' }, { side: 'CLOSE_LONG' }, { entry_price: 100 }, { entry_price: '1e2' }, { max_slippage_bps: 21 }, { client_order_id: 'x' }, { version: 'cr.trade-intent.v1' }]) {
+  const without = (f) => { const x = { ...intent }; delete x[f]; return x; };
+  for (const bad of [{ position_id: 'pos-1' }, { side: 'CLOSE_LONG' }, { entry_price: 100 }, { entry_price: '1e2' }, { max_slippage_bps: 21 }, { client_order_id: 'x' }, { version: 'cr.trade-intent.v1' }, { version: 'cr.trade-intent.v2' }, { project_id: '../config' }, { grant: { pm_approved_risk_usd: '1000' } }]) {
     assert.equal(validate(schema, { ...intent, ...bad }).valid, false, JSON.stringify(bad));
   }
+  for (const f of ['project_id', 'receipt_id', 'decision_id']) assert.equal(validate(schema, without(f)).valid, false, f);
+  // v2 is never edited: its text is the one published by PR #58.
+  assert.equal(sha256(schemaText('v2')), '084e34ddf02f306a90b0295714284eaf9a6ad752b8bd8cd214f26b5e9f921a7f');
+});
+
+test('D8: the trader reads Eric\'s grant from his stored decision, by the desk\'s own in-force rule', () => {
+  const PT = require('../core/paper-trader');
+  const T = require('../core/tickets');
+  const rid = 'tr_2026-10-27T000000Z_fict2';
+  const line = (id, action, over = {}) => ({ schema_version: PT.DECISION_VERSION, decision_id: id, project_id: 'fict-project', receipt_id: rid, action, ...over });
+  const undo = (id, of) => line(id, 'undo', { undoes: of });
+  const seqs = [[], [line('a', 'approve')], [line('a', 'approve'), undo('u', 'a')], [line('a', 'approve'), undo('u', 'a'), line('b', 'halve')], [line('a', 'approve'), line('b', 'reopen')], [undo('u', 'a'), line('a', 'approve')], [line('a', 'approve', { receipt_id: 'tr_other' })]];
+  for (const ls of seqs) assert.deepEqual(PT.decisionInForce(ls, rid), T.decisionFor(ls, rid), JSON.stringify(ls));
+  // The desk writes the decision schema the trader reads.
+  assert.match(fs.readFileSync(path.join(ROOT, 'dashboard', 'core', 'tickets.js'), 'utf8'), new RegExp(`schema_version: '${PT.DECISION_VERSION.replace(/\./g, '\\.')}'`));
+  const src = fs.readFileSync(path.join(ROOT, 'dashboard', 'core', 'paper-trader.js'), 'utf8');
+  assert.match(src, /projects\/\$\{pid\}\/tickets\/decisions\.jsonl/);
+  assert.doesNotMatch(src, /grant: ctx\.grant/, 'the book never carries a caller\'s grant');
 });

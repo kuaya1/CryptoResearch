@@ -25,22 +25,37 @@ const at = (ms) => new Date(ms).toISOString();
 const ID = (c) => `01JBXQ5R7Z8Y9W0V1T2S3R4Q5${c}`;
 const VENUE = { lot: '0.001', min_notional_usd: '10', maker_rate: '0.001', taker_rate: '0.002' };
 const RULES = { stop_min_pct: '0.01', stop_min_atr: '1', notional_max_pct: '0.25', price_stale_minutes: 15, max_validity_minutes: 180, allowlist: ['FICT/USDC'] };
-const GRANT = { thesis_id: 'THESIS-FICT-001', suggested_risk_usd: '250', pm_approved_risk_usd: '250' };
-const ctx = (now = NOW, over = {}) => ({ now: at(now), rules: RULES, venue: VENUE, exit_max_usd: '5000', grant: GRANT, ...over });
+// The ticket every fixture intent acts on (cr.trade-intent.v3, D8): a
+// fictional project, receipt and decision. Its grant is read from the stored
+// decision; the book read takes the ticket in ctx.ticket, a reservation from
+// the intent itself, and neither takes a grant from ctx.
+const PID = 'fict-project';
+const RID = 'tr_2026-10-27T000000Z_fict2';
+const DID = 'td_fict0000000001';
+const TICKET = { project_id: PID, receipt_id: RID, decision_id: DID };
+const DECISIONS = `projects/${PID}/tickets/decisions.jsonl`;
+const decision = (over = {}) => ({ schema_version: 'cr.ticket-decision.v1', decision_id: DID, project_id: PID, receipt_id: RID, ticket_id: 'tk_2026-10-27T000000Z_fict2', action: 'approve', pm_approved_risk_usd: 250, suggested_risk_usd: 250, proposal_type: 'ACCUMULATE', note: null, decided_at: '2026-10-27T00:00:00.000Z', decided_by: 'eric', request_id: null, ...over });
+function writeDecisions(ws, ls) {
+  fs.mkdirSync(ws.abs(`projects/${PID}/tickets`), { recursive: true });
+  fs.writeFileSync(ws.abs(DECISIONS), ls.map((l) => (typeof l === 'string' ? l : JSON.stringify(l))).join('\n') + '\n');
+}
+const ctx = (now = NOW, over = {}) => ({ now: at(now), rules: RULES, venue: VENUE, exit_max_usd: '5000', ticket: TICKET, ...over });
 const bar = (i, over = {}) => ({ pair: 'FICT/USDC', hour: at(T0 + i * H), open: '100', high: '101', low: '99.5', close: '100', volume: '1000000', ...over });
 const hour = (ws, i, over = {}, now = T0 + (i + 1) * H) => PT.applyBar(ws, bar(i, over), { now: at(now) });
 const intent = (c, over = {}, now = NOW) => ({
-  version: 'cr.trade-intent.v2', intent_id: ID(c), thesis_id: 'THESIS-FICT-001', pair: 'FICT/USDC', side: 'OPEN_LONG', order_type: 'LIMIT',
+  version: 'cr.trade-intent.v3', intent_id: ID(c), thesis_id: RID, ...TICKET, pair: 'FICT/USDC', side: 'OPEN_LONG', order_type: 'LIMIT',
   created_at: at(now - 2 * M), reference_price: '100', reference_at: at(now - 3 * M), entry_price: '100', stop_loss_price: '95', take_profit_price: '115',
   risk_ceiling_usd: '100', max_slippage_bps: 20, valid_until: at(now + 175 * M),
   evidence: { catalyst: 'Fictional catalyst', metrics_evaluated: ['fictional metric'], negative_invalidation: 'Fictional invalidation' },
   ...over,
 });
 
-function setup(t, { cash = '10000' } = {}) {
+// Funded, fifteen hours on record, and Eric's approve of `grant` on the ticket.
+function setup(t, { cash = '10000', grant = 250 } = {}) {
   const tw = tempWorkspace('ptrader');
   t.after(tw.cleanup);
   const ws = tw.ws;
+  writeDecisions(ws, [decision({ pm_approved_risk_usd: grant, suggested_risk_usd: grant })]);
   assert.equal(PT.fund(ws, { cash_usd: cash, now: at(T0) }).status, 'saved');
   for (let i = 0; i < 15; i++) hour(ws, i);
   return ws;
@@ -49,7 +64,7 @@ const res = (ws, now) => PT.results(ws, { now: at(now) });
 const venueLines = (ws) => { try { return fs.readFileSync(ws.abs(PT.VENUE), 'utf8').split('\n').filter(Boolean).length; } catch (_) { return 0; } };
 const D = (s) => Number(s);
 
-test('an intent is sized by cr-trade-risk@1 with the stop slippage and fees in, reserved, sent and acknowledged', (t) => {
+test('an intent is sized by cr-trade-risk@2 with the stop slippage and fees in, reserved, sent and acknowledged', (t) => {
   const ws = setup(t);
   const b = PT.book(ws, 'FICT/USDC', ctx());
   assert.deepEqual([b.nav_usd, b.cash_usd, b.drawdown_24h_usd, b.price, b.atr_14h], ['10000', '10000', '0', '100', '1.5']);
@@ -193,13 +208,12 @@ test('NAV is unknown without a fresh price, never 0 or the entry; an intent is t
 });
 
 test('cash never goes negative: orders commit their cash and fee, and one that does not fit is refused', (t) => {
-  const ws = setup(t);
   // Five orders of 50 at a 2% stop under a 400 grant: 250 open at the stops,
   // inside the grant and the 24-hour ceiling, so cash is what refuses the sixth.
   // (Before red team P0-1 this test placed five orders of 100 under the 250
   // grant, 500 at the stops: the defect P0-1 fixes.)
-  const grant = { ...GRANT, suggested_risk_usd: '400', pm_approved_risk_usd: '400' };
-  const states = ['A', 'B', 'C', 'D', 'E', 'F'].map((c) => PT.submitIntent(ws, intent(c, { stop_loss_price: '98', risk_ceiling_usd: '50' }), ctx(NOW, { grant })));
+  const ws = setup(t, { grant: 400 });
+  const states = ['A', 'B', 'C', 'D', 'E', 'F'].map((c) => PT.submitIntent(ws, intent(c, { stop_loss_price: '98', risk_ceiling_usd: '50' }), ctx()));
   assert.deepEqual(states.map((s) => s.state || s.status), ['ACKED', 'ACKED', 'ACKED', 'ACKED', 'ACKED', 'refused']);
   assert.deepEqual(states[5].refusals.map((x) => [x.field, x.rule]), [['book.cash_usd', 'cash']]);
   assert.equal(PT.book(ws, 'FICT/USDC', ctx()).available_cash_usd, '513.565');
@@ -434,15 +448,14 @@ test('red team P0-1: open risk is summed; a thesis never holds more than its gra
   const b = PT.book(ws, 'FICT/USDC', ctx());
   assert.deepEqual([b.open_risk_usd, b.thesis_risk_usd], ['199.99572255', '199.99572255']);
   // A grant of 1000: four orders hold 399.9914451 at their stops; a fifth would pass 4% of NAV (400).
-  const ws2 = setup(t);
-  const grant = { ...GRANT, suggested_risk_usd: '1000', pm_approved_risk_usd: '1000' };
-  const r = ['A', 'B', 'C', 'D', 'E'].map((c) => PT.submitIntent(ws2, intent(c), ctx(NOW, { grant })));
+  const ws2 = setup(t, { grant: 1000 });
+  const r = ['A', 'B', 'C', 'D', 'E'].map((c) => PT.submitIntent(ws2, intent(c), ctx()));
   assert.deepEqual(r.map((x) => x.state || x.status), ['ACKED', 'ACKED', 'ACKED', 'ACKED', 'refused']);
   assert.deepEqual(r[4].refusals.map((x) => [x.field, x.rule]), [['risk_ceiling_usd', 'drawdown']]);
   // One ordinary hour (no gap) stops all four: the 24-hour drawdown stays within the ceiling.
   hour(ws2, 15, { low: '99' });
   hour(ws2, 16, { open: '96', high: '96', low: '94.9', close: '95' });
-  const after = PT.book(ws2, 'FICT/USDC', ctx(T0 + 17 * H + M, { grant }));
+  const after = PT.book(ws2, 'FICT/USDC', ctx(T0 + 17 * H + M));
   assert.equal(after.drawdown_24h_usd, '399.9914451');
   assert.equal(after.open_risk_usd, '0');
 });
@@ -645,4 +658,96 @@ test('red team P2-14: an order whose life ends inside an hour expires before tha
   assert.equal(PT.submitIntent(ws, intent('A', { valid_until: at(T0 + 16 * H + M) }), ctx()).state, 'ACKED');
   hour(ws, 15, { low: '100.2', open: '100.5', close: '100.5', high: '101' });
   assert.deepEqual(hour(ws, 16, { low: '99' }).events.map((e) => e.type), ['bar', 'expired', 'mark']);
+});
+
+// --- D8 (Eric, 2026-10-28): the grant is read from Eric's stored decision.
+
+const DID2 = 'td_fict0000000002';
+const undo = (undoes, over = {}) => ({ schema_version: 'cr.ticket-decision.v1', decision_id: 'td_fict00000000u1', project_id: PID, receipt_id: RID, action: 'undo', undoes, decided_at: '2026-10-27T00:01:00.000Z', ...over });
+const fieldRules = (r) => r.refusals.map((x) => [x.field, x.rule]);
+const journalText = (ws) => { try { return fs.readFileSync(ws.abs(PT.JOURNAL), 'utf8'); } catch (_) { return null; } };
+
+test('D8: a grant from the caller is refused, nothing written; the stored decision is the grant', (t) => {
+  const ws = setup(t, { grant: 50 });
+  const before = journalText(ws);
+  const big = { thesis_id: RID, ...TICKET, suggested_risk_usd: '1000', pm_approved_risk_usd: '1000' };
+  assert.throws(() => PT.submitIntent(ws, intent('A'), ctx(NOW, { grant: big })), (e) => e.code === 'INVALID' && /never taken from the caller/.test(e.message));
+  assert.throws(() => PT.reserveIntent(ws, intent('A'), ctx(NOW, { grant: big })), (e) => e.code === 'INVALID');
+  assert.throws(() => PT.book(ws, 'FICT/USDC', ctx(NOW, { grant: big })), (e) => e.code === 'INVALID');
+  assert.equal(journalText(ws), before);
+  // Eric approved 50: an intent at 100 is refused against the stored amounts.
+  assert.deepEqual(PT.book(ws, 'FICT/USDC', ctx()).grant, { thesis_id: RID, ...TICKET, action: 'approve', suggested_risk_usd: '50', pm_approved_risk_usd: '50' });
+  assert.deepEqual(fieldRules(PT.submitIntent(ws, intent('A'), ctx())), [['risk_ceiling_usd', 'gate_cap'], ['risk_ceiling_usd', 'pm_cap']]);
+  assert.equal(PT.submitIntent(ws, intent('B', { risk_ceiling_usd: '50' }), ctx()).state, 'ACKED');
+  // The reservation records the decision that granted it.
+  const reserved = events(ws).find((e) => e.type === 'reserved');
+  assert.deepEqual([reserved.grant.decision_id, reserved.grant.pm_approved_risk_usd], [DID, '50']);
+});
+
+test('D8: a halve grants its halved amount, and the thesis is held to it', (t) => {
+  const ws = setup(t);
+  writeDecisions(ws, [decision({ action: 'halve', pm_approved_risk_usd: 125, suggested_risk_usd: 250 })]);
+  assert.equal(PT.submitIntent(ws, intent('A'), ctx()).state, 'ACKED');
+  // What A holds at its stop and 100 more is above Eric's 125, not the gate's 250.
+  assert.deepEqual(fieldRules(PT.submitIntent(ws, intent('B'), ctx())), [['risk_ceiling_usd', 'pm_cap']]);
+});
+
+test('D8: a veto, pass or watch, an undone or replaced decision, or one that does not read grants nothing', (t) => {
+  const cases = [
+    [[decision({ action: 'veto', pm_approved_risk_usd: 0 })], /is a veto: only an approve or a halve grants risk/],
+    [[decision({ action: 'pass', pm_approved_risk_usd: 0, suggested_risk_usd: 0 })], /is a pass/],
+    [[decision({ action: 'watch', pm_approved_risk_usd: 0, suggested_risk_usd: 0 })], /is a watch/],
+    [[decision(), undo(DID)], /is not in force for ticket .*: it was undone/],
+    [[decision(), decision({ decision_id: DID2, action: 'reopen', pm_approved_risk_usd: 0 })], /reopen td_fict0000000002 replaced it/],
+    [[decision(), undo(DID), decision({ decision_id: DID2 })], /it was undone/],
+    [[decision({ project_id: 'other-project' })], /is not a cr\.ticket-decision\.v1 decision on fict-project/],
+    [[decision({ schema_version: 'cr.ticket-decision.v2' })], /is not a cr\.ticket-decision\.v1 decision/],
+    [[decision({ decision_id: DID2 })], /is not on record for ticket/],
+    [[decision({ pm_approved_risk_usd: '250' })], /does not state its approved and suggested risk as amounts/],
+    [[decision({ pm_approved_risk_usd: 0 })], /approves \$0/],
+    [[decision(), 'not json'], /line 2 does not read/],
+  ];
+  for (const [ls, words] of cases) {
+    const ws = setup(t);
+    writeDecisions(ws, ls);
+    const r = PT.submitIntent(ws, intent('A'), ctx());
+    assert.equal(r.status, 'refused', String(words));
+    assert.deepEqual(fieldRules(r), [['book.grant', 'unknown'], ['decision_id', 'grant']], String(words));
+    assert.match(r.refusals[1].words, words);
+    const b = PT.book(ws, 'FICT/USDC', ctx());
+    assert.equal(b.grant, null);
+    assert.match(b.unknown.join(' '), words);
+  }
+  // After the undo, the new approve is the grant: an intent naming it passes.
+  const ws = setup(t);
+  writeDecisions(ws, [decision(), undo(DID), decision({ decision_id: DID2 })]);
+  assert.equal(PT.submitIntent(ws, intent('A', { decision_id: DID2 }), ctx()).state, 'ACKED');
+});
+
+test('D8: a missing or unreadable record, a project ID that is not one, or a v2 intent is refused', (t) => {
+  const ws = setup(t);
+  fs.rmSync(ws.abs(DECISIONS));
+  const grantWords = (r) => r.refusals.find((x) => x.rule === 'grant').words;
+  assert.match(grantWords(PT.submitIntent(ws, intent('A'), ctx())), /No decision of Eric's is on record for fict-project/);
+  fs.mkdirSync(ws.abs(DECISIONS));
+  assert.match(grantWords(PT.submitIntent(ws, intent('B'), ctx())), /could not be read/);
+  // A project ID is checked before it names a file: nothing outside projects/ is read.
+  assert.match(grantWords(PT.submitIntent(setup(t), intent('C', { project_id: '../../config' }), ctx())), /names no desk project/);
+  // A v2 intent names no ticket and is refused, whatever the record holds.
+  const v2 = intent('D', { version: 'cr.trade-intent.v2', thesis_id: 'THESIS-FICT-001' });
+  for (const f of ['project_id', 'receipt_id', 'decision_id']) delete v2[f];
+  const r2 = PT.submitIntent(setup(t), v2, ctx());
+  assert.equal(r2.status, 'refused');
+  assert.ok(fieldRules(r2).some(([f, rule]) => f === 'version' && rule === 'shape'));
+});
+
+test('D8: a close reads no grant, so a position still closes after Eric takes the grant back', (t) => {
+  const ws = setup(t);
+  assert.equal(PT.submitIntent(ws, intent('A'), ctx()).state, 'ACKED');
+  hour(ws, 15, { low: '99' });
+  writeDecisions(ws, [decision(), undo(DID), decision({ decision_id: DID2, action: 'veto', pm_approved_risk_usd: 0 })]);
+  const now = T0 + 16 * H + M;
+  assert.equal(PT.submitIntent(ws, intent('B', {}, now), ctx(now)).status, 'refused');
+  const close = intent('C', { side: 'CLOSE_LONG', position_id: `pos-${ID('A')}`, entry_price: '100.5', reference_price: '100' }, now);
+  assert.equal(PT.submitIntent(ws, close, ctx(now)).state, 'ACKED');
 });
