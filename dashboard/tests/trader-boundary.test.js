@@ -1,31 +1,43 @@
 'use strict';
 // The trader's boundary (Junior Trader invariants 1, 3, 4 and 5; the
 // pipeline review and the architecture recovery's PR D, 2026-10-27): the risk
-// engine, the Paper Books and the arithmetic they compute with are protected,
-// by name and by any glob that reaches them; nothing outside them and their
-// tests calls the trader yet (no route, CLI, connector tool or UI); no trader
-// module reaches a network, a process or a secret; the frozen
-// cr.trade-intent.v3 schema and the engine read the same fields, and v2 stays
-// as published; the trader's in-force rule for Eric's decisions is the
-// desk's; and the contract in DESK_STATE.md says an order never times out to
-// lost. This file is protected too, so a candidate cannot loosen it.
+// engine, the Paper Books, the arithmetic they compute with, their tests and
+// the frozen intent schemas are protected, on the one list below; nothing
+// outside them and their tests calls the trader yet (no route, CLI,
+// connector tool or UI); no trader module reaches a network, a process or a
+// secret; the frozen cr.trade-intent.v3 schema and the engine read the same
+// fields, and v2 stays as published; the trader's in-force rule for Eric's
+// decisions is the desk's; and the contract in DESK_STATE.md says an order
+// never times out to lost. This file is on the list too.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const BP = require('../scripts/backlog-promote');
-const P = require('../engineering/policy');
-const { parseBacklog } = require('../scripts/backlog-status');
 const { validate } = require('../core/schema');
 const { sha256 } = require('../core/fsx');
 const risk = require('../core/trade-risk');
 const PT = require('../core/paper-trader');
 const TR = require('../core/trader-rules');
-const { protectedHit } = BP;
 
 const ROOT = path.join(__dirname, '..', '..');
 const DESK = fs.readFileSync(path.join(ROOT, 'DESK_STATE.md'), 'utf8');
+const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+
+// The protected list (PR-B 5a, Eric 2026-10-28). It was the agent lane's
+// admission list (backlog-promote.js PROTECTED), which goes with the lane;
+// this is now its one record. A change to any file on it is its own
+// supervised pull request, marked [P], that Eric reviews deliberately
+// (audits/2026-10-27-de-escalation §4 and §5).
+const PROTECTED = Object.freeze([
+  'dashboard/core/trade-risk.js', 'dashboard/core/paper.js', 'dashboard/core/paper-trader.js', 'dashboard/core/decimal.js',
+  'dashboard/tests/trade-risk.test.js', 'dashboard/tests/paper-trader.test.js', 'dashboard/tests/trader-boundary.test.js',
+  'templates/schemas/trade-intent.v2.schema.json', 'templates/schemas/trade-intent.v3.schema.json',
+]);
+// A path as Eric's Windows PC reads it: letter case ignored, each name's
+// trailing dots and spaces dropped, so Paper.JS is paper.js.
+const foldPath = (p) => String(p).split('/').map((s) => s.replace(/[. ]+$/, '')).join('/').toLowerCase();
+const isProtected = (p) => PROTECTED.some((x) => foldPath(x) === foldPath(p));
 const section = (head) => {
   const at = DESK.indexOf(head);
   assert.ok(at >= 0, head);
@@ -33,14 +45,29 @@ const section = (head) => {
   return DESK.slice(at, next < 0 ? undefined : at + head.length + next);
 };
 
-test('the Paper Books, the risk engine, their arithmetic and their tests are protected, by name and by any glob that reaches them', () => {
-  for (const p of ['dashboard/core/paper.js', 'dashboard/core/paper-trader.js', 'dashboard/core/decimal.js', 'dashboard/core/trade-risk.js', 'dashboard/tests/trade-risk.test.js', 'dashboard/tests/paper-trader.test.js', 'dashboard/tests/trader-boundary.test.js', 'Dashboard/Core/Paper.js', 'dashboard/core/trade-risk.js.']) {
-    assert.ok(BP.protectedHit(p), p);
-    assert.ok(P.protectedWhy(p), p);
-  }
-  for (const g of ['dashboard/core/*.js', 'dashboard/core/pap*.js', 'dashboard/*/trade-risk.js', 'dashboard/tests/trade*.test.js', 'dashboard/core/paper-t*.js', 'dashboard/core/dec*.js']) assert.ok(P.globTouchesProtected(g), g);
-  // The PM Paper Book's status-strip cell is not the book: builders keep it.
-  for (const p of ['dashboard/core/paper-book.js', 'dashboard/tests/paper-book.test.js', 'dashboard/public/paper-model.js']) assert.equal(BP.protectedHit(p), null, p);
+test('the protected list: every file on it exists, read as Windows reads a path, and no neighbour by accident', () => {
+  for (const p of PROTECTED) assert.ok(fs.existsSync(path.join(ROOT, p)), `${p} exists`);
+  for (const p of ['Dashboard/Core/Paper.JS', 'dashboard/core/trade-risk.js.', 'dashboard/core/decimal.js ', 'DASHBOARD/TESTS/TRADER-BOUNDARY.TEST.JS']) assert.ok(isProtected(p), p);
+  // The PM Paper Book's status-strip cell and Eric's rules home are not the book.
+  for (const p of ['dashboard/core/paper-book.js', 'dashboard/tests/paper-book.test.js', 'dashboard/public/paper-model.js', 'dashboard/core/trader-rules.js', 'dashboard/tests/trader-rules.test.js', 'dashboard/core/paper.json', 'templates/schemas/trade-intent.v4.schema.json']) assert.equal(isProtected(p), false, p);
+});
+
+test('the docs that guide Eric\'s review name this list and nothing the lane kept', () => {
+  // CLAUDE.md's Junior Trader contract: the four modules and their tests, pointing here.
+  const claude = read('CLAUDE.md').split('\n').find((l) => l.startsWith('- The Junior Trader contract'));
+  assert.ok(claude, 'CLAUDE.md has the Junior Trader contract');
+  assert.match(claude, /`paper\.js`, `paper-trader\.js`, `trade-risk\.js`, `decimal\.js` and their tests are protected \(`dashboard\/tests\/trader-boundary\.test\.js`\)/);
+  // DESK_STATE.md's cr-paper@2 section: the same files, on this list, never the lane's.
+  const p = section('### Paper Book `cr-paper@2`').split('\n').find((l) => l.startsWith('- **Protected.**'));
+  assert.ok(p, 'cr-paper@2 says what is protected');
+  for (const f of ['`dashboard/core/paper.js`', '`paper-trader.js`', '`trade-risk.js`', '`decimal.js`', '`trade-risk`, `paper-trader` and `trader-boundary` under `dashboard/tests/`', '`dashboard/tests/trader-boundary.test.js`', '[P]']) assert.ok(p.includes(f), f);
+  assert.doesNotMatch(p, /backlog-promote|builder|agent-lane|candidate/);
+  // The constitution names only files on this list.
+  const c = read('docs/CONSTITUTION.md').split('\n').find((l) => /Protected accounting modules/.test(l));
+  assert.ok(c, 'the constitution names protected modules');
+  const named = [...c.matchAll(/`([^`]+\.js)`/g)].map((m) => m[1]);
+  assert.ok(named.length > 0);
+  for (const f of named) assert.ok(isProtected(f), f);
 });
 
 test('invariant 4: an order is never recorded lost on a clock; unknown stays unknown until the venue answers', () => {
@@ -85,29 +112,6 @@ test('cr-paper@2: cash NAV, discrete sizing, fees and slippage, high/low stops w
   assert.match(s, /never touches `paper\/positions\.jsonl`/);
 });
 
-test('no builder took the trader items: 73 and 74 are Eric\'s, on v2 and cr-paper@2, and built by PRs #58 and #59', () => {
-  const items = parseBacklog(DESK);
-  for (const n of [73, 74]) {
-    const it = items.find((x) => x.n === n);
-    assert.ok(it, `item ${n}`);
-    assert.equal(it.eric, true, `item ${n} is marked (Eric)`);
-    assert.equal(it.checked, true, `item ${n} is built`);
-    assert.doesNotMatch(it.text, /TASK-\d+/, 'no task label of the retired PM builder');
-  }
-  const block = (n) => {
-    const at = DESK.indexOf(`**${n}. `);
-    const end = DESK.indexOf('\n- [', at);
-    return DESK.slice(at, end < 0 ? undefined : end);
-  };
-  assert.match(block(73), /`version` is `cr\.trade-intent\.v2`/);
-  assert.match(block(73), /dashboard\/core\/trade-risk\.js/);
-  assert.match(block(74), /\*\*74\. Paper Book `cr-paper@2`/);
-  assert.match(block(73), /Built by PR #58/);
-  assert.match(block(74), /Built by PR #59[^\n]*`dashboard\/core\/paper-trader\.js`, so `paper\.js` \(`cr-paper@1`\) is not edited/);
-  assert.doesNotMatch(DESK, /^- \[ \] \*\*\d+\.[^\n]*paper-fills\.js/m, 'the never-built fill harness is not an open item');
-});
-
-
 const TRADER = ['dashboard/core/trade-risk.js', 'dashboard/core/paper-trader.js'];
 // The modules that may call the trader: none yet but the trader itself.
 const CALLERS = new Set([...TRADER]);
@@ -123,13 +127,8 @@ function files(dir, out = []) {
   return out;
 }
 
-test('the risk engine, both Paper Books, their arithmetic and their tests are protected', () => {
-  for (const p of [...TRADER, 'dashboard/core/paper.js', 'dashboard/core/decimal.js', 'dashboard/tests/trade-risk.test.js', 'dashboard/tests/paper-trader.test.js', 'dashboard/tests/trader-boundary.test.js', 'templates/schemas/trade-intent.v2.schema.json', 'templates/schemas/trade-intent.v3.schema.json']) {
-    assert.ok(protectedHit(p) || /^templates\/schemas\//.test(p), `${p} is protected`);
-  }
-  for (const p of ['dashboard/core/trade-risk.js', 'Dashboard/Core/Paper.JS', 'dashboard/core/decimal.js']) assert.ok(protectedHit(p), p);
-  // A neighbour is not caught by accident.
-  assert.equal(protectedHit('dashboard/core/paper-book.js'), null);
+test('the trader modules and the schemas the engine reads are on the protected list', () => {
+  for (const p of [...TRADER, 'templates/schemas/trade-intent.v2.schema.json', `templates/schemas/trade-intent.${risk.INTENT_VERSION.split('.').pop()}.schema.json`]) assert.ok(isProtected(p), `${p} is protected`);
 });
 
 test('nothing outside the trader and its tests calls it yet', () => {
