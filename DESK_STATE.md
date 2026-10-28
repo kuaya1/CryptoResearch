@@ -357,7 +357,7 @@ Pipeline review, 2026-10-27. What the trader's Paper Book must be before any eng
   - Only a missing file reads as empty. Any other read error stops, so an unreadable journal is never a fresh book.
   - Every `client_order_id` the venue holds must be one the journal reserved and sent. A venue order the journal does not know is `INTEGRITY`.
   - No key is held (Eric's choice). The head catches a crash, a full disk, a one-file restore or a hand edit. It does not stop someone who rewrites the files consistently.
-- **Protected.** `dashboard/core/paper.js`, `paper-trader.js`, `trade-risk.js`, `decimal.js` and their tests (`trade-risk`, `paper-trader` and `trader-boundary` under `dashboard/tests/`) are in `PROTECTED` (`dashboard/scripts/backlog-promote.js`). No builder or agent-lane candidate changes them. Eric changes them, or a task he marks for it in words.
+- **Protected.** `dashboard/core/paper.js`, `paper-trader.js`, `trade-risk.js`, `decimal.js` and their tests (`trade-risk`, `paper-trader` and `trader-boundary` under `dashboard/tests/`), with the frozen intent schemas, are on the protected list in `dashboard/tests/trader-boundary.test.js` (PR-B 5a, 2026-10-28). A change to any of them is its own supervised pull request, marked [P] in its title, that Eric reviews deliberately (`audits/2026-10-27-de-escalation` §4).
 
 ### Junior Trader roadmap
 
