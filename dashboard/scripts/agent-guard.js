@@ -3,7 +3,7 @@
 // audits/2026-10-26-engineering-simplification). It runs only from main's
 // own checkout and reads everything the builder produced as data.
 //
-//   reserve   an issue labeled agent:build by Eric (the event's sender is the
+//   reserve   an issue labeled agent:ready by Eric (the event's sender is the
 //             repository owner, a user): the task in the issue form is read
 //             and checked against its template, the issue is read again from
 //             GitHub (still open, still labeled, the same text the event

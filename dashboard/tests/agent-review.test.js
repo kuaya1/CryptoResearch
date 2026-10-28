@@ -58,7 +58,7 @@ function fixture(t, { owner = false } = {}) {
   put('dashboard/core/widget.js', "'use strict';\nmodule.exports = { size: (s) => (s === '' ? 0 : s.length) };\n");
   put('dashboard/tests/widget.test.js', "'use strict';\nconst assert = require('node:assert/strict');\nconst { size } = require('../core/widget');\nassert.equal(size(''), 0);\nassert.throws(() => size(null), TypeError);\n");
   git(src, ['add', '-A']);
-  const issue = { number: 7, title: 'Widget size of an empty input', body: ISSUE_BODY, state: 'open', labels: [{ name: 'agent:build' }] };
+  const issue = { number: 7, title: 'Widget size of an empty input', body: ISSUE_BODY, state: 'open', labels: [{ name: 'agent:ready' }] };
   const task = G.taskOf(issue, { policy: POLICY });
   assert.deepEqual(task.problems, []);
   git(src, ['commit', '-q', '-m', owner ? 'Eric\'s own change' : G.commitMessage(task, { run: '5/1', policy: POLICY })], { who: owner ? ERIC : BOT });

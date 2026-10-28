@@ -2,7 +2,7 @@
 // The Agent task issue for a desk draft (Engineering v3, change 6):
 // engineering_prepare_task also returns the issue body, the problems main's
 // own agent-guard taskOf finds in it, and a link that opens the Agent task
-// form prefilled. The link carries no label: only Eric's own agent:build
+// form prefilled. The link carries no label: only Eric's own agent:ready
 // label on the version he submits authorizes a build. "Files to change" and
 // "Regression tests" are hints (cr.agent-task.v2): named, they narrow the
 // build; empty, the template's own paths are the scope and the build names
@@ -73,8 +73,8 @@ function agentIssue(args = {}, { policy = G.loadPolicy() } = {}) {
     says: [
       unique.length ? `The agent lane would refuse this task as it stands (${unique.length} ${unique.length === 1 ? 'problem' : 'problems'}).` : 'The agent lane reads this task with no problems.',
       link
-        ? `Eric opens the link, checks every field (Template ${template}: whether GitHub preselects a dropdown from the link is unverified), submits the issue and adds the agent:build label himself; nothing is built before that.`
-        : `The prefilled link would be ${full.length} characters, over ${LINK_MAX}: Eric opens the empty Agent task form and pastes each section of the body, then adds the agent:build label himself.`,
+        ? `Eric opens the link, checks every field (Template ${template}: whether GitHub preselects a dropdown from the link is unverified), submits the issue (it arrives labeled agent:draft) and adds the agent:ready label himself; nothing is built before that.`
+        : `The prefilled link would be ${full.length} characters, over ${LINK_MAX}: Eric opens the empty Agent task form and pastes each section of the body, then adds the agent:ready label himself.`,
     ].join(' '),
   };
 }

@@ -1,10 +1,11 @@
 name: Agent task
-description: One task for the agent lane. Nothing is built until Eric adds the agent:build label himself.
+description: One task for the agent lane. It arrives as a draft; nothing is built until Eric adds the agent:ready label himself.
+labels: ["agent:draft"]
 body:
   - type: markdown
     attributes:
       value: |
-        The agent lane builds this issue only after Eric adds the **agent:build** label, and only the version of the issue he labeled: an edit after that needs the label again. The build opens a pull request that Eric merges himself. The outcome, the acceptance checks and the negative cases are the task; the files and tests are optional hints that narrow the build (empty, the template's own directories are the scope). Keep secrets, records and addresses out of it: this repository is public.
+        This issue is a draft (**agent:draft**) until Eric adds the **agent:ready** label. The agent lane builds it only then, and only the version of the issue he labeled: an edit after that needs the label again. The build opens a pull request that Eric merges himself. The outcome, the acceptance checks and the negative cases are the task; the files and tests are optional hints that narrow the build (empty, the template's own directories are the scope). Keep secrets, records and addresses out of it.
   - type: dropdown
     id: lane_template
     attributes:
@@ -13,6 +14,7 @@ body:
       options:
         - eng-backend@1
         - eng-docs@1
+        - eng-app@4
     validations:
       required: true
   - type: textarea

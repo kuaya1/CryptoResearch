@@ -49,9 +49,9 @@ test('a valid task\'s body reads back through the lane\'s taskOf as given, with 
   const form = G.parseIssueForm(r.body);
   for (const [k, id] of Object.entries(A.IDS)) assert.equal(q[id], form[G.FIELDS[k]], k);
   assert.doesNotMatch(r.link, /[?&](labels|assignees|projects|milestone)=/);
-  assert.doesNotMatch(r.link, /agent%3Abuild|agent:build/);
+  assert.doesNotMatch(r.link, /agent%3Aready|agent%3Adraft|agent:ready|agent:draft/);
   assert.equal(r.link_chars, r.link.length);
-  assert.match(r.says, /reads this task with no problems.*adds the agent:build label himself/);
+  assert.match(r.says, /reads this task with no problems.*adds the agent:ready label himself/);
 });
 
 test('design is eng-docs@1, explore and anything else is refused', () => {
@@ -119,5 +119,7 @@ test('the form\'s field IDs and labels are the ones the link and taskOf use', ()
   const yml = fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'ISSUE_TEMPLATE', 'agent-task.yml'), 'utf8');
   const fields = [...yml.matchAll(/^ {4}id: (\S+)\n {4}attributes:\n {6}label: (.+)$/gm)].map((m) => [m[1], m[2].trim()]);
   assert.deepEqual(fields, Object.entries(A.IDS).map(([k, id]) => [id, G.FIELDS[k]]));
-  assert.doesNotMatch(yml, /^labels:/m, 'the form adds no label either');
+  // The form adds only the draft label, which authorizes nothing; agent:ready is Eric's own act.
+  assert.deepEqual(yml.match(/^labels:.*$/gm), ['labels: ["agent:draft"]']);
+  assert.doesNotMatch(yml, /^labels:.*agent:ready/m, 'the form never adds the build label');
 });
