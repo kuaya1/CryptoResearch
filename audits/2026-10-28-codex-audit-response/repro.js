@@ -342,6 +342,16 @@ const exitsOf = (applied) => applied.flatMap((x) => (x.events || []).filter((e) 
     exit_cap_binds: bound(narrow, { exit_max_usd: '4000' }),
     below_minimum: { risk: usd(tinyAt), ...brief(check(wide, tiny, tinyAt)) },
   };
+  // --- C10 (third review): min_notional after sizing is not terminal when a
+  // temporary bound binds. NAV $25,000, so the 4% ceiling is $1,000; entry
+  // $100, stop $90, exits proven to $5,000; Eric approved $500.
+  const c10 = { entry: '100', stop: '90', target: '140', atr: '1' };
+  const c10Case = (dd) => {
+    const bk = book(c10, { nav_usd: '25000', drawdown_24h_usd: dd, exit_max_usd: '5000' });
+    const c = largest(c10, bk, 50000);
+    return { drawdown_24h: dd, largest_risk: usd(c), ...brief(check(c10, bk, c)) };
+  };
+  out.C10 = { drawdown_binding: c10Case('999.21'), drawdown_cleared: c10Case('0') };
 }
 
 // --- C5: an approval waits; its research horizon ends; the book is then
@@ -388,6 +398,128 @@ const exitsOf = (applied) => applied.flatMap((x) => (x.events || []).filter((e) 
     next_step: s2.done.map((x) => [x.kind, x.status, x.state]),
     phase_after: mine(TD.requests(ws, { now: iso(A + 2 * M) }), did).phase,
   };
+}
+
+// =====================================================================
+// The third review's counterexamples (2026-10-28, C7-C12; C10 is beside C4).
+
+// --- C7: hour H is missing, H+1 arrives first and is held back, then H
+// arrives late: once with a stop breach in it, once quiet.
+{
+  const late = (label, hOver) => {
+    const s = heldDesk(label);
+    const t1 = s.fillHour + 3 * H + 15 * M;
+    const first = TD.applyHours(s.ws, [bar(PAIR, s.fillHour + 2 * H)], { now: iso(t1) });
+    const t2 = t1 + 30 * M;
+    const second = TD.applyHours(s.ws, [bar(PAIR, s.fillHour + H, hOver), bar(PAIR, s.fillHour + 2 * H)], { now: iso(t2) });
+    const r = PT.results(s.ws, { now: iso(t2) });
+    const rows = (a) => a.map((x) => [x.hour.slice(11, 16), x.status, x.code || null]);
+    return { h_plus_1_alone: rows(first), then_h_and_h_plus_1: rows(second), exits: exitsOf(second), open_positions: r.open_positions.length, nav_now: r.nav_usd };
+  };
+  out.C7 = { breach_in_late_h: late('c7breach', { low: '0.60' }), quiet_late_h: late('c7quiet', {}) };
+}
+
+// --- C8: a close at the next open ($0.85) against the stop the complete
+// history takes ($0.69825), for C1's 1,598.519131 XMPL, 0.3% exit fee, with
+// the engine's own decimal helpers.
+{
+  const { dec, str, mulFloor, mulCeil } = TR.exact;
+  const q = dec('1598.519131');
+  const net = (price) => { const p = mulFloor(q, dec(price)); return p - mulCeil(p, dec('0.003')); };
+  out.C8 = { stop_net_usd: str(net('0.69825')), next_open_net_usd: str(net('0.85')), difference_usd: str(net('0.85') - net('0.69825')) };
+}
+
+// --- C9: when a missing hour can be seen. 10:00 is missing; 11:00's row is
+// settled (closed 10 minutes) only at 12:10.
+{
+  const day = Date.parse('2026-10-27T00:00:00Z');
+  const rows = [11, 9].map((h) => [(day + h * H) / 1000, 0.85, 0.86, 0.84, 0.85, 86000]);
+  const seen = (hh, mm) => C.barsOf(PAIR, rows, { t: day + hh * H + mm * M, after: day + 8 * H }).bars.map((b) => b.hour.slice(11, 16));
+  out.C9 = { hours_read_at_12_09: seen(12, 9), hours_read_at_12_10: seen(12, 10), gap_seen_at: '12:10', next_open_the_withdrawn_policy_sold_at: '11:00' };
+}
+
+// The trader's Paper Book alone, as its tests set it up: funded with
+// $10,000, fifteen hours on record, Eric's approve of $250 and the ticket's
+// exit readings (cap $5,000).
+const bookFixture = (() => {
+  const T0 = Date.parse('2026-10-27T00:00:00Z');
+  const NOW = T0 + 15 * H;
+  const PID = 'fict-project';
+  const RID = 'tr_2026-10-27T000000Z_fict2';
+  const DID = 'td_fict0000000001';
+  const TID = 'tk_2026-10-27T000000Z_fict2';
+  const TICKET = { project_id: PID, receipt_id: RID, decision_id: DID };
+  const VENUE = { lot: '0.001', min_notional_usd: '10', maker_rate: '0.001', taker_rate: '0.002' };
+  const rules = { stop_min_pct: '0.01', stop_min_atr: '1', notional_max_pct: '0.25', price_stale_minutes: 15, max_validity_minutes: 180, allowlist: ['FICT/USDC'] };
+  const ctx = (now = NOW) => ({ now: iso(now), rules, venue: VENUE, ticket: TICKET });
+  const intent = (c, over = {}, now = NOW) => ({
+    version: 'cr.trade-intent.v3', intent_id: `01JBXQ5R7Z8Y9W0V1T2S3R4Q5${c}`, thesis_id: RID, ...TICKET, pair: 'FICT/USDC', side: 'OPEN_LONG', order_type: 'LIMIT',
+    created_at: iso(now - 2 * M), reference_price: '100', reference_at: iso(now - 3 * M), entry_price: '100', stop_loss_price: '95', take_profit_price: '115',
+    risk_ceiling_usd: '100', max_slippage_bps: 20, valid_until: iso(now + 175 * M),
+    evidence: { catalyst: 'Fictional catalyst', metrics_evaluated: ['fictional metric'], negative_invalidation: 'Fictional invalidation' }, ...over,
+  });
+  function make(label) {
+    const w = tempWorkspace(label);
+    cleanups.push(w.cleanup);
+    const ws = w.ws;
+    const PACKET = `projects/${PID}/tickets/${TID}/packet.json`;
+    fs.mkdirSync(ws.abs(`projects/${PID}/tickets/${TID}`), { recursive: true });
+    fs.mkdirSync(ws.abs(`projects/${PID}/tickets/receipts`), { recursive: true });
+    fs.writeFileSync(ws.abs(`projects/${PID}/tickets/decisions.jsonl`), `${JSON.stringify({ schema_version: 'cr.ticket-decision.v1', decision_id: DID, project_id: PID, receipt_id: RID, ticket_id: TID, action: 'approve', pm_approved_risk_usd: 250, suggested_risk_usd: 250, proposal_type: 'ACCUMULATE', note: null, decided_at: iso(T0), decided_by: 'eric', request_id: null })}\n`);
+    const exits = [[500, 0.4], [5000, 1.2], [20000, 7.5]].map(([size, cost]) => ({ size_usd: size, status: 'measured', cost_pct: cost, cost_complete: true, missing_costs: [], method: 'executable_quote', route_scope: 'aggregator', as_of: iso(T0), note: null }));
+    const packet = `${JSON.stringify({ project_id: PID, exits }, null, 2)}\n`;
+    fs.writeFileSync(ws.abs(PACKET), packet);
+    fs.writeFileSync(ws.abs(`projects/${PID}/tickets/receipts/${RID}.json`), `${JSON.stringify({ schema_version: 'cr.ticket-receipt.v1', receipt_id: RID, project_id: PID, ticket_id: TID, packet: { path: PACKET, sha256: sha256(packet), captured_at: iso(T0) }, desk: { sizing: { max_exit_cost_pct: 5 } } }, null, 2)}\n`);
+    PT.fund(ws, { cash_usd: '10000', now: iso(T0) });
+    for (let i = 0; i < 15; i++) PT.applyBar(ws, { pair: 'FICT/USDC', hour: iso(T0 + i * H), open: '100', high: '101', low: '99.5', close: '100', volume: '1000000' }, { now: iso(T0 + (i + 1) * H) });
+    return ws;
+  }
+  return { make, ctx, intent, rules, NOW };
+})();
+const said = (r) => ({ status: r.status, state: r.state || null, rules: (r.refusals || []).map((x) => x.rule) });
+
+// --- C11: the unresolved-order halt counts ACKED and PARTIAL as resolved, so
+// the book takes a second live buy for the same decision under another ID.
+{
+  const { make, ctx, intent } = bookFixture;
+  const ws = make('c11');
+  const a = PT.submitIntent(ws, intent('A'), ctx());
+  const b = PT.submitIntent(ws, intent('B'), ctx());
+  const c = PT.submitIntent(ws, intent('C'), ctx());
+  const bk = PT.book(ws, 'FICT/USDC', ctx());
+  out.C11 = {
+    resolved_states_in_trade_risk: ['ACKED', 'PARTIAL'].filter((s) => !['RESERVED', 'SENT', 'UNKNOWN'].includes(s)),
+    first_buy: said(a),
+    second_buy_same_decision: said(b),
+    third_buy_same_decision: said(c),
+    thesis_risk_held_usd: bk.thesis_risk_usd,
+    live_buys: PT.results(ws, { now: iso(bookFixture.NOW) }).orders.filter((o) => o.state === 'ACKED').length,
+  };
+}
+
+// --- C12: a size solved on one read of the book, then reserved after the
+// book changed. The refusal is recorded under the intent's ID, and the same
+// intent stays refused after the change is undone.
+{
+  const { make, ctx, intent, rules } = bookFixture;
+  const ws = make('c12');
+  const snapshot = PT.book(ws, 'FICT/USDC', ctx());
+  // A wide stop ($85), so Eric's $250 grant is what binds, not the notional cap.
+  const A = (risk) => intent('A', { stop_loss_price: '85', risk_ceiling_usd: risk });
+  const SIZING = ['risk_cap', 'drawdown', 'gate_cap', 'pm_cap', 'notional_cap', 'exit_cap'];
+  const fits = (cents) => !TR.validateTradeIntent(A((cents / 100).toFixed(2)), snapshot, rules).refusals.some((x) => SIZING.includes(x.rule));
+  let lo = 0;
+  let hi = 25000;
+  if (fits(hi)) lo = hi;
+  else while (hi - lo > 1) { const mid = Math.floor((lo + hi) / 2); if (fits(mid)) lo = mid; else hi = mid; }
+  const solved = (lo / 100).toFixed(2);
+  const binds = TR.validateTradeIntent(A(((lo + 1) / 100).toFixed(2)), snapshot, rules).refusals.map((x) => x.rule).filter((r) => SIZING.includes(r));
+  // Another writer takes $100 of the same thesis between the read and the reservation.
+  const other = PT.submitIntent(ws, intent('B'), ctx());
+  const first = PT.submitIntent(ws, A(solved), ctx());
+  PT.cancelOrder(ws, other.client_order_id, { now: iso(bookFixture.NOW + M) });
+  const again = PT.submitIntent(ws, A(solved), ctx(bookFixture.NOW + 2 * M));
+  out.C12 = { solved_on_the_read_usd: solved, a_cent_more_refused_by: binds, other_writer: said(other), reserve_after_the_change: said(first), other_cancelled_then_same_intent_again: said(again), thesis_risk_now_usd: PT.book(ws, 'FICT/USDC', ctx(bookFixture.NOW + 2 * M)).thesis_risk_usd };
 }
 
 async function asyncCases() {
