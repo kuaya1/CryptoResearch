@@ -21,6 +21,19 @@
 //       It is created with the first reservation; once the book holds an
 //       order, a missing file or a line that does not read is INTEGRITY, and
 //       no order is resolved from it.
+//   paper/trader/journal.head.json  the journal's head (D7, Eric 2026-10-28):
+//       the number and SHA-256 of its last line, written after it in the same
+//       commit. A chain that lost its last lines is still a valid chain, so
+//       a journal shorter than its head, a line that does not hash to it, or
+//       lines with no head is INTEGRITY: nothing is read or written. A
+//       journal longer than its head, the chain intact, is read, and the head
+//       moves forward with the next write. Only a missing file reads as
+//       empty; any other read error stops. Every client order ID the venue
+//       holds must be one the journal reserved and sent; a venue order the
+//       journal does not know is INTEGRITY. No key is held: this catches a
+//       crash, a full disk, a one-file restore or a hand edit, not someone
+//       who rewrites the files consistently. Made before any record exists
+//       under this version, as the red team's corrections were.
 //
 // One intent, one order: the client order ID is derived from intent_id; the
 // same intent again is `unchanged`, a different body under its ID refused,
@@ -82,7 +95,7 @@
 // is no grant, with its reason. A close reads none: it only reduces risk.
 
 const fs = require('fs');
-const { runOp, OpError } = require('./ops');
+const { runOp, readConsistent, OpError } = require('./ops');
 const { sha256 } = require('./fsx');
 const { isProjectId } = require('./ids');
 // Taken once, at load (red team P2-13): the engine's exports are frozen, and
@@ -92,6 +105,7 @@ const { validateTradeIntent, exact: { dec, str, mulFloor, mulCeil, isoMs, own } 
 const VERSION = 'cr-paper@2';
 const JOURNAL = 'paper/trader/journal.jsonl';
 const VENUE = 'paper/trader/venue.jsonl';
+const HEAD = 'paper/trader/journal.head.json';
 const FILL_SHARE_MAX = '0.1';
 const STOP_SLIPPAGE_BPS = 25;
 const VENUE_DUPLICATE_WINDOW_MINUTES = 60;
@@ -141,9 +155,61 @@ function parseJournal(text) {
   return { events, head };
 }
 
-function readText(ws, rel) {
-  try { return fs.readFileSync(ws.abs(rel), 'utf8'); } catch (_) { return ''; }
+// Only a missing file reads as `missing`; any other read error stops, so an
+// unreadable journal is never a fresh, unfunded book (D7).
+function readText(ws, rel, missing = '') {
+  try { return fs.readFileSync(ws.abs(rel), 'utf8'); } catch (err) {
+    if (err && err.code === 'ENOENT') return missing;
+    throw new OpError('INTEGRITY', `${rel} could not be read (${(err && err.code) || 'error'}). Nothing is read or written until it is repaired.`);
+  }
 }
+
+const stopped = (why) => new OpError('INTEGRITY', `${why} Nothing is read or written until it is repaired.`);
+
+// The journal against its head; `headText` is null when there is none.
+function checkHead(text, headText, parsed) {
+  const n = parsed.events.length;
+  if (headText === null) {
+    if (n) throw stopped(`${JOURNAL} has ${n} lines but its head record (${HEAD}) is missing, so lines lost from its end could not be detected.`);
+    return;
+  }
+  let h = null;
+  try { h = JSON.parse(headText); } catch (_) { /* refused below */ }
+  if (!h || typeof h !== 'object' || !Number.isSafeInteger(h.seq) || h.seq < 1 || typeof h.head_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(h.head_sha256)) throw stopped(`${HEAD} does not read, so the end of ${JOURNAL} cannot be checked.`);
+  if (n < h.seq) throw stopped(`${JOURNAL} ends at line ${n}, but its head record names line ${h.seq}: lines were lost from its end.`);
+  if (sha256(lines(text)[h.seq - 1]) !== h.head_sha256) throw stopped(`${JOURNAL} line ${h.seq} is not the line its head record names.`);
+}
+
+// Every order the venue holds is one the journal reserved and sent. A venue
+// line that does not read is left to venueRecords, where the venue is asked:
+// the order it would answer for stays UNKNOWN.
+function checkVenue(events, venueText) {
+  if (venueText === null) return;
+  const seen = (type) => new Set(events.filter((e) => e.type === type).map((e) => e.client_order_id));
+  const reserved = seen('reserved');
+  const sent = seen('sent');
+  for (const l of lines(venueText)) {
+    let r = null;
+    try { r = JSON.parse(l); } catch (_) { continue; }
+    if (!r || typeof r.client_order_id !== 'string') continue;
+    if (!sent.has(r.client_order_id)) throw stopped(`The venue holds ${r.client_order_id}, which ${JOURNAL} never ${reserved.has(r.client_order_id) ? 'sent' : 'reserved'}: the journal has lost lines.`);
+  }
+}
+
+// The journal, checked against its head and the venue's record. The venue is
+// read first and the journal last, so a commit landing between the reads can
+// only leave the journal newer than what it is checked against.
+function load(read) {
+  const venue = read(VENUE, null);
+  const head = read(HEAD, null);
+  const text = read(JOURNAL, '');
+  const parsed = parseJournal(text);
+  checkHead(text, head, parsed);
+  checkVenue(parsed.events, venue);
+  return { text, parsed };
+}
+const loadOp = (op) => load((rel, missing) => op.readText(rel, missing));
+const loadWs = (ws) => readConsistent(ws, () => load((rel, missing) => readText(ws, rel, missing)));
 // The venue's records, every line of them: a line that does not read is
 // INTEGRITY, never skipped, so a lost answer is never read as no answer.
 function venueRecords(text) {
@@ -220,9 +286,6 @@ function ticketOf(read, it) {
 function noCallerGrant(ctx) {
   if (ctx && ctx.grant !== undefined) throw new OpError('INVALID', 'A grant is never taken from the caller: the Paper Book reads it from Eric\'s stored PM decision (cr-trade-risk@2). Nothing was read or written.');
 }
-const fileOrNull = (ws) => (rel) => {
-  try { return fs.readFileSync(ws.abs(rel), 'utf8'); } catch (err) { if (err && err.code === 'ENOENT') return null; throw err; }
-};
 
 // --- The state, replayed from the journal.
 
@@ -437,8 +500,7 @@ function opType(ws, step, subject, now) {
 function journal(ws, step, subject, summary, now, build) {
   const t = msOf(now);
   return runOp(ws, { type: opType(ws, step, subject, now), summary }, (op) => {
-    const text = op.readText(JOURNAL, '');
-    const parsed = parseJournal(text);
+    const { text, parsed } = loadOp(op);
     let head = parsed.head;
     const st = replay(parsed.events);
     if (st.last_at && t < Date.parse(st.last_at)) throw new OpError('TIME', `${now} is earlier than the book's last record (${st.last_at}); the book never goes back in time.`);
@@ -453,7 +515,11 @@ function journal(ws, step, subject, summary, now, build) {
     };
     const result = build({ st, append, op, t });
     if (st.cash < 0n) throw new OpError('INTEGRITY', 'This change would leave cash below 0; nothing was written.');
-    if (out.length) op.write(JOURNAL, `${text}${text && !text.endsWith('\n') ? '\n' : ''}${out.join('\n')}\n`);
+    if (out.length) {
+      op.write(JOURNAL, `${text}${text && !text.endsWith('\n') ? '\n' : ''}${out.join('\n')}\n`);
+      // Its head, after it, in the same commit.
+      op.write(HEAD, `${JSON.stringify({ seq: parsed.events.length + out.length, head_sha256: head, at: iso(t) })}\n`);
+    }
     return result;
   }).result;
 }
@@ -561,7 +627,7 @@ function markSent(ws, coid, { now } = {}) {
 function venueSend(ws, coid, { now } = {}) {
   const t = msOf(now);
   return runOp(ws, { type: `paper_trader_venue.${opType(ws, 'venue', coid, now).split('.').pop()}`, summary: `Simulated venue: ${coid}` }, (op) => {
-    const st = replay(parseJournal(op.readText(JOURNAL, '')).events);
+    const st = replay(loadOp(op).parsed.events);
     const o = orderOf(st, coid);
     const text = op.readText(VENUE, null);
     const prior = venueRecords(text).find((r) => r.client_order_id === coid);
@@ -775,8 +841,8 @@ function applyBar(ws, bar, { now } = {}) {
 function book(ws, pair, ctx = {}) {
   noCallerGrant(ctx);
   const tk = ctx.ticket && typeof ctx.ticket === 'object' ? ctx.ticket : null;
-  const ticket = tk ? { thesis: typeof tk.receipt_id === 'string' ? tk.receipt_id : null, ...grantOf(fileOrNull(ws), tk) } : { thesis: null, grant: null, why: null };
-  return bookFor(replay(parseJournal(readText(ws, JOURNAL)).events), pair, ctx, ticket);
+  const ticket = tk ? { thesis: typeof tk.receipt_id === 'string' ? tk.receipt_id : null, ...grantOf((rel) => readText(ws, rel, null), tk) } : { thesis: null, grant: null, why: null };
+  return bookFor(replay(loadWs(ws).parsed.events), pair, ctx, ticket);
 }
 
 // The book's results now. NAV, cash, each position's quantity, notional,
@@ -785,7 +851,7 @@ function book(ws, pair, ctx = {}) {
 // when the caller gives BTC's price at the funding and now (`btc`).
 function results(ws, { now, btc } = {}) {
   const t = msOf(now);
-  const st = replay(parseJournal(readText(ws, JOURNAL)).events);
+  const st = replay(loadWs(ws).parsed.events);
   const nav = navAt(st, t);
   const unknown = [];
   let unrealized = 0n;
@@ -835,6 +901,6 @@ function results(ws, { now, btc } = {}) {
 }
 
 module.exports = {
-  VERSION, JOURNAL, VENUE, FILL_SHARE_MAX, STOP_SLIPPAGE_BPS, VENUE_DUPLICATE_WINDOW_MINUTES, NAV_PRICE_FRESH_MINUTES, DECISION_VERSION,
+  VERSION, JOURNAL, VENUE, HEAD, FILL_SHARE_MAX, STOP_SLIPPAGE_BPS, VENUE_DUPLICATE_WINDOW_MINUTES, NAV_PRICE_FRESH_MINUTES, DECISION_VERSION,
   decisionInForce, fund, submitIntent, reserveIntent, markSent, venueSend, recordAnswer, recover, reconcile, cancelOrder, applyBar, book, results,
 };

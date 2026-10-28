@@ -7,6 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const { tempWorkspace } = require('./helpers');
+const { sha256 } = require('../core/fsx');
 const PT = require('../core/paper-trader');
 const paper = require('../core/paper');
 
@@ -537,30 +538,110 @@ test('red team P1-4: a venue answer that does not read is an INTEGRITY error; th
   }
 });
 
-test('red team P1-5: the venue refuses a client order ID it holds with a different body; the order stays UNKNOWN', (t) => {
+// Rewrites the journal and its head consistently, as a hand edit of both would.
+function writeChain(ws, ls) {
+  let head = null;
+  const out = ls.map((l) => {
+    const line = JSON.stringify({ ...JSON.parse(l), prev_sha256: head });
+    head = sha256(line);
+    return line;
+  });
+  fs.writeFileSync(ws.abs(PT.JOURNAL), `${out.join('\n')}\n`);
+  fs.writeFileSync(ws.abs(PT.HEAD), `${JSON.stringify({ seq: out.length, head_sha256: head, at: at(NOW) })}\n`);
+}
+
+test('red team P1-5: a rolled-back journal is refused by its head and by the venue\'s record; rewritten under another body, the venue refuses the ID and the order stays UNKNOWN', (t) => {
   const ws = setup(t);
   const a = PT.reserveIntent(ws, intent('A'), ctx());
   PT.markSent(ws, a.client_order_id, { now: at(NOW) });
   PT.venueSend(ws, a.client_order_id, { now: at(NOW) });
-  // The journal loses its last two lines (a rollback); intent A's ID then takes another body.
-  const p = ws.abs(PT.JOURNAL);
-  const kept = fs.readFileSync(p, 'utf8').trim().split('\n').slice(0, -2);
-  fs.writeFileSync(p, `${kept.join('\n')}\n`);
-  const again = PT.submitIntent(ws, intent('A', { risk_ceiling_usd: '50' }), ctx(NOW + M));
-  assert.equal(again.state, 'UNKNOWN');
+  const full = fs.readFileSync(ws.abs(PT.JOURNAL), 'utf8').trim().split('\n');
+  // The journal loses its last two lines (a rollback): its head refuses it.
+  fs.writeFileSync(ws.abs(PT.JOURNAL), `${full.slice(0, -2).join('\n')}\n`);
+  assert.throws(() => PT.submitIntent(ws, intent('A', { risk_ceiling_usd: '50' }), ctx(NOW + M)), (e) => e.code === 'INTEGRITY');
+  // Its head rolled back with it: the venue holds an order the journal never reserved.
+  writeChain(ws, full.slice(0, -2));
+  assert.throws(() => PT.submitIntent(ws, intent('A', { risk_ceiling_usd: '50' }), ctx(NOW + M)), (e) => e.code === 'INTEGRITY' && /never reserved/.test(e.message));
   assert.equal(venueLines(ws), 1);
-  assert.throws(() => PT.reconcile(ws, again.client_order_id, { now: at(NOW + 2 * M) }), (e) => e.code === 'INTEGRITY');
-  assert.throws(() => PT.venueSend(ws, again.client_order_id, { now: at(NOW + 2 * M) }), (e) => e.code === 'CONFLICT');
+  // Both rewritten consistently with intent A's order at another quantity:
+  // the venue holds its ID as a different order.
+  writeChain(ws, full.map((l) => { const e = JSON.parse(l); return e.type === 'reserved' ? JSON.stringify({ ...e, quantity: '8.885' }) : l; }));
+  assert.throws(() => PT.venueSend(ws, a.client_order_id, { now: at(NOW + 2 * M) }), (e) => e.code === 'CONFLICT');
+  PT.recover(ws, { now: at(NOW + 2 * M) });
+  assert.throws(() => PT.reconcile(ws, a.client_order_id, { now: at(NOW + 62 * M) }), (e) => e.code === 'INTEGRITY');
+  assert.equal(res(ws, NOW + 62 * M).orders[0].state, 'UNKNOWN');
+  assert.equal(venueLines(ws), 1);
 });
 
-test('known gap: a journal that lost its last lines is not yet detected', { todo: 'the journal head is not anchored; a MAC under a key the agent never holds (invariant 4) is Eric\'s decision' }, (t) => {
+// --- The journal's head (D7, Eric 2026-10-28).
+
+test('D7: a journal that lost its last lines is refused by its head; nothing is read or written', (t) => {
   const ws = setup(t);
   const a = PT.reserveIntent(ws, intent('A'), ctx());
   PT.markSent(ws, a.client_order_id, { now: at(NOW) });
   const p = ws.abs(PT.JOURNAL);
   const kept = fs.readFileSync(p, 'utf8').trim().split('\n').slice(0, -2);
   fs.writeFileSync(p, `${kept.join('\n')}\n`);
-  assert.throws(() => PT.results(ws, { now: at(NOW + M) }), (e) => e.code === 'INTEGRITY');
+  const files = () => [fs.readFileSync(p, 'utf8'), fs.readFileSync(ws.abs(PT.HEAD), 'utf8')];
+  const before = files();
+  assert.throws(() => PT.results(ws, { now: at(NOW + M) }), (e) => e.code === 'INTEGRITY' && /lines were lost from its end/.test(e.message));
+  assert.throws(() => PT.book(ws, 'FICT/USDC', ctx(NOW + M)), (e) => e.code === 'INTEGRITY');
+  assert.throws(() => PT.submitIntent(ws, intent('B', {}, NOW + M), ctx(NOW + M)), (e) => e.code === 'INTEGRITY');
+  assert.throws(() => hour(ws, 15), (e) => e.code === 'INTEGRITY');
+  assert.throws(() => PT.recover(ws, { now: at(NOW + M) }), (e) => e.code === 'INTEGRITY');
+  assert.deepEqual(files(), before);
+});
+
+test('D7: a deleted or unreadable journal, or a missing head, is never a fresh book', (t) => {
+  // The journal deleted while its head is there: not even a new funding.
+  let ws = setup(t);
+  fs.rmSync(ws.abs(PT.JOURNAL));
+  assert.throws(() => PT.results(ws, { now: at(NOW) }), (e) => e.code === 'INTEGRITY' && /ends at line 0/.test(e.message));
+  assert.throws(() => PT.fund(ws, { cash_usd: '10000', now: at(NOW) }), (e) => e.code === 'INTEGRITY');
+  assert.equal(fs.existsSync(ws.abs(PT.JOURNAL)), false);
+  // A journal that does not read as a file.
+  ws = setup(t);
+  fs.rmSync(ws.abs(PT.JOURNAL));
+  fs.mkdirSync(ws.abs(PT.JOURNAL));
+  assert.throws(() => PT.results(ws, { now: at(NOW) }), (e) => e.code === 'INTEGRITY' && /could not be read/.test(e.message));
+  // Its head deleted.
+  ws = setup(t);
+  fs.rmSync(ws.abs(PT.HEAD));
+  assert.throws(() => PT.book(ws, 'FICT/USDC', ctx()), (e) => e.code === 'INTEGRITY' && /head record \(paper\/trader\/journal\.head\.json\) is missing/.test(e.message));
+});
+
+test('D7: a venue order the journal does not know is refused', (t) => {
+  const ws = setup(t);
+  assert.equal(PT.submitIntent(ws, intent('A'), ctx()).state, 'ACKED');
+  fs.appendFileSync(ws.abs(PT.VENUE), `${JSON.stringify({ client_order_id: `cr2-${ID('B')}`, pair: 'FICT/USDC', side: 'OPEN_LONG', order_type: 'LIMIT', limit: '100', quantity: '1', answer: 'accepted', words: null, at: at(NOW) })}\n`);
+  assert.throws(() => PT.results(ws, { now: at(NOW) }), (e) => e.code === 'INTEGRITY' && /never reserved: the journal has lost lines/.test(e.message));
+  assert.throws(() => hour(ws, 15, { low: '99' }), (e) => e.code === 'INTEGRITY');
+});
+
+test('D7: a hand edit of the last line, the chain still valid, is refused by the head\'s hash', (t) => {
+  const ws = setup(t);
+  PT.submitIntent(ws, intent('A'), ctx());
+  const p = ws.abs(PT.JOURNAL);
+  const ls = fs.readFileSync(p, 'utf8').trim().split('\n');
+  const last = JSON.parse(ls[ls.length - 1]);
+  assert.equal(last.answer, 'accepted');
+  ls[ls.length - 1] = JSON.stringify({ ...last, answer: 'rejected' });
+  fs.writeFileSync(p, `${ls.join('\n')}\n`);
+  assert.throws(() => PT.results(ws, { now: at(NOW) }), (e) => e.code === 'INTEGRITY' && /is not the line its head record names/.test(e.message));
+});
+
+test('D7: a journal ahead of its head, the chain intact, is read; the next write moves the head forward', (t) => {
+  const ws = setup(t);
+  const h = ws.abs(PT.HEAD);
+  const older = fs.readFileSync(h, 'utf8');
+  PT.submitIntent(ws, intent('A'), ctx());
+  // A crash between the two writes, or the head restored from before them.
+  fs.writeFileSync(h, older);
+  assert.equal(res(ws, NOW).orders[0].state, 'ACKED');
+  hour(ws, 15, { low: '99' });
+  const ls = fs.readFileSync(ws.abs(PT.JOURNAL), 'utf8').trim().split('\n');
+  const head = JSON.parse(fs.readFileSync(h, 'utf8'));
+  assert.deepEqual([head.seq, head.head_sha256], [ls.length, sha256(ls[ls.length - 1])]);
 });
 
 test('red team P1-6: inside a queued request each journal write keeps its own identity; none is collapsed into the first', (t) => {

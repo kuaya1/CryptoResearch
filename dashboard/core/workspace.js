@@ -128,6 +128,10 @@ const DEFAULT_SETTINGS = {
     },
   },
   portfolio: { base_currency: 'USD', accounting_method: 'fifo_per_account' },
+  // Eric's own trader rules (trader-rules.js; Preferences > Screening): the
+  // minimum stop distance, the notional cap, an intent's longest life and the
+  // allowlist cr-trade-risk reads. Unset, every intent is refused.
+  trader: { rules: { stop_min_pct: null, stop_min_atr: null, notional_max_pct: null, max_validity_minutes: null, allowlist: null } },
   // Read-only tracking of public wallet addresses (wallets.js, walletsync.js),
   // through Alchemy: nothing is read until a wallet with its networks and an
   // Alchemy key (ALCHEMY_API_KEY, never stored here) are both present. Each

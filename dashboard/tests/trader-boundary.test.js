@@ -20,6 +20,8 @@ const { parseBacklog } = require('../scripts/backlog-status');
 const { validate } = require('../core/schema');
 const { sha256 } = require('../core/fsx');
 const risk = require('../core/trade-risk');
+const PT = require('../core/paper-trader');
+const TR = require('../core/trader-rules');
 const { protectedHit } = BP;
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -48,7 +50,11 @@ test('invariant 4: an order is never recorded lost on a clock; unknown stays unk
   assert.match(four, /`INTENT` → `RESERVED`[^\n]*→ `SENT` → `ACKED`, `REJECTED` or `UNKNOWN`/);
   assert.match(four, /`ACKED` → `PARTIAL` → `FILLED`, `CANCELLED` or `EXPIRED`/);
   assert.match(four, /stays `UNKNOWN` until the engine has asked the venue for that `client_order_id`/);
-  assert.match(four, /`NOT_FOUND` only when the venue says so after the venue's own duplicate-order window/);
+  // What the code does (D9): the venue asked and holding no record, then its window.
+  assert.match(four, /`NOT_FOUND` only when the venue, asked for that `client_order_id`, has no record of it and the venue's duplicate-order window has passed/);
+  assert.match(four, new RegExp(`window is ${PT.VENUE_DUPLICATE_WINDOW_MINUTES} minutes from the send, on the engine's clock \\(\`paper-trader\\.js\` \`VENUE_DUPLICATE_WINDOW_MINUTES\`\\)`));
+  assert.match(four, /A real venue would need its own explicit "unknown order" answer/);
+  assert.doesNotMatch(four, /HMAC|MAC under a key/, 'the trader holds no key; its records carry no MAC');
   assert.match(four, /While any order is `RESERVED`, `SENT` or `UNKNOWN`[^\n]*opens no new intent/);
   assert.match(four, /never resends an order under a new `client_order_id`/);
   assert.doesNotMatch(four, /then is recorded `lost`/, 'the build lane\'s timeout is not an order\'s');
@@ -64,6 +70,9 @@ test('cr.trade-intent.v2: an intent id, decimal strings, an explicit long-only s
   for (const k of ['reference_price', 'entry_price', 'stop_loss_price', 'take_profit_price', 'risk_ceiling_usd']) assert.match(shape[k], /^decimal string/, k);
   assert.match(s, /\*\*Minimum stop distance\.\*\*[^\n]*`STOP_MIN_PCT`[^\n]*`STOP_MIN_ATR`[^\n]*every intent is refused/);
   assert.match(s, /\*\*Size and notional cap\.\*\*[^\n]*`floor_to_lot\(/);
+  // The formula the engine computes (D10), not the bare entry − stop.
+  assert.match(s, /`floor_to_lot\(risk_ceiling_usd \/ per_unit_loss\)`[^\n]*`per_unit_loss = entry − stop_fill \+ fee\(entry\) \+ fee\(stop_fill\)`[^\n]*`stop_fill = stop × \(1 − STOP_SLIPPAGE_BPS \/ 10,000\)`/);
+  for (const head of ['### `TradeIntent` schema (`cr.trade-intent.v2`)', '### Paper Book `cr-paper@2`']) assert.doesNotMatch(section(head), /floor_to_lot\(risk_ceiling(_usd)? \/ \(entry − stop\)\)/, head);
   assert.match(s, /\*\*Fresh price\.\*\*/);
   assert.match(s, /reads none of it for a decision/);
 });
@@ -142,6 +151,16 @@ test('no trader module reaches a network, a process, the environment or a secret
   }
 });
 
+test('D10: the settings home holds every rule the engine refuses without, and none it does not know', () => {
+  // The engine's three optional tightenings keep their hard limits when absent.
+  const required = risk.RULE_FIELDS.filter((f) => !['risk_per_trade_max', 'daily_drawdown_max', 'slippage_bps_max'].includes(f));
+  assert.deepEqual([...TR.FIELDS, 'price_stale_minutes'].sort(), [...required].sort());
+  const r = risk.validateTradeIntent({}, {}, {});
+  const unset = new Set(r.refusals.filter((x) => x.rule === 'rule_unset').map((x) => x.field));
+  for (const f of ['price_stale_minutes', 'max_validity_minutes']) assert.ok(unset.has(`rules.${f}`), f);
+  assert.doesNotMatch(fs.readFileSync(path.join(ROOT, 'dashboard', 'core', 'trader-rules.js'), 'utf8'), /require\(['"][^'"]*(trade-risk|paper-trader)/, 'the settings home does not call the trader');
+});
+
 const schemaText = (v) => fs.readFileSync(path.join(ROOT, 'templates', 'schemas', `trade-intent.${v}.schema.json`), 'utf8').replace(/\r\n/g, '\n');
 
 test('the frozen cr.trade-intent.v3 schema and the engine read the same fields and the same decimals; v2 stays as published', () => {
@@ -169,7 +188,6 @@ test('the frozen cr.trade-intent.v3 schema and the engine read the same fields a
 });
 
 test('D8: the trader reads Eric\'s grant from his stored decision, by the desk\'s own in-force rule', () => {
-  const PT = require('../core/paper-trader');
   const T = require('../core/tickets');
   const rid = 'tr_2026-10-27T000000Z_fict2';
   const line = (id, action, over = {}) => ({ schema_version: PT.DECISION_VERSION, decision_id: id, project_id: 'fict-project', receipt_id: rid, action, ...over });
