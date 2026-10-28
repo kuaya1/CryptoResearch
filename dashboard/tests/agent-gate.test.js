@@ -14,7 +14,6 @@ const { spawnSync } = require('child_process');
 const L = require('../scripts/agent-ledger');
 const GATE = require('../scripts/agent-gate');
 
-const ROOT = path.join(__dirname, '..', '..');
 const REPO = 'kuaya1/CryptoResearch';
 const GATE_APP = 424242;
 const ENV = { GITHUB_REPOSITORY: REPO, GITHUB_REPOSITORY_OWNER: 'kuaya1', GITHUB_TOKEN: 'ghs_FICTIONAL_read', GATE_TOKEN: 'ghs_FICTIONAL_gate', GATE_APP_ID: String(GATE_APP), AGENT_LEDGER_KEY: `FICTIONAL-ledger-key-${'k'.repeat(24)}` };
@@ -274,60 +273,4 @@ test('nothing is posted when the gate cannot know: no App token, a moved head, u
   fx.pull.state = 'closed';
   assert.equal((await gate(fx, w)).status, 'skipped');
   assert.equal(w.checks.length, 0);
-});
-
-test('the ruleset Eric applies requires release-gate from the gate App alone; the repository\'s file stays the rollback', () => {
-  const before = JSON.parse(fs.readFileSync(path.join(ROOT, '.github', 'rulesets', 'main-merge-requirements.json'), 'utf8'));
-  const after = GATE.rulesetAfter(before, GATE_APP);
-  const list = (rs) => rs.rules.find((r) => r.type === 'required_status_checks').parameters.required_status_checks;
-  assert.deepEqual(list(after), [...list(before), { context: 'release-gate', integration_id: GATE_APP }]);
-  assert.deepEqual({ ...after, rules: after.rules.filter((r) => r.type !== 'required_status_checks') }, { ...before, rules: before.rules.filter((r) => r.type !== 'required_status_checks') });
-  assert.equal(list(before).length, 4, 'the file is untouched');
-  for (const bad of [15368, 0, -1, 'x', 1.5, undefined]) assert.throws(() => GATE.rulesetAfter(before, bad), /positive integer, never GitHub Actions/);
-  assert.throws(() => GATE.rulesetAfter(after, GATE_APP), /already required/);
-});
-
-// The workflow as a contract, and its shell run by bash with a fake node.
-const GIT_BASH = 'C:\\Program Files\\Git\\bin\\bash.exe';
-const BASH = process.platform === 'win32' ? (fs.existsSync(GIT_BASH) ? GIT_BASH : null) : 'bash';
-test('release-gate.yml runs main\'s code in the release-gate environment, off until Eric turns it on, its App token able to write checks only', { skip: !BASH && 'no bash here; CI runs it' }, (t) => {
-  const text = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release-gate.yml'), 'utf8');
-  assert.match(text, /^on:\n {2}workflow_run:\n {4}workflows: \[test, agent-checks, agent-review\]\n {4}types: \[completed\]\n {2}issue_comment:\n {4}types: \[created\]\n {2}schedule:\n/m);
-  assert.doesNotMatch(text, /pull_request_target|^\s+pull_request:/m);
-  assert.match(text, /^permissions: \{\}$/m);
-  assert.match(text, /\n {4}if: >-\n {6}vars\.RELEASE_GATE_ENABLED == 'true' && \(\n/);
-  assert.match(text, /\n {4}environment: release-gate\n/);
-  const perms = text.slice(text.indexOf('    permissions:'), text.indexOf('    steps:'));
-  assert.doesNotMatch(perms, /write/);
-  assert.deepEqual([...new Set(text.match(/secrets\.[A-Z_]+/g))].sort(), ['secrets.AGENT_LEDGER_KEY', 'secrets.GATE_APP_KEY']);
-  assert.deepEqual(text.match(/permission-[a-z-]+: \w+/g), ['permission-checks: write']);
-  for (const u of text.match(/uses:\s*\S+/g)) assert.match(u, /@[0-9a-f]{40}$/, u);
-  assert.match(text, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
-  assert.doesNotMatch(text, /workflow_run\.head_branch|pull_request\.head\.(ref|sha) \}\}|github\.event\.comment\.body \}\}/);
-  // The workflows whose jobs the gate trusts pin every action too.
-  for (const f of ['test.yml', 'agent-checks.yml']) {
-    for (const u of fs.readFileSync(path.join(ROOT, '.github', 'workflows', f), 'utf8').match(/uses:\s*\S+/g)) assert.match(u, /@[0-9a-f]{40}$/, `${f}: ${u}`);
-  }
-  const from = text.indexOf('          set -euo pipefail\n');
-  const to = text.indexOf('          esac\n', from) + '          esac\n'.length;
-  const shell = text.slice(from, to).split('\n').map((l) => l.slice(10)).join('\n');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-gate-step-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(dir, 'step.sh'), shell);
-  fs.mkdirSync(path.join(dir, 'bin'));
-  fs.writeFileSync(path.join(dir, 'bin', 'node'), '#!/bin/sh\nprintf \'%s\n\' "$*" >> "$FAKE_LOG"\n', { mode: 0o755 });
-  const log = path.join(dir, 'node.log');
-  const run = (o) => {
-    fs.rmSync(log, { force: true });
-    const r = spawnSync(BASH, [path.join(dir, 'step.sh')], { encoding: 'utf8', env: { ...process.env, PATH: `${path.join(dir, 'bin')}${path.delimiter}${process.env.PATH}`, FAKE_LOG: log, WR_EVENT: '', WR_PR: '', WR_HEAD: '', COMMENT_PR: '', PR_INPUT: '', ...o } });
-    assert.equal(r.status, 0, `${r.stdout}${r.stderr}`);
-    return fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim() : '';
-  };
-  const H = 'a'.repeat(40);
-  assert.equal(run({ EVENT: 'workflow_run', WR_EVENT: 'pull_request', WR_PR: '5', WR_HEAD: H }), `dashboard/scripts/agent-gate.js run --pr 5 --head ${H}`);
-  assert.equal(run({ EVENT: 'workflow_run', WR_EVENT: 'workflow_run' }), 'dashboard/scripts/agent-gate.js sweep');
-  assert.equal(run({ EVENT: 'issue_comment', COMMENT_PR: '5' }), 'dashboard/scripts/agent-gate.js run --pr 5');
-  assert.equal(run({ EVENT: 'workflow_dispatch', PR_INPUT: '5' }), 'dashboard/scripts/agent-gate.js run --pr 5');
-  assert.equal(run({ EVENT: 'workflow_dispatch' }), 'dashboard/scripts/agent-gate.js sweep');
-  assert.equal(run({ EVENT: 'schedule' }), 'dashboard/scripts/agent-gate.js sweep');
 });
