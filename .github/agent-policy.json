@@ -1,6 +1,7 @@
 {
-  "version": "cr-agent-policy@3",
-  "label": "agent:build",
+  "version": "cr-agent-policy@4",
+  "label": "agent:ready",
+  "draft_label": "agent:draft",
   "branch_prefix": "agent/issue-",
   "task_branch_prefix": "agent/task-",
   "backlog": "DESK_STATE.md",

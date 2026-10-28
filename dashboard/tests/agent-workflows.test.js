@@ -163,30 +163,29 @@ test('builders push only with the builder App\'s token; no workflow holds a pers
   for (const id of ['reserve', 'build', 'record', 'refused']) assert.doesNotMatch(j[id], /agent-guard\.js publish|gh pr create/, id);
 });
 
-// Pipeline review, 2026-10-27, step 3: the issue queue authorizes a backlog
-// task without a merge to main. Its workflow runs main's own script on the
-// label, the edit and the close, holds no secret, writes only the ledger and
-// the issue, and one run at a time numbers the queue.
-test('the issue queue runs main\'s script on Eric\'s label, edit and close only, with no secret and one run at a time', () => {
-  const text = read('.github/workflows/backlog-queue.yml');
-  assert.match(text, /^on:\n {2}issues:\n {4}types: \[labeled, unlabeled, edited, closed\]\n\npermissions: \{\}\n/m);
-  assert.match(text, /concurrency:\n {2}group: backlog-queue\n {2}cancel-in-progress: false\n/);
-  const j = jobs(text);
-  assert.deepEqual(Object.keys(j), ['queue']);
-  assert.match(j.queue, /github\.event\.label\.name == 'agent:ready'/);
-  assert.match(j.queue, /contains\(github\.event\.issue\.labels\.\*\.name, 'agent:ready'\)/);
-  assert.match(j.queue, /!github\.event\.issue\.pull_request/);
-  assert.match(j.queue, /permissions:\n\s+contents: write[^\n]*\n\s+issues: write[^\n]*\n\s+steps:/);
-  assert.match(j.queue, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/, 'main\'s code, never a branch the issue names');
-  for (const m of j.queue.matchAll(/uses: ([^\s]+)/g)) assert.match(m[1], /@[0-9a-f]{40}$/, m[1]);
-  assert.deepEqual(secretsIn(text), []);
-  const run = j.queue.slice(j.queue.lastIndexOf('run:'));
-  assert.equal(run.trim(), 'run: node dashboard/scripts/backlog-queue.js event');
-  assert.doesNotMatch(text, /github\.event\.issue\.(title|body)/, 'the issue text reaches the script only through the event file');
-  const form = read('.github/ISSUE_TEMPLATE/backlog-task.yml');
+// The one lane (hardening, 2026-10-27; cr-agent-policy@4): an Agent task
+// issue arrives labeled agent:draft, and only Eric's agent:ready starts
+// anything, in one place, agent-build. The issue queue that read the same
+// label for the cloud builders (backlog-queue.yml and its Backlog task form)
+// is retired; backlog-queue.js stays as the reader of what it recorded.
+test('one lane: only agent-build starts on agent:ready; the task form arrives as agent:draft; no other workflow reads either label', () => {
+  const dir = path.join(ROOT, '.github', 'workflows');
+  const readers = fs.readdirSync(dir).filter((f) => /\.ya?ml$/.test(f) && /agent:(ready|draft|build)/.test(fs.readFileSync(path.join(dir, f), 'utf8')));
+  assert.deepEqual(readers, ['agent-build.yml']);
+  assert.ok(!fs.existsSync(path.join(dir, 'backlog-queue.yml')));
+  assert.ok(!fs.existsSync(path.join(ROOT, '.github', 'ISSUE_TEMPLATE', 'backlog-task.yml')));
+  const j = jobs(FILES[0][1]);
+  assert.match(j.reserve, /\(github\.event_name == 'issues' && github\.event\.label\.name == 'agent:ready'\) \|\|/);
+  assert.doesNotMatch(FILES[0][1], /agent:build'/, 'the old label starts nothing');
+  assert.match(j.refused, /add the agent:ready label again/);
+  const form = read('.github/ISSUE_TEMPLATE/agent-task.yml');
   assert.match(form, /^labels: \["agent:draft"\]$/m, 'a new task is a draft');
   assert.doesNotMatch(form.match(/^labels: .*$/m)[0], /agent:ready/, 'only Eric adds the label that authorizes');
-  for (const id of ['outcome', 'acceptance', 'touches', 'after', 'notes']) assert.match(form, new RegExp(`\\n {4}id: ${id}\\n`), id);
+  const policy = JSON.parse(read('.github/agent-policy.json'));
+  assert.deepEqual([policy.version, policy.label, policy.draft_label], ['cr-agent-policy@4', 'agent:ready', 'agent:draft']);
+  // Every lane template can be asked for in the form.
+  const options = form.slice(form.indexOf('id: lane_template')).match(/options:\n((?: {8}- .+\n)+)/)[1].match(/- (.+)/g).map((x) => x.slice(2));
+  assert.deepEqual(options.sort(), Object.keys(policy.templates).sort());
 });
 
 test('/revise: only Eric\'s own new comment on a pull request reserves, the revision\'s files are checked by hash, and a refusal is said as data', () => {

@@ -34,7 +34,7 @@ const git = (cwd, args, who = ERIC) => {
 };
 const form = (o) => Object.entries(o).map(([k, v]) => `### ${k}\n\n${v}`).join('\n\n');
 const FORM = { Template: 'eng-backend@1', Outcome: 'The widget size helper ignores surrounding spaces.', 'Acceptance checks': '- size of " ab " is 2', 'Negative cases': '- size of null throws', 'Regression tests': 'dashboard/tests/widget.test.js', 'Files to change': '- dashboard/core/widget.js\n- dashboard/tests/widget.test.js', Notes: '_No response_' };
-const issueOf = (fields = {}, extra = {}) => ({ number: 7, title: 'Widget size ignores spaces', body: form({ ...FORM, ...fields }), state: 'open', labels: [{ name: 'agent:build' }], ...extra });
+const issueOf = (fields = {}, extra = {}) => ({ number: 7, title: 'Widget size ignores spaces', body: form({ ...FORM, ...fields }), state: 'open', labels: [{ name: 'agent:ready' }], ...extra });
 const GOOD = { 'dashboard/core/widget.js': 'module.exports = { size: (s) => s.trim().length };\n', 'dashboard/tests/widget.test.js': "require('node:assert').equal(require('../core/widget').size(' ab '), 2);\n" };
 const REVISED = { 'dashboard/core/widget.js': "module.exports = { size: (s) => s.replace(/^[ \\t]+|[ \\t]+$/g, '').length };\n", 'dashboard/tests/widget.test.js': "require('node:assert').equal(require('../core/widget').size('\\t ab '), 2);\n" };
 const T0 = '2026-10-26T12:00:00Z';
@@ -371,7 +371,7 @@ test('only Eric\'s own new /revise on the lane\'s own candidate reserves: anythi
   w.state.issue = issueOf({ Outcome: 'FICTIONAL: the widget size helper ignores tabs too.' });
   await refused({}, new RegExp(`built from version ${w.task.body_sha256.slice(0, 12)} of issue #7, which now reads [0-9a-f]{12}: label the issue again`));
   w.state.issue = issueOf({}, { labels: [] });
-  await refused({}, /issue #7 no longer has the agent:build label/);
+  await refused({}, /issue #7 no longer has the agent:ready label/);
   w.state.issue = issueOf();
   // A commit on the branch that is not the builder App's.
   git(w.work, ['checkout', '-q', '-B', 'eric-edit', H0]);
@@ -408,13 +408,19 @@ test('without the ledger key no review verdict is read, and without a revision c
   const v2 = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'agent-policy@2.json'), 'utf8'));
   assert.equal(v2.version, 'cr-agent-policy@2');
   assert.equal(v2.ceilings.revisions_per_task_version, 2);
-  assert.equal(POLICY.version, 'cr-agent-policy@3');
+  // @3 is kept frozen beside @4 (the one lane, hardening 2026-10-27): only the label changed.
+  const v3 = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'agent-policy@3.json'), 'utf8'));
+  assert.equal(v3.version, 'cr-agent-policy@3');
+  assert.equal(v3.label, 'agent:build');
+  assert.equal(POLICY.version, 'cr-agent-policy@4');
+  assert.deepEqual({ ...POLICY, version: v3.version, label: v3.label, draft_label: undefined }, { ...v3, draft_label: undefined });
   assert.equal(POLICY.ceilings.revisions_per_task_version, 2);
   w.state.comments.push(comment(151, '/revise FICTIONAL: and again'));
   await record(w, reserves(w)[0].id, 'published');
   const event = { action: 'created', repository: { owner: { login: 'kuaya1' }, default_branch: 'main' }, issue: { number: 12, pull_request: {} }, comment: w.state.comments[1] };
   const gh = G.githubApi({ token: 'FICTIONAL-token', repo: REPO, fetchImpl: w.gh.fetchImpl });
-  const res = await R.reserve({ event, gh, cwd: w.work, env: { ...ENV, GITHUB_RUN_ID: '91', GITHUB_RUN_ATTEMPT: '1' }, now: () => Date.parse('2026-10-26T13:00:00Z'), policy: v1, base: w.base, outDir: path.join(w.dir, 'v1') });
+  // The issue carries today's label (agent:ready); what is under test is @1's missing ceiling.
+  const res = await R.reserve({ event, gh, cwd: w.work, env: { ...ENV, GITHUB_RUN_ID: '91', GITHUB_RUN_ATTEMPT: '1' }, now: () => Date.parse('2026-10-26T13:00:00Z'), policy: { ...v1, label: POLICY.label }, base: w.base, outDir: path.join(w.dir, 'v1') });
   assert.equal(res.ok, false);
   assert.match(res.reasons[0], /the policy sets no revisions_per_task_version; no revision is reserved/);
   assert.equal(reserves(w).length, 1);

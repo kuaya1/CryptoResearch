@@ -26,7 +26,7 @@ const git = (cwd, args, who = ERIC) => {
 };
 const form = (o) => Object.entries(o).map(([k, v]) => `### ${k}\n\n${v}`).join('\n\n');
 const FORM = { Template: 'eng-backend@1', Outcome: 'The widget size helper ignores surrounding spaces.', 'Acceptance checks': '- size of " ab " is 2', 'Negative cases': '- size of null throws', 'Regression tests': 'dashboard/tests/widget.test.js', 'Files to change': '- dashboard/core/widget.js\n- dashboard/tests/widget.test.js', Notes: '_No response_' };
-const issueOf = (fields = {}, extra = {}) => ({ number: 7, title: 'Widget size ignores spaces', body: form({ ...FORM, ...fields }), state: 'open', labels: [{ name: 'agent:build' }], ...extra });
+const issueOf = (fields = {}, extra = {}) => ({ number: 7, title: 'Widget size ignores spaces', body: form({ ...FORM, ...fields }), state: 'open', labels: [{ name: 'agent:ready' }], ...extra });
 
 function repo(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-guard-'));
@@ -77,11 +77,16 @@ const branchHead = (r) => git(r.work, ['ls-remote', 'origin', 'refs/heads/agent/
 const GOOD = { 'dashboard/core/widget.js': 'module.exports = { size: (s) => s.trim().length };\n', 'dashboard/tests/widget.test.js': "require('node:assert').equal(require('../core/widget').size(' ab '), 2);\n" };
 
 test('only Eric\'s own label on an open issue authorizes a build', () => {
-  const ev = (o = {}) => ({ action: 'labeled', label: { name: 'agent:build' }, repository: { owner: { login: 'kuaya1' } }, sender: { login: 'kuaya1', type: 'User' }, issue: { number: 7, state: 'open' }, ...o });
+  const ev = (o = {}) => ({ action: 'labeled', label: { name: 'agent:ready' }, repository: { owner: { login: 'kuaya1' } }, sender: { login: 'kuaya1', type: 'User' }, issue: { number: 7, state: 'open' }, ...o });
   assert.deepEqual(G.authorize(ev(), { policy: POLICY }), []);
   assert.match(G.authorize(ev({ sender: { login: 'cr-builder[bot]', type: 'Bot' } }), { policy: POLICY })[0], /not by the repository owner/);
   assert.match(G.authorize(ev({ sender: { login: 'someone', type: 'User' } }), { policy: POLICY })[0], /not by the repository owner/);
-  assert.match(G.authorize(ev({ label: { name: 'bug' } }), { policy: POLICY })[0], /not the agent:build label/);
+  assert.match(G.authorize(ev({ label: { name: 'bug' } }), { policy: POLICY })[0], /not the agent:ready label/);
+  // The one lane (cr-agent-policy@4, hardening 2026-10-27): the form's own
+  // agent:draft and the retired agent:build authorize nothing.
+  assert.equal(POLICY.label, 'agent:ready');
+  assert.equal(POLICY.draft_label, 'agent:draft');
+  for (const name of ['agent:draft', 'agent:build']) assert.match(G.authorize(ev({ label: { name } }), { policy: POLICY })[0], /not the agent:ready label/, name);
   assert.match(G.authorize(ev({ issue: { number: 7, state: 'closed' } }), { policy: POLICY })[0], /closed/);
   assert.match(G.authorize(ev({ issue: { number: 7, state: 'open', pull_request: {} } }), { policy: POLICY })[0], /not an issue/);
 });
@@ -110,6 +115,16 @@ test('the issue\'s task stays inside its template: protected, forbidden and guar
   assert.deepEqual(open.problems, []);
   assert.deepEqual(open.paths, []);
   assert.deepEqual(open.tests, []);
+});
+
+test('one lane: an issue in the retired Backlog task form, labeled agent:ready again, is no agent task and builds nothing', () => {
+  // The Backlog task form (issue queue, retired 2026-10-27) had Outcome,
+  // Acceptance checks, Touches, After and Notes: no Template, no Negative cases.
+  const queued = { number: 7, title: 'Queued item', state: 'open', labels: [{ name: 'agent:ready' }],
+    body: form({ Outcome: 'The widget size helper ignores surrounding spaces.', 'Acceptance checks': '- size of " ab " is 2', Touches: 'dashboard/core/widget.js', After: '_No response_', Notes: '_No response_' }) };
+  const problems = G.taskOf(queued, { policy: POLICY }).problems.join('\n');
+  assert.match(problems, /the template "none" is not one the agent lane builds/);
+  assert.match(problems, /"Negative cases" is empty/);
 });
 
 test('a task that names no files or tests is scoped by its template: any file inside it, never a protected or forbidden one, and still a test', (t) => {
@@ -226,7 +241,7 @@ test('the publisher commits the tree as the builder with the task\'s trailers, a
   assert.match(G.publish({ cwd: r.work, base: r.base, tree, task, run: '47/1', botName: BOT.name, botEmail: BOT.email, branch: 'agent/issue-7', reservation: 'bd-ffffffffffffffff', policy: POLICY }).error, /reservation bd-ffffffffffffffff is not in the ledger/);
   assert.equal(branchHead(r), again.commit);
 
-  assert.match((await check({ issueOf: async () => ({ ...issue, labels: [] }) })).reasons.join('\n'), /no longer has the agent:build label/);
+  assert.match((await check({ issueOf: async () => ({ ...issue, labels: [] }) })).reasons.join('\n'), /no longer has the agent:ready label/);
   assert.match((await check({ issueOf: async () => ({ ...issue, body: `${issue.body}\nFICTIONAL edit` }) })).reasons.join('\n'), /was edited after this build/);
   // Someone else's commit on the agent branch.
   fs.writeFileSync(path.join(r.work, 'x.txt'), 'x\n');
@@ -329,7 +344,7 @@ function reserver(t, r) {
   const event = path.join(r.dir, 'event-labeled.json');
   const asked = [];
   return async ({ live, run, base = r.base, at = '2026-10-26T12:00:00Z', issue = issueOf(), runs = {} }) => {
-    fs.writeFileSync(event, JSON.stringify({ action: 'labeled', label: { name: 'agent:build' }, repository: { owner: { login: 'kuaya1' } }, sender: { login: 'kuaya1', type: 'User' }, issue }));
+    fs.writeFileSync(event, JSON.stringify({ action: 'labeled', label: { name: 'agent:ready' }, repository: { owner: { login: 'kuaya1' } }, sender: { login: 'kuaya1', type: 'User' }, issue }));
     fs.writeFileSync(outFile, '');
     said.length = 0;
     const fetchImpl = async (url, o) => {
@@ -360,7 +375,7 @@ test('reserve reads the issue again: an edit, a removed label or a closed issue 
   assert.equal(e.code, 0);
   assert.equal(e.flat.ok, 'false');
   assert.match(e.said, new RegExp(`event carries version ${version.slice(0, 12)}, the issue now reads ${G.taskOf(edited, { policy: POLICY }).body_sha256.slice(0, 12)}`));
-  assert.match((await reserve({ live: { ...issue, labels: [] }, run: '11/1' })).said, /issue #7 no longer has the agent:build label/);
+  assert.match((await reserve({ live: { ...issue, labels: [] }, run: '11/1' })).said, /issue #7 no longer has the agent:ready label/);
   assert.match((await reserve({ live: { ...issue, state: 'closed' }, run: '12/1' })).said, /issue #7 is closed now/);
   assert.match((await reserve({ live: null, run: '13/1' })).said, /issue #7 could not be read from GitHub now; nothing is built/);
   assert.equal(L.read(r.work).entries.length, 0, 'nothing reserved, nothing spent');

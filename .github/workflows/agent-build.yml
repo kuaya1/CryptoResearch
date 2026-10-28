@@ -1,7 +1,9 @@
 # The agent lane's builder (Eric, 2026-10-26;
 # audits/2026-10-26-engineering-simplification). Eric opens an issue with the
-# agent task form and adds the agent:build label himself; that label is the
-# authorization, for that version of the issue only. On an agent candidate's
+# agent task form (it arrives labeled agent:draft) and adds the agent:ready
+# label himself; that label is the authorization, for that version of the
+# issue only (cr-agent-policy@4, the one lane: hardening, 2026-10-27; it was
+# agent:build under @1 to @3, which starts nothing now). On an agent candidate's
 # pull request, his own /revise comment authorizes one revision of it at the
 # head its branch holds then (Engineering v3, change 5). The lane's PM
 # (agent-pm.js, agent-builder-lane.yml) dispatches it for a backlog task of
@@ -89,7 +91,7 @@ concurrency:
 jobs:
   reserve:
     if: >-
-      (github.event_name == 'issues' && github.event.label.name == 'agent:build') ||
+      (github.event_name == 'issues' && github.event.label.name == 'agent:ready') ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
       startsWith(github.event.comment.body, '/revise') && github.event.comment.user.login == github.repository_owner) ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
@@ -178,7 +180,7 @@ jobs:
           if [ "$KIND" = revise ]; then
             printf 'Revision not started for comment %s: %s\n\nNothing was reserved or spent. Run: %s\n' "$COMMENT" "$NOTE" "$RUN_URL" > "$RUNNER_TEMP/refused.md"
           else
-            printf 'Build not started: %s\n\nNothing was reserved or spent. Fix the task and add the agent:build label again. Run: %s\n' "$NOTE" "$RUN_URL" > "$RUNNER_TEMP/refused.md"
+            printf 'Build not started: %s\n\nNothing was reserved or spent. Fix the task and add the agent:ready label again. Run: %s\n' "$NOTE" "$RUN_URL" > "$RUNNER_TEMP/refused.md"
           fi
           gh issue comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/refused.md"
 
