@@ -70,6 +70,8 @@ node_modules/
 
 /audits/*/*
 !/audits/2026-10-27-red-team/README.md
+!/audits/2026-10-27-final-hardening/README.md
+!/audits/2026-10-27-final-hardening/automation-branches.live-2026-10-27.json
 !/audits/2026-10-27-architecture-recovery/README.md
 !/audits/2026-10-27-architecture-recovery/gate0-evidence.md
 !/audits/2026-10-27-pm-builder/README.md
