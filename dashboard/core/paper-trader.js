@@ -948,6 +948,13 @@ function intents(ws) {
   });
 }
 
+// Each pair's hours on record (slot 12b): the first and the last and how
+// many, so the desk's hourly read asks only for the hours after the last.
+function hours(ws) {
+  const st = replay(loadWs(ws).parsed.events);
+  return [...st.bars.entries()].filter(([, list]) => list.length).map(([pair, list]) => ({ pair, first_hour: iso(list[0].t), last_hour: iso(list[list.length - 1].t), count: list.length }));
+}
+
 // The book's results now. NAV, cash, each position's quantity, notional,
 // planned loss at its stop, and the realized and unrealized results are kept
 // apart; anything unknown is null with its reason, never 0. Against BTC only
@@ -1006,5 +1013,5 @@ function results(ws, { now, btc } = {}) {
 module.exports = {
   VERSION, JOURNAL, VENUE, HEAD, FILL_SHARE_MAX, STOP_SLIPPAGE_BPS, VENUE_DUPLICATE_WINDOW_MINUTES, NAV_PRICE_FRESH_MINUTES, DECISION_VERSION,
   RECEIPT_RE, EXIT_FRESH_HOURS,
-  decisionInForce, fund, submitIntent, reserveIntent, markSent, venueSend, recordAnswer, recover, reconcile, cancelOrder, applyBar, book, intents, results,
+  decisionInForce, fund, submitIntent, reserveIntent, markSent, venueSend, recordAnswer, recover, reconcile, cancelOrder, applyBar, book, intents, hours, results,
 };
