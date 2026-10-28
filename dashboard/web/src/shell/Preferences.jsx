@@ -172,6 +172,75 @@ function TicketSizing({ d }) {
   );
 }
 
+// ---- Screening: trader.rules (core/trader-rules.js rulesOf) ------------------------------------
+
+const TRADER_FIELDS = [
+  ['stop_min_pct', 'Minimum stop distance (share of entry)', 'The stop is at least this share of the entry below it, such as 0.01 for 1%: more than 0, at most 0.5.'],
+  ['stop_min_atr', 'Minimum stop distance (× 14-hour ATR)', 'And at least this multiple of the pair\'s 14-hour ATR below the entry; the larger of the two applies: more than 0, at most 20.'],
+  ['notional_max_pct', 'Notional cap (share of NAV)', 'An order\'s notional is at most this share of the Paper Book\'s NAV, such as 0.25 for 25%: more than 0, at most 1.'],
+  ['max_validity_minutes', 'Longest life of an intent (minutes)', 'A trade intent lives at most this long after it was written: 1 to 10080.'],
+  ['allowlist', 'Allowlist (pairs)', 'The only pairs an intent may open, exactly as the venue names them, such as BTC/USDC; separate them with commas.'],
+];
+
+function TraderRules({ d }) {
+  const saved = (d.index.settings && d.index.settings.trader && d.index.settings.trader.rules) || {};
+  const key = JSON.stringify(saved);
+  const fresh = () => Object.fromEntries(TRADER_FIELDS.map(([k]) => {
+    const v = saved[k];
+    return [k, v === undefined || v === null ? '' : Array.isArray(v) ? v.join(', ') : String(v)];
+  }));
+  const [form, setForm] = useState(fresh);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const dirty = TRADER_FIELDS.some(([k]) => form[k] !== fresh()[k]);
+  useEffect(() => { if (!dirty) setForm(fresh()); }, [key]);
+  const save = async () => {
+    // An empty field unsets its rule; the server checks every value.
+    const out = {};
+    for (const [k] of TRADER_FIELDS) {
+      const v = String(form[k]).trim();
+      if (k === 'allowlist') out[k] = v ? v.split(/[\s,]+/).filter(Boolean) : null;
+      else if (k === 'max_validity_minutes') out[k] = v ? Number(v.replace(/[,_]/g, '')) : null;
+      else out[k] = v || null;
+    }
+    setErr(null);
+    setBusy(true);
+    try {
+      await api.post('/api/settings', { trader: { rules: out } });
+      toast('Trader rules saved.');
+      await refresh();
+    } catch (e) {
+      setErr(e.message);
+      toast(e.message, 'bad');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="l2-panel" aria-labelledby="prefs-trader-h">
+      <header className="l2-panel-head">
+        <h3 className="l2-panel-t" id="prefs-trader-h" title="Your rules for the trader's Paper Book (cr-trader-rules@1), not universal rules, beside the engine's hard limits. While any is unset, every trade intent is refused. Nothing sends intents to the book yet.">Your trader rules</h3>
+      </header>
+      <div className="l2-panel-body">
+        <form className="l2-form prefs-form" data-key="prefs-trader-form" onSubmit={(e) => { e.preventDefault(); save(); }}>
+          {TRADER_FIELDS.map(([k, label, hint]) => (
+            <label key={k} className="prefs-field" title={hint}>
+              <span>{label}</span>
+              <input className="input" type="text" inputMode={k === 'allowlist' ? 'text' : 'decimal'} placeholder="Not set" value={form[k]} aria-describedby={`prefs-hint-trader-${k}`} data-key={`prefs-trader-${k}`} onChange={(e) => { setForm({ ...form, [k]: e.target.value }); setErr(null); }} />
+              <span id={`prefs-hint-trader-${k}`} className="sr-only">{hint}</span>
+            </label>
+          ))}
+          {err ? <p className="l2-err" role="alert">{err}</p> : null}
+          <div className="l2-actions">
+            <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !dirty} data-key="prefs-trader-save">{busy ? 'Saving…' : 'Save trader rules'}</button>
+            {dirty ? <button type="button" className="btn btn-ghost btn-sm" data-key="prefs-trader-undo" onClick={() => { setForm(fresh()); setErr(null); }}>Discard changes</button> : null}
+          </div>
+        </form>
+      </div>
+    </section>
+  );
+}
+
 // ---- Appearance: the Desk's density, opening view and columns -----------------------------------
 
 function DeskDefaults() {
@@ -318,7 +387,7 @@ export default function Preferences() {
           </nav>
           <div className="prefs-body" ref={body}>
             <h3 className="prefs-title" id="prefs-title" tabIndex={-1}>{label}</h3>
-            {section === 'screening' ? <><Screening d={d} /><TicketSizing d={d} /></>
+            {section === 'screening' ? <><Screening d={d} /><TicketSizing d={d} /><TraderRules d={d} /></>
               : section === 'developer' ? <Developer d={d} />
                 : section === 'appearance' ? <Appearance />
                 : <Dom key={section} build={(L) => L.prefsSection(legacyCtx, section)} deps={[section, settingsKey]} />}
