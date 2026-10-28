@@ -262,35 +262,26 @@ test('an owner change is not an agent candidate; any builder trace makes it one'
   }
 });
 
-test('only Eric\'s own change gets the owner pass: another opener, an automation branch or an assistant\'s or bot\'s commit waits for Eric\'s review of its exact head (red-team review, 2026-10-27)', async (t) => {
+test('who opened a change and who authored its commits decide nothing: Eric\'s, a bot\'s or Claude\'s, it waits for Eric\'s review of its exact head (hardening, 2026-10-27)', async (t) => {
   const r = repo(t);
   fs.writeFileSync(path.join(r.work, 'dashboard/core/widget.js'), 'module.exports = { size: (s) => s.length + 0 };\n');
   git(r.work, ['commit', '-q', '-am', 'Eric\'s change']);
   const eric = git(r.work, ['rev-parse', 'HEAD']);
-  const check = (o) => G.prCheck({ cwd: r.work, base: r.base, head: eric, branch: 'eric/widget', author: 'kuaya1', owner: 'kuaya1', botLogin: 'cr-builder[bot]', issueOf: async () => null, policy: POLICY, ...o });
+  const check = (o) => G.prCheck({ cwd: r.work, base: r.base, head: eric, branch: 'eric/widget', author: 'kuaya1', botLogin: 'cr-builder[bot]', issueOf: async () => null, policy: POLICY, ...o });
   const own = await check({});
-  assert.deepEqual([own.agent, own.ok, own.owner, own.why], [false, true, true, []]);
-  assert.match(own.says, /^Owner change:/);
-  // #55: opened by the workflow's bot, on a backlog branch, with Claude's commits.
-  const bot = await check({ author: 'github-actions[bot]' });
-  assert.deepEqual([bot.agent, bot.ok, bot.owner], [false, true, false]);
-  assert.match(bot.why.join('\n'), /opened by github-actions\[bot\], not by the repository's owner kuaya1/);
-  assert.match(bot.says, /not Eric's own change[^\n]*no model reviews it[^\n]*waits for Eric's eric-reviewed dispatch for this exact head/);
-  for (const branch of ['claude/backlog-item-9', 'claude/candidate-eng-70', 'claude/admission-71', 'claude/claims/item-9']) {
-    const b = await check({ branch });
-    assert.equal(b.owner, false, branch);
-    assert.match(b.why.join('\n'), /is an automation branch/, branch);
-  }
-  assert.equal((await check({ owner: null })).owner, false, 'no owner known: never an owner change');
-  assert.equal((await check({ author: 'KUAYA1' })).owner, true, 'GitHub logins ignore letter case');
+  // The same answer for Eric's own change as for #55 (github-actions[bot] on
+  // a backlog branch) or a routine's commit: no owner pass, no reasons kept.
   fs.writeFileSync(path.join(r.work, 'dashboard/core/widget.js'), 'module.exports = { size: (s) => s.length + 1 };\n');
   git(r.work, ['commit', '-q', '-am', 'a routine\'s change'], { name: 'Claude', email: 'noreply@anthropic.com' });
-  const claude = await check({ head: git(r.work, ['rev-parse', 'HEAD']) });
-  assert.equal(claude.owner, false);
-  assert.match(claude.why.join('\n'), /commit [0-9a-f]{12} by Claude <noreply@anthropic\.com>/);
-  fs.writeFileSync(path.join(r.work, 'dashboard/core/widget.js'), 'module.exports = { size: (s) => s.length + 2 };\n');
-  git(r.work, ['commit', '-q', '-am', 'a bot\'s change'], { name: 'github-actions[bot]', email: '41898282+github-actions[bot]@users.noreply.github.com' });
-  assert.equal((await check({ head: git(r.work, ['rev-parse', 'HEAD']) })).owner, false);
+  const claude = git(r.work, ['rev-parse', 'HEAD']);
+  for (const o of [{}, { author: 'github-actions[bot]', branch: 'claude/backlog-item-9' }, { author: 'KUAYA1' }, { head: claude }]) {
+    const c = await check(o);
+    assert.deepEqual(Object.keys(c).sort(), ['agent', 'ok', 'reasons', 'says'], JSON.stringify(o));
+    assert.deepEqual([c.agent, c.ok, c.reasons], [false, true, []], JSON.stringify(o));
+    assert.equal(c.says, own.says);
+  }
+  assert.match(own.says, /no model reviews it, and its agent-review waits for Eric's own review of this exact head/);
+  assert.doesNotMatch(own.says, /Owner change/);
 });
 
 test('a patch or a builder report that holds a key-shaped string is refused, naming the file and line, never the value', async (t) => {
