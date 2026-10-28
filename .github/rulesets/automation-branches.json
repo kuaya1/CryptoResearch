@@ -9,9 +9,7 @@
         "refs/heads/agent/**",
         "refs/heads/agent-ledger",
         "refs/heads/visual-proof",
-        "refs/heads/claude/admission-*",
-        "refs/heads/claude/backlog-*",
-        "refs/heads/claude/claims/**"
+        "refs/heads/claude/admission-*"
       ]
     }
   },

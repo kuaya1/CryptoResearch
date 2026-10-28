@@ -56,13 +56,27 @@ test('the files: only the admin role updates main, through a pull request; the r
   assert.deepEqual(ledger.rules.map((r) => r.type).sort(), ['deletion', 'non_fast_forward']);
   assert.deepEqual(ledger.bypass_actors, []);
   const confine = byName('automation-branches');
-  assert.ok(confine.conditions.ref_name.exclude.includes('refs/heads/agent/**'));
-  // The backlog builders push their branches and claims (pipeline review,
-  // 2026-10-27): without these a non-admin identity cannot, so a running
-  // builder would be holding the admin bypass.
-  for (const ref of ['refs/heads/claude/backlog-*', 'refs/heads/claude/claims/**']) assert.ok(confine.conditions.ref_name.exclude.includes(ref), `${ref} is excluded`);
-  assert.ok(!confine.conditions.ref_name.exclude.some((r) => /intake-issue/.test(r)), 'nothing creates intake branches since the issue queue');
+  // Option B (final hardening, 2026-10-27): only the refs something still
+  // pushes without the admin role. The agent lane's candidates and ledger,
+  // the visual proofs and the engineering admissions; the backlog builders
+  // (claude/backlog-*, claude/claims/**) are retiring with the one lane and
+  // get no non-admin path, and nothing creates claude/intake-issue-* since the
+  // issue queue.
+  assert.deepEqual([...confine.conditions.ref_name.exclude].sort(), ['refs/heads/agent-ledger', 'refs/heads/agent/**', 'refs/heads/claude/admission-*', 'refs/heads/visual-proof']);
+  assert.deepEqual(confine.conditions.ref_name.include, ['~ALL']);
+  assert.deepEqual(confine.rules.map((r) => r.type), ['creation', 'update', 'deletion']);
   assert.deepEqual(confine.bypass_actors, [{ actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'always' }]);
+});
+
+test('the checker names the automation-branches drift until Eric applies the file: the live excludes as read on 2026-10-27', () => {
+  const live = liveOf();
+  // FICTIONAL ids; the excludes are the live ruleset's, as GitHub returned
+  // them for 25967715 on 2026-10-27 (updated 10:58 -04:00).
+  live.rulesets.find((r) => r.name === 'automation-branches').conditions.ref_name.exclude = ['refs/heads/agent/**', 'refs/heads/agent-ledger', 'refs/heads/visual-proof', 'refs/heads/claude/intake-issue-*', 'refs/heads/claude/admission-*'];
+  const r = MB.check({ files: FILES, live });
+  assert.equal(r.ok, false);
+  assert.equal(r.problems.length, 1, r.problems.join('\n'));
+  assert.match(r.problems[0], /^ruleset automation-branches: exclude is .*claude\/intake-issue-\*.*, the file says /);
 });
 
 test('the checker holds for the files as GitHub returns them', () => {

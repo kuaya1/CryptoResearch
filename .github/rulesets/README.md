@@ -10,7 +10,7 @@ only files.
 | `main-merge-authority.json` | Nobody may update `main` (the `update` rule). | Repository admin role, **pull request only**. That is Eric, merging a pull request. |
 | `main-merge-requirements.json` | Every change to `main` comes through a pull request. Only merge commits are allowed. The head must be up to date with `main` (strict). `test`, `agent-guard`, `agent-verify` and `agent-review` must pass, each from GitHub Actions (app 15368). No force push and no deletion. Zero approvals required. | None, not even Eric. |
 | `agent-ledger.json` | The paid-attempt ledger branch can be appended to, but never rewritten or deleted. | None |
-| `automation-branches.json` | No identity other than the admin role may create, update or delete any branch outside `agent/**`, `agent-ledger`, `visual-proof`, `claude/admission-*`, `claude/backlog-*` and `claude/claims/**`. | Repository admin role, always |
+| `automation-branches.json` | No identity other than the admin role may create, update or delete any branch outside `agent/**`, `agent-ledger`, `visual-proof` and `claude/admission-*`. | Repository admin role, always |
 
 Why approval is not the boundary: an automation token can approve a pull
 request whenever Actions is allowed to approve, and Eric can merge an
@@ -51,9 +51,13 @@ The agent lane pushes candidates only with the App token (pinned by
 claim and branch push since the first claim (2026-10-27 03:59 UTC) is Eric's
 account, which holds the admin bypass of every ruleset here, `main` included.
 In that lane "only Eric merges" rests on the routines' instructions, not on
-access. The `claude/backlog-*` and `claude/claims/**` excludes let a non-admin
-identity do the same pushes; moving the routines onto one (or retiring them
-for the issue queue) is Eric's change, outside this repository.
+access. Option B (final hardening, 2026-10-27) gives that lane no non-admin
+path: the backlog builders retire with the one lane, both routines are
+disabled, and a routine turned on again pushes only through Eric's admin
+bypass, as it always has on the live ruleset. Moving the routines onto a
+non-admin identity instead would mean adding `claude/backlog-*` and
+`claude/claims/**` back as excludes (option A); that, and turning the
+routines on or off, is Eric's change.
 
 ## Evidence (probe repository, 2026-10-26)
 
@@ -88,6 +92,20 @@ gh api -X POST repos/kuaya1/CryptoResearch/rulesets --input .github/rulesets/mai
 gh api -X POST repos/kuaya1/CryptoResearch/rulesets --input .github/rulesets/main-merge-authority.json
 node dashboard/scripts/merge-boundary-check.js
 ```
+
+A file changed after its ruleset is applied goes up by its ID, never as a
+second ruleset (`gh api repos/kuaya1/CryptoResearch/rulesets` lists the IDs;
+`automation-branches` is 25967715):
+
+```powershell
+gh api repos/kuaya1/CryptoResearch/rulesets/25967715 --jq '{name,target,enforcement,conditions,rules,bypass_actors}' > automation-branches.before.json
+gh api -X PUT repos/kuaya1/CryptoResearch/rulesets/25967715 --input .github/rulesets/automation-branches.json
+node dashboard/scripts/merge-boundary-check.js
+```
+
+The first line keeps the ruleset as it was just before, for the rollback
+(`gh api -X PUT repos/kuaya1/CryptoResearch/rulesets/25967715 --input automation-branches.before.json`);
+keep that file out of the repository.
 
 Apply `main-merge-requirements.json` only once `agent-checks.yml` and
 `agent-review.yml` are on `main`. Before that, no pull request could satisfy
