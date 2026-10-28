@@ -50,7 +50,7 @@ function req(port, { method = 'GET', path: p = '/', headers = {}, body = null } 
 // The real hosted server on a FICTIONAL desk, prices off. The temp folder
 // stands for the persistent disk: a mount of its own in the table the config
 // reads, written as the disk check reads paths (POSIX), so the desk starts
-// the same on Linux and on Windows (as engineering-guard.test.js does).
+// the same on Linux and on Windows (as frontdoor-guard.test.js does).
 async function desk(t) {
   const port = await freePort();
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-scout-ping-'));

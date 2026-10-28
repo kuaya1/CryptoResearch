@@ -1,8 +1,8 @@
 'use strict';
 // What both connectors share on the wire: the MCP protocol versions they
 // answer and the redaction of their log lines. Split out of mcp.js on review
-// N2 (2026-10-26) so the engineering connector (dashboard/engineering/tools.js)
-// loads only protected code, never the desk's research and portfolio modules.
+// N2 (2026-10-26), when a second connector, the engineering inbox (retired
+// 2026-10-28, PR-B 5b), shared it.
 
 const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26'];
 

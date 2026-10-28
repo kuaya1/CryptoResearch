@@ -1,25 +1,24 @@
 'use strict';
 // The desk's front door (review N1, 2026-10-26): everything a request meets
-// before sign-in, in one protected file (backlog-promote.js PROTECTED), so a
-// change to dashboard/server.js can no longer answer a request ahead of it.
-// In order: the security headers, Render's health check, the host check, the
-// connector's own sign-in and /mcp, the engineering connector and its public
-// reads, the unattended reviewer's token route, the scout's ingest, the offsite
-// package, the desk's sign-in and the files the sign-in
-// page needs. Only then does a request reach server.js (`signedIn`), and on
-// this PC (no sign-in) everything the stages above did not answer does.
+// before sign-in, in one file, so a change to dashboard/server.js can no
+// longer answer a request ahead of it. In order: the security headers,
+// Render's health check, the host check, the connector's own sign-in and
+// /mcp, the scout's ingest, the offsite package, the desk's sign-in and the
+// files the sign-in page needs. Only then does a request reach server.js
+// (`signedIn`), and on this PC (no sign-in) everything the stages above did
+// not answer does.
 //
 // The front door builds its handlers itself (sign-in, connector, MCP,
-// engineering routes, offsite) and hands server.js the ones its signed-in
-// pages use, so none can be swapped from outside. It owns the server's only
-// request listener: audit() says when another one answers beside it, and
-// hosted.js refuses to start the online desk then. Static files come from
-// dashboard/public only, as regular files: never a link (review N3).
+// offsite) and hands server.js the ones its signed-in pages use, so none can
+// be swapped from outside. It owns the server's only request listener:
+// audit() says when another one answers beside it, and hosted.js refuses to
+// start the online desk then. Static files come from dashboard/public only,
+// as regular files: never a link (review N3).
 //
 // What it cannot do: code running in the same process (any module the desk
-// loads) can still patch what this file relies on. Promotion's protected
-// list, the guard test (tests/engineering-guard.test.js) and audit() catch a
-// route added the ordinary way, not a deliberate attack from inside.
+// loads) can still patch what this file relies on. The guard test
+// (tests/frontdoor-guard.test.js) and audit() catch a route added the
+// ordinary way, not a deliberate attack from inside.
 
 const fs = require('fs');
 const path = require('path');
@@ -138,12 +137,6 @@ function openFrontDoor(server, { ws, hosted = null, port, quiet = false, state, 
   // A research request from an assistant can queue paid API jobs (other
   // models): the runner picks them up at once instead of at its next tick.
   const mcp = hosted ? require('./mcp').makeMcp(ws, { version, rebuild: (areas) => rebuild(areas), log, kick: () => kick(), connections: () => oauth.connections().filter((c) => c.audience !== 'engineering') }) : null;
-  // The engineering inbox's routes (connector, public reads, Eric's
-  // decisions), from the protected dashboard/engineering/routes.js.
-  const engineering = require('./engineering/routes').makeEngineeringRoutes(ws, { oauth, auth, origins: mcpOrigins, version, log, github: hosted ? require('./engineering/github').makeGithub() : null, HttpError, readCodes: READ_CODES });
-  // On the online desk, tasks GitHub shows merged are recorded merged
-  // (routes.js reconcileMerges), until the server closes.
-  if (hosted) engineering.scheduleSweeps(server);
   // The scout's ingest (core/scout.js; DESK_INGEST_KEY, read per request).
   const scout = hosted ? require('./core/scout').makeScoutRoute(ws, { env: process.env, log }) : null;
   // The offsite package for this PC's daily pull (CR_BACKUP_KEY, read per request).
@@ -193,12 +186,7 @@ function openFrontDoor(server, { ws, hosted = null, port, quiet = false, state, 
           }
           return await mcp(req, res, who);
         }
-        if (await engineering.connector(req, res, url)) return;
       }
-      if (engineering.publicRead(req, res, url)) return;
-      // The unattended reviewer (candidate-review.yml): its own token, never
-      // the sign-in; off while CR_ENG_REVIEWER_TOKEN is not set.
-      if (await engineering.reviewer(req, res, url)) return;
       // Grok Scout (audits/2026-10-26-grok-scout): the daily sweep checks its
       // key and posts its brief with the desk's own ingest key, never the
       // sign-in. Any other /api/ingest/ path, the ping included, waits for it.
@@ -223,7 +211,7 @@ function openFrontDoor(server, { ws, hosted = null, port, quiet = false, state, 
   };
   server.on('request', listener);
   OWN.set(server, listener);
-  return { origin, allowedOrigins, auth, oauth, engineering, serveStatic };
+  return { origin, allowedOrigins, auth, oauth, serveStatic };
 }
 
 // What answers requests beside the front door: nothing, or the reason in

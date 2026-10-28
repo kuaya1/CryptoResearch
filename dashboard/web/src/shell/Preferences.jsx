@@ -5,8 +5,7 @@
 // Activity are the same cards and forms as before (views/settings.js
 // prefsSection); Screening edits your forensic screening preferences (D5)
 // and your PM ticket sizing;
-// Developer holds the Explorer (D4), Engineering (Connected Engineering v1)
-// and the running code. Opening it writes
+// Developer holds the Explorer (D4) and the running code. Opening it writes
 // nothing; each save is its own button.
 import { useEffect, useRef, useState } from 'react';
 import { X, ExternalLink } from 'lucide-react';
@@ -15,7 +14,6 @@ import { useDesk, useMedia } from '../lib/hooks.js';
 import { api, refresh } from '../lib/desk.js';
 import { legacyCtx } from '../legacy/ctx.js';
 import { Dom } from '../components/Dom.jsx';
-import Engineering from './Engineering.jsx';
 import { PREF_SECTIONS, prefsOf, openPrefs, closePrefs, deskPrefs } from './overlays.js';
 import { ui } from '../lib/desk.js';
 import { prefs as readPrefs, VIEWS, DEFAULT_COLUMNS } from '../../../public/watchlist-model.js';
@@ -315,7 +313,6 @@ function Developer({ d }) {
           <a className="btn btn-sm" href="#/explorer" data-key="prefs-explorer" onClick={() => { closePrefs(); }}>Open the Explorer<ExternalLink size={13} aria-hidden="true" /></a>
         </div>
       </section>
-      <Engineering hosted={Boolean(d.session && d.session.hosted)} />
       <section className="l2-panel" aria-labelledby="prefs-dev-code">
         <header className="l2-panel-head"><h3 className="l2-panel-t" id="prefs-dev-code">Running code</h3></header>
         <div className="l2-panel-body">
