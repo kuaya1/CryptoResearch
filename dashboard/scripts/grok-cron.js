@@ -5,8 +5,7 @@
 // Responses API with its web_search tool, under the frozen prompt
 // cr-scout-prompt@1 (checked against templates/scout/LOCK.json before
 // anything is sent), then one brief to the online desk's front door
-// (core/scout.js). Protected (backlog-promote.js PROTECTED): it holds the xAI
-// key and makes the paid call.
+// (core/scout.js). It holds the xAI key and makes the paid call.
 //
 // Before any paid call it checks its ingest key with the desk; a desk that
 // refuses the key, is not set up or has taken its briefs for the day stops

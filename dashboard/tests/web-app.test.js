@@ -129,7 +129,7 @@ test('the app shows report text as text: no HTML from strings anywhere in the Re
 test('the app writes only from explicit actions, and nothing from the boot or a live update', () => {
   const files = walk(path.join(WEB, 'src'), (p) => /\.(jsx?)$/.test(p)).map((f) => [path.relative(path.join(WEB, 'src'), f).split(path.sep).join('/'), fs.readFileSync(f, 'utf8')]);
   const writers = files.filter(([, s]) => /api\.post\(/.test(s)).map(([f]) => f).sort();
-  assert.deepEqual(writers, ['lib/desk.js', 'lib/review.js', 'shell/DailyBrief.jsx', 'shell/Engineering.jsx', 'shell/Preferences.jsx', 'views/agenda/Agenda.jsx', 'views/inspector/ModelPanel.jsx', 'views/inspector/PMDecisionCard.jsx', 'views/project/Contract.jsx', 'views/project/Evidence.jsx', 'views/project/Forensics.jsx', 'views/project/Notes.jsx', 'views/project/Record.jsx', 'views/project/Report.jsx', 'views/project/forensics/Disagreements.jsx', 'views/project/forensics/ExitCompare.jsx', 'views/project/forensics/OutcomeRegister.jsx', 'views/review/Review.jsx', 'views/watchlist/StatusStrip.jsx', 'views/watchlist/state.js']);
+  assert.deepEqual(writers, ['lib/desk.js', 'lib/review.js', 'shell/DailyBrief.jsx', 'shell/Preferences.jsx', 'views/agenda/Agenda.jsx', 'views/inspector/ModelPanel.jsx', 'views/inspector/PMDecisionCard.jsx', 'views/project/Contract.jsx', 'views/project/Evidence.jsx', 'views/project/Forensics.jsx', 'views/project/Notes.jsx', 'views/project/Record.jsx', 'views/project/Report.jsx', 'views/project/forensics/Disagreements.jsx', 'views/project/forensics/ExitCompare.jsx', 'views/project/forensics/OutcomeRegister.jsx', 'views/review/Review.jsx', 'views/watchlist/StatusStrip.jsx', 'views/watchlist/state.js']);
   // The re-audit's parts (2026-10-17) each post one path, from a button:
   // a judgment, an explicit fixed-token quote, an outcome note, and the
   // agenda's Done, Snooze and Reopen. The case package is a read.
@@ -154,18 +154,6 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   assert.deepEqual(posts('views/project/forensics/Disagreements.jsx'), ['/api/projects/${enc(pid)}/forensics/judgments']);
   assert.deepEqual(posts('views/project/forensics/ExitCompare.jsx'), ['/api/projects/${enc(pid)}/forensics/exit-compare/quote']);
   assert.deepEqual(posts('views/project/forensics/OutcomeRegister.jsx'), ['/api/projects/${enc(pid)}/forensics/outcome-notes']);
-  // Preferences > Developer > Engineering (Connected Engineering v1,
-  // 2026-10-25) posts only under /api/engineering, each from its own button;
-  // opening it is a read.
-  const eng = files.find(([n]) => n === 'shell/Engineering.jsx')[1];
-  assert.deepEqual(posts('shell/Engineering.jsx'), ['path']);
-  assert.doesNotMatch(eng.slice(0, eng.indexOf('const decide')), /api\.post/, 'opening Engineering never writes');
-  const engPaths = [...eng.matchAll(/\bdecide\([^,]+, [`'](\/[^`']+)[`']/g)].map((m) => m[1]);
-  // The ninth (2026-10-26): Check admission on GitHub, which writes only what GitHub proves.
-  assert.equal(engPaths.length, 9);
-  assert.ok(engPaths.includes('/api/engineering/tasks/${t.task_id}/admission/recheck'), engPaths.join(' '));
-  for (const p of engPaths) assert.match(p, /^\/api\/engineering\//);
-  for (const m of eng.matchAll(/\bdecide\(/g)) assert.match(eng.slice(Math.max(0, m.index - 160), m.index), /(onClick=\{\(\) =>|onSubmit=\{\(e\) =>)[^<]*$/, 'every Engineering decision is a click or a submit');
   const agenda = files.find(([n]) => n === 'views/agenda/Agenda.jsx')[1];
   assert.deepEqual(posts('views/agenda/Agenda.jsx'), ['path', 'path', 'path']);
   assert.match(agenda, /const path = `\/api\/projects\/\$\{enc\(pid\)\}\/agenda`;/);
@@ -349,21 +337,11 @@ test('Pilot Queue cycle (item 71): the button dry-runs first and posts with the 
   assert.match(part, /Agent 1 \(research\)/);
 });
 
-test('the Pipeline cockpit: routed at #/pipeline, on the rail, read only, tabular figures, nothing under 12.5px', () => {
-  const view = read('web', 'src', 'views', 'system', 'PipelineCockpit.jsx');
-  const css = read('web', 'src', 'styles', 'pipeline.css');
-  assert.match(read('web', 'src', 'lib', 'router.js'), /ROUTE_NAMES = \[[^\]]*'pipeline'/);
-  assert.match(read('web', 'src', 'App.jsx'), /route\.name === 'pipeline'[\s\S]*<PipelineCockpit \/>/);
-  assert.match(read('web', 'src', 'shell', 'sections.js'), /id: 'pipeline', label: 'Pipeline'/);
-  assert.match(read('web', 'src', 'shell', 'CommandMenu.jsx'), /'#\/pipeline', 'Pipeline'/);
-  assert.match(view, /api\.get\('\/api\/pipeline'/);
-  assert.doesNotMatch(view, /api\.post|fetch\(/, 'opening it writes nothing');
-  assert.match(view, /from '\.\.\/\.\.\/\.\.\/\.\.\/public\/pipeline-progress\.js'/, 'the rules are the shared model');
-  assert.match(css, /^\.pl \{[^}]*font-variant-numeric: tabular-nums/m);
-  for (const m of css.matchAll(/font-size:\s*(\d+(?:\.\d+)?)px/g)) assert.ok(Number(m[1]) >= 12.5, `font-size ${m[1]}px`);
-  assert.match(css, /prefers-reduced-motion: reduce/);
-  assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b/i, 'tokens only');
-  // States in words, never colour alone: the active stage and the revision loop each carry their word.
-  assert.match(view, /className="pl-state">\{node\.words\}/);
-  assert.match(view, /<RotateCcw[^>]*\/>Revising/);
+test('the engineering inbox is gone from the app: no Pipeline page, no Engineering panel, no call to their routes (PR-B 5b)', () => {
+  for (const f of [['web', 'src', 'views', 'system', 'PipelineCockpit.jsx'], ['web', 'src', 'shell', 'Engineering.jsx'], ['web', 'src', 'styles', 'pipeline.css'], ['public', 'pipeline-progress.js']]) assert.equal(fs.existsSync(path.join(DASH, ...f)), false, f.join('/'));
+  assert.doesNotMatch(read('web', 'src', 'lib', 'router.js'), /ROUTE_NAMES = \[[^\]]*'pipeline'/);
+  assert.doesNotMatch(read('web', 'src', 'shell', 'sections.js'), /'pipeline'/);
+  assert.doesNotMatch(read('web', 'src', 'shell', 'CommandMenu.jsx'), /#\/pipeline/);
+  const src = walk(path.join(WEB, 'src'), (p) => /\.(jsx?)$/.test(p)).map((f) => fs.readFileSync(f, 'utf8')).join('\n');
+  assert.doesNotMatch(src, /\/api\/(pipeline|engineering|system\/briefing)/);
 });
