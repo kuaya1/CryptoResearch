@@ -41,7 +41,7 @@
 // Everything is re-derived on each call from Eric's decisions and the book's
 // journal: no record of its own, nothing kept in memory. A step that failed
 // half way completes on the next one, and the same step twice asks nothing
-// twice. Reads (requests, wanted) write nothing.
+// twice. Reads (requests, wanted, view) write nothing.
 
 const PT = require('./paper-trader');
 const { exact: { dec, str, isoMs }, INTENT_VERSION, SLIPPAGE_BPS_MAX, RESOLVED } = require('./trade-risk');
@@ -73,6 +73,12 @@ function nowOf(now) {
   return { now: s, t: Number(ms) };
 }
 const usd = (s) => `$${Number(s).toLocaleString('en-US', { maximumFractionDigits: 6 })}`;
+// A result in words, to the cent with its sign (words only; the book keeps
+// the exact decimal).
+const pnl = (s) => { const n = Number(s); return `${n < 0 ? '−' : n > 0 ? '+' : ''}$${Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`; };
+// How a position left the book (paper-trader.js exit reasons), in words.
+const EXIT_WORDS = { close: 'Sold', stop: 'Stopped out', stop_gap: 'Stopped out through a gap', take_profit: 'Target reached and sold' };
+const exitWords = (e) => (e ? `${EXIT_WORDS[e.reason] || `Exited (${String(e.reason).replace(/_/g, ' ')})`} at ${usd(e.price)}` : 'Exited');
 
 // A ULID made from the decision: its time part the decision's, its random
 // part the SHA-256 of the decision ID and the step's purpose ('open',
@@ -115,8 +121,8 @@ function settingsOf(ws) {
   const b = TR.bookOf(ws);
   const waits = [];
   if (r.unset.length) waits.push(`Your trader rules are not all set (${r.unset.join(', ')}); set them in Preferences > Screening.`);
-  if (b.unset.includes('cash_usd')) waits.push('The trader\'s Paper Book is not funded; set its funding in Preferences.');
-  if (b.unset.includes('fee_rate')) waits.push('The venue fee is not set, and an unknown fee is never read as 0; set it in Preferences.');
+  if (b.unset.includes('cash_usd')) waits.push('The trader\'s Paper Book is not funded; set its funding in Preferences > Screening.');
+  if (b.unset.includes('fee_rate')) waits.push('The venue fee is not set, and an unknown fee is never read as 0; set it in Preferences > Screening.');
   const venue = { lot: LOT, min_notional_usd: MIN_NOTIONAL_USD, maker_rate: b.book.fee_rate, taker_rate: b.book.fee_rate };
   return { rules: r.rules, book: b.book, venue, waits };
 }
@@ -281,7 +287,8 @@ function assess(ws, ctx, g, snap) {
     return out('ready', `Ready to ask the book: buy ${pr.pair} at ${usd(plan.entry)}, stop ${usd(plan.stop)}, target ${usd(plan.target)}, risk ${usd(plan.risk)}.`, { kind: 'open', intent }, { pair: pr.pair });
   }
 
-  if (asked.state === 'REFUSED') return out('refused', `The book refused the order: ${asked.refusals.map((x) => x.words).join(' ')}`, null, { refusals: asked.refusals });
+  // A refused intent has no order, so its pair is named from the project.
+  if (asked.state === 'REFUSED') return out('refused', `The book refused the order: ${asked.refusals.map((x) => x.words).join(' ')}`, null, { refusals: asked.refusals, pair: pairOf(g.project, ctx.projects).pair });
   const posId = `pos-${openId}`;
   const pos = snap.open.get(posId) || null;
   const done = snap.closed.get(posId) || null;
@@ -290,7 +297,7 @@ function assess(ws, ctx, g, snap) {
   if (!pos && !buyLive) {
     if (done) {
       const last = done.exits[done.exits.length - 1];
-      return out('closed', `Closed (${last ? last.reason.replace('_', ' ') : 'exit'}) at ${last ? usd(last.price) : 'its exit'}: ${done.realized_pnl_usd} realized.`, null, more);
+      return out('closed', `${exitWords(last)}: ${pnl(done.realized_pnl_usd)} realized.`, null, more);
     }
     return out('ended', `The buy ended with nothing filled (${stateWords(asked)}); it is never asked again.`, null, more);
   }
@@ -339,6 +346,47 @@ function requests(ws, { now, project = null } = {}) {
   const ctx = contextOf(ws, now, project);
   const snap = snapshotOf(ws, ctx.now);
   return { version: VERSION, now: ctx.now, waits: ctx.s.waits, requests: ctx.grants.map((g) => { const a = assess(ws, ctx, g, snap); delete a.next; return a; }) };
+}
+
+// The book as Outcomes > Paper Book reads it (slot 12c): Eric's settings and
+// what they leave waiting, the book's results (NAV by the hour, positions,
+// orders, realized results and fees, what is unknown), every request his
+// decisions make with its phase in words, and each order, position and
+// refusal with the project and decision it belongs to. Reads only.
+function view(ws, { now } = {}) {
+  const ctx = contextOf(ws, now, null);
+  const snap = snapshotOf(ws, ctx.now);
+  const res = PT.results(ws, { now: ctx.now });
+  const reqs = ctx.grants.map((g) => { const a = assess(ws, ctx, g, snap); delete a.next; return a; });
+  // Every intent a decision makes, its buy and each sell attempt, to its request.
+  const owner = new Map();
+  for (const r of reqs) {
+    const d = { decision_id: r.decision_id, decided_at: r.decided_at };
+    owner.set(intentIdOf(d, 'open'), { r, purpose: 'open' });
+    for (let n = 1; n <= CLOSE_ATTEMPTS_MAX; n++) owner.set(intentIdOf(d, `close-${n}`), { r, purpose: 'close' });
+  }
+  const whose = (intentId) => {
+    const o = owner.get(intentId);
+    return o ? { project_id: o.r.project_id, project: o.r.project, decision_id: o.r.decision_id, action: o.r.action, purpose: o.purpose, request_pair: o.r.pair } : { project_id: null, project: null, decision_id: null, action: null, purpose: null, request_pair: null };
+  };
+  const intents = PT.intents(ws);
+  const byOrder = new Map(intents.filter((i) => i.client_order_id).map((i) => [i.client_order_id, i]));
+  const ofPosition = (p) => ({ ...p, ...whose(String(p.position_id).replace(/^pos-/, '')), exit_words: p.exits && p.exits.length ? exitWords(p.exits[p.exits.length - 1]) : null });
+  return {
+    version: VERSION,
+    now: ctx.now,
+    waits: ctx.s.waits,
+    book: { cash_usd: ctx.s.book.cash_usd || null, fee_rate: ctx.s.book.fee_rate || null },
+    venue: { lot: LOT, min_notional_usd: MIN_NOTIONAL_USD },
+    results: { ...res, open_positions: res.open_positions.map(ofPosition), closed_positions: res.closed_positions.map(ofPosition) },
+    requests: reqs,
+    orders: res.orders.map((o) => {
+      const i = byOrder.get(o.client_order_id) || {};
+      return { ...o, intent_id: i.intent_id || null, side: i.side || null, pair: i.pair || null, position_id: i.position_id || null, ...whose(i.intent_id) };
+    }),
+    refusals: intents.filter((i) => i.state === 'REFUSED').map((i) => ({ intent_id: i.intent_id, refusals: i.refusals || [], ...whose(i.intent_id) })),
+    hours: PT.hours(ws),
+  };
 }
 
 // What the book needs hours for: each pair a request is waiting on, and each
@@ -437,4 +485,4 @@ function applyHours(ws, bars, { now } = {}) {
   return out;
 }
 
-module.exports = { VERSION, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, intentIdOf, plain, closeLimit, settingsOf, pairOf, planOf, horizonOf, requests, wanted, step, applyHours };
+module.exports = { VERSION, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, intentIdOf, plain, closeLimit, settingsOf, pairOf, planOf, horizonOf, requests, view, wanted, step, applyHours };

@@ -217,7 +217,7 @@ function TraderRules({ d }) {
   return (
     <section className="l2-panel" aria-labelledby="prefs-trader-h">
       <header className="l2-panel-head">
-        <h3 className="l2-panel-t" id="prefs-trader-h" title="Your rules for the trader's Paper Book (cr-trader-rules@1), not universal rules, beside the engine's hard limits. While any is unset, every trade intent is refused. Nothing sends intents to the book yet.">Your trader rules</h3>
+        <h3 className="l2-panel-t" id="prefs-trader-h" title="Your rules for the trader's Paper Book (cr-trader-rules@1), not universal rules, beside the engine's hard limits. While any is unset, an approve or a halve waits and no order is made.">Your trader rules</h3>
       </header>
       <div className="l2-panel-body">
         <form className="l2-form prefs-form" data-key="prefs-trader-form" onSubmit={(e) => { e.preventDefault(); save(); }}>
@@ -232,6 +232,66 @@ function TraderRules({ d }) {
           <div className="l2-actions">
             <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !dirty} data-key="prefs-trader-save">{busy ? 'Saving…' : 'Save trader rules'}</button>
             {dirty ? <button type="button" className="btn btn-ghost btn-sm" data-key="prefs-trader-undo" onClick={() => { setForm(fresh()); setErr(null); }}>Discard changes</button> : null}
+          </div>
+        </form>
+      </div>
+    </section>
+  );
+}
+
+// ---- Screening: trader.book (core/trader-rules.js bookOf, slot 12c) ----------------------------
+
+const BOOK_FIELDS = [
+  ['cash_usd', 'Paper Book funding (USD)', 'The trader\'s Paper Book is funded once with this amount, before its first hour; a different amount later is never applied over it. More than 0, at most 10,000,000.'],
+  ['fee_rate', 'Venue fee (share of the notional)', 'The simulated venue\'s fee on every fill, maker and taker alike, such as 0.003 for 0.3%. An unknown fee is never read as 0. More than 0, at most 0.1.'],
+];
+
+function TraderBook({ d }) {
+  const saved = (d.index.settings && d.index.settings.trader && d.index.settings.trader.book) || {};
+  const key = JSON.stringify(saved);
+  const fresh = () => Object.fromEntries(BOOK_FIELDS.map(([k]) => [k, saved[k] === undefined || saved[k] === null ? '' : String(saved[k])]));
+  const [form, setForm] = useState(fresh);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const dirty = BOOK_FIELDS.some(([k]) => form[k] !== fresh()[k]);
+  useEffect(() => { if (!dirty) setForm(fresh()); }, [key]);
+  const save = async () => {
+    // An empty field unsets it; the server checks every value.
+    const out = Object.fromEntries(BOOK_FIELDS.map(([k]) => {
+      const v = String(form[k]).trim().replace(/[$,_\s]/g, '');
+      return [k, v || null];
+    }));
+    setErr(null);
+    setBusy(true);
+    try {
+      await api.post('/api/settings', { trader: { book: out } });
+      toast('Paper Book settings saved.');
+      await refresh();
+    } catch (e) {
+      setErr(e.message);
+      toast(e.message, 'bad');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="l2-panel" aria-labelledby="prefs-book-h">
+      <header className="l2-panel-head">
+        <h3 className="l2-panel-t" id="prefs-book-h" title="The trader's Paper Book (cr-paper@2): its starting cash and its simulated venue's fee. Neither has a default; while either is unset, an approve or a halve waits and no hour is read. Research > Outcomes shows the book.">Your Paper Book</h3>
+      </header>
+      <div className="l2-panel-body">
+        <form className="l2-form prefs-form" data-key="prefs-book-form" onSubmit={(e) => { e.preventDefault(); save(); }}>
+          {BOOK_FIELDS.map(([k, label, hint]) => (
+            <label key={k} className="prefs-field" title={hint}>
+              <span>{label}</span>
+              <input className="input" type="text" inputMode="decimal" placeholder="Not set" value={form[k]} aria-describedby={`prefs-hint-book-${k}`} data-key={`prefs-book-${k}`} onChange={(e) => { setForm({ ...form, [k]: e.target.value }); setErr(null); }} />
+              <span id={`prefs-hint-book-${k}`} className="sr-only">{hint}</span>
+            </label>
+          ))}
+          {err ? <p className="l2-err" role="alert">{err}</p> : null}
+          <div className="l2-actions">
+            <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !dirty} data-key="prefs-book-save">{busy ? 'Saving…' : 'Save Paper Book settings'}</button>
+            {dirty ? <button type="button" className="btn btn-ghost btn-sm" data-key="prefs-book-undo" onClick={() => { setForm(fresh()); setErr(null); }}>Discard changes</button> : null}
           </div>
         </form>
       </div>
@@ -384,7 +444,7 @@ export default function Preferences() {
           </nav>
           <div className="prefs-body" ref={body}>
             <h3 className="prefs-title" id="prefs-title" tabIndex={-1}>{label}</h3>
-            {section === 'screening' ? <><Screening d={d} /><TicketSizing d={d} /><TraderRules d={d} /></>
+            {section === 'screening' ? <><Screening d={d} /><TicketSizing d={d} /><TraderRules d={d} /><TraderBook d={d} /></>
               : section === 'developer' ? <Developer d={d} />
                 : section === 'appearance' ? <Appearance />
                 : <Dom key={section} build={(L) => L.prefsSection(legacyCtx, section)} deps={[section, settingsKey]} />}
