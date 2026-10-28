@@ -252,7 +252,7 @@ function useTopPool(p) {
 function RiskStrip({ d, p }) {
   const pid = p.project_id;
   const f = p.forensic;
-  const ex = exitCell(p);
+  const ex = exitCell(p, d.index);
   const pool = useTopPool(p);
   const m = contractChipModel(p.screening);
   const risky = m.chips.filter((x) => x.dot === 'risky');

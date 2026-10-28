@@ -98,7 +98,7 @@ PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you deci
   tickets run-cycle [--limit 10] [--dry-run] [--json]   the Track 2 pipeline in one pass: auto-pilot-sync, batch-gate, exit quotes for candidates (up to --limit), then the pilot queue; one receipt with the counts and the next steps for Agent 1 and Agent 2 (no model, no order)
   tickets decide-gates --action pass|watch [--dry-run] [--request-id <id>] [--note <text>] [--json]   decide every desk-gate card waiting for you, one decision each (pass archives unheld projects; held ones never)
   tickets batch-gate [--below 40] [--dry-run] [--json]   desk gate receipts for every unheld, verified project graded under 40 (no exit quote, no Prosecutor, no model)
-  tickets exit-matrix [--json]         every verified active project by grade: $500 and $2,000 exit cost, completeness, chain, quote age, native L1 status (writes nothing)
+  tickets exit-matrix [--json]         every verified active project by grade: exit cost at each of your exit sizes (Preferences > Screening), completeness, chain, quote age, native L1 status (writes nothing)
   tickets reconcile [<id>] [--dry-run] [--json]   complete a recorded decision's missing paper position or journal entry (never archives, voids or edits a decision)
   tickets queue [<id>]                   the autonomous pilot's next step per project (research, ticket, your review)
   tickets pilot <id> --on|--off          put a project in the autonomous pilot (your opt-in)

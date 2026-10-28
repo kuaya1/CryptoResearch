@@ -47,18 +47,18 @@ function setup(t, { approve = true } = {}) {
   return { ...w, pid, calls, fetchImpl, cgGetImpl, opts: { fetchImpl, cgGetImpl, sleep: async () => {} } };
 }
 
-test('a candidate graded 40+ with no reading is quoted at both sizes; a second pass leaves it, current', async (t) => {
+test('a candidate graded 40+ with no reading is quoted at each screening size (cr-ticket-sizing@4); a second pass leaves it, current', async (t) => {
   const s = setup(t);
   const row = T.pilotCandidates(s.ws).find((r) => r.project_id === s.pid);
   assert.ok(row.grade >= 40, 'the fixture grades 40 or over');
   const out = await T.quoteCandidates(s.ws, s.opts);
   assert.deepEqual(out.quoted.map((r) => r.project_id), [s.pid]);
-  assert.deepEqual(out.quoted[0].sizes.map((x) => [x.size_usd, x.status]), [[500, 'quoted'], [2000, 'quoted']]);
-  assert.equal(s.calls.length, 2, 'one request per quote');
+  assert.deepEqual(out.quoted[0].sizes.map((x) => [x.size_usd, x.status]), [[100, 'quoted'], [500, 'quoted'], [2000, 'quoted']]);
+  assert.equal(s.calls.length, 3, 'one request per quote');
   const again = await T.quoteCandidates(s.ws, s.opts);
   assert.deepEqual(again.current.map((r) => r.project_id), [s.pid]);
   assert.equal(again.quoted.length, 0);
-  assert.equal(s.calls.length, 2, 'nothing is asked twice');
+  assert.equal(s.calls.length, 3, 'nothing is asked twice');
 });
 
 test('no approved chain is named, never approved; a grade under 40 is left to the gate; nothing is approved by the pass', async (t) => {
@@ -83,7 +83,7 @@ test('a 429 stops that source for the pass and says so', async (t) => {
   const s = setup(t);
   const limited = async () => ({ status: 429, headers: { get: () => null }, text: async () => '{}' });
   const out = await T.quoteCandidates(s.ws, { ...s.opts, fetchImpl: limited });
-  assert.deepEqual(out.quoted[0].sizes.map((x) => [x.size_usd, x.status]), [[500, 'refused']], 'the second size is not asked once the source says wait');
+  assert.deepEqual(out.quoted[0].sizes.map((x) => [x.size_usd, x.status]), [[100, 'refused']], 'the next size is not asked once the source says wait');
   assert.deepEqual(out.stopped.map((x) => x.source), ['kyberswap']);
   assert.match(out.stopped[0].reason, /asked this desk to wait/);
 });

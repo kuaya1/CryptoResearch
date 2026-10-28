@@ -19,9 +19,9 @@
 // a structured ticket (cr.ticket.v1). The two are never averaged: each keeps
 // its own figure and verdict, side by side.
 //
-// The desk computes what no model may: the exit cost at $500 and $2,000 comes
-// from its own exit-quote readings (forensics.js), the size from Eric's
-// sizing rules (cr-ticket-sizing@1, frozen into each ticket), and whether a
+// The desk computes what no model may: the exit cost at each of Eric's exit
+// sizes (Preferences > Screening) comes from its own exit-quote readings
+// (forensics.js), the size from his sizing rules (frozen into each ticket), and whether a
 // ticket is invalidated is read against the hourly prices and the bound
 // DefiLlama metric each time it is read; the stored ticket is never rewritten.
 // A decision records what Eric chose. Nothing here places an order, moves
@@ -41,7 +41,11 @@ const FORMAT = 'cr.ticket.v1';
 // @3 (Eric, 2026-10-28): the exit at a size is the cheapest current reading
 // whose cost is known in full, else the cheapest reading; a cheaper lower bound
 // no longer hides a complete reading. Frozen tickets keep their exits.
-const SIZING_VERSION = 'cr-ticket-sizing@3';
+// @4 (Eric, 2026-10-28, D4): one exit setting. The exit size, the ladder of
+// sizes and the exit-cost limit are Preferences > Screening's
+// (forensics.preferences), the same the Forensics tab reads; tickets.sizing
+// no longer holds them. Each ticket still freezes the values it used.
+const SIZING_VERSION = 'cr-ticket-sizing@4';
 const INVALIDATION_VERSION = 'cr-ticket-invalidation@2';
 const INVALIDATION_V1 = 'cr-ticket-invalidation@1';
 // Rollback safety (2026-10-25): a receipt made under a newer rules version than
@@ -82,22 +86,21 @@ const OPEN = new Set(['waiting', 'running']);
 const HOUR = 3600000;
 
 // Eric's sizing rules (2026-10-24), his choices and not universal rules:
-// $500 standard risk (1.0R) only with a proven exit cost at $500 of at most
-// 5% and a grade of at least 55; $250 the starter tranche (0.5R, "Halve
-// Size"); under 40 nothing new, and under 55 nothing new for an asset he does
-// not hold. Settings `tickets.sizing` may change them; each ticket freezes the
-// values it was made under.
+// $500 standard risk (1.0R) only with a proven exit cost at his exit position
+// within his exit-cost limit (Preferences > Screening, $500 and 5% unless he
+// changes them) and a grade of at least 55; $250 the starter tranche (0.5R,
+// "Halve Size"); under 40 nothing new, and under 55 nothing new for an asset he
+// does not hold. Settings `tickets.sizing` may change the rest; each ticket
+// freezes the values it was made under.
 const SIZING_DEFAULTS = Object.freeze({
   standard_risk_usd: 500,
   starter_risk_usd: 250,
-  exit_size_usd: 500,
-  max_exit_cost_pct: 5,
   min_grade_new_entry: 55,
   pregate_max_grade: 48,
   min_grade_any: 40,
   native_l1_min_market_cap_usd: 10e9,
 });
-const SIZING_NOTE = 'Your sizing rules (settings, tickets.sizing), not universal rules. New tickets freeze the values in force; saved tickets keep theirs.';
+const SIZING_NOTE = 'Your sizing rules (settings, tickets.sizing) with the exit position, exit sizes and exit-cost limit of your screening preferences (forensics.preferences), not universal rules. New tickets freeze the values in force; saved tickets keep theirs.';
 
 const { isNum, round, usd, nearInvalidation, tradePlanGeometry } = require('./ticket-format');
 const iso = (ms) => new Date(ms).toISOString();
@@ -133,18 +136,29 @@ function sizingOf(ws) {
   const grade = (v, fb) => (isNum(v) && v >= 0 && v <= 100 ? v : fb);
   const standard = pos(s.standard_risk_usd, d.standard_risk_usd, 1e9);
   const minNew = grade(s.min_grade_new_entry, d.min_grade_new_entry);
+  // The exit figures are the screening preferences' (@4), read with their own
+  // bounds; a value left in tickets.sizing from before is not read.
+  const screening = require('./forensics').prefsOf(ws);
   return {
     version: SIZING_VERSION,
     standard_risk_usd: standard,
     starter_risk_usd: Math.min(pos(s.starter_risk_usd, d.starter_risk_usd, 1e9), standard),
-    exit_size_usd: pos(s.exit_size_usd, d.exit_size_usd, 1e9),
-    max_exit_cost_pct: pos(s.max_exit_cost_pct, d.max_exit_cost_pct, 100),
+    exit_size_usd: screening.exit_position_usd,
+    exit_sizes_usd: screening.exit_sizes_usd.slice(),
+    max_exit_cost_pct: screening.exit_cost_limit_pct,
+    exit_rules_from: 'forensics.preferences',
     min_grade_new_entry: minNew,
     min_grade_any: grade(s.min_grade_any, d.min_grade_any),
     pregate_max_grade: Math.min(grade(s.pregate_max_grade, d.pregate_max_grade), minNew),
     native_l1_min_market_cap_usd: pos(s.native_l1_min_market_cap_usd, d.native_l1_min_market_cap_usd, 1e15),
     note: SIZING_NOTE,
   };
+}
+
+// The sizes a ticket reads exits at (@4): the screening ladder and the exit
+// position, from the sizing in force.
+function exitSizesOf(sizing) {
+  return [...new Set([...(sizing.exit_sizes_usd || [2000]), sizing.exit_size_usd])].sort((a, b) => a - b);
 }
 
 // Eric's choice, not a universal rule: the share of hours since a ticket with
@@ -608,7 +622,7 @@ function createTicket(ws, args = {}) {
   if (!args.refresh && !args.restart && onReport) return { status: 'exists', project_id: pid, receipt_id: onReport.receipt_id, ticket_id: onReport.ticket_id, message: `A ticket on Claude's current report (${researcher.report_id}) is already saved (${onReport.receipt_id}). Nothing new was opened; pass refresh: true only when Eric asks for another.` };
   if (open && args.restart) cancelTicket(ws, pid, open.ticket_id, 'Eric asked to start the ticket over.');
   const tid = `tk_${compactTs(new Date(now))}_${randomId(5)}`;
-  const sizes = [...new Set([sizing.exit_size_usd, 2000])].sort((a, b) => a - b);
+  const sizes = exitSizesOf(sizing);
   const packet = {
     schema_version: PACKET_FORMAT,
     captured_at: at,
@@ -1574,6 +1588,9 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       })(),
       near_invalidation: null,
       exit_basis: d.exit_basis || 'measured',
+      // The size and limit this ticket froze: the card says them, never a fixed $500 and 5%.
+      exit_size_usd: d.sizing && isNum(d.sizing.exit_size_usd) ? d.sizing.exit_size_usd : null,
+      exit_limit_pct: d.sizing && isNum(d.sizing.max_exit_cost_pct) ? d.sizing.max_exit_cost_pct : null,
       exit_cost_500_usd_pct: d.exit_cost_500_usd_pct ?? null,
       exit_cost_500_complete: d.exit_cost_500_complete ?? null,
       exit_cost_2000_usd_pct: d.exit_cost_2000_usd_pct ?? null,
@@ -1752,12 +1769,12 @@ function pilotCandidates(ws, { now = Date.now(), heldSet = undefined, pilotOnly 
 
 // Item 54: the Track 2 pilot queue as a board. Each candidate row (the read
 // above) with the pipeline step the chain needs next, the change since Claude's
-// earlier report (@5 to @6) and whether the $500 and $2,000 exit readings are
+// earlier report (@5 to @6) and whether the exit readings at each size are
 // in. Read-only: it writes nothing and asks no provider. A native L1 coin
 // needs no DEX quote (ready: null); a step that cannot be read says so.
 function candidateBoard(ws, { now = Date.now() } = {}) {
   const sizing = sizingOf(ws);
-  const sizes = [...new Set([sizing.exit_size_usd, 2000])].sort((a, b) => a - b);
+  const sizes = exitSizesOf(sizing);
   const heldSet = heldSetOf(ws, now);
   return pilotCandidates(ws, { now, heldSet }).map((c) => {
     let step = { step: 'unknown', why: 'The next step could not be read.' };
@@ -1772,14 +1789,16 @@ function candidateBoard(ws, { now = Date.now() } = {}) {
 
 // Item 61: the watchlist's exit-liquidity matrix. Every verified, active
 // project, best grade first (a range by its low end; no grade last), with the
-// desk's $500 and $2,000 exit cost, whether each cost is complete and the
+// desk's exit cost at each size, whether each cost is complete and the
 // components missing, the chain, the quote's age and the native L1 status.
 // Read only: it asks no provider and writes nothing. A missing reading is
-// null with its reason, never 0.
-const EXIT_MATRIX_FORMAT = 'cr-exit-matrix@1';
-const EXIT_MATRIX_SIZES = [500, 2000];
+// null with its reason, never 0. @2 (D4): the sizes are the screening ladder
+// and exit position ($100, $500, $2,000 by default), no longer a fixed $500
+// and $2,000.
+const EXIT_MATRIX_FORMAT = 'cr-exit-matrix@2';
 function exitMatrix(ws, { now = Date.now() } = {}) {
   const sizing = sizingOf(ws);
+  const sizes = exitSizesOf(sizing);
   const rows = [];
   for (const p of require('./projects').listProjects(ws)) {
     if (p.broken || p.status === 'archived') continue;
@@ -1791,7 +1810,7 @@ function exitMatrix(ws, { now = Date.now() } = {}) {
     const market = marketOf(ws, project);
     const native = nativeL1Liquid({ native: { native_chain: project.identity.native_chain === true, market_cap_usd: isNum(market.market_cap_usd) ? market.market_cap_usd : null } }, sizing);
     const chains = [...new Set((project.identity.assets || []).map((a) => a.chain).filter(Boolean))].sort();
-    const exits = exitsOf(ws, pid, EXIT_MATRIX_SIZES, now).map((e) => {
+    const exits = exitsOf(ws, pid, sizes, now).map((e) => {
       const at = Date.parse(e.as_of);
       return {
         size_usd: e.size_usd,
@@ -1816,7 +1835,7 @@ function exitMatrix(ws, { now = Date.now() } = {}) {
   }
   const rank = (r) => (r.grade === null ? -Infinity : r.grade);
   rows.sort((a, b) => (rank(b) === rank(a) ? 0 : rank(b) > rank(a) ? 1 : -1) || a.project_id.localeCompare(b.project_id));
-  return { format: EXIT_MATRIX_FORMAT, writes_nothing: true, as_of: iso(now), sizes_usd: EXIT_MATRIX_SIZES, rows };
+  return { format: EXIT_MATRIX_FORMAT, writes_nothing: true, as_of: iso(now), sizes_usd: sizes, rows };
 }
 
 // Backlog item 30. Opt in (pilot: true) every verified, active project whose
@@ -1979,7 +1998,7 @@ function decideDeskGates(ws, { action, receipt_ids: receiptIds = null, request_i
 
 // Exit quotes for pilot candidates (backlog item 25). Each candidate graded
 // QUOTE_MIN_GRADE or over with no current reading at the sizing's exit sizes
-// ($500 and $2,000) is quoted at both through prepareExitQuote's path
+// (the screening ladder and exit position) is quoted at each through prepareExitQuote's path
 // (forensic-monitor.js quoteSizeUsd: the approved chain, the adapter, budget,
 // gates, hold, never a wallet or swap), so the gate reads them as it does
 // before a ticket. A native coin needs no DEX quote; a project with no
@@ -1991,7 +2010,7 @@ async function quoteCandidates(ws, { limit = 15, dryRun = false, fetchImpl, cgGe
   if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new OpError('INVALID', '--limit is a whole number from 1 to 200.');
   const FM = require('./forensic-monitor');
   const sizing = sizingOf(ws);
-  const sizes = [...new Set([sizing.exit_size_usd, 2000])].sort((a, b) => a - b);
+  const sizes = exitSizesOf(sizing);
   const out = { dry_run: dryRun === true, sizes, limit, quoted: [], current: [], skipped: [], stopped: [] };
   const stopped = new Set();
   let budgetStop = null;

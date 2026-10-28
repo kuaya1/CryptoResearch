@@ -387,14 +387,14 @@ const TOOLS = [
   {
     name: 'quote_pilot_candidates',
     title: 'Ask exit quotes for pilot candidates (Claude)',
-    description: 'Claude only. For each pilot candidate graded 40 or over with no current exit reading at $500 and $2,000, asks one fixed-size quote at each through the approved exit-quote chain (the existing adapter, request budget, provider gates and hold; never a wallet, signature or swap), so the ticket gate reads them. It saves quote observations and nothing else. A native coin is skipped; a project with no approved chain is listed as needing one approved (Forensics > Exits), never approved here; a 429 or refusal stops that source for the pass. With dry_run, nothing is sent.',
+    description: 'Claude only. For each pilot candidate graded 40 or over with no current exit reading at one of Eric\'s exit sizes (Preferences > Screening: his exit sizes and position, $100, $500 and $2,000 unless he changes them), asks one fixed-size quote at each through the approved exit-quote chain (the existing adapter, request budget, provider gates and hold; never a wallet, signature or swap), so the ticket gate reads them. It saves quote observations and nothing else. A native coin is skipped; a project with no approved chain is listed as needing one approved (Forensics > Exits), never approved here; a 429 or refusal stops that source for the pass. With dry_run, nothing is sent.',
     inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 200, description: 'Most projects to quote in this pass (default 15).' }, dry_run: { type: 'boolean', description: 'List what would be quoted; send nothing.' } }, additionalProperties: false },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   },
   {
     name: 'start_ticket',
     title: 'Open (or resume) a PM trade ticket: the Prosecutor\'s frozen prompt (Claude)',
-    description: 'Claude only. Opens the Prosecutor\'s ticket on Claude\'s current eligible report for the project (or resumes the open one) and returns its frozen prompt (cr-ticket-prompt@1) with the desk\'s evidence packet (its measured exits at $500 and $2,000, price, sell tax, DefiLlama, whether Eric holds it) and the report\'s text. Follow the prompt exactly, then save_ticket. If a ticket on the same report is already saved, nothing is opened unless refresh: true (ask Eric first).',
+    description: 'Claude only. Opens the Prosecutor\'s ticket on Claude\'s current eligible report for the project (or resumes the open one) and returns its frozen prompt (cr-ticket-prompt@1) with the desk\'s evidence packet (its measured exits at Eric\'s exit sizes, price, sell tax, DefiLlama, whether Eric holds it) and the report\'s text. Follow the prompt exactly, then save_ticket. If a ticket on the same report is already saved, nothing is opened unless refresh: true (ask Eric first).',
     inputSchema: {
       type: 'object',
       required: ['project_id', 'owner_request'],
@@ -1929,6 +1929,7 @@ const handlers = {
         model_proposal_type: r.desk.model_proposal_type,
         suggested_risk_usd: r.desk.suggested_risk_usd,
         exit_cost_500_usd_pct: r.desk.exit_cost_500_usd_pct,
+        exit_size_usd: r.desk.sizing ? r.desk.sizing.exit_size_usd : null,
         gate_reasons: r.desk.gate.reasons,
         agent_disagreement: r.agent_disagreement,
         format_notes: r.validation.errors,
