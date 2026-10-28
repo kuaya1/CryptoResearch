@@ -31,8 +31,9 @@ const FIELDS = [
   ['volume_review_fraction', 'Volume review fraction', 'A fall in 24h volume to this share of the audit\'s reading suggests a review: above 0, at most 1.'],
   ['reported_liquidity_review_usd', 'Reported liquidity review level (USD)', 'Optional. Reported liquidity below this suggests a review; empty for none.'],
   ['volume_to_liquidity_review_ratio', 'Volume to liquidity review ratio', 'Optional. 24h volume above this multiple of reported liquidity suggests a review; empty for none.'],
+  ['solana_network_fee_ceiling_usd', 'Solana network fee ceiling (USD)', 'Optional. Added in full to a Solana quote that states no network fee, so its exit cost can be complete; empty leaves those costs "at least". At most $100.'],
 ];
-const OPTIONAL = new Set(['reported_liquidity_review_usd', 'volume_to_liquidity_review_ratio']);
+const OPTIONAL = new Set(['reported_liquidity_review_usd', 'volume_to_liquidity_review_ratio', 'solana_network_fee_ceiling_usd']);
 const asText = (k, v) => (v === null || v === undefined ? '' : Array.isArray(v) ? v.join(', ') : String(v));
 
 function Screening({ d }) {

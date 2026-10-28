@@ -46,6 +46,9 @@ const PREFERENCE_DEFAULTS = Object.freeze({
   volume_review_fraction: 0.5,
   reported_liquidity_review_usd: null,
   volume_to_liquidity_review_ratio: null,
+  // Eric, 2026-10-28 (liquidity@4): added in full to a Solana quote that
+  // states no network fee; null leaves those costs "at least".
+  solana_network_fee_ceiling_usd: 1,
 });
 const PREFERENCE_NOTE = 'Your screening preferences (Settings, forensics), not universal rules. Change them and new receipts freeze the new values; saved receipts keep theirs.';
 
@@ -175,19 +178,43 @@ const LIQUIDITY_3 = Object.freeze({
   version: LIQUIDITY_VERSION_3,
   completeness: 'A total cost needs the network fee (stated, or included in the quote) and a transfer tax known to be 0% (from the GoPlus contract screen within 7 days of the reading). With a positive tax, how it applies and whether the quote includes it are not known, so the cost shown, without it, is "at least" that figure: it can show the exit over your limit, never within it.',
 });
-// The derivation the tab and the checkpoint outcomes use now (method@3,
-// 2026-10-17, after the re-audit R01-R07): cr-forensic-eligibility@2
-// (exact official host, full chain references conferring no attribution,
-// every cited source usable, explicit contracts, bound repositories),
-// liquidity@3, lifecycle@3 (a receipt's projection must agree with its
-// verified original before it feeds anything) and scenarios@3 (a day's
-// readings count from when they were observed).
-const METHOD_VERSION = 'cr-forensic-method@3';
-const METHOD = Object.freeze({
-  version: METHOD_VERSION,
+// cr-forensic-liquidity@4 (Eric, 2026-10-28, D2 and D3): as @3, with two
+// Solana readings. The sell tax of a Solana token is its transfer fee: 0%
+// when GoPlus shows no transfer fee configured, or a fee of 0 now and in
+// every scheduled change, and no transfer hook, and the token transferable;
+// a positive fee stays a lower bound as in @3. A Solana quote that states no
+// network fee takes Eric's ceiling (forensics.preferences
+// solana_network_fee_ceiling_usd) in full, said as his ceiling, never as a
+// measured fee; with none set the cost stays "at least".
+const LIQUIDITY_VERSION_4 = 'cr-forensic-liquidity@4';
+const LIQUIDITY_4 = Object.freeze({
+  ...LIQUIDITY_3,
+  version: LIQUIDITY_VERSION_4,
+  completeness: 'A total cost needs the network fee (stated, included in the quote, or on Solana your ceiling, added in full) and a transfer tax known to be 0% (from the GoPlus contract screen within 7 days of the reading). With a positive tax, how it applies and whether the quote includes it are not known, so the cost shown, without it, is "at least" that figure: it can show the exit over your limit, never within it.',
+  solana_tax: 'A Solana token\'s sell tax is its transfer fee: 0% when GoPlus shows no transfer fee configured, or a fee of 0 now and in every scheduled change, with no transfer hook and the token transferable. A transfer hook, a non-transferable token or a fee GoPlus does not state leaves the tax unknown.',
+  network_fee_ceiling: 'A Solana quote states no network fee. With your ceiling set, the ceiling is added in full and named as yours; the fee actually paid may be lower, so the cost may be lower. With none set, the cost is "at least" the figure shown.',
+});
+// The derivation the tab and the checkpoint outcomes used from 2026-10-17
+// (method@3, after the re-audit R01-R07): cr-forensic-eligibility@2 (exact
+// official host, full chain references conferring no attribution, every
+// cited source usable, explicit contracts, bound repositories), liquidity@3,
+// lifecycle@3 (a receipt's projection must agree with its verified original
+// before it feeds anything) and scenarios@3 (a day's readings count from when
+// they were observed).
+const METHOD_3 = Object.freeze({
+  version: 'cr-forensic-method@3',
   parts: Object.freeze(['cr-forensic-eligibility@2', LIQUIDITY_VERSION_3, 'cr-forensic-lifecycle@3', 'cr-forensic-scenarios@3']),
   previous: 'cr-forensic-method@2',
   note: 'Outcomes recorded under an earlier method stay on record; where this method reads a different outcome, a correction line names both methods and the reason.',
+});
+// The derivation the tab and the checkpoint outcomes use now (method@4,
+// 2026-10-28): as method@3, with liquidity@4.
+const METHOD_VERSION = 'cr-forensic-method@4';
+const METHOD = Object.freeze({
+  ...METHOD_3,
+  version: METHOD_VERSION,
+  parts: Object.freeze(['cr-forensic-eligibility@2', LIQUIDITY_VERSION_4, 'cr-forensic-lifecycle@3', 'cr-forensic-scenarios@3']),
+  previous: 'cr-forensic-method@3',
 });
 
 // cr-forensic-scenarios@1: conditional threshold estimates.
@@ -312,9 +339,12 @@ module.exports = {
   LIQUIDITY_2,
   LIQUIDITY_VERSION_3,
   LIQUIDITY_3,
+  LIQUIDITY_VERSION_4,
+  LIQUIDITY_4,
   METHOD_VERSION,
   METHOD,
   METHOD_2,
+  METHOD_3,
   SCENARIOS_VERSION,
   SCENARIOS_VERSION_2,
   SCENARIOS_2,

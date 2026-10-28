@@ -97,6 +97,7 @@ function prefsOf(ws) {
     volume_review_fraction: pos(s.volume_review_fraction, d.volume_review_fraction, 1),
     reported_liquidity_review_usd: s.reported_liquidity_review_usd === undefined ? d.reported_liquidity_review_usd : opt(s.reported_liquidity_review_usd, 1e12),
     volume_to_liquidity_review_ratio: s.volume_to_liquidity_review_ratio === undefined ? d.volume_to_liquidity_review_ratio : opt(s.volume_to_liquidity_review_ratio, 1e6),
+    solana_network_fee_ceiling_usd: s.solana_network_fee_ceiling_usd === undefined ? d.solana_network_fee_ceiling_usd : opt(s.solana_network_fee_ceiling_usd, 100),
     note: D.PREFERENCE_NOTE,
   };
 }
@@ -415,7 +416,7 @@ function buildPacket(ws, project, { now = Date.now(), prefs = prefsOf(ws) } = {}
     contract_controls: controls,
     monitoring: monitoringSummary(ws, project.project_id, { now }),
     earlier_receipts: earlier,
-    definitions: { events: D.EVENTS_VERSION, liquidity: D.LIQUIDITY_VERSION_3, scenarios: D.SCENARIOS_VERSION_3, eligibility: E.VERSION, probability_gate: D.PROBABILITY_GATE, rubric: D.RUBRIC_VERSION },
+    definitions: { events: D.EVENTS_VERSION, liquidity: D.LIQUIDITY_VERSION_4, scenarios: D.SCENARIOS_VERSION_3, eligibility: E.VERSION, probability_gate: D.PROBABILITY_GATE, rubric: D.RUBRIC_VERSION },
     preferences: prefs,
     not_supported_here: D.UNSUPPORTED.map(([id, words]) => ({ id, words })),
     excluded: ['your holdings and transactions', 'your notes and journal', 'other models\' reports, scores and challenges'],
@@ -629,7 +630,7 @@ function createAudit(ws, args = {}) {
     utterance: typeof args.utterance === 'string' ? args.utterance.slice(0, 2000) : null,
     owner_focus: focus,
     identity: identitySnapshot(project),
-    definitions: { events: D.EVENTS_VERSION, liquidity: D.LIQUIDITY_VERSION_3, scenarios: D.SCENARIOS_VERSION_3, eligibility: E.VERSION, method: D.METHOD_VERSION, probability_gate: D.PROBABILITY_GATE, rubric: D.RUBRIC_VERSION, format: D.REPORT_FORMAT, challenge_format: D.CHALLENGE_FORMAT },
+    definitions: { events: D.EVENTS_VERSION, liquidity: D.LIQUIDITY_VERSION_4, scenarios: D.SCENARIOS_VERSION_3, eligibility: E.VERSION, method: D.METHOD_VERSION, probability_gate: D.PROBABILITY_GATE, rubric: D.RUBRIC_VERSION, format: D.REPORT_FORMAT, challenge_format: D.CHALLENGE_FORMAT },
     preferences: prefs,
     evidence_packet: { path: `${dir}/evidence-packet.json`, sha256: packetSha, captured_at: packet.captured_at, schema_version: packet.schema_version },
     prompt: null,
@@ -1170,6 +1171,25 @@ function dedupeLiquidity(list) {
 // (sell tax, 0 included), for readings within a week of the screen; else
 // unknown. Used to tell a complete exit cost from a lower bound.
 const TAX_NEAR_MS = 7 * DAY;
+// liquidity@4: Eric's Solana network fee ceiling, for a Solana quote that
+// states no network fee (Jupiter states none), from the preferences in use; a
+// receipt frozen before the ceiling existed has none. Else null.
+function feeCeilingOf(prefs, o) {
+  const usd = prefs ? prefs.solana_network_fee_ceiling_usd : null;
+  if (!isNum(usd) || usd <= 0 || !o || o.kind !== 'executable_quote' || String(o.chain_id || o.chain || '').toLowerCase() !== 'solana') return null;
+  return { usd, source: 'your ceiling' };
+}
+
+// liquidity@4: a Solana token's sell tax is its transfer fee, the highest of
+// the rate now and every scheduled rate, and only with no transfer hook and
+// a transferable token; anything GoPlus does not state is unknown (null).
+function solanaTaxPct(c) {
+  const t = c.taxes || {};
+  const k = c.checks || {};
+  if (k.transfer_hook !== 'absent' || k.non_transferable !== 'absent') return null;
+  if (typeof t.transfer_fee_pct !== 'number' || typeof t.transfer_fee_scheduled_max_pct !== 'number') return null;
+  return Math.max(t.transfer_fee_pct, t.transfer_fee_scheduled_max_pct);
+}
 function taxIndex(ws, pid, now = Date.now()) {
   let block = null;
   try {
@@ -1178,14 +1198,15 @@ function taxIndex(ws, pid, now = Date.now()) {
     return () => null;
   }
   const { addressKey } = require('./chains');
-  const list = (block && Array.isArray(block.contracts) ? block.contracts : []).filter((x) => x.status === 'ok' && x.taxes && typeof x.taxes.sell_pct === 'number');
+  const pctOf = (x) => (x.family === 'solana' ? solanaTaxPct(x) : x.taxes.sell_pct);
+  const list = (block && Array.isArray(block.contracts) ? block.contracts : []).filter((x) => x.status === 'ok' && x.taxes && typeof pctOf(x) === 'number');
   return (chainId, address, at) => {
     if (!chainId || !address) return null;
     const c = list.find((x) => String(x.chain_id) === String(chainId) && (x.family ? addressKey(x.family, x.address) === addressKey(x.family, address) : x.address === address));
     if (!c) return null;
     const checked = c.checked_at || block.fetched_at || null;
     if (!checked || !Number.isFinite(Date.parse(at)) || Math.abs(Date.parse(at) - Date.parse(checked)) > TAX_NEAR_MS) return null;
-    return { pct: c.taxes.sell_pct, source: `GoPlus contract screen of ${String(checked).slice(0, 10)}` };
+    return { pct: pctOf(c), source: `GoPlus contract screen of ${String(checked).slice(0, 10)}${c.family === 'solana' ? ' (Solana transfer fee, no transfer hook)' : ''}` };
   };
 }
 
@@ -1246,7 +1267,8 @@ function readingsFor(ws, pid, { receipts, prefs, marketPriceUsd = null, now = Da
   if (quoted.length < monitorQuotes.length) unbound.push({ receipt_id: identityReceipt ? identityReceipt.receipt_id : null, obs_id: null, measure: 'exit_quote', reason: `Not counted: ${monitorQuotes.length - quoted.length} monitor quote${monitorQuotes.length - quoted.length === 1 ? '' : 's'} for a contract that is not in this receipt's frozen identity.` });
   const liqObs = dedupeLiquidity([...captured, ...quoted]);
   const tax = (o) => (taxOf ? taxOf(o.chain_id, o.contract_address, o.retrieved_at) : null);
-  const liquidity = M.liquidityReadings(liqObs, { positionUsd: prefs.exit_position_usd, limitPct: prefs.exit_cost_limit_pct, marketPriceUsd, taxOf: tax });
+  const fee = (o) => feeCeilingOf(prefs, o);
+  const liquidity = M.liquidityReadings(liqObs, { positionUsd: prefs.exit_position_usd, limitPct: prefs.exit_cost_limit_pct, marketPriceUsd, taxOf: tax, feeOf: fee });
   // Operational: each approved check, and each check captured in an audit on
   // the project's own site. An audit's capture of an address the monitor
   // checks joins that check's readings; any other is its own check, marked as
@@ -1323,7 +1345,7 @@ function readingsFor(ws, pid, { receipts, prefs, marketPriceUsd = null, now = Da
       discontinuation.push({ at: f.event_time || f.retrieved_at || r.assessment_as_of || r.origin, kind: f.discontinuation, primary: ok, receipt_id: r.receipt_id, finding_id: f.finding_id, why_not: why });
     }
   }
-  return { liquidity, liqObs, operational, delivery, latestDelivery, discontinuation, observations: obs, unbound, tax };
+  return { liquidity, liqObs, operational, delivery, latestDelivery, discontinuation, observations: obs, unbound, tax, fee };
 }
 
 // What happened by each checkpoint of a receipt, under the receipt's own
@@ -1471,7 +1493,7 @@ function view(ws, pid, { now = Date.now(), receipt: wantReceipt = null } = {}) {
   const discState = M.discontinuationState(r.discontinuation);
   // Liquidity tables.
   const sizes = [...new Set([...usePrefs.exit_sizes_usd, usePrefs.exit_position_usd])].sort((a, b) => a - b);
-  const exits = M.exitTable(r.liqObs, sizes, { marketPriceUsd: mk ? mk.price_usd : null, taxOf: r.tax, now });
+  const exits = M.exitTable(r.liqObs, sizes, { marketPriceUsd: mk ? mk.price_usd : null, taxOf: r.tax, feeOf: r.fee, now });
   const reported = r.liqObs.filter((o) => o.kind === 'reported_liquidity' || (o.kind === 'pool_reserves' && o.reported_liquidity_usd !== null)).map((o) => ({ obs_id: o.obs_id, venue: o.venue, pool: o.pool, chain: o.chain, mechanism: o.mechanism, reported_liquidity_usd: o.reported_liquidity_usd, retrieved_at: o.retrieved_at, source_id: o.source_id, receipt_id: o.receipt_id }));
   const series = volumeSeries(ws, cg, { now, days: 150 });
   const origin = shown ? shown.origin : null;
@@ -1541,12 +1563,12 @@ function view(ws, pid, { now = Date.now(), receipt: wantReceipt = null } = {}) {
   }
   const heldCount = findingsV.filter((f) => f.eligibility.eligible).length;
   // The evidence-change review queue, from the observations already read.
-  const evidenceChanges = require('./forensic-review').queue(ws, pid, { receipts: assessed, observations: r.observations, profile: prof, limitPct: usePrefs.exit_cost_limit_pct, tax: r.tax, currentId: latestReceipt ? latestReceipt.receipt_id : null });
+  const evidenceChanges = require('./forensic-review').queue(ws, pid, { receipts: assessed, observations: r.observations, profile: prof, limitPct: usePrefs.exit_cost_limit_pct, tax: r.tax, fee: r.fee, currentId: latestReceipt ? latestReceipt.receipt_id : null });
   // The disagreement board (the shown receipt and the intact challenge of
   // it), the fixed-token exit comparison and the outcome register: read
   // from what is already stored, nothing asked or written.
   const disagreements = require('./forensic-disagreements').board(ws, pid, { assessment: shown, challenge: challengeOf && challengeIntact.ok ? challengeOf : null, findings: findingsV });
-  const exitCompare = require('./forensic-exitcompare').comparison({ targets: prof.targets.exit_quotes || [], observations: r.observations, receipt: shown, prefs: usePrefs, tax: r.tax, now });
+  const exitCompare = require('./forensic-exitcompare').comparison({ targets: prof.targets.exit_quotes || [], observations: r.observations, receipt: shown, prefs: usePrefs, tax: r.tax, fee: r.fee, now });
   const outcomes = require('./forensic-outcomes').register(assessed.filter((x) => receiptIntegrity(ws, pid, x).ok), {
     observed: { volume: series, exitCost: r.liquidity, delivery: r.delivery, positionUsd: usePrefs.exit_position_usd, limitPct: usePrefs.exit_cost_limit_pct },
     resolutionsOf: (rid) => resolutionsOf(ws, pid, rid),
@@ -1568,7 +1590,7 @@ function view(ws, pid, { now = Date.now(), receipt: wantReceipt = null } = {}) {
     generated_at: iso(now),
     read_only: true,
     method: D.METHOD,
-    definitions: { events: D.EVENTS, liquidity: D.LIQUIDITY_3, scenarios: D.SCENARIOS_3, probability: D.PROBABILITY, rubric: D.RUBRIC, areas: D.AREAS, checkpoints: D.CHECKPOINTS, unsupported: D.UNSUPPORTED, hash_note: D.HASH_NOTE, eligibility: E.VERSION },
+    definitions: { events: D.EVENTS, liquidity: D.LIQUIDITY_4, scenarios: D.SCENARIOS_3, probability: D.PROBABILITY, rubric: D.RUBRIC, areas: D.AREAS, checkpoints: D.CHECKPOINTS, unsupported: D.UNSUPPORTED, hash_note: D.HASH_NOTE, eligibility: E.VERSION },
     // How readings arrive on this desk now. cr-forensic-events@1 is kept as
     // published; its cadence sentence predates the monitor's exit quotes.
     cadence_now: { liquidity_impairment: XQ.cadenceWords(monitorCfg(ws)) },
@@ -1652,8 +1674,8 @@ function view(ws, pid, { now = Date.now(), receipt: wantReceipt = null } = {}) {
       reported_reserves: reported,
       observed_volume: { source: 'CoinGecko 24-hour volume, stored hourly by this desk (one median per UTC day)', latest: series.length ? series[series.length - 1] : null, days: series.slice(-60).map((p) => ({ day: p.day, value: p.value })), volume_to_liquidity_review_ratio: usePrefs.volume_to_liquidity_review_ratio },
       suspected_artificial: findingsV.filter((f) => f.area === 'liquidity' && /\b(wash|artificial|inorganic|self[- ]trad)/i.test(f.statement)).map((f) => ({ finding_id: f.finding_id, kind: f.shown_kind, statement: f.statement, method_stated: Boolean(f.basis.length || /method/i.test(f.statement)) })),
-      completeness: D.LIQUIDITY_3.completeness,
-      one_way: D.LIQUIDITY_3.one_way,
+      completeness: D.LIQUIDITY_4.completeness,
+      one_way: D.LIQUIDITY_4.one_way,
       note: D.LIQUIDITY.note,
     },
     controls,
@@ -1696,7 +1718,7 @@ function view(ws, pid, { now = Date.now(), receipt: wantReceipt = null } = {}) {
       recent: r.observations.slice(-40).reverse().map((o) => {
         const base = { obs_id: o.obs_id, kind: o.kind, target_id: o.target_id, label: o.label || null, url: o.url || null, repository: o.repository || null, observed_at: o.observed_at, outcome: o.outcome || o.status || null, http_status: o.http_status || null, error: o.error || null, latest_delivery_at: o.latest_delivery_at || null, body_sha256: o.body_sha256 || null, sha256: o.sha256, excerpt: o.excerpt || null };
         if (o.kind !== 'executable_quote') return base;
-        const e = o.quote && o.size_usd ? M.exitEstimate(o, o.size_usd, { tax: r.tax(o) }) : null;
+        const e = o.quote && o.size_usd ? M.exitEstimate(o, o.size_usd, { tax: r.tax(o), feeCeiling: r.fee(o) }) : null;
         return { ...base, chain: o.chain || null, provider_label: o.provider_label || null, size_usd: o.size_usd || null, amount_in: o.amount_in || null, received_usd: o.quote ? o.quote.received_usd : null, cost_pct: e && e.status === 'estimated' ? e.cost_pct : null, cost_complete: e ? e.cost_complete ?? null : null, missing_costs: e ? e.missing_costs || [] : [], route: o.quote ? o.quote.route : null };
       }),
       status: require('./forensic-monitor').statusView(ws, now),
@@ -1863,6 +1885,7 @@ module.exports = {
   appendObservation,
   readingsFor,
   taxIndex,
+  feeCeilingOf,
   eligibilityOf,
   approvedReposOf,
   investigatorReceipts,

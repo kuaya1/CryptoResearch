@@ -85,7 +85,7 @@ function stateOf(o, ctx) {
     if (o.status === 'no_route') return { m: ['no_route', o.size_usd], words: `No route at $${o.size_usd}`, values: { status: 'no_route', size_usd: o.size_usd } };
     if (o.status !== 'quoted' || !o.quote) return { failed: true, words: o.status === 'not_covered' ? `Not covered by the quote source: ${o.error || ''}`.trim() : `No quote: ${o.error || o.status}` };
     const M = require('./forensic-model');
-    const e = M.exitEstimate(o, o.size_usd, { tax: ctx.tax ? ctx.tax(o) : null });
+    const e = M.exitEstimate(o, o.size_usd, { tax: ctx.tax ? ctx.tax(o) : null, feeCeiling: ctx.fee ? ctx.fee(o) : null });
     const cost = e && e.status === 'estimated' ? e.cost_pct : null;
     const side = cost === null || !ctx.limitPct ? null : cost > ctx.limitPct ? 'over' : e.cost_complete ? 'within' : 'lower_bound_within';
     // The signature is the quote's side of the limit only (never the tax
@@ -156,8 +156,8 @@ function mappingOf(target, kind, receiptsById, currentId) {
 }
 
 // The queue (writes nothing). opts: { receipts, observations, profile,
-// limitPct, tax, currentId }.
-function queue(ws, pid, { receipts, observations, profile, limitPct = null, tax = null, currentId = null } = {}) {
+// limitPct, tax, fee, currentId }.
+function queue(ws, pid, { receipts, observations, profile, limitPct = null, tax = null, fee = null, currentId = null } = {}) {
   const reviews = readReviews(ws, pid);
   const receiptsById = new Map((receipts || []).filter((r) => r.kind === 'assessment').map((r) => [r.receipt_id, r]));
   const targets = [
@@ -179,7 +179,7 @@ function queue(ws, pid, { receipts, observations, profile, limitPct = null, tax 
     let latest = null;
     let failing = false;
     for (const s of series) {
-      const c = changesOf({ target_id: s.key }, s.list, { limitPct, tax });
+      const c = changesOf({ target_id: s.key }, s.list, { limitPct, tax, fee });
       items = items.concat(c.items);
       if (c.latest && (!latest || c.latest.observed_at > latest.observed_at)) latest = c.latest;
       failing = failing || c.failing;

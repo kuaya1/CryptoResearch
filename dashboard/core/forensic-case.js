@@ -51,7 +51,7 @@ function calculationOf(F, M, XQ, { receipt, readings, observations }) {
   const size = prefs.exit_position_usd;
   const limit = prefs.exit_cost_limit_pct;
   const bound = readings.liqObs.filter((o) => o.kind === 'executable_quote' || o.kind === 'pool_reserves');
-  const atSize = bound.map((o) => ({ o, e: M.exitEstimate(o, size, { tax: readings.tax(o) }) })).filter((x) => x.e && (x.e.status === 'estimated' || x.e.status === 'no_route'));
+  const atSize = bound.map((o) => ({ o, e: M.exitEstimate(o, size, { tax: readings.tax(o), feeCeiling: readings.fee ? readings.fee(o) : null }) })).filter((x) => x.e && (x.e.status === 'estimated' || x.e.status === 'no_route'));
   if (!atSize.length) {
     const why = readings.unbound.filter((u) => u.measure === 'liquidity' || u.measure === 'exit_quote').map((u) => u.reason);
     return { status: 'unavailable', reason: `No reading bound to this receipt speaks to the $${size} position${why.length ? `; not counted: ${why.slice(0, 3).join(' ')}` : '.'}`, size_usd: size };
@@ -78,6 +78,7 @@ function calculationOf(F, M, XQ, { receipt, readings, observations }) {
     amount_in: o.amount_in || null,
     price: o.price ? { usd: o.price.usd, as_of: o.price.as_of } : null,
     tax: e.tax || null,
+    network_fee_ceiling: typeof e.network_fee_ceiling_usd === 'number' ? { usd: e.network_fee_ceiling_usd, source: 'your ceiling' } : null,
   };
   return {
     status: 'supported',
@@ -85,7 +86,7 @@ function calculationOf(F, M, XQ, { receipt, readings, observations }) {
     limit_pct: limit,
     inputs,
     result: { status: e.status, received_usd: e.received_usd ?? null, net_received_usd: e.net_received_usd ?? null, cost_pct: e.cost_pct ?? null, cost_complete: e.cost_complete ?? null, missing_costs: e.missing_costs || [] },
-    basis: { fees: o.kind === 'executable_quote' ? 'route fees and price impact are inside the quoted amount' : `pool fee ${o.fee_bps} bps, price impact from the reserves`, gas: inputs.quote && inputs.quote.gas_included ? 'inside the quote' : inputs.quote && inputs.quote.gas_usd !== null ? `external, $${inputs.quote.gas_usd}` : 'unknown', tax: inputs.tax ? (inputs.tax.pct === 0 ? `0% (${inputs.tax.source})` : `${inputs.tax.pct}% (${inputs.tax.source}); not applied: its mechanism and whether the quote includes it are not known`) : 'unknown', one_way: true },
+    basis: { fees: o.kind === 'executable_quote' ? 'route fees and price impact are inside the quoted amount' : `pool fee ${o.fee_bps} bps, price impact from the reserves`, gas: inputs.quote && inputs.quote.gas_included ? 'inside the quote' : inputs.quote && inputs.quote.gas_usd !== null ? `external, ${inputs.quote.gas_usd}` : inputs.network_fee_ceiling ? `at most ${inputs.network_fee_ceiling.usd.toFixed(2)} (your ceiling, added in full)` : 'unknown', tax: inputs.tax ? (inputs.tax.pct === 0 ? `0% (${inputs.tax.source})` : `${inputs.tax.pct}% (${inputs.tax.source}); not applied: its mechanism and whether the quote includes it are not known`) : 'unknown', one_way: true },
     quantity_check: inputs.amount_in && inputs.token && inputs.price ? { expected_amount_in: XQ.baseUnitsFor(size, inputs.price.usd, inputs.token.decimals), note: 'The quoted amount is the position size at the stored price, in the token\'s base units for this exact chain and contract.' } : null,
   };
 }
@@ -153,7 +154,7 @@ function buildCase(ws, pid, rid, { now = Date.now() } = {}) {
     project: { project_id: pid, name: project.name },
     receipt: { receipt_id: rid, audit_id: r.audit_id, kind: r.kind, role: r.role, model: r.model && r.model.provider, saved_at: r.saved_at, assessment_as_of: r.assessment_as_of || r.origin, origin: r.origin, origin_basis: r.origin_basis || null, deadlines: r.deadlines, revision_of: r.revision_of || null, revision: r.revision || null },
     audit: { audit_id: r.audit_id, created_at: audit.created_at, definitions: audit.definitions, preferences: r.preferences },
-    versions: { prompt: r.versions && r.versions.prompt, format: r.versions && r.versions.format, method_saved: r.method || 'cr-forensic-method@1', method_now: D.METHOD_VERSION, eligibility: E.VERSION, liquidity: D.LIQUIDITY_VERSION_3, case: FORMAT },
+    versions: { prompt: r.versions && r.versions.prompt, format: r.versions && r.versions.format, method_saved: r.method || 'cr-forensic-method@1', method_now: D.METHOD_VERSION, eligibility: E.VERSION, liquidity: D.LIQUIDITY_VERSION_4, case: FORMAT },
     pins: { text_sha256: r.text.sha256, block_sha256: r.block_sha256, prompt_sha256: audit.prompt.sha256, evidence_packet_sha256: audit.evidence_packet.sha256 },
     integrity_at_build: integ,
     challenge,
@@ -178,7 +179,7 @@ function replay(calc) {
   const obs = i.kind === 'pool_reserves'
     ? { kind: 'pool_reserves', mechanism: i.mechanism, ...i.reserves, retrieved_at: i.retrieved_at }
     : { kind: 'executable_quote', route_scope: i.route_scope, retrieved_at: i.retrieved_at, quote: i.quote, source: i.captured_by === 'monitor' ? 'monitor' : undefined, amount_in: i.amount_in, token: i.token, price: i.price };
-  const e = M.exitEstimate(obs, i.size_usd, { tax: i.tax });
+  const e = M.exitEstimate(obs, i.size_usd, { tax: i.tax, feeCeiling: i.network_fee_ceiling || null });
   const got = e ? { status: e.status, received_usd: e.received_usd ?? null, net_received_usd: e.net_received_usd ?? null, cost_pct: e.cost_pct ?? null, cost_complete: e.cost_complete ?? null, missing_costs: e.missing_costs || [] } : null;
   const differences = got ? Object.keys(calc.result).filter((k) => JSON.stringify(calc.result[k]) !== JSON.stringify(got[k])) : ['the calculation gave no estimate'];
   let quantity = null;

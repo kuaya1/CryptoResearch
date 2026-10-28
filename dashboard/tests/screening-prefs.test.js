@@ -76,6 +76,15 @@ test('screening preferences: POST /api/settings saves valid values and refuses t
   assert.equal(p.exit_cost_limit_pct, 3.5);
   assert.equal(p.reported_liquidity_review_usd, null);
   assert.equal(p.volume_to_liquidity_review_ratio, 40);
+  assert.equal(p.solana_network_fee_ceiling_usd, 1, 'not posted: Eric\'s $1.00 default');
+  // The Solana network fee ceiling (liquidity@4): empty is none; at most $100.
+  assert.equal((await post({ forensics: { preferences: { solana_network_fee_ceiling_usd: 101 } } })).status, 400);
+  assert.equal((await post({ forensics: { preferences: { solana_network_fee_ceiling_usd: 0 } } })).status, 400);
+  assert.equal((await post({ forensics: { preferences: { solana_network_fee_ceiling_usd: '' } } })).status, 200);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).forensics.preferences.solana_network_fee_ceiling_usd, null);
+  assert.equal(F.prefsOf(ws).solana_network_fee_ceiling_usd, null, 'none set: Solana costs stay "at least"');
+  assert.equal((await post({ forensics: { preferences: { solana_network_fee_ceiling_usd: 0.5 } } })).status, 200);
+  assert.equal(F.prefsOf(ws).solana_network_fee_ceiling_usd, 0.5);
   // The monitor's own settings are not reachable through this branch.
   assert.equal(ws.settings.forensics.monitor.enabled, true);
 });

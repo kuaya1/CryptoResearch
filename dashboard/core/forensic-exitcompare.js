@@ -18,11 +18,11 @@
 
 const VERSION = 'cr-forensic-exit-compare@1';
 
-function rowOf(o, { M, XQ, tax, now, mode }) {
+function rowOf(o, { M, XQ, tax, fee, now, mode }) {
   const decimals = o.token && Number.isInteger(o.token.decimals) ? o.token.decimals : null;
   const tokens = o.amount_in && decimals !== null ? XQ.unitsText(o.amount_in, decimals) : null;
   const size = o.quote && typeof o.quote.sell_usd === 'number' ? o.quote.sell_usd : o.size_usd;
-  const e = o.quote ? M.exitEstimate(o, mode === 'fixed_token' ? size : o.size_usd, { tax: tax(o) }) : null;
+  const e = o.quote ? M.exitEstimate(o, mode === 'fixed_token' ? size : o.size_usd, { tax: tax(o), feeCeiling: fee(o) }) : null;
   return {
     obs_id: o.obs_id,
     sha256: o.sha256 || null,
@@ -51,7 +51,7 @@ function rowOf(o, { M, XQ, tax, now, mode }) {
 
 // observations: the project's (forensics.readObservations); receipt: the
 // shown assessment receipt (its origin anchors the reference quantity).
-function comparison({ targets = [], observations = [], receipt = null, prefs, tax = () => null, now = Date.now() }) {
+function comparison({ targets = [], observations = [], receipt = null, prefs, tax = () => null, fee = () => null, now = Date.now() }) {
   const M = require('./forensic-model');
   const XQ = require('./exitquotes');
   if (!targets.length) return { version: VERSION, status: 'unavailable', reason: 'No exit-quote chain is approved for this project: approve one under Monitoring to compare exits.', items: [] };
@@ -65,8 +65,8 @@ function comparison({ targets = [], observations = [], receipt = null, prefs, ta
     if (!anchor) return { ...head, status: 'unavailable', reason: dollars.length ? 'No quote at your position size since this assessment yet.' : 'No quote at your position size yet: the monitor has not asked, or the quote source did not answer.', fixed_usd: [], fixed_token: [], reference: null };
     const decimals = anchor.token ? anchor.token.decimals : null;
     const reference = { amount_in: anchor.amount_in, tokens: XQ.unitsText(anchor.amount_in, decimals), decimals, platform: anchor.token ? anchor.token.platform || null : null, set_from_obs_id: anchor.obs_id, set_at: anchor.observed_at, price_usd: anchor.price ? anchor.price.usd : null, basis: `What $${size} bought at the first quote after the assessment (${anchor.observed_at}).` };
-    const fixedUsd = dollars.filter((o) => Date.parse(o.observed_at) >= Date.parse(anchor.observed_at)).slice(-20).map((o) => rowOf(o, { M, XQ, tax, now, mode: 'fixed_usd' }));
-    const fixedToken = mine.filter((o) => o.basis_kind === 'fixed_token' && o.amount_in === reference.amount_in).sort((a, b) => String(a.observed_at).localeCompare(String(b.observed_at))).slice(-20).map((o) => rowOf(o, { M, XQ, tax, now, mode: 'fixed_token' }));
+    const fixedUsd = dollars.filter((o) => Date.parse(o.observed_at) >= Date.parse(anchor.observed_at)).slice(-20).map((o) => rowOf(o, { M, XQ, tax, fee, now, mode: 'fixed_usd' }));
+    const fixedToken = mine.filter((o) => o.basis_kind === 'fixed_token' && o.amount_in === reference.amount_in).sort((a, b) => String(a.observed_at).localeCompare(String(b.observed_at))).slice(-20).map((o) => rowOf(o, { M, XQ, tax, fee, now, mode: 'fixed_token' }));
     return { ...head, status: 'compared', reference, fixed_usd: fixedUsd, fixed_token: fixedToken, note: fixedToken.length ? null : 'No quote for this exact quantity yet: ask one with "Quote this quantity now".' };
   });
   return { version: VERSION, status: 'compared', size_usd: size, items, note: 'Hypothetical exits: quotes at one moment, never transactions. Fixed dollars sell a different token quantity whenever the price moves; fixed tokens sell the same quantity, whatever it is worth.' };

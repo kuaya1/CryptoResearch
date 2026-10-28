@@ -274,12 +274,14 @@ function completeness({ gasKnown, gasWords, tax }) {
 }
 
 // One reading's hypothetical exit at one size, or null when the reading does
-// not speak to that size. Never a transaction. A one-way sell.
-function exitEstimate(obs, sizeUsd, { marketPriceUsd = null, tax = null } = {}) {
+// not speak to that size. Never a transaction. A one-way sell. feeCeiling:
+// { usd, source } for a quote that states no network fee (liquidity@4, Eric's
+// Solana ceiling), added in full and named as a ceiling; else null.
+function exitEstimate(obs, sizeUsd, { marketPriceUsd = null, tax = null, feeCeiling = null } = {}) {
   if (!obs || !isNum(sizeUsd) || sizeUsd <= 0) return null;
   const basis = obs.source === 'monitor' && obs.amount_in ? { kind: 'fixed_usd', size_usd: sizeUsd, amount_in: String(obs.amount_in), token_decimals: obs.token ? obs.token.decimals : null, price_usd: obs.price ? obs.price.usd : null, price_as_of: obs.price ? obs.price.as_of : null } : { kind: 'fixed_usd', size_usd: sizeUsd };
   const taxUsed = tax && isNum(tax.pct) ? { pct: tax.pct, source: tax.source || null, checked_at: tax.checked_at || null } : null;
-  const base = { obs_id: obs.obs_id || null, size_usd: sizeUsd, venue: obs.venue || null, chain: obs.chain || null, contract_address: obs.contract_address || null, pool: obs.pool || null, retrieved_at: obs.retrieved_at || null, source_id: obs.source_id || null, captured_by: obs.source === 'monitor' ? 'monitor' : 'audit', basis, one_way: true, tax: taxUsed, version: D.LIQUIDITY_VERSION_3 };
+  const base = { obs_id: obs.obs_id || null, size_usd: sizeUsd, venue: obs.venue || null, chain: obs.chain || null, contract_address: obs.contract_address || null, pool: obs.pool || null, retrieved_at: obs.retrieved_at || null, source_id: obs.source_id || null, captured_by: obs.source === 'monitor' ? 'monitor' : 'audit', basis, one_way: true, tax: taxUsed, version: D.LIQUIDITY_VERSION_4 };
   if (obs.kind === 'executable_quote') {
     const q = obs.quote || {};
     const sell = num(q.sell_usd);
@@ -292,17 +294,20 @@ function exitEstimate(obs, sizeUsd, { marketPriceUsd = null, tax = null } = {}) 
     if (recv === null || recv < 0) return null;
     const gas = num(q.gas_usd);
     const gasIncluded = q.gas_included === true;
-    const extra = gas !== null && gas > 0 && !gasIncluded ? gas : 0;
-    const c = completeness({ gasKnown: gas !== null || gasIncluded, gasWords: gasIncluded ? 'network fee, inside the quote' : `network fee $${round(gas || 0, 4)}`, tax });
+    const ceiling = gas === null && !gasIncluded && feeCeiling && isNum(feeCeiling.usd) && feeCeiling.usd > 0 ? feeCeiling : null;
+    const extra = ceiling ? ceiling.usd : gas !== null && gas > 0 && !gasIncluded ? gas : 0;
+    const gasWords = gasIncluded ? 'network fee, inside the quote' : ceiling ? `network fee at most $${ceiling.usd.toFixed(2)} (${ceiling.source || 'your ceiling'})` : `network fee $${round(gas || 0, 4)}`;
+    const c = completeness({ gasKnown: gas !== null || gasIncluded || Boolean(ceiling), gasWords, tax });
     // One basis for proceeds and cost: what the quote receives, less an
     // external network fee; cost = (sell - net) / sell.
     const net = recv - extra;
     const cost = ((sell - net) / sell) * 100;
     const limitations = ['A quote at one moment; it can change by the time an order is sent.'];
     if (scope !== 'aggregator') limitations.push('One venue: other routes were not asked, so the cost through the best route may be lower.');
+    if (ceiling) limitations.push(`The network fee is your ceiling of $${ceiling.usd.toFixed(2)}, added in full, not a measured fee: the fee actually paid may be lower, so the cost may be lower.`);
     if (!c.complete) limitations.unshift(`Cost incomplete: ${c.missing.join(' and ')} unknown, so this is at least the figure shown.`);
     if (typeof q.valuation_note === 'string') limitations.push(str(q.valuation_note, 300));
-    return { ...base, method: 'executable_quote', route_scope: scope, status: 'estimated', quoted_usd: round(sell), received_usd: round(recv, 4), net_received_usd: round(net, 4), cost_pct: round(Math.max(-100, cost), 3), cost_complete: c.complete, missing_costs: c.missing, included_costs: ['price impact and route fees, inside the quoted amount', ...c.included], fees_usd: num(q.fees_usd), price_impact_pct: num(q.price_impact_pct), gas_usd: gas, gas_included: gasIncluded, route: str(q.route, 300), limitations };
+    return { ...base, method: 'executable_quote', route_scope: scope, status: 'estimated', quoted_usd: round(sell), received_usd: round(recv, 4), net_received_usd: round(net, 4), cost_pct: round(Math.max(-100, cost), 3), cost_complete: c.complete, missing_costs: c.missing, included_costs: ['price impact and route fees, inside the quoted amount', ...c.included], fees_usd: num(q.fees_usd), price_impact_pct: num(q.price_impact_pct), gas_usd: gas, gas_included: gasIncluded, ...(ceiling ? { network_fee_ceiling_usd: ceiling.usd } : {}), route: str(q.route, 300), limitations };
   }
   if (obs.kind === 'pool_reserves') {
     const mech = D.LIQUIDITY.mechanisms[obs.mechanism] ? obs.mechanism : 'unknown';
@@ -345,12 +350,12 @@ function costWords(e) {
 // An older answer of the same scope is history, whatever it cost. The best
 // complete route is the cheapest current one whose cost is known in full, so a
 // cheaper lower bound never hides it (the ticket gate's, cr-ticket-sizing@3).
-function exitTable(observations, sizes, { marketPriceUsd = null, taxOf = null, now = Date.now(), freshnessHours = D.EVENTS.liquidity_impairment.freshness_hours } = {}) {
+function exitTable(observations, sizes, { marketPriceUsd = null, taxOf = null, feeOf = null, now = Date.now(), freshnessHours = D.EVENTS.liquidity_impairment.freshness_hours } = {}) {
   const obs = Array.isArray(observations) ? observations : [];
   const fresh = freshnessHours * HOUR;
   return sizes.map((size) => {
     const rows = obs.map((o) => {
-      const e = exitEstimate(o, size, { marketPriceUsd, tax: taxOf ? taxOf(o) : null });
+      const e = exitEstimate(o, size, { marketPriceUsd, tax: taxOf ? taxOf(o) : null, feeCeiling: feeOf ? feeOf(o) : null });
       return e ? { ...e, scope: scopeOf(o), t: tOf(e.retrieved_at) } : null;
     }).filter(Boolean);
     const speaking = rows.filter((r) => (r.status === 'estimated' || r.status === 'no_route') && Number.isFinite(r.t)).sort((a, b) => a.t - b.t);
@@ -385,12 +390,12 @@ function exitTable(observations, sizes, { marketPriceUsd = null, taxOf = null, n
 // route says "no route" or costs over the limit (a lower bound over the limit
 // is enough). One pool or venue over the limit, or a lower bound within it,
 // counts as no reading.
-function liquidityReadings(observations, { positionUsd, limitPct, marketPriceUsd = null, taxOf = null, freshnessHours = D.EVENTS.liquidity_impairment.freshness_hours } = {}) {
+function liquidityReadings(observations, { positionUsd, limitPct, marketPriceUsd = null, taxOf = null, feeOf = null, freshnessHours = D.EVENTS.liquidity_impairment.freshness_hours } = {}) {
   const ests = [];
   for (const o of Array.isArray(observations) ? observations : []) {
     const at = isoOrNull(o && o.retrieved_at);
     if (!at) continue;
-    const e = exitEstimate(o, positionUsd, { marketPriceUsd, tax: taxOf ? taxOf(o) : null });
+    const e = exitEstimate(o, positionUsd, { marketPriceUsd, tax: taxOf ? taxOf(o) : null, feeCeiling: feeOf ? feeOf(o) : null });
     if (!e || (e.status !== 'estimated' && e.status !== 'no_route')) continue;
     ests.push({ ...e, at, t: tOf(at), scope: scopeOf(o) });
   }
