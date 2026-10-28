@@ -1,1 +1,0 @@
-{"name":"cr-agent-builder","private":true,"description":"The agent lane builder: Claude Code, pinned (agent-build.yml installs it with npm ci).","dependencies":{"@anthropic-ai/claude-code":"2.1.304"}}

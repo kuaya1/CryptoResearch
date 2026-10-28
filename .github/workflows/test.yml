@@ -1,15 +1,13 @@
 # CI for the desk (blueprint W2.1, DESK_STATE item 10): the full suite on
-# every push to a claude/ branch, to main (after a merge: main as it landed),
-# and on every pull request to main. A merge pushed by backlog-pr.yml with the
-# workflow token starts no run here; that tree was tested before it landed.
-# The tests use fictional workspaces only; no secret is read. A builder's claim
-# (claude/claims/item-<n>, dashboard/scripts/backlog-schedule.js) is a commit
-# with an empty tree and nothing to test, so it starts no run.
+# every pull request to main and on main after each merge (main as it
+# landed). It is the one check the main-merge-requirements ruleset requires
+# (audits/2026-10-27-de-escalation). The tests use fictional workspaces only;
+# no secret is read.
 name: test
 
 on:
   push:
-    branches: ['claude/**', '!claude/claims/**', 'main']
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -32,8 +30,8 @@ jobs:
       - name: Run the full suite
         shell: bash
         run: node dashboard/cli.js test 2>&1 | tee test-output.txt
-      # The counts go to the job summary and to an artifact backlog-pr.yml
-      # puts in the pull request. Node prints them as "ℹ tests n" or "# tests n".
+      # The counts go to the job summary and to an artifact. Node prints them
+      # as "ℹ tests n" or "# tests n".
       - name: Counts
         if: always()
         shell: bash
