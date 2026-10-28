@@ -69,8 +69,43 @@ function fixture(t, { owner = false } = {}) {
   // A fresh runner: an empty repository whose origin is "GitHub".
   const runner = () => { const w = path.join(dir, `runner-${n += 1}`); fs.mkdirSync(w); git(w, ['init', '-q']); git(w, ['remote', 'add', 'origin', remote]); return w; };
   const pull = { number: 3, state: 'open', head: { sha: head, ref: branch }, base: { ref: 'main' }, user: { login: owner ? 'kuaya1' : 'cr-builder[bot]' } };
-  return { remote, head, main, issue, pull, runner };
+  const fx = { remote, head, main, issue, pull, runner, task };
+  // The pull request moves: its branch and refs/pull/3/head go to `sha`.
+  const moveTo = (sha) => { git(src, ['push', '-q', '-f', remote, `${sha}:refs/heads/${branch}`, `${sha}:refs/pull/3/head`]); fx.head = sha; pull.head.sha = sha; return sha; };
+  // main gains a commit of Eric's (another file unless named).
+  fx.onMain = (p = 'dashboard/core/other.js', text = `module.exports = ${Date.now()};\n`) => {
+    git(src, ['checkout', '-q', fx.main]);
+    put(p, text);
+    git(src, ['add', '-A']);
+    git(src, ['commit', '-q', '-m', 'main moves on'], { who: ERIC });
+    fx.main = git(src, ['rev-parse', 'HEAD']);
+    git(src, ['push', '-q', remote, `${fx.main}:refs/heads/main`]);
+    git(src, ['checkout', '-q', '--detach', fx.head]);
+    return fx.main;
+  };
+  // GitHub's "Update branch": a merge of main by Eric; `extra` adds a change
+  // of its own to the merge.
+  fx.updateBranch = ({ extra = null } = {}) => {
+    git(src, ['checkout', '-q', '--detach', fx.head]);
+    git(src, ['merge', '-q', '--no-ff', '--no-commit', fx.main], { who: ERIC });
+    if (extra) { put(extra[0], extra[1]); git(src, ['add', '-A']); }
+    git(src, ['commit', '-q', '-m', `Merge branch 'main' into ${branch}`], { who: ERIC });
+    return moveTo(git(src, ['rev-parse', 'HEAD']));
+  };
+  // A commit of the pull request's own (the builder's for a candidate).
+  fx.commitOwn = (p, text) => {
+    git(src, ['checkout', '-q', '--detach', fx.head]);
+    put(p, text);
+    git(src, ['add', '-A']);
+    git(src, ['commit', '-q', '-m', owner ? 'Eric again' : G.commitMessage(task, { run: '5/1', policy: POLICY })], { who: owner ? ERIC : BOT });
+    return moveTo(git(src, ['rev-parse', 'HEAD']));
+  };
+  return fx;
 }
+// Eric's comment and approval as GitHub returns them (FICTIONAL ids).
+const OWNER_USER = { login: 'kuaya1', type: 'User' };
+const comment = (id, body, o = {}) => ({ id, body, user: OWNER_USER, author_association: 'OWNER', created_at: '2026-10-27T10:00:00Z', updated_at: '2026-10-27T10:00:00Z', html_url: `https://github.com/${REPO}/pull/3#issuecomment-${id}`, ...o });
+const approval = (id, sha, o = {}) => ({ id, state: 'APPROVED', commit_id: sha, user: OWNER_USER, author_association: 'OWNER', submitted_at: '2026-10-27T11:00:00Z', ...o });
 
 const resp = (status, body) => ({ status, text: async () => (typeof body === 'string' ? body : JSON.stringify(body)) });
 const VERDICT = { result: 'pass', summary: 'FICTIONAL: the change does what the task says.', findings: [{ severity: 'note', path: 'dashboard/core/widget.js', line: 2, summary: 'FICTIONAL note.' }] };
@@ -79,7 +114,7 @@ const VERDICT = { result: 'pass', summary: 'FICTIONAL: the change does what the 
 // next mode: ok, timeout (accepted, then the answer is lost), 503 (refused
 // before acceptance), 429, cut (accepted, body cut).
 function world(fx, { modes = [], fallback = 'ok' } = {}) {
-  const w = { clock: T0, posts: 0, bodies: [], stored: [], checks: [], checkFail: 0, modelStatus: 200, listStatus: 200, required: { test: 'success', 'agent-guard': 'success', 'agent-verify': 'success' }, verdict: VERDICT, modes: [...modes] };
+  const w = { clock: T0, posts: 0, bodies: [], stored: [], checks: [], checkFail: 0, modelStatus: 200, listStatus: 200, required: { test: 'success', 'agent-guard': 'success', 'agent-verify': 'success' }, verdict: VERDICT, modes: [...modes], comments: [], reviews: [] };
   w.fetch = async (url, opts = {}) => {
     const u = new URL(url);
     const method = opts.method || 'GET';
@@ -107,7 +142,16 @@ function world(fx, { modes = [], fallback = 'ok' } = {}) {
     if (u.host === 'api.github.com') {
       if (u.pathname === `/repos/${REPO}/pulls/3`) return resp(200, fx.pull);
       if (u.pathname === `/repos/${REPO}/issues/7`) return resp(200, fx.issue);
-      if (/\/check-runs$/.test(u.pathname) && method === 'GET') return resp(200, { check_runs: Object.entries(w.required).map(([name, s], i) => ({ id: 100 + i, name, app: { id: 15368 }, status: s === 'pending' ? 'in_progress' : 'completed', conclusion: s === 'pending' ? null : s })) });
+      // Comments, reviews and open pull requests: one page each.
+      if (u.pathname === `/repos/${REPO}/issues/3/comments` && method === 'GET') return w.comments === null ? resp(502, {}) : resp(200, u.searchParams.get('page') === '1' ? w.comments : []);
+      if (u.pathname === `/repos/${REPO}/pulls/3/reviews` && method === 'GET') return resp(200, u.searchParams.get('page') === '1' ? w.reviews : []);
+      if (u.pathname === `/repos/${REPO}/pulls` && method === 'GET') return resp(200, u.searchParams.get('page') === '1' && fx.pull.state === 'open' ? [fx.pull] : []);
+      // The required checks, and every agent-review posted on that head.
+      if (/\/check-runs$/.test(u.pathname) && method === 'GET') {
+        const sha = /\/commits\/([0-9a-f]{40})\/check-runs$/.exec(u.pathname)[1];
+        const posted = w.checks.map((c, i) => ({ ...c, id: 1000 + i, app: { id: 15368 } })).filter((c) => c.head_sha === sha);
+        return resp(200, { check_runs: [...Object.entries(w.required).map(([name, s], i) => ({ id: 100 + i, name, app: { id: 15368 }, status: s === 'pending' ? 'in_progress' : 'completed', conclusion: s === 'pending' ? null : s })), ...posted] });
+      }
       if (u.pathname === `/repos/${REPO}/check-runs` && method === 'POST') {
         if (w.checkFail > 0) { w.checkFail -= 1; return resp(502, {}); }
         w.checks.push(JSON.parse(opts.body));
@@ -340,13 +384,167 @@ test('verdicts are signed with the ledger\'s own key: without it nothing is read
   assert.equal(L.macOk(L.macKey(ENV.OPENAI_API_KEY), line), false);
 });
 
-test('an owner change is left to agent-checks; nothing reserved or sent', async (t) => {
+// Eric's own review (hardening, 2026-10-27; agent-owner-review.js): only a record
+// GitHub authenticates counts, and it names one exact head.
+test('a change that is not an agent candidate is never sent to a model; Eric\'s own change too reads Missing until his review of this exact head', async (t) => {
   const fx = fixture(t, { owner: true });
   const w = world(fx);
   const r = await review(fx, w);
-  assert.equal(r.status, 'owner');
+  assert.equal(r.status, 'missing');
   assert.equal(w.posts, 0);
-  assert.equal(w.checks.length, 0);
+  assert.deepEqual(ledger(fx), []);
+  assert.equal(lastCheck(w).conclusion, 'action_required');
+  assert.equal(lastCheck(w).output.title, `Missing: no review of ${fx.head.slice(0, 12)}`);
+  assert.ok(lastCheck(w).output.summary.includes(`\`\`\`\n/reviewed ${fx.head}\n\`\`\``));
+  assert.equal((await review(fx, w)).status, 'missing');
+  assert.equal(w.checks.length, 1, 'the same state is not posted twice');
+  // None of these is Eric's review of this head.
+  w.comments.push(
+    comment(50, `/reviewed ${fx.head}`, { user: { login: 'someone', type: 'User' }, author_association: 'COLLABORATOR' }),
+    comment(51, `/reviewed ${fx.head}`, { user: { login: 'kuaya1', type: 'Bot' } }),
+    comment(52, `/reviewed ${fx.head}`, { updated_at: '2026-10-27T10:05:00Z' }),
+    comment(53, `/reviewed ${fx.head.slice(0, 12)}`),
+    comment(54, `/reviewed ${fx.head.toUpperCase()}`),
+    comment(55, `/reviewed ${fx.head} and the next one too`),
+    comment(56, `Looks fine. /reviewed ${fx.head}`),
+  );
+  w.reviews.push(
+    approval(60, fx.head, { user: { login: 'someone', type: 'User' }, author_association: 'COLLABORATOR' }),
+    approval(61, fx.head, { state: 'DISMISSED' }),
+    approval(62, fx.head, { state: 'COMMENTED' }),
+  );
+  assert.equal((await review(fx, w)).status, 'missing');
+  const s = lastCheck(w).output.summary;
+  assert.match(s, /comment 50 \(it is by someone \(User, COLLABORATOR\), not the repository's owner\)/);
+  assert.match(s, /comment 51 \(it is by kuaya1 \(Bot, OWNER\), not the repository's owner\)/);
+  assert.match(s, /comment 52 \(it was edited after it was posted\)/);
+  for (const id of [53, 54, 55]) assert.ok(s.includes(`comment ${id} (its first line is not "/reviewed" and a full 40-character commit)`), String(id));
+  assert.doesNotMatch(s, /comment 56/);
+  // Eric's own comment naming this head: an override, neutral, nothing paid.
+  w.comments.push(comment(99, `/reviewed ${fx.head}\nRead it on my phone.`));
+  const ok = await review(fx, w);
+  assert.equal(ok.status, 'owner_override');
+  assert.equal(lastCheck(w).conclusion, 'neutral');
+  assert.equal(lastCheck(w).output.title, `Owner override: kuaya1 reviewed ${fx.head.slice(0, 12)}`);
+  assert.match(lastCheck(w).output.summary, /kuaya1 reviewed this head himself \(comment 99 at 2026-10-27T10:00:00Z\)/);
+  assert.equal(w.posts, 0);
+  assert.deepEqual(ledger(fx), []);
+});
+
+test('Eric\'s approval counts at the commit GitHub bound it to, and the sweep picks it up (an approval starts no trusted run)', async (t) => {
+  const fx = fixture(t, { owner: true });
+  const w = world(fx);
+  assert.equal((await review(fx, w)).status, 'missing');
+  w.reviews.push(approval(12, fx.head));
+  const sweep = () => AR.sweep({ env: ENV, cwd: fx.runner(), fetchImpl: w.fetch, now: () => w.clock, policy: POLICY });
+  const out = await sweep();
+  assert.deepEqual(out.map((o) => [o.status, o.pr]), [['posted', 3]]);
+  assert.equal(lastCheck(w).conclusion, 'neutral');
+  assert.match(lastCheck(w).output.summary, /approving review 12 at 2026-10-27T11:00:00Z/);
+  assert.deepEqual((await sweep()).map((o) => o.status), ['unchanged']);
+  // A head with no review of Eric's: the sweep posts nothing for it.
+  fx.commitOwn('dashboard/core/widget.js', "'use strict';\nmodule.exports = { size: (s) => (s === '' ? 0 : String(s).length) };\n");
+  const n = w.checks.length;
+  assert.deepEqual(await sweep(), []);
+  assert.equal(w.checks.length, n);
+  assert.equal(w.posts, 0);
+});
+
+test('a review carries over GitHub\'s "Update branch" only: a commit of its own or a merge that adds a change invalidates it', async (t) => {
+  const fx = fixture(t, { owner: true });
+  const w = world(fx);
+  const h0 = fx.head;
+  w.comments.push(comment(70, `/reviewed ${h0}`));
+  assert.equal((await review(fx, w)).status, 'owner_override');
+  fx.onMain();
+  const h1 = fx.updateBranch();
+  assert.equal((await review(fx, w)).status, 'owner_override');
+  assert.equal(lastCheck(w).head_sha, h1);
+  assert.equal(lastCheck(w).output.title, `Owner override: carried over from ${h0.slice(0, 12)}`);
+  assert.match(lastCheck(w).output.summary, /the one commit since merges main and adds nothing of its own, and the pull request's own change is the same patch \([0-9a-f]{12}\)/);
+  // Twice more: two merges still carry over.
+  fx.onMain('dashboard/core/third.js', 'module.exports = 3;\n');
+  fx.updateBranch();
+  assert.equal((await review(fx, w)).status, 'owner_override');
+  assert.match(lastCheck(w).output.summary, /the 2 commits since merge main and add nothing of their own/);
+  // A merge that slips in a change of its own.
+  fx.onMain('dashboard/core/fourth.js', 'module.exports = 4;\n');
+  const evil = fx.updateBranch({ extra: ['dashboard/core/widget.js', "'use strict';\nmodule.exports = { size: () => 0 };\n"] });
+  assert.equal((await review(fx, w)).status, 'invalidated');
+  assert.equal(lastCheck(w).conclusion, 'action_required');
+  assert.equal(lastCheck(w).output.title, `Invalidated by a new commit: kuaya1 reviewed ${h0.slice(0, 12)}, the head is ${evil.slice(0, 12)}`);
+  assert.ok(lastCheck(w).output.summary.includes(`merge ${evil.slice(0, 12)} adds changes of its own`));
+  assert.ok(lastCheck(w).output.summary.includes(`/reviewed ${evil}\n`));
+  // Eric reviews that head; then a commit of the pull request's own.
+  w.comments.push(comment(71, `/reviewed ${evil}`, { created_at: '2026-10-27T12:00:00Z', updated_at: '2026-10-27T12:00:00Z' }));
+  assert.equal((await review(fx, w)).status, 'owner_override');
+  const own = fx.commitOwn('dashboard/core/widget.js', "'use strict';\nmodule.exports = { size: () => 1 };\n");
+  assert.equal((await review(fx, w)).status, 'invalidated');
+  assert.equal(lastCheck(w).output.title, `Invalidated by a new commit: kuaya1 reviewed ${evil.slice(0, 12)}, the head is ${own.slice(0, 12)}`);
+  assert.ok(lastCheck(w).output.summary.includes(`${own.slice(0, 12)} is a commit of its own, not a merge of main`));
+  assert.equal(w.posts, 0);
+});
+
+test('a model pass carries over "Update branch" with nothing sent; a commit of the builder\'s own is reviewed again', async (t) => {
+  const fx = fixture(t);
+  const w = world(fx);
+  const h0 = fx.head;
+  assert.equal((await review(fx, w)).status, 'posted');
+  assert.equal(w.posts, 1);
+  fx.onMain();
+  const h1 = fx.updateBranch();
+  const r = await review(fx, w);
+  assert.equal(r.status, 'posted');
+  assert.equal(w.posts, 1, 'nothing sent for the merged head');
+  assert.equal(lastCheck(w).head_sha, h1);
+  assert.equal(lastCheck(w).conclusion, 'success');
+  assert.equal(lastCheck(w).output.title, `Independent pass (1 note), carried over from ${h0.slice(0, 12)}`);
+  assert.match(lastCheck(w).output.summary, /It was given for [0-9a-f]{12} and covers this head: the one commit since merges main/);
+  const line = ledger(fx).at(-1);
+  assert.deepEqual([line.t, line.head, line.carried_from, line.conclusion], ['posted', h1, h0, 'pass']);
+  const n = w.checks.length;
+  assert.equal((await review(fx, w)).status, 'posted');
+  assert.equal(w.checks.length, n, 'posted once');
+  fx.commitOwn('dashboard/core/widget.js', "'use strict';\nmodule.exports = { size: (s) => (s === '' ? 0 : s.length + 0) };\n");
+  assert.equal((await review(fx, w)).status, 'posted');
+  assert.equal(w.posts, 2, 'a change of its own is reviewed again');
+  assert.equal(lastCheck(w).output.title, 'Independent pass (1 note)');
+});
+
+test('Eric\'s review of an agent candidate\'s head stands in for the model\'s with nothing reserved; a pass already posted stays', async (t) => {
+  const fx = fixture(t);
+  const w = world(fx);
+  assert.equal((await review(fx, w, { env: { AGENT_REVIEW_ENABLED: 'false' } })).status, 'off');
+  assert.equal(lastCheck(w).output.title, 'Missing: the model review is off');
+  assert.ok(lastCheck(w).output.summary.includes(`/reviewed ${fx.head}\n`));
+  w.comments.push(comment(80, `/reviewed ${fx.head}`));
+  const o = await review(fx, w, { env: { AGENT_REVIEW_ENABLED: 'false' } });
+  assert.equal(o.status, 'owner_override');
+  assert.equal(lastCheck(w).conclusion, 'neutral');
+  assert.equal(w.posts, 0);
+  assert.deepEqual(ledger(fx), []);
+  // A model pass posted first is not replaced by the override.
+  const fx2 = fixture(t);
+  const w2 = world(fx2);
+  assert.equal((await review(fx2, w2)).status, 'posted');
+  const n = w2.checks.length;
+  w2.comments.push(comment(81, `/reviewed ${fx2.head}`));
+  const kept = await review(fx2, w2);
+  assert.equal(kept.status, 'posted');
+  assert.match(kept.says, /The model's pass on [0-9a-f]{12} stands/);
+  assert.equal(w2.checks.length, n);
+  assert.equal(lastCheck(w2).conclusion, 'success');
+});
+
+test('every check names its state: Failed for a required check that failed or changes required, Missing for insufficient evidence', async (t) => {
+  const fx = fixture(t);
+  const w = world(fx);
+  w.required.test = 'failure';
+  assert.equal((await review(fx, w)).status, 'not_ready');
+  assert.equal(lastCheck(w).output.title, 'Failed: test did not pass');
+  assert.equal(lastCheck(w).conclusion, 'failure');
+  assert.equal(AR.verdictCheck('a'.repeat(40), 'rv-1', { result: 'changes_required', findings: [{ severity: 'high', summary: 'x' }], summary: 's' }, 'm', null).output.title, 'Failed: changes required (1 high)');
+  assert.equal(AR.verdictCheck('a'.repeat(40), 'rv-1', { result: 'insufficient_evidence', findings: [], summary: 's' }, 'm', null).output.title, 'Missing: insufficient evidence');
 });
 
 test('the sweep settles an attempt whose pull request moved on, without posting on the old head', async (t) => {
@@ -355,8 +553,10 @@ test('the sweep settles an attempt whose pull request moved on, without posting 
   assert.equal((await review(fx, w)).status, 'uncertain');
   fx.pull.head.sha = 'f'.repeat(40);
   const out = await AR.sweep({ env: ENV, cwd: fx.runner(), fetchImpl: w.fetch, now: () => w.clock, policy: POLICY });
-  assert.equal(out.length, 1);
-  assert.equal(out[0].status, 'settled');
+  // The settled attempt, then the open pull request read for an approval:
+  // its head is not one GitHub's Git holds, so nothing is picked up.
+  assert.deepEqual(out.map((o) => o.status), ['settled', 'unreadable']);
+  assert.match(out[1].says, /#3 f{12} could not be fetched; no approval picked up/);
   assert.equal(ledger(fx).at(-1).state, 'response');
   assert.equal(w.checks.length, 0);
   assert.equal(w.posts, 1);

@@ -21,12 +21,20 @@
 //   preflight a free handshake: the key and model answer GET /v1/models, the
 //             ledger reads; nothing is reserved or sent
 //
-// Conclusions on the agent-review check: pass is success, changes_required
-// failure; anything that needs Eric (insufficient evidence, a ceiling, an
-// unreadable answer, a lost attempt, the review off) is action_required. A
-// change that is not an agent candidate is never reviewed by a model:
-// agent-checks.yml posts its check, neutral for Eric's own change and
-// action_required for any other until his eric-reviewed dispatch.
+// The agent-review check names its state first (hardening, 2026-10-27):
+//   Independent pass   the model passed this head (success), or an earlier
+//                      head whose change carries over (agent-owner-review.js)
+//   Owner override     Eric reviewed this head himself (neutral): his
+//                      "/reviewed <head>" comment or his approval at it
+//   Failed             changes required, a required check failed, the
+//                      candidate does not hold, or a self-review (failure)
+//   Invalidated        Eric reviewed an earlier head that does not carry
+//                      over to this one (action_required)
+//   Missing            no review of this head: the review off, a ceiling, an
+//                      unreadable answer, a lost attempt (action_required)
+// A change that is not an agent candidate is never reviewed by a model: only
+// Eric's own review of its exact head clears it. Nothing in its commits (the
+// opener, the branch, an author) counts as one.
 
 const crypto = require('crypto');
 const fs = require('fs');
@@ -34,6 +42,7 @@ const { spawnSync } = require('child_process');
 const L = require('./agent-ledger');
 const G = require('./agent-guard');
 const { candidateDiff } = require('./backlog-promote');
+const OR = require('./agent-owner-review');
 
 const OPENAI = 'https://api.openai.com/v1';
 const CHECK = 'agent-review';
@@ -200,8 +209,22 @@ function github({ token, repo, fetchImpl }) {
     try { json = JSON.parse(text); } catch (_) { json = null; }
     return { status: res.status, json };
   };
+  // Every page of a list, or null when one cannot be read.
+  const all = async (p) => {
+    const out = [];
+    for (let page = 1; page <= 10; page += 1) {
+      const r = await call('GET', `${p}${p.includes('?') ? '&' : '?'}per_page=100&page=${page}`);
+      if (r.status !== 200 || !Array.isArray(r.json)) return null;
+      out.push(...r.json);
+      if (r.json.length < 100) return out;
+    }
+    return null;
+  };
   return {
     pull: async (n) => { const r = await call('GET', `/repos/${repo}/pulls/${n}`); return r.status === 200 ? r.json : null; },
+    comments: (n) => all(`/repos/${repo}/issues/${n}/comments`),
+    reviews: (n) => all(`/repos/${repo}/pulls/${n}/reviews`),
+    openPulls: () => all(`/repos/${repo}/pulls?state=open&base=main`),
     issue: async (n) => { const r = await call('GET', `/repos/${repo}/issues/${n}`); return r.status === 200 ? r.json : null; },
     checks: async (sha) => { const r = await call('GET', `/repos/${repo}/commits/${sha}/check-runs?per_page=100&filter=latest`); return r.status === 200 && r.json && Array.isArray(r.json.check_runs) ? r.json.check_runs : null; },
     post: async (o) => { const r = await call('POST', `/repos/${repo}/check-runs`, o); return { ok: r.status === 201, status: r.status }; },
@@ -222,15 +245,19 @@ function requiredState(runs) {
 function checkBody({ head, conclusion, title, summary, text, runUrl }) {
   return { name: CHECK, head_sha: head, status: 'completed', conclusion, details_url: runUrl || undefined, output: { title: oneLine(title, 200), summary: String(summary || '').slice(0, 60000), text: text ? String(text).slice(0, 60000) : undefined } };
 }
-function verdictCheck(head, att, verdict, model, runUrl) {
+const STATE = { pass: 'Independent pass', changes_required: 'Failed: changes required', insufficient_evidence: 'Missing: insufficient evidence' };
+// `carried`: the earlier head the verdict was given for, when it carries
+// over to this one (agent-owner-review.js carriesOver).
+function verdictCheck(head, att, verdict, model, runUrl, carried = null) {
   const conclusion = verdict.result === 'pass' ? 'success' : verdict.result === 'changes_required' ? 'failure' : 'action_required';
   const counts = ['high', 'medium', 'low', 'note'].map((s) => [s, verdict.findings.filter((f) => f.severity === s).length]).filter(([, n]) => n);
   const lines = verdict.findings.map((f) => `- **${f.severity}**${f.path ? ` \`${f.path}${f.line ? `:${f.line}` : ''}\`` : ''}: ${f.summary}`);
   const checks = (verdict.checks || []).map((c) => `- ${c.met === 'yes' ? 'Met' : c.met === 'no' ? 'Not met' : 'Unknown'} (${c.kind === 'negative' ? 'negative case' : 'acceptance check'}): ${c.item}${c.evidence ? ` — ${c.evidence}` : ''}`);
+  const over = carried ? ` It was given for ${carried.from.slice(0, 12)} and covers this head: ${OR.carriedWords(carried)}. Nothing was sent for this head.` : '';
   return checkBody({
     head, conclusion, runUrl,
-    title: `${verdict.result}${counts.length ? ` (${counts.map(([s, n]) => `${n} ${s}`).join(', ')})` : ''}`,
-    summary: `${verdict.summary || 'No summary given.'}\n\nModel ${model || 'unknown'}, attempt \`${att}\`. Eric merges; this review merges and approves nothing.`,
+    title: `${STATE[verdict.result]}${counts.length ? ` (${counts.map(([s, n]) => `${n} ${s}`).join(', ')})` : ''}${carried ? `, carried over from ${carried.from.slice(0, 12)}` : ''}`,
+    summary: `${verdict.summary || 'No summary given.'}\n\nModel ${model || 'unknown'}, attempt \`${att}\`, result ${verdict.result}.${over} Eric merges; this review merges and approves nothing.${conclusion === 'success' ? '' : `\n\n${OR.HOW(head)}`}`,
     text: [lines.join('\n'), checks.length ? `The task, line by line:\n${checks.join('\n')}` : ''].filter(Boolean).join('\n\n') || undefined,
   });
 }
@@ -242,6 +269,55 @@ function shownDiff(cwd, base, head, real) {
   return d.status === 0 ? { diff: d.raw, bundle: true } : null;
 }
 
+// --- Eric's own review --------------------------------------------------------
+
+const ownerOf = (env) => env.GITHUB_REPOSITORY_OWNER || String(env.GITHUB_REPOSITORY || '').split('/')[0] || null;
+// The agent-review check on a head now, as GitHub reads it (the latest).
+const latestReview = (runs) => (runs || []).filter((r) => r.name === CHECK && r.app && r.app.id === 15368).sort((a, b) => b.id - a.id)[0] || null;
+const sameCheck = (run, c) => {
+  const want = c.output || c;
+  return Boolean(run && run.status === 'completed' && run.conclusion === c.conclusion && run.output && run.output.title === want.title && run.output.summary === want.summary);
+};
+
+// Eric's state at a head (agent-owner-review.js) and its check. `always` posts it
+// whatever it is (a change no model reviews); otherwise only an override is
+// posted, never over a model's pass already on the head. Returns
+// { status, says, st }: posted, unchanged, kept (a pass stands), none (no
+// override; the caller goes on) or unreadable.
+async function ownerReview({ gh, cwd, base, pr, head, owner, runUrl, always, model = null }) {
+  const [comments, reviews] = [await gh.comments(pr), await gh.reviews(pr)];
+  if (!comments || !reviews) return { status: 'unreadable', says: `The comments and reviews of #${pr} could not be read; nothing posted.` };
+  const { receipts, ignored } = OR.receiptsOf({ comments, reviews, owner });
+  const st = OR.ownerState({ cwd, base, head, receipts });
+  if (st.state !== 'owner_override' && !always) return { status: 'none', st, says: `No review by ${owner || 'the owner'} covers ${head.slice(0, 12)}.` };
+  const c = OR.stateCheck({ head, st, owner: owner || 'the owner', runUrl, model, ignored });
+  const now = latestReview(await gh.checks(head));
+  if (st.state === 'owner_override' && !always && now && now.status === 'completed' && now.conclusion === 'success') return { status: 'kept', st, says: `The model's pass on ${head.slice(0, 12)} stands; ${owner}'s review is on record too.` };
+  if (sameCheck(now, c)) return { status: 'unchanged', st, says: `${c.title} (already posted).` };
+  const r = await gh.post(checkBody({ head, conclusion: c.conclusion, title: c.title, summary: c.summary, runUrl }));
+  if (!r.ok) throw new Error(`the ${CHECK} check could not be posted (HTTP ${r.status})`);
+  return { status: 'posted', st, says: `${c.title}.` };
+}
+
+// A pass the model gave an earlier head of this pull request, for the same
+// task version and review configuration, that covers this head: the only
+// commits since merge main and the patch is the same. Only when this head
+// has no attempt of its own; the verdict's MAC is checked as decideReview
+// checks it.
+function carriedPass(entries, { key, bind, binding, cwd, base }) {
+  const atts = L.attempts(entries).filter((a) => a.reserve.kind === 'review');
+  if (atts.some((a) => a.reserve.binding === binding)) return null;
+  for (const a of [...atts].reverse()) {
+    const b = a.reserve.bind || {};
+    if (b.repo !== bind.repo || b.pr !== bind.pr || b.head === bind.head || b.issue !== bind.issue || b.task_sha256 !== bind.task_sha256 || b.prompt !== bind.prompt || b.model !== bind.model) continue;
+    const v = a.response && a.response.verdict;
+    if (!v || v.result !== 'pass' || !a.posted.length || !L.macOk(key, { ...a.response, binding: a.reserve.binding })) continue;
+    const c = OR.carriesOver(cwd, { from: b.head, to: bind.head, base });
+    if (c.ok) return { attempt: a, verdict: v, model: a.response.model || null, carried: { from: b.head, merges: c.merges, patch: c.patch } };
+  }
+  return null;
+}
+
 // --- One head ----------------------------------------------------------------
 
 // The whole review of one pull request head. Returns { status, says, posted }.
@@ -251,7 +327,8 @@ async function reviewHead({ pr, head, env = process.env, cwd = process.cwd(), re
   const gh = github({ token: env.GITHUB_TOKEN, repo, fetchImpl });
   const say = (status, says, extra = {}) => ({ status, says, pr, head, ...extra });
   const post = async (o) => { const r = await gh.post(o); if (!r.ok) throw new Error(`the ${CHECK} check could not be posted (HTTP ${r.status})`); return true; };
-  const needsEric = (title, summary) => post(checkBody({ head, conclusion: 'action_required', title, summary: `${summary}\n\nNothing was merged or approved. Eric can re-run this review (Actions, agent-review, Run workflow) or review the change himself.`, runUrl }));
+  const needsEric = (title, summary) => post(checkBody({ head, conclusion: 'action_required', title, summary: `${summary}\n\nNothing was merged or approved. Eric can re-run this review (Actions, agent-review, Run workflow) or review the change himself.\n\n${OR.HOW(head)}`, runUrl }));
+  const owner = ownerOf(env);
   // 0. The ledger's key: without it no verdict can be signed or checked.
   const key = L.ledgerKey(env);
   if (!key) return say('not_configured', NO_LEDGER_KEY);
@@ -265,20 +342,32 @@ async function reviewHead({ pr, head, env = process.env, cwd = process.cwd(), re
   const f = git(cwd, ['fetch', '-q', '--no-tags', remote, `+refs/heads/${p.base.ref}:refs/remotes/${remote}/${p.base.ref}`, `+refs/pull/${pr}/head:refs/remotes/pr/${pr}`]);
   if (f.status !== 0 || git(cwd, ['rev-parse', '--verify', '-q', `${head}^{commit}`]).out !== head) return say('unreadable', `${head.slice(0, 12)} could not be fetched; nothing reviewed.`);
   const botLogin = env.BUILDER_APP_SLUG ? `${env.BUILDER_APP_SLUG}[bot]` : null;
+  const base = `refs/remotes/${remote}/${p.base.ref}`;
+  const own = (always, model) => ownerReview({ gh, cwd, base, pr, head, owner, runUrl, always, model });
 
   // 2. The agent checks, free, before anything is paid for.
-  const g = await G.prCheck({ cwd, base: `refs/remotes/${remote}/${p.base.ref}`, head, branch: p.head.ref, author: p.user && p.user.login, botLogin, issueOf: gh.issue, pr, policy });
-  if (g.agent === false) return say('owner', 'Not an agent candidate: agent-checks posts its review check; no model review.');
-  if (!g.ok) { await post(checkBody({ head, conclusion: 'failure', title: 'Not reviewed: the agent candidate does not hold', summary: g.reasons.map((r) => `- ${r}`).join('\n'), runUrl })); return say('refused', `Not reviewed: ${g.reasons.join('; ')}`, { posted: true }); }
+  const g = await G.prCheck({ cwd, base, head, branch: p.head.ref, author: p.user && p.user.login, botLogin, issueOf: gh.issue, pr, policy });
+  // A change that is not an agent candidate: no model reviews it, and only
+  // Eric's own review of this head (or one it carries over from) clears it.
+  if (g.agent === false) {
+    const o = await own(true, 'Not an agent candidate: no model reviews it.');
+    return say(o.status === 'unreadable' ? 'unreadable' : o.st.state, o.says, { posted: o.status === 'posted' });
+  }
+  if (!g.ok) { await post(checkBody({ head, conclusion: 'failure', title: 'Failed: the agent candidate does not hold', summary: g.reasons.map((r) => `- ${r}`).join('\n'), runUrl })); return say('refused', `Not reviewed: ${g.reasons.join('; ')}`, { posted: true }); }
   // A backlog task the PM stopped on reads [BLOCKED: …] at its head: it
   // waits for Eric, and no paid review is asked for it.
   if (g.task.backlog) {
     const row = G.backlogTask(cwd, head, g.task.number);
     if (row.block && row.block.status && row.block.status.kind === 'blocked') return say('skipped', `${g.task.number} reads ${row.block.status.text} at ${head.slice(0, 12)}: it waits for Eric; nothing reviewed or paid.`);
   }
+  // Eric reviewed this head himself: his review stands in for the model's
+  // and nothing is paid for; a model pass already on the head stays.
+  const o = await own(false);
+  if (o.status === 'unreadable') return say('unreadable', o.says);
+  if (o.status !== 'none') return say(o.status === 'kept' ? 'posted' : 'owner_override', o.says, { posted: o.status === 'posted' });
   const req = requiredState(await gh.checks(head));
   const failed = REQUIRED.filter((n) => !['success', 'pending', 'missing'].includes(req[n]));
-  if (failed.length) { await post(checkBody({ head, conclusion: 'failure', title: `Not reviewed: ${failed.join(', ')} did not pass`, summary: `The model is asked only about a head whose test, agent-guard and agent-verify checks passed. ${failed.map((n) => `${n}: ${req[n]}`).join(', ')}.`, runUrl })); return say('not_ready', `${failed.join(', ')} did not pass; nothing paid.`, { posted: true }); }
+  if (failed.length) { await post(checkBody({ head, conclusion: 'failure', title: `Failed: ${failed.join(', ')} did not pass`, summary: `The model is asked only about a head whose test, agent-guard and agent-verify checks passed. ${failed.map((n) => `${n}: ${req[n]}`).join(', ')}.`, runUrl })); return say('not_ready', `${failed.join(', ')} did not pass; nothing paid.`, { posted: true }); }
   const waiting = REQUIRED.filter((n) => req[n] !== 'success');
   if (waiting.length) return say('waiting', `Waiting for ${waiting.map((n) => `${n} (${req[n]})`).join(', ')}; the run after them reviews it.`);
 
@@ -291,16 +380,27 @@ async function reviewHead({ pr, head, env = process.env, cwd = process.cwd(), re
     const [author, committer, body = ''] = rec.replace(/^\n/, '').split('\x00');
     ids.push(author, committer, ...[...body.matchAll(TRAILER_RE)].map((m) => m[2]));
   }
-  if (ids.some((x) => REVIEWER_KIN_RE.test(x))) { await post(checkBody({ head, conclusion: 'failure', title: 'Not reviewed: the reviewer would review its own kind\'s work', summary: 'A commit names an OpenAI assistant as author, committer or co-author.', runUrl })); return say('refused', 'self review', { posted: true }); }
+  if (ids.some((x) => REVIEWER_KIN_RE.test(x))) { await post(checkBody({ head, conclusion: 'failure', title: 'Failed: the reviewer would review its own kind\'s work', summary: 'A commit names an OpenAI assistant as author, committer or co-author.', runUrl })); return say('refused', 'self review', { posted: true }); }
   const shown = shownDiff(cwd, mergeBase, head, real);
   if (!shown) return say('unreadable', 'The diff could not be computed; nothing reviewed.');
-  if (shown.diff.length > policy.review.max_diff_chars) { await needsEric('Not reviewed: the diff is too large for the unattended review', `The diff is ${shown.diff.length} characters${shown.bundle ? ' (the bundle left out)' : ''}, over ${policy.review.max_diff_chars}. No model was asked.`); return say('refused', 'diff too large', { posted: true }); }
+  if (shown.diff.length > policy.review.max_diff_chars) { await needsEric('Missing: the diff is too large for the unattended review', `The diff is ${shown.diff.length} characters${shown.bundle ? ' (the bundle left out)' : ''}, over ${policy.review.max_diff_chars}. No model was asked.`); return say('refused', 'diff too large', { posted: true }); }
 
   // 3. The ledger decides.
   const config = reviewConfig(env, policy);
   const bind = bindingFields({ repo, pr, head, mergeBase, diffSha: real.diff_sha256, task: g.task, config });
   const binding = L.bindingOf(bind);
-  if (!env.OPENAI_API_KEY || !MODEL_RE.test(config.model)) { await needsEric('Not reviewed: the reviewer is not configured', 'OPENAI_API_KEY (secret) and OPENAI_REVIEW_MODEL (variable) are Eric\'s to set.'); return say('not_configured', 'not configured', { posted: true }); }
+  // A pass the model gave an earlier head carries over when the only
+  // commits since merge main and the patch is the same: nothing is sent.
+  const held = L.read(cwd, { remote });
+  const carry = held.error ? null : carriedPass(held.entries, { key, bind, binding, cwd, base });
+  if (carry) {
+    const c = verdictCheck(head, carry.attempt.id, carry.verdict, carry.model, runUrl, carry.carried);
+    if (sameCheck(latestReview(await gh.checks(head)), c)) return say('posted', `${c.output.title} (already posted); nothing sent.`, { reused: true });
+    await post(c);
+    L.transact(cwd, { remote, decide: () => ({ append: [{ t: 'posted', id: carry.attempt.id, conclusion: 'pass', head, carried_from: carry.carried.from, at: new Date(now()).toISOString() }] }), message: `review carried ${carry.attempt.id}` });
+    return say('posted', `${c.output.title}; nothing sent.`, { posted: true, result: 'pass', attempt: carry.attempt.id, reused: true });
+  }
+  if (!env.OPENAI_API_KEY || !MODEL_RE.test(config.model)) { await needsEric('Missing: the reviewer is not configured', 'OPENAI_API_KEY (secret) and OPENAI_REVIEW_MODEL (variable) are Eric\'s to set.'); return say('not_configured', 'not configured', { posted: true }); }
   const messages = buildPrompt({ task: g.task, head, mergeBase, files: real.files, diff: shown.diff, bundle: shown.bundle, version: policy.review.prompt });
   const tokens = Math.ceil(JSON.stringify(messages).length / 3) + policy.review.max_completion_tokens;
   const run = env.GITHUB_RUN_ID ? `${env.GITHUB_RUN_ID}/${env.GITHUB_RUN_ATTEMPT || 1}` : 'local';
@@ -316,7 +416,7 @@ async function reviewHead({ pr, head, env = process.env, cwd = process.cwd(), re
     const d = L.transact(cwd, { remote, decide, message: `review ${pr} ${head.slice(0, 12)}`, beforePush: hooks.beforeReserve });
     if (d.error) return say('ledger', `The ledger could not be used (${d.error}); nothing sent.`);
     if (d.action === 'off') {
-      await needsEric('Not reviewed: the model review is off', 'AGENT_REVIEW_ENABLED is not "true" (a repository variable, Eric\'s). Nothing was reserved or sent.');
+      await needsEric('Missing: the model review is off', 'AGENT_REVIEW_ENABLED is not "true" (a repository variable, Eric\'s). Nothing was reserved or sent.');
       return say('off', 'review off; nothing reserved', { posted: true });
     }
     if (d.action === 'post') {
@@ -325,7 +425,7 @@ async function reviewHead({ pr, head, env = process.env, cwd = process.cwd(), re
       record({ t: 'posted', id: d.attempt.id, conclusion: d.verdict.result, at: new Date(now()).toISOString() }, `review posted ${d.attempt.id}`);
       return say('posted', `Posted ${d.verdict.result} for ${head.slice(0, 12)} from attempt ${d.attempt.id}${d.attempt.response.via === 'reconcile' ? ' (recovered from the stored completion)' : ''}; nothing sent now.`, { posted: true, result: d.verdict.result, attempt: d.attempt.id, reused: true });
     }
-    if (d.action === 'refuse') { await needsEric('Not reviewed: a review ceiling holds', d.why); return say('refused', d.why, { posted: true }); }
+    if (d.action === 'refuse') { await needsEric(/fails its check/.test(d.why) ? 'Missing: the held verdict fails its check' : 'Missing: a review ceiling holds', d.why); return say('refused', d.why, { posted: true }); }
     if (d.action === 'reconcile') {
       const a = d.attempt;
       const found = await findStored({ fetchImpl, env, id: a.id });
@@ -334,7 +434,7 @@ async function reviewHead({ pr, head, env = process.env, cwd = process.cwd(), re
         const rec = { ...responseOf(found.completion, { id: a.id, binding, key, via: 'reconcile' }), at: new Date(now()).toISOString() };
         const r = record(rec, `review reconciled ${a.id}`);
         if (r.error) return say('uncertain', `Attempt ${a.id} was found at OpenAI but its verdict could not be recorded (${r.error}); nothing sent.`, { attempt: a.id });
-        if (!rec.verdict) { await needsEric('Not reviewed: the model\'s answer was not a verdict', `Attempt ${a.id} answered${rec.finish ? ` (finish reason ${rec.finish})` : ''}, but not with the JSON verdict asked for.`); return say('unreadable', 'answer not a verdict', { posted: true, attempt: a.id }); }
+        if (!rec.verdict) { await needsEric('Missing: the model\'s answer was not a verdict', `Attempt ${a.id} answered${rec.finish ? ` (finish reason ${rec.finish})` : ''}, but not with the JSON verdict asked for.`); return say('unreadable', 'answer not a verdict', { posted: true, attempt: a.id }); }
         continue;
       }
       const age = now() - Date.parse(a.reserve.at);
@@ -350,8 +450,8 @@ async function reviewHead({ pr, head, env = process.env, cwd = process.cwd(), re
     const r = hooks.failRecord ? { error: 'simulated save failure' } : record(out, `review ${out.state} ${d.id}`);
     if (r.error) return say('uncertain', `Attempt ${d.id} was sent (${out.state}) and its outcome could not be recorded (${r.error}); the next run reconciles it from OpenAI's stored completion before anything is sent again.`, { attempt: d.id });
     if (out.state === 'unknown') return say('uncertain', `Attempt ${d.id} may have been accepted (${out.error}); nothing more is sent until it is reconciled.`, { attempt: d.id });
-    if (out.state === 'failed') { await needsEric('Not reviewed: OpenAI refused the request', `Attempt ${d.id}: ${out.error}. It counts toward the ceilings; a re-run sends another only within them.`); return say('failed', out.error, { posted: true, attempt: d.id }); }
-    if (!out.verdict) { await needsEric('Not reviewed: the model\'s answer was not a verdict', `Attempt ${d.id} answered${out.finish ? ` (finish reason ${out.finish})` : ''}, but not with the JSON verdict asked for.`); return say('unreadable', 'answer not a verdict', { posted: true, attempt: d.id }); }
+    if (out.state === 'failed') { await needsEric('Missing: OpenAI refused the request', `Attempt ${d.id}: ${out.error}. It counts toward the ceilings; a re-run sends another only within them.`); return say('failed', out.error, { posted: true, attempt: d.id }); }
+    if (!out.verdict) { await needsEric('Missing: the model\'s answer was not a verdict', `Attempt ${d.id} answered${out.finish ? ` (finish reason ${out.finish})` : ''}, but not with the JSON verdict asked for.`); return say('unreadable', 'answer not a verdict', { posted: true, attempt: d.id }); }
   }
   return say('uncertain', 'The ledger did not settle in three rounds; nothing more sent.');
 }
@@ -382,6 +482,21 @@ async function sweep({ env = process.env, cwd = process.cwd(), remote = 'origin'
     else if (!found.error && age >= policy.review.unknown_grace_minutes * 60000) rec = { t: 'outcome', id: a.id, state: 'lost', error: `not found at OpenAI after ${Math.round(age / 60000)} min` };
     if (rec) L.transact(cwd, { remote, decide: () => ({ append: [{ ...rec, at: new Date(now()).toISOString() }] }), message: `review settled ${a.id}` });
     out.push({ status: rec ? 'settled' : 'uncertain', pr, head, says: `#${pr} moved on from ${head.slice(0, 12)}; attempt ${a.id} ${rec ? `recorded as ${rec.state}` : `still open (${found.error || 'young'})`}.` });
+  }
+  // Eric's approvals: an approving review starts no trusted run of its own
+  // (a pull_request_review run is the pull request's own workflow), so the
+  // sweep reads every open pull request and posts an override his review
+  // covers. Nothing else is posted here and nothing is paid for.
+  const open = await gh.openPulls();
+  if (!open) { out.push({ status: 'unreadable', says: 'The open pull requests could not be read; no approval picked up.' }); return out; }
+  for (const p of open) {
+    const pr = p.number;
+    const head = p.head && p.head.sha;
+    if (!Number.isInteger(pr) || !SHA_RE.test(String(head)) || seen.has(`${pr}@${head}`)) continue;
+    const f = git(cwd, ['fetch', '-q', '--no-tags', remote, `+refs/heads/${p.base.ref}:refs/remotes/${remote}/${p.base.ref}`, `+refs/pull/${pr}/head:refs/remotes/pr/${pr}`]);
+    if (f.status !== 0 || git(cwd, ['rev-parse', '--verify', '-q', `${head}^{commit}`]).out !== head) { out.push({ status: 'unreadable', pr, head, says: `#${pr} ${head.slice(0, 12)} could not be fetched; no approval picked up.` }); continue; }
+    const o = await ownerReview({ gh, cwd, base: `refs/remotes/${remote}/${p.base.ref}`, pr, head, owner: ownerOf(env), runUrl, always: false });
+    if (o.status !== 'none') out.push({ status: o.status, pr, head, says: o.says });
   }
   return out;
 }
@@ -434,7 +549,7 @@ async function main(argv) {
   }
   if (cmd === 'sweep') {
     const rs = await sweep({ runUrl });
-    summary(rs.length ? rs.map((r) => `- ${r.pr ? `#${r.pr} ` : ''}${r.says}`).join('\n') : 'No open review attempts.');
+    summary(rs.length ? rs.map((r) => `- ${r.pr ? `#${r.pr} ` : ''}${r.says}`).join('\n') : 'No open review attempts, and no approval to pick up.');
     return rs.some((r) => r.status === 'ledger') ? 1 : 0;
   }
   if (cmd === 'preflight') {

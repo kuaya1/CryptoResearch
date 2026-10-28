@@ -455,32 +455,14 @@ function commitsOf(cwd, base, head) {
 }
 const botEmailOf = (login) => (login ? `+${login}@users.noreply.github.com>` : null);
 // An agent candidate: its branch, its author or any of its commits is the
-// builder's. Anything else is not, and the agent checks pass it; whether
-// its agent-review is neutral is ownerChange's answer.
+// builder's. Anything else is not, and the agent checks pass it; its
+// agent-review waits for Eric's own review of its exact head
+// (agent-review.js, agent-owner-review.js).
 function isAgentPr({ branch, author, botLogin, commits, policy = loadPolicy() }) {
   if (String(branch || '').startsWith(policy.branch_prefix.split('/')[0] + '/')) return true;
   if (botLogin && author === botLogin) return true;
   const e = botEmailOf(botLogin);
   return Boolean(e && (commits || []).some((c) => c.author.endsWith(e) || c.committer.endsWith(e)));
-}
-// Branches only automation makes (the routines, the engineering lane, the
-// admission and intake workflows) and the identities an assistant or a bot
-// commits as.
-const AUTOMATION_BRANCH_RE = /^claude\/(backlog-|candidate-eng-|claims\/|admission-|intake-issue-)/;
-const AUTOMATION_IDENTITY_RE = /<noreply@anthropic\.com>$|\[bot\]/i;
-// Eric's own change: opened by the repository's owner, on no automation
-// branch, with no commit an assistant or a bot authored or committed. Only
-// that gets agent-checks' neutral agent-review; any other change that is not
-// an agent candidate waits for Eric's eric-reviewed dispatch for its exact
-// head (red-team review, 2026-10-27: #55, opened by github-actions[bot] with
-// Claude's commits, read as an owner change).
-function ownerChange({ branch, author, owner, commits }) {
-  const why = [];
-  if (!owner || String(author || '').toLowerCase() !== String(owner).toLowerCase()) why.push(`opened by ${oneLine(author, 60) || 'no one known'}, not by the repository's owner${owner ? ` ${oneLine(owner, 60)}` : ' (unknown)'}`);
-  if (AUTOMATION_BRANCH_RE.test(String(branch || ''))) why.push(`${oneLine(branch, 80)} is an automation branch`);
-  const bots = (commits || []).filter((c) => AUTOMATION_IDENTITY_RE.test(c.author) || AUTOMATION_IDENTITY_RE.test(c.committer));
-  if (bots.length) why.push(`${bots.length === 1 ? 'commit' : `${bots.length} commits, the first`} ${bots[0].sha.slice(0, 12)} by ${oneLine(AUTOMATION_IDENTITY_RE.test(bots[0].author) ? bots[0].author : bots[0].committer, 80)}`);
-  return { owner: why.length === 0, why };
 }
 function trailersOf(body) {
   const out = {};
@@ -519,14 +501,14 @@ function backlogTaskOf(block, { policy = loadPolicy() } = {}) {
 
 // The agent-guard check of a pull request. `pr` is its number (a backlog
 // task's candidate carries its status, which names it).
-async function prCheck({ cwd, base, head, branch, author, owner = null, botLogin, issueOf, pr = null, policy = loadPolicy() }) {
+async function prCheck({ cwd, base, head, branch, author, botLogin, issueOf, pr = null, policy = loadPolicy() }) {
   const mb = git(cwd, ['merge-base', base, head]).out;
   if (!SHA_RE.test(mb)) return { agent: null, ok: false, reasons: ['the pull request\'s merge base with main could not be read'] };
   const commits = commitsOf(cwd, mb, head) || [];
-  if (!isAgentPr({ branch, author, botLogin, commits, policy })) {
-    const o = ownerChange({ branch, author, owner, commits });
-    return { agent: false, owner: o.owner, why: o.why, ok: true, reasons: [], says: o.owner ? 'Owner change: not an agent candidate, so the agent checks do not apply. The required tests still do.' : `Not an agent candidate, and not Eric's own change (${o.why.join('; ')}): no model reviews it, and its agent-review waits for Eric's eric-reviewed dispatch for this exact head. The required tests still do.` };
-  }
+  // Who opened it, its branch and its commits' authors decide nothing more:
+  // its agent-review waits for Eric's own review of this exact head
+  // (hardening, 2026-10-27; a commit's metadata is not a review).
+  if (!isAgentPr({ branch, author, botLogin, commits, policy })) return { agent: false, ok: true, reasons: [], says: 'Not an agent candidate, so the agent checks do not apply; no model reviews it, and its agent-review waits for Eric\'s own review of this exact head. The required tests still apply.' };
   const reasons = [];
   const e = botEmailOf(botLogin);
   let trailers = null;
@@ -785,12 +767,12 @@ async function main(argv, { now = () => Date.now(), cwd = process.cwd(), env = p
   if (cmd === 'pr' || cmd === 'task-of') {
     const gh = githubApi({ token: process.env.GH_TOKEN, repo: process.env.GITHUB_REPOSITORY });
     const pr = /^[1-9][0-9]{0,9}$/.test(String(flags.pr || '')) ? Number(flags.pr) : null;
-    const r = await prCheck({ cwd, base: flags.base, head: flags.head, branch: flags.branch, author: flags.author, owner: flags.owner || process.env.GITHUB_REPOSITORY_OWNER || null, botLogin: process.env.BUILDER_APP_SLUG ? `${process.env.BUILDER_APP_SLUG}[bot]` : null, issueOf: gh.issue, pr, policy });
+    const r = await prCheck({ cwd, base: flags.base, head: flags.head, branch: flags.branch, author: flags.author, botLogin: process.env.BUILDER_APP_SLUG ? `${process.env.BUILDER_APP_SLUG}[bot]` : null, issueOf: gh.issue, pr, policy });
     if (cmd === 'task-of') {
       fs.writeFileSync(flags.out, JSON.stringify(r.agent ? { agent: true, ok: r.ok, template: r.task && r.task.template, tests: r.task ? r.task.tests : [], implementation: r.task ? r.task.implementation : [], merge_base: r.merge_base } : { agent: r.agent }, null, 2));
       return 0;
     }
-    out({ agent: r.agent, ok: r.ok, owner: r.agent === false ? r.owner : '', why: r.agent === false ? oneLine((r.why || []).join('; '), 600) : '' }, r.agent === false ? r.says : r.ok ? `Agent candidate for ${refOf(r.trailers.issue)} (${r.task.template}): its commits, its task and its change hold.` : `### Agent candidate refused\n\n${r.reasons.map((x) => `- ${x}`).join('\n')}`, r.ok ? null : { title: 'agent-guard', reasons: r.reasons });
+    out({ agent: r.agent, ok: r.ok }, r.agent === false ? r.says : r.ok ? `Agent candidate for ${refOf(r.trailers.issue)} (${r.task.template}): its commits, its task and its change hold.` : `### Agent candidate refused\n\n${r.reasons.map((x) => `- ${x}`).join('\n')}`, r.ok ? null : { title: 'agent-guard', reasons: r.reasons });
     return r.ok ? 0 : 1;
   }
   if (cmd === 'status') {
