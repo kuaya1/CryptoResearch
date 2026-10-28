@@ -64,7 +64,9 @@
 //     ended by then and each pair's close at that hour. The order in which
 //     the pairs' hours arrive never changes them, an hour before the funding
 //     is never in them, and an hour that arrives late corrects the hours
-//     after it;
+//     after it. An hour end is valued only by its own hour (PR 1b); only the
+//     newest, whose hour may not have arrived yet, takes the latest close,
+//     within the freshness window of now;
 //   - sizes from cr-trade-risk@2 (floored to the lot, every cost in), with
 //     the planned loss already at the stops counted against the 24-hour
 //     ceiling and the thesis's grant; an order's cash and fee are committed
@@ -505,10 +507,13 @@ function navAt(st, t) {
 
 // NAV at each hour's end from the first at or after the funding to t (F1):
 // the cash after the fills and exits of every hour ended by then, and each
-// quantity held then at its pair's latest close ended by then, within
-// NAV_PRICE_FRESH_MINUTES, else unknown. Derived from the journal on every
-// read, never written, so it does not depend on the order in which the pairs'
-// hours were applied. `after` leaves out the hour ends at or before it.
+// quantity held then at the close of its pair's hour that ends there, else
+// unknown (PR 1b: a past hour end is never valued at an earlier close). Only
+// an hour end after the pair's newest hour ended by t, whose own hour may not
+// have arrived yet, takes that newest close, and only while it is within
+// NAV_PRICE_FRESH_MINUTES of t, as NAV now does. Derived from the journal on
+// every read, never written, so it does not depend on the order in which the
+// pairs' hours were applied. `after` leaves out the hour ends at or before it.
 function navSeries(st, t, after = null) {
   if (st.funded === null) return [];
   const flows = [...st.flows].sort((a, b) => a.t - b.t);
@@ -520,7 +525,10 @@ function navSeries(st, t, after = null) {
     let k = seen.has(pair) ? seen.get(pair) : -1;
     while (k + 1 < list.length && list[k + 1].t + HOUR <= end) k++;
     seen.set(pair, k);
-    return k >= 0 && end - (list[k].t + HOUR) <= NAV_PRICE_FRESH_MINUTES * MIN ? list[k].close : null;
+    if (k < 0) return null;
+    if (list[k].t + HOUR === end) return list[k].close;
+    const newest = k === list.length - 1 || list[k + 1].t + HOUR > t;
+    return newest && t - (list[k].t + HOUR) <= NAV_PRICE_FRESH_MINUTES * MIN ? list[k].close : null;
   };
   let end = Math.ceil(Date.parse(st.funded_at) / HOUR) * HOUR;
   if (after !== null) end = higher(end, Math.floor(after / HOUR) * HOUR + HOUR);
