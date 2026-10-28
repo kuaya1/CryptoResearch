@@ -5,8 +5,14 @@
 // checked by the server with the bounds below; the price freshness is the
 // desk's own `freshness.price_stale_minutes`. Each starts unset, and an unset
 // one refuses every intent (unknown is never 0). A saved value outside the
-// bounds reads as unset, never applied. Nothing hands them to the trader yet:
-// Approve is wired to it later (blueprint slot 12). Reads only.
+// bounds reads as unset, never applied. The desk's adapter
+// (core/trader-desk.js, blueprint slot 12a) hands them to the trader when an
+// Approve or Halve becomes an order. Reads only.
+//
+// Beside them, in settings `trader.book` (slot 12a): the cash Eric funds the
+// trader's Paper Book with, once, and the venue's fee per trade as a share
+// of the notional. Neither has a default: unset, the adapter waits and
+// opens nothing, and an unknown fee is never read as 0.
 
 const { OpError } = require('./ops');
 
@@ -66,6 +72,40 @@ function validatePatch(p) {
   return out;
 }
 
+// The Paper Book's settings (`trader.book`): its funding and the venue fee.
+const BOOK_FIELDS = Object.freeze(['cash_usd', 'fee_rate']);
+const BOOK = Object.freeze({
+  cash_usd: decimal('Paper Book funding (USD)', '10000000', '$10,000,000'),
+  fee_rate: decimal('Venue fee (share of the notional)', '0.1', '0.1 (10%)'),
+});
+
+// The server's check of a `trader.book` patch; null unsets one.
+function validateBookPatch(p) {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) throw new OpError('INVALID', 'The Paper Book settings must be an object');
+  const out = {};
+  for (const [k, v] of Object.entries(p)) {
+    if (!BOOK[k]) throw new OpError('INVALID', `"${k}" is not a Paper Book setting (${BOOK_FIELDS.join(', ')})`);
+    if (v === null) { out[k] = null; continue; }
+    const r = BOOK[k].read(v);
+    if (r.error) throw new OpError('INVALID', r.error);
+    out[k] = r.value;
+  }
+  return out;
+}
+
+// The Paper Book's settings in force, and the names of those unset.
+function bookOf(ws) {
+  const saved = (ws.settings && ws.settings.trader && ws.settings.trader.book) || {};
+  const book = {};
+  const unset = [];
+  for (const k of BOOK_FIELDS) {
+    const r = saved[k] === null || saved[k] === undefined ? null : BOOK[k].read(saved[k]);
+    if (r && !r.error) book[k] = r.value;
+    else unset.push(k);
+  }
+  return { from: 'trader.book', book, unset };
+}
+
 // The rules in force for cr-trade-risk, and the names of those unset.
 function rulesOf(ws) {
   const saved = (ws.settings && ws.settings.trader && ws.settings.trader.rules) || {};
@@ -82,4 +122,4 @@ function rulesOf(ws) {
   return { version: VERSION, from: 'trader.rules', rules, unset };
 }
 
-module.exports = { VERSION, FIELDS, RULES, validatePatch, rulesOf };
+module.exports = { VERSION, FIELDS, RULES, validatePatch, rulesOf, BOOK_FIELDS, BOOK, validateBookPatch, bookOf };

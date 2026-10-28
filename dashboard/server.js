@@ -326,10 +326,14 @@ function validateSettingsPatch(patch, ws = null) {
     if (o.pregate_max_grade !== undefined && o.min_grade_new_entry !== undefined && o.pregate_max_grade > o.min_grade_new_entry) throw new OpError('INVALID', 'The highest grade closed without a Prosecutor cannot be above the minimum for a new entry');
     out.tickets = { sizing: o };
   }
-  if (patch.trader && patch.trader.rules !== undefined) {
-    // Eric's trader rules (Preferences > Screening; core/trader-rules.js
-    // rulesOf reads them with the same bounds). Null unsets one.
-    out.trader = { rules: require('./core/trader-rules').validatePatch(patch.trader.rules) };
+  if (patch.trader && (patch.trader.rules !== undefined || patch.trader.book !== undefined)) {
+    // Eric's trader rules (Preferences > Screening) and the Paper Book's
+    // funding and venue fee (slot 12a); core/trader-rules.js rulesOf and
+    // bookOf read them with the same bounds. Null unsets one.
+    const TR = require('./core/trader-rules');
+    out.trader = {};
+    if (patch.trader.rules !== undefined) out.trader.rules = TR.validatePatch(patch.trader.rules);
+    if (patch.trader.book !== undefined) out.trader.book = TR.validateBookPatch(patch.trader.book);
   }
   if (patch.alerts && patch.alerts.spread) {
     // Eric's spread-alert thresholds (core/spread.js thresholds reads them

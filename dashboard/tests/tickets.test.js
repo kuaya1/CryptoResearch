@@ -1603,7 +1603,7 @@ test('A06: a paper or archive step that failed after the decision is completed b
   assert.equal(T.view(s.ws, s.pid).ticket.decision.paper, 'open');
   assert.equal(notes.loadJournal(s.ws, s.pid).filter((e) => e.type === 'decision').length, 1, 'one journal entry');
   assert.equal(decisionLines(s).length, 1, 'one decision');
-  assert.deepEqual(decisionLines(s)[0].effects, { archive: null, paper: 'open', journal: 'entry' }, 'the consequences are stated with the decision');
+  assert.deepEqual(decisionLines(s)[0].effects, { archive: null, paper: 'open', journal: 'entry', trader: 'open' }, 'the consequences are stated with the decision');
   // An undone grant is never re-opened by replaying its request.
   T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'undo', request_id: 'req_a06_undo02' });
   T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve', request_id: 'req_a06_paper01' });
