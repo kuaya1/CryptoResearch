@@ -117,7 +117,7 @@ This is the "locked out of the merge button" symptom. The lock is the required `
 - `dashboard/web/src/views/system/PipelineCockpit.jsx:68` is the UI for `/api/pipeline`.
 - `dashboard/engineering/policy.js:12`, `github.js:17` and `reviewer.js:33` import `scripts/backlog-promote.js`.
 
-**Test baseline** (this branch, 2026-10-28T03:2xZ): `node dashboard/cli.js test` gives 1,345 tests: 1,344 pass, 0 fail, 1 todo (the journal gap, §3.3), in 146 s.
+**Test baseline** (this branch, 2026-10-28T03:2xZ): `node dashboard/cli.js test` gives 1,345 tests: 1,344 pass, 0 fail, 1 todo (the journal gap, §3.3), in 146 s. PR-A deleted 30 of them: on `main` after it (`da3e06d`) the suite gives 1,315 tests: 1,314 pass, 0 fail, 1 todo.
 
 ---
 
@@ -129,17 +129,17 @@ This is the "locked out of the merge button" symptom. The lock is the required `
 
 Every step is Eric's: GitHub configuration, credentials, and his scheduled work. Every step except the deletions can be reversed.
 
-**Status, 2026-10-27 (Eric approved this audit; Claude ran what needs no credential or security setting):**
+**Status, 2026-10-27, updated 2026-10-28 (Eric approved this audit; Claude ran what needs no credential or security setting):**
 
 | Step | State |
 |---|---|
 | 0 | Done. Copies in `Documents\cr-github-config-2026-10-27\`, with `deleted-branches.bundle` (the 62 heads, verified). |
 | 1 | Done. Eric deleted `automation-branches` (25967715). Claude applied the PUT at his word: `main-merge-requirements` (25967716) requires `test` alone, from app 15368, with no bypass (2026-10-28T03:49Z). |
 | 2 | Done. Eleven workflows disabled; only `test` is active. |
-| 3 | **Eric's, open.** |
+| 3 | Done on GitHub (checked 2026-10-28): 0 secrets, 0 variables, `can_approve_pull_request_reviews` false. Revoking the old keys at their consoles and uninstalling Builder App 5487887 are Eric's and cannot be seen from here. |
 | 4 | The local task `cr-at6-surge` is deleted. Routines A and B in claude.ai are Eric's. |
 | 5 | Done. #49 and #67 closed, `agent:build` deleted, `delete_branch_on_merge` on, 62 remote branches deleted (left: `main`, `agent-ledger`, `visual-proof`). The worktrees stay: most belong to Claude app sessions; the app removes them after 30 idle days. |
-| 6 | PR-A built locally on `claude/retire-agent-lane-ci`, with a correction (below). Not committed or pushed. |
+| 6 | PR-A merged as #71 (`da3e06d`, 2026-10-28T03:55Z), with a correction (below). PR-B is open: slot 5 of the supervised blueprint (5a, then 5b). |
 
 ### Step 0: keep rollback copies (outside the repo)
 
@@ -449,7 +449,7 @@ node dashboard/cli.js test
 ```
 
 - For UI changes, also run `npm --prefix dashboard/web run build` then `npm --prefix dashboard/web run check`, and commit the rebuilt bundle.
-- Claude quotes the counts line as printed (baseline: 1,345 / 1,344 pass / 0 fail / 1 todo). A failure is shown with its output, never summarized as a pass.
+- Claude quotes the counts line as printed (baseline after PR-A: 1,315 / 1,314 pass / 0 fail / 1 todo; each merged PR adds its own tests). A failure is shown with its output, never summarized as a pass.
 
 **3. Commit, push, open the PR. Only when Eric says so.**
 
