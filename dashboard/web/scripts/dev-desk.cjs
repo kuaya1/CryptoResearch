@@ -9,9 +9,11 @@
 // a project you stopped watching, an archived one, a holding, contract
 // screens, a market snapshot and generated FICTIONAL logos.
 //
-// Nothing leaves this PC: research runners, prices, DefiLlama, GoPlus and
-// wallets are stubbed off before the server starts, and no key is set. The
-// workspace lives in the OS temp folder and is deleted when this stops.
+// Nothing leaves this PC: research runners, prices, DefiLlama, GoPlus,
+// wallets and the trader's hourly read (GeckoTerminal, also once you fund the
+// book in Preferences) are stubbed off before the server starts, and no key
+// is set. The workspace lives in the OS temp folder and is deleted when this
+// stops.
 //   node scripts/dev-desk.cjs [--port 4790] [--info <file>]
 
 const fs = require('fs');
@@ -473,7 +475,7 @@ function contractFor(symbol) {
   research.hasDueWork = () => false;
   research.hasBackgroundWork = () => false;
   const offline = async () => ({ status: 'noop', message: 'FICTIONAL dev desk: offline' });
-  for (const m of ['fundamentals', 'screening']) {
+  for (const m of ['fundamentals', 'screening', 'trader-candles']) {
     const mod = require(`${ROOT}/core/${m}.js`);
     mod.isDue = () => false;
     mod.refresh = offline;

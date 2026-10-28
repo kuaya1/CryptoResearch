@@ -2,12 +2,13 @@
 // The review calendar is Review > Upcoming, and each model's route, keys and
 // limits are Preferences > Models & budget (DESIGN_AND_IA_BLUEPRINT.md §3.5).
 import {
-  h, card, table, stateText, tagChip, gradeBadge, fmtNum, fmtDate, fmtAgo, select, field, input, button, action, callout,
-  tabStrip, safeSection, waitingInstruction, PROVIDERS, PROVIDER_LABELS, onHoldOf, link, plural, submissionId,
+  h, card, table, stateText, tagChip, gradeBadge, fmtNum, fmtDate, fmtDateTime, fmtAgo, select, field, input, button, action, callout,
+  tabStrip, safeSection, waitingInstruction, PROVIDERS, PROVIDER_LABELS, onHoldOf, link, plural, submissionId, details, priceSpark, fmtChangePct,
 } from '../ui.js';
 import { comparisonBlock } from './project.js';
 import { stepWord, exitCell, deltaText } from '../pilot-board-model.js';
 import { splitPositions, returnWords, excursionWords, summaryLine, shadowRows, shadowCounts, shadowCohortLines } from '../paper-model.js';
+import * as TB from '../trader-book-model.js';
 
 const TABS = [
   ['runs', 'Research jobs'],
@@ -216,11 +217,12 @@ async function outcomesTab(ctx) {
   // the paper book stays readable when the outcomes cannot be read (L7).
   const digest = digestBar(ctx);
   const paper = paperCard(ctx);
+  const trader = traderCard(ctx);
   let o;
   try {
     o = await ctx.api.get('/api/research/outcomes');
   } catch (err) {
-    return h('div', null, await digest, await paper, card('After each report', h('p', { class: 'muted' }, `The report outcomes could not be read: ${err.message}`)));
+    return h('div', null, await digest, await paper, await trader, card('After each report', h('p', { class: 'muted' }, `The report outcomes could not be read: ${err.message}`)));
   }
   const days = o.horizons_days || [30, 60, 90, 120];
   const models = card('By model', table([
@@ -242,7 +244,7 @@ async function outcomesTab(ctx) {
     { label: 'Start', render: (r) => h('span', { class: 'small', title: r.note || (r.start.basis === 'run_packet' ? "When the research run's evidence packet was captured" : 'When the report was saved (it answers no run)') }, r.start.project ? `${fmtDate(r.start.at)}` : 'No price') },
     ...days.map((d) => ({ label: `${d}d vs BTC`, num: true, render: (r) => horizonCell(r.horizons.find((x) => x.days === d)) })),
   ], rows, { size: 50, label: 'Report outcomes', empty: 'No eligible reports yet.' }));
-  return h('div', null, await digest, await paper, models, list);
+  return h('div', null, await digest, await paper, await trader, models, list);
 }
 
 // The seven-day desk telemetry (tickets.digest): @6 reports completed,
@@ -325,6 +327,108 @@ async function paperCard(ctx) {
   ), { note: b.meaning, actions: [toggle] });
 }
 
+// The trader's Paper Book (cr-paper@2, slot 12c; trader-desk.js view through
+// GET /api/paper/trader): what an order would have done, with fills, fees,
+// slippage and stops, beside the PM Paper Book above and never added to it.
+// Read only: nothing here asks the book or the hourly read for anything.
+async function traderCard(ctx) {
+  const title = "Trader's Paper Book";
+  let v;
+  try {
+    v = await ctx.api.get('/api/paper/trader');
+  } catch (err) {
+    return card(title, h('p', { class: 'muted' }, `The trader's Paper Book could not be read: ${err.message}`));
+  }
+  const usd = (w) => h('span', { class: `num ${w.tone || ''}`.trim(), title: w.title || null, dataset: w.exact ? { exact: w.exact } : null }, w.text);
+  const amt = (s) => { const w = TB.amountWords(s); return h('span', { class: 'num', title: w.exact, dataset: w.exact ? { exact: w.exact } : null }, w.text); };
+  const proj = (x) => (x.project_id ? h('a', { href: `#/project/${encodeURIComponent(x.project_id)}/market` }, x.project || x.project_id) : h('span', { class: 'faint' }, '—'));
+  const state = (w, title = null) => h('span', { title }, stateText(w.text, w.tone));
+  const said = (text) => { const w = TB.sentenceWords(text); return h('span', { class: 'small', title: w.title }, w.text); };
+  const sub = (text, n) => h('h3', { class: 'small' }, `${text} (${n})`);
+
+  // The NAV line scales to its own range, so its change is said beside it.
+  const cell = (label, ...body) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '120px' } }, h('span', { class: 'small muted' }, label), ...body);
+  const line = TB.navLine(v);
+  const change = line.length > 1 && line[0] ? ((line[line.length - 1] - line[0]) / line[0]) * 100 : null;
+  const spark = line.length > 1 ? cell(`NAV, ${plural(line.length, 'hour')}`,
+    h('strong', { class: `num ${change > 0 ? 'pos' : change < 0 ? 'neg' : ''}`.trim() }, fmtChangePct(change)),
+    priceSpark(line, change, { width: 160, height: 32, label: `NAV over ${plural(line.length, 'closed hour')}` })) : null;
+  const facts = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '24px' } },
+    ...TB.bookFacts(v).map((f) => cell(f.label, h('strong', null, usd(f)))), spark);
+  const waits = v.waits && v.waits.length ? h('p', { class: 'small' }, v.waits.join(' '), ' ', link('Open Preferences > Screening', '#/research?tab=outcomes&prefs=screening')) : null;
+
+  const requests = v.requests.slice().sort((a, b) => String(b.decided_at || '').localeCompare(String(a.decided_at || '')));
+  const reqTable = pagedTable([
+    { label: 'Project', render: proj },
+    { label: 'Decision', render: (r) => h('span', { title: `${r.in_force ? 'In force' : 'No longer in force'} · decided ${fmtDateTime(r.decided_at)}` }, `${TB.decisionWords(r)} · ${fmtDate(r.decided_at)}`) },
+    { label: 'Pair', render: (r) => h('span', { class: 'small' }, r.pair || '—') },
+    { label: 'State', render: (r) => state(TB.phaseWords(r.phase)) },
+    { label: 'What happened', wrap: true, render: (r) => said(r.words) },
+  ], requests, { size: 25, label: 'Trader requests', empty: 'No approve or halve has asked the book yet.' });
+
+  const open = v.results.open_positions;
+  const closed = v.results.closed_positions;
+  const posTable = table([
+    { label: 'Project', render: proj },
+    { label: 'Pair', render: (p) => h('span', { class: 'small' }, p.pair) },
+    { label: 'Quantity', num: true, render: (p) => amt(p.quantity) },
+    { label: 'Entry (USD)', num: true, render: (p) => amt(p.entry_price) },
+    { label: 'Stop (USD)', num: true, render: (p) => amt(p.stop_loss_price) },
+    { label: 'Target (USD)', num: true, render: (p) => amt(p.take_profit_price) },
+    { label: 'Value', num: true, render: (p) => usd(TB.usdWords(p.value_usd, 'No hourly price within the book\'s freshness, so its value is unknown.')) },
+    { label: 'Unrealized', num: true, render: (p) => usd(TB.pnlWords(p.unrealized_pnl_usd, 'Its value is unknown.')) },
+  ], open, { empty: 'No open positions.' });
+  const closedTable = table([
+    { label: 'Project', render: proj },
+    { label: 'Pair', render: (p) => h('span', { class: 'small' }, p.pair) },
+    { label: 'Exit', render: (p) => (p.exit_words ? said(p.exit_words) : h('span', { class: 'faint' }, '—')) },
+    { label: 'Realized', num: true, render: (p) => usd(TB.pnlWords(p.realized_pnl_usd)) },
+  ], closed, { empty: 'No closed positions.' });
+
+  const ordTable = pagedTable([
+    { label: 'Project', render: proj },
+    { label: 'Side', render: (o) => TB.sideWords(o.side) },
+    { label: 'Pair', render: (o) => h('span', { class: 'small' }, o.pair || '—') },
+    { label: 'State', render: (o) => state(TB.orderStateWords(o.state), o.client_order_id) },
+    { label: 'Filled', num: true, render: (o) => h('span', { class: 'num' }, amt(o.filled), ' of ', amt(o.quantity)) },
+    { label: 'Notes', wrap: true, render: (o) => said(o.words || '') },
+  ], v.orders.slice().reverse(), { size: 25, label: 'Trader orders', empty: 'No orders yet.' });
+
+  const refTable = table([
+    { label: 'Project', render: proj },
+    { label: 'Order', render: (x) => h('span', { class: 'small' }, `${x.purpose === 'close' ? 'Sell' : 'Buy'}${x.request_pair ? ` ${x.request_pair}` : ''}`) },
+    { label: 'Why the book refused it', wrap: true, render: (x) => said(TB.refusalWords(x)) },
+  ], v.refusals, { empty: 'No refusals.' });
+
+  const navTable = pagedTable([
+    { label: 'Hour ending', render: (m) => h('span', { class: 'small' }, fmtDateTime(m.hour_end)) },
+    { label: 'NAV', num: true, render: (m) => usd(m.nav) },
+  ], TB.navRows(v), { size: 24, label: 'NAV by the hour', empty: 'No closed hour yet.' });
+
+  const c = v.candles;
+  const sources = c && c.sources && c.sources.length ? table([
+    { label: 'Pair', key: 'pair' },
+    { label: 'Pool', render: (s) => h('span', { class: 'small' }, `${s.pool_name || '—'}${s.dex ? ` · ${s.dex}` : ''}`) },
+    { label: 'Network', render: (s) => h('span', { class: 'small' }, s.network) },
+    { label: 'Chosen', render: (s) => h('span', { class: 'small' }, fmtDate(s.chosen_at)) },
+  ], c.sources) : h('p', { class: 'small muted' }, 'No pool chosen yet.');
+  const unknown = v.results.unknown && v.results.unknown.length ? details(`Not known (${v.results.unknown.length})`, h('ul', null, ...v.results.unknown.map((u) => h('li', null, said(u)))), { id: 'tb-unknown' }) : null;
+
+  return card(title, h('div', null,
+    h('p', { class: 'small muted' }, TB.summaryLine(v)),
+    waits,
+    facts,
+    sub('Your decisions', requests.length), reqTable,
+    sub('Open positions', open.length), posTable,
+    sub('Closed positions', closed.length), closedTable,
+    sub('Orders', v.orders.length), ordTable,
+    sub('Refusals', v.refusals.length), refTable,
+    details(`NAV by the hour (${v.results.nav_by_hour.length})`, navTable, { id: 'tb-nav' }),
+    details('Where the hours come from', h('div', null, h('p', { class: 'small muted' }, TB.candleWords(c)), sources), { id: 'tb-hours' }),
+    unknown,
+  ), { note: `cr-paper@2: what an order would have done, with fills, fees, slippage and stops. Kept apart from the PM Paper Book above and never added to it; nothing here is a real order. Lot ${v.venue.lot}, minimum order $${v.venue.min_notional_usd}. Reading this writes nothing.` });
+}
+
 // A long list a page at a time: the desk's claims are never drawn all at
 // once (they ran to hundreds of thousands of characters on one page).
 // The scout's list (core/scout.js view): what the morning sweep found, newest
@@ -377,10 +481,11 @@ function pagedTable(cols, rows, { size = 50, empty = '', label = 'Rows', st = { 
     prev.disabled = st.page === 0;
     const next = button('Next', () => { st.page += 1; draw(); holder.scrollIntoView({ block: 'nearest' }); }, { kind: 'small', key: `pg-${slug}-next` });
     next.disabled = st.page >= pages - 1;
-    holder.replaceChildren(
+    // replaceChildren would write a missing pager as the word "null".
+    holder.replaceChildren(...[
       table(cols, rows.slice(from, from + size), { empty }),
       pages > 1 ? h('nav', { class: 'pager', 'aria-label': `${label}: pages` }, h('span', { class: 'small muted', 'aria-live': 'polite' }, `${from + 1}–${Math.min(rows.length, from + size)} of ${rows.length} · page ${st.page + 1} of ${pages}`), prev, next) : null,
-    );
+    ].filter(Boolean));
   };
   draw();
   return holder;

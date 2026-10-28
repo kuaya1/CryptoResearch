@@ -219,11 +219,28 @@ test('12a end to end: Approve waits for the book, is refused by the exit cap, Ha
   assert.deepEqual(h3.map((x) => x.events.filter((e) => e.type === 'exit').map((e) => [e.reason, e.quantity, e.price])), [[], [['close', '1000', '0.85']]]);
   const done = mine(TD.requests(ws, { now: iso(n2) }), halve.decision_id);
   assert.equal(done.phase, 'closed');
-  assert.match(done.words, /Closed \(close\) at \$0\.85: -5\.1 realized/);
+  assert.match(done.words, /^Sold at \$0\.85: −\$5\.10 realized\.$/);
   const res = PT.results(ws, { now: iso(n2) });
   assert.deepEqual([res.nav_usd, res.cash_usd, res.realized_pnl_usd, res.fees_usd, res.open_positions.length], ['24994.9', '24994.9', '-5.1', '5.1', 0]);
   assert.deepEqual(TD.wanted(ws, { now: iso(n2) }), [], 'no hours are wanted once nothing is open or waiting');
   assert.equal(require('../core/portfolio').loadTransactions(ws).length, 0, 'Portfolio is untouched');
+
+  // 8. Outcomes > Paper Book (slot 12c) reads it all through the adapter:
+  // each decision with its phase, the refusal with its reason, each order
+  // and position with the decision it belongs to, NAV by the hour.
+  const v = TD.view(ws, { now: iso(n2) });
+  assert.deepEqual(v.book, BOOK);
+  assert.deepEqual(v.waits, []);
+  assert.deepEqual(v.requests.map((r) => [r.decision_id, r.action, r.phase]), [[approve.decision_id, 'approve', 'refused'], [halve.decision_id, 'halve', 'closed']]);
+  assert.deepEqual(v.refusals.map((x) => [x.project_id, x.decision_id, x.purpose, x.request_pair, x.refusals.map((y) => y.rule)]), [[pid, approve.decision_id, 'open', PAIR, ['exit_cap']]]);
+  assert.match(v.refusals[0].refusals[0].words, /above the 2000 the exit measurement shows/);
+  assert.deepEqual(v.orders.map((o) => [o.side, o.pair, o.state, o.decision_id, o.purpose]), [['OPEN_LONG', PAIR, 'CANCELLED', halve.decision_id, 'open'], ['CLOSE_LONG', PAIR, 'FILLED', halve.decision_id, 'close']]);
+  assert.deepEqual(v.results.closed_positions.map((p) => [p.project_id, p.decision_id, p.realized_pnl_usd, p.exit_words]), [[pid, halve.decision_id, '-5.1', 'Sold at $0.85']]);
+  assert.deepEqual(v.results.open_positions, []);
+  const navs = v.results.nav_by_hour;
+  assert.ok(navs.length >= 18);
+  assert.equal(navs[navs.length - 1].nav_usd, '24994.9');
+  assert.deepEqual(v.hours, PT.hours(ws));
 });
 
 test('only decisions that state the trader effect ask it: an older grant opens nothing; an unreadable receipt opens nothing, in words', (t) => {
@@ -251,5 +268,6 @@ test('reads write nothing', (t) => {
   const before = tree();
   TD.requests(s.ws);
   TD.wanted(s.ws);
+  TD.view(s.ws);
   assert.equal(tree(), before);
 });

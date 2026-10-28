@@ -1225,6 +1225,10 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   route('GET', '/api/tickets/candidates', () => coherent(() => ({ format: 'cr-pilot-board@1', writes_nothing: true, rows: tickets.candidateBoard(ws) })));
   route('GET', '/api/tickets/exit-matrix', () => coherent(() => tickets.exitMatrix(ws)));
   route('GET', '/api/paper', () => coherent(() => require('./core/paper').book(ws)));
+  // The trader's Paper Book (cr-paper@2, slot 12c) through its one adapter,
+  // with where its hours come from (core/trader-candles.js): read only, apart
+  // from the PM Paper Book above and from the portfolio.
+  route('GET', '/api/paper/trader', () => coherent(() => ({ ...require('./core/trader-desk').view(ws), candles: require('./core/trader-candles').statusView(ws) })));
   // The seven-day Track 2 digest (tickets.digest, item 34): read only.
   route('GET', '/api/tickets/digest', () => coherent(() => tickets.digest(ws, { days: 7 })));
   route('GET', '/api/research/outcomes', () => coherent(() => require('./core/report-outcomes').deskOutcomes(ws)));
