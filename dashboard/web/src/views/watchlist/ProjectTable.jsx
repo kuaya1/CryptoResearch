@@ -87,7 +87,7 @@ function Cell({ col, d, p, sources, onSector, onOpen, range }) {
     case 'spark': return <span className="spark-cell" title={m && typeof m.change_7d_pct === 'number' ? `7 days: ${s.change7d}` : undefined}><Spark values={m && m.sparkline_7d} change={m ? m.change_7d_pct : null} width={110} height={32} label={`${p.symbol || p.name} 7-day price${m && s.change7d ? `, ${s.change7d}` : ''}`} /></span>;
     case 'grade': return <GradeCell d={d} p={p} onOpen={onOpen} />;
     case 'risk': return <RiskBadge d={d} p={p} />;
-    case 'exit': { const x = exitCell(p); return <span className={`exit-cell is-${x.tone}`} title={x.title}>{x.text}</span>; }
+    case 'exit': { const x = exitCell(p, d.index); return <span className={`exit-cell is-${x.tone}`} title={x.title}>{x.text}</span>; }
     case 'lastResearch': { const x = lastResearchCell(p, d.index); return <span className={`lr-cell${x.tone ? ` is-${x.tone}` : ''}`} title={x.title}>{x.text}</span>; }
     case 'change24h': return m ? <Change value={m.change_24h_pct} label="over 24 hours" /> : <Unknown label="24-hour change" />;
     case 'change7d': return m ? <Change value={m.change_7d_pct} label="over 7 days" /> : <Unknown label="7-day change" />;

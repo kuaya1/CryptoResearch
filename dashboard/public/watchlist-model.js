@@ -845,11 +845,14 @@ export function riskCell(p, index = null) {
 // estimated cost of selling your exit size against your limit, from the
 // forensic monitor's quotes or pool reserves. A lower bound ("at least") over
 // the limit counts as over; under it, it says nothing. Unknown is the norm.
-export function exitCell(p) {
+// Without a forensic record the size and limit are the screening preferences
+// in force (the index's ticket_sizing, cr-ticket-sizing@4: one setting).
+export function exitCell(p, index = null) {
   const f = p && p.forensic;
   const x = f && f.exit;
-  const size = (x && x.size_usd) || (f && f.position_usd) || 500;
-  const limit = (x && x.limit_pct) || (f && f.limit_pct) || 5;
+  const inForce = (index && index.ticket_sizing) || {};
+  const size = (x && x.size_usd) || (f && f.position_usd) || inForce.exit_size_usd || 500;
+  const limit = (x && x.limit_pct) || (f && f.limit_pct) || inForce.max_exit_cost_pct || 5;
   if (!x) return { text: 'Unknown', tone: 'unknown', sort: null, size, limit, title: f ? `No exit estimate at $${size}` : 'Not audited: no exit quote or pool reserves on record' };
   if (x.status === 'no_route') return { text: 'No route', tone: 'bad', sort: 1000, size, limit, title: `No route for a $${size} exit${x.as_of ? ` (${fmtDateTime(x.as_of)})` : ''}` };
   if (typeof x.cost_pct !== 'number') return { text: 'Unknown', tone: 'unknown', sort: null, size, limit, title: x.note || `No supported estimate at $${size}` };

@@ -283,7 +283,7 @@ test('the pilot queue names whether a project named outright is in the pilot', a
 
 test('native L1 exemption (cr-ticket-sizing@2 and later): the chain\'s own coin at $10B+ passes the exit check without a DEX quote; a smaller coin, a token, or a ticket frozen under @1 does not', (t) => {
   const s = T.sizingOf({ settings: {} });
-  assert.equal(s.version, 'cr-ticket-sizing@3');
+  assert.equal(s.version, 'cr-ticket-sizing@4');
   assert.equal(s.native_l1_min_market_cap_usd, 10e9);
   const basis = (native, cap) => ({ researcher: { grade: { status: 'firm', value: 60 } }, held: true, exits: [], native: { native_chain: native, market_cap_usd: cap } });
   const eth = T.gate(basis(true, 280e9), s, 'ACCUMULATE');
@@ -306,18 +306,20 @@ test('a new ticket freezes whether the coin is native and its market cap, and th
   const s = withReport(t);
   const tk = T.createTicket(s.ws, { project_id: s.pid }).ticket;
   assert.deepEqual(tk.basis.native, { native_chain: false, market_cap_usd: null });
-  assert.equal(tk.sizing.version, 'cr-ticket-sizing@3');
+  assert.equal(tk.sizing.version, 'cr-ticket-sizing@4');
   assert.match(T.promptFor(s.ws, tk).text, /native L1 coin/);
 });
 
 test('ticket sizing in Preferences: the server takes it within the same bounds as sizingOf; new tickets freeze it, saved tickets keep theirs', (t) => {
   const { validateSettingsPatch } = require('../server');
-  const ok = validateSettingsPatch({ tickets: { sizing: { standard_risk_usd: 400, starter_risk_usd: 200, exit_size_usd: 400, max_exit_cost_pct: 4, min_grade_new_entry: 60, min_grade_any: 45, native_l1_min_market_cap_usd: 20e9 } } });
-  assert.deepEqual(ok.tickets.sizing, { standard_risk_usd: 400, starter_risk_usd: 200, exit_size_usd: 400, max_exit_cost_pct: 4, min_grade_new_entry: 60, min_grade_any: 45, native_l1_min_market_cap_usd: 20e9 });
+  const ok = validateSettingsPatch({ tickets: { sizing: { standard_risk_usd: 400, starter_risk_usd: 200, min_grade_new_entry: 60, min_grade_any: 45, native_l1_min_market_cap_usd: 20e9 } } });
+  assert.deepEqual(ok.tickets.sizing, { standard_risk_usd: 400, starter_risk_usd: 200, min_grade_new_entry: 60, min_grade_any: 45, native_l1_min_market_cap_usd: 20e9 });
   const bad = (sizing, re) => assert.throws(() => validateSettingsPatch({ tickets: { sizing } }), (e) => e.code === 'INVALID' && re.test(e.message));
   bad({ standard_risk_usd: 0 }, /more than 0/);
   bad({ standard_risk_usd: -5 }, /between/);
-  bad({ max_exit_cost_pct: 101 }, /between 0 and 100/);
+  // cr-ticket-sizing@4 (D4): the exit size and limit live in Screening only.
+  bad({ exit_size_usd: 400 }, /Preferences > Screening/);
+  bad({ max_exit_cost_pct: 4 }, /Preferences > Screening/);
   bad({ min_grade_any: 120 }, /between 0 and 100/);
   bad({ standard_risk_usd: 100, starter_risk_usd: 300 }, /starter tranche/);
   bad({ min_grade_new_entry: 40, min_grade_any: 50 }, /minimum grade/);
@@ -338,6 +340,36 @@ test('ticket sizing in Preferences: the server takes it within the same bounds a
   assert.equal(T.loadTicket(ws2, s.pid, before.ticket_id).sizing.standard_risk_usd, 500, 'a saved ticket keeps the values it froze');
   const after = T.createTicket(ws2, { project_id: s.pid, restart: true }).ticket;
   assert.equal(after.sizing.standard_risk_usd, 400, 'a new ticket freezes the values in force');
+});
+
+test('cr-ticket-sizing@4 (D4): the exit position, ladder and limit are Screening\'s; a value left in tickets.sizing is not read; each ticket freezes what it used', (t) => {
+  const s = withReport(t);
+  const d = T.sizingOf(s.ws);
+  assert.deepEqual([d.version, d.exit_size_usd, d.exit_sizes_usd, d.max_exit_cost_pct, d.exit_rules_from], ['cr-ticket-sizing@4', 500, [100, 500, 2000], 5, 'forensics.preferences']);
+  const before = T.createTicket(s.ws, { project_id: s.pid }).ticket;
+  const file = path.join(s.root, 'config', 'settings.json');
+  const cfg = readJson(file);
+  cfg.tickets = { sizing: { exit_size_usd: 9000, max_exit_cost_pct: 50 } };
+  cfg.forensics = { ...(cfg.forensics || {}), preferences: { ...((cfg.forensics || {}).preferences || {}), exit_sizes_usd: [250, 1000], exit_position_usd: 750, exit_cost_limit_pct: 3 } };
+  atomicWrite(file, jsonText(cfg));
+  const ws2 = require('../core/workspace').openWorkspace({ root: s.root, actor: 'test' });
+  const now = T.sizingOf(ws2);
+  assert.deepEqual([now.exit_size_usd, now.exit_sizes_usd, now.max_exit_cost_pct], [750, [250, 1000], 3], 'Screening\'s values, not the old tickets.sizing ones');
+  const after = T.createTicket(ws2, { project_id: s.pid, restart: true }).ticket;
+  const frozen = JSON.parse(fs.readFileSync(ws2.abs(after.packet.path), 'utf8'));
+  assert.deepEqual(frozen.exits.map((x) => x.size_usd), [250, 750, 1000], 'the packet reads the ladder and the position');
+  assert.deepEqual([after.sizing.exit_size_usd, after.sizing.max_exit_cost_pct], [750, 3]);
+  assert.deepEqual([T.loadTicket(ws2, s.pid, before.ticket_id).sizing.exit_size_usd, T.loadTicket(ws2, s.pid, before.ticket_id).sizing.max_exit_cost_pct], [500, 5], 'a saved ticket keeps the values it froze');
+  // A ladder without $2,000: the v1 field at $2,000 is no reading (null), never 0.
+  const g = T.gate({ researcher: { grade: { status: 'firm', value: 70 } }, held: false, exits: [{ size_usd: 750, cost_pct: 2.5, cost_complete: true }] }, now, 'ACCUMULATE');
+  assert.equal(g.suggested_risk_usd, 500, 'within the 3% limit at $750');
+  const over = T.gate({ researcher: { grade: { status: 'firm', value: 70 } }, held: false, exits: [{ size_usd: 750, cost_pct: 3.2, cost_complete: true }] }, now, 'ACCUMULATE');
+  assert.equal(over.suggested_risk_usd, 0);
+  assert.match(over.reasons.join(' '), /\$750 is 3\.2%, over 3%/);
+  const saved = T.saveTicket(ws2, { project_id: s.pid, ticket_id: after.ticket_id, text: answer(after) });
+  assert.equal(saved.receipt.desk.exit_cost_2000_usd_pct, null);
+  const card = T.view(ws2, s.pid).ticket;
+  assert.deepEqual([card.exit_size_usd, card.exit_limit_pct, card.exit_cost_2000_usd_pct], [750, 3, null], 'the card says the frozen size and limit');
 });
 test('each PM decision and its undo also appears in the journal, and a journal failure keeps the decision', (t) => {
   const s = withReport(t);
@@ -373,14 +405,14 @@ test('missing exit quotes are named in the packet, the receipt and the view, wit
   const s = withReport(t);
   const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
   const frozen = JSON.parse(fs.readFileSync(s.ws.abs(tk.packet.path), 'utf8'));
-  assert.deepEqual(frozen.exits_missing.map((m) => m.size_usd), [500, 2000], 'both sizes have no reading in the fixture');
+  assert.deepEqual(frozen.exits_missing.map((m) => m.size_usd), [100, 500, 2000], 'no size has a reading in the fixture');
   for (const m of frozen.exits_missing) {
     assert.ok(m.reason && m.reason.length > 10, "a reason in words");
     assert.equal(m.link, `#/project/${encodeURIComponent(s.pid)}/forensics?fx=exits`);
   }
   const saved = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) });
-  assert.deepEqual(saved.receipt.desk.exits_missing.map((m) => m.size_usd), [500, 2000]);
-  assert.deepEqual(T.view(s.ws, s.pid).ticket.exits_missing.map((m) => m.size_usd), [500, 2000]);
+  assert.deepEqual(saved.receipt.desk.exits_missing.map((m) => m.size_usd), [100, 500, 2000]);
+  assert.deepEqual(T.view(s.ws, s.pid).ticket.exits_missing.map((m) => m.size_usd), [100, 500, 2000]);
 });
 
 test('pilot candidates: held first, then by grade, no report last; the gate with no proposal; nothing written, nothing opted in', (t) => {
@@ -1395,7 +1427,7 @@ test('A08: the desk sizes from the verified packet: an exit, holding or grade ch
     const tk = T.createTicket(s.ws, { project_id: s.pid, assistant: true }).ticket;
     freshPrice(s.ws, CG, 0.85);
     const frozen = JSON.parse(fs.readFileSync(s.ws.abs(tk.packet.path), 'utf8'));
-    assert.equal(frozen.exits[0].cost_pct, null, 'the packet holds no exit reading');
+    assert.equal(frozen.exits.find((x) => x.size_usd === 500).cost_pct, null, 'the packet holds no exit reading');
     const rel = `projects/${s.pid}/tickets/${tk.ticket_id}/ticket.json`;
     const job = readJson(s.ws.abs(rel));
     mutate(job);
@@ -1409,11 +1441,11 @@ test('A08: the desk sizes from the verified packet: an exit, holding or grade ch
   stubHeld(t, s.pid, false);
   const tk = riskTicket(s, 1);
   const frozen = JSON.parse(fs.readFileSync(s.ws.abs(tk.packet.path), 'utf8'));
-  assert.equal(frozen.exits[0].cost_pct, 1);
+  assert.equal(frozen.exits.find((x) => x.size_usd === 500).cost_pct, 1);
   const out = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: answer(tk) });
   assert.equal(out.receipt.desk.suggested_risk_usd, 500);
   assert.equal(out.receipt.desk.exit_cost_500_usd_pct, 1);
-  assert.equal(out.receipt.desk.exit_cost_500_as_of, frozen.exits[0].as_of, 'the cost keeps its time');
+  assert.equal(out.receipt.desk.exit_cost_500_as_of, frozen.exits.find((x) => x.size_usd === 500).as_of, 'the cost keeps its time');
 });
 
 test('A04: an approval is refused once the ticket is invalidated (409 INVALIDATED, nothing written, no paper position); a veto is still recorded', (t) => {
@@ -1911,7 +1943,7 @@ test('candidate board (item 54): rows carry step, delta and the $500 and $2,000 
   assert.deepEqual(hashTree(s.root), tree, 'reading writes nothing');
   const row = rows.find((r) => r.project_id === s.pid);
   assert.ok(row);
-  assert.deepEqual(row.exits.map((e) => e.size_usd), [500, 2000]);
+  assert.deepEqual(row.exits.map((e) => e.size_usd), [100, 500, 2000]);
   for (const e of row.exits) assert.ok(e.ready === true || e.ready === false || e.ready === null);
   assert.ok(['research', 'ticket', 'gate_closed', 'pm_review', 'done', 'blocked', 'unknown'].includes(row.step), row.step);
   assert.ok('report_delta' in row && 'in_pilot' in row);
@@ -2050,21 +2082,21 @@ test('item 61: the exit matrix lists every verified active project by grade with
   const tree = hashTree(s.root);
   const bare = T.exitMatrix(s.ws);
   assert.equal(bare.format, T.EXIT_MATRIX_FORMAT);
-  assert.deepEqual(bare.sizes_usd, [500, 2000]);
+  assert.deepEqual(bare.sizes_usd, [100, 500, 2000], 'the screening ladder and position (cr-exit-matrix@2)');
   assert.equal(bare.rows.length, 1);
   const none = bare.rows[0];
   assert.equal(none.project_id, s.pid);
   assert.equal(none.native_l1_liquid, false);
-  assert.equal(none.exits[0].cost_pct, null, 'no reading: null, never 0');
-  assert.equal(none.exits[0].complete, null);
+  assert.equal(none.exits.find((x) => x.size_usd === 500).cost_pct, null, 'no reading: null, never 0');
+  assert.equal(none.exits.find((x) => x.size_usd === 500).complete, null);
   const incomplete = withExitReadings(1.5, () => T.exitMatrix(s.ws), { complete: false }).rows[0];
-  assert.equal(incomplete.exits[0].cost_pct, 1.5);
-  assert.equal(incomplete.exits[1].cost_pct, 3);
-  assert.equal(incomplete.exits[0].complete, false);
-  assert.deepEqual(incomplete.exits[0].missing_costs, ['network fee']);
-  assert.equal(typeof incomplete.exits[0].quote_age_minutes, 'number');
+  assert.equal(incomplete.exits.find((x) => x.size_usd === 500).cost_pct, 1.5);
+  assert.equal(incomplete.exits.find((x) => x.size_usd === 2000).cost_pct, 3);
+  assert.equal(incomplete.exits.find((x) => x.size_usd === 500).complete, false);
+  assert.deepEqual(incomplete.exits.find((x) => x.size_usd === 500).missing_costs, ['network fee']);
+  assert.equal(typeof incomplete.exits.find((x) => x.size_usd === 500).quote_age_minutes, 'number');
   const full = withExitReadings(1.5, () => T.exitMatrix(s.ws)).rows[0];
-  assert.equal(full.exits[0].complete, true);
+  assert.equal(full.exits.find((x) => x.size_usd === 500).complete, true);
   assert.deepEqual(T.exitMatrix(s.ws, { now: Date.parse(bare.as_of) }), bare, 'the same matrix for the same moment');
   assert.deepEqual(hashTree(s.root), tree, 'reading writes nothing');
   const research = fs.readFileSync(path.join(__dirname, '..', 'public', 'views', 'research.js'), 'utf8');
@@ -2299,7 +2331,7 @@ test('cr-ticket-sizing@3: a complete 4% exit beside a cheaper 3% lower bound is 
   assert.deepEqual([at500.best.cost_pct, at500.best.cost_complete], [3, false], 'the Forensics tab still shows the cheapest reading');
   assert.deepEqual([at500.best_complete.cost_pct, at500.best_complete.cost_complete], [4, true]);
   const { tk, frozen, saved } = savedOn(t, s, table);
-  assert.equal(tk.sizing.version, 'cr-ticket-sizing@3');
+  assert.equal(tk.sizing.version, 'cr-ticket-sizing@4');
   const e = frozen.exits.find((x) => x.size_usd === 500);
   assert.deepEqual([e.cost_pct, e.cost_complete, e.as_of], [4, true, at500.best_complete.retrieved_at], 'the packet freezes the complete reading and its time');
   assert.equal(saved.receipt.desk.suggested_risk_usd, 500);
