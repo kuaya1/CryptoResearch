@@ -1,0 +1,20 @@
+{
+  "schema_version": "cr.template-lock.v1",
+  "note": "The published research templates (prompts, grading appendices, execution notes), pinned as stored. The desk refuses to build from a text that differs (core/template-lock.js). Never edit one in place: publish the next version and pin it here.",
+  "sha256": {
+    "research-prompt.v1.md": "514172ca45f40e05ee5e9a36e5717817a9201314cb5f829808961fd1f8679943",
+    "grading-appendix.v1.md": "53566ce0970ea533eda858327e19d1eb1dad72f15b6a131beba5d438e730013e",
+    "research-prompt.v2.md": "205efd2a880c7dc47dfc03e137b5662a364ccb9f38fc993d0365774be202492a",
+    "grading-appendix.v2.md": "fdfdb7bfdff54b9534d9f2a53da09fb0985106260db129502526fb1d09165dd8",
+    "research-prompt.v3.md": "def0d898d201a74e05780d4bfb3738cfc5be608058485c51e94a4e4396f3c473",
+    "grading-appendix.v3.md": "2850d02980a1871f292c78bbe4ac40ba54875d450a63e56f0bbc983e00758c0b",
+    "research-prompt.v4.md": "16406817419ace20fd5927cdec7ab5516785742f4a3a06960fb2ad7a2be26ca3",
+    "grading-appendix.v4.md": "e97ab422977c731025be2de3ec91f86fc8fe1a47d8c1d4421d4b0662cf9b284e",
+    "research-prompt.v5.md": "70b3b298c3404a5232c787e793e7952ea7a489184f4801e27e2d5533aac8826e",
+    "grading-appendix.v5.md": "3271356f528ba33414503ae74dd5769022d1b61cab4a6e714725247ad61b7272",
+    "research-prompt.v6.md": "e13194d5d7a4eae41eb2a83901801560d2c2d784288cc2c965d2d6a76b3607ab",
+    "grading-appendix.v6.md": "6e3ae30f9afd3a1659136fdf3ff56e95441e02f00eca93f84a456fd7f8cf0695",
+    "execution/chatgpt.v1.md": "a7ad4872d8db69af998d73ee928741f4d8c68b8169fee994b50e31cd92129106",
+    "execution/chatgpt.v2.md": "fddb85f49c79d6f119544828fe59efd939d9846af7cce640657e62e880482d8d"
+  }
+}

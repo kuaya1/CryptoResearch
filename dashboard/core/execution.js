@@ -23,7 +23,6 @@
 // existed have none and get none: their runs keep what they were made with.
 
 const fs = require('fs');
-const path = require('path');
 const { sha256 } = require('./fsx');
 
 // The note a new job of each model is frozen with. Published notes never
@@ -43,7 +42,7 @@ const notePath = (runDir, provider) => `${runDir}/execution.${provider}.md`;
 function renderNote(ws, provider, run) {
   const spec = NOTES[provider];
   if (!spec) return null;
-  const template = fs.readFileSync(path.join(ws.root, 'templates', spec.file), 'utf8');
+  const template = require('./template-lock').lockedText('research', spec.file);
   const h = run.horizon && typeof run.horizon === 'object' ? run.horizon : {};
   const values = {
     RUN_ID: run.run_id,
@@ -54,6 +53,13 @@ function renderNote(ws, provider, run) {
   };
   const text = template.replace(/\{\{([A-Z0-9_]+)\}\}/g, (m, k) => (Object.prototype.hasOwnProperty.call(values, k) ? String(values[k]) : m));
   return { ref: spec.ref, text };
+}
+
+// The note template of each of these models, read and checked against its pin
+// before an operation starts (template-lock.js), so a changed template refuses
+// the request with nothing written, the operations log included (D5).
+function checkNotes(providers) {
+  for (const p of providers) if (NOTES[p]) require('./template-lock').lockedText('research', NOTES[p].file);
 }
 
 // Writes the note for a job inside an operation and returns the record kept
@@ -88,4 +94,4 @@ function readNote(ws, run, provider) {
   return { text, delivery: { status: 'verified', ref: rec.ref, sha256: sha, chars: text.length, note: 'Execution notes for this model only, frozen with its job. The research prompt is unchanged and the same for every model; where the two seem to differ, the prompt decides.' } };
 }
 
-module.exports = { NOTES, PUBLISHED, notePath, renderNote, freezeNote, readNote };
+module.exports = { NOTES, PUBLISHED, notePath, renderNote, checkNotes, freezeNote, readNote };

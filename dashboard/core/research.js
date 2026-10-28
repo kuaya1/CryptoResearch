@@ -935,6 +935,7 @@ function createRun(ws, args = {}) {
   const packet = evidencePacket(ws, project, { profileRef });
   const packetText = `${JSON.stringify(packet, null, 2)}\n`;
   const prompt = buildRunPrompt(ws, project, { runId, horizon, rubricRef, packet, ownerInstructions, profileRef });
+  require('./execution').checkNotes(list);
   const status = providerStatus(ws);
   const channel = args.channel || ws.actor || 'cli';
   // The model doing this run itself through the desk connector, if any.
@@ -2393,6 +2394,7 @@ function addProviders(ws, projectId, runId, providers, { assistant = null, chann
   const list = normalizeProviders(providers);
   const status = providerStatus(ws);
   const rel = `${runDir(projectId, runId)}/run.json`;
+  require('./execution').checkNotes(list);
   const out = runOp(ws, { type: 'research_run_add_providers', summary: `Add ${list.join(', ')} to ${runId}` }, (op) => {
     const run = op.readJson(rel, null);
     if (!run) throw new OpError('NOT_FOUND', `No research run ${runId} in ${projectId}`);

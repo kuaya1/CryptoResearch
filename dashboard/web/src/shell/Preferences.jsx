@@ -25,8 +25,8 @@ import '../styles/overlays.css';
 
 const FIELDS = [
   ['exit_sizes_usd', 'Exit sizes (USD)', 'One to five amounts, separated by commas. Each is quoted on every chain you approve for a project, every 12 hours, within the monitor\'s request budget.'],
-  ['exit_position_usd', 'Position size for exits (USD)', 'The size the Desk\'s Exit column and the liquidity outcome read the exit cost at.'],
-  ['exit_cost_limit_pct', 'Exit cost limit (%)', 'An exit costing more than this (price impact plus fees) counts as beyond your limit.'],
+  ['exit_position_usd', 'Position size for exits (USD)', 'The size the Desk\'s Exit column, the liquidity outcome and the ticket\'s exit check read the exit cost at.'],
+  ['exit_cost_limit_pct', 'Exit cost limit (%)', 'An exit costing more than this (price impact plus fees) counts as beyond your limit. Standard risk on a ticket needs the cost at your position size known in full and at most this.'],
   ['delivery_window_days', 'Delivery window (days)', 'Days without a release or commit before delivery reads inactive: 7 to 365.'],
   ['volume_review_fraction', 'Volume review fraction', 'A fall in 24h volume to this share of the audit\'s reading suggests a review: above 0, at most 1.'],
   ['reported_liquidity_review_usd', 'Reported liquidity review level (USD)', 'Optional. Reported liquidity below this suggests a review; empty for none.'],
@@ -112,8 +112,6 @@ function Screening({ d }) {
 const SIZING_FIELDS = [
   ['standard_risk_usd', 'Standard risk, 1.0R (USD)', 'What Approve Risk grants on a ticket that passes every check.'],
   ['starter_risk_usd', 'Starter tranche, 0.5R (USD)', 'What Halve Size grants; never more than standard risk.'],
-  ['exit_size_usd', 'Exit size checked (USD)', 'The size whose measured exit cost the ticket checks.'],
-  ['max_exit_cost_pct', 'Maximum exit cost (%)', 'Standard risk needs the exit cost at that size known in full and at most this.'],
   ['min_grade_new_entry', 'Minimum grade for a new entry', 'Under this, no new entry and no adding to a held position: 0 to 100.'],
   ['pregate_max_grade', 'Highest grade closed without a Prosecutor', 'An unheld project graded under this (or withheld) is closed by the desk with no Prosecutor; from here up to the new-entry minimum it gets one, with risk capped at $0: 0 to 100, at most the new-entry minimum.'],
   ['min_grade_any', 'Minimum grade for any new risk', 'Under this, no new risk at all: 0 to 100, at most the new-entry minimum.'],

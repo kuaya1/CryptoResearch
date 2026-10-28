@@ -137,7 +137,9 @@ function exitText(t) {
   if (t.exit_basis === 'native_l1_liquid') return { text: 'Native L1', tone: 'is-ok', title: 'The chain\'s own coin above the market-cap threshold in your sizing rules: no DEX quote is needed' };
   if (t.exit_cost_500_usd_pct === null || t.exit_cost_500_usd_pct === undefined) return { text: 'No reading', tone: 'is-unknown' };
   const v = `${t.exit_cost_500_complete ? '' : '≥ '}${t.exit_cost_500_usd_pct}%`;
-  return { text: v, tone: t.exit_cost_500_usd_pct > 5 ? 'is-bad' : t.exit_cost_500_complete ? 'is-ok' : 'is-unknown' };
+  // Against the limit this ticket froze; without one the figure stays unjudged.
+  const limit = typeof t.exit_limit_pct === 'number' ? t.exit_limit_pct : null;
+  return { text: v, tone: limit !== null && t.exit_cost_500_usd_pct > limit ? 'is-bad' : limit !== null && t.exit_cost_500_complete ? 'is-ok' : 'is-unknown' };
 }
 
 // Item 33: the change since Claude's earlier report, with the prompt versions
@@ -358,9 +360,9 @@ export function PMDecisionCard({ p }) {
           <p className="iv-rc-v" title={t.upside_target ? t.upside_target.basis || undefined : undefined}>{t.upside_target ? usd(t.upside_target.price_usd) : <span className="is-unknown" title="The ticket gives no upside target">Not given</span>}</p>
         </div>
         <div className="iv-rc">
-          <p className="iv-rc-k">Exit @ $500</p>
+          <p className="iv-rc-k">{typeof t.exit_size_usd === 'number' ? `Exit @ $${t.exit_size_usd.toLocaleString('en-US')}` : 'Exit'}</p>
           <p className={`iv-rc-v ${ex.tone}`} title={ex.title || (t.exit_cost_500_complete === false ? 'A lower bound: part of the cost is unknown' : 'The desk\'s own exit reading')}>{ex.text}</p>
-          <p className="iv-rc-s">5% limit</p>
+          {typeof t.exit_limit_pct === 'number' ? <p className="iv-rc-s">{`${t.exit_limit_pct}% limit`}</p> : null}
         </div>
       </div>
       <TradePlan pid={pid} g={t.trade_plan_geometry} />
