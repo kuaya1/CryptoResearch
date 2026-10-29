@@ -22,7 +22,6 @@
 // establish an edge). Models are never ranked, averaged together or declared
 // the more accurate one.
 
-const fs = require('fs');
 const { PROVIDERS } = require('./workspace');
 
 const HORIZONS = [30, 60, 90, 120];
@@ -30,7 +29,6 @@ const DAY = 86400000;
 const T0_TOLERANCE_MS = 6 * 3600000;
 const LATER_TOLERANCE_MS = 24 * 3600000;
 const MIN_COMPARABLE = 20;
-const CHUNK = 1 << 20;
 
 const monthOf = (ms) => new Date(ms).toISOString().slice(0, 7);
 function monthsBetween(fromMs, toMs) {
@@ -43,45 +41,13 @@ function monthsBetween(fromMs, toMs) {
   return out;
 }
 
-// Reads a month's records a chunk at a time, parsing only lines that name one
-// of the wanted assets, and hands each wanted asset's reading to onPoint.
+// Hands each wanted asset's priced readings of a month to onPoint, each
+// asset's in file order, from the month's one shared parse (market.js
+// monthPoints, 2026-10-29; it was read again a chunk at a time per call).
 function scanMonth(ws, month, ids, onPoint) {
-  const file = ws.abs(`market-data/observations/${month}.jsonl`);
-  let fd;
-  try {
-    fd = fs.openSync(file, 'r');
-  } catch (_) {
-    return;
-  }
-  const needles = [...ids].map((id) => `"id":"${id}"`);
-  const buf = Buffer.alloc(CHUNK);
-  let rest = '';
-  const line = (s) => {
-    if (!s || !needles.some((n) => s.includes(n))) return;
-    let rec;
-    try {
-      rec = JSON.parse(s);
-    } catch (_) {
-      return;
-    }
-    for (const a of Array.isArray(rec.assets) ? rec.assets : []) {
-      if (!a || !ids.has(a.id) || !(typeof a.price_usd === 'number' && a.price_usd > 0)) continue;
-      const t = Date.parse(a.source_last_updated_at || a.fetched_at || rec.fetched_at);
-      if (Number.isFinite(t)) onPoint(a.id, t, a.price_usd, typeof a.market_cap_usd === 'number' ? a.market_cap_usd : null);
-    }
-  };
-  try {
-    for (;;) {
-      const n = fs.readSync(fd, buf, 0, CHUNK, null);
-      if (!n) break;
-      const text = rest + buf.toString('utf8', 0, n);
-      const lines = text.split('\n');
-      rest = lines.pop();
-      for (const s of lines) line(s);
-    }
-    line(rest);
-  } finally {
-    fs.closeSync(fd);
+  const points = require('./market').monthPoints(ws, month);
+  for (const id of ids) {
+    for (const p of points.get(id) || []) onPoint(id, p.t, p.price_usd, p.market_cap_usd);
   }
 }
 
