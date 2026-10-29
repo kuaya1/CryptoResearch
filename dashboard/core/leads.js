@@ -353,7 +353,10 @@ function makeTurn({ ms = TURN_MS, requests = TURN_REQUESTS } = {}) {
       left -= 1;
       return true;
     },
-    signalFor: (perCallMs) => AbortSignal.any([controller.signal, AbortSignal.timeout(Math.max(1, Math.floor(Math.min(perCallMs, remaining()))))]),
+    // When the turn ends first, its own signal cuts the call, so the turn
+    // reads as spent before anything else is tried; a separate timer for the
+    // same moment could fire a hair earlier and let one more request out.
+    signalFor: (perCallMs) => (perCallMs < remaining() ? AbortSignal.any([controller.signal, AbortSignal.timeout(Math.max(1, Math.floor(perCallMs)))]) : controller.signal),
     canWait: (waitMs) => remaining() > waitMs + 250,
     // An answer over its cap fails that request only, never the whole turn.
     readBody: (res, max) => Promise.race([require('./netguard').readBodyBounded(res, max, null), ended]),
