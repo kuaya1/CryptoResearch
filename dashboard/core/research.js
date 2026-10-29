@@ -71,7 +71,7 @@ const captures = require('./captures');
 const { readJson, listDir, appendLine, readJsonLines, sha256, exists } = require('./fsx');
 const { compactTs, randomId } = require('./ids');
 const { PROVIDERS, PROVIDER_LABELS } = require('./workspace');
-const { getProject, listProjects, keyOf, appliedFor } = require('./projects');
+const { getProject, listProjects, keyOf, appliedFor, stageResolution } = require('./projects');
 const { buildRunPrompt, PROMPT_VERSION } = require('./prompts');
 const { parseHorizon } = require('./reports');
 const { ymdInTz } = require('./dates');
@@ -902,16 +902,64 @@ function newJob(ws, p, st, { assistant = null } = {}) {
   return { ...base, state: 'unconfigured', mode: 'manual', fallback: 'manual', note };
 }
 
-// The optional third argument, { idempotency: { key, payload_sha256 } }, keys
-// the run's create (a scout admission's effect, leads.js): a replay under the
-// same key returns the run it made, even past the ten-minute repeat window
-// and after the run finished. Without it, nothing changes.
-function createRun(ws, args = {}, { idempotency = null } = {}) {
+// The route a provider's status gives a new job: its paid API (or the
+// fictional mock), else its desk connection or a pasted prompt.
+const routeOf = (st) => (st && (st.mode === 'api' || st.mode === 'mock') ? 'api' : 'connector_or_manual');
+const ROUTE_WORDS = { api: 'its API', connector_or_manual: 'its connection or a pasted prompt' };
+const BUDGET_FIELDS = ['per_run_usd', 'daily_usd', 'monthly_usd'];
+// The research spending limits in force, as a scout admission freezes them.
+function budgetScope(ws) {
+  const b = (ws.settings.research && ws.settings.research.budget) || {};
+  return Object.fromEntries(BUDGET_FIELDS.map((k) => [k, typeof b[k] === 'number' && Number.isFinite(b[k]) ? b[k] : null]));
+}
+
+// What Eric confirmed against the routes and limits a new run would get now
+// (audit F2): a model whose route moved, or with any API route the spending
+// limits changed, needs his word again. Throws CONSENT_CHANGED naming it.
+function checkConsent(ws, list, status, consent) {
+  const routes = (consent && consent.routes) || {};
+  const moved = list.filter((p) => routes[p] !== routeOf(status[p])).map((p) => ({ provider: p, confirmed: routes[p] || null, now: routeOf(status[p]) }));
+  const scope = budgetScope(ws);
+  const was = (consent && consent.budget_scope) || {};
+  const limits = list.some((p) => routeOf(status[p]) === 'api') && BUDGET_FIELDS.some((k) => (was[k] === undefined ? null : was[k]) !== scope[k]) ? { confirmed: consent.budget_scope || null, now: scope } : null;
+  if (!moved.length && !limits) return;
+  const parts = [...moved.map((m) => `${PROVIDER_LABELS[m.provider]} was ${ROUTE_WORDS[m.confirmed] || 'not confirmed'} when you confirmed, ${ROUTE_WORDS[m.now]} now`), ...(limits ? ['the research spending limits changed'] : [])];
+  throw new OpError('CONSENT_CHANGED', `Changed since you confirmed: ${parts.join('; ')}. No research was requested; request research again to confirm the models and routes as they are now.`, { routes: moved, budget_scope: limits });
+}
+
+// A keyed run's answer from the choice recorded under its key: the run it
+// made, or the run started minutes earlier that it linked.
+function keyedRun(ws, result, out) {
+  const runOut = loadRun(ws, result.project_id, result.run_id);
+  const linked = result.basis === 'existing_recent';
+  const run = withStatus(runOut);
+  return {
+    status: linked ? 'exists' : 'created',
+    basis: linked ? 'existing_recent' : 'created',
+    project_id: result.project_id,
+    run_id: runOut.run_id,
+    run,
+    replayed: Boolean(out.replayed),
+    message: out.replayed ? `Already requested by this request (${runOut.run_id}).` : linked ? `A research run started a few minutes ago (${runOut.run_id}) is linked. No second run was created.` : summarizeRun(run, null),
+    files: out.files || [],
+    verified: out.verified !== false,
+    op_id: out.op_id || null,
+  };
+}
+
+// The optional third argument keys the run (a scout admission's effect,
+// leads.js). With { idempotency: { key, payload_sha256 } } the choice between
+// a new run and one started minutes earlier is made again under the lock and
+// recorded under the key either way, so a replay returns the same run even
+// after it finished or aged out of the repeat window (audit F1); a different
+// payload under the key is IDEMPOTENCY_CONFLICT. With { consent: { routes,
+// budget_scope } }, a new run whose routes or limits differ from what Eric
+// confirmed is CONSENT_CHANGED with nothing written (audit F2). Without them,
+// nothing changes.
+function createRun(ws, args = {}, { idempotency = null, consent = null } = {}) {
   const prior = appliedFor(ws, idempotency);
-  if (prior) {
-    const runOut = loadRun(ws, prior.result.project_id, prior.result.run_id);
-    return { status: 'created', project_id: prior.result.project_id, run_id: runOut.run_id, run: withStatus(runOut), replayed: true, message: `Already requested by this request (${runOut.run_id}).`, files: [], verified: true, op_id: prior.op_id };
-  }
+  if (prior) return keyedRun(ws, prior.result, { replayed: true, op_id: prior.op_id });
+  const keyed = Boolean(idempotency && idempotency.key);
   const projectId = args.project_id;
   const project = getProject(ws, projectId);
   if (project.status === 'archived') throw new OpError('INVALID', `${project.name} is archived. Unarchive it before researching it.`);
@@ -930,8 +978,23 @@ function createRun(ws, args = {}, { idempotency = null } = {}) {
   const rubricRef = (args.same_as_last && previous[0] && previous[0].rubric_version) || ws.rubrics.activeRef;
   if (!ws.rubrics.gradingVersions[rubricRef]) throw new OpError('INVALID', `Rubric ${rubricRef} is not available.`);
   // Repeating the same request within a few minutes does not start a second run.
-  const recent = previous.find((r) => !r.broken && !TERMINAL.has(r.status) && Date.now() - Date.parse(r.created_at) < DEDUPE_MINUTES * 60000 && r.horizon.text === horizonText && JSON.stringify(r.providers) === JSON.stringify(list) && (r.owner_instructions || null) === ownerInstructions);
+  const isRecent = (r) => !r.broken && !TERMINAL.has(r.status) && Date.now() - Date.parse(r.created_at) < DEDUPE_MINUTES * 60000 && r.horizon.text === horizonText && JSON.stringify(r.providers) === JSON.stringify(list) && (r.owner_instructions || null) === ownerInstructions;
+  const recentNow = () => (args.force_new ? null : listRuns(ws, projectId).find(isRecent) || null);
+  // The link to a recent run, recorded under the key in the lock.
+  const link = (op, r) => {
+    stageResolution(op, idempotency, { basis: 'existing_recent', project_id: projectId, run_id: r.run_id });
+    return { run_id: r.run_id, project_id: projectId, basis: 'existing_recent' };
+  };
+  const recent = previous.find(isRecent);
   if (recent && !args.force_new) {
+    if (keyed) {
+      const out = runOp(ws, { type: 'research_run_link', summary: `Link research run ${recent.run_id}`, ...keyOf(idempotency) }, (op) => {
+        const again = recentNow();
+        if (!again || again.run_id !== recent.run_id) throw new OpError('CHANGED', `The research run started a few minutes ago (${recent.run_id}) changed while it was being linked. Nothing was written; try again.`);
+        return link(op, again);
+      });
+      return keyedRun(ws, out.result, out);
+    }
     return { status: 'exists', project_id: projectId, run_id: recent.run_id, run: recent, message: `A research run for ${project.name} with the same providers and horizon started ${Math.round((Date.now() - Date.parse(recent.created_at)) / 60000)} min ago (${recent.run_id}). No second run was created.` };
   }
   const runId = `run_${compactTs()}_${randomId(5)}`;
@@ -946,6 +1009,7 @@ function createRun(ws, args = {}, { idempotency = null } = {}) {
   const prompt = buildRunPrompt(ws, project, { runId, horizon, rubricRef, packet, ownerInstructions, profileRef });
   require('./execution').checkNotes(list);
   const status = providerStatus(ws);
+  if (consent) checkConsent(ws, list, status, consent);
   const channel = args.channel || ws.actor || 'cli';
   // The model doing this run itself through the desk connector, if any.
   const fromCowork = /cowork/i.test(channel) || /cowork/i.test(ws.actor || '');
@@ -973,6 +1037,9 @@ function createRun(ws, args = {}, { idempotency = null } = {}) {
     jobs,
   };
   const out = runOp(ws, { type: 'research_run_create', summary: `Research ${projectId} with ${list.join(', ')}`, ...keyOf(idempotency) }, (op) => {
+    // Keyed, a run that started meanwhile is linked, never doubled.
+    const meanwhile = keyed ? recentNow() : null;
+    if (meanwhile) return link(op, meanwhile);
     op.write(`${dir}/prompt.md`, prompt, { mode: 'create' });
     op.write(`${dir}/evidence-packet.json`, packetText, { mode: 'create' });
     // A model's execution note (ChatGPT's, execution.js), frozen with its job
@@ -982,8 +1049,9 @@ function createRun(ws, args = {}, { idempotency = null } = {}) {
       if (note) run.jobs[p].execution = note;
     }
     op.writeJson(`${dir}/run.json`, run, { mode: 'create' });
-    return { run_id: runId, project_id: projectId };
+    return { run_id: runId, project_id: projectId, basis: 'created' };
   });
+  if (keyed && (out.replayed || out.result.basis === 'existing_recent')) return keyedRun(ws, out.result, out);
   const runOut = out.replayed ? loadRun(ws, projectId, out.result.run_id) : run;
   return {
     status: 'created',
@@ -2590,6 +2658,8 @@ module.exports = {
   releaseRestoredCopy,
   RUN_ID_RE,
   createRun,
+  routeOf,
+  budgetScope,
   spendLine,
   COWORK_IDLE_MINUTES,
   ASSISTANT_IDLE_MINUTES,

@@ -42,7 +42,7 @@ function expectFor(ws, keys) {
     envelope: v.envelope,
     rows: keys.map((k) => {
       const r = v.rows.find((x) => x.lead_key === k);
-      return { lead_key: k, eligibility_receipt_id: r.eligibility_receipt_id, eligibility_sha256: r.eligibility_sha256, identity_revision: r.identity_revision };
+      return { lead_key: k, eligibility_receipt_id: r.eligibility_receipt_id, eligibility_sha256: r.eligibility_sha256, identity_revision: r.identity_revision, asset_revision: r.asset_revision };
     }),
   };
 }

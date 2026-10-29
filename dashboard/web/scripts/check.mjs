@@ -56,6 +56,9 @@ const session = await (await fetch(`${base}/api/session`)).json();
 const index = await (await fetch(`${base}/api/index`, { headers: { 'x-cr-token': session.token } })).json();
 const pid = (re) => (index.projects.find((p) => re.test(p.name)) || {}).project_id;
 const P = { relay: pid(/Relay Network/), withheld: pid(/Ledger Credit/), ranges: pid(/Range Labs/), long: pid(/Extraordinarily Long/), none: pid(/Unresearched/) };
+// The dev desk's Prosecutor tickets with a ChatGPT challenge: one that holds,
+// one whose saved record was altered.
+const CH = { saved: pid(/Northwind Data Mesh/), integrity: pid(/Atlas Storage/) };
 
 // Page-side helpers, installed on every check.
 const WAIT = `window.__wait = (test, ms = 6000) => new Promise((resolve) => { const t0 = performance.now(); (function f() { let v = null; try { v = test(); } catch (_) { v = null; } if (v) resolve(performance.now()); else if (performance.now() - t0 > ms) resolve(null); else requestAnimationFrame(f); })(); }); true`;
@@ -114,6 +117,8 @@ try {
     ['review', '#/review', "document.querySelector('.rv-queue .rv-item')"],
     ['review upcoming', '#/review?seg=upcoming', "document.querySelector('.rv-up')"],
     ['review imports', '#/review?seg=imports', "document.querySelector('.rv-imp .lg *')"],
+    ['review leads', '#/review?seg=imports&imp=leads', "document.querySelector('[data-key=\"rv-leads-admitted\"] .rv-lead')"],
+    ['challenge inspector', `#/watchlist?p=${CH.saved}`, "document.querySelector('[data-key^=\"pm-challenge-\"][data-state]:not([data-state=\"loading\"])')"],
     ['explorer', '#/explorer', "document.querySelector('.lg-explorer *')"],
     ['new', '#/new', "document.querySelector('.lg-new *, .lg-intake *')"],
     ['forensics', `#/project/${P.relay}/forensics`, "document.querySelector('.fx-assess')"],
@@ -741,6 +746,37 @@ try {
     await sleep(600);
     const running = await tab.evalJs("document.getAnimations().filter((a) => a.playState === 'running' && (a.effect && a.effect.getTiming().duration > 0)).length");
     if (running) fail('forensics: animations run with reduced motion', running);
+    await tab.close();
+  }
+  // Scout leads and the ChatGPT challenge, populated (audits/2026-10-29-
+  // intake-dialectic/POST_IMPLEMENTATION_AUDIT.md §6): each admission state in
+  // words with its one action; Complete, Request research and Confirm each
+  // send one request and finish the admission; the challenge row tells a
+  // saved verdict from an altered record. Runs last: it writes.
+  {
+    const tab = await tabFor(1440);
+    const LEADS = pg('review leads');
+    let before = tab.writes.length;
+    await go(tab, LEADS[1], LEADS[2]);
+    const ROW = "const row = (re) => [...document.querySelectorAll('.rv-lead')].find((li) => re.test(li.textContent));";
+    const lv = await tab.evalJs(`(() => { ${ROW} const txt = (re) => (row(re) || {}).textContent || ''; const has = (re, k) => Boolean(row(re) && row(re).querySelector('[data-key^="' + k + '"]')); return { eligible: document.querySelectorAll('[data-key="rv-leads-eligible"] .rv-lead').length, confirmAll: (document.querySelector('[data-key="rv-leads-confirm-all"]') || {}).textContent || '', complete: txt(/Cinder Bridge/), completeActs: has(/Cinder Bridge/, 'rv-lead-complete-') || has(/Cinder Bridge/, 'rv-lead-again-'), failed: txt(/Marlin Vaults/), failedAct: has(/Marlin Vaults/, 'rv-lead-complete-'), consent: txt(/Osprey Index/), consentAct: has(/Osprey Index/, 'rv-lead-again-'), consentRetry: has(/Osprey Index/, 'rv-lead-complete-'), solana: txt(/Tamarack Pay/) }; })()`);
+    report.leads = lv;
+    ok(lv.eligible === 2 && /^Confirm all 2 eligible \(Claude\)$/.test(lv.confirmAll) && /research requested from Claude/.test(lv.complete) && !lv.completeActs && /Not finished: FICTIONAL/.test(lv.failed) && lv.failedAct && /research not requested: Changed since you confirmed: Claude was its connection or a pasted prompt when you confirmed, its API now/.test(lv.consent) && lv.consentAct && !lv.consentRetry && tab.writes.length === before, 'scout leads: complete, failed (Complete) and changed since you confirmed (Request research, never Complete) each in words; nothing written on opening', lv);
+    ok(/Transfer fee now 0%, highest scheduled 3%/.test(lv.solana) && /Not transferable: No · Transfer hook: Yes/.test(lv.solana) && /transfer hook/.test(lv.solana), 'scout leads: the Solana lead names its fee now, its highest scheduled fee and its transfer hook', lv.solana);
+    for (const [name, re, key, route] of [['Complete', /Marlin Vaults/, 'rv-lead-complete-', /\/api\/scout\/leads\/complete$/], ['Request research', /Osprey Index/, 'rv-lead-again-', /\/api\/scout\/leads\/request-research$/], ['Confirm and request research', /Wren Lending/, 'rv-lead-confirm-', /\/api\/scout\/leads\/confirm$/]]) {
+      before = tab.writes.length;
+      await tab.evalJs(`(() => { ${ROW} row(${re}).querySelector('[data-key^="${key}"]').click(); return true; })()`);
+      const done = await tab.evalJs(`__wait(() => { ${ROW} const li = row(${re}); return li && li.closest('[data-key="rv-leads-admitted"]') && /research requested from Claude/.test(li.textContent) && !li.querySelector('[data-key^="rv-lead-complete-"], [data-key^="rv-lead-again-"], [data-key^="rv-lead-confirm-"]'); }, 8000)`);
+      const sent = tab.writes.slice(before);
+      ok(Boolean(done) && sent.length === 1 && route.test(sent[0]), `scout leads: ${name} sends one request and the admission reads complete`, sent);
+    }
+    for (const [key, state, re] of [['saved', 'saved', /ChatGPT challenge: material objection \(4 of 4 tests assessed\)/], ['integrity', 'integrity', /Challenge not shown: its record does not match the ticket receipt\./]]) {
+      before = tab.writes.length;
+      await go(tab, `#/watchlist?p=${CH[key]}`, `document.querySelector('[data-key="pm-challenge-${CH[key]}"]:not([data-state="loading"])')`);
+      const c = await tab.evalJs(`(() => { const el = document.querySelector('[data-key="pm-challenge-${CH[key]}"]'); return { state: el.dataset.state, text: el.textContent, tests: el.querySelectorAll('[data-assessment]').length }; })()`);
+      report[`challenge_${key}`] = c;
+      ok(c.state === state && re.test(c.text) && (key === 'saved' ? c.tests === 4 : c.tests === 0 && !/concur|objection/.test(c.text)) && tab.writes.length === before, `challenge: the PM card's ChatGPT row reads ${state === 'saved' ? 'a saved verdict with its four tests' : 'an altered record as not shown, with no verdict'}; nothing written`, c);
+    }
     await tab.close();
   }
 } finally {

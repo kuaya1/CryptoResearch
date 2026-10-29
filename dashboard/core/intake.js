@@ -613,8 +613,10 @@ function confirmIntake(ws, id, { coingecko_id: chosen, sector = null, different_
 // the existing one, and one research run with the models given. Shared by
 // confirmIntake and a scout lead's admission (leads.js); each writes its own
 // words. `idempotency` keys the project and the run ({ project, research },
-// each { key, payload_sha256 }).
-function admitListing(ws, cand, { models, evidence, sector, utterance, run_utterance = null, owner_instructions = null, different_project = false, channel = 'intake', idempotency = {} }) {
+// each { key, payload_sha256 }); `consent` is what Eric confirmed for a scout
+// admission ({ routes, budget_scope }): a new run that would differ is
+// refused (research.js checkConsent).
+function admitListing(ws, cand, { models, evidence, sector, utterance, run_utterance = null, owner_instructions = null, different_project = false, channel = 'intake', idempotency = {}, consent = null }) {
   const projects = require('./projects');
   const chosen = cand.coingecko_id;
   const assets = cand.platforms.map((x) => ({ chain: x.chain, contract_address: x.address }));
@@ -655,7 +657,7 @@ function admitListing(ws, cand, { models, evidence, sector, utterance, run_utter
   }
   // The run's key may depend on the project it lands on (a function of its ID).
   const runKey = typeof idempotency.research === 'function' ? idempotency.research(projectId) : idempotency.research || null;
-  const run = require('./research').createRun(ws, { project_id: projectId, providers: models, channel, utterance: run_utterance, owner_instructions }, { idempotency: runKey });
+  const run = require('./research').createRun(ws, { project_id: projectId, providers: models, channel, utterance: run_utterance, owner_instructions }, { idempotency: runKey, consent });
   return { added, project_id: projectId, run };
 }
 

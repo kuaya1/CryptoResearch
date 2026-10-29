@@ -394,15 +394,19 @@ const LEAD_GROUPS = [
 ];
 const LEAD_FOLDED = [['refused', 'Refused', 'REFUSED'], ['known', 'Already in your records', 'KNOWN'], ['dismissed', 'Dismissed', 'DISMISSED']];
 const shortAddr = (a) => (a && a.length > 14 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a || '—');
+const pct = (v) => (typeof v === 'number' ? `${v}%` : 'unknown');
 const taxWords = (s) => {
   if (!s) return 'Sell tax unknown';
-  if ('transfer_fee_pct' in s) return s.transfer_fee_pct === null ? 'Transfer fee unknown' : `Transfer fee ${s.transfer_fee_pct}%`;
+  if ('transfer_fee_pct' in s) return `Transfer fee now ${pct(s.transfer_fee_pct)}, highest scheduled ${pct(s.transfer_fee_scheduled_max_pct)}`;
   return s.sell_tax_pct === null ? 'Sell tax unknown' : `Sell tax ${s.sell_tax_pct}%`;
 };
 const checkWords = (s) => {
-  if (!s || !('honeypot' in s)) return null;
+  if (!s) return null;
   const w = (v) => (v === 'absent' ? 'No' : v === 'present' ? 'Yes' : 'Unknown');
-  return `Honeypot: ${w(s.honeypot)} · Cannot sell all: ${w(s.cannot_sell_all)}${s.severe && s.severe.length ? ` · Severe: ${s.severe.join(', ')}` : ''}`;
+  const severe = s.severe && s.severe.length ? ` · Severe: ${s.severe.join(', ')}` : '';
+  if ('transfer_fee_pct' in s) return `Not transferable: ${w(s.non_transferable)} · Transfer hook: ${w(s.transfer_hook)}${severe}`;
+  if (!('honeypot' in s)) return null;
+  return `Honeypot: ${w(s.honeypot)} · Cannot sell all: ${w(s.cannot_sell_all)}${severe}`;
 };
 
 function LeadRow({ r, onDismiss, onConfirm, busy, models, extra = null }) {
@@ -448,7 +452,7 @@ function ScoutLeads({ d }) {
   const confirm = (rows) => act(async () => {
     const out = await api.post('/api/scout/leads/confirm', {
       request_id: `req_${submissionId()}`,
-      expect: { policy: { version: v.policy.version, sha256: v.policy.sha256 }, envelope: v.envelope, rows: rows.map((r) => ({ lead_key: r.lead_key, eligibility_receipt_id: r.eligibility_receipt_id, eligibility_sha256: r.eligibility_sha256, identity_revision: r.identity_revision })) },
+      expect: { policy: { version: v.policy.version, sha256: v.policy.sha256 }, envelope: v.envelope, rows: rows.map((r) => ({ lead_key: r.lead_key, eligibility_receipt_id: r.eligibility_receipt_id, eligibility_sha256: r.eligibility_sha256, identity_revision: r.identity_revision, asset_revision: r.asset_revision })) },
     });
     const n = out.since_shown && out.since_shown.eligible_new;
     toast(`${out.admissions.length} confirmed${n ? `; ${n} new eligible ${n === 1 ? 'lead' : 'leads'} arrived, look again` : ''}.`);
@@ -483,7 +487,7 @@ function ScoutLeads({ d }) {
                     onConfirm={id === 'eligible' ? confirm : null}
                     onDismiss={['eligible', 'review', 'incomplete', 'held'].includes(id) ? dismiss : null}
                     extra={r.admission && ['pending', 'failed'].includes(r.admission.state) ? <div className="l2-actions"><button type="button" className="btn btn-sm" disabled={busy} data-key={`rv-lead-complete-${r.lead_key}`} onClick={() => complete(r.admission)}>Complete</button></div>
-                      : r.admission && r.admission.state === 'lapsed' && r.admission.project_id ? <div className="l2-actions"><button type="button" className="btn btn-sm" disabled={busy || !models.length} data-key={`rv-lead-again-${r.lead_key}`} onClick={() => again(r.admission)}>Request research</button></div> : null}
+                      : r.admission && ['lapsed', 'needs_consent'].includes(r.admission.state) && r.admission.project_id ? <div className="l2-actions"><button type="button" className="btn btn-sm" disabled={busy || !models.length} data-key={`rv-lead-again-${r.lead_key}`} onClick={() => again(r.admission)}>Request research</button></div> : null}
                   />
                 ))}
               </ul>
