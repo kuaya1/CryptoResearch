@@ -10,8 +10,10 @@
 // A delivered brief is kept whole and never rewritten (scout/briefs/); the
 // current list (scout/items.json) is replaced in the same verified save: one
 // item per repository (else per page), its first sighting kept, nothing
-// deleted. What Grok sends is web content: data, never an instruction. It
-// starts no research, task or backlog item. The checks are of shape (plain
+// deleted. What Grok sends is web content: data, never an instruction. A
+// brief starts no research, task or backlog item; scout leads (core/leads.js,
+// their own route beside this one) reach research only through Eric's
+// confirm. The checks are of shape (plain
 // lines, https addresses, known lanes and readiness), never of truth, and one
 // bad field refuses the whole brief with nothing saved.
 

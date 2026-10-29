@@ -14,7 +14,8 @@
 //             step (trader-candles.js, slot 12b); only once Eric funds the book and a pair needs hours
 //   leads     eligibility of scout leads (leads.js, cr-lead-eligibility@1): CoinGecko's listing and
 //             GoPlus's screen for at most five due assets a turn; only once Eric turns leads on;
-//             never a model call, never research or a ticket
+//             also finishes admissions Eric confirmed (the project and the run his click asked
+//             for, under their own keys); never a model call, never a ticket
 //   research  run queued research jobs (explicit requests or configured schedules only)
 //   snapshot  daily portfolio snapshot                   once per day (America/New_York)
 //   reviews   daily review findings                      once per day
