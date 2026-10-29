@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cr.scout-leads.v1",
+  "title": "CryptoResearch scout leads delivery, version 1",
+  "description": "What Grok Scout posts to POST /api/ingest/scout-leads under cr-scout-leads-prompt@1 (intake plan rev. 2, audits/2026-10-29-intake-dialectic/PLAN.md §3). The envelope is checked whole: any fault refuses the delivery and nothing is saved. Each lead is checked on its own: a fault records that row as refused at intake and the others go on. A lead is identified by its chain and contract only; it has no name or ticker. Its signal and addresses are web content, data only: they never enter a prompt and start nothing. The desk keys a lead by the SHA-256 of [chain_id, address_key] (EVM lowercased, base58 as written).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "prompt_version", "delivery_id", "generated_at", "model", "leads"],
+  "properties": {
+    "schema": { "const": "cr.scout-leads.v1" },
+    "prompt_version": { "const": "cr-scout-leads-prompt@1" },
+    "delivery_id": { "type": "string", "pattern": "^[a-z0-9-]{8,64}$", "description": "Made by the sender before it sends (gh-<GITHUB_RUN_ID>-<GITHUB_RUN_ATTEMPT>) and reused on its own retry." },
+    "generated_at": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$", "description": "UTC, within 24 hours of the time the desk receives it, either way." },
+    "model": { "type": "string", "pattern": "^grok-[a-z0-9][a-z0-9.-]{0,40}$", "description": "The sender's declaration, stored as declared by the sender. Who sent it is the ingest key's principal, never this field." },
+    "leads": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["chain", "contract", "signal"],
+        "properties": {
+          "chain": { "type": "string", "description": "A chain the desk knows (dashboard/core/chains.js), by name or alias." },
+          "contract": { "type": "string", "description": "The token contract, in the shape its chain family uses. Native coins are not leads." },
+          "coingecko_id": { "type": ["string", "null"], "pattern": "^[a-z0-9][a-z0-9-]{0,99}$" },
+          "signal": { "type": "string", "maxLength": 280, "description": "One plain line." },
+          "urls": { "type": "array", "maxItems": 5, "items": { "type": "string", "pattern": "^https://", "maxLength": 300 } }
+        }
+      }
+    }
+  }
+}

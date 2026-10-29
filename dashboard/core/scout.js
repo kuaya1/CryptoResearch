@@ -363,7 +363,7 @@ const keyHash = (k) => crypto.createHash('sha256').update(String(k), 'utf8').dig
 
 // A body read whole up to max bytes; past it, reading stops and the answer
 // is 413 on a closed connection.
-function readBounded(req, max) {
+function readBounded(req, max, { withRaw = false } = {}) {
   return new Promise((resolve, reject) => {
     let size = 0;
     let done = false;
@@ -386,7 +386,9 @@ function readBounded(req, max) {
       if (done) return;
       done = true;
       try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+        const raw = Buffer.concat(chunks);
+        const parsed = JSON.parse(raw.toString('utf8'));
+        resolve(withRaw ? { json: parsed, raw } : parsed);
       } catch (_) {
         reject(Object.assign(new Error('The body is not JSON.'), { status: 400, code: 'INVALID' }));
       }
@@ -434,9 +436,52 @@ function makeScoutRoute(ws, { env = process.env, log = () => {}, now = () => Dat
     }
     return true;
   };
+  // Scout leads (core/leads.js, intake plan rev. 2 §3): the same key, lock,
+  // Origin, type and size rules as the brief; its own daily count. 202 only
+  // once the delivery reads back as saved; a save that did not verify is 503.
+  const leadsRoute = async (req, res, url, key) => {
+    const L = require('./leads');
+    const sub = url.pathname.slice(L.LEADS_PATH.length);
+    if (req.method === 'GET' || req.method === 'HEAD') {
+      if (refused(req, res, key, 'leads check')) return undefined;
+      if (!sub) return send(req, res, 200, { ok: true, key: 'accepted', leads_today: L.leadsToday(ws, now()), max_per_day: L.MAX_LEADS_PER_DAY });
+      try {
+        return send(req, res, 200, L.status(ws, L.SOURCE, decodeURIComponent(sub.slice(1))));
+      } catch (err) {
+        if (err.code === 'NOT_FOUND') return send(req, res, 404, { error: err.message, code: 'NOT_FOUND' });
+        throw err;
+      }
+    }
+    if (req.method !== 'POST' || sub) return send(req, res, 405, { error: 'Method not allowed' });
+    if (refused(req, res, key, 'leads delivery')) return undefined;
+    if (!/^application\/json\s*(;|$)/i.test(String(req.headers['content-type'] || ''))) return send(req, res, 415, { error: 'The delivery must be sent as application/json.', code: 'INVALID' });
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > L.LIMITS.body) return send(req, res, 413, { error: `The delivery is larger than ${Math.round(L.LIMITS.body / 1024)} KB.`, code: 'TOO_LARGE' });
+    let body;
+    try {
+      body = await readBounded(req, L.LIMITS.body, { withRaw: true });
+    } catch (err) {
+      return send(req, res, err.status || 400, { error: err.message, code: err.code || 'INVALID', saved: false });
+    }
+    try {
+      const r = L.ingest(ws, body.json, { now: now(), raw: body.raw });
+      log(`Scout leads ${r.status} (${r.delivery_id}): ${r.rows.length} rows.`);
+      return send(req, res, r.status === 'accepted' ? 202 : 200, r);
+    } catch (err) {
+      if (err.code === 'INVALID') {
+        log(`Scout leads refused: ${err.details.errors.length} problems.`);
+        return send(req, res, 400, { error: err.message, code: 'INVALID', errors: err.details.errors, saved: false });
+      }
+      if (err.code === 'CONFLICT') return send(req, res, 409, { error: err.message, code: 'CONFLICT', saved: false });
+      if (err.code === 'DAILY_LIMIT') return send(req, res, 429, { error: err.message, code: 'DAILY_LIMIT', saved: false });
+      log(`Scout leads not saved: ${err.code || 'error'}.`);
+      return send(req, res, 503, { error: `The delivery was not saved (${err.code || 'save failed'}); send it again with the same delivery_id.`, code: 'NOT_SAVED', saved: false });
+    }
+  };
   return async function handle(req, res, url) {
     if (req.headers.origin) return send(req, res, 403, { error: 'Not accepted from a browser.', code: 'REFUSED' });
     const key = deskKey(env);
+    if (url && /^\/api\/ingest\/scout-leads(\/|$)/.test(url.pathname)) return leadsRoute(req, res, url, key);
     if (req.method === 'GET' || req.method === 'HEAD') {
       if (refused(req, res, key, 'key check')) return undefined;
       return send(req, res, 200, { ok: true, key: 'accepted', briefs_today: briefsToday(ws, now()), max_per_day: MAX_PER_DAY });
@@ -482,6 +527,8 @@ module.exports = {
   BRIEF_PATH,
   checkBrief,
   itemProblems,
+  plainLine,
+  httpsUrl,
   normUrl,
   itemKey,
   usageCost,
