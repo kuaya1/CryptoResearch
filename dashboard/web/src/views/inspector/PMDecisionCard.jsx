@@ -131,6 +131,44 @@ function TestMatrix({ pid, pr }) {
   );
 }
 
+// ChatGPT's challenge of this ticket (intake dialectic PR 6): advisory, read
+// from its own route (core/ticket-challenges.js), never from the ticket. The
+// row always says a state in words; a record that does not match the ticket
+// receipt shows no verdict. It changes no decision and gates no button.
+const CHALLENGE_TONE = { agree: 'is-ok', disagree: 'is-warn', cannot_assess: 'is-unknown' };
+const ASSESSMENT_WORDS = { agree: 'agree', disagree: 'disagree', cannot_assess: 'cannot assess' };
+function ChallengeRow({ pid, rid, decidedAt }) {
+  const [row, setRow] = useState(null);
+  const [failed, setFailed] = useState(false);
+  const [open, setOpen] = useState(null);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    setFailed(false);
+    api.get(`/api/projects/${enc(pid)}/tickets/challenges?receipt=${enc(rid)}`, { signal: ctrl.signal })
+      .then((out) => setRow(out && out.row ? out.row : null))
+      .catch((err) => { if (err && err.name !== 'AbortError') setFailed(true); });
+    return () => ctrl.abort();
+  }, [pid, rid, decidedAt]);
+  const words = failed ? 'ChatGPT challenge: could not be read' : row ? row.words : 'ChatGPT challenge: reading…';
+  const tests = row && Array.isArray(row.tests) ? row.tests : null;
+  const cur = open && tests ? tests.find((x) => x.key === open) : null;
+  return (
+    <div className="pm-challenge" data-key={`pm-challenge-${pid}`} data-state={row ? row.state : failed ? 'unreadable' : 'loading'} aria-label="ChatGPT challenge">
+      <p className="pm-dis-row"><span className="pm-dis-k">ChatGPT challenge</span><span>{words}</span></p>
+      {row && row.after_decision_words ? <p className="faint pm-note" data-key={`pm-challenge-late-${pid}`}>{row.after_decision_words}</p> : null}
+      {tests ? (
+        <div className="pm-test-pills">
+          {tests.map((x) => (
+            <button type="button" key={x.key} className={`badge pm-test ${CHALLENGE_TONE[x.assessment] || 'is-unknown'}`} data-key={`pm-challenge-${x.key}-${pid}`} data-assessment={x.assessment || 'none'} aria-expanded={open === x.key} onClick={() => setOpen(open === x.key ? null : x.key)}>{`${x.label}: ${ASSESSMENT_WORDS[x.assessment] || 'not given'}`}</button>
+          ))}
+        </div>
+      ) : null}
+      {cur ? <p className="pm-dis-note" data-key={`pm-challenge-body-${pid}`}>{cur.reason || 'No reason recorded for this test.'}</p> : null}
+      {row && row.state === 'saved' && row.verdict !== 'insufficient_evidence' && row.verdict_reason ? <p className="pm-dis-note">{row.verdict_reason}</p> : null}
+    </div>
+  );
+}
+
 function exitText(t) {
   // A native L1 coin of the size the rules name passes without a DEX quote:
   // said as its basis, never as a measured cost.
@@ -378,6 +416,7 @@ export function PMDecisionCard({ p }) {
         </p>
       ) : null}
       {t.agent_disagreement ? <Disagreement pid={pid} t={t} spread={p.spread} dis={dis} r={r} q={q} fatal={fatal} /> : null}
+      <ChallengeRow pid={pid} rid={t.receipt_id} decidedAt={decided ? decided.at : null} />
       <RuleNote pid={pid} t={t} />
       {t.superseded_by_report ? <p className="faint pm-note">{`Claude has a newer report (${t.superseded_by_report}); this ticket is on the earlier one.`}</p> : null}
       <Actions pid={pid}>

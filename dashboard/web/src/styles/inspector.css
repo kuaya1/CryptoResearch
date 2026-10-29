@@ -539,6 +539,10 @@ html.has-drawer { overflow: hidden; }
 .pm-test { cursor: pointer; border: 0; font: inherit; }
 .pm-test-body { margin-top: 6px; }
 
+/* ChatGPT's challenge of the ticket: one row, a chip per test, in words. */
+.pm-challenge { display: flex; flex-direction: column; gap: 6px; }
+.pm-challenge .pm-dis-row { margin: 0; }
+
 /* Item 56: Agent 1 beside Agent 2. */
 .pm-sbs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
 .pm-sbs-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
