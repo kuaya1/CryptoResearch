@@ -4,7 +4,9 @@
 # repository variable SCOUT_ENABLED is 'true', which Eric sets; Run workflow
 # (workflow_dispatch) is his own run. The secrets are his, entered in GitHub:
 # XAI_API_KEY, DESK_INGEST_KEY and DESK_INGEST_URL. The script prints counts
-# only, as this repository and its logs are public.
+# only, as this repository and its logs are public. The leads call (a fifth
+# paid call, cr-scout-leads-prompt@1) runs only while the repository variable
+# SCOUT_LEADS is 'true', which Eric sets.
 name: scout-cron
 
 on:
@@ -25,7 +27,7 @@ jobs:
   sweep:
     if: github.event_name == 'workflow_dispatch' || vars.SCOUT_ENABLED == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,4 +40,5 @@ jobs:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           DESK_INGEST_KEY: ${{ secrets.DESK_INGEST_KEY }}
           DESK_INGEST_URL: ${{ secrets.DESK_INGEST_URL }}
+          SCOUT_LEADS: ${{ vars.SCOUT_LEADS }}
         run: node dashboard/scripts/grok-cron.js
