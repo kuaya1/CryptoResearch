@@ -41,3 +41,9 @@ Mission: `OVERNIGHT_MISSION.md.md` (Tasks 1–5 from `cryptoresearch-cohesion-au
 - Agent files: matcher `Bash|Write|Read|Grep|Glob`, bodies name the role's scratch folder; `dashboard/scripts/pilot.js` writes each agent's text in its role's scratch.
 - Tests: `dashboard/tests/pilot-isolation.test.js` (6: allowed/denied reads per role, searches, writes and imports, a junction inside a role's scratch, Git Bash spellings, the hook as a process); `pilot-role-guard.test.js` updated.
 - Not done (Eric's decision): a server-side Researcher/Prosecutor capability split on the connector. Today one Claude connection lists both research and ticket tools; on the online route the agent files' tool lists (client configuration) are the boundary. A server-enforced split needs its own scope/policy, not a role name in an argument.
+
+## Task 5 — phase-local snapshot reuse (brief 5): done in the adapter
+
+- `trader-desk.js` `snapshotOf` keeps `results`, `list` (intents) and `hours`; `view`, `requests` (`requestsOf`), `wanted` and `step` reuse it. `step` funds from the snapshot's funding figure, re-reads only after something was recorded, and returns requests from the snapshot taken after the last mutation (never a pre-mutation book). No cache across calls, no stored-record change; rollback is code-only.
+- Measured (journal reads, `dashboard/tests/trader-desk-reads.test.js`): Paper Book view 6 → 3; idle step 10 → 3. Answers compared whole with separate reads, before and after a recorded sell.
+- Not done (needs [P]): the remaining 3 reads are the engine's `results`, `intents` and `hours`, each loading the journal; one generation-checked read for all three, and `book` over a given snapshot (each grant not yet asked still reads the journal once in `assess`), are engine API changes in `paper-trader.js`.

@@ -371,16 +371,25 @@ function grantsOf(ws, only = null) {
 
 // The book as it stands: every intent by ID, the positions and the orders.
 // The hours each pair holds and the recorded missing hours come with it, and
-// whether the book's record is settled now (settlementOf).
+// whether the book's record is settled now (settlementOf). One snapshot
+// serves a whole read phase (the cohesion audit's brief 5): the view, the
+// requests and a step's assessments read it rather than the journal again,
+// and a step takes a new one after each thing it records, never reusing the
+// book from before a change. Nothing is kept between calls.
 function snapshotOf(ws, now) {
   const r = PT.results(ws, { now });
+  const list = PT.intents(ws);
+  const hours = PT.hours(ws);
   const snap = {
-    intents: new Map(PT.intents(ws).map((i) => [i.intent_id, i])),
+    results: r,
+    list,
+    hours,
+    intents: new Map(list.map((i) => [i.intent_id, i])),
     open: new Map(r.open_positions.map((p) => [p.position_id, p])),
     closed: new Map(r.closed_positions.map((p) => [p.position_id, p])),
     orders: r.orders,
     funded: r.funded_usd !== null,
-    last: new Map(PT.hours(ws).map((h) => [h.pair, h.last_hour])),
+    last: new Map(hours.map((h) => [h.pair, h.last_hour])),
     gaps: readGaps(ws),
   };
   snap.settlement = settlementOf(snap, Number(isoMs(now)));
@@ -521,7 +530,9 @@ function contextOf(ws, now, project) {
 // Reads only.
 function requests(ws, { now, project = null } = {}) {
   const ctx = contextOf(ws, now, project);
-  const snap = snapshotOf(ws, ctx.now);
+  return requestsOf(ws, ctx, snapshotOf(ws, ctx.now));
+}
+function requestsOf(ws, ctx, snap) {
   return { version: VERSION, now: ctx.now, waits: ctx.s.waits, settlement: snap.settlement, requests: ctx.grants.map((g) => { const a = assess(ws, ctx, g, snap); delete a.next; return a; }) };
 }
 
@@ -533,7 +544,7 @@ function requests(ws, { now, project = null } = {}) {
 function view(ws, { now } = {}) {
   const ctx = contextOf(ws, now, null);
   const snap = snapshotOf(ws, ctx.now);
-  const res = PT.results(ws, { now: ctx.now });
+  const res = snap.results;
   const reqs = ctx.grants.map((g) => { const a = assess(ws, ctx, g, snap); delete a.next; return a; });
   // Every intent a decision makes, its buy and each sell attempt, to its request.
   const owner = new Map();
@@ -546,7 +557,7 @@ function view(ws, { now } = {}) {
     const o = owner.get(intentId);
     return o ? { project_id: o.r.project_id, project: o.r.project, decision_id: o.r.decision_id, action: o.r.action, purpose: o.purpose, request_pair: o.r.pair } : { project_id: null, project: null, decision_id: null, action: null, purpose: null, request_pair: null };
   };
-  const intents = PT.intents(ws);
+  const intents = snap.list;
   const byOrder = new Map(intents.filter((i) => i.client_order_id).map((i) => [i.client_order_id, i]));
   const ofPosition = (p) => ({ ...p, ...whose(String(p.position_id).replace(/^pos-/, '')), exit_words: p.exits && p.exits.length ? exitWords(p.exits[p.exits.length - 1]) : null });
   // While an hour is missing, the book's figures are what it has recorded,
@@ -567,7 +578,7 @@ function view(ws, { now } = {}) {
       return { ...o, intent_id: i.intent_id || null, side: i.side || null, pair: i.pair || null, position_id: i.position_id || null, ...whose(i.intent_id) };
     }),
     refusals: intents.filter((i) => i.state === 'REFUSED').map((i) => ({ intent_id: i.intent_id, refusals: i.refusals || [], ...whose(i.intent_id) })),
-    hours: PT.hours(ws),
+    hours: snap.hours,
   };
 }
 
@@ -580,7 +591,7 @@ function wanted(ws, { now } = {}) {
   const ctx = contextOf(ws, now, null);
   if (!ctx.s.book.cash_usd) return [];
   const snap = snapshotOf(ws, ctx.now);
-  const last = new Map(PT.hours(ws).map((h) => [h.pair, h.last_hour]));
+  const last = snap.last;
   const out = new Map();
   const add = (pair, pid, why) => { if (pair && !out.has(pair)) out.set(pair, { pair, project_id: pid, why, last_hour: last.get(pair) || null }); };
   for (const g of ctx.grants) {
@@ -599,19 +610,21 @@ function wanted(ws, { now } = {}) {
 // recorded in it; NAV by the hour starts at the funding (paper-trader.js
 // navSeries). A different amount later is never applied over the first;
 // that is said, not thrown.
-function fundOnce(ws, ctx, done, problems) {
+function fundOnce(ws, ctx, done, problems, snap = null) {
   const cash = ctx.s.book.cash_usd;
-  if (!cash) return;
-  const funded = PT.results(ws, { now: ctx.now }).funded_usd;
+  if (!cash) return false;
+  const funded = (snap ? snap.results : PT.results(ws, { now: ctx.now })).funded_usd;
   if (funded !== null) {
     if (dec(funded) !== dec(cash)) problems.push({ kind: 'fund', code: 'CONFLICT', words: `The book was funded with ${usd(funded)}; your setting of ${usd(cash)} is never applied over it.` });
-    return;
+    return false;
   }
   try {
     const f = PT.fund(ws, { cash_usd: cash, now: ctx.now });
     if (f.status === 'saved') done.push({ kind: 'fund', status: 'saved', words: `Funded with ${usd(f.cash_usd)}.` });
+    return f.status === 'saved';
   } catch (err) {
     problems.push({ kind: 'fund', code: err.code || null, words: String(err && err.message || err).slice(0, 300) });
+    return false;
   }
 }
 
@@ -620,11 +633,13 @@ function step(ws, { now, project = null } = {}) {
   const done = [];
   const problems = [];
   const attempt = (what, fn) => { try { const r = fn(); done.push({ ...what, status: r.status, state: r.state || null, words: r.words || null, refusals: r.refusals || null }); return r; } catch (err) { problems.push({ ...what, code: err.code || null, words: String(err && err.message || err).slice(0, 300) }); return null; } };
-  fundOnce(ws, ctx, done, problems);
   let snap = snapshotOf(ws, ctx.now);
+  if (fundOnce(ws, ctx, done, problems, snap)) snap = snapshotOf(ws, ctx.now);
+  // Read again only when recovery or a reconcile was attempted.
+  const before = done.length + problems.length;
   if (snap.orders.some((o) => o.state === 'RESERVED' || o.state === 'SENT')) attempt({ kind: 'recover' }, () => PT.recover(ws, { now: ctx.now }));
   else for (const o of snap.orders.filter((x) => x.state === 'UNKNOWN')) attempt({ kind: 'reconcile', client_order_id: o.client_order_id }, () => PT.reconcile(ws, o.client_order_id, { now: ctx.now }));
-  snap = snapshotOf(ws, ctx.now);
+  if (done.length + problems.length !== before) snap = snapshotOf(ws, ctx.now);
   // Closes and cancels first: they only reduce risk. Then new orders, the
   // oldest decision first. Each pass does one thing not yet tried and reads
   // the book again, so a cancel frees the sell after it in the same step.
@@ -641,7 +656,9 @@ function step(ws, { now, project = null } = {}) {
     else attempt(what, () => PT.submitIntent(ws, a.next.intent, { now: ctx.now, rules: ctx.s.rules, venue: ctx.s.venue }));
     snap = snapshotOf(ws, ctx.now);
   }
-  return { version: VERSION, now: ctx.now, done, problems, ...requests(ws, { now: ctx.now, project }) };
+  // The requests as the book stands after the last thing recorded: snap was
+  // read after it.
+  return { version: VERSION, now: ctx.now, done, problems, ...requestsOf(ws, ctx, snap) };
 }
 
 // Closed hours for the book, one after another (12b hands them in), after
