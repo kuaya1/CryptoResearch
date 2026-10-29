@@ -586,7 +586,13 @@ test('F6: an index rebuild reads each month of price history once and gives the 
   assert.deepEqual(ids.map((id) => market.volumeChange24h(ws, id, latest.assets[id], { history: cache })), expected, 'the same results from the shared parse');
   const reviewed = digest.changesSince(ws, PID, { since: new Date(since).toISOString(), latestMarket: latest });
   assert.deepEqual(digest.changesSince(ws, PID, { since: new Date(since).toISOString(), latestMarket: latest, history: cache }).price, reviewed.price);
-  // A rebuild opens each month file once.
+  // A rebuild opens each month file once. The reads above were of these same
+  // files, and a parse is kept until a file changes (market.js parsedMonth):
+  // new times on both make the rebuild read them afresh.
+  for (const [i, m] of Object.keys(lines).entries()) {
+    const when = new Date(end + (i + 1) * 1000);
+    fs.utimesSync(path.join(root, 'market-data', 'observations', `${m}.jsonl`), when, when);
+  }
   const reads = [];
   const real = fs.readFileSync;
   t.mock.method(fs, 'readFileSync', function (p, ...rest) {

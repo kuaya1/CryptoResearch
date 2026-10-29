@@ -19,7 +19,11 @@
 // Nothing here starts research, refreshes prices or writes on its own.
 import { toast, store as browserStore, announce } from '../../../public/ui.js';
 
-const GET_TIMEOUT_MS = 20000;
+// A read waits behind whatever the server's one thread is doing (a rebuild
+// after a save, another page's read); 45 s leaves room for that on the
+// online desk's half CPU (2026-10-29: 20 s cut off reads that would have
+// answered).
+const GET_TIMEOUT_MS = 45000;
 const WRITE_TIMEOUT_MS = 120000;
 const POLL_MS = 2500;
 const POLL_TIMEOUT_MS = 8000;

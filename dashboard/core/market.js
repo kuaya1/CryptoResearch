@@ -706,19 +706,67 @@ function freshness(ws, now = Date.now()) {
 // parsed the month once per project and reader).
 function historyMonth(ws, month, cache = null) {
   if (cache && cache.has(month)) return cache.get(month);
-  const byId = new Map();
-  for (const line of readJsonLines(ws.abs(`market-data/observations/${month}.jsonl`))) {
+  const byId = parsedMonth(ws, month).history;
+  if (cache) cache.set(month, byId);
+  return byId;
+}
+
+// Every priced reading of one month by asset, in file order, as
+// { t, price_usd, market_cap_usd } (report-outcomes.js scanMonth reads it).
+function monthPoints(ws, month) {
+  return parsedMonth(ws, month).points;
+}
+
+// One parse of a month's history file shared by every reader and request
+// (2026-10-29: a ticket's invalidation check, the paper book and the outcomes
+// each parsed the 14 MB month again, several times per page, on the server's
+// one thread). Keyed by the file's size, modification time and inode: the
+// file only ever gains lines, so any change is a new key and a reader never
+// gets an older parse. Readers must not change what they are given. Only the
+// most recent months are kept.
+const MONTH_CACHE_MAX = 3;
+const monthCache = new Map();
+function parsedMonth(ws, month) {
+  const abs = ws.abs(`market-data/observations/${month}.jsonl`);
+  let sig = null;
+  try {
+    const st = fs.statSync(abs);
+    sig = `${st.size}:${st.mtimeMs}:${st.ino}`;
+  } catch (_) { /* no history for this month */ }
+  const hit = monthCache.get(abs);
+  if (hit && sig !== null && hit.sig === sig) {
+    monthCache.delete(abs);
+    monthCache.set(abs, hit);
+    return hit;
+  }
+  const history = new Map();
+  const points = new Map();
+  for (const line of sig === null ? [] : readJsonLines(abs)) {
     const seen = new Set();
     for (const a of Array.isArray(line.assets) ? line.assets : []) {
-      if (!a || typeof a.id !== 'string' || seen.has(a.id)) continue;
+      if (!a || typeof a.id !== 'string') continue;
+      if (typeof a.price_usd === 'number' && a.price_usd > 0) {
+        const t = Date.parse(a.source_last_updated_at || a.fetched_at || line.fetched_at);
+        if (Number.isFinite(t)) {
+          let pl = points.get(a.id);
+          if (!pl) points.set(a.id, (pl = []));
+          pl.push({ t, price_usd: a.price_usd, market_cap_usd: typeof a.market_cap_usd === 'number' ? a.market_cap_usd : null });
+        }
+      }
+      if (seen.has(a.id)) continue;
       seen.add(a.id);
-      let list = byId.get(a.id);
-      if (!list) byId.set(a.id, (list = []));
+      let list = history.get(a.id);
+      if (!list) history.set(a.id, (list = []));
       list.push({ source_last_updated_at: a.source_last_updated_at || null, fetched_at: line.fetched_at || null, price_usd: a.price_usd, volume_24h_usd: a.volume_24h_usd });
     }
   }
-  if (cache) cache.set(month, byId);
-  return byId;
+  const entry = { sig, history, points };
+  monthCache.delete(abs);
+  if (sig !== null) {
+    monthCache.set(abs, entry);
+    while (monthCache.size > MONTH_CACHE_MAX) monthCache.delete(monthCache.keys().next().value);
+  }
+  return entry;
 }
 
 // 24-hour volume change from our own stored observations, only when a
@@ -739,4 +787,4 @@ function volumeChange24h(ws, id, current, { history = null } = {}) {
   return { pct: (current.volume_24h_usd / best.vol - 1) * 100, compared_with: best.at, hours: Math.round(best.age * 10) / 10 };
 }
 
-module.exports = { refresh, searchCoins, readLatest, readStatus, trackedIds, freshness, fetchMarkets, validateRow, nextAllowed, noteRateLimit, rateLimitGate, retryAfterMs, clock, volumeChange24h, historyMonth, logoFile, apiKey, credential, callBudget, addCalls, reserveCall, LATEST_REL, STATUS_REL, SOURCE_LABEL, RATE_LIMIT_DEFAULT_MS };
+module.exports = { refresh, searchCoins, readLatest, readStatus, trackedIds, freshness, fetchMarkets, validateRow, nextAllowed, noteRateLimit, rateLimitGate, retryAfterMs, clock, volumeChange24h, historyMonth, monthPoints, logoFile, apiKey, credential, callBudget, addCalls, reserveCall, LATEST_REL, STATUS_REL, SOURCE_LABEL, RATE_LIMIT_DEFAULT_MS };
