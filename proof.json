@@ -1,0 +1,85 @@
+{
+ "schema_version": "cr.visual-proof.v1",
+ "desk": "fictional",
+ "theme": "light",
+ "viewport": {
+  "width": 1440,
+  "height": 900
+ },
+ "taken_at": "2026-10-29T00:58:39.316Z",
+ "shots": [
+  {
+   "name": "desk",
+   "label": "Desk",
+   "route": "#/watchlist",
+   "file": "desk.png",
+   "ready": true,
+   "measures": {
+    "rows": 16,
+    "row_height_px": 65,
+    "name_font_px": 15,
+    "name_weight": 500,
+    "columns": 7,
+    "consensus_marks": {
+     "graded": 18,
+     "waiting": 3,
+     "withheld": 2,
+     "problem": 2,
+     "hold": 16,
+     "none": 7
+    }
+   },
+   "errors": [],
+   "writes": [],
+   "clean": true
+  },
+  {
+   "name": "inspector",
+   "label": "Inspector open",
+   "route": "#/watchlist?p=example-relay-network-fictional",
+   "file": "inspector.png",
+   "ready": true,
+   "measures": {
+    "strip": true,
+    "cells": 4,
+    "one_row": false,
+    "wrapped_heads": 0,
+    "wrapped_notes": 2,
+    "inspector_width_px": 440
+   },
+   "errors": [],
+   "writes": [],
+   "clean": true
+  },
+  {
+   "name": "review",
+   "label": "Review, three panes",
+   "route": "#/review?p=example-relay-network-fictional",
+   "file": "review.png",
+   "ready": true,
+   "measures": {
+    "panes": 3,
+    "raw_ids_visible": 0,
+    "raw_id_samples": []
+   },
+   "errors": [],
+   "writes": [],
+   "clean": true
+  },
+  {
+   "name": "portfolio",
+   "label": "Portfolio",
+   "route": "#/portfolio",
+   "file": "portfolio.png",
+   "ready": true,
+   "measures": {
+    "badge": false,
+    "needs_attention": 0,
+    "badge_title": null
+   },
+   "errors": [],
+   "writes": [],
+   "clean": true
+  }
+ ]
+}
