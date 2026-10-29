@@ -335,6 +335,12 @@ function validateSettingsPatch(patch, ws = null) {
     if (patch.trader.rules !== undefined) out.trader.rules = TR.validatePatch(patch.trader.rules);
     if (patch.trader.book !== undefined) out.trader.book = TR.validateBookPatch(patch.trader.book);
   }
+  if (patch.leads !== undefined) {
+    // Eric's scout lead policy (Preferences > Screening > Scout leads;
+    // core/leads.js policyOf reads it with the same bounds). Nothing has a
+    // default: a value unset holds every lead (POLICY_HOLD).
+    out.leads = require('./core/leads').validatePolicyPatch(patch.leads);
+  }
   if (patch.alerts && patch.alerts.spread) {
     // Eric's spread-alert thresholds (core/spread.js thresholds reads them
     // with the same bounds): the grade gap between Claude and another model,
@@ -735,7 +741,8 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   // overlapping the hourly task. So does the Paper Book's hourly read (slot
   // 12b, trader-candles.js): closed hours for the pairs it needs, then the
   // desk adapter's step, only once Eric has funded the book.
-  const DAILY_JOBS = ['snapshot', 'reviews', 'backup', 'fundamentals', 'screening', 'forensics', 'trader'];
+  // So do scout leads' eligibility turns (leads.js), only once Eric turns them on.
+  const DAILY_JOBS = jobs.HOSTED_TIMER_JOBS;
   const dailyTimer = setInterval(() => jobs.runJobs(ws, DAILY_JOBS, { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 30 * 60000);
 
   // The front door (dashboard/frontdoor.js) answers everything before

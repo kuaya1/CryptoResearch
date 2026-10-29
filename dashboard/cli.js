@@ -177,6 +177,9 @@ Data, jobs and maintenance
   scout list | scout status              Grok Scout's items and its last brief (read only)
   scout leads list | scout leads status <delivery_id>
                                          Grok Scout's leads and one delivery's outcome (read only)
+  scout leads run | scout leads receipt <receipt_id>
+                                         One eligibility turn (CoinGecko listing + GoPlus screen,
+                                         at most 5 leads, 10 requests, 20 s); one receipt
   restored-copy status | restored-copy release --confirm
                                          a restored copy holds research until released here
                                          the backup key is CR_BACKUP_KEY on the desk and on this PC
@@ -1022,11 +1025,14 @@ async function run(argv) {
       if (!sub || sub === 'list') return S.view(ws);
       if (sub === 'status') return { status: S.statusLine(ws) };
       if (sub === 'leads') {
-        // Its leads (core/leads.js); read only.
+        // Its leads (core/leads.js); read only, except run: one eligibility
+        // turn (job leads), the same as the server's timer.
         const L = require('./core/leads');
         if (!rest[0] || rest[0] === 'list') return L.view(ws);
         if (rest[0] === 'status') return L.status(ws, L.SOURCE, need(rest[1], 'scout leads status <delivery_id>'));
-        throw Object.assign(new Error('scout leads list|status <delivery_id>'), { code: 'USAGE' });
+        if (rest[0] === 'run') return L.refresh(ws, { trigger: 'cli' });
+        if (rest[0] === 'receipt') return L.getReceipt(ws, need(rest[1], 'scout leads receipt <receipt_id>'));
+        throw Object.assign(new Error('scout leads list|status <delivery_id>|run|receipt <receipt_id>'), { code: 'USAGE' });
       }
       throw Object.assign(new Error('scout list|status|leads'), { code: 'USAGE' });
     }

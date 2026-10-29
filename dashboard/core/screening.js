@@ -290,7 +290,7 @@ const credsId = (creds) => sha256(`${creds.key}\n${creds.secret}`);
 // A token for this run: the cached one while it has more than two minutes
 // left, else a new one from GoPlus (one request, reserved like any other).
 // Returns { token } or { token: null, why }; never throws.
-async function accessToken(creds, { fetchImpl, timeoutMs, now, reserve, counts }) {
+async function accessToken(creds, { fetchImpl, timeoutMs, now, reserve, counts, signalOf = () => AbortSignal.timeout(timeoutMs), readText = (res) => res.text() }) {
   if (creds.mode !== 'app_key') return { token: null, why: creds.note };
   const id = credsId(creds);
   if (tokenCache && tokenCache.id === id && tokenCache.expires_at - 120000 > now) return { token: tokenCache.token };
@@ -302,8 +302,8 @@ async function accessToken(creds, { fetchImpl, timeoutMs, now, reserve, counts }
   const url = new URL(`${ORIGIN}${TOKEN_PATH}`);
   if (url.origin !== ORIGIN) return { token: null, why: 'unexpected token origin' };
   try {
-    const res = await fetchImpl(url.toString(), { method: 'POST', headers: { ...HEADERS, 'content-type': 'application/json' }, body: JSON.stringify({ app_key: creds.key, sign, time }), signal: AbortSignal.timeout(timeoutMs) });
-    const text = await res.text();
+    const res = await fetchImpl(url.toString(), { method: 'POST', headers: { ...HEADERS, 'content-type': 'application/json' }, body: JSON.stringify({ app_key: creds.key, sign, time }), signal: signalOf() });
+    const text = await readText(res);
     let body = null;
     try { body = typeof text === 'string' && text.length <= MAX_BODY_CHARS ? JSON.parse(text) : null; } catch (_) { body = null; }
     const r = body && body.result && typeof body.result === 'object' ? body.result : body;
@@ -332,17 +332,21 @@ const HEADERS = { accept: 'application/json', 'user-agent': 'CryptoResearch-desk
 // when the budget is used up nothing more is sent. A 429 (or GoPlus code
 // 4029) stops at once. With an access token (auth.token), a 401 or 403 drops
 // it: the retry, and the rest of the run, go keyless.
-async function getScreen(url, c, { fetchImpl, timeoutMs, maxAttempts, retryDelayMs, counts, reserve = () => true, auth = { token: null } }) {
+async function getScreen(url, c, { fetchImpl, timeoutMs, maxAttempts, retryDelayMs, counts, reserve = () => true, auth = { token: null }, signalOf = () => AbortSignal.timeout(timeoutMs), readText = (res) => res.text(), canWait = () => true }) {
   let failure = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    if (attempt > 1 && retryDelayMs) await sleep(retryDelayMs);
+    if (attempt > 1 && retryDelayMs) {
+      // A bounded caller (the scout leads turn) skips a wait that would pass its deadline.
+      if (!canWait(retryDelayMs)) return failure;
+      await sleep(retryDelayMs);
+    }
     if (!reserve()) return { kind: 'budget', attempts: attempt - 1, after: failure };
     counts.sent++;
     const headers = auth.token ? { ...HEADERS, authorization: `Bearer ${auth.token}` } : HEADERS;
     let res;
     let text;
     try {
-      res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+      res = await fetchImpl(url, { headers, signal: signalOf() });
       if (auth.token && (res.status === 401 || res.status === 403)) {
         try { if (res.body && typeof res.body.cancel === 'function') await res.body.cancel(); } catch (_) { /* nothing to release */ }
         auth.token = null;
@@ -355,7 +359,7 @@ async function getScreen(url, c, { fetchImpl, timeoutMs, maxAttempts, retryDelay
         try { if (res.body && typeof res.body.cancel === 'function') await res.body.cancel(); } catch (_) { /* nothing to release */ }
         return { kind: 'rate_limited', http_status: 429, retry_after_ms: require('./market').retryAfterMs(res), attempts: attempt };
       }
-      text = await res.text();
+      text = await readText(res);
     } catch (err) {
       const timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError');
       failure = { kind: 'failed', error: timedOut ? `no answer within ${Math.round(timeoutMs / 1000)} s` : `the request failed: ${cleanText(String((err && err.message) || err), 160)}`, attempts: attempt };
@@ -537,6 +541,72 @@ function isDue(ws, now = Date.now()) {
   if (!cfgOf(ws).enabled) return false;
   if (blockedBy(readStatus(ws), now)) return false;
   return screenedProjects(ws).some((p) => projectDue(ws, p, now));
+}
+
+// One address that is not yet a project's (a scout lead, core/leads.js), read
+// inside a caller's bounded turn: { take(), signalFor(ms), readBody(res),
+// canWait(ms) }. It shares this file's lease, rate-limit gate, backoff,
+// monthly budget and access token; every request, the token request and a
+// retry included, takes one of the turn's requests and is reserved in the
+// month's count before it is sent; bodies are read bounded. It writes no
+// project cache. Returns { kind, ... } and never throws for GoPlus's answer:
+//   ok (normalized, raw_sha256), not_found, refused, failed, rate_limited
+//   (retry_at), blocked (retry_at), budget, turn (the turn ran out), busy,
+//   unscreenable.
+async function screenAddress(ws, chain, address, { turn, fetchImpl = fetch, now = Date.now(), retryDelayMs = 1000 } = {}) {
+  const cfg = cfgOf(ws);
+  const info = chainInfo(chain);
+  if (!info || !addressFits(info.family, address)) return { kind: 'unscreenable', error: 'GoPlus does not screen this chain, or the address does not fit it' };
+  const c = { chain: info.label, chain_id: info.chain_id, family: info.family, label: info.label, address: String(address).trim(), screenable: true };
+  const blocked = blockedBy(readStatus(ws), now);
+  if (blocked) return { kind: 'blocked', retry_at: blocked.retry_at, error: blocked.message };
+  const timeoutMs = Math.max(1, cfg.timeout_seconds) * 1000;
+  const lease = acquireLease(ws, LEASE, Math.max(60000, turn.remaining() + 30000), { label: 'scout leads' });
+  if (!lease) return { kind: 'busy', error: 'another contract screening run holds GoPlus' };
+  const counts = { sent: 0, answered: 0 };
+  let turnOut = false;
+  const reserve = () => {
+    if (!turn.take()) {
+      turnOut = true;
+      return false;
+    }
+    return reserveRequest(ws, cfg, now);
+  };
+  let rawText = null;
+  const hooks = {
+    signalOf: () => turn.signalFor(timeoutMs),
+    readText: async (res) => {
+      rawText = await turn.readBody(res, MAX_BODY_CHARS);
+      return rawText;
+    },
+  };
+  try {
+    const creds = credentials();
+    const tok = await accessToken(creds, { fetchImpl, timeoutMs, now, reserve, counts, ...hooks });
+    if (turnOut) return { kind: 'turn', error: 'the turn\'s request budget or time ran out' };
+    const auth = { token: tok.token || null, dropped: null };
+    rawText = null;
+    const r = await getScreen(screenUrl(c), c, { fetchImpl, timeoutMs, maxAttempts: Math.max(1, cfg.max_attempts), retryDelayMs, counts, reserve, auth, ...hooks, canWait: (ms) => turn.canWait(ms) });
+    const settle = (limited) => updateStatus(ws, (cur) => {
+      const next = { ...cur, calls: addCalls(callCounts(cur, now), 0, counts.answered) };
+      return limited ? { ...next, ...rateLimitFields(cfg, cur, limited.retry_after_ms, now) } : next;
+    });
+    if (r && r.kind === 'rate_limited') {
+      settle(r);
+      return { kind: 'rate_limited', retry_at: gateOf(readStatus(ws), now).until, error: 'GoPlus rate-limited the request' };
+    }
+    settle(null);
+    if (turnOut) return { kind: 'turn', error: 'the turn\'s request budget or time ran out' };
+    if (!r) return { kind: 'failed', error: 'no attempt was made' };
+    if (r.kind === 'budget') return { kind: 'budget', error: `the monthly GoPlus request budget (${cfg.monthly_request_budget}) is used up` };
+    if (r.kind === 'failed' || r.kind === 'refused') return { kind: r.kind, error: r.error, http_status: r.http_status || null };
+    const answer = { http_status: r.http_status || null, goplus_code: r.goplus_code ?? null, raw_sha256: rawText === null ? null : sha256(rawText), endpoint: screenUrl(c) };
+    if (r.kind === 'not_found') return { kind: 'not_found', ...answer };
+    const n = c.family === 'solana' ? normalizeSolana(r.raw) : normalizeEvm(r.raw);
+    return { kind: 'ok', partial: Boolean(r.partial), ...answer, family: c.family, normalized: { ...n, ...flagsOf(c.family, n.checks) } };
+  } finally {
+    releaseLease(ws, LEASE, lease);
+  }
 }
 
 // The alert transitions between two good screens of the same contract. Pure,
@@ -915,6 +985,8 @@ module.exports = {
   credential,
   isDue,
   refresh,
+  screenAddress,
+  blockedBy,
   stateFor,
   packetBlock,
   includeInPacket,

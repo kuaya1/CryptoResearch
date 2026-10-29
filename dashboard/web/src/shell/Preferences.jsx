@@ -299,6 +299,79 @@ function TraderBook({ d }) {
   );
 }
 
+// ---- Screening: leads.* (core/leads.js policyOf, cr-lead-policy@1) ------------------------------
+
+const LEAD_FIELDS = [
+  ['chains', 'Chains leads may come from', 'Chain names or IDs, separated by commas, such as base, ethereum, solana. A lead on any other chain is refused. 1 to 40 chains.', 'text'],
+  ['min_market_cap_usd', 'Minimum market cap (USD)', 'CoinGecko\'s market cap at the reading. A whole number from 0 to 1,000,000,000,000.', 'numeric'],
+  ['min_volume_24h_usd', 'Minimum 24-hour volume (USD)', 'CoinGecko\'s 24-hour volume at the reading. A whole number from 0 to 1,000,000,000,000.', 'numeric'],
+  ['max_sell_tax_pct', 'Maximum sell tax (%)', 'GoPlus\'s sell tax (on Solana, the transfer fee). A missing tax is unknown, never 0. From 0 to 100, at most two decimals.', 'decimal'],
+  ['eligibility_hours', 'Eligibility lasts (hours)', 'How long a reading holds, from the time the desk sent its requests. A whole number from 1 to 720.', 'numeric'],
+];
+
+function ScoutLeads({ d }) {
+  const saved = (d.index.settings && d.index.settings.leads) || {};
+  const key = JSON.stringify(saved);
+  const fresh = () => ({
+    enabled: saved.enabled === true,
+    ...Object.fromEntries(LEAD_FIELDS.map(([k]) => [k, saved[k] === undefined || saved[k] === null ? '' : Array.isArray(saved[k]) ? saved[k].join(', ') : String(saved[k])])),
+  });
+  const [form, setForm] = useState(fresh);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const base = fresh();
+  const dirty = form.enabled !== base.enabled || LEAD_FIELDS.some(([k]) => form[k] !== base[k]);
+  useEffect(() => { if (!dirty) setForm(fresh()); }, [key]);
+  const save = async () => {
+    // An empty field unsets it, which holds every lead; the server checks every value.
+    const out = { enabled: form.enabled };
+    for (const [k] of LEAD_FIELDS) {
+      const v = String(form[k]).trim();
+      if (k === 'chains') out.chains = v ? v.split(',').map((c) => c.trim()).filter(Boolean) : null;
+      else out[k] = v ? v.replace(/[$,_\s%]/g, '') : null;
+    }
+    setErr(null);
+    setBusy(true);
+    try {
+      await api.post('/api/settings', { leads: out });
+      toast('Scout lead settings saved.');
+      await refresh();
+    } catch (e) {
+      setErr(e.message);
+      toast(e.message, 'bad');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="l2-panel" aria-labelledby="prefs-leads-h">
+      <header className="l2-panel-head">
+        <h3 className="l2-panel-t" id="prefs-leads-h" title="Which of Grok Scout's leads may be shown to you for confirmation (cr-lead-eligibility@1): CoinGecko's listing and GoPlus's screen, read by the desk, never a model. None of these has a default; while one is unset every lead is held. Eligible never means safe or approved.">Scout leads</h3>
+      </header>
+      <div className="l2-panel-body">
+        <form className="l2-form prefs-form" data-key="prefs-leads-form" onSubmit={(e) => { e.preventDefault(); save(); }}>
+          <label className="prefs-field" title="Off: no lead is read, and nothing is asked of CoinGecko or GoPlus for leads.">
+            <span>Read scout leads</span>
+            <input type="checkbox" checked={form.enabled} data-key="prefs-leads-enabled" onChange={(e) => { setForm({ ...form, enabled: e.target.checked }); setErr(null); }} />
+          </label>
+          {LEAD_FIELDS.map(([k, label, hint, mode]) => (
+            <label key={k} className="prefs-field" title={hint}>
+              <span>{label}</span>
+              <input className="input" type="text" inputMode={mode} placeholder="Not set" value={form[k]} aria-describedby={`prefs-hint-leads-${k}`} data-key={`prefs-leads-${k}`} onChange={(e) => { setForm({ ...form, [k]: e.target.value }); setErr(null); }} />
+              <span id={`prefs-hint-leads-${k}`} className="sr-only">{hint}</span>
+            </label>
+          ))}
+          {err ? <p className="l2-err" role="alert">{err}</p> : null}
+          <div className="l2-actions">
+            <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !dirty} data-key="prefs-leads-save">{busy ? 'Saving…' : 'Save scout lead settings'}</button>
+            {dirty ? <button type="button" className="btn btn-ghost btn-sm" data-key="prefs-leads-undo" onClick={() => { setForm(fresh()); setErr(null); }}>Discard changes</button> : null}
+          </div>
+        </form>
+      </div>
+    </section>
+  );
+}
+
 // ---- Appearance: the Desk's density, opening view and columns -----------------------------------
 
 function DeskDefaults() {
@@ -444,7 +517,7 @@ export default function Preferences() {
           </nav>
           <div className="prefs-body" ref={body}>
             <h3 className="prefs-title" id="prefs-title" tabIndex={-1}>{label}</h3>
-            {section === 'screening' ? <><Screening d={d} /><TicketSizing d={d} /><TraderRules d={d} /><TraderBook d={d} /></>
+            {section === 'screening' ? <><Screening d={d} /><TicketSizing d={d} /><TraderRules d={d} /><TraderBook d={d} /><ScoutLeads d={d} /></>
               : section === 'developer' ? <Developer d={d} />
                 : section === 'appearance' ? <Appearance />
                 : <Dom key={section} build={(L) => L.prefsSection(legacyCtx, section)} deps={[section, settingsKey]} />}

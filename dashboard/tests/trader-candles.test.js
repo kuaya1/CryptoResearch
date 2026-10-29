@@ -310,7 +310,9 @@ test('nothing is asked until Eric funds the book, and a restored copy asks nothi
 test('the job runs on the desk\'s 30-minute timer, and the read reaches the trader only through the adapter and the network only at GeckoTerminal', () => {
   assert.ok(require('../core/jobs').JOB_NAMES.includes('trader'));
   const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  assert.match(server, /const DAILY_JOBS = \[[^\]]*'trader'[^\]]*\];/);
+  // The timer's list lives in jobs.js (HOSTED_TIMER_JOBS, intake plan rev. 2 §4).
+  assert.ok(require('../core/jobs').HOSTED_TIMER_JOBS.includes('trader'));
+  assert.match(server, /const DAILY_JOBS = jobs\.HOSTED_TIMER_JOBS;/);
   const src = fs.readFileSync(path.join(__dirname, '..', 'core', 'trader-candles.js'), 'utf8');
   assert.doesNotMatch(src, /require\(\s*'\.\/(paper-trader|trade-risk|paper)'\s*\)/);
   assert.match(src, /require\('\.\/trader-desk'\)/);
