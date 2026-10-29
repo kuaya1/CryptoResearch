@@ -82,20 +82,28 @@ projects/<id>/tickets/
 - **Schema:** `templates/schemas/ticket.v1.schema.json`.
 - **Prompt:** `templates/tickets/ticket-prompt.v1.md`, pinned in `templates/tickets/LOCK.json`. A change means publishing v2; never edit v1.
 
-## Connector tools (`dashboard/mcp.js`, Claude only)
+## Connector tools (`dashboard/mcp.js`, Claude)
 
 | Tool | What it does |
 |---|---|
-| `autonomous_pilot_queue` | Read-only. Gives each pilot project's next step: `research` (Agent 1), `ticket` (Agent 2), `pm_review` or `done`, with the call to make |
+| `autonomous_pilot_queue` | Read-only. Gives each pilot project's next step: `research` (Agent 1), `ticket` (Agent 2), `ticket_failed` (the Prosecutor's last save was refused; the step names the field, and `start_ticket` resumes the ticket with the refused text as its draft), `gate_closed`, `pm_review` or `done`, with the call to make |
 | `start_ticket` | Opens or resumes the ticket on Claude's current report and returns the frozen prompt byte for byte |
 | `pending_tickets` | Read-only. Lists open tickets; with `include_prompt`, also returns the next one's prompt |
 | `save_ticket` | Saves the finished text with its JSON block. Fields that don't match the ticket are refused one by one. The same text again returns the same receipt; a different text needs `revision.note` |
 
-ChatGPT and Gemini have no ticket role in Phase 1.
+ChatGPT challenges; Claude prosecutes (intake dialectic PR 6, 2026-10-29; `dashboard/core/ticket-challenges.js`). ChatGPT may check a saved Prosecutor ticket, advisory and optional, through three tools of its own; Gemini has no ticket role, held or not.
+
+| Tool (ChatGPT only) | What it does |
+|---|---|
+| `pending_challenges` | Read-only. Saved Prosecutor tickets with no saved challenge. A project where ChatGPT's own research is open is listed as blocked, with no prompt, target or draft |
+| `start_challenge` | Opens or resumes the challenge of the latest Prosecutor ticket (or the receipt named) and returns the frozen prompt (`cr-ticket-challenge-prompt@1`). Refused while ChatGPT's own research on the project is open |
+| `save_challenge` | Saves `cr.ticket-challenge.v1`: each test agree, disagree or cannot_assess, a trade-plan critique, a verdict that fits the tests. A block that does not fit is refused field by field and kept as the draft; the same text is `unchanged`; a different one needs `revision { kind, note }` and keeps the first |
+
+The challenge freezes the ticket receipt's bytes, its text, the packet and the report (`challenges/<tc>/target.json`) and checks them on every handoff, save and read. Its receipts live in `tickets/challenge-receipts/`, apart from `receipts/`, so the trader never reads one. The PM card shows one "ChatGPT challenge" row in words; it changes no ticket, gate, size, decision or book, and `get_ticket` is unchanged.
 
 ## HTTP routes (`dashboard/server.js`)
 
-- Reads (write nothing): `GET /api/projects/<id>/tickets`, `.../tickets/<tk>/prompt`, `.../tickets/receipts/<tr>/text` (pins checked).
+- Reads (write nothing): `GET /api/projects/<id>/tickets`, `.../tickets/<tk>/prompt`, `.../tickets/receipts/<tr>/text` (pins checked), `.../tickets/challenges[?receipt=<tr>]` (ChatGPT's challenge: the card's row and every saved challenge, each checked against the ticket receipt on disk).
 - Writes: `POST .../tickets` (open), `.../tickets/<tk>/import` (save), `.../tickets/decisions` `{ receipt_id, action, request_id }` (a newer ticket is 409 `NEWER_REPORT`), `.../tickets/pilot` `{ on }`.
 
 ## Sub-agents and commands (Claude Code, Eric's subscription)

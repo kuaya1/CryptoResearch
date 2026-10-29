@@ -27,6 +27,12 @@
 // log, and marked as dispatched before it is sent, so an interrupted read is
 // never repeated by itself (it keeps counting at its reservation until Eric
 // asks to read the screenshot again).
+//
+// Step 3 is admitListing, shared with scout leads (core/leads.js, 2026-10-29):
+// a lead reaches it only through Eric's "Confirm and request research", with
+// the models frozen at his click and idempotency keys, so a replay or the
+// next leads turn finishes a crashed admission with the original project and
+// run. Confirming an intake candidate behaves as before.
 
 const fs = require('fs');
 const { runOp, OpError, withLock, replaceFile } = require('./ops');
