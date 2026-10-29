@@ -46,7 +46,9 @@
 // GAPS_REL below. While the book's record of a pair it is exposed in is
 // unsettled, no new order is asked anywhere in the book, the unfilled part
 // of a buy in that pair is not cancelled over its missing hour, and the
-// book's figures are read as recorded balances, never as settled ones.
+// book's figures are read as recorded balances, never as settled ones. Since
+// cr-paper@3 the book holds the same gate itself and its reading of each
+// pair is the one used here; the adapter adds the missing hour it recorded.
 //
 // Everything else is re-derived on each call from Eric's decisions and the
 // book's journal: its one record of its own is the missing hours the book
@@ -81,9 +83,6 @@ const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const MIN = 60000;
 const HOUR = 3600000;
 const BPS = 10000n;
-// A pair the book is exposed in whose last hour on record ended longer ago
-// than this is unsettled: the book's own NAV freshness.
-const SETTLED_WITHIN_MINUTES = PT.NAV_PRICE_FRESH_MINUTES;
 
 // The hours the book refused because one before them is missing (GAP), one
 // line per pair and missing hour, create-only: the pair, the missing hour,
@@ -218,36 +217,35 @@ function noteGap(ws, rec) {
   });
 }
 
-// Whether the book's record is settled now: for each pair it is exposed in
-// (an open position, or an order that may still fill or sell), the last hour
-// on record and any missing hour after it. Pure, over a snapshot.
-function settlementOf(snap, t) {
-  const exposed = new Map();
-  const add = (pair, what) => { if (pair) exposed.set(pair, [...(exposed.get(pair) || []), what]); };
-  for (const p of snap.open.values()) add(p.pair, 'an open position');
-  for (const i of snap.intents.values()) if (LIVE.includes(i.state)) add(i.pair, `a ${i.side === 'CLOSE_LONG' ? 'sell' : 'buy'} order ${i.state}`);
+// Whether the book's record is settled now: the engine's own reading
+// (paper-trader.js settlementAt, cr-paper@3: each pair the book is exposed
+// in, an open position or an order that may still fill or sell, and whether
+// its last hour on record is within the book's NAV freshness), with any
+// recorded missing hour after a pair's last hour named in its words. A
+// missing hour is stale by the time it is seen, so the engine's reading
+// already holds the book; a gaps record that does not read holds it here
+// too. Pure, over a snapshot.
+function settlementOf(snap) {
+  const eng = snap.results.settlement;
+  const exposed = new Set(eng.pairs.map((p) => p.pair));
   const lastMs = (pair) => (snap.last.has(pair) ? Date.parse(snap.last.get(pair)) : null);
-  const pairs = [...exposed.entries()].map(([pair, what]) => {
-    const last = lastMs(pair);
-    const through = last === null ? null : last + HOUR;
-    const gap = snap.gaps.gaps.find((g) => g.pair === pair && (last === null || Date.parse(g.missing_hour) > last)) || null;
-    const stale = through === null || t - through > SETTLED_WITHIN_MINUTES * MIN;
-    const at = ` for ${what.join(' and ')}`;
+  const pairs = eng.pairs.map((p) => {
+    const last = lastMs(p.pair);
+    const gap = snap.gaps.gaps.find((g) => g.pair === p.pair && (last === null || Date.parse(g.missing_hour) > last)) || null;
     const words = gap
-      ? `${pair} is missing the hour ${gap.missing_hour} (first seen ${gap.detected_at}; the hour ${gap.later_hour} after it has come), so a fill, stop or target in it is not on record${at}. It settles when that hour arrives; GeckoTerminal leaves out an hour in which the pool had no trade, so it may never arrive, and nothing is filled in.`
-      : stale ? `${pair} has ${through === null ? 'no hour on record' : `no hour on record since ${iso(through)}`}, more than ${SETTLED_WITHIN_MINUTES} minutes, so a fill, stop or target since then is not on record${at}.` : null;
-    return { pair, exposure: what, settled_through: through === null ? null : iso(through), state: words ? 'unsettled' : 'settled', gap: gap ? { missing_hour: gap.missing_hour, detected_at: gap.detected_at, later_hour: gap.later_hour } : null, words };
+      ? `${p.pair} is missing the hour ${gap.missing_hour} (first seen ${gap.detected_at}; the hour ${gap.later_hour} after it has come), so a fill, stop or target in it is not on record for ${p.exposure.join(' and ')}. It settles when that hour arrives; GeckoTerminal leaves out an hour in which the pool had no trade, so it may never arrive, and nothing is filled in.`
+      : p.words;
+    return { pair: p.pair, exposure: p.exposure, settled_through: p.settled_through, state: words ? 'unsettled' : 'settled', gap: gap ? { missing_hour: gap.missing_hour, detected_at: gap.detected_at, later_hour: gap.later_hour } : null, words };
   });
   const gaps = snap.gaps.gaps.map((g) => {
     const last = lastMs(g.pair);
     return { pair: g.pair, missing_hour: g.missing_hour, detected_at: g.detected_at, later_hour: g.later_hour, state: last !== null && last >= Date.parse(g.missing_hour) ? 'settled' : exposed.has(g.pair) ? 'open' : 'not_exposed' };
   });
   const said = [snap.gaps.why, ...pairs.filter((p) => p.words).map((p) => p.words)].filter(Boolean);
-  const throughs = pairs.map((p) => p.settled_through);
   return {
     version: 'cr-trader-gap@1',
     state: said.length ? 'unsettled' : 'settled',
-    settled_through: throughs.includes(null) ? null : throughs.length ? throughs.sort()[0] : iso(t),
+    settled_through: eng.settled_through,
     pairs,
     gaps,
     words: said.join(' ') || null,
@@ -392,7 +390,7 @@ function snapshotOf(ws, now) {
     last: new Map(hours.map((h) => [h.pair, h.last_hour])),
     gaps: readGaps(ws),
   };
-  snap.settlement = settlementOf(snap, Number(isoMs(now)));
+  snap.settlement = settlementOf(snap);
   return snap;
 }
 // The missing hour after a pair's last hour on record, if one is recorded.

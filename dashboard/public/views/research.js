@@ -327,9 +327,10 @@ async function paperCard(ctx) {
   ), { note: b.meaning, actions: [toggle] });
 }
 
-// The trader's Paper Book (cr-paper@2, slot 12c; trader-desk.js view through
-// GET /api/paper/trader): what an order would have done, with fills, fees,
-// slippage and stops, beside the PM Paper Book above and never added to it.
+// The trader's Paper Book (slot 12c; trader-desk.js view through
+// GET /api/paper/trader, its version named by the book): what an order
+// would have done, with fills, fees, slippage and stops, beside the PM Paper
+// Book above and never added to it.
 // Read only: nothing here asks the book or the hourly read for anything.
 async function traderCard(ctx) {
   const title = "Trader's Paper Book";
@@ -429,7 +430,7 @@ async function traderCard(ctx) {
     details(`NAV by the hour (${v.results.nav_by_hour.length})`, navTable, { id: 'tb-nav' }),
     details('Where the hours come from', h('div', null, h('p', { class: 'small muted' }, TB.candleWords(c)), sources), { id: 'tb-hours' }),
     unknown,
-  ), { note: `cr-paper@2: what an order would have done, with fills, fees, slippage and stops. Kept apart from the PM Paper Book above and never added to it; nothing here is a real order. Lot ${v.venue.lot}, minimum order $${v.venue.min_notional_usd}. Reading this writes nothing.` });
+  ), { note: `${v.results.version}: what an order would have done, with fills, fees, slippage and stops. Kept apart from the PM Paper Book above and never added to it; nothing here is a real order. Lot ${v.venue.lot}, minimum order $${v.venue.min_notional_usd}. Reading this writes nothing.` });
 }
 
 // A long list a page at a time: the desk's claims are never drawn all at

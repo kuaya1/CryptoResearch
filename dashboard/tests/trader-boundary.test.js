@@ -132,6 +132,25 @@ function files(dir, out = []) {
   return out;
 }
 
+test('cr-paper@3: the settlement gate is the engine\'s own, and every missing hour the hourly read can see is already stale', () => {
+  assert.equal(PT.VERSION, 'cr-paper@3');
+  // A missing hour is seen only once the hour after it has closed and settled
+  // (trader-candles.js SETTLE_MINUTES): two hours and that settling after the
+  // last hour on record ended. The engine's freshness is shorter, so its gate
+  // holds wherever the adapter's gaps record does, and it reads no record of
+  // the adapter's to do so.
+  const TC = require('../core/trader-candles');
+  assert.ok(PT.NAV_PRICE_FRESH_MINUTES < 2 * 60 + TC.SETTLE_MINUTES, `${PT.NAV_PRICE_FRESH_MINUTES} < ${2 * 60 + TC.SETTLE_MINUTES}`);
+  // (It requires none of their modules: the allowed requires below.)
+  assert.doesNotMatch(read('dashboard/core/paper-trader.js'), /gaps\.jsonl|paper\/candles\//);
+  const sec = section('### Paper Book `cr-paper@2`');
+  const from = sec.indexOf('\n- **Settlement gate (`cr-paper@3`');
+  assert.ok(from >= 0, 'DESK_STATE.md says what cr-paper@3 adds');
+  // The bullet and its sub-points, to the next bullet.
+  const s = sec.slice(from, sec.indexOf('\n- **', from + 1));
+  for (const part of ['`UNSETTLED`', 'nothing is written', '`NAV_PRICE_FRESH_MINUTES`', 'Closes, cancels', 'reads the same']) assert.ok(s.includes(part), part);
+});
+
 test('the trader modules and the schemas the engine reads are on the protected list', () => {
   for (const p of [...TRADER, 'templates/schemas/trade-intent.v2.schema.json', `templates/schemas/trade-intent.${risk.INTENT_VERSION.split('.').pop()}.schema.json`]) assert.ok(isProtected(p), `${p} is protected`);
 });
