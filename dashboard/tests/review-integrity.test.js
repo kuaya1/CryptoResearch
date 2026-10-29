@@ -556,6 +556,10 @@ test('F5: CoinGecko requests are reserved before they are sent: an identity sear
 // F6: one parse of the month's price history per index rebuild
 
 test('F6: an index rebuild reads each month of price history once and gives the same volume changes and digest prices across a month boundary', (t) => {
+  // The projects are added at the fixture's own end, so the rebuild's review
+  // cursor (the time each was added) and the months it reads never follow the
+  // real clock (from 2026-10-29 the cursor's next three days reached 2026-11).
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-01T10:00:00Z') });
   const { ws, root } = setup(t, 'f6-history');
   const ids = ['example-payfi-fictional', 'xtwo-fictional', 'xthree-fictional'];
   for (const [i, sym] of [[1, 'XTWO'], [2, 'XTHREE']]) {
