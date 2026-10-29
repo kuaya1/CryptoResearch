@@ -42,21 +42,35 @@ export function sentenceWords(s) {
 }
 
 // The book's figures, in order. Before funding, every figure but the funding
-// reads "Not funded".
+// reads "Not funded". While the book's record is unsettled (an hour missing
+// for a pair it holds or has an order in), each figure is a recorded balance:
+// its label says so and its tooltip says why.
 export function bookFacts(v) {
   const r = (v && v.results) || {};
   const funded = r.funded_usd !== null && r.funded_usd !== undefined;
   const nf = { text: 'Not funded', exact: null, title: 'The book is funded once from your Preferences setting, before its first hour.', tone: 'faint' };
   const unknownWhy = (r.unknown || []).join(' ') || 'Not known.';
+  const st = settlementWords(v);
+  const rec = (label, w) => (st.unsettled && w.exact ? [`${label} (recorded)`, { ...w, title: `${w.title} · Recorded, not settled: ${st.text}` }] : [label, w]);
   return [
     ['Funded', funded ? { ...usdWords(r.funded_usd), title: `Funded ${r.funded_at || ''} with ${r.funded_usd} USD`.trim() } : nf],
-    ['NAV', funded ? usdWords(r.nav_usd, unknownWhy) : nf],
-    ['Cash', funded ? usdWords(r.cash_usd) : nf],
-    ['Realized', funded ? pnlWords(r.realized_pnl_usd) : nf],
-    ['Unrealized', funded ? pnlWords(r.unrealized_pnl_usd, unknownWhy) : nf],
+    rec('NAV', funded ? usdWords(r.nav_usd, unknownWhy) : nf),
+    rec('Cash', funded ? usdWords(r.cash_usd) : nf),
+    rec('Realized', funded ? pnlWords(r.realized_pnl_usd) : nf),
+    rec('Unrealized', funded ? pnlWords(r.unrealized_pnl_usd, unknownWhy) : nf),
     ['Fees paid', funded ? usdWords(r.fees_usd) : nf],
-    ['Largest drawdown', funded ? usdWords(r.max_drawdown_usd, unknownWhy) : nf],
+    rec('Largest drawdown', funded ? usdWords(r.max_drawdown_usd, unknownWhy) : nf),
   ].map(([label, w]) => ({ label, ...w }));
+}
+
+// Whether the book's record is settled (trader-desk.js settlementOf): an
+// hour missing for a pair the book is exposed in, or no recent hour, leaves
+// it unsettled, said in words with what settles it.
+export function settlementWords(v) {
+  const s = v && v.settlement;
+  if (!s || s.state !== 'unsettled') return { unsettled: false, text: null, missing: [] };
+  const missing = (s.pairs || []).filter((p) => p.gap).map((p) => ({ pair: p.pair, hour: p.gap.missing_hour, seen: p.gap.detected_at }));
+  return { unsettled: true, text: s.words || 'The book\'s record is unsettled.', missing };
 }
 
 // A request's phase (trader-desk.js assess) in words and tone.

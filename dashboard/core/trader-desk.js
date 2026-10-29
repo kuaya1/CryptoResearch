@@ -38,16 +38,23 @@
 // as a new intent when one ends unfilled, at most CLOSE_ATTEMPTS_MAX times.
 // The stop and the target stay the book's own.
 //
-// Everything is re-derived on each call from Eric's decisions and the book's
-// journal: no record of its own, nothing kept in memory. A step that failed
+// Missing hours (cr-trader-gap@1, the cohesion audit's M1, 2026-10-29): see
+// GAPS_REL below. While the book's record of a pair it is exposed in is
+// unsettled, no new order is asked anywhere in the book, the unfilled part
+// of a buy in that pair is not cancelled over its missing hour, and the
+// book's figures are read as recorded balances, never as settled ones.
+//
+// Everything else is re-derived on each call from Eric's decisions and the
+// book's journal: its one record of its own is the missing hours the book
+// refused, and nothing is kept in memory. A step that failed
 // half way completes on the next one, and the same step twice asks nothing
 // twice. Reads (requests, wanted, view) write nothing.
 
 const PT = require('./paper-trader');
 const { exact: { dec, str, isoMs }, INTENT_VERSION, SLIPPAGE_BPS_MAX, RESOLVED } = require('./trade-risk');
 const TR = require('./trader-rules');
-const { OpError } = require('./ops');
-const { sha256 } = require('./fsx');
+const { OpError, withLock } = require('./ops');
+const { sha256, appendLine } = require('./fsx');
 
 const VERSION = 'cr-trader-desk@1';
 const OPENS = Object.freeze(['ACCUMULATE', 'LIMIT_TRAP']);
@@ -63,7 +70,21 @@ const CLOSE_ATTEMPTS_MAX = 24;
 const LIVE = Object.freeze(['RESERVED', 'SENT', 'ACKED', 'PARTIAL', 'UNKNOWN']);
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const MIN = 60000;
+const HOUR = 3600000;
 const BPS = 10000n;
+// A pair the book is exposed in whose last hour on record ended longer ago
+// than this is unsettled: the book's own NAV freshness.
+const SETTLED_WITHIN_MINUTES = PT.NAV_PRICE_FRESH_MINUTES;
+
+// The hours the book refused because one before them is missing (GAP), one
+// line per pair and missing hour, create-only: the pair, the missing hour,
+// the last hour on record, the later hour that showed it missing, and when it
+// was first seen. GeckoTerminal leaves out an hour in which the pool had no
+// trade, so a missing hour may never arrive; it is never filled in, and a
+// pair stays unsettled until the book holds it. A line that does not read
+// leaves the whole book unsettled, in words.
+const GAPS_REL = 'paper/candles/gaps.jsonl';
+const GAP_VERSION = 'cr.trader-gap.v1';
 
 const iso = (ms) => new Date(ms).toISOString();
 function nowOf(now) {
@@ -113,6 +134,70 @@ const lowerOf = (a, b) => (dec(a) < dec(b) ? a : b);
 // A sell limit SLIPPAGE_BPS under `price`, raised to the 18th place, so it is
 // never further under the price than the engine allows.
 const closeLimit = (price) => str((dec(price) * (BPS - BigInt(SLIPPAGE_BPS)) + BPS - 1n) / BPS);
+
+// The recorded missing hours, and why they cannot be read when they cannot.
+function readGaps(ws) {
+  let text = '';
+  try { text = require('fs').readFileSync(ws.abs(GAPS_REL), 'utf8'); } catch (err) {
+    if (!err || err.code !== 'ENOENT') return { gaps: [], why: `${GAPS_REL} could not be read (${(err && err.code) || 'error'}), so whether an hour is missing is unknown.` };
+  }
+  const gaps = [];
+  for (const [i, l] of text.split(/\r?\n/).entries()) {
+    if (!l.trim()) continue;
+    let g = null;
+    try { g = JSON.parse(l); } catch (_) { /* said below */ }
+    if (!g || g.schema_version !== GAP_VERSION || typeof g.pair !== 'string' || isoMs(g.missing_hour) === null || isoMs(g.detected_at) === null) return { gaps, why: `${GAPS_REL} line ${i + 1} does not read, so whether an hour is missing is unknown.` };
+    if (!gaps.some((x) => x.pair === g.pair && x.missing_hour === g.missing_hour)) gaps.push(g);
+  }
+  return { gaps, why: null };
+}
+
+// Records a missing hour once; the same one again keeps its first sighting.
+function noteGap(ws, rec) {
+  return withLock(ws, 'trader_gaps', () => {
+    const cur = readGaps(ws);
+    if (cur.why) throw new OpError('INTEGRITY', `${cur.why} The missing hour ${rec.missing_hour} of ${rec.pair} was not recorded.`);
+    if (cur.gaps.some((g) => g.pair === rec.pair && g.missing_hour === rec.missing_hour)) return 'unchanged';
+    appendLine(ws.abs(GAPS_REL), { schema_version: GAP_VERSION, ...rec });
+    return 'saved';
+  });
+}
+
+// Whether the book's record is settled now: for each pair it is exposed in
+// (an open position, or an order that may still fill or sell), the last hour
+// on record and any missing hour after it. Pure, over a snapshot.
+function settlementOf(snap, t) {
+  const exposed = new Map();
+  const add = (pair, what) => { if (pair) exposed.set(pair, [...(exposed.get(pair) || []), what]); };
+  for (const p of snap.open.values()) add(p.pair, 'an open position');
+  for (const i of snap.intents.values()) if (LIVE.includes(i.state)) add(i.pair, `a ${i.side === 'CLOSE_LONG' ? 'sell' : 'buy'} order ${i.state}`);
+  const lastMs = (pair) => (snap.last.has(pair) ? Date.parse(snap.last.get(pair)) : null);
+  const pairs = [...exposed.entries()].map(([pair, what]) => {
+    const last = lastMs(pair);
+    const through = last === null ? null : last + HOUR;
+    const gap = snap.gaps.gaps.find((g) => g.pair === pair && (last === null || Date.parse(g.missing_hour) > last)) || null;
+    const stale = through === null || t - through > SETTLED_WITHIN_MINUTES * MIN;
+    const at = ` for ${what.join(' and ')}`;
+    const words = gap
+      ? `${pair} is missing the hour ${gap.missing_hour} (first seen ${gap.detected_at}; the hour ${gap.later_hour} after it has come), so a fill, stop or target in it is not on record${at}. It settles when that hour arrives; GeckoTerminal leaves out an hour in which the pool had no trade, so it may never arrive, and nothing is filled in.`
+      : stale ? `${pair} has ${through === null ? 'no hour on record' : `no hour on record since ${iso(through)}`}, more than ${SETTLED_WITHIN_MINUTES} minutes, so a fill, stop or target since then is not on record${at}.` : null;
+    return { pair, exposure: what, settled_through: through === null ? null : iso(through), state: words ? 'unsettled' : 'settled', gap: gap ? { missing_hour: gap.missing_hour, detected_at: gap.detected_at, later_hour: gap.later_hour } : null, words };
+  });
+  const gaps = snap.gaps.gaps.map((g) => {
+    const last = lastMs(g.pair);
+    return { pair: g.pair, missing_hour: g.missing_hour, detected_at: g.detected_at, later_hour: g.later_hour, state: last !== null && last >= Date.parse(g.missing_hour) ? 'settled' : exposed.has(g.pair) ? 'open' : 'not_exposed' };
+  });
+  const said = [snap.gaps.why, ...pairs.filter((p) => p.words).map((p) => p.words)].filter(Boolean);
+  const throughs = pairs.map((p) => p.settled_through);
+  return {
+    version: 'cr-trader-gap@1',
+    state: said.length ? 'unsettled' : 'settled',
+    settled_through: throughs.includes(null) ? null : throughs.length ? throughs.sort()[0] : iso(t),
+    pairs,
+    gaps,
+    words: said.join(' ') || null,
+  };
+}
 
 // Eric's settings: the engine's rules (trader.rules and the desk's price
 // freshness), and the book's funding and venue fee (trader.book).
@@ -230,16 +315,24 @@ function grantsOf(ws, only = null) {
 }
 
 // The book as it stands: every intent by ID, the positions and the orders.
+// The hours each pair holds and the recorded missing hours come with it, and
+// whether the book's record is settled now (settlementOf).
 function snapshotOf(ws, now) {
   const r = PT.results(ws, { now });
-  return {
+  const snap = {
     intents: new Map(PT.intents(ws).map((i) => [i.intent_id, i])),
     open: new Map(r.open_positions.map((p) => [p.position_id, p])),
     closed: new Map(r.closed_positions.map((p) => [p.position_id, p])),
     orders: r.orders,
     funded: r.funded_usd !== null,
+    last: new Map(PT.hours(ws).map((h) => [h.pair, h.last_hour])),
+    gaps: readGaps(ws),
   };
+  snap.settlement = settlementOf(snap, Number(isoMs(now)));
+  return snap;
 }
+// The missing hour after a pair's last hour on record, if one is recorded.
+const openGapOf = (snap, pair) => ((snap.settlement.pairs.find((p) => p.pair === pair) || {}).gap || null);
 const unresolved = (snap) => snap.orders.filter((o) => !RESOLVED.includes(o.state));
 const stateWords = (o) => `${o.state}${o.filled && o.filled !== '0' ? `, ${o.filled} of ${o.quantity} filled` : ''}${o.words ? `: ${o.words}` : ''}`;
 
@@ -268,6 +361,7 @@ function assess(ws, ctx, g, snap) {
     const stale = ctx.s.rules.price_stale_minutes;
     const waits = [
       ...ctx.s.waits,
+      snap.settlement.state === 'unsettled' && `No new order while the book's record is unsettled: ${snap.settlement.words} Its cash and drawdown are recorded balances, so they do not show how much can be risked.`,
       !snap.funded && ctx.s.book.cash_usd && 'The trader\'s Paper Book is not funded yet.',
       unresolved(snap).length && `${unresolved(snap).length} order${unresolved(snap).length === 1 ? ' is' : 's are'} not yet resolved; nothing new is asked until the venue's answer is on record.`,
       bk.price === null && `${pr.pair} has no recent closed hour in the book.`,
@@ -305,7 +399,11 @@ function assess(ws, ctx, g, snap) {
   const reason = closeReasonOf(ws, g, (receiptOf(ws, pid, d.receipt_id).receipt) || {}, ctx.t);
   if (!reason) return out(pos ? 'open' : 'order', pos ? `Open: ${pos.quantity} ${asked.pair} at ${usd(pos.entry_price)}, stop ${usd(pos.stop_loss_price)}, target ${usd(pos.take_profit_price)}${buyLive ? `; the buy is still ${stateWords(asked)}` : ''}.` : `The buy is ${stateWords(asked)}.`, null, more);
   const closing = { ...more, close: { reason: reason.kind, words: reason.words } };
-  // What has not filled is cancelled first: a close waits for the buy.
+  // What has not filled is cancelled first: a close waits for the buy. Not
+  // over a missing hour: the buy may have filled in it, and a cancel recorded
+  // now would leave that fill off the record when the hour arrives.
+  const gap = openGapOf(snap, asked.pair);
+  if ((asked.state === 'ACKED' || asked.state === 'PARTIAL') && gap) return out('closing', `${reason.words} The unfilled part of the buy is cancelled once ${asked.pair}'s missing hour ${gap.missing_hour} is on record, so a fill in it is not lost.`, null, closing);
   if (asked.state === 'ACKED' || asked.state === 'PARTIAL') return out('closing', `${reason.words} The unfilled part of the buy is cancelled.`, { kind: 'cancel', client_order_id: asked.client_order_id }, closing);
   if (buyLive) return out('closing', `${reason.words} The buy is ${asked.state}; it is resolved with the venue before anything else.`, null, closing);
   // A sell for the position: the latest attempt, or the next one.
@@ -345,7 +443,7 @@ function contextOf(ws, now, project) {
 function requests(ws, { now, project = null } = {}) {
   const ctx = contextOf(ws, now, project);
   const snap = snapshotOf(ws, ctx.now);
-  return { version: VERSION, now: ctx.now, waits: ctx.s.waits, requests: ctx.grants.map((g) => { const a = assess(ws, ctx, g, snap); delete a.next; return a; }) };
+  return { version: VERSION, now: ctx.now, waits: ctx.s.waits, settlement: snap.settlement, requests: ctx.grants.map((g) => { const a = assess(ws, ctx, g, snap); delete a.next; return a; }) };
 }
 
 // The book as Outcomes > Paper Book reads it (slot 12c): Eric's settings and
@@ -372,13 +470,18 @@ function view(ws, { now } = {}) {
   const intents = PT.intents(ws);
   const byOrder = new Map(intents.filter((i) => i.client_order_id).map((i) => [i.client_order_id, i]));
   const ofPosition = (p) => ({ ...p, ...whose(String(p.position_id).replace(/^pos-/, '')), exit_words: p.exits && p.exits.length ? exitWords(p.exits[p.exits.length - 1]) : null });
+  // While an hour is missing, the book's figures are what it has recorded,
+  // never a settled account (a fill or a stop may be in the missing hour).
+  const st = snap.settlement;
+  const unknown = st.state === 'unsettled' ? [...res.unknown, `NAV, cash, the results and the drawdowns are recorded balances, not settled${st.settled_through ? ` (settled through ${st.settled_through})` : ''}: ${st.words}`] : res.unknown;
   return {
     version: VERSION,
     now: ctx.now,
     waits: ctx.s.waits,
+    settlement: st,
     book: { cash_usd: ctx.s.book.cash_usd || null, fee_rate: ctx.s.book.fee_rate || null },
     venue: { lot: LOT, min_notional_usd: MIN_NOTIONAL_USD },
-    results: { ...res, open_positions: res.open_positions.map(ofPosition), closed_positions: res.closed_positions.map(ofPosition) },
+    results: { ...res, open_positions: res.open_positions.map(ofPosition), closed_positions: res.closed_positions.map(ofPosition), unknown },
     requests: reqs,
     orders: res.orders.map((o) => {
       const i = byOrder.get(o.client_order_id) || {};
@@ -479,11 +582,27 @@ function applyHours(ws, bars, { now } = {}) {
       const r = PT.applyBar(ws, b, { now: n.now });
       out.push({ pair, hour: b.hour, status: r.status, events: r.events });
     } catch (err) {
-      out.push({ pair, hour: b && b.hour, status: 'refused', code: err.code || null, words: String(err && err.message || err).slice(0, 300) });
+      const row = { pair, hour: b && b.hour, status: 'refused', code: err.code || null, words: String(err && err.message || err).slice(0, 300) };
+      if (err.code === 'GAP') row.gap = gapOf(ws, pair, b.hour, n.now);
+      out.push(row);
       if (['GAP', 'INTEGRITY', 'TIME', 'ORDER'].includes(err.code)) stoppedPairs.add(pair);
     }
   }
   return out;
 }
 
-module.exports = { VERSION, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, intentIdOf, plain, closeLimit, settingsOf, pairOf, planOf, horizonOf, requests, view, wanted, step, applyHours };
+// The hour missing before `hour`, recorded once (GAPS_REL): the hour after
+// the pair's last on record. A failure to record it is said, never thrown.
+function gapOf(ws, pair, hour, now) {
+  try {
+    const last = (PT.hours(ws).find((h) => h.pair === pair) || {}).last_hour || null;
+    if (!last) return { pair, missing_hour: null, detected_at: now, status: 'failed', words: `${pair} has no hour on record, so the missing hour cannot be named.` };
+    const missing = iso(Date.parse(last) + HOUR);
+    const status = noteGap(ws, { pair, missing_hour: missing, last_hour: last, later_hour: hour, detected_at: now });
+    return { pair, missing_hour: missing, detected_at: status === 'saved' ? now : (readGaps(ws).gaps.find((g) => g.pair === pair && g.missing_hour === missing) || {}).detected_at || null, status };
+  } catch (err) {
+    return { pair, missing_hour: null, detected_at: now, status: 'failed', words: String(err && err.message || err).slice(0, 300) };
+  }
+}
+
+module.exports = { VERSION, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, intentIdOf, plain, closeLimit, settingsOf, pairOf, planOf, horizonOf, settlementOf, requests, view, wanted, step, applyHours };

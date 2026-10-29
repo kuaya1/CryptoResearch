@@ -65,3 +65,20 @@ test('NAV by the hour: newest first in the table, an unknown hour left out of th
   assert.match(M.candleWords({ held: false, last_run_at: null, requests_today: 0, daily_budget: 400, requests_this_month: 0, monthly_budget: 5000, wait_until: null }), /^Not read yet · 0 of 400 requests today, 0 of 5000 this month\.$/);
   assert.match(M.candleWords({ held: true }), /restored copy/);
 });
+
+test('an unsettled book (an hour missing) labels its figures as recorded, says why, and never reads as settled (M1)', async () => {
+  const M = await import('../public/trader-book-model.js');
+  const words = 'XMPL/USDC is missing the hour 2026-10-29T14:00:00.000Z (first seen 2026-10-29T16:15:00.000Z).';
+  const v = {
+    results: { funded_usd: '25000', funded_at: '2026-10-29T00:00:00.000Z', nav_usd: '25000', cash_usd: '25000', realized_pnl_usd: '0', unrealized_pnl_usd: '0', fees_usd: '0', max_drawdown_usd: '0', unknown: [] },
+    settlement: { state: 'unsettled', words, pairs: [{ pair: 'XMPL/USDC', gap: { missing_hour: '2026-10-29T14:00:00.000Z', detected_at: '2026-10-29T16:15:00.000Z' } }] },
+  };
+  const s = M.settlementWords(v);
+  assert.deepEqual(s, { unsettled: true, text: words, missing: [{ pair: 'XMPL/USDC', hour: '2026-10-29T14:00:00.000Z', seen: '2026-10-29T16:15:00.000Z' }] });
+  const facts = M.bookFacts(v);
+  assert.deepEqual(facts.map((f) => f.label), ['Funded', 'NAV (recorded)', 'Cash (recorded)', 'Realized (recorded)', 'Unrealized (recorded)', 'Fees paid', 'Largest drawdown (recorded)']);
+  assert.match(facts[1].title, /Recorded, not settled: XMPL\/USDC is missing the hour/);
+  const settled = M.bookFacts({ ...v, settlement: { state: 'settled', pairs: [], words: null } });
+  assert.deepEqual(settled.map((f) => f.label), ['Funded', 'NAV', 'Cash', 'Realized', 'Unrealized', 'Fees paid', 'Largest drawdown']);
+  assert.deepEqual(M.settlementWords({}), { unsettled: false, text: null, missing: [] }, 'an older view with no settlement reads as before');
+});
