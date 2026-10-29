@@ -9,6 +9,8 @@ import './styles/project.css';
 import './styles/forensics.css';
 import './styles/l2.css';
 import './styles/market.css';
+// Desk v2 (2026-10-28) layers over the Desk, the rail and the inspector; it loads last.
+import './styles/desk-v2.css';
 import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import { start } from './lib/start.js';
