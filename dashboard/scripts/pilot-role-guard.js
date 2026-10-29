@@ -12,14 +12,32 @@
 // `onFailure: block` refuses when the guard cannot run at all.
 //
 // The tools lists in the agent files keep each role to its own connector
-// tools; this guard closes the two built-in tools that could cross over
-// (the other role's CLI, or a file in the repository).
+// tools; this guard closes the built-in tools that could cross over (the
+// other role's CLI, or a file in the repository).
+//
+// Isolation (cr-pilot-isolation@1, the cohesion audit's M5, 2026-10-29): each
+// role has its own scratch folder, <temp>/cr-pilot/<role>/ (one subfolder per
+// run or ticket by convention); Write saves only there, and a desk import
+// takes its --text-file only from there. Read, Grep and Glob are guarded too:
+// neither role reads the desk's records (projects/, where drafts, tickets,
+// other models' reports and receipts live, and the other record folders),
+// any other temporary folder (the other role's scratch, other sessions'),
+// or Claude Code's own session folder (~/.claude, where transcripts live). A
+// search may not start above a refused folder. The Prosecutor gets the
+// completed Researcher report only as frozen into its prompt (tickets prompt
+// / start_ticket); the Researcher gets nothing of the Prosecutor's. The
+// online route has no server-side role split: there the agent files' tool
+// lists (the client's configuration) are the boundary.
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..', '..');
+const ISOLATION_VERSION = 'cr-pilot-isolation@1';
+// The desk's record folders at the workspace root: never read by either role.
+const RECORDS = ['projects', 'inbox', 'portfolio', 'paper', 'backups', 'logs', 'archive', 'engineering', 'scout', 'project-context', '.cr'];
+const scratchOf = (tmp, role, P = path) => P.join(tmp, 'cr-pilot', role);
 
 // Each role's desk commands, as the words after `node dashboard/cli.js`.
 const ROLES = {
@@ -113,7 +131,52 @@ function optionValue(ws, name) {
   return vals;
 }
 
-function bashDecision(role, command, { cwd, root, platform }) {
+// A path as the guard compares it: resolved from the working folder, Git Bash
+// spelling read as Windows, and on this machine through any links.
+function resolved(p, { cwd, root, platform }) {
+  const P = platform === 'win32' ? path.win32 : path.posix;
+  const file = P.resolve(fromShell(cwd || root, platform), fromShell(p, platform));
+  return platform === process.platform ? real(file) : file;
+}
+const realOn = (x, platform) => (platform === process.platform ? real(x) : x);
+
+// Why a path is closed to this role, or null when it may be read. `search`:
+// the path is where a search starts, so a refused folder under it is refused.
+function readBlock(role, file, { root, tmp, home, platform }, search = false) {
+  const P = platform === 'win32' ? path.win32 : path.posix;
+  const r = realOn(root, platform);
+  const t = realOn(tmp, platform);
+  const mine = realOn(scratchOf(tmp, role, P), platform);
+  const closed = [
+    ...RECORDS.map((d) => ({ dir: P.join(r, d), why: `the desk's records (${d}/) are not read here: the work comes from the frozen prompt and the desk's commands.` })),
+    ...(home ? [{ dir: realOn(P.join(home, '.claude'), platform), why: 'Claude Code\'s session folder (transcripts) is not read here.' }] : []),
+  ];
+  for (const c of closed) {
+    if (inside(file, c.dir, P, platform, true)) return c.why;
+    if (search && inside(c.dir, file, P, platform, true)) return `a search may not start above a closed folder: ${c.why}`;
+  }
+  if (inside(file, t, P, platform, true) && !inside(file, mine, P, platform, true)) return `in the temporary folder only this role's own scratch (${scratchOf(tmp, role, P)}) is read: not the other role's, nor another session's.`;
+  if (search && inside(t, file, P, platform, true)) return 'a search may not start at or above the temporary folder: only this role\'s own scratch is read.';
+  return null;
+}
+
+function readDecision(role, tool, ti, ctx) {
+  const P = ctx.platform === 'win32' ? path.win32 : path.posix;
+  if (tool === 'Read') {
+    if (typeof ti.file_path !== 'string' || !ti.file_path.trim()) return { allow: false, reason: 'Read needs a file path.' };
+    const why = readBlock(role, resolved(ti.file_path, ctx), ctx);
+    return why ? { allow: false, reason: why } : { allow: true };
+  }
+  // Grep and Glob: where the search starts (the working folder when none is
+  // given), and a Glob pattern that stays under it.
+  const start = typeof ti.path === 'string' && ti.path.trim() ? ti.path : ctx.cwd || ctx.root;
+  const pattern = tool === 'Glob' ? ti.pattern : ti.glob;
+  if (typeof pattern === 'string' && (/(^|[\\/])\.\.([\\/]|$)/.test(pattern) || P.isAbsolute(fromShell(pattern, ctx.platform)) || /^[a-zA-Z]:/.test(pattern) || pattern.startsWith('~'))) return { allow: false, reason: `${tool}'s pattern stays under where the search starts: no "..", no absolute path.` };
+  const why = readBlock(role, resolved(start, ctx), ctx, true);
+  return why ? { allow: false, reason: why } : { allow: true };
+}
+
+function bashDecision(role, command, { cwd, root, platform, tmp }) {
   const P = platform === 'win32' ? path.win32 : path.posix;
   const ws = words(command);
   if (!ws) return { allow: false, reason: 'only one plain command at a time: no chaining, pipes, redirects, substitution or line breaks.' };
@@ -135,10 +198,18 @@ function bashDecision(role, command, { cwd, root, platform }) {
       if (p.length !== 1 || p[0] !== 'claude') return { allow: false, reason: 'research add opens Claude\'s run only: give `--providers claude` once.' };
     }
   }
+  // A desk import reads its text only from this role's own scratch, so the
+  // other role's file (or any other) is never filed as this one's work.
+  const texts = optionValue(rest, '--text-file');
+  if (texts.length) {
+    const P2 = platform === 'win32' ? path.win32 : path.posix;
+    const mine = realOn(scratchOf(tmp, role, P2), platform);
+    if (texts.length !== 1 || !texts[0] || !inside(resolved(texts[0], { cwd, root, platform }), mine, P2, platform)) return { allow: false, reason: `--text-file is read only from this role's own scratch folder (${scratchOf(tmp, role, P2)}).` };
+  }
   return { allow: true };
 }
 
-function writeDecision(filePath, { cwd, root, tmp, platform }) {
+function writeDecision(role, filePath, { cwd, root, tmp, platform }) {
   const P = platform === 'win32' ? path.win32 : path.posix;
   if (typeof filePath !== 'string' || !filePath.trim()) return { allow: false, reason: 'Write needs a file path.' };
   const native = platform === process.platform;
@@ -148,17 +219,20 @@ function writeDecision(filePath, { cwd, root, tmp, platform }) {
   const r = native ? real(root) : root;
   if (inside(f, r, P, platform, true)) return { allow: false, reason: 'Write never saves inside the repository.' };
   if (!inside(f, t, P, platform)) return { allow: false, reason: `Write saves scratch files in the system's temporary folder only (${tmp}).` };
+  const mine = native ? real(scratchOf(tmp, role, P)) : scratchOf(tmp, role, P);
+  if (!inside(f, mine, P, platform)) return { allow: false, reason: `Write saves only in this role's own scratch folder (${scratchOf(tmp, role, P)}), one subfolder per run or ticket.` };
   return { allow: true };
 }
 
 // The guard's answer for one hook input: { allow, reason }.
-function decide(role, input, { root = ROOT, tmp = os.tmpdir(), platform = process.platform } = {}) {
+function decide(role, input, { root = ROOT, tmp = os.tmpdir(), home = os.homedir(), platform = process.platform } = {}) {
   if (!Object.prototype.hasOwnProperty.call(ROLES, role)) return { allow: false, reason: `unknown role ${JSON.stringify(role)}.` };
   if (!input || typeof input !== 'object') return { allow: false, reason: 'the hook input could not be read.' };
   const ti = input.tool_input || {};
   const cwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : null;
-  if (input.tool_name === 'Bash') return bashDecision(role, ti.command, { cwd, root, platform });
-  if (input.tool_name === 'Write') return writeDecision(ti.file_path, { cwd, root, tmp, platform });
+  if (input.tool_name === 'Bash') return bashDecision(role, ti.command, { cwd, root, platform, tmp });
+  if (input.tool_name === 'Write') return writeDecision(role, ti.file_path, { cwd, root, tmp, platform });
+  if (['Read', 'Grep', 'Glob'].includes(input.tool_name)) return readDecision(role, input.tool_name, ti, { cwd, root, tmp, home, platform });
   return { allow: true };
 }
 
@@ -180,4 +254,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { decide, words, ROLES };
+module.exports = { decide, words, ROLES, RECORDS, ISOLATION_VERSION, scratchOf };

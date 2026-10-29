@@ -356,6 +356,8 @@ async function traderCard(ctx) {
   const facts = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '24px' } },
     ...TB.bookFacts(v).map((f) => cell(f.label, h('strong', null, usd(f)))), spark);
   const waits = v.waits && v.waits.length ? h('p', { class: 'small' }, v.waits.join(' '), ' ', link('Open Preferences > Screening', '#/research?tab=outcomes&prefs=screening')) : null;
+  const st = TB.settlementWords(v);
+  const unsettled = st.unsettled ? callout(`Unsettled: ${TB.sentenceWords(st.text).text} No new order is asked until it settles.`, 'warn') : null;
 
   const requests = v.requests.slice().sort((a, b) => String(b.decided_at || '').localeCompare(String(a.decided_at || '')));
   const reqTable = pagedTable([
@@ -417,6 +419,7 @@ async function traderCard(ctx) {
   return card(title, h('div', null,
     h('p', { class: 'small muted' }, TB.summaryLine(v)),
     waits,
+    unsettled,
     facts,
     sub('Your decisions', requests.length), reqTable,
     sub('Open positions', open.length), posTable,

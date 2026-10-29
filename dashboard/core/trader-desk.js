@@ -20,15 +20,19 @@
 //   - entry: the lower of the book's price and the entry zone's high
 //     (ACCUMULATE) or low (LIMIT_TRAP), so a buy never goes through the
 //     market; stop: the invalidation price; target: the upside target; risk:
-//     Eric's approved amount; life: his longest life of an intent; pair: the
+//     at most Eric's approved amount (@2: the largest every limit allows,
+//     fit below); life: his longest life of an intent; pair: the
 //     project's ticker against USDC, refused while another unarchived project
 //     shares the ticker. A missing field opens nothing, said in words; a stop
 //     is never invented, so a metric-only invalidation opens nothing;
 //   - one attempt per decision: its intent ID is derived from the decision,
 //     so the book's answer, an order or a refusal with its reasons, is final.
 //     The book is asked only once it can answer (funded, Eric's rules and fee
-//     set, a fresh hour and a 14-hour ATR for the pair, no unresolved order);
-//     until then the request waits, with the reason in words. Once the
+//     set, a fresh hour and a 14-hour ATR for the pair, no unresolved order,
+//     the book's record settled, the ticket flat, a whole hour in the order's
+//     life) and only with an intent it would take (@2, fit); until then the
+//     request waits, with the reason in words. Past the research horizon, or
+//     on a ticket invalidated since, it never opens. Once the
 //     ticket's exit readings give no size (D11: past their 72 hours, or none
 //     within the limit), it never opens.
 // What closes: the undo of that decision, the end of the ticket's research
@@ -38,18 +42,30 @@
 // as a new intent when one ends unfilled, at most CLOSE_ATTEMPTS_MAX times.
 // The stop and the target stay the book's own.
 //
-// Everything is re-derived on each call from Eric's decisions and the book's
-// journal: no record of its own, nothing kept in memory. A step that failed
+// Missing hours (cr-trader-gap@1, the cohesion audit's M1, 2026-10-29): see
+// GAPS_REL below. While the book's record of a pair it is exposed in is
+// unsettled, no new order is asked anywhere in the book, the unfilled part
+// of a buy in that pair is not cancelled over its missing hour, and the
+// book's figures are read as recorded balances, never as settled ones.
+//
+// Everything else is re-derived on each call from Eric's decisions and the
+// book's journal: its one record of its own is the missing hours the book
+// refused, and nothing is kept in memory. A step that failed
 // half way completes on the next one, and the same step twice asks nothing
 // twice. Reads (requests, wanted, view) write nothing.
 
 const PT = require('./paper-trader');
-const { exact: { dec, str, isoMs }, INTENT_VERSION, SLIPPAGE_BPS_MAX, RESOLVED } = require('./trade-risk');
+const { validateTradeIntent, exact: { dec, str, mulCeil, isoMs }, INTENT_VERSION, SLIPPAGE_BPS_MAX, RESOLVED } = require('./trade-risk');
 const TR = require('./trader-rules');
-const { OpError } = require('./ops');
-const { sha256 } = require('./fsx');
+const { OpError, withLock } = require('./ops');
+const { sha256, appendLine } = require('./fsx');
 
-const VERSION = 'cr-trader-desk@1';
+// @2 (2026-10-29, the cohesion audit's M1, M2, M4 and M7): missing hours
+// hold openings; an opening is checked and sized before its one ID is spent;
+// a grant past its horizon or invalidated opens nothing. Intent IDs keep the
+// @1 derivation, so a decision made under @1 keeps its ID.
+const VERSION = 'cr-trader-desk@2';
+const ID_VERSION = 'cr-trader-desk@1';
 const OPENS = Object.freeze(['ACCUMULATE', 'LIMIT_TRAP']);
 const QUOTE = 'USDC';
 // The simulated venue's lot and minimum order (the plan's smaller choices),
@@ -63,7 +79,21 @@ const CLOSE_ATTEMPTS_MAX = 24;
 const LIVE = Object.freeze(['RESERVED', 'SENT', 'ACKED', 'PARTIAL', 'UNKNOWN']);
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const MIN = 60000;
+const HOUR = 3600000;
 const BPS = 10000n;
+// A pair the book is exposed in whose last hour on record ended longer ago
+// than this is unsettled: the book's own NAV freshness.
+const SETTLED_WITHIN_MINUTES = PT.NAV_PRICE_FRESH_MINUTES;
+
+// The hours the book refused because one before them is missing (GAP), one
+// line per pair and missing hour, create-only: the pair, the missing hour,
+// the last hour on record, the later hour that showed it missing, and when it
+// was first seen. GeckoTerminal leaves out an hour in which the pool had no
+// trade, so a missing hour may never arrive; it is never filled in, and a
+// pair stays unsettled until the book holds it. A line that does not read
+// leaves the whole book unsettled, in words.
+const GAPS_REL = 'paper/candles/gaps.jsonl';
+const GAP_VERSION = 'cr.trader-gap.v1';
 
 const iso = (ms) => new Date(ms).toISOString();
 function nowOf(now) {
@@ -87,7 +117,7 @@ const exitWords = (e) => (e ? `${EXIT_WORDS[e.reason] || `Exited (${String(e.rea
 function intentIdOf(d, purpose) {
   const ms = Date.parse(d.decided_at);
   let t = BigInt(Number.isFinite(ms) && ms >= 0 ? ms : 0);
-  let r = BigInt(`0x${sha256(`${VERSION}|${d.decision_id}|${purpose}`).slice(0, 20)}`);
+  let r = BigInt(`0x${sha256(`${ID_VERSION}|${d.decision_id}|${purpose}`).slice(0, 20)}`);
   let out = '';
   for (let i = 0; i < 16; i++) { out = CROCKFORD[Number(r % 32n)] + out; r /= 32n; }
   for (let i = 0; i < 10; i++) { out = CROCKFORD[Number(t % 32n)] + out; t /= 32n; }
@@ -113,6 +143,116 @@ const lowerOf = (a, b) => (dec(a) < dec(b) ? a : b);
 // A sell limit SLIPPAGE_BPS under `price`, raised to the 18th place, so it is
 // never further under the price than the engine allows.
 const closeLimit = (price) => str((dec(price) * (BPS - BigInt(SLIPPAGE_BPS)) + BPS - 1n) / BPS);
+
+// The limits that bound an opening from above as its risk grows, the book's
+// cash among them (paper-trader.js reserveIntent: the order's cash and fee at
+// its limit, committed when it is reserved), in words.
+const UPPER = ['risk_cap', 'drawdown', 'gate_cap', 'pm_cap', 'notional_cap', 'exit_cap', 'cash'];
+const BINDING_WORDS = { risk_cap: 'the risk per trade', drawdown: 'the 24-hour drawdown ceiling', gate_cap: 'the gate\'s suggested risk', pm_cap: 'your approved risk', notional_cap: 'the notional cap', exit_cap: 'the exit measurement\'s size', cash: 'the free cash' };
+
+// An opening intent checked as the book will check it (cr-trade-risk@2 over
+// the same book, and the book's cash), with its risk ceiling the largest at
+// or under the one it was written with that every limit allows (M4). Each
+// limit above grows with the risk, so the largest risk is found by halving
+// between 0 and the approved amount at the book's 18 places; the order it
+// sizes is floored to the lot by the engine itself, so one lot more breaks
+// the binding limit. Never above the approved risk; an order the book would
+// refuse at every size, or for any other reason, is { ok: false } with the
+// refusals in words. Pure: it reads no file and writes nothing.
+function fit(intent, bk, rules, venue) {
+  const fee = dec(venue && venue.taker_rate);
+  const check = (risk) => {
+    const it = { ...intent, risk_ceiling_usd: str(risk) };
+    const v = validateTradeIntent(it, bk, rules);
+    const refusals = [...v.refusals];
+    if (v.ok && v.sizing && fee !== null && dec(bk.available_cash_usd) !== null) {
+      const n = mulCeil(dec(v.sizing.quantity), dec(it.entry_price));
+      const need = n + mulCeil(n, fee);
+      if (dec(bk.available_cash_usd) < need) refusals.push({ field: 'book.cash_usd', rule: 'cash', words: `The order needs ${str(need)} with its fee; ${bk.available_cash_usd} is free.` });
+    }
+    return { it, refusals, sizing: v.sizing };
+  };
+  const want = dec(intent.risk_ceiling_usd);
+  const first = want === null ? check(0n) : check(want);
+  if (!first.refusals.length) return { ok: true, intent: first.it, sizing: first.sizing, binding: [], refusals: [] };
+  if (want === null || !first.refusals.every((x) => UPPER.includes(x.rule))) return { ok: false, refusals: first.refusals };
+  const upperOk = (r) => !check(r).refusals.some((x) => UPPER.includes(x.rule));
+  let lo = 0n;
+  let hi = want;
+  while (hi - lo > 1n) {
+    const mid = (lo + hi) / 2n;
+    if (upperOk(mid)) lo = mid; else hi = mid;
+  }
+  const best = check(lo);
+  if (lo === 0n || best.refusals.length) return { ok: false, refusals: lo === 0n ? first.refusals : best.refusals };
+  // What binds: the limits the next step of risk breaks.
+  const binding = [...new Set(check(lo + 1n).refusals.filter((x) => UPPER.includes(x.rule)).map((x) => x.rule))];
+  return { ok: true, intent: best.it, sizing: best.sizing, binding, refusals: [] };
+}
+
+// The recorded missing hours, and why they cannot be read when they cannot.
+function readGaps(ws) {
+  let text = '';
+  try { text = require('fs').readFileSync(ws.abs(GAPS_REL), 'utf8'); } catch (err) {
+    if (!err || err.code !== 'ENOENT') return { gaps: [], why: `${GAPS_REL} could not be read (${(err && err.code) || 'error'}), so whether an hour is missing is unknown.` };
+  }
+  const gaps = [];
+  for (const [i, l] of text.split(/\r?\n/).entries()) {
+    if (!l.trim()) continue;
+    let g = null;
+    try { g = JSON.parse(l); } catch (_) { /* said below */ }
+    if (!g || g.schema_version !== GAP_VERSION || typeof g.pair !== 'string' || isoMs(g.missing_hour) === null || isoMs(g.detected_at) === null) return { gaps, why: `${GAPS_REL} line ${i + 1} does not read, so whether an hour is missing is unknown.` };
+    if (!gaps.some((x) => x.pair === g.pair && x.missing_hour === g.missing_hour)) gaps.push(g);
+  }
+  return { gaps, why: null };
+}
+
+// Records a missing hour once; the same one again keeps its first sighting.
+function noteGap(ws, rec) {
+  return withLock(ws, 'trader_gaps', () => {
+    const cur = readGaps(ws);
+    if (cur.why) throw new OpError('INTEGRITY', `${cur.why} The missing hour ${rec.missing_hour} of ${rec.pair} was not recorded.`);
+    if (cur.gaps.some((g) => g.pair === rec.pair && g.missing_hour === rec.missing_hour)) return 'unchanged';
+    appendLine(ws.abs(GAPS_REL), { schema_version: GAP_VERSION, ...rec });
+    return 'saved';
+  });
+}
+
+// Whether the book's record is settled now: for each pair it is exposed in
+// (an open position, or an order that may still fill or sell), the last hour
+// on record and any missing hour after it. Pure, over a snapshot.
+function settlementOf(snap, t) {
+  const exposed = new Map();
+  const add = (pair, what) => { if (pair) exposed.set(pair, [...(exposed.get(pair) || []), what]); };
+  for (const p of snap.open.values()) add(p.pair, 'an open position');
+  for (const i of snap.intents.values()) if (LIVE.includes(i.state)) add(i.pair, `a ${i.side === 'CLOSE_LONG' ? 'sell' : 'buy'} order ${i.state}`);
+  const lastMs = (pair) => (snap.last.has(pair) ? Date.parse(snap.last.get(pair)) : null);
+  const pairs = [...exposed.entries()].map(([pair, what]) => {
+    const last = lastMs(pair);
+    const through = last === null ? null : last + HOUR;
+    const gap = snap.gaps.gaps.find((g) => g.pair === pair && (last === null || Date.parse(g.missing_hour) > last)) || null;
+    const stale = through === null || t - through > SETTLED_WITHIN_MINUTES * MIN;
+    const at = ` for ${what.join(' and ')}`;
+    const words = gap
+      ? `${pair} is missing the hour ${gap.missing_hour} (first seen ${gap.detected_at}; the hour ${gap.later_hour} after it has come), so a fill, stop or target in it is not on record${at}. It settles when that hour arrives; GeckoTerminal leaves out an hour in which the pool had no trade, so it may never arrive, and nothing is filled in.`
+      : stale ? `${pair} has ${through === null ? 'no hour on record' : `no hour on record since ${iso(through)}`}, more than ${SETTLED_WITHIN_MINUTES} minutes, so a fill, stop or target since then is not on record${at}.` : null;
+    return { pair, exposure: what, settled_through: through === null ? null : iso(through), state: words ? 'unsettled' : 'settled', gap: gap ? { missing_hour: gap.missing_hour, detected_at: gap.detected_at, later_hour: gap.later_hour } : null, words };
+  });
+  const gaps = snap.gaps.gaps.map((g) => {
+    const last = lastMs(g.pair);
+    return { pair: g.pair, missing_hour: g.missing_hour, detected_at: g.detected_at, later_hour: g.later_hour, state: last !== null && last >= Date.parse(g.missing_hour) ? 'settled' : exposed.has(g.pair) ? 'open' : 'not_exposed' };
+  });
+  const said = [snap.gaps.why, ...pairs.filter((p) => p.words).map((p) => p.words)].filter(Boolean);
+  const throughs = pairs.map((p) => p.settled_through);
+  return {
+    version: 'cr-trader-gap@1',
+    state: said.length ? 'unsettled' : 'settled',
+    settled_through: throughs.includes(null) ? null : throughs.length ? throughs.sort()[0] : iso(t),
+    pairs,
+    gaps,
+    words: said.join(' ') || null,
+  };
+}
 
 // Eric's settings: the engine's rules (trader.rules and the desk's price
 // freshness), and the book's funding and venue fee (trader.book).
@@ -230,16 +370,33 @@ function grantsOf(ws, only = null) {
 }
 
 // The book as it stands: every intent by ID, the positions and the orders.
+// The hours each pair holds and the recorded missing hours come with it, and
+// whether the book's record is settled now (settlementOf). One snapshot
+// serves a whole read phase (the cohesion audit's brief 5): the view, the
+// requests and a step's assessments read it rather than the journal again,
+// and a step takes a new one after each thing it records, never reusing the
+// book from before a change. Nothing is kept between calls.
 function snapshotOf(ws, now) {
   const r = PT.results(ws, { now });
-  return {
-    intents: new Map(PT.intents(ws).map((i) => [i.intent_id, i])),
+  const list = PT.intents(ws);
+  const hours = PT.hours(ws);
+  const snap = {
+    results: r,
+    list,
+    hours,
+    intents: new Map(list.map((i) => [i.intent_id, i])),
     open: new Map(r.open_positions.map((p) => [p.position_id, p])),
     closed: new Map(r.closed_positions.map((p) => [p.position_id, p])),
     orders: r.orders,
     funded: r.funded_usd !== null,
+    last: new Map(hours.map((h) => [h.pair, h.last_hour])),
+    gaps: readGaps(ws),
   };
+  snap.settlement = settlementOf(snap, Number(isoMs(now)));
+  return snap;
 }
+// The missing hour after a pair's last hour on record, if one is recorded.
+const openGapOf = (snap, pair) => ((snap.settlement.pairs.find((p) => p.pair === pair) || {}).gap || null);
 const unresolved = (snap) => snap.orders.filter((o) => !RESOLVED.includes(o.state));
 const stateWords = (o) => `${o.state}${o.filled && o.filled !== '0' ? `, ${o.filled} of ${o.quantity} filled` : ''}${o.words ? `: ${o.words}` : ''}`;
 
@@ -261,13 +418,26 @@ function assess(ws, ctx, g, snap) {
     if (!pr.pair) return out('not_opened', `${pr.why} No order is made.`);
     const plan0 = planOf(rc.receipt, d, null);
     if (plan0.why) return out('not_opened', plan0.why, null, { pair: pr.pair });
+    // A grant that waited past its horizon, or a ticket invalidated since,
+    // opens nothing: checked before every opening, not only after one.
+    const h = horizonOf(ws, pid, rc.receipt);
+    if (h.ms !== null && h.ms <= ctx.t) return out('not_opened', `The research horizon ended on ${h.day} before the book was asked: no order is made from this decision.`, null, { pair: pr.pair });
     const ticket = { project_id: pid, receipt_id: d.receipt_id, decision_id: d.decision_id };
     const bk = PT.book(ws, pr.pair, { now: ctx.now, venue: ctx.s.venue, ticket });
     if (bk.exit_why) return out('not_opened', `${bk.exit_why} The order is never made from this decision.`, null, { pair: pr.pair });
     if (bk.grant_why) return out('not_opened', `${bk.grant_why} No order is made.`, null, { pair: pr.pair });
+    let inv = null;
+    try { inv = require('./tickets').invalidationOf(ws, g.project, rc.receipt, { now: ctx.t }); } catch (_) { inv = null; }
+    if (inv && inv.invalidated) return out('not_opened', `The ticket is invalidated (${inv.words}) before the book was asked: no order is made from this decision.`, null, { pair: pr.pair });
     const stale = ctx.s.rules.price_stale_minutes;
+    // An earlier decision's order or position on the same ticket (an undo's
+    // close still in flight): this one waits until the ticket is flat, then
+    // opens once at its full grant, never sized around the one closing (M2).
+    const earlier = [...snap.intents.values()].filter((i) => i.thesis_id === d.receipt_id && i.intent_id !== openId && (LIVE.includes(i.state) || snap.open.has(`pos-${i.intent_id}`) || snap.open.has(i.position_id)));
     const waits = [
       ...ctx.s.waits,
+      earlier.length && `An earlier order or position on this ticket is still open (${[...new Set(earlier.map((i) => `${i.side === 'CLOSE_LONG' ? 'a sell' : 'a buy'} ${i.state}`))].join(', ')}); this order waits until the ticket is flat.`,
+      snap.settlement.state === 'unsettled' && `No new order while the book's record is unsettled: ${snap.settlement.words} Its cash and drawdown are recorded balances, so they do not show how much can be risked.`,
       !snap.funded && ctx.s.book.cash_usd && 'The trader\'s Paper Book is not funded yet.',
       unresolved(snap).length && `${unresolved(snap).length} order${unresolved(snap).length === 1 ? ' is' : 's are'} not yet resolved; nothing new is asked until the venue's answer is on record.`,
       bk.price === null && `${pr.pair} has no recent closed hour in the book.`,
@@ -277,14 +447,26 @@ function assess(ws, ctx, g, snap) {
       bk.nav_usd !== null && (bk.drawdown_24h_usd === null || bk.open_risk_usd === null || bk.thesis_risk_usd === null) && 'The book\'s 24-hour drawdown or the risk already at its stops is unknown.',
     ].filter(Boolean);
     if (waits.length) return out('waiting', waits.join(' '), null, { pair: pr.pair });
+    // The order's life must hold a whole hour that starts after it is sent,
+    // or no hour can fill it (M7): it waits for one rather than expiring.
+    const life = ctx.s.rules.max_validity_minutes;
+    const firstHour = Math.ceil(ctx.t / HOUR) * HOUR;
+    if (firstHour + HOUR > ctx.t + life * MIN) return out('waiting', `Your longest life of an intent (${life} minutes) would end before the first whole hour after now (${iso(firstHour)} to ${iso(firstHour + HOUR)}) closes, and an order fills only from a whole hour that starts after it is sent, so it would expire unfilled.${life < 60 ? ' A life under 60 minutes never holds a whole hour; lengthen it in Preferences > Screening.' : ` It is asked when the next hour is no more than ${life - 60} minutes away.`}`, null, { pair: pr.pair });
     const plan = planOf(rc.receipt, d, bk.price);
     const intent = {
       version: INTENT_VERSION, intent_id: openId, thesis_id: d.receipt_id, ...ticket, pair: pr.pair, side: 'OPEN_LONG', order_type: 'LIMIT',
       created_at: ctx.now, reference_price: bk.price, reference_at: bk.price_at,
       entry_price: plan.entry, stop_loss_price: plan.stop, take_profit_price: plan.target, risk_ceiling_usd: plan.risk,
-      max_slippage_bps: SLIPPAGE_BPS, valid_until: iso(ctx.t + ctx.s.rules.max_validity_minutes * MIN), evidence: plan.evidence,
+      max_slippage_bps: SLIPPAGE_BPS, valid_until: iso(ctx.t + life * MIN), evidence: plan.evidence,
     };
-    return out('ready', `Ready to ask the book: buy ${pr.pair} at ${usd(plan.entry)}, stop ${usd(plan.stop)}, target ${usd(plan.target)}, risk ${usd(plan.risk)}.`, { kind: 'open', intent }, { pair: pr.pair });
+    // Checked as the book will check it, before its one ID is spent (M2), and
+    // sized to the largest order every limit allows, never above Eric's
+    // approved risk (M4). Anything the book would refuse waits, in words.
+    const f = fit(intent, bk, ctx.s.rules, ctx.s.venue);
+    if (!f.ok) return out('waiting', `The book would refuse the order now, so it is not asked yet (its one attempt is kept): ${f.refusals.map((x) => x.words).join(' ')}`, null, { pair: pr.pair, refusals: f.refusals });
+    const sz = f.sizing;
+    const less = f.binding.length ? ` Sized down from your ${usd(plan.risk)} to fit ${f.binding.map((r) => BINDING_WORDS[r] || r).join(' and ')}.` : '';
+    return out('ready', `Ready to ask the book: buy ${sz.quantity} ${pr.pair} at ${usd(plan.entry)} (${usd(sz.notional_usd)}), stop ${usd(plan.stop)}, target ${usd(plan.target)}, ${usd(sz.loss_at_stop_usd)} at the stop.${less}`, { kind: 'open', intent: f.intent }, { pair: pr.pair, sizing: { ...sz, risk_ceiling_usd: f.intent.risk_ceiling_usd, approved_risk_usd: plan.risk, binding: f.binding } });
   }
 
   // A refused intent has no order, so its pair is named from the project.
@@ -305,7 +487,11 @@ function assess(ws, ctx, g, snap) {
   const reason = closeReasonOf(ws, g, (receiptOf(ws, pid, d.receipt_id).receipt) || {}, ctx.t);
   if (!reason) return out(pos ? 'open' : 'order', pos ? `Open: ${pos.quantity} ${asked.pair} at ${usd(pos.entry_price)}, stop ${usd(pos.stop_loss_price)}, target ${usd(pos.take_profit_price)}${buyLive ? `; the buy is still ${stateWords(asked)}` : ''}.` : `The buy is ${stateWords(asked)}.`, null, more);
   const closing = { ...more, close: { reason: reason.kind, words: reason.words } };
-  // What has not filled is cancelled first: a close waits for the buy.
+  // What has not filled is cancelled first: a close waits for the buy. Not
+  // over a missing hour: the buy may have filled in it, and a cancel recorded
+  // now would leave that fill off the record when the hour arrives.
+  const gap = openGapOf(snap, asked.pair);
+  if ((asked.state === 'ACKED' || asked.state === 'PARTIAL') && gap) return out('closing', `${reason.words} The unfilled part of the buy is cancelled once ${asked.pair}'s missing hour ${gap.missing_hour} is on record, so a fill in it is not lost.`, null, closing);
   if (asked.state === 'ACKED' || asked.state === 'PARTIAL') return out('closing', `${reason.words} The unfilled part of the buy is cancelled.`, { kind: 'cancel', client_order_id: asked.client_order_id }, closing);
   if (buyLive) return out('closing', `${reason.words} The buy is ${asked.state}; it is resolved with the venue before anything else.`, null, closing);
   // A sell for the position: the latest attempt, or the next one.
@@ -344,8 +530,10 @@ function contextOf(ws, now, project) {
 // Reads only.
 function requests(ws, { now, project = null } = {}) {
   const ctx = contextOf(ws, now, project);
-  const snap = snapshotOf(ws, ctx.now);
-  return { version: VERSION, now: ctx.now, waits: ctx.s.waits, requests: ctx.grants.map((g) => { const a = assess(ws, ctx, g, snap); delete a.next; return a; }) };
+  return requestsOf(ws, ctx, snapshotOf(ws, ctx.now));
+}
+function requestsOf(ws, ctx, snap) {
+  return { version: VERSION, now: ctx.now, waits: ctx.s.waits, settlement: snap.settlement, requests: ctx.grants.map((g) => { const a = assess(ws, ctx, g, snap); delete a.next; return a; }) };
 }
 
 // The book as Outcomes > Paper Book reads it (slot 12c): Eric's settings and
@@ -356,7 +544,7 @@ function requests(ws, { now, project = null } = {}) {
 function view(ws, { now } = {}) {
   const ctx = contextOf(ws, now, null);
   const snap = snapshotOf(ws, ctx.now);
-  const res = PT.results(ws, { now: ctx.now });
+  const res = snap.results;
   const reqs = ctx.grants.map((g) => { const a = assess(ws, ctx, g, snap); delete a.next; return a; });
   // Every intent a decision makes, its buy and each sell attempt, to its request.
   const owner = new Map();
@@ -369,23 +557,28 @@ function view(ws, { now } = {}) {
     const o = owner.get(intentId);
     return o ? { project_id: o.r.project_id, project: o.r.project, decision_id: o.r.decision_id, action: o.r.action, purpose: o.purpose, request_pair: o.r.pair } : { project_id: null, project: null, decision_id: null, action: null, purpose: null, request_pair: null };
   };
-  const intents = PT.intents(ws);
+  const intents = snap.list;
   const byOrder = new Map(intents.filter((i) => i.client_order_id).map((i) => [i.client_order_id, i]));
   const ofPosition = (p) => ({ ...p, ...whose(String(p.position_id).replace(/^pos-/, '')), exit_words: p.exits && p.exits.length ? exitWords(p.exits[p.exits.length - 1]) : null });
+  // While an hour is missing, the book's figures are what it has recorded,
+  // never a settled account (a fill or a stop may be in the missing hour).
+  const st = snap.settlement;
+  const unknown = st.state === 'unsettled' ? [...res.unknown, `NAV, cash, the results and the drawdowns are recorded balances, not settled${st.settled_through ? ` (settled through ${st.settled_through})` : ''}: ${st.words}`] : res.unknown;
   return {
     version: VERSION,
     now: ctx.now,
     waits: ctx.s.waits,
+    settlement: st,
     book: { cash_usd: ctx.s.book.cash_usd || null, fee_rate: ctx.s.book.fee_rate || null },
     venue: { lot: LOT, min_notional_usd: MIN_NOTIONAL_USD },
-    results: { ...res, open_positions: res.open_positions.map(ofPosition), closed_positions: res.closed_positions.map(ofPosition) },
+    results: { ...res, open_positions: res.open_positions.map(ofPosition), closed_positions: res.closed_positions.map(ofPosition), unknown },
     requests: reqs,
     orders: res.orders.map((o) => {
       const i = byOrder.get(o.client_order_id) || {};
       return { ...o, intent_id: i.intent_id || null, side: i.side || null, pair: i.pair || null, position_id: i.position_id || null, ...whose(i.intent_id) };
     }),
     refusals: intents.filter((i) => i.state === 'REFUSED').map((i) => ({ intent_id: i.intent_id, refusals: i.refusals || [], ...whose(i.intent_id) })),
-    hours: PT.hours(ws),
+    hours: snap.hours,
   };
 }
 
@@ -398,7 +591,7 @@ function wanted(ws, { now } = {}) {
   const ctx = contextOf(ws, now, null);
   if (!ctx.s.book.cash_usd) return [];
   const snap = snapshotOf(ws, ctx.now);
-  const last = new Map(PT.hours(ws).map((h) => [h.pair, h.last_hour]));
+  const last = snap.last;
   const out = new Map();
   const add = (pair, pid, why) => { if (pair && !out.has(pair)) out.set(pair, { pair, project_id: pid, why, last_hour: last.get(pair) || null }); };
   for (const g of ctx.grants) {
@@ -417,19 +610,21 @@ function wanted(ws, { now } = {}) {
 // recorded in it; NAV by the hour starts at the funding (paper-trader.js
 // navSeries). A different amount later is never applied over the first;
 // that is said, not thrown.
-function fundOnce(ws, ctx, done, problems) {
+function fundOnce(ws, ctx, done, problems, snap = null) {
   const cash = ctx.s.book.cash_usd;
-  if (!cash) return;
-  const funded = PT.results(ws, { now: ctx.now }).funded_usd;
+  if (!cash) return false;
+  const funded = (snap ? snap.results : PT.results(ws, { now: ctx.now })).funded_usd;
   if (funded !== null) {
     if (dec(funded) !== dec(cash)) problems.push({ kind: 'fund', code: 'CONFLICT', words: `The book was funded with ${usd(funded)}; your setting of ${usd(cash)} is never applied over it.` });
-    return;
+    return false;
   }
   try {
     const f = PT.fund(ws, { cash_usd: cash, now: ctx.now });
     if (f.status === 'saved') done.push({ kind: 'fund', status: 'saved', words: `Funded with ${usd(f.cash_usd)}.` });
+    return f.status === 'saved';
   } catch (err) {
     problems.push({ kind: 'fund', code: err.code || null, words: String(err && err.message || err).slice(0, 300) });
+    return false;
   }
 }
 
@@ -438,11 +633,13 @@ function step(ws, { now, project = null } = {}) {
   const done = [];
   const problems = [];
   const attempt = (what, fn) => { try { const r = fn(); done.push({ ...what, status: r.status, state: r.state || null, words: r.words || null, refusals: r.refusals || null }); return r; } catch (err) { problems.push({ ...what, code: err.code || null, words: String(err && err.message || err).slice(0, 300) }); return null; } };
-  fundOnce(ws, ctx, done, problems);
   let snap = snapshotOf(ws, ctx.now);
+  if (fundOnce(ws, ctx, done, problems, snap)) snap = snapshotOf(ws, ctx.now);
+  // Read again only when recovery or a reconcile was attempted.
+  const before = done.length + problems.length;
   if (snap.orders.some((o) => o.state === 'RESERVED' || o.state === 'SENT')) attempt({ kind: 'recover' }, () => PT.recover(ws, { now: ctx.now }));
   else for (const o of snap.orders.filter((x) => x.state === 'UNKNOWN')) attempt({ kind: 'reconcile', client_order_id: o.client_order_id }, () => PT.reconcile(ws, o.client_order_id, { now: ctx.now }));
-  snap = snapshotOf(ws, ctx.now);
+  if (done.length + problems.length !== before) snap = snapshotOf(ws, ctx.now);
   // Closes and cancels first: they only reduce risk. Then new orders, the
   // oldest decision first. Each pass does one thing not yet tried and reads
   // the book again, so a cancel frees the sell after it in the same step.
@@ -459,7 +656,9 @@ function step(ws, { now, project = null } = {}) {
     else attempt(what, () => PT.submitIntent(ws, a.next.intent, { now: ctx.now, rules: ctx.s.rules, venue: ctx.s.venue }));
     snap = snapshotOf(ws, ctx.now);
   }
-  return { version: VERSION, now: ctx.now, done, problems, ...requests(ws, { now: ctx.now, project }) };
+  // The requests as the book stands after the last thing recorded: snap was
+  // read after it.
+  return { version: VERSION, now: ctx.now, done, problems, ...requestsOf(ws, ctx, snap) };
 }
 
 // Closed hours for the book, one after another (12b hands them in), after
@@ -479,11 +678,27 @@ function applyHours(ws, bars, { now } = {}) {
       const r = PT.applyBar(ws, b, { now: n.now });
       out.push({ pair, hour: b.hour, status: r.status, events: r.events });
     } catch (err) {
-      out.push({ pair, hour: b && b.hour, status: 'refused', code: err.code || null, words: String(err && err.message || err).slice(0, 300) });
+      const row = { pair, hour: b && b.hour, status: 'refused', code: err.code || null, words: String(err && err.message || err).slice(0, 300) };
+      if (err.code === 'GAP') row.gap = gapOf(ws, pair, b.hour, n.now);
+      out.push(row);
       if (['GAP', 'INTEGRITY', 'TIME', 'ORDER'].includes(err.code)) stoppedPairs.add(pair);
     }
   }
   return out;
 }
 
-module.exports = { VERSION, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, intentIdOf, plain, closeLimit, settingsOf, pairOf, planOf, horizonOf, requests, view, wanted, step, applyHours };
+// The hour missing before `hour`, recorded once (GAPS_REL): the hour after
+// the pair's last on record. A failure to record it is said, never thrown.
+function gapOf(ws, pair, hour, now) {
+  try {
+    const last = (PT.hours(ws).find((h) => h.pair === pair) || {}).last_hour || null;
+    if (!last) return { pair, missing_hour: null, detected_at: now, status: 'failed', words: `${pair} has no hour on record, so the missing hour cannot be named.` };
+    const missing = iso(Date.parse(last) + HOUR);
+    const status = noteGap(ws, { pair, missing_hour: missing, last_hour: last, later_hour: hour, detected_at: now });
+    return { pair, missing_hour: missing, detected_at: status === 'saved' ? now : (readGaps(ws).gaps.find((g) => g.pair === pair && g.missing_hour === missing) || {}).detected_at || null, status };
+  } catch (err) {
+    return { pair, missing_hour: null, detected_at: now, status: 'failed', words: String(err && err.message || err).slice(0, 300) };
+  }
+}
+
+module.exports = { VERSION, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, intentIdOf, plain, closeLimit, fit, settingsOf, pairOf, planOf, horizonOf, settlementOf, requests, view, wanted, step, applyHours };

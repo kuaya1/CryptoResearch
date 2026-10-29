@@ -8,68 +8,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
-const { tempWorkspace, addFixtureProject, importAllFixtures, withExitReadings, freshPrice } = require('./helpers');
 const T = require('../core/tickets');
 const TD = require('../core/trader-desk');
 const TR = require('../core/trader-rules');
 const PT = require('../core/paper-trader');
-
-const H = 3600000;
-const M = 60000;
-const iso = (ms) => new Date(ms).toISOString();
-const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
-const PAIR = 'XMPL/USDC';
-const RULES = { stop_min_pct: '0.01', stop_min_atr: '1', notional_max_pct: '0.25', max_validity_minutes: 180, allowlist: [PAIR] };
-const BOOK = { cash_usd: '25000', fee_rate: '0.003' };
-
-// The Prosecutor's answer for a ticket, as a model would write it: an
-// ACCUMULATE between $0.80 and $0.90, stop $0.70, target $1.40 (FICTIONAL).
-const AT = new Date().toISOString();
-function answer(ticket, proposal = {}) {
-  const b = {
-    format: T.FORMAT, ticket_id: ticket.ticket_id, project_id: ticket.project_id, prompt_version: T.PROMPT_VERSION, role: 'prosecutor', model: 'claude', model_version: 'claude-test', as_of: AT,
-    researcher_report_id: ticket.basis.researcher.report_id, researcher_report_sha256: ticket.basis.researcher.original.sha256,
-    prosecution: {
-      verdict: 'thesis_damaged', conviction_score: 38,
-      tests: { mercenary_emissions: { result: 'fail', finding: 'Rewards exceed fees (FICTIONAL).', source_ids: ['S1'] }, tax_revenue: { result: 'pass', finding: '' }, exit_slippage: { result: 'unknown', finding: 'No reading.' }, unverified_claims: { result: 'pass', finding: '' } },
-      fatal_flaws: [{ test: 'mercenary_emissions', severity: 'fatal', finding: 'Activity is paid for by emissions (FICTIONAL).', source_ids: ['S1'] }],
-      strongest_bull_rebuttal: 'Emissions taper next quarter.',
-    },
-    proposal: {
-      proposal_type: 'ACCUMULATE',
-      non_consensus_thesis: 'The market assumes organic demand; the evidence shows paid activity; the emission cut in Q1 makes the difference observable.',
-      entry_zone: { low_usd: 0.8, high_usd: 0.9, basis: 'prior range' },
-      upside_target: { price_usd: 1.4, basis: 'fees double' },
-      invalidation_trigger: { price_usd: 0.7, metric: { key: 'fees', below_30d_usd: 100000 }, statement: 'Below $0.70 or fees under $100k a month.' },
-      ...proposal,
-    },
-    agent_disagreement_note: 'The researcher grades 60.5 on product reality; I score 38 on emissions.',
-    sources: [{ source_id: 'S1', url: 'https://example.com/xmpl/emissions', publisher: 'Example (FICTIONAL)', retrieved_at: AT, excerpt: 'fictional' }],
-  };
-  return `# Prosecution (FICTIONAL)\n\n${'The four tests and the flaws, written out for the test fixture. '.repeat(12)}\n\n\`\`\`json\n${JSON.stringify(b, null, 2)}\n\`\`\`\n`;
-}
-
-// A fictional desk with a Prosecutor's ticket the gate sized at $500: exits
-// within 5% at $100, $500 and $2,000 frozen into its packet, a fresh price.
-function deskWith(t) {
-  const w = tempWorkspace('trader-desk');
-  t.after(w.cleanup);
-  const pid = addFixtureProject(w.ws).project_id;
-  importAllFixtures(w.ws);
-  const portfolio = require('../core/portfolio');
-  const real = portfolio.computePortfolio;
-  portfolio.computePortfolio = (...a) => ({ ...real(...a), positions: [] });
-  t.after(() => { portfolio.computePortfolio = real; });
-  const tk = withExitReadings(1.5, () => T.createTicket(w.ws, { project_id: pid, assistant: true })).ticket;
-  freshPrice(w.ws, 'example-payfi-fictional', 0.85);
-  const saved = T.saveTicket(w.ws, { project_id: pid, ticket_id: tk.ticket_id, text: answer(T.loadTicket(w.ws, pid, tk.ticket_id)) });
-  assert.equal(saved.receipt.desk.suggested_risk_usd, 500, 'the fixture ticket is sized at $500');
-  return { ...w, pid, rid: saved.receipt_id };
-}
-const settle = (ws) => { ws.settings.trader = { rules: { ...RULES }, book: { ...BOOK } }; };
-// Quiet hours of XMPL/USDC: ranges of 0.02, so the 14-hour ATR is 0.02.
-const bar = (start, over = {}) => ({ pair: PAIR, hour: iso(start), open: '0.85', high: '0.86', low: '0.84', close: '0.85', volume: '10000', ...over });
-const mine = (r, did) => r.requests.find((x) => x.decision_id === did);
+const { H, M, iso, ULID_RE, PAIR, BOOK, deskWith, settle, bar, mine } = require('./trader-fixture');
 
 test('the order\'s identity and arithmetic: a ULID from the decision, plain decimals, a sell limit the engine never calls through the market', () => {
   const d = { decision_id: 'td_fict00000001', decided_at: '2026-10-28T12:00:00.000Z' };
@@ -126,7 +69,7 @@ test('the Paper Book settings: funding and the venue fee, bounded, with no defau
   assert.match(src, /out\.trader\.book = TR\.validateBookPatch\(patch\.trader\.book\)/);
 });
 
-test('12a end to end: Approve waits for the book, is refused by the exit cap, Halve opens, an hour fills part, Undo cancels the rest and closes: to the cent', (t) => {
+test('12a end to end: Approve waits for the book, then opens sized down to the exit cap, Undo cancels it, Halve opens, an hour fills part, Undo cancels the rest and closes: to the cent', (t) => {
   const s = deskWith(t);
   const { ws, pid, rid } = s;
 
@@ -152,20 +95,24 @@ test('12a end to end: Approve waits for the book, is refused by the exit cap, Ha
   assert.equal(PT.results(ws, { now: iso(now0) }).funded_usd, '25000');
   assert.equal(TD.wanted(ws, { now: iso(now0) })[0].last_hour, iso(top - H), 'the last hour the book holds, so the hourly read asks for what comes after');
 
-  // 3. The next step asks the book once. $500 at a stop of $0.70 buys
-  // 3,197.025 XMPL ($2,717.47) at $0.85, over the $2,000 the exits showed
-  // selling within 5%: refused, finally, with the reason in words.
+  // 3. The next step asks the book once. All $500 at a stop of $0.70 would
+  // buy 3,197.025 XMPL ($2,717.47) at $0.85, over the $2,000 the exits showed
+  // selling within 5%. Approved risk is a ceiling (M4, cr-trader-desk@2): the
+  // order is the largest the exit size allows, 2,352.941176 XMPL
+  // ($1,999.9999996); one lot more ($2,000.00000045) would be over it.
   const s1 = TD.step(ws);
   const r1 = mine(s1, approve.decision_id);
-  assert.equal(r1.phase, 'refused');
-  assert.deepEqual(r1.refusals.map((x) => [x.field, x.rule]), [['risk_ceiling_usd', 'exit_cap']]);
-  assert.match(r1.words, /above the 2000 the exit measurement shows/);
+  assert.equal(r1.phase, 'order');
   assert.equal(r1.open_intent_id, TD.intentIdOf(approve, 'open'));
+  const buy1 = PT.intents(ws).find((i) => i.intent_id === r1.open_intent_id);
+  assert.deepEqual([buy1.state, buy1.quantity], ['ACKED', '2352.941176']);
   assert.deepEqual(TD.step(ws).done, [], 'the same step again asks nothing');
 
-  // 4. Undo, then Halve: $250, the smaller of the starter and the suggestion.
-  T.decide(ws, pid, { receipt_id: rid, action: 'undo', request_id: 'req_12a_undo0001' });
-  assert.equal(mine(TD.requests(ws), approve.decision_id).phase, 'refused', 'a refusal stays the record of that decision');
+  // 4. Undo (its own step cancels the unfilled buy), then Halve: $250, the
+  // smaller of the starter and the suggestion.
+  const un0 = T.decide(ws, pid, { receipt_id: rid, action: 'undo', request_id: 'req_12a_undo0001' });
+  assert.equal(un0.result.trader.status, 'ended');
+  assert.equal(mine(TD.requests(ws), approve.decision_id).phase, 'ended', 'the cancelled buy stays the record of that decision');
   const hv = T.decide(ws, pid, { receipt_id: rid, action: 'halve', request_id: 'req_12a_halve001' });
   const halve = hv.result.decision;
   assert.equal(halve.pm_approved_risk_usd, 250);
@@ -179,7 +126,7 @@ test('12a end to end: Approve waits for the book, is refused by the exit cap, Ha
   assert.deepEqual([ord.state, ord.side, ord.pair, ord.quantity, ord.thesis_id], ['ACKED', 'OPEN_LONG', PAIR, '1598.519131', rid]);
   const sentAt = Date.now();
   const res0 = PT.results(ws, { now: iso(sentAt) });
-  assert.equal(res0.orders.length, 1, 'one order in the book: the refused approve made none');
+  assert.equal(res0.orders.length, 2, 'the approve\'s cancelled buy and the halve\'s');
 
   // 5. The hour in progress ends, then the next: only an hour that starts
   // after the order was sent fills it, at most 10% of its 10,000 volume.
@@ -231,10 +178,9 @@ test('12a end to end: Approve waits for the book, is refused by the exit cap, Ha
   const v = TD.view(ws, { now: iso(n2) });
   assert.deepEqual(v.book, BOOK);
   assert.deepEqual(v.waits, []);
-  assert.deepEqual(v.requests.map((r) => [r.decision_id, r.action, r.phase]), [[approve.decision_id, 'approve', 'refused'], [halve.decision_id, 'halve', 'closed']]);
-  assert.deepEqual(v.refusals.map((x) => [x.project_id, x.decision_id, x.purpose, x.request_pair, x.refusals.map((y) => y.rule)]), [[pid, approve.decision_id, 'open', PAIR, ['exit_cap']]]);
-  assert.match(v.refusals[0].refusals[0].words, /above the 2000 the exit measurement shows/);
-  assert.deepEqual(v.orders.map((o) => [o.side, o.pair, o.state, o.decision_id, o.purpose]), [['OPEN_LONG', PAIR, 'CANCELLED', halve.decision_id, 'open'], ['CLOSE_LONG', PAIR, 'FILLED', halve.decision_id, 'close']]);
+  assert.deepEqual(v.requests.map((r) => [r.decision_id, r.action, r.phase]), [[approve.decision_id, 'approve', 'ended'], [halve.decision_id, 'halve', 'closed']]);
+  assert.deepEqual(v.refusals, [], 'nothing the book would refuse was asked');
+  assert.deepEqual(v.orders.map((o) => [o.side, o.pair, o.state, o.decision_id, o.purpose]), [['OPEN_LONG', PAIR, 'CANCELLED', approve.decision_id, 'open'], ['OPEN_LONG', PAIR, 'CANCELLED', halve.decision_id, 'open'], ['CLOSE_LONG', PAIR, 'FILLED', halve.decision_id, 'close']]);
   assert.deepEqual(v.results.closed_positions.map((p) => [p.project_id, p.decision_id, p.realized_pnl_usd, p.exit_words]), [[pid, halve.decision_id, '-5.1', 'Sold at $0.85']]);
   assert.deepEqual(v.results.open_positions, []);
   // NAV by the hour runs from the funding: the hours read before it hold none.

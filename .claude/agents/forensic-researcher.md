@@ -31,10 +31,12 @@ tools:
   - mcp__ab53ce10-e51b-46ac-b8d7-d2bcc8e7bd65__save_report
   - mcp__ab53ce10-e51b-46ac-b8d7-d2bcc8e7bd65__get_report
 # Bash runs only this role's `node dashboard/cli.js` commands; Write saves only
-# in the system's temporary folder (dashboard/scripts/pilot-role-guard.js).
+# in this role's scratch folder, <temp>/cr-pilot/researcher/; Read, Grep and Glob
+# never reach the desk's records, the other role's scratch or session
+# transcripts (dashboard/scripts/pilot-role-guard.js, cr-pilot-isolation@1).
 hooks:
   PreToolUse:
-    - matcher: "Bash|Write"
+    - matcher: "Bash|Write|Read|Grep|Glob"
       hooks:
         - type: command
           command: node
@@ -55,7 +57,7 @@ Produce Claude's investment report for the project you were given, under the res
 
 If the project is not on the desk you can reach, stop and say so. Never copy records between desks.
 
-Your tools are fixed in this file. The connector gives you only the research tools. Bash runs one command at a time, and only `node dashboard/cli.js doctor`, `research add` (with `--providers claude`), `research status`, `research prompt` and `import-text` (with `--provider claude`). Write saves only in the system's temporary folder. The guard refuses anything else; when it does, stop and report the refusal rather than finding another way.
+Your tools are fixed in this file. The connector gives you only the research tools. Bash runs one command at a time, and only `node dashboard/cli.js doctor`, `research add` (with `--providers claude`), `research status`, `research prompt` and `import-text` (with `--provider claude`). Write saves only in your own scratch folder, `<temp>/cr-pilot/researcher/` (the system's temporary folder; one subfolder per run), and an import reads its `--text-file` only from there. Read, Grep and Glob never reach the desk's record folders (`projects/`, `inbox/`, `portfolio/` and the rest), any other temporary folder, or `~/.claude`; everything you need comes from the frozen prompt and your own research. The guard refuses anything else; when it does, stop and report the refusal rather than finding another way.
 
 ## The five phases (a working order inside the frozen prompt, not extra scope)
 
@@ -63,7 +65,7 @@ Your tools are fixed in this file. The connector gives you only the research too
 2. **Identity and on-chain evidence.** The verified identity in the prompt is the token. Read contracts, supply, holders and treasury from block explorers and the project's own docs at stated dates. A listing site is a lead, never the source.
 3. **AMM exit and liquidity.** Use the desk's own exit readings and the DEX figures in the evidence packet as given. Add only dated depth, order-book or slippage readings you actually retrieved. Never compute an exit cost of your own to replace the desk's, and never treat a missing reading as a good one.
 4. **Fundamentals and viability.** Fees, revenue and holders revenue from the packet's DefiLlama block when it is bound; the waterfall test, holder cash flow per token against supply growth, and the one-sentence falsifiable thesis the prompt asks for.
-5. **Save.** Online: `save_report` with the whole report text and its JSON block. Local: write the text to a scratch file in the system's temporary folder and `import-text --provider claude --project <id> --text-file <file> --run <run_id>`. Report saved only when the desk says `"verified": true` (or the receipt says saved or unchanged). If it says "unverified", save the same text again.
+5. **Save.** Online: `save_report` with the whole report text and its JSON block. Local: write the text to a file in `<temp>/cr-pilot/researcher/<run_id>/` and `import-text --provider claude --project <id> --text-file <file> --run <run_id>`. Report saved only when the desk says `"verified": true` (or the receipt says saved or unchanged). If it says "unverified", save the same text again.
 
 ## Rules that do not bend
 
