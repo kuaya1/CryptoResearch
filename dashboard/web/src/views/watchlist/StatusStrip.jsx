@@ -8,9 +8,9 @@
 // always in view, named in words. The price refresh is the header's Refresh
 // prices button (RefreshButton).
 import { useEffect, useState } from 'react';
-import { RefreshCw, TriangleAlert } from 'lucide-react';
-import { fmtAgo, fmtAsOf, fmtChangePct, fmtMarketUsd, fmtPrice, priceStatus, toast } from '../../../../public/ui.js';
-import { splitAttention, kindWord, countdownText, refreshToast, attentionHref, deskKpis, riskBudget } from '../../../../public/watchlist-model.js';
+import { RefreshCw, TriangleAlert, ArrowUpRight, ChevronDown } from 'lucide-react';
+import { fmtAgo, fmtAsOf, fmtChangePct, fmtMarketUsd, fmtPrice, priceStatus, toast, sparkPath } from '../../../../public/ui.js';
+import { splitAttention, kindWord, countdownText, refreshToast, attentionHref, deskKpis, btcSeries, riskBudget } from '../../../../public/watchlist-model.js';
 import { api, refresh, desk } from '../../lib/desk.js';
 import { navigate } from '../../lib/router.js';
 import { Dom } from '../../components/Dom.jsx';
@@ -23,6 +23,19 @@ function useTick(on) {
     const t = setInterval(() => set((n) => n + 1), 1000);
     return () => clearInterval(t);
   }, [on]);
+}
+
+function Chg({ n, win, label }) {
+  const s = fmtChangePct(n);
+  if (!s) return null;
+  const dir = n < 0 ? 'down' : n > 0 ? 'up' : 'flat';
+  return (
+    <span className={`kpi-chg chg ${dir}`}>
+      <span aria-hidden="true">{s}</span>
+      <span className="kpi-win" aria-hidden="true">{win}</span>
+      <span className="sr-only">{`${s.replace('−', 'minus ')} ${label}`}</span>
+    </span>
+  );
 }
 
 // Refresh prices (the header's secondary action): asks CoinGecko now; a
@@ -63,9 +76,20 @@ export function RefreshButton({ d }) {
       ) : null}
       <button type="button" className="btn" data-key="refresh-prices" aria-label="Refresh prices now" disabled={busy} onClick={doRefresh}>
         <RefreshCw size={14} strokeWidth={2} className={busy ? 'spin' : ''} aria-hidden="true" />
-        <span>{busy ? 'Refreshing…' : 'Refresh'}</span>
+        <span>{busy ? 'Refreshing…' : 'Refresh prices'}</span>
       </button>
     </>
+  );
+}
+
+// Bitcoin's stored 7-day series as a 44px line; no series, no line.
+function KpiSpark({ values, up }) {
+  const path = sparkPath(values, { width: 96, height: 44, pad: 4 });
+  if (!path) return null;
+  return (
+    <svg className={`kpi-spark ${up ? 'up' : 'down'}`} viewBox="0 0 96 44" width="96" height="44" aria-hidden="true" focusable="false">
+      <path d={path} />
+    </svg>
   );
 }
 
@@ -103,28 +127,21 @@ function RiskBudget({ rb }) {
   );
 }
 
-// A key figure (Desk v2): its label, a large light value and a sub-line,
-// each on one line; a cell that is a way in is a button.
-function Cell({ id, label, value, sub = null, subTone = '', valueTone = '', onClick, title, active = false, aria }) {
+function Cell({ id, label, children, onClick, title, sub = null, active = false, aria }) {
   const inner = (
     <>
       <span className="kpi-k">{label}</span>
-      <span className={`kpi-v${valueTone ? ` is-${valueTone}` : ''}`}>{value}</span>
-      {sub ? <span className={`kpi-s${subTone ? ` is-${subTone}` : ''}`}>{sub}</span> : null}
+      <span className="kpi-v">{children}</span>
+      {sub ? <span className="kpi-s">{sub}</span> : null}
     </>
   );
   if (!onClick) return <div className="kpi-cell" title={title} data-key={`kpi-${id}`}>{inner}</div>;
   return (
     <button type="button" className={`kpi-cell is-link${active ? ' is-on' : ''}`} title={title} data-key={`kpi-${id}`} aria-label={aria} aria-pressed={active || undefined} onClick={onClick}>
       {inner}
+      <ArrowUpRight className="kpi-go" size={13} aria-hidden="true" />
     </button>
   );
-}
-
-// "+2.1% this week", with its direction for the sub-line's colour.
-function chgWords(n, win) {
-  const s = fmtChangePct(n);
-  return s ? { text: `${s} ${win}`, tone: n > 0 ? 'up' : n < 0 ? 'down' : '' } : null;
 }
 
 export function KpiStrip({ d, agenda = null, settled = true, sources, filters, onView, onBeat, range = '24h' }) {
@@ -138,63 +155,68 @@ export function KpiStrip({ d, agenda = null, settled = true, sources, filters, o
   // Bitcoin's change in the chosen window where the snapshot holds it (7d
   // and 30d; it has no 24h), its window always named.
   const btc30 = range === '30d' && k.market && typeof k.market.change_30d === 'number';
-  const btcChg = k.market ? (btc30 ? chgWords(k.market.change_30d, 'over 30 days') : chgWords(k.market.change_7d, 'this week')) : null;
-  const totalChg = k.total ? chgWords(k.total.change_24h, 'today') : null;
+  const series = btcSeries(idx);
   const rb = riskBudget(idx);
-  const prices = `Prices ${m.last_success_at ? fmtAgo(m.last_success_at) : 'not fetched'}${ps.problem && !m.rate_limited ? ` · ${ps.text}` : ''}`;
-  const n = settled ? k.review.projects : null;
   return (
     <section className="kpi" aria-label="Market and what needs you">
       <div className="kpi-row">
         <Cell
           id="market"
-          label={<>Bitcoin{demo || sources.price !== 'CoinGecko' ? <span className="kpi-demo"> (demo)</span> : null}</>}
-          value={k.market ? `$${Math.round(k.market.btc).toLocaleString('en-US')}` : '—'}
-          sub={btcChg ? btcChg.text : prices}
-          subTone={btcChg ? btcChg.tone : ps.problem ? 'warn' : ''}
+          label={<>Market{demo || sources.price !== 'CoinGecko' ? <span className="kpi-demo"> (demo)</span> : null}</>}
           onClick={k.market ? () => toggle('market') : null}
           active={open === 'market'}
-          aria={k.market ? `Bitcoin ${Math.round(k.market.btc).toLocaleString('en-US')} dollars${btcChg ? `, ${btcChg.text.replace('−', 'minus ')}` : ''}${k.market.dominance !== null ? `, dominance ${k.market.dominance.toFixed(1)} percent` : ''}. ${prices}. Market details` : undefined}
-          title={k.market ? `Bitcoin and its change (CoinGecko /global)${k.market.dominance !== null ? `; dominance ${k.market.dominance.toFixed(1)}%` : ''}${k.market.stale ? '; the snapshot is stale' : ''}. ${prices}${ps.note ? `. ${ps.note}` : ''}` : 'No market snapshot captured yet'}
-        />
-        <Cell
-          id="total"
-          label="Total market"
-          value={k.total ? fmtMarketUsd(k.total.usd) : '—'}
-          sub={totalChg ? totalChg.text : null}
-          subTone={totalChg ? totalChg.tone : ''}
-          title="Total crypto market cap (CoinGecko /global), its change over 24 hours"
-        />
+          aria={k.market ? `Bitcoin ${Math.round(k.market.btc).toLocaleString('en-US')} dollars${k.market.dominance !== null ? `, dominance ${k.market.dominance.toFixed(1)} percent` : ''}. Market details` : undefined}
+          title={k.market ? 'Bitcoin, its 7-day change and its dominance of the total market cap (CoinGecko /global)' : 'No market snapshot captured yet'}
+          sub={<span className={ps.problem ? 'kpi-warn' : undefined} title={ps.note || undefined}>{`Prices ${m.last_success_at ? fmtAgo(m.last_success_at) : 'not fetched'}${ps.problem && !m.rate_limited ? ` · ${ps.text}` : ''}`}</span>}
+        >
+          {k.market ? (
+            <>
+              <span className="kpi-num">{`BTC $${Math.round(k.market.btc).toLocaleString('en-US')}`}</span>
+              {btc30 ? <Chg n={k.market.change_30d} win="30d" label="over 30 days" /> : <Chg n={k.market.change_7d} win="7d" label="over 7 days" />}
+              {series ? <KpiSpark values={series} up={(series[series.length - 1] || 0) >= (series[0] || 0)} /> : null}
+              {k.market.dominance !== null ? <span className="kpi-sub2">{`Dom ${k.market.dominance.toFixed(1)}%`}</span> : null}
+              {k.market.stale ? <span className="kpi-warn">stale</span> : null}
+            </>
+          ) : <span className="faint">No snapshot</span>}
+          {open === 'market' ? <ChevronDown className="kpi-open" size={13} aria-hidden="true" /> : null}
+        </Cell>
+        <Cell id="total" label="Total cap" title="Total crypto market cap (CoinGecko /global)">
+          {k.total ? <><span className="kpi-num">{fmtMarketUsd(k.total.usd)}</span><Chg n={k.total.change_24h} win="24h" label="total market cap over 24 hours" /></> : <span className="faint">—</span>}
+        </Cell>
         <Cell
           id="beat"
-          label="Beat Bitcoin"
-          value={k.beat ? `${k.beat.n} of ${k.beat.of}` : '—'}
-          sub="over 30 days"
+          label="Beat BTC (30d)"
           onClick={k.beat ? onBeat : null}
           active={filters.beat === 'yes'}
           title={k.beat ? `${k.beat.words.title} Select to show the projects on your list that beat Bitcoin over 30 days.` : 'No breadth figure captured yet'}
           aria={k.beat ? `${k.beat.n} of ${k.beat.of} beat Bitcoin over 30 days. Show the projects on your list that did` : undefined}
-        />
+        >
+          {k.beat ? (
+            <>
+              <span className="kpi-num">{`${k.beat.n} / ${k.beat.of}`}</span>
+              {typeof k.beat.share === 'number' ? <span className="breadth-bar" aria-hidden="true"><span style={{ width: `${Math.max(0, Math.min(100, k.beat.share))}%` }} /></span> : null}
+            </>
+          ) : <span className="faint">—</span>}
+        </Cell>
         <Cell
           id="review"
           label="Needs review"
-          value={n === null ? '…' : String(n)}
-          valueTone={n ? 'amber' : ''}
-          sub={n === null ? 'counting' : n ? 'open the queue' : 'all reviewed'}
           onClick={() => navigate('#/review')}
           title="Projects with changes since your review, a review of yours due, or research waiting for you. One project counts once."
           aria={settled ? `${k.review.projects} project${k.review.projects === 1 ? '' : 's'} need your review. Open Review` : 'Counting the projects that need your review. Open Review'}
-        />
+        >
+          {settled ? <><span className="kpi-num">{k.review.projects}</span><span className="kpi-unit">{k.review.projects === 1 ? 'project' : 'projects'}</span></> : <span className="kpi-num faint">…</span>}
+        </Cell>
         <Cell
           id="waiting"
-          label="Research"
-          value={String(k.waiting.jobs)}
-          sub="running or queued"
+          label="Research waiting"
           onClick={() => onView('waiting')}
           active={filters.owned === 'waiting'}
           title="Model jobs queued, working, paused or waiting for you (a model on hold has none)"
           aria={`${k.waiting.jobs} research job${k.waiting.jobs === 1 ? '' : 's'} waiting on a model. Show them`}
-        />
+        >
+          <span className="kpi-num">{k.waiting.jobs}</span><span className="kpi-unit">{k.waiting.jobs === 1 ? 'job' : 'jobs'}</span>
+        </Cell>
       </div>
       <RiskBudget rb={rb} />
       {open === 'market' ? (

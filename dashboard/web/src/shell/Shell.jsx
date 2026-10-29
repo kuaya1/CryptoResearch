@@ -94,7 +94,7 @@ export function Sidebar({ collapsed, onCollapse }) {
     <aside className={`sidebar${collapsed ? ' is-collapsed' : ''}`} aria-label="Desk">
       <div className="sb-brand">
         <a className="brand sb-ws" href="#/watchlist" data-key="nav-brand" title="CryptoResearch: the Desk">
-          <span className="brand-cr" aria-hidden="true">CR</span>
+          <Mark className="brand-mark" />
           <span className="brand-word">CryptoResearch</span>
           {kind ? <span className="ws-tag" title={`${kind} workspace: fictional data`}>{kind}</span> : null}
         </a>
