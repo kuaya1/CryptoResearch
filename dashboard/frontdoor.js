@@ -189,8 +189,10 @@ function openFrontDoor(server, { ws, hosted = null, port, quiet = false, state, 
       }
       // Grok Scout (audits/2026-10-26-grok-scout): the daily sweep checks its
       // key and posts its brief with the desk's own ingest key, never the
-      // sign-in. Any other /api/ingest/ path, the ping included, waits for it.
-      if (scout && url.pathname === '/api/ingest/scout-brief') return await scout(req, res, url);
+      // sign-in; its leads (core/leads.js) come the same way, with their
+      // status at /api/ingest/scout-leads/<delivery_id>. Any other
+      // /api/ingest/ path, the ping included, waits for it.
+      if (scout && (url.pathname === '/api/ingest/scout-brief' || /^\/api\/ingest\/scout-leads(\/[a-z0-9-]{1,64})?$/.test(url.pathname))) return await scout(req, res, url);
       // Offsite backup (core/offsite.js): the PC pulls a complete package with
       // the desk's own backup key, never the sign-in, and can change nothing.
       if (offsite && url.pathname === '/api/offsite/package') return offsite(req, res);

@@ -175,6 +175,8 @@ Data, jobs and maintenance
                                          folder, check records, originals and research state; no provider
                                          is asked for anything (the restored copy holds research)
   scout list | scout status              Grok Scout's items and its last brief (read only)
+  scout leads list | scout leads status <delivery_id>
+                                         Grok Scout's leads and one delivery's outcome (read only)
   restored-copy status | restored-copy release --confirm
                                          a restored copy holds research until released here
                                          the backup key is CR_BACKUP_KEY on the desk and on this PC
@@ -1019,7 +1021,14 @@ async function run(argv) {
       const S = require('./core/scout');
       if (!sub || sub === 'list') return S.view(ws);
       if (sub === 'status') return { status: S.statusLine(ws) };
-      throw Object.assign(new Error('scout list|status'), { code: 'USAGE' });
+      if (sub === 'leads') {
+        // Its leads (core/leads.js); read only.
+        const L = require('./core/leads');
+        if (!rest[0] || rest[0] === 'list') return L.view(ws);
+        if (rest[0] === 'status') return L.status(ws, L.SOURCE, need(rest[1], 'scout leads status <delivery_id>'));
+        throw Object.assign(new Error('scout leads list|status <delivery_id>'), { code: 'USAGE' });
+      }
+      throw Object.assign(new Error('scout list|status|leads'), { code: 'USAGE' });
     }
     case 'explorer': {
       // The optional Research Explorer (core/explorer.js). Exports go one way,
