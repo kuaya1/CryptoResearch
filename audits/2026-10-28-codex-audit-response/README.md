@@ -1,8 +1,8 @@
 # Codex audit of 2026-10-28: fact-check and remediation blueprint
 
 Baseline: `main` at `5022c2c` (PR #86). Written by Claude in Eric's Claude Code
-session, 2026-10-28; revised the same day after a second and a third
-adversarial review (Parts 1b and 1c). The reproductions in [repro.js](repro.js) run against the real
+session, 2026-10-28; revised the same day after a second, a third and a
+fourth adversarial review (Parts 1b, 1c and 1d). The reproductions in [repro.js](repro.js) run against the real
 modules in temporary FICTIONAL workspaces built with the repository's own test
 helpers. The path argument is the tree to test, so the same script shows each
 build's behaviour:
@@ -16,10 +16,12 @@ node audits/2026-10-28-codex-audit-response/repro.js .
 | Item | State |
 |---|---|
 | PR 1, portfolio time (F1) | **Merged**: #87 (`6254b47`), merged into `main` as `b56116a` on 2026-10-28 at 22:11 UTC, before the second review's acceptance tests existed. They and the past-hour fix they need are PR 1b, below. |
-| PR 1b, PR 1's acceptance tests | **Built, not committed**, on `claude/paper-acceptance` (from `b56116a`): the five tests and the `navSeries` fix. Only the past-hour test failed before the fix; with it the suite passes 1140/1140. Must merge before funding. |
-| PR 2, missing hours (A) | **Built, not committed, withdrawn.** It read a missing hour as "no trade", which the second review's C1 disproves. Kept uncommitted in `.claude/worktrees/paper-missing-hours` for reference. The second design's late-hour refusal and policy close are withdrawn too (C7–C9). To be rebuilt as halt and recover (Part 2) after Eric's decision D2. |
-| PRs 2b, 3–11 | **Proposed only.** Nothing is built. |
-| Counterexamples C1–C12 | **Reproduced** in repro.js. C1–C6 on `main`, PR 1 and the withdrawn PR 2 build; C7–C12 on `main` and the PR 1b build, with the same figures on both. |
+| PR 1b, PR 1's acceptance tests | **Merged**: #90 (`600199b`), into `main` as `d85386b` on 2026-10-28 at 23:57 UTC. The five tests and the `navSeries` fix; only the past-hour test failed before the fix; the suite passed 1140/1140. |
+| PR 2, missing hours (A) | **Built, not committed, withdrawn.** It read a missing hour as "no trade", which the second review's C1 disproves. Kept uncommitted in `.claude/worktrees/paper-missing-hours` for reference. The second design's late-hour refusal and policy close are withdrawn too (C7–C9). The third design's write-off is deferred (C13). Now narrowed to saying a missing hour truthfully, with `main`'s recovery kept (Part 2). |
+| PR 2b, the write-off | **Deferred** (Part 1d). Not part of the initial repair. |
+| PRs 3–11 | **Proposed only.** Nothing is built. |
+| Counterexamples C1–C14 | **Reproduced** in repro.js. C1–C6 on `main`, PR 1 and the withdrawn PR 2 build; C7–C12 on `main` and the PR 1b build, with the same figures on both; C13 and C14 on `main` with PR 1b. |
+| The blueprint's earlier revisions | #88 (C1–C6) and #89 (C7–C12), both merged. |
 | Production (the online desk's trader book) | **UNKNOWN.** Not inspected from here. |
 
 ## The answer
@@ -40,10 +42,10 @@ node audits/2026-10-28-codex-audit-response/repro.js .
   the book is funded, their damage is written into an append-only journal.
   Then re-approval (F2), exit-evidence renewal (F3) and sizing (B). Isolation
   (F4) and the small items can run beside them.
-- **Do not fund the online trader book until PR 1b and the rebuilt PR 2 are
-  merged.** Funding happens once and can't be changed afterwards, and the
-  journal keeps everything it writes. PR 1 (#87) is merged. PR 1b adds its
-  acceptance tests and corrects how it values a past hour.
+- **Do not fund the online trader book until PR 8's two checks pass on
+  `main`.** Funding happens once and can't be changed afterwards, and the
+  journal keeps everything it writes. PR 1 (#87) and its acceptance tests
+  (PR 1b, #90) are merged.
 - **The second review (Part 1b) was right on all six points.** Five of my
   proposed remedies were wrong or incomplete:
   - missing hours read as "no trade";
@@ -70,9 +72,25 @@ node audits/2026-10-28-codex-audit-response/repro.js .
   evidence settles it, and states every figure it touches, including an
   acknowledged buy with nothing filled and a partial one. Openings are
   reserved atomically, under one ID per decision.
-- **The desk is not ready for funding.** After PR 1b and PR 2, funding is
-  safe: nothing false is written. The desk is ready only when PR 8's two
-  checks pass.
+- **The fourth review (Part 1d) kept those conclusions closed and narrowed
+  the rest.** Its four points, all taken:
+  - The write-off keeps capital safe, but not the 4% drawdown breaker: a $100
+    risk it accepts, the recovered history refuses (C13). It is deferred, with
+    PR 2b. PR 2 is now only the truthful report, beside `main`'s existing
+    recovery.
+  - "Terminal under the frozen bounds" still depends on the fee, which is
+    Eric's setting: the same $1.07 grant fails the minimum at 0.3% and passes
+    at 0.1% (C14). So every sizing failure now waits, in words.
+  - The opening guards apply on every reservation entry point, through one
+    shared check.
+  - The reservation reads every input it relies on (decision, exit readings,
+    fee, rules) under the lock. The sizing search runs there too: it adds
+    about 0.5 ms to a hold of about 20 ms, measured on this PC. The
+    snapshot protocol and its `stale` state are dropped.
+- **The desk is not ready for funding.** Funding waits for PR 8's two checks
+  on the real approval-to-position path, which need PRs 2, 3, 4, 5 and 7.
+  Suite totals show only that nothing regressed. They prove nothing about
+  behaviour not yet built.
 
 ---
 
@@ -575,6 +593,136 @@ stop at $85.
 4. A moved head is `stale` and a temporary refusal is `waiting`. Neither
    writes anything.
 
+Simplified in Part 1d: the search runs inside the reservation's own lock, so
+there is no snapshot to go stale.
+
+---
+
+## Part 1d. The fourth review: narrow the repair (C13, C14)
+
+A fourth review (2026-10-28) kept the third review's withdrawals and
+corrections closed. It supported PR 1b as a narrow change for manual review
+(merged as #90), then asked for four more changes before the rest is built.
+Points 1 and 2 are reproduced in repro.js on `main` with PR 1b. Points 3 and
+4 are contract requirements on code not yet built.
+
+### C13. The write-off keeps capital, not the drawdown breaker
+
+**The review.** Valuing missing exposure at zero does not bound the drawdown
+from a peak nobody saw (the third design's own stated limit, in #89). So the
+write-off permits openings the 4% breaker would refuse, and that design let
+those reservations stand after recovery: an intentional exception to the risk
+policy.
+
+**Reproduced** with `validateTradeIntent`. Cash is $9,900, and one held token
+was last worth $100. Its two missing closes turn out to be $1,000, then $100,
+crossing neither its stop nor its target, so the complete history peaks at
+$10,900. The held token's own risk at its stop is counted as $0 on both sides,
+which only favours the recovered history.
+
+| Basis | NAV now | 24h drawdown | A new $100 risk |
+|---|---:|---:|---|
+| The write-off | $9,900 | $100 | accepted |
+| The recovered history | $10,000 | $900 | refused `drawdown` |
+
+Capital conservation and the drawdown breaker are different guarantees, and
+the write-off gives only the first.
+
+**Deferred**, with PR 2b, out of the initial repair. PR 2 keeps `main`'s
+halt-and-recover behaviour and says it truthfully, and the pilot is validated
+on that. A write-off can come back later only as a separate risk-policy
+decision, with its own acceptance criteria. At the least, it must either
+hold the drawdown breaker on the recovered history, or be stated as an
+exception Eric accepts.
+
+### C14. "Frozen bounds" still depend on execution inputs
+
+**The review.** My PR 5 re-ran the sizing with only the grant and the exit
+cap, to decide that "below the minimum" is terminal. But the quantity also
+depends on the fee and the lot, and a frozen grant and ticket freeze neither.
+
+**Reproduced** with the risk engine. The setup:
+
+- Eric's grant is $1.07;
+- entry $100, stop $90, target $140;
+- exits proven to $5,000;
+- a $10 minimum, lot 0.000001, 25 bps stop slippage.
+
+| Fee | Position | Engine |
+|---|---:|---|
+| 0.3% | $9.9126 | refused `min_notional` |
+| 0.1% | $10.2738 | accepted |
+
+Only the fee changes, and it is Eric's setting (`trader.book.fee_rate`,
+`trader-rules.js:79`). So my terminal verdict would have ended a request that
+a permitted settings change makes executable.
+
+**Corrected:** every sizing failure waits, naming the rule that limits it.
+
+- What ends a request: Undo or replacement, the research horizon, the metric
+  or price invalidation, and expired exit readings.
+- The second, counterfactual search is gone, and so is most of the
+  classification.
+- The wait is bounded, because exit readings expire 72 hours after they were
+  taken, and that ends the request (PR 4).
+
+### Point 3. The opening guards hold on every entry point
+
+Part 2 kept `reserveIntent` with today's behaviour for existing callers, and
+added `duplicate_opening` and `prior_exposure` to the book. Unless the guards
+sit in the one check every reservation runs, the direct call C11 used bypasses
+them.
+
+**Contract.** One shared reservation check holds the guards. It runs on
+every path that can reserve an `OPEN_LONG`: `reserveIntent`, `submitIntent`
+and the new sized opening.
+
+**Acceptance tests**, through each entry point, against:
+
+- an ACKED opening;
+- a PARTIAL opening;
+- another decision on the same thesis;
+- a completed opening (filled, and closed), so a decision opens once, ever.
+
+### Point 4. The journal's head does not cover every input
+
+`expect_head` sees only the paper journal. It misses three other changes: a
+decision (`decisions.jsonl`), a setting (the fee, the sizing rules) and time
+(exit readings expire).
+
+**Contract.** The reservation reads, under the lock, every input it relies
+on, at its own `now`:
+
+- the decision in force;
+- the frozen exit reading and its age;
+- the trader rules and the fee.
+
+Ticket decisions and settings saves take the same workspace lock as the
+journal (`runOp`; `tickets.js:1215`, `server.js:1452`), so nothing can change
+them during the reservation. The lot and minimum are constants of the code.
+
+**Acceptance tests.** In each, the paper journal's head does not move:
+
+- Eric undoes the approval: refused, terminal, no order;
+- the fee changes: sized with the new fee;
+- a sizing rule changes: sized under the new rule;
+- the exit readings pass 72 hours: refused, terminal, no order.
+
+**Measured before choosing the protocol.** On this PC, against a FICTIONAL
+book:
+
+| Journal | Reservation (whole operation, lock held) | Book read | The sizing search |
+|---|---:|---:|---:|
+| 15 hours on record | 19.0 ms | 3.4 ms | 0.50 ms, 16 checks |
+| 720 hours (30 days) | 25.1 ms | 4.8 ms | 0.41 ms, 16 checks |
+
+These are medians of 7 runs. The lock's timeout is 20 s, and the server's
+slower disk lengthens the writes, not the search.
+
+So the search runs inside the reservation's lock: read the inputs once, size,
+check, reserve. The exported snapshot, `expect_head` and the `stale` state
+are dropped.
+
 ---
 
 ## Part 2. The blueprint
@@ -594,34 +742,35 @@ Every PR follows the same pattern:
 Each PR also opens with its counterexample: the failing test, then the narrow
 correction, then the resulting behaviour, stated in the PR.
 
-| PR | Fixes | Counterexample | Protected file | Blocks funding | Needs Eric |
+| PR | Fixes | Counterexample | Protected file | Before funding | Needs Eric |
 |---|---|---|---|---|---|
 | 1 | F1 portfolio time (merged, #87) | — | `paper-trader.js` | done | — |
-| 1b | PR 1's acceptance tests, and a past hour end valued only by its own bar (built, not committed) | C1 (past hour ends) | `paper-trader.js` | **yes** | D1 |
-| 2 | A unknown hours: wait at H, settle by evidence, Eric's write-off | C1, C7, C8, C9 | `paper-trader.js` (`cr-paper@3`) | **yes** | D2 (revised) |
-| 2b | A quiet hour settled from the chain (optional) | — | — | | D2 |
-| 3 | F2, C5, C11, C12: end what has ended, then reserve atomically under one ID | C5, C11, C12 | `paper-trader.js` (`snapshot`, `check`, `tryReserve`, one opening per decision; `cr-paper@4`) | | D3 |
-| 4 | F3 exit-evidence lifecycle | C6 | — | | D4, D5 |
-| 5 | B size to the evidence, exactly, and say what binds | C4, C10, C12 | — | | D6 |
+| 1b | PR 1's acceptance tests, and a past hour end valued only by its own bar (merged, #90) | C1 (past hour ends) | `paper-trader.js` | done | D1 |
+| 2 | A: say a missing hour truthfully; `main`'s halt and late-hour recovery kept | C1, C7, C8, C9 | — | **yes** | D2 (revised) |
+| 2b | A quiet hour settled from the chain: **deferred** (C13) | — | — | | D2 |
+| 3 | F2, B: atomic openings, sized exactly under the lock, one per decision on every entry point | C4, C5, C10, C11, C12, C14 | `paper-trader.js` (`cr-paper@3`) | **yes** | D3, D6 |
+| 4 | F3 exit-evidence lifecycle | C6 | — | **yes** | D4, D5 |
+| 5 | B on the card: the implied position, and the size and the wait in words | C4 | — | **yes** | D6 |
 | 6 | F4 role isolation, described as it is | C2, C3 | — | | D10 |
-| 7 | F5 lifetimes, F8 feed rate | — | — | | D7 (his life value) |
-| 8 | Backend integration test, plus the user-visible check | C1, C5, C6, C7, C10, C11 | — | | — |
+| 7 | F5 lifetimes, F8 feed rate | — | — | **yes** | D7 (his life value) |
+| 8 | Backend integration test, plus the user-visible check | C1, C5, C6, C7, C10, C11, C14 | — | **yes** | — |
 | 9 | F6 exact head | — | `paper-trader.js` | | — |
 | 10 | F7 exit column | — | — | | — |
 | 11 | D replay once per phase (optional) | — | `paper-trader.js` (read-only addition) | | — |
 
 How they fit together:
 
-- PRs 1b, 2, 3, 9 and 11 touch `paper-trader.js`, so they go one at a time,
-  1b first.
+- PRs 3, 9 and 11 touch `paper-trader.js`, so they go one at a time, 3 first.
+  PR 2 no longer touches it.
 - A PR that adds an event or a rule to the book publishes a new book version
-  (`cr-paper@3`, `@4`) that reads every earlier line. A published version is
-  never edited.
-- PR 2b follows PR 2.
-- PR 5 uses PR 3's `snapshot`, `check` and `tryReserve`, and it touches the
-  card after PR 4 does.
+  (`cr-paper@3` for PR 3) that reads every earlier line. A published version
+  is never edited.
+- Next, in the fourth review's order: PR 2 (the report) and PR 3 (atomic,
+  exactly sized openings). PR 2 and PR 3 share no file.
+- PR 5 reads PR 3's result, and it touches the card after PR 4 does.
 - PRs 6, 7 and 10 share no file with the others and can go at any time.
-- PR 8 needs PRs 1b, 2, 3, 4, 5 and 7.
+- PR 8 needs PRs 2, 3, 4, 5 and 7. **Funding waits for PR 8's two checks**,
+  not for suite totals.
 
 ### PR 1: portfolio time (F1), merged as #87
 
@@ -662,10 +811,10 @@ This is a [P] PR on `paper-trader.js` and its tests, and it must merge before
 funding. #87 writes no NAV, so nothing it values wrongly is in a journal, but
 the drawdown checks read that NAV.
 
-**Built** 2026-10-28 on `claude/paper-acceptance`, not committed. On
-`b56116a` only the past-hour test failed. With the fix, the suite passes
-1140/1140 and C1's hole end reads null. The third review takes its late-hour
-rule as the correct one (C7).
+**Merged** as #90 (`600199b`) on 2026-10-28. On `b56116a` only the
+past-hour test failed. With the fix, the suite passed 1140/1140 and C1's hole
+end reads null. The third review takes its late-hour rule as the correct one
+(C7), and the fourth supported it as a narrow change for manual review.
 
 - **The tests**, each failing first where it fails today:
   - **Independent ledger.** Partial fills, exits and fees, with every cash,
@@ -698,158 +847,105 @@ rule as the correct one (C7).
   an order? Only the "made before any record exists" line in DESK_STATE
   depends on the answer.
 
-### PR 2: unknown hours (A), halt and recover (C1, C7–C9)
+### PR 2: unknown hours (A), said truthfully (C1, C7–C9, C13)
 
 The first build is withdrawn (C1). So are the second design's refusal of a
-late hour (C7) and its policy close (C8, C9). This is the third design.
-Nothing of it is built.
+late hour and its policy close (C7–C9), and the third design's write-off is
+deferred (C13). This is the narrow repair. Nothing of it is built, and it
+changes no protected file.
 
 - **What the desk can know.**
   - GeckoTerminal's answer has no row for an hour and has a row for a later
     one. That shows only that the provider gave no row. Either the pool did
     not trade, or the provider's history is missing that hour, and the answer
     cannot say which.
-  - Nothing the desk reads today establishes that no trade happened. That
-    would need the pool's own chain record for the hour: no swap event from
-    the frozen pool between the hour's first and last blocks.
-- **Design: `cr-paper@3`**, which reads every `@2` line and adds two events.
-  - **An unknown hour is an observation, never "no trade".**
-    - When GeckoTerminal's answer has no row for H and a settled row for a
-      later hour, the book writes `unknown_hour` once per pair and hour: the
-      pair, H, `detected_at` (the step that first saw it), and the words
-      "GeckoTerminal has no row for H and has one for H+1; whether the pool
-      traded in H is not known".
-    - It holds no price and is never rewritten.
-    - It is reported only between the answer's oldest row and a later settled
-      hour, as in the withdrawn build.
-  - **A pair the book holds, or has a live order on, waits at H**, as `main`
-    does today. Its later hours are not applied.
-    - It reads "path unknown since H, seen at <detected_at>".
-    - Nothing on it fills, stops, takes profit or expires. Whether any of that
-      happened in H is unknown.
-    - The figures follow the table below.
-  - **The late hour settles it** (C7).
-    - A row for H is the pair's next hour whenever it arrives. H and every
-      held-back hour then apply in order, so the evidence either fires the
-      stop at $0.69825, once, or leaves the position held.
-    - No exit happened before it, so none can repeat.
-    - The observation then reads "settled by GeckoTerminal's row for H, read
-      at <time>". The line itself is not rewritten.
-  - **A pair with no position and no live order goes on.**
-    - Its later hours apply, and its ATR waits 15 priced hours after H.
-    - A late row for H is applied when it comes. It changes only the pair's
-      price record: no order was live at H, so no fill can depend on it.
-  - **Nothing is done because of an unknown hour.** No fill, exit or
-    cancellation, whatever Eric chooses (C8, C9).
-  - **Eric's write-off, optional (D2).** Without it, one held pair keeps every
-    opening in the book waiting, because NAV is unknown.
-    - **What it is:** his word for one pair, recorded through the desk's
-      adapter like his PM decisions. No route calls the trader directly.
-    - **Its record:** `write_off`, naming the pair, H and the observation,
-      with `authorized_at` no earlier than `detected_at`.
-    - **What it does:** the book values that pair's unknown exposure at its
-      worst case for capital, so the rest of the book can be checked again.
-    - **What it never does:** sell anything, or write a fill or cash.
-    - **When it ends:** by itself, when the late hour settles the path.
-    - Every reservation made under it names it.
+  - Nothing the desk reads today establishes that no trade happened.
+- **What `main` already does, and keeps.**
+  - A pair the book holds, or has a live order on, waits at its last hour. A
+    later hour is refused `GAP` (`paper-trader.js:925`), so nothing on it
+    fills, stops, takes profit or expires.
+  - A late row for H is the pair's next hour whenever it arrives. H and every
+    held-back hour then apply in order (C7): with the breach, the stop fires
+    once, at $0.69825; after a quiet hour, the position is still held.
+  - A pair with no position and no live order goes on, because the rule
+    applies only to exposed pairs. Its ATR waits 15 priced hours.
+  - Nothing is done because of an unknown hour (C8, C9).
+- **What is missing: the words.** Today the view says "XMPL/USDC has no
+  recent closed hour in the book" (F9). That names no hour and does not say
+  why every opening waits.
+  - `trader-candles.js` records each held-back pair in its own status:
+    `held_back: { hour, first_seen }`, where `first_seen` is the first read
+    that held a later settled hour. The status becomes
+    `cr.trader-candles-status.v2`; the paper journal is unchanged. The record
+    clears when the hour arrives.
+  - The adapter's view and Outcomes > Trader's Paper Book say, for example:
+    "GeckoTerminal has no row for 01:00 and has one for 02:00, seen at 02:10.
+    Whether the pool traded at 01:00 is not known. XMPL/USDC waits at 01:00
+    until that row arrives. Until then the 24-hour drawdown is unknown, so
+    every opening waits."
+  - Once settled: "Settled by GeckoTerminal's row for 01:00, read at …".
+- **While it waits**, stated on screen and in DESK_STATE:
 
-  | Figure | Default: wait at H | With Eric's write-off, from `authorized_at` | After the late hour |
-  |---|---|---|---|
-  | Cash | Known: every fill before H | The same | Replayed from H, in order |
-  | Reserved for live buys | Known, the pair's included | The same; the pair's is never released | Replayed |
-  | Available cash (cash − reserved) | Known; the pair's buy commit is not available | The same | Replayed |
-  | A position on the pair | Value unknown at every hour end from H | $0 at every hour end from H | Real |
-  | A buy on the pair, ACKED, nothing filled | Whether it filled in H is unknown; its commit stays reserved | Counted as filled at its limit and worth $0: its commit leaves NAV | Real |
-  | A buy on the pair, PARTIAL | The filled part held, value unknown; the remainder reserved | The filled part $0; the remainder's commit leaves NAV | Real |
-  | A sell on the pair, live | Whether it filled in H is unknown | Proceeds $0 | Real |
-  | NAV | Unknown from H's end | Cash − the pair's unfilled buy commit + every other priced position; the pair counts $0 | Real |
-  | 24h drawdown | Unknown while the window holds an unknown hour end | On the write-off's NAV (see the limit below) | Real |
-  | Risk at the stops | Unknown | The other pairs'; the pair's $0 | Real |
-  | The pair's thesis: risk held against its grant | As held | As held; never released | Real |
-  | Room for an opening (4% drawdown, 2% risk, 25% notional, cash) | None: every opening waits | From the write-off's figures | Real |
+  | Figure | While a held pair waits at H |
+  |---|---|
+  | Cash | Known: every fill before H |
+  | Reserved for live buys | Known, the pair's included |
+  | Available cash (cash − reserved) | Known; the pair's buy commit is not available |
+  | A position on the pair | Value unknown from H's end |
+  | A buy on the pair, ACKED, nothing filled | Whether it filled in H is unknown; its commit stays reserved |
+  | A buy on the pair, PARTIAL | The filled part's value unknown; the remainder reserved |
+  | A sell on the pair, live | Whether it filled in H is unknown |
+  | NAV | Unknown at every hour end from H's end (PR 1b). Now: the latest close while under 120 minutes old, then unknown |
+  | 24h drawdown, risk at the stops | Unknown while the window holds an hour end from H's end |
+  | Room for an opening | None: every opening waits |
 
-  - **The invariant.** Under the write-off, every figure that gives room is
-    what the pair's worst possible history would give: every buy filled at
-    its limit, every position worth $0, no proceeds. Lifting the block
-    never turns unknown exposure into available capital. The late hour can
-    only add room: real available cash, NAV and thesis room are never below
-    the write-off's. (Cash itself can fall, when the hour shows the buy
-    filled. Its cost was already reserved, so available cash does not.)
-  - **The limit, stated.** The write-off's drawdown counts the pair's whole
-    value before H as lost, which is the most the pair can lose at its own
-    value.
-    - It is not a bound on the drawdown of the market's own path. If the
-      price rose and fell inside the unknown hours, the true path had a
-      peak that nobody observed.
-    - A reservation made under the write-off is checked against the book's
-      figures at that time and names the write-off. It stands after the late
-      hour.
-  - **What the write-off does not do.** The held pair itself stays waiting,
-    and its stop is not evaluated until the hour is settled. For a thin pool
-    the missing hour is often a quiet one, which GeckoTerminal leaves out and
-    never fills in. Only evidence settles that (PR 2b).
+- **Its cost, stated.** A thin pool's quiet hour has no row, and it never
+  will. So a held thin pair waits for good, and the whole book with it.
+  - The pilot runs on that basis. The pair Eric pilots should trade every
+    hour.
+  - If the book stalls, the remedies are later, separate decisions: the
+    write-off (C13) or the chain check (PR 2b).
 - **Proof, each failing first.**
-  - **C1, on the withdrawn build** (no exit, NAV $24,995.92):
-    - the position reads "path unknown since H, seen at …";
-    - no NAV is stated at H's end or after;
-    - nothing fills or stops.
-  - **C7, both orders.**
-    - A late H with the breach: stopped at $0.69825, once; NAV $24,750.00.
-    - A quiet late H: still held; NAV $24,995.92.
-    - Each runs twice: before any write-off, and after a write-off with a
-      reservation made under it. The outcomes are the same, except that the
-      second keeps its reservation. No exit is written twice.
-  - **C9.**
-    - The observation's `detected_at` is the first step at or after 12:10,
-      never earlier.
-    - A write-off before it is refused.
-    - Between H and the late hour, no line on the pair is a fill, exit or
-      cancellation.
-  - **The accounting table, row by row**, for a held position, an ACKED buy
-    with nothing filled and a PARTIAL buy. Every figure is compared against
-    an independent ledger, as in PR 1b.
-  - **The invariant.**
-    - Under the write-off, NAV, available cash and room never exceed the
-      worst-case history's.
-    - After either late hour, NAV, available cash and thesis room are never
-      below the write-off's. Drawdown room is the stated limit, not this
-      invariant.
-  - **The rest.**
-    - An unheld pair goes on, with ATR null for 15 hours.
-    - A late H for an unheld pair changes no fill.
-    - An `@2` journal reads the same under `@3`.
+  - **C1.** The words above. No NAV at H's end or after (PR 1b already reads
+    null). Nothing fills or stops.
+  - **C7, both orders**, through `trader-candles.refresh` and the adapter:
+    - with the breach, the stop fires once at $0.69825 (NAV $24,750.00);
+    - after a quiet hour, the position is still held (NAV $24,995.92);
+    - in both, the status clears and the words say how it settled.
+  - **C9.** `first_seen` is the first read at or after 12:10, never earlier,
+    and it survives a restart.
+  - The table's rows for a held position, an ACKED buy with nothing filled
+    and a PARTIAL buy, read from the view.
+  - An unheld pair goes on, with ATR null for 15 hours, as on `main`.
 - **Files.**
-  - `paper-trader.js` ([P], `cr-paper@3`): the two events, the wait, the
-    write-off's figures;
-  - `trader-candles.js` and `trader-desk.js`: pass the hour and its
-    detection on, and Eric's write-off through the adapter;
-  - the write-off control on Outcomes > Trader's Paper Book, and the bundle;
+  - `trader-candles.js`;
+  - `trader-desk.js`, for the view's words;
+  - the Outcomes view and the bundle;
+  - DESK_STATE, where "a missing hour stops that pair" becomes the words
+    above;
   - tests.
-- **Eric (D2, revised).** The choices are in the decisions table. Any of them
-  replaces "a missing hour stops that pair" in DESK_STATE.
+- **Eric (D2).** Nothing to decide for this PR. Which pair to pilot, and
+  whether to revisit the write-off later, are his calls.
 
-### PR 2b (optional): settle a quiet hour from the chain
+### PR 2b and the write-off: deferred (C13)
 
-A pool that does not trade has no row from GeckoTerminal, and never will.
-On a held pair, PR 2 alone would wait at that hour for good. This is the
-evidence route.
+Neither is in the initial repair. Their designs stay in #89's README for a
+later decision.
 
-- **For an unknown hour on a held pair**, read the frozen pool's swap events
-  between H's first and last blocks.
-  - **Zero swaps:** the hour is recorded as `no_trade` with its evidence
-    (chain, pool, block range, count). The book applies it flat at the
-    previous close with zero volume. Nothing fills in it, and a stop fires
-    only if that close is already through it.
-  - **One or more swaps:** the hour traded, and it stays unknown.
-- **Limits.**
-  - Only pools whose price moves only by swaps: constant-product and
-    concentrated-liquidity pools.
-  - Only networks with a read route. The Alchemy networks Wallet sync uses
-    would do, and they share its compute budget.
-  - A pool on another chain, or of another kind, stays with PR 2's wait.
-- Its own task, after PR 2.
+- **The chain check** would settle a quiet hour as `no_trade` when the frozen
+  pool had zero swaps. It covers constant-product and concentrated-liquidity
+  pools, on networks with a read route.
+- **The write-off** would value one pair's unknown exposure at its worst case
+  for capital. It keeps capital safe, but not the drawdown breaker (C13). So
+  it returns only as a risk-policy decision, with its own acceptance
+  criteria.
 
-### PR 3: end what has ended, then reserve atomically under one ID (F2, C5, C11, C12)
+### PR 3: atomic openings, sized exactly under the lock (F2, B, C4, C5, C10–C12, C14)
+
+The second design's terminal sizing verdict (C14) and the third design's
+snapshot protocol (Part 1d) are withdrawn. As the fourth review recommends,
+the old PR 5's search now runs inside the reservation. Nothing of it is
+built.
 
 - **Scope.**
   - **`trader-desk.js` `assess`, unsubmitted opening, in this order:**
@@ -859,91 +955,115 @@ evidence route.
        stop or target, expired exit evidence). Any of them gives `not_opened`
        with its words. There is no reservation and no journal line.
     2. **The temporary waits**, in words, as today.
-    3. **Size and reserve, atomically** (PR 5 sizes): `waiting`, `stale`
-       or `reserved`, as below.
-  - **`paper-trader.js` ([P], `cr-paper@4`): one rule set, three exports.**
-    - `PT.snapshot(ws, pair, { now, venue, rules, ticket })`: the book read,
-      the ticket's frozen grant and exit reading, and the journal's head
-      (`seq`, `sha256`), all from one generation (`readConsistent`).
-    - `PT.check(snapshot, intent, ctx)`, pure: every check `reserveIntent`
-      makes today (`validateTradeIntent`, the grant, the exit reading, cash,
-      the close rules). Each refusal carries its class, temporary or
-      terminal.
-    - `PT.tryReserve(ws, intent, { ...ctx, expect_head })`, under the book's
-      lock:
-      - a head other than `expect_head` gives `{ status: 'stale' }`, and
-        nothing is written;
-      - otherwise it builds the snapshot from the locked state and runs the
-        same `check`;
-      - temporary refusals only give `{ status: 'waiting', refusals }`.
-        Nothing is written, so the intent ID is not spent;
-      - a terminal refusal is recorded as today (`refused`), and the ID is
-        spent;
-      - no refusal: reserved.
-    - `reserveIntent` keeps today's behaviour, for closes and every
-      existing caller.
-  - **One opening per decision (C11), in the book.**
-    - An `OPEN_LONG` for a decision that already has a reserved opening
-      under another intent ID is refused. It is terminal:
-      `duplicate_opening`.
-    - An opening for another decision on the same thesis waits while the
-      thesis still holds a position or a live order. It is temporary:
-      `prior_exposure`. That is F2's "one live paper exposure", now the
-      book's rule rather than the adapter's.
+    3. **`PT.submitOpening`**, below. It answers `reserved` (then sent, as
+       today), `waiting` with the limiting rule in words, or `not_opened`
+       with a terminal reason.
+  - **`paper-trader.js` ([P], `cr-paper@3`): one operation under the
+    workspace lock.**
+    - **It reads every input it relies on, once, at its own `now`:** the
+      book's state; the decision in force (`decisions.jsonl`); the ticket's
+      frozen exit reading and its age; the trader rules and the fee from
+      settings. The lot and minimum are constants of the code. Decisions and
+      settings take the same lock (Part 1d), so none of them can change
+      during the operation.
+    - **It sizes:** the largest whole-cent risk, at or under the intent's
+      `risk_ceiling_usd` (Eric's grant), that the size-bound rules accept.
+      Those rules are `risk_cap`, `drawdown`, `gate_cap`, `pm_cap`,
+      `notional_cap`, `exit_cap` and `cash`.
+      - The search is a bisection whose only arithmetic is the engine's: 16
+        checks for $500, about 0.5 ms (Part 1d).
+      - It is exact. The engine sizes the quantity as the risk over the loss
+        per unit, floored to a lot. That never shrinks as the risk grows, and
+        every rule above compares such a quantity against a fixed limit. So
+        once one refuses, it refuses every larger risk.
+      - The result is checked again in full, with the shared check below.
+    - **It answers:**
+      - temporary refusals only: `waiting`, with nothing written, so the
+        opening ID is not spent;
+      - a terminal refusal: recorded (`refused`), and the ID is spent;
+      - otherwise: reserved, recording the risk it sized to beside the
+        intent's ceiling.
+    - **Existing paths:** `reserveIntent` and `submitIntent` keep their exact
+      sizing, for closes and existing callers, and run the same shared check.
+  - **The shared check.** One function every reservation of an `OPEN_LONG`
+    runs, on every entry point: `reserveIntent`, `submitIntent` and
+    `submitOpening`.
+    - **`duplicate_opening` (terminal).** This decision already has a
+      reserved opening under any intent ID, whatever its state now:
+      RESERVED, SENT, ACKED, PARTIAL or FILLED, its position open or closed.
+      A decision opens once, ever.
+    - **`prior_exposure` (temporary).** Another decision on the same thesis
+      still holds a position or a live order. That is F2's "one live paper
+      exposure", now the book's rule.
   - **Ownership.**
-    - One deterministic opening ID per decision (`intentIdOf(d, 'open')`,
-      as on `main`); its position is `pos-<ID>`.
+    - One deterministic opening ID per decision (`intentIdOf(d, 'open')`, as
+      on `main`), and its position is `pos-<ID>`.
     - Undo cancels that opening and closes that position, both found by the
       ID, never by a search.
-    - The retries under new IDs (`open-2`, `open-3`) are withdrawn.
-- **Which conditions are which** (D3 confirms the split). Three changes from
-  the second design:
-  - `min_notional` and `size_zero` after sizing move to PR 5's
-    classification (C10);
-  - `prior_exposure` is temporary;
-  - `duplicate_opening` is terminal.
+    - No retries under new IDs.
+- **What ends a request and what waits** (D3):
 
-  | Temporary: wait, re-checked every step | Terminal: `not_opened`, no reservation |
+  | Waits, in words, checked again every step | Ends: `not_opened`, no reservation |
   |---|---|
   | Book unfunded; rules or fee unset | Undone or replaced |
-  | An order not yet resolved | The research horizon ended |
-  | No recent hour, a stale price, ATR unknown | The metric invalidation fired |
-  | NAV, drawdown or open risk unknown, an unknown hour (PR 2) | The price invalidation fired |
-  | `drawdown` (the 4% ceiling) and `cash`: free up as positions close | No grant, no stop or no target in the ticket |
-  | `gate_cap` and `pm_cap` from what the thesis still holds (F2) | Exit evidence expired (PR 4) |
-  | `notional_cap` and `risk_cap` (NAV can move); `stop_distance` (ATR moves hourly) | `exit_cap` after PR 5's sizing: frozen evidence does not change |
-  | `allowlist` and the rules: Eric can change them | `price_order`: the ticket's own levels |
-  | `prior_exposure`: another decision's position or order on the thesis | `duplicate_opening`: this decision already has an opening |
-  | `min_notional` or `size_zero` when a temporary rule binds (PR 5, C10) | `min_notional` or `size_zero` when the frozen bounds alone put it there (PR 5) |
+  | An order not yet resolved; another decision's exposure on the thesis (`prior_exposure`) | The research horizon ended |
+  | No recent hour, a stale price, ATR unknown; NAV, drawdown or open risk unknown, including a pair waiting at an unknown hour | The metric or the price invalidation fired |
+  | Every sizing failure: `drawdown`, `cash`, `risk_cap`, `notional_cap`, `gate_cap`, `pm_cap`, `exit_cap`, `min_notional`, `size_zero` (C10, C14) | No grant, stop or target in the ticket; `price_order` |
+  | `stop_distance` (ATR moves hourly); `allowlist` and the rules (Eric can change them) | Exit readings expired (PR 4); `duplicate_opening` |
 
+  The wait is bounded: the exit readings expire 72 hours after they were
+  taken, and the research horizon ends too.
 - **Concurrency.**
-  - The adapter's step is synchronous, and `tryReserve` takes the book's lock
-    (`runOp`), which orders writers across processes.
-  - A stale snapshot is never reserved. The next step reads and solves again,
-    and nothing is written in between (C12).
+  - The step is synchronous, and the whole reservation (inputs, search,
+    write) runs inside one lock (`runOp`), so there is no snapshot to go
+    stale.
   - Two steps for one decision cannot both reserve. The second finds the
-    first's reservation under the same ID (`unchanged`). A different ID is
-    refused (`duplicate_opening`).
+    first under the same ID (`unchanged`), and a different ID is
+    `duplicate_opening`.
 - **Proof, each failing first.**
-  - **C5, failing on `5022c2c`** (one step ACKED then CANCELLED). The waiting
-    Halve whose horizon ended reads `not_opened`, "The research horizon ended
-    on …". The step writes nothing, and the journal is byte-identical.
-  - The same with the metric invalidation firing while it waits.
-  - **F2.** The second Halve waits (`prior_exposure`) while the sell is ACKED.
-    Once the book is flat, it is reserved (ACKED, not REFUSED). Nothing is
-    written while it waits.
-  - **C11, failing on `5022c2c`** (a second ACKED buy accepted). A second
-    opening for the same decision under another ID is refused
-    `duplicate_opening`, while the first is ACKED and while it is PARTIAL.
-  - **C12, failing on `5022c2c`** (the refusal recorded, the ID spent).
-    - Solved on a snapshot, then another decision's reservation moves the
-      head: `stale`, and the journal is byte-identical.
-    - The next step solves again and reserves once, under the same ID.
-  - **A temporary refusal at the reservation** writes nothing. The same ID
-    with a new body reserves later, and that is the ID's only line.
+  - **C4.**
+    - $176.12, the withdrawn formula, is refused. The search gives $176.11
+      at $1,999.88078, and one cent more is refused.
+    - Each bound binding first: the risk cap at $400, the notional cap at
+      $291.08, the exits at $232.87, and cash. In each, one cent more is
+      refused by that rule.
+    - Lot boundaries: one cent adding less than a lot, and one cent adding
+      several lots. Neither ever goes over a cap.
+    - Fees: a second rate gives a different answer, still exact.
+  - **C5.** The waiting Halve whose horizon ended reads `not_opened`, and
+    the journal is byte-identical. The same for the metric invalidation.
+  - **F2.** The second Halve waits (`prior_exposure`) while the sell is
+    ACKED. Once the book is flat, it is reserved. Nothing is written while
+    it waits.
+  - **C10.**
+    - At a drawdown of $999.21 it waits, naming the drawdown, and nothing is
+      written.
+    - At $0 it is reserved at $500 ($4,632.0636), once, under the same ID,
+      with no new decision line.
+  - **C11 and Part 1d's point 3, through each entry point** (`reserveIntent`,
+    `submitIntent`, `submitOpening`):
+    - a second opening for the decision is refused `duplicate_opening`,
+      while the first is ACKED, while it is PARTIAL, once it has filled, and
+      after its position closed;
+    - another decision on the same thesis waits (`prior_exposure`).
+  - **C12.** Another decision's reservation lands between two steps. The
+    next step sizes against what the lock holds and never records a
+    temporary refusal, so the ID is reserved once.
+  - **C14.**
+    - The $1.07 grant at a 0.3% fee waits, naming the minimum, and nothing
+      is written.
+    - After Eric sets 0.1%, it is reserved ($10.2738), once.
+  - **Part 1d's point 4, with the journal's head unmoved:**
+    - an Undo: refused, terminal, no order;
+    - a fee change: sized with the new fee;
+    - a sizing-rule change: sized under the new rule;
+    - exit readings past 72 hours: refused, terminal, no order.
+  - **Step 3 of the 12a test** becomes: Approve $500 at the $0.70 stop gives
+    an order with exact figures, a position of at most $2,000 and a risk of
+    at most $500, not a refusal.
   - **Undo** in each state: RESERVED, ACKED, PARTIAL, and the position open.
-- **Eric (D3).** The split above. A temporary refusal waits in words and
-  spends nothing; a terminal one ends the request with no reservation.
+- **Eric (D3, D6).** The split above, and Approve as a ceiling, sized down
+  under the lock.
 
 ### PR 4: the exit-evidence lifecycle (F3)
 
@@ -982,76 +1102,32 @@ evidence route.
     (recommended: the levels were set against old prices), or a desk-only
     re-freeze of the packet that keeps the old proposal.
 
-### PR 5: size to the evidence (B)
+### PR 5: show the size (B)
 
-- **Scope.** `trader-desk.js`, plus one line on the card.
-  - **Withdrawn:** approved risk × (cap ÷ position), floored to the cent.
-    C4 shows it overshooting by a lot ($176.12 → $2,000.00847, refused).
-  - **The exact procedure.**
-    - The rules that only tighten as the risk grows are `risk_cap`,
-      `drawdown`, `gate_cap`, `pm_cap`, `notional_cap`, `exit_cap` and
-      `cash`.
-    - On one PR 3 snapshot, when `check` refuses the approved risk only for
-      one or more of those, the adapter bisects over whole cents between 1
-      and the approved cents. The test is `check` itself: no arithmetic of
-      the adapter's own.
-    - Why that is exact: the engine sizes the quantity as the risk over the
-      loss per unit, floored to a lot. That never shrinks as the risk grows,
-      and every rule above compares a quantity that never shrinks against a
-      fixed limit. So once one refuses, it refuses for every larger risk.
-    - It is bounded: at most ⌈log₂(approved cents)⌉ + 1 checks, 17 for $500.
-  - **The result is checked again in full.** The largest passing risk must
-    pass the whole `check`. A refusal for any rule outside the search is
-    reported as it is, with no search.
-  - **What binds, when the result is under the venue minimum** (`min_notional`,
-    `size_zero`; C10).
-    - The search runs again with only the frozen bounds: the ticket's exit
-      reading (`exit_cap`) and Eric's grant.
-    - **If that is also under the minimum, it is terminal:** `not_opened`, in
-      words, with no reservation. For example: "Your grant and the exit
-      readings allow at most $0.79 of risk, which buys $8.94, under the
-      venue's $10 minimum."
-    - **Otherwise it waits,** naming the rule that refuses one cent more.
-      For example: "The 24-hour drawdown leaves room for $0.79 of risk, under
-      the venue's minimum; waiting for it to clear." It is solved again each
-      step. When room returns it opens once, under the same ID, with no new
-      approval.
-  - **It reserves with `tryReserve`** and the snapshot's head (PR 3). A moved
-    head means solving again at the next step, never a recorded refusal
-    (C12).
-  - It says so, for example: "Asked $176.11 of your $500: the exit readings
-    show $2,000 sells within 5%."
-  - The card shows the implied position before Eric decides, for example
-    "$500 at this stop is a $2,717 position; exits are proven to $2,000."
+The search itself moved into PR 3, at the fourth review's suggestion. This
+PR is what Eric sees. Nothing of it is built.
+
+- **Scope.** `trader-desk.js` (the words), `PMDecisionCard.jsx` and the
+  bundle, after PR 4.
+  - **On the card, before Eric decides:** the implied position. For
+    example: "$500 at this stop is a $2,717 position; exits are proven to
+    $2,000."
+  - **In the result:** the size. For example: "Asked $176.11 of your $500:
+    the exit readings show $2,000 sells within 5%."
+  - **In a wait:** the limiting rule. For example: "The 24-hour drawdown
+    leaves room for $0.79 of risk, under the venue's $10 minimum; waiting."
 - **Simpler, not more.** The engine, its limits and the gate don't change.
-  The intent field is already named `risk_ceiling_usd`. The model still
-  chooses no amount.
-- **Proof, each failing first.**
-  - **C4:** $176.12 (the withdrawn formula) is refused; the search gives
-    $176.11 at $1,999.88078, and one cent more is refused.
-  - Each bound binding first: risk cap $400, notional cap $291.08, exits
-    $232.87, and cash, with each "one cent more" refused by that rule.
-  - **Lot boundaries.** One case where one cent adds less than a lot (C4's
-    instrument), and one cheap token where one cent adds several lots.
-    - In both, the answer never exceeds the cap, and one cent more does.
-    - With the cheap token, the position may stop short of the cap by less
-      than one cent of risk. That is stated in the PR, never exceeded.
-  - **Minimum order, frozen:** exits to $9 refuse `min_notional` under the
-    frozen bounds alone: `not_opened`, and nothing is written.
-  - **Minimum order, temporary (C10).** With the drawdown at $999.21, the
-    request waits in words, and nothing is written. Once the drawdown is
-    back to $0, it is reserved at $500 ($4,632.0636), once, under the same
-    ID, with no new decision line.
-  - **Fees:** the same case at a second fee rate gives a different, still
-    exact, answer.
-  - Step 3 of the 12a test becomes: Approve $500 at the $0.70 stop gives an
-    order with exact figures, position ≤ $2,000 and risk ≤ $500, not a
-    refusal.
+  The model still chooses no amount.
+- **Proof.**
+  - The adapter's words for C4, C10 and C14, taken from PR 3's results.
+  - An `npm run check` fixture that shows the implied-position line and a
+    waiting reason on the card.
 - **Eric (D6).**
-  - Approve is a ceiling sized down to the evidence (recommended).
-  - Or exact or nothing (today's behaviour: most approvals open nothing).
-  - Or the gate checks exits at the position the grant implies: a new sizing
-    version, more exit quotes per ticket and more quote budget.
+  - Approve is a ceiling, sized down to the evidence (recommended).
+  - Or exact or nothing. That is today's behaviour, and most approvals open
+    nothing.
+  - Or the gate checks exits at the position the grant implies. That needs
+    a new sizing version, more exit quotes per ticket and more quote budget.
 
 ### PR 6: role isolation, described as it is (F4, C2, C3)
 
@@ -1124,7 +1200,7 @@ evidence route.
 
 ### PR 8: the backend integration test, and the user-visible check
 
-It needs PRs 1, 2, 3, 4, 5 and 7.
+It needs PRs 2, 3, 4, 5 and 7 (PRs 1 and 1b are merged).
 
 - **(a) The backend integration test.** It was called "the readiness proof",
   and it ends at `TD.view`, so it proves the backend only. One FICTIONAL
@@ -1135,6 +1211,8 @@ It needs PRs 1, 2, 3, 4, 5 and 7.
   - Approve $500 through `T.decide`, sized down exactly (C4). It first waits
     on the drawdown, then opens once it clears, with no new approval (C10).
   - A second opening for that decision is refused (C11).
+  - A grant under the venue minimum waits, then opens once Eric's fee
+    setting allows it (C14).
   - A fill.
   - Undo, and re-approve before the sell fills (F2).
   - A waiting approval whose horizon ends before the book is ready: no
@@ -1146,8 +1224,8 @@ It needs PRs 1, 2, 3, 4, 5 and 7.
   - an `npm run check` fixture that renders the card and Outcomes >
     Trader's Paper Book;
   - asserted on screen: the expiry and Renew, the toast's trader result, the
-    exact-size line, "path unknown since H, seen at …", the write-off
-    control if Eric chose it, the waiting words, and the not-opened reasons.
+    exact-size line, the missing-hour words (PR 2), the waiting words, and
+    the not-opened reasons.
 - **"Ready" needs both.** Only after (a) and (b) pass on `main` does Eric set
   the trader settings and fund the online book (production state UNKNOWN
   until he reads it). Then one pilot pair runs on paper.
@@ -1184,12 +1262,12 @@ It needs PRs 1, 2, 3, 4, 5 and 7.
 
 | | Decision | Recommended |
 |---|---|---|
-| D1 | Does the online trader book hold any journal record? | **UNKNOWN until Eric reads it** (Outcomes > Trader's Paper Book on the online desk). PR 1 (#87, merged) is built to be correct either way. Fund only after PR 1b and the rebuilt PR 2. |
-| D2 (revised) | An hour GeckoTerminal leaves out, on a pair the book holds | Always, with no choice needed: the pair waits at H, said with when it was seen; a late row settles it (C7); nothing is done because of it (C8, C9). The policy close is withdrawn. Eric's choice is what lets the rest of the book go on: (a) his write-off per pair at its worst case for capital, plus PR 2b to settle quiet hours from the chain (recommended); (b) the write-off only, so a held thin pool waits for good after a quiet hour; (c) neither, so one unknown hour on a held pair keeps every opening waiting until GeckoTerminal fills it in. |
-| D3 | What the book refuses before and at the reservation | The temporary/terminal split in PR 3. A temporary refusal waits in words and writes nothing, so it never spends the opening ID; a terminal one ends the request. One opening ID per decision, enforced by the book. Retries under new IDs are withdrawn (C11, C12). |
+| D1 | Does the online trader book hold any journal record? | **UNKNOWN until Eric reads it** (Outcomes > Trader's Paper Book on the online desk). PR 1 (#87) and PR 1b (#90), both merged, are correct either way. Fund only after PR 8's two checks pass. |
+| D2 (revised again) | An hour GeckoTerminal leaves out, on a pair the book holds | `main`'s behaviour, said truthfully (PR 2): the pair waits at H, a late row settles it (C7), and nothing is done because of it (C8, C9). The write-off and the chain check are deferred (C13). Eric's part: pilot a pair that trades every hour. If the book stalls, the write-off comes back only as a separate risk-policy decision. |
+| D3 | What the book refuses before and at the reservation | The split in PR 3. Every sizing failure waits in words and writes nothing, so it never spends the opening ID (C14). Undo, the horizon, the invalidations, expired exit readings and a duplicate opening end the request. One opening per decision, enforced by the book on every entry point. Retries under new IDs are withdrawn (C11, C12). |
 | D4 | Approve on expired exit readings | Refuse it, like INVALIDATED, and offer Renew. |
 | D5 | What a renewal is | A new Prosecutor ticket on the same report. |
-| D6 | What "Approve $500" means | A ceiling, sized down to the exit evidence by the exact search in PR 5 (the engine is the test), with the implied position shown on the card. Under the venue minimum it waits, unless the frozen bounds alone (the exit readings, the grant) put it there (C10). The proportional formula is withdrawn. |
+| D6 | What "Approve $500" means | A ceiling, sized down to the evidence by the exact search inside PR 3's reservation (the engine is the test), with the implied position shown on the card (PR 5). Under the venue minimum it waits, bounded by the exit readings' 72 hours (C10, C14). The proportional formula is withdrawn. |
 | D7 | The trader settings | Eric's values; a first-run suggestion is in Part 1. Life at least 120 minutes. |
 | D8 | The retired engineering OAuth resource | Eric's standing decision; removing it is one small PR whenever he chooses. |
 | D9 | Native BTC, ETH, SOL | Keep them excluded for this milestone; a native feed is its own task. |
@@ -1202,8 +1280,15 @@ It needs PRs 1, 2, 3, 4, 5 and 7.
   returns a row the provider filled in itself, for an hour that may have
   traded. An unknown hour stays unknown.
 - No change to the 2% and 4% hard limits to make $500 fit. The sizing fix
-  belongs in the adapter.
-- No funding of the online book before PR 1b and the rebuilt PR 2 are merged.
+  belongs in the reservation (PR 3), not the limits.
+- No funding of the online book before PR 8's two checks pass on `main`.
+  Suite totals show only that nothing regressed.
+- No write-off in the initial repair (C13). It gives up the drawdown
+  breaker in exchange for availability.
+- No terminal verdict from sizing (C14): a fee or a rule Eric may change can
+  make it executable.
+- No snapshot protocol. The search fits inside the reservation's lock (Part
+  1d).
 - No "ready" from the backend test alone (PR 8 needs the user-visible check).
 - No close, fill or cancellation because of an unknown hour, automatic or on
   Eric's word. It would either predate the hour's detection (C9) or turn
