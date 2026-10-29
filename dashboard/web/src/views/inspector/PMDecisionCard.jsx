@@ -263,7 +263,9 @@ export function PMDecisionCard({ p }) {
       toast(repair ? (r.paper && r.paper.status !== 'failed' ? 'Paper position completed' : `Paper position not completed: ${(r.paper && r.paper.error) || 'unknown error'}`)
         : action === 'undo' ? (r.project_restored ? 'Decision undone; project restored' : 'Decision undone')
           : action === 'pass' ? (r.project_archived ? 'Pass confirmed; project archived' : 'Pass confirmed; kept because you hold it')
-            : DECIDED_WORDS[action] || `Risk granted: ${usd(d ? d.pm_approved_risk_usd : null)}`, repair && !(r.paper && r.paper.status !== 'failed') ? 'bad' : undefined);
+            : action === 'reopen' && t.can_reopen && t.can_reopen.kind === 'exit_expired' ? 'Renewal recorded: a new ticket on fresh exit readings is next; the old one is kept'
+              : (DECIDED_WORDS[action] || `Risk granted: ${usd(d ? d.pm_approved_risk_usd : null)}`) + (r.trader && r.trader.words ? ` · Trader: ${r.trader.words}` : ''),
+      (repair && !(r.paper && r.paper.status !== 'failed')) || (r.trader && ['not_opened', 'failed'].includes(r.trader.status)) ? 'bad' : undefined);
       await refresh();
     } catch (err) {
       toast(err.message, 'bad');
@@ -345,6 +347,7 @@ export function PMDecisionCard({ p }) {
       {t.near_invalidation ? <p className="pm-alert" data-key={`pm-near-${pid}`} title={t.near_invalidation.words}>{`Near invalidation: a ${t.near_invalidation.distance_pct}% fall reaches ${usd(t.near_invalidation.threshold_usd)}`}</p> : null}
       {(t.invalidation && t.invalidation.checks || []).filter((c) => c.kind === 'metric' && c.status === 'holding' && typeof c.headroom_pct === 'number').map((c) => <p key={`pm-headroom-${c.key}`} className="pm-alert" data-key={`pm-headroom-${pid}`} title={c.words}>{`${c.key} floor headroom: ${c.headroom_pct}% above ${usd(c.threshold_usd)}`}</p>)}
       {t.status === 'invalidated' && t.invalidation ? <p className="pm-alert">{t.invalidation.words}</p> : null}
+      {t.exit_evidence && (t.exit_evidence.expired || t.exit_evidence.state === 'unknown') ? <p className="pm-alert" data-key={`pm-exit-expired-${pid}`}>{t.exit_evidence.words}</p> : null}
       <div className="iv-rgrid pm-grid">
         <div className="iv-rc">
           <p className="iv-rc-k">Entry zone</p>
@@ -363,6 +366,7 @@ export function PMDecisionCard({ p }) {
           <p className="iv-rc-k">{typeof t.exit_size_usd === 'number' ? `Exit @ $${t.exit_size_usd.toLocaleString('en-US')}` : 'Exit'}</p>
           <p className={`iv-rc-v ${ex.tone}`} title={ex.title || (t.exit_cost_500_complete === false ? 'A lower bound: part of the cost is unknown' : 'The desk\'s own exit reading')}>{ex.text}</p>
           {typeof t.exit_limit_pct === 'number' ? <p className="iv-rc-s">{`${t.exit_limit_pct}% limit`}</p> : null}
+          {t.exit_evidence && t.exit_evidence.expires_at ? <p className="iv-rc-s" data-key={`pm-exit-until-${pid}`} title={t.exit_evidence.words}>{`${t.exit_evidence.expired ? 'Expired' : 'Until'} ${fmtDateTime(t.exit_evidence.expires_at)}`}</p> : null}
         </div>
       </div>
       <TradePlan pid={pid} g={t.trade_plan_geometry} />
@@ -386,8 +390,8 @@ export function PMDecisionCard({ p }) {
           </p>
         ) : risk > 0 ? (
           <>
-            <button type="button" className="btn btn-sm btn-primary" data-key={`pm-approve-${pid}`} disabled={Boolean(busy) || t.status === 'invalidated' || Boolean(t.integrity && t.integrity.status !== 'ok')} title={`Grant ${usd(risk)} of risk`} onClick={() => decide('approve')}>{`Approve Risk (${usd(risk)})`}</button>
-            <button type="button" className="btn btn-sm" data-key={`pm-halve-${pid}`} disabled={Boolean(busy) || t.status === 'invalidated' || Boolean(t.integrity && t.integrity.status !== 'ok')} title="The starter tranche" onClick={() => decide('halve')}>{`Halve Size (${usd(Math.min(t.starter_risk_usd, risk))})`}</button>
+            <button type="button" className="btn btn-sm btn-primary" data-key={`pm-approve-${pid}`} disabled={Boolean(busy) || t.status === 'invalidated' || Boolean(t.integrity && t.integrity.status !== 'ok') || Boolean(t.exit_evidence && t.exit_evidence.expired)} title={`Grant ${usd(risk)} of risk`} onClick={() => decide('approve')}>{`Approve Risk (${usd(risk)})`}</button>
+            <button type="button" className="btn btn-sm" data-key={`pm-halve-${pid}`} disabled={Boolean(busy) || t.status === 'invalidated' || Boolean(t.integrity && t.integrity.status !== 'ok') || Boolean(t.exit_evidence && t.exit_evidence.expired)} title="The starter tranche" onClick={() => decide('halve')}>{`Halve Size (${usd(Math.min(t.starter_risk_usd, risk))})`}</button>
             <button type="button" className="btn btn-sm btn-danger" data-key={`pm-veto-${pid}`} disabled={Boolean(busy)} onClick={() => decide('veto')}>Veto / Archive</button>
           </>
         ) : t.proposal_type === 'TRIM_EXIT' ? (
@@ -406,7 +410,7 @@ export function PMDecisionCard({ p }) {
             <button type="button" className="btn btn-sm" data-key={`pm-watch-${pid}`} disabled={Boolean(busy)} onClick={() => decide('watch')}>{'Override → Watch'}</button>
           </>
         )}
-        {t.can_reopen && !(decided && decided.action === 'reopen') ? <button type="button" className="btn btn-sm" data-key={`pm-reopen-${pid}`} disabled={Boolean(busy)} title={t.can_reopen.why} onClick={() => decide('reopen')}>Re-open ticket</button> : null}
+        {t.can_reopen && !(decided && decided.action === 'reopen') ? <button type="button" className="btn btn-sm" data-key={`pm-reopen-${pid}`} disabled={Boolean(busy)} title={t.can_reopen.why} onClick={() => decide('reopen')}>{t.can_reopen.kind === 'exit_expired' ? 'Renew exit evidence' : 'Re-open ticket'}</button> : null}
       </Actions>
       <PilotLine p={p} t={t} busy={busy} setBusy={setBusy} />
     </section>

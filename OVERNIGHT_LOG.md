@@ -25,3 +25,12 @@ Mission: `OVERNIGHT_MISSION.md.md` (Tasks 1–5 from `cryptoresearch-cohesion-au
 - Behavior change Eric should know: the 12a demonstration's Approve $500 now opens 2,352.941176 units at the $2,000 exit size instead of being refused (test and DESK_STATE updated).
 - Tests: `dashboard/tests/trader-desk-opening.test.js` (5: lot/cent/cash/notional/equality boundaries against the engine, close-in-flight → wait → flat → one opening, horizon, M7).
 - Not done (needs [P]): true atomicity. The adapter's check and the engine's reservation are two reads; within one process `step` is synchronous, but another process changing the book between them can still produce a recorded (final) refusal. The engine-side fix is a "would refuse → do not record" mode, or the solver inside `reserveIntent`, under its lock.
+
+## Task 3 — exit-evidence renewal (M3, brief 3): done (`cr-ticket-exit-evidence@1`)
+
+- `tickets.js` `exitEvidenceOf`: the same rule as the engine's `exitCapOf` (complete, within the frozen limit, newest reading + 72 h), read from the verified packet; `view` exposes `exit_evidence {state, expires_at, expired, words}`.
+- Approve/Halve on expired readings: 409 `EXIT_EXPIRED` inside the decision's lock (`grantBlock`), nothing written; `frontdoor.js` maps it with `changed`.
+- Renewal: `reopenReason` kind `exit_expired` while no grant is in force; the card's Re-open reads "Renew exit evidence". Idempotent (same request, or a second click, is `unchanged`); old receipt byte-for-byte unchanged; the successor ticket needs a new Prosecutor save and Eric's new decision (no consent carried over, no model asked from a read).
+- Card: Until/Expired under Exit, the expiry sentence as an alert, grant buttons disabled when expired; the decision toast appends the trader's answer and turns to the warning tone for `not_opened`/`failed`.
+- Tests: `dashboard/tests/ticket-exit-renewal.test.js` (3).
+- Not done: autonomous renewal dispatch (the audit defers it to a budgeted policy); a grant already in force whose readings expire before the book is asked still ends `not_opened` in words (renewal then is Undo, then Renew).

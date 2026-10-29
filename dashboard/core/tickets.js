@@ -593,7 +593,7 @@ function createTicket(ws, args = {}) {
   const assistant = Boolean(args.assistant);
   if (args.reopen === true) {
     const latest = listReceipts(ws, pid).filter((r) => !r.broken).pop() || null;
-    if (!reopenReason(ws, project, latest, { now })) throw new OpError('REFUSED', 'Re-open applies only when the ticket in force is invalidated, or was sized under an older rules version than the one in force. It is neither; nothing was opened.');
+    if (!reopenReason(ws, project, latest, { now })) throw new OpError('REFUSED', 'Re-open applies only when the ticket in force is invalidated, was sized under an older rules version than the one in force, or its exit readings expired before any grant. It is none of these; nothing was opened.');
     args = { ...args, refresh: true };
   }
   const open = openTicket(ws, pid);
@@ -1147,9 +1147,39 @@ function newerRuleOf(receipt) {
   return newer.length ? { versions: newer, words: `Made under a newer rule (${newer.join(', ')}): shown as saved, not re-read.` } : null;
 }
 
-// Why a saved ticket may be re-opened: it is invalidated, or it was sized under
-// an older rules version than the one in force. Null when neither holds.
-// Nothing re-opens automatically.
+// How long a ticket's frozen exit readings give the trader a size
+// (cr-ticket-exit-evidence@1, the cohesion audit's M3, 2026-10-29). The rule
+// is the Paper Book's own (paper-trader.js exitCapOf): a reading counts when
+// its cost is known in full, is within the receipt's frozen exit-cost limit
+// and is no older than the desk's exit freshness window; the evidence expires
+// when its newest such reading passes that window. Only a risk-taking ticket
+// has one; null otherwise. Reads the verified packet; writes nothing.
+const EXIT_EVIDENCE_VERSION = 'cr-ticket-exit-evidence@1';
+const EXIT_FRESH_HOURS = require('./forensic-defs').EVENTS.liquidity_impairment.freshness_hours;
+function exitEvidenceOf(ws, receipt, now = Date.now()) {
+  if (!receipt || receipt.kind === 'desk_gate' || !receipt.desk || !RISK_TAKING.has(receipt.desk.proposal_type) || !(receipt.desk.suggested_risk_usd > 0)) return null;
+  const base = { version: EXIT_EVIDENCE_VERSION, fresh_hours: EXIT_FRESH_HOURS };
+  let packet;
+  try {
+    if (!receipt.packet || !receipt.packet.path) throw new Error('The receipt names no frozen packet.');
+    packet = JSON.parse(verifiedFrozen(ws, receipt.packet.path, receipt.packet.sha256, 'The frozen ticket packet'));
+  } catch (err) {
+    return { ...base, state: 'unknown', expires_at: null, expired: false, words: `The exit readings cannot be read: ${String(err && err.message || err).slice(0, 200)}` };
+  }
+  const limit = Number(receipt.desk.sizing && receipt.desk.sizing.max_exit_cost_pct);
+  const counted = (Array.isArray(packet.exits) ? packet.exits : []).filter((x) => x && Number(x.size_usd) > 0 && x.cost_complete === true && isNum(x.cost_pct) && limit > 0 && x.cost_pct <= limit && Number.isFinite(Date.parse(x.as_of)));
+  if (!counted.length) return { ...base, state: 'none', expires_at: null, expired: false, words: 'No exit reading on this ticket is complete and within its limit, so the trader has no size from it.' };
+  const newest = Math.max(...counted.map((x) => Date.parse(x.as_of)));
+  const ends = newest + EXIT_FRESH_HOURS * 3600000;
+  const day = iso(ends).slice(0, 16).replace('T', ' ');
+  if (now > ends) return { ...base, state: 'expired', expires_at: iso(ends), expired: true, words: `The exit readings this ticket froze expired ${day} UTC (${EXIT_FRESH_HOURS} hours after the newest, ${iso(newest).slice(0, 10)}): an approval now gives the trader no size, so no order would be made. Renew the exit evidence: a new ticket on fresh readings, the old one kept.` };
+  return { ...base, state: 'current', expires_at: iso(ends), expired: false, words: `The exit readings this ticket froze give the trader a size until ${day} UTC.` };
+}
+
+// Why a saved ticket may be re-opened: it is invalidated, it was sized under
+// an older rules version than the one in force, or (M3) its exit readings
+// have expired while no grant is in force. Null when none holds. Nothing
+// re-opens automatically.
 function reopenReason(ws, project, receipt, { now = Date.now() } = {}) {
   if (!receipt || receipt.kind === 'desk_gate' || newerRuleOf(receipt)) return null;
   const inv = invalidationOf(ws, project, receipt, { now });
@@ -1157,6 +1187,13 @@ function reopenReason(ws, project, receipt, { now = Date.now() } = {}) {
   const was = receipt.versions && receipt.versions.sizing;
   const inForce = sizingOf(ws).version;
   if (was && was !== inForce) return { kind: 'rules_upgrade', why: `Sized under ${was}; ${inForce} is in force.` };
+  const ev = exitEvidenceOf(ws, receipt, now);
+  if (ev && ev.expired) {
+    // A grant in force keeps its own course (its position closes on its own
+    // terms); renewal is for a ticket not yet granted, or one re-opened.
+    const d = decisionFor(readDecisions(ws, receipt.project_id || project.project_id), receipt.receipt_id);
+    if (!d || d.action === 'reopen') return { kind: 'exit_expired', why: ev.words, expires_at: ev.expires_at };
+  }
   return null;
 }
 
@@ -1168,6 +1205,8 @@ function grantBlock(ws, project, receipt, now) {
   const inv = invalidationOf(ws, project, receipt, { now });
   if (inv.unread) return { code: 'REFUSED', message: `Not recorded: ${inv.words} Whether it is invalidated cannot be read here, so it cannot be approved.`, changed: [{ kind: 'rules', words: inv.words }] };
   if (inv.invalidated) return { code: 'INVALIDATED', message: `Not recorded: this ticket is invalidated. ${inv.words} An approval applies to the ticket as you saw it, so nothing was granted; re-open it for a new review.`, changed: [{ kind: 'invalidated', by: inv.by, words: inv.words }] };
+  const ev = exitEvidenceOf(ws, receipt, now);
+  if (ev && ev.expired) return { code: 'EXIT_EXPIRED', message: `Not recorded: ${ev.words}`, changed: [{ kind: 'exit_evidence', expires_at: ev.expires_at, words: ev.words }] };
   let cur = null;
   try { cur = researcherOf(ws, project.project_id); } catch (_) { cur = null; }
   const was = receipt.researcher && receipt.researcher.report_id;
@@ -1209,7 +1248,7 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
     const rec = readJson(ws.abs(receiptRel(pid, rid)), null);
     if (rec) {
       reopen = reopenReason(ws, project(), rec);
-      if (!reopen && rec.kind !== 'desk_gate') throw new OpError('REFUSED', 'Re-open applies only to an invalidated ticket, or one sized under an older rules version than the one in force. This ticket is neither.');
+      if (!reopen && rec.kind !== 'desk_gate') throw new OpError('REFUSED', 'Re-open applies only to an invalidated ticket, one sized under an older rules version than the one in force, or one whose exit readings expired before any grant. This ticket is none of these.');
     }
   }
   const out = runOp(ws, { type: 'ticket_decision', summary: `PM ${action} on ${rid} for ${pid}` }, (op) => {
@@ -1242,7 +1281,7 @@ function decide(ws, pid, { receipt_id: rid, action, note = null, request_id: req
       if (action === 'reopen' && inForce && inForce.action === 'reopen') return replay(inForce);
       if ((action === 'approve' || action === 'halve') && !(suggested > 0)) throw new OpError('REFUSED', `This ticket suggests no risk (${type || 'no proposal'}): there is nothing to approve. Confirm the pass, or keep watching.`);
       if ((action === 'pass' || action === 'watch') && suggested > 0) throw new OpError('REFUSED', `This ticket suggests ${usd(suggested)} of risk: approve, halve or veto it.`);
-      if (action === 'reopen' && !reopen) throw new OpError('REFUSED', 'Re-open applies only to an invalidated ticket, or one sized under an older rules version.');
+      if (action === 'reopen' && !reopen) throw new OpError('REFUSED', 'Re-open applies only to an invalidated ticket, one sized under an older rules version, or one whose exit readings expired before any grant.');
       if (action === 'trim' && type !== 'TRIM_EXIT') throw new OpError('REFUSED', `This ticket proposes ${type || 'nothing'}, not a trim.`);
       if (inForce && inForce.action === action) return replay(inForce);
       // One live paper exposure per ticket: a grant in force is undone before
@@ -1612,6 +1651,7 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       exit_cost_500_complete: d.exit_cost_500_complete ?? null,
       exit_cost_2000_usd_pct: d.exit_cost_2000_usd_pct ?? null,
       exits_missing: d.exits_missing || [],
+      exit_evidence: gateOnly ? null : exitEvidenceOf(ws, current, now),
       trigger_breached_at_save: d.trigger_breached_at_save || null,
       admission: d.admission || null,
       integrity: gateOnly ? null : integrityOf(ws, current),
@@ -2339,6 +2379,8 @@ module.exports = {
   candidateBoard,
   exitMatrix,
   EXIT_MATRIX_FORMAT,
+  EXIT_EVIDENCE_VERSION,
+  exitEvidenceOf,
   batchGate,
   autoPilotSync,
   quoteCandidates,
