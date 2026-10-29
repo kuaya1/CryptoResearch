@@ -352,6 +352,20 @@ const exitsOf = (applied) => applied.flatMap((x) => (x.events || []).filter((e) 
     return { drawdown_24h: dd, largest_risk: usd(c), ...brief(check(c10, bk, c)) };
   };
   out.C10 = { drawdown_binding: c10Case('999.21'), drawdown_cleared: c10Case('0') };
+  // --- C13 (fourth review): the write-off keeps capital but not the
+  // drawdown breaker. Cash $9,900 and one held token last worth $100; its two
+  // missing closes were $1,000 then $100, crossing neither stop nor target.
+  // The held token's own risk at its stop is counted $0 on both sides, which
+  // only favours the recovered history.
+  const c13 = (nav, dd) => ({ nav_usd: nav, drawdown_24h_usd: dd, ...brief(check(c10, book(c10, { nav_usd: nav, drawdown_24h_usd: dd, exit_max_usd: '5000' }), 10000)) });
+  out.C13 = { write_off: c13('9900', '100'), recovered_history: c13('10000', '900') };
+  // --- C14 (fourth review): below the minimum under the frozen bounds alone
+  // still depends on the fee, which is Eric's setting (trader.book.fee_rate).
+  const c14 = (fee) => {
+    const bk = book(c10, { nav_usd: '25000', exit_max_usd: '5000', fees: { maker_rate: fee, taker_rate: fee }, grant: { ...book(c10).grant, suggested_risk_usd: '1.07', pm_approved_risk_usd: '1.07' } });
+    return { fee, ...brief(check(c10, bk, 107)) };
+  };
+  out.C14 = { grant_usd: '1.07', fee_0_3_pct: c14('0.003'), fee_0_1_pct: c14('0.001') };
 }
 
 // --- C5: an approval waits; its research horizon ends; the book is then
