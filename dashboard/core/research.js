@@ -71,7 +71,7 @@ const captures = require('./captures');
 const { readJson, listDir, appendLine, readJsonLines, sha256, exists } = require('./fsx');
 const { compactTs, randomId } = require('./ids');
 const { PROVIDERS, PROVIDER_LABELS } = require('./workspace');
-const { getProject, listProjects } = require('./projects');
+const { getProject, listProjects, keyOf, appliedFor } = require('./projects');
 const { buildRunPrompt, PROMPT_VERSION } = require('./prompts');
 const { parseHorizon } = require('./reports');
 const { ymdInTz } = require('./dates');
@@ -902,7 +902,16 @@ function newJob(ws, p, st, { assistant = null } = {}) {
   return { ...base, state: 'unconfigured', mode: 'manual', fallback: 'manual', note };
 }
 
-function createRun(ws, args = {}) {
+// The optional third argument, { idempotency: { key, payload_sha256 } }, keys
+// the run's create (a scout admission's effect, leads.js): a replay under the
+// same key returns the run it made, even past the ten-minute repeat window
+// and after the run finished. Without it, nothing changes.
+function createRun(ws, args = {}, { idempotency = null } = {}) {
+  const prior = appliedFor(ws, idempotency);
+  if (prior) {
+    const runOut = loadRun(ws, prior.result.project_id, prior.result.run_id);
+    return { status: 'created', project_id: prior.result.project_id, run_id: runOut.run_id, run: withStatus(runOut), replayed: true, message: `Already requested by this request (${runOut.run_id}).`, files: [], verified: true, op_id: prior.op_id };
+  }
   const projectId = args.project_id;
   const project = getProject(ws, projectId);
   if (project.status === 'archived') throw new OpError('INVALID', `${project.name} is archived. Unarchive it before researching it.`);
@@ -963,7 +972,7 @@ function createRun(ws, args = {}) {
     independence: 'Each provider gets the same prompt and dated context and never sees another model\'s conclusions.',
     jobs,
   };
-  const out = runOp(ws, { type: 'research_run_create', summary: `Research ${projectId} with ${list.join(', ')}` }, (op) => {
+  const out = runOp(ws, { type: 'research_run_create', summary: `Research ${projectId} with ${list.join(', ')}`, ...keyOf(idempotency) }, (op) => {
     op.write(`${dir}/prompt.md`, prompt, { mode: 'create' });
     op.write(`${dir}/evidence-packet.json`, packetText, { mode: 'create' });
     // A model's execution note (ChatGPT's, execution.js), frozen with its job

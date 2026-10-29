@@ -110,3 +110,13 @@
 .is-phone .rv-head .btn { order: 3; }
 .is-phone .rv-title { font-size: var(--fs-lg); }
 @media (pointer: coarse) { .rv-bar .btn, .rv-back { min-height: 44px; } }
+
+/* Imports > Scout leads (Review.jsx ScoutLeads) */
+.rv-leads .rv-lead-group { margin-top: 24px; }
+.rv-leads .rv-lead-group > h4, .rv-leads .rv-lead-group > summary { font-size: var(--fs-ui-sm); font-weight: 600; margin: 0 0 8px; }
+.rv-leads .rv-lead-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.rv-leads .rv-lead { padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--r-card, 12px); display: grid; gap: 4px; min-width: 0; }
+.rv-leads .rv-lead-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; }
+.rv-leads .rv-lead-facts { font-variant-numeric: tabular-nums; }
+.rv-leads .rv-lead-why { color: var(--text-2); }
+.rv-leads .rv-lead-quote { margin: 4px 0 0; padding: 0 0 0 12px; border-left: 2px solid var(--border); color: var(--text-2); overflow-wrap: anywhere; }

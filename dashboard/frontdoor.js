@@ -70,7 +70,8 @@ function sendError(req, res, err) {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...(retryMs ? { 'Retry-After': String(Math.max(1, Math.ceil(retryMs / 1000))) } : {}) });
   }
   // A review refused for a newer report names it (model, report, time saved).
-  const newer = err.code === 'NEWER_REPORT' && err.details && Array.isArray(err.details.newer) ? { newer: err.details.newer } : ['INVALIDATED', 'BASIS_CHANGED', 'CHANGED', 'EXIT_EXPIRED'].includes(err.code) && err.details && Array.isArray(err.details.changed) ? { changed: err.details.changed } : {};
+  // A scout-lead confirm refused for a change names each row and field (leads.js).
+  const newer = err.code === 'NEWER_REPORT' && err.details && Array.isArray(err.details.newer) ? { newer: err.details.newer } : err.code === 'CHANGED' && err.details && Array.isArray(err.details.rows) ? { lead_changes: err.details } : ['INVALIDATED', 'BASIS_CHANGED', 'CHANGED', 'EXIT_EXPIRED'].includes(err.code) && err.details && Array.isArray(err.details.changed) ? { changed: err.details.changed } : {};
   res.end(JSON.stringify({ error: status >= 500 && !readErr ? `Server error: ${err.message}` : err.message, code: err.code || null, retry_after_ms: retryMs, saved: readErr && req.method === 'GET' ? false : ['INVALID', 'BAD_ID', 'BAD_PATH', 'NOT_FOUND', 'CONFLICT', 'REFUSED', 'ALREADY_EXISTS', 'CONFIRM', 'WORKSPACE_BUSY', 'WRITES_BLOCKED', 'NEWER_REPORT', 'INTEGRITY', 'INVALIDATED', 'BASIS_CHANGED', 'CHANGED', 'EXIT_EXPIRED', 'AMBIGUOUS', 'IDEMPOTENCY_CONFLICT', 'UNSAFE_PATH', 'GENERATION_UNWRITABLE'].includes(err.code) || err.status ? false : 'unknown', ...newer }));
 }
 

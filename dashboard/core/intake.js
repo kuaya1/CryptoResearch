@@ -580,9 +580,37 @@ function confirmIntake(ws, id, { coingecko_id: chosen, sector = null, different_
   if (!cand) throw new OpError('INVALID', 'Choose one of the candidates shown for this request.');
   const sectorId = sector ? parseSector(sector) : cand.sector_guess;
   if (sector && !sectorId) throw new OpError('INVALID', 'Unknown sector.');
-  const projects = require('./projects');
   const evidence = [{ url: cand.coingecko_url, note: `CoinGecko listing for ${cand.name}${cand.symbol ? ` (${cand.symbol})` : ''}, chosen and confirmed by Eric from a research request`, kind: 'owner_confirmed' }];
   if (doc.input.link && /^https?:\/\//.test(doc.input.link)) evidence.push({ url: doc.input.link, note: 'The link Eric submitted', kind: 'user' });
+  const models = intakeModels(ws, doc);
+  const { added, project_id: projectId, run } = admitListing(ws, cand, {
+    models,
+    evidence,
+    sector: { primary: sectorId, source: sector ? 'owner' : 'suggested' },
+    utterance: doc.input.instructions || doc.input.link || 'research request',
+    run_utterance: doc.input.instructions || doc.input.link || null,
+    owner_instructions: doc.input.instructions || null,
+    different_project,
+  });
+  const { PROVIDER_LABELS } = require('./workspace');
+  const named = models.map((p) => PROVIDER_LABELS[p]).join(', ').replace(/, ([^,]*)$/, ' and $1');
+  const out = mutate(ws, id, `Confirm ${chosen} for ${id}`, (d) => {
+    d.status = 'researching';
+    d.confirmed = { coingecko_id: chosen, name: cand.name, symbol: cand.symbol, at: nowIso(), project_id: projectId, project_status: added.status, run_id: run.run_id, run_status: run.status, models };
+    event(d, `${cand.name} confirmed. ${added.status === 'exists' ? 'It was already in your records.' : 'Added to your watchlist.'} ${run.status === 'exists' ? 'A research run for it had already started a few minutes ago.' : `Research requested from ${named}.`}`);
+  });
+  return { status: 'confirmed', intake: out, project_id: projectId, project_status: added.status, run_id: run.run_id, run: run.run };
+}
+
+// One confirmed CoinGecko listing (a candidate: name, symbol, homepage,
+// coingecko_id, coingecko_url, platforms, categories) becomes a project, or
+// the existing one, and one research run with the models given. Shared by
+// confirmIntake and a scout lead's admission (leads.js); each writes its own
+// words. `idempotency` keys the project and the run ({ project, research },
+// each { key, payload_sha256 }).
+function admitListing(ws, cand, { models, evidence, sector, utterance, run_utterance = null, owner_instructions = null, different_project = false, channel = 'intake', idempotency = {} }) {
+  const projects = require('./projects');
+  const chosen = cand.coingecko_id;
   const assets = cand.platforms.map((x) => ({ chain: x.chain, contract_address: x.address }));
   const added = projects.addProject(ws, {
     name: cand.name,
@@ -591,11 +619,11 @@ function confirmIntake(ws, id, { coingecko_id: chosen, sector = null, different_
     coingecko_id: cand.coingecko_id,
     assets,
     evidence,
-    sector: { primary: sectorId, tags: cand.categories.slice(0, 8), source: sector ? 'owner' : 'suggested' },
+    sector: { primary: sector.primary, tags: (cand.categories || []).slice(0, 8), source: sector.source },
     unknowns: cand.homepage ? [] : ['CoinGecko lists no official website for this coin.'],
-    utterance: doc.input.instructions || doc.input.link || 'research request',
+    utterance,
     allow_same_symbol: Boolean(different_project),
-  });
+  }, { idempotency: idempotency.project || null });
   if (added.status === 'possible_duplicate') {
     const names = (added.candidates || []).map((c) => `${c.name} (${c.project_id})`).join(', ');
     throw new OpError('AMBIGUOUS', `Your records already have a project with the ticker ${cand.symbol}: ${names}. Tickers are not unique. If ${cand.name} is a different project, confirm again with "This is a different project".`, { same_symbol: added.candidates || [] });
@@ -619,17 +647,10 @@ function confirmIntake(ws, id, { coingecko_id: chosen, sector = null, different_
       projects.updateIdentity(ws, projectId, { coingecko_id: chosen, official_website: site, assets, evidence });
     }
   }
-  const research = require('./research');
-  const models = intakeModels(ws, doc);
-  const run = research.createRun(ws, { project_id: projectId, providers: models, channel: 'intake', utterance: doc.input.instructions || doc.input.link || null, owner_instructions: doc.input.instructions || null });
-  const { PROVIDER_LABELS } = require('./workspace');
-  const named = models.map((p) => PROVIDER_LABELS[p]).join(', ').replace(/, ([^,]*)$/, ' and $1');
-  const out = mutate(ws, id, `Confirm ${chosen} for ${id}`, (d) => {
-    d.status = 'researching';
-    d.confirmed = { coingecko_id: chosen, name: cand.name, symbol: cand.symbol, at: nowIso(), project_id: projectId, project_status: added.status, run_id: run.run_id, run_status: run.status, models };
-    event(d, `${cand.name} confirmed. ${added.status === 'exists' ? 'It was already in your records.' : 'Added to your watchlist.'} ${run.status === 'exists' ? 'A research run for it had already started a few minutes ago.' : `Research requested from ${named}.`}`);
-  });
-  return { status: 'confirmed', intake: out, project_id: projectId, project_status: added.status, run_id: run.run_id, run: run.run };
+  // The run's key may depend on the project it lands on (a function of its ID).
+  const runKey = typeof idempotency.research === 'function' ? idempotency.research(projectId) : idempotency.research || null;
+  const run = require('./research').createRun(ws, { project_id: projectId, providers: models, channel, utterance: run_utterance, owner_instructions }, { idempotency: runKey });
+  return { added, project_id: projectId, run };
 }
 
 function dismissIntake(ws, id) {
@@ -739,4 +760,4 @@ function settle(ws, { only = null } = {}) {
   return changed;
 }
 
-module.exports = { DIR, intakeModels, isIntakeId, parseLink, createIntake, readIntake, listIntakes, pendingIdentify, identify, findCandidates, confirmIntake, dismissIntake, retryIdentify, retryResearch, progressOf, settle, sectorGuess, isAmbiguous, readReservation, cgGet, MEDIA, MAX_IMAGE_BYTES };
+module.exports = { DIR, intakeModels, admitListing, isIntakeId, parseLink, createIntake, readIntake, listIntakes, pendingIdentify, identify, findCandidates, confirmIntake, dismissIntake, retryIdentify, retryResearch, progressOf, settle, sectorGuess, isAmbiguous, readReservation, cgGet, MEDIA, MAX_IMAGE_BYTES };
