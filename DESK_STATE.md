@@ -106,6 +106,8 @@ ChatGPT and Gemini have no ticket role in Phase 1.
 | `.claude/agents/junior-trader-prosecutor.md` | Agent 2. In its own context, `start_ticket` → frozen `cr-ticket-prompt@1` → `save_ticket` (or the CLI). Never sizes, decides or orders |
 | `.claude/commands/pilot-run.md` | `/pilot-run [project] [online\|local]`. Reads the pilot queue and hands each step to the right sub-agent until `pm_review`. Works under `/loop` or `/schedule` |
 
+Isolation (`cr-pilot-isolation@1`, the cohesion audit's M5, 2026-10-29): both agent files run `dashboard/scripts/pilot-role-guard.js` on Bash, Write, Read, Grep and Glob. Each role's scratch is its own folder, `<temp>/cr-pilot/<role>/` (Write saves only there, an import takes its `--text-file` only from there, and `npm run pilot` writes each agent's text there); Read, Grep and Glob never reach the desk's record folders (`projects/`, `inbox/`, `portfolio/`, `paper/`, `backups/`, `logs/`, `archive/`, `engineering/`, `scout/`, `project-context/`, `.cr/`), any other temporary folder (the other role's scratch, other sessions') or `~/.claude` (transcripts), and a search may not start above one; links are resolved first. The Prosecutor reads the completed report only as frozen into its prompt. The online route has no server-side role split: there the agent files' tool lists, a client configuration, are the boundary (a server-enforced capability would be its own decision).
+
 ## CLI and the one-command runner
 
 ```

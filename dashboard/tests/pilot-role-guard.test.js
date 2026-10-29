@@ -63,11 +63,12 @@ test('D6: each agent file lists only its own tools, its connector tools under bo
 test('D6: each agent file runs the role guard on Bash and Write, and blocks when the guard cannot run', () => {
   for (const [role, a] of Object.entries(AGENTS)) {
     const { hook, body } = frontmatter(a.file);
-    assert.match(hook, /\n {2}PreToolUse:\n {4}- matcher: "Bash\|Write"\n {6}hooks:\n {8}- type: command\n {10}command: node\n/, `${role}: one PreToolUse hook on Bash and Write, in exec form`);
+    assert.match(hook, /\n {2}PreToolUse:\n {4}- matcher: "Bash\|Write\|Read\|Grep\|Glob"\n {6}hooks:\n {8}- type: command\n {10}command: node\n/, `${role}: one PreToolUse hook on Bash, Write, Read, Grep and Glob, in exec form`);
     assert.ok(hook.includes(`args: ["\${CLAUDE_PROJECT_DIR}/dashboard/scripts/pilot-role-guard.js", "${role}"]`), `${role}: the guard, with its role`);
     assert.match(hook, /\n {10}onFailure: block(\n|$)/, `${role}: a guard that cannot start refuses`);
     assert.match(body, /The guard refuses anything else/, `${role}: the body says what the guard allows`);
     assert.ok(!/outside the repository/.test(body), `${role}: scratch files go to the temporary folder`);
+    assert.ok(body.includes(`<temp>/cr-pilot/${role}/`), `${role}: the body names its own scratch folder`);
   }
   assert.ok(fs.existsSync(GUARD));
   assert.ok(!/cr-ticket-sizing@1/.test(frontmatter(AGENTS.prosecutor.file).body), 'the prosecutor no longer names a sizing version the desk does not run');
@@ -84,12 +85,12 @@ test('D6 guard: Bash runs only one plain `node dashboard/cli.js` command of the 
   ok('researcher', 'node dashboard/cli.js research add olas --providers claude --channel cowork --utterance "autonomous pilot"');
   ok('researcher', 'node dashboard/cli.js research prompt olas rr_1');
   ok('researcher', 'node dashboard/cli.js research status olas');
-  ok('researcher', `node dashboard/cli.js import-text --provider claude --project olas --text-file "${path.join(os.tmpdir(), 'r.md')}" --run rr_1`);
+  ok('researcher', `node dashboard/cli.js import-text --provider claude --project olas --text-file "${path.join(os.tmpdir(), 'cr-pilot', 'researcher', 'rr_1', 'r.md')}" --run rr_1`);
   ok('researcher', `node "${path.join(ROOT, 'dashboard', 'cli.js')}" doctor`);
   ok('researcher', 'node ../dashboard/cli.js doctor', path.join(ROOT, 'templates'));
   ok('prosecutor', 'node dashboard/cli.js tickets start olas --assistant --mode cli');
   ok('prosecutor', 'node dashboard/cli.js tickets prompt olas tk_1');
-  ok('prosecutor', `node dashboard/cli.js tickets import olas tk_1 --text-file '${path.join(os.tmpdir(), 't.md')}'`);
+  ok('prosecutor', `node dashboard/cli.js tickets import olas tk_1 --text-file '${path.join(os.tmpdir(), 'cr-pilot', 'prosecutor', 'tk_1', 't.md')}'`);
   ok('prosecutor', 'node dashboard/cli.js tickets view olas');
   // The other role's commands.
   no('researcher', 'node dashboard/cli.js tickets import olas tk_1 --text-file x', /the researcher runs only/);
@@ -145,8 +146,8 @@ test('D6 guard: Git Bash paths on Windows read as Windows paths', () => {
 
 test('D6 guard: Write saves only in the system\'s temporary folder, never in the repository or elsewhere', () => {
   const tmp = os.tmpdir();
-  assert.equal(decide('researcher', write(path.join(tmp, 'cr-pilot-x', 'report.md'))).allow, true);
-  assert.equal(decide('prosecutor', write(path.join(tmp, 'ticket.md'))).allow, true);
+  assert.equal(decide('researcher', write(path.join(tmp, 'cr-pilot', 'researcher', 'rr_1', 'report.md'))).allow, true);
+  assert.equal(decide('prosecutor', write(path.join(tmp, 'cr-pilot', 'prosecutor', 'tk_1', 'ticket.md'))).allow, true);
   for (const f of [path.join(ROOT, 'DESK_STATE.md'), path.join(ROOT, 'dashboard', 'core', 'tickets.js'), path.join(ROOT, '.claude', 'agents', 'forensic-researcher.md')]) {
     const d = decide('researcher', write(f));
     assert.equal(d.allow, false, f);
@@ -159,6 +160,7 @@ test('D6 guard: Write saves only in the system\'s temporary folder, never in the
     assert.match(d.reason, /temporary folder only/);
   }
   assert.equal(decide('researcher', write(tmp)).allow, false, 'not the folder itself');
+  assert.equal(decide('researcher', write(path.join(tmp, 'cr-pilot', 'researcher'))).allow, false, 'not the scratch folder itself');
   assert.equal(decide('researcher', write('')).allow, false);
 });
 

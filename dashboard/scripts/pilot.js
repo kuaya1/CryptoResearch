@@ -100,8 +100,12 @@ function claude(prompt, { tools, model, timeoutMin }) {
   return r.stdout;
 }
 
-function scratch(name, text) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-pilot-'));
+// Each role's own scratch (cr-pilot-isolation@1): <temp>/cr-pilot/<role>/, one
+// folder per run or ticket, the same folders the role guard keeps apart.
+function scratch(role, name, text) {
+  const base = path.join(os.tmpdir(), 'cr-pilot', role);
+  fs.mkdirSync(base, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(base, 'run-'));
   const f = path.join(dir, name);
   fs.writeFileSync(f, text);
   return f;
@@ -138,7 +142,7 @@ function runLocal(o) {
       const prompt = cli(['research', 'prompt', o.project, runId], { text: true });
       say(`    Agent 1: claude -p on the frozen research prompt (${prompt.length} characters)…`);
       const report = claude(prompt, { tools: WEB_TOOLS, model: o.model, timeoutMin: o.timeoutMin });
-      const f = scratch('agent1-report.md', report);
+      const f = scratch('researcher', 'agent1-report.md', report);
       const saved = cli(['import-text', '--provider', 'claude', '--project', o.project, '--text-file', f, '--run', runId]);
       say(`    saved: ${saved.status}${saved.report_id ? ` ${saved.report_id}` : ''}${saved.message ? ` — ${saved.message}` : ''}`);
       if (saved.verified === false) throw new Error('The report did not read back as written; run the pilot again (an identical save is recognized).');
@@ -158,7 +162,7 @@ function runLocal(o) {
       const prompt = cli(['tickets', 'prompt', o.project, t.ticket_id], { text: true });
       say(`    Agent 2: claude -p on the frozen Prosecutor prompt ${t.ticket_id} (${prompt.length} characters)…`);
       const ticket = claude(prompt, { tools: WEB_TOOLS, model: o.model, timeoutMin: o.timeoutMin });
-      const f = scratch('agent2-ticket.md', ticket);
+      const f = scratch('prosecutor', 'agent2-ticket.md', ticket);
       const saved = cli(['tickets', 'import', o.project, t.ticket_id, '--text-file', f]);
       say(`    saved: ${saved.status} ${saved.receipt_id || ''} — ${saved.message}`);
       if (saved.verified === false) throw new Error('The ticket did not read back as written; run the pilot again.');

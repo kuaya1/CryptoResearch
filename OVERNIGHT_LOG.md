@@ -34,3 +34,10 @@ Mission: `OVERNIGHT_MISSION.md.md` (Tasks 1–5 from `cryptoresearch-cohesion-au
 - Card: Until/Expired under Exit, the expiry sentence as an alert, grant buttons disabled when expired; the decision toast appends the trader's answer and turns to the warning tone for `not_opened`/`failed`.
 - Tests: `dashboard/tests/ticket-exit-renewal.test.js` (3).
 - Not done: autonomous renewal dispatch (the audit defers it to a budgeted policy); a grant already in force whose readings expire before the book is asked still ends `not_opened` in words (renewal then is Undo, then Renew).
+
+## Task 4 — practical role isolation (M5, brief 4): done locally (`cr-pilot-isolation@1`)
+
+- `dashboard/scripts/pilot-role-guard.js`: per-role scratch `<temp>/cr-pilot/<role>/` (Write and import `--text-file` only there); the hook now also guards Read, Grep and Glob: no desk record folder, no other temporary folder (the other role's scratch, other sessions'), no `~/.claude` (transcripts), no search starting above one, no Glob pattern escaping its start; links resolved before the check.
+- Agent files: matcher `Bash|Write|Read|Grep|Glob`, bodies name the role's scratch folder; `dashboard/scripts/pilot.js` writes each agent's text in its role's scratch.
+- Tests: `dashboard/tests/pilot-isolation.test.js` (6: allowed/denied reads per role, searches, writes and imports, a junction inside a role's scratch, Git Bash spellings, the hook as a process); `pilot-role-guard.test.js` updated.
+- Not done (Eric's decision): a server-side Researcher/Prosecutor capability split on the connector. Today one Claude connection lists both research and ticket tools; on the online route the agent files' tool lists (client configuration) are the boundary. A server-enforced split needs its own scope/policy, not a role name in an argument.
