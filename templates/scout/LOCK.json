@@ -1,7 +1,8 @@
 {
   "schema_version": "cr.template-lock.v1",
-  "note": "The published scout prompt, pinned. Never edit it in place: publish the next version (scout-prompt.v2.md) and pin it here.",
+  "note": "The published scout prompts, pinned. Never edit one in place: publish the next version (scout-prompt.v2.md, leads-prompt.v2.md) and pin it here.",
   "sha256": {
-    "scout-prompt.v1.md": "33b9b9d0e239b8d27fd1c19cf11c74fa27b0644bbed3fd09b564c71796b772d0"
+    "scout-prompt.v1.md": "33b9b9d0e239b8d27fd1c19cf11c74fa27b0644bbed3fd09b564c71796b772d0",
+    "leads-prompt.v1.md": "c3bc1577470ea1b0fe0bd1ab8197024ba3ffad3248b29feeb1764cbe655cb05d"
   }
 }

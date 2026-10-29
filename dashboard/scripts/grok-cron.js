@@ -19,7 +19,8 @@
 // no item text, no address, no key and no desk address.
 //
 // `--dry-run` needs no key and sends nothing: it prints each request exactly
-// as it would be sent and the estimated cost range.
+// as it would be sent and the estimated cost range (with --leads or SCOUT_LEADS
+// on, the leads request and what it adds).
 
 const fs = require('fs');
 const path = require('path');
@@ -41,16 +42,26 @@ const ASSUME = {
   heavy: { input_tokens: 190000, cached_input_tokens: 110000, output_tokens: 15000, web_search_calls: 25 },
 };
 const ITEM_FIELDS = ['title', 'creator', 'url_primary', 'url_repo', 'summary', 'desk_leverage', 'readiness'];
+// Scout leads (intake plan rev. 2, PR 3): a fifth call under its own frozen
+// prompt, only with SCOUT_LEADS 'true' (Eric's repository variable) or
+// --leads, after the brief and apart from it, so the brief's requests and its
+// POST are the same with leads on or off, and a leads failure never touches
+// the brief or the run's result.
+const LEADS_PROMPT_ID = 'cr-scout-leads-prompt@1';
+const LEADS_PROMPT_FILE = 'leads-prompt.v1.md';
+const LEADS_PATH = '/api/ingest/scout-leads';
+const LEADS_MAX = 10;
+const LEAD_FIELDS = ['chain', 'contract', 'coingecko_id', 'signal', 'urls'];
 
 const sha256 = (b) => crypto.createHash('sha256').update(b).digest('hex');
 const fmt = (n) => Number(n || 0).toLocaleString('en-US');
 
 // The prompt text, only when it matches its pin.
-function promptTemplate(dir = TEMPLATES) {
-  const buf = fs.readFileSync(path.join(dir, PROMPT_FILE));
+function promptTemplate(dir = TEMPLATES, file = PROMPT_FILE, id = PROMPT_ID) {
+  const buf = fs.readFileSync(path.join(dir, file));
   const lock = JSON.parse(fs.readFileSync(path.join(dir, 'LOCK.json'), 'utf8'));
-  const want = lock && lock.sha256 ? lock.sha256[PROMPT_FILE] : null;
-  if (sha256(buf) !== want) throw Object.assign(new Error(`${PROMPT_ID} does not match its pinned SHA-256; nothing was sent.`), { code: 'INTEGRITY' });
+  const want = lock && lock.sha256 ? lock.sha256[file] : null;
+  if (sha256(buf) !== want) throw Object.assign(new Error(`${id} does not match its pinned SHA-256; nothing was sent.`), { code: 'INTEGRITY' });
   return buf.toString('utf8');
 }
 
@@ -69,6 +80,64 @@ function requestFor(template, lane, today) {
     max_output_tokens: MAX_OUTPUT_TOKENS,
     store: false,
   };
+}
+
+// The chains a lead may name: each chain's first name in the desk's table.
+function chainNames() {
+  return require('../core/chains').TABLE.map((row) => row[3]).join(', ');
+}
+function leadsRequestFor(template, today) {
+  const text = template.split('{{TODAY}}').join(today).split('{{MAX_LEADS}}').join(String(LEADS_MAX)).split('{{CHAINS}}').join(chainNames());
+  return {
+    model: MODEL,
+    input: [
+      { role: 'system', content: text },
+      { role: 'user', content: 'Name today\'s leads. Answer with the JSON object only.' },
+    ],
+    tools: [{ type: 'web_search' }],
+    max_output_tokens: MAX_OUTPUT_TOKENS,
+    store: false,
+  };
+}
+
+// The leads from the answer: { leads, dropped } or a reason. Only the five
+// fields go on, the signal's spaces collapsed; the desk checks every row.
+function leadsFrom(text) {
+  const s = String(text || '');
+  const from = s.indexOf('{');
+  const to = s.lastIndexOf('}');
+  if (from < 0 || to <= from) return { reason: 'the answer had no JSON object' };
+  let obj;
+  try {
+    obj = JSON.parse(s.slice(from, to + 1));
+  } catch (_) {
+    return { reason: 'the answer was not valid JSON' };
+  }
+  if (!obj || !Array.isArray(obj.leads)) return { reason: 'the answer had no leads list' };
+  const leads = [];
+  let dropped = 0;
+  for (const raw of obj.leads) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw) || leads.length >= LEADS_MAX) {
+      dropped += 1;
+      continue;
+    }
+    const it = {};
+    for (const k of LEAD_FIELDS) {
+      const v = raw[k];
+      if (v === undefined) continue;
+      it[k] = typeof v === 'string' ? (k === 'signal' ? v.replace(/[ \t\r\n]+/g, ' ').trim() : v.trim()) : v;
+    }
+    leads.push(it);
+  }
+  return { leads, dropped };
+}
+
+// The delivery's ID, made before it is sent and kept for its own retries: the
+// workflow run and its attempt, else a local one.
+function deliveryIdOf(env, now) {
+  const run = String(env.GITHUB_RUN_ID || '');
+  if (/^\d{1,20}$/.test(run)) return `gh-${run}-${/^\d{1,6}$/.test(String(env.GITHUB_RUN_ATTEMPT || '')) ? env.GITHUB_RUN_ATTEMPT : '1'}`;
+  return `local-${new Date(now).toISOString().replace(/[-:T]/g, '').slice(0, 14)}-${crypto.randomBytes(3).toString('hex')}`;
 }
 
 // xAI's usage, as the desk counts it. Output includes reasoning when the
@@ -172,15 +241,34 @@ function costRange(lanes) {
 }
 
 // One sweep. Returns { ok, status, ... }; `out` takes each line printed.
-async function run({ env = process.env, fetch: fetchFn = globalThis.fetch, now = Date.now(), out = (l) => process.stdout.write(`${l}\n`), dryRun = false, lanes = S.LANES, templateDir = TEMPLATES, postWaits = POST_WAITS_MS } = {}) {
+async function run({ env = process.env, fetch: fetchFn = globalThis.fetch, now = Date.now(), out = (l) => process.stdout.write(`${l}\n`), dryRun = false, lanes = S.LANES, templateDir = TEMPLATES, postWaits = POST_WAITS_MS, leads = null } = {}) {
   const template = promptTemplate(templateDir);
   out(`${PROMPT_ID} matches its pin.`);
   const today = new Date(now).toISOString().slice(0, 10);
   const requests = lanes.map((lane) => ({ lane, body: requestFor(template, lane, today) }));
+  // The leads prompt, only when leads are on and it matches its pin; a
+  // mismatch skips the leads, never the brief.
+  const leadsOn = leads === null ? env.SCOUT_LEADS === 'true' : Boolean(leads);
+  let leadsTemplate = null;
+  let leadsSkip = null;
+  if (leadsOn) {
+    try {
+      leadsTemplate = promptTemplate(templateDir, LEADS_PROMPT_FILE, LEADS_PROMPT_ID);
+      out(`${LEADS_PROMPT_ID} matches its pin.`);
+    } catch (err) {
+      if (err.code !== 'INTEGRITY' && err.code !== 'ENOENT') throw err;
+      leadsSkip = err.code === 'INTEGRITY' ? `${LEADS_PROMPT_ID} does not match its pin` : `${LEADS_PROMPT_FILE} is missing`;
+      out(`Leads skipped: ${leadsSkip}. Nothing will be sent for leads.`);
+    }
+  }
   if (dryRun) {
     for (const r of requests) out(`--- Request for lane ${r.lane} (POST ${XAI_URL}):\n${JSON.stringify(r.body, null, 2)}`);
     out(`--- Estimated cost with ${MODEL} under ${S.PRICES.id} (xAI's prices read ${S.PRICES.read_on}), ${lanes.length} ${lanes.length === 1 ? 'lane' : 'lanes'}:`);
     for (const l of costRange(lanes.length)) out(l);
+    if (leadsTemplate) {
+      out(`--- Request for leads (POST ${XAI_URL}), sent after the brief:\n${JSON.stringify(leadsRequestFor(leadsTemplate, today), null, 2)}`);
+      out(`--- Leads add one request a day: ${Object.entries(ASSUME).map(([name, a]) => `${name} $${S.usageCost(MODEL, a).toFixed(2)} a day, about $${Math.round(S.usageCost(MODEL, a) * 30)} a month`).join('; ')}.`);
+    }
     out('A request whose prompt reaches 200,000 tokens is billed at twice these rates. Your prepaid xAI balance is the ceiling. Nothing was sent.');
     return { ok: true, status: 'dry_run', requests: requests.length };
   }
@@ -263,13 +351,89 @@ async function run({ env = process.env, fetch: fetchFn = globalThis.fetch, now =
       last = err.name === 'AbortError' ? 'timed out' : 'network error';
     }
   }
+  let result;
   if (!receipt) {
     out(`The desk did not save the brief (${last}). The xAI calls above were made.`);
-    return { ok: false, status: 'desk_not_saved', lanes_run: brief.lanes_run, lanes_missing: brief.lanes_missing };
+    result = { ok: false, status: 'desk_not_saved', lanes_run: brief.lanes_run, lanes_missing: brief.lanes_missing };
+  } else {
+    out(`Desk: ${receipt.status} ${receipt.brief_id} (${receipt.items_new} new, ${receipt.items_updated} updated).`);
+    if (brief.lanes_missing.length) out(`::warning::Scout lanes missing: ${brief.lanes_missing.join(', ')}.`);
+    result = { ok: brief.lanes_run.length > 0, status: receipt.status, brief_id: receipt.brief_id, lanes_run: brief.lanes_run, lanes_missing: brief.lanes_missing };
   }
-  out(`Desk: ${receipt.status} ${receipt.brief_id} (${receipt.items_new} new, ${receipt.items_updated} updated).`);
-  if (brief.lanes_missing.length) out(`::warning::Scout lanes missing: ${brief.lanes_missing.join(', ')}.`);
-  return { ok: brief.lanes_run.length > 0, status: receipt.status, brief_id: receipt.brief_id, lanes_run: brief.lanes_run, lanes_missing: brief.lanes_missing };
+  if (leadsOn) result.leads = leadsTemplate ? await sendLeads({ env, fetchFn, now, out, template: leadsTemplate, today, origin, deskHeaders, xaiKey, postWaits }) : { status: 'skipped', reason: leadsSkip };
+  return result;
+}
+
+// The leads, after the brief: the desk's key check for leads first (no paid
+// call before it accepts), one xAI call never retried, then one delivery
+// under an ID made before it is sent and reused on its own retries. A
+// refusal is reported, never resent under a new ID.
+async function sendLeads({ env, fetchFn, now, out, template, today, origin, deskHeaders, xaiKey, postWaits }) {
+  let ping;
+  try {
+    const r = await timed(fetchFn, `${origin}${LEADS_PATH}`, { method: 'GET', headers: deskHeaders }, DESK_TIMEOUT_MS);
+    ping = { status: r.status, body: await jsonOf(r) };
+  } catch (err) {
+    out(`Leads: the desk did not answer the key check (${err.name === 'AbortError' ? 'timed out' : 'network error'}). Nothing was sent to xAI for leads.`);
+    return { status: 'desk_unreachable' };
+  }
+  if (ping.status !== 200 || !ping.body || ping.body.key !== 'accepted') {
+    out(`Leads: the desk refused the key check (HTTP ${ping.status}${ping.body && ping.body.code ? `, ${ping.body.code}` : ''}). Nothing was sent to xAI for leads.`);
+    return { status: 'desk_refused', http: ping.status };
+  }
+  if (ping.body.leads_today >= ping.body.max_per_day) {
+    out(`Leads: the desk has taken its ${ping.body.max_per_day} lead deliveries for today. Nothing was sent to xAI for leads.`);
+    return { status: 'desk_full' };
+  }
+  let resp;
+  try {
+    const r = await timed(fetchFn, XAI_URL, { method: 'POST', headers: { authorization: `Bearer ${xaiKey}`, 'content-type': 'application/json' }, body: JSON.stringify(leadsRequestFor(template, today)) }, LANE_TIMEOUT_MS);
+    resp = await jsonOf(r);
+    if (r.status !== 200) {
+      out(`Leads: none (xAI answered HTTP ${r.status}).`);
+      return { status: 'xai_failed', http: r.status };
+    }
+  } catch (err) {
+    out(`Leads: none (${err.name === 'AbortError' ? `no answer within ${LANE_TIMEOUT_MS / 1000} s` : 'network error'}).`);
+    return { status: 'xai_failed' };
+  }
+  const usage = usageOf(resp);
+  const counts = `${usage.web_search_calls} web searches; ${fmt(usage.input_tokens)} input tokens (${fmt(usage.cached_input_tokens)} cached), ${fmt(usage.output_tokens)} output`;
+  const got = leadsFrom(answerText(resp));
+  if (got.reason) {
+    out(`Leads: none (${got.reason}); ${counts}.`);
+    return { status: 'no_leads', reason: got.reason, usage };
+  }
+  if (!got.leads.length) {
+    out(`Leads: none named; nothing delivered; ${counts}.`);
+    return { status: 'no_leads', usage };
+  }
+  const deliveryId = deliveryIdOf(env, now);
+  const body = JSON.stringify({ schema: 'cr.scout-leads.v1', prompt_version: LEADS_PROMPT_ID, delivery_id: deliveryId, generated_at: new Date(now).toISOString(), model: MODEL, leads: got.leads });
+  let last = null;
+  for (const wait of postWaits) {
+    if (wait) await new Promise((r) => setTimeout(r, wait));
+    try {
+      const r = await timed(fetchFn, `${origin}${LEADS_PATH}`, { method: 'POST', headers: { ...deskHeaders, 'content-type': 'application/json' }, body }, DESK_TIMEOUT_MS);
+      const b = await jsonOf(r);
+      last = `HTTP ${r.status}${b && b.code ? `, ${b.code}` : ''}`;
+      if ((r.status === 202 || r.status === 200) && b && (b.status === 'accepted' || b.status === 'unchanged')) {
+        const by = (o) => b.rows.filter((x) => x.outcome === o).length;
+        out(`Leads: ${b.status} ${deliveryId} (${b.rows.length} rows: ${by('new')} new, ${by('sighting')} seen before, ${by('refused_at_intake')} refused at intake); ${counts}.`);
+        return { status: b.status, delivery_id: deliveryId, receipt_id: b.receipt_id, rows: b.rows.length, dropped: got.dropped, usage };
+      }
+      if (r.status === 409) {
+        out(`Leads: the desk holds another delivery under ${deliveryId} (${last}); not resent under a new ID.`);
+        return { status: 'conflict', delivery_id: deliveryId };
+      }
+      // A refusal is an answer; only no answer or a server error is tried again.
+      if (r.status < 500) break;
+    } catch (err) {
+      last = err.name === 'AbortError' ? 'timed out' : 'network error';
+    }
+  }
+  out(`Leads: the desk did not save delivery ${deliveryId} (${last}). The xAI call for leads was made.`);
+  return { status: 'desk_not_saved', delivery_id: deliveryId };
 }
 
 if (require.main === module) {
@@ -279,7 +443,7 @@ if (require.main === module) {
     process.stderr.write(`--lane must be one of ${S.LANES.join(', ')}\n`);
     process.exit(2);
   }
-  run({ dryRun: args.includes('--dry-run'), lanes: laneArg ? [laneArg] : S.LANES }).then((r) => {
+  run({ dryRun: args.includes('--dry-run'), lanes: laneArg ? [laneArg] : S.LANES, leads: args.includes('--leads') ? true : null }).then((r) => {
     process.exitCode = r.ok ? 0 : 1;
   }, (err) => {
     // Its name only: a message could carry an address.
@@ -288,4 +452,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { run, requestFor, promptTemplate, usageOf, answerText, itemsFrom, deskOrigin, MODEL, XAI_URL, PROMPT_ID, ASSUME };
+module.exports = { run, requestFor, leadsRequestFor, promptTemplate, usageOf, answerText, itemsFrom, leadsFrom, deliveryIdOf, deskOrigin, MODEL, XAI_URL, PROMPT_ID, LEADS_PROMPT_ID, LEADS_PATH, ASSUME };
