@@ -99,49 +99,7 @@ function Consensus({ d, p }) {
   );
 }
 
-// The inspector's grade (Desk v2, Eric, 2026-10-28): the canonical grade in
-// light 30px figures, its rubric word and the verdict on one line, the spread
-// on the right; then one row per model, its own grade as a 3px bar in the
-// model's colour and its value or state. Never averaged; each row opens that
-// model's Brief. Under them, whose grade it is, the analysis date and horizon
-// and the grade's warnings.
-function InspGrade({ d, p, g, verdict, who, sub, chips }) {
-  const cs = consensusOf(p, d.index);
-  const pid = p.project_id;
-  const figure = g.kind === 'grade' || g.kind === 'range' ? g.value : g.kind === 'withheld' ? 'Withheld' : '—';
-  const band = g.kind === 'grade' || g.kind === 'range' ? g.word : g.kind === 'withheld' ? (g.coverage !== null ? `${g.coverage}% of the weight scored` : null) : String(g.value || '').toLowerCase() || null;
-  const line = [band, verdict].filter(Boolean).join(' · ');
-  return (
-    <div className="ig">
-      <div className="ig-top">
-        <p className="ig-main" aria-label={`${who} grade ${figure}${line ? `, ${line}` : ''}`}>
-          <span className={`ig-v is-${g.kind}`} aria-hidden="true">{figure}</span>
-          {line ? <span className="ig-line" aria-hidden="true" title={line}>{line}</span> : null}
-        </p>
-        {cs.spread !== null ? <span className="ig-spread" title="Points between the highest and lowest firm grade. Agreement is not independent confirmation.">{`spread ${cs.spread.toFixed(1).replace(/\.0$/, '')}`}</span> : null}
-      </div>
-      <ul className="ig-models" aria-label={`Each model's own grade: ${cs.text}`}>
-        {cs.models.map((m) => {
-          const lo = typeof m.value === 'number' ? 0 : typeof m.low === 'number' ? m.low : 0;
-          const hi = typeof m.value === 'number' ? m.value : typeof m.high === 'number' ? m.high : 0;
-          return (
-            <li key={m.provider} className={`ig-m is-${m.provider} is-${m.mark}`}>
-              <DeepLink pid={pid} href={`#/project/${enc(pid)}/brief?model=${m.provider}`} dataKey={`iv-model-${m.provider}`} ariaLabel={`${m.name}: ${m.words}. Open ${m.name}'s Brief`}>
-                <span className="ig-m-n">{m.label}</span>
-                <span className="ig-m-track" aria-hidden="true"><span className="ig-m-fill" style={{ '--lo': `${Math.max(0, Math.min(100, lo))}%`, '--hi': `${Math.max(0, Math.min(100, hi))}%` }} /></span>
-                <span className="ig-m-v">{m.mark === 'graded' ? m.words : m.mark === 'none' ? '—' : m.words}</span>
-              </DeepLink>
-            </li>
-          );
-        })}
-      </ul>
-      <p className="ig-sub"><span className="ig-who">{who}</span>{sub}</p>
-      {chips ? <div className="ig-chips">{chips}</div> : null}
-    </div>
-  );
-}
-
-function VerdictCard({ d, p, cr, mode = 'inspector' }) {
+function VerdictCard({ d, p, cr }) {
   const pid = p.project_id;
   const g = canonicalGrade(p, d.index);
   const c = cr.c;
@@ -170,14 +128,6 @@ function VerdictCard({ d, p, cr, mode = 'inspector' }) {
     ? { status: g.kind === 'range' ? 'range' : 'firm', display: g.value }
     : g.kind === 'withheld' ? { status: 'withheld', coverage: g.coverage, reason: rep && rep.grade ? rep.grade.reason || null : null }
       : { status: 'none', label: g.kind === 'job' ? researchState(g.job, { provider: c.provider || 'claude' }).short : g.value, reason: g.kind === 'pdf' ? 'Needs a text copy to be graded' : g.kind === 'job' ? null : c.note };
-  if (mode === 'inspector') {
-    return (
-      <section className="iv-card is-v2" aria-labelledby="iv-h" data-part="verdict" data-provider={c.provider || 'claude'} data-report={rep ? rep.report_id || '' : ''} data-source={c.source}>
-        <h3 className="sr-only" id="iv-h">Verdict</h3>
-        <InspGrade d={d} p={p} g={g} verdict={verdict} who={who} sub={sub} chips={chips} />
-      </section>
-    );
-  }
   return (
     <section className="iv-card" aria-labelledby="iv-h" data-part="verdict" data-provider={c.provider || 'claude'} data-report={rep ? rep.report_id || '' : ''} data-source={c.source}>
       <h3 className="sr-only" id="iv-h">Verdict</h3>
@@ -559,14 +509,13 @@ export function ModelPanel({ d, p, detail, current = true, failed = false, mode 
   const wait = cr.c.report && !cr.report ? <ReportWait p={p} cr={cr} current={current} failed={failed && !detail} /> : null;
   return (
     <div className="mpanel iv" data-report={cr.report_id || ''} data-opinion={cr.status} data-provider={cr.c.provider || 'claude'}>
-      <VerdictCard d={d} p={p} cr={cr} mode={mode} />
-      {/* Desk v2: in the inspector the PM ticket follows the grade. */}
-      {mode === 'review' ? null : <PMDecisionCard p={p} />}
+      <VerdictCard d={d} p={p} cr={cr} />
       <Triggers p={p} cr={cr} wait={wait} />
       {mode === 'review' ? null : (
         <>
           <RiskStrip d={d} p={p} />
           <Thesis p={p} cr={cr} wait={wait} />
+          <PMDecisionCard p={p} />
           <NeedsYou d={d} p={p} detail={detail} />
           <YourNote p={p} detail={detail} />
         </>

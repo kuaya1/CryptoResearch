@@ -200,10 +200,7 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   assert.match(pm, /strongest_bull_rebuttal/);
   assert.match(pm, /: 'unknown'\)/);
   assert.match(pm, /<span className="is-unknown">unknown<\/span>/);
-  // Approve is a hold-to-approve press since Desk v2 (2026-10-28): HoldButton
-  // calls onConfirm only after a full deliberate press of the pointer or key.
-  assert.equal([...pm.matchAll(/decide\('/g)].length, [...pm.matchAll(/(onClick|onConfirm)=\{\(\) => decide\('/g)].length, 'every PM decision is a click or a full hold');
-  assert.match(pm, /export function HoldButton/);
+  assert.equal([...pm.matchAll(/decide\('/g)].length, [...pm.matchAll(/onClick=\{\(\) => decide\('/g)].length, 'every PM decision is a click');
   // Every other write sits in a handler (onClick, onSelect) or an action
   // function called only from one (the Forensics tab's changeMonitoring:
   // checked above, every call is an onClick).
@@ -273,7 +270,7 @@ test('watchlist rules shared by the React list: sort flips, filters count, sourc
   assert.equal(wl.prefsToSave({ columns: ['rank'], sort: { key: 'rank', dir: 'asc' }, filters: {} }).v, wl.PREFS_VERSION);
 });
 
-test('no purple or indigo anywhere the desk draws but the violet ramp: sources, the sign-in pages, the favicon and the built bundle (Eric, 2026-10-08; ramp 2026-10-28)', () => {
+test('no purple or indigo anywhere the desk draws: sources, the sign-in pages, the favicon and the built bundle (Eric, 2026-10-08)', () => {
   const files = [
     ...walk(path.join(DASH, 'public'), (p) => /\.(css|js|svg|html)$/.test(p)),
     ...walk(path.join(WEB, 'src'), (p) => /\.(css|jsx?)$/.test(p)),
@@ -290,11 +287,6 @@ test('no purple or indigo anywhere the desk draws but the violet ramp: sources, 
     const h = max === R ? 60 * (((G - B) / d) % 6) : max === G ? 60 * ((B - R) / d + 2) : 60 * ((R - G) / d + 4);
     return { h: (h + 360) % 360, s, l };
   };
-  // Desk v2 (Eric, 2026-10-28, "add a violet ramp"): the one exception is
-  // tokens.css's --violet-50…600 ramp (oklch, hue 285), which the build writes
-  // out as these five values. It marks Claude, the Researcher and Running only;
-  // any other violet, purple or indigo still fails.
-  const VIOLET = new Set(['#ececff', '#dadaff', '#8a81ef', '#7361e4', '#5e48c8']);
   const found = [];
   for (const f of files) {
     const s = fs.readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -308,7 +300,7 @@ test('no purple or indigo anywhere the desk draws but the violet ramp: sources, 
       const c = hsl(r, g, b);
       // Indigo, violet and purple: a hue from 228 to 300 degrees with real
       // colour in it (slate greys, navy shadows and the Working blue stay out).
-      if (c.h >= 228 && c.h <= 300 && c.s >= 0.25 && c.l > 0.08 && c.l < 0.97 && !VIOLET.has(text.toLowerCase())) found.push(`${path.relative(DASH, f)}: ${text}`);
+      if (c.h >= 228 && c.h <= 300 && c.s >= 0.25 && c.l > 0.08 && c.l < 0.97) found.push(`${path.relative(DASH, f)}: ${text}`);
     }
   }
   assert.deepEqual(found, [], 'purple or indigo colours');

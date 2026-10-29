@@ -185,7 +185,7 @@ export default function App() {
   if (d.checking || !d.index || !nav.route) return <div className="boot" role="status"><span className="sr-only">{d.checking ? 'Checking your session…' : 'Loading your workspace…'}</span></div>;
   const prefs = prefsOf();
   return (
-    <div className={`app${collapsed && !phone ? ' rail-collapsed' : ''}${nav.route.name === 'watchlist' ? ' is-desk' : ''}`}>
+    <div className={`app${collapsed && !phone ? ' rail-collapsed' : ''}`}>
       {phone ? null : <Sidebar collapsed={collapsed || rail} onCollapse={() => { const next = !collapsed; setCollapsed(next); saveRail(next); }} />}
       <div className="app-main">
         {phone ? <TopBar /> : null}

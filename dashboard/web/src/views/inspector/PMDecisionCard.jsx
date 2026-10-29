@@ -6,18 +6,11 @@
 // Eric's sizing rules, the two agents' figures side by side (never averaged)
 // and the status, read with invalidation against prices and DefiLlama. A
 // decision records his choice; nothing here places an order.
-//
-// Desk v2 (Eric, 2026-10-28): a dark card. The proposal with its dot and the
-// status in words; Entry, Stop and Target; the exit cost at the ticket's size
-// as a bar against the frozen limit (amber for a lower bound, red over it);
-// Researcher beside Prosecutor with the points between them; the four tests
-// as dots. Approve is held, not clicked: 800ms of pointer, Space or Enter,
-// so a risk grant is never a stray click; letting go early cancels it.
 import { Children, Fragment, cloneElement, isValidElement, useContext, useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { FootSlot } from './footSlot.js';
-import { toast, submissionId, fmtDateTime, announce } from '../../../../public/ui.js';
+import { toast, submissionId, fmtDateTime } from '../../../../public/ui.js';
 import { api, refresh } from '../../lib/desk.js';
 import { ruleNoteOf, deltaBadgeOf, widestCategoryLink } from '../../../../public/pm-card-model.js';
 
@@ -25,7 +18,7 @@ const enc = encodeURIComponent;
 const usd = (n) => (typeof n === 'number' ? `$${n.toLocaleString('en-US', { minimumFractionDigits: n >= 1000 ? 0 : 2, maximumFractionDigits: n < 1 ? 6 : 2 })}` : '—');
 const TYPE_WORDS = { ACCUMULATE: 'Accumulate', LIMIT_TRAP: 'Limit trap', TRIM_EXIT: 'Trim / exit', WATCH_ONLY: 'Watch only', HARD_PASS: 'Hard pass' };
 const STATUS = {
-  pending_pm_review: { word: 'Waiting for you', tone: 'is-warn' },
+  pending_pm_review: { word: 'Pending your review', tone: 'is-warn' },
   risk_granted: { word: 'Risk granted', tone: 'is-ok' },
   vetoed: { word: 'Vetoed', tone: '' },
   passed: { word: 'Passed', tone: '' },
@@ -36,58 +29,6 @@ const STATUS = {
 };
 const VERDICT_WORDS = { thesis_survives: 'thesis survives', thesis_damaged: 'thesis damaged', fatal_flaw: 'fatal flaw' };
 const TEST_WORDS = { mercenary_emissions: 'mercenary emissions', tax_revenue: 'tax revenue', exit_slippage: 'exit slippage', unverified_claims: 'unverified claims', other: 'other' };
-const TYPE_TONE = { ACCUMULATE: 'ok', LIMIT_TRAP: 'warn', TRIM_EXIT: 'warn', WATCH_ONLY: 'unknown', HARD_PASS: 'bad' };
-const cap = (w) => w.charAt(0).toUpperCase() + w.slice(1);
-
-// Hold to approve (Desk v2): press and hold the pill (pointer, or Space or
-// Enter) for --hold-ms; the fill grows in 40ms steps and the label says Keep
-// holding. Letting go, the pointer leaving or focus moving away cancels it
-// and empties the fill; a completed hold calls onConfirm once.
-const HOLD_MS = 800;
-const HOLD_STEP = 40;
-export function HoldButton({ label, onConfirm, disabled = false, className = '', ...rest }) {
-  const [progress, setProgress] = useState(0);
-  const timer = useRef(null);
-  const stop = () => { clearInterval(timer.current); timer.current = null; setProgress(0); };
-  useEffect(() => () => clearInterval(timer.current), []);
-  const start = () => {
-    if (disabled || timer.current) return;
-    const began = Date.now();
-    setProgress(0.0001);
-    announce('Keep holding to approve.');
-    timer.current = setInterval(() => {
-      const f = Math.min(1, (Date.now() - began) / HOLD_MS);
-      if (f >= 1) {
-        clearInterval(timer.current);
-        timer.current = null;
-        setProgress(0);
-        onConfirm();
-      } else setProgress(f);
-    }, HOLD_STEP);
-  };
-  const key = (e) => (e.key === ' ' || e.key === 'Enter') && !e.altKey && !e.ctrlKey && !e.metaKey;
-  return (
-    <button
-      type="button"
-      {...rest}
-      className={`${className} pm-hold${progress ? ' is-holding' : ''}`.trim()}
-      disabled={disabled}
-      onPointerDown={(e) => { if (e.button === 0) { e.preventDefault(); start(); } }}
-      onPointerUp={stop}
-      onPointerLeave={stop}
-      onPointerCancel={stop}
-      onBlur={stop}
-      onContextMenu={(e) => e.preventDefault()}
-      onKeyDown={(e) => { if (key(e)) { e.preventDefault(); if (!e.repeat) start(); } }}
-      onKeyUp={(e) => { if (key(e)) { e.preventDefault(); stop(); } }}
-      onClick={(e) => e.preventDefault()}
-      style={{ '--hold': progress }}
-    >
-      <span className="pm-hold-fill" aria-hidden="true" />
-      <span className="pm-hold-t">{progress ? 'Keep holding' : label}</span>
-    </button>
-  );
-}
 // Why the grade closed the desk's gate (cr-ticket-pregate@1): a weak grade
 // reads differently from a withheld one; an older receipt did not record it.
 function gateKindWords(t) {
@@ -175,7 +116,7 @@ function TestMatrix({ pid, pr }) {
         {TEST_ORDER.map((k) => {
           const res = resultOf(k);
           return (
-            <button type="button" key={k} className={`pm-test ${RESULT_TONE[res]}`} data-key={`pm-test-${k}-${pid}`} data-result={res} aria-label={`${TEST_WORDS[k]}: ${res}. Show the finding`} aria-expanded={open === k} onClick={() => setOpen(open === k ? null : k)}><span className="pm-test-dot" aria-hidden="true" />{`${cap(TEST_WORDS[k])}${res === 'fail' ? ' failed' : res === 'unknown' ? ' unknown' : ''}`}</button>
+            <button type="button" key={k} className={`badge pm-test ${RESULT_TONE[res]}`} data-key={`pm-test-${k}-${pid}`} data-result={res} aria-expanded={open === k} onClick={() => setOpen(open === k ? null : k)}>{`${TEST_WORDS[k]}: ${res}`}</button>
           );
         })}
       </div>
@@ -199,30 +140,6 @@ function exitText(t) {
   // Against the limit this ticket froze; without one the figure stays unjudged.
   const limit = typeof t.exit_limit_pct === 'number' ? t.exit_limit_pct : null;
   return { text: v, tone: limit !== null && t.exit_cost_500_usd_pct > limit ? 'is-bad' : limit !== null && t.exit_cost_500_complete ? 'is-ok' : 'is-unknown' };
-}
-
-// The exit cost at the ticket's size as a 3px bar on 0–8%, a 1px tick at the
-// frozen limit: light when the quote is complete and within it, amber for a
-// lower bound, red over the limit. A basis that is not a quote is words only.
-function ExitBar({ t, ex }) {
-  const size = typeof t.exit_size_usd === 'number' ? `$${t.exit_size_usd.toLocaleString('en-US')}` : 'your size';
-  const v = t.exit_cost_500_usd_pct;
-  const limit = typeof t.exit_limit_pct === 'number' ? t.exit_limit_pct : null;
-  const measured = typeof v === 'number' && t.exit_basis !== 'native_l1_liquid';
-  const over = measured && limit !== null && v > limit;
-  const tone = over ? 'over' : measured && !t.exit_cost_500_complete ? 'bound' : 'ok';
-  const words = measured ? `${ex.text}${t.exit_cost_500_complete ? '' : ' lower bound'}${limit !== null ? ` of ${limit.toFixed(1)}% limit` : ''}` : ex.text;
-  return (
-    <div className={`pm-exit is-${tone}`} title={ex.title || (t.exit_cost_500_complete === false ? 'A lower bound: part of the cost is unknown' : 'The desk\'s own exit reading')}>
-      <p className="pm-exit-row"><span className="pm-exit-k">{`Exit cost at ${size}`}</span><span className="pm-exit-v">{words}</span></p>
-      {measured ? (
-        <span className="pm-exit-track" aria-hidden="true" style={{ '--exit': `${Math.min(100, Math.max(0, (v / 8) * 100))}%`, '--limit': limit !== null ? `${Math.min(100, (limit / 8) * 100)}%` : '-10%' }}>
-          <span className="pm-exit-fill" />
-          {limit !== null ? <span className="pm-exit-tick" /> : null}
-        </span>
-      ) : null}
-    </div>
-  );
 }
 
 // Item 33: the change since Claude's earlier report, with the prompt versions
@@ -292,13 +209,20 @@ function Disagreement({ pid, t, spread, dis, r, q, fatal }) {
   const link = widestCategoryLink(spread);
   return (
     <div className="pm-dis" data-key={`pm-disagreement-${pid}`} aria-label="Researcher and Prosecutor side by side">
-      <div className="pm-agents">
-        <p className="pm-ag" data-key={`pm-agent1-${pid}`} title={`Agent 1 · Researcher: ${r.verdict || 'no verdict'}`}>Researcher <span className="pm-ag-v">{r.grade_display || r.grade || '—'}</span></p>
-        {typeof dis.spread_points === 'number' ? <p className="pm-ag-d" title={`${dis.spread_points > 0 ? '+' : ''}${dis.spread_points} points (researcher minus prosecutor)`}>{`Δ ${dis.spread_points}`}</p> : <p className="pm-ag-d" aria-hidden="true" />}
-        <p className="pm-ag is-end" data-key={`pm-agent2-${pid}`} title={`Agent 2 · Prosecutor: ${VERDICT_WORDS[q.verdict] || q.verdict || 'no verdict'}`}><span className="pm-ag-v">{q.conviction_score ?? '—'}</span> Prosecutor</p>
+      <div className="pm-sbs">
+        <div className="pm-sbs-cell" data-key={`pm-agent1-${pid}`}>
+          <p className="pm-dis-k">Agent 1 · Researcher</p>
+          <p className="pm-sbs-v">{r.grade_display || r.grade || '—'}</p>
+          <p className="pm-sbs-s">{r.verdict || 'no verdict'}</p>
+        </div>
+        <div className="pm-sbs-cell" data-key={`pm-agent2-${pid}`}>
+          <p className="pm-dis-k">Agent 2 · Prosecutor</p>
+          <p className="pm-sbs-v">{q.conviction_score ?? '—'}</p>
+          <p className="pm-sbs-s">{fatal.length ? `${fatal.length} fatal flaw${fatal.length === 1 ? '' : 's'} (${TEST_WORDS[fatal[0].test] || fatal[0].test})` : VERDICT_WORDS[q.verdict] || q.verdict || 'no verdict'}</p>
+        </div>
       </div>
-      <p className="pm-ag-s">{`${r.verdict || 'No verdict'} · ${fatal.length ? `${fatal.length} fatal flaw${fatal.length === 1 ? '' : 's'} (${TEST_WORDS[fatal[0].test] || fatal[0].test})` : VERDICT_WORDS[q.verdict] || q.verdict || 'no verdict'}`}</p>
       <DeltaBadge pid={pid} delta={t.report_delta} row />
+      {typeof dis.spread_points === 'number' ? <p className="pm-dis-row"><span className="pm-dis-k">Spread</span><span>{`${dis.spread_points > 0 ? '+' : ''}${dis.spread_points} points (researcher minus prosecutor)`}</span></p> : null}
       {dis.note ? <p className="pm-dis-note" data-key={`pm-why-${pid}`}>{dis.note}</p> : null}
       {link ? <a className="btn-link" href={link.href} title={link.title} data-key={`pm-widest-${pid}`}>{link.text}</a> : null}
     </div>
@@ -340,7 +264,6 @@ export function PMDecisionCard({ p }) {
         : action === 'undo' ? (r.project_restored ? 'Decision undone; project restored' : 'Decision undone')
           : action === 'pass' ? (r.project_archived ? 'Pass confirmed; project archived' : 'Pass confirmed; kept because you hold it')
             : DECIDED_WORDS[action] || `Risk granted: ${usd(d ? d.pm_approved_risk_usd : null)}`, repair && !(r.paper && r.paper.status !== 'failed') ? 'bad' : undefined);
-      if (action === 'approve' || action === 'halve') announce(`${action === 'halve' ? 'Halved' : 'Approved'}: ${usd(d ? d.pm_approved_risk_usd : null)} of risk granted.`);
       await refresh();
     } catch (err) {
       toast(err.message, 'bad');
@@ -405,12 +328,13 @@ export function PMDecisionCard({ p }) {
     );
   }
   return (
-    <section className="pm-card is-night" aria-labelledby={`pm-h-${pid}`} data-status={t.status}>
+    <section className="pm-card" aria-labelledby={`pm-h-${pid}`} data-status={t.status}>
       <div className="pm-head">
-        <h3 className="pm-typeline" id={`pm-h-${pid}`}><span className={`pm-dot tone-${TYPE_TONE[t.proposal_type] || 'unknown'}`} aria-hidden="true" /><span className="sr-only">PM decision: </span>{TYPE_WORDS[t.proposal_type] || t.proposal_type}</h3>
-        <span className={`pm-st ${st.tone}`}>{decided && (decided.action === 'approve' || decided.action === 'halve') && typeof t.pm_approved_risk_usd === 'number' ? `Approved · ${usd(t.pm_approved_risk_usd)}` : st.word}</span>
+        <h3 className="iv-h" id={`pm-h-${pid}`}>PM decision</h3>
+        <span className={`badge ${st.tone}`}>{st.word}</span>
       </div>
       <div className="pm-call">
+        <p className="pm-type">{TYPE_WORDS[t.proposal_type] || t.proposal_type}</p>
         <p className="pm-risk" title={t.capped ? `The desk capped ${TYPE_WORDS[t.capped.from] || t.capped.from}: ${t.capped.reason}` : (t.gate_reasons || []).join(' ') || undefined}>
           {risk > 0 ? <>{usd(risk)}<span className="pm-risk-s"> suggested</span></> : <span className="pm-risk-s">{t.capped ? `No risk · capped from ${TYPE_WORDS[t.capped.from] || t.capped.from}` : 'No risk suggested'}</span>}
         </p>
@@ -421,13 +345,13 @@ export function PMDecisionCard({ p }) {
       {t.near_invalidation ? <p className="pm-alert" data-key={`pm-near-${pid}`} title={t.near_invalidation.words}>{`Near invalidation: a ${t.near_invalidation.distance_pct}% fall reaches ${usd(t.near_invalidation.threshold_usd)}`}</p> : null}
       {(t.invalidation && t.invalidation.checks || []).filter((c) => c.kind === 'metric' && c.status === 'holding' && typeof c.headroom_pct === 'number').map((c) => <p key={`pm-headroom-${c.key}`} className="pm-alert" data-key={`pm-headroom-${pid}`} title={c.words}>{`${c.key} floor headroom: ${c.headroom_pct}% above ${usd(c.threshold_usd)}`}</p>)}
       {t.status === 'invalidated' && t.invalidation ? <p className="pm-alert">{t.invalidation.words}</p> : null}
-      <div className="pm-levels">
+      <div className="iv-rgrid pm-grid">
         <div className="iv-rc">
-          <p className="iv-rc-k">Entry</p>
+          <p className="iv-rc-k">Entry zone</p>
           <p className="iv-rc-v">{t.entry_zone ? `${usd(t.entry_zone.low_usd)}–${usd(t.entry_zone.high_usd)}` : <span className="is-unknown" title="The ticket gives no entry zone">Not given</span>}</p>
         </div>
         <div className="iv-rc">
-          <p className="iv-rc-k">Stop</p>
+          <p className="iv-rc-k">Invalidation</p>
           <p className="iv-rc-v" title={inv.statement || undefined}>{inv.price_usd ? usd(inv.price_usd) : <span className="is-unknown">No price</span>}</p>
           {inv.metric ? <p className="iv-rc-s">{`30d ${inv.metric.key.replace('_', ' ')} < ${usd(inv.metric.below_30d_usd)}`}</p> : null}
         </div>
@@ -435,8 +359,12 @@ export function PMDecisionCard({ p }) {
           <p className="iv-rc-k">Target</p>
           <p className="iv-rc-v" title={t.upside_target ? t.upside_target.basis || undefined : undefined}>{t.upside_target ? usd(t.upside_target.price_usd) : <span className="is-unknown" title="The ticket gives no upside target">Not given</span>}</p>
         </div>
+        <div className="iv-rc">
+          <p className="iv-rc-k">{typeof t.exit_size_usd === 'number' ? `Exit @ $${t.exit_size_usd.toLocaleString('en-US')}` : 'Exit'}</p>
+          <p className={`iv-rc-v ${ex.tone}`} title={ex.title || (t.exit_cost_500_complete === false ? 'A lower bound: part of the cost is unknown' : 'The desk\'s own exit reading')}>{ex.text}</p>
+          {typeof t.exit_limit_pct === 'number' ? <p className="iv-rc-s">{`${t.exit_limit_pct}% limit`}</p> : null}
+        </div>
       </div>
-      <ExitBar t={t} ex={ex} />
       <TradePlan pid={pid} g={t.trade_plan_geometry} />
       <TestMatrix pid={pid} pr={t.prosecution} />
       {(t.exits_missing || []).length ? (
@@ -458,9 +386,9 @@ export function PMDecisionCard({ p }) {
           </p>
         ) : risk > 0 ? (
           <>
-            <HoldButton className="btn btn-sm btn-primary" data-key={`pm-approve-${pid}`} disabled={Boolean(busy) || t.status === 'invalidated' || Boolean(t.integrity && t.integrity.status !== 'ok')} title={`Press and hold to grant ${usd(risk)} of risk (Space or Enter, held)`} label={busy === 'approve' ? 'Approving…' : `Hold to approve ${usd(risk)}`} onConfirm={() => decide('approve')} />
-            <button type="button" className="btn btn-sm pm-textbtn" data-key={`pm-halve-${pid}`} disabled={Boolean(busy) || t.status === 'invalidated' || Boolean(t.integrity && t.integrity.status !== 'ok')} title="The starter tranche" onClick={() => decide('halve')}>{`Halve to ${usd(Math.min(t.starter_risk_usd, risk))}`}</button>
-            <button type="button" className="btn btn-sm btn-danger pm-textbtn" data-key={`pm-veto-${pid}`} disabled={Boolean(busy)} onClick={() => decide('veto')}>Veto / Archive</button>
+            <button type="button" className="btn btn-sm btn-primary" data-key={`pm-approve-${pid}`} disabled={Boolean(busy) || t.status === 'invalidated' || Boolean(t.integrity && t.integrity.status !== 'ok')} title={`Grant ${usd(risk)} of risk`} onClick={() => decide('approve')}>{`Approve Risk (${usd(risk)})`}</button>
+            <button type="button" className="btn btn-sm" data-key={`pm-halve-${pid}`} disabled={Boolean(busy) || t.status === 'invalidated' || Boolean(t.integrity && t.integrity.status !== 'ok')} title="The starter tranche" onClick={() => decide('halve')}>{`Halve Size (${usd(Math.min(t.starter_risk_usd, risk))})`}</button>
+            <button type="button" className="btn btn-sm btn-danger" data-key={`pm-veto-${pid}`} disabled={Boolean(busy)} onClick={() => decide('veto')}>Veto / Archive</button>
           </>
         ) : t.proposal_type === 'TRIM_EXIT' ? (
           <>

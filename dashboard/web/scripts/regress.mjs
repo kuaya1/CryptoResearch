@@ -352,7 +352,7 @@ try {
       await t2.send('Network.setCacheDisabled', { cacheDisabled: true });
       await go(t2, `#/watchlist?p=${P.relay}`, "document.querySelector('.inspector .mpanel')");
       await sleep(1500);
-      const parts = await t2.evalJs("({ verdict: Boolean(document.querySelector('.inspector .mh, .inspector .vblock, .inspector .ig')), rows: Boolean(document.querySelector('.wl-table tbody tr')) })");
+      const parts = await t2.evalJs("({ verdict: Boolean(document.querySelector('.inspector .mh, .inspector .vblock')), rows: Boolean(document.querySelector('.wl-table tbody tr')) })");
       await go(t2, `#/project/${P.relay}/market`, "document.querySelector('.pp-panel .l2-panel')");
       await waitFor(t2, "document.querySelector('.pp-panel .lg-part-error')", 6000);
       Object.assign(parts, await t2.evalJs("({ partError: document.querySelectorAll('.pp-panel .lg-part-error').length, retry: [...document.querySelectorAll('.pp-panel .lg-part-error button')].some((b) => /try again/i.test(b.textContent)), panels: document.querySelectorAll('.pp-panel .l2-panel').length })"));

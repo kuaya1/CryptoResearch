@@ -15,7 +15,44 @@
 @media (min-width: 1600px) { .wl.has-inspector { grid-template-columns: minmax(0, 1fr) var(--inspector-w-wide); } }
 .wl-main { min-width: 0; padding-bottom: 32px; container-type: inline-size; }
 
+/* ---- the hero: the Daily Brief's readiness on a quiet mesh (§2.9) ---- */
+.hero { position: relative; isolation: isolate; overflow: hidden; margin: 4px 24px 0; border-radius: var(--r-tile); background: var(--color-surface-secondary); box-shadow: inset 0 0 0 1px var(--color-border-subtle); }
+/* CSS only: three soft blobs, no image; screen-blended and fainter at night. */
+.hero-mesh {
+  position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  opacity: var(--mesh-opacity); mix-blend-mode: var(--mesh-blend);
+  background:
+    radial-gradient(60% 90% at 8% 0%, var(--mesh-lime) 0%, transparent 70%),
+    radial-gradient(50% 80% at 62% 110%, var(--mesh-butter) 0%, transparent 70%),
+    radial-gradient(45% 75% at 100% 10%, var(--mesh-orchid) 0%, transparent 72%);
+}
+.hero-in { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 24px; align-items: center; padding: 24px; }
+.hero-h { font-family: var(--font-display); font-size: var(--fs-head); font-weight: 600; letter-spacing: var(--track-title); line-height: 28px; }
+.ready { list-style: none; margin: 16px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 12px 28px; }
+.ready-item { display: flex; align-items: center; gap: 12px; min-width: 0; }
+/* A 40px circle: the count, or the area's icon when there is none. */
+.ready-dot { flex: none; display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--color-surface); color: var(--text-2); box-shadow: inset 0 0 0 1px var(--color-border-subtle); }
+.ready-n { font-size: var(--fs-md); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ready-item.is-some .ready-dot { background: var(--caution-soft); color: var(--caution-soft-text); box-shadow: none; }
+.ready-item.is-clear .ready-dot { background: var(--success-soft); color: var(--success-soft-text); box-shadow: none; }
+.ready-item.is-unknown .ready-dot, .ready-item.is-partial .ready-dot { background: var(--color-surface); color: var(--text-3); box-shadow: inset 0 0 0 1px var(--color-border); }
+.ready-text { display: flex; flex-direction: column; min-width: 0; }
+.ready-t { font-size: var(--fs-md); font-weight: 600; line-height: 20px; }
+.ready-w { font-size: var(--fs-sm); line-height: 18px; color: var(--text-2); white-space: nowrap; }
+.hero-cards { display: flex; flex-direction: column; gap: 8px; }
+/* A mini-card: elevation from a stroke; hover tints the pseudo-layer only. */
+.mini { position: relative; isolation: isolate; display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 8px 12px; border: 0; border-radius: var(--r-card); background: var(--color-surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; box-shadow: 0 0 0 1px var(--color-border-subtle); }
+.mini::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: var(--color-surface-hover); opacity: 0; transition: opacity var(--dur) var(--ease); }
+.mini:hover::before { opacity: 1; }
+.mini-ico { flex: none; display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: var(--r-lg); background: var(--color-surface-secondary); color: var(--text-2); }
+.mini-text { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.mini-t { font-size: var(--fs-md); font-weight: 600; line-height: 20px; }
+.mini-s { font-size: var(--fs-sm); line-height: 18px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.mini-go { flex: none; color: var(--text-3); transition: transform var(--dur) var(--cubic-enter); }
+.mini:hover .mini-go { transform: translateX(2px); }
+
 /* A section's head on the Desk: 16px, its count beside it. */
+.desk-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px 24px 10px; }
 .sec-h { display: flex; align-items: baseline; gap: 8px; font-size: var(--fs-lg); font-weight: 600; line-height: 24px; }
 .sec-count { font-size: var(--fs-sm); font-weight: 500; color: var(--text-3); font-variant-numeric: tabular-nums; }
 
@@ -87,6 +124,38 @@
 @container (max-width: 980px) {
   .kpi-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .kpi-cell:last-child { grid-column: span 2; }
+  .hero-in { grid-template-columns: minmax(0, 1fr); }
+  .hero-cards { flex-direction: row; flex-wrap: wrap; }
+  .hero-cards .mini { flex: 1 1 220px; width: auto; }
+}
+
+/* ---- PM decisions: a grid of 16px cards, elevation from a stroke ---- */
+.dgrid-wrap { margin: 24px 24px 0; }
+.dgrid-wrap .sec-h { margin-bottom: 10px; }
+.dgrid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(273px, 1fr)); grid-auto-rows: 1fr; gap: 16px; }
+.dgrid-none { font-size: var(--fs-md); color: var(--text-2); }
+.dcard { position: relative; isolation: isolate; display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 16px; border-radius: var(--r-tile); background: var(--color-surface); }
+.dcard::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--color-border); pointer-events: none; transition: box-shadow var(--dur) var(--ease); }
+.dcard:hover::before, .dcard:focus-within::before { box-shadow: inset 0 0 0 1px var(--color-border-strong), var(--shadow-100); }
+.dcard-top { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.dcard-tile { flex: none; display: inline-grid; place-items: center; width: 48px; height: 48px; border-radius: var(--r-card); background: var(--color-surface-secondary); }
+.dcard-id { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.dcard-sym { font-size: var(--fs-md); font-weight: 600; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dcard-name { font-size: var(--fs-sm); line-height: 18px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dcard-thesis { font-size: var(--fs-md); line-height: 20px; min-height: 40px; color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.dcard-thesis.is-none { color: var(--text-3); }
+.dcard-why { font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); }
+.dcard-figs { display: flex; align-items: flex-end; gap: 24px; margin-top: auto; }
+.dcard-fig { display: flex; flex-direction: column; min-width: 0; }
+.dcard-k { font-size: var(--fs-xs); line-height: 18px; color: var(--text-2); white-space: nowrap; }
+.dcard-v { font-size: var(--fs-metric); line-height: var(--lh-metric); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dcard-st { margin-left: auto; align-self: center; }
+/* The two ways in: over the card on hover and focus, under it on touch. The
+   overlay fades in place; nothing beneath moves. */
+.dcard-over { position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; padding: 16px; border-radius: inherit; background: var(--backdrop-fade); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); opacity: 0; transition: opacity var(--dur) var(--ease); }
+.dcard:hover .dcard-over, .dcard:focus-within .dcard-over { opacity: 1; }
+@media (hover: none) {
+  .dcard-over { position: static; opacity: 1; padding: 0; justify-content: flex-start; background: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
 
 /* What needs action: always in view, in words (never a count alone). */
@@ -363,6 +432,14 @@ button.gp:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--t-fill, var(--t
   .kpi-k { font-size: var(--fs-sm); }
   .kpi-cell[data-key="kpi-total"] { display: none; }
   .action-band { margin: 8px 12px 0; }
+  .hero { margin: 4px 12px 0; }
+  .hero-in { padding: 16px; gap: 12px; }
+  .hero-h { font-size: var(--fs-lg); line-height: 24px; }
+  .ready { margin-top: 12px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .ready-item { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .ready-w { white-space: normal; }
+  .hero-cards .mini { flex-basis: 100%; }
+  .desk-bar { margin: 16px 12px 8px; }
   .rb { grid-template-columns: auto minmax(0, 1fr); padding: 10px 12px; }
   .rb-track { grid-column: 1 / -1; }
   .rb-words { grid-column: 1 / -1; }
