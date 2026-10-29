@@ -224,7 +224,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // wait. The keyless public API allows only a few calls a minute, so a short
 // wait (Retry-After up to maxWaitMs) is sat out once; a longer one fails at
 // once with the time to try again, instead of asking a busy provider again.
-async function cgGet(ws, pathAndQuery, fetchImpl, { retries = 1, maxWaitMs = 20000 } = {}) {
+// A bounded caller (the scout leads turn, core/leads.js) passes `turn`: each
+// request then takes one of its requests before it is sent, its signal ends
+// with the turn, and its body is read bounded; without it nothing changes.
+async function cgGet(ws, pathAndQuery, fetchImpl, { retries = 1, maxWaitMs = 20000, turn = null } = {}) {
   const market = require('./market');
   const md = ws.settings.market_data;
   const base = process.env.CR_MARKET_API_BASE || md.api_base;
@@ -242,6 +245,8 @@ async function cgGet(ws, pathAndQuery, fetchImpl, { retries = 1, maxWaitMs = 200
       await sleep(gate.wait_ms + 25);
       continue; // checked again: another caller may have made the wait longer
     }
+    // A bounded turn's request first, so nothing is counted that is not sent.
+    if (turn && !turn.take()) throw new OpError('TURN_SPENT', 'The turn ran out of requests or time before CoinGecko was asked.');
     // Checked and counted in one step (market.reserveCall), before it is sent.
     if (!market.reserveCall(ws)) {
       const budget = market.callBudget(ws, market.readStatus(ws));
@@ -249,8 +254,9 @@ async function cgGet(ws, pathAndQuery, fetchImpl, { retries = 1, maxWaitMs = 200
     }
     sent++;
     let res;
+    const perCall = (md.timeout_seconds || 20) * 1000;
     try {
-      res = await fetchImpl(`${base}${pathAndQuery}`, { headers, signal: AbortSignal.timeout((md.timeout_seconds || 20) * 1000) });
+      res = await fetchImpl(`${base}${pathAndQuery}`, { headers, signal: turn ? turn.signalFor(perCall) : AbortSignal.timeout(perCall) });
     } catch (err) {
       throw new OpError('LOOKUP_FAILED', err.name === 'TimeoutError' || err.name === 'AbortError' ? 'CoinGecko did not answer in time. Try again in a minute.' : `CoinGecko could not be reached (${err.message}).`);
     }
@@ -264,7 +270,7 @@ async function cgGet(ws, pathAndQuery, fetchImpl, { retries = 1, maxWaitMs = 200
     if (!res.ok) throw new OpError('LOOKUP_FAILED', `CoinGecko answered HTTP ${res.status}.`);
     let body;
     try {
-      body = await res.json();
+      body = turn ? JSON.parse(await turn.readBody(res, 2 * 1024 * 1024)) : await res.json();
     } catch (_) {
       throw new OpError('LOOKUP_FAILED', 'CoinGecko answered with unreadable data.');
     }
