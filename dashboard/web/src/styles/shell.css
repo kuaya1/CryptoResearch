@@ -10,7 +10,7 @@
   grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
   min-height: 100vh;
   min-height: 100dvh;
-  background: var(--bg);
+  background: var(--canvas-bg);
   transition: grid-template-columns var(--dur-move) var(--cubic-move);
 }
 .app.rail-collapsed { grid-template-columns: var(--rail-w) minmax(0, 1fr); }
@@ -21,8 +21,8 @@
   flex: 1 1 auto;
   min-width: 0;
   background: var(--color-surface);
-  border-radius: var(--r-card);
-  box-shadow: 0 0 0 1px var(--color-border-subtle);
+  border-radius: var(--r-panel);
+  box-shadow: 0 0 0 1px var(--color-border-subtle), var(--shadow-panel);
   padding: 24px 24px 0;
   min-height: calc(100vh - 16px);
   min-height: calc(100dvh - 16px);
