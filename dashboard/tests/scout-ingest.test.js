@@ -187,7 +187,7 @@ test('scout ingest: only the ingest key, never a browser; not set up without a k
   assert.equal(S.view(d.ws).briefs, 1);
 });
 
-test('scout ingest: ten refused keys in 15 minutes lock the key check and the brief, the right key included', async (t) => {
+test('scout ingest: the right key is never locked out; ten refused keys in 15 minutes lock only refusals, and a refusal while locked is not counted again', async (t) => {
   let clock = T0;
   const w = temp(t, 'scout-lock');
   const env = { DESK_INGEST_KEY: KEY };
@@ -197,15 +197,33 @@ test('scout ingest: ten refused keys in 15 minutes lock the key check and the br
     const reqLike = { method, headers, on() {}, pause() {} };
     route(reqLike, res, new URL(`https://${HOST}${p}`));
   });
-  for (let i = 0; i < 10; i += 1) assert.equal((await call('GET', S.BRIEF_PATH, { authorization: 'Bearer nope-not-the-key-0123456789abcdefgh' })).status, 401);
-  let r = await call('GET', S.BRIEF_PATH, { authorization: `Bearer ${KEY}` });
+  const wrong = { authorization: 'Bearer nope-not-the-key-0123456789abcdefgh' };
+  for (let i = 0; i < 10; i += 1) assert.equal((await call('GET', S.BRIEF_PATH, wrong)).status, 401);
+  // Locked for refusals: an eleventh wrong key is 429, a wrong POST closes.
+  let r = await call('GET', S.BRIEF_PATH, wrong);
   assert.equal(r.status, 429);
   assert.equal(JSON.parse(r.body).code, 'LOCKED');
-  r = await call('POST', S.BRIEF_PATH, { authorization: `Bearer ${KEY}`, 'content-type': 'application/json' });
+  r = await call('POST', S.BRIEF_PATH, { ...wrong, 'content-type': 'application/json' });
   assert.equal(r.status, 429);
   assert.equal(r.headers.Connection, 'close');
-  clock += 16 * 60000;
-  assert.equal((await call('GET', S.BRIEF_PATH, { authorization: `Bearer ${KEY}` })).status, 200, 'the lock ends after 15 minutes');
+  // The right key still goes through, on the key check and on a delivery.
+  r = await call('GET', S.BRIEF_PATH, { authorization: `Bearer ${KEY}` });
+  assert.equal(r.status, 200, 'the right key is never locked out');
+  assert.equal(JSON.parse(r.body).key, 'accepted');
+  r = await call('POST', S.BRIEF_PATH, { authorization: `Bearer ${KEY}`, 'content-type': 'text/plain' });
+  assert.equal(r.status, 415, 'a delivery with the right key gets the brief\'s usual answer, not LOCKED');
+  // Refusals while locked are not counted: the lock ends 15 minutes after the tenth.
+  clock += 14 * 60000;
+  assert.equal((await call('GET', S.BRIEF_PATH, wrong)).status, 429);
+  clock += 61000;
+  assert.equal((await call('GET', S.BRIEF_PATH, wrong)).status, 401, 'the lock ends 15 minutes after the tenth failure');
+  // A missing key configuration still answers 404 first.
+  const bare = S.makeScoutRoute(w, { env: {}, now: () => clock });
+  const r404 = await new Promise((resolve) => {
+    const res = { status: null, writeHead(s) { this.status = s; }, end() { resolve(this); } };
+    bare({ method: 'GET', headers: wrong, on() {}, pause() {} }, res, new URL(`https://${HOST}${S.BRIEF_PATH}`));
+  });
+  assert.equal(r404.status, 404);
 });
 
 test('scout ingest: a brief is checked field by field; one bad field refuses it and nothing is saved', (t) => {
