@@ -398,7 +398,8 @@ function readBounded(req, max) {
 // The one path the front door serves before sign-in, online only:
 // /api/ingest/scout-brief. GET checks the key and today's count, costing
 // nothing; POST delivers the brief. Both need the ingest key, never from a
-// browser; ten refused keys in 15 minutes lock both. /api/ingest/ping is the
+// browser; ten refused keys in 15 minutes lock refusals on both (the right
+// key still goes through). /api/ingest/ping is the
 // desk's signed-in ping (backlog item 66), not this route.
 function makeScoutRoute(ws, { env = process.env, log = () => {}, now = () => Date.now() } = {}) {
   const failures = [];
@@ -418,15 +419,19 @@ function makeScoutRoute(ws, { env = process.env, log = () => {}, now = () => Dat
   const NOT_SET_UP = () => ({ error: `Scout ingest is not set up on this desk: ${keyProblem(env)}.`, code: 'NOT_SET_UP' });
   const LOCKED = { error: 'Too many refused ingest keys; try again in 15 minutes.', code: 'LOCKED' };
   const REFUSED = { error: 'The ingest key was refused.', code: 'REFUSED' };
-  // True when it has answered (not set up, locked or refused).
+  // True when it has answered (not set up, locked or refused). The key is
+  // tested first, so the right key is never locked out (intake plan rev. 2,
+  // PR 1): the lock throttles refusals only, and a refusal while locked is
+  // not counted again, so it ends 15 minutes after the tenth failure.
   const refused = (req, res, key, what) => {
     if (!key) send(req, res, 404, NOT_SET_UP());
+    else if (accepted(req, key)) return false;
     else if (locked()) send(req, res, 429, LOCKED);
-    else if (!accepted(req, key)) {
+    else {
       failures.push(now());
       log(`Scout ${what} refused: wrong or missing ingest key.`);
       send(req, res, 401, REFUSED);
-    } else return false;
+    }
     return true;
   };
   return async function handle(req, res, url) {
