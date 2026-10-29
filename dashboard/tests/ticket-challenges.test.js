@@ -424,3 +424,66 @@ test('ticket_failed: a refused Prosecutor save names the refused field in the qu
   assert.equal(T.saveTicket(w.ws, { project_id: pid, ticket_id: tk.ticket_id, text: prosecution(tk) }).status, 'saved');
   assert.equal(T.nextStep(w.ws, pid).step, 'pm_review');
 });
+
+// Audit F4 (audits/2026-10-29-intake-dialectic/POST_IMPLEMENTATION_AUDIT.md):
+// what the card shows is pinned and derived from the verified text, so an
+// altered receipt JSON is never shown, even with its pin rewritten to match.
+test('a receipt JSON altered in its verdict, tests, count or reason shows no verdict, its pin rewritten or not; reading writes nothing', (t) => {
+  const s = desk(t);
+  const { job, target } = start(s);
+  const saved = C.saveChallenge(s.ws, { project_id: s.pid, challenge_id: job.challenge_id, text: challengeText(job, target) });
+  const crid = saved.challenge_receipt_id;
+  const rel = s.ws.abs(`projects/${s.pid}/tickets/challenge-receipts/${crid}.json`);
+  const jobRel = s.ws.abs(`projects/${s.pid}/tickets/challenges/${job.challenge_id}/challenge.json`);
+  const original = fs.readFileSync(rel, 'utf8');
+  const originalJob = fs.readFileSync(jobRel, 'utf8');
+  assert.equal(JSON.parse(originalJob).job.receipt_sha256[crid], sha256(original), 'the receipt\'s bytes are pinned in its job by the save');
+  assert.equal(C.rowFor(s.ws, s.pid, s.rid).verdict, 'material_objection');
+  const edits = {
+    verdict: (r) => { r.challenge_verdict = 'concur'; },
+    tests: (r) => { r.tests.exit_slippage.assessment = 'agree'; },
+    assessed: (r) => { r.assessed = 2; },
+    reason: (r) => { r.verdict_reason = 'A reason never in the saved answer (FICTIONAL).'; },
+  };
+  for (const [name, edit] of Object.entries(edits)) {
+    for (const repin of [false, true]) {
+      const r = JSON.parse(original);
+      edit(r);
+      const text = jsonText(r);
+      fs.writeFileSync(rel, text);
+      if (repin) {
+        const j = JSON.parse(originalJob);
+        j.job.receipt_sha256[crid] = sha256(text);
+        fs.writeFileSync(jobRel, jsonText(j));
+      }
+      const before = hashTree(s.root);
+      const row = C.rowFor(s.ws, s.pid, s.rid);
+      const view = C.challengesView(s.ws, s.pid);
+      assert.deepEqual(hashTree(s.root), before, `${name}: reading writes nothing`);
+      for (const x of [row, view.row]) {
+        assert.equal(x.state, 'integrity', `${name}${repin ? ' (pin rewritten)' : ''}`);
+        assert.equal(x.verdict, null);
+        assert.equal(x.tests, null);
+      }
+      assert.equal(view.challenges[0].holds, false);
+      assert.equal(view.challenges[0].verdict, undefined);
+      fs.writeFileSync(rel, original);
+      fs.writeFileSync(jobRel, originalJob);
+    }
+  }
+  assert.equal(fs.readFileSync(rel, 'utf8'), original, 'nothing rewrote the receipt');
+  assert.equal(C.rowFor(s.ws, s.pid, s.rid).state, 'saved', 'restored, it holds again');
+  // A receipt with no pin in its job is not shown.
+  const j = JSON.parse(originalJob);
+  delete j.job.receipt_sha256;
+  fs.writeFileSync(jobRel, jsonText(j));
+  assert.equal(C.rowFor(s.ws, s.pid, s.rid).state, 'integrity');
+  fs.writeFileSync(jobRel, originalJob);
+  // The same text again is refused while its saved record does not hold.
+  const r = JSON.parse(original);
+  r.challenge_verdict = 'concur';
+  fs.writeFileSync(rel, jsonText(r));
+  const before = hashTree(s.root);
+  assert.throws(() => C.saveChallenge(s.ws, { project_id: s.pid, challenge_id: job.challenge_id, text: challengeText(job, target) }), (e) => e.code === 'INTEGRITY');
+  assert.deepEqual(hashTree(s.root), before);
+});

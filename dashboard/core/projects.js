@@ -17,6 +17,13 @@ function appliedFor(ws, idem) {
   }
   return prior.result ? prior : null;
 }
+// A keyed reuse writes one record of the choice it made (audit F1): runOp
+// keeps a key only for an operation that writes something, and linking an
+// existing project or run otherwise writes nothing. Create-only.
+function stageResolution(op, idem, result) {
+  const safe = String(idem.key).replace(/[^A-Za-z0-9_.#:-]/g, '_').replace(/[#:]/g, '--').slice(0, 160);
+  op.writeJson(`logs/resolutions/${safe}.json`, { schema_version: 'cr.effect-resolution.v1', key: idem.key, payload_sha256: idem.payload_sha256 || null, resolved_at: new Date().toISOString(), ...result }, { mode: 'create' });
+}
 const { readJson, listDir, exists } = require('./fsx');
 const { slugify, isProjectId, isRecordId } = require('./ids');
 const { stageProjectPrompts } = require('./prompts');
@@ -282,12 +289,18 @@ function validateProject(ws, project) {
 }
 
 // The optional third argument, { idempotency: { key, payload_sha256 } }, keys
-// the create (a scout admission's effect, leads.js): a replay under the same
-// key returns the project it made, a different payload under it is
-// IDEMPOTENCY_CONFLICT. Without it, nothing changes.
+// the project (a scout admission's effect, leads.js): whether it creates one
+// or links the project already in the records, the choice is recorded under
+// the key in the lock, so a replay returns the same project (audit F1); a
+// different payload under it is IDEMPOTENCY_CONFLICT. Without it, nothing
+// changes.
+const keyedProject = (result, out) => (result.basis === 'existing'
+  ? { status: 'exists', project_id: result.project_id, matched_on: result.matched_on || [], replayed: Boolean(out.replayed), message: out.replayed ? `Already linked to "${result.project_id}" by this request.` : `Already in the workspace as "${result.project_id}". No duplicate was created.`, files: out.files || [], verified: out.verified !== false, op_id: out.op_id || null }
+  : { status: 'created', project_id: result.project_id, replayed: true, message: `Already created as "${result.project_id}" by this request.`, files: [], verified: true, op_id: out.op_id || null });
 function addProject(ws, input, { idempotency = null } = {}) {
   const prior = appliedFor(ws, idempotency);
-  if (prior) return { status: 'created', project_id: prior.result.project_id, replayed: true, message: `Already created as "${prior.result.project_id}" by this request.`, files: [], verified: true, op_id: prior.op_id };
+  if (prior) return keyedProject(prior.result, { replayed: true, op_id: prior.op_id });
+  const keyed = Boolean(idempotency && idempotency.key);
   const name = String(input.name || '').trim();
   if (!name) throw new OpError('INVALID', 'A project name is required.');
   refuseAggregatorName(name);
@@ -325,6 +338,16 @@ function addProject(ws, input, { idempotency = null } = {}) {
     }
     let watchlist = null;
     if (input.watchlist !== false) watchlist = setWatchlist(ws, existing.project_id, true);
+    if (keyed) {
+      // The match is read again in the lock and the link recorded under the key.
+      const out = runOp(ws, { type: 'add_project_link', summary: `Link project ${existing.project_id}`, ...keyOf(idempotency) }, (op) => {
+        const again = findDuplicates(ws, input).strong[0];
+        if (!again || again.project_id !== existing.project_id || again.status === 'archived') throw new OpError('CHANGED', `The project this matched (${existing.project_id}) changed while it was being linked. Nothing was written; try again.`);
+        stageResolution(op, idempotency, { basis: 'existing', project_id: existing.project_id, matched_on: existing.reasons });
+        return { project_id: existing.project_id, basis: 'existing', matched_on: existing.reasons };
+      });
+      if (out.replayed) return keyedProject(out.result, out);
+    }
     return {
       status: 'exists',
       project_id: existing.project_id,
@@ -381,11 +404,15 @@ function addProject(ws, input, { idempotency = null } = {}) {
   };
   validateProject(ws, project);
   const out = runOp(ws, { type: 'add_project', summary: `Add project ${id}`, ...keyOf(idempotency) }, (op) => {
+    // Keyed, a project with this identity added meanwhile is never doubled:
+    // nothing is written, and the next try links it.
+    if (keyed && findDuplicates(ws, input).strong.length) throw new OpError('CHANGED', `A project matching ${name} was added while this one was being created. Nothing was written; try again.`);
     op.writeJson(`projects/${id}/project.json`, project, { mode: 'create' });
     op.writeJson(`projects/${id}/events.json`, { schema_version: 'cr.events.v1', events: [] }, { mode: 'create' });
     if (input.generate_prompts !== false) stageProjectPrompts(ws, op, project);
-    return { project_id: id };
+    return { project_id: id, basis: 'created' };
   });
+  if (keyed && out.replayed) return keyedProject(out.result, out);
   return {
     status: 'created',
     project_id: id,
@@ -692,6 +719,7 @@ function generatePrompts(ws, id, providers = PROVIDERS) {
 module.exports = {
   keyOf,
   appliedFor,
+  stageResolution,
   coreName,
   domainOf,
   isNonOfficialHost,

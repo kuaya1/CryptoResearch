@@ -25,6 +25,7 @@
 const fs = require('fs');
 const { runOp, OpError } = require('./ops');
 const { readJson, listDir, sha256, jsonText } = require('./fsx');
+const { stableStringify } = require('./requests');
 const { compactTs, randomId, isProjectId } = require('./ids');
 
 const PROMPT_VERSION = 'cr-ticket-challenge-prompt@1';
@@ -377,6 +378,7 @@ function saveChallenge(ws, { project_id: pid, challenge_id: cid, text, revision 
   const textHash = normalizedTextHash(body);
   const prior = () => listChallengeReceipts(ws, pid).filter((r) => !r.broken && r.challenge_id === cid);
   const same = prior().find((r) => r.text && r.text.normalized_sha256 === textHash);
+  if (same && !receiptHolds(ws, pid, same)) throw new OpError('INTEGRITY', `Not saved: ${same.challenge_receipt_id}, saved with this text, no longer matches its record. Nothing was written.`);
   if (same) return { status: 'unchanged', challenge_receipt_id: same.challenge_receipt_id, receipt: same, verified: true, message: `This exact challenge is already saved as ${same.challenge_receipt_id}.` };
   const last = prior().pop() || null;
   let rev = null;
@@ -390,6 +392,7 @@ function saveChallenge(ws, { project_id: pid, challenge_id: cid, text, revision 
   let receipt = null;
   const out = runOp(ws, { type: 'ticket_challenge_receipt', summary: `ChatGPT challenge of ${target.receipt.receipt_id}` }, (op) => {
     const again = prior().find((r) => r.text && r.text.normalized_sha256 === textHash);
+    if (again && !receiptHolds(ws, pid, again)) throw new OpError('INTEGRITY', `Not saved: ${again.challenge_receipt_id}, saved with this text, no longer matches its record. Nothing was written.`);
     if (again) return { replay: again };
     const j = op.readJson(jobRel(pid, cid), null);
     if (!j) throw new OpError('NOT_FOUND', `No challenge ${cid} for ${pid}.`);
@@ -422,9 +425,12 @@ function saveChallenge(ws, { project_id: pid, challenge_id: cid, text, revision 
       verdict_reason: c.verdict_reason,
       sources: c.sources,
     };
+    // The receipt's exact bytes are pinned in its job in the same save, and
+    // every read checks them (audit F4).
+    const receiptText = jsonText(receipt);
     op.write(receipt.text.path, body, { mode: 'create' });
-    op.writeJson(creceiptRel(pid, crid), receipt, { mode: 'create' });
-    Object.assign(j.job, { state: 'saved', receipt_id: crid, receipts: [...(j.job.receipts || []), crid], last_refusal: null, saved_at: j.job.saved_at || savedAt, updated_at: savedAt });
+    op.write(creceiptRel(pid, crid), receiptText, { mode: 'create' });
+    Object.assign(j.job, { state: 'saved', receipt_id: crid, receipts: [...(j.job.receipts || []), crid], receipt_sha256: { ...(j.job.receipt_sha256 || {}), [crid]: sha256(receiptText) }, last_refusal: null, saved_at: j.job.saved_at || savedAt, updated_at: savedAt });
     op.writeJson(jobRel(pid, cid), j);
     return { challenge_receipt_id: crid };
   });
@@ -443,17 +449,32 @@ function saveChallenge(ws, { project_id: pid, challenge_id: cid, text, revision 
 // ---------------------------------------------------------------------------
 // Reading: the card's row and the GET route
 
-// Does a saved challenge still answer the ticket receipt on disk? Its text is
-// hashed against its record, its target against the job's pin, and the
-// target's receipt against the receipt's bytes now. Reads only.
+// What a challenge says, as shown: every field the card or the route draws.
+const projectionOf = (x, modelVersion) => stableStringify({ tests: x.tests, assessed: x.assessed, trade_plan_critique: x.trade_plan_critique, challenge_verdict: x.challenge_verdict, verdict_reason: x.verdict_reason, sources: x.sources, model_version: modelVersion });
+
+// Does a saved challenge still answer the ticket receipt on disk, and say
+// what its saved text says? The receipt's bytes are checked against the pin
+// its job took when it was saved (a receipt with no pin is not shown), its
+// text against its record, its target against the job's pin and the ticket
+// receipt's bytes now; and what is shown (verdict, tests, counts, reasons,
+// sources) must be what the verified text's own block gives when it is
+// checked again (audit F4). Reads only; nothing is ever rewritten here.
 function receiptHolds(ws, pid, cr) {
   try {
-    const md = readText(ws, cr.text && cr.text.path);
-    if (md === null || sha256(md) !== cr.text.sha256) return false;
     const job = loadJob(ws, pid, cr.challenge_id);
     if (!job || job.target_sha256 !== cr.target_sha256) return false;
+    const pin = job.job && job.job.receipt_sha256 && job.job.receipt_sha256[cr.challenge_receipt_id];
+    if (!pin || fileSha(ws, creceiptRel(pid, cr.challenge_receipt_id)) !== pin) return false;
+    const md = readText(ws, cr.text && cr.text.path);
+    if (md === null || sha256(md) !== cr.text.sha256) return false;
     const target = verifyTarget(ws, job);
-    return target.receipt.receipt_id === cr.receipt_id && target.receipt.sha256 === cr.target.receipt_sha256;
+    if (target.receipt.receipt_id !== cr.receipt_id || target.receipt.sha256 !== cr.target.receipt_sha256) return false;
+    const found = require('./forensics').findBlock(md, FORMAT);
+    if (!found.obj || sha256(JSON.stringify(found.obj)) !== cr.block_sha256) return false;
+    const expect = { format: FORMAT, challenge_id: cr.challenge_id, project_id: pid, receipt_id: target.receipt.receipt_id, receipt_sha256: target.receipt.sha256, prompt_version: PROMPT_VERSION, role: 'challenger', model: 'chatgpt' };
+    const checked = checkBlock(found.obj, expect);
+    if (checked.errors.length) return false;
+    return projectionOf(checked.content, checked.content.model_version) === projectionOf(cr, cr.model ? cr.model.model_version : undefined);
   } catch (_) {
     return false;
   }

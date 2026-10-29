@@ -78,6 +78,8 @@ node_modules/
 !/audits/2026-10-29-intake-dialectic/README.md
 !/audits/2026-10-29-intake-dialectic/PLAN.md
 !/audits/2026-10-29-intake-dialectic/AUDIT-RESPONSE.md
+!/audits/2026-10-29-intake-dialectic/POST_IMPLEMENTATION_AUDIT.md
+!/audits/2026-10-29-intake-dialectic/FIXES.md
 !/audits/2026-10-28-approve-wiring/PLAN.md
 !/audits/2026-10-28-codex-audit-response/README.md
 !/audits/2026-10-28-codex-audit-response/repro.js

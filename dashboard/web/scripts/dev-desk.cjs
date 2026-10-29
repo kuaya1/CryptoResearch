@@ -7,7 +7,8 @@
 // and a very long name with hostile text) plus a fuller watchlist: graded
 // projects across the 0-100 spectrum, research working, failed and waiting,
 // a project you stopped watching, an archived one, a holding, contract
-// screens, a market snapshot and generated FICTIONAL logos.
+// screens, a market snapshot, generated FICTIONAL logos, scout leads in each
+// admission state and two Prosecutor tickets with a ChatGPT challenge.
 //
 // Nothing leaves this PC: research runners, prices, DefiLlama, GoPlus,
 // wallets and the trader's hourly read (GeckoTerminal, also once you fund the
@@ -186,6 +187,8 @@ function contractFor(symbol) {
   const settingsFile = ws.abs('config/settings.json');
   const s = readJson(settingsFile);
   s.research = { ...(s.research || {}), providers: {}, default_providers: ['claude', 'chatgpt', 'gemini'], on_hold: { gemini: { since: '2026-10-04', reason: 'FICTIONAL hold' } } };
+  // A FICTIONAL lead policy, so Review > Imports > Scout leads has rows.
+  s.leads = { enabled: true, chains: ['8453', 'solana'], min_market_cap_usd: 1000000, min_volume_24h_usd: 100000, max_sell_tax_pct: 5, eligibility_hours: 24 };
   atomicWrite(settingsFile, jsonText(s));
   ws.reloadSettings && ws.reloadSettings();
 
@@ -466,6 +469,106 @@ function contractFor(symbol) {
     ]);
   }
 
+  // FICTIONAL scout leads, read by the real eligibility turn over a fake fetch
+  // (nothing is sent): one confirmed and complete, one whose project add
+  // failed (Complete), one whose Claude route moved to an API after the
+  // confirm (Request research), two eligible to confirm, and a Solana lead
+  // with a transfer hook and a scheduled fee (Needs review).
+  {
+    const L = require(`${ROOT}/core/leads.js`);
+    const LF = require(`${ROOT}/tests/leads-fixtures.js`);
+    const named = { 701: ['Cinder Bridge (FICTIONAL)', 'xcdr'], 702: ['Marlin Vaults (FICTIONAL)', 'xmrl'], 703: ['Osprey Index (FICTIONAL)', 'xosp'], 704: ['Wren Lending (FICTIONAL)', 'xwrn'], 705: ['Juniper Markets (FICTIONAL)', 'xjnp'] };
+    const evm = Object.fromEntries(Object.entries(named).map(([n, [name, symbol]]) => [LF.EVM(n), LF.coin(LF.EVM(n), { name, symbol })]));
+    const SOL = `TmrkPay${'z'.repeat(28)}7Q`;
+    const solCoin = { id: 'tamarack-pay-fictional', name: 'Tamarack Pay (FICTIONAL)', symbol: 'xtmk', links: { homepage: ['https://tamarack-pay.example/'] }, market_data: { market_cap: { usd: 7200000 }, total_volume: { usd: 510000 } }, detail_platforms: { solana: { contract_address: SOL, decimal_place: 6 } } };
+    const solScreen = { mintable: { status: '0' }, freezable: { status: '0' }, closable: { status: '0' }, balance_mutable_authority: { status: '0' }, metadata_mutable: { status: '0' }, transfer_hook_upgradable: { status: '0' }, transfer_fee_upgradable: { status: '0' }, non_transferable: '0', transfer_hook: ['FictionaHookProgram1111111111111111111'], transfer_fee: { current_fee_rate: { fee_rate: '0' }, scheduled_fee_rate: [{ epoch: '812', fee_rate: '0.03' }] } };
+    const fetchImpl = LF.fake({
+      cg: evm,
+      gp: Object.fromEntries(Object.keys(evm).map((a) => [a, LF.CLEAN])),
+      onCall: (url) => {
+        if (/\/coins\/solana\/contract\//.test(url)) return LF.reply(200, solCoin);
+        if (/\/solana\/token_security/.test(url)) return LF.reply(200, { code: 1, message: 'OK', result: { [SOL]: solScreen } });
+        if (/\/api\/v1\/token\b/.test(url)) return LF.reply(200, { code: 1, message: 'OK', result: { access_token: 'FICTIONAL', expires_in: 3600 } });
+        return null;
+      },
+    });
+    const keys = LF.deliver(ws, [...Object.keys(evm).map((contract) => ({ contract })), { chain: 'solana', contract: SOL }]);
+    for (let i = 0; i < 2; i++) await L.refresh(ws, { fetchImpl, trigger: 'dev' });
+    const [kA, kB, kC] = keys;
+    const v = L.reviewView(ws);
+    const expect = (k) => {
+      const r = v.rows.find((x) => x.lead_key === k);
+      return { policy: { version: v.policy.version, sha256: v.policy.sha256 }, envelope: v.envelope, rows: [{ lead_key: k, eligibility_receipt_id: r.eligibility_receipt_id, eligibility_sha256: r.eligibility_sha256, identity_revision: r.identity_revision, asset_revision: r.asset_revision }] };
+    };
+    const confirmOne = (k) => L.confirmLeads(ws, { request_id: `req_dev_${k.slice(-8)}`, expect: expect(k) }).admissions[0];
+    confirmOne(kA);
+    const addProject = projects.addProject;
+    projects.addProject = (w, input, opts) => {
+      if (input.name === named[702][0]) throw Object.assign(new Error('FICTIONAL: the project could not be added this time.'), { code: 'CONFLICT' });
+      return addProject(w, input, opts);
+    };
+    confirmOne(kB);
+    projects.addProject = addProject;
+    const createRun = research.createRun;
+    research.createRun = () => { throw new Error('FICTIONAL: the run was not created this time.'); };
+    const c = confirmOne(kC);
+    research.createRun = createRun;
+    const keep = ws.settings;
+    ws.settings = { ...keep, research: { ...keep.research, providers: { ...(keep.research.providers || {}), claude: { mock: 'ok' } } } };
+    L.completeAdmission(ws, c.admission_id);
+    ws.settings = keep;
+    const states = L.reviewView(ws).rows.map((r) => `${r.state}${r.admission ? `/${r.admission.state}` : ''}`).sort().join(' ');
+    if (states !== 'ADMITTED/complete ADMITTED/failed ADMITTED/needs_consent ELIGIBLE ELIGIBLE NEEDS_REVIEW') throw new Error(`dev desk leads not as planned: ${states}`);
+  }
+
+  // Prosecutor tickets with a saved ChatGPT challenge each (the challenge row
+  // on the PM card): Northwind's holds; Atlas's receipt was altered after it
+  // was saved, so it is not shown.
+  {
+    const T = require(`${ROOT}/core/tickets.js`);
+    const C = require(`${ROOT}/core/ticket-challenges.js`);
+    const at = new Date().toISOString();
+    const four = (x) => Number(x.toPrecision(4));
+    for (const [key, price, tamper] of [['northwind', 0.4127, false], ['atlas', 7.21, true]]) {
+      const pid = pids[key];
+      const tk = T.createTicket(ws, { project_id: pid, assistant: true }).ticket;
+      const b = {
+        format: T.FORMAT, ticket_id: tk.ticket_id, project_id: pid, prompt_version: T.PROMPT_VERSION, role: 'prosecutor', model: 'claude', model_version: 'claude-fictional', as_of: at,
+        researcher_report_id: tk.basis.researcher.report_id, researcher_report_sha256: tk.basis.researcher.original.sha256,
+        prosecution: {
+          verdict: 'thesis_damaged', conviction_score: 41,
+          tests: { mercenary_emissions: { result: 'fail', finding: 'FICTIONAL: rewards exceed fees.', source_ids: ['S1'] }, tax_revenue: { result: 'pass', finding: '' }, exit_slippage: { result: 'unknown', finding: 'FICTIONAL: no reading.' }, unverified_claims: { result: 'fail', finding: 'FICTIONAL: partner list unsourced.' } },
+          fatal_flaws: [], strongest_bull_rebuttal: 'FICTIONAL: emissions taper next quarter.',
+        },
+        proposal: {
+          proposal_type: 'ACCUMULATE',
+          non_consensus_thesis: 'FICTIONAL: the market assumes organic demand; the evidence shows paid activity; the emission cut makes the difference observable.',
+          entry_zone: { low_usd: four(price * 0.92), high_usd: four(price * 0.99), basis: 'FICTIONAL prior range' },
+          upside_target: { price_usd: four(price * 1.5), basis: 'FICTIONAL: fees double' },
+          invalidation_trigger: { price_usd: four(price * 0.8), metric: null, statement: 'FICTIONAL: a close below the range.' },
+        },
+        agent_disagreement_note: 'FICTIONAL.',
+        sources: [{ source_id: 'S1', url: 'https://example.com/fictional/emissions', publisher: 'Example (FICTIONAL)', retrieved_at: at, excerpt: 'fictional' }],
+      };
+      const saved = T.saveTicket(ws, { project_id: pid, ticket_id: tk.ticket_id, text: `# Prosecution (FICTIONAL)\n\n${'The four tests and the flaws, written out for the dev desk. '.repeat(12)}\n\n\`\`\`json\n${JSON.stringify(b, null, 2)}\n\`\`\`\n` });
+      if (saved.status !== 'saved') throw new Error(`dev desk ticket not saved: ${saved.message}`);
+      const out = C.startChallenge(ws, { project_id: pid });
+      const tests = Object.fromEntries(['mercenary_emissions', 'tax_revenue', 'exit_slippage', 'unverified_claims'].map((k) => [k, { assessment: 'agree', reason: `FICTIONAL reason for ${k}.`, source_ids: ['X1'] }]));
+      tests.exit_slippage = { assessment: 'disagree', reason: 'FICTIONAL: the exit reading is a lower bound.', source_ids: ['X1'] };
+      const cb = {
+        format: C.FORMAT, challenge_id: out.challenge_id, project_id: pid, receipt_id: out.receipt_id, receipt_sha256: out.target.receipt_sha256, prompt_version: C.PROMPT_VERSION, role: 'challenger', model: 'chatgpt', model_version: 'gpt-fictional', as_of: at,
+        tests, trade_plan_critique: 'FICTIONAL: the entry zone sits above the last range.', challenge_verdict: 'material_objection', verdict_reason: 'FICTIONAL: the exit is not proven.',
+        sources: [{ source_id: 'X1', url: 'https://example.com/fictional/pool', publisher: 'Example (FICTIONAL)', retrieved_at: at, excerpt: 'fictional' }],
+      };
+      const ch = C.saveChallenge(ws, { project_id: pid, challenge_id: out.challenge_id, text: `# Challenge (FICTIONAL)\n\n${'Each test checked against the sources, written out for the dev desk. '.repeat(8)}\n\n\`\`\`json\n${JSON.stringify(cb, null, 2)}\n\`\`\`\n` });
+      if (ch.status !== 'saved') throw new Error(`dev desk challenge not saved: ${ch.message}`);
+      if (tamper) {
+        const file = ws.abs(`projects/${pid}/tickets/challenge-receipts/${ch.challenge_receipt_id}.json`);
+        atomicWrite(file, jsonText({ ...readJson(file), challenge_verdict: 'concur' }));
+      }
+    }
+  }
+
   // The archived one last, so its history stays.
   const vireo = EXTRA.find((x) => x.archived);
   projects.archiveProject(ws, pids[vireo.key], 'FICTIONAL: archived for the dev desk');
@@ -475,7 +578,7 @@ function contractFor(symbol) {
   research.hasDueWork = () => false;
   research.hasBackgroundWork = () => false;
   const offline = async () => ({ status: 'noop', message: 'FICTIONAL dev desk: offline' });
-  for (const m of ['fundamentals', 'screening', 'trader-candles']) {
+  for (const m of ['fundamentals', 'screening', 'trader-candles', 'leads']) {
     const mod = require(`${ROOT}/core/${m}.js`);
     mod.isDue = () => false;
     mod.refresh = offline;

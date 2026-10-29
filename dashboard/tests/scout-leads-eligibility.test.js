@@ -373,3 +373,46 @@ test('each lead setting refuses a value outside its bounds', () => {
   const ok = validateSettingsPatch({ leads: { enabled: true, chains: ['base', 'ethereum', 'base'], min_market_cap_usd: 0, max_sell_tax_pct: 2.5, eligibility_hours: 720, min_volume_24h_usd: null } });
   assert.deepEqual(ok.leads, { enabled: true, chains: ['1', '8453'], min_market_cap_usd: 0, max_sell_tax_pct: 2.5, eligibility_hours: 720, min_volume_24h_usd: null });
 });
+
+// Audit F5: a Solana token's scheduled fee, its transfer hook and whether it
+// can be transferred decide eligibility; a missing fact is never a pass.
+test('Solana: the higher of the fee now and every scheduled fee, a non-transferable token, a transfer hook and an unknown basis', () => {
+  const S = require('../core/screening');
+  const identity = L.identityOf('solana', `2${'A'.repeat(42)}B`);
+  assert.ok(identity);
+  const policy = { values: { ...POLICY, chains: ['solana'] } };
+  const listing = { source: 'coingecko', outcome: 'ok', facts: { coingecko_id: 'fictional-solana', platform_entry: true, platform_contract: identity.address, homepage: 'https://fictional-solana.example/', market_cap_usd: 5000000, volume_24h_usd: 400000 } };
+  const judgeOf = (raw) => {
+    const facts = L.screenFacts(S.normalizeSolana(raw), 'solana');
+    return { facts, out: L.judge(identity, [], [listing, { source: 'goplus', outcome: 'ok', facts }], policy) };
+  };
+  const fee = (now, scheduled) => ({ current_fee_rate: { fee_rate: now }, ...(scheduled === undefined ? {} : { scheduled_fee_rate: scheduled }) });
+  const clean = { transfer_fee: fee('0', []), transfer_hook: [], non_transferable: '0' };
+  // Fully known, zero fee, no hook, transferable: eligible.
+  const ok = judgeOf(clean);
+  assert.equal(ok.out.state, 'ELIGIBLE');
+  assert.deepEqual([ok.facts.transfer_fee_pct, ok.facts.transfer_fee_scheduled_max_pct, ok.facts.transfer_hook, ok.facts.non_transferable], [0, 0, 'absent', 'absent']);
+  // A scheduled fee above the limit is refused, even at zero now.
+  const scheduled = judgeOf({ ...clean, transfer_fee: fee('0', [{ epoch: '42', fee_rate: '0.25' }]) });
+  assert.equal(scheduled.out.state, 'REFUSED');
+  assert.equal(scheduled.out.criteria.find((c) => c.name === 'transfer_fee_pct').value, 25);
+  assert.match(scheduled.out.reasons.join(' '), /transfer fee 25% \(the highest of the fee now and every scheduled fee\) is above your limit of 5%/);
+  // A schedule GoPlus does not state completely is missing, never zero.
+  const partial = judgeOf({ ...clean, transfer_fee: fee('0', [{ epoch: '42', fee_rate: 'not a number' }]) });
+  assert.equal(partial.facts.transfer_fee_scheduled_max_pct, null);
+  assert.equal(partial.out.state, 'INCOMPLETE');
+  assert.match(partial.out.reasons.join(' '), /no complete schedule of transfer fees/);
+  assert.equal(judgeOf({ ...clean, transfer_fee: { current_fee_rate: { fee_rate: '0' }, scheduled_fee_rate: null } }).out.state, 'INCOMPLETE', 'a schedule that is not a list is unknown');
+  assert.equal(judgeOf({ ...clean, transfer_fee: undefined }).out.state, 'INCOMPLETE');
+  // Not transferable never passes; unknown transferability is missing.
+  const nt = judgeOf({ ...clean, non_transferable: '1' });
+  assert.equal(nt.out.state, 'REFUSED');
+  assert.match(nt.out.reasons.join(' '), /not transferable/);
+  const ntUnknown = judgeOf({ ...clean, non_transferable: undefined });
+  assert.equal(ntUnknown.out.state, 'INCOMPLETE');
+  // A transfer hook is for Eric to look at; an unknown hook is missing.
+  const hook = judgeOf({ ...clean, transfer_hook: ['fictional-hook-program'] });
+  assert.equal(hook.out.state, 'NEEDS_REVIEW');
+  assert.match(hook.out.reasons.join(' '), /transfer hook/);
+  assert.equal(judgeOf({ ...clean, transfer_hook: undefined }).out.state, 'INCOMPLETE');
+});
