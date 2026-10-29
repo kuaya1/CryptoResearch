@@ -130,11 +130,29 @@ test('M1: a gaps record that does not read leaves the book unsettled, in words, 
   const v = TD.view(ws, { now: iso(fillHour + 10 * M) });
   assert.equal(v.settlement.state, 'unsettled');
   assert.match(v.settlement.words, /line 1 does not read/);
+  assert.equal(v.results.settlement.state, 'settled', 'the engine reads no gaps record: the adapter is the stricter here');
   T.decide(ws, s.pid, { receipt_id: s.rid, action: 'undo', request_id: 'req_gap_undo00009' });
   const hv2 = T.decide(ws, s.pid, { receipt_id: s.rid, action: 'halve', request_id: 'req_gap_halve0009' });
   const r2 = mine(TD.requests(ws, { now: iso(fillHour + 11 * M) }), hv2.result.decision.decision_id);
   assert.equal(r2.phase, 'waiting');
   assert.match(r2.words, /unsettled.*does not read/);
+});
+
+test('cr-paper@3: the engine holds the same gate; the adapter adds only the missing hour, which is stale by the time it is seen', (t) => {
+  for (const kind of ['gap', 'stale']) {
+    const s = halved(t);
+    const { ws, fillHour } = s;
+    const seen = fillHour + 2 * H + 15 * M;
+    if (kind === 'gap') TD.applyHours(ws, [bar(fillHour + H)], { now: iso(seen) });
+    const v = TD.view(ws, { now: iso(seen + M) });
+    assert.equal(v.settlement.state, 'unsettled', kind);
+    assert.equal(v.results.settlement.state, 'unsettled', `${kind}: the engine's own reading, without the gaps record`);
+    const same = (p) => [p.pair, p.exposure, p.settled_through, p.state];
+    assert.deepEqual(v.settlement.pairs.map(same), v.results.settlement.pairs.map(same), kind);
+    assert.equal(v.settlement.settled_through, v.results.settlement.settled_through, kind);
+    if (kind === 'gap') assert.equal(v.settlement.pairs[0].gap.missing_hour, iso(fillHour));
+    else assert.equal(v.settlement.pairs[0].words, v.results.settlement.pairs[0].words, 'with no missing hour recorded, the engine\'s words');
+  }
 });
 
 test('M1: reading an unsettled book writes nothing', (t) => {

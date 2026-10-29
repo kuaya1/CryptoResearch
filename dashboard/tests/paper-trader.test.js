@@ -200,7 +200,7 @@ test('the hour that fills a buy checks its stop, never its target', (t) => {
   assert.deepEqual(hour(ws2, 15, { high: '120', low: '99', close: '110' }).events.map((x) => x.type), ['bar', 'fill']);
 });
 
-test('NAV is unknown without a fresh price, never 0 or the entry; an intent is then refused', (t) => {
+test('NAV is unknown without a fresh price, never 0 or the entry; an opening then is not answered and nothing is written', (t) => {
   const ws = setup(t);
   PT.submitIntent(ws, intent('A'), ctx());
   hour(ws, 15, { low: '99' });
@@ -213,9 +213,12 @@ test('NAV is unknown without a fresh price, never 0 or the entry; an intent is t
   const b = PT.book(ws, 'FICT/USDC', ctx(late));
   assert.equal(b.nav_usd, null);
   assert.match(b.unknown.join(' '), /NAV is unknown/);
-  const refused = PT.submitIntent(ws, intent('B', {}, late), ctx(late));
-  assert.equal(refused.status, 'refused');
-  assert.ok(refused.refusals.some((x) => x.field === 'book.nav_usd' && x.rule === 'unknown'));
+  // cr-paper@3: the book's record of the position's pair is unsettled, so an
+  // opening is not answered (UNSETTLED) and nothing is written; under @2 it
+  // was a recorded refusal for the unknown NAV, final for its intent ID.
+  const before = fs.readFileSync(ws.abs(PT.JOURNAL), 'utf8');
+  assert.throws(() => PT.submitIntent(ws, intent('B', {}, late), ctx(late)), (e) => e.code === 'UNSETTLED');
+  assert.equal(fs.readFileSync(ws.abs(PT.JOURNAL), 'utf8'), before);
   // Unfunded, nothing is valued and every intent is refused.
   const tw = tempWorkspace('ptrader-unfunded');
   t.after(tw.cleanup);
@@ -1239,4 +1242,130 @@ test('PR 1b: an hour sealed but not applied is refused as interrupted; after rec
     assert.deepEqual(after.slice(0, -1), before.slice(0, -1), `${file}: the hour ends before it are as they were`);
     assert.equal(hour(ws, 16, { high: '103', close: '102' }).status, 'unchanged', file);
   }
+});
+
+// cr-paper@3 (the cohesion audit's M1, Eric 2026-10-29): the book's record is
+// settled only while every pair it is exposed in (an open position, or an
+// order that may still fill or sell) has an hour on record that ended within
+// NAV_PRICE_FRESH_MINUTES of now. Until then no opening is answered anywhere
+// in the book: UNSETTLED, nothing written, the intent ID unspent.
+const RULES2 = { ...RULES, allowlist: ['FICT/USDC', OTHR] };
+const othrIntent = (c, now) => intent(c, { pair: OTHR, reference_price: '50', entry_price: '50', stop_loss_price: '47.5', take_profit_price: '57.5' }, now);
+const files = (ws) => [PT.JOURNAL, PT.HEAD, PT.VENUE].map((f) => { try { return fs.readFileSync(ws.abs(f), 'utf8'); } catch (_) { return null; } });
+
+test('cr-paper@3: an ACKED buy with nothing filled, its pair\'s hours stopped, leaves the book unsettled; no opening anywhere is answered and nothing is written', (t) => {
+  const ws = setup(t);
+  assert.equal(PT.submitIntent(ws, intent('A'), ctx()).state, 'ACKED');
+  // FICT's last hour ends at 15:00; at 17:01 that is 121 minutes. OTHR's
+  // hours run to 17:00, fresh, with 15 in a row for its ATR.
+  const late = T0 + 17 * H + M;
+  for (let i = 2; i <= 16; i++) PT.applyBar(ws, obar(i), { now: at(late) });
+  // The recorded figures read as a clean book: NAV is cash, the drawdown 0.
+  const r = res(ws, late);
+  assert.deepEqual([r.nav_usd, r.drawdown_24h_usd], ['10000', '0']);
+  assert.equal(r.settlement.state, 'unsettled');
+  assert.equal(r.settlement.settled_through, at(T0 + 15 * H));
+  assert.deepEqual(r.settlement.pairs.map(({ words, ...p }) => p), [{ pair: 'FICT/USDC', exposure: ['a buy order ACKED'], last_hour: at(T0 + 14 * H), settled_through: at(T0 + 15 * H), state: 'unsettled' }]);
+  assert.match(r.settlement.words, /FICT\/USDC has no hour on record since 2026-10-27T15:00:00\.000Z, more than 120 minutes, so a fill, stop or target since then is not on record for a buy order ACKED\./);
+  const b = PT.book(ws, OTHR, ctx(late, { rules: RULES2 }));
+  assert.deepEqual([b.nav_usd, b.price, b.settlement.state], ['10000', '50', 'unsettled']);
+  assert.ok(b.unknown.some((u) => /record is unsettled/.test(u)), 'the book says it in its unknowns');
+  // An opening in the fresh pair: not answered, nothing written, by either door.
+  const before = files(ws);
+  for (const door of [PT.submitIntent, PT.reserveIntent]) {
+    assert.throws(() => door(ws, othrIntent('B', late), ctx(late, { rules: RULES2 })), (e) => e.code === 'UNSETTLED' && /FICT\/USDC/.test(e.message) && /Nothing was written; the intent ID is unspent\./.test(e.message));
+  }
+  assert.deepEqual(files(ws), before);
+  assert.deepEqual(PT.intents(ws).map((i) => i.intent_id), [ID('A')], 'the intent ID is unspent');
+  // FICT's late hours arrive, quiet; the book settles and the same intent reserves.
+  assert.equal(hour(ws, 15, { low: '100' }, late).status, 'saved');
+  assert.equal(hour(ws, 16, { low: '100' }, late).status, 'saved');
+  const s = res(ws, late).settlement;
+  assert.deepEqual([s.state, s.settled_through, s.words], ['settled', at(T0 + 17 * H), null]);
+  assert.deepEqual(PT.book(ws, OTHR, ctx(late, { rules: RULES2 })).unknown, []);
+  assert.equal(PT.submitIntent(ws, othrIntent('B', late), ctx(late, { rules: RULES2 })).state, 'ACKED');
+});
+
+test('cr-paper@3: a PARTIAL buy, an open position and a live sell each leave the book unsettled once their pair\'s hours stop', (t) => {
+  const late = T0 + 18 * H + M;
+  const cases = {
+    partial: [(ws) => hour(ws, 15, { low: '99', volume: '50.009' }), ['an open position', 'a buy order PARTIAL']],
+    position: [(ws) => hour(ws, 15, { low: '99' }), ['an open position']],
+    sell: [(ws) => {
+      hour(ws, 15, { low: '99' });
+      const now = T0 + 16 * H + M;
+      assert.equal(PT.submitIntent(ws, intent('C', { side: 'CLOSE_LONG', position_id: `pos-${ID('A')}`, entry_price: '100.5', reference_price: '100' }, now), ctx(now)).state, 'ACKED');
+    }, ['an open position', 'a sell order ACKED']],
+  };
+  for (const [name, [make, exposure]] of Object.entries(cases)) {
+    const ws = setup(t);
+    assert.equal(PT.submitIntent(ws, intent('A'), ctx()).state, 'ACKED');
+    make(ws);
+    // Fresh at 18:00: FICT's last hour ended at 16:00, exactly 120 minutes.
+    assert.equal(res(ws, T0 + 18 * H).settlement.state, 'settled', name);
+    const r = res(ws, late);
+    assert.equal(r.settlement.state, 'unsettled', name);
+    assert.deepEqual(r.settlement.pairs.map((p) => [p.pair, p.exposure, p.state]), [['FICT/USDC', exposure, 'unsettled']], name);
+    const before = files(ws);
+    assert.throws(() => PT.submitIntent(ws, othrIntent('B', late), ctx(late, { rules: RULES2 })), (e) => e.code === 'UNSETTLED', name);
+    assert.deepEqual(files(ws), before, name);
+  }
+});
+
+test('cr-paper@3: while unsettled, closes, cancels, hours and recovery still go through; only openings wait', (t) => {
+  const ws = setup(t);
+  assert.equal(PT.submitIntent(ws, intent('A'), ctx()).state, 'ACKED');
+  hour(ws, 15, { low: '99' });
+  // A buy in OTHR while the book is settled.
+  for (let i = 1; i <= 15; i++) PT.applyBar(ws, obar(i), { now: at(T0 + 16 * H) });
+  const t1 = T0 + 16 * H + M;
+  const bOther = PT.submitIntent(ws, othrIntent('B', t1), ctx(t1, { rules: RULES2 }));
+  assert.equal(bOther.state, 'ACKED');
+  // OTHR's hours stop at 16:00; FICT's arrive to 18:00. At 18:01 OTHR is unsettled.
+  const late = T0 + 18 * H + M;
+  assert.equal(hour(ws, 16, {}, late).status, 'saved');
+  assert.equal(hour(ws, 17, {}, late).status, 'saved');
+  assert.deepEqual(res(ws, late).settlement.pairs.map((p) => [p.pair, p.state]), [['FICT/USDC', 'settled'], [OTHR, 'unsettled']]);
+  // An opening in the fresh pair waits: the whole book is unsettled.
+  assert.throws(() => PT.submitIntent(ws, intent('C', {}, late), ctx(late, { rules: RULES2 })), (e) => e.code === 'UNSETTLED' && /OTHR\/USDC/.test(e.message));
+  // A close is answered: it only reduces risk.
+  const close = PT.submitIntent(ws, intent('D', { side: 'CLOSE_LONG', position_id: `pos-${ID('A')}`, entry_price: '100.5', reference_price: '100' }, late), ctx(late, { rules: RULES2 }));
+  assert.equal(close.state, 'ACKED');
+  assert.equal(PT.recover(ws, { now: at(late) }).status, 'unchanged');
+  // The stale buy is cancelled; with nothing left in OTHR, the book is settled.
+  assert.equal(PT.cancelOrder(ws, bOther.client_order_id, { now: at(late) }).state, 'CANCELLED');
+  assert.equal(res(ws, late).settlement.state, 'settled');
+});
+
+test('cr-paper@3: an intent already on record answers unchanged while unsettled, its order or its refusal as it was', (t) => {
+  const ws = setup(t);
+  const a = PT.submitIntent(ws, intent('A'), ctx());
+  const refused = PT.submitIntent(ws, intent('B', { pair: 'OTHER/USDC' }), ctx());
+  assert.equal(refused.status, 'refused');
+  const late = T0 + 17 * H + M;
+  assert.equal(res(ws, late).settlement.state, 'unsettled');
+  const before = files(ws);
+  assert.deepEqual([PT.submitIntent(ws, intent('A'), ctx(late)).status, PT.submitIntent(ws, intent('A'), ctx(late)).client_order_id], ['unchanged', a.client_order_id]);
+  const again = PT.submitIntent(ws, intent('B', { pair: 'OTHER/USDC' }), ctx(late));
+  assert.deepEqual([again.status, again.state, again.refusals], ['unchanged', 'REFUSED', refused.refusals]);
+  // A different body under a recorded ID is still a conflict, never UNSETTLED.
+  assert.throws(() => PT.submitIntent(ws, intent('A', { risk_ceiling_usd: '99' }), ctx(late)), (e) => e.code === 'CONFLICT');
+  assert.deepEqual(files(ws), before);
+});
+
+test('cr-paper@3: an unfunded or empty book, and a pair the book is not exposed in, are settled; reading settlement writes nothing', (t) => {
+  const tw = tempWorkspace('ptrader-settle');
+  t.after(tw.cleanup);
+  const empty = res(tw.ws, NOW).settlement;
+  assert.deepEqual(empty, { state: 'settled', settled_through: at(NOW), pairs: [], words: null });
+  // Exposed in nothing: hours long stopped are not a settlement question.
+  const ws = setup(t);
+  const late = T0 + 40 * H;
+  assert.equal(res(ws, late).settlement.state, 'settled');
+  const before = files(ws);
+  res(ws, late);
+  PT.book(ws, 'FICT/USDC', ctx(late));
+  PT.intents(ws);
+  PT.hours(ws);
+  assert.deepEqual(files(ws), before);
 });

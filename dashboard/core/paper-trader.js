@@ -116,6 +116,20 @@
 // time. A missing or altered receipt or packet, or no size that passes, is no
 // cap, with its reason in words, and the intent is refused. A close reads
 // none.
+//
+// The settlement gate (cr-paper@3, the cohesion audit's M1, Eric 2026-10-29).
+// The book's record is settled while every pair it is exposed in (an open
+// position, or an order that may still fill or sell) has an hour on record
+// that ended within NAV_PRICE_FRESH_MINUTES of now: derived from the journal
+// and the clock on every read (settlementAt), never from another module's
+// records. While it is not, no opening is answered anywhere in the book
+// (UNSETTLED): nothing is written and the intent ID is unspent, so the same
+// intent can be asked again once the hours arrive. An ACKED buy with nothing
+// filled leaves NAV known, but a fill, stop or target in an hour not yet on
+// record would change it, so a recorded drawdown of 0 is no room to risk.
+// Closes, cancels, hours and recovery are not gated: they only reduce risk or
+// settle the record. No event or record format changed, so a journal written
+// under @2 reads the same and its recorded refusals stay final.
 
 const fs = require('fs');
 const { runOp, readConsistent, OpError } = require('./ops');
@@ -125,7 +139,8 @@ const { isProjectId } = require('./ids');
 // nothing that changes them later reaches this book.
 const { validateTradeIntent, exact: { dec, str, mulFloor, mulCeil, isoMs, own } } = require('./trade-risk');
 
-const VERSION = 'cr-paper@2';
+// @3 (2026-10-29): the settlement gate above; the records are @2's.
+const VERSION = 'cr-paper@3';
 const JOURNAL = 'paper/trader/journal.jsonl';
 const VENUE = 'paper/trader/venue.jsonl';
 const HEAD = 'paper/trader/journal.head.json';
@@ -493,6 +508,34 @@ function freshClose(st, pair, t) {
   return b === null ? null : b.close;
 }
 
+// Whether the book's record is settled at t (cr-paper@3): for each pair it is
+// exposed in, what it holds there, its last hour on record and when that
+// ended. A pair is unsettled when it has no hour, or its last ended more than
+// NAV_PRICE_FRESH_MINUTES before t: a fill, stop or target since then is not
+// on record. The book is settled through the earliest of them.
+function settlementAt(st, t) {
+  const exposed = new Map();
+  const add = (pair, what) => exposed.set(pair, [...(exposed.get(pair) || []), what]);
+  for (const p of st.positions.values()) if (p.state === 'open') add(p.pair, 'an open position');
+  for (const o of st.orders.values()) if (LIVE.includes(o.state)) add(o.pair, `a ${o.side === 'CLOSE_LONG' ? 'sell' : 'buy'} order ${o.state}`);
+  const pairs = [...exposed.entries()].map(([pair, exposure]) => {
+    const list = st.bars.get(pair) || [];
+    const last = list.length ? list[list.length - 1].t : null;
+    const through = last === null ? null : last + HOUR;
+    const stale = through === null || t - through > NAV_PRICE_FRESH_MINUTES * MIN;
+    const words = stale ? `${pair} has ${through === null ? 'no hour on record' : `no hour on record since ${iso(through)}`}, more than ${NAV_PRICE_FRESH_MINUTES} minutes, so a fill, stop or target since then is not on record for ${exposure.join(' and ')}.` : null;
+    return { pair, exposure, last_hour: last === null ? null : iso(last), settled_through: through === null ? null : iso(through), state: stale ? 'unsettled' : 'settled', words };
+  });
+  const throughs = pairs.map((p) => p.settled_through);
+  const said = pairs.filter((p) => p.words).map((p) => p.words);
+  return {
+    state: said.length ? 'unsettled' : 'settled',
+    settled_through: throughs.includes(null) ? null : throughs.length ? throughs.sort()[0] : iso(t),
+    pairs,
+    words: said.join(' ') || null,
+  };
+}
+
 function navAt(st, t) {
   if (st.funded === null) return null;
   let nav = st.cash;
@@ -592,6 +635,7 @@ function bookFor(st, pair, ctx, ticket) {
   const v = ctx.venue && typeof ctx.venue === 'object' ? ctx.venue : {};
   const thesis = ticket.thesis;
   const fresh = freshBar(st, pair, t);
+  const settlement = settlementAt(st, t);
   const book = {
     now: ctx.now,
     nav_usd: orNull(navAt(st, t)),
@@ -612,9 +656,11 @@ function bookFor(st, pair, ctx, ticket) {
     grant: ticket.grant,
     positions: [...st.positions.values()].filter((p) => p.state === 'open').map((p) => ({ position_id: p.position_id, pair: p.pair, state: 'open', quantity: str(p.quantity) })),
     orders: [...st.orders.values()].map((o) => ({ client_order_id: o.client_order_id, state: o.state })),
+    settlement,
   };
   const fr = `${NAV_PRICE_FRESH_MINUTES} minutes`;
   book.unknown = [
+    settlement.state === 'unsettled' && `The book's record is unsettled, so its NAV, cash and drawdown are recorded balances: ${settlement.words}`,
     st.funded === null && 'The book is not funded, so its NAV is unknown.',
     st.funded !== null && book.nav_usd === null && `An open position has no hourly price within ${fr}, so NAV is unknown.`,
     book.nav_usd !== null && book.drawdown_24h_usd === null && `An hour of the last 24 has no NAV, so the 24-hour drawdown is unknown.`,
@@ -690,7 +736,9 @@ function fund(ws, { cash_usd, now } = {}) {
 }
 
 // Validates the intent against the book and reserves its order (RESERVED is
-// recorded before anything is sent), or records the refusal. What is checked,
+// recorded before anything is sent), or records the refusal. An intent on
+// record answers unchanged; otherwise an opening while the book's record is
+// unsettled is not answered at all (UNSETTLED, cr-paper@3). What is checked,
 // hashed and recorded is one copy of the intent's own data properties, read
 // once (red team P2-11). The grant is read from Eric's stored decision, and
 // the exit cap from the ticket's frozen exit readings, inside the same
@@ -702,12 +750,16 @@ function reserveIntent(ws, intent, ctx = {}) {
   const it = snap && typeof snap === 'object' && !Array.isArray(snap) ? snap : null;
   const id = it && typeof it.intent_id === 'string' && it.intent_id ? it.intent_id : null;
   const digest = sha256(canonical(snap));
-  return journal(ws, 'reserve', digest, `Trader intent ${id || '(no ID)'}`, ctx.now, ({ st, append, op }) => {
+  return journal(ws, 'reserve', digest, `Trader intent ${id || '(no ID)'}`, ctx.now, ({ st, append, op, t }) => {
     const prior = id ? st.intents.get(id) : null;
     if (prior) {
       if (prior.intent_sha256 !== digest) throw new OpError('CONFLICT', `Intent ${id} is on record with a different body: one intent_id is one intent. Nothing new was written.`);
       const o = [...st.orders.values()].find((x) => x.intent_id === id);
       return o ? { status: 'unchanged', intent_id: id, ...stateOf(o) } : { status: 'unchanged', intent_id: id, state: 'REFUSED', refusals: prior.refusals };
+    }
+    if (it && it.side === 'OPEN_LONG') {
+      const s = settlementAt(st, t);
+      if (s.state === 'unsettled') throw new OpError('UNSETTLED', `No opening is answered while the book's record is unsettled: ${s.words} Nothing was written; the intent ID is unspent.`);
     }
     const ticket = ticketOf((rel) => op.readText(rel, null), it, msOf(ctx.now));
     const book = bookFor(st, it && it.pair, ctx, ticket);
@@ -1070,6 +1122,8 @@ function results(ws, { now, btc } = {}) {
     closed_positions: [...st.positions.values()].filter((p) => p.state === 'closed').map((p) => ({ position_id: p.position_id, pair: p.pair, realized_pnl_usd: str(p.realized), exits: p.exits })),
     orders: [...st.orders.values()].map(stateOf),
     nav_by_hour: series.map((m) => ({ hour_end: iso(m.t), nav_usd: orNull(m.nav) })),
+    // Whether the figures above are settled or recorded balances (cr-paper@3).
+    settlement: settlementAt(st, t),
     unknown,
   };
 }
