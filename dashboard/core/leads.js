@@ -24,6 +24,7 @@ const chains = require('./chains');
 const scout = require('./scout');
 const { acquireLease, releaseLease } = require('./leases');
 const { randomId, compactTs } = require('./ids');
+const fs = require('fs');
 
 const LEADS_SCHEMA = 'cr.scout-leads.v1';
 const LEADS_PROMPT = 'cr-scout-leads-prompt@1';
@@ -412,11 +413,14 @@ function dueAssets(ws, now = Date.now(), policy = policyOf(ws)) {
   return assets(ws).filter((a) => dueOf(a, now, policy)).sort((x, y) => (x.released_at ? 0 : 1) - (y.released_at ? 0 : 1) || t(x) - t(y) || String(x.asset_id).localeCompare(String(y.asset_id)));
 }
 
-// Whether the `leads` job has work: on, not a restored copy, CoinGecko's and
-// GoPlus's gates open, and an asset due.
+// Whether the `leads` job has work: not a restored copy, and either an
+// admission with a pending effect, or leads on, CoinGecko's and GoPlus's gates
+// open, and an asset due.
 function isDue(ws, now = Date.now()) {
   const policy = policyOf(ws);
-  if (!policy.values.enabled || require('./research').restoredHold(ws)) return false;
+  if (require('./research').restoredHold(ws)) return false;
+  if (listAdmissions(ws).some((a) => pendingOf(a).length)) return true;
+  if (!policy.values.enabled) return false;
   if (!require('./market').rateLimitGate(ws, now).open) return false;
   const screening = require('./screening');
   if (screening.blockedBy(screening.readStatus(ws), now)) return false;
@@ -655,14 +659,18 @@ function commit(ws, opId, outcomes, policy, now) {
 // One turn of the `leads` job. Returns { status, message, ... }.
 async function refresh(ws, { trigger = 'manual', fetchImpl = globalThis.fetch, clock = Date.now, turnMs = TURN_MS, maxRequests = TURN_REQUESTS, retryDelayMs = 1000 } = {}) {
   const policy = policyOf(ws);
-  if (!policy.values.enabled) return { status: 'skipped', message: 'Scout leads are off (Preferences > Screening > Scout leads).' };
   if (require('./research').restoredHold(ws)) return { status: 'held', message: 'Scout leads are held in this restored copy; no provider is asked.' };
+  if (!policy.values.enabled && !listAdmissions(ws).some((a) => pendingOf(a).length)) return { status: 'skipped', message: 'Scout leads are off (Preferences > Screening > Scout leads).' };
   const lease = acquireLease(ws, LEASE, LEASE_MS, { label: trigger });
   if (!lease) return { status: 'busy', message: 'Another runner is reading scout leads right now.' };
   try {
+    // Recovery first: every admission Eric confirmed with an effect still
+    // pending is finished (or lapses), whether or not leads are on.
+    const recovered = completePending(ws, { now: clock() });
+    if (!policy.values.enabled) return { status: 'skipped', message: `Scout leads are off; ${recovered.length} confirmed ${recovered.length === 1 ? 'admission' : 'admissions'} finished.`, recovered };
     const opId = `lt_${compactTs(new Date(clock()))}_${randomId(6)}`;
     const claimed = stampClaims(ws, opId, policy, clock());
-    if (!claimed.length) return { status: 'noop', message: 'No scout lead is due.', results: [] };
+    if (!claimed.length) return { status: recovered.length ? 'ok' : 'noop', message: recovered.length ? `${recovered.length} confirmed ${recovered.length === 1 ? 'admission' : 'admissions'} finished; no scout lead is due.` : 'No scout lead is due.', results: [], recovered };
     const turn = makeTurn({ ms: turnMs, requests: maxRequests });
     const outcomes = [];
     try {
@@ -681,7 +689,7 @@ async function refresh(ws, { trigger = 'manual', fetchImpl = globalThis.fetch, c
     const results = commit(ws, opId, outcomes, policy, clock());
     const by = (pred) => results.filter(pred).length;
     const message = `Scout leads: ${by((r) => r.result === 'receipt')} read (${STATES.map((s) => [s, by((r) => r.state === s)]).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`).join(', ') || 'none'}), ${by((r) => r.result === 'released')} left for the next turn, ${turn.sent()} requests.`;
-    return { status: by((r) => r.state === 'RETRY_AT' || r.result === 'released') ? 'partial' : 'ok', message, requests: turn.sent(), results };
+    return { status: by((r) => r.state === 'RETRY_AT' || r.result === 'released') ? 'partial' : 'ok', message, requests: turn.sent(), results, recovered };
   } finally {
     releaseLease(ws, LEASE, lease);
   }
@@ -720,6 +728,449 @@ function validatePolicyPatch(p) {
     out[k] = n;
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Stage C: admission by Eric's click, "Confirm and request research" (§5).
+// A confirm names the rows Eric reviewed and the evidence he saw (each row's
+// receipt and hash, the policy, the envelope); inside one lock every row is
+// compared with the records and any difference is 409 CHANGED with nothing
+// written. Then the batch and one admission per row are written create-only,
+// and each admission's effects (the intake record, the project, the research
+// run) run after the lock, each under its own key, so a replay, Complete or
+// the next `leads` turn finishes what a crash left with the original IDs. The
+// scout's signal and URLs stay on the lead: they never enter a project's
+// instructions, a prompt or a ticket.
+
+const ADMISSION_SCHEMA = 'cr.scout-lead-admission.v1';
+const BATCH_SCHEMA = 'cr.scout-lead-batch.v1';
+const BATCHES = `${DIR}/batches`;
+const ADMISSIONS = `${DIR}/admissions`;
+const REQUEST_ID = /^req_[A-Za-z0-9_-]{4,80}$/;
+const ADMISSION_ID = /^la_[0-9a-f]{14}$/;
+const START_WINDOW_MS = 24 * 3600000;
+const MAX_BATCH = 50;
+const EFFECTS = ['intake', 'project', 'research'];
+const PROVIDER_ORDER = ['claude', 'chatgpt', 'gemini'];
+const LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', gemini: 'Gemini' };
+
+const admissionIdOf = (requestId, leadKey) => `la_${sha256(stableStringify([requestId, leadKey])).slice(0, 14)}`;
+const namesOf = (models) => models.map((p) => LABELS[p]).join(', ').replace(/, ([^,]*)$/, ' and $1');
+
+// The models and routes a confirm would request now, and the spending limits
+// in force. Read only; computed when the page draws and again in the lock.
+function envelope(ws) {
+  const research = require('./research');
+  const held = research.heldProviders(ws);
+  const st = research.providerStatus(ws);
+  const api = (p) => Boolean(st[p] && (st[p].mode === 'api' || st[p].mode === 'mock'));
+  const models = PROVIDER_ORDER.filter((p) => !held[p] && (p === 'claude' || api(p)));
+  const b = (ws.settings.research && ws.settings.research.budget) || {};
+  return {
+    models,
+    routes: Object.fromEntries(models.map((p) => [p, api(p) ? 'api' : 'connector_or_manual'])),
+    budget_scope: { per_run_usd: finite(b.per_run_usd), daily_usd: finite(b.daily_usd), monthly_usd: finite(b.monthly_usd) },
+  };
+}
+
+function readAdmission(ws, id) {
+  if (!ADMISSION_ID.test(String(id))) throw opErr('BAD_ID', 'Invalid admission ID.', 400);
+  const a = readJson(ws.abs(`${ADMISSIONS}/${id}.json`), null);
+  if (!a) throw opErr('NOT_FOUND', `No admission ${id}.`, 404);
+  return a;
+}
+
+function listAdmissions(ws) {
+  const dir = ws.abs(ADMISSIONS);
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((f) => ADMISSION_ID.test(f.slice(0, -5)) && f.endsWith('.json')).sort().map((f) => readJson(`${dir}/${f}`, null)).filter(Boolean);
+}
+
+// Effects still to do: pending, or failed and tried again (a replay, Complete
+// or the next turn) until the start deadline.
+const pendingOf = (a) => EFFECTS.filter((e) => a.effects[e] === 'pending' || a.effects[e] === 'failed');
+
+// The listing a receipt matched, as admitListing takes it.
+function listingOf(asset, receipt) {
+  const cg = receipt.observations.find((o) => o.source === 'coingecko' && o.facts);
+  const f = cg ? cg.facts : {};
+  return {
+    coingecko_id: f.coingecko_id,
+    name: f.name || f.coingecko_id,
+    symbol: f.symbol || null,
+    homepage: f.homepage || null,
+    coingecko_url: `https://www.coingecko.com/en/coins/${encodeURIComponent(f.coingecko_id || '')}`,
+    platforms: [{ chain: asset.identity.chain_id, address: asset.identity.address }],
+    categories: [],
+    observed_at: cg ? cg.observed_at : null,
+  };
+}
+
+// The difference between one reviewed row and the records now, field by
+// field; [] when it still stands. Read inside the confirm's lock.
+function rowDifferences(op, row, policy, now) {
+  const out = [];
+  let a;
+  try {
+    a = checkAsset(op.readJson(`${ASSETS}/${row.lead_key}.json`, null), row.lead_key);
+  } catch (err) {
+    return [{ field: 'lead', now: err.code === 'INTEGRITY' ? 'fails its identity check' : 'missing' }];
+  }
+  if (a.state !== 'ELIGIBLE') out.push({ field: 'state', reviewed: 'ELIGIBLE', now: a.state });
+  const e = a.eligibility || {};
+  if (e.receipt_id !== row.eligibility_receipt_id) out.push({ field: 'eligibility_receipt_id', reviewed: row.eligibility_receipt_id, now: e.receipt_id || null });
+  if (e.eligibility_sha256 !== row.eligibility_sha256) out.push({ field: 'eligibility_sha256', reviewed: row.eligibility_sha256, now: e.eligibility_sha256 || null });
+  if (a.identity_revision !== row.identity_revision) out.push({ field: 'identity_revision', reviewed: row.identity_revision, now: a.identity_revision });
+  if (!e.expires_at || !(Date.parse(e.expires_at) > now)) out.push({ field: 'expires_at', now: e.expires_at ? `expired at ${e.expires_at}` : 'not computed' });
+  if (e.policy_sha256 && e.policy_sha256 !== policy.sha256) out.push({ field: 'receipt_policy', now: 'the receipt was decided under another policy' });
+  return out;
+}
+
+// Eric's confirm. Returns { status: admitted | unchanged, batch, admissions,
+// since_shown }; throws 409 CHANGED, CONFLICT or NO_MODEL with nothing
+// written, 400 INVALID for a malformed request.
+function confirmLeads(ws, body, { now = Date.now() } = {}) {
+  const b = isObj(body) ? body : {};
+  const requestId = b.request_id;
+  const expect = b.expect;
+  if (typeof requestId !== 'string' || !REQUEST_ID.test(requestId)) throw opErr('INVALID', 'The request ID must look like req_ followed by 4 to 80 letters, digits, - or _.', 400);
+  if (!isObj(expect) || !isObj(expect.policy) || !isObj(expect.envelope) || !Array.isArray(expect.rows)) throw opErr('INVALID', 'The confirm must name the policy, the envelope and the rows you reviewed.', 400);
+  if (!expect.rows.length || expect.rows.length > MAX_BATCH) throw opErr('INVALID', `A confirm names 1 to ${MAX_BATCH} rows.`, 400);
+  const keys = expect.rows.map((r) => (isObj(r) ? r.lead_key : null));
+  if (keys.some((k) => typeof k !== 'string' || !/^[0-9a-f]{32}$/.test(k)) || new Set(keys).size !== keys.length) throw opErr('INVALID', 'Each row names one lead once.', 400);
+  const expectSha = sha256(stableStringify(expect));
+  const batchRel = `${BATCHES}/${requestId}.json`;
+  const out = runOp(ws, { type: 'scout_leads_confirm', summary: `Confirm ${keys.length} scout ${keys.length === 1 ? 'lead' : 'leads'} (${requestId})` }, (op) => {
+    const prior = op.readJson(batchRel, null);
+    if (prior) {
+      if (prior.expect_sha256 !== expectSha) throw opErr('CONFLICT', `Request ${requestId} was already confirmed with different rows or evidence; nothing was written. Use a new request for a different confirm.`, 409);
+      return { replay: true, batch: prior };
+    }
+    const policy = policyOf(ws);
+    const env = envelope(ws);
+    if (!env.models.length) throw opErr('NO_MODEL', 'Every model is on hold: nothing to request. Nothing was written.', 409);
+    const changed = { rows: [], policy: null, envelope: null };
+    if (expect.policy.version !== policy.version || expect.policy.sha256 !== policy.sha256) changed.policy = { reviewed: expect.policy, now: { version: policy.version, sha256: policy.sha256 } };
+    if (stableStringify(expect.envelope) !== stableStringify(env)) changed.envelope = { reviewed: expect.envelope, now: env };
+    for (const row of expect.rows) {
+      const fields = rowDifferences(op, row, policy, now);
+      if (fields.length) changed.rows.push({ lead_key: row.lead_key, fields });
+    }
+    const sinceShown = assets(ws).filter((a) => a.state === 'ELIGIBLE' && !keys.includes(a.asset_id)).length;
+    if (changed.rows.length || changed.policy || changed.envelope) {
+      const parts = [...(changed.policy ? ['the lead policy'] : []), ...(changed.envelope ? ['the models, routes or budget'] : []), ...(changed.rows.length ? [`${changed.rows.length} ${changed.rows.length === 1 ? 'row' : 'rows'}`] : [])];
+      throw opErr('CHANGED', `Changed since you looked: ${parts.join(', ')}. Nothing was written; look again.`, 409, { ...changed, since_shown: { eligible_new: sinceShown } });
+    }
+    const at = isoOf(now);
+    const ids = [];
+    for (const row of expect.rows) {
+      const rel = `${ASSETS}/${row.lead_key}.json`;
+      const a = checkAsset(op.readJson(rel, null), row.lead_key);
+      const receipt = readReceipt(ws, a.eligibility.receipt_id);
+      if (!receipt) throw opErr('CHANGED', `The eligibility receipt for ${row.lead_key} cannot be read intact. Nothing was written.`, 409, { rows: [{ lead_key: row.lead_key, fields: [{ field: 'eligibility_receipt', now: 'unreadable' }] }] });
+      const admissionId = admissionIdOf(requestId, row.lead_key);
+      ids.push(admissionId);
+      op.writeJson(`${ADMISSIONS}/${admissionId}.json`, {
+        schema_version: ADMISSION_SCHEMA,
+        admission_id: admissionId,
+        request_id: requestId,
+        lead_key: row.lead_key,
+        identity: a.identity,
+        identity_revision: a.identity_revision,
+        eligibility_receipt_id: receipt.receipt_id,
+        eligibility_sha256: receipt.eligibility_sha256,
+        policy: { version: policy.version, sha256: policy.sha256 },
+        envelope: env,
+        listing: listingOf(a, receipt),
+        deliveries: [...new Set(a.sightings.map((s) => s.delivery_id).filter(Boolean))],
+        batch_size: expect.rows.length,
+        created_at: at,
+        start_deadline: isoOf(now + START_WINDOW_MS),
+        state: 'pending',
+        effects: { intake: 'pending', project: 'pending', research: 'pending' },
+        intake_id: null,
+        project_id: null,
+        project_basis: null,
+        run_id: null,
+        run_basis: null,
+        errors: [],
+        words: null,
+      }, { mode: 'create' });
+      op.writeJson(rel, { ...a, state: 'ADMITTED', revision: (Number(a.revision) || 1) + 1, claim: null, next_attempt_at: null, admission_id: admissionId });
+    }
+    const batch = { schema_version: BATCH_SCHEMA, request_id: requestId, created_at: at, expect, expect_sha256: expectSha, words: `Confirmed by Eric, a batch of ${ids.length}.`, admission_ids: ids, since_shown: { eligible_new: sinceShown } };
+    op.writeJson(batchRel, batch, { mode: 'create' });
+    return { replay: false, batch };
+  });
+  const { batch } = out.result;
+  // The effects, after the lock, each admission on its own.
+  const admissions = batch.admission_ids.map((id) => completeAdmission(ws, id, { now }));
+  const sinceShown = out.result.replay ? { eligible_new: assets(ws).filter((a) => a.state === 'ELIGIBLE' && !keys.includes(a.asset_id)).length } : batch.since_shown;
+  return { status: out.result.replay ? 'unchanged' : 'admitted', batch: { request_id: batch.request_id, created_at: batch.created_at, admission_ids: batch.admission_ids }, admissions: admissions.map(summaryOf), since_shown: sinceShown, verified: out.verified };
+}
+
+const summaryOf = (a) => ({ admission_id: a.admission_id, lead_key: a.lead_key, state: a.state, project_id: a.project_id, project_basis: a.project_basis, run_id: a.run_id, run_basis: a.run_basis, effects: a.effects, errors: a.errors, words: a.words });
+
+// The words a scout admission writes on its project's evidence.
+function evidenceNote(a) {
+  return `Listed by Grok Scout (delivery ${a.deliveries.join(', ') || 'unknown'}); contract matched on CoinGecko at ${a.listing.observed_at || 'an unrecorded time'}; eligible under ${ELIGIBILITY_VERSION} (receipt ${a.eligibility_receipt_id}, policy ${a.policy.version} ${a.policy.sha256.slice(0, 12)}); confirmed by Eric in a batch of ${a.batch_size} (request ${a.request_id}); research requested from ${namesOf(a.envelope.models)}.`;
+}
+
+function keyFor(a, effect, payload) {
+  return { key: `admission:${a.admission_id}#${effect}`, payload_sha256: sha256(stableStringify(payload)) };
+}
+
+// The admission's intake record, the same shape a research request has, so
+// the existing Research requests list follows its run. Deterministic: its ID
+// and content derive from the admission alone.
+function intakeDocOf(a) {
+  const alphabet = 'abcdefghijkmnpqrstuvwxyz23456789';
+  const h = sha256(a.admission_id);
+  const tail = Array.from({ length: 5 }, (_, i) => alphabet[parseInt(h.slice(i * 2, i * 2 + 2), 16) % alphabet.length]).join('');
+  const id = `in_${compactTs(new Date(a.created_at))}_${tail}`;
+  return {
+    schema_version: 'cr.intake.v1',
+    intake_id: id,
+    created_at: a.created_at,
+    updated_at: a.created_at,
+    via: 'scout-leads',
+    fingerprint: sha256(stableStringify(['scout-lead', a.admission_id])),
+    input: { link: a.listing.coingecko_url, parsed: null, link_problem: null, screenshot: null, instructions: null },
+    status: 'admitting',
+    identity: null,
+    confirmed: null,
+    scout_admission: { admission_id: a.admission_id, lead_key: a.lead_key, eligibility_receipt_id: a.eligibility_receipt_id, request_id: a.request_id },
+    events: [{ at: a.created_at, what: 'Scout lead confirmed by Eric; adding the project.' }],
+    note: 'Research request from a scout lead Eric confirmed. The scout\'s words stay on the lead; they are never instructions.',
+  };
+}
+
+// Writes the admission (and, when given, the intake record) in one verified
+// operation; `fn` changes the admission read inside the lock.
+function updateAdmission(ws, id, summary, fn) {
+  return runOp(ws, { type: 'scout_lead_admission', summary }, (op) => {
+    const cur = op.readJson(`${ADMISSIONS}/${id}.json`, null);
+    if (!cur) throw opErr('NOT_FOUND', `No admission ${id}.`, 404);
+    const next = fn(cur, op);
+    op.writeJson(`${ADMISSIONS}/${id}.json`, next);
+    return next;
+  }).result;
+}
+
+function stateOf(a) {
+  if (EFFECTS.every((e) => a.effects[e] === 'done')) return 'complete';
+  if (EFFECTS.some((e) => a.effects[e] === 'lapsed')) return 'lapsed';
+  if (EFFECTS.some((e) => a.effects[e] === 'failed')) return 'failed';
+  return 'pending';
+}
+
+// Finishes an admission's pending effects, in order, each idempotent under its
+// own key. Past the start deadline an effect that has not committed is not
+// started: the admission reads lapsed and says what was done. A committed
+// effect is never undone. Returns the admission.
+function completeAdmission(ws, id, { now = Date.now() } = {}) {
+  let a = readAdmission(ws, id);
+  if (!pendingOf(a).length) return a;
+  const lapsed = now > Date.parse(a.start_deadline);
+  const intakeKey = keyFor(a, 'intake', intakeDocOf(a));
+  const projectKey = keyFor(a, 'project', { admission_id: a.admission_id, listing: a.listing, note: evidenceNote(a) });
+  const researchKey = (projectId) => keyFor(a, 'research', { admission_id: a.admission_id, project_id: projectId, providers: a.envelope.models, horizon: null });
+  const { readApplied } = require('./ops');
+  const committed = (k) => readApplied(ws, k.key);
+  // 1. The intake record, written with its link in one operation.
+  if (a.effects.intake !== 'done') {
+    if (lapsed && !committed(intakeKey)) return lapse(ws, a, now);
+    const doc = intakeDocOf(a);
+    const r = runOp(ws, { type: 'scout_lead_admission_intake', summary: `Research request for admission ${id}`, idempotencyKey: intakeKey.key, payloadHash: intakeKey.payload_sha256 }, (op) => {
+      if (!op.readJson(`inbox/intake/${doc.intake_id}.json`, null)) op.writeJson(`inbox/intake/${doc.intake_id}.json`, doc, { mode: 'create' });
+      const cur = op.readJson(`${ADMISSIONS}/${id}.json`, null);
+      op.writeJson(`${ADMISSIONS}/${id}.json`, { ...cur, intake_id: doc.intake_id, effects: { ...cur.effects, intake: 'done' } });
+      return { intake_id: doc.intake_id };
+    });
+    if (r.replayed) a = updateAdmission(ws, id, `Link ${id}`, (cur) => ({ ...cur, intake_id: r.result.intake_id, effects: { ...cur.effects, intake: 'done' } }));
+    else a = readAdmission(ws, id);
+  }
+  // 2 and 3. The project and the run, through the code intake shares.
+  if (a.effects.project !== 'done' || a.effects.research !== 'done') {
+    const projectDone = a.effects.project === 'done' ? { result: { project_id: a.project_id } } : committed(projectKey);
+    const researchDone = projectDone ? committed(researchKey(projectDone.result.project_id)) : null;
+    if (lapsed && (!projectDone || !researchDone)) {
+      if (projectDone && a.effects.project !== 'done') a = updateAdmission(ws, id, `Link ${id}`, (cur) => ({ ...cur, project_id: projectDone.result.project_id, project_basis: 'created', effects: { ...cur.effects, project: 'done' } }));
+      return lapse(ws, a, now);
+    }
+    let res;
+    try {
+      const sector = require('./intake').sectorGuess([]);
+      res = require('./intake').admitListing(ws, a.listing, {
+        models: a.envelope.models,
+        evidence: [{ url: a.listing.coingecko_url, note: evidenceNote(a), kind: 'owner_confirmed' }],
+        sector: { primary: sector, source: 'suggested' },
+        utterance: `scout lead ${a.lead_key} (admission ${a.admission_id})`,
+        run_utterance: null,
+        owner_instructions: null,
+        channel: 'scout-leads',
+        idempotency: { project: a.effects.project === 'done' ? null : projectKey, research: researchKey },
+      });
+    } catch (err) {
+      const p = committed(projectKey);
+      a = updateAdmission(ws, id, `Admission ${id} failed`, (cur) => ({
+        ...cur,
+        project_id: cur.project_id || (p ? p.result.project_id : null),
+        project_basis: cur.project_basis || (p ? 'created' : null),
+        effects: { ...cur.effects, project: cur.effects.project === 'done' || p ? 'done' : 'failed', research: 'failed' },
+        errors: [...cur.errors, { at: isoOf(now), code: err.code || 'FAILED', words: String(err.message).slice(0, 400) }].slice(-10),
+      }));
+      return finish(ws, a);
+    }
+    const words = `${res.added.status === 'exists' ? 'Already in your records' : 'Added to your watchlist'}; ${res.run.status === 'exists' ? 'a research run you started a few minutes ago is linked' : `research requested from ${namesOf(a.envelope.models)}`}.`;
+    a = updateAdmission(ws, id, `Link ${id}`, (cur, op) => {
+      const doc = cur.intake_id ? op.readJson(`inbox/intake/${cur.intake_id}.json`, null) : null;
+      if (doc && doc.status === 'admitting') {
+        op.writeJson(`inbox/intake/${cur.intake_id}.json`, {
+          ...doc,
+          status: 'researching',
+          updated_at: isoOf(now),
+          confirmed: { coingecko_id: a.listing.coingecko_id, name: a.listing.name, symbol: a.listing.symbol, at: cur.created_at, project_id: res.project_id, project_status: res.added.status, run_id: res.run.run_id, run_status: res.run.status, models: a.envelope.models },
+          events: [...(doc.events || []), { at: isoOf(now), what: `${a.listing.name} confirmed from a scout lead. ${words}` }].slice(-40),
+        });
+      }
+      return {
+        ...cur,
+        project_id: res.project_id,
+        project_basis: cur.project_basis || (res.added.status === 'exists' ? 'existing' : 'created'),
+        run_id: res.run.run_id,
+        run_basis: res.run.status === 'exists' ? 'existing_recent' : 'created',
+        effects: { ...cur.effects, project: 'done', research: 'done' },
+      };
+    });
+  }
+  return finish(ws, a);
+}
+
+function finish(ws, a) {
+  const state = stateOf(a);
+  if (state === a.state) return a;
+  const words = state === 'complete'
+    ? `${a.project_basis === 'existing' ? 'Linked to the project already in your records' : 'Project added'}; research ${a.run_basis === 'existing_recent' ? 'linked to a run started a few minutes earlier' : `requested from ${namesOf(a.envelope.models)}`}.`
+    : state === 'failed' ? `Not finished: ${a.errors.length ? a.errors[a.errors.length - 1].words : 'an effect failed'}` : null;
+  return updateAdmission(ws, a.admission_id, `Admission ${a.admission_id} ${state}`, (cur) => ({ ...cur, state, words }));
+}
+
+function lapse(ws, a, now) {
+  return updateAdmission(ws, a.admission_id, `Admission ${a.admission_id} lapsed`, (cur) => {
+    const effects = Object.fromEntries(EFFECTS.map((e) => [e, cur.effects[e] === 'done' ? 'done' : 'lapsed']));
+    const done = cur.effects.project === 'done' ? 'Project added' : 'Nothing was added';
+    return { ...cur, effects, state: 'lapsed', lapsed_at: isoOf(now), words: `${done}; research not requested: the confirmation lapsed at ${cur.start_deadline}.` };
+  });
+}
+
+// Completes every admission with a pending effect (the worker's recovery
+// step, and Complete on a row). Returns the admissions it touched.
+function completePending(ws, { now = Date.now() } = {}) {
+  const out = [];
+  for (const a of listAdmissions(ws)) {
+    if (!pendingOf(a).length) continue;
+    try {
+      out.push(summaryOf(completeAdmission(ws, a.admission_id, { now })));
+    } catch (err) {
+      out.push({ admission_id: a.admission_id, state: 'pending', errors: [{ code: err.code || 'FAILED', words: err.message }] });
+    }
+  }
+  return out;
+}
+
+// "Request research" on a lapsed admission's project: a new admission with
+// its own request ID and a fresh envelope Eric reviewed. The project is the
+// existing one; nothing else is re-checked.
+function requestAgain(ws, body, { now = Date.now() } = {}) {
+  const b = isObj(body) ? body : {};
+  if (typeof b.request_id !== 'string' || !REQUEST_ID.test(b.request_id)) throw opErr('INVALID', 'The request ID must look like req_ followed by 4 to 80 letters, digits, - or _.', 400);
+  const prev = readAdmission(ws, b.admission_id);
+  if (prev.state !== 'lapsed' || !prev.project_id) throw opErr('INVALID', 'Only a lapsed admission whose project was added can request research again.', 400);
+  const id = admissionIdOf(b.request_id, prev.lead_key);
+  runOp(ws, { type: 'scout_lead_request_again', summary: `Request research again (${b.request_id})` }, (op) => {
+    if (op.readJson(`${ADMISSIONS}/${id}.json`, null)) return;
+    const env = envelope(ws);
+    if (!env.models.length) throw opErr('NO_MODEL', 'Every model is on hold: nothing to request. Nothing was written.', 409);
+    if (stableStringify(b.expect_envelope) !== stableStringify(env)) throw opErr('CHANGED', 'Changed since you looked: the models, routes or budget. Nothing was written; look again.', 409, { envelope: { reviewed: b.expect_envelope || null, now: env } });
+    op.writeJson(`${ADMISSIONS}/${id}.json`, {
+      ...prev,
+      admission_id: id,
+      request_id: b.request_id,
+      envelope: env,
+      batch_size: 1,
+      created_at: isoOf(now),
+      start_deadline: isoOf(now + START_WINDOW_MS),
+      state: 'pending',
+      effects: { intake: 'done', project: 'done', research: 'pending' },
+      run_id: null,
+      run_basis: null,
+      errors: [],
+      words: null,
+      lapsed_at: undefined,
+      follows: prev.admission_id,
+    }, { mode: 'create' });
+  });
+  return summaryOf(completeAdmission(ws, id, { now }));
+}
+
+// Eric's dismissal: the lead stays dismissed; a new sighting is only
+// appended. Idempotent by request ID.
+function dismissLead(ws, body, { now = Date.now() } = {}) {
+  const b = isObj(body) ? body : {};
+  if (typeof b.request_id !== 'string' || !REQUEST_ID.test(b.request_id)) throw opErr('INVALID', 'The request ID must look like req_ followed by 4 to 80 letters, digits, - or _.', 400);
+  if (typeof b.lead_key !== 'string' || !/^[0-9a-f]{32}$/.test(b.lead_key)) throw opErr('INVALID', 'Name the lead to dismiss.', 400);
+  const reason = b.reason === undefined || b.reason === null ? null : scout.plainLine(b.reason, 280);
+  const out = runOp(ws, { type: 'scout_lead_dismiss', summary: `Dismiss scout lead ${b.lead_key}`, idempotencyKey: `dismiss:${b.request_id}`, payloadHash: sha256(stableStringify([b.lead_key, reason])) }, (op) => {
+    const rel = `${ASSETS}/${b.lead_key}.json`;
+    const a = checkAsset(op.readJson(rel, null), b.lead_key);
+    if (a.state === 'ADMITTED') throw opErr('CONFLICT', 'This lead was already confirmed; it cannot be dismissed. Archive its project instead.', 409);
+    if (a.state === 'DISMISSED') return { status: 'unchanged', lead_key: b.lead_key };
+    op.writeJson(rel, { ...a, state: 'DISMISSED', revision: (Number(a.revision) || 1) + 1, claim: null, next_attempt_at: null, dismissal: { at: isoOf(now), reason, request_id: b.request_id } });
+    return { status: 'dismissed', lead_key: b.lead_key };
+  });
+  return { ...out.result, verified: out.verified };
+}
+
+// What Review > Imports > Scout leads draws: the envelope and policy a confirm
+// sends back, and each lead grouped by state with its receipt's facts. Read
+// only.
+function reviewView(ws, { now = Date.now() } = {}) {
+  const policy = policyOf(ws);
+  const env = envelope(ws);
+  const admissions = listAdmissions(ws);
+  const byLead = new Map(admissions.map((a) => [a.lead_key, a]));
+  const rows = assets(ws).map((a) => {
+    if (a.integrity) return { lead_key: a.asset_id, state: 'INTEGRITY', reasons: ['This lead\'s record does not match its identity; it is not shown.'] };
+    const r = a.eligibility ? readReceipt(ws, a.eligibility.receipt_id) : null;
+    const cg = r ? r.observations.find((o) => o.source === 'coingecko' && o.facts) : null;
+    const gp = r ? r.observations.find((o) => o.source === 'goplus' && o.facts) : null;
+    const last = a.sightings.length ? a.sightings[a.sightings.length - 1] : null;
+    const adm = byLead.get(a.asset_id) || null;
+    return {
+      lead_key: a.asset_id,
+      state: a.state,
+      chain: a.identity.chain_label,
+      chain_id: a.identity.chain_id,
+      address: a.identity.address,
+      identity_revision: a.identity_revision,
+      eligibility_receipt_id: a.eligibility ? a.eligibility.receipt_id : null,
+      eligibility_sha256: a.eligibility ? a.eligibility.eligibility_sha256 : null,
+      decided_at: a.eligibility ? a.eligibility.decided_at : null,
+      expires_at: a.eligibility ? a.eligibility.expires_at : null,
+      expired: Boolean(a.eligibility && a.eligibility.expires_at && Date.parse(a.eligibility.expires_at) <= now),
+      reasons: a.eligibility ? a.eligibility.reasons : [],
+      listing: cg ? { name: cg.facts.name, symbol: cg.facts.symbol, coingecko_id: cg.facts.coingecko_id, image: cg.facts.image, market_cap_usd: cg.facts.market_cap_usd, volume_24h_usd: cg.facts.volume_24h_usd } : null,
+      screen: gp ? gp.facts : null,
+      words: r ? r.words : null,
+      scout_words: last ? last.signal : null,
+      sightings: a.sightings.length,
+      dismissal: a.dismissal || null,
+      known_project_id: a.known_project_id || null,
+      admission: adm ? summaryOf(adm) : null,
+    };
+  });
+  return { schema_version: 'cr.scout-leads-review.v1', policy: { version: policy.version, sha256: policy.sha256, missing: policy.missing, enabled: policy.values.enabled }, envelope: env, rows, admissions: admissions.map(summaryOf) };
 }
 
 // An eligibility receipt by its ID, checked against its hash. Read only.
@@ -778,4 +1229,19 @@ module.exports = {
   judge,
   refresh,
   getReceipt,
+  ADMISSION_SCHEMA,
+  BATCH_SCHEMA,
+  BATCHES,
+  ADMISSIONS,
+  admissionIdOf,
+  envelope,
+  confirmLeads,
+  completeAdmission,
+  completePending,
+  requestAgain,
+  dismissLead,
+  readAdmission,
+  listAdmissions,
+  reviewView,
+  evidenceNote,
 };

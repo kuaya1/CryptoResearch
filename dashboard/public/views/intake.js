@@ -13,6 +13,7 @@ const SECTORS = [['defi', 'DeFi'], ['payments', 'Payments / PayFi'], ['infrastru
 const STATUS = {
   identifying: ['Identifying the project', 'wait'],
   needs_confirmation: ['Waiting for your confirmation', 'warn'],
+  admitting: ['Confirmed from a scout lead; adding it', 'wait'],
   identity_failed: ['Not identified', 'bad'],
   researching: ['Research in progress', 'wait'],
   done: ['Report saved', 'ok'],

@@ -15,7 +15,7 @@
 // every write is an explicit click (or ⌘↵) through the same paths as before.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, ChevronDown, ExternalLink, Inbox, CalendarClock, FileInput } from 'lucide-react';
-import { PROVIDER_LABELS, fmtDate, fmtDateTime, fmtSignedPct, fmtPrice, toast, submissionId } from '../../../../public/ui.js';
+import { PROVIDER_LABELS, fmtDate, fmtDateTime, fmtSignedPct, fmtPrice, fmtMarketUsd, fmtAgo, toast, submissionId } from '../../../../public/ui.js';
 import { reviewQueue, upcomingOf, GROUPS } from '../../../../public/review-model.js';
 import { useDesk, useProject, useMedia } from '../../lib/hooks.js';
 import { api, refresh } from '../../lib/desk.js';
@@ -379,19 +379,146 @@ function Upcoming({ d }) {
   );
 }
 
+// ---- Imports > Scout leads (core/leads.js reviewView; intake plan rev. 2 §5) ------------------------
+// Reading writes nothing. Confirm sends the rows drawn here with the evidence
+// shown (each row's receipt and hash, the policy, the models and routes); a
+// change since is refused with nothing written, and the list is read again.
+
+const LEAD_GROUPS = [
+  ['eligible', 'Eligible', (r) => r.state === 'ELIGIBLE' && !r.expired],
+  ['review', 'Needs review', (r) => r.state === 'NEEDS_REVIEW'],
+  ['incomplete', 'Incomplete', (r) => r.state === 'INCOMPLETE'],
+  ['held', 'Held', (r) => r.state === 'POLICY_HOLD'],
+  ['reading', 'Being read', (r) => r.state === 'NEW' || r.state === 'RETRY_AT' || (r.state === 'ELIGIBLE' && r.expired)],
+  ['admitted', 'Confirmed', (r) => r.state === 'ADMITTED'],
+];
+const LEAD_FOLDED = [['refused', 'Refused', 'REFUSED'], ['known', 'Already in your records', 'KNOWN'], ['dismissed', 'Dismissed', 'DISMISSED']];
+const shortAddr = (a) => (a && a.length > 14 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a || '—');
+const taxWords = (s) => {
+  if (!s) return 'Sell tax unknown';
+  if ('transfer_fee_pct' in s) return s.transfer_fee_pct === null ? 'Transfer fee unknown' : `Transfer fee ${s.transfer_fee_pct}%`;
+  return s.sell_tax_pct === null ? 'Sell tax unknown' : `Sell tax ${s.sell_tax_pct}%`;
+};
+const checkWords = (s) => {
+  if (!s || !('honeypot' in s)) return null;
+  const w = (v) => (v === 'absent' ? 'No' : v === 'present' ? 'Yes' : 'Unknown');
+  return `Honeypot: ${w(s.honeypot)} · Cannot sell all: ${w(s.cannot_sell_all)}${s.severe && s.severe.length ? ` · Severe: ${s.severe.join(', ')}` : ''}`;
+};
+
+function LeadRow({ r, onDismiss, onConfirm, busy, models, extra = null }) {
+  const l = r.listing || {};
+  const copy = () => { try { navigator.clipboard.writeText(r.address); toast('Contract copied'); } catch (_) { /* no clipboard */ } };
+  return (
+    <li className="rv-lead" data-key={`rv-lead-${r.lead_key}`}>
+      <div className="rv-lead-head">
+        <strong>{l.name || shortAddr(r.address)}</strong>{l.symbol ? <span className="faint"> {l.symbol}</span> : null}
+        <span className="faint"> · {r.chain}</span>
+        <button type="button" className="btn btn-ghost btn-sm" title={r.address} aria-label={`Copy contract ${r.address}`} onClick={copy}>{shortAddr(r.address)}</button>
+      </div>
+      {r.listing ? <div className="rv-lead-facts">MC {fmtMarketUsd(l.market_cap_usd)} · Vol 24h {fmtMarketUsd(l.volume_24h_usd)} · {taxWords(r.screen)}</div> : null}
+      {checkWords(r.screen) ? <div className="rv-lead-facts">{checkWords(r.screen)}</div> : null}
+      {r.reasons && r.reasons.length ? <div className="rv-lead-why">{r.reasons[0]}</div> : null}
+      {r.decided_at ? <div className="faint" title={r.eligibility_receipt_id || ''}>Read {fmtAgo(r.decided_at)}{r.words ? ` · ${r.words}` : ''}</div> : null}
+      {r.scout_words ? <blockquote className="rv-lead-quote"><span className="faint">Scout's words: </span>“{r.scout_words}”</blockquote> : null}
+      {r.admission ? <div className="rv-lead-why">{r.admission.words || `Confirmation ${r.admission.state}`}{r.admission.project_id ? <> · <a href={`#/project/${encodeURIComponent(r.admission.project_id)}`}>Open project</a></> : null}</div> : null}
+      {extra}
+      {onConfirm || onDismiss ? (
+        <div className="l2-actions">
+          {onConfirm ? <button type="button" className="btn btn-primary btn-sm" disabled={busy || !models.length} data-key={`rv-lead-confirm-${r.lead_key}`} onClick={() => onConfirm([r])}>{models.length ? `Confirm and request research (${models.map((p) => PROVIDER_LABELS[p]).join(', ')})` : 'Every model is on hold: nothing to request'}</button> : null}
+          {onDismiss ? <button type="button" className="btn btn-sm" disabled={busy} data-key={`rv-lead-dismiss-${r.lead_key}`} onClick={() => onDismiss(r)}>Dismiss</button> : null}
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+function ScoutLeads({ d }) {
+  const [v, setV] = useState(null);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = () => api.get('/api/scout/leads').then((x) => { setV(x); setErr(null); }, (e) => setErr(e.message));
+  useEffect(() => { load(); }, [d.version]);
+  if (err && !v) return <p className="l2-err" role="alert">{err} <button type="button" className="btn btn-sm" onClick={load}>Try again</button></p>;
+  if (!v) return <p className="faint">Loading scout leads…</p>;
+  const models = v.envelope.models;
+  const act = async (fn) => {
+    setBusy(true);
+    try { await fn(); } catch (e) { toast(e.message, 'bad'); } finally { setBusy(false); await load(); refresh(); }
+  };
+  const confirm = (rows) => act(async () => {
+    const out = await api.post('/api/scout/leads/confirm', {
+      request_id: `req_${submissionId()}`,
+      expect: { policy: { version: v.policy.version, sha256: v.policy.sha256 }, envelope: v.envelope, rows: rows.map((r) => ({ lead_key: r.lead_key, eligibility_receipt_id: r.eligibility_receipt_id, eligibility_sha256: r.eligibility_sha256, identity_revision: r.identity_revision })) },
+    });
+    const n = out.since_shown && out.since_shown.eligible_new;
+    toast(`${out.admissions.length} confirmed${n ? `; ${n} new eligible ${n === 1 ? 'lead' : 'leads'} arrived, look again` : ''}.`);
+  });
+  const dismiss = (r) => act(async () => { await api.post('/api/scout/leads/dismiss', { lead_key: r.lead_key, request_id: `req_${submissionId()}` }); toast('Dismissed.'); });
+  const complete = (a) => act(async () => { await api.post('/api/scout/leads/complete', { admission_id: a.admission_id }); });
+  const again = (a) => act(async () => { await api.post('/api/scout/leads/request-research', { admission_id: a.admission_id, request_id: `req_${submissionId()}`, expect_envelope: v.envelope }); toast('Research requested.'); });
+  const eligible = v.rows.filter(LEAD_GROUPS[0][2]);
+  return (
+    <section className="l2-panel rv-leads" aria-labelledby="rv-leads-h">
+      <header className="l2-panel-head">
+        <h3 className="l2-panel-t" id="rv-leads-h" title="Grok Scout's leads, read by the desk against your lead policy (Preferences > Screening > Scout leads). Eligible means only that a lead may be shown to you; it is never safe or approved. Confirming adds the project and requests research from the models named on the button.">Scout leads</h3>
+      </header>
+      <div className="l2-panel-body">
+        {!v.policy.enabled ? <p className="faint">Scout leads are off (Preferences &gt; Screening &gt; Scout leads).</p> : null}
+        {v.policy.missing.length ? <p className="faint">Held: {v.policy.missing.length} lead {v.policy.missing.length === 1 ? 'setting is' : 'settings are'} not set.</p> : null}
+        {!v.rows.length ? <p className="faint">No scout leads yet.</p> : null}
+        {eligible.length > 1 ? <div className="l2-actions"><button type="button" className="btn btn-primary btn-sm" disabled={busy || !models.length} data-key="rv-leads-confirm-all" onClick={() => confirm(eligible)}>{`Confirm all ${eligible.length} eligible (${models.map((p) => PROVIDER_LABELS[p]).join(', ') || 'no model'})`}</button></div> : null}
+        {LEAD_GROUPS.map(([id, label, pick]) => {
+          const rows = v.rows.filter(pick);
+          if (!rows.length) return null;
+          return (
+            <div key={id} className="rv-lead-group" data-key={`rv-leads-${id}`}>
+              <h4>{label} ({rows.length})</h4>
+              <ul className="rv-lead-list">
+                {rows.map((r) => (
+                  <LeadRow
+                    key={r.lead_key}
+                    r={r}
+                    busy={busy}
+                    models={models}
+                    onConfirm={id === 'eligible' ? confirm : null}
+                    onDismiss={['eligible', 'review', 'incomplete', 'held'].includes(id) ? dismiss : null}
+                    extra={r.admission && ['pending', 'failed'].includes(r.admission.state) ? <div className="l2-actions"><button type="button" className="btn btn-sm" disabled={busy} data-key={`rv-lead-complete-${r.lead_key}`} onClick={() => complete(r.admission)}>Complete</button></div>
+                      : r.admission && r.admission.state === 'lapsed' && r.admission.project_id ? <div className="l2-actions"><button type="button" className="btn btn-sm" disabled={busy || !models.length} data-key={`rv-lead-again-${r.lead_key}`} onClick={() => again(r.admission)}>Request research</button></div> : null}
+                  />
+                ))}
+              </ul>
+            </div>
+          );
+        })}
+        {LEAD_FOLDED.map(([id, label, state]) => {
+          const rows = v.rows.filter((r) => r.state === state);
+          if (!rows.length) return null;
+          return (
+            <details key={id} className="rv-lead-group" data-key={`rv-leads-${id}`}>
+              <summary>{label} ({rows.length})</summary>
+              <ul className="rv-lead-list">{rows.map((r) => <LeadRow key={r.lead_key} r={r} busy={busy} models={models} />)}</ul>
+            </details>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 // ---- Imports: the report import, the inbox, Cowork requests (this PC) -------------------------------
 
 function Imports({ d, route }) {
   const imp = route.query.get('imp') || 'import';
   const hosted = Boolean(d.session && d.session.hosted);
-  const tabs = [['import', 'Import report'], ['inbox', `Inbox${(((d.index.imports || {}).inbox || {}).in_inbox || []).length ? ` (${d.index.imports.inbox.in_inbox.length})` : ''}`], ...(hosted ? [] : [['requests', `Cowork requests${((d.index.imports || {}).requests_pending || []).length ? ` (${d.index.imports.requests_pending.length})` : ''}`]])];
+  const tabs = [['import', 'Import report'], ['inbox', `Inbox${(((d.index.imports || {}).inbox || {}).in_inbox || []).length ? ` (${d.index.imports.inbox.in_inbox.length})` : ''}`], ['leads', 'Scout leads'], ...(hosted ? [] : [['requests', `Cowork requests${((d.index.imports || {}).requests_pending || []).length ? ` (${d.index.imports.requests_pending.length})` : ''}`]])];
   return (
     <div className="rv-imp">
       <nav className="tabs" aria-label="Imports">
         {tabs.map(([k, w]) => <a key={k} className="tab" href={hrefWith({ imp: k === 'import' ? null : k })} aria-current={imp === k ? 'page' : undefined} data-key={`rv-imp-tab-${k}`} onClick={(e) => { e.preventDefault(); setQuery({ imp: k === 'import' ? null : k }); }}>{w}</a>)}
       </nav>
       <div className="rv-imp-body">
-        {imp === 'inbox' ? <Dom key="inbox" build={(L) => L.inboxTab(legacyCtx)} deps={[d.version]} />
+        {imp === 'leads' ? <ScoutLeads d={d} />
+          : imp === 'inbox' ? <Dom key="inbox" build={(L) => L.inboxTab(legacyCtx)} deps={[d.version]} />
           : imp === 'requests' && !hosted ? <Dom key="requests" build={(L) => L.requestsTab(legacyCtx)} deps={[d.version]} />
             : <Dom key="import" build={(L) => L.importTab(legacyCtx, nav.route)} deps={[route.query.get('project'), route.query.get('provider'), route.query.get('run')]} />}
       </div>

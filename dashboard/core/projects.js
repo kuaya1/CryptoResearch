@@ -2,7 +2,21 @@
 // Project records: creation with duplicate detection, identity, watchlist,
 // headline selection, archiving and prompt generation.
 
-const { runOp, OpError } = require('./ops');
+const { runOp, OpError, readApplied } = require('./ops');
+
+// An explicit idempotency key ({ key, payload_sha256 }) as runOp takes it.
+const keyOf = (idem) => (idem && idem.key ? { idempotencyKey: idem.key, payloadHash: idem.payload_sha256 || null } : {});
+// The effect already applied under that key, else null; a different payload
+// under it is IDEMPOTENCY_CONFLICT.
+function appliedFor(ws, idem) {
+  if (!idem || !idem.key) return null;
+  const prior = readApplied(ws, idem.key);
+  if (!prior) return null;
+  if (idem.payload_sha256 && prior.payload_sha256 && prior.payload_sha256 !== idem.payload_sha256) {
+    throw new OpError('IDEMPOTENCY_CONFLICT', `Request ${idem.key} was already applied with different content (op ${prior.op_id}). Nothing new was applied.`, { prior_op_id: prior.op_id });
+  }
+  return prior.result ? prior : null;
+}
 const { readJson, listDir, exists } = require('./fsx');
 const { slugify, isProjectId, isRecordId } = require('./ids');
 const { stageProjectPrompts } = require('./prompts');
@@ -267,7 +281,13 @@ function validateProject(ws, project) {
   if (!res.valid) throw new OpError('INVALID', `Project record failed validation: ${res.errors.slice(0, 5).join('; ')}`);
 }
 
-function addProject(ws, input) {
+// The optional third argument, { idempotency: { key, payload_sha256 } }, keys
+// the create (a scout admission's effect, leads.js): a replay under the same
+// key returns the project it made, a different payload under it is
+// IDEMPOTENCY_CONFLICT. Without it, nothing changes.
+function addProject(ws, input, { idempotency = null } = {}) {
+  const prior = appliedFor(ws, idempotency);
+  if (prior) return { status: 'created', project_id: prior.result.project_id, replayed: true, message: `Already created as "${prior.result.project_id}" by this request.`, files: [], verified: true, op_id: prior.op_id };
   const name = String(input.name || '').trim();
   if (!name) throw new OpError('INVALID', 'A project name is required.');
   refuseAggregatorName(name);
@@ -360,10 +380,11 @@ function addProject(ws, input) {
     origin_request: input.utterance || null,
   };
   validateProject(ws, project);
-  const out = runOp(ws, { type: 'add_project', summary: `Add project ${id}` }, (op) => {
+  const out = runOp(ws, { type: 'add_project', summary: `Add project ${id}`, ...keyOf(idempotency) }, (op) => {
     op.writeJson(`projects/${id}/project.json`, project, { mode: 'create' });
     op.writeJson(`projects/${id}/events.json`, { schema_version: 'cr.events.v1', events: [] }, { mode: 'create' });
     if (input.generate_prompts !== false) stageProjectPrompts(ws, op, project);
+    return { project_id: id };
   });
   return {
     status: 'created',
@@ -669,6 +690,8 @@ function generatePrompts(ws, id, providers = PROVIDERS) {
 }
 
 module.exports = {
+  keyOf,
+  appliedFor,
   coreName,
   domainOf,
   isNonOfficialHost,

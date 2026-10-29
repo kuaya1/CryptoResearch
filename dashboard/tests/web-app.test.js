@@ -145,7 +145,8 @@ test('the app writes only from explicit actions, and nothing from the boot or a 
   assert.deepEqual(uniq('views/project/Notes.jsx'), ['/api/projects/${enc(pid)}/journal', '/api/projects/${enc(pid)}/note', '/api/scopes/${enc(pid)}/events', '/api/scopes/${enc(pid)}/events/${enc(e.event_id)}']);
   assert.deepEqual(uniq('views/project/Record.jsx'), ['/api/projects/${enc(pid)}/headline', '/api/projects/${enc(pid)}/prompts', '/api/projects/${enc(pid)}/research/${enc(run.run_id)}/jobs/${prov}/reconcile', '/api/projects/${enc(pid)}/research/${enc(runId)}/jobs/${prov}/cancel', '/api/projects/${enc(pid)}/research/${enc(runId)}/jobs/${prov}/retry']);
   assert.deepEqual(uniq('views/project/Report.jsx'), ['/api/projects/${enc(pid)}/reports/${enc(rid)}/corrections']);
-  assert.deepEqual(uniq('views/review/Review.jsx'), ["/api/scopes/${enc(c.project_id || 'portfolio')}/events/${enc(c.event_id)}", '/api/scopes/${enc(scope)}/events']);
+  // Imports > Scout leads: Confirm, Dismiss, Complete and Request research, each a click (leads.js).
+  assert.deepEqual(uniq('views/review/Review.jsx'), ["/api/scopes/${enc(c.project_id || 'portfolio')}/events/${enc(c.event_id)}", '/api/scopes/${enc(scope)}/events', '/api/scout/leads/complete', '/api/scout/leads/confirm', '/api/scout/leads/dismiss', '/api/scout/leads/request-research']);
   assert.deepEqual(uniq('shell/Preferences.jsx'), ['/api/settings']);
   assert.deepEqual(uniq('views/watchlist/StatusStrip.jsx'), ['/api/market/refresh']);
   assert.doesNotMatch(files.find(([n]) => n === 'shell/CommandMenu.jsx')[1], /api\.post|sendReview\(/, 'the command menu writes nothing itself');

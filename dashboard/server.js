@@ -1242,6 +1242,16 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   // Grok Scout's list (core/scout.js): read only; the sweep's own route is
   // the front door's.
   route('GET', '/api/scout', () => coherent(() => require('./core/scout').view(ws)));
+  // Scout leads for Review > Imports (core/leads.js, intake plan rev. 2 §5):
+  // the view is read only; confirm names the rows and the evidence Eric
+  // reviewed (a change is 409 CHANGED, nothing written); dismiss, complete
+  // and request-research act on one lead or admission. No route here starts
+  // research except through a confirm's admission.
+  route('GET', '/api/scout/leads', () => coherent(() => require('./core/leads').reviewView(ws)));
+  route('POST', '/api/scout/leads/confirm', (m, req, res, body) => after(require('./core/leads').confirmLeads(ws, body || {})));
+  route('POST', '/api/scout/leads/dismiss', (m, req, res, body) => after(require('./core/leads').dismissLead(ws, body || {})));
+  route('POST', '/api/scout/leads/complete', (m, req, res, body) => after({ admission: require('./core/leads').completeAdmission(ws, (body || {}).admission_id) }));
+  route('POST', '/api/scout/leads/request-research', (m, req, res, body) => after(require('./core/leads').requestAgain(ws, body || {})));
   // The daily brief (core/brief-daily.js): read only, nothing stored.
   route('GET', '/api/brief/daily', (m, req, res, body, url) => coherent(() => require('./core/brief-daily').brief(ws, { since: url.searchParams.get('since') || null })));
   route('GET', '/api/projects/([^/]+)/outcomes', (m) => coherent(() => require('./core/report-outcomes').projectOutcomes(ws, pid(m[1]))));
