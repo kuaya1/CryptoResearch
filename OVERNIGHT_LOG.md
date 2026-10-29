@@ -14,3 +14,14 @@ Mission: `OVERNIGHT_MISSION.md.md` (Tasks 1–5 from `cryptoresearch-cohesion-au
 - Late hour: applies once, in order (quiet and breach cases tested; the stop fires once).
 - Tests: `dashboard/tests/trader-desk-gaps.test.js` (5), `trader-book-model.test.js` (+1). Shared fixture moved to `dashboard/tests/trader-fixture.js`.
 - Not done (needs [P]): the gate inside `reserveIntent` itself (today the adapter is the only opening path, enforced by `trader-boundary.test.js`, so the adapter gate covers every supported path, but not a future direct caller); a cancel recorded while the pair's hours lag behind real time can still drop a fill in an hour not yet applied (engine semantics, observed, not changed).
+
+## Task 2 — one atomic, bounded opening (M2, M4, M7, brief 2): done in the adapter (`cr-trader-desk@2`)
+
+- `fit(intent, book, rules, venue)`: the opening is checked with the engine's own `validateTradeIntent` over the same `PT.book`, plus the book's free-cash rule, before the decision's one intent ID is spent. Anything the book would refuse now waits in words; no refusal is recorded, so a temporary refusal no longer kills the decision (M2). No `open-2` IDs: the one ID per decision is kept (IDs keep the `@1` derivation).
+- M4: approved risk is a ceiling. When the full amount breaks an upper limit (risk cap, drawdown, gate/PM cap, notional cap, exit size, free cash), the risk is bisected at 18 places to the largest every limit allows; the engine floors to the lot, so one lot more breaks the binding limit, which the request names (`sizing.binding`). Never above Eric's amount.
+- M2 sequencing: a re-grant while the ticket's earlier position is still closing waits until flat, then opens once at its full grant (not sized around the closing position).
+- Horizon / invalidation: checked before every opening; past the horizon or invalidated, nothing is reserved.
+- M7: an order whose life holds no whole hour after it is sent waits for one (a life under 60 minutes says so and points to Preferences).
+- Behavior change Eric should know: the 12a demonstration's Approve $500 now opens 2,352.941176 units at the $2,000 exit size instead of being refused (test and DESK_STATE updated).
+- Tests: `dashboard/tests/trader-desk-opening.test.js` (5: lot/cent/cash/notional/equality boundaries against the engine, close-in-flight → wait → flat → one opening, horizon, M7).
+- Not done (needs [P]): true atomicity. The adapter's check and the engine's reservation are two reads; within one process `step` is synchronous, but another process changing the book between them can still produce a recorded (final) refusal. The engine-side fix is a "would refuse → do not record" mode, or the solver inside `reserveIntent`, under its lock.

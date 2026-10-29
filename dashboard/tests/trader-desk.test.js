@@ -69,7 +69,7 @@ test('the Paper Book settings: funding and the venue fee, bounded, with no defau
   assert.match(src, /out\.trader\.book = TR\.validateBookPatch\(patch\.trader\.book\)/);
 });
 
-test('12a end to end: Approve waits for the book, is refused by the exit cap, Halve opens, an hour fills part, Undo cancels the rest and closes: to the cent', (t) => {
+test('12a end to end: Approve waits for the book, then opens sized down to the exit cap, Undo cancels it, Halve opens, an hour fills part, Undo cancels the rest and closes: to the cent', (t) => {
   const s = deskWith(t);
   const { ws, pid, rid } = s;
 
@@ -95,20 +95,24 @@ test('12a end to end: Approve waits for the book, is refused by the exit cap, Ha
   assert.equal(PT.results(ws, { now: iso(now0) }).funded_usd, '25000');
   assert.equal(TD.wanted(ws, { now: iso(now0) })[0].last_hour, iso(top - H), 'the last hour the book holds, so the hourly read asks for what comes after');
 
-  // 3. The next step asks the book once. $500 at a stop of $0.70 buys
-  // 3,197.025 XMPL ($2,717.47) at $0.85, over the $2,000 the exits showed
-  // selling within 5%: refused, finally, with the reason in words.
+  // 3. The next step asks the book once. All $500 at a stop of $0.70 would
+  // buy 3,197.025 XMPL ($2,717.47) at $0.85, over the $2,000 the exits showed
+  // selling within 5%. Approved risk is a ceiling (M4, cr-trader-desk@2): the
+  // order is the largest the exit size allows, 2,352.941176 XMPL
+  // ($1,999.9999996); one lot more ($2,000.00000045) would be over it.
   const s1 = TD.step(ws);
   const r1 = mine(s1, approve.decision_id);
-  assert.equal(r1.phase, 'refused');
-  assert.deepEqual(r1.refusals.map((x) => [x.field, x.rule]), [['risk_ceiling_usd', 'exit_cap']]);
-  assert.match(r1.words, /above the 2000 the exit measurement shows/);
+  assert.equal(r1.phase, 'order');
   assert.equal(r1.open_intent_id, TD.intentIdOf(approve, 'open'));
+  const buy1 = PT.intents(ws).find((i) => i.intent_id === r1.open_intent_id);
+  assert.deepEqual([buy1.state, buy1.quantity], ['ACKED', '2352.941176']);
   assert.deepEqual(TD.step(ws).done, [], 'the same step again asks nothing');
 
-  // 4. Undo, then Halve: $250, the smaller of the starter and the suggestion.
-  T.decide(ws, pid, { receipt_id: rid, action: 'undo', request_id: 'req_12a_undo0001' });
-  assert.equal(mine(TD.requests(ws), approve.decision_id).phase, 'refused', 'a refusal stays the record of that decision');
+  // 4. Undo (its own step cancels the unfilled buy), then Halve: $250, the
+  // smaller of the starter and the suggestion.
+  const un0 = T.decide(ws, pid, { receipt_id: rid, action: 'undo', request_id: 'req_12a_undo0001' });
+  assert.equal(un0.result.trader.status, 'ended');
+  assert.equal(mine(TD.requests(ws), approve.decision_id).phase, 'ended', 'the cancelled buy stays the record of that decision');
   const hv = T.decide(ws, pid, { receipt_id: rid, action: 'halve', request_id: 'req_12a_halve001' });
   const halve = hv.result.decision;
   assert.equal(halve.pm_approved_risk_usd, 250);
@@ -122,7 +126,7 @@ test('12a end to end: Approve waits for the book, is refused by the exit cap, Ha
   assert.deepEqual([ord.state, ord.side, ord.pair, ord.quantity, ord.thesis_id], ['ACKED', 'OPEN_LONG', PAIR, '1598.519131', rid]);
   const sentAt = Date.now();
   const res0 = PT.results(ws, { now: iso(sentAt) });
-  assert.equal(res0.orders.length, 1, 'one order in the book: the refused approve made none');
+  assert.equal(res0.orders.length, 2, 'the approve\'s cancelled buy and the halve\'s');
 
   // 5. The hour in progress ends, then the next: only an hour that starts
   // after the order was sent fills it, at most 10% of its 10,000 volume.
@@ -174,10 +178,9 @@ test('12a end to end: Approve waits for the book, is refused by the exit cap, Ha
   const v = TD.view(ws, { now: iso(n2) });
   assert.deepEqual(v.book, BOOK);
   assert.deepEqual(v.waits, []);
-  assert.deepEqual(v.requests.map((r) => [r.decision_id, r.action, r.phase]), [[approve.decision_id, 'approve', 'refused'], [halve.decision_id, 'halve', 'closed']]);
-  assert.deepEqual(v.refusals.map((x) => [x.project_id, x.decision_id, x.purpose, x.request_pair, x.refusals.map((y) => y.rule)]), [[pid, approve.decision_id, 'open', PAIR, ['exit_cap']]]);
-  assert.match(v.refusals[0].refusals[0].words, /above the 2000 the exit measurement shows/);
-  assert.deepEqual(v.orders.map((o) => [o.side, o.pair, o.state, o.decision_id, o.purpose]), [['OPEN_LONG', PAIR, 'CANCELLED', halve.decision_id, 'open'], ['CLOSE_LONG', PAIR, 'FILLED', halve.decision_id, 'close']]);
+  assert.deepEqual(v.requests.map((r) => [r.decision_id, r.action, r.phase]), [[approve.decision_id, 'approve', 'ended'], [halve.decision_id, 'halve', 'closed']]);
+  assert.deepEqual(v.refusals, [], 'nothing the book would refuse was asked');
+  assert.deepEqual(v.orders.map((o) => [o.side, o.pair, o.state, o.decision_id, o.purpose]), [['OPEN_LONG', PAIR, 'CANCELLED', approve.decision_id, 'open'], ['OPEN_LONG', PAIR, 'CANCELLED', halve.decision_id, 'open'], ['CLOSE_LONG', PAIR, 'FILLED', halve.decision_id, 'close']]);
   assert.deepEqual(v.results.closed_positions.map((p) => [p.project_id, p.decision_id, p.realized_pnl_usd, p.exit_words]), [[pid, halve.decision_id, '-5.1', 'Sold at $0.85']]);
   assert.deepEqual(v.results.open_positions, []);
   // NAV by the hour runs from the funding: the hours read before it hold none.

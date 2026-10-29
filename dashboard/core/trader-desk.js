@@ -20,15 +20,19 @@
 //   - entry: the lower of the book's price and the entry zone's high
 //     (ACCUMULATE) or low (LIMIT_TRAP), so a buy never goes through the
 //     market; stop: the invalidation price; target: the upside target; risk:
-//     Eric's approved amount; life: his longest life of an intent; pair: the
+//     at most Eric's approved amount (@2: the largest every limit allows,
+//     fit below); life: his longest life of an intent; pair: the
 //     project's ticker against USDC, refused while another unarchived project
 //     shares the ticker. A missing field opens nothing, said in words; a stop
 //     is never invented, so a metric-only invalidation opens nothing;
 //   - one attempt per decision: its intent ID is derived from the decision,
 //     so the book's answer, an order or a refusal with its reasons, is final.
 //     The book is asked only once it can answer (funded, Eric's rules and fee
-//     set, a fresh hour and a 14-hour ATR for the pair, no unresolved order);
-//     until then the request waits, with the reason in words. Once the
+//     set, a fresh hour and a 14-hour ATR for the pair, no unresolved order,
+//     the book's record settled, the ticket flat, a whole hour in the order's
+//     life) and only with an intent it would take (@2, fit); until then the
+//     request waits, with the reason in words. Past the research horizon, or
+//     on a ticket invalidated since, it never opens. Once the
 //     ticket's exit readings give no size (D11: past their 72 hours, or none
 //     within the limit), it never opens.
 // What closes: the undo of that decision, the end of the ticket's research
@@ -51,12 +55,17 @@
 // twice. Reads (requests, wanted, view) write nothing.
 
 const PT = require('./paper-trader');
-const { exact: { dec, str, isoMs }, INTENT_VERSION, SLIPPAGE_BPS_MAX, RESOLVED } = require('./trade-risk');
+const { validateTradeIntent, exact: { dec, str, mulCeil, isoMs }, INTENT_VERSION, SLIPPAGE_BPS_MAX, RESOLVED } = require('./trade-risk');
 const TR = require('./trader-rules');
 const { OpError, withLock } = require('./ops');
 const { sha256, appendLine } = require('./fsx');
 
-const VERSION = 'cr-trader-desk@1';
+// @2 (2026-10-29, the cohesion audit's M1, M2, M4 and M7): missing hours
+// hold openings; an opening is checked and sized before its one ID is spent;
+// a grant past its horizon or invalidated opens nothing. Intent IDs keep the
+// @1 derivation, so a decision made under @1 keeps its ID.
+const VERSION = 'cr-trader-desk@2';
+const ID_VERSION = 'cr-trader-desk@1';
 const OPENS = Object.freeze(['ACCUMULATE', 'LIMIT_TRAP']);
 const QUOTE = 'USDC';
 // The simulated venue's lot and minimum order (the plan's smaller choices),
@@ -108,7 +117,7 @@ const exitWords = (e) => (e ? `${EXIT_WORDS[e.reason] || `Exited (${String(e.rea
 function intentIdOf(d, purpose) {
   const ms = Date.parse(d.decided_at);
   let t = BigInt(Number.isFinite(ms) && ms >= 0 ? ms : 0);
-  let r = BigInt(`0x${sha256(`${VERSION}|${d.decision_id}|${purpose}`).slice(0, 20)}`);
+  let r = BigInt(`0x${sha256(`${ID_VERSION}|${d.decision_id}|${purpose}`).slice(0, 20)}`);
   let out = '';
   for (let i = 0; i < 16; i++) { out = CROCKFORD[Number(r % 32n)] + out; r /= 32n; }
   for (let i = 0; i < 10; i++) { out = CROCKFORD[Number(t % 32n)] + out; t /= 32n; }
@@ -134,6 +143,52 @@ const lowerOf = (a, b) => (dec(a) < dec(b) ? a : b);
 // A sell limit SLIPPAGE_BPS under `price`, raised to the 18th place, so it is
 // never further under the price than the engine allows.
 const closeLimit = (price) => str((dec(price) * (BPS - BigInt(SLIPPAGE_BPS)) + BPS - 1n) / BPS);
+
+// The limits that bound an opening from above as its risk grows, the book's
+// cash among them (paper-trader.js reserveIntent: the order's cash and fee at
+// its limit, committed when it is reserved), in words.
+const UPPER = ['risk_cap', 'drawdown', 'gate_cap', 'pm_cap', 'notional_cap', 'exit_cap', 'cash'];
+const BINDING_WORDS = { risk_cap: 'the risk per trade', drawdown: 'the 24-hour drawdown ceiling', gate_cap: 'the gate\'s suggested risk', pm_cap: 'your approved risk', notional_cap: 'the notional cap', exit_cap: 'the exit measurement\'s size', cash: 'the free cash' };
+
+// An opening intent checked as the book will check it (cr-trade-risk@2 over
+// the same book, and the book's cash), with its risk ceiling the largest at
+// or under the one it was written with that every limit allows (M4). Each
+// limit above grows with the risk, so the largest risk is found by halving
+// between 0 and the approved amount at the book's 18 places; the order it
+// sizes is floored to the lot by the engine itself, so one lot more breaks
+// the binding limit. Never above the approved risk; an order the book would
+// refuse at every size, or for any other reason, is { ok: false } with the
+// refusals in words. Pure: it reads no file and writes nothing.
+function fit(intent, bk, rules, venue) {
+  const fee = dec(venue && venue.taker_rate);
+  const check = (risk) => {
+    const it = { ...intent, risk_ceiling_usd: str(risk) };
+    const v = validateTradeIntent(it, bk, rules);
+    const refusals = [...v.refusals];
+    if (v.ok && v.sizing && fee !== null && dec(bk.available_cash_usd) !== null) {
+      const n = mulCeil(dec(v.sizing.quantity), dec(it.entry_price));
+      const need = n + mulCeil(n, fee);
+      if (dec(bk.available_cash_usd) < need) refusals.push({ field: 'book.cash_usd', rule: 'cash', words: `The order needs ${str(need)} with its fee; ${bk.available_cash_usd} is free.` });
+    }
+    return { it, refusals, sizing: v.sizing };
+  };
+  const want = dec(intent.risk_ceiling_usd);
+  const first = want === null ? check(0n) : check(want);
+  if (!first.refusals.length) return { ok: true, intent: first.it, sizing: first.sizing, binding: [], refusals: [] };
+  if (want === null || !first.refusals.every((x) => UPPER.includes(x.rule))) return { ok: false, refusals: first.refusals };
+  const upperOk = (r) => !check(r).refusals.some((x) => UPPER.includes(x.rule));
+  let lo = 0n;
+  let hi = want;
+  while (hi - lo > 1n) {
+    const mid = (lo + hi) / 2n;
+    if (upperOk(mid)) lo = mid; else hi = mid;
+  }
+  const best = check(lo);
+  if (lo === 0n || best.refusals.length) return { ok: false, refusals: lo === 0n ? first.refusals : best.refusals };
+  // What binds: the limits the next step of risk breaks.
+  const binding = [...new Set(check(lo + 1n).refusals.filter((x) => UPPER.includes(x.rule)).map((x) => x.rule))];
+  return { ok: true, intent: best.it, sizing: best.sizing, binding, refusals: [] };
+}
 
 // The recorded missing hours, and why they cannot be read when they cannot.
 function readGaps(ws) {
@@ -354,13 +409,25 @@ function assess(ws, ctx, g, snap) {
     if (!pr.pair) return out('not_opened', `${pr.why} No order is made.`);
     const plan0 = planOf(rc.receipt, d, null);
     if (plan0.why) return out('not_opened', plan0.why, null, { pair: pr.pair });
+    // A grant that waited past its horizon, or a ticket invalidated since,
+    // opens nothing: checked before every opening, not only after one.
+    const h = horizonOf(ws, pid, rc.receipt);
+    if (h.ms !== null && h.ms <= ctx.t) return out('not_opened', `The research horizon ended on ${h.day} before the book was asked: no order is made from this decision.`, null, { pair: pr.pair });
     const ticket = { project_id: pid, receipt_id: d.receipt_id, decision_id: d.decision_id };
     const bk = PT.book(ws, pr.pair, { now: ctx.now, venue: ctx.s.venue, ticket });
     if (bk.exit_why) return out('not_opened', `${bk.exit_why} The order is never made from this decision.`, null, { pair: pr.pair });
     if (bk.grant_why) return out('not_opened', `${bk.grant_why} No order is made.`, null, { pair: pr.pair });
+    let inv = null;
+    try { inv = require('./tickets').invalidationOf(ws, g.project, rc.receipt, { now: ctx.t }); } catch (_) { inv = null; }
+    if (inv && inv.invalidated) return out('not_opened', `The ticket is invalidated (${inv.words}) before the book was asked: no order is made from this decision.`, null, { pair: pr.pair });
     const stale = ctx.s.rules.price_stale_minutes;
+    // An earlier decision's order or position on the same ticket (an undo's
+    // close still in flight): this one waits until the ticket is flat, then
+    // opens once at its full grant, never sized around the one closing (M2).
+    const earlier = [...snap.intents.values()].filter((i) => i.thesis_id === d.receipt_id && i.intent_id !== openId && (LIVE.includes(i.state) || snap.open.has(`pos-${i.intent_id}`) || snap.open.has(i.position_id)));
     const waits = [
       ...ctx.s.waits,
+      earlier.length && `An earlier order or position on this ticket is still open (${[...new Set(earlier.map((i) => `${i.side === 'CLOSE_LONG' ? 'a sell' : 'a buy'} ${i.state}`))].join(', ')}); this order waits until the ticket is flat.`,
       snap.settlement.state === 'unsettled' && `No new order while the book's record is unsettled: ${snap.settlement.words} Its cash and drawdown are recorded balances, so they do not show how much can be risked.`,
       !snap.funded && ctx.s.book.cash_usd && 'The trader\'s Paper Book is not funded yet.',
       unresolved(snap).length && `${unresolved(snap).length} order${unresolved(snap).length === 1 ? ' is' : 's are'} not yet resolved; nothing new is asked until the venue's answer is on record.`,
@@ -371,14 +438,26 @@ function assess(ws, ctx, g, snap) {
       bk.nav_usd !== null && (bk.drawdown_24h_usd === null || bk.open_risk_usd === null || bk.thesis_risk_usd === null) && 'The book\'s 24-hour drawdown or the risk already at its stops is unknown.',
     ].filter(Boolean);
     if (waits.length) return out('waiting', waits.join(' '), null, { pair: pr.pair });
+    // The order's life must hold a whole hour that starts after it is sent,
+    // or no hour can fill it (M7): it waits for one rather than expiring.
+    const life = ctx.s.rules.max_validity_minutes;
+    const firstHour = Math.ceil(ctx.t / HOUR) * HOUR;
+    if (firstHour + HOUR > ctx.t + life * MIN) return out('waiting', `Your longest life of an intent (${life} minutes) would end before the first whole hour after now (${iso(firstHour)} to ${iso(firstHour + HOUR)}) closes, and an order fills only from a whole hour that starts after it is sent, so it would expire unfilled.${life < 60 ? ' A life under 60 minutes never holds a whole hour; lengthen it in Preferences > Screening.' : ` It is asked when the next hour is no more than ${life - 60} minutes away.`}`, null, { pair: pr.pair });
     const plan = planOf(rc.receipt, d, bk.price);
     const intent = {
       version: INTENT_VERSION, intent_id: openId, thesis_id: d.receipt_id, ...ticket, pair: pr.pair, side: 'OPEN_LONG', order_type: 'LIMIT',
       created_at: ctx.now, reference_price: bk.price, reference_at: bk.price_at,
       entry_price: plan.entry, stop_loss_price: plan.stop, take_profit_price: plan.target, risk_ceiling_usd: plan.risk,
-      max_slippage_bps: SLIPPAGE_BPS, valid_until: iso(ctx.t + ctx.s.rules.max_validity_minutes * MIN), evidence: plan.evidence,
+      max_slippage_bps: SLIPPAGE_BPS, valid_until: iso(ctx.t + life * MIN), evidence: plan.evidence,
     };
-    return out('ready', `Ready to ask the book: buy ${pr.pair} at ${usd(plan.entry)}, stop ${usd(plan.stop)}, target ${usd(plan.target)}, risk ${usd(plan.risk)}.`, { kind: 'open', intent }, { pair: pr.pair });
+    // Checked as the book will check it, before its one ID is spent (M2), and
+    // sized to the largest order every limit allows, never above Eric's
+    // approved risk (M4). Anything the book would refuse waits, in words.
+    const f = fit(intent, bk, ctx.s.rules, ctx.s.venue);
+    if (!f.ok) return out('waiting', `The book would refuse the order now, so it is not asked yet (its one attempt is kept): ${f.refusals.map((x) => x.words).join(' ')}`, null, { pair: pr.pair, refusals: f.refusals });
+    const sz = f.sizing;
+    const less = f.binding.length ? ` Sized down from your ${usd(plan.risk)} to fit ${f.binding.map((r) => BINDING_WORDS[r] || r).join(' and ')}.` : '';
+    return out('ready', `Ready to ask the book: buy ${sz.quantity} ${pr.pair} at ${usd(plan.entry)} (${usd(sz.notional_usd)}), stop ${usd(plan.stop)}, target ${usd(plan.target)}, ${usd(sz.loss_at_stop_usd)} at the stop.${less}`, { kind: 'open', intent: f.intent }, { pair: pr.pair, sizing: { ...sz, risk_ceiling_usd: f.intent.risk_ceiling_usd, approved_risk_usd: plan.risk, binding: f.binding } });
   }
 
   // A refused intent has no order, so its pair is named from the project.
@@ -605,4 +684,4 @@ function gapOf(ws, pair, hour, now) {
   }
 }
 
-module.exports = { VERSION, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, intentIdOf, plain, closeLimit, settingsOf, pairOf, planOf, horizonOf, settlementOf, requests, view, wanted, step, applyHours };
+module.exports = { VERSION, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, intentIdOf, plain, closeLimit, fit, settingsOf, pairOf, planOf, horizonOf, settlementOf, requests, view, wanted, step, applyHours };
