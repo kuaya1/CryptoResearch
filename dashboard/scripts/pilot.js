@@ -155,7 +155,8 @@ function runLocal(o) {
       if (g.verified === false) throw new Error('The desk\'s gate receipt did not read back as written; run the pilot again.');
       continue;
     }
-    if (s.step === 'ticket') {
+    if (s.step === 'ticket_failed') say(`    the last save was refused${s.refused_field ? ` (${s.refused_field})` : ''}: running the Prosecutor again on ${s.ticket_id}.`);
+    if (s.step === 'ticket' || s.step === 'ticket_failed') {
       if (o.dryRun) return say('    would run Agent 2 (the Prosecutor) with claude -p, then save the ticket.');
       const t = cli(['tickets', 'start', o.project, ...(s.refresh ? ['--reopen'] : []), ...(s.force ? ['--force-prosecution'] : []), '--assistant', '--mode', 'cli', '--utterance', s.force ? (o.ownerWords || FORCE_WORDS) : 'autonomous pilot (npm run pilot)']);
       if (!t.ticket_id) throw new Error(t.message);

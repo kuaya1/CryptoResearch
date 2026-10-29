@@ -762,7 +762,8 @@ function saveDraft(ws, pid, tid, { text, note = null }) {
     if (t.job.state === 'waiting') Object.assign(t.job, { state: 'running', mode: 'cowork', note: 'Taken by Claude with its first draft.' });
     if (t.job.state !== 'running') throw new OpError('CONFLICT', `Ticket ${tid} is ${t.job.state}; a draft is kept only for open work.`);
     op.write(draftRel(pid, tid), body);
-    Object.assign(t.job, { draft_saved_at: at, draft_chars: body.length, progress_note: note ? String(note).slice(0, 300) : null, updated_at: at });
+    // A new draft is a new attempt: the last refusal no longer stands.
+    Object.assign(t.job, { draft_saved_at: at, draft_chars: body.length, progress_note: note ? String(note).slice(0, 300) : null, last_refusal: null, updated_at: at });
     return { at, chars: body.length };
   }, `Prosecutor draft for ${tid}`, 'ticket_draft');
   return { status: 'saved', ...out.result, verified: out.verified };
@@ -947,7 +948,49 @@ function admitted(g, admission) {
   return { ...g, risk_allowed: false, allowed_types: g.allowed_types.filter((x) => !RISK_TAKING.has(x)), proposal_type: 'WATCH_ONLY', capped: { from: g.proposal_type, reason: why }, suggested_risk_usd: 0, reasons: [why], admission_hold: true };
 }
 
-function saveTicket(ws, { project_id: pid, ticket_id: tid, text, revision = null, channel = null }) {
+// The field a refusal names, for the queue's ticket_failed step.
+function refusedField(err) {
+  const d = err.details || {};
+  if (Array.isArray(d.fields) && d.fields.length) return String(d.fields[0]).split(':')[0];
+  if (d.trigger) return 'proposal.invalidation_trigger';
+  const m = String(err.message || '');
+  if (/too short|larger than/.test(m)) return 'text';
+  if (/JSON block was found/.test(m)) return 'json_block';
+  if (/revision/.test(m)) return 'revision';
+  if (/as_of/.test(m)) return 'as_of';
+  const dotted = m.match(/\b(?:prosecution|proposal|entry_zone|upside_target|invalidation_trigger)(?:\.[a-z0-9_]+)*\b/);
+  return dotted ? dotted[0] : null;
+}
+
+// A refused save on an open ticket is recorded on its job (an operational
+// record: the field, the message, the text kept as the draft), so the queue
+// says ticket_failed with the reason instead of repeating "ticket". INTEGRITY,
+// a closed or missing ticket and a trigger already breached at the save (A03:
+// refused with nothing written) write nothing; the refusal is thrown as is.
+function saveTicket(ws, args) {
+  try {
+    return saveTicketOnce(ws, args);
+  } catch (err) {
+    if (['INVALID', 'CONFLICT'].includes(err.code) && !(err.details && err.details.trigger) && TICKET_RE.test(String(args.ticket_id)) && isProjectId(args.project_id)) {
+      const body = typeof args.text === 'string' ? args.text : '';
+      try {
+        updateTicket(ws, args.project_id, args.ticket_id, (t, op) => {
+          if (!OPEN.has(t.job.state)) return { noop: true };
+          const at = iso(Date.now());
+          if (body.trim() && Buffer.byteLength(body) <= MAX_DRAFT) {
+            op.write(draftRel(args.project_id, args.ticket_id), body);
+            Object.assign(t.job, { draft_saved_at: at, draft_chars: body.length });
+          }
+          Object.assign(t.job, { last_refusal: { at, code: err.code, field: refusedField(err), message: String(err.message).slice(0, 600) }, updated_at: at });
+          return {};
+        }, `Prosecutor save refused on ${args.ticket_id}`, 'ticket_refusal');
+      } catch (_) { /* the refusal below is what the caller needs */ }
+    }
+    throw err;
+  }
+}
+
+function saveTicketOnce(ws, { project_id: pid, ticket_id: tid, text, revision = null, channel = null }) {
   if (require('./research').heldProviders(ws).claude) throw new OpError('REFUSED', 'Claude is on hold on this desk; nothing was saved.');
   const body = typeof text === 'string' ? text : '';
   if (body.trim().length < MIN_TEXT) throw new OpError('INVALID', `That is too short to be the finished ticket (${body.trim().length} characters). Save the whole text with its JSON block.`);
@@ -1743,6 +1786,8 @@ function nextStep(ws, pid, { now = Date.now(), heldSet = undefined } = {}) {
   const ageDays = r.analysis_at ? (now - Date.parse(r.analysis_at)) / 86400000 : null;
   if (ageDays !== null && ageDays > staleDays) return { ...base, step: 'research', run_id: null, report_id: r.report_id, why: `Claude's report is ${Math.round(ageDays)} days old, past ${staleDays}: research again (Agent 1).` };
   const open = openTicket(ws, pid);
+  const refused = open && open.job.last_refusal;
+  if (refused) return { ...base, step: 'ticket_failed', ticket_id: open.ticket_id, state: open.job.state, report_id: open.basis.researcher.report_id, refused_field: refused.field || null, refused_at: refused.at, why: `Prosecutor: save refused${refused.field ? `, ${refused.field}` : ''}: ${refused.message} Run the Prosecutor again on ticket ${open.ticket_id} (start_ticket resumes it with its draft), then save_ticket.` };
   if (open) return { ...base, step: 'ticket', ticket_id: open.ticket_id, state: open.job.state, report_id: open.basis.researcher.report_id, why: `Ticket ${open.ticket_id} is open: write the Prosecutor's ticket (Agent 2).` };
   const v = view(ws, pid, { now });
   if (v.ticket && v.ticket.status === 'reopened' && v.ticket.researcher_report_id === r.report_id) return { ...base, step: 'ticket', ticket_id: null, report_id: r.report_id, refresh: true, reopen: true, why: `Eric re-opened ticket ${v.ticket.receipt_id}: open a new one on Claude's current report ${r.report_id} (start_ticket with refresh: true). The old receipt is kept.` };

@@ -1051,6 +1051,13 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     return id;
   };
   route('GET', '/api/projects/([^/]+)/tickets', (m) => coherent(() => tickets.view(ws, pid(m[1]))));
+  // ChatGPT's challenge of the ticket in force (or ?receipt=): the PM card's
+  // row and every saved challenge, each checked against the ticket receipt on
+  // disk (core/ticket-challenges.js). Advisory; reading writes nothing.
+  route('GET', '/api/projects/([^/]+)/tickets/challenges', (m, req, res, body, url) => {
+    const rid = url.searchParams.get('receipt');
+    return coherent(() => require('./core/ticket-challenges').challengesView(ws, pid(m[1]), { receiptId: rid ? ticketReceipt(rid) : null }));
+  });
   route('GET', '/api/projects/([^/]+)/tickets/(tk_[^/]+)/prompt', (m) => {
     const id = pid(m[1]);
     const t = tickets.loadTicket(ws, id, ticketId(m[2]));

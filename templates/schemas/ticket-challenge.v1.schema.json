@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cr.ticket-challenge.v1",
+  "title": "CryptoResearch PM ticket challenge, version 1",
+  "description": "The JSON block ChatGPT ends a cr-ticket-challenge-prompt@1 challenge with. It names the challenge, project, ticket receipt and that receipt's SHA-256, the prompt, role and model, exactly as its frozen prompt gives them. Each of the four tests is agree, disagree or cannot_assess with its reason; the verdict must fit the tests (concur: at least one agree and no disagree; material_objection and fatal_objection: at least one disagree; insufficient_evidence: any mix, and the only verdict when all four are cannot_assess). It has no proposal type, size, risk, grade or price, and no other field is accepted. It is saved as its own receipt and never changes the ticket it challenges.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "challenge_id", "project_id", "receipt_id", "receipt_sha256", "prompt_version", "role", "model", "tests", "trade_plan_critique", "challenge_verdict", "verdict_reason", "sources"],
+  "$defs": {
+    "test": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assessment", "reason", "source_ids"],
+      "properties": {
+        "assessment": { "enum": ["agree", "disagree", "cannot_assess"] },
+        "reason": { "type": "string", "minLength": 1 },
+        "source_ids": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+  "properties": {
+    "format": { "const": "cr.ticket-challenge.v1" },
+    "challenge_id": { "type": "string", "pattern": "^tc_\\d{4}-\\d{2}-\\d{2}T\\d{6}Z_[a-z2-9]{5}$" },
+    "project_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "receipt_id": { "type": "string", "pattern": "^tr_\\d{4}-\\d{2}-\\d{2}T\\d{6}Z_[a-z2-9]{5}$" },
+    "receipt_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "prompt_version": { "const": "cr-ticket-challenge-prompt@1" },
+    "role": { "const": "challenger" },
+    "model": { "const": "chatgpt" },
+    "model_version": { "type": ["string", "null"] },
+    "as_of": { "type": ["string", "null"] },
+    "tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mercenary_emissions", "tax_revenue", "exit_slippage", "unverified_claims"],
+      "properties": {
+        "mercenary_emissions": { "$ref": "#/$defs/test" },
+        "tax_revenue": { "$ref": "#/$defs/test" },
+        "exit_slippage": { "$ref": "#/$defs/test" },
+        "unverified_claims": { "$ref": "#/$defs/test" }
+      }
+    },
+    "trade_plan_critique": { "type": "string", "minLength": 1 },
+    "challenge_verdict": { "enum": ["concur", "material_objection", "fatal_objection", "insufficient_evidence"] },
+    "verdict_reason": { "type": "string", "minLength": 1 },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_id", "url"],
+        "properties": {
+          "source_id": { "type": "string", "minLength": 1 },
+          "url": { "type": "string", "minLength": 1 },
+          "publisher": { "type": ["string", "null"] },
+          "retrieved_at": { "type": ["string", "null"] },
+          "excerpt": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}
