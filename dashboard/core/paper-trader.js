@@ -15,9 +15,10 @@
 // every call (no state is kept in memory between calls):
 //   paper/trader/journal.jsonl  the engine's record: the funding, every
 //       intent and its verdict, each order's states, the hours applied and
-//       the fills and exits they made, and NAV at each hour's end. Each line
-//       carries the SHA-256 of the line before it; a broken chain refuses
-//       every read and write (INTEGRITY).
+//       the fills and exits they made. NAV is never written: it is derived
+//       from them on every read (below). Each line carries the SHA-256 of the
+//       line before it; a broken chain refuses every read and write
+//       (INTEGRITY).
 //   paper/trader/venue.jsonl    the simulated venue's own record of what it
 //       accepted or rejected, by client order ID: what a reconciliation asks.
 //       It is created with the first reservation; once the book holds an
@@ -57,6 +58,15 @@
 //     NAV is unknown and every intent is refused); NAV is cash plus each open
 //     quantity at its pair's latest hourly close no older than
 //     NAV_PRICE_FRESH_MINUTES, else unknown, never valued at 0 or at entry;
+//   - portfolio time (F1, the Codex audit of 2026-10-28): NAV at each hour's
+//     end since the funding, and the drawdowns read from it, are derived
+//     from the journal on every read, from the fills and exits of the hours
+//     ended by then and each pair's close at that hour. The order in which
+//     the pairs' hours arrive never changes them, an hour before the funding
+//     is never in them, and an hour that arrives late corrects the hours
+//     after it. An hour end is valued only by its own hour (PR 1b); only the
+//     newest, whose hour may not have arrived yet, takes the latest close,
+//     within the freshness window of now;
 //   - sizes from cr-trade-risk@2 (floored to the lot, every cost in), with
 //     the planned loss already at the stops counted against the 24-hour
 //     ceiling and the thesis's grant; an order's cash and fee are committed
@@ -368,7 +378,7 @@ function noCallerGrant(ctx) {
 // --- The state, replayed from the journal.
 
 function replay(events) {
-  const st = { funded: null, funded_at: null, cash: 0n, intents: new Map(), orders: new Map(), positions: new Map(), bars: new Map(), marks: [], realized: 0n, fees: 0n, last_at: null };
+  const st = { funded: null, funded_at: null, cash: 0n, intents: new Map(), orders: new Map(), positions: new Map(), bars: new Map(), flows: [], realized: 0n, fees: 0n, last_at: null };
   for (const e of events) applyEvent(st, e);
   return st;
 }
@@ -422,6 +432,8 @@ function applyEvent(st, e) {
       const p = st.positions.get(e.position_id) || { position_id: e.position_id, intent_id: o.intent_id, thesis_id: o.thesis_id, pair: o.pair, stop: o.stop, take_profit: o.take_profit, per_unit_loss: o.per_unit_loss, exit_fee_rate: dec(o.venue.taker_rate), quantity: 0n, notional: 0n, cost: 0n, realized: 0n, exits: [], opened_at: e.at };
       p.quantity += q; p.notional += dec(e.notional_usd); p.cost += cost; p.state = 'open';
       st.positions.set(e.position_id, p);
+      // What NAV by the hour is derived from: the cash and quantity each hour moved.
+      st.flows.push({ t: Date.parse(e.hour), pair: o.pair, position_id: e.position_id, cash: -cost, quantity: q });
       break;
     }
     case 'exit': {
@@ -433,11 +445,14 @@ function applyEvent(st, e) {
       st.realized += pnl;
       p.realized += pnl;
       p.exits.push({ hour: e.hour, reason: e.reason, quantity: e.quantity, price: e.price, realized_pnl_usd: str(pnl) });
+      st.flows.push({ t: Date.parse(e.hour), pair: p.pair, position_id: e.position_id, cash: dec(e.proceeds_usd) - fee, quantity: -p.quantity });
       p.quantity = 0n; p.notional = 0n; p.cost = 0n; p.state = 'closed'; p.closed_at = e.at;
       if (o) { o.filled = o.quantity; o.state = 'FILLED'; }
       break;
     }
-    case 'mark': st.marks.push({ t: Date.parse(e.hour_end), nav: dec(e.nav_usd) }); break;
+    // NAV at an hour's end as an earlier build wrote it: read, never used
+    // (NAV by the hour is derived, navSeries).
+    case 'mark': break;
     default: throw new OpError('INTEGRITY', `${JOURNAL} holds an event ${VERSION} does not know: ${e.type}.`);
   }
   st.last_at = e.at;
@@ -490,14 +505,63 @@ function navAt(st, t) {
   return nav;
 }
 
+// NAV at each hour's end from the first at or after the funding to t (F1):
+// the cash after the fills and exits of every hour ended by then, and each
+// quantity held then at the close of its pair's hour that ends there, else
+// unknown (PR 1b: a past hour end is never valued at an earlier close). Only
+// an hour end after the pair's newest hour ended by t, whose own hour may not
+// have arrived yet, takes that newest close, and only while it is within
+// NAV_PRICE_FRESH_MINUTES of t, as NAV now does. Derived from the journal on
+// every read, never written, so it does not depend on the order in which the
+// pairs' hours were applied. `after` leaves out the hour ends at or before it.
+function navSeries(st, t, after = null) {
+  if (st.funded === null) return [];
+  const flows = [...st.flows].sort((a, b) => a.t - b.t);
+  const held = new Map();
+  const seen = new Map();
+  // A pair's close at an hour's end; the ends asked only move forward.
+  const closeAt = (pair, end) => {
+    const list = st.bars.get(pair) || [];
+    let k = seen.has(pair) ? seen.get(pair) : -1;
+    while (k + 1 < list.length && list[k + 1].t + HOUR <= end) k++;
+    seen.set(pair, k);
+    if (k < 0) return null;
+    if (list[k].t + HOUR === end) return list[k].close;
+    const newest = k === list.length - 1 || list[k + 1].t + HOUR > t;
+    return newest && t - (list[k].t + HOUR) <= NAV_PRICE_FRESH_MINUTES * MIN ? list[k].close : null;
+  };
+  let end = Math.ceil(Date.parse(st.funded_at) / HOUR) * HOUR;
+  if (after !== null) end = higher(end, Math.floor(after / HOUR) * HOUR + HOUR);
+  const out = [];
+  let cash = st.funded;
+  let i = 0;
+  for (; end <= t; end += HOUR) {
+    // An hour's fills and exits count from its end.
+    for (; i < flows.length && flows[i].t < end; i++) {
+      const f = flows[i];
+      const q = (held.has(f.position_id) ? held.get(f.position_id).quantity : 0n) + f.quantity;
+      cash += f.cash;
+      if (q === 0n) held.delete(f.position_id);
+      else held.set(f.position_id, { pair: f.pair, quantity: q });
+    }
+    let nav = cash;
+    for (const h of held.values()) {
+      const c = closeAt(h.pair, end);
+      if (c === null) { nav = null; break; }
+      nav += mulFloor(h.quantity, c);
+    }
+    out.push({ t: end, nav });
+  }
+  return out;
+}
+
 // From the highest NAV of the last 24 hours (each hour's end, and now) to
 // NAV now; unknown when any of them is.
 function drawdown24(st, t) {
   const now = navAt(st, t);
   if (now === null) return null;
   let high = now;
-  for (const m of st.marks) {
-    if (m.t <= t - 24 * HOUR || m.t > t) continue;
+  for (const m of navSeries(st, t, t - 24 * HOUR)) {
     if (m.nav === null) return null;
     if (m.nav > high) high = m.nav;
   }
@@ -843,7 +907,7 @@ function readBar(bar) {
 
 // One closed hour of a pair: expiries, then the stops and targets of what was
 // held at its open, then close orders, then buys (and the stop of what they
-// filled), then NAV at the hour's end. The same hour again is unchanged;
+// filled). NAV is not written (navSeries). The same hour again is unchanged;
 // different prices for a recorded hour, or an hour before the last, refused;
 // for a pair with exposure, an hour that is not the next one is refused (GAP).
 function applyBar(ws, bar, { now } = {}) {
@@ -912,7 +976,6 @@ function applyBar(ws, bar, { now } = {}) {
       const p = st.positions.get(o.position_id);
       if (b.low <= p.stop) exit(p, lower(price, stopFill(p)), price <= p.stop ? 'stop_gap' : 'stop');
     }
-    add('mark', { hour_end: iso(end), nav_usd: orNull(navAt(st, end)) });
     return { status: 'saved', events: events.map((e) => ({ type: e.type, client_order_id: e.client_order_id, position_id: e.position_id, reason: e.reason, quantity: e.quantity, price: e.price })) };
   });
 }
@@ -977,9 +1040,10 @@ function results(ws, { now, btc } = {}) {
     };
   });
   if (st.funded === null) unknown.push('The book is not funded.');
+  const series = navSeries(st, t);
   let high = st.funded;
   let maxDd = st.funded === null ? null : 0n;
-  for (const m of st.marks) {
+  for (const m of series) {
     if (m.nav === null) { maxDd = null; unknown.push(`NAV is unknown at ${iso(m.t)}, so the largest drawdown is unknown.`); break; }
     if (m.nav > high) high = m.nav;
     if (maxDd !== null && high - m.nav > maxDd) maxDd = high - m.nav;
@@ -1005,7 +1069,7 @@ function results(ws, { now, btc } = {}) {
     open_positions: open,
     closed_positions: [...st.positions.values()].filter((p) => p.state === 'closed').map((p) => ({ position_id: p.position_id, pair: p.pair, realized_pnl_usd: str(p.realized), exits: p.exits })),
     orders: [...st.orders.values()].map(stateOf),
-    nav_by_hour: st.marks.map((m) => ({ hour_end: iso(m.t), nav_usd: orNull(m.nav) })),
+    nav_by_hour: series.map((m) => ({ hour_end: iso(m.t), nav_usd: orNull(m.nav) })),
     unknown,
   };
 }

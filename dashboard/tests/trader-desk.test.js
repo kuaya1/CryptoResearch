@@ -142,7 +142,7 @@ test('12a end to end: Approve waits for the book, is refused by the exit cap, Ha
   const approve = ap.result.decision;
 
   // 2. Eric sets his rules, the funding and the fee; sixteen closed hours
-  // arrive. The book is funded first, so every hour has a NAV.
+  // arrive. The book is funded first; NAV by the hour starts at the funding.
   settle(ws);
   assert.deepEqual(TD.wanted(ws), [{ pair: PAIR, project_id: pid, why: 'waiting', last_hour: null }]);
   const now0 = Date.now();
@@ -237,8 +237,11 @@ test('12a end to end: Approve waits for the book, is refused by the exit cap, Ha
   assert.deepEqual(v.orders.map((o) => [o.side, o.pair, o.state, o.decision_id, o.purpose]), [['OPEN_LONG', PAIR, 'CANCELLED', halve.decision_id, 'open'], ['CLOSE_LONG', PAIR, 'FILLED', halve.decision_id, 'close']]);
   assert.deepEqual(v.results.closed_positions.map((p) => [p.project_id, p.decision_id, p.realized_pnl_usd, p.exit_words]), [[pid, halve.decision_id, '-5.1', 'Sold at $0.85']]);
   assert.deepEqual(v.results.open_positions, []);
+  // NAV by the hour runs from the funding: the hours read before it hold none.
   const navs = v.results.nav_by_hour;
-  assert.ok(navs.length >= 18);
+  assert.equal(navs[0].hour_end, iso(Math.ceil(Date.parse(v.results.funded_at) / H) * H));
+  assert.equal(navs[navs.length - 1].hour_end, iso(Math.floor(n2 / H) * H));
+  assert.ok(navs.every((m) => m.nav_usd !== null));
   assert.equal(navs[navs.length - 1].nav_usd, '24994.9');
   assert.deepEqual(v.hours, PT.hours(ws));
 });

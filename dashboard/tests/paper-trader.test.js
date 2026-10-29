@@ -100,9 +100,9 @@ test('an intent is sized by cr-trade-risk@2 with the stop slippage and fees in, 
 test('a limit buy fills only when the low trades below it, never at a touch, at its limit, with the taker fee', (t) => {
   const ws = setup(t);
   PT.submitIntent(ws, intent('A'), ctx());
-  assert.deepEqual(hour(ws, 15, { low: '100', open: '100.5', close: '100.5' }).events.map((e) => e.type), ['bar', 'mark']);
+  assert.deepEqual(hour(ws, 15, { low: '100', open: '100.5', close: '100.5' }).events.map((e) => e.type), ['bar']);
   const e = hour(ws, 16, { low: '99.99' }).events;
-  assert.deepEqual(e.map((x) => x.type), ['bar', 'fill', 'mark']);
+  assert.deepEqual(e.map((x) => x.type), ['bar', 'fill']);
   assert.deepEqual([e[1].quantity, e[1].price], ['17.771', '100']);
   const r = res(ws, T0 + 17 * H + M);
   assert.equal(r.cash_usd, '8219.3458');
@@ -130,7 +130,7 @@ test('one hour fills at most FILL_SHARE_MAX of its volume; the rest stays open a
   // Volume under one lot's share fills nothing.
   const ws2 = setup(t);
   PT.submitIntent(ws2, intent('B'), ctx());
-  assert.deepEqual(hour(ws2, 15, { low: '99', volume: '0.009' }).events.map((x) => x.type), ['bar', 'mark']);
+  assert.deepEqual(hour(ws2, 15, { low: '99', volume: '0.009' }).events.map((x) => x.type), ['bar']);
 });
 
 test('POST_ONLY pays the maker fee; the venue rejects one that would cross; an unknown fee refuses', (t) => {
@@ -184,7 +184,7 @@ test('one hour reaching both the stop and the target takes the stop; a target is
   const ws2 = setup(t);
   PT.submitIntent(ws2, intent('A'), ctx());
   hour(ws2, 15, { low: '99' });
-  assert.deepEqual(hour(ws2, 16, { high: '115', close: '114' }).events.map((x) => x.type), ['bar', 'mark'], 'a touch of the target is not a fill');
+  assert.deepEqual(hour(ws2, 16, { high: '115', close: '114' }).events.map((x) => x.type), ['bar'], 'a touch of the target is not a fill');
   const tp = hour(ws2, 17, { high: '115.5', close: '115' }).events.find((x) => x.type === 'exit');
   assert.deepEqual([tp.reason, tp.price], ['take_profit', '115']);
   assert.ok(D(res(ws2, T0 + 18 * H + M).realized_pnl_usd) > 0);
@@ -194,10 +194,10 @@ test('the hour that fills a buy checks its stop, never its target', (t) => {
   const ws = setup(t);
   PT.submitIntent(ws, intent('A'), ctx());
   const types = hour(ws, 15, { open: '100', high: '120', low: '94', close: '96' }).events.map((x) => [x.type, x.reason]);
-  assert.deepEqual(types, [['bar', undefined], ['fill', undefined], ['exit', 'stop'], ['mark', undefined]]);
+  assert.deepEqual(types, [['bar', undefined], ['fill', undefined], ['exit', 'stop']]);
   const ws2 = setup(t);
   PT.submitIntent(ws2, intent('A'), ctx());
-  assert.deepEqual(hour(ws2, 15, { high: '120', low: '99', close: '110' }).events.map((x) => x.type), ['bar', 'fill', 'mark']);
+  assert.deepEqual(hour(ws2, 15, { high: '120', low: '99', close: '110' }).events.map((x) => x.type), ['bar', 'fill']);
 });
 
 test('NAV is unknown without a fresh price, never 0 or the entry; an intent is then refused', (t) => {
@@ -340,7 +340,7 @@ test('an order past its life expires at the next hour and releases its cash; can
   hour(ws, 15, { low: '99', volume: '50' });
   hour(ws, 16, { low: '100' });
   const e = hour(ws, 17, { low: '99' }).events;
-  assert.deepEqual(e.map((x) => x.type), ['bar', 'expired', 'mark'], 'valid_until fell inside hour 17');
+  assert.deepEqual(e.map((x) => x.type), ['bar', 'expired'], 'valid_until fell inside hour 17');
   assert.deepEqual(res(ws, T0 + 18 * H + M).orders.map((o) => [o.state, o.filled]), [['EXPIRED', '5']]);
   assert.equal(PT.book(ws, 'FICT/USDC', ctx(T0 + 18 * H + M)).available_cash_usd, res(ws, T0 + 18 * H + M).cash_usd);
   const ws2 = setup(t);
@@ -360,7 +360,7 @@ test('a CLOSE_LONG closes the whole position at its limit when the high trades a
   const r = PT.submitIntent(ws, close, ctx(now));
   assert.equal(r.state, 'ACKED');
   assert.deepEqual(r.sizing, { quantity: '17.771' });
-  assert.deepEqual(hour(ws, 16, { high: '100.5', close: '100.4' }).events.map((x) => x.type), ['bar', 'mark']);
+  assert.deepEqual(hour(ws, 16, { high: '100.5', close: '100.4' }).events.map((x) => x.type), ['bar']);
   const ex = hour(ws, 17, { high: '100.6' }).events.find((x) => x.type === 'exit');
   assert.deepEqual([ex.reason, ex.price, ex.quantity], ['close', '100.5', '17.771']);
   const out = res(ws, T0 + 18 * H + M);
@@ -673,7 +673,7 @@ test('red team P1-6: inside a queued request each journal write keeps its own id
     ws._idem = null;
   }
   assert.equal(r.state, 'ACKED');
-  assert.deepEqual(events(ws).slice(-8).map((e) => e.type), ['reserved', 'sent', 'answer', 'bar', 'fill', 'mark', 'bar', 'mark']);
+  assert.deepEqual(events(ws).slice(-6).map((e) => e.type), ['reserved', 'sent', 'answer', 'bar', 'fill', 'bar']);
   assert.deepEqual(res(ws, T0 + 17 * H + M).nav_by_hour.slice(-2).map((m) => m.hour_end), [at(T0 + 16 * H), at(T0 + 17 * H)]);
 });
 
@@ -683,9 +683,9 @@ test('red team P1-7: an order fills only from hours that start at or after it wa
   const now = T0 + 16 * H + 5 * M;
   assert.equal(PT.submitIntent(ws, intent('A', {}, now), ctx(now, { rules })).state, 'ACKED');
   // Hour 15 ended before the order existed; hour 16 began before it was sent.
-  assert.deepEqual(PT.applyBar(ws, bar(15, { low: '99', high: '103.5', close: '103' }), { now: at(now + M) }).events.map((e) => e.type), ['bar', 'mark']);
-  assert.deepEqual(hour(ws, 16, { low: '99' }).events.map((e) => e.type), ['bar', 'mark']);
-  assert.deepEqual(hour(ws, 17, { low: '99' }).events.map((e) => e.type), ['bar', 'fill', 'mark']);
+  assert.deepEqual(PT.applyBar(ws, bar(15, { low: '99', high: '103.5', close: '103' }), { now: at(now + M) }).events.map((e) => e.type), ['bar']);
+  assert.deepEqual(hour(ws, 16, { low: '99' }).events.map((e) => e.type), ['bar']);
+  assert.deepEqual(hour(ws, 17, { low: '99' }).events.map((e) => e.type), ['bar', 'fill']);
 });
 
 test('red team P2-8: for a pair with exposure, an hour that is not the next one is refused', (t) => {
@@ -755,7 +755,7 @@ test('red team P2-14: an order whose life ends inside an hour expires before tha
   const ws = setup(t);
   assert.equal(PT.submitIntent(ws, intent('A', { valid_until: at(T0 + 16 * H + M) }), ctx()).state, 'ACKED');
   hour(ws, 15, { low: '100.2', open: '100.5', close: '100.5', high: '101' });
-  assert.deepEqual(hour(ws, 16, { low: '99' }).events.map((e) => e.type), ['bar', 'expired', 'mark']);
+  assert.deepEqual(hour(ws, 16, { low: '99' }).events.map((e) => e.type), ['bar', 'expired']);
 });
 
 // --- D8 (Eric, 2026-10-28): the grant is read from Eric's stored decision.
@@ -946,4 +946,297 @@ test('D11: a close reads no exit cap, so a position still closes after its readi
   assert.match(exitWords(PT.submitIntent(ws, intent('B', {}, now), ctx(now))), /is not on record/);
   const close = intent('C', { side: 'CLOSE_LONG', position_id: `pos-${ID('A')}`, entry_price: '100.5', reference_price: '100' }, now);
   assert.equal(PT.submitIntent(ws, close, ctx(now)).state, 'ACKED');
+});
+
+// --- Portfolio time (F1, the Codex audit of 2026-10-28): each test failed on 5022c2c.
+
+const OTHR = 'OTHR/USDC';
+const obar = (i, over = {}) => ({ pair: OTHR, hour: at(T0 + i * H), open: '50', high: '51', low: '49.5', close: '50', volume: '1000000', ...over });
+const navs = (r) => r.nav_by_hour.map((m) => [m.hour_end, m.nav_usd]);
+// Every hour's end from the first at or after the funding, one hour apart, each known.
+function portfolioTime(r) {
+  const ends = r.nav_by_hour.map((m) => Date.parse(m.hour_end));
+  assert.ok(ends.length > 0);
+  assert.ok(ends[0] >= Date.parse(r.funded_at), 'no NAV before the funding');
+  ends.forEach((e, i) => { if (i) assert.equal(e - ends[i - 1], H, 'one hour apart, in time order'); });
+  assert.ok(r.nav_by_hour.every((m) => m.nav_usd !== null), 'every NAV known');
+}
+
+test('F1: a second pair\'s earlier hours change no NAV by the hour, and none is before the funding', (t) => {
+  const ws = setup(t);
+  PT.submitIntent(ws, intent('A'), ctx());
+  hour(ws, 15, { low: '99' });
+  hour(ws, 16, { high: '103', close: '102' });
+  const now = T0 + 17 * H + M;
+  const before = res(ws, now);
+  portfolioTime(before);
+  // The hourly read's first answer for a new pair: 22 hours, from before the funding.
+  for (let i = -5; i <= 16; i++) assert.equal(PT.applyBar(ws, obar(i), { now: at(now) }).status, 'saved');
+  const after = res(ws, now);
+  portfolioTime(after);
+  assert.deepEqual(navs(after), navs(before));
+  assert.deepEqual([after.nav_usd, after.max_drawdown_usd, after.drawdown_24h_usd], [before.nav_usd, before.max_drawdown_usd, before.drawdown_24h_usd]);
+  assert.equal(PT.book(ws, 'FICT/USDC', ctx(now)).drawdown_24h_usd, before.drawdown_24h_usd);
+  // NAV is never written: the journal holds the hours and the fill.
+  assert.equal(events(ws).filter((e) => e.type === 'mark').length, 0);
+});
+
+test('F1: two held pairs caught up pair by pair give the NAV the same hours give in time order', (t) => {
+  const rules = { ...RULES, allowlist: ['FICT/USDC', OTHR] };
+  const fict = { 15: { low: '99' }, 16: { high: '103', close: '102' }, 17: { open: '102', high: '102', low: '97.5', close: '98' }, 18: { open: '98', high: '101.5', low: '97.8', close: '101' } };
+  const othr = { 15: { low: '49' }, 16: { high: '52.5', close: '52' }, 17: { open: '52', high: '52', low: '48', close: '48.5' }, 18: { open: '48.5', high: '50.5', low: '48.2', close: '50' } };
+  const now = T0 + 19 * H + M;
+  // Both pairs held from hour 15; four hours each, read after an outage.
+  const held = (order) => {
+    const ws = setup(t);
+    for (let i = 0; i < 15; i++) PT.applyBar(ws, obar(i), { now: at(NOW) });
+    assert.equal(PT.submitIntent(ws, intent('A'), ctx(NOW, { rules })).state, 'ACKED');
+    assert.equal(PT.submitIntent(ws, intent('B', { pair: OTHR, reference_price: '50', entry_price: '50', stop_loss_price: '47.5', take_profit_price: '57.5' }), ctx(NOW, { rules })).state, 'ACKED');
+    for (const [pair, i] of order) {
+      const b = pair === OTHR ? obar(i, othr[i]) : bar(i, fict[i]);
+      assert.equal(PT.applyBar(ws, b, { now: at(now) }).status, 'saved');
+    }
+    return res(ws, now);
+  };
+  const hours = [15, 16, 17, 18];
+  // As the hourly read applies them, one pair's hours after the other's; and in time order.
+  const byPair = held([...hours.map((i) => ['FICT/USDC', i]), ...hours.map((i) => [OTHR, i])]);
+  const byHour = held(hours.flatMap((i) => [['FICT/USDC', i], [OTHR, i]]));
+  portfolioTime(byPair);
+  assert.deepEqual(navs(byPair), navs(byHour));
+  assert.deepEqual([byPair.max_drawdown_usd, byPair.drawdown_24h_usd], [byHour.max_drawdown_usd, byHour.drawdown_24h_usd]);
+  // At 19:00 both are held at hour 18's close: cash 10000 − 2 × 1780.6542,
+  // 17.771 × 101 and 35.542 × 50.
+  assert.deepEqual(navs(byPair).slice(-1), [[at(T0 + 19 * H), '10010.6626']]);
+  assert.equal(byPair.nav_usd, '10010.6626');
+});
+
+test('F1: the hours read before the funding hold no NAV; the first is the funding\'s own hour', (t) => {
+  const tw = tempWorkspace('ptrader');
+  t.after(tw.cleanup);
+  const ws = tw.ws;
+  writeDecisions(ws, [decision()]);
+  writeExits(ws);
+  // The adapter funds the book, then the hourly read fills in the hours before.
+  assert.equal(PT.fund(ws, { cash_usd: '10000', now: at(NOW) }).status, 'saved');
+  for (let i = 0; i < 15; i++) assert.equal(PT.applyBar(ws, bar(i), { now: at(NOW) }).status, 'saved');
+  const r = res(ws, NOW + 30 * M);
+  assert.deepEqual(navs(r), [[at(NOW), '10000']]);
+  assert.deepEqual([r.max_drawdown_usd, r.drawdown_24h_usd], ['0', '0']);
+  assert.equal(PT.submitIntent(ws, intent('A'), ctx()).state, 'ACKED');
+});
+
+// --- PR 1's acceptance tests (the second review of 2026-10-28, PR 1b).
+
+const os = require('os');
+const path = require('path');
+const ops = require('../core/ops');
+const { openWorkspace } = require('../core/workspace');
+
+// The independent ledger's arithmetic: decimal strings as integers at 18
+// places, never the engine's own functions.
+const E18 = 10n ** 18n;
+const units = (s) => {
+  const neg = s.startsWith('-');
+  const [i, f = ''] = (neg ? s.slice(1) : s).split('.');
+  const v = BigInt(i) * E18 + BigInt((f + '0'.repeat(18)).slice(0, 18));
+  return neg ? -v : v;
+};
+// Cash, fees, the realized result and NAV at each hour's end, from the
+// journal's lines alone. Every hour end here has its own hour on record.
+function ledger(ws, t) {
+  const evs = events(ws);
+  const funded = evs.find((e) => e.type === 'funded');
+  const closes = new Map(evs.filter((e) => e.type === 'bar').map((e) => [`${e.pair}|${Date.parse(e.hour)}`, units(e.close)]));
+  const pairOf = new Map(evs.filter((e) => e.type === 'reserved').map((e) => [e.position_id, e.intent.pair]));
+  const moves = evs.filter((e) => e.type === 'fill' || e.type === 'exit');
+  const pos = new Map();
+  let cash = units(funded.cash_usd);
+  let fees = 0n;
+  let realized = 0n;
+  const byPosition = new Map();
+  for (const e of moves) {
+    const p = pos.get(e.position_id) || { quantity: 0n, cost: 0n };
+    if (e.type === 'fill') {
+      const cost = units(e.notional_usd) + units(e.fee_usd);
+      cash -= cost; fees += units(e.fee_usd);
+      p.quantity += units(e.quantity); p.cost += cost;
+    } else {
+      const got = units(e.proceeds_usd) - units(e.fee_usd);
+      cash += got; fees += units(e.fee_usd); realized += got - p.cost;
+      byPosition.set(e.position_id, got - p.cost);
+      p.quantity = 0n; p.cost = 0n;
+    }
+    pos.set(e.position_id, p);
+  }
+  const nav = [];
+  for (let end = Math.ceil(Date.parse(funded.at) / H) * H; end <= t; end += H) {
+    let c = units(funded.cash_usd);
+    const held = new Map();
+    for (const e of moves.filter((x) => Date.parse(x.hour) < end)) {
+      if (e.type === 'fill') { c -= units(e.notional_usd) + units(e.fee_usd); held.set(e.position_id, (held.get(e.position_id) || 0n) + units(e.quantity)); }
+      else { c += units(e.proceeds_usd) - units(e.fee_usd); held.delete(e.position_id); }
+    }
+    for (const [id, q] of held) c += (q * closes.get(`${pairOf.get(id)}|${end - H}`)) / E18;
+    nav.push([end, c]);
+  }
+  return { cash, fees, realized, byPosition, nav };
+}
+
+test('PR 1b: an independent ledger of partial fills, a stop, a target and fees gives every figure the book derives', (t) => {
+  const ws = setup(t);
+  assert.equal(PT.submitIntent(ws, intent('A'), ctx()).state, 'ACKED');
+  assert.equal(PT.submitIntent(ws, intent('B', { stop_loss_price: '97', risk_ceiling_usd: '50' }), ctx()).state, 'ACKED');
+  hour(ws, 15, { low: '99', volume: '50.009' });
+  hour(ws, 16, { low: '99', high: '103', close: '102', volume: '1000' });
+  hour(ws, 17, { open: '101', high: '101.5', low: '96.5', close: '99' });
+  hour(ws, 18, { open: '99', high: '116', low: '98.5', close: '114' });
+  hour(ws, 19);
+  const now = T0 + 20 * H + M;
+  const evs = events(ws);
+  assert.deepEqual(evs.filter((e) => e.type === 'fill').map((e) => [e.hour, e.quantity]), [[at(T0 + 15 * H), '5'], [at(T0 + 15 * H), '5'], [at(T0 + 16 * H), '12.771'], [at(T0 + 16 * H), '8.751']], 'partial fills, then the rest');
+  assert.deepEqual(evs.filter((e) => e.type === 'exit').map((e) => [e.hour, e.reason]), [[at(T0 + 17 * H), 'stop'], [at(T0 + 18 * H), 'take_profit']]);
+  const r = res(ws, now);
+  const l = ledger(ws, now);
+  assert.deepEqual([units(r.cash_usd), units(r.fees_usd), units(r.realized_pnl_usd), units(r.nav_usd)], [l.cash, l.fees, l.realized, l.cash], 'nothing is held now, so NAV is the cash');
+  const byId = (a, b) => (a[0] < b[0] ? -1 : 1);
+  assert.deepEqual(r.closed_positions.map((p) => [p.position_id, units(p.realized_pnl_usd)]).sort(byId), [...l.byPosition].sort(byId));
+  assert.deepEqual(r.nav_by_hour.map((m) => [Date.parse(m.hour_end), units(m.nav_usd)]), l.nav);
+  let high = l.nav[0][1];
+  let maxDd = 0n;
+  for (const [, v] of l.nav) { if (v > high) high = v; if (high - v > maxDd) maxDd = high - v; }
+  assert.equal(units(r.max_drawdown_usd), maxDd);
+});
+
+// A copy of a workspace, so each order of the same hours starts from the same book.
+function copyOf(t, ws) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-test-ptorder-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 }));
+  fs.cpSync(ws.root, root, { recursive: true });
+  return openWorkspace({ root, actor: 'test' });
+}
+// Every order of two lists that keeps each list's own order.
+const interleavings = (a, b) => (!a.length ? [b] : !b.length ? [a] : [...interleavings(a.slice(1), b).map((x) => [a[0], ...x]), ...interleavings(a, b.slice(1)).map((x) => [b[0], ...x])]);
+
+test('PR 1b: every order of two held pairs\' hours that keeps each pair\'s own order gives the same NAV by the hour and drawdowns', (t) => {
+  const rules = { ...RULES, allowlist: ['FICT/USDC', OTHR] };
+  const base = setup(t);
+  for (let i = 0; i < 15; i++) PT.applyBar(base, obar(i), { now: at(NOW) });
+  assert.equal(PT.submitIntent(base, intent('A'), ctx(NOW, { rules })).state, 'ACKED');
+  assert.equal(PT.submitIntent(base, intent('B', { pair: OTHR, reference_price: '50', entry_price: '50', stop_loss_price: '47.5', take_profit_price: '57.5' }), ctx(NOW, { rules })).state, 'ACKED');
+  // Both fill in hour 15; FICT leaves at its target in hour 17, OTHR at its stop.
+  const fict = [[15, { low: '99' }], [16, { high: '103', close: '102' }], [17, { open: '102', high: '116', low: '101', close: '114' }]].map(([i, o]) => bar(i, o));
+  const othr = [[15, { low: '49' }], [16, { high: '52.5', close: '52' }], [17, { open: '52', high: '52', low: '47', close: '47.2' }]].map(([i, o]) => obar(i, o));
+  const now = T0 + 18 * H + M;
+  const orders = interleavings(fict, othr);
+  assert.equal(orders.length, 20);
+  const figures = orders.map((order) => {
+    const ws = copyOf(t, base);
+    for (const b of order) assert.equal(PT.applyBar(ws, b, { now: at(now) }).status, 'saved');
+    const r = res(ws, now);
+    portfolioTime(r);
+    // Positions are listed in the order they filled; compared by ID.
+    const exits = Object.fromEntries(r.closed_positions.map((p) => [p.position_id, p.exits.map((x) => [x.hour, x.reason, x.price])]));
+    return { navs: navs(r), dd: [r.max_drawdown_usd, r.drawdown_24h_usd], cash: r.cash_usd, realized: r.realized_pnl_usd, exits };
+  });
+  assert.deepEqual(Object.values(figures[0].exits).map((x) => x[0][1]).sort(), ['stop', 'take_profit']);
+  for (const f of figures.slice(1)) assert.deepEqual(f, figures[0]);
+});
+
+test('PR 1b: a past hour\'s end is valued only by its own hour; without it NAV there is unknown, and the late hour supplies it', (t) => {
+  const ws = setup(t);
+  assert.equal(PT.submitIntent(ws, intent('A'), ctx()).state, 'ACKED');
+  hour(ws, 15, { low: '99' });
+  hour(ws, 16, { high: '103', close: '102' });
+  // 20:01, and nothing has arrived since hour 16 (it ended at 17:00).
+  const now = T0 + 20 * H + M;
+  const navAt = (r, i) => r.nav_by_hour.find((m) => m.hour_end === at(T0 + i * H)).nav_usd;
+  const text = fs.readFileSync(ws.abs(PT.JOURNAL), 'utf8');
+  const r1 = res(ws, now);
+  assert.deepEqual([16, 17, 18, 19, 20].map((i) => navAt(r1, i)), ['9996.4458', '10031.9878', null, null, null], 'never hour 16\'s close carried to 18:00 or 19:00');
+  assert.deepEqual([r1.nav_usd, r1.drawdown_24h_usd, r1.max_drawdown_usd], [null, null, null]);
+  assert.equal(fs.readFileSync(ws.abs(PT.JOURNAL), 'utf8'), text, 'a read writes nothing');
+  // Hour 17 arrives late: 18:00 reads its close. 19:00 is still unknown,
+  // since 18:00 is more than 120 minutes before now.
+  assert.equal(PT.applyBar(ws, bar(17, { high: '104', close: '104' }), { now: at(now) }).status, 'saved');
+  const r2 = res(ws, now);
+  assert.deepEqual([18, 19, 20].map((i) => navAt(r2, i)), ['10067.5298', null, null]);
+  // Hour 18 arrives: 19:00 reads its own close, and 20:00, whose hour may
+  // not have arrived yet, reads the newest close as NAV now does.
+  assert.equal(PT.applyBar(ws, bar(18, { open: '104', high: '104', low: '102', close: '103' }), { now: at(now) }).status, 'saved');
+  const r3 = res(ws, now);
+  assert.deepEqual([19, 20].map((i) => navAt(r3, i)), ['10049.7588', '10049.7588']);
+  assert.equal(r3.nav_usd, '10049.7588');
+  assert.notEqual(r3.drawdown_24h_usd, null);
+  assert.equal(events(ws).filter((e) => e.type === 'mark').length, 0, 'NAV is never written');
+});
+
+test('PR 1b: a journal holding an earlier build\'s marks reads the same; the marks are ignored', (t) => {
+  const ws = setup(t);
+  assert.equal(PT.submitIntent(ws, intent('A'), ctx()).state, 'ACKED');
+  hour(ws, 15, { low: '99' });
+  hour(ws, 16, { high: '103', close: '102' });
+  const now = T0 + 17 * H + M;
+  const before = res(ws, now);
+  // The earlier build appended a mark after each hour, here with values a
+  // read must not use: a phantom high and an unknown.
+  const out = [];
+  for (const e of events(ws)) {
+    out.push(e);
+    if (e.type === 'bar' && Date.parse(e.hour) >= T0 + 14 * H) out.push({ at: e.at, type: 'mark', hour_end: at(Date.parse(e.hour) + H), nav_usd: e.hour === at(T0 + 15 * H) ? null : '99999' });
+  }
+  let prev = null;
+  const text = out.map((e, i) => {
+    const { seq, prev_sha256, ...rest } = e;
+    const line = JSON.stringify({ seq: i + 1, ...rest, prev_sha256: prev });
+    prev = sha256(line);
+    return line;
+  });
+  fs.writeFileSync(ws.abs(PT.JOURNAL), `${text.join('\n')}\n`);
+  fs.writeFileSync(ws.abs(PT.HEAD), `${JSON.stringify({ seq: text.length, head_sha256: prev, at: at(now) })}\n`);
+  assert.equal(events(ws).filter((e) => e.type === 'mark').length, 3);
+  const after = res(ws, now);
+  assert.deepEqual(navs(after), navs(before));
+  assert.deepEqual([after.nav_usd, after.cash_usd, after.max_drawdown_usd, after.drawdown_24h_usd], [before.nav_usd, before.cash_usd, before.max_drawdown_usd, before.drawdown_24h_usd]);
+  // The book still writes after them, and writes no mark.
+  assert.equal(hour(ws, 17).status, 'saved');
+  assert.equal(events(ws).filter((e) => e.type === 'mark').length, 3);
+});
+
+test('PR 1b: an hour sealed but not applied is refused as interrupted; after recover the journal and its head agree, with the NAV an uninterrupted write gives', (t) => {
+  const now = T0 + 17 * H + M;
+  const held = () => {
+    const ws = setup(t);
+    assert.equal(PT.submitIntent(ws, intent('A'), ctx()).state, 'ACKED');
+    hour(ws, 15, { low: '99' });
+    return ws;
+  };
+  const twin = held();
+  hour(twin, 16, { high: '103', close: '102' });
+  const expected = navs(res(twin, now));
+  // The crash lands on the journal, before anything is in place, or on its
+  // head, after the journal is.
+  for (const file of ['journal.jsonl', 'journal.head.json']) {
+    const ws = held();
+    const before = navs(res(ws, now));
+    const rename = fs.renameSync;
+    fs.renameSync = function crash(from, to) {
+      if (String(to).split(path.sep).join('/').endsWith(`paper/trader/${file}`)) throw Object.assign(new Error('simulated crash'), { code: 'EIO' });
+      return rename.apply(this, arguments);
+    };
+    try {
+      assert.throws(() => hour(ws, 16, { high: '103', close: '102' }), (e) => e.code === 'APPLY_INTERRUPTED', file);
+    } finally {
+      fs.renameSync = rename;
+    }
+    assert.throws(() => res(ws, now), (e) => e.code === 'READ_INTERRUPTED', file);
+    assert.equal(ops.recover(ws)[0].action, 'rolled_forward', file);
+    const ls = fs.readFileSync(ws.abs(PT.JOURNAL), 'utf8').trim().split('\n');
+    const head = JSON.parse(fs.readFileSync(ws.abs(PT.HEAD), 'utf8'));
+    assert.deepEqual([head.seq, head.head_sha256], [ls.length, sha256(ls[ls.length - 1])], file);
+    const after = navs(res(ws, now));
+    assert.deepEqual(after, expected, file);
+    assert.deepEqual(after.slice(0, -1), before.slice(0, -1), `${file}: the hour ends before it are as they were`);
+    assert.equal(hour(ws, 16, { high: '103', close: '102' }).status, 'unchanged', file);
+  }
 });

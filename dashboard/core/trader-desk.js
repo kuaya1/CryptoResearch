@@ -414,8 +414,9 @@ function wanted(ws, { now } = {}) {
 // before new orders). Idempotent; each failure is said and never stops the
 // other requests.
 // The book is funded once, from Eric's setting, before anything else is
-// recorded in it: the first hour it holds then has a NAV. A different amount
-// later is never applied over the first; that is said, not thrown.
+// recorded in it; NAV by the hour starts at the funding (paper-trader.js
+// navSeries). A different amount later is never applied over the first;
+// that is said, not thrown.
 function fundOnce(ws, ctx, done, problems) {
   const cash = ctx.s.book.cash_usd;
   if (!cash) return;

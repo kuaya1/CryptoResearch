@@ -115,7 +115,7 @@ test('D12: fund, size from the stored $500 approval, lose the ack, reconcile, fi
   //   NAV at 16:00 = 8998 + 10 × 99.5 = 9993
   assert.equal(PT.FILL_SHARE_MAX, '0.1');
   const h15 = hour(ws, 15, { open: '100', high: '100.5', low: '99', close: '99.5', volume: '100' });
-  assert.deepEqual(h15.events.map((e) => [e.type, e.quantity, e.price]), [['bar', undefined, undefined], ['fill', '10', '100'], ['mark', undefined, undefined]]);
+  assert.deepEqual(h15.events.map((e) => [e.type, e.quantity, e.price]), [['bar', undefined, undefined], ['fill', '10', '100']]);
   assert.deepEqual(orderState(ws, coid, T1 + H), { client_order_id: coid, state: 'PARTIAL', filled: '10', quantity: '18.859', words: rc.words });
   const b1 = PT.book(ws, PAIR, ctx(T1 + H));
   // Open risk: the position at its stop (10 × 10.60455 = 106.0455) and the
@@ -131,7 +131,7 @@ test('D12: fund, size from the stored $500 approval, lose the ack, reconcile, fi
   //   realized 897.75 − 1.7955 − 1002 = −106.0455 (10 units' planned loss, exactly)
   //   cash 8998 + 897.75 − 1.7955 = 9893.9545
   const h16 = hour(ws, 16, { open: '95', high: '95.5', low: '89', close: '90', volume: '100' });
-  assert.deepEqual(h16.events.map((e) => [e.type, e.reason, e.quantity, e.price]), [['bar', undefined, undefined, undefined], ['exit', 'stop', '10', '89.775'], ['cancelled', undefined, undefined, undefined], ['mark', undefined, undefined, undefined]]);
+  assert.deepEqual(h16.events.map((e) => [e.type, e.reason, e.quantity, e.price]), [['bar', undefined, undefined, undefined], ['exit', 'stop', '10', '89.775'], ['cancelled', undefined, undefined, undefined]]);
   assert.equal(orderState(ws, coid, T1 + 2 * H).state, 'CANCELLED');
 
   // 9. NAV, realized P&L and open risk.

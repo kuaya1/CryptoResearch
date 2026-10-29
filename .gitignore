@@ -74,6 +74,8 @@ node_modules/
 
 /audits/*/*
 !/audits/2026-10-28-approve-wiring/PLAN.md
+!/audits/2026-10-28-codex-audit-response/README.md
+!/audits/2026-10-28-codex-audit-response/repro.js
 !/audits/2026-10-27-red-team/README.md
 !/audits/2026-10-27-final-hardening/README.md
 !/audits/2026-10-27-final-hardening/automation-branches.live-2026-10-27.json
