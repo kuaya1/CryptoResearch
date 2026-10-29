@@ -430,6 +430,68 @@
     color-scheme: dark;
   }
 }
+/* Desk v2 (Eric, 2026-10-28, design_handoff_desk_redesign): the Desk and
+   its inspector as a lighter layer on the same ramps. Eric's calls on the
+   handoff's conflicts: the system fonts (no Geist); Claude, the Researcher
+   and Running in the blue ramp (no violet); resting shadows on the Desk's
+   three cards only; the 12.5px floor and 4.5:1 for readable text, so the
+   design's muted greys are darkened to pass (--desk-text-faint keeps
+   #a3a6ad for decorative marks only); dark as the handoff proposed. */
+:root {
+  --desk-canvas: #eceef2;
+  --desk-glow-a: #ffffff; --desk-glow-b: var(--blue-25); --desk-glow-c: oklch(0.96 0.03 160);
+  --desk-ink: #101114; --desk-ink-hover: #2a2c33; --on-desk-ink: #ffffff;
+  /* text on the canvas, the white card and the warm inspector: 4.8:1 at least */
+  --desk-text-2: #55585e; --desk-text-3: #5d6066; --desk-text-4: #65686f; --desk-text-body: #4a4d54;
+  --desk-text-faint: #a3a6ad;
+  --desk-running: var(--blue-500);
+  --desk-card: #ffffff; --desk-warm: #f7f6f2; --desk-night: #0b0b0c;
+  --on-night: #f4f4f2; --on-night-2: #9a9da4; --on-night-3: #8a8d94; --on-night-soft: #c9cbd0;
+  --desk-rule: rgba(16, 17, 20, 0.07); --desk-rule-strong: rgba(16, 17, 20, 0.1); --night-rule: rgba(255, 255, 255, 0.07); --night-track: rgba(255, 255, 255, 0.1);
+  --desk-row-hover: rgba(16, 17, 20, 0.025); --desk-row-selected: rgba(16, 17, 20, 0.04);
+  --desk-up: oklch(0.5 0.14 160); --desk-down: oklch(0.52 0.2 20);
+  --tone-ok: oklch(0.6 0.15 160); --tone-warn: oklch(0.72 0.16 65); --tone-bad: oklch(0.6 0.2 20); --tone-unknown: #c4c6cb;
+  --desk-amber: oklch(0.58 0.15 60); --desk-amber-text: oklch(0.5 0.12 60); --nav-amber: oklch(0.5 0.12 60);
+  --night-amber: oklch(0.82 0.14 75); --night-green: oklch(0.8 0.13 160); --night-red: oklch(0.72 0.18 20); --night-red-bar: oklch(0.66 0.2 20);
+  --night-pass: oklch(0.78 0.14 160); --night-unknown: #6b6e75; --hold-fill: oklch(0.8 0.14 160);
+  --model-claude: var(--blue-500); --model-gpt: oklch(0.6 0.15 160); --model-gemini: oklch(0.62 0.13 230);
+  --reviewed-bg: oklch(0.6 0.15 160 / 0.12);
+  --radius-card-lg: 32px; --radius-inner: 26px; --radius-row: 14px;
+  --shadow-desk-card: 0 1px 2px rgba(16, 17, 20, 0.04), 0 30px 60px -36px rgba(16, 17, 20, 0.2);
+  --shadow-desk-warm: 0 1px 2px rgba(16, 17, 20, 0.04), 0 30px 60px -36px rgba(16, 17, 20, 0.22);
+  --shadow-night: 0 30px 70px -34px rgba(16, 17, 20, 0.6);
+  --desk-rail-w: 150px;
+  --hold-ms: 800ms;
+}
+/* Dark: the canvas #131313 with the glows at about a quarter, cards #212121,
+   the warm inspector #1c1c1a; the night surfaces invert to #f4f4f2, so Needs
+   you stays the highest-contrast part of the page. */
+:root[data-theme="dark"] {
+  --desk-canvas: #131313; --desk-glow-a: rgba(255, 255, 255, 0.04); --desk-glow-b: rgba(2, 133, 255, 0.08); --desk-glow-c: oklch(0.5 0.06 160 / 0.2);
+  --desk-ink: #f4f4f2; --desk-ink-hover: #dcdcd8; --on-desk-ink: #0b0b0c;
+  --desk-text-2: #b0b2b8; --desk-text-3: #9a9da4; --desk-text-4: #a3a6ad; --desk-text-body: #c9cbd0; --desk-text-faint: #5d6066; --desk-running: var(--blue-200); --model-claude: var(--blue-300);
+  --desk-card: #212121; --desk-warm: #1c1c1a; --desk-night: #f4f4f2;
+  --on-night: #0b0b0c; --on-night-2: #4a4d54; --on-night-3: #5d6066; --on-night-soft: #2a2c33;
+  --desk-rule: rgba(255, 255, 255, 0.07); --desk-rule-strong: rgba(255, 255, 255, 0.12); --night-rule: rgba(16, 17, 20, 0.08); --night-track: rgba(16, 17, 20, 0.1);
+  --desk-row-hover: rgba(255, 255, 255, 0.03); --desk-row-selected: rgba(255, 255, 255, 0.06);
+  --desk-up: oklch(0.75 0.14 160); --desk-down: oklch(0.72 0.17 20);
+  --night-amber: oklch(0.55 0.14 65); --night-green: oklch(0.5 0.13 160); --night-red: oklch(0.55 0.2 20); --night-pass: oklch(0.55 0.14 160); --night-unknown: #8a8d94;
+  --shadow-desk-card: 0 30px 60px -36px rgba(0, 0, 0, 0.6); --shadow-desk-warm: 0 30px 60px -36px rgba(0, 0, 0, 0.6); --shadow-night: 0 30px 70px -34px rgba(0, 0, 0, 0.7);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] {
+    --desk-canvas: #131313; --desk-glow-a: rgba(255, 255, 255, 0.04); --desk-glow-b: rgba(2, 133, 255, 0.08); --desk-glow-c: oklch(0.5 0.06 160 / 0.2);
+    --desk-ink: #f4f4f2; --desk-ink-hover: #dcdcd8; --on-desk-ink: #0b0b0c;
+    --desk-text-2: #b0b2b8; --desk-text-3: #9a9da4; --desk-text-4: #a3a6ad; --desk-text-body: #c9cbd0; --desk-text-faint: #5d6066; --desk-running: var(--blue-200); --model-claude: var(--blue-300);
+    --desk-card: #212121; --desk-warm: #1c1c1a; --desk-night: #f4f4f2;
+    --on-night: #0b0b0c; --on-night-2: #4a4d54; --on-night-3: #5d6066; --on-night-soft: #2a2c33;
+    --desk-rule: rgba(255, 255, 255, 0.07); --desk-rule-strong: rgba(255, 255, 255, 0.12); --night-rule: rgba(16, 17, 20, 0.08); --night-track: rgba(16, 17, 20, 0.1);
+    --desk-row-hover: rgba(255, 255, 255, 0.03); --desk-row-selected: rgba(255, 255, 255, 0.06);
+    --desk-up: oklch(0.75 0.14 160); --desk-down: oklch(0.72 0.17 20);
+    --night-amber: oklch(0.55 0.14 65); --night-green: oklch(0.5 0.13 160); --night-red: oklch(0.55 0.2 20); --night-pass: oklch(0.55 0.14 160); --night-unknown: #8a8d94;
+    --shadow-desk-card: 0 30px 60px -36px rgba(0, 0, 0, 0.6); --shadow-desk-warm: 0 30px 60px -36px rgba(0, 0, 0, 0.6); --shadow-night: 0 30px 70px -34px rgba(0, 0, 0, 0.7);
+  }
+}
 @media (prefers-reduced-motion: reduce) { :root { --dur: 0ms; --dur-move: 0ms; } }
 
 /* Icons as local SVG masks (no requests), drawn in currentColor; always next

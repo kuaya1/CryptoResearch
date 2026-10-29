@@ -8,6 +8,11 @@
 // and tabular; unknown stays "—" with its reason. When the list is narrower
 // than its columns, the least essential give way (FIT_ORDER); a phone keeps
 // Project, Price / 24h, Grade and Risk. Every value stays in the inspector.
+// Desk v2 (Eric, 2026-10-28): rows without dividers, sentence-case headers
+// (Project · Price · 7 days · Grade · Risk · Research), the grade as a light
+// numeral with three model dots (black graded, amber more than 6 points from
+// Claude, hollow none or on hold), Risk a tone dot and its words, and the
+// Action verb out of sight until it has keyboard focus.
 import { useLayoutEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronRight } from 'lucide-react';
 import { PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, fmtPrice, fmtDate, fmtDateTime, freshnessText, onHoldOf } from '../../../../public/ui.js';
@@ -48,6 +53,8 @@ function PriceCell({ p, stacked = false, range = '24h' }) {
 export function GradeCell({ d, p, onOpen }) {
   const g = canonicalGrade(p, d.index);
   const cs = consensusOf(p, d.index);
+  const claude = cs.models.find((m) => m.provider === 'claude');
+  const differs = (m) => m.provider !== 'claude' && claude && typeof claude.value === 'number' && typeof m.value === 'number' && Math.abs(m.value - claude.value) > 6;
   const src = g.source === 'headline' ? 'Your headline' : 'Claude';
   const words = g.kind === 'grade' || g.kind === 'range' ? `${g.value}${g.word ? `, ${g.word}` : ''}` : g.kind === 'withheld' ? `withheld${g.coverage !== null ? `, ${g.coverage}% of the weight scored` : ''}` : String(g.value).toLowerCase();
   const label = `${src} grade ${words}. ${cs.text}. Open details`;
@@ -65,7 +72,7 @@ export function GradeCell({ d, p, onOpen }) {
         {g.source === 'headline' ? <span className="gcell-pin" title="Your pinned headline report">Pinned</span> : null}
       </span>
       <span className="cg" aria-hidden="true">
-        {cs.models.map((m) => <span key={m.provider} className={`cg-dot is-${m.mark}`} title={`${m.name}: ${m.words}`} />)}
+        {cs.models.map((m) => <span key={m.provider} className={`cg-dot is-${m.mark}${differs(m) ? ' is-differs' : ''}`} title={`${m.name}: ${m.words}${differs(m) ? ' (more than 6 points from Claude)' : ''}`} />)}
       </span>
     </button>
   );
@@ -74,7 +81,7 @@ export function GradeCell({ d, p, onOpen }) {
 export function RiskBadge({ d, p }) {
   const r = riskCell(p, d.index);
   const cls = r.tone === 'bad' ? 'is-bad' : r.tone === 'warn' ? 'is-warn' : r.tone === 'unknown' ? 'is-unknown' : '';
-  return <span className={`badge risk-badge ${cls}`} title={r.title}>{r.text}{r.more ? <span className="risk-more">{` +${r.more}`}</span> : null}<span className="sr-only">{r.signals && r.signals.length > 1 ? `. Also: ${r.signals.filter((s) => s.text !== r.text).map((s) => s.text).join(', ')}` : ''}</span></span>;
+  return <span className={`badge risk-badge ${cls}`} title={r.title}><span className="risk-dot" aria-hidden="true" />{r.text}{r.more ? <span className="risk-more">{` +${r.more}`}</span> : null}<span className="sr-only">{r.signals && r.signals.length > 1 ? `. Also: ${r.signals.filter((s) => s.text !== r.text).map((s) => s.text).join(', ')}` : ''}</span></span>;
 }
 
 function Cell({ col, d, p, sources, onSector, onOpen, range }) {
@@ -84,11 +91,16 @@ function Cell({ col, d, p, sources, onSector, onOpen, range }) {
     case 'rank': return m && m.market_cap_rank ? <span className="rk" title={m.rank_source_label || 'CoinGecko market-cap rank'}>{m.market_cap_rank}</span> : <Unknown label="Rank" />;
     case 'priceStack': return <PriceCell p={p} stacked range={range} />;
     case 'price': return <PriceCell p={p} />;
-    case 'spark': return <span className="spark-cell" title={m && typeof m.change_7d_pct === 'number' ? `7 days: ${s.change7d}` : undefined}><Spark values={m && m.sparkline_7d} change={m ? m.change_7d_pct : null} width={110} height={32} label={`${p.symbol || p.name} 7-day price${m && s.change7d ? `, ${s.change7d}` : ''}`} /></span>;
+    case 'spark': return <span className="spark-cell" title={m && typeof m.change_7d_pct === 'number' ? `7 days: ${s.change7d}` : undefined}><Spark values={m && m.sparkline_7d} change={m ? m.change_7d_pct : null} width={90} height={24} label={`${p.symbol || p.name} 7-day price${m && s.change7d ? `, ${s.change7d}` : ''}`} /></span>;
     case 'grade': return <GradeCell d={d} p={p} onOpen={onOpen} />;
     case 'risk': return <RiskBadge d={d} p={p} />;
     case 'exit': { const x = exitCell(p, d.index); return <span className={`exit-cell is-${x.tone}`} title={x.title}>{x.text}</span>; }
-    case 'lastResearch': { const x = lastResearchCell(p, d.index); return <span className={`lr-cell${x.tone ? ` is-${x.tone}` : ''}`} title={x.title}>{x.text}</span>; }
+    case 'lastResearch': {
+      const x = lastResearchCell(p, d.index);
+      const working = consensusOf(p, d.index).models.filter((cm) => cm.mark === 'waiting' && cm.words === 'working');
+      if (working.length) return <span className="lr-cell is-running" title={`${working.map((cm) => cm.name).join(' and ')} working on it now. ${x.title}`}>Running</span>;
+      return <span className={`lr-cell${x.tone ? ` is-${x.tone}` : ''}`} title={x.title}>{x.text}</span>;
+    }
     case 'change24h': return m ? <Change value={m.change_24h_pct} label="over 24 hours" /> : <Unknown label="24-hour change" />;
     case 'change7d': return m ? <Change value={m.change_7d_pct} label="over 7 days" /> : <Unknown label="7-day change" />;
     case 'change30d': return m ? <Change value={m.change_30d_pct} label="over 30 days" /> : <Unknown label="30-day change" />;
@@ -104,8 +116,8 @@ function Cell({ col, d, p, sources, onSector, onOpen, range }) {
 
 function Marks({ p }) {
   const marks = [];
-  if (p.sector && p.sector.primary) marks.push(<span key="sector" className="proj-sector" title="Sector (your label)">{p.sector.label}</span>);
-  if (p.held) marks.push(<span key="held" className="mark mark-held" title="You hold this: see Portfolio">Held</span>);
+  if (p.symbol) marks.push(<span key="sym" className="ticker">{p.symbol}</span>);
+  if (p.held) marks.push(<span key="held" className="mark mark-held" title="You hold this: see Portfolio">held</span>);
   if (p.identity_status !== 'verified') marks.push(<span key="id" className="mark mark-flag" title={(p.identity_unknowns || []).join(' ') || 'Identity not confirmed: no prices or holdings use it'}>Identity pending</span>);
   if (p.status === 'archived') marks.push(<span key="arch" className="mark">Archived</span>);
   return marks.length ? <span className="marks">{marks}</span> : null;
@@ -235,7 +247,7 @@ export function ProjectTable({ d, rows, columns, sort, onSort, selected, recent,
                 {sort.key === 'name' ? (sort.dir === 'asc' ? <ArrowUp className="th-arrow" size={12} strokeWidth={2.2} aria-hidden="true" /> : <ArrowDown className="th-arrow" size={12} strokeWidth={2.2} aria-hidden="true" />) : null}
               </button>
             </th>
-            {rest.filter(shown).map((c) => <SortHead key={c} col={c} sort={sort} onSort={onSort} sources={sources} label={c === 'exit' ? exitLabel : c === 'priceStack' ? `Price / ${rangeOf(range).label}` : null} />)}
+            {rest.filter(shown).map((c) => <SortHead key={c} col={c} sort={sort} onSort={onSort} sources={sources} label={c === 'exit' ? exitLabel : c === 'priceStack' ? 'Price' : c === 'spark' ? '7 days' : c === 'lastResearch' ? 'Research' : null} />)}
             {showModels ? PROVIDERS.map((prov) => <ProviderHead key={prov} d={d} prov={prov} sort={sort} onSort={onSort} />) : null}
             <th scope="col" className="c-act"><span className="sr-only">Action</span></th>
           </tr>
@@ -257,7 +269,7 @@ export function ProjectTable({ d, rows, columns, sort, onSort, selected, recent,
                 {rankFirst && shown('rank') ? <td className="c-rank num"><Cell col="rank" d={d} p={p} sources={sources} /></td> : null}
                 <td className="c-name">
                   <div className="proj">
-                    <Logo p={p} size={32} />
+                    <Logo p={p} size={30} />
                     <div className="proj-names">
                       <span className="proj-top">
                         <button
@@ -271,7 +283,6 @@ export function ProjectTable({ d, rows, columns, sort, onSort, selected, recent,
                         >
                           {p.name}
                         </button>
-                        {p.symbol ? <span className="ticker">{p.symbol}</span> : null}
                       </span>
                       <span className="proj-sub"><Marks p={p} /></span>
                     </div>
@@ -289,7 +300,7 @@ export function ProjectTable({ d, rows, columns, sort, onSort, selected, recent,
         </tbody>
         {footer ? (
           <tfoot>
-            <tr><td colSpan={99} className="wl-foot">{footer}</td></tr>
+            <tr><td colSpan={99} className="wl-foot"><span className="wl-foot-l">{footer}</span><span className="wl-foot-r" aria-hidden="true">J K to move · R reviewed</span></td></tr>
           </tfoot>
         ) : null}
       </table>

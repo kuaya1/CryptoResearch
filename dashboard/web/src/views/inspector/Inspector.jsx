@@ -14,6 +14,12 @@
 // closes it). Its body scrolls on its own and the head and foot keep their
 // place. Another project opens at its top; a redraw of the same one keeps its
 // place.
+//
+// Desk v2 (Eric, 2026-10-28): a warm card on the canvas. The head is a
+// tagline (ticker · sector · Held), the name in light 30px and the close
+// mark; under it the price in 44px light figures with "+3.4% today" and one
+// line of facts; the foot a rule, Open full research as text and Mark
+// reviewed as the one black pill ("Reviewed" in green once done).
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { X, Ellipsis, ExternalLink, Check, ChevronDown, ArrowRight } from 'lucide-react';
 import { fmtDate, fmtDateTime, fmtAgo, freshnessText } from '../../../../public/ui.js';
@@ -21,7 +27,6 @@ import { mkt, marketStrings, noPriceReason, priceClock, rowProject, needsReview,
 import { useDesk, useProject } from '../../lib/hooks.js';
 import { claimFocus, navigate } from '../../lib/router.js';
 import { legacyCtx } from '../../legacy/ctx.js';
-import { Logo } from '../../components/Logo.jsx';
 import { Change, Unknown, UnknownFigure } from '../../components/figures.jsx';
 import { Menu, MenuItem, MenuSep, MenuLabel } from '../../components/Menu.jsx';
 import { loadLegacy } from '../../components/Dom.jsx';
@@ -33,7 +38,7 @@ import { FootSlot } from './footSlot.js';
 const enc = encodeURIComponent;
 const plain = (e) => e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
 
-// The header row's price: 22px bold with its 24h pill, beside the name.
+// The price in large light figures, its 24-hour change worded "today".
 function HeadPrice({ p }) {
   const m = mkt(p);
   if (!m) return null;
@@ -41,12 +46,12 @@ function HeadPrice({ p }) {
   return (
     <div className="ih-price">
       <span className="ih-price-v">{s.price}</span>
-      {s.change24h ? <span className={`ih-chg ${m.change_24h_pct < 0 ? 'down' : 'up'}`} title="Price change over 24 hours"><Change value={m.change_24h_pct} label="over 24 hours" /></span> : null}
+      {s.change24h ? <span className={`ih-chg ${m.change_24h_pct < 0 ? 'down' : 'up'}`} title="Price change over 24 hours"><Change value={m.change_24h_pct} label="over 24 hours" />{' today'}</span> : null}
     </div>
   );
 }
 
-// Under the name, one muted line: MC · FDV/MC · the price's age.
+// Under the price, one muted line: Market cap · FDV × of market cap · the price's age.
 function HeadMarket({ p, freshness }) {
   const m = mkt(p);
   if (!m) return <p className="ih-facts none"><span className="faint">{`No price: ${(noPriceReason(p) || 'unknown').toLowerCase()}`}</span></p>;
@@ -58,9 +63,9 @@ function HeadMarket({ p, freshness }) {
   const none = (label, v) => <UnknownFigure label={label} value={v} />;
   return (
     <p className="ih-facts">
-      <span className="ih-fact" title="Market cap (CoinGecko)"><span className="k">MC</span>{s.mcap || none('Market cap', m.market_cap_usd)}</span>
+      <span className="ih-fact" title="Market cap (CoinGecko)"><span className="k">Market cap</span>{s.mcap || none('Market cap', m.market_cap_usd)}</span>
       <span className="ih-dot" aria-hidden="true">·</span>
-      <span className="ih-fact" title="Fully diluted valuation over market cap, from the two figures (FDV and volume are on the Market section)"><span className="k">FDV/MC</span>{s.fdvMc || <Unknown label="FDV over market cap" />}</span>
+      <span className="ih-fact" title="Fully diluted valuation over market cap, from the two figures (FDV and volume are on the Market section)"><span className="k">FDV</span>{s.fdvMc ? `${s.fdvMc} of market cap` : <Unknown label="FDV over market cap" />}</span>
       <span className="ih-dot" aria-hidden="true">·</span>
       <span className={`ih-fresh${fresh && !clock.kept ? '' : ' is-warn'}`} title={`${source}, as of ${fmtDateTime(m.as_of)}${clock.kept ? `. The last price refresh (${fmtAgo(freshness.last_success_at)}) did not update this asset, so its last valid price is kept.` : ''}`}>
         {fresh ? clock.text || fmtAgo(m.fetched_at || m.as_of) : f.text}
@@ -183,7 +188,7 @@ export default function Inspector({ pid, wide }) {
   // competing buttons. Otherwise they stay here, Mark reviewed the primary.
   const secondary = (
     <>
-      <a className="btn btn-sm" href={fullHref} data-key={`brief-${pid}`} aria-label={`Open full research: ${p.name}`} onClick={openFull}>Open full research<ArrowRight size={13} aria-hidden="true" /></a>
+      <a className="btn btn-sm btn-text if-full" href={fullHref} data-key={`brief-${pid}`} aria-label={`Open full research: ${p.name}`} onClick={openFull}>Open full research<ArrowRight size={13} aria-hidden="true" /></a>
       {needsReview(p) ? <button type="button" className={`btn btn-sm${ticketWaits ? '' : ' btn-primary'}`} data-key="panel-reviewed" aria-keyshortcuts="R" title={drawn.ready ? 'Mark reviewed (R marks it and moves to the next project to review)' : STILL_LOADING} aria-disabled={drawn.ready ? undefined : 'true'} disabled={busy || !drawn.ready} onClick={() => markReviewed(p, { onBusy: setBusy })}>{drawn.ready ? 'Mark reviewed' : STILL_LOADING}</button> : null}
     </>
   );
@@ -208,13 +213,17 @@ export default function Inspector({ pid, wide }) {
         <header className="insp-head" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
           {modal ? <span className="insp-grip" aria-hidden="true" /> : null}
           <div className="ih-row">
-            <Logo p={p} size={36} />
-            <h2 id="insp-title" ref={heading} tabIndex={-1} title={p.name}>
-              <span className="ih-name">{p.name}{p.symbol ? <>{' '}<span className="ih-sym">{p.symbol}</span></> : null}</span>
-              {p.held ? <span className="badge is-accent ih-held" title="You hold this: see Portfolio">Held</span> : null}
-              {p.identity_status !== 'verified' ? <span className="badge is-warn ih-held" title={(p.identity_unknowns || []).join(' ') || 'Identity not confirmed: no prices or holdings use it'}>Identity pending</span> : null}
-            </h2>
-            <HeadPrice p={p} />
+            <div className="ih-id">
+              <p className="ih-tag">
+                {[p.symbol, p.sector && p.sector.label].filter(Boolean).join(' · ')}
+                {p.held ? <span className="ih-held" title="You hold this: see Portfolio">{p.symbol || (p.sector && p.sector.label) ? ' · ' : ''}Held</span> : null}
+                {p.identity_status !== 'verified' ? <span className="ih-held is-warn" title={(p.identity_unknowns || []).join(' ') || 'Identity not confirmed: no prices or holdings use it'}> · Identity pending</span> : null}
+              </p>
+              <h2 id="insp-title" ref={heading} tabIndex={-1} title={p.name}>
+                <span className="ih-name">{p.name}</span>
+                {p.symbol ? <span className="sr-only">{` (${p.symbol})`}</span> : null}
+              </h2>
+            </div>
             <div className="ih-win">
               <Menu
                 label={`Actions for ${p.name}`}
@@ -237,9 +246,10 @@ export default function Inspector({ pid, wide }) {
                   ? <MenuItem data-key="menu-restore" desc="Back as it was, with its history" onSelect={() => restoreProject(p)}>Restore</MenuItem>
                   : <MenuItem data-key="menu-archive" desc="Off your lists; nothing is deleted. Undo right after." onSelect={() => archiveProject(p)}>Archive</MenuItem>}
               </Menu>
-              <button type="button" className="btn btn-ghost btn-icon" aria-label={`Close ${p.name} details`} title="Close (Esc)" data-key="panel-close" onClick={closePanel}><X size={18} aria-hidden="true" /></button>
+              <button type="button" className="btn btn-ghost btn-icon ih-close" aria-label={`Close ${p.name} details`} title="Close (Esc)" data-key="panel-close" onClick={closePanel}><X size={20} strokeWidth={1.5} aria-hidden="true" /></button>
             </div>
           </div>
+          <HeadPrice p={p} />
           <div className="ih-sub">
             <HeadMarket p={p} freshness={d.index.freshness && d.index.freshness.market} />
             <HeadLinks p={p} L={L} />
@@ -271,9 +281,9 @@ export default function Inspector({ pid, wide }) {
                 <span className="if-dot" aria-hidden="true">·</span>
                 <a href={`#/project/${enc(pid)}/notes`} data-key={`what-changed-${pid}`} onClick={(e) => { if (!plain(e)) return; e.preventDefault(); navigate(`#/project/${enc(pid)}/notes`, { state: { crBrief: pid, from: 'watchlist' } }); }}>What changed</a>
               </>
-            ) : <span className="if-ok"><Check size={14} aria-hidden="true" />Reviewed</span>}
+            ) : null}
           </p>
-          {claimed && ticketWaits ? null : <div className="if-act">{secondary}</div>}
+          {claimed && ticketWaits ? null : <div className="if-act">{secondary}{needsReview(p) ? null : <span className="if-ok"><Check size={14} aria-hidden="true" />Reviewed</span>}</div>}
         </footer>
       </aside>
     </FootSlot.Provider>

@@ -1,23 +1,23 @@
 // The Desk, Level 0 (#/watchlist; DESIGN_AND_IA_BLUEPRINT.md §3.1; Eric,
 // 2026-10-17): the projects you follow as one ledger.
-//   header      eyebrow, title, ⋯ (archived projects, density, reset), Refresh
-//               prices, + Add project
-//   hero        the Daily Brief's readiness and two ways in (DeskHero.jsx)
-//   range       24h · 7d · 30d, the change shown under each price
-//   KPI strip   Market · Total cap · Beat BTC (30d) · Needs review · Research
-//               waiting, each a way in; what needs action always in view
-//   PM cards    tickets waiting for your decision (DecisionGrid.jsx)
-//   views       Watching · Needs review · Waiting on a model · Held · Not
-//               watching · All, each with its count
-//   filter bar  search (/), Filters, the active filters as removable
-//               "Label | Value" chips; Density, Columns and Sort on the right
-//   ledger      the table (ProjectTable.jsx) with a sticky summary footer
+// Desk v2 (Eric, 2026-10-28, design_handoff_desk_redesign): fewer boxes,
+// sentence-case labels, large light numerals and one dark "Needs you" card.
+//   header      the date, "N decisions wait for you." and the market in one
+//               sentence; ⋯ (archived projects, reset), Refresh, Add project
+//   KPI strip   Bitcoin · Total market · Beat Bitcoin · Needs review ·
+//               Research, no card, each a way in; what needs action and the
+//               risk budget always in view
+//   Needs you   the Daily Brief's readiness and the PM tickets (NeedsYou.jsx)
+//   the list    one white card: the views as text tabs with their counts,
+//               search (/), 24h · 7d · 30d, Filter, Density, Columns and Sort;
+//               the active filters as removable "Label | Value" chips; the
+//               table (ProjectTable.jsx) and its footer
 // Choose a project (click, tap, Enter, Space) for its inspector (?p=<id>);
 // J/K move the choice, R marks the open project reviewed. Nothing floats over
 // the list. Live updates redraw in place and never reorder the rows you are
 // reading (Re-sort offers it).
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Search, ListFilter, Columns3, ArrowUpDown, Plus, X, Ellipsis, Rows3 } from 'lucide-react';
+import { ListFilter, Columns3, ArrowUpDown, Plus, X, Ellipsis, Rows3 } from 'lucide-react';
 import { announce, fmtPrice } from '../../../../public/ui.js';
 import {
   COLUMNS, SORT_NAMES, DEFAULT_FILTERS, DEFAULT_COLUMNS, COVERAGE, RET30, BEAT, VIEWS, prefs as readPrefs, prefsToSave, nextSort, sortRows, matches,
@@ -33,14 +33,29 @@ import { Boundary, ViewError, retryableLazy } from '../../components/Boundary.js
 import { legacyCtx } from '../../legacy/ctx.js';
 import { KpiStrip, ActionBand, RefreshButton } from './StatusStrip.jsx';
 import { ProjectTable } from './ProjectTable.jsx';
-import { DeskHero } from './DeskHero.jsx';
 import { RangeControl } from './RangeControl.jsx';
-import { DecisionGrid } from './DecisionGrid.jsx';
+import { NeedsYou, waitingTickets, decisionsHeadline } from './NeedsYou.jsx';
 import { view, openPanel, closePanel, isWide, markReviewed, restoreProject } from './state.js';
 import { onDesk } from '../../shell/overlays.js';
 // The inspector in its own boundary: if it cannot be drawn, it says so in
 // its place with Try again and Close, and the list keeps working.
 const Inspector = retryableLazy(() => import('../inspector/Inspector.jsx'));
+
+// "Wednesday, October 28 · Paper desk", in New York time.
+function dateLine(session) {
+  const day = new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'long', day: 'numeric' });
+  const ws = session && session.workspace;
+  const kind = ws && ws.kind === 'demo' ? 'Demo desk' : ws && ws.kind && ws.kind !== 'real' ? 'Test desk' : 'Paper desk';
+  return `${day} · ${kind}`;
+}
+
+// Bitcoin's week in one sentence; nothing when no snapshot holds it.
+function marketSentence(k) {
+  const c = k.market ? k.market.change_7d : null;
+  if (typeof c !== 'number') return null;
+  if (Math.abs(c) < 0.05) return 'Bitcoin is flat this week.';
+  return `Bitcoin is ${c > 0 ? 'up' : 'down'} ${Math.abs(c).toFixed(1)}% this week.`;
+}
 
 const typing = (el) => Boolean(el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)));
 
@@ -267,7 +282,10 @@ export default function Watchlist() {
   const onOpen = (id, opener, provider = null) => openPanel(id, opener, provider);
   const selectedRow = pid && d.index.projects.find((x) => x.project_id === pid);
   const foot = deskFooter(d.index, rows);
-  const footer = `${foot.projects} project${foot.projects === 1 ? '' : 's'} · ${foot.held} held${foot.priced !== null ? ` · ${fmtPrice(foot.priced)} priced value` : ''}${foot.unpriced ? ` · ${foot.unpriced} unpriced` : ''}`;
+  const footer = `${foot.projects} of ${total} project${total === 1 ? '' : 's'} · ${foot.held} held${foot.priced !== null ? ` · ${fmtPrice(foot.priced)} priced value` : ''}${foot.unpriced ? ` · ${foot.unpriced} unpriced` : ''}`;
+  const kpis = deskKpis(d.index, agenda);
+  const waitingCount = waitingTickets(live).length;
+  const market = marketSentence(kpis);
 
   let body;
   if (rows.length) {
@@ -289,8 +307,8 @@ export default function Watchlist() {
       <div className="wl-main">
         <header className="page-head wl-head">
           <div className="ph-title">
-            <p className="ph-eyebrow">CryptoResearch</p>
-            <h1>Desk<span className="ph-count" title={`${followed} project${followed === 1 ? '' : 's'} you watch or hold`}>{followed}</span></h1>
+            <p className="ph-eyebrow">{dateLine(d.session)}</p>
+            <h1 title={`Desk: ${followed} project${followed === 1 ? '' : 's'} you watch or hold`}>{decisionsHeadline(waitingCount)}{market ? <>{' '}<span className="ph-sub">{market}</span></> : null}</h1>
           </div>
           <div className="ph-actions">
             <Menu
@@ -313,15 +331,12 @@ export default function Watchlist() {
           </div>
         </header>
 
-        <DeskHero reviewCount={settled ? deskKpis(d.index, agenda).review.projects : null} />
-        <div className="desk-bar">
-          <h2 className="sec-h">Market</h2>
-          <RangeControl value={pf.range} onChange={(r) => { if (r !== pf.range) { save({ ...pf, range: r }); announce(`Changes over ${r}.`); } }} />
-        </div>
         <KpiStrip d={d} agenda={agenda} settled={settled} sources={sources} filters={f} range={pf.range} onView={setView} onBeat={() => setFilter('beat', f.beat === 'yes' ? 'any' : 'yes')} />
         <ActionBand d={d} />
-        <DecisionGrid d={d} rows={live} />
+        <NeedsYou rows={live} selected={pid} />
 
+        <section className="wl-card" aria-label="Projects">
+        <div className="wl-bar">
         <nav className="views" aria-label="Views">
           {VIEWS.map(([v, text]) => (
             <button key={v} type="button" className="view-tab" aria-pressed={!f.archived && f.owned === v} data-key={`owned-${v}`} onClick={() => setView(v)}>
@@ -332,12 +347,11 @@ export default function Watchlist() {
 
         <div className="toolbar" role="search" aria-label="Find and filter projects" data-nodirty="1">
           <div className="search wl-search">
-            <Search className="search-ico" size={15} strokeWidth={1.9} aria-hidden="true" />
-            <input
+                        <input
               ref={search}
               className="input"
               type="search"
-              placeholder="Search name, ticker or sector"
+              placeholder="Search  /"
               aria-label="Search projects"
               aria-keyshortcuts="/"
               data-key="wl-search"
@@ -350,8 +364,8 @@ export default function Watchlist() {
                 else if (e.key === 'Enter' && q.trim() && first) { e.preventDefault(); openPanel(first.closest('[data-pid]').dataset.pid, first); }
               }}
             />
-            <kbd aria-hidden="true">/</kbd>
           </div>
+          <RangeControl value={pf.range} onChange={(r) => { if (r !== pf.range) { save({ ...pf, range: r }); announce(`Changes over ${r}.`); } }} />
           <Menu
             label="Filters"
             trigger={<button type="button" className={`btn${nFilters ? ' is-on' : ''}`} data-key="menu-btn-filters"><ListFilter size={15} strokeWidth={1.9} aria-hidden="true" /><span>Filter</span>{nFilters ? <span className="btn-count">{nFilters}<span className="sr-only"> active</span></span> : null}</button>}
@@ -420,12 +434,14 @@ export default function Watchlist() {
             </Menu>
           </div>
         </div>
+        </div>
 
         {reordered ? (
           <p className="reorder" role="status"><span>Values updated; order kept while you read.</span><button type="button" className="btn-link" data-key="resort" onClick={() => { resetOrder(); announce('Re-sorted.'); }}>Re-sort</button></p>
         ) : filtered ? <p className="results-line" role="status">{`${rows.length} of ${total} ${f.archived ? 'archived' : 'saved'} projects`}</p> : null}
 
         <div className="wl-body">{body}</div>
+        </section>
       </div>
       {selectedRow ? (
         <Boundary
