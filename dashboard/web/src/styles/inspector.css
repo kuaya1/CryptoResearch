@@ -43,25 +43,24 @@ html.has-drawer { overflow: hidden; }
 .ih-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 12px; align-items: start; }
 .ih-row h2 {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
-  font-family: var(--font-display); font-size: var(--fs-head); font-weight: var(--wt-title); letter-spacing: var(--track-title); line-height: 1.25; padding-top: 4px; min-width: 0;
+  font-family: var(--font-display); font-size: var(--fs-card-title); font-weight: var(--wt-display); letter-spacing: var(--track-title); line-height: 1.15; padding-top: 2px; min-width: 0;
 }
 .ih-row h2:focus { outline: none; }
 .ih-row h2:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-sm); }
 .ih-name { overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.ih-sym { font-family: var(--sans); display: inline-block; vertical-align: 3px; margin-left: 2px; font-size: var(--fs-sm); font-weight: 600; line-height: 22px; color: var(--text-2); background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--separator); border-radius: var(--r-sm); padding: 0 6px; letter-spacing: 0.02em; }
+.ih-sym { font-family: var(--mono); display: inline-block; vertical-align: 4px; margin-left: 2px; font-size: var(--fs-xs); font-weight: 400; line-height: 22px; color: var(--text-3); letter-spacing: var(--eyebrow-ls); }
 .ih-win { display: flex; gap: 2px; margin-right: -6px; }
 .ih-held { vertical-align: 2px; }
 .ih-sub { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; margin: 4px 0 0 48px; }
 .ih-price { display: flex; align-items: center; gap: 8px; padding-top: 4px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.ih-facts { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; margin: 0; font-size: var(--fs-ui-sm); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.ih-facts { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; margin: 0; font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-2); font-variant-numeric: tabular-nums; }
 .ih-dot { color: var(--text-3); }
 .ih-fact { color: var(--text-2); white-space: nowrap; }
 .ih-fact .k { margin-right: 4px; }
 .ih-links-btn { gap: 5px; }
-.ih-price-v { font-family: var(--font-display); font-size: var(--fs-head); font-weight: var(--wt-metric); letter-spacing: var(--track-title); line-height: 1.25; }
-.ih-chg { font-size: var(--fs-sm); font-weight: 600; padding: 2px 8px; border-radius: var(--r-pill); }
-.ih-chg.up { background: var(--pos-weak); }
-.ih-chg.down { background: var(--neg-weak); }
+.ih-price-v { font-family: var(--font-display); font-size: var(--fs-card-title); font-weight: var(--wt-display); letter-spacing: var(--track-title); line-height: 1.15; }
+/* The change in coloured mono text, no pill. */
+.ih-chg { font-family: var(--mono); font-size: var(--fs-sm); font-weight: 400; }
 .ih-fresh { color: var(--text-2); }
 .ih-fresh.is-warn { color: var(--warn); }
 .ih-links { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -80,14 +79,17 @@ html.has-drawer { overflow: hidden; }
 .iv-h { font-size: var(--fs-ui); font-weight: 600; color: var(--text); margin: 0 0 10px; }
 .iv-link { display: inline-flex; align-items: center; gap: 3px; font-size: var(--fs-sm); font-weight: 500; }
 /* 1. the executive verdict: the metric header and the consensus line */
-.iv-card .mh { padding: 20px; }
-.iv-card .mh-verdict { font-size: var(--fs-head); font-weight: 600; line-height: 1.25; }
-.iv-card .mh-num { font-size: var(--fs-page); font-weight: 700; }
+/* The grade block: a warm ceramic card, the grade the largest figure in the
+   drawer (54px, light). */
+.iv-card .mh { padding: 24px; border-radius: var(--r-tile); background: var(--warm-surface); }
+.iv-card .mh-verdict { font-size: var(--fs-head); font-weight: var(--wt-title); line-height: 1.25; letter-spacing: var(--track-title); }
+.iv-card .mh-num { font-size: var(--fs-grade-xl); font-weight: var(--wt-metric); }
 .iv-ev { gap: 5px; text-decoration: none; }
 .iv-ev:hover { text-decoration: none; filter: brightness(0.97); }
 .iv-cons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 12px 0 0; font-size: var(--fs-md); color: var(--text-2); font-variant-numeric: tabular-nums; }
 .iv-cons .iv-sep { display: none; }
-.iv-cm { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px; border-radius: var(--r-pill); background: var(--badge-bg); }
+/* Each model's grade as an outline chip. */
+.iv-cm { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px; border-radius: var(--r-pill); background: transparent; box-shadow: inset 0 0 0 1px var(--color-border); }
 .iv-cm a { color: var(--text); text-decoration: none; }
 .iv-cm a:hover { text-decoration: underline; text-decoration-color: var(--link-line); text-underline-offset: 3px; }
 .iv-cm-n { color: var(--text-2); font-size: var(--fs-md); font-weight: 600; }
@@ -475,7 +477,7 @@ html.has-drawer { overflow: hidden; }
 /* ---- foot ---- */
 .insp-foot {
   flex: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
-  padding: 12px 24px; background: var(--color-surface-elevated); box-shadow: 0 -1px 0 var(--color-border-subtle);
+  padding: 14px 24px; background: var(--cr-obsidian); box-shadow: var(--shadow-dark);
   padding-bottom: max(12px, env(safe-area-inset-bottom));
 }
 /* The PM decision, drawn here by the card (FootSlot): its own row over the
@@ -494,7 +496,7 @@ html.has-drawer { overflow: hidden; }
   position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 5;
   display: flex; flex-direction: column; gap: 4px; min-width: 240px; max-width: 100%;
   padding: 6px; border-radius: var(--r-lg);
-  background: var(--surface-raised); box-shadow: var(--shadow-pop);
+  background: var(--cr-obsidian-elevated); box-shadow: var(--shadow-pop);
 }
 .pm-more[hidden] { display: none; }
 .pm-more > .btn { justify-content: flex-start; width: 100%; }
