@@ -39,9 +39,9 @@
 .rv-centre { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .rv-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 20px 24px 28px; display: flex; flex-direction: column; gap: 20px; }
 .rv-right .rv-scroll { padding: 20px 16px 28px; }
-.rv-head { display: flex; align-items: center; gap: 12px; }
-.rv-head-n { flex: 1; min-width: 0; }
-.rv-title { font-family: var(--font-display); font-size: clamp(26px, 1.6vw + 14px, 40px); font-weight: var(--wt-display); letter-spacing: var(--track-display); line-height: 1.1; outline: none; }
+.rv-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.rv-head-n { flex: 1 1 280px; min-width: 0; }
+.rv-title { font-family: var(--font-display); font-size: clamp(24px, 1vw + 16px, 32px); font-weight: var(--wt-display); letter-spacing: var(--track-display); line-height: 1.1; outline: none; }
 .rv-title .ticker { font-family: var(--mono); font-size: var(--fs-xs); font-weight: 400; color: var(--text-3); letter-spacing: var(--eyebrow-ls); vertical-align: 6px; }
 .rv-head-n .faint { margin-top: 4px; font-family: var(--mono); font-size: var(--fs-xs); }
 .rv-head .btn { flex: none; display: inline-flex; align-items: center; gap: 6px; }
@@ -54,7 +54,7 @@
 /* Each model's block: a warm card, its grade then → now a large light figure. */
 .rv-centre .ci-card { padding: 20px; border-radius: var(--r-tile); background: var(--warm-surface); }
 .rv-centre .ci-model { font-family: var(--mono); font-size: var(--fs-xs); letter-spacing: var(--eyebrow-ls); color: var(--text-2); }
-.rv-centre .ci-move { font-family: var(--font-display); font-size: var(--fs-grade-lg); font-weight: 100; letter-spacing: var(--track-display); line-height: 1.05; }
+.rv-centre .ci-move { font-family: var(--font-display); font-size: var(--fs-card-title); font-weight: 200; letter-spacing: var(--track-display); line-height: 1.05; }
 /* The price since your review is in the right pane; the centre does not repeat it. */
 .rv-centre .ci-price { display: none; }
 

@@ -241,3 +241,6 @@
 .cmdbar-chips { flex: none; display: flex; gap: 4px; }
 .cmdbar-chip { display: inline-flex; align-items: center; height: 40px; padding: 0 14px; border: 0; border-radius: var(--r-pill); background: transparent; color: var(--text-2); font: inherit; font-family: var(--mono); font-size: var(--fs-xs); text-decoration: none; cursor: pointer; box-shadow: inset 0 0 0 1px var(--color-border-subtle); transition: background-color var(--dur-sel) var(--ease-arch); }
 .cmdbar-chip:hover { background: var(--color-surface-hover); color: var(--text); text-decoration: none; }
+/* While a project is docked its drawer's foot is the page's black panel and
+   holds its actions; the bar steps aside (Ctrl/Cmd+K still opens the menu). */
+.app-main:has(.wl.has-inspector) .cmdbar { display: none; }
