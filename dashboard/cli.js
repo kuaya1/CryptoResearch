@@ -98,7 +98,11 @@ Contract state (read-only chain reads at a finalized block; nothing is read whil
   contracts status                       caps, compute units used, the gate, networks, and contracts on unread chains (writes nothing)
   contracts show <id>                    the stored observations of a project's contracts (writes nothing, asks nothing)
   contracts observe <id> [--dry-run]     observe each contract now; --dry-run prints the planned reads and compute units, sends nothing
-  contracts probe <chain_id>             what a network answers (finalized tag, block-hash pinning), recorded for the desk
+  contracts probe [<chain_id>]           what a network answers (finalized tag, block-hash pinning), recorded; none named: every unprobed chain your projects need
+  contracts init-defaults [--dry-run]    add the published Uniswap V2/V3 factories, Safe singletons and network-fee ceilings; yours are kept
+  arm-desk [--desk=online] [--dry-run] [--daily-cu=N --monthly-cu=N] [--allow=SYM/USDC,...]
+                                         the paper desk's baseline settings (scout leads, automatic exit quotes, Paper Book, trader rules);
+                                         --desk=online prints what to paste into the signed-in desk's browser console
 
 PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you decide; no order is ever placed)
   paper [--json]                         the paper book: PM-approved tickets as paper positions, apart from the portfolio (writes nothing)
@@ -1050,7 +1054,9 @@ async function run(argv) {
       const CF = require('./core/contract-forensics');
       if (sub === 'status') return CF.deskStatus(ws);
       if (sub === 'show') return CF.view(ws, need(rest[0], 'contracts show <project>'));
-      if (sub === 'probe') return CF.probeNetwork(ws, need(rest[0], 'contracts probe <chain_id>'));
+      // With no chain named, every chain the active projects need that is not
+      // probed yet (the job's own first probe, within the caps).
+      if (sub === 'probe') return rest[0] ? CF.probeNetwork(ws, rest[0]) : CF.probeChains(ws);
       if (sub === 'observe') {
         const pid = need(rest[0], 'contracts observe <project> [--dry-run]');
         if (flags['dry-run'] || flags.dry_run) return CF.observeProject(ws, pid, { dryRun: true });
@@ -1073,7 +1079,46 @@ async function run(argv) {
         ws.reloadSettings();
         return { status: 'saved', verified: out.verified, mode: modeNow() };
       }
-      throw Object.assign(new Error('contracts status | show <project> | observe <project> [--dry-run] | probe <chain_id> | gate [observe|enforce]'), { code: 'USAGE' });
+      if (sub === 'init-defaults') {
+        // The published Uniswap V2/V3 factories, Safe singletons and network-fee
+        // ceilings (core/contract-presets.js), added to the contracts settings;
+        // rows and ceilings already set are kept. --dry-run writes nothing.
+        const S = require('./server');
+        const p = require('./core/contract-presets').plan(ws.settings);
+        const checked = p.patch ? S.validateSettingsPatch(p.patch, ws) : null;
+        if (!p.patch || flags.dry_run) return { status: p.patch ? 'planned' : 'unchanged', dry_run: Boolean(flags.dry_run), added: p.added, kept: p.kept, patch: checked };
+        const { out } = S.applySettings(ws, p.patch, 'Contract defaults (init-defaults)');
+        return { status: 'saved', verified: out.verified, added: p.added, kept: p.kept };
+      }
+      throw Object.assign(new Error('contracts status | show <project> | observe <project> [--dry-run] | probe [<chain_id>] | gate [observe|enforce] | init-defaults [--dry-run]'), { code: 'USAGE' });
+    }
+    case 'arm-desk': {
+      // The paper desk's baseline settings (core/arm-desk.js), checked by the
+      // same validateSettingsPatch as Settings. Locally they are written with
+      // the contract defaults; --desk=online prints what to paste into the
+      // signed-in desk's browser console (the CLI holds no online sign-in).
+      const A = require('./core/arm-desk');
+      const S = require('./server');
+      const desk = one(flags.desk) || 'local';
+      if (!['local', 'online'].includes(desk)) throw Object.assign(new Error('arm-desk [--desk=local|online] [--dry-run] [--daily-cu=N --monthly-cu=N] [--allow=SYM/USDC,...]'), { code: 'USAGE' });
+      const whole = (v, name) => {
+        if (v === undefined) return undefined;
+        if (!/^\d+$/.test(String(v))) throw Object.assign(new Error(`--${name} takes a whole number`), { code: 'USAGE' });
+        return Number(v);
+      };
+      const allow = list(flags.allow).flatMap((s) => String(s).split(',')).map((s) => s.trim()).filter(Boolean);
+      const patch = A.armPatch({ dailyCu: whole(one(flags.daily_cu), 'daily-cu'), monthlyCu: whole(one(flags.monthly_cu), 'monthly-cu'), allow });
+      const checked = S.validateSettingsPatch(patch, ws);
+      if (desk === 'online') {
+        const script = A.onlineScript(patch);
+        return process.argv.includes('--json') ? { desk: 'online', valid: true, patch, script } : { _text: `${script}\n` };
+      }
+      const presets = require('./core/contract-presets').plan(ws.settings);
+      const left = A.leftOpen(patch, ws.settings);
+      if (flags.dry_run) return { status: 'planned', dry_run: true, desk: 'local', valid: true, patch: checked, contract_defaults: presets.added, left_for_you: left };
+      const { out } = S.applySettings(ws, patch, 'Arm the paper desk (arm-desk)');
+      const defaults = presets.patch ? S.applySettings(ws, presets.patch, 'Contract defaults (init-defaults)').out : null;
+      return { status: 'saved', verified: out.verified && (!defaults || defaults.verified), desk: 'local', applied: checked, contract_defaults: presets.added, left_for_you: left };
     }
     case 'scout': {
       // Grok Scout's list as the desk keeps it (core/scout.js); read only.

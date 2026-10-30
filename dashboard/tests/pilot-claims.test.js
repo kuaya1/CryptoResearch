@@ -183,6 +183,36 @@ test('automation.paused stops every dispatch at once; the trader\'s candles and 
   assert.ok(!/automationPaused/.test(require('fs').readFileSync(path.join(__dirname, '..', 'core', 'trader-desk.js'), 'utf8')), 'settlement never reads the pause');
 });
 
+test('automation.paused: the connector\'s pilot queue answers "paused" for every step and offers nothing to do', async (t) => {
+  const call = async (ws, args) => {
+    const handle = require('../mcp').makeMcp(ws);
+    let body = '';
+    const req = require('stream').Readable.from([Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'autonomous_pilot_queue', arguments: args } }))]);
+    req.method = 'POST';
+    await handle(req, { writeHead() {}, end(b) { body = b || ''; } }, { assistant: 'claude' });
+    return JSON.parse(body).result.structuredContent;
+  };
+  const live = setup(t);
+  const open = await call(live.ws, { project: live.pid });
+  assert.equal(open.status, 'ok');
+  assert.equal(open.steps[0].step, 'research');
+  assert.ok(open.next);
+  const s = setup(t, { automation: { paused: true } });
+  const fs = require('fs');
+  const before = fs.readdirSync(s.root, { recursive: true }).sort();
+  for (const args of [{ project: s.pid }, {}]) {
+    const q = await call(s.ws, args);
+    assert.equal(q.status, 'paused');
+    assert.equal(q.next, null, 'nothing is offered to do');
+    assert.equal(q.steps.length, 1);
+    assert.equal(q.steps[0].step, 'paused');
+    assert.equal(q.steps[0].step_when_resumed, 'research', 'the step it would be is kept beside it');
+    assert.match(q.message, /NEXT_STEP: paused/);
+  }
+  assert.deepEqual(fs.readdirSync(s.root, { recursive: true }).sort(), before, 'the queue writes nothing');
+  assert.equal(T.pilotQueue(s.ws, { project: s.pid })[0].step, 'research', 'the desk\'s own queue is unchanged; the local claim holds the pause');
+});
+
 test('defaults: automation not paused, the standing exit-quote policy off, research Claude only', (t) => {
   const s = setup(t);
   assert.deepEqual(s.ws.settings.automation, { paused: false, exit_quotes_auto: false });

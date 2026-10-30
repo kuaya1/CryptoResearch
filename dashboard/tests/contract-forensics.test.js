@@ -551,3 +551,124 @@ test('settings: contract caps are validated, and no key or endpoint is ever acce
     assert.equal(CF.isDue(w.ws, NOW), false, 'off by default');
   } finally { w.cleanup(); }
 });
+
+// ---------------------------------------------------------------------------
+// The automatic network probe (caps set): a chain never probed is probed once.
+
+const ON = { contracts: { ...CAPS.contracts, enabled: true } };
+const netRecord = (ws) => rpc.readNetworks(ws).networks;
+
+test('caps set and contracts on: the job probes a chain never probed, records it, observes, and never probes it again on its own', async (t) => {
+  const s = setup(t, ON);
+  const node = fakeNode(plainToken());
+  assert.deepEqual(CF.unprobedChains(s.ws, NOW), ['8453']);
+  assert.equal(CF.isDue(s.ws, NOW), true, 'an unprobed chain alone makes the job due');
+  const r = await CF.refresh(s.ws, { fetchImpl: node.fetch, key: KEY, sourceImpl: sources({}), now: clock });
+  assert.equal(r.status, 'ok', r.message);
+  assert.match(r.message, /1 saved; networks probed: 8453 supported/);
+  assert.equal(node.calls[0].method, 'eth_chainId', 'the probe comes first');
+  const rec = netRecord(s.ws)['8453'];
+  assert.equal(rec.finalized, true);
+  assert.equal(rec.eip1898, true);
+  assert.equal(rec.block.hash, BLOCK.hash);
+  assert.equal(CF.view(s.ws, s.pid, NOW).subjects[0].state, 'fresh');
+  // Recorded: never probed again by the job.
+  const sent = node.calls.length;
+  assert.deepEqual(CF.unprobedChains(s.ws, NOW), []);
+  const again = await CF.refresh(s.ws, { fetchImpl: node.fetch, key: KEY, sourceImpl: sources({}), now: clock });
+  assert.equal(again.status, 'noop');
+  assert.equal(node.calls.length, sent, 'nothing sent');
+  // A chain recorded as not supported is not probed again on its own either.
+  const t2 = setup(t, ON);
+  const blind = fakeNode({ ...plainToken(), fault: (n, method, params) => (method === 'eth_getBlockByNumber' && params[0] === 'finalized' ? (id, reply) => reply(id, { result: null }) : null) });
+  const r2 = await CF.refresh(t2.ws, { fetchImpl: blind.fetch, key: KEY, sourceImpl: sources({}), now: clock });
+  assert.match(r2.message, /0 saved; networks probed: 8453 not supported/);
+  assert.equal(netRecord(t2.ws)['8453'].finalized, false);
+  assert.deepEqual(CF.unprobedChains(t2.ws, NOW), []);
+  assert.equal(CF.isDue(t2.ws, NOW), false);
+});
+
+test('the first observation by hand probes its chain first with the caps set; unset caps or contracts off send nothing', async (t) => {
+  const s = setup(t);
+  const node = fakeNode(plainToken());
+  const r = await CF.observeProject(s.ws, s.pid, { fetchImpl: node.fetch, key: KEY, sourceImpl: sources({}), now: clock });
+  assert.deepEqual(r.probes, [{ chain_id: '8453', supported: true }]);
+  assert.equal(r.results[0].status, 'saved');
+  assert.equal(netRecord(s.ws)['8453'].finalized, true);
+  // Caps unset: nothing probed or sent; the subject says why.
+  const u = setup(t, {});
+  const quiet = fakeNode(plainToken());
+  const ru = await CF.observeProject(u.ws, u.pid, { fetchImpl: quiet.fetch, key: KEY, now: clock });
+  assert.equal(ru.probes, undefined);
+  assert.equal(ru.results[0].status, 'network_not_probed');
+  assert.equal(quiet.calls.length, 0);
+  assert.ok(!fs.existsSync(u.ws.abs(rpc.NETWORKS_REL)));
+  // Caps set, contracts off: the job probes nothing.
+  const off = setup(t);
+  assert.equal(CF.isDue(off.ws, NOW), false);
+  assert.equal((await CF.refresh(off.ws, { fetchImpl: quiet.fetch, key: KEY, now: clock })).status, 'skipped');
+  assert.equal(quiet.calls.length, 0);
+});
+
+test('a probe with no answer to record waits, doubling; a stop (the key refused) ends the run; Eric\'s probe needs his caps', async (t) => {
+  const s = setup(t, ON);
+  const wrong = fakeNode({ ...plainToken(), chainId: 1 });
+  const r = await CF.refresh(s.ws, { fetchImpl: wrong.fetch, key: KEY, sourceImpl: sources({}), now: clock });
+  assert.match(r.message, /no probe answer to record for 8453/);
+  assert.equal(netRecord(s.ws)['8453'], undefined, 'nothing recorded');
+  const wait = rpc.readState(s.ws).probe_waits['8453'];
+  assert.equal(wait.failures, 1);
+  assert.equal(Date.parse(wait.until), NOW + 30 * 60000);
+  assert.deepEqual(CF.unprobedChains(s.ws, NOW), [], 'waiting');
+  assert.equal(CF.isDue(s.ws, NOW), false);
+  const later = NOW + 31 * 60000;
+  assert.deepEqual(CF.unprobedChains(s.ws, later), ['8453']);
+  await CF.refresh(s.ws, { fetchImpl: wrong.fetch, key: KEY, sourceImpl: sources({}), now: () => later });
+  assert.equal(Date.parse(rpc.readState(s.ws).probe_waits['8453'].until), later + 60 * 60000, 'the wait doubles');
+  // Eric's own probe never waits, and a recorded answer clears the wait.
+  const node = fakeNode(plainToken());
+  const mine = await CF.probeChains(s.ws, { fetchImpl: node.fetch, key: KEY, now: () => later });
+  assert.deepEqual(mine.probed, [{ chain_id: '8453', supported: true }]);
+  assert.match(mine.words, /networks probed: 8453 supported/);
+  assert.equal((rpc.readState(s.ws).probe_waits || {})['8453'], undefined);
+  assert.match((await CF.probeChains(s.ws, { fetchImpl: node.fetch, key: KEY, now: () => later })).words, /probed already/);
+  // The key refused: the run stops, the gate closes, nothing recorded.
+  const k = setup(t, ON);
+  const refused = fakeNode({ ...plainToken(), fault: () => (id, reply) => reply(id, {}, 403) });
+  const rk = await CF.refresh(k.ws, { fetchImpl: refused.fetch, key: KEY, sourceImpl: sources({}), now: clock });
+  assert.equal(rk.status, 'attention');
+  assert.match(rk.message, /stopped: Alchemy refused the key/);
+  assert.equal(refused.calls.length, 1, 'nothing after the refusal');
+  assert.equal(rpc.gateOf(rpc.readState(k.ws), NOW).open, false);
+  assert.equal(netRecord(k.ws)['8453'], undefined);
+  // Caps unset: Eric's probe is refused before anything is sent.
+  const u = setup(t, {});
+  await assert.rejects(CF.probeChains(u.ws, { fetchImpl: node.fetch, key: KEY, now: clock }), (e) => e.code === 'REFUSED' && e.status === 409 && /caps/.test(e.message));
+  await assert.rejects(CF.probeChains(s.ws, { chainId: '999', fetchImpl: node.fetch, key: KEY, now: clock }), (e) => e.code === 'INVALID');
+});
+
+test('POST /api/contracts/probe: refused while the caps are unset, for a malformed chain and without the session token; nothing written', async (t) => {
+  const http = require('http');
+  const { start } = require('../server');
+  const { hashTree } = require('./helpers');
+  const s = setup(t, {});
+  const srv = await start(s.ws, { port: 47990 + Math.floor(Math.random() * 9), quiet: true });
+  t.after(() => { try { srv.shutdown(); } catch (_) { /* stopped */ } });
+  const ask = (method, p, headers = {}, body = null) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: srv.port, path: p, method, headers: { host: `127.0.0.1:${srv.port}`, ...(body ? { 'content-type': 'application/json', origin: `http://127.0.0.1:${srv.port}` } : {}), ...headers } }, (res) => {
+      const c = [];
+      res.on('data', (d) => c.push(d));
+      res.on('end', () => resolve({ status: res.statusCode, json: (() => { try { return JSON.parse(Buffer.concat(c).toString()); } catch (_) { return null; } })() }));
+    });
+    req.on('error', reject);
+    req.end(body ? JSON.stringify(body) : undefined);
+  });
+  const token = (await ask('GET', '/api/session')).json.token;
+  const unset = await ask('POST', '/api/contracts/probe', { 'x-cr-token': token }, {});
+  assert.equal(unset.status, 409);
+  assert.match(unset.json.error, /caps/);
+  assert.equal((await ask('POST', '/api/contracts/probe', { 'x-cr-token': token }, { chain_id: '8453; rm' })).status, 400);
+  assert.equal((await ask('POST', '/api/contracts/probe', {}, { chain_id: '8453' })).status, 401, 'signed in only');
+  assert.ok(!fs.existsSync(s.ws.abs(rpc.NETWORKS_REL)), 'no network record');
+  assert.ok(!fs.existsSync(s.ws.abs(rpc.STATE_REL)), 'no counter written');
+});

@@ -1228,14 +1228,21 @@ function dryRun(ws, pid) {
 // One project's observations: each subject on a supported network, one
 // retry at a new finalized block after a reorg. A stop (rate limit, budget,
 // key, held copy) ends the run with nothing partial written.
-async function observeProject(ws, pid, { fetchImpl = null, key = undefined, sourceImpl = sourcifyGet, now = Date.now, dryRun: dry = false, trigger = 'manual' } = {}) {
+async function observeProject(ws, pid, { fetchImpl = null, key = undefined, sourceImpl = sourcifyGet, now = Date.now, dryRun: dry = false, trigger = 'manual', probe = true } = {}) {
   if (dry) return dryRun(ws, pid);
   const clock = typeof now === 'function' ? now : () => now;
   const project = require('./projects').getProject(ws, pid);
   const subjects = subjectsOf(project);
   const market = marketFor(ws, project);
   const out = { project_id: pid, results: [], stopped: null };
+  // The first observation on a chain never probed probes it first (caps set).
+  if (probe && rpc.capsOf(ws).set) {
+    const pr = await autoProbe(ws, unprobedChains(ws, clock(), subjects.map((s) => s.chain_id)), { fetchImpl, key, now: clock });
+    if (pr.probed.length || pr.failed.length) out.probes = [...pr.probed, ...pr.failed];
+    out.stopped = pr.stopped;
+  }
   for (const s of subjects) {
+    if (out.stopped) break;
     const support = rpc.networkSupport(ws, s.chain_id);
     if (!support.supported) { out.results.push({ chain_id: s.chain_id, address: s.address, status: support.reason, words: support.words }); continue; }
     const st = readStatus(ws, pid).subjects[subjectKey(s)];
@@ -1314,6 +1321,58 @@ async function probeNetwork(ws, chainId, { fetchImpl = null, key = undefined, no
   return { chain_id: id, ...rec, supported: rpc.networkSupport(ws, id).supported };
 }
 
+// The automatic probe: a chain Eric's active projects need that the desk has
+// never probed is probed once, with his caps set, and its answer recorded as
+// `contracts probe` records it, supported or not; a recorded chain is never
+// probed again on its own (`contracts probe <chain>` or POST
+// /api/contracts/probe re-probes). An unreadable record is never written over.
+function unprobedChains(ws, now = Date.now(), chains = null) {
+  const nets = rpc.readNetworks(ws);
+  if (nets.unreadable) return [];
+  let want = chains;
+  if (!want) {
+    want = [];
+    for (const p of require('./projects').listProjects(ws)) {
+      if (p.broken || p.status === 'archived') continue;
+      for (const s of subjectsOf(p)) want.push(s.chain_id);
+    }
+  }
+  const st = rpc.readState(ws);
+  const order = Object.keys(rpc.HOSTS);
+  return [...new Set(want.map(String))]
+    .filter((id) => order.includes(id) && !nets.networks[id] && !rpc.probeWaitOf(st, id, now))
+    .sort((a, b) => order.indexOf(a) - order.indexOf(b));
+}
+
+// No answer to record (a failed request, the wrong chain, a reorg) waits and
+// the next chain is tried; any other stop (caps, budget, gate, key, held) ends
+// the run with nothing more sent.
+async function autoProbe(ws, chains, { fetchImpl = null, key = undefined, now = Date.now } = {}) {
+  const clock = typeof now === 'function' ? now : () => now;
+  const out = { probed: [], failed: [], stopped: null };
+  for (const id of chains) {
+    try {
+      const r = await probeNetwork(ws, id, { fetchImpl, key, now: clock });
+      const waits = rpc.readState(ws).probe_waits;
+      if (waits && waits[id]) rpc.noteProbe(ws, id, clock());
+      out.probed.push({ chain_id: id, supported: r.supported });
+    } catch (err) {
+      const unanswered = err instanceof OpError || (err instanceof rpc.Stop && ['failed', 'reorg'].includes(err.kind));
+      if (!unanswered && err instanceof rpc.Stop) { out.stopped = { kind: err.kind, words: err.message }; break; }
+      if (!unanswered) throw err;
+      const cfg = cfgOf(ws);
+      const w = rpc.noteProbe(ws, id, clock(), { words: err.message, initial_minutes: cfg.backoff_initial_minutes, max_minutes: cfg.backoff_max_minutes });
+      out.failed.push({ chain_id: id, words: err.message, next_try_at: w.until });
+    }
+  }
+  return out;
+}
+
+const probeWords = (pr) => [
+  pr.probed.length ? `networks probed: ${pr.probed.map((p) => `${p.chain_id} ${p.supported ? 'supported' : 'not supported'}`).join(', ')}` : null,
+  pr.failed.length ? `no probe answer to record for ${pr.failed.map((p) => p.chain_id).join(', ')} (tried again later)` : null,
+].filter(Boolean);
+
 // ---------------------------------------------------------------------------
 // The job (inside the forensics job, on the server's 30-minute timer). Off
 // until Eric turns contracts.enabled on and sets both compute-unit caps.
@@ -1358,23 +1417,47 @@ function scheduledOff(ws) {
 function isDue(ws, now = Date.now()) {
   if (scheduledOff(ws)) return false;
   if (!rpc.gateOf(rpc.readState(ws), now).open) return false;
-  return dueProjects(ws, now).length > 0;
+  return unprobedChains(ws, now).length > 0 || dueProjects(ws, now).length > 0;
 }
 
+// Each chain never probed is probed first, then the observations that are due.
 async function refresh(ws, { trigger = 'scheduler', fetchImpl = null, key = undefined, sourceImpl = sourcifyGet, now = Date.now } = {}) {
   const off = scheduledOff(ws);
   if (off) return { status: 'skipped', message: off };
   const clock = typeof now === 'function' ? now : () => now;
-  const due = dueProjects(ws, clock());
-  if (!due.length) return { status: 'noop', message: 'No contract observation due.' };
+  const pr = await autoProbe(ws, unprobedChains(ws, clock()), { fetchImpl, key, now: clock });
+  const notes = probeWords(pr);
+  let stopped = pr.stopped;
+  const due = stopped ? [] : dueProjects(ws, clock());
+  if (!due.length && !stopped && !notes.length) return { status: 'noop', message: 'No contract observation due.' };
   let saved = 0;
-  let stopped = null;
   for (const pid of due) {
-    const r = await observeProject(ws, pid, { fetchImpl, key, sourceImpl, now: clock, trigger });
+    const r = await observeProject(ws, pid, { fetchImpl, key, sourceImpl, now: clock, trigger, probe: false });
     saved += r.results.filter((x) => x.status === 'saved').length;
     if (r.stopped) { stopped = r.stopped; break; }
   }
-  return { status: stopped ? (stopped.kind === 'rate_limited' ? 'backoff' : 'attention') : 'ok', message: `Contract observations: ${saved} saved${stopped ? `; stopped: ${stopped.words}` : ''}.` };
+  return { status: stopped ? (stopped.kind === 'rate_limited' ? 'backoff' : 'attention') : 'ok', message: `Contract observations: ${saved} saved${notes.length ? `; ${notes.join('; ')}` : ''}${stopped ? `; stopped: ${stopped.words}` : ''}.` };
+}
+
+// Eric's probe from the signed-in desk (POST /api/contracts/probe): one chain,
+// or with none named every chain his active projects need that is not
+// probed yet. His caps must be set; a recorded chain is probed again only
+// when he names it.
+async function probeChains(ws, { chainId = null, fetchImpl = null, key = undefined, now = Date.now } = {}) {
+  const caps = rpc.capsOf(ws);
+  if (!caps.set) throw Object.assign(new OpError('REFUSED', caps.why), { status: 409 });
+  const clock = typeof now === 'function' ? now : () => now;
+  if (chainId !== null) {
+    const id = String(chainId);
+    if (!Object.prototype.hasOwnProperty.call(rpc.HOSTS, id)) throw new OpError('INVALID', `Chain ${id} has no read route in this release (${Object.keys(rpc.HOSTS).join(', ')}).`);
+    const pr = await autoProbe(ws, [id], { fetchImpl, key, now: clock });
+    return { ...pr, words: probeWords(pr).join('; ') || (pr.stopped ? `Nothing was probed: ${pr.stopped.words}` : 'Nothing was probed.') };
+  }
+  const nets = rpc.readNetworks(ws);
+  if (nets.unreadable) throw new OpError('INTEGRITY', 'The network record (market-data/contracts/networks.json) cannot be read; nothing was probed.');
+  const chains = unprobedChains(ws, Infinity);
+  const pr = await autoProbe(ws, chains, { fetchImpl, key, now: clock });
+  return { ...pr, words: probeWords(pr).join('; ') || (pr.stopped ? `Nothing was probed: ${pr.stopped.words}` : 'Every chain your projects need is probed already.') };
 }
 
 // ---------------------------------------------------------------------------
@@ -1467,5 +1550,5 @@ function deskStatus(ws, now = Date.now()) {
 module.exports = {
   VERSION, SCHEMA, IDENTITY_VERSION, JSON_VERSION, PROBE_VERSION, PROBE_CODE, PROBE_CODE_HASH, RANDOM_CALLER, factoriesOf, marketFor, obsPath: obsRel, SLOTS, READS, TOPICS, ROLES, CAPABILITIES, SIGNATURES, SELECTOR_CAP, CLASS_WORDS, SOL,
   canonicalJson, codeKind, scanCode, withoutMetadata, surfaceOf, identityKeyOf, subjectsOf, observeProject, probeNetwork, dryRun,
-  readObservation, readCode, readStatus, view, deskStatus, exportOf, isDue, refresh, sourcifyGet, decString, decAddressArray,
+  readObservation, readCode, readStatus, view, deskStatus, exportOf, isDue, refresh, unprobedChains, autoProbe, probeChains, sourcifyGet, decString, decAddressArray,
 };
