@@ -150,7 +150,7 @@ export function MarketLine({ d, agenda = null, settled = true, sources, filters,
             value={!funded ? 'Not funded' : nav === null ? 'Unknown' : `$${Math.round(nav).toLocaleString('en-US')}`}
             sub={funded ? `${openN} open · ${unsettled ? 'unsettled' : 'settled'}` : null}
             href="#/research?tab=outcomes"
-            title="The trader simulation's book: its NAV, open positions and whether its record is settled (Research > Outcomes)"
+            title="The Trader Sim's book: its NAV, open positions and whether its record is settled (Research > Outcomes)"
           />
         ) : null}
         {settled && k.review.projects > 0 ? (

@@ -51,7 +51,7 @@ export function DecisionGrid({ d, rows }) {
   const [showClosed, setShowClosed] = useState(false);
   return (
     <section className="dgrid-wrap" aria-labelledby="dgrid-h">
-      <p className="eyebrow">PM decisions</p>
+      <p className="eyebrow">PM Cohort</p>
       <h2 className="sec-h card-title" id="dgrid-h">{waiting.length ? `${waiting.length} ${waiting.length === 1 ? 'decision waits' : 'decisions wait'}` : 'No decisions wait'}<span className="sr-only"> for you</span></h2>
       {waiting.length ? (
         <>

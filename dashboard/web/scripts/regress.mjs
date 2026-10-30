@@ -583,10 +583,10 @@ try {
       const tab = await openTab(1440);
       await go(tab, '#/watchlist', "document.querySelector('.wl-table tbody tr')");
       await tab.evalJs("document.querySelector('.sidebar [data-key=\"nav-outcomes\"]').click(); true");
-      const ok = await waitFor(tab, "/PM decision cohort/.test((document.querySelector('.lg-research') || {}).textContent || '')", 10000);
+      const ok = await waitFor(tab, "/PM Cohort/.test((document.querySelector('.lg-research') || {}).textContent || '')", 10000);
       const st = { hash: await tab.evalJs('location.hash'), current: await tab.evalJs("(document.querySelector('.sidebar [aria-current=\"page\"]') || {}).dataset?.key || null") };
       evidence.l7_outcomes = st;
-      record('L7', 'Outcomes on the rail opens Research > Outcomes with the PM decision cohort, marked as the current place', ok !== null && /tab=outcomes/.test(st.hash) && st.current === 'nav-outcomes', st);
+      record('L7', 'Outcomes on the rail opens Research > Outcomes with the PM Cohort, marked as the current place', ok !== null && /tab=outcomes/.test(st.hash) && st.current === 'nav-outcomes', st);
       if (SHOTS) await tab.shot(path.join(SHOTS, 'l7-outcomes.png'), { full: true });
       await tab.close();
     }
