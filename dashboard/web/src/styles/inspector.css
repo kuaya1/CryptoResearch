@@ -173,8 +173,8 @@ html.has-drawer { overflow: hidden; }
 .iv-watch { margin-top: 2px; }
 .iv-watch-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 /* 5. what needs you: at most three lines, each with its action */
-/* A v17 dark card: obsidian, its words re-pointed to paper in tokens.css. */
-.iv-lines { list-style: none; margin: 0; padding: 4px 16px; border-radius: var(--r-well); background: var(--cr-obsidian); box-shadow: var(--shadow-dark); }
+/* A warm ceramic card: the drawer's foot is its one black panel. */
+.iv-lines { list-style: none; margin: 0; padding: 4px 16px; border-radius: var(--r-well); background: var(--warm-surface); box-shadow: inset 0 0 0 1px var(--color-border-subtle); }
 .iv-line { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 8px 0; font-size: var(--fs-md); line-height: 1.4; }
 .iv-line + .iv-line { border-top: 1px solid var(--border); }
 .iv-line-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--text-3); }

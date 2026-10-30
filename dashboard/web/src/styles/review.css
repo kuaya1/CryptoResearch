@@ -22,7 +22,7 @@
 .rv-gh { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 16px 8px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); }
 .rv-gn { font-variant-numeric: tabular-nums; min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--r-pill); background: var(--badge-bg); color: var(--text-2); display: inline-flex; align-items: center; justify-content: center; }
 .rv-items { list-style: none; margin: 0; padding: 0 12px; display: flex; flex-direction: column; gap: 8px; }
-.rv-item { display: flex; flex-direction: column; align-items: stretch; gap: 6px; width: 100%; min-height: 44px; padding: 16px; border: 1px solid var(--border); border-radius: var(--r-card); background: var(--surface); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.rv-item { display: flex; flex-direction: column; align-items: stretch; gap: 6px; width: 100%; min-height: 44px; padding: 16px; border: 1px solid var(--border); border-radius: var(--r-well); background: var(--surface); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
 .rv-item:hover { background: var(--surface-hover); }
 .rv-item.is-on { background: var(--surface-selected); border-color: var(--control-border); box-shadow: inset 3px 0 0 var(--accent); }
 .rv-item:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
