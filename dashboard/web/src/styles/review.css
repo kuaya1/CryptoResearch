@@ -39,7 +39,7 @@
 .rv-right .rv-scroll { padding: 20px 16px 28px; }
 .rv-head { display: flex; align-items: center; gap: 12px; }
 .rv-head-n { flex: 1; min-width: 0; }
-.rv-title { font-family: var(--font-display); font-size: var(--fs-head); font-weight: 600; letter-spacing: var(--track-display); line-height: 1.25; outline: none; }
+.rv-title { font-family: var(--font-display); font-size: var(--fs-head); font-weight: var(--wt-display); letter-spacing: var(--track-display); line-height: 1.25; outline: none; }
 .rv-title .ticker { font-family: var(--sans); font-size: var(--fs-sm); font-weight: 400; color: var(--text-3); letter-spacing: 0; }
 .rv-head .btn { flex: none; display: inline-flex; align-items: center; gap: 6px; }
 .rv-centre .mpanel { padding: 0; }

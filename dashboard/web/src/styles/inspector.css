@@ -43,7 +43,7 @@ html.has-drawer { overflow: hidden; }
 .ih-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 12px; align-items: start; }
 .ih-row h2 {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
-  font-family: var(--font-display); font-size: var(--fs-head); font-weight: 700; letter-spacing: var(--track-title); line-height: 1.25; padding-top: 4px; min-width: 0;
+  font-family: var(--font-display); font-size: var(--fs-head); font-weight: var(--wt-title); letter-spacing: var(--track-title); line-height: 1.25; padding-top: 4px; min-width: 0;
 }
 .ih-row h2:focus { outline: none; }
 .ih-row h2:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-sm); }
@@ -58,7 +58,7 @@ html.has-drawer { overflow: hidden; }
 .ih-fact { color: var(--text-2); white-space: nowrap; }
 .ih-fact .k { margin-right: 4px; }
 .ih-links-btn { gap: 5px; }
-.ih-price-v { font-family: var(--font-display); font-size: var(--fs-head); font-weight: 700; letter-spacing: var(--track-title); line-height: 1.25; }
+.ih-price-v { font-family: var(--font-display); font-size: var(--fs-head); font-weight: var(--wt-metric); letter-spacing: var(--track-title); line-height: 1.25; }
 .ih-chg { font-size: var(--fs-sm); font-weight: 600; padding: 2px 8px; border-radius: var(--r-pill); }
 .ih-chg.up { background: var(--pos-weak); }
 .ih-chg.down { background: var(--neg-weak); }
@@ -173,7 +173,8 @@ html.has-drawer { overflow: hidden; }
 .iv-watch { margin-top: 2px; }
 .iv-watch-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 /* 5. what needs you: at most three lines, each with its action */
-.iv-lines { list-style: none; margin: 0; padding: 4px 16px; border-radius: var(--r-well); background: var(--surface-sunken); }
+/* A v17 dark card: obsidian, its words re-pointed to paper in tokens.css. */
+.iv-lines { list-style: none; margin: 0; padding: 4px 16px; border-radius: var(--r-well); background: var(--cr-obsidian); box-shadow: var(--shadow-dark); }
 .iv-line { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 8px 0; font-size: var(--fs-md); line-height: 1.4; }
 .iv-line + .iv-line { border-top: 1px solid var(--border); }
 .iv-line-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--text-3); }
@@ -185,12 +186,12 @@ html.has-drawer { overflow: hidden; }
 .iv-all { margin-top: 8px; font-size: var(--fs-sm); }
 /* PM decision: the Prosecutor's ticket, sized by the desk, with Eric's three
    decisions (PMDecisionCard.jsx). One tinted well, no box inside it. */
-.pm-card { display: flex; flex-direction: column; gap: 14px; padding: 18px 20px; border-radius: var(--r-well); background: var(--surface-sunken); }
+.pm-card { display: flex; flex-direction: column; gap: 14px; padding: 18px 20px; border-radius: var(--r-tile); background: var(--decision-surface); }
 .pm-card .iv-h { margin: 0; }
 .pm-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .pm-call { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.pm-type { margin: 0; font-size: var(--fs-head); font-weight: 700; line-height: 1.2; color: var(--text); }
-.pm-risk { margin: 0; font-size: var(--fs-head); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); }
+.pm-type { margin: 0; font-size: var(--fs-head); font-weight: var(--wt-title); letter-spacing: var(--track-title); line-height: 1.2; color: var(--text); }
+.pm-risk { margin: 0; font-size: var(--fs-head); font-weight: var(--wt-metric); font-variant-numeric: tabular-nums; color: var(--text); }
 .pm-risk-s { font-size: var(--fs-md); font-weight: 500; color: var(--text-2); }
 .pm-thesis { margin: 0; font-size: var(--fs-ui); line-height: 1.6; color: var(--text); }
 .pm-alert { margin: 0; font-size: var(--fs-md); font-weight: 500; color: var(--neg); }
