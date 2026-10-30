@@ -5,32 +5,32 @@
 //               folds; it replaces the page head, the hero and the PM cards
 //   options     the Desk's ⋯ menu, drawn into the v3 rail's Options slot (in
 //               the Focal block below 1280px)
-//   range       24h · 7d · 30d, the change shown under each price
-//   KPI strip   Market · Total cap · Beat BTC (30d) · Needs review · Research
-//               waiting, each a way in; what needs action always in view
-//   PM cards    tickets waiting for your decision (DecisionGrid.jsx)
-//   views       Watching · Needs review · Waiting on a model · Held · Not
-//               watching · All, each with its count
-//   filter bar  search (/), Filters, the active filters as removable
-//               "Label | Value" chips; Density, Columns and Sort on the right
-//   ledger      the table (ProjectTable.jsx) with a sticky summary footer
+//   market      the market line (StatusStrip.jsx): Bitcoin, Total market,
+//               Beat Bitcoin, Trader Sim, and the queues when they hold any;
+//               what needs action always in view above it
+//   ledger      one white card: the views (Watching · Needs review · Waiting
+//               · Held · Not watching · All, an empty one hidden unless it
+//               is chosen), search (/), 24h · 7d · 30d (the change under
+//               each price), the active filters as removable chips, the
+//               table (ProjectTable.jsx) and its footer. Filter, Columns,
+//               Sort and Density are in the options menu (D11)
 // Choose a project (click, tap, Enter, Space) for its inspector (?p=<id>);
 // J/K move the choice, R marks the open project reviewed. Nothing floats over
 // the list. Live updates redraw in place and never reorder the rows you are
 // reading (Re-sort offers it).
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Search, ListFilter, Columns3, ArrowUpDown, X, Rows3 } from 'lucide-react';
-import { announce, fmtPrice } from '../../../../public/ui.js';
+import { X } from 'lucide-react';
+import { announce } from '../../../../public/ui.js';
 import {
   COLUMNS, SORT_NAMES, DEFAULT_FILTERS, DEFAULT_COLUMNS, COVERAGE, RET30, BEAT, VIEWS, prefs as readPrefs, prefsToSave, nextSort, sortRows, matches,
-  filterCount, sourcesOf, reviewKeyAllowed, inView, deskFooter,
+  filterCount, sourcesOf, reviewKeyAllowed, inView,
 } from '../../../../public/watchlist-model.js';
 import { useDesk, useMedia } from '../../lib/hooks.js';
 import { useAgendaRead } from '../../lib/agenda.js';
 import { ui } from '../../lib/desk.js';
 import { nav, pageReady, claimFocus, navigate } from '../../lib/router.js';
-import { Menu, MenuItem, MenuLabel, MenuSep, MenuRadio, MenuCheck } from '../../components/Menu.jsx';
+import { Menu, MenuItem, MenuLabel, MenuSep, MenuRadio, MenuCheck, MenuSub } from '../../components/Menu.jsx';
 import { loadLegacy } from '../../components/Dom.jsx';
 import { Boundary, ViewError, retryableLazy } from '../../components/Boundary.jsx';
 import { legacyCtx } from '../../legacy/ctx.js';
@@ -143,13 +143,15 @@ export default function Watchlist() {
     else if (c.type === 'reset-columns') save({ ...pf, columns: DEFAULT_COLUMNS.slice() });
     else if (c.type === 'prefs') { resetOrder(); save({ ...pf, ...c.patch, filters: { ...pf.filters, ...(c.patch.filters || {}) } }); }
     else if (c.type === 'columns' || c.type === 'filter') {
-      // Open the Desk's own menu (Radix opens on a key or a pointer, not a click).
-      requestAnimationFrame(() => {
-        const b = document.querySelector(`[data-key="${c.type === 'columns' ? 'menu-btn-columns' : 'menu-btn-filters'}"]`);
-        if (!b) return;
-        b.focus();
-        b.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-      });
+      // Open the options menu at that group, by state (§5.6), its first
+      // choice focused.
+      setMenu({ open: true, sub: c.type });
+      setTimeout(() => {
+        const menus = document.querySelectorAll('.menu');
+        const last = menus[menus.length - 1];
+        const first = last && last.querySelector('[role^="menuitem"]');
+        if (first) first.focus();
+      }, 60);
     }
   }));
 
@@ -254,6 +256,7 @@ export default function Watchlist() {
     return () => document.removeEventListener('keydown', onKey);
   });
 
+  const [menu, setMenu] = useState({ open: false, sub: null });
   const sectors = d.index.sectors || [];
   // The active filters as removable "Label | Value" chips (§3.1).
   const chips = [];
@@ -266,19 +269,19 @@ export default function Watchlist() {
 
   const onOpen = (id, opener, provider = null) => openPanel(id, opener, provider);
   const selectedRow = pid && d.index.projects.find((x) => x.project_id === pid);
-  const foot = deskFooter(d.index, rows);
-  const footer = `${foot.projects} project${foot.projects === 1 ? '' : 's'} · ${foot.held} held${foot.priced !== null ? ` · ${fmtPrice(foot.priced)} priced value` : ''}${foot.unpriced ? ` · ${foot.unpriced} unpriced` : ''}`;
+  const cg = d.index.settings && d.index.settings.tickets && d.index.settings.tickets.contract_gate;
+  const footer = `${rows.length} of ${total} projects${sources.price !== 'CoinGecko' ? ' · sample data' : ''}${cg && cg.mode === 'enforce' ? ' · gate cr-contract-gate@1 enforced' : ' · gate observing'}`;
 
   let body;
   if (rows.length) {
-    body = <ProjectTable d={d} rows={rows} columns={pf.columns} sort={pf.sort} onSort={setSort} selected={pid} recent={view.recent} onOpen={onOpen} onSector={onSector} onAction={onAction} sources={sources} density={pf.density} footer={footer} agenda={agenda} range={pf.range} />;
+    body = <ProjectTable d={d} rows={rows} columns={pf.columns} sort={pf.sort} onSort={setSort} selected={pid} recent={view.recent} onOpen={onOpen} onSector={onSector} onAction={onAction} sources={sources} density={pf.density} agenda={agenda} range={pf.range} />;
   } else if (!live.length && !f.archived) {
-    body = <div className="empty-state"><h2>Your Desk is empty</h2><p>Add a project to start, or ask for new research.</p><button type="button" className="btn btn-primary" data-key="empty-add" onClick={addProject}>Add project</button></div>;
+    body = <div className="empty-state v3-empty"><p>Your Desk is empty. Add a project to start, or ask for new research.</p><button type="button" className="btn-link" data-key="empty-add" onClick={addProject}>Add project</button></div>;
   } else if (!q && !nFilters && !f.archived) {
     const name = (VIEWS.find(([v]) => v === f.owned) || [null, 'this view'])[1];
-    body = <div className="empty-state"><h2>{`Nothing in ${name}`}</h2><p>{`${live.length} project${live.length === 1 ? ' is' : 's are'} saved.`}</p><button type="button" className="btn" data-key="empty-all" onClick={() => setView('all')}>Show all</button></div>;
+    body = <div className="empty-state v3-empty"><p>Nothing here.</p><button type="button" className="btn-link" data-key="empty-all" title={`Nothing in ${name}; ${live.length} project${live.length === 1 ? ' is' : 's are'} saved`} onClick={() => setView('all')}>Show all</button></div>;
   } else {
-    body = <div className="empty-state"><h2>No projects match</h2><p>{`${total} project${total === 1 ? ' is' : 's are'} hidden by the current search or filters.`}</p><button type="button" className="btn" data-key="empty-clear" onClick={clearAll}>Clear search and filters</button></div>;
+    body = <div className="empty-state v3-empty"><p>{`Nothing here. ${total} project${total === 1 ? ' is' : 's are'} hidden by the current search or filters.`}</p><button type="button" className="btn-link" data-key="empty-clear" onClick={clearAll}>Clear search and filters</button></div>;
   }
 
   // The Desk's options (D7): the rail's Options from 1280px, the Focal
@@ -288,24 +291,64 @@ export default function Watchlist() {
     const el = document.getElementById('desk-options-slot');
     if (el !== slot) setSlot(el);
   });
+  const sortOptions = Object.entries(SORT_NAMES).flatMap(([k, [label, a, z]]) => [[`${k}:asc`, `${label}, ${a}`], [`${k}:desc`, `${label}, ${z}`]]);
+  const sortValue = `${pf.sort.key}:${pf.sort.dir}`;
+  const subOf = (k) => ({ open: menu.open && menu.sub === k ? true : undefined, onOpenChange: (o) => setMenu((m) => ({ ...m, sub: o ? k : null })) });
   const optionsMenu = (
     <Menu
       label="Desk options"
       align={slot ? 'start' : 'end'}
       side={slot ? 'right' : 'bottom'}
+      open={menu.open}
+      onOpenChange={(o) => setMenu({ open: o, sub: null })}
       trigger={<button type="button" className={slot ? 'v3-foot-item' : 'v3-focal-link'} aria-label="Desk options" data-key="desk-more">Options</button>}
     >
-      <MenuCheck checked={f.archived} onChange={(v) => setFilter('archived', Boolean(v))}>{`Archived projects (${archivedCount})`}</MenuCheck>
+      <MenuSub label={nFilters ? `Filter (${nFilters})` : 'Filter'} data-key="menu-btn-filters" {...subOf('filter')}>
+        <MenuRadio label="Sector" value={f.sector} onChange={(v) => setFilter('sector', v)} options={[['', 'All sectors', live.length], ...sectors.map((x) => [x.id, x.label, live.filter((p) => p.sector && p.sector.primary === x.id).length])]} />
+        <MenuSep />
+        <MenuRadio label="Model coverage" value={f.coverage} onChange={(v) => setFilter('coverage', v)} options={COVERAGE} />
+        <MenuSep />
+        <MenuRadio label="30-day change" value={f.ret30} onChange={(v) => setFilter('ret30', v)} options={RET30} />
+        <MenuSep />
+        <MenuRadio label="Against Bitcoin" value={f.beat || 'any'} onChange={(v) => setFilter('beat', v)} options={BEAT} />
+        {nFilters ? <><MenuSep /><MenuItem onSelect={clearAll}>Clear filters</MenuItem></> : null}
+      </MenuSub>
+      <MenuSub label="Columns" data-key="menu-btn-columns" {...subOf('columns')}>
+        <MenuLabel>Show columns</MenuLabel>
+        {COLUMNS.map((c) => (
+          <MenuCheck
+            key={c.id}
+            checked={pf.columns.includes(c.id)}
+            onChange={(on) => {
+              const set = on ? [...new Set([...pf.columns, c.id])] : pf.columns.filter((x) => x !== c.id);
+              save({ ...pf, columns: COLUMNS.filter((x) => set.includes(x.id)).map((x) => x.id) });
+            }}
+          >
+            {c.label}
+          </MenuCheck>
+        ))}
+        <p className="menu-note">Narrow windows hide some columns; every value stays in the project details.</p>
+        <MenuSep />
+        <MenuItem data-key="desk-reset-cols" onSelect={() => save({ ...pf, columns: DEFAULT_COLUMNS.slice() })}>Reset columns</MenuItem>
+      </MenuSub>
+      <MenuSub label="Sort" data-key="menu-btn-sort" {...subOf('sort')}>
+        <MenuRadio
+          label="Sort by"
+          value={sortValue}
+          onChange={(v) => { const dir = v.split(':').pop(); const k = v.slice(0, v.length - dir.length - 1); resetOrder(); save({ ...pf, sort: { key: k, dir } }); }}
+          options={sortOptions.map(([v, text]) => [v, text.replace('Rank (CoinGecko)', sources.rankName)])}
+        />
+      </MenuSub>
+      <MenuSub label="Density" data-key="menu-btn-density" {...subOf('density')}>
+        <MenuRadio label="Row density" value={pf.density} onChange={(v) => save({ ...pf, density: v })} options={[['comfortable', 'Comfortable'], ['compact', 'Compact']]} />
+      </MenuSub>
       <MenuSep />
-      <MenuItem data-key="desk-reset-cols" onSelect={() => save({ ...pf, columns: DEFAULT_COLUMNS.slice() })}>Reset columns</MenuItem>
+      <MenuCheck checked={f.archived} onChange={(v) => setFilter('archived', Boolean(v))}>{`Archived projects (${archivedCount})`}</MenuCheck>
       {reordered ? <MenuItem data-key="desk-resort" onSelect={() => { resetOrder(); announce('Re-sorted.'); }}>Re-sort now</MenuItem> : null}
       <MenuItem data-key="desk-new" href="#/new">New research from a link or screenshot</MenuItem>
       <MenuItem data-key="desk-exit-quotes" onSelect={async () => { const L = await loadLegacy(); L.openExitQuotesDialog(legacyCtx); }}>Quote exits for every project…</MenuItem>
     </Menu>
   );
-
-  const sortOptions = Object.entries(SORT_NAMES).flatMap(([k, [label, a, z]]) => [[`${k}:asc`, `${label}, ${a}`], [`${k}:desc`, `${label}, ${z}`]]);
-  const sortValue = `${pf.sort.key}:${pf.sort.dir}`;
 
   return (
     <div className={`wl${pid && wide ? ' has-inspector' : ''}`}>
@@ -315,50 +358,36 @@ export default function Watchlist() {
         <ActionBand d={d} />
         <MarketLine d={d} agenda={agenda} settled={settled} sources={sources} filters={f} onView={setView} onBeat={() => setFilter('beat', f.beat === 'yes' ? 'any' : 'yes')} />
 
-        <nav className="views" aria-label="Views">
-          {VIEWS.map(([v, text]) => (
-            <button key={v} type="button" className="view-tab" aria-pressed={!f.archived && f.owned === v} data-key={`owned-${v}`} onClick={() => setView(v)}>
-              <span>{text}</span><span className="view-count">{counts[v]}</span>
-            </button>
-          ))}
-          <RangeControl value={pf.range} onChange={(r) => { if (r !== pf.range) { save({ ...pf, range: r }); announce(`Changes over ${r}.`); } }} />
-        </nav>
-
-        <div className="toolbar" role="search" aria-label="Find and filter projects" data-nodirty="1">
-          <div className="search wl-search">
-            <Search className="search-ico" size={15} strokeWidth={1.9} aria-hidden="true" />
-            <input
-              ref={search}
-              className="input"
-              type="search"
-              placeholder="Search name, ticker or sector"
-              aria-label="Search projects"
-              aria-keyshortcuts="/"
-              data-key="wl-search"
-              value={q}
-              onChange={(e) => { view.q = e.target.value; setQ(e.target.value); resetOrder(); }}
-              onKeyDown={(e) => {
-                if (e.nativeEvent.isComposing || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-                const first = document.querySelector('.wl .pname');
-                if (e.key === 'ArrowDown' && first) { e.preventDefault(); first.focus(); }
-                else if (e.key === 'Enter' && q.trim() && first) { e.preventDefault(); openPanel(first.closest('[data-pid]').dataset.pid, first); }
-              }}
-            />
-            <kbd aria-hidden="true">/</kbd>
+        <section className="v3-ledger" aria-label="Projects">
+          <div className="v3-ledger-top">
+            <nav className="views" aria-label="Views">
+              {VIEWS.filter(([v]) => v === 'all' || counts[v] > 0 || (!f.archived && f.owned === v)).map(([v, text]) => (
+                <button key={v} type="button" className="view-tab" aria-pressed={!f.archived && f.owned === v} data-key={`owned-${v}`} onClick={() => setView(v)}>
+                  <span>{v === 'waiting' ? 'Waiting' : text}</span><span className="view-count">{counts[v]}</span>
+                </button>
+              ))}
+            </nav>
+            <div className="v3-ledger-right" role="search" aria-label="Find projects" data-nodirty="1">
+              <input
+                ref={search}
+                className="v3-search"
+                type="search"
+                placeholder="Search  /"
+                aria-label="Search projects"
+                aria-keyshortcuts="/"
+                data-key="wl-search"
+                value={q}
+                onChange={(e) => { view.q = e.target.value; setQ(e.target.value); resetOrder(); }}
+                onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+                  const first = document.querySelector('.wl .pname');
+                  if (e.key === 'ArrowDown' && first) { e.preventDefault(); first.focus(); }
+                  else if (e.key === 'Enter' && q.trim() && first) { e.preventDefault(); openPanel(first.closest('[data-pid]').dataset.pid, first); }
+                }}
+              />
+              <RangeControl value={pf.range} onChange={(r) => { if (r !== pf.range) { save({ ...pf, range: r }); announce(`Changes over ${r}.`); } }} />
+            </div>
           </div>
-          <Menu
-            label="Filters"
-            trigger={<button type="button" className={`btn${nFilters ? ' is-on' : ''}`} data-key="menu-btn-filters"><ListFilter size={15} strokeWidth={1.9} aria-hidden="true" /><span>Filter</span>{nFilters ? <span className="btn-count">{nFilters}<span className="sr-only"> active</span></span> : null}</button>}
-          >
-            <MenuRadio label="Sector" value={f.sector} onChange={(v) => setFilter('sector', v)} options={[['', 'All sectors', live.length], ...sectors.map((s) => [s.id, s.label, live.filter((p) => p.sector && p.sector.primary === s.id).length])]} />
-            <MenuSep />
-            <MenuRadio label="Model coverage" value={f.coverage} onChange={(v) => setFilter('coverage', v)} options={COVERAGE} />
-            <MenuSep />
-            <MenuRadio label="30-day change" value={f.ret30} onChange={(v) => setFilter('ret30', v)} options={RET30} />
-            <MenuSep />
-            <MenuRadio label="Against Bitcoin" value={f.beat || 'any'} onChange={(v) => setFilter('beat', v)} options={BEAT} />
-            {nFilters ? <><MenuSep /><MenuItem onSelect={clearAll}>Clear filters</MenuItem></> : null}
-          </Menu>
           {chips.length ? (
             <ul className="fchips" aria-label="Active filters">
               {chips.map((t) => (
@@ -370,56 +399,12 @@ export default function Watchlist() {
               {chips.length > 1 ? <li><button type="button" className="btn-link" data-key="tok-clear" onClick={clearAll}>Clear all</button></li> : null}
             </ul>
           ) : null}
-          <div className="tb-right">
-            <Menu
-              label="Density"
-              align="end"
-              trigger={<button type="button" className="btn btn-icon" data-key="menu-btn-density" aria-label={`Density: ${pf.density}`} title="Density"><Rows3 size={15} strokeWidth={1.9} aria-hidden="true" /></button>}
-            >
-              <MenuRadio label="Row density" value={pf.density} onChange={(v) => save({ ...pf, density: v })} options={[['comfortable', 'Comfortable'], ['compact', 'Compact']]} />
-            </Menu>
-            <Menu
-              label="Columns"
-              align="end"
-              trigger={<button type="button" className="btn" data-key="menu-btn-columns"><Columns3 size={15} strokeWidth={1.9} aria-hidden="true" /><span className="tb-lbl">Columns</span></button>}
-            >
-              <MenuLabel>Show columns</MenuLabel>
-              {COLUMNS.map((c) => (
-                <MenuCheck
-                  key={c.id}
-                  checked={pf.columns.includes(c.id)}
-                  onChange={(on) => {
-                    const set = on ? [...new Set([...pf.columns, c.id])] : pf.columns.filter((x) => x !== c.id);
-                    save({ ...pf, columns: COLUMNS.filter((x) => set.includes(x.id)).map((x) => x.id) });
-                  }}
-                >
-                  {c.label}
-                </MenuCheck>
-              ))}
-              <p className="menu-note">Narrow windows hide some columns; every value stays in the project details.</p>
-              <MenuSep />
-              <MenuItem onSelect={() => save({ ...pf, columns: DEFAULT_COLUMNS.slice() })}>Reset columns</MenuItem>
-            </Menu>
-            <Menu
-              label="Sort projects"
-              align="end"
-              trigger={<button type="button" className="btn" data-key="menu-btn-sort" aria-label={`Sort: ${SORT_NAMES[pf.sort.key][0]}, ${SORT_NAMES[pf.sort.key][pf.sort.dir === 'asc' ? 1 : 2]}`}><ArrowUpDown size={15} strokeWidth={1.9} aria-hidden="true" /><span className="tb-sort-lbl">{SORT_NAMES[pf.sort.key][0].replace(' (CoinGecko)', '').replace(' (demo data)', '')}</span></button>}
-            >
-              <MenuRadio
-                label="Sort by"
-                value={sortValue}
-                onChange={(v) => { const dir = v.split(':').pop(); const k = v.slice(0, v.length - dir.length - 1); resetOrder(); save({ ...pf, sort: { key: k, dir } }); }}
-                options={sortOptions.map(([v, text]) => [v, text.replace('Rank (CoinGecko)', sources.rankName)])}
-              />
-            </Menu>
-          </div>
-        </div>
-
-        {reordered ? (
-          <p className="reorder" role="status"><span>Values updated; order kept while you read.</span><button type="button" className="btn-link" data-key="resort" onClick={() => { resetOrder(); announce('Re-sorted.'); }}>Re-sort</button></p>
-        ) : filtered ? <p className="results-line" role="status">{`${rows.length} of ${total} ${f.archived ? 'archived' : 'saved'} projects`}</p> : null}
-
-        <div className="wl-body">{body}</div>
+          {reordered ? (
+            <p className="reorder" role="status"><span>Values updated; order kept while you read.</span><button type="button" className="btn-link" data-key="resort" onClick={() => { resetOrder(); announce('Re-sorted.'); }}>Re-sort</button></p>
+          ) : filtered ? <p className="results-line" role="status">{`${rows.length} of ${total} ${f.archived ? 'archived' : 'saved'} projects`}</p> : null}
+          <div className="wl-body">{body}</div>
+          <p className="v3-ledger-foot"><span>{footer}</span><span aria-hidden="true">J K to move · R reviewed</span></p>
+        </section>
       </div>
       {selectedRow ? (
         <Boundary

@@ -267,12 +267,12 @@ try {
       else if (m.bottom > m.fold) fail(`${w}×${h} ${k}: the strongest risk ends below the first screen`, m);
     }
     // The Desk keeps its four phone columns in view (Project, Price / 24h,
-    // Grade, Risk): the table never scrolls sideways (found on the live desk,
+    // Grade, Gate; UI v3: two lines per row, no head): the table never scrolls sideways (found on the live desk,
     // 2026-10-17: a long mark, "Not researched" and long prices widened it).
     {
       await go(tab, '#/watchlist', "document.querySelector('.wl-table tbody tr')");
       await sleep(300);
-      const t = await tab.evalJs("(() => { const sc = document.querySelector('.wl-scroll'); return { over: sc.scrollWidth - sc.clientWidth, cols: [...document.querySelectorAll('.wl-table thead th')].filter((th) => th.getBoundingClientRect().width > 0).map((th) => th.className.split(' ')[0]) }; })()");
+      const t = await tab.evalJs("(() => { const sc = document.querySelector('.wl-scroll'); return { over: sc.scrollWidth - sc.clientWidth, cols: [...document.querySelectorAll('.wl-table tbody tr:first-child td')].filter((td) => td.getBoundingClientRect().width > 0).map((td) => td.className.split(' ')[0]) }; })()");
       report.phone[`${w}x${h} desk table`] = t;
       ok(t.over <= 1 && ['c-name', 'c-priceStack', 'c-grade', 'c-risk'].every((c) => t.cols.includes(c)), `${w}x${h}: the Desk shows Project, Price / 24h, Grade and Risk without sideways scroll`, t);
     }
