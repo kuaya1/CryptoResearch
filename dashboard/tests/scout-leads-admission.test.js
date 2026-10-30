@@ -557,3 +557,84 @@ test('after Request research the lead shows the new admission; the superseded on
   assert.deepEqual(files(root), before, 'nothing written');
   assert.equal(research.listRuns(ws, again.project_id).length, 1, 'one run');
 });
+
+// Remedy verification (2026-10-29), F5 upgrade: a Solana receipt the pre-fix
+// worker wrote kept only the fee now, so an answer with a 25% scheduled fee
+// read ELIGIBLE. Opened by the current code, that unedited receipt must not
+// be confirmed: the confirm is 409 CHANGED with nothing written, the lead is
+// due at once, and the next turn asks again (never reusing the old reading)
+// and decides under the rules in force. A fully known zero-fee receipt still
+// confirms.
+test('F5 upgrade: a pre-fix ELIGIBLE Solana receipt without the fee schedule or hook is refused at confirm and read again', async (t) => {
+  const { reply } = require('./leads-fixtures');
+  const { ws, root } = workspace(t, 'adm-f5-upgrade', { leads: { ...POLICY, chains: ['8453', 'solana'] } });
+  const OLD = `2${'A'.repeat(42)}B`;
+  const CTRL = `3${'C'.repeat(42)}D`;
+  const now = Date.now();
+  const [oldKey, ctrlKey] = deliver(ws, [{ chain: 'solana', contract: OLD }, { chain: 'solana', contract: CTRL }], now);
+  const fee = (scheduled) => ({ current_fee_rate: { fee_rate: '0' }, scheduled_fee_rate: scheduled });
+  let answers = { [OLD]: { transfer_fee: fee([]), transfer_hook: [], non_transferable: '0' }, [CTRL]: { transfer_fee: fee([]), transfer_hook: [], non_transferable: '0' } };
+  const f = fake({ onCall: (url) => {
+    const cg = /\/coins\/solana\/contract\/([1-9A-HJ-NP-Za-km-z]+)/.exec(url);
+    if (cg) return reply(200, { ...coin(`0x${cg[1].slice(0, 4)}`), detail_platforms: { solana: { contract_address: cg[1], decimal_place: 9 } } });
+    const gp = /\/solana\/token_security\?contract_addresses=([1-9A-HJ-NP-Za-km-z]+)/.exec(url);
+    if (gp) return reply(200, { code: 1, message: 'OK', result: { [gp[1]]: answers[gp[1]] } });
+    return null;
+  } });
+  await L.refresh(ws, { fetchImpl: f, clock: () => now });
+  for (const k of [oldKey, ctrlKey]) assert.equal(L.getAsset(ws, k).state, 'ELIGIBLE');
+  // The pre-fix worker's receipt for OLD: the GoPlus facts as it stored them
+  // (fee now only), self-hashed as it wrote them; the asset pins that hash.
+  const asset = L.getAsset(ws, oldKey);
+  const rel = ws.abs(`${L.ELIGIBILITY}/${asset.eligibility.receipt_id}.json`);
+  const r = readJson(rel);
+  const gpObs = r.observations.find((o) => o.source === 'goplus');
+  gpObs.facts = { transfer_fee_pct: 0, severe: [], watch: [] };
+  r.criteria = r.criteria.filter((c) => c.name === 'market_cap_usd' || c.name === 'volume_24h_usd' || c.name === 'transfer_fee_pct');
+  r.eligibility_sha256 = L.receiptSha(r);
+  fs.writeFileSync(rel, JSON.stringify(r, null, 2));
+  const assetFile = ws.abs(`${L.ASSETS}/${oldKey}.json`);
+  const raw = readJson(assetFile);
+  fs.writeFileSync(assetFile, JSON.stringify({ ...raw, eligibility: { ...raw.eligibility, eligibility_sha256: r.eligibility_sha256 } }, null, 2));
+  const legacy = fs.readFileSync(rel, 'utf8');
+  // Intact and ELIGIBLE as stored, INCOMPLETE under the rule in force.
+  assert.equal(L.getReceipt(ws, r.receipt_id).state, 'ELIGIBLE');
+  assert.equal(L.judge(asset.identity, [], r.observations, L.policyOf(ws)).state, 'INCOMPLETE');
+  assert.equal(L.factsCurrent(r.observations, 'solana'), false);
+  // The review shows it as being read again, never confirmable.
+  const row = L.reviewView(ws).rows.find((x) => x.lead_key === oldKey);
+  assert.equal(row.rescreen_due, true);
+  assert.equal(row.expired, true);
+  assert.match(row.reasons.join(' '), /schedule of transfer fees|transferability|transfer hook/);
+  // Confirming with the exact receipt and revision the view gives: 409, nothing written.
+  const body = { request_id: rid(), expect: expectFor(ws, [oldKey]) };
+  const before = files(root);
+  assert.throws(() => L.confirmLeads(ws, body), (e) => {
+    assert.equal(e.code, 'CHANGED');
+    assert.equal(e.status, 409);
+    const field = e.details.rows[0].fields.find((x) => x.field === 'eligibility_rule');
+    assert.ok(field, 'the obsolete rule is named');
+    assert.equal(field.now, 'INCOMPLETE');
+    return true;
+  });
+  assert.deepEqual(files(root), before, 'nothing written');
+  assert.equal(projects.listProjects(ws).length, 0, 'no project was made');
+  // Due at once, though unexpired and under the same policy.
+  assert.ok(Date.parse(asset.eligibility.expires_at) > Date.now());
+  assert.deepEqual(L.dueAssets(ws).map((a) => a.asset_id), [oldKey], 'only the obsolete reading is due; the control is not');
+  assert.equal(L.isDue(ws), true);
+  // The next turn asks GoPlus again (the 25% schedule the old worker missed)
+  // and decides under the rules in force; the kept receipt is untouched.
+  answers = { ...answers, [OLD]: { transfer_fee: fee([{ epoch: '42', fee_rate: '0.25' }]), transfer_hook: [], non_transferable: '0' } };
+  const calls = f.calls.length;
+  await L.refresh(ws, { fetchImpl: f, clock: () => Date.now() });
+  assert.ok(f.calls.slice(calls).some((u) => u.includes('/solana/token_security') && u.includes(OLD)), 'a fresh screen, not the old reading reused');
+  const after = L.getAsset(ws, oldKey);
+  assert.equal(after.state, 'REFUSED');
+  assert.notEqual(after.eligibility.receipt_id, r.receipt_id);
+  assert.match(after.eligibility.reasons.join(' '), /transfer fee 25%/);
+  assert.equal(fs.readFileSync(rel, 'utf8'), legacy, 'the kept receipt is never rewritten');
+  // The fully known zero-fee control still confirms.
+  const out = confirm(ws, [ctrlKey]);
+  assert.equal(out.admissions[0].state, 'complete');
+});
