@@ -165,6 +165,28 @@ const DEFAULT_SETTINGS = {
     backoff_max_minutes: 720,
     sync_now_min_seconds: 120,
   },
+  // Contract state observations (contract-forensics.js, Pillar 1): read-only
+  // chain reads through Alchemy, pinned to a finalized block. Nothing is read
+  // while either compute-unit cap is unset (no default: Eric sets them from
+  // the measured cost per observation), and the scheduled run stays off until
+  // `enabled`. Safe singletons are recognized only from Eric's allowlist of
+  // code hashes; with none, every Safe controller is "unknown".
+  contracts: {
+    enabled: false,
+    daily_cu_cap: null,
+    monthly_cu_cap: null,
+    ttl_hours: 24,
+    watch_interval_hours: 6,
+    baseline_interval_hours: 168,
+    min_timelock_hours: 48,
+    max_authority_depth: 3,
+    max_log_blocks: 10000,
+    max_projects_per_run: 5,
+    timeout_seconds: 20,
+    backoff_initial_minutes: 30,
+    backoff_max_minutes: 720,
+    safe_singleton_code_hashes: [],
+  },
   inbox: { settle_seconds: 2 },
   requests: { settle_seconds: 2 },
   backups: { keep_recent: 14, keep_monthly: 12 },

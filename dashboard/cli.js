@@ -94,6 +94,12 @@ Forensics & Resilience (no paid model call; Claude investigates, ChatGPT may cha
                                          one replayable exit calculation, what is missing); reads only
   forensics case-verify --file FILE      checks a case package offline and replays its calculation (no network)
 
+Contract state (read-only chain reads at a finalized block; nothing is read while your caps are unset)
+  contracts status                       caps, compute units used, the gate, networks, and contracts on unread chains (writes nothing)
+  contracts show <id>                    the stored observations of a project's contracts (writes nothing, asks nothing)
+  contracts observe <id> [--dry-run]     observe each contract now; --dry-run prints the planned reads and compute units, sends nothing
+  contracts probe <chain_id>             what a network answers (finalized tag, block-hash pinning), recorded for the desk
+
 PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you decide; no order is ever placed)
   paper [--json]                         the paper book: PM-approved tickets as paper positions, apart from the portfolio (writes nothing)
   tickets candidates [--json]           who could go in the pilot: held first, then by grade, with today's gate (writes nothing)
@@ -1036,6 +1042,22 @@ async function run(argv) {
       if (sub === 'verify') return off.verifyFile(path.resolve(need(rest[0], 'offsite verify <file>')));
       if (sub === 'drill') return off.drill(ws, { file: rest[0] ? path.resolve(rest[0]) : null, to: one(flags.to) ? path.resolve(one(flags.to)) : null });
       throw Object.assign(new Error('offsite setup|pull|status|verify|drill'), { code: 'USAGE' });
+    }
+    case 'contracts': {
+      // Contract state observations (core/contract-forensics.js, Pillar 1).
+      // show and status read stored files only; observe and probe read the
+      // chain within Eric's compute-unit caps; --dry-run sends nothing.
+      const CF = require('./core/contract-forensics');
+      if (sub === 'status') return CF.deskStatus(ws);
+      if (sub === 'show') return CF.view(ws, need(rest[0], 'contracts show <project>'));
+      if (sub === 'probe') return CF.probeNetwork(ws, need(rest[0], 'contracts probe <chain_id>'));
+      if (sub === 'observe') {
+        const pid = need(rest[0], 'contracts observe <project> [--dry-run]');
+        if (flags['dry-run'] || flags.dry_run) return CF.observeProject(ws, pid, { dryRun: true });
+        const r = await CF.observeProject(ws, pid, { trigger: 'cli' });
+        return r.results.some((x) => x.status === 'saved') ? { ...r, ...(await afterWrite(ws, pid)) } : r;
+      }
+      throw Object.assign(new Error('contracts status | show <project> | observe <project> [--dry-run] | probe <chain_id>'), { code: 'USAGE' });
     }
     case 'scout': {
       // Grok Scout's list as the desk keeps it (core/scout.js); read only.

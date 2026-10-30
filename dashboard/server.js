@@ -192,6 +192,34 @@ function validateSettingsPatch(patch, ws = null) {
     if (w.daily_cu_cap !== undefined) out.wallet_sync.daily_cu_cap = w.daily_cu_cap === null || w.daily_cu_cap === '' ? null : whole(w.daily_cu_cap, 1000, 30000000, 'Daily compute-unit cap');
     if (w.monthly_cu_cap !== undefined) out.wallet_sync.monthly_cu_cap = w.monthly_cu_cap === null || w.monthly_cu_cap === '' ? null : whole(w.monthly_cu_cap, 10000, 300000000, 'Monthly compute-unit cap');
   }
+  if (patch.contracts) {
+    // Contract observations (contract-forensics.js): Eric's caps and intervals
+    // only. Keys and endpoints are never accepted; addresses come from the
+    // verified identity. Unset caps keep every chain read off.
+    const c = patch.contracts;
+    if (Object.keys(c).some((k) => /key|secret|token|url|endpoint/i.test(k))) throw new OpError('REFUSED', 'Keys and endpoints are never stored in settings. The Alchemy key goes in Render > Environment (ALCHEMY_API_KEY).');
+    const whole = (v, lo, hi, label) => {
+      const n = num(v, lo, hi, label);
+      if (!Number.isInteger(n)) throw new OpError('INVALID', `${label} must be a whole number from ${lo} to ${hi}.`);
+      return n;
+    };
+    const cap = (v, lo, hi, label) => (v === null || v === '' ? null : whole(v, lo, hi, label));
+    out.contracts = {};
+    if (c.enabled !== undefined) out.contracts.enabled = c.enabled === true;
+    if (c.daily_cu_cap !== undefined) out.contracts.daily_cu_cap = cap(c.daily_cu_cap, 1000, 30000000, 'Contract daily compute-unit cap');
+    if (c.monthly_cu_cap !== undefined) out.contracts.monthly_cu_cap = cap(c.monthly_cu_cap, 10000, 300000000, 'Contract monthly compute-unit cap');
+    if (c.ttl_hours !== undefined) out.contracts.ttl_hours = whole(c.ttl_hours, 1, 168, 'Contract evidence life (hours)');
+    if (c.watch_interval_hours !== undefined) out.contracts.watch_interval_hours = whole(c.watch_interval_hours, 1, 168, 'Watched interval (hours)');
+    if (c.baseline_interval_hours !== undefined) out.contracts.baseline_interval_hours = whole(c.baseline_interval_hours, 6, 2160, 'Baseline interval (hours)');
+    if (c.min_timelock_hours !== undefined) out.contracts.min_timelock_hours = whole(c.min_timelock_hours, 1, 720, 'Minimum timelock (hours)');
+    if (c.max_authority_depth !== undefined) out.contracts.max_authority_depth = whole(c.max_authority_depth, 1, 6, 'Authority depth');
+    if (c.max_log_blocks !== undefined) out.contracts.max_log_blocks = whole(c.max_log_blocks, 100, 1000000, 'Log range (blocks)');
+    if (c.safe_singleton_code_hashes !== undefined) {
+      const list = c.safe_singleton_code_hashes;
+      if (!Array.isArray(list) || list.length > 20 || list.some((h) => !/^0x[0-9a-fA-F]{64}$/.test(String(h)))) throw new OpError('INVALID', 'Safe singleton code hashes must be a list of up to 20 Keccak-256 hashes (0x and 64 hex digits).');
+      out.contracts.safe_singleton_code_hashes = [...new Set(list.map((h) => String(h).toLowerCase()))];
+    }
+  }
   if (patch.research) {
     // Only limits and model choices; API keys are never accepted from the page.
     out.research = {};

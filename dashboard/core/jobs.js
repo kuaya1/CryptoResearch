@@ -81,7 +81,8 @@ function isDue(ws, name, state, now = Date.now(), opts = {}) {
       // Closed without a monitored project, in a restored copy, and while
       // GitHub's rate limit or a failure backoff runs; open when the standing
       // exit-quote policy has a pilot project to approve (stage 5.3).
-      return require('./forensic-monitor').isDue(ws, now) || require('./forensics').autoExitQuotePlan(ws).add.length > 0;
+      // Contract observations ride along, off until Eric sets their caps.
+      return require('./forensic-monitor').isDue(ws, now) || require('./forensics').autoExitQuotePlan(ws).add.length > 0 || require('./contract-forensics').isDue(ws, now);
     case 'leads':
       // Closed until Eric turns leads on, in a restored copy, while CoinGecko's
       // or GoPlus's gate is closed, and with no asset due.
@@ -187,6 +188,15 @@ async function runJobBody(ws, name, trigger) {
       // Its own lease, gate, backoff and budget are inside refresh().
       const r = await require('./forensic-monitor').refresh(ws, { trigger });
       if (auto.added.length) r.message = `Exit quotes approved by your standing policy for ${auto.added.length} pilot project${auto.added.length === 1 ? '' : 's'}. ${r.message || ''}`.trim();
+      // Contract observations (their own caps, gate and backoff; off by default).
+      // A failure there is said, never lost, and never changes the monitor's result.
+      let ct = null;
+      try {
+        ct = await require('./contract-forensics').refresh(ws, { trigger });
+      } catch (err) {
+        ct = { status: 'failed', message: `Contract observations: ${err.message}` };
+      }
+      if (ct && !['skipped', 'noop'].includes(ct.status)) r.message = `${r.message || ''} ${ct.message}`.trim();
       return { status: r.status === 'held' ? 'skipped' : r.status, summary: r.message, error: r.status === 'failed' ? r.message : null };
     }
     case 'trader': {

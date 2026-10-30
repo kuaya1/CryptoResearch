@@ -190,6 +190,9 @@ function forensicRecords(ws, projectId) {
     judgments: require('./forensic-disagreements').readJudgments(ws, projectId),
     outcome_notes: require('./forensic-outcomes').readNotes(ws, projectId),
     agenda_actions: require('./forensic-agenda').readActions(ws, projectId),
+    // Contract state observations (contract-forensics.js), each as stored with
+    // whether it still matches its SHA-256; runtime code stays in the package.
+    contract_observations: require('./contract-forensics').exportOf(ws, projectId),
   };
 }
 
@@ -199,6 +202,7 @@ const EXPORT_INVENTORY = {
     'every project record, with every report: original text (or base64 for PDFs) and its SHA-256, structured record, corrections, effective values, citation check',
     'journal, conviction notes, review events, claim checks, disputes, research runs, prompt files with hashes',
     'forensic audits, receipts with their full text and SHA-256, recorded checkpoint outcomes, the monitoring opt-in, monitor observations and the reviews of evidence changes',
+    'contract state observations (projects/<id>/forensics/contracts) with their status; the runtime code they name is kept in the complete package and backups',
     'portfolio accounts, assets, transactions (including voided), limits, events, and the computed positions',
     'the paper book (paper/positions.jsonl: opened and voided paper positions, apart from the portfolio)',
     'latest market observation per asset and the market status',

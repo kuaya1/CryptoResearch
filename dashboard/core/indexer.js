@@ -787,6 +787,14 @@ function projectDetailRaw(ws, id) {
         return { state: 'unavailable', reason: `The saved contract screen could not be read: ${err.message}` };
       }
     })(),
+    // The saved contract state observations (never read from the chain here).
+    contracts: (() => {
+      try {
+        return require('./contract-forensics').view(ws, project);
+      } catch (err) {
+        return { state: 'unavailable', reason: `The saved contract observations could not be read: ${err.message}`, subjects: [] };
+      }
+    })(),
     market_context: require('./cycle').summary(ws),
     horizon_policy: require('./position').policy(ws),
     // A closed position (sold to zero) is history, not a holding.
