@@ -19,16 +19,18 @@
 /* ---- the queue ---- */
 .rv-queue { display: flex; flex-direction: column; padding: 12px 0 24px; }
 .rv-group + .rv-group { margin-top: 10px; padding-top: 4px; }
-.rv-gh { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 16px 8px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); }
-.rv-gn { font-variant-numeric: tabular-nums; min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--r-pill); background: var(--badge-bg); color: var(--text-2); display: inline-flex; align-items: center; justify-content: center; }
+/* Each group's head: a mono eyebrow and its count. */
+.rv-gh { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 16px 8px; font-family: var(--mono); font-size: var(--eyebrow-size); font-weight: 400; letter-spacing: var(--eyebrow-ls); color: var(--text-2); }
+.rv-gn { font-variant-numeric: tabular-nums; color: var(--text-3); }
 .rv-items { list-style: none; margin: 0; padding: 0 12px; display: flex; flex-direction: column; gap: 8px; }
-.rv-item { display: flex; flex-direction: column; align-items: stretch; gap: 6px; width: 100%; min-height: 44px; padding: 16px; border: 1px solid var(--border); border-radius: var(--r-well); background: var(--surface); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.rv-item { display: flex; flex-direction: column; align-items: stretch; gap: 6px; width: 100%; min-height: 44px; padding: 16px 18px; border: 0; border-radius: var(--r-tile); background: var(--surface); color: var(--text); text-align: left; font: inherit; cursor: pointer; box-shadow: var(--shadow-card); transition: background-color var(--dur-sel) var(--ease-arch); }
 .rv-item:hover { background: var(--surface-hover); }
-.rv-item.is-on { background: var(--surface-selected); border-color: var(--control-border); box-shadow: inset 3px 0 0 var(--accent); }
+/* The chosen project: the warm ceramic row with a hairline. */
+.rv-item.is-on { background: var(--warm-surface); box-shadow: inset 0 0 0 1px var(--color-border); }
 .rv-item:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-.rv-it { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: var(--fs-ui); font-weight: 600; }
+.rv-it { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: var(--fs-ui); font-weight: 500; }
 .rv-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rv-it .ticker { color: var(--text-2); font-weight: 500; font-size: var(--fs-sm); }
+.rv-it .ticker { font-family: var(--mono); color: var(--text-3); font-weight: 400; font-size: var(--fs-xs); }
 .rv-ir { display: block; font-size: var(--fs-ui-sm); color: var(--text-2); line-height: 1.45; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .rv-none { padding: 2px 16px 6px; font-size: var(--fs-sm); color: var(--text-3); }
 .rv-low { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 0; padding: 8px 16px; font-size: var(--fs-sm); color: var(--text-2); }
@@ -39,8 +41,9 @@
 .rv-right .rv-scroll { padding: 20px 16px 28px; }
 .rv-head { display: flex; align-items: center; gap: 12px; }
 .rv-head-n { flex: 1; min-width: 0; }
-.rv-title { font-family: var(--font-display); font-size: var(--fs-head); font-weight: var(--wt-display); letter-spacing: var(--track-display); line-height: 1.25; outline: none; }
-.rv-title .ticker { font-family: var(--sans); font-size: var(--fs-sm); font-weight: 400; color: var(--text-3); letter-spacing: 0; }
+.rv-title { font-family: var(--font-display); font-size: clamp(26px, 1.6vw + 14px, 40px); font-weight: var(--wt-display); letter-spacing: var(--track-display); line-height: 1.1; outline: none; }
+.rv-title .ticker { font-family: var(--mono); font-size: var(--fs-xs); font-weight: 400; color: var(--text-3); letter-spacing: var(--eyebrow-ls); vertical-align: 6px; }
+.rv-head-n .faint { margin-top: 4px; font-family: var(--mono); font-size: var(--fs-xs); }
 .rv-head .btn { flex: none; display: inline-flex; align-items: center; gap: 6px; }
 .rv-centre .mpanel { padding: 0; }
 /* The centre reads the model cards, then the verdict and bull and bear (the
@@ -48,11 +51,16 @@
    model a tinted card, nothing boxed inside a box. */
 .rv-centre .digest { padding: 0; margin: 0; background: transparent; }
 .rv-centre .digest.has { background: transparent; }
-.rv-centre .ci-card { background: var(--surface-sunken); }
+/* Each model's block: a warm card, its grade then → now a large light figure. */
+.rv-centre .ci-card { padding: 20px; border-radius: var(--r-tile); background: var(--warm-surface); }
+.rv-centre .ci-model { font-family: var(--mono); font-size: var(--fs-xs); letter-spacing: var(--eyebrow-ls); color: var(--text-2); }
+.rv-centre .ci-move { font-family: var(--font-display); font-size: var(--fs-grade-lg); font-weight: 100; letter-spacing: var(--track-display); line-height: 1.05; }
 /* The price since your review is in the right pane; the centre does not repeat it. */
 .rv-centre .ci-price { display: none; }
 
-.rv-bar { flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 24px; border-top: 1px solid var(--border); background: var(--surface); }
+/* The decision bar: the Review screen's one black panel (its words
+   re-pointed in tokens.css); Mark reviewed is held to confirm. */
+.rv-bar { flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 16px 16px; padding: 12px 16px; border-radius: var(--r-tile); background: var(--cr-obsidian); box-shadow: var(--shadow-dark); }
 .rv-bar-sp { flex: 1; }
 .rv-bar .ag-acts { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .rv-bar .btn-primary { display: inline-flex; align-items: center; gap: 8px; }
@@ -61,8 +69,8 @@
 /* ---- the evidence for the change ---- */
 .rv-ev { display: flex; flex-direction: column; gap: 12px; }
 .rv-ph { font-size: var(--fs-ui); font-weight: 600; }
-.rv-evs { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-card); font-size: var(--fs-md); box-shadow: var(--shadow-card); }
-.rv-evs h3 { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: var(--fs-md); font-weight: 600; color: var(--text); }
+.rv-evs { display: flex; flex-direction: column; gap: 10px; padding: 18px 20px; background: var(--surface); border: 0; border-radius: var(--r-card); font-size: var(--fs-md); box-shadow: var(--shadow-card); }
+.rv-evs h3 { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-family: var(--mono); font-size: var(--eyebrow-size); font-weight: 400; letter-spacing: var(--eyebrow-ls); color: var(--text-2); }
 .rv-evs-n { font-size: var(--fs-sm); font-weight: 500; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .rv-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; font-size: var(--fs-md); }
 .rv-list > li + li { padding-top: 12px; border-top: 1px solid var(--separator); }

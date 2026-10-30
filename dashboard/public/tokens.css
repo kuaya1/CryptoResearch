@@ -573,7 +573,7 @@
    decisions and Mark reviewed) is the black panel instead, so the hero takes
    the warm ceramic card and the page's own words. On the black panel the
    primary is a ceramic pill with ink words. */
-.wl:not(.has-inspector) .hero, .insp-foot {
+.wl:not(.has-inspector) .hero, .insp-foot, .rv-bar {
   --hero-bg: var(--cr-obsidian); --hero-shadow: var(--shadow-dark);
   --color-solid: var(--cr-surface-ceramic); --color-solid-hover: var(--cr-paper-secondary); --color-solid-active: var(--cr-paper-secondary); --on-accent: var(--cr-obsidian);
   --text: var(--cr-paper); --text-2: var(--cr-paper-secondary); --text-3: var(--cr-paper-body);
