@@ -22,10 +22,11 @@
 //                         session that never sees Agent 1's session.
 //
 // Local: every record change goes through `node dashboard/cli.js` and is
-// verified by it. Online: one `claude -p` session that may call only the
-// CryptoResearch connector's tools and web search, told to follow
-// autonomous_pilot_queue. Either way the chain stops at Eric's PM review: it
-// never decides a ticket, places an order or moves money.
+// verified by it. Online: one fresh `claude -p` session per step, each
+// allowed only its role's CryptoResearch connector tools and web search,
+// following autonomous_pilot_queue; the Researcher's and the Prosecutor's
+// sessions share no transcript. Either way the chain stops at Eric's PM
+// review: it never decides a ticket, places an order or moves money.
 
 const fs = require('fs');
 const os = require('os');
@@ -175,26 +176,93 @@ function runLocal(o) {
   say(`Stopped after ${MAX_STEPS} steps.`);
 }
 
-function onlineInstruction(o) {
+// Online, as locally, each role is its own `claude -p` session: a fresh
+// context that never sees the other's transcript, allowed only its own
+// connector tools (and web search). The runner carries nothing from one
+// session to the next but the queue's step name; the Prosecutor reads the
+// report only as frozen into its prompt by start_ticket.
+const ROLE_TOOLS = Object.freeze({
+  researcher: Object.freeze(['autonomous_pilot_queue', 'start_research', 'get_research', 'save_research_draft', 'save_report']),
+  prosecutor: Object.freeze(['autonomous_pilot_queue', 'start_ticket', 'get_ticket', 'save_ticket']),
+});
+const STEPS = ['research', 'ticket', 'ticket_failed', 'gate_closed', 'pm_review', 'done', 'blocked', 'unknown'];
+
+const roleTools = (role, o) => [...ROLE_TOOLS[role].map((t) => `${o.connector}__${t}`), ...WEB_TOOLS];
+
+function roleInstruction(role, o) {
   const words = JSON.stringify(o.ownerWords || FORCE_WORDS);
+  const head = `CryptoResearch autonomous pilot, project "${o.project}", Eric's online desk. Use only the tools you are given.`;
+  const tail = [
+    'Never decide a ticket, never choose a dollar amount, never place or simulate an order.',
+    `When you are done, call autonomous_pilot_queue with project "${o.project}" once more and end your answer with one line, exactly "NEXT_STEP: <step>", naming the step it returns.`,
+  ];
+  if (role === 'researcher') {
+    return [
+      head,
+      'You are Agent 1, the Researcher, in a session of your own.',
+      `1. Call autonomous_pilot_queue with project "${o.project}". If its step is not "research", do nothing else.`,
+      '2. If it is "research": use start_research for Claude only (owner_request "autonomous pilot") or resume the open run, follow its frozen prompt exactly with your own web research, and save_report with the whole report. One report, then stop.',
+      ...tail,
+    ].join('\n');
+  }
   return [
-    `Run the CryptoResearch autonomous pilot for the project "${o.project}" on Eric's online desk, using only the CryptoResearch connector's tools and web search.`,
-    `1. Call autonomous_pilot_queue with project "${o.project}". Do its next step, then call it again, until the step is pm_review or done (at most ${MAX_STEPS} steps).`,
-    '2. A "research" step is Agent 1: Claude\'s investment research. Use start_research for Claude only (owner_request "autonomous pilot") or resume the open run, follow its frozen prompt exactly with your own web research, and save_report with the whole report.',
+    head,
+    'You are Agent 2, the Prosecutor, in a session of your own. You have not seen the research session; the report reaches you only as frozen into the prompt start_ticket returns.',
+    `1. Call autonomous_pilot_queue with project "${o.project}" and do only its one next step.`,
     o.forceProsecution
-      ? `2b. Eric asked for a Prosecutor although the desk's gate closed on the grade (his words: ${words}). On a "gate_closed" step, and on a "pm_review" step whose ticket in force (get_ticket) is the desk's gate receipt (desk_gate: true) still waiting for his review, call start_ticket with force_prosecution: true and owner_request exactly those words, then do step 3 with the ticket it opens. Once per project. Never on a desk gate Eric already decided. If start_ticket opens no ticket, give its message and stop.`
-      : '2b. A "gate_closed" step needs no Prosecutor: call start_ticket (owner_request "autonomous pilot") once, which saves the desk\'s gate receipt, then call autonomous_pilot_queue again.',
-    '3. A "ticket" step is Agent 2: start_ticket (owner_request "autonomous pilot"), take the Prosecutor\'s role the prompt gives you, apart from the report\'s author, and save_ticket with the whole text and its JSON block.',
-    '4. Never decide a ticket, never choose a dollar amount, never place or simulate an order. Stop at pm_review.',
-    '5. End with one line per step: the step, the record saved (report or receipt ID) and the desk\'s message.',
+      ? `2. Eric asked for a Prosecutor although the desk's gate closed on the grade (his words: ${words}). On a "gate_closed" step, and on a "pm_review" step whose ticket in force (get_ticket) is the desk's gate receipt (desk_gate: true) still waiting for his review, call start_ticket with force_prosecution: true and owner_request exactly those words, then do step 3 with the ticket it opens. Never on a desk gate Eric already decided. If start_ticket opens no ticket, give its message and stop.`
+      : '2. A "gate_closed" step needs no Prosecutor: call start_ticket (owner_request "autonomous pilot") once, which saves the desk\'s gate receipt, and stop.',
+    '3. A "ticket" or "ticket_failed" step: start_ticket (owner_request "autonomous pilot"), take the Prosecutor\'s role its frozen prompt gives you, apart from the report\'s author, and save_ticket with the whole text and its JSON block. One ticket, then stop.',
+    '4. Any other step: do nothing.',
+    ...tail,
   ].join('\n');
 }
 
-function runOnline(o) {
-  const instruction = onlineInstruction(o);
-  if (o.dryRun) return say(`Would run one claude -p session with tools ${o.connector}, ${WEB_TOOLS.join(', ')}:\n\n${instruction}`);
-  say(`claude -p on the online desk through ${o.connector}…`);
-  say(claude(instruction, { tools: [o.connector, ...WEB_TOOLS], model: o.model, timeoutMin: o.timeoutMin * MAX_STEPS }));
+// The last "NEXT_STEP: <step>" line of a session's answer, or null.
+function nextStepOf(text) {
+  const all = [...String(text || '').matchAll(/^\s*NEXT_STEP:\s*([a-z_]+)\s*$/gm)].map((m) => m[1]);
+  const s = all.length ? all[all.length - 1] : null;
+  return STEPS.includes(s) ? s : null;
+}
+
+// Which role's session takes a step, or null to stop. `forced` says Eric's
+// override already had its one Prosecutor on this run.
+function roleForStep(step, o, { forced = false } = {}) {
+  if (step === null) return 'researcher';
+  if (step === 'research') return 'researcher';
+  if (['ticket', 'ticket_failed', 'gate_closed'].includes(step)) return 'prosecutor';
+  if (step === 'pm_review' && o.forceProsecution && !forced) return 'prosecutor';
+  return null;
+}
+
+function runOnline(o, { run = claude, out = say } = {}) {
+  if (o.dryRun) {
+    for (const role of ['researcher', 'prosecutor']) out(`Would run a ${role} claude -p session with tools ${roleTools(role, o).join(', ')}:\n\n${roleInstruction(role, o)}\n`);
+    return [];
+  }
+  const sessions = [];
+  let step = null;
+  let forced = false;
+  for (let i = 0; i < MAX_STEPS; i++) {
+    const role = roleForStep(step, o, { forced });
+    if (!role) {
+      out(step === 'pm_review' ? 'Done: the ticket waits for your PM review (inspector > PM decision).' : `Nothing for the agents to do (${step}).`);
+      return sessions;
+    }
+    if (role === 'prosecutor' && o.forceProsecution && ['gate_closed', 'pm_review'].includes(step)) forced = true;
+    const prompt = roleInstruction(role, o);
+    const tools = roleTools(role, o);
+    out(`[${i + 1}] ${role}: a fresh claude -p session through ${o.connector}${step ? ` (step ${step})` : ''}…`);
+    const answer = run(prompt, { tools, model: o.model, timeoutMin: o.timeoutMin });
+    sessions.push({ role, prompt, tools });
+    out(answer);
+    const next = nextStepOf(answer);
+    if (!next) throw new Error(`The ${role} session did not end with a NEXT_STEP line; nothing more is run. Check the desk, then run the pilot again.`);
+    if (role === 'researcher' && step !== null && next === 'research') throw new Error('The research step is still open after the researcher\'s session; nothing more is run.');
+    step = next;
+  }
+  out(`Stopped after ${MAX_STEPS} sessions.`);
+  return sessions;
 }
 
 function main() {
@@ -210,7 +278,7 @@ function main() {
   else throw new Error('--desk is local or online.');
 }
 
-module.exports = { resolveClaude, parse, forcedTicket, onlineInstruction, FORCE_WORDS };
+module.exports = { resolveClaude, parse, forcedTicket, roleInstruction, roleTools, roleForStep, nextStepOf, runOnline, ROLE_TOOLS, FORCE_WORDS };
 
 if (require.main === module) {
   try {

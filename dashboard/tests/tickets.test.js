@@ -1684,6 +1684,96 @@ test('reconcile: an undone grant gets no paper position; a failed archive is nam
   assert.notEqual(projects.getProject(s2.ws, s2.pid).status, 'archived', 'reconcile never archives');
 });
 
+// Stage 2.3: callers that start together open one ticket. Four processes pass
+// the check before the lock at once; the check inside it answers the others.
+test('createTicket: four processes started together open exactly one ticket; the others resume it', (t) => {
+  const cp = require('child_process');
+  const s = withReport(t);
+  const go = Date.now() + 1500;
+  const script = `const T=require(${JSON.stringify(require.resolve('../core/tickets'))});const ws=require(${JSON.stringify(require.resolve('../core/workspace'))}).openWorkspace({root:process.argv[1],actor:'race'});while(Date.now()<${go});try{const r=T.createTicket(ws,{project_id:process.argv[2],assistant:true});process.stdout.write(JSON.stringify({status:r.status,ticket_id:r.ticket_id||null}))}catch(e){process.stdout.write(JSON.stringify({error:e.code||e.message}))}`;
+  const kids = Array.from({ length: 4 }, () => cp.spawn(process.execPath, ['-e', script, s.root, s.pid], { stdio: ['ignore', 'pipe', 'pipe'] }));
+  const outs = kids.map((k) => { let o = ''; k.stdout.on('data', (d) => { o += d; }); return new Promise((res) => k.on('close', () => res(o))); });
+  return Promise.all(outs).then((texts) => {
+    const r = texts.map((x) => JSON.parse(x));
+    assert.ok(r.every((x) => !x.error), JSON.stringify(r));
+    assert.equal(r.filter((x) => x.status === 'created').length, 1, JSON.stringify(r));
+    assert.equal(new Set(r.map((x) => x.ticket_id)).size, 1, 'every caller names the same ticket');
+    const dirs = fs.readdirSync(s.ws.abs(`projects/${s.pid}/tickets`)).filter((n) => n.startsWith('tk_'));
+    assert.equal(dirs.length, 1, 'one ticket on disk');
+  });
+});
+
+// Stage 2.4: a record that does not read is never taken as missing.
+function grantWithFailedPaper(t) {
+  const P = require('../core/paper');
+  const s = withReport(t);
+  const saved = savedTicket(t, s);
+  const orig = P.openForDecision;
+  P.openForDecision = () => { throw new Error('disk full'); };
+  try { T.decide(s.ws, s.pid, { receipt_id: saved.receipt_id, action: 'approve' }); } finally { P.openForDecision = orig; }
+  return { ...s, saved };
+}
+const snapshot = (ws) => {
+  const out = {};
+  const walk = (rel) => {
+    const abs = ws.abs(rel);
+    if (!fs.existsSync(abs)) return;
+    for (const e of fs.readdirSync(abs, { withFileTypes: true })) {
+      const r = `${rel}/${e.name}`;
+      if (e.isDirectory()) walk(r); else out[r] = fs.readFileSync(ws.abs(r), 'utf8');
+    }
+  };
+  walk('projects');
+  walk('paper');
+  return out;
+};
+
+test('reconcile: a malformed or unreadable decisions or positions file refuses the whole repair and writes nothing', (t) => {
+  const P = require('../core/paper');
+  // A malformed line in positions.jsonl (a torn write of this grant's own open).
+  const a = grantWithFailedPaper(t);
+  fs.mkdirSync(path.dirname(a.ws.abs(P.REL)), { recursive: true });
+  fs.writeFileSync(a.ws.abs(P.REL), '{"event":"open","decision_id":"dc_torn');
+  let before = snapshot(a.ws);
+  assert.throws(() => T.reconcileEffects(a.ws), (err) => err.code === 'INTEGRITY' && /positions\.jsonl has a line that does not read \(line 1\)/.test(err.message));
+  assert.deepEqual(snapshot(a.ws), before, 'zero writes');
+  assert.throws(() => T.reconcileDesk(a.ws, { dryRun: true }), /INTEGRITY|Nothing was repaired/);
+  // A malformed decisions line: an undo that does not parse never lets the grant look in force.
+  const b = grantWithFailedPaper(t);
+  fs.appendFileSync(b.ws.abs(`projects/${b.pid}/tickets/decisions.jsonl`), '{"action":"undo","undoes":\n');
+  before = snapshot(b.ws);
+  assert.throws(() => T.reconcileEffects(b.ws, { project: b.pid }), (err) => err.code === 'INTEGRITY' && /decisions\.jsonl/.test(err.message));
+  assert.deepEqual(snapshot(b.ws), before, 'zero writes');
+  // positions.jsonl that cannot be read at all (a folder in its place).
+  const c = grantWithFailedPaper(t);
+  fs.mkdirSync(c.ws.abs(P.REL), { recursive: true });
+  before = snapshot(c.ws);
+  assert.throws(() => T.reconcileEffects(c.ws), (err) => err.code === 'INTEGRITY' && /could not be read/.test(err.message));
+  assert.deepEqual(snapshot(c.ws), before, 'zero writes');
+});
+
+test('reconcile: a receipt whose frozen packet no longer holds refuses the repair and writes nothing', (t) => {
+  const a = grantWithFailedPaper(t);
+  const receipt = JSON.parse(fs.readFileSync(a.ws.abs(`projects/${a.pid}/tickets/receipts/${a.saved.receipt_id}.json`), 'utf8'));
+  fs.appendFileSync(a.ws.abs(receipt.packet.path), ' ');
+  const before = snapshot(a.ws);
+  assert.throws(() => T.reconcileEffects(a.ws), (err) => err.code === 'INTEGRITY' && err.message.includes(a.saved.receipt_id));
+  assert.deepEqual(snapshot(a.ws), before, 'zero writes');
+});
+
+test('reconcile: a position saved with no entry price is complete, qualified, and never opened again', (t) => {
+  const P = require('../core/paper');
+  const a = grantWithFailedPaper(t);
+  const decision = fs.readFileSync(a.ws.abs(`projects/${a.pid}/tickets/decisions.jsonl`), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).pop();
+  fs.mkdirSync(path.dirname(a.ws.abs(P.REL)), { recursive: true });
+  fs.writeFileSync(a.ws.abs(P.REL), `${JSON.stringify({ schema_version: 'cr.paper.v1', event: 'open', position_id: 'pp_FICTIONAL', project_id: a.pid, receipt_id: a.saved.receipt_id, decision_id: decision.decision_id, entry: { status: 'no_entry_price', reason: 'FICTIONAL' } })}\n`);
+  const r = T.reconcileEffects(a.ws);
+  assert.ok(!r.completed.some((c) => c.step === 'paper'));
+  const done = r.already_complete.find((c) => c.step === 'paper');
+  assert.equal(done.qualified, 'no_entry_price');
+  assert.equal(P.readRecords(a.ws).length, 1, 'never opened again');
+});
+
 // ---------------------------------------------------------------------------
 // Older receipts sized from a job record: integrity-limited (backlog item 37)
 

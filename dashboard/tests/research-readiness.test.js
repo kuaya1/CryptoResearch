@@ -8,7 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
-const { tempWorkspace, addFixtureProject } = require('./helpers');
+const { tempWorkspace, addFixtureProject, withOpenJobsSetAside } = require('./helpers');
 const research = require('../core/research');
 const { readJson, atomicWrite, jsonText } = require('../core/fsx');
 const { openWorkspace } = require('../core/workspace');
@@ -95,7 +95,8 @@ test('readiness: a model on hold gets nothing new; its waiting jobs are kept and
   // The default models leave it out; naming it for one run is Eric's choice.
   const def = research.createRun(ws, { project_id: pid, force_new: true }).run;
   assert.deepEqual(def.providers, ['claude', 'chatgpt']);
-  const named = research.createRun(ws, { project_id: pid, providers: ['gemini'], force_new: true }).run;
+  // Beside its waiting job, as records made before one-open-job-per-model can hold.
+  const named = withOpenJobsSetAside(ws, pid, () => research.createRun(ws, { project_id: pid, providers: ['gemini'], force_new: true }).run);
   assert.equal(named.jobs.gemini.state, 'queued', 'queued for its API, but held unsent');
   // The runner sends nothing for it, and Eric's next request does not move its waiting job.
   const sent = [];

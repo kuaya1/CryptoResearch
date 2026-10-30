@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { Readable } = require('stream');
-const { tempWorkspace, addFixtureProject, hashTree } = require('./helpers');
+const { tempWorkspace, addFixtureProject, hashTree, cancelOpenJobs } = require('./helpers');
 const { makeMcp } = require('../mcp');
 const projects = require('../core/projects');
 const research = require('../core/research');
@@ -50,6 +50,7 @@ test('archive: hides the project, keeps everything; unsent work is held, sent wo
   // (never sent) API job and one already sent and running in the background.
   const run = research.createRun(ws, { project_id: PID, providers: ['claude', 'chatgpt', 'gemini'], channel: 'dashboard' }).run;
   for (const p of ['claude', 'chatgpt']) assert.equal(inbox.importContent(ws, p, { content: mockReport(ws, p, run), projectId: PID, runId: run.run_id }).result.status, 'ingested');
+  cancelOpenJobs(ws, PID, ['gemini']);
   const run2 = research.createRun(ws, { project_id: PID, providers: ['chatgpt', 'gemini'], channel: 'dashboard', force_new: true }).run;
   patchJob(ws, run2.run_id, 'chatgpt', { state: 'queued', mode: 'api', model: 'FICTIONAL' });
   patchJob(ws, run2.run_id, 'gemini', { state: 'dispatching', mode: 'api', model: 'FICTIONAL', attempts: [{ n: 1, attempt_id: 'att_fictional', phase: 'submitted', provider_request_id: 'FICTIONAL-sent' }] });

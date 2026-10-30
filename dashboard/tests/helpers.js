@@ -94,4 +94,38 @@ function freshPrice(ws, id, price, ageMs = 60000) {
   atomicWrite(file, jsonText({ ...cur, provider: 'coingecko', assets: { ...(cur.assets || {}), [id]: { id, price_usd: price, source_last_updated_at: at, fetched_at: at } } }));
 }
 
-module.exports = { FIXTURES, tempWorkspace, addFixtureProject, dropFixture, dropText, hashTree, importAllFixtures, withExitReadings, freshPrice };
+// A model has one open research job on a project at a time (createRun's
+// admission). A test that makes a later run for the same model first ends the
+// earlier one's open jobs, as Eric would by canceling it.
+function cancelOpenJobs(ws, projectId, providers = ['claude', 'chatgpt', 'gemini']) {
+  const research = require('../core/research');
+  for (const p of providers) for (const o of research.openJobsFor(ws, projectId, p)) research.cancelJob(ws, projectId, o.run.run_id, p, 'FICTIONAL: a later run for the same model');
+}
+
+// Records made before that rule can still hold several open jobs for one
+// model. A test that needs that state makes its later runs with the earlier
+// open jobs set aside on disk, then puts them back as they were.
+const OPEN_JOB_STATES = ['unconfigured', 'queued', 'dispatching', 'running', 'uncertain'];
+function withOpenJobsSetAside(ws, projectId, fn) {
+  const research = require('../core/research');
+  const aside = [];
+  for (const r of research.listRuns(ws, projectId)) {
+    const file = ws.abs(`projects/${projectId}/research/${r.run_id}/run.json`);
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const open = Object.entries(doc.jobs || {}).filter(([, j]) => OPEN_JOB_STATES.includes(j.state));
+    if (!open.length) continue;
+    for (const [p, j] of open) { aside.push([file, p, j.state]); j.state = 'canceled'; }
+    atomicWrite(file, jsonText(doc));
+  }
+  try {
+    return fn();
+  } finally {
+    for (const [file, p, state] of aside) {
+      const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+      doc.jobs[p].state = state;
+      atomicWrite(file, jsonText(doc));
+    }
+  }
+}
+
+module.exports = { FIXTURES, tempWorkspace, addFixtureProject, dropFixture, dropText, hashTree, importAllFixtures, withExitReadings, freshPrice, cancelOpenJobs, withOpenJobsSetAside };

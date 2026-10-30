@@ -19,7 +19,7 @@ const exporter = require('../core/exporter');
 const research = require('../core/research');
 const captures = require('../core/captures');
 const projects = require('../core/projects');
-const { tempWorkspace, addFixtureProject } = require('./helpers');
+const { tempWorkspace, addFixtureProject, withOpenJobsSetAside } = require('./helpers');
 const { readJson, atomicWrite, jsonText, sha256 } = require('../core/fsx');
 const { openWorkspace } = require('../core/workspace');
 const { mockReport } = require('../core/demo');
@@ -414,7 +414,8 @@ test('offsite drill: pulled copy verified, restored in isolation, originals and 
   // Four ChatGPT jobs, one in each state the review names.
   const states = [];
   for (const kind of ['unsent', 'sent', 'uncertain', 'quarantined']) {
-    const run = research.createRun(d.ws, { project_id: pid, providers: ['chatgpt'], force_new: true }).run;
+    // Four ChatGPT jobs at once, as records made before one-open-job-per-model can hold.
+    const run = withOpenJobsSetAside(d.ws, pid, () => research.createRun(d.ws, { project_id: pid, providers: ['chatgpt'], force_new: true }).run);
     const file = d.ws.abs(`projects/${pid}/research/${run.run_id}/run.json`);
     const doc = readJson(file);
     const j = doc.jobs.chatgpt;

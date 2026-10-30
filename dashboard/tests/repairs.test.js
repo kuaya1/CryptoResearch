@@ -174,7 +174,7 @@ test('repairs: a record in any other state is left untouched, and the repair is 
 test('repairs: each precondition guards its record (reports, open research, archived, already verified, an identity already taken)', (t) => {
   const cases = [
     ['reports', (ws, root) => fs.mkdirSync(path.join(root, 'projects', 'coinmarketcap', 'reports', 'rep_fictional_0001'), { recursive: true }), CMC_ID, /coinmarketcap has reports/],
-    ['open-run', (ws) => require('../core/research').createRun(ws, { project_id: 'coinmarketcap', providers: ['claude'], channel: 'dashboard' }), CMC_ID, /coinmarketcap has an open research run/],
+    ['open-run', (ws) => require('../core/research').createRun(ws, { project_id: 'coinmarketcap', providers: ['claude'], channel: 'dashboard', allow_pending_identity: true }), CMC_ID, /coinmarketcap has an open research run/],
     ['archived', (ws) => projects.archiveProject(ws, 'coinmarketcap', 'Eric archived it (FICTIONAL test)'), CMC_ID, /coinmarketcap is already archived/],
     ['veranta-missing', (ws, root) => fs.rmSync(path.join(root, 'projects', 'veranta-formerly-avantis'), { recursive: true }), CMC_ID, /veranta-formerly-avantis is not on the desk/],
     ['taken', (ws) => projects.addProject(ws, { name: 'Sandbox Copy (FICTIONAL)', official_website: 'https://copy-fictional.example/', coingecko_id: 'the-sandbox', evidence: [{ url: 'https://copy-fictional.example/' }] }), SANDBOX_ID, /sandbox-copy-fictional already has that identity \(same CoinGecko ID\)/],

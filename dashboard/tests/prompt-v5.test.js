@@ -24,7 +24,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { pathToFileURL } = require('url');
-const { tempWorkspace, addFixtureProject, importAllFixtures, hashTree, FIXTURES } = require('./helpers');
+const { tempWorkspace, addFixtureProject, importAllFixtures, hashTree, FIXTURES, withOpenJobsSetAside } = require('./helpers');
 const inbox = require('../core/inbox');
 const research = require('../core/research');
 const prompts = require('../core/prompts');
@@ -266,9 +266,10 @@ test('earlier work is preserved: a run\'s frozen prompt, stored reports and thei
   const reportsBefore = hashTree(path.join(root, 'projects', PAYFI, 'reports'));
 
   // A run, then later research under @5 with all three models (fictional adapters).
-  const first = research.createRun(ws, { project_id: PAYFI, providers: ['claude'], horizon: '3 months' });
+  const first = research.createRun(ws, { project_id: PAYFI, providers: ['claude'], horizon: '3 months', refresh: true });
   const firstPrompt = fs.readFileSync(path.join(root, first.run.prompt.path));
-  const second = research.createRun(ws, { project_id: PAYFI, providers: ['claude', 'chatgpt', 'gemini'], force_new: true });
+  // Beside the first run's open Claude job, as records made before one-open-job-per-model can hold.
+  const second = withOpenJobsSetAside(ws, PAYFI, () => research.createRun(ws, { project_id: PAYFI, providers: ['claude', 'chatgpt', 'gemini'], force_new: true }));
   await research.runDueJobs(ws, { trigger: 'test' });
   buildIndex(ws);
   assert.ok(fs.readFileSync(path.join(root, first.run.prompt.path)).equals(firstPrompt), 'the first run\'s prompt file is untouched');
@@ -512,7 +513,7 @@ test('comparison and summaries: reports of one run compare under the profile ver
   const { ws } = workspace(t, 'v5-compare', { research: { providers: { claude: { mock: 'ok' }, chatgpt: { mock: 'ok' }, gemini: { mock: 'ok' } } } });
   addFixtureProject(ws);
   importAllFixtures(ws);
-  const created = research.createRun(ws, { project_id: PAYFI, providers: ['claude', 'chatgpt', 'gemini'] });
+  const created = research.createRun(ws, { project_id: PAYFI, providers: ['claude', 'chatgpt', 'gemini'], refresh: true });
   await research.runDueJobs(ws, { trigger: 'test' });
   const reports = loadReports(ws, PAYFI);
   const cmp = compareProject(ws, reports);

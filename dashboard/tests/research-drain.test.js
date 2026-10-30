@@ -8,7 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
-const { tempWorkspace, addFixtureProject } = require('./helpers');
+const { tempWorkspace, addFixtureProject, withOpenJobsSetAside } = require('./helpers');
 const research = require('../core/research');
 const { mockReport } = require('../core/demo');
 const { readJson, atomicWrite, jsonText } = require('../core/fsx');
@@ -170,7 +170,8 @@ test('send waiting: one click sends every waiting job whose API is set up now; a
   // Sending again changes nothing.
   assert.deepEqual(research.sendAllWaitingToApi(ws).sent, []);
   // A project whose identity is not verified keeps its waiting jobs.
-  const run2 = research.createRun(ws, { project_id: pid, providers: ['claude'], refresh: true });
+  // Beside the first run's waiting Claude job, as records made before one-open-job-per-model can hold.
+  const run2 = withOpenJobsSetAside(ws, pid, () => research.createRun(ws, { project_id: pid, providers: ['claude'], refresh: true }));
   assert.equal(research.loadRun(ws, pid, run2.run_id).jobs.claude.state, 'unconfigured');
   withKeys(t, KEYS);
   ws = configure(root, { on_hold: { gemini: { since: '2026-10-04', reason: 'test hold' } } });

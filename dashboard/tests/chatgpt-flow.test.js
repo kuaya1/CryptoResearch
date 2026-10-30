@@ -17,7 +17,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
-const { tempWorkspace, addFixtureProject, FIXTURES } = require('./helpers');
+const { tempWorkspace, addFixtureProject, FIXTURES, cancelOpenJobs } = require('./helpers');
 const research = require('../core/research');
 const inbox = require('../core/inbox');
 const indexer = require('../core/indexer');
@@ -209,6 +209,7 @@ test('execution note: a new run freezes ChatGPT\'s note with its job; the prompt
   assert.equal(bad.delivery.status, 'hash_mismatch');
   fs.writeFileSync(path.join(root, rec.path), text);
   // ChatGPT added to a Claude-only run gets its note when its job is made.
+  cancelOpenJobs(ws, pid);
   const solo = research.createRun(ws, { project_id: pid, providers: ['claude'], kind: 'refresh' }).run;
   assert.equal(solo.jobs.claude.execution, undefined);
   research.addProviders(ws, pid, solo.run_id, ['chatgpt']);

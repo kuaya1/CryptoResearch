@@ -7,7 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { tempWorkspace, addFixtureProject, dropFixture, dropText } = require('./helpers');
+const { tempWorkspace, addFixtureProject, dropFixture, dropText, cancelOpenJobs } = require('./helpers');
 const position = require('../core/position');
 const research = require('../core/research');
 const prompts = require('../core/prompts');
@@ -134,6 +134,7 @@ test('a run gets the position prompt (@5) with its dates and the market snapshot
   assert.equal(packet0.market_context.status, 'unknown');
   // With a snapshot (FICTIONAL), a later run carries it by ID.
   const snapId = cycle.saveSnapshot(ws, cycle.buildSnapshot({ global: { data: { total_market_cap: { usd: 2e12 }, market_cap_percentage: { btc: 55.5, eth: 12 }, updated_at: Math.floor(Date.now() / 1000) } }, rows: [{ id: 'bitcoin', symbol: 'btc', name: 'Bitcoin', current_price: 60000, price_change_percentage_7d_in_currency: 1, price_change_percentage_30d_in_currency: 4, last_updated: new Date().toISOString() }, { id: 'alt-fictional', symbol: 'alt', name: 'Alt (FICTIONAL)', current_price: 2, price_change_percentage_7d_in_currency: 3, price_change_percentage_30d_in_currency: 9, last_updated: new Date().toISOString() }], fictional: true }));
+  cancelOpenJobs(ws, PID);
   const r1 = research.createRun(ws, { project_id: PID, providers: ['claude', 'chatgpt', 'gemini'], horizon: '3 months', force_new: true });
   assert.equal(r1.run.evidence_packet.market_snapshot_id, snapId);
   const packet1 = readJson(path.join(root, r1.run.evidence_packet.path));
@@ -334,6 +335,7 @@ test('Cowork request queue: a long-term research request needs its reason; with 
   assert.equal(runs[0].horizon.exception_reason, 'FICTIONAL owner reason');
   assert.equal(runs[0].jobs.claude.mode, 'cowork', 'the Cowork session does the Claude job');
   // The default request (no horizon) is a position run.
+  cancelOpenJobs(ws, PID);
   put('req_pc_default', {});
   requests.processRequests(ws);
   const def = JSON.parse(fs.readFileSync(path.join(root, 'logs', 'requests', 'req_pc_default.result.json'), 'utf8'));
