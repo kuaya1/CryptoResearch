@@ -719,9 +719,10 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     try {
       do {
         walletAgain = false;
-        if (!jobs.isDue(ws, 'wallets', jobs.readJobState(ws))) break;
+        // runJob checks the due rule itself and records a due check that throws.
         const out = await jobs.runJob(ws, 'wallets', { trigger: hosted ? 'hosted' : 'dashboard', onlyDue: true });
-        if (out && !['noop', 'not_due', 'busy', 'skipped'].includes(out.status)) rebuild(['portfolio']);
+        if (out && out.status === 'not_due') break;
+        if (out && !['noop', 'busy', 'skipped'].includes(out.status)) rebuild(['portfolio']);
       } while (walletAgain);
     } catch (err) {
       console.error('Wallet sync failed:', err.message);
@@ -743,7 +744,9 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   // desk adapter's step, only once Eric has funded the book.
   // So do scout leads' eligibility turns (leads.js), only once Eric turns them on.
   const DAILY_JOBS = jobs.HOSTED_TIMER_JOBS;
-  const dailyTimer = setInterval(() => jobs.runJobs(ws, DAILY_JOBS, { trigger: 'dashboard', onlyDue: true }).catch(() => {}), 30 * 60000);
+  // Each job's failure is recorded by runJob; this only says one that could
+  // not even be recorded.
+  const dailyTimer = setInterval(() => jobs.runJobs(ws, DAILY_JOBS, { trigger: 'dashboard', onlyDue: true }).catch((err) => console.error('Background jobs failed:', err.message)), 30 * 60000);
 
   // The front door (dashboard/frontdoor.js) answers everything before
   // sign-in and builds the sign-in and connector handlers this file's

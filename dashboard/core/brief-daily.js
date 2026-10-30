@@ -150,7 +150,7 @@ function brief(ws, { since = null, now = Date.now() } = {}) {
     if (!cands.some((c) => c.in_pilot)) return [{ text: 'No project is in the pilot, so no exit reading is expected.', link: null, n: 0 }];
     return cands
       .filter((c) => c.in_pilot && c.exit_reading && c.exit_reading.present === false)
-      .map((c) => ({ text: `${c.name || c.project_id}: no current exit reading at $${c.exit_reading.size_usd}.`, link: `#/project/${c.project_id}/forensics?tab=exits` }));
+      .map((c) => ({ text: `${c.name || c.project_id}: no current exit reading at $${c.exit_reading.size_usd}.`, link: `#/project/${c.project_id}/forensics?fx=exits` }));
   });
 
   section('held', 'Held positions', true, () => {

@@ -124,7 +124,7 @@ test('daily brief: a stale basis and a pilot project without an exit reading are
   const out = B.brief(s.ws, { now: Date.parse(saved.receipt.saved_at) });
   const exits = byId(out, 'pilot_exits');
   assert.equal(exits.state, 'ok');
-  for (const l of exits.lines) assert.match(l.link, /\/forensics\?tab=exits$/);
+  for (const l of exits.lines) assert.match(l.link, /\/forensics\?fx=exits$/);
 });
 
 test('daily brief: a section it cannot read says so, never nothing; the others still read', (t) => {

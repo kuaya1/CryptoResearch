@@ -379,6 +379,24 @@ test('intake: without the Claude key a screenshot is not read, and the request s
   assert.match(o2.identity.notes.join(' '), /needs the Claude API key/);
 });
 
+test('intake: a restored copy reads no screenshot: nothing is sent, reserved or counted', async (t) => {
+  withKey(t);
+  const { root, cleanup } = tempWorkspace('intake-restored');
+  t.after(cleanup);
+  const ws = configure(root, { providers: { claude: { model: 'claude-test-model', input_usd_per_mtok: 4, output_usd_per_mtok: 20 } }, budget: { per_run_usd: 2.5, daily_usd: 8, monthly_usd: 30 } });
+  atomicWrite(ws.abs('config/restored-copy.json'), jsonText({ schema_version: 'cr.restored-copy.v1', restored_at: '2026-10-29T00:00:00Z', from: { kind: 'test' } }));
+  assert.ok(research.restoredHold(ws));
+  const good = reader();
+  const { intake: doc } = intake.createIntake(ws, { screenshot: shot() });
+  const out = await intake.identify(ws, doc.intake_id, { fetchImpl: cgStub(), identifyImpl: good });
+  assert.equal(good.calls.length, 0, 'no provider is asked');
+  assert.equal(out.status, 'identity_failed');
+  assert.match(out.identity.error, /restored copy/);
+  assert.equal((out.identity.screenshot_attempts || 0), 0);
+  const lines = fs.existsSync(ws.abs('logs/research-spend.jsonl')) ? readJsonLines(ws.abs('logs/research-spend.jsonl')).filter((l) => String(l.run_id).startsWith('intake_')) : [];
+  assert.deepEqual(lines, [], 'no reservation is written');
+});
+
 // --- research through the Claude adapter (stubbed HTTP), as on the live desk
 
 function claudeStub(ws, behaviors) {
