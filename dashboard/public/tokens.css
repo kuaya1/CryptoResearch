@@ -105,7 +105,22 @@
   --cr-radius-tile: 18px;
   --cr-radius-key: 14px;
   --cr-radius-logo: 11px;
+  --cr-surface-glass-hi: rgba(255, 255, 255, 0.85);
+  --cr-blur-glass: blur(28px);
   --decision-surface: var(--cr-surface-ceramic);   /* v17 decision cards; raised obsidian at night */
+  --warm-surface: var(--cr-surface-warm);          /* reading cards: the grade block, the thesis */
+  --glass-surface: var(--cr-surface-glass-hi);     /* the floating command bar */
+  /* The Architecture restyle (Eric, 2026-10-29): the type scale's large end,
+     scaled down on a phone so the first screen keeps what it shows. */
+  --fs-hero-title: clamp(32px, 2.4vw + 16px, 50px);   /* page titles and the Desk headline */
+  --fs-grade-xl: clamp(40px, 2vw + 26px, 54px);       /* the grade on a project surface */
+  --fs-grade-lg: 44px;                                /* the Daily Brief counts, Review's model grades */
+  --fs-card-title: clamp(22px, 1vw + 14px, 30px);     /* section and card titles */
+  --fs-grade-row: 22px;                               /* the grade in a table row */
+  --ease-arch: cubic-bezier(0.22, 1, 0.36, 1);        /* selection and filter changes */
+  --dur-sel: 500ms;
+  --hold-ms: 1100ms;                                  /* hold-to-confirm */
+  --on-hold: #ffffff;                                 /* words over the green sweep (5.6:1) */
   --canvas-bg:
     radial-gradient(1100px 650px at 15% 0%, var(--cr-canvas-glow-white) 0%, rgba(255, 255, 255, 0) 60%),
     radial-gradient(800px 500px at 60% 100%, var(--cr-canvas-glow-green) 0%, rgba(255, 255, 255, 0) 70%),
@@ -323,7 +338,7 @@
   --wt-metric: 300;               /* KPI figures, grades, counts */
   /* v17's mono eyebrow, raised to the floor and kept in sentence case */
   --eyebrow-size: var(--fs-xs);
-  --eyebrow-ls: 0.04em;
+  --eyebrow-ls: 0.08em;
   /* The one type scale (nothing under 12.5px anywhere, Eric, 2026-10-18).
      The blueprint's scale: 12.5 captions and badges (its 12, raised to the
      floor), 14/20 body, controls and labels, 16 card titles, 18/29 metric
@@ -365,7 +380,7 @@
   --radius-2xs: 2px; --radius-xs: 4px; --radius-sm: 6px; --radius-md: 8px; --radius-lg: 10px;
   --radius-xl: 12px; --radius-2xl: 16px; --radius-3xl: 20px; --radius-4xl: 24px; --radius-full: 9999px;
   --r-sm: var(--radius-2xs); --r-md: var(--radius-sm); --r-lg: var(--radius-md); --r-xl: var(--radius-lg);
-  --r-card: var(--cr-radius-inner);   /* the frames and cards on the panel (v17 inner, 26px) */
+  --r-card: var(--cr-radius-card);    /* cards on the canvas (the Architecture restyle: 36px) */
   --r-tile: var(--cr-radius-inner);   /* content cards: the hero, the PM Decision Cards */
   --r-panel: var(--cr-radius-card);   /* the main panel (v17 card, 36px) */
   --r-well: var(--cr-radius-tile);    /* wells (v17 tile, 18px) */
@@ -476,7 +491,7 @@
   --shadow-pop: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -4px rgba(0, 0, 0, 0.2), var(--shadow-hairline);
   --shadow-drawer: -8px 0 16px 0 rgba(0, 0, 0, 0.35), -2px 0 6px 0 rgba(0, 0, 0, 0.2), inset 0 0 0 1px var(--color-border);
   /* v17 at night: obsidian surfaces, paper text, the states' on-dark tones */
-  --canvas-bg: var(--cr-obsidian); --decision-surface: var(--cr-obsidian-elevated);
+  --canvas-bg: var(--cr-obsidian); --decision-surface: var(--cr-obsidian-elevated); --warm-surface: var(--cr-obsidian-elevated); --glass-surface: rgba(28, 28, 31, 0.82);
   --color-surface-tertiary: var(--cr-obsidian); --color-surface: var(--cr-obsidian-raised); --color-surface-secondary: #111113; --color-surface-elevated: var(--cr-obsidian-elevated);
   --color-surface-hover: #1a1a1d; --color-surface-selected: #232327; --color-bg-soft: var(--cr-obsidian-elevated);
   --color-text: var(--cr-paper); --color-text-heading: var(--cr-paper); --color-text-label: var(--cr-paper-secondary);
@@ -535,7 +550,7 @@
     --shadow-seg: 0 1px 4px -1px rgba(0, 0, 0, 0.5);
     --shadow-pop: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -4px rgba(0, 0, 0, 0.2), var(--shadow-hairline);
     --shadow-drawer: -8px 0 16px 0 rgba(0, 0, 0, 0.35), -2px 0 6px 0 rgba(0, 0, 0, 0.2), inset 0 0 0 1px var(--color-border);
-    --canvas-bg: var(--cr-obsidian); --decision-surface: var(--cr-obsidian-elevated);
+    --canvas-bg: var(--cr-obsidian); --decision-surface: var(--cr-obsidian-elevated); --warm-surface: var(--cr-obsidian-elevated); --glass-surface: rgba(28, 28, 31, 0.82);
     --color-surface-tertiary: var(--cr-obsidian); --color-surface: var(--cr-obsidian-raised); --color-surface-secondary: #111113; --color-surface-elevated: var(--cr-obsidian-elevated);
     --color-surface-hover: #1a1a1d; --color-surface-selected: #232327; --color-bg-soft: var(--cr-obsidian-elevated);
     --color-text: var(--cr-paper); --color-text-heading: var(--cr-paper); --color-text-label: var(--cr-paper-secondary);
@@ -549,13 +564,16 @@
     color-scheme: dark;
   }
 }
-@media (prefers-reduced-motion: reduce) { :root { --dur: 0ms; --dur-move: 0ms; } }
+@media (prefers-reduced-motion: reduce) { :root { --dur: 0ms; --dur-move: 0ms; --dur-sel: 0ms; } }
 
-/* v17's dark cards, in both themes: the Daily Brief hero (where Eric sees
-   the engine) and the inspector's Needs you. Obsidian with paper text; the
-   words their parts draw are re-pointed here, so the parts keep their own
-   rules. The hero's two ways in are v17 decision cards: ceramic, light. */
-.hero, .iv-lines {
+/* The page's one black panel (the Architecture restyle, 2026-10-29): the
+   Daily Brief hero on the Desk, in both themes, obsidian with paper text;
+   the words its parts draw are re-pointed here, so the parts keep their own
+   rules. While a project is docked beside the list the drawer's foot is the
+   black panel, so the hero takes the warm ceramic card and the page's own
+   words (these overrides simply do not apply). */
+.wl:not(.has-inspector) .hero {
+  --hero-bg: var(--cr-obsidian); --hero-shadow: var(--shadow-dark);
   --text: var(--cr-paper); --text-2: var(--cr-paper-secondary); --text-3: var(--cr-paper-body);
   --border: var(--cr-dark-divider); --separator: var(--cr-dark-divider);
   --color-border: var(--cr-dark-border); --color-border-subtle: var(--cr-dark-divider);
@@ -564,11 +582,6 @@
   --dot-neg: var(--cr-critical-on-dark); --dot-warn: var(--cr-tuning-on-dark);
   --mesh-opacity: 0.35; --mesh-blend: screen;
   color: var(--text);
-}
-.hero .mini {
-  --text: var(--cr-obsidian); --text-2: var(--cr-ink-secondary); --text-3: var(--cr-ink-tertiary);
-  --color-surface: var(--cr-surface-ceramic); --color-surface-secondary: var(--cr-surface); --color-surface-hover: #ebebe8;
-  --color-border-subtle: transparent;
 }
 
 /* Icons as local SVG masks (no requests), drawn in currentColor; always next
