@@ -1,10 +1,11 @@
 // One page per project (#/project/<id>/<section>): the deep audit, Level 2
 // (DESIGN_AND_IA_BLUEPRINT.md §3.3; Eric, 2026-10-17). The header carries the
 // identity and the market now (with its own time, apart from any research
-// date) and the actions: Run research, Start forensic audit, Watching and the
-// menu (Archive). Under it the model switcher, a segmented control:
+// date) and the actions: Run research, and the menu (Start forensic audit,
+// Watch, Archive). Under it the model switcher, a segmented control:
 // Claude | ChatGPT | Gemini | Compare (Compare is a mode, not a section, at
-// the address "compare"); then the sections as underline tabs with counts:
+// the address "compare"); then the sections as underline tabs, Evidence with
+// its claim count:
 // Brief (the address "brief"), Evidence, Forensics, Market, Contract, Report,
 // Record and Notes. Opened from the inspector (Open full research), a back bar,
 // Back and Escape return there with the list's filters, place and focus, also
@@ -17,7 +18,7 @@
 // is drawn only when the record holds the very report the list names
 // (lib/opinion.js), else the view waits (F1).
 import { Fragment, useEffect, useLayoutEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Ellipsis, Check, Play, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Ellipsis, Play } from 'lucide-react';
 import { PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, fmtDateTime, fmtAgo, fmtAsOf, toast } from '../../../../public/ui.js';
 import { briefModel, marketNow } from '../../../../public/brief-model.js';
 import { PROJECT_TABS, PROJECT_VIEWS, MODEL_VIEWS, selectionOf, sectionHref } from '../../../../public/project-routes.js';
@@ -124,10 +125,11 @@ function Header({ d, row, phone }) {
       </div>
       {phone ? null : (
         <div className="ph-actions">
+          {/* One primary action; the rest under ⋯ (Quieter Desk). */}
           {archived ? null : <button type="button" className="btn btn-primary" id="project-research-btn" data-key="project-research" onClick={runResearch}><Play size={14} aria-hidden="true" />Run research</button>}
-          {archived ? null : <a className="btn" href={forensicHref} data-key="project-forensic"><ShieldCheck size={14} aria-hidden="true" />Start forensic audit</a>}
-          {archived ? null : <button type="button" className="btn" aria-pressed={watching} data-key="project-watch" title={watching ? 'On your watchlist. Click to stop watching.' : 'Add to your watchlist'} onClick={toggleWatch}>{watching ? <><Check size={14} aria-hidden="true" />Watching</> : 'Watch'}</button>}
           <Menu label={`More actions for ${p.name}`} align="end" trigger={<button type="button" className="btn btn-ghost btn-icon" aria-label={`More actions for ${p.name}`} data-key="project-menu"><Ellipsis size={18} aria-hidden="true" /></button>}>
+            {archived ? null : <MenuItem data-key="project-forensic" href={forensicHref}>Start forensic audit</MenuItem>}
+            {archived ? null : <MenuItem data-key="project-watch" desc={watching ? 'On your watchlist now' : null} onSelect={toggleWatch}>{watching ? 'Stop watching' : 'Watch'}</MenuItem>}
             {archived
               ? <MenuItem data-key="project-restore" desc="Back as it was, with its history" onSelect={() => restoreProject(projectish)}>Restore</MenuItem>
               : <MenuItem data-key="project-archive" desc="Off your lists; nothing is deleted. Undo right after." onSelect={() => archiveProject(projectish)}>Archive</MenuItem>}
@@ -173,14 +175,15 @@ function ModelSwitcher({ row, sel, tab, pid }) {
         const verdict = rep && rep.verdict ? `${rep.verdict.charAt(0)}${rep.verdict.slice(1).toLowerCase().replace(/_/g, ' ')}` : null;
         return (
           <button key={prov} type="button" role="tab" id={`pb-tab-${prov}`} className="ptab" aria-selected={on} aria-controls="pb-model" tabIndex={on ? 0 : -1} data-key={`pb-tab-${prov}`} aria-label={`${info.text.replace(/[.\s]+$/, '')}${verdict ? `. Verdict: ${verdict}` : ''}`} title={verdict || undefined} onClick={() => { if (!on) go(prov); }}>
+            {/* The name and the grade only: the chosen model's verdict is the
+                grade block's, said once (Quieter Desk P2); the others' are in
+                each segment's name and tooltip. */}
             <span className="ptab-top" aria-hidden="true"><span className="ptab-name"><span className="n-full">{PROVIDER_LABELS[prov]}</span><span className="n-short">{PROVIDER_SHORT[prov]}</span></span><GradePill provider={prov} report={rep} job={job} opts={opts} showSub={false} /></span>
-            {verdict ? <span className="ptab-verdict" aria-hidden="true">{verdict}</span> : <span className="ptab-verdict faint" aria-hidden="true">{info.kind === 'none' ? 'No report' : ''}</span>}
           </button>
         );
       })}
       <button type="button" role="tab" id="pb-tab-compare" className="ptab ptab-compare" aria-selected={current === 'compare'} aria-controls="pb-model" tabIndex={current === 'compare' ? 0 : -1} data-key="pb-tab-compare" aria-label="Compare the models' reports side by side" onClick={() => { if (current !== 'compare') go('compare'); }}>
         <span className="ptab-top" aria-hidden="true"><span className="ptab-name">Compare</span></span>
-        <span className="ptab-verdict" aria-hidden="true">Side by side</span>
       </button>
     </div>
   );
@@ -291,15 +294,13 @@ export default function ProjectPage() {
 
   const p = d.project;
   const sel = selectionOf(tab, route.query, { latest, providerOf });
-  // Counts beside the sections: the chosen report's claims, the reports and
-  // the research runs on record.
+  // A count beside a section only where it informs: the chosen report's
+  // claims (Quieter Desk; the reports and runs are listed on their sections).
   const chosen = d.reports.find((r) => !r.broken && r.report_id === (reportId || latest[prov])) || null;
   const COUNTS = {
     evidence: chosen && chosen.assessment && Array.isArray(chosen.assessment.claims) ? chosen.assessment.claims.length : null,
-    report: d.reports.length || null,
-    record: (d.research && d.research.runs ? d.research.runs.length : 0) || null,
   };
-  const COUNT_WORDS = { evidence: 'claims', report: 'reports', record: 'research runs' };
+  const COUNT_WORDS = { evidence: 'claims' };
   const navTab = tab === 'compare' ? 'brief' : tab;
   const tabLink = (t, label) => {
     const href = sectionHref(pid, t, sel, { latest });
