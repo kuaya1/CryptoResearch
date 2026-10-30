@@ -28,7 +28,7 @@
 // money or calls a model or a paid provider.
 
 const fs = require('fs');
-const { runOp, OpError } = require('./ops');
+const { runOp, withLock, OpError } = require('./ops');
 const { readJson, listDir, sha256, jsonText } = require('./fsx');
 const { compactTs, randomId, isProjectId } = require('./ids');
 
@@ -1539,7 +1539,7 @@ function reconcileEffects(ws, { project = null, dryRun = false } = {}) {
         // A position saved with no entry price is complete, qualified; never opened again.
         if (opened) out.already_complete.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper', ...(opened.entry && opened.entry.status === 'no_entry_price' ? { qualified: 'no_entry_price' } : {}) });
         else if (dryRun) out.completed.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper', status: 'would_open' });
-        else out.completed.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper', ...paperBook(ws, pid, rid, inForce, null) });
+        else out.completed.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper', ...openStillInForce(ws, pid, rid, inForce) });
       }
       if (inForce.action === 'pass' && inForce.archive === 'archived') {
         let status = null;
@@ -1550,6 +1550,27 @@ function reconcileEffects(ws, { project = null, dryRun = false } = {}) {
     }
   }
   return out;
+}
+
+// The repair's paper step at its write boundary (audit H3): inside the
+// workspace lock, where a decision or an Undo is written, the decisions and the
+// paper positions are read again; the position is opened only while the same
+// decision is still the one in force and nothing has opened it since. A
+// decision superseded or undone after the repair's first read is skipped, said
+// in words, and nothing is written for it.
+function openStillInForce(ws, pid, rid, d) {
+  return withLock(ws, `ticket reconcile ${pid}`, () => {
+    const lines = strictLines(ws, decisionsRel(pid));
+    if (!lines.ok) return { status: 'skipped', reason: 'unreadable', words: `${lines.words}; the position was not opened.` };
+    const now = decisionFor(lines.lines, rid);
+    if (!now || now.decision_id !== d.decision_id) {
+      return { status: 'skipped', reason: 'not_in_force', words: `Decision ${d.decision_id} on ${rid} is no longer the one in force (${now ? `${now.action} ${now.decision_id}` : 'none'}); the position was not opened.` };
+    }
+    const positions = strictLines(ws, require('./paper').REL);
+    if (!positions.ok) return { status: 'skipped', reason: 'unreadable', words: `${positions.words}; the position was not opened.` };
+    if (positions.lines.some((l) => l.event === 'open' && l.decision_id === d.decision_id)) return { status: 'unchanged', reason: 'opened_since' };
+    return paperBook(ws, pid, rid, now, null);
+  });
 }
 
 // Item 60: the one-click repair. reconcileEffects over every project, as a
