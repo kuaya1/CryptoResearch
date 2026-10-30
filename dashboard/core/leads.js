@@ -387,8 +387,11 @@ function knownProject(ws, identity) {
   return null;
 }
 
-// Whether an asset is due now (one predicate, read only; §4's table).
-function dueOf(a, now, policy) {
+// Whether an asset is due now (one predicate, read only; §4's table). With
+// the workspace, an ELIGIBLE asset whose receipt no longer stands under the
+// rules in force (stillEligible) is due at once: a receipt kept from before
+// a stronger rule is read again, never confirmed (audit F5, upgrade).
+function dueOf(a, now, policy, ws = null) {
   if (!a || a.integrity || TERMINAL.has(a.state)) return false;
   if (a.claim && Number.isFinite(Date.parse(a.claim.claimed_at)) && now - Date.parse(a.claim.claimed_at) < CLAIM_STALE_MS) return false;
   const e = a.eligibility;
@@ -397,7 +400,7 @@ function dueOf(a, now, policy) {
   switch (a.state) {
     case 'NEW': return true;
     case 'RETRY_AT': return at(a.next_attempt_at);
-    case 'ELIGIBLE': return changed || at(e.expires_at);
+    case 'ELIGIBLE': return changed || at(e.expires_at) || Boolean(ws && !standingOf(ws, a, policy).stands);
     case 'REFUSED':
     case 'NEEDS_REVIEW':
     case 'INCOMPLETE': return changed || at(a.next_attempt_at);
@@ -410,7 +413,7 @@ function dueOf(a, now, policy) {
 function dueAssets(ws, now = Date.now(), policy = policyOf(ws)) {
   if (!policy.values.enabled || require('./research').restoredHold(ws)) return [];
   const t = (a) => Date.parse(a.next_attempt_at || a.created_at) || 0;
-  return assets(ws).filter((a) => dueOf(a, now, policy)).sort((x, y) => (x.released_at ? 0 : 1) - (y.released_at ? 0 : 1) || t(x) - t(y) || String(x.asset_id).localeCompare(String(y.asset_id)));
+  return assets(ws).filter((a) => dueOf(a, now, policy, ws)).sort((x, y) => (x.released_at ? 0 : 1) - (y.released_at ? 0 : 1) || t(x) - t(y) || String(x.asset_id).localeCompare(String(y.asset_id)));
 }
 
 // Whether the `leads` job has work: not a restored copy, and either an
@@ -547,6 +550,40 @@ function judge(identity, sightings, observations, policy) {
   return { state: 'ELIGIBLE', reasons: [], criteria };
 }
 
+// The facts the rules in force read, by source and family. A stored reading
+// that lacks any of them was made under an earlier fact set (before audit F5
+// a Solana reading kept no scheduled fee, hook or transferability).
+const FACT_KEYS = {
+  coingecko: Object.keys(listingFacts({}, null)),
+  goplus: { evm: Object.keys(screenFacts({}, 'evm')), solana: Object.keys(screenFacts({}, 'solana')) },
+};
+function factsCurrent(observations, family) {
+  return (observations || []).every((o) => {
+    if (!o || !o.facts) return true;
+    const keys = o.source === 'coingecko' ? FACT_KEYS.coingecko : o.source === 'goplus' ? FACT_KEYS.goplus[family === 'solana' ? 'solana' : 'evm'] : null;
+    return !keys || keys.every((k) => Object.prototype.hasOwnProperty.call(o.facts, k));
+  });
+}
+
+// Whether an ELIGIBLE receipt still stands under the rules in force: its
+// stored facts carry every fact those rules read and judge() over them still
+// says ELIGIBLE. Pure: { stands } or { stands: false, state, reasons }. A
+// receipt's hash proves it unchanged, never that its decision meets a rule
+// made after it (audit F5, upgrade).
+function stillEligible(receipt, asset, policy) {
+  const j = judge(asset.identity, asset.sightings, receipt.observations, policy);
+  if (j.state !== 'ELIGIBLE') return { stands: false, state: j.state, reasons: j.reasons };
+  if (!factsCurrent(receipt.observations, asset.identity.family)) return { stands: false, state: 'INCOMPLETE', reasons: ['the reading was made before the desk read every fact it reads now'] };
+  return { stands: true };
+}
+
+// The same for an ELIGIBLE asset's receipt on file; a receipt that cannot be
+// read is left to rowCheck, which refuses it. Read only.
+function standingOf(ws, a, policy) {
+  const r = a.eligibility ? readReceipt(ws, a.eligibility.receipt_id) : null;
+  return r && r.state === 'ELIGIBLE' ? stillEligible(r, a, policy) : { stands: true };
+}
+
 // One claimed asset through the network phase: a decision with its
 // observations, or `released` when the turn ran out first. Never throws for a
 // source's answer.
@@ -561,11 +598,12 @@ async function evaluate(ws, claim, { policy, turn, fetchImpl, clock, retryDelayM
   if (policy.missing.length) return decided('POLICY_HOLD', policy.missing.map((k) => `Held: ${POLICY_WORDS[k]} not set`));
   if (!policy.values.chains.includes(id.chain_id)) return decided('REFUSED', [`${id.chain_label} is not among the chains you allow for leads`]);
   // A changed policy re-reads the last observations while they are fresh,
-  // with no request.
+  // with no request; a reading that lacks a fact the rules read now is never
+  // reused as a complete one.
   const prev = a.eligibility ? readReceipt(ws, a.eligibility.receipt_id) : null;
   const hours = policy.values.eligibility_hours * 3600000;
   const now0 = clock();
-  if (prev && prev.observations.length && prev.observations.every((o) => Date.parse(o.observed_at) + hours > now0) && prev.observations.some((o) => o.source === 'coingecko') && prev.observations.some((o) => o.source === 'goplus')) {
+  if (prev && prev.observations.length && prev.observations.every((o) => Date.parse(o.observed_at) + hours > now0) && prev.observations.some((o) => o.source === 'coingecko') && prev.observations.some((o) => o.source === 'goplus') && factsCurrent(prev.observations, id.family)) {
     const j = judge(id, a.sightings, prev.observations, policy);
     return { ...base, kind: 'receipt', ...j, observations: prev.observations, reused_from: prev.receipt_id };
   }
@@ -865,6 +903,13 @@ function rowCheck(ws, op, row, policy, now) {
     if (r.state !== 'ELIGIBLE') out.push({ field: 'receipt_state', reviewed: 'ELIGIBLE', now: r.state });
     if ((!r.policy || r.policy.version !== policy.version || r.policy.sha256 !== policy.sha256) && !out.some((x) => x.field === 'receipt_policy')) out.push({ field: 'receipt_policy', now: 'the receipt was decided under another policy' });
     if (!r.expires_at || !(Date.parse(r.expires_at) > now)) out.push({ field: 'receipt_expires_at', now: r.expires_at ? `expired at ${r.expires_at}` : 'not computed' });
+    // Its stored facts judged again under the rules in force (audit F5,
+    // upgrade): a receipt kept from before a stronger rule is read again by
+    // the next turn, never confirmed.
+    if (r.state === 'ELIGIBLE') {
+      const s = stillEligible(r, a, policy);
+      if (!s.stands) out.push({ field: 'eligibility_rule', reviewed: 'ELIGIBLE', now: s.state, reasons: s.reasons, words: 'this reading does not meet the eligibility rule in force; the lead is read again before it can be confirmed' });
+    }
   }
   return { fields: out, asset: a, receipt: r };
 }
@@ -1290,6 +1335,9 @@ function reviewView(ws, { now = Date.now() } = {}) {
     const gp = r ? r.observations.find((o) => o.source === 'goplus' && o.facts) : null;
     const last = a.sightings.length ? a.sightings[a.sightings.length - 1] : null;
     const adm = byLead.get(a.asset_id) || null;
+    // An ELIGIBLE reading that no longer stands is shown as being read again,
+    // with the reasons in force, never as confirmable.
+    const standing = a.state === 'ELIGIBLE' && r && r.state === 'ELIGIBLE' ? stillEligible(r, a, policy) : { stands: true };
     return {
       lead_key: a.asset_id,
       state: a.state,
@@ -1302,8 +1350,9 @@ function reviewView(ws, { now = Date.now() } = {}) {
       eligibility_sha256: a.eligibility ? a.eligibility.eligibility_sha256 : null,
       decided_at: a.eligibility ? a.eligibility.decided_at : null,
       expires_at: a.eligibility ? a.eligibility.expires_at : null,
-      expired: Boolean(a.eligibility && a.eligibility.expires_at && Date.parse(a.eligibility.expires_at) <= now),
-      reasons: a.eligibility ? a.eligibility.reasons : [],
+      expired: Boolean(a.eligibility && a.eligibility.expires_at && Date.parse(a.eligibility.expires_at) <= now) || !standing.stands,
+      rescreen_due: !standing.stands,
+      reasons: standing.stands ? (a.eligibility ? a.eligibility.reasons : []) : standing.reasons,
       listing: cg ? { name: cg.facts.name, symbol: cg.facts.symbol, coingecko_id: cg.facts.coingecko_id, image: cg.facts.image, market_cap_usd: cg.facts.market_cap_usd, volume_24h_usd: cg.facts.volume_24h_usd } : null,
       screen: gp ? gp.facts : null,
       words: r ? r.words : null,
@@ -1366,6 +1415,8 @@ module.exports = {
   receiptSha,
   knownProject,
   dueOf,
+  stillEligible,
+  factsCurrent,
   dueAssets,
   isDue,
   listingFacts,
