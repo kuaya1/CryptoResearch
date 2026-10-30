@@ -298,6 +298,27 @@ test('leads: a save that does not verify is 503, never accepted, and saves nothi
   assert.equal(r.status, 202);
 });
 
+test('leads: a dismissal reason that is not one plain line of 280 characters is a clean 400, nothing written', (t) => {
+  const calls = noProviders(t);
+  const ws = temp(t, 'leads-dismiss-reason');
+  const key = L.ingest(ws, delivery(), { now: T0 }).rows[0].lead_key;
+  const files = leadFiles(ws);
+  let n = 0;
+  const rid = () => `req_dismiss_${++n}`;
+  for (const reason of ['Line one\nline two', 'Hidden‮mark', 42, { why: 'no' }, 'x'.repeat(281)]) {
+    assert.throws(() => L.dismissLead(ws, { lead_key: key, request_id: rid(), reason }), (err) => err.code === 'INVALID' && err.status === 400 && /^The reason was refused: reason: /.test(err.message), `refused: ${JSON.stringify(reason)}`);
+    assert.deepEqual(leadFiles(ws), files, 'a refused reason writes nothing');
+  }
+  assert.equal(L.getAsset(ws, key).state, 'NEW');
+  // Blank and missing reasons are no reason; a plain one is kept trimmed.
+  assert.equal(L.dismissLead(ws, { lead_key: key, request_id: rid(), reason: '   ' }).status, 'dismissed');
+  assert.equal(L.getAsset(ws, key).dismissal.reason, null);
+  const other = L.ingest(ws, delivery({ delivery_id: 'gh-1001-1', leads: [lead({ contract: EVM(2) })] }), { now: T0 }).rows[0].lead_key;
+  assert.equal(L.dismissLead(ws, { lead_key: other, request_id: rid(), reason: '  Not for me.  ' }).status, 'dismissed');
+  assert.equal(L.getAsset(ws, other).dismissal.reason, 'Not for me.');
+  assert.deepEqual(calls, []);
+});
+
 test('leads: reads write nothing; the backup and offsite package carry scout/leads', (t) => {
   const calls = noProviders(t);
   const ws = temp(t, 'leads-read');

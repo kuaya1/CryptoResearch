@@ -112,6 +112,26 @@ test('online: the steps decide the roles; the override has one Prosecutor; a mis
   assert.throws(() => runOnline(O(), { run: () => 'NEXT_STEP: research', out: () => {} }), /research step is still open/);
 });
 
+test('online: a paused desk dispatches no agent after the session that read the queue, and says why', () => {
+  const { PAUSED_WORDS } = require('../scripts/pilot');
+  assert.equal(nextStepOf('The queue is paused.\nNEXT_STEP: paused'), 'paused');
+  for (const role of ['researcher', 'prosecutor']) assert.match(roleInstruction(role, O()), /answers "paused".*call nothing else.*NEXT_STEP: paused/, role);
+  for (const over of [{}, { forceProsecution: true }]) {
+    const lines = [];
+    const prompts = [];
+    const sessions = runOnline(O(over), { run: (prompt) => { prompts.push(prompt); return 'NEXT_STEP: paused'; }, out: (s) => lines.push(s) });
+    assert.equal(prompts.length, 1, 'only the first session, which reads the queue');
+    assert.deepEqual(sessions.map((s) => s.role), ['researcher']);
+    assert.equal(lines[lines.length - 1], PAUSED_WORDS);
+  }
+  // Paused while the chain runs: the session that saw it is the last one.
+  const roles = [];
+  const lines = [];
+  runOnline(O(), { run: (prompt) => { roles.push(/Agent 2/.test(prompt) ? 'prosecutor' : 'researcher'); return roles.length === 1 ? 'Saved.\nNEXT_STEP: ticket' : 'NEXT_STEP: paused'; }, out: (s) => lines.push(s) });
+  assert.deepEqual(roles, ['researcher', 'prosecutor'], 'no session after the pause');
+  assert.equal(lines[lines.length - 1], PAUSED_WORDS);
+});
+
 test('online --dry-run shows each role\'s session and runs none', () => {
   const lines = [];
   const sessions = runOnline(O({ dryRun: true }), { run: () => assert.fail('nothing runs'), out: (s) => lines.push(s) });

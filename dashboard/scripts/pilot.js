@@ -217,7 +217,8 @@ const ROLE_TOOLS = Object.freeze({
   researcher: Object.freeze(['autonomous_pilot_queue', 'start_research', 'get_research', 'save_research_draft', 'save_report']),
   prosecutor: Object.freeze(['autonomous_pilot_queue', 'start_ticket', 'get_ticket', 'save_ticket']),
 });
-const STEPS = ['research', 'ticket', 'ticket_failed', 'gate_closed', 'contract_evidence', 'pm_review', 'done', 'blocked', 'unknown'];
+const STEPS = ['research', 'ticket', 'ticket_failed', 'gate_closed', 'contract_evidence', 'pm_review', 'paused', 'done', 'blocked', 'unknown'];
+const PAUSED_WORDS = 'Not dispatched: automation is paused on the online desk (settings automation.paused); no agent is dispatched until you resume it.';
 
 const roleTools = (role, o) => [...ROLE_TOOLS[role].map((t) => `${o.connector}__${t}`), ...WEB_TOOLS];
 
@@ -225,6 +226,7 @@ function roleInstruction(role, o) {
   const words = JSON.stringify(o.ownerWords || FORCE_WORDS);
   const head = `CryptoResearch autonomous pilot, project "${o.project}", Eric's online desk. Use only the tools you are given.`;
   const tail = [
+    'If the queue answers "paused", Eric paused automation: call nothing else and answer only "NEXT_STEP: paused".',
     'Never decide a ticket, never choose a dollar amount, never place or simulate an order.',
     `When you are done, call autonomous_pilot_queue with project "${o.project}" once more and end your answer with one line, exactly "NEXT_STEP: <step>", naming the step it returns.`,
   ];
@@ -276,6 +278,11 @@ function runOnline(o, { run = claude, out = say } = {}) {
   let step = null;
   let forced = false;
   for (let i = 0; i < MAX_STEPS; i++) {
+    // The pause, as locally: the runner stops before its next session.
+    if (step === 'paused') {
+      out(PAUSED_WORDS);
+      return sessions;
+    }
     const role = roleForStep(step, o, { forced });
     if (!role) {
       out(step === 'pm_review' ? 'Done: the ticket waits for your PM review (inspector > PM decision).' : `Nothing for the agents to do (${step}).`);
@@ -310,7 +317,7 @@ function main() {
   else throw new Error('--desk is local or online.');
 }
 
-module.exports = { resolveClaude, parse, forcedTicket, roleInstruction, roleTools, roleForStep, nextStepOf, runOnline, runLocal, ROLE_TOOLS, FORCE_WORDS };
+module.exports = { resolveClaude, parse, forcedTicket, roleInstruction, roleTools, roleForStep, nextStepOf, runOnline, runLocal, ROLE_TOOLS, FORCE_WORDS, PAUSED_WORDS };
 
 if (require.main === module) {
   try {

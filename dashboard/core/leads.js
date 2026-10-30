@@ -1301,7 +1301,9 @@ function dismissLead(ws, body, { now = Date.now() } = {}) {
   const b = isObj(body) ? body : {};
   if (typeof b.request_id !== 'string' || !REQUEST_ID.test(b.request_id)) throw opErr('INVALID', 'The request ID must look like req_ followed by 4 to 80 letters, digits, - or _.', 400);
   if (typeof b.lead_key !== 'string' || !/^[0-9a-f]{32}$/.test(b.lead_key)) throw opErr('INVALID', 'Name the lead to dismiss.', 400);
-  const reason = b.reason === undefined || b.reason === null ? null : scout.plainLine(b.reason, 280);
+  const reasonErrors = [];
+  const reason = scout.plainLine(b.reason, 'reason', 280, reasonErrors, { required: false });
+  if (reasonErrors.length) throw opErr('INVALID', `The reason was refused: ${reasonErrors.join('; ')}.`, 400);
   const out = runOp(ws, { type: 'scout_lead_dismiss', summary: `Dismiss scout lead ${b.lead_key}`, idempotencyKey: `dismiss:${b.request_id}`, payloadHash: sha256(stableStringify([b.lead_key, reason])) }, (op) => {
     const rel = `${ASSETS}/${b.lead_key}.json`;
     const a = checkAsset(op.readJson(rel, null), b.lead_key);

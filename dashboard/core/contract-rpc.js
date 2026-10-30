@@ -171,7 +171,7 @@ function networkSupport(ws, chainId) {
   const id = String(chainId);
   if (!Object.prototype.hasOwnProperty.call(HOSTS, id)) return { supported: false, reason: 'network_not_supported', words: `Chain ${id} has no read route in this release.` };
   const rec = readNetworks(ws).networks[id];
-  if (!rec) return { supported: false, reason: 'network_not_probed', words: `Chain ${id} has not been probed (contracts probe ${id}).` };
+  if (!rec) return { supported: false, reason: 'network_not_probed', words: `Chain ${id} has not been probed (contracts probe ${id}; probed on its own once both caps are set).` };
   if (id === 'solana') return rec.finalized ? { supported: true, record: rec } : { supported: false, reason: 'network_not_supported', words: 'The Solana probe found no finalized commitment.', record: rec };
   if (!rec.finalized || !rec.eip1898) return { supported: false, reason: 'network_not_supported', words: `Chain ${id} does not answer ${!rec.finalized ? 'the finalized tag' : 'reads pinned by block hash (EIP-1898)'}.`, record: rec };
   return { supported: true, record: rec };
@@ -179,6 +179,31 @@ function networkSupport(ws, chainId) {
 
 function supportedNetworks(ws) {
   return Object.keys(HOSTS).filter((id) => networkSupport(ws, id).supported);
+}
+
+// An automatic probe that got nothing to record (no answer, the wrong chain,
+// a reorg) waits before its next try, doubling from the first wait to the
+// longest (contract-forensics.js autoProbe). Eric's own probe never waits.
+function probeWaitOf(state, chainId, now) {
+  const w = state.probe_waits && state.probe_waits[String(chainId)];
+  return w && Date.parse(w.until) > now ? w : null;
+}
+
+function noteProbe(ws, chainId, now, failure = null) {
+  const id = String(chainId);
+  let rec = null;
+  updateState(ws, (s) => {
+    const waits = { ...(s.probe_waits || {}) };
+    if (!failure) delete waits[id];
+    else {
+      const failures = ((waits[id] && waits[id].failures) || 0) + 1;
+      const minutes = Math.min(failure.max_minutes, failure.initial_minutes * 2 ** (failures - 1));
+      rec = { failures, at: isoOf(now), until: isoOf(now + minutes * 60000), words: String(failure.words || '').slice(0, 200) };
+      waits[id] = rec;
+    }
+    return { ...s, probe_waits: waits };
+  });
+  return rec;
 }
 
 // ---------------------------------------------------------------------------
@@ -311,4 +336,4 @@ function openSession(ws, { chainId, fetchImpl = null, key = undefined, now = Dat
   return session;
 }
 
-module.exports = { VERSION, CU, READ_METHODS, PINNED, HOSTS, STATE_REL, NETWORKS_REL, Stop, assertReadMethod, pin, pinnedParams, openSession, readState, gateOf, capsOf, readNetworks, networkSupport, supportedNetworks };
+module.exports = { VERSION, CU, READ_METHODS, PINNED, HOSTS, STATE_REL, NETWORKS_REL, Stop, assertReadMethod, pin, pinnedParams, openSession, readState, gateOf, capsOf, readNetworks, networkSupport, supportedNetworks, probeWaitOf, noteProbe };

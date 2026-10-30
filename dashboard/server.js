@@ -446,6 +446,18 @@ function mergeDeep(a, b) {
   return out;
 }
 
+// One settings patch, validated and written as Settings writes it (Settings,
+// `contracts init-defaults`, `arm-desk`).
+function applySettings(ws, body, summary = 'Update dashboard settings') {
+  const patch = validateSettingsPatch(body || {}, ws);
+  const out = runOp(ws, { type: 'update_settings', summary }, (op) => {
+    const cur = op.readJson('config/settings.json', { schema_version: 1 });
+    op.writeJson('config/settings.json', mergeDeep(cur, patch));
+  });
+  ws.reloadSettings();
+  return { patch, out };
+}
+
 async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false, hosted = null } = {}) {
   if (hosted) {
     // Only through hosted.js, which refuses to start without a passphrase,
@@ -1214,6 +1226,15 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     if (out.added.length) setTimeout(() => jobs.runJob(ws, 'forensics', { trigger: 'dashboard', onlyDue: true }).then(() => rebuild(['api'])).catch(() => {}), 300);
     return after({ status: out.added.length ? 'saved' : 'unchanged', ...out });
   });
+  // Eric's network probe from the signed-in desk, no shell needed
+  // (contract-forensics.js probeChains): one chain by `chain_id`, else every
+  // chain his active projects need that is not probed yet. Refused while his
+  // contract caps are unset; within them, as `contracts probe`.
+  route('POST', '/api/contracts/probe', async (m, req, res, body) => {
+    const raw = body && body.chain_id !== undefined && body.chain_id !== null ? String(body.chain_id) : null;
+    if (raw !== null && !/^(\d{1,12}|solana)$/.test(raw)) throw new HttpError(400, 'chain_id is a chain number or "solana".');
+    return after(await require('./core/contract-forensics').probeChains(ws, { chainId: raw }));
+  });
   route('POST', '/api/projects/([^/]+)/forensics/monitoring', (m, req, res, body) => after(forensics.setMonitoring(ws, pid(m[1]), {
     enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
     approve: body.approve && typeof body.approve === 'object' && typeof body.approve.receipt_id === 'string' ? { receipt_id: receiptId(body.approve.receipt_id), product_checks: Array.isArray(body.approve.product_checks) ? body.approve.product_checks.map(String).slice(0, 5) : undefined, repositories: Array.isArray(body.approve.repositories) ? body.approve.repositories.map(String).slice(0, 3) : undefined } : null,
@@ -1536,14 +1557,21 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     return { status: 'saved' };
   });
   route('POST', '/api/settings', (m, req, res, body) => {
-    const patch = validateSettingsPatch(body || {}, ws);
-    const out = runOp(ws, { type: 'update_settings', summary: 'Update dashboard settings' }, (op) => {
-      const cur = op.readJson('config/settings.json', { schema_version: 1 });
-      op.writeJson('config/settings.json', mergeDeep(cur, patch));
-    });
-    ws.reloadSettings();
+    const { out } = applySettings(ws, body);
     rebuild(['config']);
     return { status: 'saved', files: out.files };
+  });
+  // Contract defaults (contract-presets.js): the published Uniswap V2 and V3
+  // factories, Safe singletons and network-fee ceilings added to Eric's
+  // contracts settings, his own rows and ceilings kept; `dry_run` shows the
+  // plan and writes nothing.
+  route('POST', '/api/contracts/init-defaults', (m, req, res, body) => {
+    const p = require('./core/contract-presets').plan(ws.settings);
+    if (p.patch) validateSettingsPatch(p.patch, ws);
+    if (!p.patch || (body && body.dry_run === true)) return { status: p.patch ? 'planned' : 'unchanged', added: p.added, kept: p.kept };
+    const { out } = applySettings(ws, p.patch, 'Contract defaults (init-defaults)');
+    rebuild(['config']);
+    return { status: 'saved', added: p.added, kept: p.kept, files: out.files };
   });
 
   return async function handle(req, res, url, { allowedOrigins }) {
@@ -1594,4 +1622,4 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   };
 }
 
-module.exports = { start, validateSettingsPatch };
+module.exports = { start, validateSettingsPatch, applySettings };

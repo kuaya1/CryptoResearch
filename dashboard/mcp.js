@@ -380,7 +380,7 @@ const TOOLS = [
   {
     name: 'autonomous_pilot_queue',
     title: 'The autonomous pilot: next step per project (Claude)',
-    description: 'Read-only. For each project Eric put in the autonomous pilot (or the one named), the next step of the two-agent chain: "research" (Agent 1: Claude\'s investment research is missing, stale or open: use pending_research or start_research), "ticket" (Agent 2: call start_ticket), "ticket_failed" (the Prosecutor\'s last save was refused; the step names the refused field: call start_ticket, which resumes the ticket with its draft, then save_ticket), "gate_closed" (the grade alone rules out new risk and Eric does not hold it: call start_ticket, which saves the desk\'s own gate receipt; there is no Prosecutor prompt and no save_ticket; with the contract gate enforced, also when the contract gate blocks), "contract_evidence" (the contract gate is enforced and holds: nothing for an agent to do until the desk observes the contract again), "pm_review" (the ticket waits for Eric; nothing to do) or "done". Do the steps in order, one project at a time.',
+    description: 'Read-only. For each project Eric put in the autonomous pilot (or the one named), the next step of the two-agent chain: "research" (Agent 1: Claude\'s investment research is missing, stale or open: use pending_research or start_research), "ticket" (Agent 2: call start_ticket), "ticket_failed" (the Prosecutor\'s last save was refused; the step names the refused field: call start_ticket, which resumes the ticket with its draft, then save_ticket), "gate_closed" (the grade alone rules out new risk and Eric does not hold it: call start_ticket, which saves the desk\'s own gate receipt; there is no Prosecutor prompt and no save_ticket; with the contract gate enforced, also when the contract gate blocks), "contract_evidence" (the contract gate is enforced and holds: nothing for an agent to do until the desk observes the contract again), "pm_review" (the ticket waits for Eric; nothing to do), "paused" (Eric paused automation: do nothing at all until he resumes it) or "done". Do the steps in order, one project at a time.',
     inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'Optional: one project (name, ticker or project ID), in the pilot or not.' }, candidates: { type: 'boolean', description: 'true: instead of the queue, list who could go in the pilot (held first, then by grade, with today\'s gate result). Opts nothing in.' } }, additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
@@ -1885,6 +1885,12 @@ const handlers = {
     const named = q ? projects.listProjects(ws).filter((p) => !p.broken && matches(p, q)) : null;
     if (named && !named.length) return { status: 'none_for_project', steps: [], message: `No project matches "${q}".` };
     const steps = named ? named.flatMap((p) => T.pilotQueue(ws, { project: p.project_id })) : T.pilotQueue(ws);
+    // Eric's pause (settings automation.paused) halts the pilot's next agent
+    // online as the local claim does: every step reads "paused", the step it
+    // would be is kept beside it, and nothing is offered to do.
+    if (require('./core/workspace').automationPaused(ws)) {
+      return { status: 'paused', steps: steps.map((s) => ({ ...s, step: 'paused', step_when_resumed: s.step })), next: null, message: 'Automation is paused: no agent is dispatched until Eric resumes it. Do nothing else; answer NEXT_STEP: paused.' };
+    }
     const todo = steps.filter((s) => s.step === 'research' || s.step === 'ticket' || s.step === 'ticket_failed' || s.step === 'gate_closed');
     const next = todo[0] || null;
     const how = next ? (next.step === 'research'

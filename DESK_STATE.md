@@ -144,6 +144,70 @@ OLAS is `olas-autonolas` and lives only on the online desk.
 
 Live tickets (2026-10-24), both $0 and waiting for Eric: OLAS `tr_2026-10-24T175256Z_g3cug`, HARD_PASS (Researcher 26.3, Prosecutor 15). ZAMA (held) `tr_2026-10-24T182937Z_vzsbf`, TRIM_EXIT (Researcher 35.5, Prosecutor 18; invalidation $0.045). Neither has an exit reading or a DefiLlama binding.
 
+## Arming the paper desk (2026-10-30)
+
+The mandatory order for a ticket that should size above $0:
+
+1. **Quote exits.** Use Forensics > Exits, or Desk options "Quote exits for every project…". With `automation.exit_quotes_auto` on, the desk approves them itself for pilot projects. `start_ticket` freezes the packet with the exit readings it finds then, so a ticket opened before them is capped at $0.
+2. **Run the Prosecutor** (`/pilot-run`, `npm run pilot`).
+3. **Approve within 72 hours** of the newest complete exit reading. After that, Approve and Halve are refused with 409 `EXIT_EXPIRED`. "Renew exit evidence" (Re-open) makes a new ticket on fresh readings.
+
+Three facts the 2026-10-30 audit found misread:
+
+- **The network-fee ceiling key.** The desk's own on-chain exit readings use `contracts.network_fee_ceiling_usd`, a map of chain ID to USD (0 to 100).
+  - There is no `evm_network_fee_ceiling_usd`.
+  - Solana aggregator quotes use `forensics.preferences.solana_network_fee_ceiling_usd`.
+  - KyberSwap's EVM quotes carry their own gas.
+- **On-chain exit rows never size the Paper Book.** The desk's on-chain rows (`desk_onchain`, `cr-forensic-exit-legacy@1`) live in the packet's `contract.exits.legacy`, never in `packet.exits`.
+  - `paper-trader.js` sizes its exit cap from `packet.exits` only.
+  - An on-chain reading reaches an order only through the contract gate's open guard, in enforce mode (`tickets.js` `contractOpenGuard`).
+- **Confirming a scout lead requests Claude only** (`leads.js` `envelope`). The click never adds another model or a configured API.
+
+The commands:
+
+```
+node dashboard/cli.js arm-desk --dry-run [--daily-cu=5000 --monthly-cu=100000] [--allow=SYM/USDC,...]
+node dashboard/cli.js arm-desk [...]                this folder's desk: the settings and the contract defaults
+node dashboard/cli.js arm-desk --desk=online [...]  prints a script for the signed-in online desk's browser console
+node dashboard/cli.js contracts init-defaults [--dry-run]
+node dashboard/cli.js contracts probe [<chain_id>]  none named: every chain the active projects need that is not probed
+```
+
+**`arm-desk`** (`core/arm-desk.js`) writes one patch, checked by `validateSettingsPatch`:
+
+| Setting | Value |
+|---|---|
+| Scout leads | On, for ethereum, base, arbitrum, optimism, polygon, avalanche, linea, unichain, sonic and solana |
+| Lead thresholds | Market cap at least $5M, 24h volume at least $250K, sell tax at most 5%, eligibility 48 h |
+| `automation.exit_quotes_auto` | true |
+| `trader.book` | $25,000 at a fee of 0.001 |
+| `trader.rules` | Stop at least 0.03 of entry and 0.5 ATR, notional at most 0.20 of NAV, intents valid 240 minutes |
+| Contract caps | Written only when named |
+
+- `contracts.enabled` and the contract gate's mode are left as they are.
+- The allowlist holds only the pairs Eric names. While it is unset, every intent waits.
+- Online, the script reads the session token, then posts to `/api/settings` and to `/api/contracts/init-defaults`.
+
+**`contracts init-defaults`** (`core/contract-presets.js`; `POST /api/contracts/init-defaults` on the desk, `{ "dry_run": true }` for the plan) adds:
+
+- **Uniswap V3:** fee tiers 100, 500, 3000 and 10000, with its QuoterV2.
+- **Uniswap V2:** 30 bps.
+- **Where:** both Uniswap rows on Ethereum, Base, Arbitrum One and OP Mainnet, quoted in native USDC.
+- **Safe:** the Safe and SafeL2 singleton code hashes of v1.3.0 and v1.4.1.
+- **Network-fee ceilings:** Ethereum $5; Base, Arbitrum and Optimism $0.25.
+
+Every value was read back from the chain on 2026-10-30. Rows and ceilings already set are kept.
+
+**The network probe:**
+
+- **When it runs:** with both caps set, the first observation on a chain never probed probes that chain first. With `contracts.enabled` on, the `forensics` job does it for every chain the active projects need.
+- **What is recorded:** the answer goes to `market-data/contracts/networks.json`, supported or not. A recorded chain is never probed again on its own.
+- **No answer to record** (no reply, the wrong chain, a reorg): the next try waits 30 minutes, doubling to 12 hours (`probe_waits` in `market-data/contracts/status.json`).
+- **On the online desk,** `POST /api/contracts/probe` (`{ "chain_id": "8453" }`, or nothing for every chain) probes from the signed-in page. It is refused while the caps are unset.
+- **Key check first:** a key refused (HTTP 401 or 403) closes the gate for every chain for 6 hours. Check `ALCHEMY_API_KEY` on Render before setting the caps.
+
+**Pause:** `automation.paused` now stops the online pilot too. The connector's `autonomous_pilot_queue` answers `paused` for every step, and `npm run pilot -- --desk=online` dispatches no further agent.
+
 ## UI files
 
 | Part | File |
