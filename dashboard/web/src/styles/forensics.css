@@ -72,7 +72,7 @@
 .fx-stand { display: inline-flex; align-items: center; min-height: var(--badge-h); padding: 0 8px; border-radius: var(--r-badge); font-size: var(--fs-xs); font-weight: 500; }
 .fx-stand.is-holds { background: var(--badge-bg); color: var(--text-2); box-shadow: none; }
 .fx-stand.is-claim { background: var(--warn-weak); color: var(--warn); box-shadow: none; white-space: normal; }
-.fx-key { min-width: 0; padding: 14px 16px; border-radius: var(--r-card); background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-card); border-top: 3px solid var(--border); }
+.fx-key { min-width: 0; padding: 14px 16px; border-radius: var(--r-well); background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-card); border-top: 3px solid var(--border); }
 .fx-key.is-concern { border-top-color: var(--neg-strong); }
 .fx-key.is-counter { border-top-color: var(--pos-strong); }
 .fx-key-h { font-size: var(--fs-xs); font-weight: 600; margin-bottom: 6px; }

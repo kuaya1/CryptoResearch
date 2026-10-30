@@ -272,7 +272,7 @@ test('leads: six deliveries a day apart from the briefs; a replay still resolves
   for (let i = 0; i < 6; i += 1) assert.equal(L.ingest(ws, delivery({ delivery_id: `gh-200${i}-1` }), { now: T0 }).status, 'accepted');
   assert.equal(L.ingest(ws, delivery({ delivery_id: 'gh-2000-1' }), { now: T0 }).status, 'unchanged', 'a replay resolves after the sixth');
   assert.throws(() => L.ingest(ws, delivery({ delivery_id: 'gh-2006-1' }), { now: T0 }), (err) => err.code === 'DAILY_LIMIT');
-  assert.equal(L.view(ws, { now: T0 }).leads_today, 6, 'counted on the day of the deliveries, not the day the test runs');
+  assert.equal(L.view(ws, { now: T0 }).leads_today, 6);
   assert.equal(S.view(ws, { env: {} }).briefs, 0, 'the brief count is untouched');
   // The next UTC day takes deliveries again.
   assert.equal(L.ingest(ws, delivery({ delivery_id: 'gh-2007-1', generated_at: '2026-10-30T00:30:00.000Z' }), { now: Date.parse('2026-10-30T00:31:00.000Z') }).status, 'accepted');

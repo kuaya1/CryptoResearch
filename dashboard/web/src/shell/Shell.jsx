@@ -237,3 +237,25 @@ export function DemoBanner() {
 export function saveRail(on) {
   try { store.set(RAIL_KEY, Boolean(on)); } catch (_) { /* a private window */ }
 }
+
+// The command bar (the Architecture restyle, 2026-10-29): a floating glass
+// bar at the foot of the page from 1024px, the same command menu as ⌘K and
+// the rail's Search, with three ways in as chips (the Daily Brief, Review,
+// Preferences). Review has its own decision bar there, so it is left out.
+export function CommandBar() {
+  const key = mac() ? '⌘K' : 'Ctrl K';
+  return (
+    <div className="cmdbar" role="toolbar" aria-label="Commands">
+      <button type="button" className="cmdbar-open" data-key="cmdbar-open" aria-keyshortcuts={mac() ? 'Meta+K' : 'Control+K'} onClick={() => openCommand()}>
+        <Search size={16} strokeWidth={1.75} aria-hidden="true" />
+        <span className="cmdbar-t">Search projects, pages and commands</span>
+        <kbd className="cmdbar-kbd" aria-hidden="true">{key}</kbd>
+      </button>
+      <span className="cmdbar-chips">
+        <button type="button" className="cmdbar-chip" data-key="cmdbar-brief" onClick={() => openBrief()}>Daily Brief</button>
+        <a className="cmdbar-chip" href="#/review" data-key="cmdbar-review">Review</a>
+        <button type="button" className="cmdbar-chip" data-key="cmdbar-prefs" onClick={() => openPrefs('appearance')}>Preferences</button>
+      </span>
+    </div>
+  );
+}

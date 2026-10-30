@@ -31,8 +31,9 @@ export function Change({ value, label, className = '' }) {
   );
 }
 
-// The 7-day chart: one SVG path (public/ui.js sparkPath), green when the
-// 7-day change is up or flat, red when down; a faint dashed line without a
+// The 7-day chart: one SVG path (public/ui.js sparkPath) in a neutral ink,
+// its last point a pip, green when the 7-day change is up or flat, red when
+// down (the Architecture restyle, 2026-10-29); a faint dashed line without a
 // series. The label says the change.
 export function Spark({ values, change, width = 120, height = 36, label = '7-day price' }) {
   const d = sparkPath(values, { width, height });
@@ -44,9 +45,11 @@ export function Spark({ values, change, width = 120, height = 36, label = '7-day
     );
   }
   const up = !(typeof change === 'number' && change < 0);
+  const end = d.match(/(-?[0-9.]+)[ ,](-?[0-9.]+)\s*$/);
   return (
     <svg className={`spark ${up ? 'up' : 'down'}`} width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${label}${typeof change === 'number' ? `, ${change >= 0 ? 'up' : 'down'} ${Math.abs(change).toFixed(2)} percent` : ''}`} fill="none">
       <path d={d} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      {end ? <circle className="spark-end" cx={end[1]} cy={end[2]} r="2.5" /> : null}
     </svg>
   );
 }

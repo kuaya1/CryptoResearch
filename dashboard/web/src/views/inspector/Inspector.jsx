@@ -22,6 +22,7 @@ import { useDesk, useProject } from '../../lib/hooks.js';
 import { claimFocus, navigate } from '../../lib/router.js';
 import { legacyCtx } from '../../legacy/ctx.js';
 import { Logo } from '../../components/Logo.jsx';
+import { HoldButton } from '../../components/HoldButton.jsx';
 import { Change, Unknown, UnknownFigure } from '../../components/figures.jsx';
 import { Menu, MenuItem, MenuSep, MenuLabel } from '../../components/Menu.jsx';
 import { loadLegacy } from '../../components/Dom.jsx';
@@ -184,7 +185,7 @@ export default function Inspector({ pid, wide }) {
   const secondary = (
     <>
       <a className="btn btn-sm" href={fullHref} data-key={`brief-${pid}`} aria-label={`Open full research: ${p.name}`} onClick={openFull}>Open full research<ArrowRight size={13} aria-hidden="true" /></a>
-      {needsReview(p) ? <button type="button" className={`btn btn-sm${ticketWaits ? '' : ' btn-primary'}`} data-key="panel-reviewed" aria-keyshortcuts="R" title={drawn.ready ? 'Mark reviewed (R marks it and moves to the next project to review)' : STILL_LOADING} aria-disabled={drawn.ready ? undefined : 'true'} disabled={busy || !drawn.ready} onClick={() => markReviewed(p, { onBusy: setBusy })}>{drawn.ready ? 'Mark reviewed' : STILL_LOADING}</button> : null}
+      {needsReview(p) ? <HoldButton className={`btn-sm${ticketWaits ? '' : ' btn-primary'}`} data-key="panel-reviewed" aria-keyshortcuts="R" title={drawn.ready ? 'Mark reviewed (R marks it and moves to the next project to review)' : STILL_LOADING} aria-disabled={drawn.ready ? undefined : 'true'} disabled={busy || !drawn.ready} onConfirm={() => markReviewed(p, { onBusy: setBusy })}>{drawn.ready ? 'Mark reviewed' : STILL_LOADING}</HoldButton> : null}
     </>
   );
   const slot = footSlot ? { el: footSlot, extras: ticketWaits ? secondary : null, claim: setClaimed } : null;
