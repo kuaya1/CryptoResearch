@@ -82,7 +82,7 @@ test('daily brief: a PM card waiting is listed with its age and link; held, mode
   const saved = savedTicket(t, s);
   const now = Date.parse(saved.receipt.saved_at) + 5 * 3600000;
   const out = B.brief(s.ws, { now });
-  assert.equal(out.format, 'cr-daily-brief@1');
+  assert.equal(out.format, 'cr-daily-brief@2');
   const cards = byId(out, 'pm_cards');
   assert.equal(cards.state, 'ok');
   assert.match(cards.lines[0].text, /Example PayFi \(FICTIONAL\): ACCUMULATE, waiting 5 h\./);
@@ -95,7 +95,7 @@ test('daily brief: a PM card waiting is listed with its age and link; held, mode
   const differ = byId(out, 'models_differ');
   assert.equal(differ.state, 'ok');
   assert.ok(differ.lines.every((l) => /^#\/project\/.+\/compare$/.test(l.link) || l.link === null));
-  assert.equal(out.sections.map((x) => x.id).join(), 'pm_cards,invalidated,near_invalidation,stale_basis,ticket_repairs,pilot_exits,held,horizons,research_waiting,models_differ,spread,freshness');
+  assert.equal(out.sections.map((x) => x.id).join(), 'pm_cards,exceptions,invalidated,near_invalidation,stale_basis,ticket_repairs,pilot_exits,held,horizons,research_waiting,models_differ,spread,freshness,progress');
 });
 
 test('daily brief: a ticket invalidated since a time is listed with the reading that fired; one before it is not; no since lists every one', (t) => {
@@ -213,7 +213,7 @@ test('daily brief: the text is deterministic, its SHA-256 is of that text, and a
     await handle(req, { writeHead() {}, end(x) { body = x || ''; } }, { assistant: who });
     const r = JSON.parse(body).result;
     assert.equal(r.isError, false, who);
-    assert.equal(r.structuredContent.format, 'cr-daily-brief@1');
+    assert.equal(r.structuredContent.format, 'cr-daily-brief@2');
     assert.equal(r.structuredContent.text_sha256, sha256(r.structuredContent.text));
   }
   // The route.
@@ -247,7 +247,7 @@ test('daily brief: the text is deterministic, its SHA-256 is of that text, and a
   const tree = hashTree(s.root);
   const r = await get('/api/brief/daily', { 'x-cr-token': token });
   assert.equal(r.status, 200);
-  assert.equal(r.json.format, 'cr-daily-brief@1');
+  assert.equal(r.json.format, 'cr-daily-brief@2');
   assert.equal((await get('/api/brief/daily?since=nope', { 'x-cr-token': token })).status, 400);
   assert.deepEqual(hashTree(s.root), tree, 'no file changed');
 });
@@ -258,7 +258,7 @@ test('daily brief: the CLI prints the text and its hash, or the JSON', async (t)
   const cliOut = require('child_process').spawnSync(process.execPath, [path.join(__dirname, '..', 'cli.js'), 'brief', 'daily', '--json', '--workspace', s.root], { encoding: 'utf8' });
   assert.equal(cliOut.status, 0, cliOut.stderr);
   const json = JSON.parse(cliOut.stdout);
-  assert.equal(json.format, 'cr-daily-brief@1');
+  assert.equal(json.format, 'cr-daily-brief@2');
   const text = require('child_process').spawnSync(process.execPath, [path.join(__dirname, '..', 'cli.js'), 'brief', 'daily', '--workspace', s.root], { encoding: 'utf8' });
   assert.match(text.stdout, /SHA-256 of this text: [0-9a-f]{64}/);
   assert.match(text.stdout, /PM cards waiting for you/);
@@ -306,7 +306,7 @@ test('daily brief (item 53): a ticket whose fresh price is within 10% above its 
   assert.ok(at > 0);
 });
 
-test('daily brief (item 67): PM cards order trims, near-invalidation, then oldest; desk gates are one line; the count is the cards waiting', (t) => {
+test('daily brief (item 67, stage 3): PM cards order trims, near-invalidation, then oldest; desk gates closed at $0 are one "Closed by the desk" line outside the count', (t) => {
   const s = setup(t);
   const indexer = require('../core/indexer');
   const real = indexer.buildIndex;
@@ -325,10 +325,10 @@ test('daily brief (item 67): PM cards order trims, near-invalidation, then oldes
   const sec = byId(B.brief(s.ws, { now: Date.parse('2026-10-05T00:00:00Z') }), 'pm_cards');
   assert.equal(sec.state, 'ok');
   assert.deepEqual(sec.lines.slice(0, 4).map((l) => l.text.split(':')[0]), ['trim', 'near', 'ord-early', 'ord-late']);
-  assert.equal(sec.lines[4].text, '3 desk gates waiting: gate-a, gate-b, gate-c.');
+  assert.equal(sec.lines[4].text, 'Closed by the desk (3): gate-a, gate-b, gate-c.');
   assert.equal(sec.lines[4].link, '#/research?tab=runs');
   assert.equal(sec.lines.length, 5);
-  assert.equal(sec.count, 7);
+  assert.equal(sec.count, 4, 'the cards waiting; a desk gate closed at $0 is not a decision');
   assert.ok(!('n' in sec.lines[4]));
   // an unreadable ticket still makes the section partial
   rows.push({ project_id: 'bad', name: 'bad', ticket: { unavailable: true, error: 'x' } });

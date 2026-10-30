@@ -391,8 +391,8 @@ test('a model on hold: its header and its dashes follow the model status, for an
 
 test('R: only a plain R outside fields, with nothing open, on a project with something to review; it goes to the next one to review in the list\'s order', async () => {
   const { wl } = await mods;
-  const todo = { project_id: 'a', changes: { item_count: 3 } };
-  const done = { project_id: 'b', changes: { item_count: 0 } };
+  const todo = { project_id: 'a', changes: { item_count: 3, review_count: 3 } };
+  const done = { project_id: 'b', changes: { item_count: 0, review_count: 0 } };
   const key = (k, mods = {}) => ({ key: k, ctrlKey: false, metaKey: false, altKey: false, isComposing: false, ...mods });
   assert.equal(wl.reviewKeyAllowed(key('r'), { project: todo }), true);
   assert.equal(wl.reviewKeyAllowed(key('R'), { project: todo }), true);
@@ -403,8 +403,8 @@ test('R: only a plain R outside fields, with nothing open, on a project with som
   assert.equal(wl.reviewKeyAllowed(key('r'), { project: done }), false, 'nothing to review');
   assert.equal(wl.reviewKeyAllowed(key('r'), { project: null }), false, 'no project chosen');
   assert.equal(wl.reviewKeyAllowed(key('j'), { project: todo }), false);
-  assert.equal(wl.needsReview({ changes: { item_count: 2 }, status: 'archived' }), false, 'archived: nothing to review');
-  const projects = [{ project_id: 'a', changes: { item_count: 1 } }, { project_id: 'b', changes: { item_count: 0 } }, { project_id: 'c', changes: { item_count: 4 } }, { project_id: 'd', changes: { item_count: 2 } }];
+  assert.equal(wl.needsReview({ changes: { item_count: 2, review_count: 2 }, status: 'archived' }), false, 'archived: nothing to review');
+  const projects = [{ project_id: 'a', changes: { item_count: 1, review_count: 1 } }, { project_id: 'b', changes: { item_count: 0, review_count: 0 } }, { project_id: 'c', changes: { item_count: 4, review_count: 4 } }, { project_id: 'd', changes: { item_count: 2, review_count: 2 } }];
   assert.equal(wl.nextToReview(['a', 'b', 'c', 'd'], projects, 'a'), 'c', 'skips projects with nothing to review');
   assert.equal(wl.nextToReview(['a', 'b', 'c', 'd'], projects, 'd'), 'a', 'wraps to the top of the list');
   assert.equal(wl.nextToReview(['d', 'c', 'b', 'a'], projects, 'c'), 'a', 'in the order shown');

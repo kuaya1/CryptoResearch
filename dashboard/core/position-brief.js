@@ -65,14 +65,15 @@ function checkpoints({ decided_at: decidedAt, horizon_end: endIso, horizon_missi
   return { status: 'in_horizon', day, next_mark: next, horizon_end: endDay, days_left: left, words: `Day ${day}; ${next ? `next mark day ${next}` : 'past the day 120 mark'}; the horizon ends ${endDay} (${left} ${left === 1 ? 'day' : 'days'} left).` };
 }
 
-// Age of Claude's current report against freshness.report_stale_days.
+// Age of Claude's current report against the one research staleness
+// threshold (freshness.research_stale_days; report_stale_days is retired).
 function researchDue(ws, pid, { now = Date.now() } = {}) {
   let r;
   try { r = require('./compare').latestByProvider(require('./reports').loadReports(ws, pid)).claude; } catch (err) { return { status: 'unreadable', words: `The report could not be read: ${err.message}` }; }
   const at = r && Date.parse(r.assessment.analysis_at);
   if (!r || !Number.isFinite(at)) return { status: 'no_report', words: 'No current Claude report with a date.' };
   const days = Math.max(0, Math.floor((now - at) / DAY_MS));
-  const limit = ((ws.settings || {}).freshness || {}).report_stale_days;
+  const limit = require('./workspace').researchStaleDays(ws.settings);
   if (!isNum(limit)) return { status: 'unknown_limit', age_days: days, words: `Claude's report is ${days} days old; no stale limit is set.` };
   const due = days > limit;
   return { status: due ? 'due' : 'current', age_days: days, limit_days: limit, report_id: r.meta.report_id || null, words: due ? `research due, ${days} days old` : `Claude's report is ${days} days old (due after ${limit})` };

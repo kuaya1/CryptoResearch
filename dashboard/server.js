@@ -161,7 +161,6 @@ function validateSettingsPatch(patch, ws = null) {
     out.freshness = {};
     if (patch.freshness.price_stale_minutes !== undefined) out.freshness.price_stale_minutes = num(patch.freshness.price_stale_minutes, 5, 10080, 'Price stale minutes');
     if (patch.freshness.claim_stale_days !== undefined) out.freshness.claim_stale_days = num(patch.freshness.claim_stale_days, 1, 3650, 'Claim stale days');
-    if (patch.freshness.report_stale_days !== undefined) out.freshness.report_stale_days = num(patch.freshness.report_stale_days, 1, 3650, 'Report stale days');
     if (patch.freshness.research_stale_days !== undefined) out.freshness.research_stale_days = num(patch.freshness.research_stale_days, 1, 3650, 'Research stale days');
   }
   if (patch.market_data) {
@@ -1263,6 +1262,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   route('POST', '/api/scout/leads/complete', (m, req, res, body) => after({ admission: require('./core/leads').completeAdmission(ws, (body || {}).admission_id) }));
   route('POST', '/api/scout/leads/request-research', (m, req, res, body) => after(require('./core/leads').requestAgain(ws, body || {})));
   // The daily brief (core/brief-daily.js): read only, nothing stored.
+  route('GET', '/api/attention', () => coherent(() => require('./core/brief-daily').attention(ws)));
   route('GET', '/api/brief/daily', (m, req, res, body, url) => coherent(() => require('./core/brief-daily').brief(ws, { since: url.searchParams.get('since') || null })));
   route('GET', '/api/projects/([^/]+)/outcomes', (m) => coherent(() => require('./core/report-outcomes').projectOutcomes(ws, pid(m[1]))));
   // `expect` is the count the button showed: more waiting than that is a 409,

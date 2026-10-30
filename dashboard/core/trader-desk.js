@@ -444,12 +444,12 @@ function assess(ws, ctx, g, snap) {
       snap.funded && bk.nav_usd === null && 'The book\'s NAV is unknown (an open position has no recent hour).',
       bk.nav_usd !== null && (bk.drawdown_24h_usd === null || bk.open_risk_usd === null || bk.thesis_risk_usd === null) && 'The book\'s 24-hour drawdown or the risk already at its stops is unknown.',
     ].filter(Boolean);
-    if (waits.length) return out('waiting', waits.join(' '), null, { pair: pr.pair });
+    if (waits.length) return out('waiting', waits.join(' '), null, { pair: pr.pair, exit_as_of: bk.exit ? bk.exit.as_of : null });
     // The order's life must hold a whole hour that starts after it is sent,
     // or no hour can fill it (M7): it waits for one rather than expiring.
     const life = ctx.s.rules.max_validity_minutes;
     const firstHour = Math.ceil(ctx.t / HOUR) * HOUR;
-    if (firstHour + HOUR > ctx.t + life * MIN) return out('waiting', `Your longest life of an intent (${life} minutes) would end before the first whole hour after now (${iso(firstHour)} to ${iso(firstHour + HOUR)}) closes, and an order fills only from a whole hour that starts after it is sent, so it would expire unfilled.${life < 60 ? ' A life under 60 minutes never holds a whole hour; lengthen it in Preferences > Screening.' : ` It is asked when the next hour is no more than ${life - 60} minutes away.`}`, null, { pair: pr.pair });
+    if (firstHour + HOUR > ctx.t + life * MIN) return out('waiting', `Your longest life of an intent (${life} minutes) would end before the first whole hour after now (${iso(firstHour)} to ${iso(firstHour + HOUR)}) closes, and an order fills only from a whole hour that starts after it is sent, so it would expire unfilled.${life < 60 ? ' A life under 60 minutes never holds a whole hour; lengthen it in Preferences > Screening.' : ` It is asked when the next hour is no more than ${life - 60} minutes away.`}`, null, { pair: pr.pair, exit_as_of: bk.exit ? bk.exit.as_of : null });
     const plan = planOf(rc.receipt, d, bk.price);
     const intent = {
       version: INTENT_VERSION, intent_id: openId, thesis_id: d.receipt_id, ...ticket, pair: pr.pair, side: 'OPEN_LONG', order_type: 'LIMIT',
@@ -461,7 +461,7 @@ function assess(ws, ctx, g, snap) {
     // sized to the largest order every limit allows, never above Eric's
     // approved risk (M4). Anything the book would refuse waits, in words.
     const f = fit(intent, bk, ctx.s.rules, ctx.s.venue);
-    if (!f.ok) return out('waiting', `The book would refuse the order now, so it is not asked yet (its one attempt is kept): ${f.refusals.map((x) => x.words).join(' ')}`, null, { pair: pr.pair, refusals: f.refusals });
+    if (!f.ok) return out('waiting', `The book would refuse the order now, so it is not asked yet (its one attempt is kept): ${f.refusals.map((x) => x.words).join(' ')}`, null, { pair: pr.pair, refusals: f.refusals, exit_as_of: bk.exit ? bk.exit.as_of : null });
     const sz = f.sizing;
     const less = f.binding.length ? ` Sized down from your ${usd(plan.risk)} to fit ${f.binding.map((r) => BINDING_WORDS[r] || r).join(' and ')}.` : '';
     return out('ready', `Ready to ask the book: buy ${sz.quantity} ${pr.pair} at ${usd(plan.entry)} (${usd(sz.notional_usd)}), stop ${usd(plan.stop)}, target ${usd(plan.target)}, ${usd(sz.loss_at_stop_usd)} at the stop.${less}`, { kind: 'open', intent: f.intent }, { pair: pr.pair, sizing: { ...sz, risk_ceiling_usd: f.intent.risk_ceiling_usd, approved_risk_usd: plan.risk, binding: f.binding } });

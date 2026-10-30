@@ -28,7 +28,9 @@ const DEFAULT_SETTINGS = {
     discrepancy_tolerance: 1.0,
     labels: null,
   },
-  freshness: { price_stale_minutes: 90, claim_stale_days: 45, report_stale_days: 60, research_stale_days: 90 },
+  // One staleness threshold for research (subtraction stage 3): research_stale_days.
+  // report_stale_days (60) is retired; a stored value of it is not read.
+  freshness: { price_stale_minutes: 90, claim_stale_days: 45, research_stale_days: 90 },
   market_data: {
     enabled: true,
     provider: 'coingecko',
@@ -426,7 +428,14 @@ function initWorkspace(root, { kind = 'real', name = 'CryptoResearch', templates
   return { root: r, created };
 }
 
+// The one research staleness threshold, in days (settings.freshness.research_stale_days, default 90).
+function researchStaleDays(settings) {
+  const n = Number(settings && settings.freshness && settings.freshness.research_stale_days);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_SETTINGS.freshness.research_stale_days;
+}
+
 module.exports = {
+  researchStaleDays,
   PROVIDERS,
   PROVIDER_LABELS,
   CODE_ROOT,
