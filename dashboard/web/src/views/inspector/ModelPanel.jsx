@@ -3,8 +3,8 @@
 // do, in six blocks and about a screen and a half:
 //   1. the executive verdict: the canonical grade (D1: your pinned headline
 //      report, else Claude's current eligible report) with its rubric word,
-//      the verdict, the analysis age and horizon, the three-model consensus
-//      line (each model a link to its Brief) and an evidence flag;
+//      the verdict, the analysis age and horizon and an evidence flag (the
+//      three-model line, each model a link to its Brief, is under Details);
 //   2. bull and bear: the strongest sourced risk and the top "would confirm",
 //      with "would break it" under the risk;
 //   3. risk and exit: the forensic states, the exit at your size against your
@@ -142,7 +142,6 @@ function VerdictCard({ d, p, cr }) {
         sub={sub}
         chips={chips}
       />
-      <Consensus d={d} p={p} />
     </section>
   );
 }
@@ -319,8 +318,9 @@ function RiskStrip({ d, p }) {
   );
 }
 
-// The drawer's second level (subtraction stage 4.1): the models' spread, the
-// pool and contract pages and the whole bear text, one click away.
+// The drawer's second level (subtraction stage 4.1): each model's grade and
+// their spread (the grade above is said once, Quieter Desk P2), the pool and
+// contract pages and the whole bear text, one click away.
 function Details({ d, p, cr }) {
   const pid = p.project_id;
   const cs = consensusOf(p, d.index);
@@ -330,6 +330,7 @@ function Details({ d, p, cr }) {
     <details className="iv-details" data-key={`iv-details-${pid}`}>
       <summary>Details</summary>
       <div className="iv-details-b">
+        <Consensus d={d} p={p} />
         {cs.spread !== null ? <p className="iv-spread" title="Points between the highest and lowest firm grade. Agreement is not independent confirmation.">{`Spread between the models' firm grades: ${cs.spread.toFixed(1)} points`}</p> : null}
         {risk && risk.text.length > 280 ? <div><p className="iv-rc-k">Bear, in full</p><p className="ik-t">{risk.text}</p></div> : null}
         <p className="iv-rc-a">

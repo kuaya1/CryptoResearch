@@ -75,14 +75,12 @@ function QueueList({ d, q, sel, onPick }) {
         <section key={g.id} className="rv-group" aria-labelledby={`rv-g-${g.id}`}>
           <h2 className="rv-gh" id={`rv-g-${g.id}`}><span>{g.label}</span><span className="rv-gn">{g.count}</span></h2>
           {g.id === 'imports' ? (
-            g.count ? (
-              <ul className="rv-items">
-                {q.imports.map((x) => (
-                  <li key={x.key}><button type="button" className="rv-item" data-key={`rv-imp-${x.key}`} onClick={() => setQuery({ seg: 'imports', p: null })}><span className="rv-it">{x.words}</span>{x.detail ? <span className="rv-ir">{x.detail}</span> : null}</button></li>
-                ))}
-              </ul>
-            ) : <p className="rv-none">Nothing to confirm</p>
-          ) : g.items.length ? (
+            <ul className="rv-items">
+              {q.imports.map((x) => (
+                <li key={x.key}><button type="button" className="rv-item" data-key={`rv-imp-${x.key}`} onClick={() => setQuery({ seg: 'imports', p: null })}><span className="rv-it">{x.words}</span>{x.detail ? <span className="rv-ir">{x.detail}</span> : null}</button></li>
+              ))}
+            </ul>
+          ) : (
             <ul className="rv-items">
               {g.items.map((x) => {
                 const p = d.index.projects.find((y) => y.project_id === x.pid);
@@ -96,12 +94,12 @@ function QueueList({ d, q, sel, onPick }) {
                 );
               })}
             </ul>
-          ) : <p className="rv-none">Nothing here</p>}
+          )}
         </section>
       ))}
       {q.hidden_low || q.include_low ? (
-        <p className="rv-low">
-          {q.include_low ? 'Showing projects graded under 40' : `${q.hidden_low} graded under 40 hidden (not held)`}
+        <p className="rv-low" title="Projects graded under 40 that you do not hold">
+          {q.include_low ? 'Showing projects graded under 40' : `${q.hidden_low} graded under 40 hidden`}
           <button type="button" className="btn-link" data-key="rv-low" onClick={() => setQuery({ low: q.include_low ? null : '1' })}>{q.include_low ? 'Hide them' : 'Show'}</button>
         </p>
       ) : null}
@@ -234,6 +232,7 @@ function Centre({ d, p, item, onPrev, onNext, hasPrev, hasNext, phone }) {
   useEffect(() => { force((n) => n + 1); }, [detail, current]);
   const primary = item && item.agenda && item.agenda.primary && !item.agenda.primary.completed && !item.agenda.primary.snoozed ? item.agenda.primary : null;
   const can = markRef.current && markRef.current.can;
+  const facts = item ? [...new Set(item.reasons.map(shortReason))] : [];
   // ⌘↵ or Ctrl+↵: Mark reviewed when there is something to mark, else Done.
   useEffect(() => {
     const onKey = (e) => {
@@ -253,7 +252,8 @@ function Centre({ d, p, item, onPrev, onNext, hasPrev, hasNext, phone }) {
           <Logo p={p} size={32} />
           <div className="rv-head-n">
             <h2 className="rv-title" id="rv-title" tabIndex={-1}>{p.name}{p.symbol ? <span className="ticker">{` ${p.symbol}`}</span> : null}</h2>
-            <p className="faint">{item ? item.reasons.map((r) => r.words).join(' · ') : 'Nothing waits on this project'}</p>
+            {/* At most four short facts; the rest in the tooltip and under What changed (Quieter Desk P8). */}
+            <p className="faint" title={item ? item.reasons.map((r) => r.words).join('\n') : undefined}>{facts.length ? `${facts.slice(0, 4).join(' · ')}${facts.length > 4 ? ` · +${facts.length - 4} more` : ''}` : 'Nothing waits on this project'}</p>
           </div>
           <DeepLink pid={pid} href={`#/project/${enc(pid)}/brief`} className="btn btn-sm" dataKey={`rv-open-${pid}`}>Open full research<ExternalLink size={13} aria-hidden="true" /></DeepLink>
         </header>

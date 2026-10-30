@@ -79,6 +79,7 @@ html.has-drawer { overflow: hidden; }
 .iv-details { margin-top: 16px; font-size: var(--fs-sm); }
 .iv-details > summary { cursor: pointer; color: var(--text-2); font-weight: 500; }
 .iv-details-b { display: flex; flex-direction: column; gap: 10px; padding-top: 10px; }
+.iv-details-b .iv-cons { margin: 0; }
 .iv { display: flex; flex-direction: column; gap: 20px; }
 .iv-h { font-size: var(--fs-ui); font-weight: 600; color: var(--text); margin: 0 0 10px; }
 .iv-link { display: inline-flex; align-items: center; gap: 3px; font-size: var(--fs-sm); font-weight: 500; }
