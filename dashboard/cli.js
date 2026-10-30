@@ -1057,7 +1057,23 @@ async function run(argv) {
         const r = await CF.observeProject(ws, pid, { trigger: 'cli' });
         return r.results.some((x) => x.status === 'saved') ? { ...r, ...(await afterWrite(ws, pid)) } : r;
       }
-      throw Object.assign(new Error('contracts status | show <project> | observe <project> [--dry-run] | probe <chain_id>'), { code: 'USAGE' });
+      if (sub === 'gate') {
+        // The contract gate's mode (observe by default). Enforce is refused
+        // until both contract compute caps and a probed network are set
+        // (server.js validateSettingsPatch, the same check as Settings).
+        const modeNow = () => (ws.settings.tickets && ws.settings.tickets.contract_gate && ws.settings.tickets.contract_gate.mode) || 'observe';
+        if (!rest[0]) return { mode: modeNow() };
+        const patch = require('./server').validateSettingsPatch({ tickets: { contract_gate: { mode: rest[0] } } }, ws);
+        const { runOp } = require('./core/ops');
+        const out = runOp(ws, { type: 'update_settings', summary: `Contract gate mode ${patch.tickets.contract_gate.mode}` }, (op) => {
+          const cur = op.readJson('config/settings.json', { schema_version: 1 });
+          cur.tickets = { ...(cur.tickets || {}), contract_gate: patch.tickets.contract_gate };
+          op.writeJson('config/settings.json', cur);
+        });
+        ws.reloadSettings();
+        return { status: 'saved', verified: out.verified, mode: modeNow() };
+      }
+      throw Object.assign(new Error('contracts status | show <project> | observe <project> [--dry-run] | probe <chain_id> | gate [observe|enforce]'), { code: 'USAGE' });
     }
     case 'scout': {
       // Grok Scout's list as the desk keeps it (core/scout.js); read only.

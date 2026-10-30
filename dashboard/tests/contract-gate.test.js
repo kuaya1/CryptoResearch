@@ -243,9 +243,9 @@ function tokenFns(extraSigs = {}) {
 function world({ S, tokenCode, factoryPair = PAIR, extra = {}, block = BLOCK, buyers = [BUYER] }) {
   const accounts = {
     [TOKEN]: { code: tokenCode, fns: tokenFns() },
-    [USDC]: { code: codeWith('transfer(address,uint256)'), fns: { [sel('decimals()')]: () => ok(6), [sel('balanceOf(address)')]: (s, f, d) => ok(argA(d, 0) === PAIR ? USDC_RES : 0n) } },
+    [USDC]: { code: codeWith('transfer(address,uint256)'), fns: { [sel('decimals()')]: () => ok(6), [sel('balanceOf(address)')]: (s, f, d) => ok(argA(d, 0) === PAIR ? s.reserve_quote || USDC_RES : 0n) } },
     [FACTORY]: { code: '0x60806040526001', fns: { [sel('getPair(address,address)')]: () => okA(factoryPair) } },
-    [factoryPair]: { code: '0x60806040526002', fns: { [sel('token0()')]: () => okA(T0), [sel('token1()')]: () => okA(T1), [sel('getReserves()')]: (s) => (T0 === TOKEN ? ok(s.reserve_token, USDC_RES, 0) : ok(USDC_RES, s.reserve_token, 0)) } },
+    [factoryPair]: { code: '0x60806040526002', fns: { [sel('token0()')]: () => okA(T0), [sel('token1()')]: () => okA(T1), [sel('getReserves()')]: (s) => (T0 === TOKEN ? ok(s.reserve_token, s.reserve_quote || USDC_RES, 0) : ok(s.reserve_quote || USDC_RES, s.reserve_token, 0)) } },
     ...extra,
   };
   const calls = [];
@@ -589,4 +589,197 @@ test('the Paper Book reads a v2 packet\'s exits exactly as a v1 packet\'s', (t) 
   const { packet_sha256: b, ...e2 } = v2.exit;
   assert.deepEqual(e2, e1);
   assert.notEqual(a, b);
+});
+
+// ---------------------------------------------------------------------------
+// Enforce mode (PR C): sizing@5, invalidation@3, the grant's refusals and the
+// trader's opening guard. Fictional chain, verified source for the token and
+// the timelock, a shallow pool priced at the stored $0.85.
+
+const TD = require('../core/trader-desk');
+const TF = require('./trader-fixture');
+const TL = ADDR('71e10c');
+const TL2 = ADDR('71e20c');
+const TL_CODE = codeWith('getMinDelay()');
+const TOKEN_CODE = codeWith('transfer(address,uint256)', 'mint(address,uint256)');
+const TOKEN_ABI = ['transfer', 'mint'].map((name) => ({ type: 'function', name, inputs: [{ type: 'address' }, { type: 'uint256' }], stateMutability: 'nonpayable' }));
+const sources = async (c, a) => (a === TOKEN ? { status: 'verified_full', abi: TOKEN_ABI, contract_name: 'ExampleToken', runtime_code_hash: K.keccak256Hex(TOKEN_CODE) }
+  : a === TL || a === TL2 ? { status: 'verified_full', abi: [], contract_name: 'TimelockController', runtime_code_hash: K.keccak256Hex(TL_CODE) } : { status: 'unverified' });
+const timelocks = { [TL]: { code: TL_CODE, fns: { [sel('getMinDelay()')]: () => ok(72 * 3600) } }, [TL2]: { code: TL_CODE, fns: { [sel('getMinDelay()')]: () => ok(96 * 3600) } } };
+// $0.85 a token: 30,000 USDC against 35,294 tokens. A $500 sale costs about
+// 2%; a $2,000 sale about 6.5%, over the 5% limit.
+const SHALLOW = 35294n * E18;
+const shallowState = (controller) => baseState({ owner: controller, minter: controller, reserve_token: SHALLOW, reserve_quote: 30000n * 10n ** 6n, bal: { [PAIR]: SHALLOW, [BUYER]: 50000n * E18 } });
+const liveBlock = (n) => ({ number: n, hash: `0x${n.toString(16).padStart(64, '0')}`, timestamp: Math.floor(Date.now() / 1000) - 600 });
+
+function enforceDesk(t, mode = 'enforce') {
+  const s = ticketDesk(t);
+  s.ws.settings.tickets = { contract_gate: { mode } };
+  s.ws.settings.contracts.network_fee_ceiling_usd = { 8453: 0.5 };
+  // Eric records no position in it: a known "not held".
+  const portfolio = require('../core/portfolio');
+  const real = portfolio.computePortfolio;
+  portfolio.computePortfolio = (...a) => ({ ...real(...a), positions: [] });
+  t.after(() => { portfolio.computePortfolio = real; });
+  return s;
+}
+
+async function observeAs(s, controller, n) {
+  const w = world({ S: shallowState(controller), tokenCode: TOKEN_CODE, extra: timelocks, block: liveBlock(n) });
+  await CF.probeNetwork(s.ws, '8453', { fetchImpl: w.fetch, key: KEY, now: Date.now });
+  const r = await CF.observeProject(s.ws, s.pid, { fetchImpl: w.fetch, key: KEY, sourceImpl: sources, now: Date.now });
+  assert.equal(r.results[0].status, 'saved', JSON.stringify(r.results[0]));
+  return CF.readObservation(s.ws, s.pid, r.results[0].observation_id).observation;
+}
+
+function saveFor(s, tk) {
+  H.freshPrice(s.ws, 'example-payfi-fictional', 0.85);
+  const saved = T.saveTicket(s.ws, { project_id: s.pid, ticket_id: tk.ticket_id, text: TF.answer(T.loadTicket(s.ws, s.pid, tk.ticket_id)) });
+  assert.equal(saved.status, 'saved', saved.message);
+  return saved.receipt;
+}
+
+test('enforce: an EOA that can mint hard-passes at $0 with no Prosecutor; a 72h timelock changes the identity and opens a ticket on the same report', async (t) => {
+  const s = enforceDesk(t);
+  assert.equal(T.sizingOf(s.ws).version, 'cr-ticket-sizing@5');
+  const eoa = await observeAs(s, OWNER, 9001);
+  assert.equal(eoa.authorities.find((a) => a.capability === 'C2').class, 'K5');
+  const closed = T.createTicket(s.ws, { project_id: s.pid, assistant: true });
+  assert.equal(closed.status, 'gate_closed', closed.message);
+  const rc = closed.receipt;
+  assert.deepEqual([rc.kind, rc.desk.gate.reason_kind, rc.desk.proposal_type, rc.desk.suggested_risk_usd], ['desk_gate', 'contract_block', 'HARD_PASS', 0]);
+  assert.deepEqual([rc.desk.contract_gate.mode, rc.desk.contract_gate.tier], ['enforce', 'block']);
+  assert.match(rc.desk.gate.reasons[0], /contract gate blocks/);
+  assert.deepEqual(T.listTickets(s.ws, s.pid), [], 'no Prosecutor ticket was opened');
+  const packet = JSON.parse(fs.readFileSync(s.ws.abs(rc.packet.path), 'utf8'));
+  assert.match(packet.contract.subjects[0].observation.path, new RegExp(`receipts/${rc.receipt_id}\\.contract/`));
+  assert.equal(T.integrityOf(s.ws, rc), null, 'the frozen attestation holds');
+  // The same report and the same contract: the gate stands.
+  assert.equal(T.createTicket(s.ws, { project_id: s.pid, assistant: true }).status, 'unchanged');
+  assert.notEqual(T.nextStep(s.ws, s.pid).step, 'ticket');
+  // The admin moves to a 72-hour timelock: a review finding, a new identity.
+  const tl = await observeAs(s, TL, 9002);
+  assert.equal(tl.authorities.find((a) => a.capability === 'C2').class, 'K2');
+  assert.notEqual(tl.identity_key, eoa.identity_key);
+  assert.equal(T.nextStep(s.ws, s.pid).step, 'ticket');
+  const made = H.withExitReadings(1.5, () => T.createTicket(s.ws, { project_id: s.pid, assistant: true }));
+  assert.equal(made.status, 'created', made.message);
+  assert.deepEqual([made.ticket.sizing.version, made.ticket.versions.invalidation, made.ticket.basis.contract.verdict.tier], ['cr-ticket-sizing@5', 'cr-ticket-invalidation@3', 'review']);
+  const r = saveFor(s, made.ticket);
+  assert.deepEqual([r.desk.suggested_risk_usd, r.desk.invalidation_version, r.desk.contract_admission.status], [500, 'cr-ticket-invalidation@3', 'same']);
+  assert.equal(T.integrityOf(s.ws, r).status, 'ok');
+});
+
+test('enforce: a hold writes no receipt and the queue says contract_evidence; in observe mode the same desk opens its ticket', async (t) => {
+  const s = enforceDesk(t);
+  await observeAs(s, TL, 9101);
+  s.ws.settings.contracts.ttl_hours = 0.05; // the observation (10 minutes old) is past it: CG-20
+  const step = T.nextStep(s.ws, s.pid);
+  assert.equal(step.step, 'contract_evidence', step.why);
+  const r = T.createTicket(s.ws, { project_id: s.pid, assistant: true });
+  assert.equal(r.status, 'needs_contract_evidence', r.message);
+  assert.ok(r.findings.some((f) => f.rule_id === 'CG-20'));
+  assert.deepEqual(T.listReceipts(s.ws, s.pid), [], 'no receipt written');
+  assert.deepEqual(T.listTickets(s.ws, s.pid), []);
+  // Observe mode: nothing is held; the same desk opens its ticket.
+  s.ws.settings.tickets.contract_gate.mode = 'observe';
+  assert.equal(T.nextStep(s.ws, s.pid).step, 'ticket');
+  assert.equal(H.withExitReadings(1.5, () => T.createTicket(s.ws, { project_id: s.pid, assistant: true })).status, 'created');
+});
+
+test('enforce: a contract change after the save invalidates the ticket; an approval is refused and the trader opens nothing', async (t) => {
+  const s = enforceDesk(t);
+  TF.settle(s.ws);
+  await observeAs(s, TL, 9201);
+  const tk = H.withExitReadings(1.5, () => T.createTicket(s.ws, { project_id: s.pid, assistant: true })).ticket;
+  const r = saveFor(s, tk);
+  assert.equal(T.invalidationOf(s.ws, projects.getProject(s.ws, s.pid), r).invalidated, false);
+  const d = T.decide(s.ws, s.pid, { receipt_id: r.receipt_id, action: 'approve', request_id: 'req_pc_approve0001' }).result.decision;
+  // The admin moves to a 96-hour timelock: still a review finding, but not the contract the ticket was saved on.
+  await observeAs(s, TL2, 9202);
+  const inv = T.invalidationOf(s.ws, projects.getProject(s.ws, s.pid), r);
+  assert.deepEqual([inv.version, inv.invalidated, inv.by], ['cr-ticket-invalidation@3', true, 'contract']);
+  assert.match(inv.words, /identity fingerprint changed/);
+  assert.equal(T.view(s.ws, s.pid).ticket.status, 'invalidated');
+  const a = TD.requests(s.ws, {}).requests.find((x) => x.decision_id === d.decision_id);
+  assert.equal(a.phase, 'not_opened', a.words);
+  assert.match(a.words, /invalidated/);
+  // Undo, then approve again: refused while invalidated.
+  T.decide(s.ws, s.pid, { receipt_id: r.receipt_id, action: 'undo', request_id: 'req_pc_undo000001' });
+  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: r.receipt_id, action: 'approve', request_id: 'req_pc_approve0002' }), (e) => e.code === 'INVALIDATED' && /identity fingerprint/.test(e.message));
+});
+
+test('enforce: a measured sell tax that rises a point after the save invalidates (tax spike)', async (t) => {
+  const s = enforceDesk(t);
+  await observeAs(s, TL, 9301);
+  const r = saveFor(s, H.withExitReadings(1.5, () => T.createTicket(s.ws, { project_id: s.pid, assistant: true })).ticket);
+  const w = world({ S: { ...shallowState(TL), tax_bps: 150 }, tokenCode: TOKEN_CODE, extra: timelocks, block: liveBlock(9302) });
+  const o = await CF.observeProject(s.ws, s.pid, { fetchImpl: w.fetch, key: KEY, sourceImpl: sources, now: Date.now });
+  assert.equal(o.results[0].status, 'saved');
+  const inv = T.invalidationOf(s.ws, projects.getProject(s.ws, s.pid), r);
+  // 1.5% taken from the sale, floored to whole basis points (cr-transfer-probe@1).
+  assert.deepEqual([inv.invalidated, inv.by, inv.fired.tax_bps_frozen, inv.fired.tax_bps_now], [true, 'contract', 0, 149]);
+});
+
+test('enforce: a grant is refused when its ticket was not attested, the contract changed, or the evidence expired', async (t) => {
+  // Saved in observe mode with nothing observed: the gate read hold (CG-26).
+  const s = enforceDesk(t, 'observe');
+  const unobserved = saveFor(s, H.withExitReadings(1.5, () => T.createTicket(s.ws, { project_id: s.pid, assistant: true })).ticket);
+  assert.equal(unobserved.desk.contract_gate.tier, 'hold');
+  assert.equal(unobserved.desk.suggested_risk_usd, 500, 'observe: sized as before');
+  s.ws.settings.tickets.contract_gate.mode = 'enforce';
+  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: unobserved.receipt_id, action: 'approve' }), (e) => e.code === 'CONTRACT_UNATTESTED' && /read hold/.test(e.message));
+  // Observed (a review), saved in observe mode, then the contract changes.
+  s.ws.settings.tickets.contract_gate.mode = 'observe';
+  await observeAs(s, TL, 9401);
+  const r = saveFor(s, H.withExitReadings(1.5, () => T.createTicket(s.ws, { project_id: s.pid, assistant: true, refresh: true })).ticket);
+  assert.equal(r.desk.contract_gate.tier, 'review');
+  s.ws.settings.tickets.contract_gate.mode = 'enforce';
+  s.ws.settings.contracts.ttl_hours = 0.05;
+  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: r.receipt_id, action: 'approve' }), (e) => e.code === 'CONTRACT_EVIDENCE_EXPIRED');
+  s.ws.settings.contracts.ttl_hours = 24;
+  await observeAs(s, TL2, 9402);
+  assert.throws(() => T.decide(s.ws, s.pid, { receipt_id: r.receipt_id, action: 'approve' }), (e) => e.code === 'CONTRACT_CHANGED');
+  // A veto is never gated.
+  assert.equal(T.decide(s.ws, s.pid, { receipt_id: r.receipt_id, action: 'veto' }).result.status, 'saved');
+  // The HTTP answer is a 409 that names what changed.
+  const { sendError } = require('../frontdoor');
+  let sent = null;
+  sendError({ method: 'POST' }, { writeHead: (st) => { sent = { status: st }; }, setHeader() {}, end: (b) => { sent.body = JSON.parse(b); } }, Object.assign(new Error('x'), { code: 'CONTRACT_CHANGED', details: { changed: [{ kind: 'contract' }] } }));
+  assert.deepEqual([sent.status, sent.body.saved, sent.body.changed[0].kind], [409, false, 'contract']);
+});
+
+test('enforce: the trader waits while the fitted notional\'s exit is over the limit (CG-14); observe asks the book', async (t) => {
+  const s = enforceDesk(t);
+  TF.settle(s.ws);
+  await observeAs(s, TL, 9501);
+  const r = saveFor(s, H.withExitReadings(1.5, () => T.createTicket(s.ws, { project_id: s.pid, assistant: true })).ticket);
+  const now0 = Date.now();
+  const top = Math.floor(now0 / TF.H) * TF.H;
+  TD.applyHours(s.ws, Array.from({ length: 16 }, (_, i) => TF.bar(top - (16 - i) * TF.H)), { now: TF.iso(now0) });
+  const d = T.decide(s.ws, s.pid, { receipt_id: r.receipt_id, action: 'approve', request_id: 'req_pc_cg14_000001' }).result.decision;
+  const a = TD.requests(s.ws, {}).requests.find((x) => x.decision_id === d.decision_id);
+  assert.equal(a.phase, 'waiting', a.words);
+  assert.match(a.words, /fitted notional \$\d+(\.\d+)? is \d+\.\d{3}%, over the 5% limit/);
+  assert.equal(a.contract.rule_id, 'CG-14');
+  // The reference tranche alone passes: $500 on chain is within 5%.
+  const proj = projects.getProject(s.ws, s.pid);
+  assert.equal(T.contractOpenGuard(s.ws, proj, r, { notionalUsd: '500', priceUsd: '0.85' }), null);
+  // Observe: the same grant is asked of the book as before.
+  s.ws.settings.tickets.contract_gate.mode = 'observe';
+  assert.equal(TD.requests(s.ws, {}).requests.find((x) => x.decision_id === d.decision_id).phase, 'ready');
+});
+
+test('the contract gate\'s mode: observe by default; enforce is refused until both caps and a probed network are set', async (t) => {
+  const { validateSettingsPatch } = require('../server');
+  const w = H.tempWorkspace('contract-mode');
+  t.after(w.cleanup);
+  assert.equal(T.sizingOf(w.ws).version, 'cr-ticket-sizing@4');
+  assert.deepEqual(validateSettingsPatch({ tickets: { contract_gate: { mode: 'observe' } } }, w.ws).tickets, { contract_gate: { mode: 'observe' } });
+  assert.throws(() => validateSettingsPatch({ tickets: { contract_gate: { mode: 'on' } } }, w.ws), (e) => e.code === 'INVALID');
+  assert.throws(() => validateSettingsPatch({ tickets: { contract_gate: { mode: 'enforce' } } }, w.ws), (e) => e.code === 'REFUSED' && /daily_cu_cap, monthly_cu_cap/.test(e.message));
+  assert.throws(() => validateSettingsPatch({ contracts: { daily_cu_cap: 50000, monthly_cu_cap: 1000000 }, tickets: { contract_gate: { mode: 'enforce' } } }, w.ws), (e) => e.code === 'REFUSED' && /no network is probed/.test(e.message));
+  const s = enforceDesk(t, 'observe');
+  await CF.probeNetwork(s.ws, '8453', { fetchImpl: world({ S: baseState(), tokenCode: TOKEN_CODE }).fetch, key: KEY, now: Date.now });
+  assert.deepEqual(validateSettingsPatch({ tickets: { contract_gate: { mode: 'enforce' } } }, s.ws).tickets, { contract_gate: { mode: 'enforce' } });
 });

@@ -188,6 +188,24 @@ function exitLadder(observation, { sizes, priceUsd, networkFeeUsd, limitPct }) {
   return { version: EXIT_VERSION, tax_bps: taxBps, pools: per, best, excluded: pools.filter((p) => p.counted !== true).map((p) => ({ pool: p.pool, reason: p.excluded })) };
 }
 
+// The exit at the trader's fitted notional (CG-14, F08): a grant is the loss
+// at the stop, so the position is the risk over the stop distance, and its
+// exit is checked at that size, not at the reference tranche. Only a cost
+// known in full and within the limit passes; no pool that prices the size
+// (a concentrated pool is quoted at the ladder's sizes only) is not a pass.
+function fittedExit(observation, { notionalUsd, priceUsd, networkFeeUsd, limitPct }) {
+  const n = ratio(notionalUsd);
+  const lim = ratio(limitPct);
+  const size = n ? fixed(n, 2, 'ceil', false) : null;
+  const base = { rule_id: 'CG-14', notional_usd: size, limit_pct: limitPct };
+  if (!n || n.n <= 0n || !lim) return { ...base, ok: false, cost_pct: null, words: 'The fitted notional or the exit-cost limit is unknown.' };
+  const b = exitLadder(observation, { sizes: [notionalUsd], priceUsd, networkFeeUsd, limitPct }).best[0].best;
+  if (!b) return { ...base, ok: false, cost_pct: null, words: `No verified pool prices a sale of $${size} on chain, so the exit at the fitted notional is not proven within ${limitPct}%.` };
+  if (!b.cost_complete) return { ...base, ok: false, cost_pct: b.cost_pct, cost_pct_3: b.cost_pct_3, pool: b.pool, words: `The exit cost at the fitted notional $${size} is at least ${b.cost_pct_3}% (${b.missing_costs.join(', ').replace(/_/g, ' ')} unknown): not proven within ${limitPct}%.` };
+  if (rCmp(ratio(b.cost_pct), lim) > 0) return { ...base, ok: false, cost_pct: b.cost_pct, cost_pct_3: b.cost_pct_3, pool: b.pool, words: `The exit cost at the fitted notional $${size} is ${b.cost_pct_3}%, over the ${limitPct}% limit.` };
+  return { ...base, ok: true, cost_pct: b.cost_pct, cost_pct_3: b.cost_pct_3, pool: b.pool, words: `The exit cost at the fitted notional $${size} is ${b.cost_pct_3}%, within ${limitPct}%.` };
+}
+
 // ---------------------------------------------------------------------------
 // Value capture (cr-value-capture@1)
 
@@ -339,5 +357,5 @@ const tierOf = (v) => (v && TIER_RANK[v.tier] !== undefined ? v.tier : 'none');
 
 module.exports = {
   GATE_VERSION, ATTESTATION_VERSION, VALUE_CAPTURE_VERSION, EXIT_VERSION, EXIT_LEGACY_VERSION, JSON_VERSION, PACKET_V2, MODES, PARAMS_DEFAULT, TIER_RANK, CAP_RULE,
-  canonicalJson, hashOf, ratio, fixed, tokensFor, cpOut, exitAt, depthToLimit, legacyExit, exitLadder, valueCapture, verdict, tierOf,
+  canonicalJson, hashOf, ratio, fixed, tokensFor, cpOut, exitAt, depthToLimit, legacyExit, exitLadder, fittedExit, valueCapture, verdict, tierOf,
 };

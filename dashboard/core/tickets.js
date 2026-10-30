@@ -47,11 +47,20 @@ const FORMAT = 'cr.ticket.v1';
 const SIZING_VERSION = 'cr-ticket-sizing@4';
 const INVALIDATION_VERSION = 'cr-ticket-invalidation@2';
 const INVALIDATION_V1 = 'cr-ticket-invalidation@1';
+// Pillar 1 PR C: @5 and @3 are in force only while Eric has the contract gate
+// in mode enforce (settings tickets.contract_gate.mode). sizing@5 is @4 plus
+// the frozen contract verdict (a block or a hold suggests no new risk; a block
+// is a HARD_PASS); invalidation@3 is @2 plus the contract (the identity
+// fingerprint changed, or the measured sell tax rose by TAX_SPIKE_BPS or more,
+// after the save). In mode observe @4 and @2 stay in force, unchanged.
+const SIZING_V5 = 'cr-ticket-sizing@5';
+const INVALIDATION_V3 = 'cr-ticket-invalidation@3';
+const TAX_SPIKE_BPS = 100;
 // Rollback safety (2026-10-25): a receipt made under a newer rules version than
 // this code knows is shown as saved, never re-read and never thrown on.
 const RULE_KINDS = [
-  { name: 'sizing', current: SIZING_VERSION, of: (r) => r.versions && r.versions.sizing },
-  { name: 'invalidation', current: INVALIDATION_VERSION, of: (r) => (r.desk && r.desk.invalidation_version) || (r.versions && r.versions.invalidation) },
+  { name: 'sizing', current: SIZING_V5, of: (r) => r.versions && r.versions.sizing },
+  { name: 'invalidation', current: INVALIDATION_V3, of: (r) => (r.desk && r.desk.invalidation_version) || (r.versions && r.versions.invalidation) },
   { name: 'pregate', current: 'cr-ticket-pregate@2', of: (r) => r.pregate_version || (r.versions && r.versions.pregate) },
 ];
 const versionNumber = (v) => { const m = /@(\d+)$/.exec(String(v || '')); return m ? Number(m[1]) : null; };
@@ -139,7 +148,7 @@ function sizingOf(ws) {
   // bounds; a value left in tickets.sizing from before is not read.
   const screening = require('./forensics').prefsOf(ws);
   return {
-    version: SIZING_VERSION,
+    version: contractGateMode(ws) === 'enforce' ? SIZING_V5 : SIZING_VERSION,
     standard_risk_usd: standard,
     starter_risk_usd: Math.min(pos(s.starter_risk_usd, d.starter_risk_usd, 1e9), standard),
     exit_size_usd: screening.exit_position_usd,
@@ -384,6 +393,13 @@ function gate(basis, sizing, proposalType = null) {
     newRisk = false;
     reasons.push(`Grade ${grade} is under ${sizing.min_grade_new_entry}: a held position is not added to.`);
   }
+  // sizing@5: the contract verdict frozen in the packet. A trim is never
+  // blocked by it (held positions keep TRIM_EXIT).
+  const contractTier = sizing.version === SIZING_V5 && basis.contract && basis.contract.verdict ? basis.contract.verdict.tier : null;
+  if (contractTier === 'block' || contractTier === 'hold') {
+    newRisk = false;
+    reasons.unshift(`The contract gate ${contractTier === 'block' ? 'blocks' : 'holds'} new risk: ${basis.contract.words}`);
+  }
   let exitOk = false;
   const native = nativeL1Liquid(basis, sizing);
   if (native) exitOk = true;
@@ -397,9 +413,9 @@ function gate(basis, sizing, proposalType = null) {
   let capped = null;
   if (type && !allowed.includes(type)) {
     capped = { from: type, reason: RISK_TAKING.has(type) ? reasons.join(' ') : type === 'TRIM_EXIT' ? 'Nothing is held to trim.' : 'Not allowed.' };
-    type = 'WATCH_ONLY';
+    type = contractTier === 'block' ? 'HARD_PASS' : 'WATCH_ONLY';
   }
-  if (!type) type = riskAllowed ? null : grade !== null && grade < sizing.min_grade_any ? 'HARD_PASS' : 'WATCH_ONLY';
+  if (!type) type = riskAllowed ? null : contractTier === 'block' || (grade !== null && grade < sizing.min_grade_any) ? 'HARD_PASS' : 'WATCH_ONLY';
   return {
     version: sizing.version || SIZING_VERSION,
     grade_used: grade,
@@ -413,6 +429,7 @@ function gate(basis, sizing, proposalType = null) {
     capped,
     suggested_risk_usd: type && RISK_TAKING.has(type) && riskAllowed ? sizing.standard_risk_usd : 0,
     reasons: riskAllowed ? [] : reasons,
+    ...(contractTier ? { contract_tier: contractTier } : {}),
   };
 }
 
@@ -611,8 +628,13 @@ function createTicket(ws, args = {}) {
   const sizing = sizingOf(ws);
   const held = heldOf(ws, pid, now);
   const pregate = args.force_prosecution !== true && !args.restart && pregateReason(researcher, held, sizing) !== null;
-  const onReport = listReceipts(ws, pid).filter((r) => !r.broken && r.researcher && r.researcher.report_id === researcher.report_id && !(args.force_prosecution === true && r.kind === 'desk_gate')).pop() || null;
+  // A contract block's gate stands for the contract it read (its replay key
+  // is the report and the identity fingerprint): once the fingerprint
+  // changes, the same report may open a ticket.
+  const idNow = sizing.version === SIZING_V5 ? contractIdentityNow(ws, project, now) : null;
+  const onReport = listReceipts(ws, pid).filter((r) => !r.broken && r.researcher && r.researcher.report_id === researcher.report_id && !(args.force_prosecution === true && r.kind === 'desk_gate') && gateStands(r, idNow)).pop() || null;
   if (pregate && onReport && onReport.kind === 'desk_gate') return { status: 'unchanged', gate_closed: true, project_id: pid, receipt_id: onReport.receipt_id, receipt: onReport, verified: true, message: `The desk's gate on Claude's current report (${researcher.report_id}) is already saved (${onReport.receipt_id}). No Prosecutor runs; pass force_prosecution: true only when Eric asks for one.` };
+  if (!args.refresh && !args.restart && onReport && contractBlockGate(onReport)) return { status: 'unchanged', gate_closed: true, project_id: pid, receipt_id: onReport.receipt_id, receipt: onReport, verified: true, message: `The desk's contract gate on Claude's current report (${researcher.report_id}) is already saved (${onReport.receipt_id}) for the contract as it stands. No Prosecutor runs until the contract changes.` };
   if (!args.refresh && !args.restart && onReport) return { status: 'exists', project_id: pid, receipt_id: onReport.receipt_id, ticket_id: onReport.ticket_id, message: `A ticket on Claude's current report (${researcher.report_id}) is already saved (${onReport.receipt_id}). Nothing new was opened; pass refresh: true only when Eric asks for another.` };
   if (open && args.restart) cancelTicket(ws, pid, open.ticket_id, 'Eric asked to start the ticket over.');
   const tid = `tk_${compactTs(new Date(now))}_${randomId(5)}`;
@@ -642,8 +664,25 @@ function createTicket(ws, args = {}) {
   packet.exits_missing = exitsMissing(packet.exits, pid);
   // The contract attestation (v2): frozen beside the receipt for a desk gate,
   // beside the ticket otherwise. Observe mode: recorded, read by nothing.
-  const gateRid = pregate ? `tr_${compactTs(new Date(now))}_${randomId(5)}` : null;
-  const att = contractAttestation(ws, project, packet, sizing, now, pregate ? receiptRel(pid, gateRid, 'contract') : `${ticketDir(pid, tid)}/contract`);
+  const att = contractAttestation(ws, project, packet, sizing, now, `${ticketDir(pid, tid)}/contract`);
+  // Enforce mode (sizing@5), for a token Eric does not hold: a block closes
+  // the desk's gate with no Prosecutor; a hold opens nothing and writes no
+  // receipt until the contract is observed again. A held token's ticket opens
+  // (a trim is never blocked) and the gate sizes it.
+  const tier = att ? att.contract.verdict.tier : null;
+  const contractPregate = sizing.version === SIZING_V5 && !pregate && args.force_prosecution !== true && !args.restart && held === false && (tier === 'block' || tier === 'hold') ? tier : null;
+  if (contractPregate === 'hold') {
+    const holds = att.contract.verdict.findings.filter((f) => f.tier === 'hold');
+    return { status: 'needs_contract_evidence', project_id: pid, report_id: researcher.report_id, tier, findings: holds, message: `No ticket was opened for ${project.name} and no receipt written: the contract gate holds (${att.contract.words}). It opens once the desk observes the contract with nothing holding it (contracts observe).` };
+  }
+  const gated = pregate || contractPregate === 'block';
+  const gateRid = gated ? `tr_${compactTs(new Date(now))}_${randomId(5)}` : null;
+  if (att && gated) {
+    const base = receiptRel(pid, gateRid, 'contract');
+    const move = (p) => `${base}/${p.split('/').pop()}`;
+    for (const s of att.contract.subjects) s.observation.path = move(s.observation.path);
+    for (const f of att.frozen) f.path = move(f.path);
+  }
   if (att) {
     packet.schema_version = require('./contract-gate').PACKET_V2;
     packet.contract = att.contract;
@@ -652,7 +691,7 @@ function createTicket(ws, args = {}) {
   }
   const packetText = jsonText(packet);
   const packetSha = sha256(packetText);
-  if (pregate) return closeGate(ws, { pid, project, researcher, packet, packetText, packetSha, sizing, now, rid: gateRid, frozen: att ? att.frozen : [] });
+  if (gated) return closeGate(ws, { pid, project, researcher, packet, packetText, packetSha, sizing, now, rid: gateRid, frozen: att ? att.frozen : [], reasonKind: pregate ? null : 'contract_block' });
   const dir = ticketDir(pid, tid);
   const ticket = {
     schema_version: 'cr.ticket-job.v1',
@@ -662,7 +701,7 @@ function createTicket(ws, args = {}) {
     created_by: ws.actor || null,
     channel: args.channel || ws.actor || 'cli',
     utterance: typeof args.utterance === 'string' ? args.utterance.slice(0, 2000) : null,
-    versions: { prompt: PROMPT_VERSION, format: FORMAT, sizing: SIZING_VERSION, invalidation: INVALIDATION_VERSION },
+    versions: { prompt: PROMPT_VERSION, format: FORMAT, sizing: sizing.version, invalidation: sizing.version === SIZING_V5 ? INVALIDATION_V3 : INVALIDATION_VERSION },
     basis: { researcher, held: packet.held, exits: packet.exits, market: packet.market, native: packet.native, ...(packet.contract ? { contract: packet.contract, value_capture: packet.value_capture } : {}) },
     sizing,
     packet: { path: `${dir}/packet.json`, sha256: packetSha, captured_at: at },
@@ -678,7 +717,7 @@ function createTicket(ws, args = {}) {
     const openNow = openTicket(ws, pid);
     if (openNow) return { meanwhile: 'open', ticket_id: openNow.ticket_id, created_at: openNow.created_at };
     if (!args.refresh && !args.restart) {
-      const savedNow = listReceipts(ws, pid).filter((r) => !r.broken && r.researcher && r.researcher.report_id === researcher.report_id && !(args.force_prosecution === true && r.kind === 'desk_gate')).pop();
+      const savedNow = listReceipts(ws, pid).filter((r) => !r.broken && r.researcher && r.researcher.report_id === researcher.report_id && !(args.force_prosecution === true && r.kind === 'desk_gate') && gateStands(r, idNow)).pop();
       if (savedNow) return { meanwhile: 'saved', receipt_id: savedNow.receipt_id, ticket_id: savedNow.ticket_id };
     }
     op.write(`${dir}/packet.json`, packetText, { mode: 'create' });
@@ -696,8 +735,8 @@ function createTicket(ws, args = {}) {
 // The pre-gate's receipt: the same frozen packet as a ticket would carry (kept
 // beside the receipt, create-only) and the gate's own result with no
 // proposal. No prompt is rendered and nothing goes to a model.
-function closeGate(ws, { pid, project, researcher, packet, packetText, packetSha, sizing, now, rid: givenRid = null, frozen = [] }) {
-  const basis = { researcher, held: packet.held, exits: packet.exits, market: packet.market, native: packet.native };
+function closeGate(ws, { pid, project, researcher, packet, packetText, packetSha, sizing, now, rid: givenRid = null, frozen = [], reasonKind = null }) {
+  const basis = { researcher, held: packet.held, exits: packet.exits, market: packet.market, native: packet.native, contract: packet.contract || null };
   const g = gate(basis, sizing);
   const at500 = packet.exits.find((x) => x.size_usd === sizing.exit_size_usd) || null;
   const at2000 = packet.exits.find((x) => x.size_usd === 2000) || null;
@@ -728,7 +767,7 @@ function closeGate(ws, { pid, project, researcher, packet, packetText, packetSha
     desk: {
       sizing,
       gate: (() => {
-        const reason_kind = gradeReasonKind(researcher.grade);
+        const reason_kind = reasonKind || gradeReasonKind(researcher.grade);
         const withheld = reason_kind === 'grade_withheld' ? withheldOf(ws, pid, researcher) : null;
         return { ...g, reason_kind, ...(withheld ? { withheld } : {}) };
       })(),
@@ -750,7 +789,8 @@ function closeGate(ws, { pid, project, researcher, packet, packetText, packetSha
     validation: { errors: [] },
   };
   const out = runOp(ws, { type: 'ticket_desk_gate', summary: `Desk gate for ${pid}` }, (op) => {
-    const again = listReceipts(ws, pid).find((r) => !r.broken && r.kind === 'desk_gate' && r.researcher && r.researcher.report_id === researcher.report_id);
+    const idNow = contractGate ? { identity_key: contractGate.identity_key } : null;
+    const again = listReceipts(ws, pid).find((r) => !r.broken && r.kind === 'desk_gate' && r.researcher && r.researcher.report_id === researcher.report_id && gateStands(r, idNow));
     if (again) return { replay: again };
     op.write(receipt.packet.path, packetText, { mode: 'create' });
     for (const f of frozen) op.write(f.path, f.text, { mode: 'create' });
@@ -766,7 +806,9 @@ function closeGate(ws, { pid, project, researcher, packet, packetText, packetSha
     receipt,
     verified: out.verified,
     files: out.files,
-    message: `The desk's gate is closed for ${project.name}: ${g.proposal_type}, no risk. ${g.reasons[0] || ''} No Prosecutor ran; the receipt ${rid} waits for Eric's review (pass force_prosecution: true to open one anyway).`,
+    message: reasonKind === 'contract_block'
+      ? `The desk's contract gate is closed for ${project.name}: ${g.proposal_type}, no risk. ${g.reasons[0] || ''} No Prosecutor ran; the receipt ${rid} waits for Eric's review. A change of the contract's identity opens a ticket on the same report.`
+      : `The desk's gate is closed for ${project.name}: ${g.proposal_type}, no risk. ${g.reasons[0] || ''} No Prosecutor ran; the receipt ${rid} waits for Eric's review (pass force_prosecution: true to open one anyway).`,
   };
 }
 
@@ -849,7 +891,7 @@ function contractAttestation(ws, project, packet, sizing, now, base) {
     rules: { version: G.GATE_VERSION, mode: contractGateMode(ws), params },
     subjects: rows,
     not_observed: notObserved,
-    identity_key: `sha256:${G.hashOf(rows.map((r) => [r.chain_id, r.address, r.identity_key]))}`,
+    identity_key: identityKeyOf(rows),
     exits: ladder ? { version: ladder.version, tax_bps: ladder.tax_bps, best: ladder.best.map((b) => ({ size_usd: b.size_usd, ...(b.best ? { pool: b.best.pool, cost_pct: b.best.cost_pct, cost_pct_3: b.best.cost_pct_3, cost_complete: b.best.cost_complete, missing_costs: b.best.missing_costs } : { cost_pct: null }) })), excluded: ladder.excluded, projection: G.EXIT_LEGACY_VERSION, legacy: ladder.best.map((b) => G.legacyExit(b.best, exitObs.observation.block.timestamp)), note: 'The desk\'s own on-chain readings; under sizing@4 they are not in `exits`.' } : null,
     verdict: { tier: v.tier, findings: v.findings, findings_sha256: v.findings_sha256 },
     words: v.words,
@@ -913,6 +955,137 @@ function contractIntegrity(ws, receipt) {
   } catch (err) {
     return { status: 'unverified', words: `Cannot be checked: ${String(err && err.message || err).slice(0, 200)} It cannot be approved or halved; a veto, pass or watch is still allowed.` };
   }
+}
+
+// ---------------------------------------------------------------------------
+// The contract gate in force (mode enforce, Pillar 1 PR C). Every check reads
+// stored observations only; none asks a chain.
+
+const CONTRACT_ADMISSION_VERSION = 'cr-contract-admission@1';
+const identityKeyOf = (rows) => `sha256:${require('./contract-gate').hashOf(rows.map((r) => [r.chain_id, r.address, r.identity_key]))}`;
+function contractTtlHours(ws) {
+  const v = Number(ws.settings && ws.settings.contracts && ws.settings.contracts.ttl_hours);
+  return v > 0 ? v : 24;
+}
+
+// The project's contract as the desk last observed it: the identity
+// fingerprint over every observed chain (the attestation's own rule), the exit
+// chain's observation and its age. Null for a project with no contract the
+// desk reads.
+function contractIdentityNow(ws, project, now = Date.now()) {
+  const CF = require('./contract-forensics');
+  const subjects = CF.subjectsOf(project);
+  if (!subjects.length) return null;
+  const status = CF.readStatus(ws, project.project_id);
+  const rows = [];
+  let exit = null;
+  subjects.forEach((s, i) => {
+    const cur = status.subjects[`${s.chain_id}:${s.address}`];
+    const r = cur && cur.current ? CF.readObservation(ws, project.project_id, cur.current) : null;
+    if (!r || !r.ok) return;
+    rows.push({ chain_id: s.chain_id, address: s.address, identity_key: r.observation.identity_key });
+    if (i === 0) exit = r.observation;
+  });
+  const at = exit ? Date.parse((exit.block && exit.block.timestamp) || (exit.retrieved && exit.retrieved.finished_at)) : NaN;
+  return { identity_key: identityKeyOf(rows), exit_observation: exit, exit_age_hours: Number.isFinite(at) ? (now - at) / HOUR : null, ttl_hours: contractTtlHours(ws) };
+}
+
+// Why the exit chain's latest observation does not give current evidence, or
+// null when it does.
+function contractStaleWords(idNow) {
+  if (!idNow || !idNow.exit_observation) return 'The exit chain\'s contract has no observation on record.';
+  if (idNow.exit_age_hours === null || idNow.exit_age_hours > idNow.ttl_hours) return `The exit chain's latest contract observation is ${idNow.exit_age_hours === null ? 'of unknown age' : `${Math.round(idNow.exit_age_hours)} hours old`}, past ${idNow.ttl_hours} hours.`;
+  return null;
+}
+
+const contractBlockGate = (r) => Boolean(r && r.kind === 'desk_gate' && r.desk && r.desk.gate && r.desk.gate.reason_kind === 'contract_block');
+// A contract block's gate stands only for the identity it read; every other
+// receipt stands as it is.
+function gateStands(r, idNow) {
+  if (!contractBlockGate(r)) return true;
+  return Boolean(idNow && r.desk.contract_gate && r.desk.contract_gate.identity_key === idNow.identity_key);
+}
+
+// The verdict the desk would freeze now, for the queue's next step. Reads only.
+function contractVerdictNow(ws, project, sizing, now) {
+  const packet = { market: marketOf(ws, project), fundamentals: fundamentalsOf(ws, project, now) };
+  const att = contractAttestation(ws, project, packet, sizing, now, 'preview');
+  return att ? { tier: att.contract.verdict.tier, words: att.contract.words, findings: att.contract.verdict.findings, identity_key: att.contract.identity_key } : null;
+}
+
+// At the save (sizing@5): the contract is still the one the packet froze and
+// its evidence is current. Otherwise the ticket is saved with no risk, said as
+// a cap, as the price admission does.
+function contractAdmissionOf(ws, project, packet, now) {
+  const idNow = contractIdentityNow(ws, project, now);
+  const base = { version: CONTRACT_ADMISSION_VERSION, checked_at: iso(now), identity_key_frozen: packet.contract.identity_key, identity_key_now: idNow ? idNow.identity_key : null };
+  if (!idNow || idNow.identity_key !== packet.contract.identity_key) return { ...base, status: 'changed', words: 'The contract\'s identity fingerprint changed after the ticket was opened (an implementation, admin or controller moved).' };
+  const stale = contractStaleWords(idNow);
+  if (stale) return { ...base, status: 'expired', words: stale };
+  return { ...base, status: 'same', words: null };
+}
+
+function contractAdmitted(g, ca) {
+  if (!ca || ca.status === 'same' || !(g.suggested_risk_usd > 0)) return g;
+  const why = `${ca.words} No risk is suggested until the contract is attested again (${CONTRACT_ADMISSION_VERSION}).`;
+  return { ...g, risk_allowed: false, allowed_types: g.allowed_types.filter((x) => !RISK_TAKING.has(x)), proposal_type: 'WATCH_ONLY', capped: { from: g.proposal_type, reason: why }, suggested_risk_usd: 0, reasons: [why], contract_hold: true };
+}
+
+// What a grant needs under enforce: an attestation that let risk through,
+// the same contract now, and current evidence. Null when it holds, or when the
+// gate is observed only or the project has no contract the desk reads.
+function contractGrantBlock(ws, project, receipt, now) {
+  if (contractGateMode(ws) !== 'enforce') return null;
+  if (!require('./contract-forensics').subjectsOf(project).length) return null;
+  const cg = receipt.desk && receipt.desk.contract_gate;
+  const refuse = (code, words) => ({ code, message: `Not recorded: ${words} Nothing was granted.`, changed: [{ kind: 'contract', words }] });
+  if (!cg) return refuse('CONTRACT_UNATTESTED', 'This ticket carries no contract attestation (its packet is not cr.ticket-packet.v2), and the contract gate is enforced. Re-open it for a ticket on a fresh packet.');
+  if (cg.tier === 'block' || cg.tier === 'hold') return refuse('CONTRACT_UNATTESTED', `Its contract gate read ${cg.tier} when it was saved (mode ${cg.mode}): ${cg.words}`);
+  const idNow = contractIdentityNow(ws, project, now);
+  if (!idNow || idNow.identity_key !== cg.identity_key) return refuse('CONTRACT_CHANGED', 'The contract\'s identity fingerprint changed since this ticket was saved (an implementation, admin or controller moved).');
+  const stale = contractStaleWords(idNow);
+  if (stale) return refuse('CONTRACT_EVIDENCE_EXPIRED', `${stale} Observe the contract again (contracts observe).`);
+  return null;
+}
+
+// invalidation@3's contract check: the fingerprint changed after the save, or
+// the measured sell tax rose by TAX_SPIKE_BPS or more over the one frozen.
+function contractCheckOf(ws, project, receipt, now) {
+  const cg = receipt.desk && receipt.desk.contract_gate;
+  if (!cg) return null;
+  const idNow = contractIdentityNow(ws, project, now);
+  if (!idNow) return { kind: 'contract', status: 'unknown', words: 'The contract is not read now.' };
+  if (idNow.identity_key !== cg.identity_key) return { kind: 'contract', status: 'triggered', identity_key_frozen: cg.identity_key, identity_key_now: idNow.identity_key, words: 'The contract\'s identity fingerprint changed after the ticket was saved (an implementation, admin or controller moved).' };
+  let frozenTax = null;
+  try {
+    const packet = JSON.parse(verifiedFrozen(ws, receipt.packet.path, receipt.packet.sha256, 'The frozen ticket packet'));
+    const s = packet.contract && packet.contract.subjects ? packet.contract.subjects.find((x) => x.role === 'exit_chain') : null;
+    frozenTax = s && s.summary && s.summary.sell_probe && s.summary.sell_probe.status === 'ok' ? s.summary.sell_probe.tax_bps : null;
+  } catch (_) { frozenTax = null; }
+  const tp = idNow.exit_observation && idNow.exit_observation.transfer_probe;
+  const nowTax = tp && tp.status === 'ok' && tp.sell_path ? tp.sell_path.tax_bps : null;
+  if (Number.isInteger(frozenTax) && Number.isInteger(nowTax) && nowTax - frozenTax >= TAX_SPIKE_BPS) return { kind: 'contract', status: 'triggered', tax_bps_frozen: frozenTax, tax_bps_now: nowTax, words: `The measured sell tax rose from ${frozenTax / 100}% to ${nowTax / 100}% after the ticket was saved.` };
+  return { kind: 'contract', status: 'holding', words: 'The contract\'s identity is unchanged since the ticket was saved.' };
+}
+
+// Before the trader's book is asked to open (enforce only): the same
+// contract, current evidence, and the exit at the fitted notional (CG-14).
+// `final` when no later step can open it. Null when nothing holds the order.
+// Only an opening is checked: a close, a trim or a settlement never is.
+function contractOpenGuard(ws, project, receipt, { now = Date.now(), notionalUsd, priceUsd } = {}) {
+  if (contractGateMode(ws) !== 'enforce') return null;
+  const cg = receipt && receipt.desk && receipt.desk.contract_gate;
+  if (!cg) return require('./contract-forensics').subjectsOf(project).length ? { hold: true, final: true, rule_id: 'CONTRACT_UNATTESTED', words: 'The ticket carries no contract attestation and the contract gate is enforced: no order is made from it.' } : null;
+  const idNow = contractIdentityNow(ws, project, now);
+  if (!idNow || idNow.identity_key !== cg.identity_key) return { hold: true, final: true, rule_id: 'CONTRACT_CHANGED', words: 'The contract\'s identity fingerprint changed since the ticket was saved: no order is made from it.' };
+  const stale = contractStaleWords(idNow);
+  if (stale) return { hold: true, final: false, rule_id: 'CG-20', words: `${stale} The order waits for a current observation.` };
+  const fee = ws.settings && ws.settings.contracts && ws.settings.contracts.network_fee_ceiling_usd;
+  const feeCeil = fee && typeof fee === 'object' ? fee[idNow.exit_observation.subject.chain_id] : null;
+  const limit = receipt.desk.sizing && receipt.desk.sizing.max_exit_cost_pct;
+  const fx = require('./contract-gate').fittedExit(idNow.exit_observation, { notionalUsd, priceUsd, networkFeeUsd: feeCeil === undefined || feeCeil === null ? null : String(feeCeil), limitPct: limit });
+  if (!fx.ok) return { hold: true, final: false, rule_id: 'CG-14', fitted: fx, words: `${fx.words} The order waits until the fitted size is within the proven exit.` };
+  return null;
 }
 
 function cancelTicket(ws, pid, tid, reason = null) {
@@ -1029,7 +1202,7 @@ function frozenBasis(ticket, packet) {
   ];
   const diffs = fields.filter(([, a, z]) => canon(a === undefined ? null : a) !== canon(z === undefined ? null : z)).map(([k]) => k);
   if (diffs.length) throw new OpError('INTEGRITY', `Not saved: the ticket's basis differs from its frozen packet (${diffs.join(', ')}). The desk sizes only from the verified packet; nothing was written. Keep the text: a new ticket (refresh) sizes it on a fresh packet.`, { fields: diffs });
-  return { researcher: { ...r, grade: p.grade === undefined ? null : p.grade, run_id: p.run_id === undefined ? null : p.run_id }, held: packet.held, exits: packet.exits || [], market: packet.market || null, native: packet.native === undefined ? null : packet.native };
+  return { researcher: { ...r, grade: p.grade === undefined ? null : p.grade, run_id: p.run_id === undefined ? null : p.run_id }, held: packet.held, exits: packet.exits || [], market: packet.market || null, native: packet.native === undefined ? null : packet.native, contract: packet.contract || null };
 }
 
 // The horizon of the research run the report was made under, read from the
@@ -1222,7 +1395,10 @@ function saveTicketOnce(ws, { project_id: pid, ticket_id: tid, text, revision = 
     const breached = admission.breached;
     const exemptType = EXEMPT_FROM_BORN_CHECK.has(c.proposal.proposal_type) || EXEMPT_FROM_BORN_CHECK.has(g0.proposal_type);
     if (breached && !exemptType) throw new OpError('INVALID', `Not saved: ${breached.refusal} The draft is kept.`, { trigger: breached.kind });
-    g = admitted(g0, admission);
+    const g1 = admitted(g0, admission);
+    // sizing@5: the contract the packet froze must still stand at the save.
+    const contractAdmission = ticket.sizing.version === SIZING_V5 && packet.contract ? contractAdmissionOf(ws, project, packet, now) : null;
+    g = contractAdmitted(g1, contractAdmission);
     const rid = `tr_${compactTs(new Date(now))}_${randomId(5)}`;
     const savedAt = iso(now);
     receipt = {
@@ -1261,7 +1437,8 @@ function saveTicketOnce(ws, { project_id: pid, ticket_id: tid, text, revision = 
         exits_missing: exitsMissing(exits, pid),
         sell_tax: packet.sell_tax || null,
         ...(contractGateOf(packet) ? { contract_gate: contractGateOf(packet) } : {}),
-        invalidation_version: INVALIDATION_VERSION,
+        invalidation_version: ticket.versions && ticket.versions.invalidation === INVALIDATION_V3 ? INVALIDATION_V3 : INVALIDATION_VERSION,
+        ...(contractAdmission ? { contract_admission: { ...contractAdmission, held_risk: g.contract_hold ? { from: g1.proposal_type, risk_usd: g1.suggested_risk_usd, reason: g.capped.reason } : null } } : {}),
         admission: { version: admission.version, checked_at: admission.checked_at, price_stale_minutes: admission.price_stale_minutes, price: admission.price, metric: admission.metric, held_risk: g.admission_hold ? { from: g0.proposal_type, risk_usd: g0.suggested_risk_usd, reason: g.capped.reason } : null, limit: admission.limit },
         ...(breached && exemptType ? { trigger_breached_at_save: { kind: breached.kind, words: breached.words } } : {}),
       },
@@ -1339,11 +1516,11 @@ function integrityOf(ws, receipt) {
   const d = receipt.desk;
   const sizing = d.sizing || {};
   const p = packet.researcher || {};
-  const g = gate({ researcher: { grade: p.grade === undefined ? null : p.grade }, held: packet.held, exits: packet.exits || [], market: packet.market || null, native: packet.native === undefined ? null : packet.native }, sizing, receipt.proposal && receipt.proposal.proposal_type);
+  const g = gate({ researcher: { grade: p.grade === undefined ? null : p.grade }, held: packet.held, exits: packet.exits || [], market: packet.market || null, native: packet.native === undefined ? null : packet.native, contract: packet.contract || null }, sizing, receipt.proposal && receipt.proposal.proposal_type);
   const exitAt = (n) => (packet.exits || []).find((x) => x.size_usd === n) || null;
   const e500 = exitAt(sizing.exit_size_usd);
   const e2000 = exitAt(2000);
-  const savedRisk = d.admission && d.admission.held_risk ? d.admission.held_risk.risk_usd : d.suggested_risk_usd;
+  const savedRisk = d.admission && d.admission.held_risk ? d.admission.held_risk.risk_usd : d.contract_admission && d.contract_admission.held_risk ? d.contract_admission.held_risk.risk_usd : d.suggested_risk_usd;
   const num = (v) => (v === undefined ? null : v);
   const fields = [
     ['exit_cost_500_usd_pct', num(d.exit_cost_500_usd_pct), e500 ? e500.cost_pct : null],
@@ -1428,6 +1605,8 @@ function grantBlock(ws, project, receipt, now) {
   if (inv.invalidated) return { code: 'INVALIDATED', message: `Not recorded: this ticket is invalidated. ${inv.words} An approval applies to the ticket as you saw it, so nothing was granted; re-open it for a new review.`, changed: [{ kind: 'invalidated', by: inv.by, words: inv.words }] };
   const ev = exitEvidenceOf(ws, receipt, now);
   if (ev && ev.expired) return { code: 'EXIT_EXPIRED', message: `Not recorded: ${ev.words}`, changed: [{ kind: 'exit_evidence', expires_at: ev.expires_at, words: ev.words }] };
+  const cb = contractGrantBlock(ws, project, receipt, now);
+  if (cb) return cb;
   let cur = null;
   try { cur = researcherOf(ws, project.project_id); } catch (_) { cur = null; }
   const was = receipt.researcher && receipt.researcher.report_id;
@@ -1764,7 +1943,7 @@ function reconcileDesk(ws, { dryRun = false } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Invalidation, evaluated on read (cr-ticket-invalidation@1, @2)
+// Invalidation, evaluated on read (cr-ticket-invalidation@1, @2, @3)
 
 // Hours since the ticket with at least one hourly reading, out of the whole
 // hours elapsed, and every stretch over MAX_GAP_HOURS without a reading (from
@@ -1807,13 +1986,13 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
   if (newer) return { version: (receipt.desk && receipt.desk.invalidation_version) || INVALIDATION_VERSION, invalidated: false, unread: true, checks: [], words: newer.words, rule_note: newer.words };
   // A receipt made before the coverage rule has no version on it: read as @1.
   const v1 = !(receipt.desk && receipt.desk.invalidation_version);
-  const version = v1 ? INVALIDATION_V1 : INVALIDATION_VERSION;
+  const version = v1 ? INVALIDATION_V1 : receipt.desk.invalidation_version === INVALIDATION_V3 ? INVALIDATION_V3 : INVALIDATION_VERSION;
   const inv = receipt.proposal && receipt.proposal.invalidation_trigger;
-  if (!inv) return { version, invalidated: false, checks: [] };
+  if (!inv && version !== INVALIDATION_V3) return { version, invalidated: false, checks: [] };
   const checks = [];
   const savedMs = Date.parse(receipt.saved_at);
   const cg = project.identity && project.identity.coingecko_id;
-  if (isNum(inv.price_usd)) {
+  if (inv && isNum(inv.price_usd)) {
     let low = null;
     const times = [];
     if (cg) {
@@ -1850,7 +2029,7 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
     else if (thin) checks.push({ kind: 'price', status: 'unknown', threshold_usd: inv.price_usd, lowest_usd: base.price_usd, at: base.at, coverage: cov, words: `Not enough price readings to say the price held: ${cov.coverage_pct}% of the hours since the ticket have one, under your ${minCoveragePct(ws)}%. Lowest seen $${low.price_usd}, above $${inv.price_usd}.${covWords}` });
     else checks.push({ kind: 'price', status: 'holding', threshold_usd: inv.price_usd, lowest_usd: low.price_usd, at: low.at, ...(cov ? { coverage: cov } : {}), words: `Lowest price since the ticket $${low.price_usd}, above $${inv.price_usd}.${covWords}` });
   }
-  if (inv.metric) {
+  if (inv && inv.metric) {
     const f = fundamentals || fundamentalsOf(ws, project, now);
     const m = f && f.metrics ? f.metrics[inv.metric.key] : null;
     const fetched = f && f.fetched_at ? Date.parse(f.fetched_at) : NaN;
@@ -1858,6 +2037,10 @@ function invalidationOf(ws, project, receipt, { now = Date.now(), fundamentals =
     else if (!m || !isNum(m.total_30d_usd) || m.status !== 'complete') checks.push({ kind: 'metric', status: 'unknown', key: inv.metric.key, threshold_usd: inv.metric.below_30d_usd, words: `No complete 30-day ${inv.metric.key} total on file.` });
     else if (!(fetched > savedMs)) checks.push({ kind: 'metric', status: 'unknown', key: inv.metric.key, threshold_usd: inv.metric.below_30d_usd, words: 'The saved total is from before the ticket; it is not read as a change.' });
     else checks.push({ kind: 'metric', status: m.total_30d_usd < inv.metric.below_30d_usd ? 'triggered' : 'holding', key: inv.metric.key, threshold_usd: inv.metric.below_30d_usd, value_usd: m.total_30d_usd, at: f.fetched_at, ...(m.total_30d_usd >= inv.metric.below_30d_usd && inv.metric.below_30d_usd > 0 ? { headroom_pct: round(((m.total_30d_usd - inv.metric.below_30d_usd) / inv.metric.below_30d_usd) * 100, 1) } : {}), words: `30-day ${inv.metric.key} $${Math.round(m.total_30d_usd).toLocaleString('en-US')} ${m.total_30d_usd < inv.metric.below_30d_usd ? 'under' : 'not under'} $${inv.metric.below_30d_usd.toLocaleString('en-US')}.` });
+  }
+  if (version === INVALIDATION_V3) {
+    const c = contractCheckOf(ws, project, receipt, now);
+    if (c) checks.push(c);
   }
   const hit = checks.find((c) => c.status === 'triggered') || null;
   const out = { version, invalidated: Boolean(hit), by: hit ? hit.kind : null, words: hit ? hit.words : null, fired: hit, ...(hit && hit.kind === 'price' ? { sampled: hit.sampled } : {}), checks };
@@ -2038,12 +2221,22 @@ function nextStep(ws, pid, { now = Date.now(), heldSet = undefined } = {}) {
   if (open) return { ...base, step: 'ticket', ticket_id: open.ticket_id, state: open.job.state, report_id: open.basis.researcher.report_id, why: `Ticket ${open.ticket_id} is open: write the Prosecutor's ticket (Agent 2).` };
   const v = view(ws, pid, { now });
   if (v.ticket && v.ticket.status === 'reopened' && v.ticket.researcher_report_id === r.report_id) return { ...base, step: 'ticket', ticket_id: null, report_id: r.report_id, refresh: true, reopen: true, why: `Eric re-opened ticket ${v.ticket.receipt_id}: open a new one on Claude's current report ${r.report_id} (start_ticket with refresh: true). The old receipt is kept.` };
-  if (!v.ticket || v.ticket.researcher_report_id !== r.report_id) {
-    const why = pregateReason(r, heldOf(ws, pid, now, heldSet), sizingOf(ws));
+  const sizing = sizingOf(ws);
+  const enforce = sizing.version === SIZING_V5;
+  let onCurrent = Boolean(v.ticket && v.ticket.researcher_report_id === r.report_id);
+  // A contract block's gate on this report no longer stands once the
+  // contract's identity changed: the report gets its ticket.
+  if (onCurrent && v.ticket.gate_reason_kind === 'contract_block' && !gateStands(readJson(ws.abs(receiptRel(pid, v.ticket.receipt_id)), null), enforce ? contractIdentityNow(ws, project, now) : null)) onCurrent = false;
+  if (!onCurrent) {
+    const held = heldOf(ws, pid, now, heldSet);
+    const why = pregateReason(r, held, sizing);
     const kind = gradeReasonKind(r.grade);
     if (why) return { ...base, step: 'gate_closed', ticket_id: null, report_id: r.report_id, reasons: [why], reason_kind: kind, why: `The desk's gate is closed on Claude's current report ${r.report_id}${kind ? ` (${KIND_WORDS[kind]})` : ''}: ${why} No Prosecutor runs; call start_ticket (tickets start) to save the desk's receipt.` };
+    const cv = enforce && held === false ? contractVerdictNow(ws, project, sizing, now) : null;
+    if (cv && cv.tier === 'block') return { ...base, step: 'gate_closed', ticket_id: null, report_id: r.report_id, reasons: [cv.words], reason_kind: 'contract_block', why: `The desk's contract gate is closed on Claude's current report ${r.report_id}: ${cv.words} No Prosecutor runs; call start_ticket (tickets start) to save the desk's receipt.` };
+    if (cv && cv.tier === 'hold') return { ...base, step: 'contract_evidence', ticket_id: null, report_id: r.report_id, findings: cv.findings.filter((f) => f.tier === 'hold'), why: `The contract gate holds on ${project.name}: ${cv.words} No Prosecutor runs and no receipt is written until the desk observes the contract with nothing holding it (contracts observe).` };
+    return { ...base, step: 'ticket', ticket_id: null, report_id: r.report_id, why: `No ticket on Claude's current report ${r.report_id}: open one (Agent 2).` };
   }
-  if (!v.ticket || v.ticket.researcher_report_id !== r.report_id) return { ...base, step: 'ticket', ticket_id: null, report_id: r.report_id, why: `No ticket on Claude's current report ${r.report_id}: open one (Agent 2).` };
   if (v.ticket.status === 'pending_pm_review') return { ...base, step: 'pm_review', receipt_id: v.ticket.receipt_id, why: 'The ticket waits for Eric\'s PM review. Nothing for an agent to do.' };
   if (v.ticket.status === 'invalidated') return { ...base, step: 'done', receipt_id: v.ticket.receipt_id, status: v.ticket.status, why: 'Invalidated: Re-open ticket on the card (or tickets start --reopen). Nothing for an agent to do until then.' };
   return { ...base, step: 'done', receipt_id: v.ticket.receipt_id, status: v.ticket.status, why: `The ticket is ${v.ticket.status.replace(/_/g, ' ')}. Nothing for an agent to do until Claude's report changes.` };
@@ -2627,6 +2820,11 @@ module.exports = {
   SIZING_VERSION,
   INVALIDATION_VERSION,
   INVALIDATION_V1,
+  SIZING_V5,
+  INVALIDATION_V3,
+  TAX_SPIKE_BPS,
+  contractIdentityNow,
+  contractOpenGuard,
   PREGATE_VERSION,
   ADMISSION_VERSION,
   SIZING_DEFAULTS,

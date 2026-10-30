@@ -419,6 +419,24 @@ function validateSettingsPatch(patch, ws = null) {
     }
     out.tickets = { ...(out.tickets || {}), invalidation: o };
   }
+  if (patch.tickets && patch.tickets.contract_gate) {
+    // The contract gate's mode (core/tickets.js contractGateMode): observe by
+    // default. Enforce only with both contract compute caps set (this patch's
+    // or the ones saved) and at least one probed network that reads pinned
+    // blocks: an enforced gate with no way to observe would hold everything.
+    const mode = patch.tickets.contract_gate.mode;
+    if (!['observe', 'enforce'].includes(mode)) throw new OpError('INVALID', 'The contract gate\'s mode is observe or enforce.');
+    if (mode === 'enforce') {
+      const saved = (ws && ws.settings && ws.settings.contracts) || {};
+      const pc = out.contracts || {};
+      const capOf = (k) => (pc[k] !== undefined ? pc[k] : saved[k]);
+      const unset = ['daily_cu_cap', 'monthly_cu_cap'].filter((k) => !(Number(capOf(k)) > 0));
+      if (unset.length) throw new OpError('REFUSED', `The contract gate stays in observe: set the contract compute caps first (${unset.join(', ')}).`);
+      const nets = ws ? require('./core/contract-rpc').supportedNetworks(ws) : [];
+      if (!nets.length) throw new OpError('REFUSED', 'The contract gate stays in observe: no network is probed and supported yet (contracts probe <chain>).');
+    }
+    out.tickets = { ...(out.tickets || {}), contract_gate: { mode } };
+  }
   return out;
 }
 

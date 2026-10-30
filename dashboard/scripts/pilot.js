@@ -217,7 +217,7 @@ const ROLE_TOOLS = Object.freeze({
   researcher: Object.freeze(['autonomous_pilot_queue', 'start_research', 'get_research', 'save_research_draft', 'save_report']),
   prosecutor: Object.freeze(['autonomous_pilot_queue', 'start_ticket', 'get_ticket', 'save_ticket']),
 });
-const STEPS = ['research', 'ticket', 'ticket_failed', 'gate_closed', 'pm_review', 'done', 'blocked', 'unknown'];
+const STEPS = ['research', 'ticket', 'ticket_failed', 'gate_closed', 'contract_evidence', 'pm_review', 'done', 'blocked', 'unknown'];
 
 const roleTools = (role, o) => [...ROLE_TOOLS[role].map((t) => `${o.connector}__${t}`), ...WEB_TOOLS];
 

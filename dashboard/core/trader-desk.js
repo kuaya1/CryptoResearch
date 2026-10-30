@@ -463,6 +463,12 @@ function assess(ws, ctx, g, snap) {
     const f = fit(intent, bk, ctx.s.rules, ctx.s.venue);
     if (!f.ok) return out('waiting', `The book would refuse the order now, so it is not asked yet (its one attempt is kept): ${f.refusals.map((x) => x.words).join(' ')}`, null, { pair: pr.pair, refusals: f.refusals, exit_as_of: bk.exit ? bk.exit.as_of : null });
     const sz = f.sizing;
+    // The contract gate, when Eric enforces it (tickets.js contractOpenGuard):
+    // the same contract, current evidence, and the exit at this fitted
+    // notional (CG-14), not only at the reference tranche. Openings only.
+    let guard = null;
+    try { guard = require('./tickets').contractOpenGuard(ws, g.project, rc.receipt, { now: ctx.t, notionalUsd: sz.notional_usd, priceUsd: plan.entry }); } catch (err) { guard = { hold: true, final: false, words: `The contract gate could not be read (${String(err && err.message || err).slice(0, 160)}); the order waits.` }; }
+    if (guard && guard.hold) return out(guard.final ? 'not_opened' : 'waiting', guard.words, null, { pair: pr.pair, contract: { rule_id: guard.rule_id || null, ...(guard.fitted ? { fitted: guard.fitted } : {}) }, exit_as_of: bk.exit ? bk.exit.as_of : null });
     const less = f.binding.length ? ` Sized down from your ${usd(plan.risk)} to fit ${f.binding.map((r) => BINDING_WORDS[r] || r).join(' and ')}.` : '';
     return out('ready', `Ready to ask the book: buy ${sz.quantity} ${pr.pair} at ${usd(plan.entry)} (${usd(sz.notional_usd)}), stop ${usd(plan.stop)}, target ${usd(plan.target)}, ${usd(sz.loss_at_stop_usd)} at the stop.${less}`, { kind: 'open', intent: f.intent }, { pair: pr.pair, sizing: { ...sz, risk_ceiling_usd: f.intent.risk_ceiling_usd, approved_risk_usd: plan.risk, binding: f.binding } });
   }
