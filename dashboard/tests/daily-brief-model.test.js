@@ -35,7 +35,7 @@ test('daily brief view: sections keep their deep links and the hash; an unreadab
   // Only #/ addresses become links.
   assert.equal(M.safeLink('javascript:alert(1)'), null);
   assert.equal(M.safeLink('https://example.com'), null);
-  assert.equal(M.safeLink('#/project/x/forensics?tab=exits'), '#/project/x/forensics?tab=exits');
+  assert.equal(M.safeLink('#/project/x/forensics?fx=exits'), '#/project/x/forensics?fx=exits');
   const odd = M.briefView({ sections: [{ id: 'a', title: 'A', state: 'ok', count: 1, lines: [{ text: 'x', link: 'javascript:alert(1)' }] }] });
   assert.equal(odd.sections[0].lines[0].href, null);
   assert.equal(M.briefView(null).ok, false);

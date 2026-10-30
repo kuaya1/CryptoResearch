@@ -105,17 +105,20 @@ function noProviders(t) {
 }
 
 test('leads: delivered, acknowledged once on disk; a lost answer and the same delivery again give the same receipt and one asset', async (t) => {
+  // The route reads the server's own clock, so these deliveries carry the real time.
+  const at = new Date(Date.now() - 60000).toISOString();
+  const sent = (over = {}) => delivery({ generated_at: at, ...over });
   const calls = noProviders(t);
   const d = await desk(t, 'route');
   let r = await req(d.port, { path: L.LEADS_PATH, headers: { authorization: `Bearer ${KEY}` } });
   assert.equal(r.status, 200);
   assert.deepEqual(r.json, { ok: true, key: 'accepted', leads_today: 0, max_per_day: 6 });
   assert.equal((await req(d.port, { path: L.LEADS_PATH })).status, 401, 'the key is needed');
-  assert.equal((await req(d.port, { method: 'POST', path: L.LEADS_PATH, headers: { ...auth, origin: `https://${HOST}` }, body: delivery() })).status, 403, 'never from a browser');
-  assert.equal((await req(d.port, { method: 'POST', path: L.LEADS_PATH, headers: { ...auth, 'content-type': 'text/plain' }, body: delivery() })).status, 415);
+  assert.equal((await req(d.port, { method: 'POST', path: L.LEADS_PATH, headers: { ...auth, origin: `https://${HOST}` }, body: sent() })).status, 403, 'never from a browser');
+  assert.equal((await req(d.port, { method: 'POST', path: L.LEADS_PATH, headers: { ...auth, 'content-type': 'text/plain' }, body: sent() })).status, 415);
   assert.deepEqual(leadFiles(d.ws), [], 'no refusal wrote anything');
 
-  r = await req(d.port, { method: 'POST', path: L.LEADS_PATH, headers: auth, body: delivery() });
+  r = await req(d.port, { method: 'POST', path: L.LEADS_PATH, headers: auth, body: sent() });
   assert.equal(r.status, 202, r.text);
   assert.equal(r.json.status, 'accepted');
   assert.equal(r.json.delivery_id, 'gh-1000-1');
@@ -125,7 +128,7 @@ test('leads: delivered, acknowledged once on disk; a lost answer and the same de
   assert.equal(r.json.rows[0].outcome, 'new');
   const first = r.json;
   // The sender never saw the answer and sends the same delivery again.
-  r = await req(d.port, { method: 'POST', path: L.LEADS_PATH, headers: auth, body: delivery() });
+  r = await req(d.port, { method: 'POST', path: L.LEADS_PATH, headers: auth, body: sent() });
   assert.equal(r.status, 200);
   assert.equal(r.json.status, 'unchanged');
   assert.equal(r.json.receipt_id, first.receipt_id);
@@ -145,7 +148,7 @@ test('leads: delivered, acknowledged once on disk; a lost answer and the same de
   assert.equal((await req(d.port, { path: `${L.LEADS_PATH}/gh-1000-1` })).status, 401);
   assert.deepEqual(leadFiles(d.ws), before, 'a status read writes nothing');
   // The same delivery ID with a different body is a conflict; the first is kept.
-  r = await req(d.port, { method: 'POST', path: L.LEADS_PATH, headers: auth, body: delivery({ leads: [lead({ signal: 'Altered.' })] }) });
+  r = await req(d.port, { method: 'POST', path: L.LEADS_PATH, headers: auth, body: sent({ leads: [lead({ signal: 'Altered.' })] }) });
   assert.equal(r.status, 409);
   assert.equal(r.json.code, 'CONFLICT');
   assert.equal(readJson(d.ws.abs(`${L.DELIVERIES}/grok-scout-gh-1000-1.json`)).payload_sha256, first.payload_sha256);
@@ -277,6 +280,9 @@ test('leads: six deliveries a day apart from the briefs; a replay still resolves
 });
 
 test('leads: a save that does not verify is 503, never accepted, and saves nothing; the same delivery again recovers', async (t) => {
+  // The route reads the server's own clock, so these deliveries carry the real time.
+  const at = new Date(Date.now() - 60000).toISOString();
+  const sent = (over = {}) => delivery({ generated_at: at, ...over });
   const d = await desk(t, 'fail');
   const realOpen = fs.openSync;
   let failing = true;
@@ -285,13 +291,13 @@ test('leads: a save that does not verify is 503, never accepted, and saves nothi
     return realOpen.call(this, p, ...rest);
   };
   t.after(() => { fs.openSync = realOpen; });
-  let r = await req(d.port, { method: 'POST', path: L.LEADS_PATH, headers: auth, body: delivery() });
+  let r = await req(d.port, { method: 'POST', path: L.LEADS_PATH, headers: auth, body: sent() });
   assert.equal(r.status, 503);
   assert.equal(r.json.saved, false);
   assert.equal(r.json.code, 'NOT_SAVED');
   assert.deepEqual(leadFiles(d.ws), [], 'nothing was saved');
   failing = false;
-  r = await req(d.port, { method: 'POST', path: L.LEADS_PATH, headers: auth, body: delivery() });
+  r = await req(d.port, { method: 'POST', path: L.LEADS_PATH, headers: auth, body: sent() });
   assert.equal(r.status, 202);
 });
 

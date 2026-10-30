@@ -705,3 +705,24 @@ test('F17: two runners due for the same daily job run it once', async (t) => {
   const c = await jobs.runJob(ws, 'reviews', { trigger: 'cli', onlyDue: true });
   assert.equal(c.status, 'not_due');
 });
+
+test('a due check that throws is a recorded failure, never a quiet "not due"', async (t) => {
+  const { ws, cleanup } = tempWorkspace('due-check-throws');
+  t.after(cleanup);
+  const jobs = require('../core/jobs');
+  const screening = require('../core/screening');
+  const real = screening.isDue;
+  screening.isDue = () => { throw new Error('status file unreadable (FICTIONAL)'); };
+  t.after(() => { screening.isDue = real; });
+  assert.throws(() => jobs.isDue(ws, 'screening', jobs.readJobState(ws)), /unreadable/);
+  const out = await jobs.runJob(ws, 'screening', { trigger: 'dashboard', onlyDue: true });
+  assert.equal(out.status, 'failed');
+  assert.match(out.error, /^Due check failed: status file unreadable/);
+  const state = jobs.readJobState(ws).jobs.screening;
+  assert.equal(state.last_status, 'failed');
+  assert.match(state.last_error, /Due check failed/);
+  const lines = fs.readFileSync(ws.abs(jobs.JOB_LOG_REL), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.job === 'screening');
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].status, 'failed');
+  assert.match(lines[0].error, /Due check failed/);
+});

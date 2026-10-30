@@ -69,56 +69,28 @@ function isDue(ws, name, state, now = Date.now(), opts = {}) {
       return marketDue(ws, now, opts);
     case 'fundamentals':
       // Closed while DefiLlama's rate limit or a failure backoff runs.
-      try {
-        return require('./fundamentals').isDue(ws, now);
-      } catch (_) {
-        return false;
-      }
+      return require('./fundamentals').isDue(ws, now);
     case 'screening':
       // Closed while GoPlus's rate limit or a failure backoff runs.
-      try {
-        return require('./screening').isDue(ws, now);
-      } catch (_) {
-        return false;
-      }
+      return require('./screening').isDue(ws, now);
     case 'wallets':
       // Closed without a tracked wallet or a key, in a restored copy, and
       // while Alchemy's rate limit, a key refusal or a used-up plan runs.
-      try {
-        return require('./walletsync').isDue(ws, now);
-      } catch (_) {
-        return false;
-      }
+      return require('./walletsync').isDue(ws, now);
     case 'forensics':
       // Closed without a monitored project, in a restored copy, and while
       // GitHub's rate limit or a failure backoff runs.
-      try {
-        return require('./forensic-monitor').isDue(ws, now);
-      } catch (_) {
-        return false;
-      }
+      return require('./forensic-monitor').isDue(ws, now);
     case 'leads':
       // Closed until Eric turns leads on, in a restored copy, while CoinGecko's
       // or GoPlus's gate is closed, and with no asset due.
-      try {
-        return require('./leads').isDue(ws, now);
-      } catch (_) {
-        return false;
-      }
+      return require('./leads').isDue(ws, now);
     case 'trader':
       // Closed until the book is funded and a pair is behind, in a restored
       // copy, and while GeckoTerminal's 429 or a failure backoff runs.
-      try {
-        return require('./trader-candles').isDue(ws, now);
-      } catch (_) {
-        return false;
-      }
+      return require('./trader-candles').isDue(ws, now);
     case 'research':
-      try {
-        return require('./research').hasDueWork(ws, now);
-      } catch (_) {
-        return false;
-      }
+      return require('./research').hasDueWork(ws, now);
     case 'snapshot':
     case 'reviews':
     case 'backup':
@@ -214,12 +186,12 @@ async function runJobBody(ws, name, trigger) {
     case 'trader': {
       // Its own lease, gate, backoff and request budget are inside refresh().
       const r = await require('./trader-candles').refresh(ws, { trigger });
-      return { status: r.status === 'held' ? 'skipped' : r.status, summary: r.message, error: null };
+      return { status: r.status === 'held' ? 'skipped' : r.status, summary: r.message, error: r.status === 'failed' ? r.message : null };
     }
     case 'leads': {
       // Its own lease and turn; CoinGecko's and GoPlus's gates and budgets are shared.
       const r = await require('./leads').refresh(ws, { trigger });
-      return { status: r.status === 'held' ? 'skipped' : r.status, summary: r.message, error: null };
+      return { status: r.status === 'held' ? 'skipped' : r.status, summary: r.message, error: r.status === 'failed' ? r.message : null };
     }
     case 'research': {
       const r = await require('./research').runDueJobs(ws, { trigger });
@@ -264,11 +236,18 @@ async function runJob(ws, name, { trigger = 'cli', onlyDue = false, foreground =
     return { job: name, ...result };
   }
   try {
-    if (onlyDue && !isDue(ws, name, readJobState(ws), Date.now(), { foreground })) {
-      result = { status: 'not_due', summary: 'Not due yet' };
-    } else {
-      result = await runJobBody(ws, name, trigger);
+    // A due check that throws is a failure on record, never "not due", so a
+    // broken job shows in Activity instead of going quiet.
+    let due = true;
+    if (onlyDue) {
+      try {
+        due = isDue(ws, name, readJobState(ws), Date.now(), { foreground });
+      } catch (err) {
+        err.message = `Due check failed: ${err.message}`;
+        throw err;
+      }
     }
+    result = due ? await runJobBody(ws, name, trigger) : { status: 'not_due', summary: 'Not due yet' };
   } catch (err) {
     result = { status: 'failed', summary: err.message, error: err.message };
   } finally {

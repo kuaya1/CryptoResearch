@@ -415,6 +415,8 @@ function readReservation(ws) {
 async function readScreenshot(ws, doc, { fetchImpl, identifyImpl = null }) {
   const research = require('./research');
   const providers = require('./providers');
+  // A restored copy asks no provider for anything, a paid read included.
+  if (research.restoredHold(ws)) return { ok: false, reason: 'This is a restored copy: the screenshot is not read, as no provider is asked for anything until the copy is released (node dashboard/cli.js restored-copy release --confirm). Type the name or paste a CoinGecko link instead.' };
   const key = providers.apiKeyFor('claude');
   if (!key) return { ok: false, reason: 'Reading a screenshot needs the Claude API key, which is not set up yet. Type the name or paste a CoinGecko link instead.' };
   const { model, prices } = readPrices(ws);
