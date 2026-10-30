@@ -133,6 +133,63 @@ export function Sidebar({ collapsed, onCollapse }) {
   );
 }
 
+// The v3 rail (UI v3 parity, 2026-10-30, D4): the Desk from 1280px. A 150px
+// text rail on the canvas: the CR tile, the five places as words with a 4px
+// dot for the current one and a count only when something waits, then at its
+// foot Search (⌘K), the Desk's Options (its menu is drawn by the Desk into
+// #desk-options-slot), the Daily Brief and the connection. Preferences stays
+// on ⌘, and in the command menu; Sign out sits under the connection online.
+const TONE = { on: 'is-live', wait: 'is-warn', off: 'is-down' };
+export function SidebarV3() {
+  const d = useDesk();
+  const active = activeOf(nav.route);
+  const { a: agenda, settled } = useAgendaRead();
+  const counts = navCounts(d.index, agenda, { settled });
+  const ws = d.session && d.session.workspace;
+  const st = liveStatus();
+  const name = (ws && ws.name) || 'CryptoResearch';
+  const word = st.label ? st.label.charAt(0).toLowerCase() + st.label.slice(1) : '';
+  return (
+    <aside className="sidebar v3" aria-label="Desk">
+      <div className="v3-brand">
+        <a className="v3-tile" href="#/watchlist" data-key="nav-brand" title="CryptoResearch: the Desk" aria-label="CryptoResearch: the Desk">CR</a>
+        <WsTag />
+      </div>
+      <nav className="v3-nav" aria-label="Main">
+        {visibleSections(d, active).map((s) => {
+          const on = s.id === active;
+          const c = counts[s.id];
+          const n = c && typeof c.n === 'number' && c.n > 0 ? c : null;
+          return (
+            <a key={s.id} href={s.href || `#/${s.id}`} className={`v3-nav-item${on ? ' is-active' : ''}`} aria-current={on ? 'page' : undefined} aria-label={`${s.label}${n ? `, ${n.title}` : ''}`} data-key={`nav-${s.id}`}>
+              <span className="v3-mark" aria-hidden="true" />
+              <span>{s.label}</span>
+              {n ? <span className="v3-count" aria-hidden="true" title={n.title}>{n.n}</span> : null}
+            </a>
+          );
+        })}
+      </nav>
+      <span className="v3-spacer" />
+      <div className="v3-foot">
+        <button type="button" className="v3-foot-item" data-key="nav-command" aria-keyshortcuts={mac() ? 'Meta+K' : 'Control+K'} onClick={() => openCommand()}>
+          <span>Search</span><kbd className="v3-kbd" aria-hidden="true">{mac() ? '⌘K' : 'Ctrl K'}</kbd>
+        </button>
+        <div className="v3-slot" id="desk-options-slot" />
+        <button type="button" className="v3-foot-item" data-key="nav-brief" onClick={() => openBrief()}>Daily Brief</button>
+        <span className={`v3-live ${TONE[st.tone] || ''}`.trim()} title={st.title || 'Connection to the desk'}>
+          <span className="v3-live-dot" aria-hidden="true" />
+          <span className="v3-live-label">{`${name} · ${word}`}</span>
+        </span>
+        {d.session && d.session.hosted ? (
+          <form method="post" action="/logout" className="signout">
+            <button type="submit" className="v3-foot-item" data-key="nav-signout">Sign out</button>
+          </form>
+        ) : null}
+      </div>
+    </aside>
+  );
+}
+
 // A phone: the main places in a tab bar, the rest under More.
 const MORE = [
   { id: 'research', label: 'Research', icon: FlaskConical },

@@ -599,7 +599,8 @@ try {
       await go(tab, '#/watchlist', "document.querySelector('.wl-table tbody tr')");
       proxy.set({ hang: ['/app/assets/Preferences-'] });
       const t0 = Date.now();
-      await tab.evalJs("document.querySelector('.sidebar [data-key=\"nav-settings\"]').click(); true");
+      // UI v3 (2026-10-30): the Desk's rail has no Preferences row; ⌘, / Ctrl+, opens it.
+      await tab.evalJs("document.dispatchEvent(new KeyboardEvent('keydown', { key: ',', ctrlKey: !/Mac/.test(navigator.platform), metaKey: /Mac/.test(navigator.platform), bubbles: true })); true");
       const loading = await waitFor(tab, "/Loading Preferences/.test((document.querySelector('aside.prefs.is-loading') || {}).textContent || '')", 3000);
       const said = await waitFor(tab, alertWith('aside.prefs [role="alert"]'), BOUND);
       const st = { loading: loading !== null, alert: said, seconds: Math.round((Date.now() - t0) / 100) / 10 };

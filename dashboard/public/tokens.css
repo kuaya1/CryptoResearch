@@ -169,6 +169,32 @@
   --cr-reviewed-bg: oklch(0.6 0.15 160 / 0.12);
   --cr-on-ink: #ffffff;
   --cr-on-ceramic: #0b0b0c;
+  --cr-agent-on-dark: oklch(0.74 0.13 285);       /* "Running" at night */
+  /* v3's light-ground words, at the desk's 4.5:1 line. The concept's faint
+     (#8a8d94) and hint (#a3a6ad) greys read 2.1-3.3:1 on the canvas, white
+     and the warm card, so where they carry words they take the nearest grey
+     that reads (like the 12.5px floor); dots, bars and lines keep v3's own
+     tones. On the obsidian cards v3's greys already read and are kept. */
+  --v3-ink: var(--cr-ink);
+  --v3-ink-quiet: #696c71;                        /* v3 faint and hint words on light grounds */
+  --v3-ink-secondary: var(--cr-ink-secondary);
+  --v3-ink-muted: var(--cr-ink-tertiary);
+  --v3-count-warn: oklch(0.54 0.13 60);
+  --v3-review-ink: oklch(0.54 0.14 60);
+  --v3-age-warn: oklch(0.54 0.13 60);
+  --v3-agent-ink: var(--cr-agent);
+  --v3-up: var(--cr-up);
+  --v3-down: var(--cr-down);
+  --v3-surface: var(--cr-surface);
+  --v3-surface-warm: var(--cr-surface-warm);
+  --v3-row-hover: var(--cr-row-hover);
+  --v3-row-selected: var(--cr-row-selected);
+  --v3-hairline: var(--cr-hairline-ink);
+  --v3-track: var(--cr-track-ink);
+  --v3-divider: var(--cr-track-ink);
+  --v3-dot-empty: var(--cr-dot-empty);
+  --v3-solid: var(--cr-ink);
+  --v3-on-solid: var(--cr-on-ink);
 
   --fs-2xs: 12.5px;  --fs-3xs: 12.5px;  --fs-label: 12.5px;  --fs-meta: 12.5px;   /* v3 10.5 / 11 / 11.5 / 12, at the floor */
   --fs-ui-md: 13.5px; --fs-row-name: 15px; --fs-focal-name: 18px;
@@ -552,6 +578,7 @@
   --shadow-drawer: -8px 0 16px 0 rgba(0, 0, 0, 0.35), -2px 0 6px 0 rgba(0, 0, 0, 0.2), inset 0 0 0 1px var(--color-border);
   /* v17 at night: obsidian surfaces, paper text, the states' on-dark tones */
   --cr-canvas-glow-violet: transparent;
+  --v3-ink: var(--cr-paper); --v3-ink-quiet: var(--cr-paper-muted-text); --v3-ink-secondary: var(--cr-paper-secondary); --v3-ink-muted: var(--cr-paper-muted-text); --v3-count-warn: var(--cr-tuning-on-dark); --v3-review-ink: var(--cr-tuning-on-dark); --v3-age-warn: var(--cr-tuning-on-dark); --v3-agent-ink: var(--cr-agent-on-dark); --v3-up: var(--cr-live-on-dark); --v3-down: var(--cr-critical-on-dark); --v3-surface: var(--cr-obsidian-raised); --v3-surface-warm: var(--cr-obsidian-elevated); --v3-row-hover: rgba(255, 255, 255, 0.04); --v3-row-selected: rgba(255, 255, 255, 0.07); --v3-hairline: rgba(255, 255, 255, 0.16); --v3-track: rgba(255, 255, 255, 0.1); --v3-divider: rgba(255, 255, 255, 0.08); --v3-dot-empty: #4f5258; --v3-solid: var(--cr-paper); --v3-on-solid: var(--cr-obsidian);
   --canvas-bg: var(--cr-obsidian); --decision-surface: var(--cr-obsidian-elevated); --warm-surface: var(--cr-obsidian-elevated); --glass-surface: rgba(28, 28, 31, 0.82);
   --color-surface-tertiary: var(--cr-obsidian); --color-surface: var(--cr-obsidian-raised); --color-surface-secondary: #111113; --color-surface-elevated: var(--cr-obsidian-elevated);
   --color-surface-hover: #1a1a1d; --color-surface-selected: #232327; --color-bg-soft: var(--cr-obsidian-elevated);
@@ -612,6 +639,7 @@
     --shadow-pop: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -4px rgba(0, 0, 0, 0.2), var(--shadow-hairline);
     --shadow-drawer: -8px 0 16px 0 rgba(0, 0, 0, 0.35), -2px 0 6px 0 rgba(0, 0, 0, 0.2), inset 0 0 0 1px var(--color-border);
     --cr-canvas-glow-violet: transparent;
+    --v3-ink: var(--cr-paper); --v3-ink-quiet: var(--cr-paper-muted-text); --v3-ink-secondary: var(--cr-paper-secondary); --v3-ink-muted: var(--cr-paper-muted-text); --v3-count-warn: var(--cr-tuning-on-dark); --v3-review-ink: var(--cr-tuning-on-dark); --v3-age-warn: var(--cr-tuning-on-dark); --v3-agent-ink: var(--cr-agent-on-dark); --v3-up: var(--cr-live-on-dark); --v3-down: var(--cr-critical-on-dark); --v3-surface: var(--cr-obsidian-raised); --v3-surface-warm: var(--cr-obsidian-elevated); --v3-row-hover: rgba(255, 255, 255, 0.04); --v3-row-selected: rgba(255, 255, 255, 0.07); --v3-hairline: rgba(255, 255, 255, 0.16); --v3-track: rgba(255, 255, 255, 0.1); --v3-divider: rgba(255, 255, 255, 0.08); --v3-dot-empty: #4f5258; --v3-solid: var(--cr-paper); --v3-on-solid: var(--cr-obsidian);
     --canvas-bg: var(--cr-obsidian); --decision-surface: var(--cr-obsidian-elevated); --warm-surface: var(--cr-obsidian-elevated); --glass-surface: rgba(28, 28, 31, 0.82);
     --color-surface-tertiary: var(--cr-obsidian); --color-surface: var(--cr-obsidian-raised); --color-surface-secondary: #111113; --color-surface-elevated: var(--cr-obsidian-elevated);
     --color-surface-hover: #1a1a1d; --color-surface-selected: #232327; --color-bg-soft: var(--cr-obsidian-elevated);

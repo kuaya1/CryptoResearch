@@ -291,11 +291,11 @@ test('no purple or indigo anywhere the desk draws but the v3 agent violet: sourc
     return { h: (h + 360) % 360, s, l };
   };
   // UI v3 parity (2026-10-30, D2): the agent violet comes back for the
-  // Claude bar, "Running" and the canvas glow, as two tokens only. The
+  // Claude bar, "Running" (and its night tone) and the canvas glow, as three tokens only. The
   // build writes them as these hexes; no other purple is allowed.
-  const AGENT_VIOLET = new Set(['#7361e4', '#ececff']);
+  const AGENT_VIOLET = new Set(['#7361e4', '#a39ef9', '#ececff']);
   const tokens = read('public', 'tokens.css').replace(/\/\*[\s\S]*?\*\//g, '');
-  assert.deepEqual([...tokens.matchAll(/--([\w-]+):\s*oklch\([^)]*\s285\)/g)].map((m) => m[1]).sort(), ['cr-agent', 'cr-canvas-glow-violet'], 'violet is two tokens');
+  assert.deepEqual([...tokens.matchAll(/--([\w-]+):\s*oklch\([^)]*\s285\)/g)].map((m) => m[1]).sort(), ['cr-agent', 'cr-agent-on-dark', 'cr-canvas-glow-violet'], 'violet is three tokens');
   const found = [];
   for (const f of files) {
     const s = fs.readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');

@@ -508,3 +508,12 @@ button.gp:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--t-fill, var(--t
   .wl-table .price-note .pn { white-space: normal; }
 }
 @media (max-width: 379.98px) { .pname { max-width: 58px; } .wl-table .mark { max-width: 64px; } .wl-table .risk-badge { max-width: 68px; } .wl-table td, .wl-table th { padding: 0 5px; } }
+
+/* ---- UI v3 (2026-10-30, UI_MASTER_PLAYBOOK.md §3): from 1280px the Desk
+   is one column of cards (the Focal block, the Market line, the ledger)
+   with the inspector beside it; the two share the row and wrap. ---- */
+@media (min-width: 1280px) {
+  .wl, .wl.has-inspector { display: flex; flex-wrap: wrap; gap: var(--v3-gap-main); align-items: flex-start; }
+  .wl-main { flex: 1 1 var(--v3-col-min); min-width: 0; padding-bottom: 0; display: flex; flex-direction: column; gap: var(--v3-gap-main); }
+  .wl > .inspector.is-docked { flex: 1 1 var(--v3-insp-min); max-width: var(--v3-insp-max); min-width: 0; top: var(--v3-pad-page); }
+}

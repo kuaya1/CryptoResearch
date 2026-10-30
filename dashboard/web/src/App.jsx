@@ -3,7 +3,7 @@ import { toast } from '../../public/ui.js';
 import { useDesk, useMedia } from './lib/hooks.js';
 import { nav, navigate, pageTitle, routeKey } from './lib/router.js';
 import { start } from './lib/start.js';
-import { Sidebar, TabBar, TopBar, DemoBanner, CommandBar, railCollapsed, saveRail } from './shell/Shell.jsx';
+import { Sidebar, SidebarV3, TabBar, TopBar, DemoBanner, CommandBar, railCollapsed, saveRail } from './shell/Shell.jsx';
 import { SECTIONS, PAGE_TITLES } from './shell/sections.js';
 import { openCommand, openPrefs, closePrefs, prefsOf } from './shell/overlays.js';
 import { Boundary, ViewError, retryableLazy, retryingImport } from './components/Boundary.jsx';
@@ -164,6 +164,7 @@ export default function App() {
   const d = useDesk();
   const phone = useMedia('(max-width: 767.98px)');
   const rail = useMedia('(max-width: 1023.98px)');
+  const wide = useMedia('(min-width: 1280px)');
   const [collapsed, setCollapsed] = useState(railCollapsed);
   useGlobalKeys();
   useAsyncErrors();
@@ -184,8 +185,20 @@ export default function App() {
   if (d.error) return <StartError error={d.error} />;
   if (d.checking || !d.index || !nav.route) return <div className="boot" role="status"><span className="sr-only">{d.checking ? 'Checking your session…' : 'Loading your workspace…'}</span></div>;
   const prefs = prefsOf();
-  return (
-    <div className={`app${collapsed && !phone ? ' rail-collapsed' : ''}`}>
+  // UI v3 (2026-10-30, §3): the Desk from 1280px is the v3 frame, the page
+  // centred on the canvas at 1560px with the text rail inside it; no top bar
+  // and no command bar. The command bar stays on the other pages (D12).
+  const v3 = wide && nav.route.name === 'watchlist';
+  const cmdbar = !rail && !phone && nav.route.name !== 'review' && nav.route.name !== 'watchlist';
+  const frame = v3 ? (
+    <div className="v3-page">
+      <SidebarV3 />
+      <main id="main" tabIndex={-1} className="page page-watchlist v3-main">
+        <RouteView />
+      </main>
+    </div>
+  ) : (
+    <>
       {phone ? null : <Sidebar collapsed={collapsed || rail} onCollapse={() => { const next = !collapsed; setCollapsed(next); saveRail(next); }} />}
       <div className="app-main">
         {phone ? <TopBar /> : null}
@@ -195,9 +208,14 @@ export default function App() {
         <main id="main" tabIndex={-1} className={`page page-${nav.route.name}`}>
           <RouteView />
         </main>
-        {!rail && !phone && nav.route.name !== 'review' ? <CommandBar /> : null}
+        {cmdbar ? <CommandBar /> : null}
       </div>
       {phone ? <TabBar /> : null}
+    </>
+  );
+  return (
+    <div className={`app${v3 ? ' is-v3' : ''}${collapsed && !phone && !v3 ? ' rail-collapsed' : ''}${cmdbar ? ' has-cmdbar' : ''}`}>
+      {frame}
       <Boundary resetKey={prefs || 'none'} onRetry={() => Preferences.retry()} fallback={(error, retry) => <aside className="prefs is-open is-error" aria-label="Preferences"><ViewError error={error} retry={retry} what="Preferences" compact><button type="button" className="btn btn-sm btn-ghost" onClick={closePrefs}>Close</button></ViewError></aside>}>
         {prefs ? <Suspense fallback={<PrefsLoading />}><Preferences section={prefs} /></Suspense> : null}
       </Boundary>
