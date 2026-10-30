@@ -9,6 +9,9 @@
 
 .rv-panes { flex: 1; min-height: 0; display: grid; grid-template-columns: 340px minmax(0, 1fr) 360px; border-top: 1px solid var(--border); background: var(--surface); }
 .rv-panes.is-two { grid-template-columns: 340px minmax(0, 1fr); }
+.rv-panes.is-ev-closed { grid-template-columns: 340px minmax(0, 1fr) auto; }
+.rv-ev-toggle { margin: 16px 16px 0; }
+.rv-panes.is-ev-closed .rv-right { padding-bottom: 16px; }
 .rv-left, .rv-right { min-height: 0; overflow: auto; overscroll-behavior: contain; background: var(--bg); }
 .rv-left { border-right: 1px solid var(--border); }
 .rv-right { border-left: 1px solid var(--border); }

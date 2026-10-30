@@ -615,6 +615,10 @@ try {
     // reload, Reopen; nothing written on opening.
     before = tab.writes.length;
     await go(tab, REVIEW[1], REVIEW[2]);
+    // The evidence pane starts folded (subtraction stage 4.1); open it once,
+    // and the choice is kept for the reads below.
+    ok(await tab.evalJs("__wait(() => { const b = document.querySelector('[data-key=\"rv-ev-toggle\"]'); return b && b.getAttribute('aria-expanded') === 'false' && !document.querySelector('.rv-ev'); }, 8000)"), 'review: the evidence pane starts folded behind "Evidence →"');
+    await tab.evalJs("document.querySelector('[data-key=\"rv-ev-toggle\"]').click(); true");
     await tab.evalJs("__wait(() => document.querySelector('.rv-ev .ag-item'), 8000)");
     const rv = await tab.evalJs("({ items: document.querySelectorAll('.rv-item[data-pid]').length, pids: new Set([...document.querySelectorAll('.rv-item[data-pid]')].map((b) => b.dataset.pid)).size, rail: ((document.querySelector('[data-key=\"nav-review\"] .nav-count') || {}).textContent || '').trim(), head: ((document.querySelector('.rv-pagehead .ph-count') || {}).textContent || '').trim(), primaries: document.querySelectorAll('.rv-ev .ag-item.is-primary').length, basis: [...document.querySelectorAll('.rv-ev .ag-basis')].map((n) => n.textContent), why: [...document.querySelectorAll('.rv-ev .ag-why')].every((n) => n.textContent.length > 20), mark: Boolean(document.querySelector('.rv-bar [data-key=\"rv-mark\"]')), pid: (document.querySelector('.rv-item.is-on') || { dataset: {} }).dataset.pid || null })");
     report.review = rv;

@@ -41,7 +41,7 @@ function attentionExtras(ws, rows, now) {
   const trader = tryRead(() => {
     const v = require('./trader-desk').view(ws, { now });
     const out = [];
-    if (v.settlement && v.settlement.state === 'unsettled') out.push({ project_id: null, record: 'trader-book', reason: 'book_unsettled', words: `The trader's Paper Book is not settled: ${v.settlement.words}` });
+    if (v.settlement && v.settlement.state === 'unsettled') out.push({ project_id: null, record: 'trader-book', reason: 'book_unsettled', words: `The trader simulation is not settled: ${v.settlement.words}` });
     for (const r of v.requests || []) {
       const at = r.phase === 'waiting' && r.exit_as_of ? Date.parse(r.exit_as_of) : NaN;
       if (!Number.isFinite(at)) continue;

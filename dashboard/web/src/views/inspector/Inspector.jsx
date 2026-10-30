@@ -207,7 +207,6 @@ export default function Inspector({ pid, wide }) {
         }}
       >
         <header className="insp-head" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
-          {modal ? <span className="insp-grip" aria-hidden="true" /> : null}
           <div className="ih-row">
             <Logo p={p} size={36} />
             <h2 id="insp-title" ref={heading} tabIndex={-1} title={p.name}>

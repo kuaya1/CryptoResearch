@@ -275,7 +275,7 @@ async function paperCard(ctx) {
   try {
     b = await ctx.api.get('/api/paper');
   } catch (_) {
-    return card('Paper Book', h('p', { class: 'muted' }, 'The paper book could not be read.'));
+    return card('PM decision cohort', h('p', { class: 'muted' }, 'The PM decision cohort could not be read.'));
   }
   const ret = (x) => {
     const r = returnWords(x);
@@ -321,7 +321,7 @@ async function paperCard(ctx) {
     toggle.setAttribute('aria-pressed', String(on));
     body.replaceChildren(on ? shadow : positions);
   };
-  return card('Paper Book', h('div', null,
+  return card('PM decision cohort', h('div', null,
     h('p', { class: 'small muted' }, summaryLine(b)),
     body,
   ), { note: b.meaning, actions: [toggle] });
@@ -333,12 +333,12 @@ async function paperCard(ctx) {
 // Book above and never added to it.
 // Read only: nothing here asks the book or the hourly read for anything.
 async function traderCard(ctx) {
-  const title = "Trader's Paper Book";
+  const title = 'Trader simulation';
   let v;
   try {
     v = await ctx.api.get('/api/paper/trader');
   } catch (err) {
-    return card(title, h('p', { class: 'muted' }, `The trader's Paper Book could not be read: ${err.message}`));
+    return card(title, h('p', { class: 'muted' }, `The trader simulation could not be read: ${err.message}`));
   }
   const usd = (w) => h('span', { class: `num ${w.tone || ''}`.trim(), title: w.title || null, dataset: w.exact ? { exact: w.exact } : null }, w.text);
   const amt = (s) => { const w = TB.amountWords(s); return h('span', { class: 'num', title: w.exact, dataset: w.exact ? { exact: w.exact } : null }, w.text); };
@@ -430,7 +430,7 @@ async function traderCard(ctx) {
     details(`NAV by the hour (${v.results.nav_by_hour.length})`, navTable, { id: 'tb-nav' }),
     details('Where the hours come from', h('div', null, h('p', { class: 'small muted' }, TB.candleWords(c)), sources), { id: 'tb-hours' }),
     unknown,
-  ), { note: `${v.results.version}: what an order would have done, with fills, fees, slippage and stops. Kept apart from the PM Paper Book above and never added to it; nothing here is a real order. Lot ${v.venue.lot}, minimum order $${v.venue.min_notional_usd}. Reading this writes nothing.` });
+  ), { note: `${v.results.version}: what an order would have done, with fills, fees, slippage and stops. Kept apart from the PM decision cohort above and from your Portfolio, and never added to either; nothing here is a real order. Lot ${v.venue.lot}, minimum order $${v.venue.min_notional_usd}. Reading this writes nothing.` });
 }
 
 // A long list a page at a time: the desk's claims are never drawn all at

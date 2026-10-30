@@ -94,7 +94,6 @@ function Consensus({ d, p }) {
           </DeepLink>
         </span>
       ))}
-      {cs.spread !== null ? <span className="iv-spread" title="Points between the highest and lowest firm grade. Agreement is not independent confirmation."><span className="iv-sep" aria-hidden="true">·</span>{` spread ${cs.spread.toFixed(1)}`}</span> : null}
     </p>
   );
 }
@@ -120,7 +119,7 @@ function VerdictCard({ d, p, cr }) {
   const level = rep && !rep.needs_text ? evidenceLevel(rep.evidence) : null;
   const flags = rep && rep.evidence ? (rep.evidence.high || 0) + (rep.evidence.medium || 0) : 0;
   const chips = level ? (
-    <DeepLink pid={pid} href={`#/project/${enc(pid)}/evidence?model=${c.provider || 'claude'}&open=checks`} className={`badge iv-ev ev-${level} ${level === 'serious' ? 'is-bad' : 'is-warn'}`} dataKey={`iv-ev-${pid}`} title={`${evidenceText(rep.evidence)}. Open the flags.`} ariaLabel={`${level === 'serious' ? 'Serious evidence flag' : 'Evidence flag'}: ${evidenceText(rep.evidence)}. Open the flags`}>
+    <DeepLink pid={pid} href={`#/project/${enc(pid)}/evidence?model=${c.provider || 'claude'}&open=checks`} className={`badge iv-ev ev-${level} is-warn`} dataKey={`iv-ev-${pid}`} title={`${evidenceText(rep.evidence)}. Open the flags.`} ariaLabel={`${level === 'serious' ? 'Serious evidence flag' : 'Evidence flag'}: ${evidenceText(rep.evidence)}. Open the flags`}>
       <TriangleAlert size={12} aria-hidden="true" />{`${level === 'serious' ? 'Serious evidence flag' : 'Evidence flag'}${flags > 1 ? ` · ${flags}` : ''}`}
     </DeepLink>
   ) : null;
@@ -175,9 +174,9 @@ function Triggers({ p, cr, wait }) {
         <dd>
           {risk ? (
             <>
-              <p className="ik-t" data-part="risk-text">{risk.text}</p>
+              <p className="ik-t clamp-3" data-part="risk-text" title={risk.text.length > 280 ? risk.text : undefined}>{risk.text}</p>
               <p className="tl-cite">
-                {risk.tags.map((tg) => <span key={tg} className={`etag t-${tg.toLowerCase()}`} title={TAG_TITLES[tg]}>{TAG_WORDS[tg]}</span>)}
+                {risk.tags.filter((tg) => tg !== 'V').map((tg) => <span key={tg} className={`etag t-${tg.toLowerCase()}`} title={TAG_TITLES[tg]}>{TAG_WORDS[tg]}</span>)}
                 {srcUrl ? <a href={srcUrl} target="_blank" rel="noopener noreferrer nofollow" data-key={`th-risk-src-${pid}`}>{srcName}<ArrowUpRight size={12} aria-hidden="true" /></a> : src ? <span>{srcName}</span> : <span className="faint">No source cited</span>}
               </p>
             </>
@@ -294,7 +293,7 @@ function RiskStrip({ d, p }) {
         </div>
         <div className="iv-rc" data-part="exit">
           <p className="iv-rc-k">{`Exit @ $${ex.size}`}</p>
-          <p className={`iv-rc-v ${ex.tone === 'bad' ? 'is-bad' : ex.tone === 'ok' ? 'is-ok' : 'is-unknown'}`} title={ex.title}>{ex.text}</p>
+          <p className={`iv-rc-v ${ex.tone === 'bad' ? 'is-warn' : ex.tone === 'ok' ? 'is-ok' : 'is-unknown'}`} title={ex.title}>{ex.text}</p>
           <p className="iv-rc-s">{`${ex.basis ? `${ex.basis} · ` : ''}${ex.limit}% limit`}</p>
         </div>
         <div className="iv-rc" data-part="pool">
@@ -314,13 +313,31 @@ function RiskStrip({ d, p }) {
             {pool.pool ? `${pool.pool.dex} · ${pool.pool.pair}${pool.pool.multiChain ? ` · ${pool.pool.chain}` : ''}` : pool.error ? `DexScreener could not be read: ${pool.error.message}` : pool.pool === null && NO_POOL[pool.none] ? NO_POOL[pool.none] : pool.pool === null ? 'DexScreener lists no pool for this contract' : null}
           </p>
           <p className={`iv-rc-s iv-gp ${contract.tone === 'bad' ? 'is-bad' : contract.tone === 'warn' ? 'is-warn' : ''}`} title={contract.title}>{contract.text}</p>
-          <p className="iv-rc-a">
-            <DeepLink pid={pid} href={`#/project/${enc(pid)}/market`} className="iv-link" dataKey={`iv-market-${pid}`}>Pools</DeepLink>
-            <DeepLink pid={pid} href={`#/project/${enc(pid)}/contract`} className="iv-link" dataKey={`iv-contract-${pid}`}>Contract</DeepLink>
-          </p>
         </div>
       </div>
     </section>
+  );
+}
+
+// The drawer's second level (subtraction stage 4.1): the models' spread, the
+// pool and contract pages and the whole bear text, one click away.
+function Details({ d, p, cr }) {
+  const pid = p.project_id;
+  const cs = consensusOf(p, d.index);
+  const full = cr.report;
+  const risk = full && full.assessment && !full.assessment.needs_text ? keyPoints(full.assessment).risk : null;
+  return (
+    <details className="iv-details" data-key={`iv-details-${pid}`}>
+      <summary>Details</summary>
+      <div className="iv-details-b">
+        {cs.spread !== null ? <p className="iv-spread" title="Points between the highest and lowest firm grade. Agreement is not independent confirmation.">{`Spread between the models' firm grades: ${cs.spread.toFixed(1)} points`}</p> : null}
+        {risk && risk.text.length > 280 ? <div><p className="iv-rc-k">Bear, in full</p><p className="ik-t">{risk.text}</p></div> : null}
+        <p className="iv-rc-a">
+          <DeepLink pid={pid} href={`#/project/${enc(pid)}/market`} className="iv-link" dataKey={`iv-market-${pid}`}>Pools</DeepLink>
+          <DeepLink pid={pid} href={`#/project/${enc(pid)}/contract`} className="iv-link" dataKey={`iv-contract-${pid}`}>Contract</DeepLink>
+        </p>
+      </div>
+    </details>
   );
 }
 
@@ -490,7 +507,7 @@ function ReportWait({ p, cr, current, failed }) {
   if (cr.status === 'pending' && current && wasResynced(p.project_id, cr.report_id)) {
     return (
       <div className="note note-warn mp-wait" role="status">
-        <span>{`The list names ${who}'s report ${cr.report_id}, which this project's record does not hold yet. Nothing from another report is shown in its place.`}</span>
+        <span title={cr.report_id || undefined}>{`The list names a report of ${who}'s that this project's record does not hold yet. Nothing from another report is shown in its place.`}</span>
         <button type="button" className="btn btn-sm" data-key={`resync-${p.project_id}`} onClick={() => refresh().catch((err) => toast(err.message, 'bad'))}>Read again</button>
       </div>
     );
@@ -514,6 +531,7 @@ export function ModelPanel({ d, p, detail, current = true, failed = false, mode 
       {mode === 'review' ? null : (
         <>
           <RiskStrip d={d} p={p} />
+          <Details d={d} p={p} cr={cr} />
           <Thesis p={p} cr={cr} wait={wait} />
           <PMDecisionCard p={p} />
           <NeedsYou d={d} p={p} detail={detail} />

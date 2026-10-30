@@ -95,7 +95,7 @@ export function exceptionsOf(index, extra = {}) {
   };
   source('queue', extra.queue, (q) => (q.step === 'ticket_failed' ? exception(q.project_id, q.ticket_id, 'ticket_failed', `${q.name || name.get(q.project_id) || q.project_id}: the Prosecutor's save was refused${q.refused_field ? ` (${q.refused_field})` : ''}.`, 'Run the Prosecutor again', `#/?p=${q.project_id}`) : null));
   source('jobs', extra.jobs, (j) => (j.failing ? exception(null, j.job, 'job_failing', `The ${j.job} job failed at ${j.at || 'an unknown time'}: ${j.error || 'no reason recorded'}.`, 'Open Activity', '#/?prefs=activity') : null));
-  source('trader', extra.trader, (x) => exception(x.project_id, x.record, x.reason, x.words, x.reason === 'exit_expiring' ? 'Quote exits again' : 'Open the Paper Book', x.reason === 'exit_expiring' ? `#/project/${x.project_id}/forensics?fx=exits` : '#/research?tab=outcomes'));
+  source('trader', extra.trader, (x) => exception(x.project_id, x.record, x.reason, x.words, x.reason === 'exit_expiring' ? 'Quote exits again' : 'Open the trader simulation', x.reason === 'exit_expiring' ? `#/project/${x.project_id}/forensics?fx=exits` : '#/research?tab=outcomes'));
   source('intake', extra.intake, (d) => exception(null, d.intake_id, 'intake_ambiguous', `A research request${d.label ? ` (${d.label})` : ''} matches more than one project.`, 'Choose the project', `#/new/${encodeURIComponent(d.intake_id)}`));
   if (extra.restored) out.push(exception(null, 'restored-copy', 'restored_copy', 'This is a restored copy: research asks no provider until it is released.', 'Release the copy', '#/?prefs=data'));
   const all = [...unread, ...out];
