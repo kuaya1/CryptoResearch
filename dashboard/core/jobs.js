@@ -79,8 +79,9 @@ function isDue(ws, name, state, now = Date.now(), opts = {}) {
       return require('./walletsync').isDue(ws, now);
     case 'forensics':
       // Closed without a monitored project, in a restored copy, and while
-      // GitHub's rate limit or a failure backoff runs.
-      return require('./forensic-monitor').isDue(ws, now);
+      // GitHub's rate limit or a failure backoff runs; open when the standing
+      // exit-quote policy has a pilot project to approve (stage 5.3).
+      return require('./forensic-monitor').isDue(ws, now) || require('./forensics').autoExitQuotePlan(ws).add.length > 0;
     case 'leads':
       // Closed until Eric turns leads on, in a restored copy, while CoinGecko's
       // or GoPlus's gate is closed, and with no asset due.
@@ -90,6 +91,8 @@ function isDue(ws, name, state, now = Date.now(), opts = {}) {
       // copy, and while GeckoTerminal's 429 or a failure backoff runs.
       return require('./trader-candles').isDue(ws, now);
     case 'research':
+      // Nothing is sent to a provider while Eric has automation paused.
+      if (require('./workspace').automationPaused(ws)) return false;
       return require('./research').hasDueWork(ws, now);
     case 'snapshot':
     case 'reviews':
@@ -179,8 +182,11 @@ async function runJobBody(ws, name, trigger) {
       return { status: r.status === 'not_configured' || r.status === 'held' ? 'skipped' : r.status, summary: r.message, error: r.status === 'failed' ? r.message : null };
     }
     case 'forensics': {
+      // The standing exit-quote policy first (off unless Eric turned it on).
+      const auto = require('./forensics').autoExitQuotes(ws);
       // Its own lease, gate, backoff and budget are inside refresh().
       const r = await require('./forensic-monitor').refresh(ws, { trigger });
+      if (auto.added.length) r.message = `Exit quotes approved by your standing policy for ${auto.added.length} pilot project${auto.added.length === 1 ? '' : 's'}. ${r.message || ''}`.trim();
       return { status: r.status === 'held' ? 'skipped' : r.status, summary: r.message, error: r.status === 'failed' ? r.message : null };
     }
     case 'trader': {
@@ -194,6 +200,7 @@ async function runJobBody(ws, name, trigger) {
       return { status: r.status === 'held' ? 'skipped' : r.status, summary: r.message, error: r.status === 'failed' ? r.message : null };
     }
     case 'research': {
+      if (require('./workspace').automationPaused(ws)) return { status: 'skipped', summary: 'Automation is paused: no research is sent until you resume it.' };
       const r = await require('./research').runDueJobs(ws, { trigger });
       return { status: r.status, summary: r.summary, error: r.status === 'failed' ? r.summary : null };
     }

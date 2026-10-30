@@ -36,7 +36,6 @@
   .drawer-scrim { display: none; }
 }
 html.has-drawer { overflow: hidden; }
-.insp-grip { display: block; width: 36px; height: 4px; margin: -6px auto 8px; border-radius: var(--r-pill); background: var(--border); }
 
 /* ---- head ---- */
 .insp-head { flex: none; padding: 16px 24px 14px; box-shadow: 0 1px 0 var(--color-border-subtle); background: var(--color-surface-elevated); position: relative; z-index: 1; }
@@ -74,7 +73,12 @@ html.has-drawer { overflow: hidden; }
 /* The four market figures: components/ui/MetricRibbon.jsx (ui.css .mribbon). */
 
 /* ---- body: the six blocks (views/inspector/ModelPanel.jsx) ---- */
-.insp-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 20px 24px 24px; }
+.insp-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 20px 24px 24px; scrollbar-width: none; }
+.insp-body::-webkit-scrollbar { display: none; }
+/* The drawer's Details fold (subtraction stage 4.1). */
+.iv-details { margin-top: 16px; font-size: var(--fs-sm); }
+.iv-details > summary { cursor: pointer; color: var(--text-2); font-weight: 500; }
+.iv-details-b { display: flex; flex-direction: column; gap: 10px; padding-top: 10px; }
 .iv { display: flex; flex-direction: column; gap: 20px; }
 .iv-h { font-size: var(--fs-ui); font-weight: 600; color: var(--text); margin: 0 0 10px; }
 .iv-link { display: inline-flex; align-items: center; gap: 3px; font-size: var(--fs-sm); font-weight: 500; }
@@ -206,9 +210,6 @@ html.has-drawer { overflow: hidden; }
 .pm-note { margin: 0; font-size: var(--fs-sm); }
 .pm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .pm-decided { margin: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: var(--fs-md); font-weight: 500; }
-.pm-pilot { margin: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 10px; border-top: 1px solid var(--border); font-size: var(--fs-sm); color: var(--text-2); }
-.pm-pilot-k { font-weight: 500; color: var(--text); }
-.pm-pilot .btn-link { margin-left: auto; }
 /* 6. your note */
 .iv-note { margin: 0; }
 .insp-sec { margin-top: 20px; }

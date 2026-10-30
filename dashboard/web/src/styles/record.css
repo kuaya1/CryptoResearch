@@ -112,3 +112,7 @@
 .ct-contract { min-width: 0; }
 .ct-contract .cc-head { align-items: center; }
 .ct-k { font-weight: 600; color: var(--text-2); }
+/* The pilot switch (operations; moved off the PM card, subtraction stage 4.2). */
+.pm-pilot { margin: 0 0 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); color: var(--text-2); }
+.pm-pilot-k { font-weight: 500; color: var(--text); }
+.pm-pilot .btn-link { margin-left: auto; }

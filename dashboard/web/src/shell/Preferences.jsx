@@ -175,7 +175,7 @@ function TicketSizing({ d }) {
 const TRADER_FIELDS = [
   ['stop_min_pct', 'Minimum stop distance (share of entry)', 'The stop is at least this share of the entry below it, such as 0.01 for 1%: more than 0, at most 0.5.'],
   ['stop_min_atr', 'Minimum stop distance (× 14-hour ATR)', 'And at least this multiple of the pair\'s 14-hour ATR below the entry; the larger of the two applies: more than 0, at most 20.'],
-  ['notional_max_pct', 'Notional cap (share of NAV)', 'An order\'s notional is at most this share of the Paper Book\'s NAV, such as 0.25 for 25%: more than 0, at most 1.'],
+  ['notional_max_pct', 'Notional cap (share of NAV)', 'An order\'s notional is at most this share of the trader simulation\'s NAV, such as 0.25 for 25%: more than 0, at most 1.'],
   ['max_validity_minutes', 'Longest life of an intent (minutes)', 'A trade intent lives at most this long after it was written: 1 to 10080.'],
   ['allowlist', 'Allowlist (pairs)', 'The only pairs an intent may open, exactly as the venue names them, such as BTC/USDC; separate them with commas.'],
 ];
@@ -217,7 +217,7 @@ function TraderRules({ d }) {
   return (
     <section className="l2-panel" aria-labelledby="prefs-trader-h">
       <header className="l2-panel-head">
-        <h3 className="l2-panel-t" id="prefs-trader-h" title="Your rules for the trader's Paper Book (cr-trader-rules@1), not universal rules, beside the engine's hard limits. While any is unset, an approve or a halve waits and no order is made.">Your trader rules</h3>
+        <h3 className="l2-panel-t" id="prefs-trader-h" title="Your rules for the trader simulation (cr-trader-rules@1), not universal rules, beside the engine's hard limits. While any is unset, an approve or a halve waits and no order is made.">Your trader rules</h3>
       </header>
       <div className="l2-panel-body">
         <form className="l2-form prefs-form" data-key="prefs-trader-form" onSubmit={(e) => { e.preventDefault(); save(); }}>
@@ -242,7 +242,7 @@ function TraderRules({ d }) {
 // ---- Screening: trader.book (core/trader-rules.js bookOf, slot 12c) ----------------------------
 
 const BOOK_FIELDS = [
-  ['cash_usd', 'Paper Book funding (USD)', 'The trader\'s Paper Book is funded once with this amount, before its first hour; a different amount later is never applied over it. More than 0, at most 10,000,000.'],
+  ['cash_usd', 'Trader simulation funding (USD)', 'The trader simulation is funded once with this amount, before its first hour; a different amount later is never applied over it. More than 0, at most 10,000,000.'],
   ['fee_rate', 'Venue fee (share of the notional)', 'The simulated venue\'s fee on every fill, maker and taker alike, such as 0.003 for 0.3%. An unknown fee is never read as 0. More than 0, at most 0.1.'],
 ];
 
@@ -265,7 +265,7 @@ function TraderBook({ d }) {
     setBusy(true);
     try {
       await api.post('/api/settings', { trader: { book: out } });
-      toast('Paper Book settings saved.');
+      toast('Trader simulation settings saved.');
       await refresh();
     } catch (e) {
       setErr(e.message);
@@ -277,7 +277,7 @@ function TraderBook({ d }) {
   return (
     <section className="l2-panel" aria-labelledby="prefs-book-h">
       <header className="l2-panel-head">
-        <h3 className="l2-panel-t" id="prefs-book-h" title="The trader's Paper Book (cr-paper@2): its starting cash and its simulated venue's fee. Neither has a default; while either is unset, an approve or a halve waits and no hour is read. Research > Outcomes shows the book.">Your Paper Book</h3>
+        <h3 className="l2-panel-t" id="prefs-book-h" title="The trader simulation (cr-paper@2): its starting cash and its simulated venue's fee. Neither has a default; while either is unset, an approve or a halve waits and no hour is read. Research > Outcomes shows the book.">Your trader simulation</h3>
       </header>
       <div className="l2-panel-body">
         <form className="l2-form prefs-form" data-key="prefs-book-form" onSubmit={(e) => { e.preventDefault(); save(); }}>
@@ -290,7 +290,7 @@ function TraderBook({ d }) {
           ))}
           {err ? <p className="l2-err" role="alert">{err}</p> : null}
           <div className="l2-actions">
-            <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !dirty} data-key="prefs-book-save">{busy ? 'Saving…' : 'Save Paper Book settings'}</button>
+            <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !dirty} data-key="prefs-book-save">{busy ? 'Saving…' : 'Save trader simulation settings'}</button>
             {dirty ? <button type="button" className="btn btn-ghost btn-sm" data-key="prefs-book-undo" onClick={() => { setForm(fresh()); setErr(null); }}>Discard changes</button> : null}
           </div>
         </form>
@@ -365,6 +365,53 @@ function ScoutLeads({ d }) {
           <div className="l2-actions">
             <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !dirty} data-key="prefs-leads-save">{busy ? 'Saving…' : 'Save scout lead settings'}</button>
             {dirty ? <button type="button" className="btn btn-ghost btn-sm" data-key="prefs-leads-undo" onClick={() => { setForm(fresh()); setErr(null); }}>Discard changes</button> : null}
+          </div>
+        </form>
+      </div>
+    </section>
+  );
+}
+
+// ---- Models & budget: automation.* (subtraction stage 5.3) -------------------------------------
+
+function Automation({ d }) {
+  const saved = (d.index.settings && d.index.settings.automation) || {};
+  const fresh = () => ({ paused: saved.paused === true, exit_quotes_auto: saved.exit_quotes_auto === true });
+  const [form, setForm] = useState(fresh);
+  const [busy, setBusy] = useState(false);
+  const key = JSON.stringify(saved);
+  const base = fresh();
+  const dirty = form.paused !== base.paused || form.exit_quotes_auto !== base.exit_quotes_auto;
+  useEffect(() => { if (!dirty) setForm(fresh()); }, [key]);
+  const save = async () => {
+    setBusy(true);
+    try {
+      await api.post('/api/settings', { automation: form });
+      toast(form.paused ? 'Automation paused.' : 'Automation settings saved.');
+      await refresh();
+    } catch (e) {
+      toast(e.message, 'bad');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="l2-panel" aria-labelledby="prefs-automation-h">
+      <header className="l2-panel-head">
+        <h3 className="l2-panel-t" id="prefs-automation-h" title="Paused, nothing new is dispatched by itself: no research is sent to a provider, the pilot runner starts no agent and no exit quote is approved by your standing policy. Trader settlement, candles, wallet sync and reconciliation go on.">Automation</h3>
+      </header>
+      <div className="l2-panel-body">
+        <form className="l2-form prefs-form" data-key="prefs-automation-form" onSubmit={(e) => { e.preventDefault(); save(); }}>
+          <label className="prefs-field" title="Halts new automated dispatches at once; settlement and reconciliation continue.">
+            <span>Pause automation</span>
+            <input type="checkbox" checked={form.paused} data-key="prefs-automation-paused" onChange={(e) => setForm({ ...form, paused: e.target.checked })} />
+          </label>
+          <label className="prefs-field" title="Exit quotes are approved by themselves for verified, quotable projects in the pilot, while their requests fit the monitor's monthly budget.">
+            <span>Quote exits for pilot projects by themselves</span>
+            <input type="checkbox" checked={form.exit_quotes_auto} data-key="prefs-automation-exit-quotes" onChange={(e) => setForm({ ...form, exit_quotes_auto: e.target.checked })} />
+          </label>
+          <div className="l2-actions">
+            <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !dirty} data-key="prefs-automation-save">{busy ? 'Saving…' : 'Save automation settings'}</button>
           </div>
         </form>
       </div>
@@ -520,7 +567,7 @@ export default function Preferences() {
             {section === 'screening' ? <><Screening d={d} /><TicketSizing d={d} /><TraderRules d={d} /><TraderBook d={d} /><ScoutLeads d={d} /></>
               : section === 'developer' ? <Developer d={d} />
                 : section === 'appearance' ? <Appearance />
-                : <Dom key={section} build={(L) => L.prefsSection(legacyCtx, section)} deps={[section, settingsKey]} />}
+                : <>{section === 'models' ? <Automation d={d} /> : null}<Dom key={section} build={(L) => L.prefsSection(legacyCtx, section)} deps={[section, settingsKey]} /></>}
             {section === 'appearance' ? <DeskDefaults /> : null}
           </div>
         </div>

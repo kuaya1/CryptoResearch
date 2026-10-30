@@ -20,33 +20,18 @@ function request(port, { method = 'GET', path = '/', headers = {}, body = null }
   });
 }
 
-function waitForEvent(port, predicate, timeoutMs = 8000) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      req.destroy();
-      reject(new Error('no matching change event'));
-    }, timeoutMs);
-    const req = http.request({ host: '127.0.0.1', port, path: '/api/events', headers: { host: `127.0.0.1:${port}` } }, (res) => {
-      let buf = '';
-      res.on('data', (c) => {
-        buf += c.toString('utf8');
-        for (const block of buf.split('\n\n')) {
-          const m = block.match(/^event: changed\ndata: (.*)$/m);
-          if (m) {
-            const ev = JSON.parse(m[1]);
-            if (predicate(ev)) {
-              clearTimeout(timer);
-              req.destroy();
-              resolve(ev);
-              return;
-            }
-          }
-        }
-      });
-    });
-    req.on('error', () => {});
-    req.end();
-  });
+// The pages' own way to see a change: poll GET /api/version (subtraction
+// stage 6.1 retired the event stream).
+async function waitForChange(port, token, predicate, timeoutMs = 8000) {
+  const first = JSON.parse((await request(port, { path: '/api/version', headers: { 'x-cr-token': token } })).body);
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const v = JSON.parse((await request(port, { path: `/api/version?since=${first.seq}`, headers: { 'x-cr-token': token } })).body);
+    const hit = (v.changes || []).find(predicate);
+    if (hit) return hit;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  throw new Error('no matching change');
 }
 
 const PORT = 47000 + Math.floor(Math.random() * 500);
@@ -126,7 +111,7 @@ test('local server: loopback only, host and origin checks, token, traversal, liv
   });
 
   await t.test('a change made outside the server (as Cowork or the CLI would) reaches open pages', async () => {
-    const waiting = waitForEvent(port, (ev) => (ev.projects || []).includes('outside-change'));
+    const waiting = waitForChange(port, token, (ev) => (ev.projects || []).includes('outside-change'));
     await new Promise((r) => setTimeout(r, 300));
     const other = openWorkspace({ root, actor: 'cli' });
     projects.addProject(other, { name: 'Outside Change', identity_status: 'pending' });
@@ -136,6 +121,8 @@ test('local server: loopback only, host and origin checks, token, traversal, liv
     assert.ok(idx.projects.some((p) => p.project_id === 'outside-change'));
     const health = JSON.parse((await request(port, { path: '/api/health?project=outside-change' })).body);
     assert.equal(health.project_present, true);
+    // The event stream is retired (subtraction stage 6.1): pages poll /api/version.
+    assert.equal((await request(port, { path: '/api/events', headers: { 'x-cr-token': token } })).status, 404);
   });
 
   await t.test('records survive a restart', async () => {

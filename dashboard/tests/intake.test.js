@@ -204,6 +204,35 @@ test('intake: an exact CoinGecko link or contract is looked up directly, without
   assert.match(on.identity.error, /lists no coin/);
 });
 
+test('intake: an exact link resolving to one listing confirms by itself (stage 5.2); a search, or a ticker already in the records, waits for Eric', async (t) => {
+  const { ws, cleanup } = tempWorkspace('intake-auto');
+  t.after(cleanup);
+  const f = cgStub({ search: SEARCH });
+  const { intake: a } = intake.createIntake(ws, { link: 'https://www.coingecko.com/en/coins/examplecoin-fictional' });
+  const oa = await intake.identify(ws, a.intake_id, { fetchImpl: f });
+  assert.equal(oa.status, 'researching');
+  assert.equal(oa.confirmed.coingecko_id, 'examplecoin-fictional');
+  assert.equal(oa.confirmed.by, 'exact_match');
+  assert.deepEqual(oa.confirmed.models, ['claude']);
+  assert.match(oa.events.at(-1).what, /confirmed by itself/);
+  const proj = projects.loadProject(ws, oa.confirmed.project_id);
+  assert.match(proj.identity.evidence.map((e) => e.note).join(' '), /the only listing for the exact link or contract Eric submitted/);
+  assert.equal(research.loadRun(ws, oa.confirmed.project_id, oa.confirmed.run_id).providers.join(), 'claude');
+  // A name search with one result is still Eric's choice.
+  const { intake: s } = intake.createIntake(ws, { link: 'https://coinmarketcap.com/currencies/other-xmpl-fictional/' });
+  const os = await intake.identify(ws, s.intake_id, { fetchImpl: f });
+  assert.equal(os.identity.candidates.length, 1);
+  assert.equal(os.status, 'needs_confirmation');
+  // A conflicting project already in the records: not confirmed by itself.
+  const held = tempWorkspace('intake-auto-ticker');
+  t.after(held.cleanup);
+  projects.addProject(held.ws, { name: 'Examplecoin (FICTIONAL)', symbol: 'XMC', official_website: 'https://classic.example/', coingecko_id: 'examplecoin-classic-fictional', evidence: [{ url: 'https://classic.example/', note: 'fictional' }] });
+  const { intake: c } = intake.createIntake(held.ws, { link: 'https://coinmarketcap.com/dexscan/base/0x2222222222222222222222222222222222222222/' });
+  const oc = await intake.identify(held.ws, c.intake_id, { fetchImpl: f });
+  assert.equal(oc.status, 'needs_confirmation');
+  assert.match(oc.events.at(-1).what, /^Not confirmed by itself: .*in your records/);
+});
+
 test('intake: CoinGecko rate limits are waited out once; a lookup failure is shown and can be retried', async (t) => {
   const { ws, cleanup } = tempWorkspace('intake-429');
   t.after(cleanup);
@@ -486,16 +515,16 @@ test('intake: dismissing works only before research starts', async (t) => {
   assert.throws(() => intake.dismissIntake(ws, doc.intake_id), /already started/);
 });
 
-test('intake: a confirmed request is researched by Claude, plus ChatGPT and Gemini where their API is set up, or all three when asked', (t) => {
+test('intake: a confirmed request is researched by Claude alone, even where another API is set up; all three only when asked (stage 5.1)', (t) => {
   const { tempWorkspace } = require('./helpers');
   const { ws, cleanup } = tempWorkspace('intake-models', { research: { providers: { chatgpt: { mock: 'ok' } } } });
   t.after(cleanup);
   const intakeMod = require('../core/intake');
-  assert.deepEqual(intakeMod.intakeModels(ws, { input: { instructions: null } }), ['claude', 'chatgpt'], 'ChatGPT runs by itself here; Gemini has no API');
+  assert.deepEqual(intakeMod.intakeModels(ws, { input: { instructions: null } }), ['claude'], 'a ChatGPT API alone adds nothing: the spine is Claude, then the Prosecutor');
   assert.deepEqual(intakeMod.intakeModels(ws, { input: { instructions: 'Research it with all three models, focus on unlocks' } }), ['claude', 'chatgpt', 'gemini']);
   // Gemini on hold (Eric, 2026-10-04): "all three" adds Claude and ChatGPT only.
   const held = tempWorkspace('intake-models-held', { research: { providers: { chatgpt: { mock: 'ok' } }, on_hold: { gemini: { since: '2026-10-04', reason: 'FICTIONAL hold' } } } });
   t.after(held.cleanup);
   assert.deepEqual(intakeMod.intakeModels(held.ws, { input: { instructions: 'Research it with all three models, focus on unlocks' } }), ['claude', 'chatgpt']);
-  assert.deepEqual(intakeMod.intakeModels(held.ws, { input: { instructions: null } }), ['claude', 'chatgpt']);
+  assert.deepEqual(intakeMod.intakeModels(held.ws, { input: { instructions: null } }), ['claude']);
 });

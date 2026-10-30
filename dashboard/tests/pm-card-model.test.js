@@ -71,8 +71,8 @@ test('item 56: the widest category link comes from the largest model-spread gap 
 test('item 56: the card draws the side-by-side block only when agent_disagreement is present', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'web', 'src', 'views', 'inspector', 'PMDecisionCard.jsx'), 'utf8');
   assert.match(src, /t\.agent_disagreement \? <Disagreement/);
-  assert.match(src, /Agent 1 · Researcher/);
-  assert.match(src, /Agent 2 · Prosecutor/);
+  assert.match(src, /"pm-dis-k">Researcher</);
+  assert.match(src, /"pm-dis-k">Prosecutor</);
   assert.match(src, /dis\.spread_points/);
   assert.match(src, /widestCategoryLink\(spread\)/);
 });

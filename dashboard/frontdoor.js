@@ -168,7 +168,7 @@ function openFrontDoor(server, { ws, hosted = null, port, quiet = false, state, 
       const hostHeader = String(req.headers.host || '').toLowerCase();
       if (!allowedHosts.has(hostHeader)) throw new HttpError(403, 'Host not allowed');
       const url = new URL(req.url, origin);
-      const bucket = url.pathname.startsWith('/api/') ? (['/api/version', '/api/index', '/api/events', '/api/session', '/api/health'].includes(url.pathname) ? url.pathname : '/api/(other)') : '(static)';
+      const bucket = url.pathname.startsWith('/api/') ? (['/api/version', '/api/index', '/api/session', '/api/health'].includes(url.pathname) ? url.pathname : '/api/(other)') : '(static)';
       state.stats.requests[bucket] = (state.stats.requests[bucket] || 0) + 1;
       if (oauth) {
         // The connector has its own sign-in (OAuth) and never uses the

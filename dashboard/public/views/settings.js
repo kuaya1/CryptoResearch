@@ -450,7 +450,6 @@ async function systemTab(ctx) {
   };
   writeBtn.onclick = action(writeBtn, async () => { lastWriteTest = await ctx.api.post('/api/doctor/write-test', {}); drawDoctor(lastWriteTest); return true; }, 'Write test run');
   ctx.api.get('/api/doctor').then(drawDoctor).catch((err) => doc.replaceChildren(callout(err.message, 'bad')));
-  const jobs = idx.settings.jobs || {};
   // Connected apps: assistant connections (Claude, ChatGPT, Gemini) Eric
   // approved for the online desk.
   const conn = h('div', null, h('p', { class: 'small muted' }, 'Loading…'));
@@ -502,8 +501,7 @@ async function systemTab(ctx) {
       hostedDesk
         ? h('li', null, h('strong', null, 'Assistants: '), 'Claude in Cowork, ChatGPT and Gemini work on this desk through the CryptoResearch connector (Connected apps, above): they find and add projects, do the research themselves under their own plans and save the full report here, each under its own name. No CoinGecko or paid model API is needed for that. Research by the paid APIs in the background happens only for models whose API key you added on Render, within your research spending limits.')
         : h('li', null, h('strong', null, 'Cowork: '), 'a Cowork task may run in Anthropic\'s cloud. It can reach this folder only while the Claude desktop app is open and the folder is connected. Being able to write files there does not mean it can run programs on this PC: when it cannot, it drops a request in inbox/requests/ and this PC applies it. Scheduled Cowork tasks also run in the cloud. Through the connector, Cowork works on the online desk instead.'),
-      h('li', null, h('strong', null, 'Holdings: '), 'change only when you record transactions.'),
-      jobs.evidence_watch ? h('li', null, h('strong', null, 'Evidence watch: '), jobs.evidence_watch.note || 'optional; produces a dated digest and never overwrites grades.') : null)),
+      h('li', null, h('strong', null, 'Holdings: '), 'change only when you record transactions.'))),
     hostedDesk ? null : card('Scheduled task (Windows)', sched),
     card('Health checks', doc, { note: 'Same as: node dashboard/cli.js doctor' }),
     card('Privacy', h('ul', { class: 'list' },

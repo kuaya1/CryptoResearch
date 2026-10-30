@@ -121,12 +121,39 @@ function forcedTicket(step, ticket, o) {
   return step.step === 'pm_review' && Boolean(ticket && ticket.desk_gate === true && ticket.status === 'pending_pm_review');
 }
 
-function runLocal(o) {
+// The claim's answers that stop the runner (cr-pilot-claim@1): another runner
+// holds the project, an expired dispatch waits to be reconciled, the one
+// correction was used, or Eric paused automation.
+const CLAIM_STOPS = new Set(['claimed', 'reconcile', 'correction_limit', 'paused']);
+
+// A claim not yet bound is let go when the runner stops; a bound one (an
+// agent was dispatched and its outcome is unknown) is left to expire, so the
+// next runner reconciles instead of dispatching it again.
+function runLocal(o, { call = cli } = {}) {
+  const h = { token: null, bound: false };
+  try {
+    return localSteps(o, call, h);
+  } finally {
+    if (h.token && !h.bound) call(['tickets', 'release', o.project, '--token', h.token, '--outcome', 'stopped']);
+  }
+}
+
+function localSteps(o, cli, h) {
   for (let i = 0; i < MAX_STEPS; i++) {
     const q = cli(['tickets', 'queue', o.project]);
     let s = q.steps[0];
     if (!s) throw new Error(`No project ${o.project} on this desk.`);
     say(`[${i + 1}] ${s.name}: ${s.step} — ${s.why}`);
+    let token = null;
+    if (!o.dryRun && ['research', 'ticket', 'ticket_failed', 'gate_closed'].includes(s.step)) {
+      const c = cli(['tickets', 'claim', o.project, '--owner', `pilot ${process.pid}`, ...(s.force ? ['--force-prosecution'] : [])]);
+      if (CLAIM_STOPS.has(c.status)) return say(`    Not dispatched: ${c.words}`);
+      if (c.status !== 'claimed_now') return say(`    Not dispatched: ${c.words || c.status}`);
+      token = c.token;
+      Object.assign(h, { token, bound: false });
+    }
+    const bind = (args) => { if (token) { cli(['tickets', 'bind', o.project, '--token', token, ...args]); h.bound = true; } };
+    const done = () => { if (token) { cli(['tickets', 'release', o.project, '--token', token]); Object.assign(h, { token: null, bound: false }); } };
     const inForce = o.forceProsecution && s.step === 'pm_review' ? cli(['tickets', 'view', o.project]).ticket : null;
     if (forcedTicket(s, inForce, o)) {
       say('    Eric\'s override: a Prosecutor writes the trade plan; the desk\'s gate still sizes it.');
@@ -140,6 +167,7 @@ function runLocal(o) {
         runId = r.run_id;
         say(`    research run ${runId} (${r.status})`);
       }
+      bind(['--run', runId]);
       const prompt = cli(['research', 'prompt', o.project, runId], { text: true });
       say(`    Agent 1: claude -p on the frozen research prompt (${prompt.length} characters)…`);
       const report = claude(prompt, { tools: WEB_TOOLS, model: o.model, timeoutMin: o.timeoutMin });
@@ -147,6 +175,7 @@ function runLocal(o) {
       const saved = cli(['import-text', '--provider', 'claude', '--project', o.project, '--text-file', f, '--run', runId]);
       say(`    saved: ${saved.status}${saved.report_id ? ` ${saved.report_id}` : ''}${saved.message ? ` — ${saved.message}` : ''}`);
       if (saved.verified === false) throw new Error('The report did not read back as written; run the pilot again (an identical save is recognized).');
+      done();
       continue;
     }
     if (s.step === 'gate_closed') {
@@ -154,6 +183,7 @@ function runLocal(o) {
       const g = cli(['tickets', 'start', o.project, '--utterance', 'autonomous pilot (npm run pilot)']);
       say(`    desk gate: ${g.status} ${g.receipt_id || ''} — ${g.message}`);
       if (g.verified === false) throw new Error('The desk\'s gate receipt did not read back as written; run the pilot again.');
+      done();
       continue;
     }
     if (s.step === 'ticket_failed') say(`    the last save was refused${s.refused_field ? ` (${s.refused_field})` : ''}: running the Prosecutor again on ${s.ticket_id}.`);
@@ -161,6 +191,7 @@ function runLocal(o) {
       if (o.dryRun) return say('    would run Agent 2 (the Prosecutor) with claude -p, then save the ticket.');
       const t = cli(['tickets', 'start', o.project, ...(s.refresh ? ['--reopen'] : []), ...(s.force ? ['--force-prosecution'] : []), '--assistant', '--mode', 'cli', '--utterance', s.force ? (o.ownerWords || FORCE_WORDS) : 'autonomous pilot (npm run pilot)']);
       if (!t.ticket_id) throw new Error(t.message);
+      bind(['--ticket', t.ticket_id]);
       const prompt = cli(['tickets', 'prompt', o.project, t.ticket_id], { text: true });
       say(`    Agent 2: claude -p on the frozen Prosecutor prompt ${t.ticket_id} (${prompt.length} characters)…`);
       const ticket = claude(prompt, { tools: WEB_TOOLS, model: o.model, timeoutMin: o.timeoutMin });
@@ -168,6 +199,7 @@ function runLocal(o) {
       const saved = cli(['tickets', 'import', o.project, t.ticket_id, '--text-file', f]);
       say(`    saved: ${saved.status} ${saved.receipt_id || ''} — ${saved.message}`);
       if (saved.verified === false) throw new Error('The ticket did not read back as written; run the pilot again.');
+      done();
       continue;
     }
     say(s.step === 'pm_review' ? '    Done: the ticket waits for your PM review (inspector > PM decision).' : '    Nothing for the agents to do.');
@@ -278,7 +310,7 @@ function main() {
   else throw new Error('--desk is local or online.');
 }
 
-module.exports = { resolveClaude, parse, forcedTicket, roleInstruction, roleTools, roleForStep, nextStepOf, runOnline, ROLE_TOOLS, FORCE_WORDS };
+module.exports = { resolveClaude, parse, forcedTicket, roleInstruction, roleTools, roleForStep, nextStepOf, runOnline, runLocal, ROLE_TOOLS, FORCE_WORDS };
 
 if (require.main === module) {
   try {

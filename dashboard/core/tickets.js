@@ -2477,6 +2477,7 @@ module.exports = {
   setPilot,
   nextStep,
   pilotQueue,
+  readTicketProfile: readProfile,
   pilotCandidates,
   candidateBoard,
   exitMatrix,

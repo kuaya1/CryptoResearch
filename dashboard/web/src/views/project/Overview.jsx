@@ -56,9 +56,12 @@ export function ViewLink({ pid, href, children, className, dataKey }) {
   );
 }
 
+// A chip only where the claim is not the researcher's own [V] reading (a
+// project claim, an inference): [V] is the default and goes unsaid
+// (subtraction stage 4.1).
 export function TagChips({ tags }) {
   if (!tags.length) return <span className="etag none">No claim cited</span>;
-  return tags.map((t) => <span key={t} className={`etag t-${t.toLowerCase()}`} title={TAG_TITLES[t]}>{TAG_WORDS[t]}</span>);
+  return tags.filter((t) => t !== 'V').map((t) => <span key={t} className={`etag t-${t.toLowerCase()}`} title={TAG_TITLES[t]}>{TAG_WORDS[t]}</span>);
 }
 
 export function CiteLine({ f }) {
@@ -75,7 +78,7 @@ export function CiteLine({ f }) {
           {f.sources.length > 1 ? <span className="faint" title={f.sources.slice(1).map((s) => s.title || s.url || s.source_id).join('\n')}>{`+${f.sources.length - 1} more`}</span> : null}
         </>
       ) : null}
-      {f.claims.length ? <span className="cite-ids" title={f.claims.map((c) => `${c.id}${c.as_of ? ` (as of ${c.as_of})` : ''}`).join(', ')}>{f.claims.map((c) => c.id).join(' ')}</span> : null}
+      {f.claims.length ? <span className="cite-ids" title={f.claims.map((c) => `${c.id}${c.as_of ? ` (as of ${c.as_of})` : ''}`).join(', ')}>{`${f.claims.length} ${f.claims.length === 1 ? 'source' : 'sources'} →`}</span> : null}
       {f.dangling.length ? <span className="cite-dangling" title="These references are not in the report's claim or source list">{`${f.dangling.join(', ')} not listed`}</span> : null}
     </p>
   );
@@ -105,20 +108,31 @@ function gradeFlagWords(n) {
 // Each chip jumps to its sentence below. On the Overview the evidence flag has
 // no sentence there (the chip says it already): it opens the Evidence view at
 // the desk's checks instead.
+// The evidence flag and "own total differs" read as one amber integrity chip
+// (subtraction stage 4.1): both say the grade stands as calculated and its
+// basis needs a look; the sentences below keep each in full.
+function integrityOf(ns) {
+  const ev = ns.find((n) => n.kind === 'evidence');
+  const mt = ns.find((n) => n.kind === 'model_total');
+  if (!ev || !mt) return ns;
+  const merged = { kind: 'integrity', tone: 'warn', words: `${gradeFlagWords(ev)} · ${gradeFlagWords(mt).replace(/^Own/, 'own')}`, evidence: ev };
+  return ns.filter((n) => n !== ev && n !== mt).concat(merged).sort((x, y) => (x.kind === 'integrity' ? -1 : y.kind === 'integrity' ? 1 : 0));
+}
+
 export function GradeFlags({ m, pid = null, view = 'evidence' }) {
-  const ns = m.notices.filter((n) => GRADE_NOTICES.includes(n.kind));
+  const ns = integrityOf(m.notices.filter((n) => GRADE_NOTICES.includes(n.kind)).map((n) => (n.kind === 'model_total' || n.kind === 'evidence' ? { ...n, tone: 'warn' } : n)));
   if (!ns.length) return null;
   const evidenceHref = pid ? `#/project/${enc(pid)}/evidence?model=${m.provider}${m.is_latest ? '' : `&report=${enc(m.report_id)}`}&open=checks` : null;
   return (
     <ul className="gflags" aria-label="Warnings about this grade">
       {ns.map((n) => {
-        const cls = `gflag tone-${n.tone}${n.kind === 'evidence' ? ` ev-${n.level}` : ''}`;
-        const inner = <><TriangleAlert size={13} strokeWidth={2} aria-hidden="true" /><span>{gradeFlagWords(n)}</span></>;
+        const cls = `gflag tone-${n.kind === 'integrity' ? 'warn' : n.tone}${n.kind === 'evidence' ? ` ev-${n.level}` : ''}`;
+        const inner = <><TriangleAlert size={13} strokeWidth={2} aria-hidden="true" /><span>{n.kind === 'integrity' ? n.words : gradeFlagWords(n)}</span></>;
         return (
           <li key={n.kind}>
-            {n.kind === 'evidence' && view === 'overview' && evidenceHref
+            {(n.kind === 'evidence' || n.kind === 'integrity') && view === 'overview' && evidenceHref
               ? <ViewLink pid={pid} href={evidenceHref} className={cls} dataKey={`brief-gflag-${n.kind}`}>{inner}</ViewLink>
-              : <button type="button" className={cls} data-key={`brief-gflag-${n.kind}`} onClick={() => jumpTo(`brief-notice-${n.kind}`)}>{inner}</button>}
+              : <button type="button" className={cls} data-key={`brief-gflag-${n.kind}`} onClick={() => jumpTo(`brief-notice-${n.kind === 'integrity' ? 'model_total' : n.kind}`)}>{inner}</button>}
           </li>
         );
       })}
@@ -306,6 +320,14 @@ function Verdict({ m, pid, who, staleDays }) {
         verdict={v.label}
       />
       <KeyPoints m={m} who={who} />
+      {/* After the key points, so the strongest risk stays on a phone's first screen. */}
+      {w.metric ? (
+        <div className="ov-one" data-key="brief-one">
+          <h3 className="ov-h3">The one development to watch</h3>
+          <p><strong>{w.metric.metric}</strong>{w.metric.threshold ? <span className="fig">{` · ${w.metric.threshold}`}</span> : null}</p>
+          {w.metric.why ? <p className="oq-src">{w.metric.why}</p> : null}
+        </div>
+      ) : null}
       {m.grade.status === 'withheld' && m.grade.why.items.length ? (
         <div className="ov-missing">
           <h3>Not scored</h3>
@@ -379,11 +401,24 @@ function CategoryItem({ x, who }) {
   );
 }
 
+// A section below the verdict reads as one summary line, its key figure on
+// the right, until opened (subtraction stage 4.1); what was opened stays open
+// in this browser.
+const FOLD_KEY = (id) => `cr.brief.open.${id}`;
 function Section({ id, title, sub = null, children, className = '' }) {
+  const [open, setOpen] = useState(() => { try { return localStorage.getItem(FOLD_KEY(id)) === '1'; } catch (_) { return false; } });
+  const onToggle = (e) => {
+    const now = e.currentTarget.open;
+    if (now === open) return;
+    setOpen(now);
+    try { localStorage.setItem(FOLD_KEY(id), now ? '1' : '0'); } catch (_) { /* kept for this page only */ }
+  };
   return (
     <section className={`ov-sec ov-${id} ${className}`.trim()} id={`bf-${id}`} aria-labelledby={`bf-h-${id}`}>
-      <h2 className="ov-h" id={`bf-h-${id}`}>{title}{sub ? <span className="ov-h-sub">{sub}</span> : null}</h2>
-      {children}
+      <details className="ov-fold" open={open} onToggle={onToggle} data-key={`brief-sec-${id}`}>
+        <summary className="ov-fold-s"><h2 className="ov-h" id={`bf-h-${id}`}>{title}</h2>{sub ? <span className="ov-h-sub">{sub}</span> : null}</summary>
+        {open ? children : null}
+      </details>
     </section>
   );
 }
@@ -658,13 +693,6 @@ function Watch({ m, who, pid }) {
       {w.review_trigger_only ? <p className="ow-ev-x"><span className="k">Review sooner if</span>{w.review_trigger_only}</p> : null}
       {w.undated.length ? <div className="ow-aside"><h3 className="ov-h3">Date unknown</h3><ul>{w.undated.map((x) => <li key={x.title}>{x.title}<span className="faint">{` · ${CERTAINTY_WORDS[x.certainty]}`}</span></li>)}</ul></div> : null}
       {w.outside.length ? <div className="ow-aside"><h3 className="ov-h3">Outside the horizon</h3><ul>{w.outside.map((x) => <li key={x.title}>{x.title}<span className="faint">{` · ${windowWords(x.start, x.end)} · ${CERTAINTY_WORDS[x.certainty]}`}</span></li>)}</ul></div> : null}
-      {w.metric ? (
-        <div className="ow-metric">
-          <h3 className="ov-h3">The one development to watch</h3>
-          <p><strong>{w.metric.metric}</strong>{w.metric.threshold ? <span className="fig">{` · ${w.metric.threshold}`}</span> : null}</p>
-          {w.metric.why ? <p className="oq-src">{w.metric.why}</p> : null}
-        </div>
-      ) : null}
       {m.chart ? (
         <details className="fold" data-key="brief-chart">
           <summary>{`${who}'s chart and cycle reading`}</summary>

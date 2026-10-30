@@ -23,6 +23,7 @@ import { loadLegacy } from '../../components/Dom.jsx';
 import { Panel, Fold, KV, None, LazyPre, useLazyText, readText, CopyButton, enc, plural } from './kit.jsx';
 import { TextButton } from './forensics/TextButton.jsx';
 import { CaseButton } from './forensics/CaseButton.jsx';
+import { PilotLine } from './PilotLine.jsx';
 import '../../styles/record.css';
 
 const words = (s) => (s === null || s === undefined || s === '' ? '' : String(s).replace(/_/g, ' '));
@@ -639,6 +640,7 @@ function Runs({ d, row, pid, wantRun, hostedOn }) {
           </button>
         )}
       </div>
+      {row && row.ticket && !row.ticket.unavailable && !archived ? <PilotLine p={row} t={row.ticket} /> : null}
       {runs.length ? runs.map((run) => (run && run.broken
         ? <p key={run.run_id} id={`run-card-${run.run_id}`} className="note note-bad rc-broken" role="note">{`Run ${run.run_id} could not be read: ${run.error || 'unknown error'}`}</p>
         : <RunCard key={run.run_id} d={d} pid={pid} run={run} wantRun={wantRun} hostedOn={hostedOn} />)) : <None>No research runs yet.</None>}

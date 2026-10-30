@@ -527,13 +527,6 @@ async function exportFixtures(ws, { dryRun = false, completeExisting = false, en
   };
 }
 
-// The desk's real records, all projects at once. Prepared (explorer-adapter.js
-// deskSources) and deliberately not enabled: copying real research to
-// Supabase is Eric's decision, made in a later version.
-function exportDesk() {
-  throw new ExplorerError('REFUSED', 'Exporting all real desk records to the Explorer is prepared but not enabled. Preview one project with: explorer export --project <id> --dry-run');
-}
-
 const sha256 = (text) => require('crypto').createHash('sha256').update(text, 'utf8').digest('hex');
 
 // One real project, the canary. --dry-run reads its records through the same
@@ -568,4 +561,4 @@ function resetMemory() {
   memory = null;
 }
 
-module.exports = { ExplorerError, keyKind, resolve, status, navInfo, read, compareData, shapeReport, orderKey, exportFixtures, exportDesk, exportProject, fixtureBatch, resetMemory, STALE_DAYS, URL_RE };
+module.exports = { ExplorerError, keyKind, resolve, status, navInfo, read, compareData, shapeReport, orderKey, exportFixtures, exportProject, fixtureBatch, resetMemory, STALE_DAYS, URL_RE };

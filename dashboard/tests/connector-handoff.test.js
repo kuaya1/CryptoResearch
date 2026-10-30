@@ -562,3 +562,43 @@ test('auth: an access token that expires during a long session gets a 401 invali
   assert.equal(none.status, 401);
   assert.doesNotMatch(none.headers['www-authenticate'], /error=/);
 });
+
+test('the engineering OAuth resource is retired (subtraction stage 6.2): its discovery is 404, no token is issued or refreshed for it, and /mcp is unchanged', async (t) => {
+  const d = await desk(t, 'eng-retired');
+  for (const p of ['/.well-known/oauth-protected-resource/mcp/engineering', '/.well-known/oauth-authorization-server/mcp/engineering']) {
+    const r = await req(d.port, { path: p });
+    assert.equal(r.status, 404, p);
+  }
+  const pr = await req(d.port, { path: '/.well-known/oauth-protected-resource/mcp' });
+  assert.equal(pr.status, 200);
+  assert.equal(pr.json.resource, `${ORIGIN}/mcp`);
+  assert.deepEqual(pr.json.scopes_supported, ['desk', 'offline_access']);
+  const as = await req(d.port, { path: '/.well-known/oauth-authorization-server' });
+  assert.equal(as.status, 200);
+  assert.ok(!as.json.scopes_supported.includes('engineering'));
+  // An approval asked for the engineering resource is refused as an unknown target.
+  const redirect = 'https://claude.ai/api/mcp/auth_callback';
+  const reg = await req(d.port, { method: 'POST', path: '/oauth/register', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Claude', redirect_uris: [redirect], grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none' }) });
+  const challenge = b64url(crypto.createHash('sha256').update(b64url(crypto.randomBytes(40))).digest());
+  const q = form({ response_type: 'code', client_id: reg.json.client_id, redirect_uri: redirect, code_challenge: challenge, code_challenge_method: 'S256', state: 's', scope: 'engineering', resource: `${ORIGIN}/mcp/engineering` });
+  const eng = await req(d.port, { path: `/oauth/authorize?${q}` });
+  assert.equal(new URL(eng.headers.location).searchParams.get('error'), 'invalid_target');
+  // The desk's own connection works as before.
+  const claude = await connect(d, { redirect, clientName: 'Claude' });
+  assert.equal((await tool(d, claude.access, 'desk_status', {})).status, 200);
+  // A grant stored for engineering earlier gets no token and reaches nothing.
+  const file = path.join(d.ws.root, '.cr', 'oauth.json');
+  const store = readJson(file);
+  const old = await connect(d, { redirect, clientName: 'Claude' });
+  await d.restart();
+  const s2 = readJson(file);
+  const gid = Object.keys(s2.grants).find((g) => !store.grants[g]);
+  s2.grants[gid] = { ...s2.grants[gid], audience: 'engineering', role: 'worker' };
+  fs.writeFileSync(file, JSON.stringify(s2));
+  await d.restart();
+  const refreshed = await req(d.port, { method: 'POST', path: '/oauth/token', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form({ grant_type: 'refresh_token', refresh_token: old.refresh, client_id: old.clientId }) });
+  assert.equal(refreshed.status, 400);
+  assert.match(refreshed.text, /engineering connection is retired/);
+  assert.equal((await tool(d, old.access, 'desk_status', {})).status, 401);
+  assert.equal((await tool(d, claude.access, 'desk_status', {})).status, 200, 'the desk connection is untouched');
+});

@@ -197,29 +197,6 @@ function RuleNote({ pid, t }) {
   return note ? <p className="pm-alert" data-key={`pm-rule-${pid}`}>{note}</p> : null;
 }
 
-function PilotLine({ p, t, busy, setBusy }) {
-  const pid = p.project_id;
-  const on = Boolean(t && t.pilot);
-  return (
-    <p className="pm-pilot">
-      <span className="pm-pilot-k">Autonomous pilot</span>
-      <span className="pm-pilot-v">{on ? (t.open ? `Agent 2 ticket ${t.open.state === 'running' ? 'in progress' : 'waiting'}` : t.status ? 'On' : 'On · next: npm run pilot') : 'Off'}</span>
-      <button type="button" className="btn-link" data-key={`pm-pilot-${pid}`} disabled={busy === 'pilot'} onClick={async () => {
-        setBusy('pilot');
-        try {
-          await api.post(`/api/projects/${enc(pid)}/tickets/pilot`, { on: !on });
-          toast(on ? 'Pilot off for this project' : 'Pilot on: Claude researches, then prosecutes');
-          await refresh();
-        } catch (err) {
-          toast(err.message, 'bad');
-        } finally {
-          setBusy(null);
-        }
-      }}>{on ? 'Turn off' : 'Turn on'}</button>
-    </p>
-  );
-}
-
 // Trade Plan strip (item 49, cr-ticket-geometry@2): where the stored price sits
 // against the receipt's entry zone, target and invalidation price. Numbers the
 // desk does not have read "unknown"; nothing is filled in.
@@ -239,7 +216,7 @@ function TradePlan({ pid, g }) {
   );
 }
 
-// Item 56: Agent 1 beside Agent 2, never averaged: the researcher's grade and
+// Item 56: the Researcher beside the Prosecutor, never averaged: the researcher's grade and
 // verdict, the Prosecutor's conviction and verdict, the spread between them
 // and the Prosecutor's own note; when the project has model-spread alerts, a
 // link to Compare at the widest diverging category.
@@ -249,12 +226,12 @@ function Disagreement({ pid, t, spread, dis, r, q, fatal }) {
     <div className="pm-dis" data-key={`pm-disagreement-${pid}`} aria-label="Researcher and Prosecutor side by side">
       <div className="pm-sbs">
         <div className="pm-sbs-cell" data-key={`pm-agent1-${pid}`}>
-          <p className="pm-dis-k">Agent 1 · Researcher</p>
+          <p className="pm-dis-k">Researcher</p>
           <p className="pm-sbs-v">{r.grade_display || r.grade || '—'}</p>
           <p className="pm-sbs-s">{r.verdict || 'no verdict'}</p>
         </div>
         <div className="pm-sbs-cell" data-key={`pm-agent2-${pid}`}>
-          <p className="pm-dis-k">Agent 2 · Prosecutor</p>
+          <p className="pm-dis-k">Prosecutor</p>
           <p className="pm-sbs-v">{q.conviction_score ?? '—'}</p>
           <p className="pm-sbs-s">{fatal.length ? `${fatal.length} fatal flaw${fatal.length === 1 ? '' : 's'} (${TEST_WORDS[fatal[0].test] || fatal[0].test})` : VERDICT_WORDS[q.verdict] || q.verdict || 'no verdict'}</p>
         </div>
@@ -277,7 +254,6 @@ export function PMDecisionCard({ p }) {
       <section className="pm-card" aria-labelledby={`pm-h-${pid}`}>
         <h3 className="iv-h" id={`pm-h-${pid}`}>PM decision</h3>
         <p className="faint">No ticket yet.</p>
-        <PilotLine p={p} t={t} busy={busy} setBusy={setBusy} />
       </section>
     ) : null;
   }
@@ -363,7 +339,6 @@ export function PMDecisionCard({ p }) {
             </>
           )}
         </Actions>
-        <PilotLine p={p} t={t} busy={busy} setBusy={setBusy} />
       </section>
     );
   }
@@ -451,7 +426,6 @@ export function PMDecisionCard({ p }) {
         )}
         {t.can_reopen && !(decided && decided.action === 'reopen') ? <button type="button" className="btn btn-sm" data-key={`pm-reopen-${pid}`} disabled={Boolean(busy)} title={t.can_reopen.why} onClick={() => decide('reopen')}>{t.can_reopen.kind === 'exit_expired' ? 'Renew exit evidence' : 'Re-open ticket'}</button> : null}
       </Actions>
-      <PilotLine p={p} t={t} busy={busy} setBusy={setBusy} />
     </section>
   );
 }

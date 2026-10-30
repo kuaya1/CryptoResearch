@@ -65,10 +65,13 @@ export function shortReason(r) {
 
 // ---- the queue ------------------------------------------------------------------------
 
+const EV_KEY = 'cr.review.evidence';
+
+// A group with nothing in it is left out (subtraction stage 4.1).
 function QueueList({ d, q, sel, onPick }) {
   return (
     <div className="rv-queue">
-      {q.groups.map((g) => (
+      {q.groups.filter((g) => g.count > 0).map((g) => (
         <section key={g.id} className="rv-group" aria-labelledby={`rv-g-${g.id}`}>
           <h2 className="rv-gh" id={`rv-g-${g.id}`}><span>{g.label}</span><span className="rv-gn">{g.count}</span></h2>
           {g.id === 'imports' ? (
@@ -540,6 +543,10 @@ export default function Review() {
   const group = route.query.get('group');
   const phone = useMedia('(max-width: 767.98px)');
   const wide = useMedia('(min-width: 1280px)');
+  // The evidence pane is folded behind "Evidence →" until asked for
+  // (subtraction stage 4.1), the choice kept per browser.
+  const [evOpen, setEvOpen] = useState(() => { try { return localStorage.getItem(EV_KEY) === 'open'; } catch (_) { return false; } });
+  const toggleEv = () => setEvOpen((v) => { try { localStorage.setItem(EV_KEY, v ? 'closed' : 'open'); } catch (_) { /* kept for this page only */ } return !v; });
   const { a: agenda, error: agendaError } = useAgenda();
   const includeLow = route.query.get('low') === '1';
   const q = useMemo(() => reviewQueue(d.index, agenda, { includeLow }), [d.index, agenda, includeLow]);
@@ -619,12 +626,17 @@ export default function Review() {
       {head}
       {agendaError ? <p className="note note-warn rv-note" role="status">{`The agenda could not be read: ${agendaError.message}. The queue shows the rest.`}</p> : null}
       {agenda && agenda.failed && agenda.failed.length ? <p className="note note-warn rv-note" role="status">{`Could not read the agenda of ${agenda.failed.map((f) => f.name).join(', ')}.`}</p> : null}
-      <div className={`rv-panes${wide ? '' : ' is-two'}`}>
+      <div className={`rv-panes${wide ? (evOpen ? '' : ' is-ev-closed') : ' is-two'}`}>
         <aside className="rv-left" aria-label="The queue"><QueueList d={d} q={q} sel={sel} onPick={pick} /></aside>
         {p ? (
           <>
             <section className="rv-mid" aria-labelledby="rv-title"><Centre d={d} p={p} item={item} onPrev={() => step(-1)} onNext={() => step(1)} hasPrev={pos > 0} hasNext={pos >= 0 && pos < ordered.length - 1} phone={!wide} /></section>
-            {wide ? <aside className="rv-right" aria-label="Evidence for the change"><EvidencePane d={d} p={p} item={item} /></aside> : null}
+            {wide ? (
+              <aside className="rv-right" aria-label="Evidence for the change">
+                <button type="button" className="btn btn-sm rv-ev-toggle" data-key="rv-ev-toggle" aria-expanded={evOpen} onClick={toggleEv}>{evOpen ? '← Hide evidence' : 'Evidence →'}</button>
+                {evOpen ? <EvidencePane d={d} p={p} item={item} /> : null}
+              </aside>
+            ) : null}
           </>
         ) : (
           <section className="rv-mid rv-empty"><h2>All caught up</h2><p className="faint">Nothing in the queue needs you. Upcoming dates and imports are in their segments.</p></section>

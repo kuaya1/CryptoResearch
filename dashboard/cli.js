@@ -105,6 +105,7 @@ PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you deci
   tickets exit-matrix [--json]         every verified active project by grade: exit cost at each of your exit sizes (Preferences > Screening), completeness, chain, quote age, native L1 status (writes nothing)
   tickets reconcile [<id>] [--dry-run] [--json]   complete a recorded decision's missing paper position or journal entry (never archives, voids or edits a decision)
   tickets queue [<id>]                   the autonomous pilot's next step per project (research, ticket, your review)
+  tickets claim|bind|release <id>        the pilot runner's one execution claim per project (release --reconciled after an expired dispatch)
   tickets pilot <id> --on|--off          put a project in the autonomous pilot (your opt-in)
   tickets start <id> [--refresh] [--reopen] [--restart] [--force-prosecution] [--assistant]
                                          open (or resume) the Prosecutor's ticket on Claude's current report
@@ -922,6 +923,10 @@ async function run(argv) {
         return wrote ? { ...r, ...(await afterWrite(ws, null)) } : r;
       }
       if (sub === 'queue') return { steps: tk.pilotQueue(ws, { project: pid || null }), pending: tk.pendingFor(ws) };
+      // The pilot runner's execution claim (cr-pilot-claim@1, stage 5.4).
+      if (sub === 'claim') return require('./core/pilot-claims').claim(ws, need(pid, 'tickets claim <project> [--expect KEY] [--owner NAME]'), { owner: one(flags.owner) || actor, expect: one(flags.expect) || null, force: Boolean(flags['force-prosecution'] || flags.force_prosecution) });
+      if (sub === 'bind') return require('./core/pilot-claims').bind(ws, need(pid, 'tickets bind <project> --token T [--run R] [--ticket K]'), need(one(flags.token), '--token'), { run_id: one(flags.run) || null, ticket_id: one(flags.ticket) || null });
+      if (sub === 'release') return require('./core/pilot-claims').release(ws, need(pid, 'tickets release <project> --token T | --reconciled'), { token: one(flags.token) || null, reconciled: Boolean(flags.reconciled), outcome: one(flags.outcome) || null });
       if (sub === 'start') {
         const exit_quote = await tk.prepareExitQuote(ws, need(pid, 'tickets start <project> [--refresh] [--restart]')).catch(() => null);
         const r = tk.createTicket(ws, { exit_quote, project_id: need(pid, 'tickets start <project> [--refresh] [--restart]'), channel: one(flags.channel) || actor, assistant: Boolean(flags.assistant), mode: one(flags.mode) || 'cli', utterance: one(flags.utterance) || null, refresh: Boolean(flags.refresh), reopen: Boolean(flags.reopen), restart: Boolean(flags.restart), force_prosecution: Boolean(flags['force-prosecution'] || flags.force_prosecution) });
@@ -948,7 +953,7 @@ async function run(argv) {
         return { status: r.noop ? 'unchanged' : 'saved', pilot: !flags.off, verified: r.verified, ...(await afterWrite(ws, pid)) };
       }
       if (sub === 'cancel') return tk.cancelTicket(ws, need(pid, 'project'), need(tid, 'ticket_id'), one(flags.reason) || null);
-      throw Object.assign(new Error('tickets view|queue|reconcile|exit-matrix|candidates|digest|batch-gate|decide-gates|auto-pilot-sync|run-cycle|start|prompt|import|decide|pilot|cancel (see help)'), { code: 'USAGE' });
+      throw Object.assign(new Error('tickets view|queue|claim|bind|release|reconcile|exit-matrix|candidates|digest|batch-gate|decide-gates|auto-pilot-sync|run-cycle|start|prompt|import|decide|pilot|cancel (see help)'), { code: 'USAGE' });
     }
     case 'job': {
       const jobs = require('./core/jobs');
@@ -1077,7 +1082,8 @@ async function run(argv) {
       if (sub === 'export') {
         const usage = 'explorer export --fixtures [--dry-run] | --project <project_id> --dry-run (real records: a preview only; nothing is sent)';
         if ([flags.fixtures, flags.project, flags.desk].filter(Boolean).length > 1) throw Object.assign(new Error(`Choose one of --fixtures, --project <id> or --desk. ${usage}`), { code: 'USAGE' });
-        if (flags.desk) return xp.exportDesk();
+        // Exporting every real record at once is not a command (subtraction stage 6.1).
+        if (flags.desk) throw Object.assign(new Error(`Exporting all real desk records is not a command; nothing was sent. ${usage}`), { code: 'USAGE' });
         if (flags.project !== undefined) {
           const id = one(flags.project);
           if (typeof id !== 'string' || !id.trim()) throw Object.assign(new Error(`--project needs a project ID. ${usage}`), { code: 'USAGE' });

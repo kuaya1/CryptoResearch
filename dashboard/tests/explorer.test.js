@@ -311,9 +311,9 @@ test('adapter: real desk records can be read (prepared) but no command exports t
     assert.equal(batch.projects.length, 1);
     assert.ok(batch.reports.length >= 1);
     assert.ok(batch.reports.every((r) => r.category_scores.every((s) => ['scored', 'range', 'unknown', 'not_applicable'].includes(s.status))));
-    assert.throws(() => explorer.exportDesk(), /prepared but not enabled/);
+    assert.equal(explorer.exportDesk, undefined, 'retired (subtraction stage 6.1)');
     const cli = require('../cli');
-    await assert.rejects(cli.run(['explorer', 'export', '--desk', '--workspace', ws.root]), /prepared but not enabled/);
+    await assert.rejects(cli.run(['explorer', 'export', '--desk', '--workspace', ws.root]), /not a command; nothing was sent/);
   } finally {
     cleanup();
   }
@@ -363,7 +363,7 @@ test('export --project (the canary): one real project previewed as the exact req
   await assert.rejects(cli.run(['explorer', 'export', '--project', 'no-such-project', '--dry-run', '--workspace', root]), (e) => e.code === 'NOT_FOUND');
   await assert.rejects(cli.run(['explorer', 'export', '--project', 'Not An ID!', '--dry-run', '--workspace', root]), (e) => e.code === 'BAD_ID');
   // Bulk export of every project stays off; the fixtures still work as before.
-  await assert.rejects(cli.run(['explorer', 'export', '--desk', '--workspace', root]), /prepared but not enabled/);
+  await assert.rejects(cli.run(['explorer', 'export', '--desk', '--workspace', root]), /not a command; nothing was sent/);
   const fx = await cli.run(['explorer', 'export', '--fixtures', '--dry-run', '--workspace', root]);
   assert.deepEqual([fx.status, fx.dataset, fx.reports], ['dry_run', 'demo', 13]);
   // An archived project is not exported.

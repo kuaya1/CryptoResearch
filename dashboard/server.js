@@ -15,7 +15,7 @@
 // on change the index is rebuilt. Open pages ask GET /api/version every few
 // seconds while visible (a short request; no connection is held open, so any
 // number of windows fit the browser's per-server limit) and refetch what
-// changed. /api/events (server-sent events) is kept for older pages.
+// changed.
 // Reads (audit V2-001): the server keeps the last verified index and serves it
 // with read_status (current / stale / unverified). A read that meets a save in
 // progress waits briefly, then answers 503 with Retry-After; an interrupted
@@ -156,6 +156,11 @@ function validateSettingsPatch(patch, ws = null) {
         out.grading.labels = labels.map((l) => ({ label: l.label.trim(), min: Number(l.min) }));
       } else out.grading.labels = null;
     }
+  }
+  if (patch.automation) {
+    out.automation = {};
+    if (patch.automation.paused !== undefined) out.automation.paused = patch.automation.paused === true;
+    if (patch.automation.exit_quotes_auto !== undefined) out.automation.exit_quotes_auto = patch.automation.exit_quotes_auto === true;
   }
   if (patch.freshness) {
     out.freshness = {};
@@ -412,7 +417,6 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     const freed = require('./core/leases').releaseForeignLeases(ws);
     if (freed.length && !quiet) console.log(`Leases left by an earlier instance released: ${freed.join(', ')}.`);
   }
-  const clients = new Set();
   const sockets = new Set();
   const state = {
     index: null,
@@ -436,11 +440,6 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     sockets.add(sock);
     sock.on('close', () => sockets.delete(sock));
   });
-
-  function broadcast(event) {
-    const data = `event: changed\ndata: ${JSON.stringify(event)}\n\n`;
-    for (const res of clients) res.write(data);
-  }
 
   function projectSigs(index) {
     const m = new Map();
@@ -493,7 +492,6 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
         state.indexSig = sig;
         noteChange(areas, prev ? changedProjects : null);
       }
-      broadcast({ areas, projects: changedProjects, index_built_at: next.generated_at });
     } catch (err) {
       // Keep serving the last verified index, saying why it may be behind.
       const transient = err.code === 'READ_BUSY' || err.code === 'READ_INTERRUPTED';
@@ -507,7 +505,6 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
         checked_at: new Date().toISOString(),
         retry_after_ms: transient ? retryDelay : null,
       };
-      broadcast({ areas, error: err.message, code: err.code || null, read_status: state.read });
       if (transient) {
         rebuildRetry = setTimeout(() => rebuild(areas), retryDelay);
         retryDelay = Math.min(retryDelay * 2, 5000);
@@ -752,7 +749,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   // signed-in pages use.
   const door = openFrontDoor(server, { ws, hosted, port: boundPort, quiet, state, rebuild: (areas) => rebuild(areas), kick: () => setTimeout(() => researchTick(), 300), signedIn });
   const { origin, allowedOrigins, oauth, auth, serveStatic } = door;
-  const api = makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTick, queueIdentify, clients, sockets, oauth, auth });
+  const api = makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTick, queueIdentify, sockets, oauth, auth });
 
   // A request the front door passed: signed in on the online desk, or on
   // this PC anything it did not answer itself.
@@ -760,21 +757,9 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
     if (url.pathname.startsWith('/api/')) {
       const site = req.headers['sec-fetch-site'];
       if (site && !['same-origin', 'none'].includes(site)) throw new HttpError(403, 'Cross-site request refused');
-      if (url.pathname === '/api/events') return sse(req, res);
       return await api(req, res, url, { allowedOrigins });
     }
     return serveStatic(req, res, url);
-  }
-
-  function sse(req, res) {
-    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
-    res.write(`event: hello\ndata: ${JSON.stringify({ index_built_at: state.index ? state.index.generated_at : null })}\n\n`);
-    clients.add(res);
-    const ping = setInterval(() => res.write(': ping\n\n'), 25000);
-    req.on('close', () => {
-      clearInterval(ping);
-      clients.delete(res);
-    });
   }
 
   rebuild(['startup']);
@@ -809,7 +794,6 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
       const cur = readJson(ws.abs('.cr/server.json'), null);
       if (cur && cur.pid === process.pid) fs.unlinkSync(ws.abs('.cr/server.json'));
     } catch (_) { /* ignore */ }
-    for (const c of clients) c.end();
     server.close();
   };
   // A deploy or restart stops the process. Work in progress is given a short
@@ -843,7 +827,7 @@ async function start(ws, { port, open = false, host = '127.0.0.1', quiet = false
   return { url: `${origin}/`, port: boundPort, token, server, shutdown, state, queueIdentify, researchTick };
 }
 
-function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTick = () => {}, queueIdentify, clients, sockets, oauth = null, auth = null }) {
+function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTick = () => {}, queueIdentify, sockets, oauth = null, auth = null }) {
   const send = (res, status, body, type = 'application/json; charset=utf-8', extra = {}) => {
     res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', ...extra });
     res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
@@ -923,7 +907,7 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
   // like every other route, answered from the clock alone (no records read).
   route('GET', '/api/ingest/ping', () => ({ status: 'ok', service: 'scout-ingest', timestamp: new Date().toISOString() }));
   // Counts for checking that open pages stay within bounds (no records).
-  route('GET', '/api/server-stats', () => ({ instance: state.instance, started_at: state.stats.started_at, sockets_open: sockets.size, sockets_total: state.stats.sockets_total, event_streams_open: clients.size, requests: state.stats.requests, seq: state.seq, rebuilds: state.rebuilds, read_status: state.read }));
+  route('GET', '/api/server-stats', () => ({ instance: state.instance, started_at: state.stats.started_at, sockets_open: sockets.size, sockets_total: state.stats.sockets_total, requests: state.stats.requests, seq: state.seq, rebuilds: state.rebuilds, read_status: state.read }));
   route('GET', '/api/projects/([^/]+)', (m) => {
     const id = pid(m[1]);
     try {
