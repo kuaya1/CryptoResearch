@@ -20,7 +20,7 @@ const { makeOAuth, redirectAllowed, redirectKind, redirectMatches, guessLocal, C
 const { modelsAsked } = require('../mcp');
 const research = require('../core/research');
 const projects = require('../core/projects');
-const { tempWorkspace } = require('./helpers');
+const { tempWorkspace, withOpenJobsSetAside } = require('./helpers');
 const { runOp } = require('../core/ops');
 const { mockReport } = require('../core/demo');
 const { readJson } = require('../core/fsx');
@@ -628,7 +628,8 @@ test('connector: one Cowork request for all three models; ChatGPT and Gemini do 
   // own prompt (which names it), so ChatGPT's report for the first run does
   // not complete it (REVIEW F1, 2026-10-04): it keeps waiting, and the reply
   // says so.
-  const extra = research.createRun(d.ws, { project_id: pid, providers: ['chatgpt'], channel: 'dashboard', utterance: 'ChatGPT research for Examplecoin (FICTIONAL)' });
+  // (Records made before one-open-job-per-model can hold such a second job.)
+  const extra = withOpenJobsSetAside(d.ws, pid, () => research.createRun(d.ws, { project_id: pid, providers: ['chatgpt'], channel: 'dashboard', utterance: 'ChatGPT research for Examplecoin (FICTIONAL)' }));
   assert.equal(research.loadRun(d.ws, pid, extra.run_id).jobs.chatgpt.state, 'unconfigured');
   const gptText = mockReport(d.ws, 'chatgpt', run0);
   const gs = await tool(d, chatgpt.access, 'save_report', { project_id: pid, run_id: runId, report_markdown: gptText });

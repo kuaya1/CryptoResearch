@@ -12,7 +12,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { Readable } = require('stream');
-const { tempWorkspace, addFixtureProject } = require('./helpers');
+const { tempWorkspace, addFixtureProject, withOpenJobsSetAside } = require('./helpers');
 const { makeMcp } = require('../mcp');
 const research = require('../core/research');
 const inbox = require('../core/inbox');
@@ -80,13 +80,14 @@ test('F1: a valid save for run A (payfi-credit@2) never completes run B (general
   const a = research.createRun(ws, { project_id: PID, providers: ['chatgpt'], channel: 'dashboard' }).run;
   assert.equal(a.sector_profile, 'payfi-credit@2');
   projects.updateProjectFields(ws, PID, { sector_profile: 'general-token@2' });
-  const b = research.createRun(ws, { project_id: PID, providers: ['chatgpt'], channel: 'dashboard', force_new: true }).run;
+  // Three open ChatGPT jobs, as records made before one-open-job-per-model can hold.
+  const b = withOpenJobsSetAside(ws, PID, () => research.createRun(ws, { project_id: PID, providers: ['chatgpt'], channel: 'dashboard', force_new: true }).run);
   assert.equal(b.sector_profile, 'general-token@2');
   assert.equal(b.horizon.text, a.horizon.text, 'same horizon');
   assert.equal(b.owner_instructions, a.owner_instructions, 'same owner questions');
   // A third run on the very same contract except its own run ID and prompt.
   projects.updateProjectFields(ws, PID, { sector_profile: 'payfi-credit@1' });
-  const c = research.createRun(ws, { project_id: PID, providers: ['chatgpt'], channel: 'dashboard', force_new: true }).run;
+  const c = withOpenJobsSetAside(ws, PID, () => research.createRun(ws, { project_id: PID, providers: ['chatgpt'], channel: 'dashboard', force_new: true }).run);
   assert.equal(c.sector_profile, a.sector_profile);
   assert.notEqual(c.prompt.sha256, a.prompt.sha256, 'each run\'s frozen prompt names its own run');
 

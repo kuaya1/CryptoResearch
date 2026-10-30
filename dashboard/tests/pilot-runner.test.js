@@ -31,7 +31,7 @@ test('the runner no longer spawns through a shell', () => {
 
 // Eric's override (2026-10-25): a Prosecutor on a closed pre-gate. Pure
 // helpers only; nothing is run.
-const { parse, forcedTicket, onlineInstruction, FORCE_WORDS } = require('../scripts/pilot');
+const { parse, forcedTicket, roleInstruction, roleTools, roleForStep, nextStepOf, runOnline, ROLE_TOOLS, FORCE_WORDS } = require('../scripts/pilot');
 
 test('the override flag and owner words parse, an "=" inside the words kept', () => {
   const o = parse(['--project=velodrome-finance', '--desk=online', '--force-prosecution', '--owner-words=grade >= 50 = prosecute']);
@@ -53,13 +53,70 @@ test('the override turns the gate step and an undecided desk gate into a ticket,
   assert.equal(forcedTicket({ step: 'research' }, null, on), false);
 });
 
-test('the online instruction asks for force_prosecution only with the override, in Eric\'s words', () => {
-  const plain = onlineInstruction({ project: 'olas', forceProsecution: false });
+test('the Prosecutor\'s online instruction asks for force_prosecution only with the override, in Eric\'s words', () => {
+  const plain = roleInstruction('prosecutor', { project: 'olas', forceProsecution: false });
   assert.match(plain, /needs no Prosecutor/);
   assert.doesNotMatch(plain, /force_prosecution/);
-  const forced = onlineInstruction({ project: 'olas', forceProsecution: true, ownerWords: null });
+  const forced = roleInstruction('prosecutor', { project: 'olas', forceProsecution: true, ownerWords: null });
   assert.match(forced, /force_prosecution: true/);
   assert.ok(forced.includes(JSON.stringify(FORCE_WORDS)));
   assert.match(forced, /Never on a desk gate Eric already decided/);
   assert.match(forced, /Never decide a ticket, never choose a dollar amount/);
+  assert.doesNotMatch(roleInstruction('researcher', { project: 'olas', forceProsecution: true }), /force_prosecution|start_ticket|save_ticket/);
+});
+
+// Stage 2.1: online, as locally, the Researcher and the Prosecutor are two
+// sessions with no shared transcript, each with only its own connector tools.
+const O = (over = {}) => ({ project: 'olas', desk: 'online', connector: 'mcp__desk', model: null, timeoutMin: 1, forceProsecution: false, ownerWords: null, ...over });
+
+test('online: each role\'s tools are its own; neither can call the other\'s', () => {
+  const r = roleTools('researcher', O());
+  const p = roleTools('prosecutor', O());
+  for (const t of ['start_ticket', 'get_ticket', 'save_ticket']) assert.ok(!r.includes(`mcp__desk__${t}`), t);
+  for (const t of ['start_research', 'get_research', 'save_research_draft', 'save_report']) assert.ok(!p.includes(`mcp__desk__${t}`), t);
+  assert.ok(!r.includes('mcp__desk') && !p.includes('mcp__desk'), 'never the whole connector');
+  assert.deepEqual(ROLE_TOOLS.researcher.filter((t) => ROLE_TOOLS.prosecutor.includes(t)), ['autonomous_pilot_queue'], 'only the read-only queue is shared');
+});
+
+test('online: research then a ticket are two separate sessions; nothing of the first reaches the second', () => {
+  const calls = [];
+  const answers = ['Saved report rp_FICTIONAL_1 after a long transcript about tokenomics.\nNEXT_STEP: ticket', 'Saved receipt tr_FICTIONAL_1.\nNEXT_STEP: pm_review'];
+  const sessions = runOnline(O(), { run: (prompt, opts) => { calls.push({ prompt, opts }); return answers[calls.length - 1]; }, out: () => {} });
+  assert.deepEqual(sessions.map((s) => s.role), ['researcher', 'prosecutor']);
+  assert.equal(calls.length, 2, 'two claude -p sessions, no third');
+  const [a, b] = calls;
+  assert.match(a.prompt, /Agent 1, the Researcher/);
+  assert.match(b.prompt, /Agent 2, the Prosecutor/);
+  assert.ok(!b.prompt.includes('rp_FICTIONAL_1') && !b.prompt.includes('tokenomics'), 'the second session is given nothing the first said');
+  assert.equal(b.prompt, roleInstruction('prosecutor', O()), 'the Prosecutor\'s prompt is fixed, whatever the Researcher answered');
+  assert.deepEqual(a.opts.tools, roleTools('researcher', O()));
+  assert.deepEqual(b.opts.tools, roleTools('prosecutor', O()));
+});
+
+test('online: the steps decide the roles; the override has one Prosecutor; a missing NEXT_STEP stops', () => {
+  assert.equal(roleForStep(null, O()), 'researcher');
+  assert.equal(roleForStep('research', O()), 'researcher');
+  for (const s of ['ticket', 'ticket_failed', 'gate_closed']) assert.equal(roleForStep(s, O()), 'prosecutor', s);
+  for (const s of ['pm_review', 'done', 'blocked', 'unknown']) assert.equal(roleForStep(s, O()), null, s);
+  assert.equal(roleForStep('pm_review', O({ forceProsecution: true })), 'prosecutor');
+  assert.equal(roleForStep('pm_review', O({ forceProsecution: true }), { forced: true }), null);
+  assert.equal(nextStepOf('…\nNEXT_STEP: gate_closed\n'), 'gate_closed');
+  assert.equal(nextStepOf('NEXT_STEP: ticket\nNEXT_STEP: pm_review'), 'pm_review', 'the last line counts');
+  assert.equal(nextStepOf('NEXT_STEP: order_now'), null, 'only the queue\'s own steps');
+  assert.equal(nextStepOf('no step line'), null);
+  // A forced run asks one Prosecutor on the pending desk gate, then stops.
+  const seen = [];
+  runOnline(O({ forceProsecution: true }), { run: (prompt) => { seen.push(prompt); return seen.length === 1 ? 'NEXT_STEP: pm_review' : 'NEXT_STEP: pm_review'; }, out: () => {} });
+  assert.equal(seen.length, 2, 'the researcher reads the queue, one forced Prosecutor, then the runner stops');
+  assert.throws(() => runOnline(O(), { run: () => 'I did some things.', out: () => {} }), /did not end with a NEXT_STEP line/);
+  assert.throws(() => runOnline(O(), { run: () => 'NEXT_STEP: research', out: () => {} }), /research step is still open/);
+});
+
+test('online --dry-run shows each role\'s session and runs none', () => {
+  const lines = [];
+  const sessions = runOnline(O({ dryRun: true }), { run: () => assert.fail('nothing runs'), out: (s) => lines.push(s) });
+  assert.deepEqual(sessions, []);
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /researcher/);
+  assert.match(lines[1], /prosecutor/);
 });

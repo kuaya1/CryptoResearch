@@ -1324,6 +1324,7 @@ const handlers = {
       horizon: Number.isInteger(args.horizon_months) ? `${args.horizon_months} months` : null,
       long_term_reason: typeof args.long_term_reason === 'string' ? args.long_term_reason : null,
       force_new: fresh,
+      allow_pending_identity: args.allow_pending_identity === true,
     });
     const run = reload(created.run_id);
     kickIfQueued(run);

@@ -947,6 +947,42 @@ function keyedRun(ws, result, out) {
   };
 }
 
+// The admission every new run passes inside its locked write, whoever asks
+// (dashboard, CLI, connector, intake, leads, schedules, the pilot), as the
+// connector's start_research has always decided it: a verified identity (or
+// Eric's explicit allow_pending_identity), else nothing starts; a model with a
+// job still open on the project is left out (never a second open job); a model
+// whose report was saved in the last RECENT_REPORT_HOURS is left out unless
+// refresh or force_new. Only when no model is left is it a refusal. Joining an
+// open run stays the connector's choice before it gets here.
+const RECENT_REPORT_HOURS = 24;
+function admission(ws, project, list, args) {
+  const idn = project.identity || {};
+  if (idn.status !== 'verified' && args.allow_pending_identity !== true) {
+    return { error: new OpError('INVALID', `Nothing was started: ${project.name}'s identity is ${idn.status || 'not verified'}, and research needs a verified identity (the official website, the token binding and an evidence URL). Complete the identity first.`, { reason: 'identity', identity_status: idn.status || null }) };
+  }
+  const skipped = [];
+  for (const p of list) {
+    const o = openJobsFor(ws, project.project_id, p)[0];
+    if (o) skipped.push({ provider: p, reason: 'open_job', run_id: o.run.run_id, state: o.job.state, words: `${PROVIDER_LABELS[p]} already has an open job in ${o.run.run_id} (${o.job.state})` });
+  }
+  if (args.refresh !== true && !args.force_new) {
+    // The desk's current report per model, as start_research reads it.
+    let d = null;
+    for (const p of list.filter((x) => !skipped.some((s) => s.provider === x))) {
+      d = d || require('./indexer').projectDetail(ws, project.project_id);
+      const sel = d.comparison && d.comparison.latest ? d.comparison.latest[p] : null;
+      const cur = sel ? ((d.history && d.history[p]) || []).find((x) => x.report_id === sel.report_id) || null : null;
+      const at = cur ? Date.parse(cur.imported_at || cur.analysis_at) : NaN;
+      const hours = Number.isFinite(at) ? (Date.now() - at) / 3600000 : null;
+      if (hours !== null && hours < RECENT_REPORT_HOURS) skipped.push({ provider: p, reason: 'recent_report', report_id: cur.report_id, hours: Math.round(hours * 10) / 10, words: `${PROVIDER_LABELS[p]} saved a report ${Math.round(hours * 10) / 10} h ago (${cur.report_id}); ask with refresh to redo it` });
+    }
+  }
+  const admitted = list.filter((p) => !skipped.some((s) => s.provider === p));
+  if (!admitted.length) return { error: new OpError('CONFLICT', `Nothing was started for ${project.name}: ${skipped.map((s) => s.words).join('; ')}.`, { reason: 'none_admitted', skipped }), skipped };
+  return { admitted, skipped };
+}
+
 // The optional third argument keys the run (a scout admission's effect,
 // leads.js). With { idempotency: { key, payload_sha256 } } the choice between
 // a new run and one started minutes earlier is made again under the lock and
@@ -966,8 +1002,8 @@ function createRun(ws, args = {}, { idempotency = null, consent = null } = {}) {
   const explicit = Boolean(args.providers && (Array.isArray(args.providers) ? args.providers.length : String(args.providers).trim()));
   // The default models leave out a model on hold; one named for this run is Eric's choice.
   const held = heldProviders(ws);
-  const list = explicit ? normalizeProviders(args.providers) : normalizeProviders(ws.settings.research.default_providers).filter((p) => !held[p]);
-  if (!list.length) throw new OpError('INVALID', 'Choose at least one provider: claude, chatgpt or gemini.');
+  const asked = explicit ? normalizeProviders(args.providers) : normalizeProviders(ws.settings.research.default_providers).filter((p) => !held[p]);
+  if (!asked.length) throw new OpError('INVALID', 'Choose at least one provider: claude, chatgpt or gemini.');
   const previous = listRuns(ws, projectId);
   // The position-cycle recipe: an exact calendar interval inside the planning
   // ceiling, or a long-term exception with the owner's reason (position.js).
@@ -978,7 +1014,7 @@ function createRun(ws, args = {}, { idempotency = null, consent = null } = {}) {
   const rubricRef = (args.same_as_last && previous[0] && previous[0].rubric_version) || ws.rubrics.activeRef;
   if (!ws.rubrics.gradingVersions[rubricRef]) throw new OpError('INVALID', `Rubric ${rubricRef} is not available.`);
   // Repeating the same request within a few minutes does not start a second run.
-  const isRecent = (r) => !r.broken && !TERMINAL.has(r.status) && Date.now() - Date.parse(r.created_at) < DEDUPE_MINUTES * 60000 && r.horizon.text === horizonText && JSON.stringify(r.providers) === JSON.stringify(list) && (r.owner_instructions || null) === ownerInstructions;
+  const isRecent = (r) => !r.broken && !TERMINAL.has(r.status) && Date.now() - Date.parse(r.created_at) < DEDUPE_MINUTES * 60000 && r.horizon.text === horizonText && JSON.stringify(r.providers) === JSON.stringify(asked) && (r.owner_instructions || null) === ownerInstructions;
   const recentNow = () => (args.force_new ? null : listRuns(ws, projectId).find(isRecent) || null);
   // The link to a recent run, recorded under the key in the lock.
   const link = (op, r) => {
@@ -997,6 +1033,11 @@ function createRun(ws, args = {}, { idempotency = null, consent = null } = {}) {
     }
     return { status: 'exists', project_id: projectId, run_id: recent.run_id, run: recent, message: `A research run for ${project.name} with the same providers and horizon started ${Math.round((Date.now() - Date.parse(recent.created_at)) / 60000)} min ago (${recent.run_id}). No second run was created.` };
   }
+  // The models admitted now (admission, above); checked again under the lock.
+  const pre = admission(ws, project, asked, args);
+  if (pre.error) throw pre.error;
+  const list = pre.admitted;
+  let skipped = pre.skipped;
   const runId = `run_${compactTs()}_${randomId(5)}`;
   // The run's scoring profile: the current published version of the profile
   // the project record names (payfi-credit@1 -> payfi-credit@2). The record is
@@ -1040,11 +1081,20 @@ function createRun(ws, args = {}, { idempotency = null, consent = null } = {}) {
     // Keyed, a run that started meanwhile is linked, never doubled.
     const meanwhile = keyed ? recentNow() : null;
     if (meanwhile) return link(op, meanwhile);
+    // Checked again under the lock, so two callers never both start a model:
+    // one taken meanwhile is left out, and none left is a refusal.
+    const now = admission(ws, getProject(ws, projectId), list, args);
+    if (now.error) throw now.error;
+    if (now.admitted.length < list.length) {
+      for (const p of list) if (!now.admitted.includes(p)) delete run.jobs[p];
+      run.providers = now.admitted;
+      skipped = [...skipped, ...now.skipped];
+    }
     op.write(`${dir}/prompt.md`, prompt, { mode: 'create' });
     op.write(`${dir}/evidence-packet.json`, packetText, { mode: 'create' });
     // A model's execution note (ChatGPT's, execution.js), frozen with its job
     // next to the prompt; the prompt itself stays the same for every model.
-    for (const p of list) {
+    for (const p of run.providers) {
       const note = require('./execution').freezeNote(op, ws, run, p, dir);
       if (note) run.jobs[p].execution = note;
     }
@@ -1058,7 +1108,8 @@ function createRun(ws, args = {}, { idempotency = null, consent = null } = {}) {
     project_id: projectId,
     run_id: runOut.run_id,
     run: withStatus(runOut),
-    message: summarizeRun(withStatus(runOut), project),
+    message: `${summarizeRun(withStatus(runOut), project)}${skipped.length ? ` Left out: ${skipped.map((s) => s.words).join('; ')}.` : ''}`,
+    skipped,
     files: out.files,
     verified: out.verified,
     op_id: out.op_id,

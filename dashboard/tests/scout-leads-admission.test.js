@@ -14,7 +14,7 @@ const L = require('../core/leads');
 const projects = require('../core/projects');
 const research = require('../core/research');
 const { readJson } = require('../core/fsx');
-const { hashTree } = require('./helpers');
+const { hashTree, cancelOpenJobs } = require('./helpers');
 const { POLICY, EVM, workspace, eligibleLeads, deliver, fake, coin, CLEAN } = require('./leads-fixtures');
 
 const HOUR = 3600000;
@@ -348,8 +348,9 @@ test('F1: a keyed link to an existing project or a recent run is recorded; a rep
   assert.deepEqual([replay.status, replay.run_id, replay.replayed], ['exists', first.run_id, true]);
   assert.throws(() => research.createRun(ws, { project_id: made.project_id, providers: ['claude'] }, { idempotency: { ...rkey, payload_sha256: 'd'.repeat(64) } }), (e) => e.code === 'IDEMPOTENCY_CONFLICT');
   assert.equal(research.listRuns(ws, made.project_id).length, 1);
-  const unkeyed = research.createRun(ws, { project_id: made.project_id, providers: ['claude'] });
-  assert.equal(unkeyed.status, 'created', 'without a key nothing changes: past the window a new run is made');
+  // Without a key, past the window: Claude's job is still open, so nothing starts (one open job per model).
+  assert.throws(() => research.createRun(ws, { project_id: made.project_id, providers: ['claude'] }), (e) => e.code === 'CONFLICT' && /Claude already has an open job/.test(e.message));
+  assert.equal(research.listRuns(ws, made.project_id).length, 1);
 });
 
 test('F1: the admission freezes its effects\' payload hashes when it is written', async (t) => {

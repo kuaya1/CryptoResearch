@@ -27,7 +27,9 @@
 // completed Researcher report only as frozen into its prompt (tickets prompt
 // / start_ticket); the Researcher gets nothing of the Prosecutor's. The
 // online route has no server-side role split: there the agent files' tool
-// lists (the client's configuration) are the boundary.
+// lists (the client's configuration) are the boundary, and the pilot runner
+// (pilot.js --desk=online) gives each role its own `claude -p` session with
+// only that role's connector tools.
 
 const fs = require('fs');
 const os = require('os');

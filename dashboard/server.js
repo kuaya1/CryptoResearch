@@ -1338,8 +1338,15 @@ function makeApi({ ws, state, token, rebuild, marketTick, researchTick, walletTi
     const r = projects.addProject(ws, { ...body, utterance: body.utterance || null });
     let run = null;
     if (body.research && Array.isArray(body.research_providers) && body.research_providers.length && ['created', 'exists'].includes(r.status)) {
-      run = research.createRun(ws, { project_id: r.project_id, providers: body.research_providers, horizon: body.horizon || null, long_term_reason: body.long_term_reason || null, channel: 'dashboard', utterance: body.utterance || null });
-      setTimeout(() => researchTick(), 500);
+      // The project is saved either way; research the desk refuses to start
+      // (identity not verified yet, a model busy) is said, not a failed add.
+      try {
+        run = research.createRun(ws, { project_id: r.project_id, providers: body.research_providers, horizon: body.horizon || null, long_term_reason: body.long_term_reason || null, channel: 'dashboard', utterance: body.utterance || null });
+        setTimeout(() => researchTick(), 500);
+      } catch (err) {
+        if (!err.code) throw err;
+        run = { status: 'not_started', run_id: null, message: err.message };
+      }
     }
     return after({ ...r, research: run ? { status: run.status, run_id: run.run_id, message: run.message } : null });
   }));

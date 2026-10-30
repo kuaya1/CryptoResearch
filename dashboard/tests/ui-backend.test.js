@@ -115,7 +115,9 @@ test('adding a project with a research horizon saves a valid record from every e
   const out = JSON.parse(res.body.toString('utf8'));
   assert.equal(res.status, 200, JSON.stringify(out));
   assert.equal(out.status, 'created');
-  assert.ok(out.research && ['created', 'exists'].includes(out.research.status), JSON.stringify(out.research));
+  // A new project's identity is not verified yet: the project is saved and the research is said not started, why in words.
+  assert.equal(out.research && out.research.status, 'not_started', JSON.stringify(out.research));
+  assert.match(out.research.message, /identity/i);
   // Replaying the same submission applies once.
   const again = await request(srv.port, {
     method: 'POST',
@@ -125,7 +127,7 @@ test('adding a project with a research horizon saves a valid record from every e
   });
   assert.equal(again.status, 200);
   assert.equal(projects.listProjects(ws).filter((p) => p.name === 'Horizon Test Four (FICTIONAL)').length, 1);
-  assert.equal(require('../core/research').listRuns(ws, out.project_id).length, 1);
+  assert.equal(require('../core/research').listRuns(ws, out.project_id).length, 0, 'no run is made for an unverified identity, on the first post or the replay');
 });
 
 test('portfolio and index serialize without BigInt errors', (t) => {

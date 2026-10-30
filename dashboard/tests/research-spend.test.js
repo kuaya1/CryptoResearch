@@ -10,7 +10,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const cp = require('child_process');
-const { tempWorkspace, addFixtureProject } = require('./helpers');
+const { tempWorkspace, addFixtureProject, withOpenJobsSetAside } = require('./helpers');
 const research = require('../core/research');
 const projects = require('../core/projects');
 const { validateSettingsPatch } = require('../server');
@@ -144,7 +144,8 @@ async function stubServer(textOf, delayMs = 300) {
 test('V2-004 four runner processes started together cannot pass the daily limit between them', async (t) => {
   const { root, ws, pid } = setup(t, 'v2004-conc', { providers: { claude: { model: MODELS.claude, ...DOLLAR } }, budget: { per_run_usd: 5, daily_usd: 1.5, monthly_usd: 100 }, max_output_tokens: 10000, max_concurrent: 1 });
   const runs = [];
-  for (let i = 0; i < 4; i++) runs.push(research.createRun(ws, { project_id: pid, providers: ['claude'], force_new: true }).run_id);
+  // Four queued Claude jobs at once, as records made before one-open-job-per-model can hold.
+  for (let i = 0; i < 4; i++) runs.push(withOpenJobsSetAside(ws, pid, () => research.createRun(ws, { project_id: pid, providers: ['claude'], force_new: true }).run_id));
   const srv = await stubServer(texts(ws, pid));
   t.after(() => srv.close());
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-conc-'));

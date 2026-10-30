@@ -663,11 +663,22 @@ function createTicket(ws, args = {}) {
   const prompt = renderPrompt(ws, { ticket, project, packetText, packetSha, reportText });
   ticket.prompt = { version: PROMPT_VERSION, path: `${dir}/prompt.md`, sha256: sha256(prompt), chars: prompt.length };
   const out = runOp(ws, { type: 'ticket_create', summary: `PM ticket for ${pid}` }, (op) => {
+    // Checked again under the lock: a ticket another caller opened meanwhile,
+    // or a receipt saved on this report meanwhile, is answered, never doubled.
+    const openNow = openTicket(ws, pid);
+    if (openNow) return { meanwhile: 'open', ticket_id: openNow.ticket_id, created_at: openNow.created_at };
+    if (!args.refresh && !args.restart) {
+      const savedNow = listReceipts(ws, pid).filter((r) => !r.broken && r.researcher && r.researcher.report_id === researcher.report_id && !(args.force_prosecution === true && r.kind === 'desk_gate')).pop();
+      if (savedNow) return { meanwhile: 'saved', receipt_id: savedNow.receipt_id, ticket_id: savedNow.ticket_id };
+    }
     op.write(`${dir}/packet.json`, packetText, { mode: 'create' });
     op.write(`${dir}/prompt.md`, prompt, { mode: 'create' });
     op.writeJson(`${dir}/ticket.json`, ticket, { mode: 'create' });
     return { ticket_id: tid };
   });
+  const m = out.result && out.result.meanwhile;
+  if (m === 'open') return { status: 'resumed', project_id: pid, ticket_id: out.result.ticket_id, ticket: loadTicket(ws, pid, out.result.ticket_id), message: `Resuming the open ticket ${out.result.ticket_id} for ${project.name} (opened ${out.result.created_at}); it was opened while this request waited, so no second ticket was opened.` };
+  if (m === 'saved') return { status: 'exists', project_id: pid, receipt_id: out.result.receipt_id, ticket_id: out.result.ticket_id, message: `A ticket on Claude's current report (${researcher.report_id}) was saved while this request waited (${out.result.receipt_id}). Nothing new was opened.` };
   return { status: 'created', project_id: pid, ticket_id: tid, ticket, verified: out.verified, files: out.files, message: `Opened ticket ${tid} for ${project.name} on Claude's report ${researcher.report_id}.` };
 }
 
@@ -1455,17 +1466,61 @@ function journalDecision(ws, pid, d, undone, { late = false } = {}) {
   }
 }
 
+// A JSONL record read for a repair: a missing file is empty, but a file that
+// does not read, or any line in it that does not parse, is a refusal, never
+// "nothing there" (the everyday readers skip such lines).
+function strictLines(ws, rel) {
+  let text;
+  try {
+    text = require('fs').readFileSync(ws.abs(rel), 'utf8');
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return { ok: true, lines: [] };
+    return { ok: false, words: `${rel} could not be read (${(err && (err.code || err.message)) || 'unknown error'})` };
+  }
+  const lines = [];
+  const bad = [];
+  text.split('\n').forEach((l, i) => {
+    if (!l.trim()) return;
+    try { lines.push(JSON.parse(l)); } catch (_) { bad.push(i + 1); }
+  });
+  return bad.length ? { ok: false, words: `${rel} has ${bad.length === 1 ? 'a line that does' : `${bad.length} lines that do`} not read (line ${bad.slice(0, 5).join(', ')})` } : { ok: true, lines };
+}
+
 // Completes what a recorded decision left undone (review A06): the paper
 // position of a grant in force, and the journal entry of any decision line.
 // It never archives or restores a project, never voids a position and never
 // touches decisions.jsonl; a pass whose archive step is not done is named.
+// Before anything is written, every decisions file, the paper positions and
+// each receipt and frozen packet a position would be opened from must read in
+// full and hold (integrityOf); otherwise it is an INTEGRITY refusal naming
+// them and nothing is written, so absence is never inferred from a failed read.
 function reconcileEffects(ws, { project = null, dryRun = false } = {}) {
   const projects = require('./projects');
-  const paper = require('./paper');
   const out = { dry_run: dryRun === true, completed: [], already_complete: [], named: [] };
   const pids = project ? [project] : projects.listProjects(ws).filter((p) => !p.broken).map((p) => p.project_id);
+  const problems = [];
+  const decisionsOf = new Map();
   for (const pid of pids) {
-    const lines = readDecisions(ws, pid);
+    const r = strictLines(ws, decisionsRel(pid));
+    if (r.ok) decisionsOf.set(pid, r.lines);
+    else problems.push(r.words);
+  }
+  const positions = strictLines(ws, require('./paper').REL);
+  if (!positions.ok) problems.push(positions.words);
+  const openFor = (decisionId) => (positions.lines || []).find((l) => l.event === 'open' && l.decision_id === decisionId) || null;
+  for (const [pid, lines] of decisionsOf) {
+    for (const rid of new Set(lines.map((l) => l.receipt_id))) {
+      const inForce = decisionFor(lines, rid);
+      if (!inForce || !(inForce.action === 'approve' || inForce.action === 'halve') || !positions.ok || openFor(inForce.decision_id)) continue;
+      let receipt = null;
+      try { receipt = JSON.parse(require('fs').readFileSync(ws.abs(receiptRel(pid, rid)), 'utf8')); } catch (err) { problems.push(`${receiptRel(pid, rid)} could not be read (${(err && (err.code || err.message)) || 'unknown error'})`); continue; }
+      const held = integrityOf(ws, receipt);
+      if (held && held.status !== 'ok') problems.push(`${receiptRel(pid, rid)}: ${held.words}`);
+    }
+  }
+  if (problems.length) throw new OpError('INTEGRITY', `Nothing was repaired: ${problems.join('; ')}. A record that does not read is never taken as missing; fix or restore it, then run the repair again.`, { problems });
+  for (const pid of pids) {
+    const lines = decisionsOf.get(pid);
     if (!lines.length) continue;
     const rids = [...new Set(lines.map((l) => l.receipt_id))];
     for (const d of lines) {
@@ -1480,7 +1535,9 @@ function reconcileEffects(ws, { project = null, dryRun = false } = {}) {
       const inForce = decisionFor(lines, rid);
       if (!inForce) continue;
       if (inForce.action === 'approve' || inForce.action === 'halve') {
-        if (paper.readRecords(ws).some((l) => l.event === 'open' && l.decision_id === inForce.decision_id)) out.already_complete.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper' });
+        const opened = openFor(inForce.decision_id);
+        // A position saved with no entry price is complete, qualified; never opened again.
+        if (opened) out.already_complete.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper', ...(opened.entry && opened.entry.status === 'no_entry_price' ? { qualified: 'no_entry_price' } : {}) });
         else if (dryRun) out.completed.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper', status: 'would_open' });
         else out.completed.push({ project_id: pid, decision_id: inForce.decision_id, step: 'paper', ...paperBook(ws, pid, rid, inForce, null) });
       }

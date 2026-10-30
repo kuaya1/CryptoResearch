@@ -17,7 +17,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { tempWorkspace, addFixtureProject, dropText } = require('./helpers');
+const { tempWorkspace, addFixtureProject, dropText, withOpenJobsSetAside } = require('./helpers');
 const research = require('../core/research');
 const inbox = require('../core/inbox');
 const indexer = require('../core/indexer');
@@ -98,7 +98,8 @@ test('finding 1: a historical JSON report with no run ID completes nothing, whet
 
 test('finding 1: with several open jobs for the model, an unbound report completes none of them', (t) => {
   const { ws, run } = setup(t, 'jc-many', ['gemini']);
-  const run2 = research.createRun(ws, { project_id: PID, providers: ['gemini'], channel: 'dashboard', force_new: true }).run;
+  // Two open Gemini jobs, as records made before one-open-job-per-model can hold.
+  const run2 = withOpenJobsSetAside(ws, PID, () => research.createRun(ws, { project_id: PID, providers: ['gemini'], channel: 'dashboard', force_new: true }).run);
   assert.notEqual(run2.run_id, run.run_id);
   const out = inbox.importContent(ws, 'gemini', { content: PROSE('Gemini'), projectId: PID, channel: 'dashboard paste' });
   assert.equal(out.result.status, 'ingested');

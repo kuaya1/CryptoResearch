@@ -13,7 +13,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { Readable } = require('stream');
-const { tempWorkspace } = require('./helpers');
+const { tempWorkspace, cancelOpenJobs } = require('./helpers');
 const fundamentals = require('../core/fundamentals');
 const projects = require('../core/projects');
 const research = require('../core/research');
@@ -613,11 +613,13 @@ test('research: a new run freezes the fundamentals in its v2 packet and prompt; 
   assert.equal(bound.status, 'bound', bound.message);
 
   // The next run freezes what is saved then (the new binding is not fetched yet).
+  cancelOpenJobs(ws, id);
   const r2 = research.createRun(ws, { project_id: id, providers: ['claude'], force_new: true });
   assert.notEqual(r2.run.evidence_packet.sha256, r1.run.evidence_packet.sha256);
   const p2 = readJson(path.join(root, r2.run.evidence_packet.path));
   assert.equal(p2.fundamentals.state, 'pending');
   await fundamentals.refresh(ws, { fetchImpl: good(full(11, now), full(2, now), full(1, now)), now, ...FAST });
+  cancelOpenJobs(ws, id);
   const r3 = research.createRun(ws, { project_id: id, providers: ['claude'], force_new: true });
   const p3 = readJson(path.join(root, r3.run.evidence_packet.path));
   assert.deepEqual([p3.fundamentals.state, p3.fundamentals.fees_30d_usd], ['fresh', 330]);
@@ -664,6 +666,7 @@ test('a run frozen under packet v1 stays as it was: its packet and prompt are by
   assert.equal(bound.status, 'bound', bound.message);
   assert.equal(prompts.buildRunPrompt(ws, project, { runId: r.run_id, horizon: r.run.horizon, rubricRef: r.run.rubric_version, packet: readJson(packetFile), profileRef: r.run.sector_profile, version: r.run.prompt.version }), v1Prompt);
   // A new run is v2.
+  cancelOpenJobs(ws, id);
   const next = research.createRun(ws, { project_id: id, providers: ['claude'], force_new: true });
   assert.equal(readJson(path.join(root, next.run.evidence_packet.path)).schema_version, 'cr.evidence-packet.v2');
 });

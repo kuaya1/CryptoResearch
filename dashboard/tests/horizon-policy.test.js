@@ -14,7 +14,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { tempWorkspace, addFixtureProject } = require('./helpers');
+const { tempWorkspace, addFixtureProject, cancelOpenJobs } = require('./helpers');
 const research = require('../core/research');
 const pos = require('../core/position');
 const prompts = require('../core/prompts');
@@ -70,6 +70,7 @@ test('finding 5: deliberately chosen horizons are kept: a 3-month run, and a 12-
   const ps = promptOf(ws, short);
   assert.match(ps, /\(3 calendar months; a position horizon inside the 4-month planning ceiling\)/);
   assert.doesNotMatch(ps, /A typical hold of 3 to 4 months would end/, 'a 3-month horizon lies inside every typical hold: no cutoff line');
+  cancelOpenJobs(ws, PID);
   const long = research.createRun(ws, { project_id: PID, providers: ['claude'], horizon: '12 months', long_term_reason: 'FICTIONAL: structural thesis', force_new: true }).run;
   assert.equal(long.horizon.months, 12);
   assert.equal(long.horizon.mode, 'long_term');
@@ -118,6 +119,7 @@ test('finding 5: runs made under the old two-month default keep their frozen pro
   const legacyAgain = prompts.buildRunPrompt(now, getProject(now, PID), { runId: stored.run_id, horizon: legacy, rubricRef: stored.rubric_version, packet, ownerInstructions: stored.owner_instructions, version: stored.prompt.version, profileRef: stored.sector_profile });
   assert.equal(legacyAgain, bytes.toString('utf8'));
   // A new run on the same desk gets the new policy.
+  cancelOpenJobs(now, PID);
   const fresh = research.createRun(now, { project_id: PID, providers: ['claude'], force_new: true }).run;
   assert.match(promptOf(now, fresh), /A typical hold is about 3 to 4 months/);
 });
