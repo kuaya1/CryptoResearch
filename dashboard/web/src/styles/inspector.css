@@ -728,7 +728,6 @@ html.has-drawer { overflow: hidden; }
 .v3-ticket .pm-test.is-warn::before { background: var(--cr-gate-warn-dark); }
 .v3-ticket .pm-test:hover { color: var(--cr-paper); }
 .v3-ticket .pm-test[aria-expanded="true"] { color: var(--cr-paper); }
-.v3-ticket [data-key^="pm-contract-"] { padding-top: 16px; border-top: 1px solid var(--cr-dark-divider); }
 .v3-ticket a:not(.btn) { color: var(--cr-live-on-dark); }
 .v3-ticket .badge { background: var(--cr-dark-fill); color: var(--cr-paper-secondary); box-shadow: none; }
 
@@ -748,3 +747,28 @@ html.has-drawer { overflow: hidden; }
   .v3-ticket .pm-actions:not(.is-foot) > .btn:not(.btn-primary) { min-height: var(--touch); }
   .v3-levels { gap: 8px; }
 }
+
+/* ---- UI v3: the contract gate panel (UI_MASTER_PLAYBOOK.md §4.6,
+   2026-10-30), inside the ticket card under a hairline. ---- */
+.v3-gate { display: flex; flex-direction: column; gap: 10px; padding-top: 16px; border-top: 1px solid var(--cr-dark-divider); }
+.v3-gate-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; margin: 0; padding: 0; border: 0; background: none; font: inherit; font-size: var(--fs-ui-md); color: var(--cr-paper); text-align: left; }
+button.v3-gate-title { cursor: pointer; transition: opacity var(--dur) var(--ease); }
+button.v3-gate-title:hover { opacity: 0.8; }
+.v3-gate-t { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.v3-gate-t .is-ok { color: var(--cr-gate-ok-dark); }
+.v3-gate-t .is-warn { color: var(--cr-gate-warn-dark); }
+.v3-gate-t .is-bad { color: var(--cr-gate-bad-dark); }
+.v3-gate-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--cr-paper-body); }
+.v3-gate-dot.is-ok { background: var(--cr-gate-ok-dark); }
+.v3-gate-dot.is-warn { background: var(--cr-gate-warn-dark); }
+.v3-gate-dot.is-bad { background: var(--cr-gate-bad-dark); }
+.v3-gate-fold { flex: none; font-size: var(--fs-meta); color: var(--cr-paper-body); }
+.v3-gate-words { margin: 0; font-size: var(--fs-xs); line-height: 1.45; color: var(--cr-paper-body); text-wrap: pretty; }
+.v3-gate-more { display: flex; flex-direction: column; gap: 16px; padding-top: 6px; }
+.v3-gate-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; margin: 0; }
+.v3-gate-facts > div { min-width: 0; }
+.v3-gate-facts .wide { grid-column: 1 / -1; }
+.v3-gate-facts dt { font-size: var(--fs-label); color: var(--cr-paper-body); }
+.v3-gate-facts dd { margin: 2px 0 0; font-size: var(--fs-xs); color: var(--cr-ink-label-dark); overflow-wrap: anywhere; }
+.v3-gate-note { margin: 0; font-size: var(--fs-xs); line-height: 1.45; color: var(--cr-paper-body); }
+@media (max-width: 767.98px) { button.v3-gate-title { min-height: var(--touch); } }

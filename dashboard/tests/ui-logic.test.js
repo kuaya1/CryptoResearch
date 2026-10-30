@@ -922,3 +922,18 @@ test('one page per project (D1): every former project tab and the Brief page red
   for (const t of ['brief', 'compare', 'evidence', 'forensics', 'market', 'contract', 'report', 'record', 'notes']) assert.equal(go('project', [P, t]), null);
   assert.equal(go('project', [P, 'nonsense']), '#/project/p1/brief');
 });
+
+test('the contract gate panel (UI_MASTER_PLAYBOOK.md §4.6): the gate\'s own words verbatim, folded unless Preferences or ?open=gate opens it, nothing recomputed and nothing written', () => {
+  const web = (...f) => fs.readFileSync(path.join(__dirname, '..', 'web', 'src', ...f), 'utf8');
+  const gate = web('views', 'inspector', 'GatePanel.jsx');
+  assert.match(gate, /useState\(\(\) => deepOpen\(pid\) \|\| ui\.get\('gate_details', 'folded'\) === 'open'\)/, 'folded by default; the preference or the deep link opens it');
+  assert.match(gate, /q\.get\('open'\) === 'gate' && q\.get\('p'\) === pid/, 'the deep link opens only its own project');
+  assert.match(gate, /aria-expanded=\{open\} data-key=\{`gate-toggle-\$\{pid\}`\}/);
+  assert.match(gate, /\$\{cg\.words\}/, 'the verdict\'s words, verbatim');
+  assert.match(gate, /This ticket carries no contract attestation\./);
+  assert.doesNotMatch(gate, /api\.(post|get)|fetch\(/, 'it reads the ticket it is given and writes nothing');
+  const card = web('views', 'inspector', 'PMDecisionCard.jsx');
+  assert.equal((card.match(/<GatePanel pid=\{pid\} t=\{t\} \/>/g) || []).length, 2, 'both ticket layouts draw it');
+  const prefs = web('shell', 'Preferences.jsx');
+  assert.match(prefs, /data-key="prefs-gate-details" onChange=\{\(e\) => \{ ui\.set\('gate_details', e\.target\.value\)/);
+});

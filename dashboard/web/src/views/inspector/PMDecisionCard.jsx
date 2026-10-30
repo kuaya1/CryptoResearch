@@ -19,6 +19,7 @@ import { FootSlot } from './footSlot.js';
 import { toast, submissionId, fmtDateTime } from '../../../../public/ui.js';
 import { api, refresh } from '../../lib/desk.js';
 import { ruleNoteOf, deltaBadgeOf, widestCategoryLink } from '../../../../public/pm-card-model.js';
+import { GatePanel } from './GatePanel.jsx';
 
 const enc = encodeURIComponent;
 const usd = (n) => (typeof n === 'number' ? `$${n.toLocaleString('en-US', { minimumFractionDigits: n >= 1000 ? 0 : 2, maximumFractionDigits: n < 1 ? 6 : 2 })}` : '—');
@@ -183,19 +184,6 @@ function ChallengeRow({ pid, rid, decidedAt }) {
       ) : null}
       {cur ? <p className="pm-dis-note" data-key={`pm-challenge-body-${pid}`}>{cur.reason || 'No reason recorded for this test.'}</p> : null}
       {row && row.state === 'saved' && row.verdict !== 'insufficient_evidence' && row.verdict_reason ? <p className="pm-dis-note">{row.verdict_reason}</p> : null}
-    </div>
-  );
-}
-
-// The contract gate in words (Pillar 1): one quiet row each for the contract
-// and the economics. In observe mode it decides nothing, and says so.
-function ContractRow({ pid, t }) {
-  const c = t.contract_gate;
-  if (!c) return null;
-  return (
-    <div className="pm-dis" data-key={`pm-contract-${pid}`} data-tier={c.tier} aria-label="Contract gate">
-      <p className="pm-dis-row"><span className="pm-dis-k">Contract</span><span>{`${c.words}${c.mode === 'observe' ? ' (observed, not applied)' : ''}`}</span></p>
-      {c.economics ? <p className="pm-dis-row"><span className="pm-dis-k">Economics</span><span>{c.economics}</span></p> : null}
     </div>
   );
 }
@@ -381,7 +369,7 @@ export function PMDecisionCard({ p }) {
         <div className="pm-dis">
           <p className="pm-dis-row"><span className="pm-dis-k">Researcher</span><span>{`${(t.researcher || {}).grade_display || (t.researcher || {}).grade || '—'} · ${(t.researcher || {}).verdict || 'no verdict'}`}</span></p>
         </div>
-        <ContractRow pid={pid} t={t} />
+        <GatePanel pid={pid} t={t} />
         <DeltaBadge pid={pid} delta={t.report_delta} />
         <RuleNote pid={pid} t={t} />
         {t.superseded_by_report ? <p className="faint pm-note">{`Claude has a newer report (${t.superseded_by_report}); this gate is on the earlier one.`}</p> : null}
@@ -447,7 +435,7 @@ export function PMDecisionCard({ p }) {
       ) : null}
       {t.agent_disagreement ? <Disagreement pid={pid} t={t} spread={p.spread} dis={dis} r={r} q={q} fatal={fatal} /> : null}
       <ChallengeRow pid={pid} rid={t.receipt_id} decidedAt={decided ? decided.at : null} />
-      <ContractRow pid={pid} t={t} />
+      <GatePanel pid={pid} t={t} />
       <RuleNote pid={pid} t={t} />
       {t.superseded_by_report ? <p className="faint pm-note">{`Claude has a newer report (${t.superseded_by_report}); this ticket is on the earlier one.`}</p> : null}
       {gated && !decided ? <p className="v3-gated" data-key={`pm-gated-${pid}`}>{`${gated === 'block' ? 'Deterministic veto' : 'Held by the gate'}: ${t.contract_gate.words} No risk can be granted on this ticket; it re-opens only on a fresh packet.`}</p> : null}

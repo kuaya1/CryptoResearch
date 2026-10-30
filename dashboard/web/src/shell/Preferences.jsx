@@ -423,6 +423,7 @@ function Automation({ d }) {
 
 function DeskDefaults() {
   const [pf, setPf] = useState(() => readPrefs({ ui }));
+  const [gate, setGate] = useState(() => (ui.get('gate_details', 'folded') === 'open' ? 'open' : 'folded'));
   const set = (patch) => {
     deskPrefs(patch);
     setPf({ ...pf, ...patch, filters: { ...pf.filters, ...(patch.filters || {}) } });
@@ -442,6 +443,12 @@ function DeskDefaults() {
         <label className="prefs-field"><span>View</span>
           <select className="input" value={pf.filters.owned} data-key="prefs-view" onChange={(e) => set({ filters: { owned: e.target.value } })}>
             {VIEWS.map(([v, w]) => <option key={v} value={v}>{w}</option>)}
+          </select>
+        </label>
+        <label className="prefs-field"><span>Contract gate details</span>
+          <select className="input" value={gate} data-key="prefs-gate-details" onChange={(e) => { ui.set('gate_details', e.target.value); setGate(e.target.value); toast('Saved for the Desk'); }}>
+            <option value="folded">Folded</option>
+            <option value="open">Open</option>
           </select>
         </label>
         <div className="prefs-field"><span>Columns</span>
