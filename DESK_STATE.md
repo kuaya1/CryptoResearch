@@ -357,6 +357,62 @@ Open (Eric):
 - The values of `STOP_MIN_PCT`, `STOP_MIN_ATR`, `NOTIONAL_MAX_PCT`, the maximum validity and the allowlist. Their home is settings `trader.rules`, entered in Preferences > Screening and checked by the server (`dashboard/core/trader-rules.js`, `cr-trader-rules@1`, D10). All are unset. The price freshness is `freshness.price_stale_minutes`.
 - The venue whose fee schedule and lot sizes the book uses. `FILL_SHARE_MAX` (0.1) and `STOP_SLIPPAGE_BPS` (25) are the Paper Book's constants.
 
+## UI v3 parity (2026-10-30)
+
+The Desk was rebuilt to `UI_MASTER_PLAYBOOK.md` (branch `claude/desk-v3-exact-ui`). The rebuild touched only `dashboard/web/src/`, `dashboard/web/public/`, `dashboard/public/tokens.css`, the committed bundle and the checks. The trading core (`core/paper.js`, `paper-trader.js`, `trade-risk.js`, `decimal.js`), the schemas and the API routes are unchanged.
+
+| Stage | What landed |
+|---|---|
+| Shell and Focal | A 150px text rail, the page capped at 1560px. The Focal block is always obsidian and leads with the tickets that wait. The market line is plain text on the canvas |
+| Ledger | One white card. Head and rows share one grid. Clean headers. A Gate column |
+| Inspector | One warm card, docked from 1280px. Blocks A to F: head, price, PM Cohort, Signals (worst first, one shown, the rest folded), What changed, then Thesis, the ticket card, Needs you |
+| Ticket card | `PMDecisionCard.jsx` sits between Thesis and Needs you, obsidian with 26px corners. Entry, stop and target, an exit bar, actions per state. Labels and handlers are unchanged |
+| Contract gate | `GatePanel.jsx` shows the gate's own words verbatim, plus tier and mode. Folded by default; Preferences > Desk "Contract gate details" (`ui.gate_details`) or `?open=gate` opens it |
+| Copy (D15) | User-facing names are "PM Cohort" (the model grades) and "Trader Sim" (the paper book). API names, models and comments are unchanged |
+| Responsive | From 768px to the docked breakpoint the inspector is a 440px drawer with card corners. The phone keeps a 24px sheet |
+
+Deviations from the playbook, on purpose:
+
+- **Type floor:** labels stay at 12.5px. The concept's greys were raised until they pass contrast in light and dark.
+- **Pixel diff (§8.4):** not run. There is no `concept.html` in the repo, and the design source refused access. The computed-style parity checks below stand in for it.
+- **Gate column:** the tier word only ("No finding", "For review", "Hold", "Block"), with the gate's words on hover. There is no rule id, because the index carries none. The backend is unchanged.
+- **Gate panel:** shows what the index already carries (mode, tier, words, economics) and links to Contract and checks. Packet facts, the authority graph, findings and provenance need an API change, so they are not shown.
+- **Approve:** stays a click, not a hold pill, labelled "Approve Risk ($N)". There is no "/ 1.0R", because no R unit exists in the ticket data.
+- **Gated tickets:** a gated ticket (enforce, block or hold) keeps Veto and Pass. The server refuses only grants (`contractGrantBlock`).
+- **Docked inspector:** scrolls as one card (max height of the viewport) rather than an unbounded sticky.
+- **Other:**
+  - The ledger footer drops the held value.
+  - The ⋯ menu uses submenus.
+  - Preferences sits off the v3 rail.
+
+Checks changed:
+
+- **Phone check (`check.mjs`):** reads the first row's cells, not the hidden `<th>`.
+- **`regress.mjs`:**
+  - F3 finds the verdict block at `.iv-cohort`.
+  - F7 measures against the visible viewport.
+  - L7 reads "PM Cohort".
+- **`type-floor.test.js`:** asserts the Signals grid (`.v3-sig`).
+- **`ui-logic.test.js`:** covers the contract gate panel.
+- **v3-parity block (`check.mjs`):** computed styles at 1440×900, light:
+  - page 1560/28/72/36
+  - rail 150
+  - Focal obsidian 32/28-30-22
+  - headline 44/300
+  - ledger white 32/22-24-14
+  - rows gap 14, radius 14
+  - name 15/500
+  - inspector 360–440 wide, warm 32/26-26-22
+  - price 44/200
+  - ticket obsidian 26/20
+  - Mark reviewed pill
+  - Geist
+  - no sideways scroll
+
+Trader Sim on the Desk reads the existing read-only `GET /api/paper/trader` (`lib/trader.js`). No core file was touched.
+
+Legacy CSS: rules whose classes no longer appear in any source, test or check were removed from `inspector.css` and `watchlist.css` (the main CSS bundle went from 223.3 kB to 214.9 kB). Rules still referenced stay, mostly the `.wl-table` base that the v3 ledger restyles and that `type-floor.test.js` asserts, and the `iv-rgrid` and `VerdictCard` rules that Review mode still draws. `proof-shots.mjs` still names `.iv-rc`; it is not part of the checks.
+
 ## Retired backlog
 
 The Active Backlog and the Autonomous Build Backlog were retired with the agent lane (PR-B 5b, 2026-10-28) and frozen in `docs/history/autonomous-build-backlog.md`. Nothing builds from them.

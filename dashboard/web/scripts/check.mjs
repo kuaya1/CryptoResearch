@@ -783,6 +783,61 @@ try {
     }
     await tab.close();
   }
+  // ---- v3-parity (UI_MASTER_PLAYBOOK.md §8.3, 2026-10-30): the concept's
+  // values as drawn, 1440x900, light, on the fictional desk ------------------------------
+  {
+    const tab = await tabFor(1440, { height: 900, theme: 'light' });
+    await go(tab, `#/watchlist?p=${CH.integrity}`, "document.querySelector('.inspector.v3 .v3-ticket')");
+    await sleep(600);
+    const v = await tab.evalJs(`(() => {
+      const cs = (sel, el) => { const n = el || document.querySelector(sel); return n ? getComputedStyle(n) : null; };
+      const pad = (c) => c && [c.paddingTop, c.paddingRight, c.paddingBottom, c.paddingLeft].join(' ');
+      const page = cs('.v3-page');
+      const focal = cs('.v3-focal');
+      const h1 = cs('.v3-focal-h');
+      const ledger = cs('.v3-ledger');
+      const row = cs('.v3-ledger .wl-table tbody tr');
+      const name = cs('.v3-ledger .pname');
+      const insp = document.querySelector('.inspector.v3');
+      const card = cs(null, insp);
+      const price = cs('.inspector.v3 .ih-price-v');
+      const ticket = cs('.inspector.v3 .v3-ticket');
+      const pill = cs('.inspector.v3 .if-pill');
+      return {
+        page: page && [page.maxWidth, pad(page), page.columnGap],
+        rail: (cs('.sidebar.v3') || {}).width,
+        focal: focal && [focal.backgroundColor, focal.borderTopLeftRadius, pad(focal)],
+        h1: h1 && [h1.fontSize, h1.fontWeight],
+        ledger: ledger && [ledger.backgroundColor, ledger.borderTopLeftRadius, pad(ledger)],
+        row: row && [row.gridTemplateColumns.split(' ').length, row.columnGap, row.borderTopLeftRadius, pad(row)],
+        name: name && [name.fontSize, name.fontWeight],
+        insp_w: insp ? Math.round(insp.getBoundingClientRect().width) : null,
+        card: card && [card.backgroundColor, card.borderTopLeftRadius, pad(card)],
+        price: price && [price.fontSize, price.fontWeight],
+        ticket: ticket && [ticket.backgroundColor, ticket.borderTopLeftRadius, pad(ticket)],
+        pill: pill && [parseFloat(pill.borderTopLeftRadius), pill.paddingTop + ' ' + pill.paddingRight],
+        font: getComputedStyle(document.body).fontFamily.split(',')[0].replace(/["']/g, '').trim(),
+        over: document.documentElement.scrollWidth - innerWidth,
+      };
+    })()`);
+    report.v3_parity = v;
+    const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    ok(eq(v.page, ['1560px', '28px 28px 72px 28px', '36px']), 'v3-parity: the page is 1560px at most, 28/28/72 padding, a 36px gap', v.page);
+    ok(v.rail === '150px', 'v3-parity: the text rail is 150px', v.rail);
+    ok(eq(v.focal, ['rgb(11, 11, 12)', '32px', '28px 30px 22px 30px']), 'v3-parity: the Focal block is obsidian, 32px corners, 28/30/22 padding', v.focal);
+    ok(eq(v.h1, ['44px', '300']), 'v3-parity: the headline is 44px light', v.h1);
+    ok(eq(v.ledger, ['rgb(255, 255, 255)', '32px', '22px 24px 14px 24px']), 'v3-parity: the ledger is a white card, 32px corners, 22/24/14 padding', v.ledger);
+    ok(v.row && v.row[0] >= 6 && eq(v.row.slice(1), ['14px', '14px', '14px 12px 14px 12px']), 'v3-parity: a ledger row is one grid of six or more tracks, 14px gap, 14px corners, 14/12 padding', v.row);
+    ok(eq(v.name, ['15px', '500']), 'v3-parity: a row name is 15px medium', v.name);
+    ok(v.insp_w >= 360 && v.insp_w <= 440, 'v3-parity: the docked inspector is 360 to 440px wide', v.insp_w);
+    ok(eq(v.card, ['rgb(247, 246, 242)', '32px', '26px 26px 22px 26px']), 'v3-parity: the inspector is one warm card, 32px corners, 26/26/22 padding', v.card);
+    ok(eq(v.price, ['44px', '200']), 'v3-parity: the inspector price is 44px extra light', v.price);
+    ok(eq(v.ticket, ['rgb(11, 11, 12)', '26px', '20px 20px 20px 20px']), 'v3-parity: the ticket card is obsidian, 26px corners, 20px padding', v.ticket);
+    ok(v.pill && v.pill[0] >= 999 && v.pill[1] === '10px 16px', 'v3-parity: Mark reviewed is a pill', v.pill);
+    ok(v.font === 'Geist', 'v3-parity: the body is set in Geist', v.font);
+    ok(v.over <= 1, 'v3-parity: no sideways scroll at 1440', v.over);
+    await tab.close();
+  }
 } finally {
   await b.kill();
   // Disconnecting lets the desk delete its fictional workspace and exit.

@@ -53,15 +53,8 @@
 .wl:not(.has-inspector) .btn.hero-btn.is-primary { --btn-bg: var(--cr-surface-ceramic); --btn-ink: var(--cr-obsidian); --btn-line: transparent; --btn-bg-hover: var(--cr-paper-secondary); --btn-bg-active: var(--cr-paper-secondary); }
 .btn.hero-btn.is-outline { --btn-bg: transparent; --btn-ink: var(--text); --btn-line: var(--color-border); }
 
-/* The Desk's headline under its title. */
-.desk-headline { margin-top: 6px; font-size: var(--fs-body-lg); line-height: 1.5; color: var(--text-2); }
-.desk-headline .pos { color: var(--pos); }
-.desk-headline .neg { color: var(--neg); }
-
 /* A section's head on the Desk: 16px, its count beside it. */
-.desk-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px 24px 10px; }
 .sec-h { display: flex; align-items: baseline; gap: 8px; font-size: var(--fs-lg); font-weight: var(--wt-title); letter-spacing: var(--track-title); line-height: 24px; }
-.sec-count { font-family: var(--mono); font-size: var(--fs-sm); font-weight: 400; color: var(--text-3); font-variant-numeric: tabular-nums; }
 
 /* ---- the range control: a track and a thumb that slides (§2.6) ---- */
 .range { position: relative; isolation: isolate; display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 2px; border-radius: var(--r-pill); background: var(--seg-track); }
@@ -71,7 +64,6 @@
 .range-opt[aria-checked="true"] { color: var(--text); font-weight: 600; }
 .range-opt:focus-visible { outline-offset: 0; }
 
-.spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 @container (max-width: 980px) {
@@ -146,7 +138,6 @@
 .wl-search { flex: 0 1 260px; min-width: 180px; }
 .tb-right { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .btn.is-on { border-color: var(--accent-line); color: var(--accent-text); background: var(--surface-selected); }
-.btn-count { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-pill); background: var(--accent); color: var(--on-accent); font-size: var(--fs-xs); font-weight: 600; }
 /* Active filters: removable "Label | Value" chips, 32px (§3.1). */
 .fchips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .fchip { display: inline-flex; align-items: stretch; height: 32px; border-radius: var(--r-control); background: var(--sidebar-active); font-size: var(--fs-sm); overflow: hidden; }
@@ -172,13 +163,7 @@
 .wl-table thead th:first-child { border-top-left-radius: calc(var(--r-card) - 1px); }
 .wl-table thead th:last-child { border-top-right-radius: calc(var(--r-card) - 1px); }
 .wl-table th.num { text-align: right; }
-.th-sort { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 6px; margin: 0 -6px; border: 0; border-radius: var(--r-md); background: transparent; color: inherit; font: inherit; cursor: pointer; white-space: nowrap; }
-.th-sort:hover { color: var(--text); background: var(--surface-hover); }
-.wl-table th[aria-sort] .th-sort { color: var(--text); font-weight: 500; }
-.th-arrow { color: var(--accent); }
-.th-stack { display: inline-flex; flex-direction: column; align-items: center; line-height: 1.15; }
 .th-lbl { display: inline-flex; align-items: center; gap: 4px; }
-.th-hold { font-size: var(--fs-xs); color: var(--text-3); font-weight: 400; }
 .wl-table td {
   height: var(--wl-row-h); padding: 8px 16px;
   border-bottom: 1px solid var(--separator);
@@ -205,7 +190,6 @@
 .proj-names { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; }
 .proj-top { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; max-width: 100%; }
 .proj-sub { display: inline-flex; align-items: center; gap: 6px; min-height: 18px; line-height: 18px; }
-.proj-sector { font-size: var(--fs-sm); color: var(--text-2); }
 .pname {
   display: block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding: 0; border: 0; background: none; color: var(--text); cursor: pointer;
@@ -248,17 +232,10 @@
 /* The Grade: the canonical figure, its rubric word as a badge, the glyph. */
 .gcell { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 2px 4px; margin: 0 -4px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .gcell:hover { background: var(--surface-hover); }
-.gcell-main { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .gcell-v { font-family: var(--font-display); font-size: var(--fs-grade-row); font-weight: var(--wt-metric); line-height: 1; letter-spacing: var(--track-title); font-variant-numeric: tabular-nums; }
 /* The rubric word: a pip in its tier with a mono label, no fill. */
 .gcell-band { background: none; color: var(--t-ink); font-weight: 400; }
 .gcell-wh { background: repeating-linear-gradient(135deg, var(--surface-sunken) 0 4px, var(--track) 4px 6px); color: var(--text-2); }
-.gcell-none { font-size: var(--fs-md); color: var(--text-3); }
-.gcell-state { font-size: var(--fs-md); font-weight: 500; color: var(--text-2); }
-.gcell-state.is-waiting, .gcell-state.is-interrupted { color: var(--warn); }
-.gcell-state.is-running, .gcell-state.is-dispatching, .gcell-state.is-cowork, .gcell-state.is-connector, .gcell-state.is-queued { color: var(--work-text); }
-.gcell-state.is-failed, .gcell-state.is-uncertain { color: var(--neg); }
-.gcell-pin { font-size: var(--fs-xs); color: var(--text-3); }
 .cg { display: inline-flex; gap: 4px; align-items: center; height: 10px; }
 .risk-badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .wl-table .risk-badge, .wl-table .gcell-band, .wl-table .gcell-wh { height: var(--badge-h-lg); padding: 0 10px; border-radius: var(--r-badge-lg); font-size: var(--fs-sm); font-weight: 500; line-height: var(--badge-h-lg); }
@@ -267,10 +244,8 @@
 .wl-table .risk-badge.is-bad { padding-left: 10px; padding-right: 10px; background: var(--danger-soft); color: var(--danger-soft-text); }
 /* A long rubric word ("Weak to adequate or mixed") wraps in its badge
    rather than widening the Grade column. */
-.wl-table .gcell-main { white-space: normal; }
 .wl-table .gcell-band { height: auto; min-height: var(--badge-h-lg); max-width: 150px; padding-top: 3px; padding-bottom: 3px; line-height: 1.3; white-space: normal; }
 .wl-table .exit-cell, .wl-table .lr-cell { font-size: var(--fs-md); }
-.risk-more { color: inherit; opacity: 0.8; }
 .exit-cell { font-weight: 500; }
 .exit-cell.is-bad { color: var(--neg); }
 .exit-cell.is-ok { color: var(--pos); }
@@ -306,7 +281,6 @@
 @media (pointer: coarse) { .wl-table .c-act { display: none; } }
 .c-prov { width: 72px; text-align: center !important; }
 .wl-table th.c-prov { text-align: center; }
-.wl-table th.c-prov .th-sort { margin: 0 auto; }
 .wl-table td.c-prov { padding: 0 6px; }
 /* The sticky summary footer. */
 .wl-table tfoot td { position: sticky; bottom: 0; z-index: 3; height: 44px; padding: 0 16px; background: var(--surface-band); border-top: 1px solid var(--border); border-bottom: 0; color: var(--text-2); font-size: var(--fs-sm); cursor: default; }
@@ -370,10 +344,9 @@ button.gp:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--t-fill, var(--t
 @container (max-width: 800px) {
   .wl-table td, .wl-table th { padding-left: 10px; padding-right: 10px; }
   .pname { max-width: 140px; }
-  .wl-table .proj-top .ticker, .proj-sub .proj-sector { display: none; }
+  .wl-table .proj-top .ticker { display: none; }
   .wl-table .risk-badge { max-width: 128px; }
-  .wl-table .gcell-main { white-space: normal; }
-  .wl-table .gcell-wh, .wl-table .gcell-none, .wl-table .gcell-state { display: inline-block; max-width: 72px; height: auto; padding-top: 3px; padding-bottom: 3px; line-height: 1.25; white-space: normal; }
+  .wl-table .gcell-wh { display: inline-block; max-width: 72px; height: auto; padding-top: 3px; padding-bottom: 3px; line-height: 1.25; white-space: normal; }
 }
 @container (max-width: 480px) {
   .wl-table td, .wl-table th { padding-left: 6px; padding-right: 6px; }
@@ -405,10 +378,7 @@ button.gp:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--t-fill, var(--t
   .ready-item { flex-direction: column; align-items: flex-start; gap: 6px; }
   .ready-w { white-space: normal; }
   .hero-cards .hero-btn { flex-basis: 100%; }
-  .desk-bar { margin: 16px 12px 8px; }
   .rb { grid-template-columns: auto minmax(0, 1fr); padding: 10px 12px; }
-  .rb-track { grid-column: 1 / -1; }
-  .rb-words { grid-column: 1 / -1; }
   .dgrid-wrap { margin: 16px 12px 0; }
   .views { margin: 16px 12px 0; max-width: calc(100% - 24px); }
   .view-tab { padding: 0 12px; height: 44px; font-size: var(--fs-sm); }
@@ -431,13 +401,11 @@ button.gp:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--t-fill, var(--t
   .wl-table .marks, .wl-table .proj-sub { flex-wrap: wrap; }
   .wl-table .mark { display: inline-block; max-width: 80px; white-space: normal; line-height: 1.25; }
   .wl-table .price-cell .price { font-size: var(--fs-sm); }
-  .wl-table .gcell-none, .wl-table .gcell-state { display: inline-block; max-width: 56px; white-space: normal; line-height: 1.25; }
   .proj { gap: 8px; }
   .wl-table .risk-badge { max-width: 70px; padding-left: 4px; padding-right: 4px; height: auto; min-height: var(--badge-h); padding-top: 2px; padding-bottom: 2px; line-height: 1.3; white-space: normal; display: -webkit-inline-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 }
 @media (max-width: 767.98px) {
   /* A withheld grade and a stale price's note wrap rather than widen their columns. */
-  .wl-table .gcell-main { white-space: normal; }
   .wl-table .gcell-wh { height: auto; max-width: 56px; padding-top: 2px; padding-bottom: 2px; line-height: 1.25; white-space: normal; }
   .wl-table .price-note { white-space: normal; max-width: 60px; text-align: right; }
   .wl-table .price-note .pn { white-space: normal; }
