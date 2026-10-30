@@ -1,27 +1,24 @@
-// The project inspector, Level 1 (?p=<id> on the Desk; DESIGN_AND_IA
-// _BLUEPRINT.md §3.2; Eric, 2026-10-17). It answers "what is this, what is
-// the call, what could break it, what do I do" without a long scroll: a
-// sticky head (logo, name, ticker, Held, the menu, close; the price with its
-// 24-hour change, MC and FDV/MC; the links in one Links menu), six blocks
-// (ModelPanel.jsx), and a sticky foot: what changed since your review on the
-// left, Open full research and Mark reviewed (R) on the right; each label
-// opens exactly one place.
+// The project inspector, Level 1 (?p=<id> on the Desk; UI_MASTER_PLAYBOOK.md
+// §4.5, 2026-10-30). One warm card: the head (ticker, sector and Held over
+// the name, and close), the price with its change today, the market cap and
+// FDV in words, then the body (ModelPanel.jsx: the PM Cohort, bull and bear,
+// the signals, the thesis, the ticket, what needs you, your note) and the
+// footer row: Open full research, More and Links on the left, Mark reviewed
+// on the right; each label opens exactly one place.
 //
 // From 1280px it docks beside the list (non-modal; Escape closes it and
-// returns to the row; J/K move the choice), 560px wide to 1599px and 640px
-// from 1600px; below, it is a drawer over the list, a full-screen sheet on a
-// phone (modal: the rest of the page is inert; a swipe down on its head
-// closes it). Its body scrolls on its own and the head and foot keep their
-// place. Another project opens at its top; a redraw of the same one keeps its
-// place.
+// returns to the row; J/K move the choice), sticky 28px from the top, one
+// card with no sticky head or foot (when it is taller than the window the
+// card scrolls as one); below, it is a drawer over the list, a full-screen
+// sheet on a phone (modal: the rest of the page is inert; a swipe down on its
+// head closes it), whose body scrolls between the head and the foot. Another
+// project opens at its top; a redraw of the same one keeps its place.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { X, Ellipsis, ExternalLink, Check, ChevronDown, ArrowRight } from 'lucide-react';
 import { fmtDate, fmtDateTime, fmtAgo, freshnessText } from '../../../../public/ui.js';
 import { mkt, marketStrings, noPriceReason, priceClock, rowProject, needsReview, canonicalOf } from '../../../../public/watchlist-model.js';
 import { useDesk, useProject } from '../../lib/hooks.js';
 import { claimFocus, navigate } from '../../lib/router.js';
 import { legacyCtx } from '../../legacy/ctx.js';
-import { Logo } from '../../components/Logo.jsx';
 import { HoldButton } from '../../components/HoldButton.jsx';
 import { Change, Unknown, UnknownFigure } from '../../components/figures.jsx';
 import { Menu, MenuItem, MenuSep, MenuLabel } from '../../components/Menu.jsx';
@@ -34,7 +31,7 @@ import { FootSlot } from './footSlot.js';
 const enc = encodeURIComponent;
 const plain = (e) => e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
 
-// The header row's price: 22px bold with its 24h pill, beside the name.
+// Block B: the price, 44px and light, with its change today.
 function HeadPrice({ p }) {
   const m = mkt(p);
   if (!m) return null;
@@ -42,30 +39,34 @@ function HeadPrice({ p }) {
   return (
     <div className="ih-price">
       <span className="ih-price-v">{s.price}</span>
-      {s.change24h ? <span className={`ih-chg ${m.change_24h_pct < 0 ? 'down' : 'up'}`} title="Price change over 24 hours"><Change value={m.change_24h_pct} label="over 24 hours" /></span> : null}
+      {s.change24h ? <span className={`ih-chg ${m.change_24h_pct < 0 ? 'down' : 'up'}`} title="Price change over 24 hours"><Change value={m.change_24h_pct} label="over 24 hours" />{' today'}</span> : null}
     </div>
   );
 }
 
-// Under the name, one muted line: MC · FDV/MC · the price's age.
+// Under the price, one muted line: the market cap, FDV over it, and the
+// price's age only when it is not fresh.
 function HeadMarket({ p, freshness }) {
   const m = mkt(p);
-  if (!m) return <p className="ih-facts none"><span className="faint">{`No price: ${(noPriceReason(p) || 'unknown').toLowerCase()}`}</span></p>;
+  if (!m) return <p className="ih-facts none">{`No price: ${(noPriceReason(p) || 'unknown').toLowerCase()}`}</p>;
   const f = freshnessText(m.status, m.age_minutes);
   const fresh = m.status === 'fresh';
   const s = marketStrings(m);
   const clock = priceClock(m.fetched_at, freshness && freshness.last_success_at);
   const source = m.rank_source_label && /fictional/i.test(m.rank_source_label) ? 'Fictional demo data' : `Source: ${m.source || 'CoinGecko'}`;
   const none = (label, v) => <UnknownFigure label={label} value={v} />;
+  const stale = !fresh || clock.kept;
   return (
-    <p className="ih-facts">
-      <span className="ih-fact" title="Market cap (CoinGecko)"><span className="k">MC</span>{s.mcap || none('Market cap', m.market_cap_usd)}</span>
+    <p className="ih-facts" title={`${source}, as of ${fmtDateTime(m.as_of)}${clock.kept ? `. The last price refresh (${fmtAgo(freshness.last_success_at)}) did not update this asset, so its last valid price is kept.` : ''}`}>
+      <span className="ih-fact" title="Market cap (CoinGecko)">{'Market cap '}{s.mcap || none('Market cap', m.market_cap_usd)}</span>
       <span className="ih-dot" aria-hidden="true">·</span>
-      <span className="ih-fact" title="Fully diluted valuation over market cap, from the two figures (FDV and volume are on the Market section)"><span className="k">FDV/MC</span>{s.fdvMc || <Unknown label="FDV over market cap" />}</span>
-      <span className="ih-dot" aria-hidden="true">·</span>
-      <span className={`ih-fresh${fresh && !clock.kept ? '' : ' is-warn'}`} title={`${source}, as of ${fmtDateTime(m.as_of)}${clock.kept ? `. The last price refresh (${fmtAgo(freshness.last_success_at)}) did not update this asset, so its last valid price is kept.` : ''}`}>
-        {fresh ? clock.text || fmtAgo(m.fetched_at || m.as_of) : f.text}
-      </span>
+      <span className="ih-fact" title="Fully diluted valuation over market cap, from the two figures">{'FDV '}{s.fdvMc ? `${s.fdvMc} of market cap` : <Unknown label="FDV over market cap" />}</span>
+      {stale ? (
+        <>
+          <span className="ih-dot" aria-hidden="true">·</span>
+          <span className="ih-fresh is-warn">{fresh ? clock.text || fmtAgo(m.fetched_at || m.as_of) : f.text}</span>
+        </>
+      ) : null}
     </p>
   );
 }
@@ -87,8 +88,8 @@ function HeadLinks({ p, L }) {
   return (
     <Menu
       label={`Links for ${p.name}`}
-      align="end"
-      trigger={<button type="button" className="btn btn-sm ih-links-btn" data-key={`ih-links-${p.project_id}`} aria-label={`Links for ${p.name}: ${items.map((x) => x.label).join(', ')}`}><ExternalLink size={13} aria-hidden="true" /><span>Links</span><ChevronDown size={13} aria-hidden="true" /></button>}
+      align="start"
+      trigger={<button type="button" className="if-link ih-links-btn" data-key={`ih-links-${p.project_id}`} aria-label={`Links for ${p.name}: ${items.map((x) => x.label).join(', ')}`}>Links</button>}
     >
       {items.map((x) => (
         <MenuItem key={x.key} desc={x.desc} data-key={`x-${x.key}-${p.project_id}`} onSelect={() => { window.open(x.href, '_blank', 'noopener,noreferrer'); }}>{x.label}</MenuItem>
@@ -121,6 +122,7 @@ export default function Inspector({ pid, wide }) {
     const changed = lastPid.current !== pid;
     lastPid.current = pid;
     if (changed && body.current) body.current.scrollTop = 0;
+    if (changed && root.current) root.current.scrollTop = 0;
     if (view.focusOnRender) {
       const target = heading.current;
       if (target) {
@@ -154,7 +156,6 @@ export default function Inspector({ pid, wide }) {
   }, [modal]);
 
   if (!p) return null;
-  const ch = p.changes || {};
   const archived = p.status === 'archived';
   const a = p.archive || {};
   const canon = canonicalOf(p);
@@ -182,19 +183,19 @@ export default function Inspector({ pid, wide }) {
   // its decision is the primary and these two join the card's More menu
   // (the same elements and handlers), so the foot never holds a row of
   // competing buttons. Otherwise they stay here, Mark reviewed the primary.
-  const secondary = (
-    <>
-      <a className="btn btn-sm" href={fullHref} data-key={`brief-${pid}`} aria-label={`Open full research: ${p.name}`} onClick={openFull}>Open full research<ArrowRight size={13} aria-hidden="true" /></a>
-      {needsReview(p) ? <HoldButton className={`btn-sm${ticketWaits ? '' : ' btn-primary'}`} data-key="panel-reviewed" aria-keyshortcuts="R" title={drawn.ready ? 'Mark reviewed (R marks it and moves to the next project to review)' : STILL_LOADING} aria-disabled={drawn.ready ? undefined : 'true'} disabled={busy || !drawn.ready} onConfirm={() => markReviewed(p, { onBusy: setBusy })}>{drawn.ready ? 'Mark reviewed' : STILL_LOADING}</HoldButton> : null}
-    </>
-  );
+  const fullLink = <a className="if-link" href={fullHref} data-key={`brief-${pid}`} aria-label={`Open full research: ${p.name}`} onClick={openFull}>Open full research</a>;
+  const reviewPill = needsReview(p)
+    ? <HoldButton className={`if-pill${ticketWaits ? '' : ' btn-primary'}`} data-key="panel-reviewed" aria-keyshortcuts="R" title={drawn.ready ? 'Mark reviewed (R marks it and moves to the next project to review)' : STILL_LOADING} aria-disabled={drawn.ready ? undefined : 'true'} disabled={busy || !drawn.ready} onConfirm={() => markReviewed(p, { onBusy: setBusy })}>{drawn.ready ? 'Mark reviewed' : STILL_LOADING}</HoldButton>
+    : <span className="if-pill is-done">Reviewed</span>;
+  const secondary = <>{fullLink}{needsReview(p) ? reviewPill : null}</>;
   const slot = footSlot ? { el: footSlot, extras: ticketWaits ? secondary : null, claim: setClaimed } : null;
+  const tag = [p.symbol, p.sector && p.sector.label, p.held ? 'Held' : null].filter(Boolean).join(' · ');
   return (
     <FootSlot.Provider value={slot}>
       {modal ? <div className="drawer-scrim" aria-hidden="true" onClick={closePanel} /> : null}
       <aside
         ref={root}
-        className={`inspector ${modal ? 'is-modal' : 'is-docked'}`}
+        className={`inspector v3 ${modal ? 'is-modal' : 'is-docked'}`}
         role="dialog"
         aria-modal={modal ? 'true' : 'false'}
         aria-labelledby="insp-title"
@@ -208,41 +209,17 @@ export default function Inspector({ pid, wide }) {
       >
         <header className="insp-head" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
           <div className="ih-row">
-            <Logo p={p} size={36} />
-            <h2 id="insp-title" ref={heading} tabIndex={-1} title={p.name}>
-              <span className="ih-name">{p.name}{p.symbol ? <>{' '}<span className="ih-sym">{p.symbol}</span></> : null}</span>
-              {p.held ? <span className="badge is-accent ih-held" title="You hold this: see Portfolio">Held</span> : null}
-              {p.identity_status !== 'verified' ? <span className="badge is-warn ih-held" title={(p.identity_unknowns || []).join(' ') || 'Identity not confirmed: no prices or holdings use it'}>Identity pending</span> : null}
-            </h2>
-            <HeadPrice p={p} />
-            <div className="ih-win">
-              <Menu
-                label={`Actions for ${p.name}`}
-                align="end"
-                trigger={<button type="button" className="btn btn-ghost btn-icon" aria-label={`More actions for ${p.name}`} title="More actions" data-key="panel-more"><Ellipsis size={18} aria-hidden="true" /></button>}
-              >
-                <MenuItem data-key={`menu-full-${pid}`} onSelect={() => openFull(null)}>Full research page</MenuItem>
-                {archived ? null : <MenuItem data-key="menu-research" onSelect={async () => { const Lm = await loadLegacy(); Lm.openResearchDialog(legacyCtx, p); }}>Run research…</MenuItem>}
-                {archived ? null : <MenuItem data-key="menu-watch" desc={p.on_watchlist ? 'On your watchlist now' : null} onSelect={() => setWatching(p, !p.on_watchlist)}>{p.on_watchlist ? 'Stop watching' : 'Watch'}</MenuItem>}
-                {p.sector ? <MenuItem data-key="menu-sector" desc={p.sector.label} onSelect={async () => { const Lm = await loadLegacy(); Lm.openSectorDialog(legacyCtx, p); }}>Change sector</MenuItem> : null}
-                <MenuItem data-key="menu-reviewed" desc={drawn.ready ? null : STILL_LOADING} disabled={!drawn.ready} onSelect={() => markReviewed(p, { force: true, onBusy: setBusy })}>Mark reviewed</MenuItem>
-                {p.held ? <MenuItem href="#/portfolio" data-key="menu-held">Holding in Portfolio</MenuItem> : null}
-                <MenuSep />
-                <MenuLabel>Sections</MenuLabel>
-                {[['forensics', 'Forensics'], ['market', 'Market and pools'], ['contract', 'Contract and checks'], ['record', 'Research record']].map(([t, w]) => (
-                  <MenuItem key={t} data-key={`menu-${t}-${pid}`} onSelect={() => { navigate(`#/project/${enc(pid)}/${t}`, { state: { crBrief: pid, from: 'watchlist' } }); }}>{w}</MenuItem>
-                ))}
-                <MenuSep />
-                {archived
-                  ? <MenuItem data-key="menu-restore" desc="Back as it was, with its history" onSelect={() => restoreProject(p)}>Restore</MenuItem>
-                  : <MenuItem data-key="menu-archive" desc="Off your lists; nothing is deleted. Undo right after." onSelect={() => archiveProject(p)}>Archive</MenuItem>}
-              </Menu>
-              <button type="button" className="btn btn-ghost btn-icon" aria-label={`Close ${p.name} details`} title="Close (Esc)" data-key="panel-close" onClick={closePanel}><X size={18} aria-hidden="true" /></button>
+            <div className="ih-id">
+              {tag ? <p className="ih-tag">{tag}{p.identity_status !== 'verified' ? <span className="ih-pending" title={(p.identity_unknowns || []).join(' ') || 'Identity not confirmed: no prices or holdings use it'}>{' · Identity pending'}</span> : null}</p> : null}
+              <h2 id="insp-title" ref={heading} tabIndex={-1} title={p.name}>
+                <span className="ih-name">{p.name}</span>
+              </h2>
             </div>
+            <button type="button" className="ih-close" aria-label={`Close ${p.name} details`} title="Close (Esc)" data-key="panel-close" onClick={closePanel}><span aria-hidden="true">×</span></button>
           </div>
           <div className="ih-sub">
+            <HeadPrice p={p} />
             <HeadMarket p={p} freshness={d.index.freshness && d.index.freshness.market} />
-            <HeadLinks p={p} L={L} />
           </div>
         </header>
 
@@ -264,16 +241,34 @@ export default function Inspector({ pid, wide }) {
 
         <footer className="insp-foot">
           <div className="if-decide" ref={setFootSlot} />
-          <p className="if-sum" title={p.next_review ? `Next review: ${fmtDate(p.next_review.date)}${p.next_review.overdue ? ' (overdue)' : ''}` : undefined}>
-            {ch.item_count ? (
-              <>
-                <span>{`${ch.item_count} change${ch.item_count === 1 ? '' : 's'} since ${ch.cursor_source === 'project created' ? 'added' : 'your last review'}`}</span>
-                <span className="if-dot" aria-hidden="true">·</span>
-                <a href={`#/project/${enc(pid)}/notes`} data-key={`what-changed-${pid}`} onClick={(e) => { if (!plain(e)) return; e.preventDefault(); navigate(`#/project/${enc(pid)}/notes`, { state: { crBrief: pid, from: 'watchlist' } }); }}>What changed</a>
-              </>
-            ) : <span className="if-ok"><Check size={14} aria-hidden="true" />Reviewed</span>}
-          </p>
-          {claimed && ticketWaits ? null : <div className="if-act">{secondary}</div>}
+          <div className="if-row">
+            <div className="if-links">
+              {claimed && ticketWaits ? null : fullLink}
+              <Menu
+                label={`Actions for ${p.name}`}
+                align="start"
+                trigger={<button type="button" className="if-link" aria-label={`More actions for ${p.name}`} data-key="panel-more">More</button>}
+              >
+                <MenuItem data-key={`menu-full-${pid}`} onSelect={() => openFull(null)}>Full research page</MenuItem>
+                {archived ? null : <MenuItem data-key="menu-research" onSelect={async () => { const Lm = await loadLegacy(); Lm.openResearchDialog(legacyCtx, p); }}>Run research…</MenuItem>}
+                {archived ? null : <MenuItem data-key="menu-watch" desc={p.on_watchlist ? 'On your watchlist now' : null} onSelect={() => setWatching(p, !p.on_watchlist)}>{p.on_watchlist ? 'Stop watching' : 'Watch'}</MenuItem>}
+                {p.sector ? <MenuItem data-key="menu-sector" desc={p.sector.label} onSelect={async () => { const Lm = await loadLegacy(); Lm.openSectorDialog(legacyCtx, p); }}>Change sector</MenuItem> : null}
+                <MenuItem data-key="menu-reviewed" desc={drawn.ready ? null : STILL_LOADING} disabled={!drawn.ready} onSelect={() => markReviewed(p, { force: true, onBusy: setBusy })}>Mark reviewed</MenuItem>
+                {p.held ? <MenuItem href="#/portfolio" data-key="menu-held">Holding in Portfolio</MenuItem> : null}
+                <MenuSep />
+                <MenuLabel>Sections</MenuLabel>
+                {[['forensics', 'Forensics'], ['market', 'Market and pools'], ['contract', 'Contract and checks'], ['record', 'Research record']].map(([t, w]) => (
+                  <MenuItem key={t} data-key={`menu-${t}-${pid}`} onSelect={() => { navigate(`#/project/${enc(pid)}/${t}`, { state: { crBrief: pid, from: 'watchlist' } }); }}>{w}</MenuItem>
+                ))}
+                <MenuSep />
+                {archived
+                  ? <MenuItem data-key="menu-restore" desc="Back as it was, with its history" onSelect={() => restoreProject(p)}>Restore</MenuItem>
+                  : <MenuItem data-key="menu-archive" desc="Off your lists; nothing is deleted. Undo right after." onSelect={() => archiveProject(p)}>Archive</MenuItem>}
+              </Menu>
+              <HeadLinks p={p} L={L} />
+            </div>
+            {claimed && ticketWaits ? null : <div className="if-act">{reviewPill}</div>}
+          </div>
         </footer>
       </aside>
     </FootSlot.Provider>

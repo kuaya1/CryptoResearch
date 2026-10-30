@@ -555,3 +555,119 @@ html.has-drawer { overflow: hidden; }
 .pm-sbs-cell .pm-dis-k { width: auto; margin: 0; }
 .pm-sbs-v { margin: 0; font-size: var(--fs-lg, 16px); font-weight: 700; font-variant-numeric: tabular-nums; }
 .pm-sbs-s { margin: 0; color: var(--text-2); }
+
+/* ---- UI v3: the inspector card (UI_MASTER_PLAYBOOK.md §4.5, 2026-10-30):
+   one warm card, 26px in, its blocks 24px apart. Docked it has no sticky head
+   or foot and no scrolling body; when it is taller than the window the card
+   scrolls as one. A drawer and a phone sheet wear the same skin and keep
+   their head and foot. ---- */
+.inspector.v3 { background: var(--v3-surface-warm); color: var(--v3-ink); }
+.inspector.v3.is-docked {
+  height: auto; max-height: calc(100dvh - 2 * var(--v3-pad-page)); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none;
+  gap: 24px; padding: 26px 26px 22px;
+  border-radius: var(--r-v3-card); box-shadow: var(--sh-v3-insp);
+}
+.inspector.v3.is-docked::-webkit-scrollbar { display: none; }
+.inspector.v3.is-docked > .insp-head, .inspector.v3.is-docked > .insp-body, .inspector.v3.is-docked > .insp-foot { flex: none; padding: 0; overflow: visible; background: none; box-shadow: none; }
+.inspector.v3.is-modal { box-shadow: var(--sh-v3-insp); }
+.inspector.v3.is-modal > .insp-head, .inspector.v3.is-modal > .insp-foot { background: var(--v3-surface-warm); box-shadow: none; }
+.inspector.v3.is-modal > .insp-head { padding: 24px 26px 18px; }
+.inspector.v3.is-modal > .insp-body { padding: 6px 26px 24px; }
+.inspector.v3.is-modal > .insp-foot { padding: 16px 26px; padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+
+/* Block A: the head; Block B: the price */
+.inspector.v3 .ih-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.ih-id { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ih-tag { margin: 0; font-size: var(--fs-sm); color: var(--v3-ink-quiet); }
+.inspector.v3 .ih-row h2 { display: block; padding: 0; font-family: inherit; font-size: var(--fs-v3-name); font-weight: 300; letter-spacing: -0.035em; line-height: 1; color: var(--v3-ink); }
+.ih-close { flex: none; padding: 2px 4px; border: 0; border-radius: var(--r-sm); background: none; font: inherit; font-size: var(--fs-v3-close); line-height: 1; color: var(--v3-ink-quiet); cursor: pointer; transition: color var(--dur) var(--ease); }
+.ih-close:hover { color: var(--v3-ink); }
+.inspector.v3 .ih-sub { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin: 24px 0 0; }
+.inspector.v3 .ih-price { align-items: baseline; flex-wrap: wrap; gap: 12px; padding: 0; white-space: normal; }
+.inspector.v3 .ih-price-v { font-family: inherit; font-size: var(--fs-v3-price); font-weight: 200; letter-spacing: -0.045em; line-height: 1; color: var(--v3-ink); }
+.inspector.v3 .ih-chg { font-family: inherit; font-size: var(--fs-md); white-space: nowrap; }
+.inspector.v3 .ih-chg.up { color: var(--v3-up); }
+.inspector.v3 .ih-chg.down { color: var(--v3-down); }
+.inspector.v3 .ih-facts { gap: 2px 6px; font-family: inherit; font-size: var(--fs-xs); color: var(--v3-ink-quiet); }
+.inspector.v3 .ih-fact, .inspector.v3 .ih-dot { color: inherit; }
+.inspector.v3 .ih-fresh.is-warn { color: var(--v3-age-warn); }
+
+/* The body's blocks */
+.inspector.v3 .iv { gap: 24px; }
+.inspector.v3 .iv-h { font-size: var(--fs-meta); font-weight: 400; color: var(--v3-ink-quiet); }
+
+/* Block C: the PM Cohort */
+.iv-cohort { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.iv-k { margin: 0; font-size: var(--fs-meta); font-weight: 400; color: var(--v3-ink-quiet); }
+.iv-grade-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-width: 0; }
+.iv-grade { display: flex; align-items: baseline; gap: 10px; min-width: 0; margin: 0; }
+.iv-grade-v { flex: none; font-size: var(--fs-v3-grade); font-weight: 300; letter-spacing: -0.03em; line-height: 1; font-variant-numeric: tabular-nums; color: var(--v3-ink); }
+.iv-grade-v.is-none { font-size: var(--fs-lg); font-weight: 400; letter-spacing: 0; color: var(--v3-ink-quiet); }
+.iv-grade-w { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); color: var(--v3-ink-muted); }
+.iv-grade-w .mh-verdict { font: inherit; color: inherit; }
+.inspector.v3 .iv-spread { flex: none; font-size: var(--fs-meta); color: var(--v3-ink-quiet); font-variant-numeric: tabular-nums; }
+.iv-models { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.iv-model { display: grid; grid-template-columns: 56px minmax(0, 1fr) 52px; gap: 12px; align-items: center; font-size: var(--fs-xs); }
+.iv-model-n { color: var(--v3-ink-secondary); text-decoration: none; }
+.iv-model-n:hover { color: var(--v3-ink); text-decoration: underline; text-underline-offset: 3px; }
+.iv-bar { position: relative; height: 3px; border-radius: var(--r-v3-bar); background: var(--v3-track); overflow: hidden; }
+.iv-bar-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: inherit; transition: width 0.4s; }
+.iv-bar-fill.is-claude { background: var(--cr-model-claude); }
+.iv-bar-fill.is-gpt { background: var(--cr-model-gpt); }
+.iv-bar-fill.is-gemini { background: var(--cr-model-gemini); }
+.iv-model-v { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; color: var(--v3-ink-muted); font-variant-numeric: tabular-nums; }
+.inspector.v3 .iv-ev { display: inline-flex; align-self: flex-start; align-items: center; gap: 5px; font-size: var(--fs-xs); font-weight: 500; color: var(--warn); }
+
+/* Bull and bear, on the warm card: three plain lines, the risk first */
+.inspector.v3 .ikeys.iv-tr { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.inspector.v3 .iv-tr .ik { grid-column: 1; grid-row: auto; padding: 0; border-radius: 0; background: none; }
+.inspector.v3 .iv-tr .ik dt { margin-bottom: 4px; font-size: var(--fs-meta); font-weight: 400; color: var(--v3-ink-quiet); }
+.inspector.v3 .iv-tr .ik dt::before { width: 5px; height: 5px; }
+.inspector.v3 .iv-tr .ik dd { padding-left: 13px; }
+.inspector.v3 .iv-tr .ik-t { font-size: var(--fs-md); font-weight: 400; line-height: 1.45; }
+.inspector.v3 .iv-tr .ik-foot { padding-left: 13px; }
+
+/* Block E: the signals, the first shown, the rest folded */
+.iv-signals { display: flex; flex-direction: column; gap: 14px; }
+.v3-sigs { display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; list-style: none; }
+.v3-sig { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: baseline; }
+.v3-sig-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--v3-dot-empty); transform: translateY(-2px); }
+.v3-sig.is-ok .v3-sig-dot { background: var(--cr-live); }
+.v3-sig.is-warn .v3-sig-dot { background: var(--cr-amber); }
+.v3-sig.is-bad .v3-sig-dot { background: var(--cr-critical); }
+.v3-sig-t { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.v3-sig-name { font-size: var(--fs-md); font-weight: 500; color: var(--v3-ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.v3-sig-of { font-weight: 400; color: var(--v3-ink-quiet); }
+.v3-sig-note { font-size: var(--fs-sm); line-height: 1.45; color: var(--v3-ink-muted); overflow-wrap: anywhere; }
+.v3-sig-note .iv-link { display: inline; font-size: inherit; }
+.iv-fold { align-self: flex-start; padding: 0 0 0 17px; border: 0; background: none; font: inherit; font-size: var(--fs-xs); color: var(--v3-ink-quiet); cursor: pointer; transition: color var(--dur) var(--ease); }
+.iv-fold:hover { color: var(--v3-ink); }
+
+/* Block F: the changes since your review, one line under the signals */
+.iv-changes { margin: -12px 0 0; padding-left: 17px; font-size: var(--fs-xs); color: var(--v3-ink-quiet); }
+.iv-changes a { color: inherit; text-decoration: underline; text-decoration-color: var(--v3-hairline); text-underline-offset: 3px; }
+.iv-changes a:hover { color: var(--v3-ink); }
+
+/* Block G: the footer row */
+.inspector.v3 > .insp-foot { flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 12px; border-top: 1px solid var(--v3-divider); }
+.inspector.v3.is-docked > .insp-foot { padding-top: 16px; }
+.if-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.if-links { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.if-link { display: inline-flex; align-items: center; padding: 0; border: 0; background: none; font: inherit; font-size: var(--fs-sm); color: var(--v3-ink-muted); text-decoration: none; cursor: pointer; transition: color var(--dur) var(--ease); }
+.if-link:hover { color: var(--v3-ink); text-decoration: none; }
+.inspector.v3 .if-act { margin-left: auto; }
+.inspector.v3 .if-pill { height: auto; min-height: 0; padding: 10px 16px; border-radius: var(--radius-full); font-size: var(--fs-sm); font-weight: 500; }
+.inspector.v3 .if-pill.btn-primary { --btn-bg: var(--v3-solid); --btn-bg-hover: var(--v3-solid); --btn-ink: var(--v3-on-solid); }
+.inspector.v3 .if-pill.btn-hold::after { background: var(--cr-hold-sweep); }
+.if-pill.is-done { display: inline-flex; color: var(--v3-up); background: var(--cr-live-bg); }
+.inspector.v3 .pm-actions.is-foot { padding-bottom: 12px; box-shadow: 0 1px 0 var(--v3-divider); }
+.inspector.v3 .pm-more { background: var(--v3-surface); }
+
+@media (max-width: 767.98px) {
+  .inspector.v3.is-modal { border-radius: 24px 24px 0 0; }
+  .inspector.v3.is-modal > .insp-head { padding: 20px 20px 14px; }
+  .inspector.v3.is-modal > .insp-body { padding: 4px 20px 20px; }
+  .inspector.v3.is-modal > .insp-foot { padding-left: 20px; padding-right: 20px; }
+  .ih-close, .if-link, .iv-fold { min-height: var(--touch); }
+  .ih-close { min-width: var(--touch); margin: -10px -12px 0 0; }
+}

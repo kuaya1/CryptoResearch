@@ -61,9 +61,11 @@ test('the Desk at the executive scale: 15px rows, 26px badges, balanced columns;
   for (const c of ['c-name', 'c-priceStack', 'c-spark', 'c-grade', 'c-risk', 'c-lastResearch', 'c-act']) assert.match(wl, new RegExp(`\\.wl-table \\.${c} \\{ width: \\d+%; \\}`), c);
   assert.doesNotMatch(wl, /\.c-(name|grade|spark)[^{]*\{[^}]*width: 1%/, 'no column shrinks to 1% and pushes the slack elsewhere');
   const insp = fs.readFileSync(path.join(DASH, 'web', 'src', 'styles', 'inspector.css'), 'utf8');
-  // The Apple HIG pass (2026-10-18): four columns, hairlines between, no outer box.
-  assert.match(insp, /\.iv-rgrid \{ display: grid; grid-template-columns: repeat\(4, minmax\(0, 1fr\)\); \}/);
-  assert.match(insp, /\.iv-rc \+ \.iv-rc \{ border-left: 1px solid var\(--border\); \}/);
+  // UI v3 (UI_MASTER_PLAYBOOK.md §4.5, 2026-10-30): the four cells became one
+  // signal line each, a dot and words, the most severe first.
+  assert.match(insp, /\.v3-sig \{ display: grid; grid-template-columns: auto minmax\(0, 1fr\); gap: 12px; align-items: baseline; \}/);
+  assert.match(insp, /\.v3-sig-name \{ font-size: var\(--fs-md\); font-weight: 500;/);
   const mp = fs.readFileSync(path.join(DASH, 'web', 'src', 'views', 'inspector', 'ModelPanel.jsx'), 'utf8');
-  for (const part of ['forensic', 'downside', 'exit', 'pool']) assert.match(mp, new RegExp(`className="iv-rc" data-part="${part}"`), part);
+  assert.match(mp, /<li key=\{x\.key\} className=\{`v3-sig is-\$\{x\.tone\}`\} data-part=\{x\.key\}>/);
+  for (const part of ['forensic', 'downside', 'exit', 'pool']) assert.match(mp, new RegExp(`key: '${part}',`), part);
 });

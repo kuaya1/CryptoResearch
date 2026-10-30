@@ -352,7 +352,7 @@ try {
       await t2.send('Network.setCacheDisabled', { cacheDisabled: true });
       await go(t2, `#/watchlist?p=${P.relay}`, "document.querySelector('.inspector .mpanel')");
       await sleep(1500);
-      const parts = await t2.evalJs("({ verdict: Boolean(document.querySelector('.inspector .mh, .inspector .vblock')), rows: Boolean(document.querySelector('.wl-table tbody tr')) })");
+      const parts = await t2.evalJs("({ verdict: Boolean(document.querySelector('.inspector .iv-cohort, .inspector .mh, .inspector .vblock')), rows: Boolean(document.querySelector('.wl-table tbody tr')) })");
       await go(t2, `#/project/${P.relay}/market`, "document.querySelector('.pp-panel .l2-panel')");
       await waitFor(t2, "document.querySelector('.pp-panel .lg-part-error')", 6000);
       Object.assign(parts, await t2.evalJs("({ partError: document.querySelectorAll('.pp-panel .lg-part-error').length, retry: [...document.querySelectorAll('.pp-panel .lg-part-error button')].some((b) => /try again/i.test(b.textContent)), panels: document.querySelectorAll('.pp-panel .l2-panel').length })"));
@@ -634,7 +634,10 @@ try {
       await waitFor(tab, "document.querySelector('.inspector [data-part=\"risk-text\"], .inspector .tl-risk-text')", 8000);
       await sleep(400);
       const geo = await tab.evalJs(`(() => {
-        const body = document.querySelector('.insp-body').getBoundingClientRect();
+        // The docked card (UI v3) has no scrolling body: its first screen ends at
+        // the window's bottom; a drawer's at its body's.
+        const box = document.querySelector('.insp-body').getBoundingClientRect();
+        const body = { bottom: Math.min(box.bottom, innerHeight) };
         const risk = ${riskSel};
         const r = risk.getBoundingClientRect();
         const before = (sel) => { const el = document.querySelector('.inspector ' + sel); return el ? Boolean(risk.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) : null; };
