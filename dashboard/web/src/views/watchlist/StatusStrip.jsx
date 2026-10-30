@@ -1,16 +1,16 @@
-// The Desk's KPI strip (DESIGN_AND_IA_BLUEPRINT.md §3.1; Eric, 2026-10-17):
-// one panel split by hairlines into five cells, each a way in: Market
-// (Bitcoin's price and 7-day change, dominance; opens the market details),
-// Total cap (with its 24-hour change), Beat BTC 30d (filters the list to the
-// coins ahead of Bitcoin), Needs review (the one count, D3: projects; opens
-// Review) and Research waiting (the model jobs in progress or waiting; shows
-// that view). Each change names its window. Under it, what needs action is
-// always in view, named in words. The price refresh is the header's Refresh
-// prices button (RefreshButton).
+// The Desk's figures and its refresh (UI v3 parity, UI_MASTER_PLAYBOOK.md
+// §4.3, D14): the market line under the Focal block, each item a way in
+// (Bitcoin opens the market details, Beat Bitcoin filters the list, Trader
+// Sim opens Research > Outcomes, Needs review opens Review, Research shows
+// the waiting view, Risk budget opens Portfolio), with the queues said only
+// when they hold something. Refresh is the Focal block's text link
+// (RefreshLink); what needs action stays in view under it (ActionBand).
 import { useEffect, useState } from 'react';
-import { RefreshCw, TriangleAlert, ArrowUpRight, ChevronDown } from 'lucide-react';
-import { fmtAgo, fmtAsOf, fmtChangePct, fmtMarketUsd, fmtPrice, priceStatus, toast, sparkPath } from '../../../../public/ui.js';
-import { splitAttention, kindWord, countdownText, refreshToast, attentionHref, deskKpis, btcSeries, riskBudget } from '../../../../public/watchlist-model.js';
+import { TriangleAlert } from 'lucide-react';
+import { fmtAgo, fmtAsOf, fmtMarketUsd, fmtPrice, priceStatus, toast } from '../../../../public/ui.js';
+import { splitAttention, kindWord, countdownText, refreshToast, attentionHref, deskKpis, riskBudget } from '../../../../public/watchlist-model.js';
+import { settlementWords } from '../../../../public/trader-book-model.js';
+import { useTraderRead } from '../../lib/trader.js';
 import { api, refresh, desk } from '../../lib/desk.js';
 import { navigate } from '../../lib/router.js';
 import { Dom } from '../../components/Dom.jsx';
@@ -25,21 +25,6 @@ function useTick(on) {
   }, [on]);
 }
 
-function Chg({ n, win, label }) {
-  const s = fmtChangePct(n);
-  if (!s) return null;
-  const dir = n < 0 ? 'down' : n > 0 ? 'up' : 'flat';
-  return (
-    <span className={`kpi-chg chg ${dir}`}>
-      <span aria-hidden="true">{s}</span>
-      <span className="kpi-win" aria-hidden="true">{win}</span>
-      <span className="sr-only">{`${s.replace('−', 'minus ')} ${label}`}</span>
-    </span>
-  );
-}
-
-// Refresh prices (the header's secondary action): asks CoinGecko now; a
-// rate limit is said with its countdown.
 // Refresh prices now: the Desk's button and the command menu's "Refresh
 // prices", each an explicit choice (CoinGecko's budget and rate limit apply).
 export const refreshPrices = async () => {
@@ -53,38 +38,6 @@ export const refreshPrices = async () => {
   }
 };
 
-export function RefreshButton({ d }) {
-  const m = d.index.freshness.market;
-  const [busy, setBusy] = useState(false);
-  useTick(Boolean(m.rate_limited && m.retry_at));
-  const left = m.rate_limited ? countdownText(m.retry_at) : null;
-  const doRefresh = async () => {
-    setBusy(true);
-    try {
-      await refreshPrices();
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <>
-      {m.rate_limited ? (
-        <span className="badge is-warn kpi-rl" role="note" title={`The price source is limiting requests${m.retry_at ? `; the next automatic try is after ${fmtAsOf(m.retry_at)}` : ''}. Prices keep their age until then.`}>
-          Rate limited{left ? <span className="kpi-rl-count" aria-hidden="true">{left === 'due' ? ' · retry due' : ` · ${left}`}</span> : null}
-          {m.retry_at ? <span className="sr-only">{`, next try after ${fmtAsOf(m.retry_at)}`}</span> : null}
-        </span>
-      ) : null}
-      <button type="button" className="btn" data-key="refresh-prices" aria-label="Refresh prices now" disabled={busy} onClick={doRefresh}>
-        <RefreshCw size={14} strokeWidth={2} className={busy ? 'spin' : ''} aria-hidden="true" />
-        <span>{busy ? 'Refreshing…' : 'Refresh prices'}</span>
-      </button>
-    </>
-  );
-}
-
-// The Focal block's Refresh (UI v3, §4.2): the same request as the button,
-// as a word on the dark card; "Refreshing…" while it runs, and the rate
-// limit with its countdown while the price source is limiting.
 export function RefreshLink({ d }) {
   const m = d.index.freshness.market;
   const [busy, setBusy] = useState(false);
@@ -114,145 +67,130 @@ export function RefreshLink({ d }) {
   );
 }
 
-// Bitcoin's stored 7-day series as a 44px line; no series, no line.
-function KpiSpark({ values, up }) {
-  const path = sparkPath(values, { width: 96, height: 44, pad: 4 });
-  if (!path) return null;
-  return (
-    <svg className={`kpi-spark ${up ? 'up' : 'down'}`} viewBox="0 0 96 44" width="96" height="44" aria-hidden="true" focusable="false">
-      <path d={path} />
-    </svg>
-  );
+// The market line (UI v3 parity, UI_MASTER_PLAYBOOK.md §4.3): the Desk's
+// figures as one line of text items, no box. Bitcoin (opens the market
+// details), Total market, Beat Bitcoin (filters the list), Trader Sim (the
+// trader simulation's book, opens Research > Outcomes), then only when they
+// hold something: Needs review, Research waiting, Risk budget (a cap set).
+function signed(n, digits = 1) {
+  return `${n >= 0 ? '+' : '−'}${Math.abs(n).toFixed(digits)}%`;
 }
 
-// The risk budget: recorded speculative cost against the cap in Portfolio's
-// limits, a 16px track with the cap's 2×10 mark; caution from 80%, over
-// above 100%, always in words. No cap set: the words only, no bar.
-function RiskBudget({ rb }) {
-  const fill = rb.pct === null ? 0 : Math.max(0, Math.min(100, rb.pct));
-  const usd = (n) => fmtPrice(n);
-  const title = rb.state === 'no_cap'
-    ? 'No speculative capital cap is set (Portfolio > Limits)'
-    : rb.state === 'unknown' ? 'The recorded cost of speculative positions is unknown'
-      : `${rb.atLeast ? 'At least ' : ''}${usd(rb.used)} recorded cost of speculative positions against a ${usd(rb.cap)} cap${rb.atLeast ? '; some units have unknown cost' : ''}`;
-  return (
-    <a className={`rb is-${rb.state}`} href="#/portfolio" data-key="kpi-risk" title={title}>
-      <span className="rb-k">Risk budget</span>
-      {rb.state === 'no_cap' || rb.state === 'unknown' ? (
-        <span className="rb-none">
-          {rb.words}
-          {/* An empty budget says where to set it (L4): Portfolio's Capital
-              limits form; nothing is saved from here. */}
-          {rb.state === 'no_cap' ? <a className="rb-set" href="#/portfolio?tab=record" data-key="rb-set-cap">Set cap</a> : null}
-        </span>
-      ) : (
-        <>
-          <span className="rb-fig">{`${usd(rb.used)} / ${usd(rb.cap)}`}</span>
-          <span className="rb-track" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(fill)} aria-valuetext={rb.words} aria-label="Risk budget used">
-            <span className="rb-fill" style={{ width: `${fill}%` }} />
-            <span className="rb-cap" aria-hidden="true" />
-          </span>
-          <span className="rb-words">{rb.words}</span>
-        </>
-      )}
-    </a>
-  );
-}
-
-function Cell({ id, label, children, onClick, title, sub = null, active = false, aria }) {
+function Item({ id, label, value, sub = null, tone = '', onClick, href, title, aria, pressed, strong = false, valueTone = '' }) {
   const inner = (
     <>
-      <span className="kpi-k">{label}</span>
-      <span className="kpi-v">{children}</span>
-      {sub ? <span className="kpi-s">{sub}</span> : null}
+      <span className="v3-ml-k">{label}</span>
+      <span className={`v3-ml-v${strong ? ' is-strong' : ''}${valueTone ? ` ${valueTone}` : ''}`}>{value}</span>
+      {sub ? <span className={`v3-ml-s${tone ? ` ${tone}` : ''}`}>{sub}</span> : null}
     </>
   );
-  if (!onClick) return <div className="kpi-cell" title={title} data-key={`kpi-${id}`}>{inner}</div>;
-  return (
-    <button type="button" className={`kpi-cell is-link${active ? ' is-on' : ''}`} title={title} data-key={`kpi-${id}`} aria-label={aria} aria-pressed={active || undefined} onClick={onClick}>
-      {inner}
-      <ArrowUpRight className="kpi-go" size={13} aria-hidden="true" />
-    </button>
-  );
+  if (href) return <a className="v3-ml-item" href={href} data-key={`kpi-${id}`} title={title} aria-label={aria}>{inner}</a>;
+  if (!onClick) return <span className="v3-ml-item" data-key={`kpi-${id}`} title={title}>{inner}</span>;
+  return <button type="button" className="v3-ml-item" data-key={`kpi-${id}`} title={title} aria-label={aria} aria-pressed={pressed} onClick={onClick}>{inner}</button>;
 }
 
-export function KpiStrip({ d, agenda = null, settled = true, sources, filters, onView, onBeat, range = '24h' }) {
+const PLAIN = /^-?\d+(\.\d+)?$/;
+
+export function MarketLine({ d, agenda = null, settled = true, sources, filters, onView, onBeat }) {
   const idx = d.index;
   const k = deskKpis(idx, agenda);
   const m = idx.freshness.market;
   const ps = priceStatus(m);
-  const [open, setOpen] = useState(view.strip === 'market' ? 'market' : null);
-  const toggle = (id) => { const next = open === id ? null : id; view.strip = next; setOpen(next); };
-  const demo = k.market && k.market.demo;
-  // Bitcoin's change in the chosen window where the snapshot holds it (7d
-  // and 30d; it has no 24h), its window always named.
-  const btc30 = range === '30d' && k.market && typeof k.market.change_30d === 'number';
-  const series = btcSeries(idx);
+  const tr = useTraderRead().v;
+  const [open, setOpen] = useState(view.strip === 'market');
+  const toggle = () => { const next = !open; view.strip = next ? 'market' : null; setOpen(next); };
+  const demo = Boolean(k.market && k.market.demo) || sources.price !== 'CoinGecko';
   const rb = riskBudget(idx);
+  const usd = (n) => fmtPrice(n);
+  const ch7 = k.market && typeof k.market.change_7d === 'number' ? k.market.change_7d : null;
+  const chT = k.total && typeof k.total.change_24h === 'number' ? k.total.change_24h : null;
+  const r = (tr && tr.results) || null;
+  const funded = Boolean(r && r.funded_usd !== null && r.funded_usd !== undefined);
+  const nav = funded && typeof r.nav_usd === 'string' && PLAIN.test(r.nav_usd) ? Number(r.nav_usd) : null;
+  const openN = r && Array.isArray(r.open_positions) ? r.open_positions.length : 0;
+  const unsettled = settlementWords(tr).unsettled;
+  const btcWords = k.market ? `${Math.round(k.market.btc).toLocaleString('en-US')} dollars` : '';
   return (
-    <section className="kpi" aria-label="Market and what needs you">
-      <div className="kpi-row">
-        <Cell
+    <section className="v3-market" aria-label="Market and what needs you">
+      <div className="v3-ml">
+        <Item
           id="market"
-          label={<>Market{demo || sources.price !== 'CoinGecko' ? <span className="kpi-demo"> (demo)</span> : null}</>}
-          onClick={k.market ? () => toggle('market') : null}
-          active={open === 'market'}
-          aria={k.market ? `Bitcoin ${Math.round(k.market.btc).toLocaleString('en-US')} dollars${k.market.dominance !== null ? `, dominance ${k.market.dominance.toFixed(1)} percent` : ''}. Market details` : undefined}
-          title={k.market ? 'Bitcoin, its 7-day change and its dominance of the total market cap (CoinGecko /global)' : 'No market snapshot captured yet'}
-          sub={<span className={ps.problem ? 'kpi-warn' : undefined} title={ps.note || undefined}>{`Prices ${m.last_success_at ? fmtAgo(m.last_success_at) : 'not fetched'}${ps.problem && !m.rate_limited ? ` · ${ps.text}` : ''}`}</span>}
-        >
-          {k.market ? (
-            <>
-              <span className="kpi-num">{`BTC $${Math.round(k.market.btc).toLocaleString('en-US')}`}</span>
-              {btc30 ? <Chg n={k.market.change_30d} win="30d" label="over 30 days" /> : <Chg n={k.market.change_7d} win="7d" label="over 7 days" />}
-              {series ? <KpiSpark values={series} up={(series[series.length - 1] || 0) >= (series[0] || 0)} /> : null}
-              {k.market.dominance !== null ? <span className="kpi-sub2">{`Dom ${k.market.dominance.toFixed(1)}%`}</span> : null}
-              {k.market.stale ? <span className="kpi-warn">stale</span> : null}
-            </>
-          ) : <span className="faint">No snapshot</span>}
-          {open === 'market' ? <ChevronDown className="kpi-open" size={13} aria-hidden="true" /> : null}
-        </Cell>
-        <Cell id="total" label="Total cap" title="Total crypto market cap (CoinGecko /global)">
-          {k.total ? <><span className="kpi-num">{fmtMarketUsd(k.total.usd)}</span><Chg n={k.total.change_24h} win="24h" label="total market cap over 24 hours" /></> : <span className="faint">—</span>}
-        </Cell>
-        <Cell
+          label={demo ? 'Bitcoin (demo)' : 'Bitcoin'}
+          value={k.market ? `$${Math.round(k.market.btc).toLocaleString('en-US')}` : 'No snapshot'}
+          sub={ch7 !== null ? `${signed(ch7)} this week` : k.market && k.market.stale ? 'stale' : null}
+          tone={ch7 === null ? '' : ch7 >= 0 ? 'is-up' : 'is-down'}
+          onClick={k.market ? toggle : null}
+          pressed={open}
+          title={`${k.market ? 'Bitcoin and its 7-day change; select for the market details.' : 'No market snapshot captured yet.'} Prices ${m.last_success_at ? fmtAgo(m.last_success_at) : 'not fetched'}${ps.problem ? ` · ${ps.text}` : ''}`}
+          aria={k.market ? `Bitcoin ${btcWords}${ch7 !== null ? `, ${ch7 >= 0 ? 'up' : 'down'} ${Math.abs(ch7).toFixed(1)} percent this week` : ''}. Market details` : undefined}
+        />
+        <Item
+          id="total"
+          label="Total market"
+          value={k.total ? fmtMarketUsd(k.total.usd) : '—'}
+          sub={chT !== null ? `${signed(chT)} today` : null}
+          tone={chT === null ? '' : chT >= 0 ? 'is-up' : 'is-down'}
+          title="Total crypto market cap and its 24-hour change (CoinGecko /global)"
+        />
+        <Item
           id="beat"
-          label="Beat BTC (30d)"
+          label="Beat Bitcoin"
+          value={k.beat ? `${k.beat.n} of ${k.beat.of}` : '—'}
+          sub="30 days"
+          strong={filters.beat === 'yes'}
           onClick={k.beat ? onBeat : null}
-          active={filters.beat === 'yes'}
+          pressed={filters.beat === 'yes'}
           title={k.beat ? `${k.beat.words.title} Select to show the projects on your list that beat Bitcoin over 30 days.` : 'No breadth figure captured yet'}
           aria={k.beat ? `${k.beat.n} of ${k.beat.of} beat Bitcoin over 30 days. Show the projects on your list that did` : undefined}
-        >
-          {k.beat ? (
-            <>
-              <span className="kpi-num">{`${k.beat.n} / ${k.beat.of}`}</span>
-              {typeof k.beat.share === 'number' ? <span className="breadth-bar" aria-hidden="true"><span style={{ width: `${Math.max(0, Math.min(100, k.beat.share))}%` }} /></span> : null}
-            </>
-          ) : <span className="faint">—</span>}
-        </Cell>
-        <Cell
-          id="review"
-          label="Needs review"
-          onClick={() => navigate('#/review')}
-          title="Projects with changes since your review, a review of yours due, or research waiting for you. One project counts once."
-          aria={settled ? `${k.review.projects} project${k.review.projects === 1 ? '' : 's'} need your review. Open Review` : 'Counting the projects that need your review. Open Review'}
-        >
-          {settled ? <><span className="kpi-num">{k.review.projects}</span><span className="kpi-unit">{k.review.projects === 1 ? 'project' : 'projects'}</span></> : <span className="kpi-num faint">…</span>}
-        </Cell>
-        <Cell
-          id="waiting"
-          label="Research waiting"
-          onClick={() => onView('waiting')}
-          active={filters.owned === 'waiting'}
-          title="Model jobs queued, working, paused or waiting for you (a model on hold has none)"
-          aria={`${k.waiting.jobs} research job${k.waiting.jobs === 1 ? '' : 's'} waiting on a model. Show them`}
-        >
-          <span className="kpi-num">{k.waiting.jobs}</span><span className="kpi-unit">{k.waiting.jobs === 1 ? 'job' : 'jobs'}</span>
-        </Cell>
+        />
+        {tr ? (
+          <Item
+            id="trader"
+            label="Trader Sim"
+            value={!funded ? 'Not funded' : nav === null ? 'Unknown' : `$${Math.round(nav).toLocaleString('en-US')}`}
+            sub={funded ? `${openN} open · ${unsettled ? 'unsettled' : 'settled'}` : null}
+            href="#/research?tab=outcomes"
+            title="The trader simulation's book: its NAV, open positions and whether its record is settled (Research > Outcomes)"
+          />
+        ) : null}
+        {settled && k.review.projects > 0 ? (
+          <Item
+            id="review"
+            label="Needs review"
+            value={String(k.review.projects)}
+            valueTone="is-review"
+            onClick={() => navigate('#/review')}
+            title="Projects with changes since your review, a review of yours due, or research waiting for you. One project counts once."
+            aria={`${k.review.projects} project${k.review.projects === 1 ? '' : 's'} need your review. Open Review`}
+          />
+        ) : null}
+        {k.waiting.jobs > 0 ? (
+          <Item
+            id="waiting"
+            label="Research"
+            value={String(k.waiting.jobs)}
+            sub="running or queued"
+            onClick={() => onView('waiting')}
+            pressed={filters.owned === 'waiting'}
+            title="Model jobs queued, working, paused or waiting for you (a model on hold has none)"
+            aria={`${k.waiting.jobs} research job${k.waiting.jobs === 1 ? '' : 's'} running or queued. Show them`}
+          />
+        ) : null}
+        {rb.state !== 'no_cap' ? (
+          <Item
+            id="risk"
+            label="Risk budget"
+            value={rb.state === 'unknown' ? `Unknown / ${usd(rb.cap)}` : `${usd(rb.used)} / ${usd(rb.cap)}`}
+            valueTone={rb.state === 'over' ? 'is-down' : ''}
+            sub={rb.words}
+            tone={rb.state === 'over' ? 'is-down' : ''}
+            href="#/portfolio"
+            title={rb.state === 'unknown' ? 'The recorded cost of speculative positions is unknown' : `${rb.atLeast ? 'At least ' : ''}${usd(rb.used)} recorded cost of speculative positions against a ${usd(rb.cap)} cap`}
+          />
+        ) : null}
       </div>
-      <RiskBudget rb={rb} />
-      {open === 'market' ? (
-        <div className="kpi-panel" role="region" aria-label="Market details">
+      {open && k.market ? (
+        <div className="v3-ml-panel" role="region" aria-label="Market details">
           <Dom build={(L) => L.marketStrip(idx)} deps={[idx]} />
         </div>
       ) : null}

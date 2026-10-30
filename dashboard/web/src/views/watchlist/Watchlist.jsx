@@ -34,7 +34,7 @@ import { Menu, MenuItem, MenuLabel, MenuSep, MenuRadio, MenuCheck } from '../../
 import { loadLegacy } from '../../components/Dom.jsx';
 import { Boundary, ViewError, retryableLazy } from '../../components/Boundary.jsx';
 import { legacyCtx } from '../../legacy/ctx.js';
-import { KpiStrip, ActionBand } from './StatusStrip.jsx';
+import { MarketLine, ActionBand } from './StatusStrip.jsx';
 import { ProjectTable } from './ProjectTable.jsx';
 import { RangeControl } from './RangeControl.jsx';
 import { FocalBlock } from './FocalBlock.jsx';
@@ -313,11 +313,7 @@ export default function Watchlist() {
         {slot ? createPortal(optionsMenu, slot) : null}
         <FocalBlock d={d} rows={live} agenda={agenda} onAdd={addProject} options={slot ? null : optionsMenu} />
         <ActionBand d={d} />
-        <div className="desk-bar">
-          <h2 className="sec-h">Market</h2>
-          <RangeControl value={pf.range} onChange={(r) => { if (r !== pf.range) { save({ ...pf, range: r }); announce(`Changes over ${r}.`); } }} />
-        </div>
-        <KpiStrip d={d} agenda={agenda} settled={settled} sources={sources} filters={f} range={pf.range} onView={setView} onBeat={() => setFilter('beat', f.beat === 'yes' ? 'any' : 'yes')} />
+        <MarketLine d={d} agenda={agenda} settled={settled} sources={sources} filters={f} onView={setView} onBeat={() => setFilter('beat', f.beat === 'yes' ? 'any' : 'yes')} />
 
         <nav className="views" aria-label="Views">
           {VIEWS.map(([v, text]) => (
@@ -325,6 +321,7 @@ export default function Watchlist() {
               <span>{text}</span><span className="view-count">{counts[v]}</span>
             </button>
           ))}
+          <RangeControl value={pf.range} onChange={(r) => { if (r !== pf.range) { save({ ...pf, range: r }); announce(`Changes over ${r}.`); } }} />
         </nav>
 
         <div className="toolbar" role="search" aria-label="Find and filter projects" data-nodirty="1">

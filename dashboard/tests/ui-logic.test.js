@@ -475,19 +475,19 @@ test('static: no CoinMarketCap tokens or colors, no "Inter" in any font stack or
   assert.match(css, /\.brand \{[^}]*font-family: var\(--font-display\)/, 'the hosted views\' wordmark is the display sans');
 });
 
-test('the KPI strip (DESIGN_AND_IA_BLUEPRINT.md §3.1): five figures in one panel; on a phone Total steps aside and four sit two by two; what needs action keeps its words; the inspector\'s name is never cut short', () => {
+test('the market line (UI_MASTER_PLAYBOOK.md §4.3): text items on the canvas with no box; the queues only when they hold something; what needs action keeps its words; the inspector\'s name is never cut short', () => {
   const web = (...f) => fs.readFileSync(path.join(__dirname, '..', 'web', 'src', ...f), 'utf8');
   const css = web('styles', 'watchlist.css');
-  assert.match(css, /\.kpi-row \{ display: grid; grid-template-columns: repeat\(5, minmax\(0, 1fr\)\); gap: 1px; background: var\(--border\);/, 'one panel, its hairlines the gaps of one grid');
+  assert.match(css, /\.v3-ml \{ display: flex; flex-wrap: wrap; gap: 10px 34px; padding: 0 6px; \}/, 'one wrapping line, no box');
+  assert.doesNotMatch(css, /\.v3-ml \{[^}]*(background|border|box-shadow)/, 'no box, border or background');
   const phone = css.slice(css.indexOf('@media (max-width: 767.98px)'));
-  assert.match(phone, /\.kpi-row \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}/, 'two by two on a phone');
-  assert.match(phone, /\.kpi-cell\[data-key="kpi-total"\] \{ display: none; \}/, 'Total steps aside on a phone (the Market panel keeps it)');
   assert.doesNotMatch(phone, /\.action-band[^{]*\{[^}]*display: none/, 'what needs action keeps its words on a phone');
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'public', 'position-ui.js'), 'utf8'), /'Total market cap'/, 'the Market panel names the total market cap');
-  // Each cell's accessible name says it in full; what needs action is named
-  // in words, each item with its kind, and none is out of reach.
   const strip = web('views', 'watchlist', 'StatusStrip.jsx');
-  assert.match(strip, /aria=\{settled \? `\$\{k\.review\.projects\} project\$\{k\.review\.projects === 1 \? '' : 's'\} need your review\. Open Review` : 'Counting the projects that need your review\. Open Review'\}/);
+  assert.match(strip, /aria=\{`\$\{k\.review\.projects\} project\$\{k\.review\.projects === 1 \? '' : 's'\} need your review\. Open Review`\}/);
+  assert.match(strip, /\{settled && k\.review\.projects > 0 \?/, 'Needs review only once counted and when there is any');
+  assert.match(strip, /\{k\.waiting\.jobs > 0 \?/, 'Research only when a job waits');
+  assert.match(strip, /\{rb\.state !== 'no_cap' \?/, 'Risk budget only with a cap set');
   assert.match(strip, /<strong>\{kindWord\(a\)\}<\/strong>/);
   assert.match(strip, /\(all \? critical : critical\.slice\(0, 4\)\)/, 'the rest open in place');
   // The inspector's name wraps up to three lines, never cut short.

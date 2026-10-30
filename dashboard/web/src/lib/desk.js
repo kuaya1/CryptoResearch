@@ -40,6 +40,8 @@ export const desk = {
   // The review agenda as last read (lib/agenda.js): { index, promise, last }.
   agenda: null,
   brief: null,
+  // The trader simulation's book as last read (lib/trader.js), same shape.
+  trader: null,
   live: { mode: null, seq: null, instance: null, timer: null, ctrl: null, failures: 0, retryIn: null, saving: false, read: null, readCode: null, polls: 0 },
   // Why the last change happened: 'boot', 'live' (a change on the server),
   // 'refresh' (after a write here).
@@ -94,6 +96,7 @@ export function signedOut() {
   desk.projects.clear();
   desk.agenda = null;
   desk.brief = null;
+  desk.trader = null;
   desk.token = null;
   desk.ui = {};
   emit('signed_out');
@@ -546,6 +549,7 @@ function listen() {
         desk.projects.clear();
         desk.agenda = null;
         desk.brief = null;
+        desk.trader = null;
         desk.checking = false;
         emit('boot');
       });

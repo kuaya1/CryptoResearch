@@ -71,66 +71,10 @@
 .range-opt[aria-checked="true"] { color: var(--text); font-weight: 600; }
 .range-opt:focus-visible { outline-offset: 0; }
 
-/* ---- the KPI strip: one 12px frame split by alpha hairlines into five cells ---- */
-.kpi { padding: 0 24px; }
-.kpi-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1px; background: var(--border); border-radius: var(--r-card) var(--r-card) 0 0; overflow: hidden; box-shadow: 0 0 0 1px var(--border), var(--shadow-card); }
-.kpi-cell { position: relative; isolation: isolate; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; padding: 16px 20px; border: 0; background: var(--surface); color: var(--text); font: inherit; text-align: left; }
-.kpi-cell::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--color-surface-hover); opacity: 0; transition: opacity var(--dur) var(--ease); }
-.kpi-cell:focus-visible { outline-offset: -2px; }
-.kpi-cell.is-link { cursor: pointer; }
-.kpi-cell.is-link:hover::before { opacity: 1; }
-.kpi-cell.is-on { box-shadow: inset 0 -2px 0 var(--color-solid); }
-.kpi-cell.is-on::before { opacity: 1; background: var(--color-surface-selected); }
-.kpi-k { font-family: var(--mono); font-size: var(--eyebrow-size); font-weight: 400; letter-spacing: var(--eyebrow-ls); line-height: 18px; color: var(--text-2); white-space: nowrap; }
-.kpi-v { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; font-variant-numeric: tabular-nums; }
-/* The figure: 18/29, tabular, light and tight (v17 metric). */
-.kpi-num { font-family: var(--font-display); font-size: var(--fs-card-title); line-height: 1.15; font-weight: var(--wt-metric); letter-spacing: var(--track-title); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.kpi-unit { font-size: var(--fs-sm); color: var(--text-2); }
-.kpi-chg { font-family: var(--mono); font-size: var(--fs-sm); font-weight: 400; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.kpi-win { margin-left: 3px; font-size: var(--fs-sm); color: var(--text-3); }
-.kpi-sub2 { font-size: var(--fs-sm); color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.kpi-s { font-size: var(--fs-sm); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-.kpi-warn { color: var(--warn); font-weight: 500; }
-.kpi-demo { color: var(--text-3); }
-.kpi-go { position: absolute; top: 14px; right: 14px; color: var(--text-3); opacity: 0; transition: opacity var(--dur) var(--ease); }
-.kpi-cell.is-link:hover .kpi-go, .kpi-cell.is-link:focus-visible .kpi-go { opacity: 1; }
-.kpi-open { color: var(--text-3); }
-/* Bitcoin's stored 7-day line, 44px, beside its figure; no series, no line. */
-.kpi-spark { display: block; width: 96px; height: 44px; margin: -6px 0 -8px; flex: none; }
-.kpi-spark path { fill: none; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
-.kpi-spark.up path { stroke: var(--pos-strong); }
-.kpi-spark.down path { stroke: var(--neg-strong); }
-.kpi-rl { gap: 4px; }
-.kpi-rl-count { font-variant-numeric: tabular-nums; font-weight: 500; }
-.kpi-panel { margin-top: 8px; padding: 14px 16px; background: var(--surface); border-radius: var(--r-well); box-shadow: 0 0 0 1px var(--border); }
-.breadth-bar { display: inline-block; width: 64px; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; align-self: center; }
-.breadth-bar > span { display: block; height: 100%; background: var(--bar-ink); border-radius: 3px; }
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* The risk budget: the frame's last row, a 16px track with the cap's 2x10
-   mark at its end; caution from 80%, danger over 100%, always in words. */
-.rb { position: relative; isolation: isolate; display: grid; grid-template-columns: auto auto minmax(80px, 1fr) auto; align-items: center; gap: 8px 16px; margin-top: 1px; padding: 12px 20px; border-radius: 0 0 var(--r-card) var(--r-card); background: var(--surface); box-shadow: 0 0 0 1px var(--border); color: var(--text); text-decoration: none; }
-.rb::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: var(--color-surface-hover); opacity: 0; transition: opacity var(--dur) var(--ease); }
-.rb:hover { text-decoration: none; }
-.rb:hover::before { opacity: 1; }
-.rb-k { font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); white-space: nowrap; }
-.rb-fig { font-size: var(--fs-md); font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.rb-none { grid-column: 2 / -1; display: flex; align-items: baseline; gap: 12px; font-size: var(--fs-sm); color: var(--text-2); }
-.rb-set { font-weight: 500; }
-.rb-track { position: relative; height: 16px; border-radius: var(--radius-full); background: var(--color-bg-soft); }
-.rb-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: inherit; background: var(--color-solid); transition: width var(--dur-move) var(--cubic-move); }
-.rb.is-near .rb-fill { background: var(--caution-solid); }
-.rb.is-over .rb-fill { background: var(--danger-solid); }
-/* The cap: a 2x10 mark at 100%. */
-.rb-cap { position: absolute; right: 0; top: 3px; width: 2px; height: 10px; border-radius: 1px; background: var(--text); }
-.rb-words { font-size: var(--fs-sm); font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-2); }
-.rb.is-near .rb-words { color: var(--caution-text); }
-.rb.is-over .rb-words { color: var(--danger-text); }
-
 @container (max-width: 980px) {
-  .kpi-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .kpi-cell:last-child { grid-column: span 2; }
   .hero-in { grid-template-columns: minmax(0, 1fr); }
   .hero-cards { flex-direction: row; flex-wrap: wrap; }
   .hero-cards .hero-btn { flex: 1 1 220px; width: auto; }
@@ -452,15 +396,6 @@ button.gp:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--t-fill, var(--t
   .page-head { padding: 12px 12px 8px; }
   .ph-eyebrow { display: none; }
   .page-head h1 { font-size: var(--fs-2xl); }
-  .kpi { padding: 0 12px; }
-  /* Four cells, two by two (Total steps aside; its figures are in Market's panel). */
-  .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .kpi-cell { padding: 10px 12px; }
-  .kpi-cell:last-child { grid-column: auto; }
-  .kpi-num { font-size: var(--fs-metric); }
-  .kpi-spark { display: none; }
-  .kpi-k { font-size: var(--fs-sm); }
-  .kpi-cell[data-key="kpi-total"] { display: none; }
   .action-band { margin: 8px 12px 0; }
   .hero { margin: 4px 12px 0; }
   .hero-in { padding: 16px; gap: 12px; }
@@ -584,3 +519,32 @@ button.gp:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--t-fill, var(--t
   .v3-fold-btn, .v3-focal-link, .v3-add { min-height: var(--touch); }
 }
 @media (min-width: 768px) and (max-width: 1279.98px) { .v3-focal { margin: 4px 24px 0; } }
+
+/* ---- UI v3: the market line (§4.3), text items on the canvas, no box ---- */
+.v3-market { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.v3-ml { display: flex; flex-wrap: wrap; gap: 10px 34px; padding: 0 6px; }
+.v3-ml-item { display: inline-flex; align-items: baseline; gap: 8px; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; white-space: nowrap; text-decoration: none; transition: opacity 0.15s; }
+button.v3-ml-item, a.v3-ml-item { cursor: pointer; }
+button.v3-ml-item:hover, a.v3-ml-item:hover { opacity: 0.7; text-decoration: none; }
+.v3-ml-k { font-size: var(--fs-label); color: var(--v3-ink-quiet); }
+.v3-ml-v { font-size: var(--fs-lg); font-weight: 400; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--v3-ink); }
+.v3-ml-v.is-strong { font-weight: 600; }
+.v3-ml-v.is-review { color: var(--v3-review-ink); }
+.v3-ml-v.is-down { color: var(--v3-down); }
+.v3-ml-s { font-size: var(--fs-xs); color: var(--v3-ink-quiet); }
+.v3-ml-s.is-up { color: var(--v3-up); }
+.v3-ml-s.is-down { color: var(--v3-down); }
+.v3-ml-panel { padding: 16px 20px; border-radius: var(--r-v3-banner); background: var(--v3-surface); box-shadow: var(--sh-v3-card); }
+/* What needs action (D14): a light card, only when there is something. */
+.wl-main > .action-band { margin: 0; padding: 14px 18px; border-radius: var(--r-v3-banner); background: var(--danger-surface); }
+.wl-main > .action-band.is-warn { background: var(--warn-weak); }
+@media (max-width: 767.98px) {
+  .v3-ml { gap: 8px 20px; padding: 0 18px; }
+  .v3-ml-item { min-height: var(--touch); align-items: center; }
+  .v3-ml-panel { margin: 0 12px; }
+  .wl-main > .action-band { margin: 0 12px; }
+}
+@media (min-width: 768px) and (max-width: 1279.98px) {
+  .v3-ml { padding: 0 30px; }
+  .v3-ml-panel, .wl-main > .action-band { margin: 0 24px; }
+}
