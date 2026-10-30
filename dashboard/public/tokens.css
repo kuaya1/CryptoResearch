@@ -656,14 +656,12 @@
 }
 @media (prefers-reduced-motion: reduce) { :root { --dur: 0ms; --dur-move: 0ms; --dur-sel: 0ms; } }
 
-/* The page's one black panel (the Architecture restyle, 2026-10-29): the
-   Daily Brief hero on the Desk, in both themes, obsidian with paper text;
-   the words its parts draw are re-pointed here, so the parts keep their own
-   rules. While a project is docked beside the list the drawer's foot (its
-   decisions and Mark reviewed) is the black panel instead, so the hero takes
-   the warm ceramic card and the page's own words. On the black panel the
-   primary is a ceramic pill with ink words. */
-.wl:not(.has-inspector) .hero, .insp-foot, .rv-bar {
+/* The dark surfaces (UI v3 parity, 2026-10-30, D3): the Desk's Focal block
+   and the inspector's ticket card, always obsidian in both themes, and
+   Review's decision bar; the words their parts draw are re-pointed here so
+   the parts keep their own rules. On obsidian the primary is a ceramic pill
+   with ink words. The hero and the inspector's foot are no longer dark. */
+.v3-focal, .v3-ticket, .rv-bar {
   --hero-bg: var(--cr-obsidian); --hero-shadow: var(--shadow-dark);
   --color-solid: var(--cr-surface-ceramic); --color-solid-hover: var(--cr-paper-secondary); --color-solid-active: var(--cr-paper-secondary); --on-accent: var(--cr-obsidian);
   --text: var(--cr-paper); --text-2: var(--cr-paper-secondary); --text-3: var(--cr-paper-body);

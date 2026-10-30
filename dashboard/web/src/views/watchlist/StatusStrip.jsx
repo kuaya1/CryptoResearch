@@ -82,6 +82,38 @@ export function RefreshButton({ d }) {
   );
 }
 
+// The Focal block's Refresh (UI v3, §4.2): the same request as the button,
+// as a word on the dark card; "Refreshing…" while it runs, and the rate
+// limit with its countdown while the price source is limiting.
+export function RefreshLink({ d }) {
+  const m = d.index.freshness.market;
+  const [busy, setBusy] = useState(false);
+  useTick(Boolean(m.rate_limited && m.retry_at));
+  const left = m.rate_limited ? countdownText(m.retry_at) : null;
+  const doRefresh = async () => {
+    setBusy(true);
+    try {
+      await refreshPrices();
+    } finally {
+      setBusy(false);
+    }
+  };
+  const limited = Boolean(m.rate_limited) && !busy;
+  const words = busy ? 'Refreshing…' : limited ? `Rate limited${left ? (left === 'due' ? ' · retry due' : ` · ${left}`) : ''}` : 'Refresh';
+  return (
+    <button
+      type="button"
+      className={`v3-focal-link${limited ? ' is-limited' : ''}`}
+      data-key="refresh-prices"
+      aria-label={limited ? `Refresh prices now. The price source is limiting requests${m.retry_at ? `; the next automatic try is after ${fmtAsOf(m.retry_at)}` : ''}` : 'Refresh prices now'}
+      disabled={busy}
+      onClick={doRefresh}
+    >
+      {words}
+    </button>
+  );
+}
+
 // Bitcoin's stored 7-day series as a 44px line; no series, no line.
 function KpiSpark({ values, up }) {
   const path = sparkPath(values, { width: 96, height: 44, pad: 4 });

@@ -1,8 +1,10 @@
 // The Desk, Level 0 (#/watchlist; DESIGN_AND_IA_BLUEPRINT.md §3.1; Eric,
-// 2026-10-17): the projects you follow as one ledger.
-//   header      eyebrow, title, ⋯ (archived projects, density, reset), Refresh
-//               prices, + Add project
-//   hero        the Daily Brief's readiness and two ways in (DeskHero.jsx)
+// 2026-10-17; UI v3 parity, 2026-10-30): the projects you follow as one ledger.
+//   focal       the dark Focal block (FocalBlock.jsx): the date, Refresh, Add
+//               project, the headline, the ticket to decide first and the
+//               folds; it replaces the page head, the hero and the PM cards
+//   options     the Desk's ⋯ menu, drawn into the v3 rail's Options slot (in
+//               the Focal block below 1280px)
 //   range       24h · 7d · 30d, the change shown under each price
 //   KPI strip   Market · Total cap · Beat BTC (30d) · Needs review · Research
 //               waiting, each a way in; what needs action always in view
@@ -17,11 +19,12 @@
 // the list. Live updates redraw in place and never reorder the rows you are
 // reading (Re-sort offers it).
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Search, ListFilter, Columns3, ArrowUpDown, Plus, X, Ellipsis, Rows3 } from 'lucide-react';
-import { announce, fmtPrice, fmtChangePct } from '../../../../public/ui.js';
+import { createPortal } from 'react-dom';
+import { Search, ListFilter, Columns3, ArrowUpDown, X, Rows3 } from 'lucide-react';
+import { announce, fmtPrice } from '../../../../public/ui.js';
 import {
   COLUMNS, SORT_NAMES, DEFAULT_FILTERS, DEFAULT_COLUMNS, COVERAGE, RET30, BEAT, VIEWS, prefs as readPrefs, prefsToSave, nextSort, sortRows, matches,
-  filterCount, sourcesOf, reviewKeyAllowed, inView, deskFooter, deskKpis,
+  filterCount, sourcesOf, reviewKeyAllowed, inView, deskFooter,
 } from '../../../../public/watchlist-model.js';
 import { useDesk, useMedia } from '../../lib/hooks.js';
 import { useAgendaRead } from '../../lib/agenda.js';
@@ -31,11 +34,10 @@ import { Menu, MenuItem, MenuLabel, MenuSep, MenuRadio, MenuCheck } from '../../
 import { loadLegacy } from '../../components/Dom.jsx';
 import { Boundary, ViewError, retryableLazy } from '../../components/Boundary.jsx';
 import { legacyCtx } from '../../legacy/ctx.js';
-import { KpiStrip, ActionBand, RefreshButton } from './StatusStrip.jsx';
+import { KpiStrip, ActionBand } from './StatusStrip.jsx';
 import { ProjectTable } from './ProjectTable.jsx';
-import { DeskHero } from './DeskHero.jsx';
 import { RangeControl } from './RangeControl.jsx';
-import { DecisionGrid, waitingTickets } from './DecisionGrid.jsx';
+import { FocalBlock } from './FocalBlock.jsx';
 import { view, openPanel, closePanel, isWide, markReviewed, restoreProject } from './state.js';
 import { onDesk } from '../../shell/overlays.js';
 // The inspector in its own boundary: if it cannot be drawn, it says so in
@@ -52,7 +54,6 @@ export default function Watchlist() {
   const route = nav.route;
   const pid = route.query.get('p');
   const wide = useMedia('(min-width: 1280px)');
-  const phone = useMedia('(max-width: 767.98px)');
   const [pf, setPf] = useState(() => readPrefs({ ui }));
   const [q, setQ] = useState(view.q);
   const [, setOrderNonce] = useState(0);
@@ -90,7 +91,6 @@ export default function Watchlist() {
   const f = pf.filters;
   const nFilters = filterCount(f);
   const filtered = Boolean(q) || nFilters > 0;
-  const followed = live.filter((p) => p.on_watchlist || p.held).length;
   const counts = Object.fromEntries(VIEWS.map(([v]) => [v, live.filter((p) => inView(p, v, d.index, agenda)).length]));
 
   const setFilter = (k, v) => {
@@ -281,47 +281,43 @@ export default function Watchlist() {
     body = <div className="empty-state"><h2>No projects match</h2><p>{`${total} project${total === 1 ? ' is' : 's are'} hidden by the current search or filters.`}</p><button type="button" className="btn" data-key="empty-clear" onClick={clearAll}>Clear search and filters</button></div>;
   }
 
+  // The Desk's options (D7): the rail's Options from 1280px, the Focal
+  // block's below. One menu, drawn where its trigger is.
+  const [slot, setSlot] = useState(null);
+  useLayoutEffect(() => {
+    const el = document.getElementById('desk-options-slot');
+    if (el !== slot) setSlot(el);
+  });
+  const optionsMenu = (
+    <Menu
+      label="Desk options"
+      align={slot ? 'start' : 'end'}
+      side={slot ? 'right' : 'bottom'}
+      trigger={<button type="button" className={slot ? 'v3-foot-item' : 'v3-focal-link'} aria-label="Desk options" data-key="desk-more">Options</button>}
+    >
+      <MenuCheck checked={f.archived} onChange={(v) => setFilter('archived', Boolean(v))}>{`Archived projects (${archivedCount})`}</MenuCheck>
+      <MenuSep />
+      <MenuItem data-key="desk-reset-cols" onSelect={() => save({ ...pf, columns: DEFAULT_COLUMNS.slice() })}>Reset columns</MenuItem>
+      {reordered ? <MenuItem data-key="desk-resort" onSelect={() => { resetOrder(); announce('Re-sorted.'); }}>Re-sort now</MenuItem> : null}
+      <MenuItem data-key="desk-new" href="#/new">New research from a link or screenshot</MenuItem>
+      <MenuItem data-key="desk-exit-quotes" onSelect={async () => { const L = await loadLegacy(); L.openExitQuotesDialog(legacyCtx); }}>Quote exits for every project…</MenuItem>
+    </Menu>
+  );
+
   const sortOptions = Object.entries(SORT_NAMES).flatMap(([k, [label, a, z]]) => [[`${k}:asc`, `${label}, ${a}`], [`${k}:desc`, `${label}, ${z}`]]);
   const sortValue = `${pf.sort.key}:${pf.sort.dir}`;
 
   return (
     <div className={`wl${pid && wide ? ' has-inspector' : ''}`}>
       <div className="wl-main">
-        <header className="page-head wl-head">
-          <div className="ph-title">
-            <p className="ph-eyebrow">CryptoResearch</p>
-            <h1>Desk<span className="ph-count" title={`${followed} project${followed === 1 ? '' : 's'} you watch or hold`}>{followed}</span></h1>
-            <DeskHeadline d={d} rows={live} agenda={agenda} />
-          </div>
-          <div className="ph-actions">
-            <Menu
-              label="Desk options"
-              align="end"
-              trigger={<button type="button" className="btn btn-ghost btn-icon" aria-label="Desk options" data-key="desk-more"><Ellipsis size={18} aria-hidden="true" /></button>}
-            >
-              <MenuCheck checked={f.archived} onChange={(v) => setFilter('archived', Boolean(v))}>{`Archived projects (${archivedCount})`}</MenuCheck>
-              <MenuSep />
-              <MenuItem data-key="desk-reset-cols" onSelect={() => save({ ...pf, columns: DEFAULT_COLUMNS.slice() })}>Reset columns</MenuItem>
-              {reordered ? <MenuItem data-key="desk-resort" onSelect={() => { resetOrder(); announce('Re-sorted.'); }}>Re-sort now</MenuItem> : null}
-              <MenuItem data-key="desk-new" href="#/new">New research from a link or screenshot</MenuItem>
-              <MenuItem data-key="desk-exit-quotes" onSelect={async () => { const L = await loadLegacy(); L.openExitQuotesDialog(legacyCtx); }}>Quote exits for every project…</MenuItem>
-            </Menu>
-            {phone ? null : <RefreshButton d={d} />}
-            <button type="button" className="btn btn-primary" id="add-project-btn" data-key="add-project" onClick={addProject}>
-              <Plus size={15} strokeWidth={2} aria-hidden="true" />
-              <span>Add project</span>
-            </button>
-          </div>
-        </header>
-
-        <DeskHero reviewCount={settled ? deskKpis(d.index, agenda).review.projects : null} />
+        {slot ? createPortal(optionsMenu, slot) : null}
+        <FocalBlock d={d} rows={live} agenda={agenda} onAdd={addProject} options={slot ? null : optionsMenu} />
+        <ActionBand d={d} />
         <div className="desk-bar">
           <h2 className="sec-h">Market</h2>
           <RangeControl value={pf.range} onChange={(r) => { if (r !== pf.range) { save({ ...pf, range: r }); announce(`Changes over ${r}.`); } }} />
         </div>
         <KpiStrip d={d} agenda={agenda} settled={settled} sources={sources} filters={f} range={pf.range} onView={setView} onBeat={() => setFilter('beat', f.beat === 'yes' ? 'any' : 'yes')} />
-        <ActionBand d={d} />
-        <DecisionGrid d={d} rows={live} />
 
         <nav className="views" aria-label="Views">
           {VIEWS.map(([v, text]) => (
@@ -438,21 +434,5 @@ export default function Watchlist() {
         </Boundary>
       ) : null}
     </div>
-  );
-}
-
-// The Desk's one-line headline (the Architecture restyle, 2026-10-29): how
-// many decisions wait and Bitcoin's week, both figures the desk already shows
-// (the PM cards, the KPI strip); the week is left out when it is not known.
-function DeskHeadline({ d, rows, agenda }) {
-  const n = waitingTickets(rows).length;
-  const m = deskKpis(d.index, agenda).market;
-  const ch = m && typeof m.change_7d === 'number' ? m.change_7d : null;
-  const lead = n ? `${n} ${n === 1 ? 'decision waits' : 'decisions wait'} for you` : 'No decisions wait for you';
-  return (
-    <p className="desk-headline">
-      {lead}
-      {ch === null ? '.' : <>{'; Bitcoin is '}<span className={ch >= 0 ? 'pos' : 'neg'}>{`${ch >= 0 ? 'up' : 'down'} ${fmtChangePct(Math.abs(ch)).replace(/^[+−-]/, '')}`}</span>{' on the week.'}</>}
-    </p>
   );
 }
