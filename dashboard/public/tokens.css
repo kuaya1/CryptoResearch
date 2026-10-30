@@ -100,7 +100,7 @@
   --cr-shadow-dark: 0 30px 70px -30px rgba(16, 17, 20, 0.55);
   --cr-shadow-inner-card: 0 20px 40px -20px rgba(0, 0, 0, 0.6);
   --cr-shadow-float: 0 1px 2px rgba(16, 17, 20, 0.06), 0 20px 50px -14px rgba(16, 17, 20, 0.25);
-  --cr-radius-card: 36px;
+  --cr-radius-card: 32px;   /* v3 (was 36) */
   --cr-radius-inner: 26px;
   --cr-radius-tile: 18px;
   --cr-radius-key: 14px;
@@ -119,12 +119,72 @@
   --fs-grade-row: 22px;                               /* the grade in a table row */
   --ease-arch: cubic-bezier(0.22, 1, 0.36, 1);        /* selection and filter changes */
   --dur-sel: 500ms;
-  --hold-ms: 1100ms;                                  /* hold-to-confirm */
+  --hold-ms: 800ms;                                   /* hold-to-confirm: v3's 40ms ticks x 20 */
   --on-hold: #ffffff;                                 /* words over the green sweep (5.6:1) */
   --canvas-bg:
     radial-gradient(1100px 650px at 15% 0%, var(--cr-canvas-glow-white) 0%, rgba(255, 255, 255, 0) 60%),
+    radial-gradient(900px 600px at 95% 20%, var(--cr-canvas-glow-violet) 0%, rgba(255, 255, 255, 0) 65%),
     radial-gradient(800px 500px at 60% 100%, var(--cr-canvas-glow-green) 0%, rgba(255, 255, 255, 0) 70%),
     var(--cr-canvas);
+
+  /* ---- UI v3 parity (2026-10-30, UI_MASTER_PLAYBOOK.md) ----
+     The agent violet returns for three things only: the Claude bar, the
+     "Running" research word and one logo fallback, plus the canvas glow (D2).
+     The 12.5px floor stands (Eric's rollout directive, 2026-10-30): v3's
+     10.5-12px labels are raised to it, so the four label sizes below are the
+     floor under their v3 names. */
+  --cr-canvas-glow-violet: oklch(0.95 0.03 285);
+  --cr-agent: oklch(0.58 0.19 285);              /* Claude bar, "Running" */
+  --cr-ink-hint: #a3a6ad;                         /* column heads, counts, sym line, footers */
+  --cr-ink-placeholder: #9a9da4;
+  --cr-dot-empty: #c4c6cb;                        /* hollow model dot, unknown signal */
+  --cr-ink-label-dark: #e6e6e3;                   /* forensic values on obsidian */
+  --cr-paper-dim: #6b6e75;                        /* headline second clause on obsidian */
+  --cr-gate-ok-dark: oklch(0.78 0.14 160);
+  --cr-gate-warn-dark: oklch(0.82 0.14 75);
+  --cr-gate-bad-dark: oklch(0.72 0.18 20);
+  --cr-gate-bad-fill: oklch(0.66 0.2 20);
+  --cr-approved-dark: oklch(0.8 0.13 160);
+  --cr-hold-sweep: oklch(0.8 0.14 160);
+  --cr-limit-mark: oklch(0.7 0.18 20);
+  --cr-gated-bg: oklch(0.66 0.2 20 / 0.12);
+  --cr-gated-ink: #f1c9c4;
+  --cr-up: oklch(0.5 0.14 160);                   /* price change words, up */
+  --cr-down: oklch(0.55 0.2 20);                  /* price change words, down */
+  --cr-amber: oklch(0.72 0.16 65);                /* light-ground warn dot, model disagreement */
+  --cr-count-warn: oklch(0.6 0.14 60);            /* nav count */
+  --cr-age-warn: oklch(0.55 0.13 60);             /* research >=30d / Never */
+  --cr-review-ink: oklch(0.58 0.15 60);           /* Needs review figure */
+  --cr-model-claude: var(--cr-agent);
+  --cr-model-gpt: oklch(0.6 0.15 160);
+  --cr-model-gemini: oklch(0.62 0.13 230);
+  --cr-row-hover: rgba(16, 17, 20, 0.025);
+  --cr-row-selected: rgba(16, 17, 20, 0.04);
+  --cr-hairline-ink: rgba(16, 17, 20, 0.1);       /* the search underline */
+  --cr-track-ink: rgba(16, 17, 20, 0.07);         /* model bars on the warm card */
+  --cr-on-dark-fill: rgba(255, 255, 255, 0.06);   /* the focal ticket */
+  --cr-on-dark-fill-hover: rgba(255, 255, 255, 0.09);
+  --cr-on-dark-line: rgba(255, 255, 255, 0.07);   /* rows in the expanded fold, gate cells off */
+  --cr-on-dark-track: rgba(255, 255, 255, 0.1);   /* the exit bar's track */
+  --cr-reviewed-bg: oklch(0.6 0.15 160 / 0.12);
+  --cr-on-ink: #ffffff;
+  --cr-on-ceramic: #0b0b0c;
+
+  --fs-2xs: 12.5px;  --fs-3xs: 12.5px;  --fs-label: 12.5px;  --fs-meta: 12.5px;   /* v3 10.5 / 11 / 11.5 / 12, at the floor */
+  --fs-ui-md: 13.5px; --fs-row-name: 15px; --fs-focal-name: 18px;
+  --fs-v3-hero: 44px;  --fs-v3-price: 44px;  --fs-v3-name: 30px;  --fs-v3-grade: 30px;
+  --fs-v3-row-grade: 18px; --fs-v3-res: 20px; --fs-v3-close: 20px;
+
+  --r-v3-card: 32px;  --r-v3-ticket: 26px;  --r-v3-focal: 22px;  --r-v3-banner: 18px;
+  --r-v3-row: 14px;   --r-v3-logo-sq: 10px; --r-v3-cell: 3px;   --r-v3-bar: 2px;
+
+  --sh-v3-dark: 0 30px 70px -34px rgba(16, 17, 20, 0.6);
+  --sh-v3-card: 0 1px 2px rgba(16, 17, 20, 0.04), 0 30px 60px -36px rgba(16, 17, 20, 0.2);
+  --sh-v3-insp: 0 1px 2px rgba(16, 17, 20, 0.04), 0 30px 60px -36px rgba(16, 17, 20, 0.22);
+
+  --v3-rail-w: 150px;  --v3-gap-shell: 36px; --v3-gap-main: 28px; --v3-pad-page: 28px;
+  --v3-page-max: 1560px; --v3-insp-min: 360px; --v3-insp-max: 440px; --v3-col-min: 600px;
+  --v3-hold-tick: 40ms;
 
   /* ---- primitives: the gray ramp (light) ---- */
   --gray-0: #ffffff; --gray-25: #fcfcfc; --gray-50: #f9f9f9; --gray-75: #f3f3f3; --gray-100: #ededed;
@@ -491,6 +551,7 @@
   --shadow-pop: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -4px rgba(0, 0, 0, 0.2), var(--shadow-hairline);
   --shadow-drawer: -8px 0 16px 0 rgba(0, 0, 0, 0.35), -2px 0 6px 0 rgba(0, 0, 0, 0.2), inset 0 0 0 1px var(--color-border);
   /* v17 at night: obsidian surfaces, paper text, the states' on-dark tones */
+  --cr-canvas-glow-violet: transparent;
   --canvas-bg: var(--cr-obsidian); --decision-surface: var(--cr-obsidian-elevated); --warm-surface: var(--cr-obsidian-elevated); --glass-surface: rgba(28, 28, 31, 0.82);
   --color-surface-tertiary: var(--cr-obsidian); --color-surface: var(--cr-obsidian-raised); --color-surface-secondary: #111113; --color-surface-elevated: var(--cr-obsidian-elevated);
   --color-surface-hover: #1a1a1d; --color-surface-selected: #232327; --color-bg-soft: var(--cr-obsidian-elevated);
@@ -550,6 +611,7 @@
     --shadow-seg: 0 1px 4px -1px rgba(0, 0, 0, 0.5);
     --shadow-pop: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -4px rgba(0, 0, 0, 0.2), var(--shadow-hairline);
     --shadow-drawer: -8px 0 16px 0 rgba(0, 0, 0, 0.35), -2px 0 6px 0 rgba(0, 0, 0, 0.2), inset 0 0 0 1px var(--color-border);
+    --cr-canvas-glow-violet: transparent;
     --canvas-bg: var(--cr-obsidian); --decision-surface: var(--cr-obsidian-elevated); --warm-surface: var(--cr-obsidian-elevated); --glass-surface: rgba(28, 28, 31, 0.82);
     --color-surface-tertiary: var(--cr-obsidian); --color-surface: var(--cr-obsidian-raised); --color-surface-secondary: #111113; --color-surface-elevated: var(--cr-obsidian-elevated);
     --color-surface-hover: #1a1a1d; --color-surface-selected: #232327; --color-bg-soft: var(--cr-obsidian-elevated);
