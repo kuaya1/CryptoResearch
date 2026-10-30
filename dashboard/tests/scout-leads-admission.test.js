@@ -103,9 +103,9 @@ test('a changed receipt, policy, expiry or envelope is 409 naming what changed, 
   ws.settings.leads = POLICY;
   // An expired receipt.
   assert.throws(() => L.confirmLeads(ws, { request_id: rid(), expect: r2 }, { now: T + 25 * HOUR }), (e) => e.code === 'CHANGED' && e.details.rows[0].fields.some((f) => f.field === 'expires_at'));
-  // A hold placed between the drawing and the click.
-  setResearch(ws, { on_hold: { ...(ws.settings.research.on_hold || {}), chatgpt: { since: '2026-10-29', reason: 'test' } }, providers: { ...(ws.settings.research.providers || {}), gemini: { mock: 'ok' } } });
-  assert.throws(() => L.confirmLeads(ws, { request_id: rid(), expect: r2 }), (e) => e.code === 'CHANGED' && e.details.envelope && e.details.envelope.now.models.includes('gemini'));
+  // A route that changed between the drawing and the click.
+  setResearch(ws, { providers: { ...(ws.settings.research.providers || {}), claude: { mock: 'ok' } } });
+  assert.throws(() => L.confirmLeads(ws, { request_id: rid(), expect: r2 }), (e) => e.code === 'CHANGED' && e.details.envelope && e.details.envelope.now.routes.claude === 'api');
   assert.deepEqual(files(root), before);
 });
 
@@ -232,26 +232,20 @@ test('an effect not started within 24 hours lapses; Request research makes a new
   assert.equal(research.listRuns(ws, late.project_id).length, 1);
 });
 
-test('held models are left out; every model held is NO_MODEL; an API route gets a queued job', async (t) => {
-  const { ws, root } = workspace(t, 'adm-models', { research: { providers: { chatgpt: { mock: 'ok' } } } });
-  const [a, b, c] = await eligibleLeads(ws, [EVM(60), EVM(61), EVM(62)]);
-  let env = L.envelope(ws);
-  assert.deepEqual(env.models, ['claude', 'chatgpt']);
-  assert.deepEqual(env.routes, { claude: 'connector_or_manual', chatgpt: 'api' });
+test('a lead is researched by Claude alone (stage 5.1); another API adds nothing; Claude held is NO_MODEL; an API route gets a queued job', async (t) => {
+  const { ws, root } = workspace(t, 'adm-models', { research: { providers: { claude: { mock: 'ok' }, chatgpt: { mock: 'ok' } } } });
+  const [a, c] = await eligibleLeads(ws, [EVM(60), EVM(62)]);
+  const env = L.envelope(ws);
+  assert.deepEqual(env.models, ['claude'], 'a ChatGPT API alone adds nothing');
+  assert.deepEqual(env.routes, { claude: 'api' });
   const one = confirm(ws, [a]);
   const run = research.loadRun(ws, one.admissions[0].project_id, one.admissions[0].run_id);
-  assert.deepEqual(run.providers, ['claude', 'chatgpt']);
-  assert.equal(run.jobs.chatgpt.state, 'queued');
-  assert.equal(run.jobs.claude.state, 'unconfigured');
+  assert.deepEqual(run.providers, ['claude']);
+  assert.equal(run.jobs.claude.state, 'queued');
   assert.equal(research.hasDueWork(ws), true);
-  // Claude held.
+  cancelOpenJobs(ws);
+  // Claude held: no model is left.
   setResearch(ws, { on_hold: { claude: { since: '2026-10-29', reason: 'test' } } });
-  env = L.envelope(ws);
-  assert.deepEqual(env.models, ['chatgpt']);
-  const two = confirm(ws, [b]);
-  assert.deepEqual(research.loadRun(ws, two.admissions[0].project_id, two.admissions[0].run_id).providers, ['chatgpt']);
-  // Every model held.
-  setResearch(ws, { on_hold: { claude: { since: 'x' }, chatgpt: { since: 'x' }, gemini: { since: 'x' } } });
   assert.deepEqual(L.envelope(ws).models, []);
   const before = files(root);
   assert.throws(() => confirm(ws, [c]), refusal('NO_MODEL', 409));
@@ -406,7 +400,7 @@ test('F2: a route that moved to an API since the confirm creates no job; Complet
 });
 
 test('F2: a model held after the confirm keeps its job in the frozen set and the job stays unsent', async (t) => {
-  const { ws } = workspace(t, 'adm-f2-hold', { research: { providers: { chatgpt: { mock: 'ok' } } } });
+  const { ws } = workspace(t, 'adm-f2-hold', { research: { providers: { claude: { mock: 'ok' } } } });
   const [a] = await eligibleLeads(ws, [EVM(904)]);
   const createRun = research.createRun;
   let fail = true;
@@ -415,12 +409,12 @@ test('F2: a model held after the confirm keeps its job in the frozen set and the
     return createRun.apply(this, args);
   });
   const first = confirm(ws, [a]).admissions[0];
-  assert.deepEqual(L.readAdmission(ws, first.admission_id).envelope.models, ['claude', 'chatgpt']);
-  setResearch(ws, { on_hold: { chatgpt: { since: '2026-10-29', reason: 'test' } } });
+  assert.deepEqual(L.readAdmission(ws, first.admission_id).envelope.models, ['claude']);
+  setResearch(ws, { on_hold: { claude: { since: '2026-10-29', reason: 'test' } } });
   fail = false;
   const done = L.completeAdmission(ws, first.admission_id);
   assert.equal(done.state, 'complete');
-  assert.deepEqual(research.loadRun(ws, done.project_id, done.run_id).providers, ['claude', 'chatgpt'], 'the frozen set');
+  assert.deepEqual(research.loadRun(ws, done.project_id, done.run_id).providers, ['claude'], 'the frozen set');
   assert.equal(research.hasDueWork(ws), false, 'the held model job is not sent');
 });
 

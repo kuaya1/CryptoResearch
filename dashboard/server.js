@@ -157,6 +157,11 @@ function validateSettingsPatch(patch, ws = null) {
       } else out.grading.labels = null;
     }
   }
+  if (patch.automation) {
+    out.automation = {};
+    if (patch.automation.paused !== undefined) out.automation.paused = patch.automation.paused === true;
+    if (patch.automation.exit_quotes_auto !== undefined) out.automation.exit_quotes_auto = patch.automation.exit_quotes_auto === true;
+  }
   if (patch.freshness) {
     out.freshness = {};
     if (patch.freshness.price_stale_minutes !== undefined) out.freshness.price_stale_minutes = num(patch.freshness.price_stale_minutes, 5, 10080, 'Price stale minutes');

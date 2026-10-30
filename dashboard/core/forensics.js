@@ -1138,6 +1138,48 @@ function approveAllExitQuotes(ws, { by = null } = {}) {
   return out;
 }
 
+// The standing exit-quote policy (subtraction stage 5.3; settings
+// automation.exit_quotes_auto, off by default): the plan's projects that are
+// in the pilot, in order, while their estimated requests fit the monitor's
+// monthly budget beside the quotes already approved. Nothing while
+// automation is paused. Read only.
+function autoExitQuotePlan(ws) {
+  const a = (ws.settings && ws.settings.automation) || {};
+  if (a.exit_quotes_auto !== true || a.paused === true) return { add: [], over_budget: [] };
+  const T = require('./tickets');
+  const cfg = monitorCfg(ws);
+  const sizes = (prefsOf(ws).exit_sizes_usd || []).length || 1;
+  const per = sizes * Math.round((24 / (cfg.quote_interval_hours || 12)) * 30);
+  let used = 0;
+  for (const p of require('./projects').listProjects(ws)) {
+    if (p.broken || p.status === 'archived') continue;
+    used += (readProfile(ws, p.project_id).targets.exit_quotes || []).length * per;
+  }
+  const out = { add: [], over_budget: [] };
+  for (const x of exitQuotePlan(ws).add) {
+    if (!T.readTicketProfile(ws, x.project_id).pilot) continue;
+    if (used + per > cfg.monthly_request_budget) { out.over_budget.push(x); continue; }
+    used += per;
+    out.add.push(x);
+  }
+  return out;
+}
+
+function autoExitQuotes(ws) {
+  const plan = autoExitQuotePlan(ws);
+  const out = { added: [], none: [], over_budget: plan.over_budget };
+  for (const x of plan.add) {
+    try {
+      const r = setMonitoring(ws, x.project_id, { enabled: true, approve_quotes: [x.key], by: 'standing exit-quote policy' });
+      if (r.result && r.result.added && r.result.added.length) out.added.push({ project_id: x.project_id, name: x.name, chain: x.chain, source: x.source });
+      else out.none.push({ project_id: x.project_id, name: x.name, reason: (r.result && r.result.refused && r.result.refused[0] && r.result.refused[0].reason) || 'Not approved.' });
+    } catch (err) {
+      out.none.push({ project_id: x.project_id, name: x.name, reason: err.message });
+    }
+  }
+  return out;
+}
+
 // A monitor observation: appended once, with its own SHA-256 over its fields
 // (the record without obs_id and sha256, in the order written).
 function appendObservation(ws, pid, obs) {
@@ -1881,6 +1923,8 @@ module.exports = {
   setMonitoring,
   exitQuotePlan,
   approveAllExitQuotes,
+  autoExitQuotePlan,
+  autoExitQuotes,
   appendObservation,
   readingsFor,
   taxIndex,

@@ -558,27 +558,51 @@ async function identify(ws, id, { fetchImpl = fetch, identifyImpl = null, cg = c
     };
     event(d, candidates.length ? `${candidates.length} candidate${candidates.length === 1 ? '' : 's'} found; waiting for your confirmation.` : 'No CoinGecko listing found.');
   });
-  return doc;
+  const sole = autoConfirmable(doc);
+  if (!sole) return doc;
+  try {
+    return confirmIntake(ws, id, { coingecko_id: sole, auto: true }).intake;
+  } catch (err) {
+    // A ticker already in the records, or any refusal: it stays a choice for
+    // Eric, with the reason in its history.
+    return mutate(ws, id, `Auto-confirm declined for ${id}`, (d) => {
+      event(d, `Not confirmed by itself: ${err.message}`);
+    });
+  }
+}
+
+// Subtraction stage 5.2: a request whose own link or contract (not a name
+// search, not a screenshot read) resolves to exactly one CoinGecko listing,
+// unambiguously, is confirmed without a second click. Returns that listing's
+// ID, else null (several candidates, a search, a screenshot: Eric chooses).
+function autoConfirmable(doc) {
+  if (!doc || doc.status !== 'needs_confirmation' || doc.input.screenshot) return null;
+  const p = doc.input.parsed;
+  const id = doc.identity || {};
+  const cands = id.candidates || [];
+  if (!p || cands.length !== 1 || id.ambiguous) return null;
+  const direct = (p.coingecko_id && cands[0].coingecko_id === p.coingecko_id) || (p.platform && p.address && cands[0].reasons.some((r) => /exact contract/.test(r)));
+  return direct ? cands[0].coingecko_id : null;
 }
 
 // ---------------------------------------------------------------------------
 // Confirmation: project + one Claude research run
 
 // The models a confirmed request is researched with: Claude always; ChatGPT
-// and Gemini as well when their paid API is set up on this desk (they then run
-// by themselves in the background), or when Eric's instructions ask for all
-// three models (a model without an API then waits for its assistant).
+// and Gemini only when Eric's instructions ask for all three models (a model
+// without an API then waits for its assistant). Since subtraction stage 5.1 a
+// configured API alone no longer adds a model: the default spine is Claude's
+// research, then the Prosecutor.
 const ALL_THREE_WORDS = /\b(all (three|3)|three|3)\s+(of the\s+)?(models|ais?|assistants|llms)\b|\bclaude\b.{0,40}\b(chat\s?gpt|gpt)\b.{0,40}\bgemini\b/i;
 
 function intakeModels(ws, doc) {
-  const st = require('./research').providerStatus(ws);
   const askedAll = ALL_THREE_WORDS.test(String((doc.input && doc.input.instructions) || ''));
   // A model on hold gets nothing new, even when the request asks for all three.
   const held = require('./research').heldProviders(ws);
-  return ['claude', ...['chatgpt', 'gemini'].filter((p) => !held[p] && (askedAll || (st[p] && (st[p].mode === 'api' || st[p].mode === 'mock'))))];
+  return ['claude', ...['chatgpt', 'gemini'].filter((p) => !held[p] && askedAll)];
 }
 
-function confirmIntake(ws, id, { coingecko_id: chosen, sector = null, different_project = false } = {}) {
+function confirmIntake(ws, id, { coingecko_id: chosen, sector = null, different_project = false, auto = false } = {}) {
   const doc = readIntake(ws, id);
   if (doc.status !== 'needs_confirmation') {
     if (doc.confirmed && doc.confirmed.coingecko_id === chosen) return { status: 'unchanged', intake: doc, project_id: doc.confirmed.project_id, run_id: doc.confirmed.run_id };
@@ -588,7 +612,7 @@ function confirmIntake(ws, id, { coingecko_id: chosen, sector = null, different_
   if (!cand) throw new OpError('INVALID', 'Choose one of the candidates shown for this request.');
   const sectorId = sector ? parseSector(sector) : cand.sector_guess;
   if (sector && !sectorId) throw new OpError('INVALID', 'Unknown sector.');
-  const evidence = [{ url: cand.coingecko_url, note: `CoinGecko listing for ${cand.name}${cand.symbol ? ` (${cand.symbol})` : ''}, chosen and confirmed by Eric from a research request`, kind: 'owner_confirmed' }];
+  const evidence = [{ url: cand.coingecko_url, note: auto ? `CoinGecko listing for ${cand.name}${cand.symbol ? ` (${cand.symbol})` : ''}, the only listing for the exact link or contract Eric submitted in a research request` : `CoinGecko listing for ${cand.name}${cand.symbol ? ` (${cand.symbol})` : ''}, chosen and confirmed by Eric from a research request`, kind: 'owner_confirmed' }];
   if (doc.input.link && /^https?:\/\//.test(doc.input.link)) evidence.push({ url: doc.input.link, note: 'The link Eric submitted', kind: 'user' });
   const models = intakeModels(ws, doc);
   const { added, project_id: projectId, run } = admitListing(ws, cand, {
@@ -604,8 +628,8 @@ function confirmIntake(ws, id, { coingecko_id: chosen, sector = null, different_
   const named = models.map((p) => PROVIDER_LABELS[p]).join(', ').replace(/, ([^,]*)$/, ' and $1');
   const out = mutate(ws, id, `Confirm ${chosen} for ${id}`, (d) => {
     d.status = 'researching';
-    d.confirmed = { coingecko_id: chosen, name: cand.name, symbol: cand.symbol, at: nowIso(), project_id: projectId, project_status: added.status, run_id: run.run_id, run_status: run.status, models };
-    event(d, `${cand.name} confirmed. ${added.status === 'exists' ? 'It was already in your records.' : 'Added to your watchlist.'} ${run.status === 'exists' ? 'A research run for it had already started a few minutes ago.' : `Research requested from ${named}.`}`);
+    d.confirmed = { coingecko_id: chosen, name: cand.name, symbol: cand.symbol, at: nowIso(), project_id: projectId, project_status: added.status, run_id: run.run_id, run_status: run.status, models, ...(auto ? { by: 'exact_match' } : {}) };
+    event(d, `${cand.name} confirmed${auto ? ' by itself: your link or contract names this one listing' : ''}. ${added.status === 'exists' ? 'It was already in your records.' : 'Added to your watchlist.'} ${run.status === 'exists' ? 'A research run for it had already started a few minutes ago.' : `Research requested from ${named}.`}`);
   });
   return { status: 'confirmed', intake: out, project_id: projectId, project_status: added.status, run_id: run.run_id, run: run.run };
 }
@@ -770,4 +794,4 @@ function settle(ws, { only = null } = {}) {
   return changed;
 }
 
-module.exports = { DIR, intakeModels, admitListing, isIntakeId, parseLink, createIntake, readIntake, listIntakes, pendingIdentify, identify, findCandidates, confirmIntake, dismissIntake, retryIdentify, retryResearch, progressOf, settle, sectorGuess, isAmbiguous, readReservation, cgGet, MEDIA, MAX_IMAGE_BYTES };
+module.exports = { DIR, intakeModels, autoConfirmable, admitListing, isIntakeId, parseLink, createIntake, readIntake, listIntakes, pendingIdentify, identify, findCandidates, confirmIntake, dismissIntake, retryIdentify, retryResearch, progressOf, settle, sectorGuess, isAmbiguous, readReservation, cgGet, MEDIA, MAX_IMAGE_BYTES };

@@ -830,8 +830,9 @@ function envelope(ws) {
   const research = require('./research');
   const held = research.heldProviders(ws);
   const st = research.providerStatus(ws);
-  const api = (p) => research.routeOf(st[p]) === 'api';
-  const models = PROVIDER_ORDER.filter((p) => !held[p] && (p === 'claude' || api(p)));
+  // Claude only (subtraction stage 5.1): a lead is researched by the spine,
+  // and a configured API no longer adds a model by itself.
+  const models = PROVIDER_ORDER.filter((p) => !held[p] && p === 'claude');
   return {
     models,
     routes: Object.fromEntries(models.map((p) => [p, research.routeOf(st[p])])),

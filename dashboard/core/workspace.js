@@ -106,7 +106,10 @@ const DEFAULT_SETTINGS = {
     coinmarketcap: { enabled: false, note: 'Optional. Needs a CoinMarketCap API key in ~/.cryptoresearch/secrets.json (coinmarketcap_api_key) and a CoinMarketCap ID on each project.' },
   },
   research: {
-    default_providers: ['claude', 'chatgpt', 'gemini'],
+    // Claude researches by default; the Prosecutor builds on its report, and a
+    // ChatGPT challenge is never blocked by ChatGPT research it was not asked
+    // for (subtraction stage 5.1). More models are Eric's explicit choice.
+    default_providers: ['claude'],
     default_horizon: '4 months',
     max_attempts: 2,
     timeout_seconds: 600,
@@ -130,6 +133,12 @@ const DEFAULT_SETTINGS = {
     },
   },
   portfolio: { base_currency: 'USD', accounting_method: 'fifo_per_account' },
+  // Subtraction stage 5.3. `paused` halts new automated dispatches (research
+  // sent to a provider, the pilot runner's next agent, standing exit-quote
+  // approvals) while settlement, candles, wallet sync and reconciliation go
+  // on. `exit_quotes_auto` approves exit quotes by itself for verified,
+  // quotable pilot projects, within the monitor's monthly request budget.
+  automation: { paused: false, exit_quotes_auto: false },
   // Eric's own trader rules (trader-rules.js; Preferences > Screening): the
   // minimum stop distance, the notional cap, an intent's longest life and the
   // allowlist cr-trade-risk reads. Unset, every intent is refused.
@@ -429,6 +438,11 @@ function initWorkspace(root, { kind = 'real', name = 'CryptoResearch', templates
 }
 
 // The one research staleness threshold, in days (settings.freshness.research_stale_days, default 90).
+// Whether Eric paused automation (settings automation.paused).
+function automationPaused(ws) {
+  return Boolean(ws && ws.settings && ws.settings.automation && ws.settings.automation.paused === true);
+}
+
 function researchStaleDays(settings) {
   const n = Number(settings && settings.freshness && settings.freshness.research_stale_days);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_SETTINGS.freshness.research_stale_days;
@@ -436,6 +450,7 @@ function researchStaleDays(settings) {
 
 module.exports = {
   researchStaleDays,
+  automationPaused,
   PROVIDERS,
   PROVIDER_LABELS,
   CODE_ROOT,

@@ -372,6 +372,53 @@ function ScoutLeads({ d }) {
   );
 }
 
+// ---- Models & budget: automation.* (subtraction stage 5.3) -------------------------------------
+
+function Automation({ d }) {
+  const saved = (d.index.settings && d.index.settings.automation) || {};
+  const fresh = () => ({ paused: saved.paused === true, exit_quotes_auto: saved.exit_quotes_auto === true });
+  const [form, setForm] = useState(fresh);
+  const [busy, setBusy] = useState(false);
+  const key = JSON.stringify(saved);
+  const base = fresh();
+  const dirty = form.paused !== base.paused || form.exit_quotes_auto !== base.exit_quotes_auto;
+  useEffect(() => { if (!dirty) setForm(fresh()); }, [key]);
+  const save = async () => {
+    setBusy(true);
+    try {
+      await api.post('/api/settings', { automation: form });
+      toast(form.paused ? 'Automation paused.' : 'Automation settings saved.');
+      await refresh();
+    } catch (e) {
+      toast(e.message, 'bad');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="l2-panel" aria-labelledby="prefs-automation-h">
+      <header className="l2-panel-head">
+        <h3 className="l2-panel-t" id="prefs-automation-h" title="Paused, nothing new is dispatched by itself: no research is sent to a provider, the pilot runner starts no agent and no exit quote is approved by your standing policy. Trader settlement, candles, wallet sync and reconciliation go on.">Automation</h3>
+      </header>
+      <div className="l2-panel-body">
+        <form className="l2-form prefs-form" data-key="prefs-automation-form" onSubmit={(e) => { e.preventDefault(); save(); }}>
+          <label className="prefs-field" title="Halts new automated dispatches at once; settlement and reconciliation continue.">
+            <span>Pause automation</span>
+            <input type="checkbox" checked={form.paused} data-key="prefs-automation-paused" onChange={(e) => setForm({ ...form, paused: e.target.checked })} />
+          </label>
+          <label className="prefs-field" title="Exit quotes are approved by themselves for verified, quotable projects in the pilot, while their requests fit the monitor's monthly budget.">
+            <span>Quote exits for pilot projects by themselves</span>
+            <input type="checkbox" checked={form.exit_quotes_auto} data-key="prefs-automation-exit-quotes" onChange={(e) => setForm({ ...form, exit_quotes_auto: e.target.checked })} />
+          </label>
+          <div className="l2-actions">
+            <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !dirty} data-key="prefs-automation-save">{busy ? 'Saving…' : 'Save automation settings'}</button>
+          </div>
+        </form>
+      </div>
+    </section>
+  );
+}
+
 // ---- Appearance: the Desk's density, opening view and columns -----------------------------------
 
 function DeskDefaults() {
@@ -520,7 +567,7 @@ export default function Preferences() {
             {section === 'screening' ? <><Screening d={d} /><TicketSizing d={d} /><TraderRules d={d} /><TraderBook d={d} /><ScoutLeads d={d} /></>
               : section === 'developer' ? <Developer d={d} />
                 : section === 'appearance' ? <Appearance />
-                : <Dom key={section} build={(L) => L.prefsSection(legacyCtx, section)} deps={[section, settingsKey]} />}
+                : <>{section === 'models' ? <Automation d={d} /> : null}<Dom key={section} build={(L) => L.prefsSection(legacyCtx, section)} deps={[section, settingsKey]} /></>}
             {section === 'appearance' ? <DeskDefaults /> : null}
           </div>
         </div>

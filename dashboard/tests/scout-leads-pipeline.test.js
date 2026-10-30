@@ -87,15 +87,16 @@ function traderReads(ws, pid) {
 }
 
 test('delivery → eligibility → reviewed batch → admission → the envelope\'s jobs → a v1 ticket the trader reads → an optional challenge, with a restart between each step', async (t) => {
-  // ChatGPT has the desk's mock route, so the envelope gives it a queued job;
-  // Claude has none, so its job waits for its assistant.
+  // ChatGPT has the desk's mock route, yet the envelope is Claude's alone
+  // (subtraction stage 5.1): Claude has no route, so its job waits for its
+  // assistant, and ChatGPT is free to challenge the ticket.
   const { ws: ws0, root } = workspace(t, 'pipeline', { research: { providers: { chatgpt: { mock: true } } } });
   const [key] = await eligibleLeads(ws0, [EVM(500)]);
 
   let ws = restart(root);
   assert.equal(L.getAsset(ws, key).state, 'ELIGIBLE', 'eligibility survives a restart');
   const expect = expectFor(ws, [key]);
-  assert.deepEqual(expect.envelope.models, ['claude', 'chatgpt']);
+  assert.deepEqual(expect.envelope.models, ['claude']);
   const confirmed = L.confirmLeads(ws, { request_id: `req_pipeline_${process.pid}`, expect });
   assert.equal(confirmed.status, 'admitted');
   const adm = confirmed.admissions[0];
@@ -104,10 +105,9 @@ test('delivery → eligibility → reviewed batch → admission → the envelope
   ws = restart(root);
   const pid = adm.project_id;
   const run = research.loadRun(ws, pid, adm.run_id);
-  assert.deepEqual(Object.keys(run.jobs).sort(), ['chatgpt', 'claude'], 'the run\'s jobs are the frozen envelope\'s models');
+  assert.deepEqual(Object.keys(run.jobs).sort(), ['claude'], 'the run\'s jobs are the frozen envelope\'s models');
   assert.equal(run.jobs.claude.state, 'unconfigured', 'no route: it waits for Claude');
-  assert.equal(run.jobs.chatgpt.state, 'queued', 'a route: queued for the runner');
-  assert.ok(research.hasDueWork(ws));
+  assert.equal(research.hasDueWork(ws), false, 'no ChatGPT research is queued by default');
   assert.equal(L.confirmLeads(ws, { request_id: `req_pipeline_${process.pid}`, expect }).status, 'unchanged', 'a replay after the restart changes nothing');
   assert.equal(research.listRuns(ws, pid).length, 1);
 
@@ -134,12 +134,9 @@ test('delivery → eligibility → reviewed batch → admission → the envelope
   const bookBefore = JSON.stringify(desk.view(ws, { now: at }));
   const ticketBefore = JSON.stringify(T.read(ws, pid, { now }));
 
-  // ChatGPT's challenge waits for its own research, which the runner does.
+  // No ChatGPT research of its own is open, so nothing blocks its challenge.
   const pending = (await connector(ws)('chatgpt', 'pending_challenges', { project: pid })).structuredContent;
-  assert.equal(pending.status, 'blocked');
-  assert.equal((await connector(ws)('chatgpt', 'start_challenge', { project_id: pid, owner_request: 'challenge it' })).isError, true);
-  await research.runDueJobs(ws, { fetchImpl: async () => { throw new Error('no network in tests'); } });
-  assert.equal(research.loadRun(ws, pid, run.run_id).jobs.chatgpt.state, 'completed', 'the mock route completed ChatGPT\'s research');
+  assert.notEqual(pending.status, 'blocked');
 
   ws = restart(root);
   const started = (await connector(ws)('chatgpt', 'start_challenge', { project_id: pid, owner_request: 'challenge it' })).structuredContent;
