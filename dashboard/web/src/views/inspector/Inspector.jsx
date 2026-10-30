@@ -188,7 +188,9 @@ export default function Inspector({ pid, wide }) {
     ? <HoldButton className={`if-pill${ticketWaits ? '' : ' btn-primary'}`} data-key="panel-reviewed" aria-keyshortcuts="R" title={drawn.ready ? 'Mark reviewed (R marks it and moves to the next project to review)' : STILL_LOADING} aria-disabled={drawn.ready ? undefined : 'true'} disabled={busy || !drawn.ready} onConfirm={() => markReviewed(p, { onBusy: setBusy })}>{drawn.ready ? 'Mark reviewed' : STILL_LOADING}</HoldButton>
     : <span className="if-pill is-done">Reviewed</span>;
   const secondary = <>{fullLink}{needsReview(p) ? reviewPill : null}</>;
-  const slot = footSlot ? { el: footSlot, extras: ticketWaits ? secondary : null, claim: setClaimed } : null;
+  // Docked, the decisions stay in the ticket card (UI v3, §4.5 block D); a
+  // drawer and a phone sheet keep them in the foot, always in reach.
+  const slot = footSlot && modal ? { el: footSlot, extras: ticketWaits ? secondary : null, claim: setClaimed } : null;
   const tag = [p.symbol, p.sector && p.sector.label, p.held ? 'Held' : null].filter(Boolean).join(' · ');
   return (
     <FootSlot.Provider value={slot}>

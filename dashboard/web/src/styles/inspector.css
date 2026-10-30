@@ -671,3 +671,80 @@ html.has-drawer { overflow: hidden; }
   .ih-close, .if-link, .iv-fold { min-height: var(--touch); }
   .ih-close { min-width: var(--touch); margin: -10px -12px 0 0; }
 }
+
+/* ---- UI v3: the ticket card (UI_MASTER_PLAYBOOK.md §4.5 block D,
+   2026-10-30): one obsidian card in the warm inspector, its words re-pointed
+   by the dark scope in tokens.css. ---- */
+.pm-card.v3-ticket { gap: 18px; padding: 20px; border-radius: var(--r-v3-ticket); background: var(--cr-obsidian); color: var(--cr-paper); box-shadow: none; }
+.v3-ticket .pm-head { align-items: baseline; }
+.v3-tk-type { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: var(--fs-ui); font-weight: 500; color: var(--cr-paper); }
+.v3-tk-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--cr-paper-body); }
+.v3-tk-dot.is-ok { background: var(--cr-gate-ok-dark); }
+.v3-tk-dot.is-warn { background: var(--cr-gate-warn-dark); }
+.v3-tk-dot.is-bad { background: var(--cr-gate-bad-dark); }
+.v3-tk-status { font-size: var(--fs-meta); color: var(--cr-paper-body); white-space: nowrap; }
+.v3-tk-status.is-warn { color: var(--cr-gate-warn-dark); }
+.v3-tk-status.is-ok { color: var(--cr-approved-dark); }
+.v3-tk-status.is-bad { color: var(--cr-gate-bad-dark); }
+.v3-ticket .pm-risk, .v3-ticket .pm-type { font-size: var(--fs-md); font-weight: 400; color: var(--cr-paper-secondary); }
+.v3-ticket .pm-risk-s { font-size: var(--fs-sm); color: var(--cr-paper-body); }
+.v3-ticket .pm-thesis { font-size: var(--fs-sm); line-height: 1.5; color: var(--cr-paper-secondary); }
+.v3-ticket .pm-alert { font-size: var(--fs-sm); color: var(--cr-gate-bad-dark); }
+.v3-ticket .faint, .v3-ticket .pm-note { color: var(--cr-paper-body); }
+.v3-ticket .is-unknown { color: var(--cr-paper-body); }
+.v3-k { font-size: var(--fs-label); color: var(--cr-paper-body); }
+
+/* Entry / Stop / Target */
+.v3-levels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.v3-level { display: flex; flex-direction: column; gap: 3px; min-width: 0; margin: 0; }
+.v3-level-v { font-size: var(--fs-md); font-variant-numeric: tabular-nums; color: var(--cr-paper); overflow-wrap: anywhere; }
+.v3-level-s { font-size: var(--fs-xs); color: var(--cr-paper-body); }
+
+/* The exit cost against its limit */
+.v3-exit { display: flex; flex-direction: column; gap: 8px; }
+.v3-exit-row { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; margin: 0; font-size: var(--fs-meta); }
+.v3-exit-v { color: var(--cr-paper); font-variant-numeric: tabular-nums; }
+.v3-exit.is-bad .v3-exit-v { color: var(--cr-gate-bad-dark); }
+.v3-exit.is-unknown .v3-exit-v { color: var(--cr-gate-warn-dark); }
+.v3-exit-bar { position: relative; display: block; height: 3px; border-radius: var(--r-v3-bar); background: var(--cr-dark-divider); }
+.v3-exit-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: inherit; background: var(--cr-paper); }
+.v3-exit.is-bad .v3-exit-fill { background: var(--cr-gate-bad-dark); }
+.v3-exit.is-unknown .v3-exit-fill { background: var(--cr-gate-warn-dark); }
+.v3-exit-limit { position: absolute; top: -4px; bottom: -4px; width: 1px; background: var(--cr-limit-mark); }
+.v3-exit-until { margin: 0; font-size: var(--fs-xs); color: var(--cr-paper-body); }
+
+/* The Researcher beside the Prosecutor, the tests, the challenge, the gate */
+.v3-ticket .pm-dis { font-size: var(--fs-sm); color: var(--cr-paper-body); }
+.v3-ticket .pm-dis-k { color: var(--cr-paper-body); font-weight: 400; }
+.v3-ticket .pm-dis-note { color: var(--cr-paper-secondary); }
+.v3-ticket .pm-sbs-v { font-size: var(--fs-v3-res); font-weight: 200; color: var(--cr-paper); }
+.v3-ticket .pm-sbs-s { color: var(--cr-paper-body); }
+.v3-ticket .pm-plan { grid-template-columns: repeat(2, minmax(0, 1fr)); font-size: var(--fs-sm); color: var(--cr-paper-secondary); }
+.v3-ticket .pm-test-pills { gap: 6px 16px; }
+.v3-ticket .pm-test { display: inline-flex; align-items: center; gap: 6px; height: auto; padding: 0; border-radius: 0; background: none; box-shadow: none; font-size: var(--fs-meta); font-weight: 400; color: var(--cr-paper-body); }
+.v3-ticket .pm-test::before { content: ""; width: 5px; height: 5px; border-radius: 50%; flex: none; background: var(--cr-paper-dim); }
+.v3-ticket .pm-test.is-ok::before { background: var(--cr-gate-ok-dark); }
+.v3-ticket .pm-test.is-bad::before { background: var(--cr-gate-bad-dark); }
+.v3-ticket .pm-test.is-warn::before { background: var(--cr-gate-warn-dark); }
+.v3-ticket .pm-test:hover { color: var(--cr-paper); }
+.v3-ticket .pm-test[aria-expanded="true"] { color: var(--cr-paper); }
+.v3-ticket [data-key^="pm-contract-"] { padding-top: 16px; border-top: 1px solid var(--cr-dark-divider); }
+.v3-ticket a:not(.btn) { color: var(--cr-live-on-dark); }
+.v3-ticket .badge { background: var(--cr-dark-fill); color: var(--cr-paper-secondary); box-shadow: none; }
+
+/* The gate in force: in words, in place of a grant */
+.v3-gated { margin: 0; padding: 14px 16px; border-radius: var(--r-v3-banner); background: var(--cr-gated-bg); font-size: var(--fs-sm); line-height: 1.45; color: var(--cr-gated-ink); }
+
+/* The decisions: the one primary a ceramic pill, the rest words under it */
+.v3-ticket .pm-actions:not(.is-foot) { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px 24px; }
+.v3-ticket .pm-actions:not(.is-foot) > .btn-primary { flex: 1 1 100%; height: auto; padding: 14px 18px; border-radius: var(--radius-full); font-size: var(--fs-md); font-weight: 500; --btn-bg: var(--cr-surface-ceramic); --btn-bg-hover: var(--cr-paper-secondary); --btn-ink: var(--cr-on-ceramic); }
+.v3-ticket .pm-actions:not(.is-foot) > .btn:not(.btn-primary) { height: auto; min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; font-size: var(--fs-sm); font-weight: 400; color: var(--cr-paper-body); --btn-bg: transparent; --btn-bg-hover: transparent; --btn-line: transparent; --btn-ink: var(--cr-paper-body); }
+.v3-ticket .pm-actions:not(.is-foot) > .btn:not(.btn-primary):hover { color: var(--cr-on-ink); --btn-ink: var(--cr-on-ink); }
+.v3-ticket .pm-actions:not(.is-foot) > .btn-danger { --btn-ink: var(--cr-gate-bad-dark); color: var(--cr-gate-bad-dark); }
+.v3-ticket .pm-decided { flex: 1 1 100%; justify-content: space-between; font-size: var(--fs-sm); font-weight: 400; color: var(--cr-paper-tertiary); }
+.v3-ticket .pm-decided .btn { height: auto; padding: 0; border: 0; background: none; font-size: var(--fs-xs); --btn-bg: transparent; --btn-line: transparent; --btn-ink: var(--cr-paper-body); }
+.v3-ticket .pm-decided .btn:hover { --btn-ink: var(--cr-on-ink); }
+@media (max-width: 767.98px) {
+  .v3-ticket .pm-actions:not(.is-foot) > .btn:not(.btn-primary) { min-height: var(--touch); }
+  .v3-levels { gap: 8px; }
+}
