@@ -16,19 +16,17 @@ import { retryingImport } from '../components/Boundary.jsx';
 // Each page's code is asked for again after a failed download (a fresh
 // request; browsers keep a failed module fetch otherwise; review 2026-10-08, F3).
 const intake = retryingImport(() => import('../../../public/views/intake.js'));
-const project = retryingImport(() => import('../../../public/views/project.js'));
 const portfolio = retryingImport(() => import('../../../public/views/portfolio.js'));
 const research = retryingImport(() => import('../../../public/views/research.js'));
-const updates = retryingImport(() => import('../../../public/views/updates.js'));
-const settings = retryingImport(() => import('../../../public/views/settings.js'));
 const explorer = retryingImport(() => import('../../../public/views/explorer.js'));
+// The project page is React (ProjectPage); Updates and Settings are
+// redirected to Review and Preferences before a view loads (router.js), so
+// their full-page renderers are not registered (subtraction stage 6.3). Their
+// parts stay reachable through parts.js.
 export const LEGACY_VIEWS = {
   new: () => intake().then((m) => m.renderIntake),
-  project: () => project().then((m) => m.renderProject),
   portfolio: () => portfolio().then((m) => m.renderPortfolio),
   research: () => research().then((m) => m.renderResearch),
-  updates: () => updates().then((m) => m.renderUpdates),
-  settings: () => settings().then((m) => m.renderSettings),
   explorer: () => explorer().then((m) => m.renderExplorer),
 };
 

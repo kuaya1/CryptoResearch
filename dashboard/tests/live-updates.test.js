@@ -74,7 +74,7 @@ test('V2-006 /api/version: small answers, a sequence that moves with the index, 
     assert.ok(answers.every((a) => a.status === 200));
   }
   const stats = await request(srv.port, { path: '/api/server-stats', token: srv.token });
-  assert.equal(stats.body.event_streams_open, 0);
+  assert.equal(stats.body.event_streams_open, undefined, 'no event stream exists (subtraction stage 6.1)');
   assert.ok(stats.body.requests['/api/version'] >= 36);
   agents.forEach((a) => a.destroy());
   // A restart is a new instance: pages refetch instead of trusting old positions.

@@ -1082,7 +1082,8 @@ async function run(argv) {
       if (sub === 'export') {
         const usage = 'explorer export --fixtures [--dry-run] | --project <project_id> --dry-run (real records: a preview only; nothing is sent)';
         if ([flags.fixtures, flags.project, flags.desk].filter(Boolean).length > 1) throw Object.assign(new Error(`Choose one of --fixtures, --project <id> or --desk. ${usage}`), { code: 'USAGE' });
-        if (flags.desk) return xp.exportDesk();
+        // Exporting every real record at once is not a command (subtraction stage 6.1).
+        if (flags.desk) throw Object.assign(new Error(`Exporting all real desk records is not a command; nothing was sent. ${usage}`), { code: 'USAGE' });
         if (flags.project !== undefined) {
           const id = one(flags.project);
           if (typeof id !== 'string' || !id.trim()) throw Object.assign(new Error(`--project needs a project ID. ${usage}`), { code: 'USAGE' });

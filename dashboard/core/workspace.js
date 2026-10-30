@@ -125,13 +125,6 @@ const DEFAULT_SETTINGS = {
     schedules: [],
     note: 'Research runs only when you ask, or on a schedule you configure. Paid API calls need a key, a model, prices and a budget; without them each provider falls back to a ready-to-paste prompt.',
   },
-  jobs: {
-    evidence_watch: {
-      enabled: false,
-      configured: false,
-      note: 'Optional later: a dated "what changed" digest that proposes a review. It never changes grades or your thesis.',
-    },
-  },
   portfolio: { base_currency: 'USD', accounting_method: 'fifo_per_account' },
   // Subtraction stage 5.3. `paused` halts new automated dispatches (research
   // sent to a provider, the pilot runner's next agent, standing exit-quote
