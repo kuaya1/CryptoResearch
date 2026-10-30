@@ -421,7 +421,7 @@
   --head-h: 32px;
   --cell-y: 7px;
   --cell-x: 12px;
-  --wl-row-h: 60px;               /* the Desk's rows on a desktop (52px on a phone) */
+  --wl-row-h: 64px;               /* the Desk's rows on a desktop (52px on a phone) */
   --wl-head-h: 40px;
   --badge-w: 56px;
   --badge-h: 20px;
