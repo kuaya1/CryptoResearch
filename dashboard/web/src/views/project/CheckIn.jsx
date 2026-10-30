@@ -1,8 +1,8 @@
 // The review check-in, the Overview's top band: "Since your last review" in
 // one line naming the changes in words, Mark reviewed beside it, and folded
-// under it one row per model (public/checkin-model.js): the report your last
-// review saw (Then), the latest eligible report (Now), the reports saved
-// between, and what moved. Its base is in the address (?base=<receipt>,
+// under it a Then → Now table, one row per model (public/checkin-model.js):
+// the report your last review saw (Then), the latest eligible report (Now),
+// the reports saved between, and what else moved. Its base is in the address (?base=<receipt>,
 // default your latest review), so a reload, Back or a new tab draws the same
 // comparison.
 //
@@ -12,7 +12,7 @@
 // answer offers Try again with the same request, which the desk applies once.
 // The note draft stays until a review is saved.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowRight, Plus } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { fmtDate, fmtDateTime, fmtSignedPct, fmtPrice, toast } from '../../../../public/ui.js';
 import { checkInModel } from '../../../../public/checkin-model.js';
 import { baseOf, sectionHref } from '../../../../public/project-routes.js';
@@ -42,12 +42,14 @@ function Then({ label, then, now }) {
   );
 }
 
+// What moved besides the grade (the table's two columns carry the grade).
 function Moved({ mv, who }) {
   const none = <span className="faint">{`Not reported in ${who}'s report`}</span>;
   const risk = (r) => (r ? <><span className="ci-t">{r.text}</span>{r.sources.length || r.tags.length ? <CiteLine f={r} /> : null}</> : none);
+  const any = mv.verdict.changed || mv.risk.changed || mv.confirm.changed || mv.break.changed || mv.categories.length || mv.revision;
+  if (!any) return null;
   return (
     <dl className="ci-moved">
-      {mv.grade.changed ? <Then label="Grade" then={mv.grade.then} now={mv.grade.now} /> : <div className="ci-mv"><dt>Grade</dt><dd>{`${mv.grade.now} (unchanged)`}</dd></div>}
       {mv.verdict.changed ? <Then label="Verdict" then={mv.verdict.then || 'No verdict'} now={mv.verdict.now || 'No verdict'} /> : null}
       {mv.risk.changed ? <Then label="Strongest sourced risk" then={risk(mv.risk.then)} now={risk(mv.risk.now)} /> : null}
       {mv.confirm.changed ? <Then label="Would confirm" then={mv.confirm.then || none} now={mv.confirm.now || none} /> : null}
@@ -70,31 +72,36 @@ function RepLink({ s, pid, prov, label }) {
   return <a href={reportHref(pid, prov, s.report_id)} data-key={`ci-${label}-${prov}`} data-report={s.report_id} title={`Report ${s.report_id}`}>{when}</a>;
 }
 
-// One model as a card: its name, the grade then and now, its verdict now,
-// and the two reports by their dates.
+// One model as a row of the Then → Now table (Quieter Desk): its name, then
+// the grade and report your last review saw, now the grade, verdict and
+// report; what else moved, the reports between and a newer report under it.
 function Row({ r, pid }) {
   const from = r.then ? r.then.grade_words : 'No report then';
   const to = r.now ? r.now.grade_words : 'No eligible report';
   return (
-    <li className="ci-row ci-card" data-key={`ci-row-${r.provider}`} data-same={r.same ? 'true' : 'false'}>
-      <p className="ci-model">
-        <strong>{r.who}</strong>
-        {r.on_hold ? <span className="faint"> · on hold</span> : null}
-        {r.same ? <span className="ci-same"> · Same report</span> : null}
-      </p>
-      <p className="ci-move" aria-label={r.same ? `Grade ${to}, unchanged` : `Grade ${from} then, ${to} now`}>
-        {r.same ? <span className="ci-to">{to}</span> : <><span className="ci-from">{from}</span><ArrowRight size={14} aria-hidden="true" className="ci-arrow" /><span className="ci-to">{to}</span></>}
-      </p>
-      {r.now && r.now.verdict ? <p className="ci-verdict">{r.now.verdict}</p> : r.now_note ? <p className="ci-verdict is-none">{r.now_note}</p> : null}
+    <li className="ci-row" data-key={`ci-row-${r.provider}`} data-same={r.same ? 'true' : 'false'} aria-label={`${r.who}: ${r.same ? `grade ${to}, unchanged` : `grade ${from} then, ${to} now`}`}>
+      <div className="ci-cells">
+        <p className="ci-model">
+          <strong>{r.who}</strong>
+          {r.on_hold ? <span className="faint"> · on hold</span> : null}
+        </p>
+        <div className="ci-then">
+          <span className="sr-only">Then: </span>
+          {r.same ? <span className="ci-same">Same report</span> : r.then ? (
+            <>
+              <span className="ci-from">{from}</span>
+              <RepLink s={r.then} pid={pid} prov={r.provider} label="then" />
+            </>
+          ) : <span className="ci-none">{r.then_note || from}</span>}
+        </div>
+        <div className="ci-now">
+          <span className="sr-only">Now: </span>
+          <span className="ci-to">{to}</span>
+          {r.now && r.now.verdict ? <span className="ci-verdict">{r.now.verdict}</span> : null}
+          {r.now ? <RepLink s={r.now} pid={pid} prov={r.provider} label="now" /> : <span className="ci-none">{r.now_note}</span>}
+        </div>
+      </div>
       {r.newer ? <p className="ci-newer" data-key={`ci-newer-${r.provider}`}>{`A newer ${r.who} report exists · `}<a href={reportHref(pid, r.provider, r.now.report_id)} title={`Report ${r.now.report_id}`}>{`Open the ${r.now.analysis_at ? fmtDate(r.now.analysis_at) : 'newer'} report`}</a></p> : null}
-      {r.same ? (
-        r.now ? <p className="ci-reps"><span className="ci-k">Report</span><RepLink s={r.now} pid={pid} prov={r.provider} label="now" /></p> : null
-      ) : (
-        <dl className="ci-reps">
-          <div><dt className="ci-k">Then</dt><dd>{r.then ? <RepLink s={r.then} pid={pid} prov={r.provider} label="then" /> : <span className="ci-none">{r.then_note}</span>}</dd></div>
-          <div><dt className="ci-k">Now</dt><dd>{r.now ? <RepLink s={r.now} pid={pid} prov={r.provider} label="now" /> : <span className="ci-none">{r.now_note}</span>}</dd></div>
-        </dl>
-      )}
       {r.between_words ? (
         <p className="ci-between" data-key={`ci-between-${r.provider}`}>
           {`${r.between_words}: `}
@@ -221,7 +228,12 @@ export function CheckIn({ d, current, row, pid, markRef = null, hideButton = fal
           <p className={`ci-head${model.head.inferred ? ' is-inferred' : ''}`} data-key="ci-head">{loading ? 'Loading that review…' : model.head.text}</p>
           {model.head.lost ? <p className="ci-lost" role="note">{model.head.lost}</p> : null}
           {error ? <p className="ci-lost" role="alert">{`Could not read that review: ${error.message}`}</p> : null}
-          {loading ? null : <ol className="ci-rows">{model.rows.map((r) => <Row key={r.provider} r={r} pid={pid} />)}</ol>}
+          {loading || !model.rows.length ? null : (
+            <div className="ci-table">
+              <p className="ci-thead" aria-hidden="true"><span>Model</span><span>Then</span><span>Now</span></p>
+              <ol className="ci-rows" aria-label="Each model's grade then and now">{model.rows.map((r) => <Row key={r.provider} r={r} pid={pid} />)}</ol>
+            </div>
+          )}
           {ch.price && typeof ch.price.change_pct === 'number' ? <p className="ci-price">{`Price ${fmtPrice(ch.price.from)} (${fmtDateTime(ch.price.from_at)}) → ${fmtPrice(ch.price.to)} (${fmtDateTime(ch.price.to_at)}), ${fmtSignedPct(ch.price.change_pct)}`}</p> : null}
           {(ch.journal_entries || []).length ? (
             <ul className="ci-notes plain-list" aria-label="Your notes since">
@@ -233,8 +245,13 @@ export function CheckIn({ d, current, row, pid, markRef = null, hideButton = fal
               <span>Review note (optional)</span>
               <textarea data-key="ci-note" maxLength={NOTE_MAX} rows={2} value={note} autoFocus={noteOpen && !note} onChange={(e) => setNote(e.target.value.slice(0, NOTE_MAX))} />
             </label>
-          ) : <button type="button" className="btn-link ci-note-add" data-key="ci-note-add" onClick={() => setNoteOpen(true)}><Plus size={14} aria-hidden="true" />Add review note</button>}
-          <p className="dg-all"><a href={`#/project/${enc(pid)}/notes`} data-key="pb-all-changes">All changes</a></p>
+          ) : null}
+          {/* The secondary actions in one row (Quieter Desk). */}
+          <p className="ci-more">
+            <span className="ci-more-k">More</span>
+            {noteOpen || note ? null : <button type="button" className="btn-link ci-note-add" data-key="ci-note-add" onClick={() => setNoteOpen(true)}><Plus size={14} aria-hidden="true" />Add review note</button>}
+            <a className="dg-all" href={`#/project/${enc(pid)}/notes`} data-key="pb-all-changes">All changes</a>
+          </p>
         </div>
       </details>
       {canMark && !hideButton ? <button type="button" className="btn btn-sm" data-key="ov-reviewed" title={drawn.ready ? undefined : STILL_LOADING} disabled={busy || !drawn.ready} onClick={() => mark()}>{label}</button> : null}

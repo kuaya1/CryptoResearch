@@ -35,8 +35,9 @@
 .rv-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rv-it .ticker { font-family: var(--mono); color: var(--text-3); font-weight: 400; font-size: var(--fs-xs); }
 .rv-ir { display: block; font-size: var(--fs-ui-sm); color: var(--text-2); line-height: 1.45; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.rv-none { padding: 2px 16px 6px; font-size: var(--fs-sm); color: var(--text-3); }
-.rv-low { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 0; padding: 8px 16px; font-size: var(--fs-sm); color: var(--text-2); }
+/* The projects left out, one mono line (Quieter Desk). */
+.rv-low { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 4px 0 0; padding: 8px 16px; font-family: var(--mono); font-size: var(--fs-xs); letter-spacing: var(--eyebrow-ls); color: var(--text-3); }
+.rv-low .btn-link { font-family: var(--sans); font-size: var(--fs-xs); letter-spacing: 0; }
 
 /* ---- the chosen project ---- */
 .rv-centre { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -49,15 +50,14 @@
 .rv-head-n .faint { margin-top: 4px; font-family: var(--mono); font-size: var(--fs-xs); }
 .rv-head .btn { flex: none; display: inline-flex; align-items: center; gap: 6px; }
 .rv-centre .mpanel { padding: 0; }
-/* The centre reads the model cards, then the verdict and bull and bear (the
-   Apple HIG pass, 2026-10-18): the check-in sits flat on the pane, each
-   model a tinted card, nothing boxed inside a box. */
+/* The centre reads the Then → Now table, then the verdict and bull and bear:
+   the check-in sits flat on the pane, the table one warm card, nothing boxed
+   inside a box (Quieter Desk). */
 .rv-centre .digest { padding: 0; margin: 0; background: transparent; }
 .rv-centre .digest.has { background: transparent; }
-/* Each model's block: a warm card, its grade then → now a large light figure. */
-.rv-centre .ci-card { padding: 20px; border-radius: var(--r-tile); background: var(--warm-surface); }
-.rv-centre .ci-model { font-family: var(--mono); font-size: var(--fs-xs); letter-spacing: var(--eyebrow-ls); color: var(--text-2); }
-.rv-centre .ci-move { font-family: var(--font-display); font-size: var(--fs-card-title); font-weight: 200; letter-spacing: var(--track-display); line-height: 1.05; }
+.rv-centre .ci-table { padding: 16px 20px 4px; border-radius: var(--r-tile); background: var(--warm-surface); }
+.rv-centre .ci-row:last-child { border-bottom: 0; }
+.rv-centre .ci-to { font-size: var(--fs-ui); }
 /* The price since your review is in the right pane; the centre does not repeat it. */
 .rv-centre .ci-price { display: none; }
 

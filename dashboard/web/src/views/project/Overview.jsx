@@ -348,12 +348,13 @@ function Verdict({ m, pid, who, staleDays }) {
           {v.falsifiable.test ? <p className="faint">{`Would disprove it: ${v.falsifiable.test}`}</p> : null}
         </div>
       ) : null}
-      {v.timing || v.market || next || review ? (
-        <p className="ov-views" title={`${who}'s own views for this horizon; they change no score`}>
-          {v.timing ? <span className="ov-view" title={v.timing.rationale || undefined}><span className="k">Timing</span>{v.timing.word}</span> : null}
-          {v.market ? <span className="ov-view" title={v.market.rationale || undefined}><span className="k">Market</span>{v.market.word}</span> : null}
-          {next ? <span className="ov-view" title={`${next.title} · ${CERTAINTY_WORDS[next.certainty]}`}><span className="k">Next</span><span className="ov-view-t">{next.title}</span><span className="faint"> · </span>{windowWords(next.start, next.end)}</span> : null}
-          {review ? <span className="ov-view" title={review.trigger ? `Sooner if: ${review.trigger}` : undefined}><span className="k">Review</span>{fmtDate(review.start)}</span> : null}
+      {/* One mono row of dates (Quieter Desk P8); the timing and market views
+          are under What to watch. */}
+      {next || review ? (
+        <p className="ov-dates" data-key="brief-dates" title={`${who}'s own dates for this horizon; they change no score`}>
+          {next ? <span className="ov-date" title={`${next.title} · ${CERTAINTY_WORDS[next.certainty]}`}><span className="k">Next</span><span className="ov-date-t">{next.title}</span>{` ${windowWords(next.start, next.end)}`}</span> : null}
+          {next && review ? <span className="ov-date-sep" aria-hidden="true">·</span> : null}
+          {review ? <span className="ov-date" title={review.trigger ? `Sooner if: ${review.trigger}` : undefined}><span className="k">Review</span>{fmtDate(review.start)}</span> : null}
         </p>
       ) : null}
       <Notices list={gradeNotices} m={m} pid={pid} who={who} label="Warnings about this grade" />
@@ -405,7 +406,7 @@ function CategoryItem({ x, who }) {
 // the right, until opened (subtraction stage 4.1); what was opened stays open
 // in this browser.
 const FOLD_KEY = (id) => `cr.brief.open.${id}`;
-function Section({ id, title, sub = null, children, className = '' }) {
+function Section({ id, title, sub = null, hint = null, children, className = '' }) {
   const [open, setOpen] = useState(() => { try { return localStorage.getItem(FOLD_KEY(id)) === '1'; } catch (_) { return false; } });
   const onToggle = (e) => {
     const now = e.currentTarget.open;
@@ -416,18 +417,31 @@ function Section({ id, title, sub = null, children, className = '' }) {
   return (
     <section className={`ov-sec ov-${id} ${className}`.trim()} id={`bf-${id}`} aria-labelledby={`bf-h-${id}`}>
       <details className="ov-fold" open={open} onToggle={onToggle} data-key={`brief-sec-${id}`}>
-        <summary className="ov-fold-s"><h2 className="ov-h" id={`bf-h-${id}`}>{title}</h2>{sub ? <span className="ov-h-sub">{sub}</span> : null}</summary>
+        <summary className="ov-fold-s" title={hint || undefined}><h2 className="ov-h" id={`bf-h-${id}`}>{title}</h2>{sub ? <span className="ov-h-sub">{sub}</span> : null}</summary>
         {open ? children : null}
       </details>
     </section>
   );
 }
 
+// The lowest graded diagnostic, by its low end (a range is never a midpoint):
+// the folded section's key figure (Quieter Desk P6).
+export function lowestCategory(items) {
+  const low = (x) => (x.status === 'scored' ? x.value : x.status === 'range' ? x.low : null);
+  return items.filter((x) => typeof low(x) === 'number').reduce((a, x) => (!a || low(x) < low(a) ? x : a), null);
+}
+
 function Categories({ m, who }) {
   const c = m.categories;
   const counts = c.counts;
+  const lo = lowestCategory(c.items);
+  const sub = [
+    `${counts.scored} of ${counts.total} graded`,
+    counts.unknown ? `${counts.unknown} unknown` : null,
+    lo ? `lowest ${lo.label} ${scoreWords(lo)}${lo.confidence && CONF_LETTER[lo.confidence] ? ` ${CONF_LETTER[lo.confidence]}` : ''}` : null,
+  ].filter(Boolean).join(' · ');
   return (
-    <Section id="categories" title="Category grades" sub={<>{`${c.items.length} diagnostics · ${counts.scored} of ${counts.total} graded${counts.unknown ? ` · ${counts.unknown} unknown` : ''} · never averaged into the grade`}{m.older_profile ? <span title={`This report used ${m.older_profile.report}; new research uses ${m.older_profile.current}`}>{` · ${m.older_profile.report}`}</span> : null}</>}>
+    <Section id="categories" title="Category grades" hint={`${c.items.length} diagnostics, never averaged into the grade`} sub={<>{sub}{m.older_profile ? <span title={`This report used ${m.older_profile.report}; new research uses ${m.older_profile.current}`}>{` · ${m.older_profile.report}`}</span> : null}</>}>
       {c.groups.length ? (
         <div className="ocat-groups">
           {c.groups.map((g) => {
@@ -668,9 +682,14 @@ function Track({ w }) {
 function Watch({ m, who, pid }) {
   const w = m.watch;
   const tv = m.verdict.timing;
+  const mv = m.verdict.market;
+  const dated = w.items.filter((x) => x.kind === 'catalyst').length;
+  const sub = [dated ? `${dated} dated` : null, w.undated.length ? `${w.undated.length} without a date` : null].filter(Boolean).join(' · ') || null;
   return (
-    <Section id="watch" title="What to watch">
-      {tv && tv.rationale ? <p className="ow-timing"><span className="k">{`${who}'s timing view · ${tv.word}`}</span>{tv.rationale}</p> : null}
+    <Section id="watch" title="What to watch" sub={sub}>
+      {/* Timing and market views live here, not as chips under the grade (Quieter Desk). */}
+      {tv ? <p className="ow-timing" data-key="brief-timing"><span className="k">{`${who}'s timing view · ${tv.word}`}</span>{tv.rationale || null}</p> : null}
+      {mv ? <p className="ow-timing" data-key="brief-market"><span className="k">{`${who}'s market view · ${mv.word}`}</span>{mv.rationale || null}</p> : null}
       <Track w={w} />
       {w.items.length ? (
         <ol className="ow-events" aria-label="Dated catalysts and the suggested review, in date order">
@@ -691,7 +710,13 @@ function Watch({ m, who, pid }) {
         </ol>
       ) : (w.horizon.start ? <p className="none">No dated catalyst or review date in the report.</p> : null)}
       {w.review_trigger_only ? <p className="ow-ev-x"><span className="k">Review sooner if</span>{w.review_trigger_only}</p> : null}
-      {w.undated.length ? <div className="ow-aside"><h3 className="ov-h3">Date unknown</h3><ul>{w.undated.map((x) => <li key={x.title}>{x.title}<span className="faint">{` · ${CERTAINTY_WORDS[x.certainty]}`}</span></li>)}</ul></div> : null}
+      {/* Dateless items as one line until opened (Quieter Desk). */}
+      {w.undated.length ? (
+        <details className="fold ow-undated" data-key="brief-undated">
+          <summary>{`${w.undated.length} ${w.undated.length === 1 ? 'item' : 'items'} with no date`}</summary>
+          <ul className="ow-aside-list">{w.undated.map((x) => <li key={x.title}>{x.title}<span className="faint">{` · ${CERTAINTY_WORDS[x.certainty]}`}</span></li>)}</ul>
+        </details>
+      ) : null}
       {w.outside.length ? <div className="ow-aside"><h3 className="ov-h3">Outside the horizon</h3><ul>{w.outside.map((x) => <li key={x.title}>{x.title}<span className="faint">{` · ${windowWords(x.start, x.end)} · ${CERTAINTY_WORDS[x.certainty]}`}</span></li>)}</ul></div> : null}
       {m.chart ? (
         <details className="fold" data-key="brief-chart">
@@ -714,13 +739,18 @@ function Scenarios({ m, who }) {
   if (!s) return null;
   const order = ['bear', 'base', 'bull'];
   const rows = s.rows.slice().sort((x, y) => (order.indexOf(x.id) + 1 || 9) - (order.indexOf(y.id) + 1 || 9));
+  // The honesty line is said once, inside the section (Quieter Desk).
   const notes = [
+    `Forecasts: ${who}'s own estimates, not facts.`,
     s.probability && s.probability.status !== 'ok' ? s.probability.message : null,
     s.targets && !['given', 'none'].includes(s.targets.status) ? s.targets.message : null,
     s.definition ? `Against BTC: ${s.definition}` : null,
   ].filter(Boolean);
+  // The folded line's key figure: each case's probability, as the report gives it.
+  const probs = rows.filter((x) => x.probability !== null);
+  const sub = probs.length ? rows.map((x) => `${x.label} ${x.probability !== null ? `${x.probability}%` : '—'}`).join(' · ') : 'No probabilities given';
   return (
-    <Section id="scenarios" title="Scenarios" sub={`Forecasts: ${who}'s own estimates, not facts`}>
+    <Section id="scenarios" title="Scenarios" sub={sub} hint={`Forecasts: ${who}'s own estimates, not facts`}>
       <div className="scns">
         {rows.map((x) => (
           <article key={x.id} className={`scn is-${x.id}`} aria-labelledby={`bf-scn-${x.id}`}>
@@ -729,10 +759,15 @@ function Scenarios({ m, who }) {
               {x.probability !== null ? <span className="scn-prob" title={`${who}'s subjective estimate`}>{`${x.probability}%`}</span> : <span className="scn-prob none">No probability</span>}
             </h3>
             <p className="scn-price">{x.price ? <span className="fig">{x.price}</span> : <span className="none">No price range given</span>}</p>
-            <p className="scn-btc-row">{x.vsBtc ? <span className="scn-btc fig">{`${x.vsBtc} vs BTC`}</span> : <span className="none">No range against BTC</span>}</p>
-            {x.assumptions.length ? <ul className="scn-as" aria-label="Assumes">{x.assumptions.map(([k, val]) => <li key={k}><span className="faint">{`${k}: `}</span>{val}</li>)}</ul> : null}
-            {x.outcome ? <p className="scn-out"><span className="k">Outcome</span>{x.outcome}</p> : null}
             {x.invalidation ? <p className="scn-out"><span className="k">Breaks if</span>{x.invalidation}</p> : null}
+            {x.vsBtc || x.assumptions.length || x.outcome ? (
+              <details className="scn-more" data-key={`brief-scn-more-${x.id}`}>
+                <summary>Details</summary>
+                <p className="scn-btc-row">{x.vsBtc ? <span className="scn-btc fig">{`${x.vsBtc} vs BTC`}</span> : <span className="none">No range against BTC</span>}</p>
+                {x.assumptions.length ? <ul className="scn-as" aria-label="Assumes">{x.assumptions.map(([k, val]) => <li key={k}><span className="faint">{`${k}: `}</span>{val}</li>)}</ul> : null}
+                {x.outcome ? <p className="scn-out"><span className="k">Outcome</span>{x.outcome}</p> : null}
+              </details>
+            ) : <p className="scn-btc-row"><span className="none">No range against BTC</span></p>}
           </article>
         ))}
       </div>
@@ -830,7 +865,9 @@ export function SheetHead({ m, title }) {
   return (
     <header className={`sheet-head${m.report_id && m.is_latest ? ' is-latest' : ''}`}>
       <h2 id="bf-title" className="sheet-title" tabIndex={-1}>{title}<span className="sr-only">{`: ${m.identity.name}`}</span></h2>
-      {m.report_id ? <p className="sheet-sub">{m.is_latest ? 'Latest report' : 'An earlier report'}<span className="faint">{` · saved ${fmtDate(m.provenance.saved_at)}`}</span></p> : null}
+      {/* The latest report's dates are in the grade's meta row (said once); an
+          earlier report keeps its save date here. */}
+      {m.report_id ? <p className="sheet-sub" title={`Saved ${fmtDate(m.provenance.saved_at)}`}>{m.is_latest ? 'Latest report' : 'An earlier report'}{m.is_latest ? null : <span className="faint">{` · saved ${fmtDate(m.provenance.saved_at)}`}</span>}</p> : null}
     </header>
   );
 }

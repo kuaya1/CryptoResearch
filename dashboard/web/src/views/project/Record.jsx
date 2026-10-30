@@ -488,6 +488,39 @@ function PartialView({ pid, run, prov, a }) {
   );
 }
 
+// What changed since the model's previous report (Quieter Desk), one line per
+// model at most: this run's report against that model's eligible report
+// before it, in the desk's own order (d.reports is newest first by
+// reportSortKey). A grade figure only between two firm grades under the same
+// rubric; nothing is stored.
+const signed1 = (n) => `${n < 0 ? '−' : '+'}${Math.abs(Math.round(n * 10) / 10).toFixed(1)}`;
+export function runChanges(d, run) {
+  const lines = [];
+  for (const prov of providersOf(run)) {
+    const j = run.jobs[prov];
+    if (!j || j.state !== 'completed' || !j.report_id) continue;
+    const who = PROVIDER_LABELS[prov];
+    const r = (d.reports || []).find((x) => x && x.report_id === j.report_id);
+    if (!r || r.broken) continue;
+    const st = standingOf(r);
+    if (st) { lines.push({ prov, text: `${who}: this run's report is not compared (${st.text.charAt(0).toLowerCase()}${st.text.slice(1)})` }); continue; }
+    const own = d.reports.filter((x) => x && !x.broken && x.meta && x.meta.provider === prov && !standingOf(x));
+    const prev = own[own.indexOf(r) + 1] || null;
+    const a = r.assessment || {};
+    if (!prev) { lines.push({ prov, text: `${who}: first report · ${gradeWords(r.grade, Boolean(a.needs_text))} · ${verdictWords(a.verdict)}` }); continue; }
+    const b = prev.assessment || {};
+    const g0 = prev.grade;
+    const g1 = r.grade;
+    const firm = (g) => g && g.status === 'firm' && typeof g.value === 'number';
+    const same = a.rubric_version === b.rubric_version;
+    const grade = firm(g0) && firm(g1) && same ? `${g0.display} → ${g1.display} (${signed1(g1.value - g0.value)})`
+      : `${gradeWords(g0, Boolean(b.needs_text))} → ${gradeWords(g1, Boolean(a.needs_text))}${same ? '' : ' (another rubric, not compared)'}`;
+    const verdict = a.verdict !== b.verdict ? `verdict ${verdictWords(b.verdict)} → ${verdictWords(a.verdict)}` : 'verdict unchanged';
+    lines.push({ prov, text: `${who}: ${grade} · ${verdict} · vs ${b.analysis_at ? fmtDate(b.analysis_at) : 'the earlier report'}` });
+  }
+  return lines.slice(0, 3);
+}
+
 function RunCard({ d, pid, run, wantRun, hostedOn }) {
   const runId = run.run_id;
   const promptPath = `/api/projects/${enc(pid)}/research/${enc(runId)}/prompt`;
@@ -498,12 +531,19 @@ function RunCard({ d, pid, run, wantRun, hostedOn }) {
   const ep = run.evidence_packet || null;
   const partials = provs.flatMap((p) => (run.jobs[p].attempts || []).filter((a) => a && a.partial_output).map((a) => ({ p, a })));
   const reconciles = provs.flatMap((p) => (run.jobs[p].attempts || []).filter((a) => reconcilable(run.jobs[p], a)).map((a) => ({ p, a })));
+  const changed = runChanges(d, run);
   return (
     <section className="rc-run" id={`run-card-${runId}`} aria-labelledby={hid}>
       <header className="rc-run-head">
         <h3 id={hid} className="rc-h3">{`Run of ${fmtDateTime(run.created_at)}`}</h3>
         {run.status ? <span className="faint">{words(run.status)}</span> : null}
       </header>
+      {changed.length ? (
+        <div className="rc-changed" data-key={`run-changed-${runId}`}>
+          <p className="rc-changed-k">What changed since the last run</p>
+          <ul>{changed.map((c) => <li key={c.prov}>{c.text}</li>)}</ul>
+        </div>
+      ) : null}
       {provs.length ? (
         <div className="l2-table-wrap">
           <table className="l2-table rc-jobs">
