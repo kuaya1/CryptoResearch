@@ -151,9 +151,13 @@ function changesSince(ws, projectId, { since = null, base = null, latestMarket =
   const latest = latestByProvider(reports);
   const models = PROVIDERS.map((prov) => modelRow(prov, all, latest, review, sinceMs)).filter(Boolean);
   const newReports = reports.filter((r) => Date.parse(r.meta.imported_at) > sinceMs);
+  // Eligible: neither quarantined, excluded nor a PDF without its text (the
+  // desk's own reading, thenStatus). Only these move a grade, so only these
+  // are compared and counted toward a review.
+  const eligible = reports.filter((r) => thenStatus(all, r.report_id).status === 'ok');
   const providerChanges = [];
   for (const p of PROVIDERS) {
-    const list = reports.filter((r) => r.meta.provider === p).sort((a, b) => reportSortKey(a).localeCompare(reportSortKey(b)));
+    const list = eligible.filter((r) => r.meta.provider === p).sort((a, b) => reportSortKey(a).localeCompare(reportSortKey(b)));
     const before = list.filter((r) => Date.parse(r.meta.imported_at) <= sinceMs).pop() || null;
     const after = list.filter((r) => Date.parse(r.meta.imported_at) > sinceMs).pop() || null;
     if (!after) continue;
@@ -178,6 +182,11 @@ function changesSince(ws, projectId, { since = null, base = null, latestMarket =
   const nowObs = latestMarket && id && latestMarket.assets ? latestMarket.assets[id] : null;
   const price = then && nowObs && typeof nowObs.price_usd === 'number' ? { from: then.price, from_at: then.at, to: nowObs.price_usd, to_at: nowObs.source_last_updated_at, change_pct: (nowObs.price_usd / then.price - 1) * 100 } : null;
   const count = newReports.length + runs.length + journal.length + events.length;
+  // What puts a project back in "Changed since review" (subtraction stage 3):
+  // new eligible reports only. Eric's own notes, events and the runs he
+  // started are listed above, and never re-queue it by themselves; material
+  // outside events (a contract change) are added by the index.
+  const reviewCount = eligible.filter((r) => Date.parse(r.meta.imported_at) > sinceMs).length;
   return {
     project_id: projectId,
     since: cursor,
@@ -194,6 +203,7 @@ function changesSince(ws, projectId, { since = null, base = null, latestMarket =
     events: events.map((e) => ({ event_id: e.event_id, type: e.type, title: e.title, due_date: e.due_date })),
     price,
     item_count: count,
+    review_count: reviewCount,
     note: 'A digest proposes what to look at. It never changes grades, reports or your selected thesis.',
   };
 }

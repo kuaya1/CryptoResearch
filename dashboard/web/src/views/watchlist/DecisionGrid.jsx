@@ -8,7 +8,11 @@
 // 3px bar on the 0–100 scale, and the suggested risk as the desk sized it.
 // Cards are grouped by proposal, Trim / exit first and then the others, each
 // group in the desk's own order; Hard pass folds into one row that shows
-// them on a click. Its two ways in, Open Inspector and Read Full Report, show
+// them on a click. Which tickets are cards is the attention contract's
+// (public/attention-model.js decisionsOf, cr-attention@1), the Review
+// queue's and the Daily Brief's own rule: a desk gate closed at $0 on a
+// token Eric does not hold is not a card, only a quiet "Closed by the desk"
+// count that opens the list (subtraction stage 3). Its two ways in, Open Inspector and Read Full Report, show
 // over the card on hover and focus, and under it on a touch screen. The
 // cards decide nothing: the decisions and their `seen` guard live in the
 // inspector only.
@@ -16,6 +20,7 @@ import { useState } from 'react';
 import { ArrowRight, PanelRight } from 'lucide-react';
 import { canonicalGrade } from '../../../../public/watchlist-model.js';
 import { riskWords } from '../../../../public/pm-card-model.js';
+import { decisionsOf } from '../../../../public/attention-model.js';
 import { Logo } from '../../components/Logo.jsx';
 import { navigate } from '../../lib/router.js';
 import { openPanel } from './state.js';
@@ -27,7 +32,7 @@ const TYPE_TONE = { ACCUMULATE: 'is-ok', LIMIT_TRAP: 'is-info', TRIM_EXIT: 'is-w
 const GROUPS = ['TRIM_EXIT', 'ACCUMULATE', 'LIMIT_TRAP', 'WATCH_ONLY'];
 
 export function waitingTickets(rows) {
-  return rows.filter((p) => p.status !== 'archived' && p.ticket && !p.ticket.unavailable && !p.ticket.decision && ['pending_pm_review', 'reopened'].includes(p.ticket.status));
+  return decisionsOf(rows).cards;
 }
 
 // The waiting tickets grouped by proposal, each group in the order given.
@@ -40,8 +45,10 @@ export function decisionGroups(waiting) {
 
 export function DecisionGrid({ d, rows }) {
   const waiting = waitingTickets(rows);
+  const closed = decisionsOf(rows).closed;
   const { shown, hardPass } = decisionGroups(waiting);
   const [showPass, setShowPass] = useState(false);
+  const [showClosed, setShowClosed] = useState(false);
   return (
     <section className="dgrid-wrap" aria-labelledby="dgrid-h">
       <p className="eyebrow">PM decisions</p>
@@ -68,6 +75,22 @@ export function DecisionGrid({ d, rows }) {
           ) : null}
         </>
       ) : <p className="dgrid-none">No tickets wait for you</p>}
+      {closed.length ? (
+        <div className="dgrid-closed">
+          <button type="button" className="act dgrid-fold-btn" aria-expanded={showClosed} aria-controls="dgrid-closed" data-key="dgrid-closed" onClick={() => setShowClosed((v) => !v)}>
+            <span>{`Closed by the desk (${closed.length})`}</span>
+          </button>
+          {showClosed ? (
+            <ul className="dgrid-closed-list" id="dgrid-closed">
+              {closed.map((p) => (
+                <li key={p.project_id}>
+                  <button type="button" className="act" data-key={`dgrid-closed-${p.project_id}`} onClick={(e) => openPanel(p.project_id, e.currentTarget)}>{p.name}</button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
     </section>
   );
 }

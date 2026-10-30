@@ -16,7 +16,7 @@ const market = require('./market');
 const inbox = require('./inbox');
 const requests = require('./requests');
 const { ymdInTz, addDays, daysBetween, isYmd } = require('./dates');
-const { PROVIDERS, PROVIDER_LABELS } = require('./workspace');
+const { PROVIDERS, PROVIDER_LABELS, researchStaleDays } = require('./workspace');
 const { SECTORS, sectorLabel } = require('./sectors');
 
 const INDEX_REL = 'dashboard/index/index.json';
@@ -340,6 +340,10 @@ function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = 
     }
     const good = reports.filter((r) => !r.broken);
     const lastReport = good.sort((a, b) => reportSortKey(b).localeCompare(reportSortKey(a)))[0] || null;
+    // The current report for staleness is the desk's own selector's newest
+    // (compare.latestByProvider): a quarantined or excluded report never
+    // makes research look fresh or stale.
+    const currentReport = Object.values(latest).filter(Boolean).sort((a, b) => reportSortKey(b).localeCompare(reportSortKey(a)))[0] || null;
     const openEvents = events.filter((e) => e.status === 'open');
     const nextReview = openEvents.filter((e) => e.type === 'review' && e.due_date).sort((a, b) => a.due_date.localeCompare(b.due_date))[0] || null;
     const mkt = marketFor(ws, p, latestMarket, history);
@@ -513,8 +517,8 @@ function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = 
         const al = screening.alerts;
         attention.push({ kind: 'contract_change', severity: 'high', project_id: p.project_id, title: `${p.name}: token contract ${al[0].words}${al.length > 1 ? ` (+${al.length - 1} more)` : ''}`, detail: al.map((a) => `${a.chain} ${a.address}: ${a.words} (GoPlus, ${String(a.at).slice(0, 10)})`).join('; ') });
       }
-      if (position && lastReport && lastReport.assessment.analysis_at && daysBetween(String(lastReport.assessment.analysis_at).slice(0, 10), today) > settings.freshness.report_stale_days) {
-        attention.push({ kind: 'stale_research', severity: 'medium', project_id: p.project_id, title: `${p.name}: newest research is ${daysBetween(String(lastReport.assessment.analysis_at).slice(0, 10), today)} days old and you hold a position`, detail: 'Consider a new dated report. Prices never change stored grades.' });
+      if (position && currentReport && currentReport.assessment.analysis_at && daysBetween(String(currentReport.assessment.analysis_at).slice(0, 10), today) > researchStaleDays(settings)) {
+        attention.push({ kind: 'stale_research', severity: 'medium', project_id: p.project_id, title: `${p.name}: newest research is ${daysBetween(String(currentReport.assessment.analysis_at).slice(0, 10), today)} days old and you hold a position`, detail: 'Consider a new dated report. Prices never change stored grades.' });
       }
     }
 
@@ -526,7 +530,11 @@ function buildIndexOnce(ws, { light = false, now = Date.now() } = {}, history = 
     if (!light) {
       try {
         const d = require('./digest').changesSince(ws, p.project_id, { latestMarket, history });
-        changes = { since: d.since, cursor_source: d.cursor_source, item_count: d.item_count, new_reports: d.new_reports.length, price_change_pct: d.price ? d.price.change_pct : null };
+        // A contract change GoPlus saw since the review is a material outside
+        // event: it counts toward the review beside new eligible reports.
+        const sinceMs = Date.parse(d.since);
+        const contract = screening && Array.isArray(screening.alerts) ? screening.alerts.filter((a) => Date.parse(a.at) > sinceMs).length : 0;
+        changes = { since: d.since, cursor_source: d.cursor_source, item_count: d.item_count, review_count: d.review_count + contract, new_reports: d.new_reports.length, price_change_pct: d.price ? d.price.change_pct : null };
       } catch (_) { /* optional */ }
     }
     const sector = p.sector && p.sector.primary ? { ...p.sector, label: sectorLabel(p.sector.primary) } : { primary: null, label: 'Unclassified', tags: [], source: null };

@@ -110,7 +110,8 @@ PM trade tickets (Claude researches, Claude prosecutes; the desk sizes; you deci
                                          open (or resume) the Prosecutor's ticket on Claude's current report
   tickets prompt <id> <ticket_id>        print the frozen Prosecutor prompt (cr-ticket-prompt@1)
   tickets import <id> <ticket_id> --text-file FILE [--revision-note TEXT]
-  brief daily [--json] [--since ISO]                     the daily brief (cr-daily-brief@1): what needs you today, each line with its #/ link, the SHA-256 of its text (writes nothing)
+  brief daily [--json] [--since ISO]                     the daily brief (cr-daily-brief@2): what needs you today, each line with its #/ link, the SHA-256 of its text (writes nothing)
+  brief attention                                        the one attention contract (cr-attention@1): PM decisions, exceptions with their recovery action, progress since yesterday (writes nothing)
   tickets view <id> [--receipt tr_…] [--include-text]  the ticket in force (or that receipt): status, desk sizing, invalidation with every check, history (writes nothing)
   tickets decide <id> <receipt_id> --action approve|halve|veto|pass|watch|trim|reopen|undo [--note TEXT]
   tickets cancel <id> <ticket_id> [--reason TEXT]
@@ -876,7 +877,9 @@ async function run(argv) {
       throw Object.assign(new Error('forensics view|start|quote-candidates|prompt|import|challenge|cancel|monitor|run|correct|case|case-verify (see help)'), { code: 'USAGE' });
     }
     case 'brief': {
-      if (sub !== 'daily') throw Object.assign(new Error('brief daily [--json] [--since ISO] (see help)'), { code: 'USAGE' });
+      // The one attention contract (cr-attention@1): decisions, exceptions, progress.
+      if (sub === 'attention') return require('./core/brief-daily').attention(ws);
+      if (sub !== 'daily') throw Object.assign(new Error('brief daily|attention [--json] [--since ISO] (see help)'), { code: 'USAGE' });
       const out = require('./core/brief-daily').brief(ws, { since: one(flags.since) || null });
       // main strips --json before run(), so it is read from argv here.
       return flags.json || process.argv.includes('--json') ? out : { _text: `${out.text}\n\nSHA-256 of this text: ${out.text_sha256}\n` };

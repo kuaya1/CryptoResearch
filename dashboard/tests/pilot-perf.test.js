@@ -200,7 +200,7 @@ test('pilot perf: the Daily Brief scans only the pilot for its exit section, and
     try { old = B.brief(s.ws, { now }); } finally { T.pilotCandidates = real; }
     assert.deepEqual(sameBrief(now1), sameBrief(old), `the brief reads the same with ${pilot.length} in the pilot`);
     assert.equal(now1.text_sha256, old.text_sha256);
-    assert.equal(now1.sections.map((x) => x.id).join(), 'pm_cards,invalidated,near_invalidation,stale_basis,ticket_repairs,pilot_exits,held,horizons,research_waiting,models_differ,spread,freshness');
+    assert.equal(now1.sections.map((x) => x.id).join(), 'pm_cards,exceptions,invalidated,near_invalidation,stale_basis,ticket_repairs,pilot_exits,held,horizons,research_waiting,models_differ,spread,freshness,progress');
   }
   // The exit section's own words, both ways.
   for (const id of [s.pid, a]) T.setPilot(s.ws, id, false, { by: 'test' });

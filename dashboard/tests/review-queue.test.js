@@ -24,7 +24,7 @@ const mods = load();
 test.after(() => { if (tmp) fs.rmSync(tmp, { recursive: true, force: true }); });
 
 const row = (id, extra = {}) => ({ project_id: id, name: `${id} (FICTIONAL)`, symbol: id.toUpperCase().slice(0, 4), status: 'active', on_watchlist: true, ...extra });
-const changed = (n) => ({ changes: { item_count: n, cursor_source: 'your last review' } });
+const changed = (n) => ({ changes: { item_count: n, review_count: n, cursor_source: 'your last review' } });
 function fixture() {
   return {
     today: '2026-10-17',

@@ -8,6 +8,7 @@
 // so the groups add up to the Desk's "Needs review" count plus the imports.
 import { PROVIDER_LABELS, fmtDate } from './ui.js';
 import { reviewReasons, lowGradeHidden } from './watchlist-model.js';
+import { reviewChanges } from './attention-model.js';
 
 export const GROUPS = [
   ['changed', 'Changed since review'],
@@ -39,7 +40,7 @@ export function reviewQueue(index, agenda = null, { includeLow = false } = {}) {
     if (!includeLow && low && projectReasons(p, index, row, { includeLow: true }).length) hiddenLow += 1;
     if (!reasons.length) continue;
     const first = order.find((g) => reasons.some((r) => r.group === g));
-    byGroup[first].push({ pid: p.project_id, name: p.name, symbol: p.symbol || null, reasons, agenda: row, changes: p.changes ? p.changes.item_count || 0 : 0, due: row && row.primary && row.primary.due ? row.primary.due_at || null : null });
+    byGroup[first].push({ pid: p.project_id, name: p.name, symbol: p.symbol || null, reasons, agenda: row, changes: reviewChanges(p), due: row && row.primary && row.primary.due ? row.primary.due_at || null : null });
   }
   byGroup.changed.sort((a, b) => b.changes - a.changes || a.name.localeCompare(b.name));
   byGroup.due.sort((a, b) => String(a.due || '9999').localeCompare(String(b.due || '9999')) || a.name.localeCompare(b.name));

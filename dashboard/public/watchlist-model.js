@@ -8,6 +8,7 @@ import {
   PROVIDERS, PROVIDER_LABELS, PROVIDER_SHORT, RESEARCH_STATE, marketFigure, fmtPrice, fmtChangePct, fmtMarketFigure, fmtCompactUsd,
   fmtDate, fmtDateTime, fmtAgo, onHoldOf, jobKey, anchorText, scoreTier,
 } from './ui.js';
+import { pmDecision, reviewChanges } from './attention-model.js';
 
 // The Desk's column catalogue (Level 0, DESIGN_AND_IA_BLUEPRINT.md §3.1; Eric,
 // 2026-10-17): the project (frozen, always shown), then seven by default:
@@ -592,7 +593,10 @@ export function contractChipModel(s) {
 // What R does with the selected project: mark it reviewed (only with changes
 // to review), offer Undo for six seconds, and move to the next project in the
 // list's order that has changes to review ("All caught up" when none).
-export const needsReview = (p) => Boolean(p && p.changes && p.changes.item_count > 0 && p.status !== 'archived');
+// Changes to review are the attention contract's (attention-model.js
+// reviewChanges): new eligible reports and outside events, never Eric's own
+// notes or runs.
+export const needsReview = (p) => Boolean(p && p.status !== 'archived' && reviewChanges(p) > 0);
 export function nextToReview(order, projects, pid) {
   const byId = new Map(projects.map((x) => [x.project_id, x]));
   const i = order.indexOf(pid);
@@ -894,12 +898,15 @@ export function lowGradeHidden(p, index = null) {
 
 export function reviewReasons(p, index = null, agendaRow = null, { includeLow = false } = {}) {
   if (!p || p.broken || p.status === 'archived') return [];
-  if (!includeLow && lowGradeHidden(p, index)) return [];
+  // A PM card is the attention contract's (attention-model.js pmDecision),
+  // the Desk's and the Daily Brief's own rule; a low grade never hides one.
+  const card = pmDecision(p) === 'card';
+  if (!includeLow && !card && lowGradeHidden(p, index)) return [];
   const out = [];
-  // A PM ticket the Prosecutor saved waits for Eric's decision.
+  // A PM ticket waits for Eric's decision.
   const t = p.ticket;
-  if (t && t.status === 'pending_pm_review') out.push({ kind: 'waiting', words: `PM ticket waiting for your decision (${String(t.proposal_type || '').replace(/_/g, ' ').toLowerCase()})`, ticket: true });
-  const n = p.changes && p.changes.item_count;
+  if (card) out.push({ kind: 'waiting', words: `PM ticket waiting for your decision (${String(t.proposal_type || '').replace(/_/g, ' ').toLowerCase()}${t.status === 'reopened' ? ', re-opened' : ''})`, ticket: true });
+  const n = reviewChanges(p);
   if (n > 0) out.push({ kind: 'changed', words: `${n} change${n === 1 ? '' : 's'} since ${p.changes.cursor_source === 'project created' ? 'added' : 'your last review'}` });
   const nr = p.next_review;
   if (nr && nr.date && (nr.overdue || nr.date <= todayOf(index))) out.push({ kind: 'due', words: nr.overdue ? `Review overdue since ${fmtDate(nr.date)}` : 'Review due today' });
