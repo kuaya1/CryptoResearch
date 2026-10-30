@@ -38,6 +38,8 @@ const STATIC_TYPES = {
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
   '.png': 'image/png',
+  // Geist and Geist Mono, served from this origin (font-src 'self').
+  '.woff2': 'font/woff2',
 };
 // Beyond the desk's own origin, only the inspector's market views: the frames
 // of its technical chart (TradingView's widget, DexScreener's pool chart;

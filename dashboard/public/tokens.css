@@ -26,9 +26,91 @@
    Text tones are at least 4.5:1 on every surface they sit on, in both
    themes; the blueprint's tertiary gray (#8f8f8f, about 3.2:1) is kept for
    disabled text only. Signal tones (dots, bars, chart lines) are at least
-   3:1 on white and on the wells. */
+   3:1 on white and on the wells.
+
+   V17 skin (Eric, 2026-10-29, "CryptoResearch Architecture v17" tokens,
+   adapted to the desk's rules): Geist and Geist Mono, served from this
+   origin (fonts/, SIL Open Font License; font-src 'self'), never a font
+   host; the cool canvas #eceef2 with a white and a green glow (v17's violet
+   glow left out: the desk draws no purple); ink and paper text ramps;
+   obsidian for the solid primary and the dark cards (the Daily Brief hero
+   and Needs you), ceramic for decision cards; 36/26/18px corners and pill
+   controls; soft drop shadows on cards; live (green), read (blue), tuning
+   (amber) and critical (red) as the intents, in v17's OKLCH. Kept from the
+   desk: the 12.5px floor (v17's 10-11.5px mono labels are raised to it),
+   sentence case (v17's labels are uppercase), every meaning in words, and
+   no agent violet. */
+
+@font-face { font-family: "Geist"; src: url("./fonts/Geist-Variable.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
+@font-face { font-family: "Geist Mono"; src: url("./fonts/GeistMono-Variable.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
 
 :root {
+  /* ---- primitives: v17 (no agent violet) ---- */
+  --cr-canvas: #eceef2;
+  --cr-canvas-glow-white: #ffffff;
+  --cr-canvas-glow-green: oklch(0.96 0.03 160);
+  --cr-surface: #ffffff;
+  --cr-surface-warm: #f7f6f2;
+  --cr-surface-ceramic: #f4f4f2;
+  --cr-surface-sunken: #f1f1f3;
+  --cr-surface-glass: rgba(255, 255, 255, 0.72);
+  --cr-fill-subtle: rgba(16, 17, 20, 0.05);
+  --cr-fill-subtle-hover: rgba(16, 17, 20, 0.09);
+  --cr-border-highlight: rgba(255, 255, 255, 0.9);
+  --cr-divider: rgba(16, 17, 20, 0.08);
+  --cr-divider-soft: rgba(16, 17, 20, 0.07);
+  --cr-border-ink: rgba(11, 11, 12, 0.14);
+  --cr-ink: #101114;
+  --cr-ink-body: #2a2c31;
+  --cr-ink-secondary: #4a4d54;
+  --cr-ink-tertiary: #5b5e66;     /* readable muted text: 5.6:1 on the canvas (v17's #6b6e75 is 4.4:1 there) */
+  --cr-ink-muted: #6b6e75;
+  --cr-ink-faint: #8a8d94;
+  --cr-obsidian: #0b0b0c;
+  --cr-obsidian-raised: #141416;
+  --cr-obsidian-elevated: #1c1c1f;
+  --cr-dark-fill: rgba(255, 255, 255, 0.06);
+  --cr-dark-border: rgba(255, 255, 255, 0.16);
+  --cr-dark-divider: rgba(255, 255, 255, 0.08);
+  --cr-paper: #f4f4f2;
+  --cr-paper-secondary: #d8d9dc;
+  --cr-paper-tertiary: #c9cbd0;
+  --cr-paper-body: #9a9da4;
+  --cr-paper-muted-text: #afb2b8;  /* readable muted text at night: v17 #9a9da4 dims below 4.5:1 */
+  --cr-live: oklch(0.6 0.15 160);
+  --cr-live-ink: oklch(0.46 0.13 160);
+  --cr-live-bg: oklch(0.6 0.15 160 / 0.1);
+  --cr-live-on-dark: oklch(0.76 0.14 160);
+  --cr-read: oklch(0.72 0.13 230);
+  --cr-read-deep: oklch(0.62 0.13 230);
+  --cr-read-ink: oklch(0.5 0.12 230);
+  --cr-read-bg: oklch(0.62 0.13 230 / 0.1);
+  --cr-read-on-dark: oklch(0.74 0.12 230);
+  --cr-tuning: oklch(0.78 0.15 70);
+  --cr-tuning-badge-fg: oklch(0.52 0.14 60);
+  --cr-tuning-badge-bg: oklch(0.72 0.16 65 / 0.13);
+  --cr-tuning-on-dark: oklch(0.8 0.14 70);
+  --cr-critical: oklch(0.6 0.2 20);
+  --cr-critical-ink: oklch(0.5 0.19 20);
+  --cr-critical-bg: oklch(0.6 0.2 20 / 0.1);
+  --cr-critical-on-dark: oklch(0.72 0.17 20);
+  --cr-link: oklch(0.52 0.14 160);
+  --cr-link-hover: oklch(0.44 0.13 160);
+  --cr-shadow-card: 0 1px 2px rgba(16, 17, 20, 0.05), 0 30px 60px -34px rgba(16, 17, 20, 0.22);
+  --cr-shadow-dark: 0 30px 70px -30px rgba(16, 17, 20, 0.55);
+  --cr-shadow-inner-card: 0 20px 40px -20px rgba(0, 0, 0, 0.6);
+  --cr-shadow-float: 0 1px 2px rgba(16, 17, 20, 0.06), 0 20px 50px -14px rgba(16, 17, 20, 0.25);
+  --cr-radius-card: 36px;
+  --cr-radius-inner: 26px;
+  --cr-radius-tile: 18px;
+  --cr-radius-key: 14px;
+  --cr-radius-logo: 11px;
+  --decision-surface: var(--cr-surface-ceramic);   /* v17 decision cards; raised obsidian at night */
+  --canvas-bg:
+    radial-gradient(1100px 650px at 15% 0%, var(--cr-canvas-glow-white) 0%, rgba(255, 255, 255, 0) 60%),
+    radial-gradient(800px 500px at 60% 100%, var(--cr-canvas-glow-green) 0%, rgba(255, 255, 255, 0) 70%),
+    var(--cr-canvas);
+
   /* ---- primitives: the gray ramp (light) ---- */
   --gray-0: #ffffff; --gray-25: #fcfcfc; --gray-50: #f9f9f9; --gray-75: #f3f3f3; --gray-100: #ededed;
   --gray-150: #dfdfdf; --gray-200: #cdcdcd; --gray-250: #b9b9b9; --gray-300: #afafaf; --gray-350: #9f9f9f;
@@ -53,20 +135,20 @@
   --mesh-blend: normal;
 
   /* ---- semantic: text ---- */
-  --color-text-emphasis: var(--gray-1000);
-  --color-text: var(--gray-750);
-  --color-text-heading: var(--gray-900);
-  --color-text-label: var(--gray-600);       /* metric labels: 10:1 on white */
-  --color-text-secondary: var(--gray-500);   /* descriptions, timestamps: 6.4:1 on white, 5.8:1 on the canvas */
-  --color-text-tertiary: var(--gray-500);    /* readable muted text keeps 4.5:1 (the blueprint's #8f8f8f does not) */
-  --color-text-disabled: var(--gray-400);
+  --color-text-emphasis: var(--cr-obsidian);
+  --color-text: var(--cr-ink);
+  --color-text-heading: var(--cr-ink);
+  --color-text-label: var(--cr-ink-secondary);  /* metric labels, secondary prose: 8.4:1 on white */
+  --color-text-secondary: var(--cr-ink-tertiary);
+  --color-text-tertiary: var(--cr-ink-tertiary); /* readable muted text keeps 4.5:1 on the canvas too */
+  --color-text-disabled: var(--cr-ink-faint);
   --color-text-inverse: var(--gray-0);
-  --color-link: var(--blue-500);             /* 5.4:1 on white */
-  --color-link-hover: var(--blue-800);
+  --color-link: var(--cr-link);              /* v17's green link: 5.1:1 on white */
+  --color-link-hover: var(--cr-link-hover);
   /* ---- semantic: surfaces ---- */
-  --color-surface-tertiary: var(--gray-75);  /* the canvas behind the sidebar */
-  --color-surface: var(--gray-0);            /* the main panel, cards */
-  --color-surface-secondary: var(--gray-50); /* wells */
+  --color-surface-tertiary: var(--cr-canvas); /* the canvas behind the sidebar */
+  --color-surface: var(--cr-surface);        /* the main panel, cards */
+  --color-surface-secondary: var(--cr-surface-sunken); /* wells */
   --color-surface-elevated: var(--gray-0);   /* the drawer, menus, dialogs, popovers */
   --color-surface-hover: var(--gray-50);
   --color-surface-selected: var(--gray-100);
@@ -91,17 +173,17 @@
   --alpha-50: color-mix(in oklab, var(--alpha-base) 50%, transparent);
   --alpha-60: color-mix(in oklab, var(--alpha-base) 60%, transparent);
   --alpha-70: color-mix(in oklab, var(--alpha-base) 70%, transparent);
-  --color-border-subtle: var(--alpha-05);
-  --color-border: var(--alpha-10);
+  --color-border-subtle: var(--cr-divider-soft);
+  --color-border: var(--cr-divider);
   --color-border-strong: var(--alpha-15);
-  --color-border-card: var(--alpha-12);      /* a card's ::before stroke */
-  --color-border-outline: var(--alpha-16);   /* outline buttons, fields */
+  --color-border-card: var(--cr-divider);    /* a card's ::before stroke; v17's shadow carries the lift */
+  --color-border-outline: var(--cr-border-ink); /* outline buttons, fields */
   --color-border-outline-hover: var(--alpha-20);
   --color-control-border: var(--gray-400);   /* a field's edge: 3.3:1 on white */
   --card-hover: var(--alpha-02);
   --card-press: var(--alpha-04);
   /* ---- semantic: the neutral primary ---- */
-  --color-solid: var(--gray-900);
+  --color-solid: var(--cr-obsidian);
   --color-solid-hover: var(--gray-700);
   --color-solid-active: var(--gray-600);
   --color-soft: var(--alpha-08);
@@ -111,16 +193,20 @@
   --color-ghost-active: var(--alpha-12);
   --color-ring: var(--blue-500);
   --color-ring-danger: var(--red-200);
-  --seg-track: var(--gray-100);
+  --seg-track: var(--cr-fill-subtle-hover);
   --seg-thumb: var(--gray-0);
-  --nav-pill: var(--alpha-08);
+  --nav-pill: var(--cr-fill-subtle-hover);
   /* ---- semantic: intents (text for words, soft-text for words on a tint,
      surface a tint, soft a stronger tint, solid a fill with white words) ---- */
-  --info-text: var(--blue-600); --info-soft-text: var(--blue-600); --info-surface: var(--blue-25); --info-soft: var(--blue-50); --info-solid: var(--blue-500);
-  --success-text: var(--green-700); --success-soft-text: var(--green-700); --success-surface: var(--green-25); --success-soft: var(--green-50); --success-solid: var(--green-600);
-  --warning-text: var(--orange-700); --warning-soft-text: var(--orange-700); --warning-surface: var(--orange-25); --warning-soft: var(--orange-50); --warning-solid: var(--orange-600);
+  /* v17's states: read is info, live is success, tuning is warning, critical
+     is danger; caution keeps the yellow ramp for the Test/Demo tag. A solid
+     carries white words, so it takes the deeper ink step (4.5:1); v17's tile
+     colours stay the signals (dots, bars, lines) below. */
+  --info-text: var(--cr-read-ink); --info-soft-text: var(--cr-read-ink); --info-surface: var(--cr-read-bg); --info-soft: oklch(0.62 0.13 230 / 0.16); --info-solid: var(--cr-read-ink);
+  --success-text: var(--cr-live-ink); --success-soft-text: var(--cr-live-ink); --success-surface: var(--cr-live-bg); --success-soft: oklch(0.6 0.15 160 / 0.16); --success-solid: var(--cr-live-ink);
+  --warning-text: var(--cr-tuning-badge-fg); --warning-soft-text: var(--cr-tuning-badge-fg); --warning-surface: var(--cr-tuning-badge-bg); --warning-soft: oklch(0.72 0.16 65 / 0.2); --warning-solid: oklch(0.5 0.14 60);
   --caution-text: var(--yellow-800); --caution-soft-text: var(--yellow-800); --caution-surface: var(--yellow-25); --caution-soft: var(--yellow-50); --caution-solid: var(--yellow-700);
-  --danger-text: var(--red-700); --danger-soft-text: var(--red-700); --danger-surface: var(--red-25); --danger-soft: var(--red-50); --danger-solid: var(--red-600); --danger-solid-hover: var(--red-700); --on-danger: #ffffff;
+  --danger-text: var(--cr-critical-ink); --danger-soft-text: var(--cr-critical-ink); --danger-surface: var(--cr-critical-bg); --danger-soft: oklch(0.6 0.2 20 / 0.16); --danger-solid: var(--cr-critical-ink); --danger-solid-hover: oklch(0.44 0.17 20); --on-danger: #ffffff;
   --on-solid-intent: #ffffff;
   /* ---- backdrops ---- */
   --backdrop: rgba(0, 0, 0, 0.3);
@@ -176,9 +262,9 @@
   --work-text: var(--info-text);
   --work-weak: var(--info-surface);
   /* Earned color: signals for dots, bars and lines; the deeper step for words */
-  --pos-strong: var(--green-500);
-  --neg-strong: var(--red-500);
-  --warn-strong: var(--orange-500);
+  --pos-strong: var(--cr-live);
+  --neg-strong: var(--cr-critical);
+  --warn-strong: oklch(0.66 0.15 62);
   --pos: var(--success-text);
   --pos-text: var(--success-text);
   --neg: var(--danger-text);
@@ -186,12 +272,12 @@
   --pos-weak: var(--success-surface);
   --neg-weak: var(--danger-surface);
   --warn-weak: var(--warning-surface);
-  --risk-bar: var(--red-500);
-  --dot-neg: var(--red-500);
-  --dot-pos: var(--green-500);
-  --dot-warn: var(--orange-500);
+  --risk-bar: var(--cr-critical);
+  --dot-neg: var(--cr-critical);
+  --dot-pos: var(--cr-live);
+  --dot-warn: var(--warn-strong);
   --fav-bar: var(--color-text);
-  --bar-ink: var(--gray-900);     /* score and progress bars: ink, never a rainbow */
+  --bar-ink: var(--cr-obsidian);  /* score and progress bars: ink, never a rainbow */
   --track: var(--gray-100);
   --row-hover: var(--color-surface-hover);
   --row-focus: var(--color-surface-selected);
@@ -222,14 +308,22 @@
   --field-bg: var(--color-surface); --field-hover: var(--gray-500); --field-focus: var(--gray-900); --field-ring: color-mix(in oklab, var(--color-ring) 22%, transparent);
   --on-chip: var(--on-accent);
   --new-dot: var(--accent);
-  /* Type: the system sans for reading and every number (tabular figures);
-     titles in the system's display cut; monospace only for contract
-     addresses, hashes and exchange symbols. No web font and no Inter. */
-  --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* Type (v17): Geist for reading, titles and every number (tabular
+     figures); Geist Mono for eyebrows, contract addresses, hashes and
+     exchange symbols. Both from this origin; the system fonts are the
+     fallback (the sign-in page, before the fonts arrive). No Inter. */
+  --sans: "Geist", "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
   --font: var(--sans);
-  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+  --font-display: "Geist", -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: "Geist Mono", ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
   --figures: tabular-nums lining-nums;
+  /* v17 weights: light titles and figures, regular small titles */
+  --wt-display: 300;              /* page titles, the hero, page metrics */
+  --wt-title: 400;                /* section and card titles, decision titles */
+  --wt-metric: 300;               /* KPI figures, grades, counts */
+  /* v17's mono eyebrow, raised to the floor and kept in sentence case */
+  --eyebrow-size: var(--fs-xs);
+  --eyebrow-ls: 0.04em;
   /* The one type scale (nothing under 12.5px anywhere, Eric, 2026-10-18).
      The blueprint's scale: 12.5 captions and badges (its 12, raised to the
      floor), 14/20 body, controls and labels, 16 card titles, 18/29 metric
@@ -261,8 +355,8 @@
   --fs-metric: 18px;              /* the KPI frame's figures, 18/29/600 */
   --lh-metric: 29px;
   --lh-body: 20px;
-  --track-display: -0.02em;       /* 32px and up */
-  --track-title: -0.01em;         /* 14–24px */
+  --track-display: -0.03em;       /* 32px and up (v17 display) */
+  --track-title: -0.025em;        /* 14–24px (v17 small titles) */
   --tracking-tight: -0.02em;
   --tracking-normal: -0.01em;
   --tracking-wide: 0em;
@@ -271,15 +365,16 @@
   --radius-2xs: 2px; --radius-xs: 4px; --radius-sm: 6px; --radius-md: 8px; --radius-lg: 10px;
   --radius-xl: 12px; --radius-2xl: 16px; --radius-3xl: 20px; --radius-4xl: 24px; --radius-full: 9999px;
   --r-sm: var(--radius-2xs); --r-md: var(--radius-sm); --r-lg: var(--radius-md); --r-xl: var(--radius-lg);
-  --r-card: var(--radius-xl);     /* panels and the frames on the panel */
-  --r-tile: var(--radius-2xl);    /* content cards (the PM Decision Cards) */
-  --r-panel: var(--radius-xl);
-  --r-well: var(--radius-md);
-  --r-field: var(--radius-md);
-  --r-control: var(--radius-md);
-  --r-button: var(--radius-md);
-  --r-nav: var(--radius-lg);
-  --r-badge: var(--radius-xs);
+  --r-card: var(--cr-radius-inner);   /* the frames and cards on the panel (v17 inner, 26px) */
+  --r-tile: var(--cr-radius-inner);   /* content cards: the hero, the PM Decision Cards */
+  --r-panel: var(--cr-radius-card);   /* the main panel (v17 card, 36px) */
+  --r-well: var(--cr-radius-tile);    /* wells (v17 tile, 18px) */
+  --r-field: var(--cr-radius-key);
+  --r-control: var(--radius-full);    /* v17: every control is a pill */
+  --r-button: var(--radius-full);
+  --r-nav: var(--radius-full);
+  --r-badge: var(--radius-full);
+  --r-logo: var(--cr-radius-logo);
   --r-pill: var(--radius-full);
   --shadow-a100: 0.08; --shadow-a200: 0.08; --shadow-a300: 0.1; --shadow-a400: 0.12;
   --shadow-100: 0 1px 2px -1px rgb(0 0 0 / var(--shadow-a100));
@@ -287,11 +382,12 @@
   --shadow-300: 0 4px 8px -2px rgb(0 0 0 / var(--shadow-a300));
   --shadow-400: 0 8px 16px -4px rgb(0 0 0 / var(--shadow-a400));
   --shadow-hairline: 0 0 0 0.5px rgba(0, 0, 0, 0.1);
-  --shadow-card: none;            /* cards have no resting shadow: strokes carry elevation */
-  --shadow-panel: none;
+  --shadow-card: var(--cr-shadow-card);   /* v17: a soft drop under each card */
+  --shadow-panel: var(--cr-shadow-card);
+  --shadow-dark: var(--cr-shadow-dark);   /* the dark cards */
   --shadow-lift: none;
   --shadow-seg: 0 1px 4px -1px rgba(0, 0, 0, 0.2);   /* the segmented thumb */
-  --shadow-pop: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1), var(--shadow-hairline);
+  --shadow-pop: var(--cr-shadow-float), var(--shadow-hairline);
   --shadow-drawer: -8px 0 16px 0 rgba(0, 0, 0, 0.07), -2px 0 6px 0 rgba(0, 0, 0, 0.05), 0 0 0 1px var(--color-border);
   --scrim: var(--backdrop-fade);
   /* Sizes */
@@ -379,6 +475,18 @@
   --shadow-seg: 0 1px 4px -1px rgba(0, 0, 0, 0.5);
   --shadow-pop: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -4px rgba(0, 0, 0, 0.2), var(--shadow-hairline);
   --shadow-drawer: -8px 0 16px 0 rgba(0, 0, 0, 0.35), -2px 0 6px 0 rgba(0, 0, 0, 0.2), inset 0 0 0 1px var(--color-border);
+  /* v17 at night: obsidian surfaces, paper text, the states' on-dark tones */
+  --canvas-bg: var(--cr-obsidian); --decision-surface: var(--cr-obsidian-elevated);
+  --color-surface-tertiary: var(--cr-obsidian); --color-surface: var(--cr-obsidian-raised); --color-surface-secondary: #111113; --color-surface-elevated: var(--cr-obsidian-elevated);
+  --color-surface-hover: #1a1a1d; --color-surface-selected: #232327; --color-bg-soft: var(--cr-obsidian-elevated);
+  --color-text: var(--cr-paper); --color-text-heading: var(--cr-paper); --color-text-label: var(--cr-paper-secondary);
+  --color-text-secondary: var(--cr-paper-muted-text); --color-text-tertiary: var(--cr-paper-muted-text);
+  --color-link: var(--cr-live-on-dark); --color-link-hover: oklch(0.84 0.12 160); --color-solid: var(--cr-paper);
+  --info-text: var(--cr-read-on-dark); --info-soft-text: var(--cr-read-on-dark);
+  --success-text: var(--cr-live-on-dark); --success-soft-text: var(--cr-live-on-dark);
+  --warning-text: var(--cr-tuning-on-dark); --warning-soft-text: var(--cr-tuning-on-dark);
+  --danger-text: var(--cr-critical-on-dark); --danger-soft-text: var(--cr-critical-on-dark);
+  --shadow-card: var(--cr-shadow-dark); --shadow-panel: var(--cr-shadow-dark);
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -427,10 +535,41 @@
     --shadow-seg: 0 1px 4px -1px rgba(0, 0, 0, 0.5);
     --shadow-pop: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -4px rgba(0, 0, 0, 0.2), var(--shadow-hairline);
     --shadow-drawer: -8px 0 16px 0 rgba(0, 0, 0, 0.35), -2px 0 6px 0 rgba(0, 0, 0, 0.2), inset 0 0 0 1px var(--color-border);
+    --canvas-bg: var(--cr-obsidian); --decision-surface: var(--cr-obsidian-elevated);
+    --color-surface-tertiary: var(--cr-obsidian); --color-surface: var(--cr-obsidian-raised); --color-surface-secondary: #111113; --color-surface-elevated: var(--cr-obsidian-elevated);
+    --color-surface-hover: #1a1a1d; --color-surface-selected: #232327; --color-bg-soft: var(--cr-obsidian-elevated);
+    --color-text: var(--cr-paper); --color-text-heading: var(--cr-paper); --color-text-label: var(--cr-paper-secondary);
+    --color-text-secondary: var(--cr-paper-muted-text); --color-text-tertiary: var(--cr-paper-muted-text);
+    --color-link: var(--cr-live-on-dark); --color-link-hover: oklch(0.84 0.12 160); --color-solid: var(--cr-paper);
+    --info-text: var(--cr-read-on-dark); --info-soft-text: var(--cr-read-on-dark);
+    --success-text: var(--cr-live-on-dark); --success-soft-text: var(--cr-live-on-dark);
+    --warning-text: var(--cr-tuning-on-dark); --warning-soft-text: var(--cr-tuning-on-dark);
+    --danger-text: var(--cr-critical-on-dark); --danger-soft-text: var(--cr-critical-on-dark);
+    --shadow-card: var(--cr-shadow-dark); --shadow-panel: var(--cr-shadow-dark);
     color-scheme: dark;
   }
 }
 @media (prefers-reduced-motion: reduce) { :root { --dur: 0ms; --dur-move: 0ms; } }
+
+/* v17's dark cards, in both themes: the Daily Brief hero (where Eric sees
+   the engine) and the inspector's Needs you. Obsidian with paper text; the
+   words their parts draw are re-pointed here, so the parts keep their own
+   rules. The hero's two ways in are v17 decision cards: ceramic, light. */
+.hero, .iv-lines {
+  --text: var(--cr-paper); --text-2: var(--cr-paper-secondary); --text-3: var(--cr-paper-body);
+  --border: var(--cr-dark-divider); --separator: var(--cr-dark-divider);
+  --color-border: var(--cr-dark-border); --color-border-subtle: var(--cr-dark-divider);
+  --color-surface: var(--cr-dark-fill); --color-surface-hover: rgba(255, 255, 255, 0.1); --color-surface-selected: rgba(255, 255, 255, 0.14);
+  --button-border: var(--cr-dark-border); --accent-text: var(--cr-live-on-dark);
+  --dot-neg: var(--cr-critical-on-dark); --dot-warn: var(--cr-tuning-on-dark);
+  --mesh-opacity: 0.35; --mesh-blend: screen;
+  color: var(--text);
+}
+.hero .mini {
+  --text: var(--cr-obsidian); --text-2: var(--cr-ink-secondary); --text-3: var(--cr-ink-tertiary);
+  --color-surface: var(--cr-surface-ceramic); --color-surface-secondary: var(--cr-surface); --color-surface-hover: #ebebe8;
+  --color-border-subtle: transparent;
+}
 
 /* Icons as local SVG masks (no requests), drawn in currentColor; always next
    to words that carry the same meaning. */

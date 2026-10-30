@@ -4,10 +4,11 @@
 
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; padding: 20px 24px 14px; }
 .ph-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.ph-eyebrow { font-size: var(--fs-lg); color: var(--text-3); font-weight: 400; }
-/* The page title: 40/48, set tight (§3.7). */
-.page-head h1 { display: flex; align-items: baseline; gap: 10px; font-family: var(--font-display); font-size: var(--fs-page); font-weight: 600; letter-spacing: var(--track-display); line-height: 1.2; }
-.ph-count { font-family: var(--sans); font-size: var(--fs-lg); font-weight: 500; color: var(--text-3); letter-spacing: 0; font-variant-numeric: tabular-nums; }
+/* v17's page eyebrow: mono, in sentence case at the floor. */
+.ph-eyebrow { font-family: var(--mono); font-size: var(--eyebrow-size); line-height: 24px; letter-spacing: var(--eyebrow-ls); color: var(--text-3); font-weight: 400; }
+/* The page title: set tight and light (v17 display). */
+.page-head h1 { display: flex; align-items: baseline; gap: 10px; font-family: var(--font-display); font-size: var(--fs-page); font-weight: var(--wt-display); letter-spacing: var(--track-display); line-height: 1.2; }
+.ph-count { font-family: var(--sans); font-size: var(--fs-lg); font-weight: var(--wt-metric); color: var(--text-3); letter-spacing: 0; font-variant-numeric: tabular-nums; }
 .ph-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 .wl { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; }
@@ -16,7 +17,8 @@
 .wl-main { min-width: 0; padding-bottom: 32px; container-type: inline-size; }
 
 /* ---- the hero: the Daily Brief's readiness on a quiet mesh (§2.9) ---- */
-.hero { position: relative; isolation: isolate; overflow: hidden; margin: 4px 24px 0; border-radius: var(--r-tile); background: var(--color-surface-secondary); box-shadow: inset 0 0 0 1px var(--color-border-subtle); }
+/* A v17 dark card: obsidian, its words re-pointed to paper in tokens.css. */
+.hero { position: relative; isolation: isolate; overflow: hidden; margin: 4px 24px 0; border-radius: var(--r-tile); background: var(--cr-obsidian); box-shadow: var(--shadow-dark); }
 /* CSS only: three soft blobs, no image; screen-blended and fainter at night. */
 .hero-mesh {
   position: absolute; inset: 0; z-index: -1; pointer-events: none;
@@ -27,12 +29,12 @@
     radial-gradient(45% 75% at 100% 10%, var(--mesh-orchid) 0%, transparent 72%);
 }
 .hero-in { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 24px; align-items: center; padding: 24px; }
-.hero-h { font-family: var(--font-display); font-size: var(--fs-head); font-weight: 600; letter-spacing: var(--track-title); line-height: 28px; }
+.hero-h { font-family: var(--font-display); font-size: var(--fs-head); font-weight: var(--wt-display); letter-spacing: var(--track-title); line-height: 28px; }
 .ready { list-style: none; margin: 16px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 12px 28px; }
 .ready-item { display: flex; align-items: center; gap: 12px; min-width: 0; }
 /* A 40px circle: the count, or the area's icon when there is none. */
 .ready-dot { flex: none; display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--color-surface); color: var(--text-2); box-shadow: inset 0 0 0 1px var(--color-border-subtle); }
-.ready-n { font-size: var(--fs-md); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ready-n { font-size: var(--fs-md); font-weight: 500; font-variant-numeric: tabular-nums; }
 .ready-item.is-some .ready-dot { background: var(--caution-soft); color: var(--caution-soft-text); box-shadow: none; }
 .ready-item.is-clear .ready-dot { background: var(--success-soft); color: var(--success-soft-text); box-shadow: none; }
 .ready-item.is-unknown .ready-dot, .ready-item.is-partial .ready-dot { background: var(--color-surface); color: var(--text-3); box-shadow: inset 0 0 0 1px var(--color-border); }
@@ -41,7 +43,7 @@
 .ready-w { font-size: var(--fs-sm); line-height: 18px; color: var(--text-2); white-space: nowrap; }
 .hero-cards { display: flex; flex-direction: column; gap: 8px; }
 /* A mini-card: elevation from a stroke; hover tints the pseudo-layer only. */
-.mini { position: relative; isolation: isolate; display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 8px 12px; border: 0; border-radius: var(--r-card); background: var(--color-surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; box-shadow: 0 0 0 1px var(--color-border-subtle); }
+.mini { position: relative; isolation: isolate; display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 8px 12px; border: 0; border-radius: var(--r-well); background: var(--color-surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; box-shadow: 0 0 0 1px var(--color-border-subtle), var(--cr-shadow-inner-card); }
 .mini::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: var(--color-surface-hover); opacity: 0; transition: opacity var(--dur) var(--ease); }
 .mini:hover::before { opacity: 1; }
 .mini-ico { flex: none; display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: var(--r-lg); background: var(--color-surface-secondary); color: var(--text-2); }
@@ -53,20 +55,20 @@
 
 /* A section's head on the Desk: 16px, its count beside it. */
 .desk-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px 24px 10px; }
-.sec-h { display: flex; align-items: baseline; gap: 8px; font-size: var(--fs-lg); font-weight: 600; line-height: 24px; }
-.sec-count { font-size: var(--fs-sm); font-weight: 500; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.sec-h { display: flex; align-items: baseline; gap: 8px; font-size: var(--fs-lg); font-weight: var(--wt-title); letter-spacing: var(--track-title); line-height: 24px; }
+.sec-count { font-family: var(--mono); font-size: var(--fs-sm); font-weight: 400; color: var(--text-3); font-variant-numeric: tabular-nums; }
 
 /* ---- the range control: a track and a thumb that slides (§2.6) ---- */
-.range { position: relative; isolation: isolate; display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 2px; border-radius: var(--r-lg); background: var(--seg-track); }
-.range-thumb { position: absolute; z-index: -1; top: 2px; bottom: 2px; left: 2px; width: calc((100% - 4px) / var(--n)); border-radius: var(--r-md); background: var(--seg-thumb); box-shadow: var(--shadow-seg); transform: translateX(calc(var(--i) * 100%)); transition: transform var(--dur-move) var(--cubic-enter); }
-.range-opt { min-width: 48px; height: 28px; padding: 0 12px; border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: var(--fs-sm); font-weight: 500; font-variant-numeric: tabular-nums; cursor: pointer; border-radius: var(--r-md); transition: color var(--dur) var(--ease); }
+.range { position: relative; isolation: isolate; display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 2px; border-radius: var(--r-pill); background: var(--seg-track); }
+.range-thumb { position: absolute; z-index: -1; top: 2px; bottom: 2px; left: 2px; width: calc((100% - 4px) / var(--n)); border-radius: var(--r-pill); background: var(--seg-thumb); box-shadow: var(--shadow-seg); transform: translateX(calc(var(--i) * 100%)); transition: transform var(--dur-move) var(--cubic-enter); }
+.range-opt { min-width: 48px; height: 28px; padding: 0 12px; border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: var(--fs-sm); font-weight: 500; font-variant-numeric: tabular-nums; cursor: pointer; border-radius: var(--r-pill); transition: color var(--dur) var(--ease); }
 .range-opt:hover { color: var(--text); }
 .range-opt[aria-checked="true"] { color: var(--text); font-weight: 600; }
 .range-opt:focus-visible { outline-offset: 0; }
 
 /* ---- the KPI strip: one 12px frame split by alpha hairlines into five cells ---- */
 .kpi { padding: 0 24px; }
-.kpi-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1px; background: var(--border); border-radius: var(--r-card) var(--r-card) 0 0; overflow: hidden; box-shadow: 0 0 0 1px var(--border); }
+.kpi-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1px; background: var(--border); border-radius: var(--r-card) var(--r-card) 0 0; overflow: hidden; box-shadow: 0 0 0 1px var(--border), var(--shadow-card); }
 .kpi-cell { position: relative; isolation: isolate; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; padding: 16px 20px; border: 0; background: var(--surface); color: var(--text); font: inherit; text-align: left; }
 .kpi-cell::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--color-surface-hover); opacity: 0; transition: opacity var(--dur) var(--ease); }
 .kpi-cell:focus-visible { outline-offset: -2px; }
@@ -76,8 +78,8 @@
 .kpi-cell.is-on::before { opacity: 1; background: var(--color-surface-selected); }
 .kpi-k { font-size: var(--fs-sm); font-weight: 500; line-height: 18px; color: var(--text-2); white-space: nowrap; }
 .kpi-v { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; font-variant-numeric: tabular-nums; }
-/* The figure: 18/29/600, tabular (§2.8). */
-.kpi-num { font-size: var(--fs-metric); line-height: var(--lh-metric); font-weight: 600; letter-spacing: var(--track-title); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* The figure: 18/29, tabular, light and tight (v17 metric). */
+.kpi-num { font-size: var(--fs-metric); line-height: var(--lh-metric); font-weight: var(--wt-metric); letter-spacing: var(--track-title); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .kpi-unit { font-size: var(--fs-sm); color: var(--text-2); }
 .kpi-chg { font-size: var(--fs-sm); font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .kpi-win { margin-left: 3px; font-size: var(--fs-sm); color: var(--text-3); }
@@ -108,7 +110,7 @@
 .rb:hover { text-decoration: none; }
 .rb:hover::before { opacity: 1; }
 .rb-k { font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); white-space: nowrap; }
-.rb-fig { font-size: var(--fs-md); font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rb-fig { font-size: var(--fs-md); font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .rb-none { grid-column: 2 / -1; display: flex; align-items: baseline; gap: 12px; font-size: var(--fs-sm); color: var(--text-2); }
 .rb-set { font-weight: 500; }
 .rb-track { position: relative; height: 16px; border-radius: var(--radius-full); background: var(--color-bg-soft); }
@@ -134,11 +136,12 @@
 .dgrid-wrap .sec-h { margin-bottom: 10px; }
 .dgrid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(273px, 1fr)); grid-auto-rows: 1fr; gap: 16px; }
 .dgrid-none { font-size: var(--fs-md); color: var(--text-2); }
-.dcard { position: relative; isolation: isolate; display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 16px; border-radius: var(--r-tile); background: var(--color-surface); }
+/* A v17 decision card: ceramic, the inner radius, a soft drop. */
+.dcard { position: relative; isolation: isolate; display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 16px; border-radius: var(--r-tile); background: var(--decision-surface); box-shadow: var(--shadow-card); }
 .dcard::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--color-border); pointer-events: none; transition: box-shadow var(--dur) var(--ease); }
 .dcard:hover::before, .dcard:focus-within::before { box-shadow: inset 0 0 0 1px var(--color-border-strong), var(--shadow-100); }
 .dcard-top { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.dcard-tile { flex: none; display: inline-grid; place-items: center; width: 48px; height: 48px; border-radius: var(--r-card); background: var(--color-surface-secondary); }
+.dcard-tile { flex: none; display: inline-grid; place-items: center; width: 48px; height: 48px; border-radius: var(--r-logo); background: var(--color-surface); }
 .dcard-id { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
 .dcard-sym { font-size: var(--fs-md); font-weight: 600; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dcard-name { font-size: var(--fs-sm); line-height: 18px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -148,7 +151,7 @@
 .dcard-figs { display: flex; align-items: flex-end; gap: 24px; margin-top: auto; }
 .dcard-fig { display: flex; flex-direction: column; min-width: 0; }
 .dcard-k { font-size: var(--fs-xs); line-height: 18px; color: var(--text-2); white-space: nowrap; }
-.dcard-v { font-size: var(--fs-metric); line-height: var(--lh-metric); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dcard-v { font-size: var(--fs-metric); line-height: var(--lh-metric); font-weight: var(--wt-metric); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .dcard-st { margin-left: auto; align-self: center; }
 /* The two ways in: over the card on hover and focus, under it on touch. The
    overlay fades in place; nothing beneath moves. */
