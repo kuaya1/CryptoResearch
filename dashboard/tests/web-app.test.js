@@ -273,7 +273,7 @@ test('watchlist rules shared by the React list: sort flips, filters count, sourc
   assert.equal(wl.prefsToSave({ columns: ['rank'], sort: { key: 'rank', dir: 'asc' }, filters: {} }).v, wl.PREFS_VERSION);
 });
 
-test('no purple or indigo anywhere the desk draws: sources, the sign-in pages, the favicon and the built bundle (Eric, 2026-10-08)', () => {
+test('no purple or indigo anywhere the desk draws but the v3 agent violet: sources, the sign-in pages, the favicon and the built bundle (Eric, 2026-10-08)', () => {
   const files = [
     ...walk(path.join(DASH, 'public'), (p) => /\.(css|js|svg|html)$/.test(p)),
     ...walk(path.join(WEB, 'src'), (p) => /\.(css|jsx?)$/.test(p)),
@@ -290,6 +290,12 @@ test('no purple or indigo anywhere the desk draws: sources, the sign-in pages, t
     const h = max === R ? 60 * (((G - B) / d) % 6) : max === G ? 60 * ((B - R) / d + 2) : 60 * ((R - G) / d + 4);
     return { h: (h + 360) % 360, s, l };
   };
+  // UI v3 parity (2026-10-30, D2): the agent violet comes back for the
+  // Claude bar, "Running" (and its night tone) and the canvas glow, as three tokens only. The
+  // build writes them as these hexes; no other purple is allowed.
+  const AGENT_VIOLET = new Set(['#7361e4', '#a39ef9', '#ececff']);
+  const tokens = read('public', 'tokens.css').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.deepEqual([...tokens.matchAll(/--([\w-]+):\s*oklch\([^)]*\s285\)/g)].map((m) => m[1]).sort(), ['cr-agent', 'cr-agent-on-dark', 'cr-canvas-glow-violet'], 'violet is three tokens');
   const found = [];
   for (const f of files) {
     const s = fs.readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -303,7 +309,7 @@ test('no purple or indigo anywhere the desk draws: sources, the sign-in pages, t
       const c = hsl(r, g, b);
       // Indigo, violet and purple: a hue from 228 to 300 degrees with real
       // colour in it (slate greys, navy shadows and the Working blue stay out).
-      if (c.h >= 228 && c.h <= 300 && c.s >= 0.25 && c.l > 0.08 && c.l < 0.97) found.push(`${path.relative(DASH, f)}: ${text}`);
+      if (c.h >= 228 && c.h <= 300 && c.s >= 0.25 && c.l > 0.08 && c.l < 0.97 && !AGENT_VIOLET.has(text.toLowerCase())) found.push(`${path.relative(DASH, f)}: ${text}`);
     }
   }
   assert.deepEqual(found, [], 'purple or indigo colours');

@@ -6,6 +6,12 @@
 // Eric's sizing rules, the two agents' figures side by side (never averaged)
 // and the status, read with invalidation against prices and DefiLlama. A
 // decision records his choice; nothing here places an order.
+//
+// UI v3 (UI_MASTER_PLAYBOOK.md §4.5 block D, 2026-10-30): one obsidian card,
+// the type word with its dot and the status, Entry / Stop / Target, the exit
+// cost against its limit as a bar, the Researcher and Prosecutor side by side,
+// the four tests, the contract gate and the decisions. The data and the
+// handlers are unchanged; every decision is still one click.
 import { Children, Fragment, cloneElement, isValidElement, useContext, useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { createPortal } from 'react-dom';
@@ -13,6 +19,7 @@ import { FootSlot } from './footSlot.js';
 import { toast, submissionId, fmtDateTime } from '../../../../public/ui.js';
 import { api, refresh } from '../../lib/desk.js';
 import { ruleNoteOf, deltaBadgeOf, widestCategoryLink } from '../../../../public/pm-card-model.js';
+import { GatePanel } from './GatePanel.jsx';
 
 const enc = encodeURIComponent;
 const usd = (n) => (typeof n === 'number' ? `$${n.toLocaleString('en-US', { minimumFractionDigits: n >= 1000 ? 0 : 2, maximumFractionDigits: n < 1 ? 6 : 2 })}` : '—');
@@ -27,6 +34,18 @@ const STATUS = {
   invalidated: { word: 'Invalidated', tone: 'is-bad' },
   reopened: { word: 'Re-opened', tone: 'is-warn' },
 };
+// The dot beside the type word: what the proposal asks of you.
+const TYPE_TONE = { ACCUMULATE: 'is-ok', LIMIT_TRAP: 'is-warn', TRIM_EXIT: 'is-warn', WATCH_ONLY: '', HARD_PASS: 'is-bad' };
+// The head's status: what is waiting, or what was decided.
+function statusOf(t, st, gated) {
+  if (gated && !t.decision) return { word: gated === 'block' ? 'Vetoed by the gate' : 'Held by the gate', tone: 'is-bad' };
+  if (t.status === 'pending_pm_review' || t.status === 'reopened') return { word: 'Waiting for you', tone: 'is-warn' };
+  if (t.status === 'risk_granted') return { word: `Approved · ${usd(t.pm_approved_risk_usd)}`, tone: 'is-ok' };
+  return st;
+}
+// The contract gate in force on this ticket: its tier when the gate is
+// enforced and read block or hold, else null (observed, it decides nothing).
+const gatedOf = (t) => (t.contract_gate && t.contract_gate.mode === 'enforce' && (t.contract_gate.tier === 'block' || t.contract_gate.tier === 'hold') ? t.contract_gate.tier : null);
 const VERDICT_WORDS = { thesis_survives: 'thesis survives', thesis_damaged: 'thesis damaged', fatal_flaw: 'fatal flaw' };
 const TEST_WORDS = { mercenary_emissions: 'mercenary emissions', tax_revenue: 'tax revenue', exit_slippage: 'exit slippage', unverified_claims: 'unverified claims', other: 'other' };
 // Why the grade closed the desk's gate (cr-ticket-pregate@1): a weak grade
@@ -169,19 +188,6 @@ function ChallengeRow({ pid, rid, decidedAt }) {
   );
 }
 
-// The contract gate in words (Pillar 1): one quiet row each for the contract
-// and the economics. In observe mode it decides nothing, and says so.
-function ContractRow({ pid, t }) {
-  const c = t.contract_gate;
-  if (!c) return null;
-  return (
-    <div className="pm-dis" data-key={`pm-contract-${pid}`} data-tier={c.tier} aria-label="Contract gate">
-      <p className="pm-dis-row"><span className="pm-dis-k">Contract</span><span>{`${c.words}${c.mode === 'observe' ? ' (observed, not applied)' : ''}`}</span></p>
-      {c.economics ? <p className="pm-dis-row"><span className="pm-dis-k">Economics</span><span>{c.economics}</span></p> : null}
-    </div>
-  );
-}
-
 function exitText(t) {
   // A native L1 coin of the size the rules name passes without a DEX quote:
   // said as its basis, never as a measured cost.
@@ -191,6 +197,33 @@ function exitText(t) {
   // Against the limit this ticket froze; without one the figure stays unjudged.
   const limit = typeof t.exit_limit_pct === 'number' ? t.exit_limit_pct : null;
   return { text: v, tone: limit !== null && t.exit_cost_500_usd_pct > limit ? 'is-bad' : limit !== null && t.exit_cost_500_complete ? 'is-ok' : 'is-unknown' };
+}
+
+// The exit cost at the ticket's size against its limit (§4.5 D3): the words,
+// then a bar to 8% with the limit marked. A native L1 and a missing reading
+// draw no bar.
+function ExitBar({ pid, t, ex }) {
+  const cost = t.exit_cost_500_usd_pct;
+  const limit = typeof t.exit_limit_pct === 'number' ? t.exit_limit_pct : null;
+  const size = typeof t.exit_size_usd === 'number' ? t.exit_size_usd.toLocaleString('en-US') : null;
+  const measured = typeof cost === 'number' && t.exit_basis !== 'native_l1_liquid';
+  const words = !measured ? ex.text
+    : `${t.exit_cost_500_complete ? `${cost}% complete` : `≥ ${cost}% lower bound`}${limit !== null ? ` · ${limit}% limit` : ''}`;
+  return (
+    <div className={`v3-exit ${ex.tone}`} data-key={`pm-exit-${pid}`}>
+      <p className="v3-exit-row">
+        <span className="v3-k">{`Exit cost${size ? ` at $${size}` : ''}${t.exit_basis === 'native_l1_liquid' ? '' : ' · on chain'}`}</span>
+        <span className="v3-exit-v" title={ex.title || (t.exit_cost_500_complete === false ? 'A lower bound: part of the cost is unknown' : 'The desk\'s own exit reading')}>{words}</span>
+      </p>
+      {measured ? (
+        <span className="v3-exit-bar" aria-hidden="true">
+          <span className="v3-exit-fill" style={{ width: `${Math.min(100, (cost / 8) * 100)}%` }} />
+          {limit !== null ? <span className="v3-exit-limit" style={{ left: `${Math.min(100, (limit / 8) * 100)}%` }} /> : null}
+        </span>
+      ) : null}
+      {t.exit_evidence && t.exit_evidence.expires_at ? <p className="v3-exit-until" data-key={`pm-exit-until-${pid}`} title={t.exit_evidence.words}>{`${t.exit_evidence.expired ? 'Expired' : 'Until'} ${fmtDateTime(t.exit_evidence.expires_at)}`}</p> : null}
+    </div>
+  );
 }
 
 // Item 33: the change since Claude's earlier report, with the prompt versions
@@ -316,14 +349,16 @@ export function PMDecisionCard({ p }) {
     }
   };
   const inv = t.invalidation_trigger || {};
+  const gated = gatedOf(t);
+  const head = statusOf(t, st, gated);
   // The desk's own gate (cr-ticket-pregate@1): the grade alone ruled out new
   // risk, so no Prosecutor ran. Its reasons and the two ways out only.
   if (t.desk_gate) {
     return (
-      <section className="pm-card" aria-labelledby={`pm-h-${pid}`} data-status={t.status} data-kind="desk_gate">
+      <section className="pm-card v3-ticket" aria-labelledby={`pm-h-${pid}`} data-status={t.status} data-kind="desk_gate">
         <div className="pm-head">
-          <h3 className="iv-h" id={`pm-h-${pid}`}>PM decision</h3>
-          <span className={`badge ${st.tone}`}>{st.word}</span>
+          <h3 className="v3-tk-type" id={`pm-h-${pid}`}><span className="v3-tk-dot is-bad" aria-hidden="true" /><span className="sr-only">PM decision: </span>Desk gate</h3>
+          <span className={`v3-tk-status ${st.tone}`}>{st.word}</span>
         </div>
         <div className="pm-call">
           <p className="pm-type">Desk gate · no Prosecutor run</p>
@@ -334,7 +369,7 @@ export function PMDecisionCard({ p }) {
         <div className="pm-dis">
           <p className="pm-dis-row"><span className="pm-dis-k">Researcher</span><span>{`${(t.researcher || {}).grade_display || (t.researcher || {}).grade || '—'} · ${(t.researcher || {}).verdict || 'no verdict'}`}</span></p>
         </div>
-        <ContractRow pid={pid} t={t} />
+        <GatePanel pid={pid} t={t} />
         <DeltaBadge pid={pid} delta={t.report_delta} />
         <RuleNote pid={pid} t={t} />
         {t.superseded_by_report ? <p className="faint pm-note">{`Claude has a newer report (${t.superseded_by_report}); this gate is on the earlier one.`}</p> : null}
@@ -357,13 +392,12 @@ export function PMDecisionCard({ p }) {
     );
   }
   return (
-    <section className="pm-card" aria-labelledby={`pm-h-${pid}`} data-status={t.status}>
+    <section className="pm-card v3-ticket" aria-labelledby={`pm-h-${pid}`} data-status={t.status} data-gated={gated || undefined}>
       <div className="pm-head">
-        <h3 className="iv-h" id={`pm-h-${pid}`}>PM decision</h3>
-        <span className={`badge ${st.tone}`}>{st.word}</span>
+        <h3 className="v3-tk-type" id={`pm-h-${pid}`}><span className={`v3-tk-dot ${gated ? 'is-bad' : TYPE_TONE[t.proposal_type] || ''}`} aria-hidden="true" /><span className="sr-only">PM decision: </span>{gated ? 'Hard pass' : TYPE_WORDS[t.proposal_type] || t.proposal_type}</h3>
+        <span className={`v3-tk-status ${head.tone}`}>{head.word}</span>
       </div>
       <div className="pm-call">
-        <p className="pm-type">{TYPE_WORDS[t.proposal_type] || t.proposal_type}</p>
         <p className="pm-risk" title={t.capped ? `The desk capped ${TYPE_WORDS[t.capped.from] || t.capped.from}: ${t.capped.reason}` : (t.gate_reasons || []).join(' ') || undefined}>
           {risk > 0 ? <>{usd(risk)}<span className="pm-risk-s"> suggested</span></> : <span className="pm-risk-s">{t.capped ? `No risk · capped from ${TYPE_WORDS[t.capped.from] || t.capped.from}` : 'No risk suggested'}</span>}
         </p>
@@ -375,27 +409,22 @@ export function PMDecisionCard({ p }) {
       {(t.invalidation && t.invalidation.checks || []).filter((c) => c.kind === 'metric' && c.status === 'holding' && typeof c.headroom_pct === 'number').map((c) => <p key={`pm-headroom-${c.key}`} className="pm-alert" data-key={`pm-headroom-${pid}`} title={c.words}>{`${c.key} floor headroom: ${c.headroom_pct}% above ${usd(c.threshold_usd)}`}</p>)}
       {t.status === 'invalidated' && t.invalidation ? <p className="pm-alert">{t.invalidation.words}</p> : null}
       {t.exit_evidence && (t.exit_evidence.expired || t.exit_evidence.state === 'unknown') ? <p className="pm-alert" data-key={`pm-exit-expired-${pid}`}>{t.exit_evidence.words}</p> : null}
-      <div className="iv-rgrid pm-grid">
-        <div className="iv-rc">
-          <p className="iv-rc-k">Entry zone</p>
-          <p className="iv-rc-v">{t.entry_zone ? `${usd(t.entry_zone.low_usd)}–${usd(t.entry_zone.high_usd)}` : <span className="is-unknown" title="The ticket gives no entry zone">Not given</span>}</p>
-        </div>
-        <div className="iv-rc">
-          <p className="iv-rc-k">Invalidation</p>
-          <p className="iv-rc-v" title={inv.statement || undefined}>{inv.price_usd ? usd(inv.price_usd) : <span className="is-unknown">No price</span>}</p>
-          {inv.metric ? <p className="iv-rc-s">{`30d ${inv.metric.key.replace('_', ' ')} < ${usd(inv.metric.below_30d_usd)}`}</p> : null}
-        </div>
-        <div className="iv-rc">
-          <p className="iv-rc-k">Target</p>
-          <p className="iv-rc-v" title={t.upside_target ? t.upside_target.basis || undefined : undefined}>{t.upside_target ? usd(t.upside_target.price_usd) : <span className="is-unknown" title="The ticket gives no upside target">Not given</span>}</p>
-        </div>
-        <div className="iv-rc">
-          <p className="iv-rc-k">{typeof t.exit_size_usd === 'number' ? `Exit @ $${t.exit_size_usd.toLocaleString('en-US')}` : 'Exit'}</p>
-          <p className={`iv-rc-v ${ex.tone}`} title={ex.title || (t.exit_cost_500_complete === false ? 'A lower bound: part of the cost is unknown' : 'The desk\'s own exit reading')}>{ex.text}</p>
-          {typeof t.exit_limit_pct === 'number' ? <p className="iv-rc-s">{`${t.exit_limit_pct}% limit`}</p> : null}
-          {t.exit_evidence && t.exit_evidence.expires_at ? <p className="iv-rc-s" data-key={`pm-exit-until-${pid}`} title={t.exit_evidence.words}>{`${t.exit_evidence.expired ? 'Expired' : 'Until'} ${fmtDateTime(t.exit_evidence.expires_at)}`}</p> : null}
-        </div>
+      <div className="v3-levels">
+        <p className="v3-level">
+          <span className="v3-k">Entry</span>
+          <span className="v3-level-v">{t.entry_zone ? `${usd(t.entry_zone.low_usd)}–${usd(t.entry_zone.high_usd)}` : <span className="is-unknown" title="The ticket gives no entry zone">Not given</span>}</span>
+        </p>
+        <p className="v3-level">
+          <span className="v3-k">Stop</span>
+          <span className="v3-level-v" title={inv.statement || undefined}>{inv.price_usd ? usd(inv.price_usd) : <span className="is-unknown">No price</span>}</span>
+          {inv.metric ? <span className="v3-level-s">{`30d ${inv.metric.key.replace('_', ' ')} < ${usd(inv.metric.below_30d_usd)}`}</span> : null}
+        </p>
+        <p className="v3-level">
+          <span className="v3-k">Target</span>
+          <span className="v3-level-v" title={t.upside_target ? t.upside_target.basis || undefined : undefined}>{t.upside_target ? usd(t.upside_target.price_usd) : <span className="is-unknown" title="The ticket gives no upside target">Not given</span>}</span>
+        </p>
       </div>
+      <ExitBar pid={pid} t={t} ex={ex} />
       <TradePlan pid={pid} g={t.trade_plan_geometry} />
       <TestMatrix pid={pid} pr={t.prosecution} />
       {(t.exits_missing || []).length ? (
@@ -406,9 +435,10 @@ export function PMDecisionCard({ p }) {
       ) : null}
       {t.agent_disagreement ? <Disagreement pid={pid} t={t} spread={p.spread} dis={dis} r={r} q={q} fatal={fatal} /> : null}
       <ChallengeRow pid={pid} rid={t.receipt_id} decidedAt={decided ? decided.at : null} />
-      <ContractRow pid={pid} t={t} />
+      <GatePanel pid={pid} t={t} />
       <RuleNote pid={pid} t={t} />
       {t.superseded_by_report ? <p className="faint pm-note">{`Claude has a newer report (${t.superseded_by_report}); this ticket is on the earlier one.`}</p> : null}
+      {gated && !decided ? <p className="v3-gated" data-key={`pm-gated-${pid}`}>{`${gated === 'block' ? 'Deterministic veto' : 'Held by the gate'}: ${t.contract_gate.words} No risk can be granted on this ticket; it re-opens only on a fresh packet.`}</p> : null}
       <Actions pid={pid}>
         {decided ? (
           <p className="pm-decided">

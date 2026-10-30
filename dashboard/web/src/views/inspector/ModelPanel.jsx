@@ -1,18 +1,15 @@
-// The inspector's body, Level 1 (DESIGN_AND_IA_BLUEPRINT.md §3.2; Eric,
-// 2026-10-17): what this is, what the call is, what could break it, what to
-// do, in six blocks and about a screen and a half:
-//   1. the executive verdict: the canonical grade (D1: your pinned headline
-//      report, else Claude's current eligible report) with its rubric word,
-//      the verdict, the analysis age and horizon and an evidence flag (the
-//      three-model line, each model a link to its Brief, is under Details);
-//   2. bull and bear: the strongest sourced risk and the top "would confirm",
-//      with "would break it" under the risk;
-//   3. risk and exit: the forensic states, the exit at your size against your
-//      limit, the deepest DEX pool and the GoPlus flags, or "Not audited";
-//   4. the thesis in three lines (Read full brief) and the watch item;
-//   5. what needs you (only when something does), at most three lines, each
-//      with its action;
-//   6. your note.
+// The inspector's body, Level 1 (UI_MASTER_PLAYBOOK.md §4.5, 2026-10-30):
+// what this is, what the call is, what could break it, what to do:
+//   C. the PM Cohort: the canonical grade (D1: your pinned headline report,
+//      else Claude's current eligible report) with its rubric word and the
+//      verdict, the spread, and each model's grade as a bar;
+//   then bull and bear: the strongest sourced risk and the top "would
+//      confirm", with "would break it" under the risk;
+//   E. the signals: forensic status, downside, the exit at your size, the
+//      top pool and GoPlus, the most severe first, the rest one click away;
+//   F. the changes since your review, one line, only when there are some;
+//   the thesis in three lines (Read full brief) and the watch item, the PM
+//   ticket, what needs you (only when something does) and your note.
 // Everything else (the 13 categories, the six components, the downside
 // panel, the DEX card, the contract checks, the chart, the evidence, the
 // research details and the exact prompt) lives on the project page (Level 2).
@@ -80,21 +77,57 @@ function Loading({ label }) {
 
 // ---- 1. the executive verdict -------------------------------------------------------------
 
-function Consensus({ d, p }) {
-  const cs = consensusOf(p, d.index);
+// Block C: the PM Cohort. The canonical grade, its band and verdict, the
+// spread between the firm grades, and one bar per model (a range draws its
+// middle; a model with no grade draws no fill and says why). Each model's
+// name opens its Brief. Nothing is averaged.
+const COHORT_FILL = { claude: 'is-claude', chatgpt: 'is-gpt', gemini: 'is-gemini' };
+const midOf = (m) => (typeof m.value === 'number' ? m.value : m.low !== null && m.high !== null ? (m.low + m.high) / 2 : null);
+
+function Cohort({ d, p, cr }) {
   const pid = p.project_id;
+  const g = canonicalGrade(p, d.index);
+  const cs = consensusOf(p, d.index);
+  const c = cr.c;
+  const rep = c.report;
+  const vw = rep && rep.verdict ? verdictOf({ verdict: rep.verdict }) : null;
+  const verdict = vw && vw.label ? vw.label : rep && rep.verdict ? `${rep.verdict.charAt(0)}${rep.verdict.slice(1).toLowerCase()}` : null;
+  const graded = g.kind === 'grade' || g.kind === 'range';
+  const shown = graded ? g.value : g.kind === 'job' ? researchState(g.job, { provider: c.provider || 'claude' }).short : g.value;
+  const line = [graded ? g.word : null, verdict].filter(Boolean).join(' · ');
+  const level = rep && !rep.needs_text ? evidenceLevel(rep.evidence) : null;
+  const flags = rep && rep.evidence ? (rep.evidence.high || 0) + (rep.evidence.medium || 0) : 0;
+  const firm = cs.models.filter((m) => typeof m.value === 'number').length;
   return (
-    <p className="iv-cons" aria-label={`Each model's own grade: ${cs.text}`}>
-      {cs.models.map((m, i) => (
-        <span key={m.provider} className={`iv-cm is-${m.mark}`}>
-          {i ? <span className="iv-sep" aria-hidden="true">·</span> : null}
-          <span className={`cg-dot is-${m.mark}`} aria-hidden="true" />
-          <DeepLink pid={pid} href={`#/project/${enc(pid)}/brief?model=${m.provider}`} dataKey={`iv-model-${m.provider}`} ariaLabel={`${m.name}: ${m.words}. Open ${m.name}'s Brief`}>
-            <span className="iv-cm-n">{m.label}</span> <span className="iv-cm-v">{m.words}</span>
-          </DeepLink>
-        </span>
-      ))}
-    </p>
+    <section className="iv-cohort" aria-labelledby="iv-h" data-part="verdict" data-provider={c.provider || 'claude'} data-report={rep ? rep.report_id || '' : ''} data-source={c.source}>
+      <h3 className="iv-k" id="iv-h">PM Cohort</h3>
+      <div className="iv-grade-row">
+        <p className="iv-grade" title={`${c.note}. Calculated by the desk from the six weighted component scores; never the model's own total, never an average of the models.`}>
+          {graded
+            ? <span className="iv-grade-v" data-part="grade-score" role="img" aria-label={`Investment grade ${g.value} of 100${g.word ? `, ${g.word}` : ''}`}>{shown}</span>
+            : <span className="iv-grade-v is-none">{shown}</span>}
+          {line ? <span className="iv-grade-w" title={line}>{graded && g.word ? g.word : null}{graded && g.word && verdict ? ' · ' : null}{verdict ? <span className="mh-verdict">{verdict}</span> : null}</span> : null}
+        </p>
+        {firm >= 2 && cs.spread !== null ? <span className="iv-spread" title="Points between the highest and lowest firm grade. Agreement is not independent confirmation.">{`spread ${cs.spread.toFixed(1)}`}</span> : null}
+      </div>
+      <ul className="iv-models" aria-label={`Each model's own grade: ${cs.text}`}>
+        {cs.models.map((m) => {
+          const v = midOf(m);
+          return (
+            <li key={m.provider} className="iv-model">
+              <DeepLink pid={pid} href={`#/project/${enc(pid)}/brief?model=${m.provider}`} className="iv-model-n" dataKey={`iv-model-${m.provider}`} ariaLabel={`${m.name}: ${m.words}. Open ${m.name}'s Brief`}>{m.label}</DeepLink>
+              <span className="iv-bar" aria-hidden="true"><span className={`iv-bar-fill ${COHORT_FILL[m.provider] || ''}`} style={{ width: `${v === null ? 0 : Math.max(0, Math.min(100, v))}%` }} /></span>
+              <span className="iv-model-v" title={m.words}>{v !== null ? m.words : m.mark === 'none' ? '—' : m.words}</span>
+            </li>
+          );
+        })}
+      </ul>
+      {level ? (
+        <DeepLink pid={pid} href={`#/project/${enc(pid)}/evidence?model=${c.provider || 'claude'}&open=checks`} className="iv-ev" dataKey={`iv-ev-${pid}`} title={`${evidenceText(rep.evidence)}. Open the flags.`} ariaLabel={`${level === 'serious' ? 'Serious evidence flag' : 'Evidence flag'}: ${evidenceText(rep.evidence)}. Open the flags`}>
+          <TriangleAlert size={12} aria-hidden="true" />{`${level === 'serious' ? 'Serious evidence flag' : 'Evidence flag'}${flags > 1 ? ` · ${flags}` : ''}`}
+        </DeepLink>
+      ) : null}
+    </section>
   );
 }
 
@@ -205,9 +238,8 @@ function Triggers({ p, cr, wait }) {
   );
 }
 
-// ---- 3. key metrics: one horizontal strip of four (forensic status, downside
-// risk, the exit at your size, the top pool and the contract; the Apple HIG
-// pass, 2026-10-18) -------------------------------------------------------------------------
+// ---- E. the signals (UI v3, 2026-10-30): forensic status, downside risk, the
+// exit at your size, the top pool and the contract, one line each -----------------------------
 
 const FX_STATE_WORDS = { occurred: 'Occurred', watch: 'Watch', recovered: 'Recovered', within: 'Within', not_established: 'Not established', unknown: 'Unknown', reversed: 'Reversed' };
 const FX_LABELS = { liquidity_impairment: 'Liquidity', operational_degradation: 'Operations', delivery_inactivity: 'Delivery', confirmed_discontinuation: 'Discontinuation' };
@@ -247,11 +279,12 @@ function useTopPool(p) {
   return st.pid === p.project_id ? st : { pid: null, pool: undefined, error: null };
 }
 
-function RiskStrip({ d, p }) {
+function Signals({ d, p }) {
   const pid = p.project_id;
   const f = p.forensic;
   const ex = exitCell(p, d.index);
   const pool = useTopPool(p);
+  const [more, setMore] = useState(false);
   const m = contractChipModel(p.screening);
   const risky = m.chips.filter((x) => x.dot === 'risky');
   const severe = m.extra.filter((b) => b.tone === 'severe');
@@ -271,74 +304,85 @@ function RiskStrip({ d, p }) {
       : risky.length ? { text: risky.map((x) => `${x.label}: ${x.value}`).join(' · '), tone: 'warn', title: risky.map((x) => x.title || x.aria).join('\n') }
         : m.chips.every((x) => x.dot === 'unknown') ? { text: (m.status && m.status.word) || 'GoPlus: no answer', tone: 'unknown', title: (m.status && (m.status.title || m.status.word)) || m.title || 'No GoPlus answer on record' }
           : { text: 'GoPlus: no flag', tone: '', title: 'GoPlus answered no mint, blacklist, proxy or tax flag. Nothing here means safe.' };
+  const tone3 = (t) => (t === 'bad' ? 'bad' : t === 'warn' ? 'warn' : t === 'ok' || t === 'neutral' ? 'ok' : 'unknown');
+  const list = [
+    {
+      key: 'forensic',
+      tone: audited ? tone3(fx && fx.tone) : 'unknown',
+      title: fx ? fx.title : 'No forensic audit on record',
+      name: audited ? fx.text : f && f.open_audit ? 'Audit open' : 'Not audited',
+      note: audited ? states.map(([k, st]) => `${FX_LABELS[k]} ${(FX_STATE_WORDS[st] || st).toLowerCase()}`).join(' · ') : f && f.open_audit ? 'No assessment saved yet' : null,
+      action: audited
+        ? <DeepLink pid={pid} href={fxHref} className="iv-link" dataKey={`iv-fx-${pid}`}>Open Forensics</DeepLink>
+        : <DeepLink pid={pid} href={`${fxHref}?open=start`} className="iv-link" dataKey={`iv-fx-start-${pid}`}>{f && f.open_audit ? 'Open the audit' : 'Start audit'}</DeepLink>,
+    },
+    {
+      key: 'downside',
+      tone: down ? tone3(down.tone) : 'unknown',
+      title: down ? down.title : 'The report gives no downside score',
+      name: down ? <>{`Downside ${down.value}`}<span className="v3-sig-of"> / 100</span><span className="sr-only">{` · ${down.label}, higher is worse`}</span></> : 'Downside not scored',
+      note: down ? down.label : null,
+    },
+    {
+      key: 'exit',
+      tone: ex.tone === 'bad' ? 'bad' : ex.tone === 'ok' ? 'ok' : 'unknown',
+      title: ex.title,
+      name: `Exit at $${ex.size} · ${ex.text}`,
+      note: `${ex.basis ? `${ex.basis} · ` : ''}${ex.limit}% limit`,
+    },
+    {
+      key: 'pool',
+      tone: pool.pool ? (pool.pool.thin ? 'warn' : 'ok') : 'unknown',
+      title: pool.pool ? `${pool.pool.chain}${pool.pool.pairAddress ? ` · ${pool.pool.pairAddress}` : ''} · DexScreener, asked by this browser` : pool.error ? pool.error.message : null,
+      name: pool.pool === undefined ? <span aria-busy="true">Top pool …</span>
+        : pool.error ? 'DexScreener unread'
+          : !pool.pool ? (NO_POOL[pool.none] ? 'Pool not looked up' : 'No pool indexed')
+            : `Top pool ${pool.pool.liquidity === null ? '—' : fmtCompactUsd(pool.pool.liquidity)}${pool.pool.thin ? ' · Thin' : ''}`,
+      note: pool.pool ? `${pool.pool.dex} · ${pool.pool.pair}${pool.pool.multiChain ? ` · ${pool.pool.chain}` : ''}` : pool.error ? `DexScreener could not be read: ${pool.error.message}` : pool.pool === null && NO_POOL[pool.none] ? NO_POOL[pool.none] : pool.pool === null ? 'DexScreener lists no pool for this contract' : null,
+    },
+    {
+      key: 'contract',
+      tone: contract.tone === 'bad' ? 'bad' : contract.tone === 'warn' ? 'warn' : 'unknown',
+      title: contract.title,
+      name: contract.text,
+      note: null,
+    },
+  ];
+  // The most severe first, so what could break it is never folded away.
+  const rank = { bad: 0, warn: 1, unknown: 2, ok: 3 };
+  const sorted = list.map((x, i) => ({ ...x, i })).sort((x, y) => rank[x.tone] - rank[y.tone] || x.i - y.i);
+  const shown = more ? sorted : sorted.slice(0, 1);
   return (
-    <section className="iv-risk" aria-labelledby="iv-risk-h">
-      <h3 className="iv-h" id="iv-risk-h">Key metrics</h3>
-      <div className="iv-rgrid">
-        <div className="iv-rc" data-part="forensic">
-          <p className="iv-rc-k">Forensic status</p>
-          <p className={`iv-rc-v ${audited ? tone(fx && fx.tone) : 'is-unknown'}`} title={fx ? fx.title : 'No forensic audit on record'}>{audited ? fx.text : f && f.open_audit ? 'Audit open' : 'Not audited'}</p>
-          {audited ? <p className="iv-rc-s">{states.map(([k, s]) => `${FX_LABELS[k]} ${(FX_STATE_WORDS[s] || s).toLowerCase()}`).join(' · ')}</p> : f && f.open_audit ? <p className="iv-rc-s">No assessment saved yet</p> : null}
-          <p className="iv-rc-a">
-            {audited
-              ? <DeepLink pid={pid} href={fxHref} className="iv-link" dataKey={`iv-fx-${pid}`}>Open Forensics</DeepLink>
-              : <DeepLink pid={pid} href={`${fxHref}?open=start`} className="btn btn-sm" dataKey={`iv-fx-start-${pid}`}>{f && f.open_audit ? 'Open the audit' : 'Start audit'}</DeepLink>}
-          </p>
-        </div>
-        <div className="iv-rc" data-part="downside">
-          <p className="iv-rc-k">Downside risk</p>
-          {/* The score's name and direction stay in its tooltip and accessible name, not as prose in the strip. */}
-          <p className={`iv-rc-v ${down ? tone(down.tone) : 'is-unknown'}`} title={down ? down.title : 'The report gives no downside score'}>{down ? <>{down.value}<span className="iv-rc-of"> / 100</span><span className="sr-only">{` · ${down.label}, higher is worse`}</span></> : 'Not scored'}</p>
-        </div>
-        <div className="iv-rc" data-part="exit">
-          <p className="iv-rc-k">{`Exit @ $${ex.size}`}</p>
-          <p className={`iv-rc-v ${ex.tone === 'bad' ? 'is-warn' : ex.tone === 'ok' ? 'is-ok' : 'is-unknown'}`} title={ex.title}>{ex.text}</p>
-          <p className="iv-rc-s">{`${ex.basis ? `${ex.basis} · ` : ''}${ex.limit}% limit`}</p>
-        </div>
-        <div className="iv-rc" data-part="pool">
-          <p className="iv-rc-k">Top pool</p>
-          <p className="iv-rc-v iv-pool">
-            {pool.pool === undefined ? <span className="faint" aria-busy="true">…</span>
-              : pool.error ? <span className="is-unknown" title={pool.error.message}>DexScreener unread</span>
-                : !pool.pool ? <span className="is-unknown">{NO_POOL[pool.none] ? 'Not looked up' : 'No pool indexed'}</span>
-                  : (
-                    <span title={`${pool.pool.chain}${pool.pool.pairAddress ? ` · ${pool.pool.pairAddress}` : ''} · DexScreener, asked by this browser`}>
-                      {pool.pool.liquidity === null ? '—' : fmtCompactUsd(pool.pool.liquidity)}
-                      {pool.pool.thin ? <span className="badge is-warn iv-thin">Thin</span> : null}
-                    </span>
-                  )}
-          </p>
-          <p className="iv-rc-s">
-            {pool.pool ? `${pool.pool.dex} · ${pool.pool.pair}${pool.pool.multiChain ? ` · ${pool.pool.chain}` : ''}` : pool.error ? `DexScreener could not be read: ${pool.error.message}` : pool.pool === null && NO_POOL[pool.none] ? NO_POOL[pool.none] : pool.pool === null ? 'DexScreener lists no pool for this contract' : null}
-          </p>
-          <p className={`iv-rc-s iv-gp ${contract.tone === 'bad' ? 'is-bad' : contract.tone === 'warn' ? 'is-warn' : ''}`} title={contract.title}>{contract.text}</p>
-        </div>
-      </div>
+    <section className="iv-signals" aria-labelledby="iv-sig-h">
+      <h3 className="sr-only" id="iv-sig-h">Signals</h3>
+      <ul className="v3-sigs">
+        {shown.map((x) => (
+          <li key={x.key} className={`v3-sig is-${x.tone}`} data-part={x.key}>
+            <span className="v3-sig-dot" aria-hidden="true" />
+            <span className="v3-sig-t">
+              <span className="v3-sig-name" title={x.title || undefined}>{x.name}</span>
+              {x.note || x.action ? <span className="v3-sig-note">{x.note}{x.note && x.action ? ' · ' : null}{x.action || null}</span> : null}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {sorted.length > 1 ? <button type="button" className="iv-fold" aria-expanded={more} data-key={`iv-signals-${pid}`} onClick={() => setMore(!more)}>{more ? 'Fewer signals' : `${sorted.length - 1} more signal${sorted.length - 1 === 1 ? '' : 's'}`}</button> : null}
     </section>
   );
 }
 
-// The drawer's second level (subtraction stage 4.1): each model's grade and
-// their spread (the grade above is said once, Quieter Desk P2), the pool and
-// contract pages and the whole bear text, one click away.
-function Details({ d, p, cr }) {
+// Block F: the changes since your last review, one quiet line, only when
+// there are some.
+function Changes({ p }) {
+  const ch = p.changes || {};
   const pid = p.project_id;
-  const cs = consensusOf(p, d.index);
-  const full = cr.report;
-  const risk = full && full.assessment && !full.assessment.needs_text ? keyPoints(full.assessment).risk : null;
+  if (!ch.item_count) return null;
   return (
-    <details className="iv-details" data-key={`iv-details-${pid}`}>
-      <summary>Details</summary>
-      <div className="iv-details-b">
-        <Consensus d={d} p={p} />
-        {cs.spread !== null ? <p className="iv-spread" title="Points between the highest and lowest firm grade. Agreement is not independent confirmation.">{`Spread between the models' firm grades: ${cs.spread.toFixed(1)} points`}</p> : null}
-        {risk && risk.text.length > 280 ? <div><p className="iv-rc-k">Bear, in full</p><p className="ik-t">{risk.text}</p></div> : null}
-        <p className="iv-rc-a">
-          <DeepLink pid={pid} href={`#/project/${enc(pid)}/market`} className="iv-link" dataKey={`iv-market-${pid}`}>Pools</DeepLink>
-          <DeepLink pid={pid} href={`#/project/${enc(pid)}/contract`} className="iv-link" dataKey={`iv-contract-${pid}`}>Contract</DeepLink>
-        </p>
-      </div>
-    </details>
+    <p className="iv-changes" title={p.next_review ? `Next review: ${fmtDate(p.next_review.date)}${p.next_review.overdue ? ' (overdue)' : ''}` : undefined}>
+      {`${ch.item_count} change${ch.item_count === 1 ? '' : 's'} since ${ch.cursor_source === 'project created' ? 'added' : 'your last review'}`}
+      <span aria-hidden="true">{' · '}</span>
+      <DeepLink pid={pid} href={`#/project/${enc(pid)}/notes`} dataKey={`what-changed-${pid}`}>What changed</DeepLink>
+    </p>
   );
 }
 
@@ -527,12 +571,12 @@ export function ModelPanel({ d, p, detail, current = true, failed = false, mode 
   const wait = cr.c.report && !cr.report ? <ReportWait p={p} cr={cr} current={current} failed={failed && !detail} /> : null;
   return (
     <div className="mpanel iv" data-report={cr.report_id || ''} data-opinion={cr.status} data-provider={cr.c.provider || 'claude'}>
-      <VerdictCard d={d} p={p} cr={cr} />
+      {mode === 'review' ? <VerdictCard d={d} p={p} cr={cr} /> : <Cohort d={d} p={p} cr={cr} />}
       <Triggers p={p} cr={cr} wait={wait} />
       {mode === 'review' ? null : (
         <>
-          <RiskStrip d={d} p={p} />
-          <Details d={d} p={p} cr={cr} />
+          <Signals d={d} p={p} />
+          <Changes p={p} />
           <Thesis p={p} cr={cr} wait={wait} />
           <PMDecisionCard p={p} />
           <NeedsYou d={d} p={p} detail={detail} />

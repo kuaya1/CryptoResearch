@@ -1,41 +1,43 @@
 // The Desk, Level 0 (#/watchlist; DESIGN_AND_IA_BLUEPRINT.md §3.1; Eric,
-// 2026-10-17): the projects you follow as one ledger.
-//   header      eyebrow, title, ⋯ (archived projects, density, reset), Refresh
-//               prices, + Add project
-//   hero        the Daily Brief's readiness and two ways in (DeskHero.jsx)
-//   range       24h · 7d · 30d, the change shown under each price
-//   KPI strip   Market · Total cap · Beat BTC (30d) · Needs review · Research
-//               waiting, each a way in; what needs action always in view
-//   PM cards    tickets waiting for your decision (DecisionGrid.jsx)
-//   views       Watching · Needs review · Waiting on a model · Held · Not
-//               watching · All, each with its count
-//   filter bar  search (/), Filters, the active filters as removable
-//               "Label | Value" chips; Density, Columns and Sort on the right
-//   ledger      the table (ProjectTable.jsx) with a sticky summary footer
+// 2026-10-17; UI v3 parity, 2026-10-30): the projects you follow as one ledger.
+//   focal       the dark Focal block (FocalBlock.jsx): the date, Refresh, Add
+//               project, the headline, the ticket to decide first and the
+//               folds; it replaces the page head, the hero and the PM cards
+//   options     the Desk's ⋯ menu, drawn into the v3 rail's Options slot (in
+//               the Focal block below 1280px)
+//   market      the market line (StatusStrip.jsx): Bitcoin, Total market,
+//               Beat Bitcoin, Trader Sim, and the queues when they hold any;
+//               what needs action always in view above it
+//   ledger      one white card: the views (Watching · Needs review · Waiting
+//               · Held · Not watching · All, an empty one hidden unless it
+//               is chosen), search (/), 24h · 7d · 30d (the change under
+//               each price), the active filters as removable chips, the
+//               table (ProjectTable.jsx) and its footer. Filter, Columns,
+//               Sort and Density are in the options menu (D11)
 // Choose a project (click, tap, Enter, Space) for its inspector (?p=<id>);
 // J/K move the choice, R marks the open project reviewed. Nothing floats over
 // the list. Live updates redraw in place and never reorder the rows you are
 // reading (Re-sort offers it).
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Search, ListFilter, Columns3, ArrowUpDown, Plus, X, Ellipsis, Rows3 } from 'lucide-react';
-import { announce, fmtPrice, fmtChangePct } from '../../../../public/ui.js';
+import { createPortal } from 'react-dom';
+import { X } from 'lucide-react';
+import { announce } from '../../../../public/ui.js';
 import {
   COLUMNS, SORT_NAMES, DEFAULT_FILTERS, DEFAULT_COLUMNS, COVERAGE, RET30, BEAT, VIEWS, prefs as readPrefs, prefsToSave, nextSort, sortRows, matches,
-  filterCount, sourcesOf, reviewKeyAllowed, inView, deskFooter, deskKpis,
+  filterCount, sourcesOf, reviewKeyAllowed, inView,
 } from '../../../../public/watchlist-model.js';
 import { useDesk, useMedia } from '../../lib/hooks.js';
 import { useAgendaRead } from '../../lib/agenda.js';
 import { ui } from '../../lib/desk.js';
 import { nav, pageReady, claimFocus, navigate } from '../../lib/router.js';
-import { Menu, MenuItem, MenuLabel, MenuSep, MenuRadio, MenuCheck } from '../../components/Menu.jsx';
+import { Menu, MenuItem, MenuLabel, MenuSep, MenuRadio, MenuCheck, MenuSub } from '../../components/Menu.jsx';
 import { loadLegacy } from '../../components/Dom.jsx';
 import { Boundary, ViewError, retryableLazy } from '../../components/Boundary.jsx';
 import { legacyCtx } from '../../legacy/ctx.js';
-import { KpiStrip, ActionBand, RefreshButton } from './StatusStrip.jsx';
+import { MarketLine, ActionBand } from './StatusStrip.jsx';
 import { ProjectTable } from './ProjectTable.jsx';
-import { DeskHero } from './DeskHero.jsx';
 import { RangeControl } from './RangeControl.jsx';
-import { DecisionGrid, waitingTickets } from './DecisionGrid.jsx';
+import { FocalBlock } from './FocalBlock.jsx';
 import { view, openPanel, closePanel, isWide, markReviewed, restoreProject } from './state.js';
 import { onDesk } from '../../shell/overlays.js';
 // The inspector in its own boundary: if it cannot be drawn, it says so in
@@ -52,7 +54,6 @@ export default function Watchlist() {
   const route = nav.route;
   const pid = route.query.get('p');
   const wide = useMedia('(min-width: 1280px)');
-  const phone = useMedia('(max-width: 767.98px)');
   const [pf, setPf] = useState(() => readPrefs({ ui }));
   const [q, setQ] = useState(view.q);
   const [, setOrderNonce] = useState(0);
@@ -90,7 +91,6 @@ export default function Watchlist() {
   const f = pf.filters;
   const nFilters = filterCount(f);
   const filtered = Boolean(q) || nFilters > 0;
-  const followed = live.filter((p) => p.on_watchlist || p.held).length;
   const counts = Object.fromEntries(VIEWS.map(([v]) => [v, live.filter((p) => inView(p, v, d.index, agenda)).length]));
 
   const setFilter = (k, v) => {
@@ -143,13 +143,15 @@ export default function Watchlist() {
     else if (c.type === 'reset-columns') save({ ...pf, columns: DEFAULT_COLUMNS.slice() });
     else if (c.type === 'prefs') { resetOrder(); save({ ...pf, ...c.patch, filters: { ...pf.filters, ...(c.patch.filters || {}) } }); }
     else if (c.type === 'columns' || c.type === 'filter') {
-      // Open the Desk's own menu (Radix opens on a key or a pointer, not a click).
-      requestAnimationFrame(() => {
-        const b = document.querySelector(`[data-key="${c.type === 'columns' ? 'menu-btn-columns' : 'menu-btn-filters'}"]`);
-        if (!b) return;
-        b.focus();
-        b.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-      });
+      // Open the options menu at that group, by state (§5.6), its first
+      // choice focused.
+      setMenu({ open: true, sub: c.type });
+      setTimeout(() => {
+        const menus = document.querySelectorAll('.menu');
+        const last = menus[menus.length - 1];
+        const first = last && last.querySelector('[role^="menuitem"]');
+        if (first) first.focus();
+      }, 60);
     }
   }));
 
@@ -254,6 +256,7 @@ export default function Watchlist() {
     return () => document.removeEventListener('keydown', onKey);
   });
 
+  const [menu, setMenu] = useState({ open: false, sub: null });
   const sectors = d.index.sectors || [];
   // The active filters as removable "Label | Value" chips (§3.1).
   const chips = [];
@@ -266,106 +269,125 @@ export default function Watchlist() {
 
   const onOpen = (id, opener, provider = null) => openPanel(id, opener, provider);
   const selectedRow = pid && d.index.projects.find((x) => x.project_id === pid);
-  const foot = deskFooter(d.index, rows);
-  const footer = `${foot.projects} project${foot.projects === 1 ? '' : 's'} · ${foot.held} held${foot.priced !== null ? ` · ${fmtPrice(foot.priced)} priced value` : ''}${foot.unpriced ? ` · ${foot.unpriced} unpriced` : ''}`;
+  const cg = d.index.settings && d.index.settings.tickets && d.index.settings.tickets.contract_gate;
+  const footer = `${rows.length} of ${total} projects${sources.price !== 'CoinGecko' ? ' · sample data' : ''}${cg && cg.mode === 'enforce' ? ' · gate cr-contract-gate@1 enforced' : ' · gate observing'}`;
 
   let body;
   if (rows.length) {
-    body = <ProjectTable d={d} rows={rows} columns={pf.columns} sort={pf.sort} onSort={setSort} selected={pid} recent={view.recent} onOpen={onOpen} onSector={onSector} onAction={onAction} sources={sources} density={pf.density} footer={footer} agenda={agenda} range={pf.range} />;
+    body = <ProjectTable d={d} rows={rows} columns={pf.columns} sort={pf.sort} onSort={setSort} selected={pid} recent={view.recent} onOpen={onOpen} onSector={onSector} onAction={onAction} sources={sources} density={pf.density} agenda={agenda} range={pf.range} />;
   } else if (!live.length && !f.archived) {
-    body = <div className="empty-state"><h2>Your Desk is empty</h2><p>Add a project to start, or ask for new research.</p><button type="button" className="btn btn-primary" data-key="empty-add" onClick={addProject}>Add project</button></div>;
+    body = <div className="empty-state v3-empty"><p>Your Desk is empty. Add a project to start, or ask for new research.</p><button type="button" className="btn-link" data-key="empty-add" onClick={addProject}>Add project</button></div>;
   } else if (!q && !nFilters && !f.archived) {
     const name = (VIEWS.find(([v]) => v === f.owned) || [null, 'this view'])[1];
-    body = <div className="empty-state"><h2>{`Nothing in ${name}`}</h2><p>{`${live.length} project${live.length === 1 ? ' is' : 's are'} saved.`}</p><button type="button" className="btn" data-key="empty-all" onClick={() => setView('all')}>Show all</button></div>;
+    body = <div className="empty-state v3-empty"><p>Nothing here.</p><button type="button" className="btn-link" data-key="empty-all" title={`Nothing in ${name}; ${live.length} project${live.length === 1 ? ' is' : 's are'} saved`} onClick={() => setView('all')}>Show all</button></div>;
   } else {
-    body = <div className="empty-state"><h2>No projects match</h2><p>{`${total} project${total === 1 ? ' is' : 's are'} hidden by the current search or filters.`}</p><button type="button" className="btn" data-key="empty-clear" onClick={clearAll}>Clear search and filters</button></div>;
+    body = <div className="empty-state v3-empty"><p>{`Nothing here. ${total} project${total === 1 ? ' is' : 's are'} hidden by the current search or filters.`}</p><button type="button" className="btn-link" data-key="empty-clear" onClick={clearAll}>Clear search and filters</button></div>;
   }
 
+  // The Desk's options (D7): the rail's Options from 1280px, the Focal
+  // block's below. One menu, drawn where its trigger is.
+  const [slot, setSlot] = useState(null);
+  useLayoutEffect(() => {
+    const el = document.getElementById('desk-options-slot');
+    if (el !== slot) setSlot(el);
+  });
   const sortOptions = Object.entries(SORT_NAMES).flatMap(([k, [label, a, z]]) => [[`${k}:asc`, `${label}, ${a}`], [`${k}:desc`, `${label}, ${z}`]]);
   const sortValue = `${pf.sort.key}:${pf.sort.dir}`;
+  const subOf = (k) => ({ open: menu.open && menu.sub === k ? true : undefined, onOpenChange: (o) => setMenu((m) => ({ ...m, sub: o ? k : null })) });
+  const optionsMenu = (
+    <Menu
+      label="Desk options"
+      align={slot ? 'start' : 'end'}
+      side={slot ? 'right' : 'bottom'}
+      open={menu.open}
+      onOpenChange={(o) => setMenu({ open: o, sub: null })}
+      trigger={<button type="button" className={slot ? 'v3-foot-item' : 'v3-focal-link'} aria-label="Desk options" data-key="desk-more">Options</button>}
+    >
+      <MenuSub label={nFilters ? `Filter (${nFilters})` : 'Filter'} data-key="menu-btn-filters" {...subOf('filter')}>
+        <MenuRadio label="Sector" value={f.sector} onChange={(v) => setFilter('sector', v)} options={[['', 'All sectors', live.length], ...sectors.map((x) => [x.id, x.label, live.filter((p) => p.sector && p.sector.primary === x.id).length])]} />
+        <MenuSep />
+        <MenuRadio label="Model coverage" value={f.coverage} onChange={(v) => setFilter('coverage', v)} options={COVERAGE} />
+        <MenuSep />
+        <MenuRadio label="30-day change" value={f.ret30} onChange={(v) => setFilter('ret30', v)} options={RET30} />
+        <MenuSep />
+        <MenuRadio label="Against Bitcoin" value={f.beat || 'any'} onChange={(v) => setFilter('beat', v)} options={BEAT} />
+        {nFilters ? <><MenuSep /><MenuItem onSelect={clearAll}>Clear filters</MenuItem></> : null}
+      </MenuSub>
+      <MenuSub label="Columns" data-key="menu-btn-columns" {...subOf('columns')}>
+        <MenuLabel>Show columns</MenuLabel>
+        {COLUMNS.map((c) => (
+          <MenuCheck
+            key={c.id}
+            checked={pf.columns.includes(c.id)}
+            onChange={(on) => {
+              const set = on ? [...new Set([...pf.columns, c.id])] : pf.columns.filter((x) => x !== c.id);
+              save({ ...pf, columns: COLUMNS.filter((x) => set.includes(x.id)).map((x) => x.id) });
+            }}
+          >
+            {c.label}
+          </MenuCheck>
+        ))}
+        <p className="menu-note">Narrow windows hide some columns; every value stays in the project details.</p>
+        <MenuSep />
+        <MenuItem data-key="desk-reset-cols" onSelect={() => save({ ...pf, columns: DEFAULT_COLUMNS.slice() })}>Reset columns</MenuItem>
+      </MenuSub>
+      <MenuSub label="Sort" data-key="menu-btn-sort" {...subOf('sort')}>
+        <MenuRadio
+          label="Sort by"
+          value={sortValue}
+          onChange={(v) => { const dir = v.split(':').pop(); const k = v.slice(0, v.length - dir.length - 1); resetOrder(); save({ ...pf, sort: { key: k, dir } }); }}
+          options={sortOptions.map(([v, text]) => [v, text.replace('Rank (CoinGecko)', sources.rankName)])}
+        />
+      </MenuSub>
+      <MenuSub label="Density" data-key="menu-btn-density" {...subOf('density')}>
+        <MenuRadio label="Row density" value={pf.density} onChange={(v) => save({ ...pf, density: v })} options={[['comfortable', 'Comfortable'], ['compact', 'Compact']]} />
+      </MenuSub>
+      <MenuSep />
+      <MenuCheck checked={f.archived} onChange={(v) => setFilter('archived', Boolean(v))}>{`Archived projects (${archivedCount})`}</MenuCheck>
+      {reordered ? <MenuItem data-key="desk-resort" onSelect={() => { resetOrder(); announce('Re-sorted.'); }}>Re-sort now</MenuItem> : null}
+      <MenuItem data-key="desk-new" href="#/new">New research from a link or screenshot</MenuItem>
+      <MenuItem data-key="desk-exit-quotes" onSelect={async () => { const L = await loadLegacy(); L.openExitQuotesDialog(legacyCtx); }}>Quote exits for every project…</MenuItem>
+    </Menu>
+  );
 
   return (
     <div className={`wl${pid && wide ? ' has-inspector' : ''}`}>
       <div className="wl-main">
-        <header className="page-head wl-head">
-          <div className="ph-title">
-            <p className="ph-eyebrow">CryptoResearch</p>
-            <h1>Desk<span className="ph-count" title={`${followed} project${followed === 1 ? '' : 's'} you watch or hold`}>{followed}</span></h1>
-            <DeskHeadline d={d} rows={live} agenda={agenda} />
-          </div>
-          <div className="ph-actions">
-            <Menu
-              label="Desk options"
-              align="end"
-              trigger={<button type="button" className="btn btn-ghost btn-icon" aria-label="Desk options" data-key="desk-more"><Ellipsis size={18} aria-hidden="true" /></button>}
-            >
-              <MenuCheck checked={f.archived} onChange={(v) => setFilter('archived', Boolean(v))}>{`Archived projects (${archivedCount})`}</MenuCheck>
-              <MenuSep />
-              <MenuItem data-key="desk-reset-cols" onSelect={() => save({ ...pf, columns: DEFAULT_COLUMNS.slice() })}>Reset columns</MenuItem>
-              {reordered ? <MenuItem data-key="desk-resort" onSelect={() => { resetOrder(); announce('Re-sorted.'); }}>Re-sort now</MenuItem> : null}
-              <MenuItem data-key="desk-new" href="#/new">New research from a link or screenshot</MenuItem>
-              <MenuItem data-key="desk-exit-quotes" onSelect={async () => { const L = await loadLegacy(); L.openExitQuotesDialog(legacyCtx); }}>Quote exits for every project…</MenuItem>
-            </Menu>
-            {phone ? null : <RefreshButton d={d} />}
-            <button type="button" className="btn btn-primary" id="add-project-btn" data-key="add-project" onClick={addProject}>
-              <Plus size={15} strokeWidth={2} aria-hidden="true" />
-              <span>Add project</span>
-            </button>
-          </div>
-        </header>
-
-        <DeskHero reviewCount={settled ? deskKpis(d.index, agenda).review.projects : null} />
-        <div className="desk-bar">
-          <h2 className="sec-h">Market</h2>
-          <RangeControl value={pf.range} onChange={(r) => { if (r !== pf.range) { save({ ...pf, range: r }); announce(`Changes over ${r}.`); } }} />
-        </div>
-        <KpiStrip d={d} agenda={agenda} settled={settled} sources={sources} filters={f} range={pf.range} onView={setView} onBeat={() => setFilter('beat', f.beat === 'yes' ? 'any' : 'yes')} />
+        {slot ? createPortal(optionsMenu, slot) : null}
+        <FocalBlock d={d} rows={live} agenda={agenda} onAdd={addProject} options={slot ? null : optionsMenu} />
         <ActionBand d={d} />
-        <DecisionGrid d={d} rows={live} />
+        <MarketLine d={d} agenda={agenda} settled={settled} sources={sources} filters={f} onView={setView} onBeat={() => setFilter('beat', f.beat === 'yes' ? 'any' : 'yes')} />
 
-        <nav className="views" aria-label="Views">
-          {VIEWS.map(([v, text]) => (
-            <button key={v} type="button" className="view-tab" aria-pressed={!f.archived && f.owned === v} data-key={`owned-${v}`} onClick={() => setView(v)}>
-              <span>{text}</span><span className="view-count">{counts[v]}</span>
-            </button>
-          ))}
-        </nav>
-
-        <div className="toolbar" role="search" aria-label="Find and filter projects" data-nodirty="1">
-          <div className="search wl-search">
-            <Search className="search-ico" size={15} strokeWidth={1.9} aria-hidden="true" />
-            <input
-              ref={search}
-              className="input"
-              type="search"
-              placeholder="Search name, ticker or sector"
-              aria-label="Search projects"
-              aria-keyshortcuts="/"
-              data-key="wl-search"
-              value={q}
-              onChange={(e) => { view.q = e.target.value; setQ(e.target.value); resetOrder(); }}
-              onKeyDown={(e) => {
-                if (e.nativeEvent.isComposing || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-                const first = document.querySelector('.wl .pname');
-                if (e.key === 'ArrowDown' && first) { e.preventDefault(); first.focus(); }
-                else if (e.key === 'Enter' && q.trim() && first) { e.preventDefault(); openPanel(first.closest('[data-pid]').dataset.pid, first); }
-              }}
-            />
-            <kbd aria-hidden="true">/</kbd>
+        <section className="v3-ledger" aria-label="Projects">
+          <div className="v3-ledger-top">
+            <nav className="views" aria-label="Views">
+              {VIEWS.filter(([v]) => v === 'all' || counts[v] > 0 || (!f.archived && f.owned === v)).map(([v, text]) => (
+                <button key={v} type="button" className="view-tab" aria-pressed={!f.archived && f.owned === v} data-key={`owned-${v}`} onClick={() => setView(v)}>
+                  <span>{v === 'waiting' ? 'Waiting' : text}</span><span className="view-count">{counts[v]}</span>
+                </button>
+              ))}
+            </nav>
+            <div className="v3-ledger-right" role="search" aria-label="Find projects" data-nodirty="1">
+              <input
+                ref={search}
+                className="v3-search"
+                type="search"
+                placeholder="Search  /"
+                aria-label="Search projects"
+                aria-keyshortcuts="/"
+                data-key="wl-search"
+                value={q}
+                onChange={(e) => { view.q = e.target.value; setQ(e.target.value); resetOrder(); }}
+                onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+                  const first = document.querySelector('.wl .pname');
+                  if (e.key === 'ArrowDown' && first) { e.preventDefault(); first.focus(); }
+                  else if (e.key === 'Enter' && q.trim() && first) { e.preventDefault(); openPanel(first.closest('[data-pid]').dataset.pid, first); }
+                }}
+              />
+              <RangeControl value={pf.range} onChange={(r) => { if (r !== pf.range) { save({ ...pf, range: r }); announce(`Changes over ${r}.`); } }} />
+            </div>
           </div>
-          <Menu
-            label="Filters"
-            trigger={<button type="button" className={`btn${nFilters ? ' is-on' : ''}`} data-key="menu-btn-filters"><ListFilter size={15} strokeWidth={1.9} aria-hidden="true" /><span>Filter</span>{nFilters ? <span className="btn-count">{nFilters}<span className="sr-only"> active</span></span> : null}</button>}
-          >
-            <MenuRadio label="Sector" value={f.sector} onChange={(v) => setFilter('sector', v)} options={[['', 'All sectors', live.length], ...sectors.map((s) => [s.id, s.label, live.filter((p) => p.sector && p.sector.primary === s.id).length])]} />
-            <MenuSep />
-            <MenuRadio label="Model coverage" value={f.coverage} onChange={(v) => setFilter('coverage', v)} options={COVERAGE} />
-            <MenuSep />
-            <MenuRadio label="30-day change" value={f.ret30} onChange={(v) => setFilter('ret30', v)} options={RET30} />
-            <MenuSep />
-            <MenuRadio label="Against Bitcoin" value={f.beat || 'any'} onChange={(v) => setFilter('beat', v)} options={BEAT} />
-            {nFilters ? <><MenuSep /><MenuItem onSelect={clearAll}>Clear filters</MenuItem></> : null}
-          </Menu>
           {chips.length ? (
             <ul className="fchips" aria-label="Active filters">
               {chips.map((t) => (
@@ -377,56 +399,12 @@ export default function Watchlist() {
               {chips.length > 1 ? <li><button type="button" className="btn-link" data-key="tok-clear" onClick={clearAll}>Clear all</button></li> : null}
             </ul>
           ) : null}
-          <div className="tb-right">
-            <Menu
-              label="Density"
-              align="end"
-              trigger={<button type="button" className="btn btn-icon" data-key="menu-btn-density" aria-label={`Density: ${pf.density}`} title="Density"><Rows3 size={15} strokeWidth={1.9} aria-hidden="true" /></button>}
-            >
-              <MenuRadio label="Row density" value={pf.density} onChange={(v) => save({ ...pf, density: v })} options={[['comfortable', 'Comfortable'], ['compact', 'Compact']]} />
-            </Menu>
-            <Menu
-              label="Columns"
-              align="end"
-              trigger={<button type="button" className="btn" data-key="menu-btn-columns"><Columns3 size={15} strokeWidth={1.9} aria-hidden="true" /><span className="tb-lbl">Columns</span></button>}
-            >
-              <MenuLabel>Show columns</MenuLabel>
-              {COLUMNS.map((c) => (
-                <MenuCheck
-                  key={c.id}
-                  checked={pf.columns.includes(c.id)}
-                  onChange={(on) => {
-                    const set = on ? [...new Set([...pf.columns, c.id])] : pf.columns.filter((x) => x !== c.id);
-                    save({ ...pf, columns: COLUMNS.filter((x) => set.includes(x.id)).map((x) => x.id) });
-                  }}
-                >
-                  {c.label}
-                </MenuCheck>
-              ))}
-              <p className="menu-note">Narrow windows hide some columns; every value stays in the project details.</p>
-              <MenuSep />
-              <MenuItem onSelect={() => save({ ...pf, columns: DEFAULT_COLUMNS.slice() })}>Reset columns</MenuItem>
-            </Menu>
-            <Menu
-              label="Sort projects"
-              align="end"
-              trigger={<button type="button" className="btn" data-key="menu-btn-sort" aria-label={`Sort: ${SORT_NAMES[pf.sort.key][0]}, ${SORT_NAMES[pf.sort.key][pf.sort.dir === 'asc' ? 1 : 2]}`}><ArrowUpDown size={15} strokeWidth={1.9} aria-hidden="true" /><span className="tb-sort-lbl">{SORT_NAMES[pf.sort.key][0].replace(' (CoinGecko)', '').replace(' (demo data)', '')}</span></button>}
-            >
-              <MenuRadio
-                label="Sort by"
-                value={sortValue}
-                onChange={(v) => { const dir = v.split(':').pop(); const k = v.slice(0, v.length - dir.length - 1); resetOrder(); save({ ...pf, sort: { key: k, dir } }); }}
-                options={sortOptions.map(([v, text]) => [v, text.replace('Rank (CoinGecko)', sources.rankName)])}
-              />
-            </Menu>
-          </div>
-        </div>
-
-        {reordered ? (
-          <p className="reorder" role="status"><span>Values updated; order kept while you read.</span><button type="button" className="btn-link" data-key="resort" onClick={() => { resetOrder(); announce('Re-sorted.'); }}>Re-sort</button></p>
-        ) : filtered ? <p className="results-line" role="status">{`${rows.length} of ${total} ${f.archived ? 'archived' : 'saved'} projects`}</p> : null}
-
-        <div className="wl-body">{body}</div>
+          {reordered ? (
+            <p className="reorder" role="status"><span>Values updated; order kept while you read.</span><button type="button" className="btn-link" data-key="resort" onClick={() => { resetOrder(); announce('Re-sorted.'); }}>Re-sort</button></p>
+          ) : filtered ? <p className="results-line" role="status">{`${rows.length} of ${total} ${f.archived ? 'archived' : 'saved'} projects`}</p> : null}
+          <div className="wl-body">{body}</div>
+          <p className="v3-ledger-foot"><span>{footer}</span><span aria-hidden="true">J K to move · R reviewed</span></p>
+        </section>
       </div>
       {selectedRow ? (
         <Boundary
@@ -438,21 +416,5 @@ export default function Watchlist() {
         </Boundary>
       ) : null}
     </div>
-  );
-}
-
-// The Desk's one-line headline (the Architecture restyle, 2026-10-29): how
-// many decisions wait and Bitcoin's week, both figures the desk already shows
-// (the PM cards, the KPI strip); the week is left out when it is not known.
-function DeskHeadline({ d, rows, agenda }) {
-  const n = waitingTickets(rows).length;
-  const m = deskKpis(d.index, agenda).market;
-  const ch = m && typeof m.change_7d === 'number' ? m.change_7d : null;
-  const lead = n ? `${n} ${n === 1 ? 'decision waits' : 'decisions wait'} for you` : 'No decisions wait for you';
-  return (
-    <p className="desk-headline">
-      {lead}
-      {ch === null ? '.' : <>{'; Bitcoin is '}<span className={ch >= 0 ? 'pos' : 'neg'}>{`${ch >= 0 ? 'up' : 'down'} ${fmtChangePct(Math.abs(ch)).replace(/^[+−-]/, '')}`}</span>{' on the week.'}</>}
-    </p>
   );
 }

@@ -223,8 +223,9 @@
 .update-bar .btn { margin-left: auto; }
 
 
-/* The rail's Search steps aside where the command bar shows (1024px up). */
-@media (min-width: 1024px) { .sb-util[data-key="nav-command"] { display: none; } }
+/* The rail's Search steps aside where the command bar shows (1024px up,
+   every page but the Desk and Review). */
+@media (min-width: 1024px) { .app.has-cmdbar .sb-util[data-key="nav-command"] { display: none; } }
 
 /* ---- the command bar: floating glass at the foot of the page ---- */
 .cmdbar {
@@ -244,3 +245,64 @@
 /* While a project is docked its drawer's foot is the page's black panel and
    holds its actions; the bar steps aside (Ctrl/Cmd+K still opens the menu). */
 .app-main:has(.wl.has-inspector) .cmdbar { display: none; }
+
+/* ---- UI v3 frame (2026-10-30, UI_MASTER_PLAYBOOK.md §3, §4.1) ----
+   The Desk from 1280px: the page centred on the canvas, 1560px at most,
+   the 150px text rail inside it, the work beside it. Nothing is boxed but
+   the cards themselves; the canvas is the page. */
+.app.is-v3 { display: block; }
+.v3-page {
+  max-width: var(--v3-page-max); margin: 0 auto; box-sizing: border-box;
+  padding: var(--v3-pad-page) var(--v3-pad-page) 72px;
+  display: flex; gap: var(--v3-gap-shell); align-items: flex-start;
+}
+.app.is-v3 .page.v3-main {
+  flex: 1 1 0; min-width: 0; min-height: 0; padding: 0;
+  background: transparent; border-radius: 0; box-shadow: none;
+}
+
+.sidebar.v3 {
+  flex: 0 0 var(--v3-rail-w); width: var(--v3-rail-w); box-sizing: border-box;
+  position: sticky; top: var(--v3-pad-page); height: auto;
+  min-height: calc(100vh - 2 * var(--v3-pad-page));
+  min-height: calc(100dvh - 2 * var(--v3-pad-page));
+  display: flex; flex-direction: column; gap: 40px;
+  padding: 0; overflow: visible; background: transparent;
+}
+.v3-brand { display: flex; align-items: center; gap: 8px; }
+.v3-tile {
+  display: flex; align-items: center; justify-content: center; flex: none;
+  width: 32px; height: 32px; border-radius: var(--r-v3-logo-sq);
+  background: var(--v3-solid); color: var(--v3-on-solid);
+  font-size: var(--fs-meta); font-weight: 600; letter-spacing: 0; text-decoration: none;
+}
+.v3-tile:hover { text-decoration: none; }
+.v3-nav { display: flex; flex-direction: column; gap: 4px; }
+.v3-nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 7px 0;
+  font-size: var(--fs-md); line-height: 20px; font-weight: 400;
+  color: var(--v3-ink-quiet); text-decoration: none; cursor: pointer;
+  transition: color var(--dur) var(--ease);
+}
+.v3-nav-item:hover { color: var(--v3-ink); text-decoration: none; }
+.v3-nav-item.is-active { color: var(--v3-ink); font-weight: 500; }
+.v3-mark { flex: none; width: 4px; height: 4px; border-radius: 50%; background: transparent; }
+.v3-nav-item.is-active .v3-mark { background: var(--v3-ink); }
+.v3-count { font-size: var(--fs-meta); color: var(--v3-count-warn); font-variant-numeric: tabular-nums; }
+.v3-spacer { flex: 1; }
+.v3-foot { display: flex; flex-direction: column; gap: 12px; font-size: var(--fs-sm); color: var(--v3-ink-quiet); }
+.v3-foot .signout { margin: 0; }
+.v3-foot-item {
+  display: inline-flex; align-items: center; gap: 8px; align-self: flex-start;
+  padding: 0; border: 0; background: transparent; font: inherit; font-size: var(--fs-sm);
+  color: var(--v3-ink-quiet); cursor: pointer; text-align: left;
+}
+.v3-foot-item:hover { color: var(--v3-ink); }
+.v3-kbd { font-family: var(--mono); font-size: var(--fs-3xs); color: inherit; background: none; border: 0; padding: 0; }
+.v3-slot:empty { display: none; }
+.v3-live { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.v3-live-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--cr-ink-faint); }
+.v3-live.is-live .v3-live-dot { background: var(--cr-live); }
+.v3-live.is-warn .v3-live-dot { background: var(--cr-amber); }
+.v3-live.is-down .v3-live-dot { background: var(--cr-critical); }
+.v3-live-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

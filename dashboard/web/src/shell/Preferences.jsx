@@ -175,7 +175,7 @@ function TicketSizing({ d }) {
 const TRADER_FIELDS = [
   ['stop_min_pct', 'Minimum stop distance (share of entry)', 'The stop is at least this share of the entry below it, such as 0.01 for 1%: more than 0, at most 0.5.'],
   ['stop_min_atr', 'Minimum stop distance (× 14-hour ATR)', 'And at least this multiple of the pair\'s 14-hour ATR below the entry; the larger of the two applies: more than 0, at most 20.'],
-  ['notional_max_pct', 'Notional cap (share of NAV)', 'An order\'s notional is at most this share of the trader simulation\'s NAV, such as 0.25 for 25%: more than 0, at most 1.'],
+  ['notional_max_pct', 'Notional cap (share of NAV)', 'An order\'s notional is at most this share of the Trader Sim\'s NAV, such as 0.25 for 25%: more than 0, at most 1.'],
   ['max_validity_minutes', 'Longest life of an intent (minutes)', 'A trade intent lives at most this long after it was written: 1 to 10080.'],
   ['allowlist', 'Allowlist (pairs)', 'The only pairs an intent may open, exactly as the venue names them, such as BTC/USDC; separate them with commas.'],
 ];
@@ -217,7 +217,7 @@ function TraderRules({ d }) {
   return (
     <section className="l2-panel" aria-labelledby="prefs-trader-h">
       <header className="l2-panel-head">
-        <h3 className="l2-panel-t" id="prefs-trader-h" title="Your rules for the trader simulation (cr-trader-rules@1), not universal rules, beside the engine's hard limits. While any is unset, an approve or a halve waits and no order is made.">Your trader rules</h3>
+        <h3 className="l2-panel-t" id="prefs-trader-h" title="Your rules for the Trader Sim (cr-trader-rules@1), not universal rules, beside the engine's hard limits. While any is unset, an approve or a halve waits and no order is made.">Your trader rules</h3>
       </header>
       <div className="l2-panel-body">
         <form className="l2-form prefs-form" data-key="prefs-trader-form" onSubmit={(e) => { e.preventDefault(); save(); }}>
@@ -242,7 +242,7 @@ function TraderRules({ d }) {
 // ---- Screening: trader.book (core/trader-rules.js bookOf, slot 12c) ----------------------------
 
 const BOOK_FIELDS = [
-  ['cash_usd', 'Trader simulation funding (USD)', 'The trader simulation is funded once with this amount, before its first hour; a different amount later is never applied over it. More than 0, at most 10,000,000.'],
+  ['cash_usd', 'Trader Sim funding (USD)', 'The Trader Sim is funded once with this amount, before its first hour; a different amount later is never applied over it. More than 0, at most 10,000,000.'],
   ['fee_rate', 'Venue fee (share of the notional)', 'The simulated venue\'s fee on every fill, maker and taker alike, such as 0.003 for 0.3%. An unknown fee is never read as 0. More than 0, at most 0.1.'],
 ];
 
@@ -265,7 +265,7 @@ function TraderBook({ d }) {
     setBusy(true);
     try {
       await api.post('/api/settings', { trader: { book: out } });
-      toast('Trader simulation settings saved.');
+      toast('Trader Sim settings saved.');
       await refresh();
     } catch (e) {
       setErr(e.message);
@@ -277,7 +277,7 @@ function TraderBook({ d }) {
   return (
     <section className="l2-panel" aria-labelledby="prefs-book-h">
       <header className="l2-panel-head">
-        <h3 className="l2-panel-t" id="prefs-book-h" title="The trader simulation (cr-paper@2): its starting cash and its simulated venue's fee. Neither has a default; while either is unset, an approve or a halve waits and no hour is read. Research > Outcomes shows the book.">Your trader simulation</h3>
+        <h3 className="l2-panel-t" id="prefs-book-h" title="The Trader Sim (cr-paper@2): its starting cash and its simulated venue's fee. Neither has a default; while either is unset, an approve or a halve waits and no hour is read. Research > Outcomes shows the book.">Your Trader Sim</h3>
       </header>
       <div className="l2-panel-body">
         <form className="l2-form prefs-form" data-key="prefs-book-form" onSubmit={(e) => { e.preventDefault(); save(); }}>
@@ -290,7 +290,7 @@ function TraderBook({ d }) {
           ))}
           {err ? <p className="l2-err" role="alert">{err}</p> : null}
           <div className="l2-actions">
-            <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !dirty} data-key="prefs-book-save">{busy ? 'Saving…' : 'Save trader simulation settings'}</button>
+            <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !dirty} data-key="prefs-book-save">{busy ? 'Saving…' : 'Save Trader Sim settings'}</button>
             {dirty ? <button type="button" className="btn btn-ghost btn-sm" data-key="prefs-book-undo" onClick={() => { setForm(fresh()); setErr(null); }}>Discard changes</button> : null}
           </div>
         </form>
@@ -423,6 +423,7 @@ function Automation({ d }) {
 
 function DeskDefaults() {
   const [pf, setPf] = useState(() => readPrefs({ ui }));
+  const [gate, setGate] = useState(() => (ui.get('gate_details', 'folded') === 'open' ? 'open' : 'folded'));
   const set = (patch) => {
     deskPrefs(patch);
     setPf({ ...pf, ...patch, filters: { ...pf.filters, ...(patch.filters || {}) } });
@@ -442,6 +443,12 @@ function DeskDefaults() {
         <label className="prefs-field"><span>View</span>
           <select className="input" value={pf.filters.owned} data-key="prefs-view" onChange={(e) => set({ filters: { owned: e.target.value } })}>
             {VIEWS.map(([v, w]) => <option key={v} value={v}>{w}</option>)}
+          </select>
+        </label>
+        <label className="prefs-field"><span>Contract gate details</span>
+          <select className="input" value={gate} data-key="prefs-gate-details" onChange={(e) => { ui.set('gate_details', e.target.value); setGate(e.target.value); toast('Saved for the Desk'); }}>
+            <option value="folded">Folded</option>
+            <option value="open">Open</option>
           </select>
         </label>
         <div className="prefs-field"><span>Columns</span>

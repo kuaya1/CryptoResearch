@@ -352,7 +352,7 @@ try {
       await t2.send('Network.setCacheDisabled', { cacheDisabled: true });
       await go(t2, `#/watchlist?p=${P.relay}`, "document.querySelector('.inspector .mpanel')");
       await sleep(1500);
-      const parts = await t2.evalJs("({ verdict: Boolean(document.querySelector('.inspector .mh, .inspector .vblock')), rows: Boolean(document.querySelector('.wl-table tbody tr')) })");
+      const parts = await t2.evalJs("({ verdict: Boolean(document.querySelector('.inspector .iv-cohort, .inspector .mh, .inspector .vblock')), rows: Boolean(document.querySelector('.wl-table tbody tr')) })");
       await go(t2, `#/project/${P.relay}/market`, "document.querySelector('.pp-panel .l2-panel')");
       await waitFor(t2, "document.querySelector('.pp-panel .lg-part-error')", 6000);
       Object.assign(parts, await t2.evalJs("({ partError: document.querySelectorAll('.pp-panel .lg-part-error').length, retry: [...document.querySelectorAll('.pp-panel .lg-part-error button')].some((b) => /try again/i.test(b.textContent)), panels: document.querySelectorAll('.pp-panel .l2-panel').length })"));
@@ -583,10 +583,10 @@ try {
       const tab = await openTab(1440);
       await go(tab, '#/watchlist', "document.querySelector('.wl-table tbody tr')");
       await tab.evalJs("document.querySelector('.sidebar [data-key=\"nav-outcomes\"]').click(); true");
-      const ok = await waitFor(tab, "/PM decision cohort/.test((document.querySelector('.lg-research') || {}).textContent || '')", 10000);
+      const ok = await waitFor(tab, "/PM Cohort/.test((document.querySelector('.lg-research') || {}).textContent || '')", 10000);
       const st = { hash: await tab.evalJs('location.hash'), current: await tab.evalJs("(document.querySelector('.sidebar [aria-current=\"page\"]') || {}).dataset?.key || null") };
       evidence.l7_outcomes = st;
-      record('L7', 'Outcomes on the rail opens Research > Outcomes with the PM decision cohort, marked as the current place', ok !== null && /tab=outcomes/.test(st.hash) && st.current === 'nav-outcomes', st);
+      record('L7', 'Outcomes on the rail opens Research > Outcomes with the PM Cohort, marked as the current place', ok !== null && /tab=outcomes/.test(st.hash) && st.current === 'nav-outcomes', st);
       if (SHOTS) await tab.shot(path.join(SHOTS, 'l7-outcomes.png'), { full: true });
       await tab.close();
     }
@@ -599,7 +599,8 @@ try {
       await go(tab, '#/watchlist', "document.querySelector('.wl-table tbody tr')");
       proxy.set({ hang: ['/app/assets/Preferences-'] });
       const t0 = Date.now();
-      await tab.evalJs("document.querySelector('.sidebar [data-key=\"nav-settings\"]').click(); true");
+      // UI v3 (2026-10-30): the Desk's rail has no Preferences row; ⌘, / Ctrl+, opens it.
+      await tab.evalJs("document.dispatchEvent(new KeyboardEvent('keydown', { key: ',', ctrlKey: !/Mac/.test(navigator.platform), metaKey: /Mac/.test(navigator.platform), bubbles: true })); true");
       const loading = await waitFor(tab, "/Loading Preferences/.test((document.querySelector('aside.prefs.is-loading') || {}).textContent || '')", 3000);
       const said = await waitFor(tab, alertWith('aside.prefs [role="alert"]'), BOUND);
       const st = { loading: loading !== null, alert: said, seconds: Math.round((Date.now() - t0) / 100) / 10 };
@@ -633,7 +634,10 @@ try {
       await waitFor(tab, "document.querySelector('.inspector [data-part=\"risk-text\"], .inspector .tl-risk-text')", 8000);
       await sleep(400);
       const geo = await tab.evalJs(`(() => {
-        const body = document.querySelector('.insp-body').getBoundingClientRect();
+        // The docked card (UI v3) has no scrolling body: its first screen ends at
+        // the window's bottom; a drawer's at its body's.
+        const box = document.querySelector('.insp-body').getBoundingClientRect();
+        const body = { bottom: Math.min(box.bottom, innerHeight) };
         const risk = ${riskSel};
         const r = risk.getBoundingClientRect();
         const before = (sel) => { const el = document.querySelector('.inspector ' + sel); return el ? Boolean(risk.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) : null; };
