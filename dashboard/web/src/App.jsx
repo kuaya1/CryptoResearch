@@ -3,7 +3,7 @@ import { toast } from '../../public/ui.js';
 import { useDesk, useMedia } from './lib/hooks.js';
 import { nav, navigate, pageTitle, routeKey } from './lib/router.js';
 import { start } from './lib/start.js';
-import { Sidebar, TabBar, TopBar, DemoBanner, railCollapsed, saveRail } from './shell/Shell.jsx';
+import { Sidebar, TabBar, TopBar, DemoBanner, CommandBar, railCollapsed, saveRail } from './shell/Shell.jsx';
 import { SECTIONS, PAGE_TITLES } from './shell/sections.js';
 import { openCommand, openPrefs, closePrefs, prefsOf } from './shell/overlays.js';
 import { Boundary, ViewError, retryableLazy, retryingImport } from './components/Boundary.jsx';
@@ -195,6 +195,7 @@ export default function App() {
         <main id="main" tabIndex={-1} className={`page page-${nav.route.name}`}>
           <RouteView />
         </main>
+        {!rail && !phone && nav.route.name !== 'review' ? <CommandBar /> : null}
       </div>
       {phone ? <TabBar /> : null}
       <Boundary resetKey={prefs || 'none'} onRetry={() => Preferences.retry()} fallback={(error, retry) => <aside className="prefs is-open is-error" aria-label="Preferences"><ViewError error={error} retry={retry} what="Preferences" compact><button type="button" className="btn btn-sm btn-ghost" onClick={closePrefs}>Close</button></ViewError></aside>}>

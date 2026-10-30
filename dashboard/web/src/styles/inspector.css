@@ -325,7 +325,8 @@ html.has-drawer { overflow: hidden; }
 .part-why { margin-top: 4px; font-size: var(--fs-xs); color: var(--text-2); line-height: 1.45; }
 
 /* bars on the one 0–100 spectrum */
-.bar { position: relative; display: block; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+/* 3px bars (the Architecture restyle, 2026-10-29). */
+.bar { position: relative; display: block; height: 3px; border-radius: 2px; background: var(--track); overflow: hidden; }
 .bar-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--bar-ink); }
 .bar-span { position: absolute; top: 0; bottom: 0; border-radius: 3px; background: var(--bar-ink); opacity: 0.85; }
 .bar-fill.risk, .bar-span.risk { background: var(--risk-bar); }
