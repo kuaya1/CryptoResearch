@@ -80,6 +80,48 @@ test('an expired dispatch with no known outcome waits to be reconciled, never di
   assert.equal(C.claim(s.ws, s.pid, { owner: 'B', now: later }).status, 'claimed_now', 'after Eric reconciles it, the next runner may claim');
 });
 
+// Audit H1: binding a real run moves the desk's key from research:- to
+// research:run_…; the expired dispatch is still the same attempt.
+test('a real run bound under a provisional claim, then expired, waits to be reconciled though the desk\'s key changed', (t) => {
+  const s = setup(t);
+  const now = Date.now();
+  const a = C.claim(s.ws, s.pid, { owner: 'A', now });
+  assert.equal(a.status, 'claimed_now');
+  assert.equal(a.key, 'research:-');
+  assert.match(a.claim.attempt_id, /^pa_[0-9a-f]{16}$/);
+  const run = research.createRun(s.ws, { project_id: s.pid, providers: ['claude'], channel: 'cowork', utterance: 'FICTIONAL pilot test' });
+  const runId = run.run_id || run.run.run_id;
+  const bound = C.bind(s.ws, s.pid, a.token, { run_id: runId, now }).claim;
+  assert.equal(bound.key, 'research:-', 'the claim keeps its first key');
+  assert.equal(bound.bound_key, `research:${runId}`);
+  assert.equal(bound.attempt_id, a.claim.attempt_id, 'the same attempt');
+  const later = now + C.TTL_MS + 1000;
+  assert.equal(C.transitionKey(T.pilotQueue(s.ws, { project: s.pid, now: later })[0]), `research:${runId}`, 'the desk now names the run');
+  const b = C.claim(s.ws, s.pid, { owner: 'B', now: later });
+  assert.equal(b.status, 'reconcile', 'never claimed_now on an unresolved dispatch');
+  assert.equal(b.claim.attempt_id, a.claim.attempt_id);
+  assert.equal(C.read(s.ws, s.pid).token, a.token, 'nothing was written');
+  C.release(s.ws, s.pid, { reconciled: true, now: later });
+  const c = C.claim(s.ws, s.pid, { owner: 'B', now: later });
+  assert.equal(c.status, 'claimed_now');
+  assert.notEqual(c.claim.attempt_id, a.claim.attempt_id, 'a new attempt after Eric reconciles');
+});
+
+test('bind is refused once the claim has expired or automation was paused after it; nothing is dispatched', (t) => {
+  const s = setup(t);
+  const now = Date.now();
+  const a = C.claim(s.ws, s.pid, { now });
+  assert.throws(() => C.bind(s.ws, s.pid, a.token, { run_id: 'run_fictional', now: now + C.TTL_MS }), (err) => err.code === 'CHANGED' && /expired/.test(err.message));
+  assert.equal(C.read(s.ws, s.pid).state, 'claimed');
+  const b = C.claim(s.ws, s.pid, { now: now + C.TTL_MS + 1000 });
+  assert.equal(b.status, 'claimed_now', 'an expired claim that never dispatched is taken over');
+  s.ws.settings = { ...s.ws.settings, automation: { ...s.ws.settings.automation, paused: true } };
+  assert.throws(() => C.bind(s.ws, s.pid, b.token, { run_id: 'run_fictional', now: now + C.TTL_MS + 2000 }), (err) => err.code === 'PAUSED');
+  assert.equal(C.read(s.ws, s.pid).state, 'claimed');
+  // Already-dispatched work may still settle: release is never paused.
+  assert.equal(C.release(s.ws, s.pid, { token: b.token, outcome: 'stopped' }).status, 'released');
+});
+
 test('an expired claim that never dispatched is taken over; one whose work landed is a new transition', (t) => {
   const s = setup(t);
   const now = Date.now();

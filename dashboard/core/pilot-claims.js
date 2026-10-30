@@ -13,8 +13,10 @@
 //
 // An expired claim that was dispatched on the same step is never dispatched
 // again by itself: its outcome is unknown (the agent may still be running, or
-// saved nothing), so it waits for the desk to move on or for Eric to release it
-// as reconciled. A refused Prosecutor save (ticket_failed) gets at most one
+// saved nothing), so it waits for the desk to move on to another step or for
+// Eric to release it as reconciled. The step is compared, not the key: binding
+// the run or ticket changes the desk's key (research:- becomes research:run_…),
+// and that is the same attempt, so it keeps its attempt ID and its first key. A refused Prosecutor save (ticket_failed) gets at most one
 // correction run per ticket; after that the step stays ticket_failed for Eric.
 // The records live under .cr/pilot-claims/ (runner state, not research
 // records); nothing here asks a provider or writes a ticket.
@@ -45,6 +47,15 @@ function transitionKey(step) {
   return `${step.step}:${step.run_id || step.ticket_id || step.report_id || step.receipt_id || '-'}`;
 }
 
+// The desk still shows the step an expired dispatch acted on: the same key, the
+// key it was bound under, or the same step whatever record the key now names.
+// A forced prosecution claimed on pm_review dispatches a Prosecutor: its ticket
+// waiting on the desk is the same attempt.
+const dispatchedAs = (s) => (s === 'pm_review' ? 'ticket' : s);
+function sameAttempt(cur, step, key) {
+  return cur.key === key || cur.bound_key === key || dispatchedAs(cur.step) === dispatchedAs(step.step);
+}
+
 function claim(ws, pid, { owner = null, now = Date.now(), ttlMs = TTL_MS, expect = null, force = false } = {}) {
   return withLock(ws, `pilot claim ${pid}`, () => {
     if (require('./workspace').automationPaused(ws)) return { status: 'paused', words: 'Automation is paused: no agent is dispatched until you resume it.' };
@@ -58,7 +69,7 @@ function claim(ws, pid, { owner = null, now = Date.now(), ttlMs = TTL_MS, expect
     const corrections = (cur && cur.corrections) || {};
     if (cur && !cur.released) {
       if (Date.parse(cur.expires_at) > now) return { status: 'claimed', key, step, claim: cur, words: `Another runner holds this project (${cur.key}) until ${cur.expires_at}.` };
-      if (cur.state === 'dispatched' && cur.key === key) return { status: 'reconcile', key, step, claim: cur, words: `An earlier dispatch of ${key} (${cur.run_id || cur.ticket_id || 'no record'}) expired with no known outcome. It is not dispatched again; check the desk, then release it as reconciled.` };
+      if (cur.state === 'dispatched' && sameAttempt(cur, step, key)) return { status: 'reconcile', key, step, claim: cur, words: `An earlier dispatch of ${cur.key} (${cur.run_id || cur.ticket_id || 'no record'}) expired with no known outcome. It is not dispatched again; check the desk, then release it as reconciled.` };
     }
     if (step.step === 'ticket_failed' && step.ticket_id && (corrections[step.ticket_id] || 0) >= MAX_CORRECTIONS) {
       return { status: 'correction_limit', key, step, words: `The Prosecutor's save on ${step.ticket_id} was refused again after ${MAX_CORRECTIONS} correction. It waits for you.` };
@@ -69,6 +80,7 @@ function claim(ws, pid, { owner = null, now = Date.now(), ttlMs = TTL_MS, expect
       project_id: pid,
       key,
       step: step.step,
+      attempt_id: `pa_${crypto.randomBytes(8).toString('hex')}`,
       token: crypto.randomBytes(10).toString('hex'),
       owner,
       claimed_at: at,
@@ -92,11 +104,17 @@ function held(ws, pid, token) {
   return cur;
 }
 
-// The run or ticket the agent will work on, written before it runs.
+// The run or ticket the agent will work on, written before it runs. Refused
+// when the claim has expired (another runner may take it over) or automation
+// was paused since the claim; nothing is dispatched then. The claim keeps its
+// first key and attempt ID; the key under the bound record is kept beside it.
 function bind(ws, pid, token, { run_id = null, ticket_id = null, now = Date.now() } = {}) {
   return withLock(ws, `pilot bind ${pid}`, () => {
     const cur = held(ws, pid, token);
-    const rec = { ...cur, state: 'dispatched', dispatched_at: new Date(now).toISOString(), run_id: run_id || cur.run_id, ticket_id: ticket_id || cur.ticket_id };
+    if (!(Date.parse(cur.expires_at) > now)) throw new OpError('CHANGED', `The claim expired at ${cur.expires_at}; nothing was dispatched.`);
+    if (require('./workspace').automationPaused(ws)) throw new OpError('PAUSED', 'Automation was paused after the claim; nothing was dispatched.');
+    const bound = { run_id: run_id || cur.run_id, ticket_id: ticket_id || cur.ticket_id };
+    const rec = { ...cur, state: 'dispatched', dispatched_at: new Date(now).toISOString(), ...bound, bound_key: transitionKey({ step: cur.step, ...bound }) };
     write(ws, pid, rec);
     return { status: 'bound', claim: rec };
   });

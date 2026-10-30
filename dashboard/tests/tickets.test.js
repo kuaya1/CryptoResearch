@@ -1752,6 +1752,34 @@ test('reconcile: a malformed or unreadable decisions or positions file refuses t
   assert.deepEqual(snapshot(c.ws), before, 'zero writes');
 });
 
+// Audit H3: an Undo that lands after the repair's first read and before its
+// paper step. The paper step reads the decisions again inside the lock.
+test('reconcile: a grant undone between the repair\'s read and its paper step is skipped and opens nothing', (t) => {
+  const P = require('../core/paper');
+  const notes = require('../core/notes');
+  const a = grantWithFailedPaper(t);
+  const orig = notes.loadJournal;
+  let undone = false;
+  // The repair's journal step reads the journal between its first read and the paper step.
+  notes.loadJournal = (...args) => {
+    if (!undone) {
+      undone = true;
+      T.decide(a.ws, a.pid, { receipt_id: a.saved.receipt_id, action: 'undo' });
+    }
+    return orig(...args);
+  };
+  let r;
+  try { r = T.reconcileEffects(a.ws, { project: a.pid }); } finally { notes.loadJournal = orig; }
+  assert.ok(undone, 'the Undo landed mid-repair');
+  const paper = r.completed.find((c) => c.step === 'paper');
+  assert.equal(paper.status, 'skipped');
+  assert.equal(paper.reason, 'not_in_force');
+  assert.match(paper.words, /no longer the one in force/);
+  assert.equal(P.readRecords(a.ws).filter((l) => l.event === 'open').length, 0, 'no obsolete opening');
+  // Nothing in force: a later repair has nothing to open.
+  assert.ok(!T.reconcileEffects(a.ws).completed.some((c) => c.step === 'paper'));
+});
+
 test('reconcile: a receipt whose frozen packet no longer holds refuses the repair and writes nothing', (t) => {
   const a = grantWithFailedPaper(t);
   const receipt = JSON.parse(fs.readFileSync(a.ws.abs(`projects/${a.pid}/tickets/receipts/${a.saved.receipt_id}.json`), 'utf8'));
