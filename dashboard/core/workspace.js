@@ -186,6 +186,10 @@ const DEFAULT_SETTINGS = {
     backoff_initial_minutes: 30,
     backoff_max_minutes: 720,
     safe_singleton_code_hashes: [],
+    // Eric's pool allowlist and per-chain network-fee ceilings (Pillar 1 PR B):
+    // empty, so no pool counts and every desk exit cost is "at least".
+    pool_factories: [],
+    network_fee_ceiling_usd: {},
   },
   inbox: { settle_seconds: 2 },
   requests: { settle_seconds: 2 },

@@ -280,9 +280,17 @@ function openSession(ws, { chainId, fetchImpl = null, key = undefined, now = Dat
 
   // A read. Pinned methods take the session's block; { latest: true } is the
   // labeled comparison read and is allowed for eth_getStorageAt and eth_call only.
-  session.call = async (method, params = [], { latest = false } = {}) => {
+  // { overrides } is a probe: eth_call at the pinned block with replaced code
+  // at the named addresses (code only: no balance, nonce or storage), never
+  // at latest. It changes nothing on chain; the node simulates it.
+  session.call = async (method, params = [], { latest = false, overrides = null } = {}) => {
     assertReadMethod(method);
     let p = Array.isArray(params) ? params : [];
+    if (overrides !== null) {
+      if (method !== 'eth_call' || latest) throw new OpError('INVALID', 'A state override is an eth_call at the pinned block only.');
+      const ok = overrides && typeof overrides === 'object' && Object.entries(overrides).every(([a, v]) => /^0x[0-9a-f]{40}$/.test(a) && v && Object.keys(v).length === 1 && typeof v.code === 'string' && /^0x[0-9a-f]*$/.test(v.code));
+      if (!ok) throw new OpError('INVALID', 'A state override replaces code only, at lowercase addresses.');
+    }
     if (PINNED.has(method)) {
       if (latest) {
         if (method === 'eth_getCode') throw new OpError('INVALID', 'Code is read at the pinned block only.');
@@ -290,6 +298,7 @@ function openSession(ws, { chainId, fetchImpl = null, key = undefined, now = Dat
       } else {
         if (!session.pinned) throw new OpError('INVALID', `${method} before the block is pinned.`);
         p = pinnedParams(method, p, session.pinned);
+        if (overrides !== null) p = [...p, overrides];
       }
     }
     if (SOLANA.has(method)) {

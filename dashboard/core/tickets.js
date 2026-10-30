@@ -640,9 +640,19 @@ function createTicket(ws, args = {}) {
   // from a missing contract), with the stored market cap the exemption reads.
   packet.native = { native_chain: project.identity.native_chain === true, market_cap_usd: isNum(packet.market.market_cap_usd) ? packet.market.market_cap_usd : null };
   packet.exits_missing = exitsMissing(packet.exits, pid);
+  // The contract attestation (v2): frozen beside the receipt for a desk gate,
+  // beside the ticket otherwise. Observe mode: recorded, read by nothing.
+  const gateRid = pregate ? `tr_${compactTs(new Date(now))}_${randomId(5)}` : null;
+  const att = contractAttestation(ws, project, packet, sizing, now, pregate ? receiptRel(pid, gateRid, 'contract') : `${ticketDir(pid, tid)}/contract`);
+  if (att) {
+    packet.schema_version = require('./contract-gate').PACKET_V2;
+    packet.contract = att.contract;
+    packet.value_capture = att.value_capture;
+    packet.notes.push('contract: the latest contract observation of each chain (frozen beside this packet) and the contract gate\'s verdict, in its mode; value_capture: holder yield against dilution, never a share of revenue.');
+  }
   const packetText = jsonText(packet);
   const packetSha = sha256(packetText);
-  if (pregate) return closeGate(ws, { pid, project, researcher, packet, packetText, packetSha, sizing, now });
+  if (pregate) return closeGate(ws, { pid, project, researcher, packet, packetText, packetSha, sizing, now, rid: gateRid, frozen: att ? att.frozen : [] });
   const dir = ticketDir(pid, tid);
   const ticket = {
     schema_version: 'cr.ticket-job.v1',
@@ -653,7 +663,7 @@ function createTicket(ws, args = {}) {
     channel: args.channel || ws.actor || 'cli',
     utterance: typeof args.utterance === 'string' ? args.utterance.slice(0, 2000) : null,
     versions: { prompt: PROMPT_VERSION, format: FORMAT, sizing: SIZING_VERSION, invalidation: INVALIDATION_VERSION },
-    basis: { researcher, held: packet.held, exits: packet.exits, market: packet.market, native: packet.native },
+    basis: { researcher, held: packet.held, exits: packet.exits, market: packet.market, native: packet.native, ...(packet.contract ? { contract: packet.contract, value_capture: packet.value_capture } : {}) },
     sizing,
     packet: { path: `${dir}/packet.json`, sha256: packetSha, captured_at: at },
     prompt: null,
@@ -672,6 +682,7 @@ function createTicket(ws, args = {}) {
       if (savedNow) return { meanwhile: 'saved', receipt_id: savedNow.receipt_id, ticket_id: savedNow.ticket_id };
     }
     op.write(`${dir}/packet.json`, packetText, { mode: 'create' });
+    for (const f of att ? att.frozen : []) op.write(f.path, f.text, { mode: 'create' });
     op.write(`${dir}/prompt.md`, prompt, { mode: 'create' });
     op.writeJson(`${dir}/ticket.json`, ticket, { mode: 'create' });
     return { ticket_id: tid };
@@ -685,14 +696,15 @@ function createTicket(ws, args = {}) {
 // The pre-gate's receipt: the same frozen packet as a ticket would carry (kept
 // beside the receipt, create-only) and the gate's own result with no
 // proposal. No prompt is rendered and nothing goes to a model.
-function closeGate(ws, { pid, project, researcher, packet, packetText, packetSha, sizing, now }) {
+function closeGate(ws, { pid, project, researcher, packet, packetText, packetSha, sizing, now, rid: givenRid = null, frozen = [] }) {
   const basis = { researcher, held: packet.held, exits: packet.exits, market: packet.market, native: packet.native };
   const g = gate(basis, sizing);
   const at500 = packet.exits.find((x) => x.size_usd === sizing.exit_size_usd) || null;
   const at2000 = packet.exits.find((x) => x.size_usd === 2000) || null;
-  const rid = `tr_${compactTs(new Date(now))}_${randomId(5)}`;
+  const rid = givenRid || `tr_${compactTs(new Date(now))}_${randomId(5)}`;
   const savedAt = iso(now);
   const { original, ...researcherNoPath } = researcher;
+  const contractGate = contractGateOf(packet);
   const receipt = {
     schema_version: 'cr.ticket-receipt.v1',
     kind: 'desk_gate',
@@ -731,6 +743,7 @@ function closeGate(ws, { pid, project, researcher, packet, packetText, packetSha
       exit_cost_2000_complete: at2000 ? at2000.cost_complete : null,
       exits_missing: packet.exits_missing,
       sell_tax: packet.sell_tax || null,
+      ...(contractGate ? { contract_gate: contractGate } : {}),
     },
     agent_disagreement: null,
     sources: [],
@@ -740,6 +753,7 @@ function closeGate(ws, { pid, project, researcher, packet, packetText, packetSha
     const again = listReceipts(ws, pid).find((r) => !r.broken && r.kind === 'desk_gate' && r.researcher && r.researcher.report_id === researcher.report_id);
     if (again) return { replay: again };
     op.write(receipt.packet.path, packetText, { mode: 'create' });
+    for (const f of frozen) op.write(f.path, f.text, { mode: 'create' });
     op.writeJson(receiptRel(pid, rid), receipt, { mode: 'create' });
     return { receipt_id: rid };
   });
@@ -754,6 +768,151 @@ function closeGate(ws, { pid, project, researcher, packet, packetText, packetSha
     files: out.files,
     message: `The desk's gate is closed for ${project.name}: ${g.proposal_type}, no risk. ${g.reasons[0] || ''} No Prosecutor ran; the receipt ${rid} waits for Eric's review (pass force_prosecution: true to open one anyway).`,
   };
+}
+
+// ---------------------------------------------------------------------------
+// The contract attestation (cr-contract-attestation@1, Pillar 1 PR B): the
+// latest contract observation of each chain, frozen beside the packet, and
+// the contract gate's verdict over it with the value-capture tests. In mode
+// observe (the default) it is recorded and changes nothing: no gate, size,
+// receipt kind or decision reads it.
+
+function contractGateMode(ws) {
+  const m = ws.settings && ws.settings.tickets && ws.settings.tickets.contract_gate && ws.settings.tickets.contract_gate.mode;
+  return require('./contract-gate').MODES.includes(m) ? m : 'observe';
+}
+
+// The project's latest observations as the packet's `contract` block, with
+// the exact stored files to freeze under `base`. Null for a project with no
+// contract the desk reads (a native coin, an unsupported chain family).
+function contractAttestation(ws, project, packet, sizing, now, base) {
+  const CF = require('./contract-forensics');
+  const G = require('./contract-gate');
+  const subjects = CF.subjectsOf(project);
+  if (!subjects.length) return null;
+  const pid = project.project_id;
+  const status = CF.readStatus(ws, pid);
+  const cfg = (ws.settings && ws.settings.contracts) || {};
+  const frozen = [];
+  const rows = [];
+  const notObserved = [];
+  const forVerdict = [];
+  subjects.forEach((s, i) => {
+    const role = i === 0 ? 'exit_chain' : 'other_chain';
+    const cur = status.subjects[`${s.chain_id}:${s.address}`];
+    const r = cur && cur.current ? CF.readObservation(ws, pid, cur.current) : null;
+    if (!r || !r.ok) {
+      const support = require('./contract-rpc').networkSupport(ws, s.chain_id);
+      const reason = r && !r.ok ? 'unreadable' : !support.supported ? support.reason : status.last_attempt && status.last_attempt.outcome === 'reorged' ? 'reorged' : 'not_observed';
+      notObserved.push({ chain_id: s.chain_id, address: s.address, role, reason });
+      forVerdict.push({ role, chain_id: s.chain_id, address: s.address, observation: null, reason });
+      return;
+    }
+    const o = r.observation;
+    const text = readText(ws, CF.obsPath(pid, o.observation_id));
+    const path = `${base}/${o.observation_id}.json`;
+    frozen.push({ path, text });
+    const auth = (o.authorities || []).map((a) => ({ capability: a.capability, class: a.class, proof: a.proof, words: a.words }));
+    const tp = o.transfer_probe || null;
+    rows.push({
+      chain_id: s.chain_id,
+      address: s.address,
+      role,
+      observation: { observation_id: o.observation_id, path, sha256: sha256(text), block: o.block.hash ? { number: o.block.number, hash: o.block.hash, timestamp: o.block.timestamp } : { slot: o.block.slot }, age_minutes_at_capture: Math.round((now - Date.parse(o.block.timestamp || o.retrieved.finished_at)) / 60000) },
+      identity_key: o.identity_key,
+      summary: {
+        proxy_kind: o.proxy ? o.proxy.kind : null,
+        token_code_hash: o.token ? o.token.code_hash || null : null,
+        implementation_code_hash: o.proxy && o.proxy.implementation ? o.proxy.implementation.code_hash : null,
+        controllers: auth,
+        sell_probe: tp ? { status: tp.status, tax_bps: tp.sell_path ? tp.sell_path.tax_bps : null } : null,
+        source: o.source ? o.source.status : null,
+        coverage: { complete: Boolean(o.coverage && o.coverage.complete), missing: (o.coverage && o.coverage.missing) || [] },
+      },
+    });
+    forVerdict.push({ role, chain_id: s.chain_id, address: s.address, observation: o, transitions: (cur.transitions || []).slice(-5) });
+  });
+  const exitObs = forVerdict.find((v) => v.role === 'exit_chain' && v.observation);
+  const feeCeil = exitObs && cfg.network_fee_ceiling_usd && typeof cfg.network_fee_ceiling_usd === 'object' ? cfg.network_fee_ceiling_usd[exitObs.chain_id] : null;
+  const price = packet.market && isNum(packet.market.price_usd) ? packet.market.price_usd : null;
+  const ladder = exitObs && price !== null ? G.exitLadder(exitObs.observation, { sizes: sizing.exit_sizes_usd.includes(sizing.exit_size_usd) ? sizing.exit_sizes_usd : [...sizing.exit_sizes_usd, sizing.exit_size_usd].sort((a, b) => a - b), priceUsd: String(price), networkFeeUsd: feeCeil === undefined || feeCeil === null ? null : String(feeCeil), limitPct: sizing.max_exit_cost_pct }) : null;
+  const vc = G.valueCapture(valueInputs(ws, project, packet, exitObs ? exitObs.observation : null, status, pid));
+  let vendor = null;
+  try {
+    const sc = require('./screening').summary(ws, project, now);
+    vendor = { severe: (sc && sc.contracts ? sc.contracts : []).flatMap((c) => (Array.isArray(c.severe) ? c.severe : []).map((x) => (typeof x === 'string' ? x : x && (x.words || x.label || x.key)) || 'severe flag')) };
+  } catch (_) { vendor = null; }
+  const params = { ttl_hours: Number(cfg.ttl_hours) > 0 ? Number(cfg.ttl_hours) : 24, min_timelock_hours: Number(cfg.min_timelock_hours) > 0 ? Number(cfg.min_timelock_hours) : 48, recent_change_days: 30, exit_cost_limit_pct: sizing.max_exit_cost_pct, exit_size_usd: sizing.exit_size_usd };
+  const v = G.verdict({ subjects: forVerdict, vendor, exits: ladder, valueCapture: vc, params, now });
+  const contract = {
+    attestation_version: G.ATTESTATION_VERSION,
+    rules: { version: G.GATE_VERSION, mode: contractGateMode(ws), params },
+    subjects: rows,
+    not_observed: notObserved,
+    identity_key: `sha256:${G.hashOf(rows.map((r) => [r.chain_id, r.address, r.identity_key]))}`,
+    exits: ladder ? { version: ladder.version, tax_bps: ladder.tax_bps, best: ladder.best.map((b) => ({ size_usd: b.size_usd, ...(b.best ? { pool: b.best.pool, cost_pct: b.best.cost_pct, cost_pct_3: b.best.cost_pct_3, cost_complete: b.best.cost_complete, missing_costs: b.best.missing_costs } : { cost_pct: null }) })), excluded: ladder.excluded, projection: G.EXIT_LEGACY_VERSION, legacy: ladder.best.map((b) => G.legacyExit(b.best, exitObs.observation.block.timestamp)), note: 'The desk\'s own on-chain readings; under sizing@4 they are not in `exits`.' } : null,
+    verdict: { tier: v.tier, findings: v.findings, findings_sha256: v.findings_sha256 },
+    words: v.words,
+  };
+  return { contract, value_capture: vc, frozen };
+}
+
+// Value-capture inputs from the packet's own stored figures and the on-chain
+// supply (no extra request): DefiLlama only when its 30-day total is complete.
+function valueInputs(ws, project, packet, obs, status, pid) {
+  const m = packet.fundamentals && packet.fundamentals.metrics ? packet.fundamentals.metrics : {};
+  const total = (k) => (m[k] && m[k].status === 'complete' && isNum(m[k].total_30d_usd) ? m[k].total_30d_usd : null);
+  let growth = null;
+  try {
+    const CF = require('./contract-forensics');
+    const sub = obs ? status.subjects[`${obs.subject.chain_id}:${obs.subject.address}`] : null;
+    const first = sub && sub.history && sub.history.length > 1 ? CF.readObservation(ws, pid, sub.history[0].observation_id) : null;
+    if (first && first.ok && first.observation.token.total_supply && obs.token.total_supply) {
+      const days = (Date.parse(obs.block.timestamp) - Date.parse(first.observation.block.timestamp)) / 86400000;
+      const a = Number(first.observation.token.total_supply);
+      const b = Number(obs.token.total_supply);
+      if (days >= 7 && a > 0) growth = ((b - a) / a) * (365 / days);
+    }
+  } catch (_) { growth = null; }
+  const tp = obs && obs.transfer_probe && obs.transfer_probe.status === 'ok' ? obs.transfer_probe.sell_path.tax_bps / 100 : null;
+  return {
+    holders_revenue_30d_usd: total('holders_revenue'),
+    revenue_30d_usd: total('revenue'),
+    market_cap_usd: packet.market && isNum(packet.market.market_cap_usd) ? packet.market.market_cap_usd : null,
+    onchain_supply_growth_annual: growth,
+    circulating_supply_growth_annual: null,
+    buy_tax_pct: null,
+    sell_tax_pct: tp,
+    volume_30d_usd: null,
+  };
+}
+
+// The receipt's record of the gate: what it said, in which mode.
+function contractGateOf(packet) {
+  if (!packet || !packet.contract) return null;
+  const c = packet.contract;
+  return { version: c.rules.version, mode: c.rules.mode, tier: c.verdict.tier, identity_key: c.identity_key, findings: c.verdict.findings, findings_sha256: c.verdict.findings_sha256, words: c.words, economics: packet.value_capture ? packet.value_capture.words : null, value_capture_classes: packet.value_capture ? packet.value_capture.classes : [] };
+}
+
+// A v2 packet's contract block holds: each frozen observation matches its
+// SHA-256 and its own canonical hash, and the findings match their hash and
+// the receipt's. Null when it holds; a refusal in words otherwise.
+function contractIntegrity(ws, receipt) {
+  const G = require('./contract-gate');
+  try {
+    const packet = JSON.parse(verifiedFrozen(ws, receipt.packet.path, receipt.packet.sha256, 'The frozen ticket packet'));
+    if (packet.schema_version !== G.PACKET_V2 || !packet.contract) throw new OpError('INTEGRITY', 'The receipt records a contract gate but its packet is not cr.ticket-packet.v2.');
+    const c = packet.contract;
+    for (const s of c.subjects || []) {
+      const o = JSON.parse(verifiedFrozen(ws, s.observation.path, s.observation.sha256, `The frozen observation ${s.observation.observation_id}`));
+      const { sha256: own, ...rest } = o;
+      if (o.observation_id !== s.observation.observation_id || own !== sha256(G.canonicalJson(rest)) || o.identity_key !== s.identity_key) throw new OpError('INTEGRITY', `The frozen observation ${s.observation.observation_id} does not match its own record.`);
+    }
+    if (G.hashOf(c.verdict.findings) !== c.verdict.findings_sha256 || c.verdict.findings_sha256 !== receipt.desk.contract_gate.findings_sha256) throw new OpError('INTEGRITY', 'The contract findings do not match their hash or the receipt.');
+    return null;
+  } catch (err) {
+    return { status: 'unverified', words: `Cannot be checked: ${String(err && err.message || err).slice(0, 200)} It cannot be approved or halved; a veto, pass or watch is still allowed.` };
+  }
 }
 
 function cancelTicket(ws, pid, tid, reason = null) {
@@ -865,6 +1024,8 @@ function frozenBasis(ticket, packet) {
     ['market', b.market, packet.market],
     ['native', b.native, packet.native],
     ['sizing', ticket.sizing, packet.sizing],
+    ['contract', b.contract, packet.contract],
+    ['value_capture', b.value_capture, packet.value_capture],
   ];
   const diffs = fields.filter(([, a, z]) => canon(a === undefined ? null : a) !== canon(z === undefined ? null : z)).map(([k]) => k);
   if (diffs.length) throw new OpError('INTEGRITY', `Not saved: the ticket's basis differs from its frozen packet (${diffs.join(', ')}). The desk sizes only from the verified packet; nothing was written. Keep the text: a new ticket (refresh) sizes it on a fresh packet.`, { fields: diffs });
@@ -1099,6 +1260,7 @@ function saveTicketOnce(ws, { project_id: pid, ticket_id: tid, text, revision = 
         exit_cost_2000_complete: at2000 ? at2000.cost_complete : null,
         exits_missing: exitsMissing(exits, pid),
         sell_tax: packet.sell_tax || null,
+        ...(contractGateOf(packet) ? { contract_gate: contractGateOf(packet) } : {}),
         invalidation_version: INVALIDATION_VERSION,
         admission: { version: admission.version, checked_at: admission.checked_at, price_stale_minutes: admission.price_stale_minutes, price: admission.price, metric: admission.metric, held_risk: g.admission_hold ? { from: g0.proposal_type, risk_usd: g0.suggested_risk_usd, reason: g.capped.reason } : null, limit: admission.limit },
         ...(breached && exemptType ? { trigger_breached_at_save: { kind: breached.kind, words: breached.words } } : {}),
@@ -1161,6 +1323,11 @@ function decisionFor(lines, rid) {
 // (the packet cannot be read as frozen). A desk-gate receipt has no
 // Prosecutor's sizing to check (null). Reads only.
 function integrityOf(ws, receipt) {
+  // A v2 packet's contract block is checked first, a desk gate's included.
+  if (receipt && receipt.desk && receipt.desk.contract_gate) {
+    const ci = contractIntegrity(ws, receipt);
+    if (ci) return ci;
+  }
   if (!receipt || receipt.kind === 'desk_gate' || !receipt.desk) return null;
   let packet;
   try {
@@ -1772,6 +1939,8 @@ function view(ws, pid, { now = Date.now(), fundamentals = null, receiptId = null
       exit_cost_500_complete: d.exit_cost_500_complete ?? null,
       exit_cost_2000_usd_pct: d.exit_cost_2000_usd_pct ?? null,
       exits_missing: d.exits_missing || [],
+      // One quiet row on the card (observe mode: words only, nothing gated).
+      contract_gate: d.contract_gate ? { mode: d.contract_gate.mode, tier: d.contract_gate.tier, words: d.contract_gate.words, economics: d.contract_gate.economics } : null,
       exit_evidence: gateOnly ? null : exitEvidenceOf(ws, current, now),
       trigger_breached_at_save: d.trigger_breached_at_save || null,
       admission: d.admission || null,

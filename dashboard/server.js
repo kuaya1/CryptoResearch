@@ -219,6 +219,30 @@ function validateSettingsPatch(patch, ws = null) {
       if (!Array.isArray(list) || list.length > 20 || list.some((h) => !/^0x[0-9a-fA-F]{64}$/.test(String(h)))) throw new OpError('INVALID', 'Safe singleton code hashes must be a list of up to 20 Keccak-256 hashes (0x and 64 hex digits).');
       out.contracts.safe_singleton_code_hashes = [...new Set(list.map((h) => String(h).toLowerCase()))];
     }
+    // The pool allowlist: each row copied by Eric from a venue's published
+    // deployments (factory, init-code hash, fee, the quoter for V3, and the
+    // quote assets with their USD value). Empty by default: no pool counts.
+    if (c.pool_factories !== undefined) {
+      const rows = c.pool_factories;
+      const hex = (v, n) => typeof v === 'string' && new RegExp(`^0x[0-9a-fA-F]{${n}}$`).test(v);
+      const bad = (why) => { throw new OpError('INVALID', `Pool factories: ${why}`); };
+      if (!Array.isArray(rows) || rows.length > 30) bad('a list of up to 30 rows.');
+      out.contracts.pool_factories = rows.map((r) => {
+        if (!r || typeof r !== 'object' || !['v2', 'v3'].includes(r.kind) || !/^\d{1,12}$/.test(String(r.chain_id)) || !hex(r.factory, 40) || !hex(r.init_code_hash, 64)) bad('each row needs chain_id, kind v2 or v3, factory and init_code_hash.');
+        if (r.kind === 'v2' && !(Number.isInteger(r.fee_bps) && r.fee_bps >= 0 && r.fee_bps < 10000)) bad('a v2 row states its fee_bps.');
+        if (r.kind === 'v3' && !(Array.isArray(r.fee_tiers) && r.fee_tiers.length && r.fee_tiers.length <= 6 && r.fee_tiers.every((x) => Number.isInteger(x) && x > 0 && x < 1000000) && hex(r.quoter, 40) && hex(r.quoter_code_hash, 64))) bad('a v3 row states fee_tiers, quoter and quoter_code_hash.');
+        if (!Array.isArray(r.quotes) || !r.quotes.length || r.quotes.length > 5 || r.quotes.some((q) => !q || !hex(q.address, 40) || !Number.isInteger(q.decimals) || q.decimals < 0 || q.decimals > 36 || typeof q.usd_value !== 'string' || !/^\d+(\.\d+)?$/.test(q.usd_value))) bad('each row lists up to 5 quote assets with address, decimals and usd_value (a decimal string).');
+        const row = { chain_id: String(r.chain_id), kind: r.kind, name: typeof r.name === 'string' ? r.name.slice(0, 60) : null, source_url: typeof r.source_url === 'string' ? r.source_url.slice(0, 300) : null, factory: r.factory.toLowerCase(), init_code_hash: r.init_code_hash.toLowerCase(), quotes: r.quotes.map((q) => ({ address: q.address.toLowerCase(), decimals: q.decimals, usd_value: q.usd_value, symbol: typeof q.symbol === 'string' ? q.symbol.slice(0, 12) : null })) };
+        return r.kind === 'v2' ? { ...row, fee_bps: r.fee_bps } : { ...row, fee_tiers: r.fee_tiers, quoter: r.quoter.toLowerCase(), quoter_code_hash: r.quoter_code_hash.toLowerCase() };
+      });
+    }
+    // Eric's per-chain network-fee ceiling (USD) added in full to a desk exit
+    // reading; a chain without one leaves its cost "at least".
+    if (c.network_fee_ceiling_usd !== undefined) {
+      const m = c.network_fee_ceiling_usd;
+      if (!m || typeof m !== 'object' || Array.isArray(m) || Object.entries(m).some(([k, v]) => !/^\d{1,12}$/.test(k) || !(typeof v === 'number' && v >= 0 && v <= 100))) throw new OpError('INVALID', 'Network-fee ceilings are a map of chain ID to a USD amount from 0 to 100.');
+      out.contracts.network_fee_ceiling_usd = { ...m };
+    }
   }
   if (patch.research) {
     // Only limits and model choices; API keys are never accepted from the page.

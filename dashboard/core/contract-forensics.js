@@ -147,11 +147,7 @@ const SOL = Object.freeze({
 // Canonical JSON (cr-forensic-json@1): keys sorted at every level, no
 // whitespace, so a hash names the content, not the order it was written in.
 
-function canonicalJson(v) {
-  if (v === null || typeof v !== 'object') return JSON.stringify(v === undefined ? null : v);
-  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
-  return `{${Object.keys(v).sort().filter((k) => v[k] !== undefined).map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`;
-}
+const { canonicalJson } = require('./contract-gate');
 const sha256 = (text) => crypto.createHash('sha256').update(text).digest('hex');
 
 // ---------------------------------------------------------------------------
@@ -477,8 +473,9 @@ async function roleControllers(rd, token, roleName, depth, ctx, seen = new Set()
   return out;
 }
 
-async function observeEvm(session, subject, { ws, sourceImpl, now, prev }) {
-  const ctx = { cfg: cfgOf(ws), chain_id: subject.chain_id, sourceImpl, code: new Map() };
+async function observeEvm(session, subject, { ws, sourceImpl, now, prev, market = null }) {
+  const net = (rpc.readNetworks(ws).networks || {})[String(subject.chain_id)] || {};
+  const ctx = { cfg: cfgOf(ws), chain_id: subject.chain_id, sourceImpl, code: new Map(), factories: factoriesOf(ws, subject.chain_id), overrides: net.state_overrides === true, priceUsd: market ? market.price_usd : null, sizes: market ? market.sizes : [] };
   const started = new Date(now()).toISOString();
   const cid = await session.call('eth_chainId', []);
   if (!cid.ok || BigInt(cid.result) !== BigInt(subject.chain_id)) throw new OpError('INTEGRITY', `The node answered chain ${cid.ok ? BigInt(cid.result).toString() : 'unknown'}, not ${subject.chain_id}; nothing was recorded.`);
@@ -493,7 +490,7 @@ async function observeEvm(session, subject, { ws, sourceImpl, now, prev }) {
   // The token's code.
   const code = await rd.code(addr);
   const token = { code_kind: code ? code.kind : 'unknown', code_hash: code ? code.hash : null, code_size: code ? code.size : null, decimals: null, total_supply: null, name: null, symbol: null };
-  const obs = { block, proxy: null, source: null, surface: null, authorities: [], roles: { enumeration: 'unknown' }, supply: null };
+  const obs = { block, proxy: null, source: null, surface: null, authorities: [], roles: { enumeration: 'unknown' }, supply: null, transfer_probe: null, effects: [], pools: [], probes_ran: false };
   if (code && code.kind === 'contract') {
     const dec = await rd.view(addr, callData('decimals()'));
     token.decimals = dec === null ? null : Number(decUint(dec));
@@ -560,6 +557,14 @@ async function observeEvm(session, subject, { ws, sourceImpl, now, prev }) {
     const accessControl = await rd.view(addr, callData('getRoleAdmin(bytes32)', ROLES.DEFAULT_ADMIN_ROLE)) !== null;
     const ownerHex = await rd.view(addr, callData('owner()'));
     const owner = ownerHex ? decAddress(ownerHex) : null;
+    let ownerRes = null;
+    const ownerCtl = async () => {
+      if (!ownerRes && owner) {
+        const c = await resolveController(rd, owner, 1, ctx);
+        ownerRes = { ...c, address: owner, path: [{ address: owner, node: 'owner', via: 'owner()' }, ...c.path] };
+      }
+      return ownerRes;
+    };
     obs.roles = { enumeration: accessControl ? 'pending' : 'none', members: [] };
     for (const cap of ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7'].filter((c) => caps.has(c))) {
       const fn = (surface.functions.find((f) => f.capability === cap) || {}).signature || (cap === 'C1' ? `proxy ${kind}` : cap === 'C7' ? 'SELFDESTRUCT in code' : null);
@@ -577,13 +582,25 @@ async function observeEvm(session, subject, { ws, sourceImpl, now, prev }) {
         obs.roles.enumeration = rc.enumeration === 'none' ? 'none' : obs.roles.enumeration === 'none' ? 'none' : 'enumerable';
         res = { class: worst(rc.classes), path: rc.path, words: rc.words.join(' ') || `${ROLE_FOR[cap]} has no member.` };
       } else if (owner) {
-        const c = await resolveController(rd, owner, 1, ctx);
-        res = { ...c, path: [{ address: owner, node: 'owner', via: 'owner()' }, ...c.path] };
+        res = await ownerCtl();
       } else res = { class: 'K6', path: [], words: accessControl ? 'Guarded by roles the desk cannot attribute to this function.' : 'No owner or role answered: the guard is not known.' };
       obs.authorities.push({ capability: cap, function: fn, path: res.path, class: res.class, delay_hours: res.delay_hours === undefined ? null : res.delay_hours, proof: 'state_read', random_caller: 'not_tried', coverage: 'partial', words: res.words });
     }
     if (obs.roles.enumeration === 'pending') obs.roles.enumeration = 'enumerable';
     if (!accessControl) obs.roles.enumeration = 'none';
+
+    // Pools, the sell path, and the authority and effect probes (PR B).
+    const pools = ctx.factories.length ? await discoverPools(session, rd, addr, ctx) : [];
+    const sp = sellPool(pools);
+    obs.transfer_probe = await transferProbe(session, rd, { token: addr, pool: sp, decimals: token.decimals, priceUsd: ctx.priceUsd, block, ctx });
+    const holder = obs.transfer_probe.sender ? obs.transfer_probe.sender.address : sp ? sp.pool : null;
+    if (owner && obs.surface.unclassified_mutators.length) await ownerCtl();
+    const ap = await authorityProbes(session, rd, { token: addr, obs, holder, decimals: token.decimals, ownerRes, ctx });
+    obs.effects = ap.effects;
+    obs.probes_ran = ap.ran;
+    const taxBps = obs.transfer_probe.status === 'ok' ? obs.transfer_probe.sell_path.tax_bps : null;
+    await quotePools(session, rd, { token: addr, pools, decimals: token.decimals, priceUsd: ctx.priceUsd, taxBps, sizes: ctx.sizes, ctx });
+    obs.pools = pools;
 
     // The state at "latest", compared (a labeled read outside the pin).
     let latestMatch = null;
@@ -610,7 +627,10 @@ async function observeEvm(session, subject, { ws, sourceImpl, now, prev }) {
   if (!again.ok || !again.result || lower(again.result.hash) !== block.hash) throw new rpc.Stop('reorg', `Block ${block.number} is no longer the one pinned (${block.hash.slice(0, 10)}…).`);
 
   const missing = [...rd.missing].sort();
-  missing.push('authority_probe');
+  if (!obs.probes_ran || obs.authorities.some((a) => (a.capability === 'C2' || a.capability === 'C3') && a.proof === 'state_read')) missing.push('authority_probe');
+  if (!obs.transfer_probe || obs.transfer_probe.status === 'unavailable') missing.push('transfer_probe');
+  if (!obs.pools.some((p) => p.counted)) missing.push('verified_pool');
+  missing.push('lp_removal');
   if (obs.source && obs.source.status !== 'verified_full' && obs.source.status !== 'verified_partial') missing.push('verified_source');
   return {
     observation: {
@@ -622,12 +642,265 @@ async function observeEvm(session, subject, { ws, sourceImpl, now, prev }) {
       authorities: obs.authorities,
       roles: obs.roles,
       supply: obs.supply,
+      transfer_probe: obs.transfer_probe,
+      effects: obs.effects,
+      pools: obs.pools,
+      price_ref: market && market.price_usd !== null ? { usd: String(market.price_usd), as_of: market.as_of || null, source: 'coingecko_stored' } : null,
       errors: rd.errors,
-      coverage: { complete: false, missing: [...new Set(missing)].sort(), words: 'Authorities rest on state reads; the authority and effect probes are not run in this version.' },
+      coverage: { complete: false, missing: [...new Set(missing)].sort(), words: 'LP removal is not read in this version.' },
       retrieved: { started_at: started, finished_at: new Date(now()).toISOString() },
     },
     code: ctx.code,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Probes (PR B). cr-probe@1 is hand-assembled EVM code placed by a state
+// override at the address whose power is tested, so the token sees that
+// address as msg.sender. It reads, acts, reads again and returns six words:
+// [read_ok, before, act_ok, act_return, read_ok, after]. Its calldata is the
+// target, the read's length, the action's length, then both. Nothing runs on
+// chain: the node simulates one eth_call at the pinned block.
+//
+//   PUSH1 60 CALLDATASIZE SUB PUSH1 60 PUSH2 0100 CALLDATACOPY      ; data → 0x100
+//   STATICCALL(gas, target, 0x100, readLen, 0x20, 32) → mstore 0x00  ; before
+//   mstore(0x60, 1)                                                  ; no return data = true
+//   CALL(gas, target, 0, 0x100+readLen, actLen, 0x60, 32) → mstore 0x40
+//   STATICCALL(gas, target, 0x100, readLen, 0xa0, 32) → mstore 0x80  ; after
+//   RETURN(0, 0xc0)
+const PROBE_VERSION = 'cr-probe@1';
+const PROBE_CODE = `0x${[
+  '6060', '36', '03', '6060', '610100', '37',
+  '6020', '6020', '602035', '610100', '600035', '5a', 'fa', '600052',
+  '6001', '606052',
+  '6020', '6060', '604035', '602035', '610100', '01', '6000', '600035', '5a', 'f1', '604052',
+  '6020', '60a0', '602035', '610100', '600035', '5a', 'fa', '608052',
+  '60c0', '6000', 'f3',
+].join('')}`;
+const PROBE_CODE_HASH = K.keccak256Hex(PROBE_CODE);
+// A caller no one holds a key to: Keccak-256 of its own name.
+const RANDOM_CALLER = `0x${K.keccak256('cr-probe@1 random caller').slice(-40)}`;
+const PROBE_LIMIT = 'One sender, one path, one size, one block.';
+
+const probeData = (target, read, act) => {
+  const r = strip0x(read);
+  const a = strip0x(act);
+  return `0x${encAddress(target)}${encUint(r.length / 2)}${encUint(a.length / 2)}${r}${a}`;
+};
+
+async function probe(session, at, target, read, act) {
+  const res = await session.call('eth_call', [{ to: lower(at), data: probeData(target, read, act) }], { overrides: { [lower(at)]: { code: PROBE_CODE } } });
+  if (!res.ok || typeof res.result !== 'string' || strip0x(res.result).length < 384) return null;
+  const w = (i) => decUint(`0x${wordAt(res.result, i)}`);
+  return { read_ok: w(0) === 1n, before: w(1), act_ok: w(2) === 1n, act_return: w(3), after_ok: w(4) === 1n, after: w(5) };
+}
+
+// Arguments for the functions a probe calls: (holder, amount) → words.
+const PROBE_ARGS = Object.freeze({
+  'mint(address,uint256)': (h, amt) => [encAddress(RANDOM_CALLER), encUint(amt)],
+  'mintTo(address,uint256)': (h, amt) => [encAddress(RANDOM_CALLER), encUint(amt)],
+  'mint(uint256)': (h, amt) => [encUint(amt)],
+  'issue(uint256)': (h, amt) => [encUint(amt)],
+  'burn(address,uint256)': (h, amt) => [encAddress(h), encUint(amt)],
+  'setBalance(address,uint256)': (h) => [encAddress(h), encUint(0)],
+  'forceTransfer(address,address,uint256)': (h, amt) => [encAddress(h), encAddress(RANDOM_CALLER), encUint(amt)],
+  'adminTransfer(address,address,uint256)': (h, amt) => [encAddress(h), encAddress(RANDOM_CALLER), encUint(amt)],
+});
+// An unclassified function shaped (address,uint256) or (uint256) is tried
+// as an effect probe: if it raises supply, it is a mint.
+function effectArgs(signature) {
+  if (/^\w+\(address,uint256\)$/.test(signature)) return (h, amt) => [encAddress(RANDOM_CALLER), encUint(amt)];
+  if (/^\w+\(uint256\)$/.test(signature)) return (h, amt) => [encUint(amt)];
+  return null;
+}
+
+// Pools: Eric's allowlist (settings contracts.pool_factories), each row
+// copied from the venue's published deployments; empty by default, so no
+// pool counts until he adds one.
+function factoriesOf(ws, chainId) {
+  const rows = (ws.settings && ws.settings.contracts && Array.isArray(ws.settings.contracts.pool_factories)) ? ws.settings.contracts.pool_factories : [];
+  const hex = (v, n) => typeof v === 'string' && new RegExp(`^0x[0-9a-fA-F]{${n}}$`).test(v);
+  return rows.filter((r) => r && String(r.chain_id) === String(chainId) && ['v2', 'v3'].includes(r.kind) && hex(r.factory, 40) && hex(r.init_code_hash, 64)
+    && Array.isArray(r.quotes) && (r.kind === 'v2' ? Number.isInteger(r.fee_bps) : Array.isArray(r.fee_tiers) && hex(r.quoter, 40) && hex(r.quoter_code_hash, 64)))
+    .map((r) => ({ ...r, factory: lower(r.factory), init_code_hash: lower(r.init_code_hash), quoter: r.quoter ? lower(r.quoter) : null, quoter_code_hash: r.quoter_code_hash ? lower(r.quoter_code_hash) : null,
+      quotes: r.quotes.filter((q) => q && hex(q.address, 40) && Number.isInteger(q.decimals) && typeof q.usd_value === 'string').map((q) => ({ address: lower(q.address), decimals: q.decimals, usd_value: q.usd_value, symbol: q.symbol || null })) }));
+}
+
+const sortedPair = (a, b) => (lower(a) < lower(b) ? [lower(a), lower(b)] : [lower(b), lower(a)]);
+
+// Every allowlisted pool of the token, each checked: the factory's own
+// lookup, the CREATE2 address, token0/token1, and for a constant-product pool
+// the token balance against the reserve (a rebasing or fee-accruing token is
+// not computed). A failed check excludes the pool with its reason.
+async function discoverPools(session, rd, token, ctx) {
+  const out = [];
+  for (const f of ctx.factories) {
+    for (const q of f.quotes) {
+      if (q.address === token) continue;
+      const [t0, t1] = sortedPair(token, q.address);
+      const tiers = f.kind === 'v2' ? [null] : f.fee_tiers.filter((x) => Number.isInteger(x));
+      for (const fee of tiers) {
+        const look = f.kind === 'v2' ? await rd.view(f.factory, callData('getPair(address,address)', word(token), word(q.address)))
+          : await rd.view(f.factory, callData('getPool(address,address,uint24)', word(token), word(q.address), encUint(fee)));
+        const addr = look ? decAddress(look) : null;
+        if (!addr || addr === ZERO) continue;
+        const salt = f.kind === 'v2' ? K.keccak256Hex(`0x${strip0x(t0)}${strip0x(t1)}`) : K.keccak256Hex(`0x${word(t0)}${word(t1)}${encUint(fee)}`);
+        const derived = K.create2Address(f.factory, salt, f.init_code_hash);
+        const row = { pool: addr, factory: f.factory, venue: f.name || null, kind: f.kind, mechanism: f.kind === 'v2' ? 'constant_product' : 'concentrated', fee_bps: f.kind === 'v2' ? f.fee_bps : fee / 100, fee_tier: fee, quote_asset: q.address, quote_decimals: q.decimals, quote_usd: q.usd_value, create2_verified: derived === addr, counted: false, excluded: null };
+        const exclude = (why) => { row.excluded = why; out.push(row); };
+        if (!row.create2_verified) { exclude('The address is not the CREATE2 derivation of this factory and pair.'); continue; }
+        const a0 = await rd.view(addr, callData('token0()'));
+        const a1 = await rd.view(addr, callData('token1()'));
+        if (!a0 || !a1 || decAddress(a0) !== t0 || decAddress(a1) !== t1) { exclude('token0 and token1 are not this token and the quote asset.'); continue; }
+        const tokenBal = await rd.view(token, callData('balanceOf(address)', word(addr)));
+        if (f.kind === 'v2') {
+          const res = await rd.view(addr, callData('getReserves()'));
+          if (!res || !tokenBal) { exclude('The reserves did not read.'); continue; }
+          const r0 = decUint(`0x${wordAt(res, 0)}`);
+          const r1 = decUint(`0x${wordAt(res, 1)}`);
+          const rt = token === t0 ? r0 : r1;
+          const rq = token === t0 ? r1 : r0;
+          row.reserves = { token: rt.toString(), quote: rq.toString() };
+          const bal = decUint(tokenBal);
+          const diff = bal > rt ? bal - rt : rt - bal;
+          if (diff > 1n) { exclude('The token balance differs from the reserve: a rebasing or fee-accruing token is not computed by constant product.'); continue; }
+        } else {
+          const qb = await rd.view(q.address, callData('balanceOf(address)', word(addr)));
+          row.reserves = { token: tokenBal ? decUint(tokenBal).toString() : null, quote: qb ? decUint(qb).toString() : null };
+          const qc = await rd.code(f.quoter);
+          if (!qc || qc.hash !== f.quoter_code_hash) { exclude('The quoter\'s code is not the allowlisted code.'); continue; }
+        }
+        row.counted = true;
+        out.push(row);
+      }
+    }
+  }
+  return out.sort((a, b) => (a.pool < b.pool ? -1 : a.pool > b.pool ? 1 : (a.fee_tier || 0) - (b.fee_tier || 0)));
+}
+
+// The pool a sale goes to: the counted pool with the most quote-asset value.
+function sellPool(pools) {
+  const counted = pools.filter((p) => p.counted && p.reserves && p.reserves.quote);
+  const value = (p) => { const v = BigInt(p.reserves.quote) * 10n ** BigInt(30 - p.quote_decimals); return v; };
+  return counted.sort((a, b) => (value(b) > value(a) ? 1 : value(b) < value(a) ? -1 : a.pool < b.pool ? -1 : 1))[0] || null;
+}
+
+// The sell path at the pinned block (cr-transfer-probe@1): a recent buyer
+// from the pool sells to it; the pool's balance before and after gives the
+// amount received, so the tax is measured, not reported.
+async function transferProbe(session, rd, { token, pool, decimals, priceUsd, block, ctx }) {
+  const base = { version: 'cr-transfer-probe@1', probe_code_hash: PROBE_CODE_HASH, limit: PROBE_LIMIT };
+  if (!ctx.overrides) return { ...base, status: 'unavailable', words: 'This network\'s probe found no state overrides: the sale is not simulated.' };
+  if (!pool) return { ...base, status: 'unavailable', words: 'No verified pool to sell into.' };
+  const from = Math.max(0, block.number - ctx.cfg.max_log_blocks + 1);
+  const logs = await session.call('eth_getLogs', [{ address: token, fromBlock: `0x${from.toString(16)}`, toBlock: `0x${block.number.toString(16)}`, topics: [TOPICS.Transfer, `0x${word(pool.pool)}`] }]);
+  if (!logs.ok || !Array.isArray(logs.result)) { rd.missing.add('transfer_probe'); return { ...base, status: 'unavailable', words: 'The pool\'s recent transfers did not read.' }; }
+  const buyers = [];
+  for (const l of logs.result.slice().reverse()) {
+    const to = l && Array.isArray(l.topics) && l.topics[2] ? decAddress(l.topics[2]) : null;
+    if (to && to !== ZERO && to !== pool.pool && !buyers.includes(to)) buyers.push(to);
+    if (buyers.length >= 3) break;
+  }
+  let holder = null;
+  let bal = 0n;
+  for (const b of buyers) {
+    const v = await rd.view(token, callData('balanceOf(address)', word(b)));
+    if (v && decUint(v) > 0n) { holder = b; bal = decUint(v); break; }
+  }
+  if (!holder) return { ...base, status: 'unavailable', words: `No recent buyer within ${ctx.cfg.max_log_blocks} blocks still holds the token.` };
+  const ref = Number.isInteger(decimals) && priceUsd !== null ? require('./contract-gate').tokensFor(500, priceUsd, decimals) : null;
+  const amount = ref && ref > 0n && ref < bal ? ref : bal;
+  const r = await probe(session, holder, token, callData('balanceOf(address)', word(pool.pool)), callData('transfer(address,uint256)', word(pool.pool), encUint(amount)));
+  const sender = { address: holder, chosen_by: 'recent_buyer' };
+  if (!r || !r.read_ok || !r.after_ok) return { ...base, status: 'unavailable', sender, words: 'The node did not run the probe.' };
+  if (!r.act_ok) return { ...base, status: 'reverted', sender, sell_path: { to: pool.pool, sent: amount.toString(), received: null, tax_bps: null } };
+  if (r.act_return === 0n) return { ...base, status: 'returned_false', sender, sell_path: { to: pool.pool, sent: amount.toString(), received: null, tax_bps: null } };
+  const received = r.after - r.before;
+  if (received < 0n || received > amount) return { ...base, status: 'unavailable', sender, words: 'The pool received an amount the sale cannot explain.' };
+  return { ...base, status: 'ok', sender, sell_path: { to: pool.pool, sent: amount.toString(), received: received.toString(), tax_bps: Number(((amount - received) * 10000n) / amount) } };
+}
+
+// Who a probe calls as: the authority path's first owner or role member.
+function senderOf(a) {
+  const hop = (a.path || []).find((p) => p && p.address && ['owner', 'role_member'].includes(p.node));
+  return hop ? hop.address : null;
+}
+
+// Authority and effect probes (cr-authority-probe@1) on mint and balance
+// powers, as the named controller and as a caller no one holds: a power that
+// works for anyone is unguarded; one that works for neither is held by
+// someone the reads do not name; an unclassified function that raises supply
+// is a mint.
+async function authorityProbes(session, rd, { token, obs, holder, decimals, ownerRes, ctx }) {
+  const effects = [];
+  if (!ctx.overrides) return { effects, ran: false };
+  const amt = 10n ** BigInt(Number.isInteger(decimals) && decimals >= 0 && decimals <= 36 ? decimals : 18);
+  const SUPPLY = callData('totalSupply()');
+  const run = async (as, sig, args, read) => {
+    const r = await probe(session, as, token, read, `${K.selector(sig)}${args.join('')}`);
+    if (!r || !r.read_ok || !r.after_ok) return { state: 'unavailable' };
+    const delta = r.after - r.before;
+    return { state: !r.act_ok ? 'reverted' : delta === 0n ? 'no_effect' : 'succeeded', delta, act_ok: r.act_ok };
+  };
+  for (const a of obs.authorities.filter((x) => x.capability === 'C2' || x.capability === 'C3')) {
+    const make = PROBE_ARGS[a.function];
+    if (!make) continue;
+    const read = a.capability === 'C2' ? SUPPLY : holder ? callData('balanceOf(address)', word(holder)) : null;
+    if (!read) continue;
+    const args = make(holder || RANDOM_CALLER, amt);
+    const effectOf = (res) => (a.capability === 'C2' ? res.delta > 0n : res.delta < 0n);
+    const rnd = await run(RANDOM_CALLER, a.function, args, read);
+    a.random_caller = rnd.state === 'succeeded' && effectOf(rnd) ? 'succeeded' : rnd.state === 'unavailable' ? 'not_tried' : 'reverted';
+    effects.push({ function: a.function, as: RANDOM_CALLER, [a.capability === 'C2' ? 'supply_delta' : 'holder_delta']: rnd.delta === undefined ? null : rnd.delta.toString(), result: rnd.state });
+    const as = senderOf(a);
+    if (as) {
+      const ctl = await run(as, a.function, args, read);
+      effects.push({ function: a.function, as, [a.capability === 'C2' ? 'supply_delta' : 'holder_delta']: ctl.delta === undefined ? null : ctl.delta.toString(), result: ctl.state });
+      if (ctl.state === 'succeeded' && effectOf(ctl)) Object.assign(a, { proof: 'authority_probe', coverage: 'complete' });
+      else if (ctl.state !== 'unavailable' && a.random_caller === 'reverted') Object.assign(a, { class: 'K6', proof: 'authority_probe', coverage: 'complete', words: `Neither the named controller (${as}) nor a fresh caller could call ${a.function}: who can is not named by the reads.` });
+    } else if (a.class === 'K1' && a.random_caller === 'reverted') Object.assign(a, { proof: 'authority_probe', coverage: 'complete' });
+  }
+  // Effect probes on the functions the desk does not classify.
+  const unclassified = (obs.surface && obs.surface.unclassified_mutators) || [];
+  for (const f of unclassified.slice()) {
+    const make = effectArgs(f.signature || '');
+    if (!make) continue;
+    const args = make(holder, amt);
+    const callers = [RANDOM_CALLER, ownerRes ? ownerRes.address : null].filter(Boolean);
+    for (const as of callers) {
+      const res = await run(as, f.signature, args, SUPPLY);
+      effects.push({ function: f.signature, as, supply_delta: res.delta === undefined ? null : res.delta.toString(), result: res.state });
+      if (res.state === 'succeeded' && res.delta > 0n) {
+        obs.surface.unclassified_mutators = obs.surface.unclassified_mutators.filter((x) => x.selector !== f.selector);
+        obs.surface.functions = sortBy([...obs.surface.functions, { selector: f.selector, signature: f.signature, capability: 'C2', basis: 'effect_probe' }], 'selector');
+        const unguarded = as === RANDOM_CALLER;
+        obs.authorities.push(unguarded
+          ? { capability: 'C2', function: f.signature, path: [], class: 'K6', delay_hours: null, proof: 'effect_probe', random_caller: 'succeeded', coverage: 'complete', words: `${f.signature} raised supply when a fresh caller called it.` }
+          : { capability: 'C2', function: f.signature, path: ownerRes.path, class: ownerRes.class, delay_hours: ownerRes.delay_hours === undefined ? null : ownerRes.delay_hours, proof: 'effect_probe', random_caller: 'reverted', coverage: 'complete', words: `${f.signature} raised supply when the owner called it: it is a mint.` });
+        break;
+      }
+    }
+  }
+  return { effects, ran: true };
+}
+
+// Concentrated-pool quotes through the allowlisted QuoterV2 at the pinned
+// block, at each exit size; never for a taxed token (the pool checks it
+// received the full input, so a tax makes the swap revert).
+async function quotePools(session, rd, { token, pools, decimals, priceUsd, taxBps, sizes, ctx }) {
+  const gate = require('./contract-gate');
+  for (const p of pools.filter((x) => x.counted && x.mechanism === 'concentrated')) {
+    if (taxBps !== null && taxBps > 0) { Object.assign(p, { counted: false, excluded: `A token with a ${taxBps / 100}% transfer tax cannot settle in a concentrated pool.` }); continue; }
+    const f = ctx.factories.find((x) => x.factory === p.factory);
+    p.quoted = {};
+    for (const s of sizes) {
+      const q = Number.isInteger(decimals) && priceUsd !== null ? gate.tokensFor(s, priceUsd, decimals) : null;
+      if (q === null) continue;
+      const data = callData('quoteExactInputSingle((address,address,uint256,uint24,uint160))', word(token), word(p.quote_asset), encUint(q), encUint(p.fee_tier), encUint(0));
+      const v = await rd.view(f.quoter, data);
+      p.quoted[String(s)] = v ? decUint(`0x${wordAt(v, 0)}`).toString() : null;
+    }
+  }
 }
 
 async function supplyCheck(session, rd, addr, prev, block, token, ctx) {
@@ -807,6 +1080,9 @@ function readCode(ws, pid, hash) {
 }
 
 // What changed in the identity between two observations of one subject.
+// The measured sell tax, or null when no probe measured one.
+const taxOf = (o) => (o && o.transfer_probe && o.transfer_probe.status === 'ok' && o.transfer_probe.sell_path ? o.transfer_probe.sell_path.tax_bps : null);
+
 function changesBetween(a, b) {
   const out = [];
   const say = (field, x, y) => { if (canonicalJson(x) !== canonicalJson(y)) out.push({ field, from: x === undefined ? null : x, to: y === undefined ? null : y }); };
@@ -818,7 +1094,20 @@ function changesBetween(a, b) {
   say('proxy.beacon', a.proxy && a.proxy.beacon && a.proxy.beacon.address, b.proxy && b.proxy.beacon && b.proxy.beacon.address);
   const auth = (o) => Object.fromEntries(o.authorities.map((x) => [x.capability, { class: x.class, path: x.path.map((p) => p.address) }]));
   say('authorities', auth(a), auth(b));
+  say('transfer_probe.tax_bps', taxOf(a), taxOf(b));
   return out;
+}
+
+// The stored price and Eric's exit sizes the pools are priced at (the
+// screening preferences' ladder and position).
+function marketFor(ws, project) {
+  const cg = project && project.identity && project.identity.coingecko_id;
+  let row = null;
+  try { row = cg ? (require('./market').readLatest(ws).assets || {})[cg] : null; } catch (_) { row = null; }
+  let sizes = [100, 500, 2000];
+  try { const p = require('./forensics').prefsOf(ws); sizes = [...new Set([...p.exit_sizes_usd, p.exit_position_usd])].sort((a, b) => a - b); } catch (_) { /* defaults */ }
+  const price = row && typeof row.price_usd === 'number' && row.price_usd > 0 ? row.price_usd : null;
+  return { price_usd: price, as_of: row ? row.source_last_updated_at || row.fetched_at || null : null, sizes };
 }
 
 // Saves one observation and its code, and moves the subject's pointer.
@@ -842,6 +1131,10 @@ function store(ws, pid, subject, built, { provider, now }) {
     authorities: o.authorities,
     roles: o.roles || null,
     supply: o.supply || null,
+    transfer_probe: o.transfer_probe || undefined,
+    effects: o.effects || undefined,
+    pools: o.pools || undefined,
+    price_ref: o.price_ref || undefined,
     extensions: o.extensions || undefined,
     flags: o.flags || undefined,
     transfer_fee: o.transfer_fee || undefined,
@@ -868,7 +1161,9 @@ function store(ws, pid, subject, built, { provider, now }) {
     let transition = null;
     if (prevId && prevId !== kept.observation_id) {
       const prev = readObservation(ws, pid, prevId);
-      if (prev.ok && prev.observation.identity_key !== kept.identity_key) {
+      // A new identity, or a measured tax that moved (both measured).
+      const taxMoved = taxOf(prev.observation) !== null && taxOf(kept) !== null && taxOf(prev.observation) !== taxOf(kept);
+      if (prev.ok && (prev.observation.identity_key !== kept.identity_key || taxMoved)) {
         const pb = prev.observation.block;
         const nb = kept.block;
         transition = { at: new Date(now()).toISOString(), from_observation_id: prevId, to_observation_id: kept.observation_id, from_identity_key: prev.observation.identity_key, to_identity_key: kept.identity_key, between: { from: pb.number !== undefined ? pb.number : pb.slot, to: nb.number !== undefined ? nb.number : nb.slot }, changes: changesBetween(prev.observation, kept), words: 'Changed between these two observations; when exactly is not established.' };
@@ -938,6 +1233,7 @@ async function observeProject(ws, pid, { fetchImpl = null, key = undefined, sour
   const clock = typeof now === 'function' ? now : () => now;
   const project = require('./projects').getProject(ws, pid);
   const subjects = subjectsOf(project);
+  const market = marketFor(ws, project);
   const out = { project_id: pid, results: [], stopped: null };
   for (const s of subjects) {
     const support = rpc.networkSupport(ws, s.chain_id);
@@ -950,7 +1246,7 @@ async function observeProject(ws, pid, { fetchImpl = null, key = undefined, sour
       try {
         session = rpc.openSession(ws, { chainId: s.chain_id, fetchImpl, key, now: clock });
         built = s.family === 'evm'
-          ? await observeEvm(session, s, { ws, sourceImpl, now: clock, prev: prev && prev.ok ? prev.observation : null })
+          ? await observeEvm(session, s, { ws, sourceImpl, now: clock, prev: prev && prev.ok ? prev.observation : null, market })
           : await observeSolana(session, s, { now: clock });
       } catch (err) {
         if (err instanceof rpc.Stop && err.kind === 'reorg' && attempt === 1) continue;
@@ -1003,6 +1299,10 @@ async function probeNetwork(ws, chainId, { fetchImpl = null, key = undefined, no
       s.pinTo(rec.block.hash);
       const g = await s.call('eth_getCode', [ZERO]);
       rec.eip1898 = Boolean(g.ok);
+      // State overrides: code that returns 42 at an address no one holds.
+      const at = RANDOM_CALLER;
+      const o = await s.call('eth_call', [{ to: at, data: '0x' }], { overrides: { [at]: { code: '0x602a60005260206000f3' } } });
+      rec.state_overrides = Boolean(o.ok && typeof o.result === 'string' && decUint(o.result) === 42n);
     }
   }
   rec.requests = s.requests;
@@ -1165,7 +1465,7 @@ function deskStatus(ws, now = Date.now()) {
 }
 
 module.exports = {
-  VERSION, SCHEMA, IDENTITY_VERSION, JSON_VERSION, SLOTS, READS, TOPICS, ROLES, CAPABILITIES, SIGNATURES, SELECTOR_CAP, CLASS_WORDS, SOL,
+  VERSION, SCHEMA, IDENTITY_VERSION, JSON_VERSION, PROBE_VERSION, PROBE_CODE, PROBE_CODE_HASH, RANDOM_CALLER, factoriesOf, marketFor, obsPath: obsRel, SLOTS, READS, TOPICS, ROLES, CAPABILITIES, SIGNATURES, SELECTOR_CAP, CLASS_WORDS, SOL,
   canonicalJson, codeKind, scanCode, withoutMetadata, surfaceOf, identityKeyOf, subjectsOf, observeProject, probeNetwork, dryRun,
   readObservation, readCode, readStatus, view, deskStatus, exportOf, isDue, refresh, sourcifyGet, decString, decAddressArray,
 };
