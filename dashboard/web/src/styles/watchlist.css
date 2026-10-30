@@ -17,8 +17,9 @@
 .wl-main { min-width: 0; padding-bottom: 32px; container-type: inline-size; }
 
 /* ---- the hero: the Daily Brief's readiness on a quiet mesh (§2.9) ---- */
-/* A v17 dark card: obsidian, its words re-pointed to paper in tokens.css. */
-.hero { position: relative; isolation: isolate; overflow: hidden; margin: 4px 24px 0; border-radius: var(--r-tile); background: var(--cr-obsidian); box-shadow: var(--shadow-dark); }
+/* The Desk's one black panel (its words re-pointed to paper in tokens.css);
+   the warm ceramic card while a project is docked beside the list. */
+.hero { position: relative; isolation: isolate; overflow: hidden; margin: 4px 24px 0; border-radius: var(--r-panel); background: var(--hero-bg, var(--warm-surface)); box-shadow: var(--hero-shadow, var(--shadow-card)); color: var(--text); }
 /* CSS only: three soft blobs, no image; screen-blended and fainter at night. */
 .hero-mesh {
   position: absolute; inset: 0; z-index: -1; pointer-events: none;
@@ -28,30 +29,34 @@
     radial-gradient(50% 80% at 62% 110%, var(--mesh-butter) 0%, transparent 70%),
     radial-gradient(45% 75% at 100% 10%, var(--mesh-orchid) 0%, transparent 72%);
 }
-.hero-in { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 24px; align-items: center; padding: 24px; }
-.hero-h { font-family: var(--font-display); font-size: var(--fs-head); font-weight: var(--wt-display); letter-spacing: var(--track-title); line-height: 28px; }
-.ready { list-style: none; margin: 16px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 12px 28px; }
-.ready-item { display: flex; align-items: center; gap: 12px; min-width: 0; }
-/* A 40px circle: the count, or the area's icon when there is none. */
-.ready-dot { flex: none; display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--color-surface); color: var(--text-2); box-shadow: inset 0 0 0 1px var(--color-border-subtle); }
-.ready-n { font-size: var(--fs-md); font-weight: 500; font-variant-numeric: tabular-nums; }
-.ready-item.is-some .ready-dot { background: var(--caution-soft); color: var(--caution-soft-text); box-shadow: none; }
-.ready-item.is-clear .ready-dot { background: var(--success-soft); color: var(--success-soft-text); box-shadow: none; }
-.ready-item.is-unknown .ready-dot, .ready-item.is-partial .ready-dot { background: var(--color-surface); color: var(--text-3); box-shadow: inset 0 0 0 1px var(--color-border); }
-.ready-text { display: flex; flex-direction: column; min-width: 0; }
-.ready-t { font-size: var(--fs-md); font-weight: 600; line-height: 20px; }
-.ready-w { font-size: var(--fs-sm); line-height: 18px; color: var(--text-2); white-space: nowrap; }
-.hero-cards { display: flex; flex-direction: column; gap: 8px; }
-/* A mini-card: elevation from a stroke; hover tints the pseudo-layer only. */
-.mini { position: relative; isolation: isolate; display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 8px 12px; border: 0; border-radius: var(--r-well); background: var(--color-surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; box-shadow: 0 0 0 1px var(--color-border-subtle), var(--cr-shadow-inner-card); }
-.mini::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: var(--color-surface-hover); opacity: 0; transition: opacity var(--dur) var(--ease); }
-.mini:hover::before { opacity: 1; }
-.mini-ico { flex: none; display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: var(--r-lg); background: var(--color-surface-secondary); color: var(--text-2); }
-.mini-text { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
-.mini-t { font-size: var(--fs-md); font-weight: 600; line-height: 20px; }
-.mini-s { font-size: var(--fs-sm); line-height: 18px; color: var(--text-2); font-variant-numeric: tabular-nums; }
-.mini-go { flex: none; color: var(--text-3); transition: transform var(--dur) var(--cubic-enter); }
-.mini:hover .mini-go { transform: translateX(2px); }
+.hero-in { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 24px; align-items: center; padding: 28px; }
+.hero-eyebrow { margin-bottom: 6px; }
+.hero-h { font-family: var(--font-display); font-size: var(--fs-card-title); font-weight: var(--wt-display); letter-spacing: var(--track-title); line-height: 1.15; }
+.ready { list-style: none; margin: 20px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 16px 36px; }
+.ready-item { display: flex; align-items: flex-end; gap: 12px; min-width: 0; }
+/* Each area's count as a large light numeral; an unread area reads "—" and
+   says Unknown in its words. */
+.ready-n { font-family: var(--font-display); font-size: var(--fs-grade-lg); font-weight: 200; line-height: 1; letter-spacing: var(--track-display); font-variant-numeric: tabular-nums; }
+.ready-item.is-unknown .ready-n, .ready-item.is-partial .ready-n, .ready-item.is-loading .ready-n { color: var(--text-3); }
+.ready-text { display: flex; flex-direction: column; min-width: 0; padding-bottom: 2px; }
+.ready-t { font-family: var(--mono); font-size: var(--eyebrow-size); letter-spacing: var(--eyebrow-ls); line-height: 18px; color: var(--text-2); }
+.ready-w { font-size: var(--fs-sm); line-height: 18px; color: var(--text-3); white-space: nowrap; }
+.hero-cards { display: flex; flex-direction: column; gap: 10px; }
+/* The two ways in: pills. Open Daily Brief is the ceramic primary on the
+   black panel; Review queue an outline. */
+.btn.hero-btn { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; column-gap: 12px; align-items: center; width: 100%; height: auto; min-height: 56px; padding: 9px 20px; border-radius: var(--r-pill); text-align: left; }
+.hero-btn-t { grid-column: 1; font-size: var(--fs-md); font-weight: 500; line-height: 20px; }
+.hero-btn-s { grid-column: 1; font-family: var(--mono); font-size: var(--fs-xs); line-height: 18px; opacity: 0.78; font-variant-numeric: tabular-nums; }
+.hero-btn-go { grid-column: 2; grid-row: 1 / span 2; transition: transform var(--dur-sel) var(--ease-arch); }
+.hero-btn:hover .hero-btn-go { transform: translateX(3px); }
+.btn.hero-btn.is-primary { --btn-bg: var(--color-solid); --btn-bg-hover: var(--color-solid-hover); --btn-bg-active: var(--color-solid-active); --btn-line: transparent; --btn-ink: var(--on-accent); }
+.wl:not(.has-inspector) .btn.hero-btn.is-primary { --btn-bg: var(--cr-surface-ceramic); --btn-ink: var(--cr-obsidian); --btn-line: transparent; --btn-bg-hover: var(--cr-paper-secondary); --btn-bg-active: var(--cr-paper-secondary); }
+.btn.hero-btn.is-outline { --btn-bg: transparent; --btn-ink: var(--text); --btn-line: var(--color-border); }
+
+/* The Desk's headline under its title. */
+.desk-headline { margin-top: 6px; font-size: var(--fs-body-lg); line-height: 1.5; color: var(--text-2); }
+.desk-headline .pos { color: var(--pos); }
+.desk-headline .neg { color: var(--neg); }
 
 /* A section's head on the Desk: 16px, its count beside it. */
 .desk-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px 24px 10px; }
@@ -76,12 +81,12 @@
 .kpi-cell.is-link:hover::before { opacity: 1; }
 .kpi-cell.is-on { box-shadow: inset 0 -2px 0 var(--color-solid); }
 .kpi-cell.is-on::before { opacity: 1; background: var(--color-surface-selected); }
-.kpi-k { font-size: var(--fs-sm); font-weight: 500; line-height: 18px; color: var(--text-2); white-space: nowrap; }
+.kpi-k { font-family: var(--mono); font-size: var(--eyebrow-size); font-weight: 400; letter-spacing: var(--eyebrow-ls); line-height: 18px; color: var(--text-2); white-space: nowrap; }
 .kpi-v { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; font-variant-numeric: tabular-nums; }
 /* The figure: 18/29, tabular, light and tight (v17 metric). */
-.kpi-num { font-size: var(--fs-metric); line-height: var(--lh-metric); font-weight: var(--wt-metric); letter-spacing: var(--track-title); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.kpi-num { font-family: var(--font-display); font-size: var(--fs-card-title); line-height: 1.15; font-weight: var(--wt-metric); letter-spacing: var(--track-title); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .kpi-unit { font-size: var(--fs-sm); color: var(--text-2); }
-.kpi-chg { font-size: var(--fs-sm); font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.kpi-chg { font-family: var(--mono); font-size: var(--fs-sm); font-weight: 400; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .kpi-win { margin-left: 3px; font-size: var(--fs-sm); color: var(--text-3); }
 .kpi-sub2 { font-size: var(--fs-sm); color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .kpi-s { font-size: var(--fs-sm); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
@@ -97,7 +102,7 @@
 .kpi-spark.down path { stroke: var(--neg-strong); }
 .kpi-rl { gap: 4px; }
 .kpi-rl-count { font-variant-numeric: tabular-nums; font-weight: 500; }
-.kpi-panel { margin-top: 8px; padding: 14px 16px; background: var(--surface); border-radius: var(--r-card); box-shadow: 0 0 0 1px var(--border); }
+.kpi-panel { margin-top: 8px; padding: 14px 16px; background: var(--surface); border-radius: var(--r-well); box-shadow: 0 0 0 1px var(--border); }
 .breadth-bar { display: inline-block; width: 64px; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; align-self: center; }
 .breadth-bar > span { display: block; height: 100%; background: var(--bar-ink); border-radius: 3px; }
 .spin { animation: spin 0.9s linear infinite; }
@@ -128,31 +133,41 @@
   .kpi-cell:last-child { grid-column: span 2; }
   .hero-in { grid-template-columns: minmax(0, 1fr); }
   .hero-cards { flex-direction: row; flex-wrap: wrap; }
-  .hero-cards .mini { flex: 1 1 220px; width: auto; }
+  .hero-cards .hero-btn { flex: 1 1 220px; width: auto; }
 }
 
-/* ---- PM decisions: a grid of 16px cards, elevation from a stroke ---- */
-.dgrid-wrap { margin: 24px 24px 0; }
-.dgrid-wrap .sec-h { margin-bottom: 10px; }
+/* ---- PM decisions: grouped cards, 36px corners, one tint each ---- */
+.dgrid-wrap { margin: 32px 24px 0; }
+.dgrid-wrap .sec-h { margin: 2px 0 14px; }
 .dgrid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(273px, 1fr)); grid-auto-rows: 1fr; gap: 16px; }
 .dgrid-none { font-size: var(--fs-md); color: var(--text-2); }
-/* A v17 decision card: ceramic, the inner radius, a soft drop. */
-.dcard { position: relative; isolation: isolate; display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 16px; border-radius: var(--r-tile); background: var(--decision-surface); box-shadow: var(--shadow-card); }
-.dcard::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--color-border); pointer-events: none; transition: box-shadow var(--dur) var(--ease); }
-.dcard:hover::before, .dcard:focus-within::before { box-shadow: inset 0 0 0 1px var(--color-border-strong), var(--shadow-100); }
+/* Hard pass folds into one row; its cards show under it on a click. */
+.dgrid-fold { margin-top: 16px; }
+.dgrid-fold .dgrid { margin-top: 12px; }
+.dgrid-fold-btn { display: inline-flex; align-items: center; gap: 12px; }
+.dcard { position: relative; isolation: isolate; display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 22px; border-radius: var(--r-panel); background: var(--decision-surface); box-shadow: var(--shadow-card); transition: transform var(--dur-sel) var(--ease-arch); }
+.dcard::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--color-border-subtle); pointer-events: none; transition: box-shadow var(--dur-sel) var(--ease-arch); }
+.dcard:hover::before, .dcard:focus-within::before { box-shadow: inset 0 0 0 1px var(--color-border), var(--shadow-100); }
 .dcard-top { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.dcard-tile { flex: none; display: inline-grid; place-items: center; width: 48px; height: 48px; border-radius: var(--r-logo); background: var(--color-surface); }
+.dcard-tile { flex: none; display: inline-grid; place-items: center; width: 44px; height: 44px; border-radius: var(--r-logo); background: var(--color-surface); }
 .dcard-id { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
-.dcard-sym { font-size: var(--fs-md); font-weight: 600; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dcard-name { font-size: var(--fs-sm); line-height: 18px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dcard-thesis { font-size: var(--fs-md); line-height: 20px; min-height: 40px; color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.dcard-thesis.is-none { color: var(--text-3); }
-.dcard-why { font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); }
-.dcard-figs { display: flex; align-items: flex-end; gap: 24px; margin-top: auto; }
-.dcard-fig { display: flex; flex-direction: column; min-width: 0; }
-.dcard-k { font-size: var(--fs-xs); line-height: 18px; color: var(--text-2); white-space: nowrap; }
-.dcard-v { font-size: var(--fs-metric); line-height: var(--lh-metric); font-weight: var(--wt-metric); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.dcard-st { margin-left: auto; align-self: center; }
+.dcard-name { font-size: var(--fs-ui); font-weight: 500; line-height: 20px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dcard-sym { font-family: var(--mono); font-size: var(--fs-xs); line-height: 18px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dcard-top .badge { flex: none; }
+.dcard-thesis { font-size: var(--fs-body-lg); line-height: 1.5; min-height: 3em; color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.dcard-thesis.is-none { font-family: var(--mono); font-size: var(--fs-xs); letter-spacing: var(--eyebrow-ls); color: var(--text-3); min-height: 0; }
+/* The grade: 22px light figure over a 3px bar on the 0–100 scale (a span
+   for a range; none for a withheld grade or no grade). */
+.dcard-grade { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 4px 12px; margin-top: auto; }
+.dcard-k { font-family: var(--mono); font-size: var(--fs-xs); letter-spacing: var(--eyebrow-ls); line-height: 18px; color: var(--text-3); white-space: nowrap; }
+.dcard-v { font-family: var(--font-display); font-size: var(--fs-grade-row); line-height: 1; font-weight: var(--wt-metric); letter-spacing: var(--track-title); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dcard-bar { grid-column: 1 / -1; position: relative; height: 3px; border-radius: 2px; background: var(--track); overflow: hidden; }
+.dcard-bar > span { position: absolute; top: 0; bottom: 0; border-radius: inherit; background: var(--bar-ink); }
+.dcard-figs { display: flex; align-items: center; gap: 12px; padding-top: 12px; border-top: 1px solid var(--color-border-subtle); }
+.dcard-risk { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.dcard-rv { font-family: var(--mono); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; color: var(--text); }
+.dcard-why { font-family: var(--sans); font-size: var(--fs-sm); color: var(--text-2); }
+.dcard-st { margin-left: auto; }
 /* The two ways in: over the card on hover and focus, under it on touch. The
    overlay fades in place; nothing beneath moves. */
 .dcard-over { position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; padding: 16px; border-radius: inherit; background: var(--backdrop-fade); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); opacity: 0; transition: opacity var(--dur) var(--ease); }
@@ -162,7 +177,7 @@
 }
 
 /* What needs action: always in view, in words (never a count alone). */
-.action-band { display: flex; align-items: flex-start; gap: 10px; margin: 12px 24px 0; padding: 10px 14px; border-radius: var(--r-card); background: var(--warn-weak); color: var(--text); }
+.action-band { display: flex; align-items: flex-start; gap: 10px; margin: 12px 24px 0; padding: 10px 14px; border-radius: var(--r-well); background: var(--warn-weak); color: var(--text); }
 .action-band.is-bad { background: var(--neg-weak); }
 .ab-ico { flex: none; margin-top: 2px; color: var(--warn-strong); }
 .action-band.is-bad .ab-ico { color: var(--neg-strong); }
@@ -171,16 +186,14 @@
 .ab-t { color: var(--text-2); overflow-wrap: anywhere; }
 .ab-go { font-weight: 500; }
 
-/* ---- the views: underline tabs with counts ---- */
-.views { display: flex; gap: 2px; margin: 24px 24px 0; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+/* ---- the views: a segmented track, the chosen view a raised thumb ---- */
+.views { display: flex; gap: 2px; width: max-content; max-width: calc(100% - 48px); margin: 32px 24px 0; padding: 3px; border-radius: var(--r-pill); background: var(--seg-track); overflow-x: auto; scrollbar-width: none; }
 .views::-webkit-scrollbar { display: none; }
-.view-tab { display: inline-flex; align-items: center; gap: 8px; height: 48px; padding: 0 14px; margin-bottom: -1px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--text-2); font: inherit; font-size: var(--fs-ui); font-weight: 500; white-space: nowrap; cursor: pointer; }
+.view-tab { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px; border: 0; border-radius: var(--r-pill); background: transparent; color: var(--text-2); font: inherit; font-size: var(--fs-md); font-weight: 500; white-space: nowrap; cursor: pointer; transition: background-color var(--dur-sel) var(--ease-arch), color var(--dur-sel) var(--ease-arch), box-shadow var(--dur-sel) var(--ease-arch); }
 .view-tab:hover { color: var(--text); }
-.view-tab[aria-pressed="true"] { color: var(--text); border-bottom-color: var(--accent); }
-.view-count { display: inline-grid; place-items: center; min-width: 24px; height: 22px; padding: 0 7px; border-radius: var(--r-pill); box-shadow: inset 0 0 0 1px var(--border); color: var(--text-2); font-size: var(--fs-sm); font-weight: 600; font-variant-numeric: tabular-nums; }
-/* The chosen view's count keeps the same hairline as the others, with a tint;
-   the tab's underline already marks it (a near-black ring read as a badge). */
-.view-tab[aria-pressed="true"] .view-count { background: var(--surface-sunken); color: var(--text); }
+.view-tab[aria-pressed="true"] { color: var(--text); background: var(--seg-thumb); box-shadow: var(--shadow-seg); }
+.view-count { font-family: var(--mono); font-size: var(--fs-xs); font-weight: 400; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.view-tab[aria-pressed="true"] .view-count { color: var(--text-2); }
 
 /* ---- the filter bar ---- */
 .toolbar { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; padding: 12px 24px; }
@@ -206,16 +219,16 @@
 .wl-table th {
   position: sticky; top: 0; z-index: 3;
   height: var(--wl-head-h); padding: 0 16px;
-  background: var(--surface-band); color: var(--text-2);
-  font-size: var(--fs-sm); font-weight: 500; text-align: left; white-space: nowrap;
-  border-bottom: 1px solid var(--border);
+  background: var(--surface); color: var(--text-3);
+  font-family: var(--mono); font-size: var(--eyebrow-size); font-weight: 400; letter-spacing: var(--eyebrow-ls); text-align: left; white-space: nowrap;
+  border-bottom: 1px solid var(--separator);
 }
 .wl-table thead th:first-child { border-top-left-radius: calc(var(--r-card) - 1px); }
 .wl-table thead th:last-child { border-top-right-radius: calc(var(--r-card) - 1px); }
 .wl-table th.num { text-align: right; }
 .th-sort { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 6px; margin: 0 -6px; border: 0; border-radius: var(--r-md); background: transparent; color: inherit; font: inherit; cursor: pointer; white-space: nowrap; }
 .th-sort:hover { color: var(--text); background: var(--surface-hover); }
-.wl-table th[aria-sort] .th-sort { color: var(--text); font-weight: 600; }
+.wl-table th[aria-sort] .th-sort { color: var(--text); font-weight: 500; }
 .th-arrow { color: var(--accent); }
 .th-stack { display: inline-flex; flex-direction: column; align-items: center; line-height: 1.15; }
 .th-lbl { display: inline-flex; align-items: center; gap: 4px; }
@@ -239,7 +252,7 @@
 .wl-table tbody tr:last-child td { border-bottom: 0; }
 /* The project: frozen on the left with a 2px divider. */
 .wl-table .c-name { position: sticky; left: 0; z-index: 2; background: var(--surface); box-shadow: inset -2px 0 0 var(--separator); }
-.wl-table th.c-name { z-index: 4; background: var(--surface-band); }
+.wl-table th.c-name { z-index: 4; background: var(--surface); }
 .c-rank { color: var(--text-3); font-size: var(--fs-sm) !important; }
 .wl-table th.c-rank, .wl-table td.c-rank { padding-right: 4px; }
 .proj { display: flex; align-items: center; gap: 12px; min-width: 0; }
@@ -250,7 +263,7 @@
 .pname {
   display: block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding: 0; border: 0; background: none; color: var(--text); cursor: pointer;
-  font: inherit; font-size: var(--fs-ui); font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; text-align: left;
+  font: inherit; font-size: var(--fs-ui); font-weight: 500; letter-spacing: -0.01em; line-height: 1.3; text-align: left;
 }
 .pname:hover { text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 3px; }
 /* Width tiers: every default column in view down to a 1048px list (1280
@@ -262,22 +275,27 @@
    (it stays in the grade's label and title) and the Action column with it. */
 @container (max-width: 920px) { .gcell-band { display: none; } .wl-table .c-act { display: none; } .risk-badge { max-width: 170px; } }
 
-.ticker { flex: none; font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); }
+.ticker { flex: none; font-family: var(--mono); font-size: var(--fs-xs); font-weight: 400; color: var(--text-3); }
 .marks { display: inline-flex; gap: 6px; align-items: center; }
 .mark { font-size: var(--fs-xs); font-weight: 500; line-height: 20px; padding: 0 7px; border-radius: var(--r-badge); background: var(--badge-bg); color: var(--text-2); white-space: nowrap; }
-.mark-held { background: var(--accent-weak); color: var(--accent-text); box-shadow: inset 0 0 0 1px var(--border); }
+/* Held: a green pip and its word, no fill. */
+.mark-held { display: inline-flex; align-items: center; gap: 6px; padding: 0; background: none; font-family: var(--mono); color: var(--accent-text); }
+.mark-held::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .mark-flag { background: var(--warn-weak); color: var(--warn); }
 .price-cell { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px; line-height: 1.2; }
-.price { font-size: var(--fs-ui); font-weight: 600; font-variant-numeric: tabular-nums; }
-.price-chg { font-size: var(--fs-sm); font-weight: 500; }
+.price { font-size: var(--fs-ui); font-weight: 500; font-variant-numeric: tabular-nums; }
+.price-chg { font-family: var(--mono); font-size: var(--fs-sm); font-weight: 400; }
 .price-note { font-size: var(--fs-xs); color: var(--warn); white-space: nowrap; }
 .wrap-notes .price-note { white-space: normal; max-width: 120px; text-align: right; }
 .wrap-notes .price-note .pn { white-space: nowrap; }
 .rk { color: var(--text-3); }
 .spark-cell { display: block; }
 .spark { display: block; margin: 0 auto; }
-.spark.up path { stroke: var(--pos-strong); }
-.spark.down path { stroke: var(--neg-strong); }
+/* A neutral line; the last point's pip carries the week's direction. */
+.spark path { stroke: var(--text-3); }
+.spark .spark-end { stroke: var(--surface); stroke-width: 1.5; }
+.spark.up .spark-end { fill: var(--pos-strong); }
+.spark.down .spark-end { fill: var(--neg-strong); }
 .spark.none line { stroke: var(--border); }
 .chip-btn { border: 0; background: var(--badge-bg); color: var(--text-2); font: inherit; font-size: var(--fs-xs); padding: 2px 8px; border-radius: var(--r-badge); cursor: pointer; }
 .chip-btn:hover { color: var(--text); background: var(--surface-hover); }
@@ -285,8 +303,9 @@
 .gcell { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 2px 4px; margin: 0 -4px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .gcell:hover { background: var(--surface-hover); }
 .gcell-main { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.gcell-v { font-size: var(--fs-ui); font-weight: 600; font-variant-numeric: tabular-nums; }
-.gcell-band { background: var(--t-bg); color: var(--t-ink); font-weight: 600; }
+.gcell-v { font-family: var(--font-display); font-size: var(--fs-grade-row); font-weight: var(--wt-metric); line-height: 1; letter-spacing: var(--track-title); font-variant-numeric: tabular-nums; }
+/* The rubric word: a pip in its tier with a mono label, no fill. */
+.gcell-band { background: none; color: var(--t-ink); font-weight: 400; }
 .gcell-wh { background: repeating-linear-gradient(135deg, var(--surface-sunken) 0 4px, var(--track) 4px 6px); color: var(--text-2); }
 .gcell-none { font-size: var(--fs-md); color: var(--text-3); }
 .gcell-state { font-size: var(--fs-md); font-weight: 500; color: var(--text-2); }
@@ -297,6 +316,9 @@
 .cg { display: inline-flex; gap: 4px; align-items: center; height: 10px; }
 .risk-badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .wl-table .risk-badge, .wl-table .gcell-band, .wl-table .gcell-wh { height: var(--badge-h-lg); padding: 0 10px; border-radius: var(--r-badge-lg); font-size: var(--fs-sm); font-weight: 500; line-height: var(--badge-h-lg); }
+/* Risk reads as a pip and its mono words; only a severe flag keeps a tint. */
+.wl-table .risk-badge, .wl-table .gcell-band { padding-left: 0; padding-right: 0; font-weight: 400; }
+.wl-table .risk-badge.is-bad { padding-left: 10px; padding-right: 10px; background: var(--danger-soft); color: var(--danger-soft-text); }
 /* A long rubric word ("Weak to adequate or mixed") wraps in its badge
    rather than widening the Grade column. */
 .wl-table .gcell-main { white-space: normal; }
@@ -422,6 +444,9 @@ button.gp:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--t-fill, var(--t
 
 /* ---- a phone: Project, Price / 24h, Grade and Risk (§5) ---- */
 @media (max-width: 767.98px) {
+  .gcell-v { font-size: var(--fs-lg); }
+  .wl-table th { font-family: var(--sans); letter-spacing: 0; }
+  .wl-table .risk-badge.is-bad { padding-left: 6px; padding-right: 6px; }
   .page-head { padding: 12px 12px 8px; }
   .ph-eyebrow { display: none; }
   .page-head h1 { font-size: var(--fs-2xl); }
@@ -437,18 +462,19 @@ button.gp:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--t-fill, var(--t
   .action-band { margin: 8px 12px 0; }
   .hero { margin: 4px 12px 0; }
   .hero-in { padding: 16px; gap: 12px; }
-  .hero-h { font-size: var(--fs-lg); line-height: 24px; }
+  .hero-h { font-size: var(--fs-head); }
+  .ready-n { font-size: var(--fs-head); }
   .ready { margin-top: 12px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .ready-item { flex-direction: column; align-items: flex-start; gap: 6px; }
   .ready-w { white-space: normal; }
-  .hero-cards .mini { flex-basis: 100%; }
+  .hero-cards .hero-btn { flex-basis: 100%; }
   .desk-bar { margin: 16px 12px 8px; }
   .rb { grid-template-columns: auto minmax(0, 1fr); padding: 10px 12px; }
   .rb-track { grid-column: 1 / -1; }
   .rb-words { grid-column: 1 / -1; }
   .dgrid-wrap { margin: 16px 12px 0; }
-  .views { margin: 16px 12px 0; }
-  .view-tab { padding: 0 10px; height: 44px; font-size: var(--fs-sm); }
+  .views { margin: 16px 12px 0; max-width: calc(100% - 24px); }
+  .view-tab { padding: 0 12px; height: 44px; font-size: var(--fs-sm); }
   .toolbar { padding: 10px 12px; }
   .wl-search { flex: 1 1 100%; max-width: none; }
   .tb-right { margin-left: auto; }

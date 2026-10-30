@@ -18,7 +18,7 @@
 // reading (Re-sort offers it).
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Search, ListFilter, Columns3, ArrowUpDown, Plus, X, Ellipsis, Rows3 } from 'lucide-react';
-import { announce, fmtPrice } from '../../../../public/ui.js';
+import { announce, fmtPrice, fmtChangePct } from '../../../../public/ui.js';
 import {
   COLUMNS, SORT_NAMES, DEFAULT_FILTERS, DEFAULT_COLUMNS, COVERAGE, RET30, BEAT, VIEWS, prefs as readPrefs, prefsToSave, nextSort, sortRows, matches,
   filterCount, sourcesOf, reviewKeyAllowed, inView, deskFooter, deskKpis,
@@ -35,7 +35,7 @@ import { KpiStrip, ActionBand, RefreshButton } from './StatusStrip.jsx';
 import { ProjectTable } from './ProjectTable.jsx';
 import { DeskHero } from './DeskHero.jsx';
 import { RangeControl } from './RangeControl.jsx';
-import { DecisionGrid } from './DecisionGrid.jsx';
+import { DecisionGrid, waitingTickets } from './DecisionGrid.jsx';
 import { view, openPanel, closePanel, isWide, markReviewed, restoreProject } from './state.js';
 import { onDesk } from '../../shell/overlays.js';
 // The inspector in its own boundary: if it cannot be drawn, it says so in
@@ -291,6 +291,7 @@ export default function Watchlist() {
           <div className="ph-title">
             <p className="ph-eyebrow">CryptoResearch</p>
             <h1>Desk<span className="ph-count" title={`${followed} project${followed === 1 ? '' : 's'} you watch or hold`}>{followed}</span></h1>
+            <DeskHeadline d={d} rows={live} agenda={agenda} />
           </div>
           <div className="ph-actions">
             <Menu
@@ -437,5 +438,21 @@ export default function Watchlist() {
         </Boundary>
       ) : null}
     </div>
+  );
+}
+
+// The Desk's one-line headline (the Architecture restyle, 2026-10-29): how
+// many decisions wait and Bitcoin's week, both figures the desk already shows
+// (the PM cards, the KPI strip); the week is left out when it is not known.
+function DeskHeadline({ d, rows, agenda }) {
+  const n = waitingTickets(rows).length;
+  const m = deskKpis(d.index, agenda).market;
+  const ch = m && typeof m.change_7d === 'number' ? m.change_7d : null;
+  const lead = n ? `${n} ${n === 1 ? 'decision waits' : 'decisions wait'} for you` : 'No decisions wait for you';
+  return (
+    <p className="desk-headline">
+      {lead}
+      {ch === null ? '.' : <>{'; Bitcoin is '}<span className={ch >= 0 ? 'pos' : 'neg'}>{`${ch >= 0 ? 'up' : 'down'} ${fmtChangePct(Math.abs(ch)).replace(/^[+−-]/, '')}`}</span>{' on the week.'}</>}
+    </p>
   );
 }

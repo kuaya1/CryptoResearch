@@ -22,6 +22,7 @@ import { api, refresh } from '../../lib/desk.js';
 import { nav, navigate, hrefWith, pageReady } from '../../lib/router.js';
 import { legacyCtx } from '../../legacy/ctx.js';
 import { Logo } from '../../components/Logo.jsx';
+import { HoldButton } from '../../components/HoldButton.jsx';
 import { Dom } from '../../components/Dom.jsx';
 import { ModelPanel, DeepLink } from '../inspector/ModelPanel.jsx';
 import { CheckIn } from '../project/CheckIn.jsx';
@@ -263,17 +264,16 @@ function Centre({ d, p, item, onPrev, onNext, hasPrev, hasNext, phone }) {
         <button type="button" className="btn btn-sm btn-icon" aria-label="Next (J)" aria-keyshortcuts="J" title="Next (J)" disabled={!hasNext} data-key="rv-next" onClick={onNext}><ArrowRight size={15} aria-hidden="true" /></button>
         <span className="rv-bar-sp" />
         {primary ? <Act pid={pid} item={primary} /> : null}
-        <button
-          type="button"
-          className="btn btn-primary btn-sm"
+        <HoldButton
+          className="btn-primary btn-sm"
           data-key="rv-mark"
           aria-keyshortcuts="Meta+Enter Control+Enter"
           title={can ? 'Mark reviewed (⌘↵ or Ctrl+↵): the reports drawn here, with your note' : 'Nothing new since your review'}
-          disabled={!can || (markRef.current && markRef.current.busy)}
-          onClick={() => { if (markRef.current && markRef.current.can) markRef.current.mark(); }}
+          disabled={!can || Boolean(markRef.current && markRef.current.busy)}
+          onConfirm={() => { if (markRef.current && markRef.current.can) markRef.current.mark(); }}
         >
           {markRef.current ? markRef.current.label : 'Mark reviewed'}<kbd className="rv-kbd" aria-hidden="true">{/Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘↵' : 'Ctrl+Enter'}</kbd>
-        </button>
+        </HoldButton>
       </div>
     </div>
   );

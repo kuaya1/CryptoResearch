@@ -134,15 +134,15 @@
 
 /* ---- model tabs on the project page ---- */
 /* The model selector: the same segmented control as the inspector's. */
-.ptabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(96px, 0.7fr); gap: 2px; padding: 3px; margin-bottom: 12px; border-radius: var(--r-button); background: var(--surface-track); border: 1px solid var(--border); }
+.ptabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(96px, 0.7fr); gap: 2px; padding: 3px; margin-bottom: 12px; border-radius: var(--r-tile); background: var(--seg-track); border: 0; }
 .ptab-compare .ptab-name { font-weight: 600; }
-.ptab { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 9px 12px; border: 0; border-radius: var(--r-control); background: transparent; color: var(--text-2); font: inherit; text-align: left; cursor: pointer; min-width: 0; }
+.ptab { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 9px 14px; border: 0; border-radius: calc(var(--r-tile) - 3px); background: transparent; transition: background-color var(--dur-sel) var(--ease-arch), box-shadow var(--dur-sel) var(--ease-arch); color: var(--text-2); font: inherit; text-align: left; cursor: pointer; min-width: 0; }
 .ptab:hover { background: color-mix(in srgb, var(--surface) 60%, transparent); color: var(--text); }
-.ptab[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-seg); }
-.ptab[aria-selected="true"] .ptab-name { font-weight: 700; }
+.ptab[aria-selected="true"] { background: var(--seg-thumb); color: var(--text); box-shadow: var(--shadow-seg); }
+.ptab[aria-selected="true"] .ptab-name { font-weight: 600; }
 .ptab-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; }
 .ptab-name { font-size: var(--fs-sm); font-weight: 600; }
-.ptab-verdict { font-size: var(--fs-xs); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.ptab-verdict { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .ptab .gp { cursor: inherit; }
 /* On a phone a model tab is its name and its grade; the chosen model's
    verdict is the heading right under the tabs, the others' are in each
@@ -179,7 +179,7 @@
 .ov-verdict { padding: 18px 0 20px; }
 @media (max-width: 767.98px) { .ov-sec { padding-top: 24px; } }
 .ov-h { font-family: var(--font-display); font-size: var(--fs-title); font-weight: var(--wt-title); letter-spacing: var(--track-title); margin-bottom: 14px; display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
-.ov-h-sub { font-size: var(--fs-xs); font-weight: 400; color: var(--text-3); letter-spacing: 0; }
+.ov-h-sub { font-family: var(--mono); font-size: var(--fs-xs); font-weight: 400; color: var(--text-3); letter-spacing: var(--eyebrow-ls); }
 .ov-h3 { font-size: var(--fs-sm); font-weight: 600; margin-bottom: 8px; display: flex; align-items: baseline; gap: 8px; }
 .none { color: var(--text-3); font-size: var(--fs-sm); }
 .ov-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 32px; }
@@ -187,7 +187,10 @@
 
 /* the verdict: the metric header (components.css .mh; no gauge, Eric,
    2026-10-08); the grade's warnings sit in its last row */
-.ov-verdict .mh { margin-top: 4px; }
+/* The grade summary: a warm ceramic card, the grade 54px and light, the
+   largest figure on the page. */
+.ov-verdict .mh { margin-top: 4px; padding: 24px; border-radius: var(--r-tile); background: var(--warm-surface); }
+@media (min-width: 768px) { .ov-verdict .mh-num { font-size: var(--fs-grade-xl); font-weight: var(--wt-metric); } }
 .hz-short { display: none; }
 .gflags { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .mh-chips .gflags { margin: 0; }

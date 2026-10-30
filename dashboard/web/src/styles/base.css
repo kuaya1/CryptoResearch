@@ -27,10 +27,11 @@ body {
 h1, h2, h3, h4 { margin: 0; color: var(--text); line-height: 1.25; font-family: var(--sans); }
 p { margin: 0; }
 a { color: var(--accent-text); text-decoration: none; }
-/* Links are the link blue; a plain link and a text button also carry a
-   hairline underline, so they read as links without color. */
-a:not([class]), .btn-link { text-decoration: underline; text-decoration-color: var(--link-line); text-decoration-thickness: 1px; text-underline-offset: 0.2em; }
-a:hover { text-decoration: underline; text-underline-offset: 0.2em; text-decoration-color: currentColor; }
+/* Links (the Architecture restyle, 2026-10-29): the link green, no
+   underline at rest; the underline comes on hover and focus. The green
+   keeps 3:1 against the ink it sits in, so a link still reads as one. */
+a:not([class]), .btn-link { text-decoration: none; }
+a:hover, a:focus-visible, .btn-link:hover, .btn-link:focus-visible { text-decoration: underline; text-underline-offset: 0.2em; text-decoration-color: currentColor; }
 a:not([class]):hover, .btn-link:hover { color: var(--color-link-hover); }
 button { font: inherit; color: inherit; }
 img { max-width: 100%; }
