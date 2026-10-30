@@ -570,6 +570,9 @@ html.has-drawer { overflow: hidden; }
 .inspector.v3.is-docked::-webkit-scrollbar { display: none; }
 .inspector.v3.is-docked > .insp-head, .inspector.v3.is-docked > .insp-body, .inspector.v3.is-docked > .insp-foot { flex: none; padding: 0; overflow: visible; background: none; box-shadow: none; }
 .inspector.v3.is-modal { box-shadow: var(--sh-v3-insp); }
+@media (min-width: 768px) {
+  .inspector.v3.is-modal { width: min(var(--v3-insp-max), 100%); border-radius: var(--r-v3-card) 0 0 var(--r-v3-card); }
+}
 .inspector.v3.is-modal > .insp-head, .inspector.v3.is-modal > .insp-foot { background: var(--v3-surface-warm); box-shadow: none; }
 .inspector.v3.is-modal > .insp-head { padding: 24px 26px 18px; }
 .inspector.v3.is-modal > .insp-body { padding: 6px 26px 24px; }
