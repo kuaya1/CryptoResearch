@@ -169,6 +169,19 @@ function ChallengeRow({ pid, rid, decidedAt }) {
   );
 }
 
+// The contract gate in words (Pillar 1): one quiet row each for the contract
+// and the economics. In observe mode it decides nothing, and says so.
+function ContractRow({ pid, t }) {
+  const c = t.contract_gate;
+  if (!c) return null;
+  return (
+    <div className="pm-dis" data-key={`pm-contract-${pid}`} data-tier={c.tier} aria-label="Contract gate">
+      <p className="pm-dis-row"><span className="pm-dis-k">Contract</span><span>{`${c.words}${c.mode === 'observe' ? ' (observed, not applied)' : ''}`}</span></p>
+      {c.economics ? <p className="pm-dis-row"><span className="pm-dis-k">Economics</span><span>{c.economics}</span></p> : null}
+    </div>
+  );
+}
+
 function exitText(t) {
   // A native L1 coin of the size the rules name passes without a DEX quote:
   // said as its basis, never as a measured cost.
@@ -321,6 +334,7 @@ export function PMDecisionCard({ p }) {
         <div className="pm-dis">
           <p className="pm-dis-row"><span className="pm-dis-k">Researcher</span><span>{`${(t.researcher || {}).grade_display || (t.researcher || {}).grade || '—'} · ${(t.researcher || {}).verdict || 'no verdict'}`}</span></p>
         </div>
+        <ContractRow pid={pid} t={t} />
         <DeltaBadge pid={pid} delta={t.report_delta} />
         <RuleNote pid={pid} t={t} />
         {t.superseded_by_report ? <p className="faint pm-note">{`Claude has a newer report (${t.superseded_by_report}); this gate is on the earlier one.`}</p> : null}
@@ -392,6 +406,7 @@ export function PMDecisionCard({ p }) {
       ) : null}
       {t.agent_disagreement ? <Disagreement pid={pid} t={t} spread={p.spread} dis={dis} r={r} q={q} fatal={fatal} /> : null}
       <ChallengeRow pid={pid} rid={t.receipt_id} decidedAt={decided ? decided.at : null} />
+      <ContractRow pid={pid} t={t} />
       <RuleNote pid={pid} t={t} />
       {t.superseded_by_report ? <p className="faint pm-note">{`Claude has a newer report (${t.superseded_by_report}); this ticket is on the earlier one.`}</p> : null}
       <Actions pid={pid}>

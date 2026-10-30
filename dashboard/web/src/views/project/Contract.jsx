@@ -394,11 +394,82 @@ function ContractChecks({ d, row }) {
   );
 }
 
+// ---- contract state (contract-forensics.js view) -------------------------------------
+// What the chain showed at one finalized block: the proxy, who controls each
+// capability, the supply against its own events. Read as saved; never asked
+// from this page, never called safe.
+
+const STATE_WORDS = { fresh: 'Observed', stale: 'Stale', not_observed: 'Not observed yet', unreadable: 'Record does not hold', network_not_supported: 'Network not read', network_not_probed: 'Network not probed' };
+const PROXY_WORDS = { none: 'No proxy', unknown: 'Unknown', erc1967_transparent: 'Transparent proxy (ERC-1967)', erc1967_uups: 'UUPS proxy (ERC-1967)', erc1967_beacon: 'Beacon proxy (ERC-1967)', eip1822: 'EIP-1822 proxy', oz_legacy: 'Legacy OpenZeppelin proxy', eip1167_minimal: 'Minimal clone (EIP-1167)', diamond: 'Diamond (EIP-2535)', nonstandard_delegatecall: 'Nonstandard delegatecall' };
+const WARN_CLASS = new Set(['K4', 'K5', 'K6']);
+const pathWords = (path) => (Array.isArray(path) ? path.map((p) => words(p.node)).join(' → ') : '');
+
+function SubjectState({ s }) {
+  const p = s.proxy || null;
+  const supply = s.supply || null;
+  const facts = s.observation_id ? [
+    ['Block', s.block && s.block.number !== undefined ? `${s.block.number} · ${fmtDateTime(s.block.timestamp)}` : s.block && s.block.slot !== undefined ? `Slot ${s.block.slot}` : null, s.block && s.block.hash],
+    ['Proxy', p ? `${PROXY_WORDS[p.kind] || cap(words(p.kind))}${p.supported === false ? ' · not one the desk reads' : ''}` : null, p && p.words],
+    ['Implementation', p && p.implementation ? shortAddr(p.implementation.address) : null, p && p.implementation ? p.implementation.address : null],
+    ['Source', s.source ? cap(words(s.source.status)) : null],
+    ['Supply', supply && supply.explained === false ? 'Moved more than its own events account for' : supply && supply.explained === true ? 'Matches its own events' : supply && supply.words ? supply.words : null, null, true],
+    ['Transfer fee', s.transfer_fee ? `${s.transfer_fee.newer_bps / 100}% from epoch ${s.transfer_fee.newer_epoch}` : null],
+    ['Coverage', s.coverage ? (s.coverage.complete ? 'Complete' : `Missing: ${(s.coverage.missing || []).map(words).join(', ')}`) : null, null, true],
+  ] : [];
+  return (
+    <div className="cc-contract ct-contract" data-key={`cs-${s.chain_id}-${s.address}`}>
+      <div className="cc-head">
+        <span className="cc-chain">{s.label}</span>
+        <Addr address={s.address} label={s.label} />
+        <span className={`badge${s.state === 'fresh' ? '' : ' is-warn'}`}>{STATE_WORDS[s.state] || cap(words(s.state))}</span>
+        {typeof s.age_hours === 'number' ? <span className="faint">{`${s.age_hours} h old`}</span> : null}
+      </div>
+      {!s.observation_id ? <p className="faint rc-line">{s.words}</p> : (
+        <>
+          <KV rows={facts} label={`${s.label} contract state`} />
+          {s.authorities && s.authorities.length ? (
+            <dl className="cc-rows" aria-label="Who controls each capability">
+              {s.authorities.map((a, i) => (
+                <div key={`${a.capability}-${i}`} className={`cc-row lvl-${WARN_CLASS.has(a.class) ? 'warn' : 'ok'}`} title={[a.words, pathWords(a.path)].filter(Boolean).join(' · ') || undefined}>
+                  <dt>{`${a.capability_words || a.capability}${a.function ? ` (${a.function})` : ''}`}</dt>
+                  <dd>{`${a.class_words || a.class}${a.proof === 'state_read' ? ' · read, not tested' : ''}`}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : <p className="faint rc-line">No control over the token found in the reads.</p>}
+          {s.transitions && s.transitions.length ? (
+            <ul className="cc-alerts ct-alerts" aria-label="Changes between observations">
+              {s.transitions.map((t) => (
+                <li key={t.to_observation_id}><strong>Changed</strong>{` between blocks ${t.between.from} and ${t.between.to}: ${(t.changes || []).map((c) => words(c.field)).join(', ')}`}</li>
+              ))}
+            </ul>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
+function ContractState({ d }) {
+  const v = d.contracts && typeof d.contracts === 'object' ? d.contracts : null;
+  if (!v) return null;
+  const la = v.last_attempt || null;
+  return (
+    <Panel id="ct-state" title="Contract state" sub="On-chain reads" note="What the chain showed at one finalized block: the proxy, who controls each capability and the supply. Read as saved; never asked from this page.">
+      {!v.subjects || !v.subjects.length ? <p className="rc-line">{v.words}</p> : (
+        <div className="cchecks">{v.subjects.map((s) => <SubjectState key={`${s.chain_id}-${s.address}`} s={s} />)}</div>
+      )}
+      {la ? <KV label="Observation runs" rows={[['Last attempt', `${fmtDateTime(la.at)}${la.trigger ? ` · ${words(la.trigger)}` : ''} · ${la.outcome === 'ok' ? 'answered' : words(la.outcome)}${la.words ? `: ${la.words}` : ''}`, null, true]]} /> : null}
+    </Panel>
+  );
+}
+
 export default function Contract({ d, row, pid }) {
   const r = row || {};
   return (
     <div className="l2-stack ct">
       <IdentityPanel d={d} row={r} pid={pid} />
+      <ContractState d={d} />
       <ContractChecks d={d} row={r} />
     </div>
   );
