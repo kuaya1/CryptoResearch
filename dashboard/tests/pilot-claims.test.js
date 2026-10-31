@@ -215,7 +215,8 @@ test('automation.paused: the connector\'s pilot queue answers "paused" for every
 
 test('defaults: automation not paused, the standing exit-quote policy off, research Claude only', (t) => {
   const s = setup(t);
-  assert.deepEqual(s.ws.settings.automation, { paused: false, exit_quotes_auto: false });
+  // The paper mandate (automation.autonomous_paper_loop) is off by default and has no expiry.
+  assert.deepEqual(s.ws.settings.automation, { paused: false, exit_quotes_auto: false, autonomous_paper_loop: false, mandate: { expires_at: null, max_grants_per_day: 1, max_open_grants: 2, allowed_chains: ['ethereum', 'base', 'arbitrum', 'optimism', 'solana'] } });
   assert.deepEqual(s.ws.settings.research.default_providers, ['claude']);
   assert.deepEqual(require('../core/forensics').autoExitQuotePlan(s.ws), { add: [], over_budget: [] });
   assert.ok(HOUR);

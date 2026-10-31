@@ -158,9 +158,49 @@ function validateSettingsPatch(patch, ws = null) {
     }
   }
   if (patch.automation) {
+    const a = patch.automation;
     out.automation = {};
-    if (patch.automation.paused !== undefined) out.automation.paused = patch.automation.paused === true;
-    if (patch.automation.exit_quotes_auto !== undefined) out.automation.exit_quotes_auto = patch.automation.exit_quotes_auto === true;
+    if (a.paused !== undefined) out.automation.paused = a.paused === true;
+    if (a.exit_quotes_auto !== undefined) out.automation.exit_quotes_auto = a.exit_quotes_auto === true;
+    // The paper mandate (core/tickets.js mandateOf reads it with the same
+    // bounds). It always expires: on needs a future expires_at at most
+    // MANDATE_MAX_DAYS ahead, this patch's or the one saved.
+    if (a.autonomous_paper_loop !== undefined) out.automation.autonomous_paper_loop = a.autonomous_paper_loop === true;
+    if (a.mandate !== undefined) {
+      const m = a.mandate;
+      const T = require('./core/tickets');
+      if (!m || typeof m !== 'object' || Array.isArray(m)) throw new OpError('INVALID', 'automation.mandate must be an object.');
+      const o = {};
+      if (m.expires_at !== undefined) {
+        if (m.expires_at === null) o.expires_at = null;
+        else {
+          const t = typeof m.expires_at === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(m.expires_at) ? Date.parse(m.expires_at) : NaN;
+          if (!Number.isFinite(t)) throw new OpError('INVALID', 'automation.mandate.expires_at must be an ISO-8601 UTC time, or null.');
+          if (t <= Date.now()) throw new OpError('INVALID', 'automation.mandate.expires_at must be in the future.');
+          if (t - Date.now() > T.MANDATE_MAX_DAYS * 86400000) throw new OpError('INVALID', `automation.mandate.expires_at can be at most ${T.MANDATE_MAX_DAYS} days ahead.`);
+          o.expires_at = new Date(t).toISOString();
+        }
+      }
+      for (const k of ['max_grants_per_day', 'max_open_grants']) {
+        if (m[k] === undefined) continue;
+        if (!Number.isInteger(m[k]) || m[k] < 1 || m[k] > T.MANDATE_MAX_CAP) throw new OpError('INVALID', `automation.mandate.${k} must be a whole number from 1 to ${T.MANDATE_MAX_CAP}.`);
+        o[k] = m[k];
+      }
+      if (m.allowed_chains !== undefined) o.allowed_chains = T.mandateChains(m.allowed_chains);
+      const unknown = Object.keys(m).filter((k) => !['expires_at', 'max_grants_per_day', 'max_open_grants', 'allowed_chains'].includes(k));
+      if (unknown.length) throw new OpError('INVALID', `automation.mandate has no setting ${unknown.join(', ')}.`);
+      out.automation.mandate = o;
+    }
+    // Cross-field, against the merged result: turning the mandate on, or
+    // moving its expiry while it is on, needs a future expiry.
+    const saved = (ws && ws.settings && ws.settings.automation) || {};
+    const loopOn = out.automation.autonomous_paper_loop !== undefined ? out.automation.autonomous_paper_loop : saved.autonomous_paper_loop === true;
+    const touched = out.automation.autonomous_paper_loop === true || (out.automation.mandate && out.automation.mandate.expires_at !== undefined);
+    if (loopOn && touched) {
+      const exp = out.automation.mandate && out.automation.mandate.expires_at !== undefined ? out.automation.mandate.expires_at : (saved.mandate || {}).expires_at;
+      const t = typeof exp === 'string' ? Date.parse(exp) : NaN;
+      if (!(t > Date.now())) throw new OpError('INVALID', 'Set automation.mandate.expires_at (at most 30 days ahead) to turn on the paper mandate.');
+    }
   }
   if (patch.freshness) {
     out.freshness = {};

@@ -131,7 +131,17 @@ const DEFAULT_SETTINGS = {
   // approvals) while settlement, candles, wallet sync and reconciliation go
   // on. `exit_quotes_auto` approves exit quotes by itself for verified,
   // quotable pilot projects, within the monitor's monthly request budget.
-  automation: { paused: false, exit_quotes_auto: false },
+  // `autonomous_paper_loop` is the paper mandate (tickets.js mandateOf,
+  // mandateSweep): the desk may grant Prosecutor tickets on the Trader Sim
+  // book by itself, on pilot projects, within these caps, until expires_at
+  // (at most 30 days ahead; null keeps it off). Never Eric's decision; never
+  // a PM Cohort position.
+  automation: {
+    paused: false,
+    exit_quotes_auto: false,
+    autonomous_paper_loop: false,
+    mandate: { expires_at: null, max_grants_per_day: 1, max_open_grants: 2, allowed_chains: ['ethereum', 'base', 'arbitrum', 'optimism', 'solana'] },
+  },
   // Eric's own trader rules (trader-rules.js; Preferences > Screening): the
   // minimum stop distance, the notional cap, an intent's longest life and the
   // allowlist cr-trade-risk reads. Unset, every intent is refused.

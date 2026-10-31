@@ -1483,6 +1483,85 @@ function receiptText(ws, pid, rid) {
 }
 
 // ---------------------------------------------------------------------------
+// The paper mandate (cr-paper-mandate@1; settings automation.autonomous_paper_loop
+// and automation.mandate). Under it the desk may grant a Prosecutor's ticket
+// on the Trader Sim book by itself, within Eric's caps, until it expires. A
+// mandate grant is the mandate's, never Eric's; it never opens a PM Cohort
+// position; his Undo or Veto latches the ticket off for good. Whatever cannot
+// be read keeps it off: unknown is never a grant.
+
+const MANDATE_VERSION = 'cr-paper-mandate@1';
+const MANDATE_BY = `mandate:${MANDATE_VERSION}`;
+// A hard floor, whatever tickets.sizing.min_grade_new_entry says.
+const MANDATE_MIN_GRADE = 50;
+const MANDATE_MAX_DAYS = 30;
+const MANDATE_MAX_CAP = 5;
+const MANDATE_MAX_CHAINS = 10;
+const MANDATE_DEFAULTS = Object.freeze({ expires_at: null, max_grants_per_day: 1, max_open_grants: 2, allowed_chains: Object.freeze(['ethereum', 'base', 'arbitrum', 'optimism', 'solana']) });
+const MANDATE_MEANING = 'The desk\'s paper mandate recorded this under the limits Eric set (automation.mandate). It is not Eric\'s decision and places no real order.';
+
+// The tier from the receipt's own grade (a range read at its low end): 50 up
+// to 55 is the exploratory half grant, 55 and above the standard grant, under
+// 50 nothing.
+function mandateTierOf(grade) {
+  if (!isNum(grade) || grade < MANDATE_MIN_GRADE) return null;
+  return grade < 55 ? { name: 'exploratory_50_54', action: 'halve' } : { name: 'standard_55_plus', action: 'approve' };
+}
+
+const isMandateLine = (d) => Boolean(d && typeof d.decided_by === 'string' && d.decided_by.startsWith('mandate:'));
+
+// 1 to 10 unique chains that chains.js knows (aliases count once). Throws INVALID.
+function mandateChains(list) {
+  const { chainInfo } = require('./chains');
+  if (!Array.isArray(list) || !list.length || list.length > MANDATE_MAX_CHAINS) throw new OpError('INVALID', `automation.mandate.allowed_chains must list 1 to ${MANDATE_MAX_CHAINS} chains.`);
+  const seen = new Set();
+  return list.map((c) => {
+    const info = chainInfo(c);
+    if (!info) throw new OpError('INVALID', `automation.mandate.allowed_chains: "${String(c).slice(0, 40)}" is not a chain the desk knows.`);
+    if (seen.has(info.chain_id)) throw new OpError('INVALID', `automation.mandate.allowed_chains names ${info.label} twice.`);
+    seen.add(info.chain_id);
+    return String(c).trim().toLowerCase();
+  });
+}
+
+// The mandate in force. `on` only when the loop is on, automation is not
+// paused, the expiry is in the future and at most MANDATE_MAX_DAYS ahead, every
+// limit reads, and this is not a restored copy on hold.
+function mandateOf(ws, now = Date.now()) {
+  const a = (ws.settings && ws.settings.automation) || {};
+  const raw = a.mandate && typeof a.mandate === 'object' && !Array.isArray(a.mandate) ? a.mandate : {};
+  const out = {
+    version: MANDATE_VERSION,
+    on: false,
+    why: null,
+    expires_at: typeof raw.expires_at === 'string' ? raw.expires_at : null,
+    max_grants_per_day: null,
+    max_open_grants: null,
+    allowed_chains: null,
+    settings_sha256: sha256(require('./requests').stableStringify(raw)),
+  };
+  const problems = [];
+  for (const k of ['max_grants_per_day', 'max_open_grants']) {
+    const v = raw[k] === undefined ? MANDATE_DEFAULTS[k] : raw[k];
+    if (Number.isInteger(v) && v >= 1 && v <= MANDATE_MAX_CAP) out[k] = v;
+    else problems.push(`automation.mandate.${k} does not read as a whole number from 1 to ${MANDATE_MAX_CAP}`);
+  }
+  try { out.allowed_chains = mandateChains(raw.allowed_chains === undefined ? [...MANDATE_DEFAULTS.allowed_chains] : raw.allowed_chains); } catch (err) { problems.push(err.message.replace(/\.$/, '')); }
+  const t = out.expires_at ? Date.parse(out.expires_at) : NaN;
+  let held = null;
+  try { held = require('./research').restoredHold(ws); } catch (_) { held = { unreadable: true }; }
+  if (a.autonomous_paper_loop !== true) out.why = 'The paper mandate is off (automation.autonomous_paper_loop).';
+  else if (a.paused === true) out.why = 'Automation is paused: the paper mandate grants nothing.';
+  else if (problems.length) out.why = `The paper mandate's limits do not read, so it grants nothing: ${problems.join('; ')}.`;
+  else if (!Number.isFinite(t)) out.why = 'The paper mandate has no expiry (automation.mandate.expires_at), so it grants nothing.';
+  else if (t <= now) out.why = `The paper mandate expired at ${out.expires_at}.`;
+  else if (t - now > MANDATE_MAX_DAYS * 86400000) out.why = `The paper mandate's expiry is more than ${MANDATE_MAX_DAYS} days ahead; set it again.`;
+  else if (held) out.why = 'This is a restored copy on hold: the paper mandate grants nothing until it is released.';
+  else out.on = true;
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Eric's PM decisions
 
 // The decision in force for a receipt: the last line that an undo has not
@@ -2825,6 +2904,21 @@ module.exports = {
   TAX_SPIKE_BPS,
   contractIdentityNow,
   contractOpenGuard,
+  contractVerdictNow,
+  contractCheckOf,
+  exitsOf,
+  exitSizesOf,
+  MANDATE_VERSION,
+  MANDATE_BY,
+  MANDATE_MIN_GRADE,
+  MANDATE_MAX_DAYS,
+  MANDATE_MAX_CAP,
+  MANDATE_DEFAULTS,
+  MANDATE_MEANING,
+  mandateTierOf,
+  mandateChains,
+  mandateOf,
+  isMandateLine,
   PREGATE_VERSION,
   ADMISSION_VERSION,
   SIZING_DEFAULTS,
