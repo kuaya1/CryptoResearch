@@ -277,14 +277,51 @@ function receiptOf(ws, pid, rid) {
   return { receipt: r };
 }
 
-// The pair a project trades as in the book: its ticker against USDC.
-function pairOf(project, projects) {
+// The pool each pair's hourly candles are bound to for good
+// (paper/candles/sources.jsonl, create-only): the first line per pair wins,
+// the rule trader-candles.js readSources reads it by. Read here, since that
+// module requires this one. A file that is there but does not read is
+// `unreadable`, and no pair is then taken as unbound.
+const SOURCES_REL = 'paper/candles/sources.jsonl';
+const SOURCE_VERSION = 'cr.trader-candle-source.v1';
+function sourceBindings(ws) {
+  const out = new Map();
+  let text = '';
+  try { text = require('fs').readFileSync(ws.abs(SOURCES_REL), 'utf8'); } catch (err) {
+    if (!err || err.code !== 'ENOENT') out.unreadable = true;
+    return out;
+  }
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let s;
+    try { s = JSON.parse(line); } catch (_) { continue; }
+    if (s && typeof s.pair === 'string' && s.schema_version === SOURCE_VERSION && !out.has(s.pair)) out.set(s.pair, s);
+  }
+  return out;
+}
+const sourceBindingOf = (ws, pair) => sourceBindings(ws).get(pair) || null;
+
+// Whether a binding prices this project's own token: the same project and a
+// contract among its verified identity's on that chain.
+function boundToOwn(project, b) {
+  if (!b.project_id || b.project_id !== project.project_id) return false;
+  return require('./tickets').ownsContract(project, b.chain_id, b.contract_address);
+}
+
+// The pair a project trades as in the book: its ticker against USDC. With
+// `sources` (sourceBindings), a pair whose candles are bound to another
+// project or another contract is refused: its hours would not price this token.
+function pairOf(project, projects, { sources = null } = {}) {
   const sym = typeof project.symbol === 'string' ? project.symbol.trim().toUpperCase() : '';
   const name = project.name || project.project_id;
   if (!/^[A-Z0-9.]{1,24}$/.test(sym)) return { pair: null, why: `${name} has no ticker the book can name a pair with.` };
   const twin = projects.find((q) => q.project_id !== project.project_id && q.status !== 'archived' && typeof q.symbol === 'string' && q.symbol.trim().toUpperCase() === sym);
   if (twin) return { pair: null, why: `Another project on the desk, ${twin.name || twin.project_id}, also trades as ${sym}, so ${sym}/${QUOTE} would not name one token.` };
-  return { pair: `${sym}/${QUOTE}`, why: null };
+  const pair = `${sym}/${QUOTE}`;
+  if (sources && sources.unreadable) return { pair: null, why: `The candle bindings (${SOURCES_REL}) could not be read, so whether ${pair} prices this token is unknown.` };
+  const b = sources ? sources.get(pair) : null;
+  if (b && !boundToOwn(project, b)) return { pair: null, why: `${pair}'s hourly candles are bound to ${b.project_id || 'another project'} (${b.contract_address || 'no contract'}) for good, so ${pair} would not price this token.` };
+  return { pair, why: null };
 }
 
 // The order a ticket's proposal makes at the book's price, or why it makes
@@ -389,6 +426,7 @@ function snapshotOf(ws, now) {
     funded: r.funded_usd !== null,
     last: new Map(hours.map((h) => [h.pair, h.last_hour])),
     gaps: readGaps(ws),
+    sources: sourceBindings(ws),
   };
   snap.settlement = settlementOf(snap);
   return snap;
@@ -412,7 +450,7 @@ function assess(ws, ctx, g, snap) {
     if (!g.in_force) return out('not_opened', `${g.undo ? 'Undone' : 'Replaced'} before the book was asked: no order was made.`);
     const rc = receiptOf(ws, pid, d.receipt_id);
     if (rc.why) return out('not_opened', `${rc.why} No order is made from it.`);
-    const pr = pairOf(g.project, ctx.projects);
+    const pr = pairOf(g.project, ctx.projects, { sources: snap.sources });
     if (!pr.pair) return out('not_opened', `${pr.why} No order is made.`);
     const plan0 = planOf(rc.receipt, d, null);
     if (plan0.why) return out('not_opened', plan0.why, null, { pair: pr.pair });
@@ -463,6 +501,25 @@ function assess(ws, ctx, g, snap) {
     const f = fit(intent, bk, ctx.s.rules, ctx.s.venue);
     if (!f.ok) return out('waiting', `The book would refuse the order now, so it is not asked yet (its one attempt is kept): ${f.refusals.map((x) => x.words).join(' ')}`, null, { pair: pr.pair, refusals: f.refusals, exit_as_of: bk.exit ? bk.exit.as_of : null });
     const sz = f.sizing;
+    // A paper mandate grant (decided_by mandate:…) reads the contract again
+    // at opening, in every gate mode: a verdict that is gone or blocks, or an
+    // identity changed or a sell tax spiked since the save, opens nothing; a
+    // hold (a stale observation, CG-20) waits for the next one. Eric's own
+    // grants keep the enforce-only guard below.
+    if (typeof d.decided_by === 'string' && d.decided_by.startsWith('mandate:')) {
+      const T = require('./tickets');
+      let v = null;
+      let chk = null;
+      try {
+        v = T.contractVerdictNow(ws, g.project, T.sizingOf(ws), ctx.t);
+        chk = T.contractCheckOf(ws, g.project, rc.receipt, ctx.t);
+      } catch (err) {
+        return out('waiting', `The contract could not be read again for the paper mandate's grant (${String(err && err.message || err).slice(0, 160)}); the order waits.`, null, { pair: pr.pair, contract: { rule_id: 'MANDATE_RECHECK' } });
+      }
+      if (!v || v.tier === 'block') return out('not_opened', `The paper mandate's grant opens nothing: ${v ? `the contract gate now blocks (${v.words})` : 'the contract has no observation the desk can read now'}.`, null, { pair: pr.pair, contract: { rule_id: 'MANDATE_RECHECK', tier: v ? v.tier : null } });
+      if (chk && chk.status === 'triggered') return out('not_opened', `The paper mandate's grant opens nothing: ${chk.words}`, null, { pair: pr.pair, contract: { rule_id: 'MANDATE_RECHECK', status: chk.status } });
+      if (v.tier === 'hold') return out('waiting', `The paper mandate's grant waits: the contract gate holds (${v.words}).`, null, { pair: pr.pair, contract: { rule_id: 'MANDATE_RECHECK', tier: v.tier } });
+    }
     // The contract gate, when Eric enforces it (tickets.js contractOpenGuard):
     // the same contract, current evidence, and the exit at this fitted
     // notional (CG-14), not only at the reference tranche. Openings only.
@@ -705,4 +762,4 @@ function gapOf(ws, pair, hour, now) {
   }
 }
 
-module.exports = { VERSION, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, intentIdOf, plain, closeLimit, fit, settingsOf, pairOf, planOf, horizonOf, settlementOf, requests, view, wanted, step, applyHours };
+module.exports = { VERSION, OPENS, QUOTE, LOT, MIN_NOTIONAL_USD, SLIPPAGE_BPS, CLOSE_ATTEMPTS_MAX, GAPS_REL, GAP_VERSION, SOURCES_REL, intentIdOf, plain, closeLimit, fit, settingsOf, sourceBindings, sourceBindingOf, pairOf, planOf, horizonOf, settlementOf, requests, view, wanted, step, applyHours };

@@ -1508,6 +1508,20 @@ function mandateTierOf(grade) {
   return grade < 55 ? { name: 'exploratory_50_54', action: 'halve' } : { name: 'standard_55_plus', action: 'approve' };
 }
 
+// Whether a verified identity names this contract on this chain (chain IDs
+// and aliases through chains.js, addresses compared as the family keys them).
+function ownsContract(project, chainId, address) {
+  const { chainInfo, addressKey } = require('./chains');
+  const want = chainInfo(chainId);
+  if (!want || typeof address !== 'string' || !address.trim()) return false;
+  const id = (project && project.identity) || {};
+  if (id.status !== 'verified') return false;
+  return (Array.isArray(id.assets) ? id.assets : []).some((a) => {
+    const info = chainInfo(a && a.chain);
+    return Boolean(info && info.chain_id === want.chain_id && typeof a.contract_address === 'string' && addressKey(info.family, a.contract_address.trim()) === addressKey(want.family, address.trim()));
+  });
+}
+
 const isMandateLine = (d) => Boolean(d && typeof d.decided_by === 'string' && d.decided_by.startsWith('mandate:'));
 
 // 1 to 10 unique chains that chains.js knows (aliases count once). Throws INVALID.
@@ -3032,6 +3046,7 @@ module.exports = {
   isMandateLine,
   exitArrivedOf,
   reopenReason,
+  ownsContract,
   paperWanted,
   countedExits,
   PREGATE_VERSION,
